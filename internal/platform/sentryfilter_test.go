@@ -1151,6 +1151,7 @@ func TestSentryFilter_NestedBreadcrumbData(t *testing.T) {
 // Types outside scrubValue's switch take the JSON round-trip.
 func TestSentryFilter_OtherDataTypesAreScrubbed(t *testing.T) {
 	type tinT string
+	type blobT []byte
 	type deepT map[string]interface{}
 	// Deeper than encoding/json decodes, so the round trip fails.
 	deep := deepT{}
@@ -1171,6 +1172,8 @@ func TestSentryFilter_OtherDataTypesAreScrubbed(t *testing.T) {
 			"rows":   []map[string]interface{}{{"irn": `k "` + markerIRN + `"`, "line": 1}},
 			"notes":  map[string][]string{"n": {`d "` + markerAmt + `"`, "ok"}},
 			"raw":    []byte(`b "` + markerTIN + `"`),
+			"json":   json.RawMessage(`"` + markerTIN + `"`),
+			"blob":   blobT(`n "` + markerIRN + `"`),
 			"list":   []interface{}{[]byte(`l "` + markerIRN + `"`)},
 			"tin":    tinT(`t "` + markerTIN + `"`),
 			"seq":    []int64{9007199254740993},
@@ -1187,8 +1190,10 @@ func TestSentryFilter_OtherDataTypesAreScrubbed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal breadcrumb data: %v", err)
 	}
-	want := `{"deep":"[redacted]",` +
+	want := `{"blob":"n \"[redacted]\"",` +
+		`"deep":"[redacted]",` +
 		`"header":{"Accept":["text/html"],"X-Note":["n \"[redacted]\""]},` +
+		`"json":"\"[redacted]\"",` +
 		`"list":["l \"[redacted]\""],` +
 		`"notes":{"n":["d \"[redacted]\"","ok"]},` +
 		`"raw":"b \"[redacted]\"",` +
@@ -1217,6 +1222,8 @@ func TestSentryFilter_MapKeysAreScrubbed(t *testing.T) {
 			`k "` + markerTIN + `"`: "top",
 			"q?tin=" + markerTIN:    "query",
 			"f#" + markerAmt:        "fragment",
+			"http.query?x=1":        "q=" + markerTIN,
+			"http.fragment#x":       markerIRN,
 			"nested": map[string]interface{}{
 				`k "` + markerIRN + `"`: "v",
 				"q?tin=" + markerIRN:    "query",
@@ -1237,6 +1244,11 @@ func TestSentryFilter_MapKeysAreScrubbed(t *testing.T) {
 	for k, want := range map[string]string{`k "[redacted]"`: "top", "q": "query", "f": "fragment"} {
 		if got := d[k]; got != want {
 			t.Errorf("breadcrumb data[%q] = %#v, want %q", k, got, want)
+		}
+	}
+	for _, k := range []string{"http.query", "http.fragment"} {
+		if v, ok := d[k]; ok {
+			t.Errorf("breadcrumb data holds %s = %#v, want the key absent", k, v)
 		}
 	}
 	nested, _ := d["nested"].(map[string]interface{})
@@ -1438,5 +1450,52 @@ func TestSentryFilter_SpanCopy(t *testing.T) {
 		if len(s.Tags) != 0 || len(s.Data) != 0 {
 			t.Errorf("span copy tags %v, %d data keys, want neither", s.Tags, len(s.Data))
 		}
+	})
+}
+
+func TestSentryFilter_KeySitesAreScrubbed(t *testing.T) {
+	t.Run("event_tag_key", func(t *testing.T) {
+		mt := filteredClient(t, false)
+		hub := sentry.CurrentHub().Clone()
+		hub.Scope().SetTag(`k "`+markerTIN+`"`, "v")
+		hub.CaptureException(errors.New("tag key anchor"))
+
+		ev := oneEvent(t, mt, "")
+		if got := ev.Tags[`k "[redacted]"`]; got != "v" {
+			t.Errorf("tags = %v, want k \"[redacted]\" = v", ev.Tags)
+		}
+		assertNoLeak(t, mt.captured())
+	})
+
+	t.Run("context_name", func(t *testing.T) {
+		mt := filteredClient(t, false)
+		hub := sentry.CurrentHub().Clone()
+		hub.Scope().SetContext(`c "`+markerIRN+`"`, sentry.Context{"a": "b"})
+		hub.CaptureException(errors.New("context name anchor"))
+
+		ev := oneEvent(t, mt, "")
+		if got := fmt.Sprint(ev.Contexts[`c "[redacted]"`]); got != "map[a:b]" {
+			t.Errorf("context c \"[redacted]\" = %s, want map[a:b]", got)
+		}
+		assertNoLeak(t, mt.captured())
+	})
+
+	t.Run("span_tag_key", func(t *testing.T) {
+		mt := filteredClient(t, true)
+		ctx := sentry.SetHubOnContext(context.Background(), sentry.CurrentHub().Clone())
+		tx := sentry.StartTransaction(ctx, "reconcile.run")
+		child := tx.StartChild("db.query")
+		child.SetTag(`k "`+markerCred+`"`, "v")
+		child.Finish()
+		tx.Finish()
+
+		ev := oneEvent(t, mt, "transaction")
+		if len(ev.Spans) != 1 {
+			t.Fatalf("transaction has %d spans, want 1", len(ev.Spans))
+		}
+		if got := ev.Spans[0].Tags[`k "[redacted]"`]; got != "v" {
+			t.Errorf("span tags = %v, want k \"[redacted]\" = v", ev.Spans[0].Tags)
+		}
+		assertNoLeak(t, mt.captured())
 	})
 }

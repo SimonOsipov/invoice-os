@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/textproto"
+	"reflect"
 	"regexp"
 	"strings"
 	"unicode"
@@ -49,19 +50,28 @@ func scrubEvent(event *sentry.Event, _ *sentry.EventHint) *sentry.Event {
 		r.Headers = headers
 	}
 
-	for k, v := range event.Tags {
-		// The id tags stay byte-identical so they keep matching Railway logs.
-		if k != "request_id" && k != "tenant_id" {
-			event.Tags[k] = ScrubText(v)
+	if event.Tags != nil {
+		tags := make(map[string]string, len(event.Tags))
+		for k, v := range event.Tags {
+			// The id tags stay byte-identical so they keep matching Railway logs.
+			if k != "request_id" && k != "tenant_id" {
+				v = ScrubText(v)
+			}
+			tags[ScrubText(k)] = v
 		}
+		event.Tags = tags
 	}
 
-	for k, c := range event.Contexts {
-		c = scrubData(c)
-		if d, ok := c["data"].(map[string]interface{}); ok && k == "trace" {
-			c["data"] = scrubData(d)
+	if event.Contexts != nil {
+		contexts := make(map[string]sentry.Context, len(event.Contexts))
+		for k, c := range event.Contexts {
+			c = scrubData(c)
+			if d, ok := c["data"].(map[string]interface{}); ok && k == "trace" {
+				c["data"] = scrubData(d)
+			}
+			contexts[ScrubText(k)] = c
 		}
-		event.Contexts[k] = c
+		event.Contexts = contexts
 	}
 
 	for i, s := range event.Spans {
@@ -85,23 +95,32 @@ func scrubEvent(event *sentry.Event, _ *sentry.EventHint) *sentry.Event {
 // leaves for Sentry. It never drops the record.
 func scrubLog(log *sentry.Log) *sentry.Log {
 	log.Body = ScrubText(log.Body)
+	if log.Attributes == nil {
+		return log
+	}
+	attrs := make(map[string]attribute.Value, len(log.Attributes))
 	for k, v := range log.Attributes {
 		// Emitf writes each argument here raw and unquoted, so ScrubText cannot see it.
-		if k == "http.query" || k == "http.fragment" || strings.HasPrefix(k, "sentry.message.parameters.") || strings.HasPrefix(k, "user.") {
-			delete(log.Attributes, k)
+		if strings.HasPrefix(k, "sentry.message.parameters.") || strings.HasPrefix(k, "user.") {
+			continue
+		}
+		sk := ScrubText(k)
+		if isQueryKey(k) || isQueryKey(sk) {
 			continue
 		}
 		switch v.Type() {
 		case attribute.STRING:
-			log.Attributes[k] = attribute.StringValue(ScrubText(v.AsString()))
+			v = attribute.StringValue(ScrubText(v.AsString()))
 		case attribute.STRINGSLICE:
 			ss := v.AsStringSlice()
 			for i := range ss {
 				ss[i] = ScrubText(ss[i])
 			}
-			log.Attributes[k] = attribute.StringSliceValue(ss)
+			v = attribute.StringSliceValue(ss)
 		}
+		attrs[sk] = v
 	}
+	log.Attributes = attrs
 	return log
 }
 
@@ -119,8 +138,12 @@ func scrubSpan(s *sentry.Span) *sentry.Span {
 		// The decoder reads the whole value before it fills snap, so a failure leaves it empty.
 		_ = dec.Decode(&snap)
 	}
-	for k, v := range snap.Tags {
-		snap.Tags[k] = ScrubText(v)
+	var tags map[string]string
+	if snap.Tags != nil {
+		tags = make(map[string]string, len(snap.Tags))
+		for k, v := range snap.Tags {
+			tags[ScrubText(k)] = ScrubText(v)
+		}
 	}
 	return &sentry.Span{
 		TraceID:      s.TraceID,
@@ -130,7 +153,7 @@ func scrubSpan(s *sentry.Span) *sentry.Span {
 		Op:           s.Op,
 		Description:  ScrubText(s.Description),
 		Status:       s.Status,
-		Tags:         snap.Tags,
+		Tags:         tags,
 		StartTime:    s.StartTime,
 		EndTime:      s.EndTime,
 		Data:         scrubData(snap.Data),
@@ -149,12 +172,17 @@ func scrubData(d map[string]interface{}) map[string]interface{} {
 	}
 	out := make(map[string]interface{}, len(d))
 	for k, v := range d {
-		if k == "http.query" || k == "http.fragment" {
+		sk := ScrubText(k)
+		if isQueryKey(k) || isQueryKey(sk) {
 			continue
 		}
-		out[ScrubText(k)] = scrubValue(v)
+		out[sk] = scrubValue(v)
 	}
 	return out
+}
+
+func isQueryKey(k string) bool {
+	return k == "http.query" || k == "http.fragment"
 }
 
 // scrubValue returns a copy of v with every nested string passed through ScrubText.
@@ -165,9 +193,6 @@ func scrubValue(v interface{}) interface{} {
 		return v
 	case string:
 		return ScrubText(x)
-	case []byte:
-		// JSON would base64 it, which hides a quoted value from ScrubText.
-		return ScrubText(string(x))
 	case map[string]interface{}:
 		out := make(map[string]interface{}, len(x))
 		for k, e := range x {
@@ -193,6 +218,11 @@ func scrubValue(v interface{}) interface{} {
 		}
 		return out
 	}
+	// JSON would base64 a byte slice or strip a RawMessage's quotes; either hides a quoted value from ScrubText.
+	if rv := reflect.ValueOf(v); rv.Kind() == reflect.Slice && rv.Type().Elem().Kind() == reflect.Uint8 {
+		return ScrubText(string(rv.Bytes()))
+	}
+	// ceiling: a byte slice nested in a struct or typed map, or in span data, leaves as base64; revisit if one carries customer text
 	raw, err := json.Marshal(v)
 	if err != nil {
 		return "[redacted]"

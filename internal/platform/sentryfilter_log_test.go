@@ -65,6 +65,8 @@ func TestSentryLogFilter_NoQueryStringLeaves(t *testing.T) {
 		String("ref", "https://h/v1/invoices#"+markerIRN).
 		String("http.query", "q="+markerTIN).
 		String("http.fragment", markerIRN).
+		String("http.query?x=1", "q="+markerTIN).
+		String("http.fragment#x", markerIRN).
 		StringSlice("urls", []string{"/v1/invoices?q=" + markerTIN, "/v1/invoices#" + markerIRN}).
 		Emit("GET /v1/invoices?q=" + markerTIN + " from /v1/invoices#" + markerIRN)
 
@@ -302,5 +304,22 @@ func TestSentryLogFilter_DropsUserAttributes(t *testing.T) {
 		}
 	}
 	logAttr(t, l, "sentry.environment")
+	assertNoLeak(t, mt.captured())
+}
+
+func TestSentryLogFilter_AttributeKeysAreScrubbed(t *testing.T) {
+	mt := filteredClient(t, false)
+	newHubLogger().Info().
+		String(`k "`+markerTIN+`"`, "v").
+		Int(`n "`+markerIRN+`"`, 7).
+		Emit("worker started")
+
+	l := oneLog(t, mt)
+	if got := logAttr(t, l, `k "[redacted]"`).AsString(); got != "v" {
+		t.Errorf("k \"[redacted]\" = %q, want v", got)
+	}
+	if got := logAttr(t, l, `n "[redacted]"`).AsInt64(); got != 7 {
+		t.Errorf("n \"[redacted]\" = %d, want 7", got)
+	}
 	assertNoLeak(t, mt.captured())
 }

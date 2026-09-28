@@ -596,6 +596,24 @@ describe('an ended renewal and the next boot', () => {
   })
 })
 
+describe('a kept record and a ?persona= link', () => {
+  // A kept record beats every ?persona= link, so while renewal is down each link bounces to landing.
+  it('a ?persona= link after a transient boot failure does not bounce to landing again', async () => {
+    refreshReply = UNAVAILABLE
+    await bootWith(record(A0_OLD, OLD_AT), '/?persona=firm')
+    await settle(100)
+    expect(calls.length, 'the first boot ran').toBeGreaterThan(0)
+
+    const mark = calls.length
+    const second = await reload('/?persona=firm')
+    await settle(100)
+
+    expect(second.hrefWrites, 'no second bounce to landing').toEqual([])
+    await waitFor(() => expect(capturedCtx?.user, 'a workspace mounts on the second link').toBeDefined())
+    expect(calls.slice(mark).length).toBeGreaterThan(0)
+  })
+})
+
 describe('a request after the session ended sends nothing (D-1)', () => {
   it('a request after a refused renewal sends nothing', async () => {
     const { hrefWrites } = await mountFresh('/invoices')

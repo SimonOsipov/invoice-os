@@ -204,6 +204,12 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disa
 - **Public exposure:** only the four SPAs and the gateway get a public domain
   (runbook step 6). Context services, opsconsole, and Postgres are private-network
   only — for a backend service, *skipping* step 6 is what keeps it private.
+- **Sentry variables are production-only.** `SENTRY_DSN` (every Go service and
+  `docling`), `VITE_SENTRY_DSN` and `SENTRY_AUTH_TOKEN` (each SPA): `set-sentry-off`
+  in `prepare-env` writes them to `""` in every `pr-<N>` fork before anything deploys.
+  Never seal them: a sealed variable does not fork, and `audit-sealed-variables` fails
+  every PR run. A new service joins `set-sentry-off`'s lists in the same change
+  (`TestSentryOffListsMatchTheDeployedFleet`).
 
 ## 5. Provisioning runbook
 

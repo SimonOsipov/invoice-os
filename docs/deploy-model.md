@@ -92,7 +92,7 @@ PR opened ──> dev-env.yml:
                              from `development` (skipInitialDeploys, create-or-reuse)
                              ──> deploy Postgres + probe ──> assert Watch Paths empty
                              (M3-16 invariant, now runtime-asserted) ──> discover the
-                             5 URLs
+                             5 URLs ──> blank Sentry variables (set-sentry-off)
                 gateway ──> gate on /healthz (schema migrated + seeded at boot,
                 M4-21-04; the demo-tenant purge runs in the same sequence and is
                 NON-fatal, so /healthz carries a `demo_purge` field the gate

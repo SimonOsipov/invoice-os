@@ -578,6 +578,15 @@ jobs:
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
         run: bash scripts/ci/railway-env.sh set-ai-fake "$ENV_ID"
 
+      # PR ONLY: forks copy production's Sentry DSNs and token, and Vite bakes
+      # VITE_* at build, so this must precede every deploy.
+      - name: Blank every Sentry variable in the fork (never in the persistent env)
+        if: github.event_name == 'pull_request'
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
+        run: bash scripts/ci/railway-env.sh set-sentry-off "$ENV_ID"
+
       # PR ONLY: a fork inherits production's ENVIRONMENT, and the gateway needs
       # `development` there to serve the mock issuer and seed.
       - name: Set the fork gateway's ENVIRONMENT to development (never in the persistent env)

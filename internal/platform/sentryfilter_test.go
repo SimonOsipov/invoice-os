@@ -1494,9 +1494,12 @@ func TestSentryFilter_KeySitesAreScrubbed(t *testing.T) {
 	t.Run("id_tag_beats_lookalike_key", func(t *testing.T) {
 		mt := filteredClient(t, false)
 		hub := sentry.CurrentHub().Clone()
-		const realID = `req "1"`
+		const realID, realTenant = `req "1"`, `tnt "1"`
 		hub.Scope().SetTag("request_id", realID)
 		hub.Scope().SetTag("request_id#x", "lookalike")
+		hub.Scope().SetTag("tenant_id", realTenant)
+		hub.Scope().SetTag("tenant_id#x", "lookalike")
+		// Map order is random per capture, so 30 captures expose an overwrite.
 		for i := 0; i < 30; i++ {
 			hub.CaptureException(errors.New("id collision anchor"))
 		}
@@ -1507,6 +1510,9 @@ func TestSentryFilter_KeySitesAreScrubbed(t *testing.T) {
 		for i, ev := range evs {
 			if got := ev.Tags["request_id"]; got != realID {
 				t.Fatalf("capture %d: request_id = %q, want %q", i, got, realID)
+			}
+			if got := ev.Tags["tenant_id"]; got != realTenant {
+				t.Fatalf("capture %d: tenant_id = %q, want %q", i, got, realTenant)
 			}
 		}
 	})

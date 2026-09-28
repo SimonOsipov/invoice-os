@@ -105,22 +105,19 @@ func scrubLog(log *sentry.Log) *sentry.Log {
 	return log
 }
 
-// scrubSpan returns a scrubbed copy of s. A caller may still write to a
-// finished child span, so Tags and Data are read under the span's own lock.
+// scrubSpan returns a scrubbed copy of s; no public field of s changes. A caller may
+// still write to a finished child span, so Tags and Data are read under the span's own lock.
 func scrubSpan(s *sentry.Span) *sentry.Span {
 	(&sentry.Event{Spans: []*sentry.Span{s}}).MakeSerializationSafe()
 	var snap struct {
 		Tags map[string]string      `json:"tags"`
 		Data map[string]interface{} `json:"data"`
 	}
-	raw, err := json.Marshal(s)
-	if err == nil {
+	if raw, err := json.Marshal(s); err == nil {
 		dec := json.NewDecoder(bytes.NewReader(raw))
 		dec.UseNumber()
-		err = dec.Decode(&snap)
-	}
-	if err != nil {
-		snap.Tags, snap.Data = nil, nil
+		// The decoder reads the whole value before it fills snap, so a failure leaves it empty.
+		_ = dec.Decode(&snap)
 	}
 	for k, v := range snap.Tags {
 		snap.Tags[k] = ScrubText(v)
@@ -160,8 +157,11 @@ func scrubData(d map[string]interface{}) map[string]interface{} {
 }
 
 // scrubValue returns a copy of v with every nested string passed through ScrubText.
+// Any other type goes through a JSON round-trip, so no container type skips the scrub.
 func scrubValue(v interface{}) interface{} {
 	switch x := v.(type) {
+	case nil, bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, json.Number:
+		return v
 	case string:
 		return ScrubText(x)
 	case map[string]interface{}:
@@ -189,7 +189,17 @@ func scrubValue(v interface{}) interface{} {
 		}
 		return out
 	}
-	return v
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return "[redacted]"
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var generic interface{}
+	if err := dec.Decode(&generic); err != nil {
+		return "[redacted]"
+	}
+	return scrubValue(generic)
 }
 
 // stripQuery removes each "?" or "#" and the run of non-whitespace after it.
@@ -223,6 +233,7 @@ func ScrubText(s string) string {
 
 // redactQuoted replaces each Go double-quoted segment with "[redacted]".
 // Rule: '"' and '\"' are rune literals, not delimiters; an odd delimiter count redacts from the first delimiter to the end.
+// ceiling: stray quotes in non-customer text can misalign the pairing; revisit when a Sentry event shows customer text beside a stray `"`
 func redactQuoted(s string) string {
 	if !strings.Contains(s, `"`) {
 		return s

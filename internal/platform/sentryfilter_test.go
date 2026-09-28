@@ -997,6 +997,7 @@ func TestRedactQuoted(t *testing.T) {
 		{`rune '\\'"` + markerTIN + `"`, `rune '\\'"[redacted]"`},
 		{`a\"b "` + markerTIN + `"`, `a\"[redacted]`},
 		{`x "a'"' "` + markerTIN + `"`, `x "[redacted]"' "[redacted]"`},
+		{`bad size 5" for "` + markerTIN + `" in row 6"`, `bad size 5"[redacted]"` + markerTIN + `"[redacted]"`}, // accepted residual: stray quotes misalign the pairing
 	} {
 		if got := redactQuoted(c.in); got != c.want {
 			t.Errorf("redactQuoted(%q) = %q, want %q", c.in, got, c.want)
@@ -1143,6 +1144,47 @@ func TestSentryFilter_NestedBreadcrumbData(t *testing.T) {
 	}
 	if d["count"] != 3 {
 		t.Errorf("breadcrumb count = %#v, want 3", d["count"])
+	}
+	assertNoLeak(t, mt.captured())
+}
+
+// Types outside scrubValue's switch take the JSON round-trip.
+func TestSentryFilter_OtherDataTypesAreScrubbed(t *testing.T) {
+	type tinT string
+	mt := filteredClient(t, false)
+	hub := sentry.CurrentHub().Clone()
+	hub.Scope().SetContext("probe", sentry.Context{"header": http.Header{"X-Note": {`n "` + markerCred + `"`}}})
+	hub.AddBreadcrumb(&sentry.Breadcrumb{
+		Category: "db",
+		Data: map[string]interface{}{
+			"header": http.Header{"Accept": {"text/html"}, "X-Note": {`n "` + markerCred + `"`}},
+			"rows":   []map[string]interface{}{{"irn": `k "` + markerIRN + `"`, "line": 1}},
+			"notes":  map[string][]string{"n": {`d "` + markerAmt + `"`, "ok"}},
+			"tin":    tinT(`t "` + markerTIN + `"`),
+		},
+	}, nil)
+	hub.CaptureException(errors.New("other types anchor"))
+
+	ev := oneEvent(t, mt, "")
+	if len(ev.Breadcrumbs) != 1 {
+		t.Fatalf("event has %d breadcrumbs, want 1", len(ev.Breadcrumbs))
+	}
+	got, err := json.Marshal(ev.Breadcrumbs[0].Data)
+	if err != nil {
+		t.Fatalf("marshal breadcrumb data: %v", err)
+	}
+	want := `{"header":{"Accept":["text/html"],"X-Note":["n \"[redacted]\""]},` +
+		`"notes":{"n":["d \"[redacted]\"","ok"]},` +
+		`"rows":[{"irn":"k \"[redacted]\"","line":1}],` +
+		`"tin":"t \"[redacted]\""}`
+	if string(got) != want {
+		t.Errorf("breadcrumb data = %s, want %s", got, want)
+	}
+	if h, _ := ev.Contexts["probe"]["header"].(map[string]interface{}); fmt.Sprint(h["X-Note"]) != `[n "[redacted]"]` {
+		t.Errorf("context header = %#v, want X-Note [n \"[redacted]\"]", ev.Contexts["probe"]["header"])
+	}
+	if got := scrubValue(make(chan int)); got != "[redacted]" {
+		t.Errorf("scrubValue(chan) = %#v, want [redacted]", got)
 	}
 	assertNoLeak(t, mt.captured())
 }

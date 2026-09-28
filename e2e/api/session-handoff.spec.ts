@@ -121,7 +121,8 @@ test.describe('sign-in hand-off (API E2E, over the deployed gateway)', () => {
     const app = new URL(resolveTarget('APP_URL')).origin
     const routes: [string, string][] = [
       ['/auth/sign-in', landing],
-      ['/auth/exchange', landing],
+      // The app redeems the code (redeemHandoff), so the exchange's caller is the app.
+      ['/auth/exchange', app],
       ['/auth/refresh', app],
     ]
     for (const [path, origin] of routes) {

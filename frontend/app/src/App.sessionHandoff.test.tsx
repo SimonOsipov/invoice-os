@@ -352,8 +352,9 @@ describe('a hand-off session persists (AC-5, AC-6, AC-8)', () => {
     const rec = storedRecord()
     expect(rec?.token).toBe(live)
     expect(rec?.refresh_token).toBe('R0')
-    expect(rec?.received_at).toBeGreaterThanOrEqual(before)
-    expect(rec?.received_at).toBeLessThanOrEqual(Date.now())
+    // Backdated by the gateway's HandoffTTL (60 s): the code may have waited that long.
+    expect(rec?.received_at).toBeGreaterThanOrEqual(before - 60_000)
+    expect(rec?.received_at).toBeLessThanOrEqual(Date.now() - 60_000)
   })
 
   it('a captured destination is restored after the hand-off', async () => {

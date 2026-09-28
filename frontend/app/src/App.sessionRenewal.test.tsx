@@ -10,6 +10,7 @@ import { EMPTY_BUCKET } from './lib/dashboard'
 import { DEEP_LINK_KEY, readDestination } from './lib/deepLink'
 import type { Member } from './lib/members'
 import { SESSION_KEY } from './lib/session'
+import { ensureSignInState } from './lib/signInState'
 import type { PlatformCtx } from './types'
 
 const LANDING = 'https://landing.example'
@@ -368,6 +369,34 @@ describe('a due stored session renews at boot (AC-1, AC-2, AC-3, AC-10, AC-16)',
     expect(apiCalls().filter((c) => c.auth === `Bearer ${A0_OLD}`), 'the expired token is never sent').toEqual([])
   })
 
+  it('an expired renewable hand-off session wins over ?persona= and ?handoff=', async () => {
+    const urls = ['/?persona=firm', `/?handoff=${'a'.repeat(43)}`]
+    expect(urls.length).toBeGreaterThan(0)
+    for (const url of urls) {
+      calls = []
+      localStorage.clear()
+      sessionStorage.clear()
+      // A tab that asked for a code, so a redemption would really post.
+      ensureSignInState()
+      const { hrefWrites } = await bootWith(record(A0_OLD, OLD_AT), url)
+      await settle()
+
+      expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`), `${url}: no persona mint`).toEqual([])
+      expect(calls.filter((c) => c.url === `${GATEWAY}/auth/exchange`), `${url}: no redemption`).toEqual([])
+      await waitForVerifiedWorkspace()
+      expect(calls[0]?.url, `${url}: the boot renewal comes first`).toBe(REFRESH)
+      expect(calls[0]?.body, url).toEqual({ refresh_token: 'R0' })
+      expect(refreshes(), url).toHaveLength(1)
+      expect(storedRecord()?.me, `${url}: the stored session is kept`).toEqual(ME)
+      expect(storedRecord()?.refresh_token, url).toBe('R1')
+      expect(window.location.search, url).toBe('')
+      expect(hrefWrites, url).toEqual([])
+      cleanup()
+      capturedCtx = undefined
+      if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    }
+  })
+
   it('StrictMode renews once at boot', async () => {
     await bootWith(record(A0_DUE, DUE_AT), '/', { strict: true })
     await waitForVerifiedWorkspace()
@@ -448,8 +477,9 @@ describe('a refused renewal returns to landing with the destination (AC-4, AC-6,
     expect(hrefWrites).toEqual([])
   })
 
+  // The refresh token may still be valid: the record stays for the next boot to renew.
   it('transient after the deadline ends the session', async () => {
-    const { hrefWrites } = await mountFresh()
+    const { hrefWrites } = await mountFresh('/invoices')
     refreshReply = UNAVAILABLE
     vi.setSystemTime(MID_DEADLINE)
     const mark = calls.length
@@ -463,7 +493,10 @@ describe('a refused renewal returns to landing with the destination (AC-4, AC-6,
     expect(probes(mark)).toEqual([])
     expect(hrefWrites).toHaveLength(1)
     expect(hrefWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=${STATE_RE}$`))
-    expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+    expect(JSON.parse(sessionStorage.getItem(DEEP_LINK_KEY) ?? 'null')?.path).toBe('/invoices')
+    expect(storedRecord(), 'the stored record survives a transient end').not.toBeNull()
+    expect(storedRecord()?.token).toBe(A0_FRESH)
+    expect(storedRecord()?.refresh_token).toBe('R0')
   })
 })
 

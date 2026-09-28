@@ -292,9 +292,11 @@ describe('createRenewer', () => {
     }
   })
 
+  // The stored refresh token may still be valid, so storage is kept for the next boot.
   it('transient at the deadline ends it', async () => {
     const rows: [string, number, Session][] = [
       ['at the deadline', DEADLINE, hsession()],
+      ['after the deadline', DEADLINE + HOUR, hsession()],
       // No readable times means no deadline to be before.
       ['unreadable times, at receipt', RECEIVED, hsession({ token: 'opaque-token' })],
     ]
@@ -305,7 +307,7 @@ describe('createRenewer', () => {
       expect(r.error, name).toBeInstanceOf(SessionEndedError)
       expect(h.net.calls, name).toHaveLength(1)
       expect(h.onEnded, name).toHaveBeenCalledTimes(1)
-      expect(h.onEnded, name).toHaveBeenCalledWith({ keepStorage: false })
+      expect(h.onEnded, name).toHaveBeenCalledWith({ keepStorage: true })
       expect(h.onRenewed, name).not.toHaveBeenCalled()
     }
   })

@@ -724,6 +724,10 @@ func prOnlyPrepareEnvStepFaults(devEnv, subcommand, runCmd string) []string {
 	if s.cmd != runCmd {
 		faults = append(faults, fmt.Sprintf("the command is %q, want %q", s.cmd, runCmd))
 	}
+	// `|| true` or `&` softens a failure as continue-on-error would.
+	if run := strings.Join(strings.Fields(s.step.keys["run"]), " "); run != s.cmd {
+		faults = append(faults, fmt.Sprintf("the step's run is %q, want only the command", run))
+	}
 	if got := s.step.keys["if"]; got != prOnlyCondition {
 		faults = append(faults, fmt.Sprintf("the step's if: is %q, want %q", got, prOnlyCondition))
 	}

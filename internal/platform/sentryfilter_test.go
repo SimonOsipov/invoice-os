@@ -1171,6 +1171,7 @@ func TestSentryFilter_OtherDataTypesAreScrubbed(t *testing.T) {
 			"rows":   []map[string]interface{}{{"irn": `k "` + markerIRN + `"`, "line": 1}},
 			"notes":  map[string][]string{"n": {`d "` + markerAmt + `"`, "ok"}},
 			"raw":    []byte(`b "` + markerTIN + `"`),
+			"list":   []interface{}{[]byte(`l "` + markerIRN + `"`)},
 			"tin":    tinT(`t "` + markerTIN + `"`),
 			"seq":    []int64{9007199254740993},
 			"deep":   deep,
@@ -1188,6 +1189,7 @@ func TestSentryFilter_OtherDataTypesAreScrubbed(t *testing.T) {
 	}
 	want := `{"deep":"[redacted]",` +
 		`"header":{"Accept":["text/html"],"X-Note":["n \"[redacted]\""]},` +
+		`"list":["l \"[redacted]\""],` +
 		`"notes":{"n":["d \"[redacted]\"","ok"]},` +
 		`"raw":"b \"[redacted]\"",` +
 		`"rows":[{"irn":"k \"[redacted]\"","line":1}],` +
@@ -1213,9 +1215,16 @@ func TestSentryFilter_MapKeysAreScrubbed(t *testing.T) {
 		Category: "db",
 		Data: map[string]interface{}{
 			`k "` + markerTIN + `"`: "top",
-			"nested":                map[string]interface{}{`k "` + markerIRN + `"`: "v"},
-			"strings":               map[string]string{`k "` + markerCred + `"`: "v"},
-			"ints":                  map[string]int{`k "` + markerAmt + `"`: 1},
+			"q?tin=" + markerTIN:    "query",
+			"f#" + markerAmt:        "fragment",
+			"nested": map[string]interface{}{
+				`k "` + markerIRN + `"`: "v",
+				"q?tin=" + markerIRN:    "query",
+				// Only a top-level http.query key is dropped.
+				"http.query": "?tin=" + markerTIN,
+			},
+			"strings": map[string]string{`k "` + markerCred + `"`: "v"},
+			"ints":    map[string]int{`k "` + markerAmt + `"`: 1},
 		},
 	}, nil)
 	hub.CaptureException(errors.New("map keys anchor"))
@@ -1224,8 +1233,29 @@ func TestSentryFilter_MapKeysAreScrubbed(t *testing.T) {
 	if len(ev.Breadcrumbs) != 1 {
 		t.Fatalf("event has %d breadcrumbs, want 1", len(ev.Breadcrumbs))
 	}
-	if got := ev.Breadcrumbs[0].Data[`k "[redacted]"`]; got != "top" {
-		t.Errorf("breadcrumb data[k \"[redacted]\"] = %#v, want top", got)
+	d := ev.Breadcrumbs[0].Data
+	for k, want := range map[string]string{`k "[redacted]"`: "top", "q": "query", "f": "fragment"} {
+		if got := d[k]; got != want {
+			t.Errorf("breadcrumb data[%q] = %#v, want %q", k, got, want)
+		}
+	}
+	nested, _ := d["nested"].(map[string]interface{})
+	if len(nested) != 3 {
+		t.Fatalf("breadcrumb nested = %#v, want 3 keys", d["nested"])
+	}
+	for k, want := range map[string]string{`k "[redacted]"`: "v", "q": "query", "http.query": ""} {
+		if got := nested[k]; got != want {
+			t.Errorf("breadcrumb nested[%q] = %#v, want %q", k, got, want)
+		}
+	}
+	if got := fmt.Sprint(d["strings"]); got != `map[k "[redacted]":v]` {
+		t.Errorf("breadcrumb strings = %s, want map[k \"[redacted]\":v]", got)
+	}
+	if got := fmt.Sprint(d["ints"]); got != `map[k "[redacted]":1]` {
+		t.Errorf("breadcrumb ints = %s, want map[k \"[redacted]\":1]", got)
+	}
+	if got := fmt.Sprint(ev.Contexts["probe"]); got != `map[k "[redacted]":v]` {
+		t.Errorf("context probe = %s, want map[k \"[redacted]\":v]", got)
 	}
 	assertNoLeak(t, mt.captured())
 }

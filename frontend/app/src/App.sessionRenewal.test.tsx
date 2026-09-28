@@ -168,6 +168,8 @@ function routeFetch() {
         refreshesOut++
         return refreshReply().finally(() => refreshesOut--)
       }
+      // As the gateway: no bearer, no identity.
+      if (url.startsWith(PROBE) && !init?.headers?.get('Authorization')) return answer(401, { error: 'unauthorized' })()
       if (url === `${GATEWAY}/api/tenancy/v1/me`) return meReply()
       if (url === `${GATEWAY}/auth/login`) {
         return answer(200, { access_token: standInToken(Date.now()) })()
@@ -462,6 +464,49 @@ describe('a refused renewal returns to landing with the destination (AC-4, AC-6,
     expect(hrefWrites).toHaveLength(1)
     expect(hrefWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=${STATE_RE}$`))
     expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+  })
+})
+
+describe('a request after the session ended sends nothing (D-1)', () => {
+  it('a request after a refused renewal sends nothing', async () => {
+    const { hrefWrites } = await mountFresh('/invoices')
+    refreshReply = REFUSED
+    vi.setSystemTime(MID_RENEW_AT)
+    // A chain that outlives the workspace, e.g. the document-run poll, keeps this ctx.
+    const stale = capturedCtx
+    await probe(stale)
+    await waitFor(() => expect(hrefWrites.length, 'a refused renewal navigates to landing').toBeGreaterThan(0))
+    await settle()
+    const navigated = [...hrefWrites]
+    const mark = calls.length
+
+    const late = await probe(stale, '/late')
+    await settle()
+
+    expect(probes(mark), 'a request after the session ended is never sent').toEqual([])
+    expect(errorName(late)).toBe('SessionEndedError')
+    expect(navigated).toHaveLength(1)
+    expect(hrefWrites, "no signOut bare-landing navigation is added").toEqual(navigated)
+    expect(JSON.parse(sessionStorage.getItem(DEEP_LINK_KEY) ?? 'null')?.path).toBe('/invoices')
+  })
+
+  it('a request after sign-out sends nothing', async () => {
+    const { hrefWrites } = await mountFresh('/invoices')
+    const stale = capturedCtx
+    await act(async () => {
+      stale!.signOut()
+    })
+    await settle()
+    const navigated = [...hrefWrites]
+    const mark = calls.length
+
+    const late = await probe(stale, '/late')
+    await settle()
+
+    expect(probes(mark), 'a request after sign-out is never sent').toEqual([])
+    expect(errorName(late)).toBe('SessionEndedError')
+    expect(navigated[0]).toBe(LANDING)
+    expect(hrefWrites, 'no second sign-out navigation').toEqual(navigated)
   })
 })
 

@@ -975,7 +975,7 @@ async function storedRenewal(page: Page): Promise<StoredRenewal> {
   return JSON.parse(raw ?? 'null') as StoredRenewal
 }
 
-// Moves received_at back so the stored session is past its lifetime, whatever the page clock reads.
+// Moves received_at back past GOTRUE_JWT_EXP (3600 s, docs/identity-provider.md), whatever the page clock reads.
 async function ageStoredSession(page: Page, patch: Partial<StoredRenewal> = {}): Promise<void> {
   await page.evaluate(
     ({ key, patch, ageMs }) => {
@@ -1006,7 +1006,24 @@ function recordGatewayRequests(page: Page): Request[] {
   return sent
 }
 
+// sent.length at the main frame's next commit: the old document can send nothing after it.
+function markNextCommit(page: Page, sent: Request[]): () => number {
+  let mark = -1
+  const onCommit = (frame: Frame) => {
+    if (frame !== page.mainFrame()) return
+    mark = sent.length
+    page.off('framenavigated', onCommit)
+  }
+  page.on('framenavigated', onCommit)
+  return () => {
+    expect(mark, 'the reload never committed').toBeGreaterThanOrEqual(0)
+    return mark
+  }
+}
+
 const REFRESH_URL = `${GATEWAY_URL}/auth/refresh`
+// frontend/app/src/components/SignIn.tsx SignInLoading, with no persona.
+const OPENING = 'Opening your workspace…'
 const isApi = (r: Request) => r.url().startsWith(`${GATEWAY_URL}/api/`)
 const requestLine = (r: Request) => `${r.method()} ${new URL(r.url()).pathname}`
 
@@ -1030,7 +1047,7 @@ test("deployed app: a real session renews itself past the access token's lifetim
     await page.waitForLoadState('networkidle')
     const refreshed = page.waitForResponse((r) => r.url() === REFRESH_URL && r.request().method() === 'POST')
     const mark = sent.length
-    // useLiveRefresh's interval may fire here and send the first request itself.
+    // Past GOTRUE_JWT_EXP (3600 s). useLiveRefresh's interval may fire here and send the first request itself.
     await page.clock.fastForward('01:05:00')
     await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: 'Audit' }).click()
     expect((await refreshed).status(), 'the renewal answer').toBe(200)
@@ -1039,40 +1056,48 @@ test("deployed app: a real session renews itself past the access token's lifetim
 
     const after = sent.slice(mark)
     expect(requestLine(after[0]), 'the first gateway request after the jump').toBe('POST /auth/refresh')
-    for (const req of after.filter(isApi)) {
-      const auth = await req.headerValue('authorization')
-      expect(auth === `Bearer ${first.token}`, `${requestLine(req)} carried the expired token`).toBe(false)
-      expect(auth?.startsWith('Bearer ey'), `${requestLine(req)} carried no token`).toBe(true)
-    }
     await expect.poll(async () => (await storedRenewal(page)).token, { message: 'the stored token did not change' }).not.toBe(first.token)
-    expect((await storedRenewal(page)).refresh_token, 'the stored refresh token did not rotate').not.toBe(first.refresh_token)
+    const renewed = await storedRenewal(page)
+    expect(renewed.refresh_token, 'the stored refresh token did not rotate').not.toBe(first.refresh_token)
+    for (const req of after.filter(isApi)) {
+      expect(await req.headerValue('authorization'), `${requestLine(req)} did not carry the renewed token`).toBe(`Bearer ${renewed.token}`)
+    }
     await expect(page.locator(VERIFIED)).toBeAttached()
   })
 
   const second = await storedRenewal(page)
+  let third = second
 
   await test.step('a due stored session renews before the workspace mounts', async () => {
     await ageStoredSession(page)
-    // Counted at the reload's commit: the old document can send nothing after it.
-    let mark = -1
-    const onCommit = (frame: Frame) => {
-      if (frame === page.mainFrame() && mark < 0) mark = sent.length
-    }
-    page.on('framenavigated', onCommit)
+    // Held while the page is read, so "before the workspace mounts" is observed, not inferred.
+    let atRefresh: { opening: boolean; verified: number } | null = null
+    await page.route(REFRESH_URL, async (route) => {
+      try {
+        if (atRefresh === null && route.request().method() === 'POST') {
+          atRefresh = { opening: await page.getByText(OPENING, { exact: true }).isVisible(), verified: await page.locator(VERIFIED).count() }
+        }
+      } finally {
+        await route.continue()
+      }
+    })
+    const markAt = markNextCommit(page, sent)
     await page.reload()
-    page.off('framenavigated', onCommit)
-    expect(mark, 'the reload never committed').toBeGreaterThanOrEqual(0)
     await expectInWorkspace(page, account)
+    await page.unroute(REFRESH_URL)
+    const mark = markAt()
+    expect(atRefresh, 'the page while the boot renewal was out').toEqual({ opening: true, verified: 0 })
     await expect.poll(() => sent.slice(mark).filter(isApi).length, { message: 'no data request after the reload' }).toBeGreaterThan(0)
 
     const after = sent.slice(mark)
     expect(requestLine(after[0]), 'the first gateway request after the reload').toBe('POST /auth/refresh')
+    third = await storedRenewal(page)
+    expect(third.token, 'the boot renewal did not change the stored token').not.toBe(second.token)
     for (const req of after.filter(isApi)) {
-      expect(await req.headerValue('authorization'), `${requestLine(req)} carried the pre-reload token`).not.toBe(`Bearer ${second.token}`)
+      expect(await req.headerValue('authorization'), `${requestLine(req)} did not carry the boot-renewed token`).toBe(`Bearer ${third.token}`)
     }
   })
 
-  const third = await storedRenewal(page)
   expect(third.refresh_token, 'the boot renewal did not rotate the refresh token').not.toBe(second.refresh_token)
   expect(statuses.filter((s) => s.startsWith('401 ')), 'a response in the journey was 401').toEqual([])
   expect(
@@ -1087,6 +1112,7 @@ test('deployed app: a refused renewal returns to landing and keeps the destinati
   const account = await provisionRealAccount('renewal-refused')
   const errors = gatedErrors(page, [expectedStatusDropper(page, 401, /\/auth\/refresh$/)])
   const urls = recordUrls(page)
+  const sent = recordGatewayRequests(page)
 
   await signInAtFrontDoor(page, account, '/audit')
   await expect(page, 'the first sign-in did not settle on /audit').toHaveURL(/\/audit$/)
@@ -1094,12 +1120,18 @@ test('deployed app: a refused renewal returns to landing and keeps the destinati
 
   // An unknown refresh token of GoTrue's length: refused as refresh_token_not_found.
   await ageStoredSession(page, { refresh_token: 'aaaaaaaaaaaa' })
-  const [refused] = await Promise.all([
-    page.waitForResponse((r) => r.url() === REFRESH_URL && r.request().method() === 'POST'),
-    page.reload(),
-  ])
-  expect(refused.status(), 'the refused renewal').toBe(401)
+  const urlMark = urls.length
+  const markAt = markNextCommit(page, sent)
+  const refusal = page.waitForResponse((r) => r.url() === REFRESH_URL && r.request().method() === 'POST')
+  // Commit only: the refusal navigates to landing, which may beat the reload's load event.
+  await page.reload({ waitUntil: 'commit' })
+  expect((await refusal).status(), 'the refused renewal').toBe(401)
   await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
+  expect(sent.slice(markAt()).map(requestLine), 'the reloaded app sent more than the refused renewal').toEqual(['POST /auth/refresh'])
+  expect(
+    urls.slice(urlMark).some((u) => u.startsWith(LANDING_URL) && new URL(u).searchParams.has('state')),
+    'the refusal reached landing without a sign-in state',
+  ).toBe(true)
   expect(await storedSession(page.context()), 'the app origin kept a stored session').toBeNull()
 
   await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
@@ -1110,7 +1142,11 @@ test('deployed app: a refused renewal returns to landing and keeps the destinati
   await expectInWorkspace(page, account)
   await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
   await expect(page, 'the destination was not restored after the new sign-in').toHaveURL(/\/audit$/)
+  const again = await storedRenewal(page)
 
-  expect(leakingUrls(urls, signedIn.token, signedIn.refresh_token), 'a token, a refresh token or a JWT appeared in these URLs').toEqual([])
+  expect(
+    leakingUrls(urls, signedIn.token, signedIn.refresh_token, again.token, again.refresh_token),
+    'a token, a refresh token or a JWT appeared in these URLs',
+  ).toEqual([])
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })

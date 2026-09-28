@@ -15,6 +15,8 @@ const TOO_MANY = 'too many requests'
 // internal/gateway/refresh.go: RefreshHandler's refusals.
 const INVALID_REFRESH = 'invalid or expired refresh token'
 const REFRESH_REQUIRED = 'refresh_token is required'
+// internal/gateway/gateway.go router: authorize's refusal of a token with no tenant.
+const FORBIDDEN = 'forbidden'
 
 // internal/gateway/signin_throttle.go SignInMaxFailures.
 const THROTTLE_LIMIT = 10
@@ -102,9 +104,9 @@ test.describe('sign-in hand-off (API E2E, over the deployed gateway)', () => {
     expect(next.refresh_token, 'the refresh token did not rotate').not.toBe(first.refresh_token)
     expect(next.refresh_token).not.toBe('')
 
-    // The account has no workspace: 403 means the verifier accepted the renewed token.
+    // The account has no workspace: authorize's 403 means the verifier accepted the renewed token.
     const me = await rawFetch('/api/tenancy/v1/me', { headers: { Authorization: `Bearer ${next.access_token}` } })
-    expect(me.status, `renewed token on /me: ${JSON.stringify(me.body)}`).toBe(403)
+    expect([me.status, me.body], 'the renewed token on /me').toEqual([403, { error: FORBIDDEN }])
 
     const unknown = await refresh({ refresh_token: 'aaaaaaaaaaaa' })
     expect([unknown.status(), await unknown.json()], 'an unknown refresh token').toEqual([401, { error: INVALID_REFRESH }])

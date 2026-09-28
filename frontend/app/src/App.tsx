@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { APP_PERSONAS, landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn, SignInLoading } from './components/SignIn'
 import { resolveBootSession, loadSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
-import { createRenewer, isRenewalDue, type Renewer } from './lib/renewal'
+import { createRenewer, isRenewalDue, SessionEndedError, type Renewer } from './lib/renewal'
 import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
 import { consumeSignInState, ensureSignInState, landingSignInUrl, mintSignInState } from './lib/signInState'
 import { HANDOFF_PARAM, isLiveHandoffSession, readHandoffCode, redeemHandoff } from './lib/sessionHandoff'
@@ -1912,6 +1912,11 @@ export default function App() {
   useLayoutEffect(() => {
     renewer.track(activeSession)
   }, [renewer, activeSession])
+  // Nothing tracked means the session ended: a request from a chain that outlived it sends nothing.
+  const freshToken = useCallback(
+    () => (renewer.tracking() ? renewer.fresh() : Promise.reject(new SessionEndedError())),
+    [renewer],
+  )
 
   // A due seat renews behind the splash before the workspace sends anything.
   const [bootRenewing, setBootRenewing] = useState(() => seat !== null && isRenewalDue(seat))
@@ -2135,7 +2140,7 @@ export default function App() {
         becomePersona={DEMO_MODE ? becomePersona : undefined}
         returnToSeat={DEMO_MODE ? returnToSeat : undefined}
         seatSubject={DEMO_MODE ? seat?.persona.subject : undefined}
-        freshToken={renewer.fresh}
+        freshToken={freshToken}
       />
       {/* Sibling of the keyed Workspace above, not inside it -- a successful switch
           remounts Workspace, which would destroy a toast mounted underneath it. */}

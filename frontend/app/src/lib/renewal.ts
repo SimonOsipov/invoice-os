@@ -77,6 +77,7 @@ export interface RenewerOptions {
 
 export interface Renewer {
   track(session: Session | null): void
+  tracking(): boolean
   fresh(): string | null | Promise<string | null>
 }
 
@@ -151,6 +152,9 @@ export function createRenewer({ base, now = () => Date.now(), load, onRenewed, o
       if (session !== null && session !== ended) {
         ended = null
       }
+    },
+    tracking() {
+      return current !== null
     },
     fresh() {
       const session = current

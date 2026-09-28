@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -748,4 +749,186 @@ func TestSentryFilter_TransactionCarriesNoUser(t *testing.T) {
 		t.Errorf("transaction user = %+v, want empty", tx.User)
 	}
 	assertNoLeak(t, mt.captured())
+}
+
+func TestSentryFilter_ErrorTextLosesQuotedValues(t *testing.T) {
+	t.Run("chained_exception", func(t *testing.T) {
+		mt := filteredClient(t, false)
+		inner := fmt.Errorf("issue_date %q", markerIRN)
+		sentry.CurrentHub().Clone().CaptureException(fmt.Errorf("archive: compact json %q: %w", markerTIN, inner))
+
+		ev := oneEvent(t, mt, "")
+		if len(ev.Exception) < 2 {
+			t.Fatalf("event has %d exception values, want the whole chain", len(ev.Exception))
+		}
+		for i, ex := range ev.Exception {
+			if !strings.Contains(ex.Value, "issue_date") {
+				t.Errorf("exception[%d] value = %q, want it to still hold issue_date", i, ex.Value)
+			}
+		}
+		if got := exceptionValue(t, ev); !strings.Contains(got, "archive: compact json") {
+			t.Errorf("outer exception value = %q, want it to still hold archive: compact json", got)
+		}
+		assertNoLeak(t, mt.captured())
+	})
+
+	t.Run("upstream_reason", func(t *testing.T) {
+		mt := filteredClient(t, false)
+		inner := fmt.Errorf("docling: /v1/read returned 500: failed on %s", markerTIN)
+		sentry.CurrentHub().Clone().CaptureException(fmt.Errorf("extract: %w", inner))
+
+		ev := oneEvent(t, mt, "")
+		if len(ev.Exception) < 2 {
+			t.Fatalf("event has %d exception values, want the whole chain", len(ev.Exception))
+		}
+		for i, ex := range ev.Exception {
+			if !strings.Contains(ex.Value, "returned 500: ") {
+				t.Errorf("exception[%d] value = %q, want it to still hold returned 500: ", i, ex.Value)
+			}
+		}
+		assertNoLeak(t, mt.captured())
+	})
+
+	t.Run("message_event", func(t *testing.T) {
+		mt := filteredClient(t, false)
+		sentry.CurrentHub().Clone().CaptureMessage(fmt.Sprintf("total %q rejected", markerAmt))
+
+		ev := oneEvent(t, mt, "")
+		if !strings.Contains(ev.Message, "rejected") {
+			t.Errorf("message = %q, want it to still hold rejected", ev.Message)
+		}
+		assertNoLeak(t, mt.captured())
+	})
+
+	t.Run("tag_value", func(t *testing.T) {
+		mt := filteredClient(t, false)
+		hub := sentry.CurrentHub().Clone()
+		hub.Scope().SetTag("err", `decode "`+markerIRN+`"`)
+		hub.CaptureException(errors.New("quoted tag anchor"))
+
+		ev := oneEvent(t, mt, "")
+		if got := ev.Tags["err"]; got != `decode "[redacted]"` {
+			t.Errorf("tag err = %q, want %q", got, `decode "[redacted]"`)
+		}
+		assertNoLeak(t, mt.captured())
+	})
+
+	t.Run("breadcrumb_message", func(t *testing.T) {
+		mt := filteredClient(t, false)
+		hub := sentry.CurrentHub().Clone()
+		hub.AddBreadcrumb(&sentry.Breadcrumb{Category: "import", Message: `import failed: header "` + markerTIN + `"`}, nil)
+		hub.CaptureException(errors.New("quoted breadcrumb anchor"))
+
+		ev := oneEvent(t, mt, "")
+		if len(ev.Breadcrumbs) != 1 {
+			t.Fatalf("event has %d breadcrumbs, want 1", len(ev.Breadcrumbs))
+		}
+		if got := ev.Breadcrumbs[0].Message; !strings.Contains(got, "import failed: header") {
+			t.Errorf("breadcrumb message = %q, want it to still hold import failed: header", got)
+		}
+		assertNoLeak(t, mt.captured())
+	})
+
+	t.Run("breadcrumb_data", func(t *testing.T) {
+		mt := filteredClient(t, false)
+		hub := sentry.CurrentHub().Clone()
+		hub.AddBreadcrumb(&sentry.Breadcrumb{
+			Category: "import",
+			Message:  "import failed",
+			Data:     map[string]any{"err": `header "` + markerTIN + `"`},
+		}, nil)
+		hub.CaptureException(errors.New("quoted breadcrumb data anchor"))
+
+		ev := oneEvent(t, mt, "")
+		if len(ev.Breadcrumbs) != 1 {
+			t.Fatalf("event has %d breadcrumbs, want 1", len(ev.Breadcrumbs))
+		}
+		if got, _ := ev.Breadcrumbs[0].Data["err"].(string); !strings.Contains(got, "header") {
+			t.Errorf("breadcrumb data err = %q, want it to still hold header", got)
+		}
+		assertNoLeak(t, mt.captured())
+	})
+
+	t.Run("transaction_span_data", func(t *testing.T) {
+		mt := filteredClient(t, true)
+		ctx := sentry.SetHubOnContext(context.Background(), sentry.CurrentHub().Clone())
+		tx := sentry.StartTransaction(ctx, "import.run")
+		span := tx.StartChild("db.lookup", sentry.WithDescription(`lookup "`+markerTIN+`"`))
+		span.SetData("err", `decode "`+markerIRN+`"`)
+		span.Finish()
+		tx.Finish()
+
+		got := oneEvent(t, mt, "transaction")
+		var lookups []*sentry.Span
+		for _, s := range got.Spans {
+			if s.Op == "db.lookup" {
+				lookups = append(lookups, s)
+			}
+		}
+		if len(lookups) != 1 {
+			t.Fatalf("transaction has %d db.lookup spans, want 1", len(lookups))
+		}
+		if !strings.Contains(lookups[0].Description, "lookup") {
+			t.Errorf("span description = %q, want it to still hold lookup", lookups[0].Description)
+		}
+		assertNoLeak(t, mt.captured())
+	})
+
+	t.Run("trace_description_and_data", func(t *testing.T) {
+		mt := filteredClient(t, true)
+		ctx := sentry.SetHubOnContext(context.Background(), sentry.CurrentHub().Clone())
+		tx := sentry.StartTransaction(ctx, "import.run", sentry.WithDescription(`lookup "`+markerTIN+`"`))
+		tx.SetData("err", `decode "`+markerIRN+`"`)
+		sentry.GetHubFromContext(tx.Context()).CaptureException(errors.New("quoted trace anchor"))
+		tx.Finish()
+
+		for _, typ := range []string{"", "transaction"} {
+			trace := oneEvent(t, mt, typ).Contexts["trace"]
+			if got, _ := trace["description"].(string); !strings.Contains(got, "lookup") {
+				t.Errorf("%q event trace description = %q, want it to still hold lookup", typ, got)
+			}
+			data, ok := trace["data"].(map[string]interface{})
+			if !ok || len(data) == 0 {
+				t.Fatalf("%q event trace data = %#v, want a non-empty map", typ, trace["data"])
+			}
+			if got, _ := data["err"].(string); !strings.Contains(got, "decode") {
+				t.Errorf("%q event trace data err = %q, want it to still hold decode", typ, got)
+			}
+		}
+		assertNoLeak(t, mt.captured())
+	})
+}
+
+func TestRedactQuoted(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{`a "` + markerTIN + `" b "` + markerIRN + `" c`, `a "[redacted]" b "[redacted]" c`},
+		{fmt.Sprintf("x %q y", `a"`+markerTIN), `x "[redacted]" y`},
+		{fmt.Sprintf("x %q y", markerTIN+`\`), `x "[redacted]" y`},
+		{`bad "` + markerTIN + ` and more`, `bad "[redacted]`},
+		{`field ""`, `field "[redacted]"`},
+		{"", ""},
+		{"docling: /v1/read returned 500", "docling: /v1/read returned 500"},
+	} {
+		if got := redactQuoted(c.in); got != c.want {
+			t.Errorf("redactQuoted(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestRedactUpstreamReason(t *testing.T) {
+	prefix := "docling: /v1/read returned 422: "
+	var long strings.Builder
+	for long.Len() < 4<<10 {
+		long.WriteString("page " + markerTIN + "\n\"total\" " + markerAmt + "\n")
+	}
+	for _, c := range []struct{ in, want string }{
+		{"docling: /v1/read returned 500: " + markerTIN, "docling: /v1/read returned 500: [redacted]"},
+		{prefix + long.String(), prefix + "[redacted]"},
+		{"validation service returned status 502", "validation service returned status 502"},
+		{"returned 5: x", "returned 5: x"},
+	} {
+		if got := redactUpstreamReason(c.in); got != c.want {
+			t.Errorf("redactUpstreamReason(%.80q...) = %.80q..., want %q", c.in, got, c.want)
+		}
+	}
 }

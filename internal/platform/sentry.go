@@ -24,6 +24,15 @@ func initSentry(cfg Config) error {
 	return nil
 }
 
+// SentryState is "on" or "off" for /healthz. sentry-go binds a no-op client
+// for an empty DSN, so a bound client alone does not mean events are sent.
+func SentryState() string {
+	if c := sentry.CurrentHub().Client(); c != nil && c.Options().Dsn != "" {
+		return "on"
+	}
+	return "off"
+}
+
 // flushSentry flushes buffered events; called during graceful shutdown. A
 // no-op when Sentry is disabled.
 func flushSentry(timeout time.Duration) {

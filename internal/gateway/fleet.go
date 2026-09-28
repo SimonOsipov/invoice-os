@@ -21,7 +21,7 @@ import (
 const (
 	probeTimeout        = 3 * time.Second
 	maxProbeConcurrency = 8
-	// A /healthz body is a two-key object; the cap only stops a malfunctioning
+	// A /healthz body is a few short keys; the cap only stops a malfunctioning
 	// upstream from streaming into the gateway.
 	maxHealthzBody = 4 << 10
 )
@@ -49,6 +49,9 @@ type ServiceHealth struct {
 	// healthy, just not the one under test, and conflating the two would make
 	// /healthz/fleet lie in the other direction. The deploy gate compares it.
 	Build string `json:"build,omitempty"`
+	// Sentry is "on" or "off" as the service reported it, empty when its body has
+	// none or it is probed at a custom path. Never part of the up/down verdict.
+	Sentry string `json:"sentry,omitempty"`
 }
 
 // FleetHealth is the GET /healthz/fleet body: an overall roll-up plus per-service detail.
@@ -99,7 +102,7 @@ func FleetHealthHandler(upstreams map[string]*url.URL, healthPaths map[string]st
 
 		// The gateway is up by definition here; the context probes follow in name order.
 		services := make([]ServiceHealth, 0, len(names)+1)
-		services = append(services, ServiceHealth{Name: "gateway", Status: statusUp, Build: platform.BuildSHA})
+		services = append(services, ServiceHealth{Name: "gateway", Status: statusUp, Build: platform.BuildSHA, Sentry: platform.SentryState()})
 		services = append(services, probed...)
 
 		allUp := true
@@ -154,8 +157,9 @@ func probeService(ctx context.Context, client *http.Client, name string, base *u
 	// probe: 2xx already settled up/down, and the deploy gate reports a missing
 	// build as a mismatch on its own terms.
 	var payload struct {
-		Build string `json:"build"`
+		Build  string `json:"build"`
+		Sentry string `json:"sentry"`
 	}
 	_ = json.NewDecoder(io.LimitReader(resp.Body, maxHealthzBody)).Decode(&payload)
-	return ServiceHealth{Name: name, Status: statusUp, Build: payload.Build}
+	return ServiceHealth{Name: name, Status: statusUp, Build: payload.Build, Sentry: payload.Sentry}
 }

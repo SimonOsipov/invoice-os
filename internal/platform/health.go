@@ -39,7 +39,7 @@ func (rd *readiness) snapshot() map[string]ReadyCheck {
 // DBReset is "true" or "false" once a process has run boot-time database
 // provisioning, and empty on every process that does not — which is every
 // service except the gateway. /healthz omits the field entirely while it is
-// empty, so the other services' bodies are byte-identical to before it existed.
+// empty; every other body carries only status, build and sentry.
 //
 // The gateway sets it from db.ProvisionConfig.ResetWillRun — the same predicate
 // db.Provision branched on, never a second copy. It is published because the
@@ -66,7 +66,7 @@ var AuthIssuers string
 
 // healthzHandler is a liveness probe: 200 as long as the process is running.
 func healthzHandler(w http.ResponseWriter, _ *http.Request) {
-	body := map[string]string{"status": "ok", "build": BuildSHA}
+	body := map[string]string{"status": "ok", "build": BuildSHA, "sentry": SentryState()}
 	if DBReset != "" {
 		body["db_reset"] = DBReset
 	}

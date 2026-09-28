@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Every request waits for a due renewal; a refused one returns to landing (AUTH-06 D5, D8, D9).
+// Every request waits for a due renewal; a refused one returns to landing.
 
 import { StrictMode } from 'react'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
@@ -424,7 +424,7 @@ describe('a due stored session renews at boot (AC-1, AC-2, AC-3, AC-10, AC-16)',
     await waitForVerifiedWorkspace()
     await settle()
 
-    // D5: the loaders' first requests share one retry, so the count is not pinned.
+    // The loaders' first requests share one retry, so the count is not pinned.
     expect(calls[0]?.url, 'the boot renewal comes first').toBe(REFRESH)
     expect(refreshes().length).toBeGreaterThanOrEqual(1)
     expect(apiCalls().length).toBeGreaterThan(0)

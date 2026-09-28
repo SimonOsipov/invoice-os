@@ -196,7 +196,7 @@ func TestRefresh_BadBody400NoUpstreamCall(t *testing.T) {
 	}
 }
 
-// D2: the handler forwards no client path, query or extra body key to GoTrue.
+// The handler forwards no client path, query or extra body key to GoTrue.
 func TestRefresh_ForwardsNoClientPathQueryOrKey(t *testing.T) {
 	fake := newTokenFake(t, http.StatusOK, gtRefreshed)
 	h := newRefresh(fake.URL, nil)

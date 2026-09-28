@@ -109,7 +109,7 @@ describe('redeemHandoff (D9, D25 step 5)', () => {
     })
   })
 
-  // D15, D24: a missing, empty or non-string refresh token is an AUTH-05-era answer.
+  // A missing, empty or non-string refresh token is a pre-renewal gateway's answer.
   it('redeemHandoff without a refresh token sets no renewal', async () => {
     const rows: [string, object][] = [
       ['absent', { access_token: LIVE }],

@@ -14,7 +14,7 @@ const OTHER_SUB = 'd0000000-0000-0000-0000-000000000008'
 const ME: Me = { tenant: { id: TENANT, name: 'Adaeze Ventures' }, user: { id: SUB, role: 'authenticated' } }
 const OTHER_ME: Me = { tenant: { id: OTHER_TENANT, name: 'Other Co' }, user: { id: OTHER_SUB, role: 'authenticated' } }
 
-// Server times sit far from the local clock: the lifetime is exp − iat, measured from receipt (D4).
+// Server times sit far from the local clock: the lifetime is exp − iat, measured from receipt.
 const IAT = 1_700_000_000
 const EXP = IAT + 3600
 const RECEIVED = 1_800_000_000_000
@@ -286,7 +286,7 @@ describe('createRenewer', () => {
       expect(h.net.calls, name).toHaveLength(1)
       expect(h.onEnded, name).not.toHaveBeenCalled()
       expect(h.onRenewed, name).not.toHaveBeenCalled()
-      // Kept: the next call tries again (D5).
+      // Kept: the next call tries again.
       await expect(Promise.resolve(h.renewer.fresh()), name).resolves.toBe(A0)
       expect(h.net.calls, name).toHaveLength(2)
     }
@@ -552,7 +552,7 @@ describe('createRenewer', () => {
   it('storage cleared mid-flight writes nothing', async () => {
     const other = hsession({ me: OTHER_ME, token: B0, refresh: 'RB' })
     const foreign = jwt({ ...claims('A1'), app_metadata: { tenant_id: OTHER_TENANT } })
-    // Whatever the answer, storage switched under it is left alone (D30).
+    // Whatever the answer, storage switched under it is left alone.
     const rows: [string, Session | null, Reply, number][] = [
       ['cleared, 200', null, ok(A1, 'R1'), RENEW_AT],
       ['another subject, 200', other, ok(A1, 'R1'), RENEW_AT],

@@ -378,7 +378,7 @@ describe('makeAuthedFetch forwards onSuspended (AC-2)', () => {
   })
 })
 
-// A getter may return a promise while a renewal is due (AUTH-06 D9).
+// A getter may return a promise while a renewal is due.
 describe('authedFetch with an async getter (AUTH-06 D9, D5)', () => {
   // Pre-handled, so the stub that never awaits it does not report an unhandled rejection.
   const ended = () => {

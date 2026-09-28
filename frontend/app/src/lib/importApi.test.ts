@@ -1300,7 +1300,7 @@ describe('checkMapping', () => {
   })
 })
 
-// AUTH-06 D9: a promise from getToken is awaited; a plain value keeps the XHR synchronous (P17).
+// A promise from getToken is awaited; a plain value keeps the XHR synchronous (P17).
 describe('xhrJson with an async getter', () => {
   const flush = () => new Promise((r) => setTimeout(r, 0))
   const authWith = (getToken: ImportAuth['getToken'], onUnauthorized = vi.fn()): ImportAuth => ({ getToken, onUnauthorized })

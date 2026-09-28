@@ -522,7 +522,7 @@ describe('hand-off session record (AUTH-05 D8)', () => {
     const persona =
       '{"v":1,"personaId":"firm","token":"jwt","me":{"tenant":{"id":"11111111-1111-1111-1111-111111111111","name":"Okafor & Partners"},"user":{"id":"c0000000-0000-0000-0000-000000000001","role":"authenticated"}},"verified":true}'
     expect(serializeSession(firmSession())).toBe(persona)
-    // AUTH-06 D10: a persona session never writes the pair, even if it carries a renewal.
+    // A persona session never writes the pair, even if it carries a renewal.
     expect(serializeSession({ ...firmSession(), renewal: { refreshToken: 'R0', receivedAt: 1000 } })).toBe(persona)
   })
 
@@ -546,7 +546,7 @@ describe('hand-off session record (AUTH-05 D8)', () => {
   })
 })
 
-// AUTH-06 D1: the refresh token rides in the same record as the access token.
+// The refresh token rides in the same record as the access token.
 describe('renewal pair in the stored record (AUTH-06 D1)', () => {
   const ME: Me = {
     tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures' },

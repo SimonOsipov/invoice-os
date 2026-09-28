@@ -336,7 +336,7 @@ describe('a hand-off session persists (AC-5, AC-6, AC-8)', () => {
     expect(hrefWrites).toEqual([])
   })
 
-  // AUTH-06 D1: the refresh token is stored in the same record as the access token.
+  // The refresh token is stored in the same record as the access token.
   it('a hand-off boot stores the refresh token with its receipt time', async () => {
     configure()
     ensureSignInState()

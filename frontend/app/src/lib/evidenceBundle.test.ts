@@ -384,7 +384,7 @@ function endedGetter(): Promise<string | null> {
   return p
 }
 
-// AUTH-06 D9, D26: a due renewal is awaited; an ended session makes no request.
+// A due renewal is awaited; an ended session makes no request.
 describe('fetchEvidenceBundle with an async getter', () => {
   it('sends the awaited token', async () => {
     const fetchMock = stubFetch(okBundle('attachment; filename=a.zip'))

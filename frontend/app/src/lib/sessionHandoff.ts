@@ -8,6 +8,8 @@ import { BASE64URL_43 } from './signInState'
 export { handoffPersona }
 
 export const HANDOFF_PARAM = 'handoff'
+// Mirrors HandoffTTL in internal/gateway/handoff.go.
+export const HANDOFF_TTL_MS = 60_000
 
 export function readHandoffCode(search: string): string | null {
   const code = new URLSearchParams(search).get(HANDOFF_PARAM)
@@ -23,8 +25,9 @@ export async function redeemHandoff(base: string, code: string, state: string, n
     signal,
   })
   const me = await apiFetch<Me>(`${base}/api/tenancy/v1/me`, { token, signal })
-  // A missing or malformed refresh token gives a session without renewal.
-  const renewal = typeof refreshToken === 'string' && refreshToken !== '' ? { refreshToken, receivedAt: now } : undefined
+  // A missing or malformed refresh token gives a session without renewal. The token may have
+  // waited in the gateway's store for up to HandoffTTL, so receipt is backdated by it.
+  const renewal = typeof refreshToken === 'string' && refreshToken !== '' ? { refreshToken, receivedAt: now - HANDOFF_TTL_MS } : undefined
   return { persona: handoffPersona(me), token, me, verified: true, handoff: true, ...(renewal ? { renewal } : {}) }
 }
 

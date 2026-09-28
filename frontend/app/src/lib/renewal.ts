@@ -135,9 +135,10 @@ export function createRenewer({ base, now = () => Date.now(), load, onRenewed, o
     if (failure instanceof ApiError && failure.kind === 'http' && (failure.status === 400 || failure.status === 401)) {
       end(start, false)
     }
+    // The refresh token may outlive the access token: the record stays for the next boot.
     const until = deadline(start)
     if (until === null || now() >= until) {
-      end(start, false)
+      end(start, true)
     }
     return start.token
   }

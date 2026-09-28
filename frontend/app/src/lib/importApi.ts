@@ -43,7 +43,7 @@
 // backend).
 //
 // makeImportAuth(session, onSignOut, onSuspended, freshToken) mirrors makeAuthedFetch with
-// the same parameters (D3, AUDIT-10-07). The token is read at CALL time (the renewer's
+// the same parameters. The token is read at CALL time (the renewer's
 // getter, or `session.token`), never captured at construction.
 //
 // Progress contract ([progress-two-phase], AC4/AC6): xhrJson reports RAW loaded/total

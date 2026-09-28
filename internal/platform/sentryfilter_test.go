@@ -1151,6 +1151,16 @@ func TestSentryFilter_NestedBreadcrumbData(t *testing.T) {
 // Types outside scrubValue's switch take the JSON round-trip.
 func TestSentryFilter_OtherDataTypesAreScrubbed(t *testing.T) {
 	type tinT string
+	type deepT map[string]interface{}
+	// Deeper than encoding/json decodes, so the round trip fails.
+	deep := deepT{}
+	cur := map[string]interface{}(deep)
+	for i := 0; i < 10001; i++ {
+		next := map[string]interface{}{}
+		cur["d"] = next
+		cur = next
+	}
+	cur["v"] = `d "` + markerTIN + `"`
 	mt := filteredClient(t, false)
 	hub := sentry.CurrentHub().Clone()
 	hub.Scope().SetContext("probe", sentry.Context{"header": http.Header{"X-Note": {`n "` + markerCred + `"`}}})
@@ -1161,6 +1171,8 @@ func TestSentryFilter_OtherDataTypesAreScrubbed(t *testing.T) {
 			"rows":   []map[string]interface{}{{"irn": `k "` + markerIRN + `"`, "line": 1}},
 			"notes":  map[string][]string{"n": {`d "` + markerAmt + `"`, "ok"}},
 			"tin":    tinT(`t "` + markerTIN + `"`),
+			"seq":    []int64{9007199254740993},
+			"deep":   deep,
 		},
 	}, nil)
 	hub.CaptureException(errors.New("other types anchor"))
@@ -1173,9 +1185,11 @@ func TestSentryFilter_OtherDataTypesAreScrubbed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal breadcrumb data: %v", err)
 	}
-	want := `{"header":{"Accept":["text/html"],"X-Note":["n \"[redacted]\""]},` +
+	want := `{"deep":"[redacted]",` +
+		`"header":{"Accept":["text/html"],"X-Note":["n \"[redacted]\""]},` +
 		`"notes":{"n":["d \"[redacted]\"","ok"]},` +
 		`"rows":[{"irn":"k \"[redacted]\"","line":1}],` +
+		`"seq":[9007199254740993],` +
 		`"tin":"t \"[redacted]\""}`
 	if string(got) != want {
 		t.Errorf("breadcrumb data = %s, want %s", got, want)

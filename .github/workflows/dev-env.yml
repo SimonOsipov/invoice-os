@@ -587,6 +587,14 @@ jobs:
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
         run: bash scripts/ci/railway-env.sh set-sentry-off "$ENV_ID"
 
+      # PR ONLY: a fork is reused per PR, so it never inherits a production write made after it was created.
+      - name: Point the fork gateway at the reconciliation service (never in the persistent env)
+        if: github.event_name == 'pull_request'
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
+        run: bash scripts/ci/railway-env.sh set-fork-reconciliation-url "$ENV_ID"
+
       # PR ONLY: a fork inherits production's ENVIRONMENT, and the gateway needs
       # `development` there to serve the mock issuer and seed.
       - name: Set the fork gateway's ENVIRONMENT to development (never in the persistent env)

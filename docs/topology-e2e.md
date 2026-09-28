@@ -10,8 +10,8 @@ M2-14.4).
 
 ## What it asserts
 
-1. **Fleet /healthz gate** — the gateway's public `GET /healthz/fleet` roll-up reports all
-   10 backends (gateway + 7 routed context services + the `docling` and `auth` sidecars) green; the run
+1. **Fleet /healthz gate** — the gateway's public `GET /healthz/fleet` roll-up reports the
+   gateway and every backend (the 7 routed context services, `reconciliation`, and the `docling` and `auth` sidecars) green; the run
    fails naming any that are down.
    The context services are private-network-only, so this route is the only way CI sees
    their health through the one public backend surface.

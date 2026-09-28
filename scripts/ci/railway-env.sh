@@ -14,6 +14,7 @@
 #                            set-fork-auth-site <environment-id> <landing-url>|
 #                            set-production-auth <--pre-merge|--post-merge> <environment-id>|
 #                            set-sentry-off <environment-id|--self-test>|
+#                            set-fork-reconciliation-url <environment-id>|
 #                            delete-environment <name>|list-environments>
 #
 # `set-production-environment` is run by hand, once, never from a workflow: it
@@ -3065,6 +3066,43 @@ cmd_set_sentry_off() {
   echo "Sentry off confirmed in environment $env_id: SENTRY_DSN blank on ${SENTRY_BACKENDS[*]}; VITE_SENTRY_DSN and SENTRY_AUTH_TOKEN blank on ${SENTRY_SPAS[*]}."
 }
 
+# --- The fork gateway's RECONCILIATION_URL -----------------------------------
+#
+# A fork is reused per PR, so it never inherits a production write made after it was created.
+
+RECONCILIATION_INTERNAL_URL="http://reconciliation.railway.internal:8080"
+
+# cmd_set_fork_reconciliation_url <environment-id>
+# Guard order is cmd_set_ai_fake's. The URL is not a secret, so upsert_variable's echo is fine.
+cmd_set_fork_reconciliation_url() {
+  local env_id="${1:-}"
+
+  if [ -z "$env_id" ]; then
+    echo "::error::usage: railway-env.sh set-fork-reconciliation-url <environment-id>"
+    exit 2
+  fi
+
+  require_source_env
+  if [ "$env_id" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to set RECONCILIATION_URL in the persistent environment ($env_id). Its gateway variables are the user's; no CI path may write them."
+    exit 1
+  fi
+
+  require_env
+  assert_environment_is_ephemeral "$env_id" RECONCILIATION_URL
+
+  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+    "listing service instances in environment $env_id"
+  # Own line: `local gw_id=$(...)` would mask a refusal's exit status from set -e.
+  local gw_id
+  gw_id=$(service_id_by_name "$GQL_RESPONSE" gateway "environment $env_id" RECONCILIATION_URL)
+
+  upsert_variable "$env_id" "$gw_id" gateway RECONCILIATION_URL "$RECONCILIATION_INTERNAL_URL"
+  auth_read "$env_id" "$gw_id" gateway
+  value_verdict "$GQL_RESPONSE" gateway RECONCILIATION_URL "$RECONCILIATION_INTERNAL_URL" || exit 1
+  echo "gateway.RECONCILIATION_URL confirmed in environment $env_id."
+}
+
 case "${1:-}" in
   assert-project-settings)   cmd_assert_project_settings ;;
   disable-pr-environments)   cmd_disable_pr_environments ;;
@@ -3083,10 +3121,11 @@ case "${1:-}" in
   set-fork-auth-site)        shift; cmd_set_fork_auth_site "$@" ;;
   set-production-auth)       shift; cmd_set_production_auth "$@" ;;
   set-sentry-off)            cmd_set_sentry_off "${2:-}" ;;
+  set-fork-reconciliation-url) cmd_set_fork_reconciliation_url "${2:-}" ;;
   delete-environment)        cmd_delete_environment "${2:-}" ;;
   list-environments)         cmd_list_environments ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|delete-environment <name>|list-environments>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments>"
     exit 2
     ;;
 esac

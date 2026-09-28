@@ -114,9 +114,12 @@ interface Call {
   url: string
   auth: string | null
   body: unknown
+  // A refresh was sent and not yet answered when this request went out.
+  duringRefresh: boolean
 }
 
 let calls: Call[] = []
+let refreshesOut = 0
 let refreshReply: Reply = renewed()
 let meReply: Reply = answer(200, ME)
 
@@ -134,8 +137,16 @@ function routeFetch() {
   vi.stubGlobal(
     'fetch',
     vi.fn((url: string, init?: { headers?: Headers; body?: string }) => {
-      calls.push({ url, auth: init?.headers?.get('Authorization') ?? null, body: init?.body === undefined ? undefined : JSON.parse(init.body) })
-      if (url === REFRESH) return refreshReply()
+      calls.push({
+        url,
+        auth: init?.headers?.get('Authorization') ?? null,
+        body: init?.body === undefined ? undefined : JSON.parse(init.body),
+        duringRefresh: refreshesOut > 0,
+      })
+      if (url === REFRESH) {
+        refreshesOut++
+        return refreshReply().finally(() => refreshesOut--)
+      }
       if (url === `${GATEWAY}/api/tenancy/v1/me`) return meReply()
       if (url === `${GATEWAY}/auth/login`) {
         return answer(200, { access_token: jwt(OTHER_ME, nowSec(Date.now()), 'P') })()
@@ -239,6 +250,7 @@ beforeEach(() => {
   window.history.replaceState(null, '', '/')
   capturedCtx = undefined
   calls = []
+  refreshesOut = 0
   refreshReply = renewed()
   meReply = answer(200, ME)
   routeFetch()
@@ -317,8 +329,11 @@ describe('a due stored session renews at boot (AC-1, AC-2, AC-3, AC-10, AC-16)',
     await waitForVerifiedWorkspace()
     await settle()
 
-    expect(refreshes()).toHaveLength(1)
+    // D5: the loaders' first requests share one retry, so the count is not pinned.
+    expect(calls[0]?.url, 'the boot renewal comes first').toBe(REFRESH)
+    expect(refreshes().length).toBeGreaterThanOrEqual(1)
     expect(apiCalls().length).toBeGreaterThan(0)
+    expect(apiCalls().filter((c) => c.duringRefresh), 'no request goes out while a refresh is unanswered').toEqual([])
     expect(apiCalls().filter((c) => c.auth !== `Bearer ${A0_DUE}`)).toEqual([])
     expect(storedRecord()?.token).toBe(A0_DUE)
     expect(hrefWrites).toEqual([])

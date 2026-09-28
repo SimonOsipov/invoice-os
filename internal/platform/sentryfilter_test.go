@@ -331,7 +331,6 @@ func TestSentryFilter_NoQueryStringLeaves(t *testing.T) {
 		assertNoLeak(t, mt.captured())
 	})
 
-	// Guard: passes against the stub. Mutation: dereference event.Request without a nil check.
 	t.Run("nil_request", func(t *testing.T) {
 		mt := filteredClient(t, false)
 		hub := sentry.CurrentHub().Clone()
@@ -351,7 +350,6 @@ func TestSentryFilter_NoQueryStringLeaves(t *testing.T) {
 		assertNoLeak(t, mt.captured())
 	})
 
-	// Guard: passes against the stub. Mutation: dereference event.Request without a nil check.
 	t.Run("transaction_no_request", func(t *testing.T) {
 		mt := filteredClient(t, true)
 		ctx := sentry.SetHubOnContext(context.Background(), sentry.CurrentHub().Clone())
@@ -383,8 +381,6 @@ func TestSentryFilter_NoQueryStringLeaves(t *testing.T) {
 		assertNoLeak(t, mt.captured())
 	})
 
-	// Guard: passes against the stub. Mutation: an unchecked
-	// .(map[string]interface{}) assertion on the trace context's data.
 	t.Run("trace_data_not_a_map", func(t *testing.T) {
 		mt := filteredClient(t, false)
 		hub := sentry.CurrentHub().Clone()
@@ -495,9 +491,7 @@ func TestStripQuery(t *testing.T) {
 		{"row #5", "row "}, // accepted cost: prose loses the token after # or ?
 		{"a?x\tb", "a\tb"},
 		{"/p?q=Ünï\nnext", "/p\nnext"},
-		// Guard: mutation is returning a placeholder for any input.
 		{"", ""},
-		// Guard: mutation is cutting at the first space.
 		{"no query", "no query"},
 	} {
 		if got := stripQuery(c.in); got != c.want {

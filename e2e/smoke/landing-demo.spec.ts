@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import { resolveTarget } from '../targets'
 import { enclosesRect, rectsOverlap, WIDE_WIDTHS, type Rect } from '../topology/layout'
 import { seedConsent } from './landingConsent'
+import { isProductionHost, isSentryHost } from './sentryHost'
 
 // The Book-a-Demo lead capture, both the modal and the inline #demo card, against the
 // PR's own deployed landing (LAND-02).
@@ -39,6 +40,7 @@ const LANDING_URL = resolveTarget('LANDING_URL')
 // which arm the assertions expect is decided once, here, from the target under test.
 const LANDING_HOST = new URL(LANDING_URL).hostname.toLowerCase()
 const EXPECT_TAG = LANDING_HOST === 'www.ascomply.com'
+const EXPECT_SENTRY_SILENT = !isProductionHost(LANDING_URL)
 
 // Mirrors TAXPAYER_SIZE_OPTIONS / DEFAULT_TAXPAYER_SIZE in
 // frontend/landing/src/components/demoForm.ts. Deliberately RETYPED rather than imported:
@@ -131,6 +133,8 @@ type LandingSinks = {
   allRequests: string[]
   /** THE oracle for "the GA4 tag loaded". Filled by the SAME listener as allRequests. */
   gaRequests: string[]
+  /** A PR environment runs with Sentry off, so this stays empty. Same listener as allRequests. */
+  sentryRequests: string[]
   /** Safety-net route bookkeeping. Diagnostics only — NEVER assert on this (see header). */
   abortedByGuard: string[]
 }
@@ -183,6 +187,7 @@ function attachSinks(page: Page): LandingSinks {
     hubspotRequests: [],
     allRequests: [],
     gaRequests: [],
+    sentryRequests: [],
     abortedByGuard: [],
   }
   page.on('console', (msg) => {
@@ -191,13 +196,14 @@ function attachSinks(page: Page): LandingSinks {
   page.on('pageerror', (err) => {
     sinks.consoleErrors.push(`pageerror: ${err.message}`)
   })
-  // ONE listener feeds all three sinks, so allRequests' non-vacuity floor covers the GA
-  // sink too — a second listener could be dead while the first was live.
+  // ONE listener feeds every sink, so allRequests' non-vacuity floor covers the other
+  // sinks too — a second listener could be dead while the first was live.
   page.on('request', (req) => {
     const url = req.url()
     sinks.allRequests.push(url)
     if (isHubSpotHost(url)) sinks.hubspotRequests.push(url)
     if (isGoogleAnalyticsHost(url)) sinks.gaRequests.push(url)
+    if (isSentryHost(url)) sinks.sentryRequests.push(url)
   })
   return sinks
 }
@@ -304,6 +310,9 @@ function expectClosedGateStayedSilent(sinks: LandingSinks): void {
     sinks.hubspotRequests,
     `the closed gate sent something to HubSpot:\n${sinks.hubspotRequests.join('\n')}`,
   ).toEqual([])
+  if (EXPECT_SENTRY_SILENT) {
+    expect(sinks.sentryRequests, `the landing sent requests to a Sentry host:\n${sinks.sentryRequests.join('\n')}`).toEqual([])
+  }
   expect(sinks.consoleErrors, `console errors on the landing page:\n${sinks.consoleErrors.join('\n')}`).toEqual([])
   // A biconditional, not "zero GA requests": the tag SHOULD load when the target is the
   // real production host. Red either way round — a gate weakened to admit a preview host,

@@ -204,6 +204,14 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disa
 - **Public exposure:** only the four SPAs and the gateway get a public domain
   (runbook step 6). Context services, opsconsole, and Postgres are private-network
   only — for a backend service, *skipping* step 6 is what keeps it private.
+- **Sentry variables are production-only.** `SENTRY_DSN` (every Go service and
+  `docling`), `VITE_SENTRY_DSN` and `SENTRY_AUTH_TOKEN` (each SPA): `set-sentry-off`
+  in `prepare-env` writes them to `""` in every `pr-<N>` fork before anything deploys.
+  Never seal them: a sealed variable does not fork, and `audit-sealed-variables` fails
+  every PR run. A new service joins `set-sentry-off`'s lists in the same change
+  (`TestSentryOffListsMatchTheDeployedFleet`). A new service probed through the
+  `/healthz/fleet` roll-up without the platform `/healthz` must be exempted by name in
+  `fleet-gate`'s "Gate on the Go fleet's Sentry state" step, as `docling` and `auth` are.
 
 ## 5. Provisioning runbook
 
@@ -341,7 +349,7 @@ its column shows where it departs.
 | Source | `cmd/<svc>/` (Go) | `sidecar/<svc>/` (Python) | `sidecar/auth/Dockerfile` only: `FROM` the digest-pinned image plus `ENV` |
 | Config file | `cmd/<svc>/railway.json` | `sidecar/<svc>/railway.json` | `sidecar/auth/railway.json` (values also set on the instance) |
 | Dockerfile | shared root `Dockerfile` + `SERVICE` arg | per-service `sidecar/<svc>/Dockerfile` | per-service, no `ARG SERVICE` |
-| Health | `/healthz` | `/healthz` (same contract, same `build` field) | instance health check `/health` (GoTrue's; Railway rejects the JWKS path); fleet probe at `/.well-known/jwks.json`; reports no `build`, so fleet-gate exempts `auth` from the `build` check by name |
+| Health | `/healthz` | `/healthz` (same `build` field; no `sentry` field until SENTRY-05) | instance health check `/health` (GoTrue's; Railway rejects the JWKS path); fleet probe at `/.well-known/jwks.json`; reports no `build`, so fleet-gate exempts `auth` from the `build` check by name |
 | Ingress | private-networking only (gateway is the exception) | private-networking only | private-networking only |
 | Watch patterns | empty (§3) | empty (§3) | empty (§3) |
 

@@ -94,6 +94,16 @@ jobs:
       - name: Run set-ai-fake --self-test
         run: bash scripts/ci/railway-env.sh set-ai-fake --self-test
 
+  sentry-off-self-test:
+    name: Sentry-off variable write self-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run set-sentry-off --self-test
+        run: bash scripts/ci/railway-env.sh set-sentry-off --self-test
+
   fork-environment-self-test:
     name: Fork gateway ENVIRONMENT write self-test
     runs-on: ubuntu-latest

@@ -361,6 +361,32 @@ func TestLoadUpstreamsFailsLoudlyOnAMissingProbedURL(t *testing.T) {
 // probed service is 404 under /api/, while a routed one reaches its proxy (502
 // against a dead upstream proves it routed rather than 404'd).
 func TestGatewayHandlersPublishNoProxyRouteForAProbedService(t *testing.T) {
+	get, fleetNames := gatewayMux(t)
+
+	// `auth` is named explicitly: its 404 is only meaningful once the roll-up below sees it.
+	for _, svc := range append(slices.Clone(probedServices), "auth") {
+		if got := get("/api/" + svc + "/x"); got != http.StatusNotFound {
+			t.Errorf("GET /api/%s/x = %d, want 404 -- a probed sidecar is exposed as a public proxy route", svc, got)
+		}
+	}
+	// Control: without this a mux that routes NOTHING would pass the loop above.
+	if got := get("/api/" + routedServices[0] + "/x"); got != http.StatusBadGateway {
+		t.Fatalf("GET /api/%s/x = %d, want 502 (routed to a dead upstream) -- the 404s above prove nothing if no service is routed at all", routedServices[0], got)
+	}
+
+	// The roll-up sees both lists: that is why probing through the gateway works.
+	seen := fleetNames()
+	for _, svc := range append(append([]string{"gateway", "auth"}, routedServices...), probedServices...) {
+		if !seen[svc] {
+			t.Errorf("/healthz/fleet omits %q -- the deploy gate cannot block on a service the roll-up never names", svc)
+		}
+	}
+}
+
+// gatewayMux serves gatewayHandlers over upstreams set by setUpstreamEnv to a dead
+// address. get sends an authenticated GET; fleetNames decodes /healthz/fleet's names.
+func gatewayMux(t *testing.T) (get func(path string) int, fleetNames func() map[string]bool) {
+	t.Helper()
 	issuer, err := auth.NewMockIssuer(mountTestIssuer)
 	if err != nil {
 		t.Fatalf("mock issuer: %v", err)
@@ -391,45 +417,34 @@ func TestGatewayHandlersPublishNoProxyRouteForAProbedService(t *testing.T) {
 	mux.Handle("/api/", apiHandler)
 	mux.HandleFunc("GET /healthz/fleet", fleetHandler)
 
-	get := func(path string) int {
+	get = func(path string) int {
 		r := httptest.NewRequest(http.MethodGet, path, nil)
 		r.Header.Set("Authorization", "Bearer "+tok)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, r)
 		return rec.Code
 	}
-
-	// `auth` is named explicitly: its 404 is only meaningful once the roll-up below sees it.
-	for _, svc := range append(slices.Clone(probedServices), "auth") {
-		if got := get("/api/" + svc + "/x"); got != http.StatusNotFound {
-			t.Errorf("GET /api/%s/x = %d, want 404 -- a probed sidecar is exposed as a public proxy route", svc, got)
+	fleetNames = func() map[string]bool {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz/fleet", nil))
+		var fleet struct {
+			Services []struct {
+				Name string `json:"name"`
+			} `json:"services"`
 		}
-	}
-	// Control: without this a mux that routes NOTHING would pass the loop above.
-	if got := get("/api/" + routedServices[0] + "/x"); got != http.StatusBadGateway {
-		t.Fatalf("GET /api/%s/x = %d, want 502 (routed to a dead upstream) -- the 404s above prove nothing if no service is routed at all", routedServices[0], got)
-	}
-
-	// The roll-up sees both lists: that is why probing through the gateway works.
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz/fleet", nil))
-	var fleet struct {
-		Services []struct {
-			Name string `json:"name"`
-		} `json:"services"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &fleet); err != nil {
-		t.Fatalf("decode /healthz/fleet: %v (body %q)", err, rec.Body.String())
-	}
-	seen := map[string]bool{}
-	for _, s := range fleet.Services {
-		seen[s.Name] = true
-	}
-	for _, svc := range append(append([]string{"gateway", "auth"}, routedServices...), probedServices...) {
-		if !seen[svc] {
-			t.Errorf("/healthz/fleet omits %q -- the deploy gate cannot block on a service the roll-up never names", svc)
+		if err := json.Unmarshal(rec.Body.Bytes(), &fleet); err != nil {
+			t.Fatalf("decode /healthz/fleet: %v (body %q)", err, rec.Body.String())
 		}
+		seen := map[string]bool{}
+		for _, s := range fleet.Services {
+			seen[s.Name] = true
+		}
+		if len(seen) == 0 {
+			t.Fatalf("/healthz/fleet names no service (body %q)", rec.Body.String())
+		}
+		return seen
 	}
+	return get, fleetNames
 }
 
 const mountTestIssuer = "https://mock.ascomply.test"
@@ -622,6 +637,123 @@ func TestLoadUpstreamsRequiresAuthURL(t *testing.T) {
 	if _, ok := routed["auth"]; ok {
 		t.Error("auth is in the routed map -- it would get a public /api/auth/* proxy route")
 	}
+}
+
+// TestLoadUpstreamsRequiresReconciliationURL: `reconciliation` is probed, never routed,
+// so the deploy gate sees it running; a gateway that cannot see it must not boot.
+func TestLoadUpstreamsRequiresReconciliationURL(t *testing.T) {
+	if !slices.Contains(probedServices, "reconciliation") {
+		t.Errorf("probedServices = %v, want it to carry `reconciliation`", probedServices)
+	}
+
+	setUpstreamEnv(t, "http://127.0.0.1:1")
+	t.Setenv("RECONCILIATION_URL", "")
+	_, _, err := loadUpstreams()
+	if err == nil {
+		t.Error("loadUpstreams succeeded with RECONCILIATION_URL unset, want a named boot failure")
+	} else if !strings.Contains(err.Error(), "RECONCILIATION_URL") {
+		t.Errorf("error %q does not name RECONCILIATION_URL", err)
+	}
+
+	t.Setenv("RECONCILIATION_URL", "http://127.0.0.1:2")
+	routed, probed, err := loadUpstreams()
+	if err != nil {
+		t.Fatalf("loadUpstreams with RECONCILIATION_URL set: %v", err)
+	}
+	if u, ok := probed["reconciliation"]; !ok || u.String() != "http://127.0.0.1:2" {
+		t.Errorf("probed[reconciliation] = %v (present %v), want http://127.0.0.1:2", u, ok)
+	}
+	if _, ok := routed["reconciliation"]; ok {
+		t.Error("reconciliation is in the routed map -- it would get a public /api/reconciliation/* proxy route")
+	}
+
+	t.Run("rollup_names_it", func(t *testing.T) {
+		get, fleetNames := gatewayMux(t)
+		seen := fleetNames()
+		if !seen["gateway"] {
+			t.Fatalf("control: /healthz/fleet omits the gateway itself; names = %v", seen)
+		}
+		if !seen["reconciliation"] {
+			t.Errorf("/healthz/fleet omits \"reconciliation\"; names = %v", seen)
+		}
+		if got := get("/api/reconciliation/x"); got != http.StatusNotFound {
+			t.Errorf("GET /api/reconciliation/x = %d, want 404 -- a probed service is exposed as a public proxy route", got)
+		}
+		// Control: a 404 proves nothing if the mux routes no service at all.
+		if got := get("/api/tenancy/x"); got != http.StatusBadGateway {
+			t.Errorf("GET /api/tenancy/x = %d, want 502 (routed to a dead upstream)", got)
+		}
+	})
+
+	// A down reconciliation must degrade the roll-up, never be skipped or tolerated.
+	t.Run("down_degrades_rollup", func(t *testing.T) {
+		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		}))
+		t.Cleanup(up.Close)
+		var mu sync.Mutex
+		reconCode, reconPaths := http.StatusOK, []string{}
+		recon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			defer mu.Unlock()
+			reconPaths = append(reconPaths, r.URL.Path)
+			w.WriteHeader(reconCode)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		}))
+		t.Cleanup(recon.Close)
+
+		setUpstreamEnv(t, up.URL)
+		t.Setenv("RECONCILIATION_URL", recon.URL)
+		routed, probed, err := loadUpstreams()
+		if err != nil {
+			t.Fatalf("loadUpstreams: %v", err)
+		}
+		_, fleet := gatewayHandlers(nil, routed, probed, nil, slog.Default())
+		rollup := func() (int, string, map[string]string) {
+			rec := httptest.NewRecorder()
+			fleet(rec, httptest.NewRequest(http.MethodGet, "/healthz/fleet", nil))
+			var body struct {
+				Status   string `json:"status"`
+				Services []struct {
+					Name, Status string
+				} `json:"services"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode /healthz/fleet: %v (body %q)", err, rec.Body.String())
+			}
+			st := map[string]string{}
+			for _, s := range body.Services {
+				st[s.Name] = s.Status
+			}
+			return rec.Code, body.Status, st
+		}
+
+		// Positive control: every backend up, reconciliation probed at its platform /healthz.
+		code, status, st := rollup()
+		if code != http.StatusOK || status != "ok" || st["reconciliation"] != "up" {
+			t.Fatalf("all up: code=%d status=%q reconciliation=%q, want 200 ok up; services=%v", code, status, st["reconciliation"], st)
+		}
+		mu.Lock()
+		paths := slices.Clone(reconPaths)
+		reconCode = http.StatusServiceUnavailable
+		mu.Unlock()
+		if !slices.Equal(paths, []string{"/healthz"}) {
+			t.Errorf("reconciliation probed at %v, want exactly [/healthz]", paths)
+		}
+
+		code, status, st = rollup()
+		if code != http.StatusServiceUnavailable || status != "degraded" {
+			t.Errorf("reconciliation down: code=%d status=%q, want 503 degraded", code, status)
+		}
+		if st["reconciliation"] != "down" {
+			t.Errorf("reconciliation = %q, want down; services=%v", st["reconciliation"], st)
+		}
+		for name, s := range st {
+			if name != "reconciliation" && s != "up" {
+				t.Errorf("%s = %q, want up -- only reconciliation is down", name, s)
+			}
+		}
+	})
 }
 
 // parseMain returns main.go's func main body; the AST scans below read main's wiring.

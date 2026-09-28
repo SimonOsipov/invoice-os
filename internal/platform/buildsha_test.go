@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/getsentry/sentry-go"
 )
 
 // The embedded file ends with a newline; an untrimmed value would be compared
@@ -204,17 +206,17 @@ func TestHealthzCarriesAuthIssuersOnlyWhenSet(t *testing.T) {
 }
 
 // TestHealthzBodyIsUnchangedOnAServiceThatNeverProvisions: eight of the nine
-// fleet binaries never set these package vars, so their /healthz bodies must
-// stay byte-identical to what they were before the fields existed. Asserting the
-// absence of one key is weaker than asserting the whole key set — a further field
-// added on the same reasoning would pass the absence check and still change every
-// non-gateway body.
+// fleet binaries never set the provisioning vars, so their /healthz carries only
+// status, build and sentry. sentry is deliberate on every binary. The whole key
+// set is asserted so any further field fails here.
 func TestHealthzBodyIsUnchangedOnAServiceThatNeverProvisions(t *testing.T) {
 	t.Cleanup(func(issuers, issuer, purge, reset string) func() {
 		return func() { AuthIssuers, MockIssuer, DemoPurge, DBReset = issuers, issuer, purge, reset }
 	}(AuthIssuers, MockIssuer, DemoPurge, DBReset))
 
 	AuthIssuers, MockIssuer, DemoPurge, DBReset = "", "", "", ""
+	sentry.CurrentHub().BindClient(nil)
+	t.Cleanup(func() { sentry.CurrentHub().BindClient(nil) })
 
 	rec := httptest.NewRecorder()
 	healthzHandler(rec, httptest.NewRequest("GET", "/healthz", nil))
@@ -227,7 +229,7 @@ func TestHealthzBodyIsUnchangedOnAServiceThatNeverProvisions(t *testing.T) {
 		t.Fatalf("/healthz returned an empty object (%q); the comparison below would be vacuous", rec.Body.String())
 	}
 
-	want := map[string]string{"status": "ok", "build": BuildSHA}
+	want := map[string]string{"status": "ok", "build": BuildSHA, "sentry": "off"}
 	if len(body) != len(want) {
 		t.Errorf("/healthz carries %d field(s) %v on a non-provisioning service, want exactly %v", len(body), body, want)
 	}

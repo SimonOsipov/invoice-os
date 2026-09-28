@@ -13,6 +13,8 @@
 #                            set-fork-auth <environment-id|--self-test>|
 #                            set-fork-auth-site <environment-id> <landing-url>|
 #                            set-production-auth <--pre-merge|--post-merge> <environment-id>|
+#                            set-sentry-off <environment-id|--self-test>|
+#                            set-fork-reconciliation-url <environment-id>|
 #                            delete-environment <name>|list-environments>
 #
 # `set-production-environment` is run by hand, once, never from a workflow: it
@@ -2923,6 +2925,184 @@ cmd_set_production_auth() {
   echo "Production auth configuration confirmed in environment $env_id. Seal the secrets in the dashboard now."
 }
 
+# --- Sentry off in a fork ----------------------------------------------------
+#
+# A fork inherits production's variables, so a production DSN would spend the
+# Sentry quota from every PR (TestSentryOffListsMatchTheDeployedFleet pins the lists).
+
+SENTRY_BACKENDS=(gateway tenancy portfolio invoice validation submission dashboard notifications reconciliation docling)
+SENTRY_SPAS=(landing app ops-console support-console)
+
+# sentry_verdict <variables-response-json> <service> <NAME>...
+# Pure. Passes only when every name is absent or exactly "". Prints no value.
+sentry_verdict() {
+  local resp="$1" svc="$2" readable name kind bad=0
+  shift 2
+
+  readable=$(printf '%s' "$resp" | jq -r '
+    if type != "object" then "no"
+    elif (has("errors") and ((.errors | length) > 0)) then "no"
+    elif ((.data | type) != "object") or ((.data.variables | type) != "object") then "no"
+    else "yes" end' 2>/dev/null) || readable="no"
+  if [ "$readable" != "yes" ]; then
+    echo "::error::Could not read $svc's variables (a GraphQL error or a map that is not an object). This is NOT evidence that $* are unset."
+    return 1
+  fi
+
+  for name in "$@"; do
+    kind=$(auth_kind "$resp" "$name")
+    case "$kind" in
+      absent|empty)
+        echo "  $svc.$name is $kind" ;;
+      present)
+        echo "::error::$svc.$name is SET in this environment. A PR environment must never send to Sentry. Value not printed."
+        bad=1 ;;
+      *)
+        echo "::error::$svc's variable map is unreadable, so $svc.$name could not be checked. This is NOT evidence that it is unset."
+        bad=1 ;;
+    esac
+  done
+  return "$bad"
+}
+
+# sentry_expect <pass|refuse> <id> <json> <leak-needle> <NAME>...
+# Increments `failures`, a local of sentry_off_self_test (bash dynamic scoping).
+sentry_expect() {
+  local want="$1" id="$2" json="$3" needle="$4" out rc=0
+  shift 4
+  out=$(sentry_verdict "$json" landing "$@" 2>&1) || rc=$?
+  if { [ "$want" = pass ] && [ "$rc" != "0" ]; } || { [ "$want" = refuse ] && [ "$rc" = "0" ]; }; then
+    echo "::error::self-test $id FAILED: expected $want, got exit $rc and '$out'"
+    failures=$((failures + 1)); return 0
+  fi
+  if [ -n "$needle" ] && printf '%s' "$out" | grep -qF -- "$needle"; then
+    echo "::error::self-test $id FAILED: the output leaked a fixture value"
+    failures=$((failures + 1)); return 0
+  fi
+  echo "  $id ok -> $want (exit $rc), no value printed"
+}
+
+sentry_off_self_test() {
+  local failures=0 dsn="https://fixturekey@o1.ingest.de.sentry.io/1"
+
+  sentry_expect pass S1 '{"data":{"variables":{"PORT":"8080"}}}' "" SENTRY_DSN
+  sentry_expect pass S2 '{"data":{"variables":{"VITE_SENTRY_DSN":"","SENTRY_AUTH_TOKEN":""}}}' "" VITE_SENTRY_DSN SENTRY_AUTH_TOKEN
+  sentry_expect refuse S3 "{\"data\":{\"variables\":{\"SENTRY_DSN\":\"$dsn\"}}}" "$dsn" SENTRY_DSN
+  sentry_expect refuse S4 '{"data":{"variables":{"VITE_SENTRY_DSN":"","SENTRY_AUTH_TOKEN":"sntrys_fixture_token"}}}' "sntrys_fixture_token" VITE_SENTRY_DSN SENTRY_AUTH_TOKEN
+  sentry_expect refuse S5 '{"data":{"variables":{"SENTRY_DSN":" \t "}}}' "" SENTRY_DSN
+  # shellcheck disable=SC2016  # the braces are fixture data, not a missed expansion.
+  sentry_expect refuse S6 '{"data":{"variables":{"SENTRY_DSN":"${{shared.SENTRY_DSN}}"}}}' '${{shared.SENTRY_DSN}}' SENTRY_DSN
+  sentry_expect refuse S7 '{"data":{"variables":{"SENTRY_DSN":null}}}' "" SENTRY_DSN
+  sentry_expect refuse S8 '{"data":{"variables":null}}' "" SENTRY_DSN
+  sentry_expect refuse S9 '{"errors":[{"message":"Not Authorized"}],"data":{"variables":{}}}' "" SENTRY_DSN
+  sentry_expect refuse S10 '[]' "" SENTRY_DSN
+  sentry_expect refuse S11 'not json' "" SENTRY_DSN
+  sentry_expect pass S12 '{"data":{"variables":{"DATABASE_URL":"postgres://u:pw-fixture@h/db","SENTRY_DSN":""}}}' "pw-fixture" SENTRY_DSN
+
+  # S13: an unreadable map and a set variable must read differently.
+  local unreadable present
+  unreadable=$(sentry_verdict '{"data":{"variables":null}}' landing SENTRY_DSN 2>&1) || true
+  present=$(sentry_verdict "{\"data\":{\"variables\":{\"SENTRY_DSN\":\"$dsn\"}}}" landing SENTRY_DSN 2>&1) || true
+  if [ "$unreadable" = "$present" ]; then
+    echo "::error::self-test S13 FAILED: the unreadable and set refusals produced the SAME message"
+    failures=$((failures + 1))
+  else
+    echo "  S13 ok -> unreadable and set refusals are distinguishable"
+  fi
+
+  if [ "$failures" != "0" ]; then
+    echo "::error::Sentry-off self-test: $failures fixture(s) FAILED."
+    exit 1
+  fi
+  echo "Sentry-off self-test: all fixtures passed, no token read, no network call."
+}
+
+# sentry_off_service <env-id> <settle-json> <service> <NAME>...: blank, re-read, verdict.
+sentry_off_service() {
+  local env_id="$1" settle="$2" svc="$3" svc_id name
+  shift 3
+  svc_id=$(service_id_by_name "$settle" "$svc" "environment $env_id" SENTRY)
+  for name in "$@"; do
+    upsert_secret_variable "$env_id" "$svc_id" "$svc" "$name" ""
+  done
+  graphql_post "$(gql_body "$SERVICE_VARIABLES_QUERY" \
+    "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" '{p: $p, e: $e, s: $s}')")" \
+    "re-reading $svc variables in environment $env_id"
+  sentry_verdict "$GQL_RESPONSE" "$svc" "$@" || exit 1
+}
+
+# cmd_set_sentry_off <environment-id|--self-test>
+# Guard order is cmd_set_ai_fake's: an empty id must not reach the persistent-id compare.
+cmd_set_sentry_off() {
+  local env_id="${1:-}"
+
+  if [ "$env_id" = "--self-test" ]; then
+    sentry_off_self_test
+    return
+  fi
+  if [ -z "$env_id" ]; then
+    echo "::error::usage: railway-env.sh set-sentry-off <environment-id>"
+    exit 2
+  fi
+
+  require_source_env
+  if [ "$env_id" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to blank Sentry in the persistent environment ($env_id). Its Sentry configuration is the user's; no CI path may write it."
+    exit 1
+  fi
+
+  require_env
+  assert_environment_is_ephemeral "$env_id" SENTRY
+
+  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+    "listing service instances in environment $env_id"
+  local settle="$GQL_RESPONSE" svc
+  for svc in "${SENTRY_BACKENDS[@]}"; do
+    sentry_off_service "$env_id" "$settle" "$svc" SENTRY_DSN
+  done
+  for svc in "${SENTRY_SPAS[@]}"; do
+    sentry_off_service "$env_id" "$settle" "$svc" VITE_SENTRY_DSN SENTRY_AUTH_TOKEN
+  done
+  echo "Sentry off confirmed in environment $env_id: SENTRY_DSN blank on ${SENTRY_BACKENDS[*]}; VITE_SENTRY_DSN and SENTRY_AUTH_TOKEN blank on ${SENTRY_SPAS[*]}."
+}
+
+# --- The fork gateway's RECONCILIATION_URL -----------------------------------
+#
+# A fork is reused per PR, so it never inherits a production write made after it was created.
+
+RECONCILIATION_INTERNAL_URL="http://reconciliation.railway.internal:8080"
+
+# cmd_set_fork_reconciliation_url <environment-id>
+# Guard order is cmd_set_ai_fake's. The URL is not a secret, so upsert_variable's echo is fine.
+cmd_set_fork_reconciliation_url() {
+  local env_id="${1:-}"
+
+  if [ -z "$env_id" ]; then
+    echo "::error::usage: railway-env.sh set-fork-reconciliation-url <environment-id>"
+    exit 2
+  fi
+
+  require_source_env
+  if [ "$env_id" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to set RECONCILIATION_URL in the persistent environment ($env_id). Its gateway variables are the user's; no CI path may write them."
+    exit 1
+  fi
+
+  require_env
+  assert_environment_is_ephemeral "$env_id" RECONCILIATION_URL
+
+  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+    "listing service instances in environment $env_id"
+  # Own line: `local gw_id=$(...)` would mask a refusal's exit status from set -e.
+  local gw_id
+  gw_id=$(service_id_by_name "$GQL_RESPONSE" gateway "environment $env_id" RECONCILIATION_URL)
+
+  upsert_variable "$env_id" "$gw_id" gateway RECONCILIATION_URL "$RECONCILIATION_INTERNAL_URL"
+  auth_read "$env_id" "$gw_id" gateway
+  value_verdict "$GQL_RESPONSE" gateway RECONCILIATION_URL "$RECONCILIATION_INTERNAL_URL" || exit 1
+  echo "gateway.RECONCILIATION_URL confirmed in environment $env_id."
+}
+
 case "${1:-}" in
   assert-project-settings)   cmd_assert_project_settings ;;
   disable-pr-environments)   cmd_disable_pr_environments ;;
@@ -2940,10 +3120,12 @@ case "${1:-}" in
   set-fork-auth)             cmd_set_fork_auth "${2:-}" ;;
   set-fork-auth-site)        shift; cmd_set_fork_auth_site "$@" ;;
   set-production-auth)       shift; cmd_set_production_auth "$@" ;;
+  set-sentry-off)            cmd_set_sentry_off "${2:-}" ;;
+  set-fork-reconciliation-url) cmd_set_fork_reconciliation_url "${2:-}" ;;
   delete-environment)        cmd_delete_environment "${2:-}" ;;
   list-environments)         cmd_list_environments ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|delete-environment <name>|list-environments>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments>"
     exit 2
     ;;
 esac

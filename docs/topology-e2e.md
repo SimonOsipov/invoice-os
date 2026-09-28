@@ -10,9 +10,11 @@ M2-14.4).
 
 ## What it asserts
 
-1. **Fleet /healthz gate** — the gateway's public `GET /healthz/fleet` roll-up reports all
-   10 backends (gateway + 7 routed context services + the `docling` and `auth` sidecars) green; the run
+1. **Fleet /healthz gate** — the gateway's public `GET /healthz/fleet` roll-up reports the
+   gateway and every backend (the 7 routed context services, `reconciliation`, and the `docling` and `auth` sidecars) green; the run
    fails naming any that are down.
+   The same roll-up must show every Go service reporting `sentry` `off` on a PR, and `on` or
+   `off` on the persistent environment; `docling` and `auth` are exempt by name.
    The context services are private-network-only, so this route is the only way CI sees
    their health through the one public backend surface.
 2. **Live browser login** — a Playwright test drives the persona mock-login on the deployed
@@ -91,6 +93,11 @@ honours it. `deploy-gateway` stamps that tag on `pull_request` only
 four SPA origins), `VITE_GATEWAY_URL` on both `app` and `landing`, `app.VITE_LANDING_URL`,
 the landing's `VITE_APP_URL`, `VITE_OPS_URL` and `VITE_SUPPORT_URL`, each console's
 `VITE_LANDING_URL`, and `app.VITE_DEMO_MODE=true`. It refuses the persistent environment.
+
+**Written per fork, not inherited:** `gateway.RECONCILIATION_URL`. A fork is reused per PR, so
+it never picks up a production write made after its creation. `set-fork-reconciliation-url`
+writes `http://reconciliation.railway.internal:8080` and re-reads it
+(`TestSetForkReconciliationURLAgainstAScriptedRailway`).
 
 **New (persona-handoff-fix, Decision [pr-only-reset]): `gateway.GATEWAY_DB_RESET=true`.**
 A plain (non-sealed, non-reference) variable, set on `development`'s gateway service

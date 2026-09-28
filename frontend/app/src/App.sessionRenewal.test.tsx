@@ -275,6 +275,24 @@ async function bootWith(raw: string | null, path = '/', opts: { strict?: boolean
   return nav
 }
 
+// A second page load in the same browser: storage stays, the DOM and location go.
+async function reload(path: string) {
+  cleanup()
+  capturedCtx = undefined
+  if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+  return bootWith(null, path)
+}
+
+// A hand-off boot whose code answers `token` with refresh token RH.
+async function bootHandoff(token: string) {
+  exchangeReply = answer(200, { access_token: token, refresh_token: 'RH' })
+  ensureSignInState()
+  const nav = await bootWith(null, `/?handoff=${'a'.repeat(43)}`)
+  await waitForVerifiedWorkspace()
+  await settle()
+  return nav
+}
+
 // Mounted on a session that is not due, all boot loads answered.
 async function mountFresh(path = '/') {
   const nav = await bootWith(record(A0_FRESH, FRESH_AT), path)
@@ -407,6 +425,20 @@ describe('a due stored session renews at boot (AC-1, AC-2, AC-3, AC-10, AC-16)',
     expect(hrefWrites).toEqual([])
   })
 
+  it('an expired hand-off session without renewal loses to ?persona=', async () => {
+    const bare = JSON.stringify({ v: 1, personaId: 'firm', token: A0_OLD, me: ME, verified: true, handoff: true })
+    const { hrefWrites } = await bootWith(bare, '/?persona=firm')
+    await waitFor(() => expect(capturedCtx?.user, 'the persona workspace must mount').toBeDefined())
+    await settle()
+
+    expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`), 'the persona is minted').toHaveLength(1)
+    expect(refreshes()).toEqual([])
+    expect(storedRecord()?.handoff, 'the persona session replaces the record').toBeUndefined()
+    expect(storedRecord()?.token).toBe(standInToken(NOW))
+    expect(window.location.search).toBe('')
+    expect(hrefWrites).toEqual([])
+  })
+
   it('StrictMode renews once at boot', async () => {
     await bootWith(record(A0_DUE, DUE_AT), '/', { strict: true })
     await waitForVerifiedWorkspace()
@@ -510,6 +542,58 @@ describe('a refused renewal returns to landing with the destination (AC-4, AC-6,
   })
 })
 
+describe('an ended renewal and the next boot', () => {
+  // No sign-in loop: the refused record is gone, so the next ?persona= link signs the persona in.
+  it('a refused renewal on a ?persona= boot clears the record for the next persona link', async () => {
+    refreshReply = REFUSED
+    const first = await bootWith(record(A0_OLD, OLD_AT), '/?persona=firm')
+    await waitFor(() => expect(first.hrefWrites, 'a refused boot renewal navigates to landing').toHaveLength(1))
+    await settle()
+
+    expect(first.hrefWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=${STATE_RE}$`))
+    expect(refreshes()).toHaveLength(1)
+    expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`), 'the stored session won the boot').toEqual([])
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+
+    const mark = calls.length
+    const second = await reload('/?persona=firm')
+    await waitFor(() => expect(capturedCtx?.user, 'the persona workspace must mount').toBeDefined())
+    await settle()
+
+    expect(calls.slice(mark).filter((c) => c.url === `${GATEWAY}/auth/login`), 'the persona is minted').toHaveLength(1)
+    expect(refreshes(mark), 'the refused record is never tried again').toEqual([])
+    expect(storedRecord()?.token).toBe(standInToken(NOW))
+    expect(second.hrefWrites).toEqual([])
+  })
+
+  // The refresh token may outlive the access token, so the next boot tries it again.
+  it('a transient failure at boot past the deadline keeps the record for the next boot', async () => {
+    refreshReply = UNAVAILABLE
+    const first = await bootWith(record(A0_OLD, OLD_AT), '/audit')
+    await waitFor(() => expect(first.hrefWrites, 'a failed boot renewal navigates to landing').toHaveLength(1))
+    await settle()
+
+    expect(first.hrefWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=${STATE_RE}$`))
+    expect(refreshes()).toHaveLength(1)
+    expect(apiCalls(), 'the expired token is never sent').toEqual([])
+    expect(capturedCtx, 'the workspace never mounts').toBeUndefined()
+    expect(readDestination()?.path).toBe('/audit')
+    expect(storedRecord()?.token).toBe(A0_OLD)
+    expect(storedRecord()?.refresh_token).toBe('R0')
+
+    refreshReply = renewed()
+    const mark = calls.length
+    const second = await reload('/')
+    await waitForVerifiedWorkspace()
+    await settle()
+
+    expect(calls[mark]?.url, 'the next boot renews the kept record first').toBe(REFRESH)
+    expect(calls[mark]?.body).toEqual({ refresh_token: 'R0' })
+    expect(storedRecord()?.refresh_token).toBe('R1')
+    expect(second.hrefWrites).toEqual([])
+  })
+})
+
 describe('a request after the session ended sends nothing (D-1)', () => {
   it('a request after a refused renewal sends nothing', async () => {
     const { hrefWrites } = await mountFresh('/invoices')
@@ -589,6 +673,46 @@ describe('mid-session renewal (AC-5, AC-8, AC-9)', () => {
     expect(probes(mark).map((c) => c.auth), 'the expired persona token is still sent').toEqual([`Bearer ${standInToken(NOW)}`])
     expect(refreshes()).toEqual([])
     expect(hrefWrites).toEqual([])
+  })
+
+  // The code may have waited HandoffTTL (60 s) in the gateway, so receipt counts from then.
+  it('a hand-off session renews at 80% of its lifetime from the backdated receipt', async () => {
+    const H0 = jwt(ME, nowSec(NOW - MIN), 'H0')
+    const { hrefWrites } = await bootHandoff(H0)
+    const renewAt = NOW - MIN + 0.8 * HOUR
+
+    vi.setSystemTime(renewAt - 1000)
+    let mark = calls.length
+    expect(await probe(capturedCtx)).toBe('resolved')
+    expect(refreshes(mark), 'not due one second before').toEqual([])
+    expect(probes(mark).map((c) => c.auth)).toEqual([`Bearer ${H0}`])
+
+    vi.setSystemTime(renewAt)
+    mark = calls.length
+    expect(await probe(capturedCtx)).toBe('resolved')
+    expect(calls[mark]?.url, 'due: the renewal comes first').toBe(REFRESH)
+    expect(calls[mark]?.body).toEqual({ refresh_token: 'RH' })
+    expect(probes(mark).map((c) => c.auth)).toEqual([`Bearer ${renewedToken()}`])
+    expect(hrefWrites).toEqual([])
+  })
+
+  // The token's exp is 59 min after receipt; failing renewals must end the session by then.
+  it('a hand-off token is never sent at its exp while renewal keeps failing', async () => {
+    const H0 = jwt(ME, nowSec(NOW - MIN), 'H0')
+    const { hrefWrites } = await bootHandoff(H0)
+    refreshReply = UNAVAILABLE
+    vi.setSystemTime(NOW - MIN + HOUR)
+    const mark = calls.length
+
+    const err = await probe(capturedCtx)
+    await waitFor(() => expect(hrefWrites.length, 'the session ends at exp').toBeGreaterThan(0))
+    await settle()
+
+    expect(errorName(err)).toBe('SessionEndedError')
+    expect(refreshes(mark)).toHaveLength(1)
+    expect(probes(mark), 'the expired token is never sent').toEqual([])
+    expect(hrefWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=${STATE_RE}$`))
+    expect(storedRecord()?.refresh_token).toBe('RH')
   })
 
   it('byte transports use the renewed token', async () => {

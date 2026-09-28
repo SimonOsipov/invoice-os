@@ -999,7 +999,7 @@ jobs:
           }
           if [ -n "$offenders" ]; then
             echo "::error::want Sentry $direction on $EXPECTED_BUILD; offenders: $offenders"
-            echo "::error::'none' means the service predates the sentry field. On a PR, 'on' means a DSN reached the fork: check set-sentry-off in prepare-env. Any other build means its new container never replaced the old one."
+            echo "::error::'none' means the service predates the sentry field, or is down (none@none): check it is up first. On a PR, 'on' means a DSN reached the fork: check set-sentry-off in prepare-env. Any other build means its new container never replaced the old one."
             exit 1
           fi
           echo "Sentry $direction on $EXPECTED_BUILD for: $names (docling and auth exempt)."

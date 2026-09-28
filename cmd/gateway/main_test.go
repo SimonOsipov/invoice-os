@@ -685,7 +685,7 @@ func TestLoadUpstreamsRequiresReconciliationURL(t *testing.T) {
 		}
 	})
 
-	// X23: a down reconciliation must degrade the roll-up, never be skipped or tolerated.
+	// A down reconciliation must degrade the roll-up, never be skipped or tolerated.
 	t.Run("down_degrades_rollup", func(t *testing.T) {
 		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte(`{"status":"ok"}`))

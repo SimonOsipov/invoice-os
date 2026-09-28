@@ -2,7 +2,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import { resolveTarget } from '../targets'
 import { enclosesRect, rectsOverlap, WIDE_WIDTHS, type Rect } from '../topology/layout'
 import { seedConsent } from './landingConsent'
-import { isSentryHost } from './sentryHost'
+import { isProductionHost, isSentryHost } from './sentryHost'
 
 // The Book-a-Demo lead capture, both the modal and the inline #demo card, against the
 // PR's own deployed landing (LAND-02).
@@ -40,6 +40,7 @@ const LANDING_URL = resolveTarget('LANDING_URL')
 // which arm the assertions expect is decided once, here, from the target under test.
 const LANDING_HOST = new URL(LANDING_URL).hostname.toLowerCase()
 const EXPECT_TAG = LANDING_HOST === 'www.ascomply.com'
+const EXPECT_SENTRY_SILENT = !isProductionHost(LANDING_URL)
 
 // Mirrors TAXPAYER_SIZE_OPTIONS / DEFAULT_TAXPAYER_SIZE in
 // frontend/landing/src/components/demoForm.ts. Deliberately RETYPED rather than imported:
@@ -309,7 +310,9 @@ function expectClosedGateStayedSilent(sinks: LandingSinks): void {
     sinks.hubspotRequests,
     `the closed gate sent something to HubSpot:\n${sinks.hubspotRequests.join('\n')}`,
   ).toEqual([])
-  expect(sinks.sentryRequests, `the landing sent requests to a Sentry host:\n${sinks.sentryRequests.join('\n')}`).toEqual([])
+  if (EXPECT_SENTRY_SILENT) {
+    expect(sinks.sentryRequests, `the landing sent requests to a Sentry host:\n${sinks.sentryRequests.join('\n')}`).toEqual([])
+  }
   expect(sinks.consoleErrors, `console errors on the landing page:\n${sinks.consoleErrors.join('\n')}`).toEqual([])
   // A biconditional, not "zero GA requests": the tag SHOULD load when the target is the
   // real production host. Red either way round — a gate weakened to admit a preview host,

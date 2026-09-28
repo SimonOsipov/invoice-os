@@ -8,3 +8,10 @@ export function isSentryHost(rawUrl: string): boolean {
   }
   return host === 'sentry.io' || host.endsWith('.sentry.io')
 }
+
+// Production custom domains (docs/deploy-model.md), where Sentry may be on. Support-console has none.
+const PRODUCTION_HOSTS = new Set(['www.ascomply.com', 'app.ascomply.com', 'ops.ascomply.com'])
+
+export function isProductionHost(rawUrl: string): boolean {
+  return PRODUCTION_HOSTS.has(new URL(rawUrl).hostname.toLowerCase())
+}

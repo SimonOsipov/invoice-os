@@ -372,7 +372,7 @@ func devEnvJobNames(lines []string) []string {
 	return names
 }
 
-// X17: IS_PR hard-coded or the step gated to push lets a leaked DSN pass on a PR; no runtime row sees it.
+// IS_PR hard-coded or the step gated to push lets a leaked DSN pass on a PR; no runtime row sees it.
 func TestSentryGateIsOneFleetGateStepWithIsPR(t *testing.T) {
 	lines := devEnvCode(t)
 	jobs := devEnvJobNames(lines)

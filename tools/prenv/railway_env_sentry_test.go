@@ -201,7 +201,7 @@ func TestSetSentryOffAgainstAScriptedRailway(t *testing.T) {
 			}
 			noReReadAfter(t, s, "landing")
 		}},
-		// AC-6: a backend is checked for SENTRY_DSN only, so the SPA names on it do not refuse.
+		// A backend is checked for SENTRY_DSN only, so the SPA names on it do not refuse.
 		{name: "backend_checks_sentry_dsn_only", bend: map[string]string{"gateway": `.VITE_SENTRY_DSN = "` + sentryDSNSentinel + `" | .SENTRY_AUTH_TOKEN = "` + sentryTokenSentinel + `"`}, code: 0, check: func(t *testing.T, s authShim, out string) {
 			if !sentryConfirmed(out) {
 				t.Errorf("no confirmation line; output = %q", out)
@@ -268,7 +268,7 @@ func TestSetSentryOffAgainstAScriptedRailway(t *testing.T) {
 			}
 			c.check(t, s, out)
 
-			// AC-8: no read value and no token on any path.
+			// No read value and no token on any path.
 			for _, n := range slices.Concat([]string{sentryDSNSentinel, sentryTokenSentinel, sentryDBSentinel, forkToken}, c.needles) {
 				if strings.Contains(out, n) {
 					t.Errorf("output leaks %q; output = %q", n, out)
@@ -360,7 +360,7 @@ func checkBlanked(t *testing.T, s authShim, out string) {
 	if !sentryConfirmed(out) {
 		t.Errorf("no confirmation line names the fork and all three variables; output = %q", out)
 	}
-	// Control for AC-8: the maps the command read still carried the DATABASE_URL needle.
+	// Control for the no-leak check: the maps the command read still carried the DATABASE_URL needle.
 	raw, err := os.ReadFile(filepath.Join(s.dir, "store-"+sentrySvcID("gateway")+".json"))
 	if err != nil || !strings.Contains(string(raw), sentryDBSentinel) {
 		t.Errorf("control: gateway's store no longer holds the DATABASE_URL needle (%v), so its absence from output proves nothing", err)

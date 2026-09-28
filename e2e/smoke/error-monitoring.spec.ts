@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { signInUrl } from '../personas'
 import { resolveTarget } from '../targets'
 import { APPS } from './apps'
-import { isSentryHost } from './sentryHost'
+import { isProductionHost, isSentryHost } from './sentryHost'
 
 // A PR environment runs with Sentry off, so no SPA may send anything to a Sentry host.
 // Assertions read the request sink only; the safety-net route just keeps a live SDK's
@@ -34,6 +34,7 @@ const TARGETS: { name: string; url: () => string; mainView: (page: Page) => Prom
 for (const target of TARGETS) {
   test(`${target.name}: no request reaches a Sentry host`, async ({ page }) => {
     const url = target.url()
+    test.skip(isProductionHost(url), `${new URL(url).hostname} is a production host, where Sentry may be on`)
     const allRequests: { url: string; type: string }[] = []
     const sentryRequests: string[] = []
     page.on('request', (req) => {

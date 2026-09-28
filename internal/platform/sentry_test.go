@@ -2,7 +2,10 @@ package platform
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -86,5 +89,100 @@ func TestCaptureErrorNil(t *testing.T) {
 	CaptureError(context.Background(), nil)
 	if n := len(mt.captured()); n != 0 {
 		t.Errorf("captured %d events for nil error, want 0", n)
+	}
+}
+
+// healthzSentry returns /healthz's raw sentry value, whether the key is present,
+// and the body for messages.
+func healthzSentry(t *testing.T, h http.Handler) (any, bool, string) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/healthz = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode %q: %v", rec.Body.String(), err)
+	}
+	if len(body) == 0 {
+		t.Fatalf("/healthz returned an empty object (%q)", rec.Body.String())
+	}
+	v, ok := body["sentry"]
+	return v, ok, rec.Body.String()
+}
+
+func assertHealthzSentry(t *testing.T, h http.Handler, want string) {
+	t.Helper()
+	got, ok, body := healthzSentry(t, h)
+	if !ok {
+		t.Fatalf("/healthz has no sentry key, want %q (body %s)", want, body)
+	}
+	if got != want {
+		t.Errorf("/healthz sentry = %v, want %q (body %s)", got, want, body)
+	}
+}
+
+// The deploy gate reads this key to prove a PR fork sends nothing to Sentry.
+func TestHealthzCarriesSentryState(t *testing.T) {
+	h := http.HandlerFunc(healthzHandler)
+
+	t.Run("no_client", func(t *testing.T) {
+		sentry.CurrentHub().BindClient(nil)
+		t.Cleanup(func() { sentry.CurrentHub().BindClient(nil) })
+
+		assertHealthzSentry(t, h, "off")
+	})
+
+	t.Run("dsn_client", func(t *testing.T) {
+		client, err := sentry.NewClient(sentry.ClientOptions{Dsn: "https://public@example.com/1", Transport: &mockTransport{}})
+		if err != nil {
+			t.Fatalf("new client: %v", err)
+		}
+		sentry.CurrentHub().BindClient(client)
+		t.Cleanup(func() { sentry.CurrentHub().BindClient(nil) })
+
+		assertHealthzSentry(t, h, "on")
+	})
+
+	// sentry-go binds a no-op client for an empty DSN, so a bound client alone is not "on".
+	t.Run("empty_dsn_client", func(t *testing.T) {
+		t.Setenv("SENTRY_DSN", "")
+		client, err := sentry.NewClient(sentry.ClientOptions{})
+		if err != nil {
+			t.Fatalf("new client: %v", err)
+		}
+		if client == nil || client.Options().Dsn != "" {
+			t.Fatalf("precondition: want a client with an empty DSN, got %+v", client)
+		}
+		sentry.CurrentHub().BindClient(client)
+		t.Cleanup(func() { sentry.CurrentHub().BindClient(nil) })
+		if sentry.CurrentHub().Client() == nil {
+			t.Fatal("precondition: the no-op client did not bind")
+		}
+
+		assertHealthzSentry(t, h, "off")
+	})
+}
+
+// A service's own boot path decides the state: New reads SENTRY_DSN, nothing else does.
+func TestNewServesSentryStateFromTheDSN(t *testing.T) {
+	for _, c := range []struct {
+		name, dsn, want string
+	}{
+		{"empty_dsn", "", "off"},
+		{"valid_dsn", "https://public@example.com/1", "on"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("SENTRY_DSN", c.dsn)
+			sentry.CurrentHub().BindClient(nil)
+			t.Cleanup(func() { sentry.CurrentHub().BindClient(nil) })
+
+			app, err := New("svc")
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			assertHealthzSentry(t, app.Mux, c.want)
+		})
 	}
 }

@@ -405,16 +405,25 @@ describe('a due stored session renews at boot (AC-1, AC-2, AC-3, AC-10, AC-16)',
     expect(hrefWrites).toEqual([])
   })
 
+  // Due, so the workspace waits on the renewal: only the boot strip clears the param meanwhile.
   it('a live renewable hand-off session still beats ?persona=', async () => {
-    const { hrefWrites } = await mountFresh('/?persona=firm')
+    const refresh = deferRefresh()
+    const { hrefWrites } = await bootWith(record(A0_DUE, DUE_AT), '/?persona=firm')
+
+    expect(screen.queryByText('Opening your workspace…'), 'a due boot shows the splash').not.toBeNull()
+    expect(window.location.search, 'the suppressed persona is stripped before the renewal answers').toBe('')
+
+    await act(async () => refresh.release(renewed()))
+    await waitForVerifiedWorkspace()
+    await settle()
 
     expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`), 'the persona is not minted').toEqual([])
+    expect(refreshes()).toHaveLength(1)
     expect(apiCalls().length).toBeGreaterThan(0)
-    expect(apiCalls().filter((c) => c.auth !== `Bearer ${A0_FRESH}`)).toEqual([])
+    expect(apiCalls().filter((c) => c.auth !== `Bearer ${renewedToken()}`)).toEqual([])
     expect(storedRecord()?.handoff).toBe(true)
-    expect(storedRecord()?.token).toBe(A0_FRESH)
-    expect(storedRecord()?.refresh_token).toBe('R0')
-    expect(window.location.search, 'the suppressed persona is stripped').toBe('')
+    expect(storedRecord()?.refresh_token).toBe('R1')
+    expect(window.location.search).toBe('')
     expect(hrefWrites).toEqual([])
   })
 

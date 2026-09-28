@@ -42,26 +42,31 @@ func signInJSON(email string) string {
 	return string(b)
 }
 
-// A GoTrue 3xx is an answer, not a hop: following it could turn a refusal into a code.
+// A GoTrue 3xx is an answer, not a hop: following it could turn a refusal into a code or a token.
 func TestHandoffHandlers_DoNotFollowGoTrueRedirects(t *testing.T) {
-	authURL, calls := countingGoTrue(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/landed" {
-			_, _ = w.Write([]byte(`{"access_token":"tok-redirected"}`))
-			return
-		}
-		http.Redirect(w, r, "/landed", http.StatusFound)
-	})
-	mux := handoffMux(t, authURL, true)
+	for _, c := range []struct{ path, body, leak string }{
+		{"/auth/sign-in", signInJSON("a@example.com"), `"code"`},
+		{"/auth/refresh", `{"refresh_token":"ref-presented"}`, "tok-redirected"},
+	} {
+		authURL, calls := countingGoTrue(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/landed" {
+				_, _ = w.Write([]byte(`{"access_token":"tok-redirected","refresh_token":"ref-redirected"}`))
+				return
+			}
+			http.Redirect(w, r, "/landed", http.StatusFound)
+		})
+		mux := handoffMux(t, authURL, true)
 
-	rec := postJSON(mux, "/auth/sign-in", handoffAllowedOrigin, signInJSON("a@example.com"))
-	if rec.Code != http.StatusBadGateway {
-		t.Errorf("POST /auth/sign-in on a GoTrue 302 = %d %s, want 502", rec.Code, rec.Body)
-	}
-	if strings.Contains(rec.Body.String(), `"code"`) {
-		t.Errorf("a redirected sign-in minted a code: %s", rec.Body)
-	}
-	if got, want := calls(), []string{"POST /token"}; !slices.Equal(got, want) {
-		t.Errorf("GoTrue saw %v, want %v", got, want)
+		rec := postJSON(mux, c.path, handoffAllowedOrigin, c.body)
+		if rec.Code != http.StatusBadGateway {
+			t.Errorf("POST %s on a GoTrue 302 = %d %s, want 502", c.path, rec.Code, rec.Body)
+		}
+		if strings.Contains(rec.Body.String(), c.leak) {
+			t.Errorf("POST %s followed the redirect: %s", c.path, rec.Body)
+		}
+		if got, want := calls(), []string{"POST /token"}; !slices.Equal(got, want) {
+			t.Errorf("POST %s: GoTrue saw %v, want %v", c.path, got, want)
+		}
 	}
 }
 
@@ -134,6 +139,7 @@ func TestHandoffHandlersWiring(t *testing.T) {
 		"gateway.NewSignInThrottle": "gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now",
 		"gateway.SignInHandler":     "authURL, client, " + store + ", " + throttle + ", log",
 		"gateway.ExchangeHandler":   store,
+		"gateway.RefreshHandler":    "authURL, client, log",
 	} {
 		// One construction outside any closure: the store and throttle outlive a request.
 		if got := calls[callee]; len(got) != 1 || got[0] != want {
@@ -219,8 +225,8 @@ func TestHandoffCodeRedeemsOnceAcrossRequests(t *testing.T) {
 		t.Errorf("sign-in answered a token, not a code: %s", rec.Body)
 	}
 	body, _ := json.Marshal(map[string]string{"code": in.Code, "state": handoffState})
-	if rec := postJSON(mux, "/auth/exchange", handoffAllowedOrigin, string(body)); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"tok-B"`) {
-		t.Fatalf("first POST /auth/exchange = %d %s, want 200 with tok-B", rec.Code, rec.Body)
+	if rec := postJSON(mux, "/auth/exchange", handoffAllowedOrigin, string(body)); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"tok-B"`) || !strings.Contains(rec.Body.String(), `"ref-B"`) {
+		t.Fatalf("first POST /auth/exchange = %d %s, want 200 with tok-B and ref-B", rec.Code, rec.Body)
 	}
 	if rec := postJSON(mux, "/auth/exchange", handoffAllowedOrigin, string(body)); rec.Code != http.StatusBadRequest {
 		t.Errorf("second POST /auth/exchange = %d %s, want 400", rec.Code, rec.Body)
@@ -230,7 +236,7 @@ func TestHandoffCodeRedeemsOnceAcrossRequests(t *testing.T) {
 // CORS answers every preflight itself; none reaches the handler or GoTrue. An OPTIONS with no Origin is not a preflight.
 func TestHandoffPreflightIsAnsweredByCORS(t *testing.T) {
 	authURL, calls := countingGoTrue(t, func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"access_token":"tok-C"}`))
+		_, _ = w.Write([]byte(`{"access_token":"tok-C","refresh_token":"ref-C"}`))
 	})
 	mux := handoffMux(t, authURL, true)
 

@@ -4,8 +4,9 @@
 // - `isUnauthorized(e)` is a pure predicate: true iff `e instanceof ApiError && e.kind
 //   === 'http' && e.status === 401`.
 // - `createAuthedFetch(getToken, onUnauthorized)` returns `authedFetch<T>(url, opts?)`
-//   that calls `apiFetch<T>(url, { ...opts, token: getToken() })`, invokes
-//   `onUnauthorized()` iff `isUnauthorized(caught)`, and always rethrows.
+//   that calls `apiFetch<T>(url, { ...opts, token })` with the getter's token (awaited only
+//   when it is a promise), invokes `onUnauthorized()` iff `isUnauthorized(caught)`, and
+//   always rethrows.
 // No `@invoice-os/api-client` **package** change (Constraint); this file only consumes
 // its exports. Instantiated in App.tsx's `Workspace` via `makeAuthedFetch` (M3-08-03).
 //
@@ -20,6 +21,11 @@ import type { AuthedFetch } from './portfolio'
 // workspace is not active (AUDIT-10). Written down once in Go as db.NotActiveMemberMessage;
 // this hand-maintained copy is pinned to it by wireMirrors.test.ts.
 export const NOT_ACTIVE_MEMBER_MESSAGE = 'your membership in this workspace is not active'
+
+// A plain token must reach the transport synchronously: importApi's XHR tests respond in the same tick.
+export function isPromiseLike<T>(v: T | PromiseLike<T>): v is PromiseLike<T> {
+  return typeof (v as { then?: unknown } | null)?.then === 'function'
+}
 
 export function isUnauthorized(e: unknown): boolean {
   return e instanceof ApiError && e.kind === 'http' && e.status === 401
@@ -39,14 +45,16 @@ export function isSuspended(e: unknown): boolean {
 // onSuspended is optional so the ~30 ctx-fixture call sites stay two-argument; both live
 // construction sites pass it (App.tsx, pinned by App.suspended.test.tsx).
 export function createAuthedFetch(
-  getToken: () => string | null,
+  getToken: () => string | null | Promise<string | null>,
   onUnauthorized: () => void,
   onSuspended?: () => void,
 ): <T>(url: string, opts?: ApiFetchOptions) => Promise<T> {
   return async function authedFetch<T>(url: string, opts?: ApiFetchOptions): Promise<T> {
     try {
-      return await apiFetch<T>(url, { ...opts, token: getToken() })
+      const token = getToken()
+      return await apiFetch<T>(url, { ...opts, token: isPromiseLike(token) ? await token : token })
     } catch (e) {
+      // A SessionEndedError is not an ApiError, so neither seam fires.
       if (isUnauthorized(e)) onUnauthorized()
       else if (isSuspended(e)) onSuspended?.()
       throw e
@@ -54,18 +62,14 @@ export function createAuthedFetch(
   }
 }
 
-// makeAuthedFetch(session, onSignOut) — the app-side factory `Workspace` instantiates
-// (M3-08-03, task-58), covered by the live-caller specs in portfolio.authedfetch.test.ts
-// (A1-A6).
-//
-// Contract: a thin pure wrapper around `createAuthedFetch` that closes over `session`,
-// reading `session.token` at CALL time (`() => session.token`), not construction time —
-// a live re-sign-in swaps the `Session` object under React state, so a captured token
-// snapshot would go stale (A5) — and forwards `onSignOut` unchanged as the
-// `onUnauthorized` callback (A1/A3). This narrows the Obsidian M3-08 story's [A-c]
-// code-review-only residual to just `Workspace`'s `useMemo` forwarding `session` +
-// `onSignOut` into this factory — the token-read + onUnauthorized wiring itself becomes
-// node-testable here, through the live `listEntities`/`createEntity` callers.
-export function makeAuthedFetch(session: Session, onSignOut: () => void, onSuspended?: () => void): AuthedFetch {
-  return createAuthedFetch(() => session.token, onSignOut, onSuspended)
+// The app-side factory `Workspace` instantiates (portfolio.authedfetch.test.ts A1-A6).
+// `freshToken` (the renewer's) is the getter when given; otherwise `session.token` is read
+// at call time, never captured (A5). `onSignOut` is the `onUnauthorized` callback (A1/A3).
+export function makeAuthedFetch(
+  session: Session,
+  onSignOut: () => void,
+  onSuspended?: () => void,
+  freshToken?: () => string | null | Promise<string | null>,
+): AuthedFetch {
+  return createAuthedFetch(freshToken ?? (() => session.token), onSignOut, onSuspended)
 }

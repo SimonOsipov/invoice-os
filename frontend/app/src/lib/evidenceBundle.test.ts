@@ -13,6 +13,7 @@ import { ApiError } from '@invoice-os/api-client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { AuditRange } from './auditFilters'
+import { SessionEndedError } from './renewal'
 import {
   bundleRequestFor,
   evidenceBundleUrl,
@@ -373,6 +374,34 @@ describe('fetchEvidenceBundle', () => {
     expect(err).not.toBeInstanceOf(ApiError)
     expect((err as DOMException).name).toBe('AbortError')
     expect((err as DOMException).name).not.toBe('Error')
+  })
+})
+
+// Pre-handled, so the stub that never awaits it does not report an unhandled rejection.
+function endedGetter(): Promise<string | null> {
+  const p = Promise.reject(new SessionEndedError())
+  p.catch(() => {})
+  return p
+}
+
+// A due renewal is awaited; an ended session makes no request.
+describe('fetchEvidenceBundle with an async getter', () => {
+  it('sends the awaited token', async () => {
+    const fetchMock = stubFetch(okBundle('attachment; filename=a.zip'))
+
+    await fetchEvidenceBundle(() => Promise.resolve('tok'), BASE, REQ, FALLBACK)
+
+    const init = fetchMock.mock.calls[0][1] as RequestInit
+    expect(new Headers(init.headers).get('authorization')).toBe('Bearer tok')
+  })
+
+  it('a byte fetcher ends quietly', async () => {
+    const fetchMock = stubFetch(okBundle('attachment; filename=a.zip'))
+
+    const err = await fetchEvidenceBundle(endedGetter, BASE, REQ, FALLBACK).then(() => 'resolved', (e: unknown) => e)
+
+    expect(err).toBeInstanceOf(SessionEndedError)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
 

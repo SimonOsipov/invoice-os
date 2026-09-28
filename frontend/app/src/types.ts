@@ -242,10 +242,10 @@ export type AuditPrefilter = { invoiceId: string; invoiceNumber: string | null }
 // the prototype's single `renderVals()` bag of state/handlers (Platform.dc.html ~L1266+).
 export type PlatformCtx = {
   authedFetch: AuthedFetch
-  // The raw bearer token, for the ONE transport that cannot go through authedFetch:
-  // GET /v1/documents/{id} streams octet-stream bytes and apiFetch always res.json()s.
-  // Same `() => session.token` read-at-call-time closure makeImportAuth already exposes.
-  getToken: () => string | null
+  // The raw bearer token, for the byte transports that cannot go through authedFetch:
+  // apiFetch always res.json()s.
+  // makeImportAuth's getter: a promise while a renewal is due, rejected once the session ended.
+  getToken: () => string | null | Promise<string | null>
   user: SignedInUser
   clients: Client[]
   active: Client

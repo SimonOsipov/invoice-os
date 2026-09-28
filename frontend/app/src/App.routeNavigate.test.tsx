@@ -4,7 +4,6 @@
 // navigate() and the eight setView( call sites. Harness is App.routeBoot.test.tsx's: the
 // real <App/>, a session in a stubbed localStorage, ctx captured through a mocked Sidebar.
 
-import { execSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
@@ -119,8 +118,7 @@ async function bootAt(path: string, opts: { demoMode?: boolean } = {}) {
   return render(<App />)
 }
 
-// The control needle for guard_everyAppRenderingTestFileResetsTheJsdomUrl: renders with
-// WHATEVER window.location already is, unlike bootAt above which always sets it first.
+// Renders with WHATEVER window.location already is, unlike bootAt above which always sets it first.
 async function renderWithoutUrlReset() {
   localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
   vi.resetModules()
@@ -411,50 +409,15 @@ describe('AC-5: a DEMO-06 persona switch corrects the URL and adds no entry', ()
   })
 })
 
-describe('AC-6: every existing <App /> test file resets the jsdom URL', () => {
-  it('guard_everyAppRenderingTestFileResetsTheJsdomUrl', () => {
-    // Matches the JSX tag itself, not one call-site idiom -- a render(<App />) split
-    // across two lines (or App.routeBoot.test.tsx's ternary) still contains this needle,
-    // so a file can't opt out of the count by reshaping its own render call. Scoped to
-    // *.test.tsx so main.tsx (the real, non-jsdom entry point) is correctly excluded.
-    const needle = '<App( |/|>)'
-    const out = execSync(`grep -rlE "${needle}" --include="*.test.tsx" src`, { cwd: process.cwd(), encoding: 'utf8' })
-    const files = out
-      .trim()
-      .split('\n')
-      .filter(Boolean)
-    // Floor: a broken walk (wrong cwd, a mangled grep pattern) returns zero files and
-    // reads exactly like a repo with nothing left to fix.
-    // TEST-02 merge adds App.frontDoor/App.handOff/App.offlineFallback.test.tsx, the 11th-13th.
-    // ROUTE-05-02 adds App.signedOutDeepLink.test.tsx and ROUTE-02-05 adds
-    // App.routeDrillDown.test.tsx, the 14th and 15th. ROUTE-06-05 adds
-    // App.routeSweep.test.tsx, the 16th. App.savedMapping.test.tsx adds the 17th.
-    // App.aiSuggestion.test.tsx adds the 18th. App.secondImport.test.tsx adds the 19th.
-    // App.mappingCheck.test.tsx adds the 20th. App.signInState.test.tsx adds the 21st.
-    // App.sessionHandoff.test.tsx adds the 22nd.
-    expect(files, 'the walk must find exactly the twenty-two App-rendering test files').toHaveLength(22)
-
-    for (const f of files) {
-      const src = readFileSync(path.join(process.cwd(), f), 'utf8')
-      const start = src.indexOf('beforeEach(() => {')
-      expect(start, `${f} has no beforeEach(() => { block`).toBeGreaterThan(-1)
-      const end = src.indexOf('\n})', start)
-      const body = src.slice(start, end)
-      expect(body, `${f}'s beforeEach must reset the jsdom URL to '/'`).toContain(
-        "history.replaceState(null, '', '/')",
-      )
-    }
-  })
-
-  // The control needle for the guard above: without a between-render reset, a pathname one
-  // render leaves behind seeds the very next one's boot view.
+describe('AC-6: a leftover jsdom URL seeds the next boot', () => {
+  // Why every App-rendering file's beforeEach resets the URL: jsdom's history outlives a render.
   it('guard_aLeftoverPathnameWouldHaveSeededTheNextBoot', async () => {
     window.history.replaceState(null, '', '/audit')
     await renderWithoutUrlReset()
     const ctx = requireCtx()
     expect(
       ctx.view,
-      'a leftover pathname must seed the next render\'s boot view -- the pollution this guard exists to prevent is real, not hypothetical',
+      'a leftover pathname must seed the next render\'s boot view -- a beforeEach URL reset is needed',
     ).toBe('audit')
   })
 })

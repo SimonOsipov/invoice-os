@@ -77,6 +77,12 @@ export interface Me {
   user: { id: string; role: string }
 }
 
+// The refresh token and the local epoch ms it arrived at.
+export interface Renewal {
+  refreshToken: string
+  receivedAt: number
+}
+
 export interface Session {
   persona: Persona
   token: string | null
@@ -86,6 +92,8 @@ export interface Session {
   verified: boolean
   // Set only for a session redeemed from a landing hand-off code.
   handoff?: true
+  // Set only on a hand-off session whose exchange or refresh answered a refresh token.
+  renewal?: Renewal
 }
 
 // signIn mints a token and reads /me when a gateway is configured; otherwise it returns

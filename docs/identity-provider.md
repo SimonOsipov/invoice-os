@@ -5,8 +5,9 @@ signs ES256 access tokens, serves their public keys at `/.well-known/jwks.json`,
 projects the tenant into `app_metadata.tenant_id` through the Postgres access-token hook.
 It is private-network only (`http://auth.railway.internal:8080`); it has no public domain.
 The gateway reaches it for JWKS, for the fleet probe, for GoTrue's `/signup` and
-`/verify` on behalf of the two public registration routes (see Registration), and for
-GoTrue's password grant on behalf of the public sign-in route (see Sign-in and hand-off).
+`/verify` on behalf of the two public registration routes (see Registration), for
+GoTrue's password grant on behalf of the public sign-in route (see Sign-in and hand-off),
+and for its refresh-token grant on behalf of the public refresh route (see Renewal).
 
 Related: [migrations.md](./migrations.md) §1 (the `supabase_auth_admin` and
 `auth_hook_reader` roles), [deploy-model.md](./deploy-model.md) (where `auth` deploys),
@@ -274,11 +275,11 @@ time. The production key exists only in the Railway variable U3b writes and then
 
 ## Registration
 
-GoTrue stays private. The gateway is the only public surface, and it calls three GoTrue
-paths under `AUTH_URL`: `/signup` and `/verify` for registration, and
-`/token?grant_type=password` for sign-in (see Sign-in and hand-off). It forwards no client
-path or query, so no other GoTrue route (`/recover`, `/otp`, `/admin/*`, or `/token` with any
-other grant) is reachable from outside.
+GoTrue stays private. The gateway is the only public surface, and it calls GoTrue under
+`AUTH_URL` at: `/signup` and `/verify` for registration, `/token?grant_type=password` for
+sign-in (see Sign-in and hand-off), and `/token?grant_type=refresh_token` for renewal (see
+Renewal). It forwards no client path or query, so no other GoTrue route (`/recover`, `/otp`,
+`/admin/*`, or `/token` with any other grant) is reachable from outside.
 
 **The flow:**
 1. The client posts `{"email","password"}` to `POST /auth/register` on the gateway. Unless
@@ -396,20 +397,25 @@ same tab, so a code minted in another browser signs nobody in.
    with `signin=ready`, which opens the modal with the form.
 4. Landing posts `{"email","password","state"}` to `POST /auth/sign-in`. The gateway posts
    `{"email","password"}` to GoTrue `/token?grant_type=password`. On a 200 it keeps the access
-   token with `sha256(state)` and answers a code. The refresh token is discarded.
+   token and the refresh token with `sha256(state)` and answers a code.
 5. Landing navigates to `<app>?handoff=<code>`. The app strips the param at mount, before
    redemption resolves.
 6. The app reads and removes its stored state (`consumeSignInState`) and posts
    `{"code","state"}` to `POST /auth/exchange`. It then calls `GET /api/tenancy/v1/me` with
-   the token and stores the session at `localStorage['invoice-os.session']` with
-   `handoff: true`. A tab with no live state makes no exchange call and goes to step 7.
+   the access token and stores the session at `localStorage['invoice-os.session']` with
+   `handoff: true`, the refresh token (`refresh_token`) and `received_at` (epoch ms): the
+   local time the exchange was sent, backdated by `HandoffTTL` (60 s) because the token may
+   have waited that long in the store. A tab with no live state makes no exchange call and
+   goes to step 7.
 7. On any failure the app returns to landing with `signin=no-workspace` (the `/me` call
-   answered 403) or `signin=failed` (anything else), carrying a fresh state. Landing opens
+   answered 403) or `signin=failed` (anything else), carrying the state `ensureSignInState`
+   returns: a newly minted one, because step 6 removed the old. Landing opens
    the modal with "This account has no workspace yet." or "We couldn't open your workspace.
    Sign in again." An unknown `signin` value is stripped and ignored.
 
-The token travels only in the exchange answer and the `Authorization` header; landing never
-holds it. Landing renders the form only when `VITE_GATEWAY_URL` and `VITE_APP_URL` are set,
+The access token travels only in the exchange and refresh answers and the `Authorization`
+header; the refresh token travels only in the exchange answer and the refresh request and
+answer. Landing never holds either. Landing renders the form only when `VITE_GATEWAY_URL` and `VITE_APP_URL` are set,
 and otherwise shows the persona list alone. The app ignores `?handoff=` when its
 `VITE_GATEWAY_URL` is unset.
 
@@ -418,7 +424,7 @@ no verifier, wrapped in CORS, in every build:
 
 | Outcome | Answer |
 |---|---|
-| GoTrue 200 with a non-empty `access_token` | 200 `{"code":"<43 characters>"}` |
+| GoTrue 200 with a non-empty `access_token` and `refresh_token` | 200 `{"code":"<43 characters>"}` |
 | a malformed body, or one over 4 KiB | 400 `invalid request body`; GoTrue is not called |
 | an empty email or password | 400 `email and password are required`; GoTrue is not called |
 | `state` missing or not 43 base64url characters | 400 `state is required`; GoTrue is not called |
@@ -427,16 +433,17 @@ no verifier, wrapped in CORS, in every build:
 | GoTrue `invalid_credentials` or `user_banned` | 401 `invalid email or password` |
 | GoTrue `email_not_confirmed` | 403 `email address not verified` |
 | GoTrue 429 (reachable only if `GOTRUE_RATE_LIMIT_HEADER` is ever set) | 429 `too many requests` |
-| GoTrue 200 without `access_token`, any other answer, or GoTrue unreachable | 502 `sign-in is unavailable`, logged at WARN with the upstream status or the error only |
+| GoTrue 200 without `access_token` or `refresh_token`, any other answer, or GoTrue unreachable | 502 `sign-in is unavailable`, logged at WARN with the upstream status or the error only |
+| GoTrue 200 with both tokens while the hand-off store is full (`HandoffMaxLive`) | 503 `sign-in is unavailable`, logged at WARN; the reservation is refunded |
 
 A banned address answers exactly like a wrong password. The gateway never logs the email,
-the password, the code or the token.
+the password, the code or either token.
 
 **`POST /auth/exchange`** `{"code","state"}`, 1 KiB body limit, the same wrapping:
 
 | Outcome | Answer |
 |---|---|
-| a live code with the state that minted it | 200 `{"access_token":"<jwt>"}`; the code is gone |
+| a live code with the state that minted it | 200 `{"access_token":"<jwt>","refresh_token":"<opaque>"}`; the code is gone |
 | an unknown, expired, already redeemed, empty or malformed code; a missing or wrong state; a malformed body | 400 `invalid or expired code` |
 
 A code redeems only with the state that minted it. A missing or wrong state answers the same
@@ -463,7 +470,12 @@ first attempt (`SignInMaxFailures`, `SignInWindow`).
 **Precedence in the app.** A live stored hand-off session wins over `?handoff=` and
 `?persona=`: both are stripped and not acted on, so a URL never replaces a real session. A
 user signed in as A who signs in on landing as B arrives back in A's workspace with no
-message; B's code expires unused. Sign out first to switch accounts.
+message; B's code expires unused. Sign out first to switch accounts. A stored hand-off
+session whose access token has expired loses to both, even when it carries a refresh token:
+a kept record must not bounce every `?persona=` link while renewal is down. Guarded by
+`App.sessionRenewal.test.tsx` "an expired renewable hand-off session loses to ?persona=",
+"a ?handoff= code wins over an expired renewable hand-off session" and "a ?persona= link
+after a transient boot failure does not bounce to landing again".
 
 **Ceilings:**
 - `ceiling:` the code store and the throttle are in-process. A gateway restart drops
@@ -479,14 +491,165 @@ message; B's code expires unused. Sign out first to switch accounts.
 - `ceiling:` an unknown or banned address answers faster than a known one with a wrong
   password, because GoTrue returns before it checks the password. Response time can show
   that an account exists. Revisit before registration U3.
-- `ceiling:` the discarded refresh token stays live in `auth.refresh_tokens` until AUTH-07.
-  The session ends at `GOTRUE_JWT_EXP` (3600 s), and the app returns the user to landing.
+- `ceiling:` sign-out removes the stored refresh token but does not revoke it in GoTrue. A
+  copy taken before sign-out keeps renewing the session until AUTH-07 ships revocation (see
+  Renewal).
 - `ceiling:` the Railway edge access log records the app's boot URL with the code and
   landing's boot URL with the state, and the browser's global history keeps the app URL
   (`replaceState` does not purge it). The code is dead after 60 s or one use, and useless
   without its state. Someone who can read the edge log within a state's 10 minutes could bind
   their own code to a victim's state and send the victim the link; that needs privileged log
   access.
+
+## Renewal
+
+A hand-off session renews itself before its access token expires, so the user is not sent
+back to landing after `GOTRUE_JWT_EXP`. Persona sessions do not renew: `/auth/login` answers
+no refresh token, so a persona session still ends after one hour (forks and dev only).
+
+**`POST /auth/refresh`** `{"refresh_token"}`, 1 KiB body limit, outside `/api/`, no verifier
+(it must work with an expired access token), wrapped in CORS, POST and OPTIONS, in every
+build. The gateway posts `{"refresh_token"}` to GoTrue `/token?grant_type=refresh_token`.
+
+| Outcome | Answer |
+|---|---|
+| GoTrue 200 with a non-empty `access_token` and `refresh_token` | 200 `{"access_token","refresh_token"}` and no other key |
+| a malformed body, or one over 1 KiB | 400 `invalid request body`; GoTrue is not called |
+| an empty or missing `refresh_token` | 400 `refresh_token is required`; GoTrue is not called |
+| GoTrue 429 (reachable only if `GOTRUE_RATE_LIMIT_HEADER` is ever set) | 429 `too many requests` |
+| any other GoTrue 4xx (`refresh_token_not_found`, `refresh_token_already_used`, `session_not_found`, `session_expired`, `user_banned`, …) | 401 `invalid or expired refresh token` |
+| GoTrue 200 missing `access_token` or `refresh_token`, any other non-4xx answer, or GoTrue unreachable | 502 `renewal is unavailable`, logged at WARN with the upstream status or the error only |
+| an OPTIONS without an `Origin` | 405 `method not allowed`, `Allow: POST` |
+| any other method but POST | 405 from the router, `Allow: OPTIONS, POST` |
+
+A preflight (an OPTIONS with an `Origin`) is answered by CORS. Every answer the handler
+writes sets `Cache-Control: no-store`; the router's 405 does not. The gateway never logs
+either token. Guarded by `internal/gateway/refresh_test.go` (`TestRefresh_*`),
+`cmd/gateway/handoff_routes_adversarial_test.go` `TestHandoffPreflightIsAnsweredByCORS`,
+the CI `idp` job's `TestIdP_RefreshRefusalsAnswer401`, and `e2e/api/session-handoff.spec.ts`
+"sign-in hand-off (API E2E, over the deployed gateway) › the exchange answers a refresh
+token, and a refresh renews it". No test pins the router's 405.
+
+**The app's rule** (`frontend/app/src/lib/renewal.ts`):
+- **On demand.** Every request that needs a token asks the renewer first. The renewer
+  renews when `now ≥ received_at + 0.8 × (exp − iat) × 1000` (ms), then answers with the
+  new token. There is no timer. `exp − iat` is the server's lifetime in seconds;
+  `received_at` is the local time the refresh request was sent, or for a hand-off session
+  the time the exchange was sent less `HandoffTTL` (60 s). Device clock skew cancels out,
+  and the code's wait in the store cannot push the deadline past the token's real `exp`.
+  Concurrent requests share one renewal.
+- **At boot.** A stored session whose access token has expired is kept when it carries a
+  refresh token. If it is due, the app shows "Opening your workspace…" and renews before the
+  workspace mounts.
+- **Refused:** a 400 or 401, a renewed token whose `app_metadata.tenant_id` is not the
+  session's tenant, or a renewed token without a readable `iat`/`exp`. The session ends at
+  once and the stored record is removed. The front door captures the current path, sends the
+  user to landing with a sign-in state (Sign-in and hand-off, step 1), and restores the path after the next
+  sign-in.
+- **Transient:** anything else (a network error, the 15 s timeout, 429, 5xx, a 200 without
+  both tokens). Before the deadline, `received_at + (exp − iat) × 1000` (ms), the request
+  proceeds with the current token and the next request tries again. At or after the
+  deadline, or when the times are unreadable, the session ends as if refused but the stored
+  record stays: the refresh token may still be valid, so the next boot renews. Guarded by
+  `renewal.test.ts` "transient at the deadline ends it" and `App.sessionRenewal.test.tsx`
+  "transient after the deadline ends the session".
+- **Tenant check.** The app decodes the renewed token's tenant without verifying it; the
+  gateway verifier stays the authority. The access-token hook drops the tenant when the
+  membership stops being the one active membership, and a tenant-less token would 403 on
+  every tenant route.
+- Guarded by `frontend/app/src/lib/renewal.test.ts`,
+  `frontend/app/src/App.sessionRenewal.test.tsx`, and the deployed
+  `e2e/topology/auth.spec.ts` "deployed app: a real session renews itself past the access
+  token's lifetime" and "deployed app: a refused renewal returns to landing and keeps the
+  destination".
+  `TestIdP_RenewalOutlivesTheAccessTokenTTL` renews after a real expiry against the CI
+  container `idp-short` (`GOTRUE_JWT_EXP=5`, port 9996, `scripts/ci/idp-up.sh`).
+
+**Two tabs.** Tabs of the app origin share one `invoice-os.session` record. Before it
+renews, the renewer re-reads the record:
+- absent, or another user → the session ended or changed in another tab; this tab's session
+  ends and the record is left untouched;
+- the same user with a different refresh token that is not yet due → another tab already
+  renewed; this tab adopts it with no request;
+- otherwise → renew with the stored refresh token.
+
+Two tabs that renew together send the same refresh token. GoTrue answers a revoked token
+that is the parent of the active token with the active token (GoTrue v2.197.0
+`tokens/service.go`, at any age; `TestIdP_RefreshRotationAndReuse` pins it for a fresh
+parent). A token two or more
+generations old revokes the whole session for every tab (400 `refresh_token_already_used`,
+which the gateway answers 401). Guarded by `TestIdP_RefreshRotationAndReuse`.
+
+**Where the refresh token is stored, and what that does and does not protect against.**
+The refresh token is stored in the app origin's `localStorage`, key `invoice-os.session`,
+field `refresh_token`, in the same record as the access token. For its 60 s in the hand-off
+store it is in the gateway's memory, beside the access token. It crosses the network only
+inside JSON bodies over TLS: the exchange answer, the refresh request and the refresh answer.
+
+It protects against:
+- **Other origins.** Landing, both consoles and every other site cannot read it:
+  `localStorage` is per origin.
+- **URLs.** It never appears in a URL, so browser history, the Railway edge access log and a
+  `Referer` header cannot carry it. The deployed topology journeys scan every recorded URL
+  for it.
+- **Logs.** The gateway never logs it (`TestSignIn_NeverLogsSecrets`,
+  `TestRefresh_NeverLogsSecrets`).
+- **A stale copy.** GoTrue rotates the token on every renewal; presenting a token two or more
+  generations old revokes the whole session.
+- **Parity.** A script that can read it can already read the access token. The refresh token
+  adds no new reader.
+
+It does not protect against:
+- **Any script running on the app origin**, whether an XSS, a compromised dependency or a
+  browser extension with page access. It can read both tokens. With the refresh token it can
+  keep the session alive after the tab closes, from another machine, until the session is
+  revoked. GoTrue here sets no session timebox or inactivity timeout (see GoTrue's session
+  values below), and revocation arrives with AUTH-07. Before renewal the same theft bought
+  at most one hour.
+- **Someone with the device's browser profile** (malware, a shared machine left signed in).
+- **A thief who renews in step with the victim.** GoTrue's parent rule answers the previous
+  token with the active one, so two holders who alternate are not detected. Detection needs
+  a token two generations old.
+- **Sign-out.** Sign-out removes the stored copy but does not revoke it until AUTH-07.
+- **Script access by design.** The token is not `HttpOnly`. A gateway cookie was rejected:
+  on every PR fork the app and the gateway are different sites, so it would be a third-party
+  cookie.
+
+**GoTrue's session values** (v2.197.0 defaults; production sets none of these, measured
+2026-09-27). They are recorded, not a designed policy:
+- refresh-token rotation on; reuse interval 0 s;
+- v1 refresh tokens (12 characters, 60 bits);
+- `GOTRUE_SESSIONS_TIMEBOX` unset: no absolute session lifetime;
+- `GOTRUE_SESSIONS_INACTIVITY_TIMEOUT` unset: no idle timeout;
+- `GOTRUE_JWT_EXP` 3600 s (the image value).
+
+A session therefore lives until it is revoked or a stale token revokes its family. Until
+AUTH-07 ships revocation there is no timebox; the user accepted this interim (AUTH-00
+Decision Log Q30). Re-read the values (`P` and `E` as in "Opening registration in
+production") with
+`railway variables -p "$P" -e "$E" -s auth --json | jq 'with_entries(select(.key|test("GOTRUE_(JWT_EXP|SECURITY|SESSIONS)")))'`;
+`{}` means no override.
+
+**Ceilings:**
+- `ceiling:` `POST /auth/refresh` is not throttled, and GoTrue applies no limit in this fleet
+  (Registration, Ceilings). A v1 refresh token holds 60 bits. Revisit with the per-client-IP
+  limit sign-in defers.
+- `ceiling:` a copy of the refresh token taken before sign-out keeps renewing until AUTH-07
+  revokes it. AUTH-07 can revoke through GoTrue `POST /logout`.
+- `ceiling:` during a gateway outage every request tries one refresh first while a renewal
+  is due, which doubles the failed calls. Revisit if outage logs show it.
+- `ceiling:` a device clock changed by hand between receipt and use shifts the renewal time.
+  A clock moved backwards renews late, and a 401 signs the user out as before renewal.
+- `ceiling:` an offline user past the deadline is signed out on the next request; the front
+  door's navigation then fails offline.
+- `ceiling:` the load-to-save of the stored record is not atomic across tabs (`localStorage`
+  has no compare-and-set). A sign-out in another tab inside that one synchronous step is not
+  seen. Revisit if AUTH-07's revocation makes a resurrected record usable.
+- `ceiling:` a request from a chain that outlives an ended session is refused only while no
+  session is tracked. After a DEMO_MODE stand-in switch, a leftover chain gets the new
+  identity's token. DEMO_MODE runs on forks only.
+- `ceiling:` a byte download (evidence bundle, page image, source document) that finds the session ended sends nothing, and its error card can show until the front door's navigation unloads the page; revisit if a user reports it.
+- `ceiling:` on a transient failure the renewer keeps the tracked session's token and deadline even when another tab's newer stored pair supplied the refresh token, so repeated transient failures can end a session while storage holds a newer valid pair (the next boot adopts it); revisit if two-tab users report early sign-outs.
 
 ## Opening registration in production (registration U1–U4)
 
@@ -629,9 +792,15 @@ code, a whole-run re-run of the latest push `dev-env` run, or an empty commit.
    It answers 400 `{"error":"invalid or expired code"}`.
 4. On `https://www.ascomply.com`, "Explore the platform" shows "Continue with email" above
    the persona list.
+5. An unknown refresh token is refused:
+   ```
+   curl -sS -X POST https://api.ascomply.com/auth/refresh -H 'Content-Type: application/json' -d '{"refresh_token":"aaaaaaaaaaaa"}'
+   ```
+   It answers 401 `{"error":"invalid or expired refresh token"}`.
 
 With a verified account, step 2 with the real password answers 200 `{"code":"…"}`, and step 3
-with that code and the same `S` answers 200 `{"access_token":"…"}`. A full sign-in through the
+with that code and the same `S` answers 200 `{"access_token":"…","refresh_token":"…"}`.
+Step 5 with that `refresh_token` answers 200 with a new pair. A full sign-in through the
 browser also needs a provisioned workspace, and so registration U3 and U4 above.
 
 ## Sealed secrets

@@ -336,6 +336,27 @@ describe('a hand-off session persists (AC-5, AC-6, AC-8)', () => {
     expect(hrefWrites).toEqual([])
   })
 
+  // The refresh token is stored in the same record as the access token.
+  it('a hand-off boot stores the refresh token with its receipt time', async () => {
+    configure()
+    ensureSignInState()
+    // Readable iat/exp, so the renewable session is not due at once.
+    const b64 = (o: object) => btoa(JSON.stringify(o)).replace(/=+$/, '')
+    const live = `${b64({ alg: 'RS256' })}.${b64({ sub: ME.user.id, iat: nowSec(), exp: nowSec() + 3600 })}.sig`
+    exchangeReply = ok({ access_token: live, refresh_token: 'R0' })
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    const before = Date.now()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    const rec = storedRecord()
+    expect(rec?.token).toBe(live)
+    expect(rec?.refresh_token).toBe('R0')
+    // Backdated by the gateway's HandoffTTL (60 s): the code may have waited that long.
+    expect(rec?.received_at).toBeGreaterThanOrEqual(before - 60_000)
+    expect(rec?.received_at).toBeLessThanOrEqual(Date.now() - 60_000)
+  })
+
   it('a captured destination is restored after the hand-off', async () => {
     configure()
     captureDestination('/audit', '', Date.now())

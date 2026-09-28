@@ -248,8 +248,7 @@ const SIBLING_TOTALITY_GUARDS: Cell[] = [
   NAV_LOOP,
 ]
 
-// Reads the cited file off disk and asserts the spec name is really in it. Idiom from
-// guard_everyAppRenderingTestFileResetsTheJsdomUrl (App.routeNavigate.test.tsx:426).
+// Reads the cited file off disk and asserts the spec name is really in it.
 // readFileSync, not grep: src/lib/route.test.ts holds a non-UTF-8 byte, so file(1) calls it
 // `data` and plain grep skips it silently.
 function verifyCell(label: string, cell: Cell, problems: string[]): boolean {

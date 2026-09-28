@@ -57,7 +57,8 @@ func SignInHandler(authURL *url.URL, client *http.Client, store *HandoffStore, t
 		}
 
 		var sess struct {
-			AccessToken string `json:"access_token"`
+			AccessToken  string `json:"access_token"`
+			RefreshToken string `json:"refresh_token"`
 		}
 		status, gt, err := postGoTrue(r, client, token, map[string]string{"email": in.Email, "password": in.Password}, &sess)
 		switch {
@@ -65,8 +66,9 @@ func SignInHandler(authURL *url.URL, client *http.Client, store *HandoffStore, t
 			throttle.Refund(in.Email)
 			log.WarnContext(r.Context(), "sign-in: gotrue unreachable", slog.String("error", err.Error()))
 			writeError(w, http.StatusBadGateway, "sign-in is unavailable")
-		case status == http.StatusOK && sess.AccessToken != "":
-			code, ok := store.Put(sess.AccessToken, sha256.Sum256([]byte(in.State)))
+		case status == http.StatusOK && sess.AccessToken != "" && sess.RefreshToken != "":
+			answer, _ := json.Marshal(sess) // two strings; cannot fail
+			code, ok := store.Put(string(answer), sha256.Sum256([]byte(in.State)))
 			if !ok {
 				throttle.Refund(in.Email)
 				log.WarnContext(r.Context(), "sign-in: hand-off store full")
@@ -92,7 +94,7 @@ func SignInHandler(authURL *url.URL, client *http.Client, store *HandoffStore, t
 	})
 }
 
-// ExchangeHandler answers POST /auth/exchange by redeeming a code for its access token.
+// ExchangeHandler answers POST /auth/exchange by redeeming a code for its stored {access_token, refresh_token} answer.
 func ExchangeHandler(store *HandoffStore) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !postOnly(w, r) {
@@ -107,12 +109,12 @@ func ExchangeHandler(store *HandoffStore) http.Handler {
 			writeError(w, http.StatusBadRequest, "invalid or expired code")
 			return
 		}
-		tok, ok := store.Take(in.Code, in.State)
+		answer, ok := store.Take(in.Code, in.State)
 		if !ok {
 			writeError(w, http.StatusBadRequest, "invalid or expired code")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"access_token": tok})
+		writeJSON(w, http.StatusOK, json.RawMessage(answer))
 	})
 }
 

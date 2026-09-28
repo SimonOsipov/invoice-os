@@ -52,6 +52,7 @@ import type {
   ViewportPoint,
 } from './extractionReview'
 import type { LineItemInput } from './lineItems'
+import { SessionEndedError } from './renewal'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -581,6 +582,36 @@ describe('fetchPageImage', () => {
 
     expect(err, 'a dropped connection resolved as a page').toBeInstanceOf(Error)
     expect(createObjectURL).not.toHaveBeenCalled()
+  })
+})
+
+// Pre-handled, so the stub that never awaits it does not report an unhandled rejection.
+function endedGetter(): Promise<string | null> {
+  const p = Promise.reject(new SessionEndedError())
+  p.catch(() => {})
+  return p
+}
+
+// A due renewal is awaited; an ended session makes no request.
+describe('fetchPageImage with an async getter', () => {
+  it('sends the awaited token', async () => {
+    const fetchMock = mockPageFetch([1, 2, 3, 4])
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:page-2')
+
+    await fetchPageImage(() => Promise.resolve('tok'), BASE, JOB_ID, 2)
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new Headers(init.headers).get('authorization')).toBe('Bearer tok')
+  })
+
+  it('a byte fetcher ends quietly', async () => {
+    const fetchMock = mockPageFetch([1, 2, 3, 4])
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:page-2')
+
+    const err = await fetchPageImage(endedGetter, BASE, JOB_ID, 2).then(() => 'resolved', (e: unknown) => e)
+
+    expect(err).toBeInstanceOf(SessionEndedError)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
 

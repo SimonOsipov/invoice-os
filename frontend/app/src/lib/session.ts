@@ -6,6 +6,7 @@
 //
 // Persisted shape (localStorage[SESSION_KEY]):
 //   { v: SESSION_SCHEMA_VERSION, personaId: PersonaId, token: string|null, me: Me|null, verified: boolean, handoff?: true }
+//   a hand-off record may add the pair { refresh_token: string, received_at: number } (epoch ms at receipt).
 // `persona` is stored by id only and rehydrated from APP_PERSONAS — persona definitions
 // (name/subject/tenantId/role) are canonical in code, so persisting only the id avoids
 // stale-persona drift and reduces the corruption guard to a simple membership check.
@@ -26,12 +27,30 @@ export function serializeSession(session: Session): string {
     verified: session.verified,
     // Written only when set, so a persona record stays byte-identical.
     ...(session.handoff ? { handoff: true } : {}),
+    // Hand-off only, so serialize and parse stay symmetric.
+    ...(session.handoff && session.renewal
+      ? { refresh_token: session.renewal.refreshToken, received_at: session.renewal.receivedAt }
+      : {}),
   })
 }
 
 // Identity comes from /me; the rest stays the firm persona until AUTH-09.
 export function handoffPersona(me: Me): Persona {
   return { ...APP_PERSONAS.firm, subject: me.user.id, tenantId: me.tenant.id }
+}
+
+// The pair is optional; when present it must be complete, well-typed and on a hand-off record.
+function renewalPairOk(p: { handoff?: unknown; refresh_token?: unknown; received_at?: unknown }): boolean {
+  if (p.refresh_token === undefined && p.received_at === undefined) {
+    return true
+  }
+  return (
+    p.handoff === true &&
+    typeof p.refresh_token === 'string' &&
+    p.refresh_token !== '' &&
+    typeof p.received_at === 'number' &&
+    Number.isFinite(p.received_at)
+  )
 }
 
 function hasMeIds(me: unknown): me is Me {
@@ -57,10 +76,20 @@ export function parseStoredSession(raw: string | null): Session | null {
       (typeof parsed.token === 'string' || parsed.token === null) &&
       typeof parsed.verified === 'boolean' &&
       (parsed.me === null || (typeof parsed.me === 'object' && parsed.me !== null)) &&
-      (parsed.handoff !== true || hasMeIds(parsed.me))
+      (parsed.handoff !== true || hasMeIds(parsed.me)) &&
+      renewalPairOk(parsed)
     ) {
       if (parsed.handoff === true) {
-        return { persona: handoffPersona(parsed.me), token: parsed.token, me: parsed.me, verified: parsed.verified, handoff: true }
+        return {
+          persona: handoffPersona(parsed.me),
+          token: parsed.token,
+          me: parsed.me,
+          verified: parsed.verified,
+          handoff: true,
+          ...(parsed.refresh_token !== undefined
+            ? { renewal: { refreshToken: parsed.refresh_token, receivedAt: parsed.received_at } }
+            : {}),
+        }
       }
       return {
         persona: APP_PERSONAS[parsed.personaId as keyof typeof APP_PERSONAS],
@@ -129,6 +158,21 @@ export function shouldAutoSignIn(personaParam: string | null): boolean {
   return personaParam === 'firm' || personaParam === 'inhouse'
 }
 
+// Unverified read of a three-part JWT's payload; null for anything else.
+export function decodeJwtPayload(token: string | null): Record<string, unknown> | null {
+  const parts = token?.split('.')
+  if (parts?.length !== 3 || !parts[1]) {
+    return null
+  }
+  try {
+    const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    const claims: unknown = JSON.parse(atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, '=')))
+    return claims !== null && typeof claims === 'object' && !Array.isArray(claims) ? (claims as Record<string, unknown>) : null
+  } catch {
+    return null
+  }
+}
+
 // Read a JWT's `exp` WITHOUT verifying the signature. The browser cannot verify one — the
 // gateway is the only authority — so this is a courtesy check, not a security control: it
 // exists so a reload on a token the gateway will certainly reject doesn't boot into the
@@ -141,24 +185,12 @@ export function shouldAutoSignIn(personaParam: string | null): boolean {
 // every outstanding token. Those are caught by the 401 handler, which stays the real
 // backstop. Same comparison the gateway makes (internal/platform/auth/claims.go:58).
 export function isTokenExpired(token: string | null, nowMs: number = Date.now()): boolean {
-  if (!token) {
-    return false
-  }
-  const payload = token.split('.')[1]
-  if (!payload) {
-    return false
-  }
-  try {
-    const b64 = payload.replace(/-/g, '+').replace(/_/g, '/')
-    const claims = JSON.parse(atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, '=')))
-    return typeof claims?.exp === 'number' && nowMs >= claims.exp * 1000
-  } catch {
-    return false
-  }
+  const exp = decodeJwtPayload(token)?.exp
+  return typeof exp === 'number' && nowMs >= exp * 1000
 }
 
-// Boot-time session resolution: a stored session whose token has already expired is NOT a
-// session. Entering the workspace on one only buys a dashboard that 401s a moment later.
+// Boot-time session resolution: an expired token with no renewal is NOT a session (the
+// workspace would only 401). One with a renewal is kept: its refresh token outlives it.
 //
 // This deliberately does NOT distinguish "expired" from "never signed in". It used to,
 // because the two left the app by different doors — expired to the landing page, absent to
@@ -167,5 +199,5 @@ export function isTokenExpired(token: string | null, nowMs: number = Date.now())
 // behavioural difference. Keeping the flag would have meant two mechanisms for one outcome.
 export function resolveBootSession(now: number = Date.now()): Session | null {
   const session = loadSession()
-  return session !== null && isTokenExpired(session.token, now) ? null : session
+  return session !== null && !session.renewal && isTokenExpired(session.token, now) ? null : session
 }

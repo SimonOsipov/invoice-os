@@ -60,6 +60,7 @@ import { ApiError } from '@invoice-os/api-client'
 import { APP_PERSONAS, type Session } from '../auth'
 import { NOT_ACTIVE_MEMBER_MESSAGE, createAuthedFetch } from './authedFetch'
 import type { AuthedFetch } from './portfolio'
+import { SessionEndedError } from './renewal'
 import {
   checkMapping,
   createImport,
@@ -1296,5 +1297,61 @@ describe('checkMapping', () => {
     const refused = new ApiError('http', 'boom', 500)
     const failing = vi.fn(() => Promise.reject(refused)) as unknown as AuthedFetch
     await expect(checkMapping(failing, 'https://gw.test', req)).rejects.toBe(refused)
+  })
+})
+
+// A promise from getToken is awaited; a plain value keeps the XHR synchronous (P17).
+describe('xhrJson with an async getter', () => {
+  const flush = () => new Promise((r) => setTimeout(r, 0))
+  const authWith = (getToken: ImportAuth['getToken'], onUnauthorized = vi.fn()): ImportAuth => ({ getToken, onUnauthorized })
+  const bearer = (xhr: FakeXhr | undefined) => xhr?.headers.find(([k]) => k.toLowerCase() === 'authorization')?.[1]
+
+  it('xhrJson awaits the token', async () => {
+    const promise = previewImport(authWith(() => Promise.resolve('tok')), base, makeFile(), FakeXhrCtor)
+    await flush()
+    FakeXhr.last()?.respond(200, JSON.stringify(PREVIEW_BODY_CSV))
+    await promise
+
+    expect(FakeXhr.instances).toHaveLength(1)
+    expect(bearer(FakeXhr.last())).toBe('Bearer tok')
+  })
+
+  it('a rejected getter sends nothing', async () => {
+    const ended = () => {
+      const p = Promise.reject(new SessionEndedError())
+      p.catch(() => {})
+      return p
+    }
+    const onUnauthorized = vi.fn()
+    const phases: UploadPhase[] = []
+    const promise = createImport(authWith(ended, onUnauthorized), base, makeReq(), (p) => phases.push(p), FakeXhrCtor)
+    const settled = promise.then(() => 'resolved', (e: unknown) => e)
+    await flush()
+
+    expect(FakeXhr.last()?.body, 'send was called').toBeUndefined()
+    const err = await settled
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).kind).toBe('network')
+    expect((err as ApiError).message).toBe('session ended')
+    expect(phases).toEqual([{ kind: 'error', error: err }])
+    expect(onUnauthorized).not.toHaveBeenCalled()
+  })
+
+  it('a synchronous getter sends before the call returns', () => {
+    void previewImport(fakeAuth(), base, makeFile(), FakeXhrCtor)
+
+    expect(FakeXhr.last()?.body, 'a plain token must not defer the XHR').toBeInstanceOf(FormData)
+    expect(bearer(FakeXhr.last())).toBe('Bearer tok')
+  })
+
+  it("makeImportAuth's fourth argument is its getter", async () => {
+    const auth = makeImportAuth(buildSession('A0'), vi.fn(), undefined, () => Promise.resolve('A1'))
+
+    const promise = previewImport(auth, base, makeFile(), FakeXhrCtor)
+    await flush()
+    FakeXhr.last()?.respond(200, JSON.stringify(PREVIEW_BODY_CSV))
+    await promise
+
+    expect(bearer(FakeXhr.last())).toBe('Bearer A1')
   })
 })

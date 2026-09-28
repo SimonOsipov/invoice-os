@@ -254,12 +254,17 @@ fails if a name, its `switchClient` reset, or its verdict disagrees with the mod
 ## Why `Workspace` can't mount while `?persona=` is live
 
 `App.tsx`'s `seat` initializer: `const [seat, setSeat] = useState<Session | null>(() =>
-(autoPersona ? null : resolveBootSession()))`. Whenever the URL names an openable
-persona, `seat` initialises to `null`, so `App` renders `<SignInLoading>` and never
+(autoPersona || handoffCode ? null : bootSession))`, where `bootSession` is
+`resolveBootSession()`. Whenever `autoPersona` is set (the URL names an openable persona),
+`seat` initialises to `null`, so `App` renders `<SignInLoading>` and never
 mounts `Workspace` — which owns every line of the router — on that commit. This is
 structural, not an effect-ordering guarantee to remember: there is no child to order
 against. It's what makes the writer rule above actually hold, and it's pinned by
 `App.routePersonaOrdering.test.tsx`, not by comment.
+
+The one exception: a live stored hand-off session suppresses `?persona=`, so `autoPersona`
+is `null` and `Workspace` mounts on that session while the param is still in the URL. The
+writers never emit `persona` (no view owns it), and `App`'s strip effect removes it.
 
 **A path segment survives the strip; a query does not.** The strip rebuilds the URL as
 `pathname` alone, discarding the whole search string, and it runs at `App`'s mount while
@@ -517,7 +522,5 @@ landing on a review path — must still account for this writer firing in the sa
 
 **jsdom's environment is per test file, not per test.** `window.history` survives across
 `it()` blocks in one file. A test that pushes a URL leaks it into the next test's boot
-seed unless `beforeEach` resets it with `window.history.replaceState(null, '', '/')`. A
-static guard in `App.routeNavigate.test.tsx`
-(`guard_everyAppRenderingTestFileResetsTheJsdomUrl`) enforces this across all 16 files
-that render `<App />`.
+seed unless `beforeEach` resets it with `window.history.replaceState(null, '', '/')`. Every
+file that renders `<App />` does this; no test enforces it.

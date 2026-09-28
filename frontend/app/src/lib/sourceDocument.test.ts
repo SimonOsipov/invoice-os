@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { ApiError } from '@invoice-os/api-client'
 
 import { createAuthedFetch } from './authedFetch'
+import { SessionEndedError } from './renewal'
 import {
   classifyDocument,
   contiguousRanges,
@@ -710,6 +711,36 @@ describe('fetchDocumentBytes', () => {
 
     expect(revokeObjectURL).toHaveBeenCalledTimes(1)
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:test-1')
+  })
+})
+
+// Pre-handled, so the stub that never awaits it does not report an unhandled rejection.
+function endedGetter(): Promise<string | null> {
+  const p = Promise.reject(new SessionEndedError())
+  p.catch(() => {})
+  return p
+}
+
+// A due renewal is awaited; an ended session makes no request.
+describe('fetchDocumentBytes with an async getter', () => {
+  it('sends the awaited token', async () => {
+    const fetchMock = mockBytesFetch([1, 2, 3, 4])
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:test-1')
+
+    await fetchDocumentBytes(() => Promise.resolve('tok'), BASE, DOCUMENT_ID, 'pdf', 'a.pdf')
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new Headers(init.headers).get('authorization')).toBe('Bearer tok')
+  })
+
+  it('a byte fetcher ends quietly', async () => {
+    const fetchMock = mockBytesFetch([1, 2, 3, 4])
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:test-1')
+
+    const err = await fetchDocumentBytes(endedGetter, BASE, DOCUMENT_ID, 'pdf', 'a.pdf').then(() => 'resolved', (e: unknown) => e)
+
+    expect(err).toBeInstanceOf(SessionEndedError)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
 

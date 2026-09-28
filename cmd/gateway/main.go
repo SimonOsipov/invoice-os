@@ -155,13 +155,15 @@ func main() {
 	app.Mux.Handle("POST /auth/register", reg.Register)
 	app.Mux.Handle("GET /auth/verify", reg.Verify)
 
-	// Public sign-in hand-off for the landing origin, in every build.
+	// Public sign-in hand-off and session renewal, outside the verifier, in every build.
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.
 	h := handoffHandlers(probed["auth"], app.Logger)
 	app.Mux.Handle("POST /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("OPTIONS /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("POST /auth/exchange", withCORS(h.Exchange))
 	app.Mux.Handle("OPTIONS /auth/exchange", withCORS(h.Exchange))
+	app.Mux.Handle("POST /auth/refresh", withCORS(h.Refresh))
+	app.Mux.Handle("OPTIONS /auth/refresh", withCORS(h.Refresh))
 
 	// Mint routes exist only in a -tags mockissuer build; ENVIRONMENT is read raw, as for provisioning.
 	platform.MockIssuer = "absent"
@@ -249,13 +251,13 @@ func registrationHandlers(authURL, siteURL *url.URL, log *slog.Logger) registrat
 	}
 }
 
-// handoff holds the public sign-in hand-off handlers main mounts outside /api/.
+// handoff holds the public sign-in hand-off and renewal handlers main mounts outside /api/.
 type handoff struct {
-	SignIn, Exchange http.Handler
+	SignIn, Exchange, Refresh http.Handler
 }
 
-// handoffHandlers builds the sign-in and exchange handlers against GoTrue at authURL.
-// Both share one code store: a code minted by sign-in is redeemable only through exchange.
+// handoffHandlers builds the sign-in, exchange and refresh handlers against GoTrue at authURL.
+// Sign-in and exchange share one code store: a code minted by sign-in is redeemable only through exchange.
 func handoffHandlers(authURL *url.URL, log *slog.Logger) handoff {
 	store := gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
 	throttle := gateway.NewSignInThrottle(gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
@@ -267,6 +269,7 @@ func handoffHandlers(authURL *url.URL, log *slog.Logger) handoff {
 	return handoff{
 		SignIn:   gateway.SignInHandler(authURL, client, store, throttle, log),
 		Exchange: gateway.ExchangeHandler(store),
+		Refresh:  gateway.RefreshHandler(authURL, client, log),
 	}
 }
 

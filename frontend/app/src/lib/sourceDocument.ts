@@ -2,6 +2,7 @@
 // modal makes lives here as a pure exported function, so it has an oracle without a DOM.
 
 import { ApiError } from '@invoice-os/api-client'
+import { isPromiseLike } from './authedFetch'
 import type { AuthedFetch } from './portfolio'
 
 // internal/invoice/source_document.go:21-41. No omitempty: explicit null is the contract.
@@ -90,14 +91,17 @@ export async function getDocumentSheet(
 // GET /v1/documents/{id} fixes Content-Type: application/octet-stream + nosniff, so the
 // bytes must be re-typed client-side before any renderer can accept them.
 export async function fetchDocumentBytes(
-  getToken: () => string | null,
+  getToken: () => string | null | Promise<string | null>,
   base: string,
   documentId: string,
   kind: DocumentKind,
   filename: string | null,
 ): Promise<DocumentBytes> {
+  // A SessionEndedError from the getter rejects here, before any request.
+  const pending = getToken()
+  const token = isPromiseLike(pending) ? await pending : pending
   const res = await fetch(`${base}/api/invoice/v1/documents/${encodeURIComponent(documentId)}`, {
-    headers: { Authorization: `Bearer ${getToken()}` },
+    headers: { Authorization: `Bearer ${token}` },
   })
   if (!res.ok) throw new ApiError('http', res.statusText, res.status)
 

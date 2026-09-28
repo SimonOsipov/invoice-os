@@ -42,12 +42,9 @@
 // auth/error shaping (IMPAPI-20 is the anti-fork guard, mirroring PRV-16's role on the
 // backend).
 //
-// makeImportAuth(session, onSignOut, onSuspended) mirrors makeAuthedFetch with the same
-// three parameters (D3, AUDIT-10-07): PlatformCtx (src/types.ts:239) exposes only
-// `authedFetch`, so the raw token and onSignOut are otherwise unreachable here. Must
-// read `() => session.token` at CALL time, not construction time — a live re-sign-in
-// swaps the Session object under React state, so a captured token snapshot would go
-// stale (authedFetch.ts:38-45's rationale).
+// makeImportAuth(session, onSignOut, onSuspended, freshToken) mirrors makeAuthedFetch with
+// the same parameters. The token is read at CALL time (the renewer's
+// getter, or `session.token`), never captured at construction.
 //
 // Progress contract ([progress-two-phase], AC4/AC6): xhrJson reports RAW loaded/total
 // BYTES, never a fraction — the arithmetic lives in the pure `uploadPercent` so it has a
@@ -68,7 +65,7 @@
 // import under this app's `verbatimModuleSyntax`.
 import { ApiError } from '@invoice-os/api-client'
 import type { Session } from '../auth'
-import { isSuspended, isUnauthorized } from './authedFetch'
+import { isPromiseLike, isSuspended, isUnauthorized } from './authedFetch'
 import type { InvoiceRecord } from './invoices'
 import type { AuthedFetch } from './portfolio'
 
@@ -192,7 +189,7 @@ export interface SourceDocumentUpload {
 export type XhrCtor = new () => XMLHttpRequest
 
 export interface ImportAuth {
-  getToken: () => string | null
+  getToken: () => string | null | Promise<string | null>
   onUnauthorized: () => void
   // Optional for the same reason createAuthedFetch's third parameter is (authedFetch.ts).
   onSuspended?: () => void
@@ -214,12 +211,17 @@ export type UploadPhase =
   | { kind: 'error'; error: ApiError }
 
 // Mirrors makeAuthedFetch parameter for parameter so M4-08-06 can instantiate both from the
-// SAME arguments in the SAME useMemo (App.tsx) — identical inputs at one construction site
+// SAME arguments (App.tsx) — identical inputs at one construction site
 // make divergence structurally impossible (D3).
-// `() => session.token` is read at CALL time, never captured (authedFetch.ts:38-45).
-export function makeImportAuth(session: Session, onSignOut: () => void, onSuspended?: () => void): ImportAuth {
+// The token is read at CALL time, never captured (makeAuthedFetch).
+export function makeImportAuth(
+  session: Session,
+  onSignOut: () => void,
+  onSuspended?: () => void,
+  freshToken?: () => string | null | Promise<string | null>,
+): ImportAuth {
   return {
-    getToken: () => session.token,
+    getToken: freshToken ?? (() => session.token),
     onUnauthorized: onSignOut,
     onSuspended,
   }
@@ -306,11 +308,16 @@ function xhrJson(
     xhr.ontimeout = () => fail(new ApiError('network', 'request timed out', null))
 
     xhr.open(method, url)
+    const send = (token: string | null): void => {
+      if (token) xhr.setRequestHeader('Authorization', 'Bearer ' + token)
+      // Content-Type is deliberately NEVER set: the browser writes the multipart boundary
+      // itself, and Go's ParseMultipartForm rejects a hand-set header that omits it.
+      xhr.send(form)
+    }
+    // A plain token sends inside the executor, as every synchronous FakeXhr test expects.
     const token = auth.getToken()
-    if (token) xhr.setRequestHeader('Authorization', 'Bearer ' + token)
-    // Content-Type is deliberately NEVER set: the browser writes the multipart boundary
-    // itself, and Go's ParseMultipartForm rejects a hand-set header that omits it.
-    xhr.send(form)
+    if (isPromiseLike(token)) token.then(send, () => fail(new ApiError('network', 'session ended', null)))
+    else send(token)
   })
 }
 

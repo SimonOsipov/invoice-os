@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { APP_PERSONAS, landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn, SignInLoading } from './components/SignIn'
-import { resolveBootSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
+import { resolveBootSession, loadSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
+import { createRenewer, isRenewalDue, type Renewer } from './lib/renewal'
 import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
 import { consumeSignInState, ensureSignInState, landingSignInUrl, mintSignInState } from './lib/signInState'
 import { HANDOFF_PARAM, isLiveHandoffSession, readHandoffCode, redeemHandoff } from './lib/sessionHandoff'
 import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
-import { makeAuthedFetch } from './lib/authedFetch'
+import { isPromiseLike, makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, defaultDraft, resolveActiveClient } from './lib/clients'
 import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from './lib/portfolio'
 import { fileDraftGate, fileDraftInvoice, fileSuppliedNumber } from './lib/invoiceDraft'
@@ -229,13 +230,14 @@ const STILL_WORKING = new ApiError('network', 'An import or filing is still in p
 // (Platform.dc.html ~L980-1263): `this.state` becomes typed `useState` hooks below,
 // and every handler in the "actions" section is ported 1:1 as a plain function.
 // Rendered only once signed in (see App): the persona picks the initial workspace mode.
-function Workspace({ session, onSignOut, initialView, becomePersona, returnToSeat, seatSubject }: {
+function Workspace({ session, onSignOut, initialView, becomePersona, returnToSeat, seatSubject, freshToken }: {
   session: Session
   onSignOut: () => void
   initialView?: View
   becomePersona?: (member: Member, view: View) => Promise<void>
   returnToSeat?: (view: View, seat: Member) => Promise<void>
   seatSubject?: string
+  freshToken?: () => string | null | Promise<string | null>
 }) {
   // Workspace type is a property of the authenticated identity, not a user-flippable
   // view: the firm persona gets the firm workspace, the in-house persona the in-house
@@ -248,10 +250,16 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   const [suspended, setSuspended] = useState(false)
   const onSuspended = useCallback(() => setSuspended(true), [])
 
-  const authedFetch = useMemo(() => makeAuthedFetch(session, onSignOut, onSuspended), [session, onSignOut, onSuspended])
-  // Same three arguments, one construction site — the multipart XHR transport cannot drift
+  const authedFetch = useMemo(
+    () => makeAuthedFetch(session, onSignOut, onSuspended, freshToken),
+    [session, onSignOut, onSuspended, freshToken],
+  )
+  // Same arguments, one construction site — the multipart XHR transport cannot drift
   // from the fetch path on auth, the 401 sign-out or the 403 suspension (importApi.ts D3).
-  const importAuth = useMemo(() => makeImportAuth(session, onSignOut, onSuspended), [session, onSignOut, onSuspended])
+  const importAuth = useMemo(
+    () => makeImportAuth(session, onSignOut, onSuspended, freshToken),
+    [session, onSignOut, onSuspended, freshToken],
+  )
 
   // [entity-picker] step 1 of 3: ONE fetch of the tenant's live portfolio entities,
   // shared by the switcher below and ClientsView (via ctx.entities/entitiesState/
@@ -1841,8 +1849,8 @@ export default function App() {
   const frontDoorBounced = useRef(false)
   // Lazy initializer: synchronously rehydrate a persisted session at boot (no network,
   // no SignIn flash) so a reload / new tab returns straight to the workspace. A stored
-  // token already past its `exp` resolves to NO session — entering the workspace on one
-  // only buys a dashboard that 401s a moment later.
+  // token past its `exp` resolves to NO session unless it carries a refresh token; then the
+  // boot renewal below runs before the workspace mounts.
   //
   // A deep-link hand-off (`?persona=` or `?handoff=`) boots with NO session even when one is
   // stored, unless that stored session is a live hand-off session: the user just chose
@@ -1864,12 +1872,56 @@ export default function App() {
   const toastSeq = useRef(0)
   const [toast, setToast] = useState<{ name: string; initials: string; role: Member['role']; seq: number } | null>(null)
 
+  // Set by expireSession when storage belongs to another tab's sign-in or sign-out.
+  const keepStoredRecord = useRef(false)
+
   // Mirror the SEAT to storage: persist while signed in, wipe on sign out / cleared session.
   // A stand-in is deliberately absent here, so a reload returns to the seat.
   useEffect(() => {
     if (seat) saveSession(seat)
+    else if (keepStoredRecord.current) keepStoredRecord.current = false
     else clearSession()
   }, [seat])
+
+  // Unlike signOut, keeps the URL and the destination: the front door below captures the
+  // current path on its way to landing.
+  const renewerRef = useRef<Renewer | null>(null)
+  const expireSession = useCallback(({ keepStorage }: { keepStorage: boolean }) => {
+    renewerRef.current?.track(null)
+    identityGen.current++
+    keepStoredRecord.current = keepStorage
+    setSeat(null)
+    setStandIn(null)
+    setCarriedView(null)
+    setToast(null)
+    if (!keepStorage) clearSession()
+  }, [])
+  if (renewerRef.current === null) {
+    renewerRef.current = createRenewer({
+      base: gatewayBase() ?? '',
+      load: loadSession,
+      onRenewed: (next) => {
+        saveSession(next)
+        setSeat(next)
+      },
+      onEnded: expireSession,
+    })
+  }
+  const renewer = renewerRef.current
+  // Layout, not passive: the workspace's first loaders run in child passive effects.
+  useLayoutEffect(() => {
+    renewer.track(activeSession)
+  }, [renewer, activeSession])
+
+  // A due seat renews behind the splash before the workspace sends anything.
+  const [bootRenewing, setBootRenewing] = useState(() => seat !== null && isRenewalDue(seat))
+  useEffect(() => {
+    if (!bootRenewing) return
+    const done = () => setBootRenewing(false)
+    const token = renewer.fresh()
+    if (isPromiseLike(token)) token.then(done, done)
+    else done()
+  }, [bootRenewing, renewer])
 
   // Sign out returns the user to the marketing landing page (the real sign-in front
   // door). Nulling React state alone would only swap in the app's own minimal
@@ -1879,6 +1931,8 @@ export default function App() {
   // it is stripped from the URL when consumed at boot, so no history entry behind this
   // navigation can auto-sign the same persona back in.
   const signOut = useCallback(() => {
+    // First: a renewal settling after this must not restore the session.
+    renewerRef.current?.track(null)
     identityGen.current++
     // Drop the in-memory session, not just the persisted copy. clearSession() only wipes
     // localStorage, so without this the invalidated session stayed in React state and
@@ -2054,6 +2108,7 @@ export default function App() {
 
   // Mounting Workspace would clear the captured destination before the start bounce leaves.
   if (authStart && landingBase()) return null
+  if (bootRenewing && activeSession) return <SignInLoading />
   if (!activeSession) {
     // A deep-link auto-sign-in is in flight: show a loading splash, NOT the persona
     // picker, so the landing → app hand-off doesn't flash "Choose an account" before the
@@ -2080,6 +2135,7 @@ export default function App() {
         becomePersona={DEMO_MODE ? becomePersona : undefined}
         returnToSeat={DEMO_MODE ? returnToSeat : undefined}
         seatSubject={DEMO_MODE ? seat?.persona.subject : undefined}
+        freshToken={renewer.fresh}
       />
       {/* Sibling of the keyed Workspace above, not inside it -- a successful switch
           remounts Workspace, which would destroy a toast mounted underneath it. */}

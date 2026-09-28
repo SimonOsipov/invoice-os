@@ -4,6 +4,7 @@
 import { ApiError } from '@invoice-os/api-client'
 
 import type { AuditRange } from './auditFilters'
+import { isPromiseLike } from './authedFetch'
 import type { AuthedFetch } from './portfolio'
 
 export interface BundleEntity {
@@ -104,8 +105,11 @@ export async function fetchEvidenceBundle(
   fallbackFilename: string,
   signal?: AbortSignal,
 ): Promise<{ blob: Blob; filename: string }> {
+  // A SessionEndedError from the getter rejects here, before any request.
+  const pending = getToken()
+  const token = isPromiseLike(pending) ? await pending : pending
   const res = await fetch(evidenceBundleUrl(base, r), {
-    headers: { Authorization: `Bearer ${getToken()}` },
+    headers: { Authorization: `Bearer ${token}` },
     signal,
   })
 

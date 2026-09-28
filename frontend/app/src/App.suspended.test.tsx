@@ -228,8 +228,8 @@ describe('AC-2: both construction sites are wired', () => {
       expect(call, `App.tsx no longer calls ${factory}`).toBeDefined()
       expect(
         call!.split(',').length,
-        `${factory} must be called with (session, onSignOut, onSuspended) — got ${call}`,
-      ).toBe(3)
+        `${factory} must be called with (session, onSignOut, onSuspended, freshToken) — got ${call}`,
+      ).toBe(4)
     }
   })
 })

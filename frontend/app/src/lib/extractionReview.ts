@@ -6,6 +6,7 @@ import type { CSSProperties } from 'react'
 import { ApiError } from '@invoice-os/api-client'
 
 import { formatLabel } from '../components/SourceDocumentStates'
+import { isPromiseLike } from './authedFetch'
 import { fmtTimeWAT } from './format'
 import type { LineItemInput } from './lineItems'
 import type { AuthedFetch } from './portfolio'
@@ -402,8 +403,11 @@ export async function fetchPageImage(
   jobId: string,
   page: number,
 ): Promise<DocumentBytes> {
+  // A SessionEndedError from the getter rejects here, before any request.
+  const pending = getToken()
+  const token = isPromiseLike(pending) ? await pending : pending
   const res = await fetch(`${base}/api/submission/v1/extractions/${encodeURIComponent(jobId)}/pages/${page}`, {
-    headers: { Authorization: `Bearer ${getToken()}` },
+    headers: { Authorization: `Bearer ${token}` },
   })
   // Before createObjectURL, never after: a refused page would pin a blob with no release().
   if (!res.ok) throw new ApiError('http', res.statusText, res.status)

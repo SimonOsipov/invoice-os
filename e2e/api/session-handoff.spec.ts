@@ -1,6 +1,7 @@
 // The sign-in hand-off over the deployed gateway: sign-in yields a single-use code
-// bound to a state, the exchange redeems it once, both routes answer the landing preflight, and
-// sign-in is throttled per address. Forks auto-confirm, so a fresh registration signs in at once.
+// bound to a state, the exchange redeems it once for an access and a refresh token, a refresh
+// renews both, each route answers its caller's preflight, and sign-in is throttled per address.
+// Forks auto-confirm, so a fresh registration signs in at once.
 import { test, expect } from '@playwright/test'
 import { exchangeCode, mintSignInState, rawFetch, signInForCode } from './client'
 import { assertErrorEnvelope } from './contract-helpers'
@@ -11,6 +12,9 @@ const INVALID_CREDENTIALS = 'invalid email or password'
 const STATE_REQUIRED = 'state is required'
 const INVALID_CODE = 'invalid or expired code'
 const TOO_MANY = 'too many requests'
+// internal/gateway/refresh.go: RefreshHandler's refusals.
+const INVALID_REFRESH = 'invalid or expired refresh token'
+const REFRESH_REQUIRED = 'refresh_token is required'
 
 // internal/gateway/signin_throttle.go SignInMaxFailures.
 const THROTTLE_LIMIT = 10
@@ -75,14 +79,55 @@ test.describe('sign-in hand-off (API E2E, over the deployed gateway)', () => {
     expect(errorOf(right)).toBe(INVALID_CODE)
   })
 
-  test('both routes answer the landing preflight with a grant, never 405', async ({ request }) => {
-    const origin = new URL(resolveTarget('LANDING_URL')).origin
-    for (const path of ['/auth/sign-in', '/auth/exchange']) {
+  test('the exchange answers a refresh token, and a refresh renews it', async ({ request }) => {
+    const { email, password } = await registerFresh()
+    const state = mintSignInState()
+
+    const exchange = await rawFetch('/auth/exchange', { method: 'POST', body: { code: await signInForCode(email, password, state), state } })
+    expect(exchange.status, JSON.stringify(exchange.body)).toBe(200)
+    expect(Object.keys(exchange.body as object).sort(), 'the exchange answer keys').toEqual(['access_token', 'refresh_token'])
+    const first = exchange.body as { access_token: string; refresh_token: string }
+    expect(first.access_token).toMatch(JWT_RE)
+    expect(first.refresh_token, 'the exchange refresh token').not.toBe('')
+
+    const refresh = (body: unknown) => request.post(`${resolveTarget('GATEWAY_URL')}/auth/refresh`, { data: body })
+
+    const renewed = await refresh({ refresh_token: first.refresh_token })
+    const next = (await renewed.json()) as { access_token: string; refresh_token: string }
+    expect(renewed.status(), JSON.stringify(next)).toBe(200)
+    expect(renewed.headers()['cache-control'], 'the refresh answer is cacheable').toBe('no-store')
+    expect(Object.keys(next).sort(), 'the refresh answer keys').toEqual(['access_token', 'refresh_token'])
+    expect(next.access_token).toMatch(JWT_RE)
+    expect(next.access_token, 'the refresh returned the same access token').not.toBe(first.access_token)
+    expect(next.refresh_token, 'the refresh token did not rotate').not.toBe(first.refresh_token)
+    expect(next.refresh_token).not.toBe('')
+
+    // The account has no workspace: 403 means the verifier accepted the renewed token.
+    const me = await rawFetch('/api/tenancy/v1/me', { headers: { Authorization: `Bearer ${next.access_token}` } })
+    expect(me.status, `renewed token on /me: ${JSON.stringify(me.body)}`).toBe(403)
+
+    const unknown = await refresh({ refresh_token: 'aaaaaaaaaaaa' })
+    expect([unknown.status(), await unknown.json()], 'an unknown refresh token').toEqual([401, { error: INVALID_REFRESH }])
+    expect(unknown.headers()['cache-control'], 'the 401 is cacheable').toBe('no-store')
+
+    const empty = await refresh({})
+    expect([empty.status(), await empty.json()], 'no refresh token').toEqual([400, { error: REFRESH_REQUIRED }])
+  })
+
+  test("each hand-off route answers its caller's preflight with a grant, never 405", async ({ request }) => {
+    const landing = new URL(resolveTarget('LANDING_URL')).origin
+    const app = new URL(resolveTarget('APP_URL')).origin
+    const routes: [string, string][] = [
+      ['/auth/sign-in', landing],
+      ['/auth/exchange', landing],
+      ['/auth/refresh', app],
+    ]
+    for (const [path, origin] of routes) {
       const res = await request.fetch(`${resolveTarget('GATEWAY_URL')}${path}`, {
         method: 'OPTIONS',
         headers: { Origin: origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type' },
       })
-      expect(res.status(), `${path} preflight`).toBe(204)
+      expect(res.status(), `${path} preflight from ${origin}`).toBe(204)
       expect(res.headers()['access-control-allow-origin'], `${path} grant`).toBe(origin)
     }
   })

@@ -1913,6 +1913,7 @@ export default function App() {
     renewer.track(activeSession)
   }, [renewer, activeSession])
   // Nothing tracked means the session ended: a request from a chain that outlived it sends nothing.
+  // ceiling: the gate is "some session tracked", not this Workspace's; a leftover chain after a DEMO_MODE stand-in switch gets the new identity's token. Revisit if a stand-in switch shows a cross-identity request.
   const freshToken = useCallback(
     () => (renewer.tracking() ? renewer.fresh() : Promise.reject(new SessionEndedError())),
     [renewer],

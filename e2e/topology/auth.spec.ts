@@ -1,4 +1,4 @@
-import { test, expect, type BrowserContext, type Page } from '@playwright/test'
+import { test, expect, type BrowserContext, type Frame, type Page, type Request } from '@playwright/test'
 import { APP_URL, FIRM_PERSONA, GATEWAY_URL, INHOUSE_PERSONA } from './targets'
 import { resolveTarget } from '../targets'
 import { collectErrors } from '../personaSession'
@@ -784,9 +784,9 @@ async function submitSignIn(page: Page, email: string, password: string): Promis
 }
 
 // Origin and path only: a failure message must not print the leaked secret.
-function leakingUrls(urls: string[], token?: string): string[] {
+function leakingUrls(urls: string[], ...secrets: string[]): string[] {
   return urls
-    .filter((u) => JWT_IN_URL.test(u) || (token != null && u.includes(token)))
+    .filter((u) => JWT_IN_URL.test(u) || secrets.some((secret) => u.includes(secret)))
     .map((u) => {
       const at = new URL(u)
       return at.origin + at.pathname.replace(/eyJ[\w.-]*/g, '<jwt>')
@@ -962,4 +962,155 @@ test('deployed app: a hand-off code minted in another browser signs no tab in', 
     const spent = await rawFetch('/auth/exchange', { method: 'POST', body: { code: c2, state: attackerState } })
     expect([spent.status, spent.body], "the attacker's code after a wrong-state redemption").toEqual([400, { error: INVALID_CODE }])
   })
+})
+
+interface StoredRenewal {
+  token: string
+  refresh_token: string
+  received_at: number
+}
+
+async function storedRenewal(page: Page): Promise<StoredRenewal> {
+  const raw = await page.evaluate((key) => localStorage.getItem(key), SESSION_KEY)
+  return JSON.parse(raw ?? 'null') as StoredRenewal
+}
+
+// Moves received_at back so the stored session is past its lifetime, whatever the page clock reads.
+async function ageStoredSession(page: Page, patch: Partial<StoredRenewal> = {}): Promise<void> {
+  await page.evaluate(
+    ({ key, patch, ageMs }) => {
+      const s = JSON.parse(localStorage.getItem(key)!)
+      localStorage.setItem(key, JSON.stringify({ ...s, ...patch, received_at: s.received_at - ageMs }))
+    },
+    { key: SESSION_KEY, patch, ageMs: 61 * 60_000 },
+  )
+}
+
+async function signInAtFrontDoor(page: Page, account: RealAccount, path: string): Promise<void> {
+  await page.goto(`${APP_URL}${path}`)
+  await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
+  await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
+  await Promise.all([
+    page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
+    submitSignIn(page, account.email, account.password),
+  ])
+  await expectInWorkspace(page, account)
+}
+
+// Gateway requests in send order. The browser's CORS preflights are not application requests.
+function recordGatewayRequests(page: Page): Request[] {
+  const sent: Request[] = []
+  page.on('request', (req) => {
+    if (req.url().startsWith(GATEWAY_URL) && req.method() !== 'OPTIONS') sent.push(req)
+  })
+  return sent
+}
+
+const REFRESH_URL = `${GATEWAY_URL}/auth/refresh`
+const isApi = (r: Request) => r.url().startsWith(`${GATEWAY_URL}/api/`)
+const requestLine = (r: Request) => `${r.method()} ${new URL(r.url()).pathname}`
+
+test("deployed app: a real session renews itself past the access token's lifetime", async ({ page }) => {
+  test.setTimeout(180_000)
+  const account = await provisionRealAccount('renewal')
+  await page.clock.install()
+  const errors = collectErrors(page)
+  const urls = recordUrls(page)
+  const sent = recordGatewayRequests(page)
+  const statuses: string[] = []
+  page.on('response', (res) => statuses.push(`${res.status()} ${res.request().method()} ${res.url().split('?')[0]}`))
+
+  await signInAtFrontDoor(page, account, '/')
+  const first = await storedRenewal(page)
+  expect(JWT_IN_URL.test(first.token), 'the stored token is not a JWT').toBe(true)
+  expect(first.refresh_token, 'the hand-off stored no refresh token').toBeTruthy()
+
+  await test.step('past the lifetime by the browser clock, the next request renews first', async () => {
+    // Settle the dashboard's loads, so "after the jump" holds only requests the jump caused.
+    await page.waitForLoadState('networkidle')
+    const refreshed = page.waitForResponse((r) => r.url() === REFRESH_URL && r.request().method() === 'POST')
+    const mark = sent.length
+    // useLiveRefresh's interval may fire here and send the first request itself.
+    await page.clock.fastForward('01:05:00')
+    await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: 'Audit' }).click()
+    expect((await refreshed).status(), 'the renewal answer').toBe(200)
+    await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
+    await expect.poll(() => sent.slice(mark).filter(isApi).length, { message: 'no data request after the renewal' }).toBeGreaterThan(0)
+
+    const after = sent.slice(mark)
+    expect(requestLine(after[0]), 'the first gateway request after the jump').toBe('POST /auth/refresh')
+    for (const req of after.filter(isApi)) {
+      const auth = await req.headerValue('authorization')
+      expect(auth === `Bearer ${first.token}`, `${requestLine(req)} carried the expired token`).toBe(false)
+      expect(auth?.startsWith('Bearer ey'), `${requestLine(req)} carried no token`).toBe(true)
+    }
+    await expect.poll(async () => (await storedRenewal(page)).token, { message: 'the stored token did not change' }).not.toBe(first.token)
+    expect((await storedRenewal(page)).refresh_token, 'the stored refresh token did not rotate').not.toBe(first.refresh_token)
+    await expect(page.locator(VERIFIED)).toBeAttached()
+  })
+
+  const second = await storedRenewal(page)
+
+  await test.step('a due stored session renews before the workspace mounts', async () => {
+    await ageStoredSession(page)
+    // Counted at the reload's commit: the old document can send nothing after it.
+    let mark = -1
+    const onCommit = (frame: Frame) => {
+      if (frame === page.mainFrame() && mark < 0) mark = sent.length
+    }
+    page.on('framenavigated', onCommit)
+    await page.reload()
+    page.off('framenavigated', onCommit)
+    expect(mark, 'the reload never committed').toBeGreaterThanOrEqual(0)
+    await expectInWorkspace(page, account)
+    await expect.poll(() => sent.slice(mark).filter(isApi).length, { message: 'no data request after the reload' }).toBeGreaterThan(0)
+
+    const after = sent.slice(mark)
+    expect(requestLine(after[0]), 'the first gateway request after the reload').toBe('POST /auth/refresh')
+    for (const req of after.filter(isApi)) {
+      expect(await req.headerValue('authorization'), `${requestLine(req)} carried the pre-reload token`).not.toBe(`Bearer ${second.token}`)
+    }
+  })
+
+  const third = await storedRenewal(page)
+  expect(third.refresh_token, 'the boot renewal did not rotate the refresh token').not.toBe(second.refresh_token)
+  expect(statuses.filter((s) => s.startsWith('401 ')), 'a response in the journey was 401').toEqual([])
+  expect(
+    leakingUrls(urls, first.token, first.refresh_token, second.token, second.refresh_token, third.token, third.refresh_token),
+    'a token, a refresh token or a JWT appeared in these URLs',
+  ).toEqual([])
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('deployed app: a refused renewal returns to landing and keeps the destination', async ({ page }) => {
+  test.setTimeout(180_000)
+  const account = await provisionRealAccount('renewal-refused')
+  const errors = gatedErrors(page, [expectedStatusDropper(page, 401, /\/auth\/refresh$/)])
+  const urls = recordUrls(page)
+
+  await signInAtFrontDoor(page, account, '/audit')
+  await expect(page, 'the first sign-in did not settle on /audit').toHaveURL(/\/audit$/)
+  const signedIn = await storedRenewal(page)
+
+  // An unknown refresh token of GoTrue's length: refused as refresh_token_not_found.
+  await ageStoredSession(page, { refresh_token: 'aaaaaaaaaaaa' })
+  const [refused] = await Promise.all([
+    page.waitForResponse((r) => r.url() === REFRESH_URL && r.request().method() === 'POST'),
+    page.reload(),
+  ])
+  expect(refused.status(), 'the refused renewal').toBe(401)
+  await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
+  expect(await storedSession(page.context()), 'the app origin kept a stored session').toBeNull()
+
+  await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
+  await Promise.all([
+    page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
+    submitSignIn(page, account.email, account.password),
+  ])
+  await expectInWorkspace(page, account)
+  await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
+  await expect(page, 'the destination was not restored after the new sign-in').toHaveURL(/\/audit$/)
+
+  expect(leakingUrls(urls, signedIn.token, signedIn.refresh_token), 'a token, a refresh token or a JWT appeared in these URLs').toEqual([])
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })

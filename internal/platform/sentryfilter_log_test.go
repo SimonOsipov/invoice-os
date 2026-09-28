@@ -65,6 +65,7 @@ func TestSentryLogFilter_NoQueryStringLeaves(t *testing.T) {
 		String("ref", "https://h/v1/invoices#"+markerIRN).
 		String("http.query", "q="+markerTIN).
 		String("http.fragment", markerIRN).
+		StringSlice("urls", []string{"/v1/invoices?q=" + markerTIN, "/v1/invoices#" + markerIRN}).
 		Emit("GET /v1/invoices?q=" + markerTIN + " from /v1/invoices#" + markerIRN)
 
 	l := oneLog(t, mt)
@@ -80,6 +81,9 @@ func TestSentryLogFilter_NoQueryStringLeaves(t *testing.T) {
 		if got := logAttr(t, l, k).AsString(); got != "https://h/v1/invoices" {
 			t.Errorf("log attribute %s = %q, want https://h/v1/invoices", k, got)
 		}
+	}
+	if got, want := logAttr(t, l, "urls").AsStringSlice(), []string{"/v1/invoices", "/v1/invoices"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("urls attribute = %q, want %q", got, want)
 	}
 	assertNoLeak(t, mt.captured())
 }
@@ -123,6 +127,24 @@ func TestSentryLogFilter_ErrorTextLosesQuotedValues(t *testing.T) {
 		}
 		assertNoLeak(t, mt.captured())
 	})
+
+	t.Run("logger and scope attributes", func(t *testing.T) {
+		mt := filteredClient(t, false)
+		hub := sentry.CurrentHub().Clone()
+		hub.Scope().SetAttributes(attribute.String("route", "/v1/invoices?q="+markerTIN))
+		logger := sentry.NewLogger(sentry.SetHubOnContext(context.Background(), hub))
+		logger.SetAttributes(attribute.String("err", `issue_date "`+markerIRN+`"`))
+		logger.Info().Emit("search failed")
+
+		l := oneLog(t, mt)
+		if got := logAttr(t, l, "route").AsString(); got != "/v1/invoices" {
+			t.Errorf("route attribute = %q, want /v1/invoices", got)
+		}
+		if got, want := logAttr(t, l, "err").AsString(), `issue_date "[redacted]"`; got != want {
+			t.Errorf("err attribute = %q, want %q", got, want)
+		}
+		assertNoLeak(t, mt.captured())
+	})
 }
 
 func TestSentryLogFilter_DropsMessageParameters(t *testing.T) {
@@ -159,6 +181,12 @@ func TestSentryLogFilter_KeepsDefaultAttributes(t *testing.T) {
 	if got := logAttr(t, l, "sentry.server.address").AsString(); got != "svc" {
 		t.Errorf("sentry.server.address = %q, want svc", got)
 	}
+	if got := logAttr(t, l, "sentry.sdk.name").AsString(); got != "sentry.go" {
+		t.Errorf("sentry.sdk.name = %q, want sentry.go", got)
+	}
+	if got := logAttr(t, l, "sentry.sdk.version").AsString(); got != sentry.SDKVersion {
+		t.Errorf("sentry.sdk.version = %q, want %s", got, sentry.SDKVersion)
+	}
 	assertNoLeak(t, mt.captured())
 }
 
@@ -169,5 +197,82 @@ func TestSentryLogFilter_NoAttributes(t *testing.T) {
 	}
 	if got.Body != "worker started" {
 		t.Errorf("log body = %q, want worker started", got.Body)
+	}
+}
+
+// Accepted residual: a bare %s argument lands in the body unquoted, so ScrubText cannot see it.
+func TestSentryLogFilter_UnquotedArgumentStaysInBody(t *testing.T) {
+	mt := filteredClient(t, false)
+	newHubLogger().Warn().Emitf("lookup %s failed", markerTIN)
+
+	l := oneLog(t, mt)
+	if want := "lookup " + markerTIN + " failed"; l.Body != want {
+		t.Errorf("log body = %q, want %q", l.Body, want)
+	}
+	if _, ok := l.Attributes["sentry.message.parameters.0"]; ok {
+		t.Error("sentry.message.parameters.0 arrived, want it deleted")
+	}
+	if got := logAttr(t, l, "sentry.message.template").AsString(); got != "lookup %s failed" {
+		t.Errorf("sentry.message.template = %q, want lookup %%s failed", got)
+	}
+}
+
+// The deleted set is the key prefix "sentry.message.parameters." with its dot; a lookalike key is an ordinary string.
+func TestSentryLogFilter_ParameterLookalikeKeyIsScrubbedNotDropped(t *testing.T) {
+	mt := filteredClient(t, false)
+	newHubLogger().Info().
+		String("sentry.message.parameters_note", `note "`+markerIRN+`"`).
+		String("sentry.message.parameters", `note "`+markerIRN+`"`).
+		String("sentry.message.parameters.extra", markerTIN).
+		Emit("worker started")
+
+	l := oneLog(t, mt)
+	for _, k := range []string{"sentry.message.parameters_note", "sentry.message.parameters"} {
+		if got, want := logAttr(t, l, k).AsString(), `note "[redacted]"`; got != want {
+			t.Errorf("%s = %q, want %q", k, got, want)
+		}
+	}
+	if _, ok := l.Attributes["sentry.message.parameters.extra"]; ok {
+		t.Error("sentry.message.parameters.extra arrived, want it deleted")
+	}
+	assertNoLeak(t, mt.captured())
+}
+
+// Numbers pass untouched: numeric attributes carry sizes, costs and latencies, never an invoice amount.
+func TestSentryLogFilter_LeavesNonStringAttributes(t *testing.T) {
+	mt := filteredClient(t, false)
+	newHubLogger().Info().
+		Int("latency_ms", 1234).
+		Int64Slice("rows", []int64{7, 8}).
+		Float64("cost", 0.25).
+		Bool("retry", true).
+		Emit("worker started")
+
+	l := oneLog(t, mt)
+	if v := logAttr(t, l, "latency_ms"); v.Type() != attribute.INT64 || v.AsInt64() != 1234 {
+		t.Errorf("latency_ms = %s %v, want int64 1234", v.Type(), v.AsInterface())
+	}
+	if v := logAttr(t, l, "rows"); v.Type() != attribute.INT64SLICE || !reflect.DeepEqual(v.AsInt64Slice(), []int64{7, 8}) {
+		t.Errorf("rows = %s %v, want int64slice [7 8]", v.Type(), v.AsInterface())
+	}
+	if v := logAttr(t, l, "cost"); v.Type() != attribute.FLOAT64 || v.AsFloat64() != 0.25 {
+		t.Errorf("cost = %s %v, want float64 0.25", v.Type(), v.AsInterface())
+	}
+	if v := logAttr(t, l, "retry"); v.Type() != attribute.BOOL || !v.AsBool() {
+		t.Errorf("retry = %s %v, want bool true", v.Type(), v.AsInterface())
+	}
+}
+
+func TestSentryLogFilter_EmptyStringSlice(t *testing.T) {
+	mt := filteredClient(t, false)
+	newHubLogger().Info().StringSlice("rows", []string{}).Emit("worker started")
+
+	l := oneLog(t, mt)
+	v := logAttr(t, l, "rows")
+	if v.Type() != attribute.STRINGSLICE {
+		t.Fatalf("rows attribute type = %s, want stringslice", v.Type())
+	}
+	if got := v.AsStringSlice(); len(got) != 0 {
+		t.Errorf("rows attribute = %q, want empty", got)
 	}
 }

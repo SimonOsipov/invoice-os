@@ -16,12 +16,14 @@ import (
 // service shares this shape; service-specific configuration is layered on top
 // by the owning service.
 type Config struct {
-	Service         string        // logical service name, e.g. "tenancy" (set in code, not env)
-	Environment     string        // deployment environment: development, production, ...
-	Port            int           // HTTP listen port
-	LogLevel        string        // debug, info, warn, error
-	SentryDSN       string        // empty disables Sentry
-	ShutdownTimeout time.Duration // graceful-shutdown grace period
+	Service           string        // logical service name, e.g. "tenancy" (set in code, not env)
+	Environment       string        // deployment environment: development, production, ...
+	SentryEnvironment string        // Sentry's environment label
+	Release           string        // Sentry release
+	Port              int           // HTTP listen port
+	LogLevel          string        // debug, info, warn, error
+	SentryDSN         string        // empty disables Sentry
+	ShutdownTimeout   time.Duration // graceful-shutdown grace period
 }
 
 // LoadConfig reads configuration from the environment, applying defaults. The
@@ -47,6 +49,11 @@ func LoadConfig(service string) (Config, error) {
 		SentryDSN:       envString("SENTRY_DSN", ""),
 		ShutdownTimeout: shutdown,
 	}, nil
+}
+
+// releaseName is the Sentry release for a build.
+func releaseName(buildSHA, railwaySHA string) string {
+	return ""
 }
 
 func envString(key, def string) string {

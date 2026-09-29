@@ -79,3 +79,83 @@ func TestLoadConfigInvalidDuration(t *testing.T) {
 		t.Fatal("expected error for invalid SHUTDOWN_TIMEOUT")
 	}
 }
+
+const (
+	fakeStampedSHA = "5e975e718251c892c7cbfd3602bf6aa009f37ce5"
+	fakeRailwaySHA = "d0e09998b867ee781c56969b28f9497a2c2f1595"
+)
+
+// Production runs ENVIRONMENT=development; only the Sentry label follows Railway.
+func TestLoadConfig_SentryEnvironmentFromRailway(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	cfg, err := LoadConfig("svc")
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.SentryEnvironment != "production" {
+		t.Errorf("SentryEnvironment = %q, want production", cfg.SentryEnvironment)
+	}
+	if cfg.Environment != "development" {
+		t.Errorf("Environment = %q, want development (gates stay on ENVIRONMENT)", cfg.Environment)
+	}
+}
+
+func TestLoadConfig_SentryEnvironmentFallsBack(t *testing.T) {
+	for _, c := range []struct{ name, environment, want string }{
+		{"environment_set", "staging", "staging"},
+		{"both_empty", "", "development"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("RAILWAY_ENVIRONMENT_NAME", "")
+			t.Setenv("ENVIRONMENT", c.environment)
+			cfg, err := LoadConfig("svc")
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+			if cfg.SentryEnvironment != c.want {
+				t.Errorf("SentryEnvironment = %q, want %q", cfg.SentryEnvironment, c.want)
+			}
+		})
+	}
+}
+
+func TestReleaseName(t *testing.T) {
+	for _, c := range []struct{ name, build, railway, want string }{
+		{"stamped", fakeStampedSHA, "", fakeStampedSHA},
+		{"stamp_wins_over_railway", fakeStampedSHA, fakeRailwaySHA, fakeStampedSHA},
+		{"unstamped_with_railway_sha", "dev", fakeRailwaySHA, "unstamped-" + fakeRailwaySHA},
+		{"unstamped", "dev", "", "unstamped"},
+		{"empty_build", "", "", "unstamped"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := releaseName(c.build, c.railway)
+			if got != c.want {
+				t.Errorf("releaseName(%q, %q) = %q, want %q", c.build, c.railway, got, c.want)
+			}
+			if got == "" || got == "dev" {
+				t.Errorf("releaseName(%q, %q) = %q, want neither empty nor dev", c.build, c.railway, got)
+			}
+		})
+	}
+}
+
+// setBuildSHA overrides the embedded stamp for one test.
+func setBuildSHA(t *testing.T, sha string) {
+	t.Helper()
+	prev := BuildSHA
+	BuildSHA = sha
+	t.Cleanup(func() { BuildSHA = prev })
+}
+
+func TestLoadConfig_ReleaseFromStampedBuild(t *testing.T) {
+	setBuildSHA(t, fakeStampedSHA)
+	t.Setenv("RAILWAY_GIT_COMMIT_SHA", fakeRailwaySHA)
+	cfg, err := LoadConfig("svc")
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Release != fakeStampedSHA {
+		t.Errorf("Release = %q, want the stamped %q", cfg.Release, fakeStampedSHA)
+	}
+}

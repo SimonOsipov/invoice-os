@@ -190,3 +190,61 @@ func TestNewServesSentryStateFromTheDSN(t *testing.T) {
 		})
 	}
 }
+
+// The options are copied off the installed client, so a label initSentry stops
+// passing fails here even though the event goes to a recording transport.
+func TestInitSentry_LabelsEveryEvent(t *testing.T) {
+	setBuildSHA(t, "dev")
+	t.Setenv("SENTRY_DSN", "https://public@example.com/1")
+	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("RAILWAY_GIT_COMMIT_SHA", fakeRailwaySHA)
+	sentry.CurrentHub().BindClient(nil)
+	t.Cleanup(func() { sentry.CurrentHub().BindClient(nil) })
+
+	cfg, err := LoadConfig("svc")
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if err := initSentry(cfg); err != nil {
+		t.Fatalf("initSentry: %v", err)
+	}
+	installed := sentry.CurrentHub().Client()
+	if installed == nil {
+		t.Fatal("initSentry bound no client")
+	}
+	opts := installed.Options()
+	installed.Close()
+
+	wantRelease := "unstamped-" + fakeRailwaySHA
+	if opts.Environment != "production" || opts.Release != wantRelease || opts.ServerName != "svc" {
+		t.Errorf("installed options: environment %q, release %q, server_name %q; want production, %q, svc",
+			opts.Environment, opts.Release, opts.ServerName, wantRelease)
+	}
+
+	mt := &mockTransport{}
+	opts.Transport = mt
+	client, err := sentry.NewClient(opts)
+	if err != nil {
+		t.Fatalf("new client from initSentry's options: %v", err)
+	}
+	sentry.CurrentHub().BindClient(client)
+
+	CaptureError(context.Background(), errors.New("boom"))
+	sentry.Flush(time.Second)
+
+	events := mt.captured()
+	if len(events) != 1 {
+		t.Fatalf("captured %d events, want 1", len(events))
+	}
+	e := events[0]
+	if e.Environment != "production" {
+		t.Errorf("event environment = %q, want production", e.Environment)
+	}
+	if e.Release != wantRelease {
+		t.Errorf("event release = %q, want %q", e.Release, wantRelease)
+	}
+	if e.ServerName != "svc" {
+		t.Errorf("event server_name = %q, want svc", e.ServerName)
+	}
+}

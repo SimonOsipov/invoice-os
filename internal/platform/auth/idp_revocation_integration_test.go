@@ -313,7 +313,11 @@ func TestIdP_SessionCheckCost(t *testing.T) {
 		summary += fmt.Sprintf("| %s | %d | %v | %v | %v |\n", s.label, n, s.d[n/2], s.d[n*95/100], s.d[n-1])
 	}
 	// The CI gate prints test output only on failure; the run summary is where the figures show.
-	if path := os.Getenv("GITHUB_STEP_SUMMARY"); path != "" {
+	path := os.Getenv("GITHUB_STEP_SUMMARY")
+	if path == "" && os.Getenv("GITHUB_ACTIONS") == "true" {
+		t.Fatalf("GITHUB_STEP_SUMMARY is empty on a CI run; the cost figures would be lost")
+	}
+	if path != "" {
 		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
 		if err != nil {
 			t.Fatalf("open step summary: %v", err)
@@ -324,5 +328,6 @@ func TestIdP_SessionCheckCost(t *testing.T) {
 		if err := f.Close(); err != nil {
 			t.Fatalf("close step summary: %v", err)
 		}
+		t.Logf("cost figures appended to %s", path)
 	}
 }

@@ -794,6 +794,9 @@ jobs:
     if: always() && needs.health-gate.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     container: ghcr.io/railwayapp/cli:4.66.0
+    # Matrix outputs combine across legs; only the auth leg sets this one.
+    outputs:
+      auth_deployment_id: ${{ steps.up.outputs.deployment_id_auth || steps.up_dispatch.outputs.deployment_id_auth }}
     strategy:
       fail-fast: false
       matrix:
@@ -806,6 +809,7 @@ jobs:
       - name: Stamp the build sha into the upload
         run: sh scripts/ci/stamp-build-sha.sh "${{ github.sha }}"
       - name: railway up ${{ matrix.service }} (PR/push — account token)
+        id: up
         if: github.event_name != 'workflow_dispatch'
         env:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
@@ -813,6 +817,7 @@ jobs:
         run: sh scripts/ci/railway-up-ci.sh ${{ matrix.service }}
         timeout-minutes: 15
       - name: railway up ${{ matrix.service }} (dispatch — project token)
+        id: up_dispatch
         if: github.event_name == 'workflow_dispatch'
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
@@ -869,6 +874,7 @@ jobs:
     env:
       GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}
     steps:
+      - uses: actions/checkout@v4
       - name: Poll gateway /healthz/fleet until all up on the commit under test
         env:
           EXPECTED_BUILD: ${{ github.sha }}
@@ -972,6 +978,35 @@ jobs:
           fi
           echo "Sentry $direction on $EXPECTED_BUILD for: $names (docling and auth exempt)."
 
+      # auth has no build stamp; its deployment status is the verdict for `railway up`.
+      - name: Wait for the auth deployment
+        env:
+          AUTH_DEPLOYMENT_ID: ${{ needs.deploy-context.outputs.auth_deployment_id }}
+          RAILWAY_API_TOKEN: ${{ github.event_name != 'workflow_dispatch' && secrets.RAILWAY_API_TOKEN || '' }}
+          RAILWAY_PROJECT_TOKEN: ${{ github.event_name == 'workflow_dispatch' && secrets.RAILWAY_API_DEV_TOKEN || '' }}
+        run: bash scripts/ci/railway-env.sh wait-deployment auth "$AUTH_DEPLOYMENT_ID"
+
+  # 6b. SPA build verdict on push/dispatch, where e2e does not run. Read-only: GET only,
+  #     no domain repair (that stays in e2e).
+  spa-build-gate:
+    name: SPA build gate (push/dispatch)
+    needs: [deploy-spas, prepare-env]
+    if: always() && needs.deploy-spas.result == 'success' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      EXPECTED_BUILD: ${{ github.sha }}
+      APP_URL: ${{ needs.prepare-env.outputs.app_url }}
+      LANDING_URL: ${{ needs.prepare-env.outputs.landing_url }}
+      OPS_CONSOLE_URL: ${{ needs.prepare-env.outputs.ops_console_url }}
+      SUPPORT_CONSOLE_URL: ${{ needs.prepare-env.outputs.support_console_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for SPA /health on the commit under test
+        run: bash scripts/ci/wait-spa-builds.sh "$EXPECTED_BUILD" "$LANDING_URL" "$APP_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL"
+
   # 7. Post-deploy verification (b): smoke (landing + both consoles render), api
   #    (typed contract suite against the gateway), topology (browser login
   #    + cross-tenant isolation) via Playwright,
@@ -1036,32 +1071,7 @@ jobs:
       - name: Wait for SPA /health on the commit under test
         env:
           EXPECTED_BUILD: ${{ github.sha }}
-        run: |
-          # /health is answered by Caddy from memory before the filesystem, so it
-          # can never carry a build; /build.txt is the stamped file baked into the
-          # image. Both are needed: /health proves it is serving, /build.txt proves
-          # WHICH commit, and a rolling deploy keeps the previous image answering
-          # 200 on /health throughout.
-          for url in "$LANDING_URL" "$APP_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL"; do
-            echo "Waiting for $url on build $EXPECTED_BUILD ..."
-            ok=0
-            seen=""
-            # 600s (120 x 5s): every environment is now a cold build (M4-23
-            # per-PR environments, Decision [gate-windows-provisional]) —
-            # widened from 200s.
-            for _ in $(seq 1 120); do
-              code=$(curl -fsS -o /dev/null -w '%{http_code}' "$url/health" 2>/dev/null || echo 000)
-              if [ "$code" = "200" ]; then
-                seen=$(curl -fsS --max-time 10 "$url/build.txt" 2>/dev/null | tr -d '[:space:]' || echo '')
-                if [ "$seen" = "$EXPECTED_BUILD" ]; then echo "  healthy on $seen"; ok=1; break; fi
-              fi
-              sleep 5
-            done
-            if [ "$ok" != "1" ]; then
-              echo "::error::$url did not serve build $EXPECTED_BUILD within 600s (last seen: '${seen:-none}'). 'none' means /build.txt is absent -- the image predates the stamped Dockerfile layer or the stamp step did not run; any other value means the new image never replaced the old one. Running E2E here would drive the wrong frontend."
-              exit 1
-            fi
-          done
+        run: bash scripts/ci/wait-spa-builds.sh "$EXPECTED_BUILD" "$LANDING_URL" "$APP_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL"
       - name: Install Chromium
         # !cancelled(): skipping this when the wait fails makes topology report
         # `browserType.launch: Executable doesn't exist` — a missing-browser error for what

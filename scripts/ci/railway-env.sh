@@ -16,7 +16,7 @@
 #                            set-sentry-off <environment-id|--self-test>|
 #                            set-fork-reconciliation-url <environment-id>|
 #                            delete-environment <name>|list-environments|
-#                            query <context>|report-api-calls>
+#                            query <context>|wait-deployment <label> <deployment-id>|report-api-calls>
 #
 # `set-production-environment` is run by hand, once, never from a workflow: it
 # sets the persistent environment's gateway ENVIRONMENT=production.
@@ -80,7 +80,7 @@
 # Auth: account-scoped RAILWAY_API_TOKEN, `Authorization: Bearer`. A Railway *project*
 # token is pinned to one environment and cannot perform projectUpdate, nor reach an
 # ephemeral PR environment.
-# Only `query` also accepts RAILWAY_PROJECT_TOKEN (`Project-Access-Token`), for dispatch runs.
+# Only `query` and `wait-deployment` also accept RAILWAY_PROJECT_TOKEN (`Project-Access-Token`), for dispatch runs.
 #
 # bash, not POSIX sh: unlike scripts/ci/railway-up-ci.sh this does NOT run inside the
 # minimal ghcr.io/railwayapp/cli container.
@@ -3155,14 +3155,10 @@ cmd_set_fork_reconciliation_url() {
   echo "gateway.RECONCILIATION_URL confirmed in environment $env_id."
 }
 
-# query <context>: one GraphQL request, body on stdin, only the response body on stdout.
-# Diagnostics go to stderr. RAILWAY_API_TOKEN wins when both tokens are set.
-cmd_query() {
-  local ctx="${1:-}" body
-  if [ -z "$ctx" ]; then
-    echo "::error::usage: railway-env.sh query <context> (request body on stdin)" >&2
-    exit 2
-  fi
+# use_query_auth <context>: picks the token header. RAILWAY_API_TOKEN wins when both are set.
+# Exits 1 with no token or no project id.
+use_query_auth() {
+  local ctx="$1"
   if [ -z "${RAILWAY_API_TOKEN:-}" ]; then
     if [ -z "${RAILWAY_PROJECT_TOKEN:-}" ]; then
       echo "::error::Neither RAILWAY_API_TOKEN nor RAILWAY_PROJECT_TOKEN is set while $ctx. A fork PR receives no secrets and fails here by design." >&2
@@ -3174,9 +3170,65 @@ cmd_query() {
     echo "::error::RAILWAY_PROJECT_ID is not set — expected the workflow-level constant." >&2
     exit 1
   fi
+}
+
+# query <context>: one GraphQL request, body on stdin, only the response body on stdout.
+# Diagnostics go to stderr.
+cmd_query() {
+  local ctx="${1:-}" body
+  if [ -z "$ctx" ]; then
+    echo "::error::usage: railway-env.sh query <context> (request body on stdin)" >&2
+    exit 2
+  fi
+  use_query_auth "$ctx"
   body=$(cat)
   graphql_post "$body" "$ctx"
   printf '%s' "$GQL_RESPONSE"
+}
+
+# wait-deployment <label> <deployment-id>: polls one deployment's status, every 10 s, 60 ticks.
+# The id comes from `railway up` output, so it is checked before any call and never echoed raw.
+cmd_wait_deployment() {
+  local label="${1:-}" id="${2:-}" try status="" transients=0 body
+  local ctx="polling the $label deployment status"
+  local shown="${id//[^A-Za-z0-9-]/?}"
+  if [ -z "$label" ]; then
+    echo "::error::usage: railway-env.sh wait-deployment <label> <deployment-id>" >&2
+    exit 2
+  fi
+  if [ -z "$id" ]; then
+    echo "::error::$label deployment id is empty: railway up published none, so nothing confirms the deployment went live." >&2
+    exit 1
+  fi
+  if ! [[ "$id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+    echo "::error::$label deployment id is not a valid uuid: '${shown:0:64}'." >&2
+    exit 1
+  fi
+  use_query_auth "$ctx"
+  body=$(gql_body "$DEPLOYMENT_STATUS_QUERY" "$(jq -n --arg id "$id" '{id: $id}')")
+
+  for try in $(seq 1 60); do
+    if graphql_try "$body" "$ctx" once; then
+      status=$(printf '%s' "$GQL_RESPONSE" | jq -r '.data.deployment.status // "UNKNOWN"')
+      case "$status" in
+        SUCCESS | SLEEPING)
+          echo "$label deployment $id is $status."
+          return 0
+          ;;
+        FAILED | CRASHED | REMOVED | REMOVING | SKIPPED)
+          echo "::error::$label deployment $id is $status." >&2
+          exit 1
+          ;;
+      esac
+    else
+      transients=$((transients + 1))
+      poll_tick_failed "$transients" "$ctx"
+      status="UNREADABLE"
+    fi
+    [ "$try" -ge 60 ] || sleep 10
+  done
+  echo "::error::$label deployment $id was still $status after 600s." >&2
+  exit 1
 }
 
 # report-api-calls: summarises the transport's call log; never fails the job.
@@ -3226,9 +3278,10 @@ case "${1:-}" in
   delete-environment)        cmd_delete_environment "${2:-}" ;;
   list-environments)         cmd_list_environments ;;
   query)                     cmd_query "${2:-}" ;;
+  wait-deployment)           shift; cmd_wait_deployment "$@" ;;
   report-api-calls)          cmd_report_api_calls ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments|query <context>|report-api-calls>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments|query <context>|wait-deployment <label> <deployment-id>|report-api-calls>"
     exit 2
     ;;
 esac

@@ -169,7 +169,7 @@ require_env() {
 graphql_post() {
   local body="$1" ctx="$2"
 
-  if ! GQL_RESPONSE=$(curl -fsS --connect-timeout 5 --max-time 15 \
+  if ! GQL_RESPONSE=$(curl -fsS --connect-timeout 5 --max-time 30 \
         --request POST \
         --url "$RAILWAY_GRAPHQL_URL" \
         --header "Authorization: Bearer $RAILWAY_API_TOKEN" \

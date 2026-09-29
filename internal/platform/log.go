@@ -14,6 +14,7 @@ type ctxKey int
 const (
 	ctxKeyRequestID ctxKey = iota
 	ctxKeyTenantID
+	ctxKeyOutcome
 )
 
 // WithRequestID returns a context carrying the request id.
@@ -69,6 +70,21 @@ type contextHandler struct {
 }
 
 func (h *contextHandler) Handle(ctx context.Context, r slog.Record) error {
+	// ceiling: cause only from an error-valued attribute; a string "error" attribute gives a message-only event
+	if r.Level >= slog.LevelError {
+		if out := outcomeFromContext(ctx); out != nil {
+			var cause error
+			r.Attrs(func(a slog.Attr) bool {
+				if err, ok := a.Value.Any().(error); ok {
+					cause = err
+				}
+				return true
+			})
+			if cause != nil {
+				out.setCause(cause)
+			}
+		}
+	}
 	if id := RequestIDFromContext(ctx); id != "" {
 		r.AddAttrs(slog.String("request_id", id))
 	}

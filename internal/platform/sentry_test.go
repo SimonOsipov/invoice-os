@@ -49,7 +49,7 @@ func TestInitSentryDisabled(t *testing.T) {
 	}
 	// Capture must be safe (no panic, no send) while disabled.
 	CaptureError(context.Background(), errors.New("ignored"))
-	capturePanic(context.Background(), "ignored")
+	capturePanic(httptest.NewRequest(http.MethodGet, "/", nil), "ignored")
 }
 
 func TestCaptureErrorTagsIDs(t *testing.T) {

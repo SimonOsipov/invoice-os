@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -63,10 +64,12 @@ func taggedHub(ctx context.Context) *sentry.Hub {
 	return hub
 }
 
-// capturePanic reports a recovered panic to Sentry. A no-op when disabled.
-func capturePanic(ctx context.Context, rec any) {
-	if hub := taggedHub(ctx); hub != nil {
-		hub.RecoverWithContext(ctx, rec)
+// capturePanic reports a recovered handler panic with its request; scrubEvent
+// strips the query, body, cookies and non-allowlisted headers. A no-op when disabled.
+func capturePanic(r *http.Request, rec any) {
+	if hub := taggedHub(r.Context()); hub != nil {
+		hub.Scope().SetRequest(r)
+		hub.RecoverWithContext(r.Context(), rec)
 	}
 }
 

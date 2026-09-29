@@ -60,7 +60,11 @@ func recoveryMiddleware(logger *slog.Logger) middleware {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
 				if rec := recover(); rec != nil {
-					capturePanic(r.Context(), rec)
+					// net/http aborts the connection silently for this value; a gone client is not a failure.
+					if rec == http.ErrAbortHandler {
+						panic(rec)
+					}
+					capturePanic(r, rec)
 					logger.ErrorContext(r.Context(), "panic recovered",
 						slog.Any("panic", rec),
 						slog.String("stack", string(debug.Stack())),

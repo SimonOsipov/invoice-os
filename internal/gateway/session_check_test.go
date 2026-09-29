@@ -549,6 +549,9 @@ func TestSessionCheck_BareClientNeverFollowsARedirect(t *testing.T) {
 
 	assertUnavailable(t, rg.get(tok))
 
+	if n := fake.Hits(); n != 1 {
+		t.Errorf("GoTrue /user saw %d calls, want 1", n)
+	}
 	if n := targetHits.Load(); n != 0 {
 		t.Errorf("redirect target received %d requests, want 0", n)
 	}

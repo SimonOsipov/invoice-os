@@ -73,7 +73,10 @@ type upAttempt struct {
 }
 
 // upStub is a temp dir holding the scripted railway answers, the call log and GITHUB_OUTPUT.
-type upStub struct{ dir, bin string }
+type upStub struct {
+	dir, bin string
+	noOutput bool // leave GITHUB_OUTPUT unset
+}
 
 // newUpStub scripts call N from up-N.out/up-N.rc; an unscripted call exits 97.
 func newUpStub(t *testing.T, attempts ...upAttempt) upStub {
@@ -135,8 +138,10 @@ func (s upStub) run(t *testing.T, svc string) (string, int) {
 		"PATH="+s.bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"RAILWAY_ENVIRONMENT="+upEnvironment,
 		"RAILWAY_PROJECT_ID="+upProject,
-		"GITHUB_OUTPUT="+s.outputPath(),
 	)
+	if !s.noOutput {
+		cmd.Env = append(cmd.Env, "GITHUB_OUTPUT="+s.outputPath())
+	}
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
 	code := 0
@@ -265,7 +270,7 @@ func TestRailwayUpCI_SecondUploadFailureNamesBothAttempts(t *testing.T) {
 	}
 }
 
-// guard, passes at HEAD: HEAD never re-runs, so this pins "no re-run after a Build Logs URL" for the new code.
+// guard, passes at HEAD
 func TestRailwayUpCI_NoRerunAfterBuildLogs(t *testing.T) {
 	s := newUpStub(t, upAttempt{upLostPoll(upIDA), 1})
 	out, code := s.run(t, "nosuch")
@@ -283,17 +288,33 @@ func TestRailwayUpCI_NoRerunAfterBuildLogs(t *testing.T) {
 
 // guard, passes at HEAD
 func TestRailwayUpCI_DeployFailedAfterBuildLogsFails(t *testing.T) {
-	s := newUpStub(t, upAttempt{upDeployFailed(upIDA), 1})
-	out, code := s.run(t, "app")
+	const lostPollTail = "reqwest error\n\nCaused by:\n    0: error sending request for url (https://backboard.railway.com/graphql/v2)\n    1: operation timed out\n"
+	for _, c := range []struct{ name, out string }{
+		{"Deploy failed", upDeployFailed(upIDA)},
+		{"Build failed", strings.Replace(upDeployFailed(upIDA), "Deploy failed", "Build failed", 1)},
+		{"Deploy failed then a lost poll", upDeployFailed(upIDA) + lostPollTail},
+		{"Build failed then a lost poll", strings.Replace(upDeployFailed(upIDA), "Deploy failed", "Build failed", 1) + lostPollTail},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newUpStub(t, upAttempt{c.out, 1})
+			out, code := s.run(t, "app")
 
-	if code != 1 {
-		t.Errorf("exit %d, want 1; output:\n%s", code, out)
-	}
-	if got := s.railwayCalls(t); len(got) != 1 {
-		t.Errorf("railway calls = %q, want 1", got)
-	}
-	if n := errorCount(out); n != 1 {
-		t.Errorf("::error:: lines = %d, want 1; output:\n%s", n, out)
+			if code != 1 {
+				t.Errorf("exit %d, want 1; output:\n%s", code, out)
+			}
+			if got := s.railwayCalls(t); len(got) != 1 {
+				t.Errorf("railway calls = %q, want 1", got)
+			}
+			if n := errorCount(out); n != 1 {
+				t.Errorf("::error:: lines = %d, want 1; output:\n%s", n, out)
+			}
+			if w := warningLines(out); len(w) != 0 {
+				t.Errorf("::warning:: lines = %q, want none", w)
+			}
+			if got := s.output(t); got != "" {
+				t.Errorf("GITHUB_OUTPUT = %q, want empty: a failed build publishes no deployment id", got)
+			}
+		})
 	}
 }
 
@@ -311,6 +332,9 @@ func requireNotRerun(t *testing.T, s upStub, out string, code int) {
 	}
 	if errorCount(out) == 0 {
 		t.Errorf("no ::error:: line; output:\n%s", out)
+	}
+	if strings.Contains(out, "failed twice") {
+		t.Errorf("output names 'failed twice' for a first attempt; output:\n%s", out)
 	}
 }
 
@@ -437,17 +461,28 @@ func TestRailwayUpCI_LostPollWebsocketTimeoutIsTolerated(t *testing.T) {
 }
 
 func TestRailwayUpCI_LostPollFailsForAServiceWithoutAVerdict(t *testing.T) {
-	s := newUpStub(t, upAttempt{upLostPoll(upIDA), 1})
-	out, code := s.run(t, "nosuch")
+	// Lookalikes of mapped names: the verdict map matches whole names only.
+	for _, svc := range []string{"nosuch", "gateway2", "Auth", "app-web", "invoice-x"} {
+		t.Run(svc, func(t *testing.T) {
+			s := newUpStub(t, upAttempt{upLostPoll(upIDA), 1})
+			out, code := s.run(t, svc)
 
-	if code != 1 {
-		t.Errorf("exit %d, want 1", code)
-	}
-	e := errorLines(out)
-	for _, needle := range []string{"nosuch", "no later check covers"} {
-		if !strings.Contains(e, needle) {
-			t.Errorf("error lines %q lack %q", e, needle)
-		}
+			if code != 1 {
+				t.Errorf("exit %d, want 1", code)
+			}
+			e := errorLines(out)
+			for _, needle := range []string{svc, "no later check covers"} {
+				if !strings.Contains(e, needle) {
+					t.Errorf("error lines %q lack %q", e, needle)
+				}
+			}
+			if w := warningLines(out); len(w) != 0 {
+				t.Errorf("::warning:: lines = %q, want none", w)
+			}
+			if got := s.output(t); got != "" {
+				t.Errorf("GITHUB_OUTPUT = %q, want empty: an untolerated attempt publishes no id", got)
+			}
+		})
 	}
 }
 
@@ -504,7 +539,7 @@ func TestRailwayUpCI_LostPollStillWritesTheDeploymentID(t *testing.T) {
 	}
 }
 
-// guard, passes at HEAD: HEAD writes no output at all; pins "no Build Logs URL, no id" for the new code.
+// guard, passes at HEAD
 func TestRailwayUpCI_NoBuildLogsWritesNoID(t *testing.T) {
 	for _, c := range []struct{ name, out, line string }{
 		{"fatal", upUnauthorized, "Unauthorized. Please login"},
@@ -529,6 +564,8 @@ func TestRailwayUpCI_StreamFailureKeepsItsTolerance(t *testing.T) {
 	for _, c := range []struct{ name, out string }{
 		{"with a Build Logs URL", upStreamFailed(upIDA)},
 		{"without a Build Logs URL", "Failed to stream build logs: Failed to retrieve build log\n"},
+		{"with a transport signature and no Build Logs URL", "Uploading...\nFailed to stream build logs: error sending request for url (https://backboard.railway.com/graphql/v2)\n\nCaused by:\n    operation timed out\n"},
+		{"with a Build Logs URL and a transport signature", upStreamFailed(upIDA) + "operation timed out\n"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newUpStub(t, upAttempt{c.out, 1})
@@ -556,5 +593,235 @@ func TestRailwayUpCI_PassesServiceEnvironmentAndProject(t *testing.T) {
 	}
 	if got := s.calls(t); !slices.Equal(got, []string{upArgv("invoice")}) {
 		t.Errorf("calls = %q, want [%q]", got, upArgv("invoice"))
+	}
+}
+
+// upSignatures are the transport signatures, each alone, as the story's Design lists them.
+var upSignatures = []struct{ name, line string }{
+	{"operation timed out", "    operation timed out"},
+	{"error sending request for url", "error sending request for url (https://backboard.railway.com/graphql/v2)"},
+	{"Connection initialisation timeout", "got close frame. code: 4408, reason: Connection initialisation timeout"},
+	{"status code 500", "Failed to upload code with status code 500 Internal Server Error"},
+	{"status code 599", "Failed to upload code with status code 599 Network Connect Timeout"},
+}
+
+func TestRailwayUpCI_EachSignatureAloneIsRerunBeforeAcceptance(t *testing.T) {
+	for _, sig := range upSignatures {
+		t.Run(sig.name, func(t *testing.T) {
+			s := newUpStub(t, upAttempt{"Indexing...\nUploading...\n" + sig.line + "\n", 1}, upAttempt{upAccepted(upIDA), 0})
+			out, code := s.run(t, "invoice")
+
+			if code != 0 {
+				t.Errorf("exit %d, want 0; output:\n%s", code, out)
+			}
+			if got := s.railwayCalls(t); len(got) != 2 {
+				t.Errorf("railway calls = %q, want 2", got)
+			}
+			w := warningLines(out)
+			if len(w) != 1 || !strings.Contains(w[0], "(attempt 1/2): "+strings.TrimSpace(sig.line)+"; re-running once.") {
+				t.Errorf("::warning:: lines = %q, want one ending in the trimmed signature line %q", w, strings.TrimSpace(sig.line))
+			}
+		})
+	}
+}
+
+func TestRailwayUpCI_EachSignatureAloneIsATolerableLostPoll(t *testing.T) {
+	for _, sig := range upSignatures {
+		t.Run(sig.name, func(t *testing.T) {
+			s := newUpStub(t, upAttempt{"Indexing...\nUploading...\n" + upBuildLogs(upIDA) + "CI mode enabled\n" + sig.line + "\n", 1})
+			out, code := s.run(t, "auth")
+
+			if code != 0 {
+				t.Errorf("exit %d, want 0; output:\n%s", code, out)
+			}
+			if got := s.railwayCalls(t); len(got) != 1 {
+				t.Errorf("railway calls = %q, want 1", got)
+			}
+			if w := warningLines(out); len(w) != 1 || !strings.Contains(w[0], strings.TrimSpace(sig.line)) {
+				t.Errorf("::warning:: lines = %q, want one naming %q", w, strings.TrimSpace(sig.line))
+			}
+		})
+	}
+}
+
+// Near misses of a signature are no transport failure: one call, an ::error::, no warning.
+func TestRailwayUpCI_NonTransportFailureIsFatalWithoutARerun(t *testing.T) {
+	for _, c := range []struct{ name, line string }{
+		{"status code 499", "Failed to upload code with status code 499"},
+		{"status code 404", "Failed to upload code with status code 404 Not Found"},
+		{"status code 600", "Failed to upload code with status code 600"},
+		{"status code 50", "Failed to upload code with status code 50"},
+		{"unrelated text", "something else went wrong"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			for _, prefix := range []string{"", upBuildLogs(upIDA)} {
+				s := newUpStub(t, upAttempt{"Indexing...\nUploading...\n" + prefix + c.line + "\n", 1}, upAttempt{upAccepted(upIDA), 0})
+				out, code := s.run(t, "auth")
+				requireNotRerun(t, s, out, code)
+				if w := warningLines(out); len(w) != 0 {
+					t.Errorf("::warning:: lines = %q, want none", w)
+				}
+				if got := s.output(t); got != "" {
+					t.Errorf("GITHUB_OUTPUT = %q, want empty", got)
+				}
+			}
+		})
+	}
+}
+
+func TestRailwayUpCI_SignatureLineIsTheLastMatchTrimmed(t *testing.T) {
+	t.Run("upload warning", func(t *testing.T) {
+		s := newUpStub(t, upAttempt{upUploadTimeout, 1}, upAttempt{upAccepted(upIDA), 0})
+		out, _ := s.run(t, "invoice")
+		if w := warningLines(out); len(w) != 1 || !strings.Contains(w[0], "(attempt 1/2): operation timed out; re-running once.") {
+			t.Errorf("::warning:: lines = %q, want the last matching line, trimmed", w)
+		}
+	})
+	t.Run("lost poll warning", func(t *testing.T) {
+		s := newUpStub(t, upAttempt{upLostPoll(upIDA), 1})
+		out, _ := s.run(t, "invoice")
+		if w := warningLines(out); len(w) != 1 || !strings.Contains(w[0], "status poll: 1: operation timed out. fleet-gate decides.") {
+			t.Errorf("::warning:: lines = %q, want the last matching line, trimmed, before the verdict", w)
+		}
+	})
+	t.Run("both attempts of the second-failure error", func(t *testing.T) {
+		s := newUpStub(t, upAttempt{upUploadTimeout, 1}, upAttempt{upUpload503, 1})
+		out, _ := s.run(t, "invoice")
+		want := "Attempt 1: operation timed out. Attempt 2: Failed to upload code with status code 503 Service Unavailable."
+		if e := errorLines(out); !strings.Contains(e, want) {
+			t.Errorf("error %q lacks %q", e, want)
+		}
+	})
+}
+
+// The second attempt is classified on its own output.
+func TestRailwayUpCI_SecondAttemptIsClassifiedOnItsOwn(t *testing.T) {
+	first := upAttempt{upUploadTimeout, 1}
+	for _, c := range []struct {
+		name     string
+		second   upAttempt
+		svc      string
+		wantCode int
+		wantOut  string
+		wantErr  string
+	}{
+		{"build failure after acceptance", upAttempt{upDeployFailed(upIDB), 1}, "auth", 1, "", "the build failed"},
+		{"stream failure with a Build Logs URL", upAttempt{upStreamFailed(upIDB), 1}, "auth", 0, "deployment_id_auth=" + upIDB + "\n", ""},
+		{"lost poll", upAttempt{upLostPoll(upIDB), 1}, "auth", 0, "deployment_id_auth=" + upIDB + "\n", ""},
+		{"lost poll of a service outside the map", upAttempt{upLostPoll(upIDB), 1}, "nosuch", 1, "", "no later check covers"},
+		{"no transport signature", upAttempt{"Uploading...\nUnauthorized. Please login\n", 1}, "auth", 1, "", "for a non-streaming reason"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newUpStub(t, first, c.second)
+			out, code := s.run(t, c.svc)
+
+			if code != c.wantCode {
+				t.Errorf("exit %d, want %d; output:\n%s", code, c.wantCode, out)
+			}
+			if got := s.railwayCalls(t); len(got) != 2 {
+				t.Errorf("railway calls = %q, want 2", got)
+			}
+			if got := s.output(t); got != c.wantOut {
+				t.Errorf("GITHUB_OUTPUT = %q, want %q", got, c.wantOut)
+			}
+			if c.wantErr != "" && !strings.Contains(errorLines(out), c.wantErr) {
+				t.Errorf("error lines %q lack %q", errorLines(out), c.wantErr)
+			}
+			if strings.Contains(out, "failed twice") {
+				t.Errorf("output names 'failed twice' although attempt 2 was accepted or failed differently:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestRailwayUpCI_RerunThenLostPollIsTolerated(t *testing.T) {
+	s := newUpStub(t, upAttempt{upUploadTimeout, 1}, upAttempt{upLostPoll(upIDB), 1})
+	out, code := s.run(t, "gateway")
+
+	if code != 0 {
+		t.Errorf("exit %d, want 0; output:\n%s", code, out)
+	}
+	if got := s.railwayCalls(t); len(got) != 2 {
+		t.Errorf("railway calls = %q, want 2", got)
+	}
+	w := warningLines(out)
+	if len(w) != 2 || !strings.Contains(w[0], "attempt 1/2") || !strings.Contains(w[1], "lost its status poll") || !strings.Contains(w[1], "health-gate") {
+		t.Errorf("::warning:: lines = %q, want the re-run warning then the lost-poll warning naming health-gate", w)
+	}
+}
+
+func TestRailwayUpCI_DeploymentIDParsing(t *testing.T) {
+	const base = "https://railway.com/project/" + upProject + "/service/0cf7f5d8-23de-4879-9a2d-fa603ab966b6"
+	for _, c := range []struct{ name, out, want string }{
+		{"extra parameter after the id", "  Build Logs: " + base + "?id=" + upIDA + "&extra=1\n", upIDA},
+		{"extra parameter before the id", "  Build Logs: " + base + "?extra=1&id=" + upIDA + "\n", upIDA},
+		{"id with no trailing ampersand", "  Build Logs: " + base + "?id=" + upIDA + "\n", upIDA},
+		{"id that is not a UUID", "  Build Logs: " + base + "?id=abc_123\n", "abc_123"},
+		{"the last of two URLs", upBuildLogs(upIDA) + upBuildLogs(upIDB), upIDB},
+		{"an id on a later line that is not a Build Logs line", upBuildLogs(upIDA) + "see https://example.com/?id=nope\n", upIDA},
+		{"serviceId is not id", "  Build Logs: " + base + "?serviceId=" + upIDB + "\n", ""},
+		{"an empty id", "  Build Logs: " + base + "?id=&\n", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newUpStub(t, upAttempt{"Uploading...\n" + c.out + "Deploy complete\n", 0})
+			if out, code := s.run(t, "auth"); code != 0 {
+				t.Errorf("exit %d, want 0; output:\n%s", code, out)
+			}
+			want := ""
+			if c.want != "" {
+				want = "deployment_id_auth=" + c.want + "\n"
+			}
+			if got := s.output(t); got != want {
+				t.Errorf("GITHUB_OUTPUT = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestRailwayUpCI_WorksWithoutGithubOutput(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		at   upAttempt
+		want string
+	}{
+		{"success", upAttempt{upAccepted(upIDA), 0}, upAccepted(upIDA)},
+		{"lost poll", upAttempt{upLostPoll(upIDA), 1}, upLostPoll(upIDA)},
+		{"stream failure", upAttempt{upStreamFailed(upIDA), 1}, upStreamFailed(upIDA)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newUpStub(t, c.at)
+			s.noOutput = true
+			out, code := s.run(t, "auth")
+
+			if code != 0 {
+				t.Errorf("exit %d, want 0; output:\n%s", code, out)
+			}
+			if !strings.HasPrefix(out, c.want) {
+				t.Errorf("output starts with %q, want the CLI output %q then only ::warning:: lines", out, c.want)
+			}
+			if rest := strings.TrimPrefix(out, c.want); strings.Contains(rest, "::error::") || strings.Contains(rest, "parameter not set") || strings.Contains(rest, "cannot create") {
+				t.Errorf("unexpected output after the CLI output:\n%s", rest)
+			}
+			if got := s.output(t); got != "" {
+				t.Errorf("GITHUB_OUTPUT file = %q, want untouched", got)
+			}
+		})
+	}
+}
+
+// The re-run is for pre-acceptance failures only; each blocker alone, each with a transport signature.
+func TestRailwayUpCI_EachRerunBlockerAloneBlocksTheRerun(t *testing.T) {
+	for _, marker := range []string{"Deploy failed", "Build failed", "Unauthorized", "not found", "Failed to stream build logs"} {
+		t.Run(marker, func(t *testing.T) {
+			s := newUpStub(t, upAttempt{"Uploading...\nFailed to upload code with status code 502 Bad Gateway\n" + marker + "\n", 1}, upAttempt{upAccepted(upIDA), 0})
+			s.run(t, "invoice")
+
+			if got := s.railwayCalls(t); len(got) != 1 {
+				t.Errorf("railway calls = %q, want 1", got)
+			}
+			if got := s.sleeps(t); len(got) != 0 {
+				t.Errorf("sleeps = %q, want none", got)
+			}
+		})
 	}
 }

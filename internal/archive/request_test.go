@@ -189,6 +189,8 @@ func TestArchivePackage_ImportsOnlyStdlibAndUUID(t *testing.T) {
 		"github.com/sethvargo/go-retry", "github.com/mfridman/interpolate",
 		"go.uber.org/goleak", "go.uber.org/multierr",
 		"golang.org/x/sync", "gopkg.in/yaml.v3",
+		// The queue's River error reporter pulls sentry-go in.
+		"github.com/getsentry/sentry-go", "golang.org/x/sys",
 	}
 	isStdlibOrAllowed := func(imp string) bool {
 		if allowedExact[imp] || imp == selfPath {

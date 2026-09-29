@@ -702,6 +702,7 @@ func shellFunctionSource(t *testing.T, names ...string) string {
 
 // runBashScript runs a bash snippet with every RAILWAY_* variable stripped, so
 // no snippet below can reach Railway even if a guard is mutated away.
+// RUNNER_TEMP is stripped too, so a CI run never appends to the runner's call log.
 func runBashScript(t *testing.T, script string, args ...string) (stdout, stderr string, exitCode int) {
 	t.Helper()
 
@@ -710,7 +711,7 @@ func runBashScript(t *testing.T, script string, args ...string) (stdout, stderr 
 
 	var filtered []string
 	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, "RAILWAY_") {
+		if strings.HasPrefix(kv, "RAILWAY_") || strings.HasPrefix(kv, "RUNNER_TEMP=") {
 			continue
 		}
 		filtered = append(filtered, kv)

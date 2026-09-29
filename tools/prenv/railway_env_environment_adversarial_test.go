@@ -39,6 +39,7 @@ while [ $# -gt 0 ]; do
   if [ "$1" = "--data" ]; then data="$2"; shift; fi
   shift
 done
+if [ "$data" = "@-" ]; then data=$(cat); fi
 printf '%s' "$data" | jq -c . >> '` + s.log + `'
 op=$(printf '%s' "$data" | jq -r '.query | capture("^\\s*(query|mutation)\\s+(?<n>\\w+)").n')
 f='` + dir + `'/"$op".json
@@ -47,7 +48,30 @@ if [ -f "$f" ]; then cat "$f"; else echo '{"errors":[{"message":"unrouted"}]}'; 
 	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte(shim), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeSleepStub(t, dir)
 	return s
+}
+
+// writeSleepStub puts a sleep on PATH that returns at once and logs its argument to sleep.log.
+func writeSleepStub(t *testing.T, dir string) {
+	t.Helper()
+	stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + filepath.Join(dir, "sleep.log") + "'\n"
+	if err := os.WriteFile(filepath.Join(dir, "sleep"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// sleeps lists every sleep argument the scripts passed, in order.
+func (s railwayShim) sleeps(t *testing.T) []string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(s.dir, "sleep.log"))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Fields(string(raw))
 }
 
 type railwayCall struct {

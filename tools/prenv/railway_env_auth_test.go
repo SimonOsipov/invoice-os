@@ -75,19 +75,49 @@ func newAuthShim(t *testing.T, responses map[string]string, stores map[string]ma
 		}
 		writeFile(t, filepath.Join(dir, "store-"+svc+".json"), string(raw))
 	}
+	// faults-<op>: one outcome per call. <op>[-<e>[-<s>]].seq: one body per line, before .json.
+	// A request with no --data is a GET probe: probe.body, and probe.code under -w.
 	shim := `#!/bin/sh
 dir='` + dir + `'
 printf '%s\n' "$*" >> "$dir/argv.log"
-data=""
+data="" hasdata="" hdr="" w="" withbody=""
 while [ $# -gt 0 ]; do
-  case "$1" in --data|--data-binary|--data-raw) data="$2"; shift ;; esac
+  case "$1" in
+    --data|--data-binary|--data-raw) data="$2"; hasdata=1; shift ;;
+    -D|--dump-header) hdr="$2"; shift ;;
+    -w|--write-out) w=1; shift ;;
+    --fail-with-body) withbody=1 ;;
+  esac
   shift
 done
+if [ -z "$hasdata" ]; then
+  body=""; [ -f "$dir/probe.body" ] && body=$(cat "$dir/probe.body")
+  code=200; [ -f "$dir/probe.code" ] && code=$(cat "$dir/probe.code")
+  if [ -n "$w" ]; then printf '%s\n%s' "$body" "$code"; else printf '%s' "$body"; fi
+  exit 0
+fi
 case "$data" in
   @-) data=$(cat) ;;
   @*) data=$(cat "${data#@}") ;;
 esac
 printf '%s' "$data" | jq -c . >> "$dir/calls.jsonl"
+headers() { if [ -n "$hdr" ]; then if [ -f "$dir/hdr.txt" ]; then cat "$dir/hdr.txt" > "$hdr"; else : > "$hdr"; fi; fi; }
+op=$(printf '%s' "$data" | jq -r '.query | capture("^\\s*(query|mutation)\\s+(?<n>\\w+)").n')
+f="$dir/faults-$op"
+if [ -s "$f" ]; then
+  set -- $(cat "$f"); fault="$1"; shift
+  if [ $# -gt 0 ]; then echo "$*" > "$f"; else : > "$f"; fi
+  case "$fault" in
+    timeout) echo 'curl: (28) Operation timed out after 30002 milliseconds with 0 bytes received' >&2; exit 28 ;;
+    reset) echo 'curl: (56) Failure when receiving data from the peer' >&2; exit 56 ;;
+    gqlerr) headers; echo '{"errors":[{"message":"Not Authorized","extensions":{"code":"INTERNAL_SERVER_ERROR"}}]}'; exit 0 ;;
+    [45][0-9][0-9])
+      headers
+      if [ "$fault" = 400 ] && [ -n "$withbody" ]; then echo '{"errors":[{"message":"Problem processing request","extensions":{"code":"BAD_USER_INPUT"}}]}'; fi
+      echo "curl: (22) The requested URL returned error: $fault" >&2; exit 22 ;;
+  esac
+fi
+headers
 q=$(printf '%s' "$data" | jq -r '.query')
 case "$q" in
   *"variableUpsert("*)
@@ -107,13 +137,24 @@ case "$q" in
     if [ -f "$dir/read-$s.jq" ]; then v=$(jq -c -f "$dir/read-$s.jq" "$st"); else v=$(cat "$st"); fi
     printf '{"data":{"variables":%s}}' "$v" ;;
   *)
-    op=$(printf '%s' "$data" | jq -r '.query | capture("^\\s*(query|mutation)\\s+(?<n>\\w+)").n')
-    if [ -f "$dir/$op.json" ]; then cat "$dir/$op.json"; else echo '{"errors":[{"message":"unrouted"}]}'; fi ;;
+    e=$(printf '%s' "$data" | jq -r '.variables.e // empty')
+    s=$(printf '%s' "$data" | jq -r '.variables.s // empty')
+    keys="$op"
+    [ -n "$e" ] && keys="$op-$e $keys"
+    [ -n "$e" ] && [ -n "$s" ] && keys="$op-$e-$s $keys"
+    for k in $keys; do
+      if [ -s "$dir/$k.seq" ]; then
+        head -n 1 "$dir/$k.seq"; tail -n +2 "$dir/$k.seq" > "$dir/$k.seq.tmp"; mv "$dir/$k.seq.tmp" "$dir/$k.seq"; exit 0
+      fi
+      if [ -f "$dir/$k.json" ]; then cat "$dir/$k.json"; exit 0; fi
+    done
+    echo '{"errors":[{"message":"unrouted"}]}' ;;
 esac
 `
 	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte(shim), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeSleepStub(t, dir)
 	return s
 }
 

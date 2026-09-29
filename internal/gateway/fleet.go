@@ -94,9 +94,11 @@ func FleetHealthHandler(upstreams map[string]*url.URL, healthPaths map[string]st
 			go func(i int, name string, base *url.URL) {
 				defer wg.Done()
 				// A panicking probe must not kill the gateway; its service reads as down.
+				// ceiling: one event per fleet request; dedupe if a probe panic ever burns the quota
 				defer func() {
 					if rec := recover(); rec != nil {
 						probed[i] = ServiceHealth{Name: name, Status: statusDown, Error: "probe panicked"}
+						platform.CapturePanic(r.Context(), rec)
 					}
 				}()
 				sem <- struct{}{}
@@ -125,6 +127,8 @@ func FleetHealthHandler(upstreams map[string]*url.URL, healthPaths map[string]st
 			body.Status = fleetOK
 			code = http.StatusOK
 		} else {
+			// Outages are an uptime monitor's job, and the deploy gate polls this on every rollout.
+			platform.ReportedElsewhere(r.Context())
 			log.WarnContext(r.Context(), "gateway fleet-health degraded", slog.Any("services", services))
 		}
 		writeJSON(w, code, body)

@@ -26,6 +26,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform"
 )
 
 // headerS2SToken carries the shared peer secret to 04's S2SMiddleware.
@@ -221,6 +223,11 @@ func (v *Validator) Validate(ctx context.Context, items []ValidateItem) (Validat
 	// import can exceed 5,000 invoices. A default->ErrUpstream also makes any
 	// status 04 grows tomorrow (429, 409, ...) safe by default instead of
 	// silently clean. [Stage-1 F2, AC#3]
+	if resp.StatusCode >= http.StatusInternalServerError {
+		// Validation reported its own 5xx.
+		// ceiling: marks the whole request; a caller that swallows this error hides its own later 5xx
+		platform.ReportedElsewhere(ctx)
+	}
 	switch resp.StatusCode {
 	case http.StatusOK:
 		// fall through to decode

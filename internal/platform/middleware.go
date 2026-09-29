@@ -107,7 +107,8 @@ type statusRecorder struct {
 }
 
 func (r *statusRecorder) WriteHeader(code int) {
-	if !r.wroteHeader {
+	// A 1xx is informational; the final status follows it.
+	if !r.wroteHeader && (code < 100 || code > 199) {
 		r.status = code
 		r.wroteHeader = true
 	}

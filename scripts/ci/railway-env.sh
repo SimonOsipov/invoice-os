@@ -1470,10 +1470,45 @@ VARIABLE_UPSERT_MUTATION='mutation varUpsert($input: VariableUpsertInput!) {
   variableUpsert(input: $input)
 }'
 
-# shellcheck disable=SC2016  # $p/$e/$s are GraphQL variables — not shell expansions.
-VARIABLES_QUERY='query vars($p: String!, $e: String!, $s: String!) {
-  variables(projectId: $p, environmentId: $e, serviceId: $s)
+# Without replace: replace:true deletes every variable not in the map.
+# shellcheck disable=SC2016  # $input is a GraphQL variable — not a shell expansion.
+VARIABLE_COLLECTION_UPSERT_MUTATION='mutation varCollectionUpsert($input: VariableCollectionUpsertInput!) {
+  variableCollectionUpsert(input: $input)
 }'
+
+# Pairs of the last set_service_vars call, for the caller's auth_check.
+SET_VARS_PAIRS=()
+
+# set_service_vars <env-id> <svc-id> <label> "<secret names>" NAME=VALUE...
+# Reads the unrendered map, writes only the names that differ (absent != "") in one
+# collection write, and re-reads when it wrote. Leaves the final map in GQL_RESPONSE.
+# Values reach jq and curl on stdin only (TestSetServiceVars_SecretsNeverOnArgvOrInOutput).
+set_service_vars() {
+  local env_id="$1" svc_id="$2" label="$3" secrets="$4" intended diff held names n
+  shift 4
+  SET_VARS_PAIRS=("$@")
+  names=$(for n in "${@%%=*}"; do printf '%s.%s ' "$label" "$n"; done)
+  intended=$(printf '%s\0' "$@" | jq -Rsc 'split("\u0000")[:-1] | map(split("=") | {key: .[0], value: (.[1:] | join("="))}) | from_entries')
+
+  auth_read "$env_id" "$svc_id" "$label"
+  if ! printf '%s' "$GQL_RESPONSE" | jq -e '.data.variables | type == "object"' >/dev/null 2>&1; then
+    echo "::error::$label's variable map in environment $env_id is not an object, so ${names% } could not be checked and nothing was written. This is NOT evidence that they are unset."
+    exit 1
+  fi
+  diff=$(printf '%s\n%s' "$GQL_RESPONSE" "$intended" | jq -sc \
+    '.[0].data.variables as $m | .[1] | with_entries(select(.key as $k | ($m | has($k) | not) or $m[$k] != .value))')
+  held=$(( $# - $(printf '%s' "$diff" | jq length) ))
+  [ "$held" = 0 ] || echo "  $label: $held of $# already hold the intended value — not written."
+  [ "$diff" != '{}' ] || return 0
+
+  graphql_post "$(printf '%s' "$diff" | jq -c --arg q "$VARIABLE_COLLECTION_UPSERT_MUTATION" \
+    --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" \
+    '{query: $q, variables: {input: {projectId: $p, environmentId: $e, serviceId: $s, variables: ., skipDeploys: true}}}')" \
+    "setting $(printf '%s' "$diff" | jq -r --arg l "$label" '[keys[] | "\($l).\(.)"] | join(" ")') in environment $env_id"
+  printf '%s' "$diff" | jq -r --arg l "$label" --arg sec "$secrets" \
+    '($sec | split(" ")) as $s | to_entries[] | "  \($l).\(.key) = \(if (.key | IN($s[])) then "<redacted>" else .value end)"'
+  auth_read "$env_id" "$svc_id" "$label"
+}
 
 upsert_variable() {
   local env_id="$1" svc_id="$2" label="$3" name="$4" value="$5" input
@@ -1485,22 +1520,6 @@ upsert_variable() {
   graphql_post "$(gql_body "$VARIABLE_UPSERT_MUTATION" "$input")" \
     "setting $label.$name in environment $env_id"
   echo "  $label.$name = $value"
-}
-
-# Re-read independently: the mutation's own response is never the evidence
-# (same discipline as reconcile_domain).
-verify_variable() {
-  local env_id="$1" svc_id="$2" label="$3" name="$4" want="$5" got
-
-  graphql_post "$(gql_body "$VARIABLES_QUERY" \
-    "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" '{p: $p, e: $e, s: $s}')")" \
-    "re-reading $label variables in environment $env_id"
-
-  got=$(echo "$GQL_RESPONSE" | jq -r --arg n "$name" '.data.variables[$n] // empty')
-  if [ "$got" != "$want" ]; then
-    echo "::error::$label.$name in environment $env_id is '$got' after upsert, expected '$want'."
-    exit 1
-  fi
 }
 
 reconcile_url_variables() {
@@ -1516,28 +1535,17 @@ reconcile_url_variables() {
   fi
 
   echo "Reconciling per-environment URL variables in $env_id ..."
-  upsert_variable "$env_id" "$RAILWAY_SVC_GATEWAY_ID" gateway CORS_ALLOWED_ORIGINS "$origins"
-  upsert_variable "$env_id" "$RAILWAY_SVC_APP_ID" app VITE_GATEWAY_URL "$gateway_url"
-  upsert_variable "$env_id" "$RAILWAY_SVC_APP_ID" app VITE_LANDING_URL "$landing_url"
-  upsert_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_GATEWAY_URL "$gateway_url"
-  upsert_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_APP_URL "$app_url"
-  upsert_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_OPS_URL "$ops_url"
-  upsert_variable "$env_id" "$RAILWAY_SVC_OPS_CONSOLE_ID" ops-console VITE_LANDING_URL "$landing_url"
-  upsert_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_SUPPORT_URL "$support_url"
-  upsert_variable "$env_id" "$RAILWAY_SVC_SUPPORT_CONSOLE_ID" support-console VITE_LANDING_URL "$landing_url"
-  # Baked into the same vite build, so it must land before the same deploy as the URLs.
-  upsert_variable "$env_id" "$RAILWAY_SVC_APP_ID" app VITE_DEMO_MODE true
-
-  verify_variable "$env_id" "$RAILWAY_SVC_GATEWAY_ID" gateway CORS_ALLOWED_ORIGINS "$origins"
-  verify_variable "$env_id" "$RAILWAY_SVC_APP_ID" app VITE_GATEWAY_URL "$gateway_url"
-  verify_variable "$env_id" "$RAILWAY_SVC_APP_ID" app VITE_LANDING_URL "$landing_url"
-  verify_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_GATEWAY_URL "$gateway_url"
-  verify_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_APP_URL "$app_url"
-  verify_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_OPS_URL "$ops_url"
-  verify_variable "$env_id" "$RAILWAY_SVC_OPS_CONSOLE_ID" ops-console VITE_LANDING_URL "$landing_url"
-  verify_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_SUPPORT_URL "$support_url"
-  verify_variable "$env_id" "$RAILWAY_SVC_SUPPORT_CONSOLE_ID" support-console VITE_LANDING_URL "$landing_url"
-  verify_variable "$env_id" "$RAILWAY_SVC_APP_ID" app VITE_DEMO_MODE true
+  set_service_vars "$env_id" "$RAILWAY_SVC_GATEWAY_ID" gateway "" "CORS_ALLOWED_ORIGINS=$origins"
+  auth_check gateway "${SET_VARS_PAIRS[@]}" || exit 1
+  # VITE_DEMO_MODE is baked into the same vite build, so it lands before the same deploy as the URLs.
+  set_service_vars "$env_id" "$RAILWAY_SVC_APP_ID" app "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url" VITE_DEMO_MODE=true
+  auth_check app "${SET_VARS_PAIRS[@]}" || exit 1
+  set_service_vars "$env_id" "$RAILWAY_SVC_LANDING_ID" landing "" "VITE_GATEWAY_URL=$gateway_url" "VITE_APP_URL=$app_url" "VITE_OPS_URL=$ops_url" "VITE_SUPPORT_URL=$support_url"
+  auth_check landing "${SET_VARS_PAIRS[@]}" || exit 1
+  set_service_vars "$env_id" "$RAILWAY_SVC_OPS_CONSOLE_ID" ops-console "" "VITE_LANDING_URL=$landing_url"
+  auth_check ops-console "${SET_VARS_PAIRS[@]}" || exit 1
+  set_service_vars "$env_id" "$RAILWAY_SVC_SUPPORT_CONSOLE_ID" support-console "" "VITE_LANDING_URL=$landing_url"
+  auth_check support-console "${SET_VARS_PAIRS[@]}" || exit 1
   echo "All 10 environment variables confirmed by independent re-query."
 }
 
@@ -2217,7 +2225,7 @@ service_selector_self_test() {
 # NAME via service_id_by_name.
 
 # ai_key_verdict <variables-response-json> <service>
-# Pure: no token, no network. Passes only when the rendered map is an object
+# Pure: no token, no network. Passes only when the variable map is an object
 # AND OPENROUTER_API_KEY is absent or exactly "".
 # Never prints a value — this map carries live credentials.
 ai_key_verdict() {
@@ -2243,7 +2251,7 @@ ai_key_verdict() {
       echo "::error::Could not read $svc's variables (GraphQL error). This is NOT evidence that $name is unset."
       return 1 ;;
     unreadable)
-      echo "::error::$svc's rendered variable map is not an object, so $name could not be checked. This is NOT evidence that it is unset."
+      echo "::error::$svc's variable map is not an object, so $name could not be checked. This is NOT evidence that it is unset."
       return 1 ;;
     *)
       echo "::error::$svc.$name is SET in this environment. A PR environment must never hold a usable key. Value not printed."
@@ -2365,18 +2373,8 @@ cmd_set_ai_fake() {
     # status and set -e would not fire on a refusal.
     svc_id=$(service_id_by_name "$settle" "$svc" "environment $env_id" AI_FAKE)
 
-    upsert_variable "$env_id" "$svc_id" "$svc" AI_FAKE true
-    upsert_variable "$env_id" "$svc_id" "$svc" JEV_FAKE true
-    # No verify_variable here: it reads `.data.variables[$n] // empty`, so an
-    # absent key and an empty key both read back as "" — a want="" compare
-    # would pass vacuously. The fresh-read check below is the real one.
-    upsert_variable "$env_id" "$svc_id" "$svc" OPENROUTER_API_KEY ""
-    verify_variable "$env_id" "$svc_id" "$svc" AI_FAKE true
-    verify_variable "$env_id" "$svc_id" "$svc" JEV_FAKE true
-
-    graphql_post "$(gql_body "$SERVICE_VARIABLES_QUERY" \
-      "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" '{p: $p, e: $e, s: $s}')")" \
-      "re-reading $svc variables in environment $env_id"
+    set_service_vars "$env_id" "$svc_id" "$svc" "" AI_FAKE=true JEV_FAKE=true OPENROUTER_API_KEY=
+    auth_check "$svc" AI_FAKE=true JEV_FAKE=true || exit 1
     ai_key_verdict "$GQL_RESPONSE" "$svc" || exit 1
   done
   echo "AI and Jev fake mode confirmed in environment $env_id: AI_FAKE=true, JEV_FAKE=true and no usable OPENROUTER_API_KEY on submission and invoice."
@@ -2389,7 +2387,7 @@ cmd_set_ai_fake() {
 
 # environment_verdict <variables-response-json> <want>
 # Pure: no token, no network. Exit 0 only on an exact match. Prints only
-# ENVIRONMENT's value: the rendered map carries DSNs and keys.
+# ENVIRONMENT's value: the map carries DSNs and keys.
 environment_verdict() {
   local resp="$1" want="$2" kind got
 
@@ -2412,7 +2410,7 @@ environment_verdict() {
       echo "::error::Could not read the gateway's variables (GraphQL error). This is NOT evidence that ENVIRONMENT is unset."
       return 1 ;;
     *)
-      echo "::error::The gateway's rendered variable map is unreadable, so ENVIRONMENT could not be checked."
+      echo "::error::The gateway's variable map is unreadable, so ENVIRONMENT could not be checked."
       return 1 ;;
   esac
 
@@ -2507,11 +2505,7 @@ cmd_set_fork_environment() {
   local svc_id
   svc_id=$(service_id_by_name "$GQL_RESPONSE" gateway "environment $env_id" ENVIRONMENT)
 
-  upsert_variable "$env_id" "$svc_id" gateway ENVIRONMENT development
-
-  graphql_post "$(gql_body "$SERVICE_VARIABLES_QUERY" \
-    "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" '{p: $p, e: $e, s: $s}')")" \
-    "re-reading gateway variables in environment $env_id"
+  set_service_vars "$env_id" "$svc_id" gateway "" ENVIRONMENT=development
   environment_verdict "$GQL_RESPONSE" development || exit 1
   echo "gateway ENVIRONMENT=development confirmed in environment $env_id."
 }
@@ -2806,18 +2800,12 @@ cmd_set_fork_auth() {
     "AUTH_URL=$AUTH_INTERNAL_URL"
   )
 
-  upsert_secret_variable "$env_id" "$auth_id" auth GOTRUE_JWT_KEYS "$jwk"
-  upsert_secret_variable "$env_id" "$auth_id" auth GOTRUE_JWT_SECRET "$jwt_secret"
-  auth_write "$env_id" "$auth_id" auth "${auth_vars[@]}"
-  upsert_secret_variable "$env_id" "$gw_id" gateway AUTH_ADMIN_PASSWORD "$admin_pw"
-  auth_write "$env_id" "$gw_id" gateway "${gateway_vars[@]}"
-
   local bad=0
-  auth_read "$env_id" "$auth_id" auth
+  set_service_vars "$env_id" "$auth_id" auth "GOTRUE_JWT_KEYS GOTRUE_JWT_SECRET" "GOTRUE_JWT_KEYS=$jwk" "GOTRUE_JWT_SECRET=$jwt_secret" "${auth_vars[@]}"
   secret_verdict "$GQL_RESPONSE" auth GOTRUE_JWT_KEYS "$jwk" "$AUTH_PRENV" || bad=1
   secret_verdict "$GQL_RESPONSE" auth GOTRUE_JWT_SECRET "$jwt_secret" || bad=1
   auth_check auth "${auth_vars[@]}" || bad=1
-  auth_read "$env_id" "$gw_id" gateway
+  set_service_vars "$env_id" "$gw_id" gateway AUTH_ADMIN_PASSWORD "AUTH_ADMIN_PASSWORD=$admin_pw" "${gateway_vars[@]}"
   secret_verdict "$GQL_RESPONSE" gateway AUTH_ADMIN_PASSWORD "$admin_pw" || bad=1
   auth_check gateway "${gateway_vars[@]}" || bad=1
   if [ "$bad" != "0" ]; then
@@ -2856,13 +2844,11 @@ cmd_set_fork_auth_site() {
   auth_id=$(service_id_by_name "$settle" auth "environment $env_id" GOTRUE_SITE_URL)
   gw_id=$(service_id_by_name "$settle" gateway "environment $env_id" AUTH_SITE_URL)
 
-  upsert_variable "$env_id" "$auth_id" auth GOTRUE_SITE_URL "$url"
-  auth_read "$env_id" "$auth_id" auth
+  set_service_vars "$env_id" "$auth_id" auth "" "GOTRUE_SITE_URL=$url"
   auth_check auth "GOTRUE_SITE_URL=$url" || exit 1
   echo "auth.GOTRUE_SITE_URL confirmed in environment $env_id."
 
-  upsert_variable "$env_id" "$gw_id" gateway AUTH_SITE_URL "$url"
-  auth_read "$env_id" "$gw_id" gateway
+  set_service_vars "$env_id" "$gw_id" gateway "" "AUTH_SITE_URL=$url"
   auth_check gateway "AUTH_SITE_URL=$url" || exit 1
   echo "gateway.AUTH_SITE_URL confirmed in environment $env_id."
 }
@@ -3085,17 +3071,17 @@ sentry_off_self_test() {
   echo "Sentry-off self-test: all fixtures passed, no token read, no network call."
 }
 
+SENTRY_SECRET_NAMES="SENTRY_DSN VITE_SENTRY_DSN SENTRY_AUTH_TOKEN"
+
 # sentry_off_service <env-id> <settle-json> <service> <NAME>...: blank, re-read, verdict.
 sentry_off_service() {
-  local env_id="$1" settle="$2" svc="$3" svc_id name
+  local env_id="$1" settle="$2" svc="$3" svc_id name blank=()
   shift 3
   svc_id=$(service_id_by_name "$settle" "$svc" "environment $env_id" SENTRY)
   for name in "$@"; do
-    upsert_secret_variable "$env_id" "$svc_id" "$svc" "$name" ""
+    blank+=("$name=")
   done
-  graphql_post "$(gql_body "$SERVICE_VARIABLES_QUERY" \
-    "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" '{p: $p, e: $e, s: $s}')")" \
-    "re-reading $svc variables in environment $env_id"
+  set_service_vars "$env_id" "$svc_id" "$svc" "$SENTRY_SECRET_NAMES" "${blank[@]}"
   sentry_verdict "$GQL_RESPONSE" "$svc" "$@" || exit 1
 }
 
@@ -3141,7 +3127,7 @@ cmd_set_sentry_off() {
 RECONCILIATION_INTERNAL_URL="http://reconciliation.railway.internal:8080"
 
 # cmd_set_fork_reconciliation_url <environment-id>
-# Guard order is cmd_set_ai_fake's. The URL is not a secret, so upsert_variable's echo is fine.
+# Guard order is cmd_set_ai_fake's. The URL is not a secret, so its write line prints it.
 cmd_set_fork_reconciliation_url() {
   local env_id="${1:-}"
 
@@ -3165,8 +3151,7 @@ cmd_set_fork_reconciliation_url() {
   local gw_id
   gw_id=$(service_id_by_name "$GQL_RESPONSE" gateway "environment $env_id" RECONCILIATION_URL)
 
-  upsert_variable "$env_id" "$gw_id" gateway RECONCILIATION_URL "$RECONCILIATION_INTERNAL_URL"
-  auth_read "$env_id" "$gw_id" gateway
+  set_service_vars "$env_id" "$gw_id" gateway "" "RECONCILIATION_URL=$RECONCILIATION_INTERNAL_URL"
   value_verdict "$GQL_RESPONSE" gateway RECONCILIATION_URL "$RECONCILIATION_INTERNAL_URL" || exit 1
   echo "gateway.RECONCILIATION_URL confirmed in environment $env_id."
 }

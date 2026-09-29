@@ -243,20 +243,10 @@ func (s authShim) readAfter(t *testing.T, svc string, i int) bool {
 	return false
 }
 
-// lastCallIndex returns the index of the last upsert of svc.name, or -1.
+// lastCallIndex returns the index of the last write of svc.name in either mutation, or -1.
 func (s authShim) lastCallIndex(t *testing.T, svc, name string) int {
 	t.Helper()
-	at := -1
-	for i, c := range s.calls(t) {
-		if !strings.Contains(c.Query, "variableUpsert(") {
-			continue
-		}
-		in, _ := c.Variables["input"].(map[string]any)
-		if in["serviceId"] == svc && in["name"] == name {
-			at = i
-		}
-	}
-	return at
+	return lastWriteOf(s.calls(t), svc, name)
 }
 
 func (s authShim) argv(t *testing.T) string {
@@ -390,6 +380,18 @@ func runForkAuthOK(t *testing.T, sourceJWK string) (authShim, string) {
 		t.Fatalf("set-fork-auth exit %d, want 0; output = %q", code, out)
 	}
 	return s, out
+}
+
+// runForkAuthOnEmptyFork runs set-fork-auth where auth and gateway hold none of its
+// names, so every intended name is written once.
+func runForkAuthOnEmptyFork(t *testing.T) authShim {
+	t.Helper()
+	s := newAuthShim(t, forkAuthRailway(), nil)
+	stdout, stderr, code := s.run(t, forkAuthExports(), "set-fork-auth", authForkEnvID)
+	if code != 0 {
+		t.Fatalf("set-fork-auth exit %d, want 0; output = %q", code, stdout+stderr)
+	}
+	return s
 }
 
 // Both fork commands refuse before any write.
@@ -676,7 +678,7 @@ func TestSetForkAuthSite_GatewayReReadMismatchFails(t *testing.T) {
 }
 
 func TestSetForkAuth_IssuerAndAdditionalSetAgree(t *testing.T) {
-	s, _ := runForkAuthOK(t, freshJWK(t))
+	s := runForkAuthOnEmptyFork(t)
 	ups := s.upserts(t)
 
 	if got := oneUpsert(t, ups, authForkAuthID, "GOTRUE_JWT_ISSUER"); got != authForkIssuer {
@@ -770,7 +772,11 @@ func TestSetForkAuth_WritesFreshAdminPasswordAndDSNReference(t *testing.T) {
 	if pw == authSourcePassword {
 		t.Error("gateway.AUTH_ADMIN_PASSWORD equals the source value; it must be freshly generated")
 	}
-	if got := oneUpsert(t, ups, authForkAuthID, "DATABASE_URL"); got != authDSNReference {
+	// The fork inherits the reference, so it is not rewritten; the store is the evidence.
+	if n := len(upsertsOf(ups, authForkAuthID, "DATABASE_URL")); n > 1 {
+		t.Errorf("auth.DATABASE_URL written %d times, want at most 1", n)
+	}
+	if got := readStore(t, s, authForkAuthID)["DATABASE_URL"]; got != authDSNReference {
 		t.Errorf("auth.DATABASE_URL = %q, want the reference %q", got, authDSNReference)
 	}
 }

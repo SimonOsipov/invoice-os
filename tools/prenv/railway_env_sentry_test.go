@@ -91,13 +91,23 @@ func sentryConfirmed(out string) bool {
 	return false
 }
 
-// reReads returns the service id of each svcVars call, with the call index.
+// reReads returns the service id of each authVars read that follows a write of that
+// service, with the call index. The read before a service's write is not a re-read.
 func reReads(calls []railwayCall) (ids []string, at []int) {
+	written := map[string]bool{}
 	for i, c := range calls {
-		if ops := operations([]railwayCall{c}); ops[0] == "svcVars" {
-			s, _ := c.Variables["s"].(string)
-			ids = append(ids, s)
-			at = append(at, i)
+		if strings.Contains(c.Query, "variableCollectionUpsert(") {
+			in, _ := c.Variables["input"].(map[string]any)
+			sv, _ := in["serviceId"].(string)
+			written[sv] = true
+			continue
+		}
+		if ops := operations([]railwayCall{c}); ops[0] == "authVars" {
+			sv, _ := c.Variables["s"].(string)
+			if written[sv] {
+				ids = append(ids, sv)
+				at = append(at, i)
+			}
 		}
 	}
 	return ids, at
@@ -105,14 +115,21 @@ func reReads(calls []railwayCall) (ids []string, at []int) {
 
 func noReReadAfter(t *testing.T, s authShim, svc string) {
 	t.Helper()
-	ids, at := reReads(s.calls(t))
+	calls := s.calls(t)
+	ids, at := reReads(calls)
 	i := slices.Index(ids, sentrySvcID(svc))
 	if i < 0 {
 		t.Errorf("%s was never re-read; re-reads = %v", svc, ids)
 		return
 	}
-	if later := ids[i+1:]; len(later) != 0 {
-		t.Errorf("re-reads continued after %s's refusal (call %d): %v; the command must fail fast", svc, at[i], later)
+	var later []string
+	for _, c := range calls[at[i]+1:] {
+		if isVariableRead(c) {
+			later = append(later, readService(c))
+		}
+	}
+	if len(later) != 0 {
+		t.Errorf("reads continued after %s's refusal (call %d): %v; the command must fail fast", svc, at[i], later)
 	}
 }
 
@@ -318,13 +335,10 @@ func checkBlanked(t *testing.T, s authShim, out string) {
 		t.Errorf("upserts = %v\nwant exactly %v", got, wantKeys)
 	}
 
-	for _, c := range calls {
-		if !strings.Contains(c.Query, "variableUpsert(") {
-			continue
-		}
-		in, _ := c.Variables["input"].(map[string]any)
-		if in["skipDeploys"] != true || in["environmentId"] != forkEnvID {
-			t.Errorf("upsert %v.%v: skipDeploys=%v environmentId=%v, want true and %s", in["serviceId"], in["name"], in["skipDeploys"], in["environmentId"], forkEnvID)
+	ws := collectionWritesIn(calls)
+	for _, w := range ws {
+		if w.SkipDeploys != true || w.Env != forkEnvID {
+			t.Errorf("the %s write: skipDeploys=%v environmentId=%v, want true and %s", w.Service, w.SkipDeploys, w.Env, forkEnvID)
 		}
 	}
 
@@ -338,23 +352,14 @@ func checkBlanked(t *testing.T, s authShim, out string) {
 		}
 	}
 
-	// Each re-read names the service whose upserts immediately precede it.
-	last := ""
+	// Each write is followed at once by a re-read of the same service.
 	var reread []string
-	for _, c := range calls {
-		if strings.Contains(c.Query, "variableUpsert(") {
-			in, _ := c.Variables["input"].(map[string]any)
-			last, _ = in["serviceId"].(string)
+	for _, w := range ws {
+		if w.At+1 >= len(calls) || !isVariableRead(calls[w.At+1]) || readService(calls[w.At+1]) != w.Service {
+			t.Errorf("the write of %q is not followed at once by its re-read", w.Service)
 			continue
 		}
-		if operations([]railwayCall{c})[0] != "svcVars" {
-			continue
-		}
-		sv, _ := c.Variables["s"].(string)
-		if sv != last {
-			t.Errorf("re-read of %q follows upserts of %q", sv, last)
-		}
-		reread = append(reread, sv)
+		reread = append(reread, w.Service)
 	}
 	var all []string
 	for _, n := range slices.Concat(sentryBackends, sentrySPAs) {

@@ -174,7 +174,7 @@ var (
 		{"require_env", regexp.MustCompile(`\brequire_env\b`)},
 		{"assert_environment_is_ephemeral", regexp.MustCompile(`\bassert_environment_is_ephemeral\s+"\$\{?env_id\}?"\s+\S`)},
 		{"service_id_by_name", regexp.MustCompile(`\bservice_id_by_name\b`)},
-		{"upsert_variable", regexp.MustCompile(`\bupsert_variable\b`)},
+		{"set_service_vars", regexp.MustCompile(`\bset_service_vars\b`)},
 	}
 	gatewayIDByName    = regexp.MustCompile(`\b(\w+)=\$\(\s*service_id_by_name\s+\S+\s+"?gateway"?\s`)
 	variablesReRead    = regexp.MustCompile(`\b(SERVICE_)?VARIABLES_QUERY\b`)
@@ -186,9 +186,13 @@ var (
 func forkEnvironmentBodyFaults(code string) []string {
 	faults := guardOrderFaults(code, forkEnvironmentGuards)
 
-	upserts := regexp.MustCompile(`\bupsert_variable\b`).FindAllStringIndex(code, -1)
+	// set_service_vars writes and then re-reads (setServiceVarsReReadFaults), so it is both.
+	upserts := regexp.MustCompile(`\bset_service_vars\b`).FindAllStringIndex(code, -1)
 	if len(upserts) != 1 {
-		faults = append(faults, fmt.Sprintf("%d upsert_variable calls, want exactly 1", len(upserts)))
+		faults = append(faults, fmt.Sprintf("%d set_service_vars calls, want exactly 1", len(upserts)))
+	}
+	if regexp.MustCompile(`\bupsert_variable\b`).MatchString(code) {
+		faults = append(faults, "calls upsert_variable, a write with no re-read")
 	}
 	if strings.Contains(code, "RAILWAY_SVC_GATEWAY_ID") {
 		faults = append(faults, "names RAILWAY_SVC_GATEWAY_ID; the gateway must be resolved by name")
@@ -199,18 +203,16 @@ func forkEnvironmentBodyFaults(code string) []string {
 	if m := gatewayIDByName.FindStringSubmatch(code); m == nil {
 		faults = append(faults, "no `<id>=$(service_id_by_name … gateway …)`")
 	} else {
-		write := regexp.MustCompile(`(?m)\bupsert_variable\s+"\$\{?env_id\}?"\s+"\$\{?` + regexp.QuoteMeta(m[1]) + `\}?"\s+"?gateway"?\s+"?ENVIRONMENT"?\s+"?development"?\s*$`)
+		write := regexp.MustCompile(`(?m)\bset_service_vars\s+"\$\{?env_id\}?"\s+"\$\{?` + regexp.QuoteMeta(m[1]) + `\}?"\s+"?gateway"?\s+""\s+"?ENVIRONMENT=development"?\s*$`)
 		if !write.MatchString(code) {
-			faults = append(faults, fmt.Sprintf(`no upsert_variable "$env_id" "$%s" gateway ENVIRONMENT development`, m[1]))
+			faults = append(faults, fmt.Sprintf(`no set_service_vars "$env_id" "$%s" gateway "" ENVIRONMENT=development`, m[1]))
 		}
 	}
 
 	var upsertAt, reReadAt, verdictAt = -1, -1, -1
 	if len(upserts) > 0 {
 		upsertAt = upserts[len(upserts)-1][0]
-	}
-	if all := variablesReRead.FindAllStringIndex(code, -1); len(all) > 0 {
-		reReadAt = all[len(all)-1][0]
+		reReadAt = upsertAt
 	}
 	if all := developmentVerdict.FindAllStringIndex(code, -1); len(all) > 0 {
 		verdictAt = all[len(all)-1][0]
@@ -251,11 +253,7 @@ const (
 `
 	forkBodyResolve = `  svc_id=$(service_id_by_name "$GQL_RESPONSE" gateway "environment $env_id" ENVIRONMENT)
 `
-	forkBodyUpsert = `  upsert_variable "$env_id" "$svc_id" gateway ENVIRONMENT development
-`
-	forkBodyReRead = `  graphql_post "$(gql_body "$SERVICE_VARIABLES_QUERY" \
-    "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" '{p: $p, e: $e, s: $s}')")" \
-    "re-reading gateway variables in environment $env_id"
+	forkBodyUpsert = `  set_service_vars "$env_id" "$svc_id" gateway "" ENVIRONMENT=development
 `
 	forkBodyVerdict = `  environment_verdict "$GQL_RESPONSE" development || exit 1
   echo "gateway ENVIRONMENT=development confirmed in environment $env_id."
@@ -273,19 +271,20 @@ func shellCode(lines []string) string {
 }
 
 func TestSetForkEnvironmentWritesOnlyTheGatewayEnvironment(t *testing.T) {
-	good := forkBodySelfTest + forkBodyUsage + forkBodyGuards + forkBodyResolve + forkBodyUpsert + forkBodyReRead + forkBodyVerdict
+	good := forkBodySelfTest + forkBodyUsage + forkBodyGuards + forkBodyResolve + forkBodyUpsert + forkBodyVerdict
 	fixtures := []struct{ name, body string }{
 		{"require_env swapped with require_source_env", swapOnce(good, "  require_source_env\n", "  require_env\n")},
 		{"usage after require_source_env", swapOnce(good, forkBodyUsage, "  require_source_env\n")},
 		{"service_id_by_name before assert_environment_is_ephemeral", swapOnce(good, "  assert_environment_is_ephemeral \"$env_id\" ENVIRONMENT\n", forkBodyResolve)},
 		{"the constant gateway id", strings.Replace(good, forkBodyResolve, "  svc_id=\"$RAILWAY_SVC_GATEWAY_ID\"\n", 1)},
-		{"the constant id in the upsert", strings.Replace(good, `"$svc_id" gateway ENVIRONMENT`, `"$RAILWAY_SVC_GATEWAY_ID" gateway ENVIRONMENT`, 1)},
-		{"a second variable written", strings.Replace(good, forkBodyUpsert, forkBodyUpsert+"  upsert_variable \"$env_id\" \"$svc_id\" gateway GATEWAY_MOCK_ISSUER true\n", 1)},
-		{"the value production", strings.Replace(good, "ENVIRONMENT development\n", "ENVIRONMENT production\n", 1)},
+		{"the constant id in the upsert", strings.Replace(good, `"$svc_id" gateway "" ENVIRONMENT`, `"$RAILWAY_SVC_GATEWAY_ID" gateway "" ENVIRONMENT`, 1)},
+		{"a second variable written", strings.Replace(good, forkBodyUpsert, forkBodyUpsert+"  set_service_vars \"$env_id\" \"$svc_id\" gateway \"\" GATEWAY_MOCK_ISSUER=true\n", 1)},
+		{"a second variable on the same line", strings.Replace(good, "ENVIRONMENT=development\n", "ENVIRONMENT=development GATEWAY_MOCK_ISSUER=true\n", 1)},
+		{"the value production", strings.Replace(good, "ENVIRONMENT=development\n", "ENVIRONMENT=production\n", 1)},
 		{"a service other than gateway", strings.Replace(good, `"$GQL_RESPONSE" gateway "environment`, `"$GQL_RESPONSE" submission "environment`, 1)},
 		{"require_env commented out", strings.Replace(good, "  require_env\n", "  # require_env\n", 1)},
-		{"no fresh re-read", strings.Replace(good, forkBodyReRead, "", 1)},
-		{"the verdict before the re-read", swapOnce(good, forkBodyReRead, forkBodyVerdict)},
+		{"no fresh re-read", strings.Replace(good, forkBodyUpsert, "  upsert_variable \"$env_id\" \"$svc_id\" gateway ENVIRONMENT development\n", 1)},
+		{"the verdict before the re-read", swapOnce(good, forkBodyUpsert, forkBodyVerdict)},
 	}
 	t.Run("fixtures", func(t *testing.T) {
 		if faults := forkEnvironmentBodyFaults(shellCode(strings.Split(good, "\n"))); len(faults) != 0 {
@@ -304,6 +303,27 @@ func TestSetForkEnvironmentWritesOnlyTheGatewayEnvironment(t *testing.T) {
 	for _, fault := range forkEnvironmentBodyFaults(shellCode(shellFunctionBody(t, "cmd_set_fork_environment"))) {
 		t.Errorf("cmd_set_fork_environment: %s", fault)
 	}
+	for _, fault := range setServiceVarsReReadFaults(shellCode(shellFunctionBody(t, "set_service_vars")), shellCode(shellFunctionBody(t, "auth_read"))) {
+		t.Errorf("set_service_vars: %s", fault)
+	}
+}
+
+// setServiceVarsReReadFaults reports a set_service_vars whose last read does not follow its
+// collection write, or an auth_read that is not the unrendered AUTH_VARIABLES_QUERY.
+func setServiceVarsReReadFaults(code, authRead string) []string {
+	var faults []string
+	if !regexp.MustCompile(`\$AUTH_VARIABLES_QUERY\b`).MatchString(authRead) {
+		faults = append(faults, "auth_read does not send AUTH_VARIABLES_QUERY")
+	}
+	write := strings.LastIndex(code, "$VARIABLE_COLLECTION_UPSERT_MUTATION")
+	reads := regexp.MustCompile(`(?m)^\s*auth_read\s`).FindAllStringIndex(code, -1)
+	switch {
+	case write < 0:
+		faults = append(faults, "no VARIABLE_COLLECTION_UPSERT_MUTATION write")
+	case len(reads) < 2 || reads[0][0] > write || reads[len(reads)-1][0] < write:
+		faults = append(faults, "no auth_read before the write and a fresh one after it")
+	}
+	return faults
 }
 
 func TestEnvironmentVerdictTellsAbsentFromEmpty(t *testing.T) {
@@ -1251,7 +1271,11 @@ const (
     "listing service instances in environment $env_id"
   local svc_id
 `
-	prodBodyUpsert  = "  upsert_variable \"$env_id\" \"$svc_id\" gateway ENVIRONMENT production\n"
+	prodBodyUpsert = "  upsert_variable \"$env_id\" \"$svc_id\" gateway ENVIRONMENT production\n"
+	prodBodyReRead = `  graphql_post "$(gql_body "$SERVICE_VARIABLES_QUERY" \
+    "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" '{p: $p, e: $e, s: $s}')")" \
+    "re-reading gateway variables in environment $env_id"
+`
 	prodBodyVerdict = `  environment_verdict "$GQL_RESPONSE" production || exit 1
   echo "gateway ENVIRONMENT=production confirmed in environment $env_id."
 `
@@ -1259,7 +1283,7 @@ const (
 
 func TestSetProductionEnvironmentWritesOnlyTheGateway(t *testing.T) {
 	good := prodBodyUsage + "  require_source_env\n" + prodBodyCompare + "  require_env\n" + prodBodySettle +
-		forkBodyResolve + prodBodyUpsert + forkBodyReRead + prodBodyVerdict
+		forkBodyResolve + prodBodyUpsert + prodBodyReRead + prodBodyVerdict
 	fixtures := []struct{ name, body string }{
 		{"require_env swapped with require_source_env", swapOnce(good, "  require_source_env\n", "  require_env\n")},
 		{"usage after require_source_env", swapOnce(good, prodBodyUsage, "  require_source_env\n")},
@@ -1273,8 +1297,8 @@ func TestSetProductionEnvironmentWritesOnlyTheGateway(t *testing.T) {
 		{"require_env commented out", strings.Replace(good, "  require_env\n", "  # require_env\n", 1)},
 		{"a self-test branch", strings.Replace(good, prodBodyUsage, prodBodyUsage+forkBodySelfTest, 1)},
 		{"the ephemeral guard", strings.Replace(good, "  require_env\n", "  require_env\n  assert_environment_is_ephemeral \"$env_id\" ENVIRONMENT\n", 1)},
-		{"no fresh re-read", strings.Replace(good, forkBodyReRead, "", 1)},
-		{"the verdict before the re-read", swapOnce(good, forkBodyReRead, prodBodyVerdict)},
+		{"no fresh re-read", strings.Replace(good, prodBodyReRead, "", 1)},
+		{"the verdict before the re-read", swapOnce(good, prodBodyReRead, prodBodyVerdict)},
 		{"the verdict wants development", strings.Replace(good, `"$GQL_RESPONSE" production`, `"$GQL_RESPONSE" development`, 1)},
 	}
 	t.Run("fixtures", func(t *testing.T) {

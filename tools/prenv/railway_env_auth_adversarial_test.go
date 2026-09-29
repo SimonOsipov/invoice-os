@@ -50,7 +50,7 @@ func TestAuthSecretsNeverReachJQArgv(t *testing.T) {
 	scan := func(t *testing.T, log string, needles map[string]string) {
 		t.Helper()
 		argv := readLog(t, log)
-		if !strings.Contains(argv, "variableUpsert") {
+		if !strings.Contains(argv, "variableUpsert") && !strings.Contains(argv, "variableCollectionUpsert") {
 			t.Fatalf("control: the jq log holds no upsert body, so a clean scan proves nothing")
 		}
 		for label, n := range needles {
@@ -160,8 +160,8 @@ func TestSetForkAuth_ReReadIsUnrenderedAndNeverPrintsARenderedDSN(t *testing.T) 
 				t.Errorf("a variables read omits unrendered: true, so DATABASE_URL would read back rendered: %q", c.Query)
 			}
 		}
-		if reads != 2 {
-			t.Errorf("%d variables reads, want 2 (auth and gateway)", reads)
+		if reads != 4 {
+			t.Errorf("%d variables reads, want 4 (auth and gateway, each read before its write and re-read after)", reads)
 		}
 	})
 

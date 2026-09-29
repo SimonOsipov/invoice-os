@@ -1224,12 +1224,7 @@ test('deployed app: signing out on one device ends the session on every device',
     })
 
     await test.step('B signs in again and lands on /, not the old destination', async () => {
-      const dialog = b.page.getByRole('dialog', { name: 'Sign in' })
       await b.page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
-      await Promise.all([
-        b.page.waitForRequest((r) => r.isNavigationRequest() && r.url().startsWith(LANDING_URL) && new URL(r.url()).searchParams.get('signin') === 'ready'),
-        dialog.getByRole('button', { name: 'Continue with email', exact: true }).click(),
-      ])
       await Promise.all([
         b.page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
         submitSignIn(b.page, account.email, account.password),

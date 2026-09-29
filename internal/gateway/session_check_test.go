@@ -3,6 +3,7 @@ package gateway
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -367,8 +368,9 @@ func TestSessionCheck_TTLBoundary(t *testing.T) {
 		want int
 	}{
 		{0, 1},
-		{SessionCheckTTL - time.Nanosecond, 1},
-		{SessionCheckTTL, 2},
+		// The literal, not SessionCheckTTL: 30 s is the stale window the docs promise.
+		{30*time.Second - time.Nanosecond, 1},
+		{30 * time.Second, 2},
 	}
 	t0 := rg.clock.Now()
 	for _, s := range steps {
@@ -506,6 +508,8 @@ func TestSessionCheck_OtherAnswersAre503(t *testing.T) {
 			http.Redirect(w, r, "/elsewhere", http.StatusFound)
 		}},
 		{"204", plain(204, "")},
+		{"403 without error_code", plain(403, `{"code":403,"msg":"refused"}`)},
+		{"403 not JSON", plain(403, "<html>forbidden</html>")},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -765,5 +769,245 @@ func TestSessionCheck_NilAuthURLIs503(t *testing.T) {
 	}
 	if rec := rg.get(tok); rec.Code != http.StatusOK || rg.upstream.Hits() != 1 {
 		t.Errorf("no-sid token: status = %d, upstream hits = %d, want 200 and 1", rec.Code, rg.upstream.Hits())
+	}
+}
+
+// held answers GoTrue's 200 once release closes; a request abandoned first gets nothing.
+func held(release <-chan struct{}) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, gtUser)
+	}
+}
+
+func gate(t *testing.T) (<-chan struct{}, func()) {
+	t.Helper()
+	release := make(chan struct{})
+	var once sync.Once
+	open := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(open)
+	return release, open
+}
+
+// AUTH_URL may carry a path prefix; /user joins under it.
+func TestSessionCheck_PrefixedAuthURLJoinsUser(t *testing.T) {
+	for name, prefix := range map[string]string{"bare prefix": "/auth/v1", "trailing slash": "/auth/v1/"} {
+		t.Run(name, func(t *testing.T) {
+			var mu sync.Mutex
+			var paths []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				paths = append(paths, r.URL.Path)
+				mu.Unlock()
+				if r.URL.Path != "/auth/v1/user" {
+					http.NotFound(w, r)
+					return
+				}
+				_, _ = io.WriteString(w, gtUser)
+			}))
+			t.Cleanup(srv.Close)
+			authURL, err := url.Parse(srv.URL + prefix)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			rg := newSessionRig(t, authURL, nil, nil)
+
+			if rec := rg.get(rg.signer.token(t, subjectS1, sid1)); rec.Code != http.StatusOK {
+				t.Errorf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(paths) != 1 || paths[0] != "/auth/v1/user" {
+				t.Errorf("GoTrue saw paths %v, want exactly [/auth/v1/user]", paths)
+			}
+		})
+	}
+}
+
+// The checker's own 5 s bound, with a client that has no timeout of its own.
+func TestSessionCheck_SlowerThanSessionCheckTimeoutIs503(t *testing.T) {
+	const bound = 5 * time.Second
+	fake := newUserFake(t, http.StatusOK, gtUser)
+	fake.setAnswer(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(2 * bound):
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, gtUser)
+	})
+	noTimeout := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	rg := newSessionRig(t, fake.URL, noTimeout, nil)
+
+	start := time.Now()
+	rec := rg.get(rg.signer.token(t, subjectS1, sid1))
+	elapsed := time.Since(start)
+
+	assertUnavailable(t, rec)
+	if elapsed < bound || elapsed > bound+1500*time.Millisecond {
+		t.Errorf("answered after %v, want about %v", elapsed, bound)
+	}
+	if n := rg.upstream.Hits(); n != 0 {
+		t.Errorf("upstream received %d requests, want 0", n)
+	}
+}
+
+// A waiter whose own request ends answers 503 at once; the shared call runs on for the rest.
+func TestSessionCheck_CancelledWaiterLeavesTheSharedCall(t *testing.T) {
+	fake := newUserFake(t, http.StatusOK, gtUser)
+	release, open := gate(t)
+	fake.setAnswer(held(release))
+	rg := newSessionRig(t, fake.URL, nil, nil)
+	tok := rg.signer.token(t, subjectS1, sid1)
+
+	leader := make(chan int, 1)
+	go func() { leader <- rg.get(tok).Code }()
+	if !waitFor(2*time.Second, func() bool { return fake.Hits() == 1 }) {
+		open()
+		<-leader
+		t.Fatalf("GoTrue /user was never called for the leader (calls = %d)", fake.Hits())
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	waiter := make(chan int, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		rg.handler.ServeHTTP(rec, request(http.MethodGet, "/api/tenancy/v1/me", tok).WithContext(ctx))
+		waiter <- rec.Code
+	}()
+	cancel()
+
+	select {
+	case code := <-waiter:
+		if code != http.StatusServiceUnavailable {
+			t.Errorf("cancelled waiter: status = %d, want 503", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("cancelled waiter is still blocked on the held call")
+	}
+	if n := fake.Hits(); n != 1 {
+		t.Errorf("GoTrue /user calls = %d while the leader's call is held, want 1 (shared)", n)
+	}
+	open()
+	if code := <-leader; code != http.StatusOK {
+		t.Errorf("leader: status = %d, want 200", code)
+	}
+	if rec := rg.get(tok); rec.Code != http.StatusOK || fake.Hits() != 1 {
+		t.Errorf("next request: status = %d, GoTrue calls = %d, want 200 and 1 (the live answer was cached)", rec.Code, fake.Hits())
+	}
+}
+
+// The leader's own cancellation must not fail the call it shares: its answer is still cached.
+func TestSessionCheck_CancelledLeaderStillCachesTheAnswer(t *testing.T) {
+	fake := newUserFake(t, http.StatusOK, gtUser)
+	release, open := gate(t)
+	fake.setAnswer(held(release))
+	rg := newSessionRig(t, fake.URL, nil, nil)
+	tok := rg.signer.token(t, subjectS1, sid1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rg.handler.ServeHTTP(httptest.NewRecorder(), request(http.MethodGet, "/api/tenancy/v1/me", tok).WithContext(ctx))
+	}()
+	if !waitFor(2*time.Second, func() bool { return fake.Hits() == 1 }) {
+		open()
+		<-done
+		t.Fatalf("GoTrue /user was never called (calls = %d)", fake.Hits())
+	}
+	cancel()
+	open()
+	<-done
+
+	if rec := rg.get(tok); rec.Code != http.StatusOK {
+		t.Errorf("next request: status = %d, want 200", rec.Code)
+	}
+	if n := fake.Hits(); n != 1 {
+		t.Errorf("GoTrue /user calls = %d, want 1 (the cancelled leader's call still cached its answer)", n)
+	}
+}
+
+// An evicted call that finishes late must not drop the registration of the call that replaced it.
+func TestSessionCheck_EvictedCallKeepsANewerRegistration(t *testing.T) {
+	fake := newUserFake(t, http.StatusOK, gtUser)
+	rel1, open1 := gate(t)
+	rel2, open2 := gate(t)
+	var calls atomic.Int64
+	fake.setAnswer(func(w http.ResponseWriter, r *http.Request) {
+		switch calls.Add(1) {
+		case 1:
+			held(rel1)(w, r)
+		case 2:
+			held(rel2)(w, r)
+		default:
+			_, _ = io.WriteString(w, gtUser)
+		}
+	})
+	rg := newSessionRig(t, fake.URL, nil, nil)
+	tok := rg.signer.token(t, subjectS1, sid1)
+	get := func(out chan<- int) { out <- rg.get(tok).Code }
+
+	r1, r2, r3 := make(chan int, 1), make(chan int, 1), make(chan int, 1)
+	go get(r1)
+	if !waitFor(2*time.Second, func() bool { return fake.Hits() == 1 }) {
+		t.Fatalf("GoTrue /user calls = %d, want request 1's call", fake.Hits())
+	}
+	rg.sessions.EvictSubject(subjectS1)
+	go get(r2)
+	if !waitFor(2*time.Second, func() bool { return fake.Hits() == 2 }) {
+		t.Fatalf("GoTrue /user calls = %d after eviction, want request 2's own call", fake.Hits())
+	}
+	open1()
+	if code := <-r1; code != http.StatusOK {
+		t.Errorf("request 1: status = %d, want 200", code)
+	}
+	go get(r3)
+	// A dropped registration lets request 3 start a third call well inside this window.
+	waitFor(300*time.Millisecond, func() bool { return fake.Hits() > 2 })
+	open2()
+	for i, ch := range []chan int{r2, r3} {
+		if code := <-ch; code != http.StatusOK {
+			t.Errorf("request %d: status = %d, want 200", i+2, code)
+		}
+	}
+	if n := fake.Hits(); n != 2 {
+		t.Errorf("GoTrue /user calls = %d, want 2 (request 3 shares request 2's call)", n)
+	}
+	rg.get(tok)
+	if n := fake.Hits(); n != 2 {
+		t.Errorf("GoTrue /user calls = %d after a fourth request, want 2 (request 2's live answer was cached)", n)
+	}
+}
+
+// A checker built by NewSessionChecker caps its cache at 100,000 entries.
+func TestSessionCheck_DefaultCapIsSessionCheckMaxEntries(t *testing.T) {
+	fake := newUserFake(t, http.StatusOK, gtUser)
+	rg := newSessionRig(t, fake.URL, nil, nil)
+	rg.sessions.FillForTest(100_000-1, subjectS2)
+	last, over := rg.signer.token(t, subjectS1, sid1), rg.signer.token(t, subjectS1, sid2)
+
+	steps := []struct {
+		name  string
+		token string
+		want  int
+	}{
+		{"the last free slot is checked", last, 1},
+		{"the last free slot is cached", last, 1},
+		{"one over the cap is checked", over, 2},
+		{"one over the cap is not cached", over, 3},
+	}
+	for _, s := range steps {
+		if rec := rg.get(s.token); rec.Code != http.StatusOK {
+			t.Errorf("%s: status = %d, want 200", s.name, rec.Code)
+		}
+		if n := fake.Hits(); n != s.want {
+			t.Errorf("%s: GoTrue /user calls = %d, want %d", s.name, n, s.want)
+		}
 	}
 }

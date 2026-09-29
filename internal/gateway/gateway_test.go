@@ -270,6 +270,25 @@ func TestUnreachableUpstreamBadGateway(t *testing.T) {
 	}
 }
 
+// A forgotten Sessions wire fails at construction, not on the first token with a session_id.
+func TestHandlerRequiresSessions(t *testing.T) {
+	verifier, err := auth.NewVerifier(auth.Config{Issuer: testIssuer, JWKSURL: "http://127.0.0.1:1"})
+	if err != nil {
+		t.Fatalf("verifier: %v", err)
+	}
+	build := func(sessions *SessionChecker) (panicked bool) {
+		defer func() { panicked = recover() != nil }()
+		Handler(Options{Verifier: verifier, Sessions: sessions, Upstreams: map[string]*url.URL{}})
+		return false
+	}
+	if build(liveSessions(t)) {
+		t.Fatal("Handler panicked with Sessions set")
+	}
+	if !build(nil) {
+		t.Error("Handler built without Sessions, want a panic")
+	}
+}
+
 // TestHealthCoexistsUnauthenticated mirrors main's mux wiring: /healthz is public
 // while everything under /api/ requires a token.
 func TestHealthCoexistsUnauthenticated(t *testing.T) {

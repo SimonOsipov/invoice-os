@@ -23,10 +23,16 @@ package reconciliation
 
 import (
 	"context"
+	"errors"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/getsentry/sentry-go"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/sentrytest"
 )
 
 // AC-1: Start drives sweepFn once per Interval; at a 10ms interval, waiting ~50ms must
@@ -200,4 +206,182 @@ func TestConfigFromEnvMalformed(t *testing.T) {
 	if cfg != (Config{}) {
 		t.Errorf("ConfigFromEnv() error path returned %+v, want the zero Config", cfg)
 	}
+}
+
+// scriptedSweeper runs one script step per tick, then parks the next tick until its
+// context ends. parked closes once the parking tick starts, so every scripted step,
+// including its capture, has finished by then.
+func scriptedSweeper(script ...func() error) (*Sweeper, <-chan struct{}) {
+	var n atomic.Int64
+	parked := make(chan struct{})
+	return &Sweeper{
+		Interval: 5 * time.Millisecond,
+		sweepFn: func(ctx context.Context) error {
+			i := int(n.Add(1)) - 1
+			if i < len(script) {
+				return script[i]()
+			}
+			if i == len(script) {
+				close(parked)
+			}
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}, parked
+}
+
+func failWith(msg string) func() error { return func() error { return errors.New(msg) } }
+
+func succeed() error { return nil }
+
+func startAndWaitParked(t *testing.T, s *Sweeper, parked <-chan struct{}) {
+	t.Helper()
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = s.Stop(ctx)
+	})
+	select {
+	case <-parked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the scripted ticks never finished within 2s")
+	}
+}
+
+func stopSweeper(t *testing.T, s *Sweeper) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := s.Stop(ctx); err != nil {
+		t.Fatalf("Stop = %v, want nil", err)
+	}
+}
+
+func eventText(e *sentry.Event) string {
+	text := e.Message
+	for _, ex := range e.Exception {
+		text += " " + ex.Value
+	}
+	return text
+}
+
+func assertEventCount(t *testing.T, rec *sentrytest.Recorder, want sentrytest.Labels, n int) {
+	t.Helper()
+	events := rec.Events()
+	if len(events) != n {
+		t.Fatalf("recorded %d events, want %d", len(events), n)
+	}
+	for _, e := range events {
+		sentrytest.AssertLabels(t, e, want)
+	}
+}
+
+func TestSweeper_FailedSweepOpensOneIssue(t *testing.T) {
+	_, rec, want := sentrytest.Boot(t, "reconciliation")
+	s, parked := scriptedSweeper(failWith("enumerate: db down"))
+	startAndWaitParked(t, s, parked)
+
+	e := rec.One(t, want)
+	if got := eventText(e); !strings.Contains(got, "db down") {
+		t.Errorf("event text = %q, want it to carry the sweep error %q", got, "enumerate: db down")
+	}
+}
+
+func TestSweeper_RepeatedFailureOpensOneIssue(t *testing.T) {
+	_, rec, want := sentrytest.Boot(t, "reconciliation")
+	s, parked := scriptedSweeper(failWith("db down"), failWith("db down"), failWith("db down"))
+	startAndWaitParked(t, s, parked)
+
+	rec.One(t, want)
+}
+
+func TestSweeper_FailureAfterRecoveryOpensAnother(t *testing.T) {
+	_, rec, want := sentrytest.Boot(t, "reconciliation")
+	s, parked := scriptedSweeper(failWith("first"), succeed, failWith("second"))
+	startAndWaitParked(t, s, parked)
+
+	assertEventCount(t, rec, want, 2)
+}
+
+func TestSweeper_PanickingSweepIsRecoveredAndReported(t *testing.T) {
+	_, rec, want := sentrytest.Boot(t, "reconciliation")
+	var tick2 atomic.Bool
+	s, parked := scriptedSweeper(
+		func() error { panic("sweep boom") },
+		func() error { tick2.Store(true); return nil },
+	)
+	startAndWaitParked(t, s, parked)
+
+	e := rec.One(t, want)
+	if e.Level != sentry.LevelFatal {
+		t.Errorf("event level = %q, want %q", e.Level, sentry.LevelFatal)
+	}
+	if !tick2.Load() {
+		t.Error("tick 2 never ran after the panic")
+	}
+	stopSweeper(t, s)
+}
+
+// Guard: nothing is bound to capture the panic; the loop must still tick.
+func TestSweeper_PanicWithSentryOffKeepsTicking(t *testing.T) {
+	sentry.CurrentHub().BindClient(nil)
+	var tick2 atomic.Bool
+	s, parked := scriptedSweeper(
+		func() error { panic("sweep boom") },
+		func() error { tick2.Store(true); return nil },
+	)
+	startAndWaitParked(t, s, parked)
+
+	if !tick2.Load() {
+		t.Error("tick 2 never ran after the panic")
+	}
+	stopSweeper(t, s)
+}
+
+// Guard for the cancel half: the parked third tick returns ctx.Err() after Stop.
+func TestSweeper_ShutdownCancelOpensNothing(t *testing.T) {
+	_, rec, want := sentrytest.Boot(t, "reconciliation")
+	s, parked := scriptedSweeper(failWith("db down"), succeed)
+	startAndWaitParked(t, s, parked)
+
+	assertEventCount(t, rec, want, 1)
+	stopSweeper(t, s)
+	assertEventCount(t, rec, want, 1)
+}
+
+// Guard for the success half: tick 3 is held open so the recorder is read after ticks 1 and 2 only.
+func TestSweeper_SuccessOpensNothing(t *testing.T) {
+	_, rec, want := sentrytest.Boot(t, "reconciliation")
+	entered, release := make(chan struct{}), make(chan struct{})
+	s, parked := scriptedSweeper(succeed, succeed, func() error {
+		close(entered)
+		<-release
+		return errors.New("late failure")
+	})
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = s.Stop(ctx)
+	})
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("tick 3 never started within 2s")
+	}
+	rec.None(t)
+
+	close(release)
+	select {
+	case <-parked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("tick 4 never started within 2s")
+	}
+	rec.One(t, want)
 }

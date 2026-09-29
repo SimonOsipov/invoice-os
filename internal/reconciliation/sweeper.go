@@ -64,11 +64,17 @@ func (s *Sweeper) Start(ctx context.Context) error {
 			case <-runCtx.Done():
 				return
 			case <-ticker.C:
-				_ = s.sweepFn(runCtx)
+				s.runSweep(runCtx)
 			}
 		}
 	}()
 	return nil
+}
+
+// runSweep runs one sweep; a panic is recovered so the loop keeps ticking.
+func (s *Sweeper) runSweep(ctx context.Context) {
+	defer func() { _ = recover() }()
+	_ = s.sweepFn(ctx)
 }
 
 // Stop halts the ticker loop: no further tick starts a new sweepFn call once Stop

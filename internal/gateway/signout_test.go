@@ -3,6 +3,7 @@ package gateway
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -241,9 +242,15 @@ func TestSignOut_GoTrueMapping(t *testing.T) {
 		{"refresh 403", answer(403, `{"code":403,"msg":"forbidden"}`), ok, false, 401, msgRefreshRefused, 0, ptr(false)},
 		{"refresh 404", answer(404, `{"code":404,"msg":"not found"}`), ok, false, 401, msgRefreshRefused, 0, ptr(false)},
 		{"refresh 429", answer(429, gtOverRequestRateLimit), ok, false, 429, msgTooMany, 0, ptr(false)},
-		{"logout 429", answer(200, granted), answer(429, gtOverRequestRateLimit), false, 429, msgTooMany, 1, nil},
+		{"logout 429", answer(200, granted), answer(429, gtOverRequestRateLimit), false, 429, msgTooMany, 1, ptr(false)},
 		{"logout 401", answer(200, granted), answer(401, gtError(401, "session_not_found")), false, 204, "", 1, ptr(true)},
 		{"logout 403", answer(200, granted), answer(403, gtError(403, "session_not_found")), false, 204, "", 1, ptr(true)},
+		{"logout 200", answer(200, granted), answer(200, `{}`), false, 204, "", 1, ptr(true)},
+		{"logout 202", answer(200, granted), answer(202, ""), false, 204, "", 1, ptr(true)},
+		{"logout 404", answer(200, granted), answer(404, `{"code":404,"msg":"not found"}`), false, 502, msgSignOutUnavailable, 1, ptr(false)},
+		{"logout 302", answer(200, granted), answer(302, ""), false, 502, msgSignOutUnavailable, 1, ptr(false)},
+		{"refresh 201", answer(201, granted), ok, false, 502, msgSignOutUnavailable, 0, ptr(false)},
+		{"refresh 302", answer(302, ""), ok, false, 502, msgSignOutUnavailable, 0, ptr(false)},
 		{"refresh 500", answer(500, gtInternal), ok, false, 502, msgSignOutUnavailable, 0, ptr(false)},
 		{"refresh 200 without access_token", answer(200, `{"refresh_token":"`+signOutR1+`"}`), ok, false, 502, msgSignOutUnavailable, 0, ptr(false)},
 		{"refresh 200 empty access_token", answer(200, `{"access_token":"","refresh_token":"`+signOutR1+`"}`), ok, false, 502, msgSignOutUnavailable, 0, ptr(false)},
@@ -296,10 +303,11 @@ func TestSignOut_BadBody400NoUpstreamCall(t *testing.T) {
 	fake := newSignOutFake(t, answer(http.StatusOK, signOutGranted(signOutAccess(t, subjectS1))), answer(http.StatusNoContent, ""))
 	h := SignOutHandler(fake.URL, testClient(), liveSessions(t), slog.New(slog.DiscardHandler))
 
-	// refreshBody adds 20 bytes around the token.
-	oneOver := refreshBody(strings.Repeat("r", maxExchangeBodyBytes-19))
-	if len(oneOver) != maxExchangeBodyBytes+1 {
-		t.Fatalf("one-over body is %d bytes, want %d", len(oneOver), maxExchangeBodyBytes+1)
+	// The contract's limit, not the constant: refreshBody adds 20 bytes around the token.
+	const oneKiB = 1024
+	oneOver := refreshBody(strings.Repeat("r", oneKiB-19))
+	if len(oneOver) != oneKiB+1 {
+		t.Fatalf("one-over body is %d bytes, want %d", len(oneOver), oneKiB+1)
 	}
 	for _, c := range []struct{ name, body, msg string }{
 		{"not json", `not json`, msgInvalidBody},
@@ -322,9 +330,9 @@ func TestSignOut_BadBody400NoUpstreamCall(t *testing.T) {
 	}
 
 	// Positive pair: a well-formed body, and one of exactly 1 KiB, on the same handler do reach GoTrue.
-	atLimit := refreshBody(strings.Repeat("r", maxExchangeBodyBytes-20))
-	if len(atLimit) != maxExchangeBodyBytes {
-		t.Fatalf("at-limit body is %d bytes, want %d", len(atLimit), maxExchangeBodyBytes)
+	atLimit := refreshBody(strings.Repeat("r", oneKiB-20))
+	if len(atLimit) != oneKiB {
+		t.Fatalf("at-limit body is %d bytes, want %d", len(atLimit), oneKiB)
 	}
 	for i, body := range []string{refreshBody(signOutR0), atLimit} {
 		before := len(fake.Calls())
@@ -522,5 +530,110 @@ func TestSignOut_JoinsUnderAnAuthURLPrefix(t *testing.T) {
 	}
 	if want := []string{"/prefix/token?grant_type=refresh_token", "/prefix/logout?scope=global"}; !slices.Equal(got, want) {
 		t.Errorf("GoTrue saw %v, want %v", got, want)
+	}
+}
+
+// headerProbe runs probe when the handler commits its status, before any client could read it.
+type headerProbe struct {
+	*httptest.ResponseRecorder
+	probe func()
+}
+
+func (p *headerProbe) WriteHeader(code int) {
+	p.probe()
+	p.ResponseRecorder.WriteHeader(code)
+}
+
+func TestSignOut_EvictsBeforeItAnswers(t *testing.T) {
+	fake := newSignOutFake(t, answer(http.StatusOK, signOutGranted(signOutAccess(t, subjectS1))), answer(http.StatusNoContent, ""))
+	rg := newSignOutRig(t, fake, nil, nil)
+	var probes []bool
+	w := &headerProbe{httptest.NewRecorder(), func() { probes = append(probes, rg.evicted()) }}
+	req := httptest.NewRequest(http.MethodPost, "/auth/sign-out", strings.NewReader(refreshBody(signOutR0)))
+	req.Header.Set("Content-Type", "application/json")
+
+	rg.handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204: %s", w.Code, w.Body.String())
+	}
+	if len(probes) != 1 {
+		t.Fatalf("status committed %d times, want once", len(probes))
+	}
+	if !probes[0] {
+		t.Error("S1 was still cached when the 204 was committed; a client could reuse it before the eviction")
+	}
+}
+
+// D21: a grant whose access token names no readable subject still logs out; the answer follows the logout.
+func TestSignOut_SubjectlessAccessTokenStillLogsOut(t *testing.T) {
+	enc := base64.RawURLEncoding.EncodeToString
+	noSub, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"session_id": "9c8b7a6d-5e4f-4321-8a9b-0c1d2e3f4a5b", "aud": "authenticated",
+	}).SignedString([]byte("gotrue-private"))
+	if err != nil {
+		t.Fatalf("sign access token: %v", err)
+	}
+	// sub decodes before exp fails: a partial parse must not evict the half-read subject.
+	halfRead := enc([]byte(`{"alg":"HS256","typ":"JWT"}`)) + "." + enc([]byte(`{"sub":"`+subjectS1+`","exp":"soon"}`)) + "." + enc([]byte("sig"))
+	const opaque = "opaque-access-7k3m9q"
+	cases := []struct {
+		name, access string
+		logout       http.HandlerFunc
+		wantStatus   int
+		wantMsg      string
+		wantWarns    int
+	}{
+		{"opaque token logout 204", opaque, answer(http.StatusNoContent, ""), 204, "", 1},
+		{"JWT without sub logout 204", noSub, answer(http.StatusNoContent, ""), 204, "", 1},
+		{"sub then undecodable exp logout 204", halfRead, answer(http.StatusNoContent, ""), 204, "", 1},
+		{"opaque token logout 401", opaque, answer(401, gtError(401, "bad_jwt")), 204, "", 1},
+		{"opaque token logout 500", opaque, answer(500, gtInternal), 502, msgSignOutUnavailable, 2},
+		{"opaque token logout 429", opaque, answer(429, gtOverRequestRateLimit), 429, msgTooMany, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fake := newSignOutFake(t, answer(http.StatusOK, signOutGranted(c.access)), c.logout)
+			log, buf := captureLog()
+			rg := newSignOutRig(t, fake, nil, log)
+
+			rec := doSignOut(rg.handler, refreshBody(signOutR0))
+
+			if c.wantMsg == "" {
+				if rec.Code != c.wantStatus || rec.Body.Len() != 0 {
+					t.Errorf("answer = %d %q, want %d with no body", rec.Code, rec.Body.String(), c.wantStatus)
+				}
+			} else {
+				requireRefusal(t, rec, c.wantStatus, c.wantMsg)
+			}
+			var bearers []string
+			for _, call := range fake.Calls() {
+				if strings.HasSuffix(call.Path, "/logout") {
+					bearers = append(bearers, call.Auth)
+				}
+			}
+			if want := []string{"Bearer " + c.access}; !slices.Equal(bearers, want) {
+				t.Errorf("/logout bearers = %q, want %q", bearers, want)
+			}
+			if rg.evicted() {
+				t.Error("S1 was evicted on a token that names no readable subject")
+			}
+			var warns []string
+			sc := bufio.NewScanner(strings.NewReader(buf.String()))
+			for sc.Scan() {
+				var line map[string]any
+				if json.Unmarshal(sc.Bytes(), &line) == nil && line["level"] == "WARN" {
+					warns = append(warns, sc.Text())
+				}
+			}
+			if len(warns) != c.wantWarns {
+				t.Errorf("WARN lines = %d, want %d:\n%s", len(warns), c.wantWarns, buf.String())
+			}
+			for _, secret := range []string{c.access, signOutR0, signOutR1, subjectS1} {
+				if strings.Contains(buf.String(), secret) {
+					t.Errorf("log carries %q:\n%s", secret, buf.String())
+				}
+			}
+		})
 	}
 }

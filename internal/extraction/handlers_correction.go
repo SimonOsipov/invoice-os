@@ -23,7 +23,7 @@ import (
 
 // ApplyFieldToInvoice writes one corrected field onto the invoice filed from documentID, on the
 // caller's transaction. A func value, not an internal/invoice import: deps_test.go fences this
-// package to internal/platform/*, in two scans.
+// package to internal/platform/..., in two scans.
 //
 // value is NIL to clear the column, which is what an undo of a field the extractor never read
 // asks for (TestRLS_UndoOnAFieldTheExtractorNeverReadClearsTheColumn). method travels with it

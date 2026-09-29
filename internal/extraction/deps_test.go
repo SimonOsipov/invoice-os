@@ -15,7 +15,8 @@ const (
 	modulePath    = "github.com/SimonOsipov/invoice-os"
 	extractionPkg = modulePath + "/internal/extraction"
 	documentPkg   = modulePath + "/internal/document"
-	platformPfx   = modulePath + "/internal/platform/"
+	platformPkg   = modulePath + "/internal/platform"
+	platformPfx   = platformPkg + "/"
 )
 
 // goListDeps shells go list in this package's directory. "." not a path: a test
@@ -39,8 +40,8 @@ type fenceT interface {
 	Errorf(format string, args ...any)
 }
 
-// assertFenced flags every in-module dependency outside this package and
-// internal/platform/*. It matches on the full module path: the stdlib ships
+// assertFenced flags every in-module dependency outside this package,
+// internal/platform and internal/platform/*. It matches on the full module path: the stdlib ships
 // packages literally named internal/abi, internal/platform and internal/goroot,
 // so a bare "internal/" prefix test fires on Go's own runtime internals.
 func assertFenced(t fenceT, scan string, lines []string) {
@@ -57,14 +58,14 @@ func assertFenced(t fenceT, scan string, lines []string) {
 		if dep != modulePath && !strings.HasPrefix(dep, modulePath+"/") {
 			continue
 		}
-		if strings.HasPrefix(dep, platformPfx) {
+		if dep == platformPkg || strings.HasPrefix(dep, platformPfx) {
 			continue
 		}
 		if dep == documentPkg {
 			t.Errorf("%s: internal/extraction depends on %s -- content arrives via the OpenDocument func, and this edge would drag the AWS SDK in with it", scan, dep)
 			continue
 		}
-		t.Errorf("%s: internal/extraction depends on %s -- only internal/platform/* is allowed, and internal/document is the edge this fence exists to stop", scan, dep)
+		t.Errorf("%s: internal/extraction depends on %s -- only internal/platform and internal/platform/* are allowed, and internal/document is the edge this fence exists to stop", scan, dep)
 	}
 }
 

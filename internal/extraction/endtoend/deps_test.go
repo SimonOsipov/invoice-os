@@ -18,7 +18,8 @@ const (
 	eeExtractionPkg = eeModulePath + "/internal/extraction"
 	eeInvoicePkg    = eeModulePath + "/internal/invoice"
 	eeDocumentPkg   = eeModulePath + "/internal/document"
-	eePlatformPfx   = eeModulePath + "/internal/platform/"
+	eePlatformPkg   = eeModulePath + "/internal/platform"
+	eePlatformPfx   = eePlatformPkg + "/"
 	eeSelfPkg       = eeExtractionPkg + "/endtoend"
 
 	// A truncated or empty `go list -deps` output must not read as a clean scan.
@@ -65,8 +66,8 @@ func eeDep(raw string) string {
 }
 
 // AC-2. Adding a sibling subdirectory package must not widen internal/extraction's own dep
-// set: only internal/platform/* is allowed, and internal/document is the edge the fence exists
-// to stop.
+// set: only internal/platform and internal/platform/* are allowed, and internal/document is the
+// edge the fence exists to stop.
 func TestEndToEndPackage_DoesNotBreakTheExtractionFence(t *testing.T) {
 	for _, scan := range []struct {
 		name string
@@ -103,14 +104,14 @@ func TestEndToEndPackage_DoesNotBreakTheExtractionFence(t *testing.T) {
 			if dep != eeModulePath && !strings.HasPrefix(dep, eeModulePath+"/") {
 				continue
 			}
-			if strings.HasPrefix(dep, eePlatformPfx) {
+			if dep == eePlatformPkg || strings.HasPrefix(dep, eePlatformPfx) {
 				continue
 			}
 			if dep == eeDocumentPkg {
 				t.Errorf("%s: internal/extraction depends on %s -- content arrives via the OpenDocument func, and this edge drags the AWS SDK in with it", scan.name, dep)
 				continue
 			}
-			t.Errorf("%s: internal/extraction depends on %s -- only internal/platform/* is allowed", scan.name, dep)
+			t.Errorf("%s: internal/extraction depends on %s -- only internal/platform and internal/platform/* are allowed", scan.name, dep)
 		}
 	}
 }

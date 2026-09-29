@@ -46,7 +46,7 @@ type JobsResponse struct {
 
 // RecordDocumentRead writes one document.read audit row on the transaction it is handed, so
 // the row shares the read's fate. A func value, not an internal/audit import: deps_test.go
-// fences this package off everything outside internal/platform/*, and the event name is
+// fences this package off everything outside internal/platform/..., and the event name is
 // spelled in cmd/submission (TestNewDocumentReadAuditor_SpellsTheEventInCmd).
 type RecordDocumentRead func(ctx context.Context, tx pgx.Tx, subject, documentID string) error
 

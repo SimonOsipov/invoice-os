@@ -6,7 +6,7 @@
 // reached nothing reports exactly like a clean repo.
 //
 // Stdlib only. deps_test.go scan B walks test imports too, and any in-module import outside
-// internal/platform/* fails it.
+// internal/platform/... fails it.
 package extraction_test
 
 import (

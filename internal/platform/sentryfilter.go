@@ -1,0 +1,343 @@
+package platform
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/textproto"
+	"reflect"
+	"regexp"
+	"strings"
+	"unicode"
+
+	"github.com/getsentry/sentry-go"
+	"github.com/getsentry/sentry-go/attribute"
+)
+
+// sentryHeaders is an allowlist: a header nobody listed never reaches Sentry.
+var sentryHeaders = map[string]struct{}{
+	"Accept":         {},
+	"Content-Length": {},
+	"Content-Type":   {},
+	"Host":           {},
+	"User-Agent":     {},
+	"X-Request-Id":   {},
+}
+
+// scrubEvent removes request data, queries, user identity and customer text
+// from an error event or transaction before it leaves for Sentry. It never
+// drops the event.
+func scrubEvent(event *sentry.Event, _ *sentry.EventHint) *sentry.Event {
+	event.Transaction = stripQuery(event.Transaction)
+	event.User = sentry.User{}
+	event.Message = ScrubText(event.Message)
+	for i := range event.Exception {
+		event.Exception[i].Value = ScrubText(event.Exception[i].Value)
+	}
+
+	if r := event.Request; r != nil {
+		r.URL = stripQuery(r.URL)
+		r.QueryString = ""
+		r.Data = ""
+		r.Cookies = ""
+		r.Env = nil
+		headers := make(map[string]string, len(r.Headers))
+		for k, v := range r.Headers {
+			ck := textproto.CanonicalMIMEHeaderKey(k)
+			if _, ok := sentryHeaders[ck]; ok {
+				headers[ck] = v
+			}
+		}
+		r.Headers = headers
+	}
+
+	if event.Tags != nil {
+		tags := make(map[string]string, len(event.Tags))
+		for k, v := range event.Tags {
+			// The id tags stay byte-identical so they keep matching Railway logs.
+			if k == "request_id" || k == "tenant_id" {
+				tags[k] = v
+				continue
+			}
+			sk := ScrubText(k)
+			// A lookalike key such as request_id#x never overwrites the real id tag.
+			if _, clash := event.Tags[sk]; clash && (sk == "request_id" || sk == "tenant_id") {
+				continue
+			}
+			tags[sk] = ScrubText(v)
+		}
+		event.Tags = tags
+	}
+
+	if event.Contexts != nil {
+		contexts := make(map[string]sentry.Context, len(event.Contexts))
+		for k, c := range event.Contexts {
+			c = scrubData(c)
+			if d, ok := c["data"].(map[string]interface{}); ok && k == "trace" {
+				c["data"] = scrubData(d)
+			}
+			contexts[ScrubText(k)] = c
+		}
+		event.Contexts = contexts
+	}
+
+	for i, s := range event.Spans {
+		event.Spans[i] = scrubSpan(s)
+	}
+
+	// Breadcrumbs are shared with the scope, so each is replaced, not edited.
+	for i, b := range event.Breadcrumbs {
+		if b == nil {
+			continue
+		}
+		c := *b
+		c.Message = ScrubText(c.Message)
+		c.Data = scrubData(c.Data)
+		event.Breadcrumbs[i] = &c
+	}
+	return event
+}
+
+// scrubLog removes queries and customer text from a log record before it
+// leaves for Sentry. It never drops the record.
+func scrubLog(log *sentry.Log) *sentry.Log {
+	log.Body = ScrubText(log.Body)
+	if log.Attributes == nil {
+		return log
+	}
+	attrs := make(map[string]attribute.Value, len(log.Attributes))
+	for k, v := range log.Attributes {
+		// Emitf writes each argument here raw and unquoted, so ScrubText cannot see it.
+		if strings.HasPrefix(k, "sentry.message.parameters.") || strings.HasPrefix(k, "user.") {
+			continue
+		}
+		sk := ScrubText(k)
+		if isQueryKey(k) || isQueryKey(sk) {
+			continue
+		}
+		switch v.Type() {
+		case attribute.STRING:
+			v = attribute.StringValue(ScrubText(v.AsString()))
+		case attribute.STRINGSLICE:
+			ss := v.AsStringSlice()
+			for i := range ss {
+				ss[i] = ScrubText(ss[i])
+			}
+			v = attribute.StringSliceValue(ss)
+		}
+		attrs[sk] = v
+	}
+	log.Attributes = attrs
+	return log
+}
+
+// scrubSpan returns a scrubbed copy of s; no public field of s changes. A caller may
+// still write to a finished child span, so Tags and Data are read under the span's own lock.
+func scrubSpan(s *sentry.Span) *sentry.Span {
+	(&sentry.Event{Spans: []*sentry.Span{s}}).MakeSerializationSafe()
+	var snap struct {
+		Tags map[string]string      `json:"tags"`
+		Data map[string]interface{} `json:"data"`
+	}
+	if raw, err := json.Marshal(s); err == nil {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.UseNumber()
+		// The decoder reads the whole value before it fills snap, so a failure leaves it empty.
+		_ = dec.Decode(&snap)
+	}
+	var tags map[string]string
+	if snap.Tags != nil {
+		tags = make(map[string]string, len(snap.Tags))
+		for k, v := range snap.Tags {
+			tags[ScrubText(k)] = ScrubText(v)
+		}
+	}
+	return &sentry.Span{
+		TraceID:      s.TraceID,
+		SpanID:       s.SpanID,
+		ParentSpanID: s.ParentSpanID,
+		Name:         ScrubText(s.Name),
+		Op:           s.Op,
+		Description:  ScrubText(s.Description),
+		Status:       s.Status,
+		Tags:         tags,
+		StartTime:    s.StartTime,
+		EndTime:      s.EndTime,
+		Data:         scrubData(snap.Data),
+		Sampled:      s.Sampled,
+		Source:       s.Source,
+		Origin:       s.Origin,
+	}
+}
+
+// scrubData returns a copy of d without top-level query or fragment keys,
+// with keys and strings at any depth passed through ScrubText.
+// ceiling: two keys that redact alike merge; revisit if a lost key hides a fault
+func scrubData(d map[string]interface{}) map[string]interface{} {
+	if d == nil {
+		return nil
+	}
+	out := make(map[string]interface{}, len(d))
+	for k, v := range d {
+		sk := ScrubText(k)
+		if isQueryKey(k) || isQueryKey(sk) {
+			continue
+		}
+		out[sk] = scrubValue(v)
+	}
+	return out
+}
+
+func isQueryKey(k string) bool {
+	return k == "http.query" || k == "http.fragment"
+}
+
+// scrubValue returns a copy of v with every nested string passed through ScrubText.
+// Any other type goes through a JSON round-trip, so no container type skips the scrub.
+func scrubValue(v interface{}) interface{} {
+	switch x := v.(type) {
+	case nil, bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, json.Number:
+		return v
+	case string:
+		return ScrubText(x)
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(x))
+		for k, e := range x {
+			out[ScrubText(k)] = scrubValue(e)
+		}
+		return out
+	case map[string]string:
+		out := make(map[string]string, len(x))
+		for k, e := range x {
+			out[ScrubText(k)] = ScrubText(e)
+		}
+		return out
+	case []interface{}:
+		out := make([]interface{}, len(x))
+		for i, e := range x {
+			out[i] = scrubValue(e)
+		}
+		return out
+	case []string:
+		out := make([]string, len(x))
+		for i, e := range x {
+			out[i] = ScrubText(e)
+		}
+		return out
+	}
+	// JSON would base64 a byte slice or strip a RawMessage's quotes; either hides a quoted value from ScrubText.
+	if rv := reflect.ValueOf(v); rv.Kind() == reflect.Slice && rv.Type().Elem().Kind() == reflect.Uint8 {
+		return ScrubText(string(rv.Bytes()))
+	}
+	// ceiling: a nested byte slice leaves as base64 and nested raw JSON leaves unquoted, both unscrubbed; revisit if a caller puts either into Sentry data
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return "[redacted]"
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var generic interface{}
+	if err := dec.Decode(&generic); err != nil {
+		return "[redacted]"
+	}
+	return scrubValue(generic)
+}
+
+// stripQuery removes each "?" or "#" and the run of non-whitespace after it.
+func stripQuery(s string) string {
+	if !strings.ContainsAny(s, "?#") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	skipping := false
+	for _, r := range s {
+		switch {
+		case r == '?' || r == '#':
+			skipping = true
+		case unicode.IsSpace(r):
+			skipping = false
+			b.WriteRune(r)
+		case !skipping:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// ScrubText removes customer text from s before it leaves for Sentry.
+// Convention: an error message %q-quotes every customer-derived value.
+// ceiling: covers quoted text and upstream reasons only; re-triage every Errorf/errors.New site when a Sentry event shows customer text
+func ScrubText(s string) string {
+	return stripQuery(redactUpstreamReason(redactQuoted(s)))
+}
+
+// redactQuoted replaces each Go double-quoted segment with "[redacted]".
+// Rule: '"' and '\"' are rune literals, not delimiters; an odd delimiter count redacts from the first delimiter to the end.
+// ceiling: stray quotes in non-customer text can misalign the pairing; revisit when a Sentry event shows customer text beside a stray `"`
+func redactQuoted(s string) string {
+	if !strings.Contains(s, `"`) {
+		return s
+	}
+	first, open := -1, false
+	for i := 0; i < len(s); i++ {
+		switch {
+		case !open && runeLiteralLen(s[i:]) > 0:
+			i += runeLiteralLen(s[i:]) - 1
+		case open && s[i] == '\\':
+			i++
+		case s[i] == '"':
+			if first < 0 {
+				first = i
+			}
+			open = !open
+		}
+	}
+	if first < 0 {
+		return s
+	}
+	if open {
+		return s[:first] + `"[redacted]`
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if n := runeLiteralLen(s[i:]); n > 0 {
+			b.WriteString(s[i : i+n])
+			i += n - 1
+			continue
+		}
+		if s[i] != '"' {
+			b.WriteByte(s[i])
+			continue
+		}
+		b.WriteString(`"[redacted]"`)
+		for i++; s[i] != '"'; i++ {
+			if s[i] == '\\' {
+				i++
+			}
+		}
+	}
+	return b.String()
+}
+
+// runeLiteralLen returns the length of a '"' or '\"' prefix of s, else 0.
+func runeLiteralLen(s string) int {
+	switch {
+	case strings.HasPrefix(s, `'"'`):
+		return 3
+	case strings.HasPrefix(s, `'\"'`):
+		return 4
+	}
+	return 0
+}
+
+var upstreamStatus = regexp.MustCompile(`returned [0-9]{3}: `)
+
+// redactUpstreamReason replaces the text after "returned <3 digits>: " with [redacted].
+func redactUpstreamReason(s string) string {
+	loc := upstreamStatus.FindStringIndex(s)
+	if loc == nil {
+		return s
+	}
+	return s[:loc[1]] + "[redacted]"
+}

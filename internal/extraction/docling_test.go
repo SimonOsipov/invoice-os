@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
+	"github.com/SimonOsipov/invoice-os/internal/platform"
 )
 
 // --- wire body builders -------------------------------------------------------
@@ -388,6 +389,71 @@ func TestDoclingReader_422NamesStatusAndReasonDistinctFrom500(t *testing.T) {
 	for _, unwanted := range []string{"500", "boom"} {
 		if strings.Contains(err.Error(), unwanted) {
 			t.Errorf("422 error %q unexpectedly mentions %q, the 500 case's text", err.Error(), unwanted)
+		}
+	}
+}
+
+// Markers match internal/platform's filter tests.
+const (
+	dcMarkerTIN = "87654321-0009"
+	dcMarkerAmt = "9999999.99"
+	dcMarkerIRN = "INV-SECRET-2026"
+)
+
+// dcStatusErr returns Read's error for a sidecar that answers status with body.
+func dcStatusErr(t *testing.T, status int, body string) string {
+	t.Helper()
+	srv := dcServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
+		w.Write([]byte(body))
+	})
+	_, err := dcNewReader(t, srv.URL).Read(t.Context(), dcDoc("x"), func(extraction.Page) error { return nil })
+	if err == nil {
+		t.Fatalf("Read returned no error for a %d response", status)
+	}
+	return err.Error()
+}
+
+// The reason stays in err.Error() for last_error and the UI; only the Sentry copy loses it.
+func TestDoclingReader_StatusErrorReasonIsScrubbedForSentry(t *testing.T) {
+	msg := dcStatusErr(t, http.StatusInternalServerError,
+		`{"error":"conversion failed on `+dcMarkerTIN+` total `+dcMarkerAmt+`"}`)
+
+	if !strings.Contains(msg, "returned 500: conversion failed") {
+		t.Errorf("error %q lost its status and reason", msg)
+	}
+	scrubbed := platform.ScrubText(msg)
+	if !strings.Contains(scrubbed, "returned 500: ") {
+		t.Errorf("ScrubText(%q) = %q, want it to keep returned 500: ", msg, scrubbed)
+	}
+	for _, m := range []string{dcMarkerTIN, dcMarkerAmt} {
+		if !strings.Contains(msg, m) {
+			t.Errorf("error %q does not carry marker %q; the fixture proves nothing", msg, m)
+		}
+		if strings.Contains(scrubbed, m) {
+			t.Errorf("ScrubText(%q) = %q still carries marker %q", msg, scrubbed, m)
+		}
+	}
+}
+
+// The raw body holds a newline and a quoted word; both markers sit outside the quotes.
+func TestDoclingReader_StatusErrorRawBodyIsScrubbedForSentry(t *testing.T) {
+	msg := dcStatusErr(t, http.StatusUnprocessableEntity,
+		dcMarkerIRN+" unreadable\n\"page 2\" "+dcMarkerTIN)
+
+	if !strings.Contains(msg, "returned 422: "+dcMarkerIRN) {
+		t.Errorf("error %q lost its status and reason", msg)
+	}
+	scrubbed := platform.ScrubText(msg)
+	if !strings.Contains(scrubbed, "returned 422: ") {
+		t.Errorf("ScrubText(%q) = %q, want it to keep returned 422: ", msg, scrubbed)
+	}
+	for _, m := range []string{dcMarkerIRN, dcMarkerTIN} {
+		if !strings.Contains(msg, m) {
+			t.Errorf("error %q does not carry marker %q; the fixture proves nothing", msg, m)
+		}
+		if strings.Contains(scrubbed, m) {
+			t.Errorf("ScrubText(%q) = %q still carries marker %q", msg, scrubbed, m)
 		}
 	}
 }

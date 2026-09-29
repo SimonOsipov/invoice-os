@@ -7,7 +7,7 @@
 // passes vacuously; the guard fires before any of them.
 //
 // Stdlib only. deps_test.go scan B walks test imports too, and any in-module import outside
-// internal/platform/* fails it.
+// internal/platform/... fails it.
 package extraction_test
 
 import (

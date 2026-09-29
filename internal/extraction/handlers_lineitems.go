@@ -63,7 +63,7 @@ type LineItemsResponse struct {
 
 // ApplyLineItemsToInvoice replaces the whole line set of the invoice filed from documentID, on
 // the caller's transaction. A func value, not an internal/invoice import: deps_test.go fences
-// this package to internal/platform/*, in two scans.
+// this package to internal/platform/..., in two scans.
 type ApplyLineItemsToInvoice func(ctx context.Context, tx pgx.Tx, documentID string, lines []LineItemInput) (invoiceID string, err error)
 
 // The refusal wire this route adds.

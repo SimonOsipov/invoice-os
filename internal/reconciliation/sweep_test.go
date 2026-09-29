@@ -297,9 +297,8 @@ func TestRLS_SweepReArmFailureRollsBack(t *testing.T) {
 		}
 		return nil
 	}
-	if err := rRB.SweepOnce(ctx); err != nil {
-		t.Logf("SweepOnce (with afterHeal sentinel) returned: %v (a per-tenant failure need not fail "+
-			"the whole sweep)", err)
+	if err := rRB.SweepOnce(ctx); !errors.Is(err, errSentinel) {
+		t.Errorf("SweepOnce (with afterHeal sentinel) = %v, want an error wrapping the sentinel", err)
 	}
 
 	if n := mustCount(t, h.super,
@@ -427,5 +426,20 @@ func TestRLS_SweepOnceReturnsNilWhenEveryTenantSucceeds(t *testing.T) {
 		`SELECT count(*) FROM river_job WHERE kind = 'submission_poll' AND args @> jsonb_build_object('submission_job_id', $1::text)`,
 		jobID); n != 1 {
 		t.Errorf("submission_poll river_job rows = %d, want 1 (the sweep must have healed the tenant)", n)
+	}
+}
+
+// The enumeration failure is returned as-is, not swallowed into a per-tenant join.
+func TestRLS_SweepOnceReturnsEnumerationFailure(t *testing.T) {
+	h := requireHarness(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := rcReconciler(h).SweepOnce(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("SweepOnce on a cancelled context = %v, want an error wrapping context.Canceled", err)
+	}
+	if !strings.Contains(err.Error(), "enumerate tenants") {
+		t.Errorf("error %q does not name the failed enumeration step", err)
 	}
 }

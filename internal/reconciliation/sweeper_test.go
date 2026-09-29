@@ -24,6 +24,7 @@ package reconciliation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -384,4 +385,141 @@ func TestSweeper_SuccessOpensNothing(t *testing.T) {
 		t.Fatal("tick 4 never started within 2s")
 	}
 	rec.One(t, want)
+}
+
+// A panic and an error belong to one run of failures; a success ends the run.
+func TestSweeper_PanicAndErrorShareOneRunOfFailures(t *testing.T) {
+	boom := func() error { panic("sweep boom") }
+	cases := []struct {
+		name   string
+		script []func() error
+		want   int
+	}{
+		{"panic then error", []func() error{boom, failWith("later")}, 1},
+		{"error then panic", []func() error{failWith("first"), boom}, 1},
+		{"panic then panic", []func() error{boom, boom}, 1},
+		{"panic, success, error", []func() error{boom, succeed, failWith("later")}, 2},
+		{"error, success, panic", []func() error{failWith("first"), succeed, boom}, 2},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, rec, want := sentrytest.Boot(t, "reconciliation")
+			s, parked := scriptedSweeper(c.script...)
+			startAndWaitParked(t, s, parked)
+
+			assertEventCount(t, rec, want, c.want)
+			stopSweeper(t, s)
+		})
+	}
+}
+
+// A crash is a crash even when shutdown has begun; only errors are suppressed on cancel.
+func TestSweeper_PanicDuringShutdownIsStillReported(t *testing.T) {
+	_, rec, want := sentrytest.Boot(t, "reconciliation")
+	entered := make(chan struct{})
+	s := &Sweeper{
+		Interval: 5 * time.Millisecond,
+		sweepFn: func(ctx context.Context) error {
+			close(entered)
+			<-ctx.Done()
+			panic("boom while stopping")
+		},
+	}
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the sweep never started within 2s")
+	}
+	stopSweeper(t, s)
+
+	e := rec.One(t, want)
+	if e.Level != sentry.LevelFatal {
+		t.Errorf("event level = %q, want %q", e.Level, sentry.LevelFatal)
+	}
+}
+
+// Only shutdown suppresses an error: a context error while the run is live still counts.
+func TestSweeper_ContextErrorWhileRunningCounts(t *testing.T) {
+	_, rec, want := sentrytest.Boot(t, "reconciliation")
+	s, parked := scriptedSweeper(
+		func() error { return fmt.Errorf("sweep: tenant query: %w", context.DeadlineExceeded) },
+	)
+	startAndWaitParked(t, s, parked)
+
+	e := rec.One(t, want)
+	if got := eventText(e); !strings.Contains(got, "deadline exceeded") {
+		t.Errorf("event text = %q, want it to carry the context error", got)
+	}
+}
+
+// Truth table of one sweep: the returned flag and the events sent, for every input.
+func TestSweeper_RunSweepTransitionTable(t *testing.T) {
+	boom := func(context.Context) error { panic("sweep boom") }
+	fail := func(context.Context) error { return errors.New("db down") }
+	ok := func(context.Context) error { return nil }
+	cases := []struct {
+		name       string
+		fn         func(context.Context) error
+		cancelled  bool
+		failing    bool
+		wantNext   bool
+		wantEvents int
+	}{
+		{"success re-arms", ok, false, true, false, 0},
+		{"success stays armed", ok, false, false, false, 0},
+		{"first error reports", fail, false, false, true, 1},
+		{"repeated error is silent", fail, false, true, true, 0},
+		{"first panic reports", boom, false, false, true, 1},
+		{"repeated panic is silent", boom, false, true, true, 0},
+		{"error on shutdown leaves an armed flag armed", fail, true, false, false, 0},
+		{"error on shutdown leaves a failing flag failing", fail, true, true, true, 0},
+		{"success on shutdown re-arms", ok, true, true, false, 0},
+		{"first panic on shutdown reports", boom, true, false, true, 1},
+		{"repeated panic on shutdown is silent", boom, true, true, true, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, rec, want := sentrytest.Boot(t, "reconciliation")
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if c.cancelled {
+				cancel()
+			}
+			s := &Sweeper{sweepFn: c.fn}
+
+			if got := s.runSweep(ctx, c.failing); got != c.wantNext {
+				t.Errorf("runSweep returned %v, want %v", got, c.wantNext)
+			}
+			assertEventCount(t, rec, want, c.wantEvents)
+		})
+	}
+}
+
+// The joined SweepOnce error is the event text: tenant ids stay, quoted values and upstream reasons go.
+func TestSweeper_EventNamesTenantsWithoutCustomerText(t *testing.T) {
+	_, rec, want := sentrytest.Boot(t, "reconciliation")
+	const tenantA, tenantB = "0b6a7d0e-1111-4c1e-9a5a-3f1e2d4c5b6a", "7c1f2e3d-2222-4d2f-8b6b-4a2f3e5d6c7b"
+	joined := errors.Join(
+		fmt.Errorf("reconciliation: tenant %s: %w", tenantA,
+			fmt.Errorf("audit: record event %q: invoice number %q rejected", "reconciliation.auto_fixed", "INV-2026-SECRET")),
+		fmt.Errorf("reconciliation: tenant %s: %w", tenantB,
+			errors.New("submit returned 422: buyer TIN 12345678-0001 unknown")),
+	)
+	s, parked := scriptedSweeper(func() error { return joined })
+	startAndWaitParked(t, s, parked)
+
+	got := eventText(rec.One(t, want))
+	for _, id := range []string{tenantA, tenantB} {
+		if !strings.Contains(got, id) {
+			t.Errorf("event text %q does not name tenant %s", got, id)
+		}
+	}
+	for _, leak := range []string{"INV-2026-SECRET", "12345678-0001"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("event text %q leaks %q", got, leak)
+		}
+	}
 }

@@ -2,11 +2,13 @@ package auth_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -300,6 +302,7 @@ func TestIdP_SessionCheckCost(t *testing.T) {
 		t.Errorf("live verdicts %d, want %d", n, misses+hits)
 	}
 
+	summary := "### Session check cost\n\n| path | n | p50 | p95 | max |\n|---|---|---|---|---|\n"
 	for _, s := range []struct {
 		label string
 		d     []time.Duration
@@ -307,5 +310,19 @@ func TestIdP_SessionCheckCost(t *testing.T) {
 		slices.Sort(s.d)
 		n := len(s.d)
 		t.Logf("session check %s (n=%d): p50=%v p95=%v max=%v", s.label, n, s.d[n/2], s.d[n*95/100], s.d[n-1])
+		summary += fmt.Sprintf("| %s | %d | %v | %v | %v |\n", s.label, n, s.d[n/2], s.d[n*95/100], s.d[n-1])
+	}
+	// The CI gate prints test output only on failure; the run summary is where the figures show.
+	if path := os.Getenv("GITHUB_STEP_SUMMARY"); path != "" {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
+		if err != nil {
+			t.Fatalf("open step summary: %v", err)
+		}
+		if _, err := f.WriteString(summary); err != nil {
+			t.Fatalf("write step summary: %v", err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatalf("close step summary: %v", err)
+		}
 	}
 }

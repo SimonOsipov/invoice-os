@@ -12,7 +12,7 @@ Each PR has its own environment, so several `/ralph` runs MAY run concurrently.
 
 ## Agents and models
 
-Every agent runs on Opus. The model is set in each agent's own definition; do not pass `model:` on a spawn.
+The architect and the story writer run on Opus. The executor and QA run on Sonnet: QA's Mode A, Mode B and the plan critique. The model is set in each agent's own definition; do not pass `model:` on a spawn.
 
 | Stage | Subagent |
 |-------|----------|

@@ -63,17 +63,19 @@ func (a *App) Ready(name string, check ReadyCheck) {
 	a.readiness.add(name, check)
 }
 
-// handler wraps the mux with the standard middleware chain (outermost first):
+// Handler wraps the mux with the standard middleware chain (outermost first):
 // request-id, tenant-id and identity run before recovery so a recovered panic is
 // logged and reported with the request and tenant ids, and so tenant-scoped handlers
-// see the verified caller the gateway injected.
-func (a *App) handler() http.Handler {
+// see the verified caller the gateway injected. serverError is innermost so it
+// reads the mux's matched pattern.
+func (a *App) Handler() http.Handler {
 	return chain(a.Mux,
 		requestIDMiddleware,
 		tenantIDMiddleware,
 		identityMiddleware,
 		recoveryMiddleware(a.Logger),
 		requestLogMiddleware(a.Logger),
+		serverErrorMiddleware,
 	)
 }
 
@@ -103,7 +105,7 @@ func (a *App) Run(ctx context.Context) error {
 
 	srv := &http.Server{
 		Addr:              ":" + strconv.Itoa(a.Config.Port),
-		Handler:           a.handler(),
+		Handler:           a.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

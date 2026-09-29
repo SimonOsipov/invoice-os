@@ -1,10 +1,12 @@
 package platform
 
 import (
+	"bytes"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -84,6 +86,30 @@ func TestRecoveryReturns500(t *testing.T) {
 	}
 	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
 		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+}
+
+func TestRecoveryMiddleware_AbortHandlerLogsNothing(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	panicWith := func(v any) (got any) {
+		h := recoveryMiddleware(logger)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic(v) }))
+		defer func() { got = recover() }()
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
+		return nil
+	}
+	const record = `"msg":"panic recovered"`
+
+	if got := panicWith(http.ErrAbortHandler); got != http.ErrAbortHandler {
+		t.Errorf("recovered %v, want http.ErrAbortHandler re-panicked", got)
+	}
+	if n := strings.Count(buf.String(), record); n != 0 {
+		t.Errorf("abort logged %d panic recovered records, want 0", n)
+	}
+
+	panicWith("boom")
+	if n := strings.Count(buf.String(), record); n != 1 {
+		t.Errorf("boom logged %d panic recovered records, want 1", n)
 	}
 }
 

@@ -230,7 +230,7 @@ const STILL_WORKING = new ApiError('network', 'An import or filing is still in p
 // (Platform.dc.html ~L980-1263): `this.state` becomes typed `useState` hooks below,
 // and every handler in the "actions" section is ported 1:1 as a plain function.
 // Rendered only once signed in (see App): the persona picks the initial workspace mode.
-function Workspace({ session, onSignOut, initialView, becomePersona, returnToSeat, seatSubject, freshToken }: {
+function Workspace({ session, onSignOut, initialView, becomePersona, returnToSeat, seatSubject, freshToken, onUnauthorized }: {
   session: Session
   onSignOut: () => void
   initialView?: View
@@ -238,6 +238,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   returnToSeat?: (view: View, seat: Member) => Promise<void>
   seatSubject?: string
   freshToken?: () => string | null | Promise<string | null>
+  onUnauthorized: () => void
 }) {
   // Workspace type is a property of the authenticated identity, not a user-flippable
   // view: the firm persona gets the firm workspace, the in-house persona the in-house
@@ -251,14 +252,14 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   const onSuspended = useCallback(() => setSuspended(true), [])
 
   const authedFetch = useMemo(
-    () => makeAuthedFetch(session, onSignOut, onSuspended, freshToken),
-    [session, onSignOut, onSuspended, freshToken],
+    () => makeAuthedFetch(session, onUnauthorized, onSuspended, freshToken),
+    [session, onUnauthorized, onSuspended, freshToken],
   )
   // Same arguments, one construction site — the multipart XHR transport cannot drift
   // from the fetch path on auth, the 401 sign-out or the 403 suspension (importApi.ts).
   const importAuth = useMemo(
-    () => makeImportAuth(session, onSignOut, onSuspended, freshToken),
-    [session, onSignOut, onSuspended, freshToken],
+    () => makeImportAuth(session, onUnauthorized, onSuspended, freshToken),
+    [session, onUnauthorized, onSuspended, freshToken],
   )
 
   // [entity-picker] step 1 of 3: ONE fetch of the tenant's live portfolio entities,
@@ -2143,6 +2144,7 @@ export default function App() {
         returnToSeat={DEMO_MODE ? returnToSeat : undefined}
         seatSubject={DEMO_MODE ? seat?.persona.subject : undefined}
         freshToken={freshToken}
+        onUnauthorized={signOut}
       />
       {/* Sibling of the keyed Workspace above, not inside it -- a successful switch
           remounts Workspace, which would destroy a toast mounted underneath it. */}

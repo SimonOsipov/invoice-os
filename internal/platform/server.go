@@ -12,6 +12,9 @@ import (
 	"time"
 )
 
+// errShutdown marks a Run error from a graceful shutdown that overran its window.
+var errShutdown = errors.New("platform: graceful shutdown")
+
 // App is a service built on the platform kit: configuration, a logger, and a
 // mux for routes, with the standard middleware chain, health endpoints, and
 // Sentry wiring applied for free. A consumer registers routes on Mux and calls
@@ -139,7 +142,7 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	flushSentry(2 * time.Second)
 	if shutdownErr != nil {
-		return fmt.Errorf("platform: graceful shutdown: %w", shutdownErr)
+		return fmt.Errorf("%w: %w", errShutdown, shutdownErr)
 	}
 	a.Logger.Info("shutdown complete")
 	return nil

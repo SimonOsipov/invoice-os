@@ -1181,25 +1181,42 @@ test('deployed app: signing out on one device ends the session on every device',
     const recordB = await storedRenewal(b.page)
 
     await test.step('A signs out: the server revokes before A leaves', async () => {
+      // The front door's second navigation aborts the first (D10), and Playwright times only answered requests,
+      // so both sides come from CDP on Chromium's monotonic clock.
+      const cdp = await a.context.newCDPSession(a.page)
+      await cdp.send('Network.enable')
+      const signOutPosts = new Set<string>()
+      let answeredAt: number | undefined
+      const leaving: { url: string; at: number }[] = []
+      cdp.on('Network.requestWillBeSent', (e) => {
+        if (e.request.url === SIGN_OUT_URL && e.request.method === 'POST') signOutPosts.add(e.requestId)
+        if (e.type === 'Document' && e.request.url.startsWith(LANDING_URL)) leaving.push({ url: e.request.url, at: e.timestamp })
+      })
+      cdp.on('Network.responseReceived', (e) => {
+        const t = e.response.timing
+        if (signOutPosts.has(e.requestId)) answeredAt = t && t.receiveHeadersEnd > 0 ? t.requestTime + t.receiveHeadersEnd / 1000 : 0
+      })
       const signedOut = a.page.waitForResponse((r) => r.url() === SIGN_OUT_URL && r.request().method() === 'POST', { timeout: 20_000 })
-      const leaving = a.page.waitForRequest((r) => r.isNavigationRequest() && r.url().startsWith(LANDING_URL), { timeout: 20_000 })
       await a.page.getByRole('button', { name: 'Sign out' }).click()
-      const [answer, leave] = await Promise.all([signedOut, leaving])
-      expect(answer.status(), 'the sign-out answer').toBe(204)
-      await a.page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-      // Browser timestamps, not event order: CDP does not order the renderer's response before the browser's navigation.
-      const answered = answer.request().timing()
-      expect(answered.responseStart, 'the sign-out answer carries no timing').toBeGreaterThan(0)
-      expect(await leave.response(), 'the landing navigation got no response').not.toBeNull()
-      expect(answered.startTime + answered.responseStart, 'the sign-out answer arrived after A began leaving').toBeLessThan(leave.timing().startTime)
+      expect((await signedOut).status(), 'the sign-out answer').toBe(204)
+      await a.page.waitForURL((u) => u.href.startsWith(LANDING_URL) && u.searchParams.has('state'), { timeout: 20_000 })
+      await expect.poll(() => leaving.length, { message: 'A did not leave in two landing navigations', timeout: 20_000 }).toBeGreaterThanOrEqual(2)
+      expect(
+        leaving.map((l) => l.url.slice(LANDING_URL.length).replace(/^\/$/, '')),
+        'A left by other than bare landing, then the front door (D10)',
+      ).toEqual(['', expect.stringMatching(/^\/\?state=[A-Za-z0-9_-]{43}$/)])
+      await expect.poll(() => answeredAt, { message: 'the sign-out answer carries no timing', timeout: 20_000 }).toBeGreaterThan(0)
+      expect(answeredAt!, 'the sign-out answer arrived after A began leaving').toBeLessThan(leaving[0].at)
       expect(await storedSession(a.context), 'A kept a stored session').toBeNull()
+      await cdp.detach()
     })
 
     await test.step("B's next request is refused and B returns to landing", async () => {
       const refused = b.page.waitForResponse(isApiResponse)
       await b.page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: 'Invoices' }).click()
       expect((await refused).status(), "B's first /api/ answer after the sign-out").toBe(401)
-      await b.page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
+      // Settle on the front door's navigation, not the bare landing one it aborts (D10).
+      await b.page.waitForURL((u) => u.href.startsWith(LANDING_URL) && u.searchParams.has('state'), { timeout: 20_000 })
       expect(await storedSession(b.context), 'B kept a stored session').toBeNull()
 
       const renewed = await rawFetch('/auth/refresh', { method: 'POST', body: { refresh_token: recordB.refresh_token } })
@@ -1251,7 +1268,7 @@ test('deployed app: signing out on one device ends the session on every device',
       // Commit only: the 401 navigates to landing, which may beat the load event.
       await c.page.goto(APP_URL, { waitUntil: 'commit' })
       expect((await refused).status(), "C's first /api/ answer").toBe(401)
-      await c.page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
+      await c.page.waitForURL((u) => u.href.startsWith(LANDING_URL) && u.searchParams.has('state'), { timeout: 20_000 })
       await c.page.unroute(`${GATEWAY_URL}/api/**`)
       expect(await firstLook, 'the shell and the Authorization header at the first /api/ request').toEqual([1, `Bearer ${recordA.token}`])
       expect(await storedSession(c.context), 'C kept a stored session').toBeNull()

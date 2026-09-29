@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"os"
 	"testing"
 	"time"
 )
@@ -87,27 +88,41 @@ const (
 
 // Production runs ENVIRONMENT=development; only the Sentry label follows Railway.
 func TestLoadConfig_SentryEnvironmentFromRailway(t *testing.T) {
-	t.Setenv("ENVIRONMENT", "development")
-	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
-	cfg, err := LoadConfig("svc")
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	if cfg.SentryEnvironment != "production" {
-		t.Errorf("SentryEnvironment = %q, want production", cfg.SentryEnvironment)
-	}
-	if cfg.Environment != "development" {
-		t.Errorf("Environment = %q, want development (gates stay on ENVIRONMENT)", cfg.Environment)
+	for _, c := range []struct{ name, railway, environment string }{
+		{"production_label", "production", "development"},
+		{"railway_wins_over_environment_production", "invoice-os-pr-283", "production"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("ENVIRONMENT", c.environment)
+			t.Setenv("RAILWAY_ENVIRONMENT_NAME", c.railway)
+			cfg, err := LoadConfig("svc")
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+			if cfg.SentryEnvironment != c.railway {
+				t.Errorf("SentryEnvironment = %q, want %q", cfg.SentryEnvironment, c.railway)
+			}
+			if cfg.Environment != c.environment {
+				t.Errorf("Environment = %q, want %q (gates stay on ENVIRONMENT)", cfg.Environment, c.environment)
+			}
+		})
 	}
 }
 
 func TestLoadConfig_SentryEnvironmentFallsBack(t *testing.T) {
-	for _, c := range []struct{ name, environment, want string }{
-		{"environment_set", "staging", "staging"},
-		{"both_empty", "", "development"},
+	for _, c := range []struct {
+		name, environment, want string
+		unset                   bool
+	}{
+		{"environment_set", "staging", "staging", false},
+		{"both_empty", "", "development", false},
+		{"railway_unset", "staging", "staging", true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Setenv("RAILWAY_ENVIRONMENT_NAME", "")
+			if c.unset {
+				os.Unsetenv("RAILWAY_ENVIRONMENT_NAME") // t.Setenv above restores it
+			}
 			t.Setenv("ENVIRONMENT", c.environment)
 			cfg, err := LoadConfig("svc")
 			if err != nil {

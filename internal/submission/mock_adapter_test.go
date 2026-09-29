@@ -3493,7 +3493,7 @@ func TestSelect_MockUnreachableWithoutTheConfiguredName(t *testing.T) {
 //     what CI would set;
 //   - "-1s" additionally asserts the message NAMES the env var and the offending value, so an
 //     always-error stub with a generic message fails. It is also the only branch with no
-//     precedent in the repo: internal/platform/config.go:71-81's envDuration errors ONLY on a
+//     precedent in the repo: internal/platform/config.go's envDuration errors ONLY on a
 //     ParseDuration failure, and time.ParseDuration("-1s") returns (-1s, nil).
 //
 // Every error row also asserts the returned config is the ZERO MockConfig, never the default:

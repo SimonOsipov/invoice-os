@@ -307,3 +307,170 @@ func TestReportAPICalls_NoLogSaysSo(t *testing.T) {
 		})
 	}
 }
+
+// QA adversarial coverage.
+
+func TestQuery_RefusesBeforeAnyCall(t *testing.T) {
+	projectOnly := "export RAILWAY_PROJECT_TOKEN=" + queryProjectToken + "\n"
+	for _, c := range []struct {
+		name, exports, script string
+		code                  int
+		names                 string
+	}{
+		{"no RAILWAY_PROJECT_ID, API token", forkExports(true, false, false), `query "$2"`, 1, "RAILWAY_PROJECT_ID"},
+		{"no RAILWAY_PROJECT_ID, project token", projectOnly, `query "$2"`, 1, "RAILWAY_PROJECT_ID"},
+		{"empty context", forkExports(true, true, false), `query ""`, 2, "query <context>"},
+		{"no context argument", forkExports(true, true, false), `query`, 2, "query <context>"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newQueryShim(t, watchPathsResp)
+			stdout, stderr, code := runBashScript(t, s.prelude+c.exports+"printf '%s' \"$1\" | bash '"+railwayEnvScript(t)+"' "+c.script+"\n", watchPathsBody, queryCtx)
+
+			if n := len(s.calls(t)); n != 0 {
+				t.Errorf("calls = %d, want 0", n)
+			}
+			s.requireLogs(t)
+			if code != c.code {
+				t.Errorf("exit %d, want %d; stderr = %q", code, c.code, stderr)
+			}
+			if stdout != "" {
+				t.Errorf("stdout = %q, want empty", stdout)
+			}
+			if e := errorLines(stderr); !strings.Contains(e, c.names) {
+				t.Errorf("stderr error lines = %q, want them to name %q", e, c.names)
+			}
+		})
+	}
+}
+
+func TestQuery_BothTokensSendBearer(t *testing.T) {
+	s := newQueryShim(t, watchPathsResp)
+	exports := "export RAILWAY_PROJECT_TOKEN=" + queryProjectToken + "\n" + forkExports(true, true, false)
+	stdout, stderr, code := runQuery(t, s, exports, watchPathsBody, queryCtx)
+
+	if code != 0 || stdout != watchPathsResp {
+		t.Fatalf("exit %d, stdout %q, want 0 and the body; stderr = %q", code, stdout, stderr)
+	}
+	argv := s.argv(t)
+	if !strings.Contains(argv, "Authorization: Bearer "+forkToken) {
+		t.Errorf("curl argv lacks the Bearer header; argv = %q", argv)
+	}
+	if strings.Contains(argv, "Project-Access-Token") || strings.Contains(argv, queryProjectToken) {
+		t.Errorf("curl argv carries the project token; argv = %q", argv)
+	}
+}
+
+// A GQL_AUTH_HEADER in the caller's environment must not replace any subcommand's header.
+func TestRailwayAPI_CallerEnvironmentCannotSetTheAuthHeader(t *testing.T) {
+	const planted = "Project-Access-Token: planted-by-caller"
+	for _, c := range []struct{ name, sub string }{
+		{"query", "query"},
+		{"audit-sealed-variables", "audit-sealed-variables"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var s authShim
+			var code int
+			var stderr string
+			exports := "export GQL_AUTH_HEADER='" + planted + "'\n"
+			if c.sub == "query" {
+				s = newQueryShim(t, watchPathsResp)
+				_, stderr, code = runQuery(t, s, exports+forkExports(true, true, false), watchPathsBody, queryCtx)
+			} else {
+				s = newSealedShim(t, sourceInstances(), plainOn("PORT", sealedGatewayID))
+				_, stderr, code = s.run(t, exports+forkExports(true, true, true), c.sub)
+			}
+			if code != 0 {
+				t.Fatalf("%s exit %d; stderr = %q", c.sub, code, stderr)
+			}
+			argv := s.argv(t)
+			if !strings.Contains(argv, "Authorization: Bearer "+forkToken) {
+				t.Errorf("curl argv lacks the Bearer header; argv = %q", argv)
+			}
+			if strings.Contains(argv, "planted-by-caller") {
+				t.Errorf("the caller's GQL_AUTH_HEADER reached curl; argv = %q", argv)
+			}
+		})
+	}
+}
+
+func TestQuery_ExhaustedBudgetEmptyStdoutExit1(t *testing.T) {
+	s := newQueryShim(t, watchPathsResp)
+	setFaults(t, s, "anonymous", "timeout", "timeout", "timeout")
+	tmp := t.TempDir()
+	stdout, stderr, code := runQuery(t, s, forkExports(true, true, false)+"export RUNNER_TEMP='"+tmp+"'\n", watchPathsBody, queryCtx)
+
+	if code != 1 {
+		t.Errorf("exit %d, want 1 after 3 timeouts; stderr = %q", code, stderr)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if n := len(s.calls(t)); n != 3 {
+		t.Errorf("calls = %d, want 3", n)
+	}
+	if got := s.sleeps(t); !slices.Equal(got, []string{"5", "10"}) {
+		t.Errorf("sleeps = %v, want [5 10]", got)
+	}
+	e := strings.Split(errorLines(stderr), "\n")
+	if len(e) != 1 || !strings.Contains(e[0], "after 3 attempts") || !strings.Contains(e[0], queryCtx) || !strings.Contains(e[0], "(28)") {
+		t.Errorf("stderr error lines = %q, want one naming 3 attempts, %q and curl's (28)", e, queryCtx)
+	}
+
+	// The retried call that ultimately failed: 1 call, 3 attempts, 1 retried.
+	line := reportLine(t, tmp)
+	c := reportCounts.FindStringSubmatch(line)
+	if c == nil {
+		t.Fatalf("report line lacks the counts: %q", line)
+	}
+	if got := []string{c[1], c[2], c[3]}; !slices.Equal(got, []string{"1", "3", "1"}) {
+		t.Errorf("calls, attempts, retried = %v, want [1 3 1]; line = %q", got, line)
+	}
+	if seg := reportByCommand.FindStringSubmatch(line); seg == nil || strings.TrimSpace(seg[1]) != "query=1" {
+		t.Errorf("by command = %v, want query=1; line = %q", seg, line)
+	}
+}
+
+func TestReportAPICalls_MalformedLogStillExitsZero(t *testing.T) {
+	t.Run("garbage rows", func(t *testing.T) {
+		tmp := t.TempDir()
+		writeFile(t, filepath.Join(tmp, "railway-api-calls.tsv"),
+			"set-fork-auth\t1\ttransient\nset-fork-auth\t2\tok\n\ntrunc\nbad\tx\tok\nquery\t1\tok\n")
+		line := reportLine(t, tmp)
+		c := reportCounts.FindStringSubmatch(line)
+		if c == nil {
+			t.Fatalf("report line lacks the counts: %q", line)
+		}
+		if c[1] != "2" || c[3] != "1" {
+			t.Errorf("calls, retried = %s, %s, want 2, 1: a malformed row is no call; line = %q", c[1], c[3], line)
+		}
+		seg := reportByCommand.FindStringSubmatch(line)
+		if seg == nil || strings.TrimSpace(seg[1]) == "" {
+			t.Fatalf("report line lacks a non-empty by-command breakdown: %q", line)
+		}
+		by := reportCmdCount.FindAllStringSubmatch(seg[1], -1)
+		got := map[string]string{}
+		for _, kv := range by {
+			got[kv[1]] = kv[2]
+		}
+		if want := map[string]string{"set-fork-auth": "1", "query": "1"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("by command = %v, want %v; line = %q", got, want, line)
+		}
+	})
+	t.Run("unreadable log", func(t *testing.T) {
+		tmp := t.TempDir()
+		log := filepath.Join(tmp, "railway-api-calls.tsv")
+		writeFile(t, log, "query\t1\tok\n")
+		if err := os.Chmod(log, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(log, 0o644) })
+		if f, err := os.Open(log); err == nil {
+			f.Close()
+			t.Skip("running as a user that reads a mode-000 file")
+		}
+		stdout, stderr, code := runReport(t, tmp)
+		if code != 0 {
+			t.Errorf("exit %d, want 0: the report never fails the job; stdout = %q, stderr = %q", code, stdout, stderr)
+		}
+	})
+}

@@ -61,6 +61,9 @@ func assertServerErrorShape(t *testing.T, e *sentry.Event, status string) {
 	if e.Request.Method != http.MethodGet {
 		t.Errorf("request.method = %q, want GET", e.Request.Method)
 	}
+	if u, err := url.Parse(e.Request.URL); err != nil || u.Path != thingPath {
+		t.Errorf("request.url = %q, want path %q", e.Request.URL, thingPath)
+	}
 	for _, f := range e.Fingerprint {
 		if strings.Contains(f, thingUUID) {
 			t.Errorf("fingerprint %q holds the request's UUID", e.Fingerprint)
@@ -135,6 +138,24 @@ func TestServerError_ContextlessLogGivesMessageOnly(t *testing.T) {
 	if !strings.Contains(e.Message, "500") {
 		t.Errorf("message = %q, want the status", e.Message)
 	}
+}
+
+func TestServerError_WarnRecordGivesMessageOnly(t *testing.T) {
+	app, rec, want := sentrytest.Boot(t, "svc")
+	app.Mux.HandleFunc(thingPattern, func(w http.ResponseWriter, r *http.Request) {
+		app.Logger.WarnContext(r.Context(), "thing: load", slog.Any("err", errors.New("db: connection refused")))
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	serve(app.Handler(), http.MethodGet, thingPath)
+
+	e := rec.One(t, want)
+	if len(e.Exception) != 0 {
+		t.Errorf("exception values = %q, want none: only an ERROR record names the cause", exceptionValues(e))
+	}
+	if !strings.Contains(e.Message, "500") || !strings.Contains(e.Message, thingPattern) {
+		t.Errorf("message = %q, want the status and %q", e.Message, thingPattern)
+	}
+	assertServerErrorShape(t, e, "500")
 }
 
 func statusRoute(app *platform.App, logErr bool) {
@@ -343,6 +364,24 @@ func TestPanic_OpensOneIssueWithRequest(t *testing.T) {
 	}
 	if got := e.Request.Headers["X-Request-Id"]; got != "req-1" {
 		t.Errorf("request header X-Request-Id = %q, want req-1 (headers %v)", got, e.Request.Headers)
+	}
+}
+
+func TestPanic_AfterServerErrorOpensOneIssue(t *testing.T) {
+	app, rec, want := sentrytest.Boot(t, "svc")
+	app.Mux.HandleFunc(thingPattern, func(w http.ResponseWriter, r *http.Request) {
+		app.Logger.ErrorContext(r.Context(), "thing: load", slog.Any("err", errors.New("db: connection refused")))
+		w.WriteHeader(http.StatusServiceUnavailable)
+		panic("boom")
+	})
+	serve(app.Handler(), http.MethodGet, thingPath)
+
+	e := rec.One(t, want)
+	if e.Level != sentry.LevelFatal || !strings.Contains(e.Message, "boom") {
+		t.Errorf("event level %q message %q, want the fatal panic event", e.Level, e.Message)
+	}
+	if len(e.Fingerprint) != 0 {
+		t.Errorf("fingerprint = %q, want the panic's default grouping", e.Fingerprint)
 	}
 }
 

@@ -99,7 +99,7 @@ func requestLogMiddleware(logger *slog.Logger) middleware {
 	}
 }
 
-// statusRecorder captures the response status code for request logging.
+// statusRecorder captures the response status code.
 type statusRecorder struct {
 	http.ResponseWriter
 	status      int

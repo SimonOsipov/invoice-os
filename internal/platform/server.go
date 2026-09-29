@@ -22,11 +22,11 @@ var errShutdown = errors.New("platform: graceful shutdown")
 //
 //	app, err := platform.New("tenancy")
 //	if err != nil {
-//		log.Fatal(err)
+//		platform.Fatal(slog.Default(), "tenancy: %v", err)
 //	}
 //	app.Mux.HandleFunc("GET /v1/ping", pingHandler)
 //	if err := app.Run(context.Background()); err != nil {
-//		log.Fatal(err)
+//		platform.Fatal(app.Logger, "tenancy: %v", err)
 //	}
 type App struct {
 	Config Config

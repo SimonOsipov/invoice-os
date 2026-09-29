@@ -252,7 +252,7 @@ it before any forked service deploys.
    first `prepare-env` run of a ready PR, both services' re-read verdicts came back
    `is empty` rather than `is absent`, so `variableUpsert` accepted `""` and persisted it.
    Fork writes now go through `set_service_vars`, which sends `variableCollectionUpsert`
-   (one write per service, only for names that differ). The gate run on PR #282 showed: <pending>.
+   (one write per service, only for names that differ). On the fresh-fork gate run (36636496623) a blank `OPENROUTER_API_KEY` written by `variableCollectionUpsert` re-read as `is empty`, so collection upserts persist `""`.
    The verdict in `ai_key_verdict` passes on either shape, absent or exactly `""`, so no
    code depends on which one Railway chooses; a rejection would have failed `prepare-env`
    loudly rather than deploying a fork with an inherited key.

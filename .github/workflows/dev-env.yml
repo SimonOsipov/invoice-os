@@ -992,7 +992,7 @@ jobs:
     needs: [deploy-spas, prepare-env]
     if: always() && needs.deploy-spas.result == 'success' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     permissions:
       contents: read
     env:

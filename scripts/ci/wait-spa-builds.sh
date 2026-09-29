@@ -28,9 +28,11 @@ for url in "$@"; do
   echo "Waiting for $url on build $expected ..."
   ok=0
   seen=""
-  # 600s: a cold build takes that long.
+  # 600s: a cold build takes that long. Wall clock also caps the wait, so slow curls cannot stretch it.
+  start=$SECONDS
   for _ in $(seq 1 120); do
-    code=$(curl -fsS -o /dev/null -w '%{http_code}' "$url/health" 2>/dev/null || echo 000)
+    [ $((SECONDS - start)) -lt 600 ] || break
+    code=$(curl -fsS --max-time 10 -o /dev/null -w '%{http_code}' "$url/health" 2>/dev/null || echo 000)
     if [ "$code" = "200" ]; then
       seen=$(curl -fsS --max-time 10 "$url/build.txt" 2>/dev/null | tr -d '[:space:]' || echo '')
       if [ "$seen" = "$expected" ]; then echo "  healthy on $seen"; ok=1; break; fi

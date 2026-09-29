@@ -158,7 +158,7 @@ func main() {
 
 	// Public sign-in hand-off and session renewal, outside the verifier, in every build.
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.
-	h := handoffHandlers(probed["auth"], app.Logger)
+	h := handoffHandlers(probed["auth"], sessions, app.Logger)
 	app.Mux.Handle("POST /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("OPTIONS /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("POST /auth/exchange", withCORS(h.Exchange))
@@ -256,12 +256,12 @@ func registrationHandlers(authURL, siteURL *url.URL, log *slog.Logger) registrat
 
 // handoff holds the public sign-in hand-off and renewal handlers main mounts outside /api/.
 type handoff struct {
-	SignIn, Exchange, Refresh http.Handler
+	SignIn, Exchange, Refresh, SignOut http.Handler
 }
 
 // handoffHandlers builds the sign-in, exchange and refresh handlers against GoTrue at authURL.
 // Sign-in and exchange share one code store: a code minted by sign-in is redeemable only through exchange.
-func handoffHandlers(authURL *url.URL, log *slog.Logger) handoff {
+func handoffHandlers(authURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger) handoff {
 	store := gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
 	throttle := gateway.NewSignInThrottle(gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
 	// Same settings as registrationHandlers; TestRegistrationClientTimeoutAndNoFollow pins that literal in place.

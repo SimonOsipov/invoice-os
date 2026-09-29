@@ -16,7 +16,8 @@ func initSentry(cfg Config) error {
 	}
 	if err := sentry.Init(sentry.ClientOptions{
 		Dsn:         cfg.SentryDSN,
-		Environment: cfg.Environment,
+		Environment: cfg.SentryEnvironment,
+		Release:     cfg.Release,
 		ServerName:  cfg.Service,
 		// Client hooks cover every capture path; initSentry is the only sentry.Init.
 		BeforeSend:            scrubEvent,

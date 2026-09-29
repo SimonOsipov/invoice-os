@@ -41,19 +41,31 @@ func LoadConfig(service string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	environment := envString("ENVIRONMENT", "development")
 	return Config{
-		Service:         service,
-		Environment:     envString("ENVIRONMENT", "development"),
-		Port:            port,
-		LogLevel:        envString("LOG_LEVEL", "info"),
-		SentryDSN:       envString("SENTRY_DSN", ""),
-		ShutdownTimeout: shutdown,
+		Service:     service,
+		Environment: environment,
+		// Production runs ENVIRONMENT=development, so only Sentry's label follows Railway.
+		SentryEnvironment: envString("RAILWAY_ENVIRONMENT_NAME", environment),
+		Release:           releaseName(BuildSHA, os.Getenv("RAILWAY_GIT_COMMIT_SHA")),
+		Port:              port,
+		LogLevel:          envString("LOG_LEVEL", "info"),
+		SentryDSN:         envString("SENTRY_DSN", ""),
+		ShutdownTimeout:   shutdown,
 	}, nil
 }
 
-// releaseName is the Sentry release for a build.
+// releaseName is the Sentry release for a build. The "unstamped" prefix keeps a
+// Railway rebuild apart from the CI build of the same commit.
 func releaseName(buildSHA, railwaySHA string) string {
-	return ""
+	switch {
+	case buildSHA != "" && buildSHA != "dev":
+		return buildSHA
+	case railwaySHA != "":
+		return "unstamped-" + railwaySHA
+	default:
+		return "unstamped"
+	}
 }
 
 func envString(key, def string) string {

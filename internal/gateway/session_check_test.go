@@ -339,7 +339,6 @@ func TestSessionCheck_LiveSessionPassesThrough(t *testing.T) {
 	}
 }
 
-// Regression guard: green against the pass-through stub.
 func TestSessionCheck_NoSessionIDSkipsGoTrue(t *testing.T) {
 	fake := newUserFake(t, http.StatusForbidden, gtError(403, "session_not_found"))
 	rg := newSessionRig(t, fake.URL, nil, nil)

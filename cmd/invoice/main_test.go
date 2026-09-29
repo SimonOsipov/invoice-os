@@ -403,8 +403,8 @@ func TestInvoiceMain_ReadsTheAIKeyOnlyThroughFromEnv(t *testing.T) {
 }
 
 // TestInvoiceMain_AIFakeFailureUsesFatalNotLogFatalf: an unparseable AI_FAKE stops the
-// boot through fatal(app.Logger, ...), never log.Fatalf (see fatal's doc comment). The
-// window ends at jev.FromEnv( so the Jev block's fatal( cannot satisfy it.
+// boot through platform.Fatal(app.Logger, ...), never log.Fatalf. The window ends at
+// jev.FromEnv( so the Jev block's platform.Fatal( cannot satisfy it.
 func TestInvoiceMain_AIFakeFailureUsesFatalNotLogFatalf(t *testing.T) {
 	src := sourceWithoutComments(t, "main.go")
 
@@ -439,7 +439,7 @@ func TestInvoiceMain_EachFromEnvGuardRedsOnlyOnItsOwnBranch(t *testing.T) {
 }
 
 // TestInvoiceMain_JevFromEnvFailureUsesFatalNotLogFatalf: both jev.FromEnv errors stop
-// the boot through fatal(app.Logger, ...), never log.Fatal.
+// the boot through platform.Fatal(app.Logger, ...), never log.Fatal.
 func TestInvoiceMain_JevFromEnvFailureUsesFatalNotLogFatalf(t *testing.T) {
 	for _, msg := range jevGuard(sourceWithoutComments(t, "main.go")) {
 		t.Error(msg)
@@ -454,7 +454,7 @@ func jevGuard(src string) []string {
 	return fatalGuard(src, "jev.FromEnv", "app.Mux.HandleFunc")
 }
 
-// fatalGuard reports why the code from from( to the next end( lacks fatal( or holds log.Fatal.
+// fatalGuard reports why the code from from( to the next end( lacks platform.Fatal( or holds log.Fatal.
 func fatalGuard(src, from, end string) []string {
 	i := callSiteIndex(src, from)
 	if i == -1 {
@@ -466,11 +466,11 @@ func fatalGuard(src, from, end string) []string {
 	}
 	window := src[i : i+j]
 	var msgs []string
-	if !strings.Contains(window, "fatal(") {
-		msgs = append(msgs, "no fatal( between "+from+"( and "+end+"(:\n"+window)
+	if !strings.Contains(window, "platform.Fatal(") {
+		msgs = append(msgs, "no platform.Fatal( between "+from+"( and "+end+"(:\n"+window)
 	}
 	if strings.Contains(window, "log.Fatal") {
-		msgs = append(msgs, "log.Fatal between "+from+"( and "+end+"( -- use fatal(app.Logger, ...):\n"+window)
+		msgs = append(msgs, "log.Fatal between "+from+"( and "+end+"( -- use platform.Fatal(app.Logger, ...):\n"+window)
 	}
 	return msgs
 }
@@ -764,7 +764,7 @@ func TestInvoiceMain_PatternsRegisterWithoutConflict(t *testing.T) {
 }
 
 // TestInvoiceMain_JevFromEnvErrorIsTheOneThatStopsTheBoot: the statement after
-// `c, err := jev.FromEnv(app.Logger)` is `if err != nil { fatal(app.Logger, ..., err) }`.
+// `c, err := jev.FromEnv(app.Logger)` is `if err != nil { platform.Fatal(app.Logger, ..., err) }`.
 // The window guards cannot see a flipped condition or a dropped logger.
 func TestInvoiceMain_JevFromEnvErrorIsTheOneThatStopsTheBoot(t *testing.T) {
 	_, mainFn := parseMain(t)
@@ -820,13 +820,12 @@ func TestInvoiceMain_JevFromEnvErrorIsTheOneThatStopsTheBoot(t *testing.T) {
 				t.Errorf("%s.FromEnv's error branch is not a call", pkg)
 				continue
 			}
-			fn, ok := fc.Fun.(*ast.Ident)
-			if !ok || fn.Name != "fatal" || len(fc.Args) < 3 || !isSelector(fc.Args[0], "app", "Logger") {
-				t.Errorf("%s.FromEnv's error branch is not fatal(app.Logger, format, ..., %s)", pkg, errID.Name)
+			if !isSelector(fc.Fun, "platform", "Fatal") || len(fc.Args) < 3 || !isSelector(fc.Args[0], "app", "Logger") {
+				t.Errorf("%s.FromEnv's error branch is not platform.Fatal(app.Logger, format, ..., %s)", pkg, errID.Name)
 				continue
 			}
 			if id, ok := fc.Args[len(fc.Args)-1].(*ast.Ident); !ok || id.Name != errID.Name {
-				t.Errorf("%s.FromEnv's fatal does not report %s", pkg, errID.Name)
+				t.Errorf("%s.FromEnv's platform.Fatal does not report %s", pkg, errID.Name)
 			}
 		}
 		if matched != 1 {

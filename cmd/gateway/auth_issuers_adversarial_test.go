@@ -119,7 +119,7 @@ func TestGatewayRefusesADuplicateAdditionalIssuer(t *testing.T) {
 }
 
 // TestGatewayMainFatalsOnAVerifierError: the duplicate refusal above only stops
-// boot if main's guard after auth.NewVerifier calls fatal.
+// boot if main's guard after auth.NewVerifier calls platform.Fatal.
 func TestGatewayMainFatalsOnAVerifierError(t *testing.T) {
 	_, body := parseMain(t)
 
@@ -153,14 +153,14 @@ func TestGatewayMainFatalsOnAVerifierError(t *testing.T) {
 	fatals := 0
 	ast.Inspect(guard.Body, func(n ast.Node) bool {
 		if e, ok := n.(ast.Expr); ok {
-			if _, ok := isCallTo(e, "", "fatal"); ok {
+			if _, ok := isCallTo(e, "platform", "Fatal"); ok {
 				fatals++
 			}
 		}
 		return true
 	})
 	if fatals != 1 {
-		t.Errorf("the `%s != nil` guard after auth.NewVerifier calls fatal %d time(s), want 1", errName, fatals)
+		t.Errorf("the `%s != nil` guard after auth.NewVerifier calls platform.Fatal %d time(s), want 1", errName, fatals)
 	}
 }
 

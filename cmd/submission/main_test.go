@@ -1,5 +1,5 @@
 // main_test.go: cmd/submission's wiring specs. main() is not unit-testable -- it calls
-// log.Fatalf and connects a real pool -- so the claims are read off main.go's source, the
+// platform.Fatal and connects a real pool -- so the claims are read off main.go's source, the
 // cmd/gateway/main_test.go idiom: locate an anchor by name, t.Fatal if it is missing so a
 // rename cannot make the scan vacuous, then assert inside a fixed window after it.
 package main
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"io"
 	"log/slog"
@@ -37,13 +38,9 @@ import (
 
 // TestSubmissionMainFatalsOnAdapterSelectError: AC-6 / AC-7 (Core AC-6's binary-level
 // half). Static source scan proving the submission.Select( call site's error path
-// terminates the process via log.Fatalf/log.Fatal, before the next top-level statement.
+// terminates the process via platform.Fatal, before the next top-level statement.
 func TestSubmissionMainFatalsOnAdapterSelectError(t *testing.T) {
-	b, err := os.ReadFile("main.go")
-	if err != nil {
-		t.Fatalf("read cmd/submission/main.go: %v", err)
-	}
-	src := string(b)
+	src := wtSourceWithoutComments(t, "main.go")
 
 	idx := strings.Index(src, "submission.Select(")
 	if idx == -1 {
@@ -55,8 +52,8 @@ func TestSubmissionMainFatalsOnAdapterSelectError(t *testing.T) {
 	}
 	window := src[idx:end]
 
-	if !strings.Contains(window, "log.Fatalf") && !strings.Contains(window, "log.Fatal(") {
-		t.Errorf("no log.Fatalf/log.Fatal found within 500 bytes after the submission.Select( call site -- the adapter-selection error path must terminate the process (Core AC-6):\n%s", window)
+	if !strings.Contains(window, "platform.Fatal(") {
+		t.Errorf("no platform.Fatal found within 500 bytes after the submission.Select( call site -- the adapter-selection error path must terminate the process (Core AC-6):\n%s", window)
 	}
 }
 
@@ -67,7 +64,7 @@ func TestSubmissionMainFatalsOnAdapterSelectError(t *testing.T) {
 // DELIBERATELY NOT a copy of the 500-byte window above. With this subtask's wiring
 // `submission.Select(` sits roughly 120 bytes after `submission.MockConfigFromEnv(`, so a fixed
 // 500-byte window anchored at the config call would SWALLOW the Select error path's own
-// log.Fatalf (main.go's existing wiring) and pass with a full 100% green even if the config
+// platform.Fatal (main.go's existing wiring) and pass with a full 100% green even if the config
 // error were ignored entirely. The window here is bounded by the NEXT anchor instead, and the
 // ordering between the two anchors is asserted rather than assumed -- which is the real
 // requirement anyway: a config read that happened AFTER the registry was built could not have
@@ -82,15 +79,9 @@ func TestSubmissionMainFatalsOnAdapterSelectError(t *testing.T) {
 // MockConfigFromEnv's three branches ARE genuinely unit-tested
 // (internal/submission/mock_adapter_test.go's TestMockConfigFromEnv), which shrinks what this
 // scan leaves unproven to "main calls it and fatals" -- two lines, verifiable by eye. It is also
-// COMMENT-BLIND: strings.Index matches raw bytes, so a comment quoting either anchor would
-// satisfy it. Same limitation as the Select scan above; the reason main.go's own TODO avoids
-// writing the call-site form.
+// scan reads comment-stripped source, so a comment quoting either anchor cannot satisfy it.
 func TestSubmissionMain_FatalOnAdapterConfigError(t *testing.T) {
-	b, err := os.ReadFile("main.go")
-	if err != nil {
-		t.Fatalf("read cmd/submission/main.go: %v", err)
-	}
-	src := string(b)
+	src := wtSourceWithoutComments(t, "main.go")
 
 	cfgIdx := strings.Index(src, "submission.MockConfigFromEnv(")
 	if cfgIdx == -1 {
@@ -116,8 +107,8 @@ func TestSubmissionMain_FatalOnAdapterConfigError(t *testing.T) {
 			"submission.Select( one -- MockConfigFromEnv's error is being discarded, so a malformed "+
 			"APP_ADAPTER_MOCK_LATENCY would boot silently:\n%s", window)
 	}
-	if !strings.Contains(window, "log.Fatalf") && !strings.Contains(window, "log.Fatal(") {
-		t.Errorf("no log.Fatalf/log.Fatal between the submission.MockConfigFromEnv( call site and the "+
+	if !strings.Contains(window, "platform.Fatal(") {
+		t.Errorf("no platform.Fatal between the submission.MockConfigFromEnv( call site and the "+
 			"submission.Select( one -- the adapter-config error path must terminate the process, exactly "+
 			"as the Select path does:\n%s", window)
 	}
@@ -129,7 +120,7 @@ func TestSubmissionMain_FatalOnAdapterConfigError(t *testing.T) {
 }
 
 // TestSubmissionMain_NoNonProductionAdapterFallback: M5-04-08 AC-2. The two tests above
-// prove a log.Fatalf sits somewhere inside a fixed window after submission.Select( -- true
+// prove a platform.Fatal sits somewhere inside a fixed window after submission.Select( -- true
 // of both the OLD conditional fatal (IsProduction(...) || appAdapter != "") and the NEW
 // unconditional one, so neither is sufficient on its own to prove the conditional fallback
 // branch was actually deleted, not merely not-shown-by-the-window. This test asserts that
@@ -167,7 +158,7 @@ func TestSubmissionMain_NoNonProductionAdapterFallback(t *testing.T) {
 
 	if strings.Contains(window, "IsProduction(") {
 		t.Errorf("found IsProduction( within 500 bytes after the submission.Select( call site -- the "+
-			"adapter-selection error path must be an unconditional log.Fatalf, not gated on "+
+			"adapter-selection error path must be an unconditional platform.Fatal, not gated on "+
 			"IsProduction(...) || appAdapter != \"\":\n%s", window)
 	}
 }
@@ -189,6 +180,25 @@ func wtRepoRoot(t *testing.T) string {
 		t.Fatal("git reported an empty worktree root; every scan below would read nothing")
 	}
 	return root
+}
+
+// wtSourceWithoutComments re-prints path's Go source without comments, so a byte-window scan
+// reads code only.
+func wtSourceWithoutComments(t *testing.T, path string) string {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	var b strings.Builder
+	if err := printer.Fprint(&b, fset, f); err != nil {
+		t.Fatalf("print %s: %v", path, err)
+	}
+	if !strings.Contains(b.String(), "func main()") {
+		t.Fatalf("%s stripped to no func main(); a scan of it would read nothing", path)
+	}
+	return b.String()
 }
 
 // wtCallName renders a call target: "queueConfigs" for a package function, "pkg.Name" for a
@@ -1044,7 +1054,7 @@ func wtFatalAfter(t *testing.T, f *ast.File, want string) (calls int, fatal bool
 		}
 		ast.Inspect(ifs.Body, func(n ast.Node) bool {
 			if c, ok := n.(*ast.CallExpr); ok {
-				if name := wtCallName(c.Fun); name == "log.Fatalf" || name == "log.Fatal" {
+				if wtCallName(c.Fun) == "platform.Fatal" {
 					fatal = true
 				}
 			}
@@ -1092,7 +1102,7 @@ func TestSubmissionMain_FatalOnDocumentConfigError(t *testing.T) {
 			t.Errorf("main() calls %s %d times, want 1", want, calls)
 		}
 		if !fatal {
-			t.Errorf("the statement after %s is not an error check that calls log.Fatal: a malformed object-store configuration must refuse to boot, exactly as PORT and MockConfigFromEnv do", want)
+			t.Errorf("the statement after %s is not an error check that calls platform.Fatal: a malformed object-store configuration must refuse to boot, exactly as PORT and MockConfigFromEnv do", want)
 		}
 	}
 }
@@ -1120,7 +1130,7 @@ func TestSubmissionMain_FatalOnExtractorSelectionError(t *testing.T) {
 			continue
 		}
 		if !fatal {
-			t.Errorf("the statement after %s is not an error check that calls log.Fatal: an EXTRACTOR the fleet cannot build must refuse to boot rather than fall back to a seam nobody configured", want)
+			t.Errorf("the statement after %s is not an error check that calls platform.Fatal: an EXTRACTOR the fleet cannot build must refuse to boot rather than fall back to a seam nobody configured", want)
 		}
 	}
 }
@@ -1139,7 +1149,7 @@ func TestSubmissionMain_FatalOnAIClientError(t *testing.T) {
 		t.Fatalf("main() assigns from ai.FromEnv %d time(s) at the top level, want 1", calls)
 	}
 	if !fatal {
-		t.Error("the statement after ai.FromEnv is not an error check that calls log.Fatal")
+		t.Error("the statement after ai.FromEnv is not an error check that calls platform.Fatal")
 	}
 }
 
@@ -1157,7 +1167,7 @@ func TestSubmissionMain_FatalOnJevClientError(t *testing.T) {
 		t.Fatalf("main() assigns from jev.FromEnv %d time(s) at the top level, want 1", calls)
 	}
 	if !fatal {
-		t.Error("the statement after jev.FromEnv is not an error check that calls log.Fatal")
+		t.Error("the statement after jev.FromEnv is not an error check that calls platform.Fatal")
 	}
 }
 
@@ -1170,17 +1180,17 @@ func TestSubmissionMain_FatalAfterRefusesAWeakCheck(t *testing.T) {
 		wantCalls int
 		wantFatal bool
 	}{
-		{"control", "c, err := jev.FromEnv(l)\nif err != nil { log.Fatalf(\"x: %v\", err) }", 1, true},
-		{"control reformatted", "c,err:=jev.FromEnv(\n l,\n)\nif err!=nil{\nlog.Fatal(err)}", 1, true},
-		{"blank error", "c, _ := jev.FromEnv(l)\nif err != nil { log.Fatalf(\"x: %v\", err) }", 1, false},
-		{"inverted check", "c, err := jev.FromEnv(l)\nif err == nil { log.Fatalf(\"x: %v\", err) }", 1, false},
-		{"fatal only in else", "c, err := jev.FromEnv(l)\nif err != nil { l.Error(\"x\") } else { log.Fatal(err) }", 1, false},
-		{"init shadows err", "c, err := jev.FromEnv(l)\nif err := f(); err != nil { log.Fatal(err) }", 1, false},
-		{"statement between", "c, err := jev.FromEnv(l)\n_ = c\nif err != nil { log.Fatal(err) }", 1, false},
-		{"inside an if", "if ok { c, err := jev.FromEnv(l)\nif err != nil { log.Fatal(err) } }", 0, false},
-		{"inside a func literal", "func() { c, err := jev.FromEnv(l)\nif err != nil { log.Fatal(err) } }()", 0, false},
-		{"comment only", "// c, err := jev.FromEnv(l)\n// if err != nil { log.Fatal(err) }\n_ = 1", 0, false},
-		{"other func", "}\nfunc other() { c, err := jev.FromEnv(l)\nif err != nil { log.Fatal(err) }", 0, false},
+		{"control", "c, err := jev.FromEnv(l)\nif err != nil { platform.Fatal(l, \"x: %v\", err) }", 1, true},
+		{"control reformatted", "c,err:=jev.FromEnv(\n l,\n)\nif err!=nil{\nplatform.Fatal(l, \"x: %v\", err)}", 1, true},
+		{"blank error", "c, _ := jev.FromEnv(l)\nif err != nil { platform.Fatal(l, \"x: %v\", err) }", 1, false},
+		{"inverted check", "c, err := jev.FromEnv(l)\nif err == nil { platform.Fatal(l, \"x: %v\", err) }", 1, false},
+		{"fatal only in else", "c, err := jev.FromEnv(l)\nif err != nil { l.Error(\"x\") } else { platform.Fatal(l, \"x: %v\", err) }", 1, false},
+		{"init shadows err", "c, err := jev.FromEnv(l)\nif err := f(); err != nil { platform.Fatal(l, \"x: %v\", err) }", 1, false},
+		{"statement between", "c, err := jev.FromEnv(l)\n_ = c\nif err != nil { platform.Fatal(l, \"x: %v\", err) }", 1, false},
+		{"inside an if", "if ok { c, err := jev.FromEnv(l)\nif err != nil { platform.Fatal(l, \"x: %v\", err) } }", 0, false},
+		{"inside a func literal", "func() { c, err := jev.FromEnv(l)\nif err != nil { platform.Fatal(l, \"x: %v\", err) } }()", 0, false},
+		{"comment only", "// c, err := jev.FromEnv(l)\n// if err != nil { platform.Fatal(l, \"x: %v\", err) }\n_ = 1", 0, false},
+		{"other func", "}\nfunc other() { c, err := jev.FromEnv(l)\nif err != nil { platform.Fatal(l, \"x: %v\", err) }", 0, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1238,11 +1248,14 @@ func TestSubmissionMain_JevClientIsBuiltOnceBeforeTheQueue(t *testing.T) {
 	if es, ok := ifs.Body.List[0].(*ast.ExprStmt); ok {
 		call, _ = es.X.(*ast.CallExpr)
 	}
-	if call == nil || wtCallName(call.Fun) != "log.Fatalf" || len(call.Args) == 0 {
-		t.Fatal("the jev.FromEnv error branch is not one log.Fatalf call")
+	if call == nil || wtCallName(call.Fun) != "platform.Fatal" || len(call.Args) < 2 {
+		t.Fatal("the jev.FromEnv error branch is not one platform.Fatal call")
 	}
-	if lit, ok := call.Args[0].(*ast.BasicLit); !ok || !strings.HasPrefix(lit.Value, `"submission: `) {
-		t.Errorf("the jev.FromEnv fatal format is %s, want it to start with \"submission: \"", wtRender(call.Args[0]))
+	if got := wtRender(call.Args[0]); got != "app.Logger" {
+		t.Errorf("the jev.FromEnv fatal logs on %s, want app.Logger", got)
+	}
+	if lit, ok := call.Args[1].(*ast.BasicLit); !ok || !strings.HasPrefix(lit.Value, `"submission: `) {
+		t.Errorf("the jev.FromEnv fatal format is %s, want it to start with \"submission: \"", wtRender(call.Args[1]))
 	}
 
 	// Exactly one write to the client's name anywhere in main(), nested blocks included.

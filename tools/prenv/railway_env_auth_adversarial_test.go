@@ -120,6 +120,15 @@ func TestSetForkAuth_SecretUpsertFailureExitsAndNamesIt(t *testing.T) {
 			if strings.Contains(out, c.variable+" = <redacted>") {
 				t.Errorf("the failed upsert still printed its redacted success line")
 			}
+			var writes int
+			for _, u := range s.upserts(t) {
+				if u.Name == c.variable {
+					writes++
+				}
+			}
+			if writes != 1 {
+				t.Errorf("%s upserts = %d, want the one failed write, not retried", c.variable, writes)
+			}
 			for label, n := range map[string]string{
 				"the source key's private scalar": jwkPrivateScalar(t, k0),
 				"the source admin password":       authSourcePassword,

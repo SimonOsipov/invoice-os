@@ -143,6 +143,15 @@ func TestSetSentryOffAgainstAScriptedRailway(t *testing.T) {
 		if sentryConfirmed(out) {
 			t.Errorf("a failed write printed the confirmation line; output = %q", out)
 		}
+		var dsn int
+		for _, u := range s.upserts(t) {
+			if u.Name == "SENTRY_DSN" {
+				dsn++
+			}
+		}
+		if dsn != 1 {
+			t.Errorf("SENTRY_DSN upserts = %d, want the one failed write, not retried", dsn)
+		}
 	}
 	noUpsert := func(says string) func(*testing.T, authShim, string) {
 		return func(t *testing.T, s authShim, out string) {

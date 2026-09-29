@@ -9,6 +9,7 @@ import { EMPTY_BUCKET } from './lib/dashboard'
 import { captureDestination, readDestination } from './lib/deepLink'
 import { NOT_ACTIVE_MEMBER_MESSAGE } from './lib/authedFetch'
 import type { Member } from './lib/members'
+import type { ImportAuth } from './lib/importApi'
 import { SESSION_KEY } from './lib/session'
 import type { PlatformCtx } from './types'
 
@@ -64,6 +65,19 @@ vi.mock('./components/Sidebar', async (importOriginal) => {
     Sidebar: (p: { ctx: PlatformCtx }) => {
       capturedCtx = p.ctx
       return <actual.Sidebar {...p} />
+    },
+  }
+})
+
+// The upload transport's auth, as App built it; its onUnauthorized is what an upload 401 fires.
+let capturedImportAuth: ImportAuth | undefined
+vi.mock('./lib/importApi', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./lib/importApi')>()
+  return {
+    ...actual,
+    makeImportAuth: (...args: Parameters<typeof actual.makeImportAuth>) => {
+      capturedImportAuth = actual.makeImportAuth(...args)
+      return capturedImportAuth
     },
   }
 })
@@ -228,6 +242,7 @@ beforeEach(() => {
   vi.stubGlobal('sessionStorage', createMemoryStorage())
   window.history.replaceState(null, '', '/')
   capturedCtx = undefined
+  capturedImportAuth = undefined
   calls = []
   signOutReply = REVOKED_OK
   meReply = answer(200, ME)
@@ -320,6 +335,22 @@ describe('Sign out revokes every session, then leaves (AC-1..AC-5)', () => {
 
     expect(signOutPosts().map((c) => c.body)).toEqual([{ refresh_token: 'R2' }])
   })
+
+  const notThisAccount: [string, (() => void)][] = [
+    ['another account signed in', () => localStorage.setItem(SESSION_KEY, handoffRecord(jwt(OTHER_ME, 'sid9', 'O0'), 'R9', OTHER_ME))],
+    ['no stored record', () => localStorage.removeItem(SESSION_KEY)],
+  ]
+
+  it.each(notThisAccount)("the seat's own token is sent: %s", async (_name, rewrite) => {
+    const { hrefWrites } = await mount(handoffRecord(A_SID1, 'R1'))
+    rewrite()
+
+    await clickSignOut()
+    await settle()
+
+    expect(signOutPosts().map((c) => c.body)).toEqual([{ refresh_token: 'R1' }])
+    expect(hrefWrites).toEqual(HANDOFF_EXIT)
+  })
 })
 
 describe('a failed revoke still signs out (AC-6)', () => {
@@ -389,6 +420,45 @@ describe('one sign-out at a time (AC-7, AC-8)', () => {
     expect(hrefWrites).toEqual(HANDOFF_EXIT)
     expect(localStorage.getItem(SESSION_KEY)).toBeNull()
   })
+
+  // The page is still unloading when a request sent before the click answers.
+  it('a 401 or a sign-out after the sign-out changes nothing', async () => {
+    const { hrefWrites } = await mount(handoffRecord(A_SID1, 'R1'))
+    let answerLate!: () => void
+    const gate = new Promise<void>((r) => {
+      answerLate = r
+    })
+    apiOverride = () => gate.then(answer(401, { error: 'unauthorized' }))
+    const LATE = `${GATEWAY}/api/late`
+    const late = capturedCtx!.authedFetch(LATE).then(
+      () => 'resolved',
+      (e: unknown) => e,
+    )
+    await waitFor(() => expect(calls.map((c) => c.url), 'control: the request left before the click').toContain(LATE))
+    const staleSignOut = capturedCtx!.signOut
+
+    await clickSignOut()
+    await settle()
+    expect(hrefWrites, 'control: the sign-out completed').toEqual(HANDOFF_EXIT)
+    vi.mocked(localStorage.setItem).mockClear()
+    vi.mocked(localStorage.removeItem).mockClear()
+
+    let seen: unknown
+    await act(async () => {
+      answerLate()
+      seen = await late
+    })
+    await settle()
+    expect(is401(seen), 'control: the late 401 reached the app').toBe(true)
+    await act(async () => {
+      await staleSignOut()
+    })
+    await settle()
+
+    expect(hrefWrites).toEqual(HANDOFF_EXIT)
+    expect(sessionWrites()).toEqual([])
+    expect(signOutPosts()).toHaveLength(1)
+  })
 })
 
 describe('a 401 ends a revoked session (AC-9, AC-10)', () => {
@@ -407,12 +477,31 @@ describe('a 401 ends a revoked session (AC-9, AC-10)', () => {
     expect(hrefWrites).toEqual(HANDOFF_EXIT)
   })
 
+  it('a 401 on an upload ends the session without revoking', async () => {
+    const { hrefWrites } = await mount(handoffRecord(A_SID1, 'R1'))
+    captureDestination('/settings')
+    expect(readDestination(), 'control: a destination is stored').not.toBeNull()
+    expect(capturedImportAuth?.onUnauthorized, 'control: App built the upload transport').toBeTypeOf('function')
+
+    await act(async () => {
+      capturedImportAuth!.onUnauthorized()
+    })
+    await settle()
+
+    expect(signOutPosts()).toEqual([])
+    expect(readDestination()).toBeNull()
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+    expect(hrefWrites).toEqual(HANDOFF_EXIT)
+  })
+
   const rows: { name: string; seat: string; stored: string; kept: boolean }[] = [
     { name: 'another sign-in (sid2)', seat: handoffRecord(A_SID1, 'R1'), stored: handoffRecord(jwt(ME, 'sid2', 'B0'), 'R9'), kept: true },
     { name: 'the same session (sid1)', seat: handoffRecord(A_SID1, 'R1'), stored: handoffRecord(jwt(ME, 'sid1', 'A1'), 'R2'), kept: false },
     { name: 'a stored mock JWT with no session_id', seat: handoffRecord(A_SID1, 'R1'), stored: personaRecord(jwt(ME, null, 'P')), kept: false },
     { name: 'a stored null token', seat: handoffRecord(A_SID1, 'R1'), stored: personaRecord(null), kept: false },
     { name: 'an ended mock JWT with no session_id', seat: personaRecord(jwt(ME, null, 'P')), stored: handoffRecord(jwt(ME, 'sid2', 'B0'), 'R9'), kept: false },
+    { name: 'an ended null token', seat: personaRecord(null), stored: handoffRecord(jwt(ME, 'sid2', 'B0'), 'R9'), kept: false },
+    { name: 'an unparseable stored record', seat: handoffRecord(A_SID1, 'R1'), stored: '{"v":1,', kept: false },
   ]
 
   it.each(rows)('a 401 keeps only another sign-in\'s record: $name', async ({ seat, stored, kept }) => {
@@ -427,5 +516,38 @@ describe('a 401 ends a revoked session (AC-9, AC-10)', () => {
     else expect(localStorage.getItem(SESSION_KEY)).toBeNull()
     expect(signOutPosts()).toEqual([])
     expect(hrefWrites).toEqual(HANDOFF_EXIT)
+  })
+})
+
+// No VITE_LANDING_URL: sign-out does not unload the page, it shows the in-app picker.
+describe('a build with no landing page', () => {
+  it('a second sign-in can sign out again', async () => {
+    vi.stubEnv('VITE_GATEWAY_URL', '')
+    vi.stubEnv('VITE_LANDING_URL', '')
+    localStorage.setItem(SESSION_KEY, personaRecord(jwt(ME, null, 'P')))
+    vi.resetModules()
+    const { default: App } = await import('./App')
+    await act(async () => {
+      render(<App />)
+    })
+    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
+
+    await clickSignOut()
+    await settle()
+    expect(screen.queryByText('Choose an account'), 'control: the first sign-out shows the picker').not.toBeNull()
+    capturedCtx = undefined
+    const firm = screen.getAllByRole('button').filter((b) => b.textContent?.includes('Chinedu Okafor'))
+    expect(firm, 'the picker offers the firm persona').toHaveLength(1)
+    await act(async () => {
+      fireEvent.click(firm[0]!)
+    })
+    await waitFor(() => expect(capturedCtx?.user, 'the second sign-in mounts the workspace').toBeDefined())
+    await settle()
+
+    await clickSignOut()
+    await settle()
+
+    expect(screen.queryByText('Choose an account'), 'the second Sign out must reach the picker').not.toBeNull()
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull()
   })
 })

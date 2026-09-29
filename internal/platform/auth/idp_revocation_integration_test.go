@@ -159,6 +159,29 @@ func TestIdP_SignOutEndsEverySession(t *testing.T) {
 			t.Errorf("refresh %s after sign-out: status %d, keys %v; want 401", c.label, status, keys(m))
 		}
 	}
+	// A second tab signing out after the first: GoTrue's refusal is a 401, not a 502.
+	if status, body := serveJSON(t, r.signOut, "/auth/sign-out", map[string]string{"refresh_token": r2}); status != http.StatusUnauthorized {
+		t.Errorf("second sign-out with R2: status %d (%d body bytes); want 401", status, len(body))
+	}
+
+	// Control: another account's live token still reaches the upstream.
+	other, _ := r.session(t, workspaceUser(t, base))
+	r.expect(t, "another account after sign-out", other, http.StatusOK, 1)
+}
+
+// The app may send a refresh token another tab already rotated (D8); GoTrue's parent rule must still end every session.
+func TestIdP_SignOutWithTheParentRefreshToken(t *testing.T) {
+	base := idpURL(t)
+	r := newRevocation(t, base)
+	_, r0 := r.session(t, workspaceUser(t, base))
+	a1, r1 := r.renewOK(t, "R0", r0)
+
+	r.expect(t, "A1 live", a1, http.StatusOK, 1)
+	r.signOutWith(t, r0)
+	r.expect(t, "A1 after sign-out with its parent R0", a1, http.StatusUnauthorized, 1)
+	if status, m := r.renew(t, r1); status != http.StatusUnauthorized {
+		t.Errorf("refresh R1 after sign-out: status %d, keys %v; want 401", status, keys(m))
+	}
 }
 
 // The clock never moves, so only the sign-out's eviction can drop the cached "live".
@@ -177,6 +200,7 @@ func TestIdP_StaffCutOffEndsEverySession(t *testing.T) {
 	u := workspaceUser(t, base)
 	r := newRevocation(t, base)
 	a1, r1 := r.session(t, u)
+	a2, r2 := r.session(t, u) // never cached, so the cut-off reaches it at once
 
 	r.expect(t, "A1 at t0", a1, http.StatusOK, 1)
 
@@ -192,16 +216,19 @@ func TestIdP_StaffCutOffEndsEverySession(t *testing.T) {
 		t.Fatal("runbook DELETE removed no session")
 	}
 
+	r.expect(t, "uncached A2 at t0", a2, http.StatusUnauthorized, 1)
 	r.clk.set(revocationT0.Add(gateway.SessionCheckTTL - time.Second))
 	r.expect(t, "A1 at t0+TTL-1s (stale window)", a1, http.StatusOK, 2)
 	r.clk.set(revocationT0.Add(gateway.SessionCheckTTL))
 	r.expect(t, "A1 at t0+TTL", a1, http.StatusUnauthorized, 2)
-	if status, m := r.renew(t, r1); status != http.StatusUnauthorized {
-		t.Errorf("refresh R1 after cut-off: status %d, keys %v; want 401", status, keys(m))
+	for _, c := range []struct{ label, token string }{{"R1", r1}, {"R2", r2}} {
+		if status, m := r.renew(t, c.token); status != http.StatusUnauthorized {
+			t.Errorf("refresh %s after cut-off: status %d, keys %v; want 401", c.label, status, keys(m))
+		}
 	}
 
-	a2, _ := r.session(t, u)
-	r.expect(t, "new sign-in after cut-off", a2, http.StatusOK, 3)
+	a3, _ := r.session(t, u)
+	r.expect(t, "new sign-in after cut-off", a3, http.StatusOK, 3)
 }
 
 // countingTransport counts the calls that reach GoTrue.
@@ -214,7 +241,7 @@ func (c *countingTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	return http.DefaultTransport.RoundTrip(req)
 }
 
-// Logs the cost of the check; asserts only verdicts, since a latency bound would flake.
+// Logs the cost of the check; asserts verdicts and GoTrue call counts, never latency, which would flake.
 func TestIdP_SessionCheckCost(t *testing.T) {
 	const misses, hits = 200, 10_000
 	base := idpURL(t)

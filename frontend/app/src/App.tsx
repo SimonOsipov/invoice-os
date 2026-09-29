@@ -1932,7 +1932,7 @@ export default function App() {
     else done()
   }, [bootRenewing, renewer])
 
-  // Set for the whole sign-out and never reset: the page is leaving. Blocks a second click and endRevokedSession.
+  // Blocks a second click and endRevokedSession. Stays set when sign-out leaves the page; reset when it stays.
   const signingOut = useRef(false)
 
   // Sign out returns the user to the marketing landing page (the real sign-in front
@@ -1980,6 +1980,7 @@ export default function App() {
     // the workspace behind an expired token is not.
     const dest = landingBase()
     if (dest) window.location.href = dest
+    else signingOut.current = false
   }, [seat])
 
   // The 401 seam: the session is already dead, so nothing is sent. Keeps the stored record

@@ -48,8 +48,7 @@ var (
 	subjectRe = regexp.MustCompile(`(?i)service`)
 )
 
-// Population floors: the measured population, this gate's own source excluded.
-// Re-measured after settle_fork's comment dropped its fleet count: 9 hits across 4 files.
+// Population floors: the measured population (9 hits across 4 files), this gate's own source excluded.
 const (
 	minHits  = 9
 	minFiles = 4

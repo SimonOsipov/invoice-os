@@ -1079,3 +1079,80 @@ func TestRailwayAPI_SavesTheLastRateLimitHeaders(t *testing.T) {
 		t.Errorf("rate-limit file = %q, want %q", raw, want)
 	}
 }
+
+// transportScript drives graphql_try alone against the curl in dir.
+func transportScript(t *testing.T, dir string) string {
+	t.Helper()
+	return "set -euo pipefail\nexport PATH='" + dir + "':\"$PATH\"\n" +
+		"RAILWAY_GRAPHQL_URL=https://example.invalid RAILWAY_API_TOKEN=tok API_COMMAND=test\n" +
+		"GQL_RESPONSE='' GQL_ERROR='' GQL_FAULT='' GQL_LAST='' GQL_CURL_RC=0 GQL_REPORTED=0\n" +
+		shellFunctionSource(t, "gql_errors", "gql_attempt", "graphql_try") +
+		"graphql_try \"$(cat '" + filepath.Join(dir, "body") + "')\" 'sending the test body'\nprintf '%s' \"$GQL_RESPONSE\"\n"
+}
+
+// A body over the pipe buffer: bash 5 moves a large here-string to a temp file, bash 3.2 any.
+func largeSecretBody() string {
+	return `{"query":"mutation varUpsert { x }","variables":{"v":"` + strings.Repeat("s3cr3t-", 20000) + `"}}`
+}
+
+func TestRailwayAPI_BodyReachesCurlThroughAPipe(t *testing.T) {
+	dir := t.TempDir()
+	body := largeSecretBody()
+	writeFile(t, filepath.Join(dir, "body"), body)
+	stub := "#!/bin/sh\nif [ -p /dev/stdin ]; then echo pipe; else echo file; fi > '" + filepath.Join(dir, "stdin.kind") + "'\n" +
+		"cat > '" + filepath.Join(dir, "stdin.body") + "'\necho '{\"data\":{\"ok\":true}}'\n"
+	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, code := runBashScript(t, transportScript(t, dir))
+
+	if code != 0 || stdout != `{"data":{"ok":true}}` {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+	if kind := strings.TrimSpace(readFileT(t, filepath.Join(dir, "stdin.kind"))); kind != "pipe" {
+		t.Errorf("curl's stdin is a %s, want a pipe: the body touched the disk", kind)
+	}
+	if got := readFileT(t, filepath.Join(dir, "stdin.body")); got != body {
+		t.Errorf("curl read %d bytes, want the %d-byte body intact", len(got), len(body))
+	}
+}
+
+func TestRailwayAPI_CurlThatNeverReadsStdinStillSucceeds(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "body"), largeSecretBody())
+	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte("#!/bin/sh\necho '{\"data\":{\"ok\":true}}'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, code := runBashScript(t, transportScript(t, dir))
+
+	if code != 0 || stdout != `{"data":{"ok":true}}` {
+		t.Errorf("exit %d, stdout %q, stderr %q: an unread body must not fail the call", code, stdout, stderr)
+	}
+}
+
+func readFileT(t *testing.T, path string) string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func TestBucketConfirm_HTTP4xxNotAuthorizedEndsThePoll(t *testing.T) {
+	s := reconcileForkFixture(t)
+	// Probe: "Not Authorized" (no instance), so bucketCreate runs; the first confirm tick answers HTTP 403.
+	setFaults(t, s, "bucketCreds", "gqlerr", "403")
+	writeFile(t, filepath.Join(s.dir, "faultbody-bucketCreds"), gqlNotAuthorized)
+	stdout, stderr, code := runReconcileFork(t, s)
+
+	if code != 1 {
+		t.Errorf("exit %d, want 1; output = %q", code, stdout+stderr)
+	}
+	if n := opCountIn(t, s, "bucketCreds", retryForkEnv); n != 2 {
+		t.Errorf("fork bucketCreds calls = %d, want 2: an HTTP 4xx ends the poll at once", n)
+	}
+	if e := errorLines(stderr); !strings.Contains(e, "HTTP 403") {
+		t.Errorf("stderr error lines do not name HTTP 403: %q", e)
+	}
+}

@@ -75,7 +75,8 @@ func newAuthShim(t *testing.T, responses map[string]string, stores map[string]ma
 		}
 		writeFile(t, filepath.Join(dir, "store-"+svc+".json"), string(raw))
 	}
-	// faults-<op>: one outcome per call. <op>[-<e>[-<s>]].seq: one body per line, before .json.
+	// faults-<op>: one outcome per call; faultbody-<op> is what a 4xx prints under --fail-with-body.
+	// <op>[-<e>[-<s>]].seq: one body per line, before .json.
 	// A request with no --data is a GET probe: probe.body, and probe.code under -w.
 	shim := `#!/bin/sh
 dir='` + dir + `'
@@ -113,7 +114,8 @@ if [ -s "$f" ]; then
     gqlerr) headers; echo '{"errors":[{"message":"Not Authorized","extensions":{"code":"INTERNAL_SERVER_ERROR"}}]}'; exit 0 ;;
     [45][0-9][0-9])
       headers
-      if [ "$fault" = 400 ] && [ -n "$withbody" ]; then echo '{"errors":[{"message":"Problem processing request","extensions":{"code":"BAD_USER_INPUT"}}]}'; fi
+      if [ -n "$withbody" ] && [ -f "$dir/faultbody-$op" ]; then cat "$dir/faultbody-$op"
+      elif [ "$fault" = 400 ] && [ -n "$withbody" ]; then echo '{"errors":[{"message":"Problem processing request","extensions":{"code":"BAD_USER_INPUT"}}]}'; fi
       echo "curl: (22) The requested URL returned error: $fault" >&2; exit 22 ;;
   esac
 fi

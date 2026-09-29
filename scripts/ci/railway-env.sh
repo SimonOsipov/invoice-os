@@ -151,6 +151,7 @@ GQL_RESPONSE=""
 GQL_ERROR=""
 GQL_FAULT=""
 GQL_LAST=""
+GQL_CURL_RC=0
 # 1 when the transport already printed GQL_ERROR as an ::error:: (an exhausted budget).
 GQL_REPORTED=0
 # Subcommand name for the call log.
@@ -175,8 +176,8 @@ gql_errors() {
 }
 
 # gql_attempt <json-body> <context-label>
-# One HTTP attempt, body on stdin so it never reaches argv. Sets GQL_RESPONSE, GQL_LAST,
-# and on failure GQL_FAULT and GQL_ERROR. Only curl 28 and HTTP 5xx are transient.
+# One HTTP attempt; only curl 28 and HTTP 5xx are transient. The body goes through a pipe:
+# argv is visible in `ps`, and a here-string can land in a temp file (TestRailwayAPI_BodyReachesCurlThroughAPipe).
 gql_attempt() {
   local body="$1" ctx="$2" tmp rc=0 code
   tmp=$(mktemp -d)
@@ -185,7 +186,7 @@ gql_attempt() {
         --url "$RAILWAY_GRAPHQL_URL" \
         --header "Authorization: Bearer $RAILWAY_API_TOKEN" \
         --header "Content-Type: application/json" \
-        --data @- <<< "$body" 2> "$tmp/err") || rc=$?
+        --data @- < <(printf '%s' "$body") 2> "$tmp/err") || rc=$?
   GQL_LAST=$(tail -n 1 "$tmp/err")
   GQL_LAST="${GQL_LAST:-curl exit $rc}"
   if [ -n "${RUNNER_TEMP:-}" ] && grep -qiE '^(ratelimit-policy|x-ratelimit-(limit|remaining)):' "$tmp/hdr" 2>/dev/null; then
@@ -193,7 +194,7 @@ gql_attempt() {
   fi
   rm -rf "$tmp"
 
-  GQL_FAULT="" GQL_ERROR=""
+  GQL_FAULT="" GQL_ERROR="" GQL_CURL_RC=$rc
   case "$rc" in
     0)
       if printf '%s' "$GQL_RESPONSE" | jq -e '.errors' >/dev/null 2>&1; then
@@ -1967,11 +1968,11 @@ ensure_bucket() {
 
   # `Bucket` exposes no environmentId, so bucketCreate's own return cannot prove
   # the instance landed in THIS environment — only an independent re-query can.
-  # "Not Authorized" is this probe's "no instance yet"; any other failure counts under poll_tick_failed.
+  # An HTTP 200 answering only "Not Authorized" is this probe's "no instance yet"; any other failure goes to poll_tick_failed.
   local ctx="confirming the '$SOURCE_DOCUMENTS_BUCKET' instance in environment $env_id" transients=0
   for try in $(seq 1 "$VOLUME_CONFIRM_ATTEMPTS"); do
     if ! graphql_try "$(bucket_credentials_body "$bucket_id" "$env_id")" "$ctx" once; then
-      if ! gql_errors | jq -e 'length > 0 and all(.message == "Not Authorized")' >/dev/null 2>&1; then
+      if [ "$GQL_CURL_RC" != 0 ] || ! gql_errors | jq -e 'length > 0 and all(.message == "Not Authorized")' >/dev/null 2>&1; then
         transients=$((transients + 1))
         poll_tick_failed "$transients" "$ctx"
       fi

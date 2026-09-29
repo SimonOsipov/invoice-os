@@ -779,9 +779,15 @@ session costs at most one GoTrue call per 30 s.
   hits (n=10,000) p50 183 ns, p95 414 ns, max 57.6 µs.
 - These figures exclude ES256 verification (the test hands the checker an already verified
   identity) and Railway's private-network hop.
-- Deployed figures: recorded after the deploy gate. `e2e/api/session-handoff.spec.ts`
-  "the session check's deployed cost" times, for 10 fresh sessions, the first `/api/` call
-  after sign-in (a miss) and the second (a hit), and attaches the medians.
+- Deployed figures: `e2e/api/session-handoff.spec.ts` "the session check's deployed cost"
+  times, for 10 fresh sessions, the first `/api/` call after sign-in (a miss) and the second
+  (a hit), and attaches the medians. Deploy gate run `36619314593`, Railway PR env `pr-281`,
+  2026-09-29, one gateway replica: client-measured `/me` through the gateway (n=10 pairs),
+  misses median 173.2 ms (max 185.2 ms), hits median 117.0 ms (max 124.4 ms); a miss costs
+  ~56 ms over a hit. GoTrue `GET /user` duration from the auth service logs during that test
+  (n=10): median 51.5 ms, max 55.6 ms. A hit makes no GoTrue call: 20 `/me` calls produced
+  exactly 10 `/user` calls. The deployed miss cost is ~2x the CI miss p50 (23 ms), and nearly
+  all of it is the GoTrue round trip.
 
 **The worst-case stale window** (how long a revoked session's access token still passes the
 edge):

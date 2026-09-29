@@ -1932,7 +1932,7 @@ export default function App() {
     else done()
   }, [bootRenewing, renewer])
 
-  // Blocks a second click and endRevokedSession. Stays set when sign-out leaves the page; reset when it stays.
+  // Blocks a second click and a repeat exit (sign-out or revoked session). Stays set when the exit leaves the page; sign-out resets it when it stays.
   const signingOut = useRef(false)
 
   // Sign out returns the user to the marketing landing page (the real sign-in front
@@ -2001,7 +2001,10 @@ export default function App() {
     if (!keep) clearSession()
     clearDestination()
     const dest = landingBase()
-    if (dest) window.location.href = dest
+    if (dest) {
+      signingOut.current = true
+      window.location.href = dest
+    }
   }, [activeSession])
 
   const doSignIn = useCallback(async (persona: Persona) => {

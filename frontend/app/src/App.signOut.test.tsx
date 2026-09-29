@@ -494,6 +494,28 @@ describe('a 401 ends a revoked session (AC-9, AC-10)', () => {
     expect(hrefWrites).toEqual(HANDOFF_EXIT)
   })
 
+  // A second bare-landing navigation aborts the first (e2e/topology/auth.spec.ts).
+  it('a burst of 401s leaves for landing once', async () => {
+    const { hrefWrites } = await mount(handoffRecord(A_SID1, 'R1'))
+
+    let seen: unknown[] = []
+    await act(async () => {
+      seen = await Promise.all(
+        [1, 2, 3].map((i) =>
+          capturedCtx!.authedFetch(`${REVOKED}/${i}`).then(
+            () => 'resolved',
+            (e: unknown) => e,
+          ),
+        ),
+      )
+    })
+    await settle()
+
+    expect(seen.every(is401), 'control: every 401 reached the app').toBe(true)
+    expect(signOutPosts()).toEqual([])
+    expect(hrefWrites).toEqual(HANDOFF_EXIT)
+  })
+
   const rows: { name: string; seat: string; stored: string; kept: boolean }[] = [
     { name: 'another sign-in (sid2)', seat: handoffRecord(A_SID1, 'R1'), stored: handoffRecord(jwt(ME, 'sid2', 'B0'), 'R9'), kept: true },
     { name: 'the same session (sid1)', seat: handoffRecord(A_SID1, 'R1'), stored: handoffRecord(jwt(ME, 'sid1', 'A1'), 'R2'), kept: false },

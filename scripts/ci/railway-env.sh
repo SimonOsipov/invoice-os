@@ -2457,7 +2457,6 @@ environment_self_test() {
   env_expect E5 'not json {"DATABASE_URL":"sentinel-secret-dsn"}' "unreadable"
   env_expect E6 '{"errors":[{"message":"Not Authorized"}],"data":{"variables":{"DATABASE_URL":"sentinel-secret-dsn"}}}' "GraphQL error"
 
-  # E7: verify_variable reads absent and empty alike; this verdict must not.
   local msg_absent msg_empty
   msg_absent=$(environment_verdict "$absent" development 2>&1) || true
   msg_empty=$(environment_verdict "$empty" development 2>&1) || true

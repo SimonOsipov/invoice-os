@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -197,6 +198,28 @@ func echoLines(out, label, name string) []string {
 	return regexp.MustCompile(`(?m)^[ \t]+`+regexp.QuoteMeta(label+"."+name)+` = .*$`).FindAllString(out, -1)
 }
 
+var heldLine = regexp.MustCompile(`(?m)^  (\S+): (\d+) of (\d+) already hold the intended value — not written\.$`)
+
+// heldLines maps each label to its "k of n" line.
+func heldLines(out string) map[string]string {
+	got := map[string]string{}
+	for _, m := range heldLine.FindAllStringSubmatch(out, -1) {
+		got[m[1]] = m[2] + " of " + m[3]
+	}
+	return got
+}
+
+// readsPerService counts variable reads by service id.
+func readsPerService(calls []railwayCall) map[string]int {
+	got := map[string]int{}
+	for _, c := range calls {
+		if isVariableRead(c) {
+			got[readService(c)]++
+		}
+	}
+	return got
+}
+
 func TestSetSentryOff_SteadyStateWritesNothing(t *testing.T) {
 	s := fleetShim(t, sentrySteadyStores())
 	stdout, stderr, code := s.run(t, forkExports(true, true, true), "set-sentry-off", forkEnvID)
@@ -235,6 +258,16 @@ func TestSetSentryOff_SteadyStateWritesNothing(t *testing.T) {
 	if !sentryConfirmed(out) {
 		t.Errorf("no confirmation line; output = %q", out)
 	}
+	wantHeld := map[string]string{}
+	for _, b := range sentryBackends {
+		wantHeld[b] = "1 of 1"
+	}
+	for _, sp := range sentrySPAs {
+		wantHeld[sp] = "2 of 2"
+	}
+	if got := heldLines(out); !reflect.DeepEqual(got, wantHeld) {
+		t.Errorf("held lines = %v, want %v", got, wantHeld)
+	}
 }
 
 func TestReconcileURLs_SteadyStateMakesFiveReads(t *testing.T) {
@@ -270,6 +303,101 @@ func TestReconcileURLs_SteadyStateMakesFiveReads(t *testing.T) {
 	}
 	if !strings.Contains(out, batchAllConfirmed) {
 		t.Errorf("no %q line; output = %q", batchAllConfirmed, out)
+	}
+	// Each name is checked on its own service's map, so the closing line is not vacuous.
+	intended := reconcileIntended()
+	wantHeld := map[string]string{}
+	for _, l := range reconcileURLLabels {
+		vars := intended[sentrySvcID(l)]
+		if len(vars) == 0 {
+			t.Fatalf("control: no intended names for %s", l)
+		}
+		n := strconv.Itoa(len(vars))
+		wantHeld[l] = n + " of " + n
+		for name := range vars {
+			if !strings.Contains(out, "  "+l+"."+name+" confirmed.\n") {
+				t.Errorf("no `%s.%s confirmed.` line; output = %q", l, name, out)
+			}
+		}
+	}
+	if got := heldLines(out); !reflect.DeepEqual(got, wantHeld) {
+		t.Errorf("held lines = %v, want %v", got, wantHeld)
+	}
+}
+
+// Steady state for the single-service commands: one read per service, no write, a held line each.
+func TestSetServiceVars_SteadyStateWritesNothing(t *testing.T) {
+	gw, sub, inv := sentrySvcID("gateway"), sentrySvcID("submission"), sentrySvcID("invoice")
+	aiSteady := map[string]string{"AI_FAKE": "true", "JEV_FAKE": "true", "OPENROUTER_API_KEY": ""}
+	cases := []struct {
+		name     string
+		shim     func(t *testing.T) authShim
+		run      func(t *testing.T, s authShim) (string, string, int)
+		reads    map[string]int
+		held     map[string]string
+		confirms []string
+	}{
+		{"set-fork-auth-site", func(t *testing.T) authShim {
+			stores := forkAuthStores(freshJWK(t))
+			stores[authForkAuthID]["GOTRUE_SITE_URL"] = forkSiteURL
+			stores[authForkGatewayID]["AUTH_SITE_URL"] = forkSiteURL
+			return newAuthShim(t, forkAuthRailway(), stores)
+		}, func(t *testing.T, s authShim) (string, string, int) {
+			return s.run(t, forkAuthExports(), "set-fork-auth-site", authForkEnvID, forkSiteURL)
+		}, map[string]int{authForkAuthID: 1, authForkGatewayID: 1},
+			map[string]string{"auth": "1 of 1", "gateway": "1 of 1"},
+			[]string{"auth.GOTRUE_SITE_URL confirmed in environment " + authForkEnvID, "gateway.AUTH_SITE_URL confirmed in environment " + authForkEnvID}},
+		{"set-ai-fake", func(t *testing.T) authShim {
+			return fleetShim(t, map[string]map[string]string{sub: maps.Clone(aiSteady), inv: maps.Clone(aiSteady)})
+		}, func(t *testing.T, s authShim) (string, string, int) {
+			return s.run(t, forkExports(true, true, true), "set-ai-fake", forkEnvID)
+		}, map[string]int{sub: 1, inv: 1},
+			map[string]string{"submission": "3 of 3", "invoice": "3 of 3"},
+			[]string{"AI and Jev fake mode confirmed in environment " + forkEnvID}},
+		{"set-fork-reconciliation-url", func(t *testing.T) authShim {
+			return fleetShim(t, map[string]map[string]string{gw: {"RECONCILIATION_URL": reconciliationURL}})
+		}, func(t *testing.T, s authShim) (string, string, int) {
+			return s.run(t, forkExports(true, true, true), "set-fork-reconciliation-url", forkEnvID)
+		}, map[string]int{gw: 1}, map[string]string{"gateway": "1 of 1"},
+			[]string{"gateway.RECONCILIATION_URL confirmed in environment " + forkEnvID}},
+		{"set-fork-environment", func(t *testing.T) authShim {
+			return fleetShim(t, map[string]map[string]string{gw: {"ENVIRONMENT": "development"}})
+		}, func(t *testing.T, s authShim) (string, string, int) {
+			return s.run(t, forkExports(true, true, true), "set-fork-environment", forkEnvID)
+		}, map[string]int{gw: 1}, map[string]string{"gateway": "1 of 1"},
+			[]string{"gateway ENVIRONMENT=development confirmed in environment " + forkEnvID}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			s := c.shim(t)
+			stdout, stderr, code := c.run(t, s)
+			out := stdout + stderr
+			if code != 0 {
+				t.Fatalf("exit %d, want 0; output = %q", code, out)
+			}
+			calls := s.calls(t)
+			if len(calls) == 0 {
+				t.Fatal("control: no call reached the shim")
+			}
+			if m := s.mutations(t); len(m) != 0 {
+				t.Errorf("steady state sent mutations %v, want none", m)
+			}
+			if got := readsPerService(calls); !reflect.DeepEqual(got, c.reads) {
+				t.Errorf("variable reads per service = %v, want %v", got, c.reads)
+			}
+			if e := upsertEcho.FindAllString(out, -1); len(e) != 0 {
+				t.Errorf("steady state printed write lines %q", e)
+			}
+			if got := heldLines(out); !reflect.DeepEqual(got, c.held) {
+				t.Errorf("held lines = %v, want %v", got, c.held)
+			}
+			for _, want := range c.confirms {
+				if !strings.Contains(out, want) {
+					t.Errorf("no %q line; output = %q", want, out)
+				}
+			}
+		})
 	}
 }
 
@@ -325,6 +453,10 @@ func TestSetSentryOff_InheritedValuesOneWritePerService(t *testing.T) {
 			t.Errorf("%s got %d write(s), want 1", svc, seen[svc])
 		}
 	}
+	// A service with nothing already intended prints no "0 of n" line.
+	if got, wantHeld := heldLines(out), map[string]string{"landing": "1 of 2"}; !reflect.DeepEqual(got, wantHeld) {
+		t.Errorf("held lines = %v, want %v", got, wantHeld)
+	}
 	if !sentryConfirmed(out) {
 		t.Errorf("no confirmation line; output = %q", out)
 	}
@@ -350,6 +482,13 @@ func TestSetServiceVars_OnlyChangedNamesAreWritten(t *testing.T) {
 	if ups := s.upserts(t); len(ups) != 1 {
 		t.Errorf("writes = %v, want app.VITE_LANDING_URL only: every other value is already intended", names(ups))
 	}
+	wantHeld := map[string]string{"gateway": "1 of 1", "app": "2 of 3", "landing": "4 of 4", "ops-console": "1 of 1", "support-console": "1 of 1"}
+	if got := heldLines(out); !reflect.DeepEqual(got, wantHeld) {
+		t.Errorf("held lines = %v, want %v", got, wantHeld)
+	}
+	if got := echoLines(out, "app", "VITE_LANDING_URL"); len(got) != 1 || got[0] != "  app.VITE_LANDING_URL = "+batchLandingURL {
+		t.Errorf("app.VITE_LANDING_URL write lines = %q, want one with its value", got)
+	}
 }
 
 // guard, passes at HEAD
@@ -374,28 +513,61 @@ func TestSetServiceVars_StaleValueIsRewritten(t *testing.T) {
 	}
 }
 
-// guard, passes at HEAD
+// guard, passes at HEAD (set-ai-fake). set-fork-auth's absent GOTRUE_SMTP_HOST: TestSetForkAuth_BlanksForkSMTP.
 func TestSetServiceVars_AbsentIsNotEmpty(t *testing.T) {
-	sub, inv := sentrySvcID("submission"), sentrySvcID("invoice")
-	s := fleetShim(t, map[string]map[string]string{
-		sub: {"AI_FAKE": "true", "JEV_FAKE": "true", "OPENROUTER_API_KEY": ""},
-		inv: {"AI_FAKE": "true", "JEV_FAKE": "true"},
+	t.Run("set-ai-fake", func(t *testing.T) {
+		sub, inv := sentrySvcID("submission"), sentrySvcID("invoice")
+		s := fleetShim(t, map[string]map[string]string{
+			sub: {"AI_FAKE": "true", "JEV_FAKE": "true", "OPENROUTER_API_KEY": ""},
+			inv: {"AI_FAKE": "true", "JEV_FAKE": "true"},
+		})
+		stdout, stderr, code := s.run(t, forkExports(true, true, true), "set-ai-fake", forkEnvID)
+		out := stdout + stderr
+		if code != 0 {
+			t.Fatalf("exit %d, want 0; output = %q", code, out)
+		}
+		if got := upsertsOf(s.upserts(t), inv, "OPENROUTER_API_KEY"); len(got) != 1 || got[0].Value != "" {
+			t.Errorf("invoice.OPENROUTER_API_KEY writes = %v, want one write of \"\": absent is not empty", got)
+		}
+		v, ok := readStore(t, s, inv)["OPENROUTER_API_KEY"]
+		if !ok || v != "" {
+			t.Errorf("invoice's store holds OPENROUTER_API_KEY = %v (present %t), want \"\"", v, ok)
+		}
+		if !strings.Contains(out, "invoice.OPENROUTER_API_KEY is empty") {
+			t.Errorf("the verdict does not say invoice.OPENROUTER_API_KEY is empty; output = %q", out)
+		}
 	})
-	stdout, stderr, code := s.run(t, forkExports(true, true, true), "set-ai-fake", forkEnvID)
-	out := stdout + stderr
-	if code != 0 {
-		t.Fatalf("exit %d, want 0; output = %q", code, out)
-	}
-	if got := upsertsOf(s.upserts(t), inv, "OPENROUTER_API_KEY"); len(got) != 1 || got[0].Value != "" {
-		t.Errorf("invoice.OPENROUTER_API_KEY writes = %v, want one write of \"\": absent is not empty", got)
-	}
-	v, ok := readStore(t, s, inv)["OPENROUTER_API_KEY"]
-	if !ok || v != "" {
-		t.Errorf("invoice's store holds OPENROUTER_API_KEY = %v (present %t), want \"\"", v, ok)
-	}
-	if !strings.Contains(out, "invoice.OPENROUTER_API_KEY is empty") {
-		t.Errorf("the verdict does not say invoice.OPENROUTER_API_KEY is empty; output = %q", out)
-	}
+	t.Run("set-sentry-off", func(t *testing.T) {
+		stores := sentrySteadyStores()
+		gw, app := sentrySvcID("gateway"), sentrySvcID("app")
+		delete(stores[gw], "SENTRY_DSN")
+		delete(stores[app], "SENTRY_AUTH_TOKEN")
+		s := fleetShim(t, stores)
+		stdout, stderr, code := s.run(t, forkExports(true, true, true), "set-sentry-off", forkEnvID)
+		out := stdout + stderr
+		if code != 0 {
+			t.Fatalf("exit %d, want 0; output = %q", code, out)
+		}
+		ws := collectionWrites(t, s)
+		want := map[string]map[string]string{gw: {"SENTRY_DSN": ""}, app: {"SENTRY_AUTH_TOKEN": ""}}
+		got := map[string]map[string]string{}
+		for _, w := range ws {
+			got[w.Service] = w.Vars
+		}
+		if len(ws) != 2 || !reflect.DeepEqual(got, want) {
+			t.Errorf("writes = %v, want one \"\" write each for gateway.SENTRY_DSN and app.SENTRY_AUTH_TOKEN", writeNames(ws))
+		}
+		for svc, name := range map[string]string{gw: "SENTRY_DSN", app: "SENTRY_AUTH_TOKEN"} {
+			if v, ok := readStore(t, s, svc)[name]; !ok || v != "" {
+				t.Errorf("%s's store holds %s = %v (present %t), want \"\"", svc, name, v, ok)
+			}
+		}
+		for _, l := range []string{"gateway.SENTRY_DSN is empty", "app.SENTRY_AUTH_TOKEN is empty"} {
+			if !strings.Contains(out, l) {
+				t.Errorf("the verdict does not say %s; output = %q", l, out)
+			}
+		}
+	})
 }
 
 // guard, passes at HEAD
@@ -486,6 +658,29 @@ func TestSetServiceVars_ReReadMismatchFails(t *testing.T) {
 		}
 		if strings.Contains(out, "ENVIRONMENT=development confirmed") {
 			t.Errorf("a failed re-read printed the confirmation line; output = %q", out)
+		}
+	})
+	// The first read answers, the re-read after the write is a GraphQL error.
+	t.Run("set-fork-environment re-read GraphQL error", func(t *testing.T) {
+		gw := sentrySvcID("gateway")
+		s := fleetShim(t, map[string]map[string]string{gw: {"ENVIRONMENT": "production", "DATABASE_URL": sentryDBSentinel}})
+		setFaults(t, s, "authVars", "ok", "gqlerr")
+		stdout, stderr, code := s.run(t, forkExports(true, true, true), "set-fork-environment", forkEnvID)
+		out := stdout + stderr
+		if code != 1 {
+			t.Errorf("exit %d, want 1; output = %q", code, out)
+		}
+		if !strings.Contains(errorLines(out), "Not Authorized") || !strings.Contains(errorLines(out), "gateway") {
+			t.Errorf("no ::error:: line names the gateway's GraphQL error; error lines = %q", errorLines(out))
+		}
+		if len(upsertsOf(s.upserts(t), gw, "ENVIRONMENT")) != 1 {
+			t.Error("gateway.ENVIRONMENT was not written once, so the failure is not a re-read failure")
+		}
+		if n := readsPerService(s.calls(t))[gw]; n != 2 {
+			t.Errorf("%d gateway reads, want 2: the read and the failed re-read", n)
+		}
+		if strings.Contains(out, "confirmed") || strings.Contains(out, sentryDBSentinel) {
+			t.Errorf("a failed re-read printed the confirmation line or a planted value; output = %q", out)
 		}
 	})
 	t.Run("reconcile-urls", func(t *testing.T) {
@@ -714,5 +909,21 @@ func TestSetServiceVars_CollectionWriteTimeoutRetries(t *testing.T) {
 	}
 	if !strings.Contains(stdout+stderr, batchAllConfirmed) {
 		t.Errorf("no %q line; output = %q", batchAllConfirmed, stdout+stderr)
+	}
+}
+
+// NAME=VALUE splits at the first "=" only.
+func TestSetServiceVars_ValueKeepsEveryEqualsSign(t *testing.T) {
+	const url = "https://landing-pr-7.up.railway.app/?a=b=c"
+	s := newForkSiteShim(t)
+	stdout, stderr, code := s.run(t, forkAuthExports(), "set-fork-auth-site", authForkEnvID, url)
+	out := stdout + stderr
+	if code != 0 {
+		t.Fatalf("exit %d, want 0; output = %q", code, out)
+	}
+	for svc, name := range map[string]string{authForkAuthID: "GOTRUE_SITE_URL", authForkGatewayID: "AUTH_SITE_URL"} {
+		if got := oneUpsert(t, s.upserts(t), svc, name); got != url {
+			t.Errorf("%s.%s written as %q, want %q", svc, name, got, url)
+		}
 	}
 }

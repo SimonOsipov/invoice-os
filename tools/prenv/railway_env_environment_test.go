@@ -1126,7 +1126,6 @@ func productionRailway(reRead string) map[string]string {
 		"settle":    forkSettle(`{"node":{"serviceId":"` + productionGatewayID + `","serviceName":"gateway"}}`),
 		"varUpsert": `{"data":{"variableUpsert":true}}`,
 		"svcVars":   reRead,
-		"vars":      reRead,
 	}
 }
 
@@ -1179,7 +1178,7 @@ func TestSetProductionEnvironmentReportsEmptyAndAbsentApart(t *testing.T) {
 			}
 
 			ops := operations(calls)
-			if len(ops) != 3 || ops[0] != "settle" || ops[1] != "varUpsert" || (ops[2] != "svcVars" && ops[2] != "vars") {
+			if len(ops) != 3 || ops[0] != "settle" || ops[1] != "varUpsert" || ops[2] != "svcVars" {
 				t.Errorf("Railway calls = %v, want [settle varUpsert svcVars]: resolve the gateway, write once, re-read", ops)
 			}
 			for i, call := range calls {
@@ -1192,7 +1191,7 @@ func TestSetProductionEnvironmentReportsEmptyAndAbsentApart(t *testing.T) {
 						"projectId": forkProjectID, "environmentId": persistentEnvironmentID, "serviceId": productionGatewayID,
 						"name": "ENVIRONMENT", "value": "production", "skipDeploys": true,
 					}}
-				case "svcVars", "vars":
+				case "svcVars":
 					want = map[string]any{"p": forkProjectID, "e": persistentEnvironmentID, "s": productionGatewayID}
 				default:
 					continue

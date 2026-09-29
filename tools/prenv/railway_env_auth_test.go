@@ -779,6 +779,17 @@ func TestSetForkAuth_WritesFreshAdminPasswordAndDSNReference(t *testing.T) {
 	if got := readStore(t, s, authForkAuthID)["DATABASE_URL"]; got != authDSNReference {
 		t.Errorf("auth.DATABASE_URL = %q, want the reference %q", got, authDSNReference)
 	}
+
+	// A fork holding a rendered DSN gets the reference written back.
+	stale := forkAuthStores(freshJWK(t))
+	stale[authForkAuthID]["DATABASE_URL"] = "postgresql://supabase_auth_admin:rendered@h:5432/railway"
+	s2 := newAuthShim(t, forkAuthRailway(), stale)
+	if stdout, stderr, code := s2.run(t, forkAuthExports(), "set-fork-auth", authForkEnvID); code != 0 {
+		t.Fatalf("stale DSN: exit %d, want 0; output = %q", code, stdout+stderr)
+	}
+	if got := oneUpsert(t, s2.upserts(t), authForkAuthID, "DATABASE_URL"); got != authDSNReference {
+		t.Errorf("stale DSN: auth.DATABASE_URL written as %q, want the reference %q", got, authDSNReference)
+	}
 }
 
 func TestSetForkAuth_BlanksForkSMTP(t *testing.T) {

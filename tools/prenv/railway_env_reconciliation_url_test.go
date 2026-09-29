@@ -86,6 +86,8 @@ func TestSetForkReconciliationURLAgainstAScriptedRailway(t *testing.T) {
 		{name: "reread_empty", bend: `.RECONCILIATION_URL = ""`, code: 1, check: rereadRefused},
 		{name: "reread_different", bend: `.RECONCILIATION_URL = "http://reconciliation.railway.internal:8081"`, code: 1, check: rereadRefused},
 		{name: "read_unreadable", bend: `"not-a-map"`, code: 1, check: unreadableRefused},
+		// Only the re-read after the write is unreadable.
+		{name: "reread_unreadable", bend: `if .RECONCILIATION_URL == "` + reconciliationURL + `" then "not-a-map" else . end`, code: 1, check: rereadRefused},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

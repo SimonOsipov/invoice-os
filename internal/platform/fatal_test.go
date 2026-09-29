@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/sentrytest"
@@ -31,6 +33,7 @@ const (
 	fatalRailwaySHA = "0123456789abcdef0123456789abcdef01234567"
 	bootFormat      = "svc: db pool: %v"
 	bootMessage     = "svc: db pool: dial tcp: refused"
+	pgPassword      = "S3cretPw"
 )
 
 // wireEvent is the event item as it crosses the wire; sentry.Event does not decode it.
@@ -57,7 +60,9 @@ type ingest struct {
 	srv *httptest.Server
 
 	mu       sync.Mutex
+	ackDelay time.Duration
 	paths    []string
+	bodies   []string
 	events   []wireEvent
 	parseErr error
 }
@@ -68,7 +73,17 @@ func newIngest(t *testing.T) *ingest {
 	in.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		in.mu.Lock()
+		delay := in.ackDelay
+		in.mu.Unlock()
+		// A request whose sender is gone before the ack is not recorded.
+		select {
+		case <-time.After(delay):
+		case <-r.Context().Done():
+			return
+		}
+		in.mu.Lock()
 		in.paths = append(in.paths, r.Method+" "+r.URL.Path)
+		in.bodies = append(in.bodies, string(body))
 		evs, err := envelopeEvents(body)
 		in.events = append(in.events, evs...)
 		if err != nil && in.parseErr == nil {
@@ -79,6 +94,21 @@ func newIngest(t *testing.T) *ingest {
 	}))
 	t.Cleanup(in.srv.Close)
 	return in
+}
+
+// slowAck makes the endpoint record an event only if the sender is still connected
+// after d, so a process that exits without flushing loses it.
+func (in *ingest) slowAck(d time.Duration) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	in.ackDelay = d
+}
+
+// raw returns every request body received, for a search over the whole envelope.
+func (in *ingest) raw() string {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	return strings.Join(in.bodies, "\n")
 }
 
 func (in *ingest) dsn() string {
@@ -246,6 +276,27 @@ func bootStep() {
 	panic(errors.New("boot: nil map"))
 }
 
+type bootFault struct{ Code int }
+
+//go:noinline
+func bootStepTyped() {
+	defer platform.ReportBootPanic()
+	panic(bootFault{Code: 42})
+}
+
+//go:noinline
+func bootStepQuiet() {
+	defer platform.ReportBootPanic()
+}
+
+// runToShutdownTimeout runs the app until a blocking worker overruns SHUTDOWN_TIMEOUT.
+func runToShutdownTimeout(app *platform.App) error {
+	app.AddBackgroundWorker(blockingWorker{})
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(300*time.Millisecond, cancel)
+	return app.Run(ctx)
+}
+
 // TestFatalHelperProcess is the child that runChild starts; it does nothing in a normal run.
 func TestFatalHelperProcess(t *testing.T) {
 	scenario := os.Getenv(fatalHelperEnv)
@@ -266,15 +317,47 @@ func TestFatalHelperProcess(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		app.AddBackgroundWorker(blockingWorker{})
-		ctx, cancel := context.WithCancel(context.Background())
-		time.AfterFunc(300*time.Millisecond, cancel)
-		platform.Fatal(app.Logger, "svc: %v", app.Run(ctx))
+		platform.Fatal(app.Logger, "svc: %v", runToShutdownTimeout(app))
+	case "shutdown-wrapped":
+		app, err := platform.New("svc")
+		if err != nil {
+			t.Fatal(err)
+		}
+		platform.Fatal(app.Logger, "svc: %s: %v", "run", fmt.Errorf("outer: %w", runToShutdownTimeout(app)))
+	case "shutdown-lookalike":
+		app, err := platform.New("svc")
+		if err != nil {
+			t.Fatal(err)
+		}
+		platform.Fatal(app.Logger, "svc: %v", errors.New("platform: graceful shutdown: not the sentinel"))
+	case "nil-logger":
+		if _, err := platform.New("svc"); err != nil {
+			t.Fatal(err)
+		}
+		platform.Fatal(nil, bootFormat, errors.New("dial tcp: refused"))
+	case "secrets":
+		app, err := platform.New("svc")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, perr := pgxpool.ParseConfig("postgres://app:" + pgPassword + "@host:notaport/db")
+		platform.Fatal(app.Logger, "svc: DATABASE_URL=%q: %v", "postgres://app:"+pgPassword+"@host/db", perr)
 	case "boot-panic":
 		if _, err := platform.New("svc"); err != nil {
 			t.Fatal(err)
 		}
 		bootStep()
+	case "boot-panic-typed":
+		if _, err := platform.New("svc"); err != nil {
+			t.Fatal(err)
+		}
+		bootStepTyped()
+	case "boot-no-panic":
+		if _, err := platform.New("svc"); err != nil {
+			t.Fatal(err)
+		}
+		bootStepQuiet()
+		os.Exit(0)
 	default:
 		t.Fatalf("unknown scenario %q", scenario)
 	}
@@ -282,8 +365,10 @@ func TestFatalHelperProcess(t *testing.T) {
 	os.Exit(3)
 }
 
+// The slow ack makes a Fatal that exits without flushing lose the event.
 func TestFatal_ReportsBeforeExit(t *testing.T) {
 	in := newIngest(t)
+	in.slowAck(400 * time.Millisecond)
 	exit, stdout, _ := runChild(t, "boot-failure", productionEnv(in.dsn())...)
 	if exit != 1 {
 		t.Errorf("exit code = %d, want 1", exit)
@@ -356,8 +441,10 @@ func TestFatal_GracefulShutdownErrorOpensNothing(t *testing.T) {
 	in.wantEvents(t, 1)
 }
 
+// The slow ack makes a ReportBootPanic that re-panics without flushing lose the event.
 func TestReportBootPanic_ReportsThenRepanics(t *testing.T) {
 	in := newIngest(t)
+	in.slowAck(400 * time.Millisecond)
 	exit, _, stderr := runChild(t, "boot-panic", productionEnv(in.dsn())...)
 	if exit != 2 {
 		t.Errorf("exit code = %d, want 2", exit)
@@ -390,4 +477,93 @@ func TestReportBootPanic_ReportsThenRepanics(t *testing.T) {
 		t.Errorf("no DSN: exit %d, stderr %q, want exit 2 with the panic output", exit, stderr)
 	}
 	in.wantEvents(t, 1)
+}
+
+// Second half of the panic test: the re-panic carries the original value, not its text.
+func TestReportBootPanic_RepanicsTheSameValue(t *testing.T) {
+	in := newIngest(t)
+	exit, _, stderr := runChild(t, "boot-panic-typed", productionEnv(in.dsn())...)
+	if exit != 2 {
+		t.Errorf("exit code = %d, want 2", exit)
+	}
+	// Go marks a re-panic of the recovered value itself; a different value prints a second "panic:" line.
+	if first, _, _ := strings.Cut(stderr, "\n"); !strings.HasPrefix(first, "panic: (platform_test.bootFault)") || !strings.HasSuffix(first, "[recovered, repanicked]") {
+		t.Errorf("first stderr line %q, want the original bootFault marked [recovered, repanicked]", first)
+	}
+	if ev := in.wantEvents(t, 1)[0]; ev.Level != "fatal" {
+		t.Errorf("event level = %q, want fatal", ev.Level)
+	}
+}
+
+func TestReportBootPanic_NoPanicDoesNothing(t *testing.T) {
+	in := newIngest(t)
+	exit, _, stderr := runChild(t, "boot-no-panic", productionEnv(in.dsn())...)
+	if exit != 0 {
+		t.Errorf("exit code = %d, want 0", exit)
+	}
+	if strings.Contains(stderr, "panic") {
+		t.Errorf("stderr %q shows a panic", stderr)
+	}
+	in.wantEvents(t, 0)
+
+	// Control: the same ingest server counts a real boot panic.
+	runChild(t, "boot-panic", productionEnv(in.dsn())...)
+	in.wantEvents(t, 1)
+}
+
+func TestFatal_NilLoggerFallsBackToDefault(t *testing.T) {
+	in := newIngest(t)
+	exit, stdout, _ := runChild(t, "nil-logger", productionEnv(in.dsn())...)
+	if exit != 1 {
+		t.Errorf("exit code = %d, want 1", exit)
+	}
+	assertLoggedAtError(t, stdout, bootMessage)
+	if ev := in.wantEvents(t, 1)[0]; ev.Message != bootMessage {
+		t.Errorf("event message = %q, want %q", ev.Message, bootMessage)
+	}
+}
+
+// The skip follows errors.Is on the sentinel, never the error text.
+func TestFatal_ShutdownSkipFollowsTheSentinelNotTheText(t *testing.T) {
+	in := newIngest(t)
+	env := append(productionEnv(in.dsn()), "SHUTDOWN_TIMEOUT=50ms", "PORT="+freePort(t))
+
+	exit, stdout, _ := runChild(t, "shutdown-lookalike", env...)
+	if exit != 1 {
+		t.Errorf("lookalike: exit code = %d, want 1", exit)
+	}
+	assertLoggedAtError(t, stdout, "not the sentinel")
+	ev := in.wantEvents(t, 1)[0]
+	if !strings.Contains(ev.Message, "not the sentinel") {
+		t.Errorf("lookalike event message = %q, want the lookalike text", ev.Message)
+	}
+
+	exit, stdout, _ = runChild(t, "shutdown-wrapped", env...)
+	if exit != 1 {
+		t.Errorf("wrapped: exit code = %d, want 1", exit)
+	}
+	assertLoggedAtError(t, stdout, "outer: platform: graceful shutdown")
+	in.wantEvents(t, 1)
+}
+
+// Boot errors can carry connection strings; the SENTRY-02 filter must cover this path.
+func TestFatal_EventHoldsNoConnectionPassword(t *testing.T) {
+	in := newIngest(t)
+	exit, stdout, _ := runChild(t, "secrets", productionEnv(in.dsn())...)
+	if exit != 1 {
+		t.Errorf("exit code = %d, want 1", exit)
+	}
+	if !strings.Contains(stdout, "DATABASE_URL=") {
+		t.Errorf("stdout lacks the message: %s", stdout)
+	}
+	ev := in.wantEvents(t, 1)[0]
+	if !strings.Contains(ev.Message, "DATABASE_URL=") {
+		t.Errorf("event message = %q, want the boot message", ev.Message)
+	}
+	if want := []string{"boot-failure", "svc: DATABASE_URL=%q: %v"}; !slices.Equal(ev.Fingerprint, want) {
+		t.Errorf("event fingerprint = %q, want %q", ev.Fingerprint, want)
+	}
+	if raw := in.raw(); strings.Contains(raw, pgPassword) {
+		t.Errorf("the envelope holds the connection password: %s", raw)
+	}
 }

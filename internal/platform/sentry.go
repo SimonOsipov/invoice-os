@@ -39,8 +39,7 @@ func SentryState() string {
 	return "off"
 }
 
-// flushSentry flushes buffered events; called during graceful shutdown. A
-// no-op when Sentry is disabled.
+// flushSentry flushes buffered events. A no-op when Sentry is disabled.
 func flushSentry(timeout time.Duration) {
 	sentry.Flush(timeout)
 }

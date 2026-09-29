@@ -19,3 +19,6 @@ func (s *HandoffStore) SweepsForTest() int {
 	defer s.mu.Unlock()
 	return s.sweeps
 }
+
+// SetMaxEntriesForTest lowers the cache cap so a test can fill it.
+func (c *SessionChecker) SetMaxEntriesForTest(n int) { c.maxEntries = n }

@@ -71,7 +71,7 @@ func setupGateway(t *testing.T) *testGateway {
 	}
 
 	return &testGateway{
-		handler: Handler(Options{Verifier: verifier, Upstreams: upstreams}),
+		handler: Handler(Options{Verifier: verifier, Sessions: liveSessions(t), Upstreams: upstreams}),
 		issuer:  issuer,
 		caps:    caps,
 	}
@@ -256,7 +256,7 @@ func TestUnreachableUpstreamBadGateway(t *testing.T) {
 	deadURL, _ := url.Parse(dead.URL)
 	dead.Close()
 
-	h := Handler(Options{Verifier: verifier, Upstreams: map[string]*url.URL{"tenancy": deadURL}})
+	h := Handler(Options{Verifier: verifier, Sessions: liveSessions(t), Upstreams: map[string]*url.URL{"tenancy": deadURL}})
 	tok, err := issuer.Mint(auth.MintOptions{Subject: testSubject, Role: testRole, TenantID: testTenant})
 	if err != nil {
 		t.Fatalf("mint: %v", err)

@@ -142,7 +142,11 @@ func main() {
 	// (comma-separated); empty grants no browser origin (the production default).
 	withCORS := gateway.CORS(strings.Split(os.Getenv("CORS_ALLOWED_ORIGINS"), ","))
 
-	apiHandler, fleetHandler := gatewayHandlers(verifier, routed, probed, map[string]string{"auth": ".well-known/jwks.json"}, app.Logger)
+	sessions := gateway.NewSessionChecker(probed["auth"], &http.Client{
+		Timeout:       gateway.SessionCheckTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}, time.Now, app.Logger)
+	apiHandler, fleetHandler := gatewayHandlers(verifier, sessions, routed, probed, map[string]string{"auth": ".well-known/jwks.json"}, app.Logger)
 	app.Mux.Handle(routePrefix, withCORS(apiHandler))
 
 	// Public fleet-health roll-up, outside /api/ and outside the verifier —
@@ -213,12 +217,14 @@ const dbConnectWait = 120 * time.Second
 // TestGatewayApiMountIsCORSWrappedAndNotMethodScoped (withCORS at the mount).
 func gatewayHandlers(
 	verifier *auth.Verifier,
+	sessions *gateway.SessionChecker,
 	routed, probed map[string]*url.URL,
 	healthPaths map[string]string,
 	log *slog.Logger,
 ) (api http.Handler, fleet http.HandlerFunc) {
 	api = gateway.Handler(gateway.Options{
 		Verifier:  verifier,
+		Sessions:  sessions,
 		Upstreams: routed,
 		Logger:    log,
 	})

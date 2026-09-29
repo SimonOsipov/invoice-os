@@ -43,6 +43,7 @@ const routePrefix = "/api/"
 // Options configures the gateway handler.
 type Options struct {
 	Verifier  *auth.Verifier      // verifies bearer tokens; required
+	Sessions  *SessionChecker     // refuses revoked sessions; required
 	Upstreams map[string]*url.URL // service name -> base URL; required
 	Logger    *slog.Logger        // defaults to slog.Default()
 }

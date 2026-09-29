@@ -36,10 +36,12 @@ func SignOutHandler(authURL *url.URL, client *http.Client, sessions *SessionChec
 			return
 		}
 
+		// The grant rotates the refresh token, so a client that gives up must cancel neither step.
+		ctx := context.WithoutCancel(r.Context())
 		var sess struct {
 			AccessToken string `json:"access_token"`
 		}
-		status, _, err := postGoTrue(r, client, token, map[string]string{"refresh_token": in.RefreshToken}, &sess)
+		status, _, err := postGoTrue(r.WithContext(ctx), client, token, map[string]string{"refresh_token": in.RefreshToken}, &sess)
 		switch {
 		case err != nil:
 			log.WarnContext(r.Context(), "sign-out: gotrue refresh grant unreachable", slog.String("error", err.Error()))
@@ -65,8 +67,7 @@ func SignOutHandler(authURL *url.URL, client *http.Client, sessions *SessionChec
 			claims.Subject = ""
 		}
 
-		// The grant has rotated the refresh token, so a client that gives up must not cancel the logout.
-		status, gone, err := postGoTrueBearer(context.WithoutCancel(r.Context()), client, logout, sess.AccessToken)
+		status, gone, err := postGoTrueBearer(ctx, client, logout, sess.AccessToken)
 		switch {
 		case err != nil:
 			log.WarnContext(r.Context(), "sign-out: gotrue logout unreachable", slog.String("error", err.Error()))

@@ -339,6 +339,41 @@ func TestSessionCheck_LiveSessionPassesThrough(t *testing.T) {
 	}
 }
 
+// GoTrue matches ^bearer (\S+$); a header the verifier accepts in another form must still reach it canonical.
+func TestSessionCheck_SendsANormalizedBearer(t *testing.T) {
+	for name, header := range map[string]string{
+		"lowercase, two spaces": "bearer  %s",
+		"trailing space":        "Bearer %s ",
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := newUserFake(t, http.StatusOK, gtUser)
+			rg := newSessionRig(t, fake.URL, nil, nil)
+			tok := rg.signer.token(t, subjectS1, sid1)
+			fake.setAnswer(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.Header.Get("Authorization") != "Bearer "+tok {
+					w.WriteHeader(http.StatusUnauthorized)
+					_, _ = io.WriteString(w, gtError(401, "no_authorization"))
+					return
+				}
+				_, _ = io.WriteString(w, gtUser)
+			})
+			req := httptest.NewRequest(http.MethodGet, "/api/tenancy/v1/me", nil)
+			req.Header.Set("Authorization", fmt.Sprintf(header, tok))
+			rec := httptest.NewRecorder()
+
+			rg.handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK || rg.upstream.Hits() != 1 {
+				t.Errorf("status = %d, upstream hits = %d, want 200 and 1: %s", rec.Code, rg.upstream.Hits(), rec.Body.String())
+			}
+			if auths := fake.Auths(); len(auths) != 1 || auths[0] != "Bearer "+tok {
+				t.Errorf("GoTrue /user Authorization = %q, want exactly [\"Bearer <token>\"]", auths)
+			}
+		})
+	}
+}
+
 func TestSessionCheck_NoSessionIDSkipsGoTrue(t *testing.T) {
 	fake := newUserFake(t, http.StatusForbidden, gtError(403, "session_not_found"))
 	rg := newSessionRig(t, fake.URL, nil, nil)

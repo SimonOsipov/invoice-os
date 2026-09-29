@@ -519,6 +519,69 @@ func TestSignOut_LogoutSurvivesClientCancel(t *testing.T) {
 	}
 }
 
+// The app aborts at 5s while GoTrue may already have rotated the token, so the grant must outlive the caller too.
+func TestSignOut_GrantSurvivesClientCancel(t *testing.T) {
+	access := signOutAccess(t, subjectS1)
+	arrived := make(chan struct{})
+	release, open := gate(t)
+	var mu sync.Mutex
+	var completed []string // bearers of /logout calls answered on a live connection
+	fake := newSignOutFake(t, func(w http.ResponseWriter, r *http.Request) {
+		close(arrived)
+		<-release
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(100 * time.Millisecond):
+		}
+		answer(http.StatusOK, signOutGranted(access))(w, r)
+	}, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		completed = append(completed, r.Header.Get("Authorization"))
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	rg := newSignOutRig(t, fake, nil, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/auth/sign-out", strings.NewReader(refreshBody(signOutR0)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rg.handler.ServeHTTP(rec, req)
+	}()
+
+	select {
+	case <-arrived:
+		cancel() // the app gives up while the grant is in flight
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the handler neither finished nor reached /token within 5s")
+	}
+	open()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the handler did not finish within 5s of the grant answer")
+	}
+
+	mu.Lock()
+	got := slices.Clone(completed)
+	mu.Unlock()
+	if want := []string{"Bearer " + access}; !slices.Equal(got, want) {
+		t.Errorf("completed /logout calls = %q, want %q", got, want)
+	}
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("status = %d, want 204: %s", rec.Code, rec.Body.String())
+	}
+	if !rg.evicted() {
+		t.Error("S1 is still cached after a completed logout")
+	}
+}
+
 func TestSignOut_JoinsUnderAnAuthURLPrefix(t *testing.T) {
 	fake := newSignOutFake(t, answer(http.StatusOK, signOutGranted(signOutAccess(t, subjectS1))), answer(http.StatusNoContent, ""))
 	h := SignOutHandler(fake.URL.JoinPath("prefix"), testClient(), liveSessions(t), slog.New(slog.DiscardHandler))

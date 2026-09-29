@@ -155,7 +155,9 @@ func (c *SessionChecker) run(r *http.Request, sid string, call *sessionCall, sta
 	// Shared by every waiter, so one caller's cancellation must not fail it for the rest.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), SessionCheckTimeout)
 	defer cancel()
-	call.verdict = c.ask(ctx, r.Header.Get("Authorization"))
+	// GoTrue accepts only "Bearer <token>"; the verifier also takes other casing and spacing.
+	token, _ := auth.BearerToken(r)
+	call.verdict = c.ask(ctx, "Bearer "+token)
 }
 
 // ask calls GoTrue /user with the caller's bearer. Only error_code is read from the answer.

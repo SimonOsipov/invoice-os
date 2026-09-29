@@ -245,6 +245,8 @@ func TestSignOut_GoTrueMapping(t *testing.T) {
 		{"logout 429", answer(200, granted), answer(429, gtOverRequestRateLimit), false, 429, msgTooMany, 1, ptr(false)},
 		{"logout 401", answer(200, granted), answer(401, gtError(401, "session_not_found")), false, 204, "", 1, ptr(true)},
 		{"logout 403", answer(200, granted), answer(403, gtError(403, "session_not_found")), false, 204, "", 1, ptr(true)},
+		{"logout 403 bad_jwt", answer(200, granted), answer(403, gtError(403, "bad_jwt")), false, 502, msgSignOutUnavailable, 1, ptr(false)},
+		{"logout 401 without body", answer(200, granted), answer(401, ""), false, 502, msgSignOutUnavailable, 1, ptr(false)},
 		{"logout 200", answer(200, granted), answer(200, `{}`), false, 204, "", 1, ptr(true)},
 		{"logout 202", answer(200, granted), answer(202, ""), false, 204, "", 1, ptr(true)},
 		{"logout 404", answer(200, granted), answer(404, `{"code":404,"msg":"not found"}`), false, 502, msgSignOutUnavailable, 1, ptr(false)},
@@ -587,7 +589,7 @@ func TestSignOut_SubjectlessAccessTokenStillLogsOut(t *testing.T) {
 		{"opaque token logout 204", opaque, answer(http.StatusNoContent, ""), 204, "", 1},
 		{"JWT without sub logout 204", noSub, answer(http.StatusNoContent, ""), 204, "", 1},
 		{"sub then undecodable exp logout 204", halfRead, answer(http.StatusNoContent, ""), 204, "", 1},
-		{"opaque token logout 401", opaque, answer(401, gtError(401, "bad_jwt")), 204, "", 1},
+		{"opaque token logout 401", opaque, answer(401, gtError(401, "session_not_found")), 204, "", 1},
 		{"opaque token logout 500", opaque, answer(500, gtInternal), 502, msgSignOutUnavailable, 2},
 		{"opaque token logout 429", opaque, answer(429, gtOverRequestRateLimit), 429, msgTooMany, 1},
 	}

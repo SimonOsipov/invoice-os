@@ -66,15 +66,15 @@ func SignOutHandler(authURL *url.URL, client *http.Client, sessions *SessionChec
 		}
 
 		// The grant has rotated the refresh token, so a client that gives up must not cancel the logout.
-		status, err = postGoTrueBearer(context.WithoutCancel(r.Context()), client, logout, sess.AccessToken)
+		status, gone, err := postGoTrueBearer(context.WithoutCancel(r.Context()), client, logout, sess.AccessToken)
 		switch {
 		case err != nil:
 			log.WarnContext(r.Context(), "sign-out: gotrue logout unreachable", slog.String("error", err.Error()))
 			writeError(w, http.StatusBadGateway, "sign-out is unavailable")
 		case status == http.StatusTooManyRequests:
 			writeError(w, http.StatusTooManyRequests, "too many requests")
-		// 401/403: the session vanished between the two calls, which is the outcome sign-out wants.
-		case status >= 200 && status < 300, status == http.StatusUnauthorized, status == http.StatusForbidden:
+		// gone: a 401/403 naming a gone-code; the session vanished between the two calls, which sign-out wants.
+		case status >= 200 && status < 300, gone:
 			if claims.Subject != "" {
 				sessions.EvictSubject(claims.Subject)
 			}

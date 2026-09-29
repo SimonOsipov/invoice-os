@@ -178,16 +178,22 @@ func (c *SessionChecker) ask(ctx context.Context, authorization string) verdict 
 	if resp.StatusCode == http.StatusOK {
 		return verdictLive
 	}
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		var e struct {
-			ErrorCode string `json:"error_code"`
-		}
-		if json.NewDecoder(body).Decode(&e) == nil && goneCodes[e.ErrorCode] {
-			return verdictRevoked
-		}
+	if sessionGone(resp.StatusCode, body) {
+		return verdictRevoked
 	}
 	c.log.WarnContext(ctx, "session check: gotrue /user refused", slog.Int("upstream_status", resp.StatusCode))
 	return verdictUnavailable
+}
+
+// sessionGone reports whether a GoTrue 401/403 names a goneCodes error_code. It reads 1 KiB of body, only error_code.
+func sessionGone(status int, body io.Reader) bool {
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		var e struct {
+			ErrorCode string `json:"error_code"`
+		}
+		return json.NewDecoder(io.LimitReader(body, maxSessionCheckBody)).Decode(&e) == nil && goneCodes[e.ErrorCode]
+	}
+	return false
 }
 
 // store caches a verdict; a full cache sweeps expired entries and, if still full, stores nothing. Caller holds mu.

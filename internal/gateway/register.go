@@ -107,7 +107,7 @@ func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Log
 			log.WarnContext(r.Context(), "verify: gotrue refused the link", slog.Int("upstream_status", status))
 			http.Redirect(w, r, failed, http.StatusSeeOther)
 		default:
-			// ceiling: the session GoTrue issued is never delivered; any global sign-out or staff cut-off deletes it.
+			// ceiling: the session GoTrue issued is never delivered; any global sign-out or staff cut-off deletes it. Revisit when verifying should sign the user in.
 			http.Redirect(w, r, verified, http.StatusSeeOther)
 		}
 	})
@@ -157,18 +157,19 @@ func postGoTrue(r *http.Request, client *http.Client, target string, body, ok an
 	return resp.StatusCode, gt, nil
 }
 
-// postGoTrueBearer posts an empty body with bearer as the Authorization and returns the status.
-func postGoTrueBearer(ctx context.Context, client *http.Client, target, bearer string) (int, error) {
+// postGoTrueBearer posts an empty body with bearer as the Authorization and returns the status and sessionGone.
+func postGoTrueBearer(ctx context.Context, client *http.Client, target, bearer string) (status int, gone bool, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, nil)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	req.Header.Set("Authorization", "Bearer "+bearer)
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	defer resp.Body.Close()
+	gone = sessionGone(resp.StatusCode, resp.Body)
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxGoTrueBodyBytes))
-	return resp.StatusCode, nil
+	return resp.StatusCode, gone, nil
 }

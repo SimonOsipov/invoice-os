@@ -1875,7 +1875,7 @@ export default function App() {
   const toastSeq = useRef(0)
   const [toast, setToast] = useState<{ name: string; initials: string; role: Member['role']; seq: number } | null>(null)
 
-  // Set by expireSession when storage belongs to another tab's sign-in or sign-out.
+  // Set when storage belongs to another tab's sign-in or sign-out.
   const keepStoredRecord = useRef(false)
 
   // Mirror the SEAT to storage: persist while signed in, wipe on sign out / cleared session.

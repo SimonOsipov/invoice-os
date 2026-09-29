@@ -475,9 +475,9 @@ Of the two residues it left, one is now closed:
   written the card rendered no control at all, per the subtask design ("no retry loop, no
   partial workspace"), so the only exit was clearing site data. The card now carries a sign-out
   button: neither a retry nor a partial workspace, and a page a user cannot leave is a defect
-  whatever the plan said. It calls `App.tsx`'s own `signOut` — the callback the 401 seam fires
-  and the one `Sidebar.tsx` calls — so there is one sign-out, not two, and on a deployed build
-  it lands the user on the landing page, the product's single front door.
+  whatever the plan said. It calls `App.tsx`'s own `signOut` — the one `Sidebar.tsx` calls — so
+  there is one sign-out, not two, and on a deployed build it lands the user on the landing page,
+  the product's single front door.
   `App.suspended.test.tsx` pins the control's presence, its label and its end state.
 
 **11.3 A pre-existing full-suite flake.** `TestAudit_ComposedPageIsIndexServedAndUnsorted`

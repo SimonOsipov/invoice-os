@@ -1181,16 +1181,17 @@ test('deployed app: signing out on one device ends the session on every device',
     const recordB = await storedRenewal(b.page)
 
     await test.step('A signs out: the server revokes before A leaves', async () => {
-      const order: string[] = []
-      a.page.on('response', (r) => {
-        if (r.url() === SIGN_OUT_URL && r.request().method() === 'POST') order.push(`sign-out ${r.status()}`)
-      })
-      a.page.on('request', (r) => {
-        if (r.isNavigationRequest() && r.url().startsWith(LANDING_URL)) order.push('landing')
-      })
+      const signedOut = a.page.waitForResponse((r) => r.url() === SIGN_OUT_URL && r.request().method() === 'POST', { timeout: 20_000 })
+      const leaving = a.page.waitForRequest((r) => r.isNavigationRequest() && r.url().startsWith(LANDING_URL), { timeout: 20_000 })
       await a.page.getByRole('button', { name: 'Sign out' }).click()
+      const [answer, leave] = await Promise.all([signedOut, leaving])
+      expect(answer.status(), 'the sign-out answer').toBe(204)
       await a.page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-      expect(order.slice(0, 2), 'the sign-out answer and the landing navigation, in order').toEqual(['sign-out 204', 'landing'])
+      // Browser timestamps, not event order: CDP does not order the renderer's response before the browser's navigation.
+      const answered = answer.request().timing()
+      expect(answered.responseStart, 'the sign-out answer carries no timing').toBeGreaterThan(0)
+      expect(await leave.response(), 'the landing navigation got no response').not.toBeNull()
+      expect(answered.startTime + answered.responseStart, 'the sign-out answer arrived after A began leaving').toBeLessThan(leave.timing().startTime)
       expect(await storedSession(a.context), 'A kept a stored session').toBeNull()
     })
 
@@ -1256,6 +1257,9 @@ test('deployed app: signing out on one device ends the session on every device',
       expect(await storedSession(c.context), 'C kept a stored session').toBeNull()
     })
 
+    for (const [name, urls] of [['A', a.urls], ['B', b.urls], ['C', c.urls]] as const) {
+      expect(urls.length, `no URLs were recorded in ${name}`).toBeGreaterThan(0)
+    }
     expect(
       leakingUrls([...a.urls, ...b.urls, ...c.urls], recordA.token, recordA.refresh_token, recordB.token, recordB.refresh_token, againB.token, againB.refresh_token),
       'a token, a refresh token or a JWT appeared in these URLs',

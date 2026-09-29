@@ -144,8 +144,10 @@ test.describe('sign-in hand-off (API E2E, over the deployed gateway)', () => {
     const post = (path: string, body: unknown) => request.post(`${resolveTarget('GATEWAY_URL')}${path}`, { data: body })
 
     // The account has no workspace: 403 is authorize's answer to a live session.
-    const live = await getMe(two.access_token)
-    expect([live.status, live.body], 'the second session before sign-out').toEqual([403, { error: FORBIDDEN }])
+    for (const [name, session] of [['first', one], ['second', two]] as const) {
+      const live = await getMe(session.access_token)
+      expect([live.status, live.body], `the ${name} access token before sign-out`).toEqual([403, { error: FORBIDDEN }])
+    }
 
     const signOut = await post('/auth/sign-out', { refresh_token: one.refresh_token })
     expect(signOut.status(), await signOut.text()).toBe(204)

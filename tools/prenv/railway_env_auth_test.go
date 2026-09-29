@@ -104,6 +104,8 @@ esac
 printf '%s' "$data" | jq -c . >> "$dir/calls.jsonl"
 headers() { if [ -n "$hdr" ]; then if [ -f "$dir/hdr.txt" ]; then cat "$dir/hdr.txt" > "$hdr"; else : > "$hdr"; fi; fi; }
 op=$(printf '%s' "$data" | jq -r '.query | capture("^\\s*(query|mutation)\\s+(?<n>\\w+)").n')
+# dev-env.yml's inline bodies are anonymous (query($e:…){…}).
+[ -n "$op" ] || op=anonymous
 f="$dir/faults-$op"
 if [ -s "$f" ]; then
   set -- $(cat "$f"); fault="$1"; shift

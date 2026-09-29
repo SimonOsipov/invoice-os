@@ -15,7 +15,8 @@
 #                            set-production-auth <--pre-merge|--post-merge> <environment-id>|
 #                            set-sentry-off <environment-id|--self-test>|
 #                            set-fork-reconciliation-url <environment-id>|
-#                            delete-environment <name>|list-environments>
+#                            delete-environment <name>|list-environments|
+#                            query <context>|report-api-calls>
 #
 # `set-production-environment` is run by hand, once, never from a workflow: it
 # sets the persistent environment's gateway ENVIRONMENT=production.
@@ -79,6 +80,7 @@
 # Auth: account-scoped RAILWAY_API_TOKEN, `Authorization: Bearer`. A Railway *project*
 # token is pinned to one environment and cannot perform projectUpdate, nor reach an
 # ephemeral PR environment.
+# Only `query` also accepts RAILWAY_PROJECT_TOKEN (`Project-Access-Token`), for dispatch runs.
 #
 # bash, not POSIX sh: unlike scripts/ci/railway-up-ci.sh this does NOT run inside the
 # minimal ghcr.io/railwayapp/cli container.
@@ -154,6 +156,8 @@ GQL_LAST=""
 GQL_CURL_RC=0
 # 1 when the transport already printed GQL_ERROR as an ::error:: (an exhausted budget).
 GQL_REPORTED=0
+# Auth header override; empty means `Authorization: Bearer $RAILWAY_API_TOKEN`.
+GQL_AUTH_HEADER=""
 # Subcommand name for the call log.
 API_COMMAND="${1:-}"
 # Environment id found by the most recent successful lookup_environment.
@@ -184,7 +188,7 @@ gql_attempt() {
   GQL_RESPONSE=$(curl -sS --fail-with-body --connect-timeout 5 --max-time 30 -D "$tmp/hdr" \
         --request POST \
         --url "$RAILWAY_GRAPHQL_URL" \
-        --header "Authorization: Bearer $RAILWAY_API_TOKEN" \
+        --header "${GQL_AUTH_HEADER:-Authorization: Bearer $RAILWAY_API_TOKEN}" \
         --header "Content-Type: application/json" \
         --data @- < <(printf '%s' "$body") 2> "$tmp/err") || rc=$?
   GQL_LAST=$(tail -n 1 "$tmp/err")
@@ -3167,6 +3171,55 @@ cmd_set_fork_reconciliation_url() {
   echo "gateway.RECONCILIATION_URL confirmed in environment $env_id."
 }
 
+# query <context>: one GraphQL request, body on stdin, only the response body on stdout.
+# Diagnostics go to stderr. RAILWAY_API_TOKEN wins when both tokens are set.
+cmd_query() {
+  local ctx="${1:-}" body
+  if [ -z "$ctx" ]; then
+    echo "::error::usage: railway-env.sh query <context> (request body on stdin)" >&2
+    exit 2
+  fi
+  if [ -z "${RAILWAY_API_TOKEN:-}" ]; then
+    if [ -z "${RAILWAY_PROJECT_TOKEN:-}" ]; then
+      echo "::error::Neither RAILWAY_API_TOKEN nor RAILWAY_PROJECT_TOKEN is set while $ctx. A fork PR receives no secrets and fails here by design." >&2
+      exit 1
+    fi
+    GQL_AUTH_HEADER="Project-Access-Token: $RAILWAY_PROJECT_TOKEN"
+  fi
+  if [ -z "${RAILWAY_PROJECT_ID:-}" ]; then
+    echo "::error::RAILWAY_PROJECT_ID is not set — expected the workflow-level constant." >&2
+    exit 1
+  fi
+  body=$(cat)
+  graphql_post "$body" "$ctx"
+  printf '%s' "$GQL_RESPONSE"
+}
+
+# report-api-calls: summarises the transport's call log; never fails the job.
+cmd_report_api_calls() {
+  local log="${RUNNER_TEMP:-}/railway-api-calls.tsv" rl="${RUNNER_TEMP:-}/railway-api-ratelimit"
+  if [ -z "${RUNNER_TEMP:-}" ] || [ ! -s "$log" ]; then
+    echo "No Railway API calls recorded."
+    return 0
+  fi
+  [ -f "$rl" ] || rl=/dev/null
+  awk -F'\t' -v rl="$rl" '
+    FILENAME == rl {
+      i = index($0, ":")
+      if (i) { v = substr($0, i + 1); sub(/^[ \t]+/, "", v); sub(/[ \t\r]+$/, "", v); h[tolower(substr($0, 1, i - 1))] = v }
+      next
+    }
+    { attempts++ }
+    $2 == 1 { calls++; if (!($1 in by)) order[++n] = $1; by[$1]++ }
+    $2 == 2 { retried++ }
+    END {
+      for (k = 1; k <= n; k++) cmds = cmds (k > 1 ? " " : "") order[k] "=" by[order[k]]
+      split("ratelimit-policy x-ratelimit-limit x-ratelimit-remaining", names, " ")
+      for (k = 1; k <= 3; k++) rate = rate (k > 1 ? " " : "") names[k] "=" ((names[k] in h) && h[names[k]] != "" ? h[names[k]] : "n/a")
+      printf "Railway API: %d calls, %d attempts, %d retried; by command: %s; %s\n", calls, attempts, retried, cmds, rate
+    }' "$rl" "$log" || true
+}
+
 case "${1:-}" in
   assert-project-settings)   cmd_assert_project_settings ;;
   disable-pr-environments)   cmd_disable_pr_environments ;;
@@ -3188,8 +3241,10 @@ case "${1:-}" in
   set-fork-reconciliation-url) cmd_set_fork_reconciliation_url "${2:-}" ;;
   delete-environment)        cmd_delete_environment "${2:-}" ;;
   list-environments)         cmd_list_environments ;;
+  query)                     cmd_query "${2:-}" ;;
+  report-api-calls)          cmd_report_api_calls ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments|query <context>|report-api-calls>"
     exit 2
     ;;
 esac

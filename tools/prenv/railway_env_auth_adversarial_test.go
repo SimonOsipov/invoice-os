@@ -103,7 +103,7 @@ func TestSetForkAuth_SecretUpsertFailureExitsAndNamesIt(t *testing.T) {
 		name, variable, file, body string
 	}{
 		// The fork still holds the inherited key, so only the upsert's own exit can fail the run.
-		{"transport, over an inherited key", "GOTRUE_JWT_KEYS", "upsert-GOTRUE_JWT_KEYS.fail", "curl: (22) The requested URL returned error: 500"},
+		{"transport, over an inherited key", "GOTRUE_JWT_KEYS", "upsert-GOTRUE_JWT_KEYS.fail", "curl: (22) The requested URL returned error: 400"},
 		{"graphql error", "AUTH_ADMIN_PASSWORD", "upsert-AUTH_ADMIN_PASSWORD.json", `{"errors":[{"message":"planted refusal"}]}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {

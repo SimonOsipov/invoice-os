@@ -71,7 +71,7 @@ func TestSetForkReconciliationURLAgainstAScriptedRailway(t *testing.T) {
 		{name: "foreign_id", envList: sentryEnvList(true, false), code: 1, check: noUpsert("No environment with id " + forkEnvID)},
 		{name: "gateway_not_listed", settle: sentrySettle("gateway"), code: 1, check: noUpsert("RECONCILIATION_URL was NOT set")},
 		{name: "write_refused", files: map[string]string{"upsert-RECONCILIATION_URL.json": `{"errors":[{"message":"Not Authorized"}]}`}, code: 1, check: writeFailed},
-		{name: "write_transport_failure", files: map[string]string{"upsert-RECONCILIATION_URL.fail": "curl: (22) The requested URL returned error: 502"}, code: 1, check: writeFailed},
+		{name: "write_transport_failure", files: map[string]string{"upsert-RECONCILIATION_URL.fail": "curl: (22) The requested URL returned error: 400"}, code: 1, check: writeFailed},
 		{name: "reread_absent", bend: `del(.RECONCILIATION_URL)`, code: 1, check: rereadRefused},
 		{name: "reread_empty", bend: `.RECONCILIATION_URL = ""`, code: 1, check: rereadRefused},
 		{name: "reread_different", bend: `.RECONCILIATION_URL = "http://reconciliation.railway.internal:8081"`, code: 1, check: rereadRefused},

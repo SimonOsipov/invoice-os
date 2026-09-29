@@ -210,7 +210,7 @@ func TestSetSentryOffAgainstAScriptedRailway(t *testing.T) {
 		{name: "variables_null", bend: map[string]string{"gateway": "null"}, code: 1, check: func(t *testing.T, s authShim, out string) { refusesUnreadable(t, out) }},
 		{name: "variables_array", bend: map[string]string{"gateway": "[]"}, code: 1, check: func(t *testing.T, s authShim, out string) { refusesUnreadable(t, out) }},
 		{name: "write_refused", files: map[string]string{"upsert-SENTRY_DSN.json": `{"errors":[{"message":"Not Authorized"}]}`}, code: 1, check: noReRead},
-		{name: "write_transport_failure", files: map[string]string{"upsert-SENTRY_DSN.fail": "curl: (22) The requested URL returned error: 502"}, code: 1, check: noReRead},
+		{name: "write_transport_failure", files: map[string]string{"upsert-SENTRY_DSN.fail": "curl: (22) The requested URL returned error: 400"}, code: 1, check: noReRead},
 		{name: "vite_dsn_survives_on_support_console", bend: map[string]string{"support-console": `.VITE_SENTRY_DSN = "` + sentryDSNSentinel + `"`}, code: 1, check: func(t *testing.T, s authShim, out string) {
 			refusesAsSet(t, out, "support-console.VITE_SENTRY_DSN")
 			if sentryConfirmed(out) {

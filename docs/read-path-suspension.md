@@ -73,8 +73,8 @@ wrote it.
 
 **Why 403 and not 401 is load-bearing, not taste.** `isUnauthorized`
 (`frontend/app/src/lib/authedFetch.ts:16`) is true for `status === 401` and nothing else, and
-`createAuthedFetch` calls `onUnauthorized()` on exactly that predicate — which signs the user
-out and returns them to the front door. A 401 here would be indistinguishable from "your token
+`createAuthedFetch` calls `onUnauthorized()` on exactly that predicate — which returns them
+to the front door. A 401 here would be indistinguishable from "your token
 expired": the suspended user would be bounced to sign-in with no explanation, and the message
 this story exists to deliver would never render. 403 keeps the session and lets the SPA say
 why. `TestRLS_RequestSeamRefusalIsNotTheUnauthenticatedSentinel` pins that the two sentinels

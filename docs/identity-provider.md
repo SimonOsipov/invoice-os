@@ -872,7 +872,7 @@ decision, AUTH-07 CF2). Production Postgres is private-only, so the statement ru
 the Postgres container:
 
 1. `railway ssh --service Postgres`
-2. `psql -U "$PGUSER" -d "$PGDATABASE"`
+2. `psql`
 3. Run, replacing `<address>` and then `<id>`:
    ```sql
    SET ROLE supabase_auth_admin;

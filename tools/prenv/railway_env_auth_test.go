@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -133,6 +134,16 @@ case "$q" in
     st="$dir/store-$s.json"; [ -f "$st" ] || echo '{}' > "$st"
     printf '%s' "$data" | jq -c --slurpfile st "$st" '$st[0] + {(.variables.input.name): .variables.input.value}' > "$st.tmp" && mv "$st.tmp" "$st"
     echo '{"data":{"variableUpsert":true}}' ;;
+  *"variableCollectionUpsert("*)
+    # upsert-<NAME>.fail / .json apply when NAME is in the map.
+    for n in $(printf '%s' "$data" | jq -r '.variables.input.variables | keys[]'); do
+      if [ -f "$dir/upsert-$n.fail" ]; then cat "$dir/upsert-$n.fail" >&2; exit 22; fi
+      if [ -f "$dir/upsert-$n.json" ]; then cat "$dir/upsert-$n.json"; exit 0; fi
+    done
+    s=$(printf '%s' "$data" | jq -r '.variables.input.serviceId')
+    st="$dir/store-$s.json"; [ -f "$st" ] || echo '{}' > "$st"
+    printf '%s' "$data" | jq -c --slurpfile st "$st" '$st[0] + .variables.input.variables' > "$st.tmp" && mv "$st.tmp" "$st"
+    echo '{"data":{"variableCollectionUpsert":true}}' ;;
   *isSealed*)
     cat "$dir/sealed.json" ;;
   *"variables(projectId"*)
@@ -182,11 +193,22 @@ func (s authShim) run(t *testing.T, exports, sub string, args ...string) (stdout
 
 type authUpsert struct{ Service, Name, Value string }
 
-// upserts lists every variableUpsert the shim received, in order.
+// upserts lists every variable the shim was asked to write, in call order;
+// a variableCollectionUpsert contributes one entry per name, sorted.
 func (s authShim) upserts(t *testing.T) []authUpsert {
 	t.Helper()
 	var out []authUpsert
 	for _, c := range s.calls(t) {
+		if strings.Contains(c.Query, "variableCollectionUpsert(") {
+			in, _ := c.Variables["input"].(map[string]any)
+			svc, _ := in["serviceId"].(string)
+			vars, _ := in["variables"].(map[string]any)
+			for _, name := range slices.Sorted(maps.Keys(vars)) {
+				value, _ := vars[name].(string)
+				out = append(out, authUpsert{svc, name, value})
+			}
+			continue
+		}
 		if !strings.Contains(c.Query, "variableUpsert(") {
 			continue
 		}

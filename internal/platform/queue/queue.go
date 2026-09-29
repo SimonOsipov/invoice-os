@@ -53,10 +53,11 @@ type Client struct {
 // NOBYPASSRLS runtime role) — never the migrator or superuser (docs/migrations.md §1).
 func New(pool *pgxpool.Pool, cfg Config) (*Client, error) {
 	rc, err := river.NewClient(riverpgxv5.New(pool), &river.Config{
-		Queues:      cfg.Queues,
-		Workers:     cfg.Workers,
-		RetryPolicy: cfg.RetryPolicy,
-		Logger:      cfg.Logger,
+		Queues:       cfg.Queues,
+		Workers:      cfg.Workers,
+		RetryPolicy:  cfg.RetryPolicy,
+		Logger:       cfg.Logger,
+		ErrorHandler: errorReporter{},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("queue: new river client: %w", err)

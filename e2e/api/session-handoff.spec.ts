@@ -124,6 +124,7 @@ test.describe('sign-in hand-off (API E2E, over the deployed gateway)', () => {
       // The app redeems the code (redeemHandoff), so the exchange's caller is the app.
       ['/auth/exchange', app],
       ['/auth/refresh', app],
+      ['/auth/sign-out', app],
     ]
     for (const [path, origin] of routes) {
       const res = await request.fetch(`${resolveTarget('GATEWAY_URL')}${path}`, {

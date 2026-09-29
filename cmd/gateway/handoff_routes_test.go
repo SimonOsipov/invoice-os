@@ -220,7 +220,7 @@ func TestHandoffPreflightAnswersThroughCORS(t *testing.T) {
 	body, _ = json.Marshal(map[string]string{"refresh_token": ex.RefreshToken})
 	rec = postJSON(mux, "/auth/refresh", handoffAllowedOrigin, string(body))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"`+tokB+`"`) || !strings.Contains(rec.Body.String(), `"ref-B"`) {
-		t.Errorf("POST /auth/refresh = %d %s, want 200 with tok-B and ref-B", rec.Code, rec.Body)
+		t.Errorf("POST /auth/refresh = %d %s, want 200 with tokB and ref-B", rec.Code, rec.Body)
 	}
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != handoffAllowedOrigin {
 		t.Errorf("POST /auth/refresh Access-Control-Allow-Origin = %q, want %q", got, handoffAllowedOrigin)

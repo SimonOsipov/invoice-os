@@ -156,7 +156,7 @@ func main() {
 	app.Mux.Handle("POST /auth/register", reg.Register)
 	app.Mux.Handle("GET /auth/verify", reg.Verify)
 
-	// Public sign-in hand-off and session renewal, outside the verifier, in every build.
+	// Public sign-in hand-off, session renewal and sign-out, outside the verifier, in every build.
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.
 	h := handoffHandlers(probed["auth"], sessions, app.Logger)
 	app.Mux.Handle("POST /auth/sign-in", withCORS(h.SignIn))
@@ -165,6 +165,8 @@ func main() {
 	app.Mux.Handle("OPTIONS /auth/exchange", withCORS(h.Exchange))
 	app.Mux.Handle("POST /auth/refresh", withCORS(h.Refresh))
 	app.Mux.Handle("OPTIONS /auth/refresh", withCORS(h.Refresh))
+	app.Mux.Handle("POST /auth/sign-out", withCORS(h.SignOut))
+	app.Mux.Handle("OPTIONS /auth/sign-out", withCORS(h.SignOut))
 
 	// Mint routes exist only in a -tags mockissuer build; ENVIRONMENT is read raw, as for provisioning.
 	platform.MockIssuer = "absent"
@@ -254,12 +256,13 @@ func registrationHandlers(authURL, siteURL *url.URL, log *slog.Logger) registrat
 	}
 }
 
-// handoff holds the public sign-in hand-off and renewal handlers main mounts outside /api/.
+// handoff holds the public sign-in hand-off, renewal and sign-out handlers main mounts outside /api/.
 type handoff struct {
 	SignIn, Exchange, Refresh, SignOut http.Handler
 }
 
-// handoffHandlers builds the sign-in, exchange and refresh handlers against GoTrue at authURL.
+// handoffHandlers builds the sign-in, exchange, refresh and sign-out handlers against GoTrue at authURL.
+// Sign-out evicts from sessions, the API's own checker.
 // Sign-in and exchange share one code store: a code minted by sign-in is redeemable only through exchange.
 func handoffHandlers(authURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger) handoff {
 	store := gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
@@ -273,6 +276,7 @@ func handoffHandlers(authURL *url.URL, sessions *gateway.SessionChecker, log *sl
 		SignIn:   gateway.SignInHandler(authURL, client, store, throttle, log),
 		Exchange: gateway.ExchangeHandler(store),
 		Refresh:  gateway.RefreshHandler(authURL, client, log),
+		SignOut:  gateway.SignOutHandler(authURL, client, sessions, log),
 	}
 }
 

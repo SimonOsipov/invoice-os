@@ -4,8 +4,25 @@
 # /health is answered from memory, so only /build.txt proves which commit is live.
 set -euo pipefail
 
-expected="${1:?usage: wait-spa-builds.sh <expected-sha> <url>...}"
+if [ "$#" -lt 2 ]; then
+  echo "::error::usage: wait-spa-builds.sh <expected-sha> <url>..." >&2
+  exit 2
+fi
+expected="$1"
 shift
+if [ -z "$expected" ]; then
+  echo "::error::wait-spa-builds.sh: the expected sha (argument 1) is empty." >&2
+  exit 2
+fi
+
+pos=1
+for url in "$@"; do
+  pos=$((pos + 1))
+  if [ -z "$url" ]; then
+    echo "::error::wait-spa-builds.sh: argument $pos (a url) is empty; the SPA URL output was not set." >&2
+    exit 1
+  fi
+done
 
 for url in "$@"; do
   echo "Waiting for $url on build $expected ..."

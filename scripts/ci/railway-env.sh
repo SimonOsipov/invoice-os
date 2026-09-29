@@ -3189,7 +3189,7 @@ cmd_query() {
 # wait-deployment <label> <deployment-id>: polls one deployment's status, every 10 s, 60 ticks.
 # The id comes from `railway up` output, so it is checked before any call and never echoed raw.
 cmd_wait_deployment() {
-  local label="${1:-}" id="${2:-}" try status="" transients=0 body
+  local label="${1:-}" id="${2:-}" try status="" last="" transients=0 body
   local ctx="polling the $label deployment status"
   local shown="${id//[^A-Za-z0-9-]/?}"
   if [ -z "$label" ]; then
@@ -3210,6 +3210,7 @@ cmd_wait_deployment() {
   for try in $(seq 1 60); do
     if graphql_try "$body" "$ctx" once; then
       status=$(printf '%s' "$GQL_RESPONSE" | jq -r '.data.deployment.status // "UNKNOWN"')
+      last="$status"
       case "$status" in
         SUCCESS | SLEEPING)
           echo "$label deployment $id is $status."
@@ -3223,11 +3224,10 @@ cmd_wait_deployment() {
     else
       transients=$((transients + 1))
       poll_tick_failed "$transients" "$ctx"
-      status="UNREADABLE"
     fi
     [ "$try" -ge 60 ] || sleep 10
   done
-  echo "::error::$label deployment $id was still $status after 600s." >&2
+  echo "::error::$label deployment $id was still ${last:-unreadable} after 600s." >&2
   exit 1
 }
 

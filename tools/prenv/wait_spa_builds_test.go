@@ -452,3 +452,19 @@ func TestWaitSPABuilds_TrailingSlashURLNeverPassesVacuously(t *testing.T) {
 		t.Errorf("want exactly the first URL healthy; stdout = %q", stdout)
 	}
 }
+
+// An empty prepare-env output reaches the script as "": refused before any request.
+func TestWaitSPABuilds_EmptyURLFailsAtOnce(t *testing.T) {
+	s := newSPAShim(t)
+	stdout, stderr, code := s.run(t, spaSHA, spaURLs[0], "", spaURLs[2])
+
+	if code == 0 {
+		t.Errorf("exit 0 with an empty url; stdout = %q, stderr = %q", stdout, stderr)
+	}
+	if n := len(s.requests(t)); n != 0 {
+		t.Errorf("requests = %d, want 0: the empty argument is refused before any request", n)
+	}
+	if e := errorLines(stdout + stderr); !strings.Contains(e, "argument 3") {
+		t.Errorf("error lines do not name the empty argument's position (argument 3): %q", e)
+	}
+}

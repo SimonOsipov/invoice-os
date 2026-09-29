@@ -642,3 +642,21 @@ func TestWaitDeployment_NoTokenInAnyOutput(t *testing.T) {
 		})
 	}
 }
+
+// A transient final tick does not replace the last status read.
+func TestWaitDeployment_WindowEndNamesLastRealStatusAfterFinalTransientTick(t *testing.T) {
+	s := newDepShim(t, depStatus(upIDA, "DEPLOYING"))
+	setFaults(t, s, "dep", append(strings.Fields(strings.Repeat("ok ", 59)), "timeout")...)
+	stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), upIDA)
+
+	if code != 1 {
+		t.Errorf("exit %d, want 1; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if n := opCount(t, s, "dep"); n != 60 {
+		t.Errorf("dep calls = %d, want 60", n)
+	}
+	e := errorLines(stdout + stderr)
+	if !strings.Contains(e, "DEPLOYING") || strings.Contains(strings.ToUpper(e), "UNREADABLE") {
+		t.Errorf("error lines must name DEPLOYING and not UNREADABLE: %q", e)
+	}
+}

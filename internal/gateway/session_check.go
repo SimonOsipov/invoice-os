@@ -21,7 +21,7 @@ const (
 	maxSessionCheckBody = 1 << 10
 )
 
-// goneCodes are the GoTrue error_codes that mean the session will never be live again.
+// goneCodes are the GoTrue error_codes that mean the session is gone.
 var goneCodes = map[string]bool{
 	"session_not_found": true,
 	"user_not_found":    true,
@@ -65,9 +65,15 @@ type SessionChecker struct {
 }
 
 // NewSessionChecker builds a checker against GoTrue at authURL; a nil authURL answers 503 to every checked request.
+// It uses a copy of client that never follows a redirect: a followed 3xx could turn a refusal into a 200.
 func NewSessionChecker(authURL *url.URL, client *http.Client, now func() time.Time, log *slog.Logger) *SessionChecker {
+	var noRedirect http.Client
+	if client != nil {
+		noRedirect = *client
+	}
+	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	c := &SessionChecker{
-		client:     client,
+		client:     &noRedirect,
 		now:        now,
 		log:        log,
 		maxEntries: SessionCheckMaxEntries,
@@ -185,6 +191,7 @@ func (c *SessionChecker) ask(ctx context.Context, authorization string) verdict 
 }
 
 // store caches a verdict; a full cache sweeps expired entries and, if still full, stores nothing. Caller holds mu.
+// ceiling: O(n) scan on every store while full, n <= SessionCheckMaxEntries; bucket by expiry if it shows in profiles.
 func (c *SessionChecker) store(sid string, e sessionEntry) {
 	if _, ok := c.entries[sid]; !ok && len(c.entries) >= c.maxEntries {
 		now := c.now()

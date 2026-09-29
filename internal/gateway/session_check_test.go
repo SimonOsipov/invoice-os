@@ -530,6 +530,36 @@ func TestSessionCheck_OtherAnswersAre503(t *testing.T) {
 	}
 }
 
+// A caller's client that follows redirects must not turn a GoTrue 302 into a live session.
+func TestSessionCheck_BareClientNeverFollowsARedirect(t *testing.T) {
+	var targetHits atomic.Int64
+	fake := newUserFake(t, http.StatusOK, gtUser)
+	fake.setAnswer(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/user" {
+			targetHits.Add(1)
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, gtUser)
+			return
+		}
+		http.Redirect(w, r, "/elsewhere", http.StatusFound)
+	})
+	bare := &http.Client{}
+	rg := newSessionRig(t, fake.URL, bare, nil)
+	tok := rg.signer.token(t, subjectS1, sid1)
+
+	assertUnavailable(t, rg.get(tok))
+
+	if n := targetHits.Load(); n != 0 {
+		t.Errorf("redirect target received %d requests, want 0", n)
+	}
+	if n := rg.upstream.Hits(); n != 0 {
+		t.Errorf("upstream received %d requests, want 0", n)
+	}
+	if bare.CheckRedirect != nil {
+		t.Error("NewSessionChecker mutated the caller's client")
+	}
+}
+
 func TestSessionCheck_UnavailableIs503AndNotCached(t *testing.T) {
 	short := testClient()
 	short.Timeout = 100 * time.Millisecond

@@ -1,6 +1,7 @@
 package submission_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -54,6 +55,21 @@ func (sentryCancelWorker) Work(context.Context, *river.Job[sentryCancelArgs]) er
 	return river.JobCancel(errors.New("refused"))
 }
 
+type sentrySnoozeArgs struct{}
+
+func (sentrySnoozeArgs) Kind() string { return "sentry_test_snooze" }
+
+type sentrySnoozeWorker struct {
+	river.WorkerDefaults[sentrySnoozeArgs]
+}
+
+func (sentrySnoozeWorker) Work(_ context.Context, job *river.Job[sentrySnoozeArgs]) error {
+	if !bytes.Contains(job.Metadata, []byte(`"snoozes"`)) {
+		return river.JobSnooze(time.Millisecond)
+	}
+	return nil
+}
+
 type sentryFlakyArgs struct{}
 
 func (sentryFlakyArgs) Kind() string { return "sentry_test_flaky" }
@@ -83,6 +99,7 @@ func startSentryQueue(t *testing.T, pool *pgxpool.Pool) *sentryQueue {
 	river.AddWorker(workers, &sentryFailWorker{})
 	river.AddWorker(workers, &sentryPanicWorker{})
 	river.AddWorker(workers, &sentryCancelWorker{})
+	river.AddWorker(workers, &sentrySnoozeWorker{})
 	river.AddWorker(workers, &sentryFlakyWorker{})
 	name := "sentry-" + uuid.NewString()
 	q, err := queue.New(pool, queue.Config{
@@ -185,9 +202,32 @@ func TestQueueSentry_CancelledJobOpensNothing(t *testing.T) {
 	_, rec, want := sentrytest.Boot(t, "submission")
 	q := startSentryQueue(t, pool)
 
-	q.run(t, sentryCancelArgs{}, 3, rivertype.JobStateCancelled)
+	// MaxAttempts 1: were River to hand the cancel to the handler, it would count it.
+	q.run(t, sentryCancelArgs{}, 1, rivertype.JobStateCancelled)
 	if n := len(eventsOfKind(rec, sentryCancelArgs{}.Kind())); n != 0 {
 		t.Errorf("events tagged job_kind=%s = %d, want 0", sentryCancelArgs{}.Kind(), n)
+	}
+
+	q.run(t, sentryFailArgs{}, 1, rivertype.JobStateDiscarded)
+	if n := len(eventsOfKind(rec, sentryFailArgs{}.Kind())); n != 1 {
+		t.Fatalf("positive control: events tagged job_kind=%s = %d, want 1", sentryFailArgs{}.Kind(), n)
+	}
+	rec.One(t, want)
+}
+
+// A snooze on the only attempt reaches the handler nowhere: River returns before its error path.
+func TestQueueSentry_SnoozedJobOpensNothing(t *testing.T) {
+	pool := requireDB(t)
+	defer pool.Close()
+	_, rec, want := sentrytest.Boot(t, "submission")
+	q := startSentryQueue(t, pool)
+
+	job := q.run(t, sentrySnoozeArgs{}, 1, rivertype.JobStateCompleted)
+	if !bytes.Contains(job.Metadata, []byte(`"snoozes"`)) {
+		t.Fatalf("snooze job completed without a snooze (metadata %s); the row proves nothing", job.Metadata)
+	}
+	if n := len(eventsOfKind(rec, sentrySnoozeArgs{}.Kind())); n != 0 {
+		t.Errorf("events tagged job_kind=%s = %d, want 0", sentrySnoozeArgs{}.Kind(), n)
 	}
 
 	q.run(t, sentryFailArgs{}, 1, rivertype.JobStateDiscarded)

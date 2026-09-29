@@ -19,6 +19,7 @@ const (
 	argsTIN = "20746318-0001"
 	// An unquoted value survives ScrubText, so it still shows args attached after the scrub.
 	argsSeq    = "918273645001"
+	errorsSeq  = "918273645002"
 	panicTrace = "goroutine 9 [running]:\nexample.work()"
 )
 
@@ -30,6 +31,7 @@ func jobRow(attempt, maxAttempts int) *rivertype.JobRow {
 		Attempt:     attempt,
 		MaxAttempts: maxAttempts,
 		EncodedArgs: []byte(`{"tenant_id":"` + argsTIN + `","seq":` + argsSeq + `}`),
+		Errors:      []rivertype.AttemptError{{Attempt: 1, Error: "adapter: 503 for seq " + errorsSeq}},
 	}
 }
 
@@ -58,9 +60,9 @@ func assertJobEvent(t *testing.T, e *sentry.Event, fingerprint string, attempt, 
 	if !strings.Contains(string(raw), `"job_kind"`) {
 		t.Fatalf("event JSON lacks the job_kind tag, so the marker checks below prove nothing: %s", raw)
 	}
-	for _, marker := range []string{argsTIN, argsSeq} {
+	for _, marker := range []string{argsTIN, argsSeq, errorsSeq} {
 		if strings.Contains(string(raw), marker) {
-			t.Errorf("event JSON holds the job's encoded args (%s): %s", marker, raw)
+			t.Errorf("event JSON holds the job's encoded args or earlier errors (%s): %s", marker, raw)
 		}
 	}
 }
@@ -97,6 +99,13 @@ func TestErrorReporter_RetryingAttemptOpensNothing(t *testing.T) {
 		_, rec, want := sentrytest.Boot(t, "submission")
 		(errorReporter{}).HandleError(context.Background(), jobRow(1, 1), errors.New("adapter: 503"))
 		rec.One(t, want)
+	})
+
+	// River discards at Attempt >= MaxAttempts; a rescued job or a lowered max lands past it.
+	t.Run("attempt past the max counts", func(t *testing.T) {
+		_, rec, want := sentrytest.Boot(t, "submission")
+		(errorReporter{}).HandleError(context.Background(), jobRow(9, 8), errors.New("adapter: 503"))
+		assertJobEvent(t, rec.One(t, want), "discarded", 9, 8)
 	})
 }
 

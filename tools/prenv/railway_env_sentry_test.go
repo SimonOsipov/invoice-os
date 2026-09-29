@@ -246,7 +246,12 @@ func TestSetSentryOffAgainstAScriptedRailway(t *testing.T) {
 		{name: "json_null_value", bend: map[string]string{"gateway": `.SENTRY_DSN = null`}, code: 1, check: gatewaySet},
 		{name: "variables_string", bend: map[string]string{"gateway": `"` + sentryDSNSentinel + `"`}, code: 1, check: func(t *testing.T, s authShim, out string) { refusesUnreadable(t, out) }},
 		// The shim then answers {"data":{"variables":}}, which graphql_post passes through.
-		{name: "reread_not_json", bend: map[string]string{"gateway": `error("broken read")`}, code: 1, check: func(t *testing.T, s authShim, out string) { refusesUnreadable(t, out) }},
+		{name: "read_not_json", bend: map[string]string{"gateway": `error("broken read")`}, code: 1, check: func(t *testing.T, s authShim, out string) { refusesUnreadable(t, out) }},
+		// Only the re-read after the write is unreadable.
+		{name: "reread_unreadable", bend: map[string]string{"gateway": `if .SENTRY_DSN == "" then null else . end`}, code: 1, check: func(t *testing.T, s authShim, out string) {
+			refusesUnreadable(t, out)
+			noReReadAfter(t, s, "gateway")
+		}},
 		{name: "token_write_refused_after_the_backends", files: map[string]string{"upsert-SENTRY_AUTH_TOKEN.json": `{"errors":[{"message":"Not Authorized"}]}`}, code: 1, check: func(t *testing.T, s authShim, out string) {
 			ids, _ := reReads(s.calls(t))
 			if len(ids) != len(sentryBackends) || slices.Contains(ids, sentrySvcID("landing")) {

@@ -251,6 +251,8 @@ it before any forked service deploys.
 4. **Railway does store an empty-string variable value** — measured, not assumed. On the
    first `prepare-env` run of a ready PR, both services' re-read verdicts came back
    `is empty` rather than `is absent`, so `variableUpsert` accepted `""` and persisted it.
+   Fork writes now go through `set_service_vars`, which sends `variableCollectionUpsert`
+   (one write per service, only for names that differ). The gate run on PR #282 showed: <pending>.
    The verdict in `ai_key_verdict` passes on either shape, absent or exactly `""`, so no
    code depends on which one Railway chooses; a rejection would have failed `prepare-env`
    loudly rather than deploying a fork with an inherited key.

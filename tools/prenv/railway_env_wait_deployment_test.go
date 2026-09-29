@@ -406,3 +406,239 @@ func TestWaitDeployment_NoTokenMakesNoCall(t *testing.T) {
 		}
 	}
 }
+
+// A status outside the known set is not terminal: the wait polls on and names it at the window's end.
+func TestWaitDeployment_UnknownStatusKeepsPolling(t *testing.T) {
+	const odd = "FUTURE_STATE"
+	t.Run("then success", func(t *testing.T) {
+		s := newDepShim(t, depUnrouted, depStatus(upIDA, odd), depStatus(upIDA, odd), depStatus(upIDA, "SUCCESS"))
+		stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), upIDA)
+		if code != 0 {
+			t.Errorf("exit %d, want 0; stdout = %q, stderr = %q", code, stdout, stderr)
+		}
+		if n := opCount(t, s, "dep"); n != 3 {
+			t.Errorf("dep calls = %d, want 3", n)
+		}
+	})
+	t.Run("never resolves", func(t *testing.T) {
+		s := newDepShim(t, depStatus(upIDA, odd))
+		stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), upIDA)
+		if code != 1 {
+			t.Errorf("exit %d, want 1; stdout = %q, stderr = %q", code, stdout, stderr)
+		}
+		if n := opCount(t, s, "dep"); n != 60 {
+			t.Errorf("dep calls = %d, want 60", n)
+		}
+		if e := errorLines(stdout + stderr); !strings.Contains(e, odd) {
+			t.Errorf("error lines do not name the last status %q: %q", odd, e)
+		}
+	})
+}
+
+// The 3rd transient tick in total ends the wait, not the 3rd in a row.
+func TestWaitDeployment_TransientTicksCountInTotal(t *testing.T) {
+	s := newDepShim(t, depStatus(upIDA, "SUCCESS"), depStatus(upIDA, "BUILDING"), depStatus(upIDA, "BUILDING"))
+	// "ok" is not a fault: the shim falls through to normal routing for that call.
+	setFaults(t, s, "dep", "timeout", "ok", "timeout", "ok", "timeout")
+	stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), upIDA)
+
+	if code != 1 {
+		t.Errorf("exit %d, want 1; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if n := opCount(t, s, "dep"); n != 5 {
+		t.Errorf("dep calls = %d, want 5 (timeout, BUILDING, timeout, BUILDING, timeout)", n)
+	}
+	if e := errorLines(stdout + stderr); !strings.Contains(e, "Railway") || !strings.Contains(e, "(28)") {
+		t.Errorf("error lines do not name Railway and the curl fault: %q", e)
+	}
+}
+
+func TestWaitDeployment_GraphQLErrorMidPollEndsAtOnce(t *testing.T) {
+	s := newDepShim(t, depUnrouted, depStatus(upIDA, "BUILDING"), `{"errors":[{"message":"boom-mid-poll"}]}`, depStatus(upIDA, "SUCCESS"))
+	stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), upIDA)
+
+	if code != 1 {
+		t.Errorf("exit %d, want 1; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if n := opCount(t, s, "dep"); n != 2 {
+		t.Errorf("dep calls = %d, want 2: the error ends the wait, the SUCCESS behind it is never read", n)
+	}
+	if e := errorLines(stdout + stderr); !strings.Contains(e, "boom-mid-poll") {
+		t.Errorf("error lines do not name the GraphQL message: %q", e)
+	}
+}
+
+func TestWaitDeployment_UUIDShape(t *testing.T) {
+	ok := []struct{ name, id string }{
+		{"lowercase", upIDA},
+		{"uppercase", strings.ToUpper(upIDA)},
+	}
+	for _, c := range ok {
+		t.Run("accepts "+c.name, func(t *testing.T) {
+			s := newDepShim(t, depStatus(c.id, "SUCCESS"))
+			stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), c.id)
+			if code != 0 {
+				t.Errorf("exit %d, want 0; stdout = %q, stderr = %q", code, stdout, stderr)
+			}
+			calls := s.calls(t)
+			if len(calls) != 1 || calls[0].Variables["id"] != c.id {
+				t.Errorf("calls = %+v, want one dep call carrying id %q", calls, c.id)
+			}
+		})
+	}
+	bad := []struct{ name, id string }{
+		{"last group one short", upIDA[:len(upIDA)-1]},
+		{"last group one long", upIDA + "0"},
+		{"first group one short", upIDA[1:]},
+		{"non-hex digit", "g" + upIDA[1:]},
+		{"no hyphens", strings.ReplaceAll(upIDA, "-", "")},
+		{"braced", "{" + upIDA + "}"},
+	}
+	for _, c := range bad {
+		t.Run("rejects "+c.name, func(t *testing.T) {
+			s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
+			stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), c.id)
+			if n := len(s.calls(t)); n != 0 {
+				t.Errorf("calls = %d, want 0", n)
+			}
+			s.requireLogs(t)
+			if code != 1 {
+				t.Errorf("exit %d, want 1; stdout = %q, stderr = %q", code, stdout, stderr)
+			}
+		})
+	}
+}
+
+// The id echoed in the error is cut to 64 characters with every character outside [A-Za-z0-9-] shown as `?`.
+func TestWaitDeployment_MalformedIDIsEchoedSanitised(t *testing.T) {
+	cases := []struct{ name, id, want string }{
+		{"metacharacters", "70f187fe;true", "70f187fe?true"},
+		{"whitespace and newline", "a b\nc", "a?b?c"},
+		{"command substitution", "$(id)", "??id?"},
+		{"long", strings.Repeat("x", 200), strings.Repeat("x", 64)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
+			stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), c.id)
+			if code != 1 {
+				t.Fatalf("exit %d, want 1; stdout = %q, stderr = %q", code, stdout, stderr)
+			}
+			e := errorLines(stdout + stderr)
+			if !strings.Contains(e, "'"+c.want+"'") {
+				t.Errorf("error lines lack the sanitised id '%s': %q", c.want, e)
+			}
+			if strings.Contains(e, strings.Repeat("x", 65)) {
+				t.Errorf("the id is not cut to 64 characters: %q", e)
+			}
+		})
+	}
+}
+
+// The id checks run before the token check: a bad id names itself even with no token.
+func TestWaitDeployment_IDChecksBeforeTheTokenCheck(t *testing.T) {
+	for _, c := range []struct{ name, id, want string }{
+		{"empty", "", "empty"},
+		{"malformed", "not-a-uuid", "uuid"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
+			stdout, stderr, code := runWaitDeployment(t, s, forkExports(false, true, false), c.id)
+			if code != 1 {
+				t.Errorf("exit %d, want 1", code)
+			}
+			e := errorLines(stdout + stderr)
+			if !strings.Contains(e, c.want) {
+				t.Errorf("error lines lack %q: %q", c.want, e)
+			}
+			if strings.Contains(e, "RAILWAY_API_TOKEN") {
+				t.Errorf("the token error masked the id error: %q", e)
+			}
+		})
+	}
+}
+
+func TestWaitDeployment_MissingArguments(t *testing.T) {
+	t.Run("no id", func(t *testing.T) {
+		s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
+		stdout, stderr, code := s.run(t, waitDepExports(), "wait-deployment", waitDepLabel)
+		if code != 1 {
+			t.Errorf("exit %d, want 1; stdout = %q, stderr = %q", code, stdout, stderr)
+		}
+		if n := len(s.calls(t)); n != 0 {
+			t.Errorf("calls = %d, want 0", n)
+		}
+		s.requireLogs(t)
+		if e := errorLines(stdout + stderr); !strings.Contains(e, waitDepLabel) || !strings.Contains(e, "empty") {
+			t.Errorf("error lines do not name the label and the empty id: %q", e)
+		}
+	})
+	t.Run("no label", func(t *testing.T) {
+		s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
+		stdout, stderr, code := s.run(t, waitDepExports(), "wait-deployment")
+		if code != 2 {
+			t.Errorf("exit %d, want 2 (usage); stdout = %q, stderr = %q", code, stdout, stderr)
+		}
+		if !strings.Contains(stdout+stderr, "usage: railway-env.sh wait-deployment <label> <deployment-id>") {
+			t.Errorf("no wait-deployment usage line: %q", stdout+stderr)
+		}
+		if n := len(s.calls(t)); n != 0 {
+			t.Errorf("calls = %d, want 0", n)
+		}
+		s.requireLogs(t)
+	})
+}
+
+func TestWaitDeployment_NoProjectIDMakesNoCall(t *testing.T) {
+	s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
+	stdout, stderr, code := runWaitDeployment(t, s, forkExports(true, false, false), upIDA)
+
+	if n := len(s.calls(t)); n != 0 {
+		t.Errorf("calls = %d, want 0 with no project id", n)
+	}
+	s.requireLogs(t)
+	if code != 1 {
+		t.Errorf("exit %d, want 1; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if e := errorLines(stdout + stderr); !strings.Contains(e, "RAILWAY_PROJECT_ID") {
+		t.Errorf("error lines do not name RAILWAY_PROJECT_ID: %q", e)
+	}
+}
+
+// No token reaches any output line, on the success line or on a failure path.
+func TestWaitDeployment_NoTokenInAnyOutput(t *testing.T) {
+	both := "export RAILWAY_PROJECT_TOKEN=" + waitDepToken + "\n" + forkExports(true, true, false)
+	cases := []struct {
+		name     string
+		s        func(*testing.T) authShim
+		wantCode int
+	}{
+		{"success", func(t *testing.T) authShim { return newDepShim(t, depStatus(upIDA, "SUCCESS")) }, 0},
+		{"terminal status", func(t *testing.T) authShim { return newDepShim(t, depStatus(upIDA, "FAILED")) }, 1},
+		{"graphql error", func(t *testing.T) authShim { return newDepShim(t, `{"errors":[{"message":"boom"}]}`) }, 1},
+		{"third transient tick", func(t *testing.T) authShim {
+			s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
+			setFaults(t, s, "dep", "timeout", "timeout", "timeout")
+			return s
+		}, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := c.s(t)
+			stdout, stderr, code := runWaitDeployment(t, s, both, upIDA)
+			if code != c.wantCode {
+				t.Fatalf("exit %d, want %d; stdout = %q, stderr = %q", code, c.wantCode, stdout, stderr)
+			}
+			for _, tok := range []string{forkToken, waitDepToken} {
+				if strings.Contains(stdout+stderr, tok) {
+					t.Errorf("output carries a token %q: stdout = %q, stderr = %q", tok, stdout, stderr)
+				}
+			}
+			if c.wantCode == 0 {
+				if want := "auth deployment " + upIDA + " is SUCCESS.\n"; stdout != want {
+					t.Errorf("stdout = %q, want exactly %q", stdout, want)
+				}
+			}
+		})
+	}
+}

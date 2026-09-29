@@ -4,8 +4,7 @@ name: Dev Env (deploy full fleet + verify)
 # A ready PR → its own ephemeral env, which THIS workflow forks from
 # the persistent environment (M4-23-03) — not Railway's PR Environments feature,
 # which is OFF and stays OFF. push to `main` and workflow_dispatch → the
-# PERSISTENT environment itself (deploy + health-gate + fleet-gate only;
-# M4-22-07 dropped reset-seed/E2E).
+# PERSISTENT environment itself (M4-22-07 dropped reset-seed/E2E).
 #
 # persona-handoff-fix, Decision [pr-only-reset]: a PR's forked Postgres inherits
 # development's live data, not an empty schema, so it also inherits every

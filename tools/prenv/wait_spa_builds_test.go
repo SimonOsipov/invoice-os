@@ -324,3 +324,131 @@ func btoi(b bool) int {
 	}
 	return 0
 }
+
+// No URL to wait for is a caller error, never a pass.
+func TestWaitSPABuilds_NoURLsFails(t *testing.T) {
+	s := newSPAShim(t)
+	stdout, stderr, code := s.run(t, spaSHA)
+
+	if code == 0 {
+		t.Errorf("exit 0 with no URLs: a gate that checked nothing passed; stdout = %q, stderr = %q", stdout, stderr)
+	}
+	if !strings.Contains(errorLines(stdout+stderr), "usage") {
+		t.Errorf("error lines carry no usage line: %q", stdout+stderr)
+	}
+}
+
+// An empty expected sha would match an empty /build.txt: refused before any request.
+func TestWaitSPABuilds_EmptyExpectedSHAFails(t *testing.T) {
+	s := newSPAShim(t)
+	for _, u := range spaURLs {
+		s.serve(t, u, "")
+	}
+	stdout, stderr, code := s.run(t, "", spaURLs...)
+
+	if code == 0 {
+		t.Errorf("exit 0 with an empty expected sha; stdout = %q, stderr = %q", stdout, stderr)
+	}
+	if n := len(s.requests(t)); n != 0 {
+		t.Errorf("requests = %d, want 0: nothing to compare against", n)
+	}
+}
+
+// The comparison is exact: an abbreviated or extended sha is another build.
+func TestWaitSPABuilds_OnlyTheExactBuildPasses(t *testing.T) {
+	for _, c := range []struct{ name, served string }{
+		{"abbreviated sha", spaSHA[:7]},
+		{"sha with a suffix", spaSHA + "-dirty"},
+		{"sha with a prefix", "v" + spaSHA},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newSPAShim(t)
+			landing := spaURLs[0]
+			s.serve(t, landing, c.served)
+			stdout, stderr, code := s.run(t, spaSHA, spaURLs...)
+
+			if code != 1 {
+				t.Errorf("exit %d, want 1; stdout = %q, stderr = %q", code, stdout, stderr)
+			}
+			if want := spaTimeoutError(landing, spaSHA, c.served); !strings.Contains(errorLines(stdout+stderr), want) {
+				t.Errorf("error lines lack the timeout message naming %q: %q", c.served, errorLines(stdout+stderr))
+			}
+		})
+	}
+}
+
+// The stamp file ends in a newline, and a CRLF or padded one must still match.
+func TestWaitSPABuilds_TrimsWhitespaceAroundTheBuild(t *testing.T) {
+	s := newSPAShim(t)
+	s.put(t, "build-"+spaHost(spaURLs[0]), "  "+spaSHA+" \r\n")
+	stdout, stderr, code := s.run(t, spaSHA, spaURLs...)
+
+	if code != 0 {
+		t.Errorf("exit %d, want 0; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if n := healthyLines(stdout, spaSHA); n != len(spaURLs) {
+		t.Errorf("healthy-on lines = %d, want %d", n, len(spaURLs))
+	}
+}
+
+// Each URL gets its own 120 ticks, and its own last-seen build.
+func TestWaitSPABuilds_EachURLHasItsOwnWindowAndLastSeen(t *testing.T) {
+	late := strings.Repeat(spaOld+"\n", 100) + spaSHA + "\n"
+	s := newSPAShim(t)
+	s.put(t, "build-"+spaHost(spaURLs[0])+".seq", late)
+	s.put(t, "build-"+spaHost(spaURLs[1])+".seq", late)
+	stdout, stderr, code := s.run(t, spaSHA, spaURLs...)
+	if code != 0 {
+		t.Fatalf("two URLs that each need 101 ticks: exit %d, want 0; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if n := s.hits(t, spaURLs[1], "/build.txt"); n != 101 {
+		t.Errorf("app /build.txt requests = %d, want 101", n)
+	}
+
+	s = newSPAShim(t)
+	ops := spaURLs[2]
+	s.put(t, "health-"+spaHost(ops), "503\n")
+	stdout, stderr, code = s.run(t, spaSHA, spaURLs...)
+	if code != 1 {
+		t.Fatalf("exit %d, want 1; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if want := spaTimeoutError(ops, spaSHA, "none"); !strings.Contains(errorLines(stdout+stderr), want) {
+		t.Errorf("ops never answered /health after two URLs served %s; want last seen 'none': %q", spaSHA[:7], errorLines(stdout+stderr))
+	}
+}
+
+// The first URL that fails ends the run: no later URL is asked.
+func TestWaitSPABuilds_FirstFailureStopsTheRun(t *testing.T) {
+	s := newSPAShim(t)
+	s.serve(t, spaURLs[0], spaOld)
+	_, _, code := s.run(t, spaSHA, spaURLs...)
+
+	if code != 1 {
+		t.Errorf("exit %d, want 1", code)
+	}
+	if n := s.hits(t, spaURLs[0], "/health"); n != 120 {
+		t.Errorf("landing /health requests = %d, want 120", n)
+	}
+	for _, u := range spaURLs[1:] {
+		if n := s.hits(t, u, "/health"); n != 0 {
+			t.Errorf("%s /health requests = %d, want 0 after landing failed", u, n)
+		}
+	}
+}
+
+// A trailing slash makes `//health`, which the edge does not answer: the run ends red naming the URL.
+func TestWaitSPABuilds_TrailingSlashURLNeverPassesVacuously(t *testing.T) {
+	s := newSPAShim(t)
+	slashed := spaURLs[1] + "/"
+	stdout, stderr, code := s.run(t, spaSHA, spaURLs[0], slashed)
+
+	if code != 1 {
+		t.Errorf("exit %d, want 1; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if e := errorLines(stdout + stderr); !strings.Contains(e, "::error::"+slashed+" did not serve build") {
+		t.Errorf("error lines do not name the URL %q: %q", slashed, e)
+	}
+	if healthyLines(stdout, spaSHA) != 1 {
+		t.Errorf("want exactly the first URL healthy; stdout = %q", stdout)
+	}
+}

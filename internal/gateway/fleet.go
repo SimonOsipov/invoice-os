@@ -93,6 +93,12 @@ func FleetHealthHandler(upstreams map[string]*url.URL, healthPaths map[string]st
 			wg.Add(1)
 			go func(i int, name string, base *url.URL) {
 				defer wg.Done()
+				// A panicking probe must not kill the gateway; its service reads as down.
+				defer func() {
+					if rec := recover(); rec != nil {
+						probed[i] = ServiceHealth{Name: name, Status: statusDown, Error: "probe panicked"}
+					}
+				}()
 				sem <- struct{}{}
 				defer func() { <-sem }()
 				probed[i] = probeService(r.Context(), client, name, base, healthPaths[name])

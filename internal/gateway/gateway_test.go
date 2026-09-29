@@ -37,9 +37,10 @@ type capture struct {
 // that fetches that issuer's JWKS over httptest, and one recording upstream per
 // routed service. No Railway, no Postgres.
 type testGateway struct {
-	handler http.Handler
-	issuer  *auth.MockIssuer
-	caps    map[string]*capture
+	handler  http.Handler
+	issuer   *auth.MockIssuer
+	verifier *auth.Verifier
+	caps     map[string]*capture
 }
 
 func setupGateway(t *testing.T) *testGateway {
@@ -71,9 +72,10 @@ func setupGateway(t *testing.T) *testGateway {
 	}
 
 	return &testGateway{
-		handler: Handler(Options{Verifier: verifier, Upstreams: upstreams}),
-		issuer:  issuer,
-		caps:    caps,
+		handler:  Handler(Options{Verifier: verifier, Upstreams: upstreams}),
+		issuer:   issuer,
+		verifier: verifier,
+		caps:     caps,
 	}
 }
 

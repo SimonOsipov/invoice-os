@@ -132,4 +132,12 @@ func TestStatusRecorder(t *testing.T) {
 	if sr2.status != http.StatusTeapot {
 		t.Errorf("status = %d, want 418 (first WriteHeader wins)", sr2.status)
 	}
+
+	// An informational 1xx is not the final status.
+	sr3 := &statusRecorder{ResponseWriter: httptest.NewRecorder(), status: http.StatusOK}
+	sr3.WriteHeader(http.StatusContinue)
+	sr3.WriteHeader(http.StatusBadGateway)
+	if sr3.status != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502 after a 100 Continue", sr3.status)
+	}
 }

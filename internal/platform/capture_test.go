@@ -108,6 +108,28 @@ func TestServerError_UnloggedStatusOpensOneIssue(t *testing.T) {
 	assertServerErrorShape(t, e, "503")
 }
 
+// A real server, because httptest.ResponseRecorder treats a 1xx as final.
+func TestServerError_After1xxOpensOneIssue(t *testing.T) {
+	app, rec, want := sentrytest.Boot(t, "svc")
+	app.Mux.HandleFunc(thingPattern, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusContinue)
+		w.WriteHeader(http.StatusBadGateway)
+	})
+	srv := httptest.NewServer(app.Handler())
+	resp, err := srv.Client().Get(srv.URL + thingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	// Close waits for the handler chain, so its capture has happened.
+	srv.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", resp.StatusCode)
+	}
+
+	assertServerErrorShape(t, rec.One(t, want), "502")
+}
+
 func TestServerError_LastErrorRecordWins(t *testing.T) {
 	app, rec, want := sentrytest.Boot(t, "svc")
 	app.Mux.HandleFunc(thingPattern, func(w http.ResponseWriter, r *http.Request) {

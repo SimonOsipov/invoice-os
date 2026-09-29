@@ -1,5 +1,5 @@
 // railway_env_retry_test.go drives railway-env.sh's Railway transport against a faulting curl:
-// what it retries, what it fails on at once, and what it prints. Guards pass at HEAD; the rest are red.
+// what it retries, what it fails on at once, and what it prints.
 package main
 
 import (
@@ -173,25 +173,29 @@ func TestRailwayAPI_ReadTimeoutThenSuccess(t *testing.T) {
 }
 
 func TestRailwayAPI_HTTP5xxThenSuccess(t *testing.T) {
-	m := healthyMap()
-	var edges []string
-	stores := map[string]map[string]string{}
-	for svc, vars := range m {
-		edges = append(edges, instance("svc-"+svc, svc))
-		stores["svc-"+svc] = vars
-	}
-	s := newAuthShim(t, map[string]string{"settle": `{"data":{"environment":{"serviceInstances":{"edges":[` + strings.Join(edges, ",") + `]}}}}`}, stores)
-	setFaults(t, s, "svcVars", "503")
-	stdout, stderr, code := s.run(t, forkExports(true, true, true), "assert-db-dsns", retryForkEnv)
+	for _, status := range []string{"500", "502", "503", "504"} {
+		t.Run(status, func(t *testing.T) {
+			m := healthyMap()
+			var edges []string
+			stores := map[string]map[string]string{}
+			for svc, vars := range m {
+				edges = append(edges, instance("svc-"+svc, svc))
+				stores["svc-"+svc] = vars
+			}
+			s := newAuthShim(t, map[string]string{"settle": `{"data":{"environment":{"serviceInstances":{"edges":[` + strings.Join(edges, ",") + `]}}}}`}, stores)
+			setFaults(t, s, "svcVars", status)
+			stdout, stderr, code := s.run(t, forkExports(true, true, true), "assert-db-dsns", retryForkEnv)
 
-	if code != 0 {
-		t.Errorf("exit %d, want 0: an HTTP 503 on a read is retried; output = %q", code, stdout+stderr)
-	}
-	if !strings.Contains(stdout, "DSN check clean") {
-		t.Errorf("stdout lacks the DSN report; stdout = %q", stdout)
-	}
-	if n := opCount(t, s, "svcVars"); n != len(m)+1 {
-		t.Errorf("svcVars calls = %d, want %d (one per service plus the retry)", n, len(m)+1)
+			if code != 0 {
+				t.Errorf("exit %d, want 0: an HTTP %s on a read is retried; output = %q", code, status, stdout+stderr)
+			}
+			if !strings.Contains(stdout, "DSN check clean") {
+				t.Errorf("stdout lacks the DSN report; stdout = %q", stdout)
+			}
+			if n := opCount(t, s, "svcVars"); n != len(m)+1 {
+				t.Errorf("svcVars calls = %d, want %d (one per service plus the retry)", n, len(m)+1)
+			}
+		})
 	}
 }
 
@@ -348,18 +352,23 @@ func TestRailwayAPI_ExhaustedBudgetNamesRailwayCallAndLastError(t *testing.T) {
 }
 
 func TestRailwayAPI_ExhaustedOn5xxNamesTheStatus(t *testing.T) {
-	s := newSealedShim(t, sourceInstances(), plainOn("PORT", sealedGatewayID))
-	setFaults(t, s, "sealedAudit", "503", "503", "503")
-	stdout, stderr, code := s.run(t, forkExports(true, true, true), "audit-sealed-variables")
+	for _, faults := range [][]string{{"503", "503", "503"}, {"timeout", "timeout", "503"}} {
+		t.Run(strings.Join(faults, "_"), func(t *testing.T) {
+			s := newSealedShim(t, sourceInstances(), plainOn("PORT", sealedGatewayID))
+			setFaults(t, s, "sealedAudit", faults...)
+			stdout, stderr, code := s.run(t, forkExports(true, true, true), "audit-sealed-variables")
 
-	if code != 1 {
-		t.Errorf("exit %d, want 1; output = %q", code, stdout+stderr)
-	}
-	if n := opCount(t, s, "sealedAudit"); n != 3 {
-		t.Errorf("sealedAudit calls = %d, want 3", n)
-	}
-	if e := errorLines(stdout + stderr); !strings.Contains(e, "503") {
-		t.Errorf("error lines do not name 503: %q", e)
+			if code != 1 {
+				t.Errorf("exit %d, want 1; output = %q", code, stdout+stderr)
+			}
+			if n := opCount(t, s, "sealedAudit"); n != 3 {
+				t.Errorf("sealedAudit calls = %d, want 3", n)
+			}
+			// The last error is the 503; an earlier timeout must not stand in for it.
+			if e := errorLines(stdout + stderr); !strings.Contains(e, "503") || strings.Contains(e, "(28)") {
+				t.Errorf("error lines do not name the last error, 503, alone: %q", e)
+			}
+		})
 	}
 }
 
@@ -701,20 +710,372 @@ func TestRailwayAPI_BodyNeverOnCurlArgv(t *testing.T) {
 }
 
 func TestRailwayAPI_CallLogOneLinePerAttempt(t *testing.T) {
-	s := newSealedShim(t, sourceInstances(), plainOn("PORT", sealedGatewayID))
-	setFaults(t, s, "sealedAudit", "timeout")
-	tmp := t.TempDir()
-	stdout, stderr, code := s.run(t, forkExports(true, true, true)+"export RUNNER_TEMP='"+tmp+"'\n", "audit-sealed-variables")
+	const cmd = "audit-sealed-variables"
+	for _, c := range []struct {
+		name   string
+		faults []string
+		code   int
+		want   []string
+	}{
+		{"transient then ok", []string{"timeout"}, 0, []string{cmd + "\t1\ttransient", cmd + "\t2\tok"}},
+		{"exhausted", []string{"503", "timeout", "503"}, 1, []string{cmd + "\t1\ttransient", cmd + "\t2\ttransient", cmd + "\t3\ttransient"}},
+		{"fatal", []string{"gqlerr"}, 1, []string{cmd + "\t1\tfatal"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newSealedShim(t, sourceInstances(), plainOn("PORT", sealedGatewayID))
+			setFaults(t, s, "sealedAudit", c.faults...)
+			tmp := t.TempDir()
+			stdout, stderr, code := s.run(t, forkExports(true, true, true)+"export RUNNER_TEMP='"+tmp+"'\n", cmd)
+
+			if code != c.code {
+				t.Errorf("exit %d, want %d; output = %q", code, c.code, stdout+stderr)
+			}
+			raw, err := os.ReadFile(filepath.Join(tmp, "railway-api-calls.tsv"))
+			if err != nil {
+				t.Fatalf("the call log was not written: %v", err)
+			}
+			if got := strings.Split(strings.TrimSpace(string(raw)), "\n"); !slices.Equal(got, c.want) {
+				t.Errorf("call log = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestRailwayAPI_WriteExhaustedBudgetExitsWithoutReRead(t *testing.T) {
+	s := newAuthShim(t, map[string]string{
+		"settle": forkSettle(`{"node":{"serviceId":"` + productionGatewayID + `","serviceName":"gateway"}}`),
+	}, map[string]map[string]string{
+		productionGatewayID: {"RAILWAY_ENVIRONMENT_NAME": "production", "ENVIRONMENT": "development"},
+	})
+	setFaults(t, s, "varUpsert", "timeout", "502", "timeout")
+	stdout, stderr, code := s.run(t, forkExports(true, true, true), "set-production-environment", persistentEnvironmentID)
+
+	if code != 1 {
+		t.Errorf("exit %d, want 1; output = %q", code, stdout+stderr)
+	}
+	if n := opCount(t, s, "varUpsert"); n != 3 {
+		t.Errorf("varUpsert calls = %d, want 3", n)
+	}
+	if n := opCount(t, s, "svcVars"); n != 0 {
+		t.Errorf("svcVars calls = %d, want 0: a failed write is not re-read", n)
+	}
+	e := errorLines(stderr)
+	for _, needle := range []string{"Railway", "after 3 attempts", "setting gateway.ENVIRONMENT", "(28)"} {
+		if !strings.Contains(e, needle) {
+			t.Errorf("stderr error lines lack %q: %q", needle, e)
+		}
+	}
+	if got := s.sleeps(t); !slices.Equal(got, []string{"5", "10"}) {
+		t.Errorf("sleeps = %v, want [5 10]", got)
+	}
+	if strings.Contains(stdout, productionConfirmation) {
+		t.Errorf("stdout confirms a write that never landed: %q", stdout)
+	}
+}
+
+func TestVerifySPADomains_RetryKeepsEveryDiscoveredURL(t *testing.T) {
+	spas := []struct{ id, key string }{
+		{retryLandingID, "LANDING_URL"}, {retryAppID, "APP_URL"},
+		{retryOpsID, "OPS_CONSOLE_URL"}, {retrySupportID, "SUPPORT_CONSOLE_URL"},
+	}
+	r := map[string]string{}
+	var want string
+	for _, spa := range spas {
+		host := spa.id + "-pr-900.up.railway.app"
+		r["dom-"+retryForkEnv+"-"+spa.id] = domainsOf(false, host)
+		want += spa.key + "=https://" + host + "\n"
+	}
+	s := newAuthShim(t, r, nil)
+	writeFile(t, filepath.Join(s.dir, "probe.body"), "ok")
+	writeFile(t, filepath.Join(s.dir, "probe.code"), "200")
+	setFaults(t, s, "dom", "timeout", "503")
+	genv := filepath.Join(t.TempDir(), "github_env")
+	stdout, stderr, code := s.run(t, retryExports()+"export GITHUB_ENV='"+genv+"'\n", "verify-spa-domains", retryForkEnv)
 
 	if code != 0 {
 		t.Errorf("exit %d, want 0; output = %q", code, stdout+stderr)
 	}
-	raw, err := os.ReadFile(filepath.Join(tmp, "railway-api-calls.tsv"))
-	if err != nil {
-		t.Fatalf("the call log was not written: %v", err)
+	if n := opCount(t, s, "dom"); n != len(spas)+2 {
+		t.Errorf("dom calls = %d, want %d (one per SPA plus two retries)", n, len(spas)+2)
 	}
-	want := []string{"audit-sealed-variables\t1\ttransient", "audit-sealed-variables\t2\tok"}
-	if got := strings.Split(strings.TrimSpace(string(raw)), "\n"); !slices.Equal(got, want) {
-		t.Errorf("call log = %q, want %q", got, want)
+	raw, err := os.ReadFile(genv)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if string(raw) != want {
+		t.Errorf("GITHUB_ENV = %q, want exactly %q", raw, want)
+	}
+	if w := warningLines(stderr); len(w) != 1 || !strings.Contains(w[0], "attempt 3/3") {
+		t.Errorf("stderr warnings = %q, want one naming attempt 3/3", w)
+	}
+}
+
+// darkGatewayFixture makes verify-gateway-domain find the gateway hostname dark, so it heals.
+func darkGatewayFixture(t *testing.T) authShim {
+	t.Helper()
+	s := reconcileForkFixture(t)
+	writeFile(t, filepath.Join(s.dir, "probe.body"), `{"status":"error","code":404,"message":"Application not found"}`)
+	writeFile(t, filepath.Join(s.dir, "probe.code"), "404")
+	return s
+}
+
+func TestHealDomain_Delete5xxIsSentOnceAndNamed(t *testing.T) {
+	s := darkGatewayFixture(t)
+	writeFile(t, filepath.Join(s.dir, "domDelete.json"), `{"data":{"serviceDomainDelete":true}}`)
+	setFaults(t, s, "domDelete", "503")
+	stdout, stderr, code := s.run(t, retryExports(), "verify-gateway-domain", retryForkEnv)
+
+	if code != 1 {
+		t.Errorf("exit %d, want 1; output = %q", code, stdout+stderr)
+	}
+	if n := opCount(t, s, "domDelete"); n != 1 {
+		t.Errorf("domDelete calls = %d, want 1: serviceDomainDelete is sent once", n)
+	}
+	if n := opCount(t, s, "domCreate"); n != 0 {
+		t.Errorf("domCreate calls = %d, want 0 after a failed delete", n)
+	}
+	e := errorLines(stderr)
+	for _, needle := range []string{"503", "deleting the unroutable gateway domain"} {
+		if !strings.Contains(e, needle) {
+			t.Errorf("stderr error lines lack %q: %q", needle, e)
+		}
+	}
+}
+
+func TestDeleteEnvironmentTimeoutKeepsTwoRounds(t *testing.T) {
+	list := `{"data":{"environments":{"edges":[` +
+		`{"node":{"id":"` + persistentEnvironmentID + `","name":"production","isEphemeral":false}},` +
+		`{"node":{"id":"env-pr-900","name":"pr-900","isEphemeral":true}}]}}}`
+	s := newAuthShim(t, map[string]string{"envList": list, "deletePrEnvironment": `{"data":{"environmentDelete":true}}`}, nil)
+	setFaults(t, s, "deletePrEnvironment", "timeout", "timeout")
+	stdout, stderr, code := s.run(t, forkExports(true, true, true), "delete-environment", "pr-900")
+
+	if code != 1 {
+		t.Errorf("exit %d, want 1: the environment is still listed; output = %q", code, stdout+stderr)
+	}
+	if n := opCount(t, s, "deletePrEnvironment"); n != 2 {
+		t.Errorf("deletePrEnvironment calls = %d, want 2: one per round, no inner retry", n)
+	}
+}
+
+func TestBucketCreateTimeoutIsSentOnce(t *testing.T) {
+	s := reconcileForkFixture(t)
+	// The probe sees no instance; the confirm poll finds the one Railway created anyway.
+	writeFile(t, filepath.Join(s.dir, "bucketCreds-"+retryForkEnv+".seq"), gqlNotAuthorized+"\n"+bucketNamed(retryForkBucket)+"\n")
+	setFaults(t, s, "bucketCreate", "timeout")
+	stdout, stderr, code := runReconcileFork(t, s)
+
+	if code != 0 {
+		t.Errorf("exit %d, want 0: the confirm poll adopts the bucket instance; output = %q", code, stdout+stderr)
+	}
+	if n := opCount(t, s, "bucketCreate"); n != 1 {
+		t.Errorf("bucketCreate calls = %d, want 1: bucketCreate is sent once", n)
+	}
+}
+
+// postgresFirstRead answers the first svcInstance read with status, later ones from svcInstance.json.
+func postgresFirstRead(t *testing.T, s authShim, status string) {
+	t.Helper()
+	writeFile(t, filepath.Join(s.dir, "svcInstance.seq"), postgresInstance(status)+"\n")
+}
+
+func TestPostgresDeployTimeoutIsSentOnceThenFallsBack(t *testing.T) {
+	s := reconcileForkFixture(t)
+	postgresFirstRead(t, s, "NONE")
+	setFaults(t, s, "svcDeploy", "timeout")
+	stdout, stderr, code := runReconcileFork(t, s)
+
+	if code != 0 {
+		t.Errorf("exit %d, want 0: the redeploy fallback runs; output = %q", code, stdout+stderr)
+	}
+	if n := opCount(t, s, "svcDeploy"); n != 1 {
+		t.Errorf("svcDeploy calls = %d, want 1: serviceInstanceDeployV2 is sent once", n)
+	}
+	if n := opCount(t, s, "svcRedeploy"); n != 1 {
+		t.Errorf("svcRedeploy calls = %d, want 1", n)
+	}
+}
+
+func TestPostgresRedeployTimeoutIsSentOnce(t *testing.T) {
+	for _, c := range []struct {
+		name, status string
+		faults       map[string][]string
+		volumeSeq    bool
+		wantRedeploy int
+		wantErr      string
+	}{
+		{"fallback after a failed deploy", "NONE", map[string][]string{"svcDeploy": {"timeout"}, "svcRedeploy": {"timeout"}}, false, 1, "Both serviceInstanceDeployV2 and serviceInstanceRedeploy failed"},
+		{"a FAILED deployment", "FAILED", map[string][]string{"svcRedeploy": {"timeout"}}, false, 1, "serviceInstanceRedeploy failed for postgres"},
+		{"after creating the volume", "SUCCESS", map[string][]string{"svcRedeploy": {"timeout"}}, true, 1, "after creating its volume"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := reconcileForkFixture(t)
+			postgresFirstRead(t, s, c.status)
+			if c.volumeSeq {
+				writeFile(t, filepath.Join(s.dir, "vols-"+retryForkEnv+".seq"), volumesOf()+"\n")
+			}
+			for op, f := range c.faults {
+				setFaults(t, s, op, f...)
+			}
+			stdout, stderr, code := runReconcileFork(t, s)
+
+			if code != 1 {
+				t.Errorf("exit %d, want 1; output = %q", code, stdout+stderr)
+			}
+			if n := opCount(t, s, "svcRedeploy"); n != c.wantRedeploy {
+				t.Errorf("svcRedeploy calls = %d, want %d: serviceInstanceRedeploy is sent once", n, c.wantRedeploy)
+			}
+			e := errorLines(stdout + stderr)
+			if !strings.Contains(e, c.wantErr) || !strings.Contains(e, "(28)") {
+				t.Errorf("error lines lack %q and the timeout: %q", c.wantErr, e)
+			}
+		})
+	}
+}
+
+func TestCommitStagedTimeoutIsSentOnce(t *testing.T) {
+	for _, c := range []struct{ name, seqFile, seq, createOp, wantErr string }{
+		{"volume", "vols-" + retryForkEnv + ".json", volumesOf(), "volCreate", "The postgres volume was created but is STAGED"},
+		{"bucket", "bucketCreds-" + retryForkEnv + ".json", gqlNotAuthorized, "bucketCreate", "Any staged bucket instance stays staged"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := reconcileForkFixture(t)
+			writeFile(t, filepath.Join(s.dir, c.seqFile), c.seq)
+			writeFile(t, filepath.Join(s.dir, "staged.json"), `{"data":{"environment":{"id":"`+retryForkEnv+`","name":"pr-900","unmergedChangesCount":1}}}`)
+			writeFile(t, filepath.Join(s.dir, "commitStaged.json"), `{"data":{"environmentPatchCommitStaged":"commit-1"}}`)
+			setFaults(t, s, "commitStaged", "timeout")
+			stdout, stderr, code := runReconcileFork(t, s)
+
+			if code != 1 {
+				t.Errorf("exit %d, want 1; output = %q", code, stdout+stderr)
+			}
+			if n := opCount(t, s, c.createOp); n != 1 {
+				t.Fatalf("control: %s calls = %d, want 1, so the staged path was never reached; output = %q", c.createOp, n, stdout+stderr)
+			}
+			if n := opCount(t, s, "commitStaged"); n != 1 {
+				t.Errorf("commitStaged calls = %d, want 1: environmentPatchCommitStaged is sent once", n)
+			}
+			if e := errorLines(stdout + stderr); !strings.Contains(e, c.wantErr) {
+				t.Errorf("error lines lack %q: %q", c.wantErr, e)
+			}
+		})
+	}
+}
+
+func TestVolumeCreateTimeoutWithNoVolumeFails(t *testing.T) {
+	s := reconcileForkFixture(t)
+	writeFile(t, filepath.Join(s.dir, "vols-"+retryForkEnv+".json"), volumesOf())
+	setFaults(t, s, "volCreate", "timeout")
+	stdout, stderr, code := runReconcileFork(t, s)
+
+	if code != 1 {
+		t.Errorf("exit %d, want 1; output = %q", code, stdout+stderr)
+	}
+	if n := opCount(t, s, "volCreate"); n != 1 {
+		t.Errorf("volCreate calls = %d, want 1", n)
+	}
+	e := errorLines(stdout + stderr)
+	if !strings.Contains(e, "volumeCreate failed") || !strings.Contains(e, "(28)") {
+		t.Errorf("error lines do not name the create's timeout: %q", e)
+	}
+}
+
+// An "ok" fault falls through to normal routing: the pre-create reads answer, then the confirm ticks fault.
+func TestConfirmPolls_ThirdTransientTickEndsThePoll(t *testing.T) {
+	for _, c := range []struct {
+		name, op, file, body, last string
+		faults                     []string
+		wantCalls                  int
+	}{
+		{"volume", "vols", "vols-" + retryForkEnv + ".json", volumesOf(), "(28)", []string{"ok", "ok", "timeout", "ok", "503", "timeout"}, 5},
+		{"bucket", "bucketCreds", "bucketCreds-" + retryForkEnv + ".json", gqlNotAuthorized, "502", []string{"ok", "timeout", "ok", "timeout", "502"}, 5},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := reconcileForkFixture(t)
+			writeFile(t, filepath.Join(s.dir, c.file), c.body)
+			setFaults(t, s, c.op, c.faults...)
+			stdout, stderr, code := runReconcileFork(t, s)
+
+			if code != 1 {
+				t.Errorf("exit %d, want 1; output = %q", code, stdout+stderr)
+			}
+			if n := opCountIn(t, s, c.op, retryForkEnv); n != c.wantCalls {
+				t.Errorf("fork %s calls = %d, want %d: the poll ends at its 3rd transient tick in total", c.op, n, c.wantCalls)
+			}
+			e := errorLines(stderr)
+			for _, needle := range []string{"Railway", "3 poll ticks", "confirming", c.last} {
+				if !strings.Contains(e, needle) {
+					t.Errorf("stderr error lines lack %q: %q", needle, e)
+				}
+			}
+		})
+	}
+}
+
+func TestConfirmPolls_GraphQLErrorEndsThePoll(t *testing.T) {
+	for _, c := range []struct {
+		name, op, seqFile, seq, wantMsg string
+		faults                          []string
+		wantCalls                       int
+	}{
+		{"volume", "vols", "vols-" + retryForkEnv + ".json", volumesOf(), "Not Authorized", []string{"ok", "ok", "gqlerr"}, 2},
+		{"bucket", "bucketCreds", "bucketCreds-" + retryForkEnv + ".seq", gqlNotAuthorized + "\n" + gqlProblem + "\n", "Problem processing request", nil, 2},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := reconcileForkFixture(t)
+			writeFile(t, filepath.Join(s.dir, c.seqFile), c.seq)
+			if c.faults != nil {
+				setFaults(t, s, c.op, c.faults...)
+			}
+			stdout, stderr, code := runReconcileFork(t, s)
+
+			if code != 1 {
+				t.Errorf("exit %d, want 1; output = %q", code, stdout+stderr)
+			}
+			if n := opCountIn(t, s, c.op, retryForkEnv); n != c.wantCalls {
+				t.Errorf("fork %s calls = %d, want %d: a GraphQL error ends the poll", c.op, n, c.wantCalls)
+			}
+			if e := errorLines(stderr); !strings.Contains(e, c.wantMsg) {
+				t.Errorf("stderr error lines do not name %q: %q", c.wantMsg, e)
+			}
+		})
+	}
+}
+
+func TestWaitForPostgres_TransientTicksDoNotEndThePollEarly(t *testing.T) {
+	s := postgresNeverDeployedFixture(t)
+	writeFile(t, filepath.Join(s.dir, "dep.seq"), `{"data":{"deployment":{"id":"dep-pg-new","status":"BUILDING"}}}`+"\n")
+	writeFile(t, filepath.Join(s.dir, "dep.json"), `{"data":{"deployment":{"id":"dep-pg-new","status":"SUCCESS"}}}`)
+	setFaults(t, s, "dep", "timeout", "ok", "503")
+	stdout, stderr, code := runReconcileFork(t, s)
+
+	if code != 0 {
+		t.Errorf("exit %d, want 0: two transient ticks leave the poll running; output = %q", code, stdout+stderr)
+	}
+	if n := opCount(t, s, "dep"); n != 4 {
+		t.Errorf("dep calls = %d, want 4 (timeout, BUILDING, 503, SUCCESS)", n)
+	}
+	if !strings.Contains(stdout, "postgres reached SUCCESS") {
+		t.Errorf("stdout lacks the SUCCESS line; stdout = %q", stdout)
+	}
+}
+
+func TestRailwayAPI_SavesTheLastRateLimitHeaders(t *testing.T) {
+	s := newSealedShim(t, sourceInstances(), plainOn("PORT", sealedGatewayID))
+	writeFile(t, filepath.Join(s.dir, "hdr.txt"), "HTTP/2 200\r\ncontent-type: application/json\r\n"+
+		"ratelimit-policy: \"default\";q=1000;w=3600\r\nX-RateLimit-Limit: 1000\r\nx-ratelimit-remaining: 997\r\n\r\n")
+	tmp := t.TempDir()
+	stdout, stderr, code := s.run(t, forkExports(true, true, true)+"export RUNNER_TEMP='"+tmp+"'\n", "audit-sealed-variables")
+
+	if code != 0 {
+		t.Fatalf("exit %d, want 0; output = %q", code, stdout+stderr)
+	}
+	raw, err := os.ReadFile(filepath.Join(tmp, "railway-api-ratelimit"))
+	if err != nil {
+		t.Fatalf("the rate-limit file was not written: %v", err)
+	}
+	want := "ratelimit-policy: \"default\";q=1000;w=3600\nX-RateLimit-Limit: 1000\nx-ratelimit-remaining: 997\n"
+	if string(raw) != want {
+		t.Errorf("rate-limit file = %q, want %q", raw, want)
 	}
 }

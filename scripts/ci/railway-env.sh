@@ -1560,9 +1560,8 @@ cmd_reconcile_urls() {
 # story-blocking finding was reported for a deployment that read SUCCESS moments
 # later.
 #
-# Therefore this loop has NO early-exit on a bad status. It polls until the
-# status is SUCCESS or until the attempt budget is exhausted, and only then
-# fails. Nothing here may be "optimised" into an early break: one probe does not
+# Therefore this loop has NO early-exit on a bad status. Nothing here may be
+# "optimised" into an early break: one probe does not
 # bound how long CRASHED can persist, so ANY early-fail threshold is a guess and
 # every guess reintroduces the false fatal.
 wait_for_postgres() {

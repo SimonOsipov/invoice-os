@@ -64,12 +64,12 @@ export function createAuthedFetch(
 
 // The app-side factory `Workspace` instantiates (portfolio.authedfetch.test.ts A1-A6).
 // `freshToken` (the renewer's) is the getter when given; otherwise `session.token` is read
-// at call time, never captured (A5). `onSignOut` is the `onUnauthorized` callback (A1/A3).
+// at call time, never captured (A5).
 export function makeAuthedFetch(
   session: Session,
-  onSignOut: () => void,
+  onUnauthorized: () => void,
   onSuspended?: () => void,
   freshToken?: () => string | null | Promise<string | null>,
 ): AuthedFetch {
-  return createAuthedFetch(freshToken ?? (() => session.token), onSignOut, onSuspended)
+  return createAuthedFetch(freshToken ?? (() => session.token), onUnauthorized, onSuspended)
 }

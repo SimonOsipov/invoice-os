@@ -2554,7 +2554,7 @@ upsert_secret_variable() {
     --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" --arg n "$name" \
     '{query: $q, variables: {input: {projectId: $p, environmentId: $e, serviceId: $s, name: $n, value: ., skipDeploys: true}}}')
 
-  if ! GQL_RESPONSE=$(printf '%s' "$body" | curl -fsS --connect-timeout 5 --max-time 15 \
+  if ! GQL_RESPONSE=$(printf '%s' "$body" | curl -fsS --connect-timeout 5 --max-time 30 \
         --request POST \
         --url "$RAILWAY_GRAPHQL_URL" \
         --header "Authorization: Bearer $RAILWAY_API_TOKEN" \

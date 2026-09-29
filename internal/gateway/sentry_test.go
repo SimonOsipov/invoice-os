@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -147,6 +148,83 @@ func TestGatewaySentry_ClientDisconnectOpensNothing(t *testing.T) {
 
 	serveAPI(h, "/api/dead/x", tok)
 	rec.One(t, want)
+}
+
+// serveThroughGateway sends one GET through a real gateway server and closes it,
+// which waits for the handler chain, so every capture has happened on return.
+func serveThroughGateway(t *testing.T, h http.Handler, path, bearer string) (int, error) {
+	t.Helper()
+	gw := httptest.NewServer(h)
+	defer gw.Close()
+	req, err := http.NewRequest(http.MethodGet, gw.URL+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+bearer)
+	resp, err := gw.Client().Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	_, err = io.ReadAll(resp.Body)
+	return resp.StatusCode, err
+}
+
+func serverURL(t *testing.T, h http.Handler) *url.URL {
+	t.Helper()
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
+}
+
+// The proxy has already marked the request when the body copy fails; it then aborts with http.ErrAbortHandler.
+func TestGatewaySentry_UpstreamDiesMidBodyOpensNothing(t *testing.T) {
+	app, rec, want := sentrytest.Boot(t, "gateway")
+	dying := serverURL(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("partial"))
+		w.(http.Flusher).Flush()
+		panic(http.ErrAbortHandler)
+	}))
+	h, tok := mountAPI(t, app, map[string]*url.URL{"invoice": dying, "dead": closedURL(t)})
+
+	if code, err := serveThroughGateway(t, h, "/api/invoice/v1/invoices", tok); err == nil {
+		t.Fatalf("status = %d with a whole body, want the response cut off", code)
+	}
+	rec.None(t)
+
+	serveAPI(h, "/api/dead/x", tok)
+	rec.One(t, want)
+}
+
+// An upstream that sends a 1xx and then drops the connection leaves the gateway's own 502.
+func TestGatewaySentry_UpstreamDiesAfter1xxOpensOneIssue(t *testing.T) {
+	app, rec, want := sentrytest.Boot(t, "gateway")
+	hinting := serverURL(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		conn, buf, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			t.Errorf("hijack: %v", err)
+			return
+		}
+		_, _ = buf.WriteString("HTTP/1.1 103 Early Hints\r\nLink: </app.css>; rel=preload\r\n\r\n")
+		_ = buf.Flush()
+		_ = conn.Close()
+	}))
+	h, tok := mountAPI(t, app, map[string]*url.URL{"invoice": hinting})
+
+	code, err := serveThroughGateway(t, h, "/api/invoice/v1/invoices", tok)
+	if err != nil || code != http.StatusBadGateway {
+		t.Fatalf("status = %d, err = %v; want the gateway's 502", code, err)
+	}
+	e := rec.One(t, want)
+	if wantFP := []string{"http-5xx", routePrefix, "502"}; !slices.Equal(e.Fingerprint, wantFP) {
+		t.Errorf("fingerprint = %q, want %q", e.Fingerprint, wantFP)
+	}
 }
 
 // mountFleet mounts the roll-up as cmd/gateway/main.go does, plus a control

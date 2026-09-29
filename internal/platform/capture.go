@@ -36,7 +36,7 @@ func (o *requestOutcome) read() (error, bool) {
 	return o.cause, o.elsewhere
 }
 
-// ReportedElsewhere marks the request's 5xx as already reported by another service.
+// ReportedElsewhere marks the request's 5xx.
 func ReportedElsewhere(ctx context.Context) {
 	if out := outcomeFromContext(ctx); out != nil {
 		out.mu.Lock()

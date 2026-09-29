@@ -48,6 +48,9 @@ func TestValidatorSentry_RelayedValidationFailureOpensNothing(t *testing.T) {
 	}{
 		{name: "validation 500", status: http.StatusInternalServerError},
 		{name: "validation 503", status: http.StatusServiceUnavailable},
+		{name: "validation 504", status: http.StatusGatewayTimeout},
+		// A 200 that fails the totality check is invoice's own failure.
+		{name: "validation 200 without results", status: http.StatusOK, counted: true, wantCause: "covers 0 refs"},
 		{name: "validation 400", status: http.StatusBadRequest, counted: true, wantCause: "returned status 400"},
 		{name: "validation unreachable", counted: true, wantCause: "connection refused"},
 	}

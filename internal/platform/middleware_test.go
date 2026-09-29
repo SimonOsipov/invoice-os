@@ -140,4 +140,32 @@ func TestStatusRecorder(t *testing.T) {
 	if sr3.status != http.StatusBadGateway {
 		t.Errorf("status = %d, want 502 after a 100 Continue", sr3.status)
 	}
+
+	sr4 := &statusRecorder{ResponseWriter: httptest.NewRecorder(), status: http.StatusOK}
+	sr4.WriteHeader(http.StatusContinue)
+	sr4.WriteHeader(http.StatusEarlyHints)
+	sr4.WriteHeader(http.StatusServiceUnavailable)
+	if sr4.status != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503 after two 1xx", sr4.status)
+	}
+
+	// A body after a 1xx is an implicit 200.
+	sr5 := &statusRecorder{ResponseWriter: httptest.NewRecorder(), status: http.StatusOK}
+	sr5.WriteHeader(http.StatusEarlyHints)
+	// httptest.ResponseRecorder took the 103 as final and refuses the body; only sr5.status matters here.
+	_, _ = sr5.Write([]byte("ok"))
+	sr5.WriteHeader(http.StatusInternalServerError)
+	if sr5.status != http.StatusOK {
+		t.Errorf("status = %d, want 200 from the Write after a 103", sr5.status)
+	}
+
+	// The 1xx range ends at 199: 199 is informational, 200 is final.
+	for _, tc := range []struct{ first, want int }{{199, http.StatusBadGateway}, {http.StatusOK, http.StatusOK}} {
+		sr := &statusRecorder{ResponseWriter: httptest.NewRecorder(), status: http.StatusOK}
+		sr.WriteHeader(tc.first)
+		sr.WriteHeader(http.StatusBadGateway)
+		if sr.status != tc.want {
+			t.Errorf("WriteHeader(%d) then 502: status = %d, want %d", tc.first, sr.status, tc.want)
+		}
+	}
 }

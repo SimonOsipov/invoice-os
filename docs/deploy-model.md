@@ -42,7 +42,7 @@ actually existing: CI now creates, tears down and sweeps them itself.
 - **Merge to `main`** → `dev-env.yml` deploys the **persistent environment**, so what is
   live is what is on `main`. Gated on the `CI` check for the merge commit (ci.yml runs on
   `push: branches: [main]` with no paths filter, so the check always exists); deploy +
-  health-gate + fleet-gate, **no E2E** — see the ephemeral-only note below.
+  health-gate + fleet-gate (which also waits for the `auth` deployment) + `spa-build-gate`, **no E2E** — see the ephemeral-only note below.
   > **Added 2026-07-27, and it closes a real gap.** Before it, *nothing deployed on
   > merge*: a PR deployed to its own ephemeral environment, teardown deleted that
   > environment on close, and the persistent environment kept serving whatever was last
@@ -54,7 +54,7 @@ actually existing: CI now creates, tears down and sweeps them itself.
   > about that Railway-side mechanism and remains in force).
 - **`workflow_dispatch`** → targets the **persistent environment** directly
   (never an ephemeral PR environment) — the same fleet-deploy + health-gate + fleet-gate
-  flow, without the E2E suites (M4-22-07 dropped the reset/seed job and the
+  (with its `auth` deployment wait) + `spa-build-gate` flow, without the E2E suites (M4-22-07 dropped the reset/seed job and the
   dispatch-path E2E run). Now the deliberate manual override: unlike merge-to-`main`, it
   **bypasses the CI gate**. Its concurrency group is
   `dev-preview-${{ github.event.pull_request.number || github.ref }}`, so a dispatch run's
@@ -121,7 +121,7 @@ merge to main ──> dev-env.yml (push): await green CI on the merge commit
 
 workflow_dispatch ──> targets the persistent environment directly (never torn down),
                       bypassing the CI gate — the manual override
-                   ──> same deploy + health-gate + fleet-gate flow, no E2E (M4-22-07
+                   ──> same deploy + health-gate + fleet-gate (+ auth wait) + spa-build-gate flow, no E2E (M4-22-07
                        dropped the reset/seed job and dispatch-path E2E run). The
                        gateway reads ENVIRONMENT=production, so its boot-time purge
                        and seed do not run here.
@@ -393,7 +393,7 @@ contradict what the docs imply.
 
 | Thing | Carries into a fork? | Consequence for `prepare-env` |
 |---|---|---|
-| Service instances | Yes — all of them, immediately, `watchPatterns: []` on every one | No settle race. The M3-16 invariant holds in a fork. The settle poll is insurance only. |
+| Service instances | Yes — all of them, immediately, `watchPatterns: []` on every one | No settle race. The M3-16 invariant holds in a fork. Prepare reads the service list once; `set-fork-auth` already requires `gateway` and `auth` from one read. |
 | Public domains | Railway-**generated** ones only, auto-renamed `<svc>-pr-<N>.up.railway.app`; a custom domain never forks | Once the source environment holds only custom domains, a fork starts with none, so domain reconcile **creates** one per service: a query, a `serviceDomainCreate`, and a confirming re-query. Not a no-op. |
 | `targetPort` on those domains | Only the **gateway's** generated domain is `null`; the four SPA generated domains and all five custom domains report `8080` (re-measured 2026-08-02, all five services) | CI **reads** it off whichever domain it selected in the source environment — never a literal, so the gateway now gets a real `8080` from its custom domain. A `null` is still valid (Railway magic-port detection) and is replicated by **omitting** the field, not by substituting a port. |
 | Postgres deployment | **No** — `latestDeployment == NONE` | Real gap: nothing in this repo ever deployed Postgres (the `railway up` matrices are gateway + 8 contexts + docling + auth + 4 SPAs; Postgres is excluded above). `prepare-env` now deploys it explicitly via `serviceInstanceDeployV2`, then waits. |
@@ -454,6 +454,64 @@ set-production-environment`. No workflow writes it.
 
 The value is a constant, not the environment name, so `[env-name-is-convention]` still holds:
 renaming the fork convention cannot change whether a fork's database bootstraps.
+
+## Railway API failures in the gate
+
+A slow or briefly failing Railway API must not fail the gate by itself. Every GraphQL call in
+`scripts/ci/railway-env.sh` goes through one transport, `graphql_try`; `dev-env.yml` reaches it
+through `railway-env.sh query`. The rules below are the shipped behaviour
+(`tools/prenv/railway_env_retry_test.go`).
+
+**What retries.** A curl timeout (`--max-time 30`, exit 28) and an HTTP 5xx. Up to 3 attempts,
+waiting 5 s then 10 s. A call that needed a retry prints a `::warning::`; an exhausted budget
+prints one `::error::`.
+
+**What fails fast, with no retry.** A GraphQL `errors` array, any 4xx, HTTP 429 (named as
+rate-limiting), and connection resets or any other curl failure. A mutation that is not
+idempotent, and every poll tick, is sent once (`once`).
+
+**Poll budgets.**
+
+| Wait | Budget |
+|---|---|
+| Gateway `health-gate` | 900 s |
+| `fleet-gate` fleet poll | 600 s |
+| SPA `/health` + `/build.txt` (`wait-spa-builds.sh`) | 600 s (120 x 5 s) |
+| `wait-deployment` | 60 ticks x 10 s = 600 s; 3 failed ticks in all end it |
+
+**`railway up` upload re-run.** `scripts/ci/railway-up-ci.sh` re-runs an upload once, after 10 s,
+when the CLI failed on a transport error before Railway printed a `Build Logs:` URL. It never
+re-runs after a build failure, a log-stream failure, `Unauthorized` or `not found`. Accepted
+risk: a first upload that Railway received but never acknowledged can leave a duplicate
+deployment (`tools/prenv/railway_up_ci_test.go`).
+
+**A lost status poll is tolerated once Railway accepted the deploy.** If the `Build Logs:` URL
+was printed and the CLI then lost its poll, the script warns, publishes the deployment id and
+exits 0. A later check decides that service. A build that Railway reported as failed still fails.
+
+| Service | Later check that decides |
+|---|---|
+| `gateway` | `health-gate` |
+| 8 context services, `docling` | `fleet-gate` |
+| `auth` | `fleet-gate`'s "Wait for the auth deployment" step (`wait-deployment`) |
+| `landing`, `app`, `ops-console`, `support-console` | `e2e` on a PR; `spa-build-gate` on push and dispatch |
+
+A service outside the table has no later check, so a lost poll fails the step.
+
+**`wait-deployment <label> <deployment-id>`.** `auth` reports no `build` stamp, so the deployment
+status is its verdict. `deploy-context` publishes the auth deployment id as a job output;
+`fleet-gate` polls that deployment (`SUCCESS` or `SLEEPING` passes; `FAILED`, `CRASHED`,
+`REMOVED`, `REMOVING` or `SKIPPED` fails). An empty or malformed id fails before any call.
+
+**`spa-build-gate`.** On push and dispatch `e2e` does not run, so this job runs
+`scripts/ci/wait-spa-builds.sh` against the four SPA URLs. Each must serve `/health` and a
+`/build.txt` that names the commit under test. It only sends GET requests and repairs no
+domain; domain repair stays in `e2e`. On a PR the same script runs inside `e2e`.
+
+**The `report-api-calls` line.** The last `prepare-env` step, `Report Railway API calls`
+(`if: always()`), prints one line: `Railway API: N calls, M attempts, K retried; by command:
+...; ratelimit-policy=... x-ratelimit-limit=... x-ratelimit-remaining=...`. Each rate-limit
+value reads `n/a` when Railway sent no such header. The step never fails the job.
 
 ## Related
 

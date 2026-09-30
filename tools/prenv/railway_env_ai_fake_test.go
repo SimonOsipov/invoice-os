@@ -2,12 +2,8 @@
 // `scripts/ci/railway-env.sh set-ai-fake`, `ai_key_verdict`, `ai_fake_self_test`,
 // and the shared service selector it resolves services through (R6, R7).
 //
-// NOT COVERED HERE: the live GraphQL write, verify_variable's mismatch
-// branch on OPENROUTER_API_KEY (deliberately never
-// called — an absent and an empty key both read back as "" through it, so a
-// want="" compare would pass vacuously; ai_key_verdict's has() read is the
-// discriminating check), and whether Railway's variableUpsert mutation
-// accepts an empty string value.
+// NOT COVERED HERE: the live GraphQL write, and whether Railway's
+// variableCollectionUpsert mutation accepts an empty string value.
 // The only oracle for those is a green prepare-env run on a ready PR.
 package main
 
@@ -174,11 +170,10 @@ func TestSetAIFakeRefusesThePersistentEnvironment(t *testing.T) {
 	}
 }
 
-// T05: cmd_set_ai_fake must set both services, verify AI_FAKE with a fresh
-// read, and run the key verdict on a fresh read too (AC #5).
+// T05: cmd_set_ai_fake must set both services, check AI_FAKE on set_service_vars'
+// re-read, and run the key verdict on that map too (AC #5).
 //
-// KILLS: one service only; the verdict run on the mutation's own response
-// instead of a fresh read; verify before upsert; a SETTLE_QUERY per service.
+// KILLS: one service only; a check before the write; a SETTLE_QUERY per service.
 func TestSetAIFakeBodySetsAndChecksBothServices(t *testing.T) {
 	body := strings.Join(shellFunctionBody(t, "cmd_set_ai_fake"), "\n")
 
@@ -188,9 +183,8 @@ func TestSetAIFakeBodySetsAndChecksBothServices(t *testing.T) {
 		// drifted RAILWAY_DEV_ENVIRONMENT_ID.
 		`assert_environment_is_ephemeral "$env_id" AI_FAKE`,
 		"service_id_by_name",
-		`upsert_variable "$env_id" "$svc_id" "$svc" AI_FAKE true`,
-		`upsert_variable "$env_id" "$svc_id" "$svc" OPENROUTER_API_KEY ""`,
-		"verify_variable",
+		`set_service_vars "$env_id" "$svc_id" "$svc" "" AI_FAKE=true JEV_FAKE=true OPENROUTER_API_KEY=`,
+		`auth_check "$svc" AI_FAKE=true JEV_FAKE=true`,
 		"ai_key_verdict",
 	}
 	for _, r := range required {
@@ -199,23 +193,22 @@ func TestSetAIFakeBodySetsAndChecksBothServices(t *testing.T) {
 		}
 	}
 
-	upsertAt := strings.Index(body, "upsert_variable")
-	verifyAt := strings.Index(body, "verify_variable")
+	upsertAt := strings.Index(body, "set_service_vars")
+	verifyAt := strings.Index(body, "auth_check")
 	if upsertAt >= 0 && verifyAt >= 0 && verifyAt < upsertAt {
-		t.Errorf("verify_variable is called BEFORE upsert_variable — it would verify the pre-write value")
+		t.Errorf("auth_check is called BEFORE set_service_vars — it would check the pre-write value")
 	}
 
 	if count := strings.Count(body, "SETTLE_QUERY"); count != 1 {
 		t.Errorf("cmd_set_ai_fake references SETTLE_QUERY %d times, want exactly 1 — one settle call shared by both services in the loop", count)
 	}
 
-	serviceVarsAt := strings.Index(body, "SERVICE_VARIABLES_QUERY")
 	verdictAt := strings.Index(body, "ai_key_verdict")
-	if serviceVarsAt >= 0 && verdictAt >= 0 && verdictAt < serviceVarsAt {
-		t.Errorf("ai_key_verdict is called BEFORE SERVICE_VARIABLES_QUERY — the verdict must run on a FRESH read, not the mutation's own response")
+	if upsertAt >= 0 && verdictAt >= 0 && verdictAt < upsertAt {
+		t.Errorf("ai_key_verdict is called BEFORE set_service_vars — the verdict must run on its re-read, not the mutation's own response")
 	}
 
-	// Comments dropped, trailing ones too: the body's own comment names verify_variable above the upserts.
+	// Comments dropped, trailing ones too.
 	stmts := codeStatements(shellFunctionBody(t, "cmd_set_ai_fake"))
 	loopStart, loopEnd := -1, -1
 	for i, s := range stmts {
@@ -232,10 +225,8 @@ func TestSetAIFakeBodySetsAndChecksBothServices(t *testing.T) {
 	// Whole-statement match: a suffix such as `|| true` must not satisfy it.
 	loop := stmts[loopStart+1 : loopEnd]
 	for _, n := range []string{
-		`upsert_variable "$env_id" "$svc_id" "$svc" AI_FAKE true`, // control
-		`upsert_variable "$env_id" "$svc_id" "$svc" JEV_FAKE true`,
-		`upsert_variable "$env_id" "$svc_id" "$svc" OPENROUTER_API_KEY ""`,
-		`verify_variable "$env_id" "$svc_id" "$svc" JEV_FAKE true`,
+		`set_service_vars "$env_id" "$svc_id" "$svc" "" AI_FAKE=true JEV_FAKE=true OPENROUTER_API_KEY=`,
+		`auth_check "$svc" AI_FAKE=true JEV_FAKE=true || exit 1`,
 	} {
 		got := 0
 		for _, s := range loop {
@@ -248,13 +239,13 @@ func TestSetAIFakeBodySetsAndChecksBothServices(t *testing.T) {
 		}
 	}
 	code := strings.Join(stmts, "\n")
-	lastUpsert := strings.LastIndex(code, "upsert_variable")
-	firstVerify := strings.Index(code, "verify_variable")
+	lastUpsert := strings.LastIndex(code, "set_service_vars")
+	firstVerify := strings.Index(code, "auth_check")
 	if lastUpsert < 0 || firstVerify < 0 {
-		t.Fatalf("cmd_set_ai_fake's statements lack upsert_variable (%d) or verify_variable (%d)", lastUpsert, firstVerify)
+		t.Fatalf("cmd_set_ai_fake's statements lack set_service_vars (%d) or auth_check (%d)", lastUpsert, firstVerify)
 	}
 	if firstVerify < lastUpsert {
-		t.Errorf("a verify_variable precedes the last upsert_variable — every write must land before the first read-back")
+		t.Errorf("an auth_check precedes the last set_service_vars — every write must land before the first check")
 	}
 
 	// Production no longer holds the retired key, so a fork cannot copy it.
@@ -301,9 +292,9 @@ func TestSetAIFakeVerdictReadsTheFreshReadJustBeforeIt(t *testing.T) {
 	if want := `ai_key_verdict "$GQL_RESPONSE" "$svc" || exit 1`; cmds[v] != want {
 		t.Errorf("the verdict call is %q, want %q", cmds[v], want)
 	}
-	// Any command in between (upsert, verify) overwrites GQL_RESPONSE.
-	if !strings.HasPrefix(cmds[v-1], `graphql_post "$(gql_body "$SERVICE_VARIABLES_QUERY"`) {
-		t.Errorf("the command before the verdict is %q, want the SERVICE_VARIABLES_QUERY re-read", cmds[v-1])
+	// Only auth_check, which reads GQL_RESPONSE and makes no call, may sit between the re-read and the verdict.
+	if v-2 <= loopStart || !strings.HasPrefix(cmds[v-1], `auth_check "$svc" `) || !strings.HasPrefix(cmds[v-2], `set_service_vars "$env_id" "$svc_id" "$svc" `) {
+		t.Errorf("the loop's commands up to the verdict are %q, want set_service_vars then auth_check before it", cmds[loopStart+1:v])
 	}
 }
 
@@ -702,6 +693,7 @@ func shellFunctionSource(t *testing.T, names ...string) string {
 
 // runBashScript runs a bash snippet with every RAILWAY_* variable stripped, so
 // no snippet below can reach Railway even if a guard is mutated away.
+// RUNNER_TEMP is stripped too, so a CI run never appends to the runner's call log.
 func runBashScript(t *testing.T, script string, args ...string) (stdout, stderr string, exitCode int) {
 	t.Helper()
 
@@ -710,7 +702,7 @@ func runBashScript(t *testing.T, script string, args ...string) (stdout, stderr 
 
 	var filtered []string
 	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, "RAILWAY_") {
+		if strings.HasPrefix(kv, "RAILWAY_") || strings.HasPrefix(kv, "RUNNER_TEMP=") {
 			continue
 		}
 		filtered = append(filtered, kv)

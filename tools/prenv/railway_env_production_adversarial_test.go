@@ -101,9 +101,6 @@ func TestSetProductionEnvironmentStopsOnARailwayError(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			responses := productionRailway(productionVariables(`,"ENVIRONMENT":"production"`))
 			responses[c.op] = c.body
-			if c.op == "svcVars" {
-				responses["vars"] = c.body
-			}
 			shim := newRailwayShim(t, responses)
 			stdout, stderr, code := runSetProductionEnvironment(t, shim.prelude, forkExports(true, true, true), persistentEnvironmentID)
 			out := stdout + stderr

@@ -39,6 +39,7 @@ while [ $# -gt 0 ]; do
   if [ "$1" = "--data" ]; then data="$2"; shift; fi
   shift
 done
+if [ "$data" = "@-" ]; then data=$(cat); fi
 printf '%s' "$data" | jq -c . >> '` + s.log + `'
 op=$(printf '%s' "$data" | jq -r '.query | capture("^\\s*(query|mutation)\\s+(?<n>\\w+)").n')
 f='` + dir + `'/"$op".json
@@ -47,7 +48,30 @@ if [ -f "$f" ]; then cat "$f"; else echo '{"errors":[{"message":"unrouted"}]}'; 
 	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte(shim), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeSleepStub(t, dir)
 	return s
+}
+
+// writeSleepStub puts a sleep on PATH that returns at once and logs its argument to sleep.log.
+func writeSleepStub(t *testing.T, dir string) {
+	t.Helper()
+	stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + filepath.Join(dir, "sleep.log") + "'\n"
+	if err := os.WriteFile(filepath.Join(dir, "sleep"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// sleeps lists every sleep argument the scripts passed, in order.
+func (s railwayShim) sleeps(t *testing.T) []string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(s.dir, "sleep.log"))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Fields(string(raw))
 }
 
 type railwayCall struct {
@@ -131,10 +155,9 @@ func forkRailway() map[string]string {
 			`{"node":{"id":"` + persistentEnvironmentID + `","name":"production","isEphemeral":false}},` +
 			`{"node":{"id":"` + forkEnvID + `","name":"pr-900","isEphemeral":true}},` +
 			`{"node":{"id":"env-other","name":"pr-901","isEphemeral":true}}]}}}`,
-		"settle":    forkSettle(`{"node":{"serviceId":"` + forkGatewayID + `","serviceName":"gateway"}}`),
-		"varUpsert": `{"data":{"variableUpsert":true}}`,
-		"svcVars":   vars,
-		"vars":      vars,
+		"settle":              forkSettle(`{"node":{"serviceId":"` + forkGatewayID + `","serviceName":"gateway"}}`),
+		"varCollectionUpsert": `{"data":{"variableCollectionUpsert":true}}`,
+		"authVars":            vars,
 	}
 }
 
@@ -149,7 +172,8 @@ func forkSettle(extra ...string) string {
 var upsertEcho = regexp.MustCompile(`(?m)^[ \t]+\S+\.\S+ = .*$`)
 
 func TestSetForkEnvironmentAgainstAScriptedRailway(t *testing.T) {
-	full := []string{"envList", "settle", "varUpsert", "svcVars"}
+	// The shim answers every read alike, so a value that is not intended is written and re-read.
+	full := []string{"envList", "settle", "authVars", "varCollectionUpsert", "authVars"}
 	cases := []struct {
 		name     string
 		override map[string]string
@@ -157,11 +181,11 @@ func TestSetForkEnvironmentAgainstAScriptedRailway(t *testing.T) {
 		ops      []string
 		says     string
 	}{
-		{"re-read development", nil, 0, full, "gateway ENVIRONMENT=development confirmed in environment " + forkEnvID},
-		{"re-read empty", map[string]string{"svcVars": forkVariables(`,"ENVIRONMENT":""`)}, 1, full, "is empty"},
-		{"re-read absent", map[string]string{"svcVars": forkVariables("")}, 1, full, "is absent"},
-		{"re-read production", map[string]string{"svcVars": forkVariables(`,"ENVIRONMENT":"production"`)}, 1, full, "reads 'production'"},
-		{"re-read GraphQL error", map[string]string{"svcVars": `{"errors":[{"message":"Not Authorized"}],"data":{"variables":{` + forkEnvSecretSibling + `}}}`}, 1, full, "Not Authorized"},
+		{"already development", nil, 0, []string{"envList", "settle", "authVars"}, "gateway ENVIRONMENT=development confirmed in environment " + forkEnvID},
+		{"re-read empty", map[string]string{"authVars": forkVariables(`,"ENVIRONMENT":""`)}, 1, full, "is empty"},
+		{"re-read absent", map[string]string{"authVars": forkVariables("")}, 1, full, "is absent"},
+		{"re-read production", map[string]string{"authVars": forkVariables(`,"ENVIRONMENT":"production"`)}, 1, full, "reads 'production'"},
+		{"read GraphQL error", map[string]string{"authVars": `{"errors":[{"message":"Not Authorized"}],"data":{"variables":{` + forkEnvSecretSibling + `}}}`}, 1, []string{"envList", "settle", "authVars"}, "Not Authorized"},
 		{"no gateway in the fork", map[string]string{"settle": forkSettle()}, 1, []string{"envList", "settle"}, "is named 'gateway'"},
 		{"two gateways", map[string]string{"settle": forkSettle(`{"node":{"serviceId":"svc-gw-a","serviceName":"gateway"}}`, `{"node":{"serviceId":"svc-gw-b","serviceName":"gateway"}}`)}, 1, []string{"envList", "settle"}, "are named 'gateway'"},
 		{"the target is not ephemeral", map[string]string{"envList": `{"data":{"environments":{"edges":[{"node":{"id":"` + forkEnvID + `","name":"pr-900","isEphemeral":false}}]}}}`}, 1, []string{"envList"}, "is NOT ephemeral"},
@@ -199,7 +223,7 @@ func TestSetForkEnvironmentAgainstAScriptedRailway(t *testing.T) {
 			}
 
 			wantEcho := []string{}
-			if slices.Contains(c.ops, "varUpsert") {
+			if slices.Contains(c.ops, "varCollectionUpsert") {
 				wantEcho = []string{"  gateway.ENVIRONMENT = development"}
 			}
 			if got := upsertEcho.FindAllString(out, -1); !slices.Equal(got, wantEcho) {
@@ -212,15 +236,15 @@ func TestSetForkEnvironmentAgainstAScriptedRailway(t *testing.T) {
 					if want := map[string]any{"e": forkEnvID}; !reflect.DeepEqual(call.Variables, want) {
 						t.Errorf("settle variables = %v, want %v", call.Variables, want)
 					}
-				case "varUpsert":
+				case "varCollectionUpsert":
 					want := map[string]any{"input": map[string]any{
 						"projectId": forkProjectID, "environmentId": forkEnvID, "serviceId": forkGatewayID,
-						"name": "ENVIRONMENT", "value": "development", "skipDeploys": true,
+						"variables": map[string]any{"ENVIRONMENT": "development"}, "skipDeploys": true,
 					}}
 					if !reflect.DeepEqual(call.Variables, want) {
 						t.Errorf("upsert variables = %v, want %v", call.Variables, want)
 					}
-				case "svcVars":
+				case "authVars":
 					if want := map[string]any{"p": forkProjectID, "e": forkEnvID, "s": forkGatewayID}; !reflect.DeepEqual(call.Variables, want) {
 						t.Errorf("re-read variables = %v, want %v", call.Variables, want)
 					}

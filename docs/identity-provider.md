@@ -139,8 +139,10 @@ gateway at boot.
 
 - `set-fork-auth`, `set-fork-auth-site` and `set-production-auth` write with
   `skipDeploys: true`, so a write never redeploys a service by itself.
-- A secret is written through `upsert_secret_variable`, which prints
-  `label.NAME = <redacted>` and never a value or a length.
+- `set-fork-auth` and `set-fork-auth-site` write through `set_service_vars`
+  (`variableCollectionUpsert`, only the names that differ). `set-production-auth` writes one
+  variable at a time; a secret goes through `upsert_secret_variable`. Both print
+  `label.NAME = <redacted>` for a secret and never a value or a length.
 - Every write is re-read. A secret re-read compares the stored value with the written value
   inside the shell, exactly, and prints nothing. `GOTRUE_JWT_KEYS` must also parse as exactly
   one ES256 signing key (`prenv jwk-check`).
@@ -1083,7 +1085,7 @@ public API mutation seals a variable.
 script and no test in this repo reads a sealed value.
 
 **A sealed value can be edited in the dashboard** (3-dot menu → edit), but not through the
-Raw Editor. Whether `variableUpsert` over a sealed variable succeeds, fails or unseals it is
+Raw Editor. Whether a variable write (`variableUpsert` or `variableCollectionUpsert`) over a sealed variable succeeds, fails or unseals it is
 unmeasured, so no script writes one.
 
 **The audit allows exactly these three on `auth`.** `audit-sealed-variables` (run by

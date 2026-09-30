@@ -39,6 +39,19 @@ func proxyWith(h http.Handler, tok, path string, headers map[string]string) int 
 	return rec.Code
 }
 
+// proxyHeader is proxyWith for headers that carry several values.
+func proxyHeader(h http.Handler, tok, path string, headers http.Header) int {
+	req := request(http.MethodGet, path, tok)
+	for k, vs := range headers {
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec.Code
+}
+
 // oneGatewayTx returns the only recorded transaction and its only http.client span.
 func oneGatewayTx(t *testing.T, rec *sentrytest.Recorder) (*sentry.Event, *sentry.Span) {
 	t.Helper()
@@ -104,6 +117,80 @@ func TestGatewayTrace_UpstreamIsAChildOfTheGateway(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("several inbound sentry-trace headers", func(t *testing.T) {
+		app, rec, _ := sentrytest.Boot(t, "gateway")
+		up, upURL := stubURL(t)
+		h, tok := mountAPI(t, app, map[string]*url.URL{"tenancy": upURL})
+
+		code := proxyHeader(h, tok, "/api/tenancy/v1/me", http.Header{
+			"Sentry-Trace": {inboundTrace + "-" + inboundSpan + "-1", inboundTrace + "-" + inboundSpan + "-0"},
+			"Baggage":      {"sentry-transaction=" + sentrytest.MarkerTIN, "vendor=" + sentrytest.MarkerCred},
+		})
+		if code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", code)
+		}
+
+		call := up.Only(t, 1)
+		_, parentID := call.Trace(t)
+		_, span := oneGatewayTx(t, rec)
+		if want := span.SpanID.String(); parentID != want {
+			t.Errorf("upstream parent = %s, want the gateway's http.client span %s", parentID, want)
+		}
+		for _, v := range call.Header.Values("baggage") {
+			if strings.Contains(v, sentrytest.MarkerTIN) || strings.Contains(v, sentrytest.MarkerCred) {
+				t.Errorf("upstream baggage %q carries an inbound marker", v)
+			}
+		}
+	})
+
+	t.Run("inbound baggage alone", func(t *testing.T) {
+		app, rec, _ := sentrytest.Boot(t, "gateway")
+		up, upURL := stubURL(t)
+		h, tok := mountAPI(t, app, map[string]*url.URL{"tenancy": upURL})
+
+		code := proxyWith(h, tok, "/api/tenancy/v1/me", map[string]string{"Baggage": "sentry-transaction=" + sentrytest.MarkerTIN})
+		if code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", code)
+		}
+
+		call := up.Only(t, 1)
+		traceID, _ := call.Trace(t)
+		tx, _ := oneGatewayTx(t, rec)
+		if want := sentrytest.TraceID(t, tx); traceID != want {
+			t.Errorf("upstream trace id = %s, want the gateway transaction's %s", traceID, want)
+		}
+		for _, v := range call.Header.Values("baggage") {
+			if strings.Contains(v, sentrytest.MarkerTIN) {
+				t.Errorf("upstream baggage %q carries the inbound marker", v)
+			}
+		}
+	})
+
+	t.Run("upstream status and headers come back through the traced transport", func(t *testing.T) {
+		app, rec, _ := sentrytest.Boot(t, "gateway")
+		up := sentrytest.NewHeaderStub(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("X-Upstream", "kept")
+			w.WriteHeader(http.StatusCreated)
+		})
+		upURL, err := url.Parse(up.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, tok := mountAPI(t, app, map[string]*url.URL{"tenancy": upURL})
+
+		req := request(http.MethodGet, "/api/tenancy/v1/me", tok)
+		out := httptest.NewRecorder()
+		h.ServeHTTP(out, req)
+
+		up.Only(t, 1)
+		if out.Code != http.StatusCreated || out.Header().Get("X-Upstream") != "kept" {
+			t.Errorf("response = %d %q, want 201 with the upstream header", out.Code, out.Header().Get("X-Upstream"))
+		}
+		if _, span := oneGatewayTx(t, rec); span.Status != sentry.SpanStatusOK {
+			t.Errorf("http.client span status = %v, want ok for a 201", span.Status)
+		}
+	})
 }
 
 func TestGatewayTrace_FleetIsUntracedAndProbesCarryNoHeader(t *testing.T) {
@@ -128,6 +215,17 @@ func TestGatewayTrace_FleetIsUntracedAndProbesCarryNoHeader(t *testing.T) {
 	if got := rec.Transactions(); len(got) != 0 {
 		t.Fatalf("/healthz/fleet sent %d transactions, want none", len(got))
 	}
+
+	// A probe stays untraced even when the fleet request itself carries a span. The span is never
+	// finished, so it sends no transaction.
+	tx := sentry.StartTransaction(t.Context(), "fleet")
+	spanReq := httptest.NewRequest(http.MethodGet, "/healthz/fleet", nil).WithContext(tx.Context())
+	rr := httptest.NewRecorder()
+	FleetHealthHandler(map[string]*url.URL{"alpha": alphaURL}, nil, app.Logger).ServeHTTP(rr, spanReq)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("fleet under a span: status = %d, want 200", rr.Code)
+	}
+	alpha.Only(t, 2).AssertUntraced(t)
 
 	// Positive control on the same recorder: an API call is the one transaction.
 	if code := proxyWith(h, tok, "/api/tenancy/v1/me", nil); code != http.StatusOK {

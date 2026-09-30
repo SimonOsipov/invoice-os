@@ -2,7 +2,9 @@ package platform_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/getsentry/sentry-go"
@@ -62,5 +64,43 @@ func TestTraceTransport_NoSpanNoHeader(t *testing.T) {
 	tx.Finish()
 	if traceID, _ := stub.Only(t, 2).Trace(t); traceID != tx.TraceID.String() {
 		t.Errorf("traced call: trace id = %s, want %s", traceID, tx.TraceID.String())
+	}
+}
+
+type failingTripper struct{ calls int }
+
+func (f *failingTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	f.calls++
+	return nil, errors.New("dial refused")
+}
+
+func TestTraceTransport_WrapsTheBaseAndKeepsItsError(t *testing.T) {
+	_, rec, _ := sentrytest.Boot(t, "invoice")
+	base := &failingTripper{}
+	tx := sentry.StartTransaction(context.Background(), "GET /x")
+	req, err := http.NewRequestWithContext(tx.Context(), http.MethodGet, "http://upstream.invalid/x", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = (&http.Client{Transport: platform.TraceTransport(base)}).Do(req)
+	tx.Finish()
+
+	if err == nil || !strings.Contains(err.Error(), "dial refused") {
+		t.Fatalf("err = %v, want the base transport's error", err)
+	}
+	if base.calls != 1 {
+		t.Errorf("base transport ran %d times, want 1", base.calls)
+	}
+	txs := rec.Transactions()
+	if len(txs) != 1 {
+		t.Fatalf("sent %d transactions, want 1", len(txs))
+	}
+	spans := sentrytest.ClientSpans(txs[0])
+	if len(spans) != 1 {
+		t.Fatalf("transaction has %d http.client spans, want 1", len(spans))
+	}
+	if spans[0].Status != sentry.SpanStatusInternalError {
+		t.Errorf("span status = %v, want internal_error for a transport failure", spans[0].Status)
 	}
 }

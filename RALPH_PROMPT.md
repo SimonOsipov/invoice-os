@@ -6,7 +6,7 @@
 
 **One story = one branch = one PR.** RALPH splits it into subtasks (`<STORY>-01`, …) internally.
 
-A story arrives **basic** (Objective, Core ACs, Out of Scope; from `/pm-story` or `/pm-epic`; no Backlog subtasks) or **pre-planned** (Backlog subtasks exist, or the story already has an `## Implementation Subtasks` section). Phase 0.6 plans basic stories; pre-planned stories skip it.
+A story arrives **basic** (Objective, Core ACs, Out of Scope; from `/pm-story` or `/pm-epic`; no subtasks in `hm subtask list`) or **pre-planned** (`hm subtask list` shows subtasks, or the story already has an `## Implementation Subtasks` section). Phase 0.6 plans basic stories; pre-planned stories skip it.
 
 Each PR has its own environment, so several `/ralph` runs MAY run concurrently.
 
@@ -69,13 +69,29 @@ In every other case, take the next step. Do not end a turn on "Starting X now", 
 ## MCP servers
 | Server | Use |
 |--------|-----|
-| Backlog | `mcp__backlog__*` — subtasks |
 | Context7 | `mcp__context7__*` — check before writing library code (pgx, River, CEL, goose, Vite, React) |
 | Playwright | `mcp__playwright__*` — UI verification against the deployed PR environment |
 | Sentry | `mcp__sentry__*` — deployed errors |
 | Railway | `mcp__railway-mcp-server__*` — read-only; deploys happen in `dev-env.yml` |
 | Obsidian | `mcp__obsidian-mcp-tools__*` — story files |
 | sysmap | `mcp__sysmap__*` — feature records; read-only, the PM writes |
+
+## Subtasks
+Harbourmaster keeps the story's subtasks. Ralph runs only as a Harbourmaster worker, so `hm` is on the PATH.
+
+| When | Command |
+|------|---------|
+| The story file has its `## Implementation Subtasks` (Phase 0.5 step 7, Phase 0.6c), or a plan change rewrites them | `hm subtask import "<story file>"` |
+| Read the story's subtasks and their status | `hm subtask list <STORY>` |
+| Read one subtask whole | `hm subtask show <ID>` |
+| The first stage of a subtask starts: Test-Spec or Execution | `hm subtask status <ID> doing` |
+| QA Verify of the subtask passes | `hm subtask status <ID> done` |
+| QA finds a defect in the subtask | `hm subtask note <ID> "<the defect in one line>"` |
+| A fix starts on a subtask that is `done` | `hm subtask status <ID> doing` |
+
+- `<STORY>` is the prefix of the subtask ids: `AUTH-18` for `AUTH-18-01`.
+- `import` keeps each subtask's status and notes. It names each subtask that the plan dropped. Remove it with `hm subtask rm <ID>`.
+- When an `hm subtask` command fails, run it again once. On a second failure, HALT and report the command and its error.
 
 ## Docs
 Read the docs related to your change. `ls docs/` is the list, and every file in it is a Stage 4 sweep target. Key ones: `migrations.md`, `deploy-model.md`, `topology-e2e.md`, `add-a-service.md`, `e2e-convention.md`, `mock-app-adapter.md`.
@@ -96,7 +112,7 @@ Design references for UI stories: Claude Design **prototype** project `6269a212-
    - *Feature:* `sysmap_feature_show`. Name + description = Objective; acceptance criteria = Core ACs; `screen` = surface; `depends_on` = prerequisites. Set `PLANNING_REQUIRED=true`, `STORY_SOURCE=sysmap`. Refuse a feature whose status is not `planned` or `building`, and name the status. Do not change its status; the PM sets `building`.
    - *Obsidian:* `get_vault_file` on `Simon Vault/Projects/ASComply Africa/User Stories/<EPIC>/<STORY>*.md`; also check `User Stories/Archive/<EPIC>/`. Set `STORY_SOURCE=obsidian`. If no file exists, error: "run /pm-story first".
 3. **Branch slug.** Use the story's `## Branch Strategy` if present. Otherwise `feature/<lowercase-id>-<kebab-title>` (`F-192 Notice a submission failure` → `feature/f-192-notice-a-submission-failure`).
-4. **Backlog subtasks:** `mcp__backlog__task_list({ labels: ["story:<lowercase-id>"], status: "To Do" })`.
+4. **Subtasks:** `hm subtask list <STORY>`. "has no subtasks" means zero subtasks.
 5. **Refuse a story with unanswered questions.** If `## Blocking Questions` has any entry, stop and ask the first open one (Phase 0.6d rules). Never default them or delete the section to proceed. (`## Open Questions` is a different, non-blocking section.)
 6. **Classify the story state:**
    - `STORY_SOURCE=sysmap` → **BASIC**.
@@ -128,7 +144,7 @@ Design references for UI stories: Claude Design **prototype** project `6269a212-
    ```
    Record `DEV_DB_PORT`. Every DB-backed suite passes it; without it a suite hits port 5432, which may be another worktree's database.
 6. All later commands run inside `$WORKTREE_PATH`. Pass it as CWD to every subagent.
-7. Pre-planned stories: move all subtasks to "In Progress".
+7. Pre-planned stories with an `## Implementation Subtasks` section: `hm subtask import "<story file>"`.
 
 ### Phase 0.6: Planning (basic stories only)
 
@@ -150,7 +166,7 @@ Run `/qa-verify` in **unattended** disposition. Judgement and unresolved finding
 - **Checkpoint:** `PLAN_VERIFIED`
 
 #### c. Subtask generation
-Run `/subtask-generator` on the finalized story: one Backlog task per subtask, labelled `story:<slug>`, dependencies wired. Move them to "In Progress". Topo-sort into execution order. Log the plan: title, branch, ordered subtasks, count of Decisions and conservative defaults.
+Run `hm subtask import "<story file>"` on the finalized story. Topo-sort into execution order. Log the plan: title, branch, ordered subtasks, count of Decisions and conservative defaults.
 - Do not emit `SUBTASKS_READY` while a fact the story asserts lacks a `premise —` entry with pasted output.
 - **Checkpoint:** `SUBTASKS_READY`
 
@@ -189,11 +205,11 @@ For each subtask in dependency order, run the stages below. Stage numbers start 
 
 Before every spawn, run `git -C "$WORKTREE_PATH" status --short` and `git -C "$WORKTREE_PATH" log --oneline -3`. A report that says "committed" is not evidence; the log is. Commit orphaned work under its own subtask's message with explicit paths, never `git add -A`.
 
-After a context compaction, also run `mcp__backlog__task_list` for `story:<slug>` and `gh pr checks` before the next spawn. The summary says where the run was; git, Backlog and CI say where it is.
+After a context compaction, also run `hm subtask list <STORY>` and `gh pr checks` before the next spawn. The summary says where the run was; git, `hm subtask` and CI say where it is.
 
 Every stage brief (Test-Spec, Execution, QA Verify) says: **terse comments** — one or two lines for the non-obvious why, per `CLAUDE.md` "Code Comments". Do not copy the density of the file being edited.
 
-If a spawn fails, retry twice. On a third failure, HALT: leave the subtask "In Progress" and report the stage and error. Never perform a stage yourself — a same-context QA pass of your own work is worthless evidence.
+If a spawn fails, retry twice. On a third failure, HALT: leave the subtask `doing` and report the stage and error. Never perform a stage yourself — a same-context QA pass of your own work is worthless evidence.
 
 **Test-first is the default for logic-bearing work** (rules engine, tax maths, state machines, RLS, validation). `Test-first: no` is for UI, copy and config whose oracle is the deploy gate.
 
@@ -206,7 +222,7 @@ If a spawn fails, retry twice. On a third failure, HALT: leave the subtask "In P
 - **Checkpoint:** `TESTS_RED`
 
 #### Stage 3: Execution
-Spawn `product-executor` with the complete Backlog subtask. Pass these orientation rules; the executor does them before it edits:
+Spawn `product-executor` with the output of `hm subtask show <ID>` and the story file's path; the story's design sections are shared context. Pass these orientation rules; the executor does them before it edits:
 
 - **Search with `breaklist`:** `go run ./internal/tools/breaklist '<Go regexp>' [path ...]` from the worktree root. Report the command and its `TOTAL` line. Do not substitute `grep`/`git grep` or pipe through `head` — they drop NUL-byte files, ignore `\b` and truncate silently. A search finds only code that names the thing, not a test that depends on the behaviour.
 - **Go signature/API change:** enumerate every caller and test across `cmd/` and `internal/` as a deliverable.
@@ -262,7 +278,7 @@ Spawn `product-qa-spec` (Mode B) with the acceptance criteria, the plan, the cha
 
 When QA returns, **replay the mutation rows yourself**, with no other agent running: `go run ./internal/tools/mutationreplay .ralph/mutations-<SUBTASK-ID>.jsonl`. It edits source in place and restores the exact bytes. Any `NOT-PROVEN` or `INVALID` row fails QA; send it back. A row is a claim; the replay is the evidence.
 
-If issues are found, spawn `product-executor` to fix, then re-verify. Update the Backlog task's implementation_notes with QA findings.
+If issues are found, spawn `product-executor` to fix, then re-verify. Record each QA finding with `hm subtask note`.
 - **Checkpoint:** `QA_VERIFIED`
 
 After each subtask, wait for `CI` on the pushed commit (CI Monitoring Protocol):
@@ -319,12 +335,12 @@ Runs once per story, after `CI` is green. It verifies the assembled feature agai
    - No holistic "looks done": every AC needs its own evidence.
 5. **Fix loop (cap 2 cycles):** batch all fails into one report → `product-executor` fixes → push (re-fires `dev-env.yml`) → wait → re-verify only the failed items. Every bounce cites an AC id, a design-system rule or a prototype CSS rule. After 2 cycles, escalate the rest to the user; each gate run rebuilds an 11-service environment.
 6. **Log** under `## Post-Deploy QA — <date>` in the QA Debate Log: per-AC verdict + evidence, fidelity deltas, fix cycles, run ids, advisory notes.
-7. **On PASS** (all original ACs pass on a green run, no unresolved bounces, fidelity evidence for UI stories): move all subtasks to "Done". End with a short report in this order: **Needs you** (merge PR #N; each default or advisory finding a reviewer should see), **Changed** (subtasks, PR), **Found** (corrected premises; what you could not confirm and where you looked). Then output `<promise>ALL_TASKS_COMPLETE</promise>`.
-   **Otherwise:** leave subtasks "In Progress", do not emit completion, escalate to the user.
+7. **On PASS** (all original ACs pass on a green run, no unresolved bounces, fidelity evidence for UI stories): end with a short report in this order: **Needs you** (merge PR #N; each default or advisory finding a reviewer should see), **Changed** (subtasks, PR), **Found** (corrected premises; what you could not confirm and where you looked). Then output `<promise>ALL_TASKS_COMPLETE</promise>`.
+   **Otherwise:** do not emit completion; escalate to the user.
 
 ### Phase 4: Worktree cleanup
 
-After the PR merges (manually or via `/gh-merge-pr`), run `/post-merge-cleanup <STORY>`. It removes the worktree and branch, marks subtasks Done and archives the story. The PM updates sysmap. A `/ralph-goal` loop advances only after this runs.
+After the PR merges (manually or via `/gh-merge-pr`), run `/post-merge-cleanup <STORY>`. It removes the worktree and branch and archives the story. The PM updates sysmap. A `/ralph-goal` loop advances only after this runs.
 
 Teardown of the PR environment is repo-side: `dev-env-teardown.yml` on PR close (best-effort), `dev-env-sweeper.yml` daily as the authority. See `docs/deploy-model.md`.
 
@@ -361,8 +377,8 @@ An agent parses these instructions with no one to ask. Write for that reader.
 ## Completion Rules
 
 1. Both gates green on the PR head (Core Rule 3). Local tests green ≠ done.
-2. Subtask status: To Do → In Progress (Phase 0.5 / 0.6c) → Done (only after Phase 3.5 passes).
-3. Output `<promise>ALL_TASKS_COMPLETE</promise>` only after Phase 3.5 passes and subtasks are Done.
+2. Subtask status: todo → doing (its first stage starts) → done (its QA Verify passes).
+3. Output `<promise>ALL_TASKS_COMPLETE</promise>` only after Phase 3.5 passes and every subtask is `done`.
 
 ## Anti-Patterns
 
@@ -375,7 +391,6 @@ An agent parses these instructions with no one to ask. Write for that reader.
 | Hand-setting a goose migration order or an untested `Down` | `make migrate-create` in the worktree; verify up + round-trip locally |
 | Querying as superuser to get past RLS | `WithinTenantTx` as `invoice_app` |
 | Working in the main checkout | Always `$WORKTREE_PATH`; main is the user's space |
-| Finding subtasks by title | Use the `story:<slug>` label |
 | Blocking on the user in an unattended phase | Conservative default + `## Decisions`; Phase 0.6d is the only question |
 | Architect inventing scope | Every derived AC traces to the Objective / a Core AC |
 | Bouncing the executor on uncited taste | Cite a design-system or prototype rule; taste is advisory |

@@ -32,7 +32,7 @@ func repoRoot(t *testing.T) string {
 }
 
 // deniesTree reports whether content denies tree as a whole line, bare or with
-// a trailing slash -- the shape every existing entry (cmd, internal, backlog,
+// a trailing slash -- the shape every existing entry (cmd, internal,
 // docs, ...) already uses in both files.
 func deniesTree(content, tree string) bool {
 	for _, raw := range strings.Split(content, "\n") {
@@ -54,11 +54,11 @@ func TestBothRootIgnoreFilesDenySidecar(t *testing.T) {
 		}
 		content := string(raw)
 
-		// Control needle: "backlog" is a bare-line entry both files already
+		// Control needle: ".claude" is a bare-line entry both files already
 		// carry. Without it, an absence below could mean the scan found
 		// nothing at all.
-		if !deniesTree(content, "backlog") {
-			t.Fatalf("%s: the known entry `backlog` was not found -- the scan reached nothing", rel)
+		if !deniesTree(content, ".claude") {
+			t.Fatalf("%s: the known entry `.claude` was not found -- the scan reached nothing", rel)
 		}
 
 		if !deniesTree(content, "sidecar") {

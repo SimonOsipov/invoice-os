@@ -21,7 +21,6 @@ Caddyfile
 .git
 .github
 .claude
-backlog
 docs
 e2e
 *.md

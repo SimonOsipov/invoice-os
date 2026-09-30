@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -75,19 +76,53 @@ func newAuthShim(t *testing.T, responses map[string]string, stores map[string]ma
 		}
 		writeFile(t, filepath.Join(dir, "store-"+svc+".json"), string(raw))
 	}
+	// faults-<op>: one outcome per call; faultbody-<op> is what a 4xx prints under --fail-with-body.
+	// <op>[-<e>[-<s>]].seq: one body per line, before .json.
+	// A request with no --data is a GET probe: probe.body, and probe.code under -w.
 	shim := `#!/bin/sh
 dir='` + dir + `'
 printf '%s\n' "$*" >> "$dir/argv.log"
-data=""
+data="" hasdata="" hdr="" w="" withbody=""
 while [ $# -gt 0 ]; do
-  case "$1" in --data|--data-binary|--data-raw) data="$2"; shift ;; esac
+  case "$1" in
+    --data|--data-binary|--data-raw) data="$2"; hasdata=1; shift ;;
+    -D|--dump-header) hdr="$2"; shift ;;
+    -w|--write-out) w=1; shift ;;
+    --fail-with-body) withbody=1 ;;
+  esac
   shift
 done
+if [ -z "$hasdata" ]; then
+  body=""; [ -f "$dir/probe.body" ] && body=$(cat "$dir/probe.body")
+  code=200; [ -f "$dir/probe.code" ] && code=$(cat "$dir/probe.code")
+  if [ -n "$w" ]; then printf '%s\n%s' "$body" "$code"; else printf '%s' "$body"; fi
+  exit 0
+fi
 case "$data" in
   @-) data=$(cat) ;;
   @*) data=$(cat "${data#@}") ;;
 esac
 printf '%s' "$data" | jq -c . >> "$dir/calls.jsonl"
+headers() { if [ -n "$hdr" ]; then if [ -f "$dir/hdr.txt" ]; then cat "$dir/hdr.txt" > "$hdr"; else : > "$hdr"; fi; fi; }
+op=$(printf '%s' "$data" | jq -r '.query | capture("^\\s*(query|mutation)\\s+(?<n>\\w+)").n')
+# dev-env.yml's inline bodies are anonymous (query($e:…){…}).
+[ -n "$op" ] || op=anonymous
+f="$dir/faults-$op"
+if [ -s "$f" ]; then
+  set -- $(cat "$f"); fault="$1"; shift
+  if [ $# -gt 0 ]; then echo "$*" > "$f"; else : > "$f"; fi
+  case "$fault" in
+    timeout) echo 'curl: (28) Operation timed out after 30002 milliseconds with 0 bytes received' >&2; exit 28 ;;
+    reset) echo 'curl: (56) Failure when receiving data from the peer' >&2; exit 56 ;;
+    gqlerr) headers; echo '{"errors":[{"message":"Not Authorized","extensions":{"code":"INTERNAL_SERVER_ERROR"}}]}'; exit 0 ;;
+    [45][0-9][0-9])
+      headers
+      if [ -n "$withbody" ] && [ -f "$dir/faultbody-$op" ]; then cat "$dir/faultbody-$op"
+      elif [ "$fault" = 400 ] && [ -n "$withbody" ]; then echo '{"errors":[{"message":"Problem processing request","extensions":{"code":"BAD_USER_INPUT"}}]}'; fi
+      echo "curl: (22) The requested URL returned error: $fault" >&2; exit 22 ;;
+  esac
+fi
+headers
 q=$(printf '%s' "$data" | jq -r '.query')
 case "$q" in
   *"variableUpsert("*)
@@ -99,6 +134,16 @@ case "$q" in
     st="$dir/store-$s.json"; [ -f "$st" ] || echo '{}' > "$st"
     printf '%s' "$data" | jq -c --slurpfile st "$st" '$st[0] + {(.variables.input.name): .variables.input.value}' > "$st.tmp" && mv "$st.tmp" "$st"
     echo '{"data":{"variableUpsert":true}}' ;;
+  *"variableCollectionUpsert("*)
+    # upsert-<NAME>.fail / .json apply when NAME is in the map.
+    for n in $(printf '%s' "$data" | jq -r '.variables.input.variables | keys[]'); do
+      if [ -f "$dir/upsert-$n.fail" ]; then cat "$dir/upsert-$n.fail" >&2; exit 22; fi
+      if [ -f "$dir/upsert-$n.json" ]; then cat "$dir/upsert-$n.json"; exit 0; fi
+    done
+    s=$(printf '%s' "$data" | jq -r '.variables.input.serviceId')
+    st="$dir/store-$s.json"; [ -f "$st" ] || echo '{}' > "$st"
+    printf '%s' "$data" | jq -c --slurpfile st "$st" '$st[0] + .variables.input.variables' > "$st.tmp" && mv "$st.tmp" "$st"
+    echo '{"data":{"variableCollectionUpsert":true}}' ;;
   *isSealed*)
     cat "$dir/sealed.json" ;;
   *"variables(projectId"*)
@@ -107,13 +152,24 @@ case "$q" in
     if [ -f "$dir/read-$s.jq" ]; then v=$(jq -c -f "$dir/read-$s.jq" "$st"); else v=$(cat "$st"); fi
     printf '{"data":{"variables":%s}}' "$v" ;;
   *)
-    op=$(printf '%s' "$data" | jq -r '.query | capture("^\\s*(query|mutation)\\s+(?<n>\\w+)").n')
-    if [ -f "$dir/$op.json" ]; then cat "$dir/$op.json"; else echo '{"errors":[{"message":"unrouted"}]}'; fi ;;
+    e=$(printf '%s' "$data" | jq -r '.variables.e // empty')
+    s=$(printf '%s' "$data" | jq -r '.variables.s // empty')
+    keys="$op"
+    [ -n "$e" ] && keys="$op-$e $keys"
+    [ -n "$e" ] && [ -n "$s" ] && keys="$op-$e-$s $keys"
+    for k in $keys; do
+      if [ -s "$dir/$k.seq" ]; then
+        head -n 1 "$dir/$k.seq"; tail -n +2 "$dir/$k.seq" > "$dir/$k.seq.tmp"; mv "$dir/$k.seq.tmp" "$dir/$k.seq"; exit 0
+      fi
+      if [ -f "$dir/$k.json" ]; then cat "$dir/$k.json"; exit 0; fi
+    done
+    echo '{"errors":[{"message":"unrouted"}]}' ;;
 esac
 `
 	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte(shim), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeSleepStub(t, dir)
 	return s
 }
 
@@ -137,11 +193,22 @@ func (s authShim) run(t *testing.T, exports, sub string, args ...string) (stdout
 
 type authUpsert struct{ Service, Name, Value string }
 
-// upserts lists every variableUpsert the shim received, in order.
+// upserts lists every variable the shim was asked to write, in call order;
+// a variableCollectionUpsert contributes one entry per name, sorted.
 func (s authShim) upserts(t *testing.T) []authUpsert {
 	t.Helper()
 	var out []authUpsert
 	for _, c := range s.calls(t) {
+		if strings.Contains(c.Query, "variableCollectionUpsert(") {
+			in, _ := c.Variables["input"].(map[string]any)
+			svc, _ := in["serviceId"].(string)
+			vars, _ := in["variables"].(map[string]any)
+			for _, name := range slices.Sorted(maps.Keys(vars)) {
+				value, _ := vars[name].(string)
+				out = append(out, authUpsert{svc, name, value})
+			}
+			continue
+		}
 		if !strings.Contains(c.Query, "variableUpsert(") {
 			continue
 		}
@@ -176,20 +243,10 @@ func (s authShim) readAfter(t *testing.T, svc string, i int) bool {
 	return false
 }
 
-// lastCallIndex returns the index of the last upsert of svc.name, or -1.
+// lastCallIndex returns the index of the last write of svc.name in either mutation, or -1.
 func (s authShim) lastCallIndex(t *testing.T, svc, name string) int {
 	t.Helper()
-	at := -1
-	for i, c := range s.calls(t) {
-		if !strings.Contains(c.Query, "variableUpsert(") {
-			continue
-		}
-		in, _ := c.Variables["input"].(map[string]any)
-		if in["serviceId"] == svc && in["name"] == name {
-			at = i
-		}
-	}
-	return at
+	return lastWriteOf(s.calls(t), svc, name)
 }
 
 func (s authShim) argv(t *testing.T) string {
@@ -323,6 +380,18 @@ func runForkAuthOK(t *testing.T, sourceJWK string) (authShim, string) {
 		t.Fatalf("set-fork-auth exit %d, want 0; output = %q", code, out)
 	}
 	return s, out
+}
+
+// runForkAuthOnEmptyFork runs set-fork-auth where auth and gateway hold none of its
+// names, so every intended name is written once.
+func runForkAuthOnEmptyFork(t *testing.T) authShim {
+	t.Helper()
+	s := newAuthShim(t, forkAuthRailway(), nil)
+	stdout, stderr, code := s.run(t, forkAuthExports(), "set-fork-auth", authForkEnvID)
+	if code != 0 {
+		t.Fatalf("set-fork-auth exit %d, want 0; output = %q", code, stdout+stderr)
+	}
+	return s
 }
 
 // Both fork commands refuse before any write.
@@ -609,7 +678,7 @@ func TestSetForkAuthSite_GatewayReReadMismatchFails(t *testing.T) {
 }
 
 func TestSetForkAuth_IssuerAndAdditionalSetAgree(t *testing.T) {
-	s, _ := runForkAuthOK(t, freshJWK(t))
+	s := runForkAuthOnEmptyFork(t)
 	ups := s.upserts(t)
 
 	if got := oneUpsert(t, ups, authForkAuthID, "GOTRUE_JWT_ISSUER"); got != authForkIssuer {
@@ -703,8 +772,23 @@ func TestSetForkAuth_WritesFreshAdminPasswordAndDSNReference(t *testing.T) {
 	if pw == authSourcePassword {
 		t.Error("gateway.AUTH_ADMIN_PASSWORD equals the source value; it must be freshly generated")
 	}
-	if got := oneUpsert(t, ups, authForkAuthID, "DATABASE_URL"); got != authDSNReference {
+	// The fork inherits the reference, so it is not rewritten; the store is the evidence.
+	if n := len(upsertsOf(ups, authForkAuthID, "DATABASE_URL")); n > 1 {
+		t.Errorf("auth.DATABASE_URL written %d times, want at most 1", n)
+	}
+	if got := readStore(t, s, authForkAuthID)["DATABASE_URL"]; got != authDSNReference {
 		t.Errorf("auth.DATABASE_URL = %q, want the reference %q", got, authDSNReference)
+	}
+
+	// A fork holding a rendered DSN gets the reference written back.
+	stale := forkAuthStores(freshJWK(t))
+	stale[authForkAuthID]["DATABASE_URL"] = "postgresql://supabase_auth_admin:rendered@h:5432/railway"
+	s2 := newAuthShim(t, forkAuthRailway(), stale)
+	if stdout, stderr, code := s2.run(t, forkAuthExports(), "set-fork-auth", authForkEnvID); code != 0 {
+		t.Fatalf("stale DSN: exit %d, want 0; output = %q", code, stdout+stderr)
+	}
+	if got := oneUpsert(t, s2.upserts(t), authForkAuthID, "DATABASE_URL"); got != authDSNReference {
+		t.Errorf("stale DSN: auth.DATABASE_URL written as %q, want the reference %q", got, authDSNReference)
 	}
 }
 

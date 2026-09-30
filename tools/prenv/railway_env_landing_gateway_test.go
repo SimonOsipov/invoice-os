@@ -10,49 +10,75 @@ import (
 	"testing"
 )
 
-// reconcileCall is one upsert_variable / verify_variable line in reconcile_url_variables.
+// reconcileCall is one NAME=VALUE pair of a set_service_vars line in reconcile_url_variables.
+// verified: the next statement is that label's auth_check on the pairs.
 type reconcileCall struct {
-	verb, idVar, label, name, value string
+	idVar, label, name, value string
+	verified                  bool
 }
 
 // Bash variable names are case-sensitive, so every pattern here is too.
-var reconcileCallPattern = regexp.MustCompile(`^\s*(upsert_variable|verify_variable)\s+"\$env_id"\s+"\$(RAILWAY_SVC_\w+)"\s+(\S+)\s+(\w+)\s+(\S+)\s*$`)
+var (
+	reconcileCallPattern = regexp.MustCompile(`^\s*set_service_vars\s+"\$env_id"\s+"\$(RAILWAY_SVC_\w+)"\s+(\S+)\s+""((?:\s+\S+)+)\s*$`)
+	reconcilePairToken   = regexp.MustCompile(`"[^"]*"|\S+`)
+	reconcilePairName    = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
+)
 
-// reconcileCalls parses every call in the comment-stripped body; an unparsable call line is fatal.
+// reconcileCalls parses every set_service_vars line in the comment-stripped body; an unparsable line is fatal.
 func reconcileCalls(t *testing.T) []reconcileCall {
 	t.Helper()
 	var calls []reconcileCall
-	for _, line := range stripHashComments(strings.Split(reconcileURLVariablesBody(t), "\n")) {
-		s := strings.TrimSpace(line)
-		if !strings.HasPrefix(s, "upsert_variable") && !strings.HasPrefix(s, "verify_variable") {
+	var lines []string
+	for _, l := range stripHashComments(strings.Split(reconcileURLVariablesBody(t), "\n")) {
+		if strings.TrimSpace(l) != "" {
+			lines = append(lines, l)
+		}
+	}
+	for i, line := range lines {
+		if !strings.HasPrefix(strings.TrimSpace(line), "set_service_vars") {
 			continue
 		}
 		m := reconcileCallPattern.FindStringSubmatch(line)
 		if m == nil {
-			t.Fatalf("reconcile_url_variables call does not parse as `<verb> \"$env_id\" \"$RAILWAY_SVC_*\" <label> <NAME> <value>`: %q", s)
+			t.Fatalf("reconcile_url_variables call does not parse as `set_service_vars \"$env_id\" \"$RAILWAY_SVC_*\" <label> \"\" NAME=VALUE...`: %q", strings.TrimSpace(line))
 		}
-		calls = append(calls, reconcileCall{m[1], m[2], m[3], m[4], m[5]})
+		verified := i+1 < len(lines) && strings.TrimSpace(lines[i+1]) == `auth_check `+m[2]+` "${SET_VARS_PAIRS[@]}" || exit 1`
+		for _, tok := range reconcilePairToken.FindAllString(m[3], -1) {
+			name, value, ok := strings.Cut(strings.Trim(tok, `"`), "=")
+			if !ok || !reconcilePairName.MatchString(name) {
+				t.Fatalf("set_service_vars argument %s is not NAME=VALUE: %q", tok, strings.TrimSpace(line))
+			}
+			calls = append(calls, reconcileCall{m[1], m[2], name, value, verified})
+		}
 	}
-	// A floor: the 9 upserts + 9 verifies that predate the landing gateway variable.
-	if len(calls) < 18 {
-		t.Fatalf("parsed %d upsert/verify calls in reconcile_url_variables, want >= 18 (extraction is broken)", len(calls))
+	// A floor: the 9 variables that predate the landing gateway variable.
+	if len(calls) < 9 {
+		t.Fatalf("parsed %d set_service_vars pairs in reconcile_url_variables, want >= 9 (extraction is broken)", len(calls))
 	}
 	return calls
 }
 
 func TestReconcileURLVariablesSetsAndVerifiesLandingGateway(t *testing.T) {
-	body := strings.Join(stripHashComments(strings.Split(reconcileURLVariablesBody(t), "\n")), "\n")
-
-	for _, verb := range []string{"upsert_variable", "verify_variable"} {
-		// Control: the app's pair must still match the same shape.
-		app := regexp.MustCompile(`(?m)^\s*` + verb + `\s+"\$env_id"\s+"\$RAILWAY_SVC_APP_ID"\s+app\s+VITE_GATEWAY_URL\s+"\$gateway_url"\s*$`)
-		if !app.MatchString(body) {
-			t.Fatalf("control: no `%s ... app VITE_GATEWAY_URL \"$gateway_url\"` line; the pattern shape is stale", verb)
+	var app, landing *reconcileCall
+	for _, c := range reconcileCalls(t) {
+		if c.name != "VITE_GATEWAY_URL" {
+			continue
 		}
-		landing := regexp.MustCompile(`(?m)^\s*` + verb + `\s+"\$env_id"\s+"\$RAILWAY_SVC_LANDING_ID"\s+landing\s+VITE_GATEWAY_URL\s+"\$gateway_url"\s*$`)
-		if !landing.MatchString(body) {
-			t.Errorf("reconcile_url_variables has no `%s \"$env_id\" \"$RAILWAY_SVC_LANDING_ID\" landing VITE_GATEWAY_URL \"$gateway_url\"` (AC-1)", verb)
+		switch c.label {
+		case "app":
+			app = &c
+		case "landing":
+			landing = &c
 		}
+	}
+	// Control: the app's pair must still match the same shape.
+	if app == nil || app.idVar != "RAILWAY_SVC_APP_ID" || app.value != "$gateway_url" || !app.verified {
+		t.Fatalf("control: no verified `set_service_vars ... app ... VITE_GATEWAY_URL=$gateway_url` line; the pattern shape is stale (%+v)", app)
+	}
+	if landing == nil || landing.idVar != "RAILWAY_SVC_LANDING_ID" || landing.value != "$gateway_url" {
+		t.Errorf("reconcile_url_variables has no `set_service_vars \"$env_id\" \"$RAILWAY_SVC_LANDING_ID\" landing \"\" ... VITE_GATEWAY_URL=$gateway_url` (AC-1)")
+	} else if !landing.verified {
+		t.Errorf("landing's set_service_vars line is not followed by `auth_check landing \"${SET_VARS_PAIRS[@]}\" || exit 1` (AC-1)")
 	}
 }
 
@@ -66,22 +92,25 @@ func TestReconcileURLVariablesGatewayURLNotOnOtherServices(t *testing.T) {
 		"support-console": "RAILWAY_SVC_SUPPORT_CONSOLE_ID",
 	}
 
-	gatewayLabels := map[string]map[string]bool{"upsert_variable": {}, "verify_variable": {}}
+	gatewayLabels := map[string]bool{}
 	landingLines := 0
 	for _, c := range reconcileCalls(t) {
 		want, ok := idForLabel[c.label]
 		if !ok {
-			t.Errorf("%s uses unknown label %q; add it to idForLabel deliberately", c.verb, c.label)
+			t.Errorf("set_service_vars uses unknown label %q; add it to idForLabel deliberately", c.label)
 		} else if c.idVar != want {
-			t.Errorf("%s labelled %q writes $%s, want $%s", c.verb, c.label, c.idVar, want)
+			t.Errorf("set_service_vars labelled %q writes $%s, want $%s", c.label, c.idVar, want)
+		}
+		if !c.verified {
+			t.Errorf("%s.%s is written without the auth_check that follows its set_service_vars line", c.label, c.name)
 		}
 		if c.label == "landing" {
 			landingLines++
 		}
 		if c.name == "VITE_GATEWAY_URL" {
-			gatewayLabels[c.verb][c.label] = true
-			if c.value != `"$gateway_url"` {
-				t.Errorf("%s %s VITE_GATEWAY_URL carries %s, want \"$gateway_url\"", c.verb, c.label, c.value)
+			gatewayLabels[c.label] = true
+			if c.value != "$gateway_url" {
+				t.Errorf("%s VITE_GATEWAY_URL carries %s, want $gateway_url", c.label, c.value)
 			}
 		}
 	}
@@ -89,15 +118,13 @@ func TestReconcileURLVariablesGatewayURLNotOnOtherServices(t *testing.T) {
 		t.Fatalf("control: no landing-labelled call parsed")
 	}
 
-	for verb, labels := range gatewayLabels {
-		var got []string
-		for l := range labels {
-			got = append(got, l)
-		}
-		sort.Strings(got)
-		if strings.Join(got, ",") != "app,landing" {
-			t.Errorf("%s writes VITE_GATEWAY_URL on %v, want exactly [app landing]", verb, got)
-		}
+	var got []string
+	for l := range gatewayLabels {
+		got = append(got, l)
+	}
+	sort.Strings(got)
+	if strings.Join(got, ",") != "app,landing" {
+		t.Errorf("set_service_vars writes VITE_GATEWAY_URL on %v, want exactly [app landing]", got)
 	}
 }
 
@@ -146,10 +173,12 @@ func TestSetForkAuthAutoconfirms(t *testing.T) {
 		t.Errorf("cmd_set_fork_auth auth_vars %v lacks %q (AC-2)", forkVars, entry)
 	}
 	// Written and re-read through the array, so the entry cannot skip the read-back.
-	for _, call := range []string{`auth_write "$env_id" "$auth_id" auth "${auth_vars[@]}"`, `auth_check auth "${auth_vars[@]}"`} {
-		if !strings.Contains(forkJoined, call) {
-			t.Errorf("cmd_set_fork_auth no longer calls %s", call)
-		}
+	write := regexp.MustCompile(`(?m)^\s*set_service_vars "\$env_id" "\$auth_id" auth .*"\$\{auth_vars\[@\]\}"\s*$`)
+	if !write.MatchString(forkJoined) {
+		t.Errorf(`cmd_set_fork_auth no longer calls set_service_vars "$env_id" "$auth_id" auth ... "${auth_vars[@]}"`)
+	}
+	if call := `auth_check auth "${auth_vars[@]}"`; !strings.Contains(forkJoined, call) {
+		t.Errorf("cmd_set_fork_auth no longer calls %s", call)
 	}
 
 	prod := stripHashComments(shellFunctionBody(t, "cmd_set_production_auth"))

@@ -259,7 +259,8 @@ returned by step 1.
      name: "PORT", value: "8080" }) }
    ```
    Plus service-specific variables (e.g. `DATABASE_URL` = `${{Postgres.DATABASE_URL}}`)
-   — one `variableUpsert` each.
+   — one `variableUpsert` each. This is the one-variable-at-a-time production path; fork
+   writes in CI go through `set_service_vars` and `variableCollectionUpsert`.
 5. **First deploy** from current `main`:
    ```graphql
    mutation { serviceInstanceDeployV2(serviceId: "$SVC", environmentId: "$ENV",

@@ -69,7 +69,7 @@ func TestSetForkAuthSite_URLArgument(t *testing.T) {
 
 // Adding GOTRUE_DISABLE_SIGNUP must not drop or add any other fork variable.
 func TestSetForkAuth_WritesTheCompleteSet(t *testing.T) {
-	s, _ := runForkAuthOK(t, freshJWK(t))
+	s := runForkAuthOnEmptyFork(t)
 	got := map[string][]string{}
 	for _, u := range s.upserts(t) {
 		got[u.Service] = append(got[u.Service], u.Name)
@@ -106,17 +106,17 @@ func TestForkAuthWritesSkipDeploys(t *testing.T) {
 			}
 			n := 0
 			for _, call := range s.calls(t) {
-				if !strings.Contains(call.Query, "variableUpsert(") {
+				if !strings.Contains(call.Query, "variableCollectionUpsert(") {
 					continue
 				}
 				n++
 				in, _ := call.Variables["input"].(map[string]any)
 				if in["skipDeploys"] != true {
-					t.Errorf("%v.%v upsert has skipDeploys %v, want true", in["serviceId"], in["name"], in["skipDeploys"])
+					t.Errorf("the %v write has skipDeploys %v, want true", in["serviceId"], in["skipDeploys"])
 				}
 			}
 			if n == 0 {
-				t.Fatal("control: no variableUpsert was sent")
+				t.Fatal("control: no variableCollectionUpsert was sent")
 			}
 		})
 	}

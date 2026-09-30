@@ -66,7 +66,7 @@ seed itself does). The PR's environment then stays up while the PR is open —
 `dev-env-sweeper.yml` reaps any that the close event missed (see
 [deploy-model.md](./deploy-model.md)); `development` is never torn down. `dev-env.yml`
 remains dispatchable by hand (`workflow_dispatch`) to re-run the deploy + health-gate +
-fleet-gate flow against `development` on demand — without the E2E suites, which run only
+fleet-gate (with its `auth` deployment wait) + `spa-build-gate` flow against `development` on demand — without the E2E suites, which run only
 on PR pushes.
 
 ## Prerequisites
@@ -229,7 +229,7 @@ the root cause and the full rationale (Approach 3: always-rebuild, chosen after 
 experiments falsified scale-to-0 and diff-driven alternatives).
 
 The gateway `health-gate` window was widened again under M4-21 (360s → 900s) — and
-`fleet-gate` / the e2e SPA `/health` wait (200s → 600s) — since every environment is now a
+`fleet-gate` / the SPA `/health` wait in `scripts/ci/wait-spa-builds.sh` (200s → 600s) — since every environment is now a
 cold 15-service build, not the exception a warm redeploy used to be (Decision
 `[gate-windows-provisional]`).
 

@@ -20,6 +20,9 @@ func initSentry(cfg Config) error {
 		Environment: cfg.SentryEnvironment,
 		Release:     cfg.Release,
 		ServerName:  cfg.Service,
+		// The telemetry scheduler polls an event off its buffer before queueing it, so Flush can
+		// return first and os.Exit drops a boot failure. The transport path queues synchronously.
+		DisableTelemetryBuffer: true,
 		// Client hooks cover every capture path; initSentry is the only sentry.Init.
 		BeforeSend:            scrubEvent,
 		BeforeSendTransaction: scrubEvent,

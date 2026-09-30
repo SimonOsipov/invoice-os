@@ -24,6 +24,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivertype"
 )
 
 // Config configures a River client built by New.
@@ -59,6 +60,7 @@ func New(pool *pgxpool.Pool, cfg Config) (*Client, error) {
 		RetryPolicy:  cfg.RetryPolicy,
 		Logger:       cmp.Or(cfg.Logger, slog.Default()),
 		ErrorHandler: errorReporter{},
+		Middleware:   []rivertype.Middleware{&jobTracing{}},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("queue: new river client: %w", err)

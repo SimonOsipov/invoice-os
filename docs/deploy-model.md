@@ -11,7 +11,7 @@ actually existing: CI now creates, tears down and sweeps them itself.
 - **Open / update a non-draft PR** → CI deploys and verifies the **whole fleet** together,
   coherently, from the PR's code, into a **fresh ephemeral Railway environment forked from
   `development`** — never into `development` itself. (`.github/workflows/dev-env.yml`)
-  Deploys start while CI runs. A CI that does not succeed stops the run at the next stage check.
+  Deploys start while CI runs. A CI that does not succeed cancels the run.
   > The fork is issued by **CI**, not by Railway's PR Environments feature — that feature
   > never created anything here (Railway is not subscribed to this repo's PR events) and is
   > OFF, see [Railway PR Environments are OFF](#railway-pr-environments-are-off) below.
@@ -19,7 +19,7 @@ actually existing: CI now creates, tears down and sweeps them itself.
   Every PR event, draft or ready, reports an **`E2E gate`** check. It passes when no path in
   the `changes` job's `e2e` filter changed (no deploy runs), fails on a draft PR with
   relevant changes, and otherwise fails unless the `e2e` job and the `CI` check both
-  succeeded. On a ready relevant PR it fails when `CI` did not succeed, and it names CI. To
+  succeeded. On a ready relevant PR it fails when `CI` did not succeed, and it names CI; such a run concludes `cancelled`. To
   retry it, re-run the whole workflow, never "re-run failed jobs".
 - **Close a PR (merged or abandoned)** → `.github/workflows/dev-env-teardown.yml`
   (**M4-23-05**) deletes that PR's **whole ephemeral environment** via `environmentDelete`,
@@ -150,7 +150,7 @@ One accepted rough edge: ci.yml *does* set `cancel-in-progress` on `github.ref`,
 back-to-back merges cancel the earlier commit's CI run, and that commit's deploy then fails
 at the CI gate with a red — but superseded — run. The later merge deploys normally, so the
 environment still converges on `main`. On a PR, a superseded commit's cancelled CI reads as
-`failure`, so the old run stops the same way.
+`failure`, so the old run is cancelled the same way.
 
 A half-deployed environment (SPAs without backends, or backends without an app) still has
 no value: every ready PR (re)deploys its own environment whole, exactly as before.

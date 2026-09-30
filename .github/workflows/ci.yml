@@ -234,7 +234,7 @@ jobs:
   # time. gateway is built separately (task-128, M4-21-04): it is the ONE service
   # that imports package db (dbsql.FS, for db.Provision's bootstrap/seed steps),
   # so it is the only build that actually exercises Dockerfile.dockerignore's
-  # `!db/bootstrap.sql` / `!db/seed.dev.sql` / `!db/embed.go` carve-out — tenancy
+  # `!db/...` carve-out — tenancy
   # alone would never catch a regression there (confirmed empirically: removing
   # the carve-out still builds tenancy fine but fails gateway's compile). No
   # image is pushed.
@@ -606,7 +606,7 @@ jobs:
         # deterministic password rotation, and schema-grant shape. Needs only
         # DATABASE_SUPERUSER_URL, already in this job's env; self-skips everywhere else.
         run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestBootstrap|TestMakefileDevDB' ./internal/platform/db/...
-      - name: Gateway boot-path provisioning suite (bootstrap->migrate->reset->purge->seed) + per-test visibility & skip gate
+      - name: Gateway boot-path provisioning suite + per-test visibility & skip gate
         # M4-21-04 (task-128, AC-6): proves db.Provision — the entry point
         # cmd/gateway/main.go calls at boot — composes bootstrap (gated) -> migrate
         # (unconditional) -> reset (gated, PR-environments only — persona-handoff-fix,

@@ -29,7 +29,7 @@ import (
 )
 
 // ProvisionConfig bundles everything Provision needs to run the boot-time
-// bootstrap→migrate→reset→purge→seed sequence.
+// boot-time provisioning sequence.
 //
 // Environment MUST be the raw os.Getenv("ENVIRONMENT") value (see
 // BootstrapEnabled's doc comment) — Provision applies no substitution of its
@@ -205,11 +205,12 @@ func lockProvisionTail(ctx context.Context, superuserDSN string) (func(), error)
 // gateway-as-migrator behavior, unchanged) → reset (gated by ResetEnabled,
 // PR-environments only — persona-handoff-fix, Decision [pr-only-reset]) →
 // purge (gated by BootstrapEnabled, Decision [purge-non-fatal]) → seed (gated
-// by BootstrapEnabled), short-circuiting fatally on the first error so a
+// by BootstrapEnabled) → shard seed (only when ResetWillRun;
+// TestProvisionSeedsNoShardTenantWithoutReset), short-circuiting fatally on the first error so a
 // partially provisioned database is never served. The purge is the one
 // exception to that: it runs as a single transaction that rolls back whole, so
 // a failed purge leaves the database exactly as it was and the boot continues
-// to Seed. Bootstrap, Reset, PurgeDemoTenants and Seed each open/close their
+// to Seed. Bootstrap, Reset, PurgeDemoTenants, Seed and SeedShards each open/close their
 // own dedicated superuser connection (bootstrap.go, reset.go, demopurge.go),
 // and Provision opens one more of its own to hold the advisory lock across the
 // reset/purge/seed tail (lockProvisionTail). All of them are closed before

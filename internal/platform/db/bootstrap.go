@@ -1,4 +1,4 @@
-// bootstrap.go — Go provisioning runner for db/bootstrap.sql and db/seed.dev.sql
+// bootstrap.go — Go provisioning runner for the db/*.sql files
 // (M4-21-03). See db.go for the package doc.
 package db
 

@@ -5,12 +5,12 @@ package db_test
 import (
 	"context"
 	"io/fs"
-	"os"
 	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	dbsql "github.com/SimonOsipov/invoice-os/db"
@@ -249,12 +249,50 @@ func TestShardRolesAndStaffingMirrorTheirSourceTenant(t *testing.T) {
 	}
 }
 
+// requireNoApprovalRows fails when a tenant already holds approval rows, then
+// registers a teardown of what demopolicy.Seed adds: Reset spares the policy
+// tables, so a leftover trips internal/demopolicy's own "already holds" guard.
+func requireNoApprovalRows(t *testing.T, super *pgxpool.Pool, tenantIDs ...string) {
+	t.Helper()
+	tables := []string{
+		"approval_decisions", "approval_run_steps", "approval_runs",
+		"approval_policy_steps", "approval_policy_versions", "approval_policies",
+	}
+	for _, id := range tenantIDs {
+		for _, table := range tables {
+			if n := mustCount(t, super, `SELECT count(*) FROM `+table+` WHERE tenant_id = $1`, id); n != 0 {
+				t.Fatalf("tenant %s already holds %d %s row(s); the teardown would delete rows this test did not create", id, n, table)
+			}
+		}
+	}
+	t.Cleanup(func() {
+		ctx := context.Background()
+		tx, err := super.Begin(ctx)
+		if err != nil {
+			t.Errorf("approval teardown: begin: %v", err)
+			return
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		// A sealed version blocks a plain delete.
+		if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = 'replica'`); err != nil {
+			t.Errorf("approval teardown: set session_replication_role: %v", err)
+			return
+		}
+		for _, table := range tables {
+			if _, err := tx.Exec(ctx, `DELETE FROM `+table+` WHERE tenant_id::text = ANY($1::text[])`, tenantIDs); err != nil {
+				t.Errorf("approval teardown: delete %s: %v", table, err)
+				return
+			}
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Errorf("approval teardown: commit: %v", err)
+		}
+	})
+}
+
 // AC-4
 func TestShardFirmPolicyIsAnUnpublishedCopyOfTheShippedFirmPlan(t *testing.T) {
-	appDSN := os.Getenv("DATABASE_URL")
-	if appDSN == "" {
-		t.Skip("DATABASE_URL required: demopolicy.Seed runs on the app pool")
-	}
+	appDSN := requireAppDSN(t) // demopolicy.Seed runs on the app pool
 	e := newShardEnv(t)
 	e.provisionReset(t)
 	appPool, err := pgxpool.New(context.Background(), appDSN)
@@ -262,6 +300,7 @@ func TestShardFirmPolicyIsAnUnpublishedCopyOfTheShippedFirmPlan(t *testing.T) {
 		t.Fatalf("open app pool: %v", err)
 	}
 	t.Cleanup(appPool.Close)
+	requireNoApprovalRows(t, e.super, demoTenantID, honeywellTenantID)
 	// The boot runs this after Provision; it publishes 1111's plan and must leave the shards alone.
 	if _, err := demopolicy.Seed(context.Background(), appPool, nil); err != nil {
 		t.Fatalf("demopolicy.Seed: %v", err)
@@ -344,6 +383,49 @@ func TestShardTenantsHoldOnlyTheirSeededEntitiesAndInvoice(t *testing.T) {
 			t.Errorf("in-house shard %s has %d invoices, want 0", s.id, n)
 		}
 	}
+
+	// Core AC 2: under RLS each tenant, shard or source, reads only its own rows.
+	t.Run("the app role sees only its own tenant's rows", func(t *testing.T) {
+		appPool, err := pgxpool.New(context.Background(), requireAppDSN(t))
+		if err != nil {
+			t.Fatalf("open app pool: %v", err)
+		}
+		t.Cleanup(appPool.Close)
+
+		wantInvoices := map[string]int{firmSource: -1, inhouseSource: -1} // -1: any, the seed owns the count
+		for _, s := range firmShards {
+			wantInvoices[s.id] = 1
+		}
+		for _, s := range inhouseShards {
+			wantInvoices[s.id] = 0
+		}
+		if len(wantInvoices) != len(allShards)+2 {
+			t.Fatalf("tenant list holds %d entries, want %d", len(wantInvoices), len(allShards)+2)
+		}
+		for tenantID, wantOwn := range wantInvoices {
+			err := db.WithinTenantTx(context.Background(), appPool, tenantID, func(tx pgx.Tx) error {
+				for _, table := range []string{"memberships", "workflow_roles", "business_entities", "invoices", "approval_policies"} {
+					if n := mustCount(t, tx, `SELECT count(*) FROM `+table+` WHERE tenant_id <> $1`, tenantID); n != 0 {
+						t.Errorf("tenant %s sees %d foreign %s rows, want 0", tenantID, n, table)
+					}
+				}
+				for _, table := range []string{"memberships", "workflow_roles", "business_entities"} {
+					if n := mustCount(t, tx, `SELECT count(*) FROM `+table+` WHERE tenant_id = $1`, tenantID); n == 0 {
+						t.Errorf("tenant %s sees none of its own %s rows, the foreign-row zero above is vacuous", tenantID, table)
+					}
+				}
+				if n := mustCount(t, tx, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, tenantID); wantOwn >= 0 && n != wantOwn {
+					t.Errorf("tenant %s sees %d of its own invoices, want %d", tenantID, n, wantOwn)
+				} else if wantOwn < 0 && n == 0 {
+					t.Errorf("tenant %s sees none of its own invoices, the foreign-row zero above is vacuous", tenantID)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("WithinTenantTx(%s): %v", tenantID, err)
+			}
+		}
+	})
 }
 
 // AC-6

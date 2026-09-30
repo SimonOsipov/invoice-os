@@ -3364,28 +3364,27 @@ func (e scSweepSkipExemption) covers(s scSweepSkipSite) bool {
 }
 
 var scSweepSkipAllowlist = []scSweepSkipExemption{
-	{file: "internal/portfolio/portfolio_test.go", fn: "dbTestPools"},                                                   // env-gated: skips when DATABASE_URL/DATABASE_SUPERUSER_URL are unset, the same guard every DB-backed package uses
-	{file: "internal/dashboard/store_test.go", fn: "dbTestPools"},                                                       // same guard, dashboard's own pool helper
-	{file: "internal/document/document_test.go", fn: "dbTestPools"},                                                     // same guard, document's own pool helper
-	{file: "internal/importer/store_test.go", fn: "dbTestPools"},                                                        // same guard, importer's own pool helper
-	{file: "internal/invoice/store_test.go", fn: "dbTestPools"},                                                         // same guard, invoice's own pool helper
-	{file: "internal/invoice/payload_engine_test.go", fn: "rulesAppPool"},                                               // same guard, PAY-18's app-role-only pool helper
-	{file: "internal/invoice/revalidate_test.go", fn: "TestRevalidateAllTenants_CoversEveryEnumeratedTenant"},           // pre-existing: skips when DATABASE_READER_URL is unset, unrelated to the sweep
-	{file: "internal/approval/policy_immutability_test.go", fn: "migratorPool"},                                         // pre-existing: skips without DATABASE_MIGRATION_URL, unrelated to the sweep
-	{file: "internal/approval/workflow_roles_test.go", fn: "dbTestPools"},                                               // same guard, approval's own pool helper
-	{file: "internal/tenancy/tenancy_test.go", fn: "dbTestPools"},                                                       // same guard, tenancy's own pool helper
-	{file: "internal/platform/db/bootstrap_test.go", fn: "requireSuperuserDSN"},                                         // pre-existing: skips without DATABASE_SUPERUSER_URL, unrelated to the sweep
-	{file: "internal/platform/db/migrate_test.go", fn: "TestMigrateUpFromEmbedded"},                                     // pre-existing: skips without DATABASE_MIGRATION_URL, unrelated to the sweep
-	{file: "internal/platform/db/provision_test.go", fn: "requireProvisionDSNs"},                                        // pre-existing: skips without DATABASE_SUPERUSER_URL/DATABASE_MIGRATION_URL, unrelated to the sweep
-	{file: "internal/platform/db/provision_test.go", fn: "TestSuperuserDSNNotRetainedForRequestPath"},                   // pre-existing: skips without DATABASE_URL, unrelated to the sweep
-	{file: "internal/platform/db/rls_harness_test.go", fn: "requireHarness"},                                            // pre-existing: skips without DATABASE_URL/DATABASE_MIGRATION_URL/DATABASE_SUPERUSER_URL, unrelated to the sweep
-	{file: "internal/platform/db/workflow_roles_seed_store_test.go", fn: "requireAppDSN"},                               // pre-existing: skips without DATABASE_URL, unrelated to the sweep
-	{file: "internal/submission/exchange_db_test.go", fn: "requireExchangeDB"},                                          // pre-existing: skips without DATABASE_URL/DATABASE_MIGRATION_URL, unrelated to the sweep
-	{file: "internal/submission/failure_modes_test.go", fn: "requireEffects"},                                           // same guard, the M2-09 exactly-once suite's own gate
-	{file: "internal/submission/seed_evidence_honesty_test.go", fn: "sehRequireSuperuserDSN"},                           // pre-existing: skips without DATABASE_SUPERUSER_URL, unrelated to the sweep
-	{file: "internal/submission/verdict_audit_test.go", fn: "vaRequireAppPool"},                                         // pre-existing: skips without DATABASE_URL, unrelated to the sweep
-	{file: "internal/submission/worker_smoke_test.go", fn: "requireDB"},                                                 // pre-existing: skips without DATABASE_URL, unrelated to the sweep
-	{file: "internal/platform/db/shard_seed_test.go", fn: "TestShardFirmPolicyIsAnUnpublishedCopyOfTheShippedFirmPlan"}, // env-gated: skips without DATABASE_URL (demopolicy.Seed runs on the app pool); ci.yml's migrations job runs it through rls-test-gate, which fails a skip
+	{file: "internal/portfolio/portfolio_test.go", fn: "dbTestPools"},                                         // env-gated: skips when DATABASE_URL/DATABASE_SUPERUSER_URL are unset, the same guard every DB-backed package uses
+	{file: "internal/dashboard/store_test.go", fn: "dbTestPools"},                                             // same guard, dashboard's own pool helper
+	{file: "internal/document/document_test.go", fn: "dbTestPools"},                                           // same guard, document's own pool helper
+	{file: "internal/importer/store_test.go", fn: "dbTestPools"},                                              // same guard, importer's own pool helper
+	{file: "internal/invoice/store_test.go", fn: "dbTestPools"},                                               // same guard, invoice's own pool helper
+	{file: "internal/invoice/payload_engine_test.go", fn: "rulesAppPool"},                                     // same guard, PAY-18's app-role-only pool helper
+	{file: "internal/invoice/revalidate_test.go", fn: "TestRevalidateAllTenants_CoversEveryEnumeratedTenant"}, // pre-existing: skips when DATABASE_READER_URL is unset, unrelated to the sweep
+	{file: "internal/approval/policy_immutability_test.go", fn: "migratorPool"},                               // pre-existing: skips without DATABASE_MIGRATION_URL, unrelated to the sweep
+	{file: "internal/approval/workflow_roles_test.go", fn: "dbTestPools"},                                     // same guard, approval's own pool helper
+	{file: "internal/tenancy/tenancy_test.go", fn: "dbTestPools"},                                             // same guard, tenancy's own pool helper
+	{file: "internal/platform/db/bootstrap_test.go", fn: "requireSuperuserDSN"},                               // pre-existing: skips without DATABASE_SUPERUSER_URL, unrelated to the sweep
+	{file: "internal/platform/db/migrate_test.go", fn: "TestMigrateUpFromEmbedded"},                           // pre-existing: skips without DATABASE_MIGRATION_URL, unrelated to the sweep
+	{file: "internal/platform/db/provision_test.go", fn: "requireProvisionDSNs"},                              // pre-existing: skips without DATABASE_SUPERUSER_URL/DATABASE_MIGRATION_URL, unrelated to the sweep
+	{file: "internal/platform/db/provision_test.go", fn: "TestSuperuserDSNNotRetainedForRequestPath"},         // pre-existing: skips without DATABASE_URL, unrelated to the sweep
+	{file: "internal/platform/db/rls_harness_test.go", fn: "requireHarness"},                                  // pre-existing: skips without DATABASE_URL/DATABASE_MIGRATION_URL/DATABASE_SUPERUSER_URL, unrelated to the sweep
+	{file: "internal/platform/db/workflow_roles_seed_store_test.go", fn: "requireAppDSN"},                     // pre-existing: skips without DATABASE_URL, unrelated to the sweep
+	{file: "internal/submission/exchange_db_test.go", fn: "requireExchangeDB"},                                // pre-existing: skips without DATABASE_URL/DATABASE_MIGRATION_URL, unrelated to the sweep
+	{file: "internal/submission/failure_modes_test.go", fn: "requireEffects"},                                 // same guard, the M2-09 exactly-once suite's own gate
+	{file: "internal/submission/seed_evidence_honesty_test.go", fn: "sehRequireSuperuserDSN"},                 // pre-existing: skips without DATABASE_SUPERUSER_URL, unrelated to the sweep
+	{file: "internal/submission/verdict_audit_test.go", fn: "vaRequireAppPool"},                               // pre-existing: skips without DATABASE_URL, unrelated to the sweep
+	{file: "internal/submission/worker_smoke_test.go", fn: "requireDB"},                                       // pre-existing: skips without DATABASE_URL, unrelated to the sweep
 }
 
 func TestRLS_NoNewSkipsInASweptPackage(t *testing.T) {

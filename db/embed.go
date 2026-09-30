@@ -1,4 +1,4 @@
-// Package dbsql embeds db/bootstrap.sql and db/seed.dev.sql so a Go binary can
+// Package dbsql embeds the db/*.sql files listed on FS so a Go binary can
 // execute them at boot (internal/platform/db.Bootstrap / .Seed, M4-21-03) with no
 // on-disk file present in the image — mirroring migrations/embed.go's rationale
 // exactly: the gateway's distroless image contains only the compiled binary, so

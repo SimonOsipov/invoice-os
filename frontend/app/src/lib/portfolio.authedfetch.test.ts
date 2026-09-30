@@ -64,7 +64,7 @@ function buildSession(token: string | null): Session {
     persona: APP_PERSONAS.firm,
     token,
     me: {
-      tenant: { id: '11111111-1111-1111-1111-111111111111', name: 'Okafor & Partners' },
+      tenant: { id: '11111111-1111-1111-1111-111111111111', name: 'Okafor & Partners', kind: 'firm' },
       user: { id: 'c0000000-0000-0000-0000-000000000001', role: 'authenticated' },
     },
     verified: true,

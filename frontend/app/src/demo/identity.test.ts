@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 import { APP_PERSONAS } from '../auth'
 import type { Member } from '../lib/members'
+import { handoffPersona } from '../lib/session'
 import { isSeat, personaFromMember } from './identity'
 
 const SEAT = APP_PERSONAS.firm
@@ -33,6 +34,15 @@ describe('personaFromMember', () => {
     expect(persona.name).toBe(ACTIVE_MEMBER.name)
     expect(persona.initials).toBe(ACTIVE_MEMBER.initials)
     expect(persona.subject).toBe(ACTIVE_MEMBER.id)
+  })
+
+  // SEAT is the firm persona, so the case above cannot tell a copied mode from a constant.
+  it('a stand-in from an in-house hand-off seat stays in-house', () => {
+    const seat = handoffPersona({
+      tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures', kind: 'in_house' },
+      user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated' },
+    })
+    expect(personaFromMember(ACTIVE_MEMBER, seat).mode).toBe('inhouse')
   })
 
   it('refuses a non-active member', () => {

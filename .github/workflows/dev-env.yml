@@ -1054,7 +1054,9 @@ jobs:
           cache: pnpm
       - name: List the topology shards
         id: shards
-        run: echo "shards=$(node e2e/topology/shards.ts)" >> "$GITHUB_OUTPUT"
+        run: |
+          shards="$(node e2e/topology/shards.ts)"
+          echo "shards=$shards" >> "$GITHUB_OUTPUT"
       - name: Install deps
         run: pnpm install --frozen-lockfile
       # A domain record can exist, report syncStatus ACTIVE and still not route — see

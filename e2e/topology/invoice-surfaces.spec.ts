@@ -50,7 +50,7 @@ const PERSONAS: { A: Persona; B: Persona } = {
 
 // [topology-never-publishes] scoped to policy IDENTITY (docs/e2e-convention.md): this
 // self-heal restores the tenant's OWN seeded policy, never a new one. Unwrapped (D3
-// protocol, ../api/validation.spec.ts:5-22) -- the shard seed leaves the firm tenant's
+// protocol, the header of ../api/validation.spec.ts) -- the shard seed leaves the firm tenant's
 // policy an unpublished draft (db/seed.e2e-shards.sql), so every approval below would
 // otherwise 404 against an invoice that armed no run. A genuine convergence failure must
 // abort this file loudly, not surface as confusing per-test 404s.

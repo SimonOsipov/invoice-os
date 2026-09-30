@@ -86,7 +86,7 @@ func (rt *router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	id, _ := auth.IdentityFromContext(r.Context())
 	if status := authorize(r, service, id); status != 0 {
 		rt.log.WarnContext(r.Context(), "gateway authz denied",
-			slog.String("service", service), slog.Int("status", status))
+			slog.String("upstream", service), slog.Int("status", status))
 		writeError(w, status, strings.ToLower(http.StatusText(status)))
 		return
 	}
@@ -132,7 +132,7 @@ func newReverseProxy(service string, target *url.URL, log *slog.Logger) *httputi
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			log.ErrorContext(r.Context(), "gateway upstream unreachable",
-				slog.String("service", service), slog.Any("err", err))
+				slog.String("upstream", service), slog.Any("err", err))
 			writeError(w, http.StatusBadGateway, "bad gateway")
 		},
 	}

@@ -15,6 +15,7 @@
 package queue
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
@@ -56,7 +57,7 @@ func New(pool *pgxpool.Pool, cfg Config) (*Client, error) {
 		Queues:       cfg.Queues,
 		Workers:      cfg.Workers,
 		RetryPolicy:  cfg.RetryPolicy,
-		Logger:       cfg.Logger,
+		Logger:       cmp.Or(cfg.Logger, slog.Default()),
 		ErrorHandler: errorReporter{},
 	})
 	if err != nil {

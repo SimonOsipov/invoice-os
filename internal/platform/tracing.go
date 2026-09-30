@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/getsentry/sentry-go"
+	sentryhttpclient "github.com/getsentry/sentry-go/httpclient"
 )
 
 // tracingMiddleware opens one transaction per request, named by the mux's route
@@ -78,4 +79,6 @@ func methodLabel(m string) string {
 }
 
 // TraceTransport propagates the caller's trace to another first-party service; third-party clients must not use it.
-func TraceTransport(base http.RoundTripper) http.RoundTripper { return base }
+func TraceTransport(base http.RoundTripper) http.RoundTripper {
+	return sentryhttpclient.NewSentryRoundTripper(base)
+}

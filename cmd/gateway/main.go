@@ -124,6 +124,7 @@ func main() {
 		Issuer:     mustEnv("AUTH_ISSUER"),
 		JWKSURL:    mustEnv("AUTH_JWKS_URL"),
 		Additional: additional,
+		HTTPClient: newJWKSClient(),
 		Logger:     app.Logger,
 	})
 	if err != nil {
@@ -242,7 +243,9 @@ type registration struct {
 }
 
 // newJWKSClient builds the JWKS fetch client.
-func newJWKSClient() *http.Client { return &http.Client{Timeout: 10 * time.Second} }
+func newJWKSClient() *http.Client {
+	return &http.Client{Timeout: 10 * time.Second, Transport: platform.TraceTransport(nil)}
+}
 
 // registrationHandlers builds the registration handlers against GoTrue at authURL.
 // A nil siteURL means AUTH_SITE_URL is unset: both routes answer 503.

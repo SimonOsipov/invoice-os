@@ -117,6 +117,7 @@ func isProvisioning(r *http.Request) bool {
 // upstream and overwrite the identity headers from the verified token.
 func newReverseProxy(service string, target *url.URL, log *slog.Logger) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
+		Transport: platform.TraceTransport(nil),
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
 			pr.SetXForwarded()
@@ -124,6 +125,9 @@ func newReverseProxy(service string, target *url.URL, log *slog.Logger) *httputi
 				pr.Out.URL.Path = "/"
 			}
 			injectIdentity(pr)
+			// The outbound round tripper sets its own sentry-trace; inbound ones are not trusted.
+			pr.Out.Header.Del("sentry-trace")
+			pr.Out.Header.Del("baggage")
 		},
 		// Every upstream is a platform service that reports its own 5xx.
 		ModifyResponse: func(resp *http.Response) error {

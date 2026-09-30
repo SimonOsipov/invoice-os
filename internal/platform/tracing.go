@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -44,10 +45,16 @@ func tracingMiddleware(mux *http.ServeMux) middleware {
 				sentry.WithOpName("http.server"),
 				sentry.WithTransactionSource(source),
 			)
+			// recoveryMiddleware marks a recovered panic here; the recorded code may still be 2xx.
+			out := &requestOutcome{}
+			ctx = context.WithValue(span.Context(), ctxKeyOutcome, out)
 			rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-			next.ServeHTTP(rec, r.WithContext(span.Context()))
+			next.ServeHTTP(rec, r.WithContext(ctx))
 
 			span.Status = sentry.HTTPtoSpanStatus(rec.status)
+			if out.wasPanicked() {
+				span.Status = sentry.SpanStatusInternalError
+			}
 			span.SetData("http.request.method", method)
 			span.SetData("http.response.status_code", rec.status)
 			span.Finish()

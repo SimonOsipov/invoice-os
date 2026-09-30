@@ -55,6 +55,7 @@ const PERSONAS: { A: Persona; B: Persona } = {
 // otherwise 404 against an invoice that armed no run. A genuine convergence failure must
 // abort this file loudly, not surface as confusing per-test 404s.
 test.beforeAll(async () => {
+  throw new Error('INFRA-04 red-shard proof')
   expect(test.info().project.name, 'invoice-surfaces.spec.ts belongs to the invoice-surfaces shard').toBe('invoice-surfaces')
   const token = await login(PERSONAS.A)
   await ensureFirmPolicyActive(token)

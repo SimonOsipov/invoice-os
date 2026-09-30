@@ -75,7 +75,7 @@ In every other case, take the next step. Do not end a turn on "Starting X now", 
 | Sentry | `mcp__sentry__*` — deployed errors |
 | Railway | `mcp__railway-mcp-server__*` — read-only; deploys happen in `dev-env.yml` |
 | Obsidian | `mcp__obsidian-mcp-tools__*` — story files |
-| sysmap | `mcp__sysmap__*` — feature records |
+| sysmap | `mcp__sysmap__*` — feature records; read-only, the PM writes |
 
 ## Docs
 Read the docs related to your change. `ls docs/` is the list, and every file in it is a Stage 4 sweep target. Key ones: `migrations.md`, `deploy-model.md`, `topology-e2e.md`, `add-a-service.md`, `e2e-convention.md`, `mock-app-adapter.md`.
@@ -93,7 +93,7 @@ Design references for UI stories: Claude Design **prototype** project `6269a212-
    - an **Obsidian story id** — `AIR-08`, `M3-04`, `BUG-19`.
    If it resolves as both, prefer the feature and say so. Error and exit if missing.
 2. **Read the story.**
-   - *Feature:* `sysmap_feature_show`. Name + description = Objective; acceptance criteria = Core ACs; `screen` = surface; `depends_on` = prerequisites. Set `PLANNING_REQUIRED=true`, `STORY_SOURCE=sysmap`. Refuse a feature whose status is not `planned` or `building`, and name the status. Set it to `building` before Phase 1.
+   - *Feature:* `sysmap_feature_show`. Name + description = Objective; acceptance criteria = Core ACs; `screen` = surface; `depends_on` = prerequisites. Set `PLANNING_REQUIRED=true`, `STORY_SOURCE=sysmap`. Refuse a feature whose status is not `planned` or `building`, and name the status. Do not change its status; the PM sets `building`.
    - *Obsidian:* `get_vault_file` on `Simon Vault/Projects/ASComply Africa/User Stories/<EPIC>/<STORY>*.md`; also check `User Stories/Archive/<EPIC>/`. Set `STORY_SOURCE=obsidian`. If no file exists, error: "run /pm-story first".
 3. **Branch slug.** Use the story's `## Branch Strategy` if present. Otherwise `feature/<lowercase-id>-<kebab-title>` (`F-192 Notice a submission failure` → `feature/f-192-notice-a-submission-failure`).
 4. **Backlog subtasks:** `mcp__backlog__task_list({ labels: ["story:<lowercase-id>"], status: "To Do" })`.
@@ -323,7 +323,7 @@ Runs once per story, after `CI` is green. It verifies the assembled feature agai
 
 ### Phase 4: Worktree cleanup
 
-After the PR merges (manually or via `/gh-merge-pr`), run `/post-merge-cleanup <STORY>`. It removes the worktree and branch, marks subtasks Done, archives the story, and moves the feature off `building` in sysmap. A `/ralph-goal` loop advances only after this runs.
+After the PR merges (manually or via `/gh-merge-pr`), run `/post-merge-cleanup <STORY>`. It removes the worktree and branch, marks subtasks Done and archives the story. The PM updates sysmap. A `/ralph-goal` loop advances only after this runs.
 
 Teardown of the PR environment is repo-side: `dev-env-teardown.yml` on PR close (best-effort), `dev-env-sweeper.yml` daily as the authority. See `docs/deploy-model.md`.
 

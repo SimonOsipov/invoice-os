@@ -1,5 +1,5 @@
 // Fails the required "E2E gate" check unless E2E passed or was not needed.
-// Usage: node e2e/mergeGate.ts  (reads CHANGES_RESULT, E2E_RELEVANT, PR_DRAFT, E2E_RESULT)
+// Usage: node e2e/mergeGate.ts  (reads CHANGES_RESULT, E2E_RELEVANT, PR_DRAFT, E2E_RESULT, CI_RESULT, CI_CONCLUSION)
 // Node >= 22.18 runs this file without flags, so keep it to erasable TypeScript.
 
 import { fileURLToPath } from 'node:url'
@@ -9,8 +9,8 @@ export type GateInput = {
   relevant: string
   draft: string
   e2eResult: string
-  ciResult?: string
-  ciConclusion?: string
+  ciResult: string
+  ciConclusion: string
 }
 
 /** mergeGateVerdict applies the rules in order and fails closed on any unrecognised input. */
@@ -23,6 +23,12 @@ export function mergeGateVerdict(i: GateInput): { pass: boolean; reason: string 
     return { pass: false, reason: `path detection produced no verdict (e2e output '${i.relevant}')` }
   }
   if (i.draft === 'true') return { pass: false, reason: 'draft PRs run no E2E; mark the PR ready' }
+  if (i.ciResult !== 'success') {
+    return {
+      pass: false,
+      reason: `CI did not succeed on this commit (CI conclusion '${i.ciConclusion}', watch job '${i.ciResult}')`,
+    }
+  }
   if (i.e2eResult === 'success') return { pass: true, reason: 'E2E concluded success' }
   // A skipped E2E on a relevant PR means the deploy never reached it.
   return { pass: false, reason: `E2E concluded '${i.e2eResult}'` }
@@ -34,6 +40,8 @@ function main(env: NodeJS.ProcessEnv): number {
     relevant: env.E2E_RELEVANT ?? '',
     draft: env.PR_DRAFT ?? '',
     e2eResult: env.E2E_RESULT ?? '',
+    ciResult: env.CI_RESULT ?? '',
+    ciConclusion: env.CI_CONCLUSION ?? '',
   })
   console.log(v.pass ? v.reason : `::error::${v.reason}`)
   return v.pass ? 0 : 1

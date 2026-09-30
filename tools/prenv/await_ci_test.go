@@ -457,3 +457,27 @@ func TestAwaitCI_AppendsToGithubOutput(t *testing.T) {
 		})
 	}
 }
+
+// A body that is not JSON, or JSON of the wrong shape, is an API error: no verdict yet.
+func TestAwaitCI_MalformedAnswerKeepsPolling(t *testing.T) {
+	ok := ciResp(ciRun("completed", "success", "2026-09-30T10:00:00Z"))
+	for _, c := range []struct{ name, answer string }{
+		{"html with exit 0", "<html>502 Bad Gateway</html>"},
+		{"html with a failed call", "EXIT1:<html>502 Bad Gateway</html>"},
+		{"truncated json", `{"check_runs":[{"status"`},
+		{"json array", "[]"},
+		{"json error body", `EXIT1:{"message":"Server Error","status":"502"}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newCIShim(t)
+			s.seq(t, c.answer, ok)
+			out, code := s.run(t, s.defaultEnv(), ciSHA)
+
+			if code != 0 {
+				t.Errorf("exit %d, want 0; output = %q", code, out)
+			}
+			s.wantCalls(t, 2)
+			s.wantOutput(t, "conclusion=success")
+		})
+	}
+}

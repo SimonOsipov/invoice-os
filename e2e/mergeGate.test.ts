@@ -58,6 +58,17 @@ describe('mergeGateVerdict', () => {
     expect(mergeGateVerdict(input({ ciResult: 'cancelled', ciConclusion: '' })).reason).toBe(
       "CI did not succeed on this commit (CI conclusion '', watch job 'cancelled')",
     )
+    // An empty watch result prints as '', not as a placeholder.
+    expect(mergeGateVerdict(input({ ciResult: '', ciConclusion: 'success' })).reason).toBe(
+      "CI did not succeed on this commit (CI conclusion 'success', watch job '')",
+    )
+    expect(mergeGateVerdict(input({ ciResult: '', ciConclusion: '' })).reason).toBe(
+      "CI did not succeed on this commit (CI conclusion '', watch job '')",
+    )
+    // Values are printed verbatim, quotes and whitespace included.
+    expect(mergeGateVerdict(input({ ciResult: 'failure', ciConclusion: `it's "x" ` })).reason).toBe(
+      `CI did not succeed on this commit (CI conclusion 'it's "x" ', watch job 'failure')`,
+    )
   })
 
   it('rule order: a red CI is named before a skipped E2E', () => {
@@ -65,6 +76,13 @@ describe('mergeGateVerdict', () => {
     expect(v.pass).toBe(false)
     expect(v.reason).toContain('CI did not succeed')
     expect(v.reason).not.toContain('E2E concluded')
+    // A red CI wins over every E2E result, a green E2E included.
+    for (const e2eResult of ['success', 'skipped', 'failure', 'cancelled', '', 'neutral']) {
+      const r = mergeGateVerdict(input({ ciResult: 'failure', e2eResult }))
+      expect(r.pass, e2eResult).toBe(false)
+      expect(r.reason, e2eResult).toContain('CI did not succeed')
+      expect(r.reason, e2eResult).not.toContain('E2E concluded')
+    }
     // Green CI keeps the E2E reason.
     expect(mergeGateVerdict(input({ e2eResult: 'skipped' })).reason).toContain("E2E concluded 'skipped'")
   })
@@ -84,6 +102,12 @@ describe('mergeGateVerdict', () => {
       const changes = mergeGateVerdict(input({ changesResult: 'failure', relevant: '', ciResult }))
       expect(changes.pass, `changes/'${ciResult}'`).toBe(false)
       expect(changes.reason, ciResult).toContain('path detection did not succeed')
+
+      for (const relevant of ['', 'False']) {
+        const noVerdict = mergeGateVerdict(input({ relevant, ciResult }))
+        expect(noVerdict.pass, `relevant='${relevant}'/'${ciResult}'`).toBe(false)
+        expect(noVerdict.reason, `relevant='${relevant}'/'${ciResult}'`).toContain('no verdict')
+      }
     }
   })
 
@@ -181,6 +205,15 @@ describe('mergeGateVerdict adversarial', () => {
     for (const draft of ['True', 'TRUE', ' true', '', 'yes']) {
       expect(mergeGateVerdict(input({ draft, e2eResult: 'success' })).pass, draft).toBe(true)
       expect(mergeGateVerdict(input({ draft, e2eResult: 'skipped' })).pass, draft).toBe(false)
+    }
+  })
+
+  it('decides on ciResult alone; ciConclusion is only printed', () => {
+    for (const ciConclusion of ['failure', 'cancelled', '', 'SUCCESS']) {
+      expect(mergeGateVerdict(input({ ciResult: 'success', ciConclusion })).pass, ciConclusion).toBe(true)
+    }
+    for (const ciResult of ['failure', '']) {
+      expect(mergeGateVerdict(input({ ciResult, ciConclusion: 'success' })).pass, ciResult).toBe(false)
     }
   })
 
@@ -296,6 +329,36 @@ describe('mergeGate CLI', () => {
     expect(out).toContain('::error::CI did not succeed')
     expect(out).toContain("CI conclusion 'timed_out'")
     expect(out).toContain("watch job 'failure'")
+  })
+
+  it('script fails every non-exact CI_RESULT with a green E2E', () => {
+    const ready = { CHANGES_RESULT: 'success', E2E_RELEVANT: 'true', PR_DRAFT: 'false', E2E_RESULT: 'success' }
+    const variants = ['SUCCESS', 'Success', ' success', 'success ', 'success\n', 'cancelled', 'skipped', 'failure', '']
+    for (const CI_RESULT of variants) {
+      const { code, out } = cli({ ...ready, CI_RESULT, CI_CONCLUSION: 'success' })
+      expect(code, JSON.stringify(CI_RESULT)).toBe(1)
+      expect(out, JSON.stringify(CI_RESULT)).toContain('::error::CI did not succeed')
+    }
+    expect(cli({ ...ready, CI_RESULT: 'success', CI_CONCLUSION: 'success' }).code).toBe(0)
+  })
+
+  it('script prints an unset CI_CONCLUSION as empty quotes and reads CI_CONCLUSION alone as no CI', () => {
+    const ready = { CHANGES_RESULT: 'success', E2E_RELEVANT: 'true', PR_DRAFT: 'false', E2E_RESULT: 'success' }
+    const failed = cli({ ...ready, CI_RESULT: 'failure' })
+    expect(failed.code).toBe(1)
+    expect(failed.out).toContain("CI conclusion '', watch job 'failure'")
+    const onlyConclusion = cli({ ...ready, CI_CONCLUSION: 'success' })
+    expect(onlyConclusion.code).toBe(1)
+    expect(onlyConclusion.out).toContain("CI conclusion 'success', watch job ''")
+  })
+
+  it('script ignores CI_RESULT for a not-relevant PR and keeps the draft reason', () => {
+    const notRelevant = cli({ CHANGES_RESULT: 'success', E2E_RELEVANT: 'false', CI_RESULT: 'failure' })
+    expect(notRelevant.code).toBe(0)
+    expect(notRelevant.out).not.toContain('CI did not succeed')
+    const draft = cli({ CHANGES_RESULT: 'success', E2E_RELEVANT: 'true', PR_DRAFT: 'true', CI_RESULT: 'failure' })
+    expect(draft.code).toBe(1)
+    expect(draft.out).toContain('::error::draft PRs run no E2E')
   })
 
   it('script treats unset CI vars as a failed CI on the deploy path', () => {

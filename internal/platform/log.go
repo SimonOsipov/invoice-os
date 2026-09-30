@@ -42,7 +42,8 @@ func TenantIDFromContext(ctx context.Context) string {
 }
 
 // newLogger builds the process logger: JSON to stdout at the configured level,
-// with request_id and tenant_id added from the context on every *Context call.
+// with request_id and tenant_id added from the context on every *Context call,
+// plus service and environment as base fields.
 // With a Sentry DSN, every standard-level record also goes to Sentry Logs.
 func newLogger(cfg Config) *slog.Logger {
 	level := parseLevel(cfg.LogLevel)

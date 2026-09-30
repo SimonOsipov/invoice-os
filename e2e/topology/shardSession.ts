@@ -9,7 +9,7 @@ const SEEDED_FLAG = 'e2e.seeded'
 type ShardLogin = { id: string; subject: string; name: string; kind: string; role: string }
 
 // Stores the session record the SPA keeps after a real sign-in (lib/session.ts serializeSession):
-// a hand-off record for firm, a persona record for in-house (a hand-off record is firm-mode only).
+// a hand-off record for firm, a persona record for in-house.
 // The init script writes once per tab, so a reload or a deep link keeps what the app stored.
 export async function seedShardSession(page: Page, persona: 'firm' | 'inhouse', tenant: ShardLogin): Promise<void> {
   const token = await login({ ...tenant, tenantId: tenant.id })

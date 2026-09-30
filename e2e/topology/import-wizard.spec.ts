@@ -24,7 +24,7 @@
 // target would make a retry (or the second test) collide on fixed invoice numbers.
 //
 // NOTE (merged from main, M4-22-03): db/seed.dev.sql now seeds 10 curated
-// business_entities into THIS persona's tenant (1111...), where it previously seeded
+// business_entities into THIS persona's tenant, where it previously seeded
 // zero. Harmless here and deliberately not compensated for: selectEntity() (the
 // workspace-switcher helper, [import-upload-unify] -- CreateUpload's own in-page
 // entity <select> is gone) matches our own uniquely-named entity by label,
@@ -187,7 +187,7 @@ async function signInPersona(page: Page, param: string): Promise<void> {
   const tenant = inhouse ? SHARD.b : SHARD.a
   await seedShardSession(page, inhouse ? 'inhouse' : 'firm', tenant)
   // The landing page is the single sign-in front door, so the app has no picker to click
-  // on a deployed build; ?persona= IS the sign-in, exactly as landing destUrl() hands off.
+  // on a deployed build.
   const url = inhouse ? APP_URL : `${APP_URL}?persona=${param}`
   const res = await page.goto(url)
   expect(res, `no response from ${url}`).toBeTruthy()

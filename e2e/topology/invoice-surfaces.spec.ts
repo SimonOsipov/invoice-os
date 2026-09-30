@@ -10,8 +10,7 @@
 // import-wizard.spec.ts (no-duplicate-invoice-number is scoped per entity, and
 // this suite runs serially -- fullyParallel:false, workers:1
 // (playwright.topology.config.ts, [topology-config-conforms-workers-1] since
-// M4-14-01) -- with retries:1 in CI, against the same shared firm-persona
-// tenant every other topology spec also drives).
+// M4-14-01) -- with retries:1 in CI).
 //
 // Fixture data is verified against the seeded v1+v2 rule set (migrations/
 // 20260711121327_seed_mbs_v1.sql + 20260716185106_rule_set_v2.sql) and built as
@@ -51,11 +50,10 @@ const PERSONAS: { A: Persona; B: Persona } = {
 
 // [topology-never-publishes] scoped to policy IDENTITY (docs/e2e-convention.md): this
 // self-heal restores the tenant's OWN seeded policy, never a new one. Unwrapped (D3
-// protocol, ../api/validation.spec.ts:5-22) -- the api run ahead of this one (dev-env.yml)
-// leaves the firm tenant's active slot empty (contract-invoice.spec.ts's own armedInvoice
-// cleanup), so every approval below would otherwise 404 against an invoice that armed no
-// run. A genuine convergence failure must abort this file loudly, not surface as confusing
-// per-test 404s.
+// protocol, ../api/validation.spec.ts:5-22) -- the shard seed leaves the firm tenant's
+// policy an unpublished draft (db/seed.e2e-shards.sql), so every approval below would
+// otherwise 404 against an invoice that armed no run. A genuine convergence failure must
+// abort this file loudly, not surface as confusing per-test 404s.
 test.beforeAll(async () => {
   expect(test.info().project.name, 'invoice-surfaces.spec.ts belongs to the invoice-surfaces shard').toBe('invoice-surfaces')
   const token = await login(PERSONAS.A)
@@ -83,7 +81,7 @@ function collectErrors(page: Page, extra?: Dropper): string[] {
 async function signInFirm(page: Page): Promise<void> {
   await seedShardSession(page, 'firm', SHARD.a)
   // The landing page is the single sign-in front door, so the app has no picker to click
-  // on a deployed build; ?persona= IS the sign-in, exactly as landing destUrl() hands off.
+  // on a deployed build.
   const url = `${APP_URL}?persona=${FIRM_PERSONA.param}`
   const res = await page.goto(url)
   expect(res, `no response from ${url}`).toBeTruthy()
@@ -1242,11 +1240,11 @@ test('deployed app: a cross-tenant invoice id and a random UUID render the same 
   // is this test's premise, a 404 on anything else is still a failure. See
   // consoleGate.ts's notFoundIdDropper for why one 404 is really four.
   const errors = collectErrors(page, notFoundIdDropper(page, [crossTenantInvoice.id, randomId]))
+  await seedShardSession(page, 'firm', SHARD.a)
 
   // toContainText is only the settle signal -- innerText() is a one-shot read, not
   // auto-retrying. The assertion is the equality below; nothing here hardcodes a copy
   // string, so a future error-message change does not need this test rewritten.
-  await seedShardSession(page, 'firm', SHARD.a)
   async function renderedTextFor(id: string): Promise<string> {
     await page.goto(`${APP_URL}/invoices/${id}?persona=${FIRM_PERSONA.param}`)
     await expect(page.getByTestId('invoice-detail')).toContainText('HTTP 404')

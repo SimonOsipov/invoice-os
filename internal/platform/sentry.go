@@ -23,6 +23,11 @@ func initSentry(cfg Config) error {
 		// The telemetry scheduler polls an event off its buffer before queueing it, so Flush can
 		// return first and os.Exit drops a boot failure. The transport path queues synchronously.
 		DisableTelemetryBuffer: true,
+		EnableTracing:          true,
+		// ceiling: 100% of requests ≈ 13k–32k spans/month (0.3–0.6% of 5M); sample below 1.0 above ~2.5M spans/month
+		TracesSampleRate: 1.0,
+		// Keep 404s: the SDK drops them by default.
+		TraceIgnoreStatusCodes: [][]int{},
 		// Client hooks cover every capture path; initSentry is the only sentry.Init.
 		BeforeSend:            scrubEvent,
 		BeforeSendTransaction: scrubEvent,

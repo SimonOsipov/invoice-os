@@ -1142,6 +1142,11 @@ export function firmApproverTokens(tenantId: string = PERSONAS.A.tenantId): Prom
       return { fin_mgr, compliance }
     })()
     firmApproverTokensByTenant.set(tenantId, memo)
+    // A refused mint must not poison later callers; a success stays memoised.
+    const mint = memo
+    mint.catch(() => {
+      if (firmApproverTokensByTenant.get(tenantId) === mint) firmApproverTokensByTenant.delete(tenantId)
+    })
   }
   return memo
 }

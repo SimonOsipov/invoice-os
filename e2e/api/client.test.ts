@@ -354,6 +354,7 @@ describe('firmApproverTokens', () => {
   const SHARD_ID_4 = '11111111-1111-1111-1111-00000000e2e4'
   const SHARD_ID_5 = '11111111-1111-1111-1111-00000000e2e5'
   const SHARD_ID_6 = '11111111-1111-1111-1111-00000000e2e6'
+  const SHARD_ID_7 = '11111111-1111-1111-1111-00000000e2e7'
   const TENANT_1111 = '11111111-1111-1111-1111-111111111111'
   const loginsSince = () => calls.filter((c) => c.url.endsWith('/auth/login'))
   const loginBody = (c: { body?: unknown }) => c.body as { subject: string; tenant_id: string }
@@ -435,6 +436,19 @@ describe('firmApproverTokens', () => {
 
     await firmApproverTokens(SHARD_ID_6)
     expect(loginsSince()).toHaveLength(2) // a healthy shard still mints
+  })
+
+  it('after a refused mint for a tenant, a later call for it mints again', async () => {
+    failLoginTenant = SHARD_ID_7
+    try {
+      await expect(firmApproverTokens(SHARD_ID_7)).rejects.toThrow('mint refused')
+    } finally {
+      failLoginTenant = null
+    }
+    calls.length = 0
+
+    await firmApproverTokens(SHARD_ID_7)
+    expect(loginsSince()).toHaveLength(2)
   })
 })
 

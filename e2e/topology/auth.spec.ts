@@ -1,7 +1,7 @@
 import { test, expect, type BrowserContext, type Frame, type Page, type Request, type Response } from '@playwright/test'
 import { APP_URL, FIRM_PERSONA, GATEWAY_URL, INHOUSE_PERSONA } from './targets'
 import { resolveTarget } from '../targets'
-import { collectErrors } from '../personaSession'
+import { collectErrors, sidebarRoster } from '../personaSession'
 import { PERSONAS, PERSONA_IDS, DESTINATION_ENV, type PersonaId } from '../personas'
 import {
   login,
@@ -962,6 +962,49 @@ test('deployed app: a hand-off code minted in another browser signs no tab in', 
     const spent = await rawFetch('/auth/exchange', { method: 'POST', body: { code: c2, state: attackerState } })
     expect([spent.status, spent.body], "the attacker's code after a wrong-state redemption").toEqual([400, { error: INVALID_CODE }])
   })
+})
+
+// The first screen of a fresh workspace: the onboarding dashboard for the zero-entity placeholder (emptyClient).
+async function expectOnboardingDashboard(page: Page): Promise<void> {
+  await expect(page.getByText('COMPLIANCE OVERVIEW', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: 'No client yet', exact: true })).toBeVisible()
+}
+
+test('deployed app: a real in-house workspace has a Company tab and no Clients nav item', async ({ page }) => {
+  test.setTimeout(180_000)
+  const account = await provisionRealAccount('mode-inhouse', 'in_house')
+  const errors = collectErrors(page)
+
+  await signInAtFrontDoor(page, account, '/')
+  await expectOnboardingDashboard(page)
+  await expect.poll(() => sidebarRoster(page), { message: 'in-house sidebar roster' }).toContain('Settings')
+  expect(await sidebarRoster(page), 'the in-house sidebar').not.toContain('Clients')
+
+  await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: 'Settings' }).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Settings', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Company', exact: true }).click()
+  await expect(page.getByText('Your company', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Add company' })).toBeVisible()
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('deployed app: a real firm workspace has the Clients portfolio and no Company tab', async ({ page }) => {
+  test.setTimeout(180_000)
+  const account = await provisionRealAccount('mode-firm', 'firm')
+  const errors = collectErrors(page)
+
+  await signInAtFrontDoor(page, account, '/')
+  await expectOnboardingDashboard(page)
+  await expect.poll(() => sidebarRoster(page), { message: 'firm sidebar roster' }).toContain('Clients')
+
+  const nav = page.locator('aside.pf-sidebar nav.pf-nav-list')
+  await nav.getByRole('button', { name: 'Clients' }).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Client portfolio', exact: true })).toBeVisible()
+
+  await nav.getByRole('button', { name: 'Settings' }).click()
+  await expect(page.getByRole('button', { name: 'Members', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Company', exact: true })).toHaveCount(0)
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })
 
 interface StoredRenewal {

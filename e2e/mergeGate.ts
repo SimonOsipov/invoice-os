@@ -1,4 +1,4 @@
-// Fails the required "E2E gate" check unless E2E passed or was not needed.
+// Fails the required "E2E gate" check unless the PR needs no E2E, or CI and E2E both succeeded.
 // Usage: node e2e/mergeGate.ts  (reads CHANGES_RESULT, E2E_RELEVANT, PR_DRAFT, E2E_RESULT, CI_RESULT, CI_CONCLUSION)
 // Node >= 22.18 runs this file without flags, so keep it to erasable TypeScript.
 

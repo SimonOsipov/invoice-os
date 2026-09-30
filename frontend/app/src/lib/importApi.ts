@@ -42,7 +42,7 @@
 // auth/error shaping (IMPAPI-20 is the anti-fork guard, mirroring PRV-16's role on the
 // backend).
 //
-// makeImportAuth(session, onSignOut, onSuspended, freshToken) mirrors makeAuthedFetch with
+// makeImportAuth(session, onUnauthorized, onSuspended, freshToken) mirrors makeAuthedFetch with
 // the same parameters. The token is read at CALL time (the renewer's
 // getter, or `session.token`), never captured at construction.
 //
@@ -216,13 +216,13 @@ export type UploadPhase =
 // The token is read at CALL time, never captured (makeAuthedFetch).
 export function makeImportAuth(
   session: Session,
-  onSignOut: () => void,
+  onUnauthorized: () => void,
   onSuspended?: () => void,
   freshToken?: () => string | null | Promise<string | null>,
 ): ImportAuth {
   return {
     getToken: freshToken ?? (() => session.token),
-    onUnauthorized: onSignOut,
+    onUnauthorized,
     onSuspended,
   }
 }

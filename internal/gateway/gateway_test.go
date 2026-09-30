@@ -72,7 +72,7 @@ func setupGateway(t *testing.T) *testGateway {
 	}
 
 	return &testGateway{
-		handler:  Handler(Options{Verifier: verifier, Upstreams: upstreams}),
+		handler:  Handler(Options{Verifier: verifier, Sessions: liveSessions(t), Upstreams: upstreams}),
 		issuer:   issuer,
 		verifier: verifier,
 		caps:     caps,
@@ -258,7 +258,7 @@ func TestUnreachableUpstreamBadGateway(t *testing.T) {
 	deadURL, _ := url.Parse(dead.URL)
 	dead.Close()
 
-	h := Handler(Options{Verifier: verifier, Upstreams: map[string]*url.URL{"tenancy": deadURL}})
+	h := Handler(Options{Verifier: verifier, Sessions: liveSessions(t), Upstreams: map[string]*url.URL{"tenancy": deadURL}})
 	tok, err := issuer.Mint(auth.MintOptions{Subject: testSubject, Role: testRole, TenantID: testTenant})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
@@ -269,6 +269,25 @@ func TestUnreachableUpstreamBadGateway(t *testing.T) {
 
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502", rec.Code)
+	}
+}
+
+// A forgotten Sessions wire fails at construction, not on the first token with a session_id.
+func TestHandlerRequiresSessions(t *testing.T) {
+	verifier, err := auth.NewVerifier(auth.Config{Issuer: testIssuer, JWKSURL: "http://127.0.0.1:1"})
+	if err != nil {
+		t.Fatalf("verifier: %v", err)
+	}
+	build := func(sessions *SessionChecker) (panicked bool) {
+		defer func() { panicked = recover() != nil }()
+		Handler(Options{Verifier: verifier, Sessions: sessions, Upstreams: map[string]*url.URL{}})
+		return false
+	}
+	if build(liveSessions(t)) {
+		t.Fatal("Handler panicked with Sessions set")
+	}
+	if !build(nil) {
+		t.Error("Handler built without Sessions, want a panic")
 	}
 }
 

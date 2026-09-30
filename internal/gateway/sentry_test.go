@@ -24,7 +24,7 @@ import (
 func mountAPI(t *testing.T, app *platform.App, upstreams map[string]*url.URL) (http.Handler, string) {
 	t.Helper()
 	tg := setupGateway(t)
-	app.Mux.Handle(routePrefix, Handler(Options{Verifier: tg.verifier, Upstreams: upstreams, Logger: app.Logger}))
+	app.Mux.Handle(routePrefix, Handler(Options{Verifier: tg.verifier, Sessions: liveSessions(t), Upstreams: upstreams, Logger: app.Logger}))
 	return app.Handler(), tg.validToken(t)
 }
 

@@ -316,3 +316,48 @@ func TestVerify_EmailClaimReachesIdentity(t *testing.T) {
 		})
 	}
 }
+
+// Signs a raw map so a renamed struct tag cannot agree with itself.
+func TestVerify_CarriesSessionID(t *testing.T) {
+	iss := mustIssuer(t)
+	v, _ := jwksServer(t, iss)
+	const sid = "00a6daf2-8c5a-46d0-a9c5-cd9bf4fa2e08"
+	sign := func(extra jwt.MapClaims) string {
+		now := time.Now()
+		c := jwt.MapClaims{
+			"iss":          iss.issuer,
+			"sub":          testSubject,
+			"aud":          "authenticated",
+			"iat":          now.Unix(),
+			"exp":          now.Add(time.Hour).Unix(),
+			"role":         "authenticated",
+			"app_metadata": map[string]any{"tenant_id": "tenant-x"},
+		}
+		for k, val := range extra {
+			c[k] = val
+		}
+		tok := jwt.NewWithClaims(jwt.SigningMethodES256, c)
+		tok.Header["kid"] = iss.kid
+		s, err := tok.SignedString(iss.key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+
+	with, err := v.Verify(t.Context(), sign(jwt.MapClaims{"session_id": sid}))
+	if err != nil {
+		t.Fatalf("Verify with session_id: %v", err)
+	}
+	if with.SessionID != sid || with.Subject != testSubject {
+		t.Errorf("identity = %+v, want SessionID %q", with, sid)
+	}
+
+	without, err := v.Verify(t.Context(), sign(nil))
+	if err != nil {
+		t.Fatalf("Verify without session_id: %v", err)
+	}
+	if without.SessionID != "" || without.Subject != testSubject {
+		t.Errorf("identity = %+v, want an empty SessionID", without)
+	}
+}

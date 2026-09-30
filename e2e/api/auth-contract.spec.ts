@@ -39,7 +39,7 @@ test.describe('auth-header contract (API E2E, over the deployed gateway)', () =>
     })
 
     test('malformed scheme (Basic, not Bearer) -> 401 { error: string }', async () => {
-      // Present but wrong scheme: bearerToken() only recognizes "Bearer ",
+      // Present but wrong scheme: BearerToken() only recognizes "Bearer ",
       // so any non-Bearer scheme still fails the scheme check. The value
       // is intentionally not a real credential (not base64).
       const res = await rawFetch('/api/tenancy/v1/me', {
@@ -50,7 +50,7 @@ test.describe('auth-header contract (API E2E, over the deployed gateway)', () =>
 
     test('invalid Bearer (well-formed scheme, unverifiable token) -> 401 { error: string }', async () => {
       // Correct scheme, garbage token: passes the scheme/non-empty check in
-      // bearerToken() but fails signature Verify() downstream.
+      // BearerToken() but fails signature Verify() downstream.
       const res = await rawFetch('/api/tenancy/v1/me', {
         headers: { Authorization: 'Bearer not-a-jwt' },
       })

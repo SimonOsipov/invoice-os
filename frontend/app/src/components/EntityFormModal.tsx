@@ -27,7 +27,7 @@
 // - success -> onSuccess() (parent refetches via ctx.refetchEntities() + closes)
 // - ApiError -> mapSubmitError: {field:'tin', message} shows on the TIN field;
 //   {message} (no field) shows as a form-level banner; null (401) shows nothing — the
-//   authedFetch seam has already called signOut and the surface is unmounting to
+//   authedFetch seam has already fired its 401 callback and the surface is unmounting to
 //   <SignIn> ([A-c]). Client-side validation is presence-only (name+TIN); TIN
 //   grammar/duplicate detection is the server's job, surfaced from 400/409 ([A-g]).
 import { useState, type FormEvent } from 'react'
@@ -81,7 +81,7 @@ export function EntityFormModal({ mode, entity, ctx, base, onClose, onSuccess }:
       return
     }
     const mapped = mapSubmitError(err)
-    if (mapped === null) return // 401 — the authedFetch seam already fired signOut
+    if (mapped === null) return // 401 — the authedFetch seam already fired its 401 callback
     if (mapped.field === 'tin') {
       setFieldErrors((e) => ({ ...e, tin: mapped.message }))
     } else {

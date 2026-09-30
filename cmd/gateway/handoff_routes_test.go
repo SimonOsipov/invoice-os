@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"go/ast"
 	"go/types"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
 )
@@ -23,6 +25,8 @@ var handoffRoutes = map[string]string{
 	"OPTIONS /auth/exchange": "Exchange",
 	"POST /auth/refresh":     "Refresh",
 	"OPTIONS /auth/refresh":  "Refresh",
+	"POST /auth/sign-out":    "SignOut",
+	"OPTIONS /auth/sign-out": "SignOut",
 }
 
 const (
@@ -94,9 +98,10 @@ func TestHandoffRoutesRegisteredWithPreflight(t *testing.T) {
 // handoffMux mounts handoffHandlers on the hand-off patterns the way main does.
 func handoffMux(t *testing.T, authURL *url.URL, withOptions bool) *http.ServeMux {
 	t.Helper()
-	h := handoffHandlers(authURL, slog.New(slog.DiscardHandler))
+	log := slog.New(slog.DiscardHandler)
+	h := handoffHandlers(authURL, gateway.NewSessionChecker(nil, nil, time.Now, log), log)
 	withCORS := gateway.CORS([]string{handoffAllowedOrigin})
-	fields := map[string]http.Handler{"SignIn": h.SignIn, "Exchange": h.Exchange, "Refresh": h.Refresh}
+	fields := map[string]http.Handler{"SignIn": h.SignIn, "Exchange": h.Exchange, "Refresh": h.Refresh, "SignOut": h.SignOut}
 	mux := http.NewServeMux()
 	for pattern, field := range handoffRoutes {
 		if !withOptions && strings.HasPrefix(pattern, "OPTIONS ") {
@@ -130,18 +135,29 @@ func postJSON(mux http.Handler, path, origin, body string) *httptest.ResponseRec
 	return rec
 }
 
-func handoffPaths() []string { return []string{"/auth/sign-in", "/auth/exchange", "/auth/refresh"} }
+func handoffPaths() []string {
+	return []string{"/auth/sign-in", "/auth/exchange", "/auth/refresh", "/auth/sign-out"}
+}
+
+// handoffAccessToken is a GoTrue-shaped access token; sign-out reads its sub without verifying it.
+func handoffAccessToken(sub string) string {
+	enc := base64.RawURLEncoding.EncodeToString
+	return enc([]byte(`{"alg":"HS256","typ":"JWT"}`)) + "." + enc([]byte(`{"sub":"`+sub+`"}`)) + "." + enc([]byte("sig"))
+}
 
 func TestHandoffPreflightAnswersThroughCORS(t *testing.T) {
+	tokB := handoffAccessToken("user-b")
 	gotrue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.URL.Path == "/logout" && r.URL.RawQuery == "scope=global":
+			w.WriteHeader(http.StatusNoContent)
 		case r.URL.Path != "/token":
 			http.NotFound(w, r)
 		case r.URL.Query().Get("grant_type") == "password":
 			_, _ = w.Write([]byte(`{"access_token":"tok-A","refresh_token":"ref-A"}`))
 		case r.URL.Query().Get("grant_type") == "refresh_token":
-			_, _ = w.Write([]byte(`{"access_token":"tok-B","refresh_token":"ref-B"}`))
+			_, _ = w.Write([]byte(`{"access_token":"` + tokB + `","refresh_token":"ref-B"}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -203,11 +219,20 @@ func TestHandoffPreflightAnswersThroughCORS(t *testing.T) {
 	}
 	body, _ = json.Marshal(map[string]string{"refresh_token": ex.RefreshToken})
 	rec = postJSON(mux, "/auth/refresh", handoffAllowedOrigin, string(body))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"tok-B"`) || !strings.Contains(rec.Body.String(), `"ref-B"`) {
-		t.Errorf("POST /auth/refresh = %d %s, want 200 with tok-B and ref-B", rec.Code, rec.Body)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"`+tokB+`"`) || !strings.Contains(rec.Body.String(), `"ref-B"`) {
+		t.Errorf("POST /auth/refresh = %d %s, want 200 with tokB and ref-B", rec.Code, rec.Body)
 	}
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != handoffAllowedOrigin {
 		t.Errorf("POST /auth/refresh Access-Control-Allow-Origin = %q, want %q", got, handoffAllowedOrigin)
+	}
+
+	// The renewed refresh token signs out through the same mux and carries the grant.
+	rec = postJSON(mux, "/auth/sign-out", handoffAllowedOrigin, `{"refresh_token":"ref-B"}`)
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("POST /auth/sign-out = %d %s, want 204", rec.Code, rec.Body)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != handoffAllowedOrigin {
+		t.Errorf("POST /auth/sign-out Access-Control-Allow-Origin = %q, want %q", got, handoffAllowedOrigin)
 	}
 }
 
@@ -241,11 +266,13 @@ func TestHandoffPreflightDisallowedOriginGetsNoGrant(t *testing.T) {
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("POST /auth/exchange from a disallowed origin Access-Control-Allow-Origin = %q, want none", got)
 	}
-	rec = postJSON(mux, "/auth/refresh", origin, `{}`)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("POST /auth/refresh from a disallowed origin = %d %s, want 400 from the refresh handler", rec.Code, rec.Body)
-	}
-	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
-		t.Errorf("POST /auth/refresh from a disallowed origin Access-Control-Allow-Origin = %q, want none", got)
+	for _, path := range []string{"/auth/refresh", "/auth/sign-out"} {
+		rec = postJSON(mux, path, origin, `{}`)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("POST %s from a disallowed origin = %d %s, want 400 from its handler", path, rec.Code, rec.Body)
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+			t.Errorf("POST %s from a disallowed origin Access-Control-Allow-Origin = %q, want none", path, got)
+		}
 	}
 }

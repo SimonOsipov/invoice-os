@@ -56,8 +56,7 @@ gateway     ──> gate on /healthz (schema migrated at boot; a PR fork's DB is
                 gateway-wired: prepare-env's `reconcile-urls` writes VITE_GATEWAY_URL on
                 both per run)
             ──> verify: `e2e` job: smoke (landing + consoles) + api (typed contract suite)
-            ──> `topology` job, one parallel leg per unit (fleet gate, browser login,
-                isolation)
+            ──> `topology` job, one parallel leg per unit (browser login, isolation)
 ```
 
 A PR's own ephemeral fork's Postgres self-seeds at gateway boot

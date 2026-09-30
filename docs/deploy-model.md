@@ -104,11 +104,12 @@ PR opened ──> dev-env.yml:
                 asserts == "true" separately — DEMO-04; mock_issuer == "on";
                 auth_issuers == "2": the mock plus the fork's own GoTrue)
                 ──> 8 context services + docling + auth + 4 SPAs (app is gateway-wired)
+                ──> `fleet-gate` job: fleet /healthz/fleet gate + its Sentry
+                    state check: every Go service reports sentry "off"
                 ──> verify, `e2e` job: smoke (landing + both consoles) + api
                 ──> verify, `topology` job: one parallel leg per unit (serial-lane,
                     import-wizard, invoice-surfaces; app login, cross-tenant
-                    isolation, fleet /healthz/fleet gate + its Sentry
-                    state check: every Go service reports sentry "off") + demo
+                    isolation, demo persona)
               ──> PR stays open: environment stays up
 PR closed  ──> dev-env-teardown.yml (M4-23-05): prenv name ──> look the name up among
                ephemeral environments ──> environmentDelete ──> confirm by re-query.

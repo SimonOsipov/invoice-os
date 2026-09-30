@@ -221,7 +221,7 @@ did before the sidecar existed. `TestSelectExtractor_MockIsTheDefault`
 **Boot-fatal, not silent fallback.** `EXTRACTOR=docling` requires `DOCLING_URL` to be set:
 `selectExtractor` returns an error naming `DOCLING_URL` when it is empty
 (`cmd/submission/main.go:522-523`), and `main()` treats any `selectExtractor` error as fatal
-in every environment — `log.Fatalf("submission: %v", err)`
+in every environment — `platform.Fatal(app.Logger, "submission: %v", err)`
 (`cmd/submission/main.go:136-138`). A malformed (but non-empty) `DOCLING_URL` fails the same
 way, one line down, when `NewDoclingExtractor` rejects it
 (`cmd/submission/main.go:530-533`). `TestSelectExtractor_DoclingRequiresURL`

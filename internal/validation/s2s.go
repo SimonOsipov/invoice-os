@@ -46,7 +46,7 @@ const headerS2SToken = "X-S2S-Token"
 // token MUST be non-empty: ConstantTimeCompare("", "") returns 1, so an empty
 // configured token would admit every caller presenting no token at all. The
 // caller guarantees this -- cmd/validation/main.go sources it via
-// mustEnv("S2S_TOKEN"), which log.Fatalf's at boot on an unset var rather than
+// mustEnv("S2S_TOKEN"), which exits through platform.Fatal at boot on an unset var rather than
 // starting an open endpoint.
 func S2SMiddleware(token string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {

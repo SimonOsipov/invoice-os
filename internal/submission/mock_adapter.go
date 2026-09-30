@@ -125,7 +125,7 @@ type MockConfig struct {
 // Both error paths return the ZERO MockConfig, never the default: handing back a usable value
 // alongside an error invites a caller that ignores the error. The negative branch carries no %w
 // (there is no underlying error) and no exported sentinel (nothing branches on it -- the only
-// caller, cmd/submission, log.Fatalf's).
+// caller, cmd/submission, exits through platform.Fatal).
 func MockConfigFromEnv() (MockConfig, error) {
 	raw := os.Getenv(mockLatencyEnv)
 	if raw == "" {

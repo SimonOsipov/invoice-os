@@ -91,7 +91,7 @@ func Select(reg Registry, environment, name string) (Adapter, error) {
 // exact string match defeats via casing or padding -- "Production", "PRODUCTION",
 // " production" -- is not fail-closed at all, so the comparison here must not be
 // case/whitespace sensitive. Exported so cmd/submission/main.go's own production check
-// (whether to log.Fatalf when no adapter is selectable) uses this exact normalization
+// (whether to platform.Fatal when no adapter is selectable) uses this exact normalization
 // instead of duplicating it with a second, unnormalized comparison.
 //
 // internal/gateway.MockIssuerEnabled applies this same trim+lowercase normalization

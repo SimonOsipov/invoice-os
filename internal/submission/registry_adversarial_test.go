@@ -164,7 +164,7 @@ func TestSelect_ProductionNormalizationEdgeCases(t *testing.T) {
 }
 
 // TestIsProduction_DirectlyExercisesNormalization: cmd/submission/main.go's own production
-// check (whether to log.Fatalf when no adapter is selectable) calls submission.IsProduction
+// check (whether to platform.Fatal when no adapter is selectable) calls submission.IsProduction
 // directly, rather than duplicating the trim+lowercase comparison against "production" a
 // second time -- two independent string comparisons is exactly the drift
 // TestSelect_ProductionCheckIsCaseAndWhitespaceInsensitive and

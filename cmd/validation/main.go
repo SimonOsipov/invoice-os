@@ -10,7 +10,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 
@@ -20,9 +20,11 @@ import (
 )
 
 func main() {
+	defer platform.ReportBootPanic()
+
 	app, err := platform.New("validation")
 	if err != nil {
-		log.Fatalf("validation: startup: %v", err)
+		platform.Fatal(slog.Default(), "validation: startup: %v", err)
 	}
 
 	// The invoice_app (NOBYPASSRLS) connection pool. DATABASE_URL is required — a
@@ -31,7 +33,7 @@ func main() {
 	// DB surfaces via /readyz rather than blocking startup.
 	pool, err := db.NewPool(context.Background(), mustEnv("DATABASE_URL"))
 	if err != nil {
-		log.Fatalf("validation: db pool: %v", err)
+		platform.Fatal(app.Logger, "validation: db pool: %v", err)
 	}
 	defer pool.Close()
 
@@ -66,7 +68,7 @@ func main() {
 	// loader returns db.ErrNoTenant with no identity in context, so an
 	// identity-less peer call structurally cannot use it.
 	//
-	// S2S_TOKEN is required via mustEnv: an unset var log.Fatalf's at boot
+	// S2S_TOKEN is required via mustEnv: an unset var makes platform.Fatal exit at boot
 	// rather than starting this endpoint with an empty token that would admit
 	// every caller. The var is set in the deploy env (M4-04-08, [env-wiring]).
 	// The stateless engine is reused; the rule-set is loaded once per batch,
@@ -75,14 +77,14 @@ func main() {
 		validation.BatchValidateHandler(store.LoadActiveRuleSetGlobal, engine, app.Logger)))
 
 	if err := app.Run(context.Background()); err != nil {
-		log.Fatalf("validation: %v", err)
+		platform.Fatal(app.Logger, "validation: %v", err)
 	}
 }
 
 func mustEnv(key string) string {
 	v := os.Getenv(key)
 	if v == "" {
-		log.Fatalf("validation: %s is required", key)
+		platform.Fatal(slog.Default(), "validation: %s is required", key)
 	}
 	return v
 }

@@ -5,16 +5,18 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 )
 
 func main() {
+	defer platform.ReportBootPanic()
+
 	app, err := platform.New("notifications")
 	if err != nil {
-		log.Fatalf("notifications: startup: %v", err)
+		platform.Fatal(slog.Default(), "notifications: startup: %v", err)
 	}
 
 	// Stub endpoint — proves the service builds, boots, and routes end to end;
@@ -25,6 +27,6 @@ func main() {
 	})
 
 	if err := app.Run(context.Background()); err != nil {
-		log.Fatalf("notifications: %v", err)
+		platform.Fatal(app.Logger, "notifications: %v", err)
 	}
 }

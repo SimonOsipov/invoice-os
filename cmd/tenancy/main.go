@@ -6,7 +6,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 
@@ -16,9 +16,11 @@ import (
 )
 
 func main() {
+	defer platform.ReportBootPanic()
+
 	app, err := platform.New("tenancy")
 	if err != nil {
-		log.Fatalf("tenancy: startup: %v", err)
+		platform.Fatal(slog.Default(), "tenancy: startup: %v", err)
 	}
 
 	// The invoice_app (NOBYPASSRLS) connection pool. DATABASE_URL is required — a
@@ -27,7 +29,7 @@ func main() {
 	// via /readyz rather than blocking startup.
 	pool, err := db.NewPool(context.Background(), mustEnv("DATABASE_URL"))
 	if err != nil {
-		log.Fatalf("tenancy: db pool: %v", err)
+		platform.Fatal(app.Logger, "tenancy: db pool: %v", err)
 	}
 	defer pool.Close()
 
@@ -61,14 +63,14 @@ func main() {
 	app.Mux.HandleFunc("POST /v1/workspaces", tenancy.ProvisionHandler(store.ProvisionWorkspace, app.Logger))
 
 	if err := app.Run(context.Background()); err != nil {
-		log.Fatalf("tenancy: %v", err)
+		platform.Fatal(app.Logger, "tenancy: %v", err)
 	}
 }
 
 func mustEnv(key string) string {
 	v := os.Getenv(key)
 	if v == "" {
-		log.Fatalf("tenancy: %s is required", key)
+		platform.Fatal(slog.Default(), "tenancy: %s is required", key)
 	}
 	return v
 }

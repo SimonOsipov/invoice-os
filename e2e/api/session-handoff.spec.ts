@@ -1,6 +1,7 @@
-// The sign-in hand-off over the deployed gateway: sign-in yields a single-use code
-// bound to a state, the exchange redeems it once for an access and a refresh token, a refresh
-// renews both, each route answers its caller's preflight, and sign-in is throttled per address.
+// The sign-in hand-off over the deployed gateway: sign-in yields a single-use code bound to a
+// state, the exchange redeems it once for an access and a refresh token, a refresh renews both,
+// sign-out revokes every session of the account, each route answers its caller's preflight,
+// sign-in is throttled per address, and the session check's cost is measured.
 // Forks auto-confirm, so a fresh registration signs in at once.
 import { test, expect } from '@playwright/test'
 import { exchangeCode, mintSignInState, rawFetch, signInForCode } from './client'
@@ -17,6 +18,8 @@ const INVALID_REFRESH = 'invalid or expired refresh token'
 const REFRESH_REQUIRED = 'refresh_token is required'
 // internal/gateway/gateway.go router: authorize's refusal of a token with no tenant.
 const FORBIDDEN = 'forbidden'
+// internal/gateway/session_check.go SessionChecker.Middleware: a revoked session.
+const UNAUTHORIZED = 'unauthorized'
 
 // internal/gateway/signin_throttle.go SignInMaxFailures.
 const THROTTLE_LIMIT = 10
@@ -34,6 +37,24 @@ async function registerFresh(): Promise<{ email: string; password: string }> {
 
 function errorOf(res: { body: unknown }): string {
   return (res.body as { error: string }).error
+}
+
+// One sign-in, one GoTrue session.
+async function signInSession(email: string, password: string): Promise<{ access_token: string; refresh_token: string }> {
+  const state = mintSignInState()
+  const res = await rawFetch('/auth/exchange', { method: 'POST', body: { code: await signInForCode(email, password, state), state } })
+  expect(res.status, JSON.stringify(res.body)).toBe(200)
+  return res.body as { access_token: string; refresh_token: string }
+}
+
+function getMe(token: string) {
+  return rawFetch('/api/tenancy/v1/me', { headers: { Authorization: `Bearer ${token}` } })
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = sorted.length >> 1
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
 }
 
 test.describe('sign-in hand-off (API E2E, over the deployed gateway)', () => {
@@ -116,6 +137,62 @@ test.describe('sign-in hand-off (API E2E, over the deployed gateway)', () => {
     expect([empty.status(), await empty.json()], 'no refresh token').toEqual([400, { error: REFRESH_REQUIRED }])
   })
 
+  test('sign-out revokes every session of the account', async ({ request }) => {
+    const { email, password } = await registerFresh()
+    const one = await signInSession(email, password)
+    const two = await signInSession(email, password)
+    const post = (path: string, body: unknown) => request.post(`${resolveTarget('GATEWAY_URL')}${path}`, { data: body })
+
+    // The account has no workspace: 403 is authorize's answer to a live session.
+    for (const [name, session] of [['first', one], ['second', two]] as const) {
+      const live = await getMe(session.access_token)
+      expect([live.status, live.body], `the ${name} access token before sign-out`).toEqual([403, { error: FORBIDDEN }])
+    }
+
+    const signOut = await post('/auth/sign-out', { refresh_token: one.refresh_token })
+    expect(signOut.status(), await signOut.text()).toBe(204)
+    expect(await signOut.text(), 'the 204 carries a body').toBe('')
+    expect(signOut.headers()['cache-control'], 'the sign-out answer is cacheable').toBe('no-store')
+
+    // Refused at the edge, before authorization could answer 403.
+    for (const [name, session] of [['first', one], ['second', two]] as const) {
+      const me = await getMe(session.access_token)
+      expect([me.status, me.body], `the ${name} access token after sign-out`).toEqual([401, { error: UNAUTHORIZED }])
+      const renewed = await post('/auth/refresh', { refresh_token: session.refresh_token })
+      expect([renewed.status(), await renewed.json()], `the ${name} refresh token after sign-out`).toEqual([401, { error: INVALID_REFRESH }])
+    }
+
+    // internal/gateway/signout.go SignOutHandler: the same refusals as RefreshHandler.
+    const empty = await post('/auth/sign-out', {})
+    expect([empty.status(), await empty.json()], 'sign-out with no refresh token').toEqual([400, { error: REFRESH_REQUIRED }])
+    const unknown = await post('/auth/sign-out', { refresh_token: 'aaaaaaaaaaaa' })
+    expect([unknown.status(), await unknown.json()], 'sign-out with an unknown refresh token').toEqual([401, { error: INVALID_REFRESH }])
+  })
+
+  // The first call after sign-in misses the session cache, the second hits it. Timings are
+  // attached, not asserted: a latency bound would flake.
+  test("the session check's deployed cost", async () => {
+    const { email, password } = await registerFresh()
+    const pairs: { miss_ms: number; hit_ms: number }[] = []
+    for (let i = 0; i < 10; i++) {
+      const { access_token } = await signInSession(email, password)
+      const times: number[] = []
+      for (const call of ['miss', 'hit']) {
+        const started = performance.now()
+        const me = await getMe(access_token)
+        times.push(performance.now() - started)
+        expect([me.status, me.body], `session ${i + 1} ${call}`).toEqual([403, { error: FORBIDDEN }])
+      }
+      pairs.push({ miss_ms: times[0], hit_ms: times[1] })
+    }
+    const medianMiss = median(pairs.map((p) => p.miss_ms))
+    const medianHit = median(pairs.map((p) => p.hit_ms))
+    await test.info().attach('session-check-cost', {
+      contentType: 'application/json',
+      body: JSON.stringify({ pairs, median_miss_ms: medianMiss, median_hit_ms: medianHit, median_difference_ms: medianMiss - medianHit }, null, 2),
+    })
+  })
+
   test("each hand-off route answers its caller's preflight with a grant, never 405", async ({ request }) => {
     const landing = new URL(resolveTarget('LANDING_URL')).origin
     const app = new URL(resolveTarget('APP_URL')).origin
@@ -124,6 +201,7 @@ test.describe('sign-in hand-off (API E2E, over the deployed gateway)', () => {
       // The app redeems the code (redeemHandoff), so the exchange's caller is the app.
       ['/auth/exchange', app],
       ['/auth/refresh', app],
+      ['/auth/sign-out', app],
     ]
     for (const [path, origin] of routes) {
       const res = await request.fetch(`${resolveTarget('GATEWAY_URL')}${path}`, {

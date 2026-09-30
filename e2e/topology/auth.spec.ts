@@ -1,4 +1,4 @@
-import { test, expect, type BrowserContext, type Frame, type Page, type Request } from '@playwright/test'
+import { test, expect, type BrowserContext, type Frame, type Page, type Request, type Response } from '@playwright/test'
 import { APP_URL, FIRM_PERSONA, GATEWAY_URL, INHOUSE_PERSONA } from './targets'
 import { resolveTarget } from '../targets'
 import { collectErrors } from '../personaSession'
@@ -1149,4 +1149,146 @@ test('deployed app: a refused renewal returns to landing and keeps the destinati
     'a token, a refresh token or a JWT appeared in these URLs',
   ).toEqual([])
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+const SIGN_OUT_URL = `${GATEWAY_URL}/auth/sign-out`
+// internal/gateway/refresh.go RefreshHandler.
+const INVALID_REFRESH = 'invalid or expired refresh token'
+const isApiResponse = (r: Response) => isApi(r.request()) && r.request().method() !== 'OPTIONS'
+
+// The landing strips ?state= on mount, so the URL shows it only briefly; wait for the response instead.
+const frontDoor = (page: Page) =>
+  page.waitForResponse((r) => r.request().isNavigationRequest() && r.url().startsWith(LANDING_URL) && new URL(r.url()).searchParams.has('state'), {
+    timeout: 20_000,
+  })
+
+// Two contexts are two devices: global sign-out ends both, and a record copied before it replays into nothing.
+test('deployed app: signing out on one device ends the session on every device', async ({ browser }) => {
+  test.setTimeout(300_000)
+  const account = await provisionRealAccount('sign-out-everywhere')
+  const appOrigin = new URL(APP_URL).origin
+  const contexts: BrowserContext[] = []
+  const open = async () => {
+    const context = await browser.newContext()
+    contexts.push(context)
+    const page = await context.newPage()
+    return { context, page, errors: gatedErrors(page, [expectedStatusDropper(page, 401, /\/api\//)]), urls: recordUrls(page) }
+  }
+
+  try {
+    const a = await open()
+    const b = await open()
+    await signInAtFrontDoor(a.page, account, '/')
+    await signInAtFrontDoor(b.page, account, '/audit')
+    await expect(b.page, 'B did not settle on /audit').toHaveURL(/\/audit$/)
+    const copiedA = await storedSession(a.context)
+    expect(copiedA, 'A stored no session').not.toBeNull()
+    const recordA = JSON.parse(copiedA!) as StoredRenewal
+    const recordB = await storedRenewal(b.page)
+
+    await test.step('A signs out: the server revokes before A leaves', async () => {
+      // The front door's second navigation aborts the first (D10), and Playwright times only answered requests,
+      // so both sides come from CDP on Chromium's monotonic clock.
+      const cdp = await a.context.newCDPSession(a.page)
+      await cdp.send('Network.enable')
+      const signOutPosts = new Set<string>()
+      let answeredAt: number | undefined
+      const leaving: { url: string; at: number }[] = []
+      cdp.on('Network.requestWillBeSent', (e) => {
+        if (e.request.url === SIGN_OUT_URL && e.request.method === 'POST') signOutPosts.add(e.requestId)
+        if (e.type === 'Document' && e.request.url.startsWith(LANDING_URL)) leaving.push({ url: e.request.url, at: e.timestamp })
+      })
+      cdp.on('Network.responseReceived', (e) => {
+        const t = e.response.timing
+        if (signOutPosts.has(e.requestId)) answeredAt = t && t.receiveHeadersEnd > 0 ? t.requestTime + t.receiveHeadersEnd / 1000 : 0
+      })
+      const signedOut = a.page.waitForResponse((r) => r.url() === SIGN_OUT_URL && r.request().method() === 'POST', { timeout: 20_000 })
+      const aFrontDoor = frontDoor(a.page)
+      await a.page.getByRole('button', { name: 'Sign out' }).click()
+      expect((await signedOut).status(), 'the sign-out answer').toBe(204)
+      expect((await aFrontDoor).status(), "A's front door answer").toBe(200)
+      await expect.poll(() => leaving.length, { message: 'A did not leave in two landing navigations', timeout: 20_000 }).toBeGreaterThanOrEqual(2)
+      expect(
+        leaving.map((l) => l.url.slice(LANDING_URL.length).replace(/^\/$/, '')),
+        'A left by other than bare landing, then the front door (D10)',
+      ).toEqual(['', expect.stringMatching(/^\/\?state=[A-Za-z0-9_-]{43}$/)])
+      await expect.poll(() => answeredAt, { message: 'the sign-out answer carries no timing', timeout: 20_000 }).toBeGreaterThan(0)
+      expect(answeredAt!, 'the sign-out answer arrived after A began leaving').toBeLessThan(leaving[0].at)
+      expect(await storedSession(a.context), 'A kept a stored session').toBeNull()
+      await cdp.detach()
+    })
+
+    await test.step("B's next request is refused and B returns to landing", async () => {
+      const refused = b.page.waitForResponse(isApiResponse)
+      const bFrontDoor = frontDoor(b.page)
+      await b.page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: 'Invoices' }).click()
+      expect((await refused).status(), "B's first /api/ answer after the sign-out").toBe(401)
+      expect((await bFrontDoor).status(), "B's front door answer").toBe(200)
+      await expect(b.page.getByRole('banner').getByRole('button', { name: 'Explore the platform' })).toBeVisible()
+      expect(await storedSession(b.context), 'B kept a stored session').toBeNull()
+
+      const renewed = await rawFetch('/auth/refresh', { method: 'POST', body: { refresh_token: recordB.refresh_token } })
+      expect([renewed.status, renewed.body], "B's refresh token after the sign-out").toEqual([401, { error: INVALID_REFRESH }])
+    })
+
+    await test.step('B signs in again and lands on /, not the old destination', async () => {
+      await b.page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
+      await Promise.all([
+        b.page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
+        submitSignIn(b.page, account.email, account.password),
+      ])
+      await expectInWorkspace(b.page, account)
+      await expect
+        .poll(() => new URL(b.page.url()).pathname, { message: 'B did not land on /' })
+        .toBe('/')
+    })
+    const againB = await storedRenewal(b.page)
+
+    const c = await open()
+    await test.step("A's copied record replayed in a fresh context mounts, is refused and ends", async () => {
+      await c.page.addInitScript(
+        ({ origin, key, record }) => {
+          if (location.origin !== origin || sessionStorage.getItem('e2e.replayed')) return
+          sessionStorage.setItem('e2e.replayed', '1')
+          localStorage.setItem(key, record)
+        },
+        { origin: appOrigin, key: SESSION_KEY, record: copiedA! },
+      )
+      // Every /api/ request waits for one look at the page, so no 401 can navigate away first.
+      let firstLook: Promise<[number, string | null]> | undefined
+      await c.page.route(`${GATEWAY_URL}/api/**`, async (route) => {
+        const req = route.request()
+        try {
+          if (req.method() !== 'OPTIONS') {
+            firstLook ??= Promise.all([c.page.locator('aside.pf-sidebar').count(), req.headerValue('authorization')])
+            await firstLook
+          }
+        } finally {
+          await route.continue()
+        }
+      })
+      const refused = c.page.waitForResponse(isApiResponse)
+      // Commit only: the 401 navigates to landing, which may beat the load event.
+      const cFrontDoor = frontDoor(c.page)
+      await c.page.goto(APP_URL, { waitUntil: 'commit' })
+      expect((await refused).status(), "C's first /api/ answer").toBe(401)
+      expect((await cFrontDoor).status(), "C's front door answer").toBe(200)
+      await c.page.unroute(`${GATEWAY_URL}/api/**`)
+      expect(await firstLook, 'the shell and the Authorization header at the first /api/ request').toEqual([1, `Bearer ${recordA.token}`])
+      expect(await storedSession(c.context), 'C kept a stored session').toBeNull()
+    })
+
+    for (const [name, urls] of [['A', a.urls], ['B', b.urls], ['C', c.urls]] as const) {
+      expect(urls.length, `no URLs were recorded in ${name}`).toBeGreaterThan(0)
+    }
+    expect(
+      leakingUrls([...a.urls, ...b.urls, ...c.urls], recordA.token, recordA.refresh_token, recordB.token, recordB.refresh_token, againB.token, againB.refresh_token),
+      'a token, a refresh token or a JWT appeared in these URLs',
+    ).toEqual([])
+    for (const [name, errors] of [['A', a.errors], ['B', b.errors], ['C', c.errors]] as const) {
+      expect(errors, `console errors in ${name}:\n${errors.join('\n')}`).toEqual([])
+    }
+  } finally {
+    await Promise.all(contexts.map((context) => context.close()))
+  }
 })

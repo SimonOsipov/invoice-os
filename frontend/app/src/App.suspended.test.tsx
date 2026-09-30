@@ -30,15 +30,15 @@ const SEAM_REFUSAL = new ApiError('http', NOT_ACTIVE_MEMBER_MESSAGE, 403, { erro
 
 // The third argument App hands the factory. undefined here means App never wired it.
 let capturedOnSuspended: (() => void) | undefined
-// The SECOND argument — the 401 seam's callback, i.e. the app's one sign-out.
-let capturedOnSignOut: (() => void) | undefined
+// The SECOND argument — the 401 seam's callback, which ends a revoked session without revoking.
+let capturedOnUnauthorized: (() => void) | undefined
 
 vi.mock('./lib/authedFetch', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./lib/authedFetch')>()
   return {
     ...actual,
-    makeAuthedFetch: (_session: Session, onSignOut: () => void, onSuspended?: () => void) => {
-      capturedOnSignOut = onSignOut
+    makeAuthedFetch: (_session: Session, onUnauthorized: () => void, onSuspended?: () => void) => {
+      capturedOnUnauthorized = onUnauthorized
       capturedOnSuspended = onSuspended
       return async () => {
         if (actual.isSuspended(SEAM_REFUSAL)) onSuspended?.()
@@ -57,6 +57,36 @@ vi.mock('./components/Sidebar', () => ({
 }))
 
 const SEAT_SESSION: Session = { persona: APP_PERSONAS.firm, token: 'tok', me: null, verified: true }
+// A renewable hand-off seat, received just now so no renewal is due.
+const NOW_SEC = Math.floor(Date.now() / 1000)
+const HANDOFF_TOKEN = ['{"alg":"RS256"}', JSON.stringify({ sub: 'd0000000-0000-0000-0000-000000000009', iat: NOW_SEC, exp: NOW_SEC + 3600, session_id: 'sid1' }), 'sig']
+  .map((p, i) => (i < 2 ? btoa(p).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') : p))
+  .join('.')
+const HANDOFF_RECORD = JSON.stringify({
+  v: 1,
+  personaId: 'firm',
+  token: HANDOFF_TOKEN,
+  me: { tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures' }, user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated' } },
+  verified: true,
+  handoff: true,
+  refresh_token: 'R1',
+  received_at: Date.now(),
+})
+const GATEWAY = 'https://gw.test'
+
+// A gateway for the revoke only: makeAuthedFetch stays mocked, so no screen reaches fetch.
+function stubSignOut(): () => unknown[] {
+  vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
+  const posts: unknown[] = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((url: string, init?: { body?: string }) => {
+      if (url === `${GATEWAY}/auth/sign-out`) posts.push(init?.body === undefined ? undefined : JSON.parse(init.body))
+      return Promise.resolve(new Response(null, { status: url === `${GATEWAY}/auth/sign-out` ? 204 : 404 }))
+    }),
+  )
+  return () => posts
+}
 
 // Node v25's native localStorage collides with jsdom's (App.standIn.test.tsx:74-75).
 function createMemoryStorage() {
@@ -82,7 +112,7 @@ const SRC_DIR = dirname(fileURLToPath(import.meta.url))
 beforeEach(() => {
   capturedCtx = undefined
   capturedOnSuspended = undefined
-  capturedOnSignOut = undefined
+  capturedOnUnauthorized = undefined
   window.history.replaceState(null, '', '/')
   vi.stubGlobal('localStorage', createMemoryStorage())
 })
@@ -94,8 +124,8 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-async function renderApp() {
-  localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
+async function renderApp(raw = serializeSession(SEAT_SESSION)) {
+  localStorage.setItem(SESSION_KEY, raw)
   vi.resetModules()
   const { default: App } = await import('./App')
   return render(<App />)
@@ -155,23 +185,37 @@ describe('AC-4: the suspended card replaces the workspace', () => {
     expect(controls[0].textContent ?? '', 'the one control must be sign-out, not a retry').toMatch(/sign out/i)
   })
 
-  it('appSuspended_theControlRunsTheSameSignOutThe401SeamHolds', async () => {
-    await renderApp()
+  // Sign out revokes; the 401 seam ends an already-revoked session and sends nothing.
+  it('the suspended notice and the 401 seam are different callbacks', async () => {
+    const posts = stubSignOut()
+    await renderApp(HANDOFF_RECORD)
     const ctx = requireCtx()
 
-    // One sign-out, not two: what Sidebar calls IS what the 401 seam fires, and the card is
-    // handed that same callback. A literal reference check on the button's handler is not
-    // reachable from here, so the click below proves it by its end state instead.
-    expect(capturedOnSignOut, 'App.tsx never passed onSignOut to makeAuthedFetch').toBeDefined()
-    expect(ctx.signOut, 'ctx.signOut and the 401 callback have diverged').toBe(capturedOnSignOut)
+    expect(capturedOnUnauthorized, 'App.tsx never passed onUnauthorized to makeAuthedFetch').toBeDefined()
+    expect(ctx.signOut, 'the 401 callback must not be the user sign-out').not.toBe(capturedOnUnauthorized)
 
     await act(async () => {
-      await ctx.authedFetch('/x').catch(() => {})
+      capturedOnUnauthorized!()
     })
+    expect(posts(), 'a 401 revokes nothing').toEqual([])
+
+    cleanup()
+    localStorage.clear()
+    capturedCtx = undefined
+    await renderApp(HANDOFF_RECORD)
+    await act(async () => {
+      await requireCtx().authedFetch('/x').catch(() => {})
+    })
+    vi.mocked(localStorage.removeItem).mockClear()
     const control = screen.getByTestId('suspended-notice').querySelector('button')
     await act(async () => {
       fireEvent.click(control as HTMLButtonElement)
     })
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30))
+    })
+
+    expect(posts(), "the notice's Sign out revokes once").toEqual([{ refresh_token: 'R1' }])
 
     // App.signOut's whole observable contract: the persisted session goes, the in-memory one
     // goes with it, and the user lands on a front door. VITE_LANDING_URL is unset here, so
@@ -228,7 +272,7 @@ describe('AC-2: both construction sites are wired', () => {
       expect(call, `App.tsx no longer calls ${factory}`).toBeDefined()
       expect(
         call!.split(',').length,
-        `${factory} must be called with (session, onSignOut, onSuspended, freshToken) — got ${call}`,
+        `${factory} must be called with (session, onUnauthorized, onSuspended, freshToken) — got ${call}`,
       ).toBe(4)
     }
   })

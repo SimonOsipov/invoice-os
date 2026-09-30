@@ -23,7 +23,7 @@
 // - `mapSubmitError(err)` — submit-time ApiError -> user-facing message. Per §6's submit
 //   orchestration: 400 (invalid TIN) and 409 (duplicate TIN) both attach to the TIN
 //   field (`{field:'tin', message}`); 401 -> null (the authedFetch seam has already
-//   called signOut — the surface is unmounting to <SignIn>, no inline error needed);
+//   fired its 401 callback — the surface is unmounting to <SignIn>, no inline error needed);
 //   network/500 -> a form-level message (`{message}`, no `field`).
 //
 // `mapSubmitError` only reads fields (`status`, `message`) off the `ApiError` instance

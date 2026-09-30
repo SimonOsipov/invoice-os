@@ -1,7 +1,7 @@
 // RED specs (M3-08-03, task-58, A1-A6) — pin `makeAuthedFetch` (src/lib/authedFetch.ts)
 // as the AC-5 live-caller integration: a real portfolio caller (`listEntities` /
 // `createEntity`, the M3-08-01 helpers) driven through the app-side 401 seam, proving a
-// 401 invokes `onSignOut` exactly once (closing the M3-07 carry-over — M3-07's U9 only
+// 401 invokes `onUnauthorized` exactly once (closing the M3-07 carry-over — M3-07's U9 only
 // ever wired `onUnauthorized` directly, with no in-app caller).
 //
 // Every spec below currently fails because `makeAuthedFetch`'s stub throws `new
@@ -74,36 +74,36 @@ function buildSession(token: string | null): Session {
 const emptyListBody = { entities: [], pagination: { limit: 200, offset: 0, total: 0 } }
 
 describe('makeAuthedFetch: AC-5 live-caller 401 integration', () => {
-  it('A1: a 401 on a live listEntities call rejects ApiError{status:401} AND calls onSignOut exactly once', async () => {
+  it('A1: a 401 on a live listEntities call rejects ApiError{status:401} AND calls onUnauthorized exactly once', async () => {
     mockFetchOnce({ ok: false, status: 401, json: () => Promise.resolve({ error: 'unauthorized' }) })
-    const signOutSpy = vi.fn()
-    const af = makeAuthedFetch(buildSession('tok'), signOutSpy)
+    const unauthorizedSpy = vi.fn()
+    const af = makeAuthedFetch(buildSession('tok'), unauthorizedSpy)
 
     const err = await captureRejection(() => listEntities(af, base))
 
     expect(err).toBeInstanceOf(ApiError)
     expect((err as ApiError).status).toBe(401)
-    expect(signOutSpy).toHaveBeenCalledTimes(1)
+    expect(unauthorizedSpy).toHaveBeenCalledTimes(1)
   })
 
-  it('A2: a 200 on a live listEntities call resolves and does NOT call onSignOut', async () => {
+  it('A2: a 200 on a live listEntities call resolves and does NOT call onUnauthorized', async () => {
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(emptyListBody) })
-    const signOutSpy = vi.fn()
-    const af = makeAuthedFetch(buildSession('tok'), signOutSpy)
+    const unauthorizedSpy = vi.fn()
+    const af = makeAuthedFetch(buildSession('tok'), unauthorizedSpy)
 
     const result = await listEntities(af, base)
 
     expect(result.entities).toEqual([])
-    expect(signOutSpy).not.toHaveBeenCalled()
+    expect(unauthorizedSpy).not.toHaveBeenCalled()
   })
 
   it('A3: a 401 on a live createEntity call fully clears an app-side session store (closes the M3-07 carry-over)', async () => {
     mockFetchOnce({ ok: false, status: 401, json: () => Promise.resolve({ error: 'unauthorized' }) })
     const store: { session: { token: string } | null } = { session: { token: 'tok' } }
-    const onSignOut = () => {
+    const onUnauthorized = () => {
       store.session = null
     }
-    const af = makeAuthedFetch(buildSession('tok'), onSignOut)
+    const af = makeAuthedFetch(buildSession('tok'), onUnauthorized)
     const input: EntityInput = { name: 'Acme', tin: '0000000000' }
 
     await captureRejection(() => createEntity(af, base, input))
@@ -111,16 +111,16 @@ describe('makeAuthedFetch: AC-5 live-caller 401 integration', () => {
     expect(store.session).toBeNull()
   })
 
-  it('A4: a 500 on a live listEntities call rejects ApiError{status:500} and does NOT call onSignOut (only 401 logs out)', async () => {
+  it('A4: a 500 on a live listEntities call rejects ApiError{status:500} and does NOT call onUnauthorized (only 401 logs out)', async () => {
     mockFetchOnce({ ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) })
-    const signOutSpy = vi.fn()
-    const af = makeAuthedFetch(buildSession('tok'), signOutSpy)
+    const unauthorizedSpy = vi.fn()
+    const af = makeAuthedFetch(buildSession('tok'), unauthorizedSpy)
 
     const err = await captureRejection(() => listEntities(af, base))
 
     expect(err).toBeInstanceOf(ApiError)
     expect((err as ApiError).status).toBe(500)
-    expect(signOutSpy).not.toHaveBeenCalled()
+    expect(unauthorizedSpy).not.toHaveBeenCalled()
   })
 })
 
@@ -141,8 +141,8 @@ describe('makeAuthedFetch: token-read semantics', () => {
 
   it('A6: a null session.token (no-gateway showcase) issues the request with NO Authorization header', async () => {
     const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(emptyListBody) })
-    const signOutSpy = vi.fn()
-    const af = makeAuthedFetch(buildSession(null), signOutSpy)
+    const unauthorizedSpy = vi.fn()
+    const af = makeAuthedFetch(buildSession(null), unauthorizedSpy)
 
     const result = await listEntities(af, base)
 
@@ -151,7 +151,7 @@ describe('makeAuthedFetch: token-read semantics', () => {
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined
     const headers = new Headers(init?.headers)
     expect(headers.has('Authorization')).toBe(false)
-    expect(signOutSpy).not.toHaveBeenCalled()
+    expect(unauthorizedSpy).not.toHaveBeenCalled()
   })
 })
 
@@ -159,75 +159,75 @@ describe('makeAuthedFetch: token-read semantics', () => {
 // list/create at 200/401/500. These specs close gaps A1-A6 left open: the PATCH
 // (update) caller, a non-401 4xx (403) that must NOT trigger the seam, a transport-level
 // (network) ApiError that must also NOT trigger the seam, closure independence across
-// multiple makeAuthedFetch instances, and the fire-then-rethrow ORDER (onSignOut must
+// multiple makeAuthedFetch instances, and the fire-then-rethrow ORDER (onUnauthorized must
 // run before the rejection reaches the caller, and must not be swallowed).
 describe('makeAuthedFetch: adversarial coverage (B1-B5)', () => {
-  it('B1: a 401 on a live updateEntity (PATCH) call rejects ApiError{status:401} AND calls onSignOut exactly once', async () => {
+  it('B1: a 401 on a live updateEntity (PATCH) call rejects ApiError{status:401} AND calls onUnauthorized exactly once', async () => {
     mockFetchOnce({ ok: false, status: 401, json: () => Promise.resolve({ error: 'unauthorized' }) })
-    const signOutSpy = vi.fn()
-    const af = makeAuthedFetch(buildSession('tok'), signOutSpy)
+    const unauthorizedSpy = vi.fn()
+    const af = makeAuthedFetch(buildSession('tok'), unauthorizedSpy)
 
     const err = await captureRejection(() => updateEntity(af, base, 'e1', { name: 'New' }))
 
     expect(err).toBeInstanceOf(ApiError)
     expect((err as ApiError).status).toBe(401)
-    expect(signOutSpy).toHaveBeenCalledTimes(1)
+    expect(unauthorizedSpy).toHaveBeenCalledTimes(1)
   })
 
-  it('B2: a 403 on a live listEntities call rejects ApiError{status:403} and does NOT call onSignOut (only 401 logs out)', async () => {
+  it('B2: a 403 on a live listEntities call rejects ApiError{status:403} and does NOT call onUnauthorized (only 401 logs out)', async () => {
     mockFetchOnce({ ok: false, status: 403, json: () => Promise.resolve({ error: 'forbidden' }) })
-    const signOutSpy = vi.fn()
-    const af = makeAuthedFetch(buildSession('tok'), signOutSpy)
+    const unauthorizedSpy = vi.fn()
+    const af = makeAuthedFetch(buildSession('tok'), unauthorizedSpy)
 
     const err = await captureRejection(() => listEntities(af, base))
 
     expect(err).toBeInstanceOf(ApiError)
     expect((err as ApiError).status).toBe(403)
-    expect(signOutSpy).not.toHaveBeenCalled()
+    expect(unauthorizedSpy).not.toHaveBeenCalled()
   })
 
-  it('B3: a transport failure (fetch itself rejects) produces ApiError{kind:"network"}, does NOT call onSignOut, and the rejection still propagates to the caller', async () => {
+  it('B3: a transport failure (fetch itself rejects) produces ApiError{kind:"network"}, does NOT call onUnauthorized, and the rejection still propagates to the caller', async () => {
     mockFetchRejecting(new TypeError('Failed to fetch'))
-    const signOutSpy = vi.fn()
-    const af = makeAuthedFetch(buildSession('tok'), signOutSpy)
+    const unauthorizedSpy = vi.fn()
+    const af = makeAuthedFetch(buildSession('tok'), unauthorizedSpy)
 
     const err = await captureRejection(() => listEntities(af, base))
 
     expect(err).toBeInstanceOf(ApiError)
     expect((err as ApiError).kind).toBe('network')
     expect((err as ApiError).status).toBeNull()
-    expect(signOutSpy).not.toHaveBeenCalled()
+    expect(unauthorizedSpy).not.toHaveBeenCalled()
   })
 
-  it('B4: two makeAuthedFetch instances built from the same session are independent closures — no shared mutable state, each fires only its own onSignOut on its own 401', async () => {
+  it('B4: two makeAuthedFetch instances built from the same session are independent closures — no shared mutable state, each fires only its own onUnauthorized on its own 401', async () => {
     const session = buildSession('tok')
-    const signOutSpyA = vi.fn()
-    const signOutSpyB = vi.fn()
-    const afA = makeAuthedFetch(session, signOutSpyA)
-    const afB = makeAuthedFetch(session, signOutSpyB)
+    const unauthorizedSpyA = vi.fn()
+    const unauthorizedSpyB = vi.fn()
+    const afA = makeAuthedFetch(session, unauthorizedSpyA)
+    const afB = makeAuthedFetch(session, unauthorizedSpyB)
 
     mockFetchOnce({ ok: false, status: 401, json: () => Promise.resolve({ error: 'unauthorized' }) })
     await captureRejection(() => listEntities(afA, base))
 
-    expect(signOutSpyA).toHaveBeenCalledTimes(1)
-    expect(signOutSpyB).not.toHaveBeenCalled()
+    expect(unauthorizedSpyA).toHaveBeenCalledTimes(1)
+    expect(unauthorizedSpyB).not.toHaveBeenCalled()
 
     mockFetchOnce({ ok: false, status: 401, json: () => Promise.resolve({ error: 'unauthorized' }) })
     await captureRejection(() => listEntities(afB, base))
 
-    expect(signOutSpyB).toHaveBeenCalledTimes(1)
+    expect(unauthorizedSpyB).toHaveBeenCalledTimes(1)
     // afA's spy must be untouched by afB's later 401 — proves no shared state (e.g. a
     // module-level "already signed out" flag) between the two closures.
-    expect(signOutSpyA).toHaveBeenCalledTimes(1)
+    expect(unauthorizedSpyA).toHaveBeenCalledTimes(1)
   })
 
-  it('B5: onSignOut fires BEFORE the rejection reaches the caller, and the error is not swallowed (the caller still observes the 401)', async () => {
+  it('B5: onUnauthorized fires BEFORE the rejection reaches the caller, and the error is not swallowed (the caller still observes the 401)', async () => {
     mockFetchOnce({ ok: false, status: 401, json: () => Promise.resolve({ error: 'unauthorized' }) })
     const order: string[] = []
-    const onSignOut = () => {
+    const onUnauthorized = () => {
       order.push('signOut')
     }
-    const af = makeAuthedFetch(buildSession('tok'), onSignOut)
+    const af = makeAuthedFetch(buildSession('tok'), onUnauthorized)
 
     let caught: unknown
     try {

@@ -13,7 +13,7 @@ import (
 // was rejected — the reason is logged for operators only.
 func (v *Verifier) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token, ok := bearerToken(r)
+		token, ok := BearerToken(r)
 		if !ok {
 			v.reject(w, r, "missing or malformed Authorization header")
 			return
@@ -27,8 +27,8 @@ func (v *Verifier) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-// bearerToken extracts the token from an "Authorization: Bearer <token>" header.
-func bearerToken(r *http.Request) (string, bool) {
+// BearerToken extracts the token from an "Authorization: Bearer <token>" header.
+func BearerToken(r *http.Request) (string, bool) {
 	const prefix = "Bearer "
 	h := r.Header.Get("Authorization")
 	if len(h) <= len(prefix) || !strings.EqualFold(h[:len(prefix)], prefix) {

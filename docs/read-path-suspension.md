@@ -73,8 +73,8 @@ wrote it.
 
 **Why 403 and not 401 is load-bearing, not taste.** `isUnauthorized`
 (`frontend/app/src/lib/authedFetch.ts:16`) is true for `status === 401` and nothing else, and
-`createAuthedFetch` calls `onUnauthorized()` on exactly that predicate — which signs the user
-out and returns them to the front door. A 401 here would be indistinguishable from "your token
+`createAuthedFetch` calls `onUnauthorized()` on exactly that predicate — which returns them
+to the front door. A 401 here would be indistinguishable from "your token
 expired": the suspended user would be bounced to sign-in with no explanation, and the message
 this story exists to deliver would never render. 403 keeps the session and lets the SPA say
 why. `TestRLS_RequestSeamRefusalIsNotTheUnauthenticatedSentinel` pins that the two sentinels
@@ -273,6 +273,8 @@ predicates it would previously have hit inside the transaction.
 | `OPTIONS /auth/exchange` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `POST /auth/refresh` | gateway | exempt | no database; calls GoTrue |
 | `OPTIONS /auth/refresh` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
+| `POST /auth/sign-out` | gateway | exempt | no database; calls GoTrue |
+| `OPTIONS /auth/sign-out` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `POST /auth/register` | gateway | exempt | no database; calls GoTrue |
 | `GET /auth/verify` | gateway | exempt | no database; calls GoTrue |
 | `GET /.well-known/jwks.json` | gateway | exempt | serves the public verification keys; unauthenticated by design |
@@ -339,7 +341,7 @@ predicates it would previously have hit inside the transaction.
 | `POST /v1/extractions/{id}/fields/{name}/corrections` | submission | covered | |
 | `POST /v1/extractions/{id}/line-items` | submission | covered | |
 
-77 distinct routes, 83 registrations (`GET /v1/ping` is registered once per service).
+79 distinct routes, 85 registrations (`GET /v1/ping` is registered once per service).
 
 ### 8.1 The non-HTTP callers, so nobody looks for them above
 
@@ -473,9 +475,9 @@ Of the two residues it left, one is now closed:
   written the card rendered no control at all, per the subtask design ("no retry loop, no
   partial workspace"), so the only exit was clearing site data. The card now carries a sign-out
   button: neither a retry nor a partial workspace, and a page a user cannot leave is a defect
-  whatever the plan said. It calls `App.tsx`'s own `signOut` — the callback the 401 seam fires
-  and the one `Sidebar.tsx` calls — so there is one sign-out, not two, and on a deployed build
-  it lands the user on the landing page, the product's single front door.
+  whatever the plan said. It calls `App.tsx`'s own `signOut` — the one `Sidebar.tsx` calls — so
+  there is one sign-out, not two, and on a deployed build it lands the user on the landing page,
+  the product's single front door.
   `App.suspended.test.tsx` pins the control's presence, its label and its end state.
 
 **11.3 A pre-existing full-suite flake.** `TestAudit_ComposedPageIsIndexServedAndUnsorted`

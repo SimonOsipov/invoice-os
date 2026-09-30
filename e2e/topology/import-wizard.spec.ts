@@ -2594,20 +2594,24 @@ function edgesOf(el: HTMLElement) {
 
 // Two consecutive AGREEING reads, never one: a boundingBox taken as a panel opens measures
 // the transform mid-flight, and two different values on two reads is the tell.
+// Returns the agreed read itself: a fresh read after the poll can land on a later relayout.
 async function settledRead<T>(read: () => Promise<T>, label: string): Promise<T> {
   let previous = ''
+  let previousValue!: T
   await expect
     .poll(
       async () => {
-        const key = JSON.stringify(await read())
+        const value = await read()
+        const key = JSON.stringify(value)
         const stable = key === previous
         previous = key
+        previousValue = value
         return stable
       },
       { message: `${label}: geometry never settled across two consecutive reads`, timeout: 15_000 },
     )
     .toBe(true)
-  return read()
+  return previousValue
 }
 
 // Steps the viewport down until the pane stops shrinking and returns that viewport width.
@@ -3967,8 +3971,6 @@ test('EXTR11-E2E-02a (AC-1/AC-6): the panes never overlap, and no field row spil
   const headerNamesA = wireNamesA.filter((n) => !n.startsWith('line_items'))
   expect(headerNamesA.length, 'no header field on this document -- every spill comparison is vacuous').toBeGreaterThan(0)
 
-  const canvas = page.getByTestId('extraction-canvas')
-  const fields = page.getByTestId('extraction-fields')
   // The trailing hyphen matters: `extraction-fields` is itself prefixed by `extraction-field`.
   const rows = page.locator('[data-testid^="extraction-field-"]')
   await expect(rows, 'the pane rendered no row for a wire that carries header fields').toHaveCount(headerNamesA.length)
@@ -3982,20 +3984,31 @@ test('EXTR11-E2E-02a (AC-1/AC-6): the panes never overlap, and no field row spil
     for (const width of WIDE_WIDTHS) {
       await page.setViewportSize({ width, height: 1080 })
 
-      const m = await settledRead(async () => {
-        const [c, f, rs] = await Promise.all([
-          canvas.boundingBox(),
-          fields.boundingBox(),
-          rows.evaluateAll((els) =>
-            els.map((el) => {
+      // One evaluate, so the panes and rows come from the same layout pass; separate calls can
+      // straddle a relayout and pair a row from one layout with a pane from the other.
+      const m = await settledRead(
+        () =>
+          page.evaluate(() => {
+            const box = (el: Element | null) => {
+              if (!el) return null
+              const r = el.getBoundingClientRect()
+              return { x: r.x, y: r.y, width: r.width, height: r.height }
+            }
+            const rs = [...document.querySelectorAll('[data-testid^="extraction-field-"]')].map((el) => {
               const r = el.getBoundingClientRect()
               return { testid: el.getAttribute('data-testid') ?? '', left: r.left, right: r.right, width: r.width }
-            }),
-          ),
-        ])
-        return { c, f, rs }
-      }, `pane geometry at ${width}px`)
+            })
+            return {
+              vw: window.innerWidth,
+              c: box(document.querySelector('[data-testid="extraction-canvas"]')),
+              f: box(document.querySelector('[data-testid="extraction-fields"]')),
+              rs,
+            }
+          }),
+        `pane geometry at ${width}px`,
+      )
 
+      expect(m.vw, `the viewport never reached ${width}px`).toBe(width)
       expect(m.c && m.f, `both panes must render at ${width}px`).toBeTruthy()
       // Non-empty first: two collapsed rects clear each other on both axes and pass vacuously.
       expect(m.c!.width, `the document pane has no width at ${width}px`).toBeGreaterThan(0)

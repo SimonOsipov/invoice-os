@@ -347,7 +347,7 @@ test.describe('bulk import+validate — 500-invoice/60s perf gate + Day-60 stamp
 
 // PERF-08 is deliberately NOT a new test in this file: its Test Specs "Then"
 // is "the whole e2e job (smoke -> api -> topology -> demo) is green", which is
-// an outcome of dev-env.yml's one gated `e2e` job running every suite, not a
+// an outcome of dev-env.yml's `E2E gate` check over every suite, not a
 // new assertion this spec could make in isolation. It is satisfied by: (1)
 // this file resolving rule_set_version through ../rule-set's
 // ACTIVE_RULE_SET_VERSION (a FOURTH consumer -- added to that module's header

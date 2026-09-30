@@ -137,7 +137,7 @@ The gateway also logs one line per purge, `demo purge complete`, carrying `tenan
 is a service restart, not a redeploy, so nothing rebuilds and no test suite re-runs.
 
 1. **Restart the gateway.** It runs `Provision`: bootstrap, migrate, reset (PR
-   environments only), purge, seed. When its `/healthz` returns 200 with
+   environments only), purge, seed, shard seed (PR environments only). When its `/healthz` returns 200 with
    `demo_purge: "true"`, the demo tenants have been emptied and re-seeded. Only a PR
    environment reports `"true"`; production reports `"false"`, because it no longer
    purges or seeds.

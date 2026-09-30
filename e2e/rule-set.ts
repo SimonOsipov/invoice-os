@@ -18,7 +18,7 @@
 //                                 per-row column this used to read by ordinal) and the
 //                                 clean-pass block's sentence. Added INVCR-01-13/D8,
 //                                 after [positional-pins-are-invisible].
-// All of the above are steps of the one gated `e2e` job in dev-env.yml, so a version
+// All of the above are gated together by dev-env.yml's `E2E gate`, so a version
 // publish breaks them together -- and one constant fixes them together.
 //
 // ONE module, not three constants in three directories: scattered version literals are

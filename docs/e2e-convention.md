@@ -49,16 +49,30 @@ or `pageerror` during a journey fails it).
 
 ## One browser, serial
 
-**chromium-only, `workers: 1`.** No multi-browser matrix, no sharding.
+**chromium-only, `workers: 1` per unit.** No multi-browser matrix. The api suite and each
+topology unit run serial on one worker. Topology runs as three units in parallel, as listed
+in `e2e/topology/shards.ts`: a `serial-lane` of the specs that stay on the seeded persona
+tenants (1111 / 2222), plus one shard per big file
+(`import-wizard`, `invoice-surfaces`), each on its own seeded tenant pair
+(`db/seed.e2e-shards.sql`). `playwright.topology.config.ts` builds one project per unit, and
+`--project=<unit>` runs one. A new topology spec file must be added to a unit in `shards.ts`,
+or every topology run fails at config load.
+
+**A dedicated-shard spec signs in by seeding the session, not by `?persona=`.** It calls
+`seedShardSession` (`e2e/topology/shardSession.ts`), which logs in as the shard tenant through
+the mock issuer and writes the session record the SPA stores after a real sign-in. The SPA
+binds `?persona=firm` and `?persona=inhouse` to the seeded tenants 1111 / 2222, so that URL
+can never reach a shard tenant; `assertShardSession` fails a sign-in that landed in another
+tenant.
 
 **Every run gets a database of its own, and shares it across all three suites.**
 
-The suites run only on a pull request (`dev-env.yml`'s `e2e` job), against that PR's own
+The suites run only on a pull request (`dev-env.yml`'s `e2e` and `topology` jobs), against that PR's own
 ephemeral Railway environment. That environment's Postgres is a *fork* of the persistent
 environment's volume, so it is born holding everything that environment holds — and the
 gateway TRUNCATEs the tenant-data tables, purges the demo tenants and re-seeds the curated
 demo state at boot, on every deploy (boot order: bootstrap → migrate → reset → purge →
-seed; Decision [pr-only-reset], 2026-07-28, `internal/platform/db/reset.go`, and DEMO-04,
+seed → shard seed, the last on PR forks only; Decision [pr-only-reset], 2026-07-28, `internal/platform/db/reset.go`, and DEMO-04,
 `internal/platform/db/demopurge.go`). A run
 therefore starts from the seed, never from another run's leftovers, and the health-gate
 fails the run outright if that reset did not happen — it is armed by a hand-set Railway
@@ -69,7 +83,8 @@ gated like the seed, by `GATEWAY_DB_BOOTSTRAP` and the `ENVIRONMENT` that CI's
 What a spec still cannot assume is an empty table:
 
 - smoke → api → topology run in that order against ONE deployment with **no reset between
-  them**, and `api/perf.spec.ts` alone creates 500 invoices before topology reads a list;
+  them**, and `api/perf.spec.ts` alone creates 500 invoices before topology reads a list.
+  The topology units run at the same time as each other, after api;
 - a Playwright retry re-runs a failed test against everything its first attempt left behind;
 - the tables holding admin CRUD split two ways since DEMO-04, and the difference matters
   when you reason about what a spec inherits:
@@ -95,7 +110,7 @@ What a spec still cannot assume is an empty table:
   This is harmless, because every run registers a fresh address and provisions for a fresh
   subject.
 
-So the rule is unchanged, and `workers: 1` still holds: every spec creates per-run-unique
+So the rule is unchanged, and `workers: 1` per unit still holds: every spec creates per-run-unique
 data (fresh TINs, random UUIDs, high offsets for empty-state), acts on rows it created, and
 asserts containment or a live-read comparison rather than a literal count.
 

@@ -429,14 +429,15 @@ func TestTracing_ResponseStatusCodeMatchesTheWire(t *testing.T) {
 		name    string
 		handler http.HandlerFunc
 		status  string
+		panics  bool
 	}{
-		{"handler writes nothing", func(http.ResponseWriter, *http.Request) {}, "ok"},
-		{"body without a header call", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("x")) }, "ok"},
-		{"5xx without a panic", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }, "unavailable"},
+		{"handler writes nothing", func(http.ResponseWriter, *http.Request) {}, "ok", false},
+		{"body without a header call", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("x")) }, "ok", false},
+		{"5xx without a panic", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }, "unavailable", false},
 		{"panic after the header is written", func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusCreated)
 			panic("late")
-		}, ""},
+		}, "internal_error", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			app, rec, _ := sentrytest.Boot(t, "invoice")
@@ -448,9 +449,15 @@ func TestTracing_ResponseStatusCodeMatchesTheWire(t *testing.T) {
 			if got := txData(t, e)["http.response.status_code"]; got != float64(w.Code) {
 				t.Errorf("http.response.status_code = %v, client saw %d", got, w.Code)
 			}
-			if tc.status != "" {
-				if st := txTrace(t, e)["status"]; st != tc.status {
-					t.Errorf("transaction status = %v, want %s", st, tc.status)
+			if st := txTrace(t, e)["status"]; st != tc.status {
+				t.Errorf("transaction status = %v, want %s", st, tc.status)
+			}
+			if tc.panics {
+				if w.Code != http.StatusCreated {
+					t.Errorf("client saw %d, want the 201 already written", w.Code)
+				}
+				if n := len(rec.Events()); n != 1 {
+					t.Errorf("recorded %d issues, want 1", n)
 				}
 			}
 		})

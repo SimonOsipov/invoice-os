@@ -70,7 +70,7 @@ type ApproveUntilClosed = (
   max?: number,
   transport?: ApprovalTransport,
 ) => Promise<ApprovalRun>
-type FirmApproverTokens = () => Promise<Record<string, string>>
+type FirmApproverTokens = (typeof import('./client'))['firmApproverTokens']
 
 let listInvoices: (typeof import('./client'))['listInvoices']
 let approveUntilClosed: ApproveUntilClosed
@@ -337,6 +337,53 @@ describe('firmApproverTokens', () => {
       fin_mgr: 'token-for-c0000000-0000-0000-0000-000000000004',
       compliance: 'token-for-c0000000-0000-0000-0000-000000000005',
     })
+  })
+
+  // Shard ids are literals in the shards.ts format, not imported: the memo test must not
+  // depend on the shard map's contents. One id per row -- the memo persists, so each row
+  // needs a tenant no earlier row has minted for.
+  const SHARD_ID = '11111111-1111-1111-1111-00000000e2e1'
+  const SHARD_ID_2 = '11111111-1111-1111-1111-00000000e2e2'
+  const SHARD_ID_3 = '11111111-1111-1111-1111-00000000e2e3'
+  const loginsSince = () => calls.filter((c) => c.url.endsWith('/auth/login'))
+  const loginBody = (c: { body?: unknown }) => c.body as { subject: string; tenant_id: string }
+
+  it('a shard tenant\'s tokens are minted for that tenant', async () => {
+    calls.length = 0
+
+    await firmApproverTokens(SHARD_ID)
+
+    const logins = loginsSince().map(loginBody)
+    expect(logins).toHaveLength(2)
+    expect(logins.map((b) => b.tenant_id)).toEqual([SHARD_ID, SHARD_ID])
+    expect(logins.map((b) => b.subject).sort()).toEqual([
+      'c0000000-0000-0000-0000-000000000004',
+      'c0000000-0000-0000-0000-000000000005',
+    ])
+  })
+
+  it('the memo is keyed by tenant', async () => {
+    await firmApproverTokens() // 1111 warm, whatever ran before
+    calls.length = 0
+
+    await firmApproverTokens(SHARD_ID_3)
+    expect(loginsSince()).toHaveLength(2) // a warm 1111 entry must not answer for a shard
+
+    calls.length = 0
+    await firmApproverTokens(SHARD_ID_3)
+    await firmApproverTokens()
+    expect(loginsSince()).toHaveLength(0) // both keys now warm
+  })
+
+  it('two concurrent callers for a new tenant mint two logins', async () => {
+    calls.length = 0
+
+    const [first, second] = await Promise.all([firmApproverTokens(SHARD_ID_2), firmApproverTokens(SHARD_ID_2)])
+
+    const logins = loginsSince().map(loginBody)
+    expect(logins).toHaveLength(2)
+    expect(logins.map((b) => b.tenant_id)).toEqual([SHARD_ID_2, SHARD_ID_2])
+    expect(second).toEqual(first)
   })
 })
 

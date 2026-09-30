@@ -34,7 +34,7 @@ func (*jobTracing) InsertMany(ctx context.Context, manyParams []*rivertype.JobIn
 	for _, p := range manyParams {
 		meta := map[string]json.RawMessage{}
 		if len(p.Metadata) > 0 {
-			if err := json.Unmarshal(p.Metadata, &meta); err != nil {
+			if err := json.Unmarshal(p.Metadata, &meta); err != nil || meta == nil {
 				continue
 			}
 		}
@@ -50,6 +50,7 @@ func (*jobTracing) InsertMany(ctx context.Context, manyParams []*rivertype.JobIn
 	return doInner(ctx)
 }
 
+// ceiling: one transaction per job attempt; sample job transactions apart above ~1M spans/month on Sentry Stats
 func (*jobTracing) Work(ctx context.Context, job *rivertype.JobRow, doInner func(context.Context) error) (err error) {
 	hub := sentry.CurrentHub()
 	if hub.Client() == nil {

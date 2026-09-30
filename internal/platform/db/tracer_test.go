@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/getsentry/sentry-go"
@@ -113,6 +114,64 @@ func TestQueryTracer_ErrorSetsStatusWithoutText(t *testing.T) {
 		t.Errorf("failed query status = %v, want internal_error", spans[1].Status)
 	}
 	sentrytest.AssertNoLeak(t, rec.Transactions())
+}
+
+func TestQueryTracer_InterleavedQueriesFinishTheirOwnSpans(t *testing.T) {
+	_, rec, _ := sentrytest.Boot(t, "db-test")
+	tx := sentry.StartTransaction(context.Background(), "GET /x")
+
+	ctxA := queryTracer{}.TraceQueryStart(tx.Context(), nil, pgx.TraceQueryStartData{SQL: "A"})
+	ctxB := queryTracer{}.TraceQueryStart(tx.Context(), nil, pgx.TraceQueryStartData{SQL: "B"})
+	queryTracer{}.TraceQueryEnd(ctxB, nil, pgx.TraceQueryEndData{Err: fmt.Errorf("boom")})
+	queryTracer{}.TraceQueryEnd(ctxA, nil, pgx.TraceQueryEndData{})
+	tx.Finish()
+
+	spans := oneTransactionWithSpans(t, rec, 2)
+	byDesc := map[string]*sentry.Span{}
+	for _, s := range spans {
+		byDesc[s.Description] = s
+	}
+	if byDesc["A"] == nil || byDesc["B"] == nil {
+		t.Fatalf("spans = %v, want one each for A and B", byDesc)
+	}
+	if byDesc["A"].Status == sentry.SpanStatusInternalError {
+		t.Error("query A took query B's error status")
+	}
+	if byDesc["B"].Status != sentry.SpanStatusInternalError {
+		t.Errorf("query B status = %v, want internal_error", byDesc["B"].Status)
+	}
+}
+
+func TestQueryTracer_ConcurrentQueriesUnderOneParent(t *testing.T) {
+	_, rec, _ := sentrytest.Boot(t, "db-test")
+	tx := sentry.StartTransaction(context.Background(), "GET /x")
+
+	const n = 50
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			traceQuery(tx, "SELECT 1", nil, nil)
+		}()
+	}
+	wg.Wait()
+	if got := rec.Transactions(); len(got) != 0 {
+		t.Fatalf("queries sent %d transactions before the parent finished, want none", len(got))
+	}
+	tx.Finish()
+
+	spans := oneTransactionWithSpans(t, rec, n)
+	ids := map[sentry.SpanID]bool{}
+	for _, s := range spans {
+		ids[s.SpanID] = true
+		if s.EndTime.IsZero() {
+			t.Fatal("a concurrent query left its span unfinished")
+		}
+	}
+	if len(ids) != n {
+		t.Errorf("%d distinct span ids, want %d", len(ids), n)
+	}
 }
 
 func TestNewPool_InstallsTheQueryTracer(t *testing.T) {

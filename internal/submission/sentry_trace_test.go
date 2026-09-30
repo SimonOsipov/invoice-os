@@ -269,3 +269,147 @@ func TestTraceSentry_QueryArgumentsAndErrorsDoNotLeak(t *testing.T) {
 	}
 	sentrytest.AssertNoLeak(t, rec.Transactions())
 }
+
+func spanDescriptions(spans []*sentry.Span) []string {
+	var out []string
+	for _, s := range spans {
+		out = append(out, s.Description)
+	}
+	return out
+}
+
+func TestTraceSentry_PgxCallPathsEachFinishTheirOwnSpan(t *testing.T) {
+	pool := traceTestPool(t)
+	_, rec, _ := sentrytest.Boot(t, "submission")
+	parent := sentry.StartTransaction(context.Background(), "GET /v1/paths")
+	ctx := parent.Context()
+	var n int
+
+	if _, err := pool.Exec(ctx, "SELECT 1"); err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	rows, err := pool.Query(ctx, "SELECT 2")
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	for rows.Next() {
+	}
+	rows.Close()
+	rows.Close()
+	if err := pool.QueryRow(ctx, "SELECT 3").Scan(&n); err != nil {
+		t.Fatalf("QueryRow: %v", err)
+	}
+	if err := pool.QueryRow(ctx, "SELECT 4 WHERE false").Scan(&n); err != pgx.ErrNoRows {
+		t.Fatalf("no-row QueryRow error = %v, want ErrNoRows", err)
+	}
+	if err := pool.QueryRow(ctx, "SELECT 1/0").Scan(&n); err == nil {
+		t.Fatal("SELECT 1/0 succeeded")
+	}
+	slow, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	_, err = pool.Exec(slow, "SELECT pg_sleep(5)")
+	cancel()
+	if err == nil {
+		t.Fatal("a cancelled query succeeded")
+	}
+	// Batches are outside the tracer's ceiling: no span, and no other span is finished for them.
+	b := &pgx.Batch{}
+	b.Queue("SELECT 5")
+	b.Queue("SELECT 6")
+	br := pool.SendBatch(ctx, b)
+	if err := br.Close(); err != nil {
+		t.Fatalf("batch: %v", err)
+	}
+
+	if !parent.EndTime.IsZero() {
+		t.Fatal("a query finished the parent span")
+	}
+	if got := rec.Transactions(); len(got) != 0 {
+		t.Fatalf("queries sent %d transactions before the parent finished", len(got))
+	}
+	parent.Finish()
+
+	spans := dbSpans(oneTransaction(t, rec, "GET /v1/paths"))
+	want := []string{"SELECT 1", "SELECT 2", "SELECT 3", "SELECT 4 WHERE false", "SELECT 1/0", "SELECT pg_sleep(5)"}
+	if fmt.Sprint(spanDescriptions(spans)) != fmt.Sprint(want) {
+		t.Fatalf("db.sql.query descriptions = %q, want %q", spanDescriptions(spans), want)
+	}
+	failed := map[string]bool{"SELECT 1/0": true, "SELECT pg_sleep(5)": true}
+	for _, s := range spans {
+		if s.EndTime.IsZero() {
+			t.Errorf("span %q was never finished", s.Description)
+		}
+		if got := s.Status == sentry.SpanStatusInternalError; got != failed[s.Description] {
+			t.Errorf("span %q internal_error = %v, want %v", s.Description, got, failed[s.Description])
+		}
+	}
+}
+
+func TestTraceSentry_NestedTxSpansOnePerStatement(t *testing.T) {
+	pool := traceTestPool(t)
+	_, rec, _ := sentrytest.Boot(t, "submission")
+	parent := sentry.StartTransaction(context.Background(), "GET /v1/nested")
+	ctx := parent.Context()
+
+	err := db.WithinTenantTx(ctx, pool, uuid.NewString(), func(tx pgx.Tx) error {
+		inner, err := tx.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		if _, err := inner.Exec(ctx, "SELECT 1"); err != nil {
+			return err
+		}
+		if err := inner.Rollback(ctx); err != nil {
+			return err
+		}
+		inner, err = tx.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		if _, err := inner.Exec(ctx, "SELECT 2"); err != nil {
+			return err
+		}
+		return inner.Commit(ctx)
+	})
+	if err != nil {
+		t.Fatalf("WithinTenantTx: %v", err)
+	}
+	parent.Finish()
+
+	spans := dbSpans(oneTransaction(t, rec, "GET /v1/nested"))
+	want := []string{
+		"begin", "SELECT set_config('app.current_tenant', $1, true)",
+		"savepoint sp_1", "SELECT 1", "rollback to savepoint sp_1",
+		"savepoint sp_2", "SELECT 2", "release savepoint sp_2",
+		"commit",
+	}
+	if fmt.Sprint(spanDescriptions(spans)) != fmt.Sprint(want) {
+		t.Errorf("db.sql.query descriptions = %q, want %q", spanDescriptions(spans), want)
+	}
+	for _, s := range spans {
+		if s.EndTime.IsZero() {
+			t.Errorf("span %q was never finished", s.Description)
+		}
+	}
+}
+
+func TestTraceSentry_UnclosedRowsNeverReopenASentTransaction(t *testing.T) {
+	pool := traceTestPool(t)
+	_, rec, _ := sentrytest.Boot(t, "submission")
+	parent := sentry.StartTransaction(context.Background(), "GET /v1/unclosed")
+
+	if _, err := pool.Exec(parent.Context(), "SELECT 1"); err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	rows, err := pool.Query(parent.Context(), "SELECT 2")
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	parent.Finish()
+	rows.Close()
+
+	spans := dbSpans(oneTransaction(t, rec, "GET /v1/unclosed"))
+	if len(spans) != 1 || spans[0].Description != "SELECT 1" {
+		t.Errorf("db.sql.query spans = %q, want only the finished SELECT 1", spanDescriptions(spans))
+	}
+	sentrytest.AssertNoLeak(t, rec.Transactions())
+}

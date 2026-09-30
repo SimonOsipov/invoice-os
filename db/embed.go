@@ -14,11 +14,11 @@ package dbsql
 
 import "embed"
 
-// FS holds db/bootstrap.sql and db/seed.dev.sql, embedded into the binary. A glob
+// FS holds db/bootstrap.sql, db/seed.dev.sql and db/seed.e2e-shards.sql, embedded into the binary. A glob
 // that failed to match either file would fail the build, so this can never
 // silently ship a stale or incomplete copy — see TestBootstrapFromEmbedded /
 // TestSeedFromEmbeddedIsIdempotent (internal/platform/db), which additionally
 // prove the embedded bytes are complete/correct at runtime, not merely present.
 //
-//go:embed bootstrap.sql seed.dev.sql
+//go:embed bootstrap.sql seed.dev.sql seed.e2e-shards.sql
 var FS embed.FS

@@ -321,6 +321,12 @@ func Provision(ctx context.Context, cfg ProvisionConfig) error {
 		if err := Seed(ctx, cfg.SuperuserDSN, cfg.SeedFS); err != nil {
 			return fmt.Errorf("db: provision: seed: %w", err)
 		}
+
+		if cfg.ResetWillRun() {
+			if err := SeedShards(ctx, cfg.SuperuserDSN, cfg.SeedFS); err != nil {
+				return fmt.Errorf("db: provision: seed shards: %w", err)
+			}
+		}
 	}
 
 	return nil

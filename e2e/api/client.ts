@@ -1124,19 +1124,22 @@ export async function approveUntilClosed(
 // value, so two concurrent callers can't double-mint; this is the first module-scope token
 // cache in the api suite (every other site uses a per-file beforeAll), which AC-7 mandates.
 // The mock issuer's 1h TTL against a 5-15min run means the cache can't go stale.
-let firmApproverTokensPromise: Promise<Record<string, string>> | null = null
+// Keyed by tenant id: a topology shard's seeded firm is its own tenant.
+const firmApproverTokensByTenant = new Map<string, Promise<Record<string, string>>>()
 
-export function firmApproverTokens(): Promise<Record<string, string>> {
-  if (!firmApproverTokensPromise) {
-    firmApproverTokensPromise = (async () => {
+export function firmApproverTokens(tenantId: string = PERSONAS.A.tenantId): Promise<Record<string, string>> {
+  let memo = firmApproverTokensByTenant.get(tenantId)
+  if (!memo) {
+    memo = (async () => {
       const [fin_mgr, compliance] = await Promise.all([
-        login({ ...PERSONAS.A, subject: 'c0000000-0000-0000-0000-000000000004' }),
-        login({ ...PERSONAS.A, subject: 'c0000000-0000-0000-0000-000000000005' }),
+        login({ ...PERSONAS.A, tenantId, subject: 'c0000000-0000-0000-0000-000000000004' }),
+        login({ ...PERSONAS.A, tenantId, subject: 'c0000000-0000-0000-0000-000000000005' }),
       ])
       return { fin_mgr, compliance }
     })()
+    firmApproverTokensByTenant.set(tenantId, memo)
   }
-  return firmApproverTokensPromise
+  return memo
 }
 
 // ---- Audit-reader wire types (AUDIT-04-08), mirrored key-for-key from

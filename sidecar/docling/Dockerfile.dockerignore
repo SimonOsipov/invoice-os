@@ -31,7 +31,6 @@ go.sum
 .git
 .github
 .claude
-backlog
 docs
 e2e
 *.md

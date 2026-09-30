@@ -41,9 +41,6 @@ e2e/.playwright/
 .env.*
 !.env.example
 
-# ---- Backlog.md (local task tracking, not versioned) ----
-backlog/
-
 # ---- Claude Code (local project instructions, not versioned) ----
 CLAUDE.md
 # RALPH story worktrees live here (see RALPH_PROMPT.md) — never commit them

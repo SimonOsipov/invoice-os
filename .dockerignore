@@ -14,7 +14,6 @@ node_modules
 .git
 .github
 .claude
-backlog
 
 # Go backend + DB/migration tooling (not part of the frontend image)
 cmd

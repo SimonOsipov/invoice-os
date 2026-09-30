@@ -2,7 +2,7 @@
 import { apiFetch } from '@invoice-os/api-client'
 
 import type { Me, Session } from '../auth'
-import { handoffPersona, hasMeIds, isTokenExpired } from './session'
+import { handoffPersona, isHandoffMe, isTokenExpired } from './session'
 import { BASE64URL_43 } from './signInState'
 
 export { handoffPersona }
@@ -25,7 +25,7 @@ export async function redeemHandoff(base: string, code: string, state: string, n
     signal,
   })
   const me = await apiFetch<Me>(`${base}/api/tenancy/v1/me`, { token, signal })
-  if (!hasMeIds(me)) {
+  if (!isHandoffMe(me)) {
     throw new Error('malformed /me')
   }
   // A missing or malformed refresh token gives a session without renewal. The token may have

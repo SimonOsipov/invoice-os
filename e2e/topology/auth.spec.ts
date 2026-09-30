@@ -964,10 +964,12 @@ test('deployed app: a hand-off code minted in another browser signs no tab in', 
   })
 })
 
-// The first screen of a fresh workspace: the onboarding dashboard for the zero-entity placeholder (emptyClient).
-async function expectOnboardingDashboard(page: Page): Promise<void> {
+// The first screen of a fresh workspace: the onboarding dashboard. Only the firm portfolio pins the placeholder heading.
+async function expectOnboardingDashboard(page: Page, opts: { firmHeading?: boolean } = {}): Promise<void> {
   await expect(page.getByText('COMPLIANCE OVERVIEW', { exact: true })).toBeVisible()
-  await expect(page.getByRole('heading', { level: 1, name: 'No client yet', exact: true })).toBeVisible()
+  if (opts.firmHeading) {
+    await expect(page.getByRole('heading', { level: 1, name: 'No client yet', exact: true })).toBeVisible()
+  }
 }
 
 test('deployed app: a real in-house workspace has a Company tab and no Clients nav item', async ({ page }) => {
@@ -994,7 +996,7 @@ test('deployed app: a real firm workspace has the Clients portfolio and no Compa
   const errors = collectErrors(page)
 
   await signInAtFrontDoor(page, account, '/')
-  await expectOnboardingDashboard(page)
+  await expectOnboardingDashboard(page, { firmHeading: true })
   await expect.poll(() => sidebarRoster(page), { message: 'firm sidebar roster' }).toContain('Clients')
 
   const nav = page.locator('aside.pf-sidebar nav.pf-nav-list')

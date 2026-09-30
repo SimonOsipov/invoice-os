@@ -43,7 +43,6 @@ describe('readHandoffCode (D9)', () => {
       ['', null],
       ['?persona=firm', null],
     ]
-    expect(rows.length).toBeGreaterThan(0)
     for (const [search, want] of rows) {
       expect(readHandoffCode(search), search).toBe(want)
     }
@@ -125,7 +124,6 @@ describe('redeemHandoff (D9, D25 step 5)', () => {
       ['toString', withKind('toString')],
       ['array', withKind(['firm'])],
     ]
-    expect(rows.length).toBeGreaterThan(0)
     for (const [name, me] of rows) {
       stubMe(me)
       await expect(redeemHandoff(GATEWAY, CODE, STATE), name).rejects.toThrow(/malformed/)
@@ -160,7 +158,6 @@ describe('redeemHandoff (D9, D25 step 5)', () => {
       ['numeric', { access_token: LIVE, refresh_token: 42 }],
       ['null', { access_token: LIVE, refresh_token: null }],
     ]
-    expect(rows.length).toBeGreaterThan(0)
     for (const [name, answer] of rows) {
       stubExchange(answer)
       const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000)
@@ -180,7 +177,6 @@ describe('isLiveHandoffSession (D9, D18)', () => {
       ['expired hand-off', { ...persona, token: EXPIRED, handoff: true }, false],
       ['live hand-off', { ...persona, handoff: true }, true],
     ]
-    expect(rows.length).toBeGreaterThan(0)
     for (const [name, session, want] of rows) {
       expect(isLiveHandoffSession(session, NOW), name).toBe(want)
     }

@@ -1010,7 +1010,7 @@ describe('AUTH-05-08 adversarial', () => {
     expect(warn.mock.calls.filter((c) => String(c[0]).startsWith('[session]'))).toHaveLength(1)
   })
 
-  it('a stored hand-off record from before kind existed is dropped and the boot signs in again', async () => {
+  it('a stored hand-off record with no tenant kind is dropped and the boot signs in again', async () => {
     const OLD_T = jwt(OLD_ME.user.id, nowSec() + 3600)
     const noKind = { tenant: { id: OLD_ME.tenant.id, name: OLD_ME.tenant.name }, user: OLD_ME.user }
     configure()

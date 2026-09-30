@@ -35,7 +35,7 @@ export function serializeSession(session: Session): string {
 
 const MODE_BY_KIND: Record<TenantKind, Mode> = { firm: 'firm', in_house: 'inhouse' }
 
-// A real session's mode is tenants.kind (APP_PERSONAS modes are the demo door's); the rest stays the firm persona until AUTH-09.
+// A real session's mode is tenants.kind; APP_PERSONAS modes serve the demo door only.
 export function handoffPersona(me: Me): Persona {
   return { ...APP_PERSONAS.firm, mode: MODE_BY_KIND[me.tenant.kind], subject: me.user.id, tenantId: me.tenant.id }
 }
@@ -55,7 +55,7 @@ function renewalPairOk(p: { handoff?: unknown; refresh_token?: unknown; received
 }
 
 // typeof first: an array or an object with toString would pass hasOwnProperty by coercion.
-export function hasMeIds(me: unknown): me is Me {
+export function isHandoffMe(me: unknown): me is Me {
   const m = me as { user?: { id?: unknown }; tenant?: { id?: unknown; kind?: unknown } } | null
   const kind = m?.tenant?.kind
   return (
@@ -84,7 +84,7 @@ export function parseStoredSession(raw: string | null): Session | null {
       (typeof parsed.token === 'string' || parsed.token === null) &&
       typeof parsed.verified === 'boolean' &&
       (parsed.me === null || (typeof parsed.me === 'object' && parsed.me !== null)) &&
-      (parsed.handoff !== true || hasMeIds(parsed.me)) &&
+      (parsed.handoff !== true || isHandoffMe(parsed.me)) &&
       renewalPairOk(parsed)
     ) {
       if (parsed.handoff === true) {

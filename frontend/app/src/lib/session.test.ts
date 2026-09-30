@@ -11,7 +11,7 @@ import {
   SESSION_SCHEMA_VERSION,
   clearSession,
   decodeJwtPayload,
-  hasMeIds,
+  isHandoffMe,
   isTokenExpired,
   loadSession,
   parseStoredSession,
@@ -502,7 +502,7 @@ describe('adversarial / edge coverage (QA)', () => {
 })
 
 // The hand-off record.
-// Each is refused by hasMeIds; 'firm' and 'in_house' are the accepted kinds.
+// Each is refused by isHandoffMe; 'firm' and 'in_house' are the accepted kinds.
 const KIND_REFUSALS: [string, unknown][] = [
   ['null', null],
   ['empty', ''],
@@ -550,7 +550,6 @@ describe('hand-off session record (AUTH-05 D8)', () => {
       ['inhouse persona, me firm', { ...inhouseSessionOf(ME) }, 'inhouse'],
       ['firm persona, me in_house', { persona: APP_PERSONAS.firm, token: 'jwt', me: IN_HOUSE_ME, verified: true }, 'firm'],
     ]
-    expect(rows.length).toBeGreaterThan(0)
     for (const [name, session, want] of rows) {
       expect(parseStoredSession(serializeSession(session))?.persona.mode, name).toBe(want)
     }
@@ -564,7 +563,6 @@ describe('hand-off session record (AUTH-05 D8)', () => {
       ['inhouse persona, handoff "true" is not a hand-off, me firm', stored('inhouse', meKind('firm'), { handoff: 'true' }), 'inhouse'],
       ['firm persona, handoff "true" is not a hand-off, me in_house', stored('firm', meKind('in_house'), { handoff: 'true' }), 'firm'],
     ]
-    expect(raw.length).toBeGreaterThan(0)
     for (const [name, rec, want] of raw) {
       const { warn } = spyOnConsole()
       const restored = parseStoredSession(rec)
@@ -575,14 +573,14 @@ describe('hand-off session record (AUTH-05 D8)', () => {
     }
   })
 
-  it('a stored hand-off record from before kind existed is dropped, renewal pair and all', () => {
-    const legacyMe = { tenant: { id: ME.tenant.id, name: ME.tenant.name }, user: ME.user }
-    const legacy = { v: 1, personaId: 'firm', token: 'jwt', me: legacyMe, verified: true, handoff: true, refresh_token: 'R0', received_at: 1000 }
+  it('a stored hand-off record with no tenant kind is dropped, renewal pair and all', () => {
+    const noKindMe = { tenant: { id: ME.tenant.id, name: ME.tenant.name }, user: ME.user }
+    const noKind = { v: 1, personaId: 'firm', token: 'jwt', me: noKindMe, verified: true, handoff: true, refresh_token: 'R0', received_at: 1000 }
     // Control: the same record with a kind parses and keeps its renewal.
-    const kept = parseStoredSession(JSON.stringify({ ...legacy, me: ME }))
+    const kept = parseStoredSession(JSON.stringify({ ...noKind, me: ME }))
     expect(kept?.renewal).toEqual({ refreshToken: 'R0', receivedAt: 1000 })
     const { warn, error } = spyOnConsole()
-    expect(parseStoredSession(JSON.stringify(legacy))).toBeNull()
+    expect(parseStoredSession(JSON.stringify(noKind))).toBeNull()
     expect(warn).toHaveBeenCalledTimes(1)
     expect(error).not.toHaveBeenCalled()
   })
@@ -597,7 +595,7 @@ describe('hand-off session record (AUTH-05 D8)', () => {
 
   it('a handoff record without a usable me is rejected', () => {
     const base = { v: 1, personaId: 'firm', token: 'jwt', verified: true, handoff: true }
-    // JSON.stringify drops a function, so the toString object arrives as {}; the direct hasMeIds test below keeps the real one.
+    // JSON.stringify drops a function, so the toString object arrives as {}; the direct isHandoffMe test below keeps the real one.
     const kinds: [string, unknown][] = KIND_REFUSALS.map(([name, kind]) => [`kind ${name}`, { tenant: { id: ME.tenant.id, name: 'X', kind }, user: ME.user }])
     const rows: [string, unknown][] = [
       ['me null', null],
@@ -607,7 +605,6 @@ describe('hand-off session record (AUTH-05 D8)', () => {
       ['kind absent', { tenant: { id: ME.tenant.id, name: 'X' }, user: ME.user }],
       ...kinds,
     ]
-    expect(rows.length).toBeGreaterThan(0)
     // Controls: the same record with a usable me parses, in either kind.
     expect(parseStoredSession(JSON.stringify({ ...base, me: ME }))).not.toBeNull()
     expect(parseStoredSession(JSON.stringify({ ...base, me: IN_HOUSE_ME }))).not.toBeNull()
@@ -619,16 +616,14 @@ describe('hand-off session record (AUTH-05 D8)', () => {
     }
   })
 
-  it('hasMeIds refuses a tenant kind that is not an own key of the mode table', () => {
-    // Fails on the export, not on a TypeError from calling undefined.
-    expect(hasMeIds).toBeTypeOf('function')
+  it('isHandoffMe refuses a tenant kind that is not an own key of the mode table', () => {
     const meWith = (kind: unknown) => ({ tenant: { id: ME.tenant.id, name: 'X', kind }, user: ME.user })
-    expect(hasMeIds(meWith('firm'))).toBe(true)
-    expect(hasMeIds(meWith('in_house'))).toBe(true)
+    expect(isHandoffMe(meWith('firm'))).toBe(true)
+    expect(isHandoffMe(meWith('in_house'))).toBe(true)
     for (const [name, kind] of KIND_REFUSALS) {
-      expect(hasMeIds(meWith(kind)), name).toBe(false)
+      expect(isHandoffMe(meWith(kind)), name).toBe(false)
     }
-    expect(hasMeIds({ tenant: { id: ME.tenant.id, name: 'X' }, user: ME.user }), 'kind absent').toBe(false)
+    expect(isHandoffMe({ tenant: { id: ME.tenant.id, name: 'X' }, user: ME.user }), 'kind absent').toBe(false)
   })
 })
 
@@ -685,7 +680,6 @@ describe('renewal pair in the stored record (AUTH-06 D1)', () => {
       // JSON.parse reads 1e400 as Infinity.
       ['non-finite received_at', JSON.stringify({ ...HANDOFF, refresh_token: 'R0' }).replace(/\}$/, ',"received_at":1e400}')],
     ]
-    expect(rows.length).toBeGreaterThan(0)
     // Control: the well-formed pair on a hand-off record parses.
     expect(parseStoredSession(JSON.stringify({ ...HANDOFF, refresh_token: 'R0', received_at: 1000 }))).not.toBeNull()
     for (const [name, raw] of rows) {

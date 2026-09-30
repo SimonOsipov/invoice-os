@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Me, type Session } from './auth'
 import { captureDestination } from './lib/deepLink'
-import { SESSION_KEY, parseStoredSession, serializeSession } from './lib/session'
+import { SESSION_KEY, serializeSession } from './lib/session'
 import { ensureSignInState } from './lib/signInState'
 import { EMPTY_BUCKET } from './lib/dashboard'
 import type { PlatformCtx } from './types'
@@ -23,7 +23,7 @@ const ME: Me = {
   user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated' },
 }
 const OLD_ME: Me = {
-  tenant: { id: '44444444-4444-4444-4444-444444444444', name: 'Earlier Holdings' },
+  tenant: { id: '44444444-4444-4444-4444-444444444444', name: 'Earlier Holdings', kind: 'firm' },
   user: { id: 'e0000000-0000-0000-0000-000000000004', role: 'authenticated' },
 }
 

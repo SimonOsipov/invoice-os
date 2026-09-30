@@ -26,11 +26,11 @@ const NOW = Date.UTC(2026, 8, 28, 12, 0, 0)
 const nowSec = (ms: number) => Math.floor(ms / 1000)
 
 const ME: Me = {
-  tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures' },
+  tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures', kind: 'firm' },
   user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated' },
 }
 const OTHER_ME: Me = {
-  tenant: { id: '44444444-4444-4444-4444-444444444444', name: 'Earlier Holdings' },
+  tenant: { id: '44444444-4444-4444-4444-444444444444', name: 'Earlier Holdings', kind: 'firm' },
   user: { id: 'e0000000-0000-0000-0000-000000000004', role: 'authenticated' },
 }
 

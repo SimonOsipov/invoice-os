@@ -31,7 +31,7 @@ function firmSession(): Session {
     persona: APP_PERSONAS.firm,
     token: 'jwt',
     me: {
-      tenant: { id: '11111111-1111-1111-1111-111111111111', name: 'Okafor & Partners' },
+      tenant: { id: '11111111-1111-1111-1111-111111111111', name: 'Okafor & Partners', kind: 'firm' },
       user: { id: 'c0000000-0000-0000-0000-000000000001', role: 'authenticated' },
     },
     verified: true,
@@ -443,7 +443,7 @@ describe('adversarial / edge coverage (QA)', () => {
       persona: APP_PERSONAS.inhouse,
       token: 'jwt-inhouse',
       me: {
-        tenant: { id: '22222222-2222-2222-2222-222222222222', name: 'Honeywell Group' },
+        tenant: { id: '22222222-2222-2222-2222-222222222222', name: 'Honeywell Group', kind: 'in_house' },
         user: { id: 'c0000000-0000-0000-0000-000000000002', role: 'authenticated' },
       },
       verified: true,
@@ -558,7 +558,7 @@ describe('hand-off session record (AUTH-05 D8)', () => {
 
   it('a persona record is unchanged', () => {
     const persona =
-      '{"v":1,"personaId":"firm","token":"jwt","me":{"tenant":{"id":"11111111-1111-1111-1111-111111111111","name":"Okafor & Partners"},"user":{"id":"c0000000-0000-0000-0000-000000000001","role":"authenticated"}},"verified":true}'
+      '{"v":1,"personaId":"firm","token":"jwt","me":{"tenant":{"id":"11111111-1111-1111-1111-111111111111","name":"Okafor & Partners","kind":"firm"},"user":{"id":"c0000000-0000-0000-0000-000000000001","role":"authenticated"}},"verified":true}'
     expect(serializeSession(firmSession())).toBe(persona)
     // A persona session never writes the pair, even if it carries a renewal.
     expect(serializeSession({ ...firmSession(), renewal: { refreshToken: 'R0', receivedAt: 1000 } })).toBe(persona)
@@ -604,7 +604,7 @@ describe('hand-off session record (AUTH-05 D8)', () => {
 // The refresh token rides in the same record as the access token.
 describe('renewal pair in the stored record (AUTH-06 D1)', () => {
   const ME: Me = {
-    tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures' },
+    tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures', kind: 'firm' },
     user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated' },
   }
   const HANDOFF = { v: 1, personaId: 'firm', token: 'jwt', me: ME, verified: true, handoff: true }

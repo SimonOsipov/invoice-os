@@ -20,8 +20,9 @@ emit() {
 
 echo "Gating deploy on the 'CI' check for $sha ..."
 for _ in $(seq 1 80); do
-  # A failed gh call is "no verdict yet".
+  # A failed gh call or a body that is not a JSON object is "no verdict yet".
   j=$(gh api "repos/$REPO/commits/$sha/check-runs?check_name=CI&per_page=100" 2>/dev/null || echo '{}')
+  echo "$j" | jq -e 'type == "object"' >/dev/null 2>&1 || j='{}'
   status=$(echo "$j" | jq -r '[.check_runs[]?] | sort_by(.started_at // "") | last | .status // "none"')
   concl=$(echo "$j" | jq -r '[.check_runs[]?] | sort_by(.started_at // "") | last | .conclusion // "none"')
   echo "  CI: status=$status conclusion=$concl"

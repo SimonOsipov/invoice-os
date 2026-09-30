@@ -1,5 +1,5 @@
 // await_ci_test.go runs scripts/ci/await-ci.sh against a scripted gh:
-// the shared CI poll of dev-env.yml's await-ci and ci-watch jobs.
+// the CI poll script used by dev-env.yml.
 package main
 
 import (

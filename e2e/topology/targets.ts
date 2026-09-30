@@ -8,7 +8,7 @@
 import { PERSONAS, type PersonaId } from '../personas'
 import { ACTIVE_RULE_SET_VERSION } from '../rule-set'
 import { resolveTarget } from '../targets'
-import { UNITS } from './shards'
+import { shardOf } from './shards'
 
 // The public gateway (mock issuer + /api/*) and the app SPA on this run's environment.
 export const GATEWAY_URL = resolveTarget('GATEWAY_URL')
@@ -61,7 +61,7 @@ export const TENANTS = {
 // A dedicated shard's tenant pair in TENANTS' shape: ids from shards.ts, everything else from TENANTS
 // (db/seed.e2e-shards.sql copies names, kinds and memberships). Throws for a serial-lane or unknown file.
 export function shardTenants(specFile: string): { a: ShardTenant; b: ShardTenant } {
-  const tenants = UNITS.find((u) => u.specs.includes(specFile))?.tenants
+  const tenants = shardOf(specFile)?.tenants
   if (!tenants) throw new Error(`shardTenants: ${specFile} is not in a dedicated shard`)
   return { a: { ...TENANTS.a, id: tenants.firm }, b: { ...TENANTS.b, id: tenants.inHouse } }
 }

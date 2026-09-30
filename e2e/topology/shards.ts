@@ -65,8 +65,8 @@ export const UNITS: Unit[] = [
 ]
 
 /** shardOf returns the unit that owns a spec file (base name), or undefined. */
-export function shardOf(specFile: string): string | undefined {
-  return UNITS.find((u) => u.specs.includes(specFile))?.name
+export function shardOf(specFile: string): Unit | undefined {
+  return UNITS.find((u) => u.specs.includes(specFile))
 }
 
 /** partitionErrors compares the map with the spec files on disk; empty means a clean partition. */

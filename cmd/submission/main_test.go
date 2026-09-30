@@ -40,20 +40,17 @@ import (
 // half). Static source scan proving the submission.Select( call site's error path
 // terminates the process via platform.Fatal, before the next top-level statement.
 func TestSubmissionMainFatalsOnAdapterSelectError(t *testing.T) {
-	src := wtSourceWithoutComments(t, "main.go")
-
-	idx := strings.Index(src, "submission.Select(")
-	if idx == -1 {
-		t.Fatal(`cmd/submission/main.go does not contain a "submission.Select(" call site -- this test's anchor moved (or the wiring hasn't landed yet)`)
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/submission/main.go: %v", err)
 	}
-	end := idx + 500
-	if end > len(src) {
-		end = len(src)
-	}
-	window := src[idx:end]
 
-	if !strings.Contains(window, "platform.Fatal(") {
-		t.Errorf("no platform.Fatal found within 500 bytes after the submission.Select( call site -- the adapter-selection error path must terminate the process (Core AC-6):\n%s", window)
+	calls, fatal := wtFatalAfter(t, f, "submission.Select")
+	if calls != 1 {
+		t.Fatalf(`main() assigns from submission.Select %d time(s) at the top level, want 1 -- this test's anchor moved (or the wiring hasn't landed yet)`, calls)
+	}
+	if !fatal {
+		t.Error("the statement after submission.Select is not an `if err != nil` that calls platform.Fatal -- the adapter-selection error path must terminate the process (Core AC-6)")
 	}
 }
 

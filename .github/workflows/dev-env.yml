@@ -625,7 +625,7 @@ jobs:
         timeout-minutes: 15
 
   # 2. Schema-before-fleet barrier: the gateway migrates at boot and
-  #    log.Fatals on a bad migration, so a green /healthz proves the schema is
+  #    exits through platform.Fatal on a bad migration, so a green /healthz proves the schema is
   #    fully migrated — this is what the context services, the SPAs, and the
   #    reset/seed all wait behind. Also now the SOLE Postgres liveness proof
   #    (M4-22-08 removed the pg_isready probe) — Provision() runs to

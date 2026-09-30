@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -257,16 +258,31 @@ func TestSentryLogs_EnvironmentComesFromInitSentry(t *testing.T) {
 	}
 }
 
+// The bridge ends the process on a fatal-range record, so the records run in a child
+// process; a regression then fails this test instead of killing the package binary.
 func TestSentryLogs_FatalLevelIsNotForwardedAndDoesNotExit(t *testing.T) {
+	if os.Getenv("SENTRY_LOGS_FATAL_CHILD") != "1" {
+		cmd := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$", "-test.count=1")
+		cmd.Env = append(os.Environ(), "SENTRY_LOGS_FATAL_CHILD=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("a fatal-range record ended the process or failed the child: %v\n%s", err, out)
+		}
+		return
+	}
 	_, rec, _ := sentrytest.Boot(t, "invoice")
 	ctx := context.Background()
 
-	slog.Default().Log(ctx, slog.Level(12), "fatal-level")
+	levels := []slog.Level{12, 13, 16}
+	for _, lvl := range levels {
+		slog.Default().Log(ctx, lvl, fmt.Sprintf("fatal-level-%d", lvl))
+	}
 	slog.Default().Info("after")
 
 	oneLogWithBody(t, rec, "after")
-	if got := logsWithBody(rec, "fatal-level"); len(got) != 0 {
-		t.Errorf("level-12 record reached Sentry: %d records", len(got))
+	for _, lvl := range levels {
+		if got := logsWithBody(rec, fmt.Sprintf("fatal-level-%d", lvl)); len(got) != 0 {
+			t.Errorf("level-%d record reached Sentry: %d records", lvl, len(got))
+		}
 	}
 }
 
@@ -275,7 +291,7 @@ func TestSentryLogs_CustomLevelStaysOnStdout(t *testing.T) {
 	_, rec, _ := sentrytest.Boot(t, "invoice")
 	ctx := context.Background()
 
-	levels := []slog.Level{1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 16}
+	levels := []slog.Level{1, 2, 3, 5, 6, 7, 9, 10, 11}
 	for _, lvl := range levels {
 		slog.Default().Log(ctx, lvl, fmt.Sprintf("custom-%d", lvl))
 	}

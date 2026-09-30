@@ -9,8 +9,8 @@
 // local oracle is exactly `pnpm -r typecheck` + `playwright test --list` collection
 // under playwright.topology.config.ts -- no config or workflow edit is needed
 // (testDir './topology' + testMatch '**/*.spec.ts' picks this file up automatically,
-// run by dev-env.yml's `e2e` job, step "Topology (app verified-login + cross-tenant
-// isolation)" -> `pnpm --filter @invoice-os/e2e test:topology`). The first REAL run
+// run by dev-env.yml's `topology` job, matrix leg `import-wizard` ->
+// `pnpm --filter @invoice-os/e2e test:topology --project=import-wizard`). The first REAL run
 // is that deploy gate, not this authoring pass.
 //
 // Drives the UI, not the API -- e2e/api/import.spec.ts and perf.spec.ts already gate

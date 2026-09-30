@@ -2,7 +2,10 @@ import { readdirSync } from 'node:fs'
 import { defineConfig, devices } from '@playwright/test'
 import { partitionErrors, UNITS } from './topology/shards'
 
-const partition = partitionErrors(readdirSync(new URL('./topology', import.meta.url)).filter((f) => f.endsWith('.spec.ts')))
+const specs = readdirSync(new URL('./topology', import.meta.url), { recursive: true })
+  .map(String)
+  .filter((f) => f.endsWith('.spec.ts'))
+const partition = partitionErrors(specs)
 if (partition.length > 0) throw new Error(`topology shard map: ${partition.join('; ')}`)
 
 // M2-14 topology E2E config (task-23.4). Separate from the smoke config so the two

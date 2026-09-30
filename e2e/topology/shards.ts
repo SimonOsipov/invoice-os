@@ -87,7 +87,7 @@ export function partitionErrors(specFiles: string[]): string[] {
   return errors
 }
 
-// Script entry: the CI matrix is this line.
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Script entry: the CI matrix is this line. import.meta.main needs Node >= 22.18.
+if (import.meta.main) {
   console.log(JSON.stringify(UNITS.map((u) => u.name)))
 }

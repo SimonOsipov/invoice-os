@@ -1,8 +1,8 @@
 -- db/seed.e2e-shards.sql -- per-shard tenant pairs for parallel topology E2E.
 -- Runs as superuser in a PR environment's reset-and-seed, after seed.dev.sql
 -- (db.SeedShards). Each shard tenant copies its source tenant: firm <- 1111, in-house <- 2222.
--- Writes nothing for the four seed.dev.sql tenants. Reset has emptied the data tables, so
--- every insert below is also a repair on a re-run.
+-- Writes nothing for the four seed.dev.sql tenants. Tenants, memberships, roles and
+-- entities re-converge on a re-run; shard tenants are not purged.
 
 -- Session-scoped: vanishes when SeedShards closes its connection.
 CREATE TEMP TABLE shard_map (shard_id uuid PRIMARY KEY, source_id uuid NOT NULL, is_firm boolean NOT NULL);
@@ -44,26 +44,31 @@ JOIN workflow_role_members sm ON sm.tenant_id = src.tenant_id AND sm.workflow_ro
 JOIN workflow_roles sr ON sr.tenant_id = m.shard_id AND sr.key = src.key AND sr.deleted_at IS NULL
 ON CONFLICT ON CONSTRAINT workflow_role_members_tenant_role_user_uq DO NOTHING;
 
--- Firm shards: one unpublished copy of internal/demopolicy's firmPlan. Steps go in only
--- for a version created here: approval_policy_steps_content_lock rejects an INSERT into
--- a sealed one, and a redeploy finds it sealed.
-WITH step_def (ref, parent_ref, branch, ord, kind, role_key, cond_op, cond_amount, notify_target, notify_channel) AS (
+-- One unpublished copy of internal/demopolicy's plan per shard: firmPlan for firm shards,
+-- inhousePlan for in-house shards. Steps go in only for a version created here:
+-- approval_policy_steps_content_lock rejects an INSERT into a sealed one, and a redeploy
+-- finds it sealed.
+WITH step_def (is_firm, ref, parent_ref, branch, ord, kind, role_key, cond_op, cond_amount, notify_target, notify_channel) AS (
   VALUES
-    ('a',  NULL, NULL,   0, 'approval',  'fin_mgr',    NULL, NULL,            NULL,              NULL),
-    ('b',  NULL, NULL,   1, 'condition', NULL,         '>',  250000000.00,    NULL,              NULL),
-    ('b1', 'b',  'then', 0, 'approval',  'fin_dir',    NULL, NULL,            NULL,              NULL),
-    ('c',  NULL, NULL,   2, 'condition', NULL,         '>',  1000000000.00,   NULL,              NULL),
-    ('c1', 'c',  'then', 0, 'approval',  'cfo',        NULL, NULL,            NULL,              NULL),
-    ('c2', 'c',  'then', 1, 'notify',    NULL,         NULL, NULL,            'Audit Committee', 'Email'),
-    ('d',  NULL, NULL,   3, 'approval',  'compliance', NULL, NULL,            NULL,              NULL)
+    (true,  'a',  NULL, NULL,   0, 'approval',    'fin_mgr',    NULL, NULL,            NULL,              NULL),
+    (true,  'b',  NULL, NULL,   1, 'condition',   NULL,         '>',  250000000.00,    NULL,              NULL),
+    (true,  'b1', 'b',  'then', 0, 'approval',    'fin_dir',    NULL, NULL,            NULL,              NULL),
+    (true,  'c',  NULL, NULL,   2, 'condition',   NULL,         '>',  1000000000.00,   NULL,              NULL),
+    (true,  'c1', 'c',  'then', 0, 'approval',    'cfo',        NULL, NULL,            NULL,              NULL),
+    (true,  'c2', 'c',  'then', 1, 'notify',      NULL,         NULL, NULL,            'Audit Committee', 'Email'),
+    (true,  'd',  NULL, NULL,   3, 'approval',    'compliance', NULL, NULL,            NULL,              NULL),
+    (false, 'h',  NULL, NULL,   0, 'condition',   NULL,         '>',  100000.00,       NULL,              NULL),
+    (false, 'h1', 'h',  'then', 0, 'approval',    'fin_dir',    NULL, NULL,            NULL,              NULL),
+    (false, 'h2', 'h',  'else', 0, 'autoapprove', NULL,         NULL, NULL,            NULL,              NULL),
+    (false, 'hn', NULL, NULL,   1, 'notify',      NULL,         NULL, NULL,            'Tax Team',        'In-app')
 ),
 new_policy AS (
   INSERT INTO approval_policies (tenant_id, name)
-  SELECT m.shard_id, 'Standard approval policy'
+  SELECT m.shard_id, CASE WHEN m.is_firm THEN 'Standard approval policy' ELSE 'Company approval policy' END
   FROM shard_map m
-  WHERE m.is_firm
-    AND NOT EXISTS (SELECT 1 FROM approval_policies p
-                     WHERE p.tenant_id = m.shard_id AND p.name = 'Standard approval policy')
+  WHERE NOT EXISTS (SELECT 1 FROM approval_policies p
+                     WHERE p.tenant_id = m.shard_id
+                       AND p.name = CASE WHEN m.is_firm THEN 'Standard approval policy' ELSE 'Company approval policy' END)
   RETURNING id, tenant_id
 ),
 new_version AS (
@@ -73,7 +78,9 @@ new_version AS (
 ),
 step_row AS (
   SELECT v.id AS version_id, v.tenant_id, d.*, gen_random_uuid() AS step_id
-  FROM new_version v CROSS JOIN step_def d
+  FROM new_version v
+  JOIN shard_map m ON m.shard_id = v.tenant_id
+  JOIN step_def d ON d.is_firm = m.is_firm
 )
 INSERT INTO approval_policy_steps (
     id, tenant_id, version_id, parent_step_id, branch, ord, kind,

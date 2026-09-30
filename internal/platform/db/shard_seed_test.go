@@ -301,7 +301,7 @@ func TestShardFirmPolicyIsAnUnpublishedCopyOfTheShippedFirmPlan(t *testing.T) {
 	}
 	t.Cleanup(appPool.Close)
 	requireNoApprovalRows(t, e.super, demoTenantID, honeywellTenantID)
-	// The boot runs this after Provision; it publishes 1111's plan and must leave the shards alone.
+	// The boot runs this after Provision; it publishes the source plans and must leave the shards alone.
 	if _, err := demopolicy.Seed(context.Background(), appPool, nil); err != nil {
 		t.Fatalf("demopolicy.Seed: %v", err)
 	}
@@ -311,34 +311,38 @@ func TestShardFirmPolicyIsAnUnpublishedCopyOfTheShippedFirmPlan(t *testing.T) {
 	                FROM approval_policy_steps s
 	                LEFT JOIN approval_policy_steps p ON p.id = s.parent_step_id
 	               WHERE s.version_id::text = $1`
-	wantIDs := queryTexts(t, e.super, `SELECT id::text FROM approval_policy_versions WHERE tenant_id = $1 AND is_active`, firmSource)
-	if len(wantIDs) != 1 {
-		t.Fatalf("source firm tenant has %d active versions after demopolicy.Seed, want 1", len(wantIDs))
+	groups := []struct {
+		label, source, policy string
+		shards                []shardTenant
+	}{
+		{"firm", firmSource, "Standard approval policy", firmShards},
+		{"in-house", inhouseSource, "Company approval policy", inhouseShards},
 	}
-	want := queryRows(t, e.super, tree, wantIDs[0])
-	if len(want) == 0 {
-		t.Fatal("source firm active version has no steps, the tree comparison is vacuous")
-	}
+	for _, g := range groups {
+		wantIDs := queryTexts(t, e.super, `SELECT id::text FROM approval_policy_versions WHERE tenant_id = $1 AND is_active`, g.source)
+		if len(wantIDs) != 1 {
+			t.Fatalf("source %s tenant has %d active versions after demopolicy.Seed, want 1", g.label, len(wantIDs))
+		}
+		want := queryRows(t, e.super, tree, wantIDs[0])
+		if len(want) == 0 {
+			t.Fatalf("source %s active version has no steps, the tree comparison is vacuous", g.label)
+		}
 
-	for _, s := range firmShards {
-		pol := queryRows(t, e.super, `SELECT name, scope FROM approval_policies WHERE tenant_id = $1`, s.id)
-		wantPol := queryRows(t, e.super, `SELECT 'Standard approval policy' AS name, 'All invoices' AS scope`)
-		if !slices.Equal(pol, wantPol) {
-			t.Fatalf("firm shard %s policies = %q, want exactly %q", s.id, pol, wantPol)
-		}
-		vers := queryRows(t, e.super, `SELECT sealed, is_active FROM approval_policy_versions WHERE tenant_id = $1`, s.id)
-		wantVers := queryRows(t, e.super, `SELECT false AS sealed, false AS is_active`)
-		if !slices.Equal(vers, wantVers) {
-			t.Fatalf("firm shard %s versions = %q, want exactly one %q", s.id, vers, wantVers)
-		}
-		gotIDs := queryTexts(t, e.super, `SELECT id::text FROM approval_policy_versions WHERE tenant_id = $1`, s.id)
-		if got := queryRows(t, e.super, tree, gotIDs[0]); !slices.Equal(got, want) {
-			t.Errorf("firm shard %s step tree differs from 1111's\n got: %q\nwant: %q", s.id, got, want)
-		}
-	}
-	for _, s := range inhouseShards {
-		if n := mustCount(t, e.super, `SELECT count(*) FROM approval_policies WHERE tenant_id = $1`, s.id); n != 0 {
-			t.Errorf("in-house shard %s has %d policies, want 0", s.id, n)
+		for _, s := range g.shards {
+			pol := queryRows(t, e.super, `SELECT name, scope FROM approval_policies WHERE tenant_id = $1`, s.id)
+			wantPol := queryRows(t, e.super, `SELECT $1::text AS name, 'All invoices' AS scope`, g.policy)
+			if !slices.Equal(pol, wantPol) {
+				t.Fatalf("%s shard %s policies = %q, want exactly %q", g.label, s.id, pol, wantPol)
+			}
+			vers := queryRows(t, e.super, `SELECT sealed, is_active FROM approval_policy_versions WHERE tenant_id = $1`, s.id)
+			wantVers := queryRows(t, e.super, `SELECT false AS sealed, false AS is_active`)
+			if !slices.Equal(vers, wantVers) {
+				t.Fatalf("%s shard %s versions = %q, want exactly one %q", g.label, s.id, vers, wantVers)
+			}
+			gotIDs := queryTexts(t, e.super, `SELECT id::text FROM approval_policy_versions WHERE tenant_id = $1`, s.id)
+			if got := queryRows(t, e.super, tree, gotIDs[0]); !slices.Equal(got, want) {
+				t.Errorf("%s shard %s step tree differs from its source's\n got: %q\nwant: %q", g.label, s.id, got, want)
+			}
 		}
 	}
 }

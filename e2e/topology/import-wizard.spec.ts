@@ -89,7 +89,7 @@ import {
   type ExtractionRegion,
   type Persona,
 } from '../api/client'
-import { ensureFirmPolicyActive } from '../api/contract-helpers'
+import { ensureFirmPolicyActive, ensureInhousePolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertFillsColumn, assertPageDoesNotScrollSideways, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
@@ -180,6 +180,7 @@ const PERSONAS: { A: Persona; B: Persona } = {
 test.beforeAll(async () => {
   expect(test.info().project.name, 'import-wizard.spec.ts belongs to the import-wizard shard').toBe('import-wizard')
   await ensureFirmPolicyActive(await login(PERSONAS.A))
+  await ensureInhousePolicyActive(await login(PERSONAS.B))
 })
 
 async function signInPersona(page: Page, param: string): Promise<void> {

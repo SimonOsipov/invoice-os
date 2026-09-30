@@ -1,7 +1,7 @@
 // QA Mode B adversarial coverage for M5-06-05/06 (task-247/248), added on top of the
 // RED-authored AC tests in sweep_test.go / sweeper_test.go. These target properties the
 // architect's Test Specs table names but does not fully exercise: that a single poisoned
-// tenant's per-tenant rollback (sweep.go's `if err != nil { log }` continue-on-error path,
+// tenant's per-tenant rollback (sweep.go's continue-on-error path,
 // SweepOnce comment lines 158-162) can never starve every OTHER tenant in the same sweep —
 // TestRLS_SweepReArmFailureRollsBack only ever proves rollback for ONE tenant in isolation,
 // never alongside a healthy sibling in the SAME SweepOnce call — plus Sweeper lifecycle edge
@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -59,8 +60,16 @@ func TestRLS_SweepPoisonTenantDoesNotStarveOthers(t *testing.T) {
 		return nil
 	}
 
-	if err := r.SweepOnce(ctx); err != nil {
-		t.Logf("SweepOnce returned: %v (a per-tenant failure need not fail the whole sweep)", err)
+	// The error names the failed tenant and only that one.
+	err := r.SweepOnce(ctx)
+	if !errors.Is(err, errSentinel) {
+		t.Fatalf("SweepOnce = %v, want an error wrapping the sentinel", err)
+	}
+	if !strings.Contains(err.Error(), tenantA) {
+		t.Errorf("error %q does not name the failed tenant %s", err, tenantA)
+	}
+	if strings.Contains(err.Error(), tenantB) {
+		t.Errorf("error %q names the healthy tenant %s", err, tenantB)
 	}
 
 	// Tenant A: poisoned — must roll back completely.
@@ -90,7 +99,7 @@ func TestRLS_SweepPoisonTenantDoesNotStarveOthers(t *testing.T) {
 
 // Stop called with no prior Start (s.cancel/s.done both nil) must be a safe no-op — not a
 // nil-pointer panic, not a deadlock waiting on a channel that was never created. Sweeper.Stop
-// already special-cases this (sweeper.go:72-74); this proves the contract, not just reads it.
+// already special-cases this; this proves the contract, not just reads it.
 func TestSweeperStopBeforeStartIsNoop(t *testing.T) {
 	s := &Sweeper{Interval: time.Hour, sweepFn: func(context.Context) error { return nil }}
 

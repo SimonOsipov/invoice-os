@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -43,9 +42,11 @@ import (
 )
 
 func main() {
+	defer platform.ReportBootPanic()
+
 	app, err := platform.New("submission")
 	if err != nil {
-		log.Fatalf("submission: startup: %v", err)
+		platform.Fatal(slog.Default(), "submission: startup: %v", err)
 	}
 
 	ctx := context.Background()
@@ -57,11 +58,11 @@ func main() {
 	if dsn == "" {
 		// pgx would otherwise build a config from ambient libpq env/defaults for an empty
 		// DSN — fail fast so this service can only ever connect as its configured app role.
-		log.Fatal("submission: DATABASE_URL is required")
+		platform.Fatal(app.Logger, "submission: DATABASE_URL is required")
 	}
 	pool, err := db.NewPool(ctx, dsn)
 	if err != nil {
-		log.Fatalf("submission: db pool: %v", err)
+		platform.Fatal(app.Logger, "submission: db pool: %v", err)
 	}
 	defer pool.Close()
 
@@ -74,11 +75,11 @@ func main() {
 	// (TestSubmissionMain_FatalOnDocumentConfigError).
 	docCfg, err := document.ConfigFromEnv()
 	if err != nil {
-		log.Fatalf("submission: document config: %v", err)
+		platform.Fatal(app.Logger, "submission: document config: %v", err)
 	}
 	docObjects, err := document.NewS3Store(docCfg, nil)
 	if err != nil {
-		log.Fatalf("submission: document object store: %v", err)
+		platform.Fatal(app.Logger, "submission: document object store: %v", err)
 	}
 
 	// M5-02-04: resolve the configured adapter against the fail-closed production
@@ -91,7 +92,7 @@ func main() {
 	// flips the adapter on a fleet, the worst time to discover a typo.
 	mockCfg, err := submission.MockConfigFromEnv()
 	if err != nil {
-		log.Fatalf("submission: adapter config: %v", err)
+		platform.Fatal(app.Logger, "submission: adapter config: %v", err)
 	}
 	reg := submission.NewDefaultRegistry(mockCfg)
 	appAdapter := os.Getenv("APP_ADAPTER")
@@ -101,12 +102,12 @@ func main() {
 	// fleet, dev included.
 	adapter, err := submission.Select(reg, app.Config.Environment, appAdapter)
 	if err != nil {
-		log.Fatalf("submission: adapter: %v", err)
+		platform.Fatal(app.Logger, "submission: adapter: %v", err)
 	}
 
 	rateLimit, err := submission.RateLimitConfigFromEnv()
 	if err != nil {
-		log.Fatalf("submission: rate limit config: %v", err)
+		platform.Fatal(app.Logger, "submission: rate limit config: %v", err)
 	}
 	limiter := submission.NewRateLimiter()
 	invStore := invoice.NewStore(pool)
@@ -137,11 +138,13 @@ func main() {
 	extractorName, doclingURL := os.Getenv("EXTRACTOR"), os.Getenv("DOCLING_URL")
 	extractor, err := selectExtractor(extractorName, doclingURL)
 	if err != nil {
-		log.Fatalf("submission: %v", err)
+		// ceiling: the error quotes the raw DOCLING_URL; internal host, no credentials today
+		platform.Fatal(app.Logger, "submission: %v", err)
 	}
 	textReader, err := selectTextReader(extractorName, doclingURL)
 	if err != nil {
-		log.Fatalf("submission: %v", err)
+		// ceiling: the error quotes the raw DOCLING_URL; internal host, no credentials today
+		platform.Fatal(app.Logger, "submission: %v", err)
 	}
 
 	// ExtractWorker has no Queue field, so unlike sw/pw it needs no backfill. PageStore.Reader
@@ -153,11 +156,11 @@ func main() {
 	// every case and reachable only on the text branch.
 	aiClient, err := ai.FromEnv(app.Logger)
 	if err != nil {
-		log.Fatalf("submission: %v", err)
+		platform.Fatal(app.Logger, "submission: %v", err)
 	}
 	jevClient, err := jev.FromEnv(app.Logger)
 	if err != nil {
-		log.Fatalf("submission: %v", err)
+		platform.Fatal(app.Logger, "submission: %v", err)
 	}
 	ew := newExtractWorker(pool, extractor, newDocumentOpener(docSvc.Open),
 		&extraction.PageStore{Reader: extraction.NewPDFiumReader(), Sink: newPageSink(docObjects)},
@@ -172,7 +175,7 @@ func main() {
 		Logger:  app.Logger,
 	})
 	if err != nil {
-		log.Fatalf("submission: queue: %v", err)
+		platform.Fatal(app.Logger, "submission: queue: %v", err)
 	}
 	sw.Queue, pw.Queue = q, q
 	app.AddBackgroundWorker(q)
@@ -220,7 +223,7 @@ func main() {
 		newDocumentStorer(docSvc.Store), newExtractionEnqueuer(pool, q), app.Logger))
 
 	if err := app.Run(ctx); err != nil {
-		log.Fatalf("submission: %v", err)
+		platform.Fatal(app.Logger, "submission: %v", err)
 	}
 }
 

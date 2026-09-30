@@ -9,7 +9,7 @@
 // HTTP client that has not been told to set one. S2SMiddleware itself has
 // no internal defense against being constructed with an empty token: the
 // doc comment records that cmd/validation/main.go's mustEnv("S2S_TOKEN")
-// (log.Fatalf's at boot on an unset var) is the ONLY thing standing between
+// (platform.Fatal at boot on an unset var) is the ONLY thing standing between
 // "empty token" and "open endpoint" today.
 //
 // This file does not change that design (a QA stage adds tests, not
@@ -55,9 +55,9 @@ func doS2SWithConfiguredToken(t *testing.T, configuredToken, headerToken string)
 // all -- r.Header.Get returns "" for an absent header, and
 // ConstantTimeCompare("", "") == 1. Today this configuration is
 // unreachable in production because cmd/validation/main.go sources the
-// token via mustEnv("S2S_TOKEN"), which log.Fatalf's at boot rather than
+// token via mustEnv("S2S_TOKEN"), which exits through platform.Fatal at boot rather than
 // starting the server with an empty token (verified: cmd/validation/main.go
-// calls mustEnv, and mustEnv log.Fatalf's when os.Getenv returns "").
+// calls mustEnv, and mustEnv exits through platform.Fatal when os.Getenv returns "").
 //
 // If S2SMiddleware's construction site is ever changed to source the token
 // more permissively (e.g. mustEnv swapped for a bare os.Getenv, or a

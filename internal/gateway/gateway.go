@@ -125,6 +125,11 @@ func newReverseProxy(service string, target *url.URL, log *slog.Logger) *httputi
 			}
 			injectIdentity(pr)
 		},
+		// Every upstream is a platform service that reports its own 5xx.
+		ModifyResponse: func(resp *http.Response) error {
+			platform.ReportedElsewhere(resp.Request.Context())
+			return nil
+		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			log.ErrorContext(r.Context(), "gateway upstream unreachable",
 				slog.String("service", service), slog.Any("err", err))

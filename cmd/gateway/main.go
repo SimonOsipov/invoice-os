@@ -8,7 +8,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"log/slog"
 	"maps"
 	"net/http"
@@ -41,9 +40,11 @@ var routedServices = []string{
 var probedServices = []string{"docling", "auth", "reconciliation"}
 
 func main() {
+	defer platform.ReportBootPanic()
+
 	app, err := platform.New("gateway")
 	if err != nil {
-		log.Fatalf("gateway: startup: %v", err)
+		platform.Fatal(slog.Default(), "gateway: startup: %v", err)
 	}
 
 	// Parsed before Provision so a malformed value stops boot before any bootstrap, reset or seed.
@@ -102,7 +103,7 @@ func main() {
 		Logger:       app.Logger,
 	}
 	if err := db.Provision(context.Background(), provisionCfg); err != nil {
-		fatal(app.Logger, "gateway: provision: %v", err)
+		platform.Fatal(app.Logger, "gateway: provision: %v", err)
 	}
 
 	// Publish what the sequence above actually did, off the same predicate it
@@ -126,14 +127,15 @@ func main() {
 		Logger:     app.Logger,
 	})
 	if err != nil {
-		fatal(app.Logger, "gateway: verifier: %v", err)
+		platform.Fatal(app.Logger, "gateway: verifier: %v", err)
 	}
 	// The primary issuer plus the additional set; the deploy gate asserts the count.
 	platform.AuthIssuers = strconv.Itoa(1 + len(additional))
 
 	routed, probed, err := loadUpstreams()
 	if err != nil {
-		fatal(app.Logger, "gateway: upstreams: %v", err)
+		// ceiling: the error quotes a raw <NAME>_URL; internal hosts carry no credentials today
+		platform.Fatal(app.Logger, "gateway: upstreams: %v", err)
 	}
 
 	// CORS layer, composed OUTSIDE the JWT verifier: the app SPA and the gateway are
@@ -182,7 +184,7 @@ func main() {
 	}
 
 	if err := app.Run(context.Background()); err != nil {
-		fatal(app.Logger, "gateway: %v", err)
+		platform.Fatal(app.Logger, "gateway: %v", err)
 	}
 }
 
@@ -196,7 +198,7 @@ const routePrefix = "/api/"
 // serving yet: in a freshly forked PR environment its database container has
 // only just been deployed onto a brand-new volume and is still running initdb.
 // Before this, provisioning gave that container 2.5s (db/bootstrap.go's 5
-// attempts x 500ms) and MigrateUp gave it none at all, then log.Fatal'd — a
+// attempts x 500ms) and MigrateUp gave it none at all, then exited via platform.Fatal — a
 // crash before the listener opens, which Railway can only report as "service
 // unavailable" for the whole healthcheck window.
 //
@@ -289,11 +291,11 @@ func mustParseSiteURL(raw string, log *slog.Logger) *url.URL {
 	}
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		fatal(log, "gateway: AUTH_SITE_URL=%q is not an absolute http(s) URL", raw)
+		platform.Fatal(log, "gateway: AUTH_SITE_URL is not an absolute http(s) URL")
 	}
 	// VerifyHandler appends "/?verified=1" to this value.
 	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
-		fatal(log, "gateway: AUTH_SITE_URL=%q must not carry user info, a query or a fragment", raw)
+		platform.Fatal(log, "gateway: AUTH_SITE_URL must not carry user info, a query or a fragment")
 	}
 	return u
 }
@@ -332,7 +334,7 @@ func loadUpstreams() (routed, probed map[string]*url.URL, err error) {
 func mustParseIssuers(raw string) []auth.TrustedIssuer {
 	issuers, err := auth.ParseTrustedIssuers(raw)
 	if err != nil {
-		fatal(slog.Default(), "gateway: AUTH_ADDITIONAL_ISSUERS: %v", err)
+		platform.Fatal(slog.Default(), "gateway: AUTH_ADDITIONAL_ISSUERS: %v", err)
 	}
 	return issuers
 }
@@ -340,30 +342,10 @@ func mustParseIssuers(raw string) []auth.TrustedIssuer {
 func mustEnv(key string) string {
 	v := os.Getenv(key)
 	if v == "" {
-		// slog.Default(), not app.Logger: mustEnv is called while building the
-		// db.ProvisionConfig / auth.Config literals, i.e. inside argument lists
-		// where app.Logger is not in scope. platform.New has already run
-		// slog.SetDefault by then, so this is the same process logger — and
-		// going through fatal keeps this failure at ERROR like every other boot
-		// failure. See fatal's doc comment for why that matters.
-		fatal(slog.Default(), "gateway: %s is required", key)
+		// slog.Default(): mustEnv runs inside argument lists where app.Logger is not in scope.
+		platform.Fatal(slog.Default(), "gateway: %s is required", key)
 	}
 	return v
-}
-
-// fatal logs a boot failure at ERROR and exits non-zero.
-//
-// It exists because log.Fatalf does NOT do that here. platform.New calls
-// slog.SetDefault (internal/platform/server.go), which routes the standard log
-// package through slog at INFO — so every boot failure this binary reported was
-// emitted as {"level":"INFO"}, and would have been emitted NOWHERE AT ALL under
-// LOG_LEVEL=warn or error. A gateway that crash-loops before its listener opens
-// is invisible to Railway except as "service unavailable", so the boot log is
-// the only diagnostic there is; it must not be filterable by log level or
-// mislabelled as routine.
-func fatal(logger *slog.Logger, format string, args ...any) {
-	logger.Error(fmt.Sprintf(format, args...))
-	os.Exit(1)
 }
 
 // resolveRolePassword resolves one role's password, preferring newName

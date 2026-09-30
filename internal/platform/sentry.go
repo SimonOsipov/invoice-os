@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -16,7 +17,8 @@ func initSentry(cfg Config) error {
 	}
 	if err := sentry.Init(sentry.ClientOptions{
 		Dsn:         cfg.SentryDSN,
-		Environment: cfg.Environment,
+		Environment: cfg.SentryEnvironment,
+		Release:     cfg.Release,
 		ServerName:  cfg.Service,
 		// Client hooks cover every capture path; initSentry is the only sentry.Init.
 		BeforeSend:            scrubEvent,
@@ -37,8 +39,7 @@ func SentryState() string {
 	return "off"
 }
 
-// flushSentry flushes buffered events; called during graceful shutdown. A
-// no-op when Sentry is disabled.
+// flushSentry flushes buffered events. A no-op when Sentry is disabled.
 func flushSentry(timeout time.Duration) {
 	sentry.Flush(timeout)
 }
@@ -62,10 +63,12 @@ func taggedHub(ctx context.Context) *sentry.Hub {
 	return hub
 }
 
-// capturePanic reports a recovered panic to Sentry. A no-op when disabled.
-func capturePanic(ctx context.Context, rec any) {
-	if hub := taggedHub(ctx); hub != nil {
-		hub.RecoverWithContext(ctx, rec)
+// capturePanic reports a recovered handler panic with its request; scrubEvent
+// strips the query, body, cookies and non-allowlisted headers. A no-op when disabled.
+func capturePanic(r *http.Request, rec any) {
+	if hub := taggedHub(r.Context()); hub != nil {
+		hub.Scope().SetRequest(r)
+		hub.RecoverWithContext(r.Context(), rec)
 	}
 }
 

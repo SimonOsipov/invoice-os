@@ -5,7 +5,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 
@@ -15,9 +15,11 @@ import (
 )
 
 func main() {
+	defer platform.ReportBootPanic()
+
 	app, err := platform.New("dashboard")
 	if err != nil {
-		log.Fatalf("dashboard: startup: %v", err)
+		platform.Fatal(slog.Default(), "dashboard: startup: %v", err)
 	}
 
 	// The invoice_app (NOBYPASSRLS) connection pool. DATABASE_URL is required — a
@@ -26,7 +28,7 @@ func main() {
 	// DB surfaces via /readyz rather than blocking startup.
 	pool, err := db.NewPool(context.Background(), mustEnv("DATABASE_URL"))
 	if err != nil {
-		log.Fatalf("dashboard: db pool: %v", err)
+		platform.Fatal(app.Logger, "dashboard: db pool: %v", err)
 	}
 	defer pool.Close()
 
@@ -48,14 +50,14 @@ func main() {
 	app.Mux.HandleFunc("GET /v1/rollup", dashboard.RollupHandler(store.Rollup, app.Logger))
 
 	if err := app.Run(context.Background()); err != nil {
-		log.Fatalf("dashboard: %v", err)
+		platform.Fatal(app.Logger, "dashboard: %v", err)
 	}
 }
 
 func mustEnv(key string) string {
 	v := os.Getenv(key)
 	if v == "" {
-		log.Fatalf("dashboard: %s is required", key)
+		platform.Fatal(slog.Default(), "dashboard: %s is required", key)
 	}
 	return v
 }

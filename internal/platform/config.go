@@ -16,12 +16,14 @@ import (
 // service shares this shape; service-specific configuration is layered on top
 // by the owning service.
 type Config struct {
-	Service         string        // logical service name, e.g. "tenancy" (set in code, not env)
-	Environment     string        // deployment environment: development, production, ...
-	Port            int           // HTTP listen port
-	LogLevel        string        // debug, info, warn, error
-	SentryDSN       string        // empty disables Sentry
-	ShutdownTimeout time.Duration // graceful-shutdown grace period
+	Service           string        // logical service name, e.g. "tenancy" (set in code, not env)
+	Environment       string        // deployment environment: development, production, ...
+	SentryEnvironment string        // Sentry's environment label
+	Release           string        // Sentry release
+	Port              int           // HTTP listen port
+	LogLevel          string        // debug, info, warn, error
+	SentryDSN         string        // empty disables Sentry
+	ShutdownTimeout   time.Duration // graceful-shutdown grace period
 }
 
 // LoadConfig reads configuration from the environment, applying defaults. The
@@ -39,14 +41,31 @@ func LoadConfig(service string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	environment := envString("ENVIRONMENT", "development")
 	return Config{
-		Service:         service,
-		Environment:     envString("ENVIRONMENT", "development"),
-		Port:            port,
-		LogLevel:        envString("LOG_LEVEL", "info"),
-		SentryDSN:       envString("SENTRY_DSN", ""),
-		ShutdownTimeout: shutdown,
+		Service:     service,
+		Environment: environment,
+		// Production runs ENVIRONMENT=development, so only Sentry's label follows Railway.
+		SentryEnvironment: envString("RAILWAY_ENVIRONMENT_NAME", environment),
+		Release:           releaseName(BuildSHA, os.Getenv("RAILWAY_GIT_COMMIT_SHA")),
+		Port:              port,
+		LogLevel:          envString("LOG_LEVEL", "info"),
+		SentryDSN:         envString("SENTRY_DSN", ""),
+		ShutdownTimeout:   shutdown,
 	}, nil
+}
+
+// releaseName is the Sentry release for a build. The "unstamped" prefix keeps a
+// Railway rebuild apart from the CI build of the same commit.
+func releaseName(buildSHA, railwaySHA string) string {
+	switch {
+	case buildSHA != "" && buildSHA != "dev":
+		return buildSHA
+	case railwaySHA != "":
+		return "unstamped-" + railwaySHA
+	default:
+		return "unstamped"
+	}
 }
 
 func envString(key, def string) string {

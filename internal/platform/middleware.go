@@ -60,7 +60,11 @@ func recoveryMiddleware(logger *slog.Logger) middleware {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
 				if rec := recover(); rec != nil {
-					capturePanic(r.Context(), rec)
+					// net/http aborts the connection silently for this value; a gone client is not a failure.
+					if rec == http.ErrAbortHandler {
+						panic(rec)
+					}
+					capturePanic(r, rec)
 					logger.ErrorContext(r.Context(), "panic recovered",
 						slog.Any("panic", rec),
 						slog.String("stack", string(debug.Stack())),
@@ -95,7 +99,7 @@ func requestLogMiddleware(logger *slog.Logger) middleware {
 	}
 }
 
-// statusRecorder captures the response status code for request logging.
+// statusRecorder captures the response status code.
 type statusRecorder struct {
 	http.ResponseWriter
 	status      int
@@ -103,7 +107,8 @@ type statusRecorder struct {
 }
 
 func (r *statusRecorder) WriteHeader(code int) {
-	if !r.wroteHeader {
+	// A 1xx is informational; the final status follows it.
+	if !r.wroteHeader && (code < 100 || code > 199) {
 		r.status = code
 		r.wroteHeader = true
 	}

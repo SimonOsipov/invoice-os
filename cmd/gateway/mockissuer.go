@@ -22,7 +22,7 @@ func mockIssuerRoutes(environment, flag string, withCORS func(http.Handler) http
 	}
 	issuer, err := auth.NewMockIssuer(mustEnv("AUTH_ISSUER"))
 	if err != nil {
-		fatal(logger, "gateway: mock issuer: %v", err)
+		platform.Fatal(logger, "gateway: mock issuer: %v", err)
 	}
 	// Read raw rather than off app.Config, which substitutes a literal default for
 	// an unset value — that would classify a local or CI run as a real deployment.

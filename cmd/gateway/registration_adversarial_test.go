@@ -95,6 +95,10 @@ func TestMustParseSiteURLFatalsOnAMalformedValue(t *testing.T) {
 			if !strings.Contains(out, `"level":"ERROR"`) || !strings.Contains(out, "AUTH_SITE_URL") {
 				t.Errorf("log %q does not name AUTH_SITE_URL at ERROR", out)
 			}
+			// The log line reaches Sentry too; ScrubText has no rule for URL user info.
+			if strings.Contains(out, raw) || strings.Contains(raw, "pw@") && strings.Contains(out, "pw") {
+				t.Errorf("log %q carries the raw AUTH_SITE_URL value %q", out, raw)
+			}
 		})
 	}
 }

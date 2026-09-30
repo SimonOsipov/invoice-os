@@ -9,6 +9,7 @@ package reconciliation
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -158,8 +159,8 @@ type Reconciler struct {
 // A per-tenant tx failure (Scan error, ReArmPoll error, audit-write error, or an afterHeal
 // sentinel) rolls back that tenant's tx alone and is logged — it does NOT abort the sweep;
 // SweepOnce moves on to the next tenant so one bad tenant can never starve every other
-// tenant's reconciliation. SweepOnce itself returns nil unless tenant enumeration fails
-// (there is nothing left to compose per-tenant errors into).
+// tenant's reconciliation. It returns the joined per-tenant failures, or the enumeration
+// error; nil when nothing failed.
 func (r *Reconciler) SweepOnce(ctx context.Context) error {
 	tenantIDs, err := r.enumerateTenants(ctx)
 	if err != nil {
@@ -167,15 +168,19 @@ func (r *Reconciler) SweepOnce(ctx context.Context) error {
 	}
 
 	th := r.Cfg.thresholds()
+	var failures []error
 	for _, tenantID := range tenantIDs {
 		if err := db.WithinTenantTx(ctx, r.AppPool, tenantID, func(tx pgx.Tx) error {
 			return r.sweepTenant(ctx, tx, tenantID, th)
-		}); err != nil && r.Logger != nil {
-			r.Logger.ErrorContext(ctx, "reconciliation: tenant sweep failed",
-				"tenant_id", tenantID, "error", err)
+		}); err != nil {
+			if r.Logger != nil {
+				r.Logger.ErrorContext(ctx, "reconciliation: tenant sweep failed",
+					"tenant_id", tenantID, "error", err)
+			}
+			failures = append(failures, fmt.Errorf("reconciliation: tenant %s: %w", tenantID, err))
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 // enumerateTenants lists every tenant id via ReaderPool (invoice_tenant_reader, no

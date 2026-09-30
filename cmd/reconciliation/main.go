@@ -8,7 +8,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"os"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform"
@@ -18,9 +18,11 @@ import (
 )
 
 func main() {
+	defer platform.ReportBootPanic()
+
 	app, err := platform.New("reconciliation")
 	if err != nil {
-		log.Fatalf("reconciliation: startup: %v", err)
+		platform.Fatal(slog.Default(), "reconciliation: startup: %v", err)
 	}
 
 	ctx := context.Background()
@@ -32,11 +34,11 @@ func main() {
 	if appDSN == "" {
 		// pgx would otherwise build a config from ambient libpq env/defaults for an empty
 		// DSN — fail fast so this service can only ever connect as its configured app role.
-		log.Fatal("reconciliation: DATABASE_URL is required")
+		platform.Fatal(app.Logger, "reconciliation: DATABASE_URL is required")
 	}
 	appPool, err := db.NewPool(ctx, appDSN)
 	if err != nil {
-		log.Fatalf("reconciliation: app db pool: %v", err)
+		platform.Fatal(app.Logger, "reconciliation: app db pool: %v", err)
 	}
 	defer appPool.Close()
 
@@ -46,11 +48,11 @@ func main() {
 	// unconfigured reader DSN is a boot-time failure, not a degraded sweep.
 	readerDSN := os.Getenv("DATABASE_READER_URL")
 	if readerDSN == "" {
-		log.Fatal("reconciliation: DATABASE_READER_URL is required")
+		platform.Fatal(app.Logger, "reconciliation: DATABASE_READER_URL is required")
 	}
 	readerPool, err := db.NewPool(ctx, readerDSN)
 	if err != nil {
-		log.Fatalf("reconciliation: reader db pool: %v", err)
+		platform.Fatal(app.Logger, "reconciliation: reader db pool: %v", err)
 	}
 	defer readerPool.Close()
 
@@ -66,14 +68,14 @@ func main() {
 	// for working clients only -- internal/platform/queue/queue.go's own doc comment).
 	q, err := queue.New(appPool, queue.Config{})
 	if err != nil {
-		log.Fatalf("reconciliation: queue: %v", err)
+		platform.Fatal(app.Logger, "reconciliation: queue: %v", err)
 	}
 
 	// Malformed RECONCILE_* is a fatal boot error, mirroring submission.MockConfigFromEnv /
 	// RateLimitConfigFromEnv's env-edge pattern.
 	cfg, err := reconciliation.ConfigFromEnv()
 	if err != nil {
-		log.Fatalf("reconciliation: config: %v", err)
+		platform.Fatal(app.Logger, "reconciliation: config: %v", err)
 	}
 
 	rec := &reconciliation.Reconciler{
@@ -89,6 +91,6 @@ func main() {
 	app.AddBackgroundWorker(reconciliation.NewSweeper(cfg.Interval, rec.SweepOnce))
 
 	if err := app.Run(ctx); err != nil {
-		log.Fatalf("reconciliation: %v", err)
+		platform.Fatal(app.Logger, "reconciliation: %v", err)
 	}
 }

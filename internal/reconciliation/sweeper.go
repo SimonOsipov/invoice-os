@@ -59,16 +59,42 @@ func (s *Sweeper) Start(ctx context.Context) error {
 		defer close(s.done)
 		ticker := time.NewTicker(s.Interval)
 		defer ticker.Stop()
+		// ceiling: reports the first failure of a run only; re-arm on a timer if a resolved issue hides a live failure
+		failing := false
 		for {
 			select {
 			case <-runCtx.Done():
 				return
 			case <-ticker.C:
-				_ = s.sweepFn(runCtx)
+				failing = s.runSweep(runCtx, failing)
 			}
 		}
 	}()
 	return nil
+}
+
+// runSweep runs one sweep and returns the next failing state. It reports only the
+// transition into failure; a sweep ended by shutdown changes nothing.
+func (s *Sweeper) runSweep(ctx context.Context, failing bool) (next bool) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			if !failing {
+				platform.CapturePanic(ctx, rec)
+			}
+			next = true
+		}
+	}()
+	err := s.sweepFn(ctx)
+	switch {
+	case err == nil:
+		return false
+	case ctx.Err() != nil:
+		return failing
+	}
+	if !failing {
+		platform.CaptureError(ctx, err)
+	}
+	return true
 }
 
 // Stop halts the ticker loop: no further tick starts a new sweepFn call once Stop

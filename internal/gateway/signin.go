@@ -72,6 +72,7 @@ func SignInHandler(authURL *url.URL, client *http.Client, store *HandoffStore, t
 			if !ok {
 				throttle.Refund(in.Email)
 				log.WarnContext(r.Context(), "sign-in: hand-off store full")
+				// ceiling: store-full 503 opens one event per request; answer 429 if a flood ever burns the quota
 				writeError(w, http.StatusServiceUnavailable, "sign-in is unavailable")
 				return
 			}

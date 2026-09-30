@@ -168,7 +168,7 @@ it doubles as the migrator. No context service is granted the migrator URL.
 > against `DATABASE_MIGRATION_URL`) **synchronously in `main`, before `app.Run` opens the
 > listener**. `/healthz` is always-200 liveness, so it can only answer *after* migration
 > returns — that is the "migrated before healthy" guarantee, enforced by process order
-> rather than a probe. A migration error is fatal (`log.Fatal`), so the deploy never goes
+> rather than a probe. A migration error is fatal (`platform.Fatal`), so the deploy never goes
 > healthy. The CI ordering lives in `.github/workflows/dev-env.yml` (the `preview-backend.yml`
 > name above is retired — dev-env.yml superseded it at M2-14): deploy the
 > gateway → poll its public `/healthz` until 200 (the health-gate, which also surfaces a

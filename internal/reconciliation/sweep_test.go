@@ -30,6 +30,7 @@ package reconciliation
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -296,9 +297,8 @@ func TestRLS_SweepReArmFailureRollsBack(t *testing.T) {
 		}
 		return nil
 	}
-	if err := rRB.SweepOnce(ctx); err != nil {
-		t.Logf("SweepOnce (with afterHeal sentinel) returned: %v (a per-tenant failure need not fail "+
-			"the whole sweep)", err)
+	if err := rRB.SweepOnce(ctx); !errors.Is(err, errSentinel) {
+		t.Errorf("SweepOnce (with afterHeal sentinel) = %v, want an error wrapping the sentinel", err)
 	}
 
 	if n := mustCount(t, h.super,
@@ -352,5 +352,94 @@ func TestRLS_SweepReaderSeesAllTenants(t *testing.T) {
 	}
 	if !seen[tenantY] {
 		t.Errorf("reader-pool enumeration missing tenant Y %q", tenantY)
+	}
+}
+
+func TestRLS_SweepOnceReturnsEveryTenantFailure(t *testing.T) {
+	h := requireHarness(t)
+	overdue := time.Now().Add(-1 * time.Hour)
+
+	tenantA, _, invoiceA, cleanupA := rcSeedInvoice(t, h, rcInvoiceOpts{status: "submitted"})
+	defer cleanupA()
+	jobA, cleanupJobA := rcSeedJob(t, h, tenantA, invoiceA, rcJobOpts{state: "pending", attempts: 2, nextPollAt: &overdue})
+	defer cleanupJobA()
+	defer rcCleanupPollJobsFor(h, jobA)
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM audit_log WHERE tenant_id = $1`, tenantA)
+	}()
+
+	tenantB, _, invoiceB, cleanupB := rcSeedInvoice(t, h, rcInvoiceOpts{status: "submitted"})
+	defer cleanupB()
+	jobB, cleanupJobB := rcSeedJob(t, h, tenantB, invoiceB, rcJobOpts{state: "pending", attempts: 2, nextPollAt: &overdue})
+	defer cleanupJobB()
+	defer rcCleanupPollJobsFor(h, jobB)
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM audit_log WHERE tenant_id = $1`, tenantB)
+	}()
+
+	errA := errors.New("reconciliation: probe failure A")
+	errB := errors.New("reconciliation: probe failure B")
+	r := rcReconciler(h)
+	r.afterHeal = func(tenantID string) error {
+		switch tenantID {
+		case tenantA:
+			return errA
+		case tenantB:
+			return errB
+		}
+		return nil
+	}
+
+	err := r.SweepOnce(context.Background())
+	if err == nil {
+		t.Fatal("SweepOnce = nil with two failing tenants, want an error carrying both")
+	}
+	if !errors.Is(err, errA) || !errors.Is(err, errB) {
+		t.Errorf("errors.Is(err, A) = %v, errors.Is(err, B) = %v, want both true: %v",
+			errors.Is(err, errA), errors.Is(err, errB), err)
+	}
+	for _, id := range []string{tenantA, tenantB} {
+		if !strings.Contains(err.Error(), id) {
+			t.Errorf("error text does not name failed tenant %s: %v", id, err)
+		}
+	}
+}
+
+// Guard: the healed poll proves the sweep ran, so a nil return is not a no-op passing.
+func TestRLS_SweepOnceReturnsNilWhenEveryTenantSucceeds(t *testing.T) {
+	h := requireHarness(t)
+	overdue := time.Now().Add(-1 * time.Hour)
+
+	tenantID, _, invoiceID, cleanup := rcSeedInvoice(t, h, rcInvoiceOpts{status: "submitted"})
+	defer cleanup()
+	jobID, cleanupJob := rcSeedJob(t, h, tenantID, invoiceID, rcJobOpts{state: "pending", attempts: 2, nextPollAt: &overdue})
+	defer cleanupJob()
+	defer rcCleanupPollJobsFor(h, jobID)
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM audit_log WHERE tenant_id = $1`, tenantID)
+	}()
+
+	if err := rcReconciler(h).SweepOnce(context.Background()); err != nil {
+		t.Fatalf("SweepOnce = %v, want nil when every tenant succeeds", err)
+	}
+	if n := mustCount(t, h.super,
+		`SELECT count(*) FROM river_job WHERE kind = 'submission_poll' AND args @> jsonb_build_object('submission_job_id', $1::text)`,
+		jobID); n != 1 {
+		t.Errorf("submission_poll river_job rows = %d, want 1 (the sweep must have healed the tenant)", n)
+	}
+}
+
+// The enumeration failure is returned as-is, not swallowed into a per-tenant join.
+func TestRLS_SweepOnceReturnsEnumerationFailure(t *testing.T) {
+	h := requireHarness(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := rcReconciler(h).SweepOnce(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("SweepOnce on a cancelled context = %v, want an error wrapping context.Canceled", err)
+	}
+	if !strings.Contains(err.Error(), "enumerate tenants") {
+		t.Errorf("error %q does not name the failed enumeration step", err)
 	}
 }

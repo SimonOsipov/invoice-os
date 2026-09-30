@@ -15,7 +15,7 @@ func TestNewRegistersHealthAndMiddleware(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	app.handler().ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+	app.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("/healthz status = %d, want 200", rec.Code)
@@ -36,13 +36,13 @@ func TestAppRoutesAndReadiness(t *testing.T) {
 	app.Ready("dep", func(context.Context) error { return nil })
 
 	rec := httptest.NewRecorder()
-	app.handler().ServeHTTP(rec, httptest.NewRequest("GET", "/v1/ping", nil))
+	app.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/v1/ping", nil))
 	if rec.Code != http.StatusNoContent {
 		t.Errorf("/v1/ping status = %d, want 204", rec.Code)
 	}
 
 	rec2 := httptest.NewRecorder()
-	app.handler().ServeHTTP(rec2, httptest.NewRequest("GET", "/readyz", nil))
+	app.Handler().ServeHTTP(rec2, httptest.NewRequest("GET", "/readyz", nil))
 	if rec2.Code != http.StatusOK {
 		t.Errorf("/readyz status = %d, want 200", rec2.Code)
 	}

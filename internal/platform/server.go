@@ -12,6 +12,9 @@ import (
 	"time"
 )
 
+// errShutdown marks a Run error from a graceful shutdown that overran its window.
+var errShutdown = errors.New("platform: graceful shutdown")
+
 // App is a service built on the platform kit: configuration, a logger, and a
 // mux for routes, with the standard middleware chain, health endpoints, and
 // Sentry wiring applied for free. A consumer registers routes on Mux and calls
@@ -19,11 +22,11 @@ import (
 //
 //	app, err := platform.New("tenancy")
 //	if err != nil {
-//		log.Fatal(err)
+//		platform.Fatal(slog.Default(), "tenancy: %v", err)
 //	}
 //	app.Mux.HandleFunc("GET /v1/ping", pingHandler)
 //	if err := app.Run(context.Background()); err != nil {
-//		log.Fatal(err)
+//		platform.Fatal(app.Logger, "tenancy: %v", err)
 //	}
 type App struct {
 	Config Config
@@ -63,17 +66,19 @@ func (a *App) Ready(name string, check ReadyCheck) {
 	a.readiness.add(name, check)
 }
 
-// handler wraps the mux with the standard middleware chain (outermost first):
+// Handler wraps the mux with the standard middleware chain (outermost first):
 // request-id, tenant-id and identity run before recovery so a recovered panic is
 // logged and reported with the request and tenant ids, and so tenant-scoped handlers
-// see the verified caller the gateway injected.
-func (a *App) handler() http.Handler {
+// see the verified caller the gateway injected. serverError is innermost so it
+// reads the mux's matched pattern.
+func (a *App) Handler() http.Handler {
 	return chain(a.Mux,
 		requestIDMiddleware,
 		tenantIDMiddleware,
 		identityMiddleware,
 		recoveryMiddleware(a.Logger),
 		requestLogMiddleware(a.Logger),
+		serverErrorMiddleware,
 	)
 }
 
@@ -103,7 +108,7 @@ func (a *App) Run(ctx context.Context) error {
 
 	srv := &http.Server{
 		Addr:              ":" + strconv.Itoa(a.Config.Port),
-		Handler:           a.handler(),
+		Handler:           a.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -137,7 +142,7 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	flushSentry(2 * time.Second)
 	if shutdownErr != nil {
-		return fmt.Errorf("platform: graceful shutdown: %w", shutdownErr)
+		return fmt.Errorf("%w: %w", errShutdown, shutdownErr)
 	}
 	a.Logger.Info("shutdown complete")
 	return nil

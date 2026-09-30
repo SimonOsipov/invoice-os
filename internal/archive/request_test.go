@@ -161,8 +161,7 @@ func TestBundleFilename_TruncatesLongNameTo48Bytes(t *testing.T) {
 // submission.ScrubHeaders (AC 3/8 forbid a copied allowlist; a re-scrub on the way out
 // is what makes AC 8 hold regardless of what write time stored, D-7). That pulls
 // internal/submission's own transitive graph -- internal/audit,
-// internal/platform/{auth,db,queue}, river, goose, jwt, testify and friends (measured:
-// `go list -deps ./internal/submission`, 312 packages total). No import cycle exists
+// internal/platform/{auth,db,queue}, river, goose, jwt, testify and friends. No import cycle exists
 // today. A cleaner alternative -- extracting ScrubHeaders into a dependency-free leaf
 // package internal/submission re-exports, so archive imports the leaf instead of the
 // whole graph -- is deliberately NOT done here; flag it as a follow-up if the isolation
@@ -189,6 +188,8 @@ func TestArchivePackage_ImportsOnlyStdlibAndUUID(t *testing.T) {
 		"github.com/sethvargo/go-retry", "github.com/mfridman/interpolate",
 		"go.uber.org/goleak", "go.uber.org/multierr",
 		"golang.org/x/sync", "gopkg.in/yaml.v3",
+		// The queue's River error reporter pulls sentry-go in.
+		"github.com/getsentry/sentry-go", "golang.org/x/sys",
 	}
 	isStdlibOrAllowed := func(imp string) bool {
 		if allowedExact[imp] || imp == selfPath {

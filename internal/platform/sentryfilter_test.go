@@ -39,7 +39,7 @@ const filterTestDSN = "https://public@example.com/1"
 func filteredClient(t *testing.T, tracing bool) *mockTransport {
 	t.Helper()
 	sentry.CurrentHub().BindClient(nil)
-	if err := initSentry(Config{Service: "svc", Environment: "test", SentryDSN: filterTestDSN}); err != nil {
+	if err := initSentry(Config{Service: "svc", Environment: "test", SentryEnvironment: "test", SentryDSN: filterTestDSN}); err != nil {
 		t.Fatalf("initSentry: %v", err)
 	}
 	installed := sentry.CurrentHub().Client()

@@ -1,6 +1,6 @@
 // main_test.go: role-password rename fallback shim tests (M4-22-09/task-168).
 // cmd/gateway/ had no test files before this one (main() itself isn't
-// unit-testable -- it calls log.Fatalf and opens a real listener).
+// unit-testable -- it calls platform.Fatal and opens a real listener).
 // Deliberately does NOT re-author TestBootstrapRejectsEmptyPasswords
 // (internal/platform/db/bootstrap_test.go) or
 // TestGatewayMainPassesRawEnvironmentToProvisioningGuard
@@ -522,15 +522,15 @@ func TestGatewayMainFatalsOnAnUpstreamError(t *testing.T) {
 
 	fatals := 0
 	ast.Inspect(guard.Body, func(n ast.Node) bool {
-		if call, ok := n.(*ast.CallExpr); ok {
-			if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "fatal" {
+		if e, ok := n.(ast.Expr); ok {
+			if _, ok := isCallTo(e, "platform", "Fatal"); ok {
 				fatals++
 			}
 		}
 		return true
 	})
 	if fatals != 1 {
-		t.Errorf("%s: the `%s != nil` guard calls fatal %d time(s), want 1 -- boot must stop, and it must stop at ERROR", path, errName, fatals)
+		t.Errorf("%s: the `%s != nil` guard calls platform.Fatal %d time(s), want 1 -- boot must stop, and it must stop at ERROR", path, errName, fatals)
 	}
 }
 
@@ -825,14 +825,14 @@ func TestGatewayAuthIssuersCountsPrimaryPlusAdditional(t *testing.T) {
 				if _, ok := isCallTo(e, "auth", "ParseTrustedIssuers"); ok {
 					parses++
 				}
-				if _, ok := isCallTo(e, "", "fatal"); ok {
+				if _, ok := isCallTo(e, "platform", "Fatal"); ok {
 					fatals++
 				}
 			}
 			return true
 		})
 		if parses != 1 || fatals != 1 {
-			t.Errorf("mustParseIssuers calls auth.ParseTrustedIssuers %d time(s) and fatal %d time(s), want 1 and 1 -- a malformed AUTH_ADDITIONAL_ISSUERS must stop boot at ERROR", parses, fatals)
+			t.Errorf("mustParseIssuers calls auth.ParseTrustedIssuers %d time(s) and platform.Fatal %d time(s), want 1 and 1 -- a malformed AUTH_ADDITIONAL_ISSUERS must stop boot at ERROR", parses, fatals)
 		}
 	}
 

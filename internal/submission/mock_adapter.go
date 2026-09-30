@@ -117,7 +117,7 @@ type MockConfig struct {
 //   - unset or empty  -> (MockConfig{Latency: mockLatencyDefault}, nil)
 //   - unparseable     -> (MockConfig{}, error naming the env var and the offending value)
 //   - parsed NEGATIVE -> (MockConfig{}, error) -- NET-NEW logic with no precedent to copy.
-//     internal/platform/config.go:71-81's envDuration errors ONLY on a ParseDuration failure and
+//     internal/platform/config.go's envDuration errors ONLY on a ParseDuration failure and
 //     time.ParseDuration("-1s") returns (-1s, nil), so "mirrors envDuration" is NOT license to
 //     skip this guard. It is written `< 0`, never `<= 0`: an explicitly configured "0s" is
 //     legitimate (it is what CI sets) and returns (MockConfig{Latency: 0}, nil).
@@ -125,7 +125,7 @@ type MockConfig struct {
 // Both error paths return the ZERO MockConfig, never the default: handing back a usable value
 // alongside an error invites a caller that ignores the error. The negative branch carries no %w
 // (there is no underlying error) and no exported sentinel (nothing branches on it -- the only
-// caller, cmd/submission, log.Fatalf's).
+// caller, cmd/submission, exits through platform.Fatal).
 func MockConfigFromEnv() (MockConfig, error) {
 	raw := os.Getenv(mockLatencyEnv)
 	if raw == "" {

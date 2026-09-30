@@ -10,8 +10,6 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -33,9 +31,11 @@ import (
 )
 
 func main() {
+	defer platform.ReportBootPanic()
+
 	app, err := platform.New("invoice")
 	if err != nil {
-		log.Fatalf("invoice: startup: %v", err)
+		platform.Fatal(slog.Default(), "invoice: startup: %v", err)
 	}
 
 	// The invoice_app (NOBYPASSRLS) connection pool. DATABASE_URL is required — an
@@ -44,7 +44,7 @@ func main() {
 	// DB surfaces via /readyz rather than blocking startup.
 	pool, err := db.NewPool(context.Background(), mustEnv("DATABASE_URL"))
 	if err != nil {
-		log.Fatalf("invoice: db pool: %v", err)
+		platform.Fatal(app.Logger, "invoice: db pool: %v", err)
 	}
 	defer pool.Close()
 
@@ -57,11 +57,11 @@ func main() {
 	// first upload.
 	docCfg, err := document.ConfigFromEnv()
 	if err != nil {
-		fatal(app.Logger, "invoice: %v", err)
+		platform.Fatal(app.Logger, "invoice: %v", err)
 	}
 	docObjects, err := document.NewS3Store(docCfg, nil)
 	if err != nil {
-		fatal(app.Logger, "invoice: document store: %v", err)
+		platform.Fatal(app.Logger, "invoice: document store: %v", err)
 	}
 
 	// Stub endpoint from the M2-04 skeleton — kept as the trivial reachability probe
@@ -122,7 +122,7 @@ func main() {
 	// subpaths under its generic /api/ prefix, so this route needs no gateway
 	// change.
 	//
-	// Both vars are REQUIRED ([env-wiring]) -- mustEnv log.Fatalf's on an unset
+	// Both vars are REQUIRED ([env-wiring]) -- mustEnv's platform.Fatal exits on an unset
 	// one, so an invoice service that cannot reach 04 fails fast at boot rather
 	// than serving a surface that silently cannot validate. This service needs
 	// its OWN copy of each: Railway vars are per-service, and the gateway's
@@ -189,16 +189,15 @@ func main() {
 	impStore := importer.NewStore(pool)
 	impSvc := importer.NewService(impStore, store, gate)
 	// aiClient is off when OPENROUTER_API_KEY is unset: FromEnv never exits, only an
-	// unparseable AI_FAKE does, through fatal -- see fatal's own doc comment
-	// (TestInvoiceMain_AIFakeFailureUsesFatalNotLogFatalf).
+	// unparseable AI_FAKE does, through platform.Fatal (TestInvoiceMain_AIFakeFailureUsesFatalNotLogFatalf).
 	aiClient, err := ai.FromEnv(app.Logger)
 	if err != nil {
-		fatal(app.Logger, "invoice: ai: %v", err)
+		platform.Fatal(app.Logger, "invoice: ai: %v", err)
 	}
 	// An unset OPENROUTER_API_KEY is off; both FromEnv errors stop the boot.
 	jevClient, err := jev.FromEnv(app.Logger)
 	if err != nil {
-		fatal(app.Logger, "invoice: jev: %v", err)
+		platform.Fatal(app.Logger, "invoice: jev: %v", err)
 	}
 	app.Mux.HandleFunc("POST /v1/imports", importer.CreateHandler(impSvc.Import, docSvc.Open, impStore.SaveMapping, app.Logger))
 	app.Mux.HandleFunc("POST /v1/imports/preview", importer.PreviewHandler(docSvc.Store, app.Logger))
@@ -281,34 +280,20 @@ func main() {
 	// the gateway as /api/invoice/v1/invoices/submissions.
 	q, err := queue.New(pool, queue.Config{})
 	if err != nil {
-		log.Fatalf("invoice: queue: %v", err)
+		platform.Fatal(app.Logger, "invoice: queue: %v", err)
 	}
 	submitter := invoice.NewSubmitter(store, q)
 	app.Mux.HandleFunc("POST /v1/invoices/submissions", invoice.BatchSubmitHandler(submitter.BatchSubmit, store.CallerRole, app.Logger))
 
 	if err := app.Run(context.Background()); err != nil {
-		log.Fatalf("invoice: %v", err)
+		platform.Fatal(app.Logger, "invoice: %v", err)
 	}
-}
-
-// fatal logs a boot failure at ERROR and exits non-zero.
-//
-// It exists because log.Fatalf does NOT do that here: platform.New calls
-// slog.SetDefault (internal/platform/server.go), which routes the standard log
-// package through slog at INFO, so a log.Fatalf boot failure is emitted as
-// {"level":"INFO"} and NOWHERE AT ALL under LOG_LEVEL=warn or error. A
-// fail-closed guard that dies silently leaves an operator with a crash-loop and
-// no cause. Copied from cmd/gateway/main.go; this file's remaining log.Fatalf
-// calls, mustEnv's included, still carry the defect.
-func fatal(logger *slog.Logger, format string, args ...any) {
-	logger.Error(fmt.Sprintf(format, args...))
-	os.Exit(1)
 }
 
 func mustEnv(key string) string {
 	v := os.Getenv(key)
 	if v == "" {
-		log.Fatalf("invoice: %s is required", key)
+		platform.Fatal(slog.Default(), "invoice: %s is required", key)
 	}
 	return v
 }

@@ -125,12 +125,12 @@ export interface RealAccount {
   workspaceName: string
 }
 
-// A fresh GoTrue account with a workspace of its own. Forks auto-confirm, so
-// the account signs in at once; a later sign-in carries the new tenant claim.
-// tenants.kind CHECK values (migrations/20260709153027_tenants_add_kind.sql), as the
-// provision handler accepts them (internal/tenancy/tenancy.go).
+// The tenants.kind values the provision handler accepts.
 export type TenantKind = 'firm' | 'in_house'
 
+// A fresh GoTrue account with a workspace of its own. Forks auto-confirm, so
+// the account signs in at once; a later sign-in carries the new tenant claim.
+// An absent kind stores the column default, 'firm'.
 export async function provisionRealAccount(prefix: string, kind?: TenantKind): Promise<RealAccount> {
   const id = crypto.randomUUID()
   const account = { email: `${prefix}-${id}@example.com`, password: id.slice(0, 16), workspaceName: `Hand-off E2E ${id.slice(0, 8)}` }

@@ -13,7 +13,7 @@ const CODE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ'
 const STATE = 'ZYXWVUTSRQPONMLKJIHGFEDCBAzyxwvutsrqponmlk_'
 const GATEWAY = 'https://gw.test'
 const ME: Me = {
-  tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures' },
+  tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures', kind: 'firm' },
   user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated' },
 }
 const NOW = 1_800_000_000_000
@@ -70,7 +70,7 @@ describe('redeemHandoff adversarial', () => {
 
   it('a /me 200 with no tenant rejects', async () => {
     stubFetch({ status: 200, body: { access_token: LIVE } }, { status: 200, body: { user: ME.user } })
-    await expect(redeemHandoff(GATEWAY, CODE, STATE)).rejects.toBeInstanceOf(TypeError)
+    await expect(redeemHandoff(GATEWAY, CODE, STATE)).rejects.toThrow(/malformed/)
   })
 
   // Pinned, advisory: the gateway always answers a string, so the client does not check it.
@@ -133,7 +133,7 @@ describe('hand-off record parse adversarial', () => {
       ['wrong version', { v: 2 }],
       ['numeric token', { token: 5 }],
       ['string verified', { verified: 'yes' }],
-      ['tenant id null', { me: { ...ME, tenant: { id: null, name: 'x' } } }],
+      ['tenant id null', { me: { ...ME, tenant: { id: null, name: 'x', kind: 'firm' } } }],
       ['me an array', { me: [] }],
     ]
     expect(rows.length).toBeGreaterThan(0)

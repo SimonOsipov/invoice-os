@@ -307,7 +307,8 @@ scope, or `/token` with any other grant) is reachable from outside.
    `{"workspace_name","display_name","kind"?}`. The gateway lets a tenant-less token through
    on this one method and path only. Tenancy creates the tenant and its first active admin
    in one transaction through `public.provision_workspace`
-   ([migrations.md](./migrations.md) §1) and answers 201 in the `GET /v1/me` shape.
+   ([migrations.md](./migrations.md) §1) and answers 201 in the `GET /v1/me` shape. An absent
+   `kind` stores `firm`, the column default.
 6. The next token (a refresh grant or a new sign-in) carries `app_metadata.tenant_id`.
 
 **`POST /auth/register`**, outside `/api/`, no verifier, no CORS wrap, in every build:
@@ -422,6 +423,11 @@ same tab, so a code minted in another browser signs nobody in.
    returns: a newly minted one, because step 6 removed the old. Landing opens
    the modal with "This account has no workspace yet." or "We couldn't open your workspace.
    Sign in again." An unknown `signin` value is stripped and ignored.
+
+**Workspace mode.** A hand-off session takes its mode from `/me` `tenant.kind`: `firm` opens
+the firm workspace, `in_house` the in-house one. A `/me` answer, or a stored hand-off record,
+without a known `kind` fails the redemption (step 7, `signin=failed`) or drops the record. A
+persona session keeps its persona's mode until AUTH-15.
 
 The access token travels only in the exchange and refresh answers and the `Authorization`
 header; the refresh token travels only in the exchange answer, the refresh request and

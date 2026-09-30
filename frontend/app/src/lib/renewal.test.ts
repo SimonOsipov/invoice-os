@@ -11,8 +11,8 @@ const TENANT = '33333333-3333-3333-3333-333333333333'
 const OTHER_TENANT = '44444444-4444-4444-4444-444444444444'
 const SUB = 'd0000000-0000-0000-0000-000000000009'
 const OTHER_SUB = 'd0000000-0000-0000-0000-000000000008'
-const ME: Me = { tenant: { id: TENANT, name: 'Adaeze Ventures' }, user: { id: SUB, role: 'authenticated' } }
-const OTHER_ME: Me = { tenant: { id: OTHER_TENANT, name: 'Other Co' }, user: { id: OTHER_SUB, role: 'authenticated' } }
+const ME: Me = { tenant: { id: TENANT, name: 'Adaeze Ventures', kind: 'firm' }, user: { id: SUB, role: 'authenticated' } }
+const OTHER_ME: Me = { tenant: { id: OTHER_TENANT, name: 'Other Co', kind: 'firm' }, user: { id: OTHER_SUB, role: 'authenticated' } }
 
 // Server times sit far from the local clock: the lifetime is exp − iat, measured from receipt.
 const IAT = 1_700_000_000
@@ -178,6 +178,16 @@ describe('createRenewer', () => {
     // The renewed session is tracked and not due.
     expect(h.renewer.fresh()).toBe(A1)
     expect(h.net.calls).toHaveLength(1)
+  })
+
+  it('a renewal keeps the tenant kind and the mode it names', async () => {
+    const inHouse: Me = { ...ME, tenant: { ...ME.tenant, kind: 'in_house' } }
+    const h = setup({ now: RENEW_AT, tracked: hsession({ me: inHouse }), reply: ok(A1, 'R1') })
+    await expect(Promise.resolve(h.renewer.fresh())).resolves.toBe(A1)
+    expect(h.onRenewed).toHaveBeenCalledTimes(1)
+    const next = h.onRenewed.mock.calls[0]?.[0]
+    expect(next?.persona.mode).toBe('inhouse')
+    expect(next?.me?.tenant.kind).toBe('in_house')
   })
 
   it('concurrent calls share one renewal', async () => {

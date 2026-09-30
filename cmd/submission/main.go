@@ -138,10 +138,12 @@ func main() {
 	extractorName, doclingURL := os.Getenv("EXTRACTOR"), os.Getenv("DOCLING_URL")
 	extractor, err := selectExtractor(extractorName, doclingURL)
 	if err != nil {
+		// ceiling: the error quotes the raw DOCLING_URL; internal host, no credentials today
 		platform.Fatal(app.Logger, "submission: %v", err)
 	}
 	textReader, err := selectTextReader(extractorName, doclingURL)
 	if err != nil {
+		// ceiling: the error quotes the raw DOCLING_URL; internal host, no credentials today
 		platform.Fatal(app.Logger, "submission: %v", err)
 	}
 

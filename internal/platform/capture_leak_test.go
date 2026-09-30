@@ -43,7 +43,7 @@ func leakRequest() *http.Request {
 	return r
 }
 
-// assertAllowlistedHeaders checks the request headers against SENTRY-02's six-name allowlist.
+// assertAllowlistedHeaders checks the request headers against the six-name sentryHeaders allowlist.
 func assertAllowlistedHeaders(t *testing.T, req *sentry.Request) {
 	t.Helper()
 	allowed := map[string]bool{"Accept": true, "Content-Length": true, "Content-Type": true, "Host": true, "User-Agent": true, "X-Request-Id": true}

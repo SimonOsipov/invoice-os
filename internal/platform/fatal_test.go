@@ -546,7 +546,7 @@ func TestFatal_ShutdownSkipFollowsTheSentinelNotTheText(t *testing.T) {
 	in.wantEvents(t, 1)
 }
 
-// Boot errors can carry connection strings; the SENTRY-02 filter must cover this path.
+// Boot errors can carry connection strings; scrubEvent must cover this path.
 func TestFatal_EventHoldsNoConnectionPassword(t *testing.T) {
 	in := newIngest(t)
 	exit, stdout, _ := runChild(t, "secrets", productionEnv(in.dsn())...)

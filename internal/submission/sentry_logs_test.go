@@ -56,8 +56,15 @@ func startStopRiver(t *testing.T, pool *pgxpool.Pool, logger *slog.Logger, waitF
 	t.Helper()
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &sentryLogsWorker{})
+	name := "sentry-logs-" + uuid.NewString()
+	// River registers each queue in river_queue and never removes it.
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), "DELETE FROM river_queue WHERE name = $1", name); err != nil {
+			t.Errorf("delete river_queue row: %v", err)
+		}
+	})
 	q, err := queue.New(pool, queue.Config{
-		Queues:  map[string]river.QueueConfig{"sentry-logs-" + uuid.NewString(): {MaxWorkers: 1}},
+		Queues:  map[string]river.QueueConfig{name: {MaxWorkers: 1}},
 		Workers: workers,
 		Logger:  logger,
 	})

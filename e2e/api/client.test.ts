@@ -27,6 +27,8 @@ const requested: string[] = []
 // calls: url + method, additive to `requested` -- lets AC-7/AC-8 tell a GET /approval
 // apart from a POST /approvals or /auth/login without changing what `requested` holds.
 const calls: { url: string; method: string; body?: unknown }[] = []
+// failLoginTenant: the mock refuses /auth/login for this tenant id.
+let failLoginTenant: string | null = null
 
 // CLOSED_RUN: what the URL-aware mock answers any GET .../approval with -- an
 // already-closed run, so the AC-8 default-transport test can prove decide is never reached.
@@ -45,7 +47,11 @@ vi.mock('@invoice-os/api-client/client', () => ({
     requested.push(url)
     calls.push({ url, method: init?.method ?? 'GET', body: init?.body })
     if (url.endsWith('/auth/login')) {
-      const subject = (init?.body as { subject?: string } | undefined)?.subject
+      const body = init?.body as { subject?: string; tenant_id?: string } | undefined
+      if (failLoginTenant !== null && body?.tenant_id === failLoginTenant) {
+        return Promise.reject(new Error('mint refused'))
+      }
+      const subject = body?.subject
       return Promise.resolve({ access_token: `token-for-${subject}` })
     }
     if (url.includes('/approval')) {
@@ -345,6 +351,10 @@ describe('firmApproverTokens', () => {
   const SHARD_ID = '11111111-1111-1111-1111-00000000e2e1'
   const SHARD_ID_2 = '11111111-1111-1111-1111-00000000e2e2'
   const SHARD_ID_3 = '11111111-1111-1111-1111-00000000e2e3'
+  const SHARD_ID_4 = '11111111-1111-1111-1111-00000000e2e4'
+  const SHARD_ID_5 = '11111111-1111-1111-1111-00000000e2e5'
+  const SHARD_ID_6 = '11111111-1111-1111-1111-00000000e2e6'
+  const TENANT_1111 = '11111111-1111-1111-1111-111111111111'
   const loginsSince = () => calls.filter((c) => c.url.endsWith('/auth/login'))
   const loginBody = (c: { body?: unknown }) => c.body as { subject: string; tenant_id: string }
 
@@ -384,6 +394,47 @@ describe('firmApproverTokens', () => {
     expect(logins).toHaveLength(2)
     expect(logins.map((b) => b.tenant_id)).toEqual([SHARD_ID_2, SHARD_ID_2])
     expect(second).toEqual(first)
+  })
+
+  // Fresh module: a cold 1111 cache whatever ran before.
+  it('with no argument the logins are minted for tenant 1111', async () => {
+    vi.resetModules()
+    const fresh = (await import('./client')) as unknown as { firmApproverTokens: FirmApproverTokens }
+    calls.length = 0
+
+    await fresh.firmApproverTokens()
+
+    const logins = loginsSince().map(loginBody)
+    expect(logins).toHaveLength(2)
+    expect(logins.map((b) => b.tenant_id)).toEqual([TENANT_1111, TENANT_1111])
+  })
+
+  it('a shard call after a warm 1111 cache still sends the shard tenant id', async () => {
+    await firmApproverTokens()
+    calls.length = 0
+
+    await firmApproverTokens(SHARD_ID_4)
+
+    const logins = loginsSince().map(loginBody)
+    expect(logins).toHaveLength(2)
+    expect(logins.map((b) => b.tenant_id)).toEqual([SHARD_ID_4, SHARD_ID_4])
+  })
+
+  it('a refused mint for one tenant does not evict another tenant\'s memo', async () => {
+    await firmApproverTokens()
+    failLoginTenant = SHARD_ID_5
+    try {
+      await expect(firmApproverTokens(SHARD_ID_5)).rejects.toThrow('mint refused')
+    } finally {
+      failLoginTenant = null
+    }
+    calls.length = 0
+
+    await firmApproverTokens()
+    expect(loginsSince()).toHaveLength(0) // 1111 still warm
+
+    await firmApproverTokens(SHARD_ID_6)
+    expect(loginsSince()).toHaveLength(2) // a healthy shard still mints
   })
 })
 

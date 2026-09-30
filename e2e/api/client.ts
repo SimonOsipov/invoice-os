@@ -1119,7 +1119,7 @@ export async function approveUntilClosed(
   return run
 }
 
-// firmApproverTokens(): mints the seeded firm run's two holder tokens once -- ...0004
+// firmApproverTokens(): mints the seeded firm run's two holder tokens -- ...0004
 // (fin_mgr) and ...0005 (compliance). Memoises the in-flight PROMISE, not the resolved
 // value, so two concurrent callers can't double-mint; this is the first module-scope token
 // cache in the api suite (every other site uses a per-file beforeAll), which AC-7 mandates.

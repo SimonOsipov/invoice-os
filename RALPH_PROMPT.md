@@ -44,7 +44,7 @@ Neither path licenses a silent feature cut.
 ```bash
 gh pr checks [PR_NUMBER]
 # CI (ci.yml) rolls up: go, frontend, clean-clone, migrations, docker-canary, rls, queue, audit.
-# dev-env.yml (on a ready PR): await-ci + prepare-env → deploy-gateway (migrator) → health-gate →
+# dev-env.yml (on a ready PR): prepare-env (ci-watch alongside; red CI stops the run) → deploy-gateway (migrator) → health-gate →
 #   deploy-context ×7 + deploy-spas ×3 → fleet-gate → e2e (smoke + api + topology + demo).
 ```
 
@@ -308,6 +308,7 @@ Runs once per story, after `CI` is green. It verifies the assembled feature agai
 3. **Watch the run** to conclusion per the CI Monitoring Protocol.
    - Re-run a red gate whole: `gh run rerun "$RUN_ID"`, never `--failed`. The database resets only when the gateway deploys.
    - A spec this PR changed that passed only on retry fails `e2e`. Fix the spec or the race; do not re-run for luck.
+   - A `cancelled` run is not green. Read `gh run view "$RUN_ID" --json conclusion` and the `E2E gate` check; a red `CI` stops the run.
    Green means: fleet deployed, gateway migrated, DB bootstrapped + demo-purged + seeded, all 8 backends up, smoke + topology E2E passed, including cross-tenant isolation.
 4. **Spawn `product-qa-spec`** to verify **each** original AC against the green run:
    - Quote each AC beside its evidence. Evidence of different behaviour than the quoted text fails that AC.
@@ -339,7 +340,7 @@ Foreground `sleep` is blocked. Never end a turn on a wait you did not start.
 
 1. **A check failed?** `gh run view [RUN_ID] --log 2>&1 | tail -60`, fix in the worktree, commit, push. CI (and `dev-env.yml` on a ready PR) restart on push.
 2. **`CI` green?** → Phase 3.5.
-3. **`dev-env.yml` green?** → Phase 3.5 step 4.
+3. **`dev-env.yml` concluded `success`?** → Phase 3.5 step 4.
 
 Select runs by head commit, never by latest-on-branch:
 ```bash

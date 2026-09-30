@@ -111,7 +111,7 @@ concurrency:
 
 permissions:
   contents: read
-  checks: read   # await-ci reads the CI check-run status on this commit
+  checks: read   # await-ci and ci-watch read the CI check-run status on this commit
 
 env:
   # Stable Railway resource identifiers — see PREREQUISITES #6 above. NOT the
@@ -175,61 +175,54 @@ jobs:
               - 'pnpm-lock.yaml'
               - '.github/workflows/dev-env.yml'
 
-  # 0. CI gate: never deploy red code. On a PR, wait for the required `CI`
-  #    workflow to go GREEN on THIS commit before any deploy job runs.
-  #    workflow_dispatch bypasses this gate (manual force-deploy for live
-  #    debugging); draft PRs and PRs the `changes` job marks not E2E-relevant
-  #    skip it and the deploy chain below, while `E2E gate` still reports.
-  #    Every deploy job is transitively downstream of deploy-gateway, so gating deploy-gateway
-  #    on this one job gates the whole pipeline. Runs in PARALLEL with
-  #    prepare-env below (neither needs the other) to keep wall-clock time
-  #    down — CI can take up to ~20m, environment preparation far less now
-  #    that it creates the environment instead of waiting for one to appear.
+  # A push waits for green CI before any deploy; a PR deploys alongside CI. On a PR, a red CI
+  # makes ci-watch cancel the run, and e2e needs it. workflow_dispatch bypasses both.
   await-ci:
-    name: Await green CI (PR + push; dispatch bypasses)
-    # Push is gated too, not just PRs. ci.yml also runs on `push: branches:
-    # [main]` with no paths filter, so the check always exists on the merge
-    # commit — and a merge is exactly when a red `main` would otherwise reach the
-    # live environment unattended. workflow_dispatch still bypasses: it is the
-    # deliberate manual override.
-    #
-    # KNOWN EDGE, accepted rather than engineered around: ci.yml sets
-    # cancel-in-progress on `github.ref`, so back-to-back merges cancel the
-    # earlier commit's CI run. This job then reads conclusion `cancelled` and
-    # fails, leaving a red — but SUPERSEDED — dev-env run. The later merge's own
-    # run deploys normally, so the live environment still converges on the last
-    # commit merged. Treating `cancelled` as "skip quietly" would be strictly
-    # worse: it is indistinguishable from a human cancelling a deploy on purpose.
+    name: Await green CI (push)
     needs: [changes]
-    if: >-
-      ( ( github.event_name == 'pull_request' && github.event.pull_request.draft == false ) ||
-        github.event_name == 'push' ) &&
-      needs.changes.outputs.e2e == 'true'
+    if: github.event_name == 'push' && needs.changes.outputs.e2e == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
+      - uses: actions/checkout@v4
       - name: Wait for the CI check to succeed on this commit
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          # On push there is no pull_request context; github.sha IS the merge commit.
-          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          echo "Gating deploy on the 'CI' check for $SHA ..."
-          for _ in $(seq 1 80); do   # ~20 min (80 × 15s)
-            j=$(gh api "repos/$REPO/commits/$SHA/check-runs?check_name=CI&per_page=100" 2>/dev/null || echo '{}')
-            status=$(echo "$j" | jq -r '[.check_runs[]?] | sort_by(.started_at // "") | last | .status // "none"')
-            concl=$(echo "$j"  | jq -r '[.check_runs[]?] | sort_by(.started_at // "") | last | .conclusion // "none"')
-            echo "  CI: status=$status conclusion=$concl"
-            if [ "$concl" = "success" ]; then echo "CI is green — deploying."; exit 0; fi
-            if [ "$status" = "completed" ] && [ "$concl" != "none" ] && [ "$concl" != "success" ]; then
-              echo "::error::CI concluded '$concl' for $SHA — refusing to deploy red code."
-              exit 1
-            fi
-            sleep 15
-          done
-          echo "::error::Timed out after ~20m waiting for the CI check on $SHA."
-          exit 1
+          SHA: ${{ github.sha }}
+        run: bash scripts/ci/await-ci.sh "$SHA"
+
+  ci-watch:
+    name: Watch CI (PR; red CI stops the run)
+    needs: [changes]
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false &&
+      needs.changes.outputs.e2e == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      checks: read
+      actions: write
+    outputs:
+      conclusion: ${{ steps.wait.outputs.conclusion }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: wait
+        name: Wait for the CI check to succeed on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash scripts/ci/await-ci.sh "$SHA"
+      - name: Stop this run on a red CI
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: gh run cancel "$RUN_ID" --repo "$REPO"
 
   # 0.5. Prepare the target Railway environment (M4-23-03). On a PR we now
   #      CREATE the environment ourselves rather than waiting for Railway to
@@ -581,16 +574,15 @@ jobs:
   deploy-gateway:
     name: Deploy gateway → ${{ needs.prepare-env.outputs.environment_label || needs.prepare-env.outputs.environment }}
     needs: [await-ci, prepare-env]
-    # push is gated on await-ci exactly like a PR — a red `main` must not reach
-    # the live environment. Only workflow_dispatch bypasses.
+    # Push waits on await-ci, so a red `main` never deploys; a PR needs only prepare-env.
+    # A PR run stops when ci-watch cancels it; push and dispatch keep always() semantics.
     if: >-
-      always() &&
+      ( !cancelled() || github.event_name != 'pull_request' ) &&
       needs.prepare-env.result == 'success' &&
       ( github.event_name == 'workflow_dispatch' ||
         ( github.event_name == 'push' && needs.await-ci.result == 'success' ) ||
         ( github.event_name == 'pull_request' &&
-          github.event.pull_request.draft == false &&
-          needs.await-ci.result == 'success' ) )
+          github.event.pull_request.draft == false ) )
     runs-on: ubuntu-latest
     container: ghcr.io/railwayapp/cli:4.66.0
     # e2e compares this with its own attempt: the database reset runs only when this job runs.
@@ -637,11 +629,9 @@ jobs:
   health-gate:
     name: Gate on gateway /healthz (schema migrated)
     needs: [deploy-gateway, prepare-env]
-    # always() breaks the transitive skip-cascade so a workflow_dispatch run (where
-    # await-ci is skipped) still verifies the fleet — without it, this job and every
-    # job downstream inherit await-ci's skip even though deploy-gateway ran via its
-    # own always(). Gate on the real dependency result, not the cascade.
-    if: always() && needs.deploy-gateway.result == 'success'
+    # The leading status function stops await-ci's skip (PR, dispatch) from cascading here;
+    # on a PR it is `!cancelled()`, so ci-watch's cancel stops this job.
+    if: ( !cancelled() || github.event_name != 'pull_request' ) && needs.deploy-gateway.result == 'success'
     runs-on: ubuntu-latest
     env:
       GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}
@@ -790,7 +780,7 @@ jobs:
     name: Deploy ${{ matrix.service }} → ${{ needs.prepare-env.outputs.environment_label || needs.prepare-env.outputs.environment }}
     needs: [health-gate, prepare-env]
     # The draft check applies only where `draft` exists; push and dispatch pass.
-    if: always() && needs.health-gate.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: ( !cancelled() || github.event_name != 'pull_request' ) && needs.health-gate.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     container: ghcr.io/railwayapp/cli:4.66.0
     # Matrix outputs combine across legs; only the auth leg sets this one.
@@ -832,7 +822,7 @@ jobs:
     name: Deploy ${{ matrix.service }} → ${{ needs.prepare-env.outputs.environment_label || needs.prepare-env.outputs.environment }}
     needs: [health-gate, prepare-env]
     # The draft check applies only where `draft` exists; push and dispatch pass.
-    if: always() && needs.health-gate.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: ( !cancelled() || github.event_name != 'pull_request' ) && needs.health-gate.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     container: ghcr.io/railwayapp/cli:4.66.0
     strategy:
@@ -868,7 +858,7 @@ jobs:
   fleet-gate:
     name: Fleet /healthz gate (all 10 backends green)
     needs: [deploy-context, prepare-env]
-    if: always() && needs.deploy-context.result == 'success'
+    if: ( !cancelled() || github.event_name != 'pull_request' ) && needs.deploy-context.result == 'success'
     runs-on: ubuntu-latest
     env:
       GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}
@@ -1021,11 +1011,12 @@ jobs:
   #    on the same commit, as the gate for merging it.
   e2e:
     name: E2E (smoke + api + topology)
-    needs: [fleet-gate, deploy-spas, prepare-env, deploy-gateway]
+    needs: [fleet-gate, deploy-spas, prepare-env, deploy-gateway, ci-watch]
     if: >-
-      always() &&
+      !cancelled() &&
       needs.fleet-gate.result == 'success' &&
       needs.deploy-spas.result == 'success' &&
+      needs.ci-watch.result == 'success' &&
       github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -1167,7 +1158,7 @@ jobs:
   # The required merge check: always reports on a PR, so a skipped E2E cannot read as a pass.
   e2e-gate:
     name: E2E gate
-    needs: [changes, e2e]
+    needs: [changes, e2e, ci-watch]
     if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1182,6 +1173,8 @@ jobs:
           E2E_RELEVANT: ${{ needs.changes.outputs.e2e }}
           PR_DRAFT: ${{ github.event.pull_request.draft }}
           E2E_RESULT: ${{ needs.e2e.result }}
+          CI_RESULT: ${{ needs.ci-watch.result }}
+          CI_CONCLUSION: ${{ needs.ci-watch.outputs.conclusion }}
 
   # NOTE: there is still no scale-down job here — teardown is a separate
   # workflow, .github/workflows/dev-env-teardown.yml (M4-23-05), which deletes

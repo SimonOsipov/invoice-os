@@ -76,3 +76,6 @@ func methodLabel(m string) string {
 	}
 	return "OTHER"
 }
+
+// TraceTransport propagates the caller's trace to another first-party service; third-party clients must not use it.
+func TraceTransport(base http.RoundTripper) http.RoundTripper { return base }

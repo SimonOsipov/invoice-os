@@ -241,6 +241,9 @@ type registration struct {
 	Register, Verify http.Handler
 }
 
+// newJWKSClient builds the JWKS fetch client.
+func newJWKSClient() *http.Client { return &http.Client{Timeout: 10 * time.Second} }
+
 // registrationHandlers builds the registration handlers against GoTrue at authURL.
 // A nil siteURL means AUTH_SITE_URL is unset: both routes answer 503.
 func registrationHandlers(authURL, siteURL *url.URL, log *slog.Logger) registration {

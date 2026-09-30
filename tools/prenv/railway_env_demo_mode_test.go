@@ -3,8 +3,8 @@
 // HEAD; T2, T3 and T4 are GUARDs, each already green, that fence the change against a
 // specific named regression (see each test's doc comment).
 //
-// verify_variable cannot be driven token-free (its own re-read is a live GraphQL
-// round trip), so no test here fakes one. The only live oracle for "Railway actually holds it" is a
+// These tests read the source; railway_env_batch_test.go drives the writes against a
+// scripted Railway. The only live oracle for "Railway actually holds it" is a
 // green prepare-env run on a real PR; the only oracle for "Vite actually baked it
 // into the bundle" is e2e/topology/demo-persona.spec.ts, which cannot pass with the
 // flag unset because the trigger it looks for is tree-shaken out of a flag-off build.
@@ -52,34 +52,29 @@ func reconcileURLVariablesBody(t *testing.T) string {
 // KILLS: the upsert added with no matching verify (or vice versa); either call
 // targeting a service other than $RAILWAY_SVC_APP_ID.
 func TestReconcileURLVariablesSetsAndVerifiesDemoMode(t *testing.T) {
-	body := reconcileURLVariablesBody(t)
-
-	upsertPattern := regexp.MustCompile(`upsert_variable\s+"\$env_id"\s+"\$RAILWAY_SVC_APP_ID"\s+app\s+VITE_DEMO_MODE\s+"?true"?`)
-	verifyPattern := regexp.MustCompile(`verify_variable\s+"\$env_id"\s+"\$RAILWAY_SVC_APP_ID"\s+app\s+VITE_DEMO_MODE\s+"?true"?`)
-
-	if !upsertPattern.MatchString(body) {
-		t.Errorf("reconcile_url_variables does not upsert VITE_DEMO_MODE=true on the app service ($RAILWAY_SVC_APP_ID)")
+	var demo []reconcileCall
+	for _, c := range reconcileCalls(t) {
+		if c.name == "VITE_DEMO_MODE" {
+			demo = append(demo, c)
+		}
 	}
-	if !verifyPattern.MatchString(body) {
-		t.Errorf("reconcile_url_variables does not independently re-verify VITE_DEMO_MODE=true on the app service — \"the mutation's own response is never the evidence\" (railway-env.sh:1203)")
+	if len(demo) != 1 || demo[0].label != "app" || demo[0].idVar != "RAILWAY_SVC_APP_ID" || strings.Trim(demo[0].value, `"`) != "true" {
+		t.Errorf("reconcile_url_variables does not set VITE_DEMO_MODE=true on the app service ($RAILWAY_SVC_APP_ID) exactly once: %+v", demo)
+	}
+	if len(demo) == 1 && !demo[0].verified {
+		t.Errorf("reconcile_url_variables does not check VITE_DEMO_MODE=true on the app service's re-read — \"the mutation's own response is never the evidence\"")
 	}
 }
 
-// T2 (AC-2) — GUARD, green at HEAD: 8 upsert_variable calls, closing line reads
-// "All 8 URL variables confirmed by independent re-query." (8 == 8). Wording-agnostic
-// regex so the honest post-rename wording ("environment variables") still passes —
-// only the COUNT is this test's claim.
+// T2 (AC-2) — GUARD: the closing line's count equals the NAME=VALUE pairs on the
+// set_service_vars lines. Wording-agnostic; only the COUNT is this test's claim.
 //
-// KILLS: the upsert/verify pair added while the closing line's literal count is left
-// unchanged (grep -c 'upsert_variable "\$env_id"' would show N, the log would still
-// claim N-1).
+// KILLS: a variable added while the closing line's literal count is left unchanged.
 func TestConfirmedVariableCountMatchesUpserts(t *testing.T) {
 	body := reconcileURLVariablesBody(t)
 
-	upsertCount := len(regexp.MustCompile(`(?m)^\s*upsert_variable\s`).FindAllString(body, -1))
-	if upsertCount == 0 {
-		t.Fatalf("found 0 upsert_variable calls in reconcile_url_variables — body extraction is broken (vacuity guard)")
-	}
+	// reconcileCalls is fatal below 9 pairs (vacuity guard).
+	upsertCount := len(reconcileCalls(t))
 
 	countPattern := regexp.MustCompile(`All (\d+) [a-zA-Z ]*variables confirmed by independent re-query\.`)
 	m := countPattern.FindStringSubmatch(body)
@@ -92,7 +87,7 @@ func TestConfirmedVariableCountMatchesUpserts(t *testing.T) {
 	}
 
 	if loggedCount != upsertCount {
-		t.Errorf("closing log line claims %d variables confirmed, but the function calls upsert_variable %d times", loggedCount, upsertCount)
+		t.Errorf("closing log line claims %d variables confirmed, but the function's set_service_vars lines carry %d names", loggedCount, upsertCount)
 	}
 }
 
@@ -122,20 +117,19 @@ func TestReconcileURLVariablesRefusesThePersistentEnvironment(t *testing.T) {
 // closes no gap here — it is a standing fence for a future 4th VITE_ variable).
 //
 // KILLS the one silent gap in the whole chain: Railway holds the variable,
-// verify_variable passes, the prepare-env log reads "app.VITE_DEMO_MODE = true", and
+// the re-read passes, the prepare-env log reads "app.VITE_DEMO_MODE = true", and
 // the bundle is STILL flag-off because no build arg carried it into `vite build`.
 func TestEveryAppViteVariableHasADockerfileArg(t *testing.T) {
-	body := reconcileURLVariablesBody(t)
-
-	namePattern := regexp.MustCompile(`upsert_variable\s+"\$env_id"\s+"\$RAILWAY_SVC_APP_ID"\s+app\s+(VITE_\w+)`)
-	matches := namePattern.FindAllStringSubmatch(body, -1)
-	if len(matches) < 2 {
-		t.Fatalf("found %d VITE_* upserts against the app service, want >= 2 (vacuity guard — extraction may be broken)", len(matches))
-	}
-
 	names := make(map[string]bool)
-	for _, m := range matches {
-		names[m[1]] = true
+	matches := 0
+	for _, c := range reconcileCalls(t) {
+		if c.idVar == "RAILWAY_SVC_APP_ID" && c.label == "app" && strings.HasPrefix(c.name, "VITE_") {
+			names[c.name] = true
+			matches++
+		}
+	}
+	if matches < 2 {
+		t.Fatalf("found %d VITE_* names set on the app service, want >= 2 (vacuity guard — extraction may be broken)", matches)
 	}
 
 	dockerfilePath := filepath.Join(repoRoot(t), "frontend", "app", "Dockerfile")
@@ -181,13 +175,12 @@ func TestCIYmlGoFilterReachesScriptsCI(t *testing.T) {
 
 // Sibling of TestEveryAppViteVariableHasADockerfileArg for the landing service.
 func TestEveryLandingViteVariableHasADockerfileArg(t *testing.T) {
-	body := strings.Join(stripHashComments(strings.Split(reconcileURLVariablesBody(t), "\n")), "\n")
-
-	// Bash names are case-sensitive, so the pattern is too.
-	namePattern := regexp.MustCompile(`(?m)^\s*upsert_variable\s+"\$env_id"\s+"\$RAILWAY_SVC_LANDING_ID"\s+landing\s+(VITE_\w+)\s`)
+	// Bash names are case-sensitive, so the match is too.
 	names := make(map[string]bool)
-	for _, m := range namePattern.FindAllStringSubmatch(body, -1) {
-		names[m[1]] = true
+	for _, c := range reconcileCalls(t) {
+		if c.idVar == "RAILWAY_SVC_LANDING_ID" && c.label == "landing" && strings.HasPrefix(c.name, "VITE_") {
+			names[c.name] = true
+		}
 	}
 	// APP, OPS, SUPPORT and GATEWAY.
 	if len(names) < 4 {

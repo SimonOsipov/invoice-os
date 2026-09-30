@@ -57,6 +57,16 @@ func TestSetForkReconciliationURLAgainstAScriptedRailway(t *testing.T) {
 		}
 	}
 
+	// set_service_vars reads before it writes, so an unreadable map refuses with no write.
+	unreadableRefused := func(t *testing.T, s authShim, out string) {
+		if !strings.Contains(errorLines(out), "gateway.RECONCILIATION_URL") {
+			t.Errorf("no ::error:: line names gateway.RECONCILIATION_URL; output = %q", out)
+		}
+		if ups := s.upserts(t); len(ups) != 0 {
+			t.Errorf("an unreadable map was followed by writes %v", names(ups))
+		}
+	}
+
 	cases := []struct {
 		name    string
 		envList string
@@ -71,11 +81,13 @@ func TestSetForkReconciliationURLAgainstAScriptedRailway(t *testing.T) {
 		{name: "foreign_id", envList: sentryEnvList(true, false), code: 1, check: noUpsert("No environment with id " + forkEnvID)},
 		{name: "gateway_not_listed", settle: sentrySettle("gateway"), code: 1, check: noUpsert("RECONCILIATION_URL was NOT set")},
 		{name: "write_refused", files: map[string]string{"upsert-RECONCILIATION_URL.json": `{"errors":[{"message":"Not Authorized"}]}`}, code: 1, check: writeFailed},
-		{name: "write_transport_failure", files: map[string]string{"upsert-RECONCILIATION_URL.fail": "curl: (22) The requested URL returned error: 502"}, code: 1, check: writeFailed},
+		{name: "write_transport_failure", files: map[string]string{"upsert-RECONCILIATION_URL.fail": "curl: (22) The requested URL returned error: 400"}, code: 1, check: writeFailed},
 		{name: "reread_absent", bend: `del(.RECONCILIATION_URL)`, code: 1, check: rereadRefused},
 		{name: "reread_empty", bend: `.RECONCILIATION_URL = ""`, code: 1, check: rereadRefused},
 		{name: "reread_different", bend: `.RECONCILIATION_URL = "http://reconciliation.railway.internal:8081"`, code: 1, check: rereadRefused},
-		{name: "reread_unreadable", bend: `"not-a-map"`, code: 1, check: rereadRefused},
+		{name: "read_unreadable", bend: `"not-a-map"`, code: 1, check: unreadableRefused},
+		// Only the re-read after the write is unreadable.
+		{name: "reread_unreadable", bend: `if .RECONCILIATION_URL == "` + reconciliationURL + `" then "not-a-map" else . end`, code: 1, check: rereadRefused},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -120,19 +132,14 @@ func checkReconciliationURLWritten(t *testing.T, s authShim, out string) {
 	if want := (authUpsert{reconciliationGatewayID, "RECONCILIATION_URL", reconciliationURL}); len(ups) != 1 || ups[0] != want {
 		t.Errorf("upserts = %v, want exactly [%v]", ups, want)
 	}
-	var upserted int
-	for _, c := range s.calls(t) {
-		if !strings.Contains(c.Query, "variableUpsert(") {
-			continue
-		}
-		upserted++
-		in, _ := c.Variables["input"].(map[string]any)
-		if in["skipDeploys"] != true || in["environmentId"] != forkEnvID {
-			t.Errorf("upsert %v.%v: skipDeploys=%v environmentId=%v, want true and %s", in["serviceId"], in["name"], in["skipDeploys"], in["environmentId"], forkEnvID)
+	ws := collectionWrites(t, s)
+	for _, w := range ws {
+		if w.SkipDeploys != true || w.Env != forkEnvID {
+			t.Errorf("the %s write: skipDeploys=%v environmentId=%v, want true and %s", w.Service, w.SkipDeploys, w.Env, forkEnvID)
 		}
 	}
-	if upserted == 0 {
-		t.Error("no variableUpsert call reached the shim")
+	if len(ws) != 1 || ws[0].Vars["RECONCILIATION_URL"] != reconciliationURL {
+		t.Errorf("collection writes = %v, want one carrying RECONCILIATION_URL", writeNames(ws))
 	}
 	if at := s.lastCallIndex(t, reconciliationGatewayID, "RECONCILIATION_URL"); at < 0 || !s.readAfter(t, reconciliationGatewayID, at) {
 		t.Errorf("the gateway's variables were not re-read after the RECONCILIATION_URL write (write at call %d)", at)

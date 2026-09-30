@@ -4,8 +4,7 @@ name: Dev Env (deploy full fleet + verify)
 # A ready PR → its own ephemeral env, which THIS workflow forks from
 # the persistent environment (M4-23-03) — not Railway's PR Environments feature,
 # which is OFF and stays OFF. push to `main` and workflow_dispatch → the
-# PERSISTENT environment itself (deploy + health-gate + fleet-gate only;
-# M4-22-07 dropped reset-seed/E2E).
+# PERSISTENT environment itself (M4-22-07 dropped reset-seed/E2E).
 #
 # persona-handoff-fix, Decision [pr-only-reset]: a PR's forked Postgres inherits
 # development's live data, not an empty schema, so it also inherits every
@@ -386,38 +385,17 @@ jobs:
 
       - name: Assert Watch Paths are empty on all 15 non-Postgres services (M3-16 invariant)
         env:
-          GH_EVENT_NAME: ${{ github.event_name }}
-          RAILWAY_QUERY_TOKEN: ${{ github.event_name == 'workflow_dispatch' && secrets.RAILWAY_API_DEV_TOKEN || secrets.RAILWAY_API_TOKEN }}
+          RAILWAY_API_TOKEN: ${{ github.event_name != 'workflow_dispatch' && secrets.RAILWAY_API_TOKEN || '' }}
+          RAILWAY_PROJECT_TOKEN: ${{ github.event_name == 'workflow_dispatch' && secrets.RAILWAY_API_DEV_TOKEN || '' }}
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
         run: |
           set -euo pipefail
 
-          if [ -z "${RAILWAY_QUERY_TOKEN:-}" ]; then
-            echo "::error::No Railway token available for this event type (see the resolve step above for which secret is required)."
-            exit 1
-          fi
-          if [ "$GH_EVENT_NAME" = "workflow_dispatch" ]; then
-            auth_header="Project-Access-Token: $RAILWAY_QUERY_TOKEN"
-          else
-            auth_header="Authorization: Bearer $RAILWAY_QUERY_TOKEN"
-          fi
-
           query_body=$(jq -n --arg e "$ENV_ID" \
             '{query: "query($e:String!){environment(id:$e){serviceInstances{edges{node{serviceName watchPatterns}}}}}", variables: {e: $e}}')
 
-          if ! resp=$(curl -fsS --connect-timeout 5 --max-time 15 \
-                --request POST \
-                --url https://backboard.railway.com/graphql/v2 \
-                --header "$auth_header" \
-                --header "Content-Type: application/json" \
-                --data "$query_body"); then
-            echo "::error::Railway GraphQL request failed while reading serviceInstances for environment $ENV_ID"
-            exit 1
-          fi
-          if echo "$resp" | jq -e '.errors' >/dev/null 2>&1; then
-            echo "::error::Railway GraphQL error while reading serviceInstances: $(echo "$resp" | jq -c '.errors')"
-            exit 1
-          fi
+          # query prints its own ::error:: and exits non-zero on a failed call.
+          resp=$(printf '%s' "$query_body" | bash scripts/ci/railway-env.sh query "reading serviceInstances for environment $ENV_ID")
 
           expected_json='["gateway","tenancy","portfolio","invoice","validation","submission","dashboard","notifications","reconciliation","docling","auth","landing","app","ops-console","support-console"]'
 
@@ -454,7 +432,7 @@ jobs:
       # require_service_ids, railway-env.sh), which excludes the 8 contexts and the sidecar.
       #
       # `pull_request` only, like the seam steps and for the same reasons: it
-      # checks FORK fidelity, and railway-env.sh authenticates `Authorization:
+      # checks FORK fidelity, and assert-db-dsns authenticates `Authorization:
       # Bearer` only, which the dispatch path's Railway PROJECT token cannot
       # satisfy. Consequence: push and dispatch runs get NO DSN check — acceptable
       # because neither forks anything, so there is no fork-time rendering fault
@@ -469,17 +447,11 @@ jobs:
       - name: Discover the 5 public URLs (never construct — F7)
         id: urls
         env:
-          GH_EVENT_NAME: ${{ github.event_name }}
-          RAILWAY_QUERY_TOKEN: ${{ github.event_name == 'workflow_dispatch' && secrets.RAILWAY_API_DEV_TOKEN || secrets.RAILWAY_API_TOKEN }}
+          RAILWAY_API_TOKEN: ${{ github.event_name != 'workflow_dispatch' && secrets.RAILWAY_API_TOKEN || '' }}
+          RAILWAY_PROJECT_TOKEN: ${{ github.event_name == 'workflow_dispatch' && secrets.RAILWAY_API_DEV_TOKEN || '' }}
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
         run: |
           set -euo pipefail
-
-          if [ "$GH_EVENT_NAME" = "workflow_dispatch" ]; then
-            auth_header="Project-Access-Token: $RAILWAY_QUERY_TOKEN"
-          else
-            auth_header="Authorization: Bearer $RAILWAY_QUERY_TOKEN"
-          fi
 
           fetch_domain() {
             svc_id="$1"
@@ -487,17 +459,7 @@ jobs:
             body=$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$ENV_ID" --arg s "$svc_id" \
               '{query: "query($p:String!,$e:String!,$s:String!){domains(projectId:$p,environmentId:$e,serviceId:$s){customDomains{domain targetPort} serviceDomains{domain targetPort}}}", variables: {p: $p, e: $e, s: $s}}')
 
-            if ! r=$(curl -fsS --connect-timeout 5 --max-time 15 \
-                  --request POST \
-                  --url https://backboard.railway.com/graphql/v2 \
-                  --header "$auth_header" \
-                  --header "Content-Type: application/json" \
-                  --data "$body"); then
-              echo "::error::Railway GraphQL request failed discovering the $svc_label domain" >&2
-              return 1
-            fi
-            if echo "$r" | jq -e '.errors' >/dev/null 2>&1; then
-              echo "::error::Railway GraphQL error discovering the $svc_label domain: $(echo "$r" | jq -c '.errors')" >&2
+            if ! r=$(printf '%s' "$body" | bash scripts/ci/railway-env.sh query "discovering the $svc_label domain"); then
               return 1
             fi
 
@@ -603,6 +565,11 @@ jobs:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
         run: bash scripts/ci/railway-env.sh set-fork-environment "$ENV_ID"
+
+      # The call log lives in $RUNNER_TEMP, which the runner sets for every step.
+      - name: Report Railway API calls
+        if: always()
+        run: bash scripts/ci/railway-env.sh report-api-calls
 
   # 1. Deploy the gateway FIRST — it is the fleet's single migrator (docs/
   #    migrations.md §2). `--ci` streams build logs then exits after the
@@ -826,6 +793,9 @@ jobs:
     if: always() && needs.health-gate.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     container: ghcr.io/railwayapp/cli:4.66.0
+    # Matrix outputs combine across legs; only the auth leg sets this one.
+    outputs:
+      auth_deployment_id: ${{ steps.up.outputs.deployment_id_auth || steps.up_dispatch.outputs.deployment_id_auth }}
     strategy:
       fail-fast: false
       matrix:
@@ -838,6 +808,7 @@ jobs:
       - name: Stamp the build sha into the upload
         run: sh scripts/ci/stamp-build-sha.sh "${{ github.sha }}"
       - name: railway up ${{ matrix.service }} (PR/push — account token)
+        id: up
         if: github.event_name != 'workflow_dispatch'
         env:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
@@ -845,6 +816,7 @@ jobs:
         run: sh scripts/ci/railway-up-ci.sh ${{ matrix.service }}
         timeout-minutes: 15
       - name: railway up ${{ matrix.service }} (dispatch — project token)
+        id: up_dispatch
         if: github.event_name == 'workflow_dispatch'
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
@@ -901,6 +873,7 @@ jobs:
     env:
       GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}
     steps:
+      - uses: actions/checkout@v4
       - name: Poll gateway /healthz/fleet until all up on the commit under test
         env:
           EXPECTED_BUILD: ${{ github.sha }}
@@ -1004,6 +977,35 @@ jobs:
           fi
           echo "Sentry $direction on $EXPECTED_BUILD for: $names (docling and auth exempt)."
 
+      # auth has no build stamp; its deployment status is the verdict for `railway up`.
+      - name: Wait for the auth deployment
+        env:
+          AUTH_DEPLOYMENT_ID: ${{ needs.deploy-context.outputs.auth_deployment_id }}
+          RAILWAY_API_TOKEN: ${{ github.event_name != 'workflow_dispatch' && secrets.RAILWAY_API_TOKEN || '' }}
+          RAILWAY_PROJECT_TOKEN: ${{ github.event_name == 'workflow_dispatch' && secrets.RAILWAY_API_DEV_TOKEN || '' }}
+        run: bash scripts/ci/railway-env.sh wait-deployment auth "$AUTH_DEPLOYMENT_ID"
+
+  # 6b. SPA build verdict on push/dispatch, where e2e does not run. Read-only: GET only,
+  #     no domain repair (that stays in e2e).
+  spa-build-gate:
+    name: SPA build gate (push/dispatch)
+    needs: [deploy-spas, prepare-env]
+    if: always() && needs.deploy-spas.result == 'success' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      EXPECTED_BUILD: ${{ github.sha }}
+      APP_URL: ${{ needs.prepare-env.outputs.app_url }}
+      LANDING_URL: ${{ needs.prepare-env.outputs.landing_url }}
+      OPS_CONSOLE_URL: ${{ needs.prepare-env.outputs.ops_console_url }}
+      SUPPORT_CONSOLE_URL: ${{ needs.prepare-env.outputs.support_console_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for SPA /health on the commit under test
+        run: bash scripts/ci/wait-spa-builds.sh "$EXPECTED_BUILD" "$LANDING_URL" "$APP_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL"
+
   # 7. Post-deploy verification (b): smoke (landing + both consoles render), api
   #    (typed contract suite against the gateway), topology (browser login
   #    + cross-tenant isolation) via Playwright,
@@ -1068,32 +1070,7 @@ jobs:
       - name: Wait for SPA /health on the commit under test
         env:
           EXPECTED_BUILD: ${{ github.sha }}
-        run: |
-          # /health is answered by Caddy from memory before the filesystem, so it
-          # can never carry a build; /build.txt is the stamped file baked into the
-          # image. Both are needed: /health proves it is serving, /build.txt proves
-          # WHICH commit, and a rolling deploy keeps the previous image answering
-          # 200 on /health throughout.
-          for url in "$LANDING_URL" "$APP_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL"; do
-            echo "Waiting for $url on build $EXPECTED_BUILD ..."
-            ok=0
-            seen=""
-            # 600s (120 x 5s): every environment is now a cold build (M4-23
-            # per-PR environments, Decision [gate-windows-provisional]) —
-            # widened from 200s.
-            for _ in $(seq 1 120); do
-              code=$(curl -fsS -o /dev/null -w '%{http_code}' "$url/health" 2>/dev/null || echo 000)
-              if [ "$code" = "200" ]; then
-                seen=$(curl -fsS --max-time 10 "$url/build.txt" 2>/dev/null | tr -d '[:space:]' || echo '')
-                if [ "$seen" = "$EXPECTED_BUILD" ]; then echo "  healthy on $seen"; ok=1; break; fi
-              fi
-              sleep 5
-            done
-            if [ "$ok" != "1" ]; then
-              echo "::error::$url did not serve build $EXPECTED_BUILD within 600s (last seen: '${seen:-none}'). 'none' means /build.txt is absent -- the image predates the stamped Dockerfile layer or the stamp step did not run; any other value means the new image never replaced the old one. Running E2E here would drive the wrong frontend."
-              exit 1
-            fi
-          done
+        run: bash scripts/ci/wait-spa-builds.sh "$EXPECTED_BUILD" "$LANDING_URL" "$APP_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL"
       - name: Install Chromium
         # !cancelled(): skipping this when the wait fails makes topology report
         # `browserType.launch: Executable doesn't exist` — a missing-browser error for what

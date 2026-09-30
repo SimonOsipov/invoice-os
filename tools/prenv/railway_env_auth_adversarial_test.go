@@ -50,7 +50,7 @@ func TestAuthSecretsNeverReachJQArgv(t *testing.T) {
 	scan := func(t *testing.T, log string, needles map[string]string) {
 		t.Helper()
 		argv := readLog(t, log)
-		if !strings.Contains(argv, "variableUpsert") {
+		if !strings.Contains(argv, "variableUpsert") && !strings.Contains(argv, "variableCollectionUpsert") {
 			t.Fatalf("control: the jq log holds no upsert body, so a clean scan proves nothing")
 		}
 		for label, n := range needles {
@@ -103,7 +103,7 @@ func TestSetForkAuth_SecretUpsertFailureExitsAndNamesIt(t *testing.T) {
 		name, variable, file, body string
 	}{
 		// The fork still holds the inherited key, so only the upsert's own exit can fail the run.
-		{"transport, over an inherited key", "GOTRUE_JWT_KEYS", "upsert-GOTRUE_JWT_KEYS.fail", "curl: (22) The requested URL returned error: 500"},
+		{"transport, over an inherited key", "GOTRUE_JWT_KEYS", "upsert-GOTRUE_JWT_KEYS.fail", "curl: (22) The requested URL returned error: 400"},
 		{"graphql error", "AUTH_ADMIN_PASSWORD", "upsert-AUTH_ADMIN_PASSWORD.json", `{"errors":[{"message":"planted refusal"}]}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -119,6 +119,15 @@ func TestSetForkAuth_SecretUpsertFailureExitsAndNamesIt(t *testing.T) {
 			}
 			if strings.Contains(out, c.variable+" = <redacted>") {
 				t.Errorf("the failed upsert still printed its redacted success line")
+			}
+			var writes int
+			for _, u := range s.upserts(t) {
+				if u.Name == c.variable {
+					writes++
+				}
+			}
+			if writes != 1 {
+				t.Errorf("%s upserts = %d, want the one failed write, not retried", c.variable, writes)
 			}
 			for label, n := range map[string]string{
 				"the source key's private scalar": jwkPrivateScalar(t, k0),
@@ -151,8 +160,8 @@ func TestSetForkAuth_ReReadIsUnrenderedAndNeverPrintsARenderedDSN(t *testing.T) 
 				t.Errorf("a variables read omits unrendered: true, so DATABASE_URL would read back rendered: %q", c.Query)
 			}
 		}
-		if reads != 2 {
-			t.Errorf("%d variables reads, want 2 (auth and gateway)", reads)
+		if reads != 4 {
+			t.Errorf("%d variables reads, want 4 (auth and gateway, each read before its write and re-read after)", reads)
 		}
 	})
 

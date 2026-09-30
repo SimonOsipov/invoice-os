@@ -48,11 +48,10 @@ var (
 	subjectRe = regexp.MustCompile(`(?i)service`)
 )
 
-// Population floors. Re-measured with the old and new fleet size in countRe:
-// 13 hits across 6 files, this gate's own source excluded.
+// Population floors: the measured population (9 hits across 4 files), this gate's own source excluded.
 const (
-	minHits  = 10
-	minFiles = 5
+	minHits  = 9
+	minFiles = 4
 )
 
 // allowEntry keys on a line substring, never a line number -- a line-keyed

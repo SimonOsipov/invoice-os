@@ -12,10 +12,11 @@ import "context"
 // only thing the rest of the system consumes from a token; the tenant-context
 // and RLS layers (M2-06/07) key off TenantID and Role.
 type Identity struct {
-	Subject  string // GoTrue "sub": the user id (a UUID)
-	Role     string // GoTrue "role": a Postgres role, e.g. "authenticated"
-	TenantID string // app_metadata.tenant_id: the tenant the caller acts within
-	Email    string // GoTrue "email"; "" when the token carries none
+	Subject   string // GoTrue "sub": the user id (a UUID)
+	Role      string // GoTrue "role": a Postgres role, e.g. "authenticated"
+	TenantID  string // app_metadata.tenant_id: the tenant the caller acts within
+	Email     string // GoTrue "email"; "" when the token carries none
+	SessionID string // GoTrue "session_id"; "" for a mock-issuer token
 }
 
 type ctxKey int

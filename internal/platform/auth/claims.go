@@ -22,6 +22,7 @@ type gotrueClaims struct {
 	Role        string      `json:"role"`
 	AppMetadata appMetadata `json:"app_metadata"`
 	Email       string      `json:"email,omitempty"`
+	SessionID   string      `json:"session_id,omitempty"`
 }
 
 // appMetadata is GoTrue's app_metadata object. Only tenant_id is bound; other

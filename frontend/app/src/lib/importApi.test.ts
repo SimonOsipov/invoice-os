@@ -745,15 +745,15 @@ describe('makeImportAuth: token-read semantics + onUnauthorized wiring (QA)', ()
     expect(headers.some(([k]) => k.toLowerCase() === 'authorization')).toBe(false)
   })
 
-  it('QA-03: onUnauthorized forwards to the caller-supplied onSignOut on a real 401, exactly once', async () => {
-    const onSignOut = vi.fn()
-    const auth = makeImportAuth(buildSession('tok'), onSignOut)
+  it('QA-03: onUnauthorized forwards to the caller-supplied callback on a real 401, exactly once', async () => {
+    const onUnauthorized = vi.fn()
+    const auth = makeImportAuth(buildSession('tok'), onUnauthorized)
 
     const promise = createImport(auth, base, makeReq(), () => {}, FakeXhrCtor)
     FakeXhr.last()?.respond(401, JSON.stringify(UNAUTHORIZED_BODY), 'Unauthorized')
     await captureRejection(() => promise)
 
-    expect(onSignOut).toHaveBeenCalledTimes(1)
+    expect(onUnauthorized).toHaveBeenCalledTimes(1)
   })
 })
 

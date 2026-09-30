@@ -142,7 +142,8 @@ func main() {
 	// (comma-separated); empty grants no browser origin (the production default).
 	withCORS := gateway.CORS(strings.Split(os.Getenv("CORS_ALLOWED_ORIGINS"), ","))
 
-	apiHandler, fleetHandler := gatewayHandlers(verifier, routed, probed, map[string]string{"auth": ".well-known/jwks.json"}, app.Logger)
+	sessions := gateway.NewSessionChecker(probed["auth"], &http.Client{Timeout: gateway.SessionCheckTimeout}, time.Now, app.Logger)
+	apiHandler, fleetHandler := gatewayHandlers(verifier, sessions, routed, probed, map[string]string{"auth": ".well-known/jwks.json"}, app.Logger)
 	app.Mux.Handle(routePrefix, withCORS(apiHandler))
 
 	// Public fleet-health roll-up, outside /api/ and outside the verifier —
@@ -155,15 +156,17 @@ func main() {
 	app.Mux.Handle("POST /auth/register", reg.Register)
 	app.Mux.Handle("GET /auth/verify", reg.Verify)
 
-	// Public sign-in hand-off and session renewal, outside the verifier, in every build.
+	// Public sign-in hand-off, session renewal and sign-out, outside the verifier, in every build.
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.
-	h := handoffHandlers(probed["auth"], app.Logger)
+	h := handoffHandlers(probed["auth"], sessions, app.Logger)
 	app.Mux.Handle("POST /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("OPTIONS /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("POST /auth/exchange", withCORS(h.Exchange))
 	app.Mux.Handle("OPTIONS /auth/exchange", withCORS(h.Exchange))
 	app.Mux.Handle("POST /auth/refresh", withCORS(h.Refresh))
 	app.Mux.Handle("OPTIONS /auth/refresh", withCORS(h.Refresh))
+	app.Mux.Handle("POST /auth/sign-out", withCORS(h.SignOut))
+	app.Mux.Handle("OPTIONS /auth/sign-out", withCORS(h.SignOut))
 
 	// Mint routes exist only in a -tags mockissuer build; ENVIRONMENT is read raw, as for provisioning.
 	platform.MockIssuer = "absent"
@@ -213,12 +216,14 @@ const dbConnectWait = 120 * time.Second
 // TestGatewayApiMountIsCORSWrappedAndNotMethodScoped (withCORS at the mount).
 func gatewayHandlers(
 	verifier *auth.Verifier,
+	sessions *gateway.SessionChecker,
 	routed, probed map[string]*url.URL,
 	healthPaths map[string]string,
 	log *slog.Logger,
 ) (api http.Handler, fleet http.HandlerFunc) {
 	api = gateway.Handler(gateway.Options{
 		Verifier:  verifier,
+		Sessions:  sessions,
 		Upstreams: routed,
 		Logger:    log,
 	})
@@ -251,14 +256,15 @@ func registrationHandlers(authURL, siteURL *url.URL, log *slog.Logger) registrat
 	}
 }
 
-// handoff holds the public sign-in hand-off and renewal handlers main mounts outside /api/.
+// handoff holds the public sign-in hand-off, renewal and sign-out handlers main mounts outside /api/.
 type handoff struct {
-	SignIn, Exchange, Refresh http.Handler
+	SignIn, Exchange, Refresh, SignOut http.Handler
 }
 
-// handoffHandlers builds the sign-in, exchange and refresh handlers against GoTrue at authURL.
+// handoffHandlers builds the sign-in, exchange, refresh and sign-out handlers against GoTrue at authURL.
+// Sign-out evicts from sessions, the API's own checker.
 // Sign-in and exchange share one code store: a code minted by sign-in is redeemable only through exchange.
-func handoffHandlers(authURL *url.URL, log *slog.Logger) handoff {
+func handoffHandlers(authURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger) handoff {
 	store := gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
 	throttle := gateway.NewSignInThrottle(gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
 	// Same settings as registrationHandlers; TestRegistrationClientTimeoutAndNoFollow pins that literal in place.
@@ -270,6 +276,7 @@ func handoffHandlers(authURL *url.URL, log *slog.Logger) handoff {
 		SignIn:   gateway.SignInHandler(authURL, client, store, throttle, log),
 		Exchange: gateway.ExchangeHandler(store),
 		Refresh:  gateway.RefreshHandler(authURL, client, log),
+		SignOut:  gateway.SignOutHandler(authURL, client, sessions, log),
 	}
 }
 

@@ -43,16 +43,20 @@ const routePrefix = "/api/"
 // Options configures the gateway handler.
 type Options struct {
 	Verifier  *auth.Verifier      // verifies bearer tokens; required
+	Sessions  *SessionChecker     // refuses revoked sessions; required
 	Upstreams map[string]*url.URL // service name -> base URL; required
 	Logger    *slog.Logger        // defaults to slog.Default()
 }
 
 // Handler returns the handler to mount at "/api/". Request flow: verify (401) ->
-// authorize (403) -> route by path prefix (404 on unknown) -> inject identity ->
-// reverse-proxy to the owning service (502 if unreachable). Auth runs before
-// routing, so an unauthenticated caller gets a uniform 401 and never learns which
-// service prefixes exist.
+// session check (401 revoked, 503 unavailable) -> route by path prefix (404 on
+// unknown) -> authorize (403) -> inject identity -> reverse-proxy to the owning
+// service (502 if unreachable). Auth runs before routing, so an unauthenticated
+// caller gets a uniform 401 and never learns which service prefixes exist.
 func Handler(opts Options) http.Handler {
+	if opts.Sessions == nil {
+		panic("gateway: Options.Sessions is required")
+	}
 	log := opts.Logger
 	if log == nil {
 		log = slog.Default()
@@ -61,7 +65,7 @@ func Handler(opts Options) http.Handler {
 	for svc, target := range opts.Upstreams {
 		proxies[svc] = http.StripPrefix(routePrefix+svc, newReverseProxy(svc, target, log))
 	}
-	return opts.Verifier.Middleware(&router{proxies: proxies, log: log})
+	return opts.Verifier.Middleware(opts.Sessions.Middleware(&router{proxies: proxies, log: log}))
 }
 
 // router resolves the owning service from the first path segment under /api/,

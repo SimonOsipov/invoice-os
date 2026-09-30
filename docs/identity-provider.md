@@ -7,7 +7,10 @@ It is private-network only (`http://auth.railway.internal:8080`); it has no publ
 The gateway reaches it for JWKS, for the fleet probe, for GoTrue's `/signup` and
 `/verify` on behalf of the two public registration routes (see Registration), for
 GoTrue's password grant on behalf of the public sign-in route (see Sign-in and hand-off),
-and for its refresh-token grant on behalf of the public refresh route (see Renewal).
+for its refresh-token grant on behalf of the public refresh and sign-out routes (see
+Renewal and Revocation), for GoTrue's `GET /user` on every checked `/api/` request, cached
+for 30 s (see Revocation), and for GoTrue's `POST /logout?scope=global` on behalf of the
+public sign-out route (see Revocation).
 
 Related: [migrations.md](./migrations.md) §1 (the `supabase_auth_admin` and
 `auth_hook_reader` roles), [deploy-model.md](./deploy-model.md) (where `auth` deploys),
@@ -279,9 +282,12 @@ time. The production key exists only in the Railway variable U3b writes and then
 
 GoTrue stays private. The gateway is the only public surface, and it calls GoTrue under
 `AUTH_URL` at: `/signup` and `/verify` for registration, `/token?grant_type=password` for
-sign-in (see Sign-in and hand-off), and `/token?grant_type=refresh_token` for renewal (see
-Renewal). It forwards no client path or query, so no other GoTrue route (`/recover`, `/otp`,
-`/admin/*`, or `/token` with any other grant) is reachable from outside.
+sign-in (see Sign-in and hand-off), `/token?grant_type=refresh_token` for renewal and
+sign-out (see Renewal and Revocation), `GET /user` for the session check on every checked
+`/api/` request (cached 30 s; only `error_code` is read from the answer), and
+`POST /logout?scope=global` for sign-out (see Revocation). It forwards no client path or
+query, so no other GoTrue route (`/recover`, `/otp`, `/admin/*`, `/logout` with any other
+scope, or `/token` with any other grant) is reachable from outside.
 
 **The flow:**
 1. The client posts `{"email","password"}` to `POST /auth/register` on the gateway. Unless
@@ -363,7 +369,9 @@ is a UUIDv5 of the caller's subject, so one identity provisions at most one work
   WARN log line `registration: gotrue email send rate limit` is the only signal. Set
   `GOTRUE_RATE_LIMIT_EMAIL_SENT` when signup traffic approaches it.
 - `ceiling:` the session GoTrue issues on verify is discarded but stays live in
-  `auth.refresh_tokens` until AUTH-07 builds revocation.
+  `auth.sessions` and `auth.refresh_tokens`. No route revokes it by itself; a global
+  sign-out or a staff cut-off of the account deletes it with the account's other sessions
+  (see Revocation and Cutting an account off). Its tokens never reach anyone.
 
 **Accepted risks of a link that verifies on GET:**
 - *Pre-account hijack.* GoTrue does not update an existing unconfirmed user on a repeat
@@ -416,8 +424,8 @@ same tab, so a code minted in another browser signs nobody in.
    Sign in again." An unknown `signin` value is stripped and ignored.
 
 The access token travels only in the exchange and refresh answers and the `Authorization`
-header; the refresh token travels only in the exchange answer and the refresh request and
-answer. Landing never holds either. Landing renders the form only when `VITE_GATEWAY_URL` and `VITE_APP_URL` are set,
+header; the refresh token travels only in the exchange answer, the refresh request and
+answer, and the sign-out request (see Revocation). Landing never holds either. Landing renders the form only when `VITE_GATEWAY_URL` and `VITE_APP_URL` are set,
 and otherwise shows the persona list alone. The app ignores `?handoff=` when its
 `VITE_GATEWAY_URL` is unset.
 
@@ -493,9 +501,11 @@ after a transient boot failure does not bounce to landing again".
 - `ceiling:` an unknown or banned address answers faster than a known one with a wrong
   password, because GoTrue returns before it checks the password. Response time can show
   that an account exists. Revisit before registration U3.
-- `ceiling:` sign-out removes the stored refresh token but does not revoke it in GoTrue. A
-  copy taken before sign-out keeps renewing the session until AUTH-07 ships revocation (see
-  Renewal).
+- `ceiling:` sign-out revokes every session of the account in GoTrue only when the app's
+  `POST /auth/sign-out` succeeds. When it fails (gateway unreachable, the 5 s timeout, any
+  non-2xx answer), the app still signs out locally and tells the user nothing, and a copy of
+  the refresh token taken before sign-out keeps renewing until the account is signed out
+  again or cut off (see Revocation, The app's rule).
 - `ceiling:` the Railway edge access log records the app's boot URL with the code and
   landing's boot URL with the state, and the browser's global history keeps the app URL
   (`replaceState` does not purge it). The code is dead after 60 s or one use, and useless
@@ -586,7 +596,8 @@ which the gateway answers 401). Guarded by `TestIdP_RefreshRotationAndReuse`.
 The refresh token is stored in the app origin's `localStorage`, key `invoice-os.session`,
 field `refresh_token`, in the same record as the access token. For its 60 s in the hand-off
 store it is in the gateway's memory, beside the access token. It crosses the network only
-inside JSON bodies over TLS: the exchange answer, the refresh request and the refresh answer.
+inside JSON bodies over TLS: the exchange answer, the refresh request, the refresh answer and
+the sign-out request.
 
 It protects against:
 - **Other origins.** Landing, both consoles and every other site cannot read it:
@@ -606,13 +617,16 @@ It does not protect against:
   browser extension with page access. It can read both tokens. With the refresh token it can
   keep the session alive after the tab closes, from another machine, until the session is
   revoked. GoTrue here sets no session timebox or inactivity timeout (see GoTrue's session
-  values below), and revocation arrives with AUTH-07. Before renewal the same theft bought
-  at most one hour.
+  values below). The session ends when its holder signs out successfully or an operator cuts
+  the account off (see Revocation and Cutting an account off). Before renewal the same theft
+  bought at most one hour.
 - **Someone with the device's browser profile** (malware, a shared machine left signed in).
 - **A thief who renews in step with the victim.** GoTrue's parent rule answers the previous
   token with the active one, so two holders who alternate are not detected. Detection needs
   a token two generations old.
-- **Sign-out.** Sign-out removes the stored copy but does not revoke it until AUTH-07.
+- **A sign-out that fails.** Sign-out revokes every session of the account through
+  `POST /auth/sign-out`. When that call fails, the stored copy is removed but not revoked,
+  and the user is not told (see Revocation, The app's rule).
 - **Script access by design.** The token is not `HttpOnly`. A gateway cookie was rejected:
   on every PR fork the app and the gateway are different sites, so it would be a third-party
   cookie.
@@ -625,9 +639,9 @@ It does not protect against:
 - `GOTRUE_SESSIONS_INACTIVITY_TIMEOUT` unset: no idle timeout;
 - `GOTRUE_JWT_EXP` 3600 s (the image value).
 
-A session therefore lives until it is revoked or a stale token revokes its family. Until
-AUTH-07 ships revocation there is no timebox; the user accepted this interim (AUTH-00
-Decision Log Q30). Re-read the values (`P` and `E` as in "Opening registration in
+A session therefore lives until it is revoked (a successful sign-out, or a staff cut-off;
+see Revocation) or a stale token revokes its family. There is no timebox; the user accepted
+this (AUTH-00 Decision Log Q30). Re-read the values (`P` and `E` as in "Opening registration in
 production") with
 `railway variables -p "$P" -e "$E" -s auth --json | jq 'with_entries(select(.key|test("GOTRUE_(JWT_EXP|SECURITY|SESSIONS)")))'`;
 `{}` means no override.
@@ -636,22 +650,269 @@ production") with
 - `ceiling:` `POST /auth/refresh` is not throttled, and GoTrue applies no limit in this fleet
   (Registration, Ceilings). A v1 refresh token holds 60 bits. Revisit with the per-client-IP
   limit sign-in defers.
-- `ceiling:` a copy of the refresh token taken before sign-out keeps renewing until AUTH-07
-  revokes it. AUTH-07 can revoke through GoTrue `POST /logout`.
+- `ceiling:` a copy of the refresh token taken before a sign-out whose server call failed
+  keeps renewing until the account is signed out again or cut off (see Revocation). After a
+  successful sign-out the copy answers 401.
 - `ceiling:` during a gateway outage every request tries one refresh first while a renewal
   is due, which doubles the failed calls. Revisit if outage logs show it.
 - `ceiling:` a device clock changed by hand between receipt and use shifts the renewal time.
-  A clock moved backwards renews late, and a 401 signs the user out as before renewal.
+  A clock moved backwards renews late, and the gateway's 401 on the expired token ends the
+  session (`endRevokedSession`, see Revocation).
 - `ceiling:` an offline user past the deadline is signed out on the next request; the front
   door's navigation then fails offline.
 - `ceiling:` the load-to-save of the stored record is not atomic across tabs (`localStorage`
   has no compare-and-set). A sign-out in another tab inside that one synchronous step is not
-  seen. Revisit if AUTH-07's revocation makes a resurrected record usable.
+  seen. A record resurrected this way holds revoked credentials after a successful
+  sign-out: the edge refuses its access token and `/auth/refresh` refuses its refresh token
+  (see Revocation). Revisit if a sign-out whose server call failed is reported to leave a
+  usable record.
 - `ceiling:` a request from a chain that outlives an ended session is refused only while no
   session is tracked. After a DEMO_MODE stand-in switch, a leftover chain gets the new
   identity's token. DEMO_MODE runs on forks only.
 - `ceiling:` a byte download (evidence bundle, page image, source document) that finds the session ended sends nothing, and its error card can show until the front door's navigation unloads the page; revisit if a user reports it.
 - `ceiling:` on a transient failure the renewer keeps the tracked session's token and deadline even when another tab's newer stored pair supplied the refresh token, so repeated transient failures can end a session while storage holds a newer valid pair (the next boot adopts it); revisit if two-tab users report early sign-outs.
+
+## Revocation
+
+Signing out ends every session of the account, on every device and tab, server-side. The
+app sends its refresh token to `POST /auth/sign-out`; the gateway turns it into GoTrue's
+global logout, which deletes every row of the account in `auth.sessions` (its refresh tokens
+cascade). The edge then refuses every access token of those sessions, because the gateway
+asks GoTrue whether a token's session is still live before any `/api/` request reaches a
+service. Nothing depends on another tab or origin being open: each learns at its next
+request. Staff can do the same to an account without its holder (see Cutting an account
+off).
+
+**`POST /auth/sign-out`** `{"refresh_token"}`, outside `/api/`, no verifier (an idle tab's
+access token has often expired; the refresh token is the credential the app always holds),
+wrapped in CORS, POST and OPTIONS, in every build. The body limit is the `/auth/refresh`
+one: the decoder reads the first JSON value, at most 1 KiB, and ignores any trailing bytes.
+The gateway posts `{"refresh_token"}` to GoTrue `/token?grant_type=refresh_token`, then
+`POST /logout?scope=global` with the minted access token as the bearer. On success it evicts
+every cached session-check entry whose subject is that token's `sub` (read from GoTrue's own
+answer, unverified), then answers.
+
+| Outcome | Answer |
+|---|---|
+| refresh grant 200 with a non-empty `access_token`, then logout any 2xx | 204, no body; every cached entry for the subject evicted before the answer |
+| logout 401/403 whose `error_code` is `session_not_found`, `user_not_found`, `user_banned` or `session_expired` (the session vanished between the two calls) | the same 204; evicted |
+| refresh grant 200 whose `access_token` is not a JWT or has no `sub` | the logout still runs with it and the answer follows the logout step; nothing is evicted, one WARN is logged |
+| a malformed body, or a first JSON value over 1 KiB | 400 `invalid request body`; GoTrue is not called |
+| an empty or missing `refresh_token` | 400 `refresh_token is required`; GoTrue is not called |
+| refresh grant 429, or logout 429 | 429 `too many requests`; nothing evicted |
+| refresh grant any other 4xx (the session is already gone, or the token is stale) | 401 `invalid or expired refresh token`; logout is not called |
+| logout any other 401/403 (for example `bad_jwt`), any other 4xx, or any 3xx | 502 `sign-out is unavailable`; nothing evicted |
+| refresh grant 200 without a non-empty `access_token`, any other 2xx, any 3xx; any 5xx or GoTrue unreachable at either step | 502 `sign-out is unavailable`, logged at WARN with the step and the upstream status or the error only; nothing evicted |
+| an OPTIONS without an `Origin` | 405 `method not allowed`, `Allow: POST` |
+| any other method but POST | 405 from the router |
+
+- A logout 401/403 counts as success only with one of those four codes, because only then
+  is the session gone. Any other refusal revoked nothing.
+- Once the refresh grant succeeds it has rotated the refresh token, so the logout step runs
+  on a context the client cannot cancel: an app that gives up at its 5 s timeout does not
+  stop a logout already under way. `ceiling:` that app then reports a failed sign-out even
+  though the logout may still complete.
+- Every answer the handler writes sets `Cache-Control: no-store`. The gateway never logs
+  either token or the subject. A preflight is answered by CORS.
+- Anyone holding a session's refresh token can sign the whole account out; they could
+  already use the session. `ceiling:` the route is not throttled, like `/auth/refresh`.
+- Guarded by `internal/gateway/signout_test.go` (`TestSignOut_*`; the mapping by
+  `TestSignOut_GoTrueMapping`), the CI `idp` job's `TestIdP_SignOutEndsEverySession` and
+  `TestIdP_SignOutWithTheParentRefreshToken`, and `e2e/api/session-handoff.spec.ts`
+  "sign-out revokes every session of the account".
+
+**The edge check** (`internal/gateway/session_check.go` `SessionChecker`) runs on `/api/`
+after the verifier and before the router. For a token with a `session_id` claim it calls
+GoTrue `GET /user` with the caller's own `Authorization` header and reads only `error_code`
+from the first 1 KiB of the answer:
+- **200** → live; the request proceeds.
+- **401/403 with `session_not_found`, `user_not_found`, `user_banned` or
+  `session_expired`** → revoked: 401 `{"error":"unauthorized"}` with
+  `WWW-Authenticate: Bearer`, the verifier's own refusal bytes. No service is reached.
+- **Anything else** → 503 `{"error":"session check unavailable"}`: `bad_jwt` and every other
+  4xx code, 404, any 3xx (the checker never follows a redirect), a 2xx other than 200, 429,
+  5xx, a transport error, and the 5 s timeout (`SessionCheckTimeout`). `bad_jwt` is not
+  treated as revoked: the verifier already accepted the token, so GoTrue refusing to parse
+  it means clock skew at `exp` or a misconfiguration, and a 401 would sign a live user out.
+  A mis-set `AUTH_URL` path (404) is likewise a 503, never a mass sign-out.
+
+The cache:
+- Keyed by `session_id`, 30 s (`SessionCheckTTL`). Both verdicts are cached: a deleted
+  session never comes back. A 503 is never cached.
+- Concurrent misses for one session share one GoTrue call.
+- At most 100,000 entries (`SessionCheckMaxEntries`). When full, expired entries are swept;
+  when still full, the check runs without caching.
+- A sign-out through the gateway evicts every entry of the subject and flags that subject's
+  in-flight calls as evicted. A flagged call still answers the requests already waiting on
+  it, but caches nothing, so a `/user` call that began before the sign-out cannot cache
+  "live" after it.
+
+**GoTrue unreachable: fail closed** (user decision, AUTH-07 CF4). A live cached session keeps
+working until its entry is 30 s old. After that, and at once for every uncached session,
+`/api/` answers 503 until GoTrue answers again. The app's 401 path does not fire on a 503,
+so an outage signs nobody out. An outage of GoTrue therefore stops sign-in, renewal and
+sign-out at once, and the API after 30 s.
+
+**Tokens without `session_id` skip the check.** Mock-issuer (persona) tokens carry none, so
+persona sessions on forks and in dev never call GoTrue. Production has no mock issuer. A
+GoTrue-signed token without `session_id` can be minted only with GoTrue's private key, which
+can forge any claim. `TestIdP_AccessTokenCarriesSessionID` fails if a GoTrue upgrade drops
+the claim. `ceiling:` the check keys on the claim, not the issuer; revisit if a second real
+issuer is trusted.
+
+Guarded by `internal/gateway/session_check_test.go` (`TestSessionCheck_*`; the refusal never
+reaching a service by `TestSessionCheck_RevokedNeverReachesUpstream`, the stale window by
+`TestSessionCheck_TTLBoundary`, the evicted flag by
+`TestSessionCheck_EvictionBeatsAnInFlightCheck`), and the CI `idp` job's
+`TestIdP_RevokedTokenNeverReachesAService`.
+
+**The cost of the check.** A miss costs one GoTrue `GET /user`; a hit is a map read. A
+session costs at most one GoTrue call per 30 s.
+- Design time (local GoTrue container, 2026-09-29): `GET /user` sequential p50 20.5 ms,
+  p95 25.6 ms (n=1000). Ten concurrent callers saturate GoTrue near 233 requests per second
+  (pool size 10). An uncached check would add ~20 ms to every `/api/` request and cap the
+  API at GoTrue's throughput; that is why the cache exists.
+- CI, `TestIdP_SessionCheckCost` (the `idp` job): it drives the real `SessionChecker`
+  against the `idp-es256` container, 200 misses and 10,000 hits, and asserts verdicts and
+  GoTrue call counts, never latency. It prints p50/p95/max in the test log and appends them
+  to the `idp` job's step summary (`$GITHUB_STEP_SUMMARY`), because the CI gate shows test
+  output only on failure. A local run measured misses p50 ~21.5 ms, p95 ~25 ms, and hits
+  ~83 ns. CI run `36554514886`: misses (n=200) p50 22.99 ms, p95 24.47 ms, max 28.57 ms;
+  hits (n=10,000) p50 183 ns, p95 414 ns, max 57.6 µs.
+- These figures exclude ES256 verification (the test hands the checker an already verified
+  identity) and Railway's private-network hop.
+- Deployed figures: `e2e/api/session-handoff.spec.ts` "the session check's deployed cost"
+  times, for 10 fresh sessions, the first `/api/` call after sign-in (a miss) and the second
+  (a hit), and attaches the medians. Deploy gate run `36619314593`, Railway PR env `pr-281`,
+  2026-09-29, one gateway replica: client-measured `/me` through the gateway (n=10 pairs),
+  misses median 173.2 ms (max 185.2 ms), hits median 117.0 ms (max 124.4 ms); a miss costs
+  ~56 ms over a hit. GoTrue `GET /user` duration from the auth service logs during that test
+  (n=10): median 51.5 ms, max 55.6 ms. A hit makes no GoTrue call: 20 `/me` calls produced
+  exactly 10 `/user` calls. The deployed miss cost is ~2x the CI miss p50 (23 ms), and nearly
+  all of it is the GoTrue round trip.
+
+**The worst-case stale window** (how long a revoked session's access token still passes the
+edge):
+- **Sign-out through the gateway: 0 s** on the gateway that answered, for every request whose
+  check starts after the eviction. The eviction runs before the 204, and the evicted flag
+  stops an older in-flight `/user` answer from caching "live". A request already past the
+  check, or already waiting on an in-flight check, when the eviction runs still completes.
+- **A revocation the gateway did not make** (a staff cut-off, a session GoTrue removes
+  itself, a sign-out answered 204 whose minted token named no subject): **30 s**
+  (`SessionCheckTTL`).
+- A revoked session's refresh token is refused at once in every case: GoTrue answers 400
+  `refresh_token_not_found`, which `/auth/refresh` answers 401.
+- `ceiling:` a second gateway replica does not see another replica's eviction, so its window
+  is 30 s too. The gateway runs one replica; the hand-off store has the same ceiling (Sign-in
+  and hand-off, Ceilings).
+- `ceiling:` GoTrue's reuse detection revokes a refresh-token family but leaves the session
+  row, so that session's access tokens pass the check until their `exp` (at most 3600 s).
+  Revisit if reuse detection is ever the only revocation a stolen token meets.
+
+**The app's rule** (`frontend/app/src/lib/revoke.ts`, `frontend/app/src/App.tsx` `signOut`
+and `endRevokedSession`):
+- **Revoke, then clear.** Both Sign out buttons (the Sidebar's and the suspended notice's)
+  call `signOut`. For a hand-off seat with a refresh token it first awaits
+  `revokeSessions`, which posts `{"refresh_token"}` to `/auth/sign-out` with a 5 s timeout
+  (`REVOKE_TIMEOUT_MS`) and never rejects. It sends the stored record's refresh token when
+  the record belongs to the seat's user (another tab may have rotated it), else the seat's
+  own. Only then does it clear state, the stored record and the destination, and navigate to
+  landing: the navigation would cancel the request. The worst wait is 5 s.
+- A persona seat, or a DEMO_MODE stand-in's own identity, sends nothing: neither has a
+  server session. With a stand-in active, the seat's refresh token is sent.
+- **A failed revoke is silent** (user decision, AUTH-07 CF5). Any failure (gateway
+  unreachable, the timeout, any non-2xx answer) still completes the local sign-out and logs
+  `console.warn('[session] sign-out could not reach the server; other sessions stay signed in')`.
+  `ceiling:` the user is not told; other devices stay signed in until their holder signs out
+  or staff cut the account off. Revisit if a user reports a session that outlived sign-out.
+- **One sign-out at a time.** A ref (`signingOut`) is set for the whole sign-out. While it is
+  set, a second click does nothing and `endRevokedSession` does nothing: the eviction runs
+  before the 204, so a poll from the signing-out tab can meet a 401 while the revoke is in
+  flight, and that 401 must not start a second navigation. The ref stays set once sign-out
+  navigates to landing. A build with no landing URL (the showcase build) does not navigate
+  and shows the persona picker, so there the ref is cleared at the end of sign-out, and the
+  next sign-in can sign out again.
+- **A 401 ends a revoked session without revoking** (`endRevokedSession`, the
+  `onUnauthorized` callback of every authed fetch and of the import client). It sends
+  nothing (the session is already dead), clears the destination, resets the URL to `/` and
+  navigates to landing, as sign-out does. It keeps the stored record only when both the
+  stored token and the ended session's token carry a readable `session_id` and the two
+  differ: the record then belongs to a newer sign-in in another tab, and it stays
+  byte-identical. In every other case (the same `session_id`, a missing or non-JWT token, a
+  JWT with no `session_id` such as a persona token) it clears the record. After revocation a
+  401 is the normal way another tab learns its session ended; without this rule that tab's
+  401 would wipe the record the first tab just wrote on signing in again.
+- **Where the tab ends up.** Both handlers navigate to landing. For a hand-off seat the front
+  door then redirects once more to `<landing>/?state=<43 characters>` and stores no
+  destination. A `?persona=`-booted seat ends on bare landing.
+- **Another tab that learns through a renewal** (user decision, AUTH-07 CF6). After tab 1
+  signs out, tab 2 ends at whichever comes first: its next request (edge 401 →
+  `endRevokedSession`, destination cleared) or its next due renewal, which finds the stored
+  record absent and ends as a refused renewal (Renewal, Two tabs). That path keeps tab 2's
+  destination and restores it after the next sign-in in tab 2, per AUTH-06's refused-renewal
+  rule. The destination is per tab and is only a path. A tab that sends no request keeps
+  showing its screen until it does.
+- Guarded by `frontend/app/src/App.signOut.test.tsx`,
+  `frontend/app/src/App.signedOutDeepLink.test.tsx` (`signOut_clearsAStoredDestination`,
+  `signOut_capturesNothingOnTheWayOut`), and the deployed `e2e/topology/auth.spec.ts`
+  "deployed app: signing out on one device ends the session on every device".
+
+**A fabricated or copied storage entry.** What revocation closes, and what it does not:
+- **Closed:** a stored record carrying a real token after that session is revoked, whether a
+  copy taken before sign-out or one written back by hand. Its access token is refused at the
+  edge (401 → `endRevokedSession` → landing, record cleared), and its refresh token cannot
+  mint (`/auth/refresh` 401). The deployed oracle is the same topology journey: the
+  pre-sign-out record replayed in a fresh browser context mounts, 401s and returns to
+  landing with no record.
+- **Unchanged:** a record with a fabricated token still mounts the app shell from storage
+  before its first request, then 401s and ends. The shell shows only what the record itself
+  holds. Gating the mount on a network check would add a round trip to every boot.
+- **Left to AUTH-11:** both consoles. They hold no token, so nothing server-side can refuse a
+  fabricated `{v:1, operator}` entry, and a sign-out anywhere cannot end a console session.
+  AUTH-11 owns both (its Core AC 5, a fabricated entry no longer gets in; its Core AC 9, a
+  console session ends when its account's sessions are revoked).
+
+## Cutting an account off
+
+Staff end every session of an account without its holder signing out. "Staff" is the
+operator with production database access; an in-product staff tool is out of scope (user
+decision, AUTH-07 CF2). Production Postgres is private-only, so the statement runs inside
+the Postgres container:
+
+1. `railway ssh --service Postgres`
+2. `psql`
+3. Run, replacing `<address>` and then `<id>`:
+   ```sql
+   SET ROLE supabase_auth_admin;
+   SELECT id FROM auth.users WHERE email = lower('<address>');
+   DELETE FROM auth.sessions WHERE user_id = '<id>';
+   ```
+   `SET ROLE` runs the statement as GoTrue's own role, the one GoTrue's global logout runs
+   as. The `DELETE` reports how many sessions it removed.
+
+**Effect and timing.**
+- Every refresh token of the account is refused at once: its rows cascade with the
+  sessions, and `/auth/refresh` answers 401.
+- Every access token of the account is refused at the edge within 30 s
+  (`SessionCheckTTL`): at once for a session the gateway has not cached, and when the cache
+  entry ages out for one it has. The app then ends the session through its 401 path.
+- The gateway is not told, so no cache entry is evicted. That is the 30 s stale window in
+  Revocation.
+
+**It does not ban** (user decision, AUTH-07 CF3). The person can sign in again with their
+password, and gets a new session. Keeping someone out is membership suspension, a different
+thing. Stated plainly: a compromised account whose password the attacker knows cannot be
+kept out by any path here when it is its workspace's sole active admin, because suspension
+refuses the last active admin (`internal/tenancy/store.go` `ErrLastActiveAdmin`). The
+cut-off stops a stolen token or refresh token, not a stolen password. Neither sign-out nor
+the cut-off can lock a workspace's only admin out, so the last-active-admin guard stays the
+only lock-out path.
+
+**Pinned by** the CI `idp` job's `TestIdP_StaffCutOffEndsEverySession`, which runs the
+`SET ROLE` and the `DELETE` against the pinned GoTrue's schema and asserts: an uncached
+access token refused at once, a cached one live until 30 s and refused at 30 s, both
+refresh tokens refused, and a new sign-in live. `ceiling:` the statement depends on GoTrue's
+schema at the pinned tag; an upgrade that changes `auth.sessions` fails that test.
 
 ## Opening registration in production (registration U1–U4)
 

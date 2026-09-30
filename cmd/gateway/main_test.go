@@ -27,7 +27,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/SimonOsipov/invoice-os/internal/gateway"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -383,6 +385,11 @@ func TestGatewayHandlersPublishNoProxyRouteForAProbedService(t *testing.T) {
 	}
 }
 
+// nilURLSessions is a checker for tests whose tokens carry no session_id, so GoTrue is never asked.
+func nilURLSessions() *gateway.SessionChecker {
+	return gateway.NewSessionChecker(nil, nil, time.Now, slog.Default())
+}
+
 // gatewayMux serves gatewayHandlers over upstreams set by setUpstreamEnv to a dead
 // address. get sends an authenticated GET; fleetNames decodes /healthz/fleet's names.
 func gatewayMux(t *testing.T) (get func(path string) int, fleetNames func() map[string]bool) {
@@ -412,7 +419,7 @@ func gatewayMux(t *testing.T) (get func(path string) int, fleetNames func() map[
 		t.Fatalf("loadUpstreams: %v", err)
 	}
 
-	apiHandler, fleetHandler := gatewayHandlers(verifier, routed, probed, nil, slog.Default())
+	apiHandler, fleetHandler := gatewayHandlers(verifier, nilURLSessions(), routed, probed, nil, slog.Default())
 	mux := http.NewServeMux()
 	mux.Handle("/api/", apiHandler)
 	mux.HandleFunc("GET /healthz/fleet", fleetHandler)
@@ -708,7 +715,7 @@ func TestLoadUpstreamsRequiresReconciliationURL(t *testing.T) {
 		if err != nil {
 			t.Fatalf("loadUpstreams: %v", err)
 		}
-		_, fleet := gatewayHandlers(nil, routed, probed, nil, slog.Default())
+		_, fleet := gatewayHandlers(nil, nilURLSessions(), routed, probed, nil, slog.Default())
 		rollup := func() (int, string, map[string]string) {
 			rec := httptest.NewRecorder()
 			fleet(rec, httptest.NewRequest(http.MethodGet, "/healthz/fleet", nil))
@@ -965,8 +972,8 @@ func TestGatewayMainProbesAuthAtItsJWKSPath(t *testing.T) {
 		if e, ok := n.(ast.Expr); ok {
 			if c, ok := isCallTo(e, "", "gatewayHandlers"); ok {
 				calls++
-				if len(c.Args) == 5 {
-					arg = c.Args[3]
+				if len(c.Args) == 6 {
+					arg = c.Args[4]
 				}
 			}
 		}

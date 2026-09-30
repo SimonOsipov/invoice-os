@@ -47,6 +47,7 @@ func TestHandoffHandlers_DoNotFollowGoTrueRedirects(t *testing.T) {
 	for _, c := range []struct{ path, body, leak string }{
 		{"/auth/sign-in", signInJSON("a@example.com"), `"code"`},
 		{"/auth/refresh", `{"refresh_token":"ref-presented"}`, "tok-redirected"},
+		{"/auth/sign-out", `{"refresh_token":"ref-presented"}`, "tok-redirected"},
 	} {
 		authURL, calls := countingGoTrue(t, func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/landed" {
@@ -68,6 +69,24 @@ func TestHandoffHandlers_DoNotFollowGoTrueRedirects(t *testing.T) {
 			t.Errorf("POST %s: GoTrue saw %v, want %v", c.path, got, want)
 		}
 	}
+
+	// Sign-out's second step: a 302 on /logout is a failed logout, not a hop to a 204.
+	authURL, calls := countingGoTrue(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			_, _ = w.Write([]byte(`{"access_token":"` + handoffAccessToken("user-r") + `","refresh_token":"ref-r"}`))
+		case "/landed":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Redirect(w, r, "/landed", http.StatusFound)
+		}
+	})
+	if rec := postJSON(handoffMux(t, authURL, true), "/auth/sign-out", handoffAllowedOrigin, `{"refresh_token":"ref-presented"}`); rec.Code != http.StatusBadGateway {
+		t.Errorf("POST /auth/sign-out on a /logout 302 = %d %s, want 502", rec.Code, rec.Body)
+	}
+	if got, want := calls(), []string{"POST /token", "POST /logout"}; !slices.Equal(got, want) {
+		t.Errorf("POST /auth/sign-out: GoTrue saw %v, want %v", got, want)
+	}
 }
 
 // handoffHandlers is read, not run, for what no seam exposes: the client and the constructor arguments.
@@ -85,6 +104,18 @@ func TestHandoffHandlersWiring(t *testing.T) {
 	if fn == nil {
 		t.Fatal("main.go declares no handoffHandlers")
 	}
+
+	// The checker is handoffHandlers' second parameter; sign-out must evict from the API's own cache.
+	var params []string
+	for _, p := range fn.Type.Params.List {
+		for _, n := range p.Names {
+			params = append(params, n.Name+" "+types.ExprString(p.Type))
+		}
+	}
+	if len(params) < 2 || !strings.HasSuffix(params[1], " *gateway.SessionChecker") {
+		t.Fatalf("handoffHandlers params = %v, want a *gateway.SessionChecker second", params)
+	}
+	sessions := strings.Fields(params[1])[0]
 
 	var clients []map[string]string
 	calls := map[string][]string{}  // callee -> argument lists
@@ -140,6 +171,7 @@ func TestHandoffHandlersWiring(t *testing.T) {
 		"gateway.SignInHandler":     "authURL, client, " + store + ", " + throttle + ", log",
 		"gateway.ExchangeHandler":   store,
 		"gateway.RefreshHandler":    "authURL, client, log",
+		"gateway.SignOutHandler":    "authURL, client, " + sessions + ", log",
 	} {
 		// One construction outside any closure: the store and throttle outlive a request.
 		if got := calls[callee]; len(got) != 1 || got[0] != want {
@@ -151,6 +183,43 @@ func TestHandoffHandlersWiring(t *testing.T) {
 	}
 	if store == "" || throttle == "" || store == throttle {
 		t.Errorf("store bound to %q, throttle to %q; want two distinct names", store, throttle)
+	}
+	if got := calls["gateway.NewSessionChecker"]; len(got) != 0 {
+		t.Errorf("handoffHandlers builds its own checker %v; sign-out must evict from the API's", got)
+	}
+
+	// main passes the checker it built to both gatewayHandlers and handoffHandlers.
+	var mainFn *ast.FuncDecl
+	for _, d := range f.Decls {
+		if d, ok := d.(*ast.FuncDecl); ok && d.Recv == nil && d.Name.Name == "main" {
+			mainFn = d
+		}
+	}
+	if mainFn == nil {
+		t.Fatal("main.go declares no main")
+	}
+	secondArg := map[string][]string{}
+	var checker string
+	ast.Inspect(mainFn.Body, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.AssignStmt:
+			if c, ok := n.Rhs[0].(*ast.CallExpr); ok && len(n.Lhs) == 1 && types.ExprString(c.Fun) == "gateway.NewSessionChecker" {
+				checker = types.ExprString(n.Lhs[0])
+			}
+		case *ast.CallExpr:
+			if callee := types.ExprString(n.Fun); (callee == "gatewayHandlers" || callee == "handoffHandlers") && len(n.Args) > 1 {
+				secondArg[callee] = append(secondArg[callee], types.ExprString(n.Args[1]))
+			}
+		}
+		return true
+	})
+	if checker == "" {
+		t.Fatal("main binds no `x := gateway.NewSessionChecker(...)`")
+	}
+	for _, callee := range []string{"gatewayHandlers", "handoffHandlers"} {
+		if got := secondArg[callee]; len(got) != 1 || got[0] != checker {
+			t.Errorf("main calls %s with second argument %v, want exactly once with %s", callee, got, checker)
+		}
 	}
 }
 

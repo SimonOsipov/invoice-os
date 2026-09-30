@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { APP_PERSONAS, landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn, SignInLoading } from './components/SignIn'
-import { resolveBootSession, loadSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
+import { resolveBootSession, loadSession, saveSession, clearSession, shouldAutoSignIn, decodeJwtPayload } from './lib/session'
+import { revokeSessions } from './lib/revoke'
 import { createRenewer, isRenewalDue, SessionEndedError, type Renewer } from './lib/renewal'
 import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
 import { consumeSignInState, ensureSignInState, landingSignInUrl, mintSignInState } from './lib/signInState'
@@ -181,9 +182,9 @@ export const SUSPENDED_NOTICE = {
 
 // Replaces the workspace outright, never overlays it: a suspended member can read nothing,
 // so a shell around this card would be chrome over an empty product. Its one control is the
-// app's own sign-out — the callback the 401 seam fires, never a second one. Not a retry: the
-// gate's answer cannot change without an admin. Not nothing either: with no control at all,
-// the only way off this card would be clearing site data.
+// app's own sign-out. Not a retry: the gate's answer cannot change without an admin. Not
+// nothing either: with no control at all, the only way off this card would be clearing site
+// data.
 function SuspendedNotice({ onSignOut }: { onSignOut: () => void }) {
   return (
     <div
@@ -230,7 +231,7 @@ const STILL_WORKING = new ApiError('network', 'An import or filing is still in p
 // (Platform.dc.html ~L980-1263): `this.state` becomes typed `useState` hooks below,
 // and every handler in the "actions" section is ported 1:1 as a plain function.
 // Rendered only once signed in (see App): the persona picks the initial workspace mode.
-function Workspace({ session, onSignOut, initialView, becomePersona, returnToSeat, seatSubject, freshToken }: {
+function Workspace({ session, onSignOut, initialView, becomePersona, returnToSeat, seatSubject, freshToken, onUnauthorized }: {
   session: Session
   onSignOut: () => void
   initialView?: View
@@ -238,6 +239,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   returnToSeat?: (view: View, seat: Member) => Promise<void>
   seatSubject?: string
   freshToken?: () => string | null | Promise<string | null>
+  onUnauthorized: () => void
 }) {
   // Workspace type is a property of the authenticated identity, not a user-flippable
   // view: the firm persona gets the firm workspace, the in-house persona the in-house
@@ -251,14 +253,14 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   const onSuspended = useCallback(() => setSuspended(true), [])
 
   const authedFetch = useMemo(
-    () => makeAuthedFetch(session, onSignOut, onSuspended, freshToken),
-    [session, onSignOut, onSuspended, freshToken],
+    () => makeAuthedFetch(session, onUnauthorized, onSuspended, freshToken),
+    [session, onUnauthorized, onSuspended, freshToken],
   )
   // Same arguments, one construction site — the multipart XHR transport cannot drift
-  // from the fetch path on auth, the 401 sign-out or the 403 suspension (importApi.ts).
+  // from the fetch path on auth, the 401 or the 403 suspension (importApi.ts).
   const importAuth = useMemo(
-    () => makeImportAuth(session, onSignOut, onSuspended, freshToken),
-    [session, onSignOut, onSuspended, freshToken],
+    () => makeImportAuth(session, onUnauthorized, onSuspended, freshToken),
+    [session, onUnauthorized, onSuspended, freshToken],
   )
 
   // [entity-picker] step 1 of 3: ONE fetch of the tenant's live portfolio entities,
@@ -1873,7 +1875,7 @@ export default function App() {
   const toastSeq = useRef(0)
   const [toast, setToast] = useState<{ name: string; initials: string; role: Member['role']; seq: number } | null>(null)
 
-  // Set by expireSession when storage belongs to another tab's sign-in or sign-out.
+  // Set when storage belongs to another tab's sign-in or sign-out.
   const keepStoredRecord = useRef(false)
 
   // Mirror the SEAT to storage: persist while signed in, wipe on sign out / cleared session.
@@ -1930,14 +1932,29 @@ export default function App() {
     else done()
   }, [bootRenewing, renewer])
 
+  // Blocks a second click and a repeat exit (sign-out or revoked session). Stays set when the exit leaves the page; sign-out resets it when it stays.
+  const signingOut = useRef(false)
+
   // Sign out returns the user to the marketing landing page (the real sign-in front
   // door). Nulling React state alone would only swap in the app's own minimal
-  // persona-picker, so wipe the persisted session and navigate away. Also the 401 handler
-  // (makeAuthedFetch → onSignOut): an invalidated session belongs back at the front door,
-  // not the in-app picker. The `?persona=` deep-link is no longer this function's problem —
-  // it is stripped from the URL when consumed at boot, so no history entry behind this
-  // navigation can auto-sign the same persona back in.
-  const signOut = useCallback(() => {
+  // persona-picker, so wipe the persisted session and navigate away. The `?persona=`
+  // deep-link is no longer this function's problem — it is stripped from the URL when
+  // consumed at boot, so no history entry behind this navigation can auto-sign the same
+  // persona back in.
+  // A hand-off seat revokes every session of the account first; the navigation would cancel the request.
+  const signOut = useCallback(async () => {
+    if (signingOut.current) return
+    signingOut.current = true
+    const base = gatewayBase()
+    if (seat?.handoff && seat.renewal && base) {
+      // Another tab may have rotated the seat's refresh token.
+      const stored = loadSession()
+      const refreshToken =
+        stored?.renewal && stored.persona.subject === seat.persona.subject ? stored.renewal.refreshToken : seat.renewal.refreshToken
+      if ((await revokeSessions(base, refreshToken)) === 'failed') {
+        console.warn('[session] sign-out could not reach the server; other sessions stay signed in')
+      }
+    }
     // First: a renewal settling after this must not restore the session.
     renewerRef.current?.track(null)
     identityGen.current++
@@ -1963,7 +1980,32 @@ export default function App() {
     // the workspace behind an expired token is not.
     const dest = landingBase()
     if (dest) window.location.href = dest
-  }, [])
+    else signingOut.current = false
+  }, [seat])
+
+  // The 401 seam: the session is already dead, so nothing is sent. Keeps the stored record
+  // only when it holds another sign-in (both tokens carry session_ids that differ).
+  const endRevokedSession = useCallback(() => {
+    if (signingOut.current) return
+    const endedSid = decodeJwtPayload(activeSession?.token ?? null)?.session_id
+    const storedSid = decodeJwtPayload(loadSession()?.token ?? null)?.session_id
+    const keep = typeof endedSid === 'string' && typeof storedSid === 'string' && endedSid !== storedSid
+    renewerRef.current?.track(null)
+    identityGen.current++
+    keepStoredRecord.current = keep
+    setSeat(null)
+    setStandIn(null)
+    setCarriedView(null)
+    window.history.replaceState(null, '', '/')
+    setToast(null)
+    if (!keep) clearSession()
+    clearDestination()
+    const dest = landingBase()
+    if (dest) {
+      signingOut.current = true
+      window.location.href = dest
+    }
+  }, [activeSession])
 
   const doSignIn = useCallback(async (persona: Persona) => {
     setSigningIn(persona.id)
@@ -2143,6 +2185,7 @@ export default function App() {
         returnToSeat={DEMO_MODE ? returnToSeat : undefined}
         seatSubject={DEMO_MODE ? seat?.persona.subject : undefined}
         freshToken={freshToken}
+        onUnauthorized={endRevokedSession}
       />
       {/* Sibling of the keyed Workspace above, not inside it -- a successful switch
           remounts Workspace, which would destroy a toast mounted underneath it. */}

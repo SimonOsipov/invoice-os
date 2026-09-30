@@ -212,7 +212,7 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disa
   (`TestSentryOffListsMatchTheDeployedFleet`). A new service probed through the
   `/healthz/fleet` roll-up without the platform `/healthz` must be exempted by name in
   `fleet-gate`'s "Gate on the Go fleet's Sentry state" step, as `docling` and `auth` are.
-  An outbound client to another first-party service uses `platform.TraceTransport`;
+  A new outbound client to another first-party service uses `platform.TraceTransport`;
   a third-party client never does.
 
 ## 5. Provisioning runbook

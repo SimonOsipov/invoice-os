@@ -53,9 +53,13 @@ func flushSentry(timeout time.Duration) {
 }
 
 // taggedHub returns a cloned hub with request/tenant ids from the context set
-// as tags, or nil when Sentry is disabled.
+// as tags, or nil when Sentry is disabled. It clones the request's hub when
+// tracingMiddleware installed one, so issues carry the request's trace.
 func taggedHub(ctx context.Context) *sentry.Hub {
-	hub := sentry.CurrentHub()
+	hub := sentry.GetHubFromContext(ctx)
+	if hub == nil {
+		hub = sentry.CurrentHub()
+	}
 	if hub.Client() == nil {
 		return nil
 	}

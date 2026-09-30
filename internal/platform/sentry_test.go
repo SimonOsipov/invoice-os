@@ -249,7 +249,7 @@ func TestInitSentry_LabelsEveryEvent(t *testing.T) {
 	}
 }
 
-// D-36. The default telemetry-buffer transport lets Flush return before a boot-failure event is
+// The default telemetry-buffer transport lets Flush return before a boot-failure event is
 // queued. A timing test cannot fail on that race every run, so this pins the resolved transport.
 func TestInitSentry_EventsGoThroughTheSynchronousTransport(t *testing.T) {
 	t.Setenv("SENTRY_DSN", "https://public@example.com/1")

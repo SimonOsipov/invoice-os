@@ -1156,6 +1156,18 @@ const SIGN_OUT_URL = `${GATEWAY_URL}/auth/sign-out`
 const INVALID_REFRESH = 'invalid or expired refresh token'
 const isApiResponse = (r: Response) => isApi(r.request()) && r.request().method() !== 'OPTIONS'
 
+// Polls the settled URL: waitForURL throws when the bare-landing navigation is aborted by the ?state= one (D10).
+const reachesFrontDoor = (page: Page, who: string) =>
+  expect
+    .poll(
+      () => {
+        const u = new URL(page.url())
+        return u.href.startsWith(LANDING_URL) && u.searchParams.has('state')
+      },
+      { message: `${who} did not reach the front door`, timeout: 20_000 },
+    )
+    .toBe(true)
+
 // Two contexts are two devices: global sign-out ends both, and a record copied before it replays into nothing.
 test('deployed app: signing out on one device ends the session on every device', async ({ browser }) => {
   test.setTimeout(300_000)
@@ -1199,7 +1211,7 @@ test('deployed app: signing out on one device ends the session on every device',
       const signedOut = a.page.waitForResponse((r) => r.url() === SIGN_OUT_URL && r.request().method() === 'POST', { timeout: 20_000 })
       await a.page.getByRole('button', { name: 'Sign out' }).click()
       expect((await signedOut).status(), 'the sign-out answer').toBe(204)
-      await a.page.waitForURL((u) => u.href.startsWith(LANDING_URL) && u.searchParams.has('state'), { timeout: 20_000 })
+      await reachesFrontDoor(a.page, 'A')
       await expect.poll(() => leaving.length, { message: 'A did not leave in two landing navigations', timeout: 20_000 }).toBeGreaterThanOrEqual(2)
       expect(
         leaving.map((l) => l.url.slice(LANDING_URL.length).replace(/^\/$/, '')),
@@ -1216,7 +1228,7 @@ test('deployed app: signing out on one device ends the session on every device',
       await b.page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: 'Invoices' }).click()
       expect((await refused).status(), "B's first /api/ answer after the sign-out").toBe(401)
       // Settle on the front door's navigation, not the bare landing one it aborts (D10).
-      await b.page.waitForURL((u) => u.href.startsWith(LANDING_URL) && u.searchParams.has('state'), { timeout: 20_000 })
+      await reachesFrontDoor(b.page, 'B')
       expect(await storedSession(b.context), 'B kept a stored session').toBeNull()
 
       const renewed = await rawFetch('/auth/refresh', { method: 'POST', body: { refresh_token: recordB.refresh_token } })
@@ -1263,7 +1275,7 @@ test('deployed app: signing out on one device ends the session on every device',
       // Commit only: the 401 navigates to landing, which may beat the load event.
       await c.page.goto(APP_URL, { waitUntil: 'commit' })
       expect((await refused).status(), "C's first /api/ answer").toBe(401)
-      await c.page.waitForURL((u) => u.href.startsWith(LANDING_URL) && u.searchParams.has('state'), { timeout: 20_000 })
+      await reachesFrontDoor(c.page, 'C')
       await c.page.unroute(`${GATEWAY_URL}/api/**`)
       expect(await firstLook, 'the shell and the Authorization header at the first /api/ request').toEqual([1, `Bearer ${recordA.token}`])
       expect(await storedSession(c.context), 'C kept a stored session').toBeNull()

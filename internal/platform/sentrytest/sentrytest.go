@@ -73,6 +73,20 @@ func (r *Recorder) Events() []*sentry.Event {
 	return out
 }
 
+// Transactions flushes the hub and returns the transaction-type events.
+func (r *Recorder) Transactions() []*sentry.Event {
+	sentry.Flush(time.Second)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []*sentry.Event
+	for _, e := range r.events {
+		if e.Type == "transaction" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // LogEvents flushes the hub and returns the log-type events.
 func (r *Recorder) LogEvents() []*sentry.Event {
 	sentry.Flush(time.Second)

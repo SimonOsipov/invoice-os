@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# await-ci.sh [--once] <sha>
+# await-ci.sh <sha>
 # Polls the `CI` check-run on <sha> every 15 s, 80 times. Needs REPO; gh reads GH_TOKEN.
-# Exit 0 on success, 1 on other conclusions or a timeout, 2 on usage. --once: one poll, exit 1 only on a completed non-success.
+# Exit 0 on success, 1 on any other conclusion or a timeout, 2 on a usage error.
 set -euo pipefail
 
-once=0
-if [ "${1:-}" = "--once" ]; then once=1; shift; fi
 if [ "$#" -lt 1 ] || [ -z "$1" ]; then
   echo "::error::usage: await-ci.sh <sha> (the sha is missing or empty)" >&2
   exit 2
@@ -17,7 +15,6 @@ fi
 sha="$1"
 
 emit() {
-  if [ "$once" = 1 ]; then return 0; fi
   if [ -n "${GITHUB_OUTPUT:-}" ]; then echo "conclusion=$1" >> "$GITHUB_OUTPUT"; fi
 }
 
@@ -39,7 +36,6 @@ for _ in $(seq 1 80); do
     echo "::error::CI concluded '$concl' for $sha." >&2
     exit 1
   fi
-  if [ "$once" = 1 ]; then exit 0; fi
   sleep 15
 done
 echo "::error::Timed out after ~20m waiting for the CI check on $sha." >&2

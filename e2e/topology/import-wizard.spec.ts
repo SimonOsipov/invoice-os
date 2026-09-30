@@ -80,7 +80,6 @@ import {
   getInvoice,
   postFieldCorrection,
   rawFetch,
-  PERSONAS,
   type CorrectionResponse,
   type ExtractionCandidate,
   type ExtractionDetail,
@@ -88,12 +87,14 @@ import {
   type ExtractionJobsResponse,
   type ExtractionReason,
   type ExtractionRegion,
+  type Persona,
 } from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertFillsColumn, assertPageDoesNotScrollSideways, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
-import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
+import { assertShardSession, seedShardSession } from './shardSession'
+import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA, shardTenants } from './targets'
 import {
   buildAir07TitleRowCsv,
   buildAir07UnsteeredCsv,
@@ -169,14 +170,30 @@ function collectErrors(page: Page, extra?: Dropper): string[] {
   return errors
 }
 
+// This file runs in its own shard, on its own tenants: PERSONAS shadows the api client's 1111 / 2222 pair.
+const SHARD = shardTenants('import-wizard.spec.ts')
+const PERSONAS: { A: Persona; B: Persona } = {
+  A: { ...SHARD.a, tenantId: SHARD.a.id },
+  B: { ...SHARD.b, tenantId: SHARD.b.id },
+}
+
+test.beforeAll(async () => {
+  expect(test.info().project.name, 'import-wizard.spec.ts belongs to the import-wizard shard').toBe('import-wizard')
+  await ensureFirmPolicyActive(await login(PERSONAS.A))
+})
+
 async function signInPersona(page: Page, param: string): Promise<void> {
+  const inhouse = param === INHOUSE_PERSONA.param
+  const tenant = inhouse ? SHARD.b : SHARD.a
+  await seedShardSession(page, inhouse ? 'inhouse' : 'firm', tenant)
   // The landing page is the single sign-in front door, so the app has no picker to click
   // on a deployed build; ?persona= IS the sign-in, exactly as landing destUrl() hands off.
-  const url = `${APP_URL}?persona=${param}`
+  const url = inhouse ? APP_URL : `${APP_URL}?persona=${param}`
   const res = await page.goto(url)
   expect(res, `no response from ${url}`).toBeTruthy()
   expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
   await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  await assertShardSession(page, tenant.id)
 }
 
 async function signInFirm(page: Page): Promise<void> {
@@ -226,7 +243,7 @@ function requestBody(req: Request): string {
 // run at all, and approveUntilClosed has nothing to read for one.
 async function approveOpenRunsForEntity(token: string, entityId: string): Promise<void> {
   const { invoices } = await listInvoices(token, { entity_id: entityId })
-  const approverTokens = await firmApproverTokens()
+  const approverTokens = await firmApproverTokens(SHARD.a.id)
   await Promise.all(
     invoices.filter((inv) => inv.approval?.run_state === 'open').map((inv) => approveUntilClosed(inv.id, approverTokens)),
   )

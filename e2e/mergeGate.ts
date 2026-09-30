@@ -4,7 +4,14 @@
 
 import { fileURLToPath } from 'node:url'
 
-export type GateInput = { changesResult: string; relevant: string; draft: string; e2eResult: string }
+export type GateInput = {
+  changesResult: string
+  relevant: string
+  draft: string
+  e2eResult: string
+  ciResult?: string
+  ciConclusion?: string
+}
 
 /** mergeGateVerdict applies the rules in order and fails closed on any unrecognised input. */
 export function mergeGateVerdict(i: GateInput): { pass: boolean; reason: string } {

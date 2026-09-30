@@ -1,4 +1,4 @@
-// INFRA-04-01: the four E2E shard tenants db/seed.e2e-shards.sql creates in a
+// The four E2E shard tenants db/seed.e2e-shards.sql creates in a
 // PR environment's reset-and-seed. Env-gated like reset_test.go.
 package db_test
 
@@ -197,7 +197,6 @@ func mirrorRows(t *testing.T, pool *pgxpool.Pool, label, sql string, s shardTena
 	}
 }
 
-// AC-1
 func TestProvisionSeedsShardTenantsOnAPRReset(t *testing.T) {
 	e := newShardEnv(t)
 	e.provisionReset(t)
@@ -212,7 +211,6 @@ func TestProvisionSeedsShardTenantsOnAPRReset(t *testing.T) {
 	}
 }
 
-// AC-2
 func TestShardMembershipsMirrorTheirSourceTenant(t *testing.T) {
 	e := newShardEnv(t)
 	e.provisionReset(t)
@@ -223,7 +221,6 @@ func TestShardMembershipsMirrorTheirSourceTenant(t *testing.T) {
 	}
 }
 
-// AC-3
 func TestShardRolesAndStaffingMirrorTheirSourceTenant(t *testing.T) {
 	e := newShardEnv(t)
 	e.provisionReset(t)
@@ -290,7 +287,6 @@ func requireNoApprovalRows(t *testing.T, super *pgxpool.Pool, tenantIDs ...strin
 	})
 }
 
-// AC-4
 func TestShardFirmPolicyIsAnUnpublishedCopyOfTheShippedFirmPlan(t *testing.T) {
 	appDSN := requireAppDSN(t) // demopolicy.Seed runs on the app pool
 	e := newShardEnv(t)
@@ -347,7 +343,6 @@ func TestShardFirmPolicyIsAnUnpublishedCopyOfTheShippedFirmPlan(t *testing.T) {
 	}
 }
 
-// AC-5
 func TestShardTenantsHoldOnlyTheirSeededEntitiesAndInvoice(t *testing.T) {
 	e := newShardEnv(t)
 	e.provisionReset(t)
@@ -432,7 +427,6 @@ func TestShardTenantsHoldOnlyTheirSeededEntitiesAndInvoice(t *testing.T) {
 	})
 }
 
-// AC-6
 func TestProvisionSeedsNoShardTenantWithoutReset(t *testing.T) {
 	e := newShardEnv(t)
 
@@ -459,7 +453,6 @@ func TestProvisionSeedsNoShardTenantWithoutReset(t *testing.T) {
 	e.requireAllShardTenants(t, "positive control: a reset-on Provision")
 }
 
-// AC-6
 func TestProvisionGuardOffSeedsNoShardTenant(t *testing.T) {
 	e := newShardEnv(t)
 
@@ -499,7 +492,6 @@ func versionsOfPolicy(t *testing.T, pool *pgxpool.Pool, tenantID string) []versi
 	return out
 }
 
-// AC-7
 func TestShardSeedConvergesAfterPublishSuspendAndRoleDelete(t *testing.T) {
 	e := newShardEnv(t)
 	ctx := context.Background()
@@ -556,7 +548,6 @@ func TestShardSeedConvergesAfterPublishSuspendAndRoleDelete(t *testing.T) {
 	}
 }
 
-// AC-9
 func TestProvisionFailsWhenShardSeedFileIsMissing(t *testing.T) {
 	e := newShardEnv(t)
 

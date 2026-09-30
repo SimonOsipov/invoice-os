@@ -1,6 +1,4 @@
-// INFRA-04-01 AC-8. Calls db.SeedShards directly, so it does not compile until
-// that function exists; kept apart so the Provision-level tests in
-// shard_seed_test.go stay runnable while it is missing.
+// Calls db.SeedShards directly; the Provision-level tests are in shard_seed_test.go.
 package db_test
 
 import (
@@ -28,7 +26,6 @@ var shardSeedTables = []struct{ table, tenantCol string }{
 	{"invoice_status_history", "tenant_id"},
 }
 
-// AC-8
 func TestShardSeedIsIdempotentAndLeavesTheDemoTenantsUntouched(t *testing.T) {
 	e := newShardEnv(t)
 	e.provisionReset(t)

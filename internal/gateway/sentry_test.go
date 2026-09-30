@@ -352,3 +352,29 @@ func TestFleetSentry_HealthyRollupOpensNothing(t *testing.T) {
 	getFleet(t, h, "/healthz/fleet-control")
 	rec.One(t, want)
 }
+
+func TestGatewayLogs_UpstreamDoesNotOverwriteService(t *testing.T) {
+	app, rec, _ := sentrytest.Boot(t, "gateway")
+	h, tok := mountAPI(t, app, map[string]*url.URL{"invoice": closedURL(t)})
+
+	if got := serveAPI(h, "/api/invoice/v1/invoices", tok).Code; got != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", got)
+	}
+
+	var found []sentry.Log
+	for _, l := range rec.Logs() {
+		if l.Body == "gateway upstream unreachable" {
+			found = append(found, l)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("recorded %d 'gateway upstream unreachable' logs, want 1", len(found))
+	}
+	attrs := found[0].Attributes
+	if got := attrs["service"].AsString(); got != "gateway" {
+		t.Errorf("service = %q, want gateway (the upstream must not replace it)", got)
+	}
+	if got := attrs["upstream"].AsString(); got != "invoice" {
+		t.Errorf("upstream = %q, want invoice", got)
+	}
+}

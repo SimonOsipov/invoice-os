@@ -3,7 +3,9 @@ package sentrytest
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,6 +19,16 @@ const (
 	fakeDSN        = "https://public@example.com/1"
 	fakeRailwaySHA = "d0e09998b867ee781c56969b28f9497a2c2f1595"
 )
+
+// Leak markers are URL- and JSON-safe, so encoding cannot disguise a leak.
+const (
+	MarkerTIN  = "87654321-0009"
+	MarkerAmt  = "9999999.99"
+	MarkerIRN  = "INV-SECRET-2026"
+	MarkerCred = "cred-SECRET-4411"
+)
+
+var leakMarkers = []string{MarkerTIN, MarkerAmt, MarkerIRN, MarkerCred}
 
 // Labels are the fields every counted event must carry.
 type Labels struct {
@@ -61,6 +73,29 @@ func (r *Recorder) Events() []*sentry.Event {
 	return out
 }
 
+// LogEvents flushes the hub and returns the log-type events.
+func (r *Recorder) LogEvents() []*sentry.Event {
+	sentry.Flush(time.Second)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []*sentry.Event
+	for _, e := range r.events {
+		if e.Type == "log" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// Logs flushes the hub and returns every log record the client sent.
+func (r *Recorder) Logs() []sentry.Log {
+	var out []sentry.Log
+	for _, e := range r.LogEvents() {
+		out = append(out, e.Logs...)
+	}
+	return out
+}
+
 // One fails unless exactly one event was recorded, asserts its labels and returns it.
 func (r *Recorder) One(t testing.TB, want Labels) *sentry.Event {
 	t.Helper()
@@ -91,6 +126,32 @@ func AssertLabels(t testing.TB, e *sentry.Event, want Labels) {
 	}
 	if e.ServerName != want.ServerName {
 		t.Errorf("event server_name = %q, want %q", e.ServerName, want.ServerName)
+	}
+}
+
+// AssertNoLeak fails on any marker in an event's wire JSON or its envelope trace header.
+func AssertNoLeak(t testing.TB, events []*sentry.Event) {
+	t.Helper()
+	if len(events) == 0 {
+		t.Fatal("no event recorded; nothing to check for leaks")
+	}
+	for i, e := range events {
+		raw, err := json.Marshal(e)
+		if err != nil {
+			t.Fatalf("marshal event %d: %v", i, err)
+		}
+		dsc, err := json.Marshal(e.GetDynamicSamplingContext())
+		if err != nil {
+			t.Fatalf("marshal DSC of event %d: %v", i, err)
+		}
+		for _, m := range leakMarkers {
+			if strings.Contains(string(raw), m) {
+				t.Errorf("event %d (type %q) carries marker %q: %s", i, e.Type, m, raw)
+			}
+			if strings.Contains(string(dsc), m) {
+				t.Errorf("event %d (type %q) trace header carries marker %q: %s", i, e.Type, m, dsc)
+			}
+		}
 	}
 }
 

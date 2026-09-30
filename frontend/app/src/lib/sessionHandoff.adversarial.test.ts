@@ -133,7 +133,7 @@ describe('hand-off record parse adversarial', () => {
       ['wrong version', { v: 2 }],
       ['numeric token', { token: 5 }],
       ['string verified', { verified: 'yes' }],
-      ['tenant id null', { me: { ...ME, tenant: { id: null, name: 'x' } } }],
+      ['tenant id null', { me: { ...ME, tenant: { id: null, name: 'x', kind: 'firm' } } }],
       ['me an array', { me: [] }],
     ]
     expect(rows.length).toBeGreaterThan(0)

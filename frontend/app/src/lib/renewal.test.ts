@@ -180,6 +180,16 @@ describe('createRenewer', () => {
     expect(h.net.calls).toHaveLength(1)
   })
 
+  it('a renewal keeps the tenant kind and the mode it names', async () => {
+    const inHouse: Me = { ...ME, tenant: { ...ME.tenant, kind: 'in_house' } }
+    const h = setup({ now: RENEW_AT, tracked: hsession({ me: inHouse }), reply: ok(A1, 'R1') })
+    await expect(Promise.resolve(h.renewer.fresh())).resolves.toBe(A1)
+    expect(h.onRenewed).toHaveBeenCalledTimes(1)
+    const next = h.onRenewed.mock.calls[0]?.[0]
+    expect(next?.persona.mode).toBe('inhouse')
+    expect(next?.me?.tenant.kind).toBe('in_house')
+  })
+
   it('concurrent calls share one renewal', async () => {
     const h = setup({ now: RENEW_AT })
     const answers = Array.from({ length: 5 }, () => outcome(h.renewer.fresh()))

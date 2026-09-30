@@ -554,6 +554,37 @@ describe('hand-off session record (AUTH-05 D8)', () => {
     for (const [name, session, want] of rows) {
       expect(parseStoredSession(serializeSession(session))?.persona.mode, name).toBe(want)
     }
+
+    // Stored records: a persona record never reads kind, so a missing or unknown one is not corrupt.
+    const stored = (personaId: string, me: unknown, extra: object = {}) => JSON.stringify({ v: 1, personaId, token: 'jwt', me, verified: true, ...extra })
+    const meKind = (kind: unknown) => ({ tenant: { id: ME.tenant.id, name: 'X', ...(kind === undefined ? {} : { kind }) }, user: ME.user })
+    const raw: [string, string, string][] = [
+      ['inhouse persona, no kind', stored('inhouse', meKind(undefined)), 'inhouse'],
+      ['firm persona, bogus kind', stored('firm', meKind('bogus')), 'firm'],
+      ['inhouse persona, handoff "true" is not a hand-off, me firm', stored('inhouse', meKind('firm'), { handoff: 'true' }), 'inhouse'],
+      ['firm persona, handoff "true" is not a hand-off, me in_house', stored('firm', meKind('in_house'), { handoff: 'true' }), 'firm'],
+    ]
+    expect(raw.length).toBeGreaterThan(0)
+    for (const [name, rec, want] of raw) {
+      const { warn } = spyOnConsole()
+      const restored = parseStoredSession(rec)
+      expect(restored?.persona.mode, name).toBe(want)
+      expect(restored?.handoff, name).toBeUndefined()
+      expect(warn, name).not.toHaveBeenCalled()
+      vi.restoreAllMocks()
+    }
+  })
+
+  it('a stored hand-off record from before kind existed is dropped, renewal pair and all', () => {
+    const legacyMe = { tenant: { id: ME.tenant.id, name: ME.tenant.name }, user: ME.user }
+    const legacy = { v: 1, personaId: 'firm', token: 'jwt', me: legacyMe, verified: true, handoff: true, refresh_token: 'R0', received_at: 1000 }
+    // Control: the same record with a kind parses and keeps its renewal.
+    const kept = parseStoredSession(JSON.stringify({ ...legacy, me: ME }))
+    expect(kept?.renewal).toEqual({ refreshToken: 'R0', receivedAt: 1000 })
+    const { warn, error } = spyOnConsole()
+    expect(parseStoredSession(JSON.stringify(legacy))).toBeNull()
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(error).not.toHaveBeenCalled()
   })
 
   it('a persona record is unchanged', () => {
@@ -570,9 +601,9 @@ describe('hand-off session record (AUTH-05 D8)', () => {
     const kinds: [string, unknown][] = KIND_REFUSALS.map(([name, kind]) => [`kind ${name}`, { tenant: { id: ME.tenant.id, name: 'X', kind }, user: ME.user }])
     const rows: [string, unknown][] = [
       ['me null', null],
-      ['no user id', { tenant: { id: ME.tenant.id, name: 'X' }, user: { role: 'authenticated' } }],
-      ['no tenant id', { tenant: { name: 'X' }, user: { id: ME.user.id, role: 'authenticated' } }],
-      ['numeric user id', { tenant: { id: ME.tenant.id, name: 'X' }, user: { id: 9, role: 'authenticated' } }],
+      ['no user id', { tenant: { id: ME.tenant.id, name: 'X', kind: 'firm' }, user: { role: 'authenticated' } }],
+      ['no tenant id', { tenant: { name: 'X', kind: 'firm' }, user: { id: ME.user.id, role: 'authenticated' } }],
+      ['numeric user id', { tenant: { id: ME.tenant.id, name: 'X', kind: 'firm' }, user: { id: 9, role: 'authenticated' } }],
       ['kind absent', { tenant: { id: ME.tenant.id, name: 'X' }, user: ME.user }],
       ...kinds,
     ]

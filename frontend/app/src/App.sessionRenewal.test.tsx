@@ -34,6 +34,8 @@ const OTHER_ME: Me = {
   user: { id: 'e0000000-0000-0000-0000-000000000004', role: 'authenticated' },
 }
 
+const IN_HOUSE_ME: Me = { ...ME, tenant: { ...ME.tenant, kind: 'in_house' } }
+
 const b64url = (s: string) => btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 function jwt(me: Me, iat: number, mark: string): string {
   const claims = { sub: me.user.id, iat, exp: iat + 3600, app_metadata: { tenant_id: me.tenant.id }, mark }
@@ -365,6 +367,17 @@ describe('a due stored session renews at boot (AC-1, AC-2, AC-3, AC-10, AC-16)',
     expect(apiCalls().filter((c) => c.auth !== `Bearer ${renewedToken()}`)).toEqual([])
     expect(storedRecord()?.token).toBe(renewedToken())
     expect(storedRecord()?.refresh_token).toBe('R1')
+  })
+
+  it('a due in-house hand-off session renews and stays in-house', async () => {
+    await bootWith(record(A0_DUE, DUE_AT, IN_HOUSE_ME))
+    await waitForVerifiedWorkspace()
+    await settle()
+
+    expect(refreshes(), 'the record renewed').toHaveLength(1)
+    expect(capturedCtx?.mode).toBe('inhouse')
+    expect(storedRecord()?.token).toBe(renewedToken())
+    expect((storedRecord()?.me as Me | undefined)?.tenant.kind, 'the renewed record keeps its kind').toBe('in_house')
   })
 
   it('a fresh session mounts with no renewal', async () => {
@@ -884,6 +897,26 @@ describe('a renewal never outlives its session (AC-14, AC-15, AC-17)', () => {
     expect(localStorage.getItem(SESSION_KEY), "the other user's record is untouched").toBe(X_RAW)
     expect(refreshes(mark), 'nothing is renewed for the foreign record').toEqual([])
     expect(probes(mark)).toEqual([])
+  })
+
+  it('a stand-in from an in-house hand-off seat is in-house, and so is the return to the seat', async () => {
+    vi.stubEnv('VITE_DEMO_MODE', 'true')
+    await bootWith(record(A0_FRESH, FRESH_AT, IN_HOUSE_ME))
+    await waitForVerifiedWorkspace()
+    await settle()
+    expect(capturedCtx?.mode, 'the seat').toBe('inhouse')
+    meReply = answer(200, OTHER_ME)
+    await act(async () => {
+      await capturedCtx!.becomePersona!(STAND_IN, 'dashboard')
+    })
+    await waitFor(() => expect(capturedCtx?.user.name).toBe('Tunde Bello'))
+    expect(capturedCtx?.mode, 'the stand-in').toBe('inhouse')
+    meReply = answer(200, IN_HOUSE_ME)
+    await act(async () => {
+      await capturedCtx!.returnToSeat!('dashboard', SEAT_MEMBER)
+    })
+    await waitFor(() => expect(capturedCtx?.user.name).toBe(APP_PERSONAS.firm.name))
+    expect(capturedCtx?.mode, 'back on the seat').toBe('inhouse')
   })
 
   it('returning from a stand-in renews the seat', async () => {

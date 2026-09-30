@@ -1010,6 +1010,29 @@ describe('AUTH-05-08 adversarial', () => {
     expect(warn.mock.calls.filter((c) => String(c[0]).startsWith('[session]'))).toHaveLength(1)
   })
 
+  it('a stored hand-off record from before kind existed is dropped and the boot signs in again', async () => {
+    const OLD_T = jwt(OLD_ME.user.id, nowSec() + 3600)
+    const noKind = { tenant: { id: OLD_ME.tenant.id, name: OLD_ME.tenant.name }, user: OLD_ME.user }
+    configure()
+    // Control: with a kind the same record mounts.
+    localStorage.setItem(SESSION_KEY, handoffRecord(OLD_T, OLD_ME))
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user, 'control: the record with a kind mounts').toBeDefined())
+    cleanup()
+    capturedCtx = undefined
+
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ v: 1, personaId: 'firm', token: OLD_T, me: noKind, verified: true, handoff: true }))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await settle()
+    expect(capturedCtx, 'no workspace opens on a record without a kind').toBeUndefined()
+    expect(warn.mock.calls.filter((c) => String(c[0]).startsWith('[session]'))).toHaveLength(1)
+    expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}`])
+    expect(exchangeBodies).toHaveLength(0)
+  })
+
   it('a live hand-off session boot writes no history entry carrying handoff or persona', async () => {
     const OLD_T = jwt(OLD_ME.user.id, nowSec() + 3600)
     configure()

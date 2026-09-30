@@ -66,7 +66,7 @@ const HANDOFF_RECORD = JSON.stringify({
   v: 1,
   personaId: 'firm',
   token: HANDOFF_TOKEN,
-  me: { tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures' }, user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated' } },
+  me: { tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures', kind: 'firm' }, user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated' } },
   verified: true,
   handoff: true,
   refresh_token: 'R1',

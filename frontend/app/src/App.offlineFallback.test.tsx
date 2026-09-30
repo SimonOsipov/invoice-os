@@ -130,7 +130,7 @@ describe('offline fallback: a rejected mint still seats the visitor (F-021)', ()
     signInMock.mockResolvedValueOnce({
       persona: APP_PERSONAS.firm,
       token: 'mock-token',
-      me: { tenant: { id: 't1', name: 'Okafor & Partners' }, user: { id: 'u1', role: 'authenticated' } },
+      me: { tenant: { id: 't1', name: 'Okafor & Partners', kind: 'firm' }, user: { id: 'u1', role: 'authenticated' } },
       verified: true,
     } satisfies Session)
 

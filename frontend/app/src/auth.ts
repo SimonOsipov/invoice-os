@@ -72,8 +72,10 @@ export const landingBase = (): string | null => {
   return v || null
 }
 
+export type TenantKind = 'firm' | 'in_house'
+
 export interface Me {
-  tenant: { id: string; name: string }
+  tenant: { id: string; name: string; kind: TenantKind }
   user: { id: string; role: string }
 }
 

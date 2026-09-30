@@ -1,8 +1,5 @@
-// Session persistence module (M3-07-01). Makes the Platform app's mock session durable:
-// a signed-in session is mirrored to localStorage so a reload / new tab / browser restart
-// returns the user straight to their workspace, and a cleared session (Sign out or a 401)
-// wipes the key. See the M3-07 story's Architect Decisions (a)-(c) for the corruption /
-// version-guard contract.
+// Session persistence: a signed-in session is mirrored to localStorage so a reload or new
+// tab returns the user to their workspace; a cleared session (Sign out or a 401) wipes the key.
 //
 // Persisted shape (localStorage[SESSION_KEY]):
 //   { v: SESSION_SCHEMA_VERSION, personaId: PersonaId, token: string|null, me: Me|null, verified: boolean, handoff?: true }
@@ -10,9 +7,11 @@
 // `persona` is stored by id only and rehydrated from APP_PERSONAS — persona definitions
 // (name/subject/tenantId/role) are canonical in code, so persisting only the id avoids
 // stale-persona drift and reduces the corruption guard to a simple membership check.
-// A hand-off record (`handoff: true`) rebuilds its persona from `me` instead.
+// A hand-off record (`handoff: true`) rebuilds its persona from `me` instead; its mode comes
+// from `me.tenant.kind`. A persona record keeps its APP_PERSONAS mode.
 
-import { APP_PERSONAS, type Me, type Persona, type Session } from '../auth'
+import { APP_PERSONAS, type Me, type Persona, type Session, type TenantKind } from '../auth'
+import type { Mode } from '../types'
 
 export const SESSION_KEY = 'invoice-os.session'
 export const SESSION_SCHEMA_VERSION = 1
@@ -34,9 +33,11 @@ export function serializeSession(session: Session): string {
   })
 }
 
-// Identity comes from /me; the rest stays the firm persona until AUTH-09.
+const MODE_BY_KIND: Record<TenantKind, Mode> = { firm: 'firm', in_house: 'inhouse' }
+
+// A real session's mode is tenants.kind; APP_PERSONAS modes serve the demo door only.
 export function handoffPersona(me: Me): Persona {
-  return { ...APP_PERSONAS.firm, subject: me.user.id, tenantId: me.tenant.id }
+  return { ...APP_PERSONAS.firm, mode: MODE_BY_KIND[me.tenant.kind], subject: me.user.id, tenantId: me.tenant.id }
 }
 
 // The pair is optional; when present it must be complete, well-typed and on a hand-off record.
@@ -53,9 +54,16 @@ function renewalPairOk(p: { handoff?: unknown; refresh_token?: unknown; received
   )
 }
 
-function hasMeIds(me: unknown): me is Me {
-  const m = me as { user?: { id?: unknown }; tenant?: { id?: unknown } } | null
-  return typeof m?.user?.id === 'string' && typeof m?.tenant?.id === 'string'
+// typeof first: an array or an object with toString would pass hasOwnProperty by coercion.
+export function isHandoffMe(me: unknown): me is Me {
+  const m = me as { user?: { id?: unknown }; tenant?: { id?: unknown; kind?: unknown } } | null
+  const kind = m?.tenant?.kind
+  return (
+    typeof m?.user?.id === 'string' &&
+    typeof m?.tenant?.id === 'string' &&
+    typeof kind === 'string' &&
+    Object.prototype.hasOwnProperty.call(MODE_BY_KIND, kind)
+  )
 }
 
 // Parse + validate a persisted blob back into a Session, rebuilding `persona` from
@@ -76,7 +84,7 @@ export function parseStoredSession(raw: string | null): Session | null {
       (typeof parsed.token === 'string' || parsed.token === null) &&
       typeof parsed.verified === 'boolean' &&
       (parsed.me === null || (typeof parsed.me === 'object' && parsed.me !== null)) &&
-      (parsed.handoff !== true || hasMeIds(parsed.me)) &&
+      (parsed.handoff !== true || isHandoffMe(parsed.me)) &&
       renewalPairOk(parsed)
     ) {
       if (parsed.handoff === true) {

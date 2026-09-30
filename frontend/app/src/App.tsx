@@ -230,7 +230,7 @@ const STILL_WORKING = new ApiError('network', 'An import or filing is still in p
 // This app shell is ported from the prototype's `class Component extends DCLogic`
 // (Platform.dc.html ~L980-1263): `this.state` becomes typed `useState` hooks below,
 // and every handler in the "actions" section is ported 1:1 as a plain function.
-// Rendered only once signed in (see App): the persona picks the initial workspace mode.
+// Rendered only once signed in (see App).
 function Workspace({ session, onSignOut, initialView, becomePersona, returnToSeat, seatSubject, freshToken, onUnauthorized }: {
   session: Session
   onSignOut: () => void
@@ -241,10 +241,8 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   freshToken?: () => string | null | Promise<string | null>
   onUnauthorized: () => void
 }) {
-  // Workspace type is a property of the authenticated identity, not a user-flippable
-  // view: the firm persona gets the firm workspace, the in-house persona the in-house
-  // workspace, and there is no in-app switch between them (that would require signing
-  // in as the other persona). Under GoTrue (M8) this keys off the token's role/tenant.
+  // Workspace mode is fixed by the session: a hand-off session takes it from /me tenant.kind,
+  // a persona session from its persona. There is no in-app switch.
   const mode: Mode = session.persona.mode
 
   // Latched, never unlatched: the gate's answer cannot change without an admin, so there is

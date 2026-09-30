@@ -1,4 +1,9 @@
+import { readdirSync } from 'node:fs'
 import { defineConfig, devices } from '@playwright/test'
+import { partitionErrors, UNITS } from './topology/shards'
+
+const partition = partitionErrors(readdirSync(new URL('./topology', import.meta.url)).filter((f) => f.endsWith('.spec.ts')))
+if (partition.length > 0) throw new Error(`topology shard map: ${partition.join('; ')}`)
 
 // M2-14 topology E2E config (task-23.4). Separate from the smoke config so the two
 // suites run independently: smoke asserts each SPA renders; topology drives the live
@@ -13,11 +18,8 @@ export default defineConfig({
   testMatch: '**/*.spec.ts',
   timeout: 60_000,
   expect: { timeout: 15_000 },
-  // M4-14-01: conformed to the convention's "one browser, serial" rule (matching
-  // playwright.api.config.ts) — the browser suite shares the same non-reset deployed
-  // dev DB as api/demo, so workers:1/fullyParallel:false removes cross-spec races at
-  // the root (Decision [topology-config-conforms-workers-1]). Previously
-  // fullyParallel:true with no workers key (default multi-worker).
+  // One worker per unit; CI runs one unit per job (topology/shards.ts). Without --project
+  // every unit runs on this one worker.
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,
@@ -31,5 +33,9 @@ export default defineConfig({
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: UNITS.map((u) => ({
+    name: u.name,
+    testMatch: u.specs,
+    use: { ...devices['Desktop Chrome'] },
+  })),
 })

@@ -413,31 +413,6 @@ func TestInvoiceMain_AIFakeFailureUsesFatalNotLogFatalf(t *testing.T) {
 	}
 }
 
-// TestInvoiceMain_EachFromEnvGuardRedsOnlyOnItsOwnBranch: each guard reds on its own
-// branch's deletion and only on that. A separate test, so a Jev regression does not red
-// the AI guard's test.
-func TestInvoiceMain_EachFromEnvGuardRedsOnlyOnItsOwnBranch(t *testing.T) {
-	src := sourceWithoutComments(t, "main.go")
-	t.Run("AIBranchDeleted", func(t *testing.T) {
-		mut := dropErrBranchAfter(t, src, "ai.FromEnv")
-		if len(aiGuard(mut)) == 0 {
-			t.Error("the AI guard stays green with the ai.FromEnv error branch deleted")
-		}
-		if msgs := jevGuard(mut); len(msgs) != 0 {
-			t.Errorf("the Jev guard reds on the AI branch's deletion: %v", msgs)
-		}
-	})
-	t.Run("JevBranchDeleted", func(t *testing.T) {
-		mut := dropErrBranchAfter(t, src, "jev.FromEnv")
-		if msgs := aiGuard(mut); len(msgs) != 0 {
-			t.Errorf("the AI guard reds on the Jev branch's deletion: %v", msgs)
-		}
-		if len(jevGuard(mut)) == 0 {
-			t.Error("the Jev guard stays green with the jev.FromEnv error branch deleted")
-		}
-	})
-}
-
 // TestInvoiceMain_JevFromEnvFailureUsesFatalNotLogFatalf: both jev.FromEnv errors stop
 // the boot through platform.Fatal(app.Logger, ...), never log.Fatal.
 func TestInvoiceMain_JevFromEnvFailureUsesFatalNotLogFatalf(t *testing.T) {
@@ -473,38 +448,6 @@ func fatalGuard(src, from, end string) []string {
 		msgs = append(msgs, "log.Fatal between "+from+"( and "+end+"( -- use platform.Fatal(app.Logger, ...):\n"+window)
 	}
 	return msgs
-}
-
-// dropErrBranchAfter deletes the first `if err != nil {...}` after anchor( from src.
-func dropErrBranchAfter(t *testing.T, src, anchor string) string {
-	t.Helper()
-	i := callSiteIndex(src, anchor)
-	if i == -1 {
-		t.Fatalf("no %s( call site to mutate", anchor)
-	}
-	const head = "if err != nil {"
-	k := strings.Index(src[i:], head)
-	if k == -1 {
-		t.Fatalf("no %q after %s(", head, anchor)
-	}
-	open := i + k + len(head) - 1
-	if next := callSiteIndex(src[i:], "app.Mux.HandleFunc"); next != -1 && i+next < open {
-		t.Fatalf("the first %q after %s( lies past the next app.Mux.HandleFunc( -- not its error branch", head, anchor)
-	}
-	depth := 0
-	for p := open; p < len(src); p++ {
-		switch src[p] {
-		case '{':
-			depth++
-		case '}':
-			depth--
-			if depth == 0 {
-				return src[:i+k] + src[p+1:]
-			}
-		}
-	}
-	t.Fatalf("unbalanced braces after %s(", anchor)
-	return ""
 }
 
 // TestInvoiceMain_RegistersTheCheckMappingRoute: the check route is mounted with

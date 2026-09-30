@@ -100,43 +100,102 @@ func TestTracing_TransactionNamedByRoutePattern(t *testing.T) {
 	e := oneTransaction(t, rec)
 	const want = "GET /v1/things/{id}"
 	txAssertShape(t, e, want, sentry.SourceRoute)
-	if got := e.GetDynamicSamplingContext()["transaction"]; got != want {
-		t.Errorf("DSC transaction = %q, want %q", got, want)
+	dsc := e.GetDynamicSamplingContext()
+	if dsc["transaction"] != want {
+		t.Errorf("DSC transaction = %q, want %q", dsc["transaction"], want)
+	}
+	if dsc["sample_rate"] != "1" || dsc["sampled"] != "true" {
+		t.Errorf("DSC sample_rate=%q sampled=%q, want 1 and true", dsc["sample_rate"], dsc["sampled"])
 	}
 	sentrytest.AssertNoLeak(t, rec.Transactions())
 }
 
-func TestTracing_PatternWithoutMethodGetsTheMethod(t *testing.T) {
-	app, rec, _ := sentrytest.Boot(t, "invoice")
-	app.Mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-
-	txServe(app, httptest.NewRequest(http.MethodPost, "/api/tenancy/v1/x", nil))
-
-	e := oneTransaction(t, rec)
-	txAssertShape(t, e, "POST /api/", sentry.SourceRoute)
-}
-
 func TestTracing_UnknownMethodIsOther(t *testing.T) {
 	app, rec, _ := sentrytest.Boot(t, "invoice")
-	app.Mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	ok := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
+	app.Mux.HandleFunc("/api/", ok)
+	app.Mux.HandleFunc("/v1/things/{id}/", ok)
 
 	txServe(app, httptest.NewRequest("PROPFIND", "/api/x", nil))
 	txServe(app, httptest.NewRequest("CONNECT", "/api/", nil))
+	// The mux answers a slash redirect for CONNECT with the raw path, marker included.
+	txServe(app, httptest.NewRequest("CONNECT", "/v1/things/"+sentrytest.MarkerTIN, nil))
+	txServe(app, httptest.NewRequest(sentrytest.MarkerCred, "/api/x", nil))
 
 	got := rec.Transactions()
-	if len(got) != 2 {
-		t.Fatalf("recorded %d transactions, want 2: %v", len(got), txNames(rec))
+	if len(got) != 4 {
+		t.Fatalf("recorded %d transactions, want 4: %v", len(got), txNames(rec))
 	}
 	txAssertShape(t, got[0], "OTHER /api/", sentry.SourceRoute)
 	if m := txData(t, got[0])["http.request.method"]; m != "OTHER" {
 		t.Errorf("http.request.method = %v, want OTHER", m)
 	}
 	txAssertShape(t, got[1], "CONNECT unmatched", sentry.SourceCustom)
+	txAssertShape(t, got[2], "CONNECT unmatched", sentry.SourceCustom)
+	txAssertShape(t, got[3], "OTHER /api/", sentry.SourceRoute)
 	for _, name := range txNames(rec) {
 		if strings.Contains(name, "/api/x") {
 			t.Errorf("transaction name %q holds the request path", name)
 		}
 	}
+	sentrytest.AssertNoLeak(t, got)
+}
+
+func TestTracing_ClosedMethodSetIsNamedByItsMethod(t *testing.T) {
+	for _, method := range []string{
+		http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut,
+		http.MethodPatch, http.MethodDelete, http.MethodTrace,
+	} {
+		t.Run(method, func(t *testing.T) {
+			app, rec, _ := sentrytest.Boot(t, "invoice")
+			app.Mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+
+			txServe(app, httptest.NewRequest(method, "/api/x", nil))
+
+			e := oneTransaction(t, rec)
+			txAssertShape(t, e, method+" /api/", sentry.SourceRoute)
+			if m := txData(t, e)["http.request.method"]; m != method {
+				t.Errorf("http.request.method = %v, want %s", m, method)
+			}
+		})
+	}
+}
+
+func TestTracing_HeadServedByAGetRouteKeepsThePattern(t *testing.T) {
+	app, rec, _ := sentrytest.Boot(t, "invoice")
+	app.Mux.HandleFunc("GET /v1/x", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	txServe(app, httptest.NewRequest(http.MethodHead, "/v1/x", nil))
+
+	e := oneTransaction(t, rec)
+	txAssertShape(t, e, "GET /v1/x", sentry.SourceRoute)
+	if m := txData(t, e)["http.request.method"]; m != "HEAD" {
+		t.Errorf("http.request.method = %v, want HEAD", m)
+	}
+}
+
+func TestTracing_RedirectsAreNamedByTheirRegisteredPattern(t *testing.T) {
+	app, rec, _ := sentrytest.Boot(t, "invoice")
+	app.Mux.HandleFunc("GET /v1/things/{id}/", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	// Trailing-slash redirect, then path-clean redirect.
+	for _, target := range []string{
+		"/v1/things/" + sentrytest.MarkerTIN,
+		"/v1/things//" + sentrytest.MarkerIRN + "/",
+	} {
+		if w := txServe(app, httptest.NewRequest(http.MethodGet, target, nil)); w.Code < 300 || w.Code > 399 {
+			t.Fatalf("GET %s = %d, want a redirect", target, w.Code)
+		}
+	}
+
+	got := rec.Transactions()
+	if len(got) != 2 {
+		t.Fatalf("recorded %d transactions, want 2: %v", len(got), txNames(rec))
+	}
+	for _, e := range got {
+		txAssertShape(t, e, "GET /v1/things/{id}/", sentry.SourceRoute)
+	}
+	sentrytest.AssertNoLeak(t, got)
 }
 
 func TestTracing_UnmatchedRequestIsNamedUnmatched(t *testing.T) {
@@ -157,6 +216,9 @@ func TestTracing_UnmatchedRequestIsNamedUnmatched(t *testing.T) {
 	txAssertShape(t, got[0], "GET unmatched", sentry.SourceCustom)
 	if code := txData(t, got[0])["http.response.status_code"]; code != float64(http.StatusNotFound) {
 		t.Errorf("http.response.status_code = %v, want 404", code)
+	}
+	if st := txTrace(t, got[0])["status"]; st != "not_found" {
+		t.Errorf("404 transaction status = %v, want not_found", st)
 	}
 	txAssertShape(t, got[1], "POST unmatched", sentry.SourceCustom)
 	sentrytest.AssertNoLeak(t, got)
@@ -214,21 +276,33 @@ func TestTracing_ProbesAndPreflightsAreNotTransactions(t *testing.T) {
 		{http.MethodGet, "/healthz/fleet"},
 		{http.MethodOptions, "/auth/sign-in"},
 		{http.MethodOptions, "/v1/things/1"},
+		{http.MethodHead, "/healthz"},
+		{http.MethodGet, "/healthz/"},
+		{http.MethodGet, "/readyz?x=1"},
 	} {
 		txServe(app, httptest.NewRequest(r.method, r.target, nil))
 	}
 	txServe(app, httptest.NewRequest(http.MethodGet, "/v1/things/1", nil))
 	txServe(app, httptest.NewRequest(http.MethodGet, "/healthzx", nil))
+	txServe(app, httptest.NewRequest(http.MethodGet, "/healthzz", nil))
 
 	names := txNames(rec)
-	if len(names) != 2 || names[0] != "GET /v1/things/{id}" || names[1] != "GET /healthzx" {
-		t.Fatalf("transactions = %v, want [GET /v1/things/{id} GET /healthzx]", names)
+	want := []string{"GET /v1/things/{id}", "GET /healthzx", "GET unmatched"}
+	if strings.Join(names, "|") != strings.Join(want, "|") {
+		t.Fatalf("transactions = %v, want %v", names, want)
 	}
 }
 
 func TestTracing_ContinuesInboundTraceIgnoresInboundBaggage(t *testing.T) {
 	app, rec, _ := sentrytest.Boot(t, "invoice")
-	app.Mux.HandleFunc("GET /v1/x", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	var outbound string
+	var spanSeen bool
+	app.Mux.HandleFunc("GET /v1/x", func(w http.ResponseWriter, r *http.Request) {
+		if span := sentry.SpanFromContext(r.Context()); span != nil {
+			spanSeen, outbound = true, span.ToBaggage()
+		}
+		w.WriteHeader(http.StatusOK)
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/x", nil)
 	req.Header.Set("sentry-trace", txTraceID+"-"+txSpanID+"-1")
@@ -251,6 +325,15 @@ func TestTracing_ContinuesInboundTraceIgnoresInboundBaggage(t *testing.T) {
 	}
 	if dsc["environment"] != "production" {
 		t.Errorf("DSC environment = %q, want production", dsc["environment"])
+	}
+	// The baggage the handler would forward is the transaction's own DSC.
+	if !spanSeen {
+		t.Fatal("handler context carries no span")
+	}
+	for _, leaked := range []string{"sentry-transaction=GET%20%2Fv1%2Fx%3Fq", sentrytest.MarkerTIN, sentrytest.MarkerIRN, sentrytest.MarkerCred} {
+		if strings.Contains(outbound, leaked) {
+			t.Errorf("span baggage %q carries inbound %q", outbound, leaked)
+		}
 	}
 	sentrytest.AssertNoLeak(t, rec.Transactions())
 }
@@ -277,6 +360,8 @@ func TestTracing_MalformedSentryTraceStartsANewTrace(t *testing.T) {
 		"garbage",
 		strings.Repeat("ab", 4096),
 		txTraceID + "-" + txSpanID + "-2",
+		txTraceID + "-" + txSpanID + "-1-junk",
+		txTraceID + "-" + txSpanID + "-1" + strings.Repeat("0", 8192),
 	} {
 		req := httptest.NewRequest(http.MethodGet, "/v1/x", nil)
 		req.Header.Set("sentry-trace", header)
@@ -284,8 +369,8 @@ func TestTracing_MalformedSentryTraceStartsANewTrace(t *testing.T) {
 	}
 
 	got := rec.Transactions()
-	if len(got) != 3 {
-		t.Fatalf("recorded %d transactions, want 3: %v", len(got), txNames(rec))
+	if len(got) != 5 {
+		t.Fatalf("recorded %d transactions, want 5: %v", len(got), txNames(rec))
 	}
 	for i, e := range got {
 		id, _ := txTrace(t, e)["trace_id"].(string)
@@ -302,8 +387,9 @@ func TestTracing_TransactionShapeAndNoRequestData(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	body := `{"buyer_tin":"` + sentrytest.MarkerTIN + `","total":"` + sentrytest.MarkerAmt + `","irn":"` + sentrytest.MarkerIRN + `"}`
-	req := httptest.NewRequest(http.MethodPost, "/v1/things/"+uuid.NewString()+"?q="+sentrytest.MarkerTIN+"#"+sentrytest.MarkerIRN, strings.NewReader(body))
+	// MarkerCred has no value pattern for scrubbing to mask, so it alone proves the span never held the query, body or Referer.
+	body := `{"buyer_tin":"` + sentrytest.MarkerTIN + `","total":"` + sentrytest.MarkerAmt + `","irn":"` + sentrytest.MarkerIRN + `","note":"` + sentrytest.MarkerCred + `-body"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/things/"+uuid.NewString()+"?q="+sentrytest.MarkerTIN+"&k="+sentrytest.MarkerCred+"-query#"+sentrytest.MarkerIRN, strings.NewReader(body))
 	tenant := uuid.NewString()
 	for k, v := range map[string]string{
 		"X-Tenant-ID":   tenant,
@@ -311,7 +397,7 @@ func TestTracing_TransactionShapeAndNoRequestData(t *testing.T) {
 		"X-S2S-Token":   sentrytest.MarkerCred + "-s2s",
 		"Authorization": "Bearer " + sentrytest.MarkerCred + "-authz",
 		"Cookie":        "s=" + sentrytest.MarkerCred + "-cookie",
-		"Referer":       "https://app.example/things?q=" + sentrytest.MarkerTIN,
+		"Referer":       "https://app.example/things?q=" + sentrytest.MarkerTIN + "&k=" + sentrytest.MarkerCred + "-ref",
 		"Content-Type":  "application/json",
 	} {
 		req.Header.Set(k, v)
@@ -338,6 +424,39 @@ func TestTracing_TransactionShapeAndNoRequestData(t *testing.T) {
 	sentrytest.AssertNoLeak(t, rec.Transactions())
 }
 
+func TestTracing_ResponseStatusCodeMatchesTheWire(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		handler http.HandlerFunc
+		status  string
+	}{
+		{"handler writes nothing", func(http.ResponseWriter, *http.Request) {}, "ok"},
+		{"body without a header call", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("x")) }, "ok"},
+		{"5xx without a panic", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }, "unavailable"},
+		{"panic after the header is written", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusCreated)
+			panic("late")
+		}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app, rec, _ := sentrytest.Boot(t, "invoice")
+			app.Mux.HandleFunc("GET /v1/x", tc.handler)
+
+			w := txServe(app, httptest.NewRequest(http.MethodGet, "/v1/x", nil))
+
+			e := oneTransaction(t, rec)
+			if got := txData(t, e)["http.response.status_code"]; got != float64(w.Code) {
+				t.Errorf("http.response.status_code = %v, client saw %d", got, w.Code)
+			}
+			if tc.status != "" {
+				if st := txTrace(t, e)["status"]; st != tc.status {
+					t.Errorf("transaction status = %v, want %s", st, tc.status)
+				}
+			}
+		})
+	}
+}
+
 func TestTracing_NoEmptyTags(t *testing.T) {
 	app, rec, _ := sentrytest.Boot(t, "invoice")
 	app.Mux.HandleFunc("GET /v1/x", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
@@ -360,7 +479,9 @@ func TestTracing_NoEmptyTags(t *testing.T) {
 
 func TestTracing_LogsCarryTheTransactionTraceID(t *testing.T) {
 	app, rec, _ := sentrytest.Boot(t, "invoice")
+	var inHandler *sentry.Span
 	app.Mux.HandleFunc("GET /v1/x", func(w http.ResponseWriter, r *http.Request) {
+		inHandler = sentry.SpanFromContext(r.Context())
 		app.Logger.InfoContext(r.Context(), "inside")
 		w.WriteHeader(http.StatusOK)
 	})
@@ -372,8 +493,17 @@ func TestTracing_LogsCarryTheTransactionTraceID(t *testing.T) {
 	if want == "" {
 		t.Fatal("transaction has no trace_id")
 	}
-	if got := oneLogWithBody(t, rec, "inside").TraceID.String(); got != want {
+	wantSpan, _ := txTrace(t, e)["span_id"].(string)
+	l := oneLogWithBody(t, rec, "inside")
+	if got := l.TraceID.String(); got != want {
 		t.Errorf("log trace id = %s, want the transaction's %s", got, want)
+	}
+	if got := l.SpanID.String(); wantSpan == "" || got != wantSpan {
+		t.Errorf("log span id = %s, want the transaction's %q", got, wantSpan)
+	}
+	// The log resolves its ids from the hub scope too, so only the handler's own context proves the span was passed on.
+	if inHandler == nil || inHandler.SpanID.String() != wantSpan || inHandler.TraceID.String() != want {
+		t.Errorf("handler context span = %+v, want the transaction's span %s in trace %s", inHandler, wantSpan, want)
 	}
 }
 
@@ -390,8 +520,10 @@ func TestTracing_PassThroughWithoutAClient(t *testing.T) {
 		t.Fatalf("platform.New: %v", err)
 	}
 	var hubInHandler *sentry.Hub
+	var spanInHandler *sentry.Span
 	app.Mux.HandleFunc("GET /v1/x", func(w http.ResponseWriter, r *http.Request) {
 		hubInHandler = sentry.GetHubFromContext(r.Context())
+		spanInHandler = sentry.SpanFromContext(r.Context())
 		w.WriteHeader(http.StatusCreated)
 	})
 
@@ -402,5 +534,8 @@ func TestTracing_PassThroughWithoutAClient(t *testing.T) {
 	}
 	if hubInHandler != nil {
 		t.Error("handler context carries a hub although no client is bound")
+	}
+	if spanInHandler != nil {
+		t.Error("handler context carries a span although no client is bound")
 	}
 }

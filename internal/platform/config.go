@@ -1,7 +1,7 @@
 // Package platform is the shared service kit every ASComply backend binary
 // is built on: environment configuration, structured logging, an HTTP server
 // with graceful shutdown, health/readiness probes, panic recovery, a Sentry
-// error hook, and the standard middleware chain. Observability is baked in
+// hook, and the standard middleware chain. Observability is baked in
 // here by design — there is deliberately no "add observability later" step.
 package platform
 

@@ -26,7 +26,7 @@ func tracingMiddleware(mux *http.ServeMux) middleware {
 
 			method := methodLabel(r.Method)
 			name, source := method+" unmatched", sentry.SourceCustom
-			// The mux returns a raw path, not a pattern, for CONNECT.
+			// A CONNECT slash redirect returns the raw path as its pattern.
 			if r.Method != http.MethodConnect {
 				if _, pattern := mux.Handler(r); pattern != "" {
 					name, source = pattern, sentry.SourceRoute

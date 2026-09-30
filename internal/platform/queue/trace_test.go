@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -316,5 +317,193 @@ func TestJobTracing_NoClientPassesThrough(t *testing.T) {
 	}
 	if span != nil {
 		t.Error("the worker's context holds a span although no client is bound")
+	}
+}
+
+func jtInsertRaw(ctx context.Context, metadata ...[]byte) (out [][]byte, doInnerCtx context.Context) {
+	var params []*rivertype.JobInsertParams
+	for _, m := range metadata {
+		params = append(params, &rivertype.JobInsertParams{Kind: "k", Metadata: m})
+	}
+	_, _ = (&jobTracing{}).InsertMany(ctx, params, func(c context.Context) ([]*rivertype.JobInsertResult, error) {
+		doInnerCtx = c
+		return nil, nil
+	})
+	for _, p := range params {
+		out = append(out, p.Metadata)
+	}
+	return out, doInnerCtx
+}
+
+func TestJobTracing_InsertKeepsForeignKeysVerbatimAndOverwritesItsOwn(t *testing.T) {
+	sentrytest.Boot(t, "submission")
+	tx := sentry.StartTransaction(context.Background(), "POST /v1/probe")
+	defer tx.Finish()
+
+	got, _ := jtInsertRaw(tx.Context(),
+		[]byte(`{"sentry_trace":"stale","baggage":"a=b","big":12345678901234567890,"n":{"x":[1,{"y":null}]}}`))
+
+	if len(got) != 1 {
+		t.Fatalf("got %d metadata values, want 1", len(got))
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(got[0], &m); err != nil {
+		t.Fatalf("metadata %s is not an object: %v", got[0], err)
+	}
+	for k, want := range map[string]string{
+		"sentry_trace": `"` + tx.ToSentryTrace() + `"`,
+		"baggage":      `"a=b"`,
+		"big":          `12345678901234567890`,
+		"n":            `{"x":[1,{"y":null}]}`,
+	} {
+		if string(m[k]) != want {
+			t.Errorf("metadata[%s] = %s, want %s", k, m[k], want)
+		}
+	}
+	if len(m) != 4 {
+		t.Errorf("metadata has %d keys, want 4: %s", len(m), got[0])
+	}
+}
+
+func TestJobTracing_InsertLeavesNonObjectMetadataAlone(t *testing.T) {
+	sentrytest.Boot(t, "submission")
+	tx := sentry.StartTransaction(context.Background(), "POST /v1/probe")
+	defer tx.Finish()
+	in := []string{`[1]`, `"s"`, `7`, `not json`, `{"truncated":`}
+
+	var raw [][]byte
+	for _, m := range in {
+		raw = append(raw, []byte(m))
+	}
+	got, _ := jtInsertRaw(tx.Context(), raw...)
+
+	if len(got) != len(in) {
+		t.Fatalf("got %d metadata values, want %d", len(got), len(in))
+	}
+	for i, m := range in {
+		if string(got[i]) != m {
+			t.Errorf("metadata %q became %q, want it unchanged", m, got[i])
+		}
+	}
+}
+
+func TestJobTracing_InsertNullMetadataDoesNotPanic(t *testing.T) {
+	sentrytest.Boot(t, "submission")
+	tx := sentry.StartTransaction(context.Background(), "POST /v1/probe")
+	defer tx.Finish()
+
+	var got [][]byte
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("InsertMany panicked on metadata null: %v", r)
+			}
+		}()
+		got, _ = jtInsertRaw(tx.Context(), []byte(`null`))
+	}()
+
+	if len(got) == 1 && string(got[0]) != `null` && !json.Valid(got[0]) {
+		t.Errorf("metadata null became invalid JSON %q", got[0])
+	}
+}
+
+func TestJobTracing_InsertBatchTracesEveryObjectAndSkipsTheRest(t *testing.T) {
+	sentrytest.Boot(t, "submission")
+	tx := sentry.StartTransaction(context.Background(), "POST /v1/probe")
+	defer tx.Finish()
+	want := `"sentry_trace":"` + tx.ToSentryTrace() + `"`
+
+	got, inner := jtInsertRaw(tx.Context(), nil, []byte(`{}`), []byte(`[1]`), []byte(`{"k":1}`))
+
+	if len(got) != 4 {
+		t.Fatalf("got %d metadata values, want 4", len(got))
+	}
+	for _, i := range []int{0, 1, 3} {
+		if !strings.Contains(string(got[i]), want) {
+			t.Errorf("job %d metadata = %s, want it to carry %s", i, got[i], want)
+		}
+	}
+	if string(got[2]) != `[1]` {
+		t.Errorf("job 2 metadata = %s, want the array untouched", got[2])
+	}
+	if sentry.SpanFromContext(inner) != tx {
+		t.Error("doInner did not receive the inserting context")
+	}
+}
+
+func TestJobTracing_EachRetryAttemptIsItsOwnTransactionInTheSameTrace(t *testing.T) {
+	_, rec, _ := sentrytest.Boot(t, "submission")
+	metadata := `{"sentry_trace":"` + jtTraceID + "-" + jtSpanID + `-1"}`
+	for attempt, inner := range []error{errors.New("retry me"), nil} {
+		_ = (&jobTracing{}).Work(context.Background(), jtJob("submission_poll", "q", attempt+1, 2, metadata),
+			func(context.Context) error { return inner })
+	}
+
+	got := jtTransactions(t, rec, 2)
+
+	var spans []any
+	for i, e := range got {
+		tr := jtTrace(t, e)
+		if tr["trace_id"] != jtTraceID || tr["parent_span_id"] != jtSpanID {
+			t.Errorf("attempt %d trace = %v / parent %v, want %s / %s", i+1, tr["trace_id"], tr["parent_span_id"], jtTraceID, jtSpanID)
+		}
+		if want := []string{"internal_error", "ok"}[i]; tr["status"] != want {
+			t.Errorf("attempt %d status = %v, want %s", i+1, tr["status"], want)
+		}
+		data, _ := tr["data"].(map[string]any)
+		if data["river.attempt"] != float64(i+1) {
+			t.Errorf("attempt %d river.attempt = %v", i+1, data["river.attempt"])
+		}
+		spans = append(spans, tr["span_id"])
+	}
+	if spans[0] == spans[1] {
+		t.Errorf("both attempts share span id %v, want one transaction span each", spans[0])
+	}
+}
+
+func TestJobTracing_ErrorShapesMapToStatus(t *testing.T) {
+	_, rec, _ := sentrytest.Boot(t, "submission")
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	cases := []struct {
+		name string
+		ctx  context.Context
+		err  error
+		want string
+	}{
+		{"wrapped snooze", context.Background(), fmt.Errorf("wait: %w", river.JobSnooze(time.Second)), "ok"},
+		{"job cancel", context.Background(), river.JobCancel(errors.New("stop")), "internal_error"},
+		{"cancelled worker context", cancelled, context.Canceled, "internal_error"},
+	}
+	for _, c := range cases {
+		if err := (&jobTracing{}).Work(c.ctx, jtJob("submission_poll", "q", 1, 8, `{}`),
+			func(context.Context) error { return c.err }); err != c.err {
+			t.Errorf("%s: Work returned %v, want the worker's own error", c.name, err)
+		}
+	}
+
+	got := jtTransactions(t, rec, len(cases))
+
+	for i, c := range cases {
+		if st := jtTrace(t, got[i])["status"]; st != c.want {
+			t.Errorf("%s: status = %v, want %s", c.name, st, c.want)
+		}
+	}
+}
+
+func TestJobTracing_WorkKeepsItsTraceOutOfTheCurrentHub(t *testing.T) {
+	_, rec, _ := sentrytest.Boot(t, "submission")
+	_ = (&jobTracing{}).Work(context.Background(),
+		jtJob("submission_poll", "q", 1, 8, `{"sentry_trace":"`+jtTraceID+"-"+jtSpanID+`-1"}`),
+		func(context.Context) error { return nil })
+
+	sentry.CurrentHub().CaptureMessage("after the job")
+
+	events := rec.Events()
+	if len(events) != 1 {
+		t.Fatalf("recorded %d events, want 1", len(events))
+	}
+	if id, _ := jtTrace(t, events[0])["trace_id"].(string); id == "" || id == jtTraceID {
+		t.Errorf("an event captured after the job has trace id %q, want a trace of its own", id)
 	}
 }

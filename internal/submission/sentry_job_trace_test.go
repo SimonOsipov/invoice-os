@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -67,6 +68,11 @@ type jobPanicWorker struct {
 
 func (*jobPanicWorker) Work(context.Context, *river.Job[jobProbeArgs]) error { panic("boom") }
 
+// jobRetryNow makes a failed attempt retryable at once.
+type jobRetryNow struct{}
+
+func (jobRetryNow) NextRetry(*rivertype.JobRow) time.Time { return time.Now() }
+
 func jobQueueNames(n int) []string {
 	names := make([]string, n)
 	for i := range names {
@@ -85,13 +91,17 @@ type jobQueues struct {
 }
 
 // newJobQueues builds the client without starting it and removes its queue and job rows at cleanup.
-func newJobQueues(t *testing.T, pool *pgxpool.Pool, names []string, workers *river.Workers) *jobQueues {
+func newJobQueues(t *testing.T, pool *pgxpool.Pool, names []string, workers *river.Workers, retry ...river.ClientRetryPolicy) *jobQueues {
 	t.Helper()
 	cfg := map[string]river.QueueConfig{}
 	for _, n := range names {
 		cfg[n] = river.QueueConfig{MaxWorkers: 2}
 	}
-	q, err := queue.New(pool, queue.Config{Queues: cfg, Workers: workers})
+	qcfg := queue.Config{Queues: cfg, Workers: workers}
+	if len(retry) > 0 {
+		qcfg.RetryPolicy = retry[0]
+	}
+	q, err := queue.New(pool, qcfg)
 	if err != nil {
 		t.Fatalf("build queue client: %v", err)
 	}
@@ -400,5 +410,120 @@ func TestJobTrace_PanicKeepsRiverStackAndOneIssue(t *testing.T) {
 	}
 	if _, _, _, status := jobTraceIDs(t, jobTransaction(t, txs, jobProbeKind)); status != "internal_error" {
 		t.Errorf("job transaction status = %q, want internal_error", status)
+	}
+}
+
+// jobSeedSpan is a request-like root span: an insert under its context carries its trace.
+func jobSeedSpan(t *testing.T) *sentry.Span {
+	t.Helper()
+	span := sentry.StartTransaction(context.Background(), "POST /v1/seed")
+	t.Cleanup(span.Finish)
+	return span
+}
+
+func TestJobTrace_EveryRetryAttemptContinuesTheTraceAndOnlyTheLastIsAnIssue(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		failLast     bool
+		wantStatuses []string
+		wantIssue    bool
+	}{
+		{"retry succeeds", false, []string{"internal_error", "ok"}, false},
+		{"retries exhausted", true, []string{"internal_error", "internal_error"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := traceTestPool(t)
+			names := jobQueueNames(1)
+			_, rec, want := sentrytest.Boot(t, "submission")
+			var attempts atomic.Int32
+			workers := river.NewWorkers()
+			river.AddWorker(workers, &jobProbeWorker{run: func(context.Context) error {
+				if attempts.Add(1) == 1 || tc.failLast {
+					return errors.New("probe: fail")
+				}
+				return nil
+			}})
+			jq := newJobQueues(t, pool, names, workers, jobRetryNow{})
+			jq.start(t)
+			seed := jobSeedSpan(t)
+
+			jq.insert(t, seed.Context(), jobProbeArgs{TenantID: uuid.NewString()}, 2)
+			if tc.failLast {
+				jq.wait(t, jobProbeKind, rivertype.JobStateDiscarded)
+			} else {
+				jq.wait(t, jobProbeKind, rivertype.JobStateCompleted)
+			}
+			jq.stop(t)
+
+			txs := rec.Transactions()
+			if len(txs) != len(tc.wantStatuses) {
+				t.Fatalf("recorded %d transactions, want one per attempt (%d)", len(txs), len(tc.wantStatuses))
+			}
+			spanIDs := map[string]bool{}
+			for i, e := range txs {
+				traceID, spanID, parent, status := jobTraceIDs(t, e)
+				if traceID != seed.TraceID.String() || parent != seed.SpanID.String() {
+					t.Errorf("attempt %d trace/parent = %s/%s, want %s/%s", i+1, traceID, parent, seed.TraceID, seed.SpanID)
+				}
+				if status != tc.wantStatuses[i] {
+					t.Errorf("attempt %d status = %q, want %q", i+1, status, tc.wantStatuses[i])
+				}
+				spanIDs[spanID] = true
+			}
+			if len(spanIDs) != len(txs) {
+				t.Errorf("attempts share span ids, want one transaction span each")
+			}
+			if tc.wantIssue {
+				if issue := rec.One(t, want); !slices.Equal(issue.Fingerprint, []string{"river", "discarded", jobProbeKind}) {
+					t.Errorf("issue fingerprint = %q", issue.Fingerprint)
+				}
+			} else {
+				rec.None(t)
+			}
+		})
+	}
+}
+
+func TestJobTrace_SnoozeIsOkAndCancelIsInternalError(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		run   func(n int32) error
+		state rivertype.JobState
+		want  []string
+	}{
+		{"snooze then finish", func(n int32) error {
+			if n == 1 {
+				return river.JobSnooze(time.Millisecond)
+			}
+			return nil
+		}, rivertype.JobStateCompleted, []string{"ok", "ok"}},
+		{"cancel", func(int32) error { return river.JobCancel(errors.New("refused")) },
+			rivertype.JobStateCancelled, []string{"internal_error"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := traceTestPool(t)
+			names := jobQueueNames(1)
+			_, rec, _ := sentrytest.Boot(t, "submission")
+			var attempts atomic.Int32
+			workers := river.NewWorkers()
+			river.AddWorker(workers, &jobProbeWorker{run: func(context.Context) error { return tc.run(attempts.Add(1)) }})
+			jq := newJobQueues(t, pool, names, workers)
+			jq.start(t)
+
+			jq.insert(t, context.Background(), jobProbeArgs{TenantID: uuid.NewString()}, 3)
+			jq.wait(t, jobProbeKind, tc.state)
+			jq.stop(t)
+
+			txs := rec.Transactions()
+			if len(txs) != len(tc.want) {
+				t.Fatalf("recorded %d transactions, want %d", len(txs), len(tc.want))
+			}
+			for i, e := range txs {
+				if _, _, _, status := jobTraceIDs(t, e); status != tc.want[i] {
+					t.Errorf("attempt %d status = %q, want %q", i+1, status, tc.want[i])
+				}
+			}
+			rec.None(t)
+		})
 	}
 }

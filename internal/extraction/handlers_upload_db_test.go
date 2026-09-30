@@ -25,6 +25,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
+	"github.com/SimonOsipov/invoice-os/internal/platform/sentrytest"
 )
 
 // upSink counts object PUTs. The real store PUTs before it inserts the row
@@ -224,5 +225,50 @@ func TestRLS_UploadTwiceReusesTheDocumentAndEnqueuesOnce(t *testing.T) {
 	}
 	if !eqKeyExists(t, ctx, tenantID, eqKey(documentID)) {
 		t.Errorf("no idempotency_keys row for %q; the two uploads did not share the per-document key", eqKey(documentID))
+	}
+}
+
+// --- trace ---------------------------------------------------------------------------------
+
+// TestRLS_UploadEnqueuesAJobThatContinuesTheRequestTrace: the extraction job is inserted under
+// the upload request's span, so its attempt continues the request's trace.
+func TestRLS_UploadEnqueuesAJobThatContinuesTheRequestTrace(t *testing.T) {
+	ctx := t.Context()
+	tenantID, _ := wkFixture(t, ctx)
+	id := upDBIdentity(tenantID)
+	app, rec, _ := sentrytest.Boot(t, "submission")
+	h := extraction.UploadHandler(
+		upRealStore(t, tenantID, &upSink{}), upRealEnqueue(t, wkInsertClient(t), tenantID), nil)
+	app.Mux.HandleFunc("POST "+upRoute, func(w http.ResponseWriter, r *http.Request) {
+		h.ServeHTTP(w, r.WithContext(auth.WithIdentity(r.Context(), id)))
+	})
+
+	body, ct := upBody(t, "scan.pdf", "application/pdf", []byte("%PDF-1.7 fake"), nil)
+	r := httptest.NewRequest(http.MethodPost, upRoute, body)
+	r.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	app.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("POST %s = %d: %s", upRoute, w.Code, w.Body)
+	}
+
+	var carried string
+	if err := stRequire(t).super.QueryRow(ctx,
+		`SELECT coalesce(metadata->>'sentry_trace', '') FROM river_job WHERE args->>'tenant_id' = $1`,
+		tenantID).Scan(&carried); err != nil {
+		t.Fatalf("read the enqueued job's metadata: %v", err)
+	}
+	txs := rec.Transactions()
+	if len(txs) != 1 || txs[0].Transaction != "POST "+upRoute {
+		t.Fatalf("recorded %d transactions, want the one upload request", len(txs))
+	}
+	trace := txs[0].Contexts["trace"]
+	traceID, _ := trace["trace_id"].(string)
+	spanID, _ := trace["span_id"].(string)
+	if traceID == "" || spanID == "" {
+		t.Fatalf("request transaction has no trace context: %v", trace)
+	}
+	if want := traceID + "-" + spanID + "-1"; carried != want {
+		t.Errorf("job metadata sentry_trace = %q, want the request transaction's %q", carried, want)
 	}
 }

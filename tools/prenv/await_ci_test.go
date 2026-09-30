@@ -15,7 +15,8 @@ const ciSHA = "5e975e718251c892c7cbfd3602bf6aa009f37ce5"
 var ciNonSuccess = []string{"failure", "cancelled", "timed_out", "action_required", "neutral", "skipped", "stale"}
 
 // ciShim is a gh on PATH that answers one line of gh.seq per call, then gh.default. The line
-// EXIT1, or neither file, is a failed call with no stdout. argv.log holds the tab-joined argv.
+// EXIT1, or neither file, is a failed call with no stdout; EXIT1:<body> fails with <body> on stdout.
+// argv.log holds the tab-joined argv.
 type ciShim struct {
 	dir, out string
 }
@@ -33,6 +34,7 @@ if [ -s "$dir/gh.seq" ]; then
 elif [ -f "$dir/gh.default" ]; then line=$(cat "$dir/gh.default")
 else line=EXIT1; fi
 if [ "$line" = EXIT1 ]; then echo "gh: HTTP 502" >&2; exit 1; fi
+case "$line" in EXIT1:*) printf '%s\n' "${line#EXIT1:}"; echo "gh: HTTP 502" >&2; exit 1;; esac
 printf '%s\n' "$line"
 `
 	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(stub), 0o755); err != nil {
@@ -161,7 +163,7 @@ func TestAwaitCI_FailsOnEveryNonSuccessConclusion(t *testing.T) {
 			if code != 1 {
 				t.Errorf("exit %d, want 1; output = %q", code, out)
 			}
-			if want := "CI concluded '" + c + "'"; !strings.Contains(out, want) {
+			if want := "::error::CI concluded '" + c + "' for " + ciSHA + "."; !strings.Contains(out, want) {
 				t.Errorf("output lacks %q: %q", want, out)
 			}
 			if strings.Contains(out, "CI is green") {
@@ -279,8 +281,8 @@ func TestAwaitCI_TimesOutAfterBudget(t *testing.T) {
 	if code != 1 {
 		t.Errorf("exit %d, want 1; output = %q", code, out)
 	}
-	if !strings.Contains(out, "::error::Timed out") {
-		t.Errorf("output lacks %q: %q", "::error::Timed out", out)
+	if want := "::error::Timed out after ~20m waiting for the CI check on " + ciSHA + "."; !strings.Contains(out, want) {
+		t.Errorf("output lacks %q: %q", want, out)
 	}
 	s.wantCalls(t, 80)
 	sleeps := s.sleeps(t)
@@ -299,7 +301,7 @@ func TestAwaitCI_TimesOutAfterBudget(t *testing.T) {
 func TestAwaitCI_QueriesTheCICheckOnTheGivenSHA(t *testing.T) {
 	s := newCIShim(t)
 	s.seq(t, ciResp(ciRun("completed", "success", "2026-09-30T10:00:00Z")))
-	out, code := s.run(t, s.defaultEnv(), ciSHA)
+	out, code := s.run(t, strings.Replace(s.defaultEnv(), "REPO=o/r", "REPO=acme/ledger", 1), ciSHA)
 
 	if code != 0 {
 		t.Errorf("exit %d, want 0; output = %q", code, out)
@@ -308,7 +310,7 @@ func TestAwaitCI_QueriesTheCICheckOnTheGivenSHA(t *testing.T) {
 	if len(calls) == 0 {
 		t.Fatal("the gh stub logged no call")
 	}
-	if want := "api\trepos/o/r/commits/" + ciSHA + "/check-runs?check_name=CI&per_page=100"; calls[0] != want {
+	if want := "api\trepos/acme/ledger/commits/" + ciSHA + "/check-runs?check_name=CI&per_page=100"; calls[0] != want {
 		t.Errorf("gh argv = %q, want %q", calls[0], want)
 	}
 }
@@ -322,6 +324,7 @@ func TestAwaitCI_UsageErrors(t *testing.T) {
 		{"no argument", func(s ciShim) string { return s.defaultEnv() }, nil},
 		{"empty sha", func(s ciShim) string { return s.defaultEnv() }, []string{""}},
 		{"REPO unset", func(s ciShim) string { return "unset REPO\nexport GH_TOKEN=fake GITHUB_OUTPUT='" + s.out + "'\n" }, []string{ciSHA}},
+		{"REPO empty", func(s ciShim) string { return "export REPO= GH_TOKEN=fake GITHUB_OUTPUT='" + s.out + "'\n" }, []string{ciSHA}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newCIShim(t)
@@ -363,5 +366,94 @@ func TestAwaitCI_NoGithubOutputStillDecides(t *testing.T) {
 	}
 	if !strings.Contains(out, "CI concluded 'failure'") {
 		t.Errorf("failure: output lacks the verdict: %q", out)
+	}
+}
+
+// The older run is green and the newer one is not decided: neither status nor conclusion may
+// come from the older run, and a queued run never decides even when it carries a conclusion.
+func TestAwaitCI_ANonCompletedLatestRunNeverDecides(t *testing.T) {
+	const early, late = "2026-09-30T10:00:00Z", "2026-09-30T10:05:00Z"
+	for _, c := range []struct {
+		name       string
+		first      string
+		wantCode   int
+		wantOutput string
+	}{
+		{"rerun in progress", ciRun("in_progress", "", late), 1, "failure"},
+		{"queued with a conclusion", ciRun("queued", "failure", late), 0, "success"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newCIShim(t)
+			s.seq(t,
+				ciResp(ciRun("completed", "success", early), c.first),
+				ciResp(ciRun("completed", "success", early), ciRun("completed", c.wantOutput, late)))
+			out, code := s.run(t, s.defaultEnv(), ciSHA)
+
+			if code != c.wantCode {
+				t.Errorf("exit %d, want %d; output = %q", code, c.wantCode, out)
+			}
+			s.wantCalls(t, 2)
+			s.wantOutput(t, "conclusion="+c.wantOutput)
+			if n := len(s.sleeps(t)); n != 1 {
+				t.Errorf("sleeps = %d, want 1", n)
+			}
+		})
+	}
+}
+
+func TestAwaitCI_ConclusionMatchIsExact(t *testing.T) {
+	for _, c := range []string{"Success", "SUCCESS"} {
+		t.Run(c, func(t *testing.T) {
+			s := newCIShim(t)
+			s.seq(t, ciResp(ciRun("completed", c, "2026-09-30T10:00:00Z")))
+			out, code := s.run(t, s.defaultEnv(), ciSHA)
+
+			if code != 1 {
+				t.Errorf("exit %d, want 1; output = %q", code, out)
+			}
+			if strings.Contains(out, "CI is green") {
+				t.Errorf("conclusion %q printed green: %q", c, out)
+			}
+			s.wantOutput(t, "conclusion="+c)
+		})
+	}
+}
+
+func TestAwaitCI_VerdictOnTheLastPollCounts(t *testing.T) {
+	s := newCIShim(t)
+	pending := ciResp(ciRun("in_progress", "", "2026-09-30T10:00:00Z"))
+	lines := make([]string, 0, 80)
+	for i := 0; i < 79; i++ {
+		lines = append(lines, pending)
+	}
+	s.seq(t, append(lines, ciResp(ciRun("completed", "success", "2026-09-30T10:00:00Z")))...)
+	out, code := s.run(t, s.defaultEnv(), ciSHA)
+
+	if code != 0 {
+		t.Errorf("exit %d, want 0; output = %q", code, out)
+	}
+	s.wantCalls(t, 80)
+	s.wantOutput(t, "conclusion=success")
+}
+
+func TestAwaitCI_AppendsToGithubOutput(t *testing.T) {
+	const early = "2026-09-30T10:00:00Z"
+	for _, c := range []struct {
+		name string
+		seed func(s ciShim, t *testing.T)
+		want []string
+	}{
+		{"success", func(s ciShim, t *testing.T) { s.seq(t, ciResp(ciRun("completed", "success", early))) }, []string{"prior=1", "conclusion=success"}},
+		{"failure", func(s ciShim, t *testing.T) { s.seq(t, ciResp(ciRun("completed", "failure", early))) }, []string{"prior=1", "conclusion=failure"}},
+		{"timeout leaves it as it was", func(s ciShim, t *testing.T) { s.always(t, ciResp(ciRun("queued", "", early))) }, []string{"prior=1"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newCIShim(t)
+			writeFile(t, s.out, "prior=1\n")
+			c.seed(s, t)
+			s.run(t, s.defaultEnv(), ciSHA)
+
+			s.wantOutput(t, c.want...)
+		})
 	}
 }

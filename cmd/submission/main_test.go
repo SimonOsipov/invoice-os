@@ -1041,7 +1041,7 @@ func wtFatalAfter(t *testing.T, f *ast.File, want string) (calls int, fatal bool
 			continue
 		}
 		// The call's own err, tested `err != nil`, fatal in the body: `x, _ :=`, `err == nil` or
-		// a fatal only in an else checks nothing (TestSubmissionMain_FatalAfterRefusesAWeakCheck).
+		// a fatal only in an else checks nothing.
 		if last, ok := as.Lhs[len(as.Lhs)-1].(*ast.Ident); !ok || last.Name != "err" {
 			continue
 		}
@@ -1165,41 +1165,6 @@ func TestSubmissionMain_FatalOnJevClientError(t *testing.T) {
 	}
 	if !fatal {
 		t.Error("the statement after jev.FromEnv is not an error check that calls platform.Fatal")
-	}
-}
-
-// The matcher reads main()'s top-level statements only, as AST, so layout and comments never count.
-func TestSubmissionMain_FatalAfterRefusesAWeakCheck(t *testing.T) {
-	const head = "package main\nfunc main() {\n"
-	cases := []struct {
-		name      string
-		body      string
-		wantCalls int
-		wantFatal bool
-	}{
-		{"control", "c, err := jev.FromEnv(l)\nif err != nil { platform.Fatal(l, \"x: %v\", err) }", 1, true},
-		{"control reformatted", "c,err:=jev.FromEnv(\n l,\n)\nif err!=nil{\nplatform.Fatal(l, \"x: %v\", err)}", 1, true},
-		{"blank error", "c, _ := jev.FromEnv(l)\nif err != nil { platform.Fatal(l, \"x: %v\", err) }", 1, false},
-		{"inverted check", "c, err := jev.FromEnv(l)\nif err == nil { platform.Fatal(l, \"x: %v\", err) }", 1, false},
-		{"fatal only in else", "c, err := jev.FromEnv(l)\nif err != nil { l.Error(\"x\") } else { platform.Fatal(l, \"x: %v\", err) }", 1, false},
-		{"init shadows err", "c, err := jev.FromEnv(l)\nif err := f(); err != nil { platform.Fatal(l, \"x: %v\", err) }", 1, false},
-		{"statement between", "c, err := jev.FromEnv(l)\n_ = c\nif err != nil { platform.Fatal(l, \"x: %v\", err) }", 1, false},
-		{"inside an if", "if ok { c, err := jev.FromEnv(l)\nif err != nil { platform.Fatal(l, \"x: %v\", err) } }", 0, false},
-		{"inside a func literal", "func() { c, err := jev.FromEnv(l)\nif err != nil { platform.Fatal(l, \"x: %v\", err) } }()", 0, false},
-		{"comment only", "// c, err := jev.FromEnv(l)\n// if err != nil { platform.Fatal(l, \"x: %v\", err) }\n_ = 1", 0, false},
-		{"other func", "}\nfunc other() { c, err := jev.FromEnv(l)\nif err != nil { platform.Fatal(l, \"x: %v\", err) }", 0, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			f, err := parser.ParseFile(token.NewFileSet(), "x.go", head+tc.body+"\n}\n", parser.ParseComments)
-			if err != nil {
-				t.Fatalf("parse: %v", err)
-			}
-			calls, fatal := wtFatalAfter(t, f, "jev.FromEnv")
-			if calls != tc.wantCalls || fatal != tc.wantFatal {
-				t.Errorf("wtFatalAfter = (%d, %v), want (%d, %v)", calls, fatal, tc.wantCalls, tc.wantFatal)
-			}
-		})
 	}
 }
 

@@ -10,6 +10,7 @@ const input = (o: Partial<GateInput>): GateInput => ({
   e2eResult: 'success',
   ciResult: 'success',
   ciConclusion: 'success',
+  topologyResult: 'success',
   ...o,
 })
 
@@ -35,9 +36,59 @@ describe('mergeGateVerdict', () => {
     }
   })
 
-  it('passes a ready relevant PR whose CI and E2E succeeded', () => {
+  it('passes a ready relevant PR whose CI, E2E and topology succeeded', () => {
     const v = mergeGateVerdict(input({}))
     expect(v.pass).toBe(true)
+    expect(mergeGateVerdict(input({ topologyResult: 'success' })).pass).toBe(true)
+  })
+
+  it('fails a green E2E when topology did not succeed', () => {
+    const variants = ['failure', 'cancelled', 'skipped', '', 'SUCCESS', ' success']
+    expect(variants.length).toBeGreaterThan(0)
+    for (const topologyResult of variants) {
+      const v = mergeGateVerdict(input({ e2eResult: 'success', ciResult: 'success', topologyResult }))
+      expect(v.pass, `'${topologyResult}'`).toBe(false)
+      expect(v.reason.startsWith('topology shards concluded'), `'${topologyResult}' ${v.reason}`).toBe(true)
+      expect(v.reason, `'${topologyResult}'`).toContain(`'${topologyResult}'`)
+    }
+    expect(mergeGateVerdict(input({ topologyResult: 'success' })).pass).toBe(true)
+  })
+
+  it('rule order: CI, then E2E, then topology', () => {
+    const ci = mergeGateVerdict(
+      input({ ciResult: 'failure', ciConclusion: 'failure', e2eResult: 'failure', topologyResult: 'failure' }),
+    )
+    expect(ci.pass).toBe(false)
+    expect(ci.reason).toContain('CI did not succeed')
+    expect(ci.reason).not.toContain('topology shards concluded')
+
+    const e2e = mergeGateVerdict(input({ e2eResult: 'failure', topologyResult: 'failure' }))
+    expect(e2e.pass).toBe(false)
+    expect(e2e.reason).toContain("E2E concluded 'failure'")
+    expect(e2e.reason).not.toContain('topology shards concluded')
+
+    // Only a green CI and E2E reach the topology rule.
+    const topo = mergeGateVerdict(input({ topologyResult: 'failure' }))
+    expect(topo.pass).toBe(false)
+    expect(topo.reason).toContain("topology shards concluded 'failure'")
+  })
+
+  it('topology does not touch not-relevant, draft or failed-changes PRs', () => {
+    const TOPO = ['success', 'failure', 'skipped', '']
+    expect(TOPO.length).toBeGreaterThan(0)
+    for (const topologyResult of TOPO) {
+      const notRelevant = mergeGateVerdict(input({ relevant: 'false', e2eResult: 'skipped', topologyResult }))
+      expect(notRelevant.pass, `relevant=false/'${topologyResult}'`).toBe(true)
+      expect(notRelevant.reason, topologyResult).toContain('no E2E-relevant path')
+
+      const draft = mergeGateVerdict(input({ draft: 'true', topologyResult }))
+      expect(draft.pass, `draft/'${topologyResult}'`).toBe(false)
+      expect(draft.reason, topologyResult).toContain('mark the PR ready')
+
+      const changes = mergeGateVerdict(input({ changesResult: 'failure', relevant: '', topologyResult }))
+      expect(changes.pass, `changes/'${topologyResult}'`).toBe(false)
+      expect(changes.reason, topologyResult).toContain('path detection did not succeed')
+    }
   })
 
   it('fails a green E2E when CI did not succeed', () => {
@@ -229,33 +280,58 @@ describe('mergeGateVerdict adversarial', () => {
     const CH = ['success', 'failure', '']
     const REL = ['true', 'false', '', 'False']
     const CI = ['success', 'failure', 'skipped', '', 'SUCCESS']
+    const TOPO = ['success', 'failure', 'skipped', '', 'SUCCESS']
     let passes = 0
     let n = 0
     for (const changesResult of CH)
       for (const relevant of REL)
         for (const draft of DRAFT)
           for (const e2eResult of E2E)
-            for (const ciResult of CI) {
-              n++
-              const want =
-                changesResult === 'success' &&
-                (relevant === 'false' ||
-                  (relevant === 'true' && draft !== 'true' && ciResult === 'success' && e2eResult === 'success'))
-              const v = mergeGateVerdict({ changesResult, relevant, draft, e2eResult, ciResult, ciConclusion: ciResult })
-              expect(v.pass, JSON.stringify({ changesResult, relevant, draft, e2eResult, ciResult })).toBe(want)
-              expect(v.reason.length).toBeGreaterThan(0)
-              if (v.pass) passes++
-            }
-    expect(n).toBe(CH.length * REL.length * DRAFT.length * E2E.length * CI.length)
-    expect(n).toBe(1680)
-    // 140 relevant=false rows (4 drafts x 7 E2E x 5 CI) + 3 ready-draft values with green CI and E2E.
-    expect(passes).toBe(143)
+            for (const ciResult of CI)
+              for (const topologyResult of TOPO) {
+                n++
+                const want =
+                  changesResult === 'success' &&
+                  (relevant === 'false' ||
+                    (relevant === 'true' &&
+                      draft !== 'true' &&
+                      ciResult === 'success' &&
+                      e2eResult === 'success' &&
+                      topologyResult === 'success'))
+                const v = mergeGateVerdict({
+                  changesResult,
+                  relevant,
+                  draft,
+                  e2eResult,
+                  ciResult,
+                  ciConclusion: ciResult,
+                  topologyResult,
+                })
+                expect(
+                  v.pass,
+                  JSON.stringify({ changesResult, relevant, draft, e2eResult, ciResult, topologyResult }),
+                ).toBe(want)
+                expect(v.reason.length).toBeGreaterThan(0)
+                if (v.pass) passes++
+              }
+    expect(n).toBe(CH.length * REL.length * DRAFT.length * E2E.length * CI.length * TOPO.length)
+    expect(n).toBe(8400)
+    // 700 relevant=false rows (4 drafts x 7 E2E x 5 CI x 5 TOPO) + 3 ready-draft values with everything green.
+    expect(passes).toBe(703)
   })
 })
 
 describe('mergeGate CLI', () => {
   const gate = resolve(import.meta.dirname, 'mergeGate.ts')
-  const VARS = ['CHANGES_RESULT', 'E2E_RELEVANT', 'PR_DRAFT', 'E2E_RESULT', 'CI_RESULT', 'CI_CONCLUSION']
+  const VARS = [
+    'CHANGES_RESULT',
+    'E2E_RELEVANT',
+    'PR_DRAFT',
+    'E2E_RESULT',
+    'CI_RESULT',
+    'CI_CONCLUSION',
+    'TOPOLOGY_RESULT',
+  ]
 
   const cli = (vars: Record<string, string>) => {
     // Strip the gate vars from the inherited env so a CI runner's values cannot leak in.
@@ -293,9 +369,37 @@ describe('mergeGate CLI', () => {
       PR_DRAFT: 'false',
       E2E_RESULT: 'success',
       CI_RESULT: 'success',
+      TOPOLOGY_RESULT: 'success',
     })
     expect(code).toBe(0)
     expect(out).toContain('E2E concluded success')
+  })
+
+  const green = {
+    CHANGES_RESULT: 'success',
+    E2E_RELEVANT: 'true',
+    PR_DRAFT: 'false',
+    E2E_RESULT: 'success',
+    CI_RESULT: 'success',
+    CI_CONCLUSION: 'success',
+  }
+
+  it('script exits 1 when topology did not succeed', () => {
+    const { code, out } = cli({ ...green, TOPOLOGY_RESULT: 'failure' })
+    expect(code).toBe(1)
+    expect(out).toContain("::error::topology shards concluded 'failure'")
+  })
+
+  it('script exits 0 when every stage succeeded', () => {
+    const { code, out } = cli({ ...green, TOPOLOGY_RESULT: 'success' })
+    expect(code).toBe(0)
+    expect(out).not.toContain('::error::')
+  })
+
+  it('script treats an unset TOPOLOGY_RESULT as a failed topology', () => {
+    const { code, out } = cli(green)
+    expect(code).toBe(1)
+    expect(out).toContain("::error::topology shards concluded ''")
   })
 
   it('script exits 1 on a relevant draft PR with a green E2E', () => {
@@ -311,6 +415,7 @@ describe('mergeGate CLI', () => {
       PR_DRAFT: 'false',
       E2E_RESULT: 'skipped',
       CI_RESULT: 'success',
+      TOPOLOGY_RESULT: 'success',
     })
     expect(code).toBe(1)
     expect(out).toContain("::error::E2E concluded 'skipped'")
@@ -332,7 +437,13 @@ describe('mergeGate CLI', () => {
   })
 
   it('script fails every non-exact CI_RESULT with a green E2E', () => {
-    const ready = { CHANGES_RESULT: 'success', E2E_RELEVANT: 'true', PR_DRAFT: 'false', E2E_RESULT: 'success' }
+    const ready = {
+      CHANGES_RESULT: 'success',
+      E2E_RELEVANT: 'true',
+      PR_DRAFT: 'false',
+      E2E_RESULT: 'success',
+      TOPOLOGY_RESULT: 'success',
+    }
     const variants = ['SUCCESS', 'Success', ' success', 'success ', 'success\n', 'cancelled', 'skipped', 'failure', '']
     for (const CI_RESULT of variants) {
       const { code, out } = cli({ ...ready, CI_RESULT, CI_CONCLUSION: 'success' })

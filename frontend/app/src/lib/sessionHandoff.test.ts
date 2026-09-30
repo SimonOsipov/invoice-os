@@ -8,9 +8,10 @@ const CODE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ'
 const STATE = 'ZYXWVUTSRQPONMLKJIHGFEDCBAzyxwvutsrqponmlk_'
 const GATEWAY = 'https://gw.test'
 const ME: Me = {
-  tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures' },
+  tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures', kind: 'firm' },
   user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated' },
 }
+const IN_HOUSE_ME: Me = { ...ME, tenant: { ...ME.tenant, kind: 'in_house' } }
 
 function jwt(exp: number): string {
   const b64 = (o: object) => btoa(JSON.stringify(o)).replace(/=+$/, '')
@@ -58,6 +59,12 @@ describe('handoffPersona (D8)', () => {
     })
     expect(handoffPersona(ME).mode).toBe('firm')
   })
+
+  it('handoffPersona takes in-house mode from tenants.kind', () => {
+    const persona = handoffPersona(IN_HOUSE_ME)
+    expect(persona.mode).toBe('inhouse')
+    expect(persona).toEqual({ ...APP_PERSONAS.firm, mode: 'inhouse', subject: ME.user.id, tenantId: ME.tenant.id })
+  })
 })
 
 describe('redeemHandoff (D9, D25 step 5)', () => {
@@ -91,6 +98,42 @@ describe('redeemHandoff (D9, D25 step 5)', () => {
       }),
     )
   }
+
+  function stubMe(me: unknown) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        const body = url.endsWith('/auth/exchange') ? { access_token: LIVE } : me
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) })
+      }),
+    )
+  }
+
+  it('redeemHandoff takes the mode from /me', async () => {
+    stubMe(IN_HOUSE_ME)
+    const s = await redeemHandoff(GATEWAY, CODE, STATE)
+    expect(s.persona.mode).toBe('inhouse')
+    expect(s.handoff).toBe(true)
+    expect(s.me).toEqual(IN_HOUSE_ME)
+  })
+
+  it('redeemHandoff rejects a /me without a known kind', async () => {
+    const withKind = (kind: unknown) => ({ ...ME, tenant: { ...ME.tenant, kind } })
+    const rows: [string, unknown][] = [
+      ['kind absent', { ...ME, tenant: { id: ME.tenant.id, name: ME.tenant.name } }],
+      ['bogus', withKind('bogus')],
+      ['toString', withKind('toString')],
+      ['array', withKind(['firm'])],
+    ]
+    expect(rows.length).toBeGreaterThan(0)
+    for (const [name, me] of rows) {
+      stubMe(me)
+      await expect(redeemHandoff(GATEWAY, CODE, STATE), name).rejects.toThrow(/malformed/)
+    }
+    // Control: the same /me with a known kind resolves.
+    stubMe(withKind('firm'))
+    await expect(redeemHandoff(GATEWAY, CODE, STATE)).resolves.toMatchObject({ handoff: true })
+  })
 
   // The token may have sat in the gateway's store for up to HandoffTTL (60 s, internal/gateway/handoff.go).
   it('redeemHandoff keeps the refresh token with its receipt time', async () => {

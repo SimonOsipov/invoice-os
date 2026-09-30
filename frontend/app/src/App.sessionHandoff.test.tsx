@@ -19,7 +19,7 @@ const STATE_RE = '[A-Za-z0-9_-]{43}'
 const CODE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ'
 
 const ME: Me = {
-  tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures' },
+  tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures', kind: 'firm' },
   user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated' },
 }
 const OLD_ME: Me = {
@@ -257,6 +257,43 @@ describe('a hand-off boot redeems the code (AC-1, D9, D25)', () => {
     expect(hrefWrites.filter((h) => h.includes('signin=ready'))).toEqual([])
     expect(hrefWrites).toEqual([])
     expect(window.location.search).toBe('')
+  })
+})
+
+describe('a hand-off session mounts the workspace its tenant kind names (AUTH-08)', () => {
+  const withKind = (kind: Me['tenant']['kind']): Me => ({ ...ME, tenant: { ...ME.tenant, kind } })
+
+  it('an in-house hand-off mounts the in-house workspace', async () => {
+    configure()
+    ensureSignInState()
+    meReply = ok(withKind('in_house'))
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
+    expect(capturedCtx?.mode).toBe('inhouse')
+  })
+
+  it('a firm hand-off mounts the firm workspace', async () => {
+    configure()
+    ensureSignInState()
+    meReply = ok(withKind('firm'))
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
+    expect(capturedCtx?.mode).toBe('firm')
+  })
+
+  it('a stored in-house hand-off session boots in-house', async () => {
+    configure()
+    const inHouse = { ...OLD_ME, tenant: { ...OLD_ME.tenant, kind: 'in_house' as const } }
+    localStorage.setItem(SESSION_KEY, handoffRecord(jwt(inHouse.user.id, nowSec() + 3600), inHouse))
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
+    expect(exchangeBodies, 'no redemption on a stored session').toHaveLength(0)
+    expect(capturedCtx?.mode).toBe('inhouse')
   })
 })
 
@@ -621,6 +658,8 @@ describe('AUTH-05-08 adversarial', () => {
       ['me 401', fail(401, 'unauthorized')],
       ['me network', networkDown],
       ['me malformed body', () => Promise.resolve({ ok: true, status: 200, statusText: 'OK', json: () => Promise.reject(new SyntaxError('bad json')) })],
+      ['me unknown kind', ok({ ...ME, tenant: { ...ME.tenant, kind: 'bogus' } })],
+      ['me no kind', ok({ ...ME, tenant: { id: ME.tenant.id, name: ME.tenant.name } })],
     ]
     expect(cases.length).toBeGreaterThan(0)
     for (const [name, reply] of cases) {
@@ -653,20 +692,17 @@ describe('AUTH-05-08 adversarial', () => {
     expect(localStorage.getItem(SESSION_KEY)).toBeNull()
   })
 
-  // Pinned, advisory: cmd/tenancy's MeHandler always returns tenant.id, so this is unreachable.
-  // Redemption stores a record the parser rejects; flip if redemption should apply the parse guard.
-  it('pinned: a /me 200 with a tenant but no tenant id mounts and stores an unparseable record', async () => {
+  it('a /me 200 with a tenant but no tenant id reports failed', async () => {
     configure()
     ensureSignInState()
-    meReply = ok({ tenant: { name: 'No Id' }, user: ME.user })
+    meReply = ok({ tenant: { name: 'No Id', kind: 'firm' }, user: ME.user })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
     window.history.replaceState(null, '', `/?handoff=${CODE}`)
-    interceptHref()
+    const { hrefWrites } = interceptHref()
     await bootApp()
-    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
-    expect(storedRecord()?.handoff).toBe(true)
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    expect(parseStoredSession(localStorage.getItem(SESSION_KEY))).toBeNull()
-    expect(warn).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=failed`]))
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+    expect(capturedCtx).toBeUndefined()
   })
 
   // Pinned: /auth/exchange never answers 403 (signin.go ExchangeHandler: 200/400/405; CORS: 204),

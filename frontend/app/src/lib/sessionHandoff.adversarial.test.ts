@@ -70,7 +70,7 @@ describe('redeemHandoff adversarial', () => {
 
   it('a /me 200 with no tenant rejects', async () => {
     stubFetch({ status: 200, body: { access_token: LIVE } }, { status: 200, body: { user: ME.user } })
-    await expect(redeemHandoff(GATEWAY, CODE, STATE)).rejects.toBeInstanceOf(TypeError)
+    await expect(redeemHandoff(GATEWAY, CODE, STATE)).rejects.toThrow(/malformed/)
   })
 
   // Pinned, advisory: the gateway always answers a string, so the client does not check it.

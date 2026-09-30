@@ -11,6 +11,7 @@ import {
   SESSION_SCHEMA_VERSION,
   clearSession,
   decodeJwtPayload,
+  hasMeIds,
   isTokenExpired,
   loadSession,
   parseStoredSession,
@@ -501,11 +502,29 @@ describe('adversarial / edge coverage (QA)', () => {
 })
 
 // The hand-off record.
+// Each is refused by hasMeIds; 'firm' and 'in_house' are the accepted kinds.
+const KIND_REFUSALS: [string, unknown][] = [
+  ['null', null],
+  ['empty', ''],
+  ['inhouse', 'inhouse'],
+  ['IN_HOUSE', 'IN_HOUSE'],
+  ['bogus', 'bogus'],
+  ['toString', 'toString'],
+  ['constructor', 'constructor'],
+  ['__proto__', '__proto__'],
+  ['number', 7],
+  ['true', true],
+  ['array', ['firm']],
+  ['object with toString', { toString: () => 'firm' }],
+]
+
 describe('hand-off session record (AUTH-05 D8)', () => {
   const ME: Me = {
-    tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures' },
+    tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures', kind: 'firm' },
     user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated' },
   }
+  const IN_HOUSE_ME: Me = { ...ME, tenant: { ...ME.tenant, kind: 'in_house' } }
+  const inhouseSessionOf = (me: Me): Session => ({ persona: APP_PERSONAS.inhouse, token: 'jwt', me, verified: true })
 
   it('a hand-off session round-trips', () => {
     const session: Session = { persona: handoffPersona(ME), token: 'jwt', me: ME, verified: true, handoff: true }
@@ -516,6 +535,25 @@ describe('hand-off session record (AUTH-05 D8)', () => {
     expect(restored?.persona.tenantId).toBe(ME.tenant.id)
     expect(restored?.handoff).toBe(true)
     expect(restored).toEqual(session)
+
+    // An in-house tenant: same persona id and verbatim me on disk, in-house mode after parse.
+    const inHouse: Session = { persona: handoffPersona(IN_HOUSE_ME), token: 'jwt', me: IN_HOUSE_ME, verified: true, handoff: true }
+    const inHouseRaw = serializeSession(inHouse)
+    expect(JSON.parse(inHouseRaw)).toEqual({ v: 1, personaId: 'firm', token: 'jwt', me: IN_HOUSE_ME, verified: true, handoff: true })
+    const inHouseRestored = parseStoredSession(inHouseRaw)
+    expect(inHouseRestored?.persona.mode).toBe('inhouse')
+    expect(inHouseRestored).toEqual(inHouse)
+  })
+
+  it('a persona session keeps its own mode whatever me says', () => {
+    const rows: [string, Session, string][] = [
+      ['inhouse persona, me firm', { ...inhouseSessionOf(ME) }, 'inhouse'],
+      ['firm persona, me in_house', { persona: APP_PERSONAS.firm, token: 'jwt', me: IN_HOUSE_ME, verified: true }, 'firm'],
+    ]
+    expect(rows.length).toBeGreaterThan(0)
+    for (const [name, session, want] of rows) {
+      expect(parseStoredSession(serializeSession(session))?.persona.mode, name).toBe(want)
+    }
   })
 
   it('a persona record is unchanged', () => {
@@ -528,21 +566,38 @@ describe('hand-off session record (AUTH-05 D8)', () => {
 
   it('a handoff record without a usable me is rejected', () => {
     const base = { v: 1, personaId: 'firm', token: 'jwt', verified: true, handoff: true }
+    // JSON.stringify drops a function, so the toString object arrives as {}; the direct hasMeIds test below keeps the real one.
+    const kinds: [string, unknown][] = KIND_REFUSALS.map(([name, kind]) => [`kind ${name}`, { tenant: { id: ME.tenant.id, name: 'X', kind }, user: ME.user }])
     const rows: [string, unknown][] = [
       ['me null', null],
       ['no user id', { tenant: { id: ME.tenant.id, name: 'X' }, user: { role: 'authenticated' } }],
       ['no tenant id', { tenant: { name: 'X' }, user: { id: ME.user.id, role: 'authenticated' } }],
       ['numeric user id', { tenant: { id: ME.tenant.id, name: 'X' }, user: { id: 9, role: 'authenticated' } }],
+      ['kind absent', { tenant: { id: ME.tenant.id, name: 'X' }, user: ME.user }],
+      ...kinds,
     ]
     expect(rows.length).toBeGreaterThan(0)
-    // Control: the same record with a usable me parses.
+    // Controls: the same record with a usable me parses, in either kind.
     expect(parseStoredSession(JSON.stringify({ ...base, me: ME }))).not.toBeNull()
+    expect(parseStoredSession(JSON.stringify({ ...base, me: IN_HOUSE_ME }))).not.toBeNull()
     for (const [name, me] of rows) {
       const { warn } = spyOnConsole()
       expect(parseStoredSession(JSON.stringify({ ...base, me })), name).toBeNull()
-      expect(warn, name).toHaveBeenCalled()
+      expect(warn, name).toHaveBeenCalledTimes(1)
       vi.restoreAllMocks()
     }
+  })
+
+  it('hasMeIds refuses a tenant kind that is not an own key of the mode table', () => {
+    // Fails on the export, not on a TypeError from calling undefined.
+    expect(hasMeIds).toBeTypeOf('function')
+    const meWith = (kind: unknown) => ({ tenant: { id: ME.tenant.id, name: 'X', kind }, user: ME.user })
+    expect(hasMeIds(meWith('firm'))).toBe(true)
+    expect(hasMeIds(meWith('in_house'))).toBe(true)
+    for (const [name, kind] of KIND_REFUSALS) {
+      expect(hasMeIds(meWith(kind)), name).toBe(false)
+    }
+    expect(hasMeIds({ tenant: { id: ME.tenant.id, name: 'X' }, user: ME.user }), 'kind absent').toBe(false)
   })
 })
 

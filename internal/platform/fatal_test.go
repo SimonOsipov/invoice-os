@@ -135,12 +135,6 @@ func (in *ingest) wantEvents(t *testing.T, n int) []wireEvent {
 	return slices.Clone(in.events)
 }
 
-func (in *ingest) eventCount() int {
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	return len(in.events)
-}
-
 // envelopeEvents returns the event items of a newline-delimited envelope.
 func envelopeEvents(body []byte) ([]wireEvent, error) {
 	r := bufio.NewReader(bytes.NewReader(body))
@@ -526,28 +520,6 @@ func TestFatal_NilLoggerFallsBackToDefault(t *testing.T) {
 	assertLoggedAtError(t, stdout, bootMessage)
 	if ev := in.wantEvents(t, 1)[0]; ev.Message != bootMessage {
 		t.Errorf("event message = %q, want %q", ev.Message, bootMessage)
-	}
-}
-
-// Fatal's capture-then-flush sequence, in-process: a flush that returns while a captured
-// event is still inside the SDK loses it at os.Exit.
-func TestFatal_FlushAfterCaptureLeavesNoEventBehind(t *testing.T) {
-	in := newIngest(t)
-	t.Setenv("SENTRY_DSN", in.dsn())
-	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
-	sentry.CurrentHub().BindClient(nil)
-	t.Cleanup(func() { sentry.CurrentHub().BindClient(nil) })
-	app, err := platform.New("svc")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := 1; i <= 300; i++ {
-		app.Logger.Error(bootMessage)
-		sentry.CurrentHub().Clone().CaptureMessage(bootMessage)
-		sentry.Flush(2 * time.Second)
-		if got := in.eventCount(); got != i {
-			t.Fatalf("after flush %d: ingest holds %d events, want %d", i, got, i)
-		}
 	}
 }
 

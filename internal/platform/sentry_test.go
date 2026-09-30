@@ -248,3 +248,28 @@ func TestInitSentry_LabelsEveryEvent(t *testing.T) {
 		t.Errorf("event server_name = %q, want svc", e.ServerName)
 	}
 }
+
+// D-36. The default telemetry-buffer transport lets Flush return before a boot-failure event is
+// queued. A timing test cannot fail on that race every run, so this pins the resolved transport.
+func TestInitSentry_EventsGoThroughTheSynchronousTransport(t *testing.T) {
+	t.Setenv("SENTRY_DSN", "https://public@example.com/1")
+	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	sentry.CurrentHub().BindClient(nil)
+	t.Cleanup(func() { sentry.CurrentHub().BindClient(nil) })
+
+	cfg, err := LoadConfig("svc")
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if err := initSentry(cfg); err != nil {
+		t.Fatalf("initSentry: %v", err)
+	}
+	client := sentry.CurrentHub().Client()
+	if client == nil || client.Options().Dsn == "" {
+		t.Fatal("initSentry installed no enabled client")
+	}
+	defer client.Close()
+	if _, ok := client.Transport.(*sentry.HTTPTransport); !ok {
+		t.Errorf("client transport = %T, want *sentry.HTTPTransport (telemetry buffer off)", client.Transport)
+	}
+}

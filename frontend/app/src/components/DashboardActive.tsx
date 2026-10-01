@@ -11,7 +11,7 @@
 //
 //   LIVE (rollup)   needs-attention KPI · invoice-status donut · readiness ring + bars ·
 //                   top validation failures · all four KPI tile VALUES
-//   MOCK            12-week trend (shape only — endpoint is live) · sparkline shapes · activity feed
+//   MOCK            12-week trend (shape only — endpoint is live) · sparkline shapes
 //
 // [dashboard-scope-per-client] (persona-handoff-fix step 2): this page is a CLIENT-scoped
 // surface (Sidebar.tsx's CLIENT nav group), so every LIVE panel above scopes to the
@@ -356,7 +356,7 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
         </div>
       </div>
 
-      {/* Row D: top validation failures (live) | recent activity (mock). Same
+      {/* Row D: top validation failures (live) | recent activity. Same
           `calc((100% - 396px) / 2)` narrow column as row B — see there for the 396. */}
       <div className="pf-dash-row-c" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) calc((100% - 396px) / 2)', gap: 18 }}>
       <div style={TILE_CARD}>

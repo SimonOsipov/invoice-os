@@ -109,6 +109,7 @@ let exchangeAuth: (string | null)[] = []
 let loginCalls = 0
 let exchangeReply: Reply = ok({ access_token: T })
 let meReply: Reply = ok(ME)
+let entityRows: unknown[] = []
 
 function routeFetch() {
   vi.stubGlobal(
@@ -127,6 +128,9 @@ function routeFetch() {
       if (url === `${GATEWAY}/auth/login`) {
         loginCalls++
         return ok({ access_token: jwt(APP_PERSONAS.firm.subject, nowSec() + 3600) })()
+      }
+      if (url.startsWith(`${GATEWAY}/api/portfolio/v1/entities`)) {
+        return ok({ entities: entityRows, pagination: { limit: 200, offset: 0, total: entityRows.length } })()
       }
       return ok({
         entities: [],
@@ -195,6 +199,7 @@ beforeEach(() => {
   loginCalls = 0
   exchangeReply = ok({ access_token: T })
   meReply = ok(ME)
+  entityRows = []
   routeFetch()
 })
 
@@ -448,6 +453,88 @@ describe('a hand-off session hides the demo data (AUTH-10-06, F17)', () => {
     await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
     expect(capturedCtx?.handoff).toBe(false)
     expect(capturedCtx?.draft.number).toBe('INV-2026-00482')
+  })
+
+  describe('the draft reseed paths (AUTH-10-07)', () => {
+    const ENTITY_A = 'aaaaaaaa-0000-4000-8000-000000000001'
+    const ENTITY_B = 'bbbbbbbb-0000-4000-8000-000000000002'
+    const BLANK = { number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', items: [{ desc: '', qty: 1, price: 0 }] }
+    const personaRecord = () => JSON.stringify({ v: 1, personaId: 'firm', token: T, me: ME, verified: true })
+
+    function entityRow(id: string, name: string, tin: string) {
+      return { id, name, tin, registration: null, sector: null, address: null, status: 'active', created_at: '2026-01-01T00:00:00Z' }
+    }
+
+    async function bootTwoCompanies(record: string) {
+      configure()
+      entityRows = [entityRow(ENTITY_A, 'Alpha Ltd', '12345678-0001'), entityRow(ENTITY_B, 'Beta Ltd', '12345678-0002')]
+      localStorage.setItem(SESSION_KEY, record)
+      interceptHref()
+      await bootApp()
+      await waitFor(() => expect(capturedCtx?.activeEntity?.id, 'the entity list must resolve').toBe(ENTITY_A))
+    }
+
+    async function typeIntoDraft() {
+      await act(async () => {
+        capturedCtx!.updateDraft('number', 'TYPED-1')
+        capturedCtx!.updateDraft('buyer', 'Typed Buyer')
+        capturedCtx!.updateDraft('buyerTin', '12345678-0009')
+        capturedCtx!.updateDraft('date', '2026-02-03')
+        capturedCtx!.updateItemDesc(0, 'typed line')
+      })
+      expect(capturedCtx!.draft.number, 'control: the typed value landed before the reseed').toBe('TYPED-1')
+      expect(capturedCtx!.draft.items[0]?.desc).toBe('typed line')
+    }
+
+    it('a hand-off session switching company gets a blank draft', async () => {
+      await bootTwoCompanies(handoffRecord(T, ME))
+      expect(capturedCtx?.handoff).toBe(true)
+      await typeIntoDraft()
+      await act(async () => {
+        capturedCtx!.switchClient(ENTITY_B)
+      })
+      await waitFor(() => expect(capturedCtx?.activeEntity?.id).toBe(ENTITY_B))
+      expect(capturedCtx!.draft).toEqual(BLANK)
+    })
+
+    it('a hand-off session opening a new invoice gets a blank draft', async () => {
+      await bootTwoCompanies(handoffRecord(T, ME))
+      expect(capturedCtx?.handoff).toBe(true)
+      await typeIntoDraft()
+      await act(async () => {
+        capturedCtx!.openCreate()
+      })
+      expect(capturedCtx!.draft).toEqual(BLANK)
+    })
+
+    // Control: green before and after.
+    it('a persona session switching company gets the demo draft', async () => {
+      await bootTwoCompanies(personaRecord())
+      expect(capturedCtx?.handoff).toBe(false)
+      await typeIntoDraft()
+      await act(async () => {
+        capturedCtx!.switchClient(ENTITY_B)
+      })
+      await waitFor(() => expect(capturedCtx?.activeEntity?.id).toBe(ENTITY_B))
+      expect(capturedCtx!.draft.number).toBe('INV-2026-00482')
+      expect(capturedCtx!.draft.date).toBe('2026-06-16')
+      expect(capturedCtx!.draft.buyer).not.toBe('')
+      expect(capturedCtx!.draft.items).toHaveLength(2)
+    })
+
+    // Control: green before and after.
+    it('a persona session opening a new invoice gets the demo draft', async () => {
+      await bootTwoCompanies(personaRecord())
+      expect(capturedCtx?.handoff).toBe(false)
+      await typeIntoDraft()
+      await act(async () => {
+        capturedCtx!.openCreate()
+      })
+      expect(capturedCtx!.draft.number).toBe('INV-2026-00482')
+      expect(capturedCtx!.draft.date).toBe('2026-06-16')
+      expect(capturedCtx!.draft.buyer).not.toBe('')
+      expect(capturedCtx!.draft.items).toHaveLength(2)
+    })
   })
 
   it('a redeemed hand-off boot carries handoff:true', async () => {

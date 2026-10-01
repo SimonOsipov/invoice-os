@@ -1361,11 +1361,11 @@ test('[import-upload-unify] LIVE: one real import surface, manual entry survives
   await expect(readColumnsBtn, 'enabled once a dropped file lands').toBeEnabled()
 
   // Manual entry must be reachable in LIVE. skipUpload -> createStep 'form'; the build
-  // step's own primary is 'File invoice' (CreateForm), which no earlier step renders. That
-  // label replaced 'Run validation' in INVCR-01-03, when the mock 16-check scanline and its
-  // approve screen were deleted in favour of one real POST /v1/invoices — the firm persona
-  // has a resolved entity, so the gate passes and the primary reads its armed label.
+  // step's own primary is 'File invoice' (CreateForm), which no earlier step renders. The
+  // hand-off session's form starts blank, so the primary reads the refusal until a number is typed.
   await page.getByRole('button', { name: 'Skip — enter manually' }).click()
+  await expect(page.getByRole('button', { name: 'Invoice number is required' }), 'the blank form refuses until a number is typed').toBeDisabled()
+  await page.getByPlaceholder('INV-0000-00000').fill(`DROP-${Date.now()}`)
   await expect(page.getByRole('button', { name: 'File invoice' }), 'manual build step reachable in LIVE').toBeVisible()
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
@@ -7332,12 +7332,13 @@ test('EXTR15-E2E-01 (AC-10): the hand-off row sits inside its card, and its gutt
 /** Fills the manual form the hand-off lands on, files it, and returns the new invoice's id. */
 async function fileHandOffDraft(page: Page, invoiceNumber: string): Promise<string> {
   const fileBtn = page.getByRole('button', { name: 'File invoice' })
-  await expect(fileBtn, 'the hand-off must land on the manual entry form').toBeVisible({ timeout: 60_000 })
+  const numberInput = page.getByPlaceholder('INV-0000-00000')
+  await expect(numberInput, 'the hand-off must land on the manual entry form').toBeVisible({ timeout: 60_000 })
+  await expect(page.getByRole('button', { name: 'Invoice number is required' }), 'the form starts blank').toBeDisabled()
 
-  // A fresh number per call: defaultDraft seeds a FIXED literal and
-  // (tenant_id, entity_id, invoice_number) is unique, so a Playwright retry would 409 on the
-  // row its own first attempt filed.
-  await page.getByPlaceholder('INV-0000-00000').fill(invoiceNumber)
+  // A fresh number per call: (tenant_id, entity_id, invoice_number) is unique, so a
+  // Playwright retry would 409 on the row its own first attempt filed.
+  await numberInput.fill(invoiceNumber)
   await expect(fileBtn, 'a resolved entity and a non-blank number must arm the primary').toBeEnabled()
 
   const [res] = await Promise.all([
@@ -8776,7 +8777,7 @@ test('AIR04-E2E-01 (AC-1, AC-3, AC-4, AC-5, AC-7): an unavailable AI sends the d
   const readingRes = await readingGet
   expect(readingRes.status()).toBe(200)
   expect(((await readingRes.json()) as { reading: unknown }).reading).toBeNull()
-  await expect(page.getByRole('button', { name: 'File invoice' })).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByRole('button', { name: 'Invoice number is required' })).toBeVisible({ timeout: 60_000 })
   await expect(page.getByText(CARRIED_CAPTION)).toHaveCount(0)
   await expect(page.locator('[data-testid^="carried-"]')).toHaveCount(0)
 

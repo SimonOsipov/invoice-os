@@ -206,7 +206,7 @@ export function resolveActiveClient(clients: Client[], activeEntityId: string | 
   return clients[0] ?? emptyClient()
 }
 
-// The persona session's manual create form state (a hand-off session uses startingDraft). Every field here is now genuinely EDITABLE and
+// A persona session's manual create form state. Every field here is now genuinely EDITABLE and
 // every one of them crosses the wire on POST /v1/invoices (INVCR-01-03), so these are real
 // defaults, not a mock fixture:
 //

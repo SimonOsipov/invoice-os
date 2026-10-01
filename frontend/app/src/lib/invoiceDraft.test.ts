@@ -803,5 +803,14 @@ describe('draftToCreateRequest: a blank hand-off draft (AUTH-10-07)', () => {
     expect(result.issue_date).toBeNull()
     expect(result.buyer_name).toBeNull()
     expect(result.buyer_tin).toBeNull()
+    expect(result.line_items, 'the one empty line crosses the wire').toHaveLength(1)
+    expect(result.line_items[0]).toMatchObject({ description: null, quantity: '1', unit_price: '0' })
+    expect(JSON.stringify(result), 'no NaN reaches the wire').not.toMatch(/NaN/)
+  })
+
+  it('a blank hand-off draft is refused by fileDraftGate until a number is typed', () => {
+    const blank = startingDraft(emptyClient(), true)
+    expect(fileDraftGate(blank, baseEntity)).toEqual({ canFile: false, reason: 'Invoice number is required' })
+    expect(fileDraftGate({ ...blank, number: 'X' }, baseEntity)).toEqual({ canFile: true })
   })
 })

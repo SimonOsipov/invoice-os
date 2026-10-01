@@ -838,5 +838,27 @@ describe('CreateFlow — the blank hand-off draft (AUTH-10-07)', () => {
     const primary = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Invoice number is required')
     expect(primary, 'the primary names the refusal').toBeDefined()
     expect((primary as HTMLButtonElement).disabled).toBe(true)
+    const typed = (Array.from(container.querySelectorAll('input')) as HTMLInputElement[]).filter((i) => i.type !== 'number')
+    expect(typed.length, 'the form must render text inputs').toBeGreaterThan(0)
+    expect(typed.map((i) => i.value).filter((v) => v !== ''), 'no text input carries a value').toEqual([])
+    const numbers = (Array.from(container.querySelectorAll('input[type="number"]')) as HTMLInputElement[]).map((i) => i.value)
+    expect(numbers, 'one line: qty 1, price 0').toEqual(['1', '0'])
+  })
+
+  it('a blank hand-off draft is filable once a number is typed, and the grid has one empty line', () => {
+    const entity = { id: 'e-1', name: 'Acme Ltd', tin: '12345678-0001' }
+    const draft = { ...startingDraft(emptyClient(), true), number: 'X-1' }
+    const { container } = render(
+      <CreateFlow ctx={createFlowCtx('form', null, { draft, activeEntity: entity, active: { short: 'Acme', tin: entity.tin } })} />,
+    )
+
+    const primary = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'File invoice') as HTMLButtonElement | undefined
+    expect(primary, 'a typed number arms the primary').toBeDefined()
+    expect(primary!.disabled).toBe(false)
+    expect(container.textContent).not.toContain('Invoice number is required')
+    expect(container.textContent).not.toContain('NaN')
+    const lineInputs = Array.from(container.querySelectorAll('input[placeholder="Description"]')) as HTMLInputElement[]
+    expect(lineInputs, 'one line row').toHaveLength(1)
+    expect(lineInputs[0]!.value).toBe('')
   })
 })

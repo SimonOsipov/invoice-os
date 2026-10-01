@@ -768,6 +768,16 @@ describe('DashboardActive Recent activity (AUTH-10-07, Core AC-7)', () => {
     expect(screen.queryByText('INV-2026-00481')).toBeNull()
   })
 
+  it('hand-off: Recent activity stays empty with invoices present, and the tile holds only its title and the empty line', async () => {
+    mockRollupFetch(rollup(0, { validated: 5 }))
+    render(<DashboardActive ctx={handoffCtx()} />)
+
+    await screen.findByText('Readiness score')
+    const tile = screen.getByText('Recent activity').parentElement!.parentElement as HTMLElement
+    expect(within(tile).getByText('No activity to show')).toBeDefined()
+    expect(tile.textContent).toBe('Recent activityNo activity to show')
+  })
+
   // Control: green before and after.
   it('persona: Recent activity keeps the SAMPLE feed', async () => {
     mockRollupFetch(rollup(0))

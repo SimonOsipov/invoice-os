@@ -398,6 +398,45 @@ describe('the identity card names the person /me names (AUTH-09-02)', () => {
   })
 })
 
+describe('a hand-off session hides the demo data (AUTH-10-06, F17)', () => {
+  const NO_CONNECTORS = { sap: false, quickbooks: false, oracle: false, sage: false, odoo: false, dynamics: false }
+
+  it("a hand-off session's workspace carries handoff:true and blank demo state", async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(T, ME))
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
+    expect(capturedCtx?.handoff).toBe(true)
+    expect(capturedCtx?.connectors).toEqual(NO_CONNECTORS)
+    expect(capturedCtx?.customRules).toEqual([])
+  })
+
+  // Control: green before and after.
+  it('a stored persona session keeps handoff:false and the demo state', async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ v: 1, personaId: 'firm', token: T, me: ME, verified: true }))
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
+    expect(capturedCtx?.handoff).toBe(false)
+    expect(capturedCtx?.connectors.sap).toBe(true)
+    expect(capturedCtx?.customRules).toHaveLength(5)
+  })
+
+  it('a redeemed hand-off boot carries handoff:true', async () => {
+    configure()
+    ensureSignInState()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    expect(capturedCtx?.handoff).toBe(true)
+    expect(capturedCtx?.connectors).toEqual(NO_CONNECTORS)
+    expect(capturedCtx?.customRules).toEqual([])
+  })
+})
+
 describe('the code leaves the URL (AC-3, AC-4)', () => {
   it('the code leaves the URL on success', async () => {
     configure()

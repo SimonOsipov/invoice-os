@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { CONNECTOR_DEFS, CONNECTOR_TAX_CODES } from '../data'
-import { connectorDetail, mappingFor } from './connectors'
+import { connectorDetail, initialConnectors, mappingFor } from './connectors'
 
 describe('connectorDetail', () => {
   it('is deterministic per connector', () => {
@@ -66,5 +66,26 @@ describe('mappingFor', () => {
     const edited = [{ erp: 'ZINV-CUSTOM', ubl: 'cbc:ID' }]
     expect(mappingFor(sap, { sap: edited })).toEqual(edited)
     expect(mappingFor(oracle, { sap: edited })).toEqual(oracle.mapping)
+  })
+})
+
+describe('initialConnectors', () => {
+  it('a hand-off session starts with nothing connected', () => {
+    const state = initialConnectors(true)
+    expect(CONNECTOR_DEFS.length).toBe(6)
+    expect(Object.keys(state).sort()).toEqual(CONNECTOR_DEFS.map((d) => d.id).sort())
+    expect(CONNECTOR_DEFS.map((d) => state[d.id])).toEqual([false, false, false, false, false, false])
+  })
+
+  // Control: green before and after.
+  it('a persona session keeps SAP and QuickBooks', () => {
+    expect(initialConnectors(false)).toEqual({ sap: true, quickbooks: true, oracle: false, sage: false, odoo: false, dynamics: false })
+  })
+
+  // Control: guards a shared module constant after the literal moves here.
+  it('each call returns a fresh object, so a toggle cannot leak across sessions', () => {
+    const a = initialConnectors(false)
+    a.oracle = true
+    expect(initialConnectors(false).oracle).toBe(false)
   })
 })

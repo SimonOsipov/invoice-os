@@ -12,6 +12,20 @@ import (
 // (via fmt.Errorf("%w: ...", ErrInvalidTIN)) is diagnostic only.
 var ErrInvalidTIN = errors.New("portfolio: invalid tin")
 
+// TINError names why ValidateTIN refused a TIN; errors.Is(err, ErrInvalidTIN) holds.
+type TINError struct{ Reason string }
+
+func (e *TINError) Error() string        { return ErrInvalidTIN.Error() + ": " + e.Reason }
+func (e *TINError) Is(target error) bool { return target == ErrInvalidTIN }
+
+// Refusal reasons, as sent on the wire. TINLengthMessage takes the digit count.
+const (
+	TINRequiredMessage = "Enter the TIN."
+	TINShapeMessage    = "A TIN is digits only. Only the 12-digit FIRS TIN takes a hyphen, after the 8th digit: ########-####."
+	TINLengthMessage   = "A TIN has 10 digits (JTB) or 12 digits (FIRS). This one has %d."
+	TINChecksumMessage = "This TIN's last digit is a check digit, and it does not match the other digits. Check the number on the tax certificate."
+)
+
 // tinShapePattern matches the accepted TIN shapes: a bare 10-digit JTB TIN,
 // a bare 12-digit FIRS TIN, or an 8+4 hyphenated FIRS TIN (NNNNNNNN-NNNN) --
 // the hyphenated and plain-digit spellings of a FIRS TIN both canonicalize to

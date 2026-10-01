@@ -76,7 +76,7 @@ export type TenantKind = 'firm' | 'in_house'
 
 export interface Me {
   tenant: { id: string; name: string; kind: TenantKind }
-  user: { id: string; role: string }
+  user: { id: string; role: string; display_name: string | null; email: string | null }
 }
 
 // The refresh token and the local epoch ms it arrived at.

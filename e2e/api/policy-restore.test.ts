@@ -29,9 +29,11 @@ type ApprovalPolicyTransport = {
   publish: (token: string, id: string) => Promise<ApprovalPolicy>
 }
 type EnsureFirmPolicyActive = (token: string, transport?: ApprovalPolicyTransport) => Promise<ApprovalPolicy>
+type EnsureInhousePolicyActive = EnsureFirmPolicyActive
 type MapApprovalSteps = (steps: ApprovalStep[]) => ApprovalStepInput[]
 
 let ensureFirmPolicyActive: EnsureFirmPolicyActive
+let ensureInhousePolicyActive: EnsureInhousePolicyActive
 let mapApprovalSteps: MapApprovalSteps
 
 beforeAll(async () => {
@@ -39,9 +41,10 @@ beforeAll(async () => {
   process.env.APP_URL = 'https://app.test'
   const mod = (await import('./contract-helpers')) as unknown as {
     ensureFirmPolicyActive: EnsureFirmPolicyActive
+    ensureInhousePolicyActive: EnsureInhousePolicyActive
     mapApprovalSteps: MapApprovalSteps
   }
-  ;({ ensureFirmPolicyActive, mapApprovalSteps } = mod)
+  ;({ ensureFirmPolicyActive, ensureInhousePolicyActive, mapApprovalSteps } = mod)
 })
 
 // captureRejection awaits a promise and returns its rejection -- so a test can assert the
@@ -498,5 +501,82 @@ describe('ensureFirmPolicyActive', () => {
     expect(second.name).toBe(POLICY_NAME)
     expect(first.id).toBe(second.id)
     expect(list).toHaveBeenCalledTimes(4)
+  })
+})
+
+describe('ensureInhousePolicyActive', () => {
+  const ID = 'pol-inhouse'
+  const NAME = 'Company approval policy'
+  const TREE: ApprovalStep[] = [
+    conditionStep('h', [approvalStep('h1', 'fin_dir')], [{ ...approvalStep('h2', 'x'), kind: 'autoapprove', workflow_role_key: null }]),
+  ]
+  const draft = policy({ id: ID, name: NAME, version: 1, steps: TREE, versions: [version(1, false, false)] })
+  const active = policy({ id: ID, name: NAME, version: 1, steps: TREE, versions: [version(1, true)] })
+  const res = (...approval_policies: ApprovalPolicy[]) => ({ approval_policies }) satisfies ApprovalPoliciesResponse
+
+  it("publishes the seeded draft's own tree, autoapprove lane included", async () => {
+    const list = vi.fn().mockResolvedValueOnce(res(draft)).mockResolvedValueOnce(res(active))
+    const putDraft = vi.fn().mockResolvedValue(draft)
+    const publish = vi.fn().mockResolvedValue(active)
+
+    const result = await ensureInhousePolicyActive('tok', { list, putDraft, publish })
+
+    expect(result.id).toBe(ID)
+    expect(putDraft).toHaveBeenCalledWith('tok', ID, { steps: mapApprovalSteps(TREE) })
+    expect(putDraft.mock.calls[0][2].steps[0].else[0].kind).toBe('autoapprove')
+    expect(publish).toHaveBeenCalledWith('tok', ID)
+  })
+
+  it('refuses a missing, duplicated or empty source before writing anything', async () => {
+    for (const listed of [[], [draft, { ...draft, id: 'pol-dup' }], [{ ...draft, steps: [] }]]) {
+      const putDraft = vi.fn()
+      const publish = vi.fn()
+      const err = await captureRejection(
+        ensureInhousePolicyActive('tok', { list: vi.fn().mockResolvedValue(res(...listed)), putDraft, publish }),
+      )
+      expect(err.message).toContain(NAME)
+      expect(putDraft).not.toHaveBeenCalled()
+      expect(publish).not.toHaveBeenCalled()
+    }
+  })
+
+  it('tolerates a failed mutation when the read shows it already converged', async () => {
+    const list = vi.fn().mockResolvedValue(res(active))
+    const fail = vi.fn().mockRejectedValue(new Error('409'))
+
+    const result = await ensureInhousePolicyActive('tok', { list, putDraft: fail, publish: fail })
+
+    expect(result.id).toBe(ID)
+  })
+
+  it('throws naming what it found when another policy holds the active slot', async () => {
+    const other = policy({ id: 'pol-other', name: 'Standard approval policy', version: 1, steps: GOOD_TREE, versions: [version(1, true)] })
+    const list = vi.fn().mockResolvedValueOnce(res(draft)).mockResolvedValueOnce(res(draft, other))
+    const publish = vi.fn().mockResolvedValue(active)
+
+    const err = await captureRejection(ensureInhousePolicyActive('tok', { list, putDraft: vi.fn().mockResolvedValue(draft), publish }))
+
+    expect(err.message).toContain('Standard approval policy')
+  })
+
+  it('throws when the company policy shares the active slot with another policy', async () => {
+    const other = policy({ id: 'pol-other', name: 'Standard approval policy', version: 1, steps: GOOD_TREE, versions: [version(1, true)] })
+    const list = vi.fn().mockResolvedValueOnce(res(draft)).mockResolvedValueOnce(res(active, other))
+
+    const err = await captureRejection(
+      ensureInhousePolicyActive('tok', { list, putDraft: vi.fn().mockResolvedValue(draft), publish: vi.fn().mockResolvedValue(active) }),
+    )
+
+    expect(err.message).toContain('(2)')
+  })
+
+  it('throws when nothing ends up active', async () => {
+    const list = vi.fn().mockResolvedValue(res(draft))
+
+    const err = await captureRejection(
+      ensureInhousePolicyActive('tok', { list, putDraft: vi.fn().mockResolvedValue(draft), publish: vi.fn().mockResolvedValue(draft) }),
+    )
+
+    expect(err.message).toContain('none')
   })
 })

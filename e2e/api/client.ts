@@ -123,6 +123,7 @@ export interface RealAccount {
   email: string
   password: string
   workspaceName: string
+  displayName: string
 }
 
 // The tenants.kind values the provision handler accepts.
@@ -131,16 +132,16 @@ export type TenantKind = 'firm' | 'in_house'
 // A fresh GoTrue account with a workspace of its own. Forks auto-confirm, so
 // the account signs in at once; a later sign-in carries the new tenant claim.
 // An absent kind stores the column default, 'firm'.
-export async function provisionRealAccount(prefix: string, kind?: TenantKind): Promise<RealAccount> {
+export async function provisionRealAccount(prefix: string, kind?: TenantKind, displayName = 'Hand-off E2E'): Promise<RealAccount> {
   const id = crypto.randomUUID()
-  const account = { email: `${prefix}-${id}@example.com`, password: id.slice(0, 16), workspaceName: `Hand-off E2E ${id.slice(0, 8)}` }
+  const account = { email: `${prefix}-${id}@example.com`, password: id.slice(0, 16), workspaceName: `Hand-off E2E ${id.slice(0, 8)}`, displayName }
   await apiFetch(`${apiBase()}/auth/register`, { method: 'POST', body: { email: account.email, password: account.password } })
   const state = mintSignInState()
   const token = await exchangeCode(await signInForCode(account.email, account.password, state), state)
   await apiFetch(`${apiBase()}/api/tenancy/v1/workspaces`, {
     method: 'POST',
     token,
-    body: { workspace_name: account.workspaceName, display_name: 'Hand-off E2E', ...(kind && { kind }) },
+    body: { workspace_name: account.workspaceName, display_name: displayName, ...(kind && { kind }) },
   })
   return account
 }
@@ -152,7 +153,7 @@ export async function provisionRealAccount(prefix: string, kind?: TenantKind): P
 
 export interface Me {
   tenant: { id: string; name: string; kind: string }
-  user: { id: string; role: string }
+  user: { id: string; role: string; display_name: string | null; email: string | null }
 }
 
 // Membership mirrors internal/tenancy's Membership struct: five keys, none tagged
@@ -1123,24 +1124,32 @@ export async function approveUntilClosed(
   return run
 }
 
-// firmApproverTokens(): mints the seeded firm run's two holder tokens once -- ...0004
+// firmApproverTokens(): mints the seeded firm run's two holder tokens -- ...0004
 // (fin_mgr) and ...0005 (compliance). Memoises the in-flight PROMISE, not the resolved
 // value, so two concurrent callers can't double-mint; this is the first module-scope token
 // cache in the api suite (every other site uses a per-file beforeAll), which AC-7 mandates.
 // The mock issuer's 1h TTL against a 5-15min run means the cache can't go stale.
-let firmApproverTokensPromise: Promise<Record<string, string>> | null = null
+// Keyed by tenant id: a topology shard's seeded firm is its own tenant.
+const firmApproverTokensByTenant = new Map<string, Promise<Record<string, string>>>()
 
-export function firmApproverTokens(): Promise<Record<string, string>> {
-  if (!firmApproverTokensPromise) {
-    firmApproverTokensPromise = (async () => {
+export function firmApproverTokens(tenantId: string = PERSONAS.A.tenantId): Promise<Record<string, string>> {
+  let memo = firmApproverTokensByTenant.get(tenantId)
+  if (!memo) {
+    memo = (async () => {
       const [fin_mgr, compliance] = await Promise.all([
-        login({ ...PERSONAS.A, subject: 'c0000000-0000-0000-0000-000000000004' }),
-        login({ ...PERSONAS.A, subject: 'c0000000-0000-0000-0000-000000000005' }),
+        login({ ...PERSONAS.A, tenantId, subject: 'c0000000-0000-0000-0000-000000000004' }),
+        login({ ...PERSONAS.A, tenantId, subject: 'c0000000-0000-0000-0000-000000000005' }),
       ])
       return { fin_mgr, compliance }
     })()
+    firmApproverTokensByTenant.set(tenantId, memo)
+    // A refused mint must not poison later callers; a success stays memoised.
+    const mint = memo
+    mint.catch(() => {
+      if (firmApproverTokensByTenant.get(tenantId) === mint) firmApproverTokensByTenant.delete(tenantId)
+    })
   }
-  return firmApproverTokensPromise
+  return memo
 }
 
 // ---- Audit-reader wire types (AUDIT-04-08), mirrored key-for-key from

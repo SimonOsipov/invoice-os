@@ -995,10 +995,10 @@ jobs:
       - name: Wait for SPA /health on the commit under test
         run: bash scripts/ci/wait-spa-builds.sh "$EXPECTED_BUILD" "$LANDING_URL" "$APP_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL"
 
-  # 7. Post-deploy verification (b): smoke (landing + both consoles render), api
-  #    (typed contract suite against the gateway), topology (browser login
-  #    + cross-tenant isolation) via Playwright,
-  #    once the fleet is green and the SPAs are deployed. PR environments only
+  # 7. Post-deploy verification (b), once the fleet is green and the SPAs are
+  #    deployed: smoke (landing + both consoles render) and api (typed contract
+  #    suite against the gateway) in `e2e`; topology (browser login + cross-tenant
+  #    isolation) in the `topology` job after it. PR environments only
   #    (M4-22-07); the DB is self-seeded at gateway boot, never reset here.
   #
   #    EPHEMERAL ENVIRONMENTS ONLY — hence `== 'pull_request'`, which now
@@ -1009,7 +1009,7 @@ jobs:
   #    coverage: this exact suite already ran against the PR's own environment,
   #    on the same commit, as the gate for merging it.
   e2e:
-    name: E2E (smoke + api + topology)
+    name: E2E (smoke + api)
     needs: [fleet-gate, deploy-spas, prepare-env, deploy-gateway, ci-watch]
     if: >-
       !cancelled() &&
@@ -1028,6 +1028,12 @@ jobs:
       LANDING_URL: ${{ needs.prepare-env.outputs.landing_url }}
       OPS_CONSOLE_URL: ${{ needs.prepare-env.outputs.ops_console_url }}
       SUPPORT_CONSOLE_URL: ${{ needs.prepare-env.outputs.support_console_url }}
+    outputs:
+      shards: ${{ steps.shards.outputs.shards }}
+      app_url: ${{ steps.urls.outputs.app_url }}
+      landing_url: ${{ steps.urls.outputs.landing_url }}
+      ops_console_url: ${{ steps.urls.outputs.ops_console_url }}
+      support_console_url: ${{ steps.urls.outputs.support_console_url }}
     steps:
       # "Re-run failed jobs" keeps deploy-gateway's output from an earlier attempt.
       - name: Refuse a re-run that skipped the gateway deploy
@@ -1046,6 +1052,11 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      - name: List the topology shards
+        id: shards
+        run: |
+          shards="$(node e2e/topology/shards.ts)"
+          echo "shards=$shards" >> "$GITHUB_OUTPUT"
       - name: Install deps
         run: pnpm install --frozen-lockfile
       # A domain record can exist, report syncStatus ACTIVE and still not route — see
@@ -1057,21 +1068,28 @@ jobs:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
           ENV_ID: ${{ needs.prepare-env.outputs.environment_id }}
         run: bash scripts/ci/railway-env.sh verify-spa-domains "$ENV_ID"
+      # The topology shards run on other runners; hand them the post-repair URLs.
+      - name: Publish the SPA URLs
+        id: urls
+        run: |
+          {
+            echo "app_url=$APP_URL"
+            echo "landing_url=$LANDING_URL"
+            echo "ops_console_url=$OPS_CONSOLE_URL"
+            echo "support_console_url=$SUPPORT_CONSOLE_URL"
+          } >> "$GITHUB_OUTPUT"
       - name: Wait for SPA /health on the commit under test
         env:
           EXPECTED_BUILD: ${{ github.sha }}
         run: bash scripts/ci/wait-spa-builds.sh "$EXPECTED_BUILD" "$LANDING_URL" "$APP_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL"
       - name: Install Chromium
-        # !cancelled(): skipping this when the wait fails makes topology report
-        # `browserType.launch: Executable doesn't exist` — a missing-browser error for what
-        # is really an unreachable SPA, which sends the next debugger to Playwright.
+        # !cancelled(): skipping this when the wait fails makes smoke report
+        # `browserType.launch: Executable doesn't exist` for what is really an unreachable SPA.
         if: "!cancelled() && steps.attempt.outcome == 'success'"
         run: pnpm --filter @invoice-os/e2e exec playwright install --with-deps chromium
       - name: Smoke (landing + both consoles render)
         run: pnpm --filter @invoice-os/e2e test:smoke
-      # All three suites write to the SAME e2e/playwright-report/, and every
-      # upload used to sit after every suite — so the "smoke" and "api" artifacts
-      # both contained whatever the LAST suite left behind. Park each report the
+      # Both suites write to the SAME e2e/playwright-report/. Park each report the
       # moment its suite ends, before the next one overwrites it.
       - name: Park the smoke report
         if: always()
@@ -1080,14 +1098,13 @@ jobs:
             mv e2e/playwright-report e2e/report-smoke
           fi
       - name: API E2E (typed contract suite)
-        # !cancelled(): a red smoke step must not silently withhold the api and
-        # topology verdicts (APPR-14 fix) — always() would also run this on a
+        # !cancelled(): a red smoke step must not silently withhold the api
+        # verdict (APPR-14 fix) — always() would also run this on a
         # cancelled workflow, which we don't want.
         if: "!cancelled() && steps.attempt.outcome == 'success'"
-        # Runs BEFORE topology: its beforeAll self-heal + afterAll rule-restore
-        # must complete before topology's rule-dependent assertions run (D4).
-        # Shares the global `rules` fixture with topology, so ordering here is
-        # load-bearing, not cosmetic. GATEWAY_URL comes from this job's `env:`
+        # Finishes before the topology job starts (`needs: e2e`): its beforeAll
+        # self-heal + afterAll rule-restore share the global `rules` fixture with
+        # topology (D4). GATEWAY_URL comes from this job's `env:`
         # (needs.prepare-env.outputs.gateway_url — the seam reads it
         # directly) — no chromium needed (A6: the api config declares no
         # browser project). Does not touch the database directly (M4-22-05) --
@@ -1098,20 +1115,6 @@ jobs:
         run: |
           if [ -d e2e/playwright-report ]; then
             mv e2e/playwright-report e2e/report-api
-          fi
-      - name: Topology (app verified-login + cross-tenant isolation)
-        # !cancelled(): same reasoning as the API E2E step above — a red smoke
-        # or api step must not hide topology's verdict.
-        if: "!cancelled() && steps.attempt.outcome == 'success'"
-        # GATEWAY_URL + APP_URL + LANDING_URL + OPS_CONSOLE_URL come from this
-        # job's `env:` (needs.prepare-env.outputs.* — topology/targets.ts
-        # reads them).
-        run: pnpm --filter @invoice-os/e2e test:topology
-      - name: Park the topology report
-        if: always()
-        run: |
-          if [ -d e2e/playwright-report ]; then
-            mv e2e/playwright-report e2e/report-topology
           fi
       # A retry-pass elsewhere stays a summary warning; in a spec this PR changed it fails.
       - name: Fail on a retry-pass in a spec this PR changed
@@ -1145,11 +1148,90 @@ jobs:
           path: e2e/report-api/
           if-no-files-found: ignore
           retention-days: 7
+
+  # Each topology unit runs on its own runner after smoke + api; the map is in
+  # e2e/topology/shards.ts. It reads the environment only, so it holds no Railway token.
+  topology:
+    name: E2E topology (${{ matrix.shard }})
+    needs: [e2e, prepare-env, deploy-gateway]
+    if: >-
+      !cancelled() &&
+      github.event_name == 'pull_request' &&
+      (needs.e2e.result == 'success' || needs.e2e.result == 'failure')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.e2e.outputs.shards) }}
+    permissions:
+      contents: read
+      pull-requests: read   # flaky-spec gate lists the PR's changed files
+    env:
+      FLAKY_JSON_DIR: ${{ github.workspace }}/e2e/flaky-results
+      GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}
+      APP_URL: ${{ needs.e2e.outputs.app_url }}
+      LANDING_URL: ${{ needs.e2e.outputs.landing_url }}
+      OPS_CONSOLE_URL: ${{ needs.e2e.outputs.ops_console_url }}
+      SUPPORT_CONSOLE_URL: ${{ needs.e2e.outputs.support_console_url }}
+    steps:
+      # "Re-run failed jobs" keeps deploy-gateway's output from an earlier attempt.
+      - name: Refuse a re-run that skipped the gateway deploy
+        id: attempt
+        env:
+          DEPLOYED_ATTEMPT: ${{ needs.deploy-gateway.outputs.attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$DEPLOYED_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "::error::Re-run the whole workflow, not failed jobs — the database reset runs only when the gateway deploys. Gateway last deployed in attempt '${DEPLOYED_ATTEMPT:-none}'; this is attempt $RUN_ATTEMPT."
+            exit 1
+          fi
+      - name: Refuse empty target URLs
+        id: targets
+        run: |
+          rc=0
+          for v in GATEWAY_URL APP_URL LANDING_URL OPS_CONSOLE_URL SUPPORT_CONSOLE_URL; do
+            if [ -z "${!v}" ]; then
+              echo "::error::$v is empty — the e2e job did not publish it."
+              rc=1
+            fi
+          done
+          exit "$rc"
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+      - name: Install Chromium
+        run: pnpm --filter @invoice-os/e2e exec playwright install --with-deps chromium
+      - name: Topology (${{ matrix.shard }})
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: pnpm --filter @invoice-os/e2e test:topology --project="$SHARD"
+      - name: Park the topology report
+        if: always()
+        run: |
+          if [ -d e2e/playwright-report ]; then
+            mv e2e/playwright-report e2e/report-topology
+          fi
+      # A retry-pass elsewhere stays a summary warning; in a spec this PR changed it fails.
+      - name: Fail on a retry-pass in a spec this PR changed
+        if: always() && steps.attempt.outcome == 'success' && steps.targets.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_FILES_API: repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files
+        run: |
+          set -euo pipefail
+          gh api --paginate "$PR_FILES_API" --jq '.[].filename' > "$RUNNER_TEMP/pr-files.txt"
+          node e2e/flakyGate.ts "$FLAKY_JSON_DIR" "$RUNNER_TEMP/pr-files.txt"
       - name: Upload topology Playwright report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: topology-playwright-report
+          name: topology-playwright-report-${{ matrix.shard }}
           path: e2e/report-topology/
           if-no-files-found: ignore
           retention-days: 7
@@ -1157,7 +1239,7 @@ jobs:
   # The required merge check: always reports on a PR, so a skipped E2E cannot read as a pass.
   e2e-gate:
     name: E2E gate
-    needs: [changes, e2e, ci-watch]
+    needs: [changes, e2e, topology, ci-watch]
     if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1172,6 +1254,7 @@ jobs:
           E2E_RELEVANT: ${{ needs.changes.outputs.e2e }}
           PR_DRAFT: ${{ github.event.pull_request.draft }}
           E2E_RESULT: ${{ needs.e2e.result }}
+          TOPOLOGY_RESULT: ${{ needs.topology.result }}
           CI_RESULT: ${{ needs.ci-watch.result }}
           CI_CONCLUSION: ${{ needs.ci-watch.outputs.conclusion }}
 

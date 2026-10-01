@@ -65,7 +65,7 @@ function buildSession(token: string | null): Session {
     token,
     me: {
       tenant: { id: '11111111-1111-1111-1111-111111111111', name: 'Okafor & Partners', kind: 'firm' },
-      user: { id: 'c0000000-0000-0000-0000-000000000001', role: 'authenticated' },
+      user: { id: 'c0000000-0000-0000-0000-000000000001', role: 'authenticated', display_name: 'Adaeze Nwankwo', email: 'adaeze.nwankwo@example.com' },
     },
     verified: true,
   }

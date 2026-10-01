@@ -307,7 +307,7 @@ scope, or `/token` with any other grant) is reachable from outside.
    `{"workspace_name","display_name","kind"?}`. The gateway lets a tenant-less token through
    on this one method and path only. Tenancy creates the tenant and its first active admin
    in one transaction through `public.provision_workspace`
-   ([migrations.md](./migrations.md) §1) and answers 201 in the `GET /v1/me` shape. An absent
+   ([migrations.md](./migrations.md) §1) and answers 201 `{tenant:{id,name,kind}, user:{id,role}}`. An absent
    `kind` stores `firm`, the column default.
 6. The next token (a refresh grant or a new sign-in) carries `app_metadata.tenant_id`.
 
@@ -428,6 +428,10 @@ same tab, so a code minted in another browser signs nobody in.
 the firm workspace, `in_house` the in-house one. A `/me` answer, or a stored hand-off record,
 without a known `kind` fails the redemption (step 7, `signin=failed`) or drops the record. A
 persona session keeps its persona's mode until AUTH-15.
+
+**Identity card.** A hand-off session's card shows `/me` `user.display_name`, else
+`user.email`, else nothing; its initials follow the same order. A persona session shows its
+persona until AUTH-15. A stored record without the name keeps a blank card: renewal does not re-read `/me`, so only a new sign-in fills it.
 
 The access token travels only in the exchange and refresh answers and the `Authorization`
 header; the refresh token travels only in the exchange answer, the refresh request and
@@ -603,7 +607,8 @@ The refresh token is stored in the app origin's `localStorage`, key `invoice-os.
 field `refresh_token`, in the same record as the access token. For its 60 s in the hand-off
 store it is in the gateway's memory, beside the access token. It crosses the network only
 inside JSON bodies over TLS: the exchange answer, the refresh request, the refresh answer and
-the sign-out request.
+the sign-out request. The record also holds the account's display name and email, inside the
+stored `/me` answer.
 
 It protects against:
 - **Other origins.** Landing, both consoles and every other site cannot read it:

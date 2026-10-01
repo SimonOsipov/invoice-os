@@ -225,6 +225,7 @@ export type ConnectorMappings = Partial<Record<ConnectorId, FieldMapRow[]>>
 // The signed-in caller shown in the sidebar footer. `tenantName`/`verified` come from
 // the GET /v1/me round trip (M2-13): when verified, the tenant name was proven against
 // the live backend; otherwise it falls back to the persona's static workspace label.
+// `name`/`initials` come from /me for a hand-off session, from the persona for a persona session.
 export type SignedInUser = {
   name: string
   initials: string

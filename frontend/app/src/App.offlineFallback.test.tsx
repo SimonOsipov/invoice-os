@@ -130,7 +130,7 @@ describe('offline fallback: a rejected mint still seats the visitor (F-021)', ()
     signInMock.mockResolvedValueOnce({
       persona: APP_PERSONAS.firm,
       token: 'mock-token',
-      me: { tenant: { id: 't1', name: 'Okafor & Partners', kind: 'firm' }, user: { id: 'u1', role: 'authenticated' } },
+      me: { tenant: { id: 't1', name: 'Okafor & Partners', kind: 'firm' }, user: { id: 'u1', role: 'authenticated', display_name: 'Adaeze Nwankwo', email: 'adaeze.nwankwo@example.com' } },
       verified: true,
     } satisfies Session)
 
@@ -138,6 +138,10 @@ describe('offline fallback: a rejected mint still seats the visitor (F-021)', ()
 
     const parsed = await waitForPersistedSession()
     expect(parsed.verified).toBe(true)
+    // A persona session names its persona, not the /me user (AUTH-09 D1).
+    await waitFor(() => expect(capturedCtx?.user.verified).toBe(true))
+    expect(capturedCtx?.user.name).toBe(APP_PERSONAS.firm.name)
+    expect(capturedCtx?.user.initials).toBe(APP_PERSONAS.firm.initials)
   })
 
   it('OFF-5: the app opens a workspace rather than dead-ending', async () => {
@@ -147,6 +151,12 @@ describe('offline fallback: a rejected mint still seats the visitor (F-021)', ()
     await waitFor(() =>
       expect(capturedCtx, 'Sidebar never rendered -- the app dead-ended instead of opening a workspace').toBeDefined(),
     )
+    expect(capturedCtx?.user).toEqual({
+      name: APP_PERSONAS.firm.name,
+      initials: APP_PERSONAS.firm.initials,
+      tenantName: null,
+      verified: false,
+    })
   })
 
   // Adversarial: the catch branch does not narrow on err's type, so a rejection that isn't

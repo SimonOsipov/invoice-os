@@ -106,8 +106,8 @@ able to say why, since the screen that would carry the 403 never mounts. Exempti
 is what makes the 403 reachable at all.
 
 The exemption is narrow by construction: `Me` returns only the caller's **own** tenant and
-**own** role. It reads no other member, no invoice, and nothing belonging to anyone else. Its
-two file-mates, `ListMemberships` and `SetMembershipStatus`, are gated — which is why the
+**own** role, display name and email. It reads no other member, no invoice, and nothing
+belonging to anyone else. Its two file-mates, `ListMemberships` and `SetMembershipStatus`, are gated — which is why the
 exemption is func-scoped: a method added beside `Me` inherits the gate, and the guard fails if
 anyone widens it.
 
@@ -118,7 +118,7 @@ its first admin.
 
 ### 4.1 What the exemption discloses, named plainly
 
-`Store.Me` runs its own membership lookup (`SELECT role FROM memberships WHERE user_id = $1`)
+`Store.Me` runs its own membership lookup (`SELECT role, display_name, email FROM memberships WHERE user_id = $1`)
 and never reads `status`. A caller holding a valid token for a tenant id they already know can
 therefore learn which of three cases they are in:
 
@@ -126,7 +126,7 @@ therefore learn which of three cases they are in:
 |---|---|---|
 | no `tenants` row | `404 {"error":"tenant not found"}` | the id names no workspace |
 | a real tenant, caller has no `memberships` row | `403 {"error":"no membership"}` | the id names a workspace, the caller has never been a member |
-| a real tenant, caller's row exists, any status | `200` + their own tenant and role | the id names a workspace, the caller has a row — active, suspended, or invited alike |
+| a real tenant, caller's row exists, any status | `200` + their own tenant, role, display name and email | the id names a workspace, the caller has a row — active, suspended, or invited alike |
 
 **The residue, stated honestly.** Everywhere else in this doc, a caller with no row and a
 suspended caller now answer identically — the same `403`, the same `db.NotActiveMemberMessage`
@@ -450,8 +450,6 @@ the Go literal from source and compares it to both:
 
 The extractor refuses a literal containing any backslash escape, and a zero-length extraction
 fails the run rather than comparing `'' === ''`. Reword all three in one commit.
-
-`GET /v1/me`'s wire shape does not change, so the three existing `Me` mirrors stay as they are.
 
 The SPA copy that describes suspension to a human is a separate matter and is NOT pinned to
 this literal: `lib/members.ts`'s `SUSPEND_EXPLANATION` and `App.tsx`'s `SUSPENDED_NOTICE`

@@ -13,12 +13,12 @@
 //     stranded at zero active admins needs a superuser to recover;
 //   - the row is forced back to `active` on the way in AND on the way out, in a
 //     `finally`, so neither a mid-assertion failure nor a killed prior run can
-//     leave it dirty. The api job runs BEFORE test:topology in dev-env.yml
-//     (:816 / :821), and topology's roles.spec.ts asserts exact roster content.
+//     leave it dirty. The api suite finishes before the topology job starts
+//     (`needs: e2e` in dev-env.yml), and topology's roles.spec.ts asserts exact roster content.
 //
 // Four properties are proven against the DEPLOYED gateway:
 //   - Happy-path status + shape (persona A, Core AC 1): /me -> 200 +
-//     {tenant:{id,name,kind}, user:{id,role}}; /memberships -> 200 +
+//     {tenant:{id,name,kind}, user:{id,role,display_name,email}}; /memberships -> 200 +
 //     {memberships:[{user_id,role,status,display_name,email},...]}.
 //   - The PATCH status matrix: 200 round-trip, 403 non-admin, 404 unknown
 //     user_id, 400 out-of-vocabulary status.
@@ -87,7 +87,7 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
   })
 
   test.describe('happy-path status + shape (persona A)', () => {
-    test('/me -> 200 + {tenant:{id,name,kind}, user:{id,role}}', async () => {
+    test('/me -> 200 + {tenant:{id,name,kind}, user:{id,role,display_name,email}}', async () => {
       const res = await rawFetch('/api/tenancy/v1/me', {
         headers: { Authorization: `Bearer ${token}` },
       })
@@ -110,9 +110,17 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
       expect(tenant.kind).toBe('firm')
 
       const user = body.user as Record<string, unknown>
-      expect(Object.keys(user).sort(), 'expected exactly the user.{id,role} keys').toEqual(['id', 'role'])
+      expect(Object.keys(user).sort(), 'expected exactly the user.{display_name,email,id,role} keys').toEqual([
+        'display_name',
+        'email',
+        'id',
+        'role',
+      ])
       expect(user.id).toBe(PERSONAS.A.subject)
       expect(user.role).toBe('admin')
+      // db/seed.dev.sql: persona A's membership row.
+      expect(user.display_name).toBe('Chinedu Okafor')
+      expect(user.email).toBe('c.okafor@okafor.ng')
     })
 
     test('/memberships -> 200 + {memberships:[{user_id,role,status,display_name,email},...]}, no pagination key', async () => {

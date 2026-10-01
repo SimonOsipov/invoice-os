@@ -9,7 +9,7 @@ const STATE = 'ZYXWVUTSRQPONMLKJIHGFEDCBAzyxwvutsrqponmlk_'
 const GATEWAY = 'https://gw.test'
 const ME: Me = {
   tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures', kind: 'firm' },
-  user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated' },
+  user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated', display_name: 'Adaeze Nwankwo', email: 'adaeze.nwankwo@example.com' },
 }
 const IN_HOUSE_ME: Me = { ...ME, tenant: { ...ME.tenant, kind: 'in_house' } }
 
@@ -53,6 +53,9 @@ describe('handoffPersona (D8)', () => {
   it('handoffPersona takes subject and tenant from /me', () => {
     expect(handoffPersona(ME)).toEqual({
       ...APP_PERSONAS.firm,
+      name: '',
+      initials: '',
+      email: '',
       subject: ME.user.id,
       tenantId: ME.tenant.id,
     })
@@ -62,7 +65,15 @@ describe('handoffPersona (D8)', () => {
   it('handoffPersona takes in-house mode from tenants.kind', () => {
     const persona = handoffPersona(IN_HOUSE_ME)
     expect(persona.mode).toBe('inhouse')
-    expect(persona).toEqual({ ...APP_PERSONAS.firm, mode: 'inhouse', subject: ME.user.id, tenantId: ME.tenant.id })
+    expect(persona).toEqual({
+      ...APP_PERSONAS.firm,
+      name: '',
+      initials: '',
+      email: '',
+      mode: 'inhouse',
+      subject: ME.user.id,
+      tenantId: ME.tenant.id,
+    })
   })
 })
 

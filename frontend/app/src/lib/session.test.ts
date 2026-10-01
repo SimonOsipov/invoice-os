@@ -5,10 +5,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Me, type Session } from '../auth'
+import { memberInitials } from './members'
 import { handoffPersona } from './sessionHandoff'
 import {
   SESSION_KEY,
   SESSION_SCHEMA_VERSION,
+  cardIdentity,
   clearSession,
   decodeJwtPayload,
   isHandoffMe,
@@ -32,7 +34,7 @@ function firmSession(): Session {
     token: 'jwt',
     me: {
       tenant: { id: '11111111-1111-1111-1111-111111111111', name: 'Okafor & Partners', kind: 'firm' },
-      user: { id: 'c0000000-0000-0000-0000-000000000001', role: 'authenticated' },
+      user: { id: 'c0000000-0000-0000-0000-000000000001', role: 'authenticated', display_name: 'Adaeze Nwankwo', email: 'adaeze.nwankwo@example.com' },
     },
     verified: true,
   }
@@ -444,7 +446,7 @@ describe('adversarial / edge coverage (QA)', () => {
       token: 'jwt-inhouse',
       me: {
         tenant: { id: '22222222-2222-2222-2222-222222222222', name: 'Honeywell Group', kind: 'in_house' },
-        user: { id: 'c0000000-0000-0000-0000-000000000002', role: 'authenticated' },
+        user: { id: 'c0000000-0000-0000-0000-000000000002', role: 'authenticated', display_name: 'Adaeze Nwankwo', email: 'adaeze.nwankwo@example.com' },
       },
       verified: true,
     }
@@ -521,7 +523,7 @@ const KIND_REFUSALS: [string, unknown][] = [
 describe('hand-off session record (AUTH-05 D8)', () => {
   const ME: Me = {
     tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures', kind: 'firm' },
-    user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated' },
+    user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated', display_name: 'Adaeze Nwankwo', email: 'adaeze.nwankwo@example.com' },
   }
   const IN_HOUSE_ME: Me = { ...ME, tenant: { ...ME.tenant, kind: 'in_house' } }
   const inhouseSessionOf = (me: Me): Session => ({ persona: APP_PERSONAS.inhouse, token: 'jwt', me, verified: true })
@@ -587,7 +589,7 @@ describe('hand-off session record (AUTH-05 D8)', () => {
 
   it('a persona record is unchanged', () => {
     const persona =
-      '{"v":1,"personaId":"firm","token":"jwt","me":{"tenant":{"id":"11111111-1111-1111-1111-111111111111","name":"Okafor & Partners","kind":"firm"},"user":{"id":"c0000000-0000-0000-0000-000000000001","role":"authenticated"}},"verified":true}'
+      '{"v":1,"personaId":"firm","token":"jwt","me":{"tenant":{"id":"11111111-1111-1111-1111-111111111111","name":"Okafor & Partners","kind":"firm"},"user":{"id":"c0000000-0000-0000-0000-000000000001","role":"authenticated","display_name":"Adaeze Nwankwo","email":"adaeze.nwankwo@example.com"}},"verified":true}'
     expect(serializeSession(firmSession())).toBe(persona)
     // A persona session never writes the pair, even if it carries a renewal.
     expect(serializeSession({ ...firmSession(), renewal: { refreshToken: 'R0', receivedAt: 1000 } })).toBe(persona)
@@ -631,7 +633,7 @@ describe('hand-off session record (AUTH-05 D8)', () => {
 describe('renewal pair in the stored record (AUTH-06 D1)', () => {
   const ME: Me = {
     tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures', kind: 'firm' },
-    user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated' },
+    user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated', display_name: 'Adaeze Nwankwo', email: 'adaeze.nwankwo@example.com' },
   }
   const HANDOFF = { v: 1, personaId: 'firm', token: 'jwt', me: ME, verified: true, handoff: true }
 
@@ -689,5 +691,125 @@ describe('renewal pair in the stored record (AUTH-06 D1)', () => {
       expect(error, name).not.toHaveBeenCalled()
       vi.restoreAllMocks()
     }
+  })
+})
+
+describe('cardIdentity (AUTH-09-02)', () => {
+  const USER_ID = 'd0000000-0000-0000-0000-000000000009'
+  const handoffOf = (user: Record<string, unknown>): Session => {
+    const me = {
+      tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures', kind: 'firm' },
+      user: { id: USER_ID, role: 'authenticated', ...user },
+    } as unknown as Me
+    return { persona: handoffPersona(me), token: 'jwt', me, verified: true, handoff: true }
+  }
+
+  // Every shape the stored /me may hold that names no one.
+  const ABSENT: [string, (u: Record<string, unknown>, k: string) => void][] = [
+    ['null', (u, k) => { u[k] = null }],
+    ['missing', () => {}],
+    ["''", (u, k) => { u[k] = '' }],
+    ["'   '", (u, k) => { u[k] = '   ' }],
+    ['7', (u, k) => { u[k] = 7 }],
+    ['{}', (u, k) => { u[k] = {} }],
+    ["['x']", (u, k) => { u[k] = ['x'] }],
+    ['tab and newline', (u, k) => { u[k] = '\t\n' }],
+    ['no-break space', (u, k) => { u[k] = '\u00a0' }],
+    ['true', (u, k) => { u[k] = true }],
+    ['0', (u, k) => { u[k] = 0 }],
+  ]
+
+  it('cardIdentity names a hand-off session from /me', () => {
+    const session = handoffOf({ display_name: 'Adaeze Nwankwo', email: 'a@acme.ng' })
+    expect(cardIdentity(session)).toEqual({ name: 'Adaeze Nwankwo', initials: 'AN' })
+  })
+
+  it('cardIdentity falls back to the email', () => {
+    const email = 'folake.adesina@acme.ng'
+    const got = cardIdentity(handoffOf({ display_name: null, email }))
+    expect(got).toEqual({ name: email, initials: 'FA' })
+    expect(got.initials).toBe(memberInitials(null, email, ''))
+  })
+
+  it('cardIdentity shows nothing legible, never the user id', () => {
+    expect(ABSENT).toHaveLength(11)
+    const pairs = (v: string) => Array.from({ length: v.length - 1 }, (_, i) => v.slice(i, i + 2).toLowerCase())
+    for (const [dn, setDn] of ABSENT) {
+      for (const [em, setEm] of ABSENT) {
+        const user: Record<string, unknown> = {}
+        setDn(user, 'display_name')
+        setEm(user, 'email')
+        const got = cardIdentity(handoffOf(user))
+        const label = `display_name ${dn}, email ${em}`
+        expect(got, label).toEqual({ name: '', initials: '' })
+        for (const pair of pairs(USER_ID)) {
+          expect(got.name.toLowerCase(), label).not.toContain(pair)
+          expect(got.initials.toLowerCase(), label).not.toContain(pair)
+        }
+      }
+    }
+  })
+
+  it('cardIdentity skips a blank display name', () => {
+    expect(cardIdentity(handoffOf({ display_name: '  ', email: 'zainab@acme.ng' }))).toEqual({
+      name: 'zainab@acme.ng',
+      initials: 'ZA',
+    })
+  })
+
+  // Accepted behaviour (D6): memberInitials' output is shown as is.
+  it("cardIdentity keeps memberInitials' output for non-ASCII and hyphenated names", () => {
+    const rows: [string, { name: string; initials: string }][] = [
+      ['Ọlá Adébáyọ̀', { name: 'Ọlá Adébáyọ̀', initials: 'LA' }],
+      ['Ada-Obi', { name: 'Ada-Obi', initials: 'A' }],
+      ['张伟', { name: '张伟', initials: '' }],
+      ['  Adaeze Nwankwo  ', { name: 'Adaeze Nwankwo', initials: 'AN' }],
+    ]
+    for (const [displayName, want] of rows) {
+      expect(cardIdentity(handoffOf({ display_name: displayName, email: null })), displayName).toEqual(want)
+    }
+  })
+
+  it('cardIdentity keeps the persona for a persona session', () => {
+    const me = firmSession().me
+    const withName = { ...firmSession(), me: { ...me!, user: { ...me!.user, display_name: 'Someone Else' } } }
+    const want = { name: APP_PERSONAS.firm.name, initials: APP_PERSONAS.firm.initials }
+    expect(want.name).not.toBe('Someone Else')
+    expect(cardIdentity(withName)).toEqual(want)
+    expect(cardIdentity({ ...firmSession(), me: null })).toEqual(want)
+  })
+
+  it('cardIdentity falls through every absent display name to the email', () => {
+    expect(ABSENT.length).toBeGreaterThan(0)
+    for (const [label, set] of ABSENT) {
+      const user: Record<string, unknown> = { email: '  zainab@acme.ng ' }
+      set(user, 'display_name')
+      expect(cardIdentity(handoffOf(user)), `display_name ${label}`).toEqual({ name: 'zainab@acme.ng', initials: 'ZA' })
+    }
+  })
+
+  it('cardIdentity prefers the display name over the email', () => {
+    expect(cardIdentity(handoffOf({ display_name: 'Adaeze Nwankwo', email: 'zainab@acme.ng' }))).toEqual({
+      name: 'Adaeze Nwankwo',
+      initials: 'AN',
+    })
+  })
+
+  it('cardIdentity reads /me for a hand-off session even when its persona still carries a name', () => {
+    const session = { ...handoffOf({ display_name: 'Adaeze Nwankwo', email: null }), persona: APP_PERSONAS.firm }
+    expect(APP_PERSONAS.firm.name).not.toBe('')
+    expect(cardIdentity(session)).toEqual({ name: 'Adaeze Nwankwo', initials: 'AN' })
+  })
+
+  it('cardIdentity never falls back to the persona for a hand-off session without /me', () => {
+    const session: Session = { ...handoffOf({}), persona: APP_PERSONAS.firm, me: null }
+    expect(APP_PERSONAS.firm.name).not.toBe('')
+    expect(cardIdentity(session)).toEqual({ name: '', initials: '' })
+  })
+
+  it('cardIdentity keeps the persona for a persona session whose /me names no one', () => {
+    const me = firmSession().me!
+    const session = { ...firmSession(), me: { ...me, user: { ...me.user, display_name: null, email: null } } }
+    expect(cardIdentity(session)).toEqual({ name: APP_PERSONAS.firm.name, initials: APP_PERSONAS.firm.initials })
   })
 })

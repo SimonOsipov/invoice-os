@@ -15,10 +15,12 @@ import {
   rawFetch,
   signInForCode,
   PERSONAS as API_PERSONAS,
+  type Me,
   type RealAccount,
 } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
+import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS } from './layout'
 
 // The public marketing landing page — sign-out's redirect target. Imported from the
 // BASE e2e/targets.ts, not this directory's ./targets: topology/targets.ts re-exports
@@ -359,6 +361,73 @@ test('deployed app: a top-level path is a working deep link', async ({ page }) =
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
+
+// Moved from invoice-surfaces.spec.ts unchanged; the locals stand in for that file's helpers.
+{
+const PERSONAS = API_PERSONAS
+
+function collectErrors(page: Page): string[] {
+  const errors: string[] = []
+  const drop = approvalRun404Dropper(page)
+  page.on('console', (msg) => {
+    if (msg.type() !== 'error') return
+    if (drop(msg.text(), msg.location().url)) return
+    errors.push(msg.text())
+  })
+  page.on('pageerror', (err) => {
+    errors.push(`pageerror: ${err.message}`)
+  })
+  return errors
+}
+
+function cleanInvoiceFields(invoiceNumber: string) {
+  return {
+    invoice_number: invoiceNumber,
+    issue_date: '2026-01-01T00:00:00Z',
+    supplier_tin: freshTin(),
+    supplier_name: 'Acme Nigeria Ltd',
+    buyer_tin: '87654321-0002',
+    buyer_name: 'Buyer Ltd',
+    currency: 'NGN',
+    subtotal: '1000',
+    vat: '75',
+    total: '1075',
+    line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
+  }
+}
+
+// ROUTE-02-07 (X-1/X-2): a top-level /invoices/<uuid> deep link cold-boots the detail
+// panel directly, no prior sign-in ([deep-link-uses-persona-handoff] -- copies
+// auth.spec.ts's own top-level-path test verbatim). res.ok() only proves Caddy's
+// try_files served the document; what actually renders is the real assertion.
+test('deployed app: /invoices/<uuid> is a working deep link, and the persona param strips', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `ROUTE-02 cold boot ${Date.now()}`, tin: freshTin() })
+  const invoiceNumber = `INV-ROUTE02-CB-${Date.now()}`
+  const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+
+  const url = `${APP_URL}/invoices/${inv.id}?persona=${FIRM_PERSONA.param}`
+  const res = await page.goto(url)
+  expect(res, `no response from ${url}`).toBeTruthy()
+  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
+
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  await expect(page.getByTestId('invoice-detail'), 'the cold boot must render this invoice, not the empty state').toContainText(
+    invoiceNumber,
+  )
+
+  await expect(page, 'the deep link did not settle on /invoices/<uuid>').toHaveURL(new RegExp(`/invoices/${inv.id}$`))
+  await expect
+    .poll(() => new URL(page.url()).searchParams.has('persona'), {
+      message: `?persona= survived the deep link at ${page.url()}`,
+    })
+    .toBe(false)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+}
 
 // The tab is a PATH SEGMENT (lib/route.ts's routeUrl), so it can travel in the same URL as
 // ?persona=: the strip rewrites to `pathname + hash` (App.tsx's autoPersona effect), which
@@ -1006,6 +1075,71 @@ test('deployed app: a real firm workspace has the Clients portfolio and no Compa
   await nav.getByRole('button', { name: 'Settings' }).click()
   await expect(page.getByRole('button', { name: 'Members', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Company', exact: true })).toHaveCount(0)
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('deployed app: a real sign-in names the account holder on the identity card', async ({ page, context }) => {
+  test.setTimeout(180_000)
+  const account = await provisionRealAccount('card-name', undefined, 'Ada Nwosu')
+  const errors = collectErrors(page)
+
+  await signInAtFrontDoor(page, account, '/')
+  const name = page.getByTestId('persona-name')
+  // Read once, no retry: the card already names the person when the badge appears.
+  expect(await name.textContent(), 'the card name when the verified badge attached').toBe('Ada Nwosu')
+  await expect(page.getByTestId('persona-initials')).toHaveText('AN')
+  await expect(page.locator('aside.pf-sidebar')).not.toContainText('Chinedu Okafor')
+
+  const stored = JSON.parse((await storedSession(context)) ?? 'null') as { me: Me | null } | null
+  expect(stored?.me?.user.display_name, 'the stored me.user.display_name').toBe('Ada Nwosu')
+  expect(stored?.me?.user.email, 'the stored me.user.email').toBe(account.email)
+
+  // Control for the 197-character journey: a short name is not clipped.
+  const short = await name.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+  expect(short.scrollWidth, 'the short name is clipped').toBeLessThanOrEqual(short.clientWidth)
+
+  await page.reload()
+  await expect(page.locator(VERIFIED)).toBeAttached({ timeout: 30_000 })
+  expect(page.url().startsWith(LANDING_URL), 'the reload went back to landing').toBe(false)
+  await expect(name).toHaveText('Ada Nwosu')
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+// internal/tenancy/tenancy.go maxNameChars is 200; 6 x 32 + 5 spaces = 197.
+const LONG_NAME = 'Oluwaseyifunmi Adebanjo-Ogunleye '.repeat(6).trim()
+
+test('deployed app: a 197-character name stays inside the identity card at every wide width', async ({ page }, testInfo) => {
+  test.setTimeout(180_000)
+  expect(LONG_NAME.length).toBe(197)
+  const account = await provisionRealAccount('card-long', undefined, LONG_NAME)
+  const errors = collectErrors(page)
+
+  await signInAtFrontDoor(page, account, '/')
+  const aside = page.locator('aside.pf-sidebar')
+  const main = page.locator('main.pf-main')
+  const name = page.getByTestId('persona-name')
+  const trigger = page.getByTestId('persona-trigger')
+  const signOut = aside.getByRole('button', { name: 'Sign out' })
+
+  const readings: { width: number; scrollWidth: number; clientWidth: number }[] = []
+  for (const width of WIDE_WIDTHS) {
+    await page.setViewportSize({ width, height: 1080 })
+    await settleAnimations(aside, trigger, signOut)
+    const [asideBox, mainBox, triggerBox, signOutBox] = await Promise.all([aside.boundingBox(), main.boundingBox(), trigger.boundingBox(), signOut.boundingBox()])
+    if (!asideBox || !mainBox || !triggerBox || !signOutBox) throw new Error(`aside, main, trigger or Sign out rendered no box at ${width}px`)
+
+    expect(await name.textContent(), `the card name at ${width}px`).toBe(LONG_NAME)
+    const reading = await name.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+    expect(reading.scrollWidth, `the name is not clipped by its own box at ${width}px (${JSON.stringify(reading)})`).toBeGreaterThan(reading.clientWidth)
+    expect(enclosesRect(asideBox, triggerBox, 1), `the trigger leaves the aside at ${width}px (${JSON.stringify({ asideBox, triggerBox })})`).toBe(true)
+    expect(enclosesRect(asideBox, signOutBox, 1), `Sign out leaves the aside at ${width}px (${JSON.stringify({ asideBox, signOutBox })})`).toBe(true)
+    expect(rectsOverlap(signOutBox, triggerBox), `Sign out overlaps the trigger at ${width}px`).toBe(false)
+    expect(rectsOverlap(asideBox, mainBox), `the aside overlaps main at ${width}px`).toBe(false)
+    await assertPageDoesNotScrollSideways(page, `long name at ${width}px`)
+    readings.push({ width, ...reading })
+  }
+  expect(readings.length, 'widths measured').toBe(WIDE_WIDTHS.length)
+  await testInfo.attach('name-readings', { body: JSON.stringify(readings, null, 2), contentType: 'application/json' })
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })
 

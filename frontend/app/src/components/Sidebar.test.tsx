@@ -296,6 +296,29 @@ describe('Sidebar footer, characterization pin', () => {
   })
 })
 
+describe('Sidebar footer, flag-off card reads ctx.user (AUTH-09-02)', () => {
+  const BADGE = '[title="Tenant verified via /v1/me"]'
+  const ROLLUP = rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 })
+  const footer = () => document.querySelector('aside.pf-sidebar > div:last-of-type')!
+
+  it('shows the name and initials ctx.user carries', async () => {
+    await renderSidebar(ROLLUP, sidebarCtx({ user: { name: 'Adaeze Nwankwo', initials: 'AN', verified: true, tenantName: 'Acme' } }))
+    const text = footer().textContent ?? ''
+    expect(text).toContain('Adaeze Nwankwo')
+    expect(footer().querySelector('span')!.textContent).toBe('AN')
+    expect(footer().querySelectorAll(BADGE)).toHaveLength(1)
+  })
+
+  it('renders an empty identity and keeps the badge rule', async () => {
+    await renderSidebar(ROLLUP, sidebarCtx({ user: { name: '', initials: '', verified: true, tenantName: 'Acme' } }))
+    expect(footer().querySelector('span')!.textContent).toBe('')
+    expect(footer().querySelectorAll(BADGE)).toHaveLength(1)
+    cleanup()
+    await renderSidebar(ROLLUP, sidebarCtx({ user: { name: '', initials: '', verified: false, tenantName: 'Acme' } }))
+    expect(footer().querySelectorAll(BADGE)).toHaveLength(0)
+  })
+})
+
 // BUG-17-01: the firm switcher's `pf-btn` !important pill radius (app-layer.css:192-205)
 // beats the inline radius-input -- this is a separate corner-declaration surface from
 // the badge/footer specs above.

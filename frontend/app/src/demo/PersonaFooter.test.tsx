@@ -140,6 +140,27 @@ describe('PersonaFooter (flag on)', () => {
     expect(marks.length).toBe(1)
   })
 
+  it("the demo footer shows the card's initials", async () => {
+    await renderDemoSidebar(demoCtx({ user: { name: 'Adaeze Nwankwo', initials: 'AN', verified: true, tenantName: 'Acme' } }))
+
+    expect(screen.getByTestId('persona-initials').textContent).toBe('AN')
+    expect(screen.getByTestId('persona-name').textContent).toBe('Adaeze Nwankwo')
+    const aside = document.querySelector('aside.pf-sidebar')!
+    expect(aside.querySelectorAll('[title="Tenant verified via /v1/me"]').length).toBe(1)
+  })
+
+  it('an empty identity renders and keeps the badge rule', async () => {
+    await renderDemoSidebar(demoCtx({ user: { name: '', initials: '', verified: true, tenantName: 'Acme' } }))
+    expect(screen.getByTestId('persona-initials').textContent).toBe('')
+    expect(screen.getByTestId('persona-name').textContent).toBe('')
+    const aside = () => document.querySelector('aside.pf-sidebar')!
+    expect(aside().querySelectorAll('[title="Tenant verified via /v1/me"]').length).toBe(1)
+
+    await renderDemoSidebar(demoCtx({ user: { name: '', initials: '', verified: false, tenantName: 'Acme' } }))
+    expect(screen.getByTestId('persona-initials').textContent).toBe('')
+    expect(aside().querySelectorAll('[title="Tenant verified via /v1/me"]').length).toBe(0)
+  })
+
   it('the trigger sets an explicit sans font', async () => {
     await renderDemoSidebar(demoCtx())
     expect(screen.getByTestId('persona-trigger').style.fontFamily).toBe('var(--font-sans)')

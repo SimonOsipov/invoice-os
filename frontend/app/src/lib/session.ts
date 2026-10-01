@@ -8,10 +8,11 @@
 // (name/subject/tenantId/role) are canonical in code, so persisting only the id avoids
 // stale-persona drift and reduces the corruption guard to a simple membership check.
 // A hand-off record (`handoff: true`) rebuilds its persona from `me` instead; its mode comes
-// from `me.tenant.kind`. A persona record keeps its APP_PERSONAS mode.
+// from `me.tenant.kind` and its card identity from `me.user`. A persona record keeps its APP_PERSONAS mode.
 
 import { APP_PERSONAS, type Me, type Persona, type Session, type TenantKind } from '../auth'
 import type { Mode } from '../types'
+import { memberInitials } from './members'
 
 export const SESSION_KEY = 'invoice-os.session'
 export const SESSION_SCHEMA_VERSION = 1
@@ -37,7 +38,8 @@ const MODE_BY_KIND: Record<TenantKind, Mode> = { firm: 'firm', in_house: 'inhous
 
 // A real session's mode is tenants.kind; APP_PERSONAS modes serve the demo door only.
 export function handoffPersona(me: Me): Persona {
-  return { ...APP_PERSONAS.firm, mode: MODE_BY_KIND[me.tenant.kind], subject: me.user.id, tenantId: me.tenant.id }
+  // name/initials/email blank: the card reads me.user, never the firm persona's stand-in.
+  return { ...APP_PERSONAS.firm, name: '', initials: '', email: '', mode: MODE_BY_KIND[me.tenant.kind], subject: me.user.id, tenantId: me.tenant.id }
 }
 
 // The pair is optional; when present it must be complete, well-typed and on a hand-off record.
@@ -208,4 +210,18 @@ export function isTokenExpired(token: string | null, nowMs: number = Date.now())
 export function resolveBootSession(now: number = Date.now()): Session | null {
   const session = loadSession()
   return session !== null && !session.renewal && isTokenExpired(session.token, now) ? null : session
+}
+
+// Trimmed text, or null for blank and non-string values.
+function presentText(v: unknown): string | null {
+  return typeof v === 'string' && v.trim() !== '' ? v.trim() : null
+}
+
+// A hand-off session names the person from /me (display name, else email, else nothing);
+// a persona session keeps its persona.
+export function cardIdentity(session: Session): { name: string; initials: string } {
+  if (!session.handoff) return { name: session.persona.name, initials: session.persona.initials }
+  const displayName = presentText(session.me?.user.display_name)
+  const email = presentText(session.me?.user.email)
+  return { name: displayName ?? email ?? '', initials: memberInitials(displayName, email, '') }
 }

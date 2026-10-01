@@ -1,6 +1,6 @@
 // Package tenancy is the 01 Tenancy context service: workspaces and their
 // memberships, read under Row-Level Security scoped by the app.current_tenant GUC.
-// GET /v1/me resolves the gateway-injected caller to their tenant and role;
+// GET /v1/me resolves the gateway-injected caller to their tenant, role, display name and email;
 // POST /v1/workspaces provisions a tenant-less caller's first workspace.
 package tenancy
 
@@ -59,17 +59,23 @@ var (
 // ErrAlreadyProvisioned means the caller already has a workspace.
 var ErrAlreadyProvisioned = errors.New("tenancy: already provisioned")
 
-// MeLoader resolves the current caller's tenant and their domain role (from
-// memberships). The handler depends on this narrow function type rather than a
-// pool, so its HTTP contract is unit-testable without a database; the production
-// loader (Store.Me) runs the real tenant + membership queries.
-type MeLoader func(ctx context.Context) (Tenant, string, error)
+// MeLoader resolves the caller's tenant and their own membership (role, display
+// name, email). The handler takes this function type rather than a pool so its
+// HTTP contract is unit-testable without a database; Store.Me is the real loader.
+type MeLoader func(ctx context.Context) (Tenant, MeUser, error)
+
+// MeUser is the caller's own membership: role and stored identity, never status.
+type MeUser struct {
+	Role        string
+	DisplayName *string
+	Email       *string
+}
 
 // MeHandler returns GET /v1/me. It reads the verified identity the platform's
 // identityMiddleware placed in the context (401 if absent — the endpoint is
 // tenant-scoped and must never answer without a caller), resolves the tenant and
-// domain role via load, and returns them. A missing/invalid tenant is 401
-// (db.ErrNoTenant, fail-closed); an unknown tenant is 404; a resolved tenant with
+// the caller's membership via load, and returns them. A missing/invalid tenant is
+// 401 (db.ErrNoTenant, fail-closed); an unknown tenant is 404; a resolved tenant with
 // no membership row is 403 (ErrNoMembership, fail-closed — a role is never
 // defaulted); a non-active membership is 403 (db.ErrNotActiveMember);
 // anything else is 500.
@@ -83,7 +89,7 @@ func MeHandler(load MeLoader, log *slog.Logger) http.HandlerFunc {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		tenant, role, err := load(r.Context())
+		tenant, me, err := load(r.Context())
 		switch {
 		case errors.Is(err, db.ErrNoTenant):
 			writeError(w, http.StatusUnauthorized, "unauthorized")
@@ -111,15 +117,33 @@ func MeHandler(load MeLoader, log *slog.Logger) http.HandlerFunc {
 		resp.Tenant.Name = tenant.Name
 		resp.Tenant.Kind = tenant.Kind
 		resp.User.ID = id.Subject
-		resp.User.Role = role
+		resp.User.Role = me.Role
+		resp.User.DisplayName = me.DisplayName
+		resp.User.Email = me.Email
 		writeJSON(w, http.StatusOK, resp)
 	}
 }
 
 // meResponse is the GET /v1/me body: the caller's tenant (resolved through the
 // RLS-scoped query, including its kind discriminator) and the user identity,
-// with the domain role resolved from memberships (not the JWT role claim).
+// with the domain role, display name and email from the caller's own membership
+// row (not the JWT role claim). A NULL column answers JSON null, never omitted.
 type meResponse struct {
+	Tenant struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+		Kind string `json:"kind"`
+	} `json:"tenant"`
+	User struct {
+		ID          string  `json:"id"`
+		Role        string  `json:"role"`
+		DisplayName *string `json:"display_name"`
+		Email       *string `json:"email"`
+	} `json:"user"`
+}
+
+// provisionResponse is the POST /v1/workspaces 201 body: {tenant, user:{id, role}}.
+type provisionResponse struct {
 	Tenant struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
@@ -282,7 +306,7 @@ type provisionRequest struct {
 }
 
 // ProvisionHandler returns POST /v1/workspaces: capped decode and validation
-// (400), then provision, then 201 in the GET /v1/me shape. The caller check is
+// (400), then provision, then 201 `{tenant, user:{id, role}}`. The caller check is
 // the store's: the handler cannot see a tenant-less caller.
 func ProvisionHandler(provision ProvisionFunc, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
@@ -334,7 +358,7 @@ func ProvisionHandler(provision ProvisionFunc, log *slog.Logger) http.HandlerFun
 			return
 		}
 
-		var resp meResponse
+		var resp provisionResponse
 		resp.Tenant.ID = tenant.ID
 		resp.Tenant.Name = tenant.Name
 		resp.Tenant.Kind = tenant.Kind

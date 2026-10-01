@@ -1,4 +1,4 @@
-// Package dbsql embeds db/bootstrap.sql and db/seed.dev.sql so a Go binary can
+// Package dbsql embeds the db/*.sql files listed on FS so a Go binary can
 // execute them at boot (internal/platform/db.Bootstrap / .Seed, M4-21-03) with no
 // on-disk file present in the image — mirroring migrations/embed.go's rationale
 // exactly: the gateway's distroless image contains only the compiled binary, so
@@ -14,11 +14,11 @@ package dbsql
 
 import "embed"
 
-// FS holds db/bootstrap.sql and db/seed.dev.sql, embedded into the binary. A glob
-// that failed to match either file would fail the build, so this can never
+// FS holds db/bootstrap.sql, db/seed.dev.sql and db/seed.e2e-shards.sql, embedded into the binary. A glob
+// that failed to match any of them would fail the build, so this can never
 // silently ship a stale or incomplete copy — see TestBootstrapFromEmbedded /
 // TestSeedFromEmbeddedIsIdempotent (internal/platform/db), which additionally
 // prove the embedded bytes are complete/correct at runtime, not merely present.
 //
-//go:embed bootstrap.sql seed.dev.sql
+//go:embed bootstrap.sql seed.dev.sql seed.e2e-shards.sql
 var FS embed.FS

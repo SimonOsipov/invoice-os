@@ -1,4 +1,4 @@
-// bootstrap.go — Go provisioning runner for db/bootstrap.sql and db/seed.dev.sql
+// bootstrap.go — Go provisioning runner for the db/*.sql files
 // (M4-21-03). See db.go for the package doc.
 package db
 
@@ -215,6 +215,26 @@ func Seed(ctx context.Context, superuserDSN string, fsys fs.FS) error {
 
 	if _, err := conn.Exec(ctx, string(sql)); err != nil {
 		return fmt.Errorf("db: execute seed.dev.sql: %w", err)
+	}
+	return nil
+}
+
+// SeedShards applies db/seed.e2e-shards.sql as the superuser: the per-shard
+// tenant pairs of the parallel topology E2E. One dedicated connection, like Seed.
+func SeedShards(ctx context.Context, superuserDSN string, fsys fs.FS) error {
+	conn, err := connectSuperuser(ctx, superuserDSN)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close(ctx) }()
+
+	sql, err := fs.ReadFile(fsys, "seed.e2e-shards.sql")
+	if err != nil {
+		return fmt.Errorf("db: read seed.e2e-shards.sql: %w", err)
+	}
+
+	if _, err := conn.Exec(ctx, string(sql)); err != nil {
+		return fmt.Errorf("db: execute seed.e2e-shards.sql: %w", err)
 	}
 	return nil
 }

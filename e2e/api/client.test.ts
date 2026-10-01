@@ -27,6 +27,8 @@ const requested: string[] = []
 // calls: url + method, additive to `requested` -- lets AC-7/AC-8 tell a GET /approval
 // apart from a POST /approvals or /auth/login without changing what `requested` holds.
 const calls: { url: string; method: string; body?: unknown }[] = []
+// failLoginTenant: the mock refuses /auth/login for this tenant id.
+let failLoginTenant: string | null = null
 
 // CLOSED_RUN: what the URL-aware mock answers any GET .../approval with -- an
 // already-closed run, so the AC-8 default-transport test can prove decide is never reached.
@@ -45,7 +47,11 @@ vi.mock('@invoice-os/api-client/client', () => ({
     requested.push(url)
     calls.push({ url, method: init?.method ?? 'GET', body: init?.body })
     if (url.endsWith('/auth/login')) {
-      const subject = (init?.body as { subject?: string } | undefined)?.subject
+      const body = init?.body as { subject?: string; tenant_id?: string } | undefined
+      if (failLoginTenant !== null && body?.tenant_id === failLoginTenant) {
+        return Promise.reject(new Error('mint refused'))
+      }
+      const subject = body?.subject
       return Promise.resolve({ access_token: `token-for-${subject}` })
     }
     if (url.includes('/approval')) {
@@ -70,7 +76,7 @@ type ApproveUntilClosed = (
   max?: number,
   transport?: ApprovalTransport,
 ) => Promise<ApprovalRun>
-type FirmApproverTokens = () => Promise<Record<string, string>>
+type FirmApproverTokens = (typeof import('./client'))['firmApproverTokens']
 
 let listInvoices: (typeof import('./client'))['listInvoices']
 let approveUntilClosed: ApproveUntilClosed
@@ -337,6 +343,112 @@ describe('firmApproverTokens', () => {
       fin_mgr: 'token-for-c0000000-0000-0000-0000-000000000004',
       compliance: 'token-for-c0000000-0000-0000-0000-000000000005',
     })
+  })
+
+  // Shard ids are literals in the shards.ts format, not imported: the memo test must not
+  // depend on the shard map's contents. One id per row -- the memo persists, so each row
+  // needs a tenant no earlier row has minted for.
+  const SHARD_ID = '11111111-1111-1111-1111-00000000e2e1'
+  const SHARD_ID_2 = '11111111-1111-1111-1111-00000000e2e2'
+  const SHARD_ID_3 = '11111111-1111-1111-1111-00000000e2e3'
+  const SHARD_ID_4 = '11111111-1111-1111-1111-00000000e2e4'
+  const SHARD_ID_5 = '11111111-1111-1111-1111-00000000e2e5'
+  const SHARD_ID_6 = '11111111-1111-1111-1111-00000000e2e6'
+  const SHARD_ID_7 = '11111111-1111-1111-1111-00000000e2e7'
+  const TENANT_1111 = '11111111-1111-1111-1111-111111111111'
+  const loginsSince = () => calls.filter((c) => c.url.endsWith('/auth/login'))
+  const loginBody = (c: { body?: unknown }) => c.body as { subject: string; tenant_id: string }
+
+  it('a shard tenant\'s tokens are minted for that tenant', async () => {
+    calls.length = 0
+
+    await firmApproverTokens(SHARD_ID)
+
+    const logins = loginsSince().map(loginBody)
+    expect(logins).toHaveLength(2)
+    expect(logins.map((b) => b.tenant_id)).toEqual([SHARD_ID, SHARD_ID])
+    expect(logins.map((b) => b.subject).sort()).toEqual([
+      'c0000000-0000-0000-0000-000000000004',
+      'c0000000-0000-0000-0000-000000000005',
+    ])
+  })
+
+  it('the memo is keyed by tenant', async () => {
+    await firmApproverTokens() // 1111 warm, whatever ran before
+    calls.length = 0
+
+    await firmApproverTokens(SHARD_ID_3)
+    expect(loginsSince()).toHaveLength(2) // a warm 1111 entry must not answer for a shard
+
+    calls.length = 0
+    await firmApproverTokens(SHARD_ID_3)
+    await firmApproverTokens()
+    expect(loginsSince()).toHaveLength(0) // both keys now warm
+  })
+
+  it('two concurrent callers for a new tenant mint two logins', async () => {
+    calls.length = 0
+
+    const [first, second] = await Promise.all([firmApproverTokens(SHARD_ID_2), firmApproverTokens(SHARD_ID_2)])
+
+    const logins = loginsSince().map(loginBody)
+    expect(logins).toHaveLength(2)
+    expect(logins.map((b) => b.tenant_id)).toEqual([SHARD_ID_2, SHARD_ID_2])
+    expect(second).toEqual(first)
+  })
+
+  // Fresh module: a cold 1111 cache whatever ran before.
+  it('with no argument the logins are minted for tenant 1111', async () => {
+    vi.resetModules()
+    const fresh = (await import('./client')) as unknown as { firmApproverTokens: FirmApproverTokens }
+    calls.length = 0
+
+    await fresh.firmApproverTokens()
+
+    const logins = loginsSince().map(loginBody)
+    expect(logins).toHaveLength(2)
+    expect(logins.map((b) => b.tenant_id)).toEqual([TENANT_1111, TENANT_1111])
+  })
+
+  it('a shard call after a warm 1111 cache still sends the shard tenant id', async () => {
+    await firmApproverTokens()
+    calls.length = 0
+
+    await firmApproverTokens(SHARD_ID_4)
+
+    const logins = loginsSince().map(loginBody)
+    expect(logins).toHaveLength(2)
+    expect(logins.map((b) => b.tenant_id)).toEqual([SHARD_ID_4, SHARD_ID_4])
+  })
+
+  it('a refused mint for one tenant does not evict another tenant\'s memo', async () => {
+    await firmApproverTokens()
+    failLoginTenant = SHARD_ID_5
+    try {
+      await expect(firmApproverTokens(SHARD_ID_5)).rejects.toThrow('mint refused')
+    } finally {
+      failLoginTenant = null
+    }
+    calls.length = 0
+
+    await firmApproverTokens()
+    expect(loginsSince()).toHaveLength(0) // 1111 still warm
+
+    await firmApproverTokens(SHARD_ID_6)
+    expect(loginsSince()).toHaveLength(2) // a healthy shard still mints
+  })
+
+  it('after a refused mint for a tenant, a later call for it mints again', async () => {
+    failLoginTenant = SHARD_ID_7
+    try {
+      await expect(firmApproverTokens(SHARD_ID_7)).rejects.toThrow('mint refused')
+    } finally {
+      failLoginTenant = null
+    }
+    calls.length = 0
+
+    await firmApproverTokens(SHARD_ID_7)
+    expect(loginsSince()).toHaveLength(2)
   })
 })
 

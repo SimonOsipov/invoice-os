@@ -1037,6 +1037,7 @@ describe('routeName — the bounded name Sentry groups a page by', () => {
       ['/invoices/', '/invoices'],
       ['/invoices/abc/', '/invoices/:id'],
       [`${reviewPath([UUID])}/`, '/imports/:ids/review'],
+      ['/settings/roles/', '/settings/:tab'],
     ]
     expect(rows.length).toBeGreaterThan(0)
     for (const [path, want] of rows) expect(routeName(path), path).toBe(want)
@@ -1050,6 +1051,9 @@ describe('routeName — the bounded name Sentry groups a page by', () => {
       '/wp-admin/setup.php',
       '/imports/not-a-uuid/review',
       '/settings/a/b',
+      '/settings//',
+      '/settings/roles?x=1',
+      '/settings/roles#h',
       '',
     ]
     expect(unmatched.length).toBeGreaterThan(0)
@@ -1059,6 +1063,27 @@ describe('routeName — the bounded name Sentry groups a page by', () => {
     expect(routeName('/invoices/ID-NEEDLE-9')).toBe('/invoices/:id')
     for (const path of ['/invoices/ID-NEEDLE-9', '/extraction/ID-NEEDLE-9', '/settings/ID-NEEDLE-9', '/ID-NEEDLE-9']) {
       expect(routeName(path), path).not.toContain('ID-NEEDLE-9')
+    }
+  })
+  it('routeName_resultIsAlwaysFromTheClosedSet', () => {
+    const allowed = new Set([...Object.values(ROUTE_PATHS), '/invoices/:id', '/extraction/:id', '/workflows/:id', '/imports/:ids/review', '/settings/:tab', '<unmatched>'])
+    const probes = [
+      '/constructor/x',
+      '/__proto__/x',
+      '/toString/x',
+      '/hasOwnProperty/x',
+      '/invoices/ID-NEEDLE-9?tin=12345678-0001',
+      '/invoices?q=ID-NEEDLE-9',
+      '/settings/ID-NEEDLE-9',
+      `${reviewPath([UUID])}/extra`,
+      '/invoices/%E0%A4%A',
+      '/ID-NEEDLE-9',
+    ]
+    expect(probes.length).toBeGreaterThan(0)
+    for (const path of probes) {
+      const name = routeName(path)
+      expect(typeof name, path).toBe('string')
+      expect(allowed.has(name), `${path} -> ${String(name)}`).toBe(true)
     }
   })
 })

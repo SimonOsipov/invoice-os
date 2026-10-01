@@ -30,6 +30,15 @@ describe('dockerfiles', () => {
       const lines = codeLines(readFileSync(join(FRONTEND, name, 'Dockerfile'), 'utf8'))
       const build = lines.findIndex((l) => /^RUN pnpm --filter/.test(l))
       expect(build, `${name}: no build RUN`).toBeGreaterThan(-1)
+      // An ARG above the stage's FROM is out of scope for it, and an ENV above its ARG expands empty.
+      const from = lines.findIndex((l) => /^FROM /.test(l))
+      expect(from, `${name}: no FROM`).toBeGreaterThan(-1)
+      for (const key of ['VITE_SENTRY_DSN=$VITE_SENTRY_DSN', 'VITE_RAILWAY_GIT_COMMIT_SHA=$RAILWAY_GIT_COMMIT_SHA']) {
+        const arg = lines.indexOf(`ARG ${key.split('=$')[1]}`)
+        const env = lines.indexOf(`ENV ${key}`)
+        expect(arg, `${name}: ARG for ${key} is not inside the build stage`).toBeGreaterThan(from)
+        expect(env, `${name}: ENV ${key} is not after its ARG`).toBeGreaterThan(arg)
+      }
       for (const want of [
         'ARG VITE_SENTRY_DSN',
         'ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN',

@@ -1,6 +1,7 @@
 import { StrictMode, isValidElement, type ReactElement } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 
+import { gatewayBase } from '@invoice-os/api-client'
 import { CrashBoundary } from '@invoice-os/monitoring'
 
 import App from './App'
@@ -41,5 +42,20 @@ describe('main', () => {
     expect(boundary.type).toBe(CrashBoundary)
     expect(isValidElement(boundary.props.brand) && boundary.props.brand.type).toBe(BrandMark)
     expect(boundary.props.children.type).toBe(App)
+  })
+  it('main_passesTheGatewayOriginTheTransportsCall', async () => {
+    const gatewayArg = async (env: string) => {
+      vi.resetModules()
+      h.initMonitoring.mockClear()
+      vi.stubEnv('VITE_GATEWAY_URL', env)
+      await import('./main')
+      return (h.initMonitoring.mock.calls[0] as unknown as [string, { gateway: unknown }])[1].gateway
+    }
+    vi.stubGlobal('document', { getElementById: () => ({}) })
+
+    vi.stubEnv('VITE_GATEWAY_URL', ' https://gw.test/// ')
+    expect(gatewayBase()).toBe('https://gw.test')
+    expect(await gatewayArg(' https://gw.test/// ')).toBe('https://gw.test')
+    expect(await gatewayArg('')).toBeNull()
   })
 })

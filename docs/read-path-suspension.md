@@ -451,8 +451,6 @@ the Go literal from source and compares it to both:
 The extractor refuses a literal containing any backslash escape, and a zero-length extraction
 fails the run rather than comparing `'' === ''`. Reword all three in one commit.
 
-`GET /v1/me`'s wire shape widened to `user:{id, role, display_name, email}` (AUTH-09), so the three existing `Me` mirrors widen with it.
-
 The SPA copy that describes suspension to a human is a separate matter and is NOT pinned to
 this literal: `lib/members.ts`'s `SUSPEND_EXPLANATION` and `App.tsx`'s `SUSPENDED_NOTICE`
 are product sentences, guarded by their own byte-pins.

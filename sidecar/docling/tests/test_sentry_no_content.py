@@ -178,6 +178,15 @@ _LOG_BODIES = {
         (MARKER, "GET", "/x", "1.1", 200),
         '%s - "[redacted]" %d',
     ),
+    "literal percent": ("app", "100%% of %s", (MARKER,), "100% of [redacted]"),
+    "repr": ("app", "bad %r", (MARKER,), "bad '[redacted]'"),
+    "hex conversion": ("convert", "%x of %s", (255, MARKER), "%x of %s"),
+    "dict passed to %s": (
+        "geometry",
+        "stage %s",
+        ({"cell": MARKER},),
+        "stage {'[redacted]': '[redacted]'}",
+    ),
 }
 
 
@@ -192,11 +201,35 @@ def test_unquoted_log_argument_in_a_sidecar_log_never_leaves(sentry_capture, kin
     assert bodies == [want]
 
 
-def test_unquoted_log_argument_never_leaves_through_a_later_event(sentry_capture):
+@pytest.mark.parametrize("kind", sorted(_LOG_BODIES))
+def test_unquoted_log_argument_never_leaves_through_a_later_event(sentry_capture, kind):
     # The log breadcrumb's message is the rendered record, arguments included.
-    logging.getLogger("convert").warning("stage failed: %s", MARKER)
+    name, template, args, want = _LOG_BODIES[kind]
+    logging.getLogger(name).warning(template, *args)
     sentry_sdk.capture_exception(RuntimeError("after"))
     assert len(sentry_capture.events()) == 1  # capture is live, so the absence below is not vacuous
+    crumbs = [c["message"] for c in sentry_capture.breadcrumbs() if c.get("category") == name]
+    assert crumbs == [want]
+    assert MARKER.encode() not in sentry_capture.raw()
+
+
+def test_logger_exception_in_a_request_leaks_no_argument(sentry_capture, monkeypatch):
+    def log_then_fail(body, content_type):
+        try:
+            raise ValueError("inner")
+        except ValueError:
+            logging.getLogger("convert").exception("failed: %s", MARKER)
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(convert, "stub_read", log_then_fail)
+    resp = _post(b"%PDF-1.4\nx", PDF)
+    assert resp.status_code == 500
+    events = sentry_capture.events()
+    assert len(events) == 1
+    crumbs = [c["message"] for c in events[0]["breadcrumbs"]["values"] if c["type"] == "log"]
+    assert "failed: [redacted]" in crumbs
+    bodies = [log["body"] for log in sentry_capture.logs()]
+    assert "failed: [redacted]" in bodies
     assert MARKER.encode() not in sentry_capture.raw()
 
 

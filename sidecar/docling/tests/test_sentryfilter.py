@@ -5,6 +5,7 @@ M is a unique marker standing for document content; no output may contain it.
 
 import copy
 import json
+import logging
 
 import pytest
 
@@ -361,6 +362,36 @@ _PARAM_BODIES = {
         {0: M, 1: "GET", 2: f"/x?q={M}", 3: "1.1", 4: 200},
         '%s - "[redacted]" %d',
     ),
+    "repr conversion": ("got %r", f"got '{M}'", {0: M}, "got '[redacted]'"),
+    "hex conversion": ("%x of %s", f"ff of {M}", {0: 255, 1: M}, "%x of %s"),
+    "unsupported conversion": ("%y of %s", f"? of {M}", {0: 1, 1: M}, "%y of %s"),
+    "more specifiers than args": ("%s and %s", f"{M} and {M}", {0: M}, "%s and %s"),
+    "fewer specifiers than args": ("stage %s", f"stage {M}", {0: M, 1: M}, "stage %s"),
+    "mapping template, missing key": (
+        "%(a)s %(b)s",
+        f"{M} {M}",
+        {"a": M},
+        "%(a)s %(b)s",
+    ),
+    "mapping template, tuple args": ("%(a)s of %s", f"{M} of {M}", {0: M}, "%(a)s of %s"),
+    "dict passed positionally to %s": (
+        "stage %s",
+        f"stage {{'cell': '{M}'}}",
+        {"cell": M},
+        "stage {'[redacted]': '[redacted]'}",
+    ),
+    "dict key is the marker": (
+        "stage %s",
+        f"stage {{'{M}': 1}}",
+        {M: 1},
+        "stage {'[redacted]': '[redacted]'}",
+    ),
+    "double percent beside %r": (
+        "%%%r%%",
+        f"%'{M}'%",
+        {0: M},
+        "%'[redacted]'%",
+    ),
 }
 
 
@@ -382,6 +413,91 @@ def test_scrub_log_without_parameters_keeps_its_scrubbed_body():
     # A template without a parameter does not trigger the rebuild.
     templated = _param_log("loaded '%s' ok", f"loaded '{M}' ok", {})
     assert scrub_log(templated, None)["body"] == "loaded '[redacted]' ok"
+
+    # A rebuild would turn the unformatted "%%" into "%".
+    percent = _param_log("100%% done", "100%% done", {})
+    assert scrub_log(percent, None)["body"] == "100%% done"
+
+
+def test_scrub_log_with_parameters_but_no_template_does_not_raise():
+    # The SDK sets no template when record.msg is not a str.
+    log = _param_log("unused", "stage ok", {0: "x"})
+    del log["attributes"]["sentry.message.template"]
+    out = scrub_log(log, None)
+    assert out is not None
+    assert out["body"] == "stage ok"
+    assert "sentry.message.parameter.0" not in out["attributes"]
+
+
+def _crumb_for(name, msg, args):
+    """The log breadcrumb and hint the SDK builds for a record."""
+    record = logging.LogRecord(name, logging.WARNING, __file__, 1, msg, args, None)
+    try:
+        message = record.getMessage()
+    except (TypeError, KeyError, ValueError):  # unformattable; the rebuild must still not leak
+        message = f"{msg} {M}"
+    crumb = {"type": "log", "category": name, "message": message, "level": "warning"}
+    return crumb, {"log_record": record}
+
+
+# (msg, args, wanted crumb message); a lone mapping arg is the record's mapping args.
+_CRUMB_MESSAGES = {
+    "tuple arg": ("stage failed: %s", (M,), "stage failed: [redacted]"),
+    "mapping arg": ("cell %(cell)s", ({"cell": M},), "cell [redacted]"),
+    "dict passed to %s": ("stage %s", ({"cell": M},), "stage {'[redacted]': '[redacted]'}"),
+    "literal percent": ("100%% of %s", (M,), "100% of [redacted]"),
+    "repr conversion": ("got %r", (M,), "got '[redacted]'"),
+    "hex conversion": ("%x of %s", (255, M), "%x of %s"),
+    "more specifiers than args": ("%s and %s", (M,), "%s and %s"),
+    "fewer specifiers than args": ("stage %s", (M, M), "stage %s"),
+    "mapping template, tuple args": ("%(a)s of %s", (M,), "%(a)s of %s"),
+    "mapping template, missing key": ("%(a)s %(b)s", ({"a": M},), "%(a)s %(b)s"),
+    "unsupported conversion": ("%y of %s", (1, M), "%y of %s"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_CRUMB_MESSAGES))
+def test_keep_breadcrumb_rebuilds_a_sidecar_log_message_without_its_arguments(name):
+    msg, args, want = _CRUMB_MESSAGES[name]
+    crumb, hint = _crumb_for("convert", msg, args)
+    out = keep_breadcrumb(crumb, hint)
+    assert out is not None
+    assert M not in repr(out)
+    assert out["message"] == want
+    assert out["category"] == "convert"
+    assert out["level"] == "warning"
+
+
+def test_keep_breadcrumb_without_arguments_keeps_its_message():
+    # A record without args is never %-formatted, so its "%%" stays literal.
+    crumb, hint = _crumb_for("convert", "100%% done", ())
+    assert hint["log_record"].args == ()
+    assert keep_breadcrumb(crumb, hint) == crumb
+    assert crumb["message"] == "100%% done"
+    # No hint, or a hint without a record, keeps the crumb whole.
+    assert keep_breadcrumb(crumb, None) == crumb
+    assert keep_breadcrumb(crumb, {}) == crumb
+
+
+def test_keep_breadcrumb_with_a_non_str_message_does_not_raise():
+    class Msg:
+        def __str__(self):
+            return "stage %s"
+
+    exc = RuntimeError("stage 1")
+    for msg, args in ((exc, ()), (Msg(), ("x",))):
+        crumb, hint = _crumb_for("convert", msg, args)
+        assert keep_breadcrumb(crumb, hint) is not None, repr(msg)
+    crumb, hint = _crumb_for("convert", exc, ())
+    assert keep_breadcrumb(crumb, hint) == crumb
+
+
+def test_keep_breadcrumb_never_rebuilds_a_non_sidecar_or_non_log_crumb():
+    crumb, hint = _crumb_for("docling.pipeline", "x %s", (M,))
+    assert keep_breadcrumb(crumb, hint) is None
+    http = {"type": "http", "category": "convert", "message": f"x {M}"}
+    _, hint = _crumb_for("convert", "x %s", (M,))
+    assert keep_breadcrumb(http, hint) == http
 
 
 def test_keep_breadcrumb_only_sidecar_log_crumbs():

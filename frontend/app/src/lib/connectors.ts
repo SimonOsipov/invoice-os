@@ -12,7 +12,7 @@
 import { hash, mulberry } from './prng'
 import { pad2 } from './format'
 import { CONNECTOR_TAX_CODES, type ConnectorDef } from '../data'
-import type { ConnectorId, FieldMapRow } from '../types'
+import type { ConnectorId, ConnectorsState, FieldMapRow } from '../types'
 
 export type SyncEventKind = 'transmitted' | 'validated' | 'held' | 'scheduled' | 'pull'
 
@@ -151,4 +151,8 @@ export function connectorDetail(def: ConnectorDef): ConnectorDetailData {
 /** The mapping a connector renders: the saved override when one exists, else its default. */
 export function mappingFor(def: ConnectorDef, overrides: Partial<Record<ConnectorId, FieldMapRow[]>>): FieldMapRow[] {
   return overrides[def.id] ?? def.mapping
+}
+
+export function initialConnectors(_handoff: boolean): ConnectorsState {
+  return { sap: true, quickbooks: true, oracle: false, sage: false, odoo: false, dynamics: false }
 }

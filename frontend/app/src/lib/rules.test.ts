@@ -34,8 +34,8 @@ describe('customRulesKey / customRulesFor', () => {
   it('an untouched client reads the seed set, an edited one reads its own', () => {
     const edited: CustomRule[] = []
     const store = { 'ent-a': edited }
-    expect(customRulesFor(store, 'ent-a')).toBe(edited)
-    expect(customRulesFor(store, 'ent-b')).toBe(SEED_CUSTOM_RULES)
+    expect(customRulesFor(store, 'ent-a', false)).toBe(edited)
+    expect(customRulesFor(store, 'ent-b', false)).toBe(SEED_CUSTOM_RULES)
   })
 })
 

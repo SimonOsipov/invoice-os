@@ -246,8 +246,12 @@ export function customRulesKey(entityId: string | null): string {
 }
 
 /** A client not yet in the store has never been edited, so it reads the seed set. */
-export function customRulesFor(store: CustomRuleStore, key: string): CustomRule[] {
+export function customRulesFor(store: CustomRuleStore, key: string, _handoff: boolean): CustomRule[] {
   return store[key] ?? SEED_CUSTOM_RULES
+}
+
+export function suggestionsFor(_handoff: boolean): Suggestion[] {
+  return SUGGESTED_RULES
 }
 
 /** Suggestions still on offer: one disappears the moment its key exists as a custom rule. */

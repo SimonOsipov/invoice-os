@@ -433,7 +433,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   const [customRuleStore, setCustomRuleStore] = useState<CustomRuleStore>({})
   const [openRuleKey, setOpenRuleKey] = useState<string | null>(null)
   const rulesKey = customRulesKey(active.entityId)
-  const customRules = customRulesFor(customRuleStore, rulesKey)
+  const customRules = customRulesFor(customRuleStore, rulesKey, false)
   // The tenant's approval policies — the `membersAsync` idiom below, verbatim except for
   // the mirror's guard. Per TENANT, so switching company does not swap the set.
   const policiesAsync = useAsync<Policy[]>(
@@ -1525,7 +1525,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // client's key. `rulesKey` is captured per render off `active`, so a write can
   // never land on the company the switcher just left.
   function updateCustomRules(fn: (rules: CustomRule[]) => CustomRule[]) {
-    setCustomRuleStore((store) => ({ ...store, [rulesKey]: fn(customRulesFor(store, rulesKey)) }))
+    setCustomRuleStore((store) => ({ ...store, [rulesKey]: fn(customRulesFor(store, rulesKey, false)) }))
   }
 
   function addSuggestedRule(s: Suggestion) {
@@ -1651,6 +1651,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     // Reuses importAuth's accessor rather than a second closure, so the two byte-level
     // transports can never drift on which session they read.
     getToken: importAuth.getToken,
+    handoff: false,
     user,
     clients,
     active,

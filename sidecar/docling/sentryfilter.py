@@ -13,6 +13,7 @@ _ID_TAGS = ("request_id", "tenant_id")
 _QUERY_KEYS = ("http.query", "http.fragment")
 _UPSTREAM_STATUS = re.compile(r"returned [0-9]{3}: ")
 _REDACTED = "[redacted]"
+_PARAM_PREFIX = "sentry.message.parameter."
 
 
 def _strip_query(s):
@@ -146,7 +147,7 @@ def _scrub_span(s):
         if isinstance(out.get(f), str):
             out[f] = scrub_text(out[f])
     if "tags" in out:
-        out["tags"] = {_scrub_key(k): _scrub_value(v) for k, v in out["tags"].items()}
+        out["tags"] = _scrub_tags(out["tags"])
     if "data" in out:
         out["data"] = _scrub_data(out["data"])
     return out
@@ -229,12 +230,36 @@ def _scrub_log_value(v):
     return _REDACTED
 
 
+def _redacted_message(template, args):
+    """Render template with every argument replaced; the scrubbed template itself if it cannot format."""
+    if isinstance(args, dict):
+        redacted = {k: _REDACTED for k in args}
+    else:
+        redacted = (_REDACTED,) * len(args)
+    try:
+        return scrub_text(template % redacted)
+    except (TypeError, ValueError, KeyError):
+        return scrub_text(template)
+
+
+def _template_args(attrs):
+    """SDK log parameters: tuple args key by index, mapping args by name."""
+    keys = [k[len(_PARAM_PREFIX) :] for k in attrs if k.startswith(_PARAM_PREFIX)]
+    if all(k.isdigit() for k in keys):
+        return (_REDACTED,) * len(keys)
+    return dict.fromkeys(keys)
+
+
 def scrub_log(log, hint=None):
     """Return the scrubbed record, or None for a record from a non-sidecar logger."""
     attrs = log.get("attributes") or {}
     if attrs.get("logger.name") not in SIDECAR_LOGGERS:
         return None
-    if isinstance(log.get("body"), str):
+    template = attrs.get("sentry.message.template")
+    args = _template_args(attrs)
+    if isinstance(template, str) and len(args):
+        log["body"] = _redacted_message(template, args)
+    elif isinstance(log.get("body"), str):
         log["body"] = scrub_text(log["body"])
     out = {}
     for k, v in attrs.items():
@@ -250,7 +275,12 @@ def scrub_log(log, hint=None):
 
 
 def keep_breadcrumb(crumb, hint=None):
-    """Drop log breadcrumbs from third-party loggers; keep every other kind."""
-    if crumb.get("type") == "log" and crumb.get("category") not in SIDECAR_LOGGERS:
+    """Drop log breadcrumbs from third-party loggers; a kept one is re-rendered without its arguments."""
+    if crumb.get("type") != "log":
+        return crumb
+    if crumb.get("category") not in SIDECAR_LOGGERS:
         return None
+    record = (hint or {}).get("log_record")
+    if record is not None and record.args and isinstance(record.msg, str):
+        crumb = {**crumb, "message": _redacted_message(record.msg, record.args)}
     return crumb

@@ -21,9 +21,8 @@ with sentry_setup.boot_guard():
 
     app = FastAPI()
 
-    # Background warm-up (story sec. 4): starts at import ("boot"), off any request path.
-    # T-01-3 still sees construction_count() == 0 right after import -- a real model build
-    # takes far longer than one HTTP round trip, so the race is not observable in practice.
+    # Background warm-up: starts at import, off any request path.
+    # test_t01_3_healthz_never_constructs_converter relies on a model build outlasting one round trip.
     # The thread lives in convert.py (not started inline here) so tests can join it deterministically.
     convert.start_warm_up()
 
@@ -35,7 +34,7 @@ MAX_DOCUMENT_BYTES = 15 * 1024 * 1024
 async def healthz() -> dict[str, str]:
     """Body is exactly {"status": "ok", "build": "<sha>", "sentry": "on"|"off"} --
     internal/platform/health.go's shape. No lock, no I/O beyond the build file -- stays on the
-    event loop (T-03-14).
+    event loop (test_t03_14_healthz_stays_fast_while_a_read_is_in_flight).
     """
     return {
         "status": "ok",

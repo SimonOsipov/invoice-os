@@ -2,6 +2,9 @@ package portfolio
 
 import (
 	"errors"
+	"fmt"
+	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -228,5 +231,225 @@ func TestValidateTIN_CanonicalDedup(t *testing.T) {
 
 	if dashCanonical != plainCanonical {
 		t.Errorf("canonical mismatch: dash form = %q, plain form = %q, want identical", dashCanonical, plainCanonical)
+	}
+}
+
+// reasonCase is one input and the reason ValidateTIN must give for it.
+type reasonCase struct {
+	name string
+	raw  string
+	want string
+}
+
+func runReasonCases(t *testing.T, cases []reasonCase) {
+	t.Helper()
+	if len(cases) == 0 {
+		t.Fatal("no cases")
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			canonical, err := ValidateTIN(tc.raw)
+			var te *TINError
+			if !errors.As(err, &te) {
+				t.Fatalf("ValidateTIN(%q) err = %v, want a *TINError", tc.raw, err)
+			}
+			if te.Reason != tc.want {
+				t.Errorf("ValidateTIN(%q) Reason = %q, want %q", tc.raw, te.Reason, tc.want)
+			}
+			if canonical != "" {
+				t.Errorf("ValidateTIN(%q) canonical = %q, want empty on failure", tc.raw, canonical)
+			}
+		})
+	}
+}
+
+// TestValidateTIN_ReasonRequired: AC (a).
+func TestValidateTIN_ReasonRequired(t *testing.T) {
+	runReasonCases(t, []reasonCase{
+		{"empty", "", TINRequiredMessage},
+		{"spaces", "  ", TINRequiredMessage},
+		{"tab and newline", "\t\n", TINRequiredMessage},
+	})
+}
+
+// TestValidateTIN_ReasonShape_Characters: AC (b). The Arabic-Indic and
+// full-width rows are the ones in TestValidateTIN_FormatAdversarial.
+func TestValidateTIN_ReasonShape_Characters(t *testing.T) {
+	runReasonCases(t, []reasonCase{
+		{"letters only", "BADTIN", TINShapeMessage},
+		{"letters among digits", "12ab567897", TINShapeMessage},
+		{"leading plus", "+123456780006", TINShapeMessage},
+		{"inner space", "12345 67897", TINShapeMessage},
+		{"Arabic-Indic digits", "١٢٣٤٥٦٧٨٩٠", TINShapeMessage},
+		{"full-width digits", "１２３４５６７８９７", TINShapeMessage},
+	})
+}
+
+// TestValidateTIN_ReasonLength: AC (c). The count in the message is the digit
+// count, so a hyphen is not counted.
+func TestValidateTIN_ReasonLength(t *testing.T) {
+	runReasonCases(t, []reasonCase{
+		{"5 digits", "12345", fmt.Sprintf(TINLengthMessage, 5)},
+		{"9 digits", "123456789", fmt.Sprintf(TINLengthMessage, 9)},
+		{"11 digits", "12345678901", fmt.Sprintf(TINLengthMessage, 11)},
+		{"13 digits", "9876543210987", fmt.Sprintf(TINLengthMessage, 13)},
+		{"11 digits with a hyphen at 8", "12345678-000", fmt.Sprintf(TINLengthMessage, 11)},
+		{"11 digits with a hyphen at 9", "123456789-06", fmt.Sprintf(TINLengthMessage, 11)},
+	})
+}
+
+// TestValidateTIN_ReasonShape_Hyphen: AC (d). "12345678-90" has 10 digits, so
+// any hyphen is a shape fault.
+func TestValidateTIN_ReasonShape_Hyphen(t *testing.T) {
+	runReasonCases(t, []reasonCase{
+		{"hyphen at 7", "1234567-80006", TINShapeMessage},
+		{"two hyphens", "12345678-00-06", TINShapeMessage},
+		{"leading hyphen", "-123456780006", TINShapeMessage},
+		{"10 digits, hyphen at 6", "123456-7890", TINShapeMessage},
+		{"10 digits, hyphen at 8", "12345678-90", TINShapeMessage},
+	})
+}
+
+// TestValidateTIN_ReasonChecksum: AC (e).
+func TestValidateTIN_ReasonChecksum(t *testing.T) {
+	runReasonCases(t, []reasonCase{
+		{"10 digits", "1234567890", TINChecksumMessage},
+		{"8-4 hyphenated", "12345678-0001", TINChecksumMessage},
+		{"bare 12 digits", "581274639202", TINChecksumMessage},
+	})
+}
+
+// TestValidateTIN_EveryRefusalIsErrInvalidTIN: AC (g), one input per class.
+func TestValidateTIN_EveryRefusalIsErrInvalidTIN(t *testing.T) {
+	for _, raw := range []string{"", "BADTIN", "12345", "12345678-90", "1234567890"} {
+		_, err := ValidateTIN(raw)
+		if err == nil {
+			t.Fatalf("ValidateTIN(%q) accepted, want a refusal", raw)
+		}
+		if !errors.Is(err, ErrInvalidTIN) {
+			t.Errorf("ValidateTIN(%q) err = %v, want errors.Is(err, ErrInvalidTIN)", raw, err)
+		}
+	}
+}
+
+// oracleShape is the accepted-shape pattern ValidateTIN used before AUTH-10.
+var oracleShape = regexp.MustCompile(`^(\d{10}|\d{12}|\d{8}-\d{4})$`)
+
+// luhnCheckDigit mirrors freshTin's check digit (e2e/api/fixtures.ts).
+func luhnCheckDigit(digits string) byte {
+	sum, double := 0, true
+	for i := len(digits) - 1; i >= 0; i-- {
+		d := int(digits[i] - '0')
+		if double {
+			d *= 2
+			if d > 9 {
+				d -= 9
+			}
+		}
+		sum += d
+		double = !double
+	}
+	return byte('0' + (10-sum%10)%10)
+}
+
+// insertAt puts ins into s at byte index i.
+func insertAt(s string, i int, ins string) string { return s[:i] + ins + s[i:] }
+
+// acceptedSetCorpus is deterministic: Luhn-valid and Luhn-invalid strings of
+// 9-13 digits, each with hyphen, plus and space variants.
+func acceptedSetCorpus() []string {
+	corpus := []string{
+		"", "  ", "\t\n", "BADTIN", "12345", "123456789", "12345678901", "9876543210987",
+		"1234567897", "12345678-0006", "1234567890", "12ab567897", "1234567-80006",
+		"123456789-06", "12345678-00-06", "+123456780006", "-123456780006", "12345 67897",
+		"581274639202", "0000000000", "\t\n 1234567897 \n\t", "123456780006",
+		"12345678-0001", "123456-7890", "12345678-90", "12345678-000",
+		"١٢٣٤٥٦٧٨٩٠", "１２３４５６７８９７",
+	}
+	prefixes := []string{"123456789012", "581274639202", "000000000000", "999999999999", "314159265358", "271828182845"}
+	for n := 9; n <= 13; n++ {
+		for _, pre := range prefixes {
+			body := pre[:n-1]
+			valid := body + string(luhnCheckDigit(body))
+			invalid := body + string('0'+(valid[n-1]-'0'+1)%10)
+			for _, base := range []string{valid, invalid} {
+				corpus = append(corpus, base, "+"+base, insertAt(base, n/2, " "))
+				for i := 0; i <= len(base); i++ {
+					corpus = append(corpus, insertAt(base, i, "-"))
+				}
+				if len(base) >= 10 {
+					corpus = append(corpus, insertAt(insertAt(base, 8, "-"), 10, "-"))
+				}
+			}
+		}
+	}
+	return corpus
+}
+
+// TestValidateTIN_AcceptedSetUnchanged: ValidateTIN accepts exactly what
+// oracleShape + Luhn accepted before AUTH-10, and the corpus reaches every
+// accepted shape and every refusal class.
+func TestValidateTIN_AcceptedSetUnchanged(t *testing.T) {
+	var jtb, firs12, firs84, empty, chars, length, hyphen, checksum int
+	for _, raw := range acceptedSetCorpus() {
+		trimmed := strings.TrimSpace(raw)
+		canonical := strings.Replace(trimmed, "-", "", 1)
+		want := oracleShape.MatchString(trimmed) && luhnValid(canonical)
+
+		got, err := ValidateTIN(raw)
+		if (err == nil) != want {
+			t.Fatalf("ValidateTIN(%q) accepted = %v, want %v (err = %v)", raw, err == nil, want, err)
+		}
+		if want {
+			if got != canonical {
+				t.Errorf("ValidateTIN(%q) canonical = %q, want %q", raw, got, canonical)
+			}
+			switch {
+			case len(trimmed) == 10:
+				jtb++
+			case strings.Contains(trimmed, "-"):
+				firs84++
+			default:
+				firs12++
+			}
+			continue
+		}
+		if !errors.Is(err, ErrInvalidTIN) {
+			t.Errorf("ValidateTIN(%q) err = %v, want errors.Is(err, ErrInvalidTIN)", raw, err)
+		}
+
+		digits := 0
+		hyphens := 0
+		other := false
+		for _, r := range trimmed {
+			switch {
+			case r >= '0' && r <= '9':
+				digits++
+			case r == '-':
+				hyphens++
+			default:
+				other = true
+			}
+		}
+		switch {
+		case trimmed == "":
+			empty++
+		case other:
+			chars++
+		case digits != 10 && digits != 12:
+			length++
+		case !oracleShape.MatchString(trimmed):
+			hyphen++
+		default:
+			checksum++
+		}
+	}
+	for name, n := range map[string]int{
+		"accepted 10-digit": jtb, "accepted bare 12-digit": firs12, "accepted 8-4": firs84,
+		"empty": empty, "bad characters": chars, "bad length": length, "bad hyphen": hyphen, "checksum": checksum,
+	} {
+		if n == 0 {
+			t.Errorf("corpus holds no %s case", name)
+		}
 	}
 }

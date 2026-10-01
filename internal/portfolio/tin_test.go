@@ -151,8 +151,7 @@ func TestValidateTIN_LuhnBoundary_AllZeros(t *testing.T) {
 // hyphens, a leading sign character, embedded internal whitespace, the two
 // untested boundary lengths immediately adjacent to the accepted shapes (9
 // and 11 digits), a fresh 13-digit boundary case, and non-ASCII Unicode
-// digits (Go's RE2-backed regexp \d class is ASCII-only -- it does NOT
-// include \p{Nd} -- so these must NOT be accidentally accepted).
+// digits.
 func TestValidateTIN_FormatAdversarial(t *testing.T) {
 	runTINCases(t, []tinCase{
 		{name: "hyphen in wrong position (7+5 not 8+4)", raw: "1234567-80006", wantValid: false},

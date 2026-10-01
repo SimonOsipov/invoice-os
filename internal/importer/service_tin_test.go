@@ -215,8 +215,8 @@ func TestServiceImport_APICreatedJTBEntityReportsGenuineTinFormatViolation(t *te
 // above, which skip. That matters: the guard must fire in the cheapest suite.
 func TestMBSSupplierTIN_IsTheExactInverseOfValidateTIN(t *testing.T) {
 	// Every FIRS spelling ValidateTIN accepts must map back to the ONE MBS
-	// wire spelling. tin.go's own doc: the hyphenated and bare-12 spellings
-	// "persist identically" -- they ARE the same TIN, so both must render as
+	// wire spelling. The hyphenated and bare-12 spellings
+	// ARE the same TIN, so both must render as
 	// NNNNNNNN-NNNN. Rendering the bare-12 input is therefore NOT fabricating
 	// a format: it is spelling the single canonical identity the MBS way.
 	for _, spelling := range []string{"10012345-0007", "100123450007"} {

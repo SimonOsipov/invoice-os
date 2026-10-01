@@ -25,9 +25,8 @@ var canonicalFIRSTIN = regexp.MustCompile(`^\d{12}$`)
 //
 // WHY THIS EXISTS: portfolio.ValidateTIN accepts a FIRS TIN in either
 // spelling (bare 12-digit or hyphenated NNNNNNNN-NNNN) and CANONICALIZES it
-// to 12 bare digits before persisting (tin.go:39, strings.Replace(trimmed,
-// "-", "", 1)) -- its own doc: "both spellings of a FIRS TIN persist
-// identically". The MBS rule supplier-tin-format
+// to 12 bare digits before persisting (strings.Replace(trimmed, "-", "", 1)).
+// The MBS rule supplier-tin-format
 // (migrations/20260711121327_seed_mbs_v1.sql) demands ^[0-9]{8}-[0-9]{4}$.
 // So an entity created through the REAL API path carries a TIN the wire rule
 // rejects, and every invoice (imported OR manually created) for it reported a
@@ -47,7 +46,7 @@ var canonicalFIRSTIN = regexp.MustCompile(`^\d{12}$`)
 // SHAPES -- the exact inverse of tin.go's canonicalization, which is the only
 // thing that writes business_entities.tin:
 //   - 12 bare digits -> NNNNNNNN-NNNN. Both FIRS spellings canonicalize to the
-//     same 12 digits and ARE the same TIN (tin.go's own doc), so both map onto
+//     same 12 digits and ARE the same TIN, so both map onto
 //     the single MBS spelling.
 //   - 10-digit JTB TIN -> UNCHANGED. There is no hyphen to restore, and an 8+4
 //     split would fabricate a FIRS TIN out of a JTB one. Such a TIN genuinely

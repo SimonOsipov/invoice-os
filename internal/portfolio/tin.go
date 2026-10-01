@@ -7,8 +7,7 @@ import (
 )
 
 // ErrInvalidTIN is returned when a TIN fails structural, format, or checksum
-// validation. Callers should use errors.Is to detect it; the wrapped reason
-// (via fmt.Errorf("%w: ...", ErrInvalidTIN)) is diagnostic only.
+// validation. Callers should use errors.Is to detect it.
 var ErrInvalidTIN = errors.New("portfolio: invalid tin")
 
 // TINError names why ValidateTIN refused a TIN; errors.Is(err, ErrInvalidTIN) holds.

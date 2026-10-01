@@ -1,6 +1,9 @@
-// RED STUB — QA Mode A. The executor adds the module WeakSet (D-18).
-export function markReported(_err: unknown): void {}
+const reported = new WeakSet<object>()
 
-export function wasReported(_err: unknown): boolean {
-  return false
+export function markReported(err: unknown): void {
+  if ((typeof err === 'object' && err !== null) || typeof err === 'function') reported.add(err)
+}
+
+export function wasReported(err: unknown): boolean {
+  return (typeof err === 'object' && err !== null) || typeof err === 'function' ? reported.has(err) : false
 }

@@ -151,6 +151,7 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
   const bucket = scopedBucket(ctx.mode === 'inhouse', ctx.active.entityId, data)
   const segments = donutSegments(bucket.counts)
   const total = Object.values(bucket.counts).reduce((a, b) => a + b, 0)
+  const anyValidated = total - bucket.counts.draft > 0 // drafts are the only pre-validation status
   const needsAttention = bucket.needs_attention
   const failures = topFailures(bucket.top_violations)
   const ring = readinessRing(bucket.metrics)
@@ -385,11 +386,11 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
           </div>
         ) : (
           <div style={{ padding: '40px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
-            {total > 0 && (
+            {anyValidated && (
               <span style={{ width: 40, height: 40, borderRadius: 99, background: 'var(--status-green-bg)', color: 'var(--status-green-text)', display: 'grid', placeItems: 'center', marginBottom: 12 }}>{tickGlyph13}</span>
             )}
-            <div className="card-title" style={{ marginBottom: 3 }}>{total > 0 ? 'No open failures' : 'No invoices validated yet'}</div>
-            <div style={{ fontSize: 13, color: 'var(--fg-3)' }}>{total > 0 ? 'Every invoice passed validation.' : 'Failures appear here once invoices are validated.'}</div>
+            <div className="card-title" style={{ marginBottom: 3 }}>{anyValidated ? 'No open failures' : 'No invoices validated yet'}</div>
+            <div style={{ fontSize: 13, color: 'var(--fg-3)' }}>{anyValidated ? 'Every invoice passed validation.' : 'Failures appear here once invoices are validated.'}</div>
           </div>
         )}
       </div>

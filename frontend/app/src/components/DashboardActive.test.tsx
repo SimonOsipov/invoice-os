@@ -728,9 +728,21 @@ describe('DashboardActive failures panel at zero invoices (AUTH-10-04)', () => {
     expect(failuresPanel('No open failures').querySelector('svg'), 'the tick stays when invoices exist').not.toBeNull()
   })
 
-  // total === 1 is the boundary: `total > 1` would flip it back to the zero-invoice copy.
-  it('one invoice and no failures says No open failures, with its tick', async () => {
-    mockRollupFetch(rollup(0, { draft: 1 }))
+  it('drafts only: nothing validated yet, no tick', async () => {
+    mockRollupFetch(rollup(0, { draft: 3 }))
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Readiness score')
+    expect(screen.getByText('No invoices validated yet')).toBeDefined()
+    expect(screen.getByText('Failures appear here once invoices are validated.')).toBeDefined()
+    expect(screen.queryByText('Every invoice passed validation.')).toBeNull()
+    expect(screen.queryByText('No open failures')).toBeNull()
+    expect(failuresPanel('No invoices validated yet').querySelector('svg'), 'no tick for drafts').toBeNull()
+  })
+
+  // One validated invoice is the boundary: `> 1` would flip it back to the empty-state copy.
+  it('one validated invoice and no failures says No open failures, with its tick', async () => {
+    mockRollupFetch(rollup(0, { validated: 1 }))
     render(<DashboardActive ctx={dashCtx()} />)
 
     await screen.findByText('Readiness score')

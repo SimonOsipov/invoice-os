@@ -325,4 +325,13 @@ describe('CreateUpload — the amber panel copy (AUTH-10-04)', () => {
     expect(amberPanel(container).firstElementChild?.textContent).toBe(AMBER_COPY.title[mode])
     expect(amberButton(container).textContent).toBe(AMBER_COPY.button[mode])
   })
+
+  it.each(['inhouse', 'firm'] as const)('a workspace with an entity shows no amber panel (%s)', (mode) => {
+    const ctx = { ...noEntityCtx(mode, vi.fn(), vi.fn()), activeEntity: { id: 'e1' }, entities: [{ id: 'e1' }], clients: [{}] } as unknown as PlatformCtx
+    const { container } = render(<CreateUpload ctx={ctx} />)
+    expect(container.textContent).toContain('Skip — enter manually')
+    expect(container.textContent).not.toContain(AMBER_COPY.title[mode])
+    expect(container.textContent).not.toContain(AMBER_COPY.body)
+    expect(container.textContent).not.toContain(AMBER_COPY.footnote)
+  })
 })

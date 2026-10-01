@@ -156,4 +156,24 @@ describe('emptyClient', () => {
     expect(c.onboarding).toBe(true)
     expect(c.tin).toBe('—')
   })
+
+  it('emptyClient changes nothing else about the placeholder', () => {
+    expect(emptyClient()).toMatchObject({
+      initials: '—',
+      taxpayer: 'Small',
+      sector: 'foods',
+      score: null,
+      vol: 0,
+      readiness: [0, 0, 0],
+      readinessNote: '',
+      invoices: [],
+      failing: 0,
+      pending: 0,
+      vatNum: 0,
+      vatLabel: '₦0',
+      count: 0,
+      head: 'Draft',
+      dash: null,
+    })
+  })
 })

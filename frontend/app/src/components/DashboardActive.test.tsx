@@ -727,4 +727,28 @@ describe('DashboardActive failures panel at zero invoices (AUTH-10-04)', () => {
     expect(screen.queryByText('No invoices validated yet')).toBeNull()
     expect(failuresPanel('No open failures').querySelector('svg'), 'the tick stays when invoices exist').not.toBeNull()
   })
+
+  // total === 1 is the boundary: `total > 1` would flip it back to the zero-invoice copy.
+  it('one invoice and no failures says No open failures, with its tick', async () => {
+    mockRollupFetch(rollup(0, { draft: 1 }))
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Readiness score')
+    expect(screen.getByText('No open failures')).toBeDefined()
+    expect(screen.queryByText('No invoices validated yet')).toBeNull()
+    expect(failuresPanel('No open failures').querySelector('svg')).not.toBeNull()
+  })
+
+  it.each([0, 5])('with failures listed (total %i) neither empty-state copy renders', async (validated) => {
+    const data = rollup(0, { validated })
+    data.totals.top_violations = [{ rule_key: 'tin-checksum', invoices: 2 }]
+    mockRollupFetch(data)
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Readiness score')
+    expect(screen.getByText('tin-checksum')).toBeDefined()
+    expect(screen.queryByText('No open failures')).toBeNull()
+    expect(screen.queryByText('No invoices validated yet')).toBeNull()
+    expect(screen.queryByText('Failures appear here once invoices are validated.')).toBeNull()
+  })
 })

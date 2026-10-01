@@ -1086,4 +1086,10 @@ describe('routeName — the bounded name Sentry groups a page by', () => {
       expect(allowed.has(name), `${path} -> ${String(name)}`).toBe(true)
     }
   })
+  it('parseLocation_prototypeKeyedSegmentFallsBackToDashboard', () => {
+    for (const seg of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+      expect(parseRoute(`/${seg}/x`), seg).toBeNull()
+      expect(parseLocation(`/${seg}/x`, '').view, seg).toBe('dashboard')
+    }
+  })
 })

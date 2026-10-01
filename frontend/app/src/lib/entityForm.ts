@@ -31,6 +31,8 @@
 import type { ApiError } from '@invoice-os/api-client'
 import type { Entity, EntityInput } from './portfolio'
 
+export const TIN_HINT = ''
+
 export interface EntityFormState {
   name: string
   tin: string

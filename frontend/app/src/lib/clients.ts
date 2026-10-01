@@ -19,6 +19,7 @@ import { initials } from './customers'
 import { hash, mulberry } from './prng'
 import { validate } from './validation'
 import type { Entity } from './portfolio'
+import type { AsyncStatus } from '@invoice-os/api-client'
 import type { Client, ClientCfg, Draft, Invoice, InvoiceStatus, LineItem, StatusStyle } from '../types'
 
 function mulberrySeed(name: string) {
@@ -170,6 +171,16 @@ export function emptyClient(): Client {
     onboarding: true,
   }
   return finishClient(cfg, null)
+}
+
+// Stub (AUTH-10-03 Mode A): the executor replaces the body.
+export function firstRunSurface(
+  _activeEntity: Entity | null,
+  _entitiesState: AsyncStatus,
+  _entitiesCount: number,
+  _clientsCount: number,
+): 'task' | 'loading' | 'error' {
+  return 'loading'
 }
 
 // [in-house-degenerate-case]: the ONE resolution path for BOTH workspace modes,

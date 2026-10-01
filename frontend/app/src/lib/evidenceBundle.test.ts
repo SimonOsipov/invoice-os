@@ -549,7 +549,7 @@ describe('getEvidenceBundlePreview (passthrough and abort)', () => {
     expect((authedFetch.mock.calls[0][1] as { signal?: AbortSignal }).signal).toBe(controller.signal)
 
     // Without one the option is present but undefined; apiFetch reads opts?.signal either
-    // way. An abort HERE returns as ApiError('network', ...) (client.ts:61), unlike the
+    // way. An abort HERE returns as ApiError('network', ...), unlike the
     // download path (EB-01-10) -- there is no single error-shape predicate across the two.
     authedFetch.mockClear()
     await getEvidenceBundlePreview(authedFetch, BASE, REQ)
@@ -659,8 +659,7 @@ describe('fetchEvidenceBundle (hostile input and failure modes)', () => {
       (e: unknown) => e,
     )
 
-    // There is no try/catch at all in fetchEvidenceBundle: apiFetch would have produced
-    // ApiError('network', ...) here (client.ts:61), this path propagates the raw TypeError.
+    // apiFetch would have produced ApiError('network', ...) here; this path rethrows the raw TypeError.
     expect(err).toBe(offline)
     expect(err).not.toBeInstanceOf(ApiError)
     expect((err as Error).name).toBe('TypeError')

@@ -3,7 +3,7 @@
 
 import type { CSSProperties } from 'react'
 
-import { ApiError } from '@invoice-os/api-client'
+import { ApiError, reportApiFailure } from '@invoice-os/api-client'
 
 import { formatLabel } from '../components/SourceDocumentStates'
 import { isPromiseLike } from './authedFetch'
@@ -406,11 +406,20 @@ export async function fetchPageImage(
   // A SessionEndedError from the getter rejects here, before any request.
   const pending = getToken()
   const token = isPromiseLike(pending) ? await pending : pending
-  const res = await fetch(`${base}/api/submission/v1/extractions/${encodeURIComponent(jobId)}/pages/${page}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
+  const reqUrl = `${base}/api/submission/v1/extractions/${encodeURIComponent(jobId)}/pages/${page}`
+  let res: Response
+  try {
+    res = await fetch(reqUrl, { headers: { Authorization: `Bearer ${token}` } })
+  } catch (e) {
+    reportApiFailure(e, { method: 'GET', url: reqUrl })
+    throw e
+  }
   // Before createObjectURL, never after: a refused page would pin a blob with no release().
-  if (!res.ok) throw new ApiError('http', res.statusText, res.status)
+  if (!res.ok) {
+    const error = new ApiError('http', res.statusText, res.status)
+    reportApiFailure(error, { method: 'GET', url: reqUrl })
+    throw error
+  }
 
   const url = URL.createObjectURL(new Blob([await res.arrayBuffer()], { type: 'image/png' }))
   let released = false

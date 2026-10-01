@@ -4,6 +4,8 @@
 // body, and normalizes every failure mode (network / non-2xx / malformed body)
 // into a typed ApiError so callers handle gateway errors uniformly.
 
+import { reportApiFailure } from './apiFailure'
+
 export type ApiErrorKind = 'network' | 'http' | 'malformed'
 
 export class ApiError extends Error {
@@ -50,16 +52,22 @@ export async function apiFetch<T>(url: string, opts?: ApiFetchOptions): Promise<
     body = JSON.stringify(opts.body)
   }
 
+  const method = opts?.method ?? 'GET'
+  const fail = (error: ApiError): never => {
+    reportApiFailure(error, { method, url, signal: opts?.signal })
+    throw error
+  }
+
   let res: Response
   try {
     res = await fetch(url, {
-      method: opts?.method ?? 'GET',
+      method,
       headers,
       body,
       signal: opts?.signal,
     })
   } catch (e) {
-    throw new ApiError('network', e instanceof Error ? e.message : String(e), null)
+    return fail(new ApiError('network', e instanceof Error ? e.message : String(e), null))
   }
 
   if (!res.ok) {
@@ -73,7 +81,7 @@ export async function apiFetch<T>(url: string, opts?: ApiFetchOptions): Promise<
     } catch {
       // best-effort — no JSON body to read; fall back to statusText.
     }
-    throw new ApiError('http', msg, res.status, responseBody)
+    return fail(new ApiError('http', msg, res.status, responseBody))
   }
 
   // Stays below the !res.ok branch, and inside the try: T5 fails if it is hoisted, T10 if
@@ -81,6 +89,6 @@ export async function apiFetch<T>(url: string, opts?: ApiFetchOptions): Promise<
   try {
     return (opts?.responseType === 'text' ? await res.text() : await res.json()) as T
   } catch {
-    throw new ApiError('malformed', 'malformed response body', res.status)
+    return fail(new ApiError('malformed', 'malformed response body', res.status))
   }
 }

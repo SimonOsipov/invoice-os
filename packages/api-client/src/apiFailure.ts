@@ -1,6 +1,24 @@
-// Red stubs: the executor implements both (SENTRY-06-04, D-8, D-9, D-29).
-export function countsAsIssue(_err: unknown, _signal?: AbortSignal): boolean {
-  return false
+import { captureApiFailure } from '@invoice-os/monitoring/report'
+import { ApiError } from './client'
+
+const isNamed = (v: unknown, name: string): boolean => v instanceof DOMException && v.name === name
+
+// Q12: a caller cancel is not an issue; a timeout is a network failure.
+export function countsAsIssue(err: unknown, signal?: AbortSignal): boolean {
+  if (isNamed(err, 'AbortError')) return false
+  if (signal?.aborted && !isNamed(signal.reason, 'TimeoutError')) return false
+  if (err instanceof ApiError) {
+    return err.kind === 'http' ? err.status !== null && err.status >= 500 && err.status <= 599 : true
+  }
+  return isNamed(err, 'TimeoutError') || err instanceof TypeError
 }
 
-export function reportApiFailure(_err: unknown, _req: { method: string; url: string; signal?: AbortSignal }): void {}
+export function reportApiFailure(err: unknown, req: { method: string; url: string; signal?: AbortSignal }): void {
+  try {
+    if (!countsAsIssue(err, req.signal)) return
+    const api = err instanceof ApiError ? err : null
+    captureApiFailure({ kind: api?.kind ?? 'network', status: api?.status ?? null, method: req.method, url: req.url, error: err })
+  } catch {
+    // reporting must never change what the transport throws (D-29)
+  }
+}

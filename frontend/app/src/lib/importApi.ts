@@ -63,7 +63,7 @@
 //
 // `ApiError` is imported as a VALUE (xhrJson constructs it); `Session` stays a type-only
 // import under this app's `verbatimModuleSyntax`.
-import { ApiError } from '@invoice-os/api-client'
+import { ApiError, reportApiFailure } from '@invoice-os/api-client'
 import type { Session } from '../auth'
 import { isPromiseLike, isSuspended, isUnauthorized } from './authedFetch'
 import type { InvoiceRecord } from './invoices'
@@ -244,9 +244,11 @@ function xhrJson(
     const xhr = new xhrCtor()
     let settled = false
 
-    const fail = (error: ApiError): void => {
+    // `report` is set only by the xhr handlers; the token-getter path never reports.
+    const fail = (error: ApiError, report = false): void => {
       if (settled) return
       settled = true
+      if (report) reportApiFailure(error, { method, url })
       onPhase?.({ kind: 'error', error })
       reject(error)
     }
@@ -276,7 +278,7 @@ function xhrJson(
 
       if (status >= 200 && status < 300) {
         if (!parsed) {
-          fail(new ApiError('malformed', 'malformed response body', status))
+          fail(new ApiError('malformed', 'malformed response body', status), true)
           return
         }
         settled = true
@@ -297,15 +299,15 @@ function xhrJson(
       if (isUnauthorized(error)) auth.onUnauthorized()
       else if (isSuspended(error)) auth.onSuspended?.()
 
-      fail(error)
+      fail(error, true)
     }
 
-    xhr.onerror = () => fail(new ApiError('network', 'network error', null))
+    xhr.onerror = () => fail(new ApiError('network', 'network error', null), true)
     // NOTE (task-177): `xhr.timeout` is deliberately unset (0 = infinite) — this handler
     // is unreachable in production and is pinned only by IMPAPI-17b's FakeXhr. Do NOT
     // "fix" it by picking a value: none is both safe and useful (the 60s budget in
     // e2e/api/import.spec.ts binds 500 invoices, not a maximal upload). See task-179.
-    xhr.ontimeout = () => fail(new ApiError('network', 'request timed out', null))
+    xhr.ontimeout = () => fail(new ApiError('network', 'request timed out', null), true)
 
     xhr.open(method, url)
     const send = (token: string | null): void => {

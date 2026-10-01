@@ -26,6 +26,6 @@ Every batch loads the rule set again, so the next batch honours the change. Seal
 
 ## Audit
 
-The statement writes no `audit_log` row. `audit_log` is per tenant, and a global action belongs to no tenant. Record the change in your own ops log.
+The statement writes no `audit_log` row. `audit_log` is per tenant, and a global action belongs to no tenant.
 
 Pinned by `TestKillSwitch_E2E`.

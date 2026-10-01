@@ -138,15 +138,59 @@ func TestKillSwitch_E2E(t *testing.T) {
 	}
 }
 
+// restoreRulesOnCleanup snapshots every rules row and registers a superuser
+// restore of any row whose enabled value differs at cleanup. Call it before the
+// first write.
+func restoreRulesOnCleanup(t *testing.T, super *pgxpool.Pool) {
+	t.Helper()
+	snap := rulesEnabledByID(t, super)
+	if len(snap) == 0 {
+		t.Fatal("no rules rows to snapshot")
+	}
+	t.Cleanup(func() {
+		for id, want := range snap {
+			if _, err := super.Exec(context.Background(),
+				`UPDATE rules SET enabled = $1 WHERE id = $2 AND enabled IS DISTINCT FROM $1`, want, id,
+			); err != nil {
+				t.Errorf("cleanup: restore rules.id=%s enabled=%t: %v", id, want, err)
+			}
+		}
+	})
+}
+
+// rulesEnabledByID reads rules.id -> enabled for every version.
+func rulesEnabledByID(t *testing.T, pool *pgxpool.Pool) map[string]bool {
+	t.Helper()
+	rows, err := pool.Query(context.Background(), `SELECT id::text, enabled FROM rules`)
+	if err != nil {
+		t.Fatalf("read rules.enabled: %v", err)
+	}
+	defer rows.Close()
+	got := map[string]bool{}
+	for rows.Next() {
+		var id string
+		var enabled bool
+		if err := rows.Scan(&id, &enabled); err != nil {
+			t.Fatalf("scan rules row: %v", err)
+		}
+		got[id] = enabled
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate rules rows: %v", err)
+	}
+	return got
+}
+
 // TestKillSwitch_TouchesOnlyTheActiveVersion: sealed versions keep their rows'
 // prior enabled value.
 func TestKillSwitch_TouchesOnlyTheActiveVersion(t *testing.T) {
 	super, _ := dbTestPools(t)
-	ctx := context.Background()
 	const key = "vat-standard-rate"
 
+	restoreRulesOnCleanup(t, super)
+
 	sealedRows := func() map[string]bool {
-		rows, err := super.Query(ctx,
+		rows, err := super.Query(context.Background(),
 			`SELECT r.id::text, r.enabled FROM rules r JOIN rule_set_versions v ON v.id = r.rule_set_version_id
 			 WHERE NOT v.is_active AND r.key = $1`, key)
 		if err != nil {
@@ -172,8 +216,6 @@ func TestKillSwitch_TouchesOnlyTheActiveVersion(t *testing.T) {
 	if len(before) == 0 {
 		t.Fatalf("no non-active version carries %s: the test cannot discriminate", key)
 	}
-	original := ruleEnabledActive(t, super, key)
-	t.Cleanup(func() { runKillSwitch(t, super, key, original) })
 
 	if n := runKillSwitch(t, super, key, false); n != 1 {
 		t.Fatalf("kill switch (%s, false) rows = %d, want 1", key, n)
@@ -189,12 +231,32 @@ func TestKillSwitch_TouchesOnlyTheActiveVersion(t *testing.T) {
 	}
 }
 
-// TestKillSwitch_UnknownKeyUpdatesNothing: a key not on the active version
-// matches no row.
+// TestKillSwitch_UnknownKeyUpdatesNothing: a key absent from the active version
+// matches no row, including one that a non-active version carries.
 func TestKillSwitch_UnknownKeyUpdatesNothing(t *testing.T) {
 	super, _ := dbTestPools(t)
-	if n := runKillSwitch(t, super, "no-such-rule", false); n != 0 {
-		t.Errorf("kill switch (no-such-rule, false) rows = %d, want 0", n)
+	restoreRulesOnCleanup(t, super)
+
+	const nonActiveOnly = "ks-non-active-only"
+	versionID, _ := seedVersion(t, super, false)
+	seedRule(t, super, versionID, nonActiveOnly)
+
+	for _, key := range []string{"no-such-rule", nonActiveOnly} {
+		t.Run(key, func(t *testing.T) {
+			before := rulesEnabledByID(t, super)
+			if n := runKillSwitch(t, super, key, false); n != 0 {
+				t.Errorf("kill switch (%s, false) rows = %d, want 0", key, n)
+			}
+			after := rulesEnabledByID(t, super)
+			if len(after) != len(before) {
+				t.Fatalf("rules row count %d -> %d", len(before), len(after))
+			}
+			for id, want := range before {
+				if after[id] != want {
+					t.Errorf("rules.id=%s enabled = %t, want %t unchanged", id, after[id], want)
+				}
+			}
+		})
 	}
 }
 

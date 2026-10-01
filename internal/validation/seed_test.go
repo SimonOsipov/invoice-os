@@ -20,8 +20,7 @@
 // version directly (v2 since M4-04-01; see activeSeedVersion), so it never
 // contends for the partial-unique "one active version" slot other tests'
 // seedVersion(...,true) fixtures occupy transiently. Only TestSeed_KillSwitch mutates shared state (one rule's
-// `enabled` column, via the real app-role Store.ToggleRule path) and
-// restores it in t.Cleanup; every other test in this file is read-only.
+// `enabled` column) and restores it in t.Cleanup; every other test in this file is read-only.
 //
 // Coverage (story M3-05 Test Specs; see the story's System Design table +
 // .ralph/m3-05-exec-readiness.md for the exact signatures/harness):
@@ -48,7 +47,7 @@
 //     story's Decisions section). Every subtest here also doubles as the
 //     "CEL compiles + returns bool" proof (no engine error on any case).
 //  9. TestSeed_KillSwitch            -- Core AC 5: disabling
-//     vat-standard-rate via the app-grant Store.ToggleRule path drops its
+//     vat-standard-rate via runKillSwitch drops its
 //     violation from the next evaluate, leaving only supplier-tin-format;
 //     restored in cleanup.
 //  10. TestSeed_ReversibilityRollback (optional, per the story's Test Specs

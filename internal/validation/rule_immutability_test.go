@@ -728,9 +728,8 @@ func TestRIL11_SealFalseToTrueAndNoOpAllowed(t *testing.T) {
 
 // TestRIL12_KillSwitchProductionPathUnbroken (RIL-12): the kill-switch
 // statement (killSwitchStatement) still succeeds against the sealed active
-// version, flipping a known rule's enabled value and back. Toggles to
-// `!original` then back, so a rule left disabled by an earlier run does not
-// fail the test. Restores the original value in Cleanup.
+// version, flipping a known rule's enabled value and back. Restores the original value in
+// Cleanup.
 func TestRIL12_KillSwitchProductionPathUnbroken(t *testing.T) {
 	super, _ := dbTestPools(t)
 	ctx := context.Background()

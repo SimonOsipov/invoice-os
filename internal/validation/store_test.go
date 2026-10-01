@@ -7,7 +7,7 @@
 //  1. TestStore_LoadActiveRuleSet        — active version + rules materialize into a RuleSet.
 //  2. TestStore_LoadNoActiveErrors       — no active version -> ErrNoActiveRuleSet.
 //  3. TestStore_ToggleFlipsAndAudits     — toggle flips enabled + writes exactly one audit row, same tx.
-//  4. TestStore_ToggleLiveReload         — a fresh LoadActiveRuleSet sees the flip, no redeploy.
+//  4. TestStore_KillSwitchLiveReload     — a fresh LoadActiveRuleSet sees the flip, no redeploy.
 //  5. TestStore_ToggleAppliesCrossTenant — rules are GLOBAL: a toggle under tenant A is visible under tenant B.
 //  6. TestStore_ToggleRedundant          — already-at-target toggle -> ErrRedundantTransition, no UPDATE, no audit row.
 //  7. TestStore_ToggleUnknownKey         — unknown key under the active version -> ErrNotFound.

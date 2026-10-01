@@ -88,6 +88,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   cleanup()
+  vi.useRealTimers()
   undo.splice(0).forEach((f) => f())
   await reset()
   vi.restoreAllMocks()
@@ -136,11 +137,16 @@ async function pageloadFlow(sink: string[]): Promise<void> {
   await reset()
 }
 
-async function navigationFlow(sink: string[]): Promise<void> {
+// The SDK ages the page-load span from performance.timeOrigin (worker start), so a runner's speed decides whether
+// the boot strip is a redirect (< 1.5s). Pinning Date makes the age a parameter.
+async function navigationFlow(sink: string[], ageSeconds?: number): Promise<void> {
+  if (ageSeconds !== undefined) {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(performance.timeOrigin + ageSeconds * 1000)
+  }
   window.history.replaceState(null, '', `/?handoff=${CODE}&persona=firm`)
   boot(sink, 'app', { routeName })
   window.history.replaceState(null, '', '/')
-  // A navigation within 1.5s of load is a redirect child of the page-load span, so end that first.
   getRootSpan(Sentry.getActiveSpan()!).end()
   window.history.pushState(null, '', `/invoices/${UUID}?q=${TIN}`)
   getRootSpan(Sentry.getActiveSpan()!).end()
@@ -624,20 +630,26 @@ describe('what the SDK sends', () => {
   })
 
   it('navigation_isNamedByRouteAndCarriesNoQuery', async () => {
-    const sink: string[] = []
-    await navigationFlow(sink)
-    const nav = items(sink, 'transaction').filter((i) => i.body.contexts.trace.op === 'navigation')
-    expect(nav.length, 'the navigation transaction').toBe(1)
-    expect(nav[0].body.transaction).toBe('/invoices/:id')
-    const raw = sink.join('\n')
-    for (const needle of [CODE, TIN, 'persona=', 'handoff=']) expect(raw).not.toContain(needle)
-    const crumbs = items(sink)
-      .flatMap((i) => (i.body.breadcrumbs ?? []) as any[])
-      .filter((c) => c.category === 'navigation')
-    expect(crumbs.length, 'navigation breadcrumbs').toBeGreaterThan(0)
-    for (const c of crumbs) {
-      expect(c.data.from).not.toContain('?')
-      expect(c.data.to).not.toContain('?')
+    // Fast runner: the boot strip is a redirect child. Slow runner: it is a navigation named for its path.
+    for (const [age, bootStrip] of [[0.1, 0], [5, 1]]) {
+      const sink: string[] = []
+      await navigationFlow(sink, age)
+      vi.useRealTimers()
+      const nav = items(sink, 'transaction').filter((i) => i.body.contexts.trace.op === 'navigation')
+      const names = nav.map((i) => i.body.transaction)
+      expect(names.filter((n) => n === '/invoices/:id'), `the navigation transaction, age ${age}s`).toHaveLength(1)
+      expect(names.filter((n) => n === '/').length, `boot-strip navigations, age ${age}s`).toBe(bootStrip)
+      expect(names.length, `no navigation named by anything else, age ${age}s`).toBe(1 + bootStrip)
+      const raw = sink.join('\n')
+      for (const needle of [CODE, TIN, 'persona=', 'handoff=']) expect(raw, `age ${age}s`).not.toContain(needle)
+      const crumbs = items(sink)
+        .flatMap((i) => (i.body.breadcrumbs ?? []) as any[])
+        .filter((c) => c.category === 'navigation')
+      expect(crumbs.length, 'navigation breadcrumbs').toBeGreaterThan(0)
+      for (const c of crumbs) {
+        expect(c.data.from).not.toContain('?')
+        expect(c.data.to).not.toContain('?')
+      }
     }
   })
 

@@ -13,8 +13,8 @@ M2-14.4).
 1. **Fleet /healthz gate** — the gateway's public `GET /healthz/fleet` roll-up reports the
    gateway and every backend (the 7 routed context services, `reconciliation`, and the `docling` and `auth` sidecars) green; the run
    fails naming any that are down.
-   The same roll-up must show every Go service reporting `sentry` `off` on a PR, and `on` or
-   `off` on the persistent environment; `docling` and `auth` are exempt by name.
+   The same roll-up must show every Go service and `docling` reporting `sentry` `off` on a PR,
+   and `on` or `off` on the persistent environment; `auth` is exempt by name.
    The context services are private-network-only, so this route is the only way CI sees
    their health through the one public backend surface.
 2. **Live browser login** — a Playwright test drives the persona mock-login on the deployed

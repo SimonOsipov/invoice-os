@@ -210,8 +210,8 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disa
   Never seal them: a sealed variable does not fork, and `audit-sealed-variables` fails
   every PR run. A new service joins `set-sentry-off`'s lists in the same change
   (`TestSentryOffListsMatchTheDeployedFleet`). A new service probed through the
-  `/healthz/fleet` roll-up without the platform `/healthz` must be exempted by name in
-  `fleet-gate`'s "Gate on the Go fleet's Sentry state" step, as `docling` and `auth` are.
+  `/healthz/fleet` roll-up without the platform `/healthz` must report `sentry` or be
+  exempted by name in `fleet-gate`'s "Gate on the fleet's Sentry state" step. Only `auth` is exempt.
   A new outbound client to another first-party service uses `platform.TraceTransport`;
   a third-party client never does.
 
@@ -352,7 +352,7 @@ its column shows where it departs.
 | Source | `cmd/<svc>/` (Go) | `sidecar/<svc>/` (Python) | `sidecar/auth/Dockerfile` only: `FROM` the digest-pinned image plus `ENV` |
 | Config file | `cmd/<svc>/railway.json` | `sidecar/<svc>/railway.json` | `sidecar/auth/railway.json` (values also set on the instance) |
 | Dockerfile | shared root `Dockerfile` + `SERVICE` arg | per-service `sidecar/<svc>/Dockerfile` | per-service, no `ARG SERVICE` |
-| Health | `/healthz` | `/healthz` (same `build` field; no `sentry` field until SENTRY-05) | instance health check `/health` (GoTrue's; Railway rejects the JWKS path); fleet probe at `/.well-known/jwks.json`; reports no `build`, so fleet-gate exempts `auth` from the `build` check by name |
+| Health | `/healthz` | `/healthz` (same `build` and `sentry` fields) | instance health check `/health` (GoTrue's; Railway rejects the JWKS path); fleet probe at `/.well-known/jwks.json`; reports no `build`, so fleet-gate exempts `auth` from the `build` check by name |
 | Ingress | private-networking only (gateway is the exception) | private-networking only | private-networking only |
 | Watch patterns | empty (§3) | empty (§3) | empty (§3) |
 

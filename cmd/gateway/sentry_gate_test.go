@@ -15,22 +15,23 @@ import (
 // sentryReadRE matches a jq read of the sentry field; `.sentry.io` is a host, not a read.
 var sentryReadRE = regexp.MustCompile(`(?m)\.sentry([^.\w-]|$)`)
 
+// exemptClauseRE is the success line's parenthetical naming what the step skips.
+var exemptClauseRE = regexp.MustCompile(`\([^)]*exempt[^)]*\)`)
+
 // pushDirectionRE is how the success line names the push direction.
 var pushDirectionRE = regexp.MustCompile(`\bon( or |\|)off\b`)
 
-// sentryGoNames are the roll-up entries the step checks: every name except docling and auth.
-var sentryGoNames = []string{"gateway", "tenancy", "portfolio", "invoice", "validation", "submission", "dashboard", "notifications", "reconciliation"}
+// sentryCheckedNames are the roll-up entries the step checks: every name except auth.
+var sentryCheckedNames = []string{"gateway", "tenancy", "portfolio", "invoice", "validation", "submission", "dashboard", "notifications", "reconciliation", "docling"}
 
-// sentryFleetEntries is a deployed-shape roll-up: each Go entry on deadbeef reporting sentry,
-// docling on deadbeef without the field, auth as its custom-path [name status] entry.
+// sentryFleetEntries is a deployed-shape roll-up: each checked entry on deadbeef reporting sentry,
+// auth as its custom-path [name status] entry.
 func sentryFleetEntries(sentry string) []map[string]any {
 	var s []map[string]any
-	for _, n := range sentryGoNames {
+	for _, n := range sentryCheckedNames {
 		s = append(s, map[string]any{"name": n, "status": "up", "build": "deadbeef", "sentry": sentry})
 	}
-	return append(s,
-		map[string]any{"name": "docling", "status": "up", "build": "deadbeef"},
-		map[string]any{"name": "auth", "status": "up"})
+	return append(s, map[string]any{"name": "auth", "status": "up"})
 }
 
 // sentryFleetAny is sentryFleetEntries as []any, so a row can append a non-object entry.
@@ -121,7 +122,7 @@ func TestSentryGateIsDirectional(t *testing.T) {
 			named: []string{"notifications=ON"}},
 		{name: "push_all_on", isPR: false, body: withSentry("on", nil), wantExit: 0},
 		{name: "push_mixed", isPR: false, body: withSentry("on", func(t *testing.T, s []map[string]any) []map[string]any {
-			for i, n := range sentryGoNames {
+			for i, n := range sentryCheckedNames {
 				if i%2 == 1 {
 					sentryEntry(t, s, n)["sentry"] = "off"
 				}
@@ -140,11 +141,30 @@ func TestSentryGateIsDirectional(t *testing.T) {
 		{name: "authz_is_not_auth", isPR: true, body: withSentry("off", func(t *testing.T, s []map[string]any) []map[string]any {
 			return append(s, map[string]any{"name": "authz", "status": "up", "build": "deadbeef"})
 		}), wantExit: 1, named: []string{"authz=none@deadbeef"}, notNamed: []string{"auth=none"}},
-		{name: "doclingx_is_not_docling", isPR: true, body: withSentry("off", func(t *testing.T, s []map[string]any) []map[string]any {
-			return append(s, map[string]any{"name": "doclingx", "status": "up", "build": "deadbeef"})
-		}), wantExit: 1, named: []string{"doclingx=none@deadbeef"}, notNamed: []string{"docling=none"}},
+		{name: "pr_docling_on", isPR: true, body: withSentry("off", setField("docling", "sentry", "on")), wantExit: 1,
+			named: []string{"docling=on@deadbeef", "set-sentry-off"}, notNamed: []string{"gateway="}},
+		{name: "pr_docling_missing", isPR: true, body: withSentry("off", setField("docling", "sentry", nil)), wantExit: 1,
+			named: []string{"docling=none@deadbeef"}, notNamed: []string{"gateway="}},
+		{name: "push_docling_missing", isPR: false, body: withSentry("on", setField("docling", "sentry", nil)), wantExit: 1,
+			named: []string{"docling=none@deadbeef"}, notNamed: []string{"gateway="}},
 
 		// QA Mode B adversarial rows.
+		{name: "pr_docling_empty_sentry", isPR: true, body: withSentry("off", setField("docling", "sentry", "")), wantExit: 1,
+			named: []string{"docling=@deadbeef", "set-sentry-off"}, notNamed: []string{"gateway="}},
+		{name: "push_docling_empty_sentry", isPR: false, body: withSentry("on", setField("docling", "sentry", "")), wantExit: 1,
+			named: []string{"docling=@deadbeef"}, notNamed: []string{"gateway="}},
+		{name: "pr_docling_stale_build", isPR: true, body: withSentry("off", setField("docling", "build", "0ld")), wantExit: 1,
+			named: []string{"docling=off@0ld"}, notNamed: []string{"gateway="}},
+		{name: "push_docling_stale_build", isPR: false, body: withSentry("on", setField("docling", "build", "0ld")), wantExit: 1,
+			named: []string{"docling=on@0ld"}, notNamed: []string{"gateway="}},
+		{name: "push_docling_sentry_bool", isPR: false, body: withSentry("on", setField("docling", "sentry", true)), wantExit: 1,
+			named: []string{"docling=true@deadbeef"}, notNamed: []string{"gateway="}},
+		{name: "pr_Docling_is_not_docling", isPR: true, body: withSentry("off", func(t *testing.T, s []map[string]any) []map[string]any {
+			return append(s, map[string]any{"name": "Docling", "status": "up", "build": "deadbeef"})
+		}), wantExit: 1, named: []string{"Docling=none@deadbeef"}, notNamed: []string{"docling="}},
+		{name: "doclingx_is_not_docling", isPR: true, body: withSentry("off", func(t *testing.T, s []map[string]any) []map[string]any {
+			return append(s, map[string]any{"name": "doclingx", "status": "up", "build": "deadbeef"})
+		}), wantExit: 1, named: []string{"doclingx=none@deadbeef"}, notNamed: []string{"docling="}},
 		{name: "pr_off_newline", isPR: true, body: withSentry("off", setField("submission", "sentry", "off\n")), wantExit: 1,
 			named: []string{"submission=off"}},
 		{name: "push_on_newline", isPR: false, body: withSentry("on", setField("submission", "sentry", "on\n")), wantExit: 1,
@@ -171,9 +191,8 @@ func TestSentryGateIsDirectional(t *testing.T) {
 		{name: "pr_xauth_is_not_auth", isPR: true, body: withSentry("off", func(t *testing.T, s []map[string]any) []map[string]any {
 			return append(s, map[string]any{"name": "xauth", "status": "up", "build": "deadbeef"})
 		}), wantExit: 1, named: []string{"xauth=none@deadbeef"}},
-		// Exemption is by name alone: whatever docling and auth report is not this step's to judge.
+		// Exemption is by name alone: whatever auth reports is not this step's to judge.
 		{name: "pr_exempt_values_ignored", isPR: true, body: withSentry("off", func(t *testing.T, s []map[string]any) []map[string]any {
-			sentryEntry(t, s, "docling")["sentry"] = "on"
 			sentryEntry(t, s, "auth")["sentry"] = "on"
 			return s
 		}), wantExit: 0},
@@ -194,7 +213,7 @@ func TestSentryGateIsDirectional(t *testing.T) {
 		{name: "top_level_array", isPR: true, body: func(*testing.T) any { return sentryFleetAny("off") }, wantExit: 1,
 			named: []string{"no services list"}},
 		{name: "only_exempt_entries", isPR: true, body: func(*testing.T) any {
-			return map[string]any{"services": sentryFleetAny("off")[len(sentryGoNames):]}
+			return map[string]any{"services": sentryFleetAny("off")[len(sentryCheckedNames):]}
 		}, wantExit: 1, named: []string{"no gateway entry"}},
 	}
 
@@ -243,11 +262,17 @@ func checkSentryPass(t *testing.T, r sentryRow, code int, out string, urls, errs
 		t.Fatalf("exits %d with errors %q, want 0 and none (output %q)", code, errs, out)
 	}
 	lines := strings.Split(out, "\n")
+	want := sentryCheckedNames
+	// The "(... exempt)" clause may itself name a service; only the checked list counts.
 	i := slices.IndexFunc(lines, func(l string) bool {
-		return slices.IndexFunc(sentryGoNames, func(n string) bool { return !strings.Contains(l, n) }) < 0
+		l = exemptClauseRE.ReplaceAllString(l, "")
+		return slices.IndexFunc(want, func(n string) bool { return !strings.Contains(l, n) }) < 0
 	})
 	if i < 0 {
-		t.Fatalf("no output line names every checked entry %v (output %q)", sentryGoNames, out)
+		t.Fatalf("no output line names every checked entry %v outside its exempt clause (output %q)", want, out)
+	}
+	if !strings.Contains(lines[i], "(auth exempt)") {
+		t.Errorf("the success line %q does not name auth as exempt", lines[i])
 	}
 	if push := pushDirectionRE.MatchString(lines[i]); push == r.isPR {
 		t.Errorf("IS_PR=%v: the success line %q names the wrong direction (push is %q)", r.isPR, lines[i], pushDirectionRE)
@@ -339,8 +364,8 @@ func TestSentryGateRetriesTheRollUp(t *testing.T) {
 				t.Errorf("the curl shim saw %v, want %d /healthz/fleet fetches", urls, r.wantFetch)
 			}
 			if r.wantExit == 0 {
-				if len(errs) != 0 || !strings.Contains(out, "reconciliation") {
-					t.Errorf("a passing run printed errors %q or no success line naming reconciliation (output %q)", errs, out)
+				if len(errs) != 0 || !strings.Contains(out, "reconciliation") || !strings.Contains(out, "docling") {
+					t.Errorf("a passing run printed errors %q or no success line naming reconciliation and docling (output %q)", errs, out)
 				}
 				return
 			}
@@ -418,5 +443,25 @@ func TestSentryGateIsOneFleetGateStepWithIsPR(t *testing.T) {
 		if got, ok := env[k]; !ok || got != want {
 			t.Errorf("the .sentry step's env %s = %q (set %v), want %q", k, got, ok, want)
 		}
+	}
+}
+
+// The docs cite the step by name; a rename leaves them pointing at nothing.
+func TestSentryGateStepNameIsTheOneAddAServiceCites(t *testing.T) {
+	var name string
+	for _, s := range jobSteps(jobBlock(devEnvCode(t), "fleet-gate")) {
+		if sentryReadRE.MatchString(runText(s)) {
+			name, _ = stepKey(s, "name")
+		}
+	}
+	if name == "" {
+		t.Fatal("the fleet-gate step reading .sentry has no name; the scan is broken")
+	}
+	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "add-a-service.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"`+name+`"`) {
+		t.Errorf("docs/add-a-service.md does not cite the Sentry step by its name %q", name)
 	}
 }

@@ -132,3 +132,10 @@ def test_t03_11_no_surya_no_olmocr_no_cuda_torch_wheel():
 
     assert "surya" not in text.lower(), f"{REQUIREMENTS} names surya"
     assert "olmocr" not in text.lower(), f"{REQUIREMENTS} names olmocr"
+
+
+def test_sentry_sdk_is_pinned_at_2_71_0():
+    # A scan: the pin only exists in requirements.txt; dropping it fails the image build, not a unit.
+    lines = _requirement_lines()
+    assert len(lines) >= MIN_DIRECT_REQUIREMENTS
+    assert "sentry-sdk==2.71.0" in lines

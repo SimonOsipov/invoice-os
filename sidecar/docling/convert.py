@@ -8,6 +8,8 @@ import logging
 import threading
 from io import BytesIO
 
+import sentry_sdk
+
 import geometry
 
 logger = logging.getLogger(__name__)
@@ -112,6 +114,7 @@ def warm_up() -> None:
         get_converter()
     except Exception:
         logger.exception("docling warm-up failed; construction will retry on first /v1/read")
+        sentry_sdk.capture_exception()
 
 
 _warmup_thread: threading.Thread | None = None

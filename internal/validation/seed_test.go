@@ -582,23 +582,14 @@ func TestSeed_DuplicateLineItemsCEL(t *testing.T) {
 	})
 }
 
-// TestSeed_KillSwitch (Core AC 5 / Test Spec "Kill-switch"): disabling
-// vat-standard-rate via the real app-grant Store.ToggleRule path drops its
-// violation from the very next evaluate of the bad payload -- only
-// supplier-tin-format remains. The rule is restored to enabled=true in
-// cleanup (direct superuser UPDATE, independent of whether ToggleRule itself
-// succeeded) so this test never leaves the shared migrated v1 disabled for
-// any other test in this package.
+// TestSeed_KillSwitch: disabling vat-standard-rate through runKillSwitch drops
+// its violation from the very next evaluate of the bad payload -- only
+// supplier-tin-format remains. Restored in cleanup.
 func TestSeed_KillSwitch(t *testing.T) {
 	super, app := dbTestPools(t)
 
-	// Restore on the ACTIVE version -- matching ToggleRule's own predicate
-	// (`WHERE is_active`, store.go:137-139), which is what disabled the rule
-	// below. Hardcoding `v.version = 1` here would silently restore the WRONG
-	// row once the active version is not literally 1, leaving vat-standard-rate
-	// DISABLED on the live active rule-set for every subsequent test and on the
-	// shared dev DB (RS-V2-11). Mirroring ToggleRule's predicate is what stops
-	// the two from drifting apart again.
+	// Restore on the active version, the row the kill switch writes
+	// (TestRuleSetV2_KillSwitchCleanupTargetsActiveVersion).
 	t.Cleanup(func() {
 		if _, err := super.Exec(context.Background(),
 			`UPDATE rules r SET enabled = true
@@ -609,9 +600,8 @@ func TestSeed_KillSwitch(t *testing.T) {
 		}
 	})
 
-	store := NewStore(app)
-	if _, err := store.ToggleRule(newTestIdentity(), "vat-standard-rate", false); err != nil {
-		t.Fatalf("ToggleRule(vat-standard-rate, false): %v", err)
+	if n := runKillSwitch(t, super, "vat-standard-rate", false); n != 1 {
+		t.Fatalf("kill switch (vat-standard-rate, false) rows = %d, want 1", n)
 	}
 
 	rs := loadActive(t, app)
@@ -621,7 +611,7 @@ func TestSeed_KillSwitch(t *testing.T) {
 		t.Fatalf("Evaluate(bad payload) after kill-switch: %v", err)
 	}
 	if hasViolation(result, "vat-standard-rate") {
-		t.Error("vat-standard-rate still fired after being disabled via ToggleRule")
+		t.Error("vat-standard-rate still fired after the kill switch")
 	}
 	wantKeys := []string{"supplier-tin-format"}
 	if got := violationKeys(result); !reflect.DeepEqual(got, wantKeys) {

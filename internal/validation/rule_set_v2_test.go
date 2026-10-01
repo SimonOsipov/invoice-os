@@ -629,30 +629,11 @@ func TestRuleSetV2_ReversibilityRollbackPostConditionSurvivesV2(t *testing.T) {
 // RS-V2-11 -- the kill-switch cleanup hazard.
 // ---------------------------------------------------------------------
 
-// TestRuleSetV2_KillSwitchCleanupTargetsActiveVersion (RS-V2-11): proves the
-// live-data hazard TestSeed_KillSwitch's cleanup (seed_test.go:566-574) has
-// today -- its restore statement hardcodes `WHERE v.version = 1`, but
-// store.go's ToggleRule (the real production code the cleanup is undoing)
-// acts on `WHERE is_active` (store.go:137-139). Once the sanctioned active
-// version is not literally version 1 (post-v2-publish), the cleanup
-// silently restores the WRONG row, leaving the kill-switched rule disabled
-// on the live active rule-set for every subsequent test (QA Debate Log F2).
-//
-// CAVEAT (flagged, not silently resolved): TestSeed_KillSwitch's cleanup is
-// an inline anonymous func, not an extracted, independently-callable
-// helper, and it cannot be invoked directly here without also going through
-// seed_test.go's loadV1 (a DIFFERENT, orthogonal trap -- RS-V2-15) which
-// would fail this subtest permanently regardless of whether THIS bug is
-// fixed (loadActive's own version pin does not tolerate a simulated,
-// non-canonical active version either). So this test reproduces the
-// disable step via the REAL store.ToggleRule (production code) but mirrors
-// the cleanup's CURRENT SQL verbatim as a pinned copy, rather than invoking
-// seed_test.go's real closure. When Stage 3 changes seed_test.go:568-570's
-// predicate from `v.version = 1` to `v.is_active` (task-111's explicit
-// governing fix rule), THIS copy must be updated in lockstep -- it will not
-// self-update from that file's change alone.
+// TestRuleSetV2_KillSwitchCleanupTargetsActiveVersion (RS-V2-11): the restore
+// statement TestSeed_KillSwitch's cleanup runs (pinned here as a copy, keep in
+// lockstep) re-enables the rule on the ACTIVE version, not a hardcoded v1.
 func TestRuleSetV2_KillSwitchCleanupTargetsActiveVersion(t *testing.T) {
-	super, app := dbTestPools(t)
+	super, _ := dbTestPools(t)
 	ctx := context.Background()
 
 	// M4-18: cannot use simulateActiveVersion here -- it now seals+activates immediately
@@ -663,18 +644,11 @@ func TestRuleSetV2_KillSwitchCleanupTargetsActiveVersion(t *testing.T) {
 	seedFullRule(t, super, baselineID, ruleFixture{Key: "vat-standard-rate", Enabled: true})
 	sealAndActivate(t, super, baselineID)
 
-	store := NewStore(app)
-	if _, err := store.ToggleRule(newTestIdentity(), "vat-standard-rate", false); err != nil {
-		t.Fatalf("ToggleRule(vat-standard-rate, false) on the simulated active version: %v", err)
+	if n := runKillSwitch(t, super, "vat-standard-rate", false); n != 1 {
+		t.Fatalf("kill switch (vat-standard-rate, false) on the simulated active version: rows = %d, want 1", n)
 	}
 
-	// seed_test.go's TestSeed_KillSwitch cleanup statement, run here verbatim
-	// (see this test's doc comment for why it is pinned rather than invoked).
-	// UPDATED IN LOCKSTEP by M4-04-01 Stage 3 when the real cleanup's predicate
-	// changed from `v.version = 1` to `v.is_active` -- the fix this test was
-	// authored to demand. The doc comment above called for exactly this update;
-	// without it the copy rots and this test asserts against SQL that no longer
-	// exists anywhere.
+	// TestSeed_KillSwitch's cleanup statement, verbatim.
 	if _, err := super.Exec(ctx,
 		`UPDATE rules r SET enabled = true
 		   FROM rule_set_versions v

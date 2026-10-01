@@ -315,10 +315,9 @@ func TestStore_ToggleFlipsAndAudits(t *testing.T) {
 	}
 }
 
-// TestStore_ToggleLiveReload (Test Spec #4): after ToggleRule(R,false)
-// commits, a FRESH LoadActiveRuleSet call must see R.Enabled=false -- no
-// redeploy, no cache to bust, the toggle is read straight from the table.
-func TestStore_ToggleLiveReload(t *testing.T) {
+// TestStore_KillSwitchLiveReload: after the kill switch commits, a fresh
+// LoadActiveRuleSet sees R.Enabled=false -- no redeploy, no cache.
+func TestStore_KillSwitchLiveReload(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
@@ -330,13 +329,13 @@ func TestStore_ToggleLiveReload(t *testing.T) {
 	tenantID := uuid.NewString()
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: tenantID})
 
-	if _, err := store.ToggleRule(c, "R", false); err != nil {
-		t.Fatalf("ToggleRule(R,false): %v", err)
+	if n := runKillSwitch(t, super, "R", false); n != 1 {
+		t.Fatalf("kill switch (R, false) rows = %d, want 1", n)
 	}
 
 	rs, err := store.LoadActiveRuleSet(c)
 	if err != nil {
-		t.Fatalf("LoadActiveRuleSet after toggle: %v", err)
+		t.Fatalf("LoadActiveRuleSet after kill switch: %v", err)
 	}
 	var found bool
 	for _, r := range rs.Rules {
@@ -345,11 +344,11 @@ func TestStore_ToggleLiveReload(t *testing.T) {
 		}
 		found = true
 		if r.Enabled {
-			t.Error("LoadActiveRuleSet after ToggleRule(R,false): R.Enabled = true, want false (no redeploy)")
+			t.Error("LoadActiveRuleSet after kill switch (R,false): R.Enabled = true, want false (no redeploy)")
 		}
 	}
 	if !found {
-		t.Fatal("R not present in RuleSet.Rules after toggle")
+		t.Fatal("R not present in RuleSet.Rules after kill switch")
 	}
 }
 

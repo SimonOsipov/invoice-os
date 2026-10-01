@@ -74,6 +74,9 @@ describe('AddCompanyTask (AUTH-10-03)', () => {
     expect(screen.getByText(copy.emptyTitle)).toBeTruthy()
     expect(screen.getByText(copy.emptyMessage)).toBeTruthy()
     expect(trigger().textContent?.trim()).toBe(copy.button)
+    expect(screen.getByText('No company yet')).toBeTruthy()
+    expect(screen.getByText("Invoices are filed for a registered company. Add yours — you'll need its name and its TIN.")).toBeTruthy()
+    expect(trigger().textContent?.trim()).toBe('Add company')
     expect(screen.getByText('Acme Ltd · invoices are filed for a registered company.')).toBeTruthy()
     expect(screen.queryByText(/No client/)).toBeNull()
     expect(screen.queryByText(/COMPLIANCE OVERVIEW/)).toBeNull()
@@ -88,6 +91,9 @@ describe('AddCompanyTask (AUTH-10-03)', () => {
     expect(screen.getByText(copy.emptyTitle)).toBeTruthy()
     expect(screen.getByText(copy.emptyMessage)).toBeTruthy()
     expect(trigger().textContent?.trim()).toBe(copy.button)
+    expect(screen.getByText('No clients yet')).toBeTruthy()
+    expect(screen.getByText("Invoices are filed for a registered company. Add the first client you file for — you'll need its name and its TIN.")).toBeTruthy()
+    expect(trigger().textContent?.trim()).toBe('Add client')
     expect(screen.queryByText(/COMPLIANCE OVERVIEW/)).toBeNull()
     expect(screen.queryByText('No client yet')).toBeNull()
   })
@@ -152,6 +158,22 @@ describe('AddCompanyTask (AUTH-10-03)', () => {
     expect((trigger() as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(trigger())
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('a firm whose roster has entities but no clients yet shows Loading, never the task', () => {
+    render(<AddCompanyTask ctx={mkCtx({ mode: 'firm', entitiesState: 'ready', entities: [ENTITY], clientsCount: 0 }).ctx} />)
+    expect(screen.getByText('Loading your workspace…')).toBeTruthy()
+    expect(screen.queryByTestId('add-company-task')).toBeNull()
+    expect(screen.queryByRole('button', { name: ADD_COMPANY_COPY.firm.button })).toBeNull()
+  })
+
+  it('the task gives way to Loading when a roster refetch starts', () => {
+    const { ctx } = mkCtx({ mode: 'inhouse' })
+    const { rerender } = render(<AddCompanyTask ctx={ctx} />)
+    expect(screen.getByTestId('add-company-task')).toBeTruthy()
+    rerender(<AddCompanyTask ctx={{ ...ctx, entitiesState: 'loading' } as PlatformCtx} />)
+    expect(screen.queryByTestId('add-company-task')).toBeNull()
+    expect(screen.getByText('Loading your workspace…')).toBeTruthy()
   })
 
   it('with no tenant name the subtitle says Your workspace', () => {

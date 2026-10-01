@@ -925,8 +925,8 @@ jobs:
           echo "docling is serving $EXPECTED_BUILD."
 
       # No if: a push must still report on|off, so a production build that stops
-      # reporting fails here. docling and auth lack the platform /healthz.
-      - name: Gate on the Go fleet's Sentry state
+      # reporting fails here. auth lacks the sentry field.
+      - name: Gate on the fleet's Sentry state
         env:
           EXPECTED_BUILD: ${{ github.sha }}
           IS_PR: ${{ github.event_name == 'pull_request' }}
@@ -942,11 +942,11 @@ jobs:
             sleep 5
           done
           if [ "$parsed" != 1 ]; then
-            echo "::error::$GATEWAY_URL/healthz/fleet was unreachable or had no services list after 5 tries; the Go fleet's Sentry state is unknown."
+            echo "::error::$GATEWAY_URL/healthz/fleet was unreachable or had no services list after 5 tries; the fleet's Sentry state is unknown."
             exit 1
           fi
           if [ "$IS_PR" = "true" ]; then want='["off"]'; direction='off'; else want='["on","off"]'; direction='on or off'; fi
-          checked='[.services[] | select(.name != "docling" and .name != "auth")]'
+          checked='[.services[] | select(.name != "auth")]'
           names=$(jq -r "$checked | map(.name) | join(\", \")" /tmp/sentry-fleet.json) || {
             echo "::error::the fleet roll-up has a services entry that is not an object; the Sentry state is unverified."
             exit 1
@@ -964,7 +964,7 @@ jobs:
             echo "::error::'none' means the service predates the sentry field, or is down (none@none): check it is up first. On a PR, 'on' means a DSN reached the fork: check set-sentry-off in prepare-env. Any other build means its new container never replaced the old one."
             exit 1
           fi
-          echo "Sentry $direction on $EXPECTED_BUILD for: $names (docling and auth exempt)."
+          echo "Sentry $direction on $EXPECTED_BUILD for: $names (auth exempt)."
 
       # auth has no build stamp; its deployment status is the verdict for `railway up`.
       - name: Wait for the auth deployment

@@ -17,8 +17,9 @@ export function redactSecrets(s: string): string {
   return s
     .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
     .replace(/eyJ[\w-]+\.[\w-]+\.[\w-]*/g, '[redacted]')
-    // Lazy to the closing `"]`: the SDK does not escape quotes inside the value.
-    .replace(/\[([\w-]+)="[\s\S]*?"\]/g, '[$1="[redacted]"]')
+    // The SDK does not escape quotes: a value ends at the first `"]` before end, ` > `, `[x="` or the last `"]`.
+    // ceiling: a value holding `"] > ` or `"][x="` leaks its tail, revisit when an asc-frontend issue shows one
+    .replace(/\[([\w-]+)="[\s\S]*?"\](?=$| > |\[[\w-]+="|(?![\s\S]*"\]))/g, '[$1="[redacted]"]')
 }
 
 // Redact before stripping: a `?` or `#` inside an attribute value would otherwise cut it short.

@@ -1384,8 +1384,8 @@ test('[import-upload-unify] LIVE: one real import surface, manual entry survives
 // (E2E-01 above for import; CreateForm's manual round trip, same as
 // [import-upload-unify] proves is reachable in LIVE) rather than asserting a refusal.
 //
-// What SURVIVES from the old test, restated rather than deleted: the amber "No linked
-// business entity" panel and its 'Filing needs a linked entity' refusal are still real,
+// What SURVIVES from the old test, restated rather than deleted: the amber "Add your company
+// before you file" panel and its 'Filing needs a linked entity' refusal are still real,
 // still INFORMATIONAL-never-blocking code (CreateUpload.tsx's computeNoEntity,
 // lib/importFlow.ts) -- they just no longer fire for THIS persona, because this persona
 // no longer has anything to refuse. AC-6 keeps that contract alive for its other
@@ -1418,7 +1418,7 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
   // happened a moment earlier — the real proof is everything below: Read columns arming,
   // the Map step's commit control, and the import itself all succeeding on this
   // workspace's real resolved entity.
-  await expect(page.getByText('No linked business entity', { exact: true }), 'no refusal — in-house has a resolved entity now').toHaveCount(0)
+  await expect(page.getByText('Add your company before you file', { exact: true }), 'no refusal — in-house has a resolved entity now').toHaveCount(0)
 
   const invoiceNumber = `INH-IMP-${Date.now()}`
   // A distinct header per attempt, so a retry or an e2e-job re-run never restores this

@@ -157,8 +157,8 @@ export function buildClients(entities: Entity[]): Client[] {
 // onboarding: true routes the dashboard to AddCompanyTask; entityId stays null (no real entity).
 export function emptyClient(): Client {
   const cfg: ClientCfg = {
-    name: 'No client yet',
-    short: 'No client',
+    name: 'No company yet',
+    short: 'your company',
     initials: '—',
     tin: '—',
     taxpayer: 'Small',

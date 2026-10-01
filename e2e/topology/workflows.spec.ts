@@ -383,7 +383,7 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   const switcherName = switcher.locator('span > span:not(.mono)')
   const switcherTin = switcher.locator('span.mono')
   // Re-taken AFTER the reload, which reset the active client to clients[0]. Until the portfolio
-  // fetch lands, `active` is emptyClient() — short 'No client', tin '—'. Seeded TINs all begin
+  // fetch lands, `active` is emptyClient() — short 'your company', tin '—'. Seeded TINs all begin
   // with a digit, the placeholder does not, so this retrying assertion is both guard and wait.
   await expect(switcherTin, 'the switcher must be on a REAL client before the baseline is taken').toHaveText(/^TIN \d/)
   const beforeName = (await switcherName.innerText()).trim()

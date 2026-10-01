@@ -385,9 +385,11 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
           </div>
         ) : (
           <div style={{ padding: '40px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
-            <span style={{ width: 40, height: 40, borderRadius: 99, background: 'var(--status-green-bg)', color: 'var(--status-green-text)', display: 'grid', placeItems: 'center', marginBottom: 12 }}>{tickGlyph13}</span>
-            <div className="card-title" style={{ marginBottom: 3 }}>No open failures</div>
-            <div style={{ fontSize: 13, color: 'var(--fg-3)' }}>Every invoice passed validation.</div>
+            {total > 0 && (
+              <span style={{ width: 40, height: 40, borderRadius: 99, background: 'var(--status-green-bg)', color: 'var(--status-green-text)', display: 'grid', placeItems: 'center', marginBottom: 12 }}>{tickGlyph13}</span>
+            )}
+            <div className="card-title" style={{ marginBottom: 3 }}>{total > 0 ? 'No open failures' : 'No invoices validated yet'}</div>
+            <div style={{ fontSize: 13, color: 'var(--fg-3)' }}>{total > 0 ? 'Every invoice passed validation.' : 'Failures appear here once invoices are validated.'}</div>
           </div>
         )}
       </div>

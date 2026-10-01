@@ -1,7 +1,9 @@
+import './instrument'
+
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 
-import { CrashBoundary, initMonitoring } from '@invoice-os/monitoring'
+import { CrashBoundary } from '@invoice-os/monitoring'
 
 // Design-system tokens, sourced from the shared @invoice-os/design-tokens workspace
 // package (single source of truth; DS project 999b7034-9f23-43d4-9229-51af7dde9f62).
@@ -12,8 +14,6 @@ import './styles/support.css'
 
 import App from './App'
 import { BrandMark } from './icons'
-
-initMonitoring('support-console')
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

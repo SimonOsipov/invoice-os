@@ -19,7 +19,11 @@ describe('dockerfiles', () => {
     // Floor and control: landing has a main.tsx and a Dockerfile but never calls initMonitoring.
     expect(spas, 'the walk found no SPA').toContain('landing')
 
-    const monitored = spas.filter((n) => stripJsComments(readFileSync(join(FRONTEND, n, 'src/main.tsx'), 'utf8')).includes('initMonitoring('))
+    const initsIn = (n: string) => {
+      const f = join(FRONTEND, n, 'src/instrument.ts')
+      return existsSync(f) && stripJsComments(readFileSync(f, 'utf8')).includes('initMonitoring(')
+    }
+    const monitored = spas.filter(initsIn)
     expect(monitored).toEqual(['app', 'ops-console', 'support-console'])
 
     // Control: the line finder sees a pre-existing app ARG, so a miss below is a real miss.

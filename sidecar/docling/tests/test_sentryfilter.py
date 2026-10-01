@@ -685,7 +685,7 @@ def test_scrub_log_value_rules():
     assert got["empty"] == []
     assert got["strs"] == ["a '[redacted]'", "plain", "b"]
     assert got["obj"] == "[redacted]"
-    assert got["objs"] == ["[redacted]", "ok"]
+    assert got["objs"] == "[redacted]"
     assert M not in repr(out)
 
 

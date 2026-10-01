@@ -220,6 +220,15 @@ def scrub_transaction(event, hint=None):
     return event
 
 
+def _scrub_log_value(v):
+    """D-21: only str, int, float, bool or a list of str survives; all else is redacted."""
+    if isinstance(v, list) and all(isinstance(e, str) for e in v):
+        return _scrub_value(v)
+    if isinstance(v, (str, int, float)):
+        return _scrub_value(v)
+    return _REDACTED
+
+
 def scrub_log(log, hint=None):
     """Return the scrubbed record, or None for a record from a non-sidecar logger."""
     attrs = log.get("attributes") or {}
@@ -235,7 +244,7 @@ def scrub_log(log, hint=None):
         sk = _scrub_key(k)
         if _is_query_key(k) or _is_query_key(sk):
             continue
-        out[sk] = _scrub_value(v)
+        out[sk] = _scrub_log_value(v)
     log["attributes"] = out
     return log
 

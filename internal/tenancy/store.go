@@ -27,11 +27,11 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// Me returns the caller's tenant (id, name, kind) and their domain role, both
-// resolved under RLS: SELECT id, name, kind FROM tenants (bare — the
-// app.current_tenant GUC is the filter, not a WHERE clause) then SELECT role FROM
-// memberships WHERE user_id = $1 (identity.Subject — RLS scopes the row set to
-// the current tenant). No visible tenant row maps to
+// Me returns the caller's tenant (id, name, kind) and their own membership
+// (role, display name, email), both resolved under RLS: SELECT id, name, kind FROM
+// tenants (bare — the app.current_tenant GUC is the filter, not a WHERE clause)
+// then SELECT role, display_name, email FROM memberships WHERE user_id = $1
+// (identity.Subject — RLS scopes the row set to the current tenant). It reads no status. No visible tenant row maps to
 // ErrTenantNotFound; no membership row maps to ErrNoMembership (never defaulted).
 //
 // Both queries run inside the SAME transaction, so a missing tenant row surfaces
@@ -57,8 +57,8 @@ func (s *Store) Me(ctx context.Context) (Tenant, MeUser, error) {
 		}
 
 		if err := tx.QueryRow(ctx,
-			`SELECT role FROM memberships WHERE user_id = $1`, id.Subject,
-		).Scan(&me.Role); err != nil {
+			`SELECT role, display_name, email FROM memberships WHERE user_id = $1`, id.Subject,
+		).Scan(&me.Role, &me.DisplayName, &me.Email); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNoMembership
 			}

@@ -307,7 +307,7 @@ scope, or `/token` with any other grant) is reachable from outside.
    `{"workspace_name","display_name","kind"?}`. The gateway lets a tenant-less token through
    on this one method and path only. Tenancy creates the tenant and its first active admin
    in one transaction through `public.provision_workspace`
-   ([migrations.md](./migrations.md) §1) and answers 201 in the `GET /v1/me` shape. An absent
+   ([migrations.md](./migrations.md) §1) and answers 201 `{tenant:{id,name,kind}, user:{id,role}}`. An absent
    `kind` stores `firm`, the column default.
 6. The next token (a refresh grant or a new sign-in) carries `app_metadata.tenant_id`.
 

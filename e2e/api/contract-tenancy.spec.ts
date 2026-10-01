@@ -118,6 +118,7 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
       ])
       expect(user.id).toBe(PERSONAS.A.subject)
       expect(user.role).toBe('admin')
+      // db/seed.dev.sql: persona A's membership row.
       expect(user.display_name).toBe('Chinedu Okafor')
       expect(user.email).toBe('c.okafor@okafor.ng')
     })

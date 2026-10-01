@@ -17,6 +17,7 @@ type requestOutcome struct {
 	mu        sync.Mutex
 	cause     error
 	elsewhere bool
+	panicked  bool
 }
 
 func outcomeFromContext(ctx context.Context) *requestOutcome {
@@ -28,6 +29,18 @@ func (o *requestOutcome) setCause(err error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.cause = err
+}
+
+func (o *requestOutcome) markPanicked() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.panicked = true
+}
+
+func (o *requestOutcome) wasPanicked() bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.panicked
 }
 
 func (o *requestOutcome) read() (error, bool) {
@@ -58,8 +71,12 @@ func CapturePanic(ctx context.Context, rec any) {
 // ceiling: one event per 5xx; sample or rate-cap if an outage ever burns the quota
 func serverErrorMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		out := &requestOutcome{}
-		r = r.WithContext(context.WithValue(r.Context(), ctxKeyOutcome, out))
+		// tracingMiddleware may already have installed the outcome.
+		out := outcomeFromContext(r.Context())
+		if out == nil {
+			out = &requestOutcome{}
+			r = r.WithContext(context.WithValue(r.Context(), ctxKeyOutcome, out))
+		}
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		// The mux writes the matched pattern onto this request pointer.
 		next.ServeHTTP(rec, r)

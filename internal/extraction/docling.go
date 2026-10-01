@@ -13,6 +13,8 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform"
 )
 
 const (
@@ -51,7 +53,7 @@ func NewDoclingReader(baseURL string) (*DoclingReader, error) {
 		baseURL: baseURL,
 		// No Client.Timeout. A cold start blocks on the converter lock rather than returning
 		// 503, so a first request can take minutes; ctx is the only clock.
-		client: &http.Client{},
+		client: &http.Client{Transport: platform.TraceTransport(nil)},
 	}, nil
 }
 

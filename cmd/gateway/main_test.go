@@ -859,8 +859,8 @@ func TestGatewayAuthIssuersCountsPrimaryPlusAdditional(t *testing.T) {
 		t.Fatal(`main never assigns mustParseIssuers(os.Getenv("AUTH_ADDITIONAL_ISSUERS")) to a local`)
 	}
 
-	// The verifier trusts exactly the set that is counted.
-	fedToVerifier := false
+	// The verifier trusts exactly the set that is counted, and fetches keys through the traced client.
+	fedToVerifier, tracedFetch := false, false
 	ast.Inspect(body, func(n ast.Node) bool {
 		cl, ok := n.(*ast.CompositeLit)
 		if !ok {
@@ -869,6 +869,7 @@ func TestGatewayAuthIssuersCountsPrimaryPlusAdditional(t *testing.T) {
 		if sel, ok := cl.Type.(*ast.SelectorExpr); !ok || sel.Sel.Name != "Config" {
 			return true
 		}
+		fed, traced := false, false
 		for _, e := range cl.Elts {
 			kv, ok := e.(*ast.KeyValueExpr)
 			if !ok {
@@ -877,13 +878,21 @@ func TestGatewayAuthIssuersCountsPrimaryPlusAdditional(t *testing.T) {
 			k, _ := kv.Key.(*ast.Ident)
 			v, _ := kv.Value.(*ast.Ident)
 			if k != nil && v != nil && k.Name == "Additional" && v.Name == setVar {
-				fedToVerifier = true
+				fed = true
+			}
+			if call, ok := isCallTo(kv.Value, "", "newJWKSClient"); k != nil && ok && k.Name == "HTTPClient" && len(call.Args) == 0 {
+				traced = true
 			}
 		}
+		fedToVerifier = fedToVerifier || fed
+		tracedFetch = tracedFetch || (fed && traced)
 		return true
 	})
 	if !fedToVerifier {
 		t.Errorf("main's auth.Config has no `Additional: %s`", setVar)
+	}
+	if !tracedFetch {
+		t.Error("main's verifier auth.Config has no `HTTPClient: newJWKSClient()` -- the JWKS fetch would carry no trace")
 	}
 
 	isOnePlusLen := func(e ast.Expr) bool {

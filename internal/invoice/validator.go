@@ -163,7 +163,7 @@ type Validator struct {
 // production default. [AC#5, Stage-1 F4]
 func NewValidator(baseURL, s2sToken string, hc *http.Client) *Validator {
 	if hc == nil {
-		hc = &http.Client{Timeout: defaultValidateTimeout}
+		hc = &http.Client{Timeout: defaultValidateTimeout, Transport: platform.TraceTransport(nil)}
 	}
 	return &Validator{baseURL: baseURL, s2sToken: s2sToken, hc: hc}
 }

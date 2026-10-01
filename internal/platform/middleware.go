@@ -64,6 +64,9 @@ func recoveryMiddleware(logger *slog.Logger) middleware {
 					if rec == http.ErrAbortHandler {
 						panic(rec)
 					}
+					if out := outcomeFromContext(r.Context()); out != nil {
+						out.markPanicked()
+					}
 					capturePanic(r, rec)
 					logger.ErrorContext(r.Context(), "panic recovered",
 						slog.Any("panic", rec),

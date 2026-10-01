@@ -185,6 +185,8 @@ func TestCIRunFiltersReachEveryTestInThePackage(t *testing.T) {
 				strings.HasPrefix(n, "TestHandlerMapping") ||
 				strings.HasPrefix(n, "TestExtraction") ||
 				strings.HasPrefix(n, "TestImportBatchesHeaderRow") ||
+				strings.HasPrefix(n, "TestQueryTracer") ||
+				strings.HasPrefix(n, "TestNewPool") ||
 				strings.HasPrefix(n, "TestBootstrapCreatesAuth") ||
 				n == "TestBootstrapRotatesAuthAdminPasswordIdempotently" ||
 				n == "TestBootstrapRefusesEmptyAuthAdminBeforeDialing"

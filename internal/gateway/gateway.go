@@ -86,7 +86,7 @@ func (rt *router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	id, _ := auth.IdentityFromContext(r.Context())
 	if status := authorize(r, service, id); status != 0 {
 		rt.log.WarnContext(r.Context(), "gateway authz denied",
-			slog.String("service", service), slog.Int("status", status))
+			slog.String("upstream", service), slog.Int("status", status))
 		writeError(w, status, strings.ToLower(http.StatusText(status)))
 		return
 	}
@@ -117,6 +117,7 @@ func isProvisioning(r *http.Request) bool {
 // upstream and overwrite the identity headers from the verified token.
 func newReverseProxy(service string, target *url.URL, log *slog.Logger) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
+		Transport: platform.TraceTransport(nil),
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
 			pr.SetXForwarded()
@@ -124,6 +125,9 @@ func newReverseProxy(service string, target *url.URL, log *slog.Logger) *httputi
 				pr.Out.URL.Path = "/"
 			}
 			injectIdentity(pr)
+			// The outbound round tripper sets its own sentry-trace; inbound ones are not trusted.
+			pr.Out.Header.Del("sentry-trace")
+			pr.Out.Header.Del("baggage")
 		},
 		// Every upstream is a platform service that reports its own 5xx.
 		ModifyResponse: func(resp *http.Response) error {
@@ -132,7 +136,7 @@ func newReverseProxy(service string, target *url.URL, log *slog.Logger) *httputi
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			log.ErrorContext(r.Context(), "gateway upstream unreachable",
-				slog.String("service", service), slog.Any("err", err))
+				slog.String("upstream", service), slog.Any("err", err))
 			writeError(w, http.StatusBadGateway, "bad gateway")
 		},
 	}

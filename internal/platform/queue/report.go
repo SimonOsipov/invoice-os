@@ -2,6 +2,7 @@ package queue
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/getsentry/sentry-go"
 	"github.com/riverqueue/river"
@@ -48,6 +49,13 @@ func finalAttemptHub(job *rivertype.JobRow, class, trace string) *sentry.Hub {
 	}
 	if trace != "" {
 		rc["trace"] = trace
+	}
+	// River passes the executor's ctx, not the attempt's; metadata is the only link to its trace.
+	var meta struct {
+		Trace string `json:"sentry_trace"`
+	}
+	if json.Unmarshal(job.Metadata, &meta) == nil && meta.Trace != "" {
+		_ = sentry.ContinueTrace(hub, meta.Trace, "") // sets the scope's trace; the option is unused
 	}
 	hub.ConfigureScope(func(scope *sentry.Scope) {
 		scope.SetFingerprint([]string{"river", class, job.Kind})

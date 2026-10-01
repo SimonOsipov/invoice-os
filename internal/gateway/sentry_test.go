@@ -17,6 +17,7 @@ import (
 	"github.com/getsentry/sentry-go"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/sentrytest"
 )
 
@@ -351,4 +352,51 @@ func TestFleetSentry_HealthyRollupOpensNothing(t *testing.T) {
 
 	getFleet(t, h, "/healthz/fleet-control")
 	rec.One(t, want)
+}
+
+func TestGatewayLogs_UpstreamDoesNotOverwriteService(t *testing.T) {
+	oneLog := func(t *testing.T, rec *sentrytest.Recorder, body string) sentry.Log {
+		t.Helper()
+		var found []sentry.Log
+		for _, l := range rec.Logs() {
+			if l.Body == body {
+				found = append(found, l)
+			}
+		}
+		if len(found) != 1 {
+			t.Fatalf("recorded %d %q logs, want 1", len(found), body)
+		}
+		return found[0]
+	}
+	assertAttrs := func(t *testing.T, l sentry.Log) {
+		t.Helper()
+		if got := l.Attributes["service"].AsString(); got != "gateway" {
+			t.Errorf("service = %q, want gateway (the upstream must not replace it)", got)
+		}
+		if got := l.Attributes["upstream"].AsString(); got != "invoice" {
+			t.Errorf("upstream = %q, want invoice", got)
+		}
+	}
+
+	t.Run("unreachable", func(t *testing.T) {
+		app, rec, _ := sentrytest.Boot(t, "gateway")
+		h, tok := mountAPI(t, app, map[string]*url.URL{"invoice": closedURL(t)})
+
+		if got := serveAPI(h, "/api/invoice/v1/invoices", tok).Code; got != http.StatusBadGateway {
+			t.Fatalf("status = %d, want 502", got)
+		}
+		assertAttrs(t, oneLog(t, rec, "gateway upstream unreachable"))
+	})
+
+	t.Run("authz denied", func(t *testing.T) {
+		app, rec, _ := sentrytest.Boot(t, "gateway")
+		tg := setupGateway(t)
+		app.Mux.Handle(routePrefix, Handler(Options{Verifier: tg.verifier, Sessions: liveSessions(t), Upstreams: map[string]*url.URL{"invoice": closedURL(t)}, Logger: app.Logger}))
+		tok := tg.mint(t, auth.MintOptions{Subject: testSubject, Role: testRole})
+
+		if got := serveAPI(app.Handler(), "/api/invoice/v1/invoices", tok).Code; got != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403", got)
+		}
+		assertAttrs(t, oneLog(t, rec, "gateway authz denied"))
+	})
 }

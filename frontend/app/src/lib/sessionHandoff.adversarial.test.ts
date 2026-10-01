@@ -14,7 +14,7 @@ const STATE = 'ZYXWVUTSRQPONMLKJIHGFEDCBAzyxwvutsrqponmlk_'
 const GATEWAY = 'https://gw.test'
 const ME: Me = {
   tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures', kind: 'firm' },
-  user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated' },
+  user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated', display_name: 'Adaeze Nwankwo', email: 'adaeze.nwankwo@example.com' },
 }
 const NOW = 1_800_000_000_000
 function jwt(exp: number): string {

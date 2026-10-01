@@ -32,7 +32,7 @@ function firmSession(): Session {
     token: 'jwt',
     me: {
       tenant: { id: '11111111-1111-1111-1111-111111111111', name: 'Okafor & Partners', kind: 'firm' },
-      user: { id: 'c0000000-0000-0000-0000-000000000001', role: 'authenticated' },
+      user: { id: 'c0000000-0000-0000-0000-000000000001', role: 'authenticated', display_name: 'Adaeze Nwankwo', email: 'adaeze.nwankwo@example.com' },
     },
     verified: true,
   }
@@ -444,7 +444,7 @@ describe('adversarial / edge coverage (QA)', () => {
       token: 'jwt-inhouse',
       me: {
         tenant: { id: '22222222-2222-2222-2222-222222222222', name: 'Honeywell Group', kind: 'in_house' },
-        user: { id: 'c0000000-0000-0000-0000-000000000002', role: 'authenticated' },
+        user: { id: 'c0000000-0000-0000-0000-000000000002', role: 'authenticated', display_name: 'Adaeze Nwankwo', email: 'adaeze.nwankwo@example.com' },
       },
       verified: true,
     }
@@ -521,7 +521,7 @@ const KIND_REFUSALS: [string, unknown][] = [
 describe('hand-off session record (AUTH-05 D8)', () => {
   const ME: Me = {
     tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures', kind: 'firm' },
-    user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated' },
+    user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated', display_name: 'Adaeze Nwankwo', email: 'adaeze.nwankwo@example.com' },
   }
   const IN_HOUSE_ME: Me = { ...ME, tenant: { ...ME.tenant, kind: 'in_house' } }
   const inhouseSessionOf = (me: Me): Session => ({ persona: APP_PERSONAS.inhouse, token: 'jwt', me, verified: true })
@@ -587,7 +587,7 @@ describe('hand-off session record (AUTH-05 D8)', () => {
 
   it('a persona record is unchanged', () => {
     const persona =
-      '{"v":1,"personaId":"firm","token":"jwt","me":{"tenant":{"id":"11111111-1111-1111-1111-111111111111","name":"Okafor & Partners","kind":"firm"},"user":{"id":"c0000000-0000-0000-0000-000000000001","role":"authenticated"}},"verified":true}'
+      '{"v":1,"personaId":"firm","token":"jwt","me":{"tenant":{"id":"11111111-1111-1111-1111-111111111111","name":"Okafor & Partners","kind":"firm"},"user":{"id":"c0000000-0000-0000-0000-000000000001","role":"authenticated","display_name":"Adaeze Nwankwo","email":"adaeze.nwankwo@example.com"}},"verified":true}'
     expect(serializeSession(firmSession())).toBe(persona)
     // A persona session never writes the pair, even if it carries a renewal.
     expect(serializeSession({ ...firmSession(), renewal: { refreshToken: 'R0', receivedAt: 1000 } })).toBe(persona)
@@ -631,7 +631,7 @@ describe('hand-off session record (AUTH-05 D8)', () => {
 describe('renewal pair in the stored record (AUTH-06 D1)', () => {
   const ME: Me = {
     tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures', kind: 'firm' },
-    user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated' },
+    user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated', display_name: 'Adaeze Nwankwo', email: 'adaeze.nwankwo@example.com' },
   }
   const HANDOFF = { v: 1, personaId: 'firm', token: 'jwt', me: ME, verified: true, handoff: true }
 

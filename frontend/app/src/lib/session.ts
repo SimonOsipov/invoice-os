@@ -209,3 +209,8 @@ export function resolveBootSession(now: number = Date.now()): Session | null {
   const session = loadSession()
   return session !== null && !session.renewal && isTokenExpired(session.token, now) ? null : session
 }
+
+// Scaffold: still the persona's name; the real-person source lands with AUTH-09-02.
+export function cardIdentity(session: Session): { name: string; initials: string } {
+  return { name: session.persona.name, initials: session.persona.initials }
+}

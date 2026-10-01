@@ -11,8 +11,8 @@ const TENANT = '33333333-3333-3333-3333-333333333333'
 const OTHER_TENANT = '44444444-4444-4444-4444-444444444444'
 const SUB = 'd0000000-0000-0000-0000-000000000009'
 const OTHER_SUB = 'd0000000-0000-0000-0000-000000000008'
-const ME: Me = { tenant: { id: TENANT, name: 'Adaeze Ventures', kind: 'firm' }, user: { id: SUB, role: 'authenticated' } }
-const OTHER_ME: Me = { tenant: { id: OTHER_TENANT, name: 'Other Co', kind: 'firm' }, user: { id: OTHER_SUB, role: 'authenticated' } }
+const ME: Me = { tenant: { id: TENANT, name: 'Adaeze Ventures', kind: 'firm' }, user: { id: SUB, role: 'authenticated', display_name: 'Adaeze Nwankwo', email: 'adaeze.nwankwo@example.com' } }
+const OTHER_ME: Me = { tenant: { id: OTHER_TENANT, name: 'Other Co', kind: 'firm' }, user: { id: OTHER_SUB, role: 'authenticated', display_name: 'Adaeze Nwankwo', email: 'adaeze.nwankwo@example.com' } }
 
 // Server times sit far from the local clock: the lifetime is exp − iat, measured from receipt.
 const IAT = 1_700_000_000
@@ -352,7 +352,7 @@ describe('createRenewer', () => {
     const rows: [string, Session | null][] = [
       ['absent', null],
       ['another subject', hsession({ me: OTHER_ME, token: B0, refresh: 'RB' })],
-      ['another user, same tenant', hsession({ me: { tenant: ME.tenant, user: { id: OTHER_SUB, role: 'authenticated' } }, refresh: 'RC' })],
+      ['another user, same tenant', hsession({ me: { tenant: ME.tenant, user: { id: OTHER_SUB, role: 'authenticated', display_name: 'Adaeze Nwankwo', email: 'adaeze.nwankwo@example.com' } }, refresh: 'RC' })],
     ]
     expect(rows.length).toBeGreaterThan(0)
     for (const [name, stored] of rows) {

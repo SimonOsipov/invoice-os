@@ -1,4 +1,4 @@
-"""SENTRY-05-04 (Core AC 5, D-7, D-10, D-15): the sidecar continues the caller's trace.
+"""The sidecar continues the caller's trace.
 
 The marker is joined at runtime so no source line, and so no source-context frame line, holds it.
 """

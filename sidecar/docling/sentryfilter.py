@@ -221,7 +221,7 @@ def scrub_transaction(event, hint=None):
 
 
 def _scrub_log_value(v):
-    """D-21: only str, int, float, bool or a list of str survives; all else is redacted."""
+    """Only str, int, float, bool or a list of str survives; all else is redacted."""
     if isinstance(v, list) and all(isinstance(e, str) for e in v):
         return _scrub_value(v)
     if isinstance(v, (str, int, float)):

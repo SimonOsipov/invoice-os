@@ -1,4 +1,4 @@
-"""SENTRY-05-03 (Q12): a crash, a 5xx or a failed warm-up opens one issue; nothing else does."""
+"""A crash, a 5xx or a failed warm-up opens one issue; nothing else does."""
 
 import asyncio
 import contextlib

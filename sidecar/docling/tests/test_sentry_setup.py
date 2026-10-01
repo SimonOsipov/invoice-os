@@ -1,4 +1,4 @@
-"""SENTRY-05-02: Sentry starts from SENTRY_DSN with the Go labels (internal/platform/config.go)."""
+"""Sentry starts from SENTRY_DSN with the Go labels (internal/platform/config.go)."""
 
 import importlib
 import logging
@@ -111,7 +111,6 @@ def test_events_carry_the_go_labels(monkeypatch, tmp_path):
         {"SENTRY_DSN": FAKE_DSN, "RAILWAY_ENVIRONMENT_NAME": "production"}
     )
     assert options is not None
-    options.setdefault("trace_propagation_targets", [])
     try:
         sentry_sdk.init(**options, transport=transport)
         sentry_sdk.capture_exception(RuntimeError("x"))

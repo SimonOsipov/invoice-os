@@ -1,4 +1,4 @@
-"""SENTRY-05-03 (Core AC 4, D-18): no document content reaches a serialized envelope.
+"""No document content reaches a serialized envelope.
 
 The marker is joined at runtime so no source line, and so no source-context frame line, holds it.
 """
@@ -102,7 +102,6 @@ def test_json_body_is_not_collected_without_the_scrub_hooks(monkeypatch):
     options = sentry_setup.sentry_options(
         {"SENTRY_DSN": FAKE_DSN, "RAILWAY_ENVIRONMENT_NAME": "production"}
     )
-    options.setdefault("trace_propagation_targets", [])
     transport = CapturingTransport()
     if convert._warmup_thread is not None:
         convert._warmup_thread.join()

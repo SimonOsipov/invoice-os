@@ -7,7 +7,7 @@ import sentry_sdk
 
 import sentry_setup
 
-# First, so a boot failure below has a client to report it (D-16).
+# First, so a boot failure below has a client to report it.
 sentry_setup.init_sentry()
 
 with sentry_setup.boot_guard():

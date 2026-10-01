@@ -31,7 +31,7 @@ def _is_probe(path):
 
 
 def traces_sampler(sampling_context):
-    # Ignores the inbound sampled flag, as Go resets it (D-7).
+    # Ignores the inbound sampled flag, as Go resets it.
     scope = sampling_context.get("asgi_scope") or {}
     return 0 if _is_probe(scope.get("path", "")) else 1.0
 

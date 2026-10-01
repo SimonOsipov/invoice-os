@@ -1,4 +1,4 @@
-"""SENTRY-05-01: the sidecar's scrub rules mirror internal/platform/sentryfilter.go.
+"""The sidecar's scrub rules mirror internal/platform/sentryfilter.go.
 
 M is a unique marker standing for document content; no output may contain it.
 """
@@ -37,7 +37,7 @@ def test_scrub_text_redacts_quoted_segments():
         # an escaped delimiter stays inside; an escaped backslash does not
         (f'x "a\\"{M}" y', 'x "[redacted]" y'),
         (f"x '{M}\\\\' y '{M}2'", "x '[redacted]' y '[redacted]'"),
-        # D-4 drops Go's '"' rune-literal exception
+        # Drops Go's '"' rune-literal exception
         ("a '\"' b", "a '[redacted]' b"),
         # a segment may span lines and hold non-ASCII text
         (f"a '{M}\n{M}2' b", "a '[redacted]' b"),
@@ -716,7 +716,7 @@ def test_keep_breadcrumb_keeps_non_log_crumbs_whatever_the_category():
 
 
 def test_scrub_log_redacts_every_value_that_is_not_scalar_or_list_of_str():
-    # D-21: unquoted text inside a dict, bytes, tuple, None or a list element passes scrub_text
+    # Unquoted text inside a dict, bytes, tuple, None or a list element passes scrub_text
     attrs = {
         "d": {"k": f"unquoted {M}"},
         "b": f"unquoted {M}".encode(),

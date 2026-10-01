@@ -39,7 +39,7 @@ def repo_root() -> Path:
 @pytest.fixture
 def sentry_capture():
     # sentry_sdk is imported here, not at module level: the file-scan specs import this
-    # conftest in a bare venv (D-17).
+    # conftest in a bare venv.
     import sentry_sdk
     from sentry_capture import CapturingTransport
 
@@ -55,8 +55,6 @@ def sentry_capture():
             "RAILWAY_ENVIRONMENT_NAME": "production",
         }
     )
-    # TestClient is an httpx client; a default target list would rewrite inbound headers (P23).
-    options.setdefault("trace_propagation_targets", [])
     transport = CapturingTransport()
     sentry_sdk.init(**options, transport=transport)
     try:
@@ -64,6 +62,6 @@ def sentry_capture():
     finally:
         sentry_sdk.flush()
         sentry_sdk.get_client().close()
-        # close() leaves the client bound (P24); unbind it or the next test inherits it.
+        # close() leaves the client bound; unbind it or the next test inherits it.
         sentry_sdk.get_global_scope().set_client(None)
         assert sentry_setup.sentry_state() == "off"

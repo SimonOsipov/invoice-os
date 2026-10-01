@@ -10,7 +10,7 @@ export interface ApiFailureInput {
   error: unknown
 }
 
-// Fixed message and fingerprint so one failing route is one issue (D-10); the raw error never leaves.
+// Fixed message and fingerprint so one failing route is one issue; the raw error never leaves.
 export function captureApiFailure(f: ApiFailureInput): void {
   const method = f.method.toUpperCase()
   const route = apiRoute(f.url)

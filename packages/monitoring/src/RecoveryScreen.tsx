@@ -1,6 +1,6 @@
 import { useId, type ReactNode } from 'react'
 
-// Card chrome from app SignInLoading, title from api-client ErrorState (D-12).
+// Card chrome from app SignInLoading, title from api-client ErrorState. A div, not h1: `.asc-app h1` forces the display font.
 export function RecoveryScreen({ brand }: { brand: ReactNode }): ReactNode {
   const headingId = useId()
   return (
@@ -17,9 +17,9 @@ export function RecoveryScreen({ brand }: { brand: ReactNode }): ReactNode {
           </span>
         </div>
         <section aria-labelledby={headingId} style={{ padding: '44px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, textAlign: 'center' }}>
-          <h1 id={headingId} style={{ margin: 0, fontSize: 15, fontWeight: 600, color: 'var(--status-red-text)' }}>
+          <div id={headingId} role="heading" aria-level={1} style={{ margin: 0, fontSize: 15, fontWeight: 600, color: 'var(--status-red-text)' }}>
             Something went wrong
-          </h1>
+          </div>
           <p style={{ margin: 0, fontSize: 13, color: 'var(--fg-2)' }}>This page hit an unexpected error. Reload to continue.</p>
           <button type="button" className="v2-btn v2-btn-primary" onClick={() => window.location.reload()}>
             Reload page

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Shared Sentry options, event scrubbing and route naming for the ASComply Africa SPAs (SENTRY-06).",
+  "description": "Shared Sentry setup for the ASComply Africa SPAs: options, event scrubbing, route naming, init, crash boundary with recovery screen, and API-failure capture.",
   "exports": {
     ".": "./src/index.ts",
     "./report": "./src/report.ts"

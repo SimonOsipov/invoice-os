@@ -2,7 +2,7 @@ import * as Sentry from '@sentry/react'
 import { sentryOptions, type Service } from './options'
 import { RELEASE } from './release'
 
-// A DSN the SDK cannot parse makes it log "Invalid Sentry Dsn", so treat it as off (D-33).
+// A DSN the SDK cannot parse makes it log "Invalid Sentry Dsn", so treat it as off.
 function isSentryDsn(dsn: string | undefined): boolean {
   try {
     const u = new URL(dsn ?? '')

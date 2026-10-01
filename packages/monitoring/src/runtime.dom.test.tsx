@@ -245,6 +245,8 @@ describe('crash boundary', () => {
     const { uncaught } = renderCrash()
 
     expect(screen.getByRole('region', { name: 'Something went wrong' })).toBeDefined()
+    const title = screen.getByRole('heading', { level: 1, name: 'Something went wrong' })
+    expect(title.tagName, 'a div: `.asc-app h1` would override the title style').toBe('DIV')
     expect(screen.getByText('This page hit an unexpected error. Reload to continue.')).toBeDefined()
     expect((screen.getByRole('button', { name: 'Reload page' }) as HTMLButtonElement).disabled).toBe(false)
     expect(document.body.textContent, 'the screen shows no error text (D-12)').toBe(
@@ -265,6 +267,8 @@ describe('crash boundary', () => {
     expect(Sentry.getClient()).toBeUndefined()
     const { uncaught } = renderCrash()
     expect(screen.getByRole('region', { name: 'Something went wrong' })).toBeDefined()
+    const title = screen.getByRole('heading', { level: 1, name: 'Something went wrong' })
+    expect(title.tagName, 'a div: `.asc-app h1` would override the title style').toBe('DIV')
     expect(uncaught).toEqual([])
   })
 

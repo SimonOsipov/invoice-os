@@ -4,6 +4,7 @@ import { markReported, wasReported } from './reported'
 import {
   apiRoute,
   dropEvent,
+  scrubApiError,
   keepBreadcrumb,
   redactSecrets,
   scrubEvent,
@@ -486,11 +487,11 @@ describe('dropEvent', () => {
       [`${GH}.onunhandledrejection`, new DOMException('x', 'TimeoutError')],
       [`${GH}.onunhandledrejection`, sessionEnded],
       [`${GH}.onunhandledrejection`, reportedTypeError],
+      ['auto.function.react.error_boundary', reportedTypeError],
     ]
     const keeps: Array<[string, unknown]> = [
       [`${GH}.onunhandledrejection`, new TypeError('x')],
       ['auto.function.react.error_boundary', { name: 'ApiError' }],
-      ['auto.function.react.error_boundary', reportedTypeError],
       [`${GH}.onerror`, new Error('x')],
     ]
     for (const [type, err] of drops) {
@@ -573,6 +574,41 @@ describe('dropEvent more', () => {
     markReported(o)
     expect(wasReported(o)).toBe(true)
     expect(wasReported({})).toBe(false)
+  })
+})
+
+describe('dropEvent reported', () => {
+  const evt = (type: string | undefined) =>
+    as<ErrorEvent>({ exception: { values: [{ type: 'Error', value: 'x', mechanism: type ? { type, handled: true } : undefined }] } })
+
+  it('dropEvent_aReportedErrorIsDroppedWhateverTheMechanism', () => {
+    const reported = Object.assign(new Error('gateway text'), { name: 'ApiError', kind: 'http', status: 503 })
+    markReported(reported)
+    for (const type of ['auto.function.react.error_boundary', 'generic', 'auto.browser.global_handlers.onerror', undefined]) {
+      expect(dropEvent(evt(type), as<EventHint>({ originalException: reported })), String(type)).toBe(true)
+    }
+    const fresh = Object.assign(new Error('x'), { name: 'ApiError', kind: 'http', status: 503 })
+    expect(dropEvent(evt('auto.function.react.error_boundary'), as<EventHint>({ originalException: fresh }))).toBe(false)
+  })
+})
+
+describe('scrubApiError', () => {
+  const ev = () => as<ErrorEvent>({ exception: { values: [{ type: 'ApiError', value: 'tenant Acme Ltd TIN 123 refused' }] } })
+  const apiError = (kind: string, status: number | null) => Object.assign(new Error('tenant Acme Ltd TIN 123 refused'), { name: 'ApiError', kind, status })
+  const value = (e: ErrorEvent) => e.exception?.values?.[0]?.value
+
+  it('scrubApiError_replacesTheServerMessageWithKindAndStatus', () => {
+    expect(value(scrubApiError(ev(), as<EventHint>({ originalException: apiError('http', 503) })))).toBe('http 503')
+    expect(value(scrubApiError(ev(), as<EventHint>({ originalException: apiError('network', null) })))).toBe('network -')
+    expect(value(scrubApiError(ev(), as<EventHint>({ originalException: apiError('malformed', 200) })))).toBe('malformed 200')
+  })
+
+  it('scrubApiError_leavesEverythingElseAlone', () => {
+    const e = ev()
+    for (const originalException of [new Error('x'), { name: 'ApiError' }, { name: 'ApiError', kind: 'http' }, 'ApiError', undefined]) {
+      expect(scrubApiError(e, as<EventHint>({ originalException })), String(JSON.stringify(originalException))).toBe(e)
+    }
+    expect(scrubApiError(as<ErrorEvent>({}), as<EventHint>({ originalException: apiError('http', 500) }))).toEqual({})
   })
 })
 

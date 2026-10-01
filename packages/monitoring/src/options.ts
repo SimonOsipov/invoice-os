@@ -1,7 +1,7 @@
 import type { ErrorEvent, Integration, StartSpanOptions } from '@sentry/core'
 import { browserTracingIntegration, getClient, startBrowserTracingNavigationSpan } from '@sentry/react'
 import type { BrowserOptions } from '@sentry/react'
-import { dropEvent, keepBreadcrumb, scrubEvent, scrubSpan, scrubTransaction } from './scrub'
+import { dropEvent, keepBreadcrumb, scrubApiError, scrubEvent, scrubSpan, scrubTransaction } from './scrub'
 
 export type Service = 'app' | 'ops-console' | 'support-console'
 
@@ -94,7 +94,7 @@ export function sentryOptions(c: MonitoringConfig): BrowserOptions | null {
     dataCollection: { userInfo: false, cookies: false, httpHeaders: false, httpBodies: [], urlQueryParams: false },
     enhanceFetchErrorMessages: false,
     integrations: (defaults) => [...defaults.filter((i) => i.name !== 'BrowserSession'), ...tracing],
-    beforeSend: (e, h) => (dropEvent(e, h) ? null : nameErrorTransaction(scrubEvent(e), c.routeName)),
+    beforeSend: (e, h) => (dropEvent(e, h) ? null : nameErrorTransaction(scrubEvent(scrubApiError(e, h)), c.routeName)),
     beforeSendTransaction: scrubTransaction,
     beforeSendSpan: scrubSpan,
     beforeBreadcrumb: keepBreadcrumb,

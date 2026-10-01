@@ -108,11 +108,22 @@ export function keepBreadcrumb(b: Breadcrumb): Breadcrumb | null {
 }
 
 export function dropEvent(event: ErrorEvent, hint: EventHint): boolean {
+  const err = hint.originalException
+  if (wasReported(err)) return true
   const mechanism = event.exception?.values?.[0]?.mechanism?.type
   if (!mechanism?.startsWith(GLOBAL_HANDLERS)) return false
-  const err = hint.originalException
   const name = err !== null && typeof err === 'object' ? (err as { name?: unknown }).name : undefined
-  return (typeof name === 'string' && TRANSPORT_DECIDED.has(name)) || wasReported(err)
+  return typeof name === 'string' && TRANSPORT_DECIDED.has(name)
+}
+
+// An ApiError message is the gateway's text; the event carries `${kind} ${status}` like the transport report (monitoring cannot import ApiError).
+export function scrubApiError(event: ErrorEvent, hint: EventHint): ErrorEvent {
+  const err = hint.originalException as { name?: unknown; kind?: unknown; status?: unknown; message?: unknown } | null | undefined
+  if (err === null || typeof err !== 'object' || err.name !== 'ApiError' || typeof err.kind !== 'string' || typeof err.message !== 'string') return event
+  const values = event.exception?.values
+  if (!values) return event
+  const fixed = `${err.kind} ${String(err.status ?? '-')}`
+  return { ...event, exception: { ...event.exception, values: values.map((v) => (v.value === err.message ? { ...v, value: fixed } : v)) } }
 }
 
 export function apiRoute(url: string): string {

@@ -9,7 +9,7 @@ import { initMonitoring } from './init'
 import { sentryOptions, type MonitoringConfig, type Service } from './options'
 import { RecoveryScreen } from './RecoveryScreen'
 import { RELEASE } from './release'
-import { wasReported } from './reported'
+import { markReported, wasReported } from './reported'
 import { captureApiFailure, type ApiFailureInput } from './report'
 
 const DSN = 'https://public@o1.ingest.de.sentry.io/1'
@@ -95,12 +95,12 @@ afterEach(async () => {
   vi.unstubAllEnvs()
 })
 
-function Thrower({ message }: { message: string }): never {
-  throw new Error(message)
+function Thrower({ message, error }: { message: string; error?: Error }): never {
+  throw error ?? new Error(message)
 }
 
 // React 19 logs a caught render error through console.error (D-11); the window listener keeps an uncaught one from failing the run.
-function renderCrash(): { uncaught: unknown[] } {
+function renderCrash(thrown?: Error): { uncaught: unknown[] } {
   const uncaught: unknown[] = []
   const onError = (e: ErrorEvent) => {
     e.preventDefault()
@@ -112,7 +112,7 @@ function renderCrash(): { uncaught: unknown[] } {
   try {
     render(
       <CrashBoundary brand={<span>B</span>}>
-        <Thrower message="boom-render" />
+        <Thrower message="boom-render" error={thrown} />
       </CrashBoundary>,
     )
   } catch (e) {
@@ -269,6 +269,31 @@ describe('crash boundary', () => {
     expect(uncaught).toEqual([])
   })
 
+  it('crashBoundary_aReportedApiErrorIsNotSentAgainButStillRecovers', async () => {
+    const sink: string[] = []
+    boot(sink, 'app')
+    const err = Object.assign(new Error(`gateway: tenant ${TIN} refused`), { name: 'ApiError', kind: 'http', status: 503 })
+    markReported(err)
+    const { uncaught } = renderCrash(err)
+    expect(screen.getByRole('region', { name: 'Something went wrong' })).toBeDefined()
+    await Sentry.flush(1000)
+    expect(items(sink, 'event'), 'the transport already reported it').toEqual([])
+    expect(sink.join('\n')).not.toContain(TIN)
+    expect(uncaught).toEqual([])
+  })
+
+  it('crashBoundary_anUnreportedApiErrorCarriesNoServerText', async () => {
+    const sink: string[] = []
+    boot(sink, 'app')
+    const err = Object.assign(new Error(`gateway: tenant ${TIN} refused`), { name: 'ApiError', kind: 'http', status: 422 })
+    renderCrash(err)
+    await Sentry.flush(1000)
+    const events = items(sink, 'event')
+    expect(events.length).toBe(1)
+    expect(events[0].body.exception.values[0].value).toBe('http 422')
+    expect(sink.join('\n')).not.toContain(TIN)
+  })
+
   it('crashBoundary_withoutAClientStillRecovers', () => {
     expect(Sentry.getClient()).toBeUndefined()
     const { uncaught } = renderCrash()
@@ -350,14 +375,16 @@ describe('crash boundary', () => {
     captureApiFailure({ kind: 'network', status: null, method: 'GET', url: `${GW}/api/z`, error: reported })
     await Sentry.flush(1000)
     sink.length = 0
-    for (const error of [named('ApiError'), named('SessionEndedError'), reported]) {
+    // An already-reported error is not captured again by the boundary; the recovery screen still renders.
+    for (const [error, events] of [[named('ApiError'), 1], [named('SessionEndedError'), 1], [reported, 0]] as Array<[Error, number]>) {
       render(
         <CrashBoundary brand={<span>B</span>}>
           <Boom error={error} />
         </CrashBoundary>,
       )
       await Sentry.flush(1000)
-      expect(items(sink, 'event').length, error.name + ' ' + error.message).toBe(1)
+      expect(items(sink, 'event').length, error.name + ' ' + error.message).toBe(events)
+      expect(screen.getByRole('region', { name: 'Something went wrong' })).toBeDefined()
       sink.length = 0
       cleanup()
     }

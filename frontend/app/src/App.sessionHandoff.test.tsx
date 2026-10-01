@@ -3,14 +3,14 @@
 
 import { StrictMode } from 'react'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Me, type Session } from './auth'
 import { captureDestination } from './lib/deepLink'
 import { SESSION_KEY, serializeSession } from './lib/session'
 import { ensureSignInState } from './lib/signInState'
 import { EMPTY_BUCKET } from './lib/dashboard'
-import type { PlatformCtx } from './types'
+import type { PlatformCtx, SignedInUser } from './types'
 
 const LANDING = 'https://landing.example'
 const GATEWAY = 'https://gw.test'
@@ -334,6 +334,67 @@ describe('the identity card names the person /me names (AUTH-09-02)', () => {
     const badged = seenUsers.filter((u) => u.verified && u.tenantName)
     expect(badged.length, 'a badged render happened').toBeGreaterThan(0)
     expect(badged.filter((u) => u.name !== 'Adaeze Nwankwo')).toEqual([])
+  })
+
+  it('a stored hand-off boot never badges a name that did not come from /me', async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(T, ME))
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
+    const badged = seenUsers.filter((u) => u.verified && u.tenantName)
+    expect(badged.length, 'a badged render happened').toBeGreaterThan(0)
+    expect(badged.filter((u) => u.name !== 'Adaeze Nwankwo')).toEqual([])
+  })
+
+  it('a pre-AUTH-09 stored record badges only an empty identity, never a persona name', async () => {
+    configure()
+    const old = { ...ME, user: { id: ME.user.id, role: ME.user.role } }
+    localStorage.setItem(SESSION_KEY, handoffRecord(T, old as unknown as Me))
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
+    const badged = seenUsers.filter((u) => u.verified && u.tenantName)
+    expect(badged.length, 'a badged render happened').toBeGreaterThan(0)
+    expect(badged.filter((u) => u.name !== '' || u.initials !== '')).toEqual([])
+  })
+
+  it('a stored record with non-string identity keys mounts with no name', async () => {
+    configure()
+    const shapes: Record<string, unknown>[] = [
+      { display_name: 7, email: {} },
+      { display_name: ['x'], email: 7 },
+      { display_name: '   ', email: '\t' },
+    ]
+    for (const shape of shapes) {
+      cleanup()
+      capturedCtx = undefined
+      seenUsers = []
+      const tampered = { ...ME, user: { id: ME.user.id, role: ME.user.role, ...shape } }
+      localStorage.setItem(SESSION_KEY, handoffRecord(T, tampered as unknown as Me))
+      interceptHref()
+      await bootApp()
+      await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
+      expect((capturedCtx as PlatformCtx | undefined)?.user, JSON.stringify(shape)).toEqual({
+        name: '',
+        initials: '',
+        tenantName: ME.tenant.name,
+        verified: true,
+      })
+    }
+  })
+
+  it('the card and the context carry no email field (D5)', async () => {
+    expectTypeOf<SignedInUser>().not.toHaveProperty('email')
+    expectTypeOf<PlatformCtx>().not.toHaveProperty('email')
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(T, ME))
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
+    expect(Object.keys(capturedCtx!.user).sort()).toEqual(['initials', 'name', 'tenantName', 'verified'])
+    expect(Object.keys(capturedCtx!)).not.toContain('email')
+    expect(JSON.stringify(capturedCtx!.user)).not.toContain(ME.user.email)
   })
 })
 

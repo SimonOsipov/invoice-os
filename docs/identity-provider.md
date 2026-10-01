@@ -604,11 +604,11 @@ which the gateway answers 401). Guarded by `TestIdP_RefreshRotationAndReuse`.
 
 **Where the refresh token is stored, and what that does and does not protect against.**
 The refresh token is stored in the app origin's `localStorage`, key `invoice-os.session`,
-field `refresh_token`, in the same record as the access token. The record also holds the
-account's display name and email, inside the stored `/me` answer. For its 60 s in the hand-off
+field `refresh_token`, in the same record as the access token. For its 60 s in the hand-off
 store it is in the gateway's memory, beside the access token. It crosses the network only
 inside JSON bodies over TLS: the exchange answer, the refresh request, the refresh answer and
-the sign-out request.
+the sign-out request. The record also holds the account's display name and email, inside the
+stored `/me` answer.
 
 It protects against:
 - **Other origins.** Landing, both consoles and every other site cannot read it:

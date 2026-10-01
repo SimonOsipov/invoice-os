@@ -704,6 +704,21 @@ describe('cardIdentity (AUTH-09-02)', () => {
     return { persona: handoffPersona(me), token: 'jwt', me, verified: true, handoff: true }
   }
 
+  // Every shape the stored /me may hold that names no one.
+  const ABSENT: [string, (u: Record<string, unknown>, k: string) => void][] = [
+    ['null', (u, k) => { u[k] = null }],
+    ['missing', () => {}],
+    ["''", (u, k) => { u[k] = '' }],
+    ["'   '", (u, k) => { u[k] = '   ' }],
+    ['7', (u, k) => { u[k] = 7 }],
+    ['{}', (u, k) => { u[k] = {} }],
+    ["['x']", (u, k) => { u[k] = ['x'] }],
+    ['tab and newline', (u, k) => { u[k] = '\t\n' }],
+    ['no-break space', (u, k) => { u[k] = '\u00a0' }],
+    ['true', (u, k) => { u[k] = true }],
+    ['0', (u, k) => { u[k] = 0 }],
+  ]
+
   it('cardIdentity names a hand-off session from /me', () => {
     const session = handoffOf({ display_name: 'Adaeze Nwankwo', email: 'a@acme.ng' })
     expect(cardIdentity(session)).toEqual({ name: 'Adaeze Nwankwo', initials: 'AN' })
@@ -717,19 +732,10 @@ describe('cardIdentity (AUTH-09-02)', () => {
   })
 
   it('cardIdentity shows nothing legible, never the user id', () => {
-    const absent: [string, (u: Record<string, unknown>, k: string) => void][] = [
-      ['null', (u, k) => { u[k] = null }],
-      ['missing', () => {}],
-      ["''", (u, k) => { u[k] = '' }],
-      ["'   '", (u, k) => { u[k] = '   ' }],
-      ['7', (u, k) => { u[k] = 7 }],
-      ['{}', (u, k) => { u[k] = {} }],
-      ["['x']", (u, k) => { u[k] = ['x'] }],
-    ]
-    expect(absent).toHaveLength(7)
+    expect(ABSENT).toHaveLength(11)
     const pairs = (v: string) => Array.from({ length: v.length - 1 }, (_, i) => v.slice(i, i + 2).toLowerCase())
-    for (const [dn, setDn] of absent) {
-      for (const [em, setEm] of absent) {
+    for (const [dn, setDn] of ABSENT) {
+      for (const [em, setEm] of ABSENT) {
         const user: Record<string, unknown> = {}
         setDn(user, 'display_name')
         setEm(user, 'email')
@@ -771,5 +777,39 @@ describe('cardIdentity (AUTH-09-02)', () => {
     expect(want.name).not.toBe('Someone Else')
     expect(cardIdentity(withName)).toEqual(want)
     expect(cardIdentity({ ...firmSession(), me: null })).toEqual(want)
+  })
+
+  it('cardIdentity falls through every absent display name to the email', () => {
+    expect(ABSENT.length).toBeGreaterThan(0)
+    for (const [label, set] of ABSENT) {
+      const user: Record<string, unknown> = { email: '  zainab@acme.ng ' }
+      set(user, 'display_name')
+      expect(cardIdentity(handoffOf(user)), `display_name ${label}`).toEqual({ name: 'zainab@acme.ng', initials: 'ZA' })
+    }
+  })
+
+  it('cardIdentity prefers the display name over the email', () => {
+    expect(cardIdentity(handoffOf({ display_name: 'Adaeze Nwankwo', email: 'zainab@acme.ng' }))).toEqual({
+      name: 'Adaeze Nwankwo',
+      initials: 'AN',
+    })
+  })
+
+  it('cardIdentity reads /me for a hand-off session even when its persona still carries a name', () => {
+    const session = { ...handoffOf({ display_name: 'Adaeze Nwankwo', email: null }), persona: APP_PERSONAS.firm }
+    expect(APP_PERSONAS.firm.name).not.toBe('')
+    expect(cardIdentity(session)).toEqual({ name: 'Adaeze Nwankwo', initials: 'AN' })
+  })
+
+  it('cardIdentity never falls back to the persona for a hand-off session without /me', () => {
+    const session: Session = { ...handoffOf({}), persona: APP_PERSONAS.firm, me: null }
+    expect(APP_PERSONAS.firm.name).not.toBe('')
+    expect(cardIdentity(session)).toEqual({ name: '', initials: '' })
+  })
+
+  it('cardIdentity keeps the persona for a persona session whose /me names no one', () => {
+    const me = firmSession().me!
+    const session = { ...firmSession(), me: { ...me, user: { ...me.user, display_name: null, email: null } } }
+    expect(cardIdentity(session)).toEqual({ name: APP_PERSONAS.firm.name, initials: APP_PERSONAS.firm.initials })
   })
 })

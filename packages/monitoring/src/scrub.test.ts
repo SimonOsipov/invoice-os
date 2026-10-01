@@ -369,6 +369,12 @@ describe('scrubSpan more', () => {
     expect(scrubSpan(as<SpanJSON>({ span_id: 's', data: {} })).data).toEqual({})
   })
 
+  it('scrubSpan_redactsBeforeItStrips', () => {
+    // A `?` inside an attribute value must not cut the redaction short.
+    const out = scrubSpan(as<SpanJSON>({ span_id: 's', description: `a[title="${M}?y"] > b[alt="p#q"]`, data: {} }))
+    expect(out.description).toBe('a[title="[redacted]"] > b[alt="[redacted]"]')
+  })
+
   it('scrubSpan_redactsEachSelectorAttributeName', () => {
     const out = scrubSpan(as<SpanJSON>({ span_id: 's', description: `a[alt="${M}"] > b[title="${M}"] > c[aria-label="${M}"] > d[name="${M}"] > e[type="${M}"]`, data: {} }))
     expect(out.description).toBe('a[alt="[redacted]"] > b[title="[redacted]"] > c[aria-label="[redacted]"] > d[name="[redacted]"] > e[type="[redacted]"]')

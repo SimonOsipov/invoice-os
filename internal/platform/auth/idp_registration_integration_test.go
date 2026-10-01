@@ -367,7 +367,9 @@ func TestIdP_ProvisionedWorkspaceReachesTheNextToken(t *testing.T) {
 		t.Fatalf("Identity.TenantID = %q, want %s", id.TenantID, created.Tenant.ID)
 	}
 
-	tenant, role, err := store.Me(auth.WithIdentity(ctx, id))
+	tenant, me, err := store.Me(auth.WithIdentity(ctx, id))
+
+	role := me.Role
 	if err != nil {
 		t.Fatalf("Store.Me with the refreshed identity: %v", err)
 	}

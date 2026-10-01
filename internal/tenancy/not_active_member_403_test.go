@@ -45,8 +45,8 @@ func TestTenancyStatusForErr_NotActiveMemberIs403(t *testing.T) {
 
 func TestMeHandler_NotActiveMemberIs403(t *testing.T) {
 	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
-	load := MeLoader(func(context.Context) (Tenant, string, error) {
-		return Tenant{}, "", db.ErrNotActiveMember
+	load := MeLoader(func(context.Context) (Tenant, MeUser, error) {
+		return Tenant{}, MeUser{}, db.ErrNotActiveMember
 	})
 	rec, body := doMe(t, load, &id)
 

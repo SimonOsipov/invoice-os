@@ -36,18 +36,18 @@ func NewStore(pool *pgxpool.Pool) *Store {
 //
 // Both queries run inside the SAME transaction, so a missing tenant row surfaces
 // as ErrTenantNotFound before the membership query ever runs.
-func (s *Store) Me(ctx context.Context) (Tenant, string, error) {
+func (s *Store) Me(ctx context.Context) (Tenant, MeUser, error) {
 	// AUDIT-10 §5: exempt from the request seam's membership gate, as is
 	// ProvisionWorkspace. /v1/me is the SPA's boot call and auth.ts signIn throws on failure, so
 	// gating it would turn every suspended session into an unexplained sign-in
 	// failure with nothing able to say why (TestStoreMe_AnswersForASuspendedMember).
 	id, ok := auth.IdentityFromContext(ctx)
 	if !ok {
-		return Tenant{}, "", db.ErrNoTenant
+		return Tenant{}, MeUser{}, db.ErrNoTenant
 	}
 
 	var t Tenant
-	var role string
+	var me MeUser
 	err := db.WithinTenantTx(ctx, s.pool, id.TenantID, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `SELECT id, name, kind FROM tenants`).Scan(&t.ID, &t.Name, &t.Kind); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -58,7 +58,7 @@ func (s *Store) Me(ctx context.Context) (Tenant, string, error) {
 
 		if err := tx.QueryRow(ctx,
 			`SELECT role FROM memberships WHERE user_id = $1`, id.Subject,
-		).Scan(&role); err != nil {
+		).Scan(&me.Role); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNoMembership
 			}
@@ -67,9 +67,9 @@ func (s *Store) Me(ctx context.Context) (Tenant, string, error) {
 		return nil
 	})
 	if err != nil {
-		return Tenant{}, "", err
+		return Tenant{}, MeUser{}, err
 	}
-	return t, role, nil
+	return t, me, nil
 }
 
 // workspaceNamespace keys uuidv5(subject): one self-provisioned workspace per identity.

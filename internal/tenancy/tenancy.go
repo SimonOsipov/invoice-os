@@ -63,7 +63,14 @@ var ErrAlreadyProvisioned = errors.New("tenancy: already provisioned")
 // memberships). The handler depends on this narrow function type rather than a
 // pool, so its HTTP contract is unit-testable without a database; the production
 // loader (Store.Me) runs the real tenant + membership queries.
-type MeLoader func(ctx context.Context) (Tenant, string, error)
+type MeLoader func(ctx context.Context) (Tenant, MeUser, error)
+
+// MeUser is the caller's own membership: role and stored identity, never status.
+type MeUser struct {
+	Role        string
+	DisplayName *string
+	Email       *string
+}
 
 // MeHandler returns GET /v1/me. It reads the verified identity the platform's
 // identityMiddleware placed in the context (401 if absent — the endpoint is
@@ -83,7 +90,7 @@ func MeHandler(load MeLoader, log *slog.Logger) http.HandlerFunc {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		tenant, role, err := load(r.Context())
+		tenant, me, err := load(r.Context())
 		switch {
 		case errors.Is(err, db.ErrNoTenant):
 			writeError(w, http.StatusUnauthorized, "unauthorized")
@@ -111,7 +118,7 @@ func MeHandler(load MeLoader, log *slog.Logger) http.HandlerFunc {
 		resp.Tenant.Name = tenant.Name
 		resp.Tenant.Kind = tenant.Kind
 		resp.User.ID = id.Subject
-		resp.User.Role = role
+		resp.User.Role = me.Role
 		writeJSON(w, http.StatusOK, resp)
 	}
 }

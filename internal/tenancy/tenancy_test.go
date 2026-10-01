@@ -60,8 +60,8 @@ func doMe(t *testing.T, load MeLoader, id *auth.Identity) (*httptest.ResponseRec
 // assertion only passes once Stage 3 wires the loader's role into the response.
 func TestMe_OKShape(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
-	load := func(context.Context) (Tenant, string, error) {
-		return Tenant{ID: id.TenantID, Name: "Okafor & Partners", Kind: "firm"}, "admin", nil
+	load := func(context.Context) (Tenant, MeUser, error) {
+		return Tenant{ID: id.TenantID, Name: "Okafor & Partners", Kind: "firm"}, MeUser{Role: "admin"}, nil
 	}
 	rec, body := doMe(t, load, &id)
 
@@ -86,7 +86,7 @@ func TestMe_OKShape(t *testing.T) {
 // non-empty error body — distinct from 401 (no identity) and 404 (no tenant).
 func TestMe_NoMembership403(t *testing.T) {
 	id := auth.Identity{Subject: "u", Role: "authenticated", TenantID: uuid.NewString()}
-	load := func(context.Context) (Tenant, string, error) { return Tenant{}, "", ErrNoMembership }
+	load := func(context.Context) (Tenant, MeUser, error) { return Tenant{}, MeUser{}, ErrNoMembership }
 	rec, body := doMe(t, load, &id)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", rec.Code)
@@ -100,7 +100,7 @@ func TestMe_NoMembership403(t *testing.T) {
 // mapping must be preserved unchanged by the M3-02-01 loader-signature widening.
 func TestMe_TenantNotFound404(t *testing.T) {
 	id := auth.Identity{Subject: "u", Role: "authenticated", TenantID: uuid.NewString()}
-	load := func(context.Context) (Tenant, string, error) { return Tenant{}, "", ErrTenantNotFound }
+	load := func(context.Context) (Tenant, MeUser, error) { return Tenant{}, MeUser{}, ErrTenantNotFound }
 	rec, body := doMe(t, load, &id)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", rec.Code)
@@ -114,7 +114,7 @@ func TestMe_TenantNotFound404(t *testing.T) {
 // mapping must be preserved unchanged.
 func TestMe_NoTenantCtx401(t *testing.T) {
 	id := auth.Identity{Subject: "u", Role: "authenticated", TenantID: uuid.NewString()}
-	load := func(context.Context) (Tenant, string, error) { return Tenant{}, "", db.ErrNoTenant }
+	load := func(context.Context) (Tenant, MeUser, error) { return Tenant{}, MeUser{}, db.ErrNoTenant }
 	rec, body := doMe(t, load, &id)
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rec.Code)
@@ -127,9 +127,9 @@ func TestMe_NoTenantCtx401(t *testing.T) {
 // TestMe_NoIdentity401 (AC #1): no identity in the request context must 401
 // before the loader ever runs — asserted by failing the test if load is called.
 func TestMe_NoIdentity401(t *testing.T) {
-	load := func(context.Context) (Tenant, string, error) {
+	load := func(context.Context) (Tenant, MeUser, error) {
 		t.Fatal("loader must not run without an identity")
-		return Tenant{}, "", nil
+		return Tenant{}, MeUser{}, nil
 	}
 	rec, body := doMe(t, load, nil)
 	if rec.Code != http.StatusUnauthorized {
@@ -144,7 +144,7 @@ func TestMe_NoIdentity401(t *testing.T) {
 // leak internals into the body, but still include a non-empty error message.
 func TestMe_InternalError500(t *testing.T) {
 	id := auth.Identity{Subject: "u", Role: "authenticated", TenantID: uuid.NewString()}
-	load := func(context.Context) (Tenant, string, error) { return Tenant{}, "", errors.New("boom") }
+	load := func(context.Context) (Tenant, MeUser, error) { return Tenant{}, MeUser{}, errors.New("boom") }
 	rec, body := doMe(t, load, &id)
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", rec.Code)
@@ -160,8 +160,8 @@ func TestMe_InternalError500(t *testing.T) {
 // widening.
 func TestMe_UserKeySetUnchanged(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
-	load := func(context.Context) (Tenant, string, error) {
-		return Tenant{ID: id.TenantID, Name: "Okafor & Partners", Kind: "firm"}, "admin", nil
+	load := func(context.Context) (Tenant, MeUser, error) {
+		return Tenant{ID: id.TenantID, Name: "Okafor & Partners", Kind: "firm"}, MeUser{Role: "admin"}, nil
 	}
 	r := httptest.NewRequest("GET", "/v1/me", nil)
 	r = r.WithContext(auth.WithIdentity(r.Context(), id))
@@ -253,7 +253,8 @@ func TestStoreMe_ResolvesTenantAndRole(t *testing.T) {
 
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID})
-	tenant, role, err := store.Me(c)
+	tenant, me, err := store.Me(c)
+	role := me.Role
 	if err != nil {
 		t.Fatalf("Me(%s): %v", tenantID, err)
 	}
@@ -301,7 +302,8 @@ func TestStoreMe_ExemptFromTheSeamUnderTheStrictRule(t *testing.T) {
 
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
-	tenant, role, err := store.Me(c)
+	tenant, me, err := store.Me(c)
+	role := me.Role
 	if !errors.Is(err, ErrNoMembership) {
 		t.Fatalf("Me(no row) err = %v, want ErrNoMembership", err)
 	}
@@ -361,7 +363,8 @@ func TestStoreMe_AnswersForASuspendedMember(t *testing.T) {
 
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID})
-	tenant, role, err := store.Me(c)
+	tenant, me, err := store.Me(c)
+	role := me.Role
 	if err != nil {
 		t.Fatalf("Me: a suspended member must still get their boot payload, got %v", err)
 	}
@@ -467,7 +470,8 @@ func TestStoreMe_RolePerTenant(t *testing.T) {
 	store := NewStore(app)
 
 	cA := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantA})
-	_, roleA, err := store.Me(cA)
+	_, me, err := store.Me(cA)
+	roleA := me.Role
 	if err != nil {
 		t.Fatalf("Me(tenant A): %v", err)
 	}
@@ -476,7 +480,8 @@ func TestStoreMe_RolePerTenant(t *testing.T) {
 	}
 
 	cB := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantB})
-	_, roleB, err := store.Me(cB)
+	_, me, err = store.Me(cB)
+	roleB := me.Role
 	if err != nil {
 		t.Fatalf("Me(tenant B): %v", err)
 	}
@@ -520,7 +525,8 @@ func TestStoreMe_CrossTenantRoleBorrowFailsClosed(t *testing.T) {
 	store := NewStore(app)
 	// Caller's current tenant is B, not A — U must not borrow A's admin role.
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantB})
-	_, role, err := store.Me(c)
+	_, me, err := store.Me(c)
+	role := me.Role
 	if !errors.Is(err, ErrNoMembership) {
 		t.Fatalf("Me(tenant B) err = %v, role = %q, want ErrNoMembership (must not borrow tenant A's admin role)", err, role)
 	}
@@ -551,7 +557,8 @@ func TestStoreMe_RoleValueIntegrity(t *testing.T) {
 
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID})
-	_, role, err := store.Me(c)
+	_, me, err := store.Me(c)
+	role := me.Role
 	if err != nil {
 		t.Fatalf("Me(%s): %v", tenantID, err)
 	}
@@ -914,7 +921,8 @@ func TestStoreMe_RoleIsCatalogValueForEachRole(t *testing.T) {
 			}
 
 			c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID})
-			_, role, err := store.Me(c)
+			_, me, err := store.Me(c)
+			role := me.Role
 			if err != nil {
 				t.Fatalf("Me(%s): %v", tenantID, err)
 			}

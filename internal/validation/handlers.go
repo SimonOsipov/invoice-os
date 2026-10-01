@@ -16,54 +16,13 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// toggleRequest is the PATCH /v1/rules/{key} wire body. Enabled is a *bool so
-// an ABSENT "enabled" key (body "{}") is distinguishable from an explicit
-// {"enabled":false}: the former is a 400 ("enabled is required"), the latter a
-// valid false-toggle request.
-type toggleRequest struct {
-	Enabled *bool `json:"enabled"`
-}
-
-// ToggleHandler returns PATCH /v1/rules/{key}: identity-first-401 (checked
-// before decode), decodes a {"enabled": bool} body (400 on malformed JSON or
-// an absent "enabled" key), reads the rule key from r.PathValue("key"), calls
-// toggle, maps store errors via statusForErr (404 unknown key, 409 redundant,
-// 503 no active rule-set), and answers 200 + the updated Rule on success.
-func ToggleHandler(toggle func(ctx context.Context, key string, enabled bool) (Rule, error), log *slog.Logger) http.HandlerFunc {
-	if log == nil {
-		log = slog.Default()
-	}
-	return func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
-			writeError(w, http.StatusUnauthorized, "unauthorized")
-			return
-		}
-
-		var req toggleRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid request body")
-			return
-		}
-		if req.Enabled == nil {
-			writeError(w, http.StatusBadRequest, "enabled is required")
-			return
-		}
-
-		rule, err := toggle(r.Context(), r.PathValue("key"), *req.Enabled)
-		if err != nil {
-			status, msg := statusForErr(err)
-			if status == http.StatusInternalServerError {
-				log.ErrorContext(r.Context(), "validation: toggle rule", slog.Any("err", err))
-			}
-			writeError(w, status, msg)
-			return
-		}
-
-		writeJSON(w, http.StatusOK, rule)
+// ToggleHandler is a Mode A stub (AUTH-12-02); the executor replaces it.
+func ToggleHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented")
 	}
 }
 

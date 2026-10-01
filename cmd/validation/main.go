@@ -56,7 +56,7 @@ func main() {
 	store := validation.NewStore(pool)
 	engine := validation.NewDefaultEngine()
 
-	app.Mux.HandleFunc("PATCH /v1/rules/{key}", validation.ToggleHandler(store.ToggleRule, app.Logger))
+	app.Mux.HandleFunc("PATCH /v1/rules/{key}", validation.ToggleHandler())
 
 	// POST /v1/validate/batch — the tenant-free peer surface 03 (submission)
 	// calls to validate a whole batch in one request (M4-04-03). Unlike the

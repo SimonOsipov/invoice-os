@@ -182,9 +182,12 @@ func TestCIRunFiltersReachEveryTestInThePackage(t *testing.T) {
 		postdatesTheFrozenFilters := func(n string) bool {
 			return n == "TestCIRunFiltersReachEveryTestInThePackage" ||
 				strings.HasPrefix(n, "TestPurge") ||
+				strings.HasPrefix(n, "TestShard") ||
 				strings.HasPrefix(n, "TestHandlerMapping") ||
 				strings.HasPrefix(n, "TestExtraction") ||
 				strings.HasPrefix(n, "TestImportBatchesHeaderRow") ||
+				strings.HasPrefix(n, "TestQueryTracer") ||
+				strings.HasPrefix(n, "TestNewPool") ||
 				strings.HasPrefix(n, "TestBootstrapCreatesAuth") ||
 				n == "TestBootstrapRotatesAuthAdminPasswordIdempotently" ||
 				n == "TestBootstrapRefusesEmptyAuthAdminBeforeDialing"

@@ -54,6 +54,9 @@ func filteredClient(t *testing.T, tracing bool) *mockTransport {
 	if tracing {
 		opts.EnableTracing = true
 		opts.TracesSampleRate = 1
+	} else {
+		opts.EnableTracing = false
+		opts.TracesSampleRate = 0
 	}
 	client, err := sentry.NewClient(opts)
 	if err != nil {

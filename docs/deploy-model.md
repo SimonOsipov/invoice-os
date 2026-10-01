@@ -18,8 +18,8 @@ actually existing: CI now creates, tears down and sweeps them itself.
 
   Every PR event, draft or ready, reports an **`E2E gate`** check. It passes when no path in
   the `changes` job's `e2e` filter changed (no deploy runs), fails on a draft PR with
-  relevant changes, and otherwise fails unless the `e2e` job and the `CI` check both
-  succeeded. On a ready relevant PR it fails when `CI` did not succeed, and it names CI; such a run concludes `cancelled`. To
+  relevant changes, and otherwise fails unless the `e2e` job, every `topology` unit and the
+  `CI` check all succeeded. On a ready relevant PR it fails when `CI` did not succeed, and it names CI; such a run concludes `cancelled`. To
   retry it, re-run the whole workflow, never "re-run failed jobs".
 - **Close a PR (merged or abandoned)** → `.github/workflows/dev-env-teardown.yml`
   (**M4-23-05**) deletes that PR's **whole ephemeral environment** via `environmentDelete`,
@@ -104,9 +104,12 @@ PR opened ──> dev-env.yml:
                 asserts == "true" separately — DEMO-04; mock_issuer == "on";
                 auth_issuers == "2": the mock plus the fork's own GoTrue)
                 ──> 8 context services + docling + auth + 4 SPAs (app is gateway-wired)
-                ──> verify: smoke (landing + both consoles) + api + topology (app login,
-                    cross-tenant isolation, fleet /healthz/fleet gate + its Sentry
-                    state check: every Go service reports sentry "off") + demo
+                ──> `fleet-gate` job: fleet /healthz/fleet gate + its Sentry
+                    state check: every Go service reports sentry "off"
+                ──> verify, `e2e` job: smoke (landing + both consoles) + api
+                ──> verify, `topology` job: one parallel leg per unit (serial-lane,
+                    import-wizard, invoice-surfaces; app login, cross-tenant
+                    isolation, demo persona)
               ──> PR stays open: environment stays up
 PR closed  ──> dev-env-teardown.yml (M4-23-05): prenv name ──> look the name up among
                ephemeral environments ──> environmentDelete ──> confirm by re-query.

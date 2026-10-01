@@ -13,8 +13,8 @@
 //     stranded at zero active admins needs a superuser to recover;
 //   - the row is forced back to `active` on the way in AND on the way out, in a
 //     `finally`, so neither a mid-assertion failure nor a killed prior run can
-//     leave it dirty. The api job runs BEFORE test:topology in dev-env.yml
-//     (:816 / :821), and topology's roles.spec.ts asserts exact roster content.
+//     leave it dirty. The api suite finishes before the topology job starts
+//     (`needs: e2e` in dev-env.yml), and topology's roles.spec.ts asserts exact roster content.
 //
 // Four properties are proven against the DEPLOYED gateway:
 //   - Happy-path status + shape (persona A, Core AC 1): /me -> 200 +

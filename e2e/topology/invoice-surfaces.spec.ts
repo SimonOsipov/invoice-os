@@ -10,8 +10,7 @@
 // import-wizard.spec.ts (no-duplicate-invoice-number is scoped per entity, and
 // this suite runs serially -- fullyParallel:false, workers:1
 // (playwright.topology.config.ts, [topology-config-conforms-workers-1] since
-// M4-14-01) -- with retries:1 in CI, against the same shared firm-persona
-// tenant every other topology spec also drives).
+// M4-14-01) -- with retries:1 in CI).
 //
 // Fixture data is verified against the seeded v1+v2 rule set (migrations/
 // 20260711121327_seed_mbs_v1.sql + 20260716185106_rule_set_v2.sql) and built as
@@ -32,23 +31,31 @@ import {
   getAuditLog,
   getInvoice,
   getInvoiceApproval,
-  PERSONAS,
+  type Persona,
 } from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { buildMixedCsv, buildPerfCsv } from '../importFixtures'
 import { approvalRun404Dropper, type Dropper, expectedStatusDropper, notFoundIdDropper } from './consoleGate'
 import { assertFillsColumn, assertSameHeight, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS } from './layout'
-import { APP_URL, FIRM_PERSONA, VALIDATION_EXPECTED } from './targets'
+import { assertShardSession, seedShardSession } from './shardSession'
+import { APP_URL, FIRM_PERSONA, shardTenants, VALIDATION_EXPECTED } from './targets'
+
+// This file runs in its own shard, on its own tenants: PERSONAS shadows the api client's 1111 / 2222 pair.
+const SHARD = shardTenants('invoice-surfaces.spec.ts')
+const PERSONAS: { A: Persona; B: Persona } = {
+  A: { ...SHARD.a, tenantId: SHARD.a.id },
+  B: { ...SHARD.b, tenantId: SHARD.b.id },
+}
 
 // [topology-never-publishes] scoped to policy IDENTITY (docs/e2e-convention.md): this
 // self-heal restores the tenant's OWN seeded policy, never a new one. Unwrapped (D3
-// protocol, ../api/validation.spec.ts:5-22) -- the api run ahead of this one (dev-env.yml)
-// leaves the firm tenant's active slot empty (contract-invoice.spec.ts's own armedInvoice
-// cleanup), so every approval below would otherwise 404 against an invoice that armed no
-// run. A genuine convergence failure must abort this file loudly, not surface as confusing
-// per-test 404s.
+// protocol, the header of ../api/validation.spec.ts) -- the shard seed leaves the firm tenant's
+// policy an unpublished draft (db/seed.e2e-shards.sql), so every approval below would
+// otherwise 404 against an invoice that armed no run. A genuine convergence failure must
+// abort this file loudly, not surface as confusing per-test 404s.
 test.beforeAll(async () => {
+  expect(test.info().project.name, 'invoice-surfaces.spec.ts belongs to the invoice-surfaces shard').toBe('invoice-surfaces')
   const token = await login(PERSONAS.A)
   await ensureFirmPolicyActive(token)
 })
@@ -72,13 +79,15 @@ function collectErrors(page: Page, extra?: Dropper): string[] {
 }
 
 async function signInFirm(page: Page): Promise<void> {
+  await seedShardSession(page, 'firm', SHARD.a)
   // The landing page is the single sign-in front door, so the app has no picker to click
-  // on a deployed build; ?persona= IS the sign-in, exactly as landing destUrl() hands off.
+  // on a deployed build.
   const url = `${APP_URL}?persona=${FIRM_PERSONA.param}`
   const res = await page.goto(url)
   expect(res, `no response from ${url}`).toBeTruthy()
   expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
   await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  await assertShardSession(page, SHARD.a.id)
 }
 
 // goToInvoices()/openInvoiceRow(): the two navigation seams every scenario
@@ -771,7 +780,7 @@ test('register geometry: a blocked row costs no extra line and stands the same h
 
   // The firm tenant is governed (this file's beforeAll), so validating armed a run on
   // BOTH. Closing exactly one is what makes the pair blocked-vs-clean.
-  await approveUntilClosed(clean.id, await firmApproverTokens())
+  await approveUntilClosed(clean.id, await firmApproverTokens(SHARD.a.id))
 
   await signInFirm(page)
   await selectEntity(page, entity.name)
@@ -1215,38 +1224,6 @@ test('detail surface: violations render against the rule-set version, the fix lo
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// ROUTE-02-07 (X-1/X-2): a top-level /invoices/<uuid> deep link cold-boots the detail
-// panel directly, no prior sign-in ([deep-link-uses-persona-handoff] -- copies
-// auth.spec.ts's own top-level-path test verbatim). res.ok() only proves Caddy's
-// try_files served the document; what actually renders is the real assertion.
-test('deployed app: /invoices/<uuid> is a working deep link, and the persona param strips', async ({ page }) => {
-  const errors = collectErrors(page)
-
-  const token = await login(PERSONAS.A)
-  const entity = await createEntity(token, { name: `ROUTE-02 cold boot ${Date.now()}`, tin: freshTin() })
-  const invoiceNumber = `INV-ROUTE02-CB-${Date.now()}`
-  const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
-
-  const url = `${APP_URL}/invoices/${inv.id}?persona=${FIRM_PERSONA.param}`
-  const res = await page.goto(url)
-  expect(res, `no response from ${url}`).toBeTruthy()
-  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
-
-  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
-  await expect(page.getByTestId('invoice-detail'), 'the cold boot must render this invoice, not the empty state').toContainText(
-    invoiceNumber,
-  )
-
-  await expect(page, 'the deep link did not settle on /invoices/<uuid>').toHaveURL(new RegExp(`/invoices/${inv.id}$`))
-  await expect
-    .poll(() => new URL(page.url()).searchParams.has('persona'), {
-      message: `?persona= survived the deep link at ${page.url()}`,
-    })
-    .toBe(false)
-
-  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
-})
-
 // ROUTE-02-07 (X-3): the security-relevant assertion -- a cross-tenant invoice id and a
 // random UUID must render IDENTICAL text. Fixture created under PERSONAS.B (a different
 // tenant than the firm persona that views it) and never opened as firm before this.
@@ -1263,6 +1240,7 @@ test('deployed app: a cross-tenant invoice id and a random UUID render the same 
   // is this test's premise, a 404 on anything else is still a failure. See
   // consoleGate.ts's notFoundIdDropper for why one 404 is really four.
   const errors = collectErrors(page, notFoundIdDropper(page, [crossTenantInvoice.id, randomId]))
+  await seedShardSession(page, 'firm', SHARD.a)
 
   // toContainText is only the settle signal -- innerText() is a one-shot read, not
   // auto-retrying. The assertion is the equality below; nothing here hardcodes a copy
@@ -1270,6 +1248,7 @@ test('deployed app: a cross-tenant invoice id and a random UUID render the same 
   async function renderedTextFor(id: string): Promise<string> {
     await page.goto(`${APP_URL}/invoices/${id}?persona=${FIRM_PERSONA.param}`)
     await expect(page.getByTestId('invoice-detail')).toContainText('HTTP 404')
+    await assertShardSession(page, SHARD.a.id)
     return page.getByTestId('invoice-detail').innerText()
   }
 
@@ -1497,7 +1476,7 @@ test('submission surface: batch-select and submit a validated invoice, badge adv
   // The firm tenant is governed (this file's own beforeAll) -- validating arms an open
   // approval run, and the SERVER then answers can_submit:false, which is what disables the
   // checkbox (submitGate). Close the run over the side channel before the row is selected.
-  await approveUntilClosed(inv.id, await firmApproverTokens())
+  await approveUntilClosed(inv.id, await firmApproverTokens(SHARD.a.id))
 
   await signInFirm(page)
   await selectEntity(page, entity.name)
@@ -1577,7 +1556,7 @@ test('submission surface: reject → fix → re-validate → resubmit → accept
     ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_REJECT),
   })
   await validateInvoice(token, inv.id)
-  await approveUntilClosed(inv.id, await firmApproverTokens())
+  await approveUntilClosed(inv.id, await firmApproverTokens(SHARD.a.id))
 
   await signInFirm(page)
   await selectEntity(page, entity.name)
@@ -1635,7 +1614,7 @@ test('submission surface: reject → fix → re-validate → resubmit → accept
   // satisfies that. Since BUG-12 the checkbox reads that same verdict off can_submit, so
   // this second approval is redundant; it is kept because approveUntilClosed is a no-op on
   // a closed run and deleting it would widen this leg's scope.
-  await approveUntilClosed(inv.id, await firmApproverTokens())
+  await approveUntilClosed(inv.id, await firmApproverTokens(SHARD.a.id))
 
   // Resubmit leg: back to the list -- this test still resubmits through the register's
   // batch-select-and-submit path (AC-3), not the detail page's own Submit control.
@@ -1709,7 +1688,7 @@ test('detail surface: a rejected invoice is edited back to draft with its reason
     ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_REJECT),
   })
   await validateInvoice(token, inv.id)
-  await approveUntilClosed(inv.id, await firmApproverTokens())
+  await approveUntilClosed(inv.id, await firmApproverTokens(SHARD.a.id))
 
   await signInFirm(page)
   await selectEntity(page, entity.name)
@@ -1971,7 +1950,7 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
   await validateInvoice(token, inv.id)
   // TransmitClearTx gates this transition server-side too (EXISTS(state='approved')) -- the
   // governed tenant's open run must close before the queued edge is legal here.
-  await approveUntilClosed(inv.id, await firmApproverTokens())
+  await approveUntilClosed(inv.id, await firmApproverTokens(SHARD.a.id))
   await transitionInvoice(token, inv.id, 'queued')
   await transitionInvoice(token, inv.id, 'failed')
 
@@ -2045,7 +2024,7 @@ test('resolve/unresolve loop: marking a failed invoice resolved drops it from ne
   const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
   await validateInvoice(token, inv.id)
   // Same server-side gate as the dead-end test above (TransmitClearTx).
-  await approveUntilClosed(inv.id, await firmApproverTokens())
+  await approveUntilClosed(inv.id, await firmApproverTokens(SHARD.a.id))
   await transitionInvoice(token, inv.id, 'queued')
   await transitionInvoice(token, inv.id, 'failed')
 
@@ -2228,7 +2207,7 @@ test('detail surface: submit one invoice from its own page -- cancel sends nothi
   // Approve over the side channel, then force a refetch: a validated invoice does not poll
   // (shouldPollList needs queued/submitted), so nothing on screen would notice otherwise.
   // Reuses the same back-then-reopen round trip the draft leg above already needed.
-  await approveUntilClosed(inv.id, await firmApproverTokens())
+  await approveUntilClosed(inv.id, await firmApproverTokens(SHARD.a.id))
   await page.getByRole('button', { name: '← All invoices' }).click()
   await openInvoiceRow(page, invoiceNumber)
   await expect(page.getByTestId('invoices-list')).toHaveCount(0)
@@ -2339,7 +2318,7 @@ test('submit gate: the register row and its own detail page never disagree -- re
 
   // A validated invoice does not poll (shouldPollList needs queued/submitted), so this
   // back-and-reopen round trip IS the refetch, not navigation garnish.
-  await approveUntilClosed(inv.id, await firmApproverTokens())
+  await approveUntilClosed(inv.id, await firmApproverTokens(SHARD.a.id))
   await page.getByRole('button', { name: '← All invoices' }).click()
   await expect(page.getByTestId('invoices-list')).toBeVisible()
 
@@ -2491,7 +2470,7 @@ test('register-selection: select-all is page-scoped and paging clears it', async
   // AC-2: this test submits NOTHING -- it fails purely on SELECTABILITY, not submission.
   // Every one of these 12 now arms an open run on validate (governed tenant); close them
   // all before select-all or the summary bar unmounts entirely at zero selectable.
-  const approverTokens = await firmApproverTokens()
+  const approverTokens = await firmApproverTokens(SHARD.a.id)
   await Promise.all(bulk.slice(0, SELECTABLE_COUNT).map((inv) => approveUntilClosed(inv.id, approverTokens)))
 
   await signInFirm(page)
@@ -2543,7 +2522,7 @@ test('register-confirm-stage: arm, a selection change disarms, re-arm sends exac
   await Promise.all([validateInvoice(token, inv1.id), validateInvoice(token, inv2.id)])
   // Both rows are checked below (inv2 only to prove the uncheck disarms), so both must be
   // selectable -- close the open run each validate just armed.
-  const approverTokens = await firmApproverTokens()
+  const approverTokens = await firmApproverTokens(SHARD.a.id)
   await Promise.all([approveUntilClosed(inv1.id, approverTokens), approveUntilClosed(inv2.id, approverTokens)])
 
   await signInFirm(page)
@@ -3514,7 +3493,7 @@ test.describe.serial("detail surface: the state strip's geometry", () => {
     const invoice = await createInvoice(creatorToken, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
     await validateInvoice(validatorToken, invoice.id)
     // TransmitClearTx gates the queued edge on a closed run.
-    await approveUntilClosed(invoice.id, await firmApproverTokens())
+    await approveUntilClosed(invoice.id, await firmApproverTokens(SHARD.a.id))
     await transitionInvoice(token, invoice.id, 'queued')
     await transitionInvoice(token, invoice.id, 'failed')
   })
@@ -3663,7 +3642,7 @@ test.describe.serial("detail surface: the activity card's geometry", () => {
     const invoice = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
     await validateInvoice(token, invoice.id)
     // TransmitClearTx gates the queued edge on a closed run.
-    await approveUntilClosed(invoice.id, await firmApproverTokens())
+    await approveUntilClosed(invoice.id, await firmApproverTokens(SHARD.a.id))
     await transitionInvoice(token, invoice.id, 'queued')
     await transitionInvoice(token, invoice.id, 'failed')
   })
@@ -4258,7 +4237,7 @@ test.describe.serial("detail surface: the action cluster's geometry (firm admin)
     numbers.failed = `INV-BUG1404-FAILED-${stamp}`
     const failed = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(numbers.failed) })
     await validateInvoice(token, failed.id)
-    await approveUntilClosed(failed.id, await firmApproverTokens())
+    await approveUntilClosed(failed.id, await firmApproverTokens(SHARD.a.id))
     await transitionInvoice(token, failed.id, 'queued')
     await transitionInvoice(token, failed.id, 'failed')
     ids.failed = failed.id
@@ -4544,7 +4523,7 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
   // rather than assuming fin_mgr sits at ord 0. approveUntilClosed does the same lookup for
   // the approve half; this is its one-shot reject sibling, which that helper has no mode for.
   async function rejectPendingStep(reason: string): Promise<void> {
-    const tokens = await firmApproverTokens()
+    const tokens = await firmApproverTokens(SHARD.a.id)
     const run = await getInvoiceApproval(journeyToken, invoiceId)
     expect(run.state, `the run must be open before an approver can reject it (run ${run.run_id})`).toBe('open')
     const pending = run.steps.find((s) => s.kind === 'approval' && s.state === 'pending')
@@ -4665,7 +4644,7 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
     await expect(page.getByTestId('approval-state')).toHaveText('In progress')
     await expectStripStates(page, { approved: 'current' })
 
-    await approveUntilClosed(invoiceId, await firmApproverTokens())
+    await approveUntilClosed(invoiceId, await firmApproverTokens(SHARD.a.id))
     const run = await getInvoiceApproval(journeyToken, invoiceId)
     expect(run.state, 'approveUntilClosed must leave the run closed as approved').toBe('approved')
     const approvals = run.decisions.filter((d) => d.decision === 'approved').length
@@ -4934,7 +4913,7 @@ test('detail surface: the untouched rail order is unchanged', async ({ page }) =
   await validateInvoice(token, inv.id)
   // Validating arms the governed tenant's run, and the server answers can_submit:false
   // while one is open -- close it before the row is selected.
-  await approveUntilClosed(inv.id, await firmApproverTokens())
+  await approveUntilClosed(inv.id, await firmApproverTokens(SHARD.a.id))
 
   await signInFirm(page)
   await selectEntity(page, entity.name)

@@ -124,6 +124,7 @@ func main() {
 		Issuer:     mustEnv("AUTH_ISSUER"),
 		JWKSURL:    mustEnv("AUTH_JWKS_URL"),
 		Additional: additional,
+		HTTPClient: newJWKSClient(),
 		Logger:     app.Logger,
 	})
 	if err != nil {
@@ -239,6 +240,11 @@ func gatewayHandlers(
 // registration holds the public registration handlers main mounts outside /api/.
 type registration struct {
 	Register, Verify http.Handler
+}
+
+// newJWKSClient builds the JWKS fetch client.
+func newJWKSClient() *http.Client {
+	return &http.Client{Timeout: 10 * time.Second, Transport: platform.TraceTransport(nil)}
 }
 
 // registrationHandlers builds the registration handlers against GoTrue at authURL.

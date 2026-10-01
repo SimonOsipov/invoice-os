@@ -362,6 +362,73 @@ test('deployed app: a top-level path is a working deep link', async ({ page }) =
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+// Moved from invoice-surfaces.spec.ts unchanged; the locals stand in for that file's helpers.
+{
+const PERSONAS = API_PERSONAS
+
+function collectErrors(page: Page): string[] {
+  const errors: string[] = []
+  const drop = approvalRun404Dropper(page)
+  page.on('console', (msg) => {
+    if (msg.type() !== 'error') return
+    if (drop(msg.text(), msg.location().url)) return
+    errors.push(msg.text())
+  })
+  page.on('pageerror', (err) => {
+    errors.push(`pageerror: ${err.message}`)
+  })
+  return errors
+}
+
+function cleanInvoiceFields(invoiceNumber: string) {
+  return {
+    invoice_number: invoiceNumber,
+    issue_date: '2026-01-01T00:00:00Z',
+    supplier_tin: freshTin(),
+    supplier_name: 'Acme Nigeria Ltd',
+    buyer_tin: '87654321-0002',
+    buyer_name: 'Buyer Ltd',
+    currency: 'NGN',
+    subtotal: '1000',
+    vat: '75',
+    total: '1075',
+    line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
+  }
+}
+
+// ROUTE-02-07 (X-1/X-2): a top-level /invoices/<uuid> deep link cold-boots the detail
+// panel directly, no prior sign-in ([deep-link-uses-persona-handoff] -- copies
+// auth.spec.ts's own top-level-path test verbatim). res.ok() only proves Caddy's
+// try_files served the document; what actually renders is the real assertion.
+test('deployed app: /invoices/<uuid> is a working deep link, and the persona param strips', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `ROUTE-02 cold boot ${Date.now()}`, tin: freshTin() })
+  const invoiceNumber = `INV-ROUTE02-CB-${Date.now()}`
+  const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+
+  const url = `${APP_URL}/invoices/${inv.id}?persona=${FIRM_PERSONA.param}`
+  const res = await page.goto(url)
+  expect(res, `no response from ${url}`).toBeTruthy()
+  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
+
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  await expect(page.getByTestId('invoice-detail'), 'the cold boot must render this invoice, not the empty state').toContainText(
+    invoiceNumber,
+  )
+
+  await expect(page, 'the deep link did not settle on /invoices/<uuid>').toHaveURL(new RegExp(`/invoices/${inv.id}$`))
+  await expect
+    .poll(() => new URL(page.url()).searchParams.has('persona'), {
+      message: `?persona= survived the deep link at ${page.url()}`,
+    })
+    .toBe(false)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+}
+
 // The tab is a PATH SEGMENT (lib/route.ts's routeUrl), so it can travel in the same URL as
 // ?persona=: the strip rewrites to `pathname + hash` (App.tsx's autoPersona effect), which
 // keeps the path and would drop any query the destination owned.

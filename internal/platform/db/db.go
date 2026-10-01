@@ -28,7 +28,12 @@ var ErrNoTenant = errors.New("db: missing or invalid tenant id")
 // NewPool opens a pgx connection pool for the given connection string (the app
 // role's DATABASE_URL). The caller owns the pool and must Close it on shutdown.
 func NewPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("db: open pool: %w", err)
+	}
+	cfg.ConnConfig.Tracer = queryTracer{}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("db: open pool: %w", err)
 	}

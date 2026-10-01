@@ -41,21 +41,24 @@ There is no standalone topology workflow. These assertions run automatically as 
 post-deploy verification steps of `.github/workflows/dev-env.yml`, on every ready
 (non-draft) PR — after the fleet is deployed to that PR's own ephemeral Railway
 environment (M4-23) and its Postgres is bootstrapped + seeded fresh at gateway boot
-(M4-21-04), alongside the smoke and api suites. `dev-env.yml` flow:
+(M4-21-04), alongside the smoke and api suites. The `e2e` job runs smoke then api; the
+`topology` job then runs the topology suite as parallel units, one matrix leg each
+(`serial-lane`, `import-wizard`, `invoice-surfaces`, from `e2e/topology/shards.ts`). `dev-env.yml` flow:
 
 ```
 prepare-env ──> create-or-reuse this PR's `pr-<N>` fork of `development` (on
                 workflow_dispatch: target `development` itself) ──> assert Watch Paths
                 empty (M3-16 invariant) ──> discover the 5 public URLs fresh
 gateway     ──> gate on /healthz (schema migrated at boot; a PR fork's DB is also
-                seeded, and its demo-tenant purge is NON-fatal, so the gate asserts
+                seeded, including the shard tenants of the topology units
+                (`db/seed.e2e-shards.sql`), and its demo-tenant purge is NON-fatal, so the gate asserts
                 /healthz's `demo_purge` field separately: `true` on a PR fork, `false`
                 on `development` — DEMO-04)
             ──> deploy 8 context services + docling + auth + 4 SPAs (app and landing are
                 gateway-wired: prepare-env's `reconcile-urls` writes VITE_GATEWAY_URL on
                 both per run)
-            ──> verify: smoke (landing + consoles) + api (typed contract suite) +
-                topology (fleet gate, browser login, isolation)
+            ──> verify: `e2e` job: smoke (landing + consoles) + api (typed contract suite)
+            ──> `topology` job, one parallel leg per unit (browser login, isolation)
 ```
 
 A PR's own ephemeral fork's Postgres self-seeds at gateway boot
@@ -159,7 +162,7 @@ variable that anything reads.
 `db/seed.dev.sql` inserts the canonical fixtures — the isolation pair (`aaaa…`/`bbbb…`)
 plus the persona tenants (`1111…` Okafor & Partners / `2222…` Honeywell Group) — and
 re-enables every validation rule. It runs as part of `internal/platform/db.Provision`
-(bootstrap → migrate → reset → purge → seed) on every gateway boot in an allow-listed
+(bootstrap → migrate → reset → purge → seed → shard seed) on every gateway boot in an allow-listed
 environment (`development` or a Railway PR-environment name), gated behind
 `BootstrapEnabled`, idempotent (upserts, not a table wipe) so re-running never loses data
 mid-test. A PR's own ephemeral Postgres is born empty and is purged then seeded once its
@@ -167,6 +170,13 @@ gateway first comes up — the purge (DEMO-04) is what makes the seed's upserts 
 curated state instead of accumulating on top of whatever the last demo left.
 `development`'s gateway reads `ENVIRONMENT=production`, which the allowlist refuses, so it
 neither purges nor seeds.
+
+**Shard seed (INFRA-04).** After the seed, `db.SeedShards` applies `db/seed.e2e-shards.sql`,
+only when `ResetWillRun` holds, so on PR forks only. It gives each dedicated topology shard
+(`import-wizard`, `invoice-surfaces`) a tenant pair that copies 1111 (firm) and 2222
+(in-house), and the file lists what it copies. It writes nothing for the four
+`db/seed.dev.sql` tenants, and the purge allowlist (`db.DemoTenants`) does not include the
+shard tenants.
 
 **Boot-time reset, PR environments only (persona-handoff-fix, Decision [pr-only-reset]).**
 Because a PR environment's Postgres is actually a FORK of the persistent environment's live

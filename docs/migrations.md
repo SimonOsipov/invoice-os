@@ -45,9 +45,9 @@ case adversarially; M2-06 adds `FORCE ROW LEVEL SECURITY`.)
 > (`internal/platform/db/provision.go`) gates bootstrap/seed behind `BootstrapEnabled`'s
 > ALLOWLIST (exactly `development` or a Railway PR-environment name — never a blocklist,
 > never production, QA F1), and `Bootstrap`/`Seed` (`internal/platform/db/bootstrap.go`),
-> `Reset` (`reset.go`) and `PurgeDemoTenants` (`demopurge.go`)
+> `Reset` (`reset.go`), `PurgeDemoTenants` (`demopurge.go`) and `SeedShards`
 > each open and close their **own** dedicated superuser connection, and since DEMO-04
-> `Provision` opens a fifth of its own for the advisory lock it holds across the
+> `Provision` opens one more of its own for the advisory lock it holds across the
 > reset/purge/seed tail (`lockProvisionTail`) — the DSN is read once
 > per gated step and **never retained** past the call that used it (QA F3); it is not
 > stored, logged, or reachable from any request-serving code path
@@ -357,7 +357,7 @@ show it. The fix is to rename the file to a current timestamp. Run it locally wi
 Since M4-23, each PR gets its **own** ephemeral Railway environment — including its **own**
 Postgres. That Postgres is a FORK of `development`'s live volume (M4-23-03's
 `reconcile-fork`), not an empty one — it inherits whatever data `development` currently
-holds — and is bootstrapped + migrated + reset + purged + seeded fresh at gateway boot
+holds — and is bootstrapped + migrated + reset + purged + seeded (demo, then shard tenants) fresh at gateway boot
 (`internal/platform/db.Provision`, M4-21-04; the reset step is persona-handoff-fix,
 Decision [pr-only-reset] — see docs/topology-e2e.md "Boot-time seed"; the demo-tenant
 purge is DEMO-04). When the PR closes, merged or not,
@@ -578,7 +578,7 @@ persistent, always-on service (§7). It is a one-time / re-provision runbook, no
 run per-PR: a PR's ephemeral Postgres comes from the `environmentCreate` fork that
 `dev-env.yml`'s `prepare-env` job issues (the *service* is inherited from `development`;
 the fork carries no deployment, so `prepare-env` deploys it explicitly), and is then
-bootstrapped/migrated/reset/purged/seeded by the gateway at boot
+bootstrapped/migrated/reset/purged/seeded (demo, then shard tenants) by the gateway at boot
 (`db.Provision`, M4-21-04, `[superuser-dsn-on-gateway]` above) — no human runs the steps
 below for it. The persistent environment's gateway reads `ENVIRONMENT=production`, which
 `BootstrapEnabled` refuses, so step 2's boot-time bootstrap no longer runs there: a role

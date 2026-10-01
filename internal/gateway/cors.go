@@ -19,7 +19,8 @@ import (
 // and it would fail the same silent way.
 const (
 	corsAllowMethods = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-	corsAllowHeaders = "Authorization, Content-Type"
+	// sentry-trace and baggage let the browser SDK join the gateway's trace.
+	corsAllowHeaders = "Authorization, Content-Type, sentry-trace, baggage"
 	corsMaxAge       = "600" // seconds a browser may cache a preflight before re-asking
 )
 

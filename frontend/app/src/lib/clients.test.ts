@@ -10,7 +10,11 @@
 // RED reason (assertion / thrown-error mismatch), not an import/compile error.
 import { describe, expect, it } from 'vitest'
 
-import { emptyClient, resolveActiveClient } from './clients'
+import type { AsyncStatus } from '@invoice-os/api-client'
+
+import { emptyClient, firstRunSurface, resolveActiveClient } from './clients'
+import { computeNoEntity } from './importFlow'
+import type { Entity } from './portfolio'
 import type { Client } from '../types'
 
 // A minimal, distinguishable Client fixture built off the real emptyClient() output
@@ -97,5 +101,48 @@ describe('resolveActiveClient (RAC-1..7, task-304 AC-2/AC-3)', () => {
     // would restore exactly the persona special-case task-304 AC-2 deletes.
     const threeArg = resolveActiveClient([], null, 'inhouse')
     expect(threeArg).toBeDefined()
+  })
+})
+
+// AUTH-10-03: which surface the dashboard shows while a workspace has no resolved entity.
+describe('firstRunSurface (AUTH-10-03)', () => {
+  const ENTITY: Entity = {
+    id: 'e1',
+    name: 'Lagos Freight',
+    tin: '20184412-0001',
+    registration: null,
+    sector: null,
+    address: null,
+    status: 'active',
+    created_at: '2026-01-01T00:00:00Z',
+  }
+
+  it.each([
+    ['settled empty', null, 'empty', 0, 0, 'task'],
+    ['no-gateway build', null, 'idle', 0, 0, 'task'],
+    ['ready with zero entities', null, 'ready', 0, 0, 'task'],
+    ['roster caught up, nothing resolved', null, 'ready', 2, 2, 'task'],
+    ['still loading', null, 'loading', 0, 0, 'loading'],
+    ['one-render roster catch-up', null, 'ready', 2, 0, 'loading'],
+    ['an entity resolved', ENTITY, 'ready', 1, 1, 'loading'],
+    ['fetch failed', null, 'error', 0, 0, 'error'],
+  ] as const)('%s', (_label, entity, state, entitiesCount, clientsCount, want) => {
+    expect(firstRunSurface(entity, state, entitiesCount, clientsCount)).toBe(want)
+  })
+
+  it('answers task whenever computeNoEntity does, so the dashboard and the amber panel agree', () => {
+    const states: AsyncStatus[] = ['idle', 'loading', 'error', 'empty', 'ready']
+    let noEntityCases = 0
+    for (const state of states) {
+      for (const entity of [null, ENTITY]) {
+        for (const [entitiesCount, clientsCount] of [[0, 0], [2, 0], [2, 2], [1, 1]]) {
+          if (computeNoEntity(entity, state, entitiesCount, clientsCount)) {
+            noEntityCases++
+            expect(firstRunSurface(entity, state, entitiesCount, clientsCount)).toBe('task')
+          }
+        }
+      }
+    }
+    expect(noEntityCases).toBeGreaterThan(0)
   })
 })

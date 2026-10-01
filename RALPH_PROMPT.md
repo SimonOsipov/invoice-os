@@ -28,7 +28,7 @@ The lead orchestrates. It may read, search and run commands directly to orient i
 ### 2. No assumptions, no feature cuts
 Never guess or reduce functionality. When something is unclear:
 - **Interactive run** (the user is present and you are not inside a `/ralph` phase) — ask.
-- **Unattended run** (every `/ralph` phase) — take the conservative default: the option closest to the story's text, smaller scope. Record it in `## Decisions`. Never block on the user, except at the critical-fork gate (Phase 0.6d).
+- **Unattended run** (every `/ralph` phase) — take the default: the option that the acceptance criterion's text supports. When the text supports a larger option, take the larger option. Otherwise take the smaller scope. Record it in `## Decisions`. Never block, except at the critical-fork gate (Phase 0.6d) and the Phase 3.5 escalation.
 
 Neither path licenses a silent feature cut.
 
@@ -56,9 +56,9 @@ All subtasks share one feature branch, one draft PR and one worktree.
 ### 5. Keep going
 Every `/ralph` phase is unattended. Put each status note in the same message as the next action.
 End a turn only in these cases:
-- Phase 0.6d halts at `AWAITING_ANSWERS`.
+- Phase 0.6d sends its questions to the coordinator (`AWAITING_ANSWERS`).
 - A spawn fails a third time (HALT, Phase 1).
-- Phase 3.5 escalates to the user.
+- Phase 3.5 sends its escalation to the coordinator.
 - The run outputs `ALL_TASKS_COMPLETE`.
 - A background command or Monitor you started is still running. Its completion wakes you.
 
@@ -113,7 +113,7 @@ Design references for UI stories: Claude Design **prototype** project `6269a212-
    - *Obsidian:* `get_vault_file` on `Simon Vault/Projects/ASComply Africa/User Stories/<EPIC>/<STORY>*.md`; also check `User Stories/Archive/<EPIC>/`. Set `STORY_SOURCE=obsidian`. If no file exists, error: "run /pm-story first".
 3. **Branch slug.** Use the story's `## Branch Strategy` if present. Otherwise `feature/<lowercase-id>-<kebab-title>` (`F-192 Notice a submission failure` → `feature/f-192-notice-a-submission-failure`).
 4. **Subtasks:** `hm subtask list <STORY>`. "has no subtasks" means zero subtasks.
-5. **Refuse a story with unanswered questions.** If `## Blocking Questions` has any entry, stop and ask the first open one (Phase 0.6d rules). Never default them or delete the section to proceed. (`## Open Questions` is a different, non-blocking section.)
+5. **Refuse a story with unanswered questions.** If `## Blocking Questions` has any entry, send the open ones to the coordinator (Phase 0.6d rules). Never default them or delete the section to proceed. (`## Open Questions` is a different, non-blocking section.)
 6. **Classify the story state:**
    - `STORY_SOURCE=sysmap` → **BASIC**.
    - Zero subtasks + Objective/Core ACs → **BASIC** → `PLANNING_REQUIRED=true`.
@@ -170,29 +170,34 @@ Run `hm subtask import "<story file>"` on the finalized story. Topo-sort into ex
 - Do not emit `SUBTASKS_READY` while a fact the story asserts lacks a `premise —` entry with pasted output.
 - **Checkpoint:** `SUBTASKS_READY`
 
-#### d. Critical-fork gate — the one place the run asks a question
+#### d. Critical-fork gate — the one place the plan asks a question
 Test every `## Decisions` entry (conservative defaults and `premise —` entries included) against five questions:
 
 - Does it decide **who is allowed** to do something?
 - Does it decide **what the system claims** to an outside party: the authority, the customer, the audit record?
 - Does it let the system **silently override a human's action**?
 - Does a **corrected premise** remove something the scope needs: a shipped screen, an endpoint, a merged PR, a seeded row?
-- Does it change the **meaning of a Core AC** (or a subtask AC taken from one)? A rewording that keeps the meaning is not a fork.
+- After it, does the **outcome that a Core AC promises** (or a subtask AC taken from one) no longer happen for the user? A narrower or a wider reading after which the outcome still happens is not a fork.
 
-Any "yes" makes the fork **critical**. Expect zero to two per story.
+Any "yes" makes the fork **critical**. Expect zero or one per story.
 
-**First check whether the user already answered it.** Look in the story's epic folder for a file with frontmatter `type: decision-log` (fallback: filename `*Decision Log*.md`). For each critical fork:
-- The log answers the same question → not blocking. Record `user — <choice> (<file>, <decided: date>)`.
-- The log is silent → blocking.
-- Your default contradicts the log → blocking; say so in the question.
-Match on the question, not on shared nouns.
+**First check whether it is already answered.** A source answers a fork when it decides the same question. Match on the question, not on shared nouns. Read these sources:
+- the epic's decision log: frontmatter `type: decision-log` in the story's epic folder (fallback: filename `*Decision Log*.md`);
+- the `## Decisions` of each sibling story that shipped (`User Stories/Archive/<EPIC>/`): a sibling's shipped decision is the spec;
+- the story's own Constraints and Out of Scope;
+- the sysmap notes of the story's features.
+
+For each critical fork:
+- A source answers it → not blocking. Record `<source> — <choice> (<file or feature>)`.
+- No source answers it → blocking.
+- Your default contradicts a source → blocking; say so in the question.
 
 With critical forks left:
 1. Write each under `## Blocking Questions` (exact heading): the question in one line, the default, the alternative.
-2. Ask the first question alone, in plain words, with 2–3 options and the default marked. **Halt.** **Checkpoint:** `AWAITING_ANSWERS`.
-3. After each answer, ask the next. When the user pushes back or says "your call", take the default for every question left.
+2. Send the coordinator all of them in one message, each in plain words with 2–3 options and the default marked. End the turn. **Checkpoint:** `AWAITING_ANSWERS`.
+3. The answers arrive as one message from the coordinator. An answer that says "your call" takes the default.
 
-When every question is answered or defaulted, record each as `user — <choice>` in `## Decisions`, delete `## Blocking Questions`, and continue without re-planning.
+When every question is answered or defaulted, record each as `<who> — <choice>` in `## Decisions`, with the name that the answer gives (`coordinator`, `pm` or `user`). Delete `## Blocking Questions`, and continue without re-planning.
 
 **Boundary:** pre-planned stories skip Phase 0.6 and so skip this gate.
 
@@ -329,14 +334,14 @@ Runs once per story, after `CI` is green. It verifies the assembled feature agai
 4. **Spawn `product-qa-spec`** to verify **each** original AC against the green run:
    - Quote each AC beside its evidence. Evidence of different behaviour than the quoted text fails that AC.
    - Backend / data / RLS ACs → cite the passing CI job or E2E assertion.
-   - **UI ACs** → drive the deployed SPA read-only with Playwright MCP as the seeded user. Capture each touched surface and state to `$WORKTREE_PATH/.ralph/fidelity/<surface>-<state>.png`. Diff live `getComputedStyle` and layout against the prototype (`.dc.html`; confirm the file→surface mapping first) and the design system. A delta citing a design-system rule or a prototype CSS rule is a fail; uncited taste is advisory → escalate, never bounce.
+   - **UI ACs** → drive the deployed SPA read-only with Playwright MCP as the seeded user. Capture each touched surface and state to `$WORKTREE_PATH/.ralph/fidelity/<surface>-<state>.png`. Diff live `getComputedStyle` and layout against the prototype (`.dc.html`; confirm the file→surface mapping first) and the design system. A delta citing a design-system rule or a prototype CSS rule is a fail; uncited taste is advisory: list it in the final report, never bounce.
    - **Assert the relationship, not the dimension.** A layout AC is satisfied by what the number encodes — gutter symmetry, containment, alignment to a sibling. A width assertion passes on the very bug it should catch. This applies whenever the diff adds or changes a layout constant, not only when an AC names layout. **Measure widest first:** `e2e/topology/layout.ts` sweeps 2560/1920/1440/1280; every other sweep in `e2e/` stops at 1280.
    - **A pixel figure derived from source is a guess.** Measure it on the gate run with `e2e/topology/layout.ts` and cite the run id before a CSS edit, a bounce or an escalation.
    - No holistic "looks done": every AC needs its own evidence.
-5. **Fix loop (cap 2 cycles):** batch all fails into one report → `product-executor` fixes → push (re-fires `dev-env.yml`) → wait → re-verify only the failed items. Every bounce cites an AC id, a design-system rule or a prototype CSS rule. After 2 cycles, escalate the rest to the user; each gate run rebuilds an 11-service environment.
+5. **Fix loop (cap 2 cycles):** batch all fails into one report → `product-executor` fixes → push (re-fires `dev-env.yml`) → wait → re-verify only the failed items. Every bounce cites an AC id, a design-system rule or a prototype CSS rule. After 2 cycles, send the coordinator the rest as one question: continue the fix loop, or stop. Each gate run rebuilds an 11-service environment.
 6. **Log** under `## Post-Deploy QA — <date>` in the QA Debate Log: per-AC verdict + evidence, fidelity deltas, fix cycles, run ids, advisory notes.
 7. **On PASS** (all original ACs pass on a green run, no unresolved bounces, fidelity evidence for UI stories): end with a short report in this order: **Needs you** (merge PR #N; each default or advisory finding a reviewer should see), **Changed** (subtasks, PR), **Found** (corrected premises; what you could not confirm and where you looked). Then output `<promise>ALL_TASKS_COMPLETE</promise>`.
-   **Otherwise:** do not emit completion; escalate to the user.
+   **Otherwise:** do not emit completion. Send the coordinator the open failures as one question.
 
 ### Phase 4: Worktree cleanup
 
@@ -391,7 +396,7 @@ An agent parses these instructions with no one to ask. Write for that reader.
 | Hand-setting a goose migration order or an untested `Down` | `make migrate-create` in the worktree; verify up + round-trip locally |
 | Querying as superuser to get past RLS | `WithinTenantTx` as `invoice_app` |
 | Working in the main checkout | Always `$WORKTREE_PATH`; main is the user's space |
-| Blocking on the user in an unattended phase | Conservative default + `## Decisions`; Phase 0.6d is the only question |
+| Blocking in an unattended phase | Default + `## Decisions`; only Phase 0.6d and Phase 3.5 send questions, to the coordinator |
 | Architect inventing scope | Every derived AC traces to the Objective / a Core AC |
 | Bouncing the executor on uncited taste | Cite a design-system or prototype rule; taste is advisory |
 | Renaming a variable and checking only the rename | Search every other variable's rendered value for the old name before merge |

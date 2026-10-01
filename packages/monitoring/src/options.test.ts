@@ -95,6 +95,26 @@ describe('sentryOptions', () => {
   })
 })
 
+describe('sentryOptions gateway origin and error transaction', () => {
+  it('sentryOptions_normalisesTheGatewayOrigin', () => {
+    for (const gateway of ['https://GW.test', 'https://gw.test:443', 'https://gw.test/api/']) {
+      const t = targetsOf(build({ gateway }))
+      expect(t.length, gateway).toBe(1)
+      expect(matchesAny(t, new URL('https://gw.test/api/x').toString()), gateway).toBe(true)
+      expect(matchesAny(t, 'https://gw.test.evil.example/api/x'), gateway).toBe(false)
+    }
+    expect(build({ gateway: 'not a url' }).tracePropagationTargets).toEqual([])
+  })
+
+  it('sentryOptions_beforeSendRenamesTheErrorTransaction', () => {
+    const ev = { transaction: '/invoices/u1?q=x' } as ErrorEvent
+    const out = build().beforeSend!(ev, {}) as ErrorEvent
+    expect(out.transaction).toBe('/invoices/:id')
+    const bare = build({ routeName: undefined }).beforeSend!(ev, {}) as ErrorEvent
+    expect(bare.transaction).toBe('/invoices/u1')
+  })
+})
+
 const M = 'TIN-NEEDLE-4242'
 const targetsOf = (o: BrowserOptions) => (o.tracePropagationTargets ?? []) as Array<string | RegExp>
 const matchesAny = (targets: Array<string | RegExp>, u: string) => targets.some((t) => (typeof t === 'string' ? u.includes(t) : t.test(u)))

@@ -89,6 +89,25 @@ describe('stripQuery and redactSecrets', () => {
   })
 })
 
+describe('scrub gaps', () => {
+  it('redactSecrets_redactsAnEmptySignatureJwtAndALowercaseBearer', () => {
+    expect(redactSecrets('t eyJhbGciOi.eyJzdWIi. end')).toBe('t [redacted] end')
+    expect(redactSecrets('authorization: bearer abc123')).toBe('authorization: Bearer [redacted]')
+  })
+
+  it('scrubEvent_scrubsLogentryAndExtraAndContextKeys', () => {
+    const out = scrubEvent(
+      as<ErrorEvent>({
+        logentry: { message: `m ?q=${M}`, params: [`p Bearer ${M}`] },
+        extra: { [`k?q=${M}`]: 1 },
+        contexts: { [`c?q=${M}`]: { a: 1 } },
+      }),
+    )
+    expect(json(out)).not.toContain(M)
+    expect(Object.values(out.extra ?? {})).toEqual([1])
+  })
+})
+
 describe('scrubEvent', () => {
   it('scrubEvent_requestKeepsOnlyUrlPathAndUserAgent', () => {
     const out = scrubEvent(

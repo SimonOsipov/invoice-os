@@ -15,9 +15,10 @@ export function stripQuery(s: string): string {
 
 export function redactSecrets(s: string): string {
   return s
-    .replace(/Bearer\s+\S+/g, 'Bearer [redacted]')
-    .replace(/eyJ[\w-]+\.[\w-]+\.[\w-]+/g, '[redacted]')
-    .replace(/\[([\w-]+)="[^"]*"\]/g, '[$1="[redacted]"]')
+    .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+    .replace(/eyJ[\w-]+\.[\w-]+\.[\w-]*/g, '[redacted]')
+    // Lazy to the closing `"]`: the SDK does not escape quotes inside the value.
+    .replace(/\[([\w-]+)="[\s\S]*?"\]/g, '[$1="[redacted]"]')
 }
 
 // Redact before stripping: a `?` or `#` inside an attribute value would otherwise cut it short.
@@ -68,8 +69,9 @@ export function scrubEvent(event: ErrorEvent): ErrorEvent {
     }
   }
   if (out.tags) out.tags = walk(out.tags, true)
-  if (out.extra) out.extra = walk(out.extra)
-  if (out.contexts) out.contexts = walk(out.contexts)
+  if (out.logentry) out.logentry = walk(out.logentry)
+  if (out.extra) out.extra = walk(out.extra, true)
+  if (out.contexts) out.contexts = walk(out.contexts, true)
   if (out.breadcrumbs) out.breadcrumbs = scrubBreadcrumbs(out.breadcrumbs)
   if (out.request) {
     const { url, headers } = out.request as { url?: string; headers?: Record<string, string> }
@@ -85,6 +87,7 @@ export function scrubEvent(event: ErrorEvent): ErrorEvent {
 export function scrubTransaction(event: TransactionEvent): TransactionEvent {
   const out = scrubEvent(event as unknown as ErrorEvent) as unknown as TransactionEvent
   delete out.request
+  if (out.measurements) out.measurements = walk(out.measurements, true) as typeof out.measurements
   if (out.spans) out.spans = out.spans.map((s) => scrubSpanLike(s))
   return out
 }

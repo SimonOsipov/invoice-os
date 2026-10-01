@@ -152,6 +152,13 @@ describe('real SDK pipeline with the shipped options', () => {
     expect(spanToJSON(span!).description).toBe('ROUTE:/invoices')
   })
 
+  it('pipeline_errorEventTransactionCarriesTheRoutePattern', async () => {
+    const { client, items } = boot('app', { routeName: (p) => `ROUTE:${p}` })
+    captureException(new Error('boom'))
+    await client.flush(1000)
+    expect(items().find((i) => i.exception)?.transaction).toBe('ROUTE:/invoices')
+  })
+
   it('pipeline_pageLoadSpanWithoutAHookIsUnmatched', () => {
     boot('app')
     expect(spanToJSON(getActiveSpan()!).description).toBe('<unmatched>')

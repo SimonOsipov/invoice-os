@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Shared Sentry options, scrubbing and crash UI for the ASComply Africa SPAs (SENTRY-06).",
+  "description": "Shared Sentry options, event scrubbing and route naming for the ASComply Africa SPAs (SENTRY-06).",
   "exports": {
     ".": "./src/index.ts"
   },

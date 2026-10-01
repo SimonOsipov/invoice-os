@@ -96,6 +96,8 @@ describe('scrub gaps', () => {
       [`button[title="a"] TIN 1234"]`, ['TIN', '1234']],
       [`div > button[alt="x"] Acme Ltd"][title="y"] > span`, ['Acme', 'Ltd']],
       [`img[aria-label="p"] q"]`, ['q"]']],
+      [`click a[title="Acme"] done`, ['Acme']],
+      [`a[title="x"] TIN 1234"] done`, ['TIN', '1234']],
     ]
     for (const [input, needles] of rows) {
       const out = redactSecrets(input)

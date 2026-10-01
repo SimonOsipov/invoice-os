@@ -14,6 +14,7 @@ import {
 } from './invoiceDraft'
 import type { SupplyNumberRequest } from './importApi'
 import type { Entity } from './portfolio'
+import { emptyClient, startingDraft } from './clients'
 import type { Draft } from '../types'
 
 // buyerAddress/wht/docType left `Draft` in INVCR-01-03 (task-279) — the create flow was
@@ -791,5 +792,16 @@ describe('draftTotals (TEST-03-04)', () => {
       const wire = wires[i]!
       expect(draftTotals(items), name).toEqual({ subtotal: wire.subtotal, vat: wire.vat, total: wire.total })
     })
+  })
+})
+
+describe('draftToCreateRequest: a blank hand-off draft (AUTH-10-07)', () => {
+  it('a blank hand-off draft maps to an honest request', () => {
+    const result = draftToCreateRequest({ ...startingDraft(emptyClient(), true), number: 'X' }, baseEntity)
+
+    expect(result.invoice_number, 'control: the typed number crosses the wire').toBe('X')
+    expect(result.issue_date).toBeNull()
+    expect(result.buyer_name).toBeNull()
+    expect(result.buyer_tin).toBeNull()
   })
 })

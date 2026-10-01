@@ -752,3 +752,31 @@ describe('DashboardActive failures panel at zero invoices (AUTH-10-04)', () => {
     expect(screen.queryByText('Failures appear here once invoices are validated.')).toBeNull()
   })
 })
+
+describe('DashboardActive Recent activity (AUTH-10-07, Core AC-7)', () => {
+  const handoffCtx = () => ({ ...dashCtx(), handoff: true }) as unknown as PlatformCtx
+  const personaCtx = () => ({ ...dashCtx(), handoff: false }) as unknown as PlatformCtx
+
+  it('hand-off: Recent activity is empty, not a sample', async () => {
+    mockRollupFetch(rollup(0))
+    render(<DashboardActive ctx={handoffCtx()} />)
+
+    await screen.findByText('Readiness score')
+    const head = screen.getByText('Recent activity').parentElement as HTMLElement
+    expect(screen.getByText('No activity to show')).toBeDefined()
+    expect(within(head).queryByText('SAMPLE'), 'no SAMPLE badge on the activity head').toBeNull()
+    expect(screen.queryByText('INV-2026-00481')).toBeNull()
+  })
+
+  // Control: green before and after.
+  it('persona: Recent activity keeps the SAMPLE feed', async () => {
+    mockRollupFetch(rollup(0))
+    render(<DashboardActive ctx={personaCtx()} />)
+
+    await screen.findByText('Readiness score')
+    const head = screen.getByText('Recent activity').parentElement as HTMLElement
+    expect(within(head).getByText('SAMPLE')).toBeDefined()
+    expect(screen.getByText('INV-2026-00481')).toBeDefined()
+    expect(screen.queryByText('No activity to show')).toBeNull()
+  })
+})

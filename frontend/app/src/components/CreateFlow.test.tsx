@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
 
+import { emptyClient, startingDraft } from '../lib/clients'
 import { draftToCreateRequest } from '../lib/invoiceDraft'
 import type { CreateStep, Draft, LineItem, PlatformCtx } from '../types'
 import { CreateFlow } from './CreateFlow'
@@ -819,5 +820,23 @@ describe('CreateFlow — the manual summary shows the filed totals (TEST-03-04)'
     expect(container.querySelector('[data-testid="carried-total"]')?.textContent).toBe('1075.00')
     expect(container.querySelectorAll('[data-testid^="summary-"]')).toHaveLength(0)
     expect(container.textContent).not.toContain('22.50')
+  })
+})
+
+describe('CreateFlow — the blank hand-off draft (AUTH-10-07)', () => {
+  afterEach(() => cleanup())
+
+  it('a blank hand-off draft renders and cannot be filed yet', () => {
+    const entity = { id: 'e-1', name: 'Acme Ltd', tin: '12345678-0001' }
+    const draft = startingDraft(emptyClient(), true)
+    const { container, getByTestId } = render(
+      <CreateFlow ctx={createFlowCtx('form', null, { draft, activeEntity: entity, active: { short: 'Acme', tin: entity.tin } })} />,
+    )
+
+    expect(getByTestId('summary-total'), 'the form must render').toBeDefined()
+    expect(container.textContent).not.toContain('NaN')
+    const primary = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Invoice number is required')
+    expect(primary, 'the primary names the refusal').toBeDefined()
+    expect((primary as HTMLButtonElement).disabled).toBe(true)
   })
 })

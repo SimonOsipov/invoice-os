@@ -428,6 +428,28 @@ describe('a hand-off session hides the demo data (AUTH-10-06, F17)', () => {
     expect(capturedCtx?.customRules).toHaveLength(5)
   })
 
+  it("a hand-off workspace's draft carries no demo invoice", async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(T, ME))
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
+    expect(capturedCtx?.handoff).toBe(true)
+    expect(capturedCtx?.draft.number).toBe('')
+    expect(capturedCtx?.draft.buyer).toBe('')
+  })
+
+  // Control: green before and after.
+  it('a stored persona session keeps the demo draft', async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ v: 1, personaId: 'firm', token: T, me: ME, verified: true }))
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
+    expect(capturedCtx?.handoff).toBe(false)
+    expect(capturedCtx?.draft.number).toBe('INV-2026-00482')
+  })
+
   it('a redeemed hand-off boot carries handoff:true', async () => {
     configure()
     ensureSignInState()

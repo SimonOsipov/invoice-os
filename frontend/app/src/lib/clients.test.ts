@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { AsyncStatus } from '@invoice-os/api-client'
 
-import { emptyClient, firstRunSurface, resolveActiveClient } from './clients'
+import { defaultDraft, emptyClient, firstRunSurface, resolveActiveClient, startingDraft } from './clients'
 import { computeNoEntity } from './importFlow'
 import type { Entity } from './portfolio'
 import type { Client } from '../types'
@@ -175,5 +175,18 @@ describe('emptyClient', () => {
       head: 'Draft',
       dash: null,
     })
+  })
+})
+
+describe('startingDraft (AUTH-10-07, Core AC-7)', () => {
+  // The control half is green before the change; the hand-off half is the red.
+  it('startingDraft: a hand-off session starts blank, a persona keeps the demo draft', () => {
+    const c = emptyClient()
+    const blank = startingDraft(c, true)
+    expect(blank).toEqual({ number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', items: [{ desc: '', qty: 1, price: 0 }] })
+    expect(blank.items).toHaveLength(1)
+    const demo = startingDraft(c, false)
+    expect(demo.number, 'control: the persona draft is the demo one').toBe('INV-2026-00482')
+    expect(demo).toEqual(defaultDraft(c))
   })
 })

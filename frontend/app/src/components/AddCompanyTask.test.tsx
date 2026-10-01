@@ -95,7 +95,7 @@ describe('AddCompanyTask (AUTH-10-03)', () => {
     expect(screen.getByText("Invoices are filed for a registered company. Add the first client you file for — you'll need its name and its TIN.")).toBeTruthy()
     expect(trigger().textContent?.trim()).toBe('Add client')
     expect(screen.queryByText(/COMPLIANCE OVERVIEW/)).toBeNull()
-    expect(screen.queryByText('No client yet')).toBeNull()
+    expect(screen.queryByText(emptyClient().name)).toBeNull()
   })
 
   it("the task's button opens the shared entity form", () => {

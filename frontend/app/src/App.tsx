@@ -16,6 +16,7 @@ import { createInvoice, listInvoices } from './lib/invoices'
 import { reviewQuery } from './lib/reviewBatch'
 import { parseLocation, reviewNavIds, routePath, routeQuery, routeUrl, type RouteParams } from './lib/route'
 import { canSubmitMapping, toImportMapping } from './lib/mapping'
+import { initialConnectors } from './lib/connectors'
 import {
   addFiles,
   attachDocumentIds,
@@ -140,8 +141,6 @@ import type {
   SignedInUser,
   View,
 } from './types'
-
-const INITIAL_CONNECTORS: ConnectorsState = { sap: true, quickbooks: true, oracle: false, sage: false, odoo: false, dynamics: false }
 
 // Environment banner under the header, one per state — the environment is always
 // stated, never conveyed by absence. `live` cannot render while the LIVE segment is
@@ -421,7 +420,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // Settings opens on Members: parseLocation returns that tab for a URL that names none.
   // SETTINGS_TABS' array order decides only which renders first.
   const [settingsTab, setSettingsTab_] = useState<SettingsTab>(() => availableSettingsTab(seed.settingsTab, mode))
-  const [connectors, setConnectors] = useState<ConnectorsState>(INITIAL_CONNECTORS)
+  const [connectors, setConnectors] = useState<ConnectorsState>(() => initialConnectors(session.handoff === true))
   // Field-mapping edits live at the workspace, not inside SettingsView, so a saved
   // mapping survives navigating away from Settings and back.
   const [connectorMappings, setConnectorMappings] = useState<ConnectorMappings>({})
@@ -433,7 +432,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   const [customRuleStore, setCustomRuleStore] = useState<CustomRuleStore>({})
   const [openRuleKey, setOpenRuleKey] = useState<string | null>(null)
   const rulesKey = customRulesKey(active.entityId)
-  const customRules = customRulesFor(customRuleStore, rulesKey, false)
+  const customRules = customRulesFor(customRuleStore, rulesKey, session.handoff === true)
   // The tenant's approval policies — the `membersAsync` idiom below, verbatim except for
   // the mirror's guard. Per TENANT, so switching company does not swap the set.
   const policiesAsync = useAsync<Policy[]>(
@@ -1525,7 +1524,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // client's key. `rulesKey` is captured per render off `active`, so a write can
   // never land on the company the switcher just left.
   function updateCustomRules(fn: (rules: CustomRule[]) => CustomRule[]) {
-    setCustomRuleStore((store) => ({ ...store, [rulesKey]: fn(customRulesFor(store, rulesKey, false)) }))
+    setCustomRuleStore((store) => ({ ...store, [rulesKey]: fn(customRulesFor(store, rulesKey, session.handoff === true)) }))
   }
 
   function addSuggestedRule(s: Suggestion) {
@@ -1651,7 +1650,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     // Reuses importAuth's accessor rather than a second closure, so the two byte-level
     // transports can never drift on which session they read.
     getToken: importAuth.getToken,
-    handoff: false,
+    handoff: session.handoff === true,
     user,
     clients,
     active,

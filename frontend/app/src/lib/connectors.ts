@@ -153,6 +153,6 @@ export function mappingFor(def: ConnectorDef, overrides: Partial<Record<Connecto
   return overrides[def.id] ?? def.mapping
 }
 
-export function initialConnectors(_handoff: boolean): ConnectorsState {
-  return { sap: true, quickbooks: true, oracle: false, sage: false, odoo: false, dynamics: false }
+export function initialConnectors(handoff: boolean): ConnectorsState {
+  return { sap: !handoff, quickbooks: !handoff, oracle: false, sage: false, odoo: false, dynamics: false }
 }

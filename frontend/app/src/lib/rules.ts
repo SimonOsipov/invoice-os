@@ -245,13 +245,13 @@ export function customRulesKey(entityId: string | null): string {
   return entityId ?? 'workspace'
 }
 
-/** A client not yet in the store has never been edited, so it reads the seed set. */
-export function customRulesFor(store: CustomRuleStore, key: string, _handoff: boolean): CustomRule[] {
-  return store[key] ?? SEED_CUSTOM_RULES
+/** A client not yet in the store has never been edited: it reads the seed set, or nothing for a hand-off session. */
+export function customRulesFor(store: CustomRuleStore, key: string, handoff: boolean): CustomRule[] {
+  return store[key] ?? (handoff ? [] : SEED_CUSTOM_RULES)
 }
 
-export function suggestionsFor(_handoff: boolean): Suggestion[] {
-  return SUGGESTED_RULES
+export function suggestionsFor(handoff: boolean): Suggestion[] {
+  return handoff ? [] : SUGGESTED_RULES
 }
 
 /** Suggestions still on offer: one disappears the moment its key exists as a custom rule. */

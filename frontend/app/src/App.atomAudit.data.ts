@@ -298,7 +298,7 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     resetBySwitchClient: false,
     routes: ['/settings', '/settings/<tab>'],
     verdict: 'correctly-reset',
-    note: 'Never fetched -- seeded from the INITIAL_CONNECTORS literal (App.tsx#INITIAL_CONNECTORS) and toggled locally, so it has no company dimension to go stale.',
+    note: 'Never fetched -- seeded from the initialConnectors literal (lib/connectors.ts#initialConnectors) and toggled locally, so it has no company dimension to go stale.',
   },
   {
     binding: 'connectorMappings, setConnectorMappings',

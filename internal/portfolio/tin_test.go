@@ -449,7 +449,7 @@ func TestValidateTIN_AcceptedSetUnchanged(t *testing.T) {
 	for _, raw := range acceptedSetCorpus() {
 		trimmed := strings.TrimSpace(raw)
 		canonical := strings.Replace(trimmed, "-", "", 1)
-		want := oracleShape.MatchString(trimmed) && luhnValid(canonical)
+		want := oracleShape.MatchString(trimmed) && canonical[len(canonical)-1] == luhnCheckDigit(canonical[:len(canonical)-1])
 
 		got, err := ValidateTIN(raw)
 		if (err == nil) != want {

@@ -596,7 +596,7 @@ describe('fetchEvidenceBundle (hostile input and failure modes)', () => {
       ['no error key', { detail: 'nope' }, 'Bad Gateway'],
       ['json null', null, 'Bad Gateway'],
       ['json array', [], 'Bad Gateway'],
-      // String() coercion, inherited from apiFetch (client.ts:70). Subtask 06 renders
+      // String() coercion, inherited from apiFetch. Subtask 06 renders
       // message verbatim, so a server sending {"error":null} shows the word "null".
       ['non-string error', { error: 42 }, '42'],
       ['null error', { error: null }, 'null'],
@@ -643,7 +643,7 @@ describe('fetchEvidenceBundle (hostile input and failure modes)', () => {
       (e: unknown) => e,
     )
 
-    // apiFetch turns an unreadable body into ApiError('malformed', ...) (client.ts:79-83);
+    // apiFetch turns an unreadable body into ApiError('malformed', ...);
     // this path has no equivalent.
     expect(err).toBe(boom)
     expect(err).not.toBeInstanceOf(ApiError)

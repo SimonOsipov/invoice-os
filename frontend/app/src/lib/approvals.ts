@@ -21,7 +21,7 @@
 // caught INSIDE the loop and never aborts the run; this fan-out has no pre-flight step
 // that could reject the whole call. `message` on a failed result is the server's own
 // error text, read off the caught error's `.message` (ApiError extends Error,
-// packages/api-client/src/client.ts:9-21) byte-identical -- no SPA-authored fallback
+// packages/api-client/src/client.ts) byte-identical -- no SPA-authored fallback
 // ([gates-on-the-wire]). Endpoint error set (decisionStatusForErr, handlers.go:225-246):
 // 400 body/decision/reason validation, 401 unauthorized, 403 AXIS-1/AXIS-2 role
 // refusals, 404 no run, 409 run already closed / invoice no longer awaiting approval,

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAuthedFetch, NOT_ACTIVE_MEMBER_MESSAGE } from './authedFetch'
 import { evidenceBundleUrl, fetchEvidenceBundle, type BundleRequest } from './evidenceBundle'
 import { fetchPageImage } from './extractionReview'
-import { previewImport, type ImportAuth, type XhrCtor } from './importApi'
+import { createImport, previewImport, uploadSourceDocument, type ImportAuth, type UploadPhase, type XhrCtor } from './importApi'
 import { SessionEndedError } from './renewal'
 import { fetchDocumentBytes } from './sourceDocument'
 
@@ -56,6 +56,17 @@ describe('authedFetch', () => {
     expect(reporter).toHaveBeenCalledTimes(1)
     expect(onUnauth).toHaveBeenCalledTimes(1)
     expect(onSusp).toHaveBeenCalledTimes(1)
+  })
+
+  it('authedFetch_aFailureOpensExactlyOneEvent', async () => {
+    const authed = createAuthedFetch(() => 't', vi.fn(), vi.fn())
+    stubFetch(() => Promise.reject(new TypeError('Failed to fetch')))
+    await authed(`${BASE}/api/x`).catch(() => undefined)
+    expect(reporter).toHaveBeenCalledTimes(1)
+    reporter.mockClear()
+    respond(500)
+    await authed(`${BASE}/api/x`).catch(() => undefined)
+    expect(reporter).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -129,6 +140,76 @@ describe('xhrJson', () => {
     expect(await noToken.settled).toMatchObject({ kind: 'network', message: 'session ended' })
     expect(reporter).toHaveBeenCalledTimes(0)
   })
+
+  it('xhrJson_httpStatusBoundaries', async () => {
+    const reports = async (status: number) => {
+      reporter.mockClear()
+      const { xhr, settled } = start(auth())
+      xhr.respond(status, '{"error":"x"}')
+      await settled
+      return reporter.mock.calls.length
+    }
+    expect([await reports(500), await reports(599)]).toEqual([1, 1])
+    expect([await reports(400), await reports(404), await reports(409), await reports(422), await reports(499), await reports(600)]).toEqual([
+      0, 0, 0, 0, 0, 0,
+    ])
+  })
+
+  it('xhrJson_aSuspendedRefusalReportsNothingAndStillFiresItsSeam', async () => {
+    const onSuspended = vi.fn()
+    const { xhr, settled } = start(auth({ onSuspended }))
+    xhr.respond(403, JSON.stringify({ error: NOT_ACTIVE_MEMBER_MESSAGE }))
+    expect(await settled).toBeInstanceOf(ApiError)
+    expect(onSuspended).toHaveBeenCalledTimes(1)
+    expect(reporter).toHaveBeenCalledTimes(0)
+  })
+
+  it('xhrJson_oneFailureOpensOneEvent', async () => {
+    const { xhr, settled } = start(auth())
+    xhr.onerror?.()
+    xhr.ontimeout?.()
+    xhr.respond(502, '{"error":"late"}')
+    expect(await settled).toMatchObject({ kind: 'network' })
+    expect(reporter).toHaveBeenCalledTimes(1)
+  })
+
+  it('xhrJson_everyWrapperReportsItsOwnUrl', async () => {
+    const settle = async (run: (x: XhrCtor) => Promise<unknown>) => {
+      reporter.mockClear()
+      const settled = run(FakeXhr as unknown as XhrCtor).catch((e: unknown) => e)
+      FakeXhr.last!.respond(502, '{"error":"bad gateway"}')
+      expect(await settled).toBeInstanceOf(ApiError)
+      return reporter.mock.calls.map((c) => c[0])
+    }
+    const create = await settle((x) =>
+      createImport(auth(), BASE, { entityId: 'e', mapping: {}, documentId: 'd', rememberMapping: false } as never, vi.fn(), x),
+    )
+    const upload = await settle((x) => uploadSourceDocument(auth(), BASE, file(), null, x))
+    expect(create).toHaveLength(1)
+    expect(create[0]).toMatchObject({ kind: 'http', status: 502, method: 'POST', url: `${BASE}/api/invoice/v1/imports` })
+    expect(upload).toHaveLength(1)
+    expect(upload[0]).toMatchObject({ kind: 'http', status: 502, method: 'POST', url: `${BASE}/api/submission/v1/documents` })
+  })
+
+  it('xhrJson_aShapeFailureAfterA2xxIsNotReported', async () => {
+    const { xhr, settled } = start(auth())
+    xhr.respond(200, '{}')
+    expect(await settled).toMatchObject({ kind: 'malformed', message: 'preview response is missing document_id' })
+    expect(reporter).toHaveBeenCalledTimes(0)
+  })
+
+  it('xhrJson_aBrokenReporterNeverChangesTheRejectionOrThePhase', async () => {
+    reporter.mockImplementation(() => {
+      throw new Error('sdk broke')
+    })
+    const phases: UploadPhase[] = []
+    const settled = uploadSourceDocument(auth(), BASE, file(), (p) => phases.push(p), FakeXhr as unknown as XhrCtor).catch((e: unknown) => e)
+    FakeXhr.last!.respond(502, '{"error":"bad gateway"}')
+    const e = await settled
+    expect(e).toMatchObject({ kind: 'http', status: 502, message: 'bad gateway' })
+    expect(phases.at(-1)).toEqual({ kind: 'error', error: e })
+    expect(reporter).toHaveBeenCalledTimes(1)
+  })
 })
 
 const HELPERS: Array<{
@@ -179,6 +260,91 @@ describe('raw fetch helpers', () => {
 
     const never = respond(200)
     await expect(call(() => Promise.reject(new SessionEndedError()))).rejects.toBeInstanceOf(SessionEndedError)
+    expect(never).not.toHaveBeenCalled()
+    expect(reporter).toHaveBeenCalledTimes(0)
+  })
+})
+
+describe('raw fetch helpers (adversarial)', () => {
+  it.each(HELPERS)('rawFetchHelpers_statusBoundariesAndTheRethrownInstance: $name', async ({ call }) => {
+    const reports = async (status: number) => {
+      reporter.mockClear()
+      respond(status)
+      const e = await call(() => 't').catch((x: unknown) => x)
+      return { n: reporter.mock.calls.length, thrown: e, arg: reporter.mock.calls[0]?.[0] }
+    }
+    const five = await reports(500)
+    expect(five.n).toBe(1)
+    expect(five.thrown).toBeInstanceOf(ApiError)
+    expect(five.arg.error).toBe(five.thrown)
+    expect((await reports(599)).n).toBe(1)
+    for (const status of [400, 401, 403, 404, 409, 422, 499]) expect((await reports(status)).n, String(status)).toBe(0)
+    reporter.mockClear()
+    stubFetch(async () => ({ ok: false, status: 600, statusText: 'x' }) as unknown as Response)
+    await call(() => 't').catch(() => undefined)
+    expect(reporter).toHaveBeenCalledTimes(0)
+  })
+
+  it.each(HELPERS)('rawFetchHelpers_aTimeoutReportsAndRethrowsTheSameError: $name', async ({ call }) => {
+    const timeout = new DOMException('t', 'TimeoutError')
+    stubFetch(() => Promise.reject(timeout))
+    await expect(call(() => 't')).rejects.toBe(timeout)
+    expect(reporter).toHaveBeenCalledTimes(1)
+    expect(reporter.mock.calls[0][0]).toMatchObject({ kind: 'network', status: null })
+    expect(reporter.mock.calls[0][0].error).toBe(timeout)
+  })
+
+  it.each(HELPERS)('rawFetchHelpers_aBrokenReporterNeverChangesTheError: $name', async ({ call }) => {
+    reporter.mockImplementation(() => {
+      throw new Error('sdk broke')
+    })
+    respond(500)
+    expect(await call(() => 't').catch((e: unknown) => e)).toMatchObject({ kind: 'http', status: 500 })
+    const te = new TypeError('Failed to fetch')
+    stubFetch(() => Promise.reject(te))
+    await expect(call(() => 't')).rejects.toBe(te)
+    expect(reporter).toHaveBeenCalledTimes(2)
+  })
+
+  it('fetchEvidenceBundle_theCallerSignalDecidesWhatAbortedMeans', async () => {
+    const call = (signal: AbortSignal) => fetchEvidenceBundle(() => 't', BASE, REQ, 'f.zip', signal)
+    const cancelled = new AbortController()
+    cancelled.abort()
+    const te = new TypeError('Failed to fetch')
+
+    stubFetch(() => Promise.reject(te))
+    await expect(call(cancelled.signal)).rejects.toBe(te)
+    respond(500)
+    await call(cancelled.signal).catch(() => undefined)
+    const custom = new AbortController()
+    custom.abort('why')
+    stubFetch(() => Promise.reject(te))
+    await expect(call(custom.signal)).rejects.toBe(te)
+    expect(reporter).toHaveBeenCalledTimes(0)
+
+    // On-path controls: the same failures with a live or timed-out signal report.
+    const live = new AbortController()
+    await expect(call(live.signal)).rejects.toBe(te)
+    respond(500)
+    await call(live.signal).catch(() => undefined)
+    expect(reporter).toHaveBeenCalledTimes(2)
+
+    reporter.mockClear()
+    const timer = AbortSignal.timeout(1)
+    await new Promise((r) => setTimeout(r, 25))
+    stubFetch(() => Promise.reject(timer.reason))
+    await expect(call(timer)).rejects.toBe(timer.reason)
+    expect(reporter).toHaveBeenCalledTimes(1)
+    expect(reporter.mock.calls[0][0]).toMatchObject({ kind: 'network', status: null })
+  })
+
+  it.each(HELPERS)('rawFetchHelpers_aTokenGetterThatThrowsSynchronouslyReportsNothing: $name', async ({ call }) => {
+    const never = respond(200)
+    await expect(
+      call(() => {
+        throw new SessionEndedError()
+      }),
+    ).rejects.toBeInstanceOf(SessionEndedError)
     expect(never).not.toHaveBeenCalled()
     expect(reporter).toHaveBeenCalledTimes(0)
   })

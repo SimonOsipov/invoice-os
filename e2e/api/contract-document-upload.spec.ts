@@ -18,7 +18,7 @@
 // fixture is the real work. Until it exists the docling arm has no deployed oracle.
 //
 // Multipart lives in this file, not client.ts: apiFetch and rawFetch both force
-// Content-Type: application/json (packages/api-client/src/client.ts:47-50, client.ts:40-45), the
+// Content-Type: application/json (packages/api-client/src/client.ts, client.ts:40-45), the
 // precedent every shipped multipart spec follows (contract-import.spec.ts:5,47-50). The JSON
 // seams stay local too -- the 4xx arms need the raw body, which apiFetch throws away.
 //

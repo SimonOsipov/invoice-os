@@ -118,7 +118,7 @@ export async function fetchEvidenceBundle(
   }
 
   if (!res.ok) {
-    // apiFetch's !res.ok block (client.ts:65-77), not sourceDocument.ts:96 -- that one never
+    // apiFetch's !res.ok block, not sourceDocument.ts:96 -- that one never
     // reads the body and loses the sentence EB-01-8 and EB-01-12 require.
     let body: unknown
     let msg = res.statusText

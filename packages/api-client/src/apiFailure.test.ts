@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path'
 import { captureApiFailure } from '@invoice-os/monitoring/report'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { countsAsIssue } from './apiFailure'
+import { countsAsIssue, reportApiFailure } from './apiFailure'
 import { ApiError, apiFetch } from './client'
 import { stripComments } from './stripComments'
 
@@ -57,6 +57,22 @@ describe('countsAsIssue', () => {
       ['network, signal aborted by AbortError', new ApiError('network', 'm', null), cancelSignal, false],
       ['AbortError', new DOMException('a', 'AbortError'), undefined, false],
       ['plain Error', new Error('x'), undefined, false],
+      // QA: boundaries, precedence of a cancel over every countable kind, odd inputs.
+      ['http 600', http(600), undefined, false],
+      ['http 0', http(0), undefined, false],
+      ['http with null status', new ApiError('http', 'm', null), undefined, false],
+      ['http 500, signal timed out', http(500), timeoutSignal, true],
+      ['http 500, signal cancelled', http(500), cancelSignal, false],
+      ['malformed, signal cancelled', new ApiError('malformed', 'm', 200), cancelSignal, false],
+      ['TypeError, signal cancelled', new TypeError('Failed to fetch'), cancelSignal, false],
+      ['TimeoutError, signal cancelled', new DOMException('t', 'TimeoutError'), cancelSignal, false],
+      ['network, signal aborted with a string reason', new ApiError('network', 'm', null), AbortSignal.abort('why'), false],
+      ['network, signal not aborted', new ApiError('network', 'm', null), new AbortController().signal, true],
+      ['AbortError, signal timed out', new DOMException('a', 'AbortError'), timeoutSignal, false],
+      ['other DOMException', new DOMException('n', 'NetworkError'), undefined, false],
+      ['an Error named AbortError', Object.assign(new Error('a'), { name: 'AbortError' }), undefined, false],
+      ['a string', 'boom', undefined, false],
+      ['null', null, undefined, false],
     ]
     expect(rows.some((r) => r[3]) && rows.some((r) => !r[3])).toBe(true)
     const wrong = rows.filter(([, err, signal, want]) => countsAsIssue(err, signal) !== want).map((r) => r[0])
@@ -92,6 +108,12 @@ describe('apiFetch reporting', () => {
       await run(409),
     ]
     expect(refused).toEqual([0, 0, 0, 0])
+    expect([await run(400), await run(422), await run(499)]).toEqual([0, 0, 0])
+    // Response cannot carry 600; a stub can.
+    reporter.mockClear()
+    stubFetch(async () => ({ ok: false, status: 600, statusText: 'x', json: async () => ({}) }) as unknown as Response)
+    await apiFetch(URL_).catch(() => undefined)
+    expect(reporter).toHaveBeenCalledTimes(0)
   })
 
   it('apiFetch_reportsNetworkAndTimeoutButNotCancel', async () => {
@@ -136,6 +158,128 @@ describe('apiFetch reporting', () => {
     expect(e.status).toBe(503)
     // On-path control: the reporter was reached, so the swallow above is what is under test.
     expect(reporter).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('apiFetch reporting (adversarial)', () => {
+  it('apiFetch_reportsTheMethodAndTheRethrownInstanceOnEveryKind', async () => {
+    const instanceOf = async (post: () => void): Promise<[ApiError, Parameters<typeof captureApiFailure>[0]]> => {
+      reporter.mockClear()
+      post()
+      const e = (await apiFetch(URL_, { method: 'POST', body: { a: 1 } }).catch((x: unknown) => x)) as ApiError
+      expect(reporter).toHaveBeenCalledTimes(1)
+      return [e, reporter.mock.calls[0][0]]
+    }
+    for (const arrange of [
+      () => respond('{"error":"x"}', 502),
+      () => respond('not json', 200),
+      () => reject(new TypeError('Failed to fetch')),
+    ]) {
+      const [e, arg] = await instanceOf(arrange)
+      expect(e).toBeInstanceOf(ApiError)
+      expect(arg.error).toBe(e)
+      expect(arg.method).toBe('POST')
+      expect(arg.url).toBe(URL_)
+    }
+  })
+
+  it('apiFetch_aRealTimeoutSignalReportsAndACallerAbortDoesNot', async () => {
+    const timer = AbortSignal.timeout(1)
+    await new Promise((r) => setTimeout(r, 25))
+    expect(timer.aborted).toBe(true)
+    expect((timer.reason as DOMException).name).toBe('TimeoutError')
+    reject(timer.reason)
+    const e = (await apiFetch(URL_, { signal: timer }).catch((x: unknown) => x)) as ApiError
+    expect(e.kind).toBe('network')
+    expect(reporter).toHaveBeenCalledTimes(1)
+
+    for (const reason of [undefined, 'why', new Error('custom')]) {
+      reporter.mockClear()
+      const ac = new AbortController()
+      ac.abort(reason)
+      reject(ac.signal.reason)
+      const err = (await apiFetch(URL_, { signal: ac.signal }).catch((x: unknown) => x)) as ApiError
+      expect(err).toBeInstanceOf(ApiError)
+      expect(err.kind).toBe('network')
+      expect(reporter).toHaveBeenCalledTimes(0)
+    }
+  })
+
+  it('apiFetch_aCancelledSignalSilencesAResponseThatRacedTheAbort', async () => {
+    const ac = new AbortController()
+    ac.abort()
+    respond('{"error":"x"}', 503)
+    await apiFetch(URL_, { signal: ac.signal }).catch(() => undefined)
+    expect(reporter).toHaveBeenCalledTimes(0)
+    // On-path control: the same response with no signal reports.
+    await apiFetch(URL_).catch(() => undefined)
+    expect(reporter).toHaveBeenCalledTimes(1)
+  })
+
+  it('reporterFailure_neverChangesTheError_onEveryKind', async () => {
+    reporter.mockImplementation(() => {
+      throw new Error('sdk broke')
+    })
+    const outcomes: Array<[string, () => void, string, number | null]> = [
+      ['http', () => respond('{"error":"down"}', 503), 'down', 503],
+      ['malformed', () => respond('not json', 200), 'malformed response body', 200],
+      ['network', () => reject(new TypeError('Failed to fetch')), 'Failed to fetch', null],
+    ]
+    for (const [kind, arrange, message, status] of outcomes) {
+      reporter.mockClear()
+      arrange()
+      const e = (await apiFetch(URL_).catch((x: unknown) => x)) as ApiError
+      expect(e).toBeInstanceOf(ApiError)
+      expect([e.kind, e.message, e.status]).toEqual([kind, message, status])
+      expect(reporter).toHaveBeenCalledTimes(1)
+    }
+  })
+})
+
+describe('reportApiFailure', () => {
+  it('reportApiFailure_mapsTheErrorToTheReporterInput', () => {
+    const req = { method: 'PATCH', url: URL_ }
+    const cases: Array<[unknown, unknown]> = [
+      [new ApiError('http', 'm', 502), { kind: 'http', status: 502 }],
+      [new ApiError('malformed', 'm', 200), { kind: 'malformed', status: 200 }],
+      [new ApiError('network', 'm', null), { kind: 'network', status: null }],
+      [new TypeError('Failed to fetch'), { kind: 'network', status: null }],
+      [new DOMException('t', 'TimeoutError'), { kind: 'network', status: null }],
+    ]
+    for (const [err, want] of cases) {
+      reporter.mockClear()
+      reportApiFailure(err, req)
+      expect(reporter).toHaveBeenCalledTimes(1)
+      expect(reporter.mock.calls[0][0]).toMatchObject({ ...(want as object), method: 'PATCH', url: URL_ })
+      expect(reporter.mock.calls[0][0].error).toBe(err)
+    }
+  })
+
+  it('reportApiFailure_staysSilentWhenQ12DoesNotCount', () => {
+    const cancelled = AbortSignal.abort()
+    reportApiFailure(new ApiError('http', 'm', 503), { method: 'GET', url: URL_ }) // control
+    expect(reporter).toHaveBeenCalledTimes(1)
+    reporter.mockClear()
+    for (const [err, signal] of [
+      [new ApiError('http', 'm', 404), undefined],
+      [new ApiError('http', 'm', 503), cancelled],
+      [new DOMException('a', 'AbortError'), undefined],
+      [new Error('x'), undefined],
+    ] as Array<[unknown, AbortSignal | undefined]>) {
+      reportApiFailure(err, { method: 'GET', url: URL_, signal })
+    }
+    expect(reporter).toHaveBeenCalledTimes(0)
+  })
+
+  it('reportApiFailure_swallowsAReporterThatThrowsAnything', () => {
+    for (const thrown of [new Error('sdk broke'), 'a string', undefined, { toString: () => { throw new Error('nested') } }]) {
+      reporter.mockReset()
+      reporter.mockImplementation(() => {
+        throw thrown
+      })
+      expect(() => reportApiFailure(new ApiError('http', 'm', 503), { method: 'GET', url: URL_ })).not.toThrow()
+      expect(reporter).toHaveBeenCalledTimes(1)
+    }
   })
 })
 

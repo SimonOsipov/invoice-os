@@ -230,7 +230,7 @@ export function makeImportAuth(
 // The ONE transport (D2). Private on purpose: previewImport and createImport are thin
 // wrappers over it rather than two peers, which is what makes them incapable of drifting
 // apart on the Authorization header or the ApiError shaping (IMPAPI-20 is the guard).
-// Error kinds/messages/body mirror apiFetch (client.ts:60-73) field for field so callers
+// Error kinds/messages/body mirror apiFetch field for field so callers
 // cannot tell the two transports apart.
 function xhrJson(
   auth: ImportAuth,

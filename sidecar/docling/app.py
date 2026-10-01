@@ -3,6 +3,8 @@
 import asyncio
 import logging
 
+import sentry_sdk
+
 import sentry_setup
 
 # First, so a boot failure below has a client to report it (D-16).
@@ -81,5 +83,6 @@ async def read_document(request: Request) -> JSONResponse:
         return JSONResponse({"error": str(exc)}, status_code=422)
     except Exception:
         logger.exception("unexpected /v1/read failure")
+        sentry_sdk.capture_exception()
         return JSONResponse({"error": "internal error"}, status_code=500)
     return JSONResponse(result)

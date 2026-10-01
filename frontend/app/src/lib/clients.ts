@@ -239,3 +239,8 @@ export function defaultDraft(client: ClientCfg): Draft {
     ],
   }
 }
+
+// Compile-only stub (AUTH-10-07): the hand-off branch is not implemented yet.
+export function startingDraft(client: ClientCfg, _handoff: boolean): Draft {
+  return defaultDraft(client)
+}

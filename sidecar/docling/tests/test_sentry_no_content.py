@@ -213,6 +213,20 @@ def test_unquoted_log_argument_never_leaves_through_a_later_event(sentry_capture
     assert MARKER.encode() not in sentry_capture.raw()
 
 
+class _Msg:
+    def __str__(self):
+        return "stage failed: %s"
+
+
+def test_unquoted_argument_of_a_non_str_log_message_never_leaves(sentry_capture):
+    # The SDK sets no template for a non-str msg, so neither hook can rebuild the body.
+    logging.getLogger("convert").warning(_Msg(), MARKER)
+    sentry_sdk.capture_exception(RuntimeError("after"))
+    assert len(sentry_capture.events()) == 1  # capture is live, so the absence below is not vacuous
+    assert len(sentry_capture.logs()) == 1
+    assert MARKER.encode() not in sentry_capture.raw()
+
+
 def test_logger_exception_in_a_request_leaks_no_argument(sentry_capture, monkeypatch):
     def log_then_fail(body, content_type):
         try:

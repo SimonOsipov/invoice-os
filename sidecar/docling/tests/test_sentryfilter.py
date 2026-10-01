@@ -492,6 +492,24 @@ def test_keep_breadcrumb_with_a_non_str_message_does_not_raise():
     assert keep_breadcrumb(crumb, hint) == crumb
 
 
+class _TemplateMsg:
+    def __str__(self):
+        return "stage failed: %s"
+
+
+def test_keep_breadcrumb_with_a_non_str_message_and_arguments_leaks_no_argument():
+    crumb, hint = _crumb_for("convert", _TemplateMsg(), (M,))
+    assert M in crumb["message"]  # the SDK renders it, arguments included
+    assert M not in repr(keep_breadcrumb(crumb, hint))
+
+
+def test_scrub_log_with_parameters_but_no_template_leaks_no_argument():
+    # The SDK sets no template for a non-str msg.
+    log = _param_log("unused", f"stage failed: {M}", {0: M})
+    del log["attributes"]["sentry.message.template"]
+    assert M not in repr(scrub_log(log, None))
+
+
 def test_keep_breadcrumb_never_rebuilds_a_non_sidecar_or_non_log_crumb():
     crumb, hint = _crumb_for("docling.pipeline", "x %s", (M,))
     assert keep_breadcrumb(crumb, hint) is None

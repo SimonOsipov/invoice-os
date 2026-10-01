@@ -152,7 +152,7 @@ export async function provisionRealAccount(prefix: string, kind?: TenantKind): P
 
 export interface Me {
   tenant: { id: string; name: string; kind: string }
-  user: { id: string; role: string }
+  user: { id: string; role: string; display_name: string | null; email: string | null }
 }
 
 // Membership mirrors internal/tenancy's Membership struct: five keys, none tagged

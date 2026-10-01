@@ -110,7 +110,7 @@ test.describe('workspace provisioning (API E2E, over the deployed gateway)', () 
       expect(res.status, JSON.stringify(res.body)).toBe(200)
       expect(res.body).toEqual({
         tenant: { id: tenantId, name: workspace.workspace_name, kind: 'firm' },
-        user: { id: subject, role: 'admin' },
+        user: { id: subject, role: 'admin', display_name: workspace.display_name, email: null },
       })
     })
 

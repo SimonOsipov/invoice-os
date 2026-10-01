@@ -13,7 +13,7 @@ import { GATEWAY_URL, TENANTS } from './targets'
 // live proof: real firm vs. in-house identities, not arbitrary fixture rows.
 interface Me {
   tenant: { id: string; name: string; kind: string }
-  user: { id: string; role: string }
+  user: { id: string; role: string; display_name: string | null; email: string | null }
 }
 
 async function resolveTenant(request: APIRequestContext, t: { id: string; subject: string }): Promise<Me> {

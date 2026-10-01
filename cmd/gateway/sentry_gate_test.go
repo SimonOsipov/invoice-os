@@ -15,22 +15,23 @@ import (
 // sentryReadRE matches a jq read of the sentry field; `.sentry.io` is a host, not a read.
 var sentryReadRE = regexp.MustCompile(`(?m)\.sentry([^.\w-]|$)`)
 
+// exemptClauseRE is the success line's parenthetical naming what the step skips.
+var exemptClauseRE = regexp.MustCompile(`\([^)]*exempt[^)]*\)`)
+
 // pushDirectionRE is how the success line names the push direction.
 var pushDirectionRE = regexp.MustCompile(`\bon( or |\|)off\b`)
 
-// sentryGoNames are the roll-up entries the step checks: every name except docling and auth.
-var sentryGoNames = []string{"gateway", "tenancy", "portfolio", "invoice", "validation", "submission", "dashboard", "notifications", "reconciliation"}
+// sentryCheckedNames are the roll-up entries the step checks: every name except auth.
+var sentryCheckedNames = []string{"gateway", "tenancy", "portfolio", "invoice", "validation", "submission", "dashboard", "notifications", "reconciliation", "docling"}
 
-// sentryFleetEntries is a deployed-shape roll-up: each Go entry on deadbeef reporting sentry,
-// docling on deadbeef without the field, auth as its custom-path [name status] entry.
+// sentryFleetEntries is a deployed-shape roll-up: each checked entry on deadbeef reporting sentry,
+// auth as its custom-path [name status] entry.
 func sentryFleetEntries(sentry string) []map[string]any {
 	var s []map[string]any
-	for _, n := range sentryGoNames {
+	for _, n := range sentryCheckedNames {
 		s = append(s, map[string]any{"name": n, "status": "up", "build": "deadbeef", "sentry": sentry})
 	}
-	return append(s,
-		map[string]any{"name": "docling", "status": "up", "build": "deadbeef"},
-		map[string]any{"name": "auth", "status": "up"})
+	return append(s, map[string]any{"name": "auth", "status": "up"})
 }
 
 // sentryFleetAny is sentryFleetEntries as []any, so a row can append a non-object entry.
@@ -73,6 +74,8 @@ type sentryRow struct {
 	wantExit int
 	named    []string // each must appear in an ::error:: line
 	notNamed []string // none may appear in an ::error:: line
+	// listed: the success line must list docling too; other passing rows only need the rest.
+	listed bool
 }
 
 func withSentry(sentry string, edit func(t *testing.T, s []map[string]any) []map[string]any) func(t *testing.T) any {
@@ -104,7 +107,7 @@ func TestSentryGateIsDirectional(t *testing.T) {
 	}
 
 	rows := []sentryRow{
-		{name: "pr_all_off", isPR: true, body: withSentry("off", nil), wantExit: 0},
+		{name: "pr_all_off", isPR: true, body: withSentry("off", nil), wantExit: 0, listed: true},
 		{name: "pr_invoice_on", isPR: true, body: withSentry("off", setField("invoice", "sentry", "on")), wantExit: 1,
 			named: []string{"invoice=on@deadbeef", "set-sentry-off"}, notNamed: []string{"gateway=", "tenancy="}},
 		{name: "pr_reconciliation_on", isPR: true, body: withSentry("off", setField("reconciliation", "sentry", "on")), wantExit: 1,
@@ -121,7 +124,7 @@ func TestSentryGateIsDirectional(t *testing.T) {
 			named: []string{"notifications=ON"}},
 		{name: "push_all_on", isPR: false, body: withSentry("on", nil), wantExit: 0},
 		{name: "push_mixed", isPR: false, body: withSentry("on", func(t *testing.T, s []map[string]any) []map[string]any {
-			for i, n := range sentryGoNames {
+			for i, n := range sentryCheckedNames {
 				if i%2 == 1 {
 					sentryEntry(t, s, n)["sentry"] = "off"
 				}
@@ -140,9 +143,12 @@ func TestSentryGateIsDirectional(t *testing.T) {
 		{name: "authz_is_not_auth", isPR: true, body: withSentry("off", func(t *testing.T, s []map[string]any) []map[string]any {
 			return append(s, map[string]any{"name": "authz", "status": "up", "build": "deadbeef"})
 		}), wantExit: 1, named: []string{"authz=none@deadbeef"}, notNamed: []string{"auth=none"}},
-		{name: "doclingx_is_not_docling", isPR: true, body: withSentry("off", func(t *testing.T, s []map[string]any) []map[string]any {
-			return append(s, map[string]any{"name": "doclingx", "status": "up", "build": "deadbeef"})
-		}), wantExit: 1, named: []string{"doclingx=none@deadbeef"}, notNamed: []string{"docling=none"}},
+		{name: "pr_docling_on", isPR: true, body: withSentry("off", setField("docling", "sentry", "on")), wantExit: 1,
+			named: []string{"docling=on@deadbeef", "set-sentry-off"}, notNamed: []string{"gateway="}},
+		{name: "pr_docling_missing", isPR: true, body: withSentry("off", setField("docling", "sentry", nil)), wantExit: 1,
+			named: []string{"docling=none@deadbeef"}, notNamed: []string{"gateway="}},
+		{name: "push_docling_missing", isPR: false, body: withSentry("on", setField("docling", "sentry", nil)), wantExit: 1,
+			named: []string{"docling=none@deadbeef"}, notNamed: []string{"gateway="}},
 
 		// QA Mode B adversarial rows.
 		{name: "pr_off_newline", isPR: true, body: withSentry("off", setField("submission", "sentry", "off\n")), wantExit: 1,
@@ -171,9 +177,8 @@ func TestSentryGateIsDirectional(t *testing.T) {
 		{name: "pr_xauth_is_not_auth", isPR: true, body: withSentry("off", func(t *testing.T, s []map[string]any) []map[string]any {
 			return append(s, map[string]any{"name": "xauth", "status": "up", "build": "deadbeef"})
 		}), wantExit: 1, named: []string{"xauth=none@deadbeef"}},
-		// Exemption is by name alone: whatever docling and auth report is not this step's to judge.
+		// Exemption is by name alone: whatever auth reports is not this step's to judge.
 		{name: "pr_exempt_values_ignored", isPR: true, body: withSentry("off", func(t *testing.T, s []map[string]any) []map[string]any {
-			sentryEntry(t, s, "docling")["sentry"] = "on"
 			sentryEntry(t, s, "auth")["sentry"] = "on"
 			return s
 		}), wantExit: 0},
@@ -194,7 +199,7 @@ func TestSentryGateIsDirectional(t *testing.T) {
 		{name: "top_level_array", isPR: true, body: func(*testing.T) any { return sentryFleetAny("off") }, wantExit: 1,
 			named: []string{"no services list"}},
 		{name: "only_exempt_entries", isPR: true, body: func(*testing.T) any {
-			return map[string]any{"services": sentryFleetAny("off")[len(sentryGoNames):]}
+			return map[string]any{"services": sentryFleetAny("off")[len(sentryCheckedNames):]}
 		}, wantExit: 1, named: []string{"no gateway entry"}},
 	}
 
@@ -243,11 +248,17 @@ func checkSentryPass(t *testing.T, r sentryRow, code int, out string, urls, errs
 		t.Fatalf("exits %d with errors %q, want 0 and none (output %q)", code, errs, out)
 	}
 	lines := strings.Split(out, "\n")
+	want := sentryCheckedNames
+	if !r.listed {
+		want = slices.DeleteFunc(slices.Clone(want), func(n string) bool { return n == "docling" })
+	}
+	// The "(... exempt)" clause may itself name a service; only the checked list counts.
 	i := slices.IndexFunc(lines, func(l string) bool {
-		return slices.IndexFunc(sentryGoNames, func(n string) bool { return !strings.Contains(l, n) }) < 0
+		l = exemptClauseRE.ReplaceAllString(l, "")
+		return slices.IndexFunc(want, func(n string) bool { return !strings.Contains(l, n) }) < 0
 	})
 	if i < 0 {
-		t.Fatalf("no output line names every checked entry %v (output %q)", sentryGoNames, out)
+		t.Fatalf("no output line names every checked entry %v outside its exempt clause (output %q)", want, out)
 	}
 	if push := pushDirectionRE.MatchString(lines[i]); push == r.isPR {
 		t.Errorf("IS_PR=%v: the success line %q names the wrong direction (push is %q)", r.isPR, lines[i], pushDirectionRE)

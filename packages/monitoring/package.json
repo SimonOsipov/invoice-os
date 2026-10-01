@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Shared Sentry options, event scrubbing and route naming for the ASComply Africa SPAs (SENTRY-06).",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./report": "./src/report.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

@@ -360,9 +360,10 @@ describe('what the SDK sends', () => {
 
     await reset()
     vi.stubEnv('VITE_SENTRY_DSN', 'not-a-dsn')
-    expect(initMonitoring('ops-console')).toBe(true)
-    // The SDK's DSN parser logs one "Invalid Sentry Dsn" line at init, so D-19's "writes nothing" cannot hold.
-    for (const call of err.mock.calls) expect(String(call[0])).toMatch(/^Invalid Sentry Dsn: not-a-dsn$/)
+    err.mockClear()
+    expect(initMonitoring('ops-console')).toBe(false)
+    expect(Sentry.getClient()).toBeUndefined()
+    expect(err).toHaveBeenCalledTimes(0)
   })
 
   it('captureApiFailure_fixedMessageAndRoute', async () => {

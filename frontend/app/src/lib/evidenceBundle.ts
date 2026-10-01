@@ -1,7 +1,7 @@
 // Hand-maintained mirror of internal/archive/preview.go's Preview and manifest.go's
 // manifestEntity / manifestPeriod / manifestCounts. EB-01-1's tag scan catches drift.
 
-import { ApiError, reportApiFailure } from '@invoice-os/api-client'
+import { ApiError, readBody, reportApiFailure } from '@invoice-os/api-client'
 
 import type { AuditRange } from './auditFilters'
 import { isPromiseLike } from './authedFetch'
@@ -136,7 +136,7 @@ export async function fetchEvidenceBundle(
   }
 
   return {
-    blob: await res.blob(),
+    blob: await readBody(() => res.blob(), { method: 'GET', url, signal }),
     filename: dispositionFilename(res.headers.get('Content-Disposition'), fallbackFilename),
   }
 }

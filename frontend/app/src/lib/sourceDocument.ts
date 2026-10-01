@@ -1,7 +1,7 @@
 // Source-document previewer data + pure logic layer (DOC-02-04). Every decision the
 // modal makes lives here as a pure exported function, so it has an oracle without a DOM.
 
-import { ApiError, reportApiFailure } from '@invoice-os/api-client'
+import { ApiError, readBody, reportApiFailure } from '@invoice-os/api-client'
 import { isPromiseLike } from './authedFetch'
 import type { AuthedFetch } from './portfolio'
 
@@ -114,7 +114,7 @@ export async function fetchDocumentBytes(
     throw error
   }
 
-  const blob = new Blob([await res.arrayBuffer()], { type: mimeFor(kind, filename) })
+  const blob = new Blob([await readBody(() => res.arrayBuffer(), { method: 'GET', url: reqUrl })], { type: mimeFor(kind, filename) })
   const url = URL.createObjectURL(blob)
   let released = false
   return {

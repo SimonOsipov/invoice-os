@@ -265,6 +265,35 @@ describe('raw fetch helpers', () => {
   })
 })
 
+describe('raw fetch helpers body read', () => {
+  const failingBody = (err: unknown) =>
+    stubFetch(
+      async () =>
+        ({ ok: true, status: 200, statusText: 'OK', headers: new Headers(), arrayBuffer: () => Promise.reject(err), blob: () => Promise.reject(err) }) as unknown as Response,
+    )
+
+  it.each(HELPERS)('rawFetchHelpers_aBodyReadFailureReportsAsNetworkAndRethrowsTheSameError: $name', async ({ url, call }) => {
+    const te = new TypeError('network error')
+    failingBody(te)
+    await expect(call(() => 't')).rejects.toBe(te)
+    expect(reporter).toHaveBeenCalledTimes(1)
+    expect(reporter.mock.calls[0][0]).toMatchObject({ kind: 'network', status: null, method: 'GET', url })
+    expect(reporter.mock.calls[0][0].error).toBe(te)
+
+    reporter.mockClear()
+    const abort = new DOMException('a', 'AbortError')
+    failingBody(abort)
+    await expect(call(() => 't')).rejects.toBe(abort)
+    expect(reporter).toHaveBeenCalledTimes(0)
+
+    reporter.mockImplementation(() => {
+      throw new Error('sdk broke')
+    })
+    failingBody(te)
+    await expect(call(() => 't')).rejects.toBe(te)
+  })
+})
+
 describe('raw fetch helpers (adversarial)', () => {
   it.each(HELPERS)('rawFetchHelpers_statusBoundariesAndTheRethrownInstance: $name', async ({ call }) => {
     const reports = async (status: number) => {

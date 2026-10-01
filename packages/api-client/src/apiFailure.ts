@@ -22,3 +22,13 @@ export function reportApiFailure(err: unknown, req: { method: string; url: strin
     // reporting must never change what the transport throws (D-29)
   }
 }
+
+// A body read that rejects after headers arrive is the same network failure as a fetch rejection; the same value is rethrown.
+export async function readBody<T>(read: () => Promise<T>, req: { method: string; url: string; signal?: AbortSignal }): Promise<T> {
+  try {
+    return await read()
+  } catch (e) {
+    reportApiFailure(e, req)
+    throw e
+  }
+}

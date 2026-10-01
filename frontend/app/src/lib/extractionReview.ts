@@ -3,7 +3,7 @@
 
 import type { CSSProperties } from 'react'
 
-import { ApiError, reportApiFailure } from '@invoice-os/api-client'
+import { ApiError, readBody, reportApiFailure } from '@invoice-os/api-client'
 
 import { formatLabel } from '../components/SourceDocumentStates'
 import { isPromiseLike } from './authedFetch'
@@ -421,7 +421,7 @@ export async function fetchPageImage(
     throw error
   }
 
-  const url = URL.createObjectURL(new Blob([await res.arrayBuffer()], { type: 'image/png' }))
+  const url = URL.createObjectURL(new Blob([await readBody(() => res.arrayBuffer(), { method: 'GET', url: reqUrl })], { type: 'image/png' }))
   let released = false
   return {
     url,

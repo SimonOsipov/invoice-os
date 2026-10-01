@@ -53,6 +53,9 @@ describe('handoffPersona (D8)', () => {
   it('handoffPersona takes subject and tenant from /me', () => {
     expect(handoffPersona(ME)).toEqual({
       ...APP_PERSONAS.firm,
+      name: '',
+      initials: '',
+      email: '',
       subject: ME.user.id,
       tenantId: ME.tenant.id,
     })
@@ -62,7 +65,15 @@ describe('handoffPersona (D8)', () => {
   it('handoffPersona takes in-house mode from tenants.kind', () => {
     const persona = handoffPersona(IN_HOUSE_ME)
     expect(persona.mode).toBe('inhouse')
-    expect(persona).toEqual({ ...APP_PERSONAS.firm, mode: 'inhouse', subject: ME.user.id, tenantId: ME.tenant.id })
+    expect(persona).toEqual({
+      ...APP_PERSONAS.firm,
+      name: '',
+      initials: '',
+      email: '',
+      mode: 'inhouse',
+      subject: ME.user.id,
+      tenantId: ME.tenant.id,
+    })
   })
 })
 

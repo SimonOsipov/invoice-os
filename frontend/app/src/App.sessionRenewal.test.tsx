@@ -31,7 +31,7 @@ const ME: Me = {
 }
 const OTHER_ME: Me = {
   tenant: { id: '44444444-4444-4444-4444-444444444444', name: 'Earlier Holdings', kind: 'firm' },
-  user: { id: 'e0000000-0000-0000-0000-000000000004', role: 'authenticated', display_name: 'Adaeze Nwankwo', email: 'adaeze.nwankwo@example.com' },
+  user: { id: 'e0000000-0000-0000-0000-000000000004', role: 'authenticated', display_name: 'Ifeanyi Chukwu', email: 'ifeanyi.chukwu@example.com' },
 }
 
 const IN_HOUSE_ME: Me = { ...ME, tenant: { ...ME.tenant, kind: 'in_house' } }
@@ -256,11 +256,11 @@ function storedRecord(): Record<string, unknown> | null {
   return raw == null ? null : (JSON.parse(raw) as Record<string, unknown>)
 }
 
-async function waitForVerifiedWorkspace(tenantName = ME.tenant.name) {
+async function waitForVerifiedWorkspace(tenantName = ME.tenant.name, who = { name: ME.user.display_name, initials: 'AN' }) {
   await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
   expect(capturedCtx?.user).toEqual({
-    name: APP_PERSONAS.firm.name,
-    initials: APP_PERSONAS.firm.initials,
+    name: who.name,
+    initials: who.initials,
     tenantName,
     verified: true,
   })
@@ -447,7 +447,7 @@ describe('a due stored session renews at boot (AC-1, AC-2, AC-3, AC-10, AC-16)',
     meReply = answer(200, OTHER_ME)
     ensureSignInState()
     const { hrefWrites } = await bootWith(record(A0_OLD, OLD_AT), `/?handoff=${'a'.repeat(43)}`)
-    await waitForVerifiedWorkspace(OTHER_ME.tenant.name)
+    await waitForVerifiedWorkspace(OTHER_ME.tenant.name, { name: OTHER_ME.user.display_name, initials: 'IC' })
     await settle()
 
     expect(calls.filter((c) => c.url === EXCHANGE), 'the code is redeemed').toHaveLength(1)
@@ -721,7 +721,8 @@ describe('mid-session renewal (AC-5, AC-8, AC-9)', () => {
     window.history.replaceState(null, '', '/?persona=firm')
     const { hrefWrites } = interceptHref()
     await bootApp()
-    await waitForVerifiedWorkspace()
+    // The persona keeps its own name although /me answers a display name (D1).
+    await waitForVerifiedWorkspace(ME.tenant.name, { name: APP_PERSONAS.firm.name, initials: APP_PERSONAS.firm.initials })
     await settle()
     const login = calls.filter((c) => c.url === `${GATEWAY}/auth/login`)
     expect(login).toHaveLength(1)
@@ -915,7 +916,7 @@ describe('a renewal never outlives its session (AC-14, AC-15, AC-17)', () => {
     await act(async () => {
       await capturedCtx!.returnToSeat!('dashboard', SEAT_MEMBER)
     })
-    await waitFor(() => expect(capturedCtx?.user.name).toBe(APP_PERSONAS.firm.name))
+    await waitFor(() => expect(capturedCtx?.user.name).toBe(ME.user.display_name))
     expect(capturedCtx?.mode, 'back on the seat').toBe('inhouse')
   })
 
@@ -941,7 +942,7 @@ describe('a renewal never outlives its session (AC-14, AC-15, AC-17)', () => {
     await act(async () => {
       await capturedCtx!.returnToSeat!('dashboard', SEAT_MEMBER)
     })
-    await waitFor(() => expect(capturedCtx?.user.name).toBe(APP_PERSONAS.firm.name))
+    await waitFor(() => expect(capturedCtx?.user.name).toBe(ME.user.display_name))
     await settle()
     const ctx = capturedCtx
     const out = await probe(ctx)

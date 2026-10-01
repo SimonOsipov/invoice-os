@@ -5,10 +5,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Me, type Session } from '../auth'
+import { memberInitials } from './members'
 import { handoffPersona } from './sessionHandoff'
 import {
   SESSION_KEY,
   SESSION_SCHEMA_VERSION,
+  cardIdentity,
   clearSession,
   decodeJwtPayload,
   isHandoffMe,
@@ -689,5 +691,85 @@ describe('renewal pair in the stored record (AUTH-06 D1)', () => {
       expect(error, name).not.toHaveBeenCalled()
       vi.restoreAllMocks()
     }
+  })
+})
+
+describe('cardIdentity (AUTH-09-02)', () => {
+  const USER_ID = 'd0000000-0000-0000-0000-000000000009'
+  const handoffOf = (user: Record<string, unknown>): Session => {
+    const me = {
+      tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures', kind: 'firm' },
+      user: { id: USER_ID, role: 'authenticated', ...user },
+    } as unknown as Me
+    return { persona: handoffPersona(me), token: 'jwt', me, verified: true, handoff: true }
+  }
+
+  it('cardIdentity names a hand-off session from /me', () => {
+    const session = handoffOf({ display_name: 'Adaeze Nwankwo', email: 'a@acme.ng' })
+    expect(cardIdentity(session)).toEqual({ name: 'Adaeze Nwankwo', initials: 'AN' })
+  })
+
+  it('cardIdentity falls back to the email', () => {
+    const email = 'folake.adesina@acme.ng'
+    const got = cardIdentity(handoffOf({ display_name: null, email }))
+    expect(got).toEqual({ name: email, initials: 'FA' })
+    expect(got.initials).toBe(memberInitials(null, email, ''))
+  })
+
+  it('cardIdentity shows nothing legible, never the user id', () => {
+    const absent: [string, (u: Record<string, unknown>, k: string) => void][] = [
+      ['null', (u, k) => { u[k] = null }],
+      ['missing', () => {}],
+      ["''", (u, k) => { u[k] = '' }],
+      ["'   '", (u, k) => { u[k] = '   ' }],
+      ['7', (u, k) => { u[k] = 7 }],
+      ['{}', (u, k) => { u[k] = {} }],
+      ["['x']", (u, k) => { u[k] = ['x'] }],
+    ]
+    expect(absent).toHaveLength(7)
+    const pairs = (v: string) => Array.from({ length: v.length - 1 }, (_, i) => v.slice(i, i + 2).toLowerCase())
+    for (const [dn, setDn] of absent) {
+      for (const [em, setEm] of absent) {
+        const user: Record<string, unknown> = {}
+        setDn(user, 'display_name')
+        setEm(user, 'email')
+        const got = cardIdentity(handoffOf(user))
+        const label = `display_name ${dn}, email ${em}`
+        expect(got, label).toEqual({ name: '', initials: '' })
+        for (const pair of pairs(USER_ID)) {
+          expect(got.name.toLowerCase(), label).not.toContain(pair)
+          expect(got.initials.toLowerCase(), label).not.toContain(pair)
+        }
+      }
+    }
+  })
+
+  it('cardIdentity skips a blank display name', () => {
+    expect(cardIdentity(handoffOf({ display_name: '  ', email: 'zainab@acme.ng' }))).toEqual({
+      name: 'zainab@acme.ng',
+      initials: 'ZA',
+    })
+  })
+
+  // Accepted behaviour (D6): memberInitials' output is shown as is.
+  it("cardIdentity keeps memberInitials' output for non-ASCII and hyphenated names", () => {
+    const rows: [string, { name: string; initials: string }][] = [
+      ['Ọlá Adébáyọ̀', { name: 'Ọlá Adébáyọ̀', initials: 'LA' }],
+      ['Ada-Obi', { name: 'Ada-Obi', initials: 'A' }],
+      ['张伟', { name: '张伟', initials: '' }],
+      ['  Adaeze Nwankwo  ', { name: 'Adaeze Nwankwo', initials: 'AN' }],
+    ]
+    for (const [displayName, want] of rows) {
+      expect(cardIdentity(handoffOf({ display_name: displayName, email: null })), displayName).toEqual(want)
+    }
+  })
+
+  it('cardIdentity keeps the persona for a persona session', () => {
+    const me = firmSession().me
+    const withName = { ...firmSession(), me: { ...me!, user: { ...me!.user, display_name: 'Someone Else' } } }
+    const want = { name: APP_PERSONAS.firm.name, initials: APP_PERSONAS.firm.initials }
+    expect(want.name).not.toBe('Someone Else')
+    expect(cardIdentity(withName)).toEqual(want)
+    expect(cardIdentity({ ...firmSession(), me: null })).toEqual(want)
   })
 })

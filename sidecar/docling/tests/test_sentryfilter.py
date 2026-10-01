@@ -425,7 +425,7 @@ def test_scrub_log_with_parameters_but_no_template_does_not_raise():
     del log["attributes"]["sentry.message.template"]
     out = scrub_log(log, None)
     assert out is not None
-    assert out["body"] == "stage ok"
+    assert out["body"] == "[redacted]"
     assert "sentry.message.parameter.0" not in out["attributes"]
 
 

@@ -597,6 +597,15 @@ describe('scrubApiError', () => {
   const apiError = (kind: string, status: number | null) => Object.assign(new Error('tenant Acme Ltd TIN 123 refused'), { name: 'ApiError', kind, status })
   const value = (e: ErrorEvent) => e.exception?.values?.[0]?.value
 
+  it('scrubApiError_replacesOnlyTheValuesCarryingTheServerMessage', () => {
+    const e = as<ErrorEvent>({
+      exception: { values: [{ type: 'ApiError', value: 'tenant Acme Ltd TIN 123 refused' }, { type: 'Error', value: 'unrelated cause' }, { type: 'React ErrorBoundary ApiError', value: 'tenant Acme Ltd TIN 123 refused' }] },
+    })
+    const out = scrubApiError(e, as<EventHint>({ originalException: apiError('http', 422) }))
+    expect(out.exception?.values?.map((v) => v.value)).toEqual(['http 422', 'unrelated cause', 'http 422'])
+    expect(e.exception?.values?.[0]?.value, 'the input event is not mutated').toBe('tenant Acme Ltd TIN 123 refused')
+  })
+
   it('scrubApiError_replacesTheServerMessageWithKindAndStatus', () => {
     expect(value(scrubApiError(ev(), as<EventHint>({ originalException: apiError('http', 503) })))).toBe('http 503')
     expect(value(scrubApiError(ev(), as<EventHint>({ originalException: apiError('network', null) })))).toBe('network -')
@@ -605,7 +614,13 @@ describe('scrubApiError', () => {
 
   it('scrubApiError_leavesEverythingElseAlone', () => {
     const e = ev()
-    for (const originalException of [new Error('x'), { name: 'ApiError' }, { name: 'ApiError', kind: 'http' }, 'ApiError', undefined]) {
+    const msg = 'tenant Acme Ltd TIN 123 refused'
+    const lookalikes = [
+      Object.assign(new Error(msg), { name: 'TypeError', kind: 'http', status: 500 }),
+      Object.assign(new Error(msg), { name: 'ApiError', status: 500 }),
+      Object.assign(new Error(msg), { name: 'ApiError', kind: 7, status: 500 }),
+    ]
+    for (const originalException of [new Error('x'), { name: 'ApiError' }, { name: 'ApiError', kind: 'http' }, 'ApiError', undefined, ...lookalikes]) {
       expect(scrubApiError(e, as<EventHint>({ originalException })), String(JSON.stringify(originalException))).toBe(e)
     }
     expect(scrubApiError(as<ErrorEvent>({}), as<EventHint>({ originalException: apiError('http', 500) }))).toEqual({})

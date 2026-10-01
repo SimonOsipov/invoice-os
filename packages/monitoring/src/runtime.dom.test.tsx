@@ -137,8 +137,7 @@ async function pageloadFlow(sink: string[]): Promise<void> {
   await reset()
 }
 
-// The SDK ages the page-load span from performance.timeOrigin (worker start), so a runner's speed decides whether
-// the boot strip is a redirect (< 1.5s). Pinning Date makes the age a parameter.
+// Pinning Date fixes the page age, which the SDK reads from performance.timeOrigin.
 async function navigationFlow(sink: string[], ageSeconds?: number): Promise<void> {
   if (ageSeconds !== undefined) {
     vi.useFakeTimers({ toFake: ['Date'] })
@@ -285,13 +284,14 @@ describe('crash boundary', () => {
   it('crashBoundary_anUnreportedApiErrorCarriesNoServerText', async () => {
     const sink: string[] = []
     boot(sink, 'app')
-    const err = Object.assign(new Error(`gateway: tenant ${TIN} refused`), { name: 'ApiError', kind: 'http', status: 422 })
+    const err = Object.assign(new Error(`gateway: tenant ${TIN} refused ?q=${CODE}`), { name: 'ApiError', kind: 'http', status: 422 })
     renderCrash(err)
     await Sentry.flush(1000)
     const events = items(sink, 'event')
     expect(events.length).toBe(1)
     expect(events[0].body.exception.values[0].value).toBe('http 422')
     expect(sink.join('\n')).not.toContain(TIN)
+    expect(sink.join('\n')).not.toContain(CODE)
   })
 
   it('crashBoundary_withoutAClientStillRecovers', () => {
@@ -709,6 +709,31 @@ describe('what the SDK sends', () => {
     await Sentry.flush(1000)
     const ops = items(sink, 'transaction').map((i) => `${i.body.contexts.trace.op} ${i.body.transaction}`)
     expect(ops.filter((o) => o.startsWith('navigation'))).toEqual(['navigation /invoices/:id', 'navigation /settings/members'])
+  })
+
+  it('navigation_aHistoryCallThatLeavesTheUrlStartsNoNavigation', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(performance.timeOrigin + 5000)
+    boot([], 'app', { routeName })
+    const pageload = getRootSpan(Sentry.getActiveSpan()!)
+
+    window.history.replaceState({ n: 0 }, '', '/settings/members')
+    window.history.pushState({ n: 1 }, '', '/settings/members')
+    expect(getRootSpan(Sentry.getActiveSpan()!), 'push to the URL a replace just wrote').toBe(pageload)
+
+    window.history.pushState({ n: 2 }, '', '/invoices')
+    const nav = getRootSpan(Sentry.getActiveSpan()!)
+    expect(spanToJSON(nav).op, 'control: a push to a new URL navigates').toBe('navigation')
+
+    window.history.pushState({ n: 3 }, '', '/invoices')
+    expect(getRootSpan(Sentry.getActiveSpan()!), 'push to the current URL').toBe(nav)
+
+    const popped = new Promise((r) => window.addEventListener('popstate', r, { once: true }))
+    window.history.back()
+    await popped
+    expect(window.location.pathname).toBe('/invoices')
+    expect(getRootSpan(Sentry.getActiveSpan()!), 'popstate onto the same URL').toBe(nav)
+    expect(spanToJSON(nav).timestamp).toBeUndefined()
   })
 
   it('apiFailures_backToBackRepeatsAreDeduplicated', async () => {

@@ -351,12 +351,24 @@ describe('raw fetch helpers (adversarial)', () => {
     await expect(call(custom.signal)).rejects.toBe(te)
     expect(reporter).toHaveBeenCalledTimes(0)
 
+    // A body read that fails after headers follows the same signal rule.
+    const body = () =>
+      stubFetch(async () => ({ ok: true, status: 200, statusText: 'OK', headers: new Headers(), blob: () => Promise.reject(te) }) as unknown as Response)
+    body()
+    await expect(call(cancelled.signal)).rejects.toBe(te)
+    body()
+    await expect(call(custom.signal)).rejects.toBe(te)
+    expect(reporter).toHaveBeenCalledTimes(0)
+
     // On-path controls: the same failures with a live or timed-out signal report.
     const live = new AbortController()
     await expect(call(live.signal)).rejects.toBe(te)
     respond(500)
     await call(live.signal).catch(() => undefined)
     expect(reporter).toHaveBeenCalledTimes(2)
+    body()
+    await expect(call(live.signal)).rejects.toBe(te)
+    expect(reporter).toHaveBeenCalledTimes(3)
 
     reporter.mockClear()
     const timer = AbortSignal.timeout(1)

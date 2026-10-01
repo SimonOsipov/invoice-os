@@ -103,7 +103,9 @@ What a spec still cannot assume is an empty table:
   - `api/registration.spec.ts`: each run's `auth.users` row, and the tenant and membership
     its fork chain provisions.
   - `topology/auth.spec.ts`: each real-account journey (`provisionRealAccount` in
-    `api/client.ts`) leaves an `auth.users` row, a tenant and a membership.
+    `api/client.ts`) leaves an `auth.users` row, a tenant and a membership. The two
+    add-company journeys also leave one `business_entities` row and its audit row; the next
+    deploy's reset truncates both, so they live only until the next push.
   - `api/session-handoff.spec.ts`: each registering test leaves an `auth.users` row only; it
     provisions no workspace.
 
@@ -184,7 +186,7 @@ deliberate no-oracle property, and a 200-with-null-run would leak cross-tenant e
 
 Mock-only `app` surfaces follow the same rule. **Reports and Settings** carry
 functional coverage as sidebar surfaces of the persona that owns them (see below). The
-company switcher and onboarding dashboard are not nav surfaces and hold no
+company switcher and the add-company task (covered by the two `auth.spec.ts` add-company journeys) are not nav surfaces and hold no
 coverage cell — note that the switcher *is* **operated** by `workflows.spec.ts` and
 `persona-surfaces.spec.ts` as the mechanism for changing the active client, which is not the
 same as being covered by them. Submission/transmit is real (M5-09): it is covered via the

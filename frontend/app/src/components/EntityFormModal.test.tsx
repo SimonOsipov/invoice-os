@@ -1,0 +1,247 @@
+// @vitest-environment jsdom
+// AUTH-10-02: the TIN field explains itself before the server enforces it.
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { ApiError } from '@invoice-os/api-client'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { TIN_HINT } from '../lib/entityForm'
+import { createAuthedFetch } from '../lib/authedFetch'
+import { createEntity, updateEntity, type Entity } from '../lib/portfolio'
+import type { PlatformCtx } from '../types'
+import { ClientsView } from './ClientsView'
+import { EntityFormModal } from './EntityFormModal'
+import { SettingsView } from './SettingsView'
+
+vi.mock('../lib/portfolio', async (importActual) => ({
+  ...(await importActual<typeof import('../lib/portfolio')>()),
+  createEntity: vi.fn(),
+  updateEntity: vi.fn(),
+}))
+
+// internal/portfolio/tin.go TINChecksumMessage.
+const TIN_CHECKSUM =
+  "This TIN's last digit is a check digit, and it does not match the other digits. Check the number on the tax certificate."
+
+const ENTITY: Entity = {
+  id: 'e1',
+  name: 'Lagos Freight',
+  tin: '20184412-0001',
+  registration: null,
+  sector: null,
+  address: null,
+  status: 'active',
+  created_at: '2026-01-01T00:00:00Z',
+}
+
+function ctxFor(mode: 'inhouse' | 'firm'): PlatformCtx {
+  return { mode, authedFetch: vi.fn() } as unknown as PlatformCtx
+}
+
+function mount(mode: 'create' | 'edit', ctxMode: 'inhouse' | 'firm') {
+  const utils = render(
+    <EntityFormModal
+      mode={mode}
+      entity={mode === 'edit' ? ENTITY : undefined}
+      ctx={ctxFor(ctxMode)}
+      base="https://gateway.test"
+      onClose={() => {}}
+      onSuccess={() => {}}
+    />,
+  )
+  return { ...utils, dialog: within(screen.getByRole('dialog')) }
+}
+
+// A hint that is '' would make every getByText below vacuous.
+function expectHintDefined() {
+  expect(TIN_HINT.length).toBeGreaterThan(0)
+}
+
+describe('EntityFormModal TIN hint (AUTH-10-02)', () => {
+  beforeEach(() => {
+    vi.mocked(createEntity).mockReset()
+    vi.mocked(updateEntity).mockReset()
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gateway.test')
+  })
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
+  })
+
+  it('the create modal explains the TIN before anything is submitted', () => {
+    for (const ctxMode of ['inhouse', 'firm'] as const) {
+      const { dialog, unmount } = mount('create', ctxMode)
+      expectHintDefined()
+      expect(dialog.getByText(TIN_HINT)).toBeTruthy()
+      expect(createEntity).not.toHaveBeenCalled()
+      unmount()
+    }
+  })
+
+  it('the TIN input is described by the hint', () => {
+    const { dialog } = mount('create', 'inhouse')
+    expectHintDefined()
+    const input = dialog.getByPlaceholderText('########-####')
+    expect(input.getAttribute('aria-describedby')).toBe('entity-tin-hint')
+    expect(document.getElementById('entity-tin-hint')?.textContent).toBe(TIN_HINT)
+  })
+
+  it("a refused TIN shows the server's reason beside the hint", async () => {
+    vi.mocked(createEntity).mockRejectedValue(new ApiError('http', TIN_CHECKSUM, 400))
+    const { container, dialog } = mount('create', 'inhouse')
+    fireEvent.change(container.querySelector('input.pf-input') as HTMLInputElement, { target: { value: 'Acme Ltd' } })
+    fireEvent.change(dialog.getByPlaceholderText('########-####'), { target: { value: '1234567890' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Add company' }))
+
+    await waitFor(() => expect(dialog.getByText(TIN_CHECKSUM)).toBeTruthy())
+    expect(createEntity).toHaveBeenCalledTimes(1)
+    expectHintDefined()
+    expect(dialog.getByText(TIN_HINT)).toBeTruthy()
+  })
+
+  it('the edit modal explains the TIN too', () => {
+    for (const ctxMode of ['inhouse', 'firm'] as const) {
+      const { dialog, unmount } = mount('edit', ctxMode)
+      expectHintDefined()
+      expect(dialog.getByText(TIN_HINT)).toBeTruthy()
+      unmount()
+    }
+  })
+
+  it('the hint names both TIN forms and the supplier TIN check', () => {
+    expect(TIN_HINT).toMatch(/12-digit FIRS/)
+    expect(TIN_HINT).toMatch(/10-digit JTB/)
+    expect(TIN_HINT).toMatch(/supplier TIN check/)
+  })
+  function fillAndSubmit(dialog: ReturnType<typeof within>, container: HTMLElement, tin: string, label = 'Add company') {
+    fireEvent.change(container.querySelector('input.pf-input') as HTMLInputElement, { target: { value: 'Acme Ltd' } })
+    fireEvent.change(dialog.getByPlaceholderText('########-####'), { target: { value: tin } })
+    fireEvent.click(dialog.getByRole('button', { name: label }))
+  }
+
+  function describedHint(dialog: ReturnType<typeof within>): HTMLElement {
+    const id = dialog.getByPlaceholderText('########-####').getAttribute('aria-describedby')
+    expect(id).toBeTruthy()
+    const el = document.getElementById(id as string)
+    expect(el).not.toBeNull()
+    return el as HTMLElement
+  }
+
+  it('the refused reason sits after the hint and is not inside the described element', async () => {
+    vi.mocked(createEntity).mockRejectedValue(new ApiError('http', TIN_CHECKSUM, 400))
+    const { container, dialog } = mount('create', 'inhouse')
+    fillAndSubmit(dialog, container, '1234567890')
+    const reason = await dialog.findByText(TIN_CHECKSUM)
+
+    const hint = describedHint(dialog)
+    expect(hint.textContent).toBe(TIN_HINT)
+    expect(hint.contains(reason)).toBe(false)
+    expect(hint.compareDocumentPosition(reason) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(document.querySelectorAll('#entity-tin-hint')).toHaveLength(1)
+  })
+
+  it.each([
+    ['400 reason', 400, TIN_CHECKSUM, TIN_CHECKSUM],
+    ['400 with an empty body', 400, '', 'Please check the TIN and try again.'],
+    ['409 duplicate', 409, 'duplicate', 'This TIN is already registered.'],
+  ])('a %s shows its reason and keeps the hint', async (_label, status, serverMsg, shown) => {
+    vi.mocked(createEntity).mockRejectedValue(new ApiError('http', serverMsg, status))
+    const { container, dialog } = mount('create', 'firm')
+    fillAndSubmit(dialog, container, '1234567890', 'Add client')
+    expect(await dialog.findByText(shown)).toBeTruthy()
+    expect(dialog.getAllByText(TIN_HINT)).toHaveLength(1)
+    expect(describedHint(dialog).textContent).toBe(TIN_HINT)
+  })
+
+  it('the client-side TIN-required message shows beside the hint without a server call', async () => {
+    const { container, dialog } = mount('create', 'inhouse')
+    fireEvent.change(container.querySelector('input.pf-input') as HTMLInputElement, { target: { value: 'Acme Ltd' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Add company' }))
+    expect(await dialog.findByText('TIN is required')).toBeTruthy()
+    expect(createEntity).not.toHaveBeenCalled()
+    expect(dialog.getAllByText(TIN_HINT)).toHaveLength(1)
+  })
+
+  it('a form-level failure keeps the hint', async () => {
+    vi.mocked(createEntity).mockRejectedValue(new ApiError('http', 'boom', 500))
+    const { container, dialog } = mount('create', 'inhouse')
+    fillAndSubmit(dialog, container, '1234567890')
+    expect(await dialog.findByText('Something went wrong. Please try again.')).toBeTruthy()
+    expect(dialog.getAllByText(TIN_HINT)).toHaveLength(1)
+  })
+
+  it('the edit modal keeps the hint beside a refused TIN and describes the input', async () => {
+    vi.mocked(updateEntity).mockRejectedValue(new ApiError('http', TIN_CHECKSUM, 400))
+    const { dialog } = mount('edit', 'firm')
+    fireEvent.change(dialog.getByPlaceholderText('########-####'), { target: { value: '1234567890' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Save changes' }))
+    expect(await dialog.findByText(TIN_CHECKSUM)).toBeTruthy()
+    expect(updateEntity).toHaveBeenCalledTimes(1)
+    expect(dialog.getAllByText(TIN_HINT)).toHaveLength(1)
+    expect(describedHint(dialog).textContent).toBe(TIN_HINT)
+  })
+
+  it('only the TIN input points at the hint', () => {
+    const { dialog } = mount('create', 'inhouse')
+    const inputs = Array.from(dialog.getAllByRole('textbox'))
+    expect(inputs).toHaveLength(5)
+    const described = inputs.filter((i) => i.getAttribute('aria-describedby') === 'entity-tin-hint')
+    expect(described).toHaveLength(1)
+    expect((described[0] as HTMLInputElement).placeholder).toBe('########-####')
+  })
+
+  it('SettingsView Company tab (in-house) shows the hint in create and edit', () => {
+    for (const entity of [undefined, ENTITY]) {
+      const ctx = {
+        mode: 'inhouse',
+        settingsTab: 'company',
+        sandbox: false,
+        connectors: {},
+        connectorMappings: {},
+        activeEntity: entity,
+        entitiesState: 'ready',
+        entitiesError: null,
+        refetchEntities: vi.fn(),
+        setSettingsTab: vi.fn(),
+        authedFetch: vi.fn(),
+      } as unknown as PlatformCtx
+      const { unmount } = render(<SettingsView ctx={ctx} />)
+      fireEvent.click(screen.getByRole('button', { name: entity ? 'Edit company' : 'Add company' }))
+      expect(within(screen.getByRole('dialog')).getByText(TIN_HINT)).toBeTruthy()
+      unmount()
+    }
+  })
+
+  it('ClientsView (firm) shows the hint in the Add client and Edit client modals', async () => {
+    const rows = [ENTITY]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        const body = new URL(url).pathname.endsWith('/rollup')
+          ? { totals: { counts: {}, needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] }, clients: [], top_violations: [] }
+          : { entities: rows, pagination: { limit: 200, offset: 0, total: rows.length } }
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) })
+      }),
+    )
+    const ctx = {
+      mode: 'firm',
+      authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
+      user: { name: 'F', initials: 'F', tenantName: 'Acme', verified: true },
+      entities: rows,
+      entitiesState: 'ready',
+      entitiesError: null,
+      refetchEntities: vi.fn(),
+    } as unknown as PlatformCtx
+    render(<ClientsView ctx={ctx} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add client' }))
+    expect(within(screen.getByRole('dialog')).getByText(TIN_HINT)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    fireEvent.click(await screen.findByText(ENTITY.name))
+    const edit = within(await screen.findByRole('dialog'))
+    expect(edit.getByText('Edit client')).toBeTruthy()
+    expect(edit.getByText(TIN_HINT)).toBeTruthy()
+  })
+})

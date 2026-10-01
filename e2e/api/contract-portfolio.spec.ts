@@ -127,6 +127,44 @@ test.describe('portfolio contract (API E2E, over the deployed gateway)', () => {
       assertErrorEnvelope(res, 400, 'create invalid TIN')
     })
 
+    // Each string copies a Go constant in internal/portfolio/tin.go; change both together.
+    test('create with a TIN of the wrong shape -> 400 names the shape', async () => {
+      const res = await rawFetch('/api/portfolio/v1/entities', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { name: 'AUTH-10-01 wrong shape', tin: 'BADTIN' },
+      })
+      assertErrorEnvelope(res, 400, 'create TIN wrong shape')
+      // portfolio.TINShapeMessage
+      expect((res.body as { error: string }).error).toBe(
+        'A TIN is digits only. Only the 12-digit FIRS TIN takes a hyphen, after the 8th digit: ########-####.',
+      )
+    })
+
+    test('create with a TIN of the wrong length -> 400 names the length', async () => {
+      const res = await rawFetch('/api/portfolio/v1/entities', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { name: 'AUTH-10-01 wrong length', tin: '12345' },
+      })
+      assertErrorEnvelope(res, 400, 'create TIN wrong length')
+      // portfolio.TINLengthMessage with %d = 5
+      expect((res.body as { error: string }).error).toBe('A TIN has 10 digits (JTB) or 12 digits (FIRS). This one has 5.')
+    })
+
+    test('create with a TIN that failed its check digit -> 400 names the check digit', async () => {
+      const res = await rawFetch('/api/portfolio/v1/entities', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { name: 'AUTH-10-01 failed check digit', tin: '1234567890' },
+      })
+      assertErrorEnvelope(res, 400, 'create TIN failed check digit')
+      // portfolio.TINChecksumMessage
+      expect((res.body as { error: string }).error).toBe(
+        "This TIN's last digit is a check digit, and it does not match the other digits. Check the number on the tax certificate.",
+      )
+    })
+
     test('create duplicate TIN -> 409 {error: string}', async () => {
       const tin = freshTin()
       await createEntity(token, { name: `M3-15-03 dup ${tin}`, tin })

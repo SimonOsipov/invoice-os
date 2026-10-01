@@ -303,7 +303,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
                 {plusGlyph} Add endpoint
               </button>
             </div>
-            {WEBHOOKS.map((w) => (
+            {ctx.handoff ? <div style={{ padding: 20 }}><EmptyState title="No webhooks yet" /></div> : WEBHOOKS.map((w) => (
               <div key={w.event} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 20px', borderBottom: '1px solid var(--line-1)' }}>
                 <code className="mono" style={{ flex: 'none', fontSize: 12.5, fontWeight: 600, color: 'var(--action)' }}>{w.event}</code>
                 <code className="mono" style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--fg-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.url}</code>
@@ -320,7 +320,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
       {/* Signing & certificates */}
       {settingsTab === 'signing' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {CERTS.map((c) => (
+          {ctx.handoff ? <EmptyState title="No signing certificate yet" message="This workspace has no signing certificate." /> : CERTS.map((c) => (
             <div key={c.name} style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
               <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', gap: 11 }}>
                 <span style={{ flex: 'none', width: 36, height: 36, borderRadius: 'var(--radius-md)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center' }}>{shieldGlyph}</span>

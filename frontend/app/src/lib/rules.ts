@@ -120,7 +120,7 @@ export const GOLDEN_VERSIONS: GoldenVersion[] = [
   { version: 'v7', meta: 'eff. 2026-04-15 · 40 rules', tag: 'SUPERSEDED', kind: 'superseded' },
 ]
 
-/** Seed custom rules. Every client starts from its OWN copy of this list. */
+/** Seed custom rules. */
 export const SEED_CUSTOM_RULES: CustomRule[] = [
   {
     key: 'po.number.required',
@@ -245,9 +245,13 @@ export function customRulesKey(entityId: string | null): string {
   return entityId ?? 'workspace'
 }
 
-/** A client not yet in the store has never been edited, so it reads the seed set. */
-export function customRulesFor(store: CustomRuleStore, key: string): CustomRule[] {
-  return store[key] ?? SEED_CUSTOM_RULES
+/** A client not yet in the store has never been edited: it reads the seed set, or nothing for a hand-off session. */
+export function customRulesFor(store: CustomRuleStore, key: string, handoff: boolean): CustomRule[] {
+  return store[key] ?? (handoff ? [] : SEED_CUSTOM_RULES)
+}
+
+export function suggestionsFor(handoff: boolean): Suggestion[] {
+  return handoff ? [] : SUGGESTED_RULES
 }
 
 /** Suggestions still on offer: one disappears the moment its key exists as a custom rule. */

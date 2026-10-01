@@ -14,6 +14,7 @@ import {
   SEED_CUSTOM_RULES,
   SUGGESTED_RULES,
   SUGGESTION_MESSAGE,
+  suggestionsFor,
   tenantSlug,
   toggleCustom,
   type CustomRule,
@@ -34,8 +35,39 @@ describe('customRulesKey / customRulesFor', () => {
   it('an untouched client reads the seed set, an edited one reads its own', () => {
     const edited: CustomRule[] = []
     const store = { 'ent-a': edited }
-    expect(customRulesFor(store, 'ent-a')).toBe(edited)
-    expect(customRulesFor(store, 'ent-b')).toBe(SEED_CUSTOM_RULES)
+    expect(customRulesFor(store, 'ent-a', false)).toBe(edited)
+    expect(customRulesFor(store, 'ent-b', false)).toBe(SEED_CUSTOM_RULES)
+  })
+})
+
+describe('customRulesFor, hand-off', () => {
+  it('a hand-off workspace never sees the seed', () => {
+    expect(SEED_CUSTOM_RULES.length).toBeGreaterThan(0)
+    expect(customRulesFor({}, 'workspace', true)).toEqual([])
+    expect(customRulesFor({}, 'e-1', true)).toEqual([])
+    // Control: a persona session still reads the seed.
+    expect(customRulesFor({}, 'workspace', false)).toBe(SEED_CUSTOM_RULES)
+  })
+
+  it('a stored list wins in both modes', () => {
+    const stored: CustomRule[] = [{ ...SEED_CUSTOM_RULES[0], key: 'mine.only' }]
+    const store = { 'e-1': stored }
+    expect(customRulesFor(store, 'e-1', true)).toBe(stored)
+    expect(customRulesFor(store, 'e-1', false)).toBe(stored)
+  })
+
+  it('a hand-off key with no entry stays empty beside a stored sibling', () => {
+    const store = { 'e-1': [SEED_CUSTOM_RULES[0]] }
+    expect(customRulesFor(store, 'e-2', true)).toEqual([])
+  })
+})
+
+describe('suggestionsFor', () => {
+  it('no suggestion claims a rejection a hand-off workspace never had', () => {
+    expect(SUGGESTED_RULES.length).toBeGreaterThan(0)
+    expect(suggestionsFor(true)).toEqual([])
+    // Control: a persona session keeps the three.
+    expect(suggestionsFor(false)).toEqual(SUGGESTED_RULES)
   })
 })
 

@@ -10,6 +10,7 @@ import { captureDestination } from './lib/deepLink'
 import { SESSION_KEY, serializeSession } from './lib/session'
 import { ensureSignInState } from './lib/signInState'
 import { EMPTY_BUCKET } from './lib/dashboard'
+import { SUGGESTED_RULES } from './lib/rules'
 import type { PlatformCtx, SignedInUser } from './types'
 
 const LANDING = 'https://landing.example'
@@ -36,10 +37,12 @@ const T = jwt(ME.user.id, nowSec() + 3600)
 
 let capturedCtx: PlatformCtx | undefined
 let seenUsers: PlatformCtx['user'][] = []
+let seenDemoState: { handoff: boolean; connected: number; rules: number }[] = []
 vi.mock('./components/Sidebar', () => ({
   Sidebar: (p: { ctx: PlatformCtx }) => {
     capturedCtx = p.ctx
     seenUsers.push(p.ctx.user)
+    seenDemoState.push({ handoff: p.ctx.handoff, connected: Object.values(p.ctx.connectors).filter(Boolean).length, rules: p.ctx.customRules.length })
     return null
   },
 }))
@@ -106,6 +109,7 @@ let exchangeAuth: (string | null)[] = []
 let loginCalls = 0
 let exchangeReply: Reply = ok({ access_token: T })
 let meReply: Reply = ok(ME)
+let entityRows: unknown[] = []
 
 function routeFetch() {
   vi.stubGlobal(
@@ -124,6 +128,9 @@ function routeFetch() {
       if (url === `${GATEWAY}/auth/login`) {
         loginCalls++
         return ok({ access_token: jwt(APP_PERSONAS.firm.subject, nowSec() + 3600) })()
+      }
+      if (url.startsWith(`${GATEWAY}/api/portfolio/v1/entities`)) {
+        return ok({ entities: entityRows, pagination: { limit: 200, offset: 0, total: entityRows.length } })()
       }
       return ok({
         entities: [],
@@ -184,6 +191,7 @@ beforeEach(() => {
   window.history.replaceState(null, '', '/')
   capturedCtx = undefined
   seenUsers = []
+  seenDemoState = []
   fetchUrls = []
   exchangeBodies = []
   meAuth = []
@@ -191,6 +199,7 @@ beforeEach(() => {
   loginCalls = 0
   exchangeReply = ok({ access_token: T })
   meReply = ok(ME)
+  entityRows = []
   routeFetch()
 })
 
@@ -395,6 +404,215 @@ describe('the identity card names the person /me names (AUTH-09-02)', () => {
     expect(Object.keys(capturedCtx!.user).sort()).toEqual(['initials', 'name', 'tenantName', 'verified'])
     expect(Object.keys(capturedCtx!)).not.toContain('email')
     expect(JSON.stringify(capturedCtx!.user)).not.toContain(ME.user.email)
+  })
+})
+
+describe('a hand-off session hides the demo data (AUTH-10-06, F17)', () => {
+  const NO_CONNECTORS = { sap: false, quickbooks: false, oracle: false, sage: false, odoo: false, dynamics: false }
+
+  it("a hand-off session's workspace carries handoff:true and blank demo state", async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(T, ME))
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
+    expect(capturedCtx?.handoff).toBe(true)
+    expect(capturedCtx?.connectors).toEqual(NO_CONNECTORS)
+    expect(capturedCtx?.customRules).toEqual([])
+  })
+
+  // Control: green before and after.
+  it('a stored persona session keeps handoff:false and the demo state', async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ v: 1, personaId: 'firm', token: T, me: ME, verified: true }))
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
+    expect(capturedCtx?.handoff).toBe(false)
+    expect(capturedCtx?.connectors.sap).toBe(true)
+    expect(capturedCtx?.customRules).toHaveLength(5)
+  })
+
+  it("a hand-off workspace's draft carries no demo invoice", async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(T, ME))
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
+    expect(capturedCtx?.handoff).toBe(true)
+    expect(capturedCtx?.draft.number).toBe('')
+    expect(capturedCtx?.draft.buyer).toBe('')
+  })
+
+  // Control: green before and after.
+  it('a stored persona session keeps the demo draft', async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ v: 1, personaId: 'firm', token: T, me: ME, verified: true }))
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
+    expect(capturedCtx?.handoff).toBe(false)
+    expect(capturedCtx?.draft.number).toBe('INV-2026-00482')
+  })
+
+  describe('the draft reseed paths (AUTH-10-07)', () => {
+    const ENTITY_A = 'aaaaaaaa-0000-4000-8000-000000000001'
+    const ENTITY_B = 'bbbbbbbb-0000-4000-8000-000000000002'
+    const BLANK = { number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', items: [{ desc: '', qty: 1, price: 0 }] }
+    const personaRecord = () => JSON.stringify({ v: 1, personaId: 'firm', token: T, me: ME, verified: true })
+
+    function entityRow(id: string, name: string, tin: string) {
+      return { id, name, tin, registration: null, sector: null, address: null, status: 'active', created_at: '2026-01-01T00:00:00Z' }
+    }
+
+    async function bootTwoCompanies(record: string) {
+      configure()
+      entityRows = [entityRow(ENTITY_A, 'Alpha Ltd', '12345678-0001'), entityRow(ENTITY_B, 'Beta Ltd', '12345678-0002')]
+      localStorage.setItem(SESSION_KEY, record)
+      interceptHref()
+      await bootApp()
+      await waitFor(() => expect(capturedCtx?.activeEntity?.id, 'the entity list must resolve').toBe(ENTITY_A))
+    }
+
+    async function typeIntoDraft() {
+      await act(async () => {
+        capturedCtx!.updateDraft('number', 'TYPED-1')
+        capturedCtx!.updateDraft('buyer', 'Typed Buyer')
+        capturedCtx!.updateDraft('buyerTin', '12345678-0009')
+        capturedCtx!.updateDraft('date', '2026-02-03')
+        capturedCtx!.updateItemDesc(0, 'typed line')
+      })
+      expect(capturedCtx!.draft.number, 'control: the typed value landed before the reseed').toBe('TYPED-1')
+      expect(capturedCtx!.draft.items[0]?.desc).toBe('typed line')
+    }
+
+    it('a hand-off session switching company gets a blank draft', async () => {
+      await bootTwoCompanies(handoffRecord(T, ME))
+      expect(capturedCtx?.handoff).toBe(true)
+      await typeIntoDraft()
+      await act(async () => {
+        capturedCtx!.switchClient(ENTITY_B)
+      })
+      await waitFor(() => expect(capturedCtx?.activeEntity?.id).toBe(ENTITY_B))
+      expect(capturedCtx!.draft).toEqual(BLANK)
+    })
+
+    it('a hand-off session opening a new invoice gets a blank draft', async () => {
+      await bootTwoCompanies(handoffRecord(T, ME))
+      expect(capturedCtx?.handoff).toBe(true)
+      await typeIntoDraft()
+      await act(async () => {
+        capturedCtx!.openCreate()
+      })
+      expect(capturedCtx!.draft).toEqual(BLANK)
+    })
+
+    // Control: green before and after.
+    it('a persona session switching company gets the demo draft', async () => {
+      await bootTwoCompanies(personaRecord())
+      expect(capturedCtx?.handoff).toBe(false)
+      await typeIntoDraft()
+      await act(async () => {
+        capturedCtx!.switchClient(ENTITY_B)
+      })
+      await waitFor(() => expect(capturedCtx?.activeEntity?.id).toBe(ENTITY_B))
+      expect(capturedCtx!.draft.number).toBe('INV-2026-00482')
+      expect(capturedCtx!.draft.date).toBe('2026-06-16')
+      expect(capturedCtx!.draft.buyer).not.toBe('')
+      expect(capturedCtx!.draft.items).toHaveLength(2)
+    })
+
+    // Control: green before and after.
+    it('a persona session opening a new invoice gets the demo draft', async () => {
+      await bootTwoCompanies(personaRecord())
+      expect(capturedCtx?.handoff).toBe(false)
+      await typeIntoDraft()
+      await act(async () => {
+        capturedCtx!.openCreate()
+      })
+      expect(capturedCtx!.draft.number).toBe('INV-2026-00482')
+      expect(capturedCtx!.draft.date).toBe('2026-06-16')
+      expect(capturedCtx!.draft.buyer).not.toBe('')
+      expect(capturedCtx!.draft.items).toHaveLength(2)
+    })
+  })
+
+  it('a redeemed hand-off boot carries handoff:true', async () => {
+    configure()
+    ensureSignInState()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    expect(capturedCtx?.handoff).toBe(true)
+    expect(capturedCtx?.connectors).toEqual(NO_CONNECTORS)
+    expect(capturedCtx?.customRules).toEqual([])
+  })
+
+  it('no render of a hand-off boot shows demo state, stored or redeemed', async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(T, ME))
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
+    await settle()
+    expect(seenDemoState.length).toBeGreaterThan(0)
+    expect(seenDemoState.filter((r) => r.handoff !== true || r.connected !== 0 || r.rules !== 0)).toEqual([])
+
+    cleanup()
+    seenDemoState = []
+    localStorage.clear()
+    ensureSignInState()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    await settle()
+    expect(seenDemoState.length).toBeGreaterThan(0)
+    expect(seenDemoState.filter((r) => r.handoff !== true || r.connected !== 0 || r.rules !== 0)).toEqual([])
+  })
+
+  // Control: the same capture reads the demo state on a persona session.
+  it('every render of a stored persona session shows the demo state', async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ v: 1, personaId: 'firm', token: T, me: ME, verified: true }))
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
+    await settle()
+    expect(seenDemoState.length).toBeGreaterThan(0)
+    expect(seenDemoState.filter((r) => r.handoff !== false || r.connected !== 2 || r.rules !== 5)).toEqual([])
+  })
+
+  it("a hand-off workspace's stored custom-rules list is its own, never the seed plus a write", async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(T, ME))
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
+    expect(capturedCtx?.customRules).toEqual([])
+    const adopted = SUGGESTED_RULES[0]
+    await act(async () => {
+      capturedCtx!.addSuggestedRule(adopted)
+    })
+    expect(capturedCtx?.customRules.map((r) => r.key)).toEqual([adopted.key])
+    await act(async () => {
+      capturedCtx!.removeCustomRule(adopted.key)
+    })
+    expect(capturedCtx?.customRules, 'the stored empty list wins; no seed returns').toEqual([])
+  })
+
+  // Control: a persona session writes onto the seed.
+  it("a persona workspace's first write lands on top of the five seeded rules", async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ v: 1, personaId: 'firm', token: T, me: ME, verified: true }))
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
+    expect(capturedCtx?.customRules).toHaveLength(5)
+    await act(async () => {
+      capturedCtx!.addSuggestedRule(SUGGESTED_RULES[0])
+    })
+    expect(capturedCtx?.customRules).toHaveLength(6)
   })
 })
 

@@ -397,12 +397,16 @@ func OnboardHandler(setStatus func(ctx context.Context, id string) (Entity, erro
 // real handler bodies (added by the executor) write to the response.
 // db.ErrNoTenant is 401 (fail-closed); db.ErrNotActiveMember is 403;
 // ErrInvalidTIN/ErrValidation are 400
-// with the wrapped message; ErrNotFound is 404; ErrDuplicateTIN/
+// with the wrapped message (a *TINError sends just its Reason, no prefix); ErrNotFound is 404; ErrDuplicateTIN/
 // ErrRedundantTransition are 409; anything else is 500 with a generic body —
 // this helper never leaks internals into the response. Logging the
 // unrecognized (500) case via slog is the caller's responsibility, since only
 // the caller knows the operation name to log.
 func statusForErr(err error) (status int, msg string) {
+	var te *TINError
+	if errors.As(err, &te) {
+		return http.StatusBadRequest, te.Reason
+	}
 	switch {
 	case errors.Is(err, db.ErrNoTenant):
 		return http.StatusUnauthorized, "unauthorized"

@@ -148,8 +148,8 @@ export const MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 // never rendered at all. Preview gate = file only; commit gate = entity.
 //
 // Still exactly true after INVCR-01-05, and worth restating because that subtask makes it
-// LOOK otherwise: the upload screen now shows an entity-less workspace an amber "No linked
-// business entity" panel. That panel is INFORMATIONAL — it tells the user early what the
+// LOOK otherwise: the upload screen now shows an entity-less workspace an amber "Add your company
+// before you file" panel. That panel is INFORMATIONAL — it tells the user early what the
 // commit will refuse, and it disables nothing. Do not "make it consistent" by adding an
 // entity clause here or to anything upstream of `Read columns`; that is precisely the
 // belt-and-braces copy the paragraph above describes, and re-adding it re-closes the front
@@ -173,7 +173,7 @@ export function canStartImport(preview: ImportPreview | null, mapping: Mapping |
 // guess) makes every spec fail on an assertion/thrown-error mismatch, never an
 // import/compile error.
 //
-// Whether CreateUpload's "No linked business entity" amber panel should render.
+// Whether CreateUpload's "Add your company before you file" amber panel should render.
 // Extracted verbatim from CreateUpload.tsx's own three `const`s (unchanged logic, this
 // story only MOVED it) so it is node-testable under the no-jsdom constraint — the
 // component itself stays unrenderable in this suite, but the derivation it reads is not.

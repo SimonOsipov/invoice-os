@@ -10,7 +10,11 @@
 // RED reason (assertion / thrown-error mismatch), not an import/compile error.
 import { describe, expect, it } from 'vitest'
 
-import { emptyClient, resolveActiveClient } from './clients'
+import type { AsyncStatus } from '@invoice-os/api-client'
+
+import { defaultDraft, emptyClient, firstRunSurface, resolveActiveClient, startingDraft } from './clients'
+import { computeNoEntity } from './importFlow'
+import type { Entity } from './portfolio'
 import type { Client } from '../types'
 
 // A minimal, distinguishable Client fixture built off the real emptyClient() output
@@ -97,5 +101,92 @@ describe('resolveActiveClient (RAC-1..7, task-304 AC-2/AC-3)', () => {
     // would restore exactly the persona special-case task-304 AC-2 deletes.
     const threeArg = resolveActiveClient([], null, 'inhouse')
     expect(threeArg).toBeDefined()
+  })
+})
+
+// AUTH-10-03: which surface the dashboard shows while a workspace has no resolved entity.
+describe('firstRunSurface (AUTH-10-03)', () => {
+  const ENTITY: Entity = {
+    id: 'e1',
+    name: 'Lagos Freight',
+    tin: '20184412-0001',
+    registration: null,
+    sector: null,
+    address: null,
+    status: 'active',
+    created_at: '2026-01-01T00:00:00Z',
+  }
+
+  it.each([
+    ['settled empty', null, 'empty', 0, 0, 'task'],
+    ['no-gateway build', null, 'idle', 0, 0, 'task'],
+    ['ready with zero entities', null, 'ready', 0, 0, 'task'],
+    ['roster caught up, nothing resolved', null, 'ready', 2, 2, 'task'],
+    ['still loading', null, 'loading', 0, 0, 'loading'],
+    ['one-render roster catch-up', null, 'ready', 2, 0, 'loading'],
+    ['an entity resolved', ENTITY, 'ready', 1, 1, 'loading'],
+    ['fetch failed', null, 'error', 0, 0, 'error'],
+  ] as const)('%s', (_label, entity, state, entitiesCount, clientsCount, want) => {
+    expect(firstRunSurface(entity, state, entitiesCount, clientsCount)).toBe(want)
+  })
+
+  it('answers task whenever computeNoEntity does, so the dashboard and the amber panel agree', () => {
+    const states: AsyncStatus[] = ['idle', 'loading', 'error', 'empty', 'ready']
+    let noEntityCases = 0
+    for (const state of states) {
+      for (const entity of [null, ENTITY]) {
+        for (const [entitiesCount, clientsCount] of [[0, 0], [2, 0], [2, 2], [1, 1]]) {
+          if (computeNoEntity(entity, state, entitiesCount, clientsCount)) {
+            noEntityCases++
+            expect(firstRunSurface(entity, state, entitiesCount, clientsCount)).toBe('task')
+          }
+        }
+      }
+    }
+    expect(noEntityCases).toBeGreaterThan(0)
+  })
+})
+
+describe('emptyClient', () => {
+  it('emptyClient reads as an empty company, not a missing client', () => {
+    const c = emptyClient()
+    expect(c.name).toBe('No company yet')
+    expect(c.short).toBe('your company')
+    expect(c.entityId).toBeNull()
+    expect(c.onboarding).toBe(true)
+    expect(c.tin).toBe('—')
+  })
+
+  it('emptyClient changes nothing else about the placeholder', () => {
+    expect(emptyClient()).toMatchObject({
+      initials: '—',
+      taxpayer: 'Small',
+      sector: 'foods',
+      score: null,
+      vol: 0,
+      readiness: [0, 0, 0],
+      readinessNote: '',
+      invoices: [],
+      failing: 0,
+      pending: 0,
+      vatNum: 0,
+      vatLabel: '₦0',
+      count: 0,
+      head: 'Draft',
+      dash: null,
+    })
+  })
+})
+
+describe('startingDraft (AUTH-10-07, Core AC-7)', () => {
+  // The control half is green before the change; the hand-off half is the red.
+  it('startingDraft: a hand-off session starts blank, a persona keeps the demo draft', () => {
+    const c = emptyClient()
+    const blank = startingDraft(c, true)
+    expect(blank).toEqual({ number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', items: [{ desc: '', qty: 1, price: 0 }] })
+    expect(blank.items).toHaveLength(1)
+    const demo = startingDraft(c, false)
+    expect(demo.number, 'control: the persona draft is the demo one').toBe('INV-2026-00482')
+    expect(demo).toEqual(defaultDraft(c))
   })
 })

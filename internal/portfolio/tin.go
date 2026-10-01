@@ -3,45 +3,62 @@ package portfolio
 import (
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 )
 
 // ErrInvalidTIN is returned when a TIN fails structural, format, or checksum
-// validation. Callers should use errors.Is to detect it; the wrapped reason
-// (via fmt.Errorf("%w: ...", ErrInvalidTIN)) is diagnostic only.
+// validation. Callers should use errors.Is to detect it.
 var ErrInvalidTIN = errors.New("portfolio: invalid tin")
 
-// tinShapePattern matches the accepted TIN shapes: a bare 10-digit JTB TIN,
-// a bare 12-digit FIRS TIN, or an 8+4 hyphenated FIRS TIN (NNNNNNNN-NNNN) --
-// the hyphenated and plain-digit spellings of a FIRS TIN both canonicalize to
-// the same 12-digit form.
-var tinShapePattern = regexp.MustCompile(`^(\d{10}|\d{12}|\d{8}-\d{4})$`)
+// TINError names why ValidateTIN refused a TIN; errors.Is(err, ErrInvalidTIN) holds.
+type TINError struct{ Reason string }
+
+func (e *TINError) Error() string        { return ErrInvalidTIN.Error() + ": " + e.Reason }
+func (e *TINError) Is(target error) bool { return target == ErrInvalidTIN }
+
+// Refusal reasons, as sent on the wire. TINLengthMessage takes the digit count.
+const (
+	TINRequiredMessage = "Enter the TIN."
+	TINShapeMessage    = "A TIN is digits only. Only the 12-digit FIRS TIN takes a hyphen, after the 8th digit: ########-####."
+	TINLengthMessage   = "A TIN has 10 digits (JTB) or 12 digits (FIRS). This one has %d."
+	TINChecksumMessage = "This TIN's last digit is a check digit, and it does not match the other digits. Check the number on the tax certificate."
+)
 
 // ValidateTIN validates a Nigerian Tax Identification Number and returns its
 // canonical (digits-only, hyphen-stripped) form on success.
 //
-// Accepted shapes: a bare 10-digit JTB TIN, a bare 12-digit FIRS TIN, or an
-// 8+4 hyphenated FIRS TIN (NNNNNNNN-NNNN). The canonical form strips any
-// hyphen, so both spellings of a FIRS TIN persist identically. The canonical digits must also pass a
-// Luhn (mod-10) checksum, which proves well-formedness only -- it is not a
-// FIRS/JTB registry authenticity check (see story Decision [A1]).
+// Accepted: a bare 10-digit JTB TIN, a bare 12-digit FIRS TIN, or an 8+4
+// hyphenated FIRS TIN, passing Luhn (well-formedness only, story Decision
+// [A1]). Every refusal is a *TINError of one class: required, shape, length
+// or check digit.
 func ValidateTIN(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
-		return "", fmt.Errorf("%w: tin is required", ErrInvalidTIN)
+		return "", &TINError{Reason: TINRequiredMessage}
 	}
 
-	if !tinShapePattern.MatchString(trimmed) {
-		return "", fmt.Errorf("%w: tin must be a 10-digit JTB TIN or an 8+4 FIRS TIN NNNNNNNN-NNNN", ErrInvalidTIN)
+	digits := 0
+	for _, r := range trimmed {
+		switch {
+		case r >= '0' && r <= '9':
+			digits++
+		case r == '-':
+		default:
+			return "", &TINError{Reason: TINShapeMessage}
+		}
+	}
+	if digits != 10 && digits != 12 {
+		return "", &TINError{Reason: fmt.Sprintf(TINLengthMessage, digits)}
+	}
+
+	if hyphens := len(trimmed) - digits; hyphens > 1 || (hyphens == 1 && (digits != 12 || trimmed[8] != '-')) {
+		return "", &TINError{Reason: TINShapeMessage}
 	}
 
 	canonical := strings.Replace(trimmed, "-", "", 1)
-
 	if !luhnValid(canonical) {
-		return "", fmt.Errorf("%w: tin checksum is invalid", ErrInvalidTIN)
+		return "", &TINError{Reason: TINChecksumMessage}
 	}
-
 	return canonical, nil
 }
 

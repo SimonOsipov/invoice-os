@@ -1033,12 +1033,11 @@ test('deployed app: a hand-off code minted in another browser signs no tab in', 
   })
 })
 
-// The first screen of a fresh workspace: the onboarding dashboard. Only the firm portfolio pins the placeholder heading.
-async function expectOnboardingDashboard(page: Page, opts: { firmHeading?: boolean } = {}): Promise<void> {
-  await expect(page.getByText('COMPLIANCE OVERVIEW', { exact: true })).toBeVisible()
-  if (opts.firmHeading) {
-    await expect(page.getByRole('heading', { level: 1, name: 'No client yet', exact: true })).toBeVisible()
-  }
+// The first screen of a fresh workspace: the add-company task.
+async function expectAddCompanyTask(page: Page, h1: string): Promise<void> {
+  await expect(page.getByTestId('add-company-task')).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: h1, exact: true })).toBeVisible()
+  await expect(page.getByText('COMPLIANCE OVERVIEW', { exact: true })).not.toBeVisible()
 }
 
 test('deployed app: a real in-house workspace has a Company tab and no Clients nav item', async ({ page }) => {
@@ -1047,7 +1046,7 @@ test('deployed app: a real in-house workspace has a Company tab and no Clients n
   const errors = collectErrors(page)
 
   await signInAtFrontDoor(page, account, '/')
-  await expectOnboardingDashboard(page)
+  await expectAddCompanyTask(page, 'Add your company')
   await expect.poll(() => sidebarRoster(page), { message: 'in-house sidebar roster' }).toContain('Settings')
   expect(await sidebarRoster(page), 'the in-house sidebar').not.toContain('Clients')
 
@@ -1065,7 +1064,7 @@ test('deployed app: a real firm workspace has the Clients portfolio and no Compa
   const errors = collectErrors(page)
 
   await signInAtFrontDoor(page, account, '/')
-  await expectOnboardingDashboard(page, { firmHeading: true })
+  await expectAddCompanyTask(page, 'Add your first client')
   await expect.poll(() => sidebarRoster(page), { message: 'firm sidebar roster' }).toContain('Clients')
 
   const nav = page.locator('aside.pf-sidebar nav.pf-nav-list')
@@ -1075,6 +1074,162 @@ test('deployed app: a real firm workspace has the Clients portfolio and no Compa
   await nav.getByRole('button', { name: 'Settings' }).click()
   await expect(page.getByRole('button', { name: 'Members', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Company', exact: true })).toHaveCount(0)
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+// frontend/app/src/lib/entityForm.ts TIN_HINT
+const TIN_HINT = 'Use your 12-digit FIRS TIN. A 10-digit JTB TIN is accepted, but invoices filed under it fail the supplier TIN check.'
+// internal/portfolio/tin.go: TINShapeMessage, TINLengthMessage (%d = 5), TINChecksumMessage
+const TIN_SHAPE_REFUSAL = 'A TIN is digits only. Only the 12-digit FIRS TIN takes a hyphen, after the 8th digit: ########-####.'
+const TIN_LENGTH_REFUSAL_5 = 'A TIN has 10 digits (JTB) or 12 digits (FIRS). This one has 5.'
+const TIN_CHECKSUM_REFUSAL =
+  "This TIN's last digit is a check digit, and it does not match the other digits. Check the number on the tax certificate."
+
+const IMPORT_HEADER = 'Invoice No,Issue Date,Buyer TIN,Buyer,Currency,Subtotal,VAT,Total,Item,Qty,Unit Price'
+
+function sidebarNav(page: Page) {
+  return page.locator('aside.pf-sidebar nav.pf-nav-list')
+}
+
+// New invoice → pick a one-row CSV → Read columns, stopping on the Map step.
+async function openMapStep(page: Page, tag: string, amber: { title: string; shown: boolean }): Promise<void> {
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  // Control: the upload step is on screen, so an absent panel is not an unrendered step.
+  await expect(page.getByRole('button', { name: 'Read columns' })).toBeVisible()
+  await expect(page.getByText(amber.title, { exact: true })).toHaveCount(amber.shown ? 1 : 0)
+  const csv = `${IMPORT_HEADER}\n${tag}-${Date.now()},2026-01-01,12345678-0001,Buyer Ltd,NGN,1000.00,75.00,1075.00,Consulting,1,1000.00\n`
+  await page.locator('input[type="file"]#pf-import-file').setInputFiles({ name: `${tag}.csv`, mimeType: 'text/csv', buffer: Buffer.from(csv, 'utf8') })
+  const preview = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await preview
+  await expect(page.getByText('Map fields to columns ·', { exact: false })).toBeVisible({ timeout: 30_000 })
+}
+
+// Chip then column, no `exact: true` on the chip (import-wizard.spec.ts explains). Never clicks Import.
+async function placeInvoiceNumberAndExpectImportEnabled(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  await expect(page.getByRole('button', { name: /^Import \d+ rows$/ })).toBeEnabled()
+}
+
+// CF2: each absence has its visible control in the same step.
+async function expectNoDemoActivity(page: Page): Promise<void> {
+  await expect(page.getByText('COMPLIANCE OVERVIEW', { exact: true })).toBeVisible()
+  const tile = page.getByText('Recent activity', { exact: true }).locator('xpath=ancestor::div[2]')
+  await expect(tile.getByText('No activity to show')).toBeVisible()
+  await expect(tile.getByText('SAMPLE')).toHaveCount(0)
+  await expect(tile.getByText('INV-2026-00481')).toHaveCount(0)
+}
+
+test('deployed app: a new in-house workspace lands on Add your company, and adding it opens the import', async ({ page }) => {
+  test.setTimeout(240_000)
+  const account = await provisionRealAccount('add-co-inhouse', 'in_house')
+  const errors = gatedErrors(page, [expectedStatusDropper(page, 400, /\/api\/portfolio\/v1\/entities$/)])
+  let refused = 0
+  page.on('response', (res) => {
+    if (res.status() === 400 && res.request().method() === 'POST' && /\/api\/portfolio\/v1\/entities$/.test(res.url())) refused += 1
+  })
+
+  await signInAtFrontDoor(page, account, '/')
+  await expectAddCompanyTask(page, 'Add your company')
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await expect(page.getByText('Add your company before you file', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Add your company →' }).click()
+  await expect(page).toHaveURL(/\/settings\/company$/)
+  await expect(page.getByText('Your company', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Add company' })).toBeVisible()
+  await page.getByRole('button', { name: 'Add company' }).click()
+
+  const dialog = page.getByRole('dialog', { name: 'Add company' })
+  await expect(dialog.getByText(TIN_HINT, { exact: true })).toBeVisible()
+  const name = `Add Co ${Date.now()}`
+  const tin = dialog.getByPlaceholder('########-####')
+  await dialog.getByRole('textbox').first().fill(name)
+  const refusals: Array<[string, string]> = [
+    ['BADTIN', TIN_SHAPE_REFUSAL],
+    ['12345', TIN_LENGTH_REFUSAL_5],
+    ['1234567890', TIN_CHECKSUM_REFUSAL],
+  ]
+  for (const [i, [value, reason]] of refusals.entries()) {
+    await tin.fill(value)
+    await dialog.getByRole('button', { name: 'Add company' }).click()
+    await expect(dialog.getByText(reason, { exact: true }), `refusal of ${value}`).toBeVisible()
+    for (const [, other] of refusals.filter((_, j) => j !== i)) {
+      await expect(dialog.getByText(other, { exact: true })).toHaveCount(0)
+    }
+  }
+  await expect(dialog).toBeVisible()
+
+  await tin.fill(freshTin())
+  await dialog.getByRole('button', { name: 'Add company' }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(page.getByText(name, { exact: true }).first()).toBeVisible()
+
+  await sidebarNav(page).getByRole('button', { name: 'Overview' }).click()
+  await expectNoDemoActivity(page)
+  const chip = page.getByTestId('company-chip')
+  await expect(chip).toContainText('WORKSPACE')
+  await expect(chip.getByText('ERP', { exact: true })).toHaveCount(0)
+
+  await sidebarNav(page).getByRole('button', { name: 'Settings' }).click()
+  await page.getByRole('button', { name: 'ERP connectors', exact: true }).click()
+  await expect(page.getByText('0 / 6 CONNECTED')).toBeVisible()
+  await expect(page.getByText('Synced 2 min ago')).toHaveCount(0)
+  await page.getByRole('button', { name: 'API & webhooks', exact: true }).click()
+  await expect(page.getByText('No webhooks yet')).toBeVisible()
+  await expect(page.getByText(/honeywell\.ng/)).toHaveCount(0)
+  await page.getByRole('button', { name: 'Signing & certificates', exact: true }).click()
+  await expect(page.getByText('No signing certificate yet')).toBeVisible()
+  await expect(page.getByText('O=Okafor & Partners')).toHaveCount(0)
+
+  await openMapStep(page, 'ADDCO-INH', { title: 'Add your company before you file', shown: false })
+  await placeInvoiceNumberAndExpectImportEnabled(page)
+
+  expect(refused, 'refused POSTs the gate may drop').toBe(3)
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('deployed app: a new firm lands on Add your first client, and the import step it gates opens once a client is added', async ({ page }) => {
+  test.setTimeout(240_000)
+  const account = await provisionRealAccount('add-co-firm', 'firm')
+  const errors = collectErrors(page)
+
+  await signInAtFrontDoor(page, account, '/')
+  await expectAddCompanyTask(page, 'Add your first client')
+
+  await openMapStep(page, 'ADDCO-FIRM', { title: 'Add a client before you file', shown: true })
+  await expect(page.getByRole('button', { name: 'Filing needs a linked entity' })).toBeDisabled()
+
+  await sidebarNav(page).getByRole('button', { name: 'Overview' }).click()
+  await expectAddCompanyTask(page, 'Add your first client')
+  await page.getByTestId('add-company-task').getByRole('button').click()
+  const dialog = page.getByRole('dialog', { name: 'Add client' })
+  await dialog.getByRole('textbox').first().fill(`Add Client ${Date.now()}`)
+  await dialog.getByPlaceholder('########-####').fill(freshTin())
+  await dialog.getByRole('button', { name: 'Add client' }).click()
+  await expect(page.getByTestId('add-company-task')).toHaveCount(0)
+  await expectNoDemoActivity(page)
+
+  await sidebarNav(page).getByRole('button', { name: 'Rules' }).click()
+  await expect(page.getByText('No custom rules yet — the golden ruleset alone is running.', { exact: true })).toBeVisible()
+  await expect(page.getByText('No suggestions to show.', { exact: true })).toBeVisible()
+  await expect(page.getByText('Derived from')).toHaveCount(0)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page.getByRole('button', { name: 'Skip — enter manually' }).click()
+  await expect(page.getByText('New invoice ·', { exact: false })).toBeVisible()
+  // Input values are not text: toHaveValue, never getByText.
+  await expect(page.getByPlaceholder('INV-0000-00000')).toHaveValue('')
+  await expect(page.getByText('Buyer name', { exact: true }).locator('xpath=following-sibling::input')).toHaveValue('')
+  await expect(page.getByPlaceholder('Description').first()).toHaveValue('')
+
+  await openMapStep(page, 'ADDCO-FIRM', { title: 'Add a client before you file', shown: false })
+  await placeInvoiceNumberAndExpectImportEnabled(page)
+
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })
 
@@ -1107,11 +1262,13 @@ test('deployed app: a real sign-in names the account holder on the identity card
 
 // internal/tenancy/tenancy.go maxNameChars is 200; 6 x 32 + 5 spaces = 197.
 const LONG_NAME = 'Oluwaseyifunmi Adebanjo-Ogunleye '.repeat(6).trim()
+// One unbroken 200-char word: the add-company subtitle must wrap it, not scroll the page.
+const LONG_WORKSPACE = 'W'.repeat(200)
 
 test('deployed app: a 197-character name stays inside the identity card at every wide width', async ({ page }, testInfo) => {
   test.setTimeout(180_000)
   expect(LONG_NAME.length).toBe(197)
-  const account = await provisionRealAccount('card-long', undefined, LONG_NAME)
+  const account = await provisionRealAccount('card-long', undefined, LONG_NAME, LONG_WORKSPACE)
   const errors = collectErrors(page)
 
   await signInAtFrontDoor(page, account, '/')
@@ -1120,6 +1277,8 @@ test('deployed app: a 197-character name stays inside the identity card at every
   const name = page.getByTestId('persona-name')
   const trigger = page.getByTestId('persona-trigger')
   const signOut = aside.getByRole('button', { name: 'Sign out' })
+  await expect(page.getByTestId('add-company-task')).toBeVisible({ timeout: 30_000 })
+  await expect(main.getByText(LONG_WORKSPACE, { exact: false })).toBeVisible()
 
   const readings: { width: number; scrollWidth: number; clientWidth: number }[] = []
   for (const width of WIDE_WIDTHS) {

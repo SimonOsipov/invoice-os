@@ -125,6 +125,80 @@ func TestCreateHandler_InvalidTIN400(t *testing.T) {
 	}
 }
 
+// TestCreateHandler_TINReasonInBody (AC h): a refusal from the real
+// ValidateTIN reaches the client as its reason alone, without the
+// "portfolio:" prefix.
+func TestCreateHandler_TINReasonInBody(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	for _, tc := range tinReasonRows() {
+		t.Run(tc.raw, func(t *testing.T) {
+			create := func(ctx context.Context, in CreateInput) (Entity, error) {
+				_, err := ValidateTIN(in.TIN)
+				return Entity{}, err
+			}
+			rec, body := doCreate(t, create, &id, createRequest{Name: "Acme Ltd", TIN: tc.raw})
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+			}
+			if body.Error != tc.want {
+				t.Errorf("error = %q, want %q", body.Error, tc.want)
+			}
+			if strings.HasPrefix(body.Error, "portfolio:") {
+				t.Errorf("error = %q, want no portfolio: prefix", body.Error)
+			}
+		})
+	}
+}
+
+// TestHandlers_StoreTINRefusalIsBareReason: the real Store.Create and
+// Store.Update refuse a TIN before any database call, so a nil pool is enough;
+// the 400 body is the reason alone, with no wrapper added on the way.
+func TestHandlers_StoreTINRefusalIsBareReason(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	store := NewStore(nil)
+	rows := tinReasonRows()
+	if len(rows) == 0 {
+		t.Fatal("no rows")
+	}
+	for _, tc := range rows {
+		t.Run("create/"+tc.raw, func(t *testing.T) {
+			rec, body := doCreate(t, store.Create, &id, createRequest{Name: "Acme Ltd", TIN: tc.raw})
+			if rec.Code != http.StatusBadRequest || body.Error != tc.want {
+				t.Errorf("create = %d %q, want 400 %q", rec.Code, body.Error, tc.want)
+			}
+		})
+		t.Run("update/"+tc.raw, func(t *testing.T) {
+			rec, body := doUpdate(t, store.Update, &id, uuid.NewString(), fmt.Sprintf(`{"tin":%q}`, tc.raw))
+			if rec.Code != http.StatusBadRequest || body.Error != tc.want {
+				t.Errorf("update = %d %q, want 400 %q", rec.Code, body.Error, tc.want)
+			}
+		})
+	}
+}
+
+// tinReasonRows is one refused TIN per reason shown to the user.
+func tinReasonRows() []struct{ raw, want string } {
+	return []struct{ raw, want string }{
+		{"BADTIN", TINShapeMessage},
+		{"12345", fmt.Sprintf(TINLengthMessage, 5)},
+		{"1234567890", TINChecksumMessage},
+	}
+}
+
+// TestStatusForErr_ValidationKeepsItsMessage: the TIN arm does not swallow
+// ErrValidation's own message.
+func TestStatusForErr_ValidationKeepsItsMessage(t *testing.T) {
+	err := fmt.Errorf("%w: no fields to update", ErrValidation)
+	status, msg := statusForErr(err)
+	if status != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", status)
+	}
+	if msg != err.Error() {
+		t.Errorf("msg = %q, want %q", msg, err.Error())
+	}
+}
+
 // TestCreateHandler_MissingName400 (AC1): a body without a name must 400
 // before create ever runs -- asserted by failing the test if create is
 // called.
@@ -504,6 +578,30 @@ func TestUpdateHandler_InvalidTIN400(t *testing.T) {
 	}
 	if body.Error == "" {
 		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestUpdateHandler_TINReasonInBody (AC h): as the create test, through PATCH.
+func TestUpdateHandler_TINReasonInBody(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	for _, tc := range tinReasonRows() {
+		t.Run(tc.raw, func(t *testing.T) {
+			update := func(ctx context.Context, gotID string, in UpdateInput) (Entity, error) {
+				_, err := ValidateTIN(*in.TIN)
+				return Entity{}, err
+			}
+			rec, body := doUpdate(t, update, &id, uuid.NewString(), fmt.Sprintf(`{"tin":%q}`, tc.raw))
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+			}
+			if body.Error != tc.want {
+				t.Errorf("error = %q, want %q", body.Error, tc.want)
+			}
+			if strings.HasPrefix(body.Error, "portfolio:") {
+				t.Errorf("error = %q, want no portfolio: prefix", body.Error)
+			}
+		})
 	}
 }
 

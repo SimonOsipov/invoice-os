@@ -198,7 +198,7 @@ func TestServiceImport_APICreatedJTBEntityReportsGenuineTinFormatViolation(t *te
 
 // TestMBSSupplierTIN_IsTheExactInverseOfValidateTIN is the DRIFT GUARD:
 // invoice.MBSSupplierTIN round-trips through the REAL portfolio.ValidateTIN,
-// so any change to tin.go's canonicalization (tinShapePattern gaining a
+// so any change to tin.go's canonicalization (ValidateTIN's accepted shapes gaining a
 // shape, Replace's count changing) reds THIS test rather than silently
 // re-arming the false-violation trap in production. Kept HERE (rather than
 // moved wholesale into internal/invoice) even though the function itself
@@ -215,8 +215,8 @@ func TestServiceImport_APICreatedJTBEntityReportsGenuineTinFormatViolation(t *te
 // above, which skip. That matters: the guard must fire in the cheapest suite.
 func TestMBSSupplierTIN_IsTheExactInverseOfValidateTIN(t *testing.T) {
 	// Every FIRS spelling ValidateTIN accepts must map back to the ONE MBS
-	// wire spelling. tin.go's own doc: the hyphenated and bare-12 spellings
-	// "persist identically" -- they ARE the same TIN, so both must render as
+	// wire spelling. The hyphenated and bare-12 spellings
+	// ARE the same TIN, so both must render as
 	// NNNNNNNN-NNNN. Rendering the bare-12 input is therefore NOT fabricating
 	// a format: it is spelling the single canonical identity the MBS way.
 	for _, spelling := range []string{"10012345-0007", "100123450007"} {

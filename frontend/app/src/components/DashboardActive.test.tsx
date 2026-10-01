@@ -329,7 +329,7 @@ describe('DashboardActive live panels — adversarial (QA task-429)', () => {
     // copy under a null live score.
     const readinessTile = screen.getByText('Readiness score').parentElement!.parentElement!
     expect(within(readinessTile).getByText('No invoices yet')).toBeDefined()
-    expect(screen.getByText('No open failures')).toBeDefined()
+    expect(screen.getByText('No invoices validated yet')).toBeDefined() // EMPTY_BUCKET has zero invoices
     expect(screen.queryByText('99')).toBeNull()
     expect(screen.queryByText('tenant-rule')).toBeNull()
   })
@@ -338,7 +338,7 @@ describe('DashboardActive live panels — adversarial (QA task-429)', () => {
     const data: Rollup = {
       totals: { counts: ZERO_COUNTS, needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [{ rule_key: 'tenant-wide-rule', invoices: 10 }] },
       clients: [
-        { entity_id: 'ent-3', entity_name: 'Clean Client Ltd', counts: ZERO_COUNTS, needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] },
+        { entity_id: 'ent-3', entity_name: 'Clean Client Ltd', counts: { ...ZERO_COUNTS, validated: 4 }, needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] },
       ],
       top_violations: [{ rule_key: 'tenant-wide-rule', invoices: 10 }],
     }
@@ -698,5 +698,145 @@ describe('DashboardActive KPI tiles — adversarial (QA)', () => {
     expect(head).toBe('28 TOTAL')
     expect(centre).toBe(28)
     expect(legend.reduce((a, b) => a + b, 0)).toBe(28)
+  })
+})
+
+describe('DashboardActive failures panel before any invoice is validated (AUTH-10-04)', () => {
+  const failuresPanel = (title: string) => screen.getByText(title).parentElement as HTMLElement
+
+  it('zero invoices is not "every invoice passed"', async () => {
+    mockRollupFetch(rollup(0))
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Readiness score') // settle before asserting the panel
+    expect(screen.getByText('No invoices validated yet')).toBeDefined()
+    expect(screen.getByText('Failures appear here once invoices are validated.')).toBeDefined()
+    expect(screen.queryByText('Every invoice passed validation.')).toBeNull()
+    expect(screen.queryByText('No open failures')).toBeNull()
+    expect(failuresPanel('No invoices validated yet').querySelector('svg'), 'no tick at zero invoices').toBeNull()
+  })
+
+  // Regression guard: green before and after the change.
+  it('invoices with no failures still say No open failures', async () => {
+    mockRollupFetch(rollup(0, { validated: 3 }))
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Readiness score')
+    expect(screen.getByText('No open failures')).toBeDefined()
+    expect(screen.getByText('Every invoice passed validation.')).toBeDefined()
+    expect(screen.queryByText('No invoices validated yet')).toBeNull()
+    expect(failuresPanel('No open failures').querySelector('svg'), 'the tick stays when an invoice is validated').not.toBeNull()
+  })
+
+  it('drafts only: nothing validated yet, no tick', async () => {
+    mockRollupFetch(rollup(0, { draft: 3 }))
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Readiness score')
+    expect(screen.getByText('No invoices validated yet')).toBeDefined()
+    expect(screen.getByText('Failures appear here once invoices are validated.')).toBeDefined()
+    expect(screen.queryByText('Every invoice passed validation.')).toBeNull()
+    expect(screen.queryByText('No open failures')).toBeNull()
+    expect(failuresPanel('No invoices validated yet').querySelector('svg'), 'no tick for drafts').toBeNull()
+  })
+
+  // One validated invoice is the boundary: `> 1` would flip it back to the empty-state copy.
+  it('one validated invoice and no failures says No open failures, with its tick', async () => {
+    mockRollupFetch(rollup(0, { validated: 1 }))
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Readiness score')
+    expect(screen.getByText('No open failures')).toBeDefined()
+    expect(screen.queryByText('No invoices validated yet')).toBeNull()
+    expect(failuresPanel('No open failures').querySelector('svg')).not.toBeNull()
+  })
+
+  it('drafts plus one validated invoice says No open failures, with its tick', async () => {
+    mockRollupFetch(rollup(0, { draft: 3, validated: 1 }))
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Readiness score')
+    expect(screen.getByText('No open failures')).toBeDefined()
+    expect(screen.getByText('Every invoice passed validation.')).toBeDefined()
+    expect(screen.queryByText('No invoices validated yet')).toBeNull()
+    expect(failuresPanel('No open failures').querySelector('svg')).not.toBeNull()
+  })
+
+  it('firm mode reads the selected client counts: drafts-only client under a validated tenant', async () => {
+    const data = rollup(0, { validated: 9 })
+    data.clients = [
+      {
+        entity_id: 'ent-1',
+        entity_name: 'Dangote Cement PLC',
+        counts: { ...ZERO_COUNTS, draft: 2 },
+        needs_attention: 0,
+        awaiting_approval: 0,
+        metrics: {},
+        top_violations: [],
+      },
+    ]
+    mockRollupFetch(data)
+    render(<DashboardActive ctx={firmCtx('ent-1', 'Dangote Cement PLC')} />)
+
+    await screen.findByText('Readiness score')
+    expect(screen.getByText('No invoices validated yet')).toBeDefined()
+    expect(screen.queryByText('No open failures')).toBeNull()
+  })
+
+  it.each([
+    ['drafts only', { draft: 3 }],
+    ['drafts and one rejected', { draft: 3, rejected: 1 }],
+    ['drafts and one failed', { draft: 3, failed: 1 }],
+    ['no invoices', {}],
+    ['validated only', { validated: 5 }],
+  ] as [string, Partial<Counts>][])('with failures listed (%s) neither empty-state copy renders', async (_name, countsOver) => {
+    const data = rollup(0, countsOver)
+    data.totals.top_violations = [{ rule_key: 'tin-checksum', invoices: 2 }]
+    mockRollupFetch(data)
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Readiness score')
+    expect(screen.getByText('tin-checksum')).toBeDefined()
+    expect(screen.queryByText('No open failures')).toBeNull()
+    expect(screen.queryByText('No invoices validated yet')).toBeNull()
+    expect(screen.queryByText('Failures appear here once invoices are validated.')).toBeNull()
+  })
+})
+
+describe('DashboardActive Recent activity (AUTH-10-07, Core AC-7)', () => {
+  const handoffCtx = () => ({ ...dashCtx(), handoff: true }) as unknown as PlatformCtx
+  const personaCtx = () => ({ ...dashCtx(), handoff: false }) as unknown as PlatformCtx
+
+  it('hand-off: Recent activity is empty, not a sample', async () => {
+    mockRollupFetch(rollup(0))
+    render(<DashboardActive ctx={handoffCtx()} />)
+
+    await screen.findByText('Readiness score')
+    const head = screen.getByText('Recent activity').parentElement as HTMLElement
+    expect(screen.getByText('No activity to show')).toBeDefined()
+    expect(within(head).queryByText('SAMPLE'), 'no SAMPLE badge on the activity head').toBeNull()
+    expect(screen.queryByText('INV-2026-00481')).toBeNull()
+  })
+
+  it('hand-off: Recent activity stays empty with invoices present, and the tile holds only its title and the empty line', async () => {
+    mockRollupFetch(rollup(0, { validated: 5 }))
+    render(<DashboardActive ctx={handoffCtx()} />)
+
+    await screen.findByText('Readiness score')
+    const tile = screen.getByText('Recent activity').parentElement!.parentElement as HTMLElement
+    expect(within(tile).getByText('No activity to show')).toBeDefined()
+    expect(tile.textContent).toBe('Recent activityNo activity to show')
+  })
+
+  // Control: green before and after.
+  it('persona: Recent activity keeps the SAMPLE feed', async () => {
+    mockRollupFetch(rollup(0))
+    render(<DashboardActive ctx={personaCtx()} />)
+
+    await screen.findByText('Readiness score')
+    const head = screen.getByText('Recent activity').parentElement as HTMLElement
+    expect(within(head).getByText('SAMPLE')).toBeDefined()
+    expect(screen.getByText('INV-2026-00481')).toBeDefined()
+    expect(screen.queryByText('No activity to show')).toBeNull()
   })
 })

@@ -1361,11 +1361,11 @@ test('[import-upload-unify] LIVE: one real import surface, manual entry survives
   await expect(readColumnsBtn, 'enabled once a dropped file lands').toBeEnabled()
 
   // Manual entry must be reachable in LIVE. skipUpload -> createStep 'form'; the build
-  // step's own primary is 'File invoice' (CreateForm), which no earlier step renders. That
-  // label replaced 'Run validation' in INVCR-01-03, when the mock 16-check scanline and its
-  // approve screen were deleted in favour of one real POST /v1/invoices — the firm persona
-  // has a resolved entity, so the gate passes and the primary reads its armed label.
+  // step's own primary is 'File invoice' (CreateForm), which no earlier step renders. The
+  // hand-off session's form starts blank, so the primary reads the refusal until a number is typed.
   await page.getByRole('button', { name: 'Skip — enter manually' }).click()
+  await expect(page.getByRole('button', { name: 'Invoice number is required' }), 'the blank form refuses until a number is typed').toBeDisabled()
+  await page.getByPlaceholder('INV-0000-00000').fill(`DROP-${Date.now()}`)
   await expect(page.getByRole('button', { name: 'File invoice' }), 'manual build step reachable in LIVE').toBeVisible()
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
@@ -1384,17 +1384,16 @@ test('[import-upload-unify] LIVE: one real import surface, manual entry survives
 // (E2E-01 above for import; CreateForm's manual round trip, same as
 // [import-upload-unify] proves is reachable in LIVE) rather than asserting a refusal.
 //
-// What SURVIVES from the old test, restated rather than deleted: the amber "No linked
-// business entity" panel and its 'Filing needs a linked entity' refusal are still real,
+// What SURVIVES from the old test, restated rather than deleted: the amber "Add your company
+// before you file" panel and its 'Filing needs a linked entity' refusal are still real,
 // still INFORMATIONAL-never-blocking code (CreateUpload.tsx's computeNoEntity,
 // lib/importFlow.ts) -- they just no longer fire for THIS persona, because this persona
 // no longer has anything to refuse. AC-6 keeps that contract alive for its other
 // legitimate case (a FIRM workspace whose active entity has been archived out of the
 // roster) -- but every persona this e2e suite's fixtures can sign in as now legitimately
-// has at least one entity, so a genuinely-zero-entity workspace is no longer reachable
-// through ANY browser spec here. lib/importFlow.test.ts's computeNoEntity specs
-// (FLOW-15..17) are the surviving proof that the predicate itself still fires correctly
-// for that case -- see that file for why this is the honest place for it to live now.
+// has at least one entity; the two add-company journeys in topology/auth.spec.ts reach a
+// zero-entity workspace on a fresh provisionRealAccount tenant instead.
+// lib/importFlow.test.ts's computeNoEntity specs (FLOW-15..17) prove the predicate itself.
 test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity and files an invoice, both by import and manually', async ({
   page,
 }) => {
@@ -1418,7 +1417,7 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
   // happened a moment earlier — the real proof is everything below: Read columns arming,
   // the Map step's commit control, and the import itself all succeeding on this
   // workspace's real resolved entity.
-  await expect(page.getByText('No linked business entity', { exact: true }), 'no refusal — in-house has a resolved entity now').toHaveCount(0)
+  await expect(page.getByText('Add your company before you file', { exact: true }), 'no refusal — in-house has a resolved entity now').toHaveCount(0)
 
   const invoiceNumber = `INH-IMP-${Date.now()}`
   // A distinct header per attempt, so a retry or an e2e-job re-run never restores this
@@ -7332,12 +7331,13 @@ test('EXTR15-E2E-01 (AC-10): the hand-off row sits inside its card, and its gutt
 /** Fills the manual form the hand-off lands on, files it, and returns the new invoice's id. */
 async function fileHandOffDraft(page: Page, invoiceNumber: string): Promise<string> {
   const fileBtn = page.getByRole('button', { name: 'File invoice' })
-  await expect(fileBtn, 'the hand-off must land on the manual entry form').toBeVisible({ timeout: 60_000 })
+  const numberInput = page.getByPlaceholder('INV-0000-00000')
+  await expect(numberInput, 'the hand-off must land on the manual entry form').toBeVisible({ timeout: 60_000 })
+  await expect(page.getByRole('button', { name: 'Invoice number is required' }), 'the form starts blank').toBeDisabled()
 
-  // A fresh number per call: defaultDraft seeds a FIXED literal and
-  // (tenant_id, entity_id, invoice_number) is unique, so a Playwright retry would 409 on the
-  // row its own first attempt filed.
-  await page.getByPlaceholder('INV-0000-00000').fill(invoiceNumber)
+  // A fresh number per call: (tenant_id, entity_id, invoice_number) is unique, so a
+  // Playwright retry would 409 on the row its own first attempt filed.
+  await numberInput.fill(invoiceNumber)
   await expect(fileBtn, 'a resolved entity and a non-blank number must arm the primary').toBeEnabled()
 
   const [res] = await Promise.all([
@@ -8776,7 +8776,7 @@ test('AIR04-E2E-01 (AC-1, AC-3, AC-4, AC-5, AC-7): an unavailable AI sends the d
   const readingRes = await readingGet
   expect(readingRes.status()).toBe(200)
   expect(((await readingRes.json()) as { reading: unknown }).reading).toBeNull()
-  await expect(page.getByRole('button', { name: 'File invoice' })).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByRole('button', { name: 'Invoice number is required' })).toBeVisible({ timeout: 60_000 })
   await expect(page.getByText(CARRIED_CAPTION)).toHaveCount(0)
   await expect(page.locator('[data-testid^="carried-"]')).toHaveCount(0)
 

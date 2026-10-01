@@ -49,6 +49,13 @@ import { canReadColumnsAll, canStartDocumentRun, kindMismatchNote, oversizeNote,
 import type { PickedKind } from '../lib/importFlow'
 import type { PlatformCtx } from '../types'
 
+export const AMBER_COPY = {
+  title: { inhouse: 'Add your company before you file', firm: 'Add a client before you file' },
+  button: { inhouse: 'Add your company →', firm: 'Add a client →' },
+  body: "Invoices are filed for a registered company, and this workspace has none yet. Reading a file's columns still works — filing waits until the company is added.",
+  footnote: 'Manual entry has the same requirement — an invoice is filed for a registered company too.',
+}
+
 // The per-file verdict the list renders, '' for an acceptable file. Two refusals, in
 // order: a type the picker does not accept at all, then a type that contradicts the run's
 // own kind (one pick can carry both — addFiles keeps them listed, BULK-03-8).
@@ -275,20 +282,9 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
               entity. */}
           {noEntity && (
             <div style={{ padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', color: 'var(--status-amber-text)' }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 5 }}>No linked business entity</div>
-              <p style={{ fontSize: 12.5, margin: 0, lineHeight: 1.55 }}>
-                An import is filed on behalf of a registered entity. {active.short} has none, so there is nothing to file against. Reading a file&rsquo;s columns still works — the refusal lands on the last step, where the invoices would be written.
-              </p>
-              {/* task-304 (INVCR-01-19): unconditional now for both personas — firm's
-                  destination is the Clients page (NAV_CLIENTS, ClientsView's own
-                  EntityFormModal), in-house's is the Settings > Company panel
-                  (SettingsView, AC-4, the SAME EntityFormModal). Neither used to be a
-                  dead end; in-house's own in-house-only refusal sentence that used to sit
-                  in the paragraph above is deleted outright rather than reworded — it is
-                  simply false now that this button has a real destination for that
-                  persona too.
-                  Navigating away discards a file the user may have picked; nothing has
-                  been uploaded at this point, so there is nothing to lose but the pick. */}
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 5 }}>{AMBER_COPY.title[mode]}</div>
+              <p style={{ fontSize: 12.5, margin: 0, lineHeight: 1.55 }}>{AMBER_COPY.body}</p>
+              {/* Navigating away discards a picked file; nothing is uploaded yet. */}
               <button
                 onClick={() =>
                   mode === 'inhouse' ? ctx.nav('settings', { settingsTab: 'company' }) : ctx.nav('clients')
@@ -296,7 +292,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
                 className="pf-btn"
                 style={{ marginTop: 9, background: 'none', border: 0, padding: 0, fontFamily: 'var(--font-sans)', fontSize: 12.5, fontWeight: 600, color: 'var(--status-amber-text)', textDecoration: 'underline', cursor: 'pointer' }}
               >
-                Link a business entity →
+                {AMBER_COPY.button[mode]}
               </button>
             </div>
           )}
@@ -334,7 +330,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
               reaching, and it names its own reason when it gets there. */}
           {noEntity && (
             <p style={{ fontSize: 12, color: 'var(--fg-3)', margin: 0, lineHeight: 1.5 }}>
-              Manual entry has the same requirement — an invoice is filed against a registered entity too.
+              {AMBER_COPY.footnote}
             </p>
           )}
         </div>

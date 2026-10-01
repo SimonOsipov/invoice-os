@@ -247,6 +247,8 @@ export type PlatformCtx = {
   // apiFetch always res.json()s.
   // makeImportAuth's getter: a promise while a renewal is due, rejected once the session ended.
   getToken: () => string | null | Promise<string | null>
+  // A hand-off session hides demo data; persona sessions keep it until AUTH-15.
+  handoff: boolean
   user: SignedInUser
   clients: Client[]
   active: Client

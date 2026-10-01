@@ -11,7 +11,7 @@
 //
 //   LIVE (rollup)   needs-attention KPI · invoice-status donut · readiness ring + bars ·
 //                   top validation failures · all four KPI tile VALUES
-//   MOCK            12-week trend (shape only — endpoint is live) · sparkline shapes · activity feed
+//   MOCK            12-week trend (shape only — endpoint is live) · sparkline shapes
 //
 // [dashboard-scope-per-client] (persona-handoff-fix step 2): this page is a CLIENT-scoped
 // surface (Sidebar.tsx's CLIENT nav group), so every LIVE panel above scopes to the
@@ -70,7 +70,7 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
         <div className="eyebrow" style={{ marginBottom: 10 }}>
           COMPLIANCE OVERVIEW
         </div>
-        <h1 style={{ fontSize: 28, fontWeight: 600, letterSpacing: '-0.03em', margin: '0 0 5px' }}>
+        <h1 style={{ fontSize: 28, fontWeight: 600, letterSpacing: '-0.03em', margin: '0 0 5px', overflowWrap: 'anywhere' }}>
           {ctx.mode === 'inhouse' ? ctx.user.tenantName ?? 'Your firm' : ctx.active.name}
         </h1>
         <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>
@@ -151,6 +151,7 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
   const bucket = scopedBucket(ctx.mode === 'inhouse', ctx.active.entityId, data)
   const segments = donutSegments(bucket.counts)
   const total = Object.values(bucket.counts).reduce((a, b) => a + b, 0)
+  const anyValidated = total - bucket.counts.draft > 0 // drafts are the only pre-validation status
   const needsAttention = bucket.needs_attention
   const failures = topFailures(bucket.top_violations)
   const ring = readinessRing(bucket.metrics)
@@ -356,7 +357,7 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
         </div>
       </div>
 
-      {/* Row D: top validation failures (live) | recent activity (mock). Same
+      {/* Row D: top validation failures (live) | recent activity. Same
           `calc((100% - 396px) / 2)` narrow column as row B — see there for the 396. */}
       <div className="pf-dash-row-c" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) calc((100% - 396px) / 2)', gap: 18 }}>
       <div style={TILE_CARD}>
@@ -385,15 +386,22 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
           </div>
         ) : (
           <div style={{ padding: '40px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
-            <span style={{ width: 40, height: 40, borderRadius: 99, background: 'var(--status-green-bg)', color: 'var(--status-green-text)', display: 'grid', placeItems: 'center', marginBottom: 12 }}>{tickGlyph13}</span>
-            <div className="card-title" style={{ marginBottom: 3 }}>No open failures</div>
-            <div style={{ fontSize: 13, color: 'var(--fg-3)' }}>Every invoice passed validation.</div>
+            {anyValidated && (
+              <span style={{ width: 40, height: 40, borderRadius: 99, background: 'var(--status-green-bg)', color: 'var(--status-green-text)', display: 'grid', placeItems: 'center', marginBottom: 12 }}>{tickGlyph13}</span>
+            )}
+            <div className="card-title" style={{ marginBottom: 3 }}>{anyValidated ? 'No open failures' : 'No invoices validated yet'}</div>
+            <div style={{ fontSize: 13, color: 'var(--fg-3)' }}>{anyValidated ? 'Every invoice passed validation.' : 'Failures appear here once invoices are validated.'}</div>
           </div>
         )}
       </div>
 
         <div style={TILE_CARD}>
-          <TileHead title="Recent activity" meta="SAMPLE" />
+          <TileHead title="Recent activity" meta={ctx.handoff ? undefined : 'SAMPLE'} />
+          {ctx.handoff ? (
+            <div style={{ padding: '40px 20px', textAlign: 'center' }}>
+              <div className="card-title">No activity to show</div>
+            </div>
+          ) : (
           <div style={{ padding: '18px 20px 6px' }}>
             {mock.activity.map((a, i) => (
               <div key={i} style={{ display: 'flex', gap: 12 }}>
@@ -415,6 +423,7 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
               </div>
             ))}
           </div>
+          )}
         </div>
       </div>
     </>

@@ -439,3 +439,22 @@ describe('BUG-17-01 company switcher corner', () => {
     expect(screen.queryAllByTestId('company-switcher-option')).toHaveLength(0)
   })
 })
+
+describe('Sidebar in-house chip ERP pill (AUTH-10-07, Core AC-7)', () => {
+  const ROLLUP = rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 })
+
+  it('hand-off: the in-house chip shows no ERP pill', async () => {
+    await renderSidebar(ROLLUP, sidebarCtx({ handoff: true }))
+    const chip = screen.getByTestId('company-chip')
+    expect(chip.textContent, 'the chip still names the workspace').toContain('WORKSPACE')
+    expect(within(chip).queryByText('ERP')).toBeNull()
+  })
+
+  // Control: green before and after.
+  it('persona: the in-house chip keeps its ERP pill', async () => {
+    await renderSidebar(ROLLUP, sidebarCtx({ handoff: false }))
+    const chip = screen.getByTestId('company-chip')
+    expect(chip.textContent).toContain('WORKSPACE')
+    expect(within(chip).getByText('ERP')).toBeDefined()
+  })
+})

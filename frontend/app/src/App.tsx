@@ -9,13 +9,14 @@ import { consumeSignInState, ensureSignInState, landingSignInUrl, mintSignInStat
 import { HANDOFF_PARAM, isLiveHandoffSession, readHandoffCode, redeemHandoff } from './lib/sessionHandoff'
 import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import { isPromiseLike, makeAuthedFetch } from './lib/authedFetch'
-import { buildClients, defaultDraft, resolveActiveClient } from './lib/clients'
+import { buildClients, resolveActiveClient, startingDraft } from './lib/clients'
 import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from './lib/portfolio'
 import { fileDraftGate, fileDraftInvoice, fileSuppliedNumber } from './lib/invoiceDraft'
 import { createInvoice, listInvoices } from './lib/invoices'
 import { reviewQuery } from './lib/reviewBatch'
 import { parseLocation, reviewNavIds, routePath, routeQuery, routeUrl, type RouteParams } from './lib/route'
 import { canSubmitMapping, toImportMapping } from './lib/mapping'
+import { initialConnectors } from './lib/connectors'
 import {
   addFiles,
   attachDocumentIds,
@@ -111,7 +112,7 @@ import { PersonaToast } from './demo/PersonaToast'
 import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
 import { DashboardActive } from './components/DashboardActive'
-import { DashboardOnboarding } from './components/DashboardOnboarding'
+import { AddCompanyTask } from './components/AddCompanyTask'
 import { InvoicesList } from './components/InvoicesList'
 import { CreateFlow } from './components/CreateFlow'
 import { InvoiceDetail } from './components/InvoiceDetail'
@@ -140,8 +141,6 @@ import type {
   SignedInUser,
   View,
 } from './types'
-
-const INITIAL_CONNECTORS: ConnectorsState = { sap: true, quickbooks: true, oracle: false, sage: false, odoo: false, dynamics: false }
 
 // Environment banner under the header, one per state — the environment is always
 // stated, never conveyed by absence. `live` cannot render while the LIVE segment is
@@ -371,7 +370,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // A lazy initializer, not an effect that navigates on mount, for the same StrictMode
   // reason as the block above.
   const [view, setView] = useState<View>(bootView)
-  const [draft, setDraft] = useState<Draft>(() => defaultDraft(active))
+  const [draft, setDraft] = useState<Draft>(() => startingDraft(active, session.handoff === true))
   // The document that produced no invoice, recorded by enterByHand so the invoice filed
   // instead keeps its provenance; handOffReading is its carried reading, if any. Cleared
   // wherever `draft` is reseeded -- it describes THIS draft, not the session.
@@ -421,19 +420,19 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // Settings opens on Members: parseLocation returns that tab for a URL that names none.
   // SETTINGS_TABS' array order decides only which renders first.
   const [settingsTab, setSettingsTab_] = useState<SettingsTab>(() => availableSettingsTab(seed.settingsTab, mode))
-  const [connectors, setConnectors] = useState<ConnectorsState>(INITIAL_CONNECTORS)
+  const [connectors, setConnectors] = useState<ConnectorsState>(() => initialConnectors(session.handoff === true))
   // Field-mapping edits live at the workspace, not inside SettingsView, so a saved
   // mapping survives navigating away from Settings and back.
   const [connectorMappings, setConnectorMappings] = useState<ConnectorMappings>({})
   // Custom validation rules, PER CLIENT (lib/rules.ts). Held here rather than in
   // RulesView so a client's set survives navigating away and back, and so switching
   // company genuinely swaps the set instead of carrying one client's rules over to
-  // the next. A client absent from the store has never been edited and reads the
-  // seed set; only edited clients get an entry.
+  // the next. A client absent from the store has never been edited; only edited
+  // clients get an entry.
   const [customRuleStore, setCustomRuleStore] = useState<CustomRuleStore>({})
   const [openRuleKey, setOpenRuleKey] = useState<string | null>(null)
   const rulesKey = customRulesKey(active.entityId)
-  const customRules = customRulesFor(customRuleStore, rulesKey)
+  const customRules = customRulesFor(customRuleStore, rulesKey, session.handoff === true)
   // The tenant's approval policies — the `membersAsync` idiom below, verbatim except for
   // the mirror's guard. Per TENANT, so switching company does not swap the set.
   const policiesAsync = useAsync<Policy[]>(
@@ -749,7 +748,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     navigate('dashboard')
     setDetailInvoiceId(null)
     setSwitcherOpen(false)
-    setDraft(defaultDraft(clients.find((c) => c.entityId === id) ?? active))
+    setDraft(startingDraft(clients.find((c) => c.entityId === id) ?? active, session.handoff === true))
     setHandOffDocumentId(null)
     setHandOffReading(null)
     handOffReadSeq.current += 1
@@ -794,7 +793,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     }
     navigate('create')
     setCreateStep('upload')
-    setDraft(defaultDraft(active))
+    setDraft(startingDraft(active, session.handoff === true))
     setHandOffDocumentId(null)
     setHandOffReading(null)
     handOffReadSeq.current += 1
@@ -1521,11 +1520,11 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   }
 
   // All three custom-rule writers go through the same shape: resolve THIS client's
-  // list (seed set if untouched), run the pure reducer, store it back under this
+  // list, run the pure reducer, store it back under this
   // client's key. `rulesKey` is captured per render off `active`, so a write can
   // never land on the company the switcher just left.
   function updateCustomRules(fn: (rules: CustomRule[]) => CustomRule[]) {
-    setCustomRuleStore((store) => ({ ...store, [rulesKey]: fn(customRulesFor(store, rulesKey)) }))
+    setCustomRuleStore((store) => ({ ...store, [rulesKey]: fn(customRulesFor(store, rulesKey, session.handoff === true)) }))
   }
 
   function addSuggestedRule(s: Suggestion) {
@@ -1651,6 +1650,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     // Reuses importAuth's accessor rather than a second closure, so the two byte-level
     // transports can never drift on which session they read.
     getToken: importAuth.getToken,
+    handoff: session.handoff === true,
     user,
     clients,
     active,
@@ -1797,7 +1797,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
           )
         })()}
         <div className="pf-scroll" style={{ flex: 1, overflowY: 'auto' }}>
-          {view === 'dashboard' && (active.onboarding ? <DashboardOnboarding ctx={ctx} /> : <DashboardActive ctx={ctx} />)}
+          {view === 'dashboard' && (active.onboarding ? <AddCompanyTask ctx={ctx} /> : <DashboardActive ctx={ctx} />)}
           {view === 'invoices' && <InvoicesList ctx={ctx} />}
           {view === 'create' && <CreateFlow ctx={ctx} />}
           {view === 'detail' && <InvoiceDetail ctx={ctx} />}

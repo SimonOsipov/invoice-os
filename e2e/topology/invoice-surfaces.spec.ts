@@ -2353,6 +2353,7 @@ test('INVCR-E2E-3 firm: manual entry persists and affirms nothing before the res
   await signInFirm(page)
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await page.getByRole('button', { name: 'Skip — enter manually' }).click()
+  await expect(page.getByRole('button', { name: 'Invoice number is required' }), 'the hand-off form starts blank').toBeDisabled()
 
   const invoiceNumber = `INV-E2E-MANUAL-${Date.now()}`
   await page.getByPlaceholder('INV-0000-00000').fill(invoiceNumber)
@@ -2379,9 +2380,15 @@ test('INVCR-E2E-3 firm: manual entry persists and affirms nothing before the res
   await expect(page.getByTestId('invoice-detail'), 'no success copy before the response').toHaveCount(0)
   await expect(page.getByRole('heading', { level: 1 })).toHaveCount(0)
 
-  await createResp
+  const created = (await (await createResp).json()) as { id: string }
   await expect(page.getByTestId('invoice-detail'), 'the real detail renders once the 201 lands').toBeVisible({ timeout: 30_000 })
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(invoiceNumber)
+
+  // The blank draft files no demo data (AUTH-10-07); the number is the positive control.
+  const stored = await getInvoice(await login(PERSONAS.A), created.id)
+  expect(stored.invoice_number, 'control: the typed number is what was filed').toBe(invoiceNumber)
+  expect([stored.issue_date, stored.buyer_name, stored.buyer_tin], 'issue date, buyer name, buyer TIN').toEqual([null, null, null])
+  expect(stored.line_items?.map((l) => l.description), 'one empty line').toEqual([null])
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

@@ -132,9 +132,9 @@ export type TenantKind = 'firm' | 'in_house'
 // A fresh GoTrue account with a workspace of its own. Forks auto-confirm, so
 // the account signs in at once; a later sign-in carries the new tenant claim.
 // An absent kind stores the column default, 'firm'.
-export async function provisionRealAccount(prefix: string, kind?: TenantKind, displayName = 'Hand-off E2E'): Promise<RealAccount> {
+export async function provisionRealAccount(prefix: string, kind?: TenantKind, displayName = 'Hand-off E2E', workspaceName?: string): Promise<RealAccount> {
   const id = crypto.randomUUID()
-  const account = { email: `${prefix}-${id}@example.com`, password: id.slice(0, 16), workspaceName: `Hand-off E2E ${id.slice(0, 8)}`, displayName }
+  const account = { email: `${prefix}-${id}@example.com`, password: id.slice(0, 16), workspaceName: workspaceName ?? `Hand-off E2E ${id.slice(0, 8)}`, displayName }
   await apiFetch(`${apiBase()}/auth/register`, { method: 'POST', body: { email: account.email, password: account.password } })
   const state = mintSignInState()
   const token = await exchangeCode(await signInForCode(account.email, account.password, state), state)

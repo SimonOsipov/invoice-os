@@ -10,7 +10,7 @@
 
 import type { ReactNode } from 'react'
 
-import { GOLDEN_RULES, GOLDEN_SET, GOLDEN_VERSIONS, openSuggestions, SUGGESTED_RULES, type CustomRule, type Rule } from '../lib/rules'
+import { GOLDEN_RULES, GOLDEN_SET, GOLDEN_VERSIONS, openSuggestions, suggestionsFor, type CustomRule, type Rule } from '../lib/rules'
 import { lockGlyph, sparkGlyph } from '../glyphs'
 import { RuleDrawer } from './RuleDrawer'
 import { SeverityPill, TypePill } from './RulePills'
@@ -92,7 +92,7 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
   const isFirm = mode === 'firm'
   const scope = active.short
   const total = GOLDEN_RULES.length + customRules.length
-  const suggestions = openSuggestions(SUGGESTED_RULES, customRules)
+  const suggestions = openSuggestions(suggestionsFor(ctx.handoff), customRules)
 
   const subtitle = isFirm
     ? `ASComply's golden ruleset plus the custom checks you run for ${scope}`
@@ -166,7 +166,9 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
             </div>
             {suggestions.length === 0 ? (
               <div style={{ padding: '14px', fontSize: 12, lineHeight: 1.5, color: 'var(--fg-3)' }}>
-                Nothing to suggest right now — every rule we inferred from your rejections is already in your custom list.
+                {ctx.handoff
+                  ? 'No suggestions to show.'
+                  : 'Nothing to suggest right now — every rule we inferred from your rejections is already in your custom list.'}
               </div>
             ) : (
               suggestions.map((s) => (
@@ -239,7 +241,9 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
           <GroupHeader label={`CUSTOM · ${scope}`} accent />
           {customRules.length === 0 ? (
             <div style={{ padding: '20px 16px', borderBottom: '1px solid var(--line-1)', fontSize: 13, lineHeight: 1.6, color: 'var(--fg-3)', minWidth: TABLE_MIN_WIDTH }}>
-              No custom rules yet — the golden ruleset alone is running. Add one from the suggestions on the left.
+              {ctx.handoff
+                ? 'No custom rules yet — the golden ruleset alone is running.'
+                : 'No custom rules yet — the golden ruleset alone is running. Add one from the suggestions on the left.'}
             </div>
           ) : (
             customRules.map((r) => (

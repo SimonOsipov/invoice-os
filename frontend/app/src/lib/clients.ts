@@ -16,9 +16,11 @@ import { CFG, SECTORS } from '../data'
 import { amount, fmtShort, pad2 } from './format'
 import { failuresFrom } from './charts'
 import { initials } from './customers'
+import { computeNoEntity } from './importFlow'
 import { hash, mulberry } from './prng'
 import { validate } from './validation'
 import type { Entity } from './portfolio'
+import type { AsyncStatus } from '@invoice-os/api-client'
 import type { Client, ClientCfg, Draft, Invoice, InvoiceStatus, LineItem, StatusStyle } from '../types'
 
 function mulberrySeed(name: string) {
@@ -152,13 +154,11 @@ export function buildClients(entities: Entity[]): Client[] {
 // The window before the live entity list first resolves (loading/error/no-gateway), or a
 // tenant (either persona, [entity-picker] trap 2) with genuinely zero entities — every
 // one of the ~15 places reading ctx.active needs SOMETHING defined, never `undefined`.
-// onboarding: true reuses the existing "nothing here yet" dashboard rather than
-// inventing a second empty state; entityId stays null since no real entity backs this
-// placeholder either.
+// onboarding: true routes the dashboard to AddCompanyTask; entityId stays null (no real entity).
 export function emptyClient(): Client {
   const cfg: ClientCfg = {
-    name: 'No client yet',
-    short: 'No client',
+    name: 'No company yet',
+    short: 'your company',
     initials: '—',
     tin: '—',
     taxpayer: 'Small',
@@ -170,6 +170,18 @@ export function emptyClient(): Client {
     onboarding: true,
   }
   return finishClient(cfg, null)
+}
+
+// Reuses the amber panel's predicate so the two never disagree.
+export function firstRunSurface(
+  activeEntity: Entity | null,
+  entitiesState: AsyncStatus,
+  entitiesCount: number,
+  clientsCount: number,
+): 'task' | 'loading' | 'error' {
+  if (entitiesState === 'error') return 'error'
+  if (entitiesState === 'idle' || computeNoEntity(activeEntity, entitiesState, entitiesCount, clientsCount)) return 'task'
+  return 'loading'
 }
 
 // [in-house-degenerate-case]: the ONE resolution path for BOTH workspace modes,
@@ -194,7 +206,7 @@ export function resolveActiveClient(clients: Client[], activeEntityId: string | 
   return clients[0] ?? emptyClient()
 }
 
-// The manual create form's starting state. Every field here is now genuinely EDITABLE and
+// A persona session's manual create form state. Every field here is now genuinely EDITABLE and
 // every one of them crosses the wire on POST /v1/invoices (INVCR-01-03), so these are real
 // defaults, not a mock fixture:
 //
@@ -226,4 +238,10 @@ export function defaultDraft(client: ClientCfg): Draft {
       { desc: sd.items[1] || 'Supply', qty: 12, price: 85000 },
     ],
   }
+}
+
+// A hand-off session starts blank; date '' maps to issue_date null, so nothing demo is filed.
+export function startingDraft(client: ClientCfg, handoff: boolean): Draft {
+  if (!handoff) return defaultDraft(client)
+  return { number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', items: [{ desc: '', qty: 1, price: 0 }] }
 }

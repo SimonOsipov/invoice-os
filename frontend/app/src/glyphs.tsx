@@ -32,17 +32,6 @@ export const copyGlyph = (
   />
 )
 export const docGlyph = <Icon paths={['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M14 2v6h6']} size={20} />
-export const rocketGlyph = (
-  <Icon
-    paths={[
-      'M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z',
-      'M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z',
-      'M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0',
-      'M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5',
-    ]}
-    size={22}
-  />
-)
 export const closeGlyph = <Icon paths={['M18 6 6 18M6 6l12 12']} size={16} strokeWidth={2} />
 export const backGlyph = <Icon paths={['M19 12H5', 'm12 19-7-7 7-7']} size={14} />
 export const refreshGlyph = <Icon paths={['M21 4v6h-6', 'M3 20v-6h6', 'M3.5 9a9 9 0 0 1 14.9-3.4L21 8', 'M20.5 15a9 9 0 0 1-14.9 3.4L3 16']} size={14} />

@@ -723,6 +723,7 @@ describe('mid-session renewal (AC-5, AC-8, AC-9)', () => {
     await bootApp()
     // The persona keeps its own name although /me answers a display name (D1).
     await waitForVerifiedWorkspace(ME.tenant.name, { name: APP_PERSONAS.firm.name, initials: APP_PERSONAS.firm.initials })
+    expect(capturedCtx?.handoff, 'a persona session is not a hand-off session').toBe(false)
     await settle()
     const login = calls.filter((c) => c.url === `${GATEWAY}/auth/login`)
     expect(login).toHaveLength(1)
@@ -807,6 +808,69 @@ describe('mid-session renewal (AC-5, AC-8, AC-9)', () => {
     expect(refreshes(mark)).toHaveLength(1)
     expect(uploads()[0]?.duringRefresh).toBe(false)
     expect(uploads()[0]?.auth).toBe(`Bearer ${renewedToken()}`)
+  })
+})
+
+describe('a renewed hand-off session stays a hand-off session (AUTH-10-06, F17)', () => {
+  it('a hand-off session still carries handoff:true after a renewal', async () => {
+    await mountFresh()
+    vi.setSystemTime(MID_RENEW_AT)
+    const mark = calls.length
+
+    expect(await probe(capturedCtx)).toBe('resolved')
+    await settle()
+
+    expect(refreshes(mark), 'the renewal ran').toHaveLength(1)
+    expect(storedRecord()?.token, 'the renewed token is stored').toBe(renewedToken())
+    expect(capturedCtx?.handoff).toBe(true)
+  })
+
+  it('a hand-off session renewed at boot carries handoff:true', async () => {
+    await bootWith(record(A0_DUE, DUE_AT))
+    await waitForVerifiedWorkspace()
+    await settle()
+    expect(refreshes(), 'the boot renewal ran').toHaveLength(1)
+    expect(capturedCtx?.handoff).toBe(true)
+  })
+
+  it('a stand-in is not a hand-off session, and the seat is again after the return', async () => {
+    vi.stubEnv('VITE_DEMO_MODE', 'true')
+    await mountFresh()
+    expect(capturedCtx?.handoff, 'the seat').toBe(true)
+    meReply = answer(200, OTHER_ME)
+    await act(async () => {
+      await capturedCtx!.becomePersona!(STAND_IN, 'dashboard')
+    })
+    await waitFor(() => expect(capturedCtx?.user.name).toBe('Tunde Bello'))
+    expect(capturedCtx?.handoff, 'the stand-in').toBe(false)
+    meReply = answer(200, ME)
+    await act(async () => {
+      await capturedCtx!.returnToSeat!('dashboard', SEAT_MEMBER)
+    })
+    await waitFor(() => expect(capturedCtx?.user.name).toBe(ME.user.display_name))
+    expect(capturedCtx?.handoff, 'back on the seat').toBe(true)
+  })
+
+  it('the stand-in shows the demo state and the seat is blank again after the return', async () => {
+    vi.stubEnv('VITE_DEMO_MODE', 'true')
+    await mountFresh()
+    const connected = () => Object.values(capturedCtx!.connectors).filter(Boolean).length
+    expect(connected(), 'the seat').toBe(0)
+    expect(capturedCtx?.customRules, 'the seat').toEqual([])
+    meReply = answer(200, OTHER_ME)
+    await act(async () => {
+      await capturedCtx!.becomePersona!(STAND_IN, 'dashboard')
+    })
+    await waitFor(() => expect(capturedCtx?.user.name).toBe('Tunde Bello'))
+    expect(connected(), 'the stand-in').toBe(2)
+    expect(capturedCtx?.customRules, 'the stand-in').toHaveLength(5)
+    meReply = answer(200, ME)
+    await act(async () => {
+      await capturedCtx!.returnToSeat!('dashboard', SEAT_MEMBER)
+    })
+    await waitFor(() => expect(capturedCtx?.user.name).toBe(ME.user.display_name))
+    expect(connected(), 'back on the seat').toBe(0)
+    expect(capturedCtx?.customRules, 'back on the seat').toEqual([])
   })
 })
 

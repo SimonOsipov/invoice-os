@@ -121,7 +121,7 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     resetBySwitchClient: true,
     routes: ['/create'],
     verdict: 'correctly-reset',
-    citation: { text: 'setDraft(defaultDraft(clients.find((c) => c.entityId === id) ?? active))' },
+    citation: { text: 'setDraft(startingDraft(clients.find((c) => c.entityId === id) ?? active, session.handoff === true))' },
     note: 'Re-seeded from the incoming company at App.tsx#switchClient. Read by CreateForm at createStep `form`.',
   },
   {
@@ -298,7 +298,7 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     resetBySwitchClient: false,
     routes: ['/settings', '/settings/<tab>'],
     verdict: 'correctly-reset',
-    note: 'Never fetched -- seeded from the INITIAL_CONNECTORS literal (App.tsx#INITIAL_CONNECTORS) and toggled locally, so it has no company dimension to go stale.',
+    note: 'Never fetched -- seeded from the initialConnectors literal (lib/connectors.ts#initialConnectors) and toggled locally, so it has no company dimension to go stale.',
   },
   {
     binding: 'connectorMappings, setConnectorMappings',

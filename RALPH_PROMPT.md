@@ -45,7 +45,7 @@ Neither path licenses a silent feature cut.
 gh pr checks [PR_NUMBER]
 # CI (ci.yml) rolls up: go, frontend, clean-clone, migrations, docker-canary, rls, queue, audit.
 # dev-env.yml (on a ready PR): prepare-env (ci-watch alongside; red CI stops the run) → deploy-gateway (migrator) → health-gate →
-#   deploy-context ×7 + deploy-spas ×3 → fleet-gate → e2e (smoke + api + topology + demo).
+#   deploy-context ×7 + deploy-spas ×3 → fleet-gate → e2e (smoke + api) → topology ×3 (serial-lane, import-wizard, invoice-surfaces).
 ```
 
 Not part of the gate: `dev-env-teardown.yml` (deletes the PR environment on close), `dev-env-sweeper.yml` (daily reaper of orphaned PR environments), `railway-invariants.yml` (asserts Railway PR Environments stay OFF). CI tears environments down; never use destructive Railway MCP calls.
@@ -328,7 +328,7 @@ Runs once per story, after `CI` is green. It verifies the assembled feature agai
    - **Freshness:** `git -C "$WORKTREE_PATH" fetch origin`. If `origin/main` has commits the branch lacks, merge, push, and let `CI` and the gate re-run. A base missing main's migrations crash-loops the gateway.
 3. **Watch the run** to conclusion per the CI Monitoring Protocol.
    - Re-run a red gate whole: `gh run rerun "$RUN_ID"`, never `--failed`. The database resets only when the gateway deploys.
-   - A spec this PR changed that passed only on retry fails `e2e`. Fix the spec or the race; do not re-run for luck.
+   - A spec this PR changed that passed only on retry fails the `e2e` job or the `E2E topology (<shard>)` leg that ran it. Fix the spec or the race; do not re-run for luck.
    - A `cancelled` run is not green. Read `gh run view "$RUN_ID" --json conclusion` and the `E2E gate` check; a red `CI` stops the run.
    Green means: fleet deployed, gateway migrated, DB bootstrapped + demo-purged + seeded, all 8 backends up, smoke + topology E2E passed, including cross-tenant isolation.
 4. **Spawn `product-qa-spec`** to verify **each** original AC against the green run:

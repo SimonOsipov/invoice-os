@@ -9,8 +9,8 @@
 // local oracle is exactly `pnpm -r typecheck` + `playwright test --list` collection
 // under playwright.topology.config.ts -- no config or workflow edit is needed
 // (testDir './topology' + testMatch '**/*.spec.ts' picks this file up automatically,
-// run by dev-env.yml's `e2e` job, step "Topology (app verified-login + cross-tenant
-// isolation)" -> `pnpm --filter @invoice-os/e2e test:topology`). The first REAL run
+// run by dev-env.yml's `topology` job, matrix leg `import-wizard` ->
+// `pnpm --filter @invoice-os/e2e test:topology --project=import-wizard`). The first REAL run
 // is that deploy gate, not this authoring pass.
 //
 // Drives the UI, not the API -- e2e/api/import.spec.ts and perf.spec.ts already gate
@@ -24,7 +24,7 @@
 // target would make a retry (or the second test) collide on fixed invoice numbers.
 //
 // NOTE (merged from main, M4-22-03): db/seed.dev.sql now seeds 10 curated
-// business_entities into THIS persona's tenant (1111...), where it previously seeded
+// business_entities into THIS persona's tenant, where it previously seeded
 // zero. Harmless here and deliberately not compensated for: selectEntity() (the
 // workspace-switcher helper, [import-upload-unify] -- CreateUpload's own in-page
 // entity <select> is gone) matches our own uniquely-named entity by label,
@@ -38,9 +38,9 @@
 // .../imports/preview, NOT /v1/imports -- every waitForResponse predicate below
 // matches on that prefixed path, never a bare /v1/... one.
 //
-// fullyParallel:false / workers:1 (playwright.topology.config.ts:21-22 -- conformed to
-// the convention's "one browser, serial" rule by M4-14-01, with its own rationale at
-// :18-20; this comment said fullyParallel:true until PERSONA-01 corrected it), retries:1
+// fullyParallel:false / workers:1 (playwright.topology.config.ts -- conformed to
+// the convention's "one browser, serial" rule by M4-14-01, with its own rationale in the
+// comment above them; this comment said fullyParallel:true until PERSONA-01 corrected it), retries:1
 // in CI: each test below creates its OWN fresh entity (own freshTin()) and its own
 // page/sign-in, so no two tests contend for one entity -- which still matters under
 // workers:1, because the entity is what keeps a RETRY of a test from colliding with its
@@ -80,7 +80,6 @@ import {
   getInvoice,
   postFieldCorrection,
   rawFetch,
-  PERSONAS,
   type CorrectionResponse,
   type ExtractionCandidate,
   type ExtractionDetail,
@@ -88,12 +87,14 @@ import {
   type ExtractionJobsResponse,
   type ExtractionReason,
   type ExtractionRegion,
+  type Persona,
 } from '../api/client'
-import { ensureFirmPolicyActive } from '../api/contract-helpers'
+import { ensureFirmPolicyActive, ensureInhousePolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertFillsColumn, assertPageDoesNotScrollSideways, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
-import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
+import { assertShardSession, seedShardSession } from './shardSession'
+import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA, shardTenants } from './targets'
 import {
   buildAir07TitleRowCsv,
   buildAir07UnsteeredCsv,
@@ -169,14 +170,31 @@ function collectErrors(page: Page, extra?: Dropper): string[] {
   return errors
 }
 
+// This file runs in its own shard, on its own tenants: PERSONAS shadows the api client's 1111 / 2222 pair.
+const SHARD = shardTenants('import-wizard.spec.ts')
+const PERSONAS: { A: Persona; B: Persona } = {
+  A: { ...SHARD.a, tenantId: SHARD.a.id },
+  B: { ...SHARD.b, tenantId: SHARD.b.id },
+}
+
+test.beforeAll(async () => {
+  expect(test.info().project.name, 'import-wizard.spec.ts belongs to the import-wizard shard').toBe('import-wizard')
+  await ensureFirmPolicyActive(await login(PERSONAS.A))
+  await ensureInhousePolicyActive(await login(PERSONAS.B))
+})
+
 async function signInPersona(page: Page, param: string): Promise<void> {
+  const inhouse = param === INHOUSE_PERSONA.param
+  const tenant = inhouse ? SHARD.b : SHARD.a
+  await seedShardSession(page, inhouse ? 'inhouse' : 'firm', tenant)
   // The landing page is the single sign-in front door, so the app has no picker to click
-  // on a deployed build; ?persona= IS the sign-in, exactly as landing destUrl() hands off.
-  const url = `${APP_URL}?persona=${param}`
+  // on a deployed build.
+  const url = inhouse ? APP_URL : `${APP_URL}?persona=${param}`
   const res = await page.goto(url)
   expect(res, `no response from ${url}`).toBeTruthy()
   expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
   await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  await assertShardSession(page, tenant.id)
 }
 
 async function signInFirm(page: Page): Promise<void> {
@@ -226,7 +244,7 @@ function requestBody(req: Request): string {
 // run at all, and approveUntilClosed has nothing to read for one.
 async function approveOpenRunsForEntity(token: string, entityId: string): Promise<void> {
   const { invoices } = await listInvoices(token, { entity_id: entityId })
-  const approverTokens = await firmApproverTokens()
+  const approverTokens = await firmApproverTokens(SHARD.a.id)
   await Promise.all(
     invoices.filter((inv) => inv.approval?.run_state === 'open').map((inv) => approveUntilClosed(inv.id, approverTokens)),
   )
@@ -2576,20 +2594,24 @@ function edgesOf(el: HTMLElement) {
 
 // Two consecutive AGREEING reads, never one: a boundingBox taken as a panel opens measures
 // the transform mid-flight, and two different values on two reads is the tell.
+// Returns the agreed read itself: a fresh read after the poll can land on a later relayout.
 async function settledRead<T>(read: () => Promise<T>, label: string): Promise<T> {
   let previous = ''
+  let previousValue!: T
   await expect
     .poll(
       async () => {
-        const key = JSON.stringify(await read())
+        const value = await read()
+        const key = JSON.stringify(value)
         const stable = key === previous
         previous = key
+        previousValue = value
         return stable
       },
       { message: `${label}: geometry never settled across two consecutive reads`, timeout: 15_000 },
     )
     .toBe(true)
-  return read()
+  return previousValue
 }
 
 // Steps the viewport down until the pane stops shrinking and returns that viewport width.
@@ -3949,8 +3971,6 @@ test('EXTR11-E2E-02a (AC-1/AC-6): the panes never overlap, and no field row spil
   const headerNamesA = wireNamesA.filter((n) => !n.startsWith('line_items'))
   expect(headerNamesA.length, 'no header field on this document -- every spill comparison is vacuous').toBeGreaterThan(0)
 
-  const canvas = page.getByTestId('extraction-canvas')
-  const fields = page.getByTestId('extraction-fields')
   // The trailing hyphen matters: `extraction-fields` is itself prefixed by `extraction-field`.
   const rows = page.locator('[data-testid^="extraction-field-"]')
   await expect(rows, 'the pane rendered no row for a wire that carries header fields').toHaveCount(headerNamesA.length)
@@ -3964,20 +3984,31 @@ test('EXTR11-E2E-02a (AC-1/AC-6): the panes never overlap, and no field row spil
     for (const width of WIDE_WIDTHS) {
       await page.setViewportSize({ width, height: 1080 })
 
-      const m = await settledRead(async () => {
-        const [c, f, rs] = await Promise.all([
-          canvas.boundingBox(),
-          fields.boundingBox(),
-          rows.evaluateAll((els) =>
-            els.map((el) => {
+      // One evaluate, so the panes and rows come from the same layout pass; separate calls can
+      // straddle a relayout and pair a row from one layout with a pane from the other.
+      const m = await settledRead(
+        () =>
+          page.evaluate(() => {
+            const box = (el: Element | null) => {
+              if (!el) return null
+              const r = el.getBoundingClientRect()
+              return { x: r.x, y: r.y, width: r.width, height: r.height }
+            }
+            const rs = [...document.querySelectorAll('[data-testid^="extraction-field-"]')].map((el) => {
               const r = el.getBoundingClientRect()
               return { testid: el.getAttribute('data-testid') ?? '', left: r.left, right: r.right, width: r.width }
-            }),
-          ),
-        ])
-        return { c, f, rs }
-      }, `pane geometry at ${width}px`)
+            })
+            return {
+              vw: window.innerWidth,
+              c: box(document.querySelector('[data-testid="extraction-canvas"]')),
+              f: box(document.querySelector('[data-testid="extraction-fields"]')),
+              rs,
+            }
+          }),
+        `pane geometry at ${width}px`,
+      )
 
+      expect(m.vw, `the viewport never reached ${width}px`).toBe(width)
       expect(m.c && m.f, `both panes must render at ${width}px`).toBeTruthy()
       // Non-empty first: two collapsed rects clear each other on both axes and pass vacuously.
       expect(m.c!.width, `the document pane has no width at ${width}px`).toBeGreaterThan(0)

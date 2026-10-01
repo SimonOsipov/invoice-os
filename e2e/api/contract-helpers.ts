@@ -117,3 +117,33 @@ export async function ensureFirmPolicyActive(
   }
   return result
 }
+
+// The in-house tenant's seeded active policy (internal/demopolicy's inhousePlan).
+const INHOUSE_POLICY_NAME = 'Company approval policy'
+
+// ensureInhousePolicyActive(): the in-house counterpart of ensureFirmPolicyActive, for a
+// shard whose seeded policy is an unpublished draft. Same PUT-then-publish; the verifying
+// read is the oracle.
+export async function ensureInhousePolicyActive(
+  token: string,
+  transport: ApprovalPolicyTransport = { list: listApprovalPolicies, putDraft: putApprovalPolicyDraft, publish: publishApprovalPolicy },
+): Promise<ApprovalPolicy> {
+  const { approval_policies: before } = await transport.list(token)
+  const named = before.filter((p) => p.name === INHOUSE_POLICY_NAME)
+  if (named.length !== 1 || named[0].steps.length === 0) {
+    throw new Error(`ensureInhousePolicyActive: expected one non-empty live policy named "${INHOUSE_POLICY_NAME}", found ${named.length}`)
+  }
+  try {
+    await transport.putDraft(token, named[0].id, { steps: mapApprovalSteps(named[0].steps) })
+    await transport.publish(token, named[0].id)
+  } catch {
+    // a retry finds it already active; the read below decides
+  }
+  const { approval_policies: after } = await transport.list(token)
+  const active = after.filter((p) => p.versions.some((v) => v.is_active))
+  if (active.length !== 1 || active[0].name !== INHOUSE_POLICY_NAME) {
+    const found = active.map((p) => p.name).join(', ') || 'none'
+    throw new Error(`ensureInhousePolicyActive: expected exactly one active "${INHOUSE_POLICY_NAME}", found: ${found} (${active.length})`)
+  }
+  return active[0]
+}

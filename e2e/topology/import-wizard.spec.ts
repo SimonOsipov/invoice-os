@@ -1391,10 +1391,9 @@ test('[import-upload-unify] LIVE: one real import surface, manual entry survives
 // no longer has anything to refuse. AC-6 keeps that contract alive for its other
 // legitimate case (a FIRM workspace whose active entity has been archived out of the
 // roster) -- but every persona this e2e suite's fixtures can sign in as now legitimately
-// has at least one entity, so a genuinely-zero-entity workspace is no longer reachable
-// through ANY browser spec here. lib/importFlow.test.ts's computeNoEntity specs
-// (FLOW-15..17) are the surviving proof that the predicate itself still fires correctly
-// for that case -- see that file for why this is the honest place for it to live now.
+// has at least one entity; the two add-company journeys in topology/auth.spec.ts reach a
+// zero-entity workspace on a fresh provisionRealAccount tenant instead.
+// lib/importFlow.test.ts's computeNoEntity specs (FLOW-15..17) prove the predicate itself.
 test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity and files an invoice, both by import and manually', async ({
   page,
 }) => {

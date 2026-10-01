@@ -303,7 +303,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
                 {plusGlyph} Add endpoint
               </button>
             </div>
-            {ctx.handoff ? <EmptyState title="No webhooks yet" /> : WEBHOOKS.map((w) => (
+            {ctx.handoff ? <div style={{ padding: 20 }}><EmptyState title="No webhooks yet" /></div> : WEBHOOKS.map((w) => (
               <div key={w.event} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 20px', borderBottom: '1px solid var(--line-1)' }}>
                 <code className="mono" style={{ flex: 'none', fontSize: 12.5, fontWeight: 600, color: 'var(--action)' }}>{w.event}</code>
                 <code className="mono" style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--fg-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.url}</code>

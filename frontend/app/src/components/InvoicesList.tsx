@@ -361,12 +361,12 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
           in the header row (not gated by async state) so it stays reachable even when the
           filtered result set is itself empty. */}
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 22 }}>
-        <div>
+        <div style={{ minWidth: 0 }}>
           <div className="eyebrow" style={{ marginBottom: 10 }}>
             INVOICE REGISTER
           </div>
           <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Invoices</h1>
-          <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>{ctx.user.tenantName ?? 'Your workspace'} · create, validate, and transmit.</p>
+          <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0, overflowWrap: 'anywhere' }}>{ctx.user.tenantName ?? 'Your workspace'} · create, validate, and transmit.</p>
         </div>
         <button
           onClick={() => {

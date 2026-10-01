@@ -70,7 +70,7 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
         <div className="eyebrow" style={{ marginBottom: 10 }}>
           COMPLIANCE OVERVIEW
         </div>
-        <h1 style={{ fontSize: 28, fontWeight: 600, letterSpacing: '-0.03em', margin: '0 0 5px' }}>
+        <h1 style={{ fontSize: 28, fontWeight: 600, letterSpacing: '-0.03em', margin: '0 0 5px', overflowWrap: 'anywhere' }}>
           {ctx.mode === 'inhouse' ? ctx.user.tenantName ?? 'Your firm' : ctx.active.name}
         </h1>
         <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>

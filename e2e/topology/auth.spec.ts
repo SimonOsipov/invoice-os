@@ -1262,11 +1262,13 @@ test('deployed app: a real sign-in names the account holder on the identity card
 
 // internal/tenancy/tenancy.go maxNameChars is 200; 6 x 32 + 5 spaces = 197.
 const LONG_NAME = 'Oluwaseyifunmi Adebanjo-Ogunleye '.repeat(6).trim()
+// One unbroken 200-char word: the add-company subtitle must wrap it, not scroll the page.
+const LONG_WORKSPACE = 'W'.repeat(200)
 
 test('deployed app: a 197-character name stays inside the identity card at every wide width', async ({ page }, testInfo) => {
   test.setTimeout(180_000)
   expect(LONG_NAME.length).toBe(197)
-  const account = await provisionRealAccount('card-long', undefined, LONG_NAME)
+  const account = await provisionRealAccount('card-long', undefined, LONG_NAME, LONG_WORKSPACE)
   const errors = collectErrors(page)
 
   await signInAtFrontDoor(page, account, '/')
@@ -1275,6 +1277,8 @@ test('deployed app: a 197-character name stays inside the identity card at every
   const name = page.getByTestId('persona-name')
   const trigger = page.getByTestId('persona-trigger')
   const signOut = aside.getByRole('button', { name: 'Sign out' })
+  await expect(page.getByTestId('add-company-task')).toBeVisible({ timeout: 30_000 })
+  await expect(main.getByText(LONG_WORKSPACE, { exact: false })).toBeVisible()
 
   const readings: { width: number; scrollWidth: number; clientWidth: number }[] = []
   for (const width of WIDE_WIDTHS) {

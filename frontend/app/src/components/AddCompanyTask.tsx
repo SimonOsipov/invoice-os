@@ -35,12 +35,12 @@ export function AddCompanyTask({ ctx }: { ctx: PlatformCtx }) {
   return (
     <div style={{ padding: '30px 36px 56px' }}>
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 22 }}>
-        <div>
+        <div style={{ minWidth: 0 }}>
           <div className="eyebrow" style={{ marginBottom: 10 }}>
             OVERVIEW
           </div>
           <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>{copy.h1}</h1>
-          <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>
+          <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0, overflowWrap: 'anywhere' }}>
             {ctx.user.tenantName ?? 'Your workspace'} · invoices are filed for a registered company.
           </p>
         </div>

@@ -713,3 +713,20 @@ def test_keep_breadcrumb_keeps_non_log_crumbs_whatever_the_category():
     ]
     for crumb in crumbs:
         assert keep_breadcrumb(crumb, None) == crumb, crumb
+
+
+def test_scrub_log_redacts_every_value_that_is_not_scalar_or_list_of_str():
+    # D-21: unquoted text inside a dict, bytes, tuple, None or a list element passes scrub_text
+    attrs = {
+        "d": {"k": f"unquoted {M}"},
+        "b": f"unquoted {M}".encode(),
+        "tup": (f"unquoted {M}", "x"),
+        "n": None,
+        "ld": [{"k": f"unquoted {M}"}],
+        "ll": [[f"unquoted {M}"]],
+    }
+    out = scrub_log(_sidecar_log(attrs), None)
+    assert out is not None
+    got = out["attributes"]
+    assert {k: got[k] for k in attrs} == {k: "[redacted]" for k in attrs}
+    assert M not in repr(out)

@@ -198,7 +198,7 @@ func TestServiceImport_APICreatedJTBEntityReportsGenuineTinFormatViolation(t *te
 
 // TestMBSSupplierTIN_IsTheExactInverseOfValidateTIN is the DRIFT GUARD:
 // invoice.MBSSupplierTIN round-trips through the REAL portfolio.ValidateTIN,
-// so any change to tin.go's canonicalization (tinShapePattern gaining a
+// so any change to tin.go's canonicalization (ValidateTIN's accepted shapes gaining a
 // shape, Replace's count changing) reds THIS test rather than silently
 // re-arming the false-violation trap in production. Kept HERE (rather than
 // moved wholesale into internal/invoice) even though the function itself

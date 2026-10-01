@@ -207,7 +207,7 @@ failure path is not a throughput measurement.
 ## Sentry
 
 - `SENTRY_DSN` is production-only; `set-sentry-off` blanks it in every fork. Empty means off.
-- Events carry `environment`, `release` (the build sha) and and `server_name` `docling`.
+- Events carry `environment`, `release` (the build sha) and `server_name` `docling`.
 - An unhandled `/v1/read` failure, a warm-up failure and a boot failure open an issue. A client disconnect and a 413 do not.
 - Locals, request bodies, quoted text and third-party log records never leave. `sentryfilter.py` scrubs the rest.
 - `/healthz` reports `sentry` `on` or `off`; `fleet-gate` fails a docling that omits it.

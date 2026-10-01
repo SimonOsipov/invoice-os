@@ -40,6 +40,16 @@ class CapturingTransport(Transport):
             found.extend((payload.get("breadcrumbs") or {}).get("values") or [])
         return found
 
+    def transaction_trace_headers(self):
+        sentry_sdk.flush()
+        with self._lock:
+            envelopes = list(self._envelopes)
+        return [
+            e.headers["trace"]
+            for e in envelopes
+            if any(i.type == "transaction" for i in e.items) and "trace" in e.headers
+        ]
+
     def raw(self):
         sentry_sdk.flush()
         with self._lock:

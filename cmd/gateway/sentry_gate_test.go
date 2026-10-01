@@ -74,8 +74,6 @@ type sentryRow struct {
 	wantExit int
 	named    []string // each must appear in an ::error:: line
 	notNamed []string // none may appear in an ::error:: line
-	// listed: the success line must list docling too; other passing rows only need the rest.
-	listed bool
 }
 
 func withSentry(sentry string, edit func(t *testing.T, s []map[string]any) []map[string]any) func(t *testing.T) any {
@@ -107,7 +105,7 @@ func TestSentryGateIsDirectional(t *testing.T) {
 	}
 
 	rows := []sentryRow{
-		{name: "pr_all_off", isPR: true, body: withSentry("off", nil), wantExit: 0, listed: true},
+		{name: "pr_all_off", isPR: true, body: withSentry("off", nil), wantExit: 0},
 		{name: "pr_invoice_on", isPR: true, body: withSentry("off", setField("invoice", "sentry", "on")), wantExit: 1,
 			named: []string{"invoice=on@deadbeef", "set-sentry-off"}, notNamed: []string{"gateway=", "tenancy="}},
 		{name: "pr_reconciliation_on", isPR: true, body: withSentry("off", setField("reconciliation", "sentry", "on")), wantExit: 1,
@@ -151,6 +149,22 @@ func TestSentryGateIsDirectional(t *testing.T) {
 			named: []string{"docling=none@deadbeef"}, notNamed: []string{"gateway="}},
 
 		// QA Mode B adversarial rows.
+		{name: "pr_docling_empty_sentry", isPR: true, body: withSentry("off", setField("docling", "sentry", "")), wantExit: 1,
+			named: []string{"docling=@deadbeef", "set-sentry-off"}, notNamed: []string{"gateway="}},
+		{name: "push_docling_empty_sentry", isPR: false, body: withSentry("on", setField("docling", "sentry", "")), wantExit: 1,
+			named: []string{"docling=@deadbeef"}, notNamed: []string{"gateway="}},
+		{name: "pr_docling_stale_build", isPR: true, body: withSentry("off", setField("docling", "build", "0ld")), wantExit: 1,
+			named: []string{"docling=off@0ld"}, notNamed: []string{"gateway="}},
+		{name: "push_docling_stale_build", isPR: false, body: withSentry("on", setField("docling", "build", "0ld")), wantExit: 1,
+			named: []string{"docling=on@0ld"}, notNamed: []string{"gateway="}},
+		{name: "push_docling_sentry_bool", isPR: false, body: withSentry("on", setField("docling", "sentry", true)), wantExit: 1,
+			named: []string{"docling=true@deadbeef"}, notNamed: []string{"gateway="}},
+		{name: "pr_Docling_is_not_docling", isPR: true, body: withSentry("off", func(t *testing.T, s []map[string]any) []map[string]any {
+			return append(s, map[string]any{"name": "Docling", "status": "up", "build": "deadbeef"})
+		}), wantExit: 1, named: []string{"Docling=none@deadbeef"}, notNamed: []string{"docling="}},
+		{name: "doclingx_is_not_docling", isPR: true, body: withSentry("off", func(t *testing.T, s []map[string]any) []map[string]any {
+			return append(s, map[string]any{"name": "doclingx", "status": "up", "build": "deadbeef"})
+		}), wantExit: 1, named: []string{"doclingx=none@deadbeef"}, notNamed: []string{"docling="}},
 		{name: "pr_off_newline", isPR: true, body: withSentry("off", setField("submission", "sentry", "off\n")), wantExit: 1,
 			named: []string{"submission=off"}},
 		{name: "push_on_newline", isPR: false, body: withSentry("on", setField("submission", "sentry", "on\n")), wantExit: 1,
@@ -249,9 +263,6 @@ func checkSentryPass(t *testing.T, r sentryRow, code int, out string, urls, errs
 	}
 	lines := strings.Split(out, "\n")
 	want := sentryCheckedNames
-	if !r.listed {
-		want = slices.DeleteFunc(slices.Clone(want), func(n string) bool { return n == "docling" })
-	}
 	// The "(... exempt)" clause may itself name a service; only the checked list counts.
 	i := slices.IndexFunc(lines, func(l string) bool {
 		l = exemptClauseRE.ReplaceAllString(l, "")
@@ -259,6 +270,9 @@ func checkSentryPass(t *testing.T, r sentryRow, code int, out string, urls, errs
 	})
 	if i < 0 {
 		t.Fatalf("no output line names every checked entry %v outside its exempt clause (output %q)", want, out)
+	}
+	if !strings.Contains(lines[i], "(auth exempt)") {
+		t.Errorf("the success line %q does not name auth as exempt", lines[i])
 	}
 	if push := pushDirectionRE.MatchString(lines[i]); push == r.isPR {
 		t.Errorf("IS_PR=%v: the success line %q names the wrong direction (push is %q)", r.isPR, lines[i], pushDirectionRE)
@@ -350,8 +364,8 @@ func TestSentryGateRetriesTheRollUp(t *testing.T) {
 				t.Errorf("the curl shim saw %v, want %d /healthz/fleet fetches", urls, r.wantFetch)
 			}
 			if r.wantExit == 0 {
-				if len(errs) != 0 || !strings.Contains(out, "reconciliation") {
-					t.Errorf("a passing run printed errors %q or no success line naming reconciliation (output %q)", errs, out)
+				if len(errs) != 0 || !strings.Contains(out, "reconciliation") || !strings.Contains(out, "docling") {
+					t.Errorf("a passing run printed errors %q or no success line naming reconciliation and docling (output %q)", errs, out)
 				}
 				return
 			}
@@ -429,5 +443,25 @@ func TestSentryGateIsOneFleetGateStepWithIsPR(t *testing.T) {
 		if got, ok := env[k]; !ok || got != want {
 			t.Errorf("the .sentry step's env %s = %q (set %v), want %q", k, got, ok, want)
 		}
+	}
+}
+
+// The docs cite the step by name; a rename leaves them pointing at nothing.
+func TestSentryGateStepNameIsTheOneAddAServiceCites(t *testing.T) {
+	var name string
+	for _, s := range jobSteps(jobBlock(devEnvCode(t), "fleet-gate")) {
+		if sentryReadRE.MatchString(runText(s)) {
+			name, _ = stepKey(s, "name")
+		}
+	}
+	if name == "" {
+		t.Fatal("the fleet-gate step reading .sentry has no name; the scan is broken")
+	}
+	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "add-a-service.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"`+name+`"`) {
+		t.Errorf("docs/add-a-service.md does not cite the Sentry step by its name %q", name)
 	}
 }

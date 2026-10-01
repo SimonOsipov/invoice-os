@@ -43,13 +43,16 @@ def _only(items):
 
 
 def test_read_continues_the_inbound_trace(client, sentry_capture):
-    resp = _read(client, {**_sentry_trace(1), "baggage": f"sentry-trace_id={T}"})
+    baggage = f"sentry-trace_id={T},sentry-public_key=inbound-key"
+    resp = _read(client, {**_sentry_trace(1), "baggage": baggage})
     assert resp.status_code == 200
     txn = _only(sentry_capture.transactions())
     assert txn["contexts"]["trace"]["trace_id"] == T
     assert txn["contexts"]["trace"]["parent_span_id"] == S
     assert txn["transaction"] == "/v1/read"
     assert txn["contexts"]["trace"]["op"] == "http.server"
+    # The fixture's own DSN key is "public"; "inbound-key" can only come from the baggage.
+    assert _only(sentry_capture.transaction_trace_headers())["public_key"] == "inbound-key"
 
 
 def test_inbound_unsampled_flag_is_ignored(client, sentry_capture):

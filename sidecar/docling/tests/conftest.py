@@ -13,6 +13,8 @@ so a missing mount reads as a loud failure, not a quiet pass.
 import os
 from pathlib import Path
 
+import pytest
+
 
 def repo_root() -> Path:
     env = os.environ.get("REPO_ROOT")
@@ -32,3 +34,36 @@ def repo_root() -> Path:
         f"no go.mod found above {__file__} -- set REPO_ROOT to the repo root, e.g. "
         '`docker run --rm -v "$PWD:/repo:ro" -e REPO_ROOT=/repo docling:test`'
     )
+
+
+@pytest.fixture
+def sentry_capture():
+    # sentry_sdk is imported here, not at module level: the file-scan specs import this
+    # conftest in a bare venv (D-17).
+    import sentry_sdk
+    from sentry_capture import CapturingTransport
+
+    import convert
+    import sentry_setup
+
+    # A boot warm-up must not add a stray event to a row that counts events.
+    if convert._warmup_thread is not None:
+        convert._warmup_thread.join()
+    options = sentry_setup.sentry_options(
+        {
+            "SENTRY_DSN": "https://public@o0.ingest.sentry.io/1",
+            "RAILWAY_ENVIRONMENT_NAME": "production",
+        }
+    )
+    # TestClient is an httpx client; a default target list would rewrite inbound headers (P23).
+    options.setdefault("trace_propagation_targets", [])
+    transport = CapturingTransport()
+    sentry_sdk.init(**options, transport=transport)
+    try:
+        yield transport
+    finally:
+        sentry_sdk.flush()
+        sentry_sdk.get_client().close()
+        # close() leaves the client bound (P24); unbind it or the next test inherits it.
+        sentry_sdk.get_global_scope().set_client(None)
+        assert sentry_setup.sentry_state() == "off"

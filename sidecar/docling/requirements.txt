@@ -1,5 +1,7 @@
 fastapi==0.141.1
 uvicorn==0.52.4
+# Error and trace reporting to Sentry (SENTRY-05); no extras (D-1).
+sentry-sdk==2.71.0
 
 # EXTR-03 story sec. 4 pins table. docling[rapidocr] is mandatory, not bare docling:
 # bare docling ships rapidocr without onnxruntime, so RapidOcrOptions() fails at ONNX

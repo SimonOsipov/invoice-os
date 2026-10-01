@@ -10,7 +10,7 @@ import { sentryOptions, type MonitoringConfig, type Service } from './options'
 import { RecoveryScreen } from './RecoveryScreen'
 import { RELEASE } from './release'
 import { wasReported } from './reported'
-import { captureApiFailure } from './report'
+import { captureApiFailure, type ApiFailureInput } from './report'
 
 const DSN = 'https://public@o1.ingest.de.sentry.io/1'
 const GW = 'https://gw.test'
@@ -151,14 +151,17 @@ async function navigationFlow(sink: string[]): Promise<void> {
 // Must stay the first test: the SDK's fetch handlers are module-global and an earlier app init leaves a tracing handler on them.
 describe('console tracing', () => {
   it('tracePropagation_consolesSendNoTraceHeaders', async () => {
-    boot([], 'ops-console')
-    expect(Sentry.getActiveSpan()).toBeUndefined()
-    await fetch(`${GW}/api/x`)
-    expect(fetchCalls.length).toBe(1)
-    expect(fetchCalls[0].headers['sentry-trace']).toBeUndefined()
-    expect(fetchCalls[0].headers.baggage).toBeUndefined()
-
-    await reset()
+    for (const service of ['ops-console', 'support-console'] as const) {
+      fetchCalls.length = 0
+      boot([], service)
+      expect(Sentry.getActiveSpan(), service).toBeUndefined()
+      await fetch(`${GW}/api/x`)
+      expect(fetchCalls.length, service).toBe(1)
+      expect(fetchCalls[0].headers['sentry-trace'], service).toBeUndefined()
+      expect(fetchCalls[0].headers.baggage, service).toBeUndefined()
+      await reset()
+    }
+    fetchCalls.length = 0
     fetchCalls.length = 0
     boot([], 'app')
     await fetch(`${GW}/api/x`)
@@ -194,6 +197,45 @@ describe('initMonitoring', () => {
     await Sentry.close()
     expect(fetchCalls.filter((c) => c.url.includes('ingest.de.sentry.io'))).toEqual([])
   })
+
+  it('initMonitoring_acceptsEveryRealDsnShapeAndRejectsTheRest', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const valid = [
+      DSN,
+      'https://abc123@o123.ingest.us.sentry.io/4506789',
+      'https://abc123@o123.ingest.sentry.io/4506789',
+      'https://abc123:secret@sentry.example.com/12',
+      'https://abc123@sentry.example.com:9000/12',
+      'http://abc123@localhost:9000/12',
+      'https://abc123@sentry.example.com/prefix/sub/12',
+      `  ${DSN}\n`,
+    ]
+    for (const dsn of valid) {
+      vi.stubEnv('VITE_SENTRY_DSN', dsn)
+      expect(initMonitoring('ops-console'), dsn).toBe(true)
+      expect(Sentry.getClient()?.getDsn(), `the SDK accepts ${dsn}`).toBeDefined()
+      await reset()
+    }
+    const invalid = [
+      'not-a-dsn',
+      'https://@o1.ingest.sentry.io/1',
+      'https://o1.ingest.sentry.io/1',
+      'https://public@o1.ingest.sentry.io',
+      'https://public@o1.ingest.sentry.io/',
+      'https://public@o1.ingest.sentry.io/abc',
+      'ftp://public@o1.ingest.sentry.io/1',
+      'public@o1.ingest.sentry.io/1',
+      '//public@o1.ingest.sentry.io/1',
+      'https://',
+    ]
+    for (const dsn of invalid) {
+      vi.stubEnv('VITE_SENTRY_DSN', dsn)
+      expect(() => initMonitoring('ops-console'), dsn).not.toThrow()
+      expect(initMonitoring('ops-console'), dsn).toBe(false)
+      expect(Sentry.getClient(), dsn).toBeUndefined()
+    }
+    expect(err).not.toHaveBeenCalled()
+  })
 })
 
 describe('crash boundary', () => {
@@ -205,6 +247,9 @@ describe('crash boundary', () => {
     expect(screen.getByRole('region', { name: 'Something went wrong' })).toBeDefined()
     expect(screen.getByText('This page hit an unexpected error. Reload to continue.')).toBeDefined()
     expect((screen.getByRole('button', { name: 'Reload page' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(document.body.textContent, 'the screen shows no error text (D-12)').toBe(
+      'BASComplyAFRICASomething went wrongThis page hit an unexpected error. Reload to continue.Reload page',
+    )
     await Sentry.flush(1000)
 
     const events = items(sink, 'event')
@@ -230,8 +275,82 @@ describe('crash boundary', () => {
     Object.defineProperty(globalThis, 'location', { configurable: true, value: { ...window.location, reload } })
     render(<RecoveryScreen brand={<span>B</span>} />)
     expect(reload).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: 'Reload page' }))
+    const button = screen.getByRole('button', { name: 'Reload page' }) as HTMLButtonElement
+    expect(button.type).toBe('button')
+    fireEvent.click(button)
     expect(reload).toHaveBeenCalledTimes(1)
+    expect(button.disabled, 'never disabled after a click').toBe(false)
+    fireEvent.click(button)
+    expect(reload).toHaveBeenCalledTimes(2)
+  })
+
+  it('crashBoundary_twoCrashesAreTwoScreensAndTwoIssues', async () => {
+    const sink: string[] = []
+    boot(sink, 'app')
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    render(
+      <>
+        <CrashBoundary brand={<span>B1</span>}>
+          <Thrower message="boom-first" />
+        </CrashBoundary>
+        <CrashBoundary brand={<span>B2</span>}>
+          <Thrower message="boom-second" />
+        </CrashBoundary>
+      </>,
+    )
+    expect(screen.getAllByRole('region', { name: 'Something went wrong' }).length).toBe(2)
+    expect(screen.getAllByRole('button', { name: 'Reload page' }).length).toBe(2)
+    await Sentry.flush(1000)
+    const events = items(sink, 'event')
+    expect(events.length, 'two events').toBe(2)
+    const raw = events.map((e) => JSON.stringify(e.body.exception.values))
+    expect(raw.some((r) => r.includes('boom-first'))).toBe(true)
+    expect(raw.some((r) => r.includes('boom-second'))).toBe(true)
+  })
+
+  it('crashBoundary_aCrashingBrandIsCaughtByAnOuterBoundary', async () => {
+    const sink: string[] = []
+    boot(sink, 'app')
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    render(
+      <CrashBoundary brand={<span>outer</span>}>
+        <CrashBoundary brand={<Thrower message="boom-brand" />}>
+          <Thrower message="boom-inner" />
+        </CrashBoundary>
+      </CrashBoundary>,
+    )
+    expect(screen.getAllByRole('region', { name: 'Something went wrong' }).length, 'one screen, not zero').toBe(1)
+    expect(document.body.textContent).toContain('outer')
+    await Sentry.flush(1000)
+    const raw = items(sink, 'event').map((e) => JSON.stringify(e.body.exception.values))
+    expect(raw.length, 'both crashes reported').toBe(2)
+    expect(raw.some((r) => r.includes('boom-inner'))).toBe(true)
+    expect(raw.some((r) => r.includes('boom-brand'))).toBe(true)
+  })
+
+  it('crashBoundary_keepsAnApiErrorThatCrashesARender', async () => {
+    const sink: string[] = []
+    boot(sink, 'app')
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const named = (name: string) => Object.assign(new Error(`crash-${name}`), { name })
+    function Boom({ error }: { error: Error }): never {
+      throw error
+    }
+    const reported = new TypeError('crash-reported')
+    captureApiFailure({ kind: 'network', status: null, method: 'GET', url: `${GW}/api/z`, error: reported })
+    await Sentry.flush(1000)
+    sink.length = 0
+    for (const error of [named('ApiError'), named('SessionEndedError'), reported]) {
+      render(
+        <CrashBoundary brand={<span>B</span>}>
+          <Boom error={error} />
+        </CrashBoundary>,
+      )
+      await Sentry.flush(1000)
+      expect(items(sink, 'event').length, error.name + ' ' + error.message).toBe(1)
+      sink.length = 0
+      cleanup()
+    }
   })
 })
 
@@ -267,6 +386,78 @@ describe('global handlers', () => {
     const events = items(sink, 'event')
     expect(events.length, 'one event in total').toBe(1)
     expect(events[0].body.exception.values.at(-1).type).toBe('ApiFailure')
+  })
+})
+
+describe('global handlers, odd inputs', () => {
+  it('globalHandlers_reportedErrorsStayDroppedOnEveryGlobalPath', async () => {
+    const sink: string[] = []
+    boot(sink, 'app')
+    const flushed = async (fire: () => void): Promise<Item[]> => {
+      sink.length = 0
+      fire()
+      await Sentry.flush(1000)
+      return items(sink, 'event')
+    }
+    const te = new TypeError('Failed to fetch')
+    expect((await flushed(() => window.onunhandledrejection!({ reason: te } as PromiseRejectionEvent))).length, 'unreported TypeError is kept').toBe(1)
+
+    const reported = new TypeError('Failed to fetch (reported)')
+    captureApiFailure({ kind: 'network', status: null, method: 'GET', url: `${GW}/api/y`, error: reported })
+    await Sentry.flush(1000)
+    expect((await flushed(() => window.onerror!('m', 'f.js', 1, 1, reported))).length, 'reported error through onerror').toBe(0)
+    for (let i = 0; i < 2; i++) {
+      expect((await flushed(() => window.onunhandledrejection!({ reason: reported } as PromiseRejectionEvent))).length, `rejection ${i}`).toBe(0)
+    }
+  })
+
+  it('globalHandlers_oddRejectionReasonsNeverThrowAndAreReported', async () => {
+    const sink: string[] = []
+    boot(sink, 'app')
+    const reasons: unknown[] = [undefined, null, 'text', 42, {}, Symbol('s'), () => {}]
+    for (const reason of reasons) {
+      sink.length = 0
+      expect(() => window.onunhandledrejection!({ reason } as PromiseRejectionEvent), String(reason)).not.toThrow()
+      await Sentry.flush(1000)
+      expect(items(sink, 'event').length, String(reason)).toBe(1)
+    }
+    sink.length = 0
+    window.onunhandledrejection!({ reason: { name: 'ApiError' } } as PromiseRejectionEvent)
+    await Sentry.flush(1000)
+    expect(items(sink, 'event').length, 'a plain object named ApiError').toBe(0)
+  })
+})
+
+describe('captureApiFailure, odd inputs', () => {
+  it('captureApiFailure_oddInputsNeverThrowAndNeverLeak', async () => {
+    const sink: string[] = []
+    boot(sink, 'app')
+    const SECRET = 'SECRET-UPSTREAM-31'
+    const base: ApiFailureInput = { kind: 'http', status: 500, method: 'get', url: `${GW}/api/odd`, error: null }
+    const cases: Array<[string, Partial<ApiFailureInput>, string]> = [
+      ['null status is a dash', { kind: 'network', status: null, url: `${GW}/api/one` }, 'network - GET /api/one'],
+      ['mixed-case method', { method: 'pOsT', url: `${GW}/api/two` }, 'http 500 POST /api/two'],
+      ['relative url with query and fragment', { url: `/api/three?q=${TIN}#${CODE}` }, 'http 500 GET /api/three'],
+      ['unparseable url', { url: 'http://', method: 'put' }, 'http 500 PUT :id'],
+      ['empty url', { url: '', method: 'delete' }, 'http 500 DELETE :id'],
+      ['credentials in the url', { url: `https://user:pw-NEEDLE@gw.test/api/four`, method: 'patch' }, 'http 500 PATCH /api/four'],
+      ['status zero', { status: 0, kind: 'malformed', url: `${GW}/api/five` }, 'malformed 0 GET /api/five'],
+      ['percent-encoded segment', { url: `${GW}/api/%7Bsecret%7D/six`, method: 'head' }, 'http 500 HEAD /api/:id/six'],
+    ]
+    const errors: unknown[] = [new Error(SECRET), undefined, null, SECRET, 42, Object.freeze(new Error(SECRET)), { message: SECRET }, Symbol(SECRET)]
+    for (const [label, over, value] of cases) {
+      const error = errors[cases.findIndex((c) => c[0] === label)]
+      sink.length = 0
+      expect(() => captureApiFailure({ ...base, ...over, error }), label).not.toThrow()
+      await Sentry.flush(1000)
+      const events = items(sink, 'event')
+      expect(events.length, label).toBe(1)
+      expect(events[0].body.exception.values[0].value, label).toBe(value)
+      expect(events[0].body.exception.values[0].type, label).toBe('ApiFailure')
+      const raw = sink.join('\n')
+      for (const needle of [SECRET, TIN, CODE, 'pw-NEEDLE', 'user:', '%7B', 'secret']) expect(raw, `${label}: ${needle}`).not.toContain(needle)
+      if (typeof error === 'object' && error !== null) expect(wasReported(error), label).toBe(true)
+    }
   })
 })
 
@@ -327,6 +518,24 @@ describe('what the SDK sends', () => {
     for (const needle of ['ip_address', 'client.address', '"user":']) expect(raw).not.toContain(needle)
   })
 
+  it('envelopes_dropAUserAndAClientAddressEvenWhenSet', async () => {
+    const sink: string[] = []
+    boot(sink, 'app')
+    Sentry.setUser({ id: 'USER-NEEDLE-1', email: 'user-needle@example.test', ip_address: '203.0.113.9' })
+    Sentry.captureException(new Error('with-user'))
+    const span = Sentry.startInactiveSpan({ name: 'button', op: 'ui.interaction.click', experimental: { standalone: true } })
+    span.setAttribute('client.address', '203.0.113.9')
+    span.end()
+    getRootSpan(Sentry.getActiveSpan()!).end()
+    await Sentry.flush(1000)
+
+    expect(items(sink, 'event').length, 'the event').toBe(1)
+    expect(items(sink, 'span').length, 'the standalone span').toBeGreaterThan(0)
+    expect(items(sink, 'transaction').length, 'the transaction').toBe(1)
+    const raw = sink.join('\n')
+    for (const needle of ['USER-NEEDLE-1', 'user-needle@example.test', '203.0.113.9', 'client.address', '"user":']) expect(raw).not.toContain(needle)
+  })
+
   it('tracePropagation_gatewayOnly', async () => {
     const sink: string[] = []
     window.history.replaceState(null, '', `/invoices/${UUID}`)
@@ -342,11 +551,29 @@ describe('what the SDK sends', () => {
     expect(gateway.headers.baggage).not.toContain('y=1')
     expect(gateway.headers.baggage).not.toContain('?')
     const txn = /(?:^|,)sentry-transaction=([^,]*)/.exec(gateway.headers.baggage)
-    if (txn) expect(decodeURIComponent(txn[1])).toBe('/invoices/:id')
+    expect(txn, 'a renamed span puts its route in baggage').not.toBeNull()
+    expect(decodeURIComponent(txn![1])).toBe('/invoices/:id')
+    expect(gateway.headers.baggage).not.toContain(UUID)
     expect(gateway.headers.traceparent).toBeUndefined()
     expect(third.headers['sentry-trace']).toBeUndefined()
     expect(third.headers.baggage).toBeUndefined()
     expect(third.headers.traceparent).toBeUndefined()
+
+    fetchCalls.length = 0
+    const lookalikes = [
+      'https://gw.test.evil.example/api/x',
+      'https://gw-test/api/x',
+      `https://evil.example/?next=${GW}/api/x`,
+      'http://gw.test/api/x',
+      'https://gw.test:8443/api/x',
+      `https://user@gw.test.evil.example/api/x`,
+    ]
+    for (const url of lookalikes) await fetch(url)
+    expect(fetchCalls.map((c) => c.url)).toHaveLength(lookalikes.length)
+    for (const c of fetchCalls) {
+      expect(c.headers['sentry-trace'], c.url).toBeUndefined()
+      expect(c.headers.baggage, c.url).toBeUndefined()
+    }
   })
 
   it('sdk_neverWritesConsoleErrors', async () => {

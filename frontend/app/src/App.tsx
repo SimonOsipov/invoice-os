@@ -427,8 +427,8 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // Custom validation rules, PER CLIENT (lib/rules.ts). Held here rather than in
   // RulesView so a client's set survives navigating away and back, and so switching
   // company genuinely swaps the set instead of carrying one client's rules over to
-  // the next. A client absent from the store has never been edited and reads the
-  // seed set; only edited clients get an entry.
+  // the next. A client absent from the store has never been edited; only edited
+  // clients get an entry.
   const [customRuleStore, setCustomRuleStore] = useState<CustomRuleStore>({})
   const [openRuleKey, setOpenRuleKey] = useState<string | null>(null)
   const rulesKey = customRulesKey(active.entityId)
@@ -1520,7 +1520,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   }
 
   // All three custom-rule writers go through the same shape: resolve THIS client's
-  // list (seed set if untouched), run the pure reducer, store it back under this
+  // list, run the pure reducer, store it back under this
   // client's key. `rulesKey` is captured per render off `active`, so a write can
   // never land on the company the switcher just left.
   function updateCustomRules(fn: (rules: CustomRule[]) => CustomRule[]) {

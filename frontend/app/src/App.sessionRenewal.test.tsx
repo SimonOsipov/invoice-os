@@ -850,6 +850,28 @@ describe('a renewed hand-off session stays a hand-off session (AUTH-10-06, F17)'
     await waitFor(() => expect(capturedCtx?.user.name).toBe(ME.user.display_name))
     expect(capturedCtx?.handoff, 'back on the seat').toBe(true)
   })
+
+  it('the stand-in shows the demo state and the seat is blank again after the return', async () => {
+    vi.stubEnv('VITE_DEMO_MODE', 'true')
+    await mountFresh()
+    const connected = () => Object.values(capturedCtx!.connectors).filter(Boolean).length
+    expect(connected(), 'the seat').toBe(0)
+    expect(capturedCtx?.customRules, 'the seat').toEqual([])
+    meReply = answer(200, OTHER_ME)
+    await act(async () => {
+      await capturedCtx!.becomePersona!(STAND_IN, 'dashboard')
+    })
+    await waitFor(() => expect(capturedCtx?.user.name).toBe('Tunde Bello'))
+    expect(connected(), 'the stand-in').toBe(2)
+    expect(capturedCtx?.customRules, 'the stand-in').toHaveLength(5)
+    meReply = answer(200, ME)
+    await act(async () => {
+      await capturedCtx!.returnToSeat!('dashboard', SEAT_MEMBER)
+    })
+    await waitFor(() => expect(capturedCtx?.user.name).toBe(ME.user.display_name))
+    expect(connected(), 'back on the seat').toBe(0)
+    expect(capturedCtx?.customRules, 'back on the seat').toEqual([])
+  })
 })
 
 describe('a renewal never outlives its session (AC-14, AC-15, AC-17)', () => {

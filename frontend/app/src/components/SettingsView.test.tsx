@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // A real (hand-off) session's Settings shows empty states, not the demo tenant. ctx-cast idiom of Sidebar.test.tsx.
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { CERTS, ENDPOINTS, WEBHOOKS } from '../data'
@@ -43,6 +43,25 @@ describe('Settings > ERP connectors', () => {
     expect(screen.getByText('2 / 6 CONNECTED')).toBeTruthy()
     expect(screen.getAllByText('Synced 2 min ago')).toHaveLength(2)
     expect(screen.getAllByText('NOT CONNECTED')).toHaveLength(4)
+  })
+})
+
+// The detail panel is reachable only through Manage, which only a connected row shows.
+describe('Settings > ERP connectors > detail panel', () => {
+  it('hand-off: no Manage entry and no mock ERP host render', () => {
+    render(<SettingsView ctx={settingsCtx('connectors', true)} />)
+    expect(screen.getAllByText('Connect')).toHaveLength(6)
+    expect(screen.queryAllByText('Manage')).toHaveLength(0)
+    expect(screen.queryByText(/honeywell\.ng/)).toBeNull()
+  })
+
+  // Control: Manage opens the panel that carries the mock host.
+  it('persona: Manage opens the detail panel with the mock ERP host', () => {
+    render(<SettingsView ctx={settingsCtx('connectors', false)} />)
+    const manage = screen.getAllByText('Manage')
+    expect(manage).toHaveLength(2)
+    fireEvent.click(manage[0])
+    expect(screen.getAllByText(/erp\.honeywell\.ng:44300/).length).toBeGreaterThan(0)
   })
 })
 

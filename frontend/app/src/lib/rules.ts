@@ -120,7 +120,7 @@ export const GOLDEN_VERSIONS: GoldenVersion[] = [
   { version: 'v7', meta: 'eff. 2026-04-15 · 40 rules', tag: 'SUPERSEDED', kind: 'superseded' },
 ]
 
-/** Seed custom rules. Every client starts from its OWN copy of this list. */
+/** Seed custom rules. */
 export const SEED_CUSTOM_RULES: CustomRule[] = [
   {
     key: 'po.number.required',

@@ -147,7 +147,7 @@ def test_t03_13_truncated_pdf_is_422_not_400_or_500(client, sentry_capture):
     resp = client.post("/v1/read", content=truncated, headers={"content-type": PDF_CONTENT_TYPE})
     assert resp.status_code == 422, f"got {resp.status_code}, want 422"
     assert "error" in resp.json()
-    assert sentry_capture.events() == []  # docling logs ERROR on this path; logs are not issues
+    assert sentry_capture.events() == []
 
 
 def test_unexpected_error_is_500_not_swallowed_into_422(

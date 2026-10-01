@@ -3,11 +3,13 @@
 The marker is joined at runtime so no source line, and so no source-context frame line, holds it.
 """
 
+import contextlib
 import importlib
 import io
 import json
 import logging
 
+import pytest
 import sentry_sdk
 from docx import Document
 from fastapi.testclient import TestClient
@@ -35,6 +37,42 @@ def _post(content, content_type):
     importlib.reload(app_module)
     client = TestClient(app_module.app)
     return client.post("/v1/read", content=content, headers={"content-type": content_type})
+
+
+def _pdf_with_text(text):
+    """A one-page PDF whose only content is `text`."""
+    stream = f"BT /F1 24 Tf 72 700 Td ({text}) Tj ET"
+    objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R"
+            " /Resources << /Font << /F1 5 0 R >> >> >>"
+        ),
+        f"<< /Length {len(stream)} >>\nstream\n{stream}\nendstream",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += f"{number} 0 obj\n{body}\nendobj\n".encode()
+    xref = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode()
+    for offset in offsets:
+        out += f"{offset:010d} 00000 n \n".encode()
+    out += (
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    )
+    return bytes(out)
+
+
+def _docx_with_text(text):
+    buffer = io.BytesIO()
+    doc = Document()
+    doc.add_paragraph(text)
+    doc.save(buffer)
+    return buffer.getvalue()
 
 
 def _frame_functions(event):
@@ -94,11 +132,12 @@ def test_marker_quoted_in_exception_text_never_leaves(sentry_capture, monkeypatc
     assert MARKER.encode() not in sentry_capture.raw()
 
 
-def test_marker_in_a_real_document_never_leaves(sentry_capture, monkeypatch):
-    buffer = io.BytesIO()
-    doc = Document()
-    doc.add_paragraph(MARKER)
-    doc.save(buffer)
+_DOCUMENTS = {"docx": (_docx_with_text, DOCX), "pdf": (_pdf_with_text, PDF)}
+
+
+@pytest.mark.parametrize("kind", sorted(_DOCUMENTS))
+def test_marker_in_a_real_document_never_leaves(sentry_capture, monkeypatch, kind):
+    build, content_type = _DOCUMENTS[kind]
     read_back = []
 
     def fail_after_conversion(result):
@@ -106,7 +145,7 @@ def test_marker_in_a_real_document_never_leaves(sentry_capture, monkeypatch):
         raise RuntimeError("wire build failed")
 
     monkeypatch.setattr(convert, "_to_wire_contract", fail_after_conversion)
-    resp = _post(buffer.getvalue(), DOCX)
+    resp = _post(build(MARKER), content_type)
     assert resp.status_code == 500
     assert read_back == [True]  # docling read the marker, so its records were in play
     assert len(sentry_capture.events()) == 1
@@ -123,4 +162,159 @@ def test_unquoted_marker_in_a_third_party_log_never_leaves(sentry_capture):
     assert "app" in categories
     assert not [c for c in categories if str(c).startswith("docling")]
     assert [log["body"] for log in sentry_capture.logs()] == ["control"]
+    assert MARKER.encode() not in sentry_capture.raw()
+
+
+def _parse_cell(cell):
+    secret = cell
+    raise ValueError(f"bad cell {secret!r}")
+
+
+def _chain_cause():
+    try:
+        _parse_cell(MARKER)
+    except ValueError as inner:
+        raise RuntimeError("outer") from inner
+
+
+def _with_note():
+    exc = RuntimeError("outer")
+    exc.add_note(f"cell {MARKER!r}")
+    raise exc
+
+
+def _bytes_arg():
+    raise RuntimeError(MARKER.encode())
+
+
+def _tuple_arg():
+    raise RuntimeError(("cell", MARKER))
+
+
+def _dict_arg():
+    raise RuntimeError({"cell": MARKER})
+
+
+_CHAINS = {
+    "cause": (_chain_cause, ["ValueError", "RuntimeError"]),
+    "note": (_with_note, ["RuntimeError"]),
+    "bytes": (_bytes_arg, ["RuntimeError"]),
+    "tuple": (_tuple_arg, ["RuntimeError"]),
+    "dict": (_dict_arg, ["RuntimeError"]),
+}
+
+
+@pytest.mark.parametrize("kind", sorted(_CHAINS))
+def test_marker_in_exception_chain_notes_and_args_never_leaves(sentry_capture, monkeypatch, kind):
+    raiser, types = _CHAINS[kind]
+
+    def failing_read(body, content_type):
+        raiser()
+
+    monkeypatch.setattr(convert, "stub_read", failing_read)
+    resp = _post(b"%PDF-1.4\nx", PDF)
+    assert resp.status_code == 500
+    events = sentry_capture.events()
+    assert len(events) == 1
+    assert [v["type"] for v in events[0]["exception"]["values"]] == types
+    assert MARKER.encode() not in sentry_capture.raw()
+
+
+def test_marker_in_an_implicit_context_never_leaves(sentry_capture, monkeypatch):
+    def failing_read(body, content_type):
+        try:
+            _parse_cell(MARKER)
+        except ValueError:
+            raise RuntimeError("outer")
+
+    monkeypatch.setattr(convert, "stub_read", failing_read)
+    resp = _post(b"%PDF-1.4\nx", PDF)
+    assert resp.status_code == 500
+    events = sentry_capture.events()
+    assert len(events) == 1
+    assert [v["type"] for v in events[0]["exception"]["values"]] == ["ValueError", "RuntimeError"]
+    assert MARKER.encode() not in sentry_capture.raw()
+
+
+def test_marker_in_a_warm_up_failure_never_leaves(sentry_capture, monkeypatch):
+    def fail():
+        raise FileNotFoundError(2, "No such file or directory", f"/models/{MARKER}")
+
+    monkeypatch.setattr(convert, "_converter", None)
+    monkeypatch.setattr(convert, "_construct_converter", fail)
+    assert convert.warm_up() is None
+    events = sentry_capture.events()
+    assert len(events) == 1
+    assert events[0]["exception"]["values"][-1]["value"] == (
+        "[Errno 2] No such file or directory: '[redacted]'"
+    )
+    assert [log["body"] for log in sentry_capture.logs()] == [
+        "docling warm-up failed; construction will retry on first /v1/read"
+    ]
+    assert MARKER.encode() not in sentry_capture.raw()
+
+
+def _truncated_pdf():
+    return b"%PDF-1.4\n1 0 obj\n<< /Title (" + MARKER.encode() + b") /Type /Catalog"
+
+
+def test_an_unreadable_document_sends_nothing(sentry_capture):
+    resp = _post(_truncated_pdf(), PDF)
+    assert resp.status_code == 422
+    assert sentry_capture.events() == []
+    assert MARKER.encode() not in sentry_capture.raw()
+
+
+def test_docling_records_never_become_breadcrumbs(sentry_capture, monkeypatch, caplog):
+    real_read = convert.stub_read
+
+    def read_then_fail(body, content_type):
+        with contextlib.suppress(convert.DocumentUnreadable):
+            real_read(body, content_type)
+        raise RuntimeError("after")
+
+    monkeypatch.setattr(convert, "stub_read", read_then_fail)
+    with caplog.at_level(logging.INFO):
+        resp = _post(_truncated_pdf(), PDF)
+    assert resp.status_code == 500
+    assert [r for r in caplog.records if r.name.startswith("docling")]  # docling spoke
+    events = sentry_capture.events()
+    assert len(events) == 1
+    categories = [c.get("category") for c in events[0]["breadcrumbs"]["values"]]
+    assert not [c for c in categories if str(c).startswith("docling")]
+    assert MARKER.encode() not in sentry_capture.raw()
+
+
+def test_unreadable_reason_is_returned_but_never_sent(sentry_capture, monkeypatch):
+    def unreadable(body, content_type):
+        raise convert.DocumentUnreadable(f"cannot read {MARKER}")
+
+    monkeypatch.setattr(convert, "stub_read", unreadable)
+    resp = _post(b"%PDF-1.4\nx", PDF)
+    assert resp.status_code == 422
+    assert MARKER in resp.json()["error"]
+    assert sentry_capture.events() == []
+    sentry_sdk.capture_exception(RuntimeError("after"))
+    assert len(sentry_capture.events()) == 1
+    assert MARKER.encode() not in sentry_capture.raw()
+
+
+def test_marker_in_query_headers_and_cookies_never_leaves(sentry_capture, monkeypatch):
+    _fail_read(monkeypatch, RuntimeError("boom"))
+    importlib.reload(app_module)
+    client = TestClient(app_module.app)
+    resp = client.post(
+        f"/v1/read?note={MARKER}",
+        content=b"%PDF-1.4\nx",
+        headers={
+            "content-type": PDF,
+            "x-note": MARKER,
+            "cookie": f"s={MARKER}",
+            "authorization": f"Bearer {MARKER}",
+        },
+    )
+    assert resp.status_code == 500
+    events = sentry_capture.events()
+    assert len(events) == 1
+    assert events[0]["request"]["method"] == "POST"
     assert MARKER.encode() not in sentry_capture.raw()

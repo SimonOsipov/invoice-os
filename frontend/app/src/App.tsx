@@ -111,7 +111,7 @@ import { PersonaToast } from './demo/PersonaToast'
 import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
 import { DashboardActive } from './components/DashboardActive'
-import { DashboardOnboarding } from './components/DashboardOnboarding'
+import { AddCompanyTask } from './components/AddCompanyTask'
 import { InvoicesList } from './components/InvoicesList'
 import { CreateFlow } from './components/CreateFlow'
 import { InvoiceDetail } from './components/InvoiceDetail'
@@ -1797,7 +1797,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
           )
         })()}
         <div className="pf-scroll" style={{ flex: 1, overflowY: 'auto' }}>
-          {view === 'dashboard' && (active.onboarding ? <DashboardOnboarding ctx={ctx} /> : <DashboardActive ctx={ctx} />)}
+          {view === 'dashboard' && (active.onboarding ? <AddCompanyTask ctx={ctx} /> : <DashboardActive ctx={ctx} />)}
           {view === 'invoices' && <InvoicesList ctx={ctx} />}
           {view === 'create' && <CreateFlow ctx={ctx} />}
           {view === 'detail' && <InvoiceDetail ctx={ctx} />}

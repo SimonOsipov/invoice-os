@@ -16,6 +16,7 @@ import { CFG, SECTORS } from '../data'
 import { amount, fmtShort, pad2 } from './format'
 import { failuresFrom } from './charts'
 import { initials } from './customers'
+import { computeNoEntity } from './importFlow'
 import { hash, mulberry } from './prng'
 import { validate } from './validation'
 import type { Entity } from './portfolio'
@@ -153,9 +154,7 @@ export function buildClients(entities: Entity[]): Client[] {
 // The window before the live entity list first resolves (loading/error/no-gateway), or a
 // tenant (either persona, [entity-picker] trap 2) with genuinely zero entities — every
 // one of the ~15 places reading ctx.active needs SOMETHING defined, never `undefined`.
-// onboarding: true reuses the existing "nothing here yet" dashboard rather than
-// inventing a second empty state; entityId stays null since no real entity backs this
-// placeholder either.
+// onboarding: true routes the dashboard to AddCompanyTask; entityId stays null (no real entity).
 export function emptyClient(): Client {
   const cfg: ClientCfg = {
     name: 'No client yet',
@@ -173,13 +172,15 @@ export function emptyClient(): Client {
   return finishClient(cfg, null)
 }
 
-// Stub (AUTH-10-03 Mode A): the executor replaces the body.
+// Reuses the amber panel's predicate so the two never disagree.
 export function firstRunSurface(
-  _activeEntity: Entity | null,
-  _entitiesState: AsyncStatus,
-  _entitiesCount: number,
-  _clientsCount: number,
+  activeEntity: Entity | null,
+  entitiesState: AsyncStatus,
+  entitiesCount: number,
+  clientsCount: number,
 ): 'task' | 'loading' | 'error' {
+  if (entitiesState === 'error') return 'error'
+  if (entitiesState === 'idle' || computeNoEntity(activeEntity, entitiesState, entitiesCount, clientsCount)) return 'task'
   return 'loading'
 }
 

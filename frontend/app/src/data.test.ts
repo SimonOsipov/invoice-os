@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
-import { CFG, CONNECTOR_DEFS, ONBOARD_STEPS } from './data'
+import { CFG, CONNECTOR_DEFS } from './data'
 import { connectorDetail } from './lib/connectors'
 
 // Recursively walks `rootDir` for .ts/.tsx files containing `needle`. Duplicated from
@@ -42,9 +42,7 @@ describe('rule-pack copy (BUG-03-07 item 6)', () => {
     expect(hits.sort()).toEqual([])
   })
 
-  it('ONBOARD_STEPS and the validated activity-feed copy both read 19-check', () => {
-    expect(ONBOARD_STEPS[2].body).toContain('19-check MBS rule pack')
-
+  it('the validated activity-feed copy reads 19-check', () => {
     // connectorDetail's activity feed always includes 'validated' entries (fixed literal,
     // independent of the seeded PRNG) — positive companion guards this against a filter
     // that vacuously passes over zero rows.

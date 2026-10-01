@@ -280,8 +280,7 @@ pre.pf-json {
   .pf-dash-row-c,
   .pf-create-grid,
   .pf-detail-grid,
-  .pf-funnel,
-  .pf-onboard-grid {
+  .pf-funnel {
     grid-template-columns: 1fr !important;
   }
   /* The connector health strip partitions its 5 tiles with left hairlines; wrapped

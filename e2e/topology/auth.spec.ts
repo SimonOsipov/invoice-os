@@ -1033,12 +1033,11 @@ test('deployed app: a hand-off code minted in another browser signs no tab in', 
   })
 })
 
-// The first screen of a fresh workspace: the onboarding dashboard. Only the firm portfolio pins the placeholder heading.
-async function expectOnboardingDashboard(page: Page, opts: { firmHeading?: boolean } = {}): Promise<void> {
-  await expect(page.getByText('COMPLIANCE OVERVIEW', { exact: true })).toBeVisible()
-  if (opts.firmHeading) {
-    await expect(page.getByRole('heading', { level: 1, name: 'No client yet', exact: true })).toBeVisible()
-  }
+// The first screen of a fresh workspace: the add-company task.
+async function expectAddCompanyTask(page: Page, h1: string): Promise<void> {
+  await expect(page.getByTestId('add-company-task')).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: h1, exact: true })).toBeVisible()
+  await expect(page.getByText('COMPLIANCE OVERVIEW', { exact: true })).not.toBeVisible()
 }
 
 test('deployed app: a real in-house workspace has a Company tab and no Clients nav item', async ({ page }) => {
@@ -1047,7 +1046,7 @@ test('deployed app: a real in-house workspace has a Company tab and no Clients n
   const errors = collectErrors(page)
 
   await signInAtFrontDoor(page, account, '/')
-  await expectOnboardingDashboard(page)
+  await expectAddCompanyTask(page, 'Add your company')
   await expect.poll(() => sidebarRoster(page), { message: 'in-house sidebar roster' }).toContain('Settings')
   expect(await sidebarRoster(page), 'the in-house sidebar').not.toContain('Clients')
 
@@ -1065,7 +1064,7 @@ test('deployed app: a real firm workspace has the Clients portfolio and no Compa
   const errors = collectErrors(page)
 
   await signInAtFrontDoor(page, account, '/')
-  await expectOnboardingDashboard(page, { firmHeading: true })
+  await expectAddCompanyTask(page, 'Add your first client')
   await expect.poll(() => sidebarRoster(page), { message: 'firm sidebar roster' }).toContain('Clients')
 
   const nav = page.locator('aside.pf-sidebar nav.pf-nav-list')

@@ -1094,6 +1094,8 @@ function sidebarNav(page: Page) {
 // New invoice → pick a one-row CSV → Read columns, stopping on the Map step.
 async function openMapStep(page: Page, tag: string, amber: { title: string; shown: boolean }): Promise<void> {
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  // Control: the upload step is on screen, so an absent panel is not an unrendered step.
+  await expect(page.getByRole('button', { name: 'Read columns' })).toBeVisible()
   await expect(page.getByText(amber.title, { exact: true })).toHaveCount(amber.shown ? 1 : 0)
   const csv = `${IMPORT_HEADER}\n${tag}-${Date.now()},2026-01-01,12345678-0001,Buyer Ltd,NGN,1000.00,75.00,1075.00,Consulting,1,1000.00\n`
   await page.locator('input[type="file"]#pf-import-file').setInputFiles({ name: `${tag}.csv`, mimeType: 'text/csv', buffer: Buffer.from(csv, 'utf8') })
@@ -1137,7 +1139,9 @@ test('deployed app: a new in-house workspace lands on Add your company, and addi
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await expect(page.getByText('Add your company before you file', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Add your company →' }).click()
+  await expect(page).toHaveURL(/\/settings\/company$/)
   await expect(page.getByText('Your company', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Add company' })).toBeVisible()
   await page.getByRole('button', { name: 'Add company' }).click()
 
   const dialog = page.getByRole('dialog', { name: 'Add company' })

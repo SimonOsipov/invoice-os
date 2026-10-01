@@ -104,7 +104,8 @@ What a spec still cannot assume is an empty table:
     its fork chain provisions.
   - `topology/auth.spec.ts`: each real-account journey (`provisionRealAccount` in
     `api/client.ts`) leaves an `auth.users` row, a tenant and a membership. The two
-    add-company journeys also leave one `business_entities` row and its audit row.
+    add-company journeys also leave one `business_entities` row and its audit row; the next
+    deploy's reset truncates both, so they live only until the next push.
   - `api/session-handoff.spec.ts`: each registering test leaves an `auth.users` row only; it
     provisions no workspace.
 

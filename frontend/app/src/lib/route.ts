@@ -203,3 +203,8 @@ export function parseLocation(pathname: string, search: string): ParsedLocation 
 
   return { view, invoiceId, jobId, policyId, settingsTab, q, auditInvoice, reviewBatchIds }
 }
+
+// Red stub: the real pattern-naming body lands with SENTRY-06-05.
+export function routeName(_pathname: string): string {
+  return '<unmatched>'
+}

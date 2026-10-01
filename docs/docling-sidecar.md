@@ -204,6 +204,17 @@ docker rm -f docling-bench
 The harness refuses to report a latency for a document that yielded no tokens — timing the
 failure path is not a throughput measurement.
 
+## Sentry
+
+- `SENTRY_DSN` is production-only; `set-sentry-off` blanks it in every fork. Empty means off.
+- Events carry `environment`, `release` (the build sha) and and `server_name` `docling`.
+- An unhandled `/v1/read` failure, a warm-up failure and a boot failure open an issue. A client disconnect and a 413 do not.
+- Locals, request bodies, quoted text and third-party log records never leave. `sentryfilter.py` scrubs the rest.
+- `/healthz` reports `sentry` `on` or `off`; `fleet-gate` fails a docling that omits it.
+- The sidecar continues the Go caller's trace. It reads inbound `baggage`.
+- It sends no `sentry-trace` or `baggage` outbound.
+- `/healthz`, `/readyz` and `/healthz/*` make no transaction.
+
 ## Enabling the sidecar on a fleet
 
 The sidecar is deployed and probed on every environment (see the top of this doc), but no

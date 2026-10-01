@@ -31,7 +31,9 @@
 import type { ApiError } from '@invoice-os/api-client'
 import type { Entity, EntityInput } from './portfolio'
 
-export const TIN_HINT = ''
+// JTB filing failure: TestServiceImport_APICreatedJTBEntityReportsGenuineTinFormatViolation
+export const TIN_HINT =
+  'Use your 12-digit FIRS TIN. A 10-digit JTB TIN is accepted, but invoices filed under it fail the supplier TIN check.'
 
 export interface EntityFormState {
   name: string

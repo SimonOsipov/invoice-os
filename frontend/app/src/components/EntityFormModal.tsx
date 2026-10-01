@@ -39,6 +39,7 @@ import {
   emptyEntityForm,
   entityFormFrom,
   mapSubmitError,
+  TIN_HINT,
   toEntityInput,
   toEntityUpdateInput,
   validateEntityForm,
@@ -179,8 +180,10 @@ export function EntityFormModal({ mode, entity, ctx, base, onClose, onSuccess }:
                 onChange={(e) => updateField('tin', e.target.value)}
                 disabled={submitting}
                 placeholder="########-####"
+                aria-describedby="entity-tin-hint"
                 style={{ fontFamily: 'var(--font-mono)' }}
               />
+              <div id="entity-tin-hint" style={{ marginTop: 6, fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5 }}>{TIN_HINT}</div>
               {fieldErrors.tin && <div style={{ marginTop: 6, fontSize: 11.5, color: 'var(--status-red-text)' }}>{fieldErrors.tin}</div>}
             </div>
 

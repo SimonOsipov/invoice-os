@@ -90,6 +90,21 @@ describe('stripQuery and redactSecrets', () => {
 })
 
 describe('scrub gaps', () => {
+  it('redactSecrets_redactsTheTailAfterAQuoteBracketInsideAnAttributeValue', () => {
+    // htmlTreeAsString writes the raw value, so a value holding `"]` ends the lazy match early.
+    const rows: Array<[string, string[]]> = [
+      [`button[title="a"] TIN 1234"]`, ['TIN', '1234']],
+      [`div > button[alt="x"] Acme Ltd"][title="y"] > span`, ['Acme', 'Ltd']],
+      [`img[aria-label="p"] q"]`, ['q"]']],
+    ]
+    for (const [input, needles] of rows) {
+      const out = redactSecrets(input)
+      expect(out, input).toContain('[redacted]')
+      for (const needle of needles) expect(out, input).not.toContain(needle)
+    }
+    expect(redactSecrets(`div > button[alt="x"] Acme Ltd"][title="y"] > span`)).toContain('div > button')
+  })
+
   it('redactSecrets_redactsAnEmptySignatureJwtAndALowercaseBearer', () => {
     expect(redactSecrets('t eyJhbGciOi.eyJzdWIi. end')).toBe('t [redacted] end')
     expect(redactSecrets('authorization: bearer abc123')).toBe('authorization: Bearer [redacted]')

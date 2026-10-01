@@ -193,4 +193,15 @@ describe('real SDK pipeline with the shipped options', () => {
     expect(JSON.stringify(out)).not.toContain('TIN 1234')
     expect(out.description).toContain('button')
   })
+
+  it('pipeline_selectorWhoseValueHoldsAQuoteBracketIsRedacted', () => {
+    const button = document.createElement('button')
+    button.setAttribute('title', `a"] ${N} TIN 1234`)
+    document.body.appendChild(button)
+    const selector = htmlTreeAsString(button)
+    expect(selector, 'the SDK writes the raw value').toContain('title="a"]')
+    const out = scrubSpan({ op: 'ui.interaction.click', description: selector, data: { 'lcp.element': selector } } as never)
+    expect(JSON.stringify(out)).not.toContain(N)
+    expect(JSON.stringify(out)).not.toContain('TIN 1234')
+  })
 })

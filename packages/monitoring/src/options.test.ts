@@ -112,6 +112,8 @@ describe('sentryOptions gateway origin and error transaction', () => {
     expect(out.transaction).toBe('/invoices/:id')
     const bare = build({ routeName: undefined }).beforeSend!(ev, {}) as ErrorEvent
     expect(bare.transaction).toBe('/invoices/u1')
+    const none = build().beforeSend!({} as ErrorEvent, {}) as ErrorEvent
+    expect(none.transaction, 'an event with no transaction is not given one').toBeUndefined()
   })
 })
 

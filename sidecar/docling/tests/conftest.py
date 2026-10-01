@@ -64,4 +64,6 @@ def sentry_capture():
         sentry_sdk.get_client().close()
         # close() leaves the client bound; unbind it or the next test inherits it.
         sentry_sdk.get_global_scope().set_client(None)
+        # Crumbs live on the scope, not the client; a red row's crumb would taint the next one.
+        sentry_sdk.get_isolation_scope().clear_breadcrumbs()
         assert sentry_setup.sentry_state() == "off"

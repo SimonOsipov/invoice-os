@@ -6,6 +6,8 @@ M is a unique marker standing for document content; no output may contain it.
 import copy
 import json
 
+import pytest
+
 from sentryfilter import (
     SIDECAR_LOGGERS,
     keep_breadcrumb,
@@ -312,6 +314,76 @@ def test_scrub_log_drops_third_party_loggers():
     assert kept["body"] == "open failed for '[redacted]'"
 
 
+def _param_log(template, body, params, logger="convert"):
+    attrs = {"logger.name": logger, "sentry.message.template": template}
+    for key, value in params.items():
+        attrs[f"sentry.message.parameter.{key}"] = value
+    return {"body": body, "attributes": attrs}
+
+
+_UVICORN_ACCESS = '%s - "%s %s HTTP/%s" %d'
+
+# (template, rendered body, SDK parameters, wanted body). Tuple args key by index, mapping args by name.
+_PARAM_BODIES = {
+    "one unquoted arg": (
+        "stage failed: %s",
+        f"stage failed: {M}",
+        {0: M},
+        "stage failed: [redacted]",
+    ),
+    "several args": (
+        "%s failed at %s: %s",
+        f"{M} failed at {M}b: 3",
+        {0: M, 1: f"{M}b", 2: 3},
+        "[redacted] failed at [redacted]: [redacted]",
+    ),
+    "mapping args": (
+        "cell %(cell)s in %(doc)s",
+        f"cell {M} in {M}",
+        {"cell": M, "doc": M},
+        "cell [redacted] in [redacted]",
+    ),
+    "literal percent": (
+        "100%% of %s",
+        f"100% of {M}",
+        {0: M},
+        "100% of [redacted]",
+    ),
+    "template cannot format": (
+        "%d items in %s",
+        f"7 items in {M}",
+        {0: 7, 1: M},
+        "%d items in %s",
+    ),
+    "uvicorn.access args": (
+        _UVICORN_ACCESS,
+        f'{M} - "GET /x?q={M} HTTP/1.1" 200',
+        {0: M, 1: "GET", 2: f"/x?q={M}", 3: "1.1", 4: 200},
+        '%s - "[redacted]" %d',
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_PARAM_BODIES))
+def test_scrub_log_rebuilds_the_body_from_the_template_without_the_arguments(name):
+    template, body, params, want = _PARAM_BODIES[name]
+    logger = "uvicorn.access" if "uvicorn" in name else "convert"
+    out = scrub_log(_param_log(template, body, params, logger), None)
+    assert out is not None
+    assert M not in out["body"]
+    assert out["body"] == want
+    assert M not in repr(out)
+
+
+def test_scrub_log_without_parameters_keeps_its_scrubbed_body():
+    plain = {"body": f"loaded '{M}' ok", "attributes": {"logger.name": "app"}}
+    assert scrub_log(plain, None)["body"] == "loaded '[redacted]' ok"
+
+    # A template without a parameter does not trigger the rebuild.
+    templated = _param_log("loaded '%s' ok", f"loaded '{M}' ok", {})
+    assert scrub_log(templated, None)["body"] == "loaded '[redacted]' ok"
+
+
 def test_keep_breadcrumb_only_sidecar_log_crumbs():
     assert keep_breadcrumb({"type": "log", "category": "docling.datamodel.document"}, None) is None
 
@@ -517,6 +589,21 @@ def test_scrub_event_span_name_description_and_other_fields():
         assert first[f] == span[f], f
     assert second == {"op": "bare"}
     assert M not in json.dumps(out)
+
+
+def test_scrub_transaction_survives_a_span_whose_tags_are_not_a_dict():
+    # A raise here makes the SDK drop the whole transaction silently.
+    quoted = f"x '{M}'"
+    for tags in ([quoted, "plain"], quoted, None):
+        event = {"type": "transaction", "spans": [{"op": "o", "tags": tags}, {"op": "after"}]}
+        out = scrub_transaction(event, None)
+        assert out is not None, repr(tags)
+        assert [s["op"] for s in out["spans"]] == ["o", "after"], repr(tags)
+        assert M not in json.dumps(out), repr(tags)
+    listed = scrub_transaction({"spans": [{"tags": [quoted]}]}, None)
+    assert listed["spans"][0]["tags"] == ["x '[redacted]'"]
+    text = scrub_transaction({"spans": [{"tags": quoted}]}, None)
+    assert text["spans"][0]["tags"] == "x '[redacted]'"
 
 
 def test_scrub_event_keeps_unrelated_fields_and_non_text_exception_parts():

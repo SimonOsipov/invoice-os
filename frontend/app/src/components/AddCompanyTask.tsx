@@ -33,24 +33,24 @@ export function AddCompanyTask({ ctx }: { ctx: PlatformCtx }) {
 
   const copy = ADD_COMPANY_COPY[mode]
   return (
-    <div data-testid="add-company-task" style={{ padding: '30px 36px 56px' }}>
-      <div style={{ marginBottom: 26 }}>
-        <div className="eyebrow" style={{ marginBottom: 10 }}>
-          OVERVIEW
+    <div style={{ padding: '30px 36px 56px' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 22 }}>
+        <div>
+          <div className="eyebrow" style={{ marginBottom: 10 }}>
+            OVERVIEW
+          </div>
+          <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>{copy.h1}</h1>
+          <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>
+            {ctx.user.tenantName ?? 'Your workspace'} · invoices are filed for a registered company.
+          </p>
         </div>
-        <h1 style={{ fontSize: 28, fontWeight: 600, letterSpacing: '-0.03em', margin: '0 0 5px' }}>{copy.h1}</h1>
-        <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>
-          {ctx.user.tenantName ?? 'Your workspace'} · invoices are filed for a registered company.
-        </p>
       </div>
-      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+      <div data-testid="add-company-task">
+        <EmptyState title={copy.emptyTitle} message={copy.emptyMessage} />
+        <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
           <button onClick={() => setOpen(true)} disabled={base == null} className="v2-btn v2-btn-primary pf-btn">
             <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> {copy.button}
           </button>
-        </div>
-        <div style={{ padding: 20 }}>
-          <EmptyState title={copy.emptyTitle} message={copy.emptyMessage} />
         </div>
       </div>
       {open && base != null && (

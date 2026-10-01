@@ -151,6 +151,32 @@ func TestCreateHandler_TINReasonInBody(t *testing.T) {
 	}
 }
 
+// TestHandlers_StoreTINRefusalIsBareReason: the real Store.Create and
+// Store.Update refuse a TIN before any database call, so a nil pool is enough;
+// the 400 body is the reason alone, with no wrapper added on the way.
+func TestHandlers_StoreTINRefusalIsBareReason(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	store := NewStore(nil)
+	rows := tinReasonRows()
+	if len(rows) == 0 {
+		t.Fatal("no rows")
+	}
+	for _, tc := range rows {
+		t.Run("create/"+tc.raw, func(t *testing.T) {
+			rec, body := doCreate(t, store.Create, &id, createRequest{Name: "Acme Ltd", TIN: tc.raw})
+			if rec.Code != http.StatusBadRequest || body.Error != tc.want {
+				t.Errorf("create = %d %q, want 400 %q", rec.Code, body.Error, tc.want)
+			}
+		})
+		t.Run("update/"+tc.raw, func(t *testing.T) {
+			rec, body := doUpdate(t, store.Update, &id, uuid.NewString(), fmt.Sprintf(`{"tin":%q}`, tc.raw))
+			if rec.Code != http.StatusBadRequest || body.Error != tc.want {
+				t.Errorf("update = %d %q, want 400 %q", rec.Code, body.Error, tc.want)
+			}
+		})
+	}
+}
+
 // tinReasonRows is one refused TIN per reason shown to the user.
 func tinReasonRows() []struct{ raw, want string } {
 	return []struct{ raw, want string }{

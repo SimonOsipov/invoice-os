@@ -319,15 +319,70 @@ func TestValidateTIN_ReasonChecksum(t *testing.T) {
 	})
 }
 
-// TestValidateTIN_EveryRefusalIsErrInvalidTIN: AC (g), one input per class.
+// TestValidateTIN_EveryRefusalIsErrInvalidTIN: AC (g), every class, bare and
+// wrapped. The wrapped error still reaches a caller's errors.As and errors.Is.
 func TestValidateTIN_EveryRefusalIsErrInvalidTIN(t *testing.T) {
-	for _, raw := range []string{"", "BADTIN", "12345", "12345678-90", "1234567890"} {
+	inputs := []string{"", "BADTIN", "+12345", "12345", "12345678-90", "123456780006-", "1234567890"}
+	for _, raw := range inputs {
 		_, err := ValidateTIN(raw)
 		if err == nil {
 			t.Fatalf("ValidateTIN(%q) accepted, want a refusal", raw)
 		}
 		if !errors.Is(err, ErrInvalidTIN) {
 			t.Errorf("ValidateTIN(%q) err = %v, want errors.Is(err, ErrInvalidTIN)", raw, err)
+		}
+		wrapped := fmt.Errorf("create entity: %w", err)
+		var te *TINError
+		if !errors.Is(wrapped, ErrInvalidTIN) || !errors.As(wrapped, &te) || te.Reason == "" {
+			t.Errorf("ValidateTIN(%q) wrapped = %v, want errors.Is(ErrInvalidTIN) and a *TINError with a Reason", raw, wrapped)
+		}
+		if errors.Is(err, ErrValidation) || errors.Is(err, ErrDuplicateTIN) {
+			t.Errorf("ValidateTIN(%q) err = %v, must not match another sentinel", raw, err)
+		}
+	}
+}
+
+// TestValidateTIN_ShapeBeatsLength: a stray character is a shape fault even
+// when the digit count is also wrong, so the message does not blame the length.
+func TestValidateTIN_ShapeBeatsLength(t *testing.T) {
+	runReasonCases(t, []reasonCase{
+		{"plus", "+12345", TINShapeMessage},
+		{"inner space", "12345 678", TINShapeMessage},
+		{"inner tab", "123\t45", TINShapeMessage},
+		{"inner no-break space", "12345\u00a0678", TINShapeMessage},
+		{"letter", "A1234", TINShapeMessage},
+		{"dot", "1234.5678", TINShapeMessage},
+		{"NUL byte", "1234\x00", TINShapeMessage},
+		{"Arabic-Indic digits after ASCII", "12345٦٧٨٩٠٠", TINShapeMessage},
+		{"full-width digits after ASCII", "12345６７８９", TINShapeMessage},
+	})
+}
+
+// TestValidateTIN_EdgeInputs: whitespace around the TIN is dropped before any
+// class is decided; hyphens at either end and very long inputs land in the
+// class the order of checks gives.
+func TestValidateTIN_EdgeInputs(t *testing.T) {
+	runReasonCases(t, []reasonCase{
+		{"padded shape", "  BADTIN  ", TINShapeMessage},
+		{"padded length", "\t12345\n", fmt.Sprintf(TINLengthMessage, 5)},
+		{"padded checksum", " 1234567890 ", TINChecksumMessage},
+		{"trailing hyphen on bare 12", "123456780006-", TINShapeMessage},
+		{"trailing hyphen on 8-4", "12345678-0006-", TINShapeMessage},
+		{"leading hyphen on 10", "-1234567897", TINShapeMessage},
+		{"trailing hyphen on 10", "1234567897-", TINShapeMessage},
+		{"hyphen at 9", "123456789-006", TINShapeMessage},
+		{"hyphen at 11", "12345678000-6", TINShapeMessage},
+		{"three hyphens", "1234-5678-00-06", TINShapeMessage},
+		{"hyphen only", "-", fmt.Sprintf(TINLengthMessage, 0)},
+		{"hyphens only", "---", fmt.Sprintf(TINLengthMessage, 0)},
+		{"13 digits with a hyphen at 8", "12345678-00001", fmt.Sprintf(TINLengthMessage, 13)},
+		{"very long digits", strings.Repeat("1", 10000), fmt.Sprintf(TINLengthMessage, 10000)},
+		{"very long letters", strings.Repeat("A", 10000), TINShapeMessage},
+		{"very long hyphens", strings.Repeat("-", 10000), fmt.Sprintf(TINLengthMessage, 0)},
+	})
+	for _, raw := range []string{" 12345678-0006 ", "\u00a01234567897\u00a0"} {
+		if _, err := ValidateTIN(raw); err != nil {
+			t.Errorf("ValidateTIN(%q) err = %v, want accepted", raw, err)
 		}
 	}
 }
@@ -364,7 +419,7 @@ func acceptedSetCorpus() []string {
 		"123456789-06", "12345678-00-06", "+123456780006", "-123456780006", "12345 67897",
 		"581274639202", "0000000000", "\t\n 1234567897 \n\t", "123456780006",
 		"12345678-0001", "123456-7890", "12345678-90", "12345678-000",
-		"١٢٣٤٥٦٧٨٩٠", "１２３４５６７８９７",
+		"١٢٣٤٥٦٧٨٩٠", "１２３４５６７８９７", "\u00a01234567897\u00a0", " 12345678-0006 ",
 	}
 	prefixes := []string{"123456789012", "581274639202", "000000000000", "999999999999", "314159265358", "271828182845"}
 	for n := 9; n <= 13; n++ {
@@ -373,7 +428,7 @@ func acceptedSetCorpus() []string {
 			valid := body + string(luhnCheckDigit(body))
 			invalid := body + string('0'+(valid[n-1]-'0'+1)%10)
 			for _, base := range []string{valid, invalid} {
-				corpus = append(corpus, base, "+"+base, insertAt(base, n/2, " "))
+				corpus = append(corpus, base, "+"+base, insertAt(base, n/2, " "), "\t"+base+" \n")
 				for i := 0; i <= len(base); i++ {
 					corpus = append(corpus, insertAt(base, i, "-"))
 				}
@@ -387,8 +442,8 @@ func acceptedSetCorpus() []string {
 }
 
 // TestValidateTIN_AcceptedSetUnchanged: ValidateTIN accepts exactly what
-// oracleShape + Luhn accepted before AUTH-10, and the corpus reaches every
-// accepted shape and every refusal class.
+// oracleShape + Luhn accepted before AUTH-10, every refusal gets the reason of
+// its class, and the corpus reaches every accepted shape and every class.
 func TestValidateTIN_AcceptedSetUnchanged(t *testing.T) {
 	var jtb, firs12, firs84, empty, chars, length, hyphen, checksum int
 	for _, raw := range acceptedSetCorpus() {
@@ -431,17 +486,27 @@ func TestValidateTIN_AcceptedSetUnchanged(t *testing.T) {
 				other = true
 			}
 		}
+		var wantReason string
 		switch {
 		case trimmed == "":
 			empty++
+			wantReason = TINRequiredMessage
 		case other:
 			chars++
+			wantReason = TINShapeMessage
 		case digits != 10 && digits != 12:
 			length++
+			wantReason = fmt.Sprintf(TINLengthMessage, digits)
 		case !oracleShape.MatchString(trimmed):
 			hyphen++
+			wantReason = TINShapeMessage
 		default:
 			checksum++
+			wantReason = TINChecksumMessage
+		}
+		var te *TINError
+		if !errors.As(err, &te) || te.Reason != wantReason {
+			t.Errorf("ValidateTIN(%q) err = %v, want a *TINError with Reason %q", raw, err, wantReason)
 		}
 	}
 	for name, n := range map[string]int{

@@ -701,7 +701,7 @@ describe('DashboardActive KPI tiles — adversarial (QA)', () => {
   })
 })
 
-describe('DashboardActive failures panel at zero invoices (AUTH-10-04)', () => {
+describe('DashboardActive failures panel before any invoice is validated (AUTH-10-04)', () => {
   const failuresPanel = (title: string) => screen.getByText(title).parentElement as HTMLElement
 
   it('zero invoices is not "every invoice passed"', async () => {
@@ -725,7 +725,7 @@ describe('DashboardActive failures panel at zero invoices (AUTH-10-04)', () => {
     expect(screen.getByText('No open failures')).toBeDefined()
     expect(screen.getByText('Every invoice passed validation.')).toBeDefined()
     expect(screen.queryByText('No invoices validated yet')).toBeNull()
-    expect(failuresPanel('No open failures').querySelector('svg'), 'the tick stays when invoices exist').not.toBeNull()
+    expect(failuresPanel('No open failures').querySelector('svg'), 'the tick stays when an invoice is validated').not.toBeNull()
   })
 
   it('drafts only: nothing validated yet, no tick', async () => {
@@ -751,8 +751,46 @@ describe('DashboardActive failures panel at zero invoices (AUTH-10-04)', () => {
     expect(failuresPanel('No open failures').querySelector('svg')).not.toBeNull()
   })
 
-  it.each([0, 5])('with failures listed (total %i) neither empty-state copy renders', async (validated) => {
-    const data = rollup(0, { validated })
+  it('drafts plus one validated invoice says No open failures, with its tick', async () => {
+    mockRollupFetch(rollup(0, { draft: 3, validated: 1 }))
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Readiness score')
+    expect(screen.getByText('No open failures')).toBeDefined()
+    expect(screen.getByText('Every invoice passed validation.')).toBeDefined()
+    expect(screen.queryByText('No invoices validated yet')).toBeNull()
+    expect(failuresPanel('No open failures').querySelector('svg')).not.toBeNull()
+  })
+
+  it('firm mode reads the selected client counts: drafts-only client under a validated tenant', async () => {
+    const data = rollup(0, { validated: 9 })
+    data.clients = [
+      {
+        entity_id: 'ent-1',
+        entity_name: 'Dangote Cement PLC',
+        counts: { ...ZERO_COUNTS, draft: 2 },
+        needs_attention: 0,
+        awaiting_approval: 0,
+        metrics: {},
+        top_violations: [],
+      },
+    ]
+    mockRollupFetch(data)
+    render(<DashboardActive ctx={firmCtx('ent-1', 'Dangote Cement PLC')} />)
+
+    await screen.findByText('Readiness score')
+    expect(screen.getByText('No invoices validated yet')).toBeDefined()
+    expect(screen.queryByText('No open failures')).toBeNull()
+  })
+
+  it.each([
+    ['drafts only', { draft: 3 }],
+    ['drafts and one rejected', { draft: 3, rejected: 1 }],
+    ['drafts and one failed', { draft: 3, failed: 1 }],
+    ['no invoices', {}],
+    ['validated only', { validated: 5 }],
+  ] as [string, Partial<Counts>][])('with failures listed (%s) neither empty-state copy renders', async (_name, countsOver) => {
+    const data = rollup(0, countsOver)
     data.totals.top_violations = [{ rule_key: 'tin-checksum', invoices: 2 }]
     mockRollupFetch(data)
     render(<DashboardActive ctx={dashCtx()} />)

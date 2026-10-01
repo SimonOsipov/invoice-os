@@ -423,17 +423,200 @@ func TestCORSPreflightStillGrantsGET(t *testing.T) {
 // server-to-server caller like the Verifier fetching JWKS) passes through with no CORS
 // headers added and no preflight short-circuit.
 func TestCORSNoOriginUntouched(t *testing.T) {
+	// OPTIONS without an Origin is not a preflight, even when it carries the trace headers.
+	for _, method := range []string{"GET", "OPTIONS"} {
+		next := &sentinel{}
+		h := CORS([]string{allowedOrigin})(next)
+
+		r := httptest.NewRequest(method, "/.well-known/jwks.json", nil)
+		r.Header.Set("sentry-trace", "0123456789abcdef0123456789abcdef-0123456789abcdef-1")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+
+		if !next.reached {
+			t.Fatalf("%s with no Origin must pass through untouched", method)
+		}
+		for _, name := range []string{"Access-Control-Allow-Origin", "Access-Control-Allow-Headers"} {
+			if got := rec.Header().Get(name); got != "" {
+				t.Errorf("%s: %s = %q, want empty when no Origin is sent", method, name, got)
+			}
+		}
+	}
+}
+
+// allowHeaderSet parses Access-Control-Allow-Headers into a lowercase token set.
+func allowHeaderSet(h http.Header) map[string]bool {
+	set := map[string]bool{}
+	for _, tok := range strings.Split(h.Get("Access-Control-Allow-Headers"), ",") {
+		if tok = strings.ToLower(strings.TrimSpace(tok)); tok != "" {
+			set[tok] = true
+		}
+	}
+	return set
+}
+
+const traceRequestHeaders = "authorization, content-type, sentry-trace, baggage"
+
+func tracePreflight(path, origin string) *http.Request {
+	r := httptest.NewRequest("OPTIONS", path, nil)
+	r.Header.Set("Origin", origin)
+	r.Header.Set("Access-Control-Request-Method", "GET")
+	r.Header.Set("Access-Control-Request-Headers", traceRequestHeaders)
+	return r
+}
+
+func TestCORSPreflightGrantsTraceHeaders(t *testing.T) {
 	next := &sentinel{}
 	h := CORS([]string{allowedOrigin})(next)
 
-	r := httptest.NewRequest("GET", "/.well-known/jwks.json", nil)
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, r)
+	h.ServeHTTP(rec, tracePreflight("/api/invoice/v1/invoices", allowedOrigin))
 
-	if !next.reached {
-		t.Fatal("a request with no Origin must pass through untouched")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("preflight = %d, want 204", rec.Code)
 	}
-	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
-		t.Errorf("Access-Control-Allow-Origin = %q, want empty when no Origin is sent", got)
+	if next.reached {
+		t.Error("a preflight must not reach the wrapped handler")
+	}
+	got := allowHeaderSet(rec.Header())
+	want := map[string]bool{"authorization": true, "content-type": true, "sentry-trace": true, "baggage": true}
+	if len(got) != len(want) {
+		t.Errorf("granted token set = %v, want exactly %v", got, want)
+	}
+	for tok := range want {
+		if !got[tok] {
+			t.Errorf("granted token set = %v, missing %q", got, tok)
+		}
+	}
+	if got["traceparent"] {
+		t.Errorf("granted token set = %v, must not grant traceparent", got)
+	}
+}
+
+func TestCORSDisallowedOriginGetsNoTraceGrant(t *testing.T) {
+	next := &sentinel{}
+	h := CORS([]string{allowedOrigin})(next)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, tracePreflight("/api/invoice/v1/invoices", "https://evil.example"))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("disallowed-origin preflight = %d, want 204", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "" {
+		t.Errorf("Access-Control-Allow-Headers = %q, want empty for a disallowed origin", got)
+	}
+
+	// Pair: the same handler grants the allowed origin the trace header.
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, tracePreflight("/api/invoice/v1/invoices", allowedOrigin))
+	if !allowHeaderSet(rec.Header())["sentry-trace"] {
+		t.Errorf("allowed origin on the same handler: granted %q, want sentry-trace", rec.Header().Get("Access-Control-Allow-Headers"))
+	}
+}
+
+func TestCORSTracedRequestPassesThrough(t *testing.T) {
+	const (
+		trace   = "0123456789abcdef0123456789abcdef-0123456789abcdef-1"
+		baggage = "sentry-environment=production"
+	)
+	for _, tc := range []struct{ name, origin, wantAllowOrigin string }{
+		{"allowed origin", allowedOrigin, allowedOrigin},
+		{"disallowed origin", disallowedOrigin, ""},
+		{"no origin", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotTrace, gotBaggage string
+			reached := false
+			h := CORS([]string{allowedOrigin})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				reached = true
+				gotTrace, gotBaggage = r.Header.Get("sentry-trace"), r.Header.Get("baggage")
+				w.WriteHeader(http.StatusOK)
+			}))
+
+			r := httptest.NewRequest("GET", "/api/x", nil)
+			if tc.origin != "" {
+				r.Header.Set("Origin", tc.origin)
+			}
+			r.Header.Set("sentry-trace", trace)
+			r.Header.Set("baggage", baggage)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, r)
+
+			if !reached {
+				t.Fatal("a traced non-preflight request must reach the wrapped handler")
+			}
+			if gotTrace != trace || gotBaggage != baggage {
+				t.Errorf("handler saw sentry-trace %q, baggage %q; want both unchanged", gotTrace, gotBaggage)
+			}
+			if got := rec.Header().Get("Access-Control-Allow-Origin"); got != tc.wantAllowOrigin {
+				t.Errorf("Access-Control-Allow-Origin = %q, want %q", got, tc.wantAllowOrigin)
+			}
+			if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "" {
+				t.Errorf("a non-preflight response carries Access-Control-Allow-Headers %q, want none", got)
+			}
+		})
+	}
+}
+
+// The grant is static: whatever the preflight asks for, the answer is the same four tokens.
+func TestCORSPreflightGrantIgnoresRequestedHeaders(t *testing.T) {
+	want := []string{"authorization", "content-type", "sentry-trace", "baggage"}
+	for _, requested := range []string{"traceparent", "Sentry-Trace, BAGGAGE", "x-evil, authorization", "*", ""} {
+		t.Run("requests "+requested, func(t *testing.T) {
+			r := tracePreflight("/api/invoice/v1/invoices", allowedOrigin)
+			if requested == "" {
+				r.Header.Del("Access-Control-Request-Headers")
+			} else {
+				r.Header.Set("Access-Control-Request-Headers", requested)
+			}
+			rec := httptest.NewRecorder()
+			CORS([]string{allowedOrigin})(&sentinel{}).ServeHTTP(rec, r)
+
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("preflight = %d, want 204", rec.Code)
+			}
+			raw := rec.Header().Get("Access-Control-Allow-Headers")
+			got := allowHeaderSet(rec.Header())
+			if len(got) == 0 {
+				t.Fatalf("Access-Control-Allow-Headers = %q, want a token list", raw)
+			}
+			if n := len(strings.Split(raw, ",")); n != len(want) {
+				t.Errorf("Access-Control-Allow-Headers = %q has %d entries, want %d (no duplicates, no extras)", raw, n, len(want))
+			}
+			for _, tok := range want {
+				if !got[tok] {
+					t.Errorf("Access-Control-Allow-Headers = %q, missing %q", raw, tok)
+				}
+			}
+			for _, bad := range []string{"traceparent", "*", "x-evil"} {
+				if got[bad] {
+					t.Errorf("Access-Control-Allow-Headers = %q, must not grant %q", raw, bad)
+				}
+			}
+		})
+	}
+}
+
+// Widening the header grant leaves every other preflight header as it was.
+func TestCORSPreflightOtherGrantHeadersUnchanged(t *testing.T) {
+	rec := httptest.NewRecorder()
+	CORS([]string{allowedOrigin})(&sentinel{}).ServeHTTP(rec, tracePreflight("/api/invoice/v1/invoices", allowedOrigin))
+
+	h := rec.Header()
+	if got := h.Get("Access-Control-Allow-Methods"); got != "GET, POST, PUT, PATCH, DELETE, OPTIONS" {
+		t.Errorf("Access-Control-Allow-Methods = %q", got)
+	}
+	for name, want := range map[string]string{
+		"Access-Control-Allow-Origin":   allowedOrigin,
+		"Access-Control-Max-Age":        "600",
+		"Access-Control-Expose-Headers": "Content-Disposition",
+		"Vary":                          "Origin",
+	} {
+		if got := h.Get(name); got != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
+		}
+	}
+	if got := h.Values("Access-Control-Allow-Credentials"); len(got) != 0 {
+		t.Errorf("Access-Control-Allow-Credentials = %q, want none (bearer auth, no cookies)", got)
 	}
 }

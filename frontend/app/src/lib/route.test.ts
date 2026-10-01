@@ -13,6 +13,7 @@ import {
   parseReviewPath,
   reviewNavIds,
   REVIEW_PATH_MAX_IDS,
+  routeName,
 } from './route'
 import { MAX_RUN_FILES } from './importRun'
 
@@ -128,6 +129,7 @@ describe('frontend/app/package.json', () => {
     expect(Object.keys(pkg.dependencies ?? {}).sort()).toEqual([
       '@invoice-os/api-client',
       '@invoice-os/design-tokens',
+      '@invoice-os/monitoring',
       'react',
       'react-dom',
     ])
@@ -1014,5 +1016,80 @@ describe('ROUTE-07-07 AC-11: the routing doc names both new forms', () => {
     expect(src.includes(WORKFLOWS_ROUTE_ROW), 'docs/routing.md route table has no /workflows/:id row').toBe(true)
     expect(src.includes('settings_returningToMembersWritesTheCanonicalPath'), 'docs/routing.md no longer names the Members writer pin').toBe(true)
     expect(src.includes(R2_NON_UNIFORM_RULE), 'docs/routing.md no longer states R2 as non-uniform -- query params omit, the settings tab never does').toBe(true)
+  })
+})
+
+describe('routeName — the bounded name Sentry groups a page by', () => {
+  it('routeName_namesEveryRouteByPattern', () => {
+    const statics = Object.values(ROUTE_PATHS)
+    expect(statics.length).toBe(13)
+    for (const path of statics) expect(routeName(path), path).toBe(path)
+
+    const U2 = 'b1b2c3d4-e5f6-47a8-89ab-cdef01234568'
+    const rows: Array<[string, string]> = [
+      ['/invoices/3f2c9a10-7b1e-4c55-9d0a-0123456789ab', '/invoices/:id'],
+      ['/extraction/j1', '/extraction/:id'],
+      ['/workflows/p1', '/workflows/:id'],
+      [reviewPath([UUID, U2]), '/imports/:ids/review'],
+      [reviewPath([UUID]), '/imports/:ids/review'],
+      ['/settings/roles', '/settings/:tab'],
+      ['/settings/api', '/settings/:tab'],
+      ['/invoices/', '/invoices'],
+      ['/invoices/abc/', '/invoices/:id'],
+      [`${reviewPath([UUID])}/`, '/imports/:ids/review'],
+      ['/settings/roles/', '/settings/:tab'],
+    ]
+    expect(rows.length).toBeGreaterThan(0)
+    for (const [path, want] of rows) expect(routeName(path), path).toBe(want)
+  })
+
+  it('routeName_unknownPathsNeverEchoTheirSegments', () => {
+    const unmatched = [
+      '/invoices/a/b',
+      '/Invoices',
+      '/invoices/%zz',
+      '/wp-admin/setup.php',
+      '/imports/not-a-uuid/review',
+      '/settings/a/b',
+      '/settings//',
+      '/settings/roles?x=1',
+      '/settings/roles#h',
+      '',
+    ]
+    expect(unmatched.length).toBeGreaterThan(0)
+    for (const path of unmatched) expect(routeName(path), JSON.stringify(path)).toBe('<unmatched>')
+
+    // Positive control for the absence check: the id route does name a pattern for this id.
+    expect(routeName('/invoices/ID-NEEDLE-9')).toBe('/invoices/:id')
+    for (const path of ['/invoices/ID-NEEDLE-9', '/extraction/ID-NEEDLE-9', '/settings/ID-NEEDLE-9', '/ID-NEEDLE-9']) {
+      expect(routeName(path), path).not.toContain('ID-NEEDLE-9')
+    }
+  })
+  it('routeName_resultIsAlwaysFromTheClosedSet', () => {
+    const allowed = new Set([...Object.values(ROUTE_PATHS), '/invoices/:id', '/extraction/:id', '/workflows/:id', '/imports/:ids/review', '/settings/:tab', '<unmatched>'])
+    const probes = [
+      '/constructor/x',
+      '/__proto__/x',
+      '/toString/x',
+      '/hasOwnProperty/x',
+      '/invoices/ID-NEEDLE-9?tin=12345678-0001',
+      '/invoices?q=ID-NEEDLE-9',
+      '/settings/ID-NEEDLE-9',
+      `${reviewPath([UUID])}/extra`,
+      '/invoices/%E0%A4%A',
+      '/ID-NEEDLE-9',
+    ]
+    expect(probes.length).toBeGreaterThan(0)
+    for (const path of probes) {
+      const name = routeName(path)
+      expect(typeof name, path).toBe('string')
+      expect(allowed.has(name), `${path} -> ${String(name)}`).toBe(true)
+    }
+  })
+  it('parseLocation_prototypeKeyedSegmentFallsBackToDashboard', () => {
+    for (const seg of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+      expect(parseRoute(`/${seg}/x`), seg).toBeNull()
+      expect(parseLocation(`/${seg}/x`, '').view, seg).toBe('dashboard')
+    }
   })
 })

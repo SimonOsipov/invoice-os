@@ -673,7 +673,7 @@ describe('postLineItems', () => {
 // -- the runtime dependency fence (AC-1) -------------------------------------------------
 
 describe('frontend/app/package.json', () => {
-  it('still lists exactly four runtime dependencies', () => {
+  it('still lists exactly five runtime dependencies', () => {
     // No test under frontend/app/src read package.json before this one, so a fifth runtime
     // dependency went green through tsc, vitest, the Go suite and the deploy gate.
     const pkg = JSON.parse(readFileSync(PACKAGE_JSON, 'utf8')) as {
@@ -685,6 +685,7 @@ describe('frontend/app/package.json', () => {
     expect(Object.keys(pkg.dependencies ?? {}).sort()).toEqual([
       '@invoice-os/api-client',
       '@invoice-os/design-tokens',
+      '@invoice-os/monitoring',
       'react',
       'react-dom',
     ])

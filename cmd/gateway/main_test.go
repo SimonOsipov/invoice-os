@@ -1105,3 +1105,97 @@ func TestRegistrationHandlers_NotConfigured503(t *testing.T) {
 		t.Errorf("GoTrue saw %v, want no calls", got)
 	}
 }
+
+// allowHeaderSet parses Access-Control-Allow-Headers into a lowercase token set.
+func allowHeaderSet(h http.Header) map[string]bool {
+	set := map[string]bool{}
+	for _, tok := range strings.Split(h.Get("Access-Control-Allow-Headers"), ",") {
+		if tok = strings.ToLower(strings.TrimSpace(tok)); tok != "" {
+			set[tok] = true
+		}
+	}
+	return set
+}
+
+// The /api/ mount composes CORS outside the verifier as main does, so a bearer-less
+// preflight carrying the trace headers is answered 204, not 401.
+func TestApiMountPreflightGrantsTraceHeaders(t *testing.T) {
+	const origin = "https://app.ascomply.test"
+	issuer, err := auth.NewMockIssuer(mountTestIssuer)
+	if err != nil {
+		t.Fatalf("mock issuer: %v", err)
+	}
+	jwks := httptest.NewServer(issuer.JWKSHandler())
+	t.Cleanup(jwks.Close)
+	verifier, err := auth.NewVerifier(auth.Config{Issuer: mountTestIssuer, JWKSURL: jwks.URL})
+	if err != nil {
+		t.Fatalf("verifier: %v", err)
+	}
+	setUpstreamEnv(t, "http://127.0.0.1:1")
+	routed, probed, err := loadUpstreams()
+	if err != nil {
+		t.Fatalf("loadUpstreams: %v", err)
+	}
+	apiHandler, _ := gatewayHandlers(verifier, nilURLSessions(), routed, probed, nil, slog.Default())
+	mux := http.NewServeMux()
+	mux.Handle("/api/", gateway.CORS([]string{origin})(apiHandler))
+
+	r := httptest.NewRequest(http.MethodOptions, "/api/tenancy/v1/me", nil)
+	r.Header.Set("Origin", origin)
+	r.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	r.Header.Set("Access-Control-Request-Headers", "authorization, content-type, sentry-trace, baggage")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("bearer-less preflight = %d, want 204 (body %s)", rec.Code, rec.Body.String())
+	}
+	got := allowHeaderSet(rec.Header())
+	want := map[string]bool{"authorization": true, "content-type": true, "sentry-trace": true, "baggage": true}
+	if len(got) != len(want) {
+		t.Errorf("granted token set = %v, want exactly %v", got, want)
+	}
+	for tok := range want {
+		if !got[tok] {
+			t.Errorf("granted token set = %v, missing %q", got, tok)
+		}
+	}
+	if got["traceparent"] {
+		t.Errorf("granted token set = %v, must not grant traceparent", got)
+	}
+
+	// Control: the verifier is on the path, so a bearer-less GET is 401.
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/tenancy/v1/me", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("control: GET /api/tenancy/v1/me with no bearer = %d, want 401", rec.Code)
+	}
+
+	// Trace headers buy no bypass: the traced GET is still 401, and the 401 carries the grant.
+	r = httptest.NewRequest(http.MethodGet, "/api/tenancy/v1/me", nil)
+	r.Header.Set("Origin", origin)
+	r.Header.Set("sentry-trace", "0123456789abcdef0123456789abcdef-0123456789abcdef-1")
+	r.Header.Set("baggage", "sentry-environment=production")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, r)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("traced GET with no bearer = %d, want 401", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != origin {
+		t.Errorf("traced 401 Access-Control-Allow-Origin = %q, want %q", got, origin)
+	}
+
+	// A disallowed origin's bearer-less preflight is answered 204 with no grant.
+	r = httptest.NewRequest(http.MethodOptions, "/api/tenancy/v1/me", nil)
+	r.Header.Set("Origin", "https://evil.example")
+	r.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	r.Header.Set("Access-Control-Request-Headers", "authorization, sentry-trace, baggage, traceparent")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, r)
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("disallowed-origin preflight = %d, want 204", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "" {
+		t.Errorf("disallowed-origin preflight Access-Control-Allow-Headers = %q, want none", got)
+	}
+}

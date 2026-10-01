@@ -549,7 +549,7 @@ describe('getEvidenceBundlePreview (passthrough and abort)', () => {
     expect((authedFetch.mock.calls[0][1] as { signal?: AbortSignal }).signal).toBe(controller.signal)
 
     // Without one the option is present but undefined; apiFetch reads opts?.signal either
-    // way. An abort HERE returns as ApiError('network', ...) (client.ts:61), unlike the
+    // way. An abort HERE returns as ApiError('network', ...), unlike the
     // download path (EB-01-10) -- there is no single error-shape predicate across the two.
     authedFetch.mockClear()
     await getEvidenceBundlePreview(authedFetch, BASE, REQ)
@@ -596,7 +596,7 @@ describe('fetchEvidenceBundle (hostile input and failure modes)', () => {
       ['no error key', { detail: 'nope' }, 'Bad Gateway'],
       ['json null', null, 'Bad Gateway'],
       ['json array', [], 'Bad Gateway'],
-      // String() coercion, inherited from apiFetch (client.ts:70). Subtask 06 renders
+      // String() coercion, inherited from apiFetch. Subtask 06 renders
       // message verbatim, so a server sending {"error":null} shows the word "null".
       ['non-string error', { error: 42 }, '42'],
       ['null error', { error: null }, 'null'],
@@ -643,7 +643,7 @@ describe('fetchEvidenceBundle (hostile input and failure modes)', () => {
       (e: unknown) => e,
     )
 
-    // apiFetch turns an unreadable body into ApiError('malformed', ...) (client.ts:79-83);
+    // apiFetch turns an unreadable body into ApiError('malformed', ...);
     // this path has no equivalent.
     expect(err).toBe(boom)
     expect(err).not.toBeInstanceOf(ApiError)
@@ -659,8 +659,7 @@ describe('fetchEvidenceBundle (hostile input and failure modes)', () => {
       (e: unknown) => e,
     )
 
-    // There is no try/catch at all in fetchEvidenceBundle: apiFetch would have produced
-    // ApiError('network', ...) here (client.ts:61), this path propagates the raw TypeError.
+    // apiFetch would have produced ApiError('network', ...) here; this path rethrows the raw TypeError.
     expect(err).toBe(offline)
     expect(err).not.toBeInstanceOf(ApiError)
     expect((err as Error).name).toBe('TypeError')

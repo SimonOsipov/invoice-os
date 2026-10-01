@@ -31,13 +31,13 @@ export interface Route {
 
 // Keyed by the drill-down's own first segment, which is not always the target view's
 // bare-path segment: `/invoices/<id>` -> `detail`, not the `invoices` list view.
-const DRILLDOWN_SEGMENT: Record<string, View> = {
-  invoices: 'detail',
-  extraction: 'extraction',
+const DRILLDOWN_SEGMENT = new Map<string, View>([
+  ['invoices', 'detail'],
+  ['extraction', 'extraction'],
   // Shares its View with the list, so segment count is the discriminator:
   // parse_theListAndTheBuilderAreTwoAddresses.
-  workflows: 'workflows',
-}
+  ['workflows', 'workflows'],
+])
 
 export function routePath(view: View, id?: string | null): string {
   if (id != null && view === 'detail') return `/invoices/${encodeURIComponent(id)}`
@@ -56,7 +56,7 @@ export function parseRoute(pathname: string): Route | null {
 
   const segments = normalized.split('/').filter((s) => s.length > 0)
   if (segments.length !== 2) return null
-  const view = DRILLDOWN_SEGMENT[segments[0]]
+  const view = DRILLDOWN_SEGMENT.get(segments[0])
   if (view === undefined) return null
   try {
     return { view, id: decodeURIComponent(segments[1]) }
@@ -202,4 +202,21 @@ export function parseLocation(pathname: string, search: string): ParsedLocation 
   const auditInvoice = rawInvoice !== null && INVOICE_ID.test(rawInvoice) ? rawInvoice : null
 
   return { view, invoiceId, jobId, policyId, settingsTab, q, auditInvoice, reviewBatchIds }
+}
+
+// Bounded name for Sentry grouping: a pattern, never a segment of the input.
+const ID_PATTERN: Partial<Record<View, string>> = {
+  detail: '/invoices/:id',
+  extraction: '/extraction/:id',
+  workflows: '/workflows/:id',
+}
+
+export function routeName(pathname: string): string {
+  const route = parseRoute(pathname)
+  if (route !== null) return (route.id !== null && ID_PATTERN[route.view]) || ROUTE_PATHS[route.view]
+  const normalized = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname
+  if (parseReviewPath(normalized) !== null) return '/imports/:ids/review'
+  const seg = normalized.startsWith('/settings/') ? normalized.slice('/settings/'.length) : ''
+  if (seg.length > 0 && !/[/?#]/.test(seg)) return '/settings/:tab'
+  return '<unmatched>'
 }

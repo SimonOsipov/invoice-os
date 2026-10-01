@@ -62,7 +62,7 @@ jobs:
               - 'go.sum'
               - '.github/workflows/ci.yml'
             # Gates the "Frontend" job, which is the pnpm workspace job — not just the
-            # SPAs. It runs `pnpm -r typecheck` (all 5 packages, e2e included) and the
+            # SPAs. It runs `pnpm -r typecheck` (e2e included) and the
             # e2e seam unit tests, so `e2e/**` belongs here even though the name says
             # frontend.
             #
@@ -990,6 +990,8 @@ jobs:
         run: pnpm -r build
       - name: Unit tests (api-client)
         run: pnpm --filter @invoice-os/api-client test
+      - name: Unit tests (monitoring)
+        run: pnpm --filter @invoice-os/monitoring test
       - name: Unit tests (app)
         run: pnpm --filter @invoice-os/app test
       - name: Unit tests (ops-console)

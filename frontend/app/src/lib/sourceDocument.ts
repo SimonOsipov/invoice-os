@@ -1,7 +1,7 @@
 // Source-document previewer data + pure logic layer (DOC-02-04). Every decision the
 // modal makes lives here as a pure exported function, so it has an oracle without a DOM.
 
-import { ApiError } from '@invoice-os/api-client'
+import { ApiError, readBody, reportApiFailure } from '@invoice-os/api-client'
 import { isPromiseLike } from './authedFetch'
 import type { AuthedFetch } from './portfolio'
 
@@ -100,12 +100,21 @@ export async function fetchDocumentBytes(
   // A SessionEndedError from the getter rejects here, before any request.
   const pending = getToken()
   const token = isPromiseLike(pending) ? await pending : pending
-  const res = await fetch(`${base}/api/invoice/v1/documents/${encodeURIComponent(documentId)}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  if (!res.ok) throw new ApiError('http', res.statusText, res.status)
+  const reqUrl = `${base}/api/invoice/v1/documents/${encodeURIComponent(documentId)}`
+  let res: Response
+  try {
+    res = await fetch(reqUrl, { headers: { Authorization: `Bearer ${token}` } })
+  } catch (e) {
+    reportApiFailure(e, { method: 'GET', url: reqUrl })
+    throw e
+  }
+  if (!res.ok) {
+    const error = new ApiError('http', res.statusText, res.status)
+    reportApiFailure(error, { method: 'GET', url: reqUrl })
+    throw error
+  }
 
-  const blob = new Blob([await res.arrayBuffer()], { type: mimeFor(kind, filename) })
+  const blob = new Blob([await readBody(() => res.arrayBuffer(), { method: 'GET', url: reqUrl })], { type: mimeFor(kind, filename) })
   const url = URL.createObjectURL(blob)
   let released = false
   return {

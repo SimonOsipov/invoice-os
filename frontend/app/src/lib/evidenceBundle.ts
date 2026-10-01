@@ -1,7 +1,7 @@
 // Hand-maintained mirror of internal/archive/preview.go's Preview and manifest.go's
 // manifestEntity / manifestPeriod / manifestCounts. EB-01-1's tag scan catches drift.
 
-import { ApiError } from '@invoice-os/api-client'
+import { ApiError, readBody, reportApiFailure } from '@invoice-os/api-client'
 
 import type { AuditRange } from './auditFilters'
 import { isPromiseLike } from './authedFetch'
@@ -96,8 +96,8 @@ function dispositionFilename(header: string | null, fallback: string): string {
 }
 
 // Bare fetch, not authedFetch: the body is a zip and apiFetch always res.json()s. blob(),
-// not arrayBuffer(). Nothing wraps the fetch call, so an abort propagates untranslated to
-// the caller that owns the controller. EB-01-6, EB-01-10.
+// not arrayBuffer(). The fetch is wrapped only to report; the same error is rethrown, so an
+// abort reaches the caller that owns the controller untranslated. EB-01-6, EB-01-10.
 export async function fetchEvidenceBundle(
   getToken: () => string | null | Promise<string | null>,
   base: string,
@@ -108,13 +108,17 @@ export async function fetchEvidenceBundle(
   // A SessionEndedError from the getter rejects here, before any request.
   const pending = getToken()
   const token = isPromiseLike(pending) ? await pending : pending
-  const res = await fetch(evidenceBundleUrl(base, r), {
-    headers: { Authorization: `Bearer ${token}` },
-    signal,
-  })
+  const url = evidenceBundleUrl(base, r)
+  let res: Response
+  try {
+    res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal })
+  } catch (e) {
+    reportApiFailure(e, { method: 'GET', url, signal })
+    throw e
+  }
 
   if (!res.ok) {
-    // apiFetch's !res.ok block (client.ts:65-77), not sourceDocument.ts:96 -- that one never
+    // apiFetch's !res.ok block, not fetchDocumentBytes -- that one never
     // reads the body and loses the sentence EB-01-8 and EB-01-12 require.
     let body: unknown
     let msg = res.statusText
@@ -126,11 +130,13 @@ export async function fetchEvidenceBundle(
     } catch {
       // best-effort -- no JSON body to read; fall back to statusText.
     }
-    throw new ApiError('http', msg, res.status, body)
+    const error = new ApiError('http', msg, res.status, body)
+    reportApiFailure(error, { method: 'GET', url, signal })
+    throw error
   }
 
   return {
-    blob: await res.blob(),
+    blob: await readBody(() => res.blob(), { method: 'GET', url, signal }),
     filename: dispositionFilename(res.headers.get('Content-Disposition'), fallbackFilename),
   }
 }

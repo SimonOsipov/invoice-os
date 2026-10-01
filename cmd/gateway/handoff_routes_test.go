@@ -145,6 +145,40 @@ func handoffAccessToken(sub string) string {
 	return enc([]byte(`{"alg":"HS256","typ":"JWT"}`)) + "." + enc([]byte(`{"sub":"`+sub+`"}`)) + "." + enc([]byte("sig"))
 }
 
+func TestHandoffPreflightGrantsTraceHeaders(t *testing.T) {
+	authURL, _ := url.Parse("http://127.0.0.1:1")
+	mux := handoffMux(t, authURL, true)
+
+	paths := handoffPaths()
+	if len(paths) == 0 {
+		t.Fatal("handoffPaths is empty; the loop below would be vacuous")
+	}
+	for _, path := range paths {
+		req := httptest.NewRequest(http.MethodOptions, path, nil)
+		req.Header.Set("Origin", handoffAllowedOrigin)
+		req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+		req.Header.Set("Access-Control-Request-Headers", "content-type, sentry-trace, baggage, traceparent")
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNoContent {
+			t.Errorf("OPTIONS %s = %d, want 204", path, rec.Code)
+		}
+		got := allowHeaderSet(rec.Header())
+		if !got["content-type"] {
+			t.Errorf("control: OPTIONS %s granted %v, want content-type", path, got)
+		}
+		for _, tok := range []string{"sentry-trace", "baggage"} {
+			if !got[tok] {
+				t.Errorf("OPTIONS %s granted %v, missing %q", path, got, tok)
+			}
+		}
+		if got["traceparent"] {
+			t.Errorf("OPTIONS %s granted %v, must not grant traceparent", path, got)
+		}
+	}
+}
+
 func TestHandoffPreflightAnswersThroughCORS(t *testing.T) {
 	tokB := handoffAccessToken("user-b")
 	gotrue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

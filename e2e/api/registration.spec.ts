@@ -78,10 +78,10 @@ test.describe('workspace provisioning (API E2E, over the deployed gateway)', () 
     const auth = { Authorization: `Bearer ${tenantless}` }
 
     let tenantId = ''
-    await test.step('POST /workspaces -> 201 in the /me shape', async () => {
+    await test.step('POST /workspaces -> 201', async () => {
       const res = await rawFetch(WORKSPACES, { method: 'POST', headers: auth, body: workspace })
       expect(res.status, JSON.stringify(res.body)).toBe(201)
-      const body = res.body as Me
+      const body = res.body as { tenant: Me['tenant']; user: Pick<Me['user'], 'id' | 'role'> }
       expect(typeof body.tenant.id).toBe('string')
       expect(body.tenant.id).not.toBe('')
       expect(body.tenant.name).toBe(workspace.workspace_name)
@@ -110,7 +110,7 @@ test.describe('workspace provisioning (API E2E, over the deployed gateway)', () 
       expect(res.status, JSON.stringify(res.body)).toBe(200)
       expect(res.body).toEqual({
         tenant: { id: tenantId, name: workspace.workspace_name, kind: 'firm' },
-        user: { id: subject, role: 'admin' },
+        user: { id: subject, role: 'admin', display_name: workspace.display_name, email: null },
       })
     })
 

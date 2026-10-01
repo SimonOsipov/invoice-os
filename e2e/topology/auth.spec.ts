@@ -15,10 +15,12 @@ import {
   rawFetch,
   signInForCode,
   PERSONAS as API_PERSONAS,
+  type Me,
   type RealAccount,
 } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
+import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS } from './layout'
 
 // The public marketing landing page — sign-out's redirect target. Imported from the
 // BASE e2e/targets.ts, not this directory's ./targets: topology/targets.ts re-exports
@@ -1073,6 +1075,71 @@ test('deployed app: a real firm workspace has the Clients portfolio and no Compa
   await nav.getByRole('button', { name: 'Settings' }).click()
   await expect(page.getByRole('button', { name: 'Members', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Company', exact: true })).toHaveCount(0)
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('deployed app: a real sign-in names the account holder on the identity card', async ({ page, context }) => {
+  test.setTimeout(180_000)
+  const account = await provisionRealAccount('card-name', undefined, 'Ada Nwosu')
+  const errors = collectErrors(page)
+
+  await signInAtFrontDoor(page, account, '/')
+  const name = page.getByTestId('persona-name')
+  // Read once, no retry: the card already names the person when the badge appears.
+  expect(await name.textContent(), 'the card name when the verified badge attached').toBe('Ada Nwosu')
+  await expect(page.getByTestId('persona-initials')).toHaveText('AN')
+  await expect(page.locator('aside.pf-sidebar')).not.toContainText('Chinedu Okafor')
+
+  const stored = JSON.parse((await storedSession(context)) ?? 'null') as { me: Me | null } | null
+  expect(stored?.me?.user.display_name, 'the stored me.user.display_name').toBe('Ada Nwosu')
+  expect(stored?.me?.user.email, 'the stored me.user.email').toBe(account.email)
+
+  // Control for the 197-character journey: a short name is not clipped.
+  const short = await name.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+  expect(short.scrollWidth, 'the short name is clipped').toBeLessThanOrEqual(short.clientWidth)
+
+  await page.reload()
+  await expect(page.locator(VERIFIED)).toBeAttached({ timeout: 30_000 })
+  expect(page.url().startsWith(LANDING_URL), 'the reload went back to landing').toBe(false)
+  await expect(name).toHaveText('Ada Nwosu')
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+// internal/tenancy/tenancy.go maxNameChars is 200; 6 x 32 + 5 spaces = 197.
+const LONG_NAME = 'Oluwaseyifunmi Adebanjo-Ogunleye '.repeat(6).trim()
+
+test('deployed app: a 197-character name stays inside the identity card at every wide width', async ({ page }, testInfo) => {
+  test.setTimeout(180_000)
+  expect(LONG_NAME.length).toBe(197)
+  const account = await provisionRealAccount('card-long', undefined, LONG_NAME)
+  const errors = collectErrors(page)
+
+  await signInAtFrontDoor(page, account, '/')
+  const aside = page.locator('aside.pf-sidebar')
+  const main = page.locator('main.pf-main')
+  const name = page.getByTestId('persona-name')
+  const trigger = page.getByTestId('persona-trigger')
+  const signOut = aside.getByRole('button', { name: 'Sign out' })
+
+  const readings: { width: number; scrollWidth: number; clientWidth: number }[] = []
+  for (const width of WIDE_WIDTHS) {
+    await page.setViewportSize({ width, height: 1080 })
+    await settleAnimations(aside, trigger, signOut)
+    const [asideBox, mainBox, triggerBox, signOutBox] = await Promise.all([aside.boundingBox(), main.boundingBox(), trigger.boundingBox(), signOut.boundingBox()])
+    if (!asideBox || !mainBox || !triggerBox || !signOutBox) throw new Error(`aside, main, trigger or Sign out rendered no box at ${width}px`)
+
+    expect(await name.textContent(), `the card name at ${width}px`).toBe(LONG_NAME)
+    const reading = await name.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+    expect(reading.scrollWidth, `the name is not clipped by its own box at ${width}px (${JSON.stringify(reading)})`).toBeGreaterThan(reading.clientWidth)
+    expect(enclosesRect(asideBox, triggerBox, 1), `the trigger leaves the aside at ${width}px (${JSON.stringify({ asideBox, triggerBox })})`).toBe(true)
+    expect(enclosesRect(asideBox, signOutBox, 1), `Sign out leaves the aside at ${width}px (${JSON.stringify({ asideBox, signOutBox })})`).toBe(true)
+    expect(rectsOverlap(signOutBox, triggerBox), `Sign out overlaps the trigger at ${width}px`).toBe(false)
+    expect(rectsOverlap(asideBox, mainBox), `the aside overlaps main at ${width}px`).toBe(false)
+    await assertPageDoesNotScrollSideways(page, `long name at ${width}px`)
+    readings.push({ width, ...reading })
+  }
+  expect(readings.length, 'widths measured').toBe(WIDE_WIDTHS.length)
+  await testInfo.attach('name-readings', { body: JSON.stringify(readings, null, 2), contentType: 'application/json' })
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })
 

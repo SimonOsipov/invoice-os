@@ -150,15 +150,15 @@ test.describe('read-path suspension (API E2E, over the deployed gateway)', () =>
   test('a suspended member can still read /v1/me', async () => {
     // A deliberate exemption (D-5), as is POST /v1/workspaces: /v1/me is the SPA's only boot round trip, and
     // gating it would turn every suspended session into an unexplained sign-in failure with
-    // nothing left able to say why. Its shape does not change, so the key sets are asserted
-    // exactly — the same idiom contract-tenancy.spec.ts uses.
+    // nothing left able to say why. The key sets are asserted exactly — the same idiom
+    // contract-tenancy.spec.ts uses.
     const res = await rawFetch('/api/tenancy/v1/me', { headers: bearer(suspendedToken) })
     expect(res.status, '/v1/me must answer a suspended member').toBe(200)
 
     const body = res.body as { tenant: Record<string, unknown>; user: Record<string, unknown> }
     expect(Object.keys(body).sort(), '/v1/me top-level keys').toEqual(['tenant', 'user'])
     expect(Object.keys(body.tenant).sort(), '/v1/me tenant keys').toEqual(['id', 'kind', 'name'])
-    expect(Object.keys(body.user).sort(), '/v1/me user keys').toEqual(['id', 'role'])
+    expect(Object.keys(body.user).sort(), '/v1/me user keys').toEqual(['display_name', 'email', 'id', 'role'])
     expect(body.tenant.id, 'the suspended member still resolves their own tenant').toBe(PERSONAS.A.tenantId)
     expect(body.user.id, 'the subject the token carries').toBe(SUSPENDED_SUBJECT)
     expect(body.user.role, 'the seeded access role, unchanged by suspension').toBe('reviewer')

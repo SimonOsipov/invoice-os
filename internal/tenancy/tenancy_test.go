@@ -32,11 +32,36 @@ type meBody struct {
 		Kind string `json:"kind"`
 	} `json:"tenant"`
 	User struct {
-		ID   string `json:"id"`
-		Role string `json:"role"`
+		ID          string  `json:"id"`
+		Role        string  `json:"role"`
+		DisplayName *string `json:"display_name"`
+		Email       *string `json:"email"`
 	} `json:"user"`
 	Error string `json:"error"`
 }
+
+// meUserRaw returns the raw user object so a test can tell a null value from a missing key.
+func meUserRaw(t *testing.T, load MeLoader, id auth.Identity) map[string]json.RawMessage {
+	t.Helper()
+	r := httptest.NewRequest("GET", "/v1/me", nil)
+	r = r.WithContext(auth.WithIdentity(r.Context(), id))
+	rec := httptest.NewRecorder()
+	MeHandler(load, nil).ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+	}
+	var user map[string]json.RawMessage
+	if err := json.Unmarshal(body["user"], &user); err != nil {
+		t.Fatalf("decode user %q: %v", body["user"], err)
+	}
+	return user
+}
+
+func strp(s string) *string { return &s }
 
 func doMe(t *testing.T, load MeLoader, id *auth.Identity) (*httptest.ResponseRecorder, meBody) {
 	t.Helper()
@@ -60,8 +85,9 @@ func doMe(t *testing.T, load MeLoader, id *auth.Identity) (*httptest.ResponseRec
 // assertion only passes once Stage 3 wires the loader's role into the response.
 func TestMe_OKShape(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
-	load := func(context.Context) (Tenant, string, error) {
-		return Tenant{ID: id.TenantID, Name: "Okafor & Partners", Kind: "firm"}, "admin", nil
+	load := func(context.Context) (Tenant, MeUser, error) {
+		return Tenant{ID: id.TenantID, Name: "Okafor & Partners", Kind: "firm"},
+			MeUser{Role: "admin", DisplayName: strp("Ada Obi"), Email: strp("ada@acme.ng")}, nil
 	}
 	rec, body := doMe(t, load, &id)
 
@@ -80,13 +106,60 @@ func TestMe_OKShape(t *testing.T) {
 	if body.User.Role != "admin" {
 		t.Errorf("user.role = %q, want %q (the domain role from memberships, not the JWT role)", body.User.Role, "admin")
 	}
+	if body.User.DisplayName == nil || *body.User.DisplayName != "Ada Obi" {
+		t.Errorf("user.display_name = %v, want %q", body.User.DisplayName, "Ada Obi")
+	}
+	if body.User.Email == nil || *body.User.Email != "ada@acme.ng" {
+		t.Errorf("user.email = %v, want %q", body.User.Email, "ada@acme.ng")
+	}
+}
+
+// TestMe_EmailOnlyIdentity: a NULL display name is a JSON null beside a real email, never omitted.
+func TestMe_EmailOnlyIdentity(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	load := func(context.Context) (Tenant, MeUser, error) {
+		return Tenant{ID: id.TenantID, Name: "Okafor & Partners", Kind: "firm"},
+			MeUser{Role: "admin", Email: strp("ada@acme.ng")}, nil
+	}
+	user := meUserRaw(t, load, id)
+	if string(user["email"]) != `"ada@acme.ng"` {
+		t.Errorf("user.email = %s, want %q", user["email"], `"ada@acme.ng"`)
+	}
+	if raw, ok := user["display_name"]; !ok || string(raw) != "null" {
+		t.Errorf("user.display_name = %s (present=%v), want a present JSON null", raw, ok)
+	}
+}
+
+// TestMe_EmptyAndEscapedIdentity: an empty string is a present "" (not null) and
+// reserved characters round-trip unchanged.
+func TestMe_EmptyAndEscapedIdentity(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	for _, tc := range []struct{ name, display, email, wantDisplay, wantEmail string }{
+		{"empty", "", "", `""`, `""`},
+		{"reserved characters", `Ada "Q" <O'Brien> & Sons`, "ada+tag@acme.ng", `"Ada \"Q\" \u003cO'Brien\u003e \u0026 Sons"`, `"ada+tag@acme.ng"`},
+		{"non-ASCII", "Adaeze Ọbị", "ada@acme.ng", `"Adaeze Ọbị"`, `"ada@acme.ng"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			load := func(context.Context) (Tenant, MeUser, error) {
+				return Tenant{ID: id.TenantID, Name: "Okafor & Partners", Kind: "firm"},
+					MeUser{Role: "admin", DisplayName: &tc.display, Email: &tc.email}, nil
+			}
+			user := meUserRaw(t, load, id)
+			if string(user["display_name"]) != tc.wantDisplay {
+				t.Errorf("user.display_name = %s, want %s", user["display_name"], tc.wantDisplay)
+			}
+			if string(user["email"]) != tc.wantEmail {
+				t.Errorf("user.email = %s, want %s", user["email"], tc.wantEmail)
+			}
+		})
+	}
 }
 
 // TestMe_NoMembership403 (AC #3, A1): ErrNoMembership must map to 403 with a
 // non-empty error body — distinct from 401 (no identity) and 404 (no tenant).
 func TestMe_NoMembership403(t *testing.T) {
 	id := auth.Identity{Subject: "u", Role: "authenticated", TenantID: uuid.NewString()}
-	load := func(context.Context) (Tenant, string, error) { return Tenant{}, "", ErrNoMembership }
+	load := func(context.Context) (Tenant, MeUser, error) { return Tenant{}, MeUser{}, ErrNoMembership }
 	rec, body := doMe(t, load, &id)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", rec.Code)
@@ -100,7 +173,7 @@ func TestMe_NoMembership403(t *testing.T) {
 // mapping must be preserved unchanged by the M3-02-01 loader-signature widening.
 func TestMe_TenantNotFound404(t *testing.T) {
 	id := auth.Identity{Subject: "u", Role: "authenticated", TenantID: uuid.NewString()}
-	load := func(context.Context) (Tenant, string, error) { return Tenant{}, "", ErrTenantNotFound }
+	load := func(context.Context) (Tenant, MeUser, error) { return Tenant{}, MeUser{}, ErrTenantNotFound }
 	rec, body := doMe(t, load, &id)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", rec.Code)
@@ -114,7 +187,7 @@ func TestMe_TenantNotFound404(t *testing.T) {
 // mapping must be preserved unchanged.
 func TestMe_NoTenantCtx401(t *testing.T) {
 	id := auth.Identity{Subject: "u", Role: "authenticated", TenantID: uuid.NewString()}
-	load := func(context.Context) (Tenant, string, error) { return Tenant{}, "", db.ErrNoTenant }
+	load := func(context.Context) (Tenant, MeUser, error) { return Tenant{}, MeUser{}, db.ErrNoTenant }
 	rec, body := doMe(t, load, &id)
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rec.Code)
@@ -127,9 +200,9 @@ func TestMe_NoTenantCtx401(t *testing.T) {
 // TestMe_NoIdentity401 (AC #1): no identity in the request context must 401
 // before the loader ever runs — asserted by failing the test if load is called.
 func TestMe_NoIdentity401(t *testing.T) {
-	load := func(context.Context) (Tenant, string, error) {
+	load := func(context.Context) (Tenant, MeUser, error) {
 		t.Fatal("loader must not run without an identity")
-		return Tenant{}, "", nil
+		return Tenant{}, MeUser{}, nil
 	}
 	rec, body := doMe(t, load, nil)
 	if rec.Code != http.StatusUnauthorized {
@@ -144,7 +217,7 @@ func TestMe_NoIdentity401(t *testing.T) {
 // leak internals into the body, but still include a non-empty error message.
 func TestMe_InternalError500(t *testing.T) {
 	id := auth.Identity{Subject: "u", Role: "authenticated", TenantID: uuid.NewString()}
-	load := func(context.Context) (Tenant, string, error) { return Tenant{}, "", errors.New("boom") }
+	load := func(context.Context) (Tenant, MeUser, error) { return Tenant{}, MeUser{}, errors.New("boom") }
 	rec, body := doMe(t, load, &id)
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", rec.Code)
@@ -154,33 +227,15 @@ func TestMe_InternalError500(t *testing.T) {
 	}
 }
 
-// TestMe_UserKeySetUnchanged (AC-4, regression guard -- expected to pass
-// today and must stay green): GET /v1/me's user object key set is exactly
-// {id, role}, pinning that /v1/me is byte-unchanged by the memberships
-// widening.
+// The user key set is pinned on purpose: widening it must edit this test.
 func TestMe_UserKeySetUnchanged(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
-	load := func(context.Context) (Tenant, string, error) {
-		return Tenant{ID: id.TenantID, Name: "Okafor & Partners", Kind: "firm"}, "admin", nil
+	load := func(context.Context) (Tenant, MeUser, error) {
+		return Tenant{ID: id.TenantID, Name: "Okafor & Partners", Kind: "firm"}, MeUser{Role: "admin"}, nil
 	}
-	r := httptest.NewRequest("GET", "/v1/me", nil)
-	r = r.WithContext(auth.WithIdentity(r.Context(), id))
-	rec := httptest.NewRecorder()
-	MeHandler(load, nil).ServeHTTP(rec, r)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
+	user := meUserRaw(t, load, id)
 
-	var body map[string]json.RawMessage
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
-	}
-	var user map[string]json.RawMessage
-	if err := json.Unmarshal(body["user"], &user); err != nil {
-		t.Fatalf("decode user %q: %v", body["user"], err)
-	}
-
-	want := []string{"id", "role"}
+	want := []string{"display_name", "email", "id", "role"}
 	got := make([]string, 0, len(user))
 	for k := range user {
 		got = append(got, k)
@@ -188,6 +243,11 @@ func TestMe_UserKeySetUnchanged(t *testing.T) {
 	slices.Sort(got)
 	if !slices.Equal(got, want) {
 		t.Errorf("user keys = %v, want %v", got, want)
+	}
+	for _, k := range []string{"display_name", "email"} {
+		if raw, ok := user[k]; !ok || string(raw) != "null" {
+			t.Errorf("user.%s = %s (present=%v), want a present JSON null for a nil identity", k, raw, ok)
+		}
 	}
 }
 
@@ -246,22 +306,25 @@ func TestStoreMe_ResolvesTenantAndRole(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
-	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, 'admin')`, tenantID, userID); err != nil {
-		t.Fatalf("seed membership: %v", err)
-	}
+	seedIdentityMembership(t, super, tenantID, userID, "admin", "active", strp("Tenancy Me Test"), strp("me@tenancy.test"))
 
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID})
-	tenant, role, err := store.Me(c)
+	tenant, me, err := store.Me(c)
 	if err != nil {
 		t.Fatalf("Me(%s): %v", tenantID, err)
 	}
 	if tenant.ID != tenantID || tenant.Name != tenantName || tenant.Kind != "firm" {
 		t.Errorf("tenant = %+v, want id=%s name=%s kind=firm", tenant, tenantID, tenantName)
 	}
-	if role != "admin" {
-		t.Errorf("role = %q, want %q", role, "admin")
+	if me.Role != "admin" {
+		t.Errorf("role = %q, want %q", me.Role, "admin")
+	}
+	if me.DisplayName == nil || *me.DisplayName != "Tenancy Me Test" {
+		t.Errorf("DisplayName = %v, want %q", me.DisplayName, "Tenancy Me Test")
+	}
+	if me.Email == nil || *me.Email != "me@tenancy.test" {
+		t.Errorf("Email = %v, want %q", me.Email, "me@tenancy.test")
 	}
 }
 
@@ -301,7 +364,8 @@ func TestStoreMe_ExemptFromTheSeamUnderTheStrictRule(t *testing.T) {
 
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
-	tenant, role, err := store.Me(c)
+	tenant, me, err := store.Me(c)
+	role := me.Role
 	if !errors.Is(err, ErrNoMembership) {
 		t.Fatalf("Me(no row) err = %v, want ErrNoMembership", err)
 	}
@@ -357,11 +421,11 @@ func TestStoreMe_AnswersForASuspendedMember(t *testing.T) {
 	const tenantName = "tenancy me-test suspended firm"
 	tenantID := seedTenant(t, super, tenantName)
 	userID := uuid.NewString()
-	seedMembership(t, super, tenantID, userID, "admin", "suspended")
+	seedIdentityMembership(t, super, tenantID, userID, "admin", "suspended", strp("Suspended Sam"), strp("sam@tenancy.test"))
 
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID})
-	tenant, role, err := store.Me(c)
+	tenant, me, err := store.Me(c)
 	if err != nil {
 		t.Fatalf("Me: a suspended member must still get their boot payload, got %v", err)
 	}
@@ -374,8 +438,11 @@ func TestStoreMe_AnswersForASuspendedMember(t *testing.T) {
 	if tenant.Kind != "firm" {
 		t.Errorf("tenant.Kind = %q, want %q", tenant.Kind, "firm")
 	}
-	if role != "admin" {
-		t.Errorf("role = %q, want %q", role, "admin")
+	if me.Role != "admin" {
+		t.Errorf("role = %q, want %q", me.Role, "admin")
+	}
+	if me.DisplayName == nil || *me.DisplayName != "Suspended Sam" {
+		t.Errorf("DisplayName = %v, want the suspended member's own %q", me.DisplayName, "Suspended Sam")
 	}
 }
 
@@ -389,7 +456,7 @@ func TestMe_SuspendedMemberStillGets200(t *testing.T) {
 	const tenantName = "tenancy me-handler suspended firm"
 	tenantID := seedTenant(t, super, tenantName)
 	userID := uuid.NewString()
-	seedMembership(t, super, tenantID, userID, "admin", "suspended")
+	seedIdentityMembership(t, super, tenantID, userID, "admin", "suspended", strp("Suspended Sam"), strp("sam@tenancy.test"))
 
 	id := auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID}
 	rec, body := doMe(t, NewStore(app).Me, &id)
@@ -414,6 +481,93 @@ func TestMe_SuspendedMemberStillGets200(t *testing.T) {
 	}
 	if body.User.Role != "admin" {
 		t.Errorf("user.role = %q, want %q", body.User.Role, "admin")
+	}
+	if body.User.DisplayName == nil || *body.User.DisplayName != "Suspended Sam" {
+		t.Errorf("user.display_name = %v, want %q on the wire", body.User.DisplayName, "Suspended Sam")
+	}
+	if body.User.Email == nil || *body.User.Email != "sam@tenancy.test" {
+		t.Errorf("user.email = %v, want %q on the wire", body.User.Email, "sam@tenancy.test")
+	}
+}
+
+// TestMe_RealStoreNullAndEmptyOnTheWire: NULL columns reach the wire as a present
+// JSON null and empty strings as "", through the real Store.Me.
+func TestMe_RealStoreNullAndEmptyOnTheWire(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "tenancy me-handler null vs empty")
+	nullUser, emptyUser := uuid.NewString(), uuid.NewString()
+	seedIdentityMembership(t, super, tenantID, nullUser, "admin", "active", nil, nil)
+	seedIdentityMembership(t, super, tenantID, emptyUser, "preparer", "active", strp(""), strp(""))
+
+	for _, tc := range []struct{ name, subject, want string }{
+		{"NULL columns", nullUser, "null"},
+		{"empty columns", emptyUser, `""`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			user := meUserRaw(t, NewStore(app).Me, auth.Identity{Subject: tc.subject, Role: "authenticated", TenantID: tenantID})
+			if len(user) != 4 {
+				t.Fatalf("user keys = %d, want 4 (id, role, display_name, email): %v", len(user), user)
+			}
+			for _, k := range []string{"display_name", "email"} {
+				if raw, ok := user[k]; !ok || string(raw) != tc.want {
+					t.Errorf("user.%s = %s (present=%v), want %s", k, raw, ok, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// TestMe_CrossTenantMemberLeaksNoIdentity: a member of tenant A only, acting in tenant B,
+// gets a 403 whose body carries none of tenant A's identity.
+func TestMe_CrossTenantMemberLeaksNoIdentity(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantA := seedTenant(t, super, "tenancy me-handler leak A")
+	tenantB := seedTenant(t, super, "tenancy me-handler leak B")
+	userID := uuid.NewString()
+	seedIdentityMembership(t, super, tenantA, userID, "admin", "active", strp("Ada Only In A"), strp("ada@only-a.test"))
+
+	rec, body := doMe(t, NewStore(app).Me, &auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantB})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (body %q)", rec.Code, rec.Body.String())
+	}
+	if body.Error == "" {
+		t.Error("error body is empty, want the 403 envelope")
+	}
+	for _, leak := range []string{"Ada Only In A", "ada@only-a.test", "display_name", tenantA} {
+		if strings.Contains(rec.Body.String(), leak) {
+			t.Errorf("403 body %q leaks %q", rec.Body.String(), leak)
+		}
+	}
+}
+
+// TestStoreMe_IdentityIsTheCallersOwnRow: in a tenant of three members of different
+// statuses, each caller gets their own pair, never a neighbour's.
+func TestStoreMe_IdentityIsTheCallersOwnRow(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "tenancy me-test own row")
+	members := []struct{ user, status, name, email string }{
+		{uuid.NewString(), "active", "Own Active", "active@own.test"},
+		{uuid.NewString(), "invited", "Own Invited", "invited@own.test"},
+		{uuid.NewString(), "suspended", "Own Suspended", "suspended@own.test"},
+	}
+	for _, m := range members {
+		seedIdentityMembership(t, super, tenantID, m.user, "preparer", m.status, strp(m.name), strp(m.email))
+	}
+
+	store := NewStore(app)
+	for _, m := range members {
+		t.Run(m.status, func(t *testing.T) {
+			_, me, err := store.Me(auth.WithIdentity(context.Background(), auth.Identity{Subject: m.user, Role: "authenticated", TenantID: tenantID}))
+			if err != nil {
+				t.Fatalf("Me(%s member): %v", m.status, err)
+			}
+			if me.DisplayName == nil || *me.DisplayName != m.name {
+				t.Errorf("DisplayName = %v, want %q", me.DisplayName, m.name)
+			}
+			if me.Email == nil || *me.Email != m.email {
+				t.Errorf("Email = %v, want %q", me.Email, m.email)
+			}
+		})
 	}
 }
 
@@ -467,7 +621,8 @@ func TestStoreMe_RolePerTenant(t *testing.T) {
 	store := NewStore(app)
 
 	cA := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantA})
-	_, roleA, err := store.Me(cA)
+	_, me, err := store.Me(cA)
+	roleA := me.Role
 	if err != nil {
 		t.Fatalf("Me(tenant A): %v", err)
 	}
@@ -476,7 +631,8 @@ func TestStoreMe_RolePerTenant(t *testing.T) {
 	}
 
 	cB := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantB})
-	_, roleB, err := store.Me(cB)
+	_, me, err = store.Me(cB)
+	roleB := me.Role
 	if err != nil {
 		t.Fatalf("Me(tenant B): %v", err)
 	}
@@ -511,18 +667,81 @@ func TestStoreMe_CrossTenantRoleBorrowFailsClosed(t *testing.T) {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA, tenantB)
 	})
 	// U is admin in A ONLY — deliberately no membership row in B.
-	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, 'admin')`,
-		tenantA, userID); err != nil {
-		t.Fatalf("seed membership: %v", err)
-	}
+	seedIdentityMembership(t, super, tenantA, userID, "admin", "active", strp("Ada in A"), strp("a@a.test"))
 
 	store := NewStore(app)
 	// Caller's current tenant is B, not A — U must not borrow A's admin role.
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantB})
-	_, role, err := store.Me(c)
+	_, me, err := store.Me(c)
 	if !errors.Is(err, ErrNoMembership) {
-		t.Fatalf("Me(tenant B) err = %v, role = %q, want ErrNoMembership (must not borrow tenant A's admin role)", err, role)
+		t.Fatalf("Me(tenant B) err = %v, role = %q, want ErrNoMembership (must not borrow tenant A's admin role)", err, me.Role)
+	}
+	if me != (MeUser{}) {
+		t.Errorf("MeUser = %+v on a refusal, want the zero value -- tenant A's identity must not leak", me)
+	}
+}
+
+// TestStoreMe_IdentityNullAndEmptyStayDistinct: NULL reads back nil, an empty string reads back non-nil.
+func TestStoreMe_IdentityNullAndEmptyStayDistinct(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "tenancy me-test null vs empty")
+	nullUser, emptyUser := uuid.NewString(), uuid.NewString()
+	seedIdentityMembership(t, super, tenantID, nullUser, "admin", "active", nil, nil)
+	seedIdentityMembership(t, super, tenantID, emptyUser, "preparer", "active", strp(""), strp(""))
+
+	store := NewStore(app)
+	_, me, err := store.Me(auth.WithIdentity(ctx, auth.Identity{Subject: nullUser, Role: "authenticated", TenantID: tenantID}))
+	if err != nil {
+		t.Fatalf("Me(NULL member): %v", err)
+	}
+	if me.Role != "admin" {
+		t.Errorf("NULL member role = %q, want admin", me.Role)
+	}
+	if me.DisplayName != nil || me.Email != nil {
+		t.Errorf("NULL member identity = (%v, %v), want (nil, nil)", me.DisplayName, me.Email)
+	}
+
+	_, me, err = store.Me(auth.WithIdentity(ctx, auth.Identity{Subject: emptyUser, Role: "authenticated", TenantID: tenantID}))
+	if err != nil {
+		t.Fatalf("Me(empty member): %v", err)
+	}
+	if me.Role != "preparer" {
+		t.Errorf("empty member role = %q, want preparer", me.Role)
+	}
+	if me.DisplayName == nil || *me.DisplayName != "" {
+		t.Errorf("empty member DisplayName = %v, want a non-nil %q", me.DisplayName, "")
+	}
+	if me.Email == nil || *me.Email != "" {
+		t.Errorf("empty member Email = %v, want a non-nil %q", me.Email, "")
+	}
+}
+
+// TestStoreMe_IdentityPerTenant: one user_id in two tenants resolves each tenant's own pair.
+func TestStoreMe_IdentityPerTenant(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantA := seedTenant(t, super, "tenancy me-test identity A")
+	tenantB := seedTenant(t, super, "tenancy me-test identity B")
+	userID := uuid.NewString()
+	seedIdentityMembership(t, super, tenantA, userID, "admin", "active", strp("Ada in A"), strp("a@a.test"))
+	seedIdentityMembership(t, super, tenantB, userID, "preparer", "active", strp("Ada in B"), strp("b@b.test"))
+
+	store := NewStore(app)
+	for _, tc := range []struct{ tenant, name, email string }{
+		{tenantA, "Ada in A", "a@a.test"},
+		{tenantB, "Ada in B", "b@b.test"},
+	} {
+		_, me, err := store.Me(auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tc.tenant}))
+		if err != nil {
+			t.Fatalf("Me(%s): %v", tc.tenant, err)
+		}
+		if me.DisplayName == nil || *me.DisplayName != tc.name {
+			t.Errorf("DisplayName under %s = %v, want %q", tc.tenant, me.DisplayName, tc.name)
+		}
+		if me.Email == nil || *me.Email != tc.email {
+			t.Errorf("Email under %s = %v, want %q", tc.tenant, me.Email, tc.email)
+		}
 	}
 }
 
@@ -551,7 +770,8 @@ func TestStoreMe_RoleValueIntegrity(t *testing.T) {
 
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID})
-	_, role, err := store.Me(c)
+	_, me, err := store.Me(c)
+	role := me.Role
 	if err != nil {
 		t.Fatalf("Me(%s): %v", tenantID, err)
 	}
@@ -914,7 +1134,8 @@ func TestStoreMe_RoleIsCatalogValueForEachRole(t *testing.T) {
 			}
 
 			c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID})
-			_, role, err := store.Me(c)
+			_, me, err := store.Me(c)
+			role := me.Role
 			if err != nil {
 				t.Fatalf("Me(%s): %v", tenantID, err)
 			}
@@ -1388,6 +1609,16 @@ func seedMembership(t *testing.T, super *pgxpool.Pool, tenantID, userID, role, s
 	if _, err := super.Exec(context.Background(),
 		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, $3, $4)`,
 		tenantID, userID, role, status); err != nil {
+		t.Fatalf("seed membership: %v", err)
+	}
+}
+
+// seedIdentityMembership inserts a membership with a stored display name and email (nil = NULL).
+func seedIdentityMembership(t *testing.T, super *pgxpool.Pool, tenantID, userID, role, status string, displayName, email *string) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO memberships (tenant_id, user_id, role, status, display_name, email) VALUES ($1, $2, $3, $4, $5, $6)`,
+		tenantID, userID, role, status, displayName, email); err != nil {
 		t.Fatalf("seed membership: %v", err)
 	}
 }

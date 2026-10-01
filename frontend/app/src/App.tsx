@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { APP_PERSONAS, landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn, SignInLoading } from './components/SignIn'
-import { resolveBootSession, loadSession, saveSession, clearSession, shouldAutoSignIn, decodeJwtPayload } from './lib/session'
+import { resolveBootSession, loadSession, saveSession, clearSession, shouldAutoSignIn, decodeJwtPayload, cardIdentity } from './lib/session'
 import { revokeSessions } from './lib/revoke'
 import { createRenewer, isRenewalDue, SessionEndedError, type Renewer } from './lib/renewal'
 import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
@@ -1641,8 +1641,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   }
 
   const user: SignedInUser = {
-    name: session.persona.name,
-    initials: session.persona.initials,
+    ...cardIdentity(session),
     tenantName: session.me?.tenant.name ?? null,
     verified: session.verified,
   }

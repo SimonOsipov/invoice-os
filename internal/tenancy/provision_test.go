@@ -228,7 +228,8 @@ func TestStoreMe_AnswersForAProvisionedWorkspace(t *testing.T) {
 	}
 
 	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: r.id.Subject, Role: "authenticated", TenantID: r.tenantID})
-	tenant, role, err := store.Me(ctx)
+	tenant, me, err := store.Me(ctx)
+	role := me.Role
 	if err != nil {
 		t.Fatalf("Me for the provisioned workspace: %v", err)
 	}

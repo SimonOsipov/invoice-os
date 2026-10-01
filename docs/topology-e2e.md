@@ -26,7 +26,8 @@ M2-14.4).
    fork account signs in, the code hand-off lands it in its own workspace, no token appears
    in any URL, a code minted in another browser signs no tab in, the session renews itself
    past the access token's lifetime, a refused renewal returns to landing and keeps the
-   destination, and an account provisioned as in-house or as a firm opens in that mode
+   destination, an account provisioned as in-house or as a firm opens in that mode, the
+   identity card shows the account's own name, and a long name stays inside the card
    ([identity-provider.md](./identity-provider.md) "Sign-in and hand-off",
    "Renewal").
 3. **Cross-tenant isolation** — mints a tenant-A and a tenant-B token via the gateway's mock

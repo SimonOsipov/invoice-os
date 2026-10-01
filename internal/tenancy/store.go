@@ -27,27 +27,28 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// Me returns the caller's tenant (id, name, kind) and their domain role, both
-// resolved under RLS: SELECT id, name, kind FROM tenants (bare — the
-// app.current_tenant GUC is the filter, not a WHERE clause) then SELECT role FROM
-// memberships WHERE user_id = $1 (identity.Subject — RLS scopes the row set to
-// the current tenant). No visible tenant row maps to
-// ErrTenantNotFound; no membership row maps to ErrNoMembership (never defaulted).
+// Me returns the caller's tenant (id, name, kind) and their own membership
+// (role, display name, email), both resolved under RLS: SELECT id, name, kind FROM
+// tenants (bare — the app.current_tenant GUC is the filter, not a WHERE clause)
+// then SELECT role, display_name, email FROM memberships WHERE user_id = $1
+// (identity.Subject — RLS scopes the row set to the current tenant). It reads no
+// status. No visible tenant row maps to ErrTenantNotFound; no membership row maps
+// to ErrNoMembership (never defaulted).
 //
 // Both queries run inside the SAME transaction, so a missing tenant row surfaces
 // as ErrTenantNotFound before the membership query ever runs.
-func (s *Store) Me(ctx context.Context) (Tenant, string, error) {
+func (s *Store) Me(ctx context.Context) (Tenant, MeUser, error) {
 	// AUDIT-10 §5: exempt from the request seam's membership gate, as is
 	// ProvisionWorkspace. /v1/me is the SPA's boot call and auth.ts signIn throws on failure, so
 	// gating it would turn every suspended session into an unexplained sign-in
 	// failure with nothing able to say why (TestStoreMe_AnswersForASuspendedMember).
 	id, ok := auth.IdentityFromContext(ctx)
 	if !ok {
-		return Tenant{}, "", db.ErrNoTenant
+		return Tenant{}, MeUser{}, db.ErrNoTenant
 	}
 
 	var t Tenant
-	var role string
+	var me MeUser
 	err := db.WithinTenantTx(ctx, s.pool, id.TenantID, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `SELECT id, name, kind FROM tenants`).Scan(&t.ID, &t.Name, &t.Kind); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -57,8 +58,8 @@ func (s *Store) Me(ctx context.Context) (Tenant, string, error) {
 		}
 
 		if err := tx.QueryRow(ctx,
-			`SELECT role FROM memberships WHERE user_id = $1`, id.Subject,
-		).Scan(&role); err != nil {
+			`SELECT role, display_name, email FROM memberships WHERE user_id = $1`, id.Subject,
+		).Scan(&me.Role, &me.DisplayName, &me.Email); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNoMembership
 			}
@@ -67,9 +68,9 @@ func (s *Store) Me(ctx context.Context) (Tenant, string, error) {
 		return nil
 	})
 	if err != nil {
-		return Tenant{}, "", err
+		return Tenant{}, MeUser{}, err
 	}
-	return t, role, nil
+	return t, me, nil
 }
 
 // workspaceNamespace keys uuidv5(subject): one self-provisioned workspace per identity.

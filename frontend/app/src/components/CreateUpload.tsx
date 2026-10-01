@@ -49,6 +49,14 @@ import { canReadColumnsAll, canStartDocumentRun, kindMismatchNote, oversizeNote,
 import type { PickedKind } from '../lib/importFlow'
 import type { PlatformCtx } from '../types'
 
+// STUB (AUTH-10-04 Mode A): current copy, not yet rendered from; the executor replaces it.
+export const AMBER_COPY = {
+  title: { inhouse: 'No linked business entity', firm: 'No linked business entity' },
+  button: { inhouse: 'Link a business entity →', firm: 'Link a business entity →' },
+  body: 'An import is filed on behalf of a registered entity.',
+  footnote: 'Manual entry has the same requirement — an invoice is filed against a registered entity too.',
+}
+
 // The per-file verdict the list renders, '' for an acceptable file. Two refusals, in
 // order: a type the picker does not accept at all, then a type that contradicts the run's
 // own kind (one pick can carry both — addFiles keeps them listed, BULK-03-8).

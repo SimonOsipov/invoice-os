@@ -123,11 +123,12 @@ Design references for UI stories: Claude Design **prototype** project `6269a212-
 ### Phase 0.5: Worktree bootstrap
 
 1. **Paths:** `MAIN_CHECKOUT=/Users/samosipov/Downloads/invoice-os`, `WORKTREE_PATH="$MAIN_CHECKOUT/.claude/worktrees/<lowercase-id>"`, `BRANCH=<slug>`.
+   **Base:** `BASE` is the branch that your Harbourmaster role file names under "Your base branch". When the role file names none, `BASE=main`. In an epic run, `BASE` is the epic branch: the PR targets it, and the coordinator merges it.
 2. **Pre-flight:** if `$WORKTREE_PATH` exists and `git worktree list` shows it, another run owns this story — error and exit. If it exists but is not listed, it is stale — tell the user to run `/post-merge-cleanup`, and exit.
 3. **Create:**
    ```bash
-   git -C "$MAIN_CHECKOUT" fetch origin main
-   git -C "$MAIN_CHECKOUT" worktree add -b "$BRANCH" "$WORKTREE_PATH" origin/main
+   git -C "$MAIN_CHECKOUT" fetch origin main "$BASE"
+   git -C "$MAIN_CHECKOUT" worktree add -b "$BRANCH" "$WORKTREE_PATH" "origin/$BASE"
    ```
 4. **Symlink `CLAUDE.md`** (gitignored, so the worktree lacks it; subagents need it). A symlink, never a copy:
    ```bash
@@ -275,7 +276,7 @@ Spawn `product-qa-spec` (Mode B) with the acceptance criteria, the plan, the cha
   3. matches every letter case, unless case is the point — then a comment says so.
   Prove it with one break: delete the guarded code, keep its comment, run the scan, and it must go red. Record that as a mutation row.
 - **An absence scan** also needs a control needle that must be found and a floor on the population scanned. Offer no "zero hits" as evidence until the same command has found a planted hit.
-- **Re-read every comment and doc your change made false**, and fix them in the same commit. Sweep in cost order: (1) comments your diff did not edit in files it did (`git diff main...HEAD -U15`); (2) comments in files you never opened — name the fact your change altered and search the whole tree for it; (3) every file in `docs/`. Treat your own earlier future-tense notes as suspects.
+- **Re-read every comment and doc your change made false**, and fix them in the same commit. Sweep in cost order: (1) comments your diff did not edit in files it did (`git diff "origin/$BASE...HEAD" -U15`); (2) comments in files you never opened — name the fact your change altered and search the whole tree for it; (3) every file in `docs/`. Treat your own earlier future-tense notes as suspects.
 - **State a shared fact in one place** and cite that place.
 - **Report test deletions.** List each test this subtask made redundant in the QA report. Delete it in the same commit.
 - **A fix to a false comment deletes the false clause and adds no new clause.** A needed new claim names the test or command that proves it.
@@ -296,10 +297,10 @@ A red run stops the next subtask until it is green. Then take the next subtask.
 
 ### Phase 2: PR lifecycle
 
-`product-executor` manages PR state from the subtask `Order` field:
+`product-executor` manages PR state from the subtask `Order` field. Put `Base branch: <BASE>` in every executor brief:
 - `1 of N (FIRST)` → push and create the **draft** PR (drafts skip `dev-env.yml`).
 - `K of N` → push only.
-- `N of N (FINAL)` → `git fetch origin`, merge `origin/main` if behind, push, `gh pr ready`.
+- `N of N (FINAL)` → `git fetch origin`, merge `origin/<BASE>` if behind, and also `origin/main` when `BASE` is not `main`. Push, `gh pr ready`.
 
 The orchestrator never runs `git checkout -b`, `gh pr create` or `gh pr ready`.
 
@@ -325,7 +326,7 @@ Runs once per story, after `CI` is green. It verifies the assembled feature agai
    - A `skipped` run is a draft run: neither pass nor fail.
    - `gh workflow run dev-env.yml --ref "$BRANCH"` is for diagnosis only. It targets `development`, not the PR environment, so it proves nothing about this PR.
    - `dev-env.yml` is paths-filtered (`frontend/ packages/ e2e/ cmd/ internal/ migrations/ db/ tools/prenv/ scripts/ci/`, go.mod/sum, Dockerfile, Caddyfile, package.json, pnpm-*, the workflow file). A docs-only PR never fires it; escalate to the user rather than faking it green.
-   - **Freshness:** `git -C "$WORKTREE_PATH" fetch origin`. If `origin/main` has commits the branch lacks, merge, push, and let `CI` and the gate re-run. A base missing main's migrations crash-loops the gateway.
+   - **Freshness:** `git -C "$WORKTREE_PATH" fetch origin`. If `origin/$BASE` or `origin/main` has commits the branch lacks, merge them, push, and let `CI` and the gate re-run. A base missing main's migrations crash-loops the gateway.
 3. **Watch the run** to conclusion per the CI Monitoring Protocol.
    - Re-run a red gate whole: `gh run rerun "$RUN_ID"`, never `--failed`. The database resets only when the gateway deploys.
    - A spec this PR changed that passed only on retry fails the `e2e` job or the `E2E topology (<shard>)` leg that ran it. Fix the spec or the race; do not re-run for luck.

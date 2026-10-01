@@ -227,8 +227,7 @@ func TestMe_InternalError500(t *testing.T) {
 	}
 }
 
-// TestMe_UserKeySetUnchanged: the name is kept by Core AC-2. The user key set was
-// {id, role} until AUTH-09 widened it deliberately to add display_name and email.
+// The user key set is pinned on purpose: widening it must edit this test.
 func TestMe_UserKeySetUnchanged(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	load := func(context.Context) (Tenant, MeUser, error) {

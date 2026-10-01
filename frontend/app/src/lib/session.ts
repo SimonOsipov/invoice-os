@@ -218,7 +218,7 @@ function presentText(v: unknown): string | null {
 }
 
 // A hand-off session names the person from /me (display name, else email, else nothing);
-// a persona session keeps its persona until AUTH-15.
+// a persona session keeps its persona.
 export function cardIdentity(session: Session): { name: string; initials: string } {
   if (!session.handoff) return { name: session.persona.name, initials: session.persona.initials }
   const displayName = presentText(session.me?.user.display_name)

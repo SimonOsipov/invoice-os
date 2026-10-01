@@ -431,7 +431,7 @@ persona session keeps its persona's mode until AUTH-15.
 
 **Identity card.** A hand-off session's card shows `/me` `user.display_name`, else
 `user.email`, else nothing; its initials follow the same order. A persona session shows its
-persona until AUTH-15. A record stored before AUTH-09 shows no name until the next sign-in.
+persona until AUTH-15. A stored record without the name keeps a blank card: renewal does not re-read `/me`, so only a new sign-in fills it.
 
 The access token travels only in the exchange and refresh answers and the `Authorization`
 header; the refresh token travels only in the exchange answer, the refresh request and

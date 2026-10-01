@@ -1,6 +1,6 @@
 // Package tenancy is the 01 Tenancy context service: workspaces and their
 // memberships, read under Row-Level Security scoped by the app.current_tenant GUC.
-// GET /v1/me resolves the gateway-injected caller to their tenant;
+// GET /v1/me resolves the gateway-injected caller to their tenant, role, display name and email;
 // POST /v1/workspaces provisions a tenant-less caller's first workspace.
 package tenancy
 

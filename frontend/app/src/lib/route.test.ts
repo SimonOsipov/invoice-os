@@ -128,6 +128,7 @@ describe('frontend/app/package.json', () => {
     expect(Object.keys(pkg.dependencies ?? {}).sort()).toEqual([
       '@invoice-os/api-client',
       '@invoice-os/design-tokens',
+      '@invoice-os/monitoring',
       'react',
       'react-dom',
     ])

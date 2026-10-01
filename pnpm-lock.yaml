@@ -37,6 +37,9 @@ importers:
       '@invoice-os/design-tokens':
         specifier: workspace:*
         version: link:../../packages/design-tokens
+      '@invoice-os/monitoring':
+        specifier: workspace:*
+        version: link:../../packages/monitoring
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -185,7 +188,13 @@ importers:
       '@invoice-os/design-tokens':
         specifier: workspace:*
         version: link:../design-tokens
+      '@invoice-os/monitoring':
+        specifier: workspace:*
+        version: link:../monitoring
     devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.0
       '@types/react':
         specifier: ^19.2.17
         version: 19.2.17

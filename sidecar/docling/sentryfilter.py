@@ -259,6 +259,9 @@ def scrub_log(log, hint=None):
     args = _template_args(attrs)
     if isinstance(template, str) and len(args):
         log["body"] = _redacted_message(template, args)
+    elif len(args):
+        # No template means a non-str msg; the record is out of reach, so the body cannot be told from its arguments.
+        log["body"] = _REDACTED
     elif isinstance(log.get("body"), str):
         log["body"] = scrub_text(log["body"])
     out = {}
@@ -281,6 +284,6 @@ def keep_breadcrumb(crumb, hint=None):
     if crumb.get("category") not in SIDECAR_LOGGERS:
         return None
     record = (hint or {}).get("log_record")
-    if record is not None and record.args and isinstance(record.msg, str):
-        crumb = {**crumb, "message": _redacted_message(record.msg, record.args)}
+    if record is not None and record.args:
+        crumb = {**crumb, "message": _redacted_message(str(record.msg), record.args)}
     return crumb

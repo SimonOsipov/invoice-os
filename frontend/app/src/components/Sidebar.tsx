@@ -223,12 +223,14 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
                 WORKSPACE
               </span>
             </span>
-            <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 5, background: 'var(--status-green-bg)', border: '1px solid var(--status-green-border)', borderRadius: 999, padding: '2px 7px' }}>
-              <span style={{ width: 5, height: 5, borderRadius: 99, background: 'var(--status-green-text)' }} />
-              <span className="mono" style={{ fontSize: 9, fontWeight: 600, color: 'var(--status-green-text)', letterSpacing: '0.04em' }}>
-                ERP
+            {!ctx.handoff && (
+              <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 5, background: 'var(--status-green-bg)', border: '1px solid var(--status-green-border)', borderRadius: 999, padding: '2px 7px' }}>
+                <span style={{ width: 5, height: 5, borderRadius: 99, background: 'var(--status-green-text)' }} />
+                <span className="mono" style={{ fontSize: 9, fontWeight: 600, color: 'var(--status-green-text)', letterSpacing: '0.04em' }}>
+                  ERP
+                </span>
               </span>
-            </span>
+            )}
           </div>
         )}
       </div>

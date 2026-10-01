@@ -121,7 +121,7 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     resetBySwitchClient: true,
     routes: ['/create'],
     verdict: 'correctly-reset',
-    citation: { text: 'setDraft(defaultDraft(clients.find((c) => c.entityId === id) ?? active))' },
+    citation: { text: 'setDraft(startingDraft(clients.find((c) => c.entityId === id) ?? active, session.handoff === true))' },
     note: 'Re-seeded from the incoming company at App.tsx#switchClient. Read by CreateForm at createStep `form`.',
   },
   {

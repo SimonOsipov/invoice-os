@@ -395,7 +395,12 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
       </div>
 
         <div style={TILE_CARD}>
-          <TileHead title="Recent activity" meta="SAMPLE" />
+          <TileHead title="Recent activity" meta={ctx.handoff ? undefined : 'SAMPLE'} />
+          {ctx.handoff ? (
+            <div style={{ padding: '40px 20px', textAlign: 'center' }}>
+              <div className="card-title">No activity to show</div>
+            </div>
+          ) : (
           <div style={{ padding: '18px 20px 6px' }}>
             {mock.activity.map((a, i) => (
               <div key={i} style={{ display: 'flex', gap: 12 }}>
@@ -417,6 +422,7 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
               </div>
             ))}
           </div>
+          )}
         </div>
       </div>
     </>

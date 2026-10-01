@@ -9,7 +9,7 @@ import { consumeSignInState, ensureSignInState, landingSignInUrl, mintSignInStat
 import { HANDOFF_PARAM, isLiveHandoffSession, readHandoffCode, redeemHandoff } from './lib/sessionHandoff'
 import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import { isPromiseLike, makeAuthedFetch } from './lib/authedFetch'
-import { buildClients, defaultDraft, resolveActiveClient } from './lib/clients'
+import { buildClients, resolveActiveClient, startingDraft } from './lib/clients'
 import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from './lib/portfolio'
 import { fileDraftGate, fileDraftInvoice, fileSuppliedNumber } from './lib/invoiceDraft'
 import { createInvoice, listInvoices } from './lib/invoices'
@@ -370,7 +370,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // A lazy initializer, not an effect that navigates on mount, for the same StrictMode
   // reason as the block above.
   const [view, setView] = useState<View>(bootView)
-  const [draft, setDraft] = useState<Draft>(() => defaultDraft(active))
+  const [draft, setDraft] = useState<Draft>(() => startingDraft(active, session.handoff === true))
   // The document that produced no invoice, recorded by enterByHand so the invoice filed
   // instead keeps its provenance; handOffReading is its carried reading, if any. Cleared
   // wherever `draft` is reseeded -- it describes THIS draft, not the session.
@@ -748,7 +748,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     navigate('dashboard')
     setDetailInvoiceId(null)
     setSwitcherOpen(false)
-    setDraft(defaultDraft(clients.find((c) => c.entityId === id) ?? active))
+    setDraft(startingDraft(clients.find((c) => c.entityId === id) ?? active, session.handoff === true))
     setHandOffDocumentId(null)
     setHandOffReading(null)
     handOffReadSeq.current += 1
@@ -793,7 +793,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     }
     navigate('create')
     setCreateStep('upload')
-    setDraft(defaultDraft(active))
+    setDraft(startingDraft(active, session.handoff === true))
     setHandOffDocumentId(null)
     setHandOffReading(null)
     handOffReadSeq.current += 1

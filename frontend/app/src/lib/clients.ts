@@ -206,7 +206,7 @@ export function resolveActiveClient(clients: Client[], activeEntityId: string | 
   return clients[0] ?? emptyClient()
 }
 
-// The manual create form's starting state. Every field here is now genuinely EDITABLE and
+// The persona session's manual create form state (a hand-off session uses startingDraft). Every field here is now genuinely EDITABLE and
 // every one of them crosses the wire on POST /v1/invoices (INVCR-01-03), so these are real
 // defaults, not a mock fixture:
 //
@@ -240,7 +240,8 @@ export function defaultDraft(client: ClientCfg): Draft {
   }
 }
 
-// Compile-only stub (AUTH-10-07): the hand-off branch is not implemented yet.
-export function startingDraft(client: ClientCfg, _handoff: boolean): Draft {
-  return defaultDraft(client)
+// A hand-off session starts blank; date '' maps to issue_date null, so nothing demo is filed.
+export function startingDraft(client: ClientCfg, handoff: boolean): Draft {
+  if (!handoff) return defaultDraft(client)
+  return { number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', items: [{ desc: '', qty: 1, price: 0 }] }
 }

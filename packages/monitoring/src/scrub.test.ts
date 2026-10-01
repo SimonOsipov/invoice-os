@@ -367,6 +367,7 @@ describe('scrubSpan more', () => {
   it('scrubSpan_toleratesNoDescriptionAndNoData', () => {
     expect(scrubSpan(as<SpanJSON>({ span_id: 's' }))).toEqual({ span_id: 's' })
     expect(scrubSpan(as<SpanJSON>({ span_id: 's', data: {} })).data).toEqual({})
+    expect(scrubSpan(as<SpanJSON>({ span_id: 's', data: null })).data).toBeNull()
   })
 
   it('scrubSpan_redactsBeforeItStrips', () => {
@@ -563,6 +564,7 @@ describe('apiRoute', () => {
       ['https://gw.test/api/Invoice/v1', '/api/:id/v1'],
       ['https://gw.test/api/a_b/v1x/v/2', '/api/:id/:id/v/:id'],
       ['https://gw.test/api/x/INV-1234', '/api/x/:id'],
+      ['https://gw.test/api/-x/--', '/api/:id/:id'],
       ['https://gw.test/api/x/a%2Fb', '/api/x/:id'],
       ['', ':id'],
     ]

@@ -204,7 +204,19 @@ export function parseLocation(pathname: string, search: string): ParsedLocation 
   return { view, invoiceId, jobId, policyId, settingsTab, q, auditInvoice, reviewBatchIds }
 }
 
-// Red stub: the real pattern-naming body lands with SENTRY-06-05.
-export function routeName(_pathname: string): string {
+// Bounded name for Sentry grouping: a pattern, never a segment of the input.
+const ID_PATTERN: Partial<Record<View, string>> = {
+  detail: '/invoices/:id',
+  extraction: '/extraction/:id',
+  workflows: '/workflows/:id',
+}
+
+export function routeName(pathname: string): string {
+  const route = parseRoute(pathname)
+  if (route !== null) return (route.id !== null && ID_PATTERN[route.view]) || ROUTE_PATHS[route.view]
+  const normalized = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname
+  if (parseReviewPath(normalized) !== null) return '/imports/:ids/review'
+  const seg = normalized.startsWith('/settings/') ? normalized.slice('/settings/'.length) : ''
+  if (seg.length > 0 && !/[/?#]/.test(seg)) return '/settings/:tab'
   return '<unmatched>'
 }

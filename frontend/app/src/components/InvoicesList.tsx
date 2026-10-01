@@ -324,7 +324,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
       // submitInvoices returns `res.results` unguarded (invoices.test.ts SUB-3 pins a
       // malformed 2xx body resolving to `undefined` and names this call site as the
       // guard) — normalize once, here, so `results !== null` below can never see
-      // `undefined` and throw out of `.map` with no error boundary to catch it.
+      // `undefined` and throw out of `.map`.
       const items = res ?? []
       // Resolve invoice numbers from `rows` NOW, before `list.run()` below nulls
       // `list.data` for the duration of the refetch (see the `results` state comment).

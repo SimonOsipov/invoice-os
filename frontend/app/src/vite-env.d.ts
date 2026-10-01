@@ -14,6 +14,8 @@ interface ImportMetaEnv {
   // Demo builds only. Exactly the string 'true' turns the persona switcher on; read at module
   // scope in src/demo/flag.ts so `vite build` folds it and drops src/demo when it is unset.
   readonly VITE_DEMO_MODE?: string
+  readonly VITE_SENTRY_DSN?: string
+  readonly VITE_RAILWAY_GIT_COMMIT_SHA?: string
 }
 
 interface ImportMeta {

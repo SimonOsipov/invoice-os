@@ -116,6 +116,7 @@ export function PersonaFooter({ ctx, orgLabel, signOutButton }: { ctx: PlatformC
             }}
           >
             <span
+              data-testid="persona-initials"
               style={{
                 flex: 'none',
                 width: 30,

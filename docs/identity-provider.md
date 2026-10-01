@@ -429,6 +429,10 @@ the firm workspace, `in_house` the in-house one. A `/me` answer, or a stored han
 without a known `kind` fails the redemption (step 7, `signin=failed`) or drops the record. A
 persona session keeps its persona's mode until AUTH-15.
 
+**Identity card.** A hand-off session's card shows `/me` `user.display_name`, else
+`user.email`, else nothing; its initials follow the same order. A persona session shows its
+persona until AUTH-15. A record stored before AUTH-09 shows no name until the next sign-in.
+
 The access token travels only in the exchange and refresh answers and the `Authorization`
 header; the refresh token travels only in the exchange answer, the refresh request and
 answer, and the sign-out request (see Revocation). Landing never holds either. Landing renders the form only when `VITE_GATEWAY_URL` and `VITE_APP_URL` are set,
@@ -600,7 +604,8 @@ which the gateway answers 401). Guarded by `TestIdP_RefreshRotationAndReuse`.
 
 **Where the refresh token is stored, and what that does and does not protect against.**
 The refresh token is stored in the app origin's `localStorage`, key `invoice-os.session`,
-field `refresh_token`, in the same record as the access token. For its 60 s in the hand-off
+field `refresh_token`, in the same record as the access token. The record also holds the
+account's display name and email, inside the stored `/me` answer. For its 60 s in the hand-off
 store it is in the gateway's memory, beside the access token. It crosses the network only
 inside JSON bodies over TLS: the exchange answer, the refresh request, the refresh answer and
 the sign-out request.

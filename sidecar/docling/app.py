@@ -3,21 +3,27 @@
 import asyncio
 import logging
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+import sentry_setup
 
-import buildinfo
-import convert
+# First, so a boot failure below has a client to report it (D-16).
+sentry_setup.init_sentry()
 
-logger = logging.getLogger(__name__)
+with sentry_setup.boot_guard():
+    from fastapi import FastAPI, Request
+    from fastapi.responses import JSONResponse
 
-app = FastAPI()
+    import buildinfo
+    import convert
 
-# Background warm-up (story sec. 4): starts at import ("boot"), off any request path.
-# T-01-3 still sees construction_count() == 0 right after import -- a real model build
-# takes far longer than one HTTP round trip, so the race is not observable in practice.
-# The thread lives in convert.py (not started inline here) so tests can join it deterministically.
-convert.start_warm_up()
+    logger = logging.getLogger(__name__)
+
+    app = FastAPI()
+
+    # Background warm-up (story sec. 4): starts at import ("boot"), off any request path.
+    # T-01-3 still sees construction_count() == 0 right after import -- a real model build
+    # takes far longer than one HTTP round trip, so the race is not observable in practice.
+    # The thread lives in convert.py (not started inline here) so tests can join it deterministically.
+    convert.start_warm_up()
 
 # documents.size_bytes CHECKs <= this; matches maxDocumentBytes (cmd/submission/main.go:152).
 MAX_DOCUMENT_BYTES = 15 * 1024 * 1024
@@ -25,10 +31,15 @@ MAX_DOCUMENT_BYTES = 15 * 1024 * 1024
 
 @app.get("/healthz")
 async def healthz() -> dict[str, str]:
-    """Body is exactly {"status": "ok", "build": "<sha>"} — internal/platform/health.go:62's
-    shape. No lock, over a module-level string -- stays on the event loop (T-03-14).
+    """Body is exactly {"status": "ok", "build": "<sha>", "sentry": "on"|"off"} --
+    internal/platform/health.go's shape. No lock, no I/O beyond the build file -- stays on the
+    event loop (T-03-14).
     """
-    return {"status": "ok", "build": buildinfo.read_build_sha(buildinfo.BUILD_FILE)}
+    return {
+        "status": "ok",
+        "build": buildinfo.read_build_sha(buildinfo.BUILD_FILE),
+        "sentry": sentry_setup.sentry_state(),
+    }
 
 
 async def _read_capped_body(request: Request) -> bytes | None:

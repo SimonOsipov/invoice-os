@@ -156,7 +156,7 @@ func TestTaggedMockIssuerRoutesKeepTheirWiring(t *testing.T) {
 		r := httptest.NewRequest(http.MethodOptions, "/auth/login", nil)
 		r.Header.Set("Origin", origin)
 		r.Header.Set("Access-Control-Request-Method", "POST")
-		r.Header.Set("Access-Control-Request-Headers", "content-type, sentry-trace, baggage")
+		r.Header.Set("Access-Control-Request-Headers", "content-type, sentry-trace, baggage, traceparent")
 		rec := httptest.NewRecorder()
 		login.ServeHTTP(rec, r)
 		if rec.Code != http.StatusNoContent {
@@ -167,6 +167,24 @@ func TestTaggedMockIssuerRoutesKeepTheirWiring(t *testing.T) {
 			if !got[tok] {
 				t.Errorf("granted token set = %v, missing %q", got, tok)
 			}
+		}
+		if got["traceparent"] {
+			t.Errorf("granted token set = %v, must not grant traceparent", got)
+		}
+	})
+
+	t.Run("login withholds the trace headers from a disallowed origin", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodOptions, "/auth/login", nil)
+		r.Header.Set("Origin", "https://evil.example")
+		r.Header.Set("Access-Control-Request-Method", "POST")
+		r.Header.Set("Access-Control-Request-Headers", "content-type, sentry-trace, baggage")
+		rec := httptest.NewRecorder()
+		login.ServeHTTP(rec, r)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("preflight = %d, want 204", rec.Code)
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "" {
+			t.Errorf("Access-Control-Allow-Headers = %q, want none", got)
 		}
 	})
 

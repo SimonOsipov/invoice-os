@@ -157,7 +157,7 @@ func TestHandoffPreflightGrantsTraceHeaders(t *testing.T) {
 		req := httptest.NewRequest(http.MethodOptions, path, nil)
 		req.Header.Set("Origin", handoffAllowedOrigin)
 		req.Header.Set("Access-Control-Request-Method", http.MethodPost)
-		req.Header.Set("Access-Control-Request-Headers", "content-type, sentry-trace, baggage")
+		req.Header.Set("Access-Control-Request-Headers", "content-type, sentry-trace, baggage, traceparent")
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 
@@ -172,6 +172,9 @@ func TestHandoffPreflightGrantsTraceHeaders(t *testing.T) {
 			if !got[tok] {
 				t.Errorf("OPTIONS %s granted %v, missing %q", path, got, tok)
 			}
+		}
+		if got["traceparent"] {
+			t.Errorf("OPTIONS %s granted %v, must not grant traceparent", path, got)
 		}
 	}
 }

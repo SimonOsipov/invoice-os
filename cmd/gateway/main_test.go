@@ -1170,4 +1170,32 @@ func TestApiMountPreflightGrantsTraceHeaders(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("control: GET /api/tenancy/v1/me with no bearer = %d, want 401", rec.Code)
 	}
+
+	// Trace headers buy no bypass: the traced GET is still 401, and the 401 carries the grant.
+	r = httptest.NewRequest(http.MethodGet, "/api/tenancy/v1/me", nil)
+	r.Header.Set("Origin", origin)
+	r.Header.Set("sentry-trace", "0123456789abcdef0123456789abcdef-0123456789abcdef-1")
+	r.Header.Set("baggage", "sentry-environment=production")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, r)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("traced GET with no bearer = %d, want 401", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != origin {
+		t.Errorf("traced 401 Access-Control-Allow-Origin = %q, want %q", got, origin)
+	}
+
+	// A disallowed origin's bearer-less preflight is answered 204 with no grant.
+	r = httptest.NewRequest(http.MethodOptions, "/api/tenancy/v1/me", nil)
+	r.Header.Set("Origin", "https://evil.example")
+	r.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	r.Header.Set("Access-Control-Request-Headers", "authorization, sentry-trace, baggage, traceparent")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, r)
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("disallowed-origin preflight = %d, want 204", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "" {
+		t.Errorf("disallowed-origin preflight Access-Control-Allow-Headers = %q, want none", got)
+	}
 }

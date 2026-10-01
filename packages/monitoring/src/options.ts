@@ -1,5 +1,5 @@
-import type { ErrorEvent, StartSpanOptions } from '@sentry/core'
-import { browserTracingIntegration } from '@sentry/react'
+import type { ErrorEvent, Integration, StartSpanOptions } from '@sentry/core'
+import { browserTracingIntegration, getClient, startBrowserTracingNavigationSpan } from '@sentry/react'
 import type { BrowserOptions } from '@sentry/react'
 import { dropEvent, keepBreadcrumb, scrubEvent, scrubSpan, scrubTransaction } from './scrub'
 
@@ -35,11 +35,56 @@ function nameErrorTransaction(e: ErrorEvent, routeName?: (p: string) => string):
   return routeName && typeof e.transaction === 'string' ? { ...e, transaction: routeName(e.transaction) } : e
 }
 
+// The SDK's own navigation handler also fires on replaceState, which the app uses for canonicalisation and query edits.
+// Only pushState and popstate are navigations here; the handler is installed once and finds the live client per call.
+let navigationsWired = false
+
+function startNavigation(url: string): void {
+  const client = getClient()
+  if (!client?.getIntegrationByName('BrowserTracing')) return
+  startBrowserTracingNavigationSpan(
+    client,
+    { name: new URL(url, window.location.href).pathname, attributes: { 'sentry.source': 'url', 'sentry.origin': 'auto.navigation.browser' } },
+    { url },
+  )
+}
+
+function wireNavigations(): void {
+  if (navigationsWired) return
+  navigationsWired = true
+  let last = window.location.href
+  const push = window.history.pushState
+  window.history.pushState = function (...args: Parameters<History['pushState']>) {
+    const out = push.apply(this, args)
+    const to = window.location.href
+    if (to !== last) startNavigation(to)
+    last = to
+    return out
+  }
+  window.history.replaceState = new Proxy(window.history.replaceState, {
+    apply(target, self, args: Parameters<History['replaceState']>) {
+      const out = Reflect.apply(target, self, args)
+      last = window.location.href
+      return out
+    },
+  })
+  window.addEventListener('popstate', () => {
+    const to = window.location.href
+    if (to !== last) startNavigation(to)
+    last = to
+  })
+}
+
+function appTracing(routeName?: (p: string) => string): Integration {
+  const bt = browserTracingIntegration({ beforeStartSpan: nameRouteSpan(routeName), instrumentNavigation: false })
+  return { ...bt, setup: (client) => (bt.setup?.(client), wireNavigations()) }
+}
+
 export function sentryOptions(c: MonitoringConfig): BrowserOptions | null {
   const dsn = (c.dsn ?? '').trim()
   if (dsn === '') return null
   const app = c.service === 'app'
-  const tracing = app ? [browserTracingIntegration({ beforeStartSpan: nameRouteSpan(c.routeName) })] : []
+  const tracing = app ? [appTracing(c.routeName)] : []
   const origin = gatewayOrigin(c.gateway)
   return {
     dsn,

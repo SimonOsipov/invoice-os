@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import * as Sentry from '@sentry/react'
-import { getRootSpan, serializeEnvelope } from '@sentry/core'
+import { getRootSpan, serializeEnvelope, spanToJSON } from '@sentry/core'
 import type { Envelope } from '@sentry/core'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -630,8 +630,8 @@ describe('what the SDK sends', () => {
   })
 
   it('navigation_isNamedByRouteAndCarriesNoQuery', async () => {
-    // Fast runner: the boot strip is a redirect child. Slow runner: it is a navigation named for its path.
-    for (const [age, bootStrip] of [[0.1, 0], [5, 1]]) {
+    // replaceState (the boot strip) is never a navigation, at any page age.
+    for (const [age, bootStrip] of [[0.1, 0], [5, 0]]) {
       const sink: string[] = []
       await navigationFlow(sink, age)
       vi.useRealTimers()
@@ -651,6 +651,37 @@ describe('what the SDK sends', () => {
         expect(c.data.to).not.toContain('?')
       }
     }
+  })
+
+  it('navigation_replaceStateStartsNoNavigationAndKeepsThePageLoadOpen', async () => {
+    // Page older than the SDK's redirect window, so a history call would start a root navigation.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(performance.timeOrigin + 5000)
+    const sink: string[] = []
+    boot(sink, 'app', { routeName })
+    const pageload = getRootSpan(Sentry.getActiveSpan()!)
+    expect(spanToJSON(pageload).op).toBe('pageload')
+
+    window.history.replaceState(null, '', '/settings/members')
+    window.history.replaceState(null, '', `/settings/members?q=${TIN}`)
+    expect(getRootSpan(Sentry.getActiveSpan()!), 'still the page-load span').toBe(pageload)
+    expect(spanToJSON(pageload).timestamp, 'page load not cut short').toBeUndefined()
+
+    window.history.pushState(null, '', `/invoices/${UUID}`)
+    const nav = getRootSpan(Sentry.getActiveSpan()!)
+    expect(spanToJSON(nav).op).toBe('navigation')
+    expect(spanToJSON(pageload).timestamp, 'a real navigation ends the page load').toBeDefined()
+    nav.end()
+
+    window.history.replaceState(null, '', `/invoices/${UUID}?x=1`)
+    const popped = new Promise((r) => window.addEventListener('popstate', r, { once: true }))
+    window.history.back()
+    await popped
+    expect(spanToJSON(getRootSpan(Sentry.getActiveSpan()!)).op, 'popstate is a navigation').toBe('navigation')
+    getRootSpan(Sentry.getActiveSpan()!).end()
+    await Sentry.flush(1000)
+    const ops = items(sink, 'transaction').map((i) => `${i.body.contexts.trace.op} ${i.body.transaction}`)
+    expect(ops.filter((o) => o.startsWith('navigation'))).toEqual(['navigation /invoices/:id', 'navigation /settings/members'])
   })
 
   it('apiFailures_backToBackRepeatsAreDeduplicated', async () => {

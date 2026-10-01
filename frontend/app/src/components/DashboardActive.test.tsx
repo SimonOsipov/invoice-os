@@ -329,7 +329,7 @@ describe('DashboardActive live panels — adversarial (QA task-429)', () => {
     // copy under a null live score.
     const readinessTile = screen.getByText('Readiness score').parentElement!.parentElement!
     expect(within(readinessTile).getByText('No invoices yet')).toBeDefined()
-    expect(screen.getByText('No open failures')).toBeDefined()
+    expect(screen.getByText('No invoices validated yet')).toBeDefined() // EMPTY_BUCKET has zero invoices
     expect(screen.queryByText('99')).toBeNull()
     expect(screen.queryByText('tenant-rule')).toBeNull()
   })
@@ -338,7 +338,7 @@ describe('DashboardActive live panels — adversarial (QA task-429)', () => {
     const data: Rollup = {
       totals: { counts: ZERO_COUNTS, needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [{ rule_key: 'tenant-wide-rule', invoices: 10 }] },
       clients: [
-        { entity_id: 'ent-3', entity_name: 'Clean Client Ltd', counts: ZERO_COUNTS, needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] },
+        { entity_id: 'ent-3', entity_name: 'Clean Client Ltd', counts: { ...ZERO_COUNTS, validated: 4 }, needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] },
       ],
       top_violations: [{ rule_key: 'tenant-wide-rule', invoices: 10 }],
     }
@@ -698,5 +698,33 @@ describe('DashboardActive KPI tiles — adversarial (QA)', () => {
     expect(head).toBe('28 TOTAL')
     expect(centre).toBe(28)
     expect(legend.reduce((a, b) => a + b, 0)).toBe(28)
+  })
+})
+
+describe('DashboardActive failures panel at zero invoices (AUTH-10-04)', () => {
+  const failuresPanel = (title: string) => screen.getByText(title).parentElement as HTMLElement
+
+  it('zero invoices is not "every invoice passed"', async () => {
+    mockRollupFetch(rollup(0))
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Readiness score') // settle before asserting the panel
+    expect(screen.getByText('No invoices validated yet')).toBeDefined()
+    expect(screen.getByText('Failures appear here once invoices are validated.')).toBeDefined()
+    expect(screen.queryByText('Every invoice passed validation.')).toBeNull()
+    expect(screen.queryByText('No open failures')).toBeNull()
+    expect(failuresPanel('No invoices validated yet').querySelector('svg'), 'no tick at zero invoices').toBeNull()
+  })
+
+  // Regression guard: green before and after the change.
+  it('invoices with no failures still say No open failures', async () => {
+    mockRollupFetch(rollup(0, { validated: 3 }))
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('Readiness score')
+    expect(screen.getByText('No open failures')).toBeDefined()
+    expect(screen.getByText('Every invoice passed validation.')).toBeDefined()
+    expect(screen.queryByText('No invoices validated yet')).toBeNull()
+    expect(failuresPanel('No open failures').querySelector('svg'), 'the tick stays when invoices exist').not.toBeNull()
   })
 })

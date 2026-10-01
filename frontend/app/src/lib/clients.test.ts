@@ -146,3 +146,14 @@ describe('firstRunSurface (AUTH-10-03)', () => {
     expect(noEntityCases).toBeGreaterThan(0)
   })
 })
+
+describe('emptyClient', () => {
+  it('emptyClient reads as an empty company, not a missing client', () => {
+    const c = emptyClient()
+    expect(c.name).toBe('No company yet')
+    expect(c.short).toBe('your company')
+    expect(c.entityId).toBeNull()
+    expect(c.onboarding).toBe(true)
+    expect(c.tin).toBe('—')
+  })
+})

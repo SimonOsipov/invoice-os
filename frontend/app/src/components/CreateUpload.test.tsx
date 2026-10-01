@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { PickedFile } from '../lib/importRun'
 import type { PlatformCtx } from '../types'
-import { CreateUpload } from './CreateUpload'
+import { AMBER_COPY, CreateUpload } from './CreateUpload'
 
 const UNSUPPORTED_NOTE = /Unsupported file type/i
 
@@ -237,13 +237,30 @@ function noEntityCtx(mode: 'firm' | 'inhouse', nav: () => void, setSettingsTab: 
   } as unknown as PlatformCtx
 }
 
-function linkEntityButton(container: HTMLElement): HTMLButtonElement {
-  const buttons = Array.from(container.querySelectorAll('button')).filter((b) =>
-    (b.textContent ?? '').startsWith('Link a business entity'),
-  )
+// The amber panel's button is the one control whose label ends in an arrow.
+function amberButton(container: HTMLElement): HTMLButtonElement {
+  const buttons = Array.from(container.querySelectorAll('button')).filter((b) => (b.textContent ?? '').endsWith('→'))
   expect(buttons, 'the no-entity panel did not render its button').toHaveLength(1)
   return buttons[0] as HTMLButtonElement
 }
+
+function amberPanel(container: HTMLElement): HTMLElement {
+  return amberButton(container).parentElement as HTMLElement
+}
+
+// The footnote is the last <p> on the step; it renders only alongside the panel.
+function amberFootnote(container: HTMLElement): string {
+  const ps = container.querySelectorAll('p')
+  expect(ps.length, 'the footnote did not render').toBeGreaterThan(1)
+  return ps[ps.length - 1].textContent ?? ''
+}
+
+// Literal on purpose: a copy constant alone would let drift pass (6 [c']).
+// Apostrophe is ASCII, exactly as Design § Copy writes it.
+const BODY =
+  "Invoices are filed for a registered company, and this workspace has none yet. Reading a file's columns still works \u2014 filing waits until the company is added."
+const FOOTNOTE =
+  'Manual entry has the same requirement \u2014 an invoice is filed for a registered company too.'
 
 describe('CreateUpload — the no-entity button names its destination tab in the nav call (ROUTE-04-03)', () => {
   afterEach(cleanup)
@@ -253,7 +270,9 @@ describe('CreateUpload — the no-entity button names its destination tab in the
     const setSettingsTab = vi.fn()
     const { container } = render(<CreateUpload ctx={noEntityCtx('inhouse', nav, setSettingsTab)} />)
 
-    fireEvent.click(linkEntityButton(container))
+    expect(amberPanel(container).firstElementChild?.textContent).toBe('Add your company before you file')
+    expect(amberButton(container).textContent).toBe('Add your company →')
+    fireEvent.click(amberButton(container))
 
     expect(nav.mock.calls, 'the tab must arrive with the destination, not before it').toEqual([
       ['settings', { settingsTab: 'company' }],
@@ -268,10 +287,42 @@ describe('CreateUpload — the no-entity button names its destination tab in the
     const setSettingsTab = vi.fn()
     const { container } = render(<CreateUpload ctx={noEntityCtx('firm', nav, setSettingsTab)} />)
 
-    fireEvent.click(linkEntityButton(container))
+    expect(amberPanel(container).firstElementChild?.textContent).toBe('Add a client before you file')
+    expect(amberButton(container).textContent).toBe('Add a client →')
+    fireEvent.click(amberButton(container))
 
     // The asymmetry is the point: Clients owns no param, so the firm branch passes none.
     expect(nav.mock.calls).toEqual([['clients']])
     expect(setSettingsTab).not.toHaveBeenCalled()
+  })
+})
+
+describe('CreateUpload — the amber panel copy (AUTH-10-04)', () => {
+  afterEach(cleanup)
+
+  it.each(['inhouse', 'firm'] as const)('the panel names the task, not a missing link (%s)', (mode) => {
+    const { container } = render(<CreateUpload ctx={noEntityCtx(mode, vi.fn(), vi.fn())} />)
+    const panel = amberPanel(container)
+    // Positive first: an empty panel would pass every negative below.
+    expect(panel.textContent ?? '').not.toBe('')
+    const text = `${panel.textContent} ${amberFootnote(container)}`
+    for (const gone of ['No linked business entity', 'Link a business entity', 'has none, so']) {
+      expect(text).not.toContain(gone)
+    }
+    // The placeholder name ('Lagos Freight' in this ctx) is no longer interpolated.
+    expect(text).not.toContain('Lagos Freight')
+  })
+
+  it.each(['inhouse', 'firm'] as const)('the panel says exactly what the task is (%s)', (mode) => {
+    const { container } = render(<CreateUpload ctx={noEntityCtx(mode, vi.fn(), vi.fn())} />)
+    const body = amberPanel(container).querySelector('p')
+    expect(body, 'the panel body did not render').not.toBeNull()
+    expect(body?.textContent).toBe(BODY)
+    expect(amberFootnote(container)).toBe(FOOTNOTE)
+    // The panel renders from the constant, and the constant is the literal.
+    expect(AMBER_COPY.body).toBe(BODY)
+    expect(AMBER_COPY.footnote).toBe(FOOTNOTE)
+    expect(amberPanel(container).firstElementChild?.textContent).toBe(AMBER_COPY.title[mode])
+    expect(amberButton(container).textContent).toBe(AMBER_COPY.button[mode])
   })
 })

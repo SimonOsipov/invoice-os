@@ -69,6 +69,19 @@ def test_no_header_starts_a_new_trace(client, sentry_capture):
     assert txn["contexts"]["trace"].get("parent_span_id") is None
 
 
+@pytest.mark.parametrize(
+    "header",
+    ["garbage", "zz-zz-1", f"{T}-{S}-2", f"{T[:-1]}-{S}-1", f"{T}-{S}-1-extra", ""],
+)
+def test_malformed_sentry_trace_starts_a_new_trace(client, sentry_capture, header):
+    resp = _read(client, {"sentry-trace": header})
+    assert resp.status_code == 200
+    trace = _only(sentry_capture.transactions())["contexts"]["trace"]
+    assert re.fullmatch(r"[0-9a-f]{32}", trace["trace_id"])
+    assert trace["trace_id"] != T
+    assert trace.get("parent_span_id") is None
+
+
 def test_healthz_makes_no_transaction(client, sentry_capture):
     for headers in (None, _sentry_trace(1)):
         resp = client.get("/healthz", headers=headers)
@@ -93,6 +106,9 @@ def test_issue_and_log_carry_the_inbound_trace(sentry_capture, monkeypatch):
     assert event["contexts"]["trace"]["trace_id"] == T
     notes = [log for log in sentry_capture.logs() if log["body"] == "stage note"]
     assert _only(notes)["trace_id"] == T
+    span_id = _only(sentry_capture.transactions())["contexts"]["trace"]["span_id"]
+    assert event["contexts"]["trace"]["span_id"] == span_id
+    assert _only(notes)["span_id"] == span_id
 
 
 def test_transaction_carries_no_request_and_no_query(client, sentry_capture):

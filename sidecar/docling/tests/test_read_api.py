@@ -31,11 +31,12 @@ def real_pdf_body() -> bytes:
     return (TESTDATA / "native_invoice.pdf").read_bytes()
 
 
-def test_t01_4_over_cap_body_is_refused_with_413(client):
+def test_t01_4_over_cap_body_is_refused_with_413(client, sentry_capture):
     body = b"0" * (MAX_DOCUMENT_BYTES + 1)
     resp = client.post("/v1/read", content=body, headers={"content-type": PDF_CONTENT_TYPE})
     assert resp.status_code == 413
     assert "error" in resp.json()
+    assert sentry_capture.events() == []
 
 
 def test_t01_5_exactly_cap_body_is_not_refused(client):
@@ -89,9 +90,10 @@ def test_over_cap_content_length_is_refused_without_reading_the_body(client):
     assert resp.status_code == 413
 
 
-def test_t01_6_empty_body_is_400(client):
+def test_t01_6_empty_body_is_400(client, sentry_capture):
     resp = client.post("/v1/read", content=b"", headers={"content-type": PDF_CONTENT_TYPE})
     assert resp.status_code == 400
+    assert sentry_capture.events() == []
 
 
 def test_t01_7_stub_response_validates_against_the_wire_contract(client, real_pdf_body):
@@ -136,7 +138,7 @@ def test_unsupported_content_type_is_accepted(client, real_pdf_body):
     assert resp.status_code == 200
 
 
-def test_t03_13_truncated_pdf_is_422_not_400_or_500(client):
+def test_t03_13_truncated_pdf_is_422_not_400_or_500(client, sentry_capture):
     # Valid header, body cut mid-object -- no endobj, no xref, no %%EOF. docling-parse raises
     # ConversionError on exactly this shape (confirmed against the pinned stack); a document
     # Docling opened but could not convert is 422, never 400 (that's reserved for empty body)
@@ -145,9 +147,12 @@ def test_t03_13_truncated_pdf_is_422_not_400_or_500(client):
     resp = client.post("/v1/read", content=truncated, headers={"content-type": PDF_CONTENT_TYPE})
     assert resp.status_code == 422, f"got {resp.status_code}, want 422"
     assert "error" in resp.json()
+    assert sentry_capture.events() == []  # docling logs ERROR on this path; logs are not issues
 
 
-def test_unexpected_error_is_500_not_swallowed_into_422(client, monkeypatch, caplog):
+def test_unexpected_error_is_500_not_swallowed_into_422(
+    client, monkeypatch, caplog, sentry_capture
+):
     # 422 is reserved for DocumentUnreadable (docling opened the document but couldn't
     # convert it) -- a genuine bug must stay 500 and land in the log, not get relabeled
     # "bad document" and hidden.
@@ -161,3 +166,6 @@ def test_unexpected_error_is_500_not_swallowed_into_422(client, monkeypatch, cap
     assert resp.status_code == 500
     assert resp.json() == {"error": "internal error"}
     assert "unexpected /v1/read failure" in caplog.text
+    events = sentry_capture.events()
+    assert len(events) == 1
+    assert [v["type"] for v in events[0]["exception"]["values"]] == ["ValueError"]

@@ -106,8 +106,8 @@ able to say why, since the screen that would carry the 403 never mounts. Exempti
 is what makes the 403 reachable at all.
 
 The exemption is narrow by construction: `Me` returns only the caller's **own** tenant and
-**own** role, display name and email. It reads no other member, no invoice, and nothing belonging to anyone else. Its
-two file-mates, `ListMemberships` and `SetMembershipStatus`, are gated — which is why the
+**own** role, display name and email. It reads no other member, no invoice, and nothing
+belonging to anyone else. Its two file-mates, `ListMemberships` and `SetMembershipStatus`, are gated — which is why the
 exemption is func-scoped: a method added beside `Me` inherits the gate, and the guard fails if
 anyone widens it.
 

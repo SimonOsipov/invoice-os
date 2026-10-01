@@ -1,6 +1,6 @@
 // Package tenancy is the 01 Tenancy context service: workspaces and their
 // memberships, read under Row-Level Security scoped by the app.current_tenant GUC.
-// GET /v1/me resolves the gateway-injected caller to their tenant and role;
+// GET /v1/me resolves the gateway-injected caller to their tenant;
 // POST /v1/workspaces provisions a tenant-less caller's first workspace.
 package tenancy
 
@@ -74,8 +74,8 @@ type MeUser struct {
 // MeHandler returns GET /v1/me. It reads the verified identity the platform's
 // identityMiddleware placed in the context (401 if absent — the endpoint is
 // tenant-scoped and must never answer without a caller), resolves the tenant and
-// domain role via load, and returns them. A missing/invalid tenant is 401
-// (db.ErrNoTenant, fail-closed); an unknown tenant is 404; a resolved tenant with
+// the caller's membership via load, and returns them. A missing/invalid tenant is
+// 401 (db.ErrNoTenant, fail-closed); an unknown tenant is 404; a resolved tenant with
 // no membership row is 403 (ErrNoMembership, fail-closed — a role is never
 // defaulted); a non-active membership is 403 (db.ErrNotActiveMember);
 // anything else is 500.

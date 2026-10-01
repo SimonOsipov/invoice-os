@@ -130,6 +130,31 @@ func TestMe_EmailOnlyIdentity(t *testing.T) {
 	}
 }
 
+// TestMe_EmptyAndEscapedIdentity: an empty string is a present "" (not null) and
+// reserved characters round-trip unchanged.
+func TestMe_EmptyAndEscapedIdentity(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	for _, tc := range []struct{ name, display, email, wantDisplay, wantEmail string }{
+		{"empty", "", "", `""`, `""`},
+		{"reserved characters", `Ada "Q" <O'Brien> & Sons`, "ada+tag@acme.ng", `"Ada \"Q\" \u003cO'Brien\u003e \u0026 Sons"`, `"ada+tag@acme.ng"`},
+		{"non-ASCII", "Adaeze Ọbị", "ada@acme.ng", `"Adaeze Ọbị"`, `"ada@acme.ng"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			load := func(context.Context) (Tenant, MeUser, error) {
+				return Tenant{ID: id.TenantID, Name: "Okafor & Partners", Kind: "firm"},
+					MeUser{Role: "admin", DisplayName: &tc.display, Email: &tc.email}, nil
+			}
+			user := meUserRaw(t, load, id)
+			if string(user["display_name"]) != tc.wantDisplay {
+				t.Errorf("user.display_name = %s, want %s", user["display_name"], tc.wantDisplay)
+			}
+			if string(user["email"]) != tc.wantEmail {
+				t.Errorf("user.email = %s, want %s", user["email"], tc.wantEmail)
+			}
+		})
+	}
+}
+
 // TestMe_NoMembership403 (AC #3, A1): ErrNoMembership must map to 403 with a
 // non-empty error body — distinct from 401 (no identity) and 404 (no tenant).
 func TestMe_NoMembership403(t *testing.T) {
@@ -432,7 +457,7 @@ func TestMe_SuspendedMemberStillGets200(t *testing.T) {
 	const tenantName = "tenancy me-handler suspended firm"
 	tenantID := seedTenant(t, super, tenantName)
 	userID := uuid.NewString()
-	seedMembership(t, super, tenantID, userID, "admin", "suspended")
+	seedIdentityMembership(t, super, tenantID, userID, "admin", "suspended", strp("Suspended Sam"), strp("sam@tenancy.test"))
 
 	id := auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID}
 	rec, body := doMe(t, NewStore(app).Me, &id)
@@ -457,6 +482,93 @@ func TestMe_SuspendedMemberStillGets200(t *testing.T) {
 	}
 	if body.User.Role != "admin" {
 		t.Errorf("user.role = %q, want %q", body.User.Role, "admin")
+	}
+	if body.User.DisplayName == nil || *body.User.DisplayName != "Suspended Sam" {
+		t.Errorf("user.display_name = %v, want %q on the wire", body.User.DisplayName, "Suspended Sam")
+	}
+	if body.User.Email == nil || *body.User.Email != "sam@tenancy.test" {
+		t.Errorf("user.email = %v, want %q on the wire", body.User.Email, "sam@tenancy.test")
+	}
+}
+
+// TestMe_RealStoreNullAndEmptyOnTheWire: NULL columns reach the wire as a present
+// JSON null and empty strings as "", through the real Store.Me.
+func TestMe_RealStoreNullAndEmptyOnTheWire(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "tenancy me-handler null vs empty")
+	nullUser, emptyUser := uuid.NewString(), uuid.NewString()
+	seedIdentityMembership(t, super, tenantID, nullUser, "admin", "active", nil, nil)
+	seedIdentityMembership(t, super, tenantID, emptyUser, "preparer", "active", strp(""), strp(""))
+
+	for _, tc := range []struct{ name, subject, want string }{
+		{"NULL columns", nullUser, "null"},
+		{"empty columns", emptyUser, `""`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			user := meUserRaw(t, NewStore(app).Me, auth.Identity{Subject: tc.subject, Role: "authenticated", TenantID: tenantID})
+			if len(user) != 4 {
+				t.Fatalf("user keys = %d, want 4 (id, role, display_name, email): %v", len(user), user)
+			}
+			for _, k := range []string{"display_name", "email"} {
+				if raw, ok := user[k]; !ok || string(raw) != tc.want {
+					t.Errorf("user.%s = %s (present=%v), want %s", k, raw, ok, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// TestMe_CrossTenantMemberLeaksNoIdentity: a member of tenant A only, acting in tenant B,
+// gets a 403 whose body carries none of tenant A's identity.
+func TestMe_CrossTenantMemberLeaksNoIdentity(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantA := seedTenant(t, super, "tenancy me-handler leak A")
+	tenantB := seedTenant(t, super, "tenancy me-handler leak B")
+	userID := uuid.NewString()
+	seedIdentityMembership(t, super, tenantA, userID, "admin", "active", strp("Ada Only In A"), strp("ada@only-a.test"))
+
+	rec, body := doMe(t, NewStore(app).Me, &auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantB})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (body %q)", rec.Code, rec.Body.String())
+	}
+	if body.Error == "" {
+		t.Error("error body is empty, want the 403 envelope")
+	}
+	for _, leak := range []string{"Ada Only In A", "ada@only-a.test", "display_name", tenantA} {
+		if strings.Contains(rec.Body.String(), leak) {
+			t.Errorf("403 body %q leaks %q", rec.Body.String(), leak)
+		}
+	}
+}
+
+// TestStoreMe_IdentityIsTheCallersOwnRow: in a tenant of three members of different
+// statuses, each caller gets their own pair, never a neighbour's.
+func TestStoreMe_IdentityIsTheCallersOwnRow(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "tenancy me-test own row")
+	members := []struct{ user, status, name, email string }{
+		{uuid.NewString(), "active", "Own Active", "active@own.test"},
+		{uuid.NewString(), "invited", "Own Invited", "invited@own.test"},
+		{uuid.NewString(), "suspended", "Own Suspended", "suspended@own.test"},
+	}
+	for _, m := range members {
+		seedIdentityMembership(t, super, tenantID, m.user, "preparer", m.status, strp(m.name), strp(m.email))
+	}
+
+	store := NewStore(app)
+	for _, m := range members {
+		t.Run(m.status, func(t *testing.T) {
+			_, me, err := store.Me(auth.WithIdentity(context.Background(), auth.Identity{Subject: m.user, Role: "authenticated", TenantID: tenantID}))
+			if err != nil {
+				t.Fatalf("Me(%s member): %v", m.status, err)
+			}
+			if me.DisplayName == nil || *me.DisplayName != m.name {
+				t.Errorf("DisplayName = %v, want %q", me.DisplayName, m.name)
+			}
+			if me.Email == nil || *me.Email != m.email {
+				t.Errorf("Email = %v, want %q", me.Email, m.email)
+			}
+		})
 	}
 }
 

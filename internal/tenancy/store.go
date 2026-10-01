@@ -31,8 +31,9 @@ func NewStore(pool *pgxpool.Pool) *Store {
 // (role, display name, email), both resolved under RLS: SELECT id, name, kind FROM
 // tenants (bare — the app.current_tenant GUC is the filter, not a WHERE clause)
 // then SELECT role, display_name, email FROM memberships WHERE user_id = $1
-// (identity.Subject — RLS scopes the row set to the current tenant). It reads no status. No visible tenant row maps to
-// ErrTenantNotFound; no membership row maps to ErrNoMembership (never defaulted).
+// (identity.Subject — RLS scopes the row set to the current tenant). It reads no
+// status. No visible tenant row maps to ErrTenantNotFound; no membership row maps
+// to ErrNoMembership (never defaulted).
 //
 // Both queries run inside the SAME transaction, so a missing tenant row surfaces
 // as ErrTenantNotFound before the membership query ever runs.

@@ -75,6 +75,7 @@ function wireNavigations(): void {
   })
 }
 
+// ceiling: a pushState within ~1.5 s of page load is not demoted to a redirect child as the SDK would; revisit if the app gains a boot-time pushState
 function appTracing(routeName?: (p: string) => string): Integration {
   const bt = browserTracingIntegration({ beforeStartSpan: nameRouteSpan(routeName), instrumentNavigation: false })
   return { ...bt, setup: (client) => (bt.setup?.(client), wireNavigations()) }

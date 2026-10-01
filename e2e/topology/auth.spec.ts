@@ -1080,18 +1080,18 @@ test('deployed app: a real firm workspace has the Clients portfolio and no Compa
 
 test('deployed app: a real sign-in names the account holder on the identity card', async ({ page, context }) => {
   test.setTimeout(180_000)
-  const account = await provisionRealAccount('card-name', undefined, 'Adaeze Nwankwo')
+  const account = await provisionRealAccount('card-name', undefined, 'Ada Nwosu')
   const errors = collectErrors(page)
 
   await signInAtFrontDoor(page, account, '/')
   const name = page.getByTestId('persona-name')
   // Read once, no retry: the card already names the person when the badge appears.
-  expect(await name.textContent(), 'the card name when the verified badge attached').toBe('Adaeze Nwankwo')
+  expect(await name.textContent(), 'the card name when the verified badge attached').toBe('Ada Nwosu')
   await expect(page.getByTestId('persona-initials')).toHaveText('AN')
   await expect(page.locator('aside.pf-sidebar')).not.toContainText('Chinedu Okafor')
 
   const stored = JSON.parse((await storedSession(context)) ?? 'null') as { me: Me | null } | null
-  expect(stored?.me?.user.display_name, 'the stored me.user.display_name').toBe('Adaeze Nwankwo')
+  expect(stored?.me?.user.display_name, 'the stored me.user.display_name').toBe('Ada Nwosu')
   expect(stored?.me?.user.email, 'the stored me.user.email').toBe(account.email)
 
   // Control for the 197-character journey: a short name is not clipped.
@@ -1101,7 +1101,7 @@ test('deployed app: a real sign-in names the account holder on the identity card
   await page.reload()
   await expect(page.locator(VERIFIED)).toBeAttached({ timeout: 30_000 })
   expect(page.url().startsWith(LANDING_URL), 'the reload went back to landing').toBe(false)
-  await expect(name).toHaveText('Adaeze Nwankwo')
+  await expect(name).toHaveText('Ada Nwosu')
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })
 

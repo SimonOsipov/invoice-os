@@ -14,7 +14,6 @@ import (
 )
 
 // refusalBody is the exact 403 body, flat envelope plus the encoder's newline.
-// The message is the production constant rulesManagedMessage.
 const refusalBody = `{"error":"rules are managed by ASComply"}` + "\n"
 
 // doToggle issues a PATCH /v1/rules/{key} through ToggleHandler, with
@@ -122,6 +121,13 @@ func TestHandlers_ErrorEnvelopeShape(t *testing.T) {
 		rec := doToggle(t, tenantIdentity(), "vat-standard-rate", strings.NewReader(`{"enabled":true}`))
 		if rec.Code != http.StatusForbidden {
 			t.Fatalf("status = %d, want 403", rec.Code)
+		}
+		assertFlatErrorEnvelope(t, rec)
+	})
+	t.Run("toggle 401", func(t *testing.T) {
+		rec := doToggle(t, nil, "vat-standard-rate", strings.NewReader(`{"enabled":true}`))
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401", rec.Code)
 		}
 		assertFlatErrorEnvelope(t, rec)
 	})

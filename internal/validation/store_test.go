@@ -57,7 +57,7 @@ type ruleFixture struct {
 
 // seedFullRule inserts one rules row under versionID as the superuser, like
 // schema_test.go's seedRule, but exposes every column so tests can assert
-// field-mapping and toggle behavior precisely. No cleanup of its own: it is
+// field-mapping precisely. No cleanup of its own: it is
 // always reachable from the seedVersion call that produced versionID, whose
 // cleanup cascades onto this row (rules.rule_set_version_id is ON DELETE
 // CASCADE — see schema_test.go's seedVersion doc comment).

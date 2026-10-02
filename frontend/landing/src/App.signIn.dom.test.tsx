@@ -252,3 +252,118 @@ describe('AUTH-05-07: the boot sign-in params', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 })
+
+describe('the console hand-back', () => {
+  const STATE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN-_0'
+  // D8 copy, verbatim.
+  const NOT_STAFF = 'This account cannot open the ASComply consoles.'
+  const NO_WORKSPACE = 'This account has no workspace yet.'
+
+  let assigned: string[]
+  let originalLocation: PropertyDescriptor | undefined
+
+  beforeEach(() => {
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.x')
+    vi.stubEnv('VITE_APP_URL', 'https://app.x')
+    vi.stubEnv('VITE_OPS_URL', 'https://ops.x')
+    vi.stubEnv('VITE_SUPPORT_URL', 'https://support.x')
+    // Reads delegate to the real location so the boot strip still works; only `href` writes are captured.
+    assigned = []
+    originalLocation = Object.getOwnPropertyDescriptor(window, 'location')
+    const real = window.location
+    const stub = {
+      get href() {
+        return real.href
+      },
+      set href(v: string) {
+        assigned.push(v)
+      },
+      get search() {
+        return real.search
+      },
+      get pathname() {
+        return real.pathname
+      },
+      get hash() {
+        return real.hash
+      },
+      get origin() {
+        return real.origin
+      },
+    }
+    Object.defineProperty(window, 'location', { value: stub, writable: true, configurable: true })
+  })
+
+  afterEach(() => {
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    window.history.replaceState(null, '', '/')
+    vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
+  })
+
+  async function bootAt(path: string): Promise<void> {
+    window.history.replaceState(null, '', path)
+    await mountApp()
+  }
+
+  async function signInFromNav(): Promise<void> {
+    await clickByText(document.querySelector('header')!, SIGN_IN_CTA)
+    const d = document.querySelector<HTMLElement>(DIALOG)!
+    expect(d, 'expected the sign-in dialog').not.toBeNull()
+    const email = d.querySelectorAll<HTMLInputElement>('input[type="email"]')
+    const password = d.querySelectorAll<HTMLInputElement>('input[type="password"]')
+    expect(email.length).toBe(1)
+    expect(password.length).toBe(1)
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => {
+      setValue.call(email[0], 'ada@okafor.ng')
+      email[0].dispatchEvent(new Event('input', { bubbles: true }))
+      setValue.call(password[0], 'pw')
+      password[0].dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      d.querySelector<HTMLButtonElement>('button[type="submit"]')!.click()
+    })
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+  }
+
+  function codeFetch() {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ code: 'the-code' }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  it('signIn_returnsTheCodeToTheConsoleThatAsked', async () => {
+    const fetchMock = codeFetch()
+    await bootAt(`/?state=${STATE}&console=ops`)
+    await signInFromNav()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(assigned).toEqual(['https://ops.x?handoff=the-code'])
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('signIn_withoutAConsoleStillOpensTheApp', async () => {
+    const fetchMock = codeFetch()
+    await bootAt(`/?state=${STATE}`)
+    await signInFromNav()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(assigned).toEqual(['https://app.x?handoff=the-code'])
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('boot_notStaffShowsItsMessage', async () => {
+    await bootAt('/?signin=not-staff')
+    expect(document.querySelectorAll(DIALOG).length).toBe(1)
+    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Sign in')
+    const alerts = Array.from(document.querySelector(DIALOG)!.querySelectorAll<HTMLElement>('[role="alert"]'))
+    expect(alerts.length).toBe(1)
+    expect(alerts[0].textContent).toContain(NOT_STAFF)
+    expect(alerts[0].textContent).not.toContain(NO_WORKSPACE)
+    expect(window.location.search).toBe('')
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+})

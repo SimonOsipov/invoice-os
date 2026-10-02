@@ -19,23 +19,24 @@ import { isScrollable, scrollDepthPercent, trackDemoOpen, trackScrollDepth, type
 import { readConsent, type ConsentRecord } from './consent'
 import { applyChoice } from './consentActions'
 import { isPrivacyPath } from './route'
-import { readSignInState } from './signIn'
+import { readSignInConsole, readSignInState } from './signIn'
 
-// Copy for the app's ?signin= outcome; `ready` opens the modal with no message.
+// Copy for the ?signin= outcome; `ready` opens the modal with no message.
 const SIGN_IN_OUTCOMES = new Map<string, string | undefined>([
   ['ready', undefined],
   ['no-workspace', 'This account has no workspace yet.'],
   ['failed', "We couldn't open your workspace. Sign in again."],
+  ['not-staff', 'This account cannot open the ASComply consoles.'],
 ])
 
-// Held a minute short of the app's 10-minute state TTL, so a posted state is still live there.
+// Held a minute short of the 10-minute state TTL, so a posted state is still live.
 const STATE_HOLD_MS = 9 * 60 * 1000
 
 // Pure read: the strip runs in an effect, so StrictMode's double init sees the same URL.
 function readSignInBoot(search: string) {
   const state = readSignInState(search)
   const outcome = new URLSearchParams(search).get('signin') ?? ''
-  return { state, bootAt: Date.now(), error: SIGN_IN_OUTCOMES.get(outcome), open: SIGN_IN_OUTCOMES.has(outcome) }
+  return { state, consoleTarget: readSignInConsole(search), bootAt: Date.now(), error: SIGN_IN_OUTCOMES.get(outcome), open: SIGN_IN_OUTCOMES.has(outcome) }
 }
 
 // The whole page lives under `.asc-app` — that scope defines the design-system
@@ -75,11 +76,12 @@ export default function App() {
     return () => window.removeEventListener('pageshow', onShow)
   }, [])
 
-  // Strip `state` and `signin` for any value; every other param stays.
+  // Strip `state`, `console` and `signin` for any value; every other param stays.
   useEffect(() => {
     const url = new URL(window.location.href)
-    if (!url.searchParams.has('state') && !url.searchParams.has('signin')) return
+    if (!['state', 'console', 'signin'].some((k) => url.searchParams.has(k))) return
     url.searchParams.delete('state')
+    url.searchParams.delete('console')
     url.searchParams.delete('signin')
     window.history.replaceState(null, '', url.pathname + url.search + url.hash)
   }, [])
@@ -160,6 +162,7 @@ export default function App() {
         <SignInModal
           heldState={heldState}
           initialError={signInError}
+          consoleTarget={signInBoot.consoleTarget ?? undefined}
           onClose={() => {
             setSignInOpen(false)
             setSignInError(undefined)

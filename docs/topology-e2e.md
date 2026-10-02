@@ -30,7 +30,10 @@ M2-14.4).
    lands on the add-company task, and adding its company opens the import step it gated, the
    identity card shows the account's own name, and a long name stays inside the card
    ([identity-provider.md](./identity-provider.md) "Sign-in and hand-off",
-   "Renewal").
+   "Renewal"). The same file's "deployed consoles:" journeys sign a staff account in through
+   landing and open both consoles, refuse a customer's session and a forged record, renew the
+   stored session on a load, and end both console sessions from one sign-out ("Console
+   sessions").
 3. **Cross-tenant isolation** — mints a tenant-A and a tenant-B token via the gateway's mock
    issuer and asserts `GET /api/tenancy/v1/me` returns exactly the caller's own tenant. Both
    rows exist in the seeded table, so RLS (JWT-verify → inject `X-Tenant-ID` → `SET LOCAL
@@ -55,9 +58,9 @@ gateway     ──> gate on /healthz (schema migrated at boot; a PR fork's DB is
                 (`db/seed.e2e-shards.sql`), and its demo-tenant purge is NON-fatal, so the gate asserts
                 /healthz's `demo_purge` field separately: `true` on a PR fork, `false`
                 on `development` — DEMO-04)
-            ──> deploy 8 context services + docling + auth + 4 SPAs (app and landing are
+            ──> deploy 8 context services + docling + auth + 4 SPAs (all four are
                 gateway-wired: prepare-env's `reconcile-urls` writes VITE_GATEWAY_URL on
-                both per run)
+                each per run)
             ──> verify: `e2e` job: smoke (landing + consoles) + api (typed contract suite)
             ──> `topology` job, one parallel leg per unit (browser login, isolation)
 ```
@@ -94,9 +97,19 @@ which is off). `GATEWAY_MOCK_ISSUER` forks, but only a `-tags mockissuer` gatewa
 honours it. `deploy-gateway` stamps that tag on `pull_request` only
 (`scripts/ci/stamp-mock-issuer.sh`).
 
+**The fork staff grant route.** The same mock-issuer branch of the gateway mounts
+`POST /auth/mock/staff {"user_id":"<uuid>"}`, beside `/auth/login`. It inserts the
+`staff_members` row with the migrator DSN and answers 204, so a spec can make a registered
+fork account staff (`provisionStaffAccount`, `e2e/api/client.ts`). A production build omits
+it: `mintsymbols_test.go` requires its handler and `db.GrantStaff` to be absent from that
+binary. Anyone who reaches a PR fork can make any fork account staff, as the mock issuer
+already lets anyone mint any persona; the consoles hold mock data only. It answers 204, 400 (a
+body without a hyphenated UUID `user_id`), 405 and 502. The production statement it stands in
+for is in [identity-provider.md](./identity-provider.md) "Granting staff".
+
 **Written per run, not inherited:** the URL variables. On a PR, prepare-env's
 `reconcile-urls` step writes and re-reads the fork's own `gateway.CORS_ALLOWED_ORIGINS` (all
-four SPA origins), `VITE_GATEWAY_URL` on both `app` and `landing`, `app.VITE_LANDING_URL`,
+four SPA origins), `VITE_GATEWAY_URL` on `app`, `landing` and each console, `app.VITE_LANDING_URL`,
 the landing's `VITE_APP_URL`, `VITE_OPS_URL` and `VITE_SUPPORT_URL`, each console's
 `VITE_LANDING_URL`, and `app.VITE_DEMO_MODE=true`. It refuses the persistent environment.
 

@@ -37,7 +37,11 @@ describe('dockerfiles', () => {
       // An ARG above the stage's FROM is out of scope for it, and an ENV above its ARG expands empty.
       const from = lines.findIndex((l) => /^FROM /.test(l))
       expect(from, `${name}: no FROM`).toBeGreaterThan(-1)
-      for (const key of ['VITE_SENTRY_DSN=$VITE_SENTRY_DSN', 'VITE_RAILWAY_GIT_COMMIT_SHA=$RAILWAY_GIT_COMMIT_SHA']) {
+      for (const key of [
+        'VITE_SENTRY_DSN=$VITE_SENTRY_DSN',
+        'VITE_RAILWAY_GIT_COMMIT_SHA=$RAILWAY_GIT_COMMIT_SHA',
+        'VITE_GATEWAY_URL=$VITE_GATEWAY_URL',
+      ]) {
         const arg = lines.indexOf(`ARG ${key.split('=$')[1]}`)
         const env = lines.indexOf(`ENV ${key}`)
         expect(arg, `${name}: ARG for ${key} is not inside the build stage`).toBeGreaterThan(from)
@@ -48,6 +52,8 @@ describe('dockerfiles', () => {
         'ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN',
         'ARG RAILWAY_GIT_COMMIT_SHA',
         'ENV VITE_RAILWAY_GIT_COMMIT_SHA=$RAILWAY_GIT_COMMIT_SHA',
+        'ARG VITE_GATEWAY_URL',
+        'ENV VITE_GATEWAY_URL=$VITE_GATEWAY_URL',
       ]) {
         const at = lines.indexOf(want)
         expect(at, `${name}/Dockerfile lacks "${want}" before its build RUN`).toBeGreaterThan(-1)

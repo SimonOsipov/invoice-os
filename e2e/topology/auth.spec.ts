@@ -1,17 +1,20 @@
 import { test, expect, type BrowserContext, type Frame, type Page, type Request, type Response } from '@playwright/test'
 import { APP_URL, FIRM_PERSONA, GATEWAY_URL, INHOUSE_PERSONA } from './targets'
 import { resolveTarget } from '../targets'
-import { collectErrors, sidebarRoster } from '../personaSession'
+import { DESTINATION_READY, collectErrors, sidebarRoster } from '../personaSession'
+import { CONSOLE_SESSION_KEY, consoleUrl, seedStaffSession, type ConsoleTarget } from '../staffSession'
 import { PERSONAS, PERSONA_IDS, DESTINATION_ENV, type PersonaId } from '../personas'
 import {
   login,
   createEntity,
   createInvoice,
   createImportBatch,
+  claimsOf,
   exchangeCode,
   listEntities,
   mintSignInState,
   provisionRealAccount,
+  provisionStaffAccount,
   rawFetch,
   signInForCode,
   PERSONAS as API_PERSONAS,
@@ -565,6 +568,18 @@ test('deployed app: a signed-out deep link returns to its FILTER after sign-in',
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
+// The console's front door: landing with a sign-in state and the console that asked.
+// The landing strips both on mount, so the answer is awaited, not the URL.
+const consoleFrontDoor = (page: Page, target: ConsoleTarget) =>
+  page.waitForResponse(
+    (r) => {
+      if (!r.request().isNavigationRequest() || !r.url().startsWith(LANDING_URL)) return false
+      const q = new URL(r.url()).searchParams
+      return q.has('state') && q.get('console') === target
+    },
+    { timeout: 20_000 },
+  )
+
 // This walk drives the REAL SignInModal (open -> pick a persona), never
 // e2e/personas.ts#signInUrl's constructed URL. signInUrl cannot catch three ways the
 // two sides can silently diverge:
@@ -576,9 +591,11 @@ test('deployed app: a signed-out deep link returns to its FILTER after sign-in',
 //      at CI run time;
 //  (c) unset behaviour is opposite — an unset target makes destUrl() return null and the
 //      pick a silent no-op, while signInUrl() throws.
+// A console takes a staff session, not a persona: its pick ends at the front-door bounce to landing.
 for (const id of PERSONA_IDS) {
   const persona = PERSONAS[id]
-  test(`deployed ${persona.destination}: the ${id} persona reaches its destination through the sign-in modal`, async ({ page }) => {
+  const outcome = persona.destination === 'app' ? 'reaches its destination' : 'is sent back to the landing front door'
+  test(`deployed ${persona.destination}: the ${id} persona ${outcome} through the sign-in modal`, async ({ page }) => {
     const errors: string[] = []
     page.on('console', (msg) => {
       if (msg.type() === 'error') errors.push(msg.text())
@@ -603,18 +620,18 @@ for (const id of PERSONA_IDS) {
     // consumed ?persona="), so the wire value is only observable on the outbound navigation
     // request — armed BEFORE the click.
     const base = EXPECTED_BASE[id]
+    const door = persona.destination === 'app' ? null : consoleFrontDoor(page, persona.destination)
     const [navRequest] = await Promise.all([
       page.waitForRequest((r) => r.isNavigationRequest() && r.url().startsWith(base)),
       page.locator(`[data-persona="${id}"]`).click(),
     ])
     expect(new URL(navRequest.url()).searchParams.get('persona'), `navigation request did not carry ?persona=${id}`).toBe(id)
 
-    if (persona.destination === 'app') {
+    if (door === null) {
       await expect(page.locator('aside.pf-sidebar')).toContainText(persona.tenantName!.toUpperCase())
-    } else if (persona.destination === 'ops') {
-      await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible()
     } else {
-      await expect(page.getByRole('heading', { name: 'Submissions ops' })).toBeVisible()
+      expect((await door).status(), `the ${persona.destination} front door answer`).toBe(200)
+      await expect(page.getByRole('banner').getByRole('button', { name: 'Explore the platform' })).toBeVisible()
     }
 
     expect(errors, `console errors on the ${persona.destination} arrival:\n${errors.join('\n')}`).toEqual([])
@@ -1628,5 +1645,260 @@ test('deployed app: signing out on one device ends the session on every device',
     }
   } finally {
     await Promise.all(contexts.map((context) => context.close()))
+  }
+})
+
+// Both consoles take a staff session. Each journey drives landing's real form against real GoTrue accounts.
+const CONSOLE_TARGETS: readonly ConsoleTarget[] = ['ops', 'support']
+const NOT_STAFF = 'This account cannot open the ASComply consoles.'
+
+const isConsoleHandoff = (url: string, target: ConsoleTarget) => url.startsWith(consoleUrl(target)) && new URL(url).searchParams.has('handoff')
+const isRefresh = (r: Request | Response) => r.url() === REFRESH_URL
+const refreshAnswer = (page: Page) => page.waitForResponse((r) => isRefresh(r) && r.request().method() === 'POST')
+
+// The console origin's stored session in this context, or null.
+async function consoleRecord(context: BrowserContext, target: ConsoleTarget): Promise<{ v: number; token: string; refresh_token: string } | null> {
+  const { origins } = await context.storageState()
+  const entry = origins.find((o) => o.origin === new URL(consoleUrl(target)).origin)?.localStorage.find((e) => e.name === CONSOLE_SESSION_KEY[target])
+  return entry ? JSON.parse(entry.value) : null
+}
+
+// Writes a hand-made record into the console origin before any page script runs.
+async function seedRawConsoleRecord(context: BrowserContext, target: ConsoleTarget, value: string): Promise<void> {
+  await context.addInitScript(
+    ({ origin, key, record }) => {
+      if (location.origin !== origin || sessionStorage.getItem('e2e.raw-seeded')) return
+      sessionStorage.setItem('e2e.raw-seeded', '1')
+      localStorage.setItem(key, record)
+    },
+    { origin: new URL(consoleUrl(target)).origin, key: CONSOLE_SESSION_KEY[target], record: value },
+  )
+}
+
+// A console visit with no usable session: the console leaves for landing at once, so wait on the commit.
+async function visitConsole(page: Page, target: ConsoleTarget): Promise<void> {
+  const door = consoleFrontDoor(page, target)
+  await page.goto(consoleUrl(target), { waitUntil: 'commit' })
+  expect((await door).status(), `the ${target} front door answer`).toBe(200)
+  await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
+}
+
+async function signInThroughLanding(page: Page, target: ConsoleTarget, account: { email: string; password: string }): Promise<Request> {
+  await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
+  const [handoff] = await Promise.all([
+    page.waitForRequest((r) => r.isNavigationRequest() && isConsoleHandoff(r.url(), target)),
+    submitSignIn(page, account.email, account.password),
+  ])
+  return handoff
+}
+
+test('deployed consoles: a staff session signs in through landing, opens each console and survives a reload, with no token in any URL', async ({ browser }) => {
+  test.setTimeout(240_000)
+  const account = await provisionStaffAccount('console-door')
+
+  for (const target of CONSOLE_TARGETS) {
+    await test.step(`${target}-console`, async () => {
+      const context = await browser.newContext()
+      try {
+        const page = await context.newPage()
+        const errors = gatedErrors(page, [])
+        const urls = recordUrls(page)
+
+        await visitConsole(page, target)
+        const handoff = await signInThroughLanding(page, target, account)
+        expect(new URL(handoff.url()).searchParams.get('handoff'), 'the hand-off code').toMatch(/^[A-Za-z0-9_-]{43}$/)
+        await DESTINATION_READY[target](page)
+        expect(new URL(page.url()).searchParams.has('handoff'), '?handoff= survived the redemption').toBe(false)
+
+        const stored = await consoleRecord(context, target)
+        expect(stored, `${target} stored no session`).not.toBeNull()
+        expect(stored!.v, 'the stored record version').toBe(2)
+        expect(JWT_IN_URL.test(stored!.token), 'the stored token is not a JWT').toBe(true)
+        expect((claimsOf(stored!.token).app_metadata as { staff?: unknown }).staff, 'staff on the stored token').toBe(true)
+
+        await page.reload()
+        await DESTINATION_READY[target](page)
+        const renewed = await consoleRecord(context, target)
+        expect(renewed, `${target} lost its session on reload`).not.toBeNull()
+
+        expect(urls.length, 'no URLs were recorded').toBeGreaterThan(0)
+        expect(
+          leakingUrls(urls, stored!.token, stored!.refresh_token, renewed!.token, renewed!.refresh_token),
+          'a token, a refresh token or a JWT appeared in these URLs',
+        ).toEqual([])
+        expect(errors, `console errors on the ${target} journey:\n${errors.join('\n')}`).toEqual([])
+      } finally {
+        await context.close()
+      }
+    })
+  }
+})
+
+test("deployed consoles: a customer's real session opens neither console and is told why", async ({ browser }) => {
+  test.setTimeout(240_000)
+  const account = await provisionRealAccount('console-customer')
+
+  for (const target of CONSOLE_TARGETS) {
+    await test.step(`${target}-console`, async () => {
+      const context = await browser.newContext()
+      try {
+        const page = await context.newPage()
+        const errors = gatedErrors(page, [])
+        const urls = recordUrls(page)
+
+        await visitConsole(page, target)
+        // Armed before the sign-in: the console redeems the code, finds no staff claim, and leaves.
+        const notStaff = page.waitForResponse(
+          (r) => {
+            if (!r.request().isNavigationRequest() || !r.url().startsWith(LANDING_URL)) return false
+            const q = new URL(r.url()).searchParams
+            return q.get('signin') === 'not-staff' && q.get('console') === target && q.has('state')
+          },
+          { timeout: 30_000 },
+        )
+        await signInThroughLanding(page, target, account)
+        expect((await notStaff).status(), `the ${target} not-staff landing answer`).toBe(200)
+        await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
+        await expect(page.getByRole('dialog', { name: 'Sign in' }).getByRole('alert')).toContainText(NOT_STAFF)
+
+        expect(await consoleRecord(context, target), `${target} kept a session for a customer`).toBeNull()
+        expect(urls.length, 'no URLs were recorded').toBeGreaterThan(0)
+        expect(leakingUrls(urls), 'a JWT appeared in these URLs').toEqual([])
+        expect(errors, `console errors on the ${target} journey:\n${errors.join('\n')}`).toEqual([])
+      } finally {
+        await context.close()
+      }
+    })
+  }
+})
+
+const b64u = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url')
+
+test('deployed consoles: a hand-written or forged record opens nothing and ends on landing', async ({ browser }) => {
+  test.setTimeout(240_000)
+  const forgedToken = `${b64u({ alg: 'none', typ: 'JWT' })}.${b64u({ sub: crypto.randomUUID(), app_metadata: { staff: true }, exp: Math.floor(Date.now() / 1000) + 3600 })}.`
+  const records = {
+    v1: JSON.stringify({ v: 1, operator: { id: 'amara', name: 'Amara Okafor' } }),
+    forged: JSON.stringify({ v: 2, token: forgedToken, refresh_token: 'aaaaaaaaaaaa' }),
+  }
+
+  for (const target of CONSOLE_TARGETS) {
+    for (const [kind, record] of Object.entries(records)) {
+      await test.step(`${target}-console, ${kind} record`, async () => {
+        const context = await browser.newContext()
+        try {
+          const page = await context.newPage()
+          // Only the forged record reaches /auth/refresh, and only that answer is expected.
+          const errors = gatedErrors(page, kind === 'forged' ? [expectedStatusDropper(page, 401, /\/auth\/refresh$/)] : [])
+          const urls = recordUrls(page)
+          const warnings: string[] = []
+          page.on('console', (msg) => {
+            if (msg.type() === 'warning') warnings.push(msg.text())
+          })
+          await seedRawConsoleRecord(context, target, record)
+          const refused = kind === 'forged' ? refreshAnswer(page) : null
+
+          await visitConsole(page, target)
+          if (refused) {
+            expect((await refused).status(), `the ${target} refresh of the forged record`).toBe(401)
+            expect(await consoleRecord(context, target), `${target} kept the forged record`).toBeNull()
+          } else {
+            // A v1 record is ignored, never sent to the gateway. The warning proves the console read it.
+            await expect
+              .poll(() => warnings.some((w) => w.includes(`ignoring unusable stored session at "${CONSOLE_SESSION_KEY[target]}"`)), { message: `the ${target} console never read the v1 record` })
+              .toBe(true)
+            expect(urls.filter((u) => u === REFRESH_URL), `${target} sent the v1 record to /auth/refresh`).toEqual([])
+          }
+          expect(urls.length, 'no URLs were recorded').toBeGreaterThan(0)
+          expect(errors, `console errors on the ${target} ${kind} load:\n${errors.join('\n')}`).toEqual([])
+        } finally {
+          await context.close()
+        }
+      })
+    }
+  }
+})
+
+test('deployed consoles: a console load renews the stored session and stays in the console', async ({ browser }) => {
+  test.setTimeout(240_000)
+  const account = await provisionStaffAccount('console-renew')
+
+  for (const target of CONSOLE_TARGETS) {
+    await test.step(`${target}-console`, async () => {
+      const context = await browser.newContext()
+      try {
+        const page = await context.newPage()
+        const errors = gatedErrors(page, [])
+        const urls = recordUrls(page)
+        const seeded = await seedStaffSession(page, target, account)
+        const first = await consoleRecord(context, target)
+        expect(first, `${target} stored no session after the first load`).not.toBeNull()
+        // The refresh token always rotates; two access tokens minted in one second can be identical.
+        expect(first!.refresh_token, 'the first load did not renew the seeded pair').not.toBe(seeded.refresh_token)
+
+        const renewal = refreshAnswer(page)
+        await page.reload()
+        expect((await renewal).status(), `the ${target} renewal on reload`).toBe(200)
+        await DESTINATION_READY[target](page)
+        expect(page.url().startsWith(consoleUrl(target)), `the reload left ${page.url()}`).toBe(true)
+
+        const second = await consoleRecord(context, target)
+        expect(second, `${target} stored no session after the reload`).not.toBeNull()
+        expect(second!.refresh_token, 'the reload did not change the stored pair').not.toBe(first!.refresh_token)
+
+        expect(urls.length, 'no URLs were recorded').toBeGreaterThan(0)
+        expect(
+          leakingUrls(urls, seeded.token, seeded.refresh_token, first!.token, first!.refresh_token, second!.token, second!.refresh_token),
+          'a token, a refresh token or a JWT appeared in these URLs',
+        ).toEqual([])
+        expect(errors, `console errors on the ${target} journey:\n${errors.join('\n')}`).toEqual([])
+      } finally {
+        await context.close()
+      }
+    })
+  }
+})
+
+test('deployed consoles: signing out of the Support Console ends the Ops Console session', async ({ browser }) => {
+  test.setTimeout(240_000)
+  const account = await provisionStaffAccount('console-sign-out')
+  const context = await browser.newContext()
+  try {
+    const ops = await context.newPage()
+    const support = await context.newPage()
+    const opsErrors = gatedErrors(ops, [expectedStatusDropper(ops, 401, /\/auth\/refresh$/)])
+    const supportErrors = gatedErrors(support, [])
+    const opsUrls = recordUrls(ops)
+    const supportUrls = recordUrls(support)
+    const seededOps = await seedStaffSession(ops, 'ops', account)
+    const seededSupport = await seedStaffSession(support, 'support', account)
+    const opsBefore = await consoleRecord(context, 'ops')
+    expect(opsBefore, 'the Ops Console stored no session').not.toBeNull()
+    expect(await consoleRecord(context, 'support'), 'the Support Console stored no session').not.toBeNull()
+
+    const signedOut = support.waitForResponse((r) => r.url() === SIGN_OUT_URL && r.request().method() === 'POST', { timeout: 20_000 })
+    await support.getByRole('button', { name: 'Sign out' }).click()
+    expect((await signedOut).status(), 'the sign-out answer').toBe(204)
+    await support.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
+    expect(await consoleRecord(context, 'support'), 'the Support Console kept a session').toBeNull()
+
+    // Armed before the reload: the refused renewal and the front door both come from the one load.
+    const refused = refreshAnswer(ops)
+    const door = consoleFrontDoor(ops, 'ops')
+    await ops.reload({ waitUntil: 'commit' })
+    expect((await refused).status(), 'the Ops Console renewal after the sign-out').toBe(401)
+    expect((await door).status(), "the Ops Console's front door answer").toBe(200)
+    await ops.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
+    expect(await consoleRecord(context, 'ops'), 'the Ops Console kept a session').toBeNull()
+
+    expect(opsUrls.length + supportUrls.length, 'no URLs were recorded').toBeGreaterThan(0)
+    expect(
+      leakingUrls([...opsUrls, ...supportUrls], seededOps.token, seededOps.refresh_token, seededSupport.token, seededSupport.refresh_token, opsBefore!.token, opsBefore!.refresh_token),
+      'a token, a refresh token or a JWT appeared in these URLs',
+    ).toEqual([])
+    expect(opsErrors, `console errors in the Ops Console:\n${opsErrors.join('\n')}`).toEqual([])
+    expect(supportErrors, `console errors in the Support Console:\n${supportErrors.join('\n')}`).toEqual([])
+  } finally {
+    await context.close()
   }
 })

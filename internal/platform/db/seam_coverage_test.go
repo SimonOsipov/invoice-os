@@ -201,6 +201,7 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/importer/backfill.go"},                               // operator CLI tools/backfill-source-rows; it carries a job tenant and never a request identity
 	{file: "internal/invoice/revalidate.go"},                              // operator CLI tools/revalidate-invoices; same shape, same absence of a caller
 	{file: "internal/reconciliation/sweep.go"},                            // enumerateTenants reads tenants as invoice_tenant_reader with no GUC set, which a tenant-scoped tx cannot express
+	{file: "internal/platform/db/staff.go", fn: "GrantStaff"},             // mock builds only: the E2E fork grants staff on the owner DSN; no caller identity exists
 }
 
 // scPoolSite is one direct pool call: recv is the pool-typed name it was made on,

@@ -102,7 +102,7 @@ PR opened ──> dev-env.yml:
                 NON-fatal, so /healthz carries a `demo_purge` field the gate
                 asserts == "true" separately — DEMO-04; mock_issuer == "on";
                 auth_issuers == "2": the mock plus the fork's own GoTrue)
-                ──> 8 context services + docling + auth + 4 SPAs (app is gateway-wired)
+                ──> 8 context services + docling + auth + 4 SPAs (all four are gateway-wired)
                 ──> `fleet-gate` job: fleet /healthz/fleet gate + its Sentry
                     state check: every Go service and docling report sentry "off"
                 ──> verify, `e2e` job: smoke (landing + both consoles) + api

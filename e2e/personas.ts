@@ -11,21 +11,21 @@
 // reason. See e2e/personaSession.ts for the Playwright-driving layer this registry
 // deliberately does not contain.
 //
-// This is the SINGLE source of truth for the persona axis: smoke/apps.ts and
-// topology/targets.ts derive their persona values from here. The dependency runs one way —
-// those two import this module, never the reverse.
+// This is the SINGLE source of truth for the persona axis: topology/targets.ts derives its
+// persona values from here. The dependency runs one way — that file imports this module,
+// never the reverse.
 
 import { resolveTarget } from './targets'
 
 // The four landing personas (frontend/landing/src/auth.ts's LandingPersona.id). These ids are WIRE VALUES:
-// each one is the `?persona=` param the landing hands off with, and the destination SPA's
-// session gate checks it verbatim. Not to be conflated with frontend/app/src/auth.ts:14's
-// unrelated, two-member `PersonaId` (firm | inhouse) — different package, different job.
+// each one is the `?persona=` param the landing hands off with, and the app's session gate
+// checks it verbatim. Not to be conflated with frontend/app/src/auth.ts's unrelated,
+// two-member `PersonaId` (firm | inhouse) — different package, different job.
 export type PersonaId = 'developer' | 'support' | 'firm' | 'inhouse'
 
 // The three deployed SPAs a persona can be routed to. Mirrors LandingPersona.target
 // (frontend/landing/src/auth.ts) — `ops` is the ops-console service, and the `developer`
-// persona opening it is the wire-value/display-name split documented there, not a mistake.
+// persona routing to it is the wire-value/display-name split documented there, not a mistake.
 export type Destination = 'app' | 'ops' | 'support'
 
 // Which environment variable carries each destination's base URL on this run's ephemeral
@@ -185,28 +185,24 @@ export function signInUrl(id: PersonaId): string {
   return `${base}?persona=${id}`
 }
 
-// Whether a destination's session gate lets this persona in. Each persona opens exactly one
-// destination, so this is a lookup against the registry rather than a second list of pairs.
-// Mirrors the three live product gates:
-//   app     -> shouldAutoSignIn        (frontend/app/src/lib/session.ts:110-111)
-//   ops     -> OPS_OPERATORS           (frontend/ops-console/src/session.ts:31-33)
-//   support -> SUPPORT_OPERATORS       (frontend/support-console/src/session.ts:26-28)
+// Whether a destination's gate lets this persona in. Only the app does, via shouldAutoSignIn
+// (frontend/app/src/lib/session.ts); the consoles take a staff session, not a persona.
 export function accepts(destination: Destination, id: PersonaId): boolean {
-  return PERSONAS[id].destination === destination
+  return destination === 'app' && PERSONAS[id].destination === 'app'
 }
 
-// Every (persona, destination) pair and what the destination's gate does with it: 4 accepts,
-// 8 refuses. HAND-WRITTEN on purpose. Derived from accepts() it would be 12-long and
+// Every (persona, destination) pair and what the destination's gate does with it: 2 accepts,
+// 10 refuses. HAND-WRITTEN on purpose. Derived from accepts() it would be 12-long and
 // duplicate-free by construction, so G5 would assert a tautology; written out, adding a
 // fifth persona leaves the matrix at 12 rows and turns G5 red until all three of its new
 // pairs have been stated. G5 also cross-checks every row against accepts().
 export const BOUNDARY_MATRIX: readonly { persona: PersonaId; destination: Destination; verdict: 'accepts' | 'refuses' }[] = [
   { persona: 'developer', destination: 'app', verdict: 'refuses' },
-  { persona: 'developer', destination: 'ops', verdict: 'accepts' },
+  { persona: 'developer', destination: 'ops', verdict: 'refuses' },
   { persona: 'developer', destination: 'support', verdict: 'refuses' },
   { persona: 'support', destination: 'app', verdict: 'refuses' },
   { persona: 'support', destination: 'ops', verdict: 'refuses' },
-  { persona: 'support', destination: 'support', verdict: 'accepts' },
+  { persona: 'support', destination: 'support', verdict: 'refuses' },
   { persona: 'firm', destination: 'app', verdict: 'accepts' },
   { persona: 'firm', destination: 'ops', verdict: 'refuses' },
   { persona: 'firm', destination: 'support', verdict: 'refuses' },

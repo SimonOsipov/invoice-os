@@ -123,8 +123,7 @@ GRANT USAGE ON SCHEMA public TO supabase_auth_admin;
 
 --    ALTER FUNCTION ... OWNER TO auth_hook_reader needs the new owner to hold CREATE.
 GRANT USAGE, CREATE ON SCHEMA public TO auth_hook_reader;
---    SET without INHERIT: the migrator can hand the hook over and drop it, but never
---    inherits the role's cross-tenant read policy.
+--    SET without INHERIT: the migrator never inherits the role's cross-tenant read policy.
 GRANT auth_hook_reader TO invoice_migrator WITH INHERIT FALSE, SET TRUE;
 
 --    Lock down the public schema: revoke the ambient CREATE that PUBLIC has by

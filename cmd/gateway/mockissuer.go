@@ -3,13 +3,17 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"os"
 
+	"github.com/google/uuid"
+
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 const mockIssuerCompiled = true
@@ -33,4 +37,11 @@ func mockIssuerRoutes(environment, flag string, withCORS func(http.Handler) http
 	login = withCORS(gateway.MockLoginHandler(issuer, posture))
 	logger.Warn("mock issuer enabled — unauthenticated login is live on this deployment")
 	return jwks, login
+}
+
+// mockStaffRoute binds the staff grant handler to the owner DSN.
+func mockStaffRoute(dsn string, logger *slog.Logger) http.Handler {
+	return gateway.MockStaffHandler(func(ctx context.Context, userID uuid.UUID) error {
+		return db.GrantStaff(ctx, dsn, userID)
+	}, logger)
 }

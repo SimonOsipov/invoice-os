@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// OPS-01 — local-only ops console showcase. No proxy/backend; all content is static.
+// OPS-01 — ops console showcase. No dev proxy; the staff gate calls the gateway by its absolute URL, and all content is static.
 export default defineConfig({
   plugins: [react()],
   // Favicons come from the design-tokens package so all four apps serve identical

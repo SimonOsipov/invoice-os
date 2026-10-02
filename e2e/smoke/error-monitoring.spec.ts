@@ -1,5 +1,6 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import { signInUrl } from '../personas'
+import { CONSOLE_SESSION_KEY, seedStaffStorage, test, type ConsoleTarget } from '../staffSession'
 import { resolveTarget } from '../targets'
 import { APPS } from './apps'
 import { enclosesRect, gaps, WIDE_WIDTHS } from '../topology/layout'
@@ -18,7 +19,7 @@ function mainViewOf(name: string): (page: Page) => Promise<void> {
   return app.assertMainView
 }
 
-const TARGETS: { name: string; url: () => string; mainView: (page: Page) => Promise<void> }[] = [
+const TARGETS: { name: string; url: () => string; console?: ConsoleTarget; mainView: (page: Page) => Promise<void> }[] = [
   { name: 'landing', url: () => resolveTarget('LANDING_URL'), mainView: mainViewOf('landing') },
   {
     name: 'app',
@@ -28,12 +29,12 @@ const TARGETS: { name: string; url: () => string; mainView: (page: Page) => Prom
       await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
     },
   },
-  { name: 'ops-console', url: () => signInUrl('developer'), mainView: mainViewOf('ops-console') },
-  { name: 'support-console', url: () => signInUrl('support'), mainView: mainViewOf('support-console') },
+  { name: 'ops-console', url: () => resolveTarget('OPS_CONSOLE_URL'), console: 'ops', mainView: mainViewOf('ops-console') },
+  { name: 'support-console', url: () => resolveTarget('SUPPORT_CONSOLE_URL'), console: 'support', mainView: mainViewOf('support-console') },
 ]
 
 for (const target of TARGETS) {
-  test(`${target.name}: no request reaches a Sentry host`, async ({ page }) => {
+  test(`${target.name}: no request reaches a Sentry host`, async ({ page, staffAccount }) => {
     const url = target.url()
     test.skip(isProductionHost(url), `${new URL(url).hostname} is a production host, where Sentry may be on`)
     const allRequests: { url: string; type: string }[] = []
@@ -47,6 +48,7 @@ for (const target of TARGETS) {
       (route) => route.fulfill({ status: 200, body: '{}', headers: { 'access-control-allow-origin': '*' } }),
     )
 
+    if (target.console) await seedStaffStorage(page, target.console, staffAccount)
     await page.goto(url)
     await target.mainView(page)
     // A fixed window, not networkidle: an SDK flushes on a timer, and a signed-in SPA may never go idle.
@@ -77,9 +79,11 @@ const TRACE_HEADERS = {
   baggage: 'sentry-environment=production',
 }
 
-// Each SPA reads URLSearchParams in a render-time initializer, so throwing there crashes the first render.
+// The app reads URLSearchParams in a render-time initializer, so throwing there crashes its first render.
+// A console reads it in the async gate, so its crash is armed when the gate stores the renewed session:
+// the console's first render then calls Array.prototype.filter (jobs.filter in each console's App).
 for (const target of TARGETS.filter((t) => t.name !== 'landing')) {
-  test(`${target.name}: an induced render crash shows the recovery screen`, async ({ page }, testInfo) => {
+  test(`${target.name}: an induced render crash shows the recovery screen`, async ({ page, staffAccount }, testInfo) => {
     const url = target.url()
     test.skip(isProductionHost(url), `${new URL(url).hostname} is a production host, where Sentry may be on`)
     const consoleErrors: string[] = []
@@ -92,11 +96,28 @@ for (const target of TARGETS.filter((t) => t.name !== 'landing')) {
     page.on('request', (req) => {
       if (isSentryHost(req.url())) sentryRequests.push(req.url())
     })
-    await page.addInitScript((message) => {
-      ;(window as unknown as { URLSearchParams: unknown }).URLSearchParams = function () {
-        throw new Error(message)
-      }
-    }, CRASH_MESSAGE)
+    // Added after the seed, so the seed's own setItem is the original.
+    if (target.console) await seedStaffStorage(page, target.console, staffAccount)
+    await page.addInitScript(
+      ({ message, key }) => {
+        if (key === null) {
+          ;(window as unknown as { URLSearchParams: unknown }).URLSearchParams = function () {
+            throw new Error(message)
+          }
+          return
+        }
+        const setItem = Storage.prototype.setItem
+        Storage.prototype.setItem = function (k: string, v: string) {
+          setItem.call(this, k, v)
+          if (k === key) {
+            Array.prototype.filter = function () {
+              throw new Error(message)
+            }
+          }
+        }
+      },
+      { message: CRASH_MESSAGE, key: target.console ? CONSOLE_SESSION_KEY[target.console] : null },
+    )
 
     await page.goto(url)
     const region = page.getByRole('region', { name: 'Something went wrong' })

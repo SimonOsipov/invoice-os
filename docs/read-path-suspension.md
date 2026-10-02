@@ -249,7 +249,7 @@ fragile part of it.
 ## 8. The endpoint table — every route, covered or exempt
 
 **`covered` is structural, not per-route inspection.** Scans 1 and 2 (§9) make the gated seam a
-monopoly: outside eight named files and one named func, nothing in `internal/` **or `cmd/`** can
+monopoly: outside eight named files and two named funcs, nothing in `internal/` **or `cmd/`** can
 obtain a database handle at all, and the only callers allowed to reach the identity-free core
 are workers, boot-time seeders, two operator CLIs, `GET /v1/me` and `POST /v1/workspaces`. Every route that touches
 tenant data is therefore gated by construction, and `covered` records that. `exempt` rows each
@@ -267,6 +267,7 @@ predicates it would previously have hit inside the transaction.
 | `GET /healthz/fleet` | gateway | exempt | fleet roll-up across services, deliberately outside the verifier |
 | `POST /auth/login` | gateway | exempt | unauthenticated by definition; there is no caller yet to hold a membership |
 | `OPTIONS /auth/login` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
+| `POST /auth/mock/staff` | gateway | exempt | mock builds only; grants staff on the owner DSN for the E2E fork, with no caller identity |
 | `POST /auth/sign-in` | gateway | exempt | no database; calls GoTrue |
 | `OPTIONS /auth/sign-in` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `POST /auth/exchange` | gateway | exempt | no database; in-process code store |
@@ -341,7 +342,7 @@ predicates it would previously have hit inside the transaction.
 | `POST /v1/extractions/{id}/fields/{name}/corrections` | submission | covered | |
 | `POST /v1/extractions/{id}/line-items` | submission | covered | |
 
-79 distinct routes, 85 registrations (`GET /v1/ping` is registered once per service).
+80 distinct routes, 86 registrations (`GET /v1/ping` is registered once per service).
 
 ### 8.1 The non-HTTP callers, so nobody looks for them above
 
@@ -372,7 +373,7 @@ it", so a stale exemption cannot outlive its reason.
 
 | Guard | What it asserts | Needles | Floor (measured at AUDIT-10-04) |
 |---|---|---|---|
-| `TestRLS_NoDirectPoolUseOutsideTheSeam` | **no database handle is acquired outside eight named files and one named func**: no pool method on a `*pgxpool.Pool`-typed name, and no `pgx.Connect`, `pgxpool.New`, `pgconn.Connect` or `sql.Open` off a DSN | a fixture holding both `r.ReaderPool.Query(...)` and `r.URL.Query()` must find **exactly 1**; a bare pool parameter; a non-database method; an aliased local; all three DSN entry points; a renamed import; an acquisition inside a func literal, attributed to the literal | ≥130 files walked (139); ≥4 pool-typed names (4); ≥9 sites across ≥8 files (10 across 9) |
+| `TestRLS_NoDirectPoolUseOutsideTheSeam` | **no database handle is acquired outside eight named files and two named funcs**: no pool method on a `*pgxpool.Pool`-typed name, and no `pgx.Connect`, `pgxpool.New`, `pgconn.Connect` or `sql.Open` off a DSN | a fixture holding both `r.ReaderPool.Query(...)` and `r.URL.Query()` must find **exactly 1**; a bare pool parameter; a non-database method; an aliased local; all three DSN entry points; a renamed import; an acquisition inside a func literal, attributed to the literal | ≥130 files walked (139); ≥4 pool-typed names (4); ≥9 sites across ≥8 files (10 across 9) |
 | `TestRLS_UngatedCoreIsWorkerAndExemptionOnly` | every call of the identity-free `db.WithinTenantTx`/`Opts` is a worker, a boot-time seeder, an operator CLI, or `tenancy` func `Me` or `ProvisionWorkspace` | a call in a named func; a doc comment naming the seam (0 sites); a call inside a func literal, attributed to the literal | ≥130 files walked (139); ≥12 sites across ≥6 packages (14 across 7) |
 | `TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute` | every `app.Mux` route in `cmd/*/main.go` and `internal/platform/server.go` has a row in §8 with a verdict, and no row classifies a route nobody registers | a const-indirected route resolves; an unresolvable argument fails loudly; a verdict cell must read exactly `covered` or `exempt`; a longer path cannot answer for a shorter one | ≥8 roots yielding routes (9); ≥55 registrations (63) |
 | `TestRLS_ReadPathSuspensionDocHasNoStaleNarrowRuleClaim` | this page carries no sentence still asserting AUDIT-10's narrow rule (§5) | a fixture planting both stale phrases must be flagged; a fixture holding only the legitimate active-row line must not | this file parses to ≥10 top-level (`## `) section headings |

@@ -483,7 +483,7 @@ test('deployed app: a signed-out deep link returns to its destination after sign
   // Same modal drive as the parametrised walk below. 'Explore the platform' renders TWICE on
   // the landing page (header + hero), so the banner scope is required, not stylistic.
   await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
-  await expect(page.getByRole('dialog', { name: 'Sign in' })).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'Platform login' })).toBeVisible()
   await page.locator(`[data-persona="${FIRM_PERSONA.param}"]`).click()
 
   // The hand-off lands on the app ROOT (destUrl carries no path), so arriving on /audit can
@@ -530,7 +530,7 @@ test('deployed app: a signed-out deep link returns to its FILTER after sign-in',
   await page.waitForURL((url) => url.href.startsWith(LANDING_URL), { timeout: 20_000 })
 
   await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
-  await expect(page.getByRole('dialog', { name: 'Sign in' })).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'Platform login' })).toBeVisible()
 
   // The only browser proof that a keyboard pick works: the persona is a native button.
   const pick = page.locator(`[data-persona="${FIRM_PERSONA.param}"]`)
@@ -589,7 +589,7 @@ for (const id of PERSONA_IDS) {
 
     await page.goto(LANDING_URL)
     await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
-    const dialog = page.getByRole('dialog', { name: 'Sign in' })
+    const dialog = page.getByRole('dialog', { name: 'Platform login' })
     await expect(dialog).toBeVisible()
 
     // Positive control first: an absence check on an unrendered picker passes vacuously.
@@ -846,7 +846,7 @@ function gatedErrors(page: Page, drops: Dropper[]): string[] {
 }
 
 async function submitSignIn(page: Page, email: string, password: string): Promise<void> {
-  const dialog = page.getByRole('dialog', { name: 'Sign in' })
+  const dialog = page.getByRole('dialog', { name: 'Platform login' })
   await dialog.getByLabel('Work email', { exact: true }).fill(email)
   await dialog.getByLabel('Password', { exact: true }).fill(password)
   await dialog.getByRole('button', { name: 'Sign in →', exact: true }).click()
@@ -891,7 +891,7 @@ test('deployed app: a real sign-in from the front door returns to its destinatio
     .toBe(false)
 
   await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
-  await expect(page.getByRole('dialog', { name: 'Sign in' })).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'Platform login' })).toBeVisible()
   const [handoffNav] = await Promise.all([
     page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
     submitSignIn(page, account.email, account.password),
@@ -945,7 +945,7 @@ test('deployed app: a real sign-in from a direct landing visit bounces for a sta
 
   await page.goto(LANDING_URL)
   await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
-  const dialog = page.getByRole('dialog', { name: 'Sign in' })
+  const dialog = page.getByRole('dialog', { name: 'Platform login' })
   await expect(dialog.getByRole('button', { name: 'Continue with email', exact: true })).toBeVisible()
   await expect(dialog.getByLabel('Work email', { exact: true }), 'a stateless landing must not offer the form').toHaveCount(0)
 
@@ -992,7 +992,7 @@ test('deployed app: a hand-off code minted in another browser signs no tab in', 
 
       await victim.goto(`${APP_URL}/?handoff=${c1}`)
       await victim.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-      await expect(victim.getByRole('dialog', { name: 'Sign in' })).toContainText(HANDOFF_FAILED)
+      await expect(victim.getByRole('dialog', { name: 'Platform login' })).toContainText(HANDOFF_FAILED)
       expect(exchanges, 'the victim tab called /auth/exchange').toEqual([])
       expect(await storedSession(context), 'the victim tab stored a session').toBeNull()
       expect(errors, `console errors in the victim tab:\n${errors.join('\n')}`).toEqual([])
@@ -1022,7 +1022,7 @@ test('deployed app: a hand-off code minted in another browser signs no tab in', 
       // An expired code answers the same 400, which would prove nothing about the state.
       expect(Date.now() - mintedAt, 'the code could have expired before the victim tab redeemed it').toBeLessThan(HANDOFF_TTL_MS)
       await victim.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-      await expect(victim.getByRole('dialog', { name: 'Sign in' })).toContainText(HANDOFF_FAILED)
+      await expect(victim.getByRole('dialog', { name: 'Platform login' })).toContainText(HANDOFF_FAILED)
       expect(await storedSession(context), 'the victim tab stored a session').toBeNull()
       expect(errors, `console errors in the victim tab:\n${errors.join('\n')}`).toEqual([])
     } finally {

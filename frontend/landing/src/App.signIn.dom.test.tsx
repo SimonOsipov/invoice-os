@@ -100,7 +100,7 @@ describe('F-2: the sign-in control opens the sign-in modal', () => {
     // F2-c: exactly one dialog, and it is the Sign-in one -- not Book a demo.
     expect(document.querySelectorAll(DIALOG).length).toBe(1)
     const dialog = document.querySelector(DIALOG)!
-    expect(dialog.getAttribute('aria-label')).toBe('Sign in')
+    expect(dialog.getAttribute('aria-label')).toBe('Platform login')
 
     // F2-d: no navigation.
     expect(window.location.pathname).toBe(pathBefore)
@@ -134,7 +134,7 @@ describe('F-2: the sign-in control opens the sign-in modal', () => {
 
     await clickByText(header, SIGN_IN_CTA)
     expect(document.querySelectorAll(DIALOG).length).toBe(1)
-    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Sign in')
+    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Platform login')
     expect(consoleError).not.toHaveBeenCalled()
   })
 })
@@ -172,7 +172,7 @@ describe('AUTH-05-07: the boot sign-in params', () => {
   it('a no-workspace outcome opens the modal with its message', async () => {
     await bootAt('/?signin=no-workspace')
     expect(document.querySelectorAll(DIALOG).length).toBe(1)
-    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Sign in')
+    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Platform login')
     const got = dialogAlerts()
     expect(got.length).toBe(1)
     expect(got[0].textContent).toContain(NO_WORKSPACE)

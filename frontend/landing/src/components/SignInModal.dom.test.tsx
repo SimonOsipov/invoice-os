@@ -7,6 +7,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { LANDING_PERSONAS } from '../auth'
+import { GLYPHS } from '../icons'
 import { SignInModal } from './SignInModal'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -68,7 +69,7 @@ const STATE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN-_0'
 
 function dialog(): HTMLElement {
   const d = document.querySelector<HTMLElement>('[role="dialog"]')
-  expect(d, 'expected the Sign in dialog').not.toBeNull()
+  expect(d, 'expected the Platform login dialog').not.toBeNull()
   return d!
 }
 
@@ -104,7 +105,7 @@ describe('controls', () => {
   it('T01-2: control — the picker renders four personas in order', async () => {
     await mount()
     const d = dialog()
-    expect(d.getAttribute('aria-label')).toBe('Sign in')
+    expect(d.getAttribute('aria-label')).toBe('Platform login')
     expect(d.textContent).toContain('Choose an account')
     expect(d.textContent).toContain('Pick a demo profile to continue')
     const ids = Array.from(d.querySelectorAll<HTMLElement>('[data-persona]'), (b) => b.dataset.persona)
@@ -230,6 +231,79 @@ describe('removed chrome', () => {
     for (const s of FOOTER_TEXT) {
       expect(d.textContent, `dialog shows "${s}"`).not.toContain(s)
     }
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+})
+
+describe('v2 content', () => {
+  const norm = (s: string) => s.replace(/\s+/g, ' ').trim()
+
+  // Declarations of every rule whose selector list names `selector`, across the dialog's <style> tags.
+  function declsOf(selector: string): string[] {
+    const css = Array.from(dialog().querySelectorAll('style'), (s) => s.textContent ?? '').join('\n')
+    const out: string[] = []
+    for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      if (m[1].split(',').some((sel) => norm(sel) === selector)) out.push(...m[2].split(';').map(norm).filter(Boolean))
+    }
+    return out
+  }
+
+  it.each([
+    ['unconfigured', unconfigured, 0],
+    ['configured', () => { stubTargets(ALL_TARGETS); configured() }, 1],
+  ])('SM-02 %s: the eyebrow is PLATFORM LOGIN', async (_label, setup, forms) => {
+    setup()
+    await mount(vi.fn(), STATE)
+    const d = dialog()
+    expect(d.querySelectorAll('input[type="password"]').length, 'control: the form shows only when configured').toBe(forms)
+    const eyebrows = Array.from(d.querySelectorAll('.t-eyebrow'))
+    expect(eyebrows.map((e) => e.textContent)).toEqual(['PLATFORM LOGIN'])
+    expect(d.textContent).not.toContain('SIGN IN')
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('SM-03: the headings share the v2 style', async () => {
+    stubTargets(ALL_TARGETS)
+    configured()
+    await mount(vi.fn(), STATE)
+    const h3s = Array.from(dialog().querySelectorAll<HTMLElement>('h3'))
+    expect(h3s.map((h) => h.textContent)).toEqual(['Sign in to your workspace', 'Choose an account'])
+    for (const h of h3s) {
+      const label = h.textContent ?? ''
+      expect(h.style.fontSize, label).toBe('22px')
+      expect(h.style.fontWeight, label).toBe('700')
+      expect(h.style.letterSpacing, label).toBe('-0.03em')
+      expect(h.style.color, label).toBe('var(--ink)')
+    }
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('SM-04: each persona row is the v2 row', async () => {
+    unconfigured()
+    await mount()
+    const rows = Array.from(dialog().querySelectorAll<HTMLElement>('[data-persona]'))
+    expect(rows.length).toBe(4)
+    for (const row of rows) {
+      const p = LANDING_PERSONAS.find((x) => x.id === row.dataset.persona)
+      expect(p, `no persona for ${row.dataset.persona}`).toBeDefined()
+      const id = p!.id
+      expect(row.classList.contains('si-persona'), id).toBe(true)
+      expect(row.style.border, id).toBe('1px solid var(--border)')
+      expect(row.style.borderRadius, id).toBe('var(--radius-md)')
+      const meta = row.querySelectorAll('.t-meta')
+      expect(meta.length, id).toBe(1)
+      expect(meta[0].textContent, id).toBe(p!.access)
+      const chevron = Array.from(row.querySelectorAll('svg path'), (x) => x.getAttribute('d'))
+      expect(chevron, id).toEqual([...GLYPHS['chevron-right']])
+    }
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('SM-05: the persona CSS is the v2 hover and ring', async () => {
+    unconfigured()
+    await mount()
+    expect(declsOf('.si-persona:hover')).toContain('filter: brightness(0.97)')
+    expect(declsOf('.si-persona:focus-visible')).toContain('outline: 2px solid var(--ring)')
     expect(consoleError).not.toHaveBeenCalled()
   })
 })

@@ -30,7 +30,7 @@ for (const viewport of VIEWPORTS) {
 
     // signin=ready opens the modal with the form, as the app's start bounce does.
     await page.goto(`${LANDING_URL}/?state=${STATE}&signin=ready`)
-    const dialog = page.getByRole('dialog', { name: 'Sign in' })
+    const dialog = page.getByRole('dialog', { name: 'Platform login' })
     await expect(dialog).toBeVisible()
 
     const card = dialog.locator(':scope > div')

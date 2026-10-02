@@ -10,6 +10,8 @@ const TYPOGRAPHY_CSS = fileURLToPath(
   new URL('../../../packages/design-tokens/v2/tokens/typography.css', import.meta.url),
 )
 
+const DOCS = fileURLToPath(new URL('../../../docs/', import.meta.url))
+
 function familyParams(html: string): string[] {
   return [...html.replaceAll('&amp;', '&').matchAll(/[?&]family=([^&"'\s]+)/g)].map((m) => m[1])
 }
@@ -40,6 +42,16 @@ describe('index.html head copy', () => {
     const href = /<link rel="stylesheet" href="([^"]+)"/.exec(lines[12])?.[1]
     expect(href, 'line 13 is a stylesheet link').toBeTruthy()
     expect(href!.replaceAll('&amp;', '&'), 'line 13 href equals the typography.css @import URL').toBe(importUrl)
+
+    const analytics = readFileSync(`${DOCS}analytics.md`, 'utf8')
+    expect(analytics, 'docs/analytics.md cites the font tags as 11-13').toContain('frontend/landing/index.html:11-13')
+    const c10 = readFileSync(`${DOCS}privacy-policy-claims.md`, 'utf8').split('\n').find((l) => l.startsWith('| C10 |'))
+    expect(c10, 'the C10 row exists').toBeTruthy()
+    const [, , claim, , evidence] = c10!.split('|').map((c) => c.trim())
+    expect(evidence, 'C10 evidence cites the font tags as 11-13').toContain('frontend/landing/index.html:11-13')
+    expect(claim, 'C10 claim text is unchanged').toBe(
+      'Google also serves the fonts this site is typeset in. Loading a font tells Google your IP address and which site asked for it. This happens on every page, whatever you choose about analytics.',
+    )
   })
 
   it('index.html requests one font family, Manrope 400-800', () => {

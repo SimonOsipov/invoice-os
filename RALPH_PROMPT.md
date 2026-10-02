@@ -288,12 +288,7 @@ When QA returns, **replay the mutation rows yourself**, with no other agent runn
 If issues are found, spawn `product-executor` to fix, then re-verify. Record each QA finding with `hm subtask note`.
 - **Checkpoint:** `QA_VERIFIED`
 
-After each subtask, wait for `CI` on the pushed commit (CI Monitoring Protocol):
-```bash
-SHA="$(git -C "$WORKTREE_PATH" rev-parse HEAD)"
-RUN_ID="$(gh run list --workflow ci.yml --commit "$SHA" --limit 1 --json databaseId -q '.[0].databaseId')"
-gh run watch "$RUN_ID" --exit-status
-```
+After each subtask, wait for `CI` on the pushed commit: `hm ci wait <PR>` (CI Monitoring Protocol).
 A red run stops the next subtask until it is green. Then take the next subtask.
 
 ### Phase 2: PR lifecycle
@@ -316,22 +311,12 @@ While it runs, review the whole diff: run `/code-review high <PR_NUMBER>`, never
 Runs once per story, after `CI` is green. It verifies the assembled feature against the original objective.
 
 1. **Read the original acceptance criteria**, not the possibly-edited subtask ACs. `STORY_SOURCE=sysmap`: the feature's acceptance criteria (standing invariants). `STORY_SOURCE=obsidian`: the story's Objective and Core ACs.
-2. **Find the deploy-gate run on HEAD** — a `pull_request` run on the head commit that was not skipped:
-   ```bash
-   BRANCH="$(git -C "$WORKTREE_PATH" rev-parse --abbrev-ref HEAD)"
-   SHA="$(git -C "$WORKTREE_PATH" rev-parse HEAD)"
-   RUN_ID="$(gh run list --workflow dev-env.yml --commit "$SHA" --limit 10 --json databaseId,event,conclusion \
-     -q '[.[] | select(.event == "pull_request" and .conclusion != "skipped")][0].databaseId')"
-   ```
-   - `gh pr ready` does not reliably start a run. If `RUN_ID` is empty on the first lookup, push an empty commit: `git -C "$WORKTREE_PATH" commit --allow-empty -m "ci: run the deploy gate" && git -C "$WORKTREE_PATH" push`. GitHub applies the path filter to the whole PR diff, so this starts the gate.
-   - A `skipped` run is a draft run: neither pass nor fail.
-   - `gh workflow run dev-env.yml --ref "$BRANCH"` is for diagnosis only. It targets `development`, not the PR environment, so it proves nothing about this PR.
-   - `dev-env.yml` is paths-filtered (`frontend/ packages/ e2e/ cmd/ internal/ migrations/ db/ tools/prenv/ scripts/ci/`, go.mod/sum, Dockerfile, Caddyfile, package.json, pnpm-*, the workflow file). A docs-only PR never fires it; escalate to the user rather than faking it green.
-   - **Freshness:** `git -C "$WORKTREE_PATH" fetch origin`. If `origin/$BASE` or `origin/main` has commits the branch lacks, merge them, push, and let `CI` and the gate re-run. A base missing main's migrations crash-loops the gateway.
-3. **Watch the run** to conclusion per the CI Monitoring Protocol.
-   - Re-run a red gate whole: `gh run rerun "$RUN_ID"`, never `--failed`. The database resets only when the gateway deploys.
+2. **Freshness:** `git -C "$WORKTREE_PATH" fetch origin`. If `origin/$BASE` or `origin/main` has commits the branch lacks, merge them, push, and let `CI` and the gate re-run. A base missing main's migrations crash-loops the gateway.
+3. **Wait for the gate:** `hm ci wait <PR> --gate` (CI Monitoring Protocol).
+   - A `no-run` verdict on a docs-only PR is expected: `dev-env.yml` is paths-filtered. Escalate to the user rather than faking it green.
+   - `gh workflow run dev-env.yml` is for diagnosis only. It targets `development`, not the PR environment, so it proves nothing about this PR.
+   - Re-run a red gate whole: `gh run rerun <run id>`, never `--failed`. The database resets only when the gateway deploys.
    - A spec this PR changed that passed only on retry fails the `e2e` job or the `E2E topology (<shard>)` leg that ran it. Fix the spec or the race; do not re-run for luck.
-   - A `cancelled` run is not green. Read `gh run view "$RUN_ID" --json conclusion` and the `E2E gate` check; a red `CI` stops the run.
    Green means: fleet deployed, gateway migrated, DB bootstrapped + demo-purged + seeded, all 8 backends up, smoke + topology E2E passed, including cross-tenant isolation.
 4. **Spawn `product-qa-spec`** to verify **each** original AC against the green run:
    - Quote each AC beside its evidence. Evidence of different behaviour than the quoted text fails that AC.
@@ -355,20 +340,13 @@ Teardown of the PR environment is repo-side: `dev-env-teardown.yml` on PR close 
 
 ## CI Monitoring Protocol
 
-Wait with a background watcher. Run `gh run watch "$RUN_ID" --exit-status` through Bash with `run_in_background: true`. Its exit wakes you.
-
-If `RUN_ID` is empty, GitHub has not registered the run yet. Start a background until-loop that repeats the `gh run list` query every 30 s and exits on the first id. Phase 3.5 step 2 owns a deploy-gate run that never starts.
+Wait with `hm ci wait <PR>` for `CI` and `hm ci wait <PR> --gate` for the deploy gate. Run it through Bash with `run_in_background: true`. Its exit wakes you. Your Harbourmaster role file ("Waiting for CI and the deploy gate") names each verdict and what to do.
 
 Foreground `sleep` is blocked. Never end a turn on a wait you did not start.
 
-1. **A check failed?** `gh run view [RUN_ID] --log 2>&1 | tail -60`, fix in the worktree, commit, push. CI (and `dev-env.yml` on a ready PR) restart on push.
-2. **`CI` green?** → Phase 3.5.
-3. **`dev-env.yml` concluded `success`?** → Phase 3.5 step 4.
-
-Select runs by head commit, never by latest-on-branch:
-```bash
-gh run list --workflow ci.yml --commit "$(git -C "$WORKTREE_PATH" rev-parse HEAD)" --limit 1 --json databaseId,status,conclusion -q '.[0]'
-```
+1. **`failed`?** Read the failed jobs and the log tail it prints. Fix in the worktree, commit, push, and wait again.
+2. **`CI` passed?** → Phase 3.5.
+3. **The gate passed?** → Phase 3.5 step 4.
 
 ---
 

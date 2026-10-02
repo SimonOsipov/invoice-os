@@ -35,7 +35,7 @@ for (const viewport of VIEWPORTS) {
 
     const card = dialog.locator(':scope > div')
     await expect(card).toHaveCount(1)
-    // The entry animation moves the card by 10px; wait for its box to settle inside the viewport.
+    // The entry animation moves the card; wait for its box to settle inside the viewport.
     await expect
       .poll(async () => {
         const box = await card.boundingBox()

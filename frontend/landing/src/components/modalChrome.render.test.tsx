@@ -100,8 +100,11 @@ describe('the shared modal chrome (RESKIN-06-01)', () => {
     expect(sa).toBe(b.dialog.getAttribute('style'))
     expect(sa).toContain('background:color-mix(in srgb, var(--surface) 55%, transparent)')
     expect(sa).toContain('z-index:200')
-    expect(sa).toContain('backdrop-filter:blur(6px)')
-    expect(sa).toContain('animation:ovIn 160ms ease-out')
+    // Per declaration: the -webkit- prefixed one also contains 'backdrop-filter:blur(6px)' as text.
+    const flat = Object.fromEntries(declarations(a.dialog))
+    expect(flat['backdrop-filter']).toBe('blur(6px)')
+    expect(flat['-webkit-backdrop-filter']).toBe('blur(6px)')
+    expect(flat.animation).toBe('ovIn 160ms ease-out')
   })
 
   it('MC-02 the two cards differ only in max-width', () => {
@@ -160,6 +163,60 @@ describe('the shared modal chrome (RESKIN-06-01)', () => {
       expect(html.length, label).toBeGreaterThan(0)
       expect(html.match(OKLCH), `${label}: oklch(`).toBeNull()
       expect(html.match(PILL), `${label}: pill radius`).toBeNull()
+    }
+  })
+
+  it('MC-07 the header row pads 14px by the modal’s own padX and rules off the body', () => {
+    for (const [label, r, padX] of [['sign-in', signIn(), 18], ['demo', demo(), 20]] as const) {
+      const decls = Object.fromEntries(declarations(r.header))
+      expect(decls.padding, label).toBe(`14px ${padX}px`)
+      expect(decls['border-bottom'], label).toBe('1px solid var(--border)')
+      expect(decls.display, label).toBe('flex')
+      expect(decls['justify-content'], label).toBe('space-between')
+      const kids = Array.from(r.header.children)
+      expect(kids.length, `${label}: header children`).toBe(2)
+      expect(kids[0].querySelector('img.ds-logo-mark'), `${label}: the logo leads`).not.toBeNull()
+      expect(kids[1].matches('button[aria-label="Close"]'), `${label}: Close trails`).toBe(true)
+    }
+  })
+
+  it('MC-08 the configured sign-in modal shares the demo modal’s scrim and card', () => {
+    const configured = parse(configuredSignInHtml())
+    const d = demo()
+    expect(configured.dialog.getAttribute('style')).toBeTruthy()
+    expect(configured.dialog.getAttribute('style')).toBe(d.dialog.getAttribute('style'))
+    const rest = (el: Element) => declarations(el).filter(([k]) => k !== 'max-width')
+    expect(rest(configured.card).length).toBeGreaterThan(0)
+    expect(rest(configured.card)).toEqual(rest(d.card))
+    expect(declarations(configured.card).find(([k]) => k === 'max-width')?.[1]).toBe('452px')
+  })
+
+  it('MC-09 each modal ships MODAL_CHROME_CSS and every animation its chrome names has a keyframes rule', async () => {
+    const { MODAL_CHROME_CSS } = await loadChrome()
+    for (const [label, r] of [['sign-in', signIn()], ['sign-in (configured)', parse(configuredSignInHtml())], ['demo', demo()]] as const) {
+      expect(r.html, `${label}: the chrome CSS`).toContain(MODAL_CHROME_CSS)
+      const names = [r.dialog, r.card].map((el) => Object.fromEntries(declarations(el)).animation.split(' ')[0])
+      expect(names, label).toEqual(['ovIn', 'cardIn'])
+      for (const name of names) expect(r.html, `${label}: @keyframes ${name}`).toMatch(new RegExp(`@keyframes\\s+${name}\\s*\\{`))
+    }
+  })
+
+  it('MC-10 only the demo overlay carries dm-overlay, the hook of its phone padding rule', () => {
+    const d = demo()
+    expect(d.dialog.getAttribute('class')).toBe('dm-overlay')
+    expect(d.html).toMatch(/@media\s*\(max-width:\s*480px\)\s*\{\s*\.dm-overlay\s*\{\s*padding:\s*14px\s*!important;/)
+    expect(signIn().dialog.getAttribute('class')).toBeNull()
+  })
+
+  it('MC-11 the shell carries no v1 token, no v1 keyframe name and no v1 wordmark', () => {
+    const V1_TOKEN = /var\(--(?:bg|line|fg)-\d\)/
+    const V1_KEYFRAMES = /\b(?:siOvIn|siCardIn|dmOvIn|dmCardIn)\b/
+    expect('background:var(--bg-2);animation:siOvIn 1s'.match(V1_TOKEN)).not.toBeNull()
+    expect('animation:dmCardIn 1s'.match(V1_KEYFRAMES)).not.toBeNull()
+    for (const [label, r] of [['sign-in', signIn()], ['sign-in (configured)', parse(configuredSignInHtml())], ['demo', demo()]] as const) {
+      for (const el of [r.dialog, r.card, r.header]) expect(el.getAttribute('style'), label).not.toMatch(V1_TOKEN)
+      expect(r.html, `${label}: v1 keyframes`).not.toMatch(V1_KEYFRAMES)
+      expect(r.header.querySelector('.mono'), `${label}: the v1 AFRICA chip`).toBeNull()
     }
   })
 

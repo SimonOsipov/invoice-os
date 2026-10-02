@@ -1,5 +1,5 @@
-// The Book-a-Demo popup shell — overlay, brand header, Close, Escape, Tab-trap and
-// focus restore, cloned VERBATIM from SignInModal.tsx. The form itself is DemoLeadForm.
+// The Book-a-Demo popup shell — overlay, header, Close, Escape, Tab-trap and
+// focus restore. The form itself is DemoLeadForm.
 
 import { useEffect } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'

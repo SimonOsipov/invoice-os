@@ -479,3 +479,90 @@ describe('SignInModal adversarial: the configured gate', () => {
     expect(header).toContain('gateway')
   })
 })
+
+// Seeds useState slot 6 (submitting) by call order, as DemoLeadForm.adversarial.test.tsx does.
+async function busySignInMarkup(): Promise<string> {
+  vi.resetModules()
+  vi.doMock('react', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('react')>()
+    let call = 0
+    return {
+      ...actual,
+      useState: <T,>(initial: T) => {
+        call += 1
+        return call === 6 ? actual.useState(true as T) : actual.useState(initial)
+      },
+    }
+  })
+  try {
+    const { renderToStaticMarkup } = await import('react-dom/server')
+    const react = await import('react')
+    const mod = await import('./SignInForm')
+    return renderToStaticMarkup(react.createElement(mod.SignInForm, { heldState: () => STATE }))
+  } finally {
+    vi.doUnmock('react')
+    vi.resetModules()
+  }
+}
+
+describe('SignInForm wears the v2 field, buttons and alert (FL rows)', () => {
+  it('FL-02: the sign-in fields wear the same v2 field', async () => {
+    configure()
+    await mountForm(STATE)
+    for (const input of [emailInput(), passwordInput()]) {
+      const s = input.style
+      expect(s.height, input.id).toBe('42px')
+      expect(s.background, input.id).toBe('var(--card)')
+      expect(s.border, input.id).toBe('1px solid var(--input)')
+      expect(s.borderRadius, input.id).toBe('var(--radius)')
+      expect(s.color, input.id).toBe('var(--ink)')
+    }
+  })
+
+  it('FL-04b: both sign-in buttons are the DS md primary', async () => {
+    configure()
+    const buttonNamed = (text: string) =>
+      Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((b) => b.textContent?.trim() === text)
+    await mountForm(STATE)
+    const signIn = buttonNamed('Sign in →')
+    await mountForm(null)
+    const cont = buttonNamed('Continue with email')
+    const found = [signIn, cont].filter((b): b is HTMLButtonElement => Boolean(b))
+    expect(found.length, 'floor: both buttons found').toBe(2)
+    for (const b of found) {
+      for (const want of ['ds-btn', 'ds-btn--primary', 'ds-btn--md']) expect(b.classList.contains(want), `${b.textContent} ${want}`).toBe(true)
+      expect(Array.from(b.classList).some((c) => c.startsWith('v2-btn')), b.textContent ?? '').toBe(false)
+    }
+  })
+
+  it('FL-05b: the sign-in spinner has no oklch and the busy button is disabled', async () => {
+    configure()
+    vi.stubGlobal('fetch', vi.fn().mockReturnValue(new Promise(() => undefined)))
+    await mountForm(STATE)
+    await fill('ada@okafor.ng', 'pw')
+    await submit()
+    const button = submitButton()
+    expect(button.textContent, 'control: the form is busy').toContain('Checking…')
+    // jsdom drops a `border` that carries `color-mix(in oklch, …)`, so a DOM read
+    // cannot see it; the SSR markup keeps every declaration. Today's spinner writes
+    // `in oklch,` with no paren, so the bare word is the needle.
+    const ssr = await busySignInMarkup()
+    expect(ssr, 'control: the seed took').toContain('Checking…')
+    expect(ssr).not.toMatch(/oklch/i)
+    expect(ssr).toContain('color-mix(in srgb, var(--primary-foreground) 40%, transparent)')
+    const spinner = one<HTMLSpanElement>(button, 'span')
+    expect(spinner.style.borderRadius).toBe('var(--radius-pill)')
+    expect(button.disabled).toBe(true)
+    expect(button.classList.contains('ds-btn')).toBe(true)
+  })
+
+  it('FL-07b: the sign-in alert is the v2 destructive colour', async () => {
+    configure()
+    vi.stubGlobal('fetch', vi.fn())
+    await mountForm(STATE)
+    await submit()
+    const got = alerts()
+    expect(got.length).toBeGreaterThan(0)
+    for (const a of got) expect(a.style.color, a.id).toBe('var(--destructive)')
+  })
+})

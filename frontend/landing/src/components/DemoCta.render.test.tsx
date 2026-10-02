@@ -133,7 +133,7 @@ describe('R5 (AC-1.3, NEW-BEHAVIOUR): the facade is gone, not supplemented', () 
 })
 
 describe('R6 ([panel-padding-by-variant], NEW-BEHAVIOUR): card form renders no padding, popup\'s does', () => {
-  it("DemoCta's <form> is padding:0; DemoModal's stays padding:20px", () => {
+  it("DemoCta's <form> is padding:0; DemoModal's is padding:24px 24px 22px", () => {
     const dcHtml = renderToStaticMarkup(createElement(Cta))
     const dcForm = dcHtml.match(/<form[^>]*style="[^"]*"/)
     expect(dcForm, 'expected DemoCta to render a <form>').not.toBeNull()
@@ -142,16 +142,16 @@ describe('R6 ([panel-padding-by-variant], NEW-BEHAVIOUR): card form renders no p
     const dmHtml = renderToStaticMarkup(createElement(DemoModal, { onClose: noop }))
     const dmForm = dmHtml.match(/<form[^>]*style="[^"]*"/)
     expect(dmForm, 'expected DemoModal to render a <form>').not.toBeNull()
-    if (dmForm) expect(dmForm[0]).toContain('padding:20px')
+    if (dmForm) expect(dmForm[0]).toContain('padding:24px 24px 22px')
   })
 })
 
-describe("R7 ([card-takes-popup-spacing], NEW-BEHAVIOUR): the card's submit takes the popup's 18px", () => {
-  it('the submit button carries margin-top:18px', () => {
+describe("R7 ([card-takes-popup-spacing], NEW-BEHAVIOUR): the card's submit takes the popup's 24px", () => {
+  it('the submit button carries margin-top:24px', () => {
     const html = renderToStaticMarkup(createElement(Cta))
     const submit = html.match(/<button[^>]*type="submit"[^>]*>/)
     expect(submit, 'expected a type="submit" button').not.toBeNull()
-    if (submit) expect(submit[0]).toContain('margin-top:18px')
+    if (submit) expect(submit[0]).toContain('margin-top:24px')
   })
 })
 

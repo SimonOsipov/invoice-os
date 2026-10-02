@@ -72,9 +72,9 @@ const POPUP_CSS_RULES = [
   'from { opacity: 0; transform: translateY(8px); }',
   'to { opacity: 1; transform: none; }',
   'to { transform: rotate(360deg); }',
-  '.dm-input, .dm-select { transition: border-color 120ms, box-shadow 120ms; }',
-  '.dm-input:focus, .dm-select:focus { border-color: var(--action) !important; box-shadow: 0 0 0 3px var(--action-glow); outline: none; }',
-  '.dm-err { border-color: var(--status-red-text) !important; }',
+  '.dm-input, .dm-select { transition: border-color var(--dur-fast) var(--ease-out); }',
+  '.dm-input:focus, .dm-select:focus { outline: 2px solid var(--ring); outline-offset: 2px; }',
+  '.dm-err { border-color: var(--destructive) !important; }',
   '.dm-select { appearance: none; -webkit-appearance: none; }',
   '.si-close { transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }',
   '.si-close:hover { background: var(--muted); color: var(--ink); }',
@@ -82,6 +82,8 @@ const POPUP_CSS_RULES = [
   '.dm-row { flex-direction: column !important; align-items: stretch !important; }',
   '.dm-overlay { padding: 14px !important; }',
 ]
+
+const MODAL_PANEL_STYLE = 'padding:36px 24px 26px;text-align:center;display:grid;gap:12px;justify-items:center'
 
 describe('the popup DOM survives the extraction (A1-A3)', () => {
   const popup = renderToStaticMarkup(createElement(DemoModal, { onClose: noop }))
@@ -101,10 +103,10 @@ describe('the popup DOM survives the extraction (A1-A3)', () => {
 
   it('A3: the success panel is the one node that gained markup — id + tabindex, nothing else', async () => {
     const html = await renderSeeded(3, 'success', { idPrefix: 'dm', variant: 'modal', onDone: noop })
-    expect(html).toContain('<div id="dm-success" tabindex="-1" style="padding:32px 22px 24px;text-align:center">')
+    expect(html).toContain(`<div id="dm-success" tabindex="-1" style="${MODAL_PANEL_STYLE}">`)
     // Pre-extraction the error panel's wrapper carried neither; it must still carry neither.
     const error = await renderSeeded(3, 'error', { idPrefix: 'dm', variant: 'modal', onDone: noop })
-    expect(error).toContain('<div style="padding:32px 22px 24px;text-align:center">')
+    expect(error).toContain(`<div style="${MODAL_PANEL_STYLE}">`)
   })
 })
 
@@ -112,20 +114,20 @@ describe('panel padding follows the variant (A4)', () => {
   it('A4: modal pads the form and both panels; card pads neither', async () => {
     const modalForm = renderToStaticMarkup(createElement(DemoLeadForm, { idPrefix: 'dm', variant: 'modal' }))
     const cardForm = renderToStaticMarkup(createElement(DemoLeadForm, { idPrefix: 'dc', variant: 'card' }))
-    expect(modalForm.startsWith('<form noValidate="" style="padding:20px">')).toBe(true)
+    expect(modalForm.startsWith('<form noValidate="" style="padding:24px 24px 22px">')).toBe(true)
     expect(cardForm.startsWith('<form noValidate="" style="padding:0">')).toBe(true)
     // Through DemoModal too: rendering the form alone cannot see which variant the
     // popup asks for.
     expect(renderToStaticMarkup(createElement(DemoModal, { onClose: noop }))).toContain(
-      '<form noValidate="" style="padding:20px">',
+      '<form noValidate="" style="padding:24px 24px 22px">',
     )
 
     for (const step of ['success', 'error'] as const) {
       const modalPanel = await renderSeeded(3, step, { idPrefix: 'dm', variant: 'modal', onDone: noop })
       const cardPanel = await renderSeeded(3, step, { idPrefix: 'dc', variant: 'card' })
-      expect(modalPanel).toContain('padding:32px 22px 24px;text-align:center')
+      expect(modalPanel).toContain(MODAL_PANEL_STYLE)
       expect(cardPanel).toContain('padding:0;text-align:center')
-      expect(cardPanel).not.toContain('32px 22px 24px')
+      expect(cardPanel).not.toContain('36px 24px 26px')
     }
   })
 })
@@ -221,5 +223,124 @@ describe('the analytics source scans see code, not comments (A9)', () => {
   it('A9c: no identifier-shaped dm- literal survives once comments are stripped', () => {
     expect(stripped).toContain('dm-input') // control: the four exempt class names stay
     expect(/\bdm-(name|email|company|role|size|volume|consent|success|error)/.test(stripped)).toBe(false)
+  })
+})
+
+// Declaration map of one inline style, so `border-radius:var(--radius)` is not
+// satisfied by `border-radius:var(--radius-input)`.
+function declarations(style: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const d of style.split(';')) {
+    const i = d.indexOf(':')
+    if (i > 0) out[d.slice(0, i).trim()] = d.slice(i + 1).trim()
+  }
+  return out
+}
+
+const tagsOf = (html: string, re: string) => Array.from(html.matchAll(new RegExp(`<(?:${re})\\b[^>]*>`, 'g'))).map((m) => m[0])
+const attrOf = (tag: string, name: string) => tag.match(new RegExp(`\\s${name}="([^"]*)"`))?.[1] ?? ''
+const classTokens = (tag: string) => attrOf(tag, 'class').split(/\s+/).filter(Boolean)
+const buttonByText = (html: string, text: string) =>
+  Array.from(html.matchAll(/<button\b[^>]*>(?:(?!<\/button>)[\s\S])*<\/button>/g))
+    .map((m) => m[0])
+    .find((b) => b.replace(/<[^>]*>/g, '').trim() === text)
+
+const popupSeed = (slot: number, value: unknown) =>
+  renderSeeded(slot, value, { idPrefix: 'dm', variant: 'modal', onDone: noop })
+
+describe('the demo form wears the v2 field, ring and buttons (FL rows)', () => {
+  const popup = renderToStaticMarkup(createElement(DemoModal, { onClose: noop }))
+
+  it('FL-01: every demo field wears the v2 field', () => {
+    const fields = tagsOf(popup, 'input|select').filter((t) => /^dm-/.test(attrOf(t, 'id')) && attrOf(t, 'id') !== 'dm-consent')
+    expect(fields.length).toBe(6)
+    for (const tag of fields) {
+      const d = declarations(attrOf(tag, 'style'))
+      const id = attrOf(tag, 'id')
+      expect(d.height, id).toBe('42px')
+      expect(d.background, id).toBe('var(--card)')
+      expect(d.border, id).toBe('1px solid var(--input)')
+      expect(d['border-radius'], id).toBe('var(--radius)')
+      expect(d.color, id).toBe('var(--ink)')
+    }
+  })
+
+  it('FL-03: the focus ring is the v2 ring', () => {
+    const rules = cssRules(DEMO_FORM_CSS)
+    const focus = rules.find((r) => r.startsWith('.dm-input:focus, .dm-select:focus {'))
+    expect(focus, 'the focus rule exists').toBeDefined()
+    expect(focus).toContain('outline: 2px solid var(--ring);')
+    expect(focus).toContain('outline-offset: 2px;')
+    expect(focus).not.toContain('box-shadow')
+    const err = rules.find((r) => r.startsWith('.dm-err {'))
+    expect(err, 'the error rule exists').toBeDefined()
+    expect(err).toContain('var(--destructive)')
+    expect(err).not.toContain('--status-red-text')
+  })
+
+  it('FL-04a: every demo primary button is the DS md primary', async () => {
+    const buttons = [
+      buttonByText(popup, 'Book my demo →'),
+      buttonByText(await popupSeed(3, 'success'), 'Done'),
+      buttonByText(await popupSeed(3, 'error'), 'Try again'),
+    ].filter((b): b is string => Boolean(b))
+    expect(buttons.length, 'floor: three buttons found').toBe(3)
+    for (const b of buttons) {
+      const tokens = classTokens(b)
+      for (const want of ['ds-btn', 'ds-btn--primary', 'ds-btn--md']) expect(tokens, b).toContain(want)
+      expect(tokens.some((t) => t.startsWith('v2-btn')), b).toBe(false)
+    }
+  })
+
+  it('FL-05a: the demo spinner has no oklch and the busy button is disabled', async () => {
+    const html = await popupSeed(3, 'submitting')
+    expect(html, 'control: the seed took').toContain('Booking…')
+    expect(html).not.toContain('oklch(')
+    const spinner = tagsOf(html, 'span').find((t) => attrOf(t, 'style').includes('dmSpin'))
+    expect(spinner, 'the spinner exists').toBeDefined()
+    const d = declarations(attrOf(spinner!, 'style'))
+    expect(d['border-radius']).toBe('var(--radius-pill)')
+    expect(d.border).toContain('color-mix(in srgb, var(--primary-foreground) 40%, transparent)')
+    const submit = tagsOf(html, 'button').find((t) => attrOf(t, 'type') === 'submit')!
+    expect(submit).toContain('disabled=""')
+    expect(classTokens(submit)).toContain('ds-btn')
+  })
+
+  it('FL-06: the success panel follows V605-611', async () => {
+    const tiles = (html: string) => tagsOf(html, 'span').filter((t) => classTokens(t).includes('ds-icontile'))
+    const success = await popupSeed(3, 'success')
+    const good = tiles(success)
+    expect(good.length).toBe(1)
+    expect(classTokens(good[0])).toContain('ds-icontile--primary')
+    const g = declarations(attrOf(good[0], 'style'))
+    expect([g.width, g.height]).toEqual(['48px', '48px'])
+    expect(success).not.toContain('border-radius:99')
+
+    const error = await popupSeed(3, 'error')
+    expect(error).not.toContain('border-radius:99')
+    const tile = tagsOf(error, 'span').find((t) => attrOf(t, 'style').includes('var(--status-red-bg)'))
+    expect(tile, 'the error tile exists').toBeDefined()
+    const e = declarations(attrOf(tile!, 'style'))
+    expect(e['border-radius']).toBe('var(--radius-md)')
+    expect([e.width, e.height]).toEqual(['48px', '48px'])
+    expect(e.color).toBe('var(--destructive)')
+  })
+
+  it('FL-07a: the demo field errors are the v2 destructive colour', async () => {
+    const html = await renderSeeded(
+      2,
+      { name: 'E1', email: 'E2', company: 'E3', consent: 'E4' },
+      { idPrefix: 'dm', variant: 'modal', onDone: noop },
+    )
+    const alerts = Array.from(html.matchAll(/<div\b[^>]*role="alert"[^>]*>[\s\S]*?<\/div>/g)).map((m) => m[0])
+    const stars = Array.from(html.matchAll(/<span style="([^"]*)">\*<\/span>/g)).map((m) => m[1])
+    expect(alerts.length).toBe(4)
+    expect(stars.length).toBe(3)
+    for (const a of alerts) {
+      expect(declarations(attrOf(a.match(/<div\b[^>]*>/)![0], 'style')).color, a).toBe('var(--destructive)')
+      expect(a, 'the glyph stays (D-30)').toContain('<svg')
+    }
+    for (const s of stars) expect(declarations(s).color).toBe('var(--destructive)')
+    expect(html).not.toContain('--status-red-text')
   })
 })

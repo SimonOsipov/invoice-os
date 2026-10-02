@@ -268,7 +268,7 @@ describe('X12: a submit that bypasses the disabled button still reaches the wire
 })
 
 describe('X10 ([panel-padding-by-variant]): the card\'s PANELS pad to zero too, not just its form', () => {
-  it('the success panel renders no padding in the card and the popup\'s 32px in the popup', async () => {
+  it('the success panel renders no padding in the card and the popup\'s 36px in the popup', async () => {
     openGate()
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200 }))
     await mount()
@@ -293,7 +293,7 @@ describe('X10 ([panel-padding-by-variant]): the card\'s PANELS pad to zero too, 
     await act(async () => pop<HTMLInputElement>('#dm-consent').click())
     await act(async () => pop<HTMLButtonElement>('button[type="submit"]').click())
     await flushAsync()
-    expect(pop('#dm-success').style.padding).toBe('32px 22px 24px')
+    expect(pop('#dm-success').style.padding).toBe('36px 24px 26px')
 
     await act(async () => popupRoot.unmount())
     popupHost.remove()

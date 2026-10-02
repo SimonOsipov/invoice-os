@@ -162,7 +162,7 @@ describe('an absent heading emits nothing; the popup heading sits above the firs
     expect(between).not.toMatch(/<div><\/div>/)
   })
 
-  it('S10b (CHARACTERIZATION, already green): the popup heading sits between <form> and #dm-name', () => {
+  it('S10b: the popup heading sits between <form> and #dm-name', () => {
     const html = renderToStaticMarkup(createElement(DemoModal, { onClose: noop }))
     const formStart = html.indexOf('<form')
     const fieldStart = html.indexOf('id="dm-name"')
@@ -171,8 +171,10 @@ describe('an absent heading emits nothing; the popup heading sits above the firs
     const between = html.slice(formStart, fieldStart)
     expect(between).toContain('BOOK A DEMO')
     expect(between).toContain('<h3')
-    expect(between).toContain('See your invoices pass compliance in real time.')
+    expect(between).toContain('class="t-eyebrow"')
+    expect(between).toContain('Let&#x27;s talk about your workflow.')
     expect(between).toContain('A 20-minute walkthrough')
+    expect(between).not.toContain('See your invoices pass compliance')
   })
 })
 

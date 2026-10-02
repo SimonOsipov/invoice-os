@@ -43,7 +43,7 @@ button {
 
 @keyframes scanline {
   0% {
-    transform: translateY(0);
+    transform: translateY(-30px);
     opacity: 0;
   }
   10% {
@@ -53,7 +53,7 @@ button {
     opacity: 1;
   }
   100% {
-    transform: translateY(190px);
+    transform: translateY(240px);
     opacity: 0;
   }
 }
@@ -200,6 +200,32 @@ button {
   display: grid;
 }
 
+.hero-scan {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 30px;
+  background: linear-gradient(180deg, var(--accent-20), transparent);
+  pointer-events: none;
+  animation: scanline 2.8s var(--ease-out) infinite;
+}
+.hero-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 7px 14px;
+  animation: rowIn 320ms var(--ease-out) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hero-row {
+    animation: none;
+  }
+  .hero-scan {
+    display: none;
+  }
+}
+
 /* ------------------------------------------------------------------
    Responsive degradation. The prototype is desktop-first with fixed
    multi-column grids; these media queries reflow them so nothing is
@@ -220,6 +246,9 @@ button {
 @media (max-width: 900px) {
   .split {
     grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .hero-card {
+    margin-top: 0 !important;
   }
 }
 

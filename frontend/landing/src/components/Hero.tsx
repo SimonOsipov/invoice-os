@@ -1,10 +1,17 @@
 import { HERO_CHECKS } from '../data'
-import { GLYPHS, Icon } from '../icons'
+import { GLYPHS, Icon, type GlyphName } from '../icons'
+import { Badge } from './ds/Badge'
 import { Button } from './ds/Button'
 import { Eyebrow } from './ds/Eyebrow'
+import { IconTile } from './ds/IconTile'
 import { Section } from './ds/Section'
 
 const NOTES = ['Your systems, connected', 'Audit-ready invoice records']
+
+const TILES: { icon: GlyphName; tone: 'primary' | 'accent'; title: string; caption: string }[] = [
+  { icon: 'check-check', tone: 'primary', title: 'Invoice workflow', caption: 'Validate. Review. Keep the record.' },
+  { icon: 'sparkles', tone: 'accent', title: 'Regulatory intelligence', caption: 'AI-supported.' },
+]
 
 export function Hero({ onBookDemo }: { onBookDemo: () => void }) {
   return (
@@ -41,106 +48,96 @@ export function Hero({ onBookDemo }: { onBookDemo: () => void }) {
         </div>
 
         <div style={{ minWidth: 0 }}>
-        <div
-          style={{
-            background: 'var(--bg-2)',
-            border: '1px solid var(--line-2)',
-            borderRadius: 'var(--radius-lg)',
-            overflow: 'hidden',
-            boxShadow: 'var(--shadow-elegant)',
-          }}
-        >
-          {/* window chrome */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: '11px 14px',
-              borderBottom: '1px solid var(--line-1)',
-              background: 'var(--bg-1)',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
-                INV-2026-00481
-              </span>
+          <div className="card-floating hero-card" style={{ position: 'relative', marginTop: 40, padding: '22px 24px 24px', boxShadow: 'var(--shadow-elegant)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
+              <span className="t-card-title">ASComply Platform</span>
+              <span className="t-meta">Illustrative view</span>
             </div>
             <div
               style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                background: 'var(--status-amber-bg)',
-                border: '1px solid var(--status-amber-border)',
-                borderRadius: 999,
-                padding: '3px 9px',
+                background: 'var(--card)',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-md)',
+                overflow: 'hidden',
+                marginBottom: 16,
               }}
             >
-              <span style={{ width: 6, height: 6, borderRadius: 99, background: 'var(--status-amber-text)' }} />
-              <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: 'var(--status-amber-text)', letterSpacing: '0.05em' }}>
-                VALIDATING
-              </span>
-            </div>
-          </div>
-          {/* validation rows */}
-          <div style={{ position: 'relative', padding: '6px 0' }}>
-            <div
-              style={{
-                position: 'absolute',
-                left: 0,
-                right: 0,
-                top: 0,
-                height: 28,
-                background: 'linear-gradient(180deg, var(--action-tint), transparent)',
-                pointerEvents: 'none',
-                animation: 'scanline 2.6s var(--ease-out) infinite',
-              }}
-            />
-            {HERO_CHECKS.map((c, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '9px 16px' }}>
-                <span
-                  style={{
-                    flex: 'none',
-                    width: 18,
-                    height: 18,
-                    borderRadius: 99,
-                    display: 'grid',
-                    placeItems: 'center',
-                    background: c.bg,
-                    color: c.fg,
-                  }}
-                >
-                  {c.icon}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  padding: '10px 14px',
+                  borderBottom: '1px solid var(--border)',
+                  background: 'var(--muted)',
+                }}
+              >
+                <span className="t-meta">INV-2026-00481</span>
+                <Badge tone="progress" dot>
+                  Validating
+                </Badge>
+              </div>
+              <div style={{ position: 'relative', padding: '4px 0', overflow: 'hidden' }}>
+                <div className="hero-scan" aria-hidden="true" />
+                {HERO_CHECKS.map((c, i) => (
+                  <div key={c.label} className="hero-row" style={{ animationDelay: `${i * 120}ms` }}>
+                    <span
+                      style={{
+                        flex: 'none',
+                        width: 18,
+                        height: 18,
+                        borderRadius: 'var(--radius-pill)',
+                        display: 'grid',
+                        placeItems: 'center',
+                        background: c.bg,
+                        color: c.fg,
+                      }}
+                    >
+                      <Icon paths={GLYPHS[c.icon]} size={11} strokeWidth={2} />
+                    </span>
+                    <span style={{ flex: 1, fontSize: 13, color: 'var(--foreground)' }}>{c.label}</span>
+                    <span className="t-meta" style={{ color: c.fg, fontWeight: 700 }}>
+                      {c.tag}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '4px 12px',
+                  padding: '10px 14px',
+                  borderTop: '1px solid var(--border)',
+                  background: 'var(--muted)',
+                }}
+              >
+                {/* data-tally: hooks for the tally tests in Hero.validationPreview.dom.test.tsx and landing-content.spec.ts */}
+                <span data-tally="failures" className="t-meta" style={{ color: 'var(--destructive)', fontWeight: 700 }}>
+                  1 ERROR · 1 WARNING
                 </span>
-                <span style={{ flex: 1, fontSize: 13, color: 'var(--fg-2)' }}>{c.label}</span>
-                <span className="mono" style={{ fontSize: 11, color: c.fg, fontWeight: 500 }}>
-                  {c.tag}
+                <span data-tally="passed" className="t-meta">
+                  14 / 16 CHECKS PASSED
                 </span>
               </div>
-            ))}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '14px 20px' }}>
+              {TILES.map((t) => (
+                <div key={t.title} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <IconTile name={t.icon} tone={t.tone} size={40} />
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--ink)' }}>{t.title}</div>
+                    <div className="t-caption" style={{ lineHeight: 1.4 }}>
+                      {t.caption}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-          {/* footer summary */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: '13px 16px',
-              borderTop: '1px solid var(--line-1)',
-              background: 'var(--bg-1)',
-            }}
-          >
-            {/* data-tally: stable selector for the failure-count test oracle */}
-            <span data-tally="failures" className="mono" style={{ fontSize: 11, color: 'var(--status-red-text)', fontWeight: 600 }}>
-              1 ERROR · 1 WARNING
-            </span>
-            {/* data-tally: stable selector for the passed-count test oracle */}
-            <span data-tally="passed" className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
-              14 / 16 CHECKS PASSED
-            </span>
-          </div>
-        </div>
         </div>
       </div>
       <div

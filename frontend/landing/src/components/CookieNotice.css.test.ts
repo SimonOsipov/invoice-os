@@ -444,7 +444,10 @@ describe('CookieNotice CSS source (LAND-05-02)', () => {
     const utilitiesPath = join(HERE, '..', '..', '..', '..', 'packages', 'design-tokens', 'v2', 'utilities.css')
     const bridgePath = join(HERE, '..', 'styles', 'bridge.css')
     expect(existsSync(bridgePath), `expected ${bridgePath} to exist ([RESKIN-01-02] adds the bridge)`).toBe(true)
-    const rules = [utilitiesPath, bridgePath].flatMap((path) => linkDecorationRules(readFileSync(path, 'utf8')))
+    const rules = [
+      ...[utilitiesPath, bridgePath].flatMap((path) => linkDecorationRules(readFileSync(path, 'utf8'))),
+      ...linkDecorationRules(CSS_SRC),
+    ]
     expect(rules.some((r) => r.selector === 'a'), 'the v2 a {} rule is among them').toBe(true)
     expect(rules.filter((r) => !weakerThanLnkCnLink(r.spec))).toEqual([])
   })

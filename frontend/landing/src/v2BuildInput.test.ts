@@ -70,6 +70,21 @@ describe('the landing loads only v2', () => {
     expect(specs.filter((s) => s === V1_ENTRY)).toEqual([])
   })
 
+  it('V2-06 main.tsx loads the v2 entry, then the bridge, then landing.css', () => {
+    const order = ['@invoice-os/design-tokens/v2/styles.css', './styles/bridge.css', './styles/landing.css']
+    const at = (specs: string[]) => order.map((s) => specs.indexOf(s))
+    const planted = importSpecifiers('p.tsx', `import '${order[0]}'\nimport '${order[2]}'\n// import './styles/bridge.css'`)
+    expect(at(planted), 'control: a commented import is absent, the others are found').toEqual([0, -1, 1])
+
+    const specs = importSpecifiers('main.tsx', readFileSync(join(LANDING_SRC, 'main.tsx'), 'utf8'))
+    const [v2, bridge, landing] = at(specs)
+    expect(bridge, 'main.tsx imports bridge.css').toBeGreaterThanOrEqual(0)
+    expect(specs.filter((s) => s === order[1])).toHaveLength(1)
+    expect(v2, 'the bridge maps v2 names, so v2 loads first').toBeGreaterThanOrEqual(0)
+    expect(v2).toBeLessThan(bridge)
+    expect(bridge, 'landing.css reads the bridge names, so the bridge loads first').toBeLessThan(landing)
+  })
+
   it('V2-05 the v2 entry import chain reaches no app-layer', () => {
     const fake: Record<string, string> = {
       'a.css': "@import url('./b.css'); @import 'c.css'; @import url(d.css); @import url(\"./sub/e.css\"); @import url('https://x.test/y.css'); /* @import 'z.css'; */",

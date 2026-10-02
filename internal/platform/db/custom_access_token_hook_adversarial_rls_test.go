@@ -290,6 +290,7 @@ func TestRLS_AuthAdminCannotSetRoleToAuthHookReader(t *testing.T) {
 // STABLE plus an owner with no write privilege anywhere: the hook cannot write.
 func TestRLS_CustomAccessTokenHookIsStableAndItsOwnerCannotWrite(t *testing.T) {
 	requireHarness(t)
+	reapplyStaffMigration(t)
 	ctx := context.Background()
 
 	var volatility string
@@ -339,6 +340,7 @@ func TestRLS_CustomAccessTokenHookIsStableAndItsOwnerCannotWrite(t *testing.T) {
 // Drives the shipped Downs and Ups through goose, staff first on the way down (D23).
 func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.T) {
 	requireHarness(t)
+	reapplyStaffMigration(t)
 	ctx := context.Background()
 	hook, staff := hookMigrationVersion(t), staffMigrationVersion(t)
 

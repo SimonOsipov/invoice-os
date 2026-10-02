@@ -3,6 +3,7 @@ package db_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"reflect"
 	"testing"
@@ -61,9 +62,37 @@ func staffMigrationProvider(t *testing.T) *goose.Provider {
 	return provider
 }
 
+// staleStaffTable clears a table that a broken Down left behind.
+const staleStaffTable = `DROP TABLE IF EXISTS public.staff_members`
+
+// reapplyMigration rolls the migration matching glob back and forward from the embedded SQL, so a
+// test reads the shipped file and not a database migrated earlier. afterDown runs between the two.
+func reapplyMigration(t *testing.T, glob, afterDown string) {
+	t.Helper()
+	ctx := context.Background()
+	provider, version := staffMigrationProvider(t), migrationVersion(t, glob)
+	if _, err := provider.ApplyVersion(ctx, version, false); err != nil && !errors.Is(err, goose.ErrNotApplied) {
+		t.Fatalf("roll back %s: %v", glob, err)
+	}
+	if afterDown != "" {
+		if _, err := h.super.Exec(ctx, afterDown); err != nil {
+			t.Fatalf("clear after rolling back %s: %v", glob, err)
+		}
+	}
+	if _, err := provider.ApplyVersion(ctx, version, true); err != nil {
+		t.Fatalf("apply %s: %v", glob, err)
+	}
+}
+
+func reapplyStaffMigration(t *testing.T) {
+	t.Helper()
+	reapplyMigration(t, "*_staff_members.sql", staleStaffTable)
+}
+
 // AC-1. Guard: fails if a grant to one of these roles is added.
 func TestRLS_StaffMembersRefusesAppReaderAndAuthAdmin(t *testing.T) {
 	h := requireHarness(t)
+	reapplyStaffMigration(t)
 	ctx := context.Background()
 	seedStaff(t, uuid.NewString())
 	if n := mustCount(t, h.super, `SELECT count(*) FROM public.staff_members`); n == 0 {
@@ -95,6 +124,7 @@ func TestRLS_StaffMembersRefusesAppReaderAndAuthAdmin(t *testing.T) {
 // AC-2.
 func TestRLS_StaffMembersHookReaderReadsUserIDOnly(t *testing.T) {
 	h := requireHarness(t)
+	reapplyStaffMigration(t)
 	ctx := context.Background()
 	userID := uuid.NewString()
 	seedStaff(t, userID)
@@ -156,6 +186,7 @@ func TestRLS_StaffMembersHookReaderReadsUserIDOnly(t *testing.T) {
 // AC-3. Guard: fails if the primary key is dropped.
 func TestRLS_StaffMembersOwnerGrantIsIdempotent(t *testing.T) {
 	h := requireHarness(t)
+	reapplyStaffMigration(t)
 	ctx := context.Background()
 	userID := uuid.NewString()
 	t.Cleanup(func() {
@@ -185,6 +216,7 @@ func TestRLS_StaffMembersOwnerGrantIsIdempotent(t *testing.T) {
 // AC-4.
 func TestRLS_CustomAccessTokenHookProjectsStaffBesideTheTenant(t *testing.T) {
 	h := requireHarness(t)
+	reapplyStaffMigration(t)
 	auth := authAdminPool(t)
 
 	for _, tc := range []struct {
@@ -225,6 +257,7 @@ func TestRLS_CustomAccessTokenHookProjectsStaffBesideTheTenant(t *testing.T) {
 // AC-5.
 func TestRLS_CustomAccessTokenHookStaffWithoutAppMetadata(t *testing.T) {
 	requireHarness(t)
+	reapplyStaffMigration(t)
 	auth := authAdminPool(t)
 
 	userID := uuid.NewString()
@@ -246,6 +279,7 @@ func TestRLS_CustomAccessTokenHookStaffWithoutAppMetadata(t *testing.T) {
 // AC-6.
 func TestRLS_CustomAccessTokenHookStripsAnUnearnedStaffClaim(t *testing.T) {
 	h := requireHarness(t)
+	reapplyStaffMigration(t)
 	auth := authAdminPool(t)
 
 	// Another user's row: a strip that skipped on any row would keep the claim.
@@ -254,7 +288,10 @@ func TestRLS_CustomAccessTokenHookStripsAnUnearnedStaffClaim(t *testing.T) {
 		t.Fatal("staff_members is empty")
 	}
 
-	for name, forged := range map[string]any{"bool_true": true, "string_true": "true", "number_1": 1} {
+	for name, forged := range map[string]any{
+		"bool_true": true, "string_true": "true", "number_1": 1,
+		"bool_false": false, "json_null": nil, "object": map[string]any{"is": true}, "array": []any{true},
+	} {
 		t.Run(name, func(t *testing.T) {
 			got, in := hookRun(t, auth, uuid.NewString(), func(c map[string]any) {
 				c["app_metadata"].(map[string]any)["staff"] = forged
@@ -281,6 +318,7 @@ func TestRLS_CustomAccessTokenHookStripsAnUnearnedStaffClaim(t *testing.T) {
 // AC-7. Guard: fails if the strip branch sets staff:false.
 func TestRLS_CustomAccessTokenHookAddsNoKeyForANonStaffUser(t *testing.T) {
 	h := requireHarness(t)
+	reapplyStaffMigration(t)
 	auth := authAdminPool(t)
 
 	for _, tc := range []struct {
@@ -316,6 +354,8 @@ func TestRLS_CustomAccessTokenHookAddsNoKeyForANonStaffUser(t *testing.T) {
 // AC-8. Guard: fails if provisioning inserts a staff row.
 func TestRLS_ProvisionWorkspaceGrantsNoStaff(t *testing.T) {
 	h := requireHarness(t)
+	reapplyStaffMigration(t)
+	reapplyMigration(t, "*_provision_workspace.sql", "")
 	auth := authAdminPool(t)
 	ctx := context.Background()
 
@@ -367,6 +407,7 @@ func staffFootprint(t *testing.T) (tables, policies, grants int) {
 // AC-9. Drives the shipped Down and Up through goose for the staff version.
 func TestRLS_StaffMembersDownRestoresTheTenantOnlyHook(t *testing.T) {
 	h := requireHarness(t)
+	reapplyStaffMigration(t)
 	auth := authAdminPool(t)
 	ctx := context.Background()
 	version := staffMigrationVersion(t)
@@ -399,6 +440,9 @@ func TestRLS_StaffMembersDownRestoresTheTenantOnlyHook(t *testing.T) {
 	staffApplied := true
 	t.Cleanup(func() {
 		if !staffApplied {
+			if _, err := h.super.Exec(context.Background(), staleStaffTable); err != nil {
+				t.Errorf("clear the staff table: %v", err)
+			}
 			if _, err := provider.ApplyVersion(context.Background(), version, true); err != nil {
 				t.Errorf("restore the staff migration: %v", err)
 			}
@@ -423,9 +467,12 @@ func TestRLS_StaffMembersDownRestoresTheTenantOnlyHook(t *testing.T) {
 // AC-11.
 func TestRLS_CustomAccessTokenHookStaffStepIsTotalOverNonObjectAppMetadata(t *testing.T) {
 	requireHarness(t)
+	reapplyStaffMigration(t)
 	auth := authAdminPool(t)
 
-	for name, appMetadata := range map[string]any{"json_null": nil, "string": "x"} {
+	for name, appMetadata := range map[string]any{
+		"json_null": nil, "string": "x", "number": 7, "bool": true,
+	} {
 		t.Run(name+"/staff", func(t *testing.T) {
 			userID := uuid.NewString()
 			seedStaff(t, userID)
@@ -452,6 +499,7 @@ func TestRLS_CustomAccessTokenHookStaffStepIsTotalOverNonObjectAppMetadata(t *te
 // AC-12. Replays the memberships round-trip tests' cleanup, then reads the hook.
 func TestRLS_StaffProjectionSurvivesTheMembershipsRoundTrip(t *testing.T) {
 	requireHarness(t)
+	reapplyStaffMigration(t)
 	auth := authAdminPool(t)
 	ctx := context.Background()
 	provider := staffMigrationProvider(t)
@@ -482,6 +530,7 @@ func TestRLS_StaffProjectionSurvivesTheMembershipsRoundTrip(t *testing.T) {
 // Boundary. Guard: fails if the EXISTS ignores user_id.
 func TestRLS_CustomAccessTokenHookStaffRowForAnotherUser(t *testing.T) {
 	h := requireHarness(t)
+	reapplyStaffMigration(t)
 	auth := authAdminPool(t)
 
 	staffUser, other := uuid.NewString(), uuid.NewString()
@@ -500,5 +549,148 @@ func TestRLS_CustomAccessTokenHookStaffRowForAnotherUser(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("claims\n got: %v\nwant: %v", got, want)
+	}
+}
+
+// A write grant alone can hide behind RLS's own 42501, so the ACL is read directly.
+func TestRLS_StaffMembersGrantsReachOnlyTheOwnerAndTheHookReader(t *testing.T) {
+	h := requireHarness(t)
+	reapplyStaffMigration(t)
+	ctx := context.Background()
+
+	var owner string
+	if err := h.super.QueryRow(ctx,
+		`SELECT tableowner FROM pg_tables WHERE schemaname = 'public' AND tablename = 'staff_members'`,
+	).Scan(&owner); err != nil {
+		t.Fatalf("read the staff_members owner: %v", err)
+	}
+	if owner != "invoice_migrator" {
+		t.Fatalf("staff_members owner = %q, want invoice_migrator", owner)
+	}
+	if n := mustCount(t, h.super,
+		`SELECT count(*) FROM information_schema.table_privileges
+		  WHERE table_schema = 'public' AND table_name = 'staff_members' AND grantee = $1`, owner); n == 0 {
+		t.Fatal("the view lists no privilege for the owner, so an empty read below proves nothing")
+	}
+
+	collect := func(sql string) []string {
+		t.Helper()
+		rows, err := h.super.Query(ctx, sql, owner)
+		if err != nil {
+			t.Fatalf("read privileges: %v", err)
+		}
+		got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatalf("collect privileges: %v", err)
+		}
+		return got
+	}
+	if got := collect(`SELECT grantee || ':' || privilege_type FROM information_schema.table_privileges
+	                    WHERE table_schema = 'public' AND table_name = 'staff_members' AND grantee <> $1 ORDER BY 1`); len(got) != 0 {
+		t.Errorf("table-level privileges beyond the owner: %v", got)
+	}
+	want := []string{"auth_hook_reader:user_id:SELECT"}
+	if got := collect(`SELECT grantee || ':' || column_name || ':' || privilege_type FROM information_schema.column_privileges
+	                    WHERE table_schema = 'public' AND table_name = 'staff_members' AND grantee <> $1 ORDER BY 1`); !reflect.DeepEqual(got, want) {
+		t.Errorf("column privileges beyond the owner = %v, want %v", got, want)
+	}
+}
+
+// The staff step runs after the tenant step: it never changes which tenant projects.
+func TestRLS_CustomAccessTokenHookStaffStepKeepsTheTenantRules(t *testing.T) {
+	h := requireHarness(t)
+	reapplyStaffMigration(t)
+	auth := authAdminPool(t)
+
+	for _, tc := range []struct {
+		name        string
+		memberships map[string]string
+		wantTenant  string
+	}{
+		{"two_active", map[string]string{h.tenantA: "active", h.tenantB: "active"}, ""},
+		{"suspended_only", map[string]string{h.tenantA: "suspended"}, ""},
+		{"no_membership", nil, ""},
+		{"one_active_one_suspended", map[string]string{h.tenantA: "active", h.tenantB: "suspended"}, h.tenantA},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			userID := uuid.NewString()
+			seedStaff(t, userID)
+			for tenant, status := range tc.memberships {
+				seedHookMembership(t, tenant, userID, status)
+			}
+
+			got, _ := hookRun(t, auth, userID, func(c map[string]any) {
+				c["app_metadata"].(map[string]any)["tenant_id"] = "forged-tenant"
+			})
+			md := appMetadataOf(t, got)
+			if md["staff"] != true {
+				t.Errorf("app_metadata.staff = %v, want true: %v", md["staff"], md)
+			}
+			if tc.wantTenant == "" {
+				if v, has := md["tenant_id"]; has {
+					t.Errorf("app_metadata.tenant_id = %v, want absent", v)
+				}
+			} else if md["tenant_id"] != tc.wantTenant {
+				t.Errorf("app_metadata.tenant_id = %v, want %s", md["tenant_id"], tc.wantTenant)
+			}
+			if md["provider"] != "email" {
+				t.Errorf("app_metadata.provider = %v, want email kept", md["provider"])
+			}
+		})
+	}
+}
+
+// A user_id that matches no row, null or absent, earns no staff and keeps no forged one.
+func TestRLS_CustomAccessTokenHookStripsStaffForANullOrAbsentUserID(t *testing.T) {
+	h := requireHarness(t)
+	reapplyStaffMigration(t)
+	auth := authAdminPool(t)
+
+	seedStaff(t, uuid.NewString())
+	if n := mustCount(t, h.super, `SELECT count(*) FROM public.staff_members`); n == 0 {
+		t.Fatal("staff_members is empty")
+	}
+
+	for name, edit := range map[string]func(e, _ map[string]any){
+		"null":   func(e, _ map[string]any) { e["user_id"] = nil },
+		"absent": func(e, _ map[string]any) { delete(e, "user_id") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw, _ := hookEvent(t, uuid.NewString())
+			event := editEvent(t, raw, func(e, c map[string]any) {
+				edit(e, c)
+				c["app_metadata"].(map[string]any)["staff"] = true
+			})
+			md := appMetadataOf(t, outputClaims(t, callHook(t, auth, event)))
+			if v, has := md["staff"]; has {
+				t.Errorf("app_metadata.staff = %v survived a %s user_id", v, name)
+			}
+			if md["provider"] != "email" {
+				t.Errorf("app_metadata.provider = %v, want email kept", md["provider"])
+			}
+		})
+	}
+}
+
+// Deleting the row cuts the account off at its next token, forged claim included.
+func TestRLS_CustomAccessTokenHookStopsProjectingStaffWhenTheRowIsDeleted(t *testing.T) {
+	h := requireHarness(t)
+	reapplyStaffMigration(t)
+	auth := authAdminPool(t)
+
+	userID := uuid.NewString()
+	seedStaff(t, userID)
+	if v := appMetadataOf(t, mustHookClaims(t, auth, userID))["staff"]; v != true {
+		t.Fatalf("app_metadata.staff = %v with the row present, want true", v)
+	}
+
+	if _, err := h.super.Exec(context.Background(), `DELETE FROM public.staff_members WHERE user_id = $1`, userID); err != nil {
+		t.Fatalf("delete the staff row: %v", err)
+	}
+	got, _ := hookRun(t, auth, userID, func(c map[string]any) {
+		c["app_metadata"].(map[string]any)["staff"] = true
+	})
+	if v, has := appMetadataOf(t, got)["staff"]; has {
+		t.Errorf("app_metadata.staff = %v after the row was deleted, want absent", v)
 	}
 }

@@ -2,6 +2,7 @@ package platform_test
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,9 +15,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -225,7 +228,50 @@ func gwWith(h map[string]string, k, v string) map[string]string {
 	return out
 }
 
+const gwRefusalLog = "request refused: no gateway token"
+
 const gwUnauthorizedBody = "{\"error\":\"unauthorized\"}\n"
+
+// gwTenantRoutes holds real tenant-owned routes per service; notifications registers none.
+var gwTenantRoutes = map[string][][2]string{
+	"tenancy": {
+		{"GET", "/v1/me"}, {"GET", "/v1/memberships"},
+		{"PATCH", "/v1/memberships/" + gwForgedUID}, {"POST", "/v1/workspaces"},
+	},
+	"portfolio": {
+		{"GET", "/v1/entities"}, {"POST", "/v1/entities"}, {"POST", "/v1/entities/x/offboard"},
+	},
+	"invoice": {
+		{"GET", "/v1/invoices"}, {"POST", "/v1/invoices"}, {"GET", "/v1/audit-log"},
+		{"POST", "/v1/invoices/submissions"}, {"POST", "/v1/imports/preview"},
+	},
+	"validation":    {{"PATCH", "/v1/rules/x"}},
+	"submission":    {{"GET", "/v1/extractions"}, {"POST", "/v1/documents"}},
+	"dashboard":     {{"GET", "/v1/rollup"}},
+	"notifications": nil,
+}
+
+// gwStandInDB listens where a Postgres would; every accepted connection is database contact.
+func gwStandInDB(t *testing.T) (dsn string, accepted *atomic.Int32) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("stand-in database: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	accepted = new(atomic.Int32)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted.Add(1)
+			_ = c.Close()
+		}
+	}()
+	return fmt.Sprintf("postgres://u:p@%s/db?sslmode=disable", ln.Addr()), accepted
+}
 
 // Each real context-service main refuses a request the gateway did not sign. A built
 // binary is the only layer that sees a main that never calls RequireGateway.
@@ -302,6 +348,56 @@ func TestRLS_EveryContextServiceRefusesAForgedRequest(t *testing.T) {
 				}
 			})
 
+			t.Run("refuses every real tenant route without the token", func(t *testing.T) {
+				routes, ok := gwTenantRoutes[svc]
+				if !ok {
+					t.Fatalf("gwTenantRoutes has no entry for %q; list its tenant routes, or nil when it has none", svc)
+				}
+				for _, r := range routes {
+					body := ""
+					if r[0] != "GET" {
+						body = "{}"
+					}
+					code, got := p.do(t, r[0], r[1], body, gwForged())
+					if code != http.StatusUnauthorized || got != gwUnauthorizedBody {
+						t.Errorf("%s %s, forged identity, no token = %d %q, want 401 %q", r[0], r[1], code, got, gwUnauthorizedBody)
+					}
+					code, got = p.do(t, r[0], r[1], body, gwWith(gwForged(), "X-Gateway-Token", gwToken))
+					if code == http.StatusUnauthorized && got == gwUnauthorizedBody || got == "404 page not found\n" {
+						t.Errorf("%s %s with the token = %d %q, want the route reached", r[0], r[1], code, got)
+					}
+				}
+			})
+
+			t.Run("a refused boot contacts no database", func(t *testing.T) {
+				if svc != "notifications" {
+					dsn, accepted := gwStandInDB(t)
+					port := gwFreePort(t)
+					cp := gwStart(t, bin, port, append(gwBootEnv(svc, port), "DATABASE_URL="+dsn, "GATEWAY_TOKEN="+gwToken))
+					for deadline := time.Now().Add(60 * time.Second); accepted.Load() == 0 && !cp.exited(); {
+						if time.Now().After(deadline) {
+							t.Fatalf("%s never contacted the stand-in database with the token, so the run below proves nothing:\n%s", svc, cp.out)
+						}
+						_, _ = http.Get(cp.url("/readyz"))
+						time.Sleep(100 * time.Millisecond)
+					}
+					if accepted.Load() == 0 {
+						t.Fatalf("%s exited before it contacted the stand-in database:\n%s", svc, cp.out)
+					}
+				}
+				dsn, accepted := gwStandInDB(t)
+				port := gwFreePort(t)
+				bp := gwStart(t, bin, port, append(gwBootEnv(svc, port), "DATABASE_URL="+dsn))
+				select {
+				case <-bp.done:
+				case <-time.After(60 * time.Second):
+					t.Fatalf("%s neither exited nor failed within 60s without GATEWAY_TOKEN:\n%s", svc, bp.out)
+				}
+				if n := accepted.Load(); n != 0 || bp.exit != 1 {
+					t.Errorf("%s without GATEWAY_TOKEN: exit %d, %d database connection(s); want exit 1 and none:\n%s", svc, bp.exit, n, bp.out)
+				}
+			})
+
 			t.Run("refuses to boot without GATEWAY_TOKEN", func(t *testing.T) {
 				for _, c := range []struct {
 					name string
@@ -349,6 +445,46 @@ func TestRLS_EveryContextServiceRefusesAForgedRequest(t *testing.T) {
 					t.Errorf("POST /v1/validate/batch, gateway token only = %d, want 401 from the S2S check", code)
 				}
 			})
+
+			t.Run("open pattern admits no other route, method or path form", func(t *testing.T) {
+				const batch = `{"invoices":[]}`
+				s2s := map[string]string{"X-S2S-Token": gwS2SToken}
+				if code, _ := p.do(t, "POST", "/v1/validate/batch", batch, s2s); code == http.StatusUnauthorized || code == http.StatusNotFound {
+					t.Fatalf("POST /v1/validate/batch, S2S token only = %d, want the route reached", code)
+				}
+				for _, c := range []struct{ method, path string }{
+					{"GET", "/v1/validate/batch"},
+					{"PUT", "/v1/validate/batch"},
+					{"POST", "/v1/validate/batch/"},
+					{"POST", "/V1/validate/batch"},
+					{"POST", "/v1/validate/batch/extra"},
+					{"PATCH", "/v1/rules/x"},
+					{"GET", "/v1/ping"},
+				} {
+					refused := strings.Count(p.out.String(), gwRefusalLog)
+					code, body := p.do(t, c.method, c.path, batch, gwWith(gwForged(), "X-S2S-Token", gwS2SToken))
+					if code != http.StatusUnauthorized || body != gwUnauthorizedBody {
+						t.Errorf("%s %s, S2S token and forged identity, no gateway token = %d %q, want 401 %q", c.method, c.path, code, body, gwUnauthorizedBody)
+					}
+					// a handler can answer the same 401; only the guard logs the refusal
+					if got := strings.Count(p.out.String(), gwRefusalLog); got != refused+1 {
+						t.Errorf("%s %s: guard logged %d refusal(s), want 1; the route reached its handler", c.method, c.path, got-refused)
+					}
+				}
+			})
 		})
 	}
+
+	t.Run("reconciliation is not guarded and still serves health", func(t *testing.T) {
+		if slices.Contains(services, "reconciliation") {
+			t.Fatal("routedServices names reconciliation; D4 says the gateway gives it no proxy route")
+		}
+		port := gwFreePort(t)
+		reader := cmp.Or(os.Getenv("DATABASE_READER_URL"), os.Getenv("DATABASE_URL"))
+		p := gwStart(t, buildMain(t, "reconciliation"), port, append(gwBootEnv("reconciliation", port), "DATABASE_READER_URL="+reader))
+		gwWaitHealthy(t, p, 90*time.Second)
+		if code, body := p.do(t, "GET", "/v1/ping", "", gwForged()); code != http.StatusNotFound {
+			t.Errorf("GET /v1/ping, forged identity, no token = %d %q, want the mux's 404: no guard (D4)", code, body)
+		}
+	})
 }

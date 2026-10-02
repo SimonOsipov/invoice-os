@@ -260,6 +260,53 @@ func TestKillSwitch_UnknownKeyUpdatesNothing(t *testing.T) {
 	}
 }
 
+// TestKillSwitch_OnlyTheOwnerCanRunIt: killSwitchStatement updates 1 row as
+// invoice_migrator and is refused with 42501 as invoice_app. Both run in a tx
+// that is rolled back.
+func TestKillSwitch_OnlyTheOwnerCanRunIt(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+	const key = "vat-standard-rate"
+
+	restoreRulesOnCleanup(t, super)
+
+	run := func(role string) (rows int64, who string, err error) {
+		tx, err := super.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin %s tx: %v", role, err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		if _, err := tx.Exec(ctx, "SET LOCAL ROLE "+role); err != nil {
+			t.Fatalf("SET LOCAL ROLE %s: %v", role, err)
+		}
+		if err := tx.QueryRow(ctx, "SELECT current_user").Scan(&who); err != nil {
+			t.Fatalf("SELECT current_user as %s: %v", role, err)
+		}
+		tag, err := tx.Exec(ctx, killSwitchStatement, false, key)
+		return tag.RowsAffected(), who, err
+	}
+
+	_, who, err := run("invoice_app")
+	if who != "invoice_app" {
+		t.Fatalf("current_user = %q, want invoice_app", who)
+	}
+	assertAppRefused(t, err, "kill switch statement")
+
+	rows, who, err := run("invoice_migrator")
+	if who != "invoice_migrator" {
+		t.Fatalf("current_user = %q, want invoice_migrator", who)
+	}
+	if err != nil {
+		t.Fatalf("kill switch as invoice_migrator: %v", err)
+	}
+	if rows != 1 {
+		t.Errorf("kill switch as invoice_migrator rows = %d, want 1", rows)
+	}
+	if !ruleEnabledActive(t, super, key) {
+		t.Errorf("%s enabled = false after rolled-back statements, want true", key)
+	}
+}
+
 // ruleEnabledActive reads rules.enabled for key on the active version via the
 // superuser pool, with the same row choice as killSwitchStatement.
 func ruleEnabledActive(t *testing.T, pool *pgxpool.Pool, key string) bool {

@@ -310,6 +310,45 @@ describe('scrubTransaction', () => {
   })
 })
 
+const CAPACITY_KEYS = ['effectiveConnectionType', 'connectionType', 'deviceMemory', 'hardwareConcurrency', 'connection.rtt']
+const capacity = () => ({ effectiveConnectionType: '4g', connectionType: 'wifi', deviceMemory: 8, hardwareConcurrency: 12, 'connection.rtt': 50 })
+
+describe('connection and device capacity', () => {
+  it('scrubTransaction_dropsConnectionAndDeviceCapacity', () => {
+    const tx = as<TransactionEvent>({
+      type: 'transaction',
+      contexts: { trace: { data: { ...capacity(), 'sentry.op': 'pageload' } } },
+      measurements: {
+        lcp: { value: 1200, unit: 'millisecond' },
+        'connection.rtt': { value: 50, unit: 'millisecond' },
+        deviceMemory: { value: 8, unit: 'gigabyte' },
+        hardwareConcurrency: { value: 12, unit: 'none' },
+        effectiveConnectionType: { value: 4, unit: 'none' },
+        connectionType: { value: 1, unit: 'none' },
+      },
+      spans: [{ description: 'span', data: { ...capacity(), 'sentry.op': 'resource.script' } }],
+    })
+    const before = json(tx)
+    for (const k of CAPACITY_KEYS) expect(findKey(tx, k).length, `control: the fixture holds ${k}`).toBe(3)
+    const out = scrubTransaction(tx)
+    for (const k of CAPACITY_KEYS) expect(findKey(out, k), k).toEqual([])
+    expect(out.measurements?.lcp, 'control: lcp survives').toEqual({ value: 1200, unit: 'millisecond' })
+    expect((out.contexts as { trace: { data: Record<string, unknown> } }).trace.data['sentry.op']).toBe('pageload')
+    expect(out.spans?.length, 'spans survive').toBe(1)
+    expect(out.spans?.[0].data['sentry.op']).toBe('resource.script')
+    expect(json(tx), 'the input is not mutated').toBe(before)
+  })
+
+  it('scrubSpan_dropsConnectionAndDeviceCapacity', () => {
+    const span = as<SpanJSON>({ op: 'ui.interaction.click', span_id: 's1', description: 'button', data: { ...capacity(), 'sentry.op': 'ui.interaction.click' } })
+    for (const k of CAPACITY_KEYS) expect(span.data, `control: the fixture holds ${k}`).toHaveProperty([k])
+    const out = scrubSpan(span)
+    for (const k of CAPACITY_KEYS) expect(out.data, k).not.toHaveProperty([k])
+    expect(out.data['sentry.op'], 'control: sentry.op survives').toBe('ui.interaction.click')
+    expect(out.span_id).toBe('s1')
+  })
+})
+
 describe('scrubTransaction more', () => {
   it('scrubTransaction_scrubsEverySpanAndEveryClsSource', () => {
     const span = (n: number) => ({

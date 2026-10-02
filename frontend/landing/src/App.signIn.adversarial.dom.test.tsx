@@ -168,6 +168,15 @@ describe('AUTH-05-07 adversarial: boot params', () => {
     expect(window.location.pathname).toBe('/')
     expect(window.location.search).toBe('?utm_source=x')
     expect(window.location.hash).toBe('#pricing')
+
+    // A path that is not `/` tells a kept path from a rebuilt one.
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    vi.resetModules()
+    await bootAt(`/privacy?state=${STATE}&console=ops&keep=1#top`)
+    expect(window.location.pathname).toBe('/privacy')
+    expect(window.location.search).toBe('?keep=1')
+    expect(window.location.hash).toBe('#top')
   })
 
   it('a boot with neither param does not touch history', async () => {
@@ -280,5 +289,203 @@ describe('AUTH-05-07 adversarial: unconfigured landing (D7: production unchanged
     pageMounted()
     expect(dialogs().length).toBe(0)
     expect(window.location.search).toBe('')
+  })
+})
+
+const NOT_STAFF = 'This account cannot open the ASComply consoles.'
+const CONTINUE = 'Continue with email'
+
+function continueButtons(d: HTMLElement): HTMLButtonElement[] {
+  return Array.from(d.querySelectorAll('button')).filter((b) => b.textContent?.trim() === CONTINUE)
+}
+
+async function clickContinue(): Promise<void> {
+  const b = continueButtons(onlyDialog())
+  expect(b.length).toBe(1)
+  await act(async () => b[0].click())
+}
+
+async function fillAndSubmit(d: HTMLElement): Promise<void> {
+  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+  const email = d.querySelectorAll<HTMLInputElement>('input[type="email"]')
+  const password = d.querySelectorAll<HTMLInputElement>('input[type="password"]')
+  expect(email.length).toBe(1)
+  expect(password.length).toBe(1)
+  await act(async () => {
+    setValue.call(email[0], 'ada@okafor.ng')
+    email[0].dispatchEvent(new Event('input', { bubbles: true }))
+    setValue.call(password[0], 'pw')
+    password[0].dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await act(async () => d.querySelector<HTMLButtonElement>('button[type="submit"]')!.click())
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 0))
+  })
+}
+
+function stubCode() {
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValue(new Response(JSON.stringify({ code: 'the-code' }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+describe('AUTH-11-06 adversarial: the console target', () => {
+  beforeEach(() => {
+    vi.stubEnv('VITE_OPS_URL', 'https://ops.x')
+    vi.stubEnv('VITE_SUPPORT_URL', 'https://support.x')
+  })
+
+  it('a single console and no state reaches that console through App, modal and form', async () => {
+    const cases: [string, string][] = [
+      ['ops', 'https://ops.x?auth=start'],
+      ['support', 'https://support.x?auth=start'],
+    ]
+    expect(cases.length).toBeGreaterThan(0)
+    for (const [target, want] of cases) {
+      const assigned = captureNavigation()
+      await bootAt(`/?console=${target}`)
+      pageMounted()
+      expect(dialogs().length).toBe(0)
+      expect(window.location.search).toBe('')
+      await openFromNav()
+      await clickContinue()
+      expect(assigned, target).toEqual([want])
+      restoreLocation?.()
+      restoreLocation = undefined
+      await act(async () => root.unmount())
+      root = createRoot(container)
+      vi.resetModules()
+    }
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('a console value that is not exactly ops or support holds no target and never reaches the URL', async () => {
+    const refused = ['OPS', 'Support', 'ops%20', '%20ops', '', 'ops,support', 'ops%00', 'https%3A%2F%2Fevil.example', '%2F%2Fevil.example', 'ops%40evil.example', 'app']
+    for (const v of refused) {
+      const assigned = captureNavigation()
+      await bootAt(`/?console=${v}&signin=ready`)
+      expect(window.location.search, v).toBe('')
+      await clickContinue()
+      expect(assigned, v).toEqual(['https://app.x?auth=start'])
+      restoreLocation?.()
+      restoreLocation = undefined
+      await act(async () => root.unmount())
+      root = createRoot(container)
+      vi.resetModules()
+    }
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('a URL in console never receives the code', async () => {
+    stubCode()
+    const assigned = captureNavigation()
+    await bootAt(`/?state=${STATE}&console=${encodeURIComponent('https://evil.example/x')}&signin=ready`)
+    await fillAndSubmit(onlyDialog())
+    expect(assigned).toEqual(['https://app.x?handoff=the-code'])
+    for (const a of assigned) expect(a).not.toContain('evil')
+  })
+
+  it('a console with an unset base navigates nowhere and never falls back to the app', async () => {
+    const cases: [string, string, string][] = [
+      ['ops', 'VITE_OPS_URL', 'https://support.x'],
+      ['support', 'VITE_SUPPORT_URL', 'https://ops.x'],
+    ]
+    for (const [target, env] of cases) {
+      vi.stubEnv(env, '')
+      const fetchMock = stubCode()
+      const assigned = captureNavigation()
+      await bootAt(`/?state=${STATE}&console=${target}&signin=ready`)
+      await fillAndSubmit(onlyDialog())
+      expect(fetchMock, target).toHaveBeenCalledTimes(1)
+      expect(assigned, `${target} submit`).toEqual([])
+      restoreLocation?.()
+      restoreLocation = undefined
+      await act(async () => root.unmount())
+      root = createRoot(container)
+      vi.resetModules()
+
+      const bounced = captureNavigation()
+      await bootAt(`/?console=${target}&signin=ready`)
+      await clickContinue()
+      expect(bounced, `${target} continue`).toEqual([])
+      restoreLocation?.()
+      restoreLocation = undefined
+      await act(async () => root.unmount())
+      root = createRoot(container)
+      vi.resetModules()
+      vi.stubEnv('VITE_OPS_URL', 'https://ops.x')
+      vi.stubEnv('VITE_SUPPORT_URL', 'https://support.x')
+    }
+  })
+
+  it('not-staff with a held console keeps the target for the retry', async () => {
+    stubCode()
+    const assigned = captureNavigation()
+    await bootAt(`/?state=${STATE}&console=support&signin=not-staff`)
+    const d = onlyDialog()
+    expect(Array.from(d.querySelectorAll('[role="alert"]')).map((a) => a.textContent)).toEqual([expect.stringContaining(NOT_STAFF)])
+    await fillAndSubmit(d)
+    expect(assigned).toEqual(['https://support.x?handoff=the-code'])
+  })
+
+  it('not-staff with a held console and no state keeps the alert and bounces through that console', async () => {
+    const assigned = captureNavigation()
+    await bootAt('/?console=ops&signin=not-staff')
+    const alerts = Array.from(onlyDialog().querySelectorAll('[role="alert"]'))
+    expect(alerts.length).toBe(1)
+    expect(alerts[0].textContent).toContain(NOT_STAFF)
+    await clickContinue()
+    expect(assigned).toEqual(['https://ops.x?auth=start'])
+  })
+
+  it('a bare console param is stripped alone, and a repeated one in every copy', async () => {
+    await bootAt('/?console&keep=1')
+    pageMounted()
+    expect(window.location.search).toBe('?keep=1')
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    vi.resetModules()
+    await bootAt('/?console=ops&a=1&console=ops&console=support&b=2')
+    pageMounted()
+    expect(window.location.search).toBe('?a=1&b=2')
+    expect(dialogs().length).toBe(0)
+  })
+
+  it('the persona picker ignores a held console', async () => {
+    const assigned = captureNavigation()
+    await bootAt('/?console=ops&signin=ready')
+    const picks: [string, string][] = [
+      ['firm', 'https://app.x?persona=firm'],
+      ['support', 'https://support.x?persona=support'],
+      ['developer', 'https://ops.x?persona=developer'],
+    ]
+    for (const [id, want] of picks) {
+      const b = onlyDialog().querySelectorAll<HTMLButtonElement>(`[data-persona="${id}"]`)
+      expect(b.length, id).toBe(1)
+      await act(async () => b[0].click())
+      expect(assigned.at(-1), id).toBe(want)
+    }
+    expect(assigned.length).toBe(picks.length)
+  })
+
+  it('StrictMode: the held console survives the double effect and the strip', async () => {
+    stubCode()
+    const assigned = captureNavigation()
+    await bootAt(`/?state=${STATE}&console=ops&signin=ready`, true)
+    expect(window.location.search).toBe('')
+    await fillAndSubmit(onlyDialog())
+    expect(assigned).toEqual(['https://ops.x?handoff=the-code'])
+  })
+
+  it('the console target is held in memory only', async () => {
+    const assigned = captureNavigation()
+    await bootAt('/?console=ops&signin=ready')
+    await clickContinue()
+    expect(assigned).toEqual(['https://ops.x?auth=start'])
+    for (const w of writes) expect(JSON.stringify(w)).not.toContain('console')
+    expect(document.cookie).not.toContain('console')
+    expect(window.location.href).not.toContain('console')
   })
 })

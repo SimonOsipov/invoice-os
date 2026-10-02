@@ -144,6 +144,14 @@ describe('readSignInConsole', () => {
       ['two different values', search([['console', 'ops'], ['console', 'support']])],
       ['an unknown value', search([['console', 'app']])],
       ['a URL', search([['console', 'https://x']])],
+      ['upper case', search([['console', 'OPS']])],
+      ['trailing space', search([['console', 'ops ']])],
+      ['leading space', search([['console', ' support']])],
+      ['empty value', '?console='],
+      ['no value', '?console'],
+      ['a list', search([['console', 'ops,support']])],
+      ['a differently cased key', search([['Console', 'ops']])],
+      ['a prefix', search([['console', 'opsx']])],
     ]
     expect(refused.length).toBeGreaterThan(0)
     for (const [name, s] of refused) {

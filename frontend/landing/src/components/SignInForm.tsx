@@ -45,7 +45,7 @@ export function SignInForm({ heldState, initialError, consoleTarget }: { heldSta
     return () => window.removeEventListener('pageshow', onShow)
   }, [])
 
-  // No state in memory: the app mints one and bounces back with ?state=.
+  // No state in memory: the bounce mints one and returns with ?state=.
   if (!state) {
     return (
       <div>

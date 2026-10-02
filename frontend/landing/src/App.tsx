@@ -21,7 +21,7 @@ import { applyChoice } from './consentActions'
 import { isPrivacyPath } from './route'
 import { readSignInConsole, readSignInState } from './signIn'
 
-// Copy for the app's ?signin= outcome; `ready` opens the modal with no message.
+// Copy for the ?signin= outcome; `ready` opens the modal with no message.
 const SIGN_IN_OUTCOMES = new Map<string, string | undefined>([
   ['ready', undefined],
   ['no-workspace', 'This account has no workspace yet.'],
@@ -29,7 +29,7 @@ const SIGN_IN_OUTCOMES = new Map<string, string | undefined>([
   ['not-staff', 'This account cannot open the ASComply consoles.'],
 ])
 
-// Held a minute short of the app's 10-minute state TTL, so a posted state is still live there.
+// Held a minute short of the 10-minute state TTL, so a posted state is still live.
 const STATE_HOLD_MS = 9 * 60 * 1000
 
 // Pure read: the strip runs in an effect, so StrictMode's double init sees the same URL.

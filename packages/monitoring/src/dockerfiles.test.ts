@@ -23,7 +23,11 @@ describe('dockerfiles', () => {
       // An ARG above the stage's FROM is out of scope for it, and an ENV above its ARG expands empty.
       const from = lines.findIndex((l) => /^FROM /.test(l))
       expect(from, `${name}: no FROM`).toBeGreaterThan(-1)
-      for (const key of ['VITE_SENTRY_DSN=$VITE_SENTRY_DSN', 'VITE_RAILWAY_GIT_COMMIT_SHA=$RAILWAY_GIT_COMMIT_SHA']) {
+      for (const key of [
+        'VITE_SENTRY_DSN=$VITE_SENTRY_DSN',
+        'VITE_SENTRY_TEST_DIGEST=$VITE_SENTRY_TEST_DIGEST',
+        'VITE_RAILWAY_GIT_COMMIT_SHA=$RAILWAY_GIT_COMMIT_SHA',
+      ]) {
         const arg = lines.indexOf(`ARG ${key.split('=$')[1]}`)
         const env = lines.indexOf(`ENV ${key}`)
         expect(arg, `${name}: ARG for ${key} is not inside the build stage`).toBeGreaterThan(from)
@@ -32,6 +36,8 @@ describe('dockerfiles', () => {
       for (const want of [
         'ARG VITE_SENTRY_DSN',
         'ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN',
+        'ARG VITE_SENTRY_TEST_DIGEST',
+        'ENV VITE_SENTRY_TEST_DIGEST=$VITE_SENTRY_TEST_DIGEST',
         'ARG RAILWAY_GIT_COMMIT_SHA',
         'ENV VITE_RAILWAY_GIT_COMMIT_SHA=$RAILWAY_GIT_COMMIT_SHA',
       ]) {

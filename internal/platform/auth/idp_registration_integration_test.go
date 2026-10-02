@@ -1,6 +1,7 @@
 package auth_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,16 +66,24 @@ func mailEnv(t *testing.T, name string) string {
 }
 
 // startGateway serves the real register and verify handlers where the mailed link points.
-func startGateway(t *testing.T, authBase string) string {
+func startGatewayNoFloor(t *testing.T, authBase string) string {
+	t.Helper()
+	gw, _ := startGateway(t, authBase, 0)
+	return gw
+}
+
+// startGateway is startGatewayNoFloor with a register minimum; it also returns the gateway's JSON log.
+func startGateway(t *testing.T, authBase string, minResponse time.Duration) (string, *bytes.Buffer) {
 	t.Helper()
 	authURL, err := url.Parse(authBase)
 	if err != nil {
 		t.Fatal(err)
 	}
 	site, _ := url.Parse(siteURL)
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logs := &bytes.Buffer{}
+	log := slog.New(slog.NewJSONHandler(&syncWriter{w: logs}, nil))
 	mux := http.NewServeMux()
-	mux.Handle("POST /auth/register", gateway.RegisterHandler(authURL, noRedirect, log))
+	mux.Handle("POST /auth/register", gateway.RegisterHandler(authURL, noRedirect, minResponse, log))
 	mux.Handle("GET /auth/verify", gateway.VerifyHandler(authURL, site, noRedirect, log))
 
 	l, err := net.Listen("tcp", gatewayAddr)
@@ -84,7 +94,19 @@ func startGateway(t *testing.T, authBase string) string {
 	srv.Listener = l
 	srv.Start()
 	t.Cleanup(srv.Close)
-	return srv.URL
+	return srv.URL, logs
+}
+
+// syncWriter serialises the handler goroutines' log writes into one buffer.
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
 }
 
 // registrant signs up through the gateway handler; the superuser deletes the GoTrue user and any workspace afterwards.
@@ -130,7 +152,7 @@ func postRegister(t *testing.T, gw, email string) (int, string) {
 
 // None may register. The gateway refuses the trailing-dot row; real GoTrue decides the rest.
 func TestIdP_FreeMailVariantsAreNotAccepted(t *testing.T) {
-	gw := startGateway(t, idpMailURL(t))
+	gw := startGatewayNoFloor(t, idpMailURL(t))
 	conn := superConn(t)
 	ctx := context.Background()
 
@@ -258,7 +280,7 @@ func follow(t *testing.T, link string) string {
 
 func TestIdP_RegisterLeavesTheAccountUnverified(t *testing.T) {
 	base := idpMailURL(t)
-	u := registrant(t, startGateway(t, base))
+	u := registrant(t, startGatewayNoFloor(t, base))
 
 	var confirmed bool
 	if err := superConn(t).QueryRow(context.Background(),
@@ -276,7 +298,7 @@ func TestIdP_RegisterLeavesTheAccountUnverified(t *testing.T) {
 
 func TestIdP_ConfirmationLinkTargetsTheGateway(t *testing.T) {
 	base := idpMailURL(t)
-	u := registrant(t, startGateway(t, base))
+	u := registrant(t, startGatewayNoFloor(t, base))
 
 	link := confirmationLink(t, u.email)
 	parsed, err := url.Parse(link)
@@ -293,7 +315,7 @@ func TestIdP_ConfirmationLinkTargetsTheGateway(t *testing.T) {
 
 func TestIdP_EmailedLinkVerifiesThenSignInSucceeds(t *testing.T) {
 	base := idpMailURL(t)
-	u := registrant(t, startGateway(t, base))
+	u := registrant(t, startGatewayNoFloor(t, base))
 
 	if got := follow(t, confirmationLink(t, u.email)); got != siteURL+"/?verified=1" {
 		t.Fatalf("verify redirect = %q, want %s/?verified=1", got, siteURL)
@@ -303,7 +325,7 @@ func TestIdP_EmailedLinkVerifiesThenSignInSucceeds(t *testing.T) {
 
 func TestIdP_VerificationLinkIsSingleUse(t *testing.T) {
 	base := idpMailURL(t)
-	u := registrant(t, startGateway(t, base))
+	u := registrant(t, startGatewayNoFloor(t, base))
 
 	link := confirmationLink(t, u.email)
 	if got := follow(t, link); got != siteURL+"/?verified=1" {
@@ -316,7 +338,7 @@ func TestIdP_VerificationLinkIsSingleUse(t *testing.T) {
 
 func TestIdP_ProvisionedWorkspaceReachesTheNextToken(t *testing.T) {
 	base := idpMailURL(t)
-	u := registrant(t, startGateway(t, base))
+	u := registrant(t, startGatewayNoFloor(t, base))
 	if got := follow(t, confirmationLink(t, u.email)); got != siteURL+"/?verified=1" {
 		t.Fatalf("verify redirect = %q, want %s/?verified=1", got, siteURL)
 	}

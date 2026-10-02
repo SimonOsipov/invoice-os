@@ -1091,7 +1091,7 @@ func TestRegistrationHandlers_WiresBothRoutes(t *testing.T) {
 // AUTH_SITE_URL unset: both routes refuse without calling GoTrue.
 func TestRegistrationHandlers_NotConfigured503(t *testing.T) {
 	authURL, calls := fakeAuth(t)
-	reg := registrationHandlers(authURL, nil, slog.New(slog.DiscardHandler))
+	reg := registrationHandlers(authURL, nil, 0, slog.New(slog.DiscardHandler))
 
 	for name, rec := range map[string]*httptest.ResponseRecorder{
 		"Register": serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`),

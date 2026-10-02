@@ -105,7 +105,7 @@ function isBoxProp(prop: string): boolean {
 
 // Every box-affecting property is declared once here, so the two buttons cannot
 // diverge. font-family / font-size / cursor are in the list because a native
-// <button> inherits none of them and no `.asc-app button` rule exists.
+// <button> inherits none of them (the page base sets only font-family).
 const REQUIRED_BUTTON_PROPS = [
   'height', 'flex', 'padding', 'border', 'border-radius',
   'font-weight', 'font-family', 'font-size', 'cursor',
@@ -152,7 +152,7 @@ function reducedMotionRulesNaming(css: string, needle: string): CssRule[] {
 }
 
 /** Rules that style .cn-link at one class only AND declare text-decoration — the
- *  (0,1,0) form that loses to `.asc-app a` (0,1,1) and ships the link un-underlined. */
+ *  (0,1,0) form that loses to a two-class rule and ships the link un-underlined. */
 function bareCnLinkDecorationRules(css: string): CssRule[] {
   return parseRules(css).filter(
     (r) =>
@@ -160,6 +160,44 @@ function bareCnLinkDecorationRules(css: string): CssRule[] {
       propertiesOf(r.body).includes('text-decoration'),
   )
 }
+
+type Spec = [number, number, number]
+
+function specificity(selector: string): Spec {
+  let [a, b, c] = [0, 0, 0]
+  let s = selector.replace(/:where\([^)]*\)/g, '')
+  s = s.replace(/:(?:not|is|has)\(([^)]*)\)/g, (_m, arg: string) => {
+    const [x, y, z] = specificity(arg)
+    a += x
+    b += y
+    c += z
+    return ''
+  })
+  s = s.replace(/\[[^\]]*\]/g, () => (b++, ''))
+  s = s.replace(/#[\w-]+/g, () => (a++, ''))
+  s = s.replace(/::[\w-]+/g, () => (c++, ''))
+  s = s.replace(/\.[\w-]+/g, () => (b++, ''))
+  s = s.replace(/:[\w-]+/g, () => (b++, ''))
+  s = s.replace(/(^|[\s>+~])[a-zA-Z][\w-]*/g, (_m, lead: string) => (c++, lead))
+  return [a, b, c]
+}
+
+// Last compound is `a`, `a.lnk` or `.lnk`, optionally `:hover` — whatever ancestors precede it.
+const LINK_TARGET = /^(?:a(?:\.lnk)?|\.lnk)(?::hover)?$/
+
+/** Rules that can set the policy link's text-decoration, with the specificity of each matching selector. */
+function linkDecorationRules(css: string): { selector: string; spec: Spec }[] {
+  return parseRules(css)
+    .filter((r) => propertiesOf(r.body).some((p) => p.startsWith('text-decoration')))
+    .flatMap((r) =>
+      selectorParts(r)
+        .filter((p) => LINK_TARGET.test(p.split(/[\s>+~]+/).pop() ?? ''))
+        .map((selector) => ({ selector, spec: specificity(selector) })),
+    )
+}
+
+/** True when `spec` is below (0,2,0), the specificity of .lnk.cn-link. */
+const weakerThanLnkCnLink = ([a, b]: Spec) => a === 0 && b < 2
 
 // Any selector that can reach a <button> inside the card, whether or not it names the
 // [data-consent] hook. `.cn-actions button:first-child` and `.cn-actions button + button`
@@ -371,7 +409,7 @@ describe('CookieNotice CSS source (LAND-05-02)', () => {
 
   it('T2-13(a,b) / AC-3: the underline is declared on the two-class .lnk.cn-link selector', () => {
     const rules = parseRules(CSS_SRC).filter((r) => selectorParts(r).some((p) => /\.lnk\.cn-link\b/.test(p)))
-    expect(rules.length, 'expected a .lnk.cn-link rule — (0,2,0) beats .asc-app a at (0,1,1)').toBeGreaterThan(0)
+    expect(rules.length, 'expected a .lnk.cn-link rule — (0,2,0) beats the v2 a {} rule at (0,0,1)').toBeGreaterThan(0)
     const body = rules.map((r) => r.body).join('\n')
     expect(body).toMatch(/text-decoration:\s*underline/)
     expect(body).toMatch(/text-underline-offset:\s*3px/)
@@ -390,6 +428,25 @@ describe('CookieNotice CSS source (LAND-05-02)', () => {
     expect(bareCnLinkDecorationRules('.lnk.cn-link { text-decoration: underline; }')).toEqual([])
 
     expect(bareCnLinkDecorationRules(CSS_SRC)).toEqual([])
+  })
+
+  it('T2-13(d) / AC-3: every rule that can set the policy link decoration is weaker than .lnk.cn-link', () => {
+    const planted = linkDecorationRules('.asc-app a.lnk { text-decoration: none; }')
+    expect(planted, 'control: the detector finds the planted two-class-plus-type rule').toEqual([
+      { selector: '.asc-app a.lnk', spec: [0, 2, 1] },
+    ])
+    expect(planted.filter((r) => !weakerThanLnkCnLink(r.spec)), 'control: it is flagged').toHaveLength(1)
+    expect(
+      linkDecorationRules('a { text-decoration: none; } a:hover { text-decoration: none; }').filter((r) => !weakerThanLnkCnLink(r.spec)),
+      'control: one-type and one-type-plus-pseudo rules are not flagged',
+    ).toEqual([])
+
+    const utilitiesPath = join(HERE, '..', '..', '..', '..', 'packages', 'design-tokens', 'v2', 'utilities.css')
+    const bridgePath = join(HERE, '..', 'styles', 'bridge.css')
+    expect(existsSync(bridgePath), `expected ${bridgePath} to exist ([RESKIN-01-02] adds the bridge)`).toBe(true)
+    const rules = [utilitiesPath, bridgePath].flatMap((path) => linkDecorationRules(readFileSync(path, 'utf8')))
+    expect(rules.some((r) => r.selector === 'a'), 'the v2 a {} rule is among them').toBe(true)
+    expect(rules.filter((r) => !weakerThanLnkCnLink(r.spec))).toEqual([])
   })
 
   it('AC-9: only the shared .cn-actions button selector declares box geometry on the card buttons', () => {
@@ -476,9 +533,8 @@ describe('CookieNotice CSS source (LAND-05-02)', () => {
   })
 
   it('landing.css does not override the shared .eyebrow', () => {
-    // `.cookie-note .eyebrow` is (0,2,0) and merely TIES `.asc-app .eyebrow`
-    // (app-layer.css:163) — it would win on source order alone. Correction 6 says reuse
-    // the class; an override here also risks defeating the 24px ::before rule.
+    // Correction 6: reuse the bridge's .eyebrow; a landing.css override here
+    // also risks defeating the 24px ::before rule.
     const probe = (css: string) =>
       parseRules(css).filter((r) => selectorParts(r).some((p) => /\.eyebrow\b/.test(p)))
     expect(probe('.cookie-note .eyebrow { font-size: 11.5px; }').length, 'control').toBe(1)

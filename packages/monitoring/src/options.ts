@@ -106,6 +106,7 @@ export function sentryOptions(c: MonitoringConfig): BrowserOptions | null {
     beforeSendTransaction: scrubTransaction,
     beforeSendSpan: scrubSpan,
     beforeBreadcrumb: keepBreadcrumb,
+    // ceiling: landing samples every page load (1.0), crawlers included; lower it if transaction quota passes a threshold, and reword the privacy sentence "Each page you open" (Privacy.claims.test.tsx)
     ...(app || landing ? { tracesSampleRate: 1 } : {}),
     tracePropagationTargets: app && origin !== '' ? [new RegExp('^' + escapeRegExp(origin) + '/')] : [],
   }

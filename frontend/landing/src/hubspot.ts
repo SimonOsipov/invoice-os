@@ -130,7 +130,8 @@ export async function submitDemoLead(
   // Status only, NEVER a field value — the rejection message is surfaced nowhere
   // near a log sink, and must not carry the visitor's email or company.
   if (!res.ok) {
-    reportApiFailure(new ApiError('http', 'hubspot ' + res.status, res.status), { method: 'POST', url })
-    throw new Error('hubspot ' + res.status)
+    const err = new ApiError('http', 'hubspot ' + res.status, res.status)
+    reportApiFailure(err, { method: 'POST', url })
+    throw err
   }
 }

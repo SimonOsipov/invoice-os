@@ -64,6 +64,15 @@ describe('submitDemoLead reporting', () => {
     )
   })
 
+  it('submitDemoLead_throwsTheValueItReported', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503 }))
+
+    const err = await rejection(submit)
+
+    expect(h.captureApiFailure).toHaveBeenCalledTimes(1)
+    expect(err).toBe((h.captureApiFailure.mock.calls[0][0] as { error: unknown }).error)
+  })
+
   it.each([
     ['400', () => vi.fn().mockResolvedValue({ ok: false, status: 400 })],
     ['404', () => vi.fn().mockResolvedValue({ ok: false, status: 404 })],

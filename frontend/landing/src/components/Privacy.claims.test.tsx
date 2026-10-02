@@ -386,7 +386,7 @@ describe('T4-14 (AC-11): the ledger no longer forbids what the page now says', (
   })
 })
 
-// SENTRY-07-03. The approved wording is in the story's `## Decisions` (pm entry; D-19).
+// pm-approved copy: change these strings only with a new approval.
 const APPROVED_INTRO =
   'Three other companies receive information about your visit. Google serves the fonts this site is typeset in, and measures how the site is used if you have allowed analytics. HubSpot stores the answers you give if you book a demo. Sentry receives a report when a page fails, and measures how long pages take to load. Your browser loads nothing on this site from, and sends nothing to, any other company.'
 const APPROVED_MONITORING =

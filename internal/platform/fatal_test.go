@@ -38,12 +38,14 @@ const (
 
 // wireEvent is the event item as it crosses the wire; sentry.Event does not decode it.
 type wireEvent struct {
-	Environment string   `json:"environment"`
-	Release     string   `json:"release"`
-	ServerName  string   `json:"server_name"`
-	Level       string   `json:"level"`
-	Message     string   `json:"message"`
-	Fingerprint []string `json:"fingerprint"`
+	Environment string            `json:"environment"`
+	Release     string            `json:"release"`
+	ServerName  string            `json:"server_name"`
+	Level       string            `json:"level"`
+	Message     string            `json:"message"`
+	Fingerprint []string          `json:"fingerprint"`
+	Request     json.RawMessage   `json:"request"`
+	Tags        map[string]string `json:"tags"`
 	Exception   []struct {
 		Type       string `json:"type"`
 		Value      string `json:"value"`

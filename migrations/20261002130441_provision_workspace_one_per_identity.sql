@@ -1,5 +1,5 @@
 -- Provisioning refuses an identity that holds any membership, in any tenant, in any status.
--- ceiling: a membership written concurrently by another path is not seen; revisit when a second membership writer exists.
+-- ceiling: only provision_workspace takes the per-identity lock; revisit when a second membership writer exists.
 -- ceiling: invoice_app learns whether a user id holds a membership by provisioning under a matching GUC; revisit if invoice_app stops being trusted code.
 
 -- +goose Up
@@ -25,6 +25,7 @@ BEGIN
         RAISE EXCEPTION 'provision_workspace: p_tenant_id does not match app.current_tenant (row-level security)'
             USING ERRCODE = 'insufficient_privilege';
     END IF;
+    PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(p_user_id::text, 0));
     IF public.identity_has_membership(p_user_id) THEN
         RAISE EXCEPTION 'identity already holds a membership'
             USING ERRCODE = 'unique_violation', CONSTRAINT = 'one_workspace_per_identity';

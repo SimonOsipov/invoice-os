@@ -486,6 +486,6 @@ describe('docs/analytics.md tracks DEMO_CTA_SOURCES (AC #8, gap)', () => {
   it('N6: the button total the doc quotes is the one F3-f measures', () => {
     // The rendered-button total itself is measured by App.demoCtas.dom.test.tsx's F3-f
     // (ROSTER.length + NON_CTA_COUNT); this pins the doc's copy of it.
-    expect(ANALYTICS_DOC).toContain('values cover **nine** buttons')
+    expect(ANALYTICS_DOC).toContain('values cover **ten** buttons')
   })
 })

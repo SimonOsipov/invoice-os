@@ -1,62 +1,67 @@
-// RED specs (task-558, LAND-04-04) — pin the hrefPrefix scope-addition contract before
-// Footer.tsx applies it. SSR-only, same idiom as Nav.hrefPrefix.test.tsx: no jsdom, no
-// testing-library (vitest.config.ts: environment 'node').
+// hrefPrefix contract of the v2 footer (LAND-04-04, re-targeted in RESKIN-02-05). SSR-only, same
+// idiom as Nav.hrefPrefix.test.tsx: no jsdom, no testing-library (vitest.config.ts: environment 'node').
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
-import { Footer } from './Footer'
+import { Footer, PLATFORM_LINKS, footerHref } from './Footer'
 
 function noop() {}
 
-const REAL_ANCHORS = ['#modules', '#compliance', '#accountants', '#developers', '#pricing']
-
-// Scoped to <a href> only — same guard as Nav.hrefPrefix.test.tsx: an unrelated element's
-// own href/src attribute must never count here.
+// Scoped to <a href> only; the Logo img src is not a footer target.
 const ANCHOR_HREF = /<a\s+href="([^"]*)"/g
 
-// Duplicated rather than shared, matching the openLanding() precedent. Both bounds are
-// load-bearing: Company is the last column and the copyright row follows it, so an
-// unbounded slice counts the copyright row's own controls as Company items.
-const COPYRIGHT_ROW = '2026 ASCOMPLY AFRICA'
+// ASCII sub-needle of the bottom row.
+const COPYRIGHT_ROW = '2026 ASComply Africa Limited'
 
-function companySlice(html: string): string {
-  const start = html.indexOf('>Company<')
-  expect(start, 'expected to find the Company column heading').toBeGreaterThan(-1)
+const hrefsOf = (html: string) => Array.from(html.matchAll(ANCHOR_HREF)).map((m) => m[1])
+
+function connectSlice(html: string): string {
+  const start = html.indexOf('>Connect<')
+  expect(start, 'expected to find the Connect column heading').toBeGreaterThan(-1)
   const end = html.indexOf(COPYRIGHT_ROW)
-  expect(end, 'expected the copyright row to follow the Company column').toBeGreaterThan(start)
+  expect(end, 'expected the bottom row to follow the Connect column').toBeGreaterThan(start)
   return html.slice(start, end)
 }
 
 function copyrightRowSlice(html: string): string {
   const idx = html.indexOf(COPYRIGHT_ROW)
-  expect(idx, 'expected to find the copyright row').toBeGreaterThan(-1)
+  expect(idx, 'expected to find the bottom row').toBeGreaterThan(-1)
   const open = html.lastIndexOf('<div', idx)
-  expect(open, 'expected an opening div for the copyright row').toBeGreaterThan(-1)
+  expect(open, 'expected an opening div for the bottom row').toBeGreaterThan(-1)
   return html.slice(open)
 }
 
+describe('footerHref', () => {
+  it('FT-10b: an in-page #x takes the prefix; /privacy and a bare # do not', () => {
+    expect(footerHref('#platform', '/')).toBe('/#platform')
+    expect(footerHref('#platform', '')).toBe('#platform')
+    expect(footerHref('/privacy', '/')).toBe('/privacy')
+    expect(footerHref('#', '/')).toBe('#')
+  })
+})
+
 describe('Footer hrefPrefix contract', () => {
-  it('AC-6: default hrefPrefix leaves every href byte-identical to today', () => {
-    const html = renderToStaticMarkup(createElement(Footer, { onBookDemo: noop }))
-    const hrefs = Array.from(html.matchAll(ANCHOR_HREF)).map((m) => m[1])
+  it('AC-6: default hrefPrefix leaves every href as authored: the Platform list, then /privacy', () => {
+    const hrefs = hrefsOf(renderToStaticMarkup(createElement(Footer, { onBookDemo: noop })))
     // Control needle first: a misresolved render would otherwise pass vacuously below.
     expect(hrefs.length).toBeGreaterThan(0)
-    expect(hrefs).toEqual(['#modules', '#compliance', '#', '#accountants', '#developers', '#pricing', '#', '#', '/privacy'])
+    expect(hrefs).toEqual([...PLATFORM_LINKS.map((l) => l.href), '/privacy'])
   })
 
-  it('AC-7: hrefPrefix="/" prefixes the five real cross-section anchors', () => {
-    const html = renderToStaticMarkup(createElement(Footer, { onBookDemo: noop, hrefPrefix: '/' }))
-    for (const target of REAL_ANCHORS) {
-      expect(html, target).toContain(`href="/${target}"`)
-      expect(html, target).not.toContain(`href="//${target}"`)
+  it('AC-7: hrefPrefix="/" prefixes every Platform link once and leaves /privacy alone', () => {
+    const hrefs = hrefsOf(renderToStaticMarkup(createElement(Footer, { onBookDemo: noop, hrefPrefix: '/' })))
+    expect(hrefs.length).toBeGreaterThan(0)
+    expect(hrefs).toEqual([...PLATFORM_LINKS.map((l) => `/${l.href}`), '/privacy'])
+    expect(hrefs.filter((h) => h.startsWith('//'))).toEqual([])
+  })
+
+  it('AC-8: no footer anchor is a bare # stub, with or without a prefix', () => {
+    for (const hrefPrefix of ['', '/']) {
+      const hrefs = hrefsOf(renderToStaticMarkup(createElement(Footer, { onBookDemo: noop, hrefPrefix })))
+      expect(hrefs.length, `control: anchors at prefix ${JSON.stringify(hrefPrefix)}`).toBeGreaterThan(0)
+      expect(hrefs, `a stub survived at prefix ${JSON.stringify(hrefPrefix)}`).not.toContain('#')
     }
-  })
-
-  it('AC-8: the three # stubs stay exactly "#" under a non-empty prefix', () => {
-    const html = renderToStaticMarkup(createElement(Footer, { onBookDemo: noop, hrefPrefix: '/' }))
-    const stubs = html.match(/href="#"/g) ?? []
-    expect(stubs.length).toBe(3)
   })
 
   it('AC-9: /privacy never becomes //privacy', () => {
@@ -65,17 +70,18 @@ describe('Footer hrefPrefix contract', () => {
     expect(html).not.toContain('href="//privacy"')
   })
 
-  // T4-7 (task-563): the same claim — hrefPrefix multiplies no button — taken per region
-  // instead of as a whole-file constant, so a second footer control cannot invert it.
-  it('AC-9b: one button in the Company column and one in the copyright row, regardless of hrefPrefix', () => {
-    const html = renderToStaticMarkup(createElement(Footer, { onBookDemo: noop, hrefPrefix: '/' }))
+  // T4-7: hrefPrefix multiplies no button, counted per region.
+  it('AC-9b: three buttons in Connect and one in the bottom row, regardless of hrefPrefix', () => {
+    for (const hrefPrefix of ['', '/']) {
+      const html = renderToStaticMarkup(createElement(Footer, { onBookDemo: noop, hrefPrefix }))
 
-    const company = companySlice(html)
-    expect(company.length, 'the Company slice resolved empty').toBeGreaterThan(0)
-    expect((company.match(/<button/g) ?? []).length, 'Company column button count').toBe(1)
+      const connect = connectSlice(html)
+      expect(connect.length, 'the Connect slice resolved empty').toBeGreaterThan(0)
+      expect((connect.match(/<button/g) ?? []).length, `Connect button count at ${JSON.stringify(hrefPrefix)}`).toBe(3)
 
-    const row = copyrightRowSlice(html)
-    expect(row.length, 'the copyright row slice resolved empty').toBeGreaterThan(0)
-    expect((row.match(/<button/g) ?? []).length, 'copyright row button count').toBe(1)
+      const row = copyrightRowSlice(html)
+      expect(row.length, 'the bottom row slice resolved empty').toBeGreaterThan(0)
+      expect((row.match(/<button/g) ?? []).length, `bottom row button count at ${JSON.stringify(hrefPrefix)}`).toBe(1)
+    }
   })
 })

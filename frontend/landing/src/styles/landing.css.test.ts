@@ -1,4 +1,4 @@
-// Source rules of landing.css for the v2 header, hero and live check card (RESKIN-02-01 to -03); the rendered result is the topology job's.
+// Source rules of landing.css for the v2 header, hero, live check card and footer links (RESKIN-02-01 to -05); the rendered result is the topology job's.
 /// <reference types="node" />
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -232,5 +232,36 @@ describe('HC-11 the row and scanline boxes and the keyframe end states, which js
         .find((d) => d.prop === prop)?.value
     expect(stop('from', 'opacity')).toBe('0')
     expect(stop('to', 'opacity')).toBe('1')
+  })
+})
+
+/** The `.a-link` contract: the failures, empty when it holds. */
+function aLinkFailures(css: string): string[] {
+  const rules = parseRules(css)
+  const top = (a: string[]) => a.length === 0
+  const decoration = rules
+    .filter((r) => selectorParts(r).includes('.a-link'))
+    .flatMap((r) => declarations(r.body))
+    .filter((d) => d.prop.startsWith('text-decoration'))
+  const checks: [string, string | undefined, string | undefined][] = [
+    ['.a-link color', declared(rules, '.a-link', 'color', top), 'var(--ink)'],
+    ['.a-link:hover color', declared(rules, '.a-link:hover', 'color', top), 'var(--teal)'],
+    ['.a-link text-decoration', decoration.map((d) => d.prop).join(','), ''],
+  ]
+  return checks.filter(([, got, want]) => got !== want).map(([what, got, want]) => `${what}: ${got} != ${want}`)
+}
+
+describe('FT-12 the a-link rule', () => {
+  const GOOD = '.a-link { color: var(--ink); } .a-link:hover { color: var(--teal); }'
+
+  it('controls: the lookup accepts the rule and rejects a wrong colour, a decoration and a missing hover', () => {
+    expect(aLinkFailures(GOOD)).toEqual([])
+    expect(aLinkFailures(GOOD.replace('var(--ink)', 'var(--muted-foreground)')).length).toBeGreaterThan(0)
+    expect(aLinkFailures(GOOD.replace('color: var(--ink);', 'color: var(--ink); text-decoration: underline;')).length).toBeGreaterThan(0)
+    expect(aLinkFailures('.a-link { color: var(--ink); }').length, 'no hover rule').toBeGreaterThan(0)
+  })
+
+  it('landing.css: .a-link is var(--ink) with no text-decoration, .a-link:hover is var(--teal)', () => {
+    expect(aLinkFailures(LANDING_CSS)).toEqual([])
   })
 })

@@ -8,8 +8,7 @@ import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import App from './App'
-
-const REAL_ANCHORS = ['#modules', '#compliance', '#accountants', '#developers', '#pricing']
+import { PLATFORM_LINKS } from './components/Footer'
 
 // App.tsx reads window.location.pathname at render time (not just inside an
 // effect, which SSR never runs anyway), so the stub must be in place before render.
@@ -33,26 +32,24 @@ function footerSlice(html: string): string {
   return html.slice(idx, end + '</footer>'.length)
 }
 
-describe('App SSR wiring — hrefPrefix reaches Footer with the right polarity', () => {
-  it('at /privacy: the five real anchors are prefixed, the three stubs and /privacy are not doubled', () => {
-    const footer = footerSlice(renderAppAt('/privacy'))
-    for (const target of REAL_ANCHORS) {
-      expect(footer, target).toContain(`href="/${target}"`)
-      expect(footer, target).not.toContain(`href="//${target}"`)
-    }
-    expect(footer.match(/href="#"/g)?.length, 'expected exactly 3 unprefixed stubs').toBe(3)
-    expect(footer).toContain('href="/privacy"')
-    expect(footer).not.toContain('href="//privacy"')
-    expect(footer).toMatch(/<button[^>]*>Book a demo</)
+const footerHrefs = (footer: string) => [...footer.matchAll(/<a\s[^>]*?href="([^"]*)"/g)].map((m) => m[1])
+
+describe('FT-10 App SSR wiring: hrefPrefix reaches Footer with the right polarity', () => {
+  it('at /privacy every footer anchor is /privacy or starts with /#, and none is a bare #', () => {
+    const hrefs = footerHrefs(footerSlice(renderAppAt('/privacy')))
+    expect(hrefs.length, 'expected anchors in the footer').toBeGreaterThanOrEqual(1)
+    expect(hrefs.filter((h) => h !== '/privacy' && !h.startsWith('/#'))).toEqual([])
+    expect(hrefs).not.toContain('#')
   })
 
-  it('at /: the footer anchors are NOT prefixed (catches an inverted ternary)', () => {
+  it('at / no footer anchor starts with /# (catches an inverted ternary) and none is a bare #', () => {
     const footer = footerSlice(renderAppAt('/'))
-    for (const target of REAL_ANCHORS) {
-      expect(footer, target).toContain(`href="${target}"`)
-      expect(footer, target).not.toContain(`href="/${target}"`)
-    }
+    const hrefs = footerHrefs(footer)
+    expect(hrefs.length, 'expected anchors in the footer').toBeGreaterThanOrEqual(1)
+    expect(hrefs.filter((h) => h.startsWith('/#'))).toEqual([])
+    expect(hrefs).not.toContain('#')
     expect(footer).toContain('href="/privacy"')
+    expect(footer).toMatch(/<button[^>]*>Book a demo</)
   })
 })
 
@@ -155,14 +152,15 @@ const primaryNav = (html: string) => /<nav\b[^>]*aria-label="Primary"[^>]*>([\s\
 const navHashes = (html: string) => [...primaryNav(html).matchAll(/href="(#[^"]+)"/g)].map((m) => m[1])
 const navHrefs = (html: string) => [...primaryNav(html).matchAll(/href="([^"]*)"/g)].map((m) => m[1])
 
-/** In-page nav hrefs that do not resolve to exactly one `<section id>`. */
-function unresolvedNavLinks(html: string): string[] {
+/** The hashes that do not resolve to exactly one `<section id>` in `html`. */
+function unresolvedHashes(html: string, hashes: string[]): string[] {
   const owners = [...html.matchAll(/<([a-zA-Z][\w-]*)\b[^>]*\sid="([^"]*)"/g)]
-  return navHashes(html).filter((h) => {
+  return hashes.filter((h) => {
     const mine = owners.filter((o) => o[2] === h.slice(1))
     return mine.length !== 1 || mine[0][1] !== 'section'
   })
 }
+const unresolvedNavLinks = (html: string) => unresolvedHashes(html, navHashes(html))
 
 describe('AN-01 every nav in-page link resolves to one section', () => {
   it('controls: the helper reports a ghost link, a duplicate id and a non-section owner', () => {
@@ -186,5 +184,21 @@ describe('AN-02 on /privacy every nav link carries the prefix', () => {
     expect(hrefs.length, 'expected links in the Primary nav').toBeGreaterThanOrEqual(1)
     expect(hrefs.filter((h) => !h.startsWith('/#'))).toEqual([])
     expect(hrefs.filter((h) => h.startsWith('//'))).toEqual([])
+  })
+})
+
+describe('AN-03 every footer in-page link resolves to one section', () => {
+  it('controls: the helper reports a ghost footer link and passes a resolving one', () => {
+    const footer = '<footer><a href="#ghost">x</a></footer>'
+    expect(unresolvedHashes(footer, ['#ghost'])).toEqual(['#ghost'])
+    expect(unresolvedHashes(`${footer}<section id="ghost"></section>`, ['#ghost'])).toEqual([])
+    expect(unresolvedHashes(`${footer}<div id="ghost"></div>`, ['#ghost'])).toEqual(['#ghost'])
+  })
+
+  it('at / the footer in-page hrefs are exactly PLATFORM_LINKS, each with one id on a <section', () => {
+    const html = renderAppAt('/')
+    const hashes = footerHrefs(footerSlice(html)).filter((h) => h.startsWith('#') && h.length > 1)
+    expect(hashes, 'the footer hashes are not the PLATFORM_LINKS population').toHaveLength(PLATFORM_LINKS.length)
+    expect(unresolvedHashes(html, hashes)).toEqual([])
   })
 })

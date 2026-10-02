@@ -1,5 +1,11 @@
 import { BrandMark } from '../icons'
 
+// RED-stage seam: today's in-page Platform entries, not rendered; replaced by the v2 list.
+export const PLATFORM_LINKS: { label: string; href: string }[] = [
+  { label: 'Modules', href: '#modules' },
+  { label: 'Validation engine', href: '#compliance' },
+]
+
 const COLS = [
   {
     title: 'Platform',
@@ -31,7 +37,7 @@ const COLS = [
 // Only real cross-section anchors take the prefix. The `#` stubs (Open the app,
 // Security, Status) and the /privacy path render exactly as authored — prefixing
 // /privacy would produce //privacy.
-function footerHref(href: string, prefix: string): string {
+export function footerHref(href: string, prefix: string): string {
   return href.startsWith('#') && href !== '#' ? `${prefix}${href}` : href
 }
 

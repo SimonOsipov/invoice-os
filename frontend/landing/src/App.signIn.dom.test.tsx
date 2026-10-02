@@ -141,6 +141,25 @@ describe('F-2: the sign-in control opens the sign-in modal', () => {
   })
 })
 
+describe('F-2 footer: Open the cockpit', () => {
+  it('FT-11: the footer Open the cockpit opens the Sign-in dialog and Close leaves none', async () => {
+    await mountApp()
+    const footer = document.querySelector('footer')!
+    expect(document.querySelectorAll(DIALOG).length, 'control: no dialog yet').toBe(0)
+
+    await clickByText(footer, 'Open the cockpit')
+
+    expect(document.querySelectorAll(DIALOG).length).toBe(1)
+    const dialog = document.querySelector(DIALOG)!
+    expect(dialog.getAttribute('aria-label')).toBe('Sign in')
+    await act(async () => {
+      dialog.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click()
+    })
+    expect(document.querySelectorAll(DIALOG).length).toBe(0)
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+})
+
 describe('F-2 menu: sign-in from the burger menu', () => {
   it('F2-g: the menu Platform login opens the Sign-in dialog and the menu is gone behind it', async () => {
     await mountApp()

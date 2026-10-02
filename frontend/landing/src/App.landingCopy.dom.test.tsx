@@ -17,7 +17,7 @@ const HERO_PARAGRAPH = 'Bring invoices, approvals and changing country requireme
 const MODULES_HEADING = 'ASComply is your invoice compliance solution.'
 const MODULES_INTRO_SECOND =
   'We help your team validate invoices before they are submitted, manage approvals internally, store audit-ready records and submit them to the regulatory bodies.'
-const FOOTER_TAGLINE = 'E-invoicing compliance solution for African businesses.'
+const FOOTER_TAGLINE = 'Clarity for every invoice. Confidence for your business.'
 
 const STEP_01_BODY =
   'Pull invoices from your ERP via API, or upload CSV / XLSX from any accounting system, or a PDF or scan of the invoice. No migration.'
@@ -60,7 +60,7 @@ describe('landing positioning copy, on the rendered tree', () => {
     expect(textOf(intro[1])).toBe(MODULES_INTRO_SECOND)
   })
 
-  it('the footer tagline is one sentence', () => {
+  it('the footer tagline reads as v2', () => {
     const d = mount()
     const tagline = d.querySelectorAll('footer p')
     expect(tagline.length, 'footer does not hold exactly one tagline paragraph').toBe(1)

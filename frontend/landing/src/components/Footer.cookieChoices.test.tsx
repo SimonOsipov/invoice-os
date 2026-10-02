@@ -1,5 +1,5 @@
-// RED specs (task-563, LAND-05-04) — pin the footer Cookie choices control before
-// Footer.tsx grows it. SSR-only, same idiom as Footer.render.test.tsx.
+// The footer's bottom row and Cookie choices control (LAND-05-04, re-targeted to the v2 footer in
+// RESKIN-02-05). SSR-only, same idiom as Footer.render.test.tsx.
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -10,17 +10,17 @@ function noop() {}
 
 const LABEL = 'Cookie choices'
 // ASCII sub-needle: sidesteps the © / · escaping question and occurs exactly once.
-const COPYRIGHT = '2026 ASCOMPLY AFRICA'
+const COPYRIGHT = '2026 ASComply Africa Limited'
 
 const html = renderToStaticMarkup(createElement(Footer, { onBookDemo: noop }))
 
-// Bounded at the copyright row: Company is the LAST column, so an open-ended slice
+// Bounded at the copyright row: Connect is the LAST column, so an open-ended slice
 // swallows the row the control lives in.
-function companySlice(markup: string): string {
-  const start = markup.indexOf('>Company<')
-  expect(start, 'expected to find the Company column heading').toBeGreaterThan(-1)
+function connectSlice(markup: string): string {
+  const start = markup.indexOf('>Connect<')
+  expect(start, 'expected to find the Connect column heading').toBeGreaterThan(-1)
   const end = markup.indexOf(COPYRIGHT)
-  expect(end, 'expected the copyright row to follow the Company column').toBeGreaterThan(start)
+  expect(end, 'expected the copyright row to follow the Connect column').toBeGreaterThan(start)
   return markup.slice(start, end)
 }
 
@@ -88,7 +88,11 @@ function buttonWithLabel(markup: string, label: string): string {
   return m![0]
 }
 
-describe('Footer Cookie choices control (LAND-05-04)', () => {
+const attrsOf = (tag: string): Record<string, string> =>
+  Object.fromEntries([...tag.matchAll(/\s([^\s=>/]+)(?:="([^"]*)")?/g)].map((m) => [m[1], m[2] ?? '']))
+const textOfHtml = (markup: string) => markup.replace(/<[^>]*>/g, '')
+
+describe('Footer bottom row and Cookie choices control (LAND-05-04, FT-06 to FT-08)', () => {
   it('control: the render resolved and the walker sees the copyright row', () => {
     expect(html.length).toBeGreaterThan(0)
     const row = copyrightRowSlice(html)
@@ -101,39 +105,46 @@ describe('Footer Cookie choices control (LAND-05-04)', () => {
     expect(html, 'the control is an anchor, not a button').not.toMatch(/<a[^>]*>Cookie choices</)
   })
 
-  it('T4-2: the control keeps its own wrapper, and the row keeps two direct children', () => {
+  it('FT-06 / T4-2: the row keeps two direct children, the group holds Privacy policy then Cookie choices and nothing else', () => {
     const row = copyrightRowSlice(html)
     const children = directChildren(row)
-    expect(children.length, 'the copyright row must stay a two-item space-between row').toBe(2)
-    expect(children[0], 'the first child is the copyright string').toContain(COPYRIGHT)
+    expect(children.length, 'the bottom row must stay a two-item space-between row').toBe(2)
+    expect(textOfHtml(children[0]), 'the first child is the copyright string').toBe(
+      '© 2026 ASComply Africa Limited · Lagos, Nigeria',
+    )
 
-    const wrapper = children[1]
-    expect(wrapper, 'the second child is not the control wrapper').toContain(LABEL)
-
-    const inner = directChildren(wrapper)
-    expect(inner.length, 'the wrapper holds the control and nothing else').toBe(1)
-    expect(inner[0], 'the wrapper direct child is not the control').toContain(LABEL)
+    const group = children[1]
+    const inner = directChildren(group)
+    expect(inner.length, 'the group holds the privacy link and the control, nothing else').toBe(2)
+    expect(inner[0], 'the first group child is the privacy link').toMatch(/^<a\b/)
+    expect(attrsOf(openingTag(inner[0])).href).toBe('/privacy')
+    expect(attrsOf(openingTag(inner[0])).class).toBe('a-link')
+    expect(textOfHtml(inner[0])).toBe('Privacy policy')
+    expect(inner[1], 'the second group child is the control').toMatch(/^<button\b/)
+    expect(attrsOf(openingTag(inner[1])).class).toBe('a-link')
+    expect(textOfHtml(inner[1])).toBe(LABEL)
 
     // Element count alone lets a text node in as a further anonymous flex item.
     expectNoStrayText(row, children)
-    expectNoStrayText(wrapper, inner)
+    expectNoStrayText(group, inner)
   })
 
-  it('AC-2/AC-3: the grouping MECHANISM is present, not only the markup shape', () => {
+  it('FT-06 / AC-3: the row and the group are wrapping flex containers, the row space-between', () => {
     const row = copyrightRowSlice(html)
     const rowTag = openingTag(row)
     // Control needle: the tag reader sees the declarations that are there.
     expect(rowTag, 'control: the row carries no inline style at all').toContain('style=')
     expect(rowTag, 'the row stopped being a flex container').toContain('display:flex')
+    expect(rowTag, 'the row stopped wrapping').toContain('flex-wrap:wrap')
     expect(rowTag, 'without space-between the two-child grouping buys nothing').toContain(
       'justify-content:space-between',
     )
 
-    const wrapperTag = openingTag(directChildren(row)[1])
-    expect(wrapperTag, 'control: the wrapper carries no inline style at all').toContain('style=')
-    // flex-wrap is INERT on a block box: the AC-3 string check below passes on it.
-    expect(wrapperTag, 'flex-wrap:wrap is inert unless the wrapper is a flex container').toContain('display:flex')
-    expect(wrapperTag).toContain('flex-wrap:wrap')
+    const groupTag = openingTag(directChildren(row)[1])
+    expect(groupTag, 'control: the group carries no inline style at all').toContain('style=')
+    // flex-wrap is INERT on a block box.
+    expect(groupTag, 'flex-wrap:wrap is inert unless the group is a flex container').toContain('display:flex')
+    expect(groupTag, 'the group would not wrap its second child, overflowing the row').toContain('flex-wrap:wrap')
   })
 
   it('AC-1/AC-7: the accessible name is the visible label, and nothing hides or unfocuses the control', () => {
@@ -142,45 +153,45 @@ describe('Footer Cookie choices control (LAND-05-04)', () => {
     // Control needle: the scan can see an attribute that IS present.
     expect(tag, 'control: the control tag carries no attributes to scan').toContain('class=')
 
-    // Every one of these overrides or removes the accessible name AC #1 pins, or takes
-    // the control out of the keyboard order, without touching the visible text.
+    // Every one of these overrides or removes the accessible name, or takes the control out
+    // of the keyboard order, without touching the visible text.
     for (const attr of ['aria-label', 'aria-labelledby', 'title=', 'aria-hidden', 'tabindex', 'inert']) {
       expect(tag, `the control carries ${attr}`).not.toContain(attr)
     }
 
     // An ancestor can hide it just as completely as the control itself can.
     const row = copyrightRowSlice(html)
-    expect(openingTag(row), 'the copyright row is hidden from assistive technology').not.toContain('aria-hidden')
-    expect(openingTag(row), 'the copyright row is inert').not.toContain('inert')
-    const wrapperTag = openingTag(directChildren(row)[1])
-    expect(wrapperTag, 'the wrapper hides the control from assistive technology').not.toContain('aria-hidden')
-    expect(wrapperTag, 'the wrapper makes the control unreachable').not.toContain('inert')
+    expect(openingTag(row), 'the bottom row is hidden from assistive technology').not.toContain('aria-hidden')
+    expect(openingTag(row), 'the bottom row is inert').not.toContain('inert')
+    const groupTag = openingTag(directChildren(row)[1])
+    expect(groupTag, 'the group hides the control from assistive technology').not.toContain('aria-hidden')
+    expect(groupTag, 'the group makes the control unreachable').not.toContain('inert')
   })
 
-  it('AC-7: focus order — the control follows Book a demo and precedes nothing focusable', () => {
+  it('FT-07: focus order, the control follows Book a demo and Privacy policy and precedes nothing focusable', () => {
     const sibling = buttonWithLabel(html, 'Book a demo')
     const control = buttonWithLabel(html, LABEL)
+    const privacy = html.match(/<a\b[^>]*>Privacy policy<\/a>/)?.[0]
+    expect(privacy, 'control: the Privacy policy anchor is not on the page').toBeDefined()
     expect(html.indexOf(sibling), 'control: the sibling is not on the page').toBeGreaterThan(-1)
-    expect(
-      html.indexOf(control),
-      'the control moved ahead of the Company column, changing the footer tab order',
-    ).toBeGreaterThan(html.indexOf(sibling))
+    expect(html.indexOf(control), 'the control moved ahead of Book a demo').toBeGreaterThan(html.indexOf(sibling))
+    expect(html.indexOf(control), 'the control moved ahead of Privacy policy').toBeGreaterThan(html.indexOf(privacy!))
     // Nothing focusable may follow it inside the footer: it is the last stop.
     const after = html.slice(html.indexOf(control) + control.length)
     expect(after, 'a focusable element now follows the control in the footer').not.toMatch(/<(?:a|button|input)\b/)
   })
 
-  it('T4-3: it is not a fourth Company link', () => {
+  it('FT-07 / T4-3: it is not a Connect control', () => {
     // Control needle first: without the control on the page the exclusion below is vacuous.
     expect(html, 'the control is not on the page at all').toContain(LABEL)
-    const company = companySlice(html)
-    const items = Array.from(company.matchAll(/<(?:a|button)[^>]*>([^<]*)</g)).map((m) => m[1])
+    const connect = connectSlice(html)
+    const items = Array.from(connect.matchAll(/<(?:a|button)[^>]*>([^<]*)</g)).map((m) => m[1])
     expect(items.length).toBeGreaterThan(0)
-    expect(items).toEqual(['Book a demo', 'Security', 'Status', 'Privacy &amp; cookies'])
-    expect(company, 'the control leaked into the Company column').not.toContain(LABEL)
+    expect(items).toEqual(['Book a demo', 'Open the cockpit', 'Contact ASComply'])
+    expect(connect, 'the control leaked into the Connect column').not.toContain(LABEL)
   })
 
-  it('T4-4: never hidden, never disabled — the same contract as its Book a demo sibling', () => {
+  it('FT-07 / T4-4: never hidden, never disabled, the same contract as its Book a demo sibling', () => {
     const sibling = buttonWithLabel(html, 'Book a demo')
     expect(sibling, 'the sibling contract already broke').not.toMatch(/\bdisabled\b/)
     expect(sibling).not.toMatch(/\bhidden\b/)
@@ -190,23 +201,22 @@ describe('Footer Cookie choices control (LAND-05-04)', () => {
     expect(control, 'the control ships hidden beside always-visible siblings').not.toMatch(/\bhidden\b/)
   })
 
-  it('T4-5: it renders var(--primary), never --fg-3 / --muted-foreground', () => {
-    // Control needle: --fg-3 IS in this row, on the copyright span, so the exclusion is not vacuous.
-    expect(copyrightRowSlice(html), 'control: the copyright span no longer carries --fg-3').toContain('var(--fg-3)')
-    const control = buttonWithLabel(html, LABEL)
-    expect(control).toContain('var(--primary)')
-    expect(control).not.toContain('var(--fg-3)')
-    expect(control).not.toContain('var(--muted-foreground)')
-  })
-
-  // Inert while the wrapper holds one child — a one-child flex container cannot wrap. Pinned
-  // so the row keeps its break point the day a second child joins the wrapper.
-  it('AC-3: the wrapper wraps, keeping the break point the row has today', () => {
-    const row = copyrightRowSlice(html)
-    expect(row, 'control: the outer row already wraps').toContain('flex-wrap:wrap')
-    const children = directChildren(row)
-    expect(children.length).toBe(2)
-    expect(children[1], 'the wrapper would not wrap a second child, overflowing the row').toContain('flex-wrap:wrap')
+  it('FT-08 / T4-5: Cookie choices and Privacy policy share one a-link style, with no inline colour', () => {
+    // Control needle: the muted colour IS on this row, so the exclusion below is not vacuous.
+    expect(openingTag(copyrightRowSlice(html)), 'control: the row no longer carries --muted-foreground').toContain(
+      'var(--muted-foreground)',
+    )
+    const privacy = html.match(/<a\b[^>]*>Privacy policy<\/a>/)?.[0]
+    expect(privacy, 'control: the Privacy policy anchor is not on the page').toBeDefined()
+    for (const [name, tag] of [
+      ['Privacy policy', openingTag(privacy!)],
+      [LABEL, openingTag(buttonWithLabel(html, LABEL))],
+    ] as const) {
+      expect(attrsOf(tag).class, `${name} class`).toBe('a-link')
+      expect(tag, `${name} carries an inline colour`).not.toMatch(/(?:^|[\s";])color:/)
+      expect(tag, `${name} names --muted-foreground`).not.toContain('--muted-foreground')
+      expect(tag, `${name} names --fg-3`).not.toContain('--fg-3')
+    }
   })
 
   it('T4-9: with no onCookieChoices the render does not throw and still emits the control', () => {

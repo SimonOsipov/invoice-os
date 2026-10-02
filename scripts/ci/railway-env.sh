@@ -2028,6 +2028,43 @@ ensure_bucket() {
   exit 1
 }
 
+# A fork must never archive WAL; the image archives only while WAL_ARCHIVE_BUCKET is non-empty.
+ensure_postgres_archive_off() {
+  local env_id="$1" names status pairs=() n
+
+  auth_read "$env_id" "$RAILWAY_SVC_POSTGRES_ID" Postgres
+  if ! printf '%s' "$GQL_RESPONSE" | jq -e '.data.variables | type == "object"' >/dev/null 2>&1; then
+    echo "::error::Postgres's variable map in environment $env_id is unreadable, so WAL_ARCHIVE_* could not be checked and nothing was written. This is NOT evidence that WAL_ARCHIVE_* is unset."
+    exit 1
+  fi
+  names=$(printf '%s' "$GQL_RESPONSE" | jq -r \
+    '.data.variables | to_entries[] | select((.key | startswith("WAL_ARCHIVE_")) and .value != "") | .key')
+  if [ -z "$names" ]; then
+    echo "Postgres in $env_id: no WAL_ARCHIVE_* value to blank."
+    return 0
+  fi
+
+  graphql_post "$(gql_body "$SERVICE_INSTANCE_QUERY" \
+    "$(jq -n --arg e "$env_id" --arg s "$RAILWAY_SVC_POSTGRES_ID" '{e: $e, s: $s}')")" \
+    "reading the postgres service instance in environment $env_id"
+  status=$(printf '%s' "$GQL_RESPONSE" | jq -r '.data.serviceInstance.latestDeployment.status // empty')
+  if [ -n "$status" ] || ! printf '%s' "$GQL_RESPONSE" | jq -e '.data.serviceInstance.latestDeployment == null' >/dev/null 2>&1; then
+    echo "::error::Postgres in environment $env_id already has a deployment (status ${status:-unknown}) and booted with WAL archiving on. Blanking now would not undo it: delete the environment and re-run."
+    exit 1
+  fi
+
+  for n in $names; do pairs+=("$n="); done
+  # set_service_vars splits its secrets argument on spaces.
+  set_service_vars "$env_id" "$RAILWAY_SVC_POSTGRES_ID" Postgres "${names//$'\n'/ }" "${pairs[@]}"
+  for n in $names; do
+    if [ "$(auth_kind "$GQL_RESPONSE" "$n")" != empty ]; then
+      echo "::error::Postgres.$n is not blank in environment $env_id after the write. Value not printed."
+      exit 1
+    fi
+  done
+  echo "Postgres WAL archiving blank in $env_id: ${names//$'\n'/ }."
+}
+
 # cmd_reconcile_fork <environment-id>
 # The reconciles are one command on purpose: they are strictly sequential,
 # share the fork environment id and the auth context, and produce one coherent
@@ -2049,6 +2086,7 @@ cmd_reconcile_fork() {
 
   echo "Reconciling fork fidelity for environment $env_id ..."
   settle_fork "$env_id"
+  ensure_postgres_archive_off "$env_id"
   reconcile_domains "$env_id"
   # ORDER IS LOAD-BEARING: the volume must exist BEFORE Postgres deploys, because
   # Railway mounts volumes at deploy time. Reversed (the order shipped before

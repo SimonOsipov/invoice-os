@@ -6,6 +6,7 @@ import uuid
 
 import pytest
 import sentry_sdk
+from fastapi.testclient import TestClient
 from sentry_capture import CapturingTransport
 from sentry_sdk.integrations.logging import LoggingIntegration
 from sentry_sdk.utils import BadDsn
@@ -458,3 +459,60 @@ def test_test_event_fingerprint_does_not_stick(boot):
     later = [e for e in events if e["exception"]["values"][-1]["value"] == "later"]
     assert len(later) == 1
     assert "sentry-test-event" not in (later[0].get("fingerprint") or [])
+
+
+def test_test_event_fires_once_at_start_not_per_request(boot):
+    transport = boot(flag="true")
+    client = TestClient(app.app)
+    for path in ("/healthz", "/healthz", "/no-such-path"):
+        client.get(path)
+    assert len(transport.events()) == 1
+
+
+def test_test_event_flag_is_read_at_start_only(boot, monkeypatch):
+    transport = boot(flag=None)
+    monkeypatch.setenv("SENTRY_TEST_EVENT", "true")
+    client = TestClient(app.app)
+    for path in ("/healthz", "/healthz"):
+        client.get(path)
+    assert transport.events() == []
+    # Control: the transport is wired, so the zero above is not vacuous.
+    sentry_sdk.capture_exception(RuntimeError("control"))
+    assert len(transport.events()) == 1
+
+
+def test_test_event_leaves_no_fingerprint_on_later_events(boot):
+    transport = boot(flag="true")
+    sentry_sdk.capture_message("later message")
+    with sentry_sdk.isolation_scope():
+        sentry_sdk.capture_exception(ValueError("later isolated"))
+    events = transport.events()
+    assert len(events) == 3
+    later = [e for e in events if "sentry-test-event" not in (e.get("fingerprint") or [])]
+    assert len(later) == 2
+
+
+def test_test_event_with_a_bad_dsn_raises_and_sends_nothing(boot, monkeypatch):
+    # A client bound earlier would receive a stray test event, so bind one to watch.
+    watcher = CapturingTransport()
+    sentry_sdk.init(dsn=FAKE_DSN, transport=watcher)
+    monkeypatch.setenv("SENTRY_DSN", "not a dsn")
+    monkeypatch.setenv("SENTRY_TEST_EVENT", "true")
+    with pytest.raises(BadDsn):
+        sentry_setup.init_sentry()
+    assert watcher.events() == []
+    # Control: the watcher is wired, so the zero above is not vacuous.
+    sentry_sdk.capture_exception(RuntimeError("control"))
+    assert len(watcher.events()) == 1
+
+
+def test_test_event_with_a_blank_dsn_ignores_a_bound_client(boot, monkeypatch):
+    watcher = CapturingTransport()
+    sentry_sdk.init(dsn=FAKE_DSN, transport=watcher)
+    monkeypatch.setenv("SENTRY_DSN", "")
+    monkeypatch.setenv("SENTRY_TEST_EVENT", "true")
+    sentry_setup.init_sentry()
+    assert watcher.events() == []
+    # Control: the watcher is wired, so the zero above is not vacuous.
+    sentry_sdk.capture_exception(RuntimeError("control"))
+    assert len(watcher.events()) == 1

@@ -27,6 +27,12 @@ describe('landing tracing options', () => {
     expect(arg.beforeStartSpan!({ name: '/privacy/' }).name, 'the span name comes from the route function').toBe('R(/privacy/)')
 
     tracing.mockClear()
+    const bare = sentryOptions({ service: 'landing', dsn: DSN, release: 'r1' })!
+    expect(tracing, 'control: landing without a route function still builds its tracing').toHaveBeenCalledTimes(1)
+    expect(tracing.mock.calls[0][0]!.beforeStartSpan!({ name: '/privacy/NEEDLE-ID' }).name, 'no route function, no raw path').toBe('<unmatched>')
+    expect(bare.tracesSampleRate).toBe(1)
+
+    tracing.mockClear()
     build('app')
     expect(tracing, 'control: app builds its tracing once').toHaveBeenCalledTimes(1)
     const app = tracing.mock.calls[0][0]!

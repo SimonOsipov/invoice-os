@@ -30,14 +30,19 @@ interface FetchCall {
 
 const fetchCalls: FetchCall[] = []
 let hubspotStatus = 200
+let hubspotDown = false
 // The SDK wraps globalThis.fetch once per module, so one stub lives for the whole file.
 vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
   const headers: Record<string, string> = {}
   new Headers(init?.headers).forEach((v, k) => (headers[k] = v))
   const url = input instanceof Request ? input.url : String(input)
   fetchCalls.push({ url, headers })
+  if (hubspotDown && url.includes('hsforms.com')) throw new TypeError('Failed to fetch')
   return new Response('{}', { status: url.includes('hsforms.com') ? hubspotStatus : 200 })
 })
+
+// The SDK wraps XHR once per module, so the no-op `send` is in place before the first boot.
+XMLHttpRequest.prototype.send = function () {}
 
 const text = (e: Envelope): string => {
   const s = serializeEnvelope(e)
@@ -90,6 +95,7 @@ const undo: Array<() => void> = []
 beforeEach(() => {
   fetchCalls.length = 0
   hubspotStatus = 200
+  hubspotDown = false
   window.history.replaceState(null, '', '/')
 })
 
@@ -136,6 +142,60 @@ describe('landing tracing', () => {
       expect(c.headers.baggage, c.url).toBeUndefined()
       expect(c.headers.traceparent, c.url).toBeUndefined()
     }
+  })
+
+  it('tracePropagation_landingXhrSendsNoTraceHeaders', async () => {
+    const headerNames = (): string[] => set.mock.calls.map((c) => String(c[0]).toLowerCase())
+    const xhrTo = (url: string): void => {
+      const x = new XMLHttpRequest()
+      x.open('GET', url)
+      x.send()
+    }
+    const set = vi.spyOn(XMLHttpRequest.prototype, 'setRequestHeader')
+    boot([], { gateway: GW })
+    pageLoad()
+    xhrTo(`${GW}/api/x`)
+    xhrTo('https://api-eu1.hsforms.com/x')
+    for (const h of ['sentry-trace', 'baggage', 'traceparent']) expect(headerNames(), h).not.toContain(h)
+    await reset()
+    set.mockClear()
+
+    // The SDK's XHR handlers are module-global, so the control boots after the landing phase.
+    const o = sentryOptions({ service: LANDING, dsn: DSN, release: RELEASE, routeName: landingRoute, gateway: GW })!
+    Sentry.init({ ...o, tracePropagationTargets: [/gw\.test/], transport: recordingTransport([]) })
+    pageLoad()
+    xhrTo(`${GW}/api/x`)
+    expect(headerNames(), 'control: an XHR to a matching target carries the trace headers').toEqual(expect.arrayContaining(['sentry-trace', 'baggage']))
+  })
+
+  // One event per boot, so a regression on any one of the three is red on its own.
+  it.each(['pushState', 'popstate', 'fragment'])('landing_aloneAHistoryEventStartsNoNavigation (%s)', async (event) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(performance.timeOrigin + 5000)
+    window.history.replaceState(null, '', '/start')
+    window.history.pushState(null, '', '/privacy')
+    const sink: string[] = []
+    boot(sink)
+    const pageload = pageLoad()
+    const settled = (type: string) => new Promise((r) => window.addEventListener(type, r, { once: true }))
+    if (event === 'pushState') window.history.pushState(null, '', '/x')
+    if (event === 'popstate') {
+      const popped = settled('popstate')
+      window.history.back()
+      await popped
+      expect(window.location.pathname, 'control: back moved the location').toBe('/start')
+    }
+    if (event === 'fragment') {
+      const hashed = settled('hashchange')
+      window.location.hash = '#top'
+      await hashed
+      expect(window.location.hash, 'control: the fragment changed').toBe('#top')
+    }
+    expect(pageLoad(), 'still the page-load span').toBe(pageload)
+    pageload.end()
+    await Sentry.flush(1000)
+    const tx = items(sink, 'transaction')
+    expect(tx.map((i) => i.body.contexts.trace.op), 'only the page load').toEqual(['pageload'])
   })
 
   it('landing_pageLoadIsNamedAndNothingElseNavigates', async () => {
@@ -240,6 +300,51 @@ describe('what the landing SDK sends', () => {
     for (const needle of ['148915098', 'abc-123-needle', LEAD, COMPANY]) expect(raw, needle).not.toContain(needle)
   })
 
+  it('demoForm_urlQueryAndFragmentNeverLeave', async () => {
+    const sink: string[] = []
+    await visit(sink, '/', async () => {
+      await demoPost(`${HUBSPOT}?portal=QUERY-NEEDLE#HASH-NEEDLE`)
+    })
+    const crumb = items(sink)
+      .flatMap((i) => (i.body.breadcrumbs ?? []) as any[])
+      .find((c) => c.category === 'fetch' && String(c.data?.url).includes('hsforms.com'))
+    expect(crumb, 'fetch breadcrumb').toBeDefined()
+    expect(crumb.data.url).toBe(HUBSPOT)
+    const raw = sink.join('\n')
+    for (const needle of ['QUERY-NEEDLE', 'HASH-NEEDLE', 'portal=']) expect(raw, needle).not.toContain(needle)
+  })
+
+  it('demoForm_networkFailureMessageNamesNoHost', async () => {
+    hubspotDown = true
+    const sink: string[] = []
+    await visit(sink, '/', async () => {
+      Sentry.captureException(await demoPost().catch((e) => e))
+    })
+    const values = items(sink, 'event').map((i) => i.body.exception.values[0].value)
+    expect(values, 'the failed POST and the visit error').toEqual(['Failed to fetch', 'on-landing'])
+    const raw = sink.join('\n')
+    for (const needle of [LEAD, COMPANY]) expect(raw, needle).not.toContain(needle)
+  })
+
+  it('referrerAndLaterUrlEditsNeverLeave', async () => {
+    plant(document, 'referrer', 'https://elsewhere.test/?REFERRER-NEEDLE#REFERRER-FRAG')
+    const sink: string[] = []
+    const preScrub: string[] = []
+    window.history.replaceState(null, '', '/privacy')
+    boot(sink)
+    Sentry.getClient()!.on('preprocessEvent', (e) => preScrub.push(JSON.stringify(e)))
+    window.history.pushState(null, '', '/privacy?PUSH-NEEDLE=1#PUSH-FRAG')
+    Sentry.captureException(new Error('after-url-edit'))
+    pageLoad().end()
+    await Sentry.flush(1000)
+    expect(preScrub.join('\n'), 'control: the SDK reads the referrer').toContain('REFERRER-NEEDLE')
+    const events = items(sink, 'event')
+    expect(events.length, 'the after-url-edit error').toBe(1)
+    expect(events[0].body.request.url, 'control: the event carries a url').toContain('/privacy')
+    const raw = sink.join('\n')
+    for (const needle of ['REFERRER-NEEDLE', 'REFERRER-FRAG', 'PUSH-NEEDLE', 'PUSH-FRAG']) expect(raw, needle).not.toContain(needle)
+  })
+
   it('envelopes_neverInferIpAndSendNoSessions', async () => {
     const sink: string[] = []
     await visit(sink, `/privacy${SPA_QUERY}`)
@@ -251,6 +356,23 @@ describe('what the landing SDK sends', () => {
     expect(items(sink).map((i) => i.type)).not.toContain('sessions')
     const raw = sink.join('\n')
     for (const needle of ['ip_address', 'client.address', '"user":']) expect(raw).not.toContain(needle)
+  })
+
+  it('envelopes_dropAnIdentityPlantedOnTheScopeAndSpans', async () => {
+    const sink: string[] = []
+    window.history.replaceState(null, '', '/')
+    boot(sink)
+    Sentry.setUser({ id: 'USER-NEEDLE', email: 'USER-NEEDLE@example.test', ip_address: '203.0.113.9' })
+    const root = pageLoad()
+    root.setAttribute('client.address', '203.0.113.9')
+    Sentry.startSpan({ name: 'child', attributes: { 'client.address': '203.0.113.9' } }, () => {})
+    Sentry.captureException(new Error('with-user'))
+    root.end()
+    await Sentry.flush(1000)
+    const typed = items(sink).filter((i) => i.type === 'event' || i.type === 'transaction')
+    expect(typed.map((i) => i.type).sort(), 'one event and one transaction').toEqual(['event', 'transaction'])
+    const raw = sink.join('\n')
+    for (const needle of ['USER-NEEDLE', '203.0.113.9', 'client.address', '"user":', 'ip_address']) expect(raw, needle).not.toContain(needle)
   })
 
   it('storage_landingWritesNothing', async () => {

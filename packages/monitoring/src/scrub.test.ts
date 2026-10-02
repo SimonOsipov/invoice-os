@@ -349,6 +349,18 @@ describe('connection and device capacity', () => {
   })
 })
 
+describe('connection and device capacity edges', () => {
+  it('scrubTransaction_capacityDropToleratesAbsentOrNullContainers', () => {
+    const bare = as<TransactionEvent>({ type: 'transaction' })
+    expect(scrubTransaction(bare)).toEqual({ type: 'transaction' })
+    const hollow = as<TransactionEvent>({ type: 'transaction', contexts: { trace: { data: null } }, measurements: null, spans: [{ description: 'a' }, { description: 'b', data: null }] })
+    const out = scrubTransaction(hollow)
+    expect(out.spans?.length, 'both spans survive').toBe(2)
+    expect(out.spans?.[0].description).toBe('a')
+    expect(scrubSpan(as<SpanJSON>({ span_id: 's', description: 'x' })).span_id, 'a span with no data survives').toBe('s')
+  })
+})
+
 describe('scrubTransaction more', () => {
   it('scrubTransaction_scrubsEverySpanAndEveryClsSource', () => {
     const span = (n: number) => ({

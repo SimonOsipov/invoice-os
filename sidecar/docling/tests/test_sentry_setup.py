@@ -364,3 +364,97 @@ def test_boot_guard_reraises_when_no_client_is_bound():
     with pytest.raises(RuntimeError) as caught, sentry_setup.boot_guard():
         raise exc
     assert caught.value is exc
+
+
+@pytest.fixture
+def boot(monkeypatch, tmp_path):
+    """init_sentry() from the environment, with a CapturingTransport injected into sentry_sdk.init."""
+    build_file = tmp_path / "build.txt"
+    build_file.write_text("abc123\n")
+    monkeypatch.setattr(buildinfo, "BUILD_FILE", build_file)
+    for key in ("ENVIRONMENT", "RAILWAY_GIT_COMMIT_SHA"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+    if convert._warmup_thread is not None:
+        convert._warmup_thread.join()
+    real_init = sentry_sdk.init
+    init_calls = []
+
+    def run(dsn=FAKE_DSN, flag=None):
+        monkeypatch.setenv("SENTRY_DSN", dsn)
+        if flag is None:
+            monkeypatch.delenv("SENTRY_TEST_EVENT", raising=False)
+        else:
+            monkeypatch.setenv("SENTRY_TEST_EVENT", flag)
+        transport = CapturingTransport()
+
+        def init_with_transport(**kw):
+            init_calls.append(kw)
+            return real_init(**kw, transport=transport)
+
+        monkeypatch.setattr(sentry_sdk, "init", init_with_transport)
+        sentry_setup.init_sentry()
+        return transport
+
+    run.init_calls = init_calls
+    try:
+        yield run
+    finally:
+        _unbind()
+        sentry_sdk.get_isolation_scope().clear()
+        sentry_sdk.get_current_scope().clear()
+
+
+def test_test_event_sends_one_labelled_event(boot):
+    events = boot(flag="true").events()
+    assert len(events) == 1
+    event = events[0]
+    assert event.get("server_name") == "docling"
+    assert event.get("environment") == "production"
+    assert event.get("release") == "abc123"
+    assert event.get("fingerprint") == ["sentry-test-event", "docling"]
+    # Boot has no request in flight; Go's test event carries none either.
+    assert not event.get("request")
+
+
+def test_test_event_has_a_readable_stack_without_locals(boot):
+    events = boot(flag="true").events()
+    assert len(events) == 1
+    exceptions = events[0]["exception"]["values"]
+    assert len(exceptions) >= 1
+    exc = exceptions[-1]
+    assert exc["type"] == "RuntimeError"
+    assert exc["value"] == "sentry test event"
+    frames = exc["stacktrace"]["frames"]
+    assert len(frames) >= 1
+    assert any(f.get("filename", "").endswith("sentry_setup.py") for f in frames)
+    assert all("vars" not in f for f in frames)
+
+
+@pytest.mark.parametrize("flag", [None, "", "false", "1", "True", " true"])
+def test_test_event_fires_only_on_exact_true(boot, flag):
+    assert boot(flag=flag).events() == []
+    _unbind()
+    # Control: the same boot with exactly "true" sends one, so the zero above is not vacuous.
+    assert len(boot(flag="true").events()) == 1
+
+
+def test_test_event_without_dsn_is_silent(boot):
+    boot(dsn="", flag="true")
+    assert sentry_setup.sentry_state() == "off"
+    assert boot.init_calls == []
+    # Control: the same flag with a DSN sends one.
+    assert len(boot(flag="true").events()) == 1
+    assert len(boot.init_calls) == 1
+
+
+def test_test_event_fingerprint_does_not_stick(boot):
+    transport = boot(flag="true")
+    sentry_sdk.capture_exception(ValueError("later"))
+    events = transport.events()
+    assert len(events) == 2
+    tagged = [e for e in events if "sentry-test-event" in (e.get("fingerprint") or [])]
+    assert len(tagged) == 1
+    later = [e for e in events if e["exception"]["values"][-1]["value"] == "later"]
+    assert len(later) == 1
+    assert "sentry-test-event" not in (later[0].get("fingerprint") or [])

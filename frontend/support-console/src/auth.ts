@@ -13,3 +13,6 @@ export const landingBase = (): string | null => {
   const v = (import.meta.env.VITE_LANDING_URL ?? '').trim().replace(/\/+$/, '')
   return v || null
 }
+
+// stub: AUTH-11-05 wires this to signOutConsole
+export const signOut = async (): Promise<void> => {}

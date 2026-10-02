@@ -123,6 +123,12 @@ importers:
 
   frontend/ops-console:
     dependencies:
+      '@invoice-os/api-client':
+        specifier: workspace:*
+        version: link:../../packages/api-client
+      '@invoice-os/console-session':
+        specifier: workspace:*
+        version: link:../../packages/console-session
       '@invoice-os/design-tokens':
         specifier: workspace:*
         version: link:../../packages/design-tokens
@@ -157,6 +163,12 @@ importers:
 
   frontend/support-console:
     dependencies:
+      '@invoice-os/api-client':
+        specifier: workspace:*
+        version: link:../../packages/api-client
+      '@invoice-os/console-session':
+        specifier: workspace:*
+        version: link:../../packages/console-session
       '@invoice-os/design-tokens':
         specifier: workspace:*
         version: link:../../packages/design-tokens

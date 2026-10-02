@@ -721,6 +721,28 @@ func TestSetServiceVars_ReReadMismatchFails(t *testing.T) {
 			t.Errorf("a failed re-read printed the confirmation line; output = %q", out)
 		}
 	})
+	// Each console's gateway URL is verified by its own auth_check.
+	for _, svc := range []string{"ops-console", "support-console"} {
+		t.Run("reconcile-urls "+svc, func(t *testing.T) {
+			id := sentrySvcID(svc)
+			s := newAuthShim(t, nil, reconcileStale())
+			s.bendRead(t, id, `.VITE_GATEWAY_URL = "`+batchProdLandingURL+`"`)
+			stdout, stderr, code := runReconcileURLs(t, s)
+			out := stdout + stderr
+			if code != 1 {
+				t.Errorf("exit %d, want 1; output = %q", code, out)
+			}
+			if !strings.Contains(errorLines(out), svc+".VITE_GATEWAY_URL") {
+				t.Errorf("no ::error:: line names %s.VITE_GATEWAY_URL; error lines = %q", svc, errorLines(out))
+			}
+			if len(upsertsOf(s.upserts(t), id, "VITE_GATEWAY_URL")) == 0 {
+				t.Errorf("%s.VITE_GATEWAY_URL was never written, so the failure is not a re-read failure", svc)
+			}
+			if strings.Contains(out, batchAllConfirmed) {
+				t.Errorf("a failed re-read printed the confirmation line; output = %q", out)
+			}
+		})
+	}
 }
 
 func TestSetServiceVars_UnreadableMapWritesNothing(t *testing.T) {

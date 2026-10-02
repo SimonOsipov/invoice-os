@@ -149,7 +149,9 @@ export function stringLiterals(src: string): string[] {
 
 const DYNAMIC = '\u0000'
 
-/** Static class tokens of every `className=` value: "…", '…', {'…'}, {`…${x}…`}, {a ? 'b' : 'c'}. A token touching `${…}` is dynamic and dropped. */
+const COMPARED = /[!=]==?\s*(['"`])(?:(?!\1).)*\1|(['"`])(?:(?!\2).)*\2\s*[!=]==?/g
+
+/** Static class tokens of every `className=` value: "…", '…', {'…'}, {`…${x}…`}, {a ? 'b' : 'c'}. A token touching `${…}` is dynamic and dropped; a literal compared with `==`, `!=`, `===` or `!==` is not a class. */
 export function classNameTokens(src: string): string[] {
   const out: string[] = []
   for (const m of src.matchAll(/\bclassName\s*=\s*/g)) {
@@ -159,6 +161,7 @@ export function classNameTokens(src: string): string[] {
     if (first === '"' || first === "'") expr = src.slice(start, skipLiteral(src, start))
     else if (first === '{') expr = src.slice(start, skipBraces(src, start))
     else continue
+    expr = expr.replace(COMPARED, '')
     for (let lit of stringLiterals(expr)) {
       for (let at = lit.indexOf('${'); at !== -1; at = lit.indexOf('${')) {
         lit = lit.slice(0, at) + DYNAMIC + lit.slice(skipBraces(lit, at + 1))

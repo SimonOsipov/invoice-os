@@ -70,18 +70,23 @@ describe('the landing loads only v2', () => {
     expect(specs.filter((s) => s === V1_ENTRY)).toEqual([])
   })
 
-  it('V2-06 main.tsx loads the v2 entry, then the bridge, then landing.css', () => {
-    const order = ['@invoice-os/design-tokens/v2/styles.css', './styles/bridge.css', './styles/landing.css']
+  it('V2-06 main.tsx loads the v2 entry, then the bridge, then ds.css, then landing.css', () => {
+    const order = ['@invoice-os/design-tokens/v2/styles.css', './styles/bridge.css', './styles/ds.css', './styles/landing.css']
     const at = (specs: string[]) => order.map((s) => specs.indexOf(s))
-    const planted = importSpecifiers('p.tsx', `import '${order[0]}'\nimport '${order[2]}'\n// import './styles/bridge.css'`)
-    expect(at(planted), 'control: a commented import is absent, the others are found').toEqual([0, -1, 1])
+    const planted = importSpecifiers('p.tsx', `import '${order[0]}'\nimport '${order[3]}'\n// import './styles/bridge.css'`)
+    expect(at(planted), 'control: a commented import is absent, the others are found').toEqual([0, -1, -1, 1])
 
     const specs = importSpecifiers('main.tsx', readFileSync(join(LANDING_SRC, 'main.tsx'), 'utf8'))
-    const [v2, bridge, landing] = at(specs)
+    const [v2, bridge, ds, landing] = at(specs)
     expect(bridge, 'main.tsx imports bridge.css').toBeGreaterThanOrEqual(0)
     expect(specs.filter((s) => s === order[1])).toHaveLength(1)
     expect(v2, 'the bridge maps v2 names, so v2 loads first').toBeGreaterThanOrEqual(0)
     expect(v2).toBeLessThan(bridge)
+    expect(specs.filter((s) => s === order[2])).toHaveLength(1)
+    expect(ds, 'main.tsx imports ds.css').toBeGreaterThanOrEqual(0)
+    expect(v2, '.ds-eyebrow--dark ties .t-eyebrow in specificity, so v2 utilities load first').toBeLessThan(ds)
+    expect(bridge, 'ds.css follows the bridge').toBeLessThan(ds)
+    expect(ds, 'landing.css layers on the primitives, so ds.css loads first').toBeLessThan(landing)
     expect(bridge, 'landing.css reads the bridge names, so the bridge loads first').toBeLessThan(landing)
   })
 

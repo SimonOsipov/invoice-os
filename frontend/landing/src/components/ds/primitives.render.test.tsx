@@ -145,11 +145,20 @@ describe('Button', () => {
     expect(root.attrs).toEqual({ href: '#platform', class: 'ds-btn ds-btn--ghostDark' })
     expect(root.attrs.type).toBeUndefined()
 
-    const props = { href: '/x', variant: 'primary', disabled: true, type: 'submit', target: '_blank', rel: 'noopener', 'aria-label': 'Open', className: 'extra', style: { width: '100%' } }
+    const props = { href: '/x', variant: 'primary', type: 'submit', target: '_blank', rel: 'noopener', 'aria-label': 'Open', className: 'extra', style: { width: '100%' } }
     const full = rootTag(await render('Button', 'Button', props, 'Go'))
     expect(full.name).toBe('a')
     expect(full.attrs).toEqual({ href: '/x', class: 'ds-btn ds-btn--primary ds-btn--md extra', style: 'width:100%', 'aria-label': 'Open', target: '_blank', rel: 'noopener' })
     expect('disabled' in full.attrs, 'an anchor carries no disabled attribute').toBe(false)
+    expect('aria-disabled' in full.attrs, 'an enabled link is not aria-disabled').toBe(false)
+
+    const off = rootTag(await render('Button', 'Button', { href: '#x', disabled: true, 'aria-label': 'Open', className: 'extra' }, 'Go'))
+    expect(off.name, 'a disabled link stays an anchor').toBe('a')
+    expect(off.attrs, 'a disabled link is inert, aria-disabled and styled by .ds-btn--disabled').toEqual({
+      class: 'ds-btn ds-btn--primary ds-btn--md ds-btn--disabled extra',
+      'aria-disabled': 'true',
+      'aria-label': 'Open',
+    })
   })
 
   it('DS-06 Button forwards type, disabled, aria-label, className and style', async () => {
@@ -315,6 +324,7 @@ describe('class contract with ds.css', () => {
         render('Button', 'Button', { variant, size: 'lg' }, 'x'),
       ]),
       ...['success', 'progress', 'development'].map((tone) => render('Badge', 'Badge', { tone, dot: true }, 'x')),
+      render('Button', 'Button', { href: '#x', disabled: true }, 'x'),
       render('Badge', 'TagPill', {}, 'x'),
       ...['primary', 'accent'].map((tone) => render('IconTile', 'IconTile', { name: 'sparkles', tone })),
       render('ChecklistItem', 'ChecklistItem', {}, 'x'),

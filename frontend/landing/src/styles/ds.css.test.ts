@@ -24,6 +24,16 @@ function readDs(): string {
 
 const norm = (v: string) => v.replace(/\s+/g, ' ').trim()
 
+/** Like `valueOf`, for the selector parts that start with `prefix`. */
+function valueOfPrefix(css: string, prefix: string, ...props: string[]): string | undefined {
+  const values = parseRules(css)
+    .filter((r) => selectorParts(r).some((s) => s.startsWith(prefix)))
+    .flatMap((r) => declarations(r.body))
+    .filter((d) => props.includes(d.prop))
+    .map((d) => norm(d.value))
+  return values.at(-1)
+}
+
 /** Last declared value of `props` across the rules whose selector list holds `selector` exactly. */
 function valueOf(css: string, selector: string, ...props: string[]): string | undefined {
   const values = parseRules(css)
@@ -53,11 +63,25 @@ describe('ds.css values', () => {
     ]
     expect(hovers).toHaveLength(5)
     for (const [variant, props, want] of hovers) {
-      expectDecl(css, `.ds-btn--${variant}:hover:not(:disabled)`, props, want)
+      expect(valueOfPrefix(css, `.ds-btn--${variant}:hover`, ...props), `.ds-btn--${variant}:hover { ${props[0]} }`).toBe(want)
     }
     expectDecl(css, '.ds-btn:disabled', ['opacity'], '0.45')
     const tokens = v2Tokens()
     for (const name of ['--radius-btn', '--muted', '--teal']) expect(tokens.has(name), `v2 declares ${name}`).toBe(true)
+  })
+
+  it('DSC-12 a disabled link looks disabled and takes no hover', () => {
+    const css = readDs()
+    const off = parseRules(css).flatMap((r) => (selectorParts(r).includes('.ds-btn--disabled') ? declarations(r.body) : []))
+    expect(off.length, '.ds-btn--disabled rule exists').toBeGreaterThan(0)
+    expectDecl(css, '.ds-btn--disabled', ['opacity'], valueOf(css, '.ds-btn:disabled', 'opacity') as string)
+    expectDecl(css, '.ds-btn--disabled', ['opacity'], '0.45')
+    expectDecl(css, '.ds-btn--disabled', ['cursor'], valueOf(css, '.ds-btn:disabled', 'cursor') as string)
+    expectDecl(css, '.ds-btn--disabled', ['cursor'], 'not-allowed')
+
+    const hovers = parseRules(css).flatMap((r) => selectorParts(r)).filter((s) => /^\.ds-btn--\w+:hover/.test(s))
+    expect(hovers.length, 'one hover selector per variant').toBeGreaterThanOrEqual(5)
+    expect(hovers.filter((s) => !s.includes(':not(:disabled)') || !s.includes(':not(.ds-btn--disabled)'))).toEqual([])
   })
 
   it('DSC-02 badges and tags use the 4px radius', () => {

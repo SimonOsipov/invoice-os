@@ -110,6 +110,10 @@ describe('bridge.css maps the app-layer names onto v2', () => {
     const defining = [v2['utilities.css'], v2['tokens/hero-grid.css']]
     expect(defining.every((c) => typeof c === 'string' && c.length > 0), 'v2 utilities.css and hero-grid.css exist').toBe(true)
 
+    expect(classNameTokens("<i className={tone === 'dark' ? 'a b' : 'c'} />"), 'control: a === operand is not a class').toEqual(['a', 'b', 'c'])
+    expect(classNameTokens("<i className={'light' !== tone && 'on'} />"), 'control: a !== operand on the left is not a class').toEqual(['on'])
+    expect(classNameTokens('<i className={t == "x" ? "y" : "z"} /><i className={"w" != t ? "v" : ""} />'), 'control: == and != with double quotes').toEqual(['y', 'z', 'v'])
+
     const planted = undefinedClasses(
       {
         'planted.tsx': "const a = <i className=\"a-cls no-such-cls\" /><i className={'p-one'} /><i className={`p-two ${v} p-three ds--${v}`} /><i className={ok ? 'a-cls' : 'p-four'} />",

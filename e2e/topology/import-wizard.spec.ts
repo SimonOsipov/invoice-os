@@ -1004,7 +1004,7 @@ test('E2E-04/09 (INVCR-01-09): the mixed fixture separates the two channels by T
   const violateEntry = body.invoice_violations.find((iv) => iv.invoice_number === 'INV-UI-MIX-VIOLATE')
   expect(
     violateEntry,
-    'expected an invoice_violations entry for INV-UI-MIX-VIOLATE -- if this fails, check whether vat-standard-rate was disabled by an out-of-order suite run (api -> topology -> demo)',
+    'expected an invoice_violations entry for INV-UI-MIX-VIOLATE',
   ).toBeTruthy()
   expect(violateEntry!.violations.map((v) => v.rule_key)).toEqual(['vat-standard-rate'])
   expect(violateEntry!.invoice_id, 'invoice_violations[].invoice_id must be populated on a REAL import').toBeTruthy()

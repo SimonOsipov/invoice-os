@@ -51,8 +51,9 @@ test.describe('a customer cannot change a golden rule (API E2E, over the deploye
   test.beforeAll(async () => {
     tokenA = await login(PERSONAS.A)
     tokenB = await login(PERSONAS.B)
-    entityA = (await createEntity(tokenA, { name: `AUTH-12 A ${Date.now()}`, tin: freshTin() })).id
-    entityB = (await createEntity(tokenB, { name: `AUTH-12 B ${Date.now()}`, tin: freshTin() })).id
+    // Tenant B's name must sort after "Honeywell Group" ([e2e-entity-name-ordering-trap]).
+    entityA = (await createEntity(tokenA, { name: `Rule lock AUTH-12 A ${Date.now()}`, tin: freshTin() })).id
+    entityB = (await createEntity(tokenB, { name: `Rule lock AUTH-12 B ${Date.now()}`, tin: freshTin() })).id
     baselineB = await validateFreshDraft(tokenB, entityB, 1)
     for (const key of ['vat-standard-rate', 'currency-allowed']) {
       for (const enabled of [false, true]) {

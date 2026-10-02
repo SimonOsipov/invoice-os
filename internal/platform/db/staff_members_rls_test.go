@@ -469,7 +469,7 @@ func TestRLS_StaffMembersDownRestoresTheTenantOnlyHook(t *testing.T) {
 
 // AC-11.
 func TestRLS_CustomAccessTokenHookStaffStepIsTotalOverNonObjectAppMetadata(t *testing.T) {
-	requireHarness(t)
+	h := requireHarness(t)
 	reapplyStaffMigration(t)
 	auth := authAdminPool(t)
 
@@ -494,6 +494,16 @@ func TestRLS_CustomAccessTokenHookStaffStepIsTotalOverNonObjectAppMetadata(t *te
 			}
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("claims changed\n got: %v\nwant: %v", got, want)
+			}
+		})
+		// The tenant step joins a scalar and the tenant object into an array, and #- into an array errors.
+		t.Run(name+"/non_staff_with_membership", func(t *testing.T) {
+			userID := uuid.NewString()
+			seedHookMembership(t, h.tenantA, userID, "active")
+			got, _ := hookRun(t, auth, userID, func(c map[string]any) { c["app_metadata"] = appMetadata })
+			want := roundTrip(t, map[string]any{"app_metadata": []any{appMetadata, map[string]any{"tenant_id": h.tenantA}}})
+			if !reflect.DeepEqual(got["app_metadata"], want["app_metadata"]) {
+				t.Errorf("app_metadata\n got: %v\nwant: %v", got["app_metadata"], want["app_metadata"])
 			}
 		})
 	}

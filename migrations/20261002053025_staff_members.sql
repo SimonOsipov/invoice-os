@@ -31,7 +31,7 @@ CREATE OR REPLACE FUNCTION public.custom_access_token_hook(event jsonb) RETURNS 
                      CASE WHEN jsonb_typeof(t.claims->'app_metadata') = 'object'
                           THEN t.claims->'app_metadata' ELSE '{}'::jsonb END
                          || '{"staff": true}'::jsonb)
-        -- #- into a non-object errors; GoTrue always sends an object.
+        -- GoTrue always sends an object.
         WHEN jsonb_typeof(t.claims->'app_metadata') = 'object'
             THEN t.claims #- '{app_metadata,staff}'
         ELSE t.claims END)

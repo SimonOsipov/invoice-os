@@ -109,7 +109,12 @@ func (s *Store) ProvisionWorkspace(ctx context.Context, in ProvisionInput) (Tena
 			}
 			return err
 		}
-		return tx.QueryRow(ctx, `SELECT id, name, kind FROM tenants`).Scan(&t.ID, &t.Name, &t.Kind)
+		if err := tx.QueryRow(ctx, `SELECT id, name, kind FROM tenants`).Scan(&t.ID, &t.Name, &t.Kind); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, caller.Subject, "workspace.provisioned", map[string]any{
+			"tenant_id": t.ID, "user_id": subject, "name": t.Name, "kind": t.Kind,
+		})
 	})
 	if err != nil {
 		return Tenant{}, "", err

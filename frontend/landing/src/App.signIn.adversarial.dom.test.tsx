@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
-// Adversarial coverage for landing's boot read and strip of `state` and `signin`.
+// Adversarial coverage for landing's boot read and strip of `state`, `console` and `signin`.
 /// <reference types="node" />
 import { StrictMode, act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -18,6 +18,7 @@ let container: HTMLDivElement
 let root: Root
 let consoleError: ReturnType<typeof vi.spyOn>
 let writes: unknown[]
+let restoreLocation: (() => void) | undefined
 
 function spyStore() {
   const map = new Map<string, string>()
@@ -50,6 +51,8 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  restoreLocation?.()
+  restoreLocation = undefined
   act(() => root.unmount())
   container.remove()
   window.history.replaceState(null, '', '/')
@@ -65,6 +68,38 @@ async function bootAt(path: string, strict = false): Promise<void> {
   await act(async () => {
     root.render(strict ? createElement(StrictMode, null, createElement(mod.default)) : createElement(mod.default))
   })
+}
+
+// Reads delegate to the real location so the strip still works; only `href` writes are captured.
+function captureNavigation(): string[] {
+  const assigned: string[] = []
+  const original = Object.getOwnPropertyDescriptor(window, 'location')
+  const real = window.location
+  const stub = {
+    get href() {
+      return real.href
+    },
+    set href(v: string) {
+      assigned.push(v)
+    },
+    get search() {
+      return real.search
+    },
+    get pathname() {
+      return real.pathname
+    },
+    get hash() {
+      return real.hash
+    },
+    get origin() {
+      return real.origin
+    },
+  }
+  Object.defineProperty(window, 'location', { value: stub, writable: true, configurable: true })
+  restoreLocation = () => {
+    if (original) Object.defineProperty(window, 'location', original)
+  }
+  return assigned
 }
 
 function dialogs(): HTMLElement[] {
@@ -96,11 +131,19 @@ async function openFromNav(): Promise<void> {
 
 describe('AUTH-05-07 adversarial: boot params', () => {
   it('a repeated state is ignored and every copy is stripped', async () => {
-    await bootAt(`/?state=${STATE}&signin=ready&state=${OTHER}`)
+    vi.stubEnv('VITE_OPS_URL', 'https://ops.x')
+    vi.stubEnv('VITE_SUPPORT_URL', 'https://support.x')
+    const assigned = captureNavigation()
+    await bootAt(`/?state=${STATE}&console=ops&signin=ready&state=${OTHER}&console=support`)
     const d = onlyDialog()
     expect(d.querySelectorAll('input').length).toBe(0)
     expect(d.textContent).toContain('Continue with email')
     expect(window.location.search).toBe('')
+    // Two console values hold no target: the bounce goes to the app.
+    const cont = Array.from(d.querySelectorAll('button')).filter((b) => b.textContent?.trim() === 'Continue with email')
+    expect(cont.length).toBe(1)
+    await act(async () => cont[0].click())
+    expect(assigned).toEqual(['https://app.x?auth=start'])
     expect(consoleError).not.toHaveBeenCalled()
   })
 
@@ -120,7 +163,7 @@ describe('AUTH-05-07 adversarial: boot params', () => {
   })
 
   it('the strip keeps the path and the hash', async () => {
-    await bootAt(`/?utm_source=x&state=${STATE}&signin=ready#pricing`)
+    await bootAt(`/?utm_source=x&state=${STATE}&console=ops&signin=ready#pricing`)
     onlyDialog()
     expect(window.location.pathname).toBe('/')
     expect(window.location.search).toBe('?utm_source=x')

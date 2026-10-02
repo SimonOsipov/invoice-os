@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { SignInForm } from './SignInForm'
 import { SignInModal } from './SignInModal'
+import type { ConsoleTarget } from '../signIn'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -56,9 +57,9 @@ function unconfigure(): void {
   vi.stubEnv('VITE_APP_URL', 'https://app.x/')
 }
 
-async function mountForm(state: string | null, initialError?: string): Promise<void> {
+async function mountForm(state: string | null, initialError?: string, consoleTarget?: ConsoleTarget): Promise<void> {
   await act(async () => {
-    root.render(createElement(SignInForm, { heldState: () => state, initialError }))
+    root.render(createElement(SignInForm, { heldState: () => state, initialError, consoleTarget }))
   })
 }
 
@@ -174,6 +175,23 @@ describe('AC-2: the held state', () => {
       buttons[0].click()
     })
     expect(locationStub.href).toBe('https://app.x?auth=start')
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('continueWithEmail_bouncesThroughTheHeldConsole', async () => {
+    configure()
+    vi.stubEnv('VITE_SUPPORT_URL', 'https://support.x/')
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await mountForm(null, undefined, 'support')
+    const buttons = Array.from(container.querySelectorAll('button'))
+    expect(buttons.length).toBe(1)
+    expect(buttons[0].textContent?.trim()).toBe('Continue with email')
+    await act(async () => {
+      buttons[0].click()
+    })
+    expect(locationStub.href).toBe('https://support.x?auth=start')
     expect(fetchMock).not.toHaveBeenCalled()
     expect(consoleError).not.toHaveBeenCalled()
   })

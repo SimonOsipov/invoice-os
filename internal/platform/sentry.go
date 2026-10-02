@@ -41,7 +41,7 @@ func initSentry(cfg Config) error {
 
 // captureTestEvent sends one labelled event so an operator can see a service reach Sentry.
 // The fingerprint goes on a cloned scope so later events do not inherit it.
-// ceiling: fires on every boot while the container env holds SENTRY_TEST_EVENT; deleting it applies at the next deploy or redeploy
+// ceiling: the test event fires on every boot while the variable is set; revisit if it is ever needed outside a go-live window
 func captureTestEvent(service string) {
 	if SentryState() == "off" {
 		return

@@ -2,7 +2,7 @@ import * as Sentry from '@sentry/react'
 import type { Service } from './options'
 
 // Installs window.__ascSentryTest(passphrase): one labelled event when SHA-256(passphrase) matches the build digest.
-// ceiling: the digest stays in the bundle until the variable is deleted and the SPA rebuilt
+// ceiling: the digest is baked into the bundle at build; revisit if a test event is ever needed outside a go-live window
 export function installTestEvent(service: Service, digest: string | undefined): void {
   const want = (digest ?? '').trim().toLowerCase()
   if (!/^[0-9a-f]{64}$/.test(want)) return

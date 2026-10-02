@@ -75,7 +75,7 @@ def init_sentry():
 
 def _capture_test_event():
     # Fingerprint goes on a forked scope so later events do not inherit it.
-    # ceiling: fires on every boot while the container env holds SENTRY_TEST_EVENT; deleting it applies at the next deploy or redeploy
+    # ceiling: the test event fires on every start while the variable is set; revisit if it is ever needed outside a go-live window
     with sentry_sdk.new_scope() as scope:
         scope.fingerprint = ["sentry-test-event", "docling"]
         try:

@@ -12,7 +12,7 @@ Ops page for error, trace and log reporting. The Sentry org is EU (`https://de.s
 
 `auth` (GoTrue) has no Sentry SDK and is not a deployable here; `fleet-gate` exempts it by name.
 
-The test event has the fingerprint `["sentry-test-event", <service>]`: one issue per deployable, and a repeat joins the same issue.
+The test event has the fingerprint `["sentry-test-event", <service>]`: one issue per deployable, and a repeat joins the same issue. The only alert rule is "A new issue is created", so a repeat sends no email. Prove a retest by the issue's event count rising, or by its new event.
 
 ## Variables
 
@@ -33,6 +33,7 @@ The two test variables are not blanked in forks. The DSN is blank there, so they
 - Fires once per boot or start, and again on every boot while the container holds the variable.
 - Deleting the variable changes nothing in the running container. Redeploy the service after the delete.
 - Does nothing without a DSN.
+- A crash-loop or health-check restart fires it too, so keep the window between step 8 and step 11 short.
 
 `VITE_SENTRY_TEST_DIGEST`:
 - The SHA-256 hex of the passphrase: `printf %s "$P" | shasum -a 256 | cut -d' ' -f1`.
@@ -66,12 +67,17 @@ The user does every step. Production writes are the user's; an agent never write
 10. Confirm one alert email arrived per deployable. Evidence: the emails.
 11. Remove the test triggers.
     - On each backend: `railway variable delete SENTRY_TEST_EVENT -s <svc> -e <env id>`, then `railway redeploy -s <svc> -e <env id> -y`. A delete starts no deploy and the running container keeps the variable, so a plain restart fires again.
-    - On each SPA: delete `VITE_SENTRY_TEST_DIGEST`. The next deploy ships bundles without the trigger.
-    - To test an SPA again later, choose a new passphrase, set its digest and deploy the SPA: the digest is baked at build.
-    - To rotate or after a leak, delete the digest variable and deploy. A leaked passphrase can only send test events.
-    - Evidence: neither variable is listed on any service.
+    - On each SPA: delete `VITE_SENTRY_TEST_DIGEST`, then rebuild the four SPAs as in step 8: re-run the `Dev Env` run of `main`'s head with `gh run rerun <id>`, never `--failed`. Record each SPA's entry asset name before the re-run. A Railway `redeploy` re-serves the old bundle.
+    - To test an SPA again later, choose a new passphrase, set its digest and rebuild the SPA as above: the digest is baked at build. The retest adds an event to the existing issue and sends no email.
+    - To rotate or after a leak, delete the digest variable and rebuild as above. A leaked passphrase can only send test events.
+    - Evidence: neither variable is listed on any service. Each SPA's entry asset name differs from the one recorded before the re-run. `typeof window.__ascSentryTest === 'undefined'` in the console on `www.`, `app.`, `ops.` and `sup.ascomply.com`.
 12. Sign in to `app.ascomply.com` and validate one invoice, for the trace check. Evidence: the invoice id.
-13. Tell the agent session. It reads the rest and fills "Go-live record".
+13. Tell the agent session. It reads the rest and fills "Go-live record". Also read:
+    - `curl -sI` an entry `.js.map` on `app.ascomply.com`: expect 404 (SENTRY-08 F-2).
+    - Landing (SENTRY-07): EU ingest host; consent absent or denied; no Sentry cookie or storage; page-load named `/` or `/privacy`; no ingest request off the production host.
+    - Browser to gateway trace join (SENTRY-06 H1).
+    - One extraction job transaction with a `docling` child span in one trace (H7); "no production upload in the window" is a valid result.
+    - Moving ledger rows C23–C31 in `docs/privacy-policy-claims.md` to the observed date.
 
 ## Where to look
 

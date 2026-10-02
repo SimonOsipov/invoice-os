@@ -34,7 +34,7 @@ import { collectErrors, expectRefused } from '../personaSession'
 // discriminator would run against the LANDING dom and could only ever fail if landing grew
 // an h1 "Overview". Such an assertion is vacuous by construction and is deliberately absent
 // here. That property is held instead by the app's render gate, which returns null
-// before its effect matters: frontend/app/src/App.tsx:889.
+// before its effect matters.
 //
 // WHY ONLY THE 10 REFUSALS ([refusals-only-in-the-matrix]). The matrix's two accept cells
 // are covered where they belong and are not re-driven here: app-firm by

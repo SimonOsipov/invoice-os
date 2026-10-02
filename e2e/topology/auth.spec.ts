@@ -339,7 +339,7 @@ test("deployed app: Back from an invoice detail returns to the list, not the lan
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// The Caddyfile:20-24 try_files fallback has served this since M1-06; nothing in the
+// The Caddyfile `try_files` fallback has served this since M1-06; nothing in the
 // suite has ever cold-booted a top-level path until now.
 test('deployed app: a top-level path is a working deep link', async ({ page }) => {
   const errors = collectErrors(page)

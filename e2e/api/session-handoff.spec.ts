@@ -4,7 +4,7 @@
 // sign-in is throttled per address, and the session check's cost is measured.
 // Forks auto-confirm, so a fresh registration signs in at once.
 import { test, expect } from '@playwright/test'
-import { claimsOf, exchangeCode, mintSignInState, rawFetch, registerFresh, signInForCode, signInSession, subjectOf } from './client'
+import { claimsOf, exchangeCode, mintSignInState, provisionRealAccount, rawFetch, registerFresh, signInForCode, signInSession, subjectOf } from './client'
 import { assertErrorEnvelope } from './contract-helpers'
 import { resolveTarget } from '../targets'
 
@@ -153,14 +153,13 @@ test.describe('sign-in hand-off (API E2E, over the deployed gateway)', () => {
     expect([unknown.status(), await unknown.json()], 'sign-out with an unknown refresh token').toEqual([401, { error: INVALID_REFRESH }])
   })
 
-  test('a registered account has no staff claim; the mock grant puts it on the next sign-in and the next refresh', async () => {
-    const { email, password } = await registerFresh()
+  test('a provisioned account has no staff claim; the mock grant puts it on the next sign-in and the next refresh', async () => {
+    const { email, password } = await provisionRealAccount('staff-claim')
     const before = await signInSession(email, password)
-    const beforeClaims = claimsOf(before.access_token)
-    // Positive control: the decode reads this token, so an absent claim is not a failed read.
-    expect(beforeClaims.sub, 'the decoded subject').toBe(subjectOf(before.access_token))
-    expect(beforeClaims.sub, 'the decoded subject').toMatch(/^[0-9a-f-]{36}$/)
-    expect((beforeClaims.app_metadata as { staff?: unknown } | undefined)?.staff, 'staff on a customer token').toBeUndefined()
+    const beforeMeta = claimsOf(before.access_token).app_metadata as { tenant_id?: unknown; staff?: unknown } | undefined
+    // Positive control: this token carries the tenant claim, so an absent staff claim is not a failed read.
+    expect(beforeMeta?.tenant_id, 'the tenant claim on a provisioned account').toBeTruthy()
+    expect(beforeMeta?.staff, 'staff on a customer token').toBeUndefined()
 
     const grant = await rawFetch('/auth/mock/staff', { method: 'POST', body: { user_id: subjectOf(before.access_token) } })
     expect(grant.status, JSON.stringify(grant.body)).toBe(204)

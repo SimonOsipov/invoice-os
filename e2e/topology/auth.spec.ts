@@ -1789,8 +1789,12 @@ test('deployed consoles: a hand-written or forged record opens nothing and ends 
         try {
           const page = await context.newPage()
           // Only the forged record reaches /auth/refresh, and only that answer is expected.
-          const errors = gatedErrors(page, [expectedStatusDropper(page, 401, /\/auth\/refresh$/)])
+          const errors = gatedErrors(page, kind === 'forged' ? [expectedStatusDropper(page, 401, /\/auth\/refresh$/)] : [])
           const urls = recordUrls(page)
+          const warnings: string[] = []
+          page.on('console', (msg) => {
+            if (msg.type() === 'warning') warnings.push(msg.text())
+          })
           await seedRawConsoleRecord(context, target, record)
           const refused = kind === 'forged' ? refreshAnswer(page) : null
 
@@ -1799,7 +1803,10 @@ test('deployed consoles: a hand-written or forged record opens nothing and ends 
             expect((await refused).status(), `the ${target} refresh of the forged record`).toBe(401)
             expect(await consoleRecord(context, target), `${target} kept the forged record`).toBeNull()
           } else {
-            // A v1 record is ignored, never sent to the gateway.
+            // A v1 record is ignored, never sent to the gateway. The warning proves the console read it.
+            await expect
+              .poll(() => warnings.some((w) => w.includes(`ignoring unusable stored session at "${CONSOLE_SESSION_KEY[target]}"`)), { message: `the ${target} console never read the v1 record` })
+              .toBe(true)
             expect(urls.filter((u) => u === REFRESH_URL), `${target} sent the v1 record to /auth/refresh`).toEqual([])
           }
           expect(urls.length, 'no URLs were recorded').toBeGreaterThan(0)
@@ -1826,7 +1833,8 @@ test('deployed consoles: a console load renews the stored session and stays in t
         const seeded = await seedStaffSession(page, target, account)
         const first = await consoleRecord(context, target)
         expect(first, `${target} stored no session after the first load`).not.toBeNull()
-        expect(first!.token, 'the first load did not renew the seeded token').not.toBe(seeded.token)
+        // The refresh token always rotates; two access tokens minted in one second can be identical.
+        expect(first!.refresh_token, 'the first load did not renew the seeded pair').not.toBe(seeded.refresh_token)
 
         const renewal = refreshAnswer(page)
         await page.reload()
@@ -1836,8 +1844,7 @@ test('deployed consoles: a console load renews the stored session and stays in t
 
         const second = await consoleRecord(context, target)
         expect(second, `${target} stored no session after the reload`).not.toBeNull()
-        expect(second!.token, 'the reload did not change the stored token').not.toBe(first!.token)
-        expect(second!.refresh_token, 'the reload did not rotate the refresh token').not.toBe(first!.refresh_token)
+        expect(second!.refresh_token, 'the reload did not change the stored pair').not.toBe(first!.refresh_token)
 
         expect(urls.length, 'no URLs were recorded').toBeGreaterThan(0)
         expect(

@@ -73,8 +73,8 @@ for (const [name, target] of [
   })
 }
 
-// Each console build must hold this environment's gateway host: without it the gate leaves every visitor
-// with signin=failed. The host is baked in from VITE_GATEWAY_URL at the image build.
+// Each console build must hold this environment's gateway host: without it no hand-off code can
+// be redeemed. The host is baked in from VITE_GATEWAY_URL at the image build.
 for (const app of APPS.filter((a) => a.console)) {
   test(`${app.name}: the served main script holds this environment's gateway host`, async ({ request }) => {
     const page = await request.get(app.url)

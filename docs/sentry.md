@@ -67,7 +67,7 @@ The user does every step. Production writes are the user's; an agent never write
 11. Remove the test triggers.
     - On each backend: `railway variable delete SENTRY_TEST_EVENT -s <svc> -e <env id>`, then `railway redeploy -s <svc> -e <env id> -y`. A delete starts no deploy and the running container keeps the variable, so a plain restart fires again.
     - On each SPA: delete `VITE_SENTRY_TEST_DIGEST`. The next deploy ships bundles without the trigger.
-    - To test again later, choose a new passphrase and set its digest.
+    - To test an SPA again later, choose a new passphrase, set its digest and deploy the SPA: the digest is baked at build.
     - To rotate or after a leak, delete the digest variable and deploy. A leaked passphrase can only send test events.
     - Evidence: neither variable is listed on any service.
 12. Sign in to `app.ascomply.com` and validate one invoice, for the trace check. Evidence: the invoice id.

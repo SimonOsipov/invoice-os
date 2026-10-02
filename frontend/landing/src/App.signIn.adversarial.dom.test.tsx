@@ -292,6 +292,15 @@ describe('AUTH-05-07 adversarial: unconfigured landing (D7: production unchanged
   })
 })
 
+// Ends the current boot: restores `location`, then mounts a fresh root on re-imported modules.
+async function remountFresh(): Promise<void> {
+  restoreLocation?.()
+  restoreLocation = undefined
+  await act(async () => root.unmount())
+  root = createRoot(container)
+  vi.resetModules()
+}
+
 const NOT_STAFF = 'This account cannot open the ASComply consoles.'
 const CONTINUE = 'Continue with email'
 
@@ -352,11 +361,7 @@ describe('AUTH-11-06 adversarial: the console target', () => {
       await openFromNav()
       await clickContinue()
       expect(assigned, target).toEqual([want])
-      restoreLocation?.()
-      restoreLocation = undefined
-      await act(async () => root.unmount())
-      root = createRoot(container)
-      vi.resetModules()
+      await remountFresh()
     }
     expect(consoleError).not.toHaveBeenCalled()
   })
@@ -369,11 +374,7 @@ describe('AUTH-11-06 adversarial: the console target', () => {
       expect(window.location.search, v).toBe('')
       await clickContinue()
       expect(assigned, v).toEqual(['https://app.x?auth=start'])
-      restoreLocation?.()
-      restoreLocation = undefined
-      await act(async () => root.unmount())
-      root = createRoot(container)
-      vi.resetModules()
+      await remountFresh()
     }
     expect(consoleError).not.toHaveBeenCalled()
   })
@@ -400,21 +401,13 @@ describe('AUTH-11-06 adversarial: the console target', () => {
       await fillAndSubmit(onlyDialog())
       expect(fetchMock, target).toHaveBeenCalledTimes(1)
       expect(assigned, `${target} submit`).toEqual([])
-      restoreLocation?.()
-      restoreLocation = undefined
-      await act(async () => root.unmount())
-      root = createRoot(container)
-      vi.resetModules()
+      await remountFresh()
 
       const bounced = captureNavigation()
       await bootAt(`/?console=${target}&signin=ready`)
       await clickContinue()
       expect(bounced, `${target} continue`).toEqual([])
-      restoreLocation?.()
-      restoreLocation = undefined
-      await act(async () => root.unmount())
-      root = createRoot(container)
-      vi.resetModules()
+      await remountFresh()
       vi.stubEnv('VITE_OPS_URL', 'https://ops.x')
       vi.stubEnv('VITE_SUPPORT_URL', 'https://support.x')
     }

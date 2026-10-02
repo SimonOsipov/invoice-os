@@ -22,6 +22,8 @@ ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN
 # The release fallback when no release is stamped.
 ARG RAILWAY_GIT_COMMIT_SHA
 ENV VITE_RAILWAY_GIT_COMMIT_SHA=$RAILWAY_GIT_COMMIT_SHA
+# Build stage only, never ENV; empty skips the source-map upload.
+ARG SENTRY_AUTH_TOKEN
 RUN pnpm --filter @invoice-os/ops-console build
 
 # ---- Serve: Caddy static server with SPA fallback + /health ----

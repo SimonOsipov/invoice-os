@@ -539,9 +539,9 @@ jobs:
           --health-retries 5
     env:
       # bootstrap runs as the superuser; goose runs as the migrator. DATABASE_URL
-      # (the app role) is added ONLY so TestSuperuserDSNNotRetainedForRequestPath
-      # (task-128 / AC-4) can prove the request-serving pool it opens comes from
-      # DATABASE_URL, not the superuser DSN — no other step in this job uses it.
+      # (the app role) is for TestSuperuserDSNNotRetainedForRequestPath (task-128 / AC-4),
+      # which proves the request-serving pool it opens comes from DATABASE_URL, not the
+      # superuser DSN, and for TestRestoreCheck_FailsWithoutBypassRLS.
       # Dev-safe passwords only — this is an ephemeral throwaway DB.
       DATABASE_SUPERUSER_URL: postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disable
       DATABASE_MIGRATION_URL: postgres://invoice_migrator:migrator@localhost:5432/invoice_os?sslmode=disable
@@ -603,8 +603,8 @@ jobs:
         # caller (not just psql) can execute the identical file (Decision
         # [one-bootstrap-file]). Covers create-or-converge, security-attribute
         # re-assertion, fail-closed on a missing/empty password GUC, idempotency,
-        # deterministic password rotation, and schema-grant shape. Needs only
-        # DATABASE_SUPERUSER_URL, already in this job's env; self-skips everywhere else.
+        # deterministic password rotation, and schema-grant shape.
+        # TestRestoreCheck* runs db/restore-check.sql against this job's Postgres.
         run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestBootstrap|TestMakefileDevDB|TestRestoreCheck' ./internal/platform/db/...
       - name: Gateway boot-path provisioning suite + per-test visibility & skip gate
         # M4-21-04 (task-128, AC-6): proves db.Provision — the entry point

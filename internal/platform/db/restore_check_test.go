@@ -2,10 +2,13 @@ package db_test
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -230,7 +233,11 @@ func (f *rcFixture) exec(t *testing.T, sql string, args ...any) {
 
 func (f *rcFixture) invoice(t *testing.T, number, status string, at time.Time) string {
 	t.Helper()
-	id := uuid.NewString()
+	return f.invoiceAs(t, uuid.NewString(), number, status, at)
+}
+
+func (f *rcFixture) invoiceAs(t *testing.T, id, number, status string, at time.Time) string {
+	t.Helper()
 	f.exec(t, `INSERT INTO invoices (id, tenant_id, entity_id, invoice_number, status, created_at)
 	           VALUES ($1, $2, $3, $4, $5, $6)`, id, f.tenant, f.entity, number, status, at)
 	return id
@@ -248,7 +255,7 @@ func (f *rcFixture) document(t *testing.T, at time.Time) string {
 	t.Helper()
 	id := uuid.NewString()
 	f.exec(t, `INSERT INTO documents (id, tenant_id, storage_key, content_hash, size_bytes, created_at)
-	           VALUES ($1, $2, $3, $4, 1, $5)`, id, f.tenant, "rc/"+id, strings.Repeat("a", 64), at)
+	           VALUES ($1, $2, $3, $4, 1, $5)`, id, f.tenant, "rc/"+id, strings.Repeat(strings.ReplaceAll(id, "-", ""), 2), at)
 	return id
 }
 
@@ -390,8 +397,10 @@ func TestRestoreCheck_EmptyTableForTenantPrintsDash(t *testing.T) {
 	if got := tables["invoices"][2]; got != "1" {
 		t.Fatalf("invoices count = %q, want 1", got)
 	}
-	if got := strings.Join(tables["documents"][2:], " | "); got != "0 | - | -" {
-		t.Errorf("documents row tail = %q, want %q", got, "0 | - | -")
+	for _, n := range []string{"line_items", "documents", "audit_log", "memberships"} {
+		if got := strings.Join(tables[n][2:], " | "); got != "0 | - | -" {
+			t.Errorf("%s row tail = %q, want %q", n, got, "0 | - | -")
+		}
 	}
 }
 
@@ -440,6 +449,29 @@ func TestRestoreCheck_DetectsMissingOrChangedRows(t *testing.T) {
 		}},
 		{"update invoice status", "invoices", func(t *testing.T, f *rcFixture, s rcFull) {
 			f.exec(t, `UPDATE invoices SET status = 'rejected' WHERE id = $1`, s.invoices[0])
+		}},
+		{"update line item", "line_items", func(t *testing.T, f *rcFixture, s rcFull) {
+			f.exec(t, `UPDATE line_items SET quantity = 99 WHERE id = $1`, s.lineItems[0])
+		}},
+		{"update document", "documents", func(t *testing.T, f *rcFixture, s rcFull) {
+			f.exec(t, `UPDATE documents SET size_bytes = 2 WHERE id = $1`, s.document)
+		}},
+		{"update membership", "memberships", func(t *testing.T, f *rcFixture, s rcFull) {
+			f.exec(t, `UPDATE memberships SET display_name = 'changed' WHERE id = $1`, s.membership)
+		}},
+		{"update audit row under replica mode", "audit_log", func(t *testing.T, f *rcFixture, s rcFull) {
+			ctx := context.Background()
+			conn, err := pgx.Connect(ctx, f.dsn)
+			if err != nil {
+				t.Fatalf("connect: %v", err)
+			}
+			defer conn.Close(ctx)
+			if _, err := conn.Exec(ctx, `SET session_replication_role = replica`); err != nil {
+				t.Fatalf("replica mode: %v", err)
+			}
+			if _, err := conn.Exec(ctx, `UPDATE audit_log SET actor = 'changed' WHERE id = $1`, s.auditIDs[0]); err != nil {
+				t.Fatalf("update audit row: %v", err)
+			}
 		}},
 	}
 	for _, tc := range cases {
@@ -507,6 +539,65 @@ func TestRestoreCheck_IncludesRowAtCutoff(t *testing.T) {
 	}
 }
 
+// rcInsertors adds one row to a tenant-owned table at the given instant.
+var rcInsertors = map[string]func(t *testing.T, f *rcFixture, s rcFull, at time.Time){
+	"invoices":    func(t *testing.T, f *rcFixture, _ rcFull, at time.Time) { f.invoice(t, "RC-X", "draft", at) },
+	"line_items":  func(t *testing.T, f *rcFixture, s rcFull, at time.Time) { f.lineItem(t, s.invoices[0], 9, at) },
+	"documents":   func(t *testing.T, f *rcFixture, _ rcFull, at time.Time) { f.document(t, at) },
+	"audit_log":   func(t *testing.T, f *rcFixture, _ rcFull, at time.Time) { f.audit(t, "rc.extra", at) },
+	"memberships": func(t *testing.T, f *rcFixture, _ rcFull, at time.Time) { f.membership(t, at) },
+}
+
+func TestRestoreCheck_EveryTableHonoursTheCutoff(t *testing.T) {
+	if len(rcInsertors) != len(rcTableNames) {
+		t.Fatalf("rcInsertors covers %d tables, want %d", len(rcInsertors), len(rcTableNames))
+	}
+	for _, name := range rcTableNames {
+		t.Run(name+" row one microsecond after the cutoff is ignored", func(t *testing.T) {
+			f := newRCFixture(t)
+			s := f.seedFull(t)
+			before := f.run(t)
+			if len(before.rows) == 0 {
+				t.Fatal("baseline output is empty")
+			}
+			rcInsertors[name](t, f, s, f.cutoff.Add(time.Microsecond))
+			if after := f.run(t); after.raw != before.raw {
+				t.Errorf("output changed:\n--- before\n%s\n--- after\n%s", before.raw, after.raw)
+			}
+		})
+		t.Run(name+" row exactly at the cutoff counts", func(t *testing.T) {
+			f := newRCFixture(t)
+			s := f.seedFull(t)
+			before := f.run(t).tables(t)
+			rcInsertors[name](t, f, s, f.cutoff)
+			after := f.run(t).tables(t)
+			if changed := rcRowsDiffer(before, after); len(changed) != 1 || changed[0] != name {
+				t.Fatalf("changed table rows = %v, want only [%s]", changed, name)
+			}
+			if got := rcInstant(t, after[name][3]); !got.Equal(f.cutoff) {
+				t.Errorf("%s max(created_at) = %s, want the cutoff %s", name, got, f.cutoff)
+			}
+		})
+	}
+}
+
+func TestRestoreCheck_IgnoresAnotherTenantsRowsInEveryTable(t *testing.T) {
+	f := newRCFixture(t)
+	f.seedFull(t)
+	before := f.run(t)
+	if len(before.rows) == 0 {
+		t.Fatal("baseline output is empty")
+	}
+	other := newRCFixture(t)
+	other.seedFull(t)
+	if after := f.run(t); after.raw != before.raw {
+		t.Errorf("output changed after another tenant seeded every table:\n--- before\n%s\n--- after\n%s", before.raw, after.raw)
+	}
+	if got := other.run(t).tables(t); got["invoices"][2] != "3" {
+		t.Errorf("the other tenant's own run counts %q invoices, want 3", got["invoices"][2])
+	}
+}
+
 // --- AC-4 -------------------------------------------------------------------
 
 func TestRestoreCheck_RejectsBadInput(t *testing.T) {
@@ -520,29 +611,55 @@ func TestRestoreCheck_RejectsBadInput(t *testing.T) {
 	lateOnly.invoice(t, "RC-LATE", "draft", lateOnly.cutoff.Add(time.Hour))
 
 	valid := rcInputs(good.tenant, good.cutoff)
+	unknown := uuid.NewString()
+	// Each case names its own clause: every guard message starts "restore-check:", so the
+	// prefix alone cannot tell which clause rejected the input.
 	cases := []struct {
 		name     string
 		settings map[string]string
-		unset    bool
+		clause   string
 	}{
-		{"unknown tenant", rcInputs(uuid.NewString(), good.cutoff), false},
-		{"tenant whose only invoice is after the cutoff", rcInputs(lateOnly.tenant, lateOnly.cutoff), false},
-		{"tenant unset", map[string]string{"restore_check.cutoff": valid["restore_check.cutoff"]}, true},
-		{"cutoff unset", map[string]string{"restore_check.tenant": good.tenant}, true},
-		{"tenant empty", rcWith(valid, "restore_check.tenant", ""), false},
-		{"cutoff empty", rcWith(valid, "restore_check.cutoff", ""), false},
-		{"cutoff without offset", rcWith(valid, "restore_check.cutoff", "2026-10-02 08:00:00"), false},
+		{"unknown tenant", rcInputs(unknown, good.cutoff), "tenant " + unknown + " not found"},
+		{"tenant whose only invoice is after the cutoff", rcInputs(lateOnly.tenant, lateOnly.cutoff), "has no invoices at or before"},
+		{"tenant unset", map[string]string{"restore_check.cutoff": valid["restore_check.cutoff"]}, "restore_check.tenant is unset or empty"},
+		{"cutoff unset", map[string]string{"restore_check.tenant": good.tenant}, "restore_check.cutoff is unset or empty"},
+		{"tenant empty", rcWith(valid, "restore_check.tenant", ""), "restore_check.tenant is unset or empty"},
+		{"cutoff empty", rcWith(valid, "restore_check.cutoff", ""), "restore_check.cutoff is unset or empty"},
+		{"tenant not a UUID", rcWith(valid, "restore_check.tenant", "not-a-uuid"), "restore_check.tenant is not a UUID"},
+		{"cutoff without offset", rcWith(valid, "restore_check.cutoff", "2026-10-02 08:00:00"), "needs an explicit offset"},
+		{"date-only cutoff", rcWith(valid, "restore_check.cutoff", "2026-10-02"), "needs an explicit offset"},
+		{"day-first date cutoff", rcWith(valid, "restore_check.cutoff", "02-10-2026"), "needs an explicit offset"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := rcRun(t, good.dsn, tc.settings)
-			if tc.unset && err != nil {
-				var pgErr *pgconn.PgError
-				if errors.As(err, &pgErr) && pgErr.Code == "42704" {
-					return
-				}
-			}
 			requireRCPgMessage(t, err, "restore-check:")
+			requireRCPgMessage(t, err, tc.clause)
+		})
+	}
+}
+
+func TestRestoreCheck_AcceptsEveryExplicitOffsetForm(t *testing.T) {
+	f := newRCFixture(t)
+	f.seedFull(t)
+	base := f.run(t)
+	if len(base.rows) == 0 {
+		t.Fatal("baseline output is empty")
+	}
+	// All of these are 2026-10-02 08:00:00 UTC.
+	for _, cutoff := range []string{
+		"2026-10-02T08:00:00z",
+		"2026-10-02 08:00:00Z",
+		"2026-10-02T09:00:00+01",
+		"2026-10-02T09:00:00+0100",
+		"2026-10-02T09:00:00+01:00",
+		"2026-10-02T03:00:00-05:00",
+	} {
+		t.Run(cutoff, func(t *testing.T) {
+			out := rcMustRun(t, f.dsn, rcWith(rcInputs(f.tenant, f.cutoff), "restore_check.cutoff", cutoff))
+			if out.raw != base.raw {
+				t.Errorf("output differs from the Z form:\n--- Z\n%s\n--- %s\n%s", base.raw, cutoff, out.raw)
+			}
 		})
 	}
 }
@@ -563,6 +680,8 @@ func TestRestoreCheck_FailsWithoutBypassRLS(t *testing.T) {
 
 	_, err := rcRun(t, appDSN, rcInputs(f.tenant, f.cutoff))
 	requireRCPgMessage(t, err, "restore-check:")
+	// Without the clause, invoice_app's RLS-blind "tenant not found" would pass this test too.
+	requireRCPgMessage(t, err, "does not bypass RLS")
 }
 
 func TestRestoreCheck_RoleRowNamesTheCaller(t *testing.T) {
@@ -577,6 +696,41 @@ func TestRestoreCheck_RoleRowNamesTheCaller(t *testing.T) {
 		t.Fatalf("role rows = %v, want exactly one", rows)
 	}
 	if got, want := strings.Join(rows[0][1:], " | "), cfg.User+" | t | t"; got != want {
+		t.Errorf("role row tail = %q, want %q", got, want)
+	}
+}
+
+func TestRestoreCheck_BypassRLSRoleWithoutSuperuserPasses(t *testing.T) {
+	ctx := context.Background()
+	f := newRCFixture(t)
+	f.invoice(t, "RC-1", "draft", f.cutoff.Add(-time.Hour))
+	name := "rc_bypass_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+	f.exec(t, `CREATE ROLE `+name+` LOGIN BYPASSRLS PASSWORD 'rc'`)
+	t.Cleanup(func() {
+		_, _ = f.pool.Exec(ctx, `DROP OWNED BY `+name)
+		_, _ = f.pool.Exec(ctx, `DROP ROLE `+name)
+	})
+	f.exec(t, `GRANT SELECT ON tenants, invoices, line_items, documents, audit_log, memberships, goose_db_version TO `+name)
+
+	cfg, err := pgx.ParseConfig(f.dsn)
+	if err != nil {
+		t.Fatalf("parse DSN: %v", err)
+	}
+	cfg.User, cfg.Password = name, "rc"
+	conn, err := pgx.ConnectConfig(ctx, cfg)
+	if err != nil {
+		t.Fatalf("connect as %s: %v", name, err)
+	}
+	defer conn.Close(ctx)
+	out, err := rcRunOn(ctx, t, conn, rcInputs(f.tenant, f.cutoff))
+	if err != nil {
+		t.Fatalf("a BYPASSRLS non-superuser was refused: %v", err)
+	}
+	rows := out.kind("role")
+	if len(rows) != 1 {
+		t.Fatalf("role rows = %v, want exactly one", rows)
+	}
+	if got, want := strings.Join(rows[0][1:], " | "), name+" | f | t"; got != want {
 		t.Errorf("role row tail = %q, want %q", got, want)
 	}
 }
@@ -634,6 +788,37 @@ func TestRestoreCheck_RecentRows(t *testing.T) {
 	}
 }
 
+func TestRestoreCheck_RecentRowsBreakTiesByIDDescending(t *testing.T) {
+	f := newRCFixture(t)
+	c := f.cutoff
+	pair := func() (hi, lo string) {
+		a, b := uuid.NewString(), uuid.NewString()
+		if a < b {
+			a, b = b, a
+		}
+		return a, b
+	}
+	h1, l1 := pair()
+	h2, l2 := pair()
+	// Low ids go in first so a physical-order result cannot pass.
+	f.invoiceAs(t, l1, "L1", "draft", c.Add(-time.Hour))
+	f.invoiceAs(t, h1, "H1", "draft", c.Add(-time.Hour))
+	f.invoice(t, "N2", "draft", c.Add(-2*time.Hour))
+	f.invoice(t, "N3", "draft", c.Add(-3*time.Hour))
+	f.invoiceAs(t, l2, "L2", "draft", c.Add(-4*time.Hour))
+	f.invoiceAs(t, h2, "H2", "draft", c.Add(-4*time.Hour))
+
+	recent := f.run(t).kind("recent")
+	var got []string
+	for _, r := range recent {
+		got = append(got, r[2])
+	}
+	// Six invoices, limit five: the tie at -4h keeps its higher id.
+	if want := "H1,L1,N2,N3,H2"; strings.Join(got, ",") != want {
+		t.Errorf("recent invoice numbers = %v, want %s", got, want)
+	}
+}
+
 // --- AC-7 -------------------------------------------------------------------
 
 func TestRestoreCheck_OutputIndependentOfSessionSettings(t *testing.T) {
@@ -667,11 +852,45 @@ func TestRestoreCheck_OutputIndependentOfSessionSettings(t *testing.T) {
 	}
 }
 
+func TestRestoreCheck_HashIsTheUTCISORowText(t *testing.T) {
+	ctx := context.Background()
+	f := newRCFixture(t)
+	f.seedFull(t)
+	got := f.run(t).tables(t)
+
+	tx, err := f.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback(ctx)
+	for _, set := range []string{`SET LOCAL TimeZone = 'UTC'`, `SET LOCAL DateStyle = 'ISO, YMD'`} {
+		if _, err := tx.Exec(ctx, set); err != nil {
+			t.Fatalf("%s: %v", set, err)
+		}
+	}
+	for _, name := range rcTableNames {
+		var want string
+		err := tx.QueryRow(ctx, `SELECT md5(string_agg(t::text, E'\n' ORDER BY t.id)) FROM `+name+
+			` t WHERE t.tenant_id = $1 AND t.created_at <= $2`, f.tenant, f.cutoff).Scan(&want)
+		if err != nil {
+			t.Fatalf("hash %s: %v", name, err)
+		}
+		if got[name][4] != want {
+			t.Errorf("%s hash = %s, want %s (row text under TimeZone UTC, DateStyle ISO, YMD)", name, got[name][4], want)
+		}
+	}
+}
+
 // --- AC-8 -------------------------------------------------------------------
 
 func TestRestoreCheck_LedgerAndOwnerRows(t *testing.T) {
 	f := newRCFixture(t)
 	f.invoice(t, "RC-1", "draft", f.cutoff.Add(-time.Hour))
+	// The migrated test DB has no GoTrue tables, so auth would otherwise contribute no owner rows.
+	probe := "rc_probe_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+	f.exec(t, `CREATE TABLE auth.`+probe+` (i int)`)
+	t.Cleanup(func() { _, _ = f.pool.Exec(context.Background(), `DROP TABLE IF EXISTS auth.`+probe) })
+	f.exec(t, `ALTER TABLE auth.`+probe+` OWNER TO invoice_app`)
 	out := f.run(t)
 
 	var count, maxVer int64
@@ -710,6 +929,9 @@ func TestRestoreCheck_LedgerAndOwnerRows(t *testing.T) {
 	if len(want) == 0 {
 		t.Fatal("pg_class grouping is empty")
 	}
+	if !slices.Contains(want, "auth|invoice_app|1") {
+		t.Fatalf("pg_class grouping %v lacks the probe's auth|invoice_app|1 row", want)
+	}
 	var got []string
 	for _, r := range out.kind("owner") {
 		if len(r) != 4 {
@@ -721,6 +943,46 @@ func TestRestoreCheck_LedgerAndOwnerRows(t *testing.T) {
 	sort.Strings(got)
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("owner rows = %v, want %v", got, want)
+	}
+}
+
+func TestRestoreCheck_GooseRowReadsTheLedgerInApplyOrder(t *testing.T) {
+	ctx := context.Background()
+	f := newRCFixture(t)
+	f.invoice(t, "RC-1", "draft", f.cutoff.Add(-time.Hour))
+	conn, err := pgx.Connect(ctx, f.dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer conn.Close(ctx)
+	// A temp table shadows public.goose_db_version on this connection: the check's
+	// unqualified read resolves pg_temp first, so the ledger is under the test's control.
+	if _, err := conn.Exec(ctx, `CREATE TEMP TABLE goose_db_version
+		(id integer PRIMARY KEY, version_id bigint NOT NULL, is_applied boolean NOT NULL)`); err != nil {
+		t.Fatalf("create temp ledger: %v", err)
+	}
+	// Inserted out of id order; ids are not in version order; two rows are rolled back.
+	for _, r := range []struct {
+		id      int
+		version int64
+		applied bool
+	}{{1, 0, true}, {5, 100, true}, {3, 200, true}, {6, 400, false}, {2, 300, true}, {4, 300, false}} {
+		if _, err := conn.Exec(ctx, `INSERT INTO goose_db_version VALUES ($1, $2, $3)`, r.id, r.version, r.applied); err != nil {
+			t.Fatalf("seed temp ledger: %v", err)
+		}
+	}
+	out, err := rcRunOn(ctx, t, conn, rcInputs(f.tenant, f.cutoff))
+	if err != nil {
+		t.Fatalf("restore-check failed: %v", err)
+	}
+	goose := out.kind("goose")
+	if len(goose) != 1 || len(goose[0]) != 4 {
+		t.Fatalf("goose rows = %v, want one row of 4 fields", goose)
+	}
+	sum := md5.Sum([]byte("0:true\n300:true\n200:true\n300:false\n100:true\n400:false"))
+	want := []string{"goose", "4", "300", hex.EncodeToString(sum[:])}
+	if strings.Join(goose[0], "|") != strings.Join(want, "|") {
+		t.Errorf("goose row = %v, want %v (count and max over applied rows; hash over id order)", goose[0], want)
 	}
 }
 

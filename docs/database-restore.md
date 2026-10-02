@@ -41,7 +41,7 @@ rc_run() {  # $1 = service name, $2 = output prefix; reads RC_TENANT and RC_CUTO
 
 ## 1. What exists
 
-- **Point-in-time recovery (PITR):** enabled on 2026-10-02 at about 18:11 UTC by the user (`pitr enable --json`: `enabled` true, `bucketWired` true, `isHaCluster` false). Bucket: `Postgres-PITR` (created by the enable; name per Railway docs, not read back). The restart took `Postgres` deployment `5d63c4d5-cc7a-4169-86cc-66e6ddeb33ea` from `DEPLOYING` at 18:11:43 to `SUCCESS` at 18:12:19; it is the post-enable `latestDeployment.id`. First base backup: pgbackrest label `20261002-181212F`, full, 18:12:12Z to 18:13:12Z, LSN start `0/35000028`, stop `0/350003E0`. The restore range starts at 18:13:12Z. `pg_stat_archiver` showed `archived_count` 3 and `failed_count` 0, `archive_mode` on, and `pitr status` showed `archiverHealthy` true. `/healthz/fleet` was ok with all 11 services up. Current state: `railway postgres -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s 98723af0-50ca-42a4-a56a-3e0438b9ce8a pitr status --json`.
+- **Point-in-time recovery (PITR):** enabled on 2026-10-02 at about 18:11 UTC by the user (`pitr enable --json`: `enabled` true, `bucketWired` true, `isHaCluster` false). Bucket: `Postgres-PITR`, read back with `railway bucket list -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production --json`. The restart took `Postgres` deployment `5d63c4d5-cc7a-4169-86cc-66e6ddeb33ea` (created 18:11:00Z) from `DEPLOYING` at 18:11:43 to `SUCCESS` at 18:12:19; it is the post-enable deployment id. Read it: `deploymentId` of `railway service status -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s Postgres --json`. First base backup: pgbackrest label `20261002-181212F`, full, 18:12:12Z to 18:13:12Z, LSN start `0/35000028`, stop `0/350003E0`. The restore range starts at 18:13:12Z. `pg_stat_archiver` showed `archived_count` 3 and `failed_count` 0, `archive_mode` on, and `pitr status` showed `archiverHealthy` true. `/healthz/fleet` was ok with all 11 services up. Current state: `railway postgres -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s 98723af0-50ca-42a4-a56a-3e0438b9ce8a pitr status --json`.
 - **Backup schedule:** none. On 2026-10-02, `railway postgres -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s 98723af0-50ca-42a4-a56a-3e0438b9ce8a pitr schedule list` printed `No backup schedule configured for Postgres.`, and with `--json` printed `[]`.
 - **Manual backup:** one, `Pre-Security-Patch Backup`, id `c3db8156-43c2-4f8e-b3af-4e128e033d0d`, taken 2026-08-22, expired 2026-09-21 (`referencedMB` 248). List: `railway postgres -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s 98723af0-50ca-42a4-a56a-3e0438b9ce8a --json pitr backup list`. It is a volume backup, not a PITR source.
 - **Never drill with a volume restore.** `pitr backup restore` and a restore from the dashboard Backups tab overwrite the selected database in place: a new volume replaces production's volume. That is a production event, not a drill. Use only `pitr restore` (section 3), which creates a sibling service and never touches the source.
@@ -92,19 +92,19 @@ Failure branches. Stop at the first one and roll back with the command below:
 railway postgres -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s 98723af0-50ca-42a4-a56a-3e0438b9ce8a pitr disable --yes --json
 ```
 
-Afterwards, record the `Postgres` `latestDeployment.id` (the enable changed it) in section 7.
+Afterwards, record the `Postgres` `deploymentId` (the enable changed it) in section 1.
 
 ## 3. Restore to a sibling
 
 1. Pick a time outside Railway's auto-update window for `Postgres`: Saturday 10:00 to Sunday 18:00 (the timezone of that schedule is unverified).
 2. Ask the coordinator to hold PR environments. While the sibling exists, no PR environment is created or redeployed: a fork made then would copy the sibling.
-3. Read the restore range. `range_end` is the end of the "available restore range" in:
+3. Read the restore range. `range_end` is the `Restorable up to` line of the text output (JSON: `live.maxRestoreTime`):
 
    ```sh
    railway postgres -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s 98723af0-50ca-42a4-a56a-3e0438b9ce8a pitr status
    ```
 
-4. Read the stop LSN of the newest base backup (`backup[-1].lsn.stop`):
+4. Read the stop LSN of the newest base backup (`[0].backup[-1].lsn.stop`):
 
    ```sh
    railway ssh -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s Postgres "su postgres -s /bin/sh -c 'pgbackrest --stanza=main info --output=json'"
@@ -241,7 +241,7 @@ Delete only by ID, and only the sibling. Steps 3 and 4 are production writes.
 
 Definitions:
 
-- `range_end`: the end of the "available restore range" in `pitr status`, read just before the restore.
+- `range_end`: the `Restorable up to` time in `pitr status`, read just before the restore.
 - `T`: `range_end - 2 min`.
 - `t_request`: the `date -u` printed on the same line as `pitr restore`.
 - `t_ready`: the first 30 s poll where `pg_is_in_recovery()` on the sibling returns `f`.

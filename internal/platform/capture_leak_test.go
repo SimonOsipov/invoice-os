@@ -30,13 +30,14 @@ func leakRequest() *http.Request {
 	body := `{"buyer_tin":"` + markerTIN + `","total":"` + markerAmt + `","irn":"` + markerIRN + `","token":"` + markerCred + `"}`
 	r := httptest.NewRequest(http.MethodPost, "/v1/things/3f2b8c1e-6d4a-4b7e-9a1c-2e5f7d9b0a64?q="+markerTIN+"#"+markerIRN, strings.NewReader(body))
 	for k, v := range map[string]string{
-		"X-S2S-Token":   markerCred + "-s2s",
-		"Authorization": "Bearer " + markerCred + "-authz",
-		"Cookie":        "s=" + markerCred + "-cookie",
-		"X-User-Id":     markerCred + "-user",
-		"Referer":       "https://app.example/things?q=" + markerTIN,
-		"Content-Type":  "application/json",
-		"X-Request-Id":  "req-leak-1",
+		"X-S2S-Token":     markerCred + "-s2s",
+		"X-Gateway-Token": markerCred + "-gw",
+		"Authorization":   "Bearer " + markerCred + "-authz",
+		"Cookie":          "s=" + markerCred + "-cookie",
+		"X-User-Id":       markerCred + "-user",
+		"Referer":         "https://app.example/things?q=" + markerTIN,
+		"Content-Type":    "application/json",
+		"X-Request-Id":    "req-leak-1",
 	} {
 		r.Header.Set(k, v)
 	}

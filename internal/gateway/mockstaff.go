@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -25,7 +26,8 @@ func MockStaffHandler(grant func(ctx context.Context, userID uuid.UUID) error, l
 			return
 		}
 		userID, err := uuid.Parse(in.UserID)
-		if err != nil {
+		// uuid.Parse also accepts 32-, 36+2- and urn:uuid: forms; only the hyphenated one is a user_id.
+		if err != nil || userID.String() != strings.ToLower(in.UserID) {
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}

@@ -41,3 +41,22 @@
 .ds-logo-word { display: inline-flex; flex-direction: column; gap: 3px; }
 .ds-logo-name { font-family: var(--font-display); font-weight: var(--fw-bold); line-height: 1; letter-spacing: -0.02em; color: var(--ink); }
 .ds-logo-region { font-family: var(--font-sans); font-weight: var(--fw-bold); line-height: 1; letter-spacing: var(--tracking-brand); text-transform: uppercase; color: var(--step-label); }
+
+.ds-tabs { display: block; }
+.ds-tabs-list { display: flex; }
+.ds-tabs-panel { background: var(--sage-panel); border-radius: 0 0 var(--radius-lg) var(--radius-lg); padding: 32px; }
+.ds-tab { box-sizing: border-box; flex: 1; display: flex; align-items: center; justify-content: center; gap: 12px; height: 58px; padding: 0 16px; background: transparent; border: none; border-bottom: 2px solid var(--tab-border); cursor: pointer; font-family: var(--font-sans); font-size: var(--fs-ui); font-weight: var(--fw-bold); color: var(--muted-foreground); transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
+.ds-tab[aria-selected="true"] { border-bottom-color: var(--tab-active-border); background: var(--sage-panel); color: var(--tab-active-text); }
+.ds-tab-step { font-family: var(--font-mono); font-size: 12px; font-weight: var(--fw-regular); opacity: 0.8; }
+.ds-tab[aria-selected="true"] .ds-tab-step { opacity: 1; }
+
+.ds-seg { display: inline-flex; gap: 2px; padding: 4px; background: var(--sage); border: 1px solid var(--sage-card-border); border-radius: var(--radius-md); }
+.ds-seg-btn { height: 36px; padding: 0 16px; background: transparent; border: none; border-radius: var(--radius-sm); cursor: pointer; font-family: var(--font-sans); font-size: var(--fs-btn-sm); font-weight: var(--fw-bold); color: var(--ink); transition: background var(--dur-fast) var(--ease-out); }
+.ds-seg-btn[aria-selected="true"] { background: var(--primary); color: var(--primary-foreground); }
+
+.ds-faq { border-bottom: 1px solid var(--border); }
+.ds-faq-btn { display: flex; align-items: center; justify-content: space-between; gap: 24px; width: 100%; padding: 20px 0; background: transparent; border: none; cursor: pointer; text-align: left; font-family: var(--font-sans); font-size: 15px; font-weight: var(--fw-bold); line-height: var(--lh-snug); color: var(--ink); }
+.ds-faq-btn svg { flex: none; color: var(--muted-foreground); }
+.ds-faq-a { padding: 0 0 22px; max-width: 760px; font-family: var(--font-sans); font-size: var(--fs-body-sm); line-height: var(--lh-body); color: var(--text-copy); }
+
+.ds-tab:focus-visible, .ds-seg-btn:focus-visible, .ds-faq-btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }

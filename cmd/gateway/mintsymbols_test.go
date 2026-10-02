@@ -18,8 +18,8 @@ const (
 	symSignedString = "github.com/golang-jwt/jwt/v4.(*Token).SignedString"
 	symECDSASign    = "github.com/golang-jwt/jwt/v4.(*SigningMethodECDSA).Sign"
 	symVerify       = "github.com/SimonOsipov/invoice-os/internal/platform/auth.(*Verifier).Verify"
-	// The linker inlines gateway.MockStaffHandler into main, so nm names its closure under main.
-	symMockStaff  = "main.main.mockStaffRoute.MockStaffHandler.func2"
+	// MockStaffHandler is //go:noinline, so nm names its closure under the gateway package.
+	symMockStaff  = "github.com/SimonOsipov/invoice-os/internal/gateway.MockStaffHandler.func1"
 	symGrantStaff = "github.com/SimonOsipov/invoice-os/internal/platform/db.GrantStaff"
 )
 

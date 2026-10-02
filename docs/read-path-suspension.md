@@ -267,6 +267,7 @@ predicates it would previously have hit inside the transaction.
 | `GET /healthz/fleet` | gateway | exempt | fleet roll-up across services, deliberately outside the verifier |
 | `POST /auth/login` | gateway | exempt | unauthenticated by definition; there is no caller yet to hold a membership |
 | `OPTIONS /auth/login` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
+| `POST /auth/mock/staff` | gateway | exempt | mock builds only; grants staff on the owner DSN for the E2E fork, with no caller identity |
 | `POST /auth/sign-in` | gateway | exempt | no database; calls GoTrue |
 | `OPTIONS /auth/sign-in` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `POST /auth/exchange` | gateway | exempt | no database; in-process code store |
@@ -341,7 +342,7 @@ predicates it would previously have hit inside the transaction.
 | `POST /v1/extractions/{id}/fields/{name}/corrections` | submission | covered | |
 | `POST /v1/extractions/{id}/line-items` | submission | covered | |
 
-79 distinct routes, 85 registrations (`GET /v1/ping` is registered once per service).
+80 distinct routes, 86 registrations (`GET /v1/ping` is registered once per service).
 
 ### 8.1 The non-HTTP callers, so nobody looks for them above
 

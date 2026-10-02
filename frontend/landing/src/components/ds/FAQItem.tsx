@@ -4,7 +4,7 @@ import type { ReactNode } from 'react'
 import { GLYPHS, Icon } from '../../icons'
 
 type FAQItemProps = {
-  question: string
+  question: ReactNode
   open: boolean
   onToggle: () => void
   children?: ReactNode

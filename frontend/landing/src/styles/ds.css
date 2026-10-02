@@ -59,4 +59,4 @@
 .ds-faq-btn svg { flex: none; color: var(--muted-foreground); }
 .ds-faq-a { padding: 0 0 22px; max-width: 760px; font-family: var(--font-sans); font-size: var(--fs-body-sm); line-height: var(--lh-body); color: var(--text-copy); }
 
-.ds-tab:focus-visible, .ds-seg-btn:focus-visible, .ds-faq-btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.ds-tab:focus-visible, .ds-tabs-panel:focus-visible, .ds-seg-btn:focus-visible, .ds-faq-btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }

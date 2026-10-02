@@ -1,7 +1,9 @@
+import type { ReactNode } from 'react'
+
 import { useTabKeys } from './Tabs'
 
 type SegmentedTabsProps = {
-  options: { id: string; label: string }[]
+  options: { id: string; label: ReactNode }[]
   value: string
   onChange: (id: string) => void
   'aria-label': string

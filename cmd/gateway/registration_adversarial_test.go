@@ -115,7 +115,7 @@ func TestGatewayMainWiresAuthSiteURLIntoRegistration(t *testing.T) {
 					siteVar, parseAt = types.ExprString(as.Lhs[0]), i
 				}
 			}
-			if call, ok := isCallTo(as.Rhs[0], "", "registrationHandlers"); ok && len(call.Args) == 3 {
+			if call, ok := isCallTo(as.Rhs[0], "", "registrationHandlers"); ok && len(call.Args) == 4 {
 				wiredArg = types.ExprString(call.Args[1])
 			}
 		}

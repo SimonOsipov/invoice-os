@@ -183,32 +183,35 @@ rsql Postgres-drill-<YYYYMMDD> "select '<replay>'::pg_lsn > '<stop>'::pg_lsn"
 
 Expect `t`.
 
-**A non-empty `diff`.** Keep the sibling and record the diff. The one benign cause is a production change after `T`. Tell it apart: run both services again with a cutoff 1 h earlier. A diff that remains is a restore defect: stop and tell the coordinator.
+**A non-empty `diff`.** Keep the sibling and record the diff. The one benign cause is a production change after `T`. Tell it apart: run both services again with a cutoff 1 h earlier. An earlier cutoff clears only rows created after it. The `goose` and `owner` rows are not scoped by the cutoff, and neither is an update to an older row: a diff there is benign only if a migration or an update ran on production after `T`. Otherwise a diff that remains is a restore defect: stop and tell the coordinator.
 
 ## 5. Clean up
 
-Delete only by ID, and only the sibling. **Production write — the operator runs it**, steps 3 and 4.
+Delete only by ID, and only the sibling. Steps 3 and 4 are production writes.
 
-1. Read the sibling's volume ID before you delete the service. Take `SIBLING_VOLUME_ID` from the entry whose `serviceName` is the sibling:
+1. Read the sibling's volume ID before you delete the service. Take `SIBLING_VOLUME_ID` from the `id` of the entry whose `serviceName` is the sibling:
 
    ```sh
    railway volume -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production list --json
    ```
 
-2. Assert neither ID is production's:
+2. Set both IDs, then assert each is a UUID and neither is production's. An empty ID passes a "not production" test alone, and an empty `-s` falls back to the linked service:
 
    ```sh
-   [ "$SIBLING_ID" != 98723af0-50ca-42a4-a56a-3e0438b9ce8a ] && [ "$SIBLING_VOLUME_ID" != b3b5bcf5-6a4d-4871-970a-5e72aa9d7efa ] && echo IDS-OK
+   SIBLING_ID=<id from the pitr restore JSON>
+   SIBLING_VOLUME_ID=<id from step 1>
+   uuid='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+   [ "$(printf '%s\n%s\n' "$SIBLING_ID" "$SIBLING_VOLUME_ID" | grep -Ec "$uuid")" = 2 ] && [ "$SIBLING_ID" != 98723af0-50ca-42a4-a56a-3e0438b9ce8a ] && [ "$SIBLING_VOLUME_ID" != b3b5bcf5-6a4d-4871-970a-5e72aa9d7efa ] && echo IDS-OK
    ```
 
    Stop unless it prints `IDS-OK`.
-3. Delete the service. Add `--2fa-code <code>` if 2FA is on:
+3. **Production write — the operator runs it.** Delete the service. Add `--2fa-code <code>` if 2FA is on:
 
    ```sh
    railway service delete -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s "$SIBLING_ID" --yes
    ```
 
-4. Delete its volume. Railway may keep a deleted service's volume:
+4. **Production write — the operator runs it.** Delete its volume. Railway may keep a deleted service's volume. Add `--2fa-code <code>` if 2FA is on:
 
    ```sh
    railway volume -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production delete -v "$SIBLING_VOLUME_ID" --yes
@@ -227,9 +230,9 @@ Delete only by ID, and only the sibling. **Production write — the operator run
 ## 6. Open gaps
 
 - **The bucket and its keys.** The `source-documents` bucket holds the files behind `documents.storage_key` and `extraction_page_images.storage_key`. No volume or PITR restore covers it. A restored database can point at keys the bucket no longer has.
-- **Volume against PITR archive.** Volume backups die with the volume. The PITR archive lives in the `Postgres-PITR` bucket, outside the volume, but restores land in the same project only. Whether deleting the `Postgres` service also deletes that bucket is unverified.
-- **Logical-dump roles, passwords and ownership.** A dump restore needs `db/bootstrap.sql` first. The cluster has four login roles (`invoice_app`, `invoice_migrator`, `invoice_tenant_reader`, `supabase_auth_admin`), the NOLOGIN role `auth_hook_reader`, and the schema `auth`, which GoTrue migrates outside goose. Ownership is split: `supabase_auth_admin` owns `auth`; `invoice_migrator` owns most of `public`; `auth_hook_reader` owns `custom_access_token_hook`. A dump with `--no-owner` would, by reasoning not by test, break the next migration: `ALTER TABLE` needs ownership and goose runs as `invoice_migrator`. Passwords are not in a dump.
-- **`river_job` re-submission.** A restore to an earlier point can replay jobs that already reached an external system. Latent today: only the `mock` adapter is registered and production has no `river_job` or `idempotency_keys` rows. `idempotency_keys` is a partial guard once a real adapter ships.
+- **Volume against PITR archive.** Volume backups die with the volume. The PITR archive lives in the `Postgres-PITR` bucket, outside the volume, so it survives losing the volume but not losing the project. Restores land in the same project only. Whether deleting the `Postgres` service also deletes that bucket is unverified.
+- **Logical-dump roles, passwords and ownership.** A dump restore needs `db/bootstrap.sql` first. The cluster has four login roles (`invoice_app`, `invoice_migrator`, `invoice_tenant_reader`, `supabase_auth_admin`), the NOLOGIN role `auth_hook_reader`, and the schema `auth`, which GoTrue migrates outside goose. Ownership is split: `supabase_auth_admin` owns `auth`; `invoice_migrator` owns most of `public`; `auth_hook_reader` owns `custom_access_token_hook`. A dump with `--no-owner` would, by reasoning not by test, break the next migration: `ALTER TABLE` needs ownership and goose runs as `invoice_migrator`. Passwords are not in a dump. A PITR restore is physical and carries roles, passwords and ownership.
+- **`river_job` re-submission.** Restoring `river_job` rows to an earlier point can re-submit invoices to FIRS. Latent today: only the `mock` adapter is registered and production has no `river_job` or `idempotency_keys` rows. `idempotency_keys` partly covers it; that is a hazard, not a proven safety property, once a real adapter ships.
 - **Cutover never performed.** Pointing the services at a restored copy has not been drilled.
 - **Restore-then-migrate never performed.** The `goose` and `owner` rows prove the copy carries production's apply order and ownership. Running a migration on the copy has not been done.
 - **`auth` compared by one line only.** The `auth.users` count and hash in section 4. Sessions, identities and refresh tokens are not compared.

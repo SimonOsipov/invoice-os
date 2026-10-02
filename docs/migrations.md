@@ -75,28 +75,42 @@ case adversarially; M2-06 adds `FORCE ROW LEVEL SECURITY`.)
   [identity-provider.md](./identity-provider.md).
 - `auth_hook_reader` (added AUTH-02) — `NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB
   NOCREATEROLE`, `USAGE, CREATE ON SCHEMA public`. It owns the SECURITY DEFINER
-  `public.custom_access_token_hook` and holds the policy that lets it read
+  `public.custom_access_token_hook` and `public.identity_has_membership` (callable only by
+  `invoice_migrator`, §1), and holds the policy that lets it read
   `(user_id, tenant_id, status)` on `memberships` for every tenant, and `user_id` on
   `staff_members`. No DSN or password exists for it. See §8.
 - Bootstrap also `REVOKE CREATE ON SCHEMA public FROM PUBLIC` (a no-op on PG15+, kept for
   PG13/14 + defense-in-depth).
 
-**The one path that creates a tenant at runtime: `public.provision_workspace` (AUTH-03).**
-`invoice_app` stays `SELECT`-only on `tenants`. It creates a tenant only through this
-SECURITY DEFINER function, which `invoice_migrator` owns
-(`migrations/20260924184759_provision_workspace.sql`):
+**The one path that creates a tenant at runtime: `public.provision_workspace` (AUTH-03,
+guarded by AUTH-16).** `invoice_app` stays `SELECT`-only on `tenants`. It creates a tenant
+only through this SECURITY DEFINER function, which `invoice_migrator` owns
+(`migrations/20260924184759_provision_workspace.sql`, replaced by
+`migrations/20261002130441_provision_workspace_one_per_identity.sql`):
 - The function inserts the `tenants` row and then its first `memberships` row. Role
   `admin` and status `active` are literals in the body, not parameters. It cannot update,
   delete, or write any other table.
 - `EXECUTE` is revoked from `PUBLIC` and granted to `invoice_app` only.
 - The owner is `NOBYPASSRLS` and both tables are `FORCE`d, so `tenant_isolation` still
   applies inside the function. The caller must set `app.current_tenant` to the new tenant id
-  first; a mismatched or unset GUC fails with 42501.
+  first; the function checks it before anything else, and a mismatched or unset GUC fails
+  with 42501 (message contains "row-level security").
+- After the GUC check, the function refuses an identity that holds any membership, in any
+  tenant and any status: 23505, constraint `one_workspace_per_identity`, nothing written.
+  `tenancy.Store.ProvisionWorkspace` maps it to `ErrAlreadyProvisioned`, the same 409 as a
+  tenant-bearing caller. It asks `public.identity_has_membership(uuid)`: SECURITY DEFINER,
+  `search_path=""`, owned by `auth_hook_reader`, `EXECUTE` to `invoice_migrator` only (so
+  `invoice_app` gets 42501 calling it directly).
 - The only caller is `tenancy.Store.ProvisionWorkspace`, through the ungated
   `db.WithinTenantTx` (§4); a source scan pins that. Nothing restricts which `invoice_app`
-  connection may call it; that application guard is the limit.
-- Down drops the function. No `SET ROLE` is needed, because the migrator owns it.
-- Proven by `internal/platform/db/tenants_provision_rls_test.go` in the `rls` job.
+  connection may call it; that application guard is the limit. Under a matching GUC it can
+  call the function for any user id and learn whether that id holds a membership (23505
+  against a new tenant); see §8.
+- The AUTH-03 migration's Down drops the function; no `SET ROLE` is needed, because the
+  migrator owns it. The guard migration's Down restores the AUTH-03 body, then runs
+  `SET LOCAL ROLE auth_hook_reader` to drop `identity_has_membership`.
+- Proven by `internal/platform/db/tenants_provision_rls_test.go` (AUTH-03 replay) and
+  `internal/platform/db/provision_guard_rls_test.go` (guard) in the `rls` job.
 
 `bootstrap.sql` is idempotent (DO-block role creation + `ALTER ROLE` re-assertion), run
 as the superuser via psql. `make db-bootstrap` runs it with dev-default passwords; real
@@ -445,8 +459,9 @@ store-on-`Postgres`-service pattern as the app/migrator URLs — see the Appendi
 ### The second, bounded cross-tenant reader — `auth_hook_reader` (AUTH-02)
 
 `auth_hook_reader` is a second cross-tenant reader, but not an enumeration identity: it
-cannot log in, and it is reachable only as a per-user lookup. It owns the SECURITY DEFINER
-function `public.custom_access_token_hook(event jsonb)`, and a policy lets it read
+cannot log in, and it is reachable only as a per-user lookup. It owns two SECURITY DEFINER
+functions, `public.custom_access_token_hook(event jsonb)` and (AUTH-16)
+`public.identity_has_membership(p_user_id uuid) RETURNS boolean`, and a policy lets it read
 `(user_id, tenant_id, status)` for every tenant:
 
 ```sql
@@ -463,9 +478,18 @@ CREATE POLICY auth_hook_lookup ON public.memberships
   its own reads of `memberships` stay tenant-scoped.
 - `invoice_app` and `invoice_tenant_reader` cannot execute the hook (`REVOKE … FROM
   PUBLIC`).
+- `identity_has_membership` returns whether one user id holds any membership. Its only
+  grantee besides the owner is `invoice_migrator`, so only `provision_workspace` (which the
+  migrator owns) calls it. No table privilege was added to the role.
 - Residual: a leaked GoTrue DSN can call the hook once per GoTrue user and map each user
   with exactly one active membership to its tenant. It also learns whether that user is
   staff (`app_metadata.staff`). It cannot bulk-read statuses or multiple memberships.
+- Provisioning residual: `invoice_app` can call `provision_workspace` for any user id under
+  a GUC equal to `p_tenant_id`. A member answers 23505 `one_workspace_per_identity`; a
+  non-member gets a tenant written. A mismatched or unset GUC fails 42501 before the guard
+  and learns nothing. `invoice_app` is trusted code that can already provision for any id,
+  and it sets its own GUC, so it can already read that tenant's memberships under RLS.
+  Pinned by `TestRLS_ProvisionGuard_MatchingGUCResidualIsTheDocumentedOne`.
 
 DEFINER works here because the owner is not the table owner: `FORCE ROW LEVEL SECURITY`
 binds a DEFINER function owned by `invoice_migrator` to zero rows, but a function owned by a

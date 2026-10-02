@@ -129,7 +129,7 @@ func TestRLS_ProvisionGuard_FunctionShape(t *testing.T) {
 		publicAny bool
 	)
 	if err := h.super.QueryRow(ctx, `
-		SELECT p.prosecdef, pg_get_userbyid(p.proowner), coalesce(p.proconfig, '{}'), p.proargtypes::regtype[]::text, p.prorettype::regtype::text,
+		SELECT p.prosecdef, pg_get_userbyid(p.proowner), coalesce(p.proconfig, '{}'), (SELECT array_agg(t::regtype::text) FROM unnest(p.proargtypes::oid[]) t)::text, p.prorettype::regtype::text,
 		       coalesce((SELECT array_agg(pg_get_userbyid(a.grantee) || '=' || a.privilege_type ORDER BY 1)
 		                 FROM aclexplode(p.proacl) a WHERE a.grantee <> 0), '{}'),
 		       p.proacl IS NULL OR EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.grantee = 0)

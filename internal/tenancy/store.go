@@ -103,7 +103,8 @@ func (s *Store) ProvisionWorkspace(ctx context.Context, in ProvisionInput) (Tena
 			tenantID, in.WorkspaceName, nullIfEmpty(in.Kind), subject, in.DisplayName, nullIfEmpty(caller.Email),
 		); err != nil {
 			var pgErr *pgconn.PgError
-			if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "tenants_pkey" {
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" &&
+				(pgErr.ConstraintName == "tenants_pkey" || pgErr.ConstraintName == "one_workspace_per_identity") {
 				return ErrAlreadyProvisioned
 			}
 			return err

@@ -47,7 +47,7 @@ export function HowItWorks() {
             </p>
           </div>
         </div>
-        {/* The three steps sit in a single 24px --surface panel, cells divided by
+        {/* The three steps sit in a single --radius-xl --surface panel, cells divided by
             --on-dark-10 hairlines. */}
         <div
           className="ios-grid ios-3"

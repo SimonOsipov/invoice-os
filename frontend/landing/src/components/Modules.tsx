@@ -1,6 +1,6 @@
 import { MODULES } from '../data'
 
-// A flat dark band holding a 16px panel divided by --on-dark-10 hairlines; cells
+// A flat dark band holding a --radius-lg panel divided by --on-dark-10 hairlines; cells
 // carry a bare accent glyph. .mod-cell lifts its fill on hover (see landing.css).
 export function Modules() {
   return (

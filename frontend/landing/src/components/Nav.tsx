@@ -41,7 +41,8 @@ export function Nav({
     // No fallback on purpose: if the token ever went missing, parseFloat('') is
     // NaN, every `top <= NaN` is false and no link lights — the failure is dark,
     // never wrong. Do not "fix" this with a hardcoded pixel fallback.
-    const headerH = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--header-h'))
+    const readHeaderH = () => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--header-h'))
+    let headerH = readHeaderH()
 
     let frame = 0
     const measure = () => {
@@ -73,13 +74,26 @@ export function Nav({
     // fallback: `-NaNpx` is not a legal rootMargin and would THROW out of this
     // effect, taking the scroll listener down with it. Missing token => no spy.
     let io: IntersectionObserver | null = null
-    if (Number.isFinite(headerH)) {
+    const observe = () => {
+      io?.disconnect()
+      io = null
+      if (!Number.isFinite(headerH)) return
       io = new IntersectionObserver(schedule, { rootMargin: `-${headerH}px 0px -60% 0px` })
       document.querySelectorAll('section[id]').forEach((el) => io!.observe(el))
     }
+    observe()
+
+    // --header-h changes across the breakpoint; re-read it and rebuild the observer.
+    const onResize = () => {
+      headerH = readHeaderH()
+      observe()
+      measure()
+    }
+    window.addEventListener('resize', onResize)
 
     return () => {
       window.removeEventListener('scroll', schedule)
+      window.removeEventListener('resize', onResize)
       io?.disconnect()
       if (frame) cancelAnimationFrame(frame)
     }

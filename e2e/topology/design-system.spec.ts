@@ -1,5 +1,5 @@
-// RESKIN-01-07: the deployed proof that the landing reads v2 and the app and consoles read v1.
-// Landing and v1 halves share one topology spec on purpose (D-39); this is a recorded deviation from
+// The deployed proof that the landing reads v2 and the app and consoles read v1.
+// Landing and v1 halves share one topology spec on purpose; this is a recorded deviation from
 // docs/e2e-convention.md, which keeps gateway-free render checks in smoke.
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -10,14 +10,14 @@ import { resolveTarget } from '../targets'
 
 const LANDING_URL = resolveTarget('LANDING_URL')
 
-// D-44: every family string goes through here, so a quoting mismatch cannot fake a pass.
+// Every family string goes through here, so a quoting mismatch cannot fake a pass.
 function familyName(raw: string): string {
   return raw.replace(/["']/g, '').trim()
 }
 
 const firstFamily = (raw: string | null): string | null => (raw === null ? null : familyName(raw.split(',')[0]))
 
-// The v1 --accent, from disk (D-21). Value text only; the trailing comment is not part of it.
+// The v1 --accent, from disk. Value text only; the trailing comment is not part of it.
 function v1Accent(): string {
   const css = readFileSync(fileURLToPath(new URL('../../packages/design-tokens/tokens/colors.css', import.meta.url)), 'utf8')
   const m = css.match(/--accent:\s*([^;]+);/)
@@ -49,7 +49,7 @@ type Probe = {
   appCount: number
 }
 
-// D-21: fonts settled and two frames painted before any read.
+// Fonts settled and two frames painted before any read.
 async function probe(page: Page): Promise<Probe> {
   await expect(page.locator('h1:visible').first()).toBeVisible()
   const raw: RawProbe = await page.evaluate(async () => {
@@ -155,7 +155,7 @@ for (const { id, name } of V1_SURFACES) {
     expect(p.groundFamily, 'ground first family').toBe('Inter')
     expect(p.accent, '--accent equals the v1 value on disk').toBe(v1Accent())
     expect(families(p), 'no Manrope face on a v1 surface').not.toContain('Manrope')
-    // Positive control (D-39): the face list is not empty for want of a read.
+    // Positive control: the face list is not empty for want of a read.
     const loaded = families(p, 'loaded')
     expect(loaded.has('Inter') || loaded.has('Fraunces'), `a loaded Inter or Fraunces face; loaded: ${[...loaded].join(', ')}`).toBe(true)
     expect(p.appCount, 'at least one .asc-app element').toBeGreaterThanOrEqual(1)
@@ -166,7 +166,7 @@ for (const { id, name } of V1_SURFACES) {
 
 type Measured = { tag: string; text: string; left: number; right: number; top: number; bottom: number }
 
-// D-35: relationships, not pixel values.
+// Relationships, not pixel values.
 test('landing header row: inside the viewport and no overlap at 390, 1080 and 1240', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
   const res = await page.goto(`${LANDING_URL}/`)

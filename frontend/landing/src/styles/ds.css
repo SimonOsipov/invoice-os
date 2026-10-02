@@ -20,6 +20,11 @@
 .ds-btn--ghostDark:hover:not(:disabled):not(.ds-btn--disabled) { filter: brightness(1.12); color: var(--surface-foreground); }
 .ds-btn--text { padding: 7px 0; background: transparent; color: var(--link); border: none; border-bottom: 1px solid var(--link); border-radius: 0; line-height: 1.4; }
 .ds-btn--text:hover:not(:disabled):not(.ds-btn--disabled) { color: var(--teal); }
+.ds-btn--primary.ds-btn--disabled:hover { color: var(--primary-foreground); }
+.ds-btn--accent.ds-btn--disabled:hover { color: var(--accent-foreground); }
+.ds-btn--outline.ds-btn--disabled:hover { color: var(--ink); }
+.ds-btn--ghostDark.ds-btn--disabled:hover { color: var(--surface-foreground); }
+.ds-btn--text.ds-btn--disabled:hover { color: var(--link); }
 .ds-btn-play { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: var(--radius-pill); border: 1px solid color-mix(in srgb, var(--surface-foreground) 45%, transparent); }
 
 .ds-badge { display: inline-flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; border-radius: var(--radius-sm); font-family: var(--font-sans); font-size: var(--fs-xs); font-weight: var(--fw-semibold); white-space: nowrap; }

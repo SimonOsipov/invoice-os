@@ -360,7 +360,7 @@ test('landing analytics: the analytics-host classifier accepts GA hosts and noth
   }
 
   for (const url of [
-    // The two highest-value rejections: this page requests both on every single run.
+    // The two highest-value rejections: Google Fonts hosts.
     'https://fonts.googleapis.com/css2?family=Inter',
     'https://fonts.gstatic.com/s/inter/v13/x.woff2',
     'https://www.googletagmanager.com.attacker.example/gtag/js',

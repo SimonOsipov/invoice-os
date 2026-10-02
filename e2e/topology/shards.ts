@@ -34,7 +34,7 @@ export const UNITS: Unit[] = [
       'demo-persona.spec.ts':
         "Asserts the seeded firm roster (including the seeded suspended member and the longest seeded name) and the seat switch. Sets 1111's active policy slot through `ensureFirmPolicyActive`, which persona-surfaces also sets.",
       'design-system.spec.ts':
-        'Cost, not shared state ([fork-lane-by-cost]): reads no tenant data beyond the firm sign-in and writes none.',
+        'Cost, not shared state ([fork-lane-by-cost]): reads no tenant data beyond the firm, developer and support sign-ins and writes none.',
       'environment-posture.spec.ts':
         'Cost, not shared state ([fork-lane-by-cost]): reads and writes no tenant data. A shard costs ~1 min of runner setup for one 1.4 s test.',
       'isolation.spec.ts':

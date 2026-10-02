@@ -13,7 +13,12 @@ import { Nav } from './Nav'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+const rootMargins: string[] = []
+
 class StubIntersectionObserver {
+  constructor(_cb: unknown, opts?: { rootMargin?: string }) {
+    rootMargins.push(opts?.rootMargin ?? '')
+  }
   observe() {}
   unobserve() {}
   disconnect() {}
@@ -32,6 +37,7 @@ let container: HTMLDivElement
 let root: Root
 
 beforeEach(() => {
+  rootMargins.length = 0
   document.documentElement.style.setProperty('--header-h', '65px')
   ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = StubIntersectionObserver
   for (const s of SECTIONS) {
@@ -75,5 +81,40 @@ describe('Nav scroll-spy under a non-empty hrefPrefix', () => {
     const current = container.querySelectorAll('a[aria-current="true"]')
     expect(current.length).toBe(1)
     expect(current[0].getAttribute('href')).toBe('#accountants')
+  })
+})
+
+describe('Nav scroll-spy follows --header-h across the breakpoint', () => {
+  const frames = () => act(async () => void (await new Promise((r) => setTimeout(r, 60))))
+  const resizeTo = (px: number) => {
+    document.documentElement.style.setProperty('--header-h', `${px}px`)
+    act(() => void window.dispatchEvent(new Event('resize')))
+  }
+  const mount = () =>
+    act(() => {
+      root.render(createElement(Nav, { onSignIn: () => {}, onBookDemo: () => {} }))
+    })
+  const currentHref = () => container.querySelector('a[aria-current="true"]')?.getAttribute('href')
+
+  it('the observer rootMargin takes the new header height after a resize', async () => {
+    document.documentElement.style.setProperty('--header-h', '86px')
+    mount()
+    expect(rootMargins.at(-1), 'control: the observer is built from the mounted token').toMatch(/^-86px /)
+
+    resizeTo(73)
+    await frames()
+    expect(rootMargins.at(-1), 'observer rootMargin after --header-h 86px -> 73px').toMatch(/^-73px /)
+  })
+
+  it('the active link uses the new header height after a resize', async () => {
+    // developers sits at 80px: crossed at threshold 87 (header 86px), not at 74 (header 73px)
+    document.getElementById('developers')!.getBoundingClientRect = () => ({ top: 80 }) as DOMRect
+    document.documentElement.style.setProperty('--header-h', '86px')
+    mount()
+    expect(currentHref(), 'control: developers is crossed at the 86px header').toBe('#developers')
+
+    resizeTo(73)
+    await frames()
+    expect(currentHref(), 'active link after --header-h 86px -> 73px').toBe('#accountants')
   })
 })

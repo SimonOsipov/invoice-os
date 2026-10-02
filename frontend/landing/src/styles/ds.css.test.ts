@@ -300,13 +300,13 @@ const HOVER_COLOUR: Record<string, string> = {
   text: 'var(--teal)',
 }
 
-/** One entry per variant hover rule that misses its colour or fails to outrank `floor`; one per variant with no hover rule. */
+/** One entry per enabled variant hover rule (disabled-link hovers belong to DSC-16) that misses its colour or fails to outrank `floor`; one per variant with no hover rule. */
 function hoverDefects(css: string, floor: Specificity): string[] {
   const defects: string[] = []
   for (const [variant, colour] of Object.entries(HOVER_COLOUR)) {
     const hits = parseRules(css).flatMap((r) =>
       selectorParts(r)
-        .filter((s) => s.includes(`.ds-btn--${variant}`) && s.includes(':hover'))
+        .filter((s) => s.includes(`.ds-btn--${variant}`) && s.includes(':hover') && !/\.ds-btn--disabled(?![\w-])/.test(s.replace(/:not\([^()]*\)/g, '')))
         .map((s) => ({ s, colour: declarations(r.body).filter((d) => d.prop === 'color').map((d) => norm(d.value)).at(-1) })),
     )
     if (hits.length === 0) defects.push(`${variant}: no hover rule`)
@@ -348,5 +348,48 @@ describe('ds.css hover cascade', () => {
     expect(specificity('.ds-btn--primary:hover:not(:disabled)')).toEqual([0, 3, 0])
 
     expect(hoverDefects(readDs(), v2Hover)).toEqual([])
+  })
+
+  // Contract: a rule whose selector holds `.ds-btn--{variant}`, `.ds-btn--disabled` (outside any :not) and `:hover`,
+  // e.g. `.ds-btn--{variant}.ds-btn--disabled:hover`; it declares the variant's base colour and outranks `a:hover`.
+  it('DSC-16 a disabled link button keeps its variant colour on hover', () => {
+    const v2Hover = specificity('a:hover')
+    const has = (s: string, token: string) => new RegExp(`${token.replace('.', '\\.')}(?![\\w-])`).test(s)
+    const defects = (css: string): string[] => {
+      const out: string[] = []
+      for (const variant of Object.keys(HOVER_COLOUR)) {
+        const base = valueOf(css, `.ds-btn--${variant}`, 'color')
+        if (base === undefined) out.push(`${variant}: no base colour`)
+        const hits = parseRules(css).flatMap((r) =>
+          selectorParts(r)
+            .filter((s) => {
+              const bare = s.replace(/:not\([^()]*\)/g, '')
+              return has(bare, `.ds-btn--${variant}`) && has(bare, '.ds-btn--disabled') && bare.includes(':hover')
+            })
+            .map((s) => ({ s, colour: declarations(r.body).filter((d) => d.prop === 'color').map((d) => norm(d.value)).at(-1) })),
+        )
+        if (hits.length === 0) out.push(`${variant}: no rule matches a disabled link on hover`)
+        for (const h of hits) {
+          if (h.colour !== base) out.push(`${variant}: ${h.s} declares color ${h.colour ?? 'nothing'}, want ${base}`)
+          if (!beats(specificity(h.s), v2Hover)) out.push(`${variant}: ${h.s} does not outrank the v2 a:hover`)
+        }
+      }
+      return out
+    }
+
+    const base = Object.keys(HOVER_COLOUR)
+      .map((v) => `.ds-btn--${v} { color: var(--c-${v}); }`)
+      .join('\n')
+    const rules = (make: (v: string) => string) => base + '\n' + Object.keys(HOVER_COLOUR).map(make).join('\n')
+    expect(defects(rules((v) => `.ds-btn--${v}.ds-btn--disabled:hover { color: var(--c-${v}); }`)), 'planted correct rules').toEqual([])
+    expect(defects(rules((v) => `.ds-btn--${v}:hover:not(:disabled):not(.ds-btn--disabled) { color: var(--c-${v}); }`)), 'planted enabled-only rules').toHaveLength(5)
+    expect(defects(rules((v) => `.ds-btn--${v}.ds-btn--disabled:hover { color: var(--teal); }`)), 'planted teal rules').toHaveLength(5)
+    expect(defects(rules((v) => `:where(.ds-btn--${v}.ds-btn--disabled):hover { color: var(--c-${v}); }`)), 'planted rules below a:hover').toHaveLength(5)
+
+    const css = readDs()
+    for (const variant of Object.keys(HOVER_COLOUR)) {
+      expect(valueOf(css, `.ds-btn--${variant}`, 'color'), `.ds-btn--${variant} declares a base colour`).toBeDefined()
+    }
+    expect(defects(css), 'ds.css disabled-link hover rules').toEqual([])
   })
 })

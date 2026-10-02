@@ -2,7 +2,10 @@ package tenancy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
@@ -248,4 +251,142 @@ func tenantCount(t *testing.T, super *pgxpool.Pool) int {
 		t.Fatalf("count tenants: %v", err)
 	}
 	return n
+}
+
+// refusedHistories are the membership histories that must stop a tenant-less caller provisioning.
+var refusedHistories = []struct {
+	name     string
+	statuses []string
+}{
+	{"active", []string{"active"}},
+	{"suspended", []string{"suspended"}},
+	{"invited", []string{"invited"}},
+	{"two active", []string{"active", "active"}},
+}
+
+// withHistory seeds the registrant's subject into one fresh tenant per status.
+func withHistory(t *testing.T, r registrant, statuses []string) {
+	t.Helper()
+	for _, status := range statuses {
+		seedMembership(t, r.super, seedTenant(t, r.super, "History "+status), r.id.Subject, "admin", status)
+	}
+}
+
+func subjectMemberships(t *testing.T, r registrant) int {
+	t.Helper()
+	var n int
+	if err := r.super.QueryRow(context.Background(), `SELECT count(*) FROM memberships WHERE user_id = $1`, r.id.Subject).Scan(&n); err != nil {
+		t.Fatalf("count memberships: %v", err)
+	}
+	return n
+}
+
+func TestStoreProvisionWorkspace_RefusesAnyExistingMembership(t *testing.T) {
+	for _, h := range refusedHistories {
+		t.Run(h.name, func(t *testing.T) {
+			r := newRegistrant(t)
+			withHistory(t, r, h.statuses)
+			before := subjectMemberships(t, r)
+			if before != len(h.statuses) {
+				t.Fatalf("seeded memberships = %d, want %d", before, len(h.statuses))
+			}
+
+			_, _, err := NewStore(r.app).ProvisionWorkspace(r.ctx(), ProvisionInput{WorkspaceName: "Second Door", DisplayName: "Ada"})
+
+			if !errors.Is(err, ErrAlreadyProvisioned) {
+				t.Errorf("err = %v, want ErrAlreadyProvisioned", err)
+			}
+			if tenants, members := provisionedRows(t, r.super, r.tenantID); len(tenants) != 0 || len(members) != 0 {
+				t.Errorf("workspace at uuidv5(subject) = tenants %v, memberships %+v, want none", tenants, members)
+			}
+			if after := subjectMemberships(t, r); after != before {
+				t.Errorf("subject memberships %d -> %d, want unchanged", before, after)
+			}
+		})
+	}
+}
+
+func TestProvisionHandler_ExistingMembershipIsTheSame409(t *testing.T) {
+	const want = "this account already has a workspace"
+	r := newRegistrant(t)
+	withHistory(t, r, []string{"suspended"})
+	store := NewStore(r.app)
+
+	got := postProvision(store, r.ctx(), validProvisionBody)
+
+	bearing := r.id
+	bearing.TenantID = uuid.NewString()
+	ref := postProvision(store, auth.WithIdentity(context.Background(), bearing), validProvisionBody)
+	if ref.Code != http.StatusConflict {
+		t.Fatalf("tenant-bearing reference answer = %d, want 409", ref.Code)
+	}
+	if got.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409 (body=%s)", got.Code, got.Body.String())
+	}
+	var body struct{ Error string }
+	if err := json.Unmarshal(got.Body.Bytes(), &body); err != nil || body.Error != want {
+		t.Errorf("body = %q (decode err %v), want error %q", got.Body.String(), err, want)
+	}
+	if got.Body.String() != ref.Body.String() || got.Header().Get("Content-Type") != ref.Header().Get("Content-Type") {
+		t.Errorf("answer %q (%s) differs from the tenant-bearing %q (%s)",
+			got.Body.String(), got.Header().Get("Content-Type"), ref.Body.String(), ref.Header().Get("Content-Type"))
+	}
+	if tenants, _ := provisionedRows(t, r.super, r.tenantID); len(tenants) != 0 {
+		t.Errorf("tenants at uuidv5(subject) = %v, want none", tenants)
+	}
+}
+
+// tokenClaims is the hook's app_metadata for subject, read as the superuser (the function is DEFINER).
+func tokenClaims(t *testing.T, r registrant) map[string]any {
+	t.Helper()
+	event, err := json.Marshal(map[string]any{
+		"user_id": r.id.Subject,
+		"claims":  map[string]any{"app_metadata": map[string]any{}},
+	})
+	if err != nil {
+		t.Fatalf("marshal hook event: %v", err)
+	}
+	var out []byte
+	if err := r.super.QueryRow(context.Background(), `SELECT public.custom_access_token_hook($1::jsonb)`, string(event)).Scan(&out); err != nil {
+		t.Fatalf("call custom_access_token_hook: %v", err)
+	}
+	var decoded struct {
+		Claims struct {
+			AppMetadata map[string]any `json:"app_metadata"`
+		} `json:"claims"`
+	}
+	if err := json.Unmarshal(out, &decoded); err != nil {
+		t.Fatalf("decode hook output %s: %v", out, err)
+	}
+	return decoded.Claims.AppMetadata
+}
+
+func TestStoreProvisionWorkspace_EverySuccessReachesTheNextToken(t *testing.T) {
+	t.Run("success projects the new tenant", func(t *testing.T) {
+		r := newRegistrant(t)
+		tenant, _, err := NewStore(r.app).ProvisionWorkspace(r.ctx(), ProvisionInput{WorkspaceName: "Reachable", DisplayName: "Ada"})
+		if err != nil {
+			t.Fatalf("ProvisionWorkspace: %v", err)
+		}
+		if got := tokenClaims(t, r)["tenant_id"]; got != tenant.ID {
+			t.Errorf("app_metadata.tenant_id = %v, want the new tenant %s", got, tenant.ID)
+		}
+	})
+
+	for _, h := range refusedHistories {
+		t.Run("refused "+h.name+" leaves the token as it was", func(t *testing.T) {
+			r := newRegistrant(t)
+			withHistory(t, r, h.statuses)
+			before := tokenClaims(t, r)
+
+			_, _, err := NewStore(r.app).ProvisionWorkspace(r.ctx(), ProvisionInput{WorkspaceName: "Unreachable", DisplayName: "Ada"})
+
+			if !errors.Is(err, ErrAlreadyProvisioned) {
+				t.Errorf("err = %v, want ErrAlreadyProvisioned", err)
+			}
+			if after := tokenClaims(t, r); !reflect.DeepEqual(after, before) {
+				t.Errorf("app_metadata %v -> %v, want identical", before, after)
+			}
+		})
+	}
 }

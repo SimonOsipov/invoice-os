@@ -137,12 +137,12 @@ test('landing privacy: the nav returns the visitor to the sales page', async ({ 
   const nav = page.getByRole('navigation', { name: 'Primary' })
 
   const hrefs = await nav.locator('a').evaluateAll((els) => els.map((e) => e.getAttribute('href')))
-  expect(hrefs).toHaveLength(6)
+  expect(hrefs).toEqual(['/#problem']) // Nav.tsx#NAV_LINKS under hrefPrefix '/'
   for (const href of hrefs) {
     expect(href ?? '', 'a nav link lost its /privacy hrefPrefix').toMatch(/^\/#/)
   }
 
-  // "The Problem" carries no shed class, so it stays visible at the default viewport.
+  // The default viewport is wide enough for the nav to show.
   await nav.locator('a[href="/#problem"]').click()
   await expect(page).toHaveURL(/\/#problem$/)
   await expect(page.getByTestId('privacy-container')).toHaveCount(0)

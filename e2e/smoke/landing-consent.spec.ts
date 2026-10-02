@@ -696,7 +696,7 @@ test('landing consent: keyboard focus cannot reach the notice while a modal is o
   const { errors, card } = await openLanding(page)
 
   const cases = [
-    { trigger: 'Explore the platform', dialog: 'Sign in' },
+    { trigger: 'Platform login', dialog: 'Sign in' },
     { trigger: 'Book a demo', dialog: 'Book a demo' },
   ]
 

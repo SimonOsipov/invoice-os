@@ -31,7 +31,7 @@ describe('React aria-* boolean-passthrough mechanism (justifies the ternary in N
 describe('Nav SSR (no scroll-spy effect runs under renderToStaticMarkup, so activeHref stays its initial null)', () => {
   it('every link is inactive on first render and none of them carry aria-current at all — not "false"', () => {
     // If Nav.tsx used the boolean form (`aria-current={active}`) instead of the ternary,
-    // this render would emit aria-current="false" on all six links, since useState's
+    // this render would emit aria-current="false" on every link, since useState's
     // initial value (null) makes `l.href === activeHref` false for every link and SSR
     // never runs the useEffect that could later flip one of them true.
     const html = renderToStaticMarkup(createElement(Nav, { onSignIn: () => {}, onBookDemo: () => {} }))

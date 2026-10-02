@@ -218,12 +218,10 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
   expect(errors, `console errors on the header sweep:\n${errors.join('\n')}`).toEqual([])
 }
 
-test('landing header row: inside the viewport and no overlap at 1080 and 1240', async ({ page }, testInfo) => {
-  await assertHeaderRow(page, testInfo, [1080, 1240])
+test('landing header row: inside the viewport and no overlap at 1440, 1240, 1080 and 834', async ({ page }, testInfo) => {
+  await assertHeaderRow(page, testInfo, [1440, 1240, 1080, 834])
 })
 
-// RESKIN-02 AC1 removes the marker when the header fits.
-test('landing header row at 390: inside the viewport and no overlap (expected to fail until RESKIN-02 fixes the mobile header)', async ({ page }, testInfo) => {
-  test.fail()
+test('landing header row at 390: inside the viewport and no overlap', async ({ page }, testInfo) => {
   await assertHeaderRow(page, testInfo, [390])
 })

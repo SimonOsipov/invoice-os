@@ -452,3 +452,87 @@ func TestIdPFilterListsEveryPlannedPath(t *testing.T) {
 		t.Errorf("the docling sidecar filter %s lost sidecar/**", got)
 	}
 }
+
+func TestIdpSlotGivesAWorktreeItsOwnContainersAndPorts(t *testing.T) {
+	t.Setenv("IDP_SLOT", "2")
+	dsn := "postgres://supabase_auth_admin:pw@localhost:5434/invoice_os"
+	for _, osName := range []string{"Linux", "Darwin"} {
+		t.Run(osName, func(t *testing.T) {
+			r := runIdpUp(t, osName, dsn, "5434")
+			if r.code != 0 {
+				t.Fatalf("exit %d; stderr=%s", r.code, r.stderr)
+			}
+			want := []string{
+				"IDP_ES256_URL=http://localhost:10011", "IDP_HS256_URL=http://localhost:10012",
+				"IDP_REBUILD_URL=http://localhost:10013", "IDP_MAIL_URL=http://localhost:10014",
+				"IDP_SHORT_URL=http://localhost:10016", "MAILPIT_URL=http://localhost:8045", "IDP_ISSUER=" + idpIssuer,
+			}
+			got := strings.Split(strings.TrimSuffix(r.stdout, "\n"), "\n")
+			if !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
+				t.Errorf("stdout = %q, want %q", r.stdout, want)
+			}
+			for c, port := range map[string]string{"idp-es256": "10011", "idp-hs256": "10012", "idp-rebuild": "10013", "idp-mail": "10014", "idp-short": "10016"} {
+				if len(stubLines(r.log, "RUN", c)) != 0 {
+					t.Errorf("slot 2 started the unsuffixed %s", c)
+				}
+				runs := stubLines(r.log, "RUN", c+"-s2")
+				if len(runs) != 1 || !strings.Contains(runs[0]+" ", "-e PORT="+port+" ") {
+					t.Fatalf("%s-s2 runs = %q, want one on port %s", c, runs, port)
+				}
+			}
+			im := stubLines(r.log, "RUN", "idp-mail-s2")[0]
+			if argvEnv(im, "GOTRUE_SMTP_PORT") != "1045" || argvEnv(im, "GOTRUE_MAILER_URLPATHS_CONFIRMATION") != "http://localhost:10015/auth/verify" {
+				t.Errorf("idp-mail-s2 mails to the wrong ports: %s", im)
+			}
+			for _, l := range strings.Split(r.log, "\n") {
+				if f := strings.Fields(l); len(f) == 4 && f[1] == "rm" && !strings.HasSuffix(f[3], "-s2") {
+					t.Errorf("slot 2 removes another slot's container: %s", l)
+				}
+			}
+			mp := stubLines(r.log, "RUN", "mailpit-s2")
+			if len(mp) != 1 || len(stubLines(r.log, "RUN", "mailpit")) != 0 {
+				t.Fatalf("mailpit-s2 runs = %q", mp)
+			}
+			if osName == "Linux" {
+				if argvEnv(mp[0], "MP_SMTP_BIND_ADDR") != "0.0.0.0:1045" || argvEnv(mp[0], "MP_UI_BIND_ADDR") != "0.0.0.0:8045" {
+					t.Errorf("mailpit-s2 on the host network keeps its default ports: %s", mp[0])
+				}
+			} else if !strings.Contains(mp[0], "-p 1045:1025") || !strings.Contains(mp[0], "-p 8045:8025") {
+				t.Errorf("mailpit-s2 off Linux: want -p 1045:1025 -p 8045:8025: %s", mp[0])
+			}
+		})
+	}
+
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "stub.log")
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/usr/bin/env bash\necho \"$*\" >>\""+logPath+"\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", filepath.Join("..", "..", "scripts", "ci", "idp-down.sh"))
+	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("idp-down.sh: %v: %s", err, out)
+	}
+	log, _ := os.ReadFile(logPath)
+	if got := strings.TrimSpace(string(log)); got != "rm -f idp-es256-s2 idp-hs256-s2 idp-rebuild-s2 idp-mail-s2 idp-short-s2 mailpit-s2" {
+		t.Errorf("idp-down.sh with IDP_SLOT=2 ran %q", got)
+	}
+}
+
+func TestIdpUpRefusesABadSlot(t *testing.T) {
+	for _, slot := range []string{"abc", "-1", "501", ""} {
+		t.Run(slot, func(t *testing.T) {
+			t.Setenv("IDP_SLOT", slot)
+			r := runIdpUp(t, "Linux", "postgres://supabase_auth_admin:pw@localhost:5448/invoice_os", "5448")
+			if slot == "" {
+				if r.code != 0 || !strings.Contains(r.log, "RUN idp-es256 ") {
+					t.Fatalf("an empty IDP_SLOT is slot 0: exit %d, stderr=%s", r.code, r.stderr)
+				}
+				return
+			}
+			if r.code == 0 || r.stdout != "" || strings.Contains(r.log, "RUN ") {
+				t.Errorf("IDP_SLOT=%q: exit %d, stdout %q", slot, r.code, r.stdout)
+			}
+		})
+	}
+}

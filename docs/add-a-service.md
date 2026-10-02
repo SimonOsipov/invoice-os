@@ -214,6 +214,15 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disa
   exempted by name in `fleet-gate`'s "Gate on the fleet's Sentry state" step. Only `auth` is exempt.
   A new outbound client to another first-party service uses `platform.TraceTransport`;
   a third-party client never does.
+  A new Go service built on `platform.New` gets Sentry with no code of its own: labels
+  (`environment`, `release`, `server_name`), 5xx, panic and boot-failure capture, logs,
+  tracing, the `/healthz` `sentry` field and the `SENTRY_TEST_EVENT` trigger. It needs only
+  its production `SENTRY_DSN`. A new SPA calls `initMonitoring` from `src/instrument.ts` and
+  declares the `ARG`/`ENV` pairs `VITE_SENTRY_DSN` and `VITE_SENTRY_TEST_DIGEST` in its
+  Dockerfile build stage (`packages/monitoring/src/dockerfiles.test.ts` enforces them).
+  `VITE_SENTRY_TEST_DIGEST` is the 64-hex SHA-256 of the operator's passphrase; it does
+  nothing without a DSN and stays in the bundle until it is deleted and the SPA rebuilt.
+  Variables, go-live and where to look: `docs/sentry.md`.
 
 ## 5. Provisioning runbook
 

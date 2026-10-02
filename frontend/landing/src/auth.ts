@@ -1,5 +1,5 @@
 // Landing sign-in personas and cross-SPA routing. A pick navigates to the sibling SPA the role may open;
-// no backend call happens here — the destination app mints the session from ?persona=<id>.
+// the destination app mints the session from ?persona=<id>.
 
 export interface LandingPersona {
   // The persona id is the ROLE, and it is what the destination SPA's session gate checks
@@ -78,8 +78,8 @@ const resolveBase = (v: string | undefined): string | null => {
   return trimmed || null
 }
 export const appBase = () => resolveBase(import.meta.env.VITE_APP_URL)
-const opsBase = () => resolveBase(import.meta.env.VITE_OPS_URL)
-const supportBase = () => resolveBase(import.meta.env.VITE_SUPPORT_URL)
+export const opsBase = () => resolveBase(import.meta.env.VITE_OPS_URL)
+export const supportBase = () => resolveBase(import.meta.env.VITE_SUPPORT_URL)
 
 const BASE_BY_TARGET: Record<LandingPersona['target'], () => string | null> = {
   app: appBase,
@@ -87,12 +87,13 @@ const BASE_BY_TARGET: Record<LandingPersona['target'], () => string | null> = {
   support: supportBase,
 }
 
+export const consoleBase = (target: 'ops' | 'support') => (target === 'ops' ? opsBase() : supportBase())
+
 // destUrl is the SPA the persona's role may open. EVERY target carries ?persona=<id>:
 // the Platform app auto-signs-in that persona (reusing M2-13's mint + /me path), and both
 // consoles record it as their sign-in. A console used to be opened with a bare navigation,
 // which is why it had no way to tell a signed-in visitor from a stranger with the URL —
 // each now refuses to render without one and sends you back here.
-// (VERIFIED token consumption still arrives at M7; this is routing, not enforcement.)
 // Returns null — the documented unconfigured path — when the target SPA's URL isn't set;
 // callers must not navigate on null.
 export function destUrl(p: LandingPersona): string | null {

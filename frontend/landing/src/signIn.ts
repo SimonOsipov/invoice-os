@@ -1,7 +1,7 @@
 // Landing sign-in client.
 import { ApiError, apiFetch, gatewayBase } from '@invoice-os/api-client/client'
 
-import { appBase } from './auth'
+import { appBase, consoleBase } from './auth'
 
 const STATE_RE = /^[A-Za-z0-9_-]{43}$/
 
@@ -12,8 +12,8 @@ const UNAVAILABLE = 'Sign-in is unavailable right now. Try again shortly.'
 
 export type ConsoleTarget = 'ops' | 'support'
 
-export function handoffUrl(code: string, _target?: ConsoleTarget): string | null {
-  const base = appBase()
+export function handoffUrl(code: string, target?: ConsoleTarget): string | null {
+  const base = target ? consoleBase(target) : appBase()
   return base ? `${base}?handoff=${encodeURIComponent(code)}` : null
 }
 
@@ -48,11 +48,12 @@ export function readSignInState(search: string): string | null {
   return all.length === 1 && STATE_RE.test(all[0]) ? all[0] : null
 }
 
-export function readSignInConsole(_search: string): ConsoleTarget | null {
-  return null
+export function readSignInConsole(search: string): ConsoleTarget | null {
+  const all = new URLSearchParams(search).getAll('console')
+  return all.length === 1 && (all[0] === 'ops' || all[0] === 'support') ? all[0] : null
 }
 
-export function startUrl(_target?: ConsoleTarget): string | null {
-  const base = appBase()
+export function startUrl(target?: ConsoleTarget): string | null {
+  const base = target ? consoleBase(target) : appBase()
   return base ? `${base}?auth=start` : null
 }

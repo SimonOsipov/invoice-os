@@ -43,6 +43,15 @@ export function press(el: Element, key: string): void {
   })
 }
 
+/** Like `press`, with modifier keys, and returns the event so a test can read `defaultPrevented`. */
+export function fire(el: Element, key: string, init: KeyboardEventInit = {}): KeyboardEvent {
+  const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init })
+  act(() => {
+    el.dispatchEvent(event)
+  })
+  return event
+}
+
 export function click(el: HTMLElement): void {
   act(() => el.click())
 }

@@ -2,7 +2,7 @@
 // Interactive contract of FAQItem (jsdom). Source of truth: the DS FAQItem.jsx in .ralph/design-v2/components plus the
 // story's deliberate divergences (controlled open/onToggle, answer stays mounted with `hidden`, chevron-down/up glyph swap,
 // stroke 2). Glyph expectations come from GLYPHS.
-import { createElement } from 'react'
+import { createElement, useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GLYPHS } from '../../icons'
 import { click, load, mountView, show, spyConsoleError, unmountView, type View } from './dsDom.test.util'
@@ -92,5 +92,47 @@ describe('FAQItem', () => {
       expect(svgs[0].getAttribute('stroke-width'), `open=${open}`).toBe('2')
       expect(svgs[0].getAttribute('width'), `open=${open}`).toBe('18')
     }
+  })
+})
+
+describe('FAQItem toggling', () => {
+  it('FQ-06 a question opens on one click and closes on the next', async () => {
+    const FAQItem = await load('FAQItem', 'FAQItem')
+    const spy = vi.fn()
+    function Row() {
+      const [open, setOpen] = useState(false)
+      const onToggle = () => {
+        spy()
+        setOpen(!open)
+      }
+      return createElement(FAQItem, { question: 'Q', open, onToggle }, 'A')
+    }
+    await show(view, createElement(Row))
+    const button = view.container.querySelector('button') as HTMLButtonElement
+    expect(button).not.toBeNull()
+    const state = () => ({ expanded: button.getAttribute('aria-expanded'), hidden: answerOf(button)?.hasAttribute('hidden'), glyph: glyphOf(button) })
+    const closed = { expanded: 'false', hidden: true, glyph: [...GLYPHS['chevron-down']] }
+    const open = { expanded: 'true', hidden: false, glyph: [...GLYPHS['chevron-up']] }
+    expect(state()).toEqual(closed)
+    click(button)
+    expect(state()).toEqual(open)
+    click(button)
+    expect(state()).toEqual(closed)
+    click(button)
+    expect(state(), 'and opens again').toEqual(open)
+    expect(spy).toHaveBeenCalledTimes(3)
+  })
+
+  it('FQ-07 two questions on one page never share an answer id', async () => {
+    const FAQItem = await load('FAQItem', 'FAQItem')
+    const item = (q: string) => createElement(FAQItem, { key: q, question: q, open: true, onToggle: () => undefined }, `${q} answer`)
+    await show(view, createElement('div', null, item('One'), item('Two')))
+    const buttons = Array.from(view.container.querySelectorAll('button'))
+    expect(buttons).toHaveLength(2)
+    const answers = buttons.map(answerOf)
+    expect(answers[0], 'first button names a node').not.toBeNull()
+    expect(answers[1], 'second button names a node').not.toBeNull()
+    expect(answers[0]).not.toBe(answers[1])
+    expect(answers.map((a) => a?.textContent)).toEqual(['One answer', 'Two answer'])
   })
 })

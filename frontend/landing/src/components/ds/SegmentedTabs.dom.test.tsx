@@ -68,6 +68,9 @@ describe('SegmentedTabs', () => {
     const moved = tabsIn(await mount({ value: 'dev' }))
     expect(moved.map((t) => t.getAttribute('aria-selected'))).toEqual(['false', 'false', 'true'])
     expect(moved.map((t) => t.tabIndex)).toEqual([-1, -1, 0])
+    const unknown = tabsIn(await mount({ value: 'missing' }))
+    expect(unknown.map((t) => t.getAttribute('aria-selected'))).toEqual(['false', 'false', 'false'])
+    expect(unknown.map((t) => t.tabIndex), 'an unknown value keeps the first option reachable').toEqual([0, -1, -1])
   })
 
   it('SG-03 a click reports the option', async () => {

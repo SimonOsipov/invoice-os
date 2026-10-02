@@ -208,8 +208,10 @@ func TestTaggedMockIssuerRoutesKeepTheirWiring(t *testing.T) {
 
 // A DSN that cannot connect gives 502 for a valid body; a bad body is refused before any connection.
 func TestTaggedMockStaffRouteWiresTheGrant(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := mockStaffRoute("postgres://invalid", logger)
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	const dsnHost = "staff-dsn-marker.invalid"
+	h := mockStaffRoute("postgres://u@"+dsnHost+":5432/db", logger)
 	post := func(body string) *httptest.ResponseRecorder {
 		ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 		defer cancel()
@@ -239,5 +241,9 @@ func TestTaggedMockStaffRouteWiresTheGrant(t *testing.T) {
 		if got := strings.TrimSpace(rec.Body.String()); got != c.want {
 			t.Errorf("%s: body = %s, want %s", c.name, got, c.want)
 		}
+	}
+	// The failed connection names the DSN host, so the route is bound to the DSN it was given.
+	if !strings.Contains(logs.String(), dsnHost) {
+		t.Errorf("log %q does not name the DSN host %q", logs.String(), dsnHost)
 	}
 }

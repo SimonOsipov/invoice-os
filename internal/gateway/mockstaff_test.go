@@ -77,6 +77,9 @@ func TestMockStaff_RefusesABadBody(t *testing.T) {
 		{"user_id null", `{"user_id":null}`},
 		{"user_id not a string", `{"user_id":5}`},
 		{"valid user_id then a mistyped duplicate", `{"user_id":"` + uuid.NewString() + `","user_id":5}`},
+		{"urn form of a uuid", `{"user_id":"urn:uuid:` + uuid.NewString() + `"}`},
+		{"braced uuid", `{"user_id":"{` + uuid.NewString() + `}"}`},
+		{"uuid without hyphens", `{"user_id":"` + strings.ReplaceAll(uuid.NewString(), "-", "") + `"}`},
 		{"body is an array", `["` + uuid.NewString() + `"]`},
 	}
 	for _, c := range cases {

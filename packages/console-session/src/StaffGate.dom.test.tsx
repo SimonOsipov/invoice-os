@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resolveConsoleBoot } from './boot'
 import { StaffGate } from './StaffGate'
-import { CODE, GW, installFetch, installStorage, LANDING, OPS_KEY, recordRaw, reply, spyTimeouts, staffToken } from './testkit'
+import { CODE, GW, installFetch, installStorage, LANDING, OPS_KEY, recordRaw, reply, spyTimeouts, staffToken, STATE_A, STATE_KEY, stateRaw } from './testkit'
 
 vi.mock('./boot', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./boot')>()
@@ -81,13 +81,14 @@ describe('StaffGate (AC-11)', () => {
   })
 
   it('StaffGate_stripsHandoffAndAuthAtMount', () => {
-    window.history.replaceState(null, '', `/?handoff=${CODE}&auth=start&x=1`)
+    window.history.replaceState(null, '', `/?handoff=${CODE}&auth=start&x=1#frag`)
     resolve.mockImplementationOnce(never)
     const replace = vi.spyOn(window.history, 'replaceState')
     render(gate())
     expect(replace).toHaveBeenCalled()
     expect(realLocation.search).toBe('?x=1')
     expect(realLocation.pathname).toBe('/')
+    expect(realLocation.hash).toBe('#frag')
     // The boot still gets the code: the strip must not run before the search is read.
     expect(resolve).toHaveBeenCalledTimes(1)
     expect(resolve.mock.calls[0]?.[0].search).toBe(`?handoff=${CODE}&auth=start&x=1`)
@@ -110,5 +111,40 @@ describe('StaffGate (AC-11)', () => {
     expect(await screen.findByText('console')).toBeTruthy()
     expect(net.calls).toHaveLength(0)
     expect(hrefWrites).toEqual([])
+  })
+
+  it('StaffGate_strictModeLeavesOnce', async () => {
+    const url = `${LANDING}/?state=abc&console=ops`
+    resolve.mockImplementation(async () => ({ kind: 'leave', url }))
+    render(<StrictMode>{gate()}</StrictMode>)
+    await waitFor(() => expect(hrefWrites).toEqual([url]))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(hrefWrites).toEqual([url])
+    expect(resolve).toHaveBeenCalledTimes(1)
+  })
+
+  it('StaffGate_strictModeRedeemsAHandoffOnce', async () => {
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    store.session.setItem(STATE_KEY, stateRaw(STATE_A, Date.now() - 1000))
+    const access = staffToken('exchanged')
+    const net = installFetch(() => reply(200, { access_token: access, refresh_token: 'R-exchanged' }))
+    render(<StrictMode>{gate()}</StrictMode>)
+    expect(await screen.findByText('console')).toBeTruthy()
+    expect(net.calls.map((c) => c.url)).toEqual([`${GW}/auth/exchange`])
+    expect(net.calls[0]?.body).toEqual({ code: CODE, state: STATE_A })
+    expect(JSON.parse(store.local.getItem(OPS_KEY) ?? 'null')).toEqual({ v: 2, token: access, refresh_token: 'R-exchanged' })
+    expect(realLocation.search).toBe('')
+    expect(hrefWrites).toEqual([])
+  })
+
+  it('StaffGate_authStartLeavesForTheLandingReady', async () => {
+    window.history.replaceState(null, '', '/?auth=start')
+    const net = installFetch(() => new Error('unexpected request'))
+    render(gate())
+    await waitFor(() => expect(hrefWrites).toHaveLength(1))
+    expect(hrefWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=[A-Za-z0-9_-]{43}&console=ops&signin=ready$`))
+    expect(realLocation.search).toBe('')
+    expect(net.calls).toHaveLength(0)
+    expect(screen.queryByText('console')).toBeNull()
   })
 })

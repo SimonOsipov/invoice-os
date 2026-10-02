@@ -21,6 +21,8 @@ import {
   STATE_A,
   STATE_KEY,
   stateRaw,
+  SUPPORT_KEY,
+  throwingStorage,
   timeoutError,
 } from './testkit'
 
@@ -126,10 +128,13 @@ describe('hand-off redemption (AC-6, AC-7)', () => {
     })
     expect(boot).toEqual({ kind: 'open', session: { token: access, refreshToken: 'R-exchanged' } })
     expect(calls).toHaveLength(1)
-    expect(calls[0]).toMatchObject({ url: EXCHANGE, method: 'POST', body: { code: CODE, state: STATE_A } })
+    expect(calls[0]).toMatchObject({ url: EXCHANGE, method: 'POST' })
+    expect(calls[0]?.body).toEqual({ code: CODE, state: STATE_A })
     expect(JSON.parse(store.local.getItem(OPS_KEY) ?? 'null')).toEqual({ v: 2, token: access, refresh_token: 'R-exchanged' })
     expect(store.session.getItem(STATE_KEY)).toBeNull()
+    expect(timeouts).toHaveBeenCalledTimes(1)
     expect(timeouts).toHaveBeenCalledWith(TIMEOUT_MS)
+    expect(calls[0]?.signal).toBe(timeouts.mock.results[0]?.value)
   })
 
   it('boot_handoffNonStaffStoresNothing', async () => {
@@ -144,6 +149,8 @@ describe('hand-off redemption (AC-6, AC-7)', () => {
     expect(store.local.setItem).not.toHaveBeenCalled()
     expect(store.local.getItem(OPS_KEY)).toBeNull()
     expect(heldState()).toBe(withOutcome('not-staff').exec(url)?.[1])
+    // The redeemed state is spent: landing gets a new one.
+    expect(heldState()).not.toBe(STATE_A)
   })
 
   it('boot_handoffFailureKeepsAStoredRecord', async () => {
@@ -152,11 +159,21 @@ describe('hand-off redemption (AC-6, AC-7)', () => {
       ['exchange 400', reply(400, { error: 'invalid or expired code' })],
       ['network', new TypeError('Failed to fetch')],
       ['timeout', timeoutError()],
+      ['429', reply(429, { error: 'too many requests' })],
+      ['500', reply(500, { error: 'internal' })],
+      ['200 with only an access token', reply(200, { access_token: staffToken('x') })],
+      ['200 with an empty refresh token', reply(200, { access_token: staffToken('x'), refresh_token: '' })],
+      ['200 JSON null', reply(200, null)],
+      ['200 non-JSON', new Response('<html>', { status: 200 })],
     ]
+    expect(failures.length).toBeGreaterThan(0)
     for (const [name, answer] of failures) {
       const { boot, calls } = await run({ search: `?handoff=${CODE}`, state: stateRaw(STATE_A, NOW - 1000), local: stored, answer: () => answer })
       const url = leaveUrl(boot)
       expect(withOutcome('failed').test(url), `${name}: ${url}`).toBe(true)
+      // The attempt spent the state: landing gets a new one, and the key holds it.
+      expect(withOutcome('failed').exec(url)?.[1], name).not.toBe(STATE_A)
+      expect(heldState(), name).toBe(withOutcome('failed').exec(url)?.[1])
       expect(calls.map((c) => c.url), name).toEqual([EXCHANGE])
       expect(store.local.getItem(OPS_KEY), name).toBe(stored)
       expect(store.local.setItem, name).not.toHaveBeenCalled()
@@ -192,10 +209,13 @@ describe('renewal of a stored record (AC-8, AC-9)', () => {
     const renewed = staffToken('renewed')
     const { boot, calls } = await run({ local: OLD_RECORD, answer: () => pair(renewed, 'R-renewed') })
     expect(calls).toHaveLength(1)
-    expect(calls[0]).toMatchObject({ url: REFRESH, method: 'POST', body: { refresh_token: 'R-old' } })
+    expect(calls[0]).toMatchObject({ url: REFRESH, method: 'POST' })
+    expect(calls[0]?.body).toEqual({ refresh_token: 'R-old' })
     expect(boot).toEqual({ kind: 'open', session: { token: renewed, refreshToken: 'R-renewed' } })
     expect(JSON.parse(store.local.getItem(OPS_KEY) ?? 'null')).toEqual({ v: 2, token: renewed, refresh_token: 'R-renewed' })
+    expect(timeouts).toHaveBeenCalledTimes(1)
     expect(timeouts).toHaveBeenCalledWith(TIMEOUT_MS)
+    expect(calls[0]?.signal).toBe(timeouts.mock.results[0]?.value)
   })
 
   it('boot_expiredStoredTokenRenews', async () => {
@@ -208,8 +228,14 @@ describe('renewal of a stored record (AC-8, AC-9)', () => {
   })
 
   it('boot_refusedRenewalClearsAndLeaves', async () => {
-    for (const status of [400, 401]) {
-      const { boot, calls } = await run({ local: OLD_RECORD, answer: () => reply(status, { error: 'invalid or expired refresh token' }) })
+    const refusals: [number, () => Response][] = [
+      [400, () => reply(400, { error: 'invalid or expired refresh token' })],
+      [401, () => reply(401, { error: 'invalid or expired refresh token' })],
+      [400, () => reply(400)],
+      [401, () => new Response('<html>', { status: 401 })],
+    ]
+    for (const [status, answer] of refusals) {
+      const { boot, calls } = await run({ local: OLD_RECORD, answer })
       expect(calls, String(status)).toHaveLength(1)
       expect(store.local.getItem(OPS_KEY), String(status)).toBeNull()
       const url = leaveUrl(boot)
@@ -233,9 +259,18 @@ describe('renewal of a stored record (AC-8, AC-9)', () => {
       ['network error', new TypeError('Failed to fetch')],
       ['timeout', timeoutError()],
       ['429', reply(429, { error: 'too many requests' })],
+      ['403', reply(403, { error: 'forbidden' })],
+      ['404', reply(404)],
+      ['500', reply(500, { error: 'internal' })],
       ['502', reply(502, { error: 'renewal is unavailable' })],
       ['503', reply(503, { error: 'unavailable' })],
       ['200 with only an access token', reply(200, { access_token: staffToken('renewed') })],
+      ['200 with only a refresh token', reply(200, { refresh_token: 'R-new' })],
+      ['200 with an empty access token', reply(200, { access_token: '', refresh_token: 'R-new' })],
+      ['200 with a non-string access token', reply(200, { access_token: 1, refresh_token: 'R-new' })],
+      ['200 with a non-string refresh token', reply(200, { access_token: staffToken('renewed'), refresh_token: 5 })],
+      ['200 JSON null', reply(200, null)],
+      ['204 with no body', reply(204)],
       ['200 with an empty refresh token', reply(200, { access_token: staffToken('renewed'), refresh_token: '' })],
       ['200 with a non-JSON body', new Response('<html>', { status: 200 })],
     ]
@@ -316,5 +351,121 @@ describe('URLs (AC-13)', () => {
       for (const secret of secrets) expect(url, secret).not.toContain(secret)
       expect(url.match(/state=([^&]+)/)?.[1]).toMatch(BASE64URL_43_RE)
     }
+  })
+})
+
+describe('precedence and isolation', () => {
+  it('boot_authStartBeatsAHandoffCode', async () => {
+    const { boot, calls } = await run({
+      search: `?handoff=${CODE}&auth=start`,
+      state: stateRaw(STATE_A, NOW - 1000),
+      local: OLD_RECORD,
+      answer: () => pair(staffToken('x'), 'R-x'),
+    })
+    const url = leaveUrl(boot)
+    const m = withOutcome('ready').exec(url)
+    expect(m, url).not.toBeNull()
+    expect(calls).toHaveLength(0)
+    expect(m?.[1]).not.toBe(STATE_A)
+    expect(heldBlob()).toEqual({ v: 1, s: m?.[1], at: NOW })
+    expect(store.local.getItem(OPS_KEY)).toBe(OLD_RECORD)
+  })
+
+  it('boot_authParamOtherThanStartIsIgnored', async () => {
+    for (const search of ['?auth=other', '?auth=', '?auth=START']) {
+      const { boot, calls } = await run({ search, local: OLD_RECORD, answer: () => pair(staffToken('renewed'), 'R-renewed') })
+      expect(boot.kind, search).toBe('open')
+      expect(calls.map((c) => c.url), search).toEqual([REFRESH])
+    }
+  })
+
+  it('boot_authStartLeavesReadyWithoutAGateway', async () => {
+    const { boot, calls } = await run({ search: '?auth=start', gateway: null })
+    expect(withOutcome('ready').test(leaveUrl(boot))).toBe(true)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('boot_handoffWithALiveStateBeatsAStoredRecord', async () => {
+    const access = staffToken('exchanged')
+    const { boot, calls } = await run({
+      search: `?handoff=${CODE}`,
+      state: stateRaw(STATE_A, NOW - 1000),
+      local: OLD_RECORD,
+      answer: () => pair(access, 'R-exchanged'),
+    })
+    expect(calls.map((c) => c.url)).toEqual([EXCHANGE])
+    expect(boot).toEqual({ kind: 'open', session: { token: access, refreshToken: 'R-exchanged' } })
+    expect(JSON.parse(store.local.getItem(OPS_KEY) ?? 'null')).toEqual({ v: 2, token: access, refresh_token: 'R-exchanged' })
+  })
+
+  it('boot_v1RecordIsNoRecord', async () => {
+    const v1 = JSON.stringify({ v: 1, operator: 'developer' })
+    const { boot, calls } = await run({ local: v1 })
+    expect(FRONT_DOOR.test(leaveUrl(boot))).toBe(true)
+    expect(calls).toHaveLength(0)
+    expect(console.warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('boot_supportConsoleUsesItsOwnKeyAndTarget', async () => {
+    const supportToken = staffToken('support-old')
+    const renewed = staffToken('support-renewed')
+    const local = { [OPS_KEY]: OLD_RECORD, [SUPPORT_KEY]: recordRaw(supportToken, 'R-support') }
+    const base = { search: '', target: 'support' as const, gateway: GW, landing: LANDING, now: NOW }
+
+    store = installStorage({ local })
+    let net = installFetch(() => pair(renewed, 'R-support-new'))
+    const opened = await resolveConsoleBoot({ ...base, storageKey: SUPPORT_KEY })
+    expect(opened).toEqual({ kind: 'open', session: { token: renewed, refreshToken: 'R-support-new' } })
+    expect(net.calls[0]?.body).toEqual({ refresh_token: 'R-support' })
+    expect(JSON.parse(store.local.getItem(SUPPORT_KEY) ?? 'null')).toEqual({ v: 2, token: renewed, refresh_token: 'R-support-new' })
+    expect(store.local.getItem(OPS_KEY)).toBe(OLD_RECORD)
+
+    store = installStorage({ local })
+    net = installFetch(() => reply(401, { error: 'invalid or expired refresh token' }))
+    const refused = await resolveConsoleBoot({ ...base, storageKey: SUPPORT_KEY })
+    expect(refused.kind === 'leave' && refused.url).toMatch(new RegExp(`^${LANDING}/\\?state=[A-Za-z0-9_-]{43}&console=support$`))
+    expect(store.local.getItem(SUPPORT_KEY)).toBeNull()
+    expect(store.local.getItem(OPS_KEY)).toBe(OLD_RECORD)
+  })
+})
+
+describe('storage that throws (AC-15)', () => {
+  it('boot_storageThrowsNeverEscapes', async () => {
+    const access = staffToken('exchanged')
+    const base = { storageKey: OPS_KEY, target: 'ops' as const, gateway: GW, landing: LANDING, now: NOW }
+
+    // A failed record write still opens this load.
+    installStorage({ session: { [STATE_KEY]: stateRaw(STATE_A, NOW - 1000) } })
+    vi.stubGlobal('localStorage', throwingStorage())
+    installFetch(() => pair(access, 'R-exchanged'))
+    await expect(resolveConsoleBoot({ ...base, search: `?handoff=${CODE}` })).resolves.toEqual({
+      kind: 'open',
+      session: { token: access, refreshToken: 'R-exchanged' },
+    })
+    expect(console.warn).toHaveBeenCalledTimes(1)
+
+    // An unreadable record reads as none: the front door, no request.
+    vi.mocked(console.warn).mockClear()
+    installStorage()
+    vi.stubGlobal('localStorage', throwingStorage())
+    let net = installFetch(() => new Error('unexpected request'))
+    let boot = await resolveConsoleBoot({ ...base, search: '' })
+    expect(FRONT_DOOR.test(leaveUrl(boot))).toBe(true)
+    expect(net.calls).toHaveLength(0)
+    expect(console.warn).toHaveBeenCalledTimes(1)
+
+    // An unreadable state redeems nothing and leaves with an unstored state.
+    vi.mocked(console.warn).mockClear()
+    installStorage()
+    vi.stubGlobal('sessionStorage', throwingStorage())
+    net = installFetch(() => new Error('unexpected request'))
+    boot = await resolveConsoleBoot({ ...base, search: `?handoff=${CODE}` })
+    expect(FRONT_DOOR.test(leaveUrl(boot))).toBe(true)
+    expect(net.calls).toHaveLength(0)
+    expect(vi.mocked(console.warn).mock.calls.length).toBeGreaterThan(0)
+
+    // ?auth=start with unwritable state storage still leaves.
+    boot = await resolveConsoleBoot({ ...base, search: '?auth=start' })
+    expect(withOutcome('ready').test(leaveUrl(boot))).toBe(true)
   })
 })

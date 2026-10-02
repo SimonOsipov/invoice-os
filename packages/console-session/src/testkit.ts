@@ -4,6 +4,7 @@ import { vi } from 'vitest'
 export const GW = 'https://gw.test'
 export const LANDING = 'https://www.test'
 export const OPS_KEY = 'invoice-os.ops-session'
+export const SUPPORT_KEY = 'invoice-os.support-session'
 export const STATE_KEY = 'invoice-os.signInState' // SIGN_IN_STATE_KEY, frontend/app/src/lib/signInState.ts
 export const NOW = 1_800_000_000_000
 export const CODE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ'

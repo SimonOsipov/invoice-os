@@ -7,8 +7,7 @@ import { markReported } from './reported'
 
 const DSN = 'https://public@o1.ingest.de.sentry.io/1'
 const GATEWAY = 'https://gw.test'
-// The cast goes once Service gains 'landing'.
-const SERVICES: Service[] = ['app', 'ops-console', 'support-console', 'landing' as Service]
+const SERVICES: Service[] = ['app', 'ops-console', 'support-console', 'landing']
 const routeName = (p: string) => (p.startsWith('/invoices/') ? '/invoices/:id' : p)
 
 const cfg = (over: Partial<MonitoringConfig> = {}): MonitoringConfig => ({
@@ -173,7 +172,7 @@ describe('sentryOptions more', () => {
     expect(integrationNames(build({ service: 'ops-console' }))).toEqual(want)
     expect(integrationNames(build({ service: 'support-console' }))).toEqual(want)
     expect(integrationNames(build({ service: 'app' }))).toEqual([...want, 'BrowserTracing'])
-    expect(integrationNames(build({ service: 'landing' as Service }))).toEqual([...want, 'BrowserTracing'])
+    expect(integrationNames(build({ service: 'landing' }))).toEqual([...want, 'BrowserTracing'])
   })
 
   it('sentryOptions_anUnknownServiceIsTreatedAsCrashesOnly', () => {

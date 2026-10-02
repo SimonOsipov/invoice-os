@@ -17,7 +17,7 @@ const LEAD = 'LEAD-NEEDLE@example.test'
 const COMPANY = 'COMPANY-NEEDLE'
 const SPA_QUERY = '?persona=PERSONA-NEEDLE&state=STATE-NEEDLE&signin=ready#FRAG-NEEDLE'
 const landingRoute = (p: string): string => (p === '/' ? '/' : p === '/privacy' ? '/privacy' : '<unmatched>')
-const LANDING = 'landing' as Service // cast goes once Service gains 'landing'
+const LANDING: Service = 'landing'
 
 interface Item {
   type: string

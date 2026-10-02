@@ -18,6 +18,7 @@ export const UNITS: Unit[] = [
       'audit.spec.ts',
       'auth.spec.ts',
       'demo-persona.spec.ts',
+      'design-system.spec.ts',
       'environment-posture.spec.ts',
       'isolation.spec.ts',
       'persona-surfaces.spec.ts',
@@ -32,6 +33,8 @@ export const UNITS: Unit[] = [
         'Tests the `?persona=` front door and stored-session rules, which the SPA binds to the seeded persona tenants 1111 / 2222.',
       'demo-persona.spec.ts':
         "Asserts the seeded firm roster (including the seeded suspended member and the longest seeded name) and the seat switch. Sets 1111's active policy slot through `ensureFirmPolicyActive`, which persona-surfaces also sets.",
+      'design-system.spec.ts':
+        'Cost, not shared state ([fork-lane-by-cost]): reads no tenant data beyond the firm sign-in and writes none.',
       'environment-posture.spec.ts':
         'Cost, not shared state ([fork-lane-by-cost]): reads and writes no tenant data. A shard costs ~1 min of runner setup for one 1.4 s test.',
       'isolation.spec.ts':

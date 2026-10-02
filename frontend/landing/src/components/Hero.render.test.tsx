@@ -31,6 +31,22 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+// jsdom drops shorthands such as padding-block, so inline styles are read from the SSR markup.
+function ssrTop(): HTMLElement {
+  const ssr = document.createElement('template')
+  ssr.innerHTML = renderToStaticMarkup(createElement(Hero, { onBookDemo: () => undefined }))
+  return ssr.content.querySelector<HTMLElement>('#top')!
+}
+
+const styleOf = (el: Element | null | undefined): Record<string, string> => {
+  const out: Record<string, string> = {}
+  for (const decl of (el?.getAttribute('style') ?? '').split(';')) {
+    const i = decl.indexOf(':')
+    if (i > 0) out[decl.slice(0, i).trim()] = decl.slice(i + 1).trim()
+  }
+  return out
+}
+
 async function mountHero(onBookDemo: () => void = () => undefined): Promise<HTMLElement> {
   await act(async () => {
     root.render(createElement(Hero, { onBookDemo }))
@@ -47,10 +63,7 @@ describe('HB-01 #top is the dark Section', () => {
     expect([...top.classList]).toEqual(['ds-section', 'band-dark'])
     expect(top.firstElementChild?.classList.contains('container'), 'first child is .container').toBe(true)
 
-    // jsdom drops the padding-block shorthand, so the style attribute is read from the SSR markup.
-    const ssr = document.createElement('template')
-    ssr.innerHTML = renderToStaticMarkup(createElement(Hero, { onBookDemo: () => undefined }))
-    expect(ssr.content.querySelector('#top')?.getAttribute('style')).toBe('padding-block:clamp(48px, 6vw, 80px) 0')
+    expect(ssrTop().getAttribute('style')).toBe('padding-block:clamp(48px, 6vw, 80px) 0')
     expect(consoleError).not.toHaveBeenCalled()
   })
 })
@@ -78,6 +91,10 @@ describe('HB-03 the h1 and its highlighted line', () => {
     expect(hl.length).toBe(1)
     expect(textOf(hl[0])).toBe('keeps up.')
     expect(h1.lastChild).toBe(hl[0])
+
+    // D-16: the collapsing textOf cannot see a missing space after a <br />.
+    expect(h1.querySelectorAll('br').length).toBe(2)
+    expect(h1.textContent).toBe('Africa moves. Compliance keeps up.')
   })
 })
 
@@ -110,6 +127,8 @@ describe('HB-06 Explore the platform is an anchor to #platform', () => {
     expect(el.tagName).toBe('A')
     expect(el.getAttribute('href')).toBe('#platform')
     expect(el.classList.contains('ds-btn--ghostDark')).toBe(true)
+    // D-40: no hrefPrefix on either hero anchor.
+    expect([...top.querySelectorAll('a')].map((a) => a.getAttribute('href'))).toEqual(['#platform', '#platform'])
 
     await act(async () => {
       ;(el as HTMLElement).click()
@@ -123,6 +142,9 @@ describe('HB-07 the hero has no sign-in control', () => {
     const top = await mountHero()
     const buttons = [...top.querySelectorAll('button')]
     expect(buttons.map(textOf)).toEqual(['Book a demo'])
+    const controls = [...top.querySelectorAll('a, button, [role="button"]')].map(textOf)
+    expect(controls, 'control: the CTAs are in the scan').toContain('Book a demo')
+    expect(controls.filter((t) => /log\s?in|sign\s?in/i.test(t))).toEqual([])
   })
 })
 
@@ -161,5 +183,59 @@ describe('HB-10 the timeline and the floating tag are gone', () => {
     const RETIRED = ['Large taxpayers', 'Medium taxpayers', 'Small / SME', 'NRS REFERENCE', 'CSID · pending transmit']
     expect(RETIRED.filter((s) => text.includes(s))).toEqual([])
     expect(text).toContain('Africa moves.')
+  })
+})
+
+describe('HB-15 the band lays out as the v2 prototype', () => {
+  it('the frame, the text column order and every inline style match the prototype values', () => {
+    const top = ssrTop()
+    const container = top.querySelector('.container')!
+    expect([...container.children].map((c) => c.className || c.tagName)).toEqual(['split', 'DIV'])
+    const [split, strip] = [...container.children]
+    expect(styleOf(split)).toEqual({ 'grid-template-columns': 'minmax(0, 1fr) minmax(0, 1.05fr)', gap: '64px', 'align-items': 'start' })
+
+    const [textCol, cardCol] = [...split.children]
+    expect(styleOf(cardCol)).toEqual({ 'min-width': '0' })
+    expect(styleOf(textCol)).toEqual({ display: 'grid', gap: '28px', 'justify-items': 'start' })
+    expect([...textCol.children].map((c) => c.tagName)).toEqual(['SPAN', 'H1', 'P', 'DIV', 'DIV'])
+    const [, h1, lead, ctas, notes] = [...textCol.children]
+
+    expect(styleOf(h1)).toEqual({ margin: '0', color: 'var(--surface-foreground)' })
+    expect(lead.className).toBe('t-lead')
+    expect(styleOf(lead)).toEqual({ margin: '0', 'max-width': '480px', color: 'var(--surface-body)' })
+    expect(styleOf(ctas)).toEqual({ display: 'flex', 'flex-wrap': 'wrap', 'align-items': 'center', gap: '16px 28px' })
+    expect([...ctas.children].map(textOf)).toEqual(['Book a demo', 'Explore the platform'])
+    expect(styleOf(notes)).toEqual({ display: 'flex', 'flex-wrap': 'wrap', gap: '12px 32px', 'margin-top': '4px' })
+
+    expect(notes.children.length).toBe(2)
+    for (const note of notes.children) {
+      expect(styleOf(note)).toEqual({
+        display: 'flex',
+        'align-items': 'center',
+        gap: '10px',
+        'font-size': '14px',
+        'font-weight': '600',
+        color: 'var(--surface-body)',
+      })
+      expect(styleOf(note.firstElementChild)).toEqual({ display: 'inline-flex', color: 'var(--accent)' })
+      const svg = note.querySelector('svg')!
+      expect([svg.getAttribute('width'), svg.getAttribute('height'), svg.getAttribute('stroke-width')]).toEqual(['16', '16', '2'])
+    }
+
+    expect(styleOf(strip)).toEqual({
+      'margin-top': '64px',
+      padding: '28px 0',
+      'border-top': '1px solid var(--on-dark-10)',
+      display: 'flex',
+      'flex-wrap': 'wrap',
+      'justify-content': 'space-between',
+      gap: '12px 24px',
+      'font-size': '10px',
+      'font-weight': '700',
+      'letter-spacing': 'var(--tracking-eyebrow)',
+      'text-transform': 'uppercase',
+      color: 'var(--eyebrow-on-dark)',
+    })
+    expect(styleOf(strip.querySelector('a'))).toEqual({ color: 'var(--eyebrow-on-dark)' })
   })
 })

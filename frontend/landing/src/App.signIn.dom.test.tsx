@@ -58,7 +58,7 @@ async function mountApp(): Promise<void> {
 
 // Local, unexported copy per Decisions -> [click-by-text-duplicated]: the two existing
 // copies (consentActions.mount.dom.test.tsx, consentActions.dom.test.tsx) query
-// `document` and cannot express "the nav one, not the hero one". The `root` parameter
+// `document` and cannot express "the nav one". The `root` parameter
 // is the one difference.
 async function clickByText(root: ParentNode, text: string): Promise<void> {
   const button = Array.from(root.querySelectorAll('button')).find((b) => b.textContent?.trim() === text)

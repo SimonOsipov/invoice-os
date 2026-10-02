@@ -79,7 +79,7 @@ const HERO_CHECK_ROWS: ReadonlyArray<{ label: string; tag: CheckTag }> = [
   { label: 'Line totals reconcile to header', tag: 'FAIL' },
 ]
 
-// Retyped from Hero.tsx's two data-tally spans (:172, :176). Both are hardcoded literals,
+// Retyped from Hero.tsx's two data-tally spans. Both are hardcoded literals,
 // not derived from HERO_CHECKS at render time — the fact the invariant below turns on.
 const TALLY_FAILURES_TEXT = '1 ERROR · 1 WARNING'
 const TALLY_PASSED_TEXT = '14 / 16 CHECKS PASSED'

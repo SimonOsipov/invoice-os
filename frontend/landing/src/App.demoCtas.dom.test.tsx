@@ -90,7 +90,7 @@ async function clickByText(root: ParentNode, text: string): Promise<void> {
 // the CTA renders (FIRM/INHOUSE/FINTECH.cta, PLANS[].cta); the other three -- Nav, Hero
 // and Footer's own "Book a demo" -- have no shared constant behind them (Footer's
 // copy lives in a local, unexported `COLS` array), so they are given as the literal each
-// component renders. Labels repeat ACROSS scopes ("Book a demo" is Nav's, PLANS[1]'s and
+// component renders. Labels repeat ACROSS scopes ("Book a demo" is Nav's, Hero's, PLANS[1]'s and
 // Footer's) but never WITHIN one -- that is what the per-entry scope assertion checks.
 const ROSTER: { scope: string; label: string }[] = [
   { scope: 'header', label: 'Book a demo' }, // Nav.tsx
@@ -194,6 +194,25 @@ describe('F3-g: the header Book a demo keeps its attribution and closes the burg
       expect(trackDemoOpen.mock.calls).toEqual([['nav']])
       expect(document.querySelectorAll(DIALOG).length).toBe(1)
       expect(document.querySelector('.a-menu')).toBeNull()
+      expect(consoleError).not.toHaveBeenCalled()
+    } finally {
+      vi.doUnmock('./analytics')
+    }
+  })
+})
+
+describe('F3-h: the hero Book a demo keeps its attribution', () => {
+  it("opens the demo dialog with trackDemoOpen('hero') once", async () => {
+    const trackDemoOpen = vi.fn()
+    vi.doMock('./analytics', async () => ({ ...(await vi.importActual<object>('./analytics')), trackDemoOpen }))
+    try {
+      await mountApp()
+      expect(trackDemoOpen, 'control: nothing tracked yet').not.toHaveBeenCalled()
+
+      await clickByText(document.querySelector('#top')!, 'Book a demo')
+
+      expect(trackDemoOpen.mock.calls).toEqual([['hero']])
+      expect(document.querySelectorAll(DIALOG).length).toBe(1)
       expect(consoleError).not.toHaveBeenCalled()
     } finally {
       vi.doUnmock('./analytics')

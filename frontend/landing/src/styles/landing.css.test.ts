@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import { LANDING_SRC, declarations, parseRules, selectorParts, type CssRule } from '../cssScan.test.util'
+import { LANDING_SRC, V2_DIR, customPropValues, declarations, parseRules, selectorParts, type CssRule } from '../cssScan.test.util'
 
 const LANDING_CSS = readFileSync(join(LANDING_SRC, 'styles', 'landing.css'), 'utf8')
 
@@ -85,5 +85,18 @@ describe('HB-11 the split collapses at 900px and the old h1 rule is gone', () =>
     expect(display(rules, '.split', (a) => a.length === 0)).toBe('grid')
     expect(declared(rules, '.split', 'grid-template-columns', maxWidth900)).toBe('minmax(0, 1fr) !important')
     expect(rules.flatMap(selectorParts).filter((s) => s.includes('.ios-hero-h1'))).toEqual([])
+  })
+})
+
+describe('HB-14 the h1 highlight line takes --highlight-on-dark', () => {
+  it('.t-hl colours with --highlight-on-dark, which colors.css defines; jsdom applies no CSS to see it', () => {
+    const rules = parseRules(readFileSync(join(V2_DIR, 'utilities.css'), 'utf8'))
+    expect(rules.length, 'control: the file parsed').toBeGreaterThanOrEqual(20)
+    const color = (selector: string) => declared(rules, selector, 'color', (a) => a.length === 0)
+    expect(color('.t-hl-peach'), 'control: a sibling resolves to its own token').toBe('var(--highlight-on-peach)')
+
+    expect(color('.t-hl')).toBe('var(--highlight-on-dark)')
+    const tokens = customPropValues(readFileSync(join(V2_DIR, 'tokens', 'colors.css'), 'utf8'))
+    expect(tokens.has('--highlight-on-dark'), '--highlight-on-dark is defined').toBe(true)
   })
 })

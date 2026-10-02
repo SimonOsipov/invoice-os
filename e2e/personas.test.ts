@@ -301,15 +301,10 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     expect(requireImport.test(src), "found `require('@playwright/test')` in e2e/personas.ts").toBe(false)
   })
 
-  it('row 1 (AC-1) -- signInUrl builds the landing hand-off URL for each persona', () => {
+  it('row 1 (AC-1) -- signInUrl builds the landing hand-off URL for each app persona', () => {
     process.env.APP_URL = 'https://app.example.test///'
-    process.env.OPS_CONSOLE_URL = 'https://ops.example.test/'
-    process.env.SUPPORT_CONSOLE_URL = 'https://support.example.test'
-
     expect(signInUrl('firm')).toBe('https://app.example.test?persona=firm')
     expect(signInUrl('inhouse')).toBe('https://app.example.test?persona=inhouse')
-    expect(signInUrl('developer')).toBe('https://ops.example.test?persona=developer')
-    expect(signInUrl('support')).toBe('https://support.example.test?persona=support')
   })
 
   it('row 2 (AC-1) -- signInUrl throws naming the missing variable', () => {

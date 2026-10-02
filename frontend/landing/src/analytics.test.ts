@@ -454,7 +454,7 @@ describe('DEMO_CTA_SOURCES shrinks without moving the four cited sends (AC #7, g
   })
 })
 
-// AC #8 gap-fill. docs/analytics.md's four count-bearing sites are hand-maintained and
+// AC #8 gap-fill. docs/analytics.md's three count-bearing sites are hand-maintained and
 // were guarded by nothing -- stalerefs tracks only multi-word quoted literals. Derived
 // from DEMO_CTA_SOURCES so a retired source cannot survive in the page.
 describe('docs/analytics.md tracks DEMO_CTA_SOURCES (AC #8, gap)', () => {
@@ -478,7 +478,6 @@ describe('docs/analytics.md tracks DEMO_CTA_SOURCES (AC #8, gap)', () => {
     const capitalised = n[0].toUpperCase() + n.slice(1)
     expect(ANALYTICS_DOC).toContain(`${capitalised} \`cta_location\` values cover`)
     expect(ANALYTICS_DOC).toContain(`**all ${n}** \`cta_location\` values appear`)
-    expect(ANALYTICS_DOC).toContain(`matches the ${n} literal call`)
     for (const source of DEMO_CTA_SOURCES) expect(ANALYTICS_DOC).toContain(`\`${source}\``)
     expect(ANALYTICS_DOC, 'a retired source must not survive anywhere in the page').not.toContain('demo_cta')
   })

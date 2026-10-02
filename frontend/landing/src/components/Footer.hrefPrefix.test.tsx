@@ -1,6 +1,6 @@
 // hrefPrefix contract of the v2 footer (LAND-04-04, re-targeted in RESKIN-02-05). SSR-only, same
 // idiom as Nav.hrefPrefix.test.tsx: no jsdom, no testing-library (vitest.config.ts: environment 'node').
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
@@ -38,6 +38,11 @@ describe('footerHref', () => {
     expect(footerHref('#platform', '')).toBe('#platform')
     expect(footerHref('/privacy', '/')).toBe('/privacy')
     expect(footerHref('#', '/')).toBe('#')
+    expect(footerHref('#', '')).toBe('#')
+    expect(footerHref('#a#b', '/')).toBe('/#a#b')
+    expect(footerHref('', '/'), 'an empty href is not an in-page anchor').toBe('')
+    expect(footerHref('https://example.com/#x', '/'), 'an absolute URL is never prefixed').toBe('https://example.com/#x')
+    expect(footerHref('/#platform', '/'), 'an already prefixed anchor is not prefixed twice').toBe('/#platform')
   })
 })
 
@@ -83,5 +88,34 @@ describe('Footer hrefPrefix contract', () => {
       expect(row.length, 'the bottom row slice resolved empty').toBeGreaterThan(0)
       expect((row.match(/<button/g) ?? []).length, `bottom row button count at ${JSON.stringify(hrefPrefix)}`).toBe(1)
     }
+  })
+})
+
+describe('Footer hrefPrefix contract with a populated Platform column', () => {
+  const saved = [...PLATFORM_LINKS]
+  const PLANTED = [
+    { label: 'Invoice workflows', href: '#platform' },
+    { label: 'Country roadmap', href: '#coverage' },
+  ]
+  afterEach(() => void PLATFORM_LINKS.splice(0, PLATFORM_LINKS.length, ...saved))
+
+  it.each([
+    ['', ''],
+    ['/', '/'],
+  ])('with hrefPrefix %j every in-page link takes the prefix once and /privacy stays exactly /privacy', (hrefPrefix, p) => {
+    PLATFORM_LINKS.splice(0, PLATFORM_LINKS.length, ...PLANTED)
+    expect(PLATFORM_LINKS.length, 'control: the fixture is in place').toBe(PLANTED.length)
+    const hrefs = hrefsOf(renderToStaticMarkup(createElement(Footer, { onBookDemo: noop, hrefPrefix })))
+    expect(hrefs).toEqual([...PLANTED.map((l) => `${p}${l.href}`), '/privacy'])
+    expect(hrefs.filter((h) => h.startsWith('//'))).toEqual([])
+  })
+
+  it('with no hrefPrefix prop the in-page links stay bare', () => {
+    PLATFORM_LINKS.splice(0, PLATFORM_LINKS.length, ...PLANTED)
+    expect(PLATFORM_LINKS.length, 'control: the fixture is in place').toBe(PLANTED.length)
+    expect(hrefsOf(renderToStaticMarkup(createElement(Footer, { onBookDemo: noop })))).toEqual([
+      ...PLANTED.map((l) => l.href),
+      '/privacy',
+    ])
   })
 })

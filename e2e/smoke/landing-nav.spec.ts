@@ -98,8 +98,7 @@ test('landing nav: every link points at exactly one section that exists', async 
   const { errors } = await openLanding(page)
 
   for (const href of NAV_HREFS) {
-    // Count 1, not toBeAttached: a duplicated id must fail too. The id selector also
-    // means the footer's links, which share three of these hrefs, are irrelevant.
+    // Count 1, not toBeAttached: a duplicated id must fail too.
     await expect(page.locator(href), `expected exactly one element matching ${href}`).toHaveCount(1)
   }
 

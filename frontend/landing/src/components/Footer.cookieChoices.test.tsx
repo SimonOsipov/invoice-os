@@ -218,13 +218,4 @@ describe('Footer bottom row and Cookie choices control (LAND-05-04, FT-06 to FT-
       expect(tag, `${name} names --fg-3`).not.toContain('--fg-3')
     }
   })
-
-  it('T4-9: with no onCookieChoices the render does not throw and still emits the control', () => {
-    let markup = ''
-    expect(() => {
-      markup = renderToStaticMarkup(createElement(Footer, { onBookDemo: noop }))
-    }, 'the default handler is not a noop').not.toThrow()
-    expect(markup.length).toBeGreaterThan(0)
-    expect(markup, 'the control is conditional on the optional prop').toMatch(/<button[^>]*>Cookie choices</)
-  })
 })

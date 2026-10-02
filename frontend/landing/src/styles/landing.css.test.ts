@@ -240,25 +240,40 @@ function aLinkFailures(css: string): string[] {
   const rules = parseRules(css)
   const top = (a: string[]) => a.length === 0
   const decoration = rules
-    .filter((r) => selectorParts(r).includes('.a-link'))
+    .filter((r) => selectorParts(r).some((s) => s === '.a-link' || s.startsWith('.a-link:')))
     .flatMap((r) => declarations(r.body))
     .filter((d) => d.prop.startsWith('text-decoration'))
   const checks: [string, string | undefined, string | undefined][] = [
     ['.a-link color', declared(rules, '.a-link', 'color', top), 'var(--ink)'],
     ['.a-link:hover color', declared(rules, '.a-link:hover', 'color', top), 'var(--teal)'],
     ['.a-link text-decoration', decoration.map((d) => d.prop).join(','), ''],
+    // The button reset: without it a footer <button class="a-link"> shows native button chrome.
+    ['.a-link background', declared(rules, '.a-link', 'background', top), 'none'],
+    ['.a-link border', declared(rules, '.a-link', 'border', top), '0'],
+    ['.a-link padding', declared(rules, '.a-link', 'padding', top), '0'],
+    ['.a-link font-size', declared(rules, '.a-link', 'font-size', top), '14px'],
+    ['.a-link cursor', declared(rules, '.a-link', 'cursor', top), 'pointer'],
+    ['.a-link text-align', declared(rules, '.a-link', 'text-align', top), 'left'],
   ]
   return checks.filter(([, got, want]) => got !== want).map(([what, got, want]) => `${what}: ${got} != ${want}`)
 }
 
 describe('FT-12 the a-link rule', () => {
-  const GOOD = '.a-link { color: var(--ink); } .a-link:hover { color: var(--teal); }'
+  const GOOD =
+    '.a-link { color: var(--ink); background: none; border: 0; padding: 0; font-size: 14px; cursor: pointer; text-align: left; } .a-link:hover { color: var(--teal); }'
 
-  it('controls: the lookup accepts the rule and rejects a wrong colour, a decoration and a missing hover', () => {
+  it('controls: the lookup accepts the rule and rejects a wrong colour, a decoration, a missing hover and a dropped reset', () => {
     expect(aLinkFailures(GOOD)).toEqual([])
     expect(aLinkFailures(GOOD.replace('var(--ink)', 'var(--muted-foreground)')).length).toBeGreaterThan(0)
     expect(aLinkFailures(GOOD.replace('color: var(--ink);', 'color: var(--ink); text-decoration: underline;')).length).toBeGreaterThan(0)
-    expect(aLinkFailures('.a-link { color: var(--ink); }').length, 'no hover rule').toBeGreaterThan(0)
+    expect(
+      aLinkFailures(GOOD.replace('color: var(--teal);', 'color: var(--teal); text-decoration: underline;')).length,
+      'a hover decoration',
+    ).toBeGreaterThan(0)
+    expect(aLinkFailures(GOOD.replace(/ \.a-link:hover \{[^}]*\}/, '')).length, 'no hover rule').toBeGreaterThan(0)
+    for (const reset of ['background: none;', 'border: 0;', 'padding: 0;', 'font-size: 14px;', 'cursor: pointer;', 'text-align: left;']) {
+      expect(aLinkFailures(GOOD.replace(reset, '')).length, `without ${reset}`).toBeGreaterThan(0)
+    }
   })
 
   it('landing.css: .a-link is var(--ink) with no text-decoration, .a-link:hover is var(--teal)', () => {

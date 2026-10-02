@@ -4,7 +4,7 @@
 // nor Nav's own unit tests can catch that either — they take hrefPrefix as an
 // explicit prop, never through App's actual `privacy` boolean. This file renders
 // the real App tree (SSR, no jsdom) at both paths to close that gap.
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import App from './App'
@@ -42,7 +42,7 @@ describe('FT-10 App SSR wiring: hrefPrefix reaches Footer with the right polarit
     expect(hrefs).not.toContain('#')
   })
 
-  it('at / no footer anchor starts with /# (catches an inverted ternary) and none is a bare #', () => {
+  it('at / no footer anchor starts with /# and none is a bare #', () => {
     const footer = footerSlice(renderAppAt('/'))
     const hrefs = footerHrefs(footer)
     expect(hrefs.length, 'expected anchors in the footer').toBeGreaterThanOrEqual(1)
@@ -50,6 +50,39 @@ describe('FT-10 App SSR wiring: hrefPrefix reaches Footer with the right polarit
     expect(hrefs).not.toContain('#')
     expect(footer).toContain('href="/privacy"')
     expect(footer).toMatch(/<button[^>]*>Book a demo</)
+  })
+})
+
+// PLATFORM_LINKS is empty today, so the polarity of hrefPrefix is only observable on a planted list.
+describe('FT-10 / AN-03 with PLATFORM_LINKS populated', () => {
+  const saved = [...PLATFORM_LINKS]
+  const plant = (hrefs: string[]) =>
+    PLATFORM_LINKS.splice(0, PLATFORM_LINKS.length, ...hrefs.map((href) => ({ label: href.slice(1), href })))
+  afterEach(() => void PLATFORM_LINKS.splice(0, PLATFORM_LINKS.length, ...saved))
+
+  it('at /privacy the planted links are /#x and /privacy is exact', () => {
+    plant(['#modules', '#how'])
+    expect(PLATFORM_LINKS.length, 'control: the fixture is in place').toBe(2)
+    expect(footerHrefs(footerSlice(renderAppAt('/privacy')))).toEqual(['/#modules', '/#how', '/privacy'])
+  })
+
+  it('at / the planted links keep their bare #x and /privacy is exact', () => {
+    plant(['#modules', '#how'])
+    expect(PLATFORM_LINKS.length, 'control: the fixture is in place').toBe(2)
+    expect(footerHrefs(footerSlice(renderAppAt('/')))).toEqual(['#modules', '#how', '/privacy'])
+  })
+
+  it('AN-03 reads the live list: resolving links pass, a ghost link is reported through the real App', () => {
+    plant(['#modules', '#how', '#pricing'])
+    const html = renderAppAt('/')
+    const hashes = footerHrefs(footerSlice(html)).filter((h) => h.startsWith('#') && h.length > 1)
+    expect(hashes).toHaveLength(3)
+    expect(unresolvedHashes(html, hashes)).toEqual([])
+
+    plant(['#modules', '#ghost'])
+    const ghostHtml = renderAppAt('/')
+    const ghostHashes = footerHrefs(footerSlice(ghostHtml)).filter((h) => h.startsWith('#') && h.length > 1)
+    expect(unresolvedHashes(ghostHtml, ghostHashes)).toEqual(['#ghost'])
   })
 })
 

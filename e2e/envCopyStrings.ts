@@ -62,7 +62,6 @@ export const RETIRED_LANDING_COPY = [
   'compliance workflow layer',
   // Row 5 — replaced by "submit them to the regulatory bodies".
   'licensed transmission partners',
-  // Row 10 — footer tagline dropped to one sentence.
   'compliance infrastructure for African businesses',
   'designed to expand',
   // Row 6 — replaced by "CSV / XLSX / PDF import".

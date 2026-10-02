@@ -221,6 +221,39 @@ describe('F3-h: the hero Book a demo keeps its attribution', () => {
   })
 })
 
+describe('F3-i: the footer demo buttons keep the footer attribution; Open the cockpit tracks nothing', () => {
+  it.each([['Book a demo'], ['Contact ASComply']])("%s reports trackDemoOpen('footer') once", async (label) => {
+    const trackDemoOpen = vi.fn()
+    vi.doMock('./analytics', async () => ({ ...(await vi.importActual<object>('./analytics')), trackDemoOpen }))
+    try {
+      await mountApp()
+      expect(trackDemoOpen, 'control: nothing tracked yet').not.toHaveBeenCalled()
+
+      await clickByText(document.querySelector('footer')!, label)
+
+      expect(trackDemoOpen.mock.calls).toEqual([['footer']])
+      expect(document.querySelectorAll(DIALOG).length).toBe(1)
+      expect(consoleError).not.toHaveBeenCalled()
+    } finally {
+      vi.doUnmock('./analytics')
+    }
+  })
+
+  it('Open the cockpit opens no demo dialog and reports no demo open', async () => {
+    const trackDemoOpen = vi.fn()
+    vi.doMock('./analytics', async () => ({ ...(await vi.importActual<object>('./analytics')), trackDemoOpen }))
+    try {
+      await mountApp()
+      await clickByText(document.querySelector('footer')!, 'Open the cockpit')
+
+      expect(trackDemoOpen).not.toHaveBeenCalled()
+      expect(Array.from(document.querySelectorAll(DIALOG), (d) => d.getAttribute('aria-label'))).toEqual(['Sign in'])
+    } finally {
+      vi.doUnmock('./analytics')
+    }
+  })
+})
+
 // A1 (AC-1.3, NEW-BEHAVIOUR): pins the end state directly -- #demo's button must stop
 // opening the popup. #dc-name-error proves the click was not inert (validation ran on
 // a real submit), rather than a dead handler that also opens no dialog.

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// SSR contract of the v2 footer (RESKIN-02-05): brand block, Platform and Connect columns, handlers.
+// SSR contract of the v2 footer: brand block, Platform and Connect columns, handlers.
 // jsdom serves the click and tab-order cases; renderToStaticMarkup runs unchanged under it.
 import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'

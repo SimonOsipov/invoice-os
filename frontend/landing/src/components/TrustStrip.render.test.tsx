@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// The sage v2 audience strip (RESKIN-02-04). SSR markup, because jsdom drops shorthands such as padding-block and gap.
+// The sage v2 audience strip. SSR markup, because jsdom drops shorthands such as padding-block and gap.
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'

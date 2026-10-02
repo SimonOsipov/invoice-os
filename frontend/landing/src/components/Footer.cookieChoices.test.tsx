@@ -1,5 +1,4 @@
-// The footer's bottom row and Cookie choices control (LAND-05-04, re-targeted to the v2 footer in
-// RESKIN-02-05). SSR-only, same idiom as Footer.render.test.tsx.
+// The footer's bottom row and Cookie choices control. SSR-only, same idiom as Footer.render.test.tsx.
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -92,7 +91,7 @@ const attrsOf = (tag: string): Record<string, string> =>
   Object.fromEntries([...tag.matchAll(/\s([^\s=>/]+)(?:="([^"]*)")?/g)].map((m) => [m[1], m[2] ?? '']))
 const textOfHtml = (markup: string) => markup.replace(/<[^>]*>/g, '')
 
-describe('Footer bottom row and Cookie choices control (LAND-05-04, FT-06 to FT-08)', () => {
+describe('Footer bottom row and Cookie choices control (FT-06 to FT-08)', () => {
   it('control: the render resolved and the walker sees the copyright row', () => {
     expect(html.length).toBeGreaterThan(0)
     const row = copyrightRowSlice(html)

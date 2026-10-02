@@ -1,4 +1,4 @@
-// Same-origin privacy link, no stubs, prefix-blind Book a demo (LAND-04-04, re-targeted in RESKIN-02-05).
+// Same-origin privacy link, no stubs, prefix-blind Book a demo.
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -17,7 +17,7 @@ function connectSlice(html: string): string {
   return html.slice(start, end)
 }
 
-describe('Footer adversarial coverage (LAND-04-04)', () => {
+describe('Footer adversarial coverage', () => {
   it('FT-09: the privacy link is same-origin, no anchor is a stub, and Book a demo ignores the prefix', () => {
     const plain = renderToStaticMarkup(createElement(Footer, { onBookDemo: noop }))
     const prefixed = renderToStaticMarkup(createElement(Footer, { onBookDemo: noop, hrefPrefix: '/' }))

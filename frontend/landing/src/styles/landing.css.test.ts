@@ -1,4 +1,4 @@
-// Source rules of landing.css for the v2 header, hero, live check card and footer links (RESKIN-02-01 to -05); the rendered result is the topology job's.
+// Source rules of landing.css for the v2 header, hero, live check card and footer links; the rendered result is the topology job's.
 /// <reference types="node" />
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'

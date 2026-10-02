@@ -1,6 +1,6 @@
 import { Logo } from './ds/Logo'
 
-// Sections arrive with RESKIN-03/04/05; App.render.test.tsx AN-03 pins that each href resolves.
+// Sections are not built yet; App.render.test.tsx AN-03 pins that each href resolves.
 export const PLATFORM_LINKS: { label: string; href: string }[] = []
 
 // Only in-page anchors take the prefix; /privacy is already absolute.

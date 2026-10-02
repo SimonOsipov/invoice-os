@@ -1,4 +1,4 @@
-// hrefPrefix contract of the v2 footer (LAND-04-04, re-targeted in RESKIN-02-05). SSR-only, same
+// hrefPrefix contract of the v2 footer. SSR-only, same
 // idiom as Nav.hrefPrefix.test.tsx: no jsdom, no testing-library (vitest.config.ts: environment 'node').
 import { afterEach, describe, expect, it } from 'vitest'
 import { createElement } from 'react'

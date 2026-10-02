@@ -1,4 +1,4 @@
-// Header controls and the burger menu (RESKIN-02-01), mounted in jsdom.
+// Header controls and the burger menu, mounted in jsdom.
 // @vitest-environment jsdom
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'

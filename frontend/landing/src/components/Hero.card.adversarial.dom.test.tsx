@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
-// RESKIN-02-03 adversarial: the card renders from HERO_CHECKS, and nothing else in the frame names --shadow-elegant.
+// The card renders from HERO_CHECKS, and nothing else in the frame names --shadow-elegant.
 /// <reference types="node" />
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'

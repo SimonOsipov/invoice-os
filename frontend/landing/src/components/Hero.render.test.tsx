@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
-// The v2 dark hero band (RESKIN-02-02): frame, eyebrow, h1, CTAs, notes, bottom strip.
+// The v2 dark hero band: frame, eyebrow, h1, CTAs, notes, bottom strip.
 /// <reference types="node" />
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'

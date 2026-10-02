@@ -1,4 +1,4 @@
-// SSR contract of the v2 header (RESKIN-02-01): frame tokens, Logo lockup, nav list, closed burger.
+// SSR contract of the v2 header: frame tokens, Logo lockup, nav list, closed burger.
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'

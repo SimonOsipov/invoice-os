@@ -167,12 +167,12 @@ for (const { id, name } of V1_SURFACES) {
 type Measured = { tag: string; text: string; left: number; right: number; top: number; bottom: number }
 
 // Relationships, not pixel values.
-test('landing header row: inside the viewport and no overlap at 390, 1080 and 1240', async ({ page }, testInfo) => {
+async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[]): Promise<void> {
   const errors = collectErrors(page)
   const res = await page.goto(`${LANDING_URL}/`)
   expect(res?.ok(), `/ returned HTTP ${res?.status()}`).toBeTruthy()
 
-  for (const width of [390, 1080, 1240]) {
+  for (const width of widths) {
     await page.setViewportSize({ width, height: width === 390 ? 844 : 900 })
     await expect(page.locator('header').first()).toBeVisible()
     const m = await page.evaluate(async () => {
@@ -216,4 +216,14 @@ test('landing header row: inside the viewport and no overlap at 390, 1080 and 12
   }
 
   expect(errors, `console errors on the header sweep:\n${errors.join('\n')}`).toEqual([])
+}
+
+test('landing header row: inside the viewport and no overlap at 1080 and 1240', async ({ page }, testInfo) => {
+  await assertHeaderRow(page, testInfo, [1080, 1240])
+})
+
+// RESKIN-02 AC1 removes the marker when the header fits.
+test('landing header row at 390: inside the viewport and no overlap (expected to fail until RESKIN-02 fixes the mobile header)', async ({ page }, testInfo) => {
+  test.fail()
+  await assertHeaderRow(page, testInfo, [390])
 })

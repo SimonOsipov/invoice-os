@@ -76,8 +76,8 @@ case adversarially; M2-06 adds `FORCE ROW LEVEL SECURITY`.)
 - `auth_hook_reader` (added AUTH-02) — `NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB
   NOCREATEROLE`, `USAGE, CREATE ON SCHEMA public`. It owns the SECURITY DEFINER
   `public.custom_access_token_hook` and holds the policy that lets it read
-  `(user_id, tenant_id, status)` on `memberships` for every tenant. No DSN or password
-  exists for it. See §8.
+  `(user_id, tenant_id, status)` on `memberships` for every tenant, and `user_id` on
+  `staff_members`. No DSN or password exists for it. See §8.
 - Bootstrap also `REVOKE CREATE ON SCHEMA public FROM PUBLIC` (a no-op on PG15+, kept for
   PG13/14 + defense-in-depth).
 
@@ -454,6 +454,8 @@ CREATE POLICY auth_hook_lookup ON public.memberships
     FOR SELECT TO auth_hook_reader USING (true);
 ```
 
+- `staff_hook_lookup` (`FOR SELECT TO auth_hook_reader USING (true)`) lets it read the
+  `user_id` column of `public.staff_members`, nothing else on that table.
 - GoTrue's login role `supabase_auth_admin` has `EXECUTE` on the function and **no** grant
   or policy on `memberships`: one `user_id` in, one `tenant_id` (exactly one active
   membership) or nothing out.
@@ -462,8 +464,8 @@ CREATE POLICY auth_hook_lookup ON public.memberships
 - `invoice_app` and `invoice_tenant_reader` cannot execute the hook (`REVOKE … FROM
   PUBLIC`).
 - Residual: a leaked GoTrue DSN can call the hook once per GoTrue user and map each user
-  with exactly one active membership to its tenant. It cannot bulk-read statuses or
-  multiple memberships.
+  with exactly one active membership to its tenant. It also learns whether that user is
+  staff (`app_metadata.staff`). It cannot bulk-read statuses or multiple memberships.
 
 DEFINER works here because the owner is not the table owner: `FORCE ROW LEVEL SECURITY`
 binds a DEFINER function owned by `invoice_migrator` to zero rows, but a function owned by a

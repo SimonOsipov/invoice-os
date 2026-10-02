@@ -1,5 +1,6 @@
 -- Staff role: a row here makes the access-token hook add app_metadata.staff = true.
 -- Written only by the owner or a superuser (docs/identity-provider.md "Granting staff").
+-- ceiling: a staff user whose app_metadata is not an object gets {"staff": true} only, dropping a projected tenant; GoTrue always sends an object.
 
 -- +goose Up
 CREATE TABLE public.staff_members (

@@ -97,9 +97,10 @@ What a spec still cannot assume is an empty table:
     seeded staffing rows in the same `Provision` call (Decision [include-workflow-roles]).
     A role or staffing row a spec creates at runtime on a demo tenant does NOT survive the
     next deploy; the seeded ones always come back.
-- Three specs leave rows that persist across pushes to one PR environment, in `auth.users`
-  (GoTrue's schema, which neither the reset nor the purge touches) and in `tenants` and
-  `memberships` (the reset excludes both, and the purge touches the four demo tenants only):
+- Specs leave rows that persist across pushes to one PR environment, in `auth.users`
+  (GoTrue's schema, which neither the reset nor the purge touches), in `staff_members` (in
+  neither `resetTables` nor the purge) and in `tenants` and `memberships` (the reset excludes
+  both, and the purge touches the four demo tenants only):
   - `api/registration.spec.ts`: each run's `auth.users` row, and the tenant and membership
     its fork chain provisions.
   - `topology/auth.spec.ts`: each real-account journey (`provisionRealAccount` in
@@ -107,7 +108,13 @@ What a spec still cannot assume is an empty table:
     add-company journeys also leave one `business_entities` row and its audit row; the next
     deploy's reset truncates both, so they live only until the next push.
   - `api/session-handoff.spec.ts`: each registering test leaves an `auth.users` row only; it
-    provisions no workspace.
+    provisions no workspace. The staff-claim test also leaves the tenant and membership of
+    its `provisionRealAccount` call and one `staff_members` row.
+  - Every `provisionStaffAccount` call (`api/client.ts`) leaves one `auth.users` row and one
+    `staff_members` row, and no workspace: one per Playwright worker per run for the smoke
+    console specs (`staffSession.ts`), and one per console journey in `topology/auth.spec.ts`.
+    `POST /auth/mock/staff`, which writes the row, exists only in the mock build that every PR
+    fork runs.
 
   This is harmless, because every run registers a fresh address and provisions for a fresh
   subject.
@@ -125,13 +132,16 @@ but **what backs the assertion**:
 | surface | backing | what a browser assertion may claim |
 |---|---|---|
 | `app` SPA | gateway-wired (real API, real DB) | a **contract**: rendered state matches what the API returned |
-| `ops-console` | mock data, no backend | **fixture behaviour** — that the console's own client-side logic works |
-| `support-console` | mock data, no backend | same |
-| `landing` | marketing, plus a gateway-backed sign-in form | render and client-side navigation; the sign-in form is a **contract** — a real account signs in and lands in its workspace |
+| `ops-console` | mock data; the gateway backs only the staff session | **fixture behaviour** — that the console's own client-side logic works. Entry is a **contract**: a real staff session opens it |
+| `support-console` | mock data; the gateway backs only the staff session | same |
+| `landing` | marketing, plus a gateway-backed sign-in form | render and client-side navigation; the sign-in form is a **contract** — a real account signs in and lands in its workspace, or, for a staff account that came from a console, in that console |
 
-The `app` SPA, and the landing sign-in form that hands off to it, remain the only places a
-browser test can prove the **stack** integrates end to end. The consoles and the rest of the
-landing page carry functional coverage of their own
+The `app` SPA, and the landing sign-in form that hands off to it or to a console, remain the
+only places a browser test can prove the **stack** integrates end to end. A console is entered
+the way a staff member enters it: the smoke specs seed a real staff session
+(`seedStaffSession`, `e2e/staffSession.ts`, a staff account from `provisionStaffAccount`),
+and the topology journeys in `auth.spec.ts` sign in through landing. The consoles and the rest
+of the landing page carry functional coverage of their own
 client-side behaviour because a browser is the only place it can be observed: every
 frontend vitest project defaults to `node`, and the files that opt into jsdom per-file
 (`// @vitest-environment jsdom`) get a DOM with no layout engine — so a control's
@@ -209,8 +219,10 @@ enforces the ceiling; keeping the layer thin stays a review judgement.
 
 ## Persona is an axis, not a constant
 
-`?persona=` is the single sign-in front door for all four personas, and the suite treats it
-as a **parameter** rather than a constant baked into each spec.
+`?persona=` is the sign-in front door for the two app personas (`firm`, `inhouse`), and the
+suite treats it as a **parameter** rather than a constant baked into each spec. The two console
+personas (`developer`, `support`) no longer open a console that way: a console takes a staff
+session (Target surface), and `e2e/personas.ts` records the console pairs as refusals.
 
 - **`e2e/personas.ts`** is the registry: four personas, the three destinations they route
   to, the app SPA's 10 nav surfaces, and a **coverage map** naming which persona is proven

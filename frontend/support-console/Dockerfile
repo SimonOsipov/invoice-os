@@ -11,9 +11,8 @@ COPY . .
 RUN pnpm install --frozen-lockfile
 # Vite bakes VITE_* at build time. Railway injects the service variable as a build arg;
 # declare it and promote it to an env var so `vite build` sees it. Same mechanism as
-# frontend/ops-console/Dockerfile. Unset → landingBase() returns null (src/auth.ts) and
-# Sign out stays put rather than routing to a hardcoded deploy, so the default showcase
-# build and the smoke suite are unaffected.
+# frontend/ops-console/Dockerfile. Unset → landingBase() returns null (src/auth.ts): no
+# staff gate, and Sign out stays put rather than routing to a hardcoded deploy.
 ARG VITE_LANDING_URL
 ENV VITE_LANDING_URL=$VITE_LANDING_URL
 ARG VITE_GATEWAY_URL

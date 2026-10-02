@@ -392,8 +392,9 @@ is a UUIDv5 of the caller's subject, so one identity provisions at most one work
 
 The landing SPA is the sign-in surface, and it is a different origin from the app. No cookie
 or other channel is shared between them, so the session crosses in the URL as a short-lived,
-single-use code, never as a token. The code is bound to a `state` that the app minted in the
-same tab, so a code minted in another browser signs nobody in.
+single-use code, never as a token. The code is bound to a `state` that the app, or a console,
+minted in the same tab, so a code minted in another browser signs nobody in. The target of the
+hand-off is the app by default and a console when the visitor came from one (Console sessions).
 
 **The flow:**
 1. A signed-out app tab calls `ensureSignInState` (`frontend/app/src/lib/signInState.ts`). It
@@ -402,15 +403,17 @@ same tab, so a code minted in another browser signs nobody in.
    a state from a URL.
 2. The app goes to `<landing>/?state=<s>[&signin=<outcome>]`: from the front-door redirect,
    from the start bounce (step 3) with `signin=ready`, and from a failed hand-off (step 7).
-   Landing keeps the state in memory only and strips `state` and `signin` at boot.
+   A console adds `console=ops` or `console=support`. Landing keeps the state and the console
+   target in memory only and strips `state`, `signin` and `console` at boot.
 3. A visitor who opened landing directly has no state. The modal then shows "Continue with
-   email", which goes to `<app>?auth=start`. The app ensures a state and returns to landing
-   with `signin=ready`, which opens the modal with the form.
+   email", which goes to `<app>?auth=start`, or to the held console's `?auth=start`. The app
+   or console ensures a state and returns to landing with `signin=ready`, which opens the
+   modal with the form.
 4. Landing posts `{"email","password","state"}` to `POST /auth/sign-in`. The gateway posts
    `{"email","password"}` to GoTrue `/token?grant_type=password`. On a 200 it keeps the access
    token and the refresh token with `sha256(state)` and answers a code.
-5. Landing navigates to `<app>?handoff=<code>`. The app strips the param at mount, before
-   redemption resolves.
+5. Landing navigates to `<app>?handoff=<code>`, or to `<console>?handoff=<code>` for a held
+   console target. The app or console strips the param at mount, before redemption resolves.
 6. The app reads and removes its stored state (`consumeSignInState`) and posts
    `{"code","state"}` to `POST /auth/exchange`. It then calls `GET /api/tenancy/v1/me` with
    the access token and stores the session at `localStorage['invoice-os.session']` with
@@ -422,7 +425,9 @@ same tab, so a code minted in another browser signs nobody in.
    answered 403) or `signin=failed` (anything else), carrying the state `ensureSignInState`
    returns: a newly minted one, because step 6 removed the old. Landing opens
    the modal with "This account has no workspace yet." or "We couldn't open your workspace.
-   Sign in again." An unknown `signin` value is stripped and ignored.
+   Sign in again." A console redeems the same way, but instead of `/me` it reads the token:
+   one without the staff claim returns `signin=not-staff` ("This account cannot open the
+   ASComply consoles."). An unknown `signin` value is stripped and ignored.
 
 **Workspace mode.** A hand-off session takes its mode from `/me` `tenant.kind`: `firm` opens
 the firm workspace, `in_house` the in-house one. A `/me` answer, or a stored hand-off record,
@@ -436,7 +441,8 @@ persona until AUTH-15. A stored record without the name keeps a blank card: rene
 The access token travels only in the exchange and refresh answers and the `Authorization`
 header; the refresh token travels only in the exchange answer, the refresh request and
 answer, and the sign-out request (see Revocation). Landing never holds either. Landing renders the form only when `VITE_GATEWAY_URL` and `VITE_APP_URL` are set,
-and otherwise shows the persona list alone. The app ignores `?handoff=` when its
+and otherwise shows the persona list alone. A hand-off to a console also needs landing's
+`VITE_OPS_URL` or `VITE_SUPPORT_URL`; without it landing does not navigate. The app ignores `?handoff=` when its
 `VITE_GATEWAY_URL` is unset.
 
 **`POST /auth/sign-in`** `{"email","password","state"}`, 4 KiB body limit, outside `/api/`,
@@ -686,7 +692,7 @@ production") with
 ## Revocation
 
 Signing out ends every session of the account, on every device and tab, server-side. The
-app sends its refresh token to `POST /auth/sign-out`; the gateway turns it into GoTrue's
+app, or a console, sends its refresh token to `POST /auth/sign-out`; the gateway turns it into GoTrue's
 global logout, which deletes every row of the account in `auth.sessions` (its refresh tokens
 cascade). The edge then refuses every access token of those sessions, because the gateway
 asks GoTrue whether a token's session is still live before any `/api/` request reaches a
@@ -878,10 +884,9 @@ and `endRevokedSession`):
 - **Unchanged:** a record with a fabricated token still mounts the app shell from storage
   before its first request, then 401s and ends. The shell shows only what the record itself
   holds. Gating the mount on a network check would add a round trip to every boot.
-- **Left to AUTH-11:** both consoles. They hold no token, so nothing server-side can refuse a
-  fabricated `{v:1, operator}` entry, and a sign-out anywhere cannot end a console session.
-  AUTH-11 owns both (its Core AC 5, a fabricated entry no longer gets in; its Core AC 9, a
-  console session ends when its account's sessions are revoked).
+- **Consoles:** a console renews its stored record at every load, so a fabricated record or a
+  forged token is refused by the renewal and the record is cleared, and a session revoked
+  anywhere ends at the console's next load (Console sessions). A `v:1` record opens nothing.
 
 ## Cutting an account off
 
@@ -924,6 +929,173 @@ only lock-out path.
 access token refused at once, a cached one live until 30 s and refused at 30 s, both
 refresh tokens refused, and a new sign-in live. `ceiling:` the statement depends on GoTrue's
 schema at the pinned tag; an upgrade that changes `auth.sessions` fails that test.
+
+## Staff role
+
+A staff account is an `auth.users` row with a row in `public.staff_members`. The access-token
+hook (`public.custom_access_token_hook`, migration `staff_members`) reads that table and puts
+`app_metadata.staff: true` into the token. GoTrue runs the hook on every sign-in and every
+refresh, so a grant or a removal reaches the account's next token with no other change. The
+consoles read this claim and nothing else (Console sessions). It is not a Postgres role: the
+verifier binds the top-level `role` claim, and `app_metadata` is the namespace the hook owns.
+
+- `public.staff_members (user_id uuid PRIMARY KEY, created_at timestamptz NOT NULL DEFAULT
+  now())`. RLS is enabled without `FORCE`: the table has no tenant, and its only writers are
+  its owner (the migrator) and a superuser. It has no foreign key to `auth.users`, because
+  GoTrue creates that table at its own boot, outside `goose`. A row for a deleted account
+  grants nothing, since no token can be minted for it.
+- `auth_hook_reader` holds `SELECT (user_id)` and the policy `staff_hook_lookup`. No other
+  role holds a grant: `invoice_app`, `invoice_tenant_reader` and `supabase_auth_admin` are
+  refused. Registration and `provision_workspace` write no row. No user-supplied field reaches
+  the hook's staff decision: `user_metadata` is user-writable and is not read.
+- The table is not in `resetTables` and not in the demo purge, so a grant on a PR fork
+  survives a redeploy of that fork.
+
+**Hook contract.** The staff step runs after the unchanged tenant step. A non-staff token gains
+no key, so `TestIdP_TokenShapeMatchesGolden` stays valid.
+
+| `staff_members` has `user_id` | incoming `app_metadata` | outgoing `app_metadata` |
+|---|---|---|
+| yes | an object | incoming keys (tenant step applied) plus `"staff": true` |
+| yes | absent | `{"staff": true}`, plus `tenant_id` when the tenant step projects one |
+| yes | not an object (`null`, a string) | `{"staff": true}` |
+| no | has `staff` (any JSON value) | `staff` removed, other keys kept |
+| no | no `staff` | unchanged (no key added) |
+| no | not an object | unchanged |
+| `user_id` not a UUID, `null` or absent | | the existing behaviour (`TestRLS_CustomAccessTokenHookMalformedUserID`) |
+
+`ceiling:` a staff user whose incoming `app_metadata` is not an object loses a projected
+tenant. GoTrue always sends an object. A leaked `supabase_auth_admin` DSN can call the hook and
+so also learns the staff bit (migrations.md, `auth_hook_reader`).
+
+Guarded by the `rls` job's `staff_members_rls_test.go` (`TestRLS_StaffMembers*`,
+`TestRLS_CustomAccessTokenHook*Staff*`, `TestRLS_ProvisionWorkspaceGrantsNoStaff`) and the
+`idp` job's `TestIdP_RegisteredAccountCarriesNoStaffClaim`,
+`TestIdP_StaffGrantReachesTheNextToken` and `TestIdP_StaffClaimSurvivesRenewalPastTheTTL`
+(`idp-short`, `GOTRUE_JWT_EXP=5`).
+
+## Granting staff
+
+Registration creates the account; one statement grants the role. "Staff" here is the operator
+with production database access, as in "Cutting an account off". Production Postgres is
+private-only, so run it inside the Postgres container:
+
+1. `railway ssh --service Postgres`
+2. `psql` (a superuser)
+3. Run, replacing `<address>`:
+   ```sql
+   INSERT INTO public.staff_members (user_id) SELECT id FROM auth.users WHERE email = lower('<address>');
+   ```
+   It must answer `INSERT 0 1`. `INSERT 0 0` means no account has that address.
+
+To remove the role:
+
+```sql
+DELETE FROM public.staff_members WHERE user_id = (SELECT id FROM auth.users WHERE email = lower('<address>'));
+```
+
+A removal reaches the next token only. A console that is already open keeps rendering until it
+reloads (Console sessions). When the person must leave at once, also run the cut-off in
+"Cutting an account off".
+
+**Pinned by** `TestIdP_StaffGrantReachesTheNextToken`, `TestIdP_StaffRemovalReachesTheNextToken`
+and `TestIdP_StaffGrantStatementMatchesTheAddressInAnyCase` (`internal/platform/auth/idp_staff_integration_test.go`).
+They run the two statements above verbatim, as a superuser, against the real `supabase/auth`
+containers. The grant and the removal each reach the account's next refresh and next sign-in
+and leave other accounts alone. The grant statement matches an address typed in any case and
+answers `INSERT 0 0` for an unregistered one.
+
+An in-product staff screen is out of scope. On production no account can be created while
+signup is closed, so the first staff account waits for registration U3 or for console U3.
+
+## Console sessions
+
+Both consoles (`ops-console`, `support-console`) render one shared gate, `StaffGate` from
+`@invoice-os/console-session`. Each console passes its own storage key and target (`ops` or
+`support`). A console opens only for a session the gateway has just renewed or exchanged and
+whose token carries `app_metadata.staff === true`.
+
+**Honest limit.** The consoles call no backend and render mock data compiled into a public
+bundle. The gate makes the door right, and nothing server-side enforces staff access to
+console data, because there is none. A console that reads real data must check the staff claim
+on the server. The same words head `packages/console-session/src/StaffGate.tsx`.
+
+**The record.** `localStorage[<storageKey>] = {"v":2,"token":"<access>","refresh_token":"<refresh>"}`
+under `invoice-os.ops-session` or `invoice-os.support-session`. A `v:1` record (`{v:1, operator}`)
+reads as no record and logs one `console.warn`; it stays in storage and the next staff sign-in
+overwrites it. The sign-in state sits in `sessionStorage['invoice-os.signInState']` on the
+console's own origin, in the app's shape.
+
+**Boot order.** The gate renders nothing until one of these steps ends it.
+1. Standalone (`VITE_LANDING_URL` unset): render the console. No storage read, no request.
+2. `?auth=start`: mint a fresh state and go to `<landing>/?state=<s>&console=<target>&signin=ready`.
+3. `?handoff=<code>` (exactly one parameter, 43 base64url characters): strip it at mount, then,
+   with a live state in this tab, `POST /auth/exchange`. A staff token is stored and the console
+   renders. A token without the claim is discarded unstored and the visitor goes to landing with
+   `signin=not-staff`. Any failure goes to landing with `signin=failed` and leaves a stored
+   record alone. With no live state the code is ignored and the gate continues at step 4.
+4. A stored `v:2` record: `POST /auth/refresh` with its refresh token, 15 s timeout. A 200 with
+   the staff claim stores the new pair and renders. A 200 without it clears the record and goes
+   to landing with `signin=not-staff`. A 400 or 401 clears the record and goes to the front
+   door. A network error, timeout, 429, 5xx or malformed 200 keeps the record and goes to
+   landing with `signin=failed`.
+5. Nothing stored: the front door, `<landing>/?state=<s>&console=<target>`. The state is reused
+   when minted under 60 s ago.
+
+A landing URL with no `VITE_GATEWAY_URL` cannot run steps 3 and 4: a code leaves with
+`signin=failed`, otherwise the gate leaves by the front door. A console with no gateway URL
+therefore opens for nobody.
+
+**What the renewal proves.** A load asks the gateway, not the browser, whether the session is
+live: the refresh token exists in GoTrue, the account exists, its sessions are not revoked, and
+the staff claim is minted now from the current `staff_members` row. The console decodes the
+claim, unverified, from the token the gateway has just answered over TLS. A forged claim needs a
+forged gateway answer. The cost is one GoTrue refresh grant per console load, and a stored
+record whose access token expired hours ago loads normally.
+
+**Revocation.** A sign-out anywhere and a staff cut-off delete the session's refresh token, so
+the console's next load gets 401, clears its record and goes to the front door. A staff role
+removal reaches the next load the same way: the refresh answers 200 without the claim, and the
+visitor goes to landing with `signin=not-staff`. `/auth/refresh` is not cached, so the stale
+window is 0 s from the next load. An open console tab keeps rendering until it reloads; what it
+renders is mock data in the public bundle.
+
+**Sign out.** The Sign out button posts the stored refresh token to `/auth/sign-out` (5 s,
+never rejects; a failure logs `console.warn`), clears the record and goes to landing. It ends
+every session of the account, so it also signs the account out of the app and the other
+console. With no gateway the sign-out is local only.
+
+**Ceilings.**
+- `ceiling:` no timer renews an open console tab. When a console gains a backend, its requests
+  must ask for a fresh token first, as the app's `fresh()` does.
+- `ceiling:` no lock serialises two loads of one console. GoTrue answers the parent of the
+  active refresh token with the active token, and only a token two or more generations old
+  revokes the family (`TestIdP_RefreshRotationAndReuse`), which two overlapping loads do not
+  reach.
+- `ceiling:` a transient boot failure sends a still-valid staff user to sign in again; the
+  next load after recovery succeeds with the kept record.
+- `ceiling:` a customer's refused sign-in leaves its GoTrue session live in `auth.sessions`,
+  reachable by nobody, until the account's next global sign-out or a cut-off.
+- `ceiling:` a console's transient failure reuses landing's `failed` copy, "We couldn't open
+  your workspace. Sign in again."
+
+**The standalone build keeps no gate (VITE_LANDING_URL unset).** Today that costs nothing,
+because both consoles are mock data in a public bundle, every deployed console sets
+`VITE_LANDING_URL`, and a fork that lost it fails `smoke.spec.ts` "a visit with no session
+redirects to the landing page". **The first console that reads real data must make the gate
+fail closed when `VITE_LANDING_URL` is unset**, and must check the staff claim on the server.
+
+**CORS.** The gateway's one origin list wraps `/api/` and every `/auth/` route, so console U2
+lets browser JavaScript on the two console origins call all of them, not only exchange, refresh
+and sign-out. Every `/api/` call still needs a verified bearer, the session check and RLS; the
+console origins serve only our own bundle, and the same token works from `curl`.
+
+Guarded by the package's `boot.test.ts`, `StaffGate.dom.test.tsx`, `signOut.test.ts`,
+`state.test.ts` and `session.test.ts`, each console's `App.test.tsx`, landing's `signIn.test.ts`
+and `App.signIn.dom.test.tsx`, and the deployed `e2e/topology/auth.spec.ts` "deployed consoles:"
+journeys (a staff session opens both consoles, a customer's session opens neither, a forged
+record opens nothing, a load renews the stored session, signing out of one console ends the
+other's).
 
 ## Opening registration in production (registration U1–U4)
 
@@ -1076,6 +1248,65 @@ With a verified account, step 2 with the real password answers 200 `{"code":"…
 with that code and the same `S` answers 200 `{"access_token":"…","refresh_token":"…"}`.
 Step 5 with that `refresh_token` answers 200 with a new pair. A full sign-in through the
 browser also needs a provisioned workspace, and so registration U3 and U4 above.
+
+## Opening the consoles in production (console U1–U3)
+
+These steps are separate from the first-time setup's U1–U4, registration U1–U4 and sign-in
+U1–U3 above. Production writes are the user's. They use the same `P` and `E` as "Opening
+registration". Console U2 extends the value that sign-in U1 left in the gateway's
+`CORS_ALLOWED_ORIGINS`.
+
+**Until the first staff account is granted (console U3), production's consoles open for
+nobody.** After the merge deploy, every visitor to either console is sent to landing's sign-in,
+and no production account can carry the staff claim. The persona door and a fabricated storage
+entry no longer open a console. The user accepted this (AUTH-11, CF1): the consoles hold mock
+data only.
+
+| Step | When | Production write |
+|---|---|---|
+| U1 | before the merge push | `VITE_GATEWAY_URL` on `ops-console` and `support-console` |
+| U2 | after merge | gateway `CORS_ALLOWED_ORIGINS` gains the two console origins |
+| U3 | after U1 and U2 have deployed | the first staff account, then its grant |
+
+**U1 — `VITE_GATEWAY_URL` on both consoles.** It is a build argument, so write it before the
+merge push builds them. A variable write triggers an unstamped rebuild.
+
+```
+railway variables --set 'VITE_GATEWAY_URL=https://api.ascomply.com' -p "$P" -e "$E" -s ops-console --skip-deploys
+railway variables --set 'VITE_GATEWAY_URL=https://api.ascomply.com' -p "$P" -e "$E" -s support-console --skip-deploys
+railway variables -p "$P" -e "$E" -s ops-console --json | jq -r '.VITE_GATEWAY_URL'
+railway variables -p "$P" -e "$E" -s support-console --json | jq -r '.VITE_GATEWAY_URL'
+# expected, both: https://api.ascomply.com
+```
+
+Without it a deployed console has no gateway to ask and opens for nobody.
+
+**U2 — gateway `CORS_ALLOWED_ORIGINS`.** The console origin's preflight is refused until this
+write. `reconcile_url_variables` refuses the persistent environment, so this is by hand. Read
+the value first and keep every origin it holds.
+
+```
+railway variables -p "$P" -e "$E" -s gateway --json | jq -r '.CORS_ALLOWED_ORIGINS'
+# expected before: https://app.ascomply.com,https://www.ascomply.com
+railway variables --set 'CORS_ALLOWED_ORIGINS=https://app.ascomply.com,https://www.ascomply.com,https://ops.ascomply.com,https://sup.ascomply.com' -p "$P" -e "$E" -s gateway --skip-deploys
+railway variables -p "$P" -e "$E" -s gateway --json | jq -r '.CORS_ALLOWED_ORIGINS'
+# expected: https://app.ascomply.com,https://www.ascomply.com,https://ops.ascomply.com,https://sup.ascomply.com
+```
+
+The CORS layer is global, so this also lets browser calls from the two console origins reach
+`/api/` and every `/auth/` route (Console sessions, CORS).
+
+**Deploy the writes** as in "Opening registration".
+
+**U3 — the first staff account.** Register it once production signup is open (registration
+U3). Or set `GOTRUE_DISABLE_SIGNUP=false` on the `auth` service as in registration U3, register
+and verify the account, then set it back to `true` the same way. Registration needs
+registration U1 and U2 deployed (Opening registration). Then run the grant statement in
+"Granting staff". Until then production's consoles open for nobody.
+
+Check by hand, for each of `https://ops.ascomply.com` and `https://sup.ascomply.com`: the visit
+goes to landing's sign-in, and a sign-in with the staff account returns to that console, which
+opens. A console holds its own session, so the second console asks for its own sign-in.
 
 ## Sealed secrets
 

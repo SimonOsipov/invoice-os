@@ -7,8 +7,10 @@ import (
 	"sort"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/pressly/goose/v3"
 )
@@ -423,4 +425,71 @@ func TestRLS_ProvisionGuard_ConcurrentSameWorkspaceHasOneWinner(t *testing.T) {
 	if n := membershipCount(t, a.userID); n != 1 {
 		t.Errorf("memberships for the user = %d, want 1", n)
 	}
+}
+
+// beginProvision opens an invoice_app tx with its GUC set and calls provision_workspace in it.
+// It returns errors, not fatals, so a goroutine can call it.
+func beginProvision(ctx context.Context, a provisionArgs) (pgx.Tx, error) {
+	tx, err := h.app.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true)`, a.tenantID); err != nil {
+		_ = tx.Rollback(ctx)
+		return nil, err
+	}
+	return tx, a.exec(ctx, tx)
+}
+
+func TestRLS_ProvisionGuard_ConcurrentDifferentTenantIdsHaveOneWinner(t *testing.T) {
+	h := requireHarness(t)
+	useShippedGuard(t)
+	ctx := context.Background()
+	user := uuid.NewString()
+	x, y := uuid.NewString(), uuid.NewString()
+	cleanupTenant(t, x, y)
+	a, b := newProvisionArgs(x), newProvisionArgs(y)
+	a.userID, b.userID = user, user
+
+	first, err := beginProvision(ctx, a)
+	if err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	defer func() { _ = first.Rollback(ctx) }()
+
+	done := make(chan error, 1)
+	go func() {
+		second, err := beginProvision(ctx, b)
+		switch {
+		case second == nil:
+		case err == nil:
+			err = second.Commit(ctx)
+		default:
+			_ = second.Rollback(ctx)
+		}
+		done <- err
+	}()
+
+	// The second call must wait on the first's uncommitted work, not pass the guard beside it.
+	deadline := time.Now().Add(10 * time.Second)
+	for waiting := 0; waiting == 0; {
+		select {
+		case err := <-done:
+			t.Fatalf("second call finished while the first was open (err %v), want it blocked", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("second call never blocked on an advisory lock")
+		}
+		waiting = mustCount(t, h.super, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`)
+	}
+
+	if err := first.Commit(ctx); err != nil {
+		t.Fatalf("commit the first call: %v", err)
+	}
+	assertGuardRefusal(t, "second call for the same identity", <-done)
+	if n := membershipCount(t, user); n != 1 {
+		t.Errorf("memberships for the user = %d, want 1", n)
+	}
+	assertNothingWritten(t, y)
 }

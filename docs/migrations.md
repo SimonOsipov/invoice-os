@@ -97,7 +97,7 @@ only through this SECURITY DEFINER function, which `invoice_migrator` owns
   with 42501 (message contains "row-level security").
 - After the GUC check, the function refuses an identity that holds any membership, in any
   tenant and any status: 23505, constraint `one_workspace_per_identity`, nothing written.
-  It takes a per-identity transaction advisory lock first, so concurrent calls serialise.
+  It takes a per-identity transaction advisory lock first, so concurrent calls for one identity serialise.
   `tenancy.Store.ProvisionWorkspace` maps it to `ErrAlreadyProvisioned`, the same 409 as a
   tenant-bearing caller. It asks `public.identity_has_membership(uuid)`: SECURITY DEFINER,
   `search_path=""`, owned by `auth_hook_reader`, `EXECUTE` to `invoice_migrator` only (so

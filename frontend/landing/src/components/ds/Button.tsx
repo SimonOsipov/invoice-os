@@ -37,6 +37,8 @@ export function Button({
   const sized = variant === 'primary' || variant === 'accent' || variant === 'outline'
   const classes = ['ds-btn', `ds-btn--${variant}`]
   if (sized) classes.push(`ds-btn--${size ?? (variant === 'accent' ? 'lg' : 'md')}`)
+  const inert = href !== undefined && disabled
+  if (inert) classes.push('ds-btn--disabled')
   if (className) classes.push(className)
   const content = (
     <>
@@ -48,6 +50,14 @@ export function Button({
       {children}
     </>
   )
+  if (inert) {
+    // An anchor has no disabled state: no href, no target, no handler; .ds-btn--disabled styles it.
+    return (
+      <a className={classes.join(' ')} style={style} aria-disabled="true" aria-label={ariaLabel}>
+        {content}
+      </a>
+    )
+  }
   if (href !== undefined) {
     return (
       <a href={href} className={classes.join(' ')} style={style} aria-label={ariaLabel} target={target} rel={rel} onClick={onClick}>

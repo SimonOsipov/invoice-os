@@ -4,21 +4,22 @@
 
 .ds-btn { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; gap: 10px; border-radius: var(--radius-btn); font-family: var(--font-sans); font-size: var(--fs-btn); font-weight: var(--fw-bold); line-height: var(--lh-ui); text-decoration: none; white-space: nowrap; cursor: pointer; transition: filter var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
 .ds-btn:disabled { cursor: not-allowed; opacity: 0.45; }
+.ds-btn--disabled { cursor: not-allowed; opacity: 0.45; }
 .ds-btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 .ds-btn--sm { height: 40px; padding: 0 16px; }
 .ds-btn--md { height: 46px; padding: 12px 21px; }
 .ds-btn--lg { height: 57px; padding: 17px 27px; }
 .ds-btn--outline, .ds-btn--ghostDark, .ds-btn--text { font-size: var(--fs-btn-sm); }
 .ds-btn--primary { background: var(--primary); color: var(--primary-foreground); border: 1px solid transparent; }
-.ds-btn--primary:hover:not(:disabled) { filter: brightness(1.18); color: var(--primary-foreground); }
+.ds-btn--primary:hover:not(:disabled):not(.ds-btn--disabled) { filter: brightness(1.18); color: var(--primary-foreground); }
 .ds-btn--accent { background: var(--accent); color: var(--accent-foreground); border: 1px solid transparent; }
-.ds-btn--accent:hover:not(:disabled) { filter: brightness(1.06); color: var(--accent-foreground); }
+.ds-btn--accent:hover:not(:disabled):not(.ds-btn--disabled) { filter: brightness(1.06); color: var(--accent-foreground); }
 .ds-btn--outline { background: transparent; color: var(--ink); border: 1px solid var(--button-outline-border); }
-.ds-btn--outline:hover:not(:disabled) { background: var(--muted); color: var(--ink); }
+.ds-btn--outline:hover:not(:disabled):not(.ds-btn--disabled) { background: var(--muted); color: var(--ink); }
 .ds-btn--ghostDark { gap: 12px; background: transparent; color: var(--surface-foreground); border: none; }
-.ds-btn--ghostDark:hover:not(:disabled) { filter: brightness(1.12); color: var(--surface-foreground); }
+.ds-btn--ghostDark:hover:not(:disabled):not(.ds-btn--disabled) { filter: brightness(1.12); color: var(--surface-foreground); }
 .ds-btn--text { padding: 7px 0; background: transparent; color: var(--link); border: none; border-bottom: 1px solid var(--link); border-radius: 0; line-height: 1.4; }
-.ds-btn--text:hover:not(:disabled) { color: var(--teal); }
+.ds-btn--text:hover:not(:disabled):not(.ds-btn--disabled) { color: var(--teal); }
 .ds-btn-play { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: var(--radius-pill); border: 1px solid color-mix(in srgb, var(--surface-foreground) 45%, transparent); }
 
 .ds-badge { display: inline-flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; border-radius: var(--radius-sm); font-family: var(--font-sans); font-size: var(--fs-xs); font-weight: var(--fw-semibold); white-space: nowrap; }

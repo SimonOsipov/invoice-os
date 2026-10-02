@@ -111,4 +111,19 @@ describe('sourcemapUploadOptions', () => {
     expect(sourcemapUploadOptions(appDir, {}).sourcemaps.filesToDeleteAfterUpload).toEqual(want)
     expect(sourcemapUploadOptions(`${appDir}/`, {}).sourcemaps.filesToDeleteAfterUpload).toEqual(want)
   })
+
+  it('uploadDefaults_readProcessEnvWhenNoEnvIsGiven', () => {
+    const { appDir } = tree('dev')
+    vi.stubEnv('SENTRY_AUTH_TOKEN', ' sntrys_proc \n')
+    vi.stubEnv(ENV, 'procsha')
+    const opts = sourcemapUploadOptions(appDir)
+    expect(opts.authToken).toBe('sntrys_proc')
+    expect(opts.release.name).toBe('unstamped-procsha')
+  })
+
+  it('uploadBuilder_isNotInThePackageEntry', async () => {
+    const entry = await import('./index')
+    expect(typeof entry.releaseName).toBe('function')
+    expect(Object.keys(entry)).not.toContain('sourcemapUploadOptions')
+  })
 })

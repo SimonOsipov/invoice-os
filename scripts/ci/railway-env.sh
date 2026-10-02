@@ -2054,7 +2054,8 @@ ensure_postgres_archive_off() {
   fi
 
   for n in $names; do pairs+=("$n="); done
-  set_service_vars "$env_id" "$RAILWAY_SVC_POSTGRES_ID" Postgres "$names" "${pairs[@]}"
+  # set_service_vars splits its secrets argument on spaces.
+  set_service_vars "$env_id" "$RAILWAY_SVC_POSTGRES_ID" Postgres "${names//$'\n'/ }" "${pairs[@]}"
   for n in $names; do
     if [ "$(auth_kind "$GQL_RESPONSE" "$n")" != empty ]; then
       echo "::error::Postgres.$n is not blank in environment $env_id after the write. Value not printed."

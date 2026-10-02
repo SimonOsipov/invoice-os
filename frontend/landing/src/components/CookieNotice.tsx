@@ -19,10 +19,10 @@ export function CookieNotice({
         role="region"
         aria-label="Cookie notice"
         aria-live="polite"
-        className="cookie-note"
+        className="cookie-note card-floating"
         inert={suppressed}
       >
-        <div className="eyebrow">Cookies</div>
+        <div className="t-step">Cookies</div>
         {current ? (
           <p className="cn-setting">
             {current.analytics ? 'Analytics cookies are on.' : 'Analytics cookies are off.'}

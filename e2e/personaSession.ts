@@ -16,7 +16,7 @@ import { resolveTarget } from './targets'
 //              The same discriminator the four existing signInFirm copies already wait on.
 //   ops     -> the default Overview screen's h1 (ops-console/src/components/Overview.tsx:154)
 //   support -> the default Submissions ops h1 (support-console/src/components/Submissions.tsx:48)
-const DESTINATION_READY: Record<Destination, (page: Page) => Promise<void>> = {
+export const DESTINATION_READY: Record<Destination, (page: Page) => Promise<void>> = {
   app: async (page) => {
     await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
   },
@@ -28,11 +28,12 @@ const DESTINATION_READY: Record<Destination, (page: Page) => Promise<void>> = {
   },
 }
 
-// Sign in as a persona through the landing hand-off and wait until its destination has
+// Sign in as an app persona through the landing hand-off and wait until its destination has
 // actually drawn. The landing page is the single sign-in front door, so no deployed build
 // has a picker to click — `?persona=` IS the sign-in, exactly as landing destUrl() hands
-// off. The response is asserted ok() BEFORE the discriminator so an HTTP failure reports as
-// itself rather than as a selector timeout.
+// off. A console takes a real staff session instead (staffSession.ts). The response is
+// asserted ok() BEFORE the discriminator so an HTTP failure reports as itself rather than
+// as a selector timeout.
 export async function signInAs(page: Page, id: PersonaId): Promise<void> {
   const url = signInUrl(id)
   const res = await page.goto(url)
@@ -43,8 +44,8 @@ export async function signInAs(page: Page, id: PersonaId): Promise<void> {
 
 // The refusal half of the axis: hand a destination a persona it does not admit and assert it
 // bounces back to the landing page. All three gates refuse the same way — no session, so the
-// SPA navigates to landingBase() (app/src/App.tsx, ops-console/src/App.tsx:40-44,
-// support-console/src/App.tsx:41-45) — which is why one helper covers all of them.
+// SPA navigates to landingBase() (the console's StaffGate does it after an async boot) —
+// which is why one helper covers all of them.
 //
 // Builds the URL from DESTINATION_ENV rather than signInUrl(), because the whole point is to
 // pair a persona with a destination that is NOT its own.

@@ -146,6 +146,47 @@ export async function provisionRealAccount(prefix: string, kind?: TenantKind, di
   return account
 }
 
+// A fresh GoTrue account with no workspace. Forks auto-confirm, so it signs in at once.
+export async function registerFresh(prefix = 'handoff'): Promise<{ email: string; password: string }> {
+  const id = crypto.randomUUID()
+  const account = { email: `${prefix}-${id}@example.com`, password: id.slice(0, 16) }
+  const res = await rawFetch('/auth/register', { method: 'POST', body: account })
+  if (res.status !== 202) throw new Error(`register answered ${res.status}: ${JSON.stringify(res.body)}`)
+  return account
+}
+
+// One sign-in, one GoTrue session.
+export async function signInSession(email: string, password: string): Promise<{ access_token: string; refresh_token: string }> {
+  const state = mintSignInState()
+  const res = await rawFetch('/auth/exchange', { method: 'POST', body: { code: await signInForCode(email, password, state), state } })
+  if (res.status !== 200) throw new Error(`exchange answered ${res.status}: ${JSON.stringify(res.body)}`)
+  return res.body as { access_token: string; refresh_token: string }
+}
+
+// Unverified payload of a JWT the gateway just minted.
+export function claimsOf(token: string): Record<string, unknown> {
+  return JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8')) as Record<string, unknown>
+}
+
+export function subjectOf(token: string): string {
+  return claimsOf(token).sub as string
+}
+
+export interface StaffAccount {
+  email: string
+  password: string
+  userId: string
+}
+
+// POST /auth/mock/staff exists only in the mock build, which every PR fork runs.
+export async function provisionStaffAccount(prefix: string): Promise<StaffAccount> {
+  const account = await registerFresh(prefix)
+  const userId = subjectOf((await signInSession(account.email, account.password)).access_token)
+  const grant = await rawFetch('/auth/mock/staff', { method: 'POST', body: { user_id: userId } })
+  if (grant.status !== 204) throw new Error(`staff grant answered ${grant.status}: ${JSON.stringify(grant.body)}`)
+  return { ...account, userId }
+}
+
 // ---- Wire contract types, declared locally to the verified contract
 // (internal/tenancy, internal/portfolio/portfolio.go, internal/validation/
 // rule.go + handlers.go). Me mirrors e2e/topology/isolation.spec.ts's Me

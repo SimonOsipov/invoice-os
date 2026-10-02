@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { resolveTarget } from '../targets'
-import { enclosesRect, rectsOverlap, WIDE_WIDTHS, type Rect } from '../topology/layout'
+import { enclosesRect, gaps, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from '../topology/layout'
 import { seedConsent } from './landingConsent'
 import { isProductionHost, isSentryHost } from './sentryHost'
 
@@ -756,6 +756,68 @@ test('landing demo: the inline card taxpayer-size value fits its box', async ({ 
   }
 
   expectClosedGateStayedSilent(sinks)
+})
+
+// O1: the modal card fits the viewport and sits centred, widest first, then a phone.
+test('landing demo: the modal card fits and sits centred at every width', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 1080 })
+  await openLanding(page)
+  const dialog = await openDemoModal(page)
+  const card = dialog.locator(':scope > div')
+  await expect(card).toHaveCount(1)
+
+  const viewports = [...WIDE_WIDTHS.map((width) => ({ width, height: 1080 })), { width: 390, height: 667 }]
+  const measured: Array<{ width: number; height: number; cardWidth: number; left: number; right: number }> = []
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport)
+    const at = `${viewport.width}x${viewport.height}`
+    // The resize re-lays the overlay; poll until the card is settled, enclosed and centred.
+    await expect
+      .poll(async () => {
+        await settleAnimations(card)
+        const box = await card.boundingBox()
+        if (!box) return null
+        const side = gaps(box, { x: 0, width: viewport.width })
+        const fits = enclosesRect({ x: 0, y: 0, width: viewport.width, height: viewport.height }, box, 0.5)
+        return fits && Math.abs(side.left - side.right) <= 1
+      }, { message: `the card is not enclosed and centred at ${at}` })
+      .toBe(true)
+    const box = (await card.boundingBox())!
+    const side = gaps(box, { x: 0, width: viewport.width })
+    measured.push({ ...viewport, cardWidth: box.width, left: side.left, right: side.right })
+  }
+
+  await testInfo.attach('demo-modal-fit.json', { body: JSON.stringify(measured, null, 2), contentType: 'application/json' })
+  expect(measured.length, 'one reading per width').toBe(WIDE_WIDTHS.length + 1)
+  expect(measured[0].width, 'the widest width is read first').toBe(2560)
+  for (const m of measured) expect(m.cardWidth, `the card has no width at ${m.width}`).toBeGreaterThan(0)
+})
+
+// O2: at 390x667 the card scrolls its own content; the page behind it does not move.
+test('landing demo: the modal card scrolls inside itself at 390', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1080 })
+  await openLanding(page)
+  const dialog = await openDemoModal(page)
+  const card = dialog.locator(':scope > div')
+  await expect(card).toHaveCount(1)
+  await page.setViewportSize({ width: 390, height: 667 })
+  await settleAnimations(card)
+
+  const scrollY0 = await page.evaluate(() => window.scrollY)
+  const submit = submitButton(dialog)
+  await submit.scrollIntoViewIfNeeded()
+
+  const overflow = await card.evaluate((el) => ({ scrollHeight: el.scrollHeight, clientHeight: el.clientHeight }))
+  // Non-vacuity: a card that fits has nothing to scroll.
+  expect(overflow.scrollHeight, 'the card has no overflow to scroll at 390x667').toBeGreaterThan(overflow.clientHeight + 1)
+  await expect.poll(() => card.evaluate((el) => el.scrollTop), { message: 'the card did not scroll' }).toBeGreaterThan(0)
+
+  const [cardBox, submitBox] = await Promise.all([card.boundingBox(), submit.boundingBox()])
+  expect(cardBox, 'the card has no box').not.toBeNull()
+  expect(submitBox, 'the submit has no box').not.toBeNull()
+  expect(enclosesRect(cardBox!, submitBox!, 0.5), 'the card does not enclose the submit').toBe(true)
+  await expect(submit).toBeInViewport()
+  expect(await page.evaluate(() => window.scrollY), 'the page behind the modal scrolled').toBe(scrollY0)
 })
 
 // E7 — the deployed scroll-depth path. Reads the whole page, opens no modal, and asserts

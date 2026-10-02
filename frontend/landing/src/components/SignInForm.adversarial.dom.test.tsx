@@ -467,7 +467,7 @@ describe('SignInModal adversarial: the configured gate', () => {
     const card = Array.from(d.children).find((c) => c.tagName === 'DIV') as HTMLElement
     expect(card).toBeDefined()
     expect(card.contains(one(d, 'form'))).toBe(true)
-    expect(card.style.maxHeight).toBe('calc(100vh - 48px)')
+    expect(card.style.maxHeight).toBe('calc(100dvh - 48px)')
     expect(card.style.overflowY).toBe('auto')
   })
 

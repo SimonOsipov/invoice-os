@@ -65,20 +65,20 @@ function cssRules(css: string): string[] {
     .filter((r) => !r.startsWith(' '))
 }
 
-// Captured from the popup as it rendered at 75f48da4, before the extraction. The rule
-// SET is the contract; the order inside the single <style> is the one named exception.
-const POPUP_CSS_RULES_BEFORE_EXTRACTION = [
+// The popup's rule SET is the contract (order aside): MODAL_CHROME_CSS, DEMO_FORM_CSS, the phone rule.
+const POPUP_CSS_RULES = [
   'from { opacity: 0; }',
   'to { opacity: 1; }',
-  'from { opacity: 0; transform: translateY(10px) scale(0.985); }',
+  'from { opacity: 0; transform: translateY(8px); }',
   'to { opacity: 1; transform: none; }',
   'to { transform: rotate(360deg); }',
   '.dm-input, .dm-select { transition: border-color 120ms, box-shadow 120ms; }',
   '.dm-input:focus, .dm-select:focus { border-color: var(--action) !important; box-shadow: 0 0 0 3px var(--action-glow); outline: none; }',
   '.dm-err { border-color: var(--status-red-text) !important; }',
   '.dm-select { appearance: none; -webkit-appearance: none; }',
-  '.si-close { transition: background 120ms ease-out, color 120ms ease-out; }',
-  '.si-close:hover { background: var(--bg-3); color: var(--fg-1); }',
+  '.si-close { transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }',
+  '.si-close:hover { background: var(--muted); color: var(--ink); }',
+  '.si-close:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }',
   '.dm-row { flex-direction: column !important; align-items: stretch !important; }',
   '.dm-overlay { padding: 14px !important; }',
 ]
@@ -91,12 +91,12 @@ describe('the popup DOM survives the extraction (A1-A3)', () => {
     expect(ids).toEqual(['dm-name', 'dm-email', 'dm-company', 'dm-role', 'dm-size', 'dm-volume', 'dm-consent'])
   })
 
-  it('A2: the single <style> carries exactly the pre-extraction rule set, order aside', () => {
+  it('A2: the single <style> carries exactly the v2 chrome, form and phone rule set, order aside', () => {
     const styles = Array.from(popup.matchAll(/<style>([\s\S]*?)<\/style>/g))
     expect(styles.length).toBe(1)
     const rules = cssRules(styles[0][1])
-    expect(rules.length).toBe(POPUP_CSS_RULES_BEFORE_EXTRACTION.length)
-    expect([...rules].sort()).toEqual([...POPUP_CSS_RULES_BEFORE_EXTRACTION].sort())
+    expect(rules.length).toBe(POPUP_CSS_RULES.length)
+    expect([...rules].sort()).toEqual([...POPUP_CSS_RULES].sort())
   })
 
   it('A3: the success panel is the one node that gained markup — id + tabindex, nothing else', async () => {
@@ -137,7 +137,7 @@ describe('DEMO_FORM_CSS is the form half only (A5)', () => {
     }
     // The card (BUG-19-02) renders this string on its own — a leaked overlay or
     // close-button rule would restyle a surface that has neither.
-    for (const shellOnly of ['dmOvIn', 'dmCardIn', '.si-close', '.dm-overlay']) {
+    for (const shellOnly of ['ovIn', 'cardIn', '.si-close', '.dm-overlay']) {
       expect(DEMO_FORM_CSS).not.toContain(shellOnly)
     }
   })

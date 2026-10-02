@@ -186,7 +186,7 @@ describe('exactly one style element carries both halves (S16, NEW-BEHAVIOUR)', (
     const html = renderToStaticMarkup(createElement(DemoModal, { onClose: noop }))
     const styleTags = html.match(/<style/g) ?? []
     expect(styleTags.length).toBe(1)
-    for (const needle of ['dmOvIn', 'dmCardIn', '.si-close', '.dm-overlay', 'dmSpin', '.dm-input:focus', '.dm-err', '.dm-row']) {
+    for (const needle of ['ovIn', 'cardIn', '.si-close', '.dm-overlay', 'dmSpin', '.dm-input:focus', '.dm-err', '.dm-row']) {
       expect(html).toContain(needle)
     }
     expect(html).toContain(mod.DEMO_FORM_CSS)

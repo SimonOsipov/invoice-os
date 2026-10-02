@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { resolveTarget } from '../targets'
+import { gaps, settleAnimations } from '../topology/layout'
 import { seedConsent } from './landingConsent'
 
 // The sign-in modal carries the email form above the persona list, so it is
@@ -11,6 +12,7 @@ const LANDING_URL = resolveTarget('LANDING_URL')
 const VIEWPORTS = [
   { width: 390, height: 667 },
   { width: 1280, height: 800 },
+  { width: 1440, height: 900 },
 ] as const
 
 // A state in the app's shape (43 base64url characters): landing only checks the format.
@@ -40,6 +42,13 @@ for (const viewport of VIEWPORTS) {
         return box != null && box.x >= 0 && box.y >= 0 && box.x + box.width <= viewport.width && box.y + box.height <= viewport.height
       }, { message: `the card overflows ${viewport.width}x${viewport.height}` })
       .toBe(true)
+
+    // O1: equal side gaps, read after the entry animation has finished.
+    await settleAnimations(card)
+    const cardBox = await card.boundingBox()
+    expect(cardBox, 'the card has no box').not.toBeNull()
+    const side = gaps(cardBox!, { x: 0, width: viewport.width })
+    expect(Math.abs(side.left - side.right), `the card is off-centre at ${viewport.width}x${viewport.height}: ${JSON.stringify(side)}`).toBeLessThanOrEqual(1)
 
     const submit = dialog.getByRole('button', { name: 'Sign in →', exact: true })
     await submit.scrollIntoViewIfNeeded()

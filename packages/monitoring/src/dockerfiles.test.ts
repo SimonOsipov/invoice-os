@@ -1,29 +1,15 @@
 /// <reference types="node" />
-import { readdirSync, readFileSync, existsSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { FRONTEND, monitoredSpas } from './monitoredSpas.testutil'
 
-const FRONTEND = fileURLToPath(new URL('../../../frontend', import.meta.url))
-
-const stripJsComments = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 const codeLines = (dockerfile: string) =>
   dockerfile.split('\n').map((l) => l.trim()).filter((l) => l !== '' && !l.startsWith('#'))
 
 describe('dockerfiles', () => {
   it('dockerfiles_everyMonitoredSpaBakesTheDsnAndReleaseFallback', () => {
-    const spas = readdirSync(FRONTEND, { withFileTypes: true })
-      .filter((e) => e.isDirectory() && existsSync(join(FRONTEND, e.name, 'src/main.tsx')))
-      .map((e) => e.name)
-      .sort()
-    // Floor: the walk found the SPAs; all four must be monitored below.
-    expect(spas, 'the walk found no SPA').toContain('landing')
-
-    const initsIn = (n: string) => {
-      const f = join(FRONTEND, n, 'src/instrument.ts')
-      return existsSync(f) && stripJsComments(readFileSync(f, 'utf8')).includes('initMonitoring(')
-    }
-    const monitored = spas.filter(initsIn)
+    const monitored = monitoredSpas()
     expect(monitored).toEqual(['app', 'landing', 'ops-console', 'support-console'])
 
     // Control: the line finder sees a pre-existing app ARG, so a miss below is a real miss.
@@ -53,6 +39,39 @@ describe('dockerfiles', () => {
         expect(at, `${name}/Dockerfile lacks "${want}" before its build RUN`).toBeGreaterThan(-1)
         expect(at, `${name}/Dockerfile has "${want}" after its build RUN`).toBeLessThan(build)
       }
+    }
+  })
+
+  it('dockerfiles_theAuthTokenReachesOnlyTheBuildStage', () => {
+    const monitored = monitoredSpas()
+    expect(monitored).toEqual(['app', 'landing', 'ops-console', 'support-console'])
+
+    for (const name of monitored) {
+      const lines = codeLines(readFileSync(join(FRONTEND, name, 'Dockerfile'), 'utf8'))
+      const froms = lines.flatMap((l, i) => (/^FROM\s/i.test(l) ? [i] : []))
+      expect(froms, `${name}: expected a build FROM and a serve FROM`).toHaveLength(2)
+      const [buildFrom, serveFrom] = froms
+      const build = lines.findIndex((l) => /^RUN\s+pnpm\s+--filter/i.test(l))
+      expect(build, `${name}: no build RUN`).toBeGreaterThan(buildFrom)
+      expect(build, `${name}: build RUN is not in the build stage`).toBeLessThan(serveFrom)
+
+      // Control: the same finder locates a pre-existing ARG inside the build stage.
+      const dsn = lines.findIndex((l) => /^ARG\s+VITE_SENTRY_DSN$/i.test(l))
+      expect(dsn, `${name}: finder missed ARG VITE_SENTRY_DSN`).toBeGreaterThan(buildFrom)
+      expect(dsn).toBeLessThan(build)
+
+      const args = lines.flatMap((l, i) => (/^ARG\s+SENTRY_AUTH_TOKEN$/i.test(l) ? [i] : []))
+      expect(args, `${name}/Dockerfile must declare ARG SENTRY_AUTH_TOKEN exactly once`).toHaveLength(1)
+      expect(args[0], `${name}: ARG SENTRY_AUTH_TOKEN is before the build FROM`).toBeGreaterThan(buildFrom)
+      expect(args[0], `${name}: ARG SENTRY_AUTH_TOKEN is after the build RUN`).toBeLessThan(build)
+
+      // The token must not persist in image metadata or a default value.
+      expect(lines.filter((l) => /^ENV\b.*SENTRY_AUTH_TOKEN/i.test(l)), `${name}: ENV names the token`).toEqual([])
+      expect(lines.filter((l) => /SENTRY_AUTH_TOKEN=/i.test(l)), `${name}: token assigned`).toEqual([])
+
+      const serve = lines.slice(serveFrom + 1)
+      expect(serve.length, `${name}: serve stage is empty`).toBeGreaterThan(0)
+      expect(serve.filter((l) => /SENTRY_AUTH_TOKEN/i.test(l)), `${name}: serve stage names the token`).toEqual([])
     }
   })
 })

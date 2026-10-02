@@ -41,7 +41,7 @@ func TestIdentityMiddleware_EmptyTenantHeaderOverTheWire(t *testing.T) {
 			if tc.tenant != nil {
 				req.Header["X-Tenant-Id"] = tc.tenant
 			}
-			req.Header.Set("X-User-ID", "user-42")
+			req.Header.Set("X-User-ID", testSubject)
 			req.Header.Set("X-User-Role", "authenticated")
 			req.Header.Set("X-User-Email", "ada@example.test")
 			res, err := http.DefaultClient.Do(req)
@@ -53,7 +53,7 @@ func TestIdentityMiddleware_EmptyTenantHeaderOverTheWire(t *testing.T) {
 			if sawHeader != tc.wantHeader {
 				t.Fatalf("X-Tenant-ID present on the server = %v, want %v", sawHeader, tc.wantHeader)
 			}
-			want := auth.Identity{Subject: "user-42", Role: "authenticated", Email: "ada@example.test"}
+			want := auth.Identity{Subject: testSubject, Role: "authenticated", Email: "ada@example.test"}
 			if !callerOK || caller != want {
 				t.Errorf("tenant-less caller = %+v (ok %v), want %+v", caller, callerOK, want)
 			}

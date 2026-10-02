@@ -77,7 +77,7 @@ describe('F-2: the sign-in control opens the sign-in modal', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('F2-b / HD-16: exactly one "Platform login" in header and on the page, none reads "Explore the platform"', async () => {
+  it('F2-b / HD-16: exactly one "Platform login" in header and on the page, and no retired trigger label', async () => {
     await mountApp()
     const header = document.querySelector('header')!
     const inHeader = Array.from(header.querySelectorAll('button')).filter((b) => b.textContent?.trim() === SIGN_IN_CTA)
@@ -87,7 +87,7 @@ describe('F-2: the sign-in control opens the sign-in modal', () => {
     )
     expect(inHeader.length, 'nav CTA missing or duplicated').toBe(1)
     expect(onPage.length, 'expected the header copy only').toBe(1)
-    expect(oldLabel.length, 'a header button still reads "Explore the platform"').toBe(0)
+    expect(oldLabel.length, 'the retired trigger label is still on a header control').toBe(0)
     expect(consoleError).not.toHaveBeenCalled()
   })
 
@@ -138,6 +138,28 @@ describe('F-2: the sign-in control opens the sign-in modal', () => {
     await clickByText(header, SIGN_IN_CTA)
     expect(document.querySelectorAll(DIALOG).length).toBe(1)
     expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Sign in')
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+})
+
+describe('F-2 menu: sign-in from the burger menu', () => {
+  it('F2-g: the menu Platform login opens the Sign-in dialog and the menu is gone behind it', async () => {
+    await mountApp()
+    const burger = document.querySelector<HTMLButtonElement>('header button.a-burger')
+    expect(burger, 'expected the header burger').not.toBeNull()
+    await act(async () => {
+      burger!.click()
+    })
+    const menu = document.querySelector('.a-menu')
+    expect(menu, 'control: the burger opened the menu').not.toBeNull()
+    expect(document.querySelectorAll(DIALOG).length, 'control: no dialog yet').toBe(0)
+
+    await clickByText(menu!, SIGN_IN_CTA)
+
+    expect(document.querySelectorAll(DIALOG).length).toBe(1)
+    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Sign in')
+    expect(document.querySelector('.a-menu'), 'the menu closes before the modal opens').toBeNull()
+    expect(burger!.getAttribute('aria-expanded')).toBe('false')
     expect(consoleError).not.toHaveBeenCalled()
   })
 })

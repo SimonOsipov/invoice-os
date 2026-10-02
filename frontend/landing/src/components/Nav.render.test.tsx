@@ -1,7 +1,7 @@
 // SSR contract of the v2 header (RESKIN-02-01): frame tokens, Logo lockup, nav list, closed burger.
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { GLYPHS } from '../icons'
 import { NAV_LINKS, Nav } from './Nav'
@@ -122,5 +122,25 @@ describe('HD-06 the closed burger names a menu that is not rendered', () => {
 
     const inner = html.slice(tags[0].index!, html.indexOf('</button>', tags[0].index!))
     expect([...inner.matchAll(/<path d="([^"]*)"/g)].map((m) => m[1])).toEqual([...GLYPHS.menu])
+  })
+})
+
+describe('HD-03b the Primary nav renders every entry in list order', () => {
+  const EXTRA: Link[] = [V2_NAV[1], V2_NAV[2]]
+  let before: number
+  beforeEach(() => {
+    before = NAV_LINKS.length
+    NAV_LINKS.push(...EXTRA)
+  })
+  afterEach(() => void NAV_LINKS.splice(before))
+
+  it.each([
+    ['', ''],
+    ['/', '/'],
+  ])('with hrefPrefix %j the anchors are the prefixed NAV_LINKS pairs, in order, one per entry', (hrefPrefix, p) => {
+    expect(NAV_LINKS.length, 'control: the fixture grew the list').toBe(before + EXTRA.length)
+    expect(primaryNavLinks(render(hrefPrefix ? { hrefPrefix } : {}))).toEqual(
+      NAV_LINKS.map((l) => ({ label: l.label, href: `${p}${l.href}` })),
+    )
   })
 })

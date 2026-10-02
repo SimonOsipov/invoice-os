@@ -212,3 +212,125 @@ describe('HD-17 menu links share the nav link current state', () => {
     expect(Array.from(document.querySelectorAll('[aria-current]'))).toEqual([navLink, menuLink])
   })
 })
+
+describe('HD-07b aria-controls names the same menu id at rest and while open', () => {
+  it('the id is non-empty, identical closed, open and reopened, and is the menu element id', () => {
+    mount()
+    const atRest = burger().getAttribute('aria-controls')
+    expect(atRest, 'aria-controls is empty at rest').toBeTruthy()
+
+    toggle()
+    expect(burger().getAttribute('aria-controls')).toBe(atRest)
+    expect(menu()?.id).toBe(atRest)
+    expect(document.querySelectorAll(`[id="${atRest}"]`).length, 'the id is unique on the page').toBe(1)
+
+    toggle()
+    toggle()
+    expect(burger().getAttribute('aria-controls'), 'the id survives a reopen').toBe(atRest)
+    expect(menu()?.id).toBe(atRest)
+  })
+})
+
+describe('HD-07c the menu lists every NAV_LINKS entry in order, prefixed or not', () => {
+  const EXTRA = [
+    { label: 'The solution', href: '#solution' },
+    { label: 'Platform', href: '#platform' },
+  ]
+  let before: number
+  beforeEach(() => {
+    before = NAV_LINKS.length
+    NAV_LINKS.push(...EXTRA)
+  })
+  afterEach(() => void NAV_LINKS.splice(before))
+
+  it.each([
+    ['', ''],
+    ['/', '/'],
+  ])('with hrefPrefix %j the menu hrefs are the prefixed NAV_LINKS hrefs, in list order', (hrefPrefix, p) => {
+    expect(NAV_LINKS.length, 'control: the fixture grew the list').toBe(before + EXTRA.length)
+    mount(hrefPrefix ? { hrefPrefix } : {})
+    toggle()
+    const links = Array.from(menu()!.querySelectorAll('a.a-menu-link'))
+    expect(links.map((a) => [a.textContent, a.getAttribute('href')])).toEqual(
+      NAV_LINKS.map((l) => [l.label, `${p}${l.href}`]),
+    )
+  })
+})
+
+describe('HD-08c only Escape closes the open menu', () => {
+  const key = (k: string) => act(() => void document.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true })))
+
+  it('other keys leave it open; Escape closes it from a body focus and sends focus to the burger; a second Escape is inert', () => {
+    mount()
+    toggle()
+    expect(menu(), 'control: open').not.toBeNull()
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    for (const k of ['Enter', 'Esc', ' ', 'Tab', 'ArrowDown', 'escape']) key(k)
+    expect(menu(), 'a non-Escape key closed the menu').not.toBeNull()
+    expect(burger().getAttribute('aria-expanded')).toBe('true')
+
+    key('Escape')
+    expect(menu()).toBeNull()
+    expect(document.activeElement, 'focus lands on the burger even from <body>').toBe(burger())
+
+    const book = headerButton('Book a demo')!
+    book.focus()
+    key('Escape')
+    expect(document.activeElement, 'a second Escape must not move focus').toBe(book)
+  })
+})
+
+describe('HD-09b header Book a demo and burger interplay', () => {
+  it('Book a demo with the menu open closes it and the listener goes with it', () => {
+    const remove = vi.spyOn(document, 'removeEventListener')
+    mount()
+    toggle()
+    act(() => void headerButton('Book a demo')!.click())
+    expect(menu()).toBeNull()
+    expect(burger().getAttribute('aria-expanded')).toBe('false')
+    expect(remove.mock.calls.filter((c) => c[0] === 'keydown').length).toBe(1)
+    expect(onBookDemo).toHaveBeenCalledTimes(1)
+  })
+
+  it('a menu link click sets the active link and closes; the header Platform login stays one control', () => {
+    for (const s of [
+      { id: 'top', top: -500 },
+      { id: 'problem', top: 500 },
+    ]) {
+      const el = document.createElement('section')
+      el.id = s.id
+      el.getBoundingClientRect = () => ({ top: s.top }) as DOMRect
+      document.body.appendChild(el)
+    }
+    mount()
+    expect(document.querySelector('[aria-current]'), 'control: nothing is current before the click').toBeNull()
+    toggle()
+    act(() => void menu()!.querySelector<HTMLAnchorElement>('a.a-menu-link')!.click())
+    expect(menu()).toBeNull()
+    const current = document.querySelector('nav[aria-label="Primary"] a[aria-current="true"]')
+    expect(current?.getAttribute('href'), 'the click lights the nav link at once').toBe('#problem')
+    expect(Array.from(header().querySelectorAll('button')).filter((b) => b.textContent?.trim() === 'Platform login').length).toBe(1)
+  })
+})
+
+describe('HD-14b a menu left open across a resize stays coherent', () => {
+  it('the menu and listener survive a resize above the breakpoint, links re-evaluate, Escape still closes', () => {
+    const sec = document.createElement('section')
+    sec.id = 'problem'
+    sec.getBoundingClientRect = () => ({ top: 80 }) as DOMRect
+    document.body.appendChild(sec)
+    mount()
+    toggle()
+    expect(menu()!.querySelector('a.a-menu-link')?.getAttribute('aria-current'), 'control: current at 86px').toBe('true')
+
+    document.documentElement.style.setProperty('--header-h', '73px')
+    act(() => void window.dispatchEvent(new Event('resize')))
+    expect(menu(), 'CSS hides the menu above 1120px; the JS state is not reset').not.toBeNull()
+    expect(burger().getAttribute('aria-expanded')).toBe('true')
+    expect(document.querySelector('[aria-current]'), 'no link is current at 73px, nav or menu').toBeNull()
+
+    act(() => void document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    expect(menu()).toBeNull()
+    expect(document.activeElement).toBe(burger())
+  })
+})

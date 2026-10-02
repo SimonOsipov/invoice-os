@@ -176,6 +176,32 @@ describe('F-3: all nine rendered demo CTAs open the same modal', () => {
   })
 })
 
+describe('F3-g: the header Book a demo keeps its attribution and closes the burger menu', () => {
+  it("opens the demo dialog with trackDemoOpen('nav') once and leaves no menu behind", async () => {
+    const trackDemoOpen = vi.fn()
+    vi.doMock('./analytics', async () => ({ ...(await vi.importActual<object>('./analytics')), trackDemoOpen }))
+    try {
+      await mountApp()
+      const burger = document.querySelector<HTMLButtonElement>('header button.a-burger')
+      expect(burger, 'expected the header burger').not.toBeNull()
+      await act(async () => {
+        burger!.click()
+      })
+      expect(document.querySelector('.a-menu'), 'control: the menu is open').not.toBeNull()
+      expect(trackDemoOpen, 'control: nothing tracked yet').not.toHaveBeenCalled()
+
+      await clickByText(document.querySelector('header')!, 'Book a demo')
+
+      expect(trackDemoOpen.mock.calls).toEqual([['nav']])
+      expect(document.querySelectorAll(DIALOG).length).toBe(1)
+      expect(document.querySelector('.a-menu')).toBeNull()
+      expect(consoleError).not.toHaveBeenCalled()
+    } finally {
+      vi.doUnmock('./analytics')
+    }
+  })
+})
+
 // A1 (AC-1.3, NEW-BEHAVIOUR): pins the end state directly -- #demo's button must stop
 // opening the popup. #dc-name-error proves the click was not inert (validation ran on
 // a real submit), rather than a dead handler that also opens no dialog.

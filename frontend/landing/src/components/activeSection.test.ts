@@ -98,9 +98,8 @@ describe('activeNavHref', () => {
   })
 
   it('threshold of exactly 0 is honored, not silently swapped for a nonzero default', () => {
-    // Every U1-U7 row uses THRESHOLD (66), so none of them would notice a `threshold ||
-    // someDefault` bug — 0 is the one input value JS truthiness gets wrong. Confirmed by
-    // mutation: a `threshold || 66` implementation passes all of U1-U7 and only fails here.
+    // Every U1-U7 row uses THRESHOLD, so none of them would notice a `threshold ||
+    // someDefault` bug — 0 is the one input value JS truthiness gets wrong.
     const sections = [
       { id: 'problem', top: 0 },
       { id: 'solution', top: 1 },

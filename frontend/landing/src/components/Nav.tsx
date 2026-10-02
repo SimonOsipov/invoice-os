@@ -26,7 +26,7 @@ export function Nav({
 
   useEffect(() => {
     // Header height comes from --header-h, the single source of truth (it also
-    // drives this file's calc() below and landing.css's scroll-padding-top).
+    // drives landing.css's scroll-padding-top).
     // No fallback on purpose: if the token ever went missing, parseFloat('') is
     // NaN, every `top <= NaN` is false and no link lights — the failure is dark,
     // never wrong. Do not "fix" this with a hardcoded pixel fallback.

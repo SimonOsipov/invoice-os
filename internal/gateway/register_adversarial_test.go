@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A literal, not maxRegisterBodyBytes: a test that reads the constant moves with it.
@@ -161,6 +162,18 @@ func TestRegister_LogsNeverCarryCredentials(t *testing.T) {
 			for _, s := range []string{regEmail, regPassword} {
 				if strings.Contains(buf.String(), s) {
 					t.Errorf("log carries %q: %s", s, buf.String())
+				}
+			}
+
+			// With a minimum the timing line joins the log; a 400 logs none.
+			floorLog, floorBuf := captureLog()
+			serveFloor(t, authURL, 50*time.Millisecond, floorLog, registerBody(regEmail, regPassword))
+			if c.status != http.StatusBadRequest && len(timingLines(t, floorBuf)) != 1 {
+				t.Fatalf("no %q line at a 50 ms minimum: %s", timingMsg, floorBuf.String())
+			}
+			for _, s := range []string{regEmail, regPassword} {
+				if strings.Contains(floorBuf.String(), s) {
+					t.Errorf("log at a 50 ms minimum carries %q: %s", s, floorBuf.String())
 				}
 			}
 		})

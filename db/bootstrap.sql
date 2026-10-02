@@ -11,8 +11,8 @@
 --     Still NOBYPASSRLS: its reach is exactly what its policies+grants allow, no more.
 --   supabase_auth_admin    — GoTrue's login role; owns schema `auth`, nothing in `public`.
 -- And one NOLOGIN role:
---   auth_hook_reader       — owns the SECURITY DEFINER access-token hook; invoice_migrator
---     may SET ROLE to it but does not inherit it, so the migrator's own reads stay scoped.
+--   auth_hook_reader       — invoice_migrator may SET ROLE to it but does not inherit it,
+--     so the migrator's own reads stay scoped.
 --
 -- Why non-superuser + NOBYPASSRLS matters: Row-Level Security is only *enforceable*
 -- if the roles it applies to cannot bypass it and do not own the tables (an owner

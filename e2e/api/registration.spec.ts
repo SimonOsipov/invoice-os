@@ -5,7 +5,7 @@
 // Every run uses a fresh address and subject: the auth.users, tenants and memberships rows
 // it creates survive the per-deploy reset.
 import { test, expect } from '@playwright/test'
-import { login, memberships, rawFetch, PERSONAS, type Me, type Persona } from './client'
+import { getAuditLog, login, memberships, rawFetch, PERSONAS, type Me, type Persona } from './client'
 import { assertErrorEnvelope } from './contract-helpers'
 import { resolveTarget } from '../targets'
 
@@ -22,6 +22,11 @@ const FORBIDDEN = 'forbidden'
 // internal/gateway/register.go VerifyHandler: the failure redirect's query.
 const VERIFY_FAILED = '?verify=failed'
 
+// internal/gateway/register.go DefaultRegisterMinResponse; a pr-<N> fork inherits the default.
+const REGISTER_MIN_MS = 2000
+// db/seed.dev.sql: reviewer 'Halima Yusuf', status suspended, in tenant 1111...
+const SUSPENDED_MEMBER = 'c0000000-0000-0000-0000-000000000007'
+
 const WORKSPACES = '/api/tenancy/v1/workspaces'
 const ME = '/api/tenancy/v1/me'
 
@@ -34,12 +39,19 @@ test.describe('registration (API E2E, over the deployed gateway)', () => {
     const credentials = { email: `reg-${crypto.randomUUID()}@example.com`, password: crypto.randomUUID().slice(0, 12) }
     expect(credentials.password).toHaveLength(12)
 
+    // Lower bounds only: the deployed app's upper latency is not ours to assert.
+    let t0 = performance.now()
     const first = await rawFetch('/auth/register', { method: 'POST', body: credentials })
+    const firstMs = performance.now() - t0
     expect(first.status, 'a new address').toBe(202)
+    expect(firstMs, 'a new address waits out the minimum').toBeGreaterThanOrEqual(REGISTER_MIN_MS)
     expect(first.body).toEqual(VERIFICATION_PENDING)
 
     // GoTrue answers the repeat 422 user_already_exists; the gateway maps it to 202.
+    t0 = performance.now()
     const repeat = await rawFetch('/auth/register', { method: 'POST', body: credentials })
+    const repeatMs = performance.now() - t0
+    expect(repeatMs, 'a repeat waits out the minimum').toBeGreaterThanOrEqual(REGISTER_MIN_MS)
     expect(repeat.status, 'a repeat must not reveal the address is taken').toBe(202)
     expect(repeat.body).toEqual(VERIFICATION_PENDING)
   })
@@ -123,6 +135,27 @@ test.describe('workspace provisioning (API E2E, over the deployed gateway)', () 
       // The mock token carries no email claim.
       expect(row!.email).toBeNull()
     })
+
+    await test.step('the new admin reads exactly one workspace.provisioned event', async () => {
+      const { events } = await getAuditLog(tenantToken, { event: ['workspace.provisioned'] })
+      expect(events).toHaveLength(1)
+      const [event] = events
+      expect(event.actor).toBe(subject)
+      expect(event.company_scope).toBe('workspace')
+      expect(event.entity_id).toBeNull()
+      expect((event.payload as { tenant_id: string }).tenant_id).toBe(tenantId)
+    })
+  })
+
+  test('a member of another workspace cannot provision a second one', async () => {
+    const token = await login(asSubject(SUSPENDED_MEMBER, ''))
+    const res = await rawFetch(WORKSPACES, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: { workspace_name: `Registration E2E ${crypto.randomUUID().slice(0, 8)}`, display_name: 'Registration E2E' },
+    })
+    assertErrorEnvelope(res, 409, 'suspended member provision')
+    expect((res.body as { error: string }).error).toBe(ALREADY_PROVISIONED)
   })
 
   test('a tenant-bearing caller is refused with 409', async () => {

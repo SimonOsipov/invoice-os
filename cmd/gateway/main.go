@@ -50,6 +50,7 @@ func main() {
 	// Parsed before Provision so a malformed value stops boot before any bootstrap, reset or seed.
 	additional := mustParseIssuers(os.Getenv("AUTH_ADDITIONAL_ISSUERS"))
 	siteURL := mustParseSiteURL(os.Getenv("AUTH_SITE_URL"), app.Logger)
+	registerMinResponse := mustParseRegisterMinResponse(os.Getenv("AUTH_REGISTER_MIN_RESPONSE"), app.Logger)
 
 	// Bootstrap (gated) -> migrate (unconditional) -> reset (gated, PR
 	// environments only, persona-handoff-fix Decision [pr-only-reset]) -> purge
@@ -155,7 +156,7 @@ func main() {
 
 	// Public registration, outside /api/ and the verifier, in every build. No CORS wrap:
 	// no browser client calls it yet.
-	reg := registrationHandlers(probed["auth"], siteURL, app.Logger)
+	reg := registrationHandlers(probed["auth"], siteURL, registerMinResponse, app.Logger)
 	app.Mux.Handle("POST /auth/register", reg.Register)
 	app.Mux.Handle("GET /auth/verify", reg.Verify)
 
@@ -250,7 +251,7 @@ func newJWKSClient() *http.Client {
 
 // registrationHandlers builds the registration handlers against GoTrue at authURL.
 // A nil siteURL means AUTH_SITE_URL is unset: both routes answer 503.
-func registrationHandlers(authURL, siteURL *url.URL, log *slog.Logger) registration {
+func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, log *slog.Logger) registration {
 	if authURL == nil || siteURL == nil {
 		nc := gateway.RegistrationNotConfigured()
 		return registration{Register: nc, Verify: nc}
@@ -260,7 +261,7 @@ func registrationHandlers(authURL, siteURL *url.URL, log *slog.Logger) registrat
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	return registration{
-		Register: gateway.RegisterHandler(authURL, client, log),
+		Register: gateway.RegisterHandler(authURL, client, minResponse, log),
 		Verify:   gateway.VerifyHandler(authURL, siteURL, client, log),
 	}
 }
@@ -305,6 +306,19 @@ func mustParseSiteURL(raw string, log *slog.Logger) *url.URL {
 		platform.Fatal(log, "gateway: AUTH_SITE_URL must not carry user info, a query or a fragment")
 	}
 	return u
+}
+
+// mustParseRegisterMinResponse parses AUTH_REGISTER_MIN_RESPONSE, a Go duration. Unset gives the
+// default; a value that does not parse or is not above zero stops boot without echoing it.
+func mustParseRegisterMinResponse(raw string, log *slog.Logger) time.Duration {
+	if raw == "" {
+		return gateway.DefaultRegisterMinResponse
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		platform.Fatal(log, "gateway: AUTH_REGISTER_MIN_RESPONSE is not a positive duration such as 2s")
+	}
+	return d
 }
 
 // loadUpstreams reads each service's base URL from <NAME>_URL, returning the

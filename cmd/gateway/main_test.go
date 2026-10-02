@@ -1068,9 +1068,14 @@ func serveRegistration(h http.Handler, method, target, body string) *httptest.Re
 func TestRegistrationHandlers_WiresBothRoutes(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(authURL, site, slog.New(slog.DiscardHandler))
+	const floor = 100 * time.Millisecond
+	reg := registrationHandlers(authURL, site, floor, slog.New(slog.DiscardHandler))
 
+	start := time.Now()
 	rec := serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`)
+	if elapsed := time.Since(start); elapsed < floor {
+		t.Errorf("Register answered after %v, want no earlier than the %v minimum", elapsed, floor)
+	}
 	if rec.Code != http.StatusAccepted {
 		t.Errorf("Register = %d, want 202: %s", rec.Code, rec.Body.String())
 	}
@@ -1086,7 +1091,7 @@ func TestRegistrationHandlers_WiresBothRoutes(t *testing.T) {
 // AUTH_SITE_URL unset: both routes refuse without calling GoTrue.
 func TestRegistrationHandlers_NotConfigured503(t *testing.T) {
 	authURL, calls := fakeAuth(t)
-	reg := registrationHandlers(authURL, nil, slog.New(slog.DiscardHandler))
+	reg := registrationHandlers(authURL, nil, 0, slog.New(slog.DiscardHandler))
 
 	for name, rec := range map[string]*httptest.ResponseRecorder{
 		"Register": serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`),

@@ -1,10 +1,10 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 
-// Design-system tokens, sourced from the shared @invoice-os/design-tokens workspace
-// package (single source of truth; DS project 999b7034-9f23-43d4-9229-51af7dde9f62).
-// Single entry: tokens -> utilities -> .asc-app product layer.
-import '@invoice-os/design-tokens/styles.css'
+// v2 design-system entry (tokens, utilities), then the landing-local bridge that maps
+// the old app-layer names onto it. Never import the v1 entry here.
+import '@invoice-os/design-tokens/v2/styles.css'
+import './styles/bridge.css'
 // Local page styles ported from the prototype's inline <style> (keyframes + hovers).
 import './styles/landing.css'
 

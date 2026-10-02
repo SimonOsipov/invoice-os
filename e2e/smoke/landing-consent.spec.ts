@@ -639,8 +639,8 @@ test('landing consent: Accept and Reject are the same box at the same weight', a
   expectNoConsoleErrors(errors)
 })
 
-// C6 — the notice's policy link is underlined. `.asc-app a { text-decoration: none }` is
-// (0,1,1) and outranks a bare .cn-link, so this is the cascade resolution, not the source.
+// C6 — the notice's policy link is underlined. The v2 `a { text-decoration: none }` is
+// (0,0,1) and a.lnk sets no decoration, so this is the cascade resolution, not the source.
 test('landing consent: the policy link inside the notice is underlined', async ({ page }) => {
   const { errors, card } = await openLanding(page)
 
@@ -736,7 +736,7 @@ test('landing consent: keyboard focus cannot reach the notice while a modal is o
 
 // C9 — first visit at 390x844. The standard overflow check is vacuous twice here: the
 // notice is position:fixed so it adds nothing to document.scrollWidth, and it sits inside
-// .asc-app's overflow-x: clip. The oracle is the card's OWN box.
+// the App root's overflow-x: clip. The oracle is the card's OWN box.
 test('landing consent: the first-visit card is at most a third of the phone viewport', async ({ page }, testInfo) => {
   await page.setViewportSize(PHONE)
   const { errors, card } = await openLanding(page)

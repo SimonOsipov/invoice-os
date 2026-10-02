@@ -143,9 +143,8 @@ export function Nav({
               <a
                 key={l.href}
                 href={`${hrefPrefix}${l.href}`}
-                // Not .ios-link: that rule's hover resolves to amber (the prototype's
-                // generic link behaviour, still what the footer wants). The nav's own
-                // state machine is teal-on-hover, teal-when-current.
+                // Not .ios-link: the nav has its own state machine, teal-on-hover and
+                // teal-when-current.
                 className={l.shed ? `ios-nav-link ${l.shed}` : 'ios-nav-link'}
                 // The spy is a scroll-time answer, so it cannot light the destination
                 // until the jump lands. Setting it here means the indicator moves with

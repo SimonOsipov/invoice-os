@@ -38,9 +38,7 @@ function readSignInBoot(search: string) {
   return { state, bootAt: Date.now(), error: SIGN_IN_OUTCOMES.get(outcome), open: SIGN_IN_OUTCOMES.has(outcome) }
 }
 
-// The whole page lives under `.asc-app` — that scope defines the design-system
-// tokens (--accent, --bg-*, --fg-*, …) and the utility classes (.v2-btn, .label,
-// .mono, .grid-bg, .dot-bg) that every section relies on.
+// Tokens and utility classes (.v2-btn, .label, .mono) are global: v2 plus bridge.css.
 export default function App() {
   // The state is held in memory only, never in storage.
   const [signInBoot] = useState(() => readSignInBoot(window.location.search))
@@ -112,7 +110,6 @@ export default function App() {
 
   return (
     <div
-      className="asc-app"
       style={{
         minHeight: '100vh',
         background: 'var(--bg-1)',

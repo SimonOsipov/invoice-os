@@ -41,7 +41,6 @@ export function SignInModal({ onClose, heldState = NO_STATE, initialError }: { o
 
   return (
     <div
-      className="asc-app"
       onClick={onClose}
       role="dialog"
       aria-modal="true"

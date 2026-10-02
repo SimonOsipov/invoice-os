@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -30,6 +31,7 @@ type guardCalls struct {
 	hasID    bool
 	tenantl  bool
 	tenantID string
+	header   http.Header
 }
 
 func (c *guardCalls) count() int {
@@ -45,6 +47,7 @@ func (c *guardCalls) handler(w http.ResponseWriter, r *http.Request) {
 	c.identity, c.hasID = auth.IdentityFromContext(r.Context())
 	_, c.tenantl = auth.TenantlessCallerFromContext(r.Context())
 	c.tenantID = TenantIDFromContext(r.Context())
+	c.header = r.Header.Clone()
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -113,7 +116,7 @@ func TestRequireGateway_RefusesForgedIdentityWithoutToken(t *testing.T) {
 }
 
 func TestRequireGateway_RefusesWrongEmptyAndShortTokens(t *testing.T) {
-	for _, tok := range []string{"tik", "", "to", "tok "} {
+	for _, tok := range []string{"tik", "", "to", "tok ", "tokk", "TOK", "t"} {
 		t.Run("token="+tok, func(t *testing.T) {
 			app, calls := guardedApp(t)
 			r := httptest.NewRequest(http.MethodGet, "/v1/thing", nil)
@@ -174,21 +177,26 @@ func TestRequireGateway_HealthProbesStayOpen(t *testing.T) {
 	// The guard must be engaged, or "probes answer as at head" proves nothing.
 	assertRefused(t, serve(guarded, httptest.NewRequest(http.MethodGet, "/v1/thing", nil)), "guard engaged")
 
-	for _, path := range []string{"/healthz", "/readyz"} {
-		for _, withForged := range []bool{false, true} {
-			mk := func() *http.Request {
-				r := httptest.NewRequest(http.MethodGet, path, nil)
-				if withForged {
-					newForged().apply(r)
-				}
-				return r
-			}
-			got, want := serve(guarded, mk()), serve(plain, mk())
-			if want.Code != http.StatusOK {
-				t.Fatalf("%s control status = %d, want 200", path, want.Code)
-			}
-			if got.Code != want.Code || got.Body.String() != want.Body.String() {
-				t.Errorf("%s (forged=%v): got %d %q, want %d %q", path, withForged, got.Code, got.Body.String(), want.Code, want.Body.String())
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		for _, probe := range []string{"healthz", "readyz"} {
+			for _, withForged := range []bool{false, true} {
+				name := fmt.Sprintf("%s_%s_forged=%v", method, probe, withForged)
+				t.Run(name, func(t *testing.T) {
+					mk := func() *http.Request {
+						r := httptest.NewRequest(method, "/"+probe, nil)
+						if withForged {
+							newForged().apply(r)
+						}
+						return r
+					}
+					got, want := serve(guarded, mk()), serve(plain, mk())
+					if want.Code != http.StatusOK {
+						t.Fatalf("control status = %d, want 200", want.Code)
+					}
+					if got.Code != want.Code || got.Body.String() != want.Body.String() {
+						t.Errorf("got %d %q, want %d %q", got.Code, got.Body.String(), want.Code, want.Body.String())
+					}
+				})
 			}
 		}
 	}
@@ -214,6 +222,11 @@ func TestRequireGateway_OpenRouteAdmitsWithoutIdentity(t *testing.T) {
 	}
 	if calls.tenantID != "" {
 		t.Errorf("handler saw tenant id %q, want none", calls.tenantID)
+	}
+	for _, h := range []string{"X-Tenant-ID", "X-User-ID", "X-User-Role", "X-User-Email"} {
+		if v := calls.header.Get(h); v != "" {
+			t.Errorf("handler still sees %s = %q, want it deleted", h, v)
+		}
 	}
 }
 

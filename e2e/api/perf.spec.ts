@@ -330,7 +330,7 @@ test.describe('bulk import+validate — 500-invoice/60s perf gate + Day-60 stamp
   // real seeded persona (topology/targets.ts's TENANTS.a), so login() mints a
   // token carrying tenant_id -- clears authorize(), reaches
   // injectIdentity's Del(X-S2S-Token) (gateway.go:141), then 04's
-  // S2SMiddleware (internal/validation/s2s.go:51-64) 401s on the missing
+  // S2SMiddleware 401s on the missing
   // header. The check runs BEFORE the body is read (s2s.go's doc), so the
   // empty body here is deliberate -- what is being proved is unreachability,
   // not a validation-payload contract.

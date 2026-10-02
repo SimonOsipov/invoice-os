@@ -69,6 +69,19 @@ def init_sentry():
     opts = sentry_options(os.environ)
     if opts is not None:
         sentry_sdk.init(**opts)
+        if os.environ.get("SENTRY_TEST_EVENT") == "true":
+            _capture_test_event()
+
+
+def _capture_test_event():
+    # Fingerprint goes on a forked scope so later events do not inherit it.
+    # ceiling: fires on every boot while the container env holds SENTRY_TEST_EVENT; deleting it applies at the next deploy or redeploy
+    with sentry_sdk.new_scope() as scope:
+        scope.fingerprint = ["sentry-test-event", "docling"]
+        try:
+            raise RuntimeError("sentry test event")
+        except RuntimeError as exc:
+            scope.capture_exception(exc)
 
 
 def sentry_state():

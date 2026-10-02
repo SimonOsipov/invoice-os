@@ -2,7 +2,7 @@ import { MODULES } from '../data'
 
 // Ported from the prototype's #modules section: a --gradient-hero band, a 16px
 // single panel divided by --on-dark-10 hairlines, and cells that carry a bare
-// amber glyph (no tile) with no numeral. The cells DO hover — .mod-cell lifts
+// accent glyph (no tile) with no numeral. The cells DO hover — .mod-cell lifts
 // its fill to --on-dark-10, which is the design system's "buttons on dark"
 // behaviour, plus a brightness/translate on the icon. Motion tokens only.
 export function Modules() {

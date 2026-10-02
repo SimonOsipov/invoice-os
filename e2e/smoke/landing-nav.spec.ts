@@ -26,8 +26,8 @@ const LANDING_URL = resolveTarget('LANDING_URL')
 // makes it a second non-nav section E8 could park in, alongside `#demo`.
 const NAV_HREFS = ['#problem', '#modules', '#compliance', '#accountants', '#developers', '#pricing'] as const
 
-// Sub-pixel rects: a post-jump section top measures e.g. 64.77 or 65.16 against a
-// 65px header. Every geometry comparison carries this slack. It is NOT a header
+// Sub-pixel rects: a post-jump section top measures a fraction off the header's
+// bottom edge. Every geometry comparison carries this slack. It is NOT a header
 // height — the header's own measured box is the only height reference in this file.
 const PX = 1
 

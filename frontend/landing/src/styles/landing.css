@@ -115,7 +115,7 @@ button {
 }
 
 /* Modules grid on the gradient band: the fill lifts to --on-dark-10 (the design
-   system's "buttons on dark" behaviour), the amber icon brightens and nudges up,
+   system's "buttons on dark" behaviour), the accent icon brightens and nudges up,
    and the body copy brightens. Motion tokens only — no scale, no shadow. */
 .mod-cell {
   transition: background var(--dur-base) var(--ease-out);

@@ -395,9 +395,7 @@ describe('CookieNotice CSS source (LAND-05-02)', () => {
   })
 
   it('the focus ring is an outline with a real 2px offset, declared once for both buttons', () => {
-    // Deliberate divergence from the design system's box-shadow focus idiom: that
-    // idiom is scoped to input/textarea (app-layer.css:236-240) so there is no
-    // cascade conflict, and box-shadow has no offset semantics.
+    // An outline has a real offset; box-shadow has no offset semantics.
     const rules = parseRules(CSS_SRC).filter((r) =>
       selectorParts(r).some((p) => p === '.cn-actions button:focus-visible'),
     )

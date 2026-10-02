@@ -401,8 +401,8 @@ export const PLAN_COLORS: Record<PlanVariant, {
     checkColor: 'var(--action)',
   },
   /* The featured tier, ported from the prototype: a --gradient-hero card with a
-     transparent border and an amber CTA. On light cards the checks are teal
-     (action); on this dark card they are amber, per the prototype. */
+     transparent border and an accent CTA. On light cards the checks are teal
+     (action); on this dark card they are accent, per the prototype. */
   featured: {
     cardBg: 'var(--gradient-hero)',
     cardBorder: 'transparent',

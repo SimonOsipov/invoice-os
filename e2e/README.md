@@ -26,17 +26,17 @@ deploys to its own ephemeral Railway environment with an unpredictable domain su
 (M4-23), so a missing var throws naming itself rather than silently falling back to the
 shared `development` fleet (Decision `[fail-loud-targets]`, `targets.ts`):
 
-| Target          | Env var               | Needed by       |
-| --------------- | --------------------- | --------------- |
-| landing         | `LANDING_URL`         | smoke, topology |
-| ops-console     | `OPS_CONSOLE_URL`     | smoke           |
-| support-console | `SUPPORT_CONSOLE_URL` | smoke           |
-| app             | `APP_URL`             | smoke, topology |
-| gateway         | `GATEWAY_URL`         | api, topology   |
+| Target          | Env var               | Needed by            |
+| --------------- | --------------------- | -------------------- |
+| landing         | `LANDING_URL`         | smoke, topology      |
+| ops-console     | `OPS_CONSOLE_URL`     | smoke                |
+| support-console | `SUPPORT_CONSOLE_URL` | smoke                |
+| app             | `APP_URL`             | smoke, topology      |
+| gateway         | `GATEWAY_URL`         | smoke, api, topology |
 
 CI sets all five for the whole `e2e` job, so this table matters mainly when running a
 suite by hand. Most are resolved at module scope and throw during collection; a few
-(smoke's `APP_URL`) resolve lazily and throw on the first test that needs them.
+resolve lazily and throw on the first test that needs them.
 
 ## Smoke suite
 
@@ -45,23 +45,23 @@ suite by hand. Most are resolved at module scope and throw during collection; a 
 Covers the three SPAs the landing page hands off to — `landing`, `ops-console` and
 `support-console`. It is no longer only a render check:
 
-- **Render** (`smoke/apps.ts`, `smoke.spec.ts`): each app is opened through the real
-  landing sign-in hand-off (`?persona=`, never a test-only backdoor) and asserts a
+- **Render** (`smoke/apps.ts`, `smoke.spec.ts`): landing is opened bare and each console on a
+  seeded real staff session (`staffSession.ts`, which needs `GATEWAY_URL`). Each asserts a
   signature element of its main view, failing on any console error or uncaught page error.
 - **Behaviour on backend-less surfaces** (`landing-nav.spec.ts`, `ops-console.spec.ts`,
   `support-console.spec.ts`): the landing nav's scroll-spy, and functional navigation over
-  what each console is *for*. Both consoles are mock data with no backend, so these
+  what each console is *for*. Both consoles' data is mock with no backend, so these
   assertions pin fixture behaviour rather than a contract — `docs/e2e-convention.md` says
   when that is allowed.
 - **Boundary matrix** (`persona-boundaries.spec.ts`): every destination handed a persona
   it does not admit must bounce the visitor back to the landing page. This drives **all
   three destinations including the app**, which is why smoke needs `APP_URL` too. Every
-  cell is refused synchronously before any fetch — no gateway contact, no database reads —
+  cell is refused before any gateway contact — no database reads —
   so the suite stays safe under `fullyParallel: true` (`[boundaries-in-smoke]`).
 
 ```bash
 pnpm --filter @invoice-os/e2e exec playwright install chromium   # first run only
-LANDING_URL=... OPS_CONSOLE_URL=... SUPPORT_CONSOLE_URL=... APP_URL=... \
+LANDING_URL=... OPS_CONSOLE_URL=... SUPPORT_CONSOLE_URL=... APP_URL=... GATEWAY_URL=... \
   pnpm --filter @invoice-os/e2e test:smoke    # `test` is the same command
 ```
 

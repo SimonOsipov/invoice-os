@@ -11,21 +11,21 @@
 // reason. See e2e/personaSession.ts for the Playwright-driving layer this registry
 // deliberately does not contain.
 //
-// This is the SINGLE source of truth for the persona axis: smoke/apps.ts and
-// topology/targets.ts derive their persona values from here. The dependency runs one way —
-// those two import this module, never the reverse.
+// This is the SINGLE source of truth for the persona axis: topology/targets.ts derives its
+// persona values from here. The dependency runs one way — that file imports this module,
+// never the reverse.
 
 import { resolveTarget } from './targets'
 
 // The four landing personas (frontend/landing/src/auth.ts's LandingPersona.id). These ids are WIRE VALUES:
-// each one is the `?persona=` param the landing hands off with, and the destination SPA's
-// session gate checks it verbatim. Not to be conflated with frontend/app/src/auth.ts:14's
+// each one is the `?persona=` param the landing hands off with, and the app's session gate
+// checks it verbatim. Not to be conflated with frontend/app/src/auth.ts:14's
 // unrelated, two-member `PersonaId` (firm | inhouse) — different package, different job.
 export type PersonaId = 'developer' | 'support' | 'firm' | 'inhouse'
 
 // The three deployed SPAs a persona can be routed to. Mirrors LandingPersona.target
 // (frontend/landing/src/auth.ts) — `ops` is the ops-console service, and the `developer`
-// persona opening it is the wire-value/display-name split documented there, not a mistake.
+// persona routing to it is the wire-value/display-name split documented there, not a mistake.
 export type Destination = 'app' | 'ops' | 'support'
 
 // Which environment variable carries each destination's base URL on this run's ephemeral

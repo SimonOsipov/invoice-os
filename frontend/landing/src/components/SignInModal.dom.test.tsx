@@ -43,9 +43,9 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-async function mount(onClose: () => void = vi.fn(), state: string | null = null): Promise<void> {
+async function mount(onClose: () => void = vi.fn(), state: string | null = null, initialError?: string): Promise<void> {
   await act(async () => {
-    root.render(createElement(SignInModal, { onClose, heldState: () => state }))
+    root.render(createElement(SignInModal, { onClose, heldState: () => state, initialError }))
   })
 }
 
@@ -295,7 +295,168 @@ describe('v2 content', () => {
       expect(meta[0].textContent, id).toBe(p!.access)
       const chevron = Array.from(row.querySelectorAll('svg path'), (x) => x.getAttribute('d'))
       expect(chevron, id).toEqual([...GLYPHS['chevron-right']])
+
+      const st = (prop: string) => row.style.getPropertyValue(prop)
+      expect(st('display'), id).toBe('flex')
+      expect(st('align-items'), id).toBe('center')
+      expect(st('gap'), id).toBe('12px')
+      expect(st('width'), id).toBe('100%')
+      expect(st('text-align'), id).toBe('left')
+      expect(st('background'), id).toBe('var(--card)')
+      expect(st('padding'), id).toBe('12px 14px')
+      expect(st('cursor'), id).toBe('pointer')
+      expect(st('font-family'), id).toBe('var(--font-sans)')
+
+      const m = meta[0] as HTMLElement
+      expect(m.style.color, id).toBe('var(--teal)')
+      expect(m.style.display, id).toBe('inline-block')
+      expect(m.style.marginTop, id).toBe('6px')
+
+      const svg = row.querySelector('svg')!
+      expect(svg.getAttribute('width'), id).toBe('16')
+      expect(svg.getAttribute('height'), id).toBe('16')
+      expect(svg.getAttribute('stroke-width'), id).toBe('2')
+      expect((svg.parentElement as HTMLElement).style.color, id).toBe('var(--muted-foreground)')
+
+      const avatar = row.firstElementChild as HTMLElement
+      expect(avatar.textContent, id).toBe(p!.initials)
+      expect(avatar.style.width, id).toBe('38px')
+      expect(avatar.style.height, id).toBe('38px')
+      expect(avatar.style.borderRadius, id).toBe('var(--radius-md)')
+      expect(avatar.style.background, id).toBe(p!.avBg)
+      expect(avatar.style.color, id).toBe(p!.avColor)
+
+      const text = row.textContent ?? ''
+      expect(text, id).toContain(p!.name)
+      expect(text, id).toContain(`${p!.title} · ${p!.org}`)
     }
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('SM-06: the body follows the v2 spacing, unconfigured and configured', async () => {
+    for (const [label, setup] of [['unconfigured', unconfigured], ['configured', () => { stubTargets(ALL_TARGETS); configured() }]] as const) {
+      setup()
+      await mount(vi.fn(), STATE)
+      const d = dialog()
+      const body = d.querySelector<HTMLElement>('.t-eyebrow')!.parentElement!.parentElement as HTMLElement
+      expect(body.style.padding, label).toBe('22px 20px 20px')
+      expect((body.firstElementChild as HTMLElement).style.marginBottom, `${label} eyebrow wrapper`).toBe('14px')
+      const pick = picker()
+      const heading = pick.querySelector<HTMLElement>('h3')!
+      expect(heading.style.margin, `${label} picker heading`).toBe('0px 0px 6px')
+      const para = pick.querySelector<HTMLElement>('p')!
+      expect(para.className, label).toBe('t-body-sm')
+      expect(para.style.lineHeight, label).toBe('1.55')
+      expect(para.style.margin, label).toBe('0px')
+      const list = pick.querySelector<HTMLElement>('[data-persona]')!.parentElement as HTMLElement
+      expect(list.style.display, label).toBe('grid')
+      expect(list.style.gap, label).toBe('10px')
+      expect(list.style.marginTop, label).toBe('18px')
+      expect(list.children.length, label).toBe(4)
+      act(() => root.render(null))
+    }
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('SM-07 configured: the workspace heading, form and divider precede the picker in v2 order', async () => {
+    stubTargets(ALL_TARGETS)
+    configured()
+    await mount(vi.fn(), STATE)
+    const d = dialog()
+    const order = [
+      d.querySelector('.t-eyebrow'),
+      Array.from(d.querySelectorAll('h3')).find((h) => h.textContent === 'Sign in to your workspace'),
+      d.querySelector('form'),
+      Array.from(d.querySelectorAll('div')).find((x) => x.textContent?.trim() === 'or explore with a demo profile'),
+      picker(),
+    ]
+    order.forEach((el, i) => expect(el, `step ${i} missing`).toBeTruthy())
+    for (let i = 1; i < order.length; i++) {
+      expect(order[i - 1]!.compareDocumentPosition(order[i]!) & Node.DOCUMENT_POSITION_FOLLOWING, `step ${i - 1} must precede step ${i}`).toBeTruthy()
+    }
+    expect((order[1] as HTMLElement).style.margin).toBe('0px 0px 16px')
+    const divider = order[3] as HTMLElement
+    expect(divider.style.margin).toBe('22px 0px 18px')
+    expect(divider.style.fontSize).toBe('12px')
+    expect(divider.style.color).toBe('var(--muted-foreground)')
+    const rules = divider.querySelectorAll<HTMLElement>('span')
+    expect(rules.length).toBe(2)
+    for (const r of Array.from(rules)) expect(r.style.background).toBe('var(--border)')
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('SM-08 unconfigured: no workspace heading, form or divider; the picker heading and eyebrow stay', async () => {
+    unconfigured()
+    await mount(vi.fn(), STATE)
+    const d = dialog()
+    expect(Array.from(d.querySelectorAll('h3'), (h) => h.textContent)).toEqual(['Choose an account'])
+    expect(d.querySelectorAll('.t-eyebrow').length).toBe(1)
+    expect(d.querySelectorAll('[data-persona]').length).toBe(4)
+    expect(d.textContent).not.toContain('Sign in to your workspace')
+    expect(d.textContent).not.toContain('or explore with a demo profile')
+    expect(d.querySelectorAll('form').length).toBe(0)
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('SM-09: held state and initialError reach the form under the new body', async () => {
+    stubTargets(ALL_TARGETS)
+    configured()
+    // No held state: the form offers the start bounce, and the picker is untouched.
+    await mount(vi.fn(), null, 'Sign-in failed. Try again.')
+    let d = dialog()
+    const bounce = Array.from(d.querySelectorAll('button')).find((b) => b.textContent === 'Continue with email')
+    expect(bounce, 'expected the start-bounce button').toBeDefined()
+    expect(d.querySelectorAll('input[type="password"]').length).toBe(0)
+    expect(Array.from(d.querySelectorAll('[role="alert"]'), (a) => a.textContent?.trim())).toEqual(['Sign-in failed. Try again.'])
+    expect(d.querySelectorAll('[data-persona]').length).toBe(4)
+    expect(d.querySelectorAll('.t-eyebrow').length).toBe(1)
+
+    // A held state: the credentials form replaces the bounce, and the error still shows.
+    await act(async () => root.render(null))
+    await mount(vi.fn(), STATE, 'Sign-in failed. Try again.')
+    d = dialog()
+    expect(d.querySelectorAll('input[type="password"]').length).toBe(1)
+    expect(Array.from(d.querySelectorAll('button')).some((b) => b.textContent === 'Continue with email')).toBe(false)
+    expect(Array.from(d.querySelectorAll('[role="alert"]'), (a) => a.textContent?.trim())).toEqual(['Sign-in failed. Try again.'])
+    expect(d.querySelectorAll('[data-persona]').length).toBe(4)
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('SM-10: a click on any part of a row picks that persona and does not close the modal', async () => {
+    stubTargets(ALL_TARGETS)
+    const onClose = vi.fn()
+    await mount(onClose)
+    const row = document.querySelector<HTMLElement>('[data-persona="firm"]')!
+    const parts = [row.querySelector('.t-meta'), row.querySelector('svg'), row.firstElementChild].filter((x): x is Element => x != null)
+    expect(parts.length).toBe(3)
+    for (const part of parts) {
+      locationStub.href = HOME
+      await act(async () => {
+        part.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      })
+      expect(locationStub.href).toBe('https://app.example.test?persona=firm')
+    }
+    expect(onClose).not.toHaveBeenCalled()
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('SM-11: nothing defeats the hover or focus ring, and the dialog is modal and named Platform login', async () => {
+    unconfigured()
+    await mount()
+    const d = dialog()
+    expect(d.getAttribute('aria-modal')).toBe('true')
+    expect(d.querySelectorAll('[aria-label="Sign in"]').length).toBe(0)
+    const rows = Array.from(d.querySelectorAll<HTMLElement>('[data-persona]'))
+    expect(rows.length).toBe(4)
+    for (const row of rows) {
+      expect(row.style.getPropertyValue('outline'), row.dataset.persona).toBe('')
+      expect(row.style.getPropertyValue('filter'), row.dataset.persona).toBe('')
+    }
+    expect(declsOf('.si-persona:focus-visible'), 'control: the parser finds the ring rule').toContain('outline: 2px solid var(--ring)')
+    const all = [...declsOf('.si-persona'), ...declsOf('.si-persona:hover'), ...declsOf('.si-persona:focus-visible')]
+    expect(all.length).toBeGreaterThan(0)
+    expect(all.filter((x) => /^outline(-style)?: (none|0)/.test(x))).toEqual([])
+    expect(declsOf('.si-persona:focus-visible')).toContain('outline-offset: 2px')
     expect(consoleError).not.toHaveBeenCalled()
   })
 

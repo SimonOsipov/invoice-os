@@ -88,7 +88,7 @@ describe('F-2: the sign-in control opens the sign-in modal', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('F2-c/d/e: clicking opens the Sign-in dialog, does not navigate, and Close restores the page', async () => {
+  it('F2-c/d/e: clicking opens the Platform login dialog, does not navigate, and Close restores the page', async () => {
     await mountApp()
     const header = document.querySelector('header')!
     const sectionsBefore = document.querySelectorAll('section[id]').length
@@ -97,7 +97,7 @@ describe('F-2: the sign-in control opens the sign-in modal', () => {
 
     await clickByText(header, SIGN_IN_CTA)
 
-    // F2-c: exactly one dialog, and it is the Sign-in one -- not Book a demo.
+    // F2-c: exactly one dialog, and it is the Platform login one -- not Book a demo.
     expect(document.querySelectorAll(DIALOG).length).toBe(1)
     const dialog = document.querySelector(DIALOG)!
     expect(dialog.getAttribute('aria-label')).toBe('Platform login')

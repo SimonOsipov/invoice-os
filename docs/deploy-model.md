@@ -91,7 +91,8 @@ across PRs the way `development`'s own four URLs (still constant, still hardcode
 PR opened ──> dev-env.yml:
                 prepare-env: derive `pr-<N>` (prenv.Name) ──> environmentCreate, forked
                              from `development` (skipInitialDeploys, create-or-reuse)
-                             ──> deploy Postgres + probe ──> assert Watch Paths empty
+                             ──> blank WAL_ARCHIVE_* on Postgres ──>
+                             deploy Postgres + probe ──> assert Watch Paths empty
                              (M3-16 invariant, now runtime-asserted) ──> discover the
                              5 URLs ──> blank Sentry variables (set-sentry-off)
                              ──> point the fork gateway at reconciliation

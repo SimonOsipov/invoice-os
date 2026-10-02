@@ -46,6 +46,8 @@ type Options struct {
 	Sessions  *SessionChecker     // refuses revoked sessions; required
 	Upstreams map[string]*url.URL // service name -> base URL; required
 	Logger    *slog.Logger        // defaults to slog.Default()
+
+	GatewayToken string // test-spec seam: inert until AUTH-13-03 lands
 }
 
 // Handler returns the handler to mount at "/api/". Request flow: verify (401) ->

@@ -1,11 +1,7 @@
 // This file (handlers.go) is the HTTP surface over the engine: ToggleHandler
-// (PATCH /v1/rules/{key}, the M3-06 admin kill-switch) flips a rule's enabled
-// bit via an injected toggle closure and answers the updated Rule;
-// BatchValidateHandler (POST /v1/validate/batch) evaluates a whole batch behind
-// S2SMiddleware. Both mirror internal/portfolio/portfolio.go's CreateHandler/
-// GetHandler shape: decode, delegate, statusForErr, flat {"error":...} envelope
-// on failure. See rule.go for the Payload/Result/Violation/Rule wire shapes and
-// store.go for the toggle signature.
+// (PATCH /v1/rules/{key}, refused for every caller) and BatchValidateHandler
+// (POST /v1/validate/batch, behind S2SMiddleware). Failures use the flat
+// {"error":...} envelope. See rule.go for the wire shapes.
 package validation
 
 import (
@@ -16,13 +12,23 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// ToggleHandler is a Mode A stub (AUTH-12-02); the executor replaces it.
+// rulesManagedMessage is the 403 body for every authenticated PATCH /v1/rules/{key}.
+const rulesManagedMessage = "rules are managed by ASComply"
+
+// ToggleHandler refuses every caller: rules change only through the operator
+// kill switch (docs/rule-kill-switch.md). It never reads the body and reaches
+// no database, so no key or body shape is an oracle.
 func ToggleHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not implemented")
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		writeError(w, http.StatusForbidden, rulesManagedMessage)
 	}
 }
 
@@ -185,9 +191,8 @@ func BatchValidateHandler(loadRuleSet func(ctx context.Context) (RuleSet, error)
 // statusForErr maps a store/engine error to the HTTP status + message the
 // handlers write to the response. db.ErrNoTenant is 401 (fail-closed, mirroring
 // portfolio.statusForErr); db.ErrNotActiveMember is 403; ErrValidation is 400
-// with the wrapped message; ErrNotFound is 404; ErrRedundantTransition is 409;
-// ErrNoActiveRuleSet is 503
-// (the engine has no published version to evaluate against); anything else is
+// with the wrapped message; ErrNoActiveRuleSet is 503 (the engine has no
+// published version to evaluate against); anything else is
 // 500 with a generic body -- this helper never leaks internals into the
 // response. Logging the unrecognized (500) case via slog is the caller's
 // responsibility, since only the caller knows the operation name to log.
@@ -199,10 +204,6 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusForbidden, db.NotActiveMemberMessage
 	case errors.Is(err, ErrValidation):
 		return http.StatusBadRequest, err.Error()
-	case errors.Is(err, ErrNotFound):
-		return http.StatusNotFound, "not found"
-	case errors.Is(err, ErrRedundantTransition):
-		return http.StatusConflict, "redundant transition"
 	case errors.Is(err, ErrNoActiveRuleSet):
 		return http.StatusServiceUnavailable, "no active rule-set"
 	default:

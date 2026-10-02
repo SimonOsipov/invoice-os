@@ -89,7 +89,7 @@ import (
 
 // newTestIdentity builds a fresh authenticated identity context. rule_set_versions/
 // rules are GLOBAL, untenanted tables (no RLS -- see store.go's file header), so the
-// specific tenant chosen here is arbitrary; Store.LoadActiveRuleSet/ToggleRule only
+// specific tenant chosen here is arbitrary; Store.LoadActiveRuleSet only
 // require db.WithinRequestTenantTx to see a valid identity in ctx (store_test.go's
 // TestStore_LoadNoIdentityErrors proves the no-identity case separately).
 func newTestIdentity() context.Context {

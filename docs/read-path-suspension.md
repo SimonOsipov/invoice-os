@@ -291,7 +291,7 @@ predicates it would previously have hit inside the transaction.
 | `POST /v1/entities/{id}/offboard` | portfolio | covered | |
 | `POST /v1/entities/{id}/onboard` | portfolio | covered | |
 | `GET /v1/rollup` | dashboard | covered | |
-| `PATCH /v1/rules/{key}` | validation | covered | |
+| `PATCH /v1/rules/{key}` | validation | exempt | refuses every caller with 403 and reaches no database (AUTH-12) |
 | `GET /v1/invoices` | invoice | covered | |
 | `POST /v1/invoices` | invoice | covered | |
 | `GET /v1/invoices/{id}` | invoice | covered | |

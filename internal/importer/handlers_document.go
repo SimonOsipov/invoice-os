@@ -201,7 +201,7 @@ func CreateDocumentHandler(
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			// The 413 check MUST precede the generic 400: MaxBytesReader surfaces the cap
 			// as a *http.MaxBytesError from Decode, otherwise indistinguishable from
-			// malformed JSON (internal/validation/handlers.go:217-225).
+			// malformed JSON (internal/validation.BatchValidateHandler).
 			var maxErr *http.MaxBytesError
 			if errors.As(err, &maxErr) {
 				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the size limit")

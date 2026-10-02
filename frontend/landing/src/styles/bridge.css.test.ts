@@ -258,6 +258,21 @@ describe('bridge.css maps the app-layer names onto v2', () => {
     const placeholder = props('::placeholder')
     expect(placeholder.size, 'expected a ::placeholder rule in the bridge').toBeGreaterThanOrEqual(1)
     expect(placeholder.get('color')).toBe('var(--muted-foreground)')
+    expect(placeholder.get('opacity')).toBe('0.8')
+  })
+
+  // BR-03 cannot see a deleted base rule while a sibling (`.eyebrow::before`, `.v2-btn-primary:hover`) still names the class.
+  it('BR-15 the bridge declares a base rule for each class the sections use', () => {
+    const baseRule = (css: string, selector: string) =>
+      parseRules(css).filter((r) => selectorParts(r).includes(selector)).flatMap((r) => declarations(r.body))
+    expect(baseRule('.x::before { a: b } .x:hover { a: b }', '.x'), 'control: pseudo-only siblings are not a base rule').toEqual([])
+    expect(baseRule('.x, .y { a: b }', '.x'), 'control: a grouped selector counts').toHaveLength(1)
+
+    const css = readBridge()
+    const selectors = ['.mono', '.money', '.label', '.eyebrow', '.eyebrow-dark', '.v2-btn', '.v2-btn-primary', '.v2-btn-ghost', 'a.lnk', 'a.lnk:hover']
+    expect(selectors.filter((sel) => baseRule(css, sel).length === 0)).toEqual([])
+    const primary = new Set(baseRule(css, '.v2-btn-primary').map((d) => d.prop))
+    expect([...primary].filter((p) => p === 'background' || p === 'color').sort(), '.v2-btn-primary sets a fill and a text colour').toEqual(['background', 'color'])
   })
 
   it('BR-14 .ios-link hover uses teal', () => {

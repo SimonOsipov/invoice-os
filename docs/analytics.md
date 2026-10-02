@@ -162,7 +162,7 @@ each:
 Every other GA assertion in that spec file consumes this predicate. A predicate matching nothing
 would leave the request sink permanently empty and every assertion permanently green while
 observing nothing; one matching too much would turn them permanently red, because
-`frontend/landing/index.html:12-15` requests `fonts.googleapis.com` and `fonts.gstatic.com` on
+`frontend/landing/index.html:11-13` requests `fonts.googleapis.com` and `fonts.gstatic.com` on
 every run.
 
 ## See also

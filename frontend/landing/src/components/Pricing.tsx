@@ -95,7 +95,6 @@ export function Pricing({ onBookDemo }: { onBookDemo: () => void }) {
                       fontSize: 20,
                       fontWeight: 500,
                       letterSpacing: '-0.02em',
-                      fontVariationSettings: "'opsz' 24",
                       color: c.titleColor,
                     }}
                   >

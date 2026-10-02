@@ -91,7 +91,7 @@ export const STEPS: Step[] = [
 
 export type Module = { title: string; body: string; glyph: ReactNode }
 
-// Module glyphs render bare (no tile) on the gradient band at the DS 20px rung.
+// Module glyphs render bare (no tile) on the dark band at the DS 20px rung.
 const mg = (paths: string[]) => <Icon paths={paths} size={20} />
 
 export const MODULES: Module[] = [
@@ -400,11 +400,11 @@ export const PLAN_COLORS: Record<PlanVariant, {
     btnBorder: 'var(--line-2)',
     checkColor: 'var(--action)',
   },
-  /* The featured tier, ported from the prototype: a --gradient-hero card with a
+  /* The featured tier: a flat dark --surface card with a
      transparent border and an accent CTA. On light cards the checks are teal
      (action); on this dark card they are accent, per the prototype. */
   featured: {
-    cardBg: 'var(--gradient-hero)',
+    cardBg: 'var(--surface)',
     cardBorder: 'transparent',
     titleColor: 'var(--surface-foreground)',
     subColor: 'oklch(100% 0 0 / .62)',

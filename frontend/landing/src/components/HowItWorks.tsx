@@ -47,16 +47,15 @@ export function HowItWorks() {
             </p>
           </div>
         </div>
-        {/* The three steps sit in a single 24px --gradient-hero panel, cells
-            divided by --on-dark-10 hairlines — not light cards on cream. */}
+        {/* The three steps sit in a single 24px --surface panel, cells divided by
+            --on-dark-10 hairlines. */}
         <div
           className="ios-grid ios-3"
           style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(3, 1fr)',
             gap: 1,
-            background: 'var(--on-dark-10)',
-            backgroundImage: 'var(--gradient-hero)',
+            background: 'var(--surface)',
             borderRadius: 'var(--radius-xl)',
             overflow: 'hidden',
             boxShadow: 'var(--shadow-elegant)',

@@ -23,6 +23,7 @@ interface ImportMetaEnv {
   // closed (see analytics.ts), so a PR or fork build reports nothing.
   readonly VITE_GA_MEASUREMENT_ID?: string
   readonly VITE_SENTRY_DSN?: string
+  readonly VITE_SENTRY_TEST_DIGEST?: string
   readonly VITE_RAILWAY_GIT_COMMIT_SHA?: string
 }
 

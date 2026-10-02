@@ -1,0 +1,110 @@
+/* ============================================================
+   ASComply — Color
+   Warm off-white page, deep teal primary, peach accent, flat
+   full-bleed bands (off-white → dark teal → sage → peach → dark).
+   Hex values; shadcn token names.
+   ============================================================ */
+
+:root {
+  /* ---------- CORE ---------- */
+  --background: #faf8f2; /* warm off-white page */
+  --foreground: #0b3032;
+  --ink: #0b3032; /* headings */
+  --card: #ffffff;
+  --card-foreground: #0b3032;
+  --popover: #ffffff;
+  --popover-foreground: #0b3032;
+  --primary: #073c3d; /* deep teal */
+  --primary-foreground: #ffffff;
+  --accent: #f5bc88; /* peach — warm CTA / highlight */
+  --accent-foreground: #163c35;
+  --secondary: #eff6f4;
+  --secondary-foreground: #0b3032;
+  --muted: #eff6f4;
+  --muted-foreground: #536b6d;
+  --surface: #082f31; /* dark band */
+  --surface-foreground: #f7f6ed;
+  --destructive: #b53b3b;
+  --destructive-foreground: #ffffff;
+  --border: #dce7e4;
+  --input: #c9d9d6;
+  --ring: #38877e;
+
+  /* ---------- NEW BRAND TOKENS ---------- */
+  --teal: #0c6865;
+  --link: #0d5d4c; /* text-button colour */
+  --mint: #cbf1dd;
+  --mint-soft: #ddf5ec;
+
+  /* ---------- BANDS (flat, full-bleed) ---------- */
+  --surface-2: #0c3738; /* second dark band */
+  --surface-panel: #0c3c39; /* dark panel on a dark band */
+  --surface-panel-border: #164742;
+  --sage: #e7ecdf; /* audience strip / integrations band */
+  --sage-panel: #dfe8d9; /* tab panels, active tab fill */
+  --sage-card: #f9faf3; /* cards on a sage band */
+  --sage-card-border: #cedac7;
+  --peach-band: #efb684; /* full-width country section */
+  --peach-card: #f2b981; /* closing CTA panel */
+  --peach-tint: #fbe6d1; /* AI / intelligence icon tile fill */
+  --cream-card: #fffdf5; /* floating product cards */
+  --cream-card-border: #d9e1ce;
+
+  /* ---------- TEXT ROLES ---------- */
+  --text-copy: #637771; /* body copy on light */
+  --surface-body: #bbcdc7; /* body copy on dark */
+  --eyebrow-on-dark: #bfd3c7;
+  --step-label: #527c6a;
+  --highlight-on-dark: #f5bb86; /* 2nd headline line · dark ground */
+  --highlight-on-peach: #3b6648; /* 2nd headline line · peach band */
+  --highlight-on-dark-2: #f2be8e; /* 2nd headline line · second dark band */
+
+  /* ---------- CONTROLS & CHROME ---------- */
+  --button-outline-border: #aac4bd;
+  --tab-border: #d4dece;
+  --tab-active-border: #126c5e;
+  --tab-active-text: #0d5e50;
+  --header-bg: rgba(250, 248, 242, 0.95);
+  --header-border: #e6e8dd;
+  --header-blur: 18px;
+
+  /* ---------- STATUS ---------- */
+  --status-success-fg: #1d7343;
+  --status-success-bg: #e4f4e7;
+  --status-progress-fg: #745421;
+  --status-progress-bg: #f4e3c8;
+  --status-progress-border: #e3cba8;
+  --status-dev-fg: #f4c494; /* on dark */
+  --status-dev-bg: rgba(255, 255, 255, 0.02);
+  --status-dev-border: rgba(207, 175, 113, 0.29);
+
+  /* ---------- TINTS ---------- */
+  --primary-10: rgba(7, 60, 61, 0.1); /* icon tiles on light */
+  --primary-20: rgba(7, 60, 61, 0.2);
+  --primary-90: rgba(7, 60, 61, 0.9); /* button hover */
+  --accent-10: rgba(245, 188, 136, 0.1);
+  --accent-20: rgba(245, 188, 136, 0.2);
+  --on-dark-5: rgba(255, 255, 255, 0.05); /* card fill on dark bands */
+  --on-dark-10: rgba(255, 255, 255, 0.1); /* hairline on dark bands */
+  --on-dark-20: rgba(255, 255, 255, 0.2);
+  --on-dark-70: #bbcdc7; /* body copy on dark bands (= --surface-body) */
+
+  /* ---------- SEMANTIC ALIASES ---------- */
+  --text-heading: var(--ink);
+  --text-body: var(--foreground);
+  --text-muted: var(--muted-foreground);
+  --text-on-dark: var(--surface-foreground);
+  --text-eyebrow: var(--primary);
+  --text-eyebrow-dark: var(--eyebrow-on-dark);
+  --surface-page: var(--background);
+  --surface-card: var(--card);
+  --surface-tinted: var(--muted);
+  --surface-dark: var(--surface);
+  --border-hairline: var(--border);
+  --border-on-dark: var(--on-dark-10);
+
+  /* ---------- SHADOWS (nearly flat; resting cards use a 1px border only) ---------- */
+  --shadow-card: 0 14px 22px -16px rgba(40, 83, 52, 0.21); /* @kind shadow */ /* floating product mock cards */
+  --shadow-soft: 0 14px 22px -16px rgba(40, 83, 52, 0.21); /* @kind shadow */
+  --shadow-elegant: 0 24px 48px -24px rgba(8, 47, 49, 0.35); /* @kind shadow */ /* hero product panel only */
+}

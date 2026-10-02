@@ -1,4 +1,4 @@
-// Source rules of landing.css for the v2 header and hero (RESKIN-02-01, -02); the rendered result is the topology job's.
+// Source rules of landing.css for the v2 header, hero and live check card (RESKIN-02-01 to -03); the rendered result is the topology job's.
 /// <reference types="node" />
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -98,5 +98,64 @@ describe('HB-14 the h1 highlight line takes --highlight-on-dark', () => {
     expect(color('.t-hl')).toBe('var(--highlight-on-dark)')
     const tokens = customPropValues(readFileSync(join(V2_DIR, 'tokens', 'colors.css'), 'utf8'))
     expect(tokens.has('--highlight-on-dark'), '--highlight-on-dark is defined').toBe(true)
+  })
+})
+
+const reducedMotion = (at: string[]) => at.length === 1 && /^@media \(\s*prefers-reduced-motion\s*:\s*reduce\s*\)$/i.test(at[0])
+const noAt = (a: string[]) => a.length === 0
+const noBang = (v: string | undefined) => v?.replace(/\s*!important$/, '')
+
+/** The row and scanline contract: the failures, empty when it holds. */
+function heroMotionFailures(css: string): string[] {
+  const rules = parseRules(css)
+  const anim = (sel: string, at: (a: string[]) => boolean) => noBang(declared(rules, sel, 'animation', at))
+  const checks: [string, string | undefined, string][] = [
+    ['.hero-row animation', anim('.hero-row', noAt), 'rowin 320ms var(--ease-out) both'],
+    ['.hero-scan animation', anim('.hero-scan', noAt), 'scanline 2.8s var(--ease-out) infinite'],
+    ['.hero-row animation under reduced motion', anim('.hero-row', reducedMotion), 'none'],
+    ['.hero-scan display under reduced motion', noBang(display(rules, '.hero-scan', reducedMotion)), 'none'],
+  ]
+  return checks.filter(([, got, want]) => got !== want).map(([what, got, want]) => `${what}: ${got} != ${want}`)
+}
+
+const MOTION_FIXTURE = `
+.hero-row { animation: rowIn 320ms var(--ease-out) both; }
+.hero-scan { animation: scanline 2.8s var(--ease-out) infinite; }
+@media (prefers-reduced-motion: reduce) { .hero-row { animation: none; } .hero-scan { display: none; } }
+`
+
+describe('HC-08 row and scanline animations, and the reduced-motion end state', () => {
+  it('controls: the lookup accepts the fixture and rejects a copy without the reduced-motion block, or with it under another query', () => {
+    expect(heroMotionFailures(MOTION_FIXTURE)).toEqual([])
+    const block = MOTION_FIXTURE.slice(MOTION_FIXTURE.indexOf('@media'))
+    expect(heroMotionFailures(MOTION_FIXTURE.replace(block, '')).length, 'no reduced-motion block must fail').toBeGreaterThan(0)
+    expect(heroMotionFailures(MOTION_FIXTURE.replace('reduce)', 'no-preference)')).length, 'wrong query must fail').toBeGreaterThan(0)
+    expect(heroMotionFailures(MOTION_FIXTURE.replace('320ms', '300ms')).length, 'wrong duration must fail').toBeGreaterThan(0)
+  })
+
+  it('landing.css animates .hero-row and .hero-scan, and ends them quiet under prefers-reduced-motion', () => {
+    expect(parseRules(LANDING_CSS).length, 'control: the file parsed').toBeGreaterThanOrEqual(20)
+    expect(heroMotionFailures(LANDING_CSS)).toEqual([])
+    const keyframes = parseRules(LANDING_CSS).flatMap((r) => r.at).filter((a) => a.startsWith('@keyframes'))
+    expect(keyframes, 'the animation names resolve to keyframes').toEqual(expect.arrayContaining(['@keyframes rowIn', '@keyframes scanline']))
+  })
+})
+
+describe('HC-09 the scanline keyframes follow V29', () => {
+  it('@keyframes scanline runs -30px to 240px, fading in at 10% and out at 90%', () => {
+    const frames = parseRules(LANDING_CSS).filter((r) => r.at.length === 1 && r.at[0] === '@keyframes scanline')
+    expect(frames.length, 'control: the keyframes parsed').toBeGreaterThanOrEqual(4)
+    const frame = (stop: string, prop: string) =>
+      frames
+        .filter((r) => selectorParts(r).includes(stop))
+        .flatMap((r) => declarations(r.body))
+        .find((d) => d.prop === prop)
+        ?.value.replace(/\s+/g, '')
+    expect(frame('0%', 'transform')).toBe('translateY(-30px)')
+    expect(frame('0%', 'opacity')).toBe('0')
+    expect(frame('10%', 'opacity')).toBe('1')
+    expect(frame('90%', 'opacity')).toBe('1')
+    expect(frame('100%', 'transform')).toBe('translateY(240px)')
+    expect(frame('100%', 'opacity')).toBe('0')
   })
 })

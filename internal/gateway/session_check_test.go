@@ -224,6 +224,8 @@ func newSessionRig(t *testing.T, authURL *url.URL, client *http.Client, log *slo
 			Sessions:  sessions,
 			Upstreams: map[string]*url.URL{"tenancy": upURL},
 			Logger:    log,
+
+			GatewayToken: testGatewayToken,
 		}),
 		sessions: sessions,
 		clock:    clk,

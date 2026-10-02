@@ -47,7 +47,7 @@ type Options struct {
 	Upstreams map[string]*url.URL // service name -> base URL; required
 	Logger    *slog.Logger        // defaults to slog.Default()
 
-	GatewayToken string // test-spec seam: inert until AUTH-13-03 lands
+	GatewayToken string // sent to every upstream as X-Gateway-Token; required
 }
 
 // Handler returns the handler to mount at "/api/". Request flow: verify (401) ->
@@ -59,13 +59,16 @@ func Handler(opts Options) http.Handler {
 	if opts.Sessions == nil {
 		panic("gateway: Options.Sessions is required")
 	}
+	if opts.GatewayToken == "" {
+		panic("gateway: Options.GatewayToken is required")
+	}
 	log := opts.Logger
 	if log == nil {
 		log = slog.Default()
 	}
 	proxies := make(map[string]http.Handler, len(opts.Upstreams))
 	for svc, target := range opts.Upstreams {
-		proxies[svc] = http.StripPrefix(routePrefix+svc, newReverseProxy(svc, target, log))
+		proxies[svc] = http.StripPrefix(routePrefix+svc, newReverseProxy(svc, target, opts.GatewayToken, log))
 	}
 	return opts.Verifier.Middleware(opts.Sessions.Middleware(&router{proxies: proxies, log: log}))
 }
@@ -117,7 +120,7 @@ func isProvisioning(r *http.Request) bool {
 // newReverseProxy builds the per-service reverse proxy. The path prefix is
 // stripped by the caller (http.StripPrefix); here we point the request at the
 // upstream and overwrite the identity headers from the verified token.
-func newReverseProxy(service string, target *url.URL, log *slog.Logger) *httputil.ReverseProxy {
+func newReverseProxy(service string, target *url.URL, gatewayToken string, log *slog.Logger) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
 		Transport: platform.TraceTransport(nil),
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -126,7 +129,7 @@ func newReverseProxy(service string, target *url.URL, log *slog.Logger) *httputi
 			if pr.Out.URL.Path == "" {
 				pr.Out.URL.Path = "/"
 			}
-			injectIdentity(pr)
+			injectIdentity(pr, gatewayToken)
 			// The outbound round tripper sets its own sentry-trace; inbound ones are not trusted.
 			pr.Out.Header.Del("sentry-trace")
 			pr.Out.Header.Del("baggage")
@@ -144,27 +147,17 @@ func newReverseProxy(service string, target *url.URL, log *slog.Logger) *httputi
 	}
 }
 
-// injectIdentity overwrites the trusted identity headers on the outbound request
-// from the verified token, discarding any client-supplied X-Tenant-ID / X-User-*
-// (Header.Set replaces every prior value). The request id comes from the platform
-// kit's requestIDMiddleware, which always sets one upstream of this handler.
-//
-// X-S2S-Token is DELETED rather than set: it is a peer credential, not an
-// identity the gateway can vouch for. The gateway proxies /api/validation/*
-// to 04 (routedServices in cmd/gateway/main.go includes "validation"), whose
-// batch route is guarded by that token -- so without this Del, a caller could
-// smuggle a leaked peer token to 04 through the one public backend surface
-// and be taken for 03. The gateway mints peer credentials for nobody, so the
-// only correct outbound value is none ([s2s-gateway-strip], M4-04-03). This is
-// the same discipline already applied to X-Tenant-ID/X-User-* above, extended
-// to the peer credential -- not a new mechanism.
-func injectIdentity(pr *httputil.ProxyRequest) {
+// injectIdentity takes the identity headers from the verified token, never from
+// the client. X-S2S-Token is deleted and X-Gateway-Token is set to the gateway's
+// own credential.
+func injectIdentity(pr *httputil.ProxyRequest, gatewayToken string) {
 	id, _ := auth.IdentityFromContext(pr.In.Context())
 	pr.Out.Header.Set(headerTenantID, id.TenantID)
 	pr.Out.Header.Set(headerUserID, id.Subject)
 	pr.Out.Header.Set(headerUserRole, id.Role)
 	pr.Out.Header.Set(headerUserEmail, id.Email)
 	pr.Out.Header.Del(headerS2SToken)
+	pr.Out.Header.Set(platform.HeaderGatewayToken, gatewayToken)
 	if rid := platform.RequestIDFromContext(pr.In.Context()); rid != "" {
 		pr.Out.Header.Set(headerRequestID, rid)
 	} else {

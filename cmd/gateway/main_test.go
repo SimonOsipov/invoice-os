@@ -419,7 +419,7 @@ func gatewayMux(t *testing.T) (get func(path string) int, fleetNames func() map[
 		t.Fatalf("loadUpstreams: %v", err)
 	}
 
-	apiHandler, fleetHandler := gatewayHandlers(verifier, nilURLSessions(), routed, probed, nil, slog.Default())
+	apiHandler, fleetHandler := gatewayHandlers(verifier, nilURLSessions(), routed, probed, nil, slog.Default(), "gw-test-token")
 	mux := http.NewServeMux()
 	mux.Handle("/api/", apiHandler)
 	mux.HandleFunc("GET /healthz/fleet", fleetHandler)
@@ -715,7 +715,7 @@ func TestLoadUpstreamsRequiresReconciliationURL(t *testing.T) {
 		if err != nil {
 			t.Fatalf("loadUpstreams: %v", err)
 		}
-		_, fleet := gatewayHandlers(nil, nilURLSessions(), routed, probed, nil, slog.Default())
+		_, fleet := gatewayHandlers(nil, nilURLSessions(), routed, probed, nil, slog.Default(), "gw-test-token")
 		rollup := func() (int, string, map[string]string) {
 			rec := httptest.NewRecorder()
 			fleet(rec, httptest.NewRequest(http.MethodGet, "/healthz/fleet", nil))
@@ -1210,7 +1210,7 @@ func TestApiMountPreflightGrantsTraceHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadUpstreams: %v", err)
 	}
-	apiHandler, _ := gatewayHandlers(verifier, nilURLSessions(), routed, probed, nil, slog.Default())
+	apiHandler, _ := gatewayHandlers(verifier, nilURLSessions(), routed, probed, nil, slog.Default(), "gw-test-token")
 	mux := http.NewServeMux()
 	mux.Handle("/api/", gateway.CORS([]string{origin})(apiHandler))
 

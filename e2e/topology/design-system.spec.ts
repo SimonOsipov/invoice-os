@@ -1,12 +1,12 @@
-// The deployed proof that the landing reads v2 and the app and consoles read v1.
-// Landing and v1 halves share one topology spec on purpose; this is a recorded deviation from
-// docs/e2e-convention.md, which keeps gateway-free render checks in smoke.
+// The deployed proof of the v2/v1 split and of the landing frame's geometry; one topology spec on purpose, a recorded deviation from docs/e2e-convention.md.
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { test, expect, type Page, type TestInfo } from '@playwright/test'
+import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { collectErrors, signInAs } from '../personaSession'
 import type { PersonaId } from '../personas'
+import { seedConsent } from '../smoke/landingConsent'
 import { resolveTarget } from '../targets'
+import { rectsOverlap, WIDE_WIDTHS } from './layout'
 
 const LANDING_URL = resolveTarget('LANDING_URL')
 
@@ -224,4 +224,271 @@ test('landing header row: inside the viewport and no overlap at 1440, 1240, 1080
 
 test('landing header row at 390: inside the viewport and no overlap', async ({ page }, testInfo) => {
   await assertHeaderRow(page, testInfo, [390])
+})
+
+// Resolved --header-h per width, from packages/design-tokens/v2/tokens/spacing.css (86; 73 at <=767px).
+const FRAME_VIEWPORTS = [
+  { width: 1440, height: 900, headerH: 86 },
+  { width: 834, height: 1112, headerH: 86 },
+  { width: 390, height: 844, headerH: 73 },
+] as const
+
+// Burger shows at <=1120px (landing.css .a-burger).
+const BURGER_MAX = 1120
+
+type Frame = { width: number; height: number }
+
+async function settleFrame(page: Page, { width, height }: Frame): Promise<void> {
+  await page.setViewportSize({ width, height })
+  await page.evaluate(async () => {
+    await document.fonts.ready
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+    window.scrollTo(0, 0)
+  })
+}
+
+async function openLandingFrame(page: Page): Promise<void> {
+  await seedConsent(page, false)
+  const res = await page.goto(`${LANDING_URL}/`)
+  expect(res?.ok(), `/ returned HTTP ${res?.status()}`).toBeTruthy()
+  await expect(page.getByRole('banner')).toBeVisible()
+}
+
+const attachJson = (testInfo: TestInfo, name: string, body: unknown) =>
+  testInfo.attach(name, { body: JSON.stringify(body, null, 2), contentType: 'application/json' })
+
+const headerHeightToken = (page: Page) =>
+  page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--header-h')))
+
+async function box(loc: Locator, label: string) {
+  const b = await loc.boundingBox()
+  expect(b, `${label} has no box`).not.toBeNull()
+  return b!
+}
+
+// The frame: header, hero, audience strip, footer.
+const FRAME_ALL = 'header, header *, #top, #top *, [data-strip], [data-strip] *, footer, footer *'
+const FRAME_DESCENDANTS = 'header *, #top *, [data-strip] *, footer *'
+
+test('landing frame geometry at 1440, 834 and 390', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  await openLandingFrame(page)
+  const header = page.getByRole('banner')
+  const burger = header.getByRole('button', { name: 'Menu' })
+  const nav = page.getByRole('navigation', { name: 'Primary' })
+  const login = header.getByRole('button', { name: 'Platform login' })
+  const measured: unknown[] = []
+
+  for (const vp of FRAME_VIEWPORTS) {
+    const label = `${vp.width}px`
+    await settleFrame(page, vp)
+
+    const tokenH = await headerHeightToken(page)
+    const headerBox = await box(header, `${label} header`)
+    expect(tokenH, `${label}: --header-h`).toBe(vp.headerH)
+    expect(Math.abs(headerBox.height - tokenH), `${label}: header height ${headerBox.height} vs --header-h ${tokenH}`).toBeLessThanOrEqual(0.5)
+    expect(headerBox.y, `${label}: header top`).toBeCloseTo(0, 0)
+
+    const wide = vp.width > BURGER_MAX
+    if (wide) {
+      await expect(burger, `${label}: burger`).toBeHidden()
+      await expect(nav, `${label}: Primary nav`).toBeVisible()
+      await expect(login, `${label}: Platform login`).toBeVisible()
+    } else {
+      await expect(burger, `${label}: burger`).toBeVisible()
+      await expect(nav, `${label}: Primary nav`).toBeHidden()
+      await expect(login, `${label}: Platform login`).toBeHidden()
+    }
+    await expect(header.getByRole('button', { name: 'Book a demo' }), `${label}: Book a demo`).toBeVisible()
+
+    // clamp(54px, 5.55vw, 80px): --fs-h1 in packages/design-tokens/v2/tokens/typography.css.
+    const h1 = page.locator('#top h1')
+    const h1Size = await h1.evaluate((el) => parseFloat(getComputedStyle(el).fontSize))
+    const h1Want = Math.min(80, Math.max(54, 0.0555 * vp.width))
+    expect(Math.abs(h1Size - h1Want), `${label}: h1 font-size ${h1Size} vs clamp ${h1Want}`).toBeLessThanOrEqual(0.5)
+
+    const shadow = await page.evaluate((sel) => {
+      const probeEl = document.createElement('div')
+      probeEl.style.boxShadow = 'var(--shadow-elegant)'
+      document.body.appendChild(probeEl)
+      const elegant = getComputedStyle(probeEl).boxShadow
+      probeEl.remove()
+      const matches = [...document.querySelectorAll(sel)].filter((el) => getComputedStyle(el).boxShadow === elegant)
+      return { elegant, card: getComputedStyle(document.querySelector('.hero-card')!).boxShadow, matches: matches.map((el) => el.className) }
+    }, FRAME_DESCENDANTS)
+    expect(shadow.elegant, `${label}: --shadow-elegant resolves`).not.toBe('none')
+    expect(shadow.card, `${label}: .hero-card box-shadow`).toBe(shadow.elegant)
+    expect(shadow.matches, `${label}: the only frame element with --shadow-elegant`).toHaveLength(1)
+    expect(shadow.matches[0], `${label}: the shadow holder`).toContain('hero-card')
+
+    // overflow-x: clip hides overflow from scrollWidth, so every element is walked as well.
+    const overflow = await page.evaluate((sel) => {
+      const doc = document.documentElement
+      const els = [...document.querySelectorAll(sel)]
+        .map((el) => ({ el, r: el.getBoundingClientRect() }))
+        .filter(({ r }) => r.width > 0 && r.height > 0)
+      return {
+        innerWidth: window.innerWidth,
+        scrollWidth: doc.scrollWidth,
+        clientWidth: doc.clientWidth,
+        walked: els.length,
+        outside: els
+          .filter(({ r }) => r.left < -1 || r.right > window.innerWidth + 1)
+          .map(({ el, r }) => `<${el.tagName.toLowerCase()} class="${el.className}"> ${Math.round(r.left)}..${Math.round(r.right)}`),
+      }
+    }, FRAME_ALL)
+    expect(overflow.walked, `${label}: frame elements walked`).toBeGreaterThan(0)
+    expect(overflow.scrollWidth, `${label}: scrollWidth vs clientWidth`).toBeLessThanOrEqual(overflow.clientWidth)
+    expect(overflow.outside, `${label}: frame elements outside the viewport`).toEqual([])
+
+    const h1Box = await box(h1, `${label} h1`)
+    expect(h1Box.y, `${label}: h1 top vs header bottom`).toBeGreaterThanOrEqual(headerBox.y + headerBox.height - 1)
+
+    const column = await box(page.locator('#top .split > div:first-child'), `${label} hero text column`)
+    const card = await box(page.locator('#top .hero-card'), `${label} hero card`)
+    if (wide) {
+      expect(rectsOverlap(column, card), `${label}: hero text column overlaps the card`).toBe(false)
+    } else {
+      const cta = await box(page.locator('#top').getByRole('button', { name: 'Book a demo' }).locator('..'), `${label} CTA row`)
+      expect(card.y, `${label}: card top vs CTA row bottom`).toBeGreaterThanOrEqual(cta.y + cta.height - 1)
+    }
+
+    measured.push({ width: vp.width, tokenH, headerBox, h1Size, h1Want, shadow, overflow, column, card })
+  }
+
+  await attachJson(testInfo, 'frame-geometry.json', measured)
+  expect(errors, `console errors on the frame sweep:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('landing frame columns share one left edge', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  await openLandingFrame(page)
+  const measured: unknown[] = []
+
+  for (const width of [...WIDE_WIDTHS, 834, 390]) {
+    await settleFrame(page, { width, height: width === 390 ? 844 : 1080 })
+    const lefts = {
+      headerLogo: (await box(page.getByRole('banner').locator('.ds-logo'), `${width} header logo`)).x,
+      heroEyebrow: (await box(page.locator('#top .t-eyebrow').first(), `${width} hero eyebrow`)).x,
+      stripLabel: (await box(page.locator('[data-strip] > div').first(), `${width} strip label`)).x,
+      footerLogo: (await box(page.locator('footer .ds-logo'), `${width} footer logo`)).x,
+    }
+    measured.push({ width, ...lefts })
+    const all = Object.values(lefts)
+    expect(Math.max(...all) - Math.min(...all), `${width}px: left edges ${JSON.stringify(lefts)}`).toBeLessThanOrEqual(1)
+  }
+
+  await attachJson(testInfo, 'left-edges.json', measured)
+  expect(errors, `console errors on the column sweep:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('landing mobile menu at 834 and 390', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  await openLandingFrame(page)
+  const header = page.getByRole('banner')
+  const burger = header.getByRole('button', { name: 'Menu' })
+  const measured: unknown[] = []
+
+  for (const vp of FRAME_VIEWPORTS.filter((v) => v.width <= BURGER_MAX)) {
+    const label = `${vp.width}px`
+    await settleFrame(page, vp)
+    await burger.click()
+    await expect(burger, `${label}: aria-expanded`).toHaveAttribute('aria-expanded', 'true')
+
+    const menu = header.locator('.a-menu')
+    await expect(menu, `${label}: menu`).toBeVisible()
+    const headerBox = await box(header, `${label} header`)
+    const menuBox = await box(menu, `${label} menu`)
+    expect(Math.abs(menuBox.y - (headerBox.y + headerBox.height)), `${label}: menu top ${menuBox.y} vs header bottom ${headerBox.y + headerBox.height}`).toBeLessThanOrEqual(1)
+    expect(menuBox.x, `${label}: menu left`).toBeGreaterThanOrEqual(-1)
+    expect(menuBox.x + menuBox.width, `${label}: menu right`).toBeLessThanOrEqual(vp.width + 1)
+    expect(menuBox.y + menuBox.height, `${label}: menu bottom`).toBeLessThanOrEqual(vp.height + 1)
+
+    const navLinks = await page.getByRole('navigation', { name: 'Primary' }).locator('a').count()
+    expect(navLinks, `${label}: Primary nav links`).toBeGreaterThan(0)
+    await expect(menu.locator('a'), `${label}: one menu link per nav link`).toHaveCount(navLinks)
+    await expect(menu.getByRole('button', { name: 'Platform login' }), `${label}: Platform login in the menu`).toHaveCount(1)
+
+    measured.push({ width: vp.width, headerBox, menuBox, navLinks })
+
+    await page.keyboard.press('Escape')
+    await expect(menu, `${label}: menu after Escape`).toHaveCount(0)
+    await expect(burger, `${label}: aria-expanded after Escape`).toHaveAttribute('aria-expanded', 'false')
+  }
+
+  expect(measured.length, 'menu widths measured').toBeGreaterThan(0)
+  await attachJson(testInfo, 'menu-geometry.json', measured)
+  expect(errors, `console errors on the menu sweep:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('landing breakpoint edges', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  await openLandingFrame(page)
+  const header = page.getByRole('banner')
+  const burger = header.getByRole('button', { name: 'Menu' })
+  const nav = page.getByRole('navigation', { name: 'Primary' })
+  const login = header.getByRole('button', { name: 'Platform login' })
+  const measured: Record<string, unknown> = {}
+
+  for (const [width, collapsed] of [[BURGER_MAX, true], [BURGER_MAX + 1, false]] as const) {
+    await settleFrame(page, { width, height: 900 })
+    await expect(burger, `${width}px: burger`).toBeVisible({ visible: collapsed })
+    await expect(nav, `${width}px: Primary nav`).toBeVisible({ visible: !collapsed })
+    await expect(login, `${width}px: Platform login`).toBeVisible({ visible: !collapsed })
+  }
+
+  const heights: number[] = []
+  for (const width of [767, 768]) {
+    await settleFrame(page, { width, height: 900 })
+    const tokenH = await headerHeightToken(page)
+    const headerBox = await box(header, `${width} header`)
+    expect(Math.abs(headerBox.height - tokenH), `${width}px: header height ${headerBox.height} vs --header-h ${tokenH}`).toBeLessThanOrEqual(0.5)
+    heights.push(headerBox.height)
+  }
+  expect(heights[0], `header height at 767 (${heights[0]}) is smaller than at 768 (${heights[1]})`).toBeLessThan(heights[1])
+  measured.headerHeights = { 767: heights[0], 768: heights[1] }
+
+  const card = page.locator('#top .hero-card')
+  const split = page.locator('#top .split')
+  const column = page.locator('#top .split > div:first-child')
+
+  await settleFrame(page, { width: 901, height: 900 })
+  const beside = { card: await box(card, '901 card'), split: await box(split, '901 split'), column: await box(column, '901 text column') }
+  expect(rectsOverlap(beside.column, beside.card), '901px: hero card overlaps the text column').toBe(false)
+  expect(Math.abs(beside.card.y - (beside.split.y + 40)), `901px: card top ${beside.card.y} vs split top ${beside.split.y} + 40`).toBeLessThanOrEqual(1)
+
+  await settleFrame(page, { width: 900, height: 900 })
+  const cardBox = await box(card, '900 card')
+  const cta = await box(page.locator('#top').getByRole('button', { name: 'Book a demo' }).locator('..'), '900 CTA row')
+  expect(cardBox.y, '900px: card top vs CTA row bottom').toBeGreaterThanOrEqual(cta.y + cta.height - 1)
+  expect(await card.evaluate((el) => getComputedStyle(el).marginTop), '900px: card margin-top').toBe('0px')
+  measured.hero = { beside, stacked: { card: cardBox, cta } }
+
+  await attachJson(testInfo, 'breakpoint-edges.json', measured)
+  expect(errors, `console errors on the breakpoint sweep:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('landing hero under reduced motion', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await openLandingFrame(page)
+  await settleFrame(page, { width: 1440, height: 900 })
+
+  const read = await page.evaluate(() => ({
+    scan: [...document.querySelectorAll('.hero-scan')].map((el) => getComputedStyle(el).display),
+    rows: [...document.querySelectorAll('.hero-row')].map((el) => {
+      const cs = getComputedStyle(el)
+      return { animationName: cs.animationName, opacity: cs.opacity }
+    }),
+  }))
+  await attachJson(testInfo, 'reduced-motion.json', read)
+
+  expect(read.scan, '.hero-scan elements').toHaveLength(1)
+  expect(read.scan[0], '.hero-scan display').toBe('none')
+  expect(read.rows, '.hero-row elements').toHaveLength(6)
+  for (const [i, row] of read.rows.entries()) {
+    expect(row.animationName, `.hero-row ${i} animation-name`).toBe('none')
+    expect(row.opacity, `.hero-row ${i} opacity`).toBe('1')
+  }
+  expect(errors, `console errors under reduced motion:\n${errors.join('\n')}`).toEqual([])
 })

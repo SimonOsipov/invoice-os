@@ -364,11 +364,12 @@ jobs:
         run: bash scripts/ci/railway-env.sh assert-db-dsns --source-only
 
       # PR ONLY. This mutates the target environment (domains, Postgres volume,
-      # bucket) to make a fresh fork resemble its source. The
+      # bucket) to make a fresh fork resemble its source, and blanks WAL_ARCHIVE_*
+      # on its Postgres so the fork never archives. The
       # persistent environment is not a fork and is the thing being resembled —
       # reconciling it against itself is at best a no-op and at worst rewrites
       # live infrastructure.
-      - name: Reconcile fork fidelity (domains, Postgres volume + bring-up)
+      - name: Reconcile fork fidelity (domains, Postgres archive blank + volume + bring-up)
         if: github.event_name == 'pull_request'
         env:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}

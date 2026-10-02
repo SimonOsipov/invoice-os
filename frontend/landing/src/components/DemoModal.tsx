@@ -4,6 +4,7 @@
 import { useEffect } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { DemoLeadForm, DEMO_FORM_CSS } from './DemoLeadForm'
+import { Eyebrow } from './ds/Eyebrow'
 import { MODAL_CHROME_CSS, MODAL_SCRIM_STYLE, ModalHeader, modalCardStyle } from './modalChrome'
 import type { DemoLead } from '../hubspot'
 
@@ -78,9 +79,9 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
           variant="modal"
           heading={
             <>
-              <div className="eyebrow" style={{ marginBottom: 8 }}>BOOK A DEMO</div>
-              <h3 style={{ fontSize: 20, letterSpacing: '-0.02em', fontWeight: 600, margin: '0 0 6px' }}>See your invoices pass compliance in real time.</h3>
-              <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--fg-2)', margin: '0 0 18px' }}>A 20-minute walkthrough with a compliance specialist. Bring a sample invoice file — we'll validate it live.</p>
+              <div style={{ marginBottom: 14 }}><Eyebrow>BOOK A DEMO</Eyebrow></div>
+              <h3 style={{ fontSize: 28, lineHeight: 1.2, letterSpacing: 'var(--tracking-h3)', fontWeight: 700, margin: '0 0 8px', color: 'var(--ink)' }}>Let's talk about your workflow.</h3>
+              <p className="t-body-sm" style={{ margin: '0 0 20px', lineHeight: 1.6 }}>A 20-minute walkthrough with a compliance specialist. Bring a sample invoice file — we'll validate it live.</p>
             </>
           }
           onDone={onClose}

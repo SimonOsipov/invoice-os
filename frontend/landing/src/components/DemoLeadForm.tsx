@@ -2,7 +2,7 @@
 // card; the landing card mounts it bare. idPrefix keeps the two id namespaces apart.
 
 import { useEffect, useRef, useState } from 'react'
-import type { ChangeEvent, FormEvent, ReactNode } from 'react'
+import type { ChangeEvent, CSSProperties, FormEvent, ReactNode } from 'react'
 import {
   validateDemoForm,
   firstNameOf,
@@ -18,6 +18,7 @@ import {
 } from './demoForm'
 import { resolveSubmitTarget, submitDemoLead, type DemoLead } from '../hubspot'
 import { trackedHubSpotSubmit } from '../analytics'
+import { IconTile } from './ds/IconTile'
 
 export function Glyph({ d, size = 16, sw = 1.7 }: { d: string | string[]; size?: number; sw?: number }) {
   const paths = Array.isArray(d) ? d : [d]
@@ -41,12 +42,15 @@ export const WARN_PATHS = [
 // popup still renders exactly one <style>; DemoCta renders its own.
 export const DEMO_FORM_CSS = `
   @keyframes dmSpin { to { transform: rotate(360deg); } }
-  .dm-input, .dm-select { transition: border-color 120ms, box-shadow 120ms; }
-  .dm-input:focus, .dm-select:focus { border-color: var(--action) !important; box-shadow: 0 0 0 3px var(--action-glow); outline: none; }
-  .dm-err { border-color: var(--status-red-text) !important; }
+  .dm-input, .dm-select { transition: border-color var(--dur-fast) var(--ease-out); }
+  .dm-input:focus, .dm-select:focus { outline: 2px solid var(--ring); outline-offset: 2px; }
+  .dm-err { border-color: var(--destructive) !important; }
   .dm-select { appearance: none; -webkit-appearance: none; }
   @media (max-width: 480px) { .dm-row { flex-direction: column !important; align-items: stretch !important; } }
 `
+
+const INPUT_STYLE: CSSProperties = { width: '100%', height: 42, background: 'var(--card)', border: '1px solid var(--input)', borderRadius: 'var(--radius)', padding: '0 13px', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-sans)' }
+const SELECT_STYLE: CSSProperties = { ...INPUT_STYLE, padding: '0 32px 0 13px', cursor: 'pointer' }
 
 export function DemoLeadForm({
   idPrefix,
@@ -177,8 +181,11 @@ export function DemoLeadForm({
   }
 
   const submitting = demoStep === 'submitting'
-  const formPadding = variant === 'modal' ? 20 : 0
-  const panelPadding = variant === 'modal' ? '32px 22px 24px' : 0
+  const formPadding = variant === 'modal' ? '24px 24px 22px' : 0
+  const panelPadding = variant === 'modal' ? '36px 24px 26px' : 0
+  const panelStyle: CSSProperties = { padding: panelPadding, textAlign: 'center', display: 'grid', gap: 12, justifyItems: 'center' }
+  const panelH3: CSSProperties = { fontSize: 24, fontWeight: 700, letterSpacing: 'var(--tracking-h3)', margin: '4px 0 0', color: 'var(--ink)' }
+  const panelP: CSSProperties = { lineHeight: 1.6, margin: '0 auto 8px', maxWidth: 360 }
 
   return (
     <>
@@ -186,10 +193,10 @@ export function DemoLeadForm({
         <form noValidate onSubmit={handleSubmit} style={{ padding: formPadding }}>
           {heading}
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div>
               <label htmlFor={`${idPrefix}-name`} className="label" style={{ display: 'block', marginBottom: 6 }}>
-                Full name <span style={{ color: 'var(--status-red-text)' }}>*</span>
+                Full name <span style={{ color: 'var(--destructive)' }}>*</span>
               </label>
               <input
                 id={`${idPrefix}-name`}
@@ -203,10 +210,10 @@ export function DemoLeadForm({
                 aria-invalid={Boolean(errors.name)}
                 aria-describedby={errors.name ? `${idPrefix}-name-error` : undefined}
                 disabled={submitting}
-                style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', padding: '0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)' }}
+                style={INPUT_STYLE}
               />
               {errors.name && (
-                <div id={`${idPrefix}-name-error`} role="alert" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--status-red-text)' }}>
+                <div id={`${idPrefix}-name-error`} role="alert" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--destructive)' }}>
                   <Glyph d={WARN_PATHS} size={15} sw={1.7} /> {errors.name}
                 </div>
               )}
@@ -214,7 +221,7 @@ export function DemoLeadForm({
 
             <div>
               <label htmlFor={`${idPrefix}-email`} className="label" style={{ display: 'block', marginBottom: 6 }}>
-                Work email <span style={{ color: 'var(--status-red-text)' }}>*</span>
+                Work email <span style={{ color: 'var(--destructive)' }}>*</span>
               </label>
               <input
                 id={`${idPrefix}-email`}
@@ -228,10 +235,10 @@ export function DemoLeadForm({
                 aria-invalid={Boolean(errors.email)}
                 aria-describedby={errors.email ? `${idPrefix}-email-error` : undefined}
                 disabled={submitting}
-                style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', padding: '0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)' }}
+                style={INPUT_STYLE}
               />
               {errors.email && (
-                <div id={`${idPrefix}-email-error`} role="alert" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--status-red-text)' }}>
+                <div id={`${idPrefix}-email-error`} role="alert" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--destructive)' }}>
                   <Glyph d={WARN_PATHS} size={15} sw={1.7} /> {errors.email}
                 </div>
               )}
@@ -239,7 +246,7 @@ export function DemoLeadForm({
 
             <div>
               <label htmlFor={`${idPrefix}-company`} className="label" style={{ display: 'block', marginBottom: 6 }}>
-                Company <span style={{ color: 'var(--status-red-text)' }}>*</span>
+                Company <span style={{ color: 'var(--destructive)' }}>*</span>
               </label>
               <input
                 id={`${idPrefix}-company`}
@@ -253,10 +260,10 @@ export function DemoLeadForm({
                 aria-invalid={Boolean(errors.company)}
                 aria-describedby={errors.company ? `${idPrefix}-company-error` : undefined}
                 disabled={submitting}
-                style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', padding: '0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)' }}
+                style={INPUT_STYLE}
               />
               {errors.company && (
-                <div id={`${idPrefix}-company-error`} role="alert" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--status-red-text)' }}>
+                <div id={`${idPrefix}-company-error`} role="alert" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--destructive)' }}>
                   <Glyph d={WARN_PATHS} size={15} sw={1.7} /> {errors.company}
                 </div>
               )}
@@ -264,7 +271,7 @@ export function DemoLeadForm({
 
             <div>
               <label htmlFor={`${idPrefix}-role`} className="label" style={{ display: 'block', marginBottom: 6 }}>
-                Role <span style={{ color: 'var(--fg-4)' }}>(opt.)</span>
+                Role <span style={{ color: 'var(--text-copy)' }}>(opt.)</span>
               </label>
               <div style={{ position: 'relative' }}>
                 <select
@@ -273,14 +280,14 @@ export function DemoLeadForm({
                   value={form.role}
                   onChange={(e: ChangeEvent<HTMLSelectElement>) => setField('role', e.target.value)}
                   disabled={submitting}
-                  style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', padding: '0 32px 0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
+                  style={SELECT_STYLE}
                 >
                   <option value="" disabled>Select…</option>
                   {ROLE_OPTIONS.map((opt) => (
                     <option key={opt} value={opt}>{opt}</option>
                   ))}
                 </select>
-                <span style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--fg-3)', display: 'inline-flex' }}>
+                <span style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--muted-foreground)', display: 'inline-flex' }}>
                   <Glyph d="m6 9 6 6 6-6" size={14} sw={1.8} />
                 </span>
               </div>
@@ -289,7 +296,7 @@ export function DemoLeadForm({
             <div className="dm-row" style={{ display: 'flex', gap: 12, alignItems: 'flex-end' }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <label htmlFor={`${idPrefix}-size`} className="label" style={{ display: 'block', marginBottom: 6 }}>
-                  Taxpayer size <span style={{ color: 'var(--fg-4)' }}>(opt.)</span>
+                  Taxpayer size <span style={{ color: 'var(--text-copy)' }}>(opt.)</span>
                 </label>
                 <div style={{ position: 'relative' }}>
                   <select
@@ -298,21 +305,21 @@ export function DemoLeadForm({
                     value={form.size}
                     onChange={(e: ChangeEvent<HTMLSelectElement>) => setField('size', e.target.value)}
                     disabled={submitting}
-                    style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', padding: '0 32px 0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
+                    style={SELECT_STYLE}
                   >
                     <option value="" disabled>Select…</option>
                     {TAXPAYER_SIZE_OPTIONS.map((opt) => (
                       <option key={opt} value={opt}>{opt}</option>
                     ))}
                   </select>
-                  <span style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--fg-3)', display: 'inline-flex' }}>
+                  <span style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--muted-foreground)', display: 'inline-flex' }}>
                     <Glyph d="m6 9 6 6 6-6" size={14} sw={1.8} />
                   </span>
                 </div>
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <label htmlFor={`${idPrefix}-volume`} className="label" style={{ display: 'block', marginBottom: 6 }}>
-                  Monthly invoices <span style={{ color: 'var(--fg-4)' }}>(opt.)</span>
+                  Monthly invoices <span style={{ color: 'var(--text-copy)' }}>(opt.)</span>
                 </label>
                 <div style={{ position: 'relative' }}>
                   <select
@@ -321,14 +328,14 @@ export function DemoLeadForm({
                     value={form.volume}
                     onChange={(e: ChangeEvent<HTMLSelectElement>) => setField('volume', e.target.value)}
                     disabled={submitting}
-                    style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', padding: '0 32px 0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
+                    style={SELECT_STYLE}
                   >
                     <option value="" disabled>Select…</option>
                     {VOLUME_OPTIONS.map((opt) => (
                       <option key={opt} value={opt}>{opt}</option>
                     ))}
                   </select>
-                  <span style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--fg-3)', display: 'inline-flex' }}>
+                  <span style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--muted-foreground)', display: 'inline-flex' }}>
                     <Glyph d="m6 9 6 6 6-6" size={14} sw={1.8} />
                   </span>
                 </div>
@@ -336,7 +343,7 @@ export function DemoLeadForm({
             </div>
 
             <div>
-              <label htmlFor={`${idPrefix}-consent`} style={{ display: 'flex', alignItems: 'flex-start', gap: 9, fontSize: 12.5, lineHeight: 1.5, color: 'var(--fg-2)', cursor: 'pointer' }}>
+              <label htmlFor={`${idPrefix}-consent`} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, fontSize: 13, lineHeight: 1.55, color: 'var(--foreground)', cursor: 'pointer' }}>
                 <input
                   id={`${idPrefix}-consent`}
                   type="checkbox"
@@ -346,7 +353,7 @@ export function DemoLeadForm({
                   aria-invalid={Boolean(errors.consent)}
                   aria-describedby={errors.consent ? `${idPrefix}-consent-error` : undefined}
                   disabled={submitting}
-                  style={{ flex: 'none', width: 15, height: 15, marginTop: 2, accentColor: 'var(--action)', cursor: 'pointer' }}
+                  style={{ flex: 'none', width: 18, height: 18, marginTop: 2, accentColor: 'var(--primary)', cursor: 'pointer' }}
                 />
                 {/* The imported constant, never a retyped sentence: this is the one
                     mechanism that keeps the wording the visitor was SHOWN identical to
@@ -354,7 +361,7 @@ export function DemoLeadForm({
                 {CONSENT_TEXT}
               </label>
               {errors.consent && (
-                <div id={`${idPrefix}-consent-error`} role="alert" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--status-red-text)' }}>
+                <div id={`${idPrefix}-consent-error`} role="alert" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--destructive)' }}>
                   <Glyph d={WARN_PATHS} size={15} sw={1.7} /> {errors.consent}
                 </div>
               )}
@@ -391,43 +398,41 @@ export function DemoLeadForm({
             />
           </div>
 
-          <button type="submit" disabled={submitting} className="v2-btn v2-btn-primary" style={{ width: '100%', justifyContent: 'center', height: 44, marginTop: 18, cursor: 'pointer', gap: 9 }}>
+          <button type="submit" disabled={submitting} className="ds-btn ds-btn--primary ds-btn--md" style={{ width: '100%', marginTop: 24 }}>
             {submitting ? (
               <>
-                <span style={{ width: 15, height: 15, border: '2px solid oklch(100% 0 0 / .4)', borderTopColor: 'var(--text-on-dark)', borderRadius: 99, animation: 'dmSpin 0.7s linear infinite' }} />
+                <span style={{ width: 15, height: 15, border: '2px solid color-mix(in srgb, var(--primary-foreground) 40%, transparent)', borderTopColor: 'var(--primary-foreground)', borderRadius: 'var(--radius-pill)', animation: 'dmSpin 0.7s linear infinite' }} />
                 Booking…
               </>
             ) : (
               'Book my demo →'
             )}
           </button>
-          <p style={{ fontSize: 12, color: 'var(--fg-3)', textAlign: 'center', margin: '14px 0 0' }}>No card required</p>
+          <p className="t-caption" style={{ textAlign: 'center', margin: '14px 0 0' }}>No card required</p>
         </form>
       )}
 
       {demoStep === 'success' && (
-        <div id={`${idPrefix}-success`} tabIndex={-1} style={{ padding: panelPadding, textAlign: 'center' }}>
-          <span style={{ width: 48, height: 48, borderRadius: 99, background: 'var(--action-tint)', color: 'var(--action)', display: 'inline-grid', placeItems: 'center', marginBottom: 16 }}>
-            <Glyph d="M20 6 9 17l-5-5" size={26} sw={2} />
-          </span>
-          <h3 style={{ fontSize: 20, letterSpacing: '-0.02em', fontWeight: 600, margin: '0 0 8px' }}>You're booked</h3>
-          <p style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--fg-2)', margin: '0 auto 20px', maxWidth: 330 }}>
+        <div id={`${idPrefix}-success`} tabIndex={-1} style={panelStyle}>
+          <IconTile name="check" tone="primary" size={48} iconSize={24} />
+          <h3 style={panelH3}>You're booked</h3>
+          <p className="t-body-sm" style={panelP}>
             Thanks, {firstNameOf(form.name)}. A compliance specialist will email {form.email} within one business day to lock your 20-minute slot.
           </p>
           {onDone && (
-            <button id={`${idPrefix}-success-done`} onClick={onDone} className="v2-btn v2-btn-primary" style={{ width: '100%', justifyContent: 'center', height: 44, cursor: 'pointer' }}>Done</button>
+            <button id={`${idPrefix}-success-done`} onClick={onDone} className="ds-btn ds-btn--primary ds-btn--md" style={{ width: '100%' }}>Done</button>
           )}
         </div>
       )}
 
       {demoStep === 'error' && (
-        <div style={{ padding: panelPadding, textAlign: 'center' }}>
-          <span style={{ width: 48, height: 48, borderRadius: 99, background: 'var(--status-red-bg)', color: 'var(--status-red-text)', display: 'inline-grid', placeItems: 'center', marginBottom: 16 }}>
-            <Glyph d={WARN_PATHS} size={26} sw={1.8} />
+        <div style={panelStyle}>
+          <span style={{ width: 48, height: 48, borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', color: 'var(--destructive)', display: 'inline-grid', placeItems: 'center' }}>
+            <Glyph d={WARN_PATHS} size={24} sw={1.8} />
           </span>
-          <h3 style={{ fontSize: 20, letterSpacing: '-0.02em', fontWeight: 600, margin: '0 0 8px' }}>Something went wrong</h3>
-          <p style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--fg-2)', margin: '0 auto 20px', maxWidth: 330 }}>We couldn't book your demo just now. Please try again — your details are still here.</p>
-          <button id={`${idPrefix}-error-retry`} onClick={retry} className="v2-btn v2-btn-primary" style={{ width: '100%', justifyContent: 'center', height: 44, cursor: 'pointer' }}>Try again</button>
+          <h3 style={panelH3}>Something went wrong</h3>
+          <p className="t-body-sm" style={panelP}>We couldn't book your demo just now. Please try again — your details are still here.</p>
+          <button id={`${idPrefix}-error-retry`} onClick={retry} className="ds-btn ds-btn--primary ds-btn--md" style={{ width: '100%' }}>Try again</button>
         </div>
       )}
     </>

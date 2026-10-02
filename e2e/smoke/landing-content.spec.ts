@@ -44,14 +44,11 @@ const LANDING_URL = resolveTarget('LANDING_URL')
 
 // F-6, retyped from frontend/landing/src/components/TrustStrip.tsx#AUDIENCES, in render order.
 const AUDIENCE_SEGMENTS = [
-  'Medium taxpayers',
+  'Finance teams',
   'Accounting firms',
-  'ERP consultants',
-  'Distributors',
-  'Manufacturers',
-  'Formal SMEs',
+  'Growing businesses',
   'Fintech',
-  'CRMs',
+  'Technology partners',
 ] as const
 
 // The accounting-system / data-format wordmarks the map drifted to on 2026-09-05 (this
@@ -123,8 +120,26 @@ test('landing content: the audience strip names buyer segments, never an account
   const strip = page.locator('[data-strip="audience"]')
   await expect(strip, 'the audience strip did not resolve to exactly one element').toHaveCount(1)
 
+  const band = page.locator('section.band-sage').filter({ has: strip })
+  await expect(band, 'the strip is not inside exactly one section.band-sage').toHaveCount(1)
+  const bandBg = await band.evaluate((el) => getComputedStyle(el).backgroundColor)
+  const sageBg = await page.evaluate(() => {
+    const probe = document.createElement('div')
+    probe.style.background = 'var(--sage)'
+    document.body.appendChild(probe)
+    const bg = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return bg
+  })
+  expect(sageBg, 'control: the --sage probe resolved to a colour').not.toBe('rgba(0, 0, 0, 0)')
+  expect(bandBg, 'the band background is not var(--sage)').toBe(sageBg)
+
+  const label = strip.locator(':scope > div').first()
+  await expect(label, 'the strip label is missing').toHaveCount(1)
+  await expect(label).toHaveText('Built for the way your business works')
+
   const segments = strip.locator('span')
-  await expect(segments, 'the strip does not hold exactly 8 segments').toHaveCount(AUDIENCE_SEGMENTS.length)
+  await expect(segments, 'the strip does not hold exactly 5 segments').toHaveCount(AUDIENCE_SEGMENTS.length)
   await expect(segments).toHaveText([...AUDIENCE_SEGMENTS])
 
   const stripText = (await strip.textContent()) ?? ''

@@ -1,6 +1,5 @@
 // All landing content, re-authored from the prototype's support.js state as
 // typed, static TS constants (the support.js Mustache runtime is NOT ported).
-// Glyphs are pre-built <Icon> nodes so section components stay pure layout.
 
 import type { ReactNode } from 'react'
 import { Icon, type GlyphName } from './icons'

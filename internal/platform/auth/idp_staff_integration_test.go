@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // The D13 runbook statements; docs/identity-provider.md "Granting staff" copies them verbatim.
@@ -17,14 +18,20 @@ const (
 	removeStaffSQL = `DELETE FROM public.staff_members WHERE user_id = (SELECT id FROM auth.users WHERE email = lower('<address>'));`
 )
 
-// runbook runs a D13 statement verbatim for u as the superuser and asserts one row changed.
-func runbook(t *testing.T, conn *pgx.Conn, stmt string, u idpUser) {
+// runbookFor runs a D13 statement verbatim for an address as the superuser.
+func runbookFor(t *testing.T, conn *pgx.Conn, stmt, address string) pgconn.CommandTag {
 	t.Helper()
-	tag, err := conn.Exec(context.Background(), strings.Replace(stmt, "<address>", u.email, 1))
+	tag, err := conn.Exec(context.Background(), strings.Replace(stmt, "<address>", address, 1))
 	if err != nil {
 		t.Fatalf("runbook statement: %v", err)
 	}
-	if tag.RowsAffected() != 1 {
+	return tag
+}
+
+// runbook runs a D13 statement for u and asserts one row changed.
+func runbook(t *testing.T, conn *pgx.Conn, stmt string, u idpUser) {
+	t.Helper()
+	if tag := runbookFor(t, conn, stmt, u.email); tag.RowsAffected() != 1 {
 		t.Fatalf("runbook statement %q: %s, want one row", stmt[:6], tag)
 	}
 }
@@ -95,10 +102,11 @@ func TestIdP_RegisteredAccountCarriesNoStaffClaim(t *testing.T) {
 func TestIdP_StaffGrantReachesTheNextToken(t *testing.T) {
 	base := idpURL(t)
 	conn := superConn(t)
-	u := workspaceUser(t, base)
+	u, other := workspaceUser(t, base), workspaceUser(t, base)
 	h := newRenewal(t, base)
 	a0, r0 := h.session(t, u)
 	requireNoStaff(t, "before the grant", a0)
+	_, otherR0 := h.session(t, other)
 
 	grantStaff(t, conn, u)
 
@@ -109,22 +117,61 @@ func TestIdP_StaffGrantReachesTheNextToken(t *testing.T) {
 	a2, _ := h.session(t, u)
 	requireStaff(t, "sign-in after the grant", a2)
 	requireVerifies(t, base, "signed-in staff token", a2)
+
+	o1, _ := h.renewOK(t, "other account after the grant", otherR0)
+	requireNoStaff(t, "other account refresh", o1)
+	o2, _ := h.session(t, other)
+	requireNoStaff(t, "other account sign-in", o2)
+}
+
+func TestIdP_StaffGrantStatementMatchesTheAddressInAnyCase(t *testing.T) {
+	base := idpURL(t)
+	conn := superConn(t)
+	u := workspaceUser(t, base)
+	h := newRenewal(t, base)
+	_, r0 := h.session(t, u)
+
+	if tag := runbookFor(t, conn, grantStaffSQL, "nobody-"+u.id+"@example.test"); tag.RowsAffected() != 0 {
+		t.Fatalf("grant for an unregistered address: %s, want no rows", tag)
+	}
+	mixed := strings.ToUpper(u.email)
+	if mixed == u.email {
+		t.Fatalf("control: %q has no letters to upper-case", u.email)
+	}
+	t.Cleanup(func() {
+		_, _ = conn.Exec(context.Background(), `DELETE FROM public.staff_members WHERE user_id = $1`, u.id)
+	})
+	if tag := runbookFor(t, conn, grantStaffSQL, mixed); tag.RowsAffected() != 1 {
+		t.Fatalf("grant for %q: %s, want one row", mixed, tag)
+	}
+
+	a1, _ := h.renewOK(t, "after the mixed-case grant", r0)
+	requireStaff(t, "refresh after the mixed-case grant", a1)
 }
 
 func TestIdP_StaffRemovalReachesTheNextToken(t *testing.T) {
 	base := idpURL(t)
 	conn := superConn(t)
-	u := workspaceUser(t, base)
+	u, keep := workspaceUser(t, base), workspaceUser(t, base)
 	h := newRenewal(t, base)
 	grantStaff(t, conn, u)
+	grantStaff(t, conn, keep)
 	a0, r0 := h.session(t, u)
 	requireStaff(t, "before the removal", a0)
+	_, keepR0 := h.session(t, keep)
 
 	runbook(t, conn, removeStaffSQL, u)
 
 	a1, _ := h.renewOK(t, "after the removal", r0)
 	requireNoStaff(t, "refresh after the removal", a1)
 	requireVerifies(t, base, "refreshed token after the removal", a1)
+
+	a2, _ := h.session(t, u)
+	requireNoStaff(t, "sign-in after the removal", a2)
+	requireVerifies(t, base, "signed-in token after the removal", a2)
+
+	k1, _ := h.renewOK(t, "other staff after the removal", keepR0)
+	requireStaff(t, "other staff refresh", k1)
 }
 
 func TestIdP_StaffClaimSurvivesRenewalPastTheTTL(t *testing.T) {

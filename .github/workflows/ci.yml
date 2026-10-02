@@ -57,6 +57,7 @@ jobs:
             migrations:
               - 'migrations/**'
               - 'db/**'
+              - 'internal/platform/db/restore_check_test.go'
               - 'Makefile'
               - 'go.mod'
               - 'go.sum'
@@ -539,7 +540,7 @@ jobs:
           --health-retries 5
     env:
       # bootstrap runs as the superuser; goose runs as the migrator. DATABASE_URL
-      # (the app role) is for TestSuperuserDSNNotRetainedForRequestPath (task-128 / AC-4),
+      # (the app role) is for TestSuperuserDSNNotRetainedForRequestPath,
       # which proves the request-serving pool it opens comes from DATABASE_URL, not the
       # superuser DSN, and for TestRestoreCheck_FailsWithoutBypassRLS.
       # Dev-safe passwords only — this is an ephemeral throwaway DB.

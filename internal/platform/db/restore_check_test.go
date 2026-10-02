@@ -218,7 +218,9 @@ func newRCFixture(t *testing.T) *rcFixture {
 			`DELETE FROM business_entities WHERE tenant_id = $1`,
 			`DELETE FROM tenants WHERE id = $1`,
 		} {
-			_, _ = f.pool.Exec(context.Background(), sql, f.tenant)
+			if _, err := f.pool.Exec(context.Background(), sql, f.tenant); err != nil {
+				t.Errorf("cleanup (%s): %v", sql, err)
+			}
 		}
 	})
 	return f
@@ -869,14 +871,28 @@ func TestRestoreCheck_HashIsTheUTCISORowText(t *testing.T) {
 		}
 	}
 	for _, name := range rcTableNames {
-		var want string
-		err := tx.QueryRow(ctx, `SELECT md5(string_agg(t::text, E'\n' ORDER BY t.id)) FROM `+name+
-			` t WHERE t.tenant_id = $1 AND t.created_at <= $2`, f.tenant, f.cutoff).Scan(&want)
+		rows, err := tx.Query(ctx, `SELECT t::text FROM `+name+
+			` t WHERE t.tenant_id = $1 AND t.created_at <= $2 ORDER BY t.id`, f.tenant, f.cutoff)
 		if err != nil {
-			t.Fatalf("hash %s: %v", name, err)
+			t.Fatalf("rows %s: %v", name, err)
 		}
+		var perRow strings.Builder
+		for rows.Next() {
+			var text string
+			if err := rows.Scan(&text); err != nil {
+				t.Fatalf("scan %s: %v", name, err)
+			}
+			sum := md5.Sum([]byte(text))
+			perRow.WriteString(hex.EncodeToString(sum[:]))
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			t.Fatalf("rows %s: %v", name, err)
+		}
+		total := md5.Sum([]byte(perRow.String()))
+		want := hex.EncodeToString(total[:])
 		if got[name][4] != want {
-			t.Errorf("%s hash = %s, want %s (row text under TimeZone UTC, DateStyle ISO, YMD)", name, got[name][4], want)
+			t.Errorf("%s hash = %s, want %s (md5 of the concatenated per-row md5s, row text under TimeZone UTC, DateStyle ISO, YMD)", name, got[name][4], want)
 		}
 	}
 }
@@ -1012,4 +1028,36 @@ func TestRestoreCheck_LeavesConnectionReadOnly(t *testing.T) {
 	}
 	_, err = conn.Exec(ctx, `CREATE TEMP TABLE rc_after(i int)`)
 	requireRCPgMessage(t, err, "read-only transaction")
+}
+
+// A write placed inside the file's own transaction must fail; the connection-level
+// default only covers later statements.
+func TestRestoreCheck_FileStatementsRunReadOnly(t *testing.T) {
+	ctx := context.Background()
+	f := newRCFixture(t)
+	f.invoice(t, "RC-1", "draft", f.cutoff.Add(-time.Hour))
+	base := readRestoreCheckSQL(t)
+	for _, c := range []struct{ name, anchor string }{
+		{"before the guard", "DO $guard$"},
+		{"before the fingerprint query", "WITH p AS ("},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if strings.Count(base, c.anchor) != 1 {
+				t.Fatalf("anchor %q is not unique in the file", c.anchor)
+			}
+			sql := strings.Replace(base, c.anchor, "CREATE TEMP TABLE rc_inline(i int);\n"+c.anchor, 1)
+			conn, err := pgx.Connect(ctx, f.dsn)
+			if err != nil {
+				t.Fatalf("connect: %v", err)
+			}
+			defer conn.Close(ctx)
+			for k, v := range rcInputs(f.tenant, f.cutoff) {
+				if _, err := conn.Exec(ctx, `SELECT set_config($1, $2, false)`, k, v); err != nil {
+					t.Fatalf("set_config(%s): %v", k, err)
+				}
+			}
+			_, err = conn.PgConn().Exec(ctx, sql).ReadAll()
+			requireRCPgMessage(t, err, "read-only transaction")
+		})
+	}
 }

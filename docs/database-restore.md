@@ -20,7 +20,7 @@ The production database is named `railway`, not `invoice_os`. Commands read it f
 Paste once per terminal. Run from the repo root. `rsql` runs SQL read-only on a service, `rc_run` runs `db/restore-check.sql`.
 
 ```sh
-REMOTE_PSQL='psql -q -At -v ON_ERROR_STOP=1 -U "$PGUSER" -d "$PGDATABASE"'
+REMOTE_PSQL='PGOPTIONS=-cdefault_transaction_read_only=on psql -q -At -v ON_ERROR_STOP=1 -U "$PGUSER" -d "$PGDATABASE"'
 
 rsql() {  # $1 = service name, $2 = SQL
   railway ssh -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s "$1" \
@@ -38,7 +38,7 @@ rc_run() {  # $1 = service name, $2 = output prefix; reads RC_TENANT and RC_CUTO
 }
 ```
 
-`railway ssh` joins its arguments and loses one level of quoting. That is why the SQL travels base64-encoded.
+`railway ssh` joins its arguments and loses one level of quoting. That is why the SQL travels base64-encoded, and why `PGOPTIONS` carries no space or quote. Every statement of `rsql` and `rc_run` starts in a read-only transaction: a write fails with `cannot execute ... in a read-only transaction`.
 
 ## 1. What exists
 
@@ -140,7 +140,7 @@ Afterwards, record the `Postgres` `deploymentId` (the enable changed it) in sect
 
 ## 4. Verify the restored copy
 
-`db/restore-check.sql` prints a fingerprint of one tenant. It needs a role that bypasses RLS: `railway ssh` runs as the container superuser `postgres`. It sets `default_transaction_read_only = on`, so it writes nothing.
+`db/restore-check.sql` prints a fingerprint of one tenant. It needs a role that bypasses RLS: `railway ssh` runs as the container superuser `postgres`. It runs inside `BEGIN READ ONLY`, so it writes nothing.
 
 **Pick the tenant.** If production holds a tenant outside the four demo tenants (`aaaaaaaa-…`, `bbbbbbbb-…`, `11111111-…`, `22222222-…`), use the one with the most invoices. Otherwise use `Okafor & Partners`, `11111111-1111-1111-1111-111111111111`.
 
@@ -172,11 +172,12 @@ diff rc-prod.out rc-sib.out && echo DIFF-EMPTY
 
 The `role` row on both is `role | postgres | t | t`.
 
-**Negative control.** A tenant that does not exist must fail. Run it once per environment before you trust a pass:
+**Negative control.** A tenant that does not exist must fail. Run it once per environment before you trust a pass. The subshell leaves `RC_TENANT` untouched:
 
 ```sh
-RC_TENANT=$(uuidgen | tr 'A-Z' 'a-z')
-rc_run Postgres rc-neg; cat rc-neg.out; cat rc-neg.err
+for svc in Postgres Postgres-drill-<YYYYMMDD>; do
+  ( RC_TENANT=$(uuidgen | tr 'A-Z' 'a-z'); rc_run "$svc" rc-neg-"$svc"; cat rc-neg-"$svc".out rc-neg-"$svc".err )
+done
 ```
 
 Expect a non-zero exit, `stdout_lines=0`, and stderr naming `restore-check: tenant <uuid> not found`.
@@ -197,7 +198,14 @@ rsql Postgres-drill-<YYYYMMDD> "select '<replay>'::pg_lsn > '<stop>'::pg_lsn"
 
 Expect `t`.
 
-**A non-empty `diff`.** Keep the sibling and record the diff. The one benign cause is a production change after `T`. Tell it apart: run both services again with a cutoff 1 h earlier. An earlier cutoff clears only rows created after it. The `goose` and `owner` rows are not scoped by the cutoff, and neither is an update to an older row: a diff there is benign only if a migration or an update ran on production after `T`. Otherwise a diff that remains is a restore defect: stop and tell the coordinator.
+**A non-empty `diff`.** Keep the sibling and record the diff. The only benign cause is a production write after `T`. Four forms of it exist. Tell them apart by the `table` rows that differ, and by the `count` field:
+
+- **New rows** created after `T`: production's count is higher. A cutoff 1 h earlier clears them.
+- **Rows committed after `T` with `created_at` at or before `T`** (a back-dated or late-committed row): production's count is higher, and an earlier cutoff does not clear them.
+- **Deletes after `T` of rows created before `T`**: production's count is lower, and an earlier cutoff does not clear them.
+- **Updates to older rows**: both counts are equal and only the hash differs.
+
+For a count difference, list the ids on both services and compare: `rsql <service> "select id from <table> where tenant_id = '<tenant>' and created_at <= '<T>' order by id"`. An id only on the sibling is a delete after `T`. An id only on production is a late commit. The `goose` and `owner` rows are not scoped by the cutoff: a diff there is benign only if a migration ran on production after `T`. Any diff counts as benign only if you can name the production write after `T` that caused it. Otherwise it is a restore defect: stop and tell the coordinator.
 
 ## 5. Clean up
 
@@ -267,6 +275,8 @@ Definitions:
 - **Data age:** `t_request - T`.
 - Archive lag: `t_request - range_end`.
 - Newest invoice `created_at`: the newest `recent` row of the named tenant in the copy.
+
+The 2026-10-02 `table` hashes use the earlier whole-text form. Later drills use the per-row hash (`md5` of the concatenated per-row `md5`s), so do not compare hashes across the two forms.
 
 | Date | Operator | `range_end` | `T` | Base-backup time and stop LSN | `t_request` | `t_ready` | Restore duration | Data age | Archive lag | Sibling replay LSN | Newest invoice `created_at` | Diff result | Sibling name and ID | Sibling volume ID | Deleted at |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|

@@ -1,5 +1,7 @@
 -- Restore fingerprint of one tenant. Needs a BYPASSRLS role; set restore_check.tenant and restore_check.cutoff first.
 -- Output is text rows, independent of the caller's TimeZone and DateStyle.
+-- BEGIN READ ONLY makes the file's own statements read-only; the SET keeps the session read-only afterwards.
+BEGIN READ ONLY;
 SET default_transaction_read_only = on;
 SET TimeZone = 'UTC';
 SET DateStyle = 'ISO, YMD';
@@ -47,27 +49,27 @@ rows_(ord, sub, line) AS (
   UNION ALL
   SELECT 3, 'invoices', concat_ws(' | ', 'table', 'invoices', count(*),
          coalesce(to_char(max(t.created_at) AT TIME ZONE 'UTC', (SELECT fmt FROM iso)), '-'),
-         coalesce(md5(string_agg(t::text, E'\n' ORDER BY t.id)), '-'))
+         coalesce(md5(string_agg(md5(t::text), '' ORDER BY t.id)), '-'))
     FROM invoices t, p WHERE t.tenant_id = p.tenant AND t.created_at <= p.cutoff
   UNION ALL
   SELECT 3, 'line_items', concat_ws(' | ', 'table', 'line_items', count(*),
          coalesce(to_char(max(t.created_at) AT TIME ZONE 'UTC', (SELECT fmt FROM iso)), '-'),
-         coalesce(md5(string_agg(t::text, E'\n' ORDER BY t.id)), '-'))
+         coalesce(md5(string_agg(md5(t::text), '' ORDER BY t.id)), '-'))
     FROM line_items t, p WHERE t.tenant_id = p.tenant AND t.created_at <= p.cutoff
   UNION ALL
   SELECT 3, 'documents', concat_ws(' | ', 'table', 'documents', count(*),
          coalesce(to_char(max(t.created_at) AT TIME ZONE 'UTC', (SELECT fmt FROM iso)), '-'),
-         coalesce(md5(string_agg(t::text, E'\n' ORDER BY t.id)), '-'))
+         coalesce(md5(string_agg(md5(t::text), '' ORDER BY t.id)), '-'))
     FROM documents t, p WHERE t.tenant_id = p.tenant AND t.created_at <= p.cutoff
   UNION ALL
   SELECT 3, 'audit_log', concat_ws(' | ', 'table', 'audit_log', count(*),
          coalesce(to_char(max(t.created_at) AT TIME ZONE 'UTC', (SELECT fmt FROM iso)), '-'),
-         coalesce(md5(string_agg(t::text, E'\n' ORDER BY t.id)), '-'))
+         coalesce(md5(string_agg(md5(t::text), '' ORDER BY t.id)), '-'))
     FROM audit_log t, p WHERE t.tenant_id = p.tenant AND t.created_at <= p.cutoff
   UNION ALL
   SELECT 3, 'memberships', concat_ws(' | ', 'table', 'memberships', count(*),
          coalesce(to_char(max(t.created_at) AT TIME ZONE 'UTC', (SELECT fmt FROM iso)), '-'),
-         coalesce(md5(string_agg(t::text, E'\n' ORDER BY t.id)), '-'))
+         coalesce(md5(string_agg(md5(t::text), '' ORDER BY t.id)), '-'))
     FROM memberships t, p WHERE t.tenant_id = p.tenant AND t.created_at <= p.cutoff
   UNION ALL
   SELECT 4, to_char(r.created_at AT TIME ZONE 'UTC', 'YYYYMMDDHH24MISSUS') || r.id::text,
@@ -88,3 +90,4 @@ rows_(ord, sub, line) AS (
 )
 SELECT line FROM rows_
 ORDER BY ord, CASE WHEN ord = 4 THEN NULL ELSE sub END, CASE WHEN ord = 4 THEN sub END DESC;
+COMMIT;

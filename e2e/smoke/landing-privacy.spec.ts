@@ -246,7 +246,7 @@ test('landing privacy: the prose column renders as wide as it declares itself to
   expectNoConsoleErrors(errors)
 })
 
-// P9 — 390px. Assertion 2 is what actually carries the readability claim: .asc-app's
+// P9 — 390px. Assertion 2 is what actually carries the readability claim: the App root's
 // overflowX:'clip' (App.tsx) removes descendant overflow from the document's
 // scrollable region, so an overflowing element is invisible AND unscrollable to
 // assertion 3 alone.

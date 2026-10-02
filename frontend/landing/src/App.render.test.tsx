@@ -107,3 +107,44 @@ describe('AC-11: the Cookie choices control is in the footer on every route the 
     expect(renderAppAt('/some-unknown-path'), 'an unknown path took the privacy arm').toBe(renderAppAt('/'))
   })
 })
+
+describe('RESKIN-01-03 (AC 5): the four former --gradient-hero sites render the v2 flat dark band', () => {
+  const html = renderAppAt('/')
+
+  function section(id: string): string {
+    const start = html.indexOf(`<section id="${id}"`)
+    expect(start, `expected <section id="${id}">`).toBeGreaterThan(-1)
+    return html.slice(start, html.indexOf('</section>', start))
+  }
+
+  it('Modules is a bare band-dark section with no inline background', () => {
+    const open = /^<section id="modules"[^>]*>/.exec(section('modules'))?.[0]
+    expect(open).toBe('<section id="modules" class="band-dark">')
+  })
+
+  it('HowItWorks step panel is flat var(--surface) with no background-image', () => {
+    const panel = /<div class="ios-grid ios-3"[^>]*>/.exec(section('how'))?.[0] ?? ''
+    expect(panel, 'control: the panel was found').toContain('gap:1px')
+    expect(panel).toContain('background:var(--surface);')
+    expect(panel).not.toContain('background-image')
+  })
+
+  it('only the featured price card is var(--surface); the other two stay var(--bg-2)', () => {
+    const cards = [...section('pricing').matchAll(/<div class="ios-price"[^>]*>/g)].map((m) => m[0])
+    expect(cards.length, 'three plan cards').toBe(3)
+    expect(cards.filter((c) => c.includes('background:var(--surface);'))).toHaveLength(1)
+    expect(cards.filter((c) => c.includes('background:var(--bg-2);'))).toHaveLength(2)
+  })
+
+  it('the DemoCta card is flat var(--surface)', () => {
+    const demo = /<div class="ios-grid ios-2 ios-demo-card"[^>]*>/.exec(section('demo'))?.[0] ?? ''
+    expect(demo, 'control: the card was found').toContain('padding:64px 56px')
+    expect(demo).toContain('background:var(--surface);')
+  })
+
+  it('no rendered element names a gradient token or a font-variation axis', () => {
+    expect(html.length).toBeGreaterThan(50_000)
+    expect(html).not.toMatch(/--gradient-/)
+    expect(html).not.toMatch(/font-variation-settings/i)
+  })
+})

@@ -178,7 +178,7 @@ describe('Privacy SSR render (LAND-04-02)', () => {
 
   it('C10 (NEW): the fonts host named on the page is the host the site requests', () => {
     const indexHtml = readFileSync(INDEX_HTML, 'utf8')
-    expect(indexHtml).toContain('fonts.googleapis.com')
+    expect(indexHtml).toContain('https://fonts.googleapis.com/css2?family=Manrope')
     expect(html).toContain('fonts.googleapis.com')
   })
 

@@ -1,7 +1,7 @@
-/* Local page styles — ported verbatim from the ASComply Africa prototype's
-   inline <style> block. Keyframes for the hero product mock + hover transitions.
-   Token vars (--action, --bg-2, --line-3) resolve via inheritance from .asc-app;
-   --accent is the design system's amber and resolves from :root. */
+/* Local page styles — ported from the ASComply Africa prototype's inline <style>
+   block. Keyframes for the hero product mock + hover transitions.
+   Token vars (--action, --bg-2, --line-3) come from bridge.css (:root);
+   --accent is the v2 peach and resolves from :root. */
 
 * {
   box-sizing: border-box;
@@ -12,13 +12,12 @@ body {
   padding: 0;
 }
 
-/* Anchor clearance under the sticky header. --header-h comes from the design
-   system (packages/design-tokens/tokens/spacing.css) and carries no comment
-   there, so its meaning is pinned here at the point of use: 65px is the total
-   vertical space the landing's sticky header OCCUPIES — Nav's 64px inner row
-   plus its own 1px bottom hairline. Declared once by the design system,
-   consumed here, never redeclared. Three consumers read it: this rule, the Nav
-   inner row, and (from LAND-01-03) the scroll-spy threshold. */
+/* Anchor clearance under the sticky header. --header-h is declared once by the
+   v2 design system (v2/tokens/spacing.css): the total height the sticky header
+   occupies. Never redeclared here.
+   Consumers: this rule, the Nav inner row, the scroll-spy threshold.
+   Heights differ by viewport, so no pixel value is pinned in this comment.
+   The e2e nav spec measures the real header. */
 html {
   scroll-padding-top: var(--header-h);
   scroll-behavior: smooth;
@@ -30,6 +29,16 @@ html {
   html {
     scroll-behavior: auto;
   }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+button {
+  font-family: inherit;
 }
 
 @keyframes scanline {
@@ -59,23 +68,23 @@ html {
   }
 }
 
-/* Hover, ported verbatim from the prototype's own <style> block.
-   Links: teal → amber. Feature cards and list rows have none — they are content,
+/* Hover, ported from the prototype's own <style> block.
+   Links hover to --teal (v2 link hover). Feature cards and list rows have none — they are content,
    not controls. The two exceptions the prototype ships are the pricing card's
    hairline and the module cells on the dark band. */
 .ios-link {
   transition: color 120ms ease-out;
 }
 .ios-link:hover {
-  color: var(--accent) !important;
+  color: var(--teal) !important;
 }
 .ios-price:hover {
   border-color: var(--line-3) !important;
 }
 
 /* Top-nav links. Separate from .ios-link because the two want different hovers:
-   .ios-link goes teal -> amber (the prototype's generic link rule, which the footer
-   still uses), whereas the nav is teal throughout — teal on hover, teal when current.
+   .ios-link hovers to --teal (the footer and /privacy use it), whereas the nav
+   is teal throughout — teal on hover, teal when current.
    `!important` for the same reason .ios-link needs it: the colour is set inline per
    link, and an inline declaration outranks a class rule without it.
 
@@ -105,8 +114,8 @@ html {
   }
 }
 
-/* Modules grid on the gradient band: the fill lifts to --on-dark-10 (the design
-   system's "buttons on dark" behaviour), the amber icon brightens and nudges up,
+/* Modules grid on the dark band: the fill lifts to --on-dark-10 (the design
+   system's "buttons on dark" behaviour), the accent icon brightens and nudges up,
    and the body copy brightens. Motion tokens only — no scale, no shadow. */
 .mod-cell {
   transition: background var(--dur-base) var(--ease-out);
@@ -213,9 +222,8 @@ html {
   color: var(--foreground);
 }
 
-/* Two classes (0,2,0) to outrank `.asc-app a { text-decoration: none }` (0,1,1);
-   a single-class rule loses and the link ships un-underlined. Colour is left to
-   .lnk, which is (0,2,1) and would win over this rule anyway. */
+/* Two classes (0,2,0) to outrank the v2 `a { text-decoration: none }` (0,0,1);
+   Colour is left to a.lnk (bridge.css). Pinned by CookieNotice.css.test.ts. */
 .lnk.cn-link {
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -228,7 +236,7 @@ html {
 
 /* Every box-affecting property is declared here once, so the two buttons cannot
    diverge. font-family / font-size / cursor are in the list because a native
-   <button> inherits none of them and there is no `.asc-app button` rule. */
+   <button> inherits none of them; the page base only sets `button { font-family: inherit }`. */
 .cn-actions button {
   flex: 1;
   display: inline-flex;

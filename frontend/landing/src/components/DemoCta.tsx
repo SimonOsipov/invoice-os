@@ -8,7 +8,7 @@ export function DemoCta() {
         <div
           className="ios-grid ios-2 ios-demo-card"
           style={{
-            background: 'var(--gradient-hero)',
+            background: 'var(--surface)',
             borderRadius: 'var(--radius-xl)',
             boxShadow: 'var(--shadow-elegant)',
             padding: '64px 56px',

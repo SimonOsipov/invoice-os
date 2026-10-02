@@ -95,7 +95,6 @@ export function Pricing({ onBookDemo }: { onBookDemo: () => void }) {
                       fontSize: 20,
                       fontWeight: 500,
                       letterSpacing: '-0.02em',
-                      fontVariationSettings: "'opsz' 24",
                       color: c.titleColor,
                     }}
                   >
@@ -104,7 +103,7 @@ export function Pricing({ onBookDemo }: { onBookDemo: () => void }) {
                   {p.featured && (
                     <span
                       className="mono"
-                      style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', background: 'var(--accent)', color: 'var(--text-on-dark)', padding: '3px 8px', borderRadius: 'var(--radius-sm)' }}
+                      style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', background: 'var(--accent)', color: 'var(--accent-foreground)', padding: '3px 8px', borderRadius: 'var(--radius-sm)' }}
                     >
                       POPULAR
                     </span>

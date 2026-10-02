@@ -53,7 +53,7 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
 
   return (
     <div
-      className="asc-app dm-overlay"
+      className="dm-overlay"
       onClick={onClose}
       role="dialog"
       aria-modal="true"

@@ -1,0 +1,67 @@
+/* DS primitives (components/ds). Values from the DS .jsx; colours only through v2 tokens. */
+.ds-section { padding-block: var(--section-y); }
+.ds-eyebrow--dark { color: var(--text-eyebrow-dark); }
+
+.ds-btn { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; gap: 10px; border-radius: var(--radius-btn); font-family: var(--font-sans); font-size: var(--fs-btn); font-weight: var(--fw-bold); line-height: var(--lh-ui); text-decoration: none; white-space: nowrap; cursor: pointer; transition: filter var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
+.ds-btn:disabled { cursor: not-allowed; opacity: 0.45; }
+.ds-btn--disabled { cursor: not-allowed; opacity: 0.45; }
+.ds-btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.ds-btn--sm { height: 40px; padding: 0 16px; }
+.ds-btn--md { height: 46px; padding: 12px 21px; }
+.ds-btn--lg { height: 57px; padding: 17px 27px; }
+.ds-btn--outline, .ds-btn--ghostDark, .ds-btn--text { font-size: var(--fs-btn-sm); }
+.ds-btn--primary { background: var(--primary); color: var(--primary-foreground); border: 1px solid transparent; }
+.ds-btn--primary:hover:not(:disabled):not(.ds-btn--disabled) { filter: brightness(1.18); color: var(--primary-foreground); }
+.ds-btn--accent { background: var(--accent); color: var(--accent-foreground); border: 1px solid transparent; }
+.ds-btn--accent:hover:not(:disabled):not(.ds-btn--disabled) { filter: brightness(1.06); color: var(--accent-foreground); }
+.ds-btn--outline { background: transparent; color: var(--ink); border: 1px solid var(--button-outline-border); }
+.ds-btn--outline:hover:not(:disabled):not(.ds-btn--disabled) { background: var(--muted); color: var(--ink); }
+.ds-btn--ghostDark { gap: 12px; background: transparent; color: var(--surface-foreground); border: none; }
+.ds-btn--ghostDark:hover:not(:disabled):not(.ds-btn--disabled) { filter: brightness(1.12); color: var(--surface-foreground); }
+.ds-btn--text { padding: 7px 0; background: transparent; color: var(--link); border: none; border-bottom: 1px solid var(--link); border-radius: 0; line-height: 1.4; }
+.ds-btn--text:hover:not(:disabled):not(.ds-btn--disabled) { color: var(--teal); }
+.ds-btn--primary.ds-btn--disabled:hover { color: var(--primary-foreground); }
+.ds-btn--accent.ds-btn--disabled:hover { color: var(--accent-foreground); }
+.ds-btn--outline.ds-btn--disabled:hover { color: var(--ink); }
+.ds-btn--ghostDark.ds-btn--disabled:hover { color: var(--surface-foreground); }
+.ds-btn--text.ds-btn--disabled:hover { color: var(--link); }
+.ds-btn-play { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: var(--radius-pill); border: 1px solid color-mix(in srgb, var(--surface-foreground) 45%, transparent); }
+
+.ds-badge { display: inline-flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; border-radius: var(--radius-sm); font-family: var(--font-sans); font-size: var(--fs-xs); font-weight: var(--fw-semibold); white-space: nowrap; }
+.ds-badge--success { background: var(--status-success-bg); color: var(--status-success-fg); border: 1px solid transparent; }
+.ds-badge--progress { background: var(--status-progress-bg); color: var(--status-progress-fg); border: 1px solid var(--status-progress-border); }
+.ds-badge--development { background: var(--status-dev-bg); color: var(--status-dev-fg); border: 1px solid var(--status-dev-border); }
+.ds-badge-dot { width: 6px; height: 6px; border-radius: var(--radius-pill); background: currentColor; flex: none; }
+.ds-tag { display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--card); font-family: var(--font-sans); font-size: 11px; font-weight: var(--fw-medium); color: var(--text-body); }
+
+.ds-icontile { display: inline-flex; align-items: center; justify-content: center; flex: none; border-radius: var(--radius-md); }
+.ds-icontile--primary { background: var(--sage-panel); color: var(--primary); }
+.ds-icontile--accent { background: var(--peach-tint); color: var(--ink); }
+
+.ds-checklist-item { display: flex; align-items: flex-start; gap: 12px; font-family: var(--font-sans); font-size: var(--fs-body-sm); line-height: 1.6; color: var(--text-body); }
+.ds-checklist-icon { display: inline-flex; flex: none; margin-top: 2px; color: var(--teal); }
+
+.ds-logo { display: inline-flex; align-items: center; gap: 10px; }
+.ds-logo-mark { display: block; border-radius: var(--radius-md); }
+.ds-logo-word { display: inline-flex; flex-direction: column; gap: 3px; }
+.ds-logo-name { font-family: var(--font-display); font-weight: var(--fw-bold); line-height: 1; letter-spacing: -0.02em; color: var(--ink); }
+.ds-logo-region { font-family: var(--font-sans); font-weight: var(--fw-bold); line-height: 1; letter-spacing: var(--tracking-brand); text-transform: uppercase; color: var(--step-label); }
+
+.ds-tabs { display: block; }
+.ds-tabs-list { display: flex; }
+.ds-tabs-panel { background: var(--sage-panel); border-radius: 0 0 var(--radius-lg) var(--radius-lg); padding: 32px; }
+.ds-tab { box-sizing: border-box; flex: 1; display: flex; align-items: center; justify-content: center; gap: 12px; height: 58px; padding: 0 16px; background: transparent; border: none; border-bottom: 2px solid var(--tab-border); cursor: pointer; font-family: var(--font-sans); font-size: var(--fs-ui); font-weight: var(--fw-bold); color: var(--muted-foreground); transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
+.ds-tab[aria-selected="true"] { border-bottom-color: var(--tab-active-border); background: var(--sage-panel); color: var(--tab-active-text); }
+.ds-tab-step { font-family: var(--font-mono); font-size: 12px; font-weight: var(--fw-regular); opacity: 0.8; }
+.ds-tab[aria-selected="true"] .ds-tab-step { opacity: 1; }
+
+.ds-seg { display: inline-flex; gap: 2px; padding: 4px; background: var(--sage); border: 1px solid var(--sage-card-border); border-radius: var(--radius-md); }
+.ds-seg-btn { height: 36px; padding: 0 16px; background: transparent; border: none; border-radius: var(--radius-sm); cursor: pointer; font-family: var(--font-sans); font-size: var(--fs-btn-sm); font-weight: var(--fw-bold); color: var(--ink); transition: background var(--dur-fast) var(--ease-out); }
+.ds-seg-btn[aria-selected="true"] { background: var(--primary); color: var(--primary-foreground); }
+
+.ds-faq { border-bottom: 1px solid var(--border); }
+.ds-faq-btn { display: flex; align-items: center; justify-content: space-between; gap: 24px; width: 100%; padding: 20px 0; background: transparent; border: none; cursor: pointer; text-align: left; font-family: var(--font-sans); font-size: 15px; font-weight: var(--fw-bold); line-height: var(--lh-snug); color: var(--ink); }
+.ds-faq-btn svg { flex: none; color: var(--muted-foreground); }
+.ds-faq-a { padding: 0 0 22px; max-width: 760px; font-family: var(--font-sans); font-size: var(--fs-body-sm); line-height: var(--lh-body); color: var(--text-copy); }
+
+.ds-tab:focus-visible, .ds-tabs-panel:focus-visible, .ds-seg-btn:focus-visible, .ds-faq-btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }

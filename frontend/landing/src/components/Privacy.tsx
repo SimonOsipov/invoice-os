@@ -13,7 +13,7 @@ const H2 = { fontSize: 21, lineHeight: 1.3, letterSpacing: '-0.02em', fontWeight
 const P = { fontSize: 16, lineHeight: 1.65, color: 'var(--fg-2)', margin: '0 0 14px' } as const
 const LIST = { ...P, paddingLeft: 22 } as const
 const ITEM = { margin: '0 0 10px' } as const
-// .asc-app a is `color: inherit; text-decoration: none`, so an unstyled link is invisible.
+// The v2 `a` rule sets no underline, so an unstyled link would not read as a link.
 // overflowWrap lets the long gaoptout URL break instead of overhanging its column at 390px.
 const LINK = { color: 'var(--action)', textDecoration: 'underline', overflowWrap: 'anywhere' } as const
 

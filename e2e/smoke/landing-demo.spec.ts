@@ -253,7 +253,7 @@ async function openLanding(page: Page): Promise<LandingSinks> {
 
   await expect(page.getByRole('banner')).toBeVisible()
 
-  // Inter and Fraunces are Google-hosted with display=swap. A swap AFTER a measurement
+  // Manrope is Google-hosted with display=swap. A swap AFTER a measurement
   // reflows geometry that has already been read, and E6 measures geometry to the
   // sub-pixel. Settle once, here, before anything else — same reason as landing-nav.spec.ts.
   await page.evaluate(() => document.fonts.ready.then(() => true))
@@ -360,7 +360,7 @@ test('landing analytics: the analytics-host classifier accepts GA hosts and noth
   }
 
   for (const url of [
-    // The two highest-value rejections: this page requests both on every single run.
+    // The two highest-value rejections: Google Fonts hosts.
     'https://fonts.googleapis.com/css2?family=Inter',
     'https://fonts.gstatic.com/s/inter/v13/x.woff2',
     'https://www.googletagmanager.com.attacker.example/gtag/js',

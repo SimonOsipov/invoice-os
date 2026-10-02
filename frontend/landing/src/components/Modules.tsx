@@ -1,13 +1,10 @@
 import { MODULES } from '../data'
 
-// Ported from the prototype's #modules section: a --gradient-hero band, a 16px
-// single panel divided by --on-dark-10 hairlines, and cells that carry a bare
-// amber glyph (no tile) with no numeral. The cells DO hover — .mod-cell lifts
-// its fill to --on-dark-10, which is the design system's "buttons on dark"
-// behaviour, plus a brightness/translate on the icon. Motion tokens only.
+// A flat dark band holding a --radius-lg panel divided by --on-dark-10 hairlines; cells
+// carry a bare accent glyph. .mod-cell lifts its fill on hover (see landing.css).
 export function Modules() {
   return (
-    <section id="modules" className="band-gradient" style={{ backgroundImage: 'var(--gradient-hero)', color: 'var(--text-on-dark)' }}>
+    <section id="modules" className="band-dark">
       <div style={{ maxWidth: 1280, margin: '0 auto', padding: '88px 32px' }}>
         <div style={{ marginBottom: 44 }}>
           <div className="eyebrow eyebrow-dark" style={{ marginBottom: 14 }}>

@@ -96,7 +96,7 @@ honours it. `deploy-gateway` stamps that tag on `pull_request` only
 
 **Written per run, not inherited:** the URL variables. On a PR, prepare-env's
 `reconcile-urls` step writes and re-reads the fork's own `gateway.CORS_ALLOWED_ORIGINS` (all
-four SPA origins), `VITE_GATEWAY_URL` on both `app` and `landing`, `app.VITE_LANDING_URL`,
+four SPA origins), `VITE_GATEWAY_URL` on `app`, `landing` and each console, `app.VITE_LANDING_URL`,
 the landing's `VITE_APP_URL`, `VITE_OPS_URL` and `VITE_SUPPORT_URL`, each console's
 `VITE_LANDING_URL`, and `app.VITE_DEMO_MODE=true`. It refuses the persistent environment.
 

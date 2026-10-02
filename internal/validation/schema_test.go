@@ -330,8 +330,7 @@ func assertSQLState(t *testing.T, err error, want string) {
 	}
 }
 
-// assertAppRefused asserts err is a 42501 refusal. A nil err means the app-role write
-// succeeded, which is the red at head.
+// assertAppRefused asserts err is a 42501 refusal.
 func assertAppRefused(t *testing.T, err error, what string) {
 	t.Helper()
 	if err == nil {
@@ -412,7 +411,6 @@ func TestSchema_AppCannotLockRuleRows(t *testing.T) {
 }
 
 // TestSchema_AppHoldsNoWritePrivilegeOnRules: no column or table write privilege on rules.
-// The table-level half is green at head; the column half is the red.
 func TestSchema_AppHoldsNoWritePrivilegeOnRules(t *testing.T) {
 	super, _ := dbTestPools(t)
 	ctx := context.Background()
@@ -439,9 +437,77 @@ func TestSchema_AppHoldsNoWritePrivilegeOnRules(t *testing.T) {
 	}
 }
 
+// TestSchema_OnlyTheOwnerCanWriteRules: no role but the owner and superusers can write rules,
+// directly, through PUBLIC, or by SET ROLE to the owner.
+func TestSchema_OnlyTheOwnerCanWriteRules(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+
+	rows, err := super.Query(ctx, `
+		SELECT rolname,
+		       has_column_privilege(oid, 'public.rules', 'enabled', 'UPDATE'),
+		       has_table_privilege(oid, 'public.rules', 'INSERT'),
+		       has_table_privilege(oid, 'public.rules', 'UPDATE'),
+		       has_table_privilege(oid, 'public.rules', 'DELETE'),
+		       has_table_privilege(oid, 'public.rules', 'TRUNCATE'),
+		       pg_has_role(oid, 'invoice_migrator', 'USAGE')
+		FROM pg_roles
+		WHERE NOT rolsuper AND rolname !~ '^pg_' AND rolname <> 'invoice_migrator'
+		ORDER BY rolname`)
+	if err != nil {
+		t.Fatalf("read non-owner roles: %v", err)
+	}
+	defer rows.Close()
+	seen := map[string]bool{}
+	for rows.Next() {
+		var name string
+		var col, ins, upd, del, trunc, asOwner bool
+		if err := rows.Scan(&name, &col, &ins, &upd, &del, &trunc, &asOwner); err != nil {
+			t.Fatalf("scan role: %v", err)
+		}
+		seen[name] = true
+		for what, held := range map[string]bool{
+			"UPDATE rules.enabled": col, "INSERT rules": ins, "UPDATE rules": upd, "DELETE rules": del,
+			"TRUNCATE rules": trunc, "SET ROLE invoice_migrator": asOwner,
+		} {
+			if held {
+				t.Errorf("role %s can %s, want only the owner to write rules", name, what)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate roles: %v", err)
+	}
+	for _, want := range []string{"invoice_app", "invoice_tenant_reader"} {
+		if !seen[want] {
+			t.Errorf("role %s missing from the audited set %v: the check would be vacuous", want, seen)
+		}
+	}
+
+	for _, p := range []string{"INSERT", "UPDATE", "DELETE", "TRUNCATE"} {
+		var has bool
+		if err := super.QueryRow(ctx,
+			`SELECT has_table_privilege('public', 'public.rules', $1)`, p,
+		).Scan(&has); err != nil {
+			t.Fatalf("has_table_privilege(PUBLIC, %s): %v", p, err)
+		}
+		if has {
+			t.Errorf("PUBLIC can %s rules, want false", p)
+		}
+	}
+	var publicCol bool
+	if err := super.QueryRow(ctx,
+		`SELECT has_column_privilege('public', 'public.rules', 'enabled', 'UPDATE')`,
+	).Scan(&publicCol); err != nil {
+		t.Fatalf("has_column_privilege(PUBLIC): %v", err)
+	}
+	if publicCol {
+		t.Error("PUBLIC can UPDATE rules.enabled, want false")
+	}
+}
+
 // TestSchema_AppKeepsReadOnRules: the revoke leaves SELECT on both tables and the global
-// loader working. Green at head; mutation: add `REVOKE SELECT ON rules FROM invoice_app;`
-// to the migration Up.
+// loader working.
 func TestSchema_AppKeepsReadOnRules(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()

@@ -149,3 +149,34 @@ func TestRLS_RulesRevokeFailsWhileAnotherGrantorKeepsTheGrant(t *testing.T) {
 		}
 	})
 }
+
+// A grant inherited through a role membership still counts, and only a check on invoice_app
+// itself sees it: the grantor-role test above also passes for a check on invoice_tenant_reader.
+func TestRLS_RulesRevokeFailsWhileAnInheritedGrantRemains(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	up := auditEntitySectionOf(t, revokeRulesEnabledMigration(t), "Up")
+
+	tx := revokeProbeTx(t)
+	for _, s := range []string{
+		`CREATE ROLE qa_rules_enabled_writer NOLOGIN`,
+		`GRANT UPDATE (enabled) ON rules TO qa_rules_enabled_writer`,
+		`GRANT qa_rules_enabled_writer TO invoice_app`,
+		`SET LOCAL ROLE invoice_migrator`,
+	} {
+		if _, err := tx.Exec(ctx, s); err != nil {
+			t.Fatalf("set up the inherited grant (%s): %v", s, err)
+		}
+	}
+	if !appHoldsEnabledUpdate(t, tx, "before the Up") {
+		t.Fatal("invoice_app lacks UPDATE on rules.enabled through its membership, want t")
+	}
+	_, err := tx.Exec(ctx, up)
+	var pgErr *pgconn.PgError
+	switch {
+	case err == nil:
+		t.Error("the shipped Up succeeded while invoice_app inherits the grant, want an error")
+	case !errors.As(err, &pgErr) || pgErr.Message != revokePostConditionMsg:
+		t.Errorf("Up error = %v, want message %q", err, revokePostConditionMsg)
+	}
+}

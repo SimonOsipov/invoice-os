@@ -32,10 +32,11 @@ Pinned by `TestKillSwitch_E2E` and `TestKillSwitch_OnlyTheOwnerCanRunIt`.
 
 ## Recovery: the revoke migration fails
 
-Migration `revoke_rules_enabled_from_app` raises `invoice_app still holds UPDATE on rules.enabled` when another grantor holds the grant. The gateway fails to boot and blocks every later migration.
+Migration `revoke_rules_enabled_from_app` raises `invoice_app still holds UPDATE on rules.enabled` when another grantor or a role membership still gives it. The gateway fails to boot and blocks every later migration.
 
 1. `railway ssh --service Postgres`, then `psql` against `invoice_os`.
-2. `\dp rules`. Read the grantor after `invoice_app=w/` under `enabled`.
-3. `SET ROLE <grantor>; REVOKE UPDATE (enabled) ON rules FROM invoice_app; RESET ROLE;`
+2. `\dp rules`. Find `invoice_app=w/<grantor>` under `enabled` (column grant) or in Access privileges (table grant).
+3. Column grant: `SET ROLE <grantor>; REVOKE UPDATE (enabled) ON rules FROM invoice_app; RESET ROLE;`. Table grant: the same with `REVOKE UPDATE ON rules`.
+   No such entry means a membership: `SELECT roleid::regrole FROM pg_auth_members WHERE member = 'invoice_app'::regrole;`, then `REVOKE <role> FROM invoice_app;`.
 4. Confirm `SELECT has_column_privilege('invoice_app','public.rules','enabled','UPDATE');` returns `f`.
 5. Redeploy the gateway.

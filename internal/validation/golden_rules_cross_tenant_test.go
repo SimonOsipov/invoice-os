@@ -200,8 +200,7 @@ func TestGoldenRules_TenantACannotOverrideAStaffKillSwitch(t *testing.T) {
 	assertSameEvaluation(t, evaluationOf(t, app, b), baseline, "after A's attempts")
 }
 
-// TestGoldenRules_TenantAKeepsItsOwnEvaluation: one global set, no per-tenant fork. Red at
-// head through the refusal half; the equality half alone would pass.
+// TestGoldenRules_TenantAKeepsItsOwnEvaluation: one global set, no per-tenant fork.
 func TestGoldenRules_TenantAKeepsItsOwnEvaluation(t *testing.T) {
 	super, app := dbTestPools(t)
 	restoreRulesOnCleanup(t, super)

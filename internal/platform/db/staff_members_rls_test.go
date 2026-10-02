@@ -390,8 +390,7 @@ func TestRLS_CustomAccessTokenHookAddsNoKeyForANonStaffUser(t *testing.T) {
 func TestRLS_ProvisionWorkspaceGrantsNoStaff(t *testing.T) {
 	h := requireHarness(t)
 	reapplyStaffMigration(t)
-	reapplyMigration(t, "*_provision_workspace.sql")
-	t.Cleanup(func() { reapplyMigration(t, "*_provision_workspace_one_per_identity.sql") })
+	useShippedGuard(t)
 	auth := authAdminPool(t)
 	ctx := context.Background()
 

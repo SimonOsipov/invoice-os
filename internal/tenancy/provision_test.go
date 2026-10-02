@@ -306,6 +306,27 @@ func TestStoreProvisionWorkspace_RefusesAnyExistingMembership(t *testing.T) {
 	}
 }
 
+// With the guard in front, only a tenant row at the workspace id with no membership reaches tenants_pkey.
+func TestStoreProvisionWorkspace_MemberlessTenantAtTheWorkspaceIDIsAlreadyProvisioned(t *testing.T) {
+	r := newRegistrant(t)
+	if _, err := r.super.Exec(context.Background(), `INSERT INTO tenants (id, name) VALUES ($1, 'Orphan Works')`, r.tenantID); err != nil {
+		t.Fatalf("seed memberless tenant: %v", err)
+	}
+	if n := subjectMemberships(t, r); n != 0 {
+		t.Fatalf("subject memberships = %d, want 0 so the guard cannot be the one that refuses", n)
+	}
+
+	_, _, err := NewStore(r.app).ProvisionWorkspace(r.ctx(), ProvisionInput{WorkspaceName: "Second Door", DisplayName: "Ada"})
+
+	if !errors.Is(err, ErrAlreadyProvisioned) {
+		t.Errorf("err = %v, want ErrAlreadyProvisioned", err)
+	}
+	tenants, members := provisionedRows(t, r.super, r.tenantID)
+	if len(tenants) != 1 || tenants[0][0] != "Orphan Works" || len(members) != 0 {
+		t.Errorf("tenants = %v, memberships = %+v, want only the seeded tenant", tenants, members)
+	}
+}
+
 func TestProvisionHandler_ExistingMembershipIsTheSame409(t *testing.T) {
 	const want = "this account already has a workspace"
 	r := newRegistrant(t)

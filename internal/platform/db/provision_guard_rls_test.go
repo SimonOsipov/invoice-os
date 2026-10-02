@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"sort"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -35,6 +36,23 @@ func membershipCount(t *testing.T, userID string) int {
 	return mustCount(t, h.super, `SELECT count(*) FROM memberships WHERE user_id = $1`, userID)
 }
 
+// useShippedGuard applies the shipped guard Up over whatever an earlier run left, so the test reads
+// the file and not the DB migrated earlier. It skips the Down, which a broken Down could block.
+func useShippedGuard(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
+	provider, version := guardMigrationProvider(t)
+	if _, err := h.super.Exec(ctx, `DROP FUNCTION IF EXISTS `+guardSig); err != nil {
+		t.Fatalf("drop %s: %v", guardSig, err)
+	}
+	if _, err := h.super.Exec(ctx, `DELETE FROM goose_db_version WHERE version_id = $1`, version); err != nil {
+		t.Fatalf("forget the guard migration: %v", err)
+	}
+	if _, err := provider.ApplyVersion(ctx, version, true); err != nil {
+		t.Fatalf("apply the guard migration: %v", err)
+	}
+}
+
 func requireGuardFunction(t *testing.T) {
 	t.Helper()
 	if n := mustCount(t, h.super, `SELECT count(*) FROM pg_proc WHERE oid = to_regprocedure($1)`, guardSig); n != 1 {
@@ -44,6 +62,7 @@ func requireGuardFunction(t *testing.T) {
 
 func TestRLS_ProvisionGuard_AnyMembershipRefused(t *testing.T) {
 	h := requireHarness(t)
+	useShippedGuard(t)
 	ctx := context.Background()
 
 	for _, status := range []string{"active", "suspended", "invited"} {
@@ -71,6 +90,7 @@ func TestRLS_ProvisionGuard_AnyMembershipRefused(t *testing.T) {
 
 func TestRLS_ProvisionGuard_TwoActiveMembershipsRefused(t *testing.T) {
 	h := requireHarness(t)
+	useShippedGuard(t)
 	ctx := context.Background()
 	userID := uuid.NewString()
 	seedHookMembership(t, h.tenantA, userID, "active")
@@ -92,9 +112,10 @@ func TestRLS_ProvisionGuard_TwoActiveMembershipsRefused(t *testing.T) {
 	}
 }
 
-// Green at head: the control that gives the refusal tests their meaning.
+// The control that gives the refusal tests their meaning; the hook read is the next token.
 func TestRLS_ProvisionGuard_FreshIdentityStillProvisions(t *testing.T) {
 	h := requireHarness(t)
+	useShippedGuard(t)
 	ctx := context.Background()
 	id := uuid.NewString()
 	cleanupTenant(t, id)
@@ -112,10 +133,15 @@ func TestRLS_ProvisionGuard_FreshIdentityStillProvisions(t *testing.T) {
 		id, a.userID); n != 1 {
 		t.Errorf("active admin rows for the user = %d, want 1", n)
 	}
+	got, _ := hookRun(t, authAdminPool(t), a.userID, nil)
+	if tid := appMetadataOf(t, got)["tenant_id"]; tid != id {
+		t.Errorf("hook app_metadata.tenant_id = %v, want the new tenant %s", tid, id)
+	}
 }
 
 func TestRLS_ProvisionGuard_FunctionShape(t *testing.T) {
 	h := requireHarness(t)
+	useShippedGuard(t)
 	ctx := context.Background()
 	requireGuardFunction(t)
 
@@ -164,6 +190,7 @@ func TestRLS_ProvisionGuard_FunctionShape(t *testing.T) {
 
 func TestRLS_ProvisionGuard_AppCannotAskAboutAnIdentity(t *testing.T) {
 	h := requireHarness(t)
+	useShippedGuard(t)
 	ctx := context.Background()
 	requireGuardFunction(t)
 	member := uuid.NewString()
@@ -238,6 +265,7 @@ func TestRLS_ProvisionGuard_DownRestoresTheUnguardedFunction(t *testing.T) {
 
 func TestRLS_ProvisionGuard_MismatchedGUCAnswersAlikeForMemberAndStranger(t *testing.T) {
 	h := requireHarness(t)
+	useShippedGuard(t)
 	ctx := context.Background()
 	member := uuid.NewString()
 	seedHookMembership(t, h.tenantA, member, "suspended")
@@ -268,6 +296,7 @@ func TestRLS_ProvisionGuard_MismatchedGUCAnswersAlikeForMemberAndStranger(t *tes
 
 func TestRLS_ProvisionGuard_MatchingGUCResidualIsTheDocumentedOne(t *testing.T) {
 	h := requireHarness(t)
+	useShippedGuard(t)
 	ctx := context.Background()
 	member := uuid.NewString()
 	seedHookMembership(t, h.tenantA, member, "suspended")
@@ -285,5 +314,113 @@ func TestRLS_ProvisionGuard_MatchingGUCResidualIsTheDocumentedOne(t *testing.T) 
 	}
 	if n := mustCount(t, h.super, `SELECT count(*) FROM tenants WHERE id = $1`, strangerID); n != 1 {
 		t.Errorf("tenants rows for the stranger = %d, want 1", n)
+	}
+}
+
+func provisionSrc(t *testing.T, q querier) string {
+	t.Helper()
+	var src string
+	if err := q.QueryRow(context.Background(), `SELECT prosrc FROM pg_proc WHERE oid = to_regprocedure($1)`, provisionSig).Scan(&src); err != nil {
+		t.Fatalf("read provision_workspace prosrc: %v", err)
+	}
+	return src
+}
+
+func TestRLS_ProvisionGuard_DownBodyIsTheAuth03Body(t *testing.T) {
+	h := requireHarness(t)
+	useShippedGuard(t)
+	provider, version := guardMigrationProvider(t)
+	t.Cleanup(func() {
+		if _, err := provider.ApplyVersion(context.Background(), version, true); err != nil && !errors.Is(err, goose.ErrAlreadyApplied) {
+			t.Errorf("re-apply the guard migration: %v", err)
+		}
+	})
+	guarded := provisionSrc(t, h.super)
+
+	if _, err := provider.ApplyVersion(context.Background(), version, false); err != nil {
+		t.Fatalf("roll back the guard migration: %v", err)
+	}
+	afterDown := provisionSrc(t, h.super)
+	auth03 := provisionSrc(t, shippedProvisionUpTx(t))
+
+	if afterDown == guarded {
+		t.Errorf("provision_workspace body is unchanged by the Down, want the unguarded body")
+	}
+	if afterDown != auth03 {
+		t.Errorf("provision_workspace body after the Down differs from the AUTH-03 Up body:\n--- Down\n%s\n--- AUTH-03\n%s", afterDown, auth03)
+	}
+}
+
+func TestRLS_ProvisionGuard_DeletingTheOnlyTenantFreesTheIdentity(t *testing.T) {
+	h := requireHarness(t)
+	useShippedGuard(t)
+	ctx := context.Background()
+	tenant := uuid.NewString()
+	if _, err := h.super.Exec(ctx, `INSERT INTO tenants (id, name) VALUES ($1, 'Doomed')`, tenant); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	cleanupTenant(t, tenant)
+	user := uuid.NewString()
+	seedHookMembership(t, tenant, user, "active")
+
+	refusedID := uuid.NewString()
+	cleanupTenant(t, refusedID)
+	r := newProvisionArgs(refusedID)
+	r.userID = user
+	assertGuardRefusal(t, "provision while the tenant exists", provisionAs(ctx, h.app, refusedID, r))
+
+	if _, err := h.super.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, tenant); err != nil {
+		t.Fatalf("delete tenant: %v", err)
+	}
+	if n := membershipCount(t, user); n != 0 {
+		t.Fatalf("memberships after the tenant delete = %d, want 0 (cascade)", n)
+	}
+	freedID := uuid.NewString()
+	cleanupTenant(t, freedID)
+	f := newProvisionArgs(freedID)
+	f.userID = user
+	if err := provisionAs(ctx, h.app, freedID, f); err != nil {
+		t.Errorf("provision after the only tenant was deleted: want success, got %v", err)
+	}
+}
+
+func TestRLS_ProvisionGuard_ConcurrentSameWorkspaceHasOneWinner(t *testing.T) {
+	h := requireHarness(t)
+	useShippedGuard(t)
+	ctx := context.Background()
+	id := uuid.NewString()
+	cleanupTenant(t, id)
+	a := newProvisionArgs(id)
+
+	errs := make([]error, 2)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs[i] = provisionAs(ctx, h.app, id, a)
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	wins := 0
+	for _, err := range errs {
+		var pgErr *pgconn.PgError
+		switch {
+		case err == nil:
+			wins++
+		case errors.As(err, &pgErr) && pgErr.Code == "23505" && (pgErr.ConstraintName == "tenants_pkey" || pgErr.ConstraintName == guardConstraint):
+		default:
+			t.Errorf("loser: want 23505 on tenants_pkey or %s, got %v", guardConstraint, err)
+		}
+	}
+	if wins != 1 {
+		t.Errorf("successes = %d (errs %v), want exactly 1", wins, errs)
+	}
+	if n := membershipCount(t, a.userID); n != 1 {
+		t.Errorf("memberships for the user = %d, want 1", n)
 	}
 }

@@ -992,6 +992,8 @@ jobs:
         run: pnpm --filter @invoice-os/api-client test
       - name: Unit tests (monitoring)
         run: pnpm --filter @invoice-os/monitoring test
+      - name: Unit tests (console-session)
+        run: pnpm --filter @invoice-os/console-session test
       - name: Unit tests (app)
         run: pnpm --filter @invoice-os/app test
       - name: Unit tests (ops-console)

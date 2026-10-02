@@ -3,6 +3,7 @@ package platform_test
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +24,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const (
@@ -273,6 +278,53 @@ func gwStandInDB(t *testing.T) (dsn string, accepted *atomic.Int32) {
 	return fmt.Sprintf("postgres://u:p@%s/db?sslmode=disable", ln.Addr()), accepted
 }
 
+// gwDatabaseURL returns dsn with its database name replaced.
+func gwDatabaseURL(t *testing.T, dsn, name string) string {
+	t.Helper()
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatalf("parse database URL: %v", err)
+	}
+	u.Path = "/" + name
+	return u.String()
+}
+
+// gwThrowawayDB copies the job's database (roles, schema, grants) into a fresh one and drops it
+// at cleanup: invoice's boot seeds demo approval runs, which the shared database must not keep.
+func gwThrowawayDB(t *testing.T, superDSN string) string {
+	t.Helper()
+	ctx := t.Context()
+	u, err := url.Parse(superDSN)
+	if err != nil {
+		t.Fatalf("parse DATABASE_SUPERUSER_URL: %v", err)
+	}
+	src := strings.TrimPrefix(u.Path, "/")
+	name := fmt.Sprintf("gwboot_%d", time.Now().UnixNano())
+	conn, err := pgx.Connect(ctx, gwDatabaseURL(t, superDSN, "postgres"))
+	if err != nil {
+		t.Fatalf("connect as superuser: %v", err)
+	}
+	t.Cleanup(func() {
+		defer conn.Close(context.Background())
+		if _, err := conn.Exec(context.Background(), "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)"); err != nil {
+			t.Errorf("drop %s: %v", name, err)
+		}
+	})
+	// the template needs an idle source database; wait out a session that is closing
+	create := fmt.Sprintf("CREATE DATABASE %s TEMPLATE %s", name, pgx.Identifier{src}.Sanitize())
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(250 * time.Millisecond) {
+		_, err = conn.Exec(ctx, create)
+		var pe *pgconn.PgError
+		if err == nil || !errors.As(err, &pe) || pe.Code != "55006" || time.Now().After(deadline) {
+			break
+		}
+	}
+	if err != nil {
+		t.Fatalf("create throwaway database: %v", err)
+	}
+	return name
+}
+
 // Each real context-service main refuses a request the gateway did not sign. A built
 // binary is the only layer that sees a main that never calls RequireGateway.
 func TestRLS_EveryContextServiceRefusesAForgedRequest(t *testing.T) {
@@ -293,6 +345,15 @@ func TestRLS_EveryContextServiceRefusesAForgedRequest(t *testing.T) {
 	}
 	if os.Getenv("DATABASE_URL") == "" {
 		t.Skip("DATABASE_URL not set")
+	}
+	superDSN := os.Getenv("DATABASE_SUPERUSER_URL")
+	if superDSN == "" {
+		t.Skip("DATABASE_SUPERUSER_URL not set")
+	}
+	scratch := gwThrowawayDB(t, superDSN)
+	t.Setenv("DATABASE_URL", gwDatabaseURL(t, os.Getenv("DATABASE_URL"), scratch))
+	if r := os.Getenv("DATABASE_READER_URL"); r != "" {
+		t.Setenv("DATABASE_READER_URL", gwDatabaseURL(t, r, scratch))
 	}
 
 	for _, svc := range services {

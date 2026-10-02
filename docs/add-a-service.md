@@ -338,7 +338,7 @@ trigger, which had to be `deploymentTriggerDelete`d before the invariants workfl
 
 A new SPA adds `sentryVitePlugin(sourcemapUploadOptions(appDir))` and `build.sourcemap: 'hidden'` to its
 `vite.config.ts` and `ARG SENTRY_AUTH_TOKEN` to its Dockerfile build stage. It inherits the Caddy `.map` 404
-from the shared `Caddyfile`. §4 (the DSN `ARG`/`ENV` pair) is unchanged.
+from the shared `Caddyfile`.
 
 ---
 

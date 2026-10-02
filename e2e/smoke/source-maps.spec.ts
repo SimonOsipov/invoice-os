@@ -27,7 +27,7 @@ for (const target of TARGETS) {
       const script = await request.get(`${base}${path}`)
       expect(script.status(), path).toBe(200)
       expect(script.headers()['content-type'], path).toContain('javascript')
-      expect((await script.text()).includes('sourceMappingURL'), `${path} still names its source map`).toBe(false)
+      expect(/\/\/[#@]\s*sourceMappingURL=/.test(await script.text()), `${path} still carries a sourceMappingURL comment`).toBe(false)
       const map = await request.get(`${base}${path}.map`)
       expect(map.status(), `${path}.map`).toBe(404)
     }

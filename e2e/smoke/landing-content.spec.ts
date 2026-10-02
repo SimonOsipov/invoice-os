@@ -245,8 +245,7 @@ test('landing content: the live-validation preview lists every check and its tal
 // E4 — the retired positioning copy. None of these four strings carries a data-* hook, so the
 // selectors are structural; App.landingCopy.dom.test.tsx asserts the same four on the SSR tree,
 // which is what keeps a bad selector here from costing a fleet rebuild to discover.
-const HERO_SOLUTION_TEXT =
-  "ASComply Africa is the solution between your business and Nigeria's Merchant Buyer Solution. Create, validate, approve, archive, and transmit compliant invoices — through the dashboard or the API."
+const HERO_LEAD_TEXT = 'Bring invoices, approvals and changing country requirements into one connected solution. Available for Nigeria.'
 const MODULES_HEADING_TEXT = 'ASComply is your invoice compliance solution.'
 const MODULES_SOLUTION_TEXT =
   'We help your team validate invoices before they are submitted, manage approvals internally, store audit-ready records and submit them to the regulatory bodies.'
@@ -257,7 +256,7 @@ test('landing content: the retired positioning copy is replaced everywhere it sh
 
   const heroParagraph = page.locator('#top p')
   await expect(heroParagraph, '#top does not hold exactly one hero paragraph').toHaveCount(1)
-  await expect(heroParagraph).toHaveText(HERO_SOLUTION_TEXT)
+  await expect(heroParagraph).toHaveText(HERO_LEAD_TEXT)
 
   const modulesHeading = page.locator('#modules h2')
   await expect(modulesHeading, '#modules does not hold exactly one heading').toHaveCount(1)

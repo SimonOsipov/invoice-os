@@ -2,7 +2,7 @@
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
 // F-5: the validation-preview rows, and the tally invariant.
 //
-// Both tally strings (Hero.tsx:173,177) are HARDCODED literals -- HERO_CHECKS is
+// Both tally strings (in Hero.tsx) are HARDCODED literals -- HERO_CHECKS is
 // consumed only by the .map() that renders the rows, never by the tally. So this
 // test relates two literals to the imported list; it proves nothing about a
 // computation, and it cannot catch a pair of literals that are wrong but
@@ -64,7 +64,7 @@ afterEach(() => {
 
 async function mountHero(): Promise<void> {
   await act(async () => {
-    root.render(createElement(Hero, { onBookDemo: () => undefined, onSignIn: () => undefined }))
+    root.render(createElement(Hero, { onBookDemo: () => undefined }))
   })
 }
 

@@ -1,10 +1,9 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
-// F-2: the nav's "Platform login" control opens the sign-in modal specifically,
+// F-2: the nav's "Platform login" control opens the sign-in modal specifically (the hero has no sign-in control),
 // without navigating away, and dismissing it restores the page. Same setup contract as
 // consentActions.mount.dom.test.tsx: production URL, an installed memory localStorage,
 // a console.error spy asserted empty. The control is reached scoped to `header`.
-/// <reference types="node" />
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'

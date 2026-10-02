@@ -196,6 +196,10 @@ button {
   color: oklch(100% 0 0 / 0.88) !important;
 }
 
+.split {
+  display: grid;
+}
+
 /* ------------------------------------------------------------------
    Responsive degradation. The prototype is desktop-first with fixed
    multi-column grids; these media queries reflow them so nothing is
@@ -213,13 +217,16 @@ button {
   }
 }
 
+@media (max-width: 900px) {
+  .split {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
 @media (max-width: 600px) {
   .ios-grid.ios-3,
   .ios-grid.ios-4 {
     grid-template-columns: 1fr !important;
-  }
-  .ios-hero-h1 {
-    font-size: 40px !important;
   }
   .ios-demo-card {
     padding: 36px 22px !important;

@@ -127,7 +127,7 @@ export default function App() {
         <Privacy />
       ) : (
         <>
-          <Hero onBookDemo={book('hero')} onSignIn={onSignIn} />
+          <Hero onBookDemo={book('hero')} />
           <TrustStrip />
           <Problem />
           <Modules />

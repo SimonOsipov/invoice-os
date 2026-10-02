@@ -1,6 +1,6 @@
 /// <reference types="node" />
 import { createRequire } from 'node:module'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -11,6 +11,8 @@ type Built = { appDir: string; output: Item[]; dist: string[]; warns: string[]; 
 
 const SPAS = monitoredSpas()
 const TIMEOUT = 120_000
+// "No org provided. Will not upload source maps." also fires for a token the builder failed to trim.
+const NO_TOKEN_WARNING = 'No auth token provided. Will not upload source maps'
 const builds = new Map<string, Built>()
 
 const walk = (dir: string): string[] =>
@@ -106,8 +108,8 @@ describe('sourcemaps (real SPA builds)', () => {
       const b = built(name)
       expect(b.output.length, `${name}: empty build output`).toBeGreaterThan(0)
       expect(
-        b.warns.some((w) => w.includes('Will not upload source maps')),
-        `${name}: no "Will not upload source maps" warning; got ${JSON.stringify(b.warns)}`,
+        b.warns.some((w) => w.includes(NO_TOKEN_WARNING)),
+        `${name}: no "${NO_TOKEN_WARNING}" warning; got ${JSON.stringify(b.warns)}`,
       ).toBe(true)
       expect(b.errors.filter((e) => e.includes('[sentry-vite-plugin] Error')), `${name}: plugin error`).toEqual([])
     }
@@ -120,7 +122,7 @@ describe('sourcemaps (real SPA builds)', () => {
     expect(b.failure, 'ops-console: build failed').toBeUndefined()
     expect(b.output.length).toBeGreaterThan(0)
     expect(
-      b.warns.some((w) => w.includes('Will not upload source maps')),
+      b.warns.some((w) => w.includes(NO_TOKEN_WARNING)),
       `no skip warning; got ${JSON.stringify(b.warns)}`,
     ).toBe(true)
     expect(b.errors.filter((e) => e.includes('[sentry-vite-plugin] Error'))).toEqual([])
@@ -135,6 +137,13 @@ describe('sourcemaps (real SPA builds)', () => {
       expect(b.dist.filter((f) => f.endsWith('.map')), `${name}: maps left in dist`).toEqual([])
       expect(entries(b).length).toBeGreaterThan(0)
       for (const entry of entries(b)) expect(b.dist, `${name}: entry chunk missing from dist`).toContain(entry.fileName)
+      // The shipped JS on disk, not the in-memory chunk: no comment invites a browser to fetch a map.
+      const js = b.dist.filter((f) => f.endsWith('.js'))
+      expect(js.length, `${name}: no .js in dist`).toBeGreaterThan(0)
+      for (const f of js) {
+        const text = readFileSync(join(b.appDir, 'dist', f), 'utf8')
+        expect(/\/\/[#@]\s*sourceMappingURL=/.test(text), `${name}: dist/${f} carries a sourceMappingURL comment`).toBe(false)
+      }
     }
   }, TIMEOUT)
 })

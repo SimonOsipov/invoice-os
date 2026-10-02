@@ -253,8 +253,7 @@ describe('AUTH-05-07: the boot sign-in params', () => {
   })
 })
 
-// AUTH-11-06: the console that sent the visitor gets the code back.
-describe('AUTH-11-06: the console hand-back', () => {
+describe('the console hand-back', () => {
   const STATE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN-_0'
   // D8 copy, verbatim.
   const NOT_STAFF = 'This account cannot open the ASComply consoles.'

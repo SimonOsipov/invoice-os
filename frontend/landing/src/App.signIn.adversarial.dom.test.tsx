@@ -340,7 +340,7 @@ function stubCode() {
   return fetchMock
 }
 
-describe('AUTH-11-06 adversarial: the console target', () => {
+describe('adversarial: the console target', () => {
   beforeEach(() => {
     vi.stubEnv('VITE_OPS_URL', 'https://ops.x')
     vi.stubEnv('VITE_SUPPORT_URL', 'https://support.x')

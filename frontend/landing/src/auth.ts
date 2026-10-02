@@ -1,5 +1,5 @@
 // Landing sign-in personas and cross-SPA routing. A pick navigates to the sibling SPA the role may open;
-// the destination app mints the session from ?persona=<id>.
+// the app mints the session from ?persona=<id>; a console ignores it and sends the visitor to its sign-in.
 
 export interface LandingPersona {
   // The persona id is the ROLE, and it is what the app's session gate checks (`?persona=<id>`).

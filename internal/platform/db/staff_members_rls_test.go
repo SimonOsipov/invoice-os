@@ -222,7 +222,7 @@ func TestRLS_StaffMembersOwnerGrantIsIdempotent(t *testing.T) {
 	}
 }
 
-// AUTH-11-03 AC-4. Guard: fails if GrantStaff drops ON CONFLICT or writes a second row.
+// Guard: fails if GrantStaff drops ON CONFLICT or writes a second row.
 func TestRLS_GrantStaffIsIdempotent(t *testing.T) {
 	h := requireHarness(t)
 	reapplyStaffMigration(t)

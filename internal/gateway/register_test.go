@@ -147,7 +147,7 @@ func doRegister(t *testing.T, authURL *url.URL, log *slog.Logger, body string) *
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	RegisterHandler(authURL, testClient(), log).ServeHTTP(rec, req)
+	RegisterHandler(authURL, testClient(), 0, log).ServeHTTP(rec, req)
 	return rec
 }
 

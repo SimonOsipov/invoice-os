@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 const (
@@ -17,10 +18,15 @@ const (
 	maxGoTrueBodyBytes = 64 << 10
 )
 
+// DefaultRegisterMinResponse is the shortest time any non-400 register answer takes.
+const DefaultRegisterMinResponse = 2 * time.Second
+
 // RegisterHandler answers POST /auth/register by calling GoTrue's /signup under authURL.
-func RegisterHandler(authURL *url.URL, client *http.Client, log *slog.Logger) http.Handler {
+// Every answer except a 400 arrives no earlier than minResponse after the request; 0 means no wait.
+func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, log *slog.Logger) http.Handler {
 	signup := authURL.JoinPath("signup").String()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
 		var in struct {
 			Email    string `json:"email"`
 			Password string `json:"password"`
@@ -39,40 +45,72 @@ func RegisterHandler(authURL *url.URL, client *http.Client, log *slog.Logger) ht
 		}
 
 		status, gt, err := postGoTrue(r, client, signup, in, nil)
+		upstream := time.Since(start)
+		pending := func() { writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"}) }
+		var send func()
 		if err != nil {
 			log.WarnContext(r.Context(), "registration: gotrue unreachable", slog.String("error", err.Error()))
-			writeError(w, http.StatusBadGateway, "registration is unavailable")
-			return
+			send = func() { writeError(w, http.StatusBadGateway, "registration is unavailable") }
 		}
 
 		// A repeat or confirmed address answers exactly like a new one.
 		switch {
+		case err != nil:
 		case status == http.StatusOK,
 			gt.ErrorCode == "user_already_exists",
 			gt.ErrorCode == "email_exists":
-			writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"})
+			send = pending
 		case gt.ErrorCode == "over_email_send_rate_limit":
 			// ceiling: GoTrue's instance-wide mail cap (30/h) answers the same code, so this WARN is its only signal; raise GOTRUE_RATE_LIMIT_EMAIL_SENT when signups near it.
 			log.WarnContext(r.Context(), "registration: gotrue email send rate limit", slog.Int("upstream_status", status))
-			writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"})
+			send = pending
 		case status >= http.StatusInternalServerError && gt.Code == "23505":
 			// The loser of two concurrent signups for one address gets GoTrue's unique-violation 500.
 			log.WarnContext(r.Context(), "registration: gotrue concurrent duplicate signup")
-			writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"})
+			send = pending
 		case gt.ErrorCode == "validation_failed",
 			gt.ErrorCode == "weak_password",
 			gt.ErrorCode == "email_address_invalid":
 			writeError(w, http.StatusBadRequest, gt.Msg)
+			return
 		case gt.ErrorCode == "signup_disabled":
-			writeError(w, http.StatusServiceUnavailable, "registration is closed")
+			send = func() { writeError(w, http.StatusServiceUnavailable, "registration is closed") }
 		case status == http.StatusTooManyRequests:
-			writeError(w, http.StatusTooManyRequests, "too many requests")
+			send = func() { writeError(w, http.StatusTooManyRequests, "too many requests") }
 		default:
 			log.WarnContext(r.Context(), "registration: gotrue signup failed",
 				slog.Int("upstream_status", status), slog.String("error_code", gt.ErrorCode))
-			writeError(w, http.StatusBadGateway, "registration is unavailable")
+			send = func() { writeError(w, http.StatusBadGateway, "registration is unavailable") }
+		}
+
+		if holdMinimum(r.Context(), log, start, upstream, minResponse) {
+			send()
 		}
 	})
+}
+
+// holdMinimum logs the signup timing and waits out what is left of minResponse since start.
+// It reports false when the client went away first. A minResponse of 0 neither logs nor waits.
+func holdMinimum(ctx context.Context, log *slog.Logger, start time.Time, upstream, minResponse time.Duration) bool {
+	if minResponse <= 0 {
+		return true
+	}
+	level := slog.LevelWarn
+	if upstream < minResponse {
+		level = slog.LevelInfo
+	}
+	// ceiling: a GoTrue answer slower than the minimum still leaks timing; revisit when this line logs WARN.
+	// ceiling: each waiting request holds a connection for up to the minimum and register has no per-client limit; revisit with the per-client-IP limit owed before U3.
+	log.Log(ctx, level, "registration: signup timing",
+		slog.Int64("upstream_ms", upstream.Milliseconds()), slog.Int64("min_ms", minResponse.Milliseconds()))
+	timer := time.NewTimer(max(0, minResponse-time.Since(start)))
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // VerifyHandler answers the emailed link by calling GoTrue's /verify, then redirects to siteURL.

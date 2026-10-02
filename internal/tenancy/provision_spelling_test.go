@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -74,6 +75,25 @@ func TestProvisionHandler_RespelledSubjectAnswersCanonical(t *testing.T) {
 			}
 			if _, members := provisionedRows(t, r.super, r.tenantID); len(members) != 1 || members[0].UserID != canonical {
 				t.Errorf("memberships = %+v, want exactly one for %s", members, canonical)
+			}
+			events := provisionedEvents(t, r.super, r.tenantID)
+			if len(events) != 1 {
+				t.Fatalf("workspace.provisioned rows = %d, want 1", len(events))
+			}
+			if events[0].Actor != id.Subject || events[0].Payload["user_id"] != canonical {
+				t.Errorf("actor %q, payload user_id %v, want the raw %q and the canonical %q",
+					events[0].Actor, events[0].Payload["user_id"], id.Subject, canonical)
+			}
+			read := auth.WithIdentity(context.Background(), auth.Identity{Subject: canonical, Role: "authenticated", TenantID: r.tenantID})
+			resp, err := audit.NewStore(r.app).List(read, audit.Filter{Events: []string{"workspace.provisioned"}, Limit: 10})
+			if err != nil || len(resp.Events) != 1 {
+				t.Fatalf("audit List = %d events, err %v, want 1", len(resp.Events), err)
+			}
+			if strings.HasPrefix(tc.spelling, "urn:") {
+				return // ceiling: actor.Resolve does not normalise urn:uuid:, the actor stays raw
+			}
+			if resp.Events[0].ActorName != "Ada" || resp.Events[0].ActorKind != "person" {
+				t.Errorf("actor = {%q %q}, want {Ada person}: a respelled raw actor must still resolve", resp.Events[0].ActorName, resp.Events[0].ActorKind)
 			}
 		})
 	}

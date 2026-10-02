@@ -126,6 +126,7 @@ Nothing below is a secret value; secrets are named, never shown.
 | `AUTH_ADDITIONAL_ISSUERS` | unset: production trusts one issuer (`/healthz` `auth_issuers=1`) | the fork's GoTrue issuer and JWKS URL (`auth_issuers=2`) |
 | `AUTH_ADMIN_PASSWORD` | **secret, not sealed**: 64 hex characters, rendered into `auth.DATABASE_URL` | freshly generated per fork |
 | `AUTH_SITE_URL` | `https://www.ascomply.com` after registration U1; unset before it | the fork's landing URL (`set-fork-auth-site`) |
+| `AUTH_REGISTER_MIN_RESPONSE` | unset: the default `2s`, until registration U4 tunes it | not written; a fork inherits production's value |
 
 `AUTH_ADMIN_PASSWORD` stays unsealed: the `auth.DATABASE_URL` reference renders it, and
 every fork overwrites it with its own.
@@ -134,6 +135,11 @@ every fork overwrites it with its own.
 registration routes answer 503 `registration is not configured`. A value that is not an
 absolute `http(s)` URL, or that carries user info, a query or a fragment, stops the
 gateway at boot.
+
+`AUTH_REGISTER_MIN_RESPONSE` is a Go duration (`2s`, `3500ms`): the shortest time any
+`POST /auth/register` answer except a 400 takes. Unset means `2s`. A value that does not parse
+or is not above zero stops the gateway at boot with an ERROR that names the variable and does
+not echo the value. There is no upper bound.
 
 ## Script behaviour on writes
 
@@ -293,7 +299,9 @@ scope, or `/token` with any other grant) is reachable from outside.
 1. The client posts `{"email","password"}` to `POST /auth/register` on the gateway. Unless
    the address is at a free-mail domain (400, GoTrue not called), the gateway posts only
    those two fields to GoTrue `/signup`. GoTrue creates an unconfirmed user and
-   mails a confirmation link through Resend.
+   mails a confirmation link through Resend. Every answer except a 400 arrives no earlier
+   than `AUTH_REGISTER_MIN_RESPONSE` after the request reached the handler, so a new address
+   and a known one take the same time while GoTrue answers faster than that (see Ceilings).
 2. The link targets `GOTRUE_MAILER_URLPATHS_CONFIRMATION`, which is the gateway's
    `GET /auth/verify`. A relative value would resolve against `API_EXTERNAL_URL`, a private
    host, so production sets an absolute URL.
@@ -308,8 +316,13 @@ scope, or `/token` with any other grant) is reachable from outside.
    on this one method and path only. Tenancy creates the tenant and its first active admin
    in one transaction through `public.provision_workspace`
    ([migrations.md](./migrations.md) §1) and answers 201 `{tenant:{id,name,kind}, user:{id,role}}`. An absent
-   `kind` stores `firm`, the column default.
-6. The next token (a refresh grant or a new sign-in) carries `app_metadata.tenant_id`.
+   `kind` stores `firm`, the column default. `provision_workspace` refuses an identity that
+   already holds any membership, in any workspace and in any status (unique violation,
+   constraint `one_workspace_per_identity`; the gateway answers 409), and takes a
+   per-identity advisory lock so two concurrent calls cannot both pass. The same
+   transaction writes one `workspace.provisioned` audit event.
+6. After every 201 the caller holds exactly one active membership, so the next token (a
+   refresh grant or a new sign-in) carries `app_metadata.tenant_id`.
 
 **`POST /auth/register`**, outside `/api/`, no verifier, no CORS wrap, in every build:
 
@@ -330,6 +343,13 @@ scope, or `/token` with any other grant) is reachable from outside.
 The four 202 rows answer identically, so the response never tells whether an address
 already has an account. The answer never carries the user id or any GoTrue field except
 `msg`.
+
+The four 202 rows and the 503 `registration is closed`, 429 and 502 rows wait for
+`AUTH_REGISTER_MIN_RESPONSE` (default `2s`), counted from when the request reached the handler. The 400 rows
+answer at once. The 503 `registration is not configured` answers at once too, because the
+route is not wired. If the client disconnects during the wait, no answer is written. Each
+waiting request logs `registration: signup timing` with `upstream_ms` (how long GoTrue took)
+and `min_ms` (the minimum): INFO while `upstream_ms` is below `min_ms`, WARN at or above it.
 
 The free-mail list lives in `internal/gateway/freemail.go` `freeMailDomains`. To extend it,
 add one lower-case domain; its subdomains are refused too. Fullwidth, ideographic-dot and
@@ -354,8 +374,11 @@ would otherwise consume the single-use token.
 **`POST /api/tenancy/v1/workspaces`:** 201 with `{tenant:{id,name,kind}, user:{id,role}}`;
 400 for a malformed body, a name outside 1–200 characters, or a `kind` other than `firm` or
 `in_house`; 401 for no caller or a subject that is not a UUID; 409 `this account already has a workspace` when the token
-already carries a tenant or the caller already provisioned one; 500 otherwise. The tenant id
-is a UUIDv5 of the caller's subject, so one identity provisions at most one workspace.
+already carries a tenant, when the caller already provisioned one, or when the caller holds
+any membership in any workspace in any status; 500
+otherwise. The tenant id is a UUIDv5 of the caller's subject; the membership guard in
+`provision_workspace` is what holds one identity to one workspace. Every 201 writes one
+`workspace.provisioned` audit event in the same transaction.
 
 **Ceilings:**
 - `ceiling:` GoTrue's per-request rate limiters, `/verify` and `/token` included, are off in
@@ -369,6 +392,12 @@ is a UUIDv5 of the caller's subject, so one identity provisions at most one work
   about 30 confirmation mails per hour. A registrant during the cap gets 202 and no mail; the
   WARN log line `registration: gotrue email send rate limit` is the only signal. Set
   `GOTRUE_RATE_LIMIT_EMAIL_SENT` when signup traffic approaches it.
+- `ceiling:` the registration minimum hides GoTrue's timing only while GoTrue answers faster
+  than `AUTH_REGISTER_MIN_RESPONSE`. A slower answer still leaks timing. Revisit when
+  `registration: signup timing` logs WARN, and raise the minimum (registration U4 step 5).
+- `ceiling:` each waiting register request holds a connection for up to the minimum, and
+  register has no per-client limit. Revisit with the per-client-IP limit owed before
+  registration U3.
 - `ceiling:` the session GoTrue issues on verify is discarded but stays live in
   `auth.sessions` and `auth.refresh_tokens`. No route revokes it by itself; a global
   sign-out or a staff cut-off of the account deletes it with the account's other sessions
@@ -1118,7 +1147,7 @@ E=6c864094-6a06-452f-8495-be77d8a94fe7
 | U1 | any time after merge | gateway `AUTH_SITE_URL` |
 | U2 | any time after merge | auth `GOTRUE_MAILER_URLPATHS_CONFIRMATION` |
 | U3 | when registration opens: after AUTH-04 and AUTH-16 merge | auth `GOTRUE_DISABLE_SIGNUP=false` |
-| U4 | after U1–U3 have deployed | none: an end-to-end check by hand |
+| U4 | after U1–U3 have deployed | none: an end-to-end check by hand; step 5 may raise `AUTH_REGISTER_MIN_RESPONSE` |
 
 Until U1 deploys, production's `POST /auth/register` and `GET /auth/verify` answer 503
 `registration is not configured`. Between U1 and U3, register answers 503
@@ -1144,7 +1173,8 @@ railway variables -p "$P" -e "$E" -s auth --json | jq -r '.GOTRUE_MAILER_URLPATH
 **U3 — auth `GOTRUE_DISABLE_SIGNUP=false`. Do this only after AUTH-04 and AUTH-16 merge.** The
 AUTH-00 decision S6 makes registration open with free-mail domains refused. AUTH-04 ships
 that refusal; opening production before it admits free-mail registrants. AUTH-16 closes the
-registration timing leak.
+registration timing leak while GoTrue answers faster than `AUTH_REGISTER_MIN_RESPONSE` (see
+Registration Ceilings and U4 step 5).
 
 ```
 railway variables --set 'GOTRUE_DISABLE_SIGNUP=false' -p "$P" -e "$E" -s auth --skip-deploys
@@ -1161,14 +1191,29 @@ deploy sooner, re-run the latest push `dev-env` run as a whole run
 empty commit instead.
 
 **U4 — check by hand with a real business mailbox:**
-1. `curl -sS -X POST https://api.ascomply.com/auth/register -H 'Content-Type: application/json' -d '{"email":"<you>@<your-company-domain>","password":"<12+ characters>"}'`
-   answers 202 `{"status":"verification_pending"}`.
+1. `curl -sS -w '\n%{time_total}\n' -X POST https://api.ascomply.com/auth/register -H 'Content-Type: application/json' -d '{"email":"<you>@<your-company-domain>","password":"<12+ characters>"}'`
+   answers 202 `{"status":"verification_pending"}`, after at least the minimum (`2s` by default).
 2. The mail arrives from `no-reply@ascomply.com`. Its link starts
    `https://api.ascomply.com/auth/verify?token=`.
 3. Opening the link lands on `https://www.ascomply.com/?verified=1`. Opening it a second
    time lands on `?verify=failed`.
 4. `curl -sS -X POST https://api.ascomply.com/auth/register -H 'Content-Type: application/json' -d '{"email":"someone@gmail.com","password":"<12+ characters>"}'`
    answers 400 `{"error":"a business email address is required; personal email providers are not accepted"}`.
+5. Time a real signup. A client-side `curl` time cannot separate GoTrue's time from the minimum, so read the gateway's
+   `registration: signup timing` line for the step 1 request (Railway logs, service
+   `gateway`): `upstream_ms` is how long GoTrue took, `min_ms` the minimum in force. When
+   `upstream_ms` exceeds about three quarters of `min_ms`, or the line is WARN, raise the
+   minimum, re-read it and deploy the gateway:
+
+   ```
+   railway variables --set 'AUTH_REGISTER_MIN_RESPONSE=<n>s' -p "$P" -e "$E" -s gateway --skip-deploys
+   railway variables -p "$P" -e "$E" -s gateway --json | jq -r '.AUTH_REGISTER_MIN_RESPONSE'
+   # expected: <n>s
+   ```
+
+   Deploy as in "Deploy the writes" above. Do not set a value below `2s`: the end-to-end
+   assertion `REGISTER_MIN_MS = 2000` in `e2e/api/registration.spec.ts` fails on every PR
+   fork, because a fork inherits production's value.
 
 To check provisioning, sign in with the U4 account and redeem the code (the `curl` pair in
 sign-in U3 below, with the real password), then post

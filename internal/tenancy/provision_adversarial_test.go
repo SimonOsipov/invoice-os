@@ -157,6 +157,9 @@ func TestProvisionHandler_ConcurrentDoubleSubmitIsOne201AndOne409(t *testing.T) 
 	if len(tenants) != 1 || len(members) != 1 {
 		t.Errorf("tenants = %v, memberships = %+v, want one of each", tenants, members)
 	}
+	if n := len(provisionedEvents(t, r.super, r.tenantID)); n != 1 {
+		t.Errorf("workspace.provisioned rows = %d, want exactly 1 (the 409 loser writes none)", n)
+	}
 }
 
 func TestStoreProvisionWorkspace_IdentityWinsOverTenantlessCaller(t *testing.T) {

@@ -1,13 +1,15 @@
-import type { ReactElement } from 'react'
+import type { ReactElement, ReactNode } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { StaffGate } from '@invoice-os/console-session'
 
 import App from './App'
+import { NAV_ITEMS } from './data'
 
 vi.mock('@invoice-os/console-session', () => ({
-  StaffGate: function StaffGate() {
-    return null
+  StaffGate: function StaffGate({ children }: { children: ReactNode }) {
+    return children
   },
   signOutConsole: vi.fn(),
 }))
@@ -61,5 +63,20 @@ describe('App', () => {
     expect(unset.type).toBe(StaffGate)
     expect(unset.props.gateway).toBeNull()
     expect(unset.props.landing).toBeNull()
+  })
+
+  it('App_rendersTheSameConsoleWhenTheGateOpens', () => {
+    // React hoists the logo preload <link> ahead of the root.
+    const html = renderToStaticMarkup(<App />).replace(/^(<link[^>]*>)+/, '').replaceAll('&amp;', '&')
+
+    // The gate adds no wrapper: the console's own root is the document root.
+    expect(html.startsWith('<div class="asc-app"')).toBe(true)
+    expect(html.match(/class="asc-app"/g)).toHaveLength(1)
+    expect(html).toContain('<aside')
+    expect(html).toContain('<main')
+    expect(html).toMatch(/<h1[^>]*>Overview<\/h1>/)
+    expect(NAV_ITEMS.length).toBeGreaterThan(0)
+    for (const n of NAV_ITEMS) expect(html, `nav item ${n.label}`).toContain(n.label)
+    expect(html.match(/aria-label="Sign out"/g)).toHaveLength(1)
   })
 })

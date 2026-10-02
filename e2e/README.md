@@ -74,12 +74,10 @@ all**, so the config declares no browser project and `playwright install` is not
 for it. `api/client.ts` resolves `GATEWAY_URL` itself, mirroring `topology/targets.ts`,
 which is why `baseURL` is intentionally unset.
 
-**The serial setting is load-bearing, not a leftover default.** The kill-switch spec
-mutates the **global `rules` table** and every spec shares one deployed database, so
-parallel workers would race — a concurrent validate observing a mid-toggle rule, or
-entity-namespace contention (Decision A8). For the same reason the suite is not read-only:
-it self-heals rule state in `beforeAll` and restores it in `afterAll`, which is why CI
-runs it against ephemeral PR environments only.
+**The serial setting is load-bearing, not a leftover default.** Every spec shares one
+deployed database, so parallel workers would race — entity-namespace contention
+(Decision A8). The suite is not read-only, which is why CI runs it against ephemeral PR
+environments only.
 
 ```bash
 GATEWAY_URL=... pnpm --filter @invoice-os/e2e test:api
@@ -151,6 +149,4 @@ pnpm --filter @invoice-os/e2e test:hooks
 
 `dev-env.yml`'s `e2e` job runs **smoke → api**, in that order, on pull requests only. The
 `topology` job runs after it (`needs: e2e`), one matrix leg per unit, in parallel.
-**The api → topology ordering is load-bearing**: the api suite's `beforeAll` self-heal and
-`afterAll` rule-restore must complete before topology's rule-dependent assertions run, and
-the two share the global `rules` fixture.
+**The api → topology ordering is load-bearing**: the two share one deployed database.

@@ -57,7 +57,7 @@
 // `listInvoices` had never been called with this tenant's token at all.
 //
 // Serial by INHERITANCE: playwright.api.config.ts sets fullyParallel:false / workers:1
-// because the kill-switch spec mutates the GLOBAL `rules` table. There is deliberately no
+// because every spec shares one deployed DB. There is deliberately no
 // test.describe.configure override here — that setting is load-bearing for the suite.
 import { test, expect } from '@playwright/test'
 import {

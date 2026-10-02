@@ -20,7 +20,7 @@
 // {"error":<string>} everywhere (no RFC-7807, no nested {error:{code,...}}).
 // This file asserts that SHAPE, not the literal string — matching this
 // suite's existing convention of asserting ApiError.kind/status rather than
-// pinning response body text (isolation.spec.ts, validation.spec.ts).
+// pinning response body text (isolation.spec.ts).
 // Cross-surface identity (AC2/AC3) is instead proven by directly comparing
 // the three response bodies to each other, so "identical" is demonstrated,
 // not assumed from a hard-coded string.

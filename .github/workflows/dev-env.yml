@@ -1002,10 +1002,8 @@ jobs:
   #    (M4-22-07); the DB is self-seeded at gateway boot, never reset here.
   #
   #    EPHEMERAL ENVIRONMENTS ONLY — hence `== 'pull_request'`, which now
-  #    excludes push as well as dispatch. The api suite is not read-only: it
-  #    self-heals rule state in beforeAll and restores it in afterAll, so a run
-  #    against the persistent environment would mutate live data, and a failure
-  #    between the two hooks would leave it mutated. Merging does not lose
+  #    excludes push as well as dispatch. The api suite is not read-only, so a run
+  #    against the persistent environment would mutate live data. Merging does not lose
   #    coverage: this exact suite already ran against the PR's own environment,
   #    on the same commit, as the gate for merging it.
   e2e:
@@ -1102,9 +1100,8 @@ jobs:
         # verdict (APPR-14 fix) — always() would also run this on a
         # cancelled workflow, which we don't want.
         if: "!cancelled() && steps.attempt.outcome == 'success'"
-        # Finishes before the topology job starts (`needs: e2e`): its beforeAll
-        # self-heal + afterAll rule-restore share the global `rules` fixture with
-        # topology (D4). GATEWAY_URL comes from this job's `env:`
+        # Finishes before the topology job starts (`needs: e2e`): it shares the
+        # deployed database with topology (D4). GATEWAY_URL comes from this job's `env:`
         # (needs.prepare-env.outputs.gateway_url — the seam reads it
         # directly) — no chromium needed (A6: the api config declares no
         # browser project). Does not touch the database directly (M4-22-05) --

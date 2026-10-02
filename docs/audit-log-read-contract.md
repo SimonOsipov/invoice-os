@@ -625,8 +625,7 @@ So the set of rows an invoice's own page can ever show is not "every event that 
 invoice". It is exactly the two `event IN (…)` lists inside that generation expression: **ten
 events whose id is read from `payload->>'id'`, seven from `payload->>'invoice_id'` —
 seventeen of the thirty-nine event types the log carries.**
-`TestAuditScopeOf_RuleSetsAreDisjointAndSumToThirtyNine` pins the 39. Neither of the events added since is invoice-scoped, so
-the numerator did not move.
+`TestAuditScopeOf_RuleSetsAreDisjointAndSumToThirtyNine` pins the 39.
 **Derive this list from the migration, never from prose — this page included.**
 
 | Domain | Count | Events | Payload key |

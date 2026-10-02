@@ -124,7 +124,10 @@ describe('SPA test event', () => {
     const fn = trigger()
     expect(typeof fn, 'installed').toBe('function')
     // The last two stringify to P, so only a typeof check refuses them.
-    for (const bad of ['wrong', DIGEST, '', 42, { toString: () => P }, [P]]) expect(await fn!(bad), `input ${String(bad)}`).toBeNull()
+    // The digest is trimmed and lowercased; the passphrase must not be.
+    const bad = ['wrong', DIGEST, '', 42, { toString: () => P }, [P], ` ${P}`, `${P}\n`, P.toUpperCase(), P.slice(1)]
+    expect(bad.length, 'inputs listed').toBeGreaterThan(0)
+    for (const b of bad) expect(await fn!(b), `input ${JSON.stringify(b)}`).toBeNull()
     expect(await fn!(undefined), 'undefined').toBeNull()
     expect(await fn!(), 'no argument').toBeNull()
     expect((await sentEvents()).length, 'nothing sent').toBe(0)
@@ -145,12 +148,20 @@ describe('SPA test event', () => {
       expect(boot('app', DIGEST, dsn), `dsn ${JSON.stringify(dsn)}`).toBe(false)
       expect(trigger(), `dsn ${JSON.stringify(dsn)}`).toBeUndefined()
     }
-    for (const digest of ['', ' ', 'abc', `${DIGEST}a`, 'z'.repeat(64)]) {
+    for (const digest of ['', ' ', 'abc', `${DIGEST}a`, 'z'.repeat(64), DIGEST.slice(1), `${DIGEST.slice(0, 32)} ${DIGEST.slice(32)}`, `0x${DIGEST.slice(2)}`, `${DIGEST.slice(0, 63)}g`]) {
       delete (window as unknown as { __ascSentryTest?: Trigger }).__ascSentryTest
       await reset()
       expect(boot('app', digest), `digest ${JSON.stringify(digest)}: monitoring itself stays on`).toBe(true)
       expect(trigger(), `digest ${JSON.stringify(digest)}`).toBeUndefined()
     }
+    // A variable that was never set reaches the bundle as undefined.
+    delete (window as unknown as { __ascSentryTest?: Trigger }).__ascSentryTest
+    await reset()
+    vi.stubEnv('VITE_SENTRY_DSN', DSN)
+    vi.stubEnv('VITE_SENTRY_TEST_DIGEST', undefined)
+    expect(import.meta.env.VITE_SENTRY_TEST_DIGEST, 'control: digest is unset').toBeUndefined()
+    expect(initMonitoring('app'), 'monitoring stays on').toBe(true)
+    expect(trigger(), 'digest unset').toBeUndefined()
   })
 
   it('testEvent_digestIsTrimmedAndCaseFolded', async () => {
@@ -214,5 +225,67 @@ describe('SPA test event', () => {
     expect(boot('app')).toBe(true)
     expect(typeof (await trigger()!(P)), 'control: with crypto.subtle the passphrase resolves an id').toBe('string')
     expect((await sentEvents()).length, 'control: one event').toBe(1)
+  })
+  it('testEvent_fingerprintDoesNotStickToLaterEvents', async () => {
+    expect(boot('app')).toBe(true)
+    const fn = trigger()
+    expect(typeof fn, 'installed').toBe('function')
+    await fn!(P)
+    Sentry.captureException(new Error('later'))
+    const sent = await sentEvents()
+    expect(sent.length, 'the test event and the later one').toBe(2)
+    const [test, later] = sent.map((i) => i.body)
+    expect(test.fingerprint, 'control: the test event carries it').toEqual(['sentry-test-event', 'app'])
+    expect(later.exception.values[0].value).toBe('later')
+    expect(later.fingerprint ?? [], 'the later event is not grouped with the test event').not.toContain('sentry-test-event')
+    expect(Sentry.getCurrentScope().getScopeData().fingerprint, 'current scope untouched').toEqual([])
+    expect(Sentry.getIsolationScope().getScopeData().fingerprint, 'isolation scope untouched').toEqual([])
+  })
+
+  it('testEvent_neitherEventNorConsoleCarriesThePassphraseDigestOrUrlQuery', async () => {
+    const calls: unknown[][] = []
+    for (const m of ['log', 'info', 'debug', 'warn', 'error'] as const) vi.spyOn(console, m).mockImplementation((...a) => void calls.push(a))
+    window.history.replaceState(null, '', '/invoices?email=a%40b.example&tok=s3cr3t#frag')
+    expect(boot('app')).toBe(true)
+    const fn = trigger()
+    expect(typeof fn, 'installed').toBe('function')
+    const id = await fn!(P)
+    const sent = await sentEvents()
+    expect(sent.length, 'one event').toBe(1)
+    const wire = JSON.stringify(sent[0].body)
+    expect(wire.length, 'control: the event serialised').toBeGreaterThan(100)
+    expect(wire, 'control: the event carries the page').toContain('/invoices')
+    for (const secret of [P, DIGEST, 'a%40b.example', 'a@b.example', 's3cr3t', 'email=']) expect(wire.includes(secret), `event leaks ${secret}`).toBe(false)
+    expect(JSON.stringify(calls).includes(DIGEST) || JSON.stringify(calls).includes(P), 'console leaks').toBe(false)
+    expect(id, 'the id is not the digest').not.toBe(DIGEST)
+  })
+
+  it('testEvent_aRejectingDigestResolvesNull', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(boot('app')).toBe(true)
+    const fn = trigger()
+    expect(typeof fn, 'installed').toBe('function')
+    const digest = vi.spyOn(globalThis.crypto.subtle, 'digest').mockRejectedValue(new Error('boom'))
+    await expect(fn!(P)).resolves.toBeNull()
+    expect(digest, 'control: the stub was reached').toHaveBeenCalledTimes(1)
+    expect((await sentEvents()).length, 'nothing sent').toBe(0)
+    expect(err).not.toHaveBeenCalled()
+    expect(warn).not.toHaveBeenCalled()
+    digest.mockRestore()
+    expect(typeof (await fn!(P)), 'control: the next call works').toBe('string')
+  })
+
+  it('testEvent_nonAsciiPassphraseMatchesTheShellDigest', async () => {
+    // printf %s "pässwörd-日本" | shasum -a 256
+    const UTF8_P = 'pässwörd-日本'
+    const UTF8_DIGEST = '6cb9b7f113bcabd3b3a29babfa7dd342d9f2d247f51c835d52a2f2c3b1a22bdb'
+    expect(boot('app', UTF8_DIGEST)).toBe(true)
+    const fn = trigger()
+    expect(typeof fn, 'installed').toBe('function')
+    expect(typeof (await fn!(UTF8_P)), 'resolves an id').toBe('string')
+    expect((await sentEvents()).length, 'one event').toBe(1)
+    expect(await fn!('passwörd-日本'), 'control: one letter off').toBeNull()
+    expect((await sentEvents()).length, 'still one event').toBe(1)
   })
 })

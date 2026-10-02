@@ -55,9 +55,9 @@ gateway     ──> gate on /healthz (schema migrated at boot; a PR fork's DB is
                 (`db/seed.e2e-shards.sql`), and its demo-tenant purge is NON-fatal, so the gate asserts
                 /healthz's `demo_purge` field separately: `true` on a PR fork, `false`
                 on `development` — DEMO-04)
-            ──> deploy 8 context services + docling + auth + 4 SPAs (app and landing are
+            ──> deploy 8 context services + docling + auth + 4 SPAs (all four are
                 gateway-wired: prepare-env's `reconcile-urls` writes VITE_GATEWAY_URL on
-                both per run)
+                each per run)
             ──> verify: `e2e` job: smoke (landing + consoles) + api (typed contract suite)
             ──> `topology` job, one parallel leg per unit (browser login, isolation)
 ```

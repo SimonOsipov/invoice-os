@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { resolveTarget } from '../targets'
 import { overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from '../topology/layout'
 import { seedConsent } from './landingConsent'
@@ -632,6 +632,15 @@ test('landing consent: Accept and Reject are the same box at the same weight', a
         reject: getComputedStyle(el.querySelector('[data-consent="reject"]')!).fontWeight,
       }))
       expect(weights.accept, `Accept and Reject differ in weight ${at}`).toBe(weights.reject)
+
+      // The outline must render: a per-button border-color that loses the cascade to the
+      // shared `border` shorthand leaves Reject transparent or Accept-coloured.
+      const borders = await card.evaluate((el) => ({
+        accept: getComputedStyle(el.querySelector('[data-consent="accept"]')!).borderTopColor,
+        reject: getComputedStyle(el.querySelector('[data-consent="reject"]')!).borderTopColor,
+      }))
+      expect(borders.reject, `Reject's outline is transparent ${at}`).not.toBe('rgba(0, 0, 0, 0)')
+      expect(borders.reject, `Reject's outline matches Accept's border ${at} (${borders.reject})`).not.toBe(borders.accept)
     }
   } finally {
     if (entry) await page.setViewportSize(entry)
@@ -1047,5 +1056,166 @@ test('landing consent: the Cookie choices control sits opposite the copyright in
     if (entry) await page.setViewportSize(entry)
   }
 
+  expectNoConsoleErrors(errors)
+})
+
+type Gaps = { left: number; right: number; bottom: number }
+
+/** Viewport-relative gaps of the notice, measured against the scrollbar-free client box. */
+async function noticeGaps(card: Locator): Promise<Gaps & { width: number }> {
+  return card.evaluate((el) => {
+    const r = el.getBoundingClientRect()
+    const root = document.documentElement
+    return { left: r.left, right: root.clientWidth - r.right, bottom: root.clientHeight - r.bottom, width: r.width }
+  })
+}
+
+// O3 — anchored bottom-right on desktop, a band under 640px. Relationships only: equal
+// right and bottom gaps, a wider left gap, and equal side and bottom gaps on a phone.
+test('landing consent: O3 the notice is anchored bottom-right on desktop and a band under 640px', async ({
+  page,
+}, testInfo) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  const { errors, card } = await openLanding(page)
+
+  const states = [
+    ...WIDE_WIDTHS.map((width) => ({ width, height: 1080, band: false })),
+    { width: 600, height: 844, band: true },
+    { ...PHONE, band: true },
+  ]
+  const measured: Array<Gaps & { state: string }> = []
+  const entry = page.viewportSize()
+  try {
+    for (const state of states) {
+      const at = `at ${state.width}x${state.height}`
+      await page.setViewportSize({ width: state.width, height: state.height })
+      await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(state.width)
+      await settleLayout(page)
+
+      const g = await noticeGaps(card)
+      measured.push({ state: at, left: g.left, right: g.right, bottom: g.bottom })
+      expect(g.width, `the notice collapsed ${at}`).toBeGreaterThan(0)
+      if (state.band) {
+        expect(Math.abs(g.left - g.right), `the band's side gaps differ ${at} (${g.left} vs ${g.right})`).toBeLessThanOrEqual(1)
+        expect(Math.abs(g.bottom - g.left), `the band's bottom gap differs from its side gap ${at} (${g.bottom} vs ${g.left})`).toBeLessThanOrEqual(1)
+      } else {
+        expect(Math.abs(g.right - g.bottom), `right and bottom gaps differ ${at} (${g.right} vs ${g.bottom})`).toBeLessThanOrEqual(1)
+        expect(g.left, `the notice is not right-anchored ${at} (left ${g.left} vs right ${g.right})`).toBeGreaterThan(g.right)
+      }
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+
+  await testInfo.attach('cookie-notice-anchoring.json', {
+    body: JSON.stringify(measured, null, 2),
+    contentType: 'application/json',
+  })
+  expect(measured.length, 'O3 measured fewer states than it declares').toBe(states.length)
+  expectNoConsoleErrors(errors)
+})
+
+const TAB_CAP = 80
+const MIN_O4_CONTROLS = 20 // `/` has ~36 controls before the notice; fewer means the walk never crossed the page
+const MIN_O4_CONTROLS_PRIVACY = 5 // header and footer links
+
+type FocusRead = { inside: boolean; name: string; rect: Rect; notice: Rect } | null
+
+/** Park focus at the page top so the next Tab starts from the first control, not a stale starting point. */
+async function focusPageTop(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    window.scrollTo(0, 0)
+    const anchor = document.createElement('div')
+    anchor.tabIndex = -1
+    anchor.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0'
+    document.body.prepend(anchor)
+    anchor.focus({ preventScroll: true })
+  })
+}
+
+/** Tab until focus enters the notice (or the cap), returning every control focused outside it. */
+async function tabToNotice(page: Page): Promise<{ controls: Array<{ name: string; rect: Rect; notice: Rect }>; entered: boolean; presses: number }> {
+  const controls: Array<{ name: string; rect: Rect; notice: Rect }> = []
+  for (let press = 1; press <= TAB_CAP; press++) {
+    await page.keyboard.press('Tab')
+    // Wait for the scroll that focus triggers to land: the rects must repeat across frames.
+    const read: FocusRead = await page.evaluate(async () => {
+      const card = document.querySelector('[aria-label="Cookie notice"]')
+      const el = document.activeElement as HTMLElement | null
+      if (!card || !el || el === document.body) return null
+      const box = (e: Element) => {
+        const r = e.getBoundingClientRect()
+        return { x: r.x, y: r.y, width: r.width, height: r.height }
+      }
+      const key = () => JSON.stringify([box(el), box(card)])
+      let prev = ''
+      for (let i = 0; i < 12 && key() !== prev; i++) {
+        prev = key()
+        await new Promise<void>((r) => requestAnimationFrame(() => r()))
+      }
+      const name = `${el.tagName.toLowerCase()} "${(el.getAttribute('aria-label') ?? el.textContent ?? '').trim().slice(0, 40)}"`
+      return { inside: card.contains(el), name, rect: box(el), notice: box(card) }
+    })
+    if (!read) continue
+    if (read.inside) return { controls, entered: true, presses: press }
+    controls.push({ name: read.name, rect: read.rect, notice: read.notice })
+  }
+  return { controls, entered: false, presses: TAB_CAP }
+}
+
+async function expectTabClearsNotice(page: Page, testInfo: TestInfo, label: string, floor: number) {
+  await focusPageTop(page)
+  const walk = await tabToNotice(page)
+  await testInfo.attach(`cookie-notice-tab-${label}.json`, {
+    body: JSON.stringify(walk, null, 2),
+    contentType: 'application/json',
+  })
+  expect(walk.entered, `${label}: Tab never reached the notice in ${TAB_CAP} presses, so the walk did not cross the page`).toBe(true)
+  expect(walk.controls.length, `${label}: only ${walk.controls.length} controls measured before the notice`).toBeGreaterThanOrEqual(floor)
+
+  const covered = walk.controls
+    .filter((c) => rectsOverlap(c.notice, c.rect))
+    .map((c) => {
+      const o = overlapOf(c.notice, c.rect)
+      return `${c.name} is under the notice by ${Math.round(o.width)}x${Math.round(o.height)}px`
+    })
+  expect(covered, `${label}: focus landed under the notice:\n${covered.join('\n')}`).toEqual([])
+}
+
+// O4 — Tab never lands focus under the notice. The browser scrolls a focused control to
+// the viewport edge, which is under a fixed notice unless scroll-padding reserves the band.
+const O4_CASES = [
+  { label: '1440x900 first visit', viewport: { width: 1440, height: 900 }, reopen: false },
+  { label: '390x844 first visit', viewport: PHONE, reopen: false },
+  { label: '390x844 reopened', viewport: PHONE, reopen: true },
+  { label: '1280x720 first visit', viewport: { width: 1280, height: 720 }, reopen: false },
+]
+for (const c of O4_CASES) {
+  test(`landing consent: O4 Tab never lands focus under the notice (${c.label})`, async ({ page }, testInfo) => {
+    test.setTimeout(120_000)
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    await page.setViewportSize(c.viewport)
+    const { errors, card } = await openLanding(page)
+
+    if (c.reopen) {
+      await card.locator('[data-consent="accept"]').click()
+      await expect(card).toHaveCount(0)
+      await page.getByRole('contentinfo').getByRole('button', { name: 'Cookie choices' }).click()
+      await expect(card.locator('.cn-setting'), 'the notice did not reopen').toHaveText('Analytics cookies are on.')
+      await scrollToTop(page)
+    }
+
+    await expectTabClearsNotice(page, testInfo, c.label, MIN_O4_CONTROLS)
+    expectNoConsoleErrors(errors)
+  })
+}
+
+test('landing consent: O4 Tab never lands focus under the notice (/privacy 390x844)', async ({ page }, testInfo) => {
+  test.setTimeout(120_000)
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.setViewportSize(PHONE)
+  const { errors } = await openLanding(page, { url: PRIVACY_URL, privacy: true })
+
+  await expectTabClearsNotice(page, testInfo, 'privacy 390x844', MIN_O4_CONTROLS_PRIVACY)
   expectNoConsoleErrors(errors)
 })

@@ -240,8 +240,8 @@ describe('IconTile', () => {
   })
 
   it('DS-11 IconTile iconSize overrides the half-size default', async () => {
-    const override = svgOf(await render('IconTile', 'IconTile', { name: 'sparkles', size: 48, iconSize: 24 }))
-    expect(override.attrs.width).toBe('24')
+    const override = svgOf(await render('IconTile', 'IconTile', { name: 'sparkles', size: 48, iconSize: 30 }))
+    expect(override.attrs.width, 'iconSize differs from half the tile').toBe('30')
     const half = svgOf(await render('IconTile', 'IconTile', { name: 'sparkles', size: 36 }))
     expect(half.attrs.width).toBe('18')
     const upper = svgOf(await render('IconTile', 'IconTile', { name: 'sparkles', size: 35 }))

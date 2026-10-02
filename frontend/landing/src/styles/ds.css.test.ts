@@ -117,9 +117,22 @@ describe('ds.css values', () => {
 
 type Specificity = [number, number, number]
 
+function dropWhere(selector: string): string {
+  for (let at = selector.indexOf(':where('); at !== -1; at = selector.indexOf(':where(')) {
+    let depth = 0
+    let end = at + ':where'.length
+    for (; end < selector.length; end++) {
+      if (selector[end] === '(') depth++
+      else if (selector[end] === ')' && --depth === 0) break
+    }
+    selector = selector.slice(0, at) + selector.slice(end + 1)
+  }
+  return selector
+}
+
 function specificity(selector: string): Specificity {
   let [a, b, c] = [0, 0, 0]
-  let rest = selector.trim().replace(/:where\([^()]*\)/g, '')
+  let rest = dropWhere(selector.trim())
   rest = rest.replace(/:(?:not|is|has)\(([^()]*)\)/g, (_m, arg: string) => {
     const [x, y, z] = specificity(arg)
     a += x
@@ -187,6 +200,10 @@ describe('ds.css hover cascade', () => {
       hoverDefects(':where(.ds-btn--primary):hover { color: var(--primary-foreground); }', v2Hover),
       'planted rule that does not outrank a:hover',
     ).toContain('primary: :where(.ds-btn--primary):hover does not outrank the v2 a:hover')
+    expect(
+      hoverDefects(':where(.ds-btn--primary:hover:not(:disabled)) { color: var(--primary-foreground); }', v2Hover),
+      'planted :where around a nested :not does not outrank a:hover',
+    ).toContain('primary: :where(.ds-btn--primary:hover:not(:disabled)) does not outrank the v2 a:hover')
     expect(specificity('.ds-btn--primary:hover:not(:disabled)')).toEqual([0, 3, 0])
 
     expect(hoverDefects(readDs(), v2Hover)).toEqual([])

@@ -3,6 +3,8 @@ package platform
 import (
 	"net/http"
 
+	"github.com/google/uuid"
+
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -24,6 +26,9 @@ const (
 // rather than validating a bearer token itself; the gateway overwrites any
 // client-supplied copies from the verified token before forwarding.
 //
+// A user header that is empty or not a uuid builds no identity and no tenant-less caller;
+// uuid.Parse is the verifier's own check.
+//
 // With no tenant header but a user header it stores a tenant-less caller on its own key,
 // so IdentityFromContext still reports none. With neither it is a no-op, so a service
 // still boots and serves unscoped routes (/healthz) with no gateway in front.
@@ -32,14 +37,19 @@ const (
 // never take effect there.
 func identityMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user := r.Header.Get(headerUserID)
+		if _, err := uuid.Parse(user); err != nil {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if tenant := r.Header.Get(headerTenantID); tenant != "" {
 			r = r.WithContext(auth.WithIdentity(r.Context(), auth.Identity{
-				Subject:  r.Header.Get(headerUserID),
+				Subject:  user,
 				Role:     r.Header.Get(headerUserRole),
 				TenantID: tenant,
 				Email:    r.Header.Get(headerUserEmail),
 			}))
-		} else if user := r.Header.Get(headerUserID); user != "" {
+		} else {
 			r = r.WithContext(auth.WithTenantlessCaller(r.Context(), auth.Identity{
 				Subject: user,
 				Role:    r.Header.Get(headerUserRole),

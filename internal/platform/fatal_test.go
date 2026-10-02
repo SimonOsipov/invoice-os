@@ -50,6 +50,7 @@ type wireEvent struct {
 		Stacktrace *struct {
 			Frames []struct {
 				Function string `json:"function"`
+				Module   string `json:"module"`
 			} `json:"frames"`
 		} `json:"stacktrace"`
 	} `json:"exception"`
@@ -225,17 +226,17 @@ func productionEnv(dsn string) []string {
 	}
 }
 
-func wantLabels() sentrytest.Labels {
+func wantLabels(service string) sentrytest.Labels {
 	release := "unstamped-" + fatalRailwaySHA
 	if sha := platform.BuildSHA; sha != "" && sha != "dev" {
 		release = sha
 	}
-	return sentrytest.Labels{Environment: "production", Release: release, ServerName: "svc"}
+	return sentrytest.Labels{Environment: "production", Release: release, ServerName: service}
 }
 
-func assertEventLabels(t *testing.T, ev wireEvent) {
+func assertEventLabels(t *testing.T, ev wireEvent, service string) {
 	t.Helper()
-	sentrytest.AssertLabels(t, &sentry.Event{Environment: ev.Environment, Release: ev.Release, ServerName: ev.ServerName}, wantLabels())
+	sentrytest.AssertLabels(t, &sentry.Event{Environment: ev.Environment, Release: ev.Release, ServerName: ev.ServerName}, wantLabels(service))
 }
 
 // assertLoggedAtError requires at least one JSON record whose msg contains want,
@@ -376,7 +377,7 @@ func TestFatal_ReportsBeforeExit(t *testing.T) {
 	assertLoggedAtError(t, stdout, bootMessage)
 
 	ev := in.wantEvents(t, 1)[0]
-	assertEventLabels(t, ev)
+	assertEventLabels(t, ev, "svc")
 	if ev.Level != "fatal" {
 		t.Errorf("event level = %q, want fatal", ev.Level)
 	}
@@ -454,7 +455,7 @@ func TestReportBootPanic_ReportsThenRepanics(t *testing.T) {
 	}
 
 	ev := in.wantEvents(t, 1)[0]
-	assertEventLabels(t, ev)
+	assertEventLabels(t, ev, "svc")
 	if ev.Level != "fatal" {
 		t.Errorf("event level = %q, want fatal", ev.Level)
 	}

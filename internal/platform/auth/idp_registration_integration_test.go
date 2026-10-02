@@ -3,6 +3,7 @@ package auth_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"html"
 	"io"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -24,12 +26,18 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/tenancy"
 )
 
-const (
-	// idp-up.sh points idp-mail's confirmation link at this address.
-	gatewayAddr = "127.0.0.1:9995"
-	linkPrefix  = "http://localhost:9995/auth/verify?"
-	siteURL     = "http://localhost:3000"
+// idp-up.sh points idp-mail's confirmation link at this port, shifted by 10 per IDP_SLOT.
+var verifyPort = func() int {
+	slot, _ := strconv.Atoi(os.Getenv("IDP_SLOT"))
+	return 9995 + 10*slot
+}()
+
+var (
+	gatewayAddr = fmt.Sprintf("127.0.0.1:%d", verifyPort)
+	linkPrefix  = fmt.Sprintf("http://localhost:%d/auth/verify?", verifyPort)
 )
+
+const siteURL = "http://localhost:3000"
 
 var noRedirect = &http.Client{
 	Timeout:       10 * time.Second,

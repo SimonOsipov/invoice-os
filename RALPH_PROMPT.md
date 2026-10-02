@@ -143,9 +143,10 @@ Design references for UI stories: Claude Design **prototype** project `6269a212-
    (cd "$WORKTREE_PATH" && DEV_DB_PORT=<unused-port> make dev-db) &
    wait
    ```
-   Record `DEV_DB_PORT`. Every DB-backed suite passes it; without it a suite hits port 5432, which may be another worktree's database.
+   Record `DEV_DB_PORT`. Every DB-backed suite passes it; without it a suite hits port 5432, which may be another worktree's database. `make test-idp` derives its container names and ports from it.
 6. All later commands run inside `$WORKTREE_PATH`. Pass it as CWD to every subagent.
-7. Pre-planned stories with an `## Implementation Subtasks` section: `hm subtask import "<story file>"`.
+7. **Scratch:** write every scratch file (scripts, harnesses, logs, corpora) to `$WORKTREE_PATH/.ralph/scratch/`. Never write to a fixed `/tmp/<name>` path: a parallel run can overwrite it. Pass this rule to every subagent.
+8. Pre-planned stories with an `## Implementation Subtasks` section: `hm subtask import "<story file>"`.
 
 ### Phase 0.6: Planning (basic stories only)
 

@@ -599,3 +599,102 @@ func TestAuditRead_NewAdminReadsTheProvisionedEvent(t *testing.T) {
 		t.Errorf("actor = {%q %q}, want {Ada Admin person}", e.ActorName, e.ActorKind)
 	}
 }
+
+func TestStoreProvisionWorkspace_EventCarriesTheStoredKindAndName(t *testing.T) {
+	r := newRegistrant(t)
+	in := ProvisionInput{WorkspaceName: "In House Works", Kind: "in_house", DisplayName: "Zed Distinct"}
+	if _, _, err := NewStore(r.app).ProvisionWorkspace(r.ctx(), in); err != nil {
+		t.Fatalf("ProvisionWorkspace: %v", err)
+	}
+
+	events := provisionedEvents(t, r.super, r.tenantID)
+	if len(events) != 1 {
+		t.Fatalf("workspace.provisioned rows = %d, want 1", len(events))
+	}
+	want := map[string]any{"tenant_id": r.tenantID, "user_id": r.id.Subject, "name": in.WorkspaceName, "kind": "in_house"}
+	if !reflect.DeepEqual(events[0].Payload, want) {
+		t.Errorf("payload = %v, want exactly %v (no display name, no email)", events[0].Payload, want)
+	}
+	for k, v := range events[0].Payload {
+		if s, _ := v.(string); strings.Contains(s, "Zed") || strings.Contains(s, "@") {
+			t.Errorf("payload[%q] = %q carries personal data", k, s)
+		}
+	}
+}
+
+func TestStoreProvisionWorkspace_RefusalsAfterASuccessWriteNoSecondEvent(t *testing.T) {
+	r := newRegistrant(t)
+	store := NewStore(r.app)
+	if _, _, err := store.ProvisionWorkspace(r.ctx(), ProvisionInput{WorkspaceName: "First Door", DisplayName: "Ada"}); err != nil {
+		t.Fatalf("first ProvisionWorkspace: %v", err)
+	}
+	if n := len(provisionedEvents(t, r.super, r.tenantID)); n != 1 {
+		t.Fatalf("control: workspace.provisioned rows after the first call = %d, want 1", n)
+	}
+
+	bearing := r.id
+	bearing.TenantID = r.tenantID
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		want error
+	}{
+		{"second call at the same workspace id", r.ctx(), ErrAlreadyProvisioned},
+		{"caller already carries a tenant", auth.WithIdentity(context.Background(), bearing), ErrAlreadyProvisioned},
+		{"no caller at all", context.Background(), db.ErrNoTenant},
+		{"subject is not a uuid", auth.WithTenantlessCaller(context.Background(), auth.Identity{Subject: "not-a-uuid", Role: "authenticated"}), db.ErrNoTenant},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := store.ProvisionWorkspace(tc.ctx, ProvisionInput{WorkspaceName: "Second Door", DisplayName: "Ada"})
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v, want %v", err, tc.want)
+			}
+			var n int
+			if err := r.super.QueryRow(context.Background(),
+				`SELECT count(*) FROM audit_log WHERE event = 'workspace.provisioned' AND (tenant_id = $1 OR actor = $2)`,
+				r.tenantID, r.id.Subject).Scan(&n); err != nil {
+				t.Fatalf("count audit rows: %v", err)
+			}
+			if n != 1 {
+				t.Errorf("workspace.provisioned rows for this registrant = %d, want still 1", n)
+			}
+		})
+	}
+}
+
+func TestAuditRead_AnotherWorkspaceAdminCannotReadTheProvisionedEvent(t *testing.T) {
+	a, b := newRegistrant(t), newRegistrant(t)
+	for i, r := range []registrant{a, b} {
+		in := ProvisionInput{WorkspaceName: fmt.Sprintf("Isolated Works %d", i), DisplayName: fmt.Sprintf("Admin %d", i)}
+		if _, _, err := NewStore(r.app).ProvisionWorkspace(r.ctx(), in); err != nil {
+			t.Fatalf("ProvisionWorkspace %d: %v", i, err)
+		}
+	}
+	list := func(r registrant, f audit.Filter) audit.Response {
+		t.Helper()
+		ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: r.id.Subject, Role: "authenticated", TenantID: r.tenantID})
+		resp, err := audit.NewStore(r.app).List(ctx, f)
+		if err != nil {
+			t.Fatalf("audit List: %v", err)
+		}
+		return resp
+	}
+
+	own := list(b, audit.Filter{Events: []string{"workspace.provisioned"}, Limit: 50})
+	if len(own.Events) != 1 {
+		t.Fatalf("control: B reads %d workspace.provisioned events of its own, want 1", len(own.Events))
+	}
+	if own.Events[0].Actor != b.id.Subject {
+		t.Errorf("B reads an event whose actor is %q, want its own %q", own.Events[0].Actor, b.id.Subject)
+	}
+	for _, e := range own.Events {
+		if e.Actor == a.id.Subject {
+			t.Errorf("B reads A's workspace.provisioned event %+v", e)
+		}
+	}
+
+	byActor := list(b, audit.Filter{Actors: []string{a.id.Subject}, Limit: 50})
+	if len(byActor.Events) != 0 {
+		t.Errorf("B filtering by A's subject reads %d events, want 0", len(byActor.Events))
+	}
+}

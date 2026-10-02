@@ -223,6 +223,17 @@ func TestAuditScopeOf_ClassifiesAllThreeStates(t *testing.T) {
 	}
 }
 
+// A workspace's first audit row is firm-wide: a null entity_id reads workspace, not unattributed.
+func TestAuditScopeOf_WorkspaceProvisionedIsWorkspace(t *testing.T) {
+	// Control: the fallback answer is reachable, so a workspace answer below is not a constant.
+	if got := audit.ScopeOf("some.entirely.unclassified.event", nil); got != audit.ScopeUnattributed {
+		t.Fatalf("control: ScopeOf(unclassified, nil) = %q, want %q", got, audit.ScopeUnattributed)
+	}
+	if got := audit.ScopeOf("workspace.provisioned", nil); got != audit.ScopeWorkspace {
+		t.Errorf("ScopeOf(workspace.provisioned, nil) = %q, want %q", got, audit.ScopeWorkspace)
+	}
+}
+
 // AC #4: an event in neither the firm-wide set nor a known invoice-scoped/document
 // list falls back to unattributed, never workspace — the fail-safe direction (D-28):
 // an event nobody classified must read "we do not know", not "this was firm-wide".

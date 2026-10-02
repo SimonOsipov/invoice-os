@@ -130,6 +130,7 @@ describe('audit vocabulary', () => {
       'extraction.failed',
       'extraction.field_corrected',
       'extraction.anchor.learned',
+      'workspace.provisioned',
     ]) {
       expect(literals, `${id} must be emitted by a Go writer`).toContain(id)
     }
@@ -157,6 +158,16 @@ describe('audit vocabulary', () => {
     // No outcome key: a learned rule is neither good nor bad news.
     expect(view.tone).toBeNull()
     // Control: the same view function does return a tone for an outcome-bearing event.
+    expect(auditEventView('submission.failed').tone).not.toBeNull()
+  })
+
+  it('auditVocabulary_workspaceProvisionedIsLabelledInMemberships', () => {
+    const view = auditEventView('workspace.provisioned')
+    // humanise() answers a null domain for an unknown id, so the domain tells labelled from unknown.
+    expect(view.domain).toBe('memberships')
+    expect(view.label).toBe('Workspace created')
+    expect(view.tone).toBeNull()
+    // Control: the same view function answers a tone for an outcome-bearing event.
     expect(auditEventView('submission.failed').tone).not.toBeNull()
   })
 

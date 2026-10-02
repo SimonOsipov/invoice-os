@@ -4,14 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
@@ -409,5 +412,190 @@ func TestStoreProvisionWorkspace_EverySuccessReachesTheNextToken(t *testing.T) {
 				t.Errorf("app_metadata %v -> %v, want identical", before, after)
 			}
 		})
+	}
+}
+
+// provisionedEvent is one workspace.provisioned audit row, read as the superuser.
+type provisionedEvent struct {
+	Actor    string
+	EntityID *string
+	Payload  map[string]any
+}
+
+func provisionedEvents(t *testing.T, super *pgxpool.Pool, tenantID string) []provisionedEvent {
+	t.Helper()
+	rows, err := super.Query(context.Background(),
+		`SELECT actor, entity_id::text, payload FROM audit_log WHERE tenant_id = $1 AND event = 'workspace.provisioned'`, tenantID)
+	if err != nil {
+		t.Fatalf("read audit_log: %v", err)
+	}
+	defer rows.Close()
+	var out []provisionedEvent
+	for rows.Next() {
+		var e provisionedEvent
+		var raw []byte
+		if err := rows.Scan(&e.Actor, &e.EntityID, &raw); err != nil {
+			t.Fatalf("scan audit row: %v", err)
+		}
+		if err := json.Unmarshal(raw, &e.Payload); err != nil {
+			t.Fatalf("decode payload %s: %v", raw, err)
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read audit_log: %v", err)
+	}
+	return out
+}
+
+// failAuditWrites makes every audit_log insert for this registrant's workspace raise; no other test sees it.
+func failAuditWrites(t *testing.T, r registrant) {
+	t.Helper()
+	ctx := context.Background()
+	name := "prov_audit_fail_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	if _, err := r.super.Exec(ctx, fmt.Sprintf(
+		`CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS $$
+		 BEGIN RAISE EXCEPTION 'forced audit failure' USING ERRCODE = 'check_violation'; END; $$`, name)); err != nil {
+		t.Fatalf("create the forced-failure function: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = r.super.Exec(context.Background(), fmt.Sprintf(`DROP FUNCTION IF EXISTS %s() CASCADE`, name))
+	})
+	if _, err := r.super.Exec(ctx, fmt.Sprintf(
+		`CREATE TRIGGER %s BEFORE INSERT ON audit_log FOR EACH ROW
+		 WHEN (NEW.tenant_id = %s::uuid) EXECUTE FUNCTION %s()`, name, quoteLiteral(r.tenantID), name)); err != nil {
+		t.Fatalf("create the forced-failure trigger: %v", err)
+	}
+}
+
+func TestStoreProvisionWorkspace_WritesOneProvisionedEvent(t *testing.T) {
+	r := newRegistrant(t)
+	in := ProvisionInput{WorkspaceName: "Audited Works", DisplayName: "Ada Registrant"}
+	if _, _, err := NewStore(r.app).ProvisionWorkspace(r.ctx(), in); err != nil {
+		t.Fatalf("ProvisionWorkspace: %v", err)
+	}
+
+	events := provisionedEvents(t, r.super, r.tenantID)
+	if len(events) != 1 {
+		t.Fatalf("workspace.provisioned rows at %s = %d, want exactly 1", r.tenantID, len(events))
+	}
+	e := events[0]
+	if e.Actor != r.id.Subject {
+		t.Errorf("actor = %q, want the caller's subject %q", e.Actor, r.id.Subject)
+	}
+	if e.EntityID != nil {
+		t.Errorf("entity_id = %q, want NULL", *e.EntityID)
+	}
+	// kind is the stored default, not an input echo.
+	want := map[string]any{"tenant_id": r.tenantID, "user_id": r.id.Subject, "name": in.WorkspaceName, "kind": "firm"}
+	if !reflect.DeepEqual(e.Payload, want) {
+		t.Errorf("payload = %v, want exactly %v", e.Payload, want)
+	}
+}
+
+func TestStoreProvisionWorkspace_AuditSharesTheTransaction(t *testing.T) {
+	r := newRegistrant(t)
+	if _, _, err := NewStore(r.app).ProvisionWorkspace(r.ctx(), ProvisionInput{WorkspaceName: "One Tx", DisplayName: "Ada"}); err != nil {
+		t.Fatalf("ProvisionWorkspace: %v", err)
+	}
+	ctx := context.Background()
+	var tenantXmin string
+	if err := r.super.QueryRow(ctx, `SELECT xmin::text FROM tenants WHERE id = $1`, r.tenantID).Scan(&tenantXmin); err != nil {
+		t.Fatalf("read tenant xmin: %v", err)
+	}
+	var auditXmin string
+	if err := r.super.QueryRow(ctx,
+		`SELECT xmin::text FROM audit_log WHERE tenant_id = $1 AND event = 'workspace.provisioned'`, r.tenantID).Scan(&auditXmin); err != nil {
+		t.Fatalf("read the audit row's xmin (no workspace.provisioned row?): %v", err)
+	}
+	if auditXmin != tenantXmin {
+		t.Errorf("audit xmin = %s, tenant xmin = %s, want one transaction", auditXmin, tenantXmin)
+	}
+}
+
+func TestStoreProvisionWorkspace_AuditFailureCreatesNothing(t *testing.T) {
+	r := newRegistrant(t)
+	failAuditWrites(t, r)
+
+	_, _, err := NewStore(r.app).ProvisionWorkspace(r.ctx(), ProvisionInput{WorkspaceName: "No Trail", DisplayName: "Ada"})
+
+	if err == nil {
+		t.Error("ProvisionWorkspace succeeded with a failing audit write, want an error")
+	}
+	if errors.Is(err, ErrAlreadyProvisioned) {
+		t.Errorf("err = %v, want a failure that is not ErrAlreadyProvisioned", err)
+	}
+	if tenants, members := provisionedRows(t, r.super, r.tenantID); len(tenants) != 0 || len(members) != 0 {
+		t.Errorf("after a failed audit: tenants %v, memberships %+v, want none", tenants, members)
+	}
+}
+
+func TestProvisionHandler_AuditFailureIs500(t *testing.T) {
+	r := newRegistrant(t)
+	failAuditWrites(t, r)
+
+	rec := postProvision(NewStore(r.app), r.ctx(), validProvisionBody)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var body struct{ Error string }
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body.Error != "internal server error" {
+		t.Errorf("body = %q (decode err %v), want error %q", rec.Body.String(), err, "internal server error")
+	}
+	if tenants, _ := provisionedRows(t, r.super, r.tenantID); len(tenants) != 0 {
+		t.Errorf("tenants at uuidv5(subject) = %v, want none", tenants)
+	}
+}
+
+func TestStoreProvisionWorkspace_RefusedCallWritesNoEvent(t *testing.T) {
+	r := newRegistrant(t)
+	withHistory(t, r, []string{"suspended"})
+
+	// Control: a successful call is visible to the same query, so a zero below means refused.
+	ok := newRegistrant(t)
+	if _, _, err := NewStore(ok.app).ProvisionWorkspace(ok.ctx(), ProvisionInput{WorkspaceName: "Control Works", DisplayName: "Ada"}); err != nil {
+		t.Fatalf("control ProvisionWorkspace: %v", err)
+	}
+	if n := len(provisionedEvents(t, ok.super, ok.tenantID)); n != 1 {
+		t.Fatalf("control: workspace.provisioned rows = %d, want 1", n)
+	}
+
+	_, _, err := NewStore(r.app).ProvisionWorkspace(r.ctx(), ProvisionInput{WorkspaceName: "Refused Works", DisplayName: "Ada"})
+	if !errors.Is(err, ErrAlreadyProvisioned) {
+		t.Fatalf("err = %v, want ErrAlreadyProvisioned", err)
+	}
+
+	var n int
+	if err := r.super.QueryRow(context.Background(),
+		`SELECT count(*) FROM audit_log WHERE event = 'workspace.provisioned' AND actor = $1`, r.id.Subject).Scan(&n); err != nil {
+		t.Fatalf("count audit rows: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("workspace.provisioned rows for the refused subject = %d, want 0", n)
+	}
+}
+
+func TestAuditRead_NewAdminReadsTheProvisionedEvent(t *testing.T) {
+	r := newRegistrant(t)
+	if _, _, err := NewStore(r.app).ProvisionWorkspace(r.ctx(), ProvisionInput{WorkspaceName: "Readable Works", DisplayName: "Ada Admin"}); err != nil {
+		t.Fatalf("ProvisionWorkspace: %v", err)
+	}
+
+	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: r.id.Subject, Role: "authenticated", TenantID: r.tenantID})
+	resp, err := audit.NewStore(r.app).List(ctx, audit.Filter{Events: []string{"workspace.provisioned"}, Limit: 10})
+	if err != nil {
+		t.Fatalf("audit List as the new admin: %v", err)
+	}
+
+	if len(resp.Events) != 1 {
+		t.Fatalf("events read = %d, want exactly 1 workspace.provisioned", len(resp.Events))
+	}
+	e := resp.Events[0]
+	if e.CompanyScope != audit.ScopeWorkspace {
+		t.Errorf("company_scope = %q, want %q", e.CompanyScope, audit.ScopeWorkspace)
+	}
+	if e.ActorName != "Ada Admin" || e.ActorKind != "person" {
+		t.Errorf("actor = {%q %q}, want {Ada Admin person}", e.ActorName, e.ActorKind)
 	}
 }

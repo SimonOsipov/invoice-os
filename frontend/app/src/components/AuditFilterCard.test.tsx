@@ -271,6 +271,21 @@ describe('AuditFilterCard: event type', () => {
     expect(flattenedIds, 'the union of every group must equal the vocabulary exactly').toEqual(Object.keys(AUDIT_EVENTS))
   })
 
+  it('auditEventFilter_workspaceCreatedIsAMembershipsRow', () => {
+    const { onChange } = renderCard()
+    openEventPopover()
+
+    const label = screen.getByTestId('audit-event-label-workspace.provisioned')
+    expect(label.textContent).toBe('Workspace created')
+
+    // The Memberships group's own All selects its ids; the new row must be one of them.
+    fireEvent.click(screen.getByTestId('audit-event-group-memberships-all'))
+    expect(onChange).toHaveBeenCalledTimes(1)
+    const next = onChange.mock.calls[0][0] as AuditFilterState
+    expect(next.events, 'control needle: a sibling membership event is selected').toContain('membership.suspended')
+    expect(next.events).toContain('workspace.provisioned')
+  })
+
   it('auditEventFilter_groupOrderIsFixed', () => {
     function headingTexts(): (string | null)[] {
       openEventPopover()

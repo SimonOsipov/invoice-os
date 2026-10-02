@@ -1,5 +1,5 @@
 // This file (handlers.go) is the HTTP surface over the engine: ToggleHandler
-// (PATCH /v1/rules/{key}, refused for every caller) and BatchValidateHandler
+// (PATCH /v1/rules/{key}, 401 without an identity, otherwise 403) and BatchValidateHandler
 // (POST /v1/validate/batch, behind S2SMiddleware). Failures use the flat
 // {"error":...} envelope. See rule.go for the wire shapes.
 package validation
@@ -19,7 +19,7 @@ import (
 // rulesManagedMessage is the 403 body for every authenticated PATCH /v1/rules/{key}.
 const rulesManagedMessage = "rules are managed by ASComply"
 
-// ToggleHandler refuses every caller: rules change only through the operator
+// ToggleHandler answers 401 without an identity, otherwise 403: rules change only through the operator
 // kill switch (docs/rule-kill-switch.md). It never reads the body and reaches
 // no database, so no key or body shape is an oracle.
 func ToggleHandler() http.HandlerFunc {

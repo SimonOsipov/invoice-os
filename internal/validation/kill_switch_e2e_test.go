@@ -55,13 +55,7 @@ type killSwitchCase struct {
 func TestKillSwitch_E2E(t *testing.T) {
 	super, app := dbTestPools(t)
 
-	t.Cleanup(func() {
-		if _, err := super.Exec(context.Background(),
-			`UPDATE rules SET enabled = true WHERE key IN ('vat-standard-rate', 'currency-allowed')`,
-		); err != nil {
-			t.Errorf("cleanup: restore vat-standard-rate/currency-allowed enabled=true: %v", err)
-		}
-	})
+	restoreRulesOnCleanup(t, super)
 
 	cases := []killSwitchCase{
 		{

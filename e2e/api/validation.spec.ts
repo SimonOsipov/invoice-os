@@ -1,4 +1,4 @@
-// A customer cannot change a golden rule (AUTH-12): tenant A's PATCH on a rule is refused
+// A customer cannot change a golden rule: tenant A's PATCH on a rule is refused
 // 403, and neither tenant's evaluation moves off B's baseline.
 import { test, expect } from '@playwright/test'
 import { login, rawFetch, createEntity, createInvoice, validateInvoice, PERSONAS, type Violation } from './client'

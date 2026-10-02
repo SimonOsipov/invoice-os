@@ -1101,7 +1101,7 @@ jobs:
         # cancelled workflow, which we don't want.
         if: "!cancelled() && steps.attempt.outcome == 'success'"
         # Finishes before the topology job starts (`needs: e2e`): it shares the
-        # deployed database with topology (D4). GATEWAY_URL comes from this job's `env:`
+        # deployed database with topology. GATEWAY_URL comes from this job's `env:`
         # (needs.prepare-env.outputs.gateway_url — the seam reads it
         # directly) — no chromium needed (A6: the api config declares no
         # browser project). Does not touch the database directly (M4-22-05) --

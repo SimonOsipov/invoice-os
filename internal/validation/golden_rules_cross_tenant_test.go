@@ -1,4 +1,4 @@
-// Cross-tenant proof for the golden rules (AUTH-12): tenant A cannot change tenant B's
+// Cross-tenant proof for the golden rules: tenant A cannot change tenant B's
 // evaluation, at the handler (403) or at the grant (42501). `rules` is global, so these
 // tests write the shared seeded rows when the grant is missing; each registers a
 // superuser restore in t.Cleanup before its first write. No t.Parallel().
@@ -31,7 +31,7 @@ type goldenTenant struct {
 }
 
 // newGoldenTenant mirrors newTestIdentity (non-UUID subject, so the membership gate is
-// skipped; D11) with a fixed tenant.
+// skipped) with a fixed tenant.
 func newGoldenTenant() goldenTenant {
 	tenant := uuid.NewString()
 	return goldenTenant{
@@ -93,7 +93,7 @@ func activeRuleID(t *testing.T, super *pgxpool.Pool, key string) string {
 	return id
 }
 
-// appToggle is tenant A's attack: invoice_app on a plain tx with A's GUC (D11). It commits
+// appToggle is tenant A's attack: invoice_app on a plain tx with A's GUC. It commits
 // when the write is accepted, as a real attacker's would, so a missing grant shows in the
 // next evaluation.
 func appToggle(t *testing.T, app *pgxpool.Pool, tenant, ruleID string, enabled bool) error {

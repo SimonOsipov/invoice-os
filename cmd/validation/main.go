@@ -1,8 +1,8 @@
 // Command validation is the 04 Rules-as-Data Validation Engine service. It serves
 // the platform kit's /healthz + /readyz plus the /v1/rules/{key} +
-// /v1/validate/batch routes. PATCH /v1/rules/{key} refuses every caller with a
-// 403 and reaches no database. POST /v1/validate/batch
-// (M4-04-03) is the tenant-free peer surface 03 submits batches to:
+// /v1/validate/batch routes. PATCH /v1/rules/{key} answers 401 without an
+// identity, otherwise 403, and reaches no database. POST /v1/validate/batch
+// is the tenant-free peer surface 03 submits batches to:
 // peer-authenticated via S2S_TOKEN, carrying no identity, loading the rule-set
 // once per batch.
 package main
@@ -54,11 +54,11 @@ func main() {
 	store := validation.NewStore(pool)
 	engine := validation.NewDefaultEngine()
 
-	// Refuses every caller (403); rules change only through the operator kill switch.
+	// 401 without an identity, otherwise 403; rules change only through the operator kill switch.
 	app.Mux.HandleFunc("PATCH /v1/rules/{key}", validation.ToggleHandler())
 
 	// POST /v1/validate/batch — the tenant-free peer surface 03 (submission)
-	// calls to validate a whole batch in one request (M4-04-03). It carries NO identity: it is
+	// calls to validate a whole batch in one request. It carries NO identity: it is
 	// authenticated as a fleet PEER via the shared S2S_TOKEN ([s2s-peer-auth]) and reads no tenant, because
 	// rule evaluation is a pure function of (payload, active global rule-set)
 	// and there is no tenant-scoped data behind it ([s2s-identity]). Hence

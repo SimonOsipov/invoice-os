@@ -1,4 +1,4 @@
-// Migration proofs for revoke_rules_enabled_from_app (AUTH-12): the shipped Down and Up
+// Migration proofs for revoke_rules_enabled_from_app: the shipped Down and Up
 // run as invoice_migrator inside a superuser tx that is always rolled back, so the shared
 // dev DB keeps its grants. The Up goes out as one argument-less Exec (simple protocol)
 // because its DO body holds semicolons.

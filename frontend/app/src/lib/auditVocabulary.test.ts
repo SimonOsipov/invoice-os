@@ -7,7 +7,7 @@ import { AUDIT_EVENTS, auditEventView, type AuditDomain } from './auditVocabular
 
 const REPO_ROOT = resolve(__dirname, '../../../..')
 
-// The 40 identifiers this app claims to label, measured against the Go tree. Four families
+// The 40 identifiers this app claims to label. Four families
 // are built from a variable rather than a literal, so a grep for quoted strings undercounts:
 // tenancy/store.go, portfolio/store.go, document/document.go and
 // submission/verdict_audit.go ("submission."+outcome).

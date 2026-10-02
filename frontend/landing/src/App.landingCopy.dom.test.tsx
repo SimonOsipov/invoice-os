@@ -13,8 +13,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import App from './App'
 import { FINTECH, FIRM, INHOUSE } from './data'
 
-const HERO_PARAGRAPH =
-  "ASComply Africa is the solution between your business and Nigeria's Merchant Buyer Solution. Create, validate, approve, archive, and transmit compliant invoices — through the dashboard or the API."
+const HERO_PARAGRAPH = 'Bring invoices, approvals and changing country requirements into one connected solution. Available for Nigeria.'
 const MODULES_HEADING = 'ASComply is your invoice compliance solution.'
 const MODULES_INTRO_SECOND =
   'We help your team validate invoices before they are submitted, manage approvals internally, store audit-ready records and submit them to the regulatory bodies.'
@@ -43,7 +42,7 @@ function textOf(el: Element | null): string {
 }
 
 describe('landing positioning copy, on the rendered tree', () => {
-  it('the hero paragraph names ASComply the solution, not a layer', () => {
+  it('the hero lead reads as v2', () => {
     const d = mount()
     const hero = d.querySelectorAll('#top p')
     expect(hero.length, '#top does not hold exactly one paragraph').toBe(1)

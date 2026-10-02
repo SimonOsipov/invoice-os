@@ -1,4 +1,4 @@
-// Source rules of landing.css for the v2 header (RESKIN-02-01); the rendered result is the topology job's.
+// Source rules of landing.css for the v2 header and hero (RESKIN-02-01, -02); the rendered result is the topology job's.
 /// <reference types="node" />
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -8,14 +8,17 @@ import { LANDING_SRC, declarations, parseRules, selectorParts, type CssRule } fr
 
 const LANDING_CSS = readFileSync(join(LANDING_SRC, 'styles', 'landing.css'), 'utf8')
 
-const display = (rules: CssRule[], selector: string, at: (a: string[]) => boolean): string | undefined =>
+const declared = (rules: CssRule[], selector: string, prop: string, at: (a: string[]) => boolean): string | undefined =>
   rules
     .filter((r) => at(r.at) && selectorParts(r).includes(selector))
     .flatMap((r) => declarations(r.body))
-    .filter((d) => d.prop === 'display')
+    .filter((d) => d.prop === prop)
     .at(-1)
-    ?.value.replace(/\s*!important$/i, '')
+    ?.value.replace(/\s+/g, ' ')
     .toLowerCase()
+
+const display = (rules: CssRule[], selector: string, at: (a: string[]) => boolean): string | undefined =>
+  declared(rules, selector, 'display', at)?.replace(/\s*!important$/, '')
 
 const maxWidth1120 = (at: string[]) => at.length === 1 && /^@media \(\s*max-width\s*:\s*1120px\s*\)$/i.test(at[0])
 const minWidthAbove1120 = (at: string[]) => {
@@ -69,5 +72,18 @@ describe('HD-12 the shed rules are gone and the nav link rule stays', () => {
     expect(declarations(hover[0].body).find((d) => d.prop === 'color')?.value.toLowerCase().replace(/\s+/g, ' ')).toBe(
       'var(--teal) !important',
     )
+  })
+})
+
+const maxWidth900 = (at: string[]) => at.length === 1 && /^@media \(\s*max-width\s*:\s*900px\s*\)$/i.test(at[0])
+
+describe('HB-11 the split collapses at 900px and the old h1 rule is gone', () => {
+  it('.split is a grid outside any media, one column at max-width 900px, and .ios-hero-h1 is gone', () => {
+    const rules = parseRules(LANDING_CSS)
+    expect(rules.length, 'control: the file parsed').toBeGreaterThanOrEqual(20)
+
+    expect(display(rules, '.split', (a) => a.length === 0)).toBe('grid')
+    expect(declared(rules, '.split', 'grid-template-columns', maxWidth900)).toBe('minmax(0, 1fr) !important')
+    expect(rules.flatMap(selectorParts).filter((s) => s.includes('.ios-hero-h1'))).toEqual([])
   })
 })

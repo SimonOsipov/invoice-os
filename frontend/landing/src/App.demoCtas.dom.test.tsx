@@ -94,7 +94,7 @@ async function clickByText(root: ParentNode, text: string): Promise<void> {
 // Footer's) but never WITHIN one -- that is what the per-entry scope assertion checks.
 const ROSTER: { scope: string; label: string }[] = [
   { scope: 'header', label: 'Book a demo' }, // Nav.tsx
-  { scope: '#top', label: 'Book a demo →' }, // Hero.tsx
+  { scope: '#top', label: 'Book a demo' }, // Hero.tsx
   { scope: '#accountants', label: FIRM.cta },
   { scope: '#accountants', label: INHOUSE.cta },
   { scope: '#accountants', label: FINTECH.cta },
@@ -104,15 +104,14 @@ const ROSTER: { scope: string; label: string }[] = [
   { scope: 'footer', label: 'Book a demo' }, // Footer.tsx
 ]
 
-// The ten controls in these six scopes that are NOT demo CTAs, named so the 19-button
+// The nine controls in these six scopes that are NOT demo CTAs, named so the 18-button
 // completeness guard below (F3-f) is not a magic number:
 //   header        -- "Platform login" (sign-in), the burger
-//   #top          -- "Explore the platform" (sign-in)
 //   #accountants  -- the firm / inhouse / fintech audience-switch tabs (3)
 //   #pricing      -- the Monthly / Annual billing-period toggle (2)
 //   #demo         -- the shared form's "Book my demo →" submit
 //   footer        -- "Cookie choices"
-const NON_CTA_COUNT = 10
+const NON_CTA_COUNT = 9
 
 describe('F-3: all nine rendered demo CTAs open the same modal', () => {
   it('F3-a: control needle -- zero dialogs at rest, and every scope resolves to >= 1 button', async () => {
@@ -139,13 +138,13 @@ describe('F-3: all nine rendered demo CTAs open the same modal', () => {
     expect(ROSTER.some((entry) => entry.scope === '#demo')).toBe(false)
   })
 
-  // F3-f: measured 3 (header) + 2 (#top) + 6 (#accountants) + 5 (#pricing) + 1 (#demo) +
-  // 2 (footer) = 19 = the 9-entry roster + the 10 named non-CTA controls above. Asserted
+  // F3-f: measured 3 (header) + 1 (#top) + 6 (#accountants) + 5 (#pricing) + 1 (#demo) +
+  // 2 (footer) = 18 = the 9-entry roster + the 9 named non-CTA controls above. Asserted
   // with the demo modal closed -- App.tsx mounts SignInModal/DemoModal as
   // siblings of Footer, outside every one of these six scopes, but an OPEN modal still
   // adds buttons to the page (its own Close, and form controls) that this total ignores
   // by construction.
-  it('F3-f: the six scopes hold exactly 19 buttons in total, modal closed', async () => {
+  it('F3-f: the six scopes hold exactly 18 buttons in total, modal closed', async () => {
     await mountApp()
     expect(document.querySelectorAll(DIALOG).length).toBe(0)
     const total = SCOPES.reduce((sum, scope) => sum + document.querySelector(scope)!.querySelectorAll('button').length, 0)

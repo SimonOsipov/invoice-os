@@ -1,140 +1,81 @@
-import { BrandMark } from '../icons'
+import { Logo } from './ds/Logo'
 
-// RED-stage seam: today's in-page Platform entries, not rendered; replaced by the v2 list.
-export const PLATFORM_LINKS: { label: string; href: string }[] = [
-  { label: 'Modules', href: '#modules' },
-  { label: 'Validation engine', href: '#compliance' },
-]
+// Sections arrive with RESKIN-03/04/05; App.render.test.tsx AN-03 pins that each href resolves.
+export const PLATFORM_LINKS: { label: string; href: string }[] = []
 
-const COLS = [
-  {
-    title: 'Platform',
-    links: [
-      { label: 'Modules', href: '#modules' },
-      { label: 'Validation engine', href: '#compliance' },
-      { label: 'Open the app', href: '#' }, // stub — Platform app not built in Phase 1
-    ],
-  },
-  {
-    title: 'Solutions',
-    links: [
-      { label: "Who it's for", href: '#accountants' },
-      { label: 'For developers', href: '#developers' },
-      { label: 'Pricing', href: '#pricing' },
-    ],
-  },
-  {
-    title: 'Company',
-    links: [
-      { label: 'Book a demo', href: '#demo' },
-      { label: 'Security', href: '#' },
-      { label: 'Status', href: '#' },
-      { label: 'Privacy & cookies', href: '/privacy' },
-    ],
-  },
-]
-
-// Only real cross-section anchors take the prefix. The `#` stubs (Open the app,
-// Security, Status) and the /privacy path render exactly as authored — prefixing
-// /privacy would produce //privacy.
+// Only in-page anchors take the prefix; /privacy is already absolute.
 export function footerHref(href: string, prefix: string): string {
   return href.startsWith('#') && href !== '#' ? `${prefix}${href}` : href
 }
 
+const column = { display: 'grid', gap: 12, alignContent: 'start' } as const
+
 export function Footer({
   onBookDemo,
+  onSignIn = () => undefined,
   hrefPrefix = '',
   onCookieChoices = () => undefined,
 }: {
   onBookDemo: () => void
+  onSignIn?: () => void
   hrefPrefix?: string
   onCookieChoices?: () => void
 }) {
   return (
-    <footer style={{ background: 'var(--bg-2)' }}>
-      <div style={{ maxWidth: 1280, margin: '0 auto', padding: '56px 32px 40px' }}>
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            gap: 40,
-            flexWrap: 'wrap',
-            paddingBottom: 36,
-            borderBottom: '1px solid var(--line-1)',
-          }}
-        >
-          <div style={{ maxWidth: 300 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-              <BrandMark size={20} />
-              <span style={{ fontWeight: 600, fontSize: 15 }}>ASComply Africa</span>
-            </div>
-            <p style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--fg-3)', margin: 0 }}>
-              E-invoicing compliance solution for African businesses.
+    <footer style={{ background: 'var(--background)', borderTop: '1px solid var(--header-border)' }}>
+      <div className="container" style={{ paddingBlock: '56px 32px' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: '40px 64px', paddingBottom: 40 }}>
+          <div style={{ display: 'grid', gap: 18, maxWidth: 320 }}>
+            <Logo size={28} />
+            <p className="t-body-sm" style={{ margin: 0 }}>
+              Clarity for every invoice.
+              <br /> Confidence for your business.
             </p>
           </div>
-          <div style={{ display: 'flex', gap: 56, flexWrap: 'wrap' }}>
-            {COLS.map((col) => (
-              <div key={col.title}>
-                <div className="label" style={{ marginBottom: 14 }}>
-                  {col.title}
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-                  {col.links.map((l) =>
-                    l.label === 'Book a demo' ? (
-                      <button
-                        key={l.label}
-                        onClick={onBookDemo}
-                        className="ios-link"
-                        style={{ fontSize: 13, color: 'var(--fg-2)', textAlign: 'left', background: 'none', border: 0, padding: 0, cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
-                      >
-                        {l.label}
-                      </button>
-                    ) : (
-                      <a key={l.label} href={footerHref(l.href, hrefPrefix)} className="ios-link" style={{ fontSize: 13, color: 'var(--fg-2)' }}>
-                        {l.label}
-                      </a>
-                    ),
-                  )}
-                </div>
-              </div>
-            ))}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '40px 80px' }}>
+            <div style={column}>
+              <span className="t-step">Platform</span>
+              {PLATFORM_LINKS.map((l) => (
+                <a key={l.href} href={footerHref(l.href, hrefPrefix)} className="a-link">
+                  {l.label}
+                </a>
+              ))}
+            </div>
+            <div style={column}>
+              <span className="t-step">Connect</span>
+              <button type="button" className="a-link" onClick={onBookDemo}>
+                Book a demo
+              </button>
+              <button type="button" className="a-link" onClick={onSignIn}>
+                Open the cockpit
+              </button>
+              <button type="button" className="a-link" onClick={onBookDemo}>
+                Contact ASComply
+              </button>
+            </div>
           </div>
         </div>
         <div
           style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
             paddingTop: 24,
+            borderTop: '1px solid var(--border)',
+            display: 'flex',
             flexWrap: 'wrap',
-            gap: 12,
+            justifyContent: 'space-between',
+            gap: '12px 24px',
+            fontSize: 13,
+            color: 'var(--muted-foreground)',
           }}
         >
-          <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
-            © 2026 ASCOMPLY AFRICA · LAGOS · NG
-          </span>
-          {/* Layout-inert with one child; kept because T4-2 pins the row at two direct
-              children and this wrapper at one. */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-            <button
-              onClick={onCookieChoices}
-              className="ios-link"
-              style={{
-                fontSize: 11,
-                color: 'var(--primary)',
-                textDecoration: 'underline',
-                textUnderlineOffset: 3,
-                textAlign: 'left',
-                background: 'none',
-                border: 0,
-                padding: 0,
-                cursor: 'pointer',
-                fontFamily: 'var(--font-sans)',
-              }}
-            >
+          <span>© 2026 ASComply Africa Limited · Lagos, Nigeria</span>
+          <span style={{ display: 'flex', flexWrap: 'wrap', gap: 20 }}>
+            <a href="/privacy" className="a-link" style={{ fontSize: 13 }}>
+              Privacy policy
+            </a>
+            <button type="button" className="a-link" onClick={onCookieChoices} style={{ fontSize: 13 }}>
               Cookie choices
             </button>
-          </div>
+          </span>
         </div>
       </div>
     </footer>

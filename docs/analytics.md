@@ -47,8 +47,9 @@ Three notes on what does **not** fire:
   It routes through the shared stub, so a bot sees exactly what a human sees and reports nothing.
 - A submission on a **closed gate** (any non-production hostname) also fires neither: no HubSpot
   call is made, so there is no outcome to report.
-- Five `cta_location` values cover **nine** buttons. `Audience`'s three persona tabs all report
-  `audience`, and `Pricing`'s three tiers all report `pricing`.
+- Five `cta_location` values cover **ten** buttons. `Audience`'s three persona tabs all report
+  `audience`, `Pricing`'s three tiers all report `pricing`, and the footer's Book a demo and
+  Contact ASComply both report `footer`.
 
 ## Configuration
 

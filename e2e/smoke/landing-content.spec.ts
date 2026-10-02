@@ -264,7 +264,8 @@ const HERO_LEAD_TEXT = 'Bring invoices, approvals and changing country requireme
 const MODULES_HEADING_TEXT = 'ASComply is your invoice compliance solution.'
 const MODULES_SOLUTION_TEXT =
   'We help your team validate invoices before they are submitted, manage approvals internally, store audit-ready records and submit them to the regulatory bodies.'
-const FOOTER_TAGLINE_TEXT = 'E-invoicing compliance solution for African businesses.'
+// Retyped from Footer.tsx's tagline (V459-483).
+const FOOTER_TAGLINE_TEXT = 'Clarity for every invoice. Confidence for your business.'
 
 test('landing content: the retired positioning copy is replaced everywhere it shipped', async ({ page }) => {
   const sinks = await openLanding(page)

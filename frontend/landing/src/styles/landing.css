@@ -275,8 +275,8 @@ button {
   background: var(--muted);
 }
 
-/* One band serves the footer spacer and the focus scroll padding. Desktop: reopened card
-   ~310px incl. inset plus a wrap line of headroom. landing-consent.spec.ts C10 re-derives it live. */
+/* One band serves the footer spacer and the focus scroll padding.
+   landing-consent.spec.ts C10 re-derives it live. */
 :root {
   --cn-band: 320px;
 }

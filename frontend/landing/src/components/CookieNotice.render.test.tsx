@@ -130,9 +130,6 @@ describe('CookieNotice SSR render (LAND-05-02)', () => {
     expect(html).toMatch(/class="t-step"[^>]*>Cookies</)
     expect(html).not.toContain('>COOKIES<')
     expect(html).not.toContain('class="eyebrow"')
-
-    // No hand-rolled 24px rule standing in for the label's own styling.
-    expect(html).not.toMatch(/<span[^>]*style="[^"]*24px/)
   })
 
   it('T2-7 / AC-6: current === null renders no .cn-setting line', async () => {
@@ -233,6 +230,25 @@ describe('CookieNotice adversarial (LAND-05-02)', () => {
     const link = html.match(/<a class="lnk cn-link" href="\/privacy">([\s\S]*?)<\/a>/)
     expect(link, 'expected the policy link').not.toBeNull()
     expect(decode(link![1])).toBe('Read the privacy & cookie policy')
+  })
+
+  it('the reopened card keeps the v2 order — label, setting, body, link, Accept, Reject, spacer', async () => {
+    const html = await render({ current: GRANTED })
+    const marks = ['class="t-step"', 'class="cn-setting"', 'class="cn-body"', 'class="lnk cn-link"', 'class="cn-actions"', 'data-consent="accept"', 'data-consent="reject"', 'class="cn-spacer"']
+    const at = marks.map((m) => html.indexOf(m))
+    expect(at.every((i) => i >= 0), `a mark is missing: ${marks.filter((_, i) => at[i] < 0)}`).toBe(true)
+    expect(at, 'the marks are out of v2 order').toEqual([...at].sort((a, b) => a - b))
+  })
+
+  it('the spacer is the card root\'s next sibling, outside the fixed card', async () => {
+    const root = await tree()
+    const kids = (root.props as { children: ReactElement[] }).children
+    expect(kids.length, 'expected the card root and the spacer').toBe(2)
+    const [card, spacer] = kids as ReactElement<{ className: string; 'aria-hidden'?: string }>[]
+    expect(card.props.className).toBe('cookie-note card-floating')
+    expect(spacer.props.className).toBe('cn-spacer')
+    expect(spacer.props['aria-hidden']).toBe('true')
+    expect(buttonsOf(card).length, 'control: the walker reaches the card\'s children').toBe(2)
   })
 
   it('suppressing the card changes the inert attribute and NOTHING else', async () => {

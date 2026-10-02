@@ -696,12 +696,102 @@ describe('CookieNotice CSS source (LAND-05-02)', () => {
     expect(mobileButton[0].body).toMatch(/height:\s*44px/)
   })
 
-  it('landing.css does not override the shared .eyebrow', () => {
-    // Correction 6: reuse the bridge's .eyebrow; a landing.css override here
-    // also risks defeating the 24px ::before rule.
+  it('landing.css does not restyle the shared .t-step label', () => {
     const probe = (css: string) =>
-      parseRules(css).filter((r) => selectorParts(r).some((p) => /\.eyebrow\b/.test(p)))
-    expect(probe('.cookie-note .eyebrow { font-size: 11.5px; }').length, 'control').toBe(1)
+      parseRules(css).filter((r) => selectorParts(r).some((p) => /\.t-step\b/.test(p)))
+    expect(probe('.cookie-note .t-step { font-size: 11.5px; }').length, 'control').toBe(1)
+    expect(baseRulesFor(CSS_SRC, '.cookie-note').length, 'population floor: the card rule exists').toBe(1)
     expect(probe(CSS_SRC).map((r) => r.selector)).toEqual([])
+  })
+
+  it('CN-6: Accept is the primary — background and colour from the tokens', () => {
+    const accept = baseRulesFor(CSS_SRC, '.cn-actions [data-consent="accept"]')
+    expect(accept.length, 'expected one Accept base rule').toBe(1)
+    expect(valueOf(accept[0].body, 'background')).toBe('var(--primary)')
+    expect(valueOf(accept[0].body, 'color')).toBe('var(--primary-foreground)')
+  })
+
+  it('CN-7: each hover rule outranks its own base rule, so the hover shows', () => {
+    // Control: a bare-attribute hover ties the prefixed base and does not outrank it.
+    expect(outranks(specificity('[data-consent="reject"]:hover'), specificity('.cn-actions [data-consent="reject"]'))).toBe(false)
+    for (const choice of ['accept', 'reject']) {
+      const base = `.cn-actions [data-consent="${choice}"]`
+      expect(baseRulesFor(CSS_SRC, base).length, `expected the ${choice} base rule`).toBe(1)
+      expect(baseRulesFor(CSS_SRC, `${base}:hover`).length, `expected the ${choice} hover rule`).toBe(1)
+      expect(outranks(specificity(`${base}:hover`), specificity(base)), `${choice} hover loses to its base`).toBe(true)
+    }
+  })
+
+  it('CN-8: the bridge hover colour outranks .lnk.cn-link, so the policy link still turns teal', () => {
+    const bridge = readFileSync(join(HERE, '..', 'styles', 'bridge.css'), 'utf8')
+    const hover = parseRules(bridge).filter(
+      (r) => selectorParts(r).includes('a.lnk:hover') && propertiesOf(r.body).includes('color'),
+    )
+    expect(hover.length, 'expected the bridge a.lnk:hover colour rule').toBe(1)
+    const link = parseRules(CSS_SRC).filter((r) => selectorParts(r).includes('.lnk.cn-link'))
+    expect(link.length, 'expected one .lnk.cn-link rule').toBe(1)
+    expect(valueOf(link[0].body, 'color')).toBe('var(--link)')
+    expect(outranks(specificity('a.lnk:hover'), specificity('.lnk.cn-link')), 'the link hover colour loses').toBe(true)
+    // Control: one more class on the notice link and the hover loses.
+    expect(outranks(specificity('a.lnk:hover'), specificity('.lnk.cn-link.cn-link'))).toBe(false)
+  })
+
+  it('CN-9: the entry animation names a real keyframes block, and reduced motion resets it to none after the base rule', () => {
+    const rules = parseRules(CSS_SRC)
+    const base = rules.findIndex((r) => r.at.length === 0 && selectorParts(r).includes('.cookie-note'))
+    expect(base, 'expected the base .cookie-note rule').toBeGreaterThanOrEqual(0)
+    const name = (valueOf(rules[base].body, 'animation') ?? '').split(' ')[0]
+    expect(name).toBe('cn-in')
+    const frames = rules.filter((r) => r.at.includes(`@keyframes ${name}`)).map((r) => r.selector)
+    expect(frames.sort(), `@keyframes ${name} needs a from and a to`).toEqual(['from', 'to'])
+
+    const reduced = rules.filter(
+      (r) =>
+        r.at.some((a) => /prefers-reduced-motion\s*:\s*reduce/.test(a)) &&
+        selectorParts(r).includes('.cookie-note'),
+    )
+    expect(reduced.length, 'expected a reduced-motion .cookie-note rule').toBeGreaterThan(0)
+    for (const r of reduced) {
+      expect(valueOf(r.body, 'animation')).toBe('none')
+      expect(rules.indexOf(r), 'the reduced-motion rule must follow the base rule to win at equal specificity').toBeGreaterThan(base)
+    }
+  })
+
+  it('CN-10: the 640px query is the whole phone card, and the base rule is the 460px desktop card', () => {
+    const rules = parseRules(CSS_SRC)
+    const phone = rules.filter((r) => r.at.length === 1 && r.at[0] === '@media (max-width: 640px)')
+    const card = phone.filter((r) => selectorParts(r).includes('.cookie-note'))
+    expect(card.length, 'expected one phone .cookie-note rule').toBe(1)
+    for (const [prop, px] of [['left', 12], ['right', 12], ['bottom', 12], ['padding', 16], ['gap', 12]] as const) {
+      expect(pxOf(card[0].body, prop), `phone ${prop}`).toBe(px)
+    }
+    expect(valueOf(card[0].body, 'width')).toBe('auto')
+    const actions = phone.filter((r) => selectorParts(r).includes('.cn-actions'))
+    expect(actions.length, 'expected one phone .cn-actions rule').toBe(1)
+    expect(valueOf(actions[0].body, 'flex-direction')).toBe('column')
+
+    const desktop = baseRulesFor(CSS_SRC, '.cookie-note')
+    expect(desktop.length).toBe(1)
+    expect(pxOf(desktop[0].body, 'width')).toBe(460)
+    expect(valueOf(desktop[0].body, 'display')).toBe('grid')
+    expect(pxOf(desktop[0].body, 'gap')).toBe(16)
+    expect(pxOf(desktop[0].body, 'padding')).toBe(24)
+    expect(pxOf(desktop[0].body, 'bottom')).toBe(24)
+  })
+
+  it('CN-11: the policy link sits at the start of its grid cell', () => {
+    const link = parseRules(CSS_SRC).filter((r) => selectorParts(r).includes('.lnk.cn-link'))
+    expect(link.length, 'expected one .lnk.cn-link rule').toBe(1)
+    expect(valueOf(link[0].body, 'justify-self')).toBe('start')
+  })
+
+  it('CN-12: the focus clearance rule is unconditional and the band is declared outside every at-rule but the 640px query', () => {
+    const rules = parseRules(CSS_SRC)
+    const has = rules.filter((r) => selectorParts(r).includes('html:has(.cookie-note)'))
+    expect(has.length, 'expected one html:has(.cookie-note) rule').toBe(1)
+    expect(has[0].at, 'the scroll padding must not depend on a media query').toEqual([])
+    const declarers = rules.filter((r) => propertiesOf(r.body).includes('--cn-band'))
+    expect(declarers.length, 'expected the base and phone --cn-band declarations').toBe(2)
+    for (const r of declarers) expect([[], ['@media (max-width: 640px)']], r.selector).toContainEqual(r.at)
   })
 })

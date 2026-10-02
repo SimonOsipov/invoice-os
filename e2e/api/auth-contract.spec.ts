@@ -20,7 +20,7 @@
 // {"error":<string>} everywhere (no RFC-7807, no nested {error:{code,...}}).
 // This file asserts that SHAPE, not the literal string — matching this
 // suite's existing convention of asserting ApiError.kind/status rather than
-// pinning response body text (isolation.spec.ts, validation.spec.ts).
+// pinning response body text (isolation.spec.ts).
 // Cross-surface identity (AC2/AC3) is instead proven by directly comparing
 // the three response bodies to each other, so "identical" is demonstrated,
 // not assumed from a hard-coded string.
@@ -63,7 +63,7 @@ test.describe('auth-header contract (API E2E, over the deployed gateway)', () =>
 
     const tenancy = await rawFetch('/api/tenancy/v1/me', { headers: invalidBearer })
     const portfolio = await rawFetch('/api/portfolio/v1/entities', { headers: invalidBearer })
-    // The validation surface's probe is a PATCH at the kill-switch route: a 401 is raised
+    // The validation surface's probe is a PATCH at the rules route: a 401 is raised
     // pre-routing (internal/gateway/gateway.go), so the request never reaches a handler and
     // nothing is toggled.
     const validation = await rawFetch('/api/validation/v1/rules/vat-standard-rate', { method: 'PATCH', headers: invalidBearer })

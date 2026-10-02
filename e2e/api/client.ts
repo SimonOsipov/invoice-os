@@ -1,5 +1,5 @@
 // M3-14-01: the reusable typed API-E2E seam (Core AC 1). Every api/ spec
-// (isolation.spec.ts, validation.spec.ts, portfolio.spec.ts — M3-14-02..04)
+// (isolation.spec.ts, portfolio.spec.ts — M3-14-02..04)
 // drives the deployed gateway headless through this ONE module, built on the
 // M3-06 typed client (@invoice-os/api-client/client) so this suite shares the
 // exact apiFetch/ApiError seam and normalized error contract the frontend
@@ -203,20 +203,6 @@ export interface Violation {
   path?: string
 }
 
-// Rule mirrors internal/validation/rule.go's Rule struct (the PATCH
-// /v1/rules/{key} response body).
-export interface Rule {
-  key: string
-  type: string
-  target: string
-  params: unknown
-  severity: string
-  when?: string | null
-  message: string
-  scope: string
-  enabled: boolean
-}
-
 export interface EntityInput {
   name: string
   tin: string
@@ -294,14 +280,6 @@ export function offboardEntity(token: string, id: string): Promise<Entity> {
 
 export function onboardEntity(token: string, id: string): Promise<Entity> {
   return apiFetch<Entity>(`${apiBase()}/api/portfolio/v1/entities/${id}/onboard`, { method: 'POST', token })
-}
-
-export function toggleRule(token: string, key: string, enabled: boolean): Promise<Rule> {
-  return apiFetch<Rule>(`${apiBase()}/api/validation/v1/rules/${key}`, {
-    method: 'PATCH',
-    body: { enabled },
-    token,
-  })
 }
 
 // RejectionReason mirrors internal/submission/result.go's Reason struct (M5-01/M5-03):

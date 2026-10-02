@@ -723,30 +723,15 @@ func TestRIL11_SealFalseToTrueAndNoOpAllowed(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
-// RIL-12 -- the production kill-switch path (store.ToggleRule) unbroken.
+// RIL-12 -- the production kill-switch path unbroken.
 // ---------------------------------------------------------------------
 
-// TestRIL12_KillSwitchProductionPathUnbroken (RIL-12): the real production
-// Store.ToggleRule (store.go:229) must still succeed against the sealed
-// active version -- flip a known rule's enabled value and flip it back,
-// round-tripping and writing exactly one audit row per call (M3-06).
-// Precondition (requireSealed) makes this 42703 pre-migration, per the
-// spec's Setup ("sealed active v2 with a known rule"). Restores the rule's
-// original enabled state in Cleanup unconditionally, mirroring
-// TestSeed_KillSwitch.
-//
-// CodeRabbit C3: toggles to `!original` then back to `original`, never a
-// hardcoded false-then-true -- ToggleRule returns ErrRedundantTransition
-// when the rule's current value already equals the requested target
-// (store.go:259-261), so a hardcoded false-then-true would spuriously
-// t.Fatalf if a prior run (or a leaked fixture on the shared 5433 DB)
-// already left the rule disabled. Also asserts the audit count against a
-// captured BASELINE for an EXACT delta of 2, not a bare `>= 2`: audit_log
-// is append-only and shared across every run against this DB, so `>= 2`
-// would pass vacuously even if THIS run wrote zero new rows, as long as a
-// prior run already left two or more behind.
+// TestRIL12_KillSwitchProductionPathUnbroken (RIL-12): the kill-switch
+// statement (killSwitchStatement) still succeeds against the sealed active
+// version, flipping a known rule's enabled value and back. Restores the original value in
+// Cleanup.
 func TestRIL12_KillSwitchProductionPathUnbroken(t *testing.T) {
-	super, app := dbTestPools(t)
+	super, _ := dbTestPools(t)
 	ctx := context.Background()
 
 	requireSealed(t, ctx, super, 2, true)
@@ -769,21 +754,9 @@ func TestRIL12_KillSwitchProductionPathUnbroken(t *testing.T) {
 		}
 	})
 
-	var auditBaseline int
-	if err := super.QueryRow(ctx,
-		`SELECT count(*) FROM audit_log
-		 WHERE event IN ('validation.rule.disabled', 'validation.rule.enabled') AND payload->>'key' = $1`,
-		key,
-	).Scan(&auditBaseline); err != nil {
-		t.Fatalf("count baseline audit_log rows for %s: %v", key, err)
-	}
-
-	identityCtx := newTestIdentity()
-	store := NewStore(app)
-
 	flipped := !original
-	if _, err := store.ToggleRule(identityCtx, key, flipped); err != nil {
-		t.Fatalf("ToggleRule(%s, %t) against the sealed active version: %v", key, flipped, err)
+	if n := runKillSwitch(t, super, key, flipped); n != 1 {
+		t.Fatalf("kill switch (%s, %t) against the sealed active version: rows = %d, want 1", key, flipped, n)
 	}
 	var afterFlip bool
 	if err := super.QueryRow(ctx,
@@ -793,11 +766,11 @@ func TestRIL12_KillSwitchProductionPathUnbroken(t *testing.T) {
 		t.Fatalf("read enabled after first flip: %v", err)
 	}
 	if afterFlip != flipped {
-		t.Errorf("enabled = %t after ToggleRule(%t), want %t", afterFlip, flipped, flipped)
+		t.Errorf("enabled = %t after kill switch (%t), want %t", afterFlip, flipped, flipped)
 	}
 
-	if _, err := store.ToggleRule(identityCtx, key, original); err != nil {
-		t.Fatalf("ToggleRule(%s, %t) (restore) against the sealed active version: %v", key, original, err)
+	if n := runKillSwitch(t, super, key, original); n != 1 {
+		t.Fatalf("kill switch (%s, %t) (restore) against the sealed active version: rows = %d, want 1", key, original, n)
 	}
 	var afterRestore bool
 	if err := super.QueryRow(ctx,
@@ -807,20 +780,7 @@ func TestRIL12_KillSwitchProductionPathUnbroken(t *testing.T) {
 		t.Fatalf("read enabled after restore flip: %v", err)
 	}
 	if afterRestore != original {
-		t.Errorf("enabled = %t after ToggleRule(%t) (restore), want %t", afterRestore, original, original)
-	}
-
-	var auditAfter int
-	if err := super.QueryRow(ctx,
-		`SELECT count(*) FROM audit_log
-		 WHERE event IN ('validation.rule.disabled', 'validation.rule.enabled') AND payload->>'key' = $1`,
-		key,
-	).Scan(&auditAfter); err != nil {
-		t.Fatalf("count audit_log rows for %s: %v", key, err)
-	}
-	if want := auditBaseline + 2; auditAfter != want {
-		t.Errorf("audit_log rows for key=%s = %d, want exactly %d (baseline %d + one per ToggleRule call)",
-			key, auditAfter, want, auditBaseline)
+		t.Errorf("enabled = %t after kill switch (%t) (restore), want %t", afterRestore, original, original)
 	}
 }
 

@@ -77,9 +77,8 @@ actually existing: CI now creates, tears down and sweeps them itself.
 > vocabulary across this doc and `railway-env.sh` is a separate cleanup.
 
 **E2E runs against ephemeral environments only** — on `pull_request`, not on push or
-dispatch. The api suite is not read-only (it self-heals rule state in `beforeAll` and
-restores it in `afterAll`), so running it against the persistent environment would mutate
-live data. No coverage is lost by merging: that suite already ran against the PR's own
+dispatch. The api suite is not read-only, so running it against the persistent environment would
+mutate live data. No coverage is lost by merging: that suite already ran against the PR's own
 environment, on the same commit, as the gate for merging it.
 
 Each PR's ephemeral environment and its four public URLs (gateway, app, landing,

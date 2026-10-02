@@ -1004,7 +1004,7 @@ test('E2E-04/09 (INVCR-01-09): the mixed fixture separates the two channels by T
   const violateEntry = body.invoice_violations.find((iv) => iv.invoice_number === 'INV-UI-MIX-VIOLATE')
   expect(
     violateEntry,
-    'expected an invoice_violations entry for INV-UI-MIX-VIOLATE -- if this fails, check whether vat-standard-rate was disabled by an out-of-order suite run (api -> topology -> demo)',
+    'expected an invoice_violations entry for INV-UI-MIX-VIOLATE',
   ).toBeTruthy()
   expect(violateEntry!.violations.map((v) => v.rule_key)).toEqual(['vat-standard-rate'])
   expect(violateEntry!.invoice_id, 'invoice_violations[].invoice_id must be populated on a REAL import').toBeTruthy()
@@ -1535,8 +1535,8 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
 //
 // AC-6/AC-7: this file had no test.describe/beforeAll/module-scope-token infrastructure
 // before this subtask -- scoped to just this submitting test rather than the whole file,
-// so unrelated tests below (INVCR-E2E-2, BULK-E2E-*, ...) stay untouched by it. Self-heal
-// (D3 protocol, ../api/validation.spec.ts:5-22), unwrapped: the api run ahead of this one
+// so unrelated tests below (INVCR-E2E-2, BULK-E2E-*, ...) stay untouched by it. Self-heal,
+// unwrapped: the api run ahead of this one
 // leaves the firm tenant's active slot empty (contract-invoice.spec.ts's own armedInvoice
 // cleanup), and [topology-never-publishes] stays satisfied -- this restores the tenant's
 // OWN seeded policy, never a new one (docs/e2e-convention.md).

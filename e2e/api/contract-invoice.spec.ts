@@ -154,7 +154,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
 
   test.beforeAll(async () => {
     token = await login(PERSONAS.A)
-    // Self-heal (D3 protocol, validation.spec.ts:14-26): contract-approvals.spec.ts's
+    // Self-heal: contract-approvals.spec.ts's
     // restore lives in ITS OWN afterAll, which never runs if that worker dies -- without
     // this, a crashed prior run leaves the firm tenant ungated and every 409 below
     // silently reverts to 200.
@@ -197,7 +197,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
     test('create with no request body -> 400 {error: string}', async () => {
       // Omit `body` entirely -- rawFetch only JSON-stringifies a body that is
       // PRESENT, so this sends a genuinely empty request body (the decode-error
-      // branch), same technique contract-validation.spec.ts uses.
+      // branch).
       const res = await rawFetch('/api/invoice/v1/invoices', {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },

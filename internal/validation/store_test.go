@@ -1,20 +1,7 @@
-// M3-04-06 (Test-first: yes) — DB-backed contract tests for the Store's
-// LoadActiveRuleSet + ToggleRule, written BEFORE the real implementation exists
-// (store.go's methods are `panic("not implemented")` stubs). This suite is RED
-// against that panic until the executor fills in the real SQL.
-//
-// Coverage (see M3-04-06 Test Specs):
-//  1. TestStore_LoadActiveRuleSet        — active version + rules materialize into a RuleSet.
-//  2. TestStore_LoadNoActiveErrors       — no active version -> ErrNoActiveRuleSet.
-//  3. TestStore_ToggleFlipsAndAudits     — toggle flips enabled + writes exactly one audit row, same tx.
-//  4. TestStore_ToggleLiveReload         — a fresh LoadActiveRuleSet sees the flip, no redeploy.
-//  5. TestStore_ToggleAppliesCrossTenant — rules are GLOBAL: a toggle under tenant A is visible under tenant B.
-//  6. TestStore_ToggleRedundant          — already-at-target toggle -> ErrRedundantTransition, no UPDATE, no audit row.
-//  7. TestStore_ToggleUnknownKey         — unknown key under the active version -> ErrNotFound.
-//  8. TestStore_AuditRollsBackWithToggle — a failed in-tx audit write rolls back the toggle too (atomicity).
+// DB-backed tests for Store.LoadActiveRuleSet; the kill switch's effect is proved in kill_switch_e2e_test.go.
 //
 // Fixtures are seeded as the SUPERUSER (bypasses the app-role grant, which is
-// SELECT + UPDATE(enabled)-only — see schema_test.go's seedVersion/seedRule,
+// SELECT-only — see schema_test.go's seedVersion/seedRule,
 // reused here, plus this file's own seedFullRule for fixtures that need
 // non-default field values).
 //
@@ -46,7 +33,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -71,7 +57,7 @@ type ruleFixture struct {
 
 // seedFullRule inserts one rules row under versionID as the superuser, like
 // schema_test.go's seedRule, but exposes every column so tests can assert
-// field-mapping and toggle behavior precisely. No cleanup of its own: it is
+// field-mapping precisely. No cleanup of its own: it is
 // always reachable from the seedVersion call that produced versionID, whose
 // cleanup cascades onto this row (rules.rule_set_version_id is ON DELETE
 // CASCADE — see schema_test.go's seedVersion doc comment).
@@ -102,38 +88,6 @@ func seedFullRule(t *testing.T, super *pgxpool.Pool, versionID string, f ruleFix
 		t.Fatalf("seed full rule(key=%q): %v", f.Key, err)
 	}
 	return id
-}
-
-// auditCountTenant returns the count of audit_log rows for tenantID+event,
-// scoped via the app pool + db.WithinTenantTx (FORCE RLS does the tenant
-// filtering) — copied from internal/portfolio/portfolio_test.go's auditCount
-// (~line 784), same env/pool convention.
-func auditCountTenant(t *testing.T, pool *pgxpool.Pool, tenantID, event string) int {
-	t.Helper()
-	ctx := context.Background()
-	var n int
-	if err := db.WithinTenantTx(ctx, pool, tenantID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE event = $1`, event).Scan(&n)
-	}); err != nil {
-		t.Fatalf("count audit_log: %v", err)
-	}
-	return n
-}
-
-// auditPayloadTenant returns the JSON payload of the most recent audit_log
-// row for tenantID+event, scoped the same way as auditCountTenant.
-func auditPayloadTenant(t *testing.T, pool *pgxpool.Pool, tenantID, event string) []byte {
-	t.Helper()
-	ctx := context.Background()
-	var payload []byte
-	if err := db.WithinTenantTx(ctx, pool, tenantID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx,
-			`SELECT payload FROM audit_log WHERE event = $1 ORDER BY created_at DESC LIMIT 1`, event,
-		).Scan(&payload)
-	}); err != nil {
-		t.Fatalf("read audit_log payload: %v", err)
-	}
-	return payload
 }
 
 // TestStore_LoadActiveRuleSet (Test Spec #1): the active version's number and
@@ -265,60 +219,9 @@ func TestStore_LoadNoActiveErrors(t *testing.T) {
 	}
 }
 
-// TestStore_ToggleFlipsAndAudits (Test Spec #3): ToggleRule(key, false) on an
-// enabled rule must (a) return the rule with Enabled=false, and (b) write
-// exactly one "validation.rule.disabled" audit_log row, in the SAME
-// transaction, whose payload carries the rule's key and the active version.
-func TestStore_ToggleFlipsAndAudits(t *testing.T) {
-	super, app := dbTestPools(t)
-	ctx := context.Background()
-
-	versionID, version := seedVersion(t, super, false)
-	seedFullRule(t, super, versionID, ruleFixture{Key: "R", Enabled: true})
-	sealAndActivate(t, super, versionID)
-
-	store := NewStore(app)
-	tenantID := uuid.NewString()
-	userID := "user-1"
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID})
-
-	const event = "validation.rule.disabled"
-	before := auditCountTenant(t, app, tenantID, event)
-
-	got, err := store.ToggleRule(c, "R", false)
-	if err != nil {
-		t.Fatalf("ToggleRule(R,false): %v", err)
-	}
-	if got.Key != "R" {
-		t.Errorf("ToggleRule(R,false).Key = %q, want %q", got.Key, "R")
-	}
-	if got.Enabled {
-		t.Error("ToggleRule(R,false).Enabled = true, want false")
-	}
-
-	after := auditCountTenant(t, app, tenantID, event)
-	if after != before+1 {
-		t.Fatalf("audit_log rows for %s = %d, want %d (exactly one new row)", event, after, before+1)
-	}
-
-	payload := auditPayloadTenant(t, app, tenantID, event)
-	var p map[string]any
-	if err := json.Unmarshal(payload, &p); err != nil {
-		t.Fatalf("unmarshal audit payload %s: %v", payload, err)
-	}
-	if p["key"] != "R" {
-		t.Errorf("audit payload key = %v, want %q", p["key"], "R")
-	}
-	v, ok := p["version"].(float64)
-	if !ok || int(v) != version {
-		t.Errorf("audit payload version = %v, want %d", p["version"], version)
-	}
-}
-
-// TestStore_ToggleLiveReload (Test Spec #4): after ToggleRule(R,false)
-// commits, a FRESH LoadActiveRuleSet call must see R.Enabled=false -- no
-// redeploy, no cache to bust, the toggle is read straight from the table.
-func TestStore_ToggleLiveReload(t *testing.T) {
+// TestStore_KillSwitchLiveReload: after the kill switch commits, a fresh
+// LoadActiveRuleSet sees R.Enabled=false -- no redeploy, no cache.
+func TestStore_KillSwitchLiveReload(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
@@ -330,13 +233,13 @@ func TestStore_ToggleLiveReload(t *testing.T) {
 	tenantID := uuid.NewString()
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: tenantID})
 
-	if _, err := store.ToggleRule(c, "R", false); err != nil {
-		t.Fatalf("ToggleRule(R,false): %v", err)
+	if n := runKillSwitch(t, super, "R", false); n != 1 {
+		t.Fatalf("kill switch (R, false) rows = %d, want 1", n)
 	}
 
 	rs, err := store.LoadActiveRuleSet(c)
 	if err != nil {
-		t.Fatalf("LoadActiveRuleSet after toggle: %v", err)
+		t.Fatalf("LoadActiveRuleSet after kill switch: %v", err)
 	}
 	var found bool
 	for _, r := range rs.Rules {
@@ -345,341 +248,26 @@ func TestStore_ToggleLiveReload(t *testing.T) {
 		}
 		found = true
 		if r.Enabled {
-			t.Error("LoadActiveRuleSet after ToggleRule(R,false): R.Enabled = true, want false (no redeploy)")
+			t.Error("LoadActiveRuleSet after kill switch (R,false): R.Enabled = true, want false (no redeploy)")
 		}
 	}
 	if !found {
-		t.Fatal("R not present in RuleSet.Rules after toggle")
+		t.Fatal("R not present in RuleSet.Rules after kill switch")
 	}
 }
 
-// TestStore_ToggleAppliesCrossTenant (Test Spec #5): rules are a GLOBAL
-// reference table, not tenant-scoped (Decision N1/N14) -- toggling R off
-// under tenant A's identity must be visible to a LoadActiveRuleSet call made
-// under tenant B's (distinct) identity. This is the test that would fail if
-// ToggleRule/LoadActiveRuleSet were ever mistakenly scoped by tenant_id (they
-// have no tenant_id column to scope by -- but a regression could add a
-// WHERE that assumes one, or filter on the wrong table).
-func TestStore_ToggleAppliesCrossTenant(t *testing.T) {
-	super, app := dbTestPools(t)
-	ctx := context.Background()
-
-	versionID, _ := seedVersion(t, super, false)
-	seedFullRule(t, super, versionID, ruleFixture{Key: "R", Enabled: true})
-	sealAndActivate(t, super, versionID)
-
-	store := NewStore(app)
-	tenantA := uuid.NewString()
-	tenantB := uuid.NewString()
-	cA := auth.WithIdentity(ctx, auth.Identity{Subject: "user-a", Role: "authenticated", TenantID: tenantA})
-	cB := auth.WithIdentity(ctx, auth.Identity{Subject: "user-b", Role: "authenticated", TenantID: tenantB})
-
-	if _, err := store.ToggleRule(cA, "R", false); err != nil {
-		t.Fatalf("ToggleRule(R,false) under tenant A: %v", err)
-	}
-
-	rs, err := store.LoadActiveRuleSet(cB)
-	if err != nil {
-		t.Fatalf("LoadActiveRuleSet under tenant B: %v", err)
-	}
-	var found bool
-	for _, r := range rs.Rules {
-		if r.Key != "R" {
-			continue
-		}
-		found = true
-		if r.Enabled {
-			t.Error("R.Enabled = true under tenant B after a toggle-off under tenant A -- rules must be GLOBAL, not tenant-isolated")
-		}
-	}
-	if !found {
-		t.Fatal("R not present in RuleSet.Rules under tenant B")
-	}
-}
-
-// TestStore_ToggleRedundant (Test Spec #6): a rule already at the requested
-// enabled value must return ErrRedundantTransition, write no UPDATE, and
-// write no audit row -- the same guard shape as portfolio.Store.SetStatus.
-func TestStore_ToggleRedundant(t *testing.T) {
-	super, app := dbTestPools(t)
-	ctx := context.Background()
-
-	versionID, _ := seedVersion(t, super, false)
-	seedFullRule(t, super, versionID, ruleFixture{Key: "R", Enabled: false}) // already disabled
-	sealAndActivate(t, super, versionID)
-
-	store := NewStore(app)
-	tenantID := uuid.NewString()
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: tenantID})
-
-	const event = "validation.rule.disabled"
-	before := auditCountTenant(t, app, tenantID, event)
-
-	_, err := store.ToggleRule(c, "R", false)
-	if !errors.Is(err, ErrRedundantTransition) {
-		t.Fatalf("ToggleRule(R,false) on already-disabled rule: err = %v, want ErrRedundantTransition", err)
-	}
-
-	after := auditCountTenant(t, app, tenantID, event)
-	if after != before {
-		t.Errorf("audit_log rows for %s = %d, want unchanged %d (redundant toggle must write no audit row)", event, after, before)
-	}
-}
-
-// TestStore_ToggleUnknownKey (Test Spec #7): a key that does not match any
-// rule under the active version must return ErrNotFound.
-func TestStore_ToggleUnknownKey(t *testing.T) {
-	super, app := dbTestPools(t)
-	ctx := context.Background()
-
-	versionID, _ := seedVersion(t, super, false)
-	seedFullRule(t, super, versionID, ruleFixture{Key: "R", Enabled: true})
-	sealAndActivate(t, super, versionID)
-
-	store := NewStore(app)
-	tenantID := uuid.NewString()
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: tenantID})
-
-	_, err := store.ToggleRule(c, "Z", false)
-	if !errors.Is(err, ErrNotFound) {
-		t.Fatalf("ToggleRule(Z,false) unknown key: err = %v, want ErrNotFound", err)
-	}
-}
-
-// TestStore_AuditRollsBackWithToggle (Test Spec #8): proves ToggleRule's
-// UPDATE and its audit.Record call share one transaction. Mechanism: call
-// ToggleRule under an identity whose Subject is "" -- WithinRequestTenantTx
-// only requires a valid TenantID uuid to proceed (Subject is not validated
-// there), so the tx opens and the UPDATE runs, but audit.Record's INSERT
-// binds actor as an empty string, which then violates audit_log's
-// `audit_actor_length` CHECK (char_length(actor) > 0) --
-// migrations/20260708062657_audit_log.sql:56 -- and errors. Because
-// ToggleRule must run both statements inside ONE db.WithinRequestTenantTx
-// closure (same shape as portfolio.Store.Create/Update/SetStatus), that
-// error rolls back the whole transaction: the UPDATE must NOT be durable,
-// and NO audit row (of any event) must have been written for this tenant.
-func TestStore_AuditRollsBackWithToggle(t *testing.T) {
-	super, app := dbTestPools(t)
-	ctx := context.Background()
-
-	versionID, _ := seedVersion(t, super, false)
-	ruleID := seedFullRule(t, super, versionID, ruleFixture{Key: "R", Enabled: true})
-	sealAndActivate(t, super, versionID)
-
-	store := NewStore(app)
-	tenantID := uuid.NewString()
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: "", Role: "authenticated", TenantID: tenantID})
-
-	_, err := store.ToggleRule(c, "R", false)
-	if err == nil {
-		t.Fatal("ToggleRule with empty-actor identity: want an error (audit CHECK violation), got nil")
-	}
-
-	var enabled bool
-	if err := super.QueryRow(ctx, `SELECT enabled FROM rules WHERE id = $1`, ruleID).Scan(&enabled); err != nil {
-		t.Fatalf("read back enabled: %v", err)
-	}
-	if !enabled {
-		t.Error("rule enabled = false after a failed ToggleRule -- the UPDATE was not rolled back with the failed audit write")
-	}
-
-	var auditRows int
-	if err := super.QueryRow(ctx,
-		`SELECT count(*) FROM audit_log WHERE tenant_id = $1 AND event LIKE 'validation.rule.%'`, tenantID,
-	).Scan(&auditRows); err != nil {
-		t.Fatalf("count audit_log for tenant: %v", err)
-	}
-	if auditRows != 0 {
-		t.Errorf("audit_log rows for tenant = %d, want 0 (failed audit write must roll back, leaving no row)", auditRows)
-	}
-}
-
-// TestStore_LoadNoIdentityErrors (QA adversarial): rule_set_versions/rules are
-// GLOBAL tables (no tenant_id, no RLS -- see store.go's file header), but
-// both Store methods still wrap db.WithinRequestTenantTx purely to resolve
-// the caller's identity for audit.Record. That wrapper's gate must still
-// apply even though the underlying data is not tenant-scoped: a context
-// carrying NO auth.Identity must be refused with db.ErrNoTenant BEFORE any
-// SQL (including the UPDATE and the audit write) runs -- "global" means every
-// tenant sees the same content, not that access requires no identity.
+// TestStore_LoadNoIdentityErrors: rules are global, but LoadActiveRuleSet still
+// runs in the request-tenant tx, so a context with no identity is refused.
 func TestStore_LoadNoIdentityErrors(t *testing.T) {
 	super, app := dbTestPools(t)
-	ctx := context.Background() // deliberately NOT auth.WithIdentity -- no identity in ctx
+	ctx := context.Background() // deliberately no auth.WithIdentity
 
 	versionID, _ := seedVersion(t, super, false)
-	ruleID := seedFullRule(t, super, versionID, ruleFixture{Key: "R", Enabled: true})
+	seedFullRule(t, super, versionID, ruleFixture{Key: "R", Enabled: true})
 	sealAndActivate(t, super, versionID)
 
-	store := NewStore(app)
-
-	if _, err := store.LoadActiveRuleSet(ctx); !errors.Is(err, db.ErrNoTenant) {
+	if _, err := NewStore(app).LoadActiveRuleSet(ctx); !errors.Is(err, db.ErrNoTenant) {
 		t.Fatalf("LoadActiveRuleSet with no identity: err = %v, want db.ErrNoTenant", err)
-	}
-
-	var auditBefore int
-	if err := super.QueryRow(context.Background(), `SELECT count(*) FROM audit_log`).Scan(&auditBefore); err != nil {
-		t.Fatalf("count audit_log before: %v", err)
-	}
-
-	if _, err := store.ToggleRule(ctx, "R", false); !errors.Is(err, db.ErrNoTenant) {
-		t.Fatalf("ToggleRule with no identity: err = %v, want db.ErrNoTenant", err)
-	}
-
-	// Delta (not an absolute-zero assertion): audit_log accumulates rows
-	// across every test in this binary run, so only "did THIS call add a
-	// row" is a safe invariant to check.
-	var auditAfter int
-	if err := super.QueryRow(context.Background(), `SELECT count(*) FROM audit_log`).Scan(&auditAfter); err != nil {
-		t.Fatalf("count audit_log after: %v", err)
-	}
-	if auditAfter != auditBefore {
-		t.Errorf("audit_log row count changed %d -> %d after a no-identity ToggleRule, want unchanged -- "+
-			"the tenant-tx gate must refuse before WithinTenantTx (and therefore audit.Record) ever runs", auditBefore, auditAfter)
-	}
-
-	var enabled bool
-	if err := super.QueryRow(context.Background(), `SELECT enabled FROM rules WHERE id = $1`, ruleID).Scan(&enabled); err != nil {
-		t.Fatalf("read back enabled: %v", err)
-	}
-	if !enabled {
-		t.Error("rule enabled = false after a no-identity ToggleRule -- the tenant-tx gate should have refused before any UPDATE ran")
-	}
-}
-
-// TestStore_ToggleRoundTripEvents (QA adversarial): disable then re-enable
-// the same rule and confirm the audit trail is a faithful, ORDERED history
-// of both flips -- not just "one row exists" (TestStore_ToggleFlipsAndAudits
-// only ever disables once). Asserts event names, from/to payload fields, and
-// that the rule really is back to enabled=true after the round trip.
-func TestStore_ToggleRoundTripEvents(t *testing.T) {
-	super, app := dbTestPools(t)
-	ctx := context.Background()
-
-	versionID, version := seedVersion(t, super, false)
-	seedFullRule(t, super, versionID, ruleFixture{Key: "R", Enabled: true})
-	sealAndActivate(t, super, versionID)
-
-	store := NewStore(app)
-	tenantID := uuid.NewString()
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: tenantID})
-
-	if _, err := store.ToggleRule(c, "R", false); err != nil {
-		t.Fatalf("ToggleRule(R,false): %v", err)
-	}
-	if _, err := store.ToggleRule(c, "R", true); err != nil {
-		t.Fatalf("ToggleRule(R,true): %v", err)
-	}
-
-	type auditRow struct {
-		Event   string
-		Payload map[string]any
-	}
-	var got []auditRow
-	if err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
-		// ORDER BY id (bigserial, monotonic) rather than created_at -- two
-		// separate transactions in quick succession could land the same
-		// timestamptz value on a fast machine.
-		rows, err := tx.Query(ctx, `SELECT event, payload FROM audit_log WHERE event LIKE 'validation.rule.%' ORDER BY id`)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var event string
-			var payload []byte
-			if err := rows.Scan(&event, &payload); err != nil {
-				return err
-			}
-			var p map[string]any
-			if err := json.Unmarshal(payload, &p); err != nil {
-				return err
-			}
-			got = append(got, auditRow{Event: event, Payload: p})
-		}
-		return rows.Err()
-	}); err != nil {
-		t.Fatalf("read audit_log rows for tenant: %v", err)
-	}
-
-	if len(got) != 2 {
-		t.Fatalf("audit_log rows for tenant = %d, want 2 (disable then enable)", len(got))
-	}
-	if got[0].Event != "validation.rule.disabled" {
-		t.Errorf("audit_log[0].event = %q, want validation.rule.disabled", got[0].Event)
-	}
-	if got[0].Payload["from"] != true || got[0].Payload["to"] != false {
-		t.Errorf("audit_log[0].payload from/to = %v/%v, want true/false", got[0].Payload["from"], got[0].Payload["to"])
-	}
-	if got[1].Event != "validation.rule.enabled" {
-		t.Errorf("audit_log[1].event = %q, want validation.rule.enabled", got[1].Event)
-	}
-	if got[1].Payload["from"] != false || got[1].Payload["to"] != true {
-		t.Errorf("audit_log[1].payload from/to = %v/%v, want false/true", got[1].Payload["from"], got[1].Payload["to"])
-	}
-	for i, r := range got {
-		v, ok := r.Payload["version"].(float64)
-		if !ok || int(v) != version {
-			t.Errorf("audit_log[%d].payload version = %v, want %d", i, r.Payload["version"], version)
-		}
-		if r.Payload["key"] != "R" {
-			t.Errorf("audit_log[%d].payload key = %v, want %q", i, r.Payload["key"], "R")
-		}
-	}
-
-	rs, err := store.LoadActiveRuleSet(c)
-	if err != nil {
-		t.Fatalf("LoadActiveRuleSet after round trip: %v", err)
-	}
-	var found bool
-	for _, r := range rs.Rules {
-		if r.Key != "R" {
-			continue
-		}
-		found = true
-		if !r.Enabled {
-			t.Error("R.Enabled = false after disable-then-enable round trip, want true")
-		}
-	}
-	if !found {
-		t.Fatal("R not present in RuleSet.Rules after round trip")
-	}
-}
-
-// TestStore_ToggleRunsAsAppRole (QA adversarial): every other test in this
-// file already calls NewStore(app) where app is dbTestPools' DATABASE_URL
-// pool -- i.e. they already run as invoice_app, not the superuser. This test
-// makes that fact an explicit, checked assertion (current_user) rather than
-// an unverified convention, and proves ToggleRule's UPDATE genuinely
-// succeeds under the real production role's column-level grant (SELECT +
-// UPDATE(enabled) only -- schema_test.go's TestSchema_AppCanToggleEnabled)
-// plus its FOR UPDATE row lock, not because the test happens to run
-// privileged.
-func TestStore_ToggleRunsAsAppRole(t *testing.T) {
-	super, app := dbTestPools(t)
-	ctx := context.Background()
-
-	var currentUser string
-	if err := app.QueryRow(ctx, `SELECT current_user`).Scan(&currentUser); err != nil {
-		t.Fatalf("select current_user on the app pool: %v", err)
-	}
-	if currentUser != "invoice_app" {
-		t.Fatalf("dbTestPools' app pool runs as %q, want invoice_app -- Store tests would be exercising the wrong role's grants entirely", currentUser)
-	}
-
-	versionID, _ := seedVersion(t, super, false)
-	seedFullRule(t, super, versionID, ruleFixture{Key: "R", Enabled: true})
-	sealAndActivate(t, super, versionID)
-
-	store := NewStore(app)
-	tenantID := uuid.NewString()
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: tenantID})
-
-	got, err := store.ToggleRule(c, "R", false)
-	if err != nil {
-		t.Fatalf("ToggleRule as invoice_app: %v -- the column-level UPDATE(enabled) grant + FOR UPDATE lock must permit this mutation for the real production role", err)
-	}
-	if got.Enabled {
-		t.Error("ToggleRule(R,false).Enabled = true, want false")
 	}
 }
 

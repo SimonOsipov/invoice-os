@@ -29,9 +29,8 @@
 // behind S2SMiddleware, on an httptest.Server) against the SAME shared
 // dev DB the invoice_app pool already points at -- both packages' own
 // dbTestPools helpers read DATABASE_URL/DATABASE_SUPERUSER_URL for the
-// identical invoice_app role (internal/validation/store.go's own header:
-// "Store persists/reads rule_set_versions + rules as the invoice_app
-// role"), so one app pool serves both sides of the gate in-process, exactly
+// identical invoice_app role (validation.Store reads rule_set_versions +
+// rules as invoice_app), so one app pool serves both sides of the gate in-process, exactly
 // as it does in production between two separate deployed services.
 //
 // This file is `package invoice` (an INTERNAL test file), not

@@ -159,3 +159,78 @@ describe('HC-09 the scanline keyframes follow V29', () => {
     expect(frame('100%', 'opacity')).toBe('0')
   })
 })
+
+/** Reduced-motion leaks: a rule after the reduced-motion rule, or an !important before it, that re-enables the motion. */
+function motionLeaks(css: string): string[] {
+  const rules = parseRules(css)
+  const targets: [string, string[]][] = [
+    ['.hero-row', ['animation', 'animation-name']],
+    ['.hero-scan', ['display']],
+  ]
+  const leaks: string[] = []
+  for (const [sel, props] of targets) {
+    const mine = rules.map((r, i) => ({ r, i })).filter(({ r }) => selectorParts(r).includes(sel))
+    const quiet = mine.filter(({ r }) => reducedMotion(r.at) && declarations(r.body).some((d) => props.includes(d.prop)))
+    if (quiet.length === 0) {
+      leaks.push(`${sel}: no reduced-motion rule`)
+      continue
+    }
+    const last = quiet[quiet.length - 1].i
+    for (const { r, i } of mine.filter(({ r }) => !reducedMotion(r.at))) {
+      const hit = declarations(r.body).filter((d) => props.includes(d.prop))
+      if (hit.some((d) => i > last || /!important/i.test(d.value))) leaks.push(`${sel}: ${hit.map((d) => d.prop).join(',')} re-enabled outside reduced motion`)
+    }
+  }
+  return leaks
+}
+
+describe('HC-10 nothing re-enables the hero motion after the reduced-motion rules', () => {
+  it('controls: a later display rule and an !important animation are both flagged', () => {
+    expect(motionLeaks(MOTION_FIXTURE)).toEqual([])
+    expect(motionLeaks(`${MOTION_FIXTURE}\n.hero-scan { display: block; }`).length, 'a later rule must be flagged').toBeGreaterThan(0)
+    expect(motionLeaks(MOTION_FIXTURE.replace('both;', 'both !important;')).length, 'an !important row animation must be flagged').toBeGreaterThan(0)
+  })
+
+  it('landing.css has no later or !important rule that wakes .hero-row or .hero-scan under reduced motion', () => {
+    const rules = parseRules(LANDING_CSS)
+    expect(rules.filter((r) => selectorParts(r).includes('.hero-row')).length, 'control: .hero-row has its base and reduced-motion rules').toBeGreaterThanOrEqual(2)
+    expect(rules.filter((r) => selectorParts(r).includes('.hero-scan')).length, 'control: .hero-scan has its base and reduced-motion rules').toBeGreaterThanOrEqual(2)
+    expect(motionLeaks(LANDING_CSS)).toEqual([])
+  })
+})
+
+describe('HC-11 the row and scanline boxes and the keyframe end states, which jsdom cannot render', () => {
+  const rules = parseRules(LANDING_CSS)
+  const base = (sel: string, prop: string) => declared(rules, sel, prop, noAt)
+
+  it('.hero-row is a centred 11px-gap flex row with 7px 14px padding (V129)', () => {
+    expect(rules.length, 'control: the file parsed').toBeGreaterThanOrEqual(20)
+    expect(base('.hero-row', 'display')).toBe('flex')
+    expect(base('.hero-row', 'align-items')).toBe('center')
+    expect(base('.hero-row', 'gap')).toBe('11px')
+    expect(base('.hero-row', 'padding')).toBe('7px 14px')
+  })
+
+  it('.hero-scan is a 30px click-through overlay pinned to the top, with the accent-20 gradient (V128)', () => {
+    expect(base('.hero-scan', 'position')).toBe('absolute')
+    expect(base('.hero-scan', 'left')).toBe('0')
+    expect(base('.hero-scan', 'right')).toBe('0')
+    expect(base('.hero-scan', 'top')).toBe('0')
+    expect(base('.hero-scan', 'height')).toBe('30px')
+    expect(base('.hero-scan', 'pointer-events')).toBe('none')
+    expect(base('.hero-scan', 'background')).toBe('linear-gradient(180deg, var(--accent-20), transparent)')
+  })
+
+  it('scanline is declared once, and rowIn ends at opacity 1 so the "both" fill leaves each row visible', () => {
+    const at = (name: string) => rules.filter((r) => r.at.length === 1 && r.at[0] === `@keyframes ${name}`)
+    expect(at('scanline').filter((r) => selectorParts(r).includes('0%')).length, 'one scanline 0% frame').toBe(1)
+    expect(at('rowIn').length, 'control: rowIn has from and to').toBeGreaterThanOrEqual(2)
+    const stop = (s: string, prop: string) =>
+      at('rowIn')
+        .filter((r) => selectorParts(r).includes(s))
+        .flatMap((r) => declarations(r.body))
+        .find((d) => d.prop === prop)?.value
+    expect(stop('from', 'opacity')).toBe('0')
+    expect(stop('to', 'opacity')).toBe('1')
+  })
+})

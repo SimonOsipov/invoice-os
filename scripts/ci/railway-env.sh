@@ -1298,7 +1298,7 @@ reconcile_domains() {
 
 # domain_is_dark <http-code> <body>
 # TRUE only for Railway's edge "no route for this hostname" 404. The shared SPA Caddyfile
-# serves index.html for unknown paths, so /health cannot 404 any other way.
+# serves /health itself, so /health cannot 404 any other way.
 # Pure: no token, no network. Guarded by `verify-spa-domains --self-test`.
 domain_is_dark() {
   local code="$1" body="$2"

@@ -336,6 +336,10 @@ Live services: `landing`, `app`, `ops-console`, `support-console` — see
 confirmed step 1's warning is still live: `serviceCreate` **did** attach a `main` deployment
 trigger, which had to be `deploymentTriggerDelete`d before the invariants workflow would pass.
 
+A new SPA adds `sentryVitePlugin(sourcemapUploadOptions(appDir))` and `build.sourcemap: 'hidden'` to its
+`vite.config.ts` and `ARG SENTRY_AUTH_TOKEN` to its Dockerfile build stage. It inherits the Caddy `.map` 404
+from the shared `Caddyfile`.
+
 ---
 
 ## Appendix: Python sidecar variant

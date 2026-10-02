@@ -4,7 +4,7 @@
 //
 //   1. send() needs loaded === true, which needs a successful ensureTag, which needs
 //      isProductionHost(hostname). PRODUCTION_HOSTNAMES is ['www.ascomply.com'], exact
-//      match only (hubspot.ts:9). Driven through an App click the hostname is this
+//      match only (hubspot.ts). Driven through an App click the hostname is this
 //      document's, the gate closes, and BOTH the claim and its non-vacuity control
 //      collapse into a green that asserts nothing.
 //   2. This file therefore keeps the DEFAULT localhost URL — a control below pins it —
@@ -20,7 +20,7 @@
 //      resetModules also clears firedMilestones, which is what makes "an uncrossed
 //      milestone" mean anything below.
 //
-// bootAnalytics() (main.tsx:22) may already have set loaded = true before any click on
+// bootAnalytics() (main.tsx) may already have set loaded = true before any click on
 // a real page load with a granted record stored, so nothing here assumes a fresh flag:
 // every phase reads the counter it is about to compare against.
 //

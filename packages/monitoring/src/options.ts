@@ -3,7 +3,7 @@ import { browserTracingIntegration, getClient, startBrowserTracingNavigationSpan
 import type { BrowserOptions } from '@sentry/react'
 import { dropEvent, keepBreadcrumb, scrubApiError, scrubEvent, scrubSpan, scrubTransaction } from './scrub'
 
-export type Service = 'app' | 'ops-console' | 'support-console'
+export type Service = 'app' | 'ops-console' | 'support-console' | 'landing'
 
 export interface MonitoringConfig {
   service: Service
@@ -81,11 +81,17 @@ function appTracing(routeName?: (p: string) => string): Integration {
   return { ...bt, setup: (client) => (bt.setup?.(client), wireNavigations()) }
 }
 
+// ceiling: no INP or navigation spans, so only page loads are measured; revisit if the landing page gains client-side routing
+function pageLoadTracing(routeName?: (p: string) => string): Integration {
+  return browserTracingIntegration({ beforeStartSpan: nameRouteSpan(routeName), instrumentNavigation: false, enableInp: false })
+}
+
 export function sentryOptions(c: MonitoringConfig): BrowserOptions | null {
   const dsn = (c.dsn ?? '').trim()
   if (dsn === '') return null
   const app = c.service === 'app'
-  const tracing = app ? [appTracing(c.routeName)] : []
+  const landing = c.service === 'landing'
+  const tracing = app ? [appTracing(c.routeName)] : landing ? [pageLoadTracing(c.routeName)] : []
   const origin = gatewayOrigin(c.gateway)
   return {
     dsn,
@@ -94,12 +100,14 @@ export function sentryOptions(c: MonitoringConfig): BrowserOptions | null {
     initialScope: { tags: { service: c.service } },
     dataCollection: { userInfo: false, cookies: false, httpHeaders: false, httpBodies: [], urlQueryParams: false },
     enhanceFetchErrorMessages: false,
-    integrations: (defaults) => [...defaults.filter((i) => i.name !== 'BrowserSession'), ...tracing],
+    integrations: (defaults) => [...defaults.filter((i) => i.name !== 'BrowserSession' && i.name !== 'CultureContext'), ...tracing],
+    // ceiling: no allowUrls/denyUrls, so third-party gtag.js errors (loaded once analytics is allowed) spend quota; add denyUrls for googletagmanager.com if they show in asc-frontend
     beforeSend: (e, h) => (dropEvent(e, h) ? null : nameErrorTransaction(scrubEvent(scrubApiError(e, h)), c.routeName)),
     beforeSendTransaction: scrubTransaction,
     beforeSendSpan: scrubSpan,
     beforeBreadcrumb: keepBreadcrumb,
-    ...(app ? { tracesSampleRate: 1 } : {}),
+    // ceiling: landing samples every page load (1.0), crawlers included; lower it if transaction quota passes a threshold, and reword the privacy sentence "Each page you open" (Privacy.claims.test.tsx)
+    ...(app || landing ? { tracesSampleRate: 1 } : {}),
     tracePropagationTargets: app && origin !== '' ? [new RegExp('^' + escapeRegExp(origin) + '/')] : [],
   }
 }

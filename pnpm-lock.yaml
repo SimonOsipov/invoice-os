@@ -89,6 +89,9 @@ importers:
       '@invoice-os/design-tokens':
         specifier: workspace:*
         version: link:../../packages/design-tokens
+      '@invoice-os/monitoring':
+        specifier: workspace:*
+        version: link:../../packages/monitoring
       react:
         specifier: ^19.2.7
         version: 19.2.7

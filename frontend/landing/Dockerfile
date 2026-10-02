@@ -28,6 +28,12 @@ ARG VITE_HUBSPOT_FORM_GUID
 ENV VITE_HUBSPOT_FORM_GUID=$VITE_HUBSPOT_FORM_GUID
 ARG VITE_GA_MEASUREMENT_ID
 ENV VITE_GA_MEASUREMENT_ID=$VITE_GA_MEASUREMENT_ID
+# Empty means Sentry off; `set-sentry-off` blanks it in forks.
+ARG VITE_SENTRY_DSN
+ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN
+# The release fallback when no release is stamped.
+ARG RAILWAY_GIT_COMMIT_SHA
+ENV VITE_RAILWAY_GIT_COMMIT_SHA=$RAILWAY_GIT_COMMIT_SHA
 RUN pnpm --filter @invoice-os/landing build
 
 # ---- Serve: Caddy static server with SPA fallback + /health ----

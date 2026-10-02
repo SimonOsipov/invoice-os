@@ -5,6 +5,8 @@
 # plus mailpit (SMTP 1025, API 8025) and idp-mail on 9994, which mails its confirmation links there,
 # and idp-short on 9996, whose access tokens expire after 5 s (9995 is the mailed-link verify handler).
 # Stdout carries only the NAME=url lines and IDP_ISSUER (safe for $GITHUB_ENV); the rest goes to stderr.
+# IDP_SLOT=n (0-500, default 0) suffixes every container name with -s<n> and adds 10*n to every
+# port, so two worktrees' runs do not remove each other's containers; `make test-idp` derives it.
 # The DSN must be supabase_auth_admin's: a superuser would hide a missing grant or search_path.
 set -euo pipefail
 
@@ -12,6 +14,15 @@ dsn="${1:?usage: idp-up.sh <auth-admin-dsn> <db-host-port>}"
 db_port="${2:?usage: idp-up.sh <auth-admin-dsn> <db-host-port>}"
 # One issuer for every container; the tests read it back as IDP_ISSUER.
 issuer="urn:ascomply:auth:ci"
+slot="${IDP_SLOT:-0}"
+case "$slot" in
+  *[!0-9]*) echo "::error::IDP_SLOT must be a number from 0 to 500, got '$slot'" >&2; exit 2 ;;
+esac
+if [ "$slot" -gt 500 ]; then echo "::error::IDP_SLOT must be a number from 0 to 500, got '$slot'" >&2; exit 2; fi
+sfx=""
+if [ "$slot" -gt 0 ]; then sfx="-s$slot"; fi
+off=$((10 * slot))
+smtp=$((1025 + off)) mail_api=$((8025 + off)) verify=$((9995 + off))
 cd "$(git rev-parse --show-toplevel)"
 
 case "$dsn" in
@@ -38,7 +49,7 @@ docker build -q -f sidecar/auth/Dockerfile -t idp:ci sidecar/auth >&2
 
 # start <name> <port> [extra docker args...]; secrets pass by name so they never reach argv.
 start() {
-  local name="$1" port="$2"
+  local name="$1$sfx" port=$(($2 + off))
   shift 2
   docker rm -f "$name" >/dev/null 2>&1 || true
   local ports=()
@@ -77,18 +88,22 @@ es256_keys() {
 
 mailpit_image="axllent/mailpit:v1.31.2@sha256:74d609a42ec279aa63c6b4622a6fa9b5408d1ad5b1d76a1c4be40a265ce0863d"
 start_mailpit() {
-  docker rm -f mailpit >/dev/null 2>&1 || true
-  local ports=()
-  if [ ${#net[@]} -eq 0 ]; then ports=(-p 1025:1025 -p 8025:8025); fi
-  docker run -d --name mailpit ${net[@]+"${net[@]}"} ${ports[@]+"${ports[@]}"} "$mailpit_image" >/dev/null
+  docker rm -f "mailpit$sfx" >/dev/null 2>&1 || true
+  local ports=() binds=()
+  if [ ${#net[@]} -eq 0 ]; then
+    ports=(-p "$smtp:1025" -p "$mail_api:8025")
+  elif [ "$slot" -gt 0 ]; then
+    binds=(-e "MP_SMTP_BIND_ADDR=0.0.0.0:$smtp" -e "MP_UI_BIND_ADDR=0.0.0.0:$mail_api")
+  fi
+  docker run -d --name "mailpit$sfx" ${net[@]+"${net[@]}"} ${ports[@]+"${ports[@]}"} ${binds[@]+"${binds[@]}"} "$mailpit_image" >/dev/null
   for _ in $(seq 1 60); do
-    if curl -fsS -o /dev/null "http://localhost:8025/readyz" 2>/dev/null; then
+    if curl -fsS -o /dev/null "http://localhost:$mail_api/readyz" 2>/dev/null; then
       return 0
     fi
     sleep 1
   done
-  echo "::error::mailpit did not answer /readyz on port 8025" >&2
-  docker logs --tail 50 mailpit >&2 || true
+  echo "::error::mailpit$sfx did not answer /readyz on port $mail_api" >&2
+  docker logs --tail 50 "mailpit$sfx" >&2 || true
   exit 1
 }
 
@@ -107,15 +122,15 @@ es256_keys
 # The absolute confirmation path points the mailed link at the test's gateway verify handler.
 start idp-mail 9994 -e GOTRUE_JWT_KEYS \
   -e GOTRUE_MAILER_AUTOCONFIRM=false \
-  -e GOTRUE_SMTP_HOST="$smtp_host" -e GOTRUE_SMTP_PORT=1025 -e GOTRUE_SMTP_PASS=unused \
-  -e GOTRUE_MAILER_URLPATHS_CONFIRMATION=http://localhost:9995/auth/verify
+  -e GOTRUE_SMTP_HOST="$smtp_host" -e GOTRUE_SMTP_PORT="$smtp" -e GOTRUE_SMTP_PASS=unused \
+  -e GOTRUE_MAILER_URLPATHS_CONFIRMATION="http://localhost:$verify/auth/verify"
 es256_keys
 start idp-short 9996 -e GOTRUE_JWT_KEYS "${no_mail[@]}" -e GOTRUE_JWT_EXP=5
 
-echo "IDP_ES256_URL=http://localhost:9991"
-echo "IDP_HS256_URL=http://localhost:9992"
-echo "IDP_REBUILD_URL=http://localhost:9993"
-echo "IDP_MAIL_URL=http://localhost:9994"
-echo "IDP_SHORT_URL=http://localhost:9996"
-echo "MAILPIT_URL=http://localhost:8025"
+echo "IDP_ES256_URL=http://localhost:$((9991 + off))"
+echo "IDP_HS256_URL=http://localhost:$((9992 + off))"
+echo "IDP_REBUILD_URL=http://localhost:$((9993 + off))"
+echo "IDP_MAIL_URL=http://localhost:$((9994 + off))"
+echo "IDP_SHORT_URL=http://localhost:$((9996 + off))"
+echo "MAILPIT_URL=http://localhost:$mail_api"
 echo "IDP_ISSUER=$issuer"

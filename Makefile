@@ -177,6 +177,8 @@ test-archive: ## Run the AUDIT-05 evidence-bundle suite against the local dev DB
 	go test -p 1 -count=1 ./internal/archive/...
 
 # Needs Docker. The containers connect as supabase_auth_admin; the trap removes them even on failure.
+# IDP_SLOT follows DEV_DB_PORT, so each worktree's containers get their own names and ports.
+test-idp: export IDP_SLOT = $(shell p=$(DEV_DB_PORT); [ "$$p" -ge 5432 ] 2>/dev/null && echo $$((p - 5432)) || echo 0)
 test-idp: ## Run the TestIdP suite against real supabase/auth containers on the local dev DB (run `make dev-db` first)
 	@trap 'scripts/ci/idp-down.sh' EXIT; \
 	urls="$$(scripts/ci/idp-up.sh "$(DEV_DB_AUTH_ADMIN_URL)" $(DEV_DB_PORT))" || exit 1; \

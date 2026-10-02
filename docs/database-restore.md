@@ -29,6 +29,7 @@ rsql() {  # $1 = service name, $2 = SQL
 
 rc_run() {  # $1 = service name, $2 = output prefix; reads RC_TENANT and RC_CUTOFF
   local b64 rc
+  [ -r db/restore-check.sql ] || { echo "rc_run: run from the repo root (db/restore-check.sql not found)" >&2; return 2; }
   b64=$({ printf "SET restore_check.tenant = '%s';\nSET restore_check.cutoff = '%s';\n" "$RC_TENANT" "$RC_CUTOFF"; cat db/restore-check.sql; } | base64 | tr -d '\n')
   railway ssh -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s "$1" \
     "echo $b64 | base64 -d | $REMOTE_PSQL" >"$2.out" 2>"$2.err"
@@ -117,8 +118,21 @@ Afterwards, record the `Postgres` `deploymentId` (the enable changed it) in sect
    date -u +%FT%TZ; railway postgres -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s 98723af0-50ca-42a4-a56a-3e0438b9ce8a pitr restore --at <T> --new-service-name Postgres-drill-<YYYYMMDD> --yes --json
    ```
 
-   Record `SIBLING_ID` from the JSON. Cross-check `t_request` with `railway postgres -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s 98723af0-50ca-42a4-a56a-3e0438b9ce8a history --json`.
-7. Poll every 30 s until it prints `f`. A connection error means not ready. The first `f` is `t_ready`. Give up after 30 min: keep the sibling, run `railway service logs -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s Postgres-drill-<YYYYMMDD>`, and tell the coordinator.
+   `pitr restore --json` returns only `root`, `targetTimestamp` and `workflowId`. Take `SIBLING_ID` from the `id` of the entry whose `name` is the `--new-service-name`:
+
+   ```sh
+   railway service list -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production --json
+   ```
+
+   Cross-check `t_request` with `railway postgres -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s 98723af0-50ca-42a4-a56a-3e0438b9ce8a history --json`.
+7. Prove the sibling is a distinct server before you poll: production also returns `f` from `pg_is_in_recovery()`. Run the query on both services and compare. The sibling's start time must be after `t_request`, and its address and LSN must differ from `Postgres`:
+
+   ```sh
+   rsql Postgres-drill-<YYYYMMDD> 'select pg_postmaster_start_time(), inet_server_addr(), pg_current_wal_lsn()'
+   rsql Postgres 'select pg_postmaster_start_time(), inet_server_addr(), pg_current_wal_lsn()'
+   ```
+
+   Then poll every 30 s until it prints `f`. A connection error means not ready. The first `f` is `t_ready`. Give up after 30 min: keep the sibling, run `railway service logs -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s Postgres-drill-<YYYYMMDD>`, and tell the coordinator.
 
    ```sh
    rsql Postgres-drill-<YYYYMMDD> 'select pg_is_in_recovery()'
@@ -198,7 +212,7 @@ Delete only by ID, and only the sibling. Steps 3 and 4 are production writes.
 2. Set both IDs, then assert each is a UUID and neither is production's. An empty ID passes a "not production" test alone, and an empty `-s` falls back to the linked service:
 
    ```sh
-   SIBLING_ID=<id from the pitr restore JSON>
+   SIBLING_ID=<id from the service list in section 3 step 6>
    SIBLING_VOLUME_ID=<id from step 1>
    uuid='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
    [ "$(printf '%s\n%s\n' "$SIBLING_ID" "$SIBLING_VOLUME_ID" | grep -Ec "$uuid")" = 2 ] && [ "$SIBLING_ID" != 98723af0-50ca-42a4-a56a-3e0438b9ce8a ] && [ "$SIBLING_VOLUME_ID" != b3b5bcf5-6a4d-4871-970a-5e72aa9d7efa ] && echo IDS-OK
@@ -211,13 +225,17 @@ Delete only by ID, and only the sibling. Steps 3 and 4 are production writes.
    railway service delete -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s "$SIBLING_ID" --yes
    ```
 
-4. **Production write — the operator runs it.** Delete its volume. Railway may keep a deleted service's volume. Add `--2fa-code <code>` if 2FA is on:
+   It prints only `> Select a service to delete <name>`, with no confirmation. Step 5's re-read is the evidence.
+
+4. **Production write — the operator runs it.** Delete its volume. Add `--2fa-code <code>` if 2FA is on:
 
    ```sh
    railway volume -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production delete -v "$SIBLING_VOLUME_ID" --yes
    ```
 
-5. Read again. The sibling and its volume are gone, `Postgres` and `postgres-volume` remain, and PITR is still enabled:
+   It prints `Volume "<name>" deleted`, but the volume stays listed (see step 5).
+
+5. Read again. The sibling is not listed. Its volume is either not listed, or listed with `isPendingDeletion: true`, `serviceName` null and a `deletedAt` purge time 48 h later. That volume is attached to no service, so a fork cannot copy it. `Postgres` and `postgres-volume` remain, and PITR is still enabled:
 
    ```sh
    railway service list -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production --json
@@ -252,3 +270,4 @@ Definitions:
 
 | Date | Operator | `range_end` | `T` | Base-backup time and stop LSN | `t_request` | `t_ready` | Restore duration | Data age | Archive lag | Sibling replay LSN | Newest invoice `created_at` | Diff result | Sibling name and ID | Sibling volume ID | Deleted at |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-10-02 | The user ran the writes (typed with `!`); the lead ran the reads | 18:21:54.193149Z | 18:19:54Z | `20261002-181212F`, 18:13:12Z, stop LSN `0/350003E0` | 18:22:36Z | 18:24:05Z | 1 min 29 s | 2 min 42 s | 41.8 s | `0/3C000F98` | 2026-09-23T11:27:52.788696Z | Empty | `Postgres-drill-20261002`, `f835699e-af4c-4a62-9dab-232beab086f6` | `5d342760-65a9-4835-8b66-63cb475d3593` | Service 18:29Z; volume soft-deleted 18:29:29Z, purge 2026-10-04T18:29:29Z |

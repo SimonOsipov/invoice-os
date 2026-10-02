@@ -65,14 +65,7 @@ func mailEnv(t *testing.T, name string) string {
 	return strings.TrimRight(v, "/")
 }
 
-// startGateway serves the real register and verify handlers where the mailed link points.
-func startGatewayNoFloor(t *testing.T, authBase string) string {
-	t.Helper()
-	gw, _ := startGateway(t, authBase, 0)
-	return gw
-}
-
-// startGateway is startGatewayNoFloor with a register minimum; it also returns the gateway's JSON log.
+// startGateway serves the real register and verify handlers where the mailed link points, and returns its JSON log.
 func startGateway(t *testing.T, authBase string, minResponse time.Duration) (string, *bytes.Buffer) {
 	t.Helper()
 	authURL, err := url.Parse(authBase)
@@ -152,7 +145,7 @@ func postRegister(t *testing.T, gw, email string) (int, string) {
 
 // None may register. The gateway refuses the trailing-dot row; real GoTrue decides the rest.
 func TestIdP_FreeMailVariantsAreNotAccepted(t *testing.T) {
-	gw := startGatewayNoFloor(t, idpMailURL(t))
+	gw, _ := startGateway(t, idpMailURL(t), 0)
 	conn := superConn(t)
 	ctx := context.Background()
 
@@ -280,7 +273,8 @@ func follow(t *testing.T, link string) string {
 
 func TestIdP_RegisterLeavesTheAccountUnverified(t *testing.T) {
 	base := idpMailURL(t)
-	u := registrant(t, startGatewayNoFloor(t, base))
+	gw, _ := startGateway(t, base, 0)
+	u := registrant(t, gw)
 
 	var confirmed bool
 	if err := superConn(t).QueryRow(context.Background(),
@@ -298,7 +292,8 @@ func TestIdP_RegisterLeavesTheAccountUnverified(t *testing.T) {
 
 func TestIdP_ConfirmationLinkTargetsTheGateway(t *testing.T) {
 	base := idpMailURL(t)
-	u := registrant(t, startGatewayNoFloor(t, base))
+	gw, _ := startGateway(t, base, 0)
+	u := registrant(t, gw)
 
 	link := confirmationLink(t, u.email)
 	parsed, err := url.Parse(link)
@@ -315,7 +310,8 @@ func TestIdP_ConfirmationLinkTargetsTheGateway(t *testing.T) {
 
 func TestIdP_EmailedLinkVerifiesThenSignInSucceeds(t *testing.T) {
 	base := idpMailURL(t)
-	u := registrant(t, startGatewayNoFloor(t, base))
+	gw, _ := startGateway(t, base, 0)
+	u := registrant(t, gw)
 
 	if got := follow(t, confirmationLink(t, u.email)); got != siteURL+"/?verified=1" {
 		t.Fatalf("verify redirect = %q, want %s/?verified=1", got, siteURL)
@@ -325,7 +321,8 @@ func TestIdP_EmailedLinkVerifiesThenSignInSucceeds(t *testing.T) {
 
 func TestIdP_VerificationLinkIsSingleUse(t *testing.T) {
 	base := idpMailURL(t)
-	u := registrant(t, startGatewayNoFloor(t, base))
+	gw, _ := startGateway(t, base, 0)
+	u := registrant(t, gw)
 
 	link := confirmationLink(t, u.email)
 	if got := follow(t, link); got != siteURL+"/?verified=1" {
@@ -338,7 +335,8 @@ func TestIdP_VerificationLinkIsSingleUse(t *testing.T) {
 
 func TestIdP_ProvisionedWorkspaceReachesTheNextToken(t *testing.T) {
 	base := idpMailURL(t)
-	u := registrant(t, startGatewayNoFloor(t, base))
+	gw, _ := startGateway(t, base, 0)
+	u := registrant(t, gw)
 	if got := follow(t, confirmationLink(t, u.email)); got != siteURL+"/?verified=1" {
 		t.Fatalf("verify redirect = %q, want %s/?verified=1", got, siteURL)
 	}

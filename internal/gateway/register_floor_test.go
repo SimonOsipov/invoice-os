@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -165,8 +167,9 @@ func TestRegister_ValidationRefusalsDoNotWait(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			fake := newFakeGoTrue(t, max(c.status, http.StatusOK), c.gtBody)
+			log, buf := captureLog()
 
-			rec, elapsed := serveFloor(t, fake.URL, floor, nil, c.body)
+			rec, elapsed := serveFloor(t, fake.URL, floor, log, c.body)
 
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
@@ -176,6 +179,9 @@ func TestRegister_ValidationRefusalsDoNotWait(t *testing.T) {
 			}
 			if elapsed >= time.Second {
 				t.Errorf("answered after %v, want no wait (minimum %v)", elapsed, floor)
+			}
+			if n := len(timingLines(t, buf)); n != 0 {
+				t.Errorf("a 400 logged %d %q lines, want none: %s", n, timingMsg, buf.String())
 			}
 		})
 	}
@@ -317,4 +323,271 @@ func TestRegister_NoTimingLineAtZeroMinimum(t *testing.T) {
 			}
 		})
 	}
+}
+
+// An hour-long minimum makes a wrongly held 400 end at the 2 s request deadline with nothing written.
+func TestRegister_FreeMailVariantsStayPromptUnderALargeMinimum(t *testing.T) {
+	for _, email := range []string{"x@gmail.com", "X@GMAIL.COM", "x@gmail.com.", "x@mail.gmail.com", " x@outlook.com"} {
+		t.Run(email, func(t *testing.T) {
+			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(email, regPassword))).WithContext(ctx)
+
+			start := time.Now()
+			RegisterHandler(fake.URL, testClient(), time.Hour, slog.New(slog.DiscardHandler)).ServeHTTP(rec, req)
+			elapsed := time.Since(start)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (after %v): %s", rec.Code, elapsed, rec.Body.String())
+			}
+			if elapsed >= time.Second {
+				t.Errorf("answered after %v, want no wait", elapsed)
+			}
+			if n := len(fake.Calls()); n != 0 {
+				t.Errorf("GoTrue saw %d calls, want none", n)
+			}
+		})
+	}
+}
+
+// One shared handler: each request waits from its own entry, not from a timer another request started.
+func TestRegister_ConcurrentRequestsWaitIndependently(t *testing.T) {
+	const floor = 300 * time.Millisecond
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+	log, buf := captureLog()
+	h := RegisterHandler(fake.URL, testClient(), floor, log)
+	serve := func(rec *httptest.ResponseRecorder) time.Duration {
+		req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
+		start := time.Now()
+		h.ServeHTTP(rec, req)
+		return time.Since(start)
+	}
+
+	t.Run("simultaneous requests do not queue", func(t *testing.T) {
+		const n = 6
+		recs := make([]*httptest.ResponseRecorder, n)
+		elapsed := make([]time.Duration, n)
+		var wg sync.WaitGroup
+		start := time.Now()
+		for i := range n {
+			recs[i] = httptest.NewRecorder()
+			wg.Go(func() { elapsed[i] = serve(recs[i]) })
+		}
+		wg.Wait()
+		wall := time.Since(start)
+
+		for i := range n {
+			requirePending202(t, recs[i])
+			if elapsed[i] < floor {
+				t.Errorf("request %d answered after %v, want no earlier than %v", i, elapsed[i], floor)
+			}
+		}
+		if wall >= n*floor/2 {
+			t.Errorf("%d requests took %v in all, want about one minimum (%v): the waits queued", n, wall, floor)
+		}
+	})
+
+	t.Run("a late request waits its own minimum", func(t *testing.T) {
+		first, second := httptest.NewRecorder(), httptest.NewRecorder()
+		var wg sync.WaitGroup
+		wg.Go(func() { serve(first) })
+		time.Sleep(floor / 2)
+		got := serve(second)
+		wg.Wait()
+
+		requirePending202(t, second)
+		if got < floor {
+			t.Errorf("late request answered after %v, want no earlier than %v from its own start", got, floor)
+		}
+	})
+
+	if n := len(timingLines(t, buf)); n != 8 {
+		t.Errorf("%d %q lines for 8 requests, want 8: %s", n, timingMsg, buf.String())
+	}
+}
+
+// Every non-400 branch reaches the wait, including those a quirky upstream selects.
+func TestRegister_OddUpstreamAnswersStillWaitTheMinimum(t *testing.T) {
+	const floor = 200 * time.Millisecond
+	huge := strings.Repeat("x", 1<<20)
+	for _, c := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"200 non-JSON", http.StatusOK, "ok"},
+		{"200 empty", http.StatusOK, ""},
+		{"200 one MiB", http.StatusOK, `{"id":"` + huge + `"}`},
+		{"302 redirect", http.StatusFound, ""},
+		{"502 HTML from a proxy", http.StatusBadGateway, "<html>Bad Gateway</html>"},
+		{"500 other SQLSTATE", http.StatusInternalServerError, gtOtherSQLState},
+		{"400 non-JSON", http.StatusBadRequest, "<html>bad request</html>"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fake := newFakeGoTrue(t, c.status, c.body)
+			log, buf := captureLog()
+
+			rec, elapsed := serveFloor(t, fake.URL, floor, log, registerBody(regEmail, regPassword))
+
+			if rec.Code == http.StatusBadRequest {
+				t.Fatalf("status 400 from an upstream that gave no validation code: %s", rec.Body.String())
+			}
+			if elapsed < floor {
+				t.Errorf("answered after %v, want no earlier than %v", elapsed, floor)
+			}
+			if n := len(timingLines(t, buf)); n != 1 {
+				t.Errorf("%d %q lines, want 1: %s", n, timingMsg, buf.String())
+			}
+		})
+	}
+}
+
+// The wait runs from handler entry, so a client timeout shorter than the minimum is still padded up to it.
+func TestRegister_UpstreamTimeoutWaitsOutTheRestOfTheMinimum(t *testing.T) {
+	const floor, clientTimeout = 500 * time.Millisecond, 100 * time.Millisecond
+	authURL := slowGoTrue(t, 2*time.Second, http.StatusOK, gtNewUser)
+	client := &http.Client{Timeout: clientTimeout}
+	log, buf := captureLog()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
+
+	start := time.Now()
+	RegisterHandler(authURL, client, floor, log).ServeHTTP(rec, req)
+	elapsed := time.Since(start)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502: %s", rec.Code, rec.Body.String())
+	}
+	if elapsed < floor {
+		t.Errorf("answered after %v, want no earlier than %v", elapsed, floor)
+	}
+	if elapsed >= time.Second {
+		t.Errorf("answered after %v, want about %v", elapsed, floor)
+	}
+	lines := timingLines(t, buf)
+	if len(lines) != 1 {
+		t.Fatalf("%d %q lines, want 1: %s", len(lines), timingMsg, buf.String())
+	}
+	if up := intAttr(t, lines[0], "upstream_ms"); up < clientTimeout.Milliseconds() || up >= floor.Milliseconds() {
+		t.Errorf("upstream_ms = %d, want the client timeout (%d) up to the minimum (%d)", up, clientTimeout.Milliseconds(), floor.Milliseconds())
+	}
+	if lines[0]["level"] != "INFO" {
+		t.Errorf("level = %v, want INFO: the client error came before the minimum", lines[0]["level"])
+	}
+}
+
+// A client gone while GoTrue is still working takes the unreachable path; it too writes nothing.
+func TestRegister_ClientGoneDuringTheUpstreamCallWritesNothing(t *testing.T) {
+	authURL := slowGoTrue(t, 800*time.Millisecond, http.StatusOK, gtNewUser)
+	ctx, cancel := context.WithCancel(t.Context())
+	time.AfterFunc(50*time.Millisecond, cancel)
+	defer cancel()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword))).WithContext(ctx)
+
+	start := time.Now()
+	RegisterHandler(authURL, testClient(), 3*time.Second, slog.New(slog.DiscardHandler)).ServeHTTP(rec, req)
+	elapsed := time.Since(start)
+
+	if elapsed >= time.Second {
+		t.Errorf("returned after %v, want the handler to end when the client leaves", elapsed)
+	}
+	if rec.Body.Len() != 0 || len(rec.Header()) != 0 || rec.Code != http.StatusOK {
+		t.Errorf("wrote status %d, headers %v, body %q after the client left", rec.Code, rec.Header(), rec.Body.String())
+	}
+}
+
+// The line's attributes are exactly these two, whatever GoTrue's body echoes back.
+func TestRegister_TimingLineCarriesOnlyTheTwoTimings(t *testing.T) {
+	echo := func(code string) string {
+		return `{"code":0,"error_code":"` + code + `","msg":"for ` + regEmail + ` password ` + regPassword + `","email":"` + regEmail + `"}`
+	}
+	for _, c := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"200 echoing the address", http.StatusOK, gtNewUser},
+		{"429 rate limit echoing both", http.StatusTooManyRequests, echo("over_email_send_rate_limit")},
+		{"422 signup_disabled echoing both", http.StatusUnprocessableEntity, echo("signup_disabled")},
+		{"500 unknown code echoing both", http.StatusInternalServerError, echo("unexpected_failure")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fake := newFakeGoTrue(t, c.status, c.body)
+			log, buf := captureLog()
+
+			serveFloor(t, fake.URL, 50*time.Millisecond, log, registerBody(regEmail, regPassword))
+
+			lines := timingLines(t, buf)
+			if len(lines) != 1 {
+				t.Fatalf("%d %q lines, want 1: %s", len(lines), timingMsg, buf.String())
+			}
+			var keys []string
+			for k := range lines[0] {
+				keys = append(keys, k)
+			}
+			slices.Sort(keys)
+			if want := []string{"level", "min_ms", "msg", "time", "upstream_ms"}; !slices.Equal(keys, want) {
+				t.Errorf("timing line keys = %v, want %v", keys, want)
+			}
+			for _, s := range []string{regEmail, regPassword} {
+				if strings.Contains(buf.String(), s) {
+					t.Errorf("log carries %q: %s", s, buf.String())
+				}
+			}
+		})
+	}
+}
+
+func TestHoldMinimum_Boundaries(t *testing.T) {
+	const floor = 40 * time.Millisecond
+	level := func(t *testing.T, upstream time.Duration) string {
+		t.Helper()
+		log, buf := captureLog()
+		if !holdMinimum(t.Context(), log, time.Now().Add(-time.Hour), upstream, floor) {
+			t.Fatal("holdMinimum = false for a live context")
+		}
+		lines := timingLines(t, buf)
+		if len(lines) != 1 {
+			t.Fatalf("%d lines, want 1: %s", len(lines), buf.String())
+		}
+		return lines[0]["level"].(string)
+	}
+
+	if got := level(t, floor-time.Nanosecond); got != "INFO" {
+		t.Errorf("just below the minimum: level = %s, want INFO", got)
+	}
+	if got := level(t, floor); got != "WARN" {
+		t.Errorf("exactly the minimum: level = %s, want WARN", got)
+	}
+	if got := level(t, floor+time.Nanosecond); got != "WARN" {
+		t.Errorf("just above the minimum: level = %s, want WARN", got)
+	}
+
+	t.Run("a minimum already spent adds no wait", func(t *testing.T) {
+		start := time.Now()
+		holdMinimum(t.Context(), slog.New(slog.DiscardHandler), time.Now().Add(-time.Hour), time.Hour, floor)
+		if elapsed := time.Since(start); elapsed >= floor {
+			t.Errorf("waited %v with the minimum long past", elapsed)
+		}
+	})
+	t.Run("a cancelled context reports false", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		if holdMinimum(ctx, slog.New(slog.DiscardHandler), time.Now(), 0, time.Hour) {
+			t.Error("holdMinimum = true for a cancelled context")
+		}
+	})
+	t.Run("zero and negative minimums neither log nor wait", func(t *testing.T) {
+		for _, m := range []time.Duration{0, -time.Second} {
+			log, buf := captureLog()
+			start := time.Now()
+			ok := holdMinimum(t.Context(), log, time.Now(), 0, m)
+			if !ok || time.Since(start) >= floor || buf.Len() != 0 {
+				t.Errorf("minimum %v: ok=%v after %v, log %q; want true at once with no line", m, ok, time.Since(start), buf.String())
+			}
+		}
+	})
 }

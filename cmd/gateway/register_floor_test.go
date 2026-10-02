@@ -120,6 +120,10 @@ func TestMustParseRegisterMinResponse_BadValueStopsBoot(t *testing.T) {
 		"zero":          "0s",
 		"negative":      "-1s",
 		"canary string": "canary-q7zx",
+		"padded":        " 3s",
+		"split unit":    "3 s",
+		"overflow":      "99999999999h",
+		"unit only":     "ms",
 	} {
 		t.Run(name, func(t *testing.T) {
 			code, out := runMinResponseChild(t, raw)

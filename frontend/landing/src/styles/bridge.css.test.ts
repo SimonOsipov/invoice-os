@@ -102,8 +102,7 @@ describe('bridge.css maps the app-layer names onto v2', () => {
     expect(existsSync(BRIDGE_PATH), `expected ${BRIDGE_PATH} to exist ([RESKIN-01-02] adds the bridge)`).toBe(true)
     const { referenced, unresolved } = unresolvedVars(landingBuildInput({ withMonitoring: true }), Object.values(readV2Css()))
     expect(referenced.length).toBeGreaterThanOrEqual(20)
-    // [RESKIN-01-03] removes --gradient-hero and this exception with it.
-    expect(unresolved).toEqual(['--gradient-hero'])
+    expect(unresolved).toEqual([])
   })
 
   it('BR-03 every static className token has a class rule', () => {
@@ -128,8 +127,7 @@ describe('bridge.css maps the app-layer names onto v2', () => {
     expect(existsSync(BRIDGE_PATH), `expected ${BRIDGE_PATH} to exist ([RESKIN-01-02] adds the bridge)`).toBe(true)
     const { checked, undef } = undefinedClasses(landingBuildInput({ withMonitoring: true }), defining)
     expect(checked.length).toBeGreaterThanOrEqual(20)
-    // [RESKIN-01-03] removes band-gradient and this exception with it.
-    expect(Object.keys(undef).sort(), JSON.stringify(undef)).toEqual(['band-gradient'])
+    expect(Object.keys(undef).sort(), JSON.stringify(undef)).toEqual([])
   })
 
   it('BR-04 every bridge :root value is a v2 token or a hex', () => {

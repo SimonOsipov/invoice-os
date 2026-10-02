@@ -132,15 +132,15 @@ async function rectOf(locator: Locator, label: string, at: string): Promise<Rect
 }
 
 /**
- * Is Inter actually available for layout?
+ * Is Manrope actually available for layout?
  *
- * The computed font-family always reads "Inter, ui-sans-serif, …" whether or not the
+ * The computed font-family always reads "Manrope, ui-sans-serif, ..." whether or not the
  * Google-hosted webfont arrived, and Chromium's document.fonts.check() answers true for a
- * family it has never heard of. Two probe spans — `Inter, monospace` against bare
- * `monospace` — differ only when Inter is real. The mobile body wraps with ~6px of slack,
- * so a missing Inter costs a whole line and reads as a layout bug unless this names it.
+ * family it has never heard of. Two probe spans, `Manrope, monospace` against bare
+ * `monospace`, differ only when Manrope is real. The mobile body wraps with ~6px of slack,
+ * so a missing Manrope costs a whole line and reads as a layout bug unless this names it.
  */
-function interIsUsable(page: Page): Promise<{ usable: boolean; withInter: number; fallback: number }> {
+function manropeIsUsable(page: Page): Promise<{ usable: boolean; withManrope: number; fallback: number }> {
   return page.evaluate(() => {
     const measure = (family: string): number => {
       const s = document.createElement('span')
@@ -151,9 +151,9 @@ function interIsUsable(page: Page): Promise<{ usable: boolean; withInter: number
       s.remove()
       return w
     }
-    const withInter = measure('Inter, monospace')
+    const withManrope = measure('Manrope, monospace')
     const fallback = measure('monospace')
-    return { usable: Math.abs(withInter - fallback) > 1, withInter, fallback }
+    return { usable: Math.abs(withManrope - fallback) > 1, withManrope, fallback }
   })
 }
 
@@ -742,15 +742,15 @@ test('landing consent: the first-visit card is at most a third of the phone view
   const { errors, card } = await openLanding(page)
   await expect(card.locator('.cn-setting'), 'a first visit must not render the current-setting line').toHaveCount(0)
 
-  const inter = await interIsUsable(page)
+  const manrope = await manropeIsUsable(page)
   expect(
-    inter.usable,
-    `Inter is not available for layout (probe ${inter.withInter}px vs fallback ${inter.fallback}px) — the body wraps with ~6px of slack, so a missing webfont costs a whole line and reads as a layout bug`,
+    manrope.usable,
+    `Manrope is not available for layout (probe ${manrope.withManrope}px vs fallback ${manrope.fallback}px) — the body wraps with ~6px of slack, so a missing webfont costs a whole line and reads as a layout bug`,
   ).toBe(true)
 
   const rect = await rectOf(card, 'the cookie notice', `at ${PHONE.width}x${PHONE.height}`)
   await testInfo.attach('cookie-notice-mobile-height.json', {
-    body: JSON.stringify({ state: 'first visit', viewport: PHONE, cap: MOBILE_THIRD_PX, rect, inter }, null, 2),
+    body: JSON.stringify({ state: 'first visit', viewport: PHONE, cap: MOBILE_THIRD_PX, rect, manrope }, null, 2),
     contentType: 'application/json',
   })
   testInfo.annotations.push({
@@ -780,15 +780,15 @@ test('landing consent: the reopened card is at most a third of the phone viewpor
   await expect(card.locator('.cn-setting'), 'the reopened card did not render its current-setting line, so this is the first-visit card again').toHaveText('Analytics cookies are on.')
   await settleLayout(page)
 
-  const inter = await interIsUsable(page)
+  const manrope = await manropeIsUsable(page)
   expect(
-    inter.usable,
-    `Inter is not available for layout (probe ${inter.withInter}px vs fallback ${inter.fallback}px) — a missing webfont costs a whole line of body copy`,
+    manrope.usable,
+    `Manrope is not available for layout (probe ${manrope.withManrope}px vs fallback ${manrope.fallback}px) — a missing webfont costs a whole line of body copy`,
   ).toBe(true)
 
   const rect = await rectOf(card, 'the reopened cookie notice', `at ${PHONE.width}x${PHONE.height}`)
   await testInfo.attach('cookie-notice-mobile-height-reopened.json', {
-    body: JSON.stringify({ state: 'reopened', viewport: PHONE, cap: MOBILE_THIRD_PX, rect, inter }, null, 2),
+    body: JSON.stringify({ state: 'reopened', viewport: PHONE, cap: MOBILE_THIRD_PX, rect, manrope }, null, 2),
     contentType: 'application/json',
   })
   testInfo.annotations.push({

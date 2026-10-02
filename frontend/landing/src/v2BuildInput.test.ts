@@ -109,4 +109,44 @@ describe('the landing loads only v2', () => {
     ])
     expect(visited.filter((p) => /app-layer\.css$/.test(p))).toEqual([])
   })
+
+  it('V2-10 no build input carries a retired v1 token or font name', () => {
+    // Every letter case is the point: the v1 names also ship upper-cased in strings and font-variation tags.
+    const needles = [/--gradient-/i, /band-gradient/i, /fraunces/i, /\binter\b/i, /opsz/i]
+    const planted = scanBuildInput(
+      {
+        'planted.ts':
+          "// Fraunces\nconst a = 'INTER'\nconst b = 'var(--Gradient-hero)'\nconst c = \"'OPSZ' 24\"\nconst d = 'Band-Gradient'",
+      },
+      needles,
+    )
+    expect(planted, 'control: comments are stripped, each other needle matches in any case').toEqual([
+      'planted.ts: /--gradient-/i',
+      'planted.ts: /band-gradient/i',
+      'planted.ts: /\\binter\\b/i',
+      'planted.ts: /opsz/i',
+    ])
+    expect(
+      scanBuildInput({ 'planted.ts': "const s = 'interval internal pointerInterface'" }, needles),
+      'control: inter inside a longer word is not a hit',
+    ).toEqual([])
+
+    const files = landingBuildInput()
+    expect(Object.keys(files).length).toBeGreaterThanOrEqual(25)
+    const hits = scanBuildInput(files, needles)
+    expect(hits, hits.join('\n')).toEqual([])
+  })
+
+  it('V2-13 no build input requests IBM Plex Mono', () => {
+    const needles = [/ibm[+ ]plex/i]
+    expect(
+      scanBuildInput({ 'planted.ts': "const u = 'family=IBM+Plex+Mono'\n// IBM Plex Mono" }, needles),
+      'control: the URL form matches once, a comment does not',
+    ).toEqual(['planted.ts: /ibm[+ ]plex/i'])
+
+    const files = landingBuildInput()
+    expect(Object.keys(files).length).toBeGreaterThanOrEqual(25)
+    const hits = scanBuildInput(files, needles)
+    expect(hits, hits.join('\n')).toEqual([])
+  })
 })

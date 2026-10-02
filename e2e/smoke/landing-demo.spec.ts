@@ -253,7 +253,7 @@ async function openLanding(page: Page): Promise<LandingSinks> {
 
   await expect(page.getByRole('banner')).toBeVisible()
 
-  // Inter and Fraunces are Google-hosted with display=swap. A swap AFTER a measurement
+  // Manrope is Google-hosted with display=swap. A swap AFTER a measurement
   // reflows geometry that has already been read, and E6 measures geometry to the
   // sub-pixel. Settle once, here, before anything else — same reason as landing-nav.spec.ts.
   await page.evaluate(() => document.fonts.ready.then(() => true))

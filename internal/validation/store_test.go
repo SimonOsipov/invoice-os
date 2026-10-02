@@ -1,7 +1,7 @@
 // DB-backed tests for Store.LoadActiveRuleSet; the kill switch's effect is proved in kill_switch_e2e_test.go.
 //
 // Fixtures are seeded as the SUPERUSER (bypasses the app-role grant, which is
-// SELECT + UPDATE(enabled)-only — see schema_test.go's seedVersion/seedRule,
+// SELECT-only — see schema_test.go's seedVersion/seedRule,
 // reused here, plus this file's own seedFullRule for fixtures that need
 // non-default field values).
 //

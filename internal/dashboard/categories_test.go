@@ -147,7 +147,7 @@ func TestCategories_KeysSortedAndStable(t *testing.T) {
 // MCAT-06: the guard survives a rule's enabled flip to false -- legal
 // since rules_content_lock() excludes `enabled` from its sealed check.
 func TestCategories_GuardSurvivesEnabledFlip(t *testing.T) {
-	_, app := dbTestPools(t)
+	super, app := dbTestPools(t)
 	active := fetchActiveRuleKeys(t, app)
 	target := active[0]
 
@@ -163,12 +163,13 @@ func TestCategories_GuardSurvivesEnabledFlip(t *testing.T) {
 		t.Fatalf("locate active rule %q: %v", target, err)
 	}
 
-	if _, err := app.Exec(context.Background(),
+	// invoice_app cannot write rules; flip as the owner/superuser.
+	if _, err := super.Exec(context.Background(),
 		`UPDATE rules SET enabled = false WHERE id = $1`, ruleID); err != nil {
 		t.Fatalf("flip enabled=false on %q: %v", target, err)
 	}
 	t.Cleanup(func() {
-		if _, err := app.Exec(context.Background(),
+		if _, err := super.Exec(context.Background(),
 			`UPDATE rules SET enabled = $1 WHERE id = $2`, prevEnabled, ruleID); err != nil {
 			t.Fatalf("restore enabled=%v on %q: %v", prevEnabled, target, err)
 		}

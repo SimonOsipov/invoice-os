@@ -28,4 +28,14 @@ Every batch loads the rule set again, so the next batch honours the change. Seal
 
 The statement writes no `audit_log` row. `audit_log` is per tenant, and a global action belongs to no tenant.
 
-Pinned by `TestKillSwitch_E2E`.
+Pinned by `TestKillSwitch_E2E` and `TestKillSwitch_OnlyTheOwnerCanRunIt`.
+
+## Recovery: the revoke migration fails
+
+Migration `revoke_rules_enabled_from_app` raises `invoice_app still holds UPDATE on rules.enabled` when another grantor holds the grant. The gateway fails to boot and blocks every later migration.
+
+1. `railway ssh --service Postgres`, then `psql` against `invoice_os`.
+2. `\dp rules`. Read the grantor after `invoice_app=w/` under `enabled`.
+3. `SET ROLE <grantor>; REVOKE UPDATE (enabled) ON rules FROM invoice_app; RESET ROLE;`
+4. Confirm `SELECT has_column_privilege('invoice_app','public.rules','enabled','UPDATE');` returns `f`.
+5. Redeploy the gateway.

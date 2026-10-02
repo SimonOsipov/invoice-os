@@ -498,6 +498,37 @@ describe('sentry: the ledger carries every new sentence', () => {
     expect(flat).toContain('the three third parties')
   })
 
+  it('each new ledger claim is a sentence the monitoring section makes', () => {
+    const KEYS: Record<string, string> = {
+      C23: 'shows an error',
+      C24: 'how long it took to load',
+      C25: 'your browser, operating system and device type',
+      C26: 'every visit to the live site',
+      C27: 'not analytics',
+      C28: 'does not store your IP address',
+      C29: 'no cookies',
+      C30: 'what you type into the demo form',
+      C31: 'stores these reports in the EU',
+    }
+    const page = plainText(html)
+    expect(Object.keys(KEYS), 'one key per new row').toEqual(NEW_IDS)
+    for (const id of NEW_IDS) {
+      const claim = rowOf(id)[0]?.split('|')[2] ?? ''
+      expect(claim, `${id}: claim cell missing`).not.toBe('')
+      expect(page, `${id}: the page lacks "${KEYS[id]}"`).toContain(KEYS[id])
+      expect(claim, `${id}: the claim does not say "${KEYS[id]}"`).toContain(KEYS[id])
+    }
+  })
+
+  it('E3 and E6 carry the Sentry scope note and the four senders', () => {
+    const e3 = rowOf('E3')[0] ?? ''
+    const e6 = rowOf('E6')[0] ?? ''
+    expect(e3, 'control: E3 row missing').not.toBe('')
+    expect(e3).toContain('Sentry')
+    expect(e6).toContain('four network senders')
+    expect(e6).toContain('the Sentry SDK started by `instrument.ts`')
+  })
+
   it('C10, W3 and W7 carry the D-19 changes', () => {
     expect(flat, 'C10').toContain("Sentry's reports (C26) are the only other ungated flow")
     expect(flat, 'W3').toContain('is not being measured by Google at all')

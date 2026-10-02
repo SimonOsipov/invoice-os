@@ -311,6 +311,16 @@ describe('front door and missing gateway (AC-10)', () => {
 
     const support = await run({ target: 'support' })
     expect(leaveUrl(support.boot)).toMatch(new RegExp(`^${LANDING}/\\?state=[A-Za-z0-9_-]{43}&console=support$`))
+
+    // The retired persona door is not a credential, for either console.
+    for (const persona of ['developer', 'support', 'firm', 'inhouse']) {
+      const viaParam = await run({ search: `?persona=${persona}` })
+      expect(FRONT_DOOR.test(leaveUrl(viaParam.boot)), `?persona=${persona} at ops`).toBe(true)
+      expect(viaParam.calls, persona).toHaveLength(0)
+      expect(store.local.getItem(OPS_KEY), persona).toBeNull()
+    }
+    const supportViaParam = await run({ target: 'support', search: '?persona=support' })
+    expect(leaveUrl(supportViaParam.boot)).toMatch(new RegExp(`^${LANDING}/\\?state=[A-Za-z0-9_-]{43}&console=support$`))
   })
 
   it('boot_noGatewayNeverOpens', async () => {

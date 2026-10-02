@@ -532,6 +532,9 @@ describe('SignInForm wears the v2 field, buttons and alert (FL rows)', () => {
     for (const b of found) {
       for (const want of ['ds-btn', 'ds-btn--primary', 'ds-btn--md']) expect(b.classList.contains(want), `${b.textContent} ${want}`).toBe(true)
       expect(Array.from(b.classList).some((c) => c.startsWith('v2-btn')), b.textContent ?? '').toBe(false)
+      // Layout comes from .ds-btn--md; an inline height or flex rule would override it.
+      expect(b.style.width, b.textContent ?? '').toBe('100%')
+      for (const k of ['height', 'justifyContent', 'gap', 'cursor', 'background', 'color'] as const) expect(b.style[k], `${k} ${b.textContent}`).toBe('')
     }
   })
 
@@ -544,8 +547,7 @@ describe('SignInForm wears the v2 field, buttons and alert (FL rows)', () => {
     const button = submitButton()
     expect(button.textContent, 'control: the form is busy').toContain('Checking…')
     // jsdom drops a `border` that carries `color-mix(in oklch, …)`, so a DOM read
-    // cannot see it; the SSR markup keeps every declaration. Today's spinner writes
-    // `in oklch,` with no paren, so the bare word is the needle.
+    // cannot see it; the SSR markup keeps every declaration.
     const ssr = await busySignInMarkup()
     expect(ssr, 'control: the seed took').toContain('Checking…')
     expect(ssr).not.toMatch(/oklch/i)
@@ -564,5 +566,53 @@ describe('SignInForm wears the v2 field, buttons and alert (FL rows)', () => {
     const got = alerts()
     expect(got.length).toBeGreaterThan(0)
     for (const a of got) expect(a.style.color, a.id).toBe('var(--destructive)')
+  })
+
+  it('FL-13: every error state renders the destructive alert with its glyph', async () => {
+    configure()
+    const states: [string, () => Promise<void>][] = [
+      ['refusal', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(401, { error: 'invalid credentials' })))
+        await mountForm(STATE)
+        await fill('ada@okafor.ng', 'wrong')
+        await submit()
+        await flush()
+      }],
+      ['initialError with state', async () => { await mountForm(STATE, 'This account has no workspace yet.') }],
+      ['initialError without state', async () => { await mountForm(null, 'This account has no workspace yet.') }],
+    ]
+    expect(states.length).toBe(3)
+    for (const [label, drive] of states) {
+      vi.stubGlobal('fetch', vi.fn())
+      await drive()
+      const got = alerts()
+      expect(got.length, label).toBeGreaterThan(0)
+      for (const a of got) {
+        expect(a.style.color, label).toBe('var(--destructive)')
+        expect(a.querySelector('svg'), `${label}: the glyph stays (D-30)`).not.toBeNull()
+      }
+      await act(async () => root.unmount())
+      root = createRoot(container)
+    }
+  })
+
+  it('FL-14: the ring and error-border rules ship with the form in both branches, and an invalid field wears them', async () => {
+    configure()
+    const css = () => Array.from(container.querySelectorAll('style')).map((e) => e.textContent ?? '').join('\n')
+    await mountForm(STATE)
+    expect(container.querySelectorAll('style').length, 'control: the form renders a <style>').toBe(1)
+    expect(css()).toContain('.dm-input:focus, .dm-select:focus { outline: 2px solid var(--ring); outline-offset: 2px; }')
+    expect(css()).toContain('.dm-err { border-color: var(--destructive) !important; }')
+    expect(Array.from(container.querySelectorAll('input')).every((i) => i.classList.contains('dm-input'))).toBe(true)
+    expect(container.querySelectorAll('input').length, 'floor: two fields').toBe(2)
+    await submit()
+    expect(emailInput().className).toBe('dm-input dm-err')
+    expect(passwordInput().className).toBe('dm-input dm-err')
+    await act(async () => root.unmount())
+    root = createRoot(container)
+
+    await mountForm(null)
+    expect(container.querySelectorAll('style').length, 'control: the state-less branch renders a <style>').toBe(1)
+    expect(css()).toContain('outline: 2px solid var(--ring)')
   })
 })

@@ -289,6 +289,10 @@ describe('the demo form wears the v2 field, ring and buttons (FL rows)', () => {
       const tokens = classTokens(b)
       for (const want of ['ds-btn', 'ds-btn--primary', 'ds-btn--md']) expect(tokens, b).toContain(want)
       expect(tokens.some((t) => t.startsWith('v2-btn')), b).toBe(false)
+      // Layout comes from .ds-btn--md; an inline height or flex rule would override it.
+      const inline = Object.keys(declarations(attrOf(b.match(/<button\b[^>]*>/)![0], 'style')))
+      expect(inline, b).toContain('width')
+      for (const k of ['height', 'justify-content', 'gap', 'cursor', 'background', 'color']) expect(inline, `${k} ${b}`).not.toContain(k)
     }
   })
 
@@ -342,5 +346,107 @@ describe('the demo form wears the v2 field, ring and buttons (FL rows)', () => {
     }
     for (const s of stars) expect(declarations(s).color).toBe('var(--destructive)')
     expect(html).not.toContain('--status-red-text')
+  })
+})
+
+describe('the rest of the demo form surface follows § Design (FL-08, FL-09, FL-11, FL-12)', () => {
+  const popup = renderToStaticMarkup(createElement(DemoModal, { onClose: noop }))
+  const countOf = (html: string, needle: string) => html.split(needle).length - 1
+
+  it('FL-08: column gap, optional marks, carets, consent row, submit and caption', () => {
+    expect(countOf(popup, '<div style="display:flex;flex-direction:column;gap:14px">'), 'field column gap 14').toBe(1)
+    expect(countOf(popup, '<span style="color:var(--text-copy)">(opt.)</span>'), 'three (opt.) marks').toBe(3)
+    const carets = tagsOf(popup, 'span').filter((t) => attrOf(t, 'style').includes('pointer-events:none'))
+    expect(carets.length, 'floor: three carets').toBe(3)
+    for (const c of carets) expect(declarations(attrOf(c, 'style')).color).toBe('var(--muted-foreground)')
+
+    const label = tagsOf(popup, 'label').find((t) => attrOf(t, 'for') === 'dm-consent')
+    expect(label, 'the consent label exists').toBeDefined()
+    const l = declarations(attrOf(label!, 'style'))
+    expect([l.gap, l['font-size'], l['line-height'], l.color]).toEqual(['12px', '13px', '1.55', 'var(--foreground)'])
+    const box = tagsOf(popup, 'input').find((t) => attrOf(t, 'id') === 'dm-consent')!
+    const b = declarations(attrOf(box, 'style'))
+    expect([b.width, b.height, b['accent-color']]).toEqual(['18px', '18px', 'var(--primary)'])
+
+    const submit = tagsOf(popup, 'button').find((t) => attrOf(t, 'type') === 'submit')!
+    const s = declarations(attrOf(submit, 'style'))
+    expect([s.width, s['margin-top']]).toEqual(['100%', '24px'])
+    const caption = tagsOf(popup, 'p').find((t) => classTokens(t).includes('t-caption'))
+    expect(caption, 'the caption wears t-caption').toBeDefined()
+    expect(attrOf(caption!, 'style')).toBe('text-align:center;margin:14px 0 0')
+  })
+
+  it('FL-09: success and error panels share the v2 heading, copy and button', async () => {
+    const cases = [
+      { step: 'success', copy: 'You&#x27;re booked', button: 'dm-success-done', label: 'Done' },
+      { step: 'error', copy: 'Something went wrong', button: 'dm-error-retry', label: 'Try again' },
+    ] as const
+    for (const c of cases) {
+      const html = await popupSeed(3, c.step)
+      const h3 = tagsOf(html, 'h3')
+      expect(h3.length, `${c.step}: one heading`).toBe(1)
+      expect(html, c.step).toContain(`${c.copy}</h3>`)
+      expect(declarations(attrOf(h3[0], 'style')), c.step).toEqual({
+        'font-size': '24px',
+        'font-weight': '700',
+        'letter-spacing': 'var(--tracking-h3)',
+        margin: '4px 0 0',
+        color: 'var(--ink)',
+      })
+      const p = tagsOf(html, 'p')
+      expect(p.length, `${c.step}: one paragraph`).toBe(1)
+      expect(classTokens(p[0]), c.step).toContain('t-body-sm')
+      expect(declarations(attrOf(p[0], 'style')), c.step).toEqual({ 'line-height': '1.6', margin: '0 auto 8px', 'max-width': '360px' })
+      const button = tagsOf(html, 'button')
+      expect(button.length, `${c.step}: one button`).toBe(1)
+      expect(attrOf(button[0], 'id'), c.step).toBe(c.button)
+      expect(declarations(attrOf(button[0], 'style')), c.step).toEqual({ width: '100%' })
+      expect(buttonByText(html, c.label), c.step).toBeDefined()
+      expect(html, `${c.step}: 24px glyph in the tile`).toMatch(/<svg width="24" height="24"/)
+    }
+  })
+
+  it('FL-11: the heading slot follows V559-560, and no v1 colour or eyebrow class survives in any step', async () => {
+    const start = popup.indexOf('<form')
+    const slot = popup.slice(start, popup.indexOf('id="dm-name"'))
+    expect(slot.length, 'control: the slot was sliced').toBeGreaterThan(100)
+    expect(slot).toContain('<div style="margin-bottom:14px"><span class="t-eyebrow">BOOK A DEMO</span></div>')
+    expect(slot).not.toContain('class="eyebrow"')
+    expect(tagsOf(slot, 'h3').length).toBe(1)
+    expect(declarations(attrOf(tagsOf(slot, 'h3')[0], 'style'))).toEqual({
+      'font-size': '28px',
+      'line-height': '1.2',
+      'letter-spacing': 'var(--tracking-h3)',
+      'font-weight': '700',
+      margin: '0 0 8px',
+      color: 'var(--ink)',
+    })
+    const p = tagsOf(slot, 'p')
+    expect(p.length).toBe(1)
+    expect(classTokens(p[0])).toContain('t-body-sm')
+    expect(declarations(attrOf(p[0], 'style'))).toEqual({ margin: '0 0 20px', 'line-height': '1.6' })
+
+    const steps = [
+      popup,
+      await popupSeed(2, { name: 'E1', email: 'E2', company: 'E3', consent: 'E4' }),
+      await popupSeed(3, 'submitting'),
+      await popupSeed(3, 'success'),
+      await popupSeed(3, 'error'),
+    ]
+    expect(steps.length).toBe(5)
+    for (const html of steps) {
+      expect(html.length).toBeGreaterThan(500)
+      expect(html).toContain('var(--ink)')
+      expect(html).not.toMatch(/var\(--(bg-\d|line-\d|fg-\d|action|radius-input|status-red-text|text-on-dark)/)
+    }
+  })
+
+  it('FL-12: an invalid field carries dm-err beside dm-input; a valid one does not', async () => {
+    const html = await popupSeed(2, { name: 'E1', email: 'E2', company: 'E3' })
+    const cls = (id: string) => classTokens(tagsOf(html, 'input').find((t) => attrOf(t, 'id') === id)!)
+    for (const id of ['dm-name', 'dm-email', 'dm-company']) {
+      expect(cls(id), id).toEqual(['dm-input', 'dm-err'])
+    }
+    expect(classTokens(tagsOf(popup, 'input').find((t) => attrOf(t, 'id') === 'dm-name')!)).toEqual(['dm-input'])
   })
 })

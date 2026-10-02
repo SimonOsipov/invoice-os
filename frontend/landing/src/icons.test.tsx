@@ -1,5 +1,4 @@
-// RED specs, RESKIN-01-04: the Lucide glyph set, the four path helpers and the v2 mark.
-// Missing exports are read off the module namespace so they fail as assertions, not as tsc errors.
+// RESKIN-01-04: the Lucide glyph set, the four path helpers and the v2 mark.
 /// <reference types="node" />
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -61,7 +60,7 @@ describe('GLYPHS', () => {
     const contact = glyphs().contact
     expect(contact, 'GLYPHS.contact').toBeDefined()
     expect(contact.length).toBe(5)
-    const html = renderToStaticMarkup(createElement(Icon, { paths: [...contact] }))
+    const html = renderToStaticMarkup(createElement(Icon, { paths: contact }))
     expect(html.match(/<path\b/g)?.length).toBe(contact.length)
     for (const tag of ['<circle', '<rect', '<line', '<polyline']) expect(html).not.toContain(tag)
   })
@@ -120,14 +119,22 @@ describe('BrandMark', () => {
   const attr = (tag: string, name: string) => tag.match(new RegExp(`\\s${name}="([^"]*)"`))?.[1]
 
   it('IC-09 BrandMark renders the v2 DS mark as rounded decoration', () => {
-    const html = renderToStaticMarkup(createElement(BrandMark, { size: 22 }))
-    const img = html.match(/<img\b[^>]*>/)?.[0]
-    expect(img, `no <img> in ${html}`).toBeDefined()
-    expect.soft(attr(img as string, 'src')).toMatch(/v2\/assets\/mark\.png(\?.*)?$/)
-    expect.soft(attr(img as string, 'alt')).toBe('')
-    expect.soft(attr(img as string, 'aria-hidden')).toBe('true')
-    expect.soft(attr(img as string, 'width')).toBe('22')
-    expect.soft(attr(img as string, 'height')).toBe('22')
-    expect.soft(attr(img as string, 'style')).toContain('border-radius:var(--radius-md)')
+    const imgOf = (props: { size?: number }) => {
+      const html = renderToStaticMarkup(createElement(BrandMark, props))
+      const img = html.match(/<img\b[^>]*>/)?.[0]
+      expect(img, `no <img> in ${html}`).toBeDefined()
+      return img as string
+    }
+    const img = imgOf({ size: 19 })
+    expect.soft(attr(img, 'src')).toMatch(/v2\/assets\/mark\.png(\?.*)?$/)
+    expect.soft(attr(img, 'alt')).toBe('')
+    expect.soft(attr(img, 'aria-hidden')).toBe('true')
+    expect.soft(attr(img, 'width')).toBe('19')
+    expect.soft(attr(img, 'height')).toBe('19')
+    expect.soft(attr(img, 'style')).toContain('border-radius:var(--radius-md)')
+    expect.soft(attr(img, 'style')).toContain('display:block')
+    // the default size is 22 (Nav)
+    expect.soft(attr(imgOf({}), 'width')).toBe('22')
+    expect.soft(attr(imgOf({}), 'height')).toBe('22')
   })
 })

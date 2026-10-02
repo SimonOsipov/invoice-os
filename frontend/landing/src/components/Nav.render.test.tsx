@@ -1,0 +1,126 @@
+// SSR contract of the v2 header (RESKIN-02-01): frame tokens, Logo lockup, nav list, closed burger.
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { describe, expect, it } from 'vitest'
+
+import { GLYPHS } from '../icons'
+import { NAV_LINKS, Nav } from './Nav'
+
+const noop = () => {}
+const render = (props: { hrefPrefix?: string } = {}) =>
+  renderToStaticMarkup(createElement(Nav, { onSignIn: noop, onBookDemo: noop, ...props }))
+
+type Link = { label: string; href: string }
+
+// The v2 file's nav list (V851), retyped.
+const V2_NAV: Link[] = [
+  { label: 'The problem', href: '#problem' },
+  { label: 'The solution', href: '#solution' },
+  { label: 'Platform', href: '#platform' },
+  { label: "Who it's for", href: '#solutions' },
+  { label: 'Integrations', href: '#integrations' },
+]
+
+function isOrderedSubsequence(list: readonly Link[], of: readonly Link[]): boolean {
+  let at = 0
+  for (const item of list) {
+    while (at < of.length && !(of[at].label === item.label && of[at].href === item.href)) at++
+    if (at === of.length) return false
+    at++
+  }
+  return true
+}
+
+const decode = (s: string) => s.replace(/&#x27;/g, "'").replace(/&amp;/g, '&')
+
+function attrsOf(openTag: string): Record<string, string> {
+  return Object.fromEntries([...openTag.matchAll(/\s([^\s=>/]+)(?:="([^"]*)")?/g)].map((m) => [m[1], m[2] ?? '']))
+}
+
+function primaryNavLinks(html: string): Link[] {
+  const nav = /<nav\b[^>]*aria-label="Primary"[^>]*>([\s\S]*?)<\/nav>/.exec(html)
+  expect(nav, 'expected <nav aria-label="Primary">').not.toBeNull()
+  return [...nav![1].matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)].map((m) => ({
+    label: decode(m[2].replace(/<[^>]*>/g, '')),
+    href: attrsOf(m[1]).href,
+  }))
+}
+
+describe('HD-01 the header frame uses the v2 header tokens', () => {
+  it('the <header> style holds the sticky frame, the three header tokens and the 1px border', () => {
+    const open = /<header\b[^>]*>/.exec(render())?.[0]
+    expect(open, 'expected a <header> element').toBeDefined()
+    const style = attrsOf(open!).style
+    expect(style, 'the <header> has no inline style').toBeTruthy()
+    const decls = new Map(style.split(';').map((d) => [d.slice(0, d.indexOf(':')), d.slice(d.indexOf(':') + 1)]))
+
+    expect(decls.get('position'), 'position').toBe('sticky')
+    expect(decls.get('top'), 'top').toBe('0')
+    expect(decls.get('height'), 'height').toBe('var(--header-h)')
+    expect(decls.get('background'), 'background').toBe('var(--header-bg)')
+    expect(decls.get('backdrop-filter'), 'backdrop-filter').toBe('blur(var(--header-blur))')
+    expect(decls.get('border-bottom'), 'border-bottom').toBe('1px solid var(--header-border)')
+    expect(style, 'no raw oklch colour').not.toContain('oklch(')
+    expect(style, 'no calc() height').not.toContain('calc(')
+  })
+})
+
+describe('HD-02 the lockup is the DS Logo linking to #top', () => {
+  it.each([
+    ['', '#top'],
+    ['/', '/#top'],
+  ])('with hrefPrefix %j the first <a> is the Logo and its href is %s', (hrefPrefix, href) => {
+    const m = /<a\b([^>]*)>([\s\S]*?)<\/a>/.exec(render(hrefPrefix ? { hrefPrefix } : {}))
+    expect(m, 'expected an <a> in the header').not.toBeNull()
+    const attrs = attrsOf(m![1])
+    expect(attrs['aria-label'], 'lockup aria-label').toBe('ASComply Africa')
+    expect(attrs.href, 'lockup href').toBe(href)
+    expect(m![2], 'lockup holds the DS Logo').toContain('class="ds-logo"')
+    const img = /<img\b[^>]*>/.exec(m![2])?.[0]
+    expect(img, 'lockup holds the mark <img>').toBeDefined()
+    expect(attrsOf(img!).width, 'mark width').toBe('32')
+  })
+})
+
+describe('HD-03 NAV_LINKS is an in-order subsequence of V851 and renders in order', () => {
+  it('the list is non-empty, a subsequence of V2_NAV, and the Primary nav renders exactly it', () => {
+    expect(isOrderedSubsequence(V2_NAV, V2_NAV), 'control: V2_NAV is its own subsequence').toBe(true)
+    expect(isOrderedSubsequence([V2_NAV[0], V2_NAV[3]], V2_NAV), 'control: a gap-skipping pick is in order').toBe(true)
+    expect(
+      isOrderedSubsequence([V2_NAV[1], V2_NAV[0]], V2_NAV),
+      'control: [#solution, #problem] is out of order',
+    ).toBe(false)
+    expect(
+      isOrderedSubsequence([{ label: 'The Problem', href: '#problem' }], V2_NAV),
+      'control: a label-case change is not in V851',
+    ).toBe(false)
+
+    expect(NAV_LINKS.length, 'NAV_LINKS is empty').toBeGreaterThanOrEqual(1)
+    expect(
+      isOrderedSubsequence(
+        NAV_LINKS.map((l) => ({ label: l.label, href: l.href })),
+        V2_NAV,
+      ),
+      `NAV_LINKS is not an ordered subsequence of V851: ${JSON.stringify(NAV_LINKS)}`,
+    ).toBe(true)
+    expect(primaryNavLinks(render())).toEqual(NAV_LINKS.map((l) => ({ label: l.label, href: l.href })))
+  })
+})
+
+describe('HD-06 the closed burger names a menu that is not rendered', () => {
+  it('button.a-burger has the Menu label, aria-expanded false, a dangling aria-controls and the menu glyph', () => {
+    const html = render()
+    const tags = [...html.matchAll(/<button\b[^>]*>/g)].filter((m) =>
+      (attrsOf(m[0]).class ?? '').split(/\s+/).includes('a-burger'),
+    )
+    expect(tags.length, 'expected exactly one button.a-burger').toBe(1)
+    const attrs = attrsOf(tags[0][0])
+    expect(attrs['aria-label'], 'burger aria-label').toBe('Menu')
+    expect(attrs['aria-expanded'], 'burger aria-expanded').toBe('false')
+    expect(attrs['aria-controls'], 'burger aria-controls').toBeTruthy()
+    expect(html, 'the controlled menu must not be in the closed markup').not.toContain(`id="${attrs['aria-controls']}"`)
+
+    const inner = html.slice(tags[0].index!, html.indexOf('</button>', tags[0].index!))
+    expect([...inner.matchAll(/<path d="([^"]*)"/g)].map((m) => m[1])).toEqual([...GLYPHS.menu])
+  })
+})

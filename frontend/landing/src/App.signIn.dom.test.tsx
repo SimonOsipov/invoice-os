@@ -1,10 +1,9 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
-// F-2: the nav's "Explore the platform" control opens the sign-in modal specifically,
+// F-2: the nav's "Platform login" control opens the sign-in modal specifically,
 // without navigating away, and dismissing it restores the page. Same setup contract as
 // consentActions.mount.dom.test.tsx: production URL, an installed memory localStorage,
-// a console.error spy asserted empty. "Explore the platform" also renders in Hero
-// (Hero.tsx:42), so the control is reached scoped to `header`, never by an unscoped find.
+// a console.error spy asserted empty. The control is reached scoped to `header`.
 /// <reference types="node" />
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -14,7 +13,7 @@ import type { ConsentStore } from './consent'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const SIGN_IN_CTA = 'Explore the platform'
+const SIGN_IN_CTA = 'Platform login'
 const DIALOG = '[role="dialog"]'
 
 function memoryStorage(): ConsentStore {
@@ -78,13 +77,17 @@ describe('F-2: the sign-in control opens the sign-in modal', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('F2-b: exactly one "Explore the platform" in header, exactly two on the page', async () => {
+  it('F2-b / HD-16: exactly one "Platform login" in header and on the page, none reads "Explore the platform"', async () => {
     await mountApp()
     const header = document.querySelector('header')!
     const inHeader = Array.from(header.querySelectorAll('button')).filter((b) => b.textContent?.trim() === SIGN_IN_CTA)
     const onPage = Array.from(document.querySelectorAll('button')).filter((b) => b.textContent?.trim() === SIGN_IN_CTA)
+    const oldLabel = Array.from(header.querySelectorAll('button')).filter(
+      (b) => b.textContent?.trim() === 'Explore the platform',
+    )
     expect(inHeader.length, 'nav CTA missing or duplicated').toBe(1)
-    expect(onPage.length, 'expected nav + hero copies').toBe(2)
+    expect(onPage.length, 'expected the header copy only').toBe(1)
+    expect(oldLabel.length, 'a header button still reads "Explore the platform"').toBe(0)
     expect(consoleError).not.toHaveBeenCalled()
   })
 

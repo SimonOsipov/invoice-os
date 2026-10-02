@@ -13,7 +13,7 @@ import { activeNavHref } from './activeSection'
 // Annotated rather than inferred: without it the element type is a union of "has
 // shed" and "has no shed", and whether `l.shed` is even readable then depends on
 // TypeScript's object-literal normalisation rather than on anything stated here.
-const NAV_LINKS: { label: string; href: string; shed?: string }[] = [
+export const NAV_LINKS: { label: string; href: string; shed?: string }[] = [
   { label: 'The Problem', href: '#problem' },
   { label: 'The Solution', href: '#modules' },
   { label: 'Compliance', href: '#compliance', shed: 'ios-nav-shed-1080' },

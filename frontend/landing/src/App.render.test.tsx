@@ -148,3 +148,43 @@ describe('RESKIN-01-03 (AC 5): the four former --gradient-hero sites render the 
     expect(html).not.toMatch(/font-variation-settings/i)
   })
 })
+
+// Nav links resolve to the page's sections (AC 2). Each stub is planted in the helper control so a
+// vacuous pass is visible.
+const primaryNav = (html: string) => /<nav\b[^>]*aria-label="Primary"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? ''
+const navHashes = (html: string) => [...primaryNav(html).matchAll(/href="(#[^"]+)"/g)].map((m) => m[1])
+const navHrefs = (html: string) => [...primaryNav(html).matchAll(/href="([^"]*)"/g)].map((m) => m[1])
+
+/** In-page nav hrefs that do not resolve to exactly one `<section id>`. */
+function unresolvedNavLinks(html: string): string[] {
+  const owners = [...html.matchAll(/<([a-zA-Z][\w-]*)\b[^>]*\sid="([^"]*)"/g)]
+  return navHashes(html).filter((h) => {
+    const mine = owners.filter((o) => o[2] === h.slice(1))
+    return mine.length !== 1 || mine[0][1] !== 'section'
+  })
+}
+
+describe('AN-01 every nav in-page link resolves to one section', () => {
+  it('controls: the helper reports a ghost link, a duplicate id and a non-section owner', () => {
+    const nav = '<nav aria-label="Primary"><a href="#ghost">x</a></nav>'
+    expect(unresolvedNavLinks(nav)).toEqual(['#ghost'])
+    expect(unresolvedNavLinks(`${nav}<section id="ghost"></section>`), 'a resolving link is not reported').toEqual([])
+    expect(unresolvedNavLinks(`${nav}<section id="ghost"></section><section id="ghost"></section>`)).toEqual(['#ghost'])
+    expect(unresolvedNavLinks(`${nav}<div id="ghost"></div>`)).toEqual(['#ghost'])
+  })
+
+  it('at / each href="#x" in the Primary nav has exactly one id="x", on a <section', () => {
+    const html = renderAppAt('/')
+    expect(navHashes(html).length, 'expected in-page links in the Primary nav').toBeGreaterThanOrEqual(1)
+    expect(unresolvedNavLinks(html)).toEqual([])
+  })
+})
+
+describe('AN-02 on /privacy every nav link carries the prefix', () => {
+  it('each Primary nav href starts with /# and none with //', () => {
+    const hrefs = navHrefs(renderAppAt('/privacy'))
+    expect(hrefs.length, 'expected links in the Primary nav').toBeGreaterThanOrEqual(1)
+    expect(hrefs.filter((h) => !h.startsWith('/#'))).toEqual([])
+    expect(hrefs.filter((h) => h.startsWith('//'))).toEqual([])
+  })
+})

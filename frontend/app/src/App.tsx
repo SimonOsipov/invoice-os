@@ -2082,7 +2082,7 @@ export default function App() {
   //
   // replaceState, not a navigation: it must not add a history entry the back button can
   // bounce off. Reads the URL directly rather than depending on render state — this is the
-  // only writer, and it runs once. Same treatment as ops-console/src/App.tsx.
+  // only writer, and it runs once.
   // `auth` and `handoff` are one-shot too, and are stripped whether used or not. A `persona`
   // suppressed by a live hand-off session is stripped as well.
   useEffect(() => {

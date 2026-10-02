@@ -143,7 +143,7 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
             SUPPORT ENGINEER · L2
           </div>
         </div>
-        {/* Sign out: revokes the session server-side, clears it, then leaves (signOutConsole). */}
+        {/* Sign out: clears the session, then leaves (signOutConsole). */}
         <button
           type="button"
           onClick={signOut}

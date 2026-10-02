@@ -101,6 +101,7 @@ export function sentryOptions(c: MonitoringConfig): BrowserOptions | null {
     dataCollection: { userInfo: false, cookies: false, httpHeaders: false, httpBodies: [], urlQueryParams: false },
     enhanceFetchErrorMessages: false,
     integrations: (defaults) => [...defaults.filter((i) => i.name !== 'BrowserSession' && i.name !== 'CultureContext'), ...tracing],
+    // ceiling: no allowUrls/denyUrls, so third-party gtag.js errors (loaded once analytics is allowed) spend quota; add denyUrls for googletagmanager.com if they show in asc-frontend
     beforeSend: (e, h) => (dropEvent(e, h) ? null : nameErrorTransaction(scrubEvent(scrubApiError(e, h)), c.routeName)),
     beforeSendTransaction: scrubTransaction,
     beforeSendSpan: scrubSpan,

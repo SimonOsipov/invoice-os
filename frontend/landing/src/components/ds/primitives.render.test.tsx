@@ -152,12 +152,13 @@ describe('Button', () => {
     expect('disabled' in full.attrs, 'an anchor carries no disabled attribute').toBe(false)
     expect('aria-disabled' in full.attrs, 'an enabled link is not aria-disabled').toBe(false)
 
-    const off = rootTag(await render('Button', 'Button', { href: '#x', disabled: true, 'aria-label': 'Open', className: 'extra' }, 'Go'))
+    const off = rootTag(await render('Button', 'Button', { href: '#x', disabled: true, 'aria-label': 'Open', className: 'extra', style: { width: '100%' } }, 'Go'))
     expect(off.name, 'a disabled link stays an anchor').toBe('a')
     expect(off.attrs, 'a disabled link is inert, aria-disabled and styled by .ds-btn--disabled').toEqual({
       class: 'ds-btn ds-btn--primary ds-btn--md ds-btn--disabled extra',
       'aria-disabled': 'true',
       'aria-label': 'Open',
+      style: 'width:100%',
     })
   })
 

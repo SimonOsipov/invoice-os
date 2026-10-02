@@ -18,9 +18,12 @@ const (
 	symSignedString = "github.com/golang-jwt/jwt/v4.(*Token).SignedString"
 	symECDSASign    = "github.com/golang-jwt/jwt/v4.(*SigningMethodECDSA).Sign"
 	symVerify       = "github.com/SimonOsipov/invoice-os/internal/platform/auth.(*Verifier).Verify"
+	// The linker inlines gateway.MockStaffHandler into main, so nm names its closure under main.
+	symMockStaff  = "main.main.mockStaffRoute.MockStaffHandler.func2"
+	symGrantStaff = "github.com/SimonOsipov/invoice-os/internal/platform/db.GrantStaff"
 )
 
-var mintSymbols = []string{symMint, symNewIssuer, symSignedString, symECDSASign}
+var mintSymbols = []string{symMint, symNewIssuer, symSignedString, symECDSASign, symMockStaff, symGrantStaff}
 
 // gatewayBuilds counts local builds, so a test can prove an override never falls back to one.
 var gatewayBuilds atomic.Int32
@@ -119,8 +122,8 @@ func TestProductionGatewayBinaryCannotMint(t *testing.T) {
 	if !hasSymbol(lines, symVerify) {
 		t.Fatalf("%s lacks the control symbol %s; the absence checks below prove nothing", bin, symVerify)
 	}
-	if len(mintSymbols) != 4 {
-		t.Fatalf("mintSymbols has %d needle(s), want 4", len(mintSymbols))
+	if len(mintSymbols) != 6 {
+		t.Fatalf("mintSymbols has %d needle(s), want 6", len(mintSymbols))
 	}
 	for _, sym := range mintSymbols {
 		for _, l := range lines {
@@ -139,8 +142,8 @@ func TestMockIssuerGatewayBinaryCanMint(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := nmLines(t, bin)
-	if len(mintSymbols) != 4 {
-		t.Fatalf("mintSymbols has %d needle(s), want 4", len(mintSymbols))
+	if len(mintSymbols) != 6 {
+		t.Fatalf("mintSymbols has %d needle(s), want 6", len(mintSymbols))
 	}
 	for _, sym := range mintSymbols {
 		if !hasSymbol(lines, sym) {

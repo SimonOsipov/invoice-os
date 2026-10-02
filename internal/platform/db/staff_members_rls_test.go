@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pressly/goose/v3"
 
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/migrations"
 )
 
@@ -218,6 +219,32 @@ func TestRLS_StaffMembersOwnerGrantIsIdempotent(t *testing.T) {
 	_, err := h.mig.Exec(ctx, `INSERT INTO public.staff_members (user_id) VALUES ($1)`, userID)
 	if code := pgCode(err); code != "23505" {
 		t.Errorf("plain duplicate insert: SQLSTATE %q, want 23505: %v", code, err)
+	}
+}
+
+// AUTH-11-03 AC-4. Guard: fails if GrantStaff drops ON CONFLICT or writes a second row.
+func TestRLS_GrantStaffIsIdempotent(t *testing.T) {
+	h := requireHarness(t)
+	reapplyStaffMigration(t)
+	ctx := context.Background()
+	userID := uuid.New()
+	t.Cleanup(func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM public.staff_members WHERE user_id = $1`, userID)
+	})
+	count := func() int {
+		return mustCount(t, h.super, `SELECT count(*) FROM public.staff_members WHERE user_id = $1`, userID)
+	}
+	if n := count(); n != 0 {
+		t.Fatalf("staff_members rows for the user before the grant = %d, want 0", n)
+	}
+
+	for i := 1; i <= 2; i++ {
+		if err := db.GrantStaff(ctx, os.Getenv("DATABASE_MIGRATION_URL"), userID); err != nil {
+			t.Fatalf("GrantStaff call %d: %v", i, err)
+		}
+		if n := count(); n != 1 {
+			t.Errorf("staff_members rows for the user after call %d = %d, want 1", i, n)
+		}
 	}
 }
 

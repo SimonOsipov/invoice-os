@@ -27,15 +27,16 @@ for (const target of TARGETS) {
       const script = await request.get(`${base}${path}`)
       expect(script.status(), path).toBe(200)
       expect(script.headers()['content-type'], path).toContain('javascript')
-      expect(await script.text(), `${path} still names its source map`).not.toContain('sourceMappingURL')
+      expect((await script.text()).includes('sourceMappingURL'), `${path} still names its source map`).toBe(false)
       const map = await request.get(`${base}${path}.map`)
       expect(map.status(), `${path}.map`).toBe(404)
     }
 
     const entry = html.match(ENTRY_SRC)?.[1]
     expect(entry, 'index.html names no module entry script').toBeTruthy()
+    // Booleans, not toContain: a failed toContain prints the whole minified bundle.
     const entryBody = await (await request.get(`${base}${entry}`)).text()
-    expect(entryBody, `${entry} carries no Sentry debug id`).toContain('sentry-dbid-')
+    expect(entryBody.includes('sentry-dbid-'), `${entry} carries no Sentry debug id`).toBe(true)
 
     // Controls: the fallback still serves index.html, so the 404s above come from the .map rule.
     const fallback = await request.get(`${base}/assets/sentry08-no-such-file.js`)

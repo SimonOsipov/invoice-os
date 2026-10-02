@@ -19,8 +19,8 @@ import { resolveTarget } from './targets'
 
 // The four landing personas (frontend/landing/src/auth.ts's LandingPersona.id). These ids are WIRE VALUES:
 // each one is the `?persona=` param the landing hands off with, and the app's session gate
-// checks it verbatim. Not to be conflated with frontend/app/src/auth.ts:14's
-// unrelated, two-member `PersonaId` (firm | inhouse) — different package, different job.
+// checks it verbatim. Not to be conflated with frontend/app/src/auth.ts's unrelated,
+// two-member `PersonaId` (firm | inhouse) — different package, different job.
 export type PersonaId = 'developer' | 'support' | 'firm' | 'inhouse'
 
 // The three deployed SPAs a persona can be routed to. Mirrors LandingPersona.target

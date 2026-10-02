@@ -140,7 +140,8 @@ The `app` SPA, and the landing sign-in form that hands off to it or to a console
 only places a browser test can prove the **stack** integrates end to end. A console is entered
 the way a staff member enters it: the smoke specs seed a real staff session
 (`seedStaffSession`, `e2e/staffSession.ts`, a staff account from `provisionStaffAccount`),
-and the topology journeys in `auth.spec.ts` sign in through landing. The consoles and the rest
+and the first topology journey in `auth.spec.ts` signs in through landing (its renewal and
+sign-out journeys seed a session). The consoles and the rest
 of the landing page carry functional coverage of their own
 client-side behaviour because a browser is the only place it can be observed: every
 frontend vitest project defaults to `node`, and the files that opt into jsdom per-file

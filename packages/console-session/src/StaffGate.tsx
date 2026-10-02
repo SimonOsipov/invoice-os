@@ -1,4 +1,4 @@
-// The consoles call no backend and render mock data: this gate makes the door right, and nothing server-side enforces it.
+// The consoles render mock data: this gate makes the door right, and nothing server-side enforces it.
 // ceiling: unset VITE_LANDING_URL renders with no gate; make that fail closed when a console reads real data.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 

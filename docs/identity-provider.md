@@ -962,7 +962,8 @@ no key, so `TestIdP_TokenShapeMatchesGolden` stays valid.
 | no | has `staff` (any JSON value) | `staff` removed, other keys kept |
 | no | no `staff` | unchanged (no key added) |
 | no | not an object | unchanged |
-| `user_id` not a UUID, `null` or absent | | the existing behaviour (`TestRLS_CustomAccessTokenHookMalformedUserID`) |
+| `user_id` not a UUID | | the hook call fails (SQLSTATE 22P02) and GoTrue refuses the token (`TestRLS_CustomAccessTokenHookMalformedUserID`) |
+| `user_id` `null` or absent | has `staff` | no row matches: `staff` removed, other keys kept (`TestRLS_CustomAccessTokenHookStripsStaffForANullOrAbsentUserID`) |
 
 `ceiling:` a staff user whose incoming `app_metadata` is not an object loses a projected
 tenant. GoTrue always sends an object. A leaked `supabase_auth_admin` DSN can call the hook and
@@ -1015,9 +1016,9 @@ Both consoles (`ops-console`, `support-console`) render one shared gate, `StaffG
 `support`). A console opens only for a session the gateway has just renewed or exchanged and
 whose token carries `app_metadata.staff === true`.
 
-**Honest limit.** The consoles call no backend and render mock data compiled into a public
-bundle. The gate makes the door right, and nothing server-side enforces staff access to
-console data, because there is none. A console that reads real data must check the staff claim
+**Honest limit.** The consoles render mock data compiled into a public bundle, and their
+only gateway calls are the session's exchange, renewal and sign-out. The gate makes the door
+right, and nothing server-side enforces staff access to console data, because there is none. A console that reads real data must check the staff claim
 on the server. The same words head `packages/console-session/src/StaffGate.tsx`.
 
 **The record.** `localStorage[<storageKey>] = {"v":2,"token":"<access>","refresh_token":"<refresh>"}`
@@ -1029,7 +1030,7 @@ console's own origin, in the app's shape.
 **Boot order.** The gate renders nothing until one of these steps ends it.
 1. Standalone (`VITE_LANDING_URL` unset): render the console. No storage read, no request.
 2. `?auth=start`: mint a fresh state and go to `<landing>/?state=<s>&console=<target>&signin=ready`.
-3. `?handoff=<code>` (exactly one parameter, 43 base64url characters): strip it at mount, then,
+3. `?handoff=<code>` (exactly one `handoff` parameter, 43 base64url characters): strip it at mount, then,
    with a live state in this tab, `POST /auth/exchange`. A staff token is stored and the console
    renders. A token without the claim is discarded unstored and the visitor goes to landing with
    `signin=not-staff`. Any failure goes to landing with `signin=failed` and leaves a stored
@@ -1042,8 +1043,8 @@ console's own origin, in the app's shape.
 5. Nothing stored: the front door, `<landing>/?state=<s>&console=<target>`. The state is reused
    when minted under 60 s ago.
 
-A landing URL with no `VITE_GATEWAY_URL` cannot run steps 3 and 4: a code leaves with
-`signin=failed`, otherwise the gate leaves by the front door. A console with no gateway URL
+With `VITE_LANDING_URL` set and `VITE_GATEWAY_URL` unset, steps 3 and 4 cannot run: a code
+leaves with `signin=failed`, otherwise the gate leaves by the front door. A console with no gateway URL
 therefore opens for nobody.
 
 **What the renewal proves.** A load asks the gateway, not the browser, whether the session is
@@ -1085,9 +1086,10 @@ because both consoles are mock data in a public bundle, every deployed console s
 redirects to the landing page". **The first console that reads real data must make the gate
 fail closed when `VITE_LANDING_URL` is unset**, and must check the staff claim on the server.
 
-**CORS.** The gateway's one origin list wraps `/api/` and every `/auth/` route, so console U2
-lets browser JavaScript on the two console origins call all of them, not only exchange, refresh
-and sign-out. Every `/api/` call still needs a verified bearer, the session check and RLS; the
+**CORS.** The gateway's one origin list wraps `/api/`, `/auth/sign-in`, `/auth/exchange`,
+`/auth/refresh` and `/auth/sign-out`, so console U2 lets browser JavaScript on the two console
+origins call all of them, not only exchange, refresh and sign-out. `/auth/register` and
+`/auth/verify` are not wrapped. Every `/api/` call still needs a verified bearer, the session check and RLS; the
 console origins serve only our own bundle, and the same token works from `curl`.
 
 Guarded by the package's `boot.test.ts`, `StaffGate.dom.test.tsx`, `signOut.test.ts`,
@@ -1293,8 +1295,8 @@ railway variables -p "$P" -e "$E" -s gateway --json | jq -r '.CORS_ALLOWED_ORIGI
 # expected: https://app.ascomply.com,https://www.ascomply.com,https://ops.ascomply.com,https://sup.ascomply.com
 ```
 
-The CORS layer is global, so this also lets browser calls from the two console origins reach
-`/api/` and every `/auth/` route (Console sessions, CORS).
+This also lets browser calls from the two console origins reach `/api/` and the sign-in,
+exchange, refresh and sign-out routes (Console sessions, CORS).
 
 **Deploy the writes** as in "Opening registration".
 

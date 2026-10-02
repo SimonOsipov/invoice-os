@@ -41,7 +41,7 @@ rc_run() {  # $1 = service name, $2 = output prefix; reads RC_TENANT and RC_CUTO
 
 ## 1. What exists
 
-- **Point-in-time recovery (PITR):** state at the time of writing is `enabled:false` until the enable in section 2 is run. After it, this line holds the enable date, the `Postgres` `latestDeployment.id` after the restart, and the `pitr status --json` result. Current state: `railway postgres -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s 98723af0-50ca-42a4-a56a-3e0438b9ce8a pitr status --json`.
+- **Point-in-time recovery (PITR):** enabled on 2026-10-02 at about 18:11 UTC by the user (`pitr enable --json`: `enabled` true, `bucketWired` true, `isHaCluster` false). Bucket: `Postgres-PITR` (created by the enable; name per Railway docs, not read back). The restart took `Postgres` deployment `5d63c4d5-cc7a-4169-86cc-66e6ddeb33ea` from `DEPLOYING` at 18:11:43 to `SUCCESS` at 18:12:19; it is the post-enable `latestDeployment.id`. First base backup: pgbackrest label `20261002-181212F`, full, 18:12:12Z to 18:13:12Z, LSN start `0/35000028`, stop `0/350003E0`. The restore range starts at 18:13:12Z. `pg_stat_archiver` showed `archived_count` 3 and `failed_count` 0, `archive_mode` on, and `pitr status` showed `archiverHealthy` true. `/healthz/fleet` was ok with all 11 services up. Current state: `railway postgres -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s 98723af0-50ca-42a4-a56a-3e0438b9ce8a pitr status --json`.
 - **Backup schedule:** none. On 2026-10-02, `railway postgres -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s 98723af0-50ca-42a4-a56a-3e0438b9ce8a pitr schedule list` printed `No backup schedule configured for Postgres.`, and with `--json` printed `[]`.
 - **Manual backup:** one, `Pre-Security-Patch Backup`, id `c3db8156-43c2-4f8e-b3af-4e128e033d0d`, taken 2026-08-22, expired 2026-09-21 (`referencedMB` 248). List: `railway postgres -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s 98723af0-50ca-42a4-a56a-3e0438b9ce8a --json pitr backup list`. It is a volume backup, not a PITR source.
 - **Never drill with a volume restore.** `pitr backup restore` and a restore from the dashboard Backups tab overwrite the selected database in place: a new volume replaces production's volume. That is a production event, not a drill. Use only `pitr restore` (section 3), which creates a sibling service and never touches the source.
@@ -73,7 +73,7 @@ Health reads, in this order:
 railway postgres -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s 98723af0-50ca-42a4-a56a-3e0438b9ce8a pitr status --json
 railway service status -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s Postgres --json
 rsql Postgres 'select archived_count, failed_count, last_failed_wal from pg_stat_archiver'
-railway ssh -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s Postgres 'pgbackrest --stanza=main info --output=json'
+railway ssh -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s Postgres "su postgres -s /bin/sh -c 'pgbackrest --stanza=main info --output=json'"
 curl -fsS https://api.ascomply.com/healthz/fleet
 ```
 
@@ -107,7 +107,7 @@ Afterwards, record the `Postgres` `latestDeployment.id` (the enable changed it) 
 4. Read the stop LSN of the newest base backup (`backup[-1].lsn.stop`):
 
    ```sh
-   railway ssh -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s Postgres 'pgbackrest --stanza=main info --output=json'
+   railway ssh -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s Postgres "su postgres -s /bin/sh -c 'pgbackrest --stanza=main info --output=json'"
    ```
 
 5. Set `T = range_end - 2 min`, in RFC 3339 with `Z`. A target past the last archived WAL can fail with `recovery ended before configured recovery target was reached`.

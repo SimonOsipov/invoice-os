@@ -62,31 +62,39 @@ func staffMigrationProvider(t *testing.T) *goose.Provider {
 	return provider
 }
 
-// staleStaffTable clears a table that a broken Down left behind.
-const staleStaffTable = `DROP TABLE IF EXISTS public.staff_members`
-
 // reapplyMigration rolls the migration matching glob back and forward from the embedded SQL, so a
-// test reads the shipped file and not a database migrated earlier. afterDown runs between the two.
-func reapplyMigration(t *testing.T, glob, afterDown string) {
+// test reads the shipped file and not a database migrated earlier.
+func reapplyMigration(t *testing.T, glob string) {
 	t.Helper()
 	ctx := context.Background()
 	provider, version := staffMigrationProvider(t), migrationVersion(t, glob)
 	if _, err := provider.ApplyVersion(ctx, version, false); err != nil && !errors.Is(err, goose.ErrNotApplied) {
 		t.Fatalf("roll back %s: %v", glob, err)
 	}
-	if afterDown != "" {
-		if _, err := h.super.Exec(ctx, afterDown); err != nil {
-			t.Fatalf("clear after rolling back %s: %v", glob, err)
-		}
-	}
 	if _, err := provider.ApplyVersion(ctx, version, true); err != nil {
 		t.Fatalf("apply %s: %v", glob, err)
 	}
 }
 
+// resetStaffMigration drops the table, forgets the ledger row and applies the Up again. It does not
+// run the Down, so a Down or Up left broken by an earlier run cannot block it.
+func resetStaffMigration(t *testing.T, provider *goose.Provider, version int64) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := h.super.Exec(ctx, `DROP TABLE IF EXISTS public.staff_members`); err != nil {
+		t.Fatalf("drop staff_members: %v", err)
+	}
+	if _, err := h.super.Exec(ctx, `DELETE FROM goose_db_version WHERE version_id = $1`, version); err != nil {
+		t.Fatalf("forget the staff migration: %v", err)
+	}
+	if _, err := provider.ApplyVersion(ctx, version, true); err != nil {
+		t.Fatalf("apply the staff migration: %v", err)
+	}
+}
+
 func reapplyStaffMigration(t *testing.T) {
 	t.Helper()
-	reapplyMigration(t, "*_staff_members.sql", staleStaffTable)
+	resetStaffMigration(t, staffMigrationProvider(t), staffMigrationVersion(t))
 }
 
 // AC-1. Guard: fails if a grant to one of these roles is added.
@@ -355,7 +363,7 @@ func TestRLS_CustomAccessTokenHookAddsNoKeyForANonStaffUser(t *testing.T) {
 func TestRLS_ProvisionWorkspaceGrantsNoStaff(t *testing.T) {
 	h := requireHarness(t)
 	reapplyStaffMigration(t)
-	reapplyMigration(t, "*_provision_workspace.sql", "")
+	reapplyMigration(t, "*_provision_workspace.sql")
 	auth := authAdminPool(t)
 	ctx := context.Background()
 
@@ -440,12 +448,7 @@ func TestRLS_StaffMembersDownRestoresTheTenantOnlyHook(t *testing.T) {
 	staffApplied := true
 	t.Cleanup(func() {
 		if !staffApplied {
-			if _, err := h.super.Exec(context.Background(), staleStaffTable); err != nil {
-				t.Errorf("clear the staff table: %v", err)
-			}
-			if _, err := provider.ApplyVersion(context.Background(), version, true); err != nil {
-				t.Errorf("restore the staff migration: %v", err)
-			}
+			resetStaffMigration(t, provider, version)
 		}
 	})
 	if _, err := provider.ApplyVersion(ctx, version, false); err != nil {

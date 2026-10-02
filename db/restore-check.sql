@@ -21,7 +21,7 @@ BEGIN
   IF v_tenant !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
     RAISE EXCEPTION 'restore-check: restore_check.tenant is not a UUID';
   END IF;
-  IF v_cutoff !~ '(Z|z|[+-][0-9]{2}(:?[0-9]{2})?)$' THEN
+  IF v_cutoff !~ '[0-9]{2}:[0-9]{2}(:[0-9]{2}([.][0-9]+)?)?[[:space:]]*(Z|z|[+-][0-9]{2}(:?[0-9]{2})?)$' THEN
     RAISE EXCEPTION 'restore-check: restore_check.cutoff needs an explicit offset (Z or +hh:mm)';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM tenants WHERE id = v_tenant::uuid) THEN

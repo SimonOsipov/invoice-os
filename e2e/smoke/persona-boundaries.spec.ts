@@ -8,22 +8,15 @@ import { collectErrors, expectRefused } from '../personaSession'
 // a fifth persona adds its three refusal rows here automatically, and G5 (personas.test.ts)
 // keeps the matrix itself complete.
 //
-// ROUTING, NOT AUTHORISATION. Both console gates say so about themselves in prose —
-// frontend/ops-console/src/session.ts:8-12 ("Deliberately NOT access control, and not a
-// security boundary... a fabricated localStorage entry is enough to get in") and
-// frontend/support-console/src/session.ts:5-9, which makes the same call for the same
-// reason. Neither console has a backend to protect; both are mock data (data.tsx). A
-// fabricated localStorage entry still gets in, and nothing here would notice. Real
-// enforcement is a verified token (M7) on top of real identities (M8). A GREEN MATRIX IS
-// NOT AN ACCESS-CONTROL PROOF — it is a proof about where the browser ends up.
+// A GREEN MATRIX IS NOT AN ACCESS-CONTROL PROOF — it is a proof about where the browser
+// ends up.
 //
 // WHAT IS NEW HERE. Three specs already assert a redirect off a protected origin:
 // smoke.spec.ts:66-75 (ops-console and support-console) and topology/auth.spec.ts:133-138
 // (the app). All three visit a BARE url with no `?persona=` at all. This spec makes the
 // claim none of them makes: a FOREIGN PERSONA PARAM IS NOT A CREDENTIAL — a present-but-
 // wrong `?persona=` is refused exactly as an absent one is. Same code path in the product
-// (operatorFromParam returns null for absent and for foreign alike; shouldAutoSignIn is
-// false for both), different precondition, and only one of the two was pinned before.
+// (shouldAutoSignIn is false for both), different precondition, and only one of the two was pinned before.
 //
 // THE POSITIVE CONTROL. A redirect assertion alone would pass against a destination that
 // renders for nobody, so this file does not stand on its own: smoke/apps.ts in THIS suite
@@ -40,13 +33,12 @@ import { collectErrors, expectRefused } from '../personaSession'
 // resolves the destination document is gone, so a `not.toBeVisible()` on a destination
 // discriminator would run against the LANDING dom and could only ever fail if landing grew
 // an h1 "Overview". Such an assertion is vacuous by construction and is deliberately absent
-// here. That property is held instead by the three render gates, each of which returns null
-// before its effect matters: frontend/app/src/App.tsx:889,
-// frontend/ops-console/src/App.tsx:50-52, frontend/support-console/src/App.tsx:51-53.
+// here. That property is held instead by the app's render gate, which returns null
+// before its effect matters: frontend/app/src/App.tsx:889.
 //
-// WHY ONLY THE 8 REFUSALS ([refusals-only-in-the-matrix]). The matrix's four accept cells
-// are covered where they belong and are not re-driven here: the two console accepts by
-// smoke/apps.ts and app-firm by topology/auth.spec.ts, both green today; app-inhouse is
+// WHY ONLY THE 10 REFUSALS ([refusals-only-in-the-matrix]). The matrix's two accept cells
+// are covered where they belong and are not re-driven here: app-firm by
+// topology/auth.spec.ts, green today; app-inhouse is
 // PERSONA-01-03's, still to come. G5 (personas.test.ts) is what keeps the matrix itself
 // complete meanwhile — it pins all 12 rows whether or not a spec drives them.
 //
@@ -62,7 +54,7 @@ for (const { persona, destination } of BOUNDARY_MATRIX.filter((c) => c.verdict =
   test(`${destination}: refuses the ${persona} persona and returns it to the landing page`, async ({ page }) => {
     // Attached BEFORE the navigation inside expectRefused, so load-time errors are caught.
     // Each test gets Playwright's default fresh context, which is the mechanism that keeps
-    // resolveBootSession() / loadOpsSession() empty — no session from another cell can leak
+    // resolveBootSession() empty — no session from another cell can leak
     // in and turn a refusal into an accept.
     const errors = collectErrors(page)
 

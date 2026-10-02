@@ -162,8 +162,7 @@ export function clearSession(): void {
 // The "stale leftover" case it used to guard against is now closed at the source: App.tsx
 // strips the param the moment it is consumed, so a reload or Back never re-runs this. Both
 // halves are load-bearing — without the strip, this rule would turn `?persona=firm` sitting
-// in history into a credential-free re-entry that survives Sign out. Matches the rule the
-// two consoles already use (ops-console/src/session.ts resolveOpsBootSession).
+// in history into a credential-free re-entry that survives Sign out.
 export function shouldAutoSignIn(personaParam: string | null): boolean {
   return personaParam === 'firm' || personaParam === 'inhouse'
 }

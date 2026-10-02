@@ -185,28 +185,24 @@ export function signInUrl(id: PersonaId): string {
   return `${base}?persona=${id}`
 }
 
-// Whether a destination's session gate lets this persona in. Each persona opens exactly one
-// destination, so this is a lookup against the registry rather than a second list of pairs.
-// Mirrors the three live product gates:
-//   app     -> shouldAutoSignIn        (frontend/app/src/lib/session.ts:110-111)
-//   ops     -> OPS_OPERATORS           (frontend/ops-console/src/session.ts:31-33)
-//   support -> SUPPORT_OPERATORS       (frontend/support-console/src/session.ts:26-28)
+// Whether a destination's gate lets this persona in. Only the app does, via shouldAutoSignIn
+// (frontend/app/src/lib/session.ts); the consoles take a staff session, not a persona.
 export function accepts(destination: Destination, id: PersonaId): boolean {
-  return PERSONAS[id].destination === destination
+  return destination === 'app' && PERSONAS[id].destination === 'app'
 }
 
-// Every (persona, destination) pair and what the destination's gate does with it: 4 accepts,
-// 8 refuses. HAND-WRITTEN on purpose. Derived from accepts() it would be 12-long and
+// Every (persona, destination) pair and what the destination's gate does with it: 2 accepts,
+// 10 refuses. HAND-WRITTEN on purpose. Derived from accepts() it would be 12-long and
 // duplicate-free by construction, so G5 would assert a tautology; written out, adding a
 // fifth persona leaves the matrix at 12 rows and turns G5 red until all three of its new
 // pairs have been stated. G5 also cross-checks every row against accepts().
 export const BOUNDARY_MATRIX: readonly { persona: PersonaId; destination: Destination; verdict: 'accepts' | 'refuses' }[] = [
   { persona: 'developer', destination: 'app', verdict: 'refuses' },
-  { persona: 'developer', destination: 'ops', verdict: 'accepts' },
+  { persona: 'developer', destination: 'ops', verdict: 'refuses' },
   { persona: 'developer', destination: 'support', verdict: 'refuses' },
   { persona: 'support', destination: 'app', verdict: 'refuses' },
   { persona: 'support', destination: 'ops', verdict: 'refuses' },
-  { persona: 'support', destination: 'support', verdict: 'accepts' },
+  { persona: 'support', destination: 'support', verdict: 'refuses' },
   { persona: 'firm', destination: 'app', verdict: 'accepts' },
   { persona: 'firm', destination: 'ops', verdict: 'refuses' },
   { persona: 'firm', destination: 'support', verdict: 'refuses' },

@@ -6,10 +6,8 @@ import { collectErrors, signInAs } from '../personaSession'
 // task-274). Persona `developer` -> destination `ops`.
 //
 // MOCK-ONLY, AND THAT LIMITS WHAT A GREEN RUN MEANS. This console has no backend: a grep
-// for fetch/XMLHttpRequest/axios/WebSocket across frontend/ops-console/src returns nothing,
-// and its own session module says so in prose (frontend/ops-console/src/session.ts:8-12 —
-// "Deliberately NOT access control... a fabricated localStorage entry is enough to get
-// in"). Every assertion below pins this console's CLIENT-SIDE BEHAVIOUR over the fixtures
+// for fetch/XMLHttpRequest/axios/WebSocket across frontend/ops-console/src returns nothing.
+// Every assertion below pins this console's CLIENT-SIDE BEHAVIOUR over the fixtures
 // in src/data.tsx. It is not a contract test and says nothing about any server. Counts are
 // read from the rendered UI rather than hardcoded, so a seed edit does not break these —
 // but the entities are fiction, and when real endpoints land (M7: operator identity + a

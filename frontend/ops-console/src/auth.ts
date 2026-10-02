@@ -1,5 +1,8 @@
-// Sign-out target for the ops console.
-//
+import { gatewayBase } from '@invoice-os/api-client'
+import { signOutConsole } from '@invoice-os/console-session'
+
+export const SESSION_KEY = 'invoice-os.ops-session'
+
 // Mirrors the app's landingBase() (frontend/app/src/auth.ts) deliberately, including
 // the null-when-unset contract: each PR deploys to its own ephemeral Railway
 // environment with an unpredictable domain suffix, so a hardcoded fallback would
@@ -14,5 +17,4 @@ export const landingBase = (): string | null => {
   return v || null
 }
 
-// stub: AUTH-11-05 wires this to signOutConsole
-export const signOut = async (): Promise<void> => {}
+export const signOut = () => signOutConsole({ storageKey: SESSION_KEY, gateway: gatewayBase(), landing: landingBase() })

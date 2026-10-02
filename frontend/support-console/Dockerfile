@@ -16,6 +16,8 @@ RUN pnpm install --frozen-lockfile
 # build and the smoke suite are unaffected.
 ARG VITE_LANDING_URL
 ENV VITE_LANDING_URL=$VITE_LANDING_URL
+ARG VITE_GATEWAY_URL
+ENV VITE_GATEWAY_URL=$VITE_GATEWAY_URL
 # Empty means Sentry off; `set-sentry-off` blanks it in forks.
 ARG VITE_SENTRY_DSN
 ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN

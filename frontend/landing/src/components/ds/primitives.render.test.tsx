@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { createElement, type ComponentType, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { LANDING_SRC, classSelectors, stripSource } from '../../cssScan.test.util'
+import { LANDING_SRC, parseRules, selectorParts, stripSource } from '../../cssScan.test.util'
 import { GLYPHS } from '../../icons'
 
 type Props = Record<string, unknown>
@@ -305,7 +305,7 @@ describe('Logo', () => {
 })
 
 describe('class contract with ds.css', () => {
-  it('DS-15 every ds- class a primitive renders has a rule in ds.css', async () => {
+  it('DS-15 every ds- class a primitive renders has a base rule in ds.css', async () => {
     const renders = await Promise.all([
       ...['cream', 'dark', 'dark2', 'sage', 'peach'].map((tone) => render('Section', 'Section', { tone }, para('x'))),
       ...['light', 'dark'].map((tone) => render('Eyebrow', 'Eyebrow', { tone }, 'x')),
@@ -324,7 +324,9 @@ describe('class contract with ds.css', () => {
     expect(rendered.size, 'the render matrix reaches the primitives').toBeGreaterThanOrEqual(25)
     expect(rendered.has('ds-btn--ghostDark')).toBe(true)
 
-    const defined = new Set(classSelectors(stripSource('ds.css', readFileSync(join(LANDING_SRC, 'styles', 'ds.css'), 'utf8'))))
-    expect([...rendered].filter((c) => !defined.has(c)).sort()).toEqual([])
+    const rules = parseRules(stripSource('ds.css', readFileSync(join(LANDING_SRC, 'styles', 'ds.css'), 'utf8')))
+    const base = new Set(rules.flatMap(selectorParts).filter((s) => /^\.[\w-]+$/.test(s)).map((s) => s.slice(1)))
+    expect(base.size, 'ds.css has base rules').toBeGreaterThanOrEqual(25)
+    expect([...rendered].filter((c) => !base.has(c)).sort(), 'a hover or pseudo rule alone is not a base rule').toEqual([])
   })
 })

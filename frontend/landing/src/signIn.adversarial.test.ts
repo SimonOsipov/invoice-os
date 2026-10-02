@@ -157,6 +157,7 @@ describe('signIn module surface', () => {
   it('exports only the D12 and D25 functions and keeps the D12 copy private', () => {
     expect(Object.keys(signIn).sort()).toEqual([
       'handoffUrl',
+      'readSignInConsole',
       'readSignInState',
       'signInConfigured',
       'signInErrorMessage',

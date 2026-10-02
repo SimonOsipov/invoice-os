@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import type { CSSProperties, FormEvent } from 'react'
 import { DEMO_FORM_CSS, Glyph, WARN_PATHS } from './DemoLeadForm'
-import { handoffUrl, signInErrorMessage, signInWithPassword, startUrl } from '../signIn'
+import { handoffUrl, signInErrorMessage, signInWithPassword, startUrl, type ConsoleTarget } from '../signIn'
 import { validateSignInForm, type SignInFormErrors } from '../signInForm'
 
 const ID = 'si-form'
@@ -20,7 +20,7 @@ function Alert({ id, text }: { id?: string; text: string }) {
 }
 
 // heldState is read at open and again at submit: an expired or dropped state is never posted.
-export function SignInForm({ heldState, initialError }: { heldState: () => string | null; initialError?: string }) {
+export function SignInForm({ heldState, initialError }: { heldState: () => string | null; initialError?: string; consoleTarget?: ConsoleTarget }) {
   const [state, setState] = useState(heldState)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')

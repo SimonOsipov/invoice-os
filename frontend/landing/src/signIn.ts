@@ -10,7 +10,9 @@ const UNVERIFIED = 'Verify your email address first. The link is in your inbox.'
 const THROTTLED = 'Too many attempts. Try again in a minute.'
 const UNAVAILABLE = 'Sign-in is unavailable right now. Try again shortly.'
 
-export function handoffUrl(code: string): string | null {
+export type ConsoleTarget = 'ops' | 'support'
+
+export function handoffUrl(code: string, _target?: ConsoleTarget): string | null {
   const base = appBase()
   return base ? `${base}?handoff=${encodeURIComponent(code)}` : null
 }
@@ -46,7 +48,11 @@ export function readSignInState(search: string): string | null {
   return all.length === 1 && STATE_RE.test(all[0]) ? all[0] : null
 }
 
-export function startUrl(): string | null {
+export function readSignInConsole(_search: string): ConsoleTarget | null {
+  return null
+}
+
+export function startUrl(_target?: ConsoleTarget): string | null {
   const base = appBase()
   return base ? `${base}?auth=start` : null
 }

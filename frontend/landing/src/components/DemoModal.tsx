@@ -3,8 +3,8 @@
 
 import { useEffect } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { BrandMark } from '../icons'
-import { DemoLeadForm, DEMO_FORM_CSS, Glyph } from './DemoLeadForm'
+import { DemoLeadForm, DEMO_FORM_CSS } from './DemoLeadForm'
+import { MODAL_CHROME_CSS, MODAL_SCRIM_STYLE, ModalHeader, modalCardStyle } from './modalChrome'
 import type { DemoLead } from '../hubspot'
 
 // A focusable element is eligible for the Tab-trap if it isn't disabled, is
@@ -58,34 +58,20 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
       role="dialog"
       aria-modal="true"
       aria-label="Book a demo"
-      style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'oklch(16% .03 210 / .44)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, animation: 'dmOvIn 160ms ease-out' }}
+      style={MODAL_SCRIM_STYLE}
     >
       <style>{`
-        @keyframes dmOvIn { from { opacity: 0; } to { opacity: 1; } }
-        @keyframes dmCardIn { from { opacity: 0; transform: translateY(10px) scale(0.985); } to { opacity: 1; transform: none; } }
+        ${MODAL_CHROME_CSS}
         ${DEMO_FORM_CSS}
-        .si-close { transition: background 120ms ease-out, color 120ms ease-out; }
-        .si-close:hover { background: var(--bg-3); color: var(--fg-1); }
         @media (max-width: 480px) { .dm-overlay { padding: 14px !important; } }
       `}</style>
 
       <div
         onClick={(e) => e.stopPropagation()}
         onKeyDown={trapTab}
-        style={{ width: '100%', maxWidth: 452, maxHeight: 'calc(100dvh - 48px)', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', boxShadow: '0 32px 64px -24px oklch(16% .03 210 / .42)', overflowY: 'auto', animation: 'dmCardIn 200ms var(--ease-out)' }}
+        style={modalCardStyle(510)}
       >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid var(--line-1)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-            <BrandMark size={19} />
-            <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: '-0.02em' }}>ASComply</span>
-            <span className="mono" style={{ fontSize: 9, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 4px' }}>
-              AFRICA
-            </span>
-          </div>
-          <button onClick={onClose} className="si-close" aria-label="Close" style={{ flex: 'none', width: 30, height: 30, borderRadius: 'var(--radius-md)', border: 0, background: 'transparent', color: 'var(--fg-3)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}>
-            <Glyph d="M18 6 6 18M6 6l12 12" size={17} sw={1.8} />
-          </button>
-        </div>
+        <ModalHeader onClose={onClose} padX={20} />
 
         <DemoLeadForm
           idPrefix="dm"

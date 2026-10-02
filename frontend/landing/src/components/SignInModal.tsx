@@ -2,10 +2,10 @@
 // The form posts to the gateway; a persona pick makes no backend call, the app mints from ?persona=<id>.
 
 import { useEffect } from 'react'
-import { BrandMark } from '../icons'
 import { LANDING_PERSONAS, destUrl, type LandingPersona } from '../auth'
 import { signInConfigured } from '../signIn'
 import { SignInForm } from './SignInForm'
+import { MODAL_CHROME_CSS, MODAL_SCRIM_STYLE, ModalHeader, modalCardStyle } from './modalChrome'
 
 function Glyph({ d, size = 16, sw = 1.7 }: { d: string | string[]; size?: number; sw?: number }) {
   const paths = Array.isArray(d) ? d : [d]
@@ -45,34 +45,20 @@ export function SignInModal({ onClose, heldState = NO_STATE, initialError }: { o
       role="dialog"
       aria-modal="true"
       aria-label="Sign in"
-      style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'oklch(16% .03 210 / .44)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, animation: 'siOvIn 160ms ease-out' }}
+      style={MODAL_SCRIM_STYLE}
     >
       <style>{`
-        @keyframes siOvIn { from { opacity: 0; } to { opacity: 1; } }
-        @keyframes siCardIn { from { opacity: 0; transform: translateY(10px) scale(0.985); } to { opacity: 1; transform: none; } }
+        ${MODAL_CHROME_CSS}
         .si-persona { transition: border-color 120ms ease-out, background 120ms ease-out, transform 90ms; }
         .si-persona:hover { border-color: var(--action); background: var(--bg-1); }
         .si-persona:active { transform: translateY(1px); }
-        .si-close { transition: background 120ms ease-out, color 120ms ease-out; }
-        .si-close:hover { background: var(--bg-3); color: var(--fg-1); }
       `}</style>
 
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', boxShadow: '0 32px 64px -24px oklch(16% .03 210 / .42)', overflow: 'hidden', maxHeight: 'calc(100vh - 48px)', overflowY: 'auto', animation: 'siCardIn 200ms var(--ease-out)' }}
+        style={modalCardStyle(452)}
       >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid var(--line-1)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-            <BrandMark size={19} />
-            <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: '-0.02em' }}>ASComply</span>
-            <span className="mono" style={{ fontSize: 9, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 4px' }}>
-              AFRICA
-            </span>
-          </div>
-          <button onClick={onClose} className="si-close" aria-label="Close" style={{ flex: 'none', width: 30, height: 30, borderRadius: 'var(--radius-md)', border: 0, background: 'transparent', color: 'var(--fg-3)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}>
-            <Glyph d="M18 6 6 18M6 6l12 12" size={17} sw={1.8} />
-          </button>
-        </div>
+        <ModalHeader onClose={onClose} padX={18} />
 
         <div style={{ padding: '22px 20px 20px' }}>
           <div className="eyebrow" style={{ marginBottom: 8 }}>SIGN IN</div>

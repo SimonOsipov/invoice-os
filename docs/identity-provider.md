@@ -301,7 +301,7 @@ scope, or `/token` with any other grant) is reachable from outside.
    those two fields to GoTrue `/signup`. GoTrue creates an unconfirmed user and
    mails a confirmation link through Resend. Every answer except a 400 arrives no earlier
    than `AUTH_REGISTER_MIN_RESPONSE` after the request reached the handler, so a new address
-   and a known one take the same time.
+   and a known one take the same time while GoTrue answers faster than that (see Ceilings).
 2. The link targets `GOTRUE_MAILER_URLPATHS_CONFIRMATION`, which is the gateway's
    `GET /auth/verify`. A relative value would resolve against `API_EXTERNAL_URL`, a private
    host, so production sets an absolute URL.
@@ -345,9 +345,9 @@ already has an account. The answer never carries the user id or any GoTrue field
 `msg`.
 
 The four 202 rows and the 503 `registration is closed`, 429 and 502 rows wait for
-`AUTH_REGISTER_MIN_RESPONSE` (default `2s`), counted from the request's arrival. The 400 rows
+`AUTH_REGISTER_MIN_RESPONSE` (default `2s`), counted from when the request reached the handler. The 400 rows
 answer at once. The 503 `registration is not configured` answers at once too, because the
-route is not wired. If the client disconnects during the wait, nothing is written. Each
+route is not wired. If the client disconnects during the wait, no answer is written. Each
 waiting request logs `registration: signup timing` with `upstream_ms` (how long GoTrue took)
 and `min_ms` (the minimum): INFO while `upstream_ms` is below `min_ms`, WARN at or above it.
 
@@ -1199,7 +1199,7 @@ empty commit instead.
    time lands on `?verify=failed`.
 4. `curl -sS -X POST https://api.ascomply.com/auth/register -H 'Content-Type: application/json' -d '{"email":"someone@gmail.com","password":"<12+ characters>"}'`
    answers 400 `{"error":"a business email address is required; personal email providers are not accepted"}`.
-5. Time a real signup. A client-side `curl` only sees the minimum, so read the gateway's
+5. Time a real signup. A client-side `curl` time cannot separate GoTrue's time from the minimum, so read the gateway's
    `registration: signup timing` line for the step 1 request (Railway logs, service
    `gateway`): `upstream_ms` is how long GoTrue took, `min_ms` the minimum in force. When
    `upstream_ms` exceeds about three quarters of `min_ms`, or the line is WARN, raise the

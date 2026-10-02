@@ -314,7 +314,7 @@ test('landing frame geometry at 1440, 834 and 390', async ({ page }, testInfo) =
       const elegant = getComputedStyle(probeEl).boxShadow
       probeEl.remove()
       const matches = [...document.querySelectorAll(sel)].filter((el) => getComputedStyle(el).boxShadow === elegant)
-      return { elegant, card: getComputedStyle(document.querySelector('.hero-card')!).boxShadow, matches: matches.map((el) => el.className) }
+      return { elegant, card: getComputedStyle(document.querySelector('.hero-card')!).boxShadow, matches: matches.map((el) => el.getAttribute('class') ?? '') }
     }, FRAME_DESCENDANTS)
     expect(shadow.elegant, `${label}: --shadow-elegant resolves`).not.toBe('none')
     expect(shadow.card, `${label}: .hero-card box-shadow`).toBe(shadow.elegant)
@@ -332,12 +332,14 @@ test('landing frame geometry at 1440, 834 and 390', async ({ page }, testInfo) =
         scrollWidth: doc.scrollWidth,
         clientWidth: doc.clientWidth,
         walked: els.length,
+        roots: ['header', '#top', '[data-strip]', 'footer'].filter((root) => !els.some(({ el }) => el.matches(root))),
         outside: els
           .filter(({ r }) => r.left < -1 || r.right > window.innerWidth + 1)
           .map(({ el, r }) => `<${el.tagName.toLowerCase()} class="${el.className}"> ${Math.round(r.left)}..${Math.round(r.right)}`),
       }
     }, FRAME_ALL)
     expect(overflow.walked, `${label}: frame elements walked`).toBeGreaterThan(0)
+    expect(overflow.roots, `${label}: frame regions missing from the walk`).toEqual([])
     expect(overflow.scrollWidth, `${label}: scrollWidth vs clientWidth`).toBeLessThanOrEqual(overflow.clientWidth)
     expect(overflow.outside, `${label}: frame elements outside the viewport`).toEqual([])
 
@@ -348,12 +350,24 @@ test('landing frame geometry at 1440, 834 and 390', async ({ page }, testInfo) =
     const card = await box(page.locator('#top .hero-card'), `${label} hero card`)
     if (wide) {
       expect(rectsOverlap(column, card), `${label}: hero text column overlaps the card`).toBe(false)
+      expect(card.x, `${label}: card left vs text column right (beside, not stacked)`).toBeGreaterThanOrEqual(column.x + column.width - 1)
     } else {
       const cta = await box(page.locator('#top').getByRole('button', { name: 'Book a demo' }).locator('..'), `${label} CTA row`)
       expect(card.y, `${label}: card top vs CTA row bottom`).toBeGreaterThanOrEqual(cta.y + cta.height - 1)
     }
 
     measured.push({ width: vp.width, tokenH, headerBox, h1Size, h1Want, shadow, overflow, column, card })
+  }
+
+  // 1440 is within tolerance of the 80px ceiling and 834/390 sit on the floor; only a width between them reads the vw term.
+  for (const width of [1100, 1280]) {
+    await settleFrame(page, { width, height: 900 })
+    const h1Size = await page.locator('#top h1').evaluate((el) => parseFloat(getComputedStyle(el).fontSize))
+    const h1Want = Math.min(80, Math.max(54, 0.0555 * width))
+    expect(h1Want, `${width}px: clamp is in its proportional range`).toBeGreaterThan(54)
+    expect(h1Want, `${width}px: clamp is in its proportional range`).toBeLessThan(80)
+    expect(Math.abs(h1Size - h1Want), `${width}px: h1 font-size ${h1Size} vs clamp ${h1Want}`).toBeLessThanOrEqual(0.5)
+    measured.push({ width, h1Size, h1Want })
   }
 
   await attachJson(testInfo, 'frame-geometry.json', measured)
@@ -490,5 +504,16 @@ test('landing hero under reduced motion', async ({ page }, testInfo) => {
     expect(row.animationName, `.hero-row ${i} animation-name`).toBe('none')
     expect(row.opacity, `.hero-row ${i} opacity`).toBe('1')
   }
+
+  // Control: without the preference the same elements animate, so the reads above come from the media rule.
+  await page.emulateMedia({ reducedMotion: 'no-preference' })
+  const motion = await page.evaluate(() => ({
+    scan: getComputedStyle(document.querySelector('.hero-scan')!).display,
+    rows: [...document.querySelectorAll('.hero-row')].map((el) => getComputedStyle(el).animationName),
+  }))
+  expect(motion.scan, '.hero-scan display without reduced motion').not.toBe('none')
+  expect(motion.rows, '.hero-row animation-name without reduced motion').toHaveLength(6)
+  for (const name of motion.rows) expect(name, '.hero-row animation-name without reduced motion').not.toBe('none')
+
   expect(errors, `console errors under reduced motion:\n${errors.join('\n')}`).toEqual([])
 })

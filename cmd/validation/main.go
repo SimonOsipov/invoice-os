@@ -74,6 +74,8 @@ func main() {
 	app.Mux.Handle("POST /v1/validate/batch", validation.S2SMiddleware(mustEnv("S2S_TOKEN"))(
 		validation.BatchValidateHandler(store.LoadActiveRuleSetGlobal, engine, app.Logger)))
 
+	app.RequireGateway(mustEnv("GATEWAY_TOKEN"), "POST /v1/validate/batch")
+
 	if err := app.Run(context.Background()); err != nil {
 		platform.Fatal(app.Logger, "validation: %v", err)
 	}

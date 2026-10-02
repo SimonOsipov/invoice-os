@@ -21,10 +21,11 @@ const (
 // identityMiddleware reconstructs the caller Identity from the trusted headers the
 // gateway sets after verifying the JWT, and places it in the context so tenant-scoped
 // data access (db.WithinRequestTenantTx) and handlers can read the caller without
-// re-verifying a token. A context service is reachable only through the gateway — the
-// single authenticated ingress (the D1/D3 chokepoint) — so it TRUSTS these headers
+// re-verifying a token. A context service TRUSTS these headers
 // rather than validating a bearer token itself; the gateway overwrites any
-// client-supplied copies from the verified token before forwarding.
+// client-supplied copies from the verified token before forwarding. Each context main
+// refuses a request without the gateway token (RequireGateway;
+// TestRLS_EveryContextServiceRefusesAForgedRequest).
 //
 // A user header that is empty or not a uuid builds no identity and no tenant-less caller;
 // uuid.Parse is the verifier's own check.

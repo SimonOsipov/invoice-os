@@ -285,6 +285,8 @@ func main() {
 	submitter := invoice.NewSubmitter(store, q)
 	app.Mux.HandleFunc("POST /v1/invoices/submissions", invoice.BatchSubmitHandler(submitter.BatchSubmit, store.CallerRole, app.Logger))
 
+	app.RequireGateway(mustEnv("GATEWAY_TOKEN"))
+
 	if err := app.Run(context.Background()); err != nil {
 		platform.Fatal(app.Logger, "invoice: %v", err)
 	}

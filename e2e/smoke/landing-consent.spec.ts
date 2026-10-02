@@ -137,8 +137,8 @@ async function rectOf(locator: Locator, label: string, at: string): Promise<Rect
  * The computed font-family always reads "Manrope, ui-sans-serif, ..." whether or not the
  * Google-hosted webfont arrived, and Chromium's document.fonts.check() answers true for a
  * family it has never heard of. Two probe spans, `Manrope, monospace` against bare
- * `monospace`, differ only when Manrope is real. The mobile body wraps with ~6px of slack,
- * so a missing Manrope costs a whole line and reads as a layout bug unless this names it.
+ * `monospace`, differ only when Manrope is real. A missing Manrope reads as a layout bug
+ * unless this names it.
  */
 function manropeIsUsable(page: Page): Promise<{ usable: boolean; withManrope: number; fallback: number }> {
   return page.evaluate(() => {
@@ -745,7 +745,7 @@ test('landing consent: the first-visit card is at most a third of the phone view
   const manrope = await manropeIsUsable(page)
   expect(
     manrope.usable,
-    `Manrope is not available for layout (probe ${manrope.withManrope}px vs fallback ${manrope.fallback}px) — the body wraps with ~6px of slack, so a missing webfont costs a whole line and reads as a layout bug`,
+    `Manrope is not available for layout (probe ${manrope.withManrope}px vs fallback ${manrope.fallback}px) — a missing webfont reads as a layout bug`,
   ).toBe(true)
 
   const rect = await rectOf(card, 'the cookie notice', `at ${PHONE.width}x${PHONE.height}`)
@@ -783,7 +783,7 @@ test('landing consent: the reopened card is at most a third of the phone viewpor
   const manrope = await manropeIsUsable(page)
   expect(
     manrope.usable,
-    `Manrope is not available for layout (probe ${manrope.withManrope}px vs fallback ${manrope.fallback}px) — a missing webfont costs a whole line of body copy`,
+    `Manrope is not available for layout (probe ${manrope.withManrope}px vs fallback ${manrope.fallback}px) — a missing webfont reads as a layout bug`,
   ).toBe(true)
 
   const rect = await rectOf(card, 'the reopened cookie notice', `at ${PHONE.width}x${PHONE.height}`)

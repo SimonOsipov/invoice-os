@@ -533,6 +533,8 @@ describe('sentry: the ledger carries every new sentence', () => {
     expect(flat, 'C10').toContain("Sentry's reports (C26) are the only other ungated flow")
     expect(flat, 'W3').toContain('is not being measured by Google at all')
     expect(flat, 'W3 old wording').not.toContain('is not being measured at all')
-    expect(flat, 'W7').toContain("nor Sentry's reports (C26)")
+    const w7 = rowOf('W7')[0]?.split('|')[2] ?? ''
+    expect(w7, 'control: W7 claim cell').toContain('stops Google Fonts')
+    expect(w7, 'W7 claim must not cite Sentry; the closing note does not').not.toContain('Sentry')
   })
 })

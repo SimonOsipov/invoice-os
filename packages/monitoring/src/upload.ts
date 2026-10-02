@@ -1,4 +1,7 @@
 /// <reference types="node" />
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { releaseName } from './release-name'
 
 export interface SourcemapUploadOptions {
   authToken: string
@@ -9,17 +12,22 @@ export interface SourcemapUploadOptions {
   sourcemaps: { filesToDeleteAfterUpload: string[] }
 }
 
-// QA stub: red until SENTRY-08-01 is implemented.
+// Node-only: SPA vite configs import this by relative path; keep it out of index.ts.
 export function sourcemapUploadOptions(
-  _appDir: string,
-  _env: Record<string, string | undefined> = process.env,
+  appDir: string,
+  env: Record<string, string | undefined> = process.env,
 ): SourcemapUploadOptions {
+  const stamp = readFileSync(join(appDir, '../../internal/platform/buildsha.txt'), 'utf8')
   return {
-    authToken: 'stub',
-    project: '',
-    url: '',
-    telemetry: true as never,
-    release: { name: '', inject: true as never, setCommits: true as never },
-    sourcemaps: { filesToDeleteAfterUpload: [] },
+    authToken: (env.SENTRY_AUTH_TOKEN ?? '').trim(),
+    project: 'asc-frontend',
+    url: 'https://de.sentry.io',
+    telemetry: false,
+    release: {
+      name: releaseName(stamp, env.VITE_RAILWAY_GIT_COMMIT_SHA ?? ''),
+      inject: false,
+      setCommits: false,
+    },
+    sourcemaps: { filesToDeleteAfterUpload: [join(appDir, 'dist', '**', '*.map')] },
   }
 }

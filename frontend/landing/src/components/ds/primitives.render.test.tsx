@@ -1,8 +1,12 @@
 // Rendered contract of the static DS primitives (SSR, node). Modules load through import.meta.glob
 // so a missing file or export fails the test that names it, not the whole run.
+/// <reference types="node" />
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { createElement, type ComponentType, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import { LANDING_SRC, classSelectors, stripSource } from '../../cssScan.test.util'
 import { GLYPHS } from '../../icons'
 
 type Props = Record<string, unknown>
@@ -83,6 +87,8 @@ describe('Section', () => {
     const padded = rootTag(await render('Section', 'Section', { paddingBlock: '30px' }, para('x')))
     expect(padded.attrs.style).toBe('padding-block:30px')
     expect(padded.attrs.id).toBeUndefined()
+    const both = rootTag(await render('Section', 'Section', { tone: 'dark2', id: 'pricing', paddingBlock: 'var(--section-y)' }, para('x')))
+    expect(both.attrs).toEqual({ id: 'pricing', class: 'ds-section band-dark2', style: 'padding-block:var(--section-y)' })
   })
 })
 
@@ -95,6 +101,7 @@ describe('Eyebrow', () => {
     expect(rootTag(dark).name).toBe('span')
     expect(classesOf(rootTag(dark))).toEqual(['t-eyebrow', 'ds-eyebrow--dark'])
     expect(dark).toContain('>Problem</span>')
+    expect(classesOf(rootTag(await render('Eyebrow', 'Eyebrow', {}, 'Problem'))), 'default tone is light').toEqual(['t-eyebrow'])
   })
 })
 
@@ -122,6 +129,14 @@ describe('Button', () => {
     }
     const dflt = rootTag(await render('Button', 'Button', {}, 'Go'))
     expect(classesOf(dflt), 'default variant').toEqual(EXPECTED.primary)
+    for (const variant of ['ghostDark', 'text']) {
+      const root = rootTag(await render('Button', 'Button', { variant, size: 'lg' }, 'Go'))
+      expect(classesOf(root), `${variant} ignores an explicit size`).toEqual(['ds-btn', `ds-btn--${variant}`])
+    }
+    const accentSm = rootTag(await render('Button', 'Button', { variant: 'accent', size: 'sm' }, 'Go'))
+    expect(classesOf(accentSm), 'accent honours an explicit size').toEqual(['ds-btn', 'ds-btn--accent', 'ds-btn--sm'])
+    const outlineLg = rootTag(await render('Button', 'Button', { variant: 'outline', size: 'lg' }, 'Go'))
+    expect(classesOf(outlineLg), 'outline honours an explicit size').toEqual(['ds-btn', 'ds-btn--outline', 'ds-btn--lg'])
   })
 
   it('DS-05 Button with href renders a link', async () => {
@@ -129,6 +144,12 @@ describe('Button', () => {
     expect(root.name).toBe('a')
     expect(root.attrs).toEqual({ href: '#platform', class: 'ds-btn ds-btn--ghostDark' })
     expect(root.attrs.type).toBeUndefined()
+
+    const props = { href: '/x', variant: 'primary', disabled: true, type: 'submit', target: '_blank', rel: 'noopener', 'aria-label': 'Open', className: 'extra', style: { width: '100%' } }
+    const full = rootTag(await render('Button', 'Button', props, 'Go'))
+    expect(full.name).toBe('a')
+    expect(full.attrs).toEqual({ href: '/x', class: 'ds-btn ds-btn--primary ds-btn--md extra', style: 'width:100%', 'aria-label': 'Open', target: '_blank', rel: 'noopener' })
+    expect('disabled' in full.attrs, 'an anchor carries no disabled attribute').toBe(false)
   })
 
   it('DS-06 Button forwards type, disabled, aria-label, className and style', async () => {
@@ -140,6 +161,10 @@ describe('Button', () => {
     expect(root.attrs['aria-label']).toBe('Send')
     expect(classesOf(root)).toEqual(['ds-btn', 'ds-btn--primary', 'ds-btn--md', 'btn-block'])
     expect(root.attrs.style).toContain('width:100%')
+
+    const plain = rootTag(await render('Button', 'Button', { disabled: false, type: 'reset' }, 'Go'))
+    expect('disabled' in plain.attrs, 'disabled={false} renders no attribute').toBe(false)
+    expect(plain.attrs).toEqual({ type: 'reset', class: 'ds-btn ds-btn--primary ds-btn--md' })
   })
 
   it('DS-14 ghostDark draws the play circle', async () => {
@@ -155,6 +180,9 @@ describe('Button', () => {
     for (const variant of ['primary', 'accent', 'outline', 'text']) {
       expect(await render('Button', 'Button', { variant }, 'Go'), variant).not.toContain('ds-btn-play')
     }
+    const link = await render('Button', 'Button', { variant: 'ghostDark', href: '#demo' }, 'Watch')
+    expect(rootTag(link).name).toBe('a')
+    expect(firstChild(link)?.attrs.class, 'a ghostDark link keeps the play circle').toBe('ds-btn-play')
   })
 })
 
@@ -170,6 +198,7 @@ describe('Badge and TagPill', () => {
       const dot = firstChild(html)
       expect(dot?.name, tone).toBe('span')
       expect(dot?.attrs, tone).toEqual({ class: 'ds-badge-dot', 'aria-hidden': 'true' })
+      expect(html, tone).toMatch(/<span class="ds-badge-dot" aria-hidden="true"><\/span>Live<\/span>$/)
     }
   })
 
@@ -201,6 +230,13 @@ describe('IconTile', () => {
     expect(svg.attrs['stroke-width']).toBe('2')
     expect(GLYPHS.sparkles.length).toBeGreaterThan(0)
     expect(svg.paths).toEqual([...GLYPHS.sparkles])
+
+    const dflt = await render('IconTile', 'IconTile', { name: 'shield-check' })
+    expect(classesOf(rootTag(dflt)), 'default tone is primary').toEqual(['ds-icontile', 'ds-icontile--primary'])
+    expect(rootTag(dflt).attrs.style, 'default size is 40').toBe('width:40px;height:40px')
+    expect(svgOf(dflt).attrs.width).toBe('20')
+    expect(GLYPHS['shield-check']).not.toEqual(GLYPHS.sparkles)
+    expect(svgOf(dflt).paths, 'the glyph follows the name prop').toEqual([...GLYPHS['shield-check']])
   })
 
   it('DS-11 IconTile iconSize overrides the half-size default', async () => {
@@ -208,6 +244,10 @@ describe('IconTile', () => {
     expect(override.attrs.width).toBe('24')
     const half = svgOf(await render('IconTile', 'IconTile', { name: 'sparkles', size: 36 }))
     expect(half.attrs.width).toBe('18')
+    const upper = svgOf(await render('IconTile', 'IconTile', { name: 'sparkles', size: 35 }))
+    expect(upper.attrs.width, '17.5 rounds up').toBe('18')
+    const lower = svgOf(await render('IconTile', 'IconTile', { name: 'sparkles', size: 33 }))
+    expect(lower.attrs.width, '16.5 rounds up').toBe('17')
   })
 })
 
@@ -252,5 +292,39 @@ describe('Logo', () => {
     const small = await render('Logo', 'Logo', { size: 28 })
     expect(leaf(small, 'ds-logo-name').attrs.style).toBe('font-size:16px')
     expect(leaf(small, 'ds-logo-region').attrs.style).toBe('font-size:8px')
+    const smallImg = tagsOf(small.match(/<img\b[^>]*>/)?.[0] as string)[0].attrs
+    expect([smallImg.width, smallImg.height], 'the mark follows size').toEqual(['28', '28'])
+
+    const below = await render('Logo', 'Logo', { size: 31 })
+    expect(leaf(below, 'ds-logo-name').attrs.style, '17.98 rounds up').toBe('font-size:18px')
+    expect(leaf(below, 'ds-logo-region').attrs.style, 'AFRICA drops to 8px under 32').toBe('font-size:8px')
+    const large = await render('Logo', 'Logo', { size: 50 })
+    expect(leaf(large, 'ds-logo-name').attrs.style).toBe('font-size:29px')
+    expect(leaf(large, 'ds-logo-region').attrs.style, 'AFRICA stays 9px above 32').toBe('font-size:9px')
+  })
+})
+
+describe('class contract with ds.css', () => {
+  it('DS-15 every ds- class a primitive renders has a rule in ds.css', async () => {
+    const renders = await Promise.all([
+      ...['cream', 'dark', 'dark2', 'sage', 'peach'].map((tone) => render('Section', 'Section', { tone }, para('x'))),
+      ...['light', 'dark'].map((tone) => render('Eyebrow', 'Eyebrow', { tone }, 'x')),
+      ...['primary', 'accent', 'outline', 'ghostDark', 'text'].flatMap((variant) => [
+        render('Button', 'Button', { variant }, 'x'),
+        render('Button', 'Button', { variant, size: 'sm' }, 'x'),
+        render('Button', 'Button', { variant, size: 'lg' }, 'x'),
+      ]),
+      ...['success', 'progress', 'development'].map((tone) => render('Badge', 'Badge', { tone, dot: true }, 'x')),
+      render('Badge', 'TagPill', {}, 'x'),
+      ...['primary', 'accent'].map((tone) => render('IconTile', 'IconTile', { name: 'sparkles', tone })),
+      render('ChecklistItem', 'ChecklistItem', {}, 'x'),
+      render('Logo', 'Logo'),
+    ])
+    const rendered = new Set(renders.flatMap((html) => tagsOf(html).flatMap(classesOf)).filter((c) => c.startsWith('ds-')))
+    expect(rendered.size, 'the render matrix reaches the primitives').toBeGreaterThanOrEqual(25)
+    expect(rendered.has('ds-btn--ghostDark')).toBe(true)
+
+    const defined = new Set(classSelectors(stripSource('ds.css', readFileSync(join(LANDING_SRC, 'styles', 'ds.css'), 'utf8'))))
+    expect([...rendered].filter((c) => !defined.has(c)).sort()).toEqual([])
   })
 })

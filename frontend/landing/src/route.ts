@@ -4,3 +4,5 @@ export function isPrivacyPath(pathname: string): boolean {
   const normalized = trimmed.endsWith('/') ? trimmed.slice(0, -1) : trimmed
   return normalized === '/privacy'
 }
+
+export const landingRouteName = (_: string): string => ''

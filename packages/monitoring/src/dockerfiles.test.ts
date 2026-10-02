@@ -16,7 +16,7 @@ describe('dockerfiles', () => {
       .filter((e) => e.isDirectory() && existsSync(join(FRONTEND, e.name, 'src/main.tsx')))
       .map((e) => e.name)
       .sort()
-    // Floor and control: landing has a main.tsx and a Dockerfile but never calls initMonitoring.
+    // Floor: the walk found the SPAs; all four must be monitored below.
     expect(spas, 'the walk found no SPA').toContain('landing')
 
     const initsIn = (n: string) => {
@@ -24,7 +24,7 @@ describe('dockerfiles', () => {
       return existsSync(f) && stripJsComments(readFileSync(f, 'utf8')).includes('initMonitoring(')
     }
     const monitored = spas.filter(initsIn)
-    expect(monitored).toEqual(['app', 'ops-console', 'support-console'])
+    expect(monitored).toEqual(['app', 'landing', 'ops-console', 'support-console'])
 
     // Control: the line finder sees a pre-existing app ARG, so a miss below is a real miss.
     const appLines = codeLines(readFileSync(join(FRONTEND, 'app/Dockerfile'), 'utf8'))

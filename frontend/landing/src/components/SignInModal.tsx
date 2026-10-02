@@ -2,11 +2,11 @@
 // The form posts to the gateway; a persona pick makes no backend call, the app mints from ?persona=<id>.
 
 import { useEffect } from 'react'
+import { GLYPHS, Icon } from '../icons'
 import { LANDING_PERSONAS, destUrl, type LandingPersona } from '../auth'
 import { signInConfigured } from '../signIn'
-import { GLYPHS, Icon } from '../icons'
-import { Eyebrow } from './ds/Eyebrow'
 import { SignInForm } from './SignInForm'
+import { Eyebrow } from './ds/Eyebrow'
 import { MODAL_CHROME_CSS, MODAL_SCRIM_STYLE, ModalHeader, modalCardStyle } from './modalChrome'
 
 const SIGN_IN_CSS = `

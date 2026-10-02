@@ -5,4 +5,6 @@ export function isPrivacyPath(pathname: string): boolean {
   return normalized === '/privacy'
 }
 
-export const landingRouteName = (_: string): string => ''
+// Collapses to the two real pages so a visitor-typed path never becomes a transaction name.
+export const landingRouteName = (pathname: string): string =>
+  pathname === '/' ? '/' : isPrivacyPath(pathname) ? '/privacy' : '<unmatched>'

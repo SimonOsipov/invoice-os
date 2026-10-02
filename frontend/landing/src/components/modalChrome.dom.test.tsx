@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
-// Mounted shell behaviour of the two modals after the shared-chrome swap (RESKIN-06-01):
+// Mounted shell behaviour of the two modals:
 // Close, overlay click, and the demo modal's Escape, focus restore and Tab trap.
 /// <reference types="node" />
 import { act, createElement } from 'react'
@@ -67,7 +67,7 @@ function key(target: Element, init: KeyboardEventInit): KeyboardEvent {
   return e
 }
 
-describe('the modal shell behaves as before the chrome swap (RESKIN-06-01)', () => {
+describe('the modal shell: close, overlay click, Escape, focus restore, Tab trap', () => {
   for (const which of MODALS) {
     it(`MD-01 ${which}: Close calls onClose once; a click inside the card does not close; the overlay does`, async () => {
       const onClose = vi.fn()
@@ -119,7 +119,7 @@ describe('the modal shell behaves as before the chrome swap (RESKIN-06-01)', () 
     const d = await mount('demo', vi.fn())
     const name = d.querySelector<HTMLElement>('#dm-name')
     expect(name, 'expected #dm-name').not.toBeNull()
-    // The form's mount effect focuses #dm-name first, so the shell captures it, not the opener. Unchanged by the chrome swap.
+    // The form's mount effect focuses #dm-name first, so the shell captures it, not the opener.
     expect(focused.filter((el) => el === name).length).toBe(1)
     act(() => root.unmount())
     expect(focused.filter((el) => el === name).length, 'unmount did not restore focus').toBe(2)

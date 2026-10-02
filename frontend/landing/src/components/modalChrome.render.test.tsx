@@ -85,7 +85,7 @@ function cssRules(css: string): string[] {
     .filter((r) => !r.startsWith(' '))
 }
 
-describe('the shared modal chrome (RESKIN-06-01)', () => {
+describe('the shared modal chrome', () => {
   it('MC-00 the chrome module loads', async () => {
     const mod = await loadChrome()
     expect(mod.modalCardStyle(452).maxWidth).toBe(452)

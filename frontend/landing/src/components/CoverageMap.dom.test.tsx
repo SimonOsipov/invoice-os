@@ -126,6 +126,8 @@ describe('CoverageMap: the image SVG', () => {
     expect(fills).toEqual(want)
     expect(fills.filter((f) => f === 'var(--on-dark-10)'), '48 other countries').toHaveLength(48)
     expect(paths.map((p) => paint(p, 'stroke'))).toEqual(paths.map(() => 'var(--surface-panel)'))
+    expect(paths.map((p) => paint(p, 'stroke-width'))).toEqual(paths.map(() => '1'))
+    expect(paths.map((p) => paint(p, 'stroke-linejoin'))).toEqual(paths.map(() => 'round'))
 
     expect(svg.querySelectorAll('circle'), 'no circle in the image SVG (no rings, no markers)').toHaveLength(0)
     expect(svg.querySelectorAll('[role]'), 'no [role] descendant').toHaveLength(0)
@@ -156,6 +158,9 @@ describe('CoverageMap: the image SVG', () => {
       expect(inherited(tag[0], 'font-weight', svg), `${L.name} tag weight`).toBe('700')
       expect(inherited(tag[0], 'letter-spacing', svg), `${L.name} tag tracking`).toBe('0.1em')
       expect(inherited(name[0], 'pointer-events', svg), `${L.name} name pointer-events`).toBe('none')
+      expect(inherited(tag[0], 'pointer-events', svg), `${L.name} tag pointer-events`).toBe('none')
+      expect(inherited(name[0], 'letter-spacing', svg), `${L.name} name tracking`).toBe('-0.02em')
+      expect(inherited(name[0], 'font-family', svg), `${L.name} name family`).toBe('var(--font-sans)')
     }
   })
 })
@@ -233,6 +238,8 @@ describe('CoverageMap: the marker layer', () => {
       expect(el.style.width).toBe('100%')
       expect(el.style.height).toBe('100%')
       expect(el.style.display).toBe('block')
+      expect(el.style.getPropertyValue('inset'), 'inset 0').toMatch(/^0(px)?$/)
+      expect(el.style.zIndex, 'no z-index: the overlay stacks by document order').toBe('')
     }
   })
 })
@@ -285,5 +292,75 @@ describe('CoverageMap: inert on mount', () => {
     expect(interval).toHaveBeenCalledTimes(0)
     expect('AFRICA_MAP' in window).toBe(false)
     view = mountView()
+  })
+})
+
+describe('CoverageMap: adversarial', () => {
+  const ids = [...ORDER]
+  const hitCircle = (id: Id) => marker(id).querySelector('circle[r="20"]') as Element
+
+  it('MP-12 every marker selects its own country by click, Enter and Space, from every start', () => {
+    const drives: Array<[string, (id: Id) => void]> = [
+      ['click on the marker', (id) => clickSvg(marker(id))],
+      ['click on the hit circle', (id) => clickSvg(hitCircle(id))],
+      ['Enter', (id) => void fire(marker(id), 'Enter')],
+      ['Space', (id) => void fire(marker(id), ' ')],
+    ]
+    for (const [how, drive] of drives) {
+      for (const start of ids) {
+        click(tab(start))
+        expectSelected(start)
+        for (const target of ids) {
+          drive(target)
+          expect(cardTitle(), `${how}: ${start} to ${target}`).toBe(TITLES[target])
+          expectSelected(target)
+          click(tab(start))
+        }
+      }
+    }
+  })
+
+  it('MP-13 markers are the only focus targets in the image, follow the tabs, and keep focus after a key select', () => {
+    expect(imageSvg().querySelectorAll('[tabindex], a, button, [contenteditable]'), 'image SVG exposes no focus target').toHaveLength(0)
+    const order = Array.from(view.container.querySelectorAll('button, a[href], [tabindex]')).filter((e) => e.getAttribute('tabindex') !== '-1')
+    const at = (el: Element) => order.indexOf(el)
+    expect(order.filter((e) => Number(e.getAttribute('tabindex') ?? 0) > 0), 'no positive tabindex').toHaveLength(0)
+    const tabsAt = ids.map((id) => at(tab(id)))
+    const markersAt = ids.map((id) => at(marker(id)))
+    expect([...tabsAt, ...markersAt].every((i) => i >= 0), 'tabs and markers are in the tab order').toBe(true)
+    expect(Math.max(...tabsAt), 'tabs precede the markers').toBeLessThan(Math.min(...markersAt))
+    expect(markersAt, 'markers in NG, KE, ZA order').toEqual([...markersAt].sort((a, b) => a - b))
+
+    const kenya = marker('KE')
+    act(() => kenya.focus())
+    expect(document.activeElement, 'the marker takes focus').toBe(kenya)
+    fire(kenya, 'Enter')
+    expectSelected('KE')
+    expect(document.activeElement, 'focus survives the re-render').toBe(marker('KE'))
+    expect(marker('KE'), 'same node, not a remount').toBe(kenya)
+  })
+
+  it('MP-14 unmount and remount leave no layer, listener or timer behind', async () => {
+    unmountView(view)
+    expect(document.querySelectorAll('[data-cov-markers]'), 'unmount removes the layer').toHaveLength(0)
+    const spies = [
+      vi.spyOn(window, 'addEventListener'),
+      vi.spyOn(document, 'addEventListener'),
+      vi.spyOn(window, 'setTimeout'),
+      vi.spyOn(window, 'setInterval'),
+      vi.spyOn(window, 'requestAnimationFrame'),
+    ]
+    view = mountView()
+    await show(view, createElement(Coverage, { onBookDemo: () => undefined }))
+    clickSvg(marker('ZA'))
+    fire(marker('KE'), 'Enter')
+    // Positive pair: the remounted map is live and starts from NG's default.
+    expect(layer().querySelectorAll('g[role="button"]')).toHaveLength(3)
+    unmountView(view)
+    expect(spies.map((s) => s.mock.calls.length), 'addEventListener x2, setTimeout, setInterval, requestAnimationFrame').toEqual([0, 0, 0, 0, 0])
+    view = mountView()
+    await show(view, createElement(Coverage, { onBookDemo: () => undefined }))
+    expectSelected('NG')
+    expect(view.container.querySelectorAll('[data-cov-markers]'), 'one layer after remount').toHaveLength(1)
   })
 })

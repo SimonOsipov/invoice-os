@@ -64,9 +64,9 @@ describe('SO-01 #solution exists once and the retired section id is gone', () =>
     expect(page.querySelectorAll('#solution .mod-grid > .mod-cell').length).toBe(12)
   })
 
-  it('no element on the page still carries ios-4; the .ios-3 grids are the control', () => {
+  it('no element on the page still carries ios-4; the page sections are the control', () => {
     const page = toFrag(createElement(App))
-    expect(page.querySelectorAll('.ios-3').length, 'control: .ios-3 consumers remain').toBeGreaterThan(0)
+    expect(page.querySelectorAll('section').length, 'control: the page rendered its sections').toBeGreaterThan(10)
     expect(page.querySelectorAll('.ios-4').length).toBe(0)
   })
 

@@ -106,7 +106,7 @@ describe('F-2: the sign-in control opens the sign-in modal', () => {
 
     // F2-d: no navigation.
     expect(window.location.pathname).toBe(pathBefore)
-    expect(document.querySelector('#pricing')).not.toBeNull()
+    expect(document.querySelector('#faq')).not.toBeNull()
 
     // F2-e: Close leaves zero dialogs and restores the pre-open snapshot.
     const closeButton = dialog.querySelector<HTMLButtonElement>('button[aria-label="Close"]')

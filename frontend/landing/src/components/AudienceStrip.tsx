@@ -2,7 +2,7 @@ import { Section } from './ds/Section'
 
 const AUDIENCES = ['Finance teams', 'Accounting firms', 'Growing businesses', 'Fintech', 'Technology partners']
 
-export function TrustStrip() {
+export function AudienceStrip() {
   // data-strip: stable selector for the audience-strip test oracle
   return (
     <Section tone="sage" paddingBlock="30px">

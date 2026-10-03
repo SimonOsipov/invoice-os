@@ -1,17 +1,18 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://landing-pr-42.up.railway.app/" }
-// The card on a NON-production host. The hostname arm of the gate is the one D1-D9
-// never exercise — every one of them runs at www.ascomply.com — yet every PR
-// preview and every local visit takes this path.
+// The closed-gate hostname arm is the one DemoModal.form.dom.test.tsx never exercises (it runs at
+// www.ascomply.com).
 /// <reference types="node" />
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { DemoCta } from './DemoCta'
+import { DemoModal } from './DemoModal'
 import { isProductionHost } from '../hubspot'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+function noop() {}
 
 let container: HTMLDivElement
 let root: Root
@@ -45,10 +46,9 @@ function typeInto(input: HTMLInputElement, value: string): void {
   input.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
-describe('X9: a card lead on a preview host completes locally and sends nothing', () => {
+describe('MF-X9 (CHARACTERIZATION): a modal lead on a preview host completes locally and sends nothing', () => {
   it('the HubSpot credentials are present, the hostname is not, so no fetch leaves the page', async () => {
-    // Control needle: the gate's hostname arm really is closed here, so the
-    // "no fetch" assertion below cannot pass for the wrong reason.
+    // Control: the hostname arm really is closed, so "no fetch" cannot pass for the wrong reason.
     expect(isProductionHost(window.location.hostname)).toBe(false)
     vi.stubEnv('VITE_HUBSPOT_PORTAL_ID', '148915098')
     vi.stubEnv('VITE_HUBSPOT_FORM_GUID', 'abc-123')
@@ -56,14 +56,14 @@ describe('X9: a card lead on a preview host completes locally and sends nothing'
     vi.stubGlobal('fetch', fetchMock)
 
     await act(async () => {
-      root.render(createElement(DemoCta))
+      root.render(createElement(DemoModal, { onClose: noop }))
     })
     await act(async () => {
-      typeInto($('#dc-name'), 'Ada Okafor')
-      typeInto($('#dc-email'), 'ada@okafor.ng')
-      typeInto($('#dc-company'), 'Okafor & Partners')
+      typeInto($('#dm-name'), 'Ada Okafor')
+      typeInto($('#dm-email'), 'ada@okafor.ng')
+      typeInto($('#dm-company'), 'Okafor & Partners')
     })
-    await act(async () => $<HTMLInputElement>('#dc-consent').click())
+    await act(async () => $<HTMLInputElement>('#dm-consent').click())
 
     vi.useFakeTimers()
     await act(async () => $<HTMLButtonElement>('button[type="submit"]').click())
@@ -74,7 +74,7 @@ describe('X9: a card lead on a preview host completes locally and sends nothing'
 
     expect(fetchMock).not.toHaveBeenCalled()
     expect(container.textContent).toContain("You're booked")
-    expect(document.activeElement?.id).toBe('dc-success')
+    expect(document.activeElement?.id).toBe('dm-success-done')
     expect(consoleError).not.toHaveBeenCalled()
   })
 })

@@ -10,6 +10,8 @@ export const NAV_LINKS: { label: string; href: string }[] = [
   { label: 'The problem', href: '#problem' },
   { label: 'The solution', href: '#solution' },
   { label: 'Platform', href: '#platform' },
+  { label: "Who it's for", href: '#solutions' },
+  { label: 'Integrations', href: '#integrations' },
 ]
 
 const NAV_HREFS = NAV_LINKS.map((l) => l.href)
@@ -59,7 +61,7 @@ export function Nav({
     // writer with its own notion of active would fight the scroll one for the
     // indicator, and activeNavHref is the tested answer (activeSection.test.ts).
     // What it adds is the crossings a scroll listener never sees: a section that
-    // changes height under a parked viewport (the Who-it's-for toggle swaps mocks
+    // changes height under a parked viewport (a tab or toggle swaps content
     // of different heights), and the tail of a smooth anchor jump that settles
     // after the last scroll event.
     //

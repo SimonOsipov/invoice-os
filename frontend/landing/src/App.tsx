@@ -3,17 +3,17 @@ import { Nav } from './components/Nav'
 import { SignInModal } from './components/SignInModal'
 import { DemoModal } from './components/DemoModal'
 import { Hero } from './components/Hero'
-import { TrustStrip } from './components/TrustStrip'
+import { AudienceStrip } from './components/AudienceStrip'
 import { Problem } from './components/Problem'
 import { Modules } from './components/Modules'
 import { Platform } from './components/Platform'
-import { Compliance } from './components/Compliance'
 import { Coverage } from './components/Coverage'
 import { Intelligence } from './components/Intelligence'
-import { Audience } from './components/Audience'
-import { Developers } from './components/Developers'
-import { Pricing } from './components/Pricing'
-import { DemoCta } from './components/DemoCta'
+import { Solutions } from './components/Solutions'
+import { Integrations } from './components/Integrations'
+import { Api } from './components/Api'
+import { Faq } from './components/Faq'
+import { ClosingCta } from './components/ClosingCta'
 import { Footer } from './components/Footer'
 import { Privacy } from './components/Privacy'
 import { CookieNotice } from './components/CookieNotice'
@@ -90,7 +90,7 @@ export default function App() {
     const measure = () => {
       frame = 0
       // documentElement, not body: body.scrollHeight excludes body margins. The height is
-      // never cached — the Who-it's-for toggle swaps mocks of different heights.
+      // never cached — a toggle can swap content of different heights.
       const documentH = document.documentElement.scrollHeight
       // A page that fits the viewport is 100% seen but nothing was scrolled; reporting it
       // at mount would burn all four milestones. Pinned by "guards the mount-time measurement".
@@ -129,17 +129,17 @@ export default function App() {
       ) : (
         <>
           <Hero onBookDemo={book('hero')} />
-          <TrustStrip />
+          <AudienceStrip />
           <Problem />
           <Modules />
           <Platform onBookDemo={book('platform')} />
-          <Compliance />
           <Coverage onBookDemo={book('coverage')} />
           <Intelligence />
-          <Audience onBookDemo={book('audience')} />
-          <Developers />
-          <Pricing onBookDemo={book('pricing')} />
-          <DemoCta />
+          <Solutions onBookDemo={book('audience')} />
+          <Integrations onBookDemo={book('integrations')} />
+          <Api onBookDemo={book('api')} />
+          <Faq onBookDemo={book('faq')} />
+          <ClosingCta onBookDemo={book('closing')} />
         </>
       )}
       <Footer onBookDemo={book('footer')} onSignIn={onSignIn} hrefPrefix={privacy ? '/' : ''} onCookieChoices={() => setReopened(true)} />

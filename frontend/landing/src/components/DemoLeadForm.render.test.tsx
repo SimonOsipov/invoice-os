@@ -54,7 +54,7 @@ describe('DemoLeadForm renders every control under any idPrefix (S6, NEW-BEHAVIO
 
     const labelTargets = Array.from(html.matchAll(/<label[^>]*\sfor="([^"]+)"/g)).map((m) => m[1])
     expect(labelTargets.length).toBeGreaterThan(0)
-    for (const field of ['name', 'email', 'company']) {
+    for (const field of ['name', 'email', 'company', 'role', 'size', 'volume']) {
       expect(labelTargets).toContain(`zz-${field}`)
     }
 

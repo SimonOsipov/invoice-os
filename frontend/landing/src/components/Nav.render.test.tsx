@@ -125,13 +125,10 @@ describe('HD-06 the closed burger names a menu that is not rendered', () => {
   })
 })
 
-describe('NV-01 the nav reaches the three sections', () => {
-  it('NAV_LINKS is exactly The problem, The solution, Platform, and the Primary nav renders them', () => {
-    const expected = [
-      ['The problem', '#problem'],
-      ['The solution', '#solution'],
-      ['Platform', '#platform'],
-    ]
+describe('NV-01 the nav reaches the five sections', () => {
+  it("the nav reaches V851's five sections: NAV_LINKS is exactly them, and the Primary nav renders them", () => {
+    const expected = V2_NAV.map((l) => [l.label, l.href])
+    expect(expected, 'control: V2_NAV holds five entries').toHaveLength(5)
     expect(NAV_LINKS.map((l) => [l.label, l.href])).toEqual(expected)
     expect(primaryNavLinks(render()).map((l) => [l.label, l.href])).toEqual(expected)
     expect(primaryNavLinks(render({ hrefPrefix: '/' })).map((l) => [l.label, l.href])).toEqual(
@@ -141,8 +138,11 @@ describe('NV-01 the nav reaches the three sections', () => {
 })
 
 describe('HD-03b the Primary nav renders every entry in list order', () => {
-  // The two V851 entries no section owns yet; the real list already holds the other three.
-  const EXTRA: Link[] = [V2_NAV[3], V2_NAV[4]]
+  // Planted: the render must grow with the list, whatever the live list holds.
+  const EXTRA: Link[] = [
+    { label: 'Extra A', href: '#extra-a' },
+    { label: 'Extra B', href: '#extra-b' },
+  ]
   let before: number
   beforeEach(() => {
     before = NAV_LINKS.length
@@ -154,7 +154,7 @@ describe('HD-03b the Primary nav renders every entry in list order', () => {
     ['', ''],
     ['/', '/'],
   ])('with hrefPrefix %j the anchors are the prefixed NAV_LINKS pairs, in order, one per entry', (hrefPrefix, p) => {
-    expect(NAV_LINKS.length, 'control: the fixture grew the list').toBe(before + EXTRA.length)
+    expect(NAV_LINKS.length, 'control: the fixture grew the list to seven').toBe(7)
     expect(primaryNavLinks(render(hrefPrefix ? { hrefPrefix } : {}))).toEqual(
       NAV_LINKS.map((l) => ({ label: l.label, href: `${p}${l.href}` })),
     )
@@ -162,7 +162,7 @@ describe('HD-03b the Primary nav renders every entry in list order', () => {
 
   it('NV-09 the grown list holds distinct hrefs and renders without a duplicate-key warning', () => {
     const hrefs = NAV_LINKS.map((l) => l.href)
-    expect(hrefs.length, 'control: the fixture grew the list').toBe(before + EXTRA.length)
+    expect(hrefs.length, 'control: the fixture grew the list to seven').toBe(7)
     expect(new Set(hrefs).size, `duplicate href in ${JSON.stringify(hrefs)}`).toBe(hrefs.length)
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {

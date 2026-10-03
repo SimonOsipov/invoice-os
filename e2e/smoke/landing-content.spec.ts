@@ -24,7 +24,7 @@ import { seedConsent } from './landingConsent'
 //
 // RETYPED, NOT IMPORTED — the opposite of the unit tests' convention, and deliberately so.
 // Every expected value below is retyped from its source rather than imported: importing
-// TrustStrip.tsx#AUDIENCES / data.tsx#HERO_CHECKS into e2e/ would make these
+// AudienceStrip.tsx#AUDIENCES / data.tsx#HERO_CHECKS into e2e/ would make these
 // assertions agree with themselves no matter what the deployed build actually serves — the
 // same reasoning landing-demo.spec.ts already applies at :41-46. Unit tests do the opposite
 // (assert against the imported constant) because there the risk runs the other way: a retyped
@@ -40,7 +40,7 @@ import { seedConsent } from './landingConsent'
 
 const LANDING_URL = resolveTarget('LANDING_URL')
 
-// F-6, retyped from frontend/landing/src/components/TrustStrip.tsx#AUDIENCES, in render order.
+// F-6, retyped from frontend/landing/src/components/AudienceStrip.tsx#AUDIENCES, in render order.
 const AUDIENCE_SEGMENTS = [
   'Finance teams',
   'Accounting firms',

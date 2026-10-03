@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
 // QA Mode B gap-fill, behavioural half. DemoModal.retry.dom.test.tsx drives the popup;
-// these rows drive the shared form directly, so the guarantees are pinned on the
-// component both surfaces mount rather than on one caller. Seam per the plan: the real
+// these rows drive the form directly, so the guarantees are pinned on the
+// component rather than on one caller. Seam per the plan: the real
 // HubSpot gate opened with vi.stubEnv, fetch stubbed, no vi.mock of the component.
 /// <reference types="node" />
 import { act, createElement } from 'react'

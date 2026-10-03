@@ -33,17 +33,23 @@ export const HERO_CHECKS: HeroCheck[] = [
 /* The problem — what breaks today                                     */
 /* ------------------------------------------------------------------ */
 
-// One shared warning glyph for every row, so this stays a plain string list.
-export const PROBLEMS: string[] = [
-  'Missing or incomplete tax fields',
-  'Incorrect customer or supplier information',
-  'Duplicate invoice numbers',
-  'Weak approval workflows',
-  'Poor audit trails',
-  'Manual invoice corrections',
-  'Disconnected accounting and ERP systems',
-  'Lack of readiness for structured e-invoicing requirements',
+// Rows in V759 order; Problem.tsx resolves them from CHECKING one by one.
+const PROBLEM_ROWS: [string, 'FAIL' | 'WARN'][] = [
+  ['Missing or incomplete tax fields', 'FAIL'],
+  ['Incorrect customer or supplier information', 'FAIL'],
+  ['Duplicate invoice numbers', 'FAIL'],
+  ['Weak approval workflows', 'WARN'],
+  ['Poor audit trails', 'WARN'],
+  ['Manual invoice corrections', 'WARN'],
+  ['Disconnected accounting and ERP systems', 'WARN'],
+  ['Lack of readiness for structured e-invoicing requirements', 'FAIL'],
 ]
+
+export const PROBLEMS: HeroCheck[] = PROBLEM_ROWS.map(([label, tag]) =>
+  tag === 'FAIL' ? { label, tag, ...FAIL } : { label, tag, ...WARN },
+)
+
+export const CHECKING = { tag: 'CHECKING', icon: 'loader-circle', bg: 'var(--muted)', fg: 'var(--muted-foreground)' } as const
 
 /* ------------------------------------------------------------------ */
 /* How it works — 3 steps                                              */

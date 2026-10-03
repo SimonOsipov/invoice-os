@@ -242,3 +242,13 @@ export function readV2Css(): Record<string, string> {
   }
   return out
 }
+
+export type ContrastRow = { el: Element; text: string; fg: string; bg: string; ratio: number; ambiguous: boolean }
+
+/** One row per element under `root` with a direct non-blank text node, resolved from the CSS texts in `css` and the ancestors above `root`. */
+export function resolveTextContrast(root: Element, css: readonly string[]): ContrastRow[] {
+  // Skeleton until implemented: returns no rows.
+  void root
+  void css
+  return []
+}

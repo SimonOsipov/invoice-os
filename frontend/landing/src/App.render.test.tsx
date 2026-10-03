@@ -220,6 +220,20 @@ describe('AN-02 on /privacy every nav link carries the prefix', () => {
   })
 })
 
+describe('R4-AN-1 the landing renders #coverage once, the privacy page none', () => {
+  const count = (html: string) => (html.match(/<section id="coverage"/g) ?? []).length
+
+  it('/ renders one <section id="coverage" class="ds-section band-peach">, /privacy none', () => {
+    const landing = renderAppAt('/')
+    const privacy = renderAppAt('/privacy')
+    expect(landing, 'control: the landing rendered its sections').toContain('<section id="modules"')
+    expect(privacy, 'control: the privacy page rendered its footer').toContain('<footer')
+    expect(count(landing), 'sections on /').toBe(1)
+    expect(landing).toContain('<section id="coverage" class="ds-section band-peach">')
+    expect(count(privacy), 'sections on /privacy').toBe(0)
+  })
+})
+
 describe('AN-03 every footer in-page link resolves to one section', () => {
   it('controls: the helper reports a ghost footer link and passes a resolving one', () => {
     const footer = '<footer><a href="#ghost">x</a></footer>'

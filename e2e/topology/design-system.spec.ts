@@ -418,7 +418,8 @@ test('landing mobile menu at 834 and 390', async ({ page }, testInfo) => {
     expect(menuBox.x + menuBox.width, `${label}: menu right`).toBeLessThanOrEqual(vp.width + 1)
     expect(menuBox.y + menuBox.height, `${label}: menu bottom`).toBeLessThanOrEqual(vp.height + 1)
 
-    const navLinks = await page.getByRole('navigation', { name: 'Primary' }).locator('a').count()
+    // CSS locator: the Primary nav is display:none below the burger edge.
+    const navLinks = await page.locator('nav[aria-label="Primary"] a').count()
     expect(navLinks, `${label}: Primary nav links`).toBeGreaterThan(0)
     await expect(menu.locator('a'), `${label}: one menu link per nav link`).toHaveCount(navLinks)
     await expect(menu.getByRole('button', { name: 'Platform login' }), `${label}: Platform login in the menu`).toHaveCount(1)

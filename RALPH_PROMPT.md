@@ -242,19 +242,16 @@ Spawn `product-executor` with the output of `hm subtask show <ID>` and the story
 
 The executor commits and handles push and PR state per its `Order` field (Phase 2).
 
-Then run the suites yourself, with output to logs:
+Then run the suites yourself. Run this command in `$WORKTREE_PATH`, with `run_in_background: true` and `timeout: 7200000`:
 ```bash
-L="$WORKTREE_PATH/.ralph"; mkdir -p "$L"
-(cd "$WORKTREE_PATH" && scripts/dev/wait-go-test-idle.sh .)                   > "$L/wait.log" 2>&1; echo "wait=$?"  # wait=1: stop, do not run the suites
-(cd "$WORKTREE_PATH" && make fmt-check)                                        > "$L/fmt.log"  2>&1; echo "fmt=$?"
-(cd "$WORKTREE_PATH" && go build ./... && go vet ./... && go test ./...)      > "$L/go.log"   2>&1; echo "go=$?"
-(cd "$WORKTREE_PATH" && make test-rls test-queue test-audit DEV_DB_PORT="$DEV_DB_PORT") > "$L/db.log" 2>&1; echo "db=$?"
-(cd "$WORKTREE_PATH" && pnpm -r typecheck && pnpm -r build)                   > "$L/spa.log"  2>&1; echo "spa=$?"
-# `pnpm -r test` alone would launch Playwright (e2e's `test` script is the browser suite).
-(cd "$WORKTREE_PATH" && pnpm -r --filter '!@invoice-os/e2e' test && pnpm --filter @invoice-os/e2e test:unit) > "$L/unit.log" 2>&1; echo "unit=$?"
-grep -hE '^(ok|FAIL|--- FAIL|Test Files|Tests)' "$L"/*.log | tail -40
+DEV_DB_PORT=<your DEV_DB_PORT> hm suite run scripts/dev/suites.sh
 ```
-- Never kill a running suite: a killed DB suite skips `t.Cleanup` and leaves an orphan tenant and a stuck `river_job`. Run the block in the background. Its exit wakes you.
+- `hm suite run` runs one worktree's suites at a time on the machine. Parallel suites starve each other of CPU until their tests time out. A queued run prints the story whose suites it waits for.
+- `scripts/dev/suites.sh` writes one log per suite to `$WORKTREE_PATH/.ralph/`. It prints one `<suite>=<exit code>` line per suite and the summary lines. It exits non-zero when a suite failed.
+- Omit `DEV_DB_PORT` only when Phase 0.5 started no dev Postgres. The script then prints `db=skipped`.
+- `wait=1`: a `go test` still runs in this worktree, and no suite ran. Wait for it to end, then run the command again.
+- Exit 1 with "the suites did not run": the queue did not move in an hour. Stop and report the error. It names the run that holds the queue.
+- Never kill a running suite: a killed DB suite skips `t.Cleanup` and leaves an orphan tenant and a stuck `river_job`. Its exit wakes you.
 - A zero exit and its summary line are the evidence. Read a full log only when its suite failed.
 - A subagent's report of a suite is not the suite's result.
 - **Checkpoint:** `EXECUTION_DONE`

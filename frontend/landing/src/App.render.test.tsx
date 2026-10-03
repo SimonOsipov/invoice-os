@@ -4,6 +4,8 @@
 // nor Nav's own unit tests can catch that either — they take hrefPrefix as an
 // explicit prop, never through App's actual `privacy` boolean. This file renders
 // the real App tree (SSR, no jsdom) at both paths to close that gap.
+import { readdirSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -345,6 +347,27 @@ describe('NV-04 How it works is gone from the page and the data', () => {
     for (const copy of OLD_COPY) expect(html, `old step copy "${copy}" is back`).not.toContain(copy)
     expect(Object.keys(data), 'control: data.tsx exports are enumerated').not.toHaveLength(0)
     expect(Object.keys(data)).not.toContain(DATA_KEY)
+  })
+})
+
+describe('R5-AC6 Compliance, Pricing and the TrustStrip name are gone from the page, the data and the tree', () => {
+  const RETIRED_COPY = ['Priced by compliance need', '₦340k', '–2 MONTHS', 'Know exactly how compliant you are', 'Compliance readiness', 'TIN &amp; VAT identifier checks', 'Readiness score, live', 'Transmit-ready invoices']
+
+  it('the markup carries none of their copy, and data.tsx exports none of their lists', () => {
+    const html = renderAppAt('/')
+    expect(html, 'control: the audience strip rendered').toContain('data-strip="audience"')
+    expect(html, 'control: the page escapes & as &amp;, so the needle below can match').toContain('&amp;')
+    for (const copy of RETIRED_COPY) expect(html, `retired copy "${copy}" is back`).not.toContain(copy)
+    const keys = Object.keys(data)
+    expect(keys, 'control: data.tsx exports are enumerated').toContain('FAQS')
+    for (const key of ['PLANS', 'PLAN_COLORS', 'RULES']) expect(keys, `${key} is back in data.tsx`).not.toContain(key)
+  })
+
+  it('no component file of the retired sections remains, and the renamed strip is the one that does', () => {
+    const files = readdirSync(fileURLToPath(new URL('./components', import.meta.url)))
+    expect(files.length, 'population floor: the components directory resolved').toBeGreaterThan(30)
+    expect(files, 'control: the strip kept under its v2 name').toContain('AudienceStrip.tsx')
+    for (const gone of ['Compliance.tsx', 'Pricing.tsx', 'TrustStrip.tsx']) expect(files, `${gone} is back`).not.toContain(gone)
   })
 })
 

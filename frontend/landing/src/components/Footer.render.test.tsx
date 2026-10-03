@@ -205,6 +205,7 @@ describe('R4-FT-2 the Platform column links its three sections in V470 order', (
         { tag: 'a', label: 'AI-supported intelligence', class: 'a-link', href: intelligence },
         { tag: 'a', label: 'Solutions for partners', class: 'a-link', href: solutions },
       ])
+      expect(controls.at(-1)?.label, 'the Platform column ends with Solutions for partners').toBe('Solutions for partners')
     },
   )
 })

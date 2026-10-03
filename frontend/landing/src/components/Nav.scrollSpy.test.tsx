@@ -29,7 +29,10 @@ const SECTIONS: { id: string; top: number }[] = [
   { id: 'problem', top: 10 }, // last section crossed at threshold 87 — the expected winner
   { id: 'solution', top: 500 },
   { id: 'platform', top: 900 },
-  { id: 'compliance', top: 1300 },
+  { id: 'coverage', top: 1300 },
+  { id: 'solutions', top: 1700 },
+  { id: 'integrations', top: 2100 },
+  { id: 'api', top: 2500 },
 ]
 
 let container: HTMLDivElement
@@ -119,31 +122,35 @@ describe('Nav scroll-spy follows --header-h across the breakpoint', () => {
   })
 })
 
-describe('NV-11 the scroll-spy marks The solution and Platform current, and clears past them', () => {
-  const setTops = (tops: Record<string, number>) => {
-    for (const [id, top] of Object.entries(tops)) {
-      document.getElementById(id)!.getBoundingClientRect = () => ({ top }) as DOMRect
-    }
-  }
-  const FAR = 5000
-  const cases: [string, Record<string, number>, string | null][] = [
-    ['The problem', { problem: 10, solution: FAR, platform: FAR, compliance: FAR }, '#problem'],
-    ['The solution', { problem: -900, solution: 10, platform: FAR, compliance: FAR }, '#solution'],
-    ['Platform', { problem: -1800, solution: -900, platform: 10, compliance: FAR }, '#platform'],
-    ['Compliance', { problem: -2700, solution: -1800, platform: -900, compliance: 10 }, null],
+describe('NV-11 the scroll-spy marks each of the five nav sections current, and clears in an unlinked one', () => {
+  // Page order; the last section whose top has crossed the header is the one the spy reports.
+  const ORDER = ['top', 'problem', 'solution', 'platform', 'coverage', 'solutions', 'integrations', 'api']
+  const crossed = (id: string) => Object.fromEntries(ORDER.map((s, i) => [s, (i - ORDER.indexOf(id)) * 900 + (s === id ? 10 : 0)]))
+  // A null href marks a section the nav does not link: no link is current there.
+  const cases: [string, string, string | null][] = [
+    ['The problem', 'problem', '#problem'],
+    ['The solution', 'solution', '#solution'],
+    ['Platform', 'platform', '#platform'],
+    ['Solutions', 'solutions', '#solutions'],
+    ['Integrations', 'integrations', '#integrations'],
+    ['Coverage', 'coverage', null],
+    ['API', 'api', null],
   ]
 
   it.each(
-    cases.flatMap(([name, tops, href]) => [
-      { title: `${name} crossed, no prefix`, tops, href, hrefPrefix: '' },
-      { title: `${name} crossed, prefix slash`, tops, href, hrefPrefix: '/' },
+    cases.flatMap(([name, id, href]) => [
+      { title: `${name} crossed, no prefix`, id, href, hrefPrefix: '' },
+      { title: `${name} crossed, prefix slash`, id, href, hrefPrefix: '/' },
     ]),
-  )('$title: the nav marks only its own link current', ({ tops, href, hrefPrefix }) => {
-    setTops(tops)
+  )('$title: the nav marks only its own link current', ({ id, href, hrefPrefix }) => {
+    for (const [sid, top] of Object.entries(crossed(id))) {
+      document.getElementById(sid)!.getBoundingClientRect = () => ({ top }) as DOMRect
+    }
     act(() => {
       root.render(createElement(Nav, { onSignIn: () => {}, onBookDemo: () => {}, ...(hrefPrefix ? { hrefPrefix } : {}) }))
     })
     expect(container.querySelectorAll('.ios-nav-link'), 'control: every NAV_LINKS entry rendered').toHaveLength(NAV_LINKS.length)
+    expect(NAV_LINKS.length, 'control: the five V851 entries').toBe(5)
     const current = Array.from(container.querySelectorAll('a[aria-current="true"]')).map((a) => a.getAttribute('href'))
     expect(current).toEqual(href ? [`${hrefPrefix}${href}`] : [])
   })

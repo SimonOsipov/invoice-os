@@ -91,24 +91,21 @@ export const STEPS: Step[] = [
 /* Platform — 12 modules                                               */
 /* ------------------------------------------------------------------ */
 
-export type Module = { title: string; body: string; glyph: ReactNode }
-
-// Module glyphs render bare (no tile) on the dark band at the DS 20px rung.
-const mg = (paths: string[]) => <Icon paths={paths} size={20} />
+export type Module = { title: string; body: string; icon: GlyphName }
 
 export const MODULES: Module[] = [
-  { title: 'Business profile', body: 'Multi-tenant setup, tax details, numbering, currency, branches.', glyph: mg(['M3 21h18', 'M5 21V7l8-4v18', 'M19 21V11l-6-4']) },
-  { title: 'User access', body: 'Role-based access, team invites, accountant-client links.', glyph: mg(['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z', 'M22 21v-2a4 4 0 0 0-3-3.87']) },
-  { title: 'Customer / vendor', body: 'Buyer & seller database, TIN & company verification, duplicate detection.', glyph: mg(['M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2', 'M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z']) },
-  { title: 'Invoice management', body: 'Drafts, line items, credit & debit notes, cancellations.', glyph: mg(['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M14 2v6h6', 'M16 13H8M16 17H8']) },
-  { title: 'Validation engine', body: 'Rule-based checks for fields, tax logic, totals, numbering.', glyph: mg(['m9 12 2 2 4-4', 'M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9Z']) },
-  { title: 'Approval workflow', body: 'Creator, reviewer, approver, rejection notes, status trail.', glyph: mg(['M20 6 9 17l-5-5']) },
-  { title: 'Document generation', body: 'PDF, JSON, XML/UBL export, QR placeholder, versioning.', glyph: mg(['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M14 2v6h6', 'm9 15 2 2 4-4']) },
-  { title: 'Integration / API', body: 'REST, webhooks, ERP connectors, API keys, OAuth2.', glyph: mg(['M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.8 1.7', 'M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7']) },
-  { title: 'Archive & audit', body: 'Immutable logs, document storage, search, retention rules.', glyph: mg(['M21 8v13H3V8', 'M1 3h22v5H1z', 'M10 12h4']) },
-  { title: 'Reporting & analytics', body: 'Volume, tax summaries, error patterns, readiness score.', glyph: mg(['M3 3v18h18', 'm19 9-5 5-4-4-3 3']) },
-  { title: 'Partner portal', body: 'Accountants manage multiple client companies & exports.', glyph: mg(['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z', 'M22 21v-2a4 4 0 0 0-3-3.87', 'M16 3.13a4 4 0 0 1 0 7.75']) },
-  { title: 'Platform admin', body: 'Tenants, subscriptions, country modules, support, config.', glyph: mg(['M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z', 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z']) },
+  { title: 'Business profile', body: 'Multi-tenant setup, tax details, numbering, currency, branches.', icon: 'building-2' },
+  { title: 'User access', body: 'Role-based access, team invites, accountant-client links.', icon: 'users' },
+  { title: 'Customer / vendor', body: 'Buyer & seller database, TIN & company verification, duplicate detection.', icon: 'contact' },
+  { title: 'Invoice management', body: 'Drafts, line items, credit & debit notes, cancellations.', icon: 'file-text' },
+  { title: 'Validation engine', body: 'Rule-based checks for fields, tax logic, totals, numbering.', icon: 'circle-check' },
+  { title: 'Approval workflow', body: 'Creator, reviewer, approver, rejection notes, status trail.', icon: 'check' },
+  { title: 'Document generation', body: 'PDF, JSON, XML/UBL export, QR placeholder, versioning.', icon: 'file-check' },
+  { title: 'Integration / API', body: 'REST, webhooks, ERP connectors, API keys, OAuth2.', icon: 'link' },
+  { title: 'Archive & audit', body: 'Immutable logs, document storage, search, retention rules.', icon: 'archive' },
+  { title: 'Reporting & analytics', body: 'Volume, tax summaries, error patterns, readiness score.', icon: 'chart-line' },
+  { title: 'Partner portal', body: 'Accountants manage multiple client companies & exports.', icon: 'users-round' },
+  { title: 'Platform admin', body: 'Tenants, subscriptions, country modules, support, config.', icon: 'settings' },
 ]
 
 /* ------------------------------------------------------------------ */

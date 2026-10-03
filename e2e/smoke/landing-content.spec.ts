@@ -261,8 +261,8 @@ test('landing content: the live-validation preview lists every check and its tal
 // selectors are structural; App.landingCopy.dom.test.tsx asserts the same four on the SSR tree,
 // which is what keeps a bad selector here from costing a fleet rebuild to discover.
 const HERO_LEAD_TEXT = 'Bring invoices, approvals and changing country requirements into one connected solution. Available for Nigeria.'
-const MODULES_HEADING_TEXT = 'ASComply is your invoice compliance solution.'
-const MODULES_SOLUTION_TEXT =
+const SOLUTION_HEADING_TEXT = 'ASComply is your invoice compliance solution.'
+const SOLUTION_BODY_TEXT =
   'We help your team validate invoices before they are submitted, manage approvals internally, store audit-ready records and submit them to the regulatory bodies.'
 // Retyped from Footer.tsx's tagline (V459-483).
 const FOOTER_TAGLINE_TEXT = 'Clarity for every invoice. Confidence for your business.'
@@ -274,14 +274,14 @@ test('landing content: the retired positioning copy is replaced everywhere it sh
   await expect(heroParagraph, '#top does not hold exactly one hero paragraph').toHaveCount(1)
   await expect(heroParagraph).toHaveText(HERO_LEAD_TEXT)
 
-  const modulesHeading = page.locator('#modules h2')
-  await expect(modulesHeading, '#modules does not hold exactly one heading').toHaveCount(1)
-  await expect(modulesHeading).toHaveText(MODULES_HEADING_TEXT)
+  const solutionHeading = page.locator('#solution h2')
+  await expect(solutionHeading, '#solution does not hold exactly one heading').toHaveCount(1)
+  await expect(solutionHeading).toHaveText(SOLUTION_HEADING_TEXT)
 
-  // .mod-body excluded: those are the four module-card paragraphs, not the section intro.
-  const modulesIntro = page.locator('#modules p:not(.mod-body)')
-  await expect(modulesIntro, '#modules does not hold exactly two intro paragraphs').toHaveCount(2)
-  await expect(modulesIntro.nth(1)).toHaveText(MODULES_SOLUTION_TEXT)
+  // .mod-body excluded: those are the module-card paragraphs, not the section intro.
+  const solutionIntro = page.locator('#solution p:not(.mod-body)')
+  await expect(solutionIntro, '#solution does not hold exactly two intro paragraphs').toHaveCount(2)
+  await expect(solutionIntro.nth(1)).toHaveText(SOLUTION_BODY_TEXT)
 
   const footerTagline = page.locator('footer p')
   await expect(footerTagline, 'footer does not hold exactly one tagline paragraph').toHaveCount(1)

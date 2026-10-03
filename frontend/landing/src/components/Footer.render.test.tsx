@@ -186,6 +186,20 @@ describe('FT-02 the Platform column is an in-order subsequence of V470', () => {
   })
 })
 
+describe('R4-FT-2 the Platform column links both sections in V470 order', () => {
+  it.each([
+    ['', '#coverage', '#intelligence'],
+    ['/', '/#coverage', '/#intelligence'],
+  ])('with hrefPrefix %j "Country roadmap" %s comes before "AI-supported intelligence" %s', (hrefPrefix, coverage, intelligence) => {
+    const controls = controlsOf(platformSlice(renderToStaticMarkup(createElement(Footer, { onBookDemo: noop, hrefPrefix }))))
+    const mine = controls.filter((c) => c.label === 'Country roadmap' || c.label === 'AI-supported intelligence')
+    expect(mine.map((c) => ({ tag: c.tag, label: c.label, class: c.attrs.class, href: c.attrs.href }))).toEqual([
+      { tag: 'a', label: 'Country roadmap', class: 'a-link', href: coverage },
+      { tag: 'a', label: 'AI-supported intelligence', class: 'a-link', href: intelligence },
+    ])
+  })
+})
+
 describe('FT-02b the Platform column renders PLATFORM_LINKS, whatever it holds', () => {
   const saved = [...PLATFORM_LINKS]
   const plant = (links: Link[]) => PLATFORM_LINKS.splice(0, PLATFORM_LINKS.length, ...links)

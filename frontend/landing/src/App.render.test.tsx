@@ -234,6 +234,23 @@ describe('R4-AN-1 the landing renders #coverage once, the privacy page none', ()
   })
 })
 
+describe('R4-AN-2 the two sections render in v2 order', () => {
+  const count = (html: string, id: string) => (html.match(new RegExp(`<section id="${id}"`, 'g')) ?? []).length
+
+  it('/ renders one #coverage then one #intelligence, /privacy neither', () => {
+    const landing = renderAppAt('/')
+    const privacy = renderAppAt('/privacy')
+    expect(landing, 'control: the landing rendered its sections').toContain('<section id="modules"')
+    expect(privacy, 'control: the privacy page rendered its footer').toContain('<footer')
+    expect(count(landing, 'coverage'), '#coverage on /').toBe(1)
+    expect(count(landing, 'intelligence'), '#intelligence on /').toBe(1)
+    expect(landing).toContain('<section id="intelligence" class="ds-section band-dark2">')
+    expect(landing.indexOf('<section id="coverage"'), '#coverage comes first').toBeLessThan(landing.indexOf('<section id="intelligence"'))
+    expect(count(privacy, 'coverage'), '#coverage on /privacy').toBe(0)
+    expect(count(privacy, 'intelligence'), '#intelligence on /privacy').toBe(0)
+  })
+})
+
 describe('AN-03 every footer in-page link resolves to one section', () => {
   it('controls: the helper reports a ghost footer link and passes a resolving one', () => {
     const footer = '<footer><a href="#ghost">x</a></footer>'

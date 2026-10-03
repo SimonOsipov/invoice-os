@@ -3053,6 +3053,17 @@ gateway_token_write() {
   echo "GATEWAY_TOKEN confirmed on ${#GATEWAY_TOKEN_SERVICES[@]} services in environment $env_id."
 }
 
+# gateway_token_write_generated <env-id>: refuses unless openssl yields 64 lowercase hex; then writes.
+gateway_token_write_generated() {
+  local env_id="$1" token
+  token=$(openssl rand -hex 32)
+  if ! [[ "$token" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "::error::The generated GATEWAY_TOKEN is not 64 lowercase hex characters (openssl rand -hex 32). Value not printed. Nothing was written."
+    exit 1
+  fi
+  gateway_token_write "$env_id" "$token"
+}
+
 # cmd_set_fork_gateway_token <environment-id>
 # Generated, never read from the source: a fork must not trust production's token.
 cmd_set_fork_gateway_token() {
@@ -3075,7 +3086,7 @@ cmd_set_fork_gateway_token() {
     "listing service instances in environment $env_id"
   gateway_token_ids "$env_id" "$GQL_RESPONSE"
 
-  gateway_token_write "$env_id" "$(openssl rand -hex 32)"
+  gateway_token_write_generated "$env_id"
 }
 
 # cmd_set_production_gateway_token <environment-id>
@@ -3122,7 +3133,7 @@ cmd_set_production_gateway_token() {
   done
 
   if [ "$present" = "0" ]; then
-    gateway_token_write "$env_id" "$(openssl rand -hex 32)"
+    gateway_token_write_generated "$env_id"
     return
   fi
 

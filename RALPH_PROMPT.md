@@ -286,7 +286,16 @@ If issues are found, spawn `product-executor` to fix, then re-verify. Record eac
 - **Checkpoint:** `QA_VERIFIED`
 
 After each subtask, wait for `CI` on the pushed commit: `hm ci wait <PR>` (CI Monitoring Protocol).
-A red run stops the next subtask until it is green. Then take the next subtask.
+A red run stops the next subtask until it is green. A red run caused by a defect is recorded per "A defect in a verified subtask". Then take the next subtask.
+
+#### A defect in a verified subtask
+A defect is wrong behaviour in product code or its tests. A flaky run or an infrastructure failure is not a defect.
+A defect escaped QA when a later check finds it in a subtask that reached `QA_VERIFIED`. The later checks are CI, a later subtask's QA Verify, the Phase 3 review and the Phase 3.5 gate.
+
+1. Find the subtask whose commit added the faulty code. Use `git log -L` or `git blame` in `$WORKTREE_PATH`.
+2. Record the defect before the fix starts: `hm subtask note <SUBTASK-ID> "escaped: <finder> · <one line>"`.
+3. `<finder>` is one of `ci`, `qa <SUBTASK-ID>`, `review`, `gate`.
+4. When no single subtask added the faulty code, put the note on the subtask that found it, and write `source unknown` in the line.
 
 ### Phase 2: PR lifecycle
 
@@ -301,7 +310,7 @@ The orchestrator never runs `git checkout -b`, `gh pr create` or `gh pr ready`.
 
 After the FINAL subtask's QA, wait for the aggregate `CI` per the CI Monitoring Protocol.
 
-While it runs, review the whole diff: run `/code-review high <PR_NUMBER>`, never with `--fix`. Give `product-executor` every finding that would block the merge, in one batch: file and line, why it is wrong, how to show it fails. Add the other findings to the PR body as advisory (`gh pr edit`). Run one review cycle. No other automated review runs on this repo.
+While it runs, review the whole diff: run `/code-review high <PR_NUMBER>`, never with `--fix`. Give `product-executor` every finding that would block the merge, in one batch: file and line, why it is wrong, how to show it fails. Add the other findings to the PR body as advisory (`gh pr edit`). Run one review cycle. Record each blocking finding that is a defect per "A defect in a verified subtask". No other automated review runs on this repo.
 
 ### Phase 3.5: Story-level deploy gate
 
@@ -322,7 +331,7 @@ Runs once per story, after `CI` is green. It verifies the assembled feature agai
    - **Assert the relationship, not the dimension.** A layout AC is satisfied by what the number encodes — gutter symmetry, containment, alignment to a sibling. A width assertion passes on the very bug it should catch. This applies whenever the diff adds or changes a layout constant, not only when an AC names layout. **Measure widest first:** `e2e/topology/layout.ts` sweeps 2560/1920/1440/1280; every other sweep in `e2e/` stops at 1280.
    - **A pixel figure derived from source is a guess.** Measure it on the gate run with `e2e/topology/layout.ts` and cite the run id before a CSS edit, a bounce or an escalation.
    - No holistic "looks done": every AC needs its own evidence.
-5. **Fix loop (cap 2 cycles):** batch all fails into one report → `product-executor` fixes → push (re-fires `dev-env.yml`) → wait → re-verify only the failed items. Every bounce cites an AC id, a design-system rule or a prototype CSS rule. After 2 cycles, send the coordinator the rest as one question: continue the fix loop, or stop. Each gate run rebuilds an 11-service environment.
+5. **Fix loop (cap 2 cycles):** record each fail that is a defect per "A defect in a verified subtask". Batch all fails into one report → `product-executor` fixes → push (re-fires `dev-env.yml`) → wait → re-verify only the failed items. Every bounce cites an AC id, a design-system rule or a prototype CSS rule. After 2 cycles, send the coordinator the rest as one question: continue the fix loop, or stop. Each gate run rebuilds an 11-service environment.
 6. **Log** under `## Post-Deploy QA — <date>` in the QA Debate Log: per-AC verdict + evidence, fidelity deltas, fix cycles, run ids, advisory notes.
 7. **On PASS** (all original ACs pass on a green run, no unresolved bounces, fidelity evidence for UI stories): end with a short report in this order: **Needs you** (merge PR #N; each default or advisory finding a reviewer should see), **Changed** (subtasks, PR), **Found** (corrected premises; what you could not confirm and where you looked). Then output `<promise>ALL_TASKS_COMPLETE</promise>`.
    **Otherwise:** do not emit completion. Send the coordinator the open failures as one question.

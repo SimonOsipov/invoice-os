@@ -254,6 +254,12 @@ button {
   .hero-card {
     margin-top: 0 !important;
   }
+  .cols3 {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .rm-chev {
+    display: none !important;
+  }
 }
 
 @media (max-width: 600px) {
@@ -401,4 +407,14 @@ html:has(.cookie-note) {
   .cn-actions button {
     height: 44px;
   }
+}
+
+.btn-on-dark {
+  color: var(--accent) !important;
+  border-bottom-color: var(--accent) !important;
+}
+
+.btn-on-peach {
+  color: var(--primary) !important;
+  border-bottom-color: var(--primary) !important;
 }

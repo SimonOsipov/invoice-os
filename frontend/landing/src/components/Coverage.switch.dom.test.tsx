@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Coverage band, left column and panel shell: header copy, country switch, card, flags, legend (jsdom).
 import { act, createElement } from 'react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { GLYPHS } from '../icons'
 import { click, mountView, show, spyConsoleError, unmountView, type View } from './ds/dsDom.test.util'
 import { Coverage } from './Coverage'
@@ -84,12 +84,12 @@ const CTA_TEXT = 'Discuss your country →'
 
 let view: View
 let consoleError: ReturnType<typeof spyConsoleError>
-let onBookDemo: ReturnType<typeof vi.fn>
+let onBookDemo: Mock<() => void>
 
 beforeEach(async () => {
   view = mountView()
   consoleError = spyConsoleError()
-  onBookDemo = vi.fn()
+  onBookDemo = vi.fn<() => void>()
   await show(view, createElement(Coverage, { onBookDemo }))
 })
 
@@ -336,7 +336,7 @@ describe('Coverage band', () => {
     })
   })
 
-  it('CV-09 the roadmap row is V792', () => {
+  it('CV-11 the roadmap row is V792', () => {
     const rows = view.container.querySelectorAll<HTMLElement>('[data-roadmap]')
     expect(rows, 'exactly one [data-roadmap]').toHaveLength(1)
     const row = rows[0]
@@ -391,7 +391,7 @@ describe('Coverage band', () => {
     }
   })
 
-  it('CV-10 the disclaimer and the CTA', () => {
+  it('CV-12 the disclaimer and the CTA', () => {
     const roadmap = view.container.querySelector('[data-roadmap]')
     expect(roadmap, 'the roadmap row').not.toBeNull()
     const row = roadmap!.nextElementSibling as HTMLElement | null

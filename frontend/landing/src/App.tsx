@@ -57,8 +57,8 @@ export default function App() {
   const [consent, setConsent] = useState<ConsentRecord | null>(() => readConsent())
   // Once a choice is stored the footer control is the only route back to the notice.
   const [reopened, setReopened] = useState(false)
-  // Source-bound per call site: the five components keep `onBookDemo: () => void`
-  // and stay untouched, so one file carries the attribution instead of six.
+  // Source-bound per call site: the six components keep `onBookDemo: () => void`
+  // and stay untouched, so one file carries the attribution.
   const book = (source: DemoCtaSource) => () => {
     trackDemoOpen(source)
     setDemoOpen(true)
@@ -134,7 +134,7 @@ export default function App() {
           <Modules />
           <HowItWorks />
           <Compliance />
-          <Coverage />
+          <Coverage onBookDemo={book('coverage')} />
           <Audience onBookDemo={book('audience')} />
           <Developers />
           <Pricing onBookDemo={book('pricing')} />

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { COUNTRY_ORDER, COVERAGE, LEGEND, type CountryId } from '../countries'
+import { COUNTRY_ORDER, COVERAGE, LEGEND, ROADMAP, type CountryId } from '../countries'
 import { GLYPHS, Icon } from '../icons'
 import { Badge } from './ds/Badge'
 import { Button } from './ds/Button'
@@ -13,7 +13,7 @@ const teal = (name: 'shield-check' | 'check') => (
   </span>
 )
 
-export function Coverage() {
+export function Coverage({ onBookDemo }: { onBookDemo: () => void }) {
   const [country, setCountry] = useState<CountryId>('NG')
   const cty = COVERAGE[country]
   return (
@@ -138,6 +138,43 @@ export function Coverage() {
             ))}
           </div>
         </div>
+      </div>
+      <div className="cols3" data-roadmap style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 16, marginTop: 32 }}>
+        {ROADMAP.map((r) => (
+          <div key={r.n} style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--primary)', paddingTop: 3 }}>{r.n}</span>
+              <div>
+                <div className="t-card-title" style={{ color: 'var(--primary)' }}>
+                  {r.t}
+                </div>
+                <div style={{ fontSize: 14, lineHeight: 1.5, color: 'var(--accent-foreground)' }}>{r.s}</div>
+              </div>
+            </div>
+            <span className="rm-chev" style={{ display: r.chev, color: 'var(--primary)' }}>
+              <Icon paths={GLYPHS['chevron-right']} size={20} />
+            </span>
+          </div>
+        ))}
+      </div>
+      <div
+        style={{
+          marginTop: 32,
+          paddingTop: 22,
+          borderTop: '1px solid var(--accent-20)',
+          display: 'flex',
+          flexWrap: 'wrap',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '12px 24px',
+        }}
+      >
+        <p style={{ margin: 0, fontSize: 14, color: 'var(--accent-foreground)', maxWidth: 640 }}>
+          Roadmap markets represent our direction. Availability and launch dates will be confirmed by the ASComply team.
+        </p>
+        <Button variant="text" className="btn-on-peach" onClick={onBookDemo}>
+          Discuss your country →
+        </Button>
       </div>
     </Section>
   )

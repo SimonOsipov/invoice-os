@@ -67,3 +67,9 @@ export const LEGEND = [
   { label: 'Planned expansion', color: 'var(--sage)', border: 'transparent' },
   { label: 'Future vision', color: 'var(--on-dark-10)', border: 'var(--on-dark-20)' },
 ] as const
+
+export const ROADMAP = [
+  { n: '01', t: 'Nigeria', s: 'Our first launch market', chev: 'inline-flex' },
+  { n: '02', t: 'Kenya and South Africa', s: 'Planned expansion markets', chev: 'inline-flex' },
+  { n: '03', t: 'Pan-African ambition', s: 'Wider coverage, country by country', chev: 'none' },
+] as const

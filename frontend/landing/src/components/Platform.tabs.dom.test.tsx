@@ -89,20 +89,37 @@ describe('PL-04 the keys drive the composed tabs', () => {
       return { selected: selectedIndex(tabs), focused: focusedIndex(tabs), h3: h3(), labelledby: panelOf(c).getAttribute('aria-labelledby') === tabs[selectedIndex(tabs)].id }
     }
     const heading = (i: number) => `${PLATFORM_COPY[i].h1} ${PLATFORM_COPY[i].h2}`
+    // Roving tabindex and aria-controls follow the selection after every key.
+    const wiring = () => {
+      const tabs = tabsIn(c)
+      const panel = panelOf(c)
+      expect(panel.id, 'the panel has an id').not.toBe('')
+      return { tabIndexes: tabs.map((t) => t.tabIndex), controls: tabs.map((t) => t.getAttribute('aria-controls') === panel.id) }
+    }
+    const at = (i: number) => ({ tabIndexes: [0, 1, 2].map((j) => (j === i ? 0 : -1)), controls: [true, true, true] })
     expect(tabsIn(c), 'control: three tabs').toHaveLength(3)
     tabsIn(c)[0].focus()
     expect(state(), 'control: Validate selected and focused at rest').toEqual({ selected: 0, focused: 0, h3: heading(0), labelledby: true })
+    expect(wiring()).toEqual(at(0))
 
     press(document.activeElement!, 'ArrowRight')
     expect(state()).toEqual({ selected: 1, focused: 1, h3: 'Every decision. A clear owner.', labelledby: true })
+    expect(wiring()).toEqual(at(1))
     press(document.activeElement!, 'ArrowLeft')
     expect(state()).toEqual({ selected: 0, focused: 0, h3: heading(0), labelledby: true })
     press(document.activeElement!, 'ArrowLeft')
     expect(state(), 'ArrowLeft wraps to Submit').toEqual({ selected: 2, focused: 2, h3: heading(2), labelledby: true })
-    press(document.activeElement!, 'Home')
-    expect(state()).toEqual({ selected: 0, focused: 0, h3: heading(0), labelledby: true })
+    expect(wiring()).toEqual(at(2))
+    press(document.activeElement!, 'ArrowRight')
+    expect(state(), 'ArrowRight wraps to Validate').toEqual({ selected: 0, focused: 0, h3: heading(0), labelledby: true })
     press(document.activeElement!, 'End')
     expect(state()).toEqual({ selected: 2, focused: 2, h3: heading(2), labelledby: true })
+    press(document.activeElement!, 'Home')
+    expect(state()).toEqual({ selected: 0, focused: 0, h3: heading(0), labelledby: true })
+    expect(wiring()).toEqual(at(0))
+    press(document.activeElement!, 'End')
+    expect(state()).toEqual({ selected: 2, focused: 2, h3: heading(2), labelledby: true })
+    expect(wiring()).toEqual(at(2))
   })
 })
 

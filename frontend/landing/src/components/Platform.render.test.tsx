@@ -4,6 +4,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
+import App from '../App'
 import { GLYPHS } from '../icons'
 import { Platform } from './Platform'
 import { PLATFORM_CAPABILITIES, PLATFORM_COPY, PLATFORM_SIDE_COPY } from './Platform.copy.test.util'
@@ -138,6 +139,11 @@ describe('PL-03r the Validate result card keeps the card frame', () => {
     expect(cards.length).toBe(1)
     expect(styleOf(cards[0])).toMatchObject({ 'box-shadow': 'var(--shadow-card)', padding: '22px 24px' })
 
+    const tiles = cards[0].querySelectorAll('.ds-icontile')
+    expect(tiles.length).toBe(1)
+    expect(tiles[0].classList.contains('ds-icontile--primary')).toBe(true)
+    expect(styleOf(tiles[0])).toMatchObject({ width: '36px', height: '36px' })
+
     const shield = [...cards[0].querySelectorAll('svg')].filter((s) => s.getAttribute('width') === '28')
     expect(shield.length).toBe(1)
     expect(paths(shield[0])).toEqual([...GLYPHS['shield-check']])
@@ -149,5 +155,25 @@ describe('PL-03r the Validate result card keeps the card frame', () => {
       expect(paths(t)).toEqual([...GLYPHS['circle-check']])
       expect(colorOf(t)).toBe('var(--teal)')
     })
+  })
+})
+
+describe('PL-09 the page places #platform after #solution and before #how', () => {
+  it('lists the three section ids consecutively, with #platform once', () => {
+    const tpl = document.createElement('template')
+    tpl.innerHTML = renderToStaticMarkup(createElement(App))
+    const ids = [...tpl.content.querySelectorAll('section[id]')].map((s) => s.id)
+    expect(ids.filter((id) => id === 'platform')).toHaveLength(1)
+    const i = ids.indexOf('solution')
+    expect(i, 'control: #solution rendered').toBeGreaterThan(-1)
+    expect(ids.slice(i, i + 3)).toEqual(['solution', 'platform', 'how'])
+  })
+
+  it('the rendered page makes no cryptographic claim, and the control page does render the Platform copy', () => {
+    const tpl = document.createElement('template')
+    tpl.innerHTML = renderToStaticMarkup(createElement(App))
+    const text = norm(tpl.content.textContent)
+    expect(text, 'control: the Platform band rendered').toContain('THE ASCOMPLY PLATFORM')
+    expect(text).not.toMatch(/cryptograph/i)
   })
 })

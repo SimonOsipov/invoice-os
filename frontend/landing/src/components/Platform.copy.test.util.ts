@@ -1,5 +1,5 @@
-// Platform copy retyped from the prototype, never imported from data.tsx, so a drifting data file fails the tests.
-// The Submit body and tags are the honest wording the PM chose over the prototype's cryptographic claim.
+// Platform copy retyped here, never imported from data.tsx, so a drifting data file fails the tests.
+// The Submit body and tags are the approved wording, not the prototype's.
 import type { GlyphName } from '../icons'
 
 export type PlatformCopy = {

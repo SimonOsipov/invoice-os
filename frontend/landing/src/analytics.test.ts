@@ -248,6 +248,7 @@ describe('App.tsx CTA bindings (AC-3)', () => {
     expect(bound).toContain('platform')
     expect(new Set(bound).size).toBe(bound.length)
     expect(new Set(bound)).toEqual(new Set(DEMO_CTA_SOURCES))
+    expect(bound, 'bindings follow the page order DEMO_CTA_SOURCES lists').toEqual([...DEMO_CTA_SOURCES])
     expect(APP_SRC).not.toMatch(/onBookDemo=\{onBookDemo\}/)
   })
 })

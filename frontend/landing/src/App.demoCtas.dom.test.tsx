@@ -2,7 +2,7 @@
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
 // F-3: every rendered demo CTA -- eleven of them, spread across six scopes, in six
 // different components -- opens the same "Book a demo" modal. Also discharges F-12 criterion 3
-// (every pricing tier's CTA opens the demo modal): roster entries 6-8 are the three
+// (every pricing tier's CTA opens the demo modal): the three #pricing roster entries are the
 // PLANS[].cta values, the same ones Pricing.billingPeriod.dom.test.tsx reads; per
 // Decisions -> [f12-criterion-3-placement] that file points back here rather than
 // re-proving it, because proving it needs the App-owned dialog a component-alone

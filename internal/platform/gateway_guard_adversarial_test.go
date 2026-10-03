@@ -239,3 +239,36 @@ func TestRequireToken_EmptyConfiguredTokenAdmitsOnlyAMissingOrEmptyHeader(t *tes
 		})
 	}
 }
+
+// The marker is the guard's own refusal and nothing else: an admitted request, an open route and a
+// client-sent copy never carry it, and the refusal body stays the plain 401.
+func TestRequireGateway_MarkerOnlyOnARefusal(t *testing.T) {
+	app, _ := guardedApp(t)
+
+	ok := httptest.NewRequest(http.MethodGet, "/v1/thing", nil)
+	ok.Header.Set(HeaderGatewayToken, guardToken)
+	ok.Header.Set(HeaderGatewayGuard, GatewayGuardRefused)
+	rec := serve(app, ok)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admitted request: status = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Values(HeaderGatewayGuard); len(got) != 0 {
+		t.Errorf("admitted request: %s = %q, want none", HeaderGatewayGuard, got)
+	}
+
+	open := serve(app, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if open.Code != http.StatusOK {
+		t.Fatalf("open route: status = %d, want 200", open.Code)
+	}
+	if got := open.Header().Values(HeaderGatewayGuard); len(got) != 0 {
+		t.Errorf("open route: %s = %q, want none", HeaderGatewayGuard, got)
+	}
+
+	refused := httptest.NewRequest(http.MethodGet, "/v1/thing", nil)
+	refused.Header.Set(HeaderGatewayGuard, "something-else")
+	rr := serve(app, refused)
+	assertRefused(t, rr, "no token, client-sent marker")
+	if got := rr.Header().Values(HeaderGatewayGuard); len(got) != 1 {
+		t.Errorf("refusal: %s = %q, want exactly one value", HeaderGatewayGuard, got)
+	}
+}

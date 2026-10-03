@@ -230,3 +230,159 @@ func TestGatewayTokenNeverLeavesTheGateway(t *testing.T) {
 		}
 	})
 }
+
+const upstreamSecretBody = "UPSTREAM-BODY-SECRET"
+
+// markedUpstream answers status with the guard marker value and a body the client must never see.
+func markedUpstream(t *testing.T, status int, marker string) *url.URL {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if marker != "" {
+			w.Header().Set(platform.HeaderGatewayGuard, marker)
+		}
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(upstreamSecretBody))
+	}))
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parse upstream url: %v", err)
+	}
+	return u
+}
+
+// The marker alone decides: any status, even a 2xx, answers 502. Only the exact guard value counts.
+func TestGuardMarkerAnswers502OnAnyStatusAndNeverLeaks(t *testing.T) {
+	for _, status := range []int{200, 204, 401, 403, 404, 500, 503} {
+		t.Run("status "+http.StatusText(status), func(t *testing.T) {
+			tg := setupGateway(t)
+			h := Handler(Options{Verifier: tg.verifier, Sessions: liveSessions(t), Upstreams: map[string]*url.URL{"tenancy": markedUpstream(t, status, platform.GatewayGuardRefused)}, GatewayToken: testGatewayToken})
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, request("GET", "/api/tenancy/v1/ping", tg.validToken(t)))
+
+			if rec.Code != http.StatusBadGateway {
+				t.Fatalf("status = %d, want 502", rec.Code)
+			}
+			if got := rec.Body.String(); got != `{"error":"bad gateway"}`+"\n" {
+				t.Errorf("body = %q, want the gateway's bad-gateway body", got)
+			}
+			for k, vs := range rec.Header() {
+				if strings.EqualFold(k, platform.HeaderGatewayGuard) {
+					t.Errorf("header %s = %q reached the client", k, vs)
+				}
+			}
+			if strings.Contains(rec.Body.String(), upstreamSecretBody) {
+				t.Errorf("the upstream's body reached the client: %q", rec.Body.String())
+			}
+		})
+	}
+
+	for _, v := range []string{"Refused", "refused;x", "REFUSED", "1", ""} {
+		t.Run("not the marker "+v, func(t *testing.T) {
+			tg := setupGateway(t)
+			h := Handler(Options{Verifier: tg.verifier, Sessions: liveSessions(t), Upstreams: map[string]*url.URL{"tenancy": markedUpstream(t, http.StatusUnauthorized, v)}, GatewayToken: testGatewayToken})
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, request("GET", "/api/tenancy/v1/ping", tg.validToken(t)))
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("status = %d, want the upstream's 401 passed through", rec.Code)
+			}
+		})
+	}
+}
+
+// A client-sent marker is request data: it must not turn a pass-through into a 502, and an
+// upstream answer without the marker stays unreported by the gateway.
+func TestGuardMarkerSentByAClientHasNoEffect(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		status int
+	}{{"upstream 200", 200}, {"upstream 401", 401}, {"upstream 500", 500}} {
+		t.Run(c.name, func(t *testing.T) {
+			app, rec, want := sentrytest.Boot(t, "gateway")
+			h, tok := mountAPI(t, app, map[string]*url.URL{"tenancy": markedUpstream(t, c.status, ""), "marked": markedUpstream(t, 401, platform.GatewayGuardRefused)})
+			for _, name := range []string{"x-gateway-guard", platform.HeaderGatewayGuard} {
+				req := request(http.MethodGet, "/api/tenancy/v1/ping", tok)
+				req.Header[name] = []string{platform.GatewayGuardRefused}
+				out := httptest.NewRecorder()
+				h.ServeHTTP(out, req)
+				if out.Code != c.status {
+					t.Errorf("client sent %s: status = %d, want the upstream's %d", name, out.Code, c.status)
+				}
+			}
+			rec.None(t)
+
+			// Positive control: a marked upstream response on the same recorder is counted.
+			serveAPI(h, "/api/marked/v1/ping", tok)
+			rec.One(t, want)
+		})
+	}
+}
+
+// A refusal opens exactly one Sentry issue, as the gateway's own 5xx, and carries no secret.
+func TestGuardMarkerRefusalIsReportedOnce(t *testing.T) {
+	app, rec, want := sentrytest.Boot(t, "gateway")
+	h, tok := mountAPI(t, app, map[string]*url.URL{"tenancy": markedUpstream(t, http.StatusUnauthorized, platform.GatewayGuardRefused)})
+
+	if got := serveAPI(h, "/api/tenancy/v1/ping", tok).Code; got != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", got)
+	}
+	e := rec.One(t, want)
+	if wantFP := []string{"http-5xx", routePrefix, "502"}; !slices.Equal(e.Fingerprint, wantFP) {
+		t.Errorf("fingerprint = %q, want %q", e.Fingerprint, wantFP)
+	}
+	raw, err := json.Marshal(e)
+	if err != nil {
+		t.Fatalf("marshal event: %v", err)
+	}
+	for _, secret := range []string{testGatewayToken, tok, upstreamSecretBody} {
+		if strings.Contains(string(raw), secret) {
+			t.Errorf("the Sentry event carries %q: %s", secret, raw)
+		}
+	}
+}
+
+// The one ERROR line names the upstream and carries neither a credential nor a client-forged identity.
+func TestGuardMarkerErrorLogHasNoSecrets(t *testing.T) {
+	tg := setupGateway(t)
+	log, buf := captureLog()
+	tok := tg.validToken(t)
+	h := Handler(Options{Verifier: tg.verifier, Sessions: liveSessions(t), Upstreams: map[string]*url.URL{"tenancy": markedUpstream(t, http.StatusUnauthorized, platform.GatewayGuardRefused)}, Logger: log, GatewayToken: testGatewayToken})
+
+	req := request("GET", "/api/tenancy/v1/ping", tok)
+	forged := map[string]string{"X-Tenant-ID": "tenant-FORGED", "X-User-ID": "user-FORGED", "X-User-Role": "role-FORGED", "X-User-Email": "forged@FORGED.test", platform.HeaderGatewayToken: "token-FORGED"}
+	for k, v := range forged {
+		req.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", rec.Code)
+	}
+
+	var errLines []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("log line is not JSON: %q", line)
+		}
+		if rec["level"] == "ERROR" {
+			errLines = append(errLines, rec)
+		}
+	}
+	if len(errLines) != 1 {
+		t.Fatalf("%d ERROR lines, want 1:\n%s", len(errLines), buf.String())
+	}
+	if errLines[0]["msg"] != "gateway token refused by upstream" || errLines[0]["upstream"] != "tenancy" {
+		t.Errorf("ERROR line = %v, want msg and upstream=tenancy", errLines[0])
+	}
+	logged := buf.String()
+	secrets := []string{testGatewayToken, tok, upstreamSecretBody, testSubject, testTenant}
+	for _, v := range forged {
+		secrets = append(secrets, v)
+	}
+	for _, s := range secrets {
+		if strings.Contains(logged, s) {
+			t.Errorf("the log carries %q:\n%s", s, logged)
+		}
+	}
+}

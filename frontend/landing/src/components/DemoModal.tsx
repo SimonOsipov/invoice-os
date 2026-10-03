@@ -54,7 +54,6 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
 
   return (
     <div
-      className="dm-overlay"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
@@ -64,7 +63,6 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
       <style>{`
         ${MODAL_CHROME_CSS}
         ${DEMO_FORM_CSS}
-        @media (max-width: 480px) { .dm-overlay { padding: 14px !important; } }
       `}</style>
 
       <div

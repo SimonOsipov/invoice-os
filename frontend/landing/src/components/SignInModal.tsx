@@ -72,7 +72,7 @@ export function SignInModal({ onClose, heldState = NO_STATE, initialError }: { o
           <div data-testid="persona-picker">
             <h3 style={{ ...HEADING_STYLE, margin: '0 0 6px' }}>Choose an account</h3>
             <p className="t-body-sm" style={{ margin: 0, lineHeight: 1.55 }}>Pick a demo profile to continue. Each role opens only the workspace it's allowed to use.</p>
-            <div style={{ display: 'grid', gap: 10, marginTop: 18 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 10, marginTop: 18 }}>
               {LANDING_PERSONAS.map((p) => (
                 // data-persona: stable selector for the persona-picker test oracle
                 <button
@@ -80,7 +80,7 @@ export function SignInModal({ onClose, heldState = NO_STATE, initialError }: { o
                   key={p.id}
                   onClick={() => pickPersona(p)}
                   className="si-persona"
-                  style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '12px 14px', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', minWidth: 0, textAlign: 'left', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '12px 14px', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
                 >
                   <span style={{ flex: 'none', width: 38, height: 38, borderRadius: 'var(--radius-md)', background: p.avBg, color: p.avColor, display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 700 }}>{p.initials}</span>
                   <span style={{ flex: 1, minWidth: 0 }}>

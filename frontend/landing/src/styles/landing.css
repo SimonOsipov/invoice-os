@@ -198,6 +198,9 @@ button {
   .mod-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .cols6 {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
 }
 @media (max-width: 560px) {
   .mod-grid {
@@ -225,6 +228,9 @@ button {
 }
 
 .split {
+  display: grid;
+}
+.cols6 {
   display: grid;
 }
 [data-sol-tabs] .ds-seg-btn {
@@ -302,6 +308,9 @@ button {
 }
 
 @media (max-width: 640px) {
+  .cols6 {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
   .a-tabs [role="tablist"] {
     overflow-x: auto;
     scrollbar-width: none;

@@ -250,18 +250,25 @@ export const SOLUTIONS: readonly Solution[] = [
 ]
 
 /* ------------------------------------------------------------------ */
-/* Developers — API points                                             */
+/* Integrations — partners; API band — bullets                         */
 /* ------------------------------------------------------------------ */
 
-export type ApiPoint = { glyph: ReactNode; text: string }
+export type Partner = { mark: string; desc: string; size: number; weight: number; track?: string; glyph?: boolean }
 
-const ag = (paths: string[]) => <Icon paths={paths} size={18} />
+export const PARTNERS: Partner[] = [
+  { mark: 'SAP', desc: 'Enterprise resource planning', size: 30, weight: 800 },
+  { mark: 'ORACLE', desc: 'Enterprise applications', size: 20, weight: 700, track: '0.16em' },
+  { mark: 'Microsoft', desc: 'Dynamics 365', size: 22, weight: 700, glyph: true },
+  { mark: 'QuickBooks', desc: 'Business accounting', size: 24, weight: 800 },
+  { mark: 'sage', desc: 'Accounting and ERP', size: 26, weight: 800, track: '-0.04em' },
+  { mark: 'odoo', desc: 'Business applications', size: 28, weight: 700, track: '-0.03em' },
+]
 
-export const API_POINTS: ApiPoint[] = [
-  { glyph: ag(['M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.8 1.7', 'M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7']), text: 'REST API — create, validate, fetch status, fetch documents' },
-  { glyph: ag(['M22 12h-4l-3 9L9 3l-3 9H2']), text: 'Signed webhooks on status change & transmission events' },
-  { glyph: ag(['M19 11H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2Z', 'M7 11V7a5 5 0 0 1 10 0v4']), text: 'OAuth2 + scoped API keys, per-tenant isolation' },
-  { glyph: ag(['M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9Z', 'M3.6 9h16.8M3.6 15h16.8']), text: 'Sandbox MBS/NRS adapter — production on accreditation' },
+export const API_BULLETS: { icon: GlyphName; text: string }[] = [
+  { icon: 'link', text: 'REST API: create, validate, fetch status, fetch documents' },
+  { icon: 'activity', text: 'Signed webhooks on status change and submission events' },
+  { icon: 'key-round', text: 'OAuth2 and scoped API keys, with per-tenant isolation' },
+  { icon: 'globe', text: 'Sandbox MBS/NRS adapter. Production on accreditation.' },
 ]
 
 /* ------------------------------------------------------------------ */

@@ -11,7 +11,8 @@ import { Compliance } from './components/Compliance'
 import { Coverage } from './components/Coverage'
 import { Intelligence } from './components/Intelligence'
 import { Solutions } from './components/Solutions'
-import { Developers } from './components/Developers'
+import { Integrations } from './components/Integrations'
+import { Api } from './components/Api'
 import { Pricing } from './components/Pricing'
 import { DemoCta } from './components/DemoCta'
 import { Footer } from './components/Footer'
@@ -137,7 +138,8 @@ export default function App() {
           <Coverage onBookDemo={book('coverage')} />
           <Intelligence />
           <Solutions onBookDemo={book('audience')} />
-          <Developers />
+          <Integrations onBookDemo={book('integrations')} />
+          <Api onBookDemo={book('api')} />
           <Pricing onBookDemo={book('pricing')} />
           <DemoCta />
         </>

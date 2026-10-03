@@ -559,7 +559,8 @@ test('landing sections at 1440, 834 and 390', async ({ page }, testInfo) => {
     expect(want.shadow, `${label}: --shadow-card resolves`).not.toBe('none')
     expect(read.problemShadow, `${label}: problem check shadow`).toBe(want.shadow)
     expect(read.platformShadow, `${label}: platform result card shadow`).toBe(want.shadow)
-    expect(read.panelPaddingLeft, `${label}: tabpanel padding-left`).toBe(wide ? '48px' : vp.width === 390 ? '24px' : read.panelPaddingLeft)
+    // The clamp's two ends; 834 sits between them.
+    if (vp.width !== 834) expect(read.panelPaddingLeft, `${label}: tabpanel padding-left`).toBe(wide ? '48px' : '24px')
 
     let tabs: unknown = null
     if (vp.width === 390) {
@@ -610,8 +611,10 @@ test('landing problem check plays after scrolling into view at 1440, 834 and 390
     const card = page.locator('#problem-check')
     const before = await box(card, `${label} check card`)
     expect(before.y, `${label}: card top vs 0.7 x viewport height`).toBeGreaterThan(0.7 * vp.height)
-    await expect(checkFooter(page), `${label}: footer before entry`).toHaveText('Checking 1 of 8')
-    await expect(checkTags(page), `${label}: tags before entry`).toHaveText(Array(8).fill('CHECKING'))
+    // A run that began at load is past step 1 after two steps; a retrying read would wait for step 1 to return.
+    await page.waitForTimeout(1100)
+    expect(await checkFooter(page).textContent(), `${label}: footer before entry`).toBe('Checking 1 of 8')
+    expect(await checkTags(page).allTextContents(), `${label}: tags before entry`).toEqual(Array(8).fill('CHECKING'))
 
     await card.evaluate((el) => el.scrollIntoView({ block: 'center' }))
     await expect.poll(async () => checkFooter(page).textContent(), { intervals: [100], timeout: 10_000, message: `${label}: the run shows a step` }).toMatch(/^Checking [2-8] of 8$/)
@@ -791,9 +794,10 @@ test('landing hero and problem check under reduced motion', async ({ page }, tes
 
   // The check card shows its end state at load, after scrolling to it and after a replay.
   const problem = page.locator('#problem-check')
+  // One read, not a retrying one: a replayed run would reach the end text within the retry window.
   const expectEnd = async (when: string) => {
-    await expect(checkFooter(page), `reduced motion, ${when}: footer`).toHaveText(CHECK_END)
-    await expect(checkTags(page), `reduced motion, ${when}: outcomes`).toHaveText(CHECK_OUTCOMES)
+    expect(await checkFooter(page).textContent(), `reduced motion, ${when}: footer`).toBe(CHECK_END)
+    expect(await checkTags(page).allTextContents(), `reduced motion, ${when}: outcomes`).toEqual(CHECK_OUTCOMES)
   }
   await expectEnd('at load')
   await problem.evaluate((el) => el.scrollIntoView({ block: 'center' }))

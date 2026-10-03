@@ -1115,7 +1115,7 @@ test('landing consent: O3 the notice is anchored bottom-right on desktop and a b
 })
 
 const TAB_CAP = 80
-const MIN_O4_CONTROLS = 20 // `/` has ~36 controls before the notice; fewer means the walk never crossed the page
+const MIN_O4_CONTROLS = 20 // fewer means the walk never crossed the page
 const MIN_O4_CONTROLS_PRIVACY = 5 // header and footer links
 
 type FocusRead = { inside: boolean; name: string; rect: Rect; notice: Rect } | null

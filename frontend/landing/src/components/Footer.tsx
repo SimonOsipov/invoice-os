@@ -1,7 +1,11 @@
 import { Logo } from './ds/Logo'
 
-// Later stories append in the design's order; App.render.test.tsx AN-03 pins that each href resolves.
-export const PLATFORM_LINKS: { label: string; href: string }[] = [{ label: 'Invoice workflows', href: '#platform' }]
+// Only sections on the page; App.render.test.tsx AN-03 pins that each href resolves.
+export const PLATFORM_LINKS: { label: string; href: string }[] = [
+  { label: 'Invoice workflows', href: '#platform' },
+  { label: 'Country roadmap', href: '#coverage' },
+  { label: 'AI-supported intelligence', href: '#intelligence' },
+]
 
 // Only in-page anchors take the prefix; /privacy is already absolute.
 export function footerHref(href: string, prefix: string): string {

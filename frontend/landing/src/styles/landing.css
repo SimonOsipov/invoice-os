@@ -112,9 +112,26 @@ button {
 .a-link:focus-visible,
 .a-burger:focus-visible,
 .ios-nav-link:focus-visible,
-.a-menu-link:focus-visible {
+.a-menu-link:focus-visible,
+.a-card-btn:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
+}
+/* Inset: the steps scroller clips an outside ring. */
+[data-intel-steps] .a-card-btn:focus-visible {
+  outline-offset: -2px;
+}
+.a-tab-pill:hover {
+  filter: brightness(0.97);
+}
+.cov-marker:focus {
+  outline: none;
+}
+.cov-marker-focus {
+  opacity: 0;
+}
+.cov-marker:focus-visible .cov-marker-focus {
+  opacity: 1;
 }
 .a-nav {
   display: flex;
@@ -258,14 +275,17 @@ button {
 }
 
 @media (max-width: 900px) {
-  .cols3 {
-    grid-template-columns: minmax(0, 1fr);
-  }
   .split {
     grid-template-columns: minmax(0, 1fr) !important;
   }
   .hero-card {
     margin-top: 0 !important;
+  }
+  .cols3 {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .rm-chev {
+    display: none !important;
   }
 }
 
@@ -429,4 +449,14 @@ html:has(.cookie-note) {
   .cn-actions button {
     height: 44px;
   }
+}
+
+.btn-on-dark {
+  color: var(--accent) !important;
+  border-bottom-color: var(--accent) !important;
+}
+
+.btn-on-peach {
+  color: var(--primary) !important;
+  border-bottom-color: var(--primary) !important;
 }

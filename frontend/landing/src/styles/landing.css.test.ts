@@ -341,7 +341,7 @@ describe('SO-08 the Solution highlight line takes --highlight-on-dark-2', () => 
 /** The capability grid and narrow tab strip contract: the failures, empty when it holds. */
 function platformCssFailures(css: string): string[] {
   const rules = parseRules(css).map((r) => ({ ...r, selector: r.selector.replace(/'/g, '"') }))
-  const cols = (at: (a: string[]) => boolean) => declared(rules, '.cols3', 'grid-template-columns', at)
+  const cols = (at: (a: string[]) => boolean) => noBang(declared(rules, '.cols3', 'grid-template-columns', at))
   const tab = (selector: string, prop: string) => declared(rules, selector, prop, maxWidth(640))
   const checks: [string, string | undefined, string][] = [
     ['.cols3 columns outside any media', cols(noAt), 'repeat(3, minmax(0, 1fr))'],
@@ -375,5 +375,43 @@ describe('PL-08 the capability grid and the narrow tab strip', () => {
   it('landing.css sets .cols3 to 3 columns and 1 at max-width 900px, and scrolls the tab strip with unshrunk tabs at max-width 640px', () => {
     expect(parseRules(LANDING_CSS).length, 'control: the file parsed').toBeGreaterThanOrEqual(20)
     expect(platformCssFailures(LANDING_CSS)).toEqual([])
+  })
+})
+
+// Source scan: jsdom applies no CSS, so only the rule text shows the tab ring and hover dim are declared.
+describe('CV-10 the Coverage tabs keep their focus ring and hover dim', () => {
+  it('landing.css draws the ring on .a-card-btn:focus-visible and dims .a-tab-pill on hover', () => {
+    const rules = parseRules(LANDING_CSS)
+    const root = (a: string[]) => a.length === 0
+    expect(rules.length, 'control: the sheet parsed').toBeGreaterThan(10)
+    expect(declared(rules, '.a-link:focus-visible', 'outline', root), 'control: a sibling resolves').toBe('2px solid var(--ring)')
+    expect(declared(rules, '.a-card-btn:focus-visible', 'outline', root)).toBe('2px solid var(--ring)')
+    expect(declared(rules, '.a-card-btn:focus-visible', 'outline-offset', root)).toBe('2px')
+    expect(declared(rules, '.a-tab-pill:hover', 'filter', root)).toBe('brightness(0.97)')
+  })
+
+  it('landing.css insets the Intelligence step ring, which sits inside an overflow scroller', () => {
+    const rules = parseRules(LANDING_CSS)
+    expect(declared(rules, '[data-intel-steps] .a-card-btn:focus-visible', 'outline-offset', (a) => a.length === 0)).toBe('-2px')
+  })
+})
+
+// Source scan: jsdom applies no media queries, so only the rule text shows the roadmap collapse at 900px and the
+// .btn-on-peach underline. Intelligence.switch.dom.test.tsx IN-11 observes .btn-on-dark.
+describe('CV-13 the roadmap collapses at 900px and the peach button overrides the DS colour', () => {
+  const rules = parseRules(LANDING_CSS)
+
+  it('.cols3 is one column and .rm-chev is hidden at max-width 900px, both !important', () => {
+    expect(rules.length, 'control: the sheet parsed').toBeGreaterThan(10)
+    expect(declared(rules, '.split', 'grid-template-columns', maxWidth900), 'control: a sibling collapses in the same block').toBe('minmax(0, 1fr) !important')
+    expect(declared(rules, '.cols3', 'grid-template-columns', maxWidth900)).toBe('minmax(0, 1fr) !important')
+    expect(declared(rules, '.rm-chev', 'display', maxWidth900)).toBe('none !important')
+    expect(declared(rules, '.cols3', 'grid-template-columns', noAt), '.cols3 keeps its three-column base outside the media block').toBe('repeat(3, minmax(0, 1fr))')
+    expect(declared(rules, '.rm-chev', 'display', noAt), '.rm-chev sets no display outside the media block').toBeUndefined()
+  })
+
+  it('.btn-on-peach is --primary, colour and underline, !important', () => {
+    expect(declared(rules, '.btn-on-peach', 'color', noAt)).toBe('var(--primary) !important')
+    expect(declared(rules, '.btn-on-peach', 'border-bottom-color', noAt)).toBe('var(--primary) !important')
   })
 })

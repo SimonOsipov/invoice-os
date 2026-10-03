@@ -8,6 +8,8 @@ import { Problem } from './components/Problem'
 import { Modules } from './components/Modules'
 import { Platform } from './components/Platform'
 import { Compliance } from './components/Compliance'
+import { Coverage } from './components/Coverage'
+import { Intelligence } from './components/Intelligence'
 import { Audience } from './components/Audience'
 import { Developers } from './components/Developers'
 import { Pricing } from './components/Pricing'
@@ -132,6 +134,8 @@ export default function App() {
           <Modules />
           <Platform onBookDemo={book('platform')} />
           <Compliance />
+          <Coverage onBookDemo={book('coverage')} />
+          <Intelligence />
           <Audience onBookDemo={book('audience')} />
           <Developers />
           <Pricing onBookDemo={book('pricing')} />

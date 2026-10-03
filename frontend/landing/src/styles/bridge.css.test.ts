@@ -9,9 +9,11 @@ import {
   classNameTokens,
   classSelectors,
   classSelectorsInStrings,
+  contrast,
   customPropNames,
   customPropValues,
   declarations,
+  hexOf,
   landingBuildInput,
   parseRules,
   readV2Css,
@@ -68,29 +70,6 @@ function undefinedClasses(inputs: Record<string, string>, definingCss: readonly 
   const undef: Record<string, string[]> = {}
   for (const [tok, files] of used) if (!defined.has(tok)) undef[tok] = files
   return { checked: [...used.keys()], undef }
-}
-
-function hexOf(name: string, values: Map<string, string>): string | null {
-  let v = values.get(name)
-  for (let hops = 0; v && hops < 10; hops++) {
-    if (/^#[0-9a-f]{6}$/i.test(v)) return v.toLowerCase()
-    const m = /^var\(\s*(--[\w-]+)\s*\)$/.exec(v)
-    v = m ? values.get(m[1]) : undefined
-  }
-  return null
-}
-
-function luminance(hex: string): number {
-  const [r, g, b] = [1, 3, 5].map((i) => {
-    const c = parseInt(hex.slice(i, i + 2), 16) / 255
-    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
-  })
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b
-}
-
-function contrast(fg: string, bg: string): number {
-  const [hi, lo] = [luminance(fg), luminance(bg)].sort((a, b) => b - a)
-  return (hi + 0.05) / (lo + 0.05)
 }
 
 describe('bridge.css maps the app-layer names onto v2', () => {

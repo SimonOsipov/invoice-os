@@ -82,6 +82,7 @@ Harbourmaster keeps the story's subtasks. Ralph runs only as a Harbourmaster wor
 | When | Command |
 |------|---------|
 | The story file has its `## Implementation Subtasks` (Phase 0.5 step 7, Phase 0.6c), or a plan change rewrites them | `hm subtask import "<story file>"` |
+| The plan or a subtask's plan changes after Phase 1 started | `hm signal B7 <STORY> "<what changed>"` |
 | Read the story's subtasks and their status | `hm subtask list <STORY>` |
 | Read one subtask whole | `hm subtask show <ID>` |
 | The first stage of a subtask starts: Test-Spec or Execution | `hm subtask status <ID> doing` |
@@ -280,13 +281,24 @@ Spawn `product-qa-spec` (Mode B) with the acceptance criteria, the plan, the cha
 - **A fix to a false comment deletes the false clause and adds no new clause.** A needed new claim names the test or command that proves it.
 - Frontend: Playwright MCP verification against the deployed PR environment once it exists.
 
-When QA returns, **replay the mutation rows yourself**, with no other agent running: `go run ./internal/tools/mutationreplay .ralph/mutations-<SUBTASK-ID>.jsonl`. It edits source in place and restores the exact bytes. Any `NOT-PROVEN` or `INVALID` row fails QA; send it back. A row is a claim; the replay is the evidence.
+When QA returns, **replay the mutation rows yourself**, with no other agent running: `go run ./internal/tools/mutationreplay .ralph/mutations-<SUBTASK-ID>.jsonl`. It edits source in place and restores the exact bytes. Any `NOT-PROVEN` or `INVALID` row fails QA; send it back. Before you send it back, record each `NOT-PROVEN` row: `hm signal B6 <STORY> --subtask <SUBTASK-ID> "<ac>"`. A row is a claim; the replay is the evidence.
 
-If issues are found, spawn `product-executor` to fix, then re-verify. Record each QA finding with `hm subtask note`.
+If issues are found, spawn `product-executor` to fix, then re-verify. Record each QA finding with `hm subtask note`. Record each return to the executor with `hm signal B5 <STORY> --subtask <SUBTASK-ID> "<one line>"`.
 - **Checkpoint:** `QA_VERIFIED`
 
 After each subtask, wait for `CI` on the pushed commit: `hm ci wait <PR>` (CI Monitoring Protocol).
 A red run stops the next subtask until it is green. Then take the next subtask.
+A red run caused by a defect is recorded per "A defect in a verified subtask".
+
+#### A defect in a verified subtask
+A defect is wrong behaviour in product code or its tests. A flaky run or an infrastructure failure is not a defect.
+
+A defect escaped QA when a later finder finds it in a subtask that reached `QA_VERIFIED`. The finders are CI, a later subtask's QA Verify, the Phase 3 review and the Phase 3.5 gate.
+
+1. Find the subtask whose commit added the faulty code: `git log -L` or `git blame` in `$WORKTREE_PATH`.
+2. Before the fix starts, record `hm signal V1 <STORY> --subtask <SUBTASK-ID> "<finder>: <one line>"`.
+3. `<finder>` is `ci`, `qa <SUBTASK-ID>`, `review` or `gate`.
+4. When no single subtask added the faulty code, use the subtask that found it. Write `source unknown` in the line.
 
 ### Phase 2: PR lifecycle
 
@@ -301,7 +313,7 @@ The orchestrator never runs `git checkout -b`, `gh pr create` or `gh pr ready`.
 
 After the FINAL subtask's QA, wait for the aggregate `CI` per the CI Monitoring Protocol.
 
-While it runs, review the whole diff: run `/code-review high <PR_NUMBER>`, never with `--fix`. Give `product-executor` every finding that would block the merge, in one batch: file and line, why it is wrong, how to show it fails. Add the other findings to the PR body as advisory (`gh pr edit`). Run one review cycle. No other automated review runs on this repo.
+While it runs, review the whole diff: run `/code-review high <PR_NUMBER>`, never with `--fix`. Give `product-executor` every finding that would block the merge, in one batch: file and line, why it is wrong, how to show it fails. Add the other findings to the PR body as advisory (`gh pr edit`). Run one review cycle. No other automated review runs on this repo. A blocking finding that is a defect is recorded per "A defect in a verified subtask" (Phase 1).
 
 ### Phase 3.5: Story-level deploy gate
 
@@ -322,7 +334,7 @@ Runs once per story, after `CI` is green. It verifies the assembled feature agai
    - **Assert the relationship, not the dimension.** A layout AC is satisfied by what the number encodes — gutter symmetry, containment, alignment to a sibling. A width assertion passes on the very bug it should catch. This applies whenever the diff adds or changes a layout constant, not only when an AC names layout. **Measure widest first:** `e2e/topology/layout.ts` sweeps 2560/1920/1440/1280; every other sweep in `e2e/` stops at 1280.
    - **A pixel figure derived from source is a guess.** Measure it on the gate run with `e2e/topology/layout.ts` and cite the run id before a CSS edit, a bounce or an escalation.
    - No holistic "looks done": every AC needs its own evidence.
-5. **Fix loop (cap 2 cycles):** batch all fails into one report → `product-executor` fixes → push (re-fires `dev-env.yml`) → wait → re-verify only the failed items. Every bounce cites an AC id, a design-system rule or a prototype CSS rule. After 2 cycles, send the coordinator the rest as one question: continue the fix loop, or stop. Each gate run rebuilds an 11-service environment.
+5. **Fix loop (cap 2 cycles):** batch all fails into one report → `product-executor` fixes → push (re-fires `dev-env.yml`) → wait → re-verify only the failed items. Every bounce cites an AC id, a design-system rule or a prototype CSS rule. After 2 cycles, send the coordinator the rest as one question: continue the fix loop, or stop. Each gate run rebuilds an 11-service environment. A fail that is a defect is recorded per "A defect in a verified subtask" (Phase 1).
 6. **Log** under `## Post-Deploy QA — <date>` in the QA Debate Log: per-AC verdict + evidence, fidelity deltas, fix cycles, run ids, advisory notes.
 7. **On PASS** (all original ACs pass on a green run, no unresolved bounces, fidelity evidence for UI stories): end with a short report in this order: **Needs you** (merge PR #N; each default or advisory finding a reviewer should see), **Changed** (subtasks, PR), **Found** (corrected premises; what you could not confirm and where you looked). Then output `<promise>ALL_TASKS_COMPLETE</promise>`.
    **Otherwise:** do not emit completion. Send the coordinator the open failures as one question.

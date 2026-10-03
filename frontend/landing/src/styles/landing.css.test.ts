@@ -436,3 +436,13 @@ describe('R5-CSS-1b .cta-mark hides at 900', () => {
     expect(declared(rules, '.cta-mark', 'display', noAt), 'the mark shows above 900px').toBeUndefined()
   })
 })
+
+describe('R5-GE-4 the FAQ aside is static in the one-column layout', () => {
+  it('is position: static !important at max-width 900px and no base rule sets its position, so it cannot slide over the list', () => {
+    const rules = parseRules(LANDING_CSS)
+    expect(rules.length, 'control: the sheet parsed').toBeGreaterThan(10)
+    expect(declared(rules, '.cta-mark', 'display', maxWidth(900)), 'control: a sibling override is found at 900px').toBe('none !important')
+    expect(declared(rules, '[data-faq-aside]', 'position', maxWidth(900))).toBe('static !important')
+    expect(declared(rules, '[data-faq-aside]', 'position', noAt), 'a base rule would fight the sticky inline style').toBeUndefined()
+  })
+})

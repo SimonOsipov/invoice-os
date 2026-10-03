@@ -291,6 +291,10 @@ button {
   .cta-mark {
     display: none !important;
   }
+  /* a sticky grid item slides over the list in one column */
+  [data-faq-aside] {
+    position: static !important;
+  }
 }
 
 @media (max-width: 640px) {

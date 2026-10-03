@@ -1,7 +1,7 @@
 /* Local page styles — ported from the ASComply Africa prototype's inline <style>
    block. Keyframes for the hero product mock + hover transitions.
-   Token vars (--action, --bg-2, --line-3) come from bridge.css (:root);
-   --accent is the v2 peach and resolves from :root. */
+   --accent is the v2 peach and resolves from :root.
+*/
 
 * {
   box-sizing: border-box;
@@ -70,16 +70,12 @@ button {
 
 /* Hover, ported from the prototype's own <style> block.
    Links hover to --teal (v2 link hover). Feature cards and list rows have none — they are content,
-   not controls. The two exceptions the prototype ships are the pricing card's
-   hairline and the module cells on the dark band. */
+   not controls. The one exception the prototype ships is the module cells on the dark band. */
 .ios-link {
   transition: color 120ms ease-out;
 }
 .ios-link:hover {
   color: var(--teal) !important;
-}
-.ios-price:hover {
-  border-color: var(--line-3) !important;
 }
 
 /* Top-nav links. Separate from .ios-link: the nav has its own current state.
@@ -119,6 +115,11 @@ button {
 }
 /* Inset: the steps scroller clips an outside ring. */
 [data-intel-steps] .a-card-btn:focus-visible {
+  outline-offset: -2px;
+}
+/* Inset: the panel clips an outside ring. */
+.api-sample:focus-visible {
+  outline: 2px solid var(--ring);
   outline-offset: -2px;
 }
 .a-tab-pill:hover {
@@ -198,6 +199,9 @@ button {
   .mod-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .cols6 {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
 }
 @media (max-width: 560px) {
   .mod-grid {
@@ -221,11 +225,17 @@ button {
   transition: color var(--dur-base) var(--ease-out);
 }
 .mod-cell:hover .mod-body {
-  color: oklch(100% 0 0 / 0.88) !important;
+  color: rgba(255, 255, 255, 0.88) !important;
 }
 
 .split {
   display: grid;
+}
+.cols6 {
+  display: grid;
+}
+[data-sol-tabs] .ds-seg-btn {
+  white-space: nowrap;
 }
 .cols3 {
   display: grid;
@@ -265,15 +275,6 @@ button {
    required to override the inline grid-template-columns the sections
    set on themselves.
    ------------------------------------------------------------------ */
-@media (max-width: 920px) {
-  .ios-grid.ios-2 {
-    grid-template-columns: 1fr !important;
-  }
-  .ios-grid.ios-3 {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-  }
-}
-
 @media (max-width: 900px) {
   .split {
     grid-template-columns: minmax(0, 1fr) !important;
@@ -287,18 +288,19 @@ button {
   .rm-chev {
     display: none !important;
   }
-}
-
-@media (max-width: 600px) {
-  .ios-grid.ios-3 {
-    grid-template-columns: 1fr !important;
+  .cta-mark {
+    display: none !important;
   }
-  .ios-demo-card {
-    padding: 36px 22px !important;
+  /* a sticky grid item slides over the list in one column */
+  [data-faq-aside] {
+    position: static !important;
   }
 }
 
 @media (max-width: 640px) {
+  .cols6 {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
   .a-tabs [role="tablist"] {
     overflow-x: auto;
     scrollbar-width: none;

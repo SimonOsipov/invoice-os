@@ -308,18 +308,16 @@ describe('SO-05 the module grid runs 4 / 2 / 1', () => {
     expect(modGridFailures(MOD_GRID_FIXTURE('999px')).length, 'a max-width 999px copy must fail the lookup').toBeGreaterThan(0)
   })
 
-  it('landing.css sets .mod-grid to 4 columns, 2 at max-width 1000px, 1 at max-width 560px, and drops .ios-4', () => {
+  it('landing.css sets .mod-grid to 4 columns, 2 at max-width 1000px, 1 at max-width 560px, and no .ios-grid rule remains', () => {
     const rules = parseRules(LANDING_CSS)
     expect(rules.length, 'control: the file parsed').toBeGreaterThanOrEqual(20)
     const selectors = rules.flatMap(selectorParts)
-    expect(selectors.some((s) => s.includes('.ios-3')), 'control: .ios-3 remains').toBe(true)
+    expect(selectors.some((s) => s.includes('.mod-grid')), 'control: .mod-grid is declared').toBe(true)
 
     expect(modGridFailures(LANDING_CSS)).toEqual([])
-    expect(selectors.filter((s) => s.includes('.ios-4'))).toEqual([])
-
-    const ios3 = (px: number) => declared(rules, '.ios-grid.ios-3', 'grid-template-columns', maxWidth(px))
-    expect(ios3(920), 'dropping .ios-4 left the .ios-3 tablet rule').toBe('repeat(2, minmax(0, 1fr)) !important')
-    expect(ios3(600), 'dropping .ios-4 left the .ios-3 phone rule').toBe('1fr !important')
+    for (const dead of ['.ios-grid', '.ios-4', '.ios-price', '.ios-demo-card']) {
+      expect(selectors.filter((s) => s.includes(dead)), `a ${dead} rule outlived its last consumer`).toEqual([])
+    }
   })
 })
 
@@ -413,5 +411,38 @@ describe('CV-13 the roadmap collapses at 900px and the peach button overrides th
   it('.btn-on-peach is --primary, colour and underline, !important', () => {
     expect(declared(rules, '.btn-on-peach', 'color', noAt)).toBe('var(--primary) !important')
     expect(declared(rules, '.btn-on-peach', 'border-bottom-color', noAt)).toBe('var(--primary) !important')
+  })
+})
+
+// Source scan: jsdom applies no media queries. The component sets no display, so .cols6 itself makes the grid.
+describe('R5-CSS-1a .cols6 collapses 3 / 2 / 1', () => {
+  it('is a grid, then 2 tracks at max-width 1000px and 1 at max-width 640px, both !important; the three tracks stay inline', () => {
+    const rules = parseRules(LANDING_CSS)
+    expect(rules.length, 'control: the sheet parsed').toBeGreaterThan(10)
+    expect(declared(rules, '.mod-grid', 'grid-template-columns', maxWidth(1000)), 'control: a sibling collapses at 1000px').toBe('repeat(2, minmax(0, 1fr))')
+    expect(declared(rules, '.cols6', 'display', noAt)).toBe('grid')
+    expect(declared(rules, '.cols6', 'grid-template-columns', maxWidth(1000))).toBe('repeat(2, minmax(0, 1fr)) !important')
+    expect(declared(rules, '.cols6', 'grid-template-columns', maxWidth(640))).toBe('minmax(0, 1fr) !important')
+    expect(declared(rules, '.cols6', 'grid-template-columns', noAt), 'the base tracks are inline (V387), not in the sheet').toBeUndefined()
+  })
+})
+
+describe('R5-CSS-1b .cta-mark hides at 900', () => {
+  it('is display: none !important at max-width 900px and not hidden outside it', () => {
+    const rules = parseRules(LANDING_CSS)
+    expect(rules.length, 'control: the sheet parsed').toBeGreaterThan(10)
+    expect(declared(rules, '.cols3', 'grid-template-columns', maxWidth(900)), 'control: a sibling collapses at 900px').toBe('minmax(0, 1fr) !important')
+    expect(declared(rules, '.cta-mark', 'display', maxWidth(900))).toBe('none !important')
+    expect(declared(rules, '.cta-mark', 'display', noAt), 'the mark shows above 900px').toBeUndefined()
+  })
+})
+
+describe('R5-GE-4 the FAQ aside is static in the one-column layout', () => {
+  it('is position: static !important at max-width 900px and no base rule sets its position, so it cannot slide over the list', () => {
+    const rules = parseRules(LANDING_CSS)
+    expect(rules.length, 'control: the sheet parsed').toBeGreaterThan(10)
+    expect(declared(rules, '.cta-mark', 'display', maxWidth(900)), 'control: a sibling override is found at 900px').toBe('none !important')
+    expect(declared(rules, '[data-faq-aside]', 'position', maxWidth(900))).toBe('static !important')
+    expect(declared(rules, '[data-faq-aside]', 'position', noAt), 'a base rule would fight the sticky inline style').toBeUndefined()
   })
 })

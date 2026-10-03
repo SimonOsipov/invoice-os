@@ -1,5 +1,4 @@
-// The shared Book-a-Demo lead-capture form. DemoModal mounts it inside the popup
-// card; the landing card mounts it bare. idPrefix keeps the two id namespaces apart.
+// The Book-a-Demo lead-capture form. DemoModal mounts it inside the popup card.
 
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, CSSProperties, FormEvent, ReactNode } from 'react'
@@ -39,7 +38,7 @@ export const WARN_PATHS = [
 ]
 
 // The form's half of DemoModal's single <style> element — interpolated there so the
-// popup still renders exactly one <style>; DemoCta renders its own.
+// popup still renders exactly one <style>.
 export const DEMO_FORM_CSS = `
   @keyframes dmSpin { to { transform: rotate(360deg); } }
   .dm-input, .dm-select { transition: border-color var(--dur-fast) var(--ease-out); }

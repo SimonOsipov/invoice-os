@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // Interactive contract of SegmentedTabs (jsdom). Source of truth: the DS SegmentedTabs.jsx in .ralph/design-v2/components
-// and the story's decisions on it (tablist of tab buttons, no panel, no aria-controls, keys shared with Tabs). Controlled only.
+// and the story's decisions on it (tablist of tab buttons, no panel; id and aria-controls only with idBase; keys shared with Tabs). Controlled only.
 import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -46,7 +46,7 @@ async function mount(props: Record<string, unknown>) {
 }
 
 describe('SegmentedTabs', () => {
-  it('SG-01 SegmentedTabs is a labelled tablist of tab buttons', async () => {
+  it('SG-01 SegmentedTabs is a labelled tablist of tab buttons; ids and aria-controls only with idBase', async () => {
     const c = await mount({ value: 'firm' })
     const lists = c.querySelectorAll('[role=tablist][aria-label=Audience]')
     expect(lists, 'one labelled tablist').toHaveLength(1)
@@ -55,9 +55,16 @@ describe('SegmentedTabs', () => {
     expect(tabs, 'three type=button tabs').toHaveLength(3)
     expect(tabs.map((t) => t.textContent)).toEqual(['Firms', 'Fintech', 'Developers'])
     expect(c.querySelectorAll('[role=tabpanel]'), 'renders no panel').toHaveLength(0)
-    expect(tabs.map((t) => t.hasAttribute('aria-controls')), 'knows no panel id').toEqual([false, false, false])
+    expect(tabs.map((t) => t.hasAttribute('aria-controls')), 'knows no panel id without idBase').toEqual([false, false, false])
+    expect(tabs.map((t) => t.hasAttribute('id')), 'has no tab id without idBase').toEqual([false, false, false])
     expect(lists[0].classList.contains('ds-seg'), 'group has .ds-seg').toBe(true)
     expect(tabs.every((t) => t.classList.contains('ds-seg-btn')), 'tabs have .ds-seg-btn').toBe(true)
+
+    const based = await mount({ value: 'a', idBase: 'x', options: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }] })
+    const basedTabs = tabsIn(based)
+    expect(basedTabs, 'two tabs with idBase').toHaveLength(2)
+    expect(basedTabs.map((t) => t.id), 'tab ids').toEqual(['x-tab-a', 'x-tab-b'])
+    expect(basedTabs.map((t) => t.getAttribute('aria-controls')), 'aria-controls').toEqual(['x-panel-a', 'x-panel-b'])
   })
 
   it('SG-02 only the selected option is aria-selected and tabbable', async () => {

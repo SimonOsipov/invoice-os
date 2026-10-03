@@ -4,6 +4,8 @@
 // nor Nav's own unit tests can catch that either — they take hrefPrefix as an
 // explicit prop, never through App's actual `privacy` boolean. This file renders
 // the real App tree (SSR, no jsdom) at both paths to close that gap.
+import { readdirSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -74,7 +76,7 @@ describe('FT-10 / AN-03 with PLATFORM_LINKS populated', () => {
   })
 
   it('AN-03 reads the live list: resolving links pass, a ghost link is reported through the real App', () => {
-    plant(['#solution', '#platform', '#pricing'])
+    plant(['#solution', '#platform', '#coverage'])
     const html = renderAppAt('/')
     const hashes = footerHrefs(footerSlice(html)).filter((h) => h.startsWith('#') && h.length > 1)
     expect(hashes).toHaveLength(3)
@@ -153,19 +155,6 @@ describe('RESKIN-01-03 (AC 5): the former --gradient-hero sites render the v2 fl
     expect(open).toBe('<section id="solution" class="ds-section band-dark">')
   })
 
-  it('only the featured price card is var(--surface); the other two stay var(--bg-2)', () => {
-    const cards = [...section('pricing').matchAll(/<div class="ios-price"[^>]*>/g)].map((m) => m[0])
-    expect(cards.length, 'three plan cards').toBe(3)
-    expect(cards.filter((c) => c.includes('background:var(--surface);'))).toHaveLength(1)
-    expect(cards.filter((c) => c.includes('background:var(--bg-2);'))).toHaveLength(2)
-  })
-
-  it('the DemoCta card is flat var(--surface)', () => {
-    const demo = /<div class="ios-grid ios-2 ios-demo-card"[^>]*>/.exec(section('demo'))?.[0] ?? ''
-    expect(demo, 'control: the card was found').toContain('padding:64px 56px')
-    expect(demo).toContain('background:var(--surface);')
-  })
-
   it('no rendered element names a gradient token or a font-variation axis', () => {
     expect(html.length).toBeGreaterThan(50_000)
     expect(html).not.toMatch(/--gradient-/)
@@ -233,6 +222,76 @@ describe('R4-AN-2 the two sections render in v2 order', () => {
   })
 })
 
+// Section order is the page contract; later sections extend it.
+describe('R5-AN section order', () => {
+  const sectionIds = (html: string) => [...html.matchAll(/<section id="([^"]+)"/g)].map((m) => m[1])
+
+  it('/ renders #solutions directly after #intelligence and no #accountants; /privacy neither', () => {
+    const landing = sectionIds(renderAppAt('/'))
+    const privacy = sectionIds(renderAppAt('/privacy'))
+    expect(landing, 'control: the landing rendered its sections').toContain('intelligence')
+    expect(renderAppAt('/privacy'), 'control: the privacy page rendered its footer').toContain('<footer')
+    expect(landing.filter((id) => id === 'solutions'), 'one #solutions on /').toHaveLength(1)
+    expect(landing[landing.indexOf('intelligence') + 1], '#solutions directly after #intelligence').toBe('solutions')
+    expect(landing, 'no #accountants on /').not.toContain('accountants')
+    expect(privacy, 'neither on /privacy').not.toContain('solutions')
+    expect(privacy).not.toContain('accountants')
+  })
+
+  it('/ renders #integrations directly after #solutions, #api directly after it, and no #developers; /privacy none', () => {
+    const landing = sectionIds(renderAppAt('/'))
+    const privacy = sectionIds(renderAppAt('/privacy'))
+    expect(landing, 'control: the landing rendered its sections').toContain('solutions')
+    expect(landing.filter((id) => id === 'integrations'), 'one #integrations on /').toHaveLength(1)
+    expect(landing.filter((id) => id === 'api'), 'one #api on /').toHaveLength(1)
+    expect(landing[landing.indexOf('solutions') + 1], '#integrations directly after #solutions').toBe('integrations')
+    expect(landing[landing.indexOf('integrations') + 1], '#api directly after #integrations').toBe('api')
+    expect(landing, 'no #developers on /').not.toContain('developers')
+    for (const id of ['integrations', 'api', 'developers']) expect(privacy, `no #${id} on /privacy`).not.toContain(id)
+  })
+
+  it('/ renders #faq directly after #api, then an id-less section holding [data-closing]; /privacy neither', () => {
+    // The closing section has no id, so read every <section> in order rather than the id list.
+    const sections = (html: string) => html.split('<section').slice(1).map((chunk) => ({ id: /^ id="([^"]+)"/.exec(chunk)?.[1], closing: chunk.includes('data-closing') }))
+    const landing = sections(renderAppAt('/'))
+    const privacy = sections(renderAppAt('/privacy'))
+    const api = landing.findIndex((s) => s.id === 'api')
+    expect(api, 'control: the landing rendered #api').toBeGreaterThan(-1)
+    expect(landing.filter((s) => s.id === 'faq'), 'one #faq on /').toHaveLength(1)
+    expect(landing[api + 1]?.id, '#faq directly after #api').toBe('faq')
+    expect(landing[api + 2], 'the next section holds [data-closing] and has no id').toEqual({ id: undefined, closing: true })
+    expect(landing.filter((s) => s.closing), 'one closing section on /').toHaveLength(1)
+    expect(privacy.length, 'control: /privacy rendered sections').toBeGreaterThan(0)
+    expect(privacy.some((s) => s.id === 'faq' || s.closing), 'neither on /privacy').toBe(false)
+  })
+
+  it('the page is v2 from hero to closing CTA: sections and bands in order, no retired section', () => {
+    const html = renderAppAt('/')
+    // The strip and the closing section carry no id, so each is named by its marker.
+    const sections = html
+      .split('<section')
+      .slice(1)
+      .map((chunk) => ({
+        id: /^ id="([^"]+)"/.exec(chunk)?.[1] ?? (chunk.includes('data-strip=') ? '[data-strip]' : chunk.includes('data-closing') ? '[data-closing]' : '?'),
+        band: /^(?: id="[^"]*")? class="ds-section band-([a-z0-9]+)"/.exec(chunk)?.[1],
+      }))
+    expect(sections.length, 'control: the landing rendered its sections').toBeGreaterThan(5)
+    expect(sections.map((s) => s.id)).toEqual(['top', '[data-strip]', 'problem', 'solution', 'platform', 'coverage', 'intelligence', 'solutions', 'integrations', 'api', 'faq', '[data-closing]'])
+    expect(sections.map((s) => s.band)).toEqual(['dark', 'sage', 'cream', 'dark', 'cream', 'peach', 'dark2', 'cream', 'peach', 'dark', 'cream', 'cream'])
+    for (const id of ['compliance', 'pricing', 'accountants', 'developers', 'demo']) {
+      expect(sections.map((s) => s.id), `no #${id} on /`).not.toContain(id)
+    }
+    expect(html.indexOf('data-closing'), 'the footer follows the closing section').toBeLessThan(html.lastIndexOf('<footer'))
+  })
+
+  it('/ renders no #demo section and no id starting dc-', () => {
+    const html = renderAppAt('/')
+    expect(sectionIds(html), 'control: the landing rendered its sections').toContain('faq')
+    expect(sectionIds(html), 'no #demo on /').not.toContain('demo')
+    expect([...html.matchAll(/\sid="(dc-[^"]*)"/g)].map((m) => m[1]), 'no dc-* id on /').toEqual([])
+  })
+})
+
 describe('AN-03 every footer in-page link resolves to one section', () => {
   it('controls: the helper reports a ghost footer link and passes a resolving one', () => {
     const footer = '<footer><a href="#ghost">x</a></footer>'
@@ -245,6 +304,7 @@ describe('AN-03 every footer in-page link resolves to one section', () => {
     const html = renderAppAt('/')
     const hashes = footerHrefs(footerSlice(html)).filter((h) => h.startsWith('#') && h.length > 1)
     expect(hashes, 'the footer hashes are not the PLATFORM_LINKS population').toHaveLength(PLATFORM_LINKS.length)
+    expect(hashes, 'the footer links Solutions for partners').toContain('#solutions')
     expect(unresolvedHashes(html, hashes)).toEqual([])
   })
 })
@@ -290,13 +350,34 @@ describe('NV-04 How it works is gone from the page and the data', () => {
   })
 })
 
+describe('R5-AC6 Compliance, Pricing and the TrustStrip name are gone from the page, the data and the tree', () => {
+  const RETIRED_COPY = ['Priced by compliance need', '₦340k', '–2 MONTHS', 'Know exactly how compliant you are', 'Compliance readiness', 'TIN &amp; VAT identifier checks', 'Readiness score, live', 'Transmit-ready invoices']
+
+  it('the markup carries none of their copy, and data.tsx exports none of their lists', () => {
+    const html = renderAppAt('/')
+    expect(html, 'control: the audience strip rendered').toContain('data-strip="audience"')
+    expect(html, 'control: the page escapes & as &amp;, so the needle below can match').toContain('&amp;')
+    for (const copy of RETIRED_COPY) expect(html, `retired copy "${copy}" is back`).not.toContain(copy)
+    const keys = Object.keys(data)
+    expect(keys, 'control: data.tsx exports are enumerated').toContain('FAQS')
+    for (const key of ['PLANS', 'PLAN_COLORS', 'RULES']) expect(keys, `${key} is back in data.tsx`).not.toContain(key)
+  })
+
+  it('no component file of the retired sections remains, and the renamed strip is the one that does', () => {
+    const files = readdirSync(fileURLToPath(new URL('./components', import.meta.url)))
+    expect(files.length, 'population floor: the components directory resolved').toBeGreaterThan(30)
+    expect(files, 'control: the strip kept under its v2 name').toContain('AudienceStrip.tsx')
+    for (const gone of ['Compliance.tsx', 'Pricing.tsx', 'TrustStrip.tsx']) expect(files, `${gone} is back`).not.toContain(gone)
+  })
+})
+
 describe('NV-12 no in-page anchor on the page resolves to a missing section', () => {
   const allHashes = (html: string) => [...html.matchAll(/href="\/?(#[^"]+)"/g)].map((m) => m[1])
 
   it('at / every href="#x" in the whole page has exactly one <section id="x">, and the nav, hero and footer anchors are in the population', () => {
     const html = renderAppAt('/')
     const hashes = allHashes(html)
-    for (const h of ['#top', '#problem', '#solution', '#platform']) {
+    for (const h of ['#top', '#problem', '#solution', '#platform', '#solutions', '#integrations']) {
       expect(hashes, `control: ${h} is linked from the page`).toContain(h)
     }
     expect(unresolvedHashes(html, hashes)).toEqual([])
@@ -304,7 +385,7 @@ describe('NV-12 no in-page anchor on the page resolves to a missing section', ()
 
   it('at /privacy every /#x anchor resolves against the sales page it links to', () => {
     const privacy = allHashes(renderAppAt('/privacy'))
-    for (const h of ['#problem', '#solution', '#platform']) {
+    for (const h of ['#problem', '#solution', '#platform', '#solutions', '#integrations']) {
       expect(privacy, `control: /privacy links ${h}`).toContain(h)
     }
     expect(unresolvedHashes(renderAppAt('/'), privacy)).toEqual([])

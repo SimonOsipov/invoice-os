@@ -7,9 +7,10 @@ type SegmentedTabsProps = {
   value: string
   onChange: (id: string) => void
   'aria-label': string
+  idBase?: string
 }
 
-export function SegmentedTabs({ options, value, onChange, 'aria-label': ariaLabel }: SegmentedTabsProps) {
+export function SegmentedTabs({ options, value, onChange, 'aria-label': ariaLabel, idBase }: SegmentedTabsProps) {
   const { selected, tabIndexOf, onKeyDown, ref } = useTabKeys(
     options.map((o) => o.id),
     value,
@@ -23,6 +24,8 @@ export function SegmentedTabs({ options, value, onChange, 'aria-label': ariaLabe
           ref={ref(i)}
           type="button"
           role="tab"
+          id={idBase ? `${idBase}-tab-${o.id}` : undefined}
+          aria-controls={idBase ? `${idBase}-panel-${o.id}` : undefined}
           className="ds-seg-btn"
           aria-selected={i === selected}
           tabIndex={tabIndexOf(i)}

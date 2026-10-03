@@ -1,4 +1,4 @@
-// The deployed proof of the v2/v1 split, the landing frame's geometry and the Problem, Solution, Platform, Coverage and Intelligence sections; one topology spec on purpose, a recorded deviation from docs/e2e-convention.md.
+// The deployed proof of the v2/v1 split, the landing frame's geometry and the Problem, Solution, Platform, Coverage and Intelligence sections, and the whole-page bands, Solutions, Integrations, API, FAQ and closing panel; one topology spec on purpose, a recorded deviation from docs/e2e-convention.md.
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
@@ -218,8 +218,9 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
   expect(errors, `console errors on the header sweep:\n${errors.join('\n')}`).toEqual([])
 }
 
-test('landing header row: inside the viewport and no overlap at 1440, 1240, 1080 and 834', async ({ page }, testInfo) => {
-  await assertHeaderRow(page, testInfo, [1440, 1240, 1080, 834])
+// BURGER_MAX + 1 is the narrowest width that shows the five nav links.
+test('landing header row: inside the viewport and no overlap at 1440, 1240, 1121, 1080 and 834', async ({ page }, testInfo) => {
+  await assertHeaderRow(page, testInfo, [1440, 1240, BURGER_MAX + 1, 1080, 834])
 })
 
 test('landing header row at 390: inside the viewport and no overlap', async ({ page }, testInfo) => {
@@ -1111,4 +1112,276 @@ test('landing coverage markers by keyboard and pointer', async ({ page }, testIn
 
   await attachJson(testInfo, 'coverage-markers.json', { scrollBeforeSpace: before, scrollAfterSpace: after })
   expect(errors, `console errors on the marker path:\n${errors.join('\n')}`).toEqual([])
+})
+
+// Bands, Solutions, Integrations, API, FAQ and closing panel.
+const GE_WIDTHS = [...WIDE_WIDTHS, 1001, 1000, 901, 900, 834, 641, 640, 390]
+const geFrame = (width: number): Frame => ({ width, height: width === 390 ? 844 : 900 })
+
+// Band tokens from the hero down (AC 12), then the footer.
+const BAND_TOKENS = [
+  '--surface-dark',
+  '--sage',
+  '--surface-page',
+  '--surface-dark',
+  '--surface-page',
+  '--peach-band',
+  '--surface-2',
+  '--surface-page',
+  '--peach-band',
+  '--surface-dark',
+  '--surface-page',
+  '--surface-page',
+  '--surface-page',
+]
+
+test('landing v2 bands, top to bottom, and no horizontal overflow', async ({ page }, testInfo) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await openLandingFrame(page)
+  const bandWidths = [1440, 834, 390]
+  const measured: unknown[] = []
+
+  for (const width of GE_WIDTHS) {
+    const label = `${width}px`
+    await settleFrame(page, geFrame(width))
+
+    if (bandWidths.includes(width)) {
+      const probes = await probeStyles(
+        page,
+        Object.fromEntries([...new Set([...BAND_TOKENS, '--peach-card'])].map((t) => [`background_${t}`, `background: var(${t})`])),
+      )
+      const bands = await page.evaluate(() => {
+        const rect = (el: Element) => {
+          const r = el.getBoundingClientRect()
+          return { top: r.top, bottom: r.bottom }
+        }
+        const sections = [...document.querySelectorAll('section')].filter((el) => !el.parentElement?.closest('section'))
+        const closing = document.querySelector('[data-closing]')
+        return {
+          layers: [...sections, document.querySelector('footer')!].map((el) => ({
+            ...rect(el),
+            id: el.id,
+            background: getComputedStyle(el).backgroundColor,
+            hasClosing: el.contains(closing),
+          })),
+          closingBackground: closing ? getComputedStyle(closing).backgroundColor : null,
+        }
+      })
+      measured.push({ width, bands })
+      expect(bands.layers, `${label}: top-level sections plus the footer`).toHaveLength(BAND_TOKENS.length)
+      bands.layers.forEach((layer, i) => {
+        expect(layer.background, `${label}: band ${i} (#${layer.id}) background vs ${BAND_TOKENS[i]}`).toBe(probes[`background_${BAND_TOKENS[i]}`])
+        if (i > 0) expect(layer.top, `${label}: band ${i} top vs band ${i - 1} bottom`).toBeGreaterThanOrEqual(bands.layers[i - 1].bottom - 1)
+      })
+      expect(bands.layers[11].hasClosing, `${label}: the 12th section holds [data-closing]`).toBe(true)
+      expect(bands.closingBackground, `${label}: [data-closing] background vs --peach-card`).toBe(probes['background_--peach-card'])
+    }
+
+    // The tab scroller and the code block scroll inside themselves; their own boxes must fit.
+    const roots = ['#solutions', '#integrations', '#api', '#faq', 'section:has([data-closing])']
+    const walk = await walkOverflow(page, roots.flatMap((r) => [r, `${r} *`]).join(', '), roots, '[data-sol-tabs], #api pre')
+    expectNoOverflow(walk, label)
+    for (const sel of ['[data-sol-tabs]', '#api pre']) {
+      const b = await box(page.locator(sel).first(), `${label}: ${sel}`)
+      expect(b.x, `${label}: ${sel} left`).toBeGreaterThanOrEqual(-1)
+      expect(b.x + b.width, `${label}: ${sel} right`).toBeLessThanOrEqual(walk.innerWidth + 1)
+    }
+    measured.push({ width, scrollWidth: walk.scrollWidth, clientWidth: walk.clientWidth })
+  }
+
+  await attachJson(testInfo, 'bands-overflow.json', measured)
+  expect(errors, `console errors on the band sweep:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('landing solutions panel height and tabs', async ({ page }, testInfo) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await openLandingFrame(page)
+  const measured: unknown[] = []
+  const order = [
+    [0, 'fin'],
+    [1, 'firm'],
+    [2, 'dev'],
+    [0, 'fin'],
+  ] as const
+
+  for (const width of GE_WIDTHS) {
+    const label = `${width}px`
+    const wide = width > 900
+    await settleFrame(page, geFrame(width))
+    await page.locator('#solutions').evaluate((el) => el.scrollIntoView({ block: 'start' }))
+    const heights: number[] = []
+
+    for (const [index, id] of order) {
+      const step = `${label}, tab ${id}`
+      const tab = page.locator('[data-sol-tabs] [role="tab"]').nth(index)
+      await tab.click()
+      await expect(tab, `${step}: selected`).toHaveAttribute('aria-selected', 'true')
+      const read = await page.evaluate(() => {
+        const rect = (el: Element) => {
+          const r = el.getBoundingClientRect()
+          return { x: r.left, y: r.top, width: r.width, height: r.height }
+        }
+        const panels = [...document.querySelectorAll('[data-sol-panel]')].map((el) => ({
+          id: el.getAttribute('data-sol-panel'),
+          visibility: getComputedStyle(el).visibility,
+          box: rect(el),
+          sage: rect(el.children[0]),
+          copy: rect(el.children[1]),
+        }))
+        return { container: rect(document.querySelector('[data-sol-panels]')!), panels }
+      })
+      measured.push({ width, id, read })
+      heights.push(read.container.height)
+      expect(read.panels.map((p) => p.id), `${step}: panel ids`).toEqual(['fin', 'firm', 'dev'])
+      for (const p of read.panels) {
+        expect(p.visibility, `${step}: panel ${p.id} visibility`).toBe(p.id === id ? 'visible' : 'hidden')
+      }
+      expect(sameBox(read.panels[0].box, read.panels[1].box) && sameBox(read.panels[1].box, read.panels[2].box), `${step}: panels share one box`).toBe(true)
+      const shown = read.panels.find((p) => p.id === id)!
+      if (wide) {
+        expect(rectsOverlap(shown.sage, shown.copy), `${step}: sage box overlaps the copy column`).toBe(false)
+        expect(Math.abs(shown.sage.y - shown.copy.y), `${step}: sage top vs copy top`).toBeLessThanOrEqual(1)
+      } else {
+        expect(above(shown.sage, shown.copy), `${step}: copy top vs sage bottom`).toBe(true)
+      }
+    }
+    expect(Math.max(...heights) - Math.min(...heights), `${label}: panel container heights ${heights}`).toBeLessThanOrEqual(0.5)
+
+    // Labels stay on one line and the focus ring has room inside the scroller.
+    const scroller = page.locator('[data-sol-tabs]')
+    await scroller.evaluate((el) => (el.scrollLeft = 0))
+    const tabsRead = await page.evaluate(() => {
+      const rect = (el: Element) => {
+        const r = el.getBoundingClientRect()
+        return { x: r.left, y: r.top, width: r.width, height: r.height }
+      }
+      return {
+        scroller: rect(document.querySelector('[data-sol-tabs]')!),
+        tablist: rect(document.querySelector('[data-sol-tabs] [role="tablist"]')!),
+        buttons: [...document.querySelectorAll('[data-sol-tabs] .ds-seg-btn')].map((el) => ({
+          box: rect(el),
+          label: el.textContent,
+          tall: el.scrollHeight > el.clientHeight,
+          wide: el.scrollWidth > el.clientWidth,
+        })),
+      }
+    })
+    measured.push({ width, tabsRead })
+    expect(tabsRead.buttons, `${label}: tab buttons`).toHaveLength(3)
+    for (const b of tabsRead.buttons) {
+      expect(b.tall || b.wide, `${label}: "${b.label}" overflows its button`).toBe(false)
+      expect(enclosesRect(tabsRead.tablist, b.box, 1), `${label}: "${b.label}" outside the tablist`).toBe(true)
+      expect(b.box.y, `${label}: "${b.label}" top inside the scroller`).toBeGreaterThanOrEqual(tabsRead.scroller.y + 4)
+      expect(b.box.y + b.box.height, `${label}: "${b.label}" bottom inside the scroller`).toBeLessThanOrEqual(tabsRead.scroller.y + tabsRead.scroller.height - 4)
+    }
+    expect(tabsRead.buttons[0].box.x, `${label}: first button left inside the scroller`).toBeGreaterThanOrEqual(tabsRead.scroller.x + 4)
+
+    if (width === 390) {
+      const sizes = await scroller.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+      expect(sizes.scrollWidth, `${label}: the tab scroller scrolls`).toBeGreaterThan(sizes.clientWidth)
+      await scroller.evaluate((el) => (el.scrollLeft = el.scrollWidth))
+      const end = await rectsOf(page, '[data-sol-tabs], [data-sol-tabs] .ds-seg-btn:last-child')
+      expect(end[1].x + end[1].width, `${label}: last button right vs scroller right`).toBeLessThanOrEqual(end[0].x + end[0].width - 4)
+    }
+  }
+
+  await attachJson(testInfo, 'solutions.json', measured)
+  expect(errors, `console errors on the Solutions sweep:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('landing integrations and api columns', async ({ page }, testInfo) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await openLandingFrame(page)
+  const measured: unknown[] = []
+
+  for (const width of GE_WIDTHS) {
+    const label = `${width}px`
+    const wide = width > 900
+    await settleFrame(page, geFrame(width))
+
+    const cards = await rectsOf(page, '[data-partner]')
+    expect(cards, `${label}: partner cards`).toHaveLength(6)
+    for (let i = 0; i < cards.length; i++) {
+      for (let j = i + 1; j < cards.length; j++) {
+        expect(rectsOverlap(cards[i], cards[j]), `${label}: partner ${i} overlaps partner ${j}`).toBe(false)
+      }
+    }
+    const tops = cards.reduce<number[]>((acc, c) => (acc.some((t) => Math.abs(t - c.y) <= 1) ? acc : [...acc, c.y]), [])
+    // 3 columns above 1000px, 2 up to 640px, then 1 (.cols6).
+    const rows = width > 1000 ? 2 : width > 640 ? 3 : 6
+    expect(tops, `${label}: distinct partner tops`).toHaveLength(rows)
+    for (const c of cards) {
+      const first = cards.find((o) => Math.abs(o.y - c.y) <= 1)!
+      expect(Math.abs(c.height - first.height), `${label}: partner height vs its row`).toBeLessThanOrEqual(1)
+    }
+
+    const left = (await rectsOf(page, '#api .split > div:first-child'))[0]
+    const panel = (await rectsOf(page, '[data-api-panel]'))[0]
+    const pre = (await rectsOf(page, '[data-api-panel] pre'))[0]
+    expect(panel, `${label}: api panel`).toBeDefined()
+    besideOrBelow(left, panel, wide, `${label}: api panel`)
+    expect(enclosesRect(panel, pre, 1), `${label}: api panel does not enclose its pre`).toBe(true)
+    measured.push({ width, cards, tops, left, panel, pre })
+  }
+
+  await attachJson(testInfo, 'columns.json', measured)
+  expect(errors, `console errors on the column sweep:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('landing faq sticky and closing panel', async ({ page }, testInfo) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await openLandingFrame(page)
+  const measured: unknown[] = []
+
+  for (const width of GE_WIDTHS) {
+    const label = `${width}px`
+    const wide = width > 900
+    await settleFrame(page, geFrame(width))
+
+    if ([1440, 834, 390].includes(width)) {
+      const headerH = await headerHeightToken(page)
+      const [split, aside] = await rectsOf(page, '#faq .split, [data-faq-aside]')
+      const spare = split.height - aside.height
+      if (width === 1440) expect(spare, `${label}: sticky room, split ${split.height} vs aside ${aside.height}`).toBeGreaterThan(8)
+      const d = Math.min(80, spare / 2)
+      await page.evaluate((y) => window.scrollBy(0, y), split.y - (headerH + 24) + d)
+      await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))))
+      const [s2, a2, list] = await rectsOf(page, '#faq .split, [data-faq-aside], [data-faq-list]')
+      measured.push({ width, headerH, d, split: s2, aside: a2, list })
+      if (wide) {
+        expect(Math.abs(a2.y - (headerH + 24)), `${label}: aside top ${a2.y} vs header-h + 24`).toBeLessThanOrEqual(1)
+        expect(rectsOverlap(a2, list), `${label}: aside overlaps the list`).toBe(false)
+      } else {
+        expect(Math.abs(a2.y - s2.y), `${label}: aside top vs split top`).toBeLessThanOrEqual(1)
+        expect(above(a2, list), `${label}: list top vs aside bottom`).toBe(true)
+      }
+    }
+
+    await page.locator('[data-closing]').evaluate((el) => el.scrollIntoView({ block: 'center' }))
+    const section = (await rectsOf(page, 'section:has([data-closing]) > .container'))[0]
+    const [closing, copy] = await rectsOf(page, '[data-closing], [data-closing] > div:first-child')
+    const mark = page.locator('[data-closing] .cta-mark')
+    expect(enclosesRect(section, closing, 1), `${label}: panel outside its container`).toBe(true)
+    expect(enclosesRect(closing, copy, 1), `${label}: copy grid outside the panel`).toBe(true)
+    if (wide) {
+      await expect(mark, `${label}: .cta-mark display`).toHaveCSS('display', 'block')
+      const m = await box(mark, `${label}: .cta-mark`)
+      expect(m.x, `${label}: .cta-mark left vs panel left`).toBeGreaterThanOrEqual(closing.x)
+      expect(m.x + m.width, `${label}: .cta-mark right vs panel right`).toBeLessThanOrEqual(closing.x + closing.width + 1)
+      expect(Math.abs(m.y + m.height / 2 - (closing.y + closing.height / 2)), `${label}: .cta-mark centre vs panel centre`).toBeLessThanOrEqual(1)
+    } else {
+      await expect(mark, `${label}: .cta-mark display`).toHaveCSS('display', 'none')
+    }
+  }
+
+  await attachJson(testInfo, 'faq-closing.json', measured)
+  expect(errors, `console errors on the FAQ and closing sweep:\n${errors.join('\n')}`).toEqual([])
 })

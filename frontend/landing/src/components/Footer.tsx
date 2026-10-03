@@ -5,6 +5,7 @@ export const PLATFORM_LINKS: { label: string; href: string }[] = [
   { label: 'Invoice workflows', href: '#platform' },
   { label: 'Country roadmap', href: '#coverage' },
   { label: 'AI-supported intelligence', href: '#intelligence' },
+  { label: 'Solutions for partners', href: '#solutions' },
 ]
 
 // Only in-page anchors take the prefix; /privacy is already absolute.

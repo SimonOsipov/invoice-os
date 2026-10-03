@@ -120,11 +120,11 @@ describe('AUTH-05-07 adversarial: boot params', () => {
   })
 
   it('the strip keeps the path and the hash', async () => {
-    await bootAt(`/?utm_source=x&state=${STATE}&signin=ready#pricing`)
+    await bootAt(`/?utm_source=x&state=${STATE}&signin=ready#faq`)
     onlyDialog()
     expect(window.location.pathname).toBe('/')
     expect(window.location.search).toBe('?utm_source=x')
-    expect(window.location.hash).toBe('#pricing')
+    expect(window.location.hash).toBe('#faq')
   })
 
   it('a boot with neither param does not touch history', async () => {

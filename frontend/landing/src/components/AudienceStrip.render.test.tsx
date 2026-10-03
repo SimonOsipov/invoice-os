@@ -4,13 +4,13 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
-import { TrustStrip } from './TrustStrip'
+import { AudienceStrip } from './AudienceStrip'
 
 const V858 = ['Finance teams', 'Accounting firms', 'Growing businesses', 'Fintech', 'Technology partners']
 
 function ssr(): DocumentFragment {
   const tpl = document.createElement('template')
-  tpl.innerHTML = renderToStaticMarkup(createElement(TrustStrip))
+  tpl.innerHTML = renderToStaticMarkup(createElement(AudienceStrip))
   return tpl.content
 }
 

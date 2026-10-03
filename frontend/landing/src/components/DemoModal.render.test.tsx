@@ -17,6 +17,9 @@
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { readdirSync, readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { DemoModal, isFocusable } from './DemoModal'
 import { CONSENT_TEXT, TAXPAYER_SIZE_OPTIONS } from './demoForm'
@@ -140,5 +143,30 @@ describe('isFocusable (LAND-02-02) — keeps the honeypot out of the Tab-trap', 
     expect(isFocusable(reachable)).toBe(true)
     expect(isFocusable(disabledEl)).toBe(false)
     expect(isFocusable(detached)).toBe(false)
+  })
+})
+
+describe('DemoModal SSR render (RESKIN-05-04)', () => {
+  const html = renderToStaticMarkup(createElement(DemoModal, { onClose: noop }))
+
+  it('MF-R7: the submit button takes 24px above it', () => {
+    const submit = extractTag(html, /<button[^>]*type="submit"[^>]*>/)
+    expect(submit).toContain('margin-top:24px')
+  })
+
+  // Source scan: a second copy of the line in a file the modal never renders cannot show up in
+  // the markup, so only a walk of the landing source sees it.
+  it('MF-R8: "No card required" renders once, and no landing source file but DemoLeadForm.tsx holds it', () => {
+    expect(html.match(/No card required/gi) ?? []).toHaveLength(1)
+
+    const src = join(dirname(fileURLToPath(import.meta.url)), '..')
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory() ? walk(join(dir, e.name)) : /\.tsx?$/.test(e.name) && !/\.test\./.test(e.name) ? [join(dir, e.name)] : [],
+      )
+    const files = walk(src)
+    expect(files.length, 'control: the walk found the landing sources').toBeGreaterThanOrEqual(25)
+    const holders = files.filter((f) => /No card required/i.test(readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '')))
+    expect(holders.map((f) => f.slice(src.length + 1))).toEqual(['components/DemoLeadForm.tsx'])
   })
 })

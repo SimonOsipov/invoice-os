@@ -345,6 +345,13 @@ jobs:
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
         run: bash scripts/ci/railway-env.sh set-fork-auth "$ENV_ID"
 
+      - name: Write the fork's gateway token (never in the persistent env)
+        if: github.event_name == 'pull_request'
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
+        run: bash scripts/ci/railway-env.sh set-fork-gateway-token "$ENV_ID"
+
       - name: Audit sealed variables in the source environment (only the auth allowlist may be sealed)
         if: github.event_name == 'pull_request'
         env:

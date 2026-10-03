@@ -1,6 +1,7 @@
 // Standalone ambient, same style as packages/api-client/src/env.d.ts (no vite dependency).
 interface ImportMetaEnv {
   readonly VITE_SENTRY_DSN?: string
+  readonly VITE_SENTRY_TEST_DIGEST?: string
   readonly VITE_RAILWAY_GIT_COMMIT_SHA?: string
 }
 

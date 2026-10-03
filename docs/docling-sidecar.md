@@ -214,6 +214,7 @@ failure path is not a throughput measurement.
 - The sidecar continues the Go caller's trace. It reads inbound `baggage`.
 - It sends no `sentry-trace` or `baggage` outbound.
 - `/healthz`, `/readyz` and `/healthz/*` make no transaction.
+- `SENTRY_TEST_EVENT=true` (exactly `true`) sends one test event at each start (fingerprint `sentry-test-event`, `docling`). The operator sets it only for go-live and redeploys after deleting it (`docs/sentry.md`).
 
 ## Enabling the sidecar on a fleet
 

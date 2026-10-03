@@ -2,6 +2,7 @@ package platform
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -36,6 +37,20 @@ func initSentry(cfg Config) error {
 		return fmt.Errorf("platform: sentry init: %w", err)
 	}
 	return nil
+}
+
+// captureTestEvent sends one labelled event so an operator can see a service reach Sentry.
+// The fingerprint goes on a cloned scope so later events do not inherit it.
+// ceiling: the test event fires on every boot while the variable is set; revisit if it is ever needed outside a go-live window
+func captureTestEvent(service string) {
+	if SentryState() == "off" {
+		return
+	}
+	hub := sentry.CurrentHub().Clone()
+	hub.ConfigureScope(func(scope *sentry.Scope) {
+		scope.SetFingerprint([]string{"sentry-test-event", service})
+	})
+	hub.CaptureException(errors.New("sentry test event"))
 }
 
 // SentryState is "on" or "off" for /healthz. sentry-go binds a no-op client

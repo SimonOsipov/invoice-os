@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // Coverage band, left column and panel shell: header copy, country switch, card, flags, legend (jsdom).
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GLYPHS } from '../icons'
 import { click, mountView, show, spyConsoleError, unmountView, type View } from './ds/dsDom.test.util'
@@ -204,8 +204,11 @@ describe('Coverage band', () => {
 
   it('CV-03 NG is selected first and its card shows', () => {
     const t = tabs()
-    expect(t.map((b) => norm(b.textContent)), 'tab names in order').toEqual(['Nigeria', 'Kenya', 'South Africa'])
+    expect(t.map((b) => b.textContent), 'tab names in order, untrimmed').toEqual(['Nigeria', 'Kenya', 'South Africa'])
     expect(pressedFlags()).toEqual(['true', 'false', 'false'])
+    // The classes carry the focus ring and the hover dim (landing.css).
+    expect(t.map((b) => b.className), 'tab classes').toEqual(Array(3).fill('a-card-btn a-tab-pill'))
+    expect(t.map((b) => b.type), 'tab types').toEqual(Array(3).fill('button'))
 
     // V789: pressed and unpressed inline values.
     const [on, off] = [t[0], t[1]]
@@ -221,7 +224,8 @@ describe('Coverage band', () => {
     })
 
     expectCard('NG')
-    const card = view.container.querySelector('[data-cov-card]')!
+    const card = view.container.querySelector<HTMLElement>('[data-cov-card]')!
+    expect([card.className, card.style.background], 'V252 card surface').toEqual(['card-floating', 'var(--cream-card)'])
     const steps = Array.from(card.querySelectorAll('.t-step'))
     const glyphs = [steps[0].nextElementSibling, ...Array.from(steps[1].nextElementSibling?.children ?? [])].map((r) => r?.querySelector('svg') ?? null)
     expect(glyphs, 'a glyph in the context row and in each of the four step rows').toHaveLength(5)
@@ -249,6 +253,16 @@ describe('Coverage band', () => {
     expectCard('NG')
   })
 
+  it('CV-09 a click on a tab’s flag selects that country', () => {
+    for (const id of ['ZA', 'KE'] as const) {
+      const flag = tab(id).firstElementChild!
+      expect(flag.localName, `${id} flag`).toBe('svg')
+      act(() => void flag.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+      expect(pressedFlags(), `after a click on the ${id} flag`).toEqual(ORDER.map((o) => String(o === id)))
+      expectCard(id)
+    }
+  })
+
   it('CV-06 the portal link opens a new tab without opener or referrer', () => {
     const seen: string[] = []
     for (const id of ORDER) {
@@ -258,6 +272,8 @@ describe('Coverage band', () => {
       seen.push(links[0].getAttribute('href') ?? '')
       expect(links[0].getAttribute('target'), `${id} target`).toBe('_blank')
       expect(links[0].getAttribute('rel'), `${id} rel`).toBe('noopener noreferrer')
+      const anchors = Array.from(view.container.querySelectorAll('a'))
+      expect(anchors, `${id}: the card link is the only anchor in the band`).toHaveLength(1)
     }
     expect(seen).toEqual(['https://einvoice.nrs.gov.ng/', 'https://www.kra.go.ke/', 'https://www.sars.gov.za/'])
   })
@@ -298,6 +314,7 @@ describe('Coverage band', () => {
     expect(t, 'three tabs').toHaveLength(3)
     ORDER.forEach((id, i) => {
       const flag = t[i].firstElementChild
+      expect(t[i].firstChild, `${id} tab: the flag comes before the name`).toBe(flag)
       expect(flag?.localName, `${id} tab's first child`).toBe('svg')
       expect(flag!.getAttribute('aria-hidden')).toBe('true')
       expect(flag!.getAttribute('preserveAspectRatio')).toBe('xMidYMid slice')

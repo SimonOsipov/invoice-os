@@ -280,3 +280,16 @@ describe('FT-12 the a-link rule', () => {
     expect(aLinkFailures(LANDING_CSS)).toEqual([])
   })
 })
+
+// Source scan: jsdom applies no CSS, so only the rule text shows the tab ring and hover dim are declared.
+describe('CV-10 the Coverage tabs keep their focus ring and hover dim', () => {
+  it('landing.css draws the ring on .a-card-btn:focus-visible and dims .a-tab-pill on hover', () => {
+    const rules = parseRules(LANDING_CSS)
+    const root = (a: string[]) => a.length === 0
+    expect(rules.length, 'control: the sheet parsed').toBeGreaterThan(10)
+    expect(declared(rules, '.a-link:focus-visible', 'outline', root), 'control: a sibling resolves').toBe('2px solid var(--ring)')
+    expect(declared(rules, '.a-card-btn:focus-visible', 'outline', root)).toBe('2px solid var(--ring)')
+    expect(declared(rules, '.a-card-btn:focus-visible', 'outline-offset', root)).toBe('2px')
+    expect(declared(rules, '.a-tab-pill:hover', 'filter', root)).toBe('brightness(0.97)')
+  })
+})

@@ -76,6 +76,13 @@ describe('Coverage band contrast', () => {
     expect(wins, 'control: one row').toHaveLength(1)
     expect([wins[0].ambiguous, wins[0].fg], 'control: the !important colour wins').toEqual([false, '#111111'])
 
+    const cascade = ['.cx-a { color: #111111; } .band-peach .cx-a { color: #222222; } .band-sage .cx-a { color: #333333; }']
+    const band = planted('<p class="cx-a">x</p>', cascade)
+    expect([band[0].fg, band[0].ambiguous], 'control: a band rule beats a class rule, and only the enclosing band applies').toEqual(['#222222', false])
+    const inherit = planted('<div style="color:var(--step-label)"><span>x</span></div><p>y</p>')
+    expect(inherit, 'control: two planted rows').toHaveLength(2)
+    expect(inherit.map((r) => r.fg), 'control: a span inherits its parent; a bare p takes the band colour').toEqual([hex('--step-label'), hex('--accent-foreground')])
+
     await show(view, createElement(Coverage))
     const root = view.container.querySelector('section')
     expect(root, 'Coverage renders a section').not.toBeNull()
@@ -84,8 +91,12 @@ describe('Coverage band contrast', () => {
     expect(hex('--peach-band'), 'control: the token read is the peach band').toBe('#efb684')
     expect(onPeach.length, 'rows on the peach background').toBeGreaterThanOrEqual(6)
 
+    // An unresolved colour would fall back to black on white and pass.
+    expect(rows.filter((r) => !/^#[0-9a-f]{6}$/.test(r.fg) || !/^#[0-9a-f]{6}$/.test(r.bg)).map((r) => r.text), 'rows with an unresolved colour').toEqual([])
+
     const has = (pred: (r: ContrastRow) => boolean) => onPeach.some(pred)
     expect(has((r) => r.el.classList.contains('t-eyebrow')), 'the eyebrow resolves to peach').toBe(true)
+    expect(onPeach.find((r) => r.el.classList.contains('t-eyebrow'))?.fg, 'the band rule colours the eyebrow --primary').toBe(hex('--primary'))
     expect(has((r) => r.el.tagName === 'H2'), 'the h2 resolves to peach').toBe(true)
     expect(has((r) => r.el.matches('h2 span.t-hl-peach')), 'the h2 span resolves to peach').toBe(true)
     expect(has((r) => r.text === V_HEADER_PARAGRAPH), 'the header paragraph resolves to peach').toBe(true)

@@ -310,28 +310,33 @@ func TestReconcileFork_UnreadablePostgresVariablesFail(t *testing.T) {
 }
 
 func TestReconcileFork_ArchiveValuesNeverPrinted(t *testing.T) {
+	b3 := []string{"WAL_ARCHIVE_BUCKET", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_SECRET"}
 	cases := []struct {
 		name, status string
-		bend         string
-		prod         map[string]string
+		setup        func(*testing.T, authShim)
 		readsProd    bool
 	}{
-		{"blank succeeds", "NONE", "", nil, false},
-		{"refused: Postgres booted", "SUCCESS", "", nil, false},
-		{"B3a bucket kept, differs from production", "NONE", pitrKeep("WAL_ARCHIVE_BUCKET", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_SECRET"), pitrProdMap(nil), true},
-		{"B3b bucket kept, equals production", "NONE", pitrKeep("WAL_ARCHIVE_BUCKET", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_SECRET"), pitrProdMap(map[string]string{"WAL_ARCHIVE_BUCKET": pitrBucket}), true},
-		{"B3c production bucket empty", "NONE", pitrKeep("WAL_ARCHIVE_BUCKET"), pitrProdMap(map[string]string{"WAL_ARCHIVE_BUCKET": ""}), true},
-		{"B2 bucket blank, others kept", "NONE", pitrKeepAfterBlank("WAL_ARCHIVE_KEY", "WAL_ARCHIVE_SECRET"), pitrProdMap(nil), false},
+		{"blank succeeds", "NONE", nil, false},
+		{"refused: Postgres booted", "SUCCESS", nil, false},
+		{"B3a bucket kept, rendered values differ from production's", "NONE", func(t *testing.T, s authShim) { pitrPlantB3(t, s, b3, pitrProdMap(nil)) }, true},
+		{"B3b bucket kept, rendered values equal production's", "NONE", func(t *testing.T, s authShim) {
+			pitrPlantB3(t, s, b3, pitrProdMap(map[string]string{"WAL_ARCHIVE_BUCKET": pitrBucket}))
+		}, true},
+		{"B3c production rendered bucket empty", "NONE", func(t *testing.T, s authShim) {
+			pitrPlantB3(t, s, b3, pitrProdMap(map[string]string{"WAL_ARCHIVE_BUCKET": ""}))
+		}, true},
+		{"B3c production rendered map unreadable", "NONE", func(t *testing.T, s authShim) { pitrPlantB3(t, s, b3, nil) }, true},
+		{"B2 bucket blank, others kept", "NONE", func(t *testing.T, s authShim) {
+			pitrPlantProduction(t, s, pitrProdMap(nil))
+			s.bendRead(t, retryPostgresID, pitrKeepAfterBlank("WAL_ARCHIVE_KEY", "WAL_ARCHIVE_SECRET"))
+		}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			s := pitrFixture(t, c.status, pitrVars(nil))
 			pitrPlantProduction(t, s, pitrProdMap(nil))
-			if c.prod != nil {
-				pitrPlantProduction(t, s, c.prod)
-			}
-			if c.bend != "" {
-				s.bendRead(t, retryPostgresID, c.bend)
+			if c.setup != nil {
+				c.setup(t, s)
 			}
 			before := readStore(t, s, retryPostgresID)
 			for k, want := range pitrArchive {
@@ -343,8 +348,8 @@ func TestReconcileFork_ArchiveValuesNeverPrinted(t *testing.T) {
 			if n := pitrPostgresReads(t, s); n < 1 {
 				t.Fatalf("control: Postgres variable map reads = %d, so the scan below sees a run that never met the values", n)
 			}
-			if c.readsProd && pitrProductionReads(t, s) < 1 {
-				t.Fatalf("control: production Postgres map reads = 0, so the scan below sees a run that never met production's values")
+			if c.readsProd && pitrRenderedReads(t, s, persistentEnvironmentID) < 1 {
+				t.Fatalf("control: production rendered Postgres map reads = 0, so the scan below sees a run that never met production's values")
 			}
 			requireNoArchiveNeedles(t, stdout+stderr)
 		})
@@ -379,6 +384,41 @@ func pitrPlantProduction(t *testing.T, s authShim, m map[string]string, filter .
 	}
 }
 
+// pitrPlantB3 plants the measured shape: the unrendered BUCKET (kept in the fork, held in production) is the same
+// template in both environments, and only the rendered maps tell them apart. A nil prodRendered is an unreadable read.
+func pitrPlantB3(t *testing.T, s authShim, kept []string, prodRendered map[string]string) {
+	t.Helper()
+	s.bendRead(t, retryPostgresID, pitrKeep(kept...))
+	tpl := map[string]string{}
+	for _, n := range []string{"WAL_ARCHIVE_BUCKET", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_SECRET", "WAL_ARCHIVE_ENDPOINT", "WAL_ARCHIVE_REGION"} {
+		tpl[n] = pitrTemplate(n)
+	}
+	pitrPlantProduction(t, s, tpl)
+	fork := map[string]string{}
+	for _, n := range kept {
+		fork[n] = pitrArchive[n]
+	}
+	for env, m := range map[string]map[string]string{retryForkEnv: fork, persistentEnvironmentID: prodRendered} {
+		raw, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(s.dir, "rendered-"+retryPostgresID+"-"+env+".json"), string(raw))
+	}
+}
+
+// pitrRenderedReads counts reads of env's Postgres map made without unrendered: true.
+func pitrRenderedReads(t *testing.T, s authShim, env string) int {
+	t.Helper()
+	n := 0
+	for _, c := range s.calls(t) {
+		if strings.Contains(c.Query, "variables(projectId") && !strings.Contains(c.Query, "unrendered") && c.Variables["s"] == retryPostgresID && c.Variables["e"] == env {
+			n++
+		}
+	}
+	return n
+}
+
 // pitrProductionReads counts reads of the source environment's Postgres variable map.
 func pitrProductionReads(t *testing.T, s authShim) int {
 	t.Helper()
@@ -391,11 +431,16 @@ func pitrProductionReads(t *testing.T, s authShim) int {
 	return n
 }
 
-// pitrKeepObj is a jq object that holds each name at the fork's planted value.
+// pitrTemplate is the unrendered value Railway holds for a bucket-linked name, in fork and production alike.
+func pitrTemplate(name string) string {
+	return "${{Postgres-PITR." + strings.TrimPrefix(name, "WAL_ARCHIVE_") + "}}"
+}
+
+// pitrKeepObj is a jq object that holds each name at its reference template, as the unrendered read shows it.
 func pitrKeepObj(names ...string) string {
 	kept := map[string]string{}
 	for _, n := range names {
-		kept[n] = pitrArchive[n]
+		kept[n] = pitrTemplate(n)
 	}
 	raw, _ := json.Marshal(kept)
 	return string(raw)
@@ -452,29 +497,31 @@ func TestReconcileFork_B2_KeptNamesPassWhenBucketBlank(t *testing.T) {
 }
 
 func TestReconcileFork_B3a_BucketDiffersFromProductionPasses(t *testing.T) {
+	all := []string{"WAL_ARCHIVE_BUCKET", "WAL_ARCHIVE_ENDPOINT", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_REGION", "WAL_ARCHIVE_SECRET"}
 	cases := []struct {
 		name   string
 		kept   []string
 		prod   map[string]string
 		listed []string
 	}{
-		{"measured shape: BUCKET, KEY, SECRET differ; ENDPOINT, REGION match", []string{"WAL_ARCHIVE_BUCKET", "WAL_ARCHIVE_ENDPOINT", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_REGION", "WAL_ARCHIVE_SECRET"}, pitrProdMap(nil), []string{"WAL_ARCHIVE_ENDPOINT", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_REGION", "WAL_ARCHIVE_SECRET"}},
+		{"measured: unrendered templates identical, rendered BUCKET, KEY, SECRET differ", all, pitrProdMap(nil), []string{"WAL_ARCHIVE_ENDPOINT", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_REGION", "WAL_ARCHIVE_SECRET"}},
 		{"only BUCKET kept", []string{"WAL_ARCHIVE_BUCKET"}, pitrProdMap(nil), nil},
-		{"BUCKET differs while KEY, SECRET equal production's", []string{"WAL_ARCHIVE_BUCKET", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_SECRET"}, pitrProdMap(map[string]string{"WAL_ARCHIVE_KEY": pitrKey, "WAL_ARCHIVE_SECRET": pitrSecret}), []string{"WAL_ARCHIVE_KEY", "WAL_ARCHIVE_SECRET"}},
-		{"BUCKET differs while production's KEY equals the fork's BUCKET", []string{"WAL_ARCHIVE_BUCKET"}, pitrProdMap(map[string]string{"WAL_ARCHIVE_KEY": pitrBucket}), nil},
+		{"rendered BUCKET differs while KEY, SECRET equal production's", []string{"WAL_ARCHIVE_BUCKET", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_SECRET"}, pitrProdMap(map[string]string{"WAL_ARCHIVE_KEY": pitrKey, "WAL_ARCHIVE_SECRET": pitrSecret}), []string{"WAL_ARCHIVE_KEY", "WAL_ARCHIVE_SECRET"}},
+		{"rendered BUCKET differs while production's KEY equals the fork's BUCKET", []string{"WAL_ARCHIVE_BUCKET"}, pitrProdMap(map[string]string{"WAL_ARCHIVE_KEY": pitrBucket}), nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			s := pitrFixture(t, "NONE", pitrVars(nil))
-			pitrPlantProduction(t, s, c.prod)
-			s.bendRead(t, retryPostgresID, pitrKeep(c.kept...))
+			pitrPlantB3(t, s, c.kept, c.prod)
 			stdout, stderr, code := runReconcileFork(t, s)
 
 			if code != 0 {
-				t.Fatalf("B3a: exit %d, want 0: the fork's BUCKET differs from production's; output = %q", code, stdout+stderr)
+				t.Fatalf("B3a: exit %d, want 0: the fork's rendered BUCKET differs from production's; output = %q", code, stdout+stderr)
 			}
-			if n := pitrProductionReads(t, s); n < 1 {
-				t.Errorf("B3a control: source-environment Postgres map reads = %d, want at least 1: the pass rests on production's BUCKET", n)
+			for _, env := range []string{retryForkEnv, persistentEnvironmentID} {
+				if n := pitrRenderedReads(t, s, env); n < 1 {
+					t.Errorf("B3a control: rendered Postgres map reads of %s = %d, want at least 1: the compare is on rendered values", env, n)
+				}
 			}
 			var lines []string
 			for _, l := range strings.Split(stdout, "\n") {
@@ -502,26 +549,28 @@ func TestReconcileFork_B3a_BucketDiffersFromProductionPasses(t *testing.T) {
 }
 
 func TestReconcileFork_B3b_BucketEqualsProductionFails(t *testing.T) {
+	all := []string{"WAL_ARCHIVE_BUCKET", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_SECRET"}
 	cases := []struct {
 		name string
 		kept []string
 		prod map[string]string
 	}{
-		{"BUCKET equal", []string{"WAL_ARCHIVE_BUCKET"}, pitrProdMap(map[string]string{"WAL_ARCHIVE_BUCKET": pitrBucket})},
-		{"BUCKET equal while KEY, SECRET differ", []string{"WAL_ARCHIVE_BUCKET", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_SECRET"}, pitrProdMap(map[string]string{"WAL_ARCHIVE_BUCKET": pitrBucket})},
+		{"rendered BUCKET equal", []string{"WAL_ARCHIVE_BUCKET"}, pitrProdMap(map[string]string{"WAL_ARCHIVE_BUCKET": pitrBucket})},
+		{"rendered BUCKET equal while KEY, SECRET differ", all, pitrProdMap(map[string]string{"WAL_ARCHIVE_BUCKET": pitrBucket})},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			s := pitrFixture(t, "NONE", pitrVars(nil))
-			pitrPlantProduction(t, s, c.prod)
-			s.bendRead(t, retryPostgresID, pitrKeep(c.kept...))
+			pitrPlantB3(t, s, c.kept, c.prod)
 			stdout, stderr, code := runReconcileFork(t, s)
 
 			if code != 1 {
 				t.Errorf("B3b: exit %d, want 1: the fork would archive into production's bucket; output = %q", code, stdout+stderr)
 			}
-			if n := pitrProductionReads(t, s); n < 1 {
-				t.Errorf("B3b control: source-environment Postgres map reads = %d, want at least 1: the refusal rests on production's BUCKET", n)
+			for _, env := range []string{retryForkEnv, persistentEnvironmentID} {
+				if n := pitrRenderedReads(t, s, env); n < 1 {
+					t.Errorf("B3b control: rendered Postgres map reads of %s = %d, want at least 1: the refusal rests on rendered values", env, n)
+				}
 			}
 			errs := strings.ToLower(errorLines(stdout + stderr))
 			for _, want := range []string{strings.ToLower(retryForkEnv), "archive", "production", "bucket"} {
@@ -542,27 +591,25 @@ func TestReconcileFork_B3c_ProductionBucketUnprovenFails(t *testing.T) {
 	prodNoBucket := pitrProdMap(nil)
 	delete(prodNoBucket, "WAL_ARCHIVE_BUCKET")
 	cases := []struct {
-		name   string
-		prod   map[string]string
-		filter []string
+		name string
+		prod map[string]string
 	}{
-		{"production map unreadable", pitrProdMap(nil), []string{"null"}},
-		{"production BUCKET empty", pitrProdMap(map[string]string{"WAL_ARCHIVE_BUCKET": ""}), nil},
-		{"production BUCKET absent", prodNoBucket, nil},
-		{"production map empty", map[string]string{}, nil},
+		{"production rendered map unreadable", nil},
+		{"production rendered BUCKET empty", pitrProdMap(map[string]string{"WAL_ARCHIVE_BUCKET": ""})},
+		{"production rendered BUCKET absent", prodNoBucket},
+		{"production rendered map empty", map[string]string{}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			s := pitrFixture(t, "NONE", pitrVars(nil))
-			pitrPlantProduction(t, s, c.prod, c.filter...)
-			s.bendRead(t, retryPostgresID, pitrKeep("WAL_ARCHIVE_BUCKET", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_SECRET"))
+			pitrPlantB3(t, s, []string{"WAL_ARCHIVE_BUCKET", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_SECRET"}, c.prod)
 			stdout, stderr, code := runReconcileFork(t, s)
 
 			if code != 1 {
 				t.Errorf("B3c: exit %d, want 1: isolation from production is not proven; output = %q", code, stdout+stderr)
 			}
-			if n := pitrProductionReads(t, s); n < 1 {
-				t.Errorf("B3c control: source-environment Postgres map reads = %d, want at least 1: the refusal rests on that read", n)
+			if n := pitrRenderedReads(t, s, persistentEnvironmentID); n < 1 {
+				t.Errorf("B3c control: rendered source-environment Postgres map reads = %d, want at least 1: the refusal rests on that read", n)
 			}
 			if errs := strings.ToLower(errorLines(stdout + stderr)); !strings.Contains(errs, "production") {
 				t.Errorf("B3c: ::error:: lines do not name production: %q", errs)

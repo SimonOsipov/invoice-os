@@ -149,6 +149,10 @@ case "$q" in
   *"variables(projectId"*)
     s=$(printf '%s' "$data" | jq -r '.variables | (.s // .serviceId // empty)')
     e=$(printf '%s' "$data" | jq -r '.variables.e // empty')
+    # A read without unrendered:true serves rendered-<s>-<e>.json (a variables object or null) when present.
+    if [ -n "$e" ] && [ -f "$dir/rendered-$s-$e.json" ] && ! printf '%s' "$data" | jq -e '.query | contains("unrendered")' >/dev/null; then
+      printf '{"data":{"variables":%s}}' "$(cat "$dir/rendered-$s-$e.json")"; exit 0
+    fi
     st="$dir/store-$s.json"; flt="$dir/read-$s.jq"
     # store-<s>-<e>.json serves environment e alone, bent only by read-<s>-<e>.jq.
     if [ -n "$e" ] && [ -f "$dir/store-$s-$e.json" ]; then st="$dir/store-$s-$e.json"; flt="$dir/read-$s-$e.jq"; fi

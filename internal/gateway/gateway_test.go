@@ -1206,7 +1206,8 @@ func TestHandlerPanicsWithoutGatewayToken(t *testing.T) {
 }
 
 // The gateway composed with a platform.App that called RequireGateway: the shared token gets
-// through with the token's identity; a different one is refused by the guarded service itself.
+// through with the token's identity; a different one is refused by the guarded service itself
+// and answered to the client as 502, never as the user's 401.
 func TestGatewayGetsThroughAGuardedService(t *testing.T) {
 	tg := setupGateway(t)
 	tok := tg.validToken(t)
@@ -1262,10 +1263,13 @@ func TestGatewayGetsThroughAGuardedService(t *testing.T) {
 	t.Run("different token", func(t *testing.T) {
 		rec, reached, handled := guarded(t, "other")
 		if reached.Load() != 1 {
-			t.Fatalf("service saw %d request(s), want 1 -- the 401 must come from the service, not the gateway", reached.Load())
+			t.Fatalf("service saw %d request(s), want 1 -- the refusal must come from the service, not the gateway", reached.Load())
 		}
-		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("status = %d, want 401", rec.Code)
+		if rec.Code != http.StatusBadGateway {
+			t.Errorf("status = %d, want 502", rec.Code)
+		}
+		if got := rec.Header().Get(platform.HeaderGatewayGuard); got != "" {
+			t.Errorf("%s = %q reached the client, want it stripped", platform.HeaderGatewayGuard, got)
 		}
 		if handled.Load() != 0 {
 			t.Errorf("service handler ran %d time(s) on a mismatched token, want 0", handled.Load())
@@ -1358,5 +1362,24 @@ func assertHeader(t *testing.T, h http.Header, key, want string) {
 	t.Helper()
 	if got := h.Get(key); got != want {
 		t.Errorf("upstream header %s = %q, want %q", key, got, want)
+	}
+}
+
+// A service's own 401 (no guard marker) is the user's auth refusal and passes through unchanged.
+func TestProxyPassesAServiceOwn401Through(t *testing.T) {
+	tg := setupGateway(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parse upstream url: %v", err)
+	}
+	h := Handler(Options{Verifier: tg.verifier, Sessions: liveSessions(t), Upstreams: map[string]*url.URL{"tenancy": u}, GatewayToken: testGatewayToken})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, request("GET", "/api/tenancy/v1/ping", tg.validToken(t)))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
 	}
 }

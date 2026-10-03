@@ -9,6 +9,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
@@ -117,6 +118,8 @@ func isProvisioning(r *http.Request) bool {
 	return r.Method == http.MethodPost && r.URL.EscapedPath() == tenantlessPath
 }
 
+var errGuardRefused = errors.New("upstream refused the gateway token")
+
 // newReverseProxy builds the per-service reverse proxy. The path prefix is
 // stripped by the caller (http.StripPrefix); here we point the request at the
 // upstream and overwrite the identity headers from the verified token.
@@ -134,12 +137,22 @@ func newReverseProxy(service string, target *url.URL, gatewayToken string, log *
 			pr.Out.Header.Del("sentry-trace")
 			pr.Out.Header.Del("baggage")
 		},
-		// Every upstream is a platform service that reports its own 5xx.
 		ModifyResponse: func(resp *http.Response) error {
+			// A guard refusal is a gateway/service token mismatch, not the user's: answer 502, never 401.
+			if resp.Header.Get(platform.HeaderGatewayGuard) == platform.GatewayGuardRefused {
+				return errGuardRefused
+			}
+			// Every upstream is a platform service that reports its own 5xx.
 			platform.ReportedElsewhere(resp.Request.Context())
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			if errors.Is(err, errGuardRefused) {
+				log.ErrorContext(r.Context(), "gateway token refused by upstream",
+					slog.String("upstream", service))
+				writeError(w, http.StatusBadGateway, "bad gateway")
+				return
+			}
 			log.ErrorContext(r.Context(), "gateway upstream unreachable",
 				slog.String("upstream", service), slog.Any("err", err))
 			writeError(w, http.StatusBadGateway, "bad gateway")

@@ -293,7 +293,8 @@ these will otherwise fail every PR once the deployment triggers are back.
 
 To roll back a deploy of the gateway token guard, roll back the gateway and the seven
 guarded services together. A guarded service's WARN `request refused: no gateway token`
-line is the symptom of a split rollback.
+line is the symptom of a split rollback. The client sees 502 `{"error":"bad gateway"}`, not
+401, and the gateway logs an ERROR `gateway token refused by upstream` naming the service.
 
 ## Cold-fleet recovery (M3-16)
 

@@ -102,6 +102,9 @@ func assertRefused(t *testing.T, rec *httptest.ResponseRecorder, label string) {
 	if rec.Body.String() != refusalBody {
 		t.Errorf("%s: body = %q, want %q", label, rec.Body.String(), refusalBody)
 	}
+	if got := rec.Header().Get(HeaderGatewayGuard); got != GatewayGuardRefused {
+		t.Errorf("%s: %s = %q, want %q", label, HeaderGatewayGuard, got, GatewayGuardRefused)
+	}
 }
 
 func TestRequireGateway_RefusesForgedIdentityWithoutToken(t *testing.T) {

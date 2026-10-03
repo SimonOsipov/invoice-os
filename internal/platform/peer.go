@@ -9,6 +9,12 @@ import (
 // HeaderGatewayToken carries the gateway's credential to a context service.
 const HeaderGatewayToken = "X-Gateway-Token"
 
+// HeaderGatewayGuard marks the gateway guard's own 401, so the gateway can tell a token mismatch from a service's auth refusal.
+const HeaderGatewayGuard = "X-Gateway-Guard"
+
+// GatewayGuardRefused is the value of HeaderGatewayGuard on a guard refusal.
+const GatewayGuardRefused = "refused"
+
 // RequireToken admits a request only when header equals token; others get 401 before the body is read.
 // An empty token admits a request that sends no header; callers must pass a non-empty one.
 func RequireToken(header, token string) func(http.Handler) http.Handler {
@@ -57,6 +63,7 @@ func (a *App) gatewayGuard(next http.Handler) http.Handler {
 		}
 		a.Logger.WarnContext(r.Context(), "request refused: no gateway token",
 			slog.String("method", r.Method), slog.String("path", r.URL.Path))
+		w.Header().Set(HeaderGatewayGuard, GatewayGuardRefused)
 		writeUnauthorized(w)
 	})
 }

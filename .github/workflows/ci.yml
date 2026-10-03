@@ -756,7 +756,7 @@ jobs:
         # DATABASE_SUPERUSER_URL (seed + subtask 05's ANALYZE) — both already in this job's env.
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/archive/...
       - name: Context-service gateway guard (each built main refuses a forged request) + per-test visibility & skip gate
-        # AUTH-13-04: boots the seven routedServices mains against a throwaway copy of this
+        # Boots the seven routedServices mains against a throwaway copy of this
         # job's database (invoice's boot seeds demo approval runs); needs DATABASE_URL (app) +
         # DATABASE_SUPERUSER_URL, already in this job's env. Before the seed step, which must stay last.
         run: scripts/ci/rls-test-gate.sh -count=1 -run TestRLS_EveryContextServiceRefusesAForgedRequest ./internal/platform

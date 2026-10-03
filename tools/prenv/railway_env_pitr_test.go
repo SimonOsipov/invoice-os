@@ -368,6 +368,39 @@ func TestReconcileFork_C2_BootedBucketUnprovenFails(t *testing.T) {
 	}
 }
 
+// C1, C2: every deployment status takes the booted path, whatever the later reuse step does with it.
+func TestReconcileFork_C1C2_EveryDeploymentStatusTakesTheBootedPath(t *testing.T) {
+	kept := []string{"WAL_ARCHIVE_BUCKET", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_SECRET"}
+	for _, status := range []string{"SUCCESS", "FAILED", "CRASHED", "BUILDING", "DEPLOYING", "REMOVED", "SLEEPING", "SKIPPED", "NEEDS_APPROVAL", "QUEUED", "INITIALIZING", "WAITING"} {
+		t.Run(status+"/differs passes the gate", func(t *testing.T) {
+			s := pitrFixture(t, status, pitrVars(nil))
+			pitrPlantB3(t, s, kept, pitrProdMap(nil))
+			stdout, stderr, _ := runReconcileFork(t, s)
+
+			requireBootedNoWrite(t, s, stdout+stderr)
+			if n := strings.Count(stdout, "differs from production's"); n != 1 {
+				t.Errorf("C1: lines saying the BUCKET differs from production's = %d, want 1; output = %q", n, stdout+stderr)
+			}
+			requireNoArchiveNeedles(t, stdout+stderr)
+		})
+		t.Run(status+"/equal refuses", func(t *testing.T) {
+			s := pitrFixture(t, status, pitrVars(nil))
+			pitrPlantB3(t, s, kept, pitrProdMap(map[string]string{"WAL_ARCHIVE_BUCKET": pitrBucket}))
+			stdout, stderr, code := runReconcileFork(t, s)
+
+			if code != 1 {
+				t.Errorf("C2: exit %d, want 1: the rendered BUCKET equals production's; output = %q", code, stdout+stderr)
+			}
+			requireBootedNoWrite(t, s, stdout+stderr)
+			if errs := errorLines(stdout + stderr); !strings.Contains(errs, "equal to production's") {
+				t.Errorf("C2: ::error:: lines lack the equal-to-production refusal: %q", errs)
+			}
+			requireNoBoot(t, s)
+			requireNoArchiveNeedles(t, stdout+stderr)
+		})
+	}
+}
+
 func TestReconcileFork_C3_BootedBucketNotSetPasses(t *testing.T) {
 	absent := pitrVars(nil)
 	delete(absent, "WAL_ARCHIVE_BUCKET")
@@ -967,6 +1000,12 @@ func TestReconcileFork_UnreadableDeploymentStateRefusesWithoutWriting(t *testing
 		{"GraphQL error reading the instance", func(t *testing.T, s authShim) { setFaults(t, s, "svcInstance", "gqlerr") }, nil},
 		{"deployment object without a status", func(t *testing.T, s authShim) {
 			writeFile(t, filepath.Join(s.dir, "svcInstance.json"), `{"data":{"serviceInstance":{"serviceName":"Postgres","latestDeployment":{"id":"dep-x"}}}}`)
+		}, []string{retryForkEnv, "delete", "status unknown"}},
+		{"deployment status null", func(t *testing.T, s authShim) {
+			writeFile(t, filepath.Join(s.dir, "svcInstance.json"), `{"data":{"serviceInstance":{"serviceName":"Postgres","latestDeployment":{"id":"dep-x","status":null}}}}`)
+		}, []string{retryForkEnv, "delete", "status unknown"}},
+		{"deployment status empty string", func(t *testing.T, s authShim) {
+			writeFile(t, filepath.Join(s.dir, "svcInstance.json"), `{"data":{"serviceInstance":{"serviceName":"Postgres","latestDeployment":{"id":"dep-x","status":""}}}}`)
 		}, []string{retryForkEnv, "delete", "status unknown"}},
 	}
 	for _, c := range cases {

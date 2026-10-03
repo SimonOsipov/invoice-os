@@ -11,6 +11,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -234,6 +235,45 @@ func gwWith(h map[string]string, k, v string) map[string]string {
 }
 
 const gwRefusalLog = "request refused: no gateway token"
+
+type gwRefusalKey struct{ method, path string }
+
+// gwRefusals counts the guard's refusal lines by exact method and path.
+func gwRefusals(p *gwProc) map[gwRefusalKey]int {
+	got := map[gwRefusalKey]int{}
+	for _, line := range strings.Split(p.out.String(), "\n") {
+		var rec struct{ Msg, Method, Path string }
+		if json.Unmarshal([]byte(line), &rec) == nil && rec.Msg == gwRefusalLog {
+			got[gwRefusalKey{rec.Method, rec.Path}]++
+		}
+	}
+	return got
+}
+
+// gwAwaitRefusal polls up to 5s for the child's pipe to deliver n refusal lines for k.
+func gwAwaitRefusal(p *gwProc, k gwRefusalKey, n int) bool {
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if gwRefusals(p)[k] >= n {
+			return true
+		}
+	}
+	return false
+}
+
+// gwSettledRefusals returns the counts once ready holds and two reads 250ms apart agree, or after 5s.
+func gwSettledRefusals(p *gwProc, ready func(map[gwRefusalKey]int) bool) map[gwRefusalKey]int {
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		a := gwRefusals(p)
+		if !ready(a) {
+			continue
+		}
+		time.Sleep(250 * time.Millisecond)
+		if b := gwRefusals(p); maps.Equal(a, b) {
+			return b
+		}
+	}
+	return gwRefusals(p)
+}
 
 const gwUnauthorizedBody = "{\"error\":\"unauthorized\"}\n"
 
@@ -513,7 +553,7 @@ func TestRLS_EveryContextServiceRefusesAForgedRequest(t *testing.T) {
 				if code, _ := p.do(t, "POST", "/v1/validate/batch", batch, s2s); code == http.StatusUnauthorized || code == http.StatusNotFound {
 					t.Fatalf("POST /v1/validate/batch, S2S token only = %d, want the route reached", code)
 				}
-				for _, c := range []struct{ method, path string }{
+				cases := []gwRefusalKey{
 					{"GET", "/v1/validate/batch"},
 					{"PUT", "/v1/validate/batch"},
 					{"POST", "/v1/validate/batch/"},
@@ -521,16 +561,45 @@ func TestRLS_EveryContextServiceRefusesAForgedRequest(t *testing.T) {
 					{"POST", "/v1/validate/batch/extra"},
 					{"PATCH", "/v1/rules/x"},
 					{"GET", "/v1/ping"},
-				} {
-					refused := strings.Count(p.out.String(), gwRefusalLog)
+				}
+				// The child logs in request order, so once the barrier line lands every earlier line has too.
+				barrier := gwRefusalKey{"GET", "/v1/log-barrier"}
+				p.do(t, barrier.method, barrier.path, "", gwForged())
+				if !gwAwaitRefusal(p, barrier, 1) {
+					t.Fatalf("no refusal line for %s %s within 5s:\n%s", barrier.method, barrier.path, p.out)
+				}
+				before := gwRefusals(p)
+				for _, c := range cases {
 					code, body := p.do(t, c.method, c.path, batch, gwWith(gwForged(), "X-S2S-Token", gwS2SToken))
 					if code != http.StatusUnauthorized || body != gwUnauthorizedBody {
 						t.Errorf("%s %s, S2S token and forged identity, no gateway token = %d %q, want 401 %q", c.method, c.path, code, body, gwUnauthorizedBody)
 					}
 					// a handler can answer the same 401; only the guard logs the refusal
-					if got := strings.Count(p.out.String(), gwRefusalLog); got != refused+1 {
-						t.Errorf("%s %s: guard logged %d refusal(s), want 1; the route reached its handler", c.method, c.path, got-refused)
+					if !gwAwaitRefusal(p, c, before[c]+1) {
+						t.Errorf("%s %s: guard logged no refusal line within 5s; the route reached its handler", c.method, c.path)
 					}
+				}
+				after := gwSettledRefusals(p, func(m map[gwRefusalKey]int) bool {
+					for _, c := range cases {
+						if m[c] < before[c]+1 {
+							return false
+						}
+					}
+					return true
+				})
+				for _, c := range cases {
+					if got := after[c] - before[c]; got != 1 {
+						t.Errorf("%s %s: guard logged %d refusal line(s), want 1", c.method, c.path, got)
+					}
+				}
+				total := func(m map[gwRefusalKey]int) (n int) {
+					for _, v := range m {
+						n += v
+					}
+					return n
+				}
+				if got := total(after) - total(before); got != len(cases) {
+					t.Errorf("guard logged %d refusal line(s) for %d requests, want one each", got, len(cases))
 				}
 			})
 		})

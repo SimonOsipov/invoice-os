@@ -29,6 +29,7 @@ function ssr(): DocumentFragment {
 
 const norm = (s: string | null | undefined) => (s ?? '').replace(/\s+/g, ' ').trim()
 const bg = (el: Element) => /(?:^|;)\s*background:\s*([^;]+)/.exec(el.getAttribute('style') ?? '')?.[1].trim()
+const stops = (root: Element) => [...root.querySelectorAll('a[href], button, input, select, textarea, [tabindex]')].map((e) => e.outerHTML)
 const cards = (frag: DocumentFragment) => [...frag.querySelectorAll('[data-partner]')]
 // The aria-hidden grid span with four child spans (D-10).
 const glyphsIn = (card: Element) =>
@@ -98,5 +99,6 @@ describe('IG-05 the CTA is a text button on the peach rule', () => {
     expect(norm(buttons[0].textContent)).toBe(V_CTA)
     expect(buttons[0].classList.contains('ds-btn--text')).toBe(true)
     expect(buttons[0].classList.contains('btn-on-peach')).toBe(true)
+    expect(stops(ssr().querySelector('#integrations')!), 'the CTA is the only Tab stop').toEqual([buttons[0].outerHTML])
   })
 })

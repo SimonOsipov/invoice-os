@@ -60,6 +60,7 @@ function ssr(markup?: string): DocumentFragment {
 const norm = (s: string | null | undefined) => (s ?? '').replace(/\s+/g, ' ').trim()
 const paths = (el: Element | null | undefined) => [...(el?.querySelectorAll('path') ?? [])].map((p) => p.getAttribute('d'))
 const style = (el: Element, prop: string) => new RegExp(`(?:^|;)\\s*${prop}:\\s*([^;]+)`, 'i').exec(el.getAttribute('style') ?? '')?.[1].trim()
+const stops = (root: Element) => [...root.querySelectorAll('a[href], button, input, select, textarea, [tabindex]')].map((e) => e.outerHTML)
 const DOT_COLOURS = ['#ff5f57', '#febc2e', '#28c840']
 const isDot = (el: Element) =>
   /^(99|999)(px)?$|^var\(--radius-pill\)$/.test(style(el, 'border-radius') ?? '') ||
@@ -139,5 +140,6 @@ describe('AP-05 one accent CTA', () => {
     expect(buttons, 'one button in the band').toHaveLength(1)
     expect(norm(buttons[0].textContent)).toBe('Request API access')
     expect(buttons[0].classList.contains('ds-btn--accent')).toBe(true)
+    expect(stops(ssr().querySelector('#api')!), 'the CTA is the only Tab stop; the sample is not focusable').toEqual([buttons[0].outerHTML])
   })
 })

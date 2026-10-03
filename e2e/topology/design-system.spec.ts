@@ -1,4 +1,4 @@
-// The deployed proof of the v2/v1 split and of the landing frame's geometry; one topology spec on purpose, a recorded deviation from docs/e2e-convention.md.
+// The deployed proof of the v2/v1 split, the landing frame's geometry and the Problem, Solution and Platform sections; one topology spec on purpose, a recorded deviation from docs/e2e-convention.md.
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
@@ -6,7 +6,7 @@ import { collectErrors, signInAs } from '../personaSession'
 import type { PersonaId } from '../personas'
 import { seedConsent } from '../smoke/landingConsent'
 import { resolveTarget } from '../targets'
-import { rectsOverlap, WIDE_WIDTHS } from './layout'
+import { enclosesRect, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
 
 const LANDING_URL = resolveTarget('LANDING_URL')
 
@@ -374,7 +374,7 @@ test('landing frame geometry at 1440, 834 and 390', async ({ page }, testInfo) =
   expect(errors, `console errors on the frame sweep:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('landing frame columns share one left edge', async ({ page }, testInfo) => {
+test('landing frame and section columns share one left edge', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
   await openLandingFrame(page)
   const measured: unknown[] = []
@@ -386,14 +386,250 @@ test('landing frame columns share one left edge', async ({ page }, testInfo) => 
       heroEyebrow: (await box(page.locator('#top .t-eyebrow').first(), `${width} hero eyebrow`)).x,
       stripLabel: (await box(page.locator('[data-strip] > div').first(), `${width} strip label`)).x,
       footerLogo: (await box(page.locator('footer .ds-logo'), `${width} footer logo`)).x,
+      problemEyebrow: (await box(page.locator('#problem .t-eyebrow'), `${width} problem eyebrow`)).x,
+      problemH2: (await box(page.locator('#problem h2'), `${width} problem h2`)).x,
+      solutionEyebrow: (await box(page.locator('#solution .t-eyebrow'), `${width} solution eyebrow`)).x,
+      solutionH2: (await box(page.locator('#solution h2'), `${width} solution h2`)).x,
+      platformEyebrow: (await box(page.locator('#platform .t-eyebrow'), `${width} platform eyebrow`)).x,
+      platformH2: (await box(page.locator('#platform h2'), `${width} platform h2`)).x,
     }
-    measured.push({ width, ...lefts })
+    const aligns = await page.$$eval('#problem h2, #solution h2, #platform h2', (els) => els.map((el) => getComputedStyle(el).textAlign))
+    measured.push({ width, ...lefts, aligns })
+    expect(aligns, `${width}px: section h2 text-align`).toHaveLength(3)
+    for (const a of aligns) expect(['start', 'left'], `${width}px: h2 text-align ${a}`).toContain(a)
     const all = Object.values(lefts)
     expect(Math.max(...all) - Math.min(...all), `${width}px: left edges ${JSON.stringify(lefts)}`).toBeLessThanOrEqual(1)
   }
 
   await attachJson(testInfo, 'left-edges.json', measured)
   expect(errors, `console errors on the column sweep:\n${errors.join('\n')}`).toEqual([])
+})
+
+const SECTIONS = '#problem, #problem *, #solution, #solution *, #platform, #platform *'
+
+// Rendered boxes of every match, in document order.
+const rectsOf = (page: Page, sel: string): Promise<Rect[]> =>
+  page.$$eval(sel, (els) =>
+    els
+      .map((el) => el.getBoundingClientRect())
+      .filter((r) => r.width > 0 && r.height > 0)
+      .map((r) => ({ x: r.left, y: r.top, width: r.width, height: r.height })),
+  )
+
+// Cells sharing the first cell's top (±1) form the first row.
+const columnsOf = (cells: Rect[]): number => cells.filter((c) => Math.abs(c.y - cells[0].y) <= 1).length
+
+const besideOrBelow = (column: Rect, card: Rect, beside: boolean, label: string) => {
+  if (beside) {
+    expect(rectsOverlap(column, card), `${label}: card overlaps its column`).toBe(false)
+    expect(card.x, `${label}: card left vs column right`).toBeGreaterThanOrEqual(column.x + column.width - 1)
+  } else {
+    expect(card.y, `${label}: card top vs column bottom`).toBeGreaterThanOrEqual(column.y + column.height - 1)
+  }
+}
+
+type Overflow = { scrollWidth: number; clientWidth: number; innerWidth: number; roots: string[]; outside: string[] }
+
+// Walks the sections' rendered elements outside the tablist, which scrolls inside itself.
+function walkOverflow(page: Page, scope: string, roots: string[]): Promise<Overflow> {
+  return page.evaluate(
+    ({ scope, roots }) => {
+      const doc = document.documentElement
+      const els = [...document.querySelectorAll(scope)]
+        .filter((el) => !el.closest('[role=tablist]'))
+        .map((el) => ({ el, r: el.getBoundingClientRect() }))
+        .filter(({ r }) => r.width > 0 && r.height > 0)
+      return {
+        scrollWidth: doc.scrollWidth,
+        clientWidth: doc.clientWidth,
+        innerWidth: window.innerWidth,
+        roots: roots.filter((root) => !els.some(({ el }) => el.matches(root))),
+        outside: els
+          .filter(({ r }) => r.left < -1 || r.right > window.innerWidth + 1)
+          .map(({ el, r }) => `<${el.tagName.toLowerCase()} class="${el.className}"> ${Math.round(r.left)}..${Math.round(r.right)}`),
+      }
+    },
+    { scope, roots },
+  )
+}
+
+function expectNoOverflow(o: Overflow, label: string): void {
+  expect(o.roots, `${label}: roots missing from the walk`).toEqual([])
+  expect(o.scrollWidth, `${label}: scrollWidth vs clientWidth`).toBeLessThanOrEqual(o.clientWidth)
+  expect(o.outside, `${label}: elements outside the viewport`).toEqual([])
+}
+
+// Computed values of a probe element carrying the given inline style, one per entry.
+function probeStyles(page: Page, styles: Record<string, string>): Promise<Record<string, string>> {
+  return page.evaluate((styles) => {
+    const out: Record<string, string> = {}
+    for (const [key, css] of Object.entries(styles)) {
+      const el = document.createElement('span')
+      el.style.cssText = `position:absolute;visibility:hidden;${css}`
+      document.body.appendChild(el)
+      const cs = getComputedStyle(el)
+      out[key] = key.startsWith('color') ? cs.color : key.startsWith('background') ? cs.backgroundColor : cs.boxShadow
+      el.remove()
+    }
+    return out
+  }, styles)
+}
+
+const CHECK_END = '4 errors · 4 warnings · Not ready to submit'
+const CHECK_OUTCOMES = ['FAIL', 'FAIL', 'FAIL', 'WARN', 'WARN', 'WARN', 'WARN', 'FAIL']
+const checkFooter = (page: Page) => page.locator('#problem-check [data-check="footer"]')
+const checkTags = (page: Page) => page.locator('#problem-check [data-check="row"] > span:last-child')
+
+const SECTION_ROOTS = ['#problem', '#solution', '#platform']
+
+test('landing sections at 1440, 834 and 390', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  await openLandingFrame(page)
+  const measured: unknown[] = []
+
+  for (const vp of FRAME_VIEWPORTS) {
+    const label = `${vp.width}px`
+    const wide = vp.width === 1440
+    await settleFrame(page, vp)
+
+    const overflow = await walkOverflow(page, SECTIONS, SECTION_ROOTS)
+    const tablist = (await rectsOf(page, '#platform [role=tablist]'))[0]
+    expectNoOverflow(overflow, label)
+    expect(tablist, `${label}: tablist has no box`).toBeDefined()
+    expect(tablist.x, `${label}: tablist left`).toBeGreaterThanOrEqual(-1)
+    expect(tablist.x + tablist.width, `${label}: tablist right`).toBeLessThanOrEqual(vp.width + 1)
+
+    const cells = await rectsOf(page, '#solution .mod-cell')
+    const grid = (await rectsOf(page, '#solution .mod-grid'))[0]
+    const columns = columnsOf(cells)
+    expect(cells.length, `${label}: module cells`).toBeGreaterThan(0)
+    expect(columns, `${label}: module grid columns`).toBe(wide ? 4 : vp.width === 834 ? 2 : 1)
+    for (const [i, c] of cells.entries()) {
+      expect(enclosesRect(grid, c, 1), `${label}: cell ${i} outside the grid`).toBe(true)
+      for (const d of cells.slice(i + 1)) expect(rectsOverlap(c, d), `${label}: cell ${i} overlaps a later cell`).toBe(false)
+    }
+
+    const problemColumn = (await rectsOf(page, '#problem .split > div:first-child'))[0]
+    const problemCard = (await rectsOf(page, '#problem-check'))[0]
+    besideOrBelow(problemColumn, problemCard, wide, `${label} problem`)
+    const panelColumn = (await rectsOf(page, '#platform [role=tabpanel] .split > div:first-child'))[0]
+    const panelCard = (await rectsOf(page, '#platform [role=tabpanel] .card'))[0]
+    besideOrBelow(panelColumn, panelCard, wide, `${label} platform`)
+
+    const tabsBox = (await rectsOf(page, '#platform .ds-tabs'))[0]
+    const caps = await rectsOf(page, '#platform .cols3 > div')
+    expect(caps, `${label}: capabilities`).toHaveLength(3)
+    for (const c of caps) expect(c.y, `${label}: capability top vs tabs bottom`).toBeGreaterThanOrEqual(tabsBox.y + tabsBox.height - 1)
+    for (const [i, c] of caps.entries()) {
+      if (i === 0) continue
+      if (wide) {
+        expect(Math.abs(c.y - caps[0].y), `${label}: capability ${i} top vs first`).toBeLessThanOrEqual(1)
+        expect(rectsOverlap(caps[i - 1], c), `${label}: capability ${i} overlaps the previous`).toBe(false)
+      } else {
+        expect(c.y, `${label}: capability ${i} top vs previous bottom`).toBeGreaterThanOrEqual(caps[i - 1].y + caps[i - 1].height - 1)
+      }
+    }
+
+    // Resolved values against probes that read the same tokens.
+    const want = await probeStyles(page, {
+      color_teal: 'color: var(--teal)',
+      color_hl: 'color: var(--highlight-on-dark-2)',
+      background_surface: 'background: var(--surface)',
+      shadow: 'box-shadow: var(--shadow-card)',
+    })
+    const h2s = await page.evaluate(() =>
+      ['#problem', '#solution', '#platform'].map((id) => ({
+        id,
+        own: getComputedStyle(document.querySelector(`${id} h2`)!).color,
+        second: getComputedStyle(document.querySelector(`${id} h2 span`)!).color,
+      })),
+    )
+    const wantSecond = [want.color_teal, want.color_hl, want.color_teal]
+    for (const [i, h] of h2s.entries()) {
+      expect(h.second, `${label}: ${h.id} h2 second line colour`).toBe(wantSecond[i])
+      expect(h.second, `${label}: ${h.id} h2 second line vs its own colour`).not.toBe(h.own)
+    }
+    const read = await page.evaluate(() => ({
+      cellBackgrounds: [...document.querySelectorAll('#solution .mod-cell')].map((el) => getComputedStyle(el).backgroundColor),
+      problemShadow: getComputedStyle(document.querySelector('#problem-check')!).boxShadow,
+      platformShadow: getComputedStyle(document.querySelector('#platform [role=tabpanel] .card')!).boxShadow,
+      panelPaddingLeft: getComputedStyle(document.querySelector('#platform [role=tabpanel]')!).paddingLeft,
+    }))
+    for (const bg of read.cellBackgrounds) expect(bg, `${label}: module cell background`).toBe(want.background_surface)
+    expect(want.shadow, `${label}: --shadow-card resolves`).not.toBe('none')
+    expect(read.problemShadow, `${label}: problem check shadow`).toBe(want.shadow)
+    expect(read.platformShadow, `${label}: platform result card shadow`).toBe(want.shadow)
+    expect(read.panelPaddingLeft, `${label}: tabpanel padding-left`).toBe(wide ? '48px' : vp.width === 390 ? '24px' : read.panelPaddingLeft)
+
+    let tabs: unknown = null
+    if (vp.width === 390) {
+      tabs = await page.evaluate(() => {
+        const list = document.querySelector('#platform [role=tablist]')!
+        return {
+          overflowX: getComputedStyle(list).overflowX,
+          items: [...list.querySelectorAll('[role=tab]')].map((tab) => {
+            const walker = document.createTreeWalker(tab, NodeFilter.SHOW_TEXT)
+            const labelRects: number[] = []
+            for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+              if (!n.textContent?.trim() || (n.parentElement && n.parentElement.closest('.ds-tab-step'))) continue
+              const range = document.createRange()
+              range.selectNodeContents(n)
+              labelRects.push(range.getClientRects().length)
+            }
+            return { whiteSpace: getComputedStyle(tab).whiteSpace, labelRects }
+          }),
+        }
+      })
+      const t = tabs as { overflowX: string; items: { whiteSpace: string; labelRects: number[] }[] }
+      expect(t.overflowX, `${label}: tablist overflow-x`).toBe('auto')
+      expect(t.items.length, `${label}: tabs`).toBeGreaterThan(0)
+      for (const [i, tab] of t.items.entries()) {
+        expect(tab.whiteSpace, `${label}: tab ${i} white-space`).toBe('nowrap')
+        expect(tab.labelRects, `${label}: tab ${i} label client rects`).toEqual([1])
+      }
+    }
+
+    measured.push({ width: vp.width, overflow, tablist, columns, cells: cells.length, grid, problemColumn, problemCard, panelColumn, panelCard, caps, h2s, want, read, tabs })
+  }
+
+  await attachJson(testInfo, 'sections.json', measured)
+  expect(errors, `console errors on the sections sweep:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('landing problem check plays after scrolling into view at 1440, 834 and 390', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  const measured: unknown[] = []
+
+  for (const vp of FRAME_VIEWPORTS) {
+    const label = `${vp.width}px`
+    await seedConsent(page, false)
+    const res = await page.goto(`${LANDING_URL}/`)
+    expect(res?.ok(), `${label}: / returned HTTP ${res?.status()}`).toBeTruthy()
+    await settleFrame(page, vp)
+
+    const card = page.locator('#problem-check')
+    const before = await box(card, `${label} check card`)
+    expect(before.y, `${label}: card top vs 0.7 x viewport height`).toBeGreaterThan(0.7 * vp.height)
+    await expect(checkFooter(page), `${label}: footer before entry`).toHaveText('Checking 1 of 8')
+    await expect(checkTags(page), `${label}: tags before entry`).toHaveText(Array(8).fill('CHECKING'))
+
+    await card.evaluate((el) => el.scrollIntoView({ block: 'center' }))
+    await expect.poll(async () => checkFooter(page).textContent(), { intervals: [100], timeout: 10_000, message: `${label}: the run shows a step` }).toMatch(/^Checking [2-8] of 8$/)
+    await expect(checkFooter(page), `${label}: footer at the end`).toHaveText(CHECK_END, { timeout: 10_000 })
+    await expect(checkTags(page), `${label}: outcomes`).toHaveText(CHECK_OUTCOMES)
+
+    const overflow = await walkOverflow(page, '#problem, #problem *', ['#problem'])
+    expectNoOverflow(overflow, label)
+    const cardBox = await box(card, `${label} card after`)
+    const footerBox = await box(checkFooter(page), `${label} footer text`)
+    const again = await box(card.getByRole('button', { name: 'Run check again' }), `${label} run again`)
+    expect(enclosesRect(cardBox, footerBox, 1), `${label}: footer text outside the card`).toBe(true)
+    expect(enclosesRect(cardBox, again, 1), `${label}: Run check again outside the card`).toBe(true)
+    measured.push({ width: vp.width, cardTopBefore: before.y, overflow, cardBox, footerBox, again })
+  }
+
+  await attachJson(testInfo, 'problem-check.json', measured)
+  expect(errors, `console errors on the problem check:\n${errors.join('\n')}`).toEqual([])
 })
 
 test('landing mobile menu at 834 and 390', async ({ page }, testInfo) => {
@@ -479,11 +715,58 @@ test('landing breakpoint edges', async ({ page }, testInfo) => {
   expect(await card.evaluate((el) => getComputedStyle(el).marginTop), '900px: card margin-top').toBe('0px')
   measured.hero = { beside, stacked: { card: cardBox, cta } }
 
+  const sectionEdges: Record<string, unknown> = {}
+  for (const [width, cols] of [[1001, 4], [1000, 2], [561, 2], [560, 1]] as const) {
+    await settleFrame(page, { width, height: 900 })
+    const got = columnsOf(await rectsOf(page, '#solution .mod-cell'))
+    expect(got, `${width}px: module grid columns`).toBe(cols)
+    sectionEdges[`grid${width}`] = got
+  }
+
+  for (const [width, beside] of [[901, true], [900, false]] as const) {
+    await settleFrame(page, { width, height: 900 })
+    const problem = { column: (await rectsOf(page, '#problem .split > div:first-child'))[0], card: (await rectsOf(page, '#problem-check'))[0] }
+    besideOrBelow(problem.column, problem.card, beside, `${width}px problem`)
+    const platform = {
+      column: (await rectsOf(page, '#platform [role=tabpanel] .split > div:first-child'))[0],
+      card: (await rectsOf(page, '#platform [role=tabpanel] .card'))[0],
+    }
+    besideOrBelow(platform.column, platform.card, beside, `${width}px platform`)
+    const caps = await rectsOf(page, '#platform .cols3 > div')
+    expect(caps, `${width}px: capabilities`).toHaveLength(3)
+    for (const [i, c] of caps.entries()) {
+      if (i === 0) continue
+      if (beside) expect(Math.abs(c.y - caps[0].y), `${width}px: capability ${i} top vs first`).toBeLessThanOrEqual(1)
+      else expect(c.y, `${width}px: capability ${i} top vs previous bottom`).toBeGreaterThanOrEqual(caps[i - 1].y + caps[i - 1].height - 1)
+    }
+    sectionEdges[`splits${width}`] = { problem, platform, caps }
+  }
+
+  for (const [width, fills] of [[641, true], [640, false]] as const) {
+    await settleFrame(page, { width, height: 900 })
+    const strip = await page.evaluate(() => {
+      const list = document.querySelector('#platform [role=tablist]')!
+      return {
+        list: list.getBoundingClientRect().width,
+        overflowX: getComputedStyle(list).overflowX,
+        tabs: [...list.querySelectorAll('[role=tab]')].map((t) => ({ grow: getComputedStyle(t).flexGrow, width: t.getBoundingClientRect().width })),
+      }
+    })
+    expect(strip.tabs.length, `${width}px: tabs`).toBeGreaterThan(0)
+    for (const [i, t] of strip.tabs.entries()) {
+      expect(t.grow, `${width}px: tab ${i} flex-grow`).toBe(fills ? '1' : '0')
+      if (fills) expect(Math.abs(t.width - strip.list / strip.tabs.length), `${width}px: tab ${i} width vs a share of the tablist`).toBeLessThanOrEqual(1)
+    }
+    if (!fills) expect(strip.overflowX, `${width}px: tablist overflow-x`).toBe('auto')
+    sectionEdges[`tabs${width}`] = strip
+  }
+  measured.sections = sectionEdges
+
   await attachJson(testInfo, 'breakpoint-edges.json', measured)
   expect(errors, `console errors on the breakpoint sweep:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('landing hero under reduced motion', async ({ page }, testInfo) => {
+test('landing hero and problem check under reduced motion', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await openLandingFrame(page)
@@ -506,6 +789,29 @@ test('landing hero under reduced motion', async ({ page }, testInfo) => {
     expect(row.opacity, `.hero-row ${i} opacity`).toBe('1')
   }
 
+  // The check card shows its end state at load, after scrolling to it and after a replay.
+  const problem = page.locator('#problem-check')
+  const expectEnd = async (when: string) => {
+    await expect(checkFooter(page), `reduced motion, ${when}: footer`).toHaveText(CHECK_END)
+    await expect(checkTags(page), `reduced motion, ${when}: outcomes`).toHaveText(CHECK_OUTCOMES)
+  }
+  await expectEnd('at load')
+  await problem.evaluate((el) => el.scrollIntoView({ block: 'center' }))
+  await page.waitForTimeout(1100)
+  await expectEnd('after scrolling into view')
+  await problem.getByRole('button', { name: 'Run check again' }).click()
+  await page.waitForTimeout(600)
+  await expectEnd('after Run check again')
+
+  await settleFrame(page, { width: 390, height: 844 })
+  await problem.evaluate((el) => el.scrollIntoView({ block: 'center' }))
+  const narrow = await walkOverflow(page, '#problem, #problem *', ['#problem'])
+  expectNoOverflow(narrow, 'reduced motion, 390px')
+  const card390 = await box(problem, '390 check card')
+  const footer390 = await box(checkFooter(page), '390 footer text')
+  expect(enclosesRect(card390, footer390, 1), '390px: footer text outside the card').toBe(true)
+  await attachJson(testInfo, 'reduced-motion-check.json', { narrow, card390, footer390 })
+
   // Control: without the preference the same elements animate, so the reads above come from the media rule.
   await page.emulateMedia({ reducedMotion: 'no-preference' })
   const motion = await page.evaluate(() => ({
@@ -515,6 +821,11 @@ test('landing hero under reduced motion', async ({ page }, testInfo) => {
   expect(motion.scan, '.hero-scan display without reduced motion').not.toBe('none')
   expect(motion.rows, '.hero-row animation-name without reduced motion').toHaveLength(6)
   for (const name of motion.rows) expect(name, '.hero-row animation-name without reduced motion').not.toBe('none')
+
+  // Control: a fresh load without the preference starts the check at step one.
+  await openLandingFrame(page)
+  await settleFrame(page, { width: 1440, height: 900 })
+  await expect(checkFooter(page), 'footer on a fresh load without reduced motion').toHaveText('Checking 1 of 8')
 
   expect(errors, `console errors under reduced motion:\n${errors.join('\n')}`).toEqual([])
 })

@@ -5,7 +5,7 @@
 //
 // The document URL is the production host ON PURPOSE. ensureTag's gate needs
 // isProductionHost(hostname) and PRODUCTION_HOSTNAMES is ['www.ascomply.com'], exact
-// match only (hubspot.ts:9). Under the default localhost URL the gate closes and both
+// match only (hubspot.ts). Under the default localhost URL the gate closes and both
 // "Accept loads the tag" and "Reject does not" pass while asserting nothing. A control
 // below pins that the environment option actually took effect.
 //

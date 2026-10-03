@@ -19,14 +19,6 @@ const MODULES_INTRO_SECOND =
   'We help your team validate invoices before they are submitted, manage approvals internally, store audit-ready records and submit them to the regulatory bodies.'
 const FOOTER_TAGLINE = 'Clarity for every invoice. Confidence for your business.'
 
-const STEP_01_BODY =
-  'Pull invoices from your ERP via API, or upload CSV / XLSX from any accounting system, or a PDF or scan of the invoice. No migration.'
-const STEP_01_POINTS = ['REST API & webhooks', 'CSV / XLSX / PDF import', 'ERP connectors']
-const STEP_02_TITLE = 'Validate against MBS rules — and your own'
-const STEP_02_BODY =
-  'Every invoice is checked against the golden MBS rule pack — tax IDs, VAT/WHT, totals, duplicates, mandatory fields — plus the rules your company adds on top.'
-const STEP_02_POINTS = ['Golden MBS rule pack', 'Your own company rules', 'Inline fix suggestions']
-
 const FIRM_BODY =
   'Manage filings, validation queues and readiness scores across your whole book of business. Switch between clients in one login, and become their compliance partner.'
 
@@ -49,14 +41,14 @@ describe('landing positioning copy, on the rendered tree', () => {
     expect(textOf(hero[0])).toBe(HERO_PARAGRAPH)
   })
 
-  it('the Solution heading and its second intro paragraph read as shipped', () => {
+  it('the Solution heading and its second intro paragraph read the Q4 wording', () => {
     const d = mount()
-    const heading = d.querySelectorAll('#modules h2')
-    expect(heading.length, '#modules does not hold exactly one heading').toBe(1)
+    const heading = d.querySelectorAll('#solution h2')
+    expect(heading.length, '#solution does not hold exactly one heading').toBe(1)
     expect(textOf(heading[0])).toBe(MODULES_HEADING)
 
-    const intro = d.querySelectorAll('#modules p:not(.mod-body)')
-    expect(intro.length, '#modules does not hold exactly two intro paragraphs').toBe(2)
+    const intro = d.querySelectorAll('#solution p:not(.mod-body)')
+    expect(intro.length, '#solution does not hold exactly two intro paragraphs').toBe(2)
     expect(textOf(intro[1])).toBe(MODULES_INTRO_SECOND)
   })
 
@@ -65,23 +57,6 @@ describe('landing positioning copy, on the rendered tree', () => {
     const tagline = d.querySelectorAll('footer p')
     expect(tagline.length, 'footer does not hold exactly one tagline paragraph').toBe(1)
     expect(textOf(tagline[0])).toBe(FOOTER_TAGLINE)
-  })
-
-  it('How it works steps 01 and 02 read as shipped', () => {
-    const d = mount()
-    const cells = d.querySelectorAll('#how .ios-grid > div')
-    expect(cells.length, '#how does not hold exactly three step cells').toBe(3)
-
-    expect(textOf(cells[0].querySelector('p'))).toBe(STEP_01_BODY)
-    for (const point of STEP_01_POINTS) {
-      expect(textOf(cells[0]), `step 01 cell missing chip: ${point}`).toContain(point)
-    }
-
-    expect(textOf(cells[1].querySelector('h3'))).toBe(STEP_02_TITLE)
-    expect(textOf(cells[1].querySelector('p'))).toBe(STEP_02_BODY)
-    for (const point of STEP_02_POINTS) {
-      expect(textOf(cells[1]), `step 02 cell missing chip: ${point}`).toContain(point)
-    }
   })
 })
 

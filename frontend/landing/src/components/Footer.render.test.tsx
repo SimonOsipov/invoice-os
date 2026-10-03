@@ -174,6 +174,23 @@ describe('FT-02 the Platform column is an in-order subsequence of V470', () => {
   })
 })
 
+describe('NV-02 the footer links Invoice workflows', () => {
+  it.each([
+    ['', '#platform'],
+    ['/', '/#platform'],
+  ])('with hrefPrefix %j the Platform column holds one a.a-link "Invoice workflows" at %s', (hrefPrefix, href) => {
+    const markup = renderToStaticMarkup(createElement(Footer, { onBookDemo: noop, ...(hrefPrefix ? { hrefPrefix } : {}) }))
+    const controls = controlsOf(platformSlice(markup))
+    expect(controls.length, 'the Platform column is empty').toBeGreaterThanOrEqual(1)
+    expect(controls[0].label, 'V470 lists it first').toBe('Invoice workflows')
+    const found = controls.filter((c) => c.label === 'Invoice workflows')
+    expect(found, 'expected exactly one "Invoice workflows" link').toHaveLength(1)
+    expect(found[0].tag).toBe('a')
+    expect(found[0].attrs.class).toBe('a-link')
+    expect(found[0].attrs.href).toBe(href)
+  })
+})
+
 describe('R4-FT-2 the Platform column links both sections in V470 order', () => {
   it.each([
     ['', '#coverage', '#intelligence'],

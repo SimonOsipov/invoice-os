@@ -6,7 +6,11 @@ import { Logo } from './ds/Logo'
 import { activeNavHref } from './activeSection'
 
 // Only sections on the page; App.render.test.tsx AN-01 pins that each href resolves.
-export const NAV_LINKS: { label: string; href: string }[] = [{ label: 'The problem', href: '#problem' }]
+export const NAV_LINKS: { label: string; href: string }[] = [
+  { label: 'The problem', href: '#problem' },
+  { label: 'The solution', href: '#solution' },
+  { label: 'Platform', href: '#platform' },
+]
 
 const NAV_HREFS = NAV_LINKS.map((l) => l.href)
 

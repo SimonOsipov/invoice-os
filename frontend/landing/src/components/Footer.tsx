@@ -2,6 +2,7 @@ import { Logo } from './ds/Logo'
 
 // Only sections on the page; App.render.test.tsx AN-03 pins that each href resolves.
 export const PLATFORM_LINKS: { label: string; href: string }[] = [
+  { label: 'Invoice workflows', href: '#platform' },
   { label: 'Country roadmap', href: '#coverage' },
   { label: 'AI-supported intelligence', href: '#intelligence' },
 ]

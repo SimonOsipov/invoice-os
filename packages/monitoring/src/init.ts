@@ -1,6 +1,7 @@
 import * as Sentry from '@sentry/react'
 import { sentryOptions, type Service } from './options'
 import { RELEASE } from './release'
+import { installTestEvent } from './testEvent'
 
 // A DSN the SDK cannot parse makes it log "Invalid Sentry Dsn", so treat it as off.
 function isSentryDsn(dsn: string | undefined): boolean {
@@ -16,5 +17,6 @@ export function initMonitoring(service: Service, opts?: { gateway?: string | nul
   const options = sentryOptions({ service, dsn: import.meta.env.VITE_SENTRY_DSN, release: RELEASE, ...opts })
   if (options === null || !isSentryDsn(options.dsn)) return false
   Sentry.init(options)
+  installTestEvent(service, import.meta.env.VITE_SENTRY_TEST_DIGEST)
   return true
 }

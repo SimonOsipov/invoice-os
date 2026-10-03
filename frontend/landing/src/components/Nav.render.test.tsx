@@ -1,7 +1,7 @@
 // SSR contract of the v2 header: frame tokens, Logo lockup, nav list, closed burger.
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { GLYPHS } from '../icons'
 import { NAV_LINKS, Nav } from './Nav'
@@ -125,8 +125,24 @@ describe('HD-06 the closed burger names a menu that is not rendered', () => {
   })
 })
 
+describe('NV-01 the nav reaches the three sections', () => {
+  it('NAV_LINKS is exactly The problem, The solution, Platform, and the Primary nav renders them', () => {
+    const expected = [
+      ['The problem', '#problem'],
+      ['The solution', '#solution'],
+      ['Platform', '#platform'],
+    ]
+    expect(NAV_LINKS.map((l) => [l.label, l.href])).toEqual(expected)
+    expect(primaryNavLinks(render()).map((l) => [l.label, l.href])).toEqual(expected)
+    expect(primaryNavLinks(render({ hrefPrefix: '/' })).map((l) => [l.label, l.href])).toEqual(
+      expected.map(([label, href]) => [label, `/${href}`]),
+    )
+  })
+})
+
 describe('HD-03b the Primary nav renders every entry in list order', () => {
-  const EXTRA: Link[] = [V2_NAV[1], V2_NAV[2]]
+  // The two V851 entries no section owns yet; the real list already holds the other three.
+  const EXTRA: Link[] = [V2_NAV[3], V2_NAV[4]]
   let before: number
   beforeEach(() => {
     before = NAV_LINKS.length
@@ -142,5 +158,18 @@ describe('HD-03b the Primary nav renders every entry in list order', () => {
     expect(primaryNavLinks(render(hrefPrefix ? { hrefPrefix } : {}))).toEqual(
       NAV_LINKS.map((l) => ({ label: l.label, href: `${p}${l.href}` })),
     )
+  })
+
+  it('NV-09 the grown list holds distinct hrefs and renders without a duplicate-key warning', () => {
+    const hrefs = NAV_LINKS.map((l) => l.href)
+    expect(hrefs.length, 'control: the fixture grew the list').toBe(before + EXTRA.length)
+    expect(new Set(hrefs).size, `duplicate href in ${JSON.stringify(hrefs)}`).toBe(hrefs.length)
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      expect(primaryNavLinks(render()).map((l) => l.href)).toEqual(hrefs)
+      expect(spy.mock.calls).toEqual([])
+    } finally {
+      spy.mockRestore()
+    }
   })
 })

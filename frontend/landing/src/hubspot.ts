@@ -5,6 +5,8 @@
 // can drive it in tests (auth.ts's resolveBase convention). This module
 // imports nothing from src/components/ — CONSENT_TEXT is passed in as an argument.
 
+import { ApiError, reportApiFailure } from '@invoice-os/api-client'
+
 /** The hostnames that ARE the real production landing site. Exact match only. */
 export const PRODUCTION_HOSTNAMES: readonly string[] = ['www.ascomply.com']
 
@@ -112,13 +114,24 @@ export async function submitDemoLead(
   lead: DemoLead,
   consentText: string,
 ): Promise<void> {
-  const res = await fetch(submissionUrl(t), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(buildSubmission(lead, consentText)),
-    signal: AbortSignal.timeout(15_000),
-  })
+  const url = submissionUrl(t)
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildSubmission(lead, consentText)),
+      signal: AbortSignal.timeout(15_000),
+    })
+  } catch (e) {
+    reportApiFailure(e, { method: 'POST', url })
+    throw e
+  }
   // Status only, NEVER a field value — the rejection message is surfaced nowhere
   // near a log sink, and must not carry the visitor's email or company.
-  if (!res.ok) throw new Error('hubspot ' + res.status)
+  if (!res.ok) {
+    const err = new ApiError('http', 'hubspot ' + res.status, res.status)
+    reportApiFailure(err, { method: 'POST', url })
+    throw err
+  }
 }

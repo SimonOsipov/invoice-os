@@ -15,8 +15,13 @@
 		respond "OK" 200
 	}
 
-	# Static assets with history-API fallback: unknown paths return index.html
-	# so client-side routing and deep links work instead of 404ing.
+	# Source maps go to Sentry privately; never serve one.
+	@maps path *.map
+	handle @maps {
+		respond 404
+	}
+
+	# Static assets with history-API fallback so client-side routing and deep links work.
 	handle {
 		root * /srv
 		try_files {path} /index.html

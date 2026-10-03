@@ -642,6 +642,68 @@ func TestReconcileFork_B3c_ForkRenderedBucketUnprovenFails(t *testing.T) {
 	requireNoArchiveNeedles(t, stdout+stderr)
 }
 
+// B3c, B4: a rendered read that fails hard exits inside $( ), so the caller sees an empty value and must still stop.
+// The failing body holds secrets and must never reach the output.
+func TestReconcileFork_B3c_RenderedReadTransportFailureFailsClosed(t *testing.T) {
+	kept := []string{"WAL_ARCHIVE_BUCKET", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_SECRET"}
+	secretBody := `{"data":{"variables":{"WAL_ARCHIVE_BUCKET":"` + pitrBucket + `","WAL_ARCHIVE_KEY":"` + pitrKey + `","WAL_ARCHIVE_SECRET":"` + pitrSecret +
+		`","PROD_BUCKET":"` + pitrProdBucket + `","PROD_KEY":"` + pitrProdKey + `","PROD_SECRET":"` + pitrProdSecret + `"}},"errors":[{"message":"boom","extensions":{"code":"BAD_USER_INPUT"}}]}`
+	// nth svcVars call that is the rendered read of env: a baseline run counts the ones before it.
+	renderedIndex := func(t *testing.T, env string) int {
+		s := pitrFixture(t, "NONE", pitrVars(nil))
+		pitrPlantB3(t, s, kept, pitrProdMap(nil))
+		runReconcileFork(t, s)
+		i := 0
+		for _, c := range s.calls(t) {
+			if !strings.Contains(c.Query, "svcVars") {
+				continue
+			}
+			if c.Variables["s"] == retryPostgresID && c.Variables["e"] == env {
+				return i
+			}
+			i++
+		}
+		t.Fatalf("control: no rendered Postgres read of %s in the baseline run", env)
+		return -1
+	}
+	cases := []struct {
+		name  string
+		fault []string
+	}{
+		{"HTTP 400 whose body holds secrets", []string{"400"}},
+		{"GraphQL error", []string{"gqlerr"}},
+		{"HTTP 500 on every attempt", []string{"500", "500", "500"}},
+	}
+	for _, side := range []struct{ name, env string }{{"fork", retryForkEnv}, {"production", persistentEnvironmentID}} {
+		env := side.env
+		for _, c := range cases {
+			t.Run(side.name+"/"+c.name, func(t *testing.T) {
+				idx := renderedIndex(t, env)
+				s := pitrFixture(t, "NONE", pitrVars(nil))
+				pitrPlantB3(t, s, kept, pitrProdMap(nil))
+				writeFile(t, filepath.Join(s.dir, "faultbody-svcVars"), secretBody)
+				setFaults(t, s, "svcVars", append(slices.Repeat([]string{"ok"}, idx), c.fault...)...)
+				stdout, stderr, code := runReconcileFork(t, s)
+
+				if code != 1 {
+					t.Errorf("B3c: exit %d, want 1: a failed rendered read proves no isolation; output = %q", code, stdout+stderr)
+				}
+				if n := pitrRenderedReads(t, s, env); n < 1 {
+					t.Errorf("B3c control: rendered reads of %s = %d, so the fault never met the read", env, n)
+				}
+				if want := "rendered variables in environment " + env; !strings.Contains(errorLines(stdout+stderr), want) {
+					t.Errorf("B3c: ::error:: lines lack %q, so the fault missed the rendered read: %q", want, errorLines(stdout+stderr))
+				}
+				if strings.Contains(stdout, "differs from production's") || strings.Contains(stdout, "Fork reconciliation complete") {
+					t.Errorf("B3c: stdout carries a pass line; stdout = %q", stdout)
+				}
+				requireNoBoot(t, s)
+				requireNoArchiveNeedles(t, stdout+stderr)
+			})
+		}
+	}
+}
+
 func TestReconcileFork_B4_UnreadableReReadFails(t *testing.T) {
 	s := pitrFixture(t, "NONE", pitrVars(nil))
 	pitrPlantProduction(t, s, pitrProdMap(nil))

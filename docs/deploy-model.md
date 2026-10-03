@@ -92,7 +92,7 @@ across PRs the way `development`'s own four URLs (still constant, still hardcode
 PR opened ──> dev-env.yml:
                 prepare-env: derive `pr-<N>` (prenv.Name) ──> environmentCreate, forked
                              from `development` (skipInitialDeploys, create-or-reuse)
-                             ──> blank WAL_ARCHIVE_* on Postgres ──>
+                             ──> blank WAL_ARCHIVE_* on Postgres (a kept BUCKET must differ from production's) ──>
                              deploy Postgres + probe ──> assert Watch Paths empty
                              (M3-16 invariant, now runtime-asserted) ──> discover the
                              5 URLs ──> blank Sentry variables (set-sentry-off)

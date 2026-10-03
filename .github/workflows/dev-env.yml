@@ -365,7 +365,7 @@ jobs:
 
       # PR ONLY. This mutates the target environment (domains, Postgres volume,
       # bucket) to make a fresh fork resemble its source, and blanks WAL_ARCHIVE_*
-      # on its Postgres so the fork never archives. The
+      # on its Postgres so the fork never archives into production's bucket. The
       # persistent environment is not a fork and is the thing being resembled —
       # reconciling it against itself is at best a no-op and at worst rewrites
       # live infrastructure.

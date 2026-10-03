@@ -77,6 +77,8 @@ func newRevocation(t *testing.T, base string) revocation {
 			Sessions:  sessions,
 			Upstreams: map[string]*url.URL{"svc": upURL},
 			Logger:    log,
+
+			GatewayToken: "gw-test-token",
 		}),
 		signOut: gateway.SignOutHandler(authURL, idpHTTP, sessions, log),
 		hits:    hits,

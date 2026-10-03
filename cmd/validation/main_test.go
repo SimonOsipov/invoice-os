@@ -136,7 +136,7 @@ func TestValidationMain_PatchRulesAnswersEveryForwardedIdentity(t *testing.T) {
 		{"service_role", map[string]string{"X-Tenant-ID": tenantA, "X-User-ID": user, "X-User-Role": "service_role"}, 403, refusal403},
 		{"anon role", map[string]string{"X-Tenant-ID": tenantA, "X-User-ID": user, "X-User-Role": "anon"}, 403, refusal403},
 		{"owner role name", map[string]string{"X-Tenant-ID": tenantA, "X-User-ID": user, "X-User-Role": "invoice_migrator"}, 403, refusal403},
-		{"tenant header alone", map[string]string{"X-Tenant-ID": tenantA}, 403, refusal403},
+		{"tenant header alone", map[string]string{"X-Tenant-ID": tenantA}, 401, unauthed401},
 		{"user without a tenant", map[string]string{"X-User-ID": user, "X-User-Role": "authenticated"}, 401, unauthed401},
 		{"no identity headers", map[string]string{}, 401, unauthed401},
 	}

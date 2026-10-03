@@ -13,6 +13,8 @@
 #                            set-fork-auth <environment-id|--self-test>|
 #                            set-fork-auth-site <environment-id> <landing-url>|
 #                            set-production-auth <--pre-merge|--post-merge> <environment-id>|
+#                            set-fork-gateway-token <environment-id>|
+#                            set-production-gateway-token <environment-id>|
 #                            set-sentry-off <environment-id|--self-test>|
 #                            set-fork-reconciliation-url <environment-id>|
 #                            delete-environment <name>|list-environments|
@@ -23,6 +25,9 @@
 #
 # `set-production-auth` is run by hand, once, never from a workflow: it writes
 # the persistent environment's auth configuration, before and after merge.
+#
+# `set-production-gateway-token` is run by hand, once, never from a workflow: it
+# writes the persistent environment's GATEWAY_TOKEN, and only when none is set.
 #
 # M4-23-02: Railway's PR Environments must stay OFF for this project.
 #
@@ -2036,9 +2041,9 @@ rendered_bucket() {
   printf '%s' "$GQL_RESPONSE" | jq -r 'if (.data.variables | type) == "object" then .data.variables.WAL_ARCHIVE_BUCKET // "" else "" end'
 }
 
-# A fork must not archive into production's bucket. Blank WAL_ARCHIVE_*; if Railway keeps a BUCKET value, it must differ from production's.
+# A fork must not archive into production's bucket. Blank WAL_ARCHIVE_* unless Postgres already booted; a kept BUCKET value must differ from production's.
 ensure_postgres_archive_off() {
-  local env_id="$1" names status pairs=() n kept="" fork_bucket prod_bucket
+  local env_id="$1" names status booted pairs=() n kept="" fork_bucket prod_bucket
 
   auth_read "$env_id" "$RAILWAY_SVC_POSTGRES_ID" Postgres
   if ! printf '%s' "$GQL_RESPONSE" | jq -e '.data.variables | type == "object"' >/dev/null 2>&1; then
@@ -2056,22 +2061,28 @@ ensure_postgres_archive_off() {
     "$(jq -n --arg e "$env_id" --arg s "$RAILWAY_SVC_POSTGRES_ID" '{e: $e, s: $s}')")" \
     "reading the postgres service instance in environment $env_id"
   status=$(printf '%s' "$GQL_RESPONSE" | jq -r '.data.serviceInstance.latestDeployment.status // empty')
-  if [ -n "$status" ] || ! printf '%s' "$GQL_RESPONSE" | jq -e '.data.serviceInstance.latestDeployment == null' >/dev/null 2>&1; then
-    echo "::error::Postgres in environment $env_id already has a deployment (status ${status:-unknown}) and booted with WAL archiving on. Blanking now would not undo it: delete the environment and re-run."
+  booted="$status"
+  if [ -z "$booted" ] && ! printf '%s' "$GQL_RESPONSE" | jq -e '.data.serviceInstance.latestDeployment == null' >/dev/null 2>&1; then
+    echo "::error::Postgres in environment $env_id already has a deployment (status unknown) and booted with WAL archiving on. Blanking now would not undo it: delete the environment and re-run."
     exit 1
   fi
 
-  for n in $names; do pairs+=("$n="); done
-  # set_service_vars splits its secrets argument on spaces.
-  set_service_vars "$env_id" "$RAILWAY_SVC_POSTGRES_ID" Postgres "${names//$'\n'/ }" "${pairs[@]}"
-  for n in $names; do
-    case "$(auth_kind "$GQL_RESPONSE" "$n")" in
-      unreadable)
-        echo "::error::Postgres's variable map in environment $env_id is unreadable after the write, so $n could not be checked. Value not printed."
-        exit 1 ;;
-      present) kept+="${kept:+ }$n" ;;
-    esac
-  done
+  if [ -n "$booted" ]; then
+    echo "Postgres in $env_id has a deployment (status $booted), so the WAL_ARCHIVE_* write is skipped. Names: ${names//$'\n'/ }."
+    kept="${names//$'\n'/ }"
+  else
+    for n in $names; do pairs+=("$n="); done
+    # set_service_vars splits its secrets argument on spaces.
+    set_service_vars "$env_id" "$RAILWAY_SVC_POSTGRES_ID" Postgres "${names//$'\n'/ }" "${pairs[@]}"
+    for n in $names; do
+      case "$(auth_kind "$GQL_RESPONSE" "$n")" in
+        unreadable)
+          echo "::error::Postgres's variable map in environment $env_id is unreadable after the write, so $n could not be checked. Value not printed."
+          exit 1 ;;
+        present) kept+="${kept:+ }$n" ;;
+      esac
+    done
+  fi
   if [ -z "$kept" ]; then
     echo "Postgres WAL archiving blank in $env_id: ${names//$'\n'/ }."
     return 0
@@ -3050,6 +3061,151 @@ cmd_set_production_auth() {
   echo "Production auth configuration confirmed in environment $env_id. Seal the secrets in the dashboard now."
 }
 
+# --- Gateway token --------------------------------------------------------------
+#
+# GATEWAY_TOKEN: gateway plus routedServices (TestGatewayTokenServicesMatchTheRoutedFleet).
+# One generated value on all eight; a fork never keeps production's.
+
+GATEWAY_TOKEN_SERVICES=(gateway tenancy portfolio invoice validation submission dashboard notifications)
+
+# gateway_token_ids <env-id> <settle-response-json>: fills GT_IDS, parallel to GATEWAY_TOKEN_SERVICES.
+# Resolves all eight before the caller writes anything.
+gateway_token_ids() {
+  local env_id="$1" settle="$2" svc id
+  GT_IDS=()
+  for svc in "${GATEWAY_TOKEN_SERVICES[@]}"; do
+    id=$(service_id_by_name "$settle" "$svc" "environment $env_id" GATEWAY_TOKEN) || exit 1
+    GT_IDS+=("$id")
+  done
+}
+
+# gateway_token_write <env-id> <token>: writes and re-reads each target; exits 1 naming each miss.
+gateway_token_write() {
+  local env_id="$1" token="$2" i bad=0
+  for i in "${!GATEWAY_TOKEN_SERVICES[@]}"; do
+    set_service_vars "$env_id" "${GT_IDS[$i]}" "${GATEWAY_TOKEN_SERVICES[$i]}" GATEWAY_TOKEN "GATEWAY_TOKEN=$token"
+    secret_verdict "$GQL_RESPONSE" "${GATEWAY_TOKEN_SERVICES[$i]}" GATEWAY_TOKEN "$token" || bad=1
+  done
+  if [ "$bad" != "0" ]; then
+    echo "::error::GATEWAY_TOKEN in environment $env_id did not read back as written."
+    exit 1
+  fi
+  echo "GATEWAY_TOKEN confirmed on ${#GATEWAY_TOKEN_SERVICES[@]} services in environment $env_id."
+}
+
+# gateway_token_write_generated <env-id>: refuses unless openssl yields 64 lowercase hex; then writes.
+gateway_token_write_generated() {
+  local env_id="$1" token
+  token=$(openssl rand -hex 32)
+  if ! [[ "$token" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "::error::The generated GATEWAY_TOKEN is not 64 lowercase hex characters (openssl rand -hex 32). Value not printed. Nothing was written."
+    exit 1
+  fi
+  gateway_token_write "$env_id" "$token"
+}
+
+# cmd_set_fork_gateway_token <environment-id>
+# Generated, never read from the source: a fork must not trust production's token.
+cmd_set_fork_gateway_token() {
+  local env_id="${1:-}"
+
+  if [ -z "$env_id" ]; then
+    echo "::error::usage: railway-env.sh set-fork-gateway-token <environment-id>"
+    exit 2
+  fi
+
+  require_source_env
+  if [ "$env_id" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to write GATEWAY_TOKEN in the persistent environment ($env_id). This command only writes a pr-<N> fork."
+    exit 1
+  fi
+  require_env
+  assert_environment_is_ephemeral "$env_id" GATEWAY_TOKEN
+
+  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+    "listing service instances in environment $env_id"
+  gateway_token_ids "$env_id" "$GQL_RESPONSE"
+
+  gateway_token_write_generated "$env_id"
+}
+
+# cmd_set_production_gateway_token <environment-id>
+# Run by hand, once, never from a workflow. Writes only when all eight are absent or empty.
+cmd_set_production_gateway_token() {
+  local env_id="${1:-}"
+
+  if [ -z "$env_id" ]; then
+    echo "::error::usage: railway-env.sh set-production-gateway-token <environment-id>"
+    exit 2
+  fi
+
+  require_source_env
+  if [ "$env_id" != "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to write the production GATEWAY_TOKEN in $env_id. This command writes only the persistent environment ($RAILWAY_DEV_ENVIRONMENT_ID)."
+    exit 1
+  fi
+  require_env
+
+  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+    "listing service instances in environment $env_id"
+  gateway_token_ids "$env_id" "$GQL_RESPONSE"
+
+  # kinds[i] is the auth_kind of target i; held[i] its value when present.
+  local i j kind got kinds=() held=() present=0
+  for i in "${!GATEWAY_TOKEN_SERVICES[@]}"; do
+    auth_read "$env_id" "${GT_IDS[$i]}" "${GATEWAY_TOKEN_SERVICES[$i]}"
+    kind=$(auth_kind "$GQL_RESPONSE" GATEWAY_TOKEN)
+    got=""
+    if [ "$kind" = "present" ]; then
+      got=$(printf '%s' "$GQL_RESPONSE" | jq -j '.data.variables.GATEWAY_TOKEN' && printf x)
+      got=${got%x}
+      present=$((present + 1))
+    fi
+    kinds+=("$kind")
+    held+=("$got")
+  done
+
+  for kind in "${kinds[@]}"; do
+    if [ "$kind" = "unreadable" ]; then
+      echo "::error::A GATEWAY_TOKEN target's variable map is unreadable in environment $env_id. Nothing was written."
+      exit 1
+    fi
+  done
+
+  if [ "$present" = "0" ]; then
+    gateway_token_write_generated "$env_id"
+    return
+  fi
+
+  # The value held by most targets is the reference; every other target is an offender.
+  local ref="" best=0 n offenders=()
+  for i in "${!held[@]}"; do
+    [ "${kinds[$i]}" = "present" ] || continue
+    n=0
+    for j in "${!held[@]}"; do
+      if [ "${kinds[$j]}" = "present" ] && [ "${held[$j]}" = "${held[$i]}" ]; then
+        n=$((n + 1))
+      fi
+    done
+    if [ "$n" -gt "$best" ]; then
+      best=$n
+      ref=${held[$i]}
+    fi
+  done
+  for i in "${!held[@]}"; do
+    if [ "${kinds[$i]}" != "present" ] || [ "${held[$i]}" != "$ref" ]; then
+      offenders+=("${GATEWAY_TOKEN_SERVICES[$i]}")
+    fi
+  done
+
+  if [ "${#offenders[@]}" = "0" ]; then
+    echo "GATEWAY_TOKEN is already set to one value on all ${#GATEWAY_TOKEN_SERVICES[@]} services in environment $env_id. Nothing was written."
+    return
+  fi
+  echo "::error::GATEWAY_TOKEN in environment $env_id is partly set. These services lack it or differ: ${offenders[*]}. Nothing was written, and no value is printed."
+  exit 1
+}
+
 # --- Sentry off in a fork ----------------------------------------------------
 #
 # A fork inherits production's variables, so a production DSN would spend the
@@ -3345,6 +3501,8 @@ case "${1:-}" in
   set-fork-auth)             cmd_set_fork_auth "${2:-}" ;;
   set-fork-auth-site)        shift; cmd_set_fork_auth_site "$@" ;;
   set-production-auth)       shift; cmd_set_production_auth "$@" ;;
+  set-fork-gateway-token)    cmd_set_fork_gateway_token "${2:-}" ;;
+  set-production-gateway-token) cmd_set_production_gateway_token "${2:-}" ;;
   set-sentry-off)            cmd_set_sentry_off "${2:-}" ;;
   set-fork-reconciliation-url) cmd_set_fork_reconciliation_url "${2:-}" ;;
   delete-environment)        cmd_delete_environment "${2:-}" ;;
@@ -3353,7 +3511,7 @@ case "${1:-}" in
   wait-deployment)           shift; cmd_wait_deployment "$@" ;;
   report-api-calls)          cmd_report_api_calls ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments|query <context>|wait-deployment <label> <deployment-id>|report-api-calls>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-fork-gateway-token <environment-id>|set-production-gateway-token <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments|query <context>|wait-deployment <label> <deployment-id>|report-api-calls>"
     exit 2
     ;;
 esac

@@ -224,6 +224,8 @@ func newSessionRig(t *testing.T, authURL *url.URL, client *http.Client, log *slo
 			Sessions:  sessions,
 			Upstreams: map[string]*url.URL{"tenancy": upURL},
 			Logger:    log,
+
+			GatewayToken: testGatewayToken,
 		}),
 		sessions: sessions,
 		clock:    clk,
@@ -371,6 +373,40 @@ func TestSessionCheck_SendsANormalizedBearer(t *testing.T) {
 				t.Errorf("GoTrue /user Authorization = %q, want exactly [\"Bearer <token>\"]", auths)
 			}
 		})
+	}
+}
+
+// The checker speaks to GoTrue as the caller, never as the gateway: GoTrue is not a peer of the seven.
+func TestSessionCheck_SendsGoTrueNoGatewayCredential(t *testing.T) {
+	fake := newUserFake(t, http.StatusOK, gtUser)
+	var mu sync.Mutex
+	var seen []http.Header
+	fake.setAnswer(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Header.Clone())
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, gtUser)
+	})
+	rg := newSessionRig(t, fake.URL, nil, nil)
+	tok := rg.signer.token(t, subjectS1, sid1)
+
+	if rec := rg.get(tok); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	if got := rg.upstream.Header().Get("X-Gateway-Token"); got != testGatewayToken {
+		t.Fatalf("tenancy saw X-Gateway-Token %q, want %q -- the request never went through the signing proxy", got, testGatewayToken)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 1 {
+		t.Fatalf("GoTrue /user saw %d call(s), want 1", len(seen))
+	}
+	for _, name := range []string{"X-Gateway-Token", "X-S2S-Token", "X-Tenant-ID", "X-User-ID", "X-User-Role"} {
+		if got := seen[0].Values(name); len(got) != 0 {
+			t.Errorf("GoTrue /user saw %s = %q, want none", name, got)
+		}
 	}
 }
 

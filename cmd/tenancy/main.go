@@ -62,6 +62,8 @@ func main() {
 	// the gateway lets a token without a tenant reach this route only.
 	app.Mux.HandleFunc("POST /v1/workspaces", tenancy.ProvisionHandler(store.ProvisionWorkspace, app.Logger))
 
+	app.RequireGateway(mustEnv("GATEWAY_TOKEN"))
+
 	if err := app.Run(context.Background()); err != nil {
 		platform.Fatal(app.Logger, "tenancy: %v", err)
 	}

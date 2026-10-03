@@ -264,28 +264,33 @@ describe('Coverage band', () => {
 
   it('CV-07 each tab carries its V flag', () => {
     // V748-750 FLAGS: each shape's attributes, in paint order.
-    const attrs = (el: Element) =>
-      Array.from(el.attributes)
-        .map((a) => `${a.name}=${a.value}`)
-        .sort()
-        .join(' ')
-    const WANT: Record<(typeof ORDER)[number], { viewBox: string; shapes: string[] }> = {
+    const attrs = (el: Element) => Object.fromEntries(Array.from(el.attributes).map((a) => [a.name, a.value]))
+    const ZA_PATH = { d: 'M0 0L12 10 0 20M12 10H30', fill: 'none' }
+    const WANT: Record<(typeof ORDER)[number], { viewBox: string; shapes: Record<string, string>[] }> = {
       NG: {
         viewBox: '0 0 3 2',
-        shapes: ['fill=#008751 height=2 width=3', 'fill=#fff height=2 width=1 x=1'],
+        shapes: [
+          { width: '3', height: '2', fill: '#008751' },
+          { x: '1', width: '1', height: '2', fill: '#fff' },
+        ],
       },
       KE: {
         viewBox: '0 0 30 20',
-        shapes: ['fill=#006600 height=20 width=30', 'fill=#fff height=14 width=30', 'fill=#000 height=6 width=30', 'fill=#bb0000 height=6 width=30 y=7'],
+        shapes: [
+          { width: '30', height: '20', fill: '#006600' },
+          { width: '30', height: '14', fill: '#fff' },
+          { width: '30', height: '6', fill: '#000' },
+          { y: '7', width: '30', height: '6', fill: '#bb0000' },
+        ],
       },
       ZA: {
         viewBox: '0 0 30 20',
         shapes: [
-          'fill=#de3831 height=10 width=30',
-          'fill=#002395 height=10 width=30 y=10',
-          'd=M0 0L12 10 0 20M12 10H30 fill=none stroke=#fff stroke-width=7',
-          'd=M0 0L12 10 0 20M12 10H30 fill=none stroke=#007749 stroke-width=4.2',
-          'd=M0 3L8.5 10 0 17Z fill=#000',
+          { width: '30', height: '10', fill: '#de3831' },
+          { y: '10', width: '30', height: '10', fill: '#002395' },
+          { ...ZA_PATH, stroke: '#fff', 'stroke-width': '7' },
+          { ...ZA_PATH, stroke: '#007749', 'stroke-width': '4.2' },
+          { d: 'M0 3L8.5 10 0 17Z', fill: '#000' },
         ],
       },
     }

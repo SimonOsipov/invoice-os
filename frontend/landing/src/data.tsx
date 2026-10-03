@@ -271,6 +271,29 @@ export const API_BULLETS: { icon: GlyphName; text: string }[] = [
   { icon: 'globe', text: 'Sandbox MBS/NRS adapter. Production on accreditation.' },
 ]
 
+export const FAQS: { q: string; a: string }[] = [
+  {
+    q: 'What does ASComply Africa do?',
+    a: 'ASComply brings invoice creation, validation, approvals and records into a connected compliance workspace.',
+  },
+  {
+    q: 'Do we need to replace our accounting system?',
+    a: 'ASComply is designed to work alongside your accounting and business systems. During a demo, we can discuss your current setup, data imports and integration requirements. Prebuilt ERP and accounting connectors are in progress.',
+  },
+  {
+    q: 'Are the integration partners already available?',
+    a: 'The integration and partner ecosystem is in progress. The systems shown on this page are roadmap targets, not confirmed partnerships or available connectors. Contact our team to discuss your system and current availability.',
+  },
+  {
+    q: 'How does AI-supported regulatory monitoring work?',
+    a: 'The planned workflow follows official tax authority updates, uses AI assistance to summarise changes and assess potential impact, and routes the analysis to a compliance specialist for review. Approved changes can then inform country workflows.',
+  },
+  {
+    q: 'Can accounting firms work with multiple clients?',
+    a: 'The platform includes a multi-client partner workspace, so accounting and tax teams can manage client companies and review their invoice workflows from one place. Ask for a walkthrough tailored to your practice.',
+  },
+]
+
 /* ------------------------------------------------------------------ */
 /* Pricing — plans (monthly / annual)                                  */
 /* ------------------------------------------------------------------ */

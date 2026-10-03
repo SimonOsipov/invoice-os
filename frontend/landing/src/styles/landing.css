@@ -296,6 +296,9 @@ button {
   .rm-chev {
     display: none !important;
   }
+  .cta-mark {
+    display: none !important;
+  }
 }
 
 @media (max-width: 600px) {

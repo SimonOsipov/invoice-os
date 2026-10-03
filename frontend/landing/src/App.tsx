@@ -13,6 +13,8 @@ import { Intelligence } from './components/Intelligence'
 import { Solutions } from './components/Solutions'
 import { Integrations } from './components/Integrations'
 import { Api } from './components/Api'
+import { Faq } from './components/Faq'
+import { ClosingCta } from './components/ClosingCta'
 import { Pricing } from './components/Pricing'
 import { DemoCta } from './components/DemoCta'
 import { Footer } from './components/Footer'
@@ -140,6 +142,8 @@ export default function App() {
           <Solutions onBookDemo={book('audience')} />
           <Integrations onBookDemo={book('integrations')} />
           <Api onBookDemo={book('api')} />
+          <Faq onBookDemo={book('faq')} />
+          <ClosingCta onBookDemo={book('closing')} />
           <Pricing onBookDemo={book('pricing')} />
           <DemoCta />
         </>

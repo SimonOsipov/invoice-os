@@ -36,7 +36,7 @@ why the operator checklist below exists.
 | Event | Kind | Parameters | Fires when |
 |---|---|---|---|
 | `page_view` | GA4 automatic | *(none set by us)* | `gtag('config', id)` sends it; GA4 derives the traffic source from the referrer and `utm_*`. Never sent manually — a manual one would double-count. |
-| `demo_open` | custom | `cta_location`: `nav` \| `hero` \| `platform` \| `coverage` \| `audience` \| `integrations` \| `api` \| `pricing` \| `footer` | A visitor opens the Book-a-demo modal. The value is bound per call site in `App.tsx`'s `book(source)`. |
+| `demo_open` | custom | `cta_location`: `nav` \| `hero` \| `platform` \| `coverage` \| `audience` \| `integrations` \| `api` \| `faq` \| `closing` \| `pricing` \| `footer` | A visitor opens the Book-a-demo modal. The value is bound per call site in `App.tsx`'s `book(source)`. |
 | `generate_lead` | GA4 recommended | `form_name`: `book_a_demo` | A demo submission **reaches HubSpot and succeeds**. |
 | `demo_submit_failed` | custom | `form_name`: `book_a_demo` | That same HubSpot call rejects (non-2xx, timeout, network). |
 | `scroll_depth` | custom | `percent_scrolled`: `25` \| `50` \| `75` \| `100` | The visitor first crosses each milestone. Once each per page load, ascending. |
@@ -47,8 +47,8 @@ Three notes on what does **not** fire:
   It routes through the shared stub, so a bot sees exactly what a human sees and reports nothing.
 - A submission on a **closed gate** (any non-production hostname) also fires neither: no HubSpot
   call is made, so there is no outcome to report.
-- Nine `cta_location` values cover **fourteen** buttons. Coverage's Discuss your country reports `coverage`, Solutions' three panel CTAs all report
-  `audience`, Integrations' Discuss your integration reports `integrations`, the API band's Request API access reports `api`, `Pricing`'s three tiers all report `pricing`, the footer's Book a demo and
+- Eleven `cta_location` values cover **sixteen** buttons. Coverage's Discuss your country reports `coverage`, Solutions' three panel CTAs all report
+  `audience`, Integrations' Discuss your integration reports `integrations`, the API band's Request API access reports `api`, the FAQ's Talk to our team reports `faq`, the closing panel's Book a demo reports `closing`, `Pricing`'s three tiers all report `pricing`, the footer's Book a demo and
   Contact ASComply both report `footer`, and the Platform panel's link reports `platform` on
   each of its three tabs.
 
@@ -95,8 +95,8 @@ Seven items. None of them is dischargeable by CI, and the first is load-bearing.
    LAND-05 the gate's consent arm is closed by default, so a clean profile that has not accepted
    reports nothing at all, and an empty DebugView then means the gate is working rather than the
    tag being broken. Also confirm that a real submission reports `generate_lead`, that
-   **all nine** `cta_location` values appear: `nav`, `hero`, `platform`, `coverage`,
-   `audience`, `integrations`, `api`, `pricing`, `footer`, and that scrolling the page to the bottom reports `scroll_depth` once each at
+   **all eleven** `cta_location` values appear: `nav`, `hero`, `platform`, `coverage`,
+   `audience`, `integrations`, `api`, `faq`, `closing`, `pricing`, `footer`, and that scrolling the page to the bottom reports `scroll_depth` once each at
    `percent_scrolled` 25, 50, 75 and 100 — four events, no repeats on scrolling back up.
 6. **Re-prove the hostname gate against production.** Item 1 puts the id on
    `www.ascomply.com`, so the e2e biconditional in `e2e/smoke/landing-demo.spec.ts` can be run

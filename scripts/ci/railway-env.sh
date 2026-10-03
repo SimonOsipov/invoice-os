@@ -2036,9 +2036,9 @@ rendered_bucket() {
   printf '%s' "$GQL_RESPONSE" | jq -r 'if (.data.variables | type) == "object" then .data.variables.WAL_ARCHIVE_BUCKET // "" else "" end'
 }
 
-# A fork must not archive into production's bucket. Blank WAL_ARCHIVE_*; if Railway keeps a BUCKET value, it must differ from production's.
+# A fork must not archive into production's bucket. Blank WAL_ARCHIVE_* unless Postgres already booted; a kept BUCKET value must differ from production's.
 ensure_postgres_archive_off() {
-  local env_id="$1" names status pairs=() n kept="" fork_bucket prod_bucket
+  local env_id="$1" names status booted pairs=() n kept="" fork_bucket prod_bucket
 
   auth_read "$env_id" "$RAILWAY_SVC_POSTGRES_ID" Postgres
   if ! printf '%s' "$GQL_RESPONSE" | jq -e '.data.variables | type == "object"' >/dev/null 2>&1; then
@@ -2056,22 +2056,28 @@ ensure_postgres_archive_off() {
     "$(jq -n --arg e "$env_id" --arg s "$RAILWAY_SVC_POSTGRES_ID" '{e: $e, s: $s}')")" \
     "reading the postgres service instance in environment $env_id"
   status=$(printf '%s' "$GQL_RESPONSE" | jq -r '.data.serviceInstance.latestDeployment.status // empty')
-  if [ -n "$status" ] || ! printf '%s' "$GQL_RESPONSE" | jq -e '.data.serviceInstance.latestDeployment == null' >/dev/null 2>&1; then
-    echo "::error::Postgres in environment $env_id already has a deployment (status ${status:-unknown}) and booted with WAL archiving on. Blanking now would not undo it: delete the environment and re-run."
+  booted="$status"
+  if [ -z "$booted" ] && ! printf '%s' "$GQL_RESPONSE" | jq -e '.data.serviceInstance.latestDeployment == null' >/dev/null 2>&1; then
+    echo "::error::Postgres in environment $env_id already has a deployment (status unknown) and booted with WAL archiving on. Blanking now would not undo it: delete the environment and re-run."
     exit 1
   fi
 
-  for n in $names; do pairs+=("$n="); done
-  # set_service_vars splits its secrets argument on spaces.
-  set_service_vars "$env_id" "$RAILWAY_SVC_POSTGRES_ID" Postgres "${names//$'\n'/ }" "${pairs[@]}"
-  for n in $names; do
-    case "$(auth_kind "$GQL_RESPONSE" "$n")" in
-      unreadable)
-        echo "::error::Postgres's variable map in environment $env_id is unreadable after the write, so $n could not be checked. Value not printed."
-        exit 1 ;;
-      present) kept+="${kept:+ }$n" ;;
-    esac
-  done
+  if [ -n "$booted" ]; then
+    echo "Postgres in $env_id has a deployment (status $booted), so the WAL_ARCHIVE_* write is skipped. Names: ${names//$'\n'/ }."
+    kept="${names//$'\n'/ }"
+  else
+    for n in $names; do pairs+=("$n="); done
+    # set_service_vars splits its secrets argument on spaces.
+    set_service_vars "$env_id" "$RAILWAY_SVC_POSTGRES_ID" Postgres "${names//$'\n'/ }" "${pairs[@]}"
+    for n in $names; do
+      case "$(auth_kind "$GQL_RESPONSE" "$n")" in
+        unreadable)
+          echo "::error::Postgres's variable map in environment $env_id is unreadable after the write, so $n could not be checked. Value not printed."
+          exit 1 ;;
+        present) kept+="${kept:+ }$n" ;;
+      esac
+    done
+  fi
   if [ -z "$kept" ]; then
     echo "Postgres WAL archiving blank in $env_id: ${names//$'\n'/ }."
     return 0

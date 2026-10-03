@@ -112,9 +112,13 @@ button {
 .a-link:focus-visible,
 .a-burger:focus-visible,
 .ios-nav-link:focus-visible,
-.a-menu-link:focus-visible {
+.a-menu-link:focus-visible,
+.a-card-btn:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
+}
+.a-tab-pill:hover {
+  filter: brightness(0.97);
 }
 .a-nav {
   display: flex;

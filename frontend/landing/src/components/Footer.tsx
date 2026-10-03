@@ -1,7 +1,7 @@
 import { Logo } from './ds/Logo'
 
-// Sections are not built yet; App.render.test.tsx AN-03 pins that each href resolves.
-export const PLATFORM_LINKS: { label: string; href: string }[] = []
+// Only sections on the page; App.render.test.tsx AN-03 pins that each href resolves.
+export const PLATFORM_LINKS: { label: string; href: string }[] = [{ label: 'Country roadmap', href: '#coverage' }]
 
 // Only in-page anchors take the prefix; /privacy is already absolute.
 export function footerHref(href: string, prefix: string): string {

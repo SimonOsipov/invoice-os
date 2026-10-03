@@ -53,7 +53,7 @@ describe('FT-10 App SSR wiring: hrefPrefix reaches Footer with the right polarit
   })
 })
 
-// PLATFORM_LINKS is empty today, so the polarity of hrefPrefix is only observable on a planted list.
+// A planted list pins the hrefPrefix polarity independent of the live links.
 describe('FT-10 / AN-03 with PLATFORM_LINKS populated', () => {
   const saved = [...PLATFORM_LINKS]
   const plant = (hrefs: string[]) =>

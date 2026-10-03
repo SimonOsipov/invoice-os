@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs'
 import { join, posix } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { LANDING_SRC, REPO_ROOT, landingBuildInput, scanBuildInput, stripSource } from './cssScan.test.util'
+import { LANDING_SRC, REPO_ROOT, landingBuildInput, parseRules, scanBuildInput, selectorParts, stripSource } from './cssScan.test.util'
 
 const V2_ENTRY = '@invoice-os/design-tokens/v2/styles.css'
 const V1_ENTRY = '@invoice-os/design-tokens/styles.css'
@@ -117,11 +117,13 @@ describe('the landing loads only v2', () => {
 
   it('V2-10 no build input carries a retired v1 token or font name', () => {
     // Every letter case is the point: the v1 names also ship upper-cased in strings and font-variation tags.
-    const needles = [/--gradient-/i, /band-gradient/i, /fraunces/i, /\binter\b/i, /opsz/i]
+    // oklch( and italic: the landing writes rgba() colours and sets no italic type (AC 11).
+    const needles = [/--gradient-/i, /band-gradient/i, /fraunces/i, /\binter\b/i, /opsz/i, /oklch\(/i, /italic/i]
     const planted = scanBuildInput(
       {
         'planted.ts':
-          "// Fraunces\nconst a = 'INTER'\nconst b = 'var(--Gradient-hero)'\nconst c = \"'OPSZ' 24\"\nconst d = 'Band-Gradient'",
+          "// Fraunces\nconst a = 'INTER'\nconst b = 'var(--Gradient-hero)'\nconst c = \"'OPSZ' 24\"\nconst d = 'Band-Gradient'\nconst e = 'OKLCH(1 0 0)'\nconst f = 'font-style: Italic'",
+        'planted.css': '/* oklch(1 0 0) italic */ a { color: red }',
       },
       needles,
     )
@@ -130,6 +132,8 @@ describe('the landing loads only v2', () => {
       'planted.ts: /band-gradient/i',
       'planted.ts: /\\binter\\b/i',
       'planted.ts: /opsz/i',
+      'planted.ts: /oklch\\(/i',
+      'planted.ts: /italic/i',
     ])
     expect(
       scanBuildInput({ 'planted.ts': "const s = 'interval internal pointerInterface'" }, needles),
@@ -153,5 +157,73 @@ describe('the landing loads only v2', () => {
     expect(Object.keys(files).length).toBeGreaterThanOrEqual(25)
     const hits = scanBuildInput(files, needles)
     expect(hits, hits.join('\n')).toEqual([])
+  })
+
+  it('AU-02 the only linear-gradient is the hero scan', () => {
+    type Site = { file: string; selectors: string[] }
+    const needle = /linear-gradient/gi
+    // A CSS rule carries its selectors. A gradient in a string, in HTML or outside a parsed rule has none, so it is never allowed.
+    const sites = (files: Record<string, string>): Site[] =>
+      Object.entries(files).flatMap(([file, raw]) => {
+        const src = stripSource(file, raw)
+        const total = src.match(needle)?.length ?? 0
+        if (!file.endsWith('.css')) return Array.from({ length: total }, () => ({ file, selectors: [] }))
+        const inRules = parseRules(src).flatMap((r) =>
+          Array.from({ length: r.body.match(needle)?.length ?? 0 }, () => ({ file, selectors: selectorParts(r) })),
+        )
+        return [...inRules, ...Array.from({ length: total - inRules.length }, () => ({ file, selectors: [] }))]
+      })
+    const allowed = (s: Site) => s.file === 'styles/landing.css' && s.selectors.length > 0 && s.selectors.every((p) => p === '.hero-scan')
+    const label = (s: Site) => `${s.file}: ${s.selectors.join(', ') || '(not a CSS rule)'}`
+
+    const files = landingBuildInput()
+    expect(Object.keys(files).length).toBeGreaterThanOrEqual(25)
+    expect(Object.keys(files).filter((f) => f.endsWith('.css')).length).toBeGreaterThanOrEqual(3)
+    const planted = {
+      ...files,
+      'styles/planted.css': '.x { background: linear-gradient(red, blue) }\n.hero-scan, .y { background: linear-gradient(red, blue) }\n/* linear-gradient(a, b) */',
+      'components/Planted.tsx': "export const s = { background: 'LINEAR-GRADIENT(red, blue)' }",
+    }
+    expect(
+      sites(planted).filter((s) => !allowed(s)).map(label).sort(),
+      'control: a lone rule, a rule shared with another selector and an inline string are outside the allow-list; a comment and the real hero scan are not',
+    ).toEqual(['components/Planted.tsx: (not a CSS rule)', 'styles/planted.css: .hero-scan, .y', 'styles/planted.css: .x'])
+
+    const real = sites(files)
+    expect(real.map(label), 'exactly one gradient, in the .hero-scan rule of landing.css').toEqual(['styles/landing.css: .hero-scan'])
+    expect(real.filter((s) => !allowed(s)).map(label)).toEqual([])
+  })
+
+  it('AU-03 pills only where allowed', () => {
+    // 9{2,} also covers 9999; var(--radius-pill) is the token form.
+    const needles = [/--radius-pill/, /border-?radius:\s*['"]?9{2,}(?:px)?\b/i]
+    const perFile = (files: Record<string, string>) => {
+      const counts: Record<string, number> = {}
+      for (const hit of scanBuildInput(files, needles)) {
+        const file = hit.slice(0, hit.indexOf(': /'))
+        counts[file] = (counts[file] ?? 0) + 1
+      }
+      return counts
+    }
+    expect(perFile({ 'planted.tsx': 'const s = { borderRadius: 999 }' }), 'control: a numeric pill radius is one hit').toEqual({ 'planted.tsx': 1 })
+
+    const files = landingBuildInput()
+    expect(Object.keys(files).length).toBeGreaterThanOrEqual(25)
+    const planted = perFile({
+      ...files,
+      'components/R5Planted.tsx': "// borderRadius: 999\nexport const s = { borderRadius: '99px', a: 'var(--radius-pill)' }",
+      'styles/r5-planted.css': '/* border-radius: 999px */ .p { border-radius: 9999PX }',
+    })
+    expect(planted['components/R5Planted.tsx'], 'control: both forms count in a file, a comment does not').toBe(2)
+    expect(planted['styles/r5-planted.css'], 'control: a CSS pill counts in any case, a comment does not').toBe(1)
+
+    expect(perFile(files)).toEqual({
+      'components/Coverage.tsx': 1,
+      'components/DemoLeadForm.tsx': 1,
+      'components/Hero.tsx': 1,
+      'components/Intelligence.tsx': 1,
+      'components/SignInForm.tsx': 1,
+      'styles/ds.css': 2,
+    })
   })
 })

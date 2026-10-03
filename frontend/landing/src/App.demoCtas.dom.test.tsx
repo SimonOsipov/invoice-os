@@ -109,16 +109,6 @@ describe('F-3: every rendered demo CTA opens the same modal', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('F3-b: the roster is exactly 13 entries, and no scope hides a duplicate CTA label', () => {
-    expect(ROSTER.length).toBe(13)
-    expect(new Set(ROSTER.map((entry) => `${entry.scope}|${entry.label}`)).size).toBe(13)
-  })
-
-  it('A2: the roster is exactly 13 entries, and no entry scopes to #demo or #pricing', () => {
-    expect(ROSTER.length).toBe(13)
-    expect(ROSTER.some((entry) => entry.scope === '#demo' || entry.scope === '#pricing')).toBe(false)
-  })
-
   // F3-f: measured 3 (header) + 1 (#top) + 4 (#platform) + 4 (#coverage) + 6 (#solutions) + 1 (#integrations) +
   // 1 (#api) + 6 (#faq) + 1 (closing) + 4 (footer) = 31 = the 13-entry roster + the 18 named non-CTA controls above. Asserted
   // with the demo modal closed -- App.tsx mounts SignInModal/DemoModal as

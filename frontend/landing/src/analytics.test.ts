@@ -439,8 +439,8 @@ describe('CTA components untouched (AC-3), gap-fill', () => {
 // N3 (AC #7, NEW-BEHAVIOUR): had no oracle before this plan. Protects
 // [analytics-line-count-frozen] -- the four send() lines docs cite by number
 // must hold their position.
-describe('DEMO_CTA_SOURCES shrinks without moving the four cited sends (AC #7, gap)', () => {
-  it('N3: demo_cta drops out, and analytics.ts keeps its four send() lines in place', () => {
+describe('DEMO_CTA_SOURCES and the four cited sends (AC #7, gap)', () => {
+  it('N3: the ten sources in page order, no pricing or demo_cta, and analytics.ts keeps its four send() lines in place', () => {
     expect(DEMO_CTA_SOURCES.length).toBe(10)
     expect([...DEMO_CTA_SOURCES], 'DEMO_CTA_SOURCES, in page order').toEqual(['nav', 'hero', 'platform', 'coverage', 'audience', 'integrations', 'api', 'faq', 'closing', 'footer'])
     expect(DEMO_CTA_SOURCES).not.toContain('pricing')

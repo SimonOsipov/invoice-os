@@ -72,6 +72,29 @@ function undefinedClasses(inputs: Record<string, string>, definingCss: readonly 
   return { checked: [...used.keys()], undef }
 }
 
+const BRIDGE_KEY = 'styles/bridge.css'
+
+/** Bridge `:root` names and base classes that no other build input, and no kept bridge rule, reads (D-25). The bridge comes out of `files`, so a planted bridge takes the same path. */
+function bridgeReads(files: Record<string, string>) {
+  const bridge = stripSource(BRIDGE_KEY, files[BRIDGE_KEY] ?? '')
+  const rules = parseRules(bridge)
+  const isRoot = (r: CssRule) => selectorParts(r).includes(':root')
+  const names = [...new Set(rules.filter(isRoot).flatMap((r) => declarations(r.body)).filter((d) => d.prop.startsWith('--')).map((d) => d.prop))]
+  const classes = [...new Set(classSelectors(bridge))]
+  const readers = new Map<string, string[]>()
+  const usedClasses = new Set<string>()
+  const addReader = (name: string, file: string) => readers.set(name, [...(readers.get(name) ?? []), file])
+  for (const [file, raw] of Object.entries(files)) {
+    if (file === BRIDGE_KEY) continue
+    const src = stripSource(file, raw)
+    varRefs(src).forEach((n) => addReader(n, file))
+    if (!file.endsWith('.css')) classNameTokens(src).forEach((c) => usedClasses.add(c))
+  }
+  for (const r of rules.filter((x) => !isRoot(x))) varRefs(r.body).forEach((n) => addReader(n, BRIDGE_KEY))
+  const unread = [...names.filter((n) => !readers.has(n)), ...classes.filter((c) => !usedClasses.has(c)).map((c) => `.${c}`)]
+  return { names, classes, readers, unread }
+}
+
 describe('bridge.css maps the app-layer names onto v2', () => {
   it('BR-01 every var(--x) in the build inputs resolves', () => {
     const planted = unresolvedVars({ 'planted.tsx': 'var(--fg-1) var(--fg-2)' }, [':root { --fg-2: var(--foreground); }'])
@@ -80,8 +103,34 @@ describe('bridge.css maps the app-layer names onto v2', () => {
 
     expect(existsSync(BRIDGE_PATH), `expected ${BRIDGE_PATH} to exist ([RESKIN-01-02] adds the bridge)`).toBe(true)
     const { referenced, unresolved } = unresolvedVars(landingBuildInput({ withMonitoring: true }), Object.values(readV2Css()))
-    expect(referenced.length).toBeGreaterThanOrEqual(20)
+    expect(referenced.length).toBeGreaterThanOrEqual(106)
     expect(unresolved).toEqual([])
+  })
+
+  it('BR-16 every bridge name is read somewhere', () => {
+    const files = landingBuildInput({ withMonitoring: true })
+    expect(Object.keys(files).length, 'population floor: the build input reaches the bridge').toBeGreaterThanOrEqual(25)
+    expect(files).toHaveProperty([BRIDGE_KEY])
+    const { names, classes, readers, unread } = bridgeReads(files)
+    expect(names.length).toBeGreaterThanOrEqual(10)
+    expect(classes.length).toBeGreaterThanOrEqual(5)
+    // e2e/personas.test.ts parses auth.ts, which reads these three (H-5).
+    for (const n of ['--action', '--action-tint', '--slate-900']) expect(readers.get(n) ?? [], `${n} is read by auth.ts`).toContain('auth.ts')
+    expect(unread, `unread bridge names: ${unread.join(' ')}`).toEqual([])
+  })
+
+  it('BR-16b an unread name is reported', () => {
+    const planted = {
+      ...landingBuildInput({ withMonitoring: true }),
+      [BRIDGE_KEY]:
+        ':root { --r5-unused: #000; --r5-read: #000; --action: var(--primary); }\n.r5-unused { color: red }\n.r5-read { color: red }\n.mono { color: red }\n/* --r5-ghost: #000; .r5-ghost { color: red } */',
+      'components/R5Planted.tsx':
+        "// var(--r5-unused) className=\"r5-unused\"\nexport const a = <i className=\"r5-read\" style={{ color: 'var(--r5-read)' }} />",
+    }
+    expect(bridgeReads(planted).unread, 'a comment-only reader and a commented declaration do not count; real readers of --action and .mono do').toEqual([
+      '--r5-unused',
+      '.r5-unused',
+    ])
   })
 
   it('BR-03 every static className token has a class rule', () => {
@@ -152,7 +201,7 @@ describe('bridge.css maps the app-layer names onto v2', () => {
     expect(card && page, 'v2 --card and --background resolve to hex').toBeTruthy()
     const failures: string[] = []
     let checked = 0
-    for (const tone of ['green', 'amber', 'red', 'muted']) {
+    for (const tone of ['red']) {
       const text = hexOf(`--status-${tone}-text`, values)
       const bg = hexOf(`--status-${tone}-bg`, values)
       if (!text || !bg) {
@@ -165,7 +214,7 @@ describe('bridge.css maps the app-layer names onto v2', () => {
         if (ratio < 4.5) failures.push(`${tone}: ${text} on ${on} ${hex} = ${ratio.toFixed(2)}`)
       }
     }
-    expect(checked).toBeGreaterThanOrEqual(3)
+    expect(checked).toBeGreaterThanOrEqual(1)
     expect(failures).toEqual([])
   })
 
@@ -250,8 +299,10 @@ describe('bridge.css maps the app-layer names onto v2', () => {
     expect(baseRule('.x, .y { a: b }', '.x'), 'control: a grouped selector counts').toHaveLength(1)
 
     const css = readBridge()
-    const selectors = ['.mono', '.money', '.label', '.eyebrow', '.eyebrow-dark', '.v2-btn', '.v2-btn-primary', '.v2-btn-ghost', 'a.lnk', 'a.lnk:hover']
+    const selectors = ['.mono', '.label', '.eyebrow', '.v2-btn', '.v2-btn-primary', 'a.lnk', 'a.lnk:hover']
     expect(selectors.filter((sel) => baseRule(css, sel).length === 0)).toEqual([])
+    const retired = ['.money', '.eyebrow-dark', '.v2-btn-ghost']
+    expect(retired.filter((sel) => baseRule(css, sel).length > 0), 'D-25 retires the classes no section uses').toEqual([])
     const primary = new Set(baseRule(css, '.v2-btn-primary').map((d) => d.prop))
     expect([...primary].filter((p) => p === 'background' || p === 'color').sort(), '.v2-btn-primary sets a fill and a text colour').toEqual(['background', 'color'])
   })

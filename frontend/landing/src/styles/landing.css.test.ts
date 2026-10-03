@@ -308,18 +308,16 @@ describe('SO-05 the module grid runs 4 / 2 / 1', () => {
     expect(modGridFailures(MOD_GRID_FIXTURE('999px')).length, 'a max-width 999px copy must fail the lookup').toBeGreaterThan(0)
   })
 
-  it('landing.css sets .mod-grid to 4 columns, 2 at max-width 1000px, 1 at max-width 560px, and drops .ios-4', () => {
+  it('landing.css sets .mod-grid to 4 columns, 2 at max-width 1000px, 1 at max-width 560px, and no .ios-grid rule remains', () => {
     const rules = parseRules(LANDING_CSS)
     expect(rules.length, 'control: the file parsed').toBeGreaterThanOrEqual(20)
     const selectors = rules.flatMap(selectorParts)
-    expect(selectors.some((s) => s.includes('.ios-3')), 'control: .ios-3 remains').toBe(true)
+    expect(selectors.some((s) => s.includes('.mod-grid')), 'control: .mod-grid is declared').toBe(true)
 
     expect(modGridFailures(LANDING_CSS)).toEqual([])
-    expect(selectors.filter((s) => s.includes('.ios-4'))).toEqual([])
-
-    const ios3 = (px: number) => declared(rules, '.ios-grid.ios-3', 'grid-template-columns', maxWidth(px))
-    expect(ios3(920), 'dropping .ios-4 left the .ios-3 tablet rule').toBe('repeat(2, minmax(0, 1fr)) !important')
-    expect(ios3(600), 'dropping .ios-4 left the .ios-3 phone rule').toBe('1fr !important')
+    for (const dead of ['.ios-grid', '.ios-4', '.ios-price', '.ios-demo-card']) {
+      expect(selectors.filter((s) => s.includes(dead)), `a ${dead} rule outlived its last consumer`).toEqual([])
+    }
   })
 })
 

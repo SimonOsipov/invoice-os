@@ -21,9 +21,9 @@ import { resolveTarget } from '../targets'
 const LANDING_URL = resolveTarget('LANDING_URL')
 
 // The nav targets, in DOM order. Mirrors NAV_LINKS in
-// frontend/landing/src/components/Nav.tsx. Sections without a link, such as `#demo`,
+// frontend/landing/src/components/Nav.tsx. Sections without a link, such as `#faq`,
 // are what E8 parks in.
-const NAV_HREFS = ['#problem', '#solution', '#platform'] as const
+const NAV_HREFS = ['#problem', '#solution', '#platform', '#solutions', '#integrations'] as const
 
 // Sub-pixel rects: a post-jump section top measures a fraction off the header's
 // bottom edge. Every geometry comparison carries this slack. It is NOT a header
@@ -258,17 +258,17 @@ test('landing nav: no link is marked current outside the nav sections', async ({
   // deliberately loose (both positions sit thousands of pixels down) so it can only
   // ever fire on a genuinely collapsed document, never on sub-pixel drift.
 
-  // In the demo CTA — a section[id] that is deliberately not a nav target.
-  await scrollSectionUnderHeader(page, '#demo')
+  // In the FAQ — a section[id] that is deliberately not a nav target.
+  await scrollSectionUnderHeader(page, '#faq')
   await expect
     .poll(() => page.evaluate(() => window.scrollY), {
-      message: `the page did not scroll to the demo CTA, so this proves nothing`,
+      message: `the page did not scroll to the FAQ, so this proves nothing`,
     })
     .toBeGreaterThan(headerH)
   await expect(nav.locator('[aria-current]')).toHaveCount(0)
 
-  // And at the very bottom: the footer is a <footer>, not a section[id], so the demo
-  // CTA is still the last section crossed.
+  // And at the very bottom: the footer is a <footer> and the closing section has no id,
+  // so the FAQ is still the last section[id] crossed.
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
   await expect
     .poll(() => page.evaluate(() => window.scrollY), {

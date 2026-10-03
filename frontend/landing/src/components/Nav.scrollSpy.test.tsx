@@ -143,7 +143,7 @@ describe('NV-11 the scroll-spy marks The solution and Platform current, and clea
     act(() => {
       root.render(createElement(Nav, { onSignIn: () => {}, onBookDemo: () => {}, ...(hrefPrefix ? { hrefPrefix } : {}) }))
     })
-    expect(container.querySelectorAll('.ios-nav-link'), 'control: the three links rendered').toHaveLength(3)
+    expect(container.querySelectorAll('.ios-nav-link'), 'control: every NAV_LINKS entry rendered').toHaveLength(NAV_LINKS.length)
     const current = Array.from(container.querySelectorAll('a[aria-current="true"]')).map((a) => a.getAttribute('href'))
     expect(current).toEqual(href ? [`${hrefPrefix}${href}`] : [])
   })

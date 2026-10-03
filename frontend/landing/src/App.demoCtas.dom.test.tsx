@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
-// F-3: every rendered demo CTA opens the same "Book a demo" modal; the #pricing entries discharge F-12 criterion 3.
+// F-3: every rendered demo CTA opens the same "Book a demo" modal.
 // LIMIT: jsdom has no visibility engine, so the CTAs in the hidden Solutions panels click through here;
 // that does not prove a visitor can reach them.
 // Setup: production URL, memory localStorage, console.error spy asserted empty.
@@ -10,13 +10,12 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ConsentStore } from './consent'
-import { PLANS } from './data'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const DIALOG = '[role="dialog"]'
 const DEMO_DIALOG_LABEL = 'Book a demo'
-const SCOPES = ['header', '#top', '#platform', '#coverage', '#solutions', '#integrations', '#api', '#faq', '[data-closing]', '#pricing', 'footer']
+const SCOPES = ['header', '#top', '#platform', '#coverage', '#solutions', '#integrations', '#api', '#faq', '[data-closing]', 'footer']
 
 function memoryStorage(): ConsentStore {
   const map = new Map<string, string>()
@@ -70,8 +69,8 @@ async function clickByText(root: ParentNode, text: string): Promise<void> {
   })
 }
 
-// Scope + label roster, in page order. The #pricing labels are PLANS[].cta; the rest are the literal each
-// component renders (V). Labels repeat across scopes, never within one: the per-entry check asserts that.
+// Scope + label roster, in page order: the literal each component renders (V). Labels repeat across scopes,
+// never within one: the per-entry check asserts that.
 const ROSTER: { scope: string; label: string }[] = [
   { scope: 'header', label: 'Book a demo' }, // Nav.tsx
   { scope: '#top', label: 'Book a demo' }, // Hero.tsx
@@ -84,23 +83,19 @@ const ROSTER: { scope: string; label: string }[] = [
   { scope: '#api', label: 'Request API access' }, // Api.tsx
   { scope: '#faq', label: 'Talk to our team →' }, // Faq.tsx
   { scope: '[data-closing]', label: 'Book a demo' }, // ClosingCta.tsx
-  { scope: '#pricing', label: PLANS[0].cta },
-  { scope: '#pricing', label: PLANS[1].cta },
-  { scope: '#pricing', label: PLANS[2].cta },
   { scope: 'footer', label: 'Book a demo' }, // Footer.tsx
   { scope: 'footer', label: 'Contact ASComply' }, // Footer.tsx, same onBookDemo (D-24)
 ]
 
-// The twenty controls in these eleven scopes that are NOT demo CTAs, named so the
-// 36-button completeness guard below (F3-f) is not a magic number:
+// The eighteen controls in these ten scopes that are NOT demo CTAs, named so the
+// 31-button completeness guard below (F3-f) is not a magic number:
 //   header        -- "Platform login" (sign-in), the burger
 //   #platform     -- the Validate / Approve / Submit tabs (3)
 //   #coverage     -- the Nigeria / Kenya / South Africa country tabs (3)
 //   #solutions    -- the three Who-it's-for tabs (3)
 //   #faq          -- the five question headers (5)
-//   #pricing      -- the Monthly / Annual billing-period toggle (2)
 //   footer        -- "Open the cockpit" (sign-in), "Cookie choices"
-const NON_CTA_COUNT = 20
+const NON_CTA_COUNT = 18
 
 describe('F-3: every rendered demo CTA opens the same modal', () => {
   it('F3-a: control needle -- zero dialogs at rest, and every scope resolves to >= 1 button', async () => {
@@ -114,23 +109,23 @@ describe('F-3: every rendered demo CTA opens the same modal', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('F3-b: the roster is exactly 16 entries, and no scope hides a duplicate CTA label', () => {
-    expect(ROSTER.length).toBe(16)
-    expect(new Set(PLANS.map((p) => p.cta)).size).toBe(3)
+  it('F3-b: the roster is exactly 13 entries, and no scope hides a duplicate CTA label', () => {
+    expect(ROSTER.length).toBe(13)
+    expect(new Set(ROSTER.map((entry) => `${entry.scope}|${entry.label}`)).size).toBe(13)
   })
 
-  it('A2: the roster is exactly 16 entries, and no entry scopes to #demo', () => {
-    expect(ROSTER.length).toBe(16)
-    expect(ROSTER.some((entry) => entry.scope === '#demo')).toBe(false)
+  it('A2: the roster is exactly 13 entries, and no entry scopes to #demo or #pricing', () => {
+    expect(ROSTER.length).toBe(13)
+    expect(ROSTER.some((entry) => entry.scope === '#demo' || entry.scope === '#pricing')).toBe(false)
   })
 
   // F3-f: measured 3 (header) + 1 (#top) + 4 (#platform) + 4 (#coverage) + 6 (#solutions) + 1 (#integrations) +
-  // 1 (#api) + 6 (#faq) + 1 (closing) + 5 (#pricing) + 4 (footer) = 36 = the 16-entry roster + the 20 named non-CTA controls above. Asserted
+  // 1 (#api) + 6 (#faq) + 1 (closing) + 4 (footer) = 31 = the 13-entry roster + the 18 named non-CTA controls above. Asserted
   // with the demo modal closed -- App.tsx mounts SignInModal/DemoModal as
   // siblings of Footer, outside every one of these scopes, but an OPEN modal still
   // adds buttons to the page (its own Close, and form controls) that this total ignores
   // by construction.
-  it('F3-f: the eleven scopes hold exactly 36 buttons in total, modal closed', async () => {
+  it('F3-f: the ten scopes hold exactly 31 buttons in total, modal closed', async () => {
     await mountApp()
     expect(document.querySelectorAll(DIALOG).length).toBe(0)
     const total = SCOPES.reduce((sum, scope) => {

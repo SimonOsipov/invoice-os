@@ -232,10 +232,10 @@ describe('HD-07b aria-controls names the same menu id at rest and while open', (
 })
 
 describe('HD-07c the menu lists every NAV_LINKS entry in order, prefixed or not', () => {
-  // The two V851 entries no section owns yet; the real list already holds the other three.
+  // Planted: the menu must grow with the list, whatever the live list holds.
   const EXTRA = [
-    { label: "Who it's for", href: '#solutions' },
-    { label: 'Integrations', href: '#integrations' },
+    { label: 'Extra A', href: '#extra-a' },
+    { label: 'Extra B', href: '#extra-b' },
   ]
   let before: number
   beforeEach(() => {
@@ -248,7 +248,7 @@ describe('HD-07c the menu lists every NAV_LINKS entry in order, prefixed or not'
     ['', ''],
     ['/', '/'],
   ])('with hrefPrefix %j the menu hrefs are the prefixed NAV_LINKS hrefs, in list order', (hrefPrefix, p) => {
-    expect(NAV_LINKS.length, 'control: the fixture grew the list').toBe(before + EXTRA.length)
+    expect(NAV_LINKS.length, 'control: the fixture grew the list to seven').toBe(7)
     mount(hrefPrefix ? { hrefPrefix } : {})
     toggle()
     const links = Array.from(menu()!.querySelectorAll('a.a-menu-link'))
@@ -259,7 +259,7 @@ describe('HD-07c the menu lists every NAV_LINKS entry in order, prefixed or not'
 
   it('NV-09 the grown list holds distinct hrefs and mounts without a duplicate-key warning', () => {
     const hrefs = NAV_LINKS.map((l) => l.href)
-    expect(hrefs.length, 'control: the fixture grew the list').toBe(before + EXTRA.length)
+    expect(hrefs.length, 'control: the fixture grew the list to seven').toBe(7)
     expect(new Set(hrefs).size, `duplicate href in ${JSON.stringify(hrefs)}`).toBe(hrefs.length)
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     mount()
@@ -269,11 +269,11 @@ describe('HD-07c the menu lists every NAV_LINKS entry in order, prefixed or not'
   })
 })
 
-describe('NV-10 the menu lists the three sections', () => {
+describe('NV-10 the menu lists the five sections', () => {
   it.each([
     ['', ''],
     ['/', '/'],
-  ])('with hrefPrefix %j the open menu holds exactly The problem, The solution, Platform', (hrefPrefix, p) => {
+  ])("with hrefPrefix %j the open menu holds exactly V851's five sections", (hrefPrefix, p) => {
     mount(hrefPrefix ? { hrefPrefix } : {})
     toggle()
     const links = Array.from(menu()!.querySelectorAll('a.a-menu-link'))
@@ -282,6 +282,8 @@ describe('NV-10 the menu lists the three sections', () => {
       ['The problem', `${p}#problem`],
       ['The solution', `${p}#solution`],
       ['Platform', `${p}#platform`],
+      ["Who it's for", `${p}#solutions`],
+      ['Integrations', `${p}#integrations`],
     ])
   })
 })

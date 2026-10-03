@@ -74,7 +74,7 @@ describe('FT-10 / AN-03 with PLATFORM_LINKS populated', () => {
   })
 
   it('AN-03 reads the live list: resolving links pass, a ghost link is reported through the real App', () => {
-    plant(['#solution', '#platform', '#pricing'])
+    plant(['#solution', '#platform', '#coverage'])
     const html = renderAppAt('/')
     const hashes = footerHrefs(footerSlice(html)).filter((h) => h.startsWith('#') && h.length > 1)
     expect(hashes).toHaveLength(3)
@@ -151,13 +151,6 @@ describe('RESKIN-01-03 (AC 5): the former --gradient-hero sites render the v2 fl
   it('SO-07 the Solution band is flat: no inline background', () => {
     const open = /^<section id="solution"[^>]*>/.exec(section('solution'))?.[0]
     expect(open).toBe('<section id="solution" class="ds-section band-dark">')
-  })
-
-  it('only the featured price card is var(--surface); the other two stay var(--bg-2)', () => {
-    const cards = [...section('pricing').matchAll(/<div class="ios-price"[^>]*>/g)].map((m) => m[0])
-    expect(cards.length, 'three plan cards').toBe(3)
-    expect(cards.filter((c) => c.includes('background:var(--surface);'))).toHaveLength(1)
-    expect(cards.filter((c) => c.includes('background:var(--bg-2);'))).toHaveLength(2)
   })
 
   it('no rendered element names a gradient token or a font-variation axis', () => {
@@ -270,6 +263,25 @@ describe('R5-AN section order', () => {
     expect(privacy.some((s) => s.id === 'faq' || s.closing), 'neither on /privacy').toBe(false)
   })
 
+  it('the page is v2 from hero to closing CTA: sections and bands in order, no retired section', () => {
+    const html = renderAppAt('/')
+    // The strip and the closing section carry no id, so each is named by its marker.
+    const sections = html
+      .split('<section')
+      .slice(1)
+      .map((chunk) => ({
+        id: /^ id="([^"]+)"/.exec(chunk)?.[1] ?? (chunk.includes('data-strip=') ? '[data-strip]' : chunk.includes('data-closing') ? '[data-closing]' : '?'),
+        band: /^(?: id="[^"]*")? class="ds-section band-([a-z0-9]+)"/.exec(chunk)?.[1],
+      }))
+    expect(sections.length, 'control: the landing rendered its sections').toBeGreaterThan(5)
+    expect(sections.map((s) => s.id)).toEqual(['top', '[data-strip]', 'problem', 'solution', 'platform', 'coverage', 'intelligence', 'solutions', 'integrations', 'api', 'faq', '[data-closing]'])
+    expect(sections.map((s) => s.band)).toEqual(['dark', 'sage', 'cream', 'dark', 'cream', 'peach', 'dark2', 'cream', 'peach', 'dark', 'cream', 'cream'])
+    for (const id of ['compliance', 'pricing', 'accountants', 'developers', 'demo']) {
+      expect(sections.map((s) => s.id), `no #${id} on /`).not.toContain(id)
+    }
+    expect(html.indexOf('data-closing'), 'the footer follows the closing section').toBeLessThan(html.lastIndexOf('<footer'))
+  })
+
   it('/ renders no #demo section and no id starting dc-', () => {
     const html = renderAppAt('/')
     expect(sectionIds(html), 'control: the landing rendered its sections').toContain('faq')
@@ -290,6 +302,7 @@ describe('AN-03 every footer in-page link resolves to one section', () => {
     const html = renderAppAt('/')
     const hashes = footerHrefs(footerSlice(html)).filter((h) => h.startsWith('#') && h.length > 1)
     expect(hashes, 'the footer hashes are not the PLATFORM_LINKS population').toHaveLength(PLATFORM_LINKS.length)
+    expect(hashes, 'the footer links Solutions for partners').toContain('#solutions')
     expect(unresolvedHashes(html, hashes)).toEqual([])
   })
 })
@@ -341,7 +354,7 @@ describe('NV-12 no in-page anchor on the page resolves to a missing section', ()
   it('at / every href="#x" in the whole page has exactly one <section id="x">, and the nav, hero and footer anchors are in the population', () => {
     const html = renderAppAt('/')
     const hashes = allHashes(html)
-    for (const h of ['#top', '#problem', '#solution', '#platform']) {
+    for (const h of ['#top', '#problem', '#solution', '#platform', '#solutions', '#integrations']) {
       expect(hashes, `control: ${h} is linked from the page`).toContain(h)
     }
     expect(unresolvedHashes(html, hashes)).toEqual([])
@@ -349,7 +362,7 @@ describe('NV-12 no in-page anchor on the page resolves to a missing section', ()
 
   it('at /privacy every /#x anchor resolves against the sales page it links to', () => {
     const privacy = allHashes(renderAppAt('/privacy'))
-    for (const h of ['#problem', '#solution', '#platform']) {
+    for (const h of ['#problem', '#solution', '#platform', '#solutions', '#integrations']) {
       expect(privacy, `control: /privacy links ${h}`).toContain(h)
     }
     expect(unresolvedHashes(renderAppAt('/'), privacy)).toEqual([])

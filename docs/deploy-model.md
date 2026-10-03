@@ -93,9 +93,10 @@ PR opened ──> dev-env.yml:
                              from `development` (skipInitialDeploys, create-or-reuse)
                              ──> write a fresh gateway token (set-fork-gateway-token,
                              right after set-fork-auth) ──> blank WAL_ARCHIVE_* on
-                             Postgres ──> deploy Postgres + probe ──> assert Watch Paths
-                             empty (M3-16 invariant, now runtime-asserted) ──> discover
-                             the 5 URLs ──> blank Sentry variables (set-sentry-off)
+                             Postgres (a kept BUCKET must differ from production's) ──>
+                             deploy Postgres + probe ──> assert Watch Paths empty
+                             (M3-16 invariant, now runtime-asserted) ──> discover the
+                             5 URLs ──> blank Sentry variables (set-sentry-off)
                              ──> point the fork gateway at reconciliation
                              (set-fork-reconciliation-url)
                 ci-watch: polls the `CI` check alongside prepare-env; e2e waits for green CI

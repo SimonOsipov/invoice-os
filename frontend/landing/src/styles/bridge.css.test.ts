@@ -81,6 +81,7 @@ function bridgeReads(files: Record<string, string>) {
   const isRoot = (r: CssRule) => selectorParts(r).includes(':root')
   const names = [...new Set(rules.filter(isRoot).flatMap((r) => declarations(r.body)).filter((d) => d.prop.startsWith('--')).map((d) => d.prop))]
   const classes = [...new Set(classSelectors(bridge))]
+  // Custom property and class names are case-sensitive, so `var(--Action)` does not read `--action`; only `var(` is not.
   const readers = new Map<string, string[]>()
   const usedClasses = new Set<string>()
   const addReader = (name: string, file: string) => readers.set(name, [...(readers.get(name) ?? []), file])

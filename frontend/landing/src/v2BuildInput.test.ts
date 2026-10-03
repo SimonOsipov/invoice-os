@@ -87,7 +87,7 @@ describe('the landing loads only v2', () => {
     expect(v2, '.ds-eyebrow--dark ties .t-eyebrow in specificity, so v2 utilities load first').toBeLessThan(ds)
     expect(bridge, 'ds.css follows the bridge').toBeLessThan(ds)
     expect(ds, 'landing.css layers on the primitives, so ds.css loads first').toBeLessThan(landing)
-    expect(bridge, 'landing.css reads the bridge names, so the bridge loads first').toBeLessThan(landing)
+    expect(bridge).toBeLessThan(landing)
   })
 
   it('V2-05 the v2 entry import chain reaches no app-layer', () => {
@@ -195,8 +195,8 @@ describe('the landing loads only v2', () => {
   })
 
   it('AU-03 pills only where allowed', () => {
-    // 9{2,} also covers 9999; var(--radius-pill) is the token form.
-    const needles = [/--radius-pill/, /border-?radius:\s*['"]?9{2,}(?:px)?\b/i]
+    // Any `radius:` value holding 99, 999 or 9999: shorthand, per-corner longhands and `radius :` too. A comma ends a value.
+    const needles = [/--radius-pill/, /radius\s*:\s*['"]?[^;}'",\n]*?\b9{2,}(?!\d)/i]
     const perFile = (files: Record<string, string>) => {
       const counts: Record<string, number> = {}
       for (const hit of scanBuildInput(files, needles)) {
@@ -206,6 +206,14 @@ describe('the landing loads only v2', () => {
       return counts
     }
     expect(perFile({ 'planted.tsx': 'const s = { borderRadius: 999 }' }), 'control: a numeric pill radius is one hit').toEqual({ 'planted.tsx': 1 })
+    expect(
+      perFile({
+        'a.css': '.a { border-radius: 8px 999px } .b { border-top-left-radius: 99px } .c { border-radius : 999px }',
+        'b.tsx': 'const s = { borderTopLeftRadius: 999, borderRadius: cond ? 999 : 8 }',
+        'c.tsx': 'const s = { borderRadius: 4, width: 999, height: 1999, borderRadius2: 8 }',
+      }),
+      'control: shorthand, per-corner and spaced forms count; a later key, a longer number and an unrelated 999 do not',
+    ).toEqual({ 'a.css': 3, 'b.tsx': 2 })
 
     const files = landingBuildInput()
     expect(Object.keys(files).length).toBeGreaterThanOrEqual(25)

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Coverage band, left column and panel shell: header copy, country switch, card, flags, legend (jsdom).
+// Coverage band (jsdom).
 import { act, createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { GLYPHS } from '../icons'

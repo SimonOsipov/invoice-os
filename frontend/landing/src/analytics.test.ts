@@ -482,6 +482,10 @@ describe('docs/analytics.md tracks DEMO_CTA_SOURCES (AC #8, gap)', () => {
     expect(ANALYTICS_DOC).toContain(`${capitalised} \`cta_location\` values cover`)
     expect(ANALYTICS_DOC).toContain(`**all ${n}** \`cta_location\` values appear`)
     for (const source of DEMO_CTA_SOURCES) expect(ANALYTICS_DOC).toContain(`\`${source}\``)
+    // The operator checklist lists the values itself; the loop above is satisfied by the table row alone.
+    const checklist = ANALYTICS_DOC.replace(/\s+/g, ' ').match(/values appear: ((?:`[a-z_]+`,? ?)+)/)
+    expect(checklist, 'expected the checklist list after "values appear:"').not.toBeNull()
+    expect(Array.from(checklist![1].matchAll(/`([a-z_]+)`/g), (m) => m[1])).toEqual([...DEMO_CTA_SOURCES])
     expect(ANALYTICS_DOC, 'a retired source must not survive anywhere in the page').not.toContain('demo_cta')
   })
 

@@ -293,3 +293,25 @@ describe('CV-10 the Coverage tabs keep their focus ring and hover dim', () => {
     expect(declared(rules, '.a-tab-pill:hover', 'filter', root)).toBe('brightness(0.97)')
   })
 })
+
+// Source scan: jsdom applies no media queries or cascade, so only the rule text shows the roadmap collapse
+// at 900px and the two on-band button overrides. .btn-on-dark has no mounted consumer yet.
+describe('CV-13 the roadmap collapses at 900px and the on-band buttons override the DS colour', () => {
+  const rules = parseRules(LANDING_CSS)
+
+  it('.cols3 is one column and .rm-chev is hidden at max-width 900px, both !important', () => {
+    expect(rules.length, 'control: the sheet parsed').toBeGreaterThan(10)
+    expect(declared(rules, '.split', 'grid-template-columns', maxWidth900), 'control: a sibling collapses in the same block').toBe('minmax(0, 1fr) !important')
+    expect(declared(rules, '.cols3', 'grid-template-columns', maxWidth900)).toBe('minmax(0, 1fr) !important')
+    expect(declared(rules, '.rm-chev', 'display', maxWidth900)).toBe('none !important')
+    expect(declared(rules, '.cols3', 'grid-template-columns', noAt), '.cols3 sets no column rule outside the media block').toBeUndefined()
+    expect(declared(rules, '.rm-chev', 'display', noAt), '.rm-chev sets no display outside the media block').toBeUndefined()
+  })
+
+  it('.btn-on-peach is --primary and .btn-on-dark is --accent, colour and underline, !important', () => {
+    expect(declared(rules, '.btn-on-peach', 'color', noAt)).toBe('var(--primary) !important')
+    expect(declared(rules, '.btn-on-peach', 'border-bottom-color', noAt)).toBe('var(--primary) !important')
+    expect(declared(rules, '.btn-on-dark', 'color', noAt)).toBe('var(--accent) !important')
+    expect(declared(rules, '.btn-on-dark', 'border-bottom-color', noAt)).toBe('var(--accent) !important')
+  })
+})

@@ -1,8 +1,6 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
-// CHARACTERIZATION: the modal form already behaves this way, so every row is green before
-// the inline DemoCta goes and must stay green after. These rows are the proof RESKIN-05 D-20
-// re-homes from DemoCta.form/adversarial onto `#dm-*`. fetch is the seam; no vi.mock here.
+// Modal form behaviour on `#dm-*`. fetch is the seam; no vi.mock here.
 /// <reference types="node" />
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'

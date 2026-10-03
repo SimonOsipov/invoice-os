@@ -1,5 +1,4 @@
-// The shared Book-a-Demo lead-capture form. DemoModal mounts it inside the popup
-// card; the landing card mounts it bare. idPrefix keeps the two id namespaces apart.
+// The Book-a-Demo lead-capture form. DemoModal mounts it inside the popup card.
 
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, CSSProperties, FormEvent, ReactNode } from 'react'

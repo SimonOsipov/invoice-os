@@ -278,13 +278,10 @@ function submitButton(root: Locator): Locator {
  * path is indistinguishable from the closed-gate path is exactly "E1 and E5 both end here,
  * both no faster than the shared stub" — so both call THIS, rather than each describing
  * success in its own words.
- *
- * The Done button renders only where the form is given an onDone — the card is not — so
- * `opts.done` selects whether that half is asserted.
  */
-async function expectSuccessPanel(root: Locator, prefix: string, opts: { done: boolean }): Promise<void> {
+async function expectSuccessPanel(root: Locator, prefix: string): Promise<void> {
   await expect(root.locator(`#${prefix}-success`)).toBeVisible()
-  if (opts.done) await expect(root.locator(`#${prefix}-success-done`)).toBeVisible()
+  await expect(root.locator(`#${prefix}-success-done`)).toBeVisible()
   await expect(root).toContainText(`Thanks, ${LEAD.firstName}.`)
   await expect(root).toContainText(LEAD.email)
   // The form is gone, not merely covered.
@@ -380,7 +377,7 @@ test('landing demo: a complete submission on a closed gate succeeds locally and 
 
   const startedAt = Date.now()
   await submitButton(dialog).click()
-  await expectSuccessPanel(dialog, 'dm', { done: true })
+  await expectSuccessPanel(dialog, 'dm')
   const elapsedMs = Date.now() - startedAt
 
   // The closed gate routes through the same 1300ms stub the honeypot uses. Asserted here as
@@ -553,7 +550,7 @@ test('landing demo: a tripped honeypot is dropped silently, and no faster than a
 
   const startedAt = Date.now()
   await submitButton(dialog).click()
-  await expectSuccessPanel(dialog, 'dm', { done: true })
+  await expectSuccessPanel(dialog, 'dm')
   const elapsedMs = Date.now() - startedAt
 
   expect(
@@ -646,7 +643,9 @@ async function measureCardStable(page: Page, width: number): Promise<CardSizeMea
 // two-select row shrinks rather than overflowing.
 test('landing demo: the modal taxpayer-size value fits its card', async ({ page }, testInfo) => {
   const sinks = await openLanding(page)
-  await openDemoModal(page)
+  const dialog = await openDemoModal(page)
+  // The open animation moves the card; settle it before the first stable-read pair.
+  await settleAnimations(dialog.locator(':scope > div'))
 
   const sweep: Array<CardSizeMeasurement & { viewportWidth: number }> = []
   for (const width of CARD_FIT_WIDTHS) {

@@ -146,7 +146,6 @@ describe('isFocusable (LAND-02-02) — keeps the honeypot out of the Tab-trap', 
   })
 })
 
-// CHARACTERIZATION (RESKIN-05 D-20): green before the inline DemoCta goes and after.
 describe('DemoModal SSR render (RESKIN-05-04)', () => {
   const html = renderToStaticMarkup(createElement(DemoModal, { onClose: noop }))
 
@@ -156,9 +155,9 @@ describe('DemoModal SSR render (RESKIN-05-04)', () => {
   })
 
   // Source scan: a second copy of the line in a file the modal never renders cannot show up in
-  // the markup, so only a walk of the landing source sees the duplicate the old DemoCta carried.
+  // the markup, so only a walk of the landing source sees it.
   it('MF-R8: "No card required" renders once, and no landing source file but DemoLeadForm.tsx holds it', () => {
-    expect(html.match(/No card required/g) ?? []).toHaveLength(1)
+    expect(html.match(/No card required/gi) ?? []).toHaveLength(1)
 
     const src = join(dirname(fileURLToPath(import.meta.url)), '..')
     const walk = (dir: string): string[] =>
@@ -167,7 +166,7 @@ describe('DemoModal SSR render (RESKIN-05-04)', () => {
       )
     const files = walk(src)
     expect(files.length, 'control: the walk found the landing sources').toBeGreaterThanOrEqual(25)
-    const holders = files.filter((f) => /No card required/.test(readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '')))
+    const holders = files.filter((f) => /No card required/i.test(readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '')))
     expect(holders.map((f) => f.slice(src.length + 1))).toEqual(['components/DemoLeadForm.tsx'])
   })
 })

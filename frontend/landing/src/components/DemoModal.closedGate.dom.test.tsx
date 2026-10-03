@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://landing-pr-42.up.railway.app/" }
-// CHARACTERIZATION: green before the inline DemoCta goes and after. The closed-gate hostname
-// arm is the one DemoModal.form.dom.test.tsx never exercises (it runs at www.ascomply.com).
+// The closed-gate hostname arm is the one DemoModal.form.dom.test.tsx never exercises (it runs at
+// www.ascomply.com).
 /// <reference types="node" />
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'

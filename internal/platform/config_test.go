@@ -174,3 +174,35 @@ func TestLoadConfig_ReleaseFromStampedBuild(t *testing.T) {
 		t.Errorf("Release = %q, want the stamped %q", cfg.Release, fakeStampedSHA)
 	}
 }
+
+func TestLoadConfig_SentryTestEventIsExactTrue(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		value *string
+		want  bool
+	}{
+		{"unset", nil, false},
+		{"empty", ptr(""), false},
+		{"false", ptr("false"), false},
+		{"capital_True", ptr("True"), false},
+		{"true", ptr("true"), true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("SENTRY_TEST_EVENT", "")
+			if c.value == nil {
+				os.Unsetenv("SENTRY_TEST_EVENT")
+			} else {
+				t.Setenv("SENTRY_TEST_EVENT", *c.value)
+			}
+			cfg, err := LoadConfig("svc")
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+			if cfg.SentryTestEvent != c.want {
+				t.Errorf("SentryTestEvent = %v, want %v", cfg.SentryTestEvent, c.want)
+			}
+		})
+	}
+}
+
+func ptr(s string) *string { return &s }

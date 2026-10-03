@@ -27,6 +27,9 @@ ENV VITE_DEMO_MODE=$VITE_DEMO_MODE
 # Empty means Sentry off; `set-sentry-off` blanks it in forks.
 ARG VITE_SENTRY_DSN
 ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN
+# Operator test-event digest; empty leaves the trigger uninstalled.
+ARG VITE_SENTRY_TEST_DIGEST
+ENV VITE_SENTRY_TEST_DIGEST=$VITE_SENTRY_TEST_DIGEST
 # The release fallback when no release is stamped.
 ARG RAILWAY_GIT_COMMIT_SHA
 ENV VITE_RAILWAY_GIT_COMMIT_SHA=$RAILWAY_GIT_COMMIT_SHA

@@ -61,25 +61,25 @@ describe('FT-10 / AN-03 with PLATFORM_LINKS populated', () => {
   afterEach(() => void PLATFORM_LINKS.splice(0, PLATFORM_LINKS.length, ...saved))
 
   it('at /privacy the planted links are /#x and /privacy is exact', () => {
-    plant(['#modules', '#how'])
+    plant(['#solution', '#how'])
     expect(PLATFORM_LINKS.length, 'control: the fixture is in place').toBe(2)
-    expect(footerHrefs(footerSlice(renderAppAt('/privacy')))).toEqual(['/#modules', '/#how', '/privacy'])
+    expect(footerHrefs(footerSlice(renderAppAt('/privacy')))).toEqual(['/#solution', '/#how', '/privacy'])
   })
 
   it('at / the planted links keep their bare #x and /privacy is exact', () => {
-    plant(['#modules', '#how'])
+    plant(['#solution', '#how'])
     expect(PLATFORM_LINKS.length, 'control: the fixture is in place').toBe(2)
-    expect(footerHrefs(footerSlice(renderAppAt('/')))).toEqual(['#modules', '#how', '/privacy'])
+    expect(footerHrefs(footerSlice(renderAppAt('/')))).toEqual(['#solution', '#how', '/privacy'])
   })
 
   it('AN-03 reads the live list: resolving links pass, a ghost link is reported through the real App', () => {
-    plant(['#modules', '#how', '#pricing'])
+    plant(['#solution', '#how', '#pricing'])
     const html = renderAppAt('/')
     const hashes = footerHrefs(footerSlice(html)).filter((h) => h.startsWith('#') && h.length > 1)
     expect(hashes).toHaveLength(3)
     expect(unresolvedHashes(html, hashes)).toEqual([])
 
-    plant(['#modules', '#ghost'])
+    plant(['#solution', '#ghost'])
     const ghostHtml = renderAppAt('/')
     const ghostHashes = footerHrefs(footerSlice(ghostHtml)).filter((h) => h.startsWith('#') && h.length > 1)
     expect(unresolvedHashes(ghostHtml, ghostHashes)).toEqual(['#ghost'])
@@ -147,9 +147,9 @@ describe('RESKIN-01-03 (AC 5): the four former --gradient-hero sites render the 
     return html.slice(start, html.indexOf('</section>', start))
   }
 
-  it('Modules is a bare band-dark section with no inline background', () => {
-    const open = /^<section id="modules"[^>]*>/.exec(section('modules'))?.[0]
-    expect(open).toBe('<section id="modules" class="band-dark">')
+  it('SO-07 the Solution band is flat: no inline background', () => {
+    const open = /^<section id="solution"[^>]*>/.exec(section('solution'))?.[0]
+    expect(open).toBe('<section id="solution" class="ds-section band-dark">')
   })
 
   it('HowItWorks step panel is flat var(--surface) with no background-image', () => {

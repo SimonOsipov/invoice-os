@@ -49,14 +49,14 @@ describe('landing positioning copy, on the rendered tree', () => {
     expect(textOf(hero[0])).toBe(HERO_PARAGRAPH)
   })
 
-  it('the Solution heading and its second intro paragraph read as shipped', () => {
+  it('the Solution heading and its second intro paragraph read the Q4 wording', () => {
     const d = mount()
-    const heading = d.querySelectorAll('#modules h2')
-    expect(heading.length, '#modules does not hold exactly one heading').toBe(1)
+    const heading = d.querySelectorAll('#solution h2')
+    expect(heading.length, '#solution does not hold exactly one heading').toBe(1)
     expect(textOf(heading[0])).toBe(MODULES_HEADING)
 
-    const intro = d.querySelectorAll('#modules p:not(.mod-body)')
-    expect(intro.length, '#modules does not hold exactly two intro paragraphs').toBe(2)
+    const intro = d.querySelectorAll('#solution p:not(.mod-body)')
+    expect(intro.length, '#solution does not hold exactly two intro paragraphs').toBe(2)
     expect(textOf(intro[1])).toBe(MODULES_INTRO_SECOND)
   })
 

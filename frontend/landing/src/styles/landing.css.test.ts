@@ -280,3 +280,54 @@ describe('FT-12 the a-link rule', () => {
     expect(aLinkFailures(LANDING_CSS)).toEqual([])
   })
 })
+
+const maxWidth = (px: number) => (at: string[]) =>
+  at.length === 1 && new RegExp(`^@media \\(\\s*max-width\\s*:\\s*${px}px\\s*\\)$`, 'i').test(at[0])
+
+/** The module grid contract: the failures, empty when it holds. */
+function modGridFailures(css: string): string[] {
+  const rules = parseRules(css)
+  const cols = (at: (a: string[]) => boolean) => noBang(declared(rules, '.mod-grid', 'grid-template-columns', at))
+  const checks: [string, string | undefined, string][] = [
+    ['.mod-grid columns outside any media', cols(noAt), 'repeat(4, minmax(0, 1fr))'],
+    ['.mod-grid columns at max-width 1000px', cols(maxWidth(1000)), 'repeat(2, minmax(0, 1fr))'],
+    ['.mod-grid columns at max-width 560px', cols(maxWidth(560)), 'minmax(0, 1fr)'],
+  ]
+  return checks.filter(([, got, want]) => got !== want).map(([what, got, want]) => `${what}: ${got} != ${want}`)
+}
+
+const MOD_GRID_FIXTURE = (tablet: string) => `
+.mod-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: ${tablet}) { .mod-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .mod-grid { grid-template-columns: minmax(0, 1fr); } }
+`
+
+describe('SO-05 the module grid runs 4 / 2 / 1', () => {
+  it('controls: the lookup accepts the fixture and rejects a 999px tablet edge', () => {
+    expect(modGridFailures(MOD_GRID_FIXTURE('1000px'))).toEqual([])
+    expect(modGridFailures(MOD_GRID_FIXTURE('999px')).length, 'a max-width 999px copy must fail the lookup').toBeGreaterThan(0)
+  })
+
+  it('landing.css sets .mod-grid to 4 columns, 2 at max-width 1000px, 1 at max-width 560px, and drops .ios-4', () => {
+    const rules = parseRules(LANDING_CSS)
+    expect(rules.length, 'control: the file parsed').toBeGreaterThanOrEqual(20)
+    const selectors = rules.flatMap(selectorParts)
+    expect(selectors.some((s) => s.includes('.ios-3')), 'control: .ios-3 remains').toBe(true)
+
+    expect(modGridFailures(LANDING_CSS)).toEqual([])
+    expect(selectors.filter((s) => s.includes('.ios-4'))).toEqual([])
+  })
+})
+
+describe('SO-08 the Solution highlight line takes --highlight-on-dark-2', () => {
+  it('.t-hl-dark2 colours with --highlight-on-dark-2, which colors.css defines; jsdom applies no CSS to see it', () => {
+    const rules = parseRules(readFileSync(join(V2_DIR, 'utilities.css'), 'utf8'))
+    expect(rules.length, 'control: the file parsed').toBeGreaterThanOrEqual(20)
+    const color = (selector: string) => declared(rules, selector, 'color', noAt)
+    expect(color('.t-hl'), 'control: the sibling resolves to its own token').toBe('var(--highlight-on-dark)')
+
+    expect(color('.t-hl-dark2')).toBe('var(--highlight-on-dark-2)')
+    const tokens = customPropValues(readFileSync(join(V2_DIR, 'tokens', 'colors.css'), 'utf8'))
+    expect(tokens.has('--highlight-on-dark-2'), '--highlight-on-dark-2 is defined').toBe(true)
+  })
+})

@@ -142,3 +142,17 @@ describe('PL-05 the panel link books a demo on every tab', () => {
     }
   })
 })
+
+describe('PL-06 the panel is not a tab stop', () => {
+  it('has no tabindex, and the next tab stop after the selected tab is the panel link', async () => {
+    const c = await mount()
+    const panel = panelOf(c)
+    expect(panel.hasAttribute('tabindex')).toBe(false)
+
+    const stops = [...c.querySelectorAll<HTMLElement>('button, [tabindex]')].filter((el) => el.tabIndex >= 0)
+    const selected = tabsIn(c)[selectedIndex(tabsIn(c))]
+    const next = stops[stops.indexOf(selected) + 1]
+    expect(next, 'control: a stop follows the selected tab').toBeDefined()
+    expect(next).toBe(panel.querySelector('button.ds-btn--text'))
+  })
+})

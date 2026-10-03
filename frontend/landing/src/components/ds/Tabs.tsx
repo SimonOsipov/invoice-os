@@ -10,6 +10,7 @@ type TabsProps = {
   className?: string
   'aria-label'?: string
   panelStyle?: CSSProperties
+  panelFocusable?: boolean
   children?: ReactNode
 }
 
@@ -33,7 +34,7 @@ export function useTabKeys(ids: string[], value: string, onChange: (id: string) 
   return { selected, tabIndexOf, onKeyDown, ref }
 }
 
-export function Tabs({ tabs, value, onChange, className, 'aria-label': ariaLabel, panelStyle, children }: TabsProps) {
+export function Tabs({ tabs, value, onChange, className, 'aria-label': ariaLabel, panelStyle, panelFocusable = true, children }: TabsProps) {
   const base = useId()
   const panelId = `${base}-panel`
   const tabId = (id: string) => `${base}-tab-${id}`
@@ -68,7 +69,7 @@ export function Tabs({ tabs, value, onChange, className, 'aria-label': ariaLabel
         role="tabpanel"
         id={panelId}
         className="ds-tabs-panel"
-        tabIndex={0}
+        tabIndex={panelFocusable ? 0 : undefined}
         aria-labelledby={selected < 0 ? undefined : tabId(tabs[selected].id)}
         style={panelStyle}
       >

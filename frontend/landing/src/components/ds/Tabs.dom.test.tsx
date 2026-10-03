@@ -313,4 +313,16 @@ describe('Tabs', () => {
     expect(unnamed, 'control: the tablist rendered').not.toBeNull()
     expect(unnamed?.hasAttribute('aria-label')).toBe(false)
   })
+
+  it('TB-17 the panel is a tab stop unless panelFocusable is false, and stays a labelled tabpanel either way', async () => {
+    const dflt = await mount({ value: 'approve' })
+    expect(dflt.querySelector('[role=tabpanel]')?.getAttribute('tabindex')).toBe('0')
+
+    const off = await mount({ value: 'approve', panelFocusable: false })
+    const panel = off.querySelector('[role=tabpanel]')
+    expect(panel, 'control: the panel rendered').not.toBeNull()
+    expect(panel?.hasAttribute('tabindex')).toBe(false)
+    expect(panel?.getAttribute('aria-labelledby')).toBe(tabsIn(off)[1].id)
+    expect(tabsIn(off)[1].getAttribute('aria-controls')).toBe(panel?.id)
+  })
 })

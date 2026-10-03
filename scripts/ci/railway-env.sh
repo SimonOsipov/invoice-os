@@ -2028,9 +2028,9 @@ ensure_bucket() {
   exit 1
 }
 
-# A fork must never archive WAL; the image archives only while WAL_ARCHIVE_BUCKET is non-empty.
+# A fork must not archive into production's bucket. Blank WAL_ARCHIVE_*; if Railway keeps a BUCKET value, it must differ from production's.
 ensure_postgres_archive_off() {
-  local env_id="$1" names status pairs=() n
+  local env_id="$1" names status pairs=() n kept="" fork_bucket prod_bucket
 
   auth_read "$env_id" "$RAILWAY_SVC_POSTGRES_ID" Postgres
   if ! printf '%s' "$GQL_RESPONSE" | jq -e '.data.variables | type == "object"' >/dev/null 2>&1; then
@@ -2057,12 +2057,35 @@ ensure_postgres_archive_off() {
   # set_service_vars splits its secrets argument on spaces.
   set_service_vars "$env_id" "$RAILWAY_SVC_POSTGRES_ID" Postgres "${names//$'\n'/ }" "${pairs[@]}"
   for n in $names; do
-    if [ "$(auth_kind "$GQL_RESPONSE" "$n")" != empty ]; then
-      echo "::error::Postgres.$n is not blank in environment $env_id after the write. Value not printed."
-      exit 1
-    fi
+    case "$(auth_kind "$GQL_RESPONSE" "$n")" in
+      unreadable)
+        echo "::error::Postgres's variable map in environment $env_id is unreadable after the write, so $n could not be checked. Value not printed."
+        exit 1 ;;
+      present) kept+="${kept:+ }$n" ;;
+    esac
   done
-  echo "Postgres WAL archiving blank in $env_id: ${names//$'\n'/ }."
+  if [ -z "$kept" ]; then
+    echo "Postgres WAL archiving blank in $env_id: ${names//$'\n'/ }."
+    return 0
+  fi
+
+  fork_bucket=$(printf '%s' "$GQL_RESPONSE" | jq -r '.data.variables.WAL_ARCHIVE_BUCKET // ""')
+  if [ -z "$fork_bucket" ]; then
+    echo "Postgres in $env_id keeps $kept after the blank; WAL_ARCHIVE_BUCKET is blank, so the fork does not archive."
+    return 0
+  fi
+
+  auth_read "$RAILWAY_DEV_ENVIRONMENT_ID" "$RAILWAY_SVC_POSTGRES_ID" Postgres
+  prod_bucket=$(printf '%s' "$GQL_RESPONSE" | jq -r 'if (.data.variables | type) == "object" then .data.variables.WAL_ARCHIVE_BUCKET // "" else "" end' 2>/dev/null) || prod_bucket=""
+  if [ -z "$prod_bucket" ]; then
+    echo "::error::Postgres in environment $env_id keeps WAL_ARCHIVE_BUCKET, and production's WAL_ARCHIVE_BUCKET is unreadable or empty, so isolation from production's bucket is not proven. Value not printed."
+    exit 1
+  fi
+  if [ "$fork_bucket" = "$prod_bucket" ]; then
+    echo "::error::Postgres in environment $env_id keeps WAL_ARCHIVE_BUCKET equal to production's, so the fork would archive into production's bucket. Value not printed."
+    exit 1
+  fi
+  echo "Postgres in $env_id keeps WAL_ARCHIVE_* ($kept); its WAL_ARCHIVE_BUCKET differs from production's, so the fork archives to its own bucket."
 }
 
 # cmd_reconcile_fork <environment-id>

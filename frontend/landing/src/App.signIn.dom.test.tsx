@@ -90,7 +90,7 @@ describe('F-2: the sign-in control opens the sign-in modal', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('F2-c/d/e: clicking opens the Sign-in dialog, does not navigate, and Close restores the page', async () => {
+  it('F2-c/d/e: clicking opens the Platform login dialog, does not navigate, and Close restores the page', async () => {
     await mountApp()
     const header = document.querySelector('header')!
     const sectionsBefore = document.querySelectorAll('section[id]').length
@@ -99,10 +99,10 @@ describe('F-2: the sign-in control opens the sign-in modal', () => {
 
     await clickByText(header, SIGN_IN_CTA)
 
-    // F2-c: exactly one dialog, and it is the Sign-in one -- not Book a demo.
+    // F2-c: exactly one dialog, and it is the Platform login one -- not Book a demo.
     expect(document.querySelectorAll(DIALOG).length).toBe(1)
     const dialog = document.querySelector(DIALOG)!
-    expect(dialog.getAttribute('aria-label')).toBe('Sign in')
+    expect(dialog.getAttribute('aria-label')).toBe('Platform login')
 
     // F2-d: no navigation.
     expect(window.location.pathname).toBe(pathBefore)
@@ -136,7 +136,7 @@ describe('F-2: the sign-in control opens the sign-in modal', () => {
 
     await clickByText(header, SIGN_IN_CTA)
     expect(document.querySelectorAll(DIALOG).length).toBe(1)
-    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Sign in')
+    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Platform login')
     expect(consoleError).not.toHaveBeenCalled()
   })
 })
@@ -151,7 +151,7 @@ describe('F-2 footer: Open the cockpit', () => {
 
     expect(document.querySelectorAll(DIALOG).length).toBe(1)
     const dialog = document.querySelector(DIALOG)!
-    expect(dialog.getAttribute('aria-label')).toBe('Sign in')
+    expect(dialog.getAttribute('aria-label')).toBe('Platform login')
     await act(async () => {
       dialog.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click()
     })
@@ -175,7 +175,7 @@ describe('F-2 menu: sign-in from the burger menu', () => {
     await clickByText(menu!, SIGN_IN_CTA)
 
     expect(document.querySelectorAll(DIALOG).length).toBe(1)
-    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Sign in')
+    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Platform login')
     expect(document.querySelector('.a-menu'), 'the menu closes before the modal opens').toBeNull()
     expect(burger!.getAttribute('aria-expanded')).toBe('false')
     expect(consoleError).not.toHaveBeenCalled()
@@ -215,7 +215,7 @@ describe('AUTH-05-07: the boot sign-in params', () => {
   it('a no-workspace outcome opens the modal with its message', async () => {
     await bootAt('/?signin=no-workspace')
     expect(document.querySelectorAll(DIALOG).length).toBe(1)
-    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Sign in')
+    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Platform login')
     const got = dialogAlerts()
     expect(got.length).toBe(1)
     expect(got[0].textContent).toContain(NO_WORKSPACE)

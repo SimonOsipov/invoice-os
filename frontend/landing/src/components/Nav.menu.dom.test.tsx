@@ -194,7 +194,7 @@ describe('HD-17 menu links share the nav link current state', () => {
     for (const s of [
       { id: 'top', top: -500 },
       { id: 'problem', top: 10 },
-      { id: 'modules', top: 500 },
+      { id: 'solution', top: 500 },
     ]) {
       const el = document.createElement('section')
       el.id = s.id
@@ -266,6 +266,23 @@ describe('HD-07c the menu lists every NAV_LINKS entry in order, prefixed or not'
     toggle()
     expect(Array.from(menu()!.querySelectorAll('a.a-menu-link')).map((a) => a.getAttribute('href'))).toEqual(hrefs)
     expect(spy.mock.calls).toEqual([])
+  })
+})
+
+describe('NV-10 the menu lists the three sections', () => {
+  it.each([
+    ['', ''],
+    ['/', '/'],
+  ])('with hrefPrefix %j the open menu holds exactly The problem, The solution, Platform', (hrefPrefix, p) => {
+    mount(hrefPrefix ? { hrefPrefix } : {})
+    toggle()
+    const links = Array.from(menu()!.querySelectorAll('a.a-menu-link'))
+    expect(links.length, 'control: the menu rendered its links').toBeGreaterThanOrEqual(1)
+    expect(links.map((a) => [a.textContent, a.getAttribute('href')])).toEqual([
+      ['The problem', `${p}#problem`],
+      ['The solution', `${p}#solution`],
+      ['Platform', `${p}#platform`],
+    ])
   })
 })
 

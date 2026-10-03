@@ -27,8 +27,9 @@ class StubIntersectionObserver {
 const SECTIONS: { id: string; top: number }[] = [
   { id: 'top', top: -500 },
   { id: 'problem', top: 10 }, // last section crossed at threshold 87 — the expected winner
-  { id: 'modules', top: 500 },
-  { id: 'how', top: 900 },
+  { id: 'solution', top: 500 },
+  { id: 'platform', top: 900 },
+  { id: 'compliance', top: 1300 },
 ]
 
 let container: HTMLDivElement
@@ -115,5 +116,35 @@ describe('Nav scroll-spy follows --header-h across the breakpoint', () => {
     resizeTo(73)
     await frames()
     expect(currentHref(), 'no link is current once the last crossed section is top').toBeUndefined()
+  })
+})
+
+describe('NV-11 the scroll-spy marks The solution and Platform current, and clears past them', () => {
+  const setTops = (tops: Record<string, number>) => {
+    for (const [id, top] of Object.entries(tops)) {
+      document.getElementById(id)!.getBoundingClientRect = () => ({ top }) as DOMRect
+    }
+  }
+  const FAR = 5000
+  const cases: [string, Record<string, number>, string | null][] = [
+    ['The problem', { problem: 10, solution: FAR, platform: FAR, compliance: FAR }, '#problem'],
+    ['The solution', { problem: -900, solution: 10, platform: FAR, compliance: FAR }, '#solution'],
+    ['Platform', { problem: -1800, solution: -900, platform: 10, compliance: FAR }, '#platform'],
+    ['Compliance', { problem: -2700, solution: -1800, platform: -900, compliance: 10 }, null],
+  ]
+
+  it.each(
+    cases.flatMap(([name, tops, href]) => [
+      { title: `${name} crossed, no prefix`, tops, href, hrefPrefix: '' },
+      { title: `${name} crossed, prefix slash`, tops, href, hrefPrefix: '/' },
+    ]),
+  )('$title: the nav marks only its own link current', ({ tops, href, hrefPrefix }) => {
+    setTops(tops)
+    act(() => {
+      root.render(createElement(Nav, { onSignIn: () => {}, onBookDemo: () => {}, ...(hrefPrefix ? { hrefPrefix } : {}) }))
+    })
+    expect(container.querySelectorAll('.ios-nav-link'), 'control: the three links rendered').toHaveLength(3)
+    const current = Array.from(container.querySelectorAll('a[aria-current="true"]')).map((a) => a.getAttribute('href'))
+    expect(current).toEqual(href ? [`${hrefPrefix}${href}`] : [])
   })
 })

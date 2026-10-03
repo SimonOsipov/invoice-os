@@ -257,13 +257,37 @@ describe('NV-04 How it works is gone from the page and the data', () => {
   const SECTION_ID = `id="${'ho' + 'w'}"`
   const BANNER = ['HOW IT', 'WORKS'].join(' ')
   const DATA_KEY = 'STE' + 'PS'
+  const OLD_COPY = ['Connect or ' + 'import', 'Approve, archive &amp; ' + 'transmit', 'No rip-and-' + 'replace', 'in three ' + 'steps']
 
   it('the markup has no How-it-works section id or banner, and data has no step list; the Platform id is present', () => {
     const html = renderAppAt('/')
     expect(html, 'control: the Platform section rendered').toContain('id="platform"')
+    expect(html, 'control: the page escapes & as &amp;, so the needles below can match').toContain('&amp;')
     expect(html).not.toContain(SECTION_ID)
     expect(html).not.toContain(BANNER)
+    for (const copy of OLD_COPY) expect(html, `old step copy "${copy}" is back`).not.toContain(copy)
     expect(Object.keys(data), 'control: data.tsx exports are enumerated').not.toHaveLength(0)
     expect(Object.keys(data)).not.toContain(DATA_KEY)
+  })
+})
+
+describe('NV-12 no in-page anchor on the page resolves to a missing section', () => {
+  const allHashes = (html: string) => [...html.matchAll(/href="\/?(#[^"]+)"/g)].map((m) => m[1])
+
+  it('at / every href="#x" in the whole page has exactly one <section id="x">, and the nav, hero and footer anchors are in the population', () => {
+    const html = renderAppAt('/')
+    const hashes = allHashes(html)
+    for (const h of ['#top', '#problem', '#solution', '#platform']) {
+      expect(hashes, `control: ${h} is linked from the page`).toContain(h)
+    }
+    expect(unresolvedHashes(html, hashes)).toEqual([])
+  })
+
+  it('at /privacy every /#x anchor resolves against the sales page it links to', () => {
+    const privacy = allHashes(renderAppAt('/privacy'))
+    for (const h of ['#problem', '#solution', '#platform']) {
+      expect(privacy, `control: /privacy links ${h}`).toContain(h)
+    }
+    expect(unresolvedHashes(renderAppAt('/'), privacy)).toEqual([])
   })
 })

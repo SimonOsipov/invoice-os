@@ -289,6 +289,12 @@ test('landing nav: the hero Explore the platform button lands on Platform', asyn
   await page.locator('#top a.ds-btn--ghostDark[href="#platform"]').click()
 
   await expect(page).toHaveURL(/#platform$/)
+  // Two-sided: a lower bound alone passes before the smooth scroll has moved.
+  await expect
+    .poll(async () => Math.abs((await page.locator('#platform').boundingBox())!.y - headerH), {
+      message: `#platform did not settle at the ${headerH}px header edge after the hero click`,
+    })
+    .toBeLessThanOrEqual(PX)
   await expect
     .poll(async () => (await page.locator('#platform h2').first().boundingBox())!.y, {
       message: `the #platform heading is occluded by the ${headerH}px header after the hero click`,

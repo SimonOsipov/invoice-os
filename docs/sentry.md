@@ -12,7 +12,7 @@ Ops page for error, trace and log reporting. The Sentry org is EU (`https://de.s
 
 `auth` (GoTrue) has no Sentry SDK and is not a deployable here; `fleet-gate` exempts it by name.
 
-The test event has the fingerprint `["sentry-test-event", <service>]`: one issue per deployable, and a repeat joins the same issue. The only alert rule is "A new issue is created", so a repeat sends no email. Prove a retest by the issue's event count rising, or by its new event.
+The test event has the fingerprint `["sentry-test-event", <service>]`: one issue per deployable, and a repeat joins the same issue. The alert rule is Sentry's default "Send a notification for high priority issues" (decision #59), so a repeat joins the existing issue and sends no new email. Prove a retest by the issue's event count rising, or by its new event.
 
 ## Variables
 
@@ -48,8 +48,8 @@ The user does every step. Production writes are the user's; an agent never write
 
 1. Read the preconditions. Evidence: `epic/sentry` is in `main`; `GET https://api.ascomply.com/healthz/fleet` builds and each SPA's `/build.txt` equal a `main` commit that contains it; a PR run after SENTRY-01 printed `Sentry off` (run 37040249736).
 2. In the EU Sentry org, create `asc-backend` (platform Go) and `asc-frontend` (platform React). Evidence: both project URLs.
-3. In each project, add an issue alert "A new issue is created" that emails the user. In each project, open Settings → Security & Privacy and turn on the setting that prevents storing IP addresses. Evidence: both alerts exist, both settings are on.
-4. In the organisation, read Settings → Spike Protection. Evidence: the state, reported to the agent session.
+3. In each project, keep the default alert "Send a notification for high priority issues" (it emails the user). In each project, open Settings → Security & Privacy and turn on the setting that prevents storing IP addresses. Evidence: the default alert exists in both projects, both settings are on.
+4. In the organisation, read Settings → Spike Protection. The plan may be a trial: record the plan name with the state, and read it again after a trial ends. Evidence: the state and the plan name, reported to the agent session.
 5. Open Settings → Developer Settings → Organization Tokens and create a token (`sntrys_…`). A user token (`sntryu_…`) makes the upload skip. Evidence: token created; the value goes nowhere else.
 6. Generate the passphrase: `openssl rand -hex 24`. Keep it in a password manager. Compute its digest with the command under `VITE_SENTRY_TEST_DIGEST`. Evidence: the digest is ready.
 7. In the Railway production environment (`6c864094-6a06-452f-8495-be77d8a94fe7`), write the variables. Never seal them. Pass `--skip-deploys` on every write.
@@ -64,11 +64,11 @@ The user does every step. Production writes are the user's; an agent never write
    - Watch one SPA build log. `[sentry-vite-plugin]` must upload. "No auth token provided" means the token did not reach the build. A stall in the upload means Sentry is unreachable.
    - Evidence: the run id, the deployment times, the old and new asset names; `/healthz/fleet` shows `"sentry":"on"` on the 9 Go services and `docling`.
 9. The backends sent their test events at boot. In each SPA (`www.`, `app.`, `ops.`, `sup.ascomply.com`), open the browser console and run `await __ascSentryTest('<passphrase>')`. Call it once per page load. The SDK's `Dedupe` drops an identical second event on the same page while the call still prints an id, so reload before the next call. Evidence: the event id from each SPA.
-10. Confirm one alert email arrived per deployable. Evidence: the emails.
+10. Confirm one alert email arrived per deployable. Evidence: the emails. If no email arrives, read the issue's priority in Sentry and record it.
 11. Remove the test triggers.
     - On each backend: `railway variable delete SENTRY_TEST_EVENT -s <svc> -e <env id>`, then `railway redeploy -s <svc> -e <env id> -y`. A delete starts no deploy and the running container keeps the variable, so a plain restart fires again.
     - On each SPA: delete `VITE_SENTRY_TEST_DIGEST`, then rebuild the four SPAs as in step 8: re-run the `Dev Env` run of `main`'s head with `gh run rerun <id>`, never `--failed`. Record each SPA's entry asset name before the re-run. A Railway `redeploy` re-serves the old bundle.
-    - To test an SPA again later, choose a new passphrase, set its digest and rebuild the SPA as above: the digest is baked at build. The retest adds an event to the existing issue and sends no email.
+    - To test an SPA again later, choose a new passphrase, set its digest and rebuild the SPA as above: the digest is baked at build. The retest adds an event to the existing issue and sends no new email.
     - To rotate or after a leak, delete the digest variable and rebuild as above. A leaked passphrase can only send test events.
     - Evidence: neither variable is listed on any service. Each SPA's entry asset name differs from the one recorded before the re-run. `typeof window.__ascSentryTest === 'undefined'` in the console on `www.`, `app.`, `ops.` and `sup.ascomply.com`.
 12. Sign in to `app.ascomply.com` and validate one invoice, for the trace check. Evidence: the invoice id.
@@ -116,7 +116,7 @@ OPEN until the agent fills it after go-live.
 
 OPEN until filled after go-live.
 
-Method: Sentry Stats, 7 days from the go-live deploy, multiplied by 30/7.
+Method: Sentry Stats, 7 days from the go-live deploy, multiplied by 30/7. Record the plan name with the reading. A trial plan has higher quotas: compare against the plan in force after the trial (the free-plan quotas below).
 
 | Signal | Quota | 7-day measured | 30-day projection | Share of quota |
 |---|---|---|---|---|

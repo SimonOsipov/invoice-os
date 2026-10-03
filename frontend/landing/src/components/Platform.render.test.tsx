@@ -158,7 +158,7 @@ describe('PL-03r the Validate result card keeps the card frame', () => {
   })
 })
 
-describe('PL-09 the page places #platform after #solution and before #how', () => {
+describe('PL-09 the page places #platform after #solution and before #compliance', () => {
   it('lists the three section ids consecutively, with #platform once', () => {
     const tpl = document.createElement('template')
     tpl.innerHTML = renderToStaticMarkup(createElement(App))
@@ -166,7 +166,8 @@ describe('PL-09 the page places #platform after #solution and before #how', () =
     expect(ids.filter((id) => id === 'platform')).toHaveLength(1)
     const i = ids.indexOf('solution')
     expect(i, 'control: #solution rendered').toBeGreaterThan(-1)
-    expect(ids.slice(i, i + 3)).toEqual(['solution', 'platform', 'how'])
+    expect(ids.slice(i, i + 3)).toEqual(['solution', 'platform', 'compliance'])
+    expect(ids, 'How it works left the page').not.toContain('how')
   })
 
   it('the rendered page makes no cryptographic claim, and the control page does render the Platform copy', () => {

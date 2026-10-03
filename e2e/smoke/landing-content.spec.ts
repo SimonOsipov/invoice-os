@@ -2,8 +2,8 @@ import { expect, test, type Page } from '@playwright/test'
 import { resolveTarget } from '../targets'
 import { seedConsent } from './landingConsent'
 
-// The landing page's content contract (TEST-01-07): F-6 audience strip, F-7 how-it-works
-// steps, and F-5's live-validation preview. Named for the capability the three share
+// The landing page's content contract (TEST-01-07): F-6 audience strip and F-5's
+// live-validation preview. Named for the capability they share
 // (docs/e2e-convention.md's "organize by capability, not by date"), alongside
 // landing-nav/landing-demo/landing-privacy/landing-consent.
 //
@@ -15,16 +15,16 @@ import { seedConsent } from './landingConsent'
 //
 // TARGET SURFACE: `landing` is a static marketing surface (docs/e2e-convention.md → "Target
 // surface"), so these assertions pin what the deployed build actually SERVES, not a backend
-// contract — there is no API behind any of F-5/F-6/F-7.
+// contract — there is no API behind F-5 or F-6.
 //
-// WHY THIS IS E2E AND NOT UNIT: F-6 and F-7 carry `unit_applicable = 0` in the system map — a
-// unit test on either raises no coverage, because the unit slot is not in their denominator.
-// Only a Playwright citation can close them. F-5 needs both dimensions; its unit half lives in
+// WHY THIS IS E2E AND NOT UNIT: F-6 carries `unit_applicable = 0` in the system map — a
+// unit test on it raises no coverage, because the unit slot is not in its denominator.
+// Only a Playwright citation can close it. F-5 needs both dimensions; its unit half lives in
 // Hero.validationPreview.dom.test.tsx (TEST-01-03).
 //
 // RETYPED, NOT IMPORTED — the opposite of the unit tests' convention, and deliberately so.
 // Every expected value below is retyped from its source rather than imported: importing
-// TrustStrip.tsx#AUDIENCES / data.tsx#STEPS / data.tsx#HERO_CHECKS into e2e/ would make these
+// TrustStrip.tsx#AUDIENCES / data.tsx#HERO_CHECKS into e2e/ would make these
 // assertions agree with themselves no matter what the deployed build actually serves — the
 // same reasoning landing-demo.spec.ts already applies at :41-46. Unit tests do the opposite
 // (assert against the imported constant) because there the risk runs the other way: a retyped
@@ -36,9 +36,7 @@ import { seedConsent } from './landingConsent'
 //
 // LOCAL GREEN IS NOT EXPECTED YET. `[data-strip]` / `[data-tally]` (TEST-01-01) exist in this
 // branch's source but are not deployed anywhere. This spec's first real green run is this
-// story's own PR deploy gate, once that PR has deployed. `#how`'s hook (`id="how"`) already
-// ships in production, which is why its test is expected to pass against a production target
-// today while the other two are not.
+// story's own PR deploy gate, once that PR has deployed.
 
 const LANDING_URL = resolveTarget('LANDING_URL')
 
@@ -54,15 +52,6 @@ const AUDIENCE_SEGMENTS = [
 // The accounting-system / data-format wordmarks the map drifted to on 2026-09-05 (this
 // story's Objective) — the criterion's own negative half, and the half that actually broke.
 const FORBIDDEN_ACCOUNTING_TERMS = ['SAP', 'NetSuite', 'Sage', 'QuickBooks', 'Zoho', 'CSV/XLSX'] as const
-
-// F-7, retyped from frontend/landing/src/data.tsx#STEPS, in order.
-const STEP_TITLES = ['Connect or import', 'Validate against MBS rules — and your own', 'Approve, archive & transmit'] as const
-const STEP_NUMBERS = ['01', '02', '03'] as const
-const STEP_POINTS: ReadonlyArray<readonly string[]> = [
-  ['REST API & webhooks', 'CSV / XLSX / PDF import', 'ERP connectors'],
-  ['Golden MBS rule pack', 'Your own company rules', 'Inline fix suggestions'],
-  ['Approval workflow', 'PDF + JSON/XML/UBL export', 'Immutable audit log'],
-]
 
 type CheckTag = 'PASS' | 'WARN' | 'FAIL'
 
@@ -151,33 +140,6 @@ test('landing content: the audience strip names buyer segments, never an account
   )
   for (const term of FORBIDDEN_ACCOUNTING_TERMS) {
     expect(stripText, `the audience strip names the accounting system/format "${term}"`).not.toContain(term)
-  }
-
-  expectNoConsoleErrors(sinks)
-})
-
-// E2 — F-7. Three ordered, numbered steps, each naming its own capabilities.
-test('landing content: How it works renders three ordered, numbered steps', async ({ page }) => {
-  const sinks = await openLanding(page)
-
-  const how = page.locator('#how')
-  await expect(how, '#how did not resolve to exactly one element').toHaveCount(1)
-
-  const headings = how.locator('h3')
-  await expect(headings, '#how does not hold exactly 3 h3 headings').toHaveCount(STEP_TITLES.length)
-  await expect(headings).toHaveText([...STEP_TITLES])
-
-  const numbers = how.locator('.mono')
-  await expect(numbers, '#how does not hold exactly 3 step numbers').toHaveCount(STEP_NUMBERS.length)
-  await expect(numbers).toHaveText([...STEP_NUMBERS])
-
-  const cells = how.locator('.ios-grid > div')
-  await expect(cells, '#how does not hold exactly 3 grid cells').toHaveCount(STEP_POINTS.length)
-  for (let i = 0; i < STEP_POINTS.length; i++) {
-    const cellText = (await cells.nth(i).textContent()) ?? ''
-    for (const point of STEP_POINTS[i]) {
-      expect(cellText, `step ${i + 1}'s cell is missing capability "${point}"`).toContain(point)
-    }
   }
 
   expectNoConsoleErrors(sinks)

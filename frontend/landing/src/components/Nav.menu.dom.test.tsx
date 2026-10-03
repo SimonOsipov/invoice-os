@@ -232,9 +232,10 @@ describe('HD-07b aria-controls names the same menu id at rest and while open', (
 })
 
 describe('HD-07c the menu lists every NAV_LINKS entry in order, prefixed or not', () => {
+  // The two V851 entries no section owns yet; the real list already holds the other three.
   const EXTRA = [
-    { label: 'The solution', href: '#solution' },
-    { label: 'Platform', href: '#platform' },
+    { label: "Who it's for", href: '#solutions' },
+    { label: 'Integrations', href: '#integrations' },
   ]
   let before: number
   beforeEach(() => {
@@ -254,6 +255,17 @@ describe('HD-07c the menu lists every NAV_LINKS entry in order, prefixed or not'
     expect(links.map((a) => [a.textContent, a.getAttribute('href')])).toEqual(
       NAV_LINKS.map((l) => [l.label, `${p}${l.href}`]),
     )
+  })
+
+  it('NV-09 the grown list holds distinct hrefs and mounts without a duplicate-key warning', () => {
+    const hrefs = NAV_LINKS.map((l) => l.href)
+    expect(hrefs.length, 'control: the fixture grew the list').toBe(before + EXTRA.length)
+    expect(new Set(hrefs).size, `duplicate href in ${JSON.stringify(hrefs)}`).toBe(hrefs.length)
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mount()
+    toggle()
+    expect(Array.from(menu()!.querySelectorAll('a.a-menu-link')).map((a) => a.getAttribute('href'))).toEqual(hrefs)
+    expect(spy.mock.calls).toEqual([])
   })
 })
 

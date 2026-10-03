@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import App from './App'
+import * as data from './data'
 import { PLATFORM_LINKS } from './components/Footer'
 
 // App.tsx reads window.location.pathname at render time (not just inside an
@@ -53,7 +54,7 @@ describe('FT-10 App SSR wiring: hrefPrefix reaches Footer with the right polarit
   })
 })
 
-// PLATFORM_LINKS is empty today, so the polarity of hrefPrefix is only observable on a planted list.
+// Planted lists observe the hrefPrefix polarity whatever the live list holds.
 describe('FT-10 / AN-03 with PLATFORM_LINKS populated', () => {
   const saved = [...PLATFORM_LINKS]
   const plant = (hrefs: string[]) =>
@@ -61,19 +62,19 @@ describe('FT-10 / AN-03 with PLATFORM_LINKS populated', () => {
   afterEach(() => void PLATFORM_LINKS.splice(0, PLATFORM_LINKS.length, ...saved))
 
   it('at /privacy the planted links are /#x and /privacy is exact', () => {
-    plant(['#solution', '#how'])
+    plant(['#solution', '#platform'])
     expect(PLATFORM_LINKS.length, 'control: the fixture is in place').toBe(2)
-    expect(footerHrefs(footerSlice(renderAppAt('/privacy')))).toEqual(['/#solution', '/#how', '/privacy'])
+    expect(footerHrefs(footerSlice(renderAppAt('/privacy')))).toEqual(['/#solution', '/#platform', '/privacy'])
   })
 
   it('at / the planted links keep their bare #x and /privacy is exact', () => {
-    plant(['#solution', '#how'])
+    plant(['#solution', '#platform'])
     expect(PLATFORM_LINKS.length, 'control: the fixture is in place').toBe(2)
-    expect(footerHrefs(footerSlice(renderAppAt('/')))).toEqual(['#solution', '#how', '/privacy'])
+    expect(footerHrefs(footerSlice(renderAppAt('/')))).toEqual(['#solution', '#platform', '/privacy'])
   })
 
   it('AN-03 reads the live list: resolving links pass, a ghost link is reported through the real App', () => {
-    plant(['#solution', '#how', '#pricing'])
+    plant(['#solution', '#platform', '#pricing'])
     const html = renderAppAt('/')
     const hashes = footerHrefs(footerSlice(html)).filter((h) => h.startsWith('#') && h.length > 1)
     expect(hashes).toHaveLength(3)
@@ -138,7 +139,7 @@ describe('AC-11: the Cookie choices control is in the footer on every route the 
   })
 })
 
-describe('RESKIN-01-03 (AC 5): the four former --gradient-hero sites render the v2 flat dark band', () => {
+describe('RESKIN-01-03 (AC 5): the former --gradient-hero sites render the v2 flat dark band', () => {
   const html = renderAppAt('/')
 
   function section(id: string): string {
@@ -150,13 +151,6 @@ describe('RESKIN-01-03 (AC 5): the four former --gradient-hero sites render the 
   it('SO-07 the Solution band is flat: no inline background', () => {
     const open = /^<section id="solution"[^>]*>/.exec(section('solution'))?.[0]
     expect(open).toBe('<section id="solution" class="ds-section band-dark">')
-  })
-
-  it('HowItWorks step panel is flat var(--surface) with no background-image', () => {
-    const panel = /<div class="ios-grid ios-3"[^>]*>/.exec(section('how'))?.[0] ?? ''
-    expect(panel, 'control: the panel was found').toContain('gap:1px')
-    expect(panel).toContain('background:var(--surface);')
-    expect(panel).not.toContain('background-image')
   })
 
   it('only the featured price card is var(--surface); the other two stay var(--bg-2)', () => {
@@ -233,5 +227,39 @@ describe('AN-03 every footer in-page link resolves to one section', () => {
     const hashes = footerHrefs(footerSlice(html)).filter((h) => h.startsWith('#') && h.length > 1)
     expect(hashes, 'the footer hashes are not the PLATFORM_LINKS population').toHaveLength(PLATFORM_LINKS.length)
     expect(unresolvedHashes(html, hashes)).toEqual([])
+  })
+})
+
+describe('NV-03 the hero Explore anchors land on Platform', () => {
+  const heroHashes = (html: string) => {
+    const start = html.indexOf('<section id="top"')
+    expect(start, 'expected <section id="top">').toBeGreaterThan(-1)
+    const slice = html.slice(start, html.indexOf('</section>', start))
+    return [...slice.matchAll(/href="(#[^"]*)"/g)].map((m) => m[1])
+  }
+
+  it('both in-page hrefs inside #top are #platform and resolve; the helper reports a planted #ghost', () => {
+    const html = renderAppAt('/')
+    expect(heroHashes(html)).toEqual(['#platform', '#platform'])
+    expect(unresolvedHashes(html, heroHashes(html))).toEqual([])
+
+    const ghost = html.replace('href="#platform"', 'href="#ghost"')
+    expect(unresolvedHashes(ghost, heroHashes(ghost)), 'control: a ghost hero anchor is reported').toEqual(['#ghost'])
+  })
+})
+
+describe('NV-04 How it works is gone from the page and the data', () => {
+  // Needles are split so the removal sweep (NV-08) does not match this test.
+  const SECTION_ID = `id="${'ho' + 'w'}"`
+  const BANNER = ['HOW IT', 'WORKS'].join(' ')
+  const DATA_KEY = 'STE' + 'PS'
+
+  it('the markup has no How-it-works section id or banner, and data has no step list; the Platform id is present', () => {
+    const html = renderAppAt('/')
+    expect(html, 'control: the Platform section rendered').toContain('id="platform"')
+    expect(html).not.toContain(SECTION_ID)
+    expect(html).not.toContain(BANNER)
+    expect(Object.keys(data), 'control: data.tsx exports are enumerated').not.toHaveLength(0)
+    expect(Object.keys(data)).not.toContain(DATA_KEY)
   })
 })

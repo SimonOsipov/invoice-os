@@ -23,7 +23,7 @@ const LANDING_URL = resolveTarget('LANDING_URL')
 // The nav targets, in DOM order. Mirrors NAV_LINKS in
 // frontend/landing/src/components/Nav.tsx. Sections without a link, such as `#demo`,
 // are what E8 parks in.
-const NAV_HREFS = ['#problem'] as const
+const NAV_HREFS = ['#problem', '#solution', '#platform'] as const
 
 // Sub-pixel rects: a post-jump section top measures a fraction off the header's
 // bottom edge. Every geometry comparison carries this slack. It is NOT a header
@@ -276,6 +276,24 @@ test('landing nav: no link is marked current outside the nav sections', async ({
     })
     .toBeGreaterThan(headerH)
   await expect(nav.locator('[aria-current]')).toHaveCount(0)
+
+  expectNoConsoleErrors(errors)
+})
+
+// E9 - the hero's "Explore the platform" button lands the Platform heading below the header.
+test('landing nav: the hero Explore the platform button lands on Platform', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 })
+  const { errors, headerH } = await openLanding(page)
+
+  // The hero holds two #platform anchors; only the ghost button is the one under test.
+  await page.locator('#top a.ds-btn--ghostDark[href="#platform"]').click()
+
+  await expect(page).toHaveURL(/#platform$/)
+  await expect
+    .poll(async () => (await page.locator('#platform h2').first().boundingBox())!.y, {
+      message: `the #platform heading is occluded by the ${headerH}px header after the hero click`,
+    })
+    .toBeGreaterThanOrEqual(headerH - PX)
 
   expectNoConsoleErrors(errors)
 })

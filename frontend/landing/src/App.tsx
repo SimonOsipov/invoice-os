@@ -7,7 +7,6 @@ import { TrustStrip } from './components/TrustStrip'
 import { Problem } from './components/Problem'
 import { Modules } from './components/Modules'
 import { Platform } from './components/Platform'
-import { HowItWorks } from './components/HowItWorks'
 import { Compliance } from './components/Compliance'
 import { Audience } from './components/Audience'
 import { Developers } from './components/Developers'
@@ -132,7 +131,6 @@ export default function App() {
           <Problem />
           <Modules />
           <Platform onBookDemo={book('platform')} />
-          <HowItWorks />
           <Compliance />
           <Audience onBookDemo={book('audience')} />
           <Developers />

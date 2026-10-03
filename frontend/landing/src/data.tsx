@@ -52,42 +52,6 @@ export const PROBLEMS: HeroCheck[] = PROBLEM_ROWS.map(([label, tag]) =>
 export const CHECKING = { tag: 'CHECKING', icon: 'loader-circle', bg: 'var(--muted)', fg: 'var(--muted-foreground)' } as const
 
 /* ------------------------------------------------------------------ */
-/* How it works — 3 steps                                              */
-/* ------------------------------------------------------------------ */
-
-export type Step = {
-  num: string
-  title: string
-  glyph: ReactNode
-  body: string
-  points: string[]
-}
-
-export const STEPS: Step[] = [
-  {
-    num: '01',
-    title: 'Connect or import',
-    glyph: <Icon paths={['M21 12a9 9 0 1 1-6.2-8.6', 'M21 3v6h-6']} size={20} />,
-    body: 'Pull invoices from your ERP via API, or upload CSV / XLSX from any accounting system, or a PDF or scan of the invoice. No migration.',
-    points: ['REST API & webhooks', 'CSV / XLSX / PDF import', 'ERP connectors'],
-  },
-  {
-    num: '02',
-    title: 'Validate against MBS rules — and your own',
-    glyph: <Icon paths={['m9 12 2 2 4-4', 'M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9Z']} size={20} />,
-    body: 'Every invoice is checked against the golden MBS rule pack — tax IDs, VAT/WHT, totals, duplicates, mandatory fields — plus the rules your company adds on top.',
-    points: ['Golden MBS rule pack', 'Your own company rules', 'Inline fix suggestions'],
-  },
-  {
-    num: '03',
-    title: 'Approve, archive & transmit',
-    glyph: <Icon paths={['M22 11.08V12a10 10 0 1 1-5.93-9.14', 'm22 4-10 10.01-3-3']} size={20} />,
-    body: 'Route for approval, generate branded PDF + UBL data, store an immutable audit trail, and transmit to NRS (Nigeria Revenue Service).',
-    points: ['Approval workflow', 'PDF + JSON/XML/UBL export', 'Immutable audit log'],
-  },
-]
-
-/* ------------------------------------------------------------------ */
 /* Platform — 12 modules                                               */
 /* ------------------------------------------------------------------ */
 

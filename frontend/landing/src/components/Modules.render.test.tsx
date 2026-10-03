@@ -45,11 +45,36 @@ const styleOf = (el: Element | null | undefined): Record<string, string> => {
 const norm = (s: string | null | undefined) => (s ?? '').replace(/\s+/g, ' ').trim()
 const paths = (el: Element | null | undefined) => [...(el?.querySelectorAll('path') ?? [])].map((p) => p.getAttribute('d'))
 
-describe('SO-01 #solution exists once and #modules is gone', () => {
-  it('the page holds one id="solution" and no id="modules"', () => {
+const RETIRED_ID = 'modules'
+
+describe('SO-01 #solution exists once and the retired section id is gone', () => {
+  it('the page holds one id="solution" and none with the retired id', () => {
     const page = toFrag(createElement(App))
     expect(page.querySelectorAll('[id="solution"]').length).toBe(1)
-    expect(page.querySelectorAll('[id="modules"]').length).toBe(0)
+    expect(page.querySelectorAll(`[id="${RETIRED_ID}"]`).length).toBe(0)
+  })
+
+  it('the band is the page <section> between #problem and #how, and holds the only .mod-grid', () => {
+    const page = toFrag(createElement(App))
+    const ids = [...page.querySelectorAll('section[id]')].map((s) => s.id)
+    expect(ids.length, 'control: the page rendered its sections').toBeGreaterThan(3)
+    expect(ids.indexOf('solution')).toBe(ids.indexOf('problem') + 1)
+    expect(ids.indexOf('how')).toBe(ids.indexOf('solution') + 1)
+    expect(page.querySelectorAll('.mod-grid').length).toBe(1)
+    expect(page.querySelectorAll('#solution .mod-grid > .mod-cell').length).toBe(12)
+  })
+
+  it('no element on the page still carries ios-4; the .ios-3 grids are the control', () => {
+    const page = toFrag(createElement(App))
+    expect(page.querySelectorAll('.ios-3').length, 'control: .ios-3 consumers remain').toBeGreaterThan(0)
+    expect(page.querySelectorAll('.ios-4').length).toBe(0)
+  })
+
+  it('neither Q4-retired phrase is anywhere on the page', () => {
+    const text = norm(toFrag(createElement(App)).textContent)
+    expect(text, 'control: the Solution copy is on the page').toContain('compliance solution')
+    expect(text).not.toContain('compliance workflow layer')
+    expect(text).not.toContain('licensed transmission partners')
   })
 })
 
@@ -69,6 +94,17 @@ describe('SO-02 the dark eyebrow and the Q4 H2', () => {
     expect(last?.tagName).toBe('SPAN')
     expect(last?.classList.contains('t-hl-dark2')).toBe(true)
     expect(norm(last?.textContent)).toBe('compliance solution.')
+  })
+
+  it('breaks the line after "invoice": the first line is plain text and the span is on the second', () => {
+    const h2 = ssr().querySelector('h2')
+    const nodes = [...(h2?.childNodes ?? [])]
+    const br = nodes.findIndex((n) => (n as Element).tagName === 'BR')
+    const span = nodes.findIndex((n) => (n as Element).tagName === 'SPAN')
+    expect(br, 'control: the heading has a <br>').toBeGreaterThan(0)
+    expect(span).toBeGreaterThan(br)
+    expect(norm(nodes.slice(0, br).map((n) => n.textContent).join(''))).toBe('ASComply is your invoice')
+    expect(h2?.querySelectorAll('.t-hl-dark2').length).toBe(1)
   })
 })
 
@@ -105,6 +141,17 @@ describe('SO-04 twelve cells in V865-878 order with V icons', () => {
       expect(norm(cell.querySelector('p.t-body-sm.mod-body')?.textContent), `cell ${i} body`).toBe(body)
       expect(paths(cell.querySelector('.mod-icon svg')), `cell ${i} glyph`).toEqual([...GLYPHS[icon]])
       expect(cell.querySelector('.mod-icon svg')?.getAttribute('width'), `cell ${i} icon size`).toBe('20')
+      expect(cell.querySelector('.mod-icon svg')?.getAttribute('stroke-width'), `cell ${i} stroke`).toBe('2')
+      expect(cell.querySelectorAll('h3').length, `cell ${i} h3 count`).toBe(1)
+      expect(cell.querySelectorAll('p').length, `cell ${i} p count`).toBe(1)
+      expect(cell.querySelectorAll('svg').length, `cell ${i} svg count`).toBe(1)
     })
+  })
+
+  it('the 12 cells carry 12 distinct titles and 12 distinct glyphs', () => {
+    const cells = [...ssr().querySelectorAll('.mod-grid > .mod-cell')]
+    expect(cells.length).toBe(12)
+    expect(new Set(cells.map((c) => norm(c.querySelector('h3')?.textContent))).size).toBe(12)
+    expect(new Set(cells.map((c) => paths(c.querySelector('svg')).join('|'))).size).toBe(12)
   })
 })

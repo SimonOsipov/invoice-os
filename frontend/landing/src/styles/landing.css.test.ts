@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import { LANDING_SRC, V2_DIR, customPropValues, declarations, parseRules, selectorParts, type CssRule } from '../cssScan.test.util'
+import { LANDING_SRC, V2_DIR, customPropValues, declarations, parseRules, selectorParts, stripSource, type CssRule } from '../cssScan.test.util'
 
 const LANDING_CSS = readFileSync(join(LANDING_SRC, 'styles', 'landing.css'), 'utf8')
 
@@ -316,6 +316,10 @@ describe('SO-05 the module grid runs 4 / 2 / 1', () => {
 
     expect(modGridFailures(LANDING_CSS)).toEqual([])
     expect(selectors.filter((s) => s.includes('.ios-4'))).toEqual([])
+
+    const ios3 = (px: number) => declared(rules, '.ios-grid.ios-3', 'grid-template-columns', maxWidth(px))
+    expect(ios3(920), 'dropping .ios-4 left the .ios-3 tablet rule').toBe('repeat(2, minmax(0, 1fr)) !important')
+    expect(ios3(600), 'dropping .ios-4 left the .ios-3 phone rule').toBe('1fr !important')
   })
 })
 
@@ -327,7 +331,9 @@ describe('SO-08 the Solution highlight line takes --highlight-on-dark-2', () => 
     expect(color('.t-hl'), 'control: the sibling resolves to its own token').toBe('var(--highlight-on-dark)')
 
     expect(color('.t-hl-dark2')).toBe('var(--highlight-on-dark-2)')
-    const tokens = customPropValues(readFileSync(join(V2_DIR, 'tokens', 'colors.css'), 'utf8'))
-    expect(tokens.has('--highlight-on-dark-2'), '--highlight-on-dark-2 is defined').toBe(true)
+    const colors = stripSource('colors.css', readFileSync(join(V2_DIR, 'tokens', 'colors.css'), 'utf8'))
+    const tokens = customPropValues(colors)
+    expect(tokens.has('--highlight-on-dark'), 'control: the sibling token is defined').toBe(true)
+    expect(tokens.get('--highlight-on-dark-2'), '--highlight-on-dark-2 is defined, outside any comment').toBeTruthy()
   })
 })

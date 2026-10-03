@@ -23,7 +23,7 @@ const ANALYTICS_SRC = readFileSync(join(HERE, 'analytics.ts'), 'utf8')
 const MAIN_SRC = readFileSync(join(HERE, 'main.tsx'), 'utf8')
 const APP_SRC = readFileSync(join(HERE, 'App.tsx'), 'utf8')
 const DEMO_MODAL_SRC = readFileSync(join(HERE, 'components', 'DemoModal.tsx'), 'utf8')
-const CTA_COMPONENTS = ['Nav.tsx', 'Hero.tsx', 'Platform.tsx', 'Coverage.tsx', 'Audience.tsx', 'Pricing.tsx', 'Footer.tsx']
+const CTA_COMPONENTS = ['Nav.tsx', 'Hero.tsx', 'Platform.tsx', 'Coverage.tsx', 'Solutions.tsx', 'Pricing.tsx', 'Footer.tsx']
 const DEMO_LEAD_FORM_PATH = join(HERE, 'components', 'DemoLeadForm.tsx')
 
 const ID = 'G-E409H76XYY'

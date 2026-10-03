@@ -233,6 +233,23 @@ describe('R4-AN-2 the two sections render in v2 order', () => {
   })
 })
 
+// Grown by every later RESKIN-05 subtask.
+describe('R5-AN section order', () => {
+  const sectionIds = (html: string) => [...html.matchAll(/<section id="([^"]+)"/g)].map((m) => m[1])
+
+  it('/ renders #solutions directly after #intelligence and no #accountants; /privacy neither', () => {
+    const landing = sectionIds(renderAppAt('/'))
+    const privacy = sectionIds(renderAppAt('/privacy'))
+    expect(landing, 'control: the landing rendered its sections').toContain('intelligence')
+    expect(renderAppAt('/privacy'), 'control: the privacy page rendered its footer').toContain('<footer')
+    expect(landing.filter((id) => id === 'solutions'), 'one #solutions on /').toHaveLength(1)
+    expect(landing[landing.indexOf('intelligence') + 1], '#solutions directly after #intelligence').toBe('solutions')
+    expect(landing, 'no #accountants on /').not.toContain('accountants')
+    expect(privacy, 'neither on /privacy').not.toContain('solutions')
+    expect(privacy).not.toContain('accountants')
+  })
+})
+
 describe('AN-03 every footer in-page link resolves to one section', () => {
   it('controls: the helper reports a ghost footer link and passes a resolving one', () => {
     const footer = '<footer><a href="#ghost">x</a></footer>'

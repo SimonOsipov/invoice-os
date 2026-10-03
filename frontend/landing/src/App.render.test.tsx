@@ -260,6 +260,21 @@ describe('R5-AN section order', () => {
     expect(landing, 'no #developers on /').not.toContain('developers')
     for (const id of ['integrations', 'api', 'developers']) expect(privacy, `no #${id} on /privacy`).not.toContain(id)
   })
+
+  it('/ renders #faq directly after #api, then an id-less section holding [data-closing]; /privacy neither', () => {
+    // The closing section has no id, so read every <section> in order rather than the id list.
+    const sections = (html: string) => html.split('<section').slice(1).map((chunk) => ({ id: /^ id="([^"]+)"/.exec(chunk)?.[1], closing: chunk.includes('data-closing') }))
+    const landing = sections(renderAppAt('/'))
+    const privacy = sections(renderAppAt('/privacy'))
+    const api = landing.findIndex((s) => s.id === 'api')
+    expect(api, 'control: the landing rendered #api').toBeGreaterThan(-1)
+    expect(landing.filter((s) => s.id === 'faq'), 'one #faq on /').toHaveLength(1)
+    expect(landing[api + 1]?.id, '#faq directly after #api').toBe('faq')
+    expect(landing[api + 2], 'the next section holds [data-closing] and has no id').toEqual({ id: undefined, closing: true })
+    expect(landing.filter((s) => s.closing), 'one closing section on /').toHaveLength(1)
+    expect(privacy.length, 'control: /privacy rendered sections').toBeGreaterThan(0)
+    expect(privacy.some((s) => s.id === 'faq' || s.closing), 'neither on /privacy').toBe(false)
+  })
 })
 
 describe('AN-03 every footer in-page link resolves to one section', () => {

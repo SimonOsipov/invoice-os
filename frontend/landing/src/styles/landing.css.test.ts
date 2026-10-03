@@ -428,3 +428,13 @@ describe('R5-CSS-1a .cols6 collapses 3 / 2 / 1', () => {
     expect(declared(rules, '.cols6', 'grid-template-columns', noAt), 'the base tracks are inline (V387), not in the sheet').toBeUndefined()
   })
 })
+
+describe('R5-CSS-1b .cta-mark hides at 900', () => {
+  it('is display: none !important at max-width 900px and not hidden outside it', () => {
+    const rules = parseRules(LANDING_CSS)
+    expect(rules.length, 'control: the sheet parsed').toBeGreaterThan(10)
+    expect(declared(rules, '.cols3', 'grid-template-columns', maxWidth(900)), 'control: a sibling collapses at 900px').toBe('minmax(0, 1fr) !important')
+    expect(declared(rules, '.cta-mark', 'display', maxWidth(900))).toBe('none !important')
+    expect(declared(rules, '.cta-mark', 'display', noAt), 'the mark shows above 900px').toBeUndefined()
+  })
+})

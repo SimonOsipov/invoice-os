@@ -230,6 +230,32 @@ describe('PC-04 one run per entry', () => {
 })
 
 describe('PC-05 Run check again replays and restarts', () => {
+  it('restarts a run that is not on a step boundary: row 0 resolves 520ms after the click, not on the old phase', () => {
+    enterFresh()
+    tick(200)
+    expectState(0)
+    runAgain()
+    expectState(0)
+    expect(live().length).toBe(1)
+    tick(STEP - 1)
+    expectState(0)
+    tick(1)
+    expectState(1)
+  })
+
+  it('plays when clicked before the first entry', () => {
+    mount()
+    expectState(0)
+    runAgain()
+    expectState(0)
+    expect(live().length).toBe(1)
+    tick(STEP)
+    expectState(1)
+    steps(7)
+    expectState(8)
+    expect(live()).toEqual([])
+  })
+
   it('replays a finished run from CHECKING to the end text', () => {
     enterFresh()
     steps(8)
@@ -256,6 +282,34 @@ describe('PC-05 Run check again replays and restarts', () => {
     expectState(0)
     tick(1)
     expectState(1)
+  })
+})
+
+describe('PC-12 one run per entry (edges)', () => {
+  it('starts nothing on a callback that is not intersecting, however long it waits', () => {
+    mount()
+    fire(false)
+    expectState(0)
+    tick(STEP * 10)
+    expectState(0)
+    expect(live()).toEqual([])
+    expect(setSpy).not.toHaveBeenCalled()
+    fire(true)
+    expectState(0)
+    expect(live().length).toBe(1)
+  })
+
+  it('builds the observer once and never disconnects it while mounted', () => {
+    enterFresh()
+    steps(8)
+    runAgain()
+    steps(8)
+    fire(false)
+    fire(true)
+    steps(8)
+    expectState(8)
+    expect(StubIO.all.length).toBe(1)
+    expect(StubIO.all[0].disconnects).toBe(0)
   })
 })
 
@@ -289,6 +343,32 @@ describe('PC-07 reduced motion is read at each start', () => {
   })
 })
 
+describe('PC-13 reduced motion is read at each start (entry path)', () => {
+  it('shows the end state at once and starts no timer when the query matches by the time of an entry', () => {
+    mount()
+    expectState(0)
+    reduced = true
+    fire(true)
+    expectState(8)
+    expect(live()).toEqual([])
+    expect(setSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('PC-14 no matchMedia', () => {
+  it('treats motion as allowed: pre-entry state, then the run plays', () => {
+    Object.defineProperty(window, 'matchMedia', { configurable: true, writable: true, value: undefined })
+    mount()
+    expectState(0)
+    expect(StubIO.all.length).toBe(1)
+    fire(true)
+    expect(live().length).toBe(1)
+    steps(8)
+    expectState(8)
+    expect(live()).toEqual([])
+  })
+})
+
 describe('PC-08 no observer, no failure', () => {
   it('renders the end state without logging, and a replay still plays', () => {
     delete (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver
@@ -314,6 +394,26 @@ describe('PC-09 unmount mid-run cleans up', () => {
     mounted = false
     expect(live()).toEqual([])
     expect(StubIO.all.length).toBe(1)
+    expect(StubIO.all[0].disconnects).toBe(1)
+  })
+})
+
+describe('PC-15 unmount (edges)', () => {
+  it('disconnects the observer once before any entry, with no timer ever started', () => {
+    mount()
+    act(() => root.unmount())
+    mounted = false
+    expect(StubIO.all.length).toBe(1)
+    expect(StubIO.all[0].disconnects).toBe(1)
+    expect(setSpy).not.toHaveBeenCalled()
+  })
+
+  it('disconnects once and keeps no timer when unmounted after the run finished', () => {
+    enterFresh()
+    steps(8)
+    act(() => root.unmount())
+    mounted = false
+    expect(live()).toEqual([])
     expect(StubIO.all[0].disconnects).toBe(1)
   })
 })

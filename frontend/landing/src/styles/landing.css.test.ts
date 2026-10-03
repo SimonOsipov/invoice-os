@@ -389,6 +389,11 @@ describe('CV-10 the Coverage tabs keep their focus ring and hover dim', () => {
     expect(declared(rules, '.a-card-btn:focus-visible', 'outline-offset', root)).toBe('2px')
     expect(declared(rules, '.a-tab-pill:hover', 'filter', root)).toBe('brightness(0.97)')
   })
+
+  it('landing.css insets the Intelligence step ring, which sits inside an overflow scroller', () => {
+    const rules = parseRules(LANDING_CSS)
+    expect(declared(rules, '[data-intel-steps] .a-card-btn:focus-visible', 'outline-offset', (a) => a.length === 0)).toBe('-2px')
+  })
 })
 
 // Source scan: jsdom applies no media queries, so only the rule text shows the roadmap collapse at 900px and the

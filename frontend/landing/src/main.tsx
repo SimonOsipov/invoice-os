@@ -1,5 +1,9 @@
+import './instrument'
+
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+
+import { CrashBoundary } from '@invoice-os/monitoring'
 
 // v2 design-system entry (tokens, utilities), then the landing-local bridge that maps
 // the old app-layer names onto it. Never import the v1 entry here.
@@ -11,10 +15,13 @@ import './styles/landing.css'
 
 import App from './App'
 import { bootAnalytics } from './analytics'
+import { BrandMark } from './icons'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <CrashBoundary brand={<BrandMark size={20} />}>
+      <App />
+    </CrashBoundary>
   </StrictMode>,
 )
 

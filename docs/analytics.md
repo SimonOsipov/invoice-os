@@ -11,7 +11,7 @@ A GA4 `gtag.js` tag, injected at runtime by `ensureTag`, behind a gate with thre
 must **all** hold (`shouldLoadTag`, `analytics.ts:22`):
 
 1. the browser is on a production hostname — exact match against `PRODUCTION_HOSTNAMES`
-   (`frontend/landing/src/hubspot.ts:9`), which today holds `www.ascomply.com` alone;
+   (`frontend/landing/src/hubspot.ts`), which today holds `www.ascomply.com` alone;
 2. analytics consent is granted — a versioned `localStorage` record (`src/consent.ts`), whose
    default when no record is stored is **denied** (`CONSENT_DEFAULT_ANALYTICS`), so a first-time
    visitor loads no tag until they accept;

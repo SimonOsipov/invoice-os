@@ -120,6 +120,15 @@ button {
 .a-tab-pill:hover {
   filter: brightness(0.97);
 }
+.cov-marker:focus {
+  outline: none;
+}
+.cov-marker-focus {
+  opacity: 0;
+}
+.cov-marker:focus-visible .cov-marker-focus {
+  opacity: 1;
+}
 .a-nav {
   display: flex;
   align-items: center;

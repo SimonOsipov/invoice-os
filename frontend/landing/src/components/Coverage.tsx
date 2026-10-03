@@ -5,6 +5,7 @@ import { Badge } from './ds/Badge'
 import { Button } from './ds/Button'
 import { Eyebrow } from './ds/Eyebrow'
 import { Section } from './ds/Section'
+import { CoverageMap } from './CoverageMap'
 import { Flag } from './Flag'
 
 const teal = (name: 'shield-check' | 'check') => (
@@ -128,7 +129,9 @@ export function Coverage({ onBookDemo }: { onBookDemo: () => void }) {
               The ASComply Africa roadmap
             </span>
           </div>
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '12px 0' }} />
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '12px 0' }}>
+            <CoverageMap selected={country} onSelect={setCountry} />
+          </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px 22px', fontSize: 12, fontWeight: 600, color: 'var(--surface-body)' }}>
             {LEGEND.map((l) => (
               <span key={l.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>

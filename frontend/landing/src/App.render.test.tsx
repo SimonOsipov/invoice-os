@@ -275,6 +275,13 @@ describe('R5-AN section order', () => {
     expect(privacy.length, 'control: /privacy rendered sections').toBeGreaterThan(0)
     expect(privacy.some((s) => s.id === 'faq' || s.closing), 'neither on /privacy').toBe(false)
   })
+
+  it('/ renders no #demo section and no id starting dc-', () => {
+    const html = renderAppAt('/')
+    expect(sectionIds(html), 'control: the landing rendered its sections').toContain('faq')
+    expect(sectionIds(html), 'no #demo on /').not.toContain('demo')
+    expect([...html.matchAll(/\sid="(dc-[^"]*)"/g)].map((m) => m[1]), 'no dc-* id on /').toEqual([])
+  })
 })
 
 describe('AN-03 every footer in-page link resolves to one section', () => {

@@ -340,7 +340,8 @@ describe('honeypot cannot reach outcome senders (AC-5)', () => {
     // Floor on the population: a walk that silently returned one directory would
     // otherwise read as "nothing else calls it".
     expect(files.length).toBeGreaterThanOrEqual(25)
-    expect(files).toContain(join(HERE, 'components', 'DemoCta.tsx'))
+    expect(files).toContain(join(HERE, 'components', 'DemoModal.tsx'))
+    expect(files, 'the inline demo form is gone').not.toContain(join(HERE, 'components', 'DemoCta.tsx'))
     const matches = files.filter((f) => readFileSync(f, 'utf8').includes('trackedHubSpotSubmit('))
     expect(matches.length).toBe(1)
     expect(matches[0]).toBe(DEMO_LEAD_FORM_PATH)
@@ -381,15 +382,9 @@ describe('honeypot cannot reach outcome senders (AC-5)', () => {
     expect(src).not.toMatch(/import\s*\*\s*as\s+\w+\s*from\s*['"]\.\.\/analytics['"]/)
   })
 
-  // S4 (NEW-BEHAVIOUR): today DemoModal.tsx still imports trackedHubSpotSubmit directly
-  // (:23) — fails honestly until the extraction moves it to DemoLeadForm.tsx.
-  it('S4: DemoModal.tsx and DemoCta.tsx import nothing from ../analytics', () => {
+  it('S4: DemoModal.tsx imports nothing from ../analytics', () => {
     expect(DEMO_MODAL_SRC.length).toBeGreaterThan(0)
     expect(DEMO_MODAL_SRC).not.toMatch(/from\s*['"]\.\.\/analytics['"]/)
-
-    const demoCtaSrc = readFileSync(join(HERE, 'components', 'DemoCta.tsx'), 'utf8')
-    expect(demoCtaSrc.length).toBeGreaterThan(0)
-    expect(demoCtaSrc).not.toMatch(/from\s*['"]\.\.\/analytics['"]/)
   })
 })
 

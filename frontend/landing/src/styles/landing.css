@@ -227,6 +227,9 @@ button {
 .split {
   display: grid;
 }
+[data-sol-tabs] .ds-seg-btn {
+  white-space: nowrap;
+}
 .cols3 {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

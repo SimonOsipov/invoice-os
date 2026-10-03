@@ -184,178 +184,69 @@ export const RULES: Rule[] = [
 ]
 
 /* ------------------------------------------------------------------ */
-/* Dual audience — firm vs in-house                                    */
+/* Solutions — three workspaces behind one switch                      */
 /* ------------------------------------------------------------------ */
 
-type StatusTriplet = { bg: string; border: string; text: string }
+export type SolutionId = 'fin' | 'firm' | 'dev'
 
-const STATUS: Record<'green' | 'amber' | 'muted', StatusTriplet> = {
-  green: { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', text: 'var(--status-green-text)' },
-  amber: { bg: 'var(--status-amber-bg)', border: 'var(--status-amber-border)', text: 'var(--status-amber-text)' },
-  muted: { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)' },
-}
-
-export type Client = {
-  name: string
-  initials: string
-  tin: string
-  score: string
-  status: string
-  statusBg: string
-  statusBorder: string
-  statusText: string
-}
-
-const cl = (name: string, initials: string, tin: string, score: string, st: 'green' | 'amber' | 'muted'): Client => ({
-  name,
-  initials,
-  tin,
-  score,
-  status: st === 'green' ? 'READY' : st === 'amber' ? 'REVIEW' : 'DRAFT',
-  statusBg: STATUS[st].bg,
-  statusBorder: STATUS[st].border,
-  statusText: STATUS[st].text,
-})
-
-export const CLIENTS: Client[] = [
-  cl('Lagos Freight & Logistics Ltd', 'LF', 'TIN 20184412-0001', '94%', 'green'),
-  cl('Sahara Foods Distribution', 'SF', 'TIN 19847720-0001', '88%', 'green'),
-  cl('Nigerian Delta Supplies Co.', 'ND', 'TIN 22310984-0001', '71%', 'amber'),
-  cl('Adeyemi & Sons Trading', 'AS', 'TIN 20991043-0001', '63%', 'amber'),
-  cl('Kano Textile Mills Plc', 'KT', 'TIN 18772300-0001', '—', 'muted'),
-]
-
-export type PipelineStat = { stage: string; count: string; color: string }
-
-export const PIPELINE: PipelineStat[] = [
-  { stage: 'Drafts', count: '18', color: 'var(--fg-1)' },
-  { stage: 'In review', count: '7', color: 'var(--status-amber-text)' },
-  { stage: 'Approved', count: '12', color: 'var(--status-green-text)' },
-  { stage: 'Transmitted', count: '204', color: 'var(--fg-1)' },
-]
-
-export type Approval = {
-  id: string
-  party: string
-  amount: string
-  who: string
-  assignee: string
-  stage: string
-  statusBg: string
-  statusBorder: string
-  statusText: string
-}
-
-const ap = (id: string, party: string, amount: string, who: string, assignee: string, st: 'green' | 'amber' | 'muted', label: string): Approval => ({
-  id,
-  party,
-  amount,
-  who,
-  assignee,
-  stage: label,
-  statusBg: STATUS[st].bg,
-  statusBorder: STATUS[st].border,
-  statusText: STATUS[st].text,
-})
-
-export const APPROVALS: Approval[] = [
-  ap('INV-2026-00518', 'Sahara Foods Distribution', '₦2.41M', 'TA', 'Tunde A. · reviewer', 'amber', 'IN REVIEW'),
-  ap('INV-2026-00517', 'MTN Nigeria Plc', '₦880k', 'OB', 'Ola B. · approver', 'green', 'APPROVED'),
-  ap('INV-2026-00516', 'Dangote Cement Plc', '₦5.07M', 'TA', 'Tunde A. · reviewer', 'amber', 'IN REVIEW'),
-  ap('INV-2026-00515', 'Lagos Freight Ltd', '₦1.12M', 'KE', 'Kemi E. · creator', 'muted', 'DRAFT'),
-]
-
-export type AudienceFeature = { title: string; body: string; glyph: ReactNode }
-export type AudienceStat = { value: string; label: string; color: string }
-
-// Feature-list glyphs sit in 36px icon tiles, so they render at the DS's 18px rung.
-const fg = (paths: string[]) => <Icon paths={paths} size={18} />
-const tg = (paths: string[]) => <Icon paths={paths} size={15} />
-
-export type Audience = {
-  tabIcon: ReactNode
-  headline: string
+export type Solution = {
+  id: SolutionId
+  tab: string
+  cardIcon: GlyphName
+  cardTitle: string
+  overview: string
+  cardHead: string
+  rows: [name: string, status: 'Validated' | 'In review' | 'Connected' | 'Mapped'][]
+  label: string
+  h3: string
   body: string
-  features: AudienceFeature[]
-  stats: AudienceStat[]
+  points: string[]
   cta: string
 }
 
-export const FIRM: Audience = {
-  tabIcon: tg(['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z', 'M22 21v-2a4 4 0 0 0-3-3.87']),
-  headline: "Run every client's compliance from one portal.",
-  body: "Manage filings, validation queues and readiness scores across your whole book of business. Switch between clients in one login, and become their compliance partner.",
-  features: [
-    { title: 'Multi-client portal', body: 'Every client company in one switchable workspace.', glyph: fg(['M3 3h7v7H3z', 'M14 3h7v7h-7z', 'M14 14h7v7h-7z', 'M3 14h7v7H3z']) },
-    { title: 'Bulk validation queues', body: 'Run and clear validation across clients in one pass.', glyph: fg(['m3 17 2 2 4-4', 'm3 7 2 2 4-4', 'M13 6h8', 'M13 12h8', 'M13 18h8']) },
-    { title: 'Per-client readiness scores', body: "See who's audit-ready and who needs attention.", glyph: fg(['m12 14 4-4', 'M3.34 19a10 10 0 1 1 17.32 0']) },
-    { title: 'White-glove client onboarding', body: 'Templates and imports to set up new books fast.', glyph: fg(['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z', 'M19 8v6', 'M22 11h-6']) },
-    {
-      title: 'Per-client rule sets',
-      body: "Stack each client's own checks on top of the golden MBS rules.",
-      glyph: fg(['M8 16H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2', 'M14 8h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2v-6']),
-    },
-  ],
-  stats: [
-    { value: '1 login', label: 'Every client company, switched instantly.', color: 'var(--fg-1)' },
-    { value: '80%', label: 'Less manual invoice checking per client book.', color: 'var(--accent)' },
-  ],
-  cta: 'Join the partner program',
-}
-
-export const INHOUSE: Audience = {
-  tabIcon: tg(['M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z', 'M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2', 'M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2', 'M10 6h4', 'M10 10h4', 'M10 14h4']),
-  headline: 'Give your finance team a compliance cockpit.',
-  body: 'Route invoices through your own approval chain, assign reviewer and approver roles, and keep one company audit-ready. Built for finance departments that own the whole process in-house — from first draft to NRS transmission.',
-  features: [
-    { title: 'Role-based approval chain', body: 'Creator → reviewer → approver, with rejection notes.', glyph: fg(['M6 3v12', 'M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z', 'M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z', 'M15 6a9 9 0 0 0-9 9']) },
-    { title: 'Departmental readiness dashboard', body: 'One company, every metric your controller needs.', glyph: fg(['M3 3h7v9H3z', 'M14 3h7v5h-7z', 'M14 12h7v9h-7z', 'M3 16h7v5H3z']) },
-    { title: 'ERP & accounting sync', body: 'Two-way sync with SAP, NetSuite, Sage, QuickBooks & Odoo.', glyph: fg(['M21 12a9 9 0 1 1-6.2-8.6', 'M21 3v6h-6']) },
-    { title: 'SSO & team management', body: 'Provision finance staff with SSO, SCIM & roles.', glyph: fg(['M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z']) },
-    { title: 'Month-end close reports', body: 'VAT/WHT summaries and exception reports on demand.', glyph: fg(['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M14 2v6h6', 'M16 13H8', 'M16 17H8']) },
-  ],
-  stats: [
-    { value: 'No code', label: 'Workflow & rule builder for your own approval chains and checks.', color: 'var(--fg-1)' },
-    { value: '1 company', label: 'Full control of your compliance.', color: 'var(--accent)' },
-  ],
-  cta: 'Book a team demo',
-}
-
-export const FINTECH: Audience = {
-  tabIcon: tg(['m18 16 4-4-4-4', 'm6 8-4 4 4 4', 'm14.5 4-5 16']),
-  headline: 'Sell compliance to your merchants as a feature.',
-  body:
-    'Call one REST endpoint and every merchant on your platform gets validated, archived and transmitted invoices. Scoped keys per tenant, signed webhooks for clearance events, and a sandbox adapter to certify against.',
-  features: [
-    { title: 'One REST endpoint', body: 'POST an invoice, get a transmit-ready payload.', glyph: fg(['m18 16 4-4-4-4', 'm6 8-4 4 4 4', 'm14.5 4-5 16']) },
-    { title: 'Per-merchant tenancy', body: 'Isolated books and scoped keys per merchant.', glyph: fg(['M3 21h18', 'M5 21V7l8-4v18', 'M19 21V11l-6-4']) },
-    {
-      title: 'Signed webhooks',
-      body: 'Clearance and CSID events pushed as they land.',
-      glyph: fg(['M12 2v4', 'm16.2 7.8 2.9-2.9', 'M18 12h4', 'm16.2 16.2 2.9 2.9', 'M12 18v4', 'm4.9 19.1 2.9-2.9', 'M2 12h4', 'm4.9 4.9 2.9 2.9']),
-    },
-    {
-      title: 'Sandbox MBS adapter',
-      body: 'Certify against the test adapter first.',
-      glyph: fg(['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M14 2v6h6', 'm9 15 2 2 4-4']),
-    },
-    { title: 'Embed or white-label', body: 'Ship compliance under your own brand.', glyph: fg(['M7 7h10v10H7z', 'M3 3h18v18H3z']) },
-  ],
-  stats: [
-    { value: '1 API', label: 'Validate, archive and transmit it all.', color: 'var(--fg-1)' },
-    { value: 'Unlimited', label: 'Merchant tenants, one integration.', color: 'var(--accent)' },
-  ],
-  cta: 'Request API access',
-}
-
-/* Merchant-tenant table behind the fintech segment (prototype `apiTenants`). */
-export type ApiTenant = { name: string; calls: string; pass: string; state: string; ok: boolean }
-
-export const API_TENANTS: ApiTenant[] = [
-  { name: 'Paystack merchants', calls: '18,204', pass: '99.2%', state: 'LIVE', ok: true },
-  { name: 'Flutterwave collections', calls: '11,876', pass: '98.7%', state: 'LIVE', ok: true },
-  { name: 'Moniepoint POS', calls: '7,431', pass: '97.4%', state: 'LIVE', ok: true },
-  { name: 'Kuda business', calls: '2,190', pass: '—', state: 'SANDBOX', ok: false },
+export const SOLUTIONS: readonly Solution[] = [
+  {
+    id: 'fin',
+    tab: 'Finance teams',
+    cardIcon: 'layout-dashboard',
+    cardTitle: 'Invoice workspace',
+    overview: 'WORKSPACE OVERVIEW',
+    cardHead: 'A clearer working day.',
+    rows: [['Invoice INV-2026-0481', 'Validated'], ['Invoice INV-2026-0482', 'In review'], ['Invoice INV-2026-0483', 'Validated']],
+    label: 'MORE CONTROL. LESS CHASING.',
+    h3: 'Keep your team focused on the business.',
+    body: 'Bring invoices, approvals and compliance checks into a single workflow. Spot what needs attention and keep everyone working from the same record.',
+    points: ['Review exceptions before submission', 'Give every approval a clear owner', 'Keep invoice records ready for review'],
+    cta: 'Find your workflow',
+  },
+  {
+    id: 'firm',
+    tab: 'Accounting & tax firms',
+    cardIcon: 'building-2',
+    cardTitle: 'Client portfolio',
+    overview: 'WORKSPACE OVERVIEW',
+    cardHead: 'Your clients, connected.',
+    rows: [['Client company A', 'Validated'], ['Client company B', 'In review'], ['Client company C', 'Validated']],
+    label: 'ONE WORKSPACE. EVERY CLIENT.',
+    h3: 'Bring every client company into clearer view.',
+    body: 'Work across client companies from one portal. Organise invoice reviews and identify the businesses that need attention without juggling separate workspaces.',
+    points: ['Switch between client companies', 'Track approvals by client', "Keep each client's records organised"],
+    cta: 'Find your workflow',
+  },
+  {
+    id: 'dev',
+    tab: 'Developers & partners',
+    cardIcon: 'plug',
+    cardTitle: 'Integration workspace',
+    overview: 'WORKSPACE OVERVIEW',
+    cardHead: 'Your data, connected.',
+    rows: [['ERP invoice import', 'Connected'], ['Field mapping', 'Mapped'], ['Validation API request', 'Validated']],
+    label: 'YOUR STACK. OUR COMPLIANCE SOLUTION.',
+    h3: 'Build compliance into the way you work.',
+    body: 'Plan an invoice workflow around your existing ERP, accounting or fintech platform. Talk to our team about API access, data mapping and your integration requirements.',
+    points: ['Explore invoice validation via API', 'Map your invoice data and workflow', 'Discuss connector and partner opportunities'],
+    cta: 'Discuss a partnership',
+  },
 ]
 
 /* ------------------------------------------------------------------ */

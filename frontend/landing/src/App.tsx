@@ -10,7 +10,7 @@ import { Platform } from './components/Platform'
 import { Compliance } from './components/Compliance'
 import { Coverage } from './components/Coverage'
 import { Intelligence } from './components/Intelligence'
-import { Audience } from './components/Audience'
+import { Solutions } from './components/Solutions'
 import { Developers } from './components/Developers'
 import { Pricing } from './components/Pricing'
 import { DemoCta } from './components/DemoCta'
@@ -90,7 +90,7 @@ export default function App() {
     const measure = () => {
       frame = 0
       // documentElement, not body: body.scrollHeight excludes body margins. The height is
-      // never cached — the Who-it's-for toggle swaps mocks of different heights.
+      // never cached — a toggle can swap content of different heights.
       const documentH = document.documentElement.scrollHeight
       // A page that fits the viewport is 100% seen but nothing was scrolled; reporting it
       // at mount would burn all four milestones. Pinned by "guards the mount-time measurement".
@@ -136,7 +136,7 @@ export default function App() {
           <Compliance />
           <Coverage onBookDemo={book('coverage')} />
           <Intelligence />
-          <Audience onBookDemo={book('audience')} />
+          <Solutions onBookDemo={book('audience')} />
           <Developers />
           <Pricing onBookDemo={book('pricing')} />
           <DemoCta />

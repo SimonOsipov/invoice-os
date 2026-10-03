@@ -301,4 +301,28 @@ describe('Tabs', () => {
       expect(root.contains(document.getElementById(panel.getAttribute('aria-labelledby') as string))).toBe(true)
     }
   })
+
+  it('TB-16 Tabs names its tablist only when asked', async () => {
+    const named = await mount({ value: 'approve', 'aria-label': 'Steps' })
+    const list = named.querySelector('[role=tablist]')
+    expect(list?.getAttribute('aria-label')).toBe('Steps')
+    expect(named.querySelectorAll('[aria-label]'), 'only the tablist carries the name').toHaveLength(1)
+
+    const bare = await mount({ value: 'approve' })
+    const unnamed = bare.querySelector('[role=tablist]')
+    expect(unnamed, 'control: the tablist rendered').not.toBeNull()
+    expect(unnamed?.hasAttribute('aria-label')).toBe(false)
+  })
+
+  it('TB-17 the panel is a tab stop unless panelFocusable is false, and stays a labelled tabpanel either way', async () => {
+    const dflt = await mount({ value: 'approve' })
+    expect(dflt.querySelector('[role=tabpanel]')?.getAttribute('tabindex')).toBe('0')
+
+    const off = await mount({ value: 'approve', panelFocusable: false })
+    const panel = off.querySelector('[role=tabpanel]')
+    expect(panel, 'control: the panel rendered').not.toBeNull()
+    expect(panel?.hasAttribute('tabindex')).toBe(false)
+    expect(panel?.getAttribute('aria-labelledby')).toBe(tabsIn(off)[1].id)
+    expect(tabsIn(off)[1].getAttribute('aria-controls')).toBe(panel?.id)
+  })
 })

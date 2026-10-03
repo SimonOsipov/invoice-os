@@ -21,7 +21,7 @@
 //
 // Criterion 3 (every tier's CTA opens the demo modal) is proved in
 // App.demoCtas.dom.test.tsx, not here -- per Decisions -> [f12-criterion-3-placement],
-// the 3 pricing CTAs are 3 of that file's 10-button roster and opening the modal needs
+// the 3 pricing CTAs are 3 of that file's roster and opening the modal needs
 // the App-owned dialog, which this component-alone mount does not have.
 /// <reference types="node" />
 import { act, createElement } from 'react'

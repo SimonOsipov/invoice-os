@@ -69,14 +69,16 @@ function firstForbiddenHit(text: string, terms: readonly string[]): string | nul
 describe('Privacy SSR render (LAND-04-02)', () => {
   const html = renderToStaticMarkup(createElement(Privacy))
 
-  it('D4: both processors are named', () => {
+  it('D4: all three processors are named', () => {
     expect(html).toContain('Google')
     expect(html).toContain('HubSpot')
+    expect(html).toContain('Sentry')
   })
 
   it('D4: each processors location is stated', () => {
     expect(html).toContain('United States')
     expect(html).toContain('EU servers')
+    expect(html).toContain('in the EU')
   })
 
   it('C7: the US claim is about processing, not the collection endpoint', () => {
@@ -173,7 +175,8 @@ describe('Privacy SSR render (LAND-04-02)', () => {
 
   it('C10: the font flow is disclosed', () => {
     expect(html).toContain('fonts')
-    expect(html).toContain('no gate in front of it')
+    expect(html).toContain('it is not behind any consent check')
+    expect(html).not.toContain('it is the one flow on this site with no gate')
   })
 
   it('C10 (NEW): the fonts host named on the page is the host the site requests', () => {
@@ -386,7 +389,9 @@ describe('T3-15/T3-17/T3-18: the page describes the control that now exists', ()
   it('T3-17 (AC-10): the lede carries the consent qualifier', () => {
     // Anchored on the sentence Privacy.claims.test.tsx already pins for this
     // paragraph, so the anchor cannot vanish silently.
-    const lede = paragraphContaining('Your browser loads nothing on this site from any other company')
+    const lede = paragraphContaining(
+      'Your browser loads nothing on this site from, and sends nothing to, any other company',
+    )
     expect(carriesConsentQualifier(lede), `no consent condition in the lede: ${lede}`).toBe(true)
   })
 

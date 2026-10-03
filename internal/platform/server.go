@@ -48,6 +48,9 @@ func New(service string) (*App, error) {
 	if err := initSentry(cfg); err != nil {
 		return nil, err
 	}
+	if cfg.SentryTestEvent {
+		captureTestEvent(cfg.Service)
+	}
 	logger := newLogger(cfg)
 	slog.SetDefault(logger)
 

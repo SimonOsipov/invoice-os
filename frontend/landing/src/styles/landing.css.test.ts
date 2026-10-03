@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import { LANDING_SRC, V2_DIR, customPropValues, declarations, parseRules, selectorParts, type CssRule } from '../cssScan.test.util'
+import { LANDING_SRC, V2_DIR, customPropValues, declarations, parseRules, selectorParts, stripSource, type CssRule } from '../cssScan.test.util'
 
 const LANDING_CSS = readFileSync(join(LANDING_SRC, 'styles', 'landing.css'), 'utf8')
 
@@ -278,5 +278,102 @@ describe('FT-12 the a-link rule', () => {
 
   it('landing.css: .a-link is var(--ink) with no text-decoration, .a-link:hover is var(--teal)', () => {
     expect(aLinkFailures(LANDING_CSS)).toEqual([])
+  })
+})
+
+const maxWidth = (px: number) => (at: string[]) =>
+  at.length === 1 && new RegExp(`^@media \\(\\s*max-width\\s*:\\s*${px}px\\s*\\)$`, 'i').test(at[0])
+
+/** The module grid contract: the failures, empty when it holds. */
+function modGridFailures(css: string): string[] {
+  const rules = parseRules(css)
+  const cols = (at: (a: string[]) => boolean) => noBang(declared(rules, '.mod-grid', 'grid-template-columns', at))
+  const checks: [string, string | undefined, string][] = [
+    ['.mod-grid columns outside any media', cols(noAt), 'repeat(4, minmax(0, 1fr))'],
+    ['.mod-grid columns at max-width 1000px', cols(maxWidth(1000)), 'repeat(2, minmax(0, 1fr))'],
+    ['.mod-grid columns at max-width 560px', cols(maxWidth(560)), 'minmax(0, 1fr)'],
+  ]
+  return checks.filter(([, got, want]) => got !== want).map(([what, got, want]) => `${what}: ${got} != ${want}`)
+}
+
+const MOD_GRID_FIXTURE = (tablet: string) => `
+.mod-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: ${tablet}) { .mod-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .mod-grid { grid-template-columns: minmax(0, 1fr); } }
+`
+
+describe('SO-05 the module grid runs 4 / 2 / 1', () => {
+  it('controls: the lookup accepts the fixture and rejects a 999px tablet edge', () => {
+    expect(modGridFailures(MOD_GRID_FIXTURE('1000px'))).toEqual([])
+    expect(modGridFailures(MOD_GRID_FIXTURE('999px')).length, 'a max-width 999px copy must fail the lookup').toBeGreaterThan(0)
+  })
+
+  it('landing.css sets .mod-grid to 4 columns, 2 at max-width 1000px, 1 at max-width 560px, and drops .ios-4', () => {
+    const rules = parseRules(LANDING_CSS)
+    expect(rules.length, 'control: the file parsed').toBeGreaterThanOrEqual(20)
+    const selectors = rules.flatMap(selectorParts)
+    expect(selectors.some((s) => s.includes('.ios-3')), 'control: .ios-3 remains').toBe(true)
+
+    expect(modGridFailures(LANDING_CSS)).toEqual([])
+    expect(selectors.filter((s) => s.includes('.ios-4'))).toEqual([])
+
+    const ios3 = (px: number) => declared(rules, '.ios-grid.ios-3', 'grid-template-columns', maxWidth(px))
+    expect(ios3(920), 'dropping .ios-4 left the .ios-3 tablet rule').toBe('repeat(2, minmax(0, 1fr)) !important')
+    expect(ios3(600), 'dropping .ios-4 left the .ios-3 phone rule').toBe('1fr !important')
+  })
+})
+
+describe('SO-08 the Solution highlight line takes --highlight-on-dark-2', () => {
+  it('.t-hl-dark2 colours with --highlight-on-dark-2, which colors.css defines; jsdom applies no CSS to see it', () => {
+    const rules = parseRules(readFileSync(join(V2_DIR, 'utilities.css'), 'utf8'))
+    expect(rules.length, 'control: the file parsed').toBeGreaterThanOrEqual(20)
+    const color = (selector: string) => declared(rules, selector, 'color', noAt)
+    expect(color('.t-hl'), 'control: the sibling resolves to its own token').toBe('var(--highlight-on-dark)')
+
+    expect(color('.t-hl-dark2')).toBe('var(--highlight-on-dark-2)')
+    const colors = stripSource('colors.css', readFileSync(join(V2_DIR, 'tokens', 'colors.css'), 'utf8'))
+    const tokens = customPropValues(colors)
+    expect(tokens.has('--highlight-on-dark'), 'control: the sibling token is defined').toBe(true)
+    expect(tokens.get('--highlight-on-dark-2'), '--highlight-on-dark-2 is defined, outside any comment').toBeTruthy()
+  })
+})
+
+/** The capability grid and narrow tab strip contract: the failures, empty when it holds. */
+function platformCssFailures(css: string): string[] {
+  const rules = parseRules(css).map((r) => ({ ...r, selector: r.selector.replace(/'/g, '"') }))
+  const cols = (at: (a: string[]) => boolean) => declared(rules, '.cols3', 'grid-template-columns', at)
+  const tab = (selector: string, prop: string) => declared(rules, selector, prop, maxWidth(640))
+  const checks: [string, string | undefined, string][] = [
+    ['.cols3 columns outside any media', cols(noAt), 'repeat(3, minmax(0, 1fr))'],
+    ['.cols3 columns at max-width 900px', cols(maxWidth(900)), 'minmax(0, 1fr)'],
+    ['.a-tabs tablist overflow-x at max-width 640px', tab('.a-tabs [role="tablist"]', 'overflow-x'), 'auto'],
+    ['.a-tabs tablist scrollbar-width at max-width 640px', tab('.a-tabs [role="tablist"]', 'scrollbar-width'), 'none'],
+    ['.a-tabs tab flex at max-width 640px', tab('.a-tabs [role="tab"]', 'flex'), '0 0 auto'],
+    ['.a-tabs tab white-space at max-width 640px', tab('.a-tabs [role="tab"]', 'white-space'), 'nowrap'],
+    ['.a-tabs tab padding at max-width 640px', tab('.a-tabs [role="tab"]', 'padding'), '0 20px'],
+    ['.a-tabs tab focus outline-offset at max-width 640px', tab('.a-tabs [role="tab"]:focus-visible', 'outline-offset'), '-2px'],
+  ]
+  return checks.filter(([, got, want]) => got !== want).map(([what, got, want]) => `${what}: ${got} != ${want}`)
+}
+
+const PLATFORM_CSS_FIXTURE = (narrow: string) => `
+.cols3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 900px) { .cols3 { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: ${narrow}) {
+  .a-tabs [role="tablist"] { overflow-x: auto; scrollbar-width: none; }
+  .a-tabs [role="tab"] { flex: 0 0 auto; white-space: nowrap; padding: 0 20px; }
+  .a-tabs [role="tab"]:focus-visible { outline-offset: -2px; }
+}
+`
+
+describe('PL-08 the capability grid and the narrow tab strip', () => {
+  it('controls: the lookup accepts the fixture and rejects a 641px strip edge', () => {
+    expect(platformCssFailures(PLATFORM_CSS_FIXTURE('640px'))).toEqual([])
+    expect(platformCssFailures(PLATFORM_CSS_FIXTURE('641px')).length, 'a max-width 641px copy must fail the lookup').toBeGreaterThan(0)
+  })
+
+  it('landing.css sets .cols3 to 3 columns and 1 at max-width 900px, and scrolls the tab strip with unshrunk tabs at max-width 640px', () => {
+    expect(parseRules(LANDING_CSS).length, 'control: the file parsed').toBeGreaterThanOrEqual(20)
+    expect(platformCssFailures(LANDING_CSS)).toEqual([])
   })
 })

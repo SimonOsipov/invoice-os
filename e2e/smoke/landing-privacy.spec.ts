@@ -137,7 +137,7 @@ test('landing privacy: the nav returns the visitor to the sales page', async ({ 
   const nav = page.getByRole('navigation', { name: 'Primary' })
 
   const hrefs = await nav.locator('a').evaluateAll((els) => els.map((e) => e.getAttribute('href')))
-  expect(hrefs).toEqual(['/#problem']) // Nav.tsx#NAV_LINKS under hrefPrefix '/'
+  expect(hrefs).toEqual(['/#problem', '/#solution', '/#platform']) // Nav.tsx#NAV_LINKS under hrefPrefix '/'
   for (const href of hrefs) {
     expect(href ?? '', 'a nav link lost its /privacy hrefPrefix').toMatch(/^\/#/)
   }

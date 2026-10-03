@@ -623,6 +623,25 @@ func TestReconcileFork_B3c_ProductionBucketUnprovenFails(t *testing.T) {
 	}
 }
 
+func TestReconcileFork_B3c_ForkRenderedBucketUnprovenFails(t *testing.T) {
+	s := pitrFixture(t, "NONE", pitrVars(nil))
+	pitrPlantB3(t, s, []string{"WAL_ARCHIVE_BUCKET", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_SECRET"}, pitrProdMap(nil))
+	writeFile(t, filepath.Join(s.dir, "rendered-"+retryPostgresID+"-"+retryForkEnv+".json"), "null")
+	stdout, stderr, code := runReconcileFork(t, s)
+
+	if code != 1 {
+		t.Errorf("B3c: exit %d, want 1: a kept reference with no rendered value proves nothing; output = %q", code, stdout+stderr)
+	}
+	if n := pitrRenderedReads(t, s, retryForkEnv); n < 1 {
+		t.Errorf("B3c control: rendered fork Postgres map reads = %d, want at least 1: the refusal rests on that read", n)
+	}
+	if strings.Contains(stdout, "differs from production's") || strings.Contains(stdout, "Fork reconciliation complete") {
+		t.Errorf("B3c: stdout carries a pass line; stdout = %q", stdout)
+	}
+	requireNoBoot(t, s)
+	requireNoArchiveNeedles(t, stdout+stderr)
+}
+
 func TestReconcileFork_B4_UnreadableReReadFails(t *testing.T) {
 	s := pitrFixture(t, "NONE", pitrVars(nil))
 	pitrPlantProduction(t, s, pitrProdMap(nil))

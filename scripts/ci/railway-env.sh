@@ -2028,6 +2028,14 @@ ensure_bucket() {
   exit 1
 }
 
+# rendered_bucket <environment-id>: Postgres's rendered WAL_ARCHIVE_BUCKET; the unrendered map holds a template.
+rendered_bucket() {
+  graphql_post "$(gql_body "$SERVICE_VARIABLES_QUERY" \
+    "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$1" --arg s "$RAILWAY_SVC_POSTGRES_ID" '{p: $p, e: $e, s: $s}')")" \
+    "reading Postgres's rendered variables in environment $1"
+  printf '%s' "$GQL_RESPONSE" | jq -r 'if (.data.variables | type) == "object" then .data.variables.WAL_ARCHIVE_BUCKET // "" else "" end'
+}
+
 # A fork must not archive into production's bucket. Blank WAL_ARCHIVE_*; if Railway keeps a BUCKET value, it must differ from production's.
 ensure_postgres_archive_off() {
   local env_id="$1" names status pairs=() n kept="" fork_bucket prod_bucket
@@ -2069,16 +2077,19 @@ ensure_postgres_archive_off() {
     return 0
   fi
 
-  fork_bucket=$(printf '%s' "$GQL_RESPONSE" | jq -r '.data.variables.WAL_ARCHIVE_BUCKET // ""')
-  if [ -z "$fork_bucket" ]; then
+  if [[ " $kept " != *" WAL_ARCHIVE_BUCKET "* ]]; then
     echo "Postgres in $env_id keeps $kept after the blank; WAL_ARCHIVE_BUCKET is blank, so the fork does not archive."
     return 0
   fi
 
-  auth_read "$RAILWAY_DEV_ENVIRONMENT_ID" "$RAILWAY_SVC_POSTGRES_ID" Postgres
-  prod_bucket=$(printf '%s' "$GQL_RESPONSE" | jq -r 'if (.data.variables | type) == "object" then .data.variables.WAL_ARCHIVE_BUCKET // "" else "" end' 2>/dev/null) || prod_bucket=""
+  fork_bucket=$(rendered_bucket "$env_id") || fork_bucket=""
+  if [ -z "$fork_bucket" ]; then
+    echo "::error::Postgres in environment $env_id keeps a WAL_ARCHIVE_BUCKET reference, but its rendered value is unreadable or empty, so isolation from production's bucket is not proven. Value not printed."
+    exit 1
+  fi
+  prod_bucket=$(rendered_bucket "$RAILWAY_DEV_ENVIRONMENT_ID") || prod_bucket=""
   if [ -z "$prod_bucket" ]; then
-    echo "::error::Postgres in environment $env_id keeps WAL_ARCHIVE_BUCKET, and production's WAL_ARCHIVE_BUCKET is unreadable or empty, so isolation from production's bucket is not proven. Value not printed."
+    echo "::error::Postgres in environment $env_id keeps WAL_ARCHIVE_BUCKET, and production's rendered WAL_ARCHIVE_BUCKET is unreadable or empty, so isolation from production's bucket is not proven. Value not printed."
     exit 1
   fi
   if [ "$fork_bucket" = "$prod_bucket" ]; then

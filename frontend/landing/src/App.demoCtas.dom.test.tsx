@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
-// F-3: all ten rendered demo CTAs -- spread across five scopes, in five different
-// components -- open the same "Book a demo" modal. Also discharges F-12 criterion 3
+// F-3: every rendered demo CTA -- eleven of them, spread across six scopes, in six
+// different components -- opens the same "Book a demo" modal. Also discharges F-12 criterion 3
 // (every pricing tier's CTA opens the demo modal): roster entries 6-8 are the three
 // PLANS[].cta values, the same ones Pricing.billingPeriod.dom.test.tsx reads; per
 // Decisions -> [f12-criterion-3-placement] that file points back here rather than
@@ -32,7 +32,7 @@ import { FIRM, INHOUSE, FINTECH, PLANS } from './data'
 
 const DIALOG = '[role="dialog"]'
 const DEMO_DIALOG_LABEL = 'Book a demo'
-const SCOPES = ['header', '#top', '#accountants', '#pricing', '#demo', 'footer']
+const SCOPES = ['header', '#top', '#platform', '#accountants', '#pricing', '#demo', 'footer']
 
 function memoryStorage(): ConsentStore {
   const map = new Map<string, string>()
@@ -86,15 +86,16 @@ async function clickByText(root: ParentNode, text: string): Promise<void> {
   })
 }
 
-// Scope + label roster, in page order. Six of the ten labels are the imported constant
-// the CTA renders (FIRM/INHOUSE/FINTECH.cta, PLANS[].cta); the other four -- Nav, Hero
-// and Footer's "Book a demo" and "Contact ASComply" -- have no shared constant behind them,
-// so they are given as the literal each component renders. Labels repeat ACROSS scopes
+// Scope + label roster, in page order. Six of the eleven labels are the imported constant
+// the CTA renders (FIRM/INHOUSE/FINTECH.cta, PLANS[].cta); the other five -- Nav, Hero,
+// Platform and Footer's "Book a demo" and "Contact ASComply" -- have no shared constant behind
+// them, so they are given as the literal each component renders. Labels repeat ACROSS scopes
 // ("Book a demo" is Nav's, Hero's, PLANS[1]'s and Footer's) but never WITHIN one -- that is
 // what the per-entry scope assertion checks.
 const ROSTER: { scope: string; label: string }[] = [
   { scope: 'header', label: 'Book a demo' }, // Nav.tsx
   { scope: '#top', label: 'Book a demo' }, // Hero.tsx
+  { scope: '#platform', label: 'See validation in action →' }, // Platform.tsx, Validate tab at rest
   { scope: '#accountants', label: FIRM.cta },
   { scope: '#accountants', label: INHOUSE.cta },
   { scope: '#accountants', label: FINTECH.cta },
@@ -105,16 +106,17 @@ const ROSTER: { scope: string; label: string }[] = [
   { scope: 'footer', label: 'Contact ASComply' }, // Footer.tsx, same onBookDemo (D-24)
 ]
 
-// The ten controls in these six scopes that are NOT demo CTAs, named so the 20-button
-// completeness guard below (F3-f) is not a magic number:
+// The thirteen controls in these seven scopes that are NOT demo CTAs, named so the
+// 24-button completeness guard below (F3-f) is not a magic number:
 //   header        -- "Platform login" (sign-in), the burger
+//   #platform     -- the Validate / Approve / Submit tabs (3)
 //   #accountants  -- the firm / inhouse / fintech audience-switch tabs (3)
 //   #pricing      -- the Monthly / Annual billing-period toggle (2)
 //   #demo         -- the shared form's "Book my demo →" submit
 //   footer        -- "Open the cockpit" (sign-in), "Cookie choices"
-const NON_CTA_COUNT = 10
+const NON_CTA_COUNT = 13
 
-describe('F-3: all ten rendered demo CTAs open the same modal', () => {
+describe('F-3: every rendered demo CTA opens the same modal', () => {
   it('F3-a: control needle -- zero dialogs at rest, and every scope resolves to >= 1 button', async () => {
     await mountApp()
     expect(document.querySelectorAll(DIALOG).length).toBe(0)
@@ -126,26 +128,26 @@ describe('F-3: all ten rendered demo CTAs open the same modal', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('F3-b: the roster is exactly 10 entries, and no scope hides a duplicate CTA label', () => {
-    expect(ROSTER.length).toBe(10)
+  it('F3-b: the roster is exactly 11 entries, and no scope hides a duplicate CTA label', () => {
+    expect(ROSTER.length).toBe(11)
     expect(new Set(PLANS.map((p) => p.cta)).size).toBe(3)
     expect(new Set([FIRM.cta, INHOUSE.cta, FINTECH.cta]).size).toBe(3)
   })
 
   // A2 (O3, NEW-BEHAVIOUR): the future roster, pinned against today's unedited
   // ROSTER literal above -- fails honestly until #demo's entry is dropped.
-  it('A2: the roster is exactly 10 entries, and no entry scopes to #demo', () => {
-    expect(ROSTER.length).toBe(10)
+  it('A2: the roster is exactly 11 entries, and no entry scopes to #demo', () => {
+    expect(ROSTER.length).toBe(11)
     expect(ROSTER.some((entry) => entry.scope === '#demo')).toBe(false)
   })
 
-  // F3-f: measured 3 (header) + 1 (#top) + 6 (#accountants) + 5 (#pricing) + 1 (#demo) +
-  // 4 (footer) = 20 = the 10-entry roster + the 10 named non-CTA controls above. Asserted
+  // F3-f: measured 3 (header) + 1 (#top) + 4 (#platform) + 6 (#accountants) + 5 (#pricing) +
+  // 1 (#demo) + 4 (footer) = 24 = the 11-entry roster + the 13 named non-CTA controls above. Asserted
   // with the demo modal closed -- App.tsx mounts SignInModal/DemoModal as
-  // siblings of Footer, outside every one of these six scopes, but an OPEN modal still
+  // siblings of Footer, outside every one of these seven scopes, but an OPEN modal still
   // adds buttons to the page (its own Close, and form controls) that this total ignores
   // by construction.
-  it('F3-f: the six scopes hold exactly 20 buttons in total, modal closed', async () => {
+  it('F3-f: the seven scopes hold exactly 24 buttons in total, modal closed', async () => {
     await mountApp()
     expect(document.querySelectorAll(DIALOG).length).toBe(0)
     const total = SCOPES.reduce((sum, scope) => sum + document.querySelector(scope)!.querySelectorAll('button').length, 0)
@@ -156,6 +158,7 @@ describe('F-3: all ten rendered demo CTAs open the same modal', () => {
   it.each(ROSTER)('F3-c/d/e: "$label" in "$scope" resolves once, opens the demo dialog, and closes cleanly', async ({ scope, label }) => {
     await mountApp()
     const scopeEl = document.querySelector(scope)!
+    expect(scopeEl, `expected scope "${scope}" to resolve`).not.toBeNull()
 
     const matches = Array.from(scopeEl.querySelectorAll('button')).filter((b) => b.textContent?.trim() === label)
     expect(matches.length, `expected exactly one "${label}" button within "${scope}"`).toBe(1)
@@ -214,6 +217,43 @@ describe('F3-h: the hero Book a demo keeps its attribution', () => {
 
       expect(trackDemoOpen.mock.calls).toEqual([['hero']])
       expect(document.querySelectorAll(DIALOG).length).toBe(1)
+      expect(consoleError).not.toHaveBeenCalled()
+    } finally {
+      vi.doUnmock('./analytics')
+    }
+  })
+})
+
+describe('F3-j: the Platform panel link reports platform on every tab', () => {
+  it("each tab's link opens one demo dialog and reports trackDemoOpen('platform'); selecting a tab alone reports nothing", async () => {
+    const trackDemoOpen = vi.fn()
+    vi.doMock('./analytics', async () => ({ ...(await vi.importActual<object>('./analytics')), trackDemoOpen }))
+    try {
+      await mountApp()
+      const platform = document.querySelector('#platform')
+      expect(platform, 'expected #platform to resolve').not.toBeNull()
+      const tabs = Array.from(platform!.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+      expect(tabs.length, 'control: three Platform tabs').toBe(3)
+      expect(trackDemoOpen, 'control: nothing tracked yet').not.toHaveBeenCalled()
+
+      const links = ['See validation in action →', 'See approvals in action →', 'See submission in action →']
+      for (const [i, link] of links.entries()) {
+        await act(async () => {
+          tabs[i].click()
+        })
+        expect(trackDemoOpen, `tab ${i}: selecting it reports nothing`).toHaveBeenCalledTimes(i)
+
+        await clickByText(platform!, link)
+
+        expect(trackDemoOpen, `tab ${i}: the link reported once`).toHaveBeenCalledTimes(i + 1)
+        expect(document.querySelectorAll(DIALOG).length, `tab ${i}: one dialog`).toBe(1)
+        await act(async () => {
+          document.querySelector<HTMLButtonElement>(`${DIALOG} button[aria-label="Close"]`)!.click()
+        })
+        expect(document.querySelectorAll(DIALOG).length, `tab ${i}: closed`).toBe(0)
+      }
+
+      expect(trackDemoOpen.mock.calls).toEqual([['platform'], ['platform'], ['platform']])
       expect(consoleError).not.toHaveBeenCalled()
     } finally {
       vi.doUnmock('./analytics')

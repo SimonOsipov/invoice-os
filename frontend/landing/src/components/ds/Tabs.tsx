@@ -8,6 +8,7 @@ type TabsProps = {
   value: string
   onChange: (id: string) => void
   className?: string
+  'aria-label'?: string
   panelStyle?: CSSProperties
   children?: ReactNode
 }

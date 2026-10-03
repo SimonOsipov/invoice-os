@@ -337,3 +337,41 @@ describe('SO-08 the Solution highlight line takes --highlight-on-dark-2', () => 
     expect(tokens.get('--highlight-on-dark-2'), '--highlight-on-dark-2 is defined, outside any comment').toBeTruthy()
   })
 })
+
+/** The capability grid and narrow tab strip contract: the failures, empty when it holds. */
+function platformCssFailures(css: string): string[] {
+  const rules = parseRules(css).map((r) => ({ ...r, selector: r.selector.replace(/'/g, '"') }))
+  const cols = (at: (a: string[]) => boolean) => declared(rules, '.cols3', 'grid-template-columns', at)
+  const tab = (selector: string, prop: string) => declared(rules, selector, prop, maxWidth(640))
+  const checks: [string, string | undefined, string][] = [
+    ['.cols3 columns outside any media', cols(noAt), 'repeat(3, minmax(0, 1fr))'],
+    ['.cols3 columns at max-width 900px', cols(maxWidth(900)), 'minmax(0, 1fr)'],
+    ['.a-tabs tablist overflow-x at max-width 640px', tab('.a-tabs [role="tablist"]', 'overflow-x'), 'auto'],
+    ['.a-tabs tablist scrollbar-width at max-width 640px', tab('.a-tabs [role="tablist"]', 'scrollbar-width'), 'none'],
+    ['.a-tabs tab flex at max-width 640px', tab('.a-tabs [role="tab"]', 'flex'), '0 0 auto'],
+    ['.a-tabs tab white-space at max-width 640px', tab('.a-tabs [role="tab"]', 'white-space'), 'nowrap'],
+    ['.a-tabs tab padding at max-width 640px', tab('.a-tabs [role="tab"]', 'padding'), '0 20px'],
+  ]
+  return checks.filter(([, got, want]) => got !== want).map(([what, got, want]) => `${what}: ${got} != ${want}`)
+}
+
+const PLATFORM_CSS_FIXTURE = (narrow: string) => `
+.cols3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 900px) { .cols3 { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: ${narrow}) {
+  .a-tabs [role="tablist"] { overflow-x: auto; scrollbar-width: none; }
+  .a-tabs [role="tab"] { flex: 0 0 auto; white-space: nowrap; padding: 0 20px; }
+}
+`
+
+describe('PL-08 the capability grid and the narrow tab strip', () => {
+  it('controls: the lookup accepts the fixture and rejects a 641px strip edge', () => {
+    expect(platformCssFailures(PLATFORM_CSS_FIXTURE('640px'))).toEqual([])
+    expect(platformCssFailures(PLATFORM_CSS_FIXTURE('641px')).length, 'a max-width 641px copy must fail the lookup').toBeGreaterThan(0)
+  })
+
+  it('landing.css sets .cols3 to 3 columns and 1 at max-width 900px, and scrolls the tab strip with unshrunk tabs at max-width 640px', () => {
+    expect(parseRules(LANDING_CSS).length, 'control: the file parsed').toBeGreaterThanOrEqual(20)
+    expect(platformCssFailures(LANDING_CSS)).toEqual([])
+  })
+})

@@ -324,7 +324,7 @@ test.describe('bulk import+validate — 500-invoice/60s perf gate + Day-60 stamp
   // the gateway strips X-S2S-Token before proxying ([s2s-gateway-strip]).
   //
   // MUST mint a TENANT-BEARING token (Stage-1 finding (d)): authorize()
-  // (internal/gateway/gateway.go:93-99) 403s an identity with an EMPTY
+  // (internal/gateway/gateway.go) 403s an identity with an EMPTY
   // TenantID BEFORE the request ever reaches the proxy -- a tenant-less token
   // would get 403 and prove nothing about the strip. PERSONAS.A resolves to a
   // real seeded persona (topology/targets.ts's TENANTS.a), so login() mints a

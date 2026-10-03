@@ -1097,7 +1097,7 @@ func TestMockIssuerEnabled(t *testing.T) {
 // at 04's batch route through the one public backend surface.
 //
 // The smuggler must first clear authorize(), which 403s on an empty
-// TenantID (gateway.go:90-95) -- so this test uses a TENANT-BEARING
+// TenantID -- so this test uses a TENANT-BEARING
 // identity (validToken, testTenant), per Stage-1 addendum G4: a request
 // with no tenant never reaches the proxy and would assert nothing.
 func TestS2STokenNeverReachesUpstream(t *testing.T) {

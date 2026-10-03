@@ -205,10 +205,10 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disa
   (runbook step 6). Context services, opsconsole, and Postgres are private-network
   only. Private networking is the first control; the gateway token is the second: a
   context service that did get a public domain still refuses any request without
-  `X-Gateway-Token`.
-- **Gateway token (every context service):** read `GATEWAY_TOKEN` with `mustEnv` before
-  any database contact or seeding, and call `app.RequireGateway(token)` before
-  `app.Run` (`TestRLS_EveryContextServiceRefusesAForgedRequest`). Declare only peer
+  `X-Gateway-Token`, except `GET /healthz`, `GET /readyz` and its declared peer routes.
+- **Gateway token (every context service):** read `GATEWAY_TOKEN` with `mustEnv` and call
+  `app.RequireGateway(token)` before `app.Run`
+  (`TestRLS_EveryContextServiceRefusesAForgedRequest`). Declare only peer
   routes as open arguments. Add the service to `GATEWAY_TOKEN_SERVICES` in
   `scripts/ci/railway-env.sh` (`TestGatewayTokenServicesMatchTheRoutedFleet`) and to
   `e2e/api/service-auth.spec.ts`. Never seal `GATEWAY_TOKEN`: a sealed variable does
@@ -271,11 +271,13 @@ returned by step 1.
    ```
    Plus service-specific variables (e.g. `DATABASE_URL` = `${{Postgres.DATABASE_URL}}`)
    — one `variableUpsert` each. A context service also needs `GATEWAY_TOKEN`, unsealed
-   and equal to the gateway's value: run `railway-env.sh set-production-gateway-token
-   <environment-id>` by hand (U1). It writes one generated value to the gateway and the
-   seven services, and refuses a partly set production state; recover by deleting the
-   partial `GATEWAY_TOKEN` variables by hand, then re-run. It is a precondition of any
-   production deploy of this code. This is the one-variable-at-a-time production path; fork
+   and equal to the gateway's value; without it the service exits at boot. The first
+   production write is `railway-env.sh set-production-gateway-token <environment-id>`,
+   run by hand: it writes one generated value to the gateway and the seven services only
+   when none holds it, and refuses a partly set state
+   (`TestSetProductionGatewayToken_RefusesAPartialOrMixedSet`). For a service added
+   after that write, upsert the gateway's current value with `variableUpsert`. This is the
+   one-variable-at-a-time production path; fork
    writes in CI go through `set_service_vars` and `variableCollectionUpsert`.
 5. **First deploy** from current `main`:
    ```graphql

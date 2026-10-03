@@ -1,8 +1,7 @@
 // All landing content, re-authored from the prototype's support.js state as
 // typed, static TS constants (the support.js Mustache runtime is NOT ported).
 
-import type { ReactNode } from 'react'
-import { Icon, type GlyphName } from './icons'
+import type { GlyphName } from './icons'
 
 /* ------------------------------------------------------------------ */
 /* Hero — animated validation mock                                     */
@@ -168,22 +167,6 @@ export const CAPABILITIES: { icon: GlyphName; title: string; body: string }[] = 
 ]
 
 /* ------------------------------------------------------------------ */
-/* Compliance — MBS readiness rules                                    */
-/* ------------------------------------------------------------------ */
-
-export type Rule = { title: string; body: string; glyph: ReactNode }
-
-// Rule-list glyphs sit in 36px icon tiles, so they render at the DS's 18px rung.
-const rg = (paths: string[]) => <Icon paths={paths} size={18} />
-
-export const RULES: Rule[] = [
-  { title: 'TIN & VAT identifier checks', body: 'Format, presence, and buyer/seller match validated automatically.', glyph: rg(['m9 12 2 2 4-4', 'M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9Z']) },
-  { title: 'WHT & tax computation logic', body: 'Withholding and VAT recalculated and reconciled per line.', glyph: rg(['M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6']) },
-  { title: 'Duplicate & sequence detection', body: 'Repeated invoice numbers and out-of-order dates flagged.', glyph: rg(['M8 16H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2', 'M14 8h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2v-6']) },
-  { title: 'Readiness score, live', body: 'A single number that tells you exactly how audit-ready you are.', glyph: rg(['M3 3v18h18', 'm19 9-5 5-4-4-3 3']) },
-]
-
-/* ------------------------------------------------------------------ */
 /* Solutions — three workspaces behind one switch                      */
 /* ------------------------------------------------------------------ */
 
@@ -293,104 +276,3 @@ export const FAQS: { q: string; a: string }[] = [
     a: 'The platform includes a multi-client partner workspace, so accounting and tax teams can manage client companies and review their invoice workflows from one place. Ask for a walkthrough tailored to your practice.',
   },
 ]
-
-/* ------------------------------------------------------------------ */
-/* Pricing — plans (monthly / annual)                                  */
-/* ------------------------------------------------------------------ */
-
-export type PlanVariant = 'light' | 'featured'
-
-export type Plan = {
-  name: string
-  featured: boolean
-  tagline: string
-  priceMonthly: string
-  priceAnnual: string
-  unit: string
-  metaMonthly: string
-  metaAnnual: string
-  cta: string
-  variant: PlanVariant
-  features: string[]
-}
-
-export const PLANS: Plan[] = [
-  {
-    name: 'Starter',
-    featured: false,
-    tagline: 'Validation, export & archiving for a single business.',
-    priceMonthly: '₦95k',
-    priceAnnual: '₦79k',
-    unit: '/mo',
-    metaMonthly: 'BILLED MONTHLY · 1 TENANT',
-    metaAnnual: 'BILLED ANNUALLY · 1 TENANT',
-    cta: 'Start free',
-    variant: 'light',
-    features: ['Up to 1,000 invoices / mo', 'Validation engine + readiness score', 'PDF + JSON/XML/UBL export', 'Immutable audit log', 'Email support'],
-  },
-  {
-    name: 'Growth',
-    featured: true,
-    tagline: 'For medium taxpayers & high-volume suppliers going live.',
-    priceMonthly: '₦340k',
-    priceAnnual: '₦283k',
-    unit: '/mo',
-    metaMonthly: 'BILLED MONTHLY · UP TO 5 TENANTS',
-    metaAnnual: 'BILLED ANNUALLY · UP TO 5 TENANTS',
-    cta: 'Book a demo',
-    variant: 'featured',
-    features: ['Up to 25,000 invoices / mo', 'API v1 + signed webhooks', 'Approval workflows & roles', 'Live MBS/NRS transmission', 'ERP connectors', 'Priority support'],
-  },
-  {
-    name: 'Firm / Enterprise',
-    featured: false,
-    tagline: 'For accounting firms & enterprises managing many clients.',
-    priceMonthly: 'Custom',
-    priceAnnual: 'Custom',
-    unit: '',
-    metaMonthly: 'PARTNER PROGRAM · UNLIMITED TENANTS',
-    metaAnnual: 'PARTNER PROGRAM · UNLIMITED TENANTS',
-    cta: 'Talk to sales',
-    variant: 'light',
-    features: ['Unlimited invoices & tenants', 'Multi-client partner portal', 'Partner commercials on request', 'SSO, SCIM & audit exports', 'Dedicated compliance manager', 'Country-module roadmap access'],
-  },
-]
-
-/* Resolved color set per pricing card variant. */
-export const PLAN_COLORS: Record<PlanVariant, {
-  cardBg: string
-  cardBorder: string
-  titleColor: string
-  subColor: string
-  featColor: string
-  btnBg: string
-  btnFg: string
-  btnBorder: string
-  checkColor: string
-}> = {
-  light: {
-    cardBg: 'var(--bg-2)',
-    cardBorder: 'var(--line-2)',
-    titleColor: 'var(--fg-1)',
-    subColor: 'var(--fg-3)',
-    featColor: 'var(--fg-2)',
-    btnBg: 'transparent',
-    btnFg: 'var(--fg-1)',
-    btnBorder: 'var(--line-2)',
-    checkColor: 'var(--action)',
-  },
-  /* The featured tier: a flat dark --surface card with a
-     transparent border and an accent CTA. On light cards the checks are teal
-     (action); on this dark card they are accent, per the prototype. */
-  featured: {
-    cardBg: 'var(--surface)',
-    cardBorder: 'transparent',
-    titleColor: 'var(--surface-foreground)',
-    subColor: 'oklch(100% 0 0 / .62)',
-    featColor: 'oklch(100% 0 0 / .84)',
-    btnBg: 'var(--accent)',
-    btnFg: 'var(--ink)',
-    btnBorder: 'var(--accent)',
-    checkColor: 'var(--accent)',
-  },
-}

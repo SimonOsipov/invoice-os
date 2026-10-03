@@ -3,11 +3,10 @@ import { Nav } from './components/Nav'
 import { SignInModal } from './components/SignInModal'
 import { DemoModal } from './components/DemoModal'
 import { Hero } from './components/Hero'
-import { TrustStrip } from './components/TrustStrip'
+import { AudienceStrip } from './components/AudienceStrip'
 import { Problem } from './components/Problem'
 import { Modules } from './components/Modules'
 import { Platform } from './components/Platform'
-import { Compliance } from './components/Compliance'
 import { Coverage } from './components/Coverage'
 import { Intelligence } from './components/Intelligence'
 import { Solutions } from './components/Solutions'
@@ -15,7 +14,6 @@ import { Integrations } from './components/Integrations'
 import { Api } from './components/Api'
 import { Faq } from './components/Faq'
 import { ClosingCta } from './components/ClosingCta'
-import { Pricing } from './components/Pricing'
 import { Footer } from './components/Footer'
 import { Privacy } from './components/Privacy'
 import { CookieNotice } from './components/CookieNotice'
@@ -131,11 +129,10 @@ export default function App() {
       ) : (
         <>
           <Hero onBookDemo={book('hero')} />
-          <TrustStrip />
+          <AudienceStrip />
           <Problem />
           <Modules />
           <Platform onBookDemo={book('platform')} />
-          <Compliance />
           <Coverage onBookDemo={book('coverage')} />
           <Intelligence />
           <Solutions onBookDemo={book('audience')} />
@@ -143,7 +140,6 @@ export default function App() {
           <Api onBookDemo={book('api')} />
           <Faq onBookDemo={book('faq')} />
           <ClosingCta onBookDemo={book('closing')} />
-          <Pricing onBookDemo={book('pricing')} />
         </>
       )}
       <Footer onBookDemo={book('footer')} onSignIn={onSignIn} hrefPrefix={privacy ? '/' : ''} onCookieChoices={() => setReopened(true)} />

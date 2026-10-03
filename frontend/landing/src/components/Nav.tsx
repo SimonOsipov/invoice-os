@@ -10,6 +10,8 @@ export const NAV_LINKS: { label: string; href: string }[] = [
   { label: 'The problem', href: '#problem' },
   { label: 'The solution', href: '#solution' },
   { label: 'Platform', href: '#platform' },
+  { label: "Who it's for", href: '#solutions' },
+  { label: 'Integrations', href: '#integrations' },
 ]
 
 const NAV_HREFS = NAV_LINKS.map((l) => l.href)

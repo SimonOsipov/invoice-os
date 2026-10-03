@@ -109,6 +109,101 @@ export const MODULES: Module[] = [
 ]
 
 /* ------------------------------------------------------------------ */
+/* Platform tabs — Validate / Approve / Submit                         */
+/* ------------------------------------------------------------------ */
+
+export type PlatformTabId = 'validate' | 'approve' | 'submit'
+
+export type PlatformTab = {
+  id: PlatformTabId
+  label: string
+  icon: GlyphName
+  stepLabel: string
+  h1: string
+  h2: string
+  body: string
+  tags: string[]
+  link: string
+  cardIcon: GlyphName
+  cardTitle: string
+  kind: string
+  result: string
+  sub: string
+  rows: { label: string; status: string }[]
+}
+
+const rows = (labels: string[], status: string[]) => labels.map((label, i) => ({ label, status: status[i] }))
+
+export const PLATFORM_TABS: PlatformTab[] = [
+  {
+    id: 'validate',
+    label: 'Validate',
+    icon: 'shield-check',
+    stepLabel: '01 / VALIDATE',
+    h1: 'Get it right.',
+    h2: 'Before it goes out.',
+    body: 'Bring in invoice data from your CRM or ERP, such as Odoo or Sage, or upload PDFs, photos, Excel and CSV files. Check required fields, totals and duplicates before an invoice moves forward. Give your team clear results they can act on.',
+    tags: ['Required fields', 'Tax logic', 'Duplicate checks'],
+    link: 'See validation in action →',
+    cardIcon: 'file-check',
+    cardTitle: 'Invoice validation',
+    kind: 'VALIDATION RESULT',
+    result: 'All checks passed.',
+    sub: 'Ready for internal review.',
+    rows: rows(
+      ['Buyer & seller details', 'Tax calculation & totals', 'Invoice number & duplicates', 'Required invoice fields'],
+      ['Passed', 'Passed', 'Passed', 'Passed'],
+    ),
+  },
+  {
+    id: 'approve',
+    label: 'Approve',
+    icon: 'user-check',
+    stepLabel: '02 / APPROVE',
+    h1: 'Every decision.',
+    h2: 'A clear owner.',
+    body: 'Move invoices from creator to reviewer to approver, or build custom approval workflows that match how your team works. Keep rejection notes and status history together so your team can resolve issues with context.',
+    tags: ['Custom workflows', 'Review roles', 'Rejection notes', 'Status trail'],
+    link: 'See approvals in action →',
+    cardIcon: 'user-check',
+    cardTitle: 'Invoice approval',
+    kind: 'APPROVAL RESULT',
+    result: 'Approval complete.',
+    sub: 'Ready for submit.',
+    rows: rows(
+      ['Invoice created', 'Reviewed by finance', 'Approved by authorised user', 'Approval trail recorded'],
+      ['Complete', 'Complete', 'Complete', 'Complete'],
+    ),
+  },
+  {
+    id: 'submit',
+    label: 'Submit',
+    icon: 'send',
+    stepLabel: '03 / SUBMIT',
+    h1: 'Send it on.',
+    h2: 'Track every response.',
+    body: 'Submit approved invoices to the tax authority — in Nigeria, the NRS, via its Merchant Buyer Solution (MBS). Generate QR codes, follow each submission, and keep an audit trail of every action with the invoice record.',
+    tags: ['QR code', 'Status tracking', 'Full audit trail'],
+    link: 'See submission in action →',
+    cardIcon: 'send',
+    cardTitle: 'Tax authority submission',
+    kind: 'SUBMISSION RESULT',
+    result: 'Submission accepted.',
+    sub: 'Response recorded with the invoice.',
+    rows: rows(
+      ['Approved invoice submitted', 'Authority response received', 'Submission status tracked', 'QR code and audit trail generated'],
+      ['Sent', 'Received', 'Tracked', 'Generated'],
+    ),
+  },
+]
+
+export const CAPABILITIES: { icon: GlyphName; title: string; body: string }[] = [
+  { icon: 'layout-dashboard', title: 'One invoice workspace', body: 'Manage drafts, line items, credit notes and invoice records.' },
+  { icon: 'key-round', title: 'The right access', body: 'Give your team clear roles across creation, review and approval.' },
+  { icon: 'chart-column', title: 'Useful visibility', body: 'Review invoice volumes, tax summaries and validation results.' },
+]
+
+/* ------------------------------------------------------------------ */
 /* Compliance — MBS readiness rules                                    */
 /* ------------------------------------------------------------------ */
 

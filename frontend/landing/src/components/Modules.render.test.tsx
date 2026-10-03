@@ -54,12 +54,12 @@ describe('SO-01 #solution exists once and the retired section id is gone', () =>
     expect(page.querySelectorAll(`[id="${RETIRED_ID}"]`).length).toBe(0)
   })
 
-  it('the band is the page <section> between #problem and #how, and holds the only .mod-grid', () => {
+  it('the band is the page <section> between #problem and #platform, and holds the only .mod-grid', () => {
     const page = toFrag(createElement(App))
     const ids = [...page.querySelectorAll('section[id]')].map((s) => s.id)
     expect(ids.length, 'control: the page rendered its sections').toBeGreaterThan(3)
     expect(ids.indexOf('solution')).toBe(ids.indexOf('problem') + 1)
-    expect(ids.indexOf('how')).toBe(ids.indexOf('solution') + 1)
+    expect(ids.indexOf('platform')).toBe(ids.indexOf('solution') + 1)
     expect(page.querySelectorAll('.mod-grid').length).toBe(1)
     expect(page.querySelectorAll('#solution .mod-grid > .mod-cell').length).toBe(12)
   })

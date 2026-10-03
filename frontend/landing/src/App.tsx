@@ -6,6 +6,7 @@ import { Hero } from './components/Hero'
 import { TrustStrip } from './components/TrustStrip'
 import { Problem } from './components/Problem'
 import { Modules } from './components/Modules'
+import { Platform } from './components/Platform'
 import { HowItWorks } from './components/HowItWorks'
 import { Compliance } from './components/Compliance'
 import { Audience } from './components/Audience'
@@ -56,8 +57,7 @@ export default function App() {
   const [consent, setConsent] = useState<ConsentRecord | null>(() => readConsent())
   // Once a choice is stored the footer control is the only route back to the notice.
   const [reopened, setReopened] = useState(false)
-  // Source-bound per call site: the five components keep `onBookDemo: () => void`
-  // and stay untouched, so one file carries the attribution instead of six.
+  // Source-bound per call site: the components keep `onBookDemo: () => void`, so this file carries the attribution.
   const book = (source: DemoCtaSource) => () => {
     trackDemoOpen(source)
     setDemoOpen(true)
@@ -131,6 +131,7 @@ export default function App() {
           <TrustStrip />
           <Problem />
           <Modules />
+          <Platform onBookDemo={book('platform')} />
           <HowItWorks />
           <Compliance />
           <Audience onBookDemo={book('audience')} />

@@ -33,7 +33,7 @@ export function useTabKeys(ids: string[], value: string, onChange: (id: string) 
   return { selected, tabIndexOf, onKeyDown, ref }
 }
 
-export function Tabs({ tabs, value, onChange, className, panelStyle, children }: TabsProps) {
+export function Tabs({ tabs, value, onChange, className, 'aria-label': ariaLabel, panelStyle, children }: TabsProps) {
   const base = useId()
   const panelId = `${base}-panel`
   const tabId = (id: string) => `${base}-tab-${id}`
@@ -44,7 +44,7 @@ export function Tabs({ tabs, value, onChange, className, panelStyle, children }:
   )
   return (
     <div className={className ? `ds-tabs ${className}` : 'ds-tabs'}>
-      <div role="tablist" className="ds-tabs-list">
+      <div role="tablist" className="ds-tabs-list" aria-label={ariaLabel}>
         {tabs.map((t, i) => (
           <button
             key={t.id}

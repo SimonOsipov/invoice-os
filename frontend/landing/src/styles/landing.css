@@ -210,6 +210,10 @@ button {
 .split {
   display: grid;
 }
+.cols3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
 
 .hero-scan {
   position: absolute;
@@ -254,6 +258,9 @@ button {
 }
 
 @media (max-width: 900px) {
+  .cols3 {
+    grid-template-columns: minmax(0, 1fr);
+  }
   .split {
     grid-template-columns: minmax(0, 1fr) !important;
   }
@@ -268,6 +275,18 @@ button {
   }
   .ios-demo-card {
     padding: 36px 22px !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .a-tabs [role="tablist"] {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .a-tabs [role="tab"] {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    padding: 0 20px;
   }
 }
 

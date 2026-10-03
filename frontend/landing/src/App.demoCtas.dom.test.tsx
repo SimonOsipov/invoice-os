@@ -287,7 +287,7 @@ describe('F3-i: the footer demo buttons keep the footer attribution; Open the co
       await clickByText(document.querySelector('footer')!, 'Open the cockpit')
 
       expect(trackDemoOpen).not.toHaveBeenCalled()
-      expect(Array.from(document.querySelectorAll(DIALOG), (d) => d.getAttribute('aria-label'))).toEqual(['Sign in'])
+      expect(Array.from(document.querySelectorAll(DIALOG), (d) => d.getAttribute('aria-label'))).toEqual(['Platform login'])
     } finally {
       vi.doUnmock('./analytics')
     }

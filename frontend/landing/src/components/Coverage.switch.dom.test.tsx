@@ -73,13 +73,24 @@ const ORDER = ['NG', 'KE', 'ZA'] as const
 const V_HEADER_PARAGRAPH =
   'Start with a focused launch. Build toward a connected African market, with workflows shaped around local requirements.'
 
+// V792 roadmap and V287's disclaimer, retyped. countries.ts ROADMAP must equal the roadmap.
+const V_ROADMAP = [
+  { n: '01', t: 'Nigeria', s: 'Our first launch market', chev: 'inline-flex' },
+  { n: '02', t: 'Kenya and South Africa', s: 'Planned expansion markets', chev: 'inline-flex' },
+  { n: '03', t: 'Pan-African ambition', s: 'Wider coverage, country by country', chev: 'none' },
+]
+const V_DISCLAIMER = 'Roadmap markets represent our direction. Availability and launch dates will be confirmed by the ASComply team.'
+const CTA_TEXT = 'Discuss your country →'
+
 let view: View
 let consoleError: ReturnType<typeof spyConsoleError>
+let onBookDemo: ReturnType<typeof vi.fn>
 
 beforeEach(async () => {
   view = mountView()
   consoleError = spyConsoleError()
-  await show(view, createElement(Coverage))
+  onBookDemo = vi.fn()
+  await show(view, createElement(Coverage, { onBookDemo }))
 })
 
 afterEach(() => {
@@ -323,6 +334,111 @@ describe('Coverage band', () => {
       expect([(flag as unknown as HTMLElement).style.display, (flag as unknown as HTMLElement).style.borderRadius], `${id} box`).toEqual(['block', '2px'])
       expect(Array.from(flag!.children).map(attrs), `${id} shapes`).toEqual(WANT[id].shapes)
     })
+  })
+
+  it('CV-09 the roadmap row is V792', () => {
+    const rows = view.container.querySelectorAll<HTMLElement>('[data-roadmap]')
+    expect(rows, 'exactly one [data-roadmap]').toHaveLength(1)
+    const row = rows[0]
+    expect(row.className).toBe('cols3')
+    expect(row.closest('.split'), 'the roadmap sits below the .split').toBeNull()
+    expect(
+      { display: row.style.display, cols: row.style.gridTemplateColumns, gap: row.style.gap, marginTop: row.style.marginTop },
+      'V283 grid',
+    ).toEqual({ display: 'grid', cols: 'repeat(3, minmax(0, 1fr))', gap: '16px', marginTop: '32px' })
+
+    const items = Array.from(row.children) as HTMLElement[]
+    expect(items, 'three roadmap items').toHaveLength(V_ROADMAP.length)
+    items.forEach((item, i) => {
+      const want = V_ROADMAP[i]
+      expect([item.style.display, item.style.alignItems, item.style.gap], `item ${want.n} row`).toEqual(['flex', 'center', '16px'])
+      const [body, chev] = Array.from(item.children) as HTMLElement[]
+      expect(item.children, `item ${want.n} holds the body and the chevron`).toHaveLength(2)
+      expect([body.style.flex, body.style.minWidth], `item ${want.n} body shrinks`).toEqual([expect.stringMatching(/^(1|1 1 0%)$/), expect.stringMatching(/^0(px)?$/)])
+      expect([body.style.display, body.style.gap, body.style.alignItems], `item ${want.n} body`).toEqual(['flex', '14px', 'flex-start'])
+      const [num, text] = Array.from(body.children) as HTMLElement[]
+      expect(body.children, `item ${want.n} body holds the number and the text`).toHaveLength(2)
+      expect(num.localName).toBe('span')
+      expect(norm(num.textContent), 'number').toBe(want.n)
+      expect([num.style.fontFamily, num.style.fontSize, num.style.color, num.style.paddingTop], `item ${want.n} number`).toEqual([
+        'var(--font-mono)',
+        '12px',
+        'var(--primary)',
+        '3px',
+      ])
+      const [title, sub] = Array.from(text.children) as HTMLElement[]
+      expect(text.children, `item ${want.n} text holds the title and the sub`).toHaveLength(2)
+      expect(title.className).toBe('t-card-title')
+      expect([norm(title.textContent), title.style.color], `item ${want.n} title`).toEqual([want.t, 'var(--primary)'])
+      expect([norm(sub.textContent), sub.style.fontSize, sub.style.lineHeight, sub.style.color], `item ${want.n} sub`).toEqual([
+        want.s,
+        '14px',
+        '1.5',
+        'var(--accent-foreground)',
+      ])
+      expect(chev.localName).toBe('span')
+      expect(chev.className, `item ${want.n} chevron`).toBe('rm-chev')
+      expect([chev.style.display, chev.style.color], `item ${want.n} chevron style`).toEqual([want.chev, 'var(--primary)'])
+    })
+
+    const chevs = Array.from(row.querySelectorAll<HTMLElement>('.rm-chev'))
+    expect(chevs.map((c) => c.style.display), 'chevron after the first two items only').toEqual(['inline-flex', 'inline-flex', 'none'])
+    for (const c of chevs.slice(0, 2)) {
+      const svg = c.querySelector('svg')
+      expect(svg, 'a shown chevron holds a glyph').not.toBeNull()
+      expect(svg!.getAttribute('width'), 'chevron size').toBe('20')
+      expect(Array.from(svg!.querySelectorAll('path')).map((p) => p.getAttribute('d')), 'chevron drawing').toEqual(GLYPHS['chevron-right'])
+    }
+  })
+
+  it('CV-10 the disclaimer and the CTA', () => {
+    const roadmap = view.container.querySelector('[data-roadmap]')
+    expect(roadmap, 'the roadmap row').not.toBeNull()
+    const row = roadmap!.nextElementSibling as HTMLElement | null
+    expect(row, 'a row follows the roadmap').not.toBeNull()
+    expect(
+      {
+        marginTop: row!.style.marginTop,
+        paddingTop: row!.style.paddingTop,
+        borderTop: row!.style.borderTop,
+        display: row!.style.display,
+        flexWrap: row!.style.flexWrap,
+        justifyContent: row!.style.justifyContent,
+        alignItems: row!.style.alignItems,
+        gap: row!.style.gap,
+      },
+      'V286 row',
+    ).toEqual({
+      marginTop: '32px',
+      paddingTop: '22px',
+      borderTop: '1px solid var(--accent-20)',
+      display: 'flex',
+      flexWrap: 'wrap',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      gap: '12px 24px',
+    })
+
+    const [p, cta] = Array.from(row!.children) as HTMLElement[]
+    expect(row!.children, 'the row holds the paragraph and the button').toHaveLength(2)
+    expect(p.localName).toBe('p')
+    expect(norm(p.textContent)).toBe(V_DISCLAIMER)
+    expect([p.style.margin, p.style.fontSize, p.style.color, p.style.maxWidth], 'V287 paragraph').toEqual([
+      '0px',
+      '14px',
+      'var(--accent-foreground)',
+      '640px',
+    ])
+    expect(cta.localName).toBe('button')
+    expect((cta as HTMLButtonElement).type).toBe('button')
+    expect(cta.className).toBe('ds-btn ds-btn--text btn-on-peach')
+    expect(norm(cta.textContent)).toBe(CTA_TEXT)
+
+    // Control: the tabs are not the CTA.
+    for (const id of ORDER) click(tab(id))
+    expect(onBookDemo, 'control: tab clicks do not book a demo').not.toHaveBeenCalled()
+    click(cta)
+    expect(onBookDemo).toHaveBeenCalledTimes(1)
   })
 
   it('CV-08 the dark panel has its title and legend', () => {

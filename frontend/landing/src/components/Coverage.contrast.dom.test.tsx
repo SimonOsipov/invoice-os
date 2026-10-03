@@ -18,6 +18,7 @@ const hex = (name: string) => TOKENS.get(name)!.toLowerCase()
 
 const V_HEADER_PARAGRAPH =
   'Start with a focused launch. Build toward a connected African market, with workflows shaped around local requirements.'
+const V_DISCLAIMER = 'Roadmap markets represent our direction. Availability and launch dates will be confirmed by the ASComply team.'
 
 let view: View
 let consoleError: ReturnType<typeof spyConsoleError>
@@ -83,7 +84,7 @@ describe('Coverage band contrast', () => {
     expect(inherit, 'control: two planted rows').toHaveLength(2)
     expect(inherit.map((r) => r.fg), 'control: a span inherits its parent; a bare p takes the band colour').toEqual([hex('--step-label'), hex('--accent-foreground')])
 
-    await show(view, createElement(Coverage))
+    await show(view, createElement(Coverage, { onBookDemo: vi.fn() }))
     const root = view.container.querySelector('section')
     expect(root, 'Coverage renders a section').not.toBeNull()
     const rows = resolveTextContrast(root!, CSS).filter((r) => !r.el.closest('[data-cov-card],[data-cov-panel]'))
@@ -105,7 +106,7 @@ describe('Coverage band contrast', () => {
   })
 
   it('CT-03 the active tab is measured on its own fill', async () => {
-    await show(view, createElement(Coverage))
+    await show(view, createElement(Coverage, { onBookDemo: vi.fn() }))
     const root = view.container.querySelector('section')
     expect(root, 'Coverage renders a section').not.toBeNull()
     const rows = resolveTextContrast(root!, CSS)
@@ -128,5 +129,38 @@ describe('Coverage band contrast', () => {
     const after = resolveTextContrast(root!, CSS).filter((r) => r.el.matches('button[aria-pressed="true"]'))
     expect(after.map((r) => r.text), 'the clicked tab is now the filled one').toEqual([tabRows[1].text])
     expect(after[0].bg).toBe(hex('--primary'))
+  })
+
+  it('CT-04 the roadmap, disclaimer and CTA are on the peach band and pass', async () => {
+    // Controls: the text button's own colour is --link; only .btn-on-peach's !important lifts it to --primary.
+    const plain = planted('<button class="ds-btn ds-btn--text">x</button>')
+    expect(plain, 'control: one planted plain text button').toHaveLength(1)
+    expect([plain[0].fg, plain[0].ratio.toFixed(2)], 'control: the DS text button resolves to --link').toEqual([hex('--link'), '4.35'])
+    const lifted = planted('<button class="ds-btn ds-btn--text btn-on-peach">x</button>')
+    expect(lifted, 'control: one planted CTA').toHaveLength(1)
+    expect([lifted[0].fg, lifted[0].ambiguous, lifted[0].ratio.toFixed(2)], 'control: .btn-on-peach wins over the DS colour').toEqual([hex('--primary'), false, '6.79'])
+
+    await show(view, createElement(Coverage, { onBookDemo: vi.fn() }))
+    const root = view.container.querySelector('section')
+    expect(root, 'Coverage renders a section').not.toBeNull()
+    const rows = resolveTextContrast(root!, CSS).filter((r) => !r.el.closest('[data-cov-card],[data-cov-panel]'))
+    const onPeach = rows.filter((r) => r.bg === hex('--peach-band'))
+    expect(onPeach.length, 'elements measured on the peach band').toBeGreaterThanOrEqual(15)
+
+    const row = (text: string) => {
+      const hits = onPeach.filter((r) => r.text === text && r.el.closest('[data-roadmap]'))
+      expect(hits, `"${text}" is measured once in the roadmap`).toHaveLength(1)
+      return hits[0]
+    }
+    for (const text of ['Nigeria', 'Our first launch market']) expect(row(text).bg, text).toBe(hex('--peach-band'))
+    expect(onPeach.filter((r) => r.text === V_DISCLAIMER), 'the V287 paragraph is measured').toHaveLength(1)
+
+    const ctas = onPeach.filter((r) => r.text === 'Discuss your country →')
+    expect(ctas, 'the CTA is measured once').toHaveLength(1)
+    expect([ctas[0].fg, ctas[0].ambiguous], 'the CTA resolves to --primary, not --link').toEqual([hex('--primary'), false])
+    expect(ctas[0].fg).not.toBe(hex('--link'))
+    expect(ctas[0].ratio.toFixed(2)).toBe('6.79')
+
+    expect(failures(rows)).toEqual([])
   })
 })

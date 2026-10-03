@@ -46,7 +46,7 @@ rc_run() {  # $1 = service name, $2 = output prefix; reads RC_TENANT and RC_CUTO
 - **Backup schedule:** none. On 2026-10-02, `railway postgres -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s 98723af0-50ca-42a4-a56a-3e0438b9ce8a pitr schedule list` printed `No backup schedule configured for Postgres.`, and with `--json` printed `[]`.
 - **Manual backup:** one, `Pre-Security-Patch Backup`, id `c3db8156-43c2-4f8e-b3af-4e128e033d0d`, taken 2026-08-22, expired 2026-09-21 (`referencedMB` 248). List: `railway postgres -p 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 -e production -s 98723af0-50ca-42a4-a56a-3e0438b9ce8a --json pitr backup list`. It is a volume backup, not a PITR source.
 - **Never drill with a volume restore.** `pitr backup restore` and a restore from the dashboard Backups tab overwrite the selected database in place: a new volume replaces production's volume. That is a production event, not a drill. Use only `pitr restore` (section 3), which creates a sibling service and never touches the source.
-- **PR forks.** A PR environment is forked from production, so a fork made after the enable copies `WAL_ARCHIVE_*`, including the bucket key and secret. `scripts/ci/railway-env.sh reconcile-fork` writes `""` to every `WAL_ARCHIVE_*` variable of the fork's Postgres before that Postgres has a deployment, then reads them back. It fails the fork when its Postgres already booted with a non-empty `WAL_ARCHIVE_*` value, names the environment, and writes nothing. That fork may have archived: delete it (`railway-env.sh delete-environment pr-<N>` or `dev-env-teardown.yml`) and tell the coordinator before you re-run. The step never prints a `WAL_ARCHIVE_*` value.
+- **PR forks.** A PR environment is forked from production, so a fork made after the enable copies `WAL_ARCHIVE_*`. The values are `${{Postgres-PITR.*}}` references, and each fork gets its own `Postgres-PITR` bucket instance. `scripts/ci/railway-env.sh reconcile-fork` writes `""` to every `WAL_ARCHIVE_*` variable of the fork's Postgres before that Postgres has a deployment, then reads them back. Railway keeps the references. The step then passes only when the fork's rendered `WAL_ARCHIVE_BUCKET` differs from production's. It fails when they match, when either side is empty or unreadable, or when the fork's Postgres already booted. A fork that failed after its Postgres booted may have archived: delete it (`railway-env.sh delete-environment pr-<N>` or `dev-env-teardown.yml`) and tell the coordinator before you re-run. The step never prints a `WAL_ARCHIVE_*` value.
 
 ## 2. Enable PITR
 
@@ -55,7 +55,7 @@ Enabling restarts production Postgres once, with a short outage. Pick the time. 
 **Precondition, for this enable and any later one:** the fork step is on the base of every PR that can fork. A PR runs the `railway-env.sh` of its head merged into its base, so a base without the step lets forks copy `WAL_ARCHIVE_*`. A draft PR forks nothing. Check:
 
 ```sh
-git fetch origin && for b in origin/main $(git branch -r --list 'origin/epic/*'); do printf '%s ' "$b"; git grep -c 'ensure_postgres_archive_off "\$env_id"' "$b" -- scripts/ci/railway-env.sh || echo MISSING; done
+git fetch origin && for b in origin/main $(git branch -r --list 'origin/epic/*'); do printf '%s ' "$b"; git grep -cF 'fork_bucket=$(rendered_bucket "$env_id")' "$b" -- scripts/ci/railway-env.sh || echo MISSING; done
 ```
 
 A base that prints `MISSING` needs a hold on PR environments, agreed with the coordinator, before the enable.

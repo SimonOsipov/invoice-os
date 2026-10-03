@@ -1,6 +1,6 @@
 /* Local page styles — ported from the ASComply Africa prototype's inline <style>
    block. Keyframes for the hero product mock + hover transitions.
-   Token vars (--action, --bg-2, --line-3) come from bridge.css (:root);
+   Token vars (--action, --bg-2, --line-2) come from bridge.css (:root);
    --accent is the v2 peach and resolves from :root. */
 
 * {
@@ -220,7 +220,7 @@ button {
   transition: color var(--dur-base) var(--ease-out);
 }
 .mod-cell:hover .mod-body {
-  color: oklch(100% 0 0 / 0.88) !important;
+  color: rgba(255, 255, 255, 0.88) !important;
 }
 
 .split {

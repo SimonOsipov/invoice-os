@@ -1,50 +1,27 @@
-/* Landing-local bridge: maps the app-layer names the sections still use onto v2 tokens.
-   Temporary; RESKIN-05 shrinks it as sections move to the v2 primitives. */
+/* Landing-local bridge: app-layer names still read by Privacy, the forms, CookieNotice, App, auth.ts
+   and @invoice-os/monitoring. */
 :root {
   --bg-1: var(--background);
   --bg-2: var(--card);
-  --bg-3: var(--muted);
   --fg-1: var(--ink);
   --fg-2: var(--foreground);
   --fg-3: var(--muted-foreground);
-  --fg-4: var(--text-copy);
   --line-1: var(--border);
   --line-2: var(--input);
-  --line-3: var(--button-outline-border);
   --action: var(--primary);
   --action-tint: var(--primary-10);
-  --action-glow: var(--primary-20);
-  --teal-300: var(--mint);
-  --slate-200: var(--surface-foreground);
-  --slate-300: var(--surface-body);
-  --slate-400: var(--surface-body);
   --slate-900: var(--ink);
-  --status-green-bg: var(--status-success-bg);
-  --status-green-border: #c3e3cb;
-  --status-green-text: var(--status-success-fg);
-  --status-amber-bg: var(--status-progress-bg);
-  --status-amber-border: var(--status-progress-border);
-  --status-amber-text: var(--status-progress-fg);
   --status-red-bg: #fbeaea;
   --status-red-text: var(--destructive);
-  --status-muted-bg: var(--muted);
-  --status-muted-border: var(--border);
-  --status-muted-text: var(--muted-foreground);
-  --radius-input: var(--radius);
-  --radius-xs: var(--radius-sm);
 }
 
 .mono { font-family: var(--font-mono); letter-spacing: -0.015em; }
-.money { font-family: var(--font-sans); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
 .label { font-family: var(--font-sans); font-size: 10.5px; font-weight: var(--fw-semibold); color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.07em; }
 .eyebrow { display: inline-flex; align-items: center; gap: 12px; white-space: nowrap; font-family: var(--font-sans); font-size: var(--fs-eyebrow); font-weight: var(--fw-bold); line-height: 1; letter-spacing: var(--tracking-eyebrow); text-transform: uppercase; color: var(--text-eyebrow); }
 .eyebrow::before { content: ''; width: 24px; height: 1px; background: currentColor; flex: none; }
-.eyebrow-dark { color: var(--text-eyebrow-dark); }
 .v2-btn { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 20px; border: 0; border-radius: var(--radius-btn); font-family: var(--font-sans); font-size: 14px; font-weight: var(--fw-medium); cursor: pointer; transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), filter var(--dur-fast) var(--ease-out); }
 .v2-btn-primary { background: var(--primary); color: var(--primary-foreground); }
 .v2-btn-primary:hover { filter: brightness(1.22); }
-.v2-btn-ghost { background: transparent; color: var(--ink); border: 1px solid var(--button-outline-border); }
-.v2-btn-ghost:hover { background: var(--muted); }
 a.lnk { color: var(--primary); transition: color var(--dur-fast) var(--ease-out); }
 a.lnk:hover { color: var(--teal); }
 em { font-style: normal; color: var(--primary); }

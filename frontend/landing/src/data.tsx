@@ -33,7 +33,7 @@ export const HERO_CHECKS: HeroCheck[] = [
 /* The problem — what breaks today                                     */
 /* ------------------------------------------------------------------ */
 
-// Rows in V759 order; Problem.tsx resolves them from CHECKING one by one.
+// Row order and outcomes are pinned by Problem.render.test.tsx PR-05; Problem.tsx resolves them from CHECKING one by one.
 const PROBLEM_ROWS: [string, 'FAIL' | 'WARN'][] = [
   ['Missing or incomplete tax fields', 'FAIL'],
   ['Incorrect customer or supplier information', 'FAIL'],

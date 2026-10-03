@@ -12,12 +12,12 @@ const TOTAL = PROBLEMS.length
 const FAILS = PROBLEMS.filter((p) => p.tag === 'FAIL').length
 const DONE_TEXT = `${FAILS} errors · ${TOTAL - FAILS} warnings · Not ready to submit`
 
-// Read at each start, so a mid-session preference change applies (D-6).
+// Read at each start, so a mid-session preference change applies.
 const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
 const hasObserver = () => typeof IntersectionObserver === 'function'
 
 export function Problem() {
-  // No observer or reduced motion: the first render is the end state (D-2).
+  // No observer or reduced motion: the first render is the end state, with no empty frame.
   const [n, setN] = useState(() => (hasObserver() && !reducedMotion() ? 0 : TOTAL))
   const [run, setRun] = useState(0)
   const cardRef = useRef<HTMLDivElement>(null)

@@ -18,7 +18,7 @@ const V822 = [
   ['sage', 'Accounting and ERP'],
   ['odoo', 'Business applications'],
 ] as const
-// D-10: the glyph's four squares, in order.
+// The glyph's four squares, in order.
 const GLYPH_FILLS = ['var(--ink)', 'var(--teal)', 'var(--teal)', 'var(--ink)']
 
 function ssr(): DocumentFragment {
@@ -31,7 +31,7 @@ const norm = (s: string | null | undefined) => (s ?? '').replace(/\s+/g, ' ').tr
 const bg = (el: Element) => /(?:^|;)\s*background:\s*([^;]+)/.exec(el.getAttribute('style') ?? '')?.[1].trim()
 const stops = (root: Element) => [...root.querySelectorAll('a[href], button, input, select, textarea, [tabindex]')].map((e) => e.outerHTML)
 const cards = (frag: DocumentFragment) => [...frag.querySelectorAll('[data-partner]')]
-// The aria-hidden grid span with four child spans (D-10).
+// The aria-hidden grid span with four child spans.
 const glyphsIn = (card: Element) =>
   [...card.querySelectorAll('span[aria-hidden="true"]')].filter((s) => s.children.length === 4 && [...s.children].every((c) => c.localName === 'span'))
 

@@ -53,6 +53,10 @@ export function Api({ onBookDemo }: { onBookDemo: () => void }) {
             </span>
           </div>
           <pre
+            className="api-sample"
+            tabIndex={0}
+            role="region"
+            aria-label="Sample API request and response"
             style={{
               margin: 0,
               padding: '22px 20px',

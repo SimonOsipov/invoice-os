@@ -222,7 +222,7 @@ describe('R4-AN-2 the two sections render in v2 order', () => {
   })
 })
 
-// Grown by every later RESKIN-05 subtask.
+// Section order is the page contract; later sections extend it.
 describe('R5-AN section order', () => {
   const sectionIds = (html: string) => [...html.matchAll(/<section id="([^"]+)"/g)].map((m) => m[1])
 

@@ -140,6 +140,14 @@ describe('AP-05 one accent CTA', () => {
     expect(buttons, 'one button in the band').toHaveLength(1)
     expect(norm(buttons[0].textContent)).toBe('Request API access')
     expect(buttons[0].classList.contains('ds-btn--accent')).toBe(true)
-    expect(stops(ssr().querySelector('#api')!), 'the CTA is the only Tab stop; the sample is not focusable').toEqual([buttons[0].outerHTML])
+    const pre = ssr().querySelector('#api pre')!
+    expect(stops(ssr().querySelector('#api')!), 'two Tab stops in DOM order: the CTA, then the labelled sample region').toEqual([buttons[0].outerHTML, pre.outerHTML])
+  })
+
+  it('makes the scrolling sample keyboard-reachable with an accessible name', () => {
+    const pre = ssr().querySelector('#api pre')!
+    expect(pre.getAttribute('tabindex')).toBe('0')
+    expect(pre.getAttribute('role')).toBe('region')
+    expect(pre.getAttribute('aria-label')).toBe('Sample API request and response')
   })
 })

@@ -88,7 +88,7 @@ const ROSTER: { scope: string; label: string }[] = [
 ]
 
 // The eighteen controls in these ten scopes that are NOT demo CTAs, named so the
-// 31-button completeness guard below (F3-f) is not a magic number:
+// 31-button completeness guard below is not a magic number:
 //   header        -- "Platform login" (sign-in), the burger
 //   #platform     -- the Validate / Approve / Submit tabs (3)
 //   #coverage     -- the Nigeria / Kenya / South Africa country tabs (3)
@@ -109,7 +109,7 @@ describe('F-3: every rendered demo CTA opens the same modal', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  // F3-f: measured 3 (header) + 1 (#top) + 4 (#platform) + 4 (#coverage) + 6 (#solutions) + 1 (#integrations) +
+  // Measured 3 (header) + 1 (#top) + 4 (#platform) + 4 (#coverage) + 6 (#solutions) + 1 (#integrations) +
   // 1 (#api) + 6 (#faq) + 1 (closing) + 4 (footer) = 31 = the 13-entry roster + the 18 named non-CTA controls above. Asserted
   // with the demo modal closed -- App.tsx mounts SignInModal/DemoModal as
   // siblings of Footer, outside every one of these scopes, but an OPEN modal still

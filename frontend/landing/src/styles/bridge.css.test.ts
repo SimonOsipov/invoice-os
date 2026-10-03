@@ -74,7 +74,7 @@ function undefinedClasses(inputs: Record<string, string>, definingCss: readonly 
 
 const BRIDGE_KEY = 'styles/bridge.css'
 
-/** Bridge `:root` names and base classes that no other build input, and no kept bridge rule, reads (D-25). The bridge comes out of `files`, so a planted bridge takes the same path. */
+/** Bridge `:root` names and base classes that no other build input, and no kept bridge rule, reads. The bridge comes out of `files`, so a planted bridge takes the same path. */
 function bridgeReads(files: Record<string, string>) {
   const bridge = stripSource(BRIDGE_KEY, files[BRIDGE_KEY] ?? '')
   const rules = parseRules(bridge)
@@ -115,7 +115,7 @@ describe('bridge.css maps the app-layer names onto v2', () => {
     const { names, classes, readers, unread } = bridgeReads(files)
     expect(names.length).toBeGreaterThanOrEqual(10)
     expect(classes.length).toBeGreaterThanOrEqual(5)
-    // e2e/personas.test.ts parses auth.ts, which reads these three (H-5).
+    // e2e/personas.test.ts parses auth.ts, which reads these three.
     for (const n of ['--action', '--action-tint', '--slate-900']) expect(readers.get(n) ?? [], `${n} is read by auth.ts`).toContain('auth.ts')
     expect(unread, `unread bridge names: ${unread.join(' ')}`).toEqual([])
   })

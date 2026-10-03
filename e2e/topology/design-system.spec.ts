@@ -1,4 +1,4 @@
-// The deployed proof of the v2/v1 split, the landing frame's geometry and the Problem, Solution, Platform, Coverage and Intelligence sections, and the whole-page bands, Solutions, Integrations, API, FAQ and closing panel (R5-GE-1..4); one topology spec on purpose, a recorded deviation from docs/e2e-convention.md.
+// The deployed proof of the v2/v1 split, the landing frame's geometry and the Problem, Solution, Platform, Coverage and Intelligence sections, and the whole-page bands, Solutions, Integrations, API, FAQ and closing panel; one topology spec on purpose, a recorded deviation from docs/e2e-convention.md.
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
@@ -1114,7 +1114,7 @@ test('landing coverage markers by keyboard and pointer', async ({ page }, testIn
   expect(errors, `console errors on the marker path:\n${errors.join('\n')}`).toEqual([])
 })
 
-// R5-GE-1..4: bands, Solutions, Integrations, API, FAQ and closing panel.
+// Bands, Solutions, Integrations, API, FAQ and closing panel.
 const GE_WIDTHS = [...WIDE_WIDTHS, 1001, 1000, 901, 900, 834, 641, 640, 390]
 const geFrame = (width: number): Frame => ({ width, height: width === 390 ? 844 : 900 })
 
@@ -1179,7 +1179,7 @@ test('landing v2 bands, top to bottom, and no horizontal overflow', async ({ pag
       expect(bands.closingBackground, `${label}: [data-closing] background vs --peach-card`).toBe(probes['background_--peach-card'])
     }
 
-    // D-32: the tab scroller and the code block scroll inside themselves; their own boxes must fit.
+    // The tab scroller and the code block scroll inside themselves; their own boxes must fit.
     const roots = ['#solutions', '#integrations', '#api', '#faq', 'section:has([data-closing])']
     const walk = await walkOverflow(page, roots.flatMap((r) => [r, `${r} *`]).join(', '), roots, '[data-sol-tabs], #api pre')
     expectNoOverflow(walk, label)
@@ -1251,7 +1251,7 @@ test('landing solutions panel height and tabs', async ({ page }, testInfo) => {
     }
     expect(Math.max(...heights) - Math.min(...heights), `${label}: panel container heights ${heights}`).toBeLessThanOrEqual(0.5)
 
-    // D-9: labels stay on one line and the focus ring has room inside the scroller.
+    // Labels stay on one line and the focus ring has room inside the scroller.
     const scroller = page.locator('[data-sol-tabs]')
     await scroller.evaluate((el) => (el.scrollLeft = 0))
     const tabsRead = await page.evaluate(() => {

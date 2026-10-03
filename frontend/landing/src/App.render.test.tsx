@@ -248,6 +248,18 @@ describe('R5-AN section order', () => {
     expect(privacy, 'neither on /privacy').not.toContain('solutions')
     expect(privacy).not.toContain('accountants')
   })
+
+  it('/ renders #integrations directly after #solutions, #api directly after it, and no #developers; /privacy none', () => {
+    const landing = sectionIds(renderAppAt('/'))
+    const privacy = sectionIds(renderAppAt('/privacy'))
+    expect(landing, 'control: the landing rendered its sections').toContain('solutions')
+    expect(landing.filter((id) => id === 'integrations'), 'one #integrations on /').toHaveLength(1)
+    expect(landing.filter((id) => id === 'api'), 'one #api on /').toHaveLength(1)
+    expect(landing[landing.indexOf('solutions') + 1], '#integrations directly after #solutions').toBe('integrations')
+    expect(landing[landing.indexOf('integrations') + 1], '#api directly after #integrations').toBe('api')
+    expect(landing, 'no #developers on /').not.toContain('developers')
+    for (const id of ['integrations', 'api', 'developers']) expect(privacy, `no #${id} on /privacy`).not.toContain(id)
+  })
 })
 
 describe('AN-03 every footer in-page link resolves to one section', () => {

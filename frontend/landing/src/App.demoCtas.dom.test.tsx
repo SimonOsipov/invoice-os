@@ -16,7 +16,7 @@ import { PLANS } from './data'
 
 const DIALOG = '[role="dialog"]'
 const DEMO_DIALOG_LABEL = 'Book a demo'
-const SCOPES = ['header', '#top', '#platform', '#coverage', '#solutions', '#pricing', '#demo', 'footer']
+const SCOPES = ['header', '#top', '#platform', '#coverage', '#solutions', '#integrations', '#api', '#pricing', '#demo', 'footer']
 
 function memoryStorage(): ConsentStore {
   const map = new Map<string, string>()
@@ -80,6 +80,8 @@ const ROSTER: { scope: string; label: string }[] = [
   { scope: '[data-sol-panel="fin"]', label: 'Find your workflow' }, // Solutions.tsx, SOL.fin.cta
   { scope: '[data-sol-panel="firm"]', label: 'Find your workflow' }, // SOL.firm.cta
   { scope: '[data-sol-panel="dev"]', label: 'Discuss a partnership' }, // SOL.dev.cta
+  { scope: '#integrations', label: 'Discuss your integration →' }, // Integrations.tsx
+  { scope: '#api', label: 'Request API access' }, // Api.tsx
   { scope: '#pricing', label: PLANS[0].cta },
   { scope: '#pricing', label: PLANS[1].cta },
   { scope: '#pricing', label: PLANS[2].cta },
@@ -87,8 +89,8 @@ const ROSTER: { scope: string; label: string }[] = [
   { scope: 'footer', label: 'Contact ASComply' }, // Footer.tsx, same onBookDemo (D-24)
 ]
 
-// The sixteen controls in these eight scopes that are NOT demo CTAs, named so the
-// 28-button completeness guard below (F3-f) is not a magic number:
+// The sixteen controls in these ten scopes that are NOT demo CTAs, named so the
+// 30-button completeness guard below (F3-f) is not a magic number:
 //   header        -- "Platform login" (sign-in), the burger
 //   #platform     -- the Validate / Approve / Submit tabs (3)
 //   #coverage     -- the Nigeria / Kenya / South Africa country tabs (3)
@@ -110,25 +112,25 @@ describe('F-3: every rendered demo CTA opens the same modal', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('F3-b: the roster is exactly 12 entries, and no scope hides a duplicate CTA label', () => {
-    expect(ROSTER.length).toBe(12)
+  it('F3-b: the roster is exactly 14 entries, and no scope hides a duplicate CTA label', () => {
+    expect(ROSTER.length).toBe(14)
     expect(new Set(PLANS.map((p) => p.cta)).size).toBe(3)
   })
 
   // A2 (O3, NEW-BEHAVIOUR): the future roster, pinned against today's unedited
   // ROSTER literal above -- fails honestly until #demo's entry is dropped.
-  it('A2: the roster is exactly 12 entries, and no entry scopes to #demo', () => {
-    expect(ROSTER.length).toBe(12)
+  it('A2: the roster is exactly 14 entries, and no entry scopes to #demo', () => {
+    expect(ROSTER.length).toBe(14)
     expect(ROSTER.some((entry) => entry.scope === '#demo')).toBe(false)
   })
 
-  // F3-f: measured 3 (header) + 1 (#top) + 4 (#platform) + 4 (#coverage) + 6 (#solutions) + 5 (#pricing) +
-  // 1 (#demo) + 4 (footer) = 28 = the 12-entry roster + the 16 named non-CTA controls above. Asserted
+  // F3-f: measured 3 (header) + 1 (#top) + 4 (#platform) + 4 (#coverage) + 6 (#solutions) + 1 (#integrations) +
+  // 1 (#api) + 5 (#pricing) + 1 (#demo) + 4 (footer) = 30 = the 14-entry roster + the 16 named non-CTA controls above. Asserted
   // with the demo modal closed -- App.tsx mounts SignInModal/DemoModal as
-  // siblings of Footer, outside every one of these eight scopes, but an OPEN modal still
+  // siblings of Footer, outside every one of these ten scopes, but an OPEN modal still
   // adds buttons to the page (its own Close, and form controls) that this total ignores
   // by construction.
-  it('F3-f: the eight scopes hold exactly 28 buttons in total, modal closed', async () => {
+  it('F3-f: the ten scopes hold exactly 30 buttons in total, modal closed', async () => {
     await mountApp()
     expect(document.querySelectorAll(DIALOG).length).toBe(0)
     const total = SCOPES.reduce((sum, scope) => {
@@ -309,6 +311,37 @@ describe('R5-F3-audience: every Solutions panel CTA reports audience', () => {
       }
 
       expect(trackDemoOpen.mock.calls).toEqual([['audience'], ['audience'], ['audience']])
+      expect(consoleError).not.toHaveBeenCalled()
+    } finally {
+      vi.doUnmock('./analytics')
+    }
+  })
+})
+
+describe('R5-F3-integrations-api: each CTA reports its own source', () => {
+  it("Discuss your integration → reports trackDemoOpen('integrations') and Request API access reports 'api'", async () => {
+    const trackDemoOpen = vi.fn()
+    vi.doMock('./analytics', async () => ({ ...(await vi.importActual<object>('./analytics')), trackDemoOpen }))
+    try {
+      await mountApp()
+      expect(trackDemoOpen, 'control: nothing tracked yet').not.toHaveBeenCalled()
+      for (const [i, [scope, label]] of (
+        [
+          ['#integrations', 'Discuss your integration →'],
+          ['#api', 'Request API access'],
+        ] as const
+      ).entries()) {
+        const band = document.querySelector(scope)
+        expect(band, `expected ${scope} to resolve`).not.toBeNull()
+        await clickByText(band!, label)
+        expect(trackDemoOpen, `${scope}: the CTA reported once`).toHaveBeenCalledTimes(i + 1)
+        expect(document.querySelectorAll(DIALOG).length, `${scope}: one dialog`).toBe(1)
+        await act(async () => {
+          document.querySelector<HTMLButtonElement>(`${DIALOG} button[aria-label="Close"]`)!.click()
+        })
+        expect(document.querySelectorAll(DIALOG).length, `${scope}: closed`).toBe(0)
+      }
+      expect(trackDemoOpen.mock.calls).toEqual([['integrations'], ['api']])
       expect(consoleError).not.toHaveBeenCalled()
     } finally {
       vi.doUnmock('./analytics')

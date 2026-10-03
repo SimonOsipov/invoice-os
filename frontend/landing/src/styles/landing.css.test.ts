@@ -415,3 +415,16 @@ describe('CV-13 the roadmap collapses at 900px and the peach button overrides th
     expect(declared(rules, '.btn-on-peach', 'border-bottom-color', noAt)).toBe('var(--primary) !important')
   })
 })
+
+// Source scan: jsdom applies no media queries. The component sets no display, so .cols6 itself makes the grid.
+describe('R5-CSS-1a .cols6 collapses 3 / 2 / 1', () => {
+  it('is a grid, then 2 tracks at max-width 1000px and 1 at max-width 640px, both !important; the three tracks stay inline', () => {
+    const rules = parseRules(LANDING_CSS)
+    expect(rules.length, 'control: the sheet parsed').toBeGreaterThan(10)
+    expect(declared(rules, '.mod-grid', 'grid-template-columns', maxWidth(1000)), 'control: a sibling collapses at 1000px').toBe('repeat(2, minmax(0, 1fr))')
+    expect(declared(rules, '.cols6', 'display', noAt)).toBe('grid')
+    expect(declared(rules, '.cols6', 'grid-template-columns', maxWidth(1000))).toBe('repeat(2, minmax(0, 1fr)) !important')
+    expect(declared(rules, '.cols6', 'grid-template-columns', maxWidth(640))).toBe('minmax(0, 1fr) !important')
+    expect(declared(rules, '.cols6', 'grid-template-columns', noAt), 'the base tracks are inline (V387), not in the sheet').toBeUndefined()
+  })
+})

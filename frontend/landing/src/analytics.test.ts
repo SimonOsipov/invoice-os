@@ -23,7 +23,7 @@ const ANALYTICS_SRC = readFileSync(join(HERE, 'analytics.ts'), 'utf8')
 const MAIN_SRC = readFileSync(join(HERE, 'main.tsx'), 'utf8')
 const APP_SRC = readFileSync(join(HERE, 'App.tsx'), 'utf8')
 const DEMO_MODAL_SRC = readFileSync(join(HERE, 'components', 'DemoModal.tsx'), 'utf8')
-const CTA_COMPONENTS = ['Nav.tsx', 'Hero.tsx', 'Platform.tsx', 'Coverage.tsx', 'Solutions.tsx', 'Pricing.tsx', 'Footer.tsx']
+const CTA_COMPONENTS = ['Nav.tsx', 'Hero.tsx', 'Platform.tsx', 'Coverage.tsx', 'Solutions.tsx', 'Integrations.tsx', 'Api.tsx', 'Pricing.tsx', 'Footer.tsx']
 const DEMO_LEAD_FORM_PATH = join(HERE, 'components', 'DemoLeadForm.tsx')
 
 const ID = 'G-E409H76XYY'
@@ -244,7 +244,7 @@ describe('App.tsx CTA bindings (AC-3)', () => {
 
     const bound = Array.from(APP_SRC.matchAll(/book\('([a-z_]+)'\)/g)).map((m) => m[1])
     expect(bound.length).toBe(DEMO_CTA_SOURCES.length)
-    expect(bound.length).toBe(7)
+    expect(bound.length).toBe(9)
     expect(bound).toContain('platform')
     expect(bound.filter((s) => s === 'coverage'), "book('coverage') is bound once").toHaveLength(1)
     expect(new Set(bound).size).toBe(bound.length)
@@ -435,8 +435,8 @@ describe('DemoModal SSR graph purity (AC-8, gap)', () => {
 // N2 (O4, NEW-BEHAVIOUR): pinned against today's unedited CTA_COMPONENTS literal
 // above -- fails honestly until DemoCta.tsx drops out of the list.
 describe('CTA components untouched (AC-3), gap-fill', () => {
-  it('N2: CTA_COMPONENTS excludes DemoCta.tsx and holds seven entries', () => {
-    expect(CTA_COMPONENTS.length).toBe(7)
+  it('N2: CTA_COMPONENTS excludes DemoCta.tsx and holds nine entries', () => {
+    expect(CTA_COMPONENTS.length).toBe(9)
     expect(CTA_COMPONENTS).not.toContain('DemoCta.tsx')
   })
 })
@@ -446,8 +446,8 @@ describe('CTA components untouched (AC-3), gap-fill', () => {
 // must hold their position however DEMO_CTA_SOURCES shrinks.
 describe('DEMO_CTA_SOURCES shrinks without moving the four cited sends (AC #7, gap)', () => {
   it('N3: demo_cta drops out, and analytics.ts keeps its four send() lines in place', () => {
-    expect(DEMO_CTA_SOURCES.length).toBe(7)
-    expect([...DEMO_CTA_SOURCES], 'DEMO_CTA_SOURCES, in page order').toEqual(['nav', 'hero', 'platform', 'coverage', 'audience', 'pricing', 'footer'])
+    expect(DEMO_CTA_SOURCES.length).toBe(9)
+    expect([...DEMO_CTA_SOURCES], 'DEMO_CTA_SOURCES, in page order').toEqual(['nav', 'hero', 'platform', 'coverage', 'audience', 'integrations', 'api', 'pricing', 'footer'])
     expect(DEMO_CTA_SOURCES).not.toContain('demo_cta')
 
     const lines = ANALYTICS_SRC.split('\n')
@@ -494,7 +494,7 @@ describe('docs/analytics.md tracks DEMO_CTA_SOURCES (AC #8, gap)', () => {
   it('N6: the button total the doc quotes is the one F3-f measures', () => {
     // The rendered-button total itself is measured by App.demoCtas.dom.test.tsx's F3-f
     // (ROSTER.length + NON_CTA_COUNT); this pins the doc's copy of it.
-    expect(ANALYTICS_DOC).toContain('values cover **twelve** buttons')
+    expect(ANALYTICS_DOC).toContain('values cover **fourteen** buttons')
     expect(ANALYTICS_DOC.replace(/\s+/g, ' '), "line 50 names Coverage's button").toContain("Coverage's Discuss your country reports `coverage`")
   })
 })

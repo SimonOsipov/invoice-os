@@ -148,8 +148,12 @@ case "$q" in
     cat "$dir/sealed.json" ;;
   *"variables(projectId"*)
     s=$(printf '%s' "$data" | jq -r '.variables | (.s // .serviceId // empty)')
-    st="$dir/store-$s.json"; [ -f "$st" ] || echo '{}' > "$st"
-    if [ -f "$dir/read-$s.jq" ]; then v=$(jq -c -f "$dir/read-$s.jq" "$st"); else v=$(cat "$st"); fi
+    e=$(printf '%s' "$data" | jq -r '.variables.e // empty')
+    st="$dir/store-$s.json"; flt="$dir/read-$s.jq"
+    # store-<s>-<e>.json serves environment e alone, bent only by read-<s>-<e>.jq.
+    if [ -n "$e" ] && [ -f "$dir/store-$s-$e.json" ]; then st="$dir/store-$s-$e.json"; flt="$dir/read-$s-$e.jq"; fi
+    [ -f "$st" ] || echo '{}' > "$st"
+    if [ -f "$flt" ]; then v=$(jq -c -f "$flt" "$st"); else v=$(cat "$st"); fi
     printf '{"data":{"variables":%s}}' "$v" ;;
   *)
     e=$(printf '%s' "$data" | jq -r '.variables.e // empty')

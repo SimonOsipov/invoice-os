@@ -891,6 +891,7 @@ test('landing coverage and intelligence geometry', async ({ page }, testInfo) =>
   const errors = collectErrors(page)
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await openLandingFrame(page)
+  await expect(page.locator('html'), 'reduced motion drops smooth scrolling').toHaveCSS('scroll-behavior', 'auto')
   const measured: unknown[] = []
 
   for (const width of [...WIDE_WIDTHS, 901, 900, 834, 390]) {
@@ -976,19 +977,31 @@ test('landing coverage and intelligence geometry', async ({ page }, testInfo) =>
     // (e) overflow: the step row scrolls inside itself, so its descendants are skipped.
     const overflow = await walkOverflow(page, '#coverage, #coverage *, #intelligence, #intelligence *', ['#coverage', '#intelligence'], '[data-intel-steps] *')
     expectNoOverflow(overflow, label)
-    const steps = await page.locator('[data-intel-steps]').evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
-    if (width === 390) expect(steps.scrollWidth, '390px: control, the step row scrolls').toBeGreaterThan(steps.clientWidth)
+    const steps = await page
+      .locator('[data-intel-steps]')
+      .evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, overflowX: getComputedStyle(el).overflowX }))
+    if (width === 390) {
+      expect(steps.scrollWidth, '390px: control, the step row overflows').toBeGreaterThan(steps.clientWidth)
+      expect(['auto', 'scroll'], '390px: control, the step row scrolls inside itself').toContain(steps.overflowX)
+    }
 
     // (f) one-line titles and labels at 1440: breaks if a title or label loses its fit.
     const lines = await page.evaluate(() => {
-      const oneLine = (el: Element) => {
+      const lineOf = (el: Element) => {
         const cs = getComputedStyle(el)
         const lh = parseFloat(cs.lineHeight)
-        const line = Number.isNaN(lh) ? parseFloat(cs.fontSize) * 1.2 : lh
-        return { height: el.getBoundingClientRect().height, line }
+        return Number.isNaN(lh) ? parseFloat(cs.fontSize) * 1.2 : lh
       }
+      // The text's own line boxes: a stretched grid row inflates the h3 box without adding a line.
+      const titleLines = (el: Element) => {
+        const range = document.createRange()
+        range.selectNodeContents(el)
+        const tops = [...range.getClientRects()].map((r) => r.top)
+        return { rects: tops.length, spread: tops.length ? Math.max(...tops) - Math.min(...tops) : 0, line: lineOf(el) }
+      }
+      const oneLine = (el: Element) => ({ height: el.getBoundingClientRect().height, line: lineOf(el) })
       return {
-        titles: [...document.querySelectorAll('[data-intel-panel] h3')].map(oneLine),
+        titles: [...document.querySelectorAll('[data-intel-panel] h3')].map(titleLines),
         labels: [...document.querySelectorAll('[data-intel-step]')].map((btn) => {
           const span = btn.querySelector(':scope > span:last-child')!
           return { ...oneLine(span), overhang: span.getBoundingClientRect().right - btn.getBoundingClientRect().right }
@@ -998,7 +1011,10 @@ test('landing coverage and intelligence geometry', async ({ page }, testInfo) =>
     if (width === 1440) {
       expect(lines.titles, `${label}: panel titles`).toHaveLength(STEP_COUNT)
       expect(lines.labels, `${label}: step labels`).toHaveLength(STEP_COUNT)
-      for (const [i, t] of lines.titles.entries()) expect(t.height, `${label}: panel title ${i} is one line`).toBeLessThanOrEqual(1.5 * t.line)
+      for (const [i, t] of lines.titles.entries()) {
+        expect(t.rects, `${label}: panel title ${i} has text lines`).toBeGreaterThanOrEqual(1)
+        expect(t.spread, `${label}: panel title ${i} is one line`).toBeLessThanOrEqual(0.5 * t.line)
+      }
       for (const [i, l] of lines.labels.entries()) {
         expect(l.height, `${label}: step label ${i} is one line`).toBeLessThanOrEqual(1.5 * l.line)
         expect(l.overhang, `${label}: step label ${i} right edge vs its button`).toBeLessThanOrEqual(1)
@@ -1035,7 +1051,7 @@ test('landing coverage and intelligence geometry', async ({ page }, testInfo) =>
   expect(errors, `console errors on the coverage and intelligence sweep:\n${errors.join('\n')}`).toEqual([])
 })
 
-// Two reads one frame apart agree once smooth scrolling has settled.
+// Two successive reads agree once the scroll has settled.
 async function stableScrollY(page: Page): Promise<number> {
   let last = -1
   await expect
@@ -1053,6 +1069,9 @@ test('landing coverage markers by keyboard and pointer', async ({ page }, testIn
   const errors = collectErrors(page)
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await openLandingFrame(page)
+  await expect(page.locator('html'), 'reduced motion drops smooth scrolling').toHaveCSS('scroll-behavior', 'auto')
+  // A card height change must not move scrollY by anchoring, or the Space check reads it as a scroll.
+  await page.addStyleTag({ content: 'html { overflow-anchor: none }' })
   await settleFrame(page, { width: 1440, height: 900 })
 
   const marker = (name: string) => page.locator(`[data-cov-markers] g[aria-label="${name}"]`)
@@ -1066,6 +1085,7 @@ test('landing coverage markers by keyboard and pointer', async ({ page }, testIn
   await expect(marker('Nigeria'), 'Tab from the card link reaches Nigeria').toBeFocused()
   await expect(ring('Nigeria'), 'focused marker shows its ring').toHaveCSS('opacity', '1')
   await expect(ring('Kenya'), 'unfocused marker hides its ring').toHaveCSS('opacity', '0')
+  await expect(ring('South Africa'), 'unfocused marker hides its ring').toHaveCSS('opacity', '0')
 
   await page.keyboard.press('Tab')
   await expect(marker('Kenya'), 'second Tab reaches Kenya').toBeFocused()

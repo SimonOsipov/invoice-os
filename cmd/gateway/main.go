@@ -51,6 +51,7 @@ func main() {
 	additional := mustParseIssuers(os.Getenv("AUTH_ADDITIONAL_ISSUERS"))
 	siteURL := mustParseSiteURL(os.Getenv("AUTH_SITE_URL"), app.Logger)
 	registerMinResponse := mustParseRegisterMinResponse(os.Getenv("AUTH_REGISTER_MIN_RESPONSE"), app.Logger)
+	gatewayToken := mustEnv("GATEWAY_TOKEN")
 
 	// Bootstrap (gated) -> migrate (unconditional) -> reset (gated, PR
 	// environments only, persona-handoff-fix Decision [pr-only-reset]) -> purge
@@ -147,7 +148,7 @@ func main() {
 	withCORS := gateway.CORS(strings.Split(os.Getenv("CORS_ALLOWED_ORIGINS"), ","))
 
 	sessions := gateway.NewSessionChecker(probed["auth"], &http.Client{Timeout: gateway.SessionCheckTimeout}, time.Now, app.Logger)
-	apiHandler, fleetHandler := gatewayHandlers(verifier, sessions, routed, probed, map[string]string{"auth": ".well-known/jwks.json"}, app.Logger)
+	apiHandler, fleetHandler := gatewayHandlers(verifier, sessions, routed, probed, map[string]string{"auth": ".well-known/jwks.json"}, app.Logger, gatewayToken)
 	app.Mux.Handle(routePrefix, withCORS(apiHandler))
 
 	// Public fleet-health roll-up, outside /api/ and outside the verifier —
@@ -225,12 +226,15 @@ func gatewayHandlers(
 	routed, probed map[string]*url.URL,
 	healthPaths map[string]string,
 	log *slog.Logger,
+	gatewayToken string,
 ) (api http.Handler, fleet http.HandlerFunc) {
 	api = gateway.Handler(gateway.Options{
 		Verifier:  verifier,
 		Sessions:  sessions,
 		Upstreams: routed,
 		Logger:    log,
+
+		GatewayToken: gatewayToken,
 	})
 
 	all := make(map[string]*url.URL, len(routed)+len(probed))

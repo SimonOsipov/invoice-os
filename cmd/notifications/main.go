@@ -7,6 +7,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"os"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 )
@@ -26,7 +27,17 @@ func main() {
 		_, _ = w.Write([]byte(`{"service":"notifications","status":"ok"}`))
 	})
 
+	app.RequireGateway(mustEnv("GATEWAY_TOKEN"))
+
 	if err := app.Run(context.Background()); err != nil {
 		platform.Fatal(app.Logger, "notifications: %v", err)
 	}
+}
+
+func mustEnv(key string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		platform.Fatal(slog.Default(), "notifications: %s is required", key)
+	}
+	return v
 }

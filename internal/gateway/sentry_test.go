@@ -25,7 +25,7 @@ import (
 func mountAPI(t *testing.T, app *platform.App, upstreams map[string]*url.URL) (http.Handler, string) {
 	t.Helper()
 	tg := setupGateway(t)
-	app.Mux.Handle(routePrefix, Handler(Options{Verifier: tg.verifier, Sessions: liveSessions(t), Upstreams: upstreams, Logger: app.Logger}))
+	app.Mux.Handle(routePrefix, Handler(Options{Verifier: tg.verifier, Sessions: liveSessions(t), Upstreams: upstreams, Logger: app.Logger, GatewayToken: testGatewayToken}))
 	return app.Handler(), tg.validToken(t)
 }
 
@@ -391,7 +391,7 @@ func TestGatewayLogs_UpstreamDoesNotOverwriteService(t *testing.T) {
 	t.Run("authz denied", func(t *testing.T) {
 		app, rec, _ := sentrytest.Boot(t, "gateway")
 		tg := setupGateway(t)
-		app.Mux.Handle(routePrefix, Handler(Options{Verifier: tg.verifier, Sessions: liveSessions(t), Upstreams: map[string]*url.URL{"invoice": closedURL(t)}, Logger: app.Logger}))
+		app.Mux.Handle(routePrefix, Handler(Options{Verifier: tg.verifier, Sessions: liveSessions(t), Upstreams: map[string]*url.URL{"invoice": closedURL(t)}, Logger: app.Logger, GatewayToken: testGatewayToken}))
 		tok := tg.mint(t, auth.MintOptions{Subject: testSubject, Role: testRole})
 
 		if got := serveAPI(app.Handler(), "/api/invoice/v1/invoices", tok).Code; got != http.StatusForbidden {

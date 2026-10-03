@@ -118,6 +118,10 @@ it never picks up a production write made after its creation. `set-fork-reconcil
 writes `http://reconciliation.railway.internal:8080` and re-reads it
 (`TestSetForkReconciliationURLAgainstAScriptedRailway`).
 
+**Written per fork, not inherited:** `GATEWAY_TOKEN`. `set-fork-gateway-token` generates one
+fresh value per PR run and writes it to the gateway and the seven guarded services, so a fork
+never keeps production's token (`TestSetForkGatewayToken_WritesOneFreshValueToTheEight`).
+
 **New (persona-handoff-fix, Decision [pr-only-reset]): `gateway.GATEWAY_DB_RESET=true`.**
 A plain (non-sealed, non-reference) variable, set on `development`'s gateway service
 alongside its existing `GATEWAY_DB_BOOTSTRAP=true` (docs/migrations.md §2) so it forks the

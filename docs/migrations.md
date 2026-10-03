@@ -292,8 +292,10 @@ current tenant is refused the same way (`tenant.go:92` — AUDIT-12 dropped D-17
 no-row exception). The gate's `SELECT status FROM memberships WHERE user_id = $1` rides the
 `set_config` above in a single `pgx.Batch`, so on the HTTP path **neither statement is
 visible to a plain `pgx.QueryTracer`** — pgx routes `SendBatch` through `pgx.BatchTracer`.
-A subject that is not a UUID skips the lookup and delegates to the core unchanged, and
-`GET /v1/me` and `POST /v1/workspaces` are the two deliberate exemptions (they call `WithinTenantTx` directly).
+A subject that is not a UUID skips the lookup and delegates to the core unchanged: only in-process
+actors (the extraction worker, `backfill-source-rows`, `revalidate-rule-set`) reach that arm,
+because over HTTP `identityMiddleware` builds no identity for one
+(`TestIdentityMiddleware_NonUUIDSubjectBuildsNoIdentity`). `GET /v1/me` and `POST /v1/workspaces` are the two deliberate exemptions (they call `WithinTenantTx` directly).
 
 ---
 

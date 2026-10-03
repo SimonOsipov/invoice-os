@@ -191,7 +191,8 @@ Production writes are the user's. The environment id is
 - Until done, the PR gate is red at prepare-env's `set-fork-auth` step, which cannot resolve
   a service named `auth`.
 - This is the **only** production action the PR gate needs. The fork writes everything else
-  itself.
+  itself. It is not the only one before a production deploy of this code: `GATEWAY_TOKEN`
+  must be written first (`set-production-gateway-token`, `docs/add-a-service.md` §5).
 
 **U2 — Create the roles and schema on production Postgres by hand**, as superuser through
 `railway ssh --service Postgres` (production Postgres is private-only). Generate the

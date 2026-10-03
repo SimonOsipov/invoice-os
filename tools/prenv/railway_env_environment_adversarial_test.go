@@ -451,4 +451,9 @@ func TestRailwayEnvGenericUsageNamesSetForkEnvironment(t *testing.T) {
 	if !strings.Contains(out, "set-fork-environment <environment-id|--self-test>") {
 		t.Errorf("the generic usage does not name set-fork-environment; output = %q", out)
 	}
+	for _, sub := range []string{"set-fork-gateway-token", productionGatewayTokenNeedle} {
+		if !strings.Contains(out, sub+" <environment-id>") {
+			t.Errorf("the generic usage does not name %s <environment-id>; output = %q", sub, out)
+		}
+	}
 }

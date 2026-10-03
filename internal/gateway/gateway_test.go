@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"regexp"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,6 +25,8 @@ const (
 	testSubject = "11111111-1111-1111-1111-111111111111"
 	testTenant  = "tenant-a"
 	testRole    = "authenticated"
+
+	testGatewayToken = "gw-test-token"
 )
 
 // capture records what an upstream service received, so tests can assert on
@@ -72,7 +76,7 @@ func setupGateway(t *testing.T) *testGateway {
 	}
 
 	return &testGateway{
-		handler:  Handler(Options{Verifier: verifier, Sessions: liveSessions(t), Upstreams: upstreams}),
+		handler:  Handler(Options{Verifier: verifier, Sessions: liveSessions(t), Upstreams: upstreams, GatewayToken: testGatewayToken}),
 		issuer:   issuer,
 		verifier: verifier,
 		caps:     caps,
@@ -258,7 +262,7 @@ func TestUnreachableUpstreamBadGateway(t *testing.T) {
 	deadURL, _ := url.Parse(dead.URL)
 	dead.Close()
 
-	h := Handler(Options{Verifier: verifier, Sessions: liveSessions(t), Upstreams: map[string]*url.URL{"tenancy": deadURL}})
+	h := Handler(Options{Verifier: verifier, Sessions: liveSessions(t), Upstreams: map[string]*url.URL{"tenancy": deadURL}, GatewayToken: testGatewayToken})
 	tok, err := issuer.Mint(auth.MintOptions{Subject: testSubject, Role: testRole, TenantID: testTenant})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
@@ -280,7 +284,7 @@ func TestHandlerRequiresSessions(t *testing.T) {
 	}
 	build := func(sessions *SessionChecker) (panicked bool) {
 		defer func() { panicked = recover() != nil }()
-		Handler(Options{Verifier: verifier, Sessions: sessions, Upstreams: map[string]*url.URL{}})
+		Handler(Options{Verifier: verifier, Sessions: sessions, Upstreams: map[string]*url.URL{}, GatewayToken: "t"})
 		return false
 	}
 	if build(liveSessions(t)) {
@@ -1087,15 +1091,13 @@ func TestMockIssuerEnabled(t *testing.T) {
 // TestS2STokenNeverReachesUpstream (VB-16, task-109/M4-04-03,
 // [s2s-gateway-strip], Stage-1 addendum G4): the gateway proxies
 // /api/validation/* to 04 (routedServices in cmd/gateway/main.go includes
-// "validation"), and injectIdentity today Sets/Dels X-Tenant-ID/X-User-*/
-// X-Request-ID but never touches X-S2S-Token (gateway.go:118-132) -- so a
-// client-supplied X-S2S-Token currently rides through to the upstream
-// unchanged. A leaked peer token smuggled this way would let a caller
-// impersonate a fleet peer at 04's batch route through the one public
-// backend surface.
+// "validation"), and injectIdentity Dels X-S2S-Token (with the identity headers it
+// Sets/Dels), so a client-supplied X-S2S-Token never rides through to the upstream.
+// A leaked peer token smuggled this way would let a caller impersonate a fleet peer
+// at 04's batch route through the one public backend surface.
 //
 // The smuggler must first clear authorize(), which 403s on an empty
-// TenantID (gateway.go:90-95) -- so this test uses a TENANT-BEARING
+// TenantID -- so this test uses a TENANT-BEARING
 // identity (validToken, testTenant), per Stage-1 addendum G4: a request
 // with no tenant never reaches the proxy and would assert nothing.
 func TestS2STokenNeverReachesUpstream(t *testing.T) {
@@ -1115,9 +1117,164 @@ func TestS2STokenNeverReachesUpstream(t *testing.T) {
 	}
 	if got := cap.header.Get("X-S2S-Token"); got != "" {
 		t.Errorf("upstream saw X-S2S-Token = %q, want empty -- a client-supplied peer token must never "+
-			"reach the upstream [s2s-gateway-strip] (injectIdentity, gateway.go:118-132, does not yet Del "+
-			"this header)", got)
+			"reach the upstream [s2s-gateway-strip] (injectIdentity must Del this header)", got)
 	}
+}
+
+func TestGatewayTokenReachesEveryUpstream(t *testing.T) {
+	tg := setupGateway(t)
+	tok := tg.validToken(t)
+	if len(tg.caps) != 7 {
+		t.Fatalf("gateway routes %d services, want 7 -- the loop below would assert nothing", len(tg.caps))
+	}
+	for svc, cap := range tg.caps {
+		t.Run(svc, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			tg.handler.ServeHTTP(rec, request("GET", "/api/"+svc+"/v1/ping", tok))
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", rec.Code)
+			}
+			if cap.hits != 1 {
+				t.Fatalf("%s hits = %d, want 1", svc, cap.hits)
+			}
+			if got := cap.header.Values(platform.HeaderGatewayToken); !slices.Equal(got, []string{testGatewayToken}) {
+				t.Errorf("%s upstream %s = %q, want [%q]", svc, platform.HeaderGatewayToken, got, testGatewayToken)
+			}
+		})
+	}
+}
+
+func TestClientSuppliedGatewayTokenIsOverwritten(t *testing.T) {
+	tg := setupGateway(t)
+	r := request("GET", "/api/tenancy/v1/ping", tg.validToken(t))
+	r.Header.Add(platform.HeaderGatewayToken, "forged")
+	r.Header.Add(platform.HeaderGatewayToken, "forged-2")
+
+	rec := httptest.NewRecorder()
+	tg.handler.ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	cap := tg.caps["tenancy"]
+	if cap.hits != 1 {
+		t.Fatalf("tenancy hits = %d, want 1", cap.hits)
+	}
+	if got := cap.header.Values(platform.HeaderGatewayToken); !slices.Equal(got, []string{testGatewayToken}) {
+		t.Errorf("upstream %s = %q, want only [%q]", platform.HeaderGatewayToken, got, testGatewayToken)
+	}
+}
+
+// The peer credential is dropped while the gateway credential is set, in the same request.
+func TestGatewayTokenIsNotTheS2SHeader(t *testing.T) {
+	tg := setupGateway(t)
+	r := request("POST", "/api/validation/v1/validate/batch", tg.validToken(t))
+	r.Header.Set("X-S2S-Token", "sneaky")
+
+	rec := httptest.NewRecorder()
+	tg.handler.ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	cap := tg.caps["validation"]
+	if cap.hits != 1 {
+		t.Fatalf("validation hits = %d, want 1", cap.hits)
+	}
+	assertHeader(t, cap.header, platform.HeaderGatewayToken, testGatewayToken)
+	assertHeader(t, cap.header, "X-S2S-Token", "")
+}
+
+func TestHandlerPanicsWithoutGatewayToken(t *testing.T) {
+	verifier, err := auth.NewVerifier(auth.Config{Issuer: testIssuer, JWKSURL: "http://127.0.0.1:1"})
+	if err != nil {
+		t.Fatalf("verifier: %v", err)
+	}
+	sessions := liveSessions(t)
+	build := func(token string) (panicked bool) {
+		defer func() { panicked = recover() != nil }()
+		Handler(Options{Verifier: verifier, Sessions: sessions, Upstreams: map[string]*url.URL{}, GatewayToken: token})
+		return false
+	}
+	if build("t") {
+		t.Fatal("Handler panicked with GatewayToken set")
+	}
+	if !build("") {
+		t.Error("Handler built with an empty GatewayToken, want a panic")
+	}
+}
+
+// The gateway composed with a platform.App that called RequireGateway: the shared token gets
+// through with the token's identity; a different one is refused by the guarded service itself
+// and answered to the client as 502, never as the user's 401.
+func TestGatewayGetsThroughAGuardedService(t *testing.T) {
+	tg := setupGateway(t)
+	tok := tg.validToken(t)
+
+	guarded := func(t *testing.T, gatewayToken string) (rec *httptest.ResponseRecorder, reached, handled *atomic.Int32) {
+		t.Helper()
+		t.Setenv("SENTRY_DSN", "")
+		prev := slog.Default()
+		t.Cleanup(func() { slog.SetDefault(prev) })
+		app, err := platform.New("tenancy")
+		if err != nil {
+			t.Fatalf("platform.New: %v", err)
+		}
+		handled = new(atomic.Int32)
+		app.Mux.HandleFunc("GET /v1/ping", func(w http.ResponseWriter, r *http.Request) {
+			handled.Add(1)
+			id, _ := auth.IdentityFromContext(r.Context())
+			_, _ = w.Write([]byte(id.Subject))
+		})
+		app.RequireGateway(testGatewayToken)
+
+		reached = new(atomic.Int32)
+		inner := app.Handler()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			reached.Add(1)
+			inner.ServeHTTP(w, r)
+		}))
+		t.Cleanup(srv.Close)
+		u, err := url.Parse(srv.URL)
+		if err != nil {
+			t.Fatalf("parse upstream url: %v", err)
+		}
+
+		h := Handler(Options{Verifier: tg.verifier, Sessions: liveSessions(t), Upstreams: map[string]*url.URL{"tenancy": u}, GatewayToken: gatewayToken})
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, request("GET", "/api/tenancy/v1/ping", tok))
+		return rec, reached, handled
+	}
+
+	t.Run("same token", func(t *testing.T) {
+		rec, reached, handled := guarded(t, testGatewayToken)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
+		}
+		if reached.Load() != 1 || handled.Load() != 1 {
+			t.Errorf("service saw %d request(s), ran its handler %d time(s), want 1 and 1", reached.Load(), handled.Load())
+		}
+		if got := rec.Body.String(); got != testSubject {
+			t.Errorf("subject at the service = %q, want %q", got, testSubject)
+		}
+	})
+
+	t.Run("different token", func(t *testing.T) {
+		rec, reached, handled := guarded(t, "other")
+		if reached.Load() != 1 {
+			t.Fatalf("service saw %d request(s), want 1 -- the refusal must come from the service, not the gateway", reached.Load())
+		}
+		if rec.Code != http.StatusBadGateway {
+			t.Errorf("status = %d, want 502", rec.Code)
+		}
+		if got := rec.Header().Get(platform.HeaderGatewayGuard); got != "" {
+			t.Errorf("%s = %q reached the client, want it stripped", platform.HeaderGatewayGuard, got)
+		}
+		if handled.Load() != 0 {
+			t.Errorf("service handler ran %d time(s) on a mismatched token, want 0", handled.Load())
+		}
+	})
 }
 
 const (
@@ -1205,5 +1362,24 @@ func assertHeader(t *testing.T, h http.Header, key, want string) {
 	t.Helper()
 	if got := h.Get(key); got != want {
 		t.Errorf("upstream header %s = %q, want %q", key, got, want)
+	}
+}
+
+// A service's own 401 (no guard marker) is the user's auth refusal and passes through unchanged.
+func TestProxyPassesAServiceOwn401Through(t *testing.T) {
+	tg := setupGateway(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parse upstream url: %v", err)
+	}
+	h := Handler(Options{Verifier: tg.verifier, Sessions: liveSessions(t), Upstreams: map[string]*url.URL{"tenancy": u}, GatewayToken: testGatewayToken})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, request("GET", "/api/tenancy/v1/ping", tg.validToken(t)))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
 	}
 }

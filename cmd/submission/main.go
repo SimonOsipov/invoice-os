@@ -222,6 +222,8 @@ func main() {
 	app.Mux.HandleFunc("POST /v1/documents", extraction.UploadHandler(
 		newDocumentStorer(docSvc.Store), newExtractionEnqueuer(pool, q), app.Logger))
 
+	app.RequireGateway(mustEnv("GATEWAY_TOKEN"))
+
 	if err := app.Run(ctx); err != nil {
 		platform.Fatal(app.Logger, "submission: %v", err)
 	}
@@ -619,4 +621,12 @@ func workerBundle(sw *submission.SubmitWorker, pw *submission.PollWorker, ew *ex
 	bundle := submission.Workers(sw, pw)
 	extraction.AddTo(bundle, ew)
 	return bundle
+}
+
+func mustEnv(key string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		platform.Fatal(slog.Default(), "submission: %s is required", key)
+	}
+	return v
 }

@@ -38,6 +38,9 @@ func main() {
 		platform.Fatal(slog.Default(), "invoice: startup: %v", err)
 	}
 
+	// Read first: a boot without the token must exit before any DB contact or seeding.
+	gatewayToken := mustEnv("GATEWAY_TOKEN")
+
 	// The invoice_app (NOBYPASSRLS) connection pool. DATABASE_URL is required — an
 	// invoice service that cannot reach its database is misconfigured, not
 	// degraded. pgxpool.New is lazy (it connects on first use), so an unreachable
@@ -284,6 +287,8 @@ func main() {
 	}
 	submitter := invoice.NewSubmitter(store, q)
 	app.Mux.HandleFunc("POST /v1/invoices/submissions", invoice.BatchSubmitHandler(submitter.BatchSubmit, store.CallerRole, app.Logger))
+
+	app.RequireGateway(gatewayToken)
 
 	if err := app.Run(context.Background()); err != nil {
 		platform.Fatal(app.Logger, "invoice: %v", err)

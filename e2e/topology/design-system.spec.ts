@@ -1,4 +1,4 @@
-// The deployed proof of the v2/v1 split, the landing frame's geometry and the Problem, Solution and Platform sections; one topology spec on purpose, a recorded deviation from docs/e2e-convention.md.
+// The deployed proof of the v2/v1 split, the landing frame's geometry and the Problem, Solution, Platform, Coverage and Intelligence sections; one topology spec on purpose, a recorded deviation from docs/e2e-convention.md.
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
@@ -392,6 +392,8 @@ test('landing frame and section columns share one left edge', async ({ page }, t
       solutionH2: (await box(page.locator('#solution h2'), `${width} solution h2`)).x,
       platformEyebrow: (await box(page.locator('#platform .t-eyebrow'), `${width} platform eyebrow`)).x,
       platformH2: (await box(page.locator('#platform h2'), `${width} platform h2`)).x,
+      coverageEyebrow: (await box(page.locator('#coverage .t-eyebrow'), `${width} coverage eyebrow`)).x,
+      intelligenceEyebrow: (await box(page.locator('#intelligence .t-eyebrow'), `${width} intelligence eyebrow`)).x,
     }
     const aligns = await page.$$eval('#problem h2, #solution h2, #platform h2', (els) => els.map((el) => getComputedStyle(el).textAlign))
     measured.push({ width, ...lefts, aligns })
@@ -430,13 +432,13 @@ const besideOrBelow = (column: Rect, card: Rect, beside: boolean, label: string)
 
 type Overflow = { scrollWidth: number; clientWidth: number; innerWidth: number; roots: string[]; outside: string[] }
 
-// Walks the sections' rendered elements outside the tablist, which scrolls inside itself.
-function walkOverflow(page: Page, scope: string, roots: string[]): Promise<Overflow> {
+// Walks the sections' rendered elements outside `skip`, a scroller that scrolls inside itself.
+function walkOverflow(page: Page, scope: string, roots: string[], skip = '[role=tablist]'): Promise<Overflow> {
   return page.evaluate(
-    ({ scope, roots }) => {
+    ({ scope, roots, skip }) => {
       const doc = document.documentElement
       const els = [...document.querySelectorAll(scope)]
-        .filter((el) => !el.closest('[role=tablist]'))
+        .filter((el) => !el.closest(skip))
         .map((el) => ({ el, r: el.getBoundingClientRect() }))
         .filter(({ r }) => r.width > 0 && r.height > 0)
       return {
@@ -449,7 +451,7 @@ function walkOverflow(page: Page, scope: string, roots: string[]): Promise<Overf
           .map(({ el, r }) => `<${el.tagName.toLowerCase()} class="${el.className}"> ${Math.round(r.left)}..${Math.round(r.right)}`),
       }
     },
-    { scope, roots },
+    { scope, roots, skip },
   )
 }
 
@@ -859,4 +861,234 @@ test('landing hero and problem check under reduced motion', async ({ page }, tes
   await expect(checkFooter(page), 'footer on a fresh load without reduced motion').toHaveText('Checking 1 of 8')
 
   expect(errors, `console errors under reduced motion:\n${errors.join('\n')}`).toEqual([])
+})
+
+// 600:673 is the CoverageMap aspectRatio.
+const MAP_RATIO = 600 / 673
+const STEP_COUNT = 4
+
+const edges = (r: Rect) => [r.x, r.y, r.x + r.width, r.y + r.height]
+const sameBox = (a: Rect, b: Rect) => edges(a).every((e, i) => Math.abs(e - edges(b)[i]) <= 1)
+const above = (upper: Rect, lower: Rect) => lower.y >= upper.y + upper.height - 1
+
+type Panel = { visibility: string; box: Rect }
+
+// Everything the geometry test reads about one step, in one evaluate so no scroll can separate the reads.
+const readWorkspace = (page: Page) =>
+  page.evaluate(() => {
+    const rect = (el: Element) => {
+      const r = el.getBoundingClientRect()
+      return { x: r.left, y: r.top, width: r.width, height: r.height }
+    }
+    return {
+      workspace: rect(document.querySelector('[data-intel-workspace]')!),
+      panels: [...document.querySelectorAll('[data-intel-panel]')].map((el) => ({ visibility: getComputedStyle(el).visibility, box: rect(el) })),
+    }
+  })
+
+test('landing coverage and intelligence geometry', async ({ page }, testInfo) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await openLandingFrame(page)
+  const measured: unknown[] = []
+
+  for (const width of [...WIDE_WIDTHS, 901, 900, 834, 390]) {
+    const label = `${width}px`
+    const wide = width > 900
+    await settleFrame(page, { width, height: width === 390 ? 844 : 900 })
+    await page.locator('#coverage').evaluate((el) => el.scrollIntoView({ block: 'start' }))
+
+    // (a) bands: the tone classes resolve the tokens the section files name.
+    const probes = await probeStyles(page, {
+      background_peach: 'background: var(--peach-band)',
+      background_dark2: 'background: var(--surface-2)',
+      color_copy: 'color: var(--text-copy)',
+    })
+    const bands = await page.evaluate(() => ({
+      coverage: getComputedStyle(document.querySelector('#coverage')!).backgroundColor,
+      intelligence: getComputedStyle(document.querySelector('#intelligence')!).backgroundColor,
+    }))
+    expect(bands.coverage, `${label}: #coverage background`).toBe(probes.background_peach)
+    expect(bands.intelligence, `${label}: #intelligence background`).toBe(probes.background_dark2)
+
+    // (b) map: breaks if CoverageMap drops its aspectRatio or the marker layer stops filling the box.
+    const mapBox = (await rectsOf(page, '[data-cov-map] svg[role="img"]'))[0]
+    const markers = (await rectsOf(page, '[data-cov-markers]'))[0]
+    const panel = (await rectsOf(page, '[data-cov-panel]'))[0]
+    expect(mapBox, `${label}: map box`).toBeDefined()
+    expect(Math.abs(mapBox.width / mapBox.height / MAP_RATIO - 1), `${label}: map ratio ${mapBox.width}x${mapBox.height}`).toBeLessThanOrEqual(0.005)
+    expect(sameBox(markers, mapBox), `${label}: marker layer ${JSON.stringify(markers)} vs map ${JSON.stringify(mapBox)}`).toBe(true)
+    expect(enclosesRect(panel, mapBox, 1), `${label}: panel does not enclose the map`).toBe(true)
+
+    // (c) columns, Coverage: breaks if the split loses its 900px stacking rule.
+    const left = (await rectsOf(page, '#coverage .split > div:first-child'))[0]
+    const roadmap = await rectsOf(page, '[data-roadmap] > div')
+    expect(roadmap, `${label}: roadmap items`).toHaveLength(3)
+    if (wide) {
+      expect(rectsOverlap(left, panel), `${label}: left column overlaps the panel`).toBe(false)
+      expect(panel.x, `${label}: panel left vs column right`).toBeGreaterThanOrEqual(left.x + left.width - 1)
+      expect(Math.abs(panel.y - left.y), `${label}: panel top vs column top`).toBeLessThanOrEqual(1)
+      expect(Math.abs(panel.height - left.height), `${label}: panel height vs column height`).toBeLessThanOrEqual(1)
+    } else {
+      expect(above(left, panel), `${label}: panel top vs column bottom`).toBe(true)
+    }
+    for (const [i, r] of roadmap.entries()) {
+      if (i === 0) continue
+      if (wide) {
+        expect(Math.abs(r.y - roadmap[0].y), `${label}: roadmap ${i} top vs first`).toBeLessThanOrEqual(1)
+        expect(rectsOverlap(roadmap[i - 1], r), `${label}: roadmap ${i} overlaps the previous`).toBe(false)
+      } else {
+        expect(above(roadmap[i - 1], r), `${label}: roadmap ${i} top vs previous bottom`).toBe(true)
+      }
+    }
+
+    // (c) columns, Intelligence.
+    await page.locator('#intelligence').evaluate((el) => el.scrollIntoView({ block: 'start' }))
+    const aside = (await rectsOf(page, '[data-intel-workspace] > aside'))[0]
+    const main = (await rectsOf(page, '[data-intel-workspace] > div'))[0]
+    const text = (await rectsOf(page, '[data-intel-panel]:not([aria-hidden]) > div:first-child'))[0]
+    const card = (await rectsOf(page, '[data-intel-panel]:not([aria-hidden]) > .card'))[0]
+    if (wide) {
+      expect(rectsOverlap(aside, main), `${label}: workspace aside overlaps main`).toBe(false)
+      expect(Math.abs(aside.y - main.y), `${label}: aside top vs main top`).toBeLessThanOrEqual(1)
+      expect(rectsOverlap(text, card), `${label}: panel text overlaps its card`).toBe(false)
+    } else {
+      expect(above(aside, main), `${label}: main top vs aside bottom`).toBe(true)
+      expect(above(text, card), `${label}: panel card top vs text bottom`).toBe(true)
+    }
+
+    // (d) workspace height: breaks if the panels stop sharing one grid cell (gridArea: 1 / 1).
+    const heights: number[] = []
+    for (let i = 0; i < STEP_COUNT; i++) {
+      await page.locator('[data-intel-step]').nth(i).click()
+      const read = await readWorkspace(page)
+      heights.push(read.workspace.height)
+      expect(read.panels, `${label}: step ${i} panels`).toHaveLength(STEP_COUNT)
+      expect(
+        read.panels.map((p: Panel) => p.visibility),
+        `${label}: step ${i} visibility`,
+      ).toEqual(read.panels.map((_, j) => (j === i ? 'visible' : 'hidden')))
+      for (const [j, p] of read.panels.entries()) expect(sameBox(p.box, read.panels[0].box), `${label}: step ${i} panel ${j} box`).toBe(true)
+    }
+    expect(Math.max(...heights) - Math.min(...heights), `${label}: workspace heights ${heights}`).toBeLessThanOrEqual(0.5)
+
+    // (e) overflow: the step row scrolls inside itself, so its descendants are skipped.
+    const overflow = await walkOverflow(page, '#coverage, #coverage *, #intelligence, #intelligence *', ['#coverage', '#intelligence'], '[data-intel-steps] *')
+    expectNoOverflow(overflow, label)
+    const steps = await page.locator('[data-intel-steps]').evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+    if (width === 390) expect(steps.scrollWidth, '390px: control, the step row scrolls').toBeGreaterThan(steps.clientWidth)
+
+    // (f) one-line titles and labels at 1440: breaks if a title or label loses its fit.
+    const lines = await page.evaluate(() => {
+      const oneLine = (el: Element) => {
+        const cs = getComputedStyle(el)
+        const lh = parseFloat(cs.lineHeight)
+        const line = Number.isNaN(lh) ? parseFloat(cs.fontSize) * 1.2 : lh
+        return { height: el.getBoundingClientRect().height, line }
+      }
+      return {
+        titles: [...document.querySelectorAll('[data-intel-panel] h3')].map(oneLine),
+        labels: [...document.querySelectorAll('[data-intel-step]')].map((btn) => {
+          const span = btn.querySelector(':scope > span:last-child')!
+          return { ...oneLine(span), overhang: span.getBoundingClientRect().right - btn.getBoundingClientRect().right }
+        }),
+      }
+    })
+    if (width === 1440) {
+      expect(lines.titles, `${label}: panel titles`).toHaveLength(STEP_COUNT)
+      expect(lines.labels, `${label}: step labels`).toHaveLength(STEP_COUNT)
+      for (const [i, t] of lines.titles.entries()) expect(t.height, `${label}: panel title ${i} is one line`).toBeLessThanOrEqual(1.5 * t.line)
+      for (const [i, l] of lines.labels.entries()) {
+        expect(l.height, `${label}: step label ${i} is one line`).toBeLessThanOrEqual(1.5 * l.line)
+        expect(l.overhang, `${label}: step label ${i} right edge vs its button`).toBeLessThanOrEqual(1)
+      }
+    }
+
+    // (g) panel body colour: breaks if the inline colour on the p goes and .band-dark2 .t-body wins.
+    const body = await page.evaluate(() => {
+      const channels = (c: string) => (c.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number)
+      const lum = (c: string) => {
+        const [r, g, b] = channels(c).map((v) => {
+          const s = v / 255
+          return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+        })
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+      }
+      const bg = getComputedStyle(document.querySelector('[data-intel-workspace]')!).backgroundColor
+      return [...document.querySelectorAll('[data-intel-panel] p.t-body')].map((p) => {
+        const fg = getComputedStyle(p).color
+        const [hi, lo] = [lum(fg), lum(bg)].sort((a, b) => b - a)
+        return { fg, bg, ratio: (hi + 0.05) / (lo + 0.05) }
+      })
+    })
+    expect(body, `${label}: panel bodies`).toHaveLength(STEP_COUNT)
+    for (const [i, b] of body.entries()) {
+      expect(b.fg, `${label}: panel body ${i} colour`).toBe(probes.color_copy)
+      expect(b.ratio, `${label}: panel body ${i} contrast on the workspace`).toBeGreaterThanOrEqual(4.5)
+    }
+
+    measured.push({ width, bands, probes, mapBox, markers, panel, left, roadmap, aside, main, text, card, heights, overflow, steps, lines, body })
+  }
+
+  await attachJson(testInfo, 'coverage-intelligence-geometry.json', measured)
+  expect(errors, `console errors on the coverage and intelligence sweep:\n${errors.join('\n')}`).toEqual([])
+})
+
+// Two reads one frame apart agree once smooth scrolling has settled.
+async function stableScrollY(page: Page): Promise<number> {
+  let last = -1
+  await expect
+    .poll(async () => {
+      const y = await page.evaluate(() => new Promise<number>((r) => requestAnimationFrame(() => r(window.scrollY))))
+      const settled = y === last
+      last = y
+      return settled
+    })
+    .toBe(true)
+  return last
+}
+
+test('landing coverage markers by keyboard and pointer', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await openLandingFrame(page)
+  await settleFrame(page, { width: 1440, height: 900 })
+
+  const marker = (name: string) => page.locator(`[data-cov-markers] g[aria-label="${name}"]`)
+  const ring = (name: string) => marker(name).locator('.cov-marker-focus')
+  const tab = (name: string) => page.locator('#coverage button[aria-pressed]').filter({ hasText: name })
+  const title = page.locator('[data-cov-card] h3')
+
+  // Breaks if the marker layer leaves the tab order or the card link stops preceding it.
+  await page.locator('[data-cov-card] a').focus()
+  await page.keyboard.press('Tab')
+  await expect(marker('Nigeria'), 'Tab from the card link reaches Nigeria').toBeFocused()
+  await expect(ring('Nigeria'), 'focused marker shows its ring').toHaveCSS('opacity', '1')
+  await expect(ring('Kenya'), 'unfocused marker hides its ring').toHaveCSS('opacity', '0')
+
+  await page.keyboard.press('Tab')
+  await expect(marker('Kenya'), 'second Tab reaches Kenya').toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(tab('Kenya')).toHaveAttribute('aria-pressed', 'true')
+  await expect(title).toHaveText('A country workflow for Kenya.')
+
+  // Breaks if onKeyDown drops preventDefault for Space.
+  await marker('South Africa').focus()
+  const before = await stableScrollY(page)
+  await page.keyboard.press('Space')
+  await expect(tab('South Africa')).toHaveAttribute('aria-pressed', 'true')
+  await expect(title).toHaveText('Prepare for what comes next.')
+  const after = await stableScrollY(page)
+  expect(after, 'Space on a marker must not scroll the page').toBe(before)
+
+  // A real pointer click, not a keyboard activation.
+  await tab('Nigeria').click()
+  await expect(title).toHaveText('Our starting point. Your next step.')
+  await marker('Kenya').click()
+  await expect(tab('Kenya')).toHaveAttribute('aria-pressed', 'true')
+  await expect(title).toHaveText('A country workflow for Kenya.')
+
+  await attachJson(testInfo, 'coverage-markers.json', { scrollBeforeSpace: before, scrollAfterSpace: after })
+  expect(errors, `console errors on the marker path:\n${errors.join('\n')}`).toEqual([])
 })

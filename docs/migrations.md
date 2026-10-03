@@ -686,6 +686,8 @@ real passwords live **only** in Railway.
   deploy → verify → teardown → sweep) the dev Postgres is exempt from.
 - [identity-provider.md](./identity-provider.md) — the `auth` service: its roles on
   production (U2), variables, sealed secrets and key rotation.
+- [database-restore.md](./database-restore.md) — restoring production Postgres to a point in time
+  and verifying the copy; migrations are forward-only, so a restore is the only rollback.
 - `db/bootstrap.sql`, root `Makefile`, `migrations/` — the harness this doc specifies.
 - `tools/revalidate-invoices` — the retrospective pass §9 runs; its package comment carries
   the full flag reference.

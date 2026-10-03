@@ -3381,6 +3381,7 @@ var scSweepSkipAllowlist = []scSweepSkipExemption{
 	{file: "internal/platform/db/provision_test.go", fn: "TestSuperuserDSNNotRetainedForRequestPath"},         // pre-existing: skips without DATABASE_URL, unrelated to the sweep
 	{file: "internal/platform/db/rls_harness_test.go", fn: "requireHarness"},                                  // pre-existing: skips without DATABASE_URL/DATABASE_MIGRATION_URL/DATABASE_SUPERUSER_URL, unrelated to the sweep
 	{file: "internal/platform/db/workflow_roles_seed_store_test.go", fn: "requireAppDSN"},                     // pre-existing: skips without DATABASE_URL, unrelated to the sweep
+	{file: "internal/platform/db/restore_check_test.go", fn: "TestRestoreCheck_FailsWithoutBypassRLS"},        // env-gated: skips without DATABASE_URL, the invoice_app role it must run as
 	{file: "internal/submission/exchange_db_test.go", fn: "requireExchangeDB"},                                // pre-existing: skips without DATABASE_URL/DATABASE_MIGRATION_URL, unrelated to the sweep
 	{file: "internal/submission/failure_modes_test.go", fn: "requireEffects"},                                 // same guard, the M2-09 exactly-once suite's own gate
 	{file: "internal/submission/seed_evidence_honesty_test.go", fn: "sehRequireSuperuserDSN"},                 // pre-existing: skips without DATABASE_SUPERUSER_URL, unrelated to the sweep

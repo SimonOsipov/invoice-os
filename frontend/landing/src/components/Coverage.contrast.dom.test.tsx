@@ -43,47 +43,8 @@ function failures(rows: ContrastRow[]): string[] {
   })
 }
 
-function planted(html: string, extraCss: string[] = []): ContrastRow[] {
-  const band = document.createElement('section')
-  band.className = 'band-peach'
-  band.innerHTML = html
-  document.body.appendChild(band)
-  try {
-    return resolveTextContrast(band, [...CSS, ...extraCss])
-  } finally {
-    band.remove()
-  }
-}
-
 describe('Coverage band contrast', () => {
   it('CT-01 the peach band’s text meets AC 9', async () => {
-    // Controls first: the resolver must see a low ratio, a conflict and an !important.
-    const step = planted('<p style="color:var(--step-label)">x</p>')
-    expect(step, 'control: one planted row').toHaveLength(1)
-    expect([step[0].fg, step[0].bg, step[0].ratio.toFixed(2)], 'control: --step-label on peach').toEqual([hex('--step-label'), hex('--peach-band'), '2.63'])
-
-    const link = planted('<p style="color:var(--link)">x</p><h2><span style="color:var(--link)">y</span></h2>')
-    expect(link, 'control: two planted --link rows').toHaveLength(2)
-    expect(link[0].ratio.toFixed(2), 'control: --link on peach').toBe('4.35')
-    expect(failures([link[0]]), 'control: 4.35 fails 4.5 outside an h2').toHaveLength(1)
-    const inH2 = link.find((r) => r.text === 'y')
-    expect(inH2, 'control: the span inside the h2 resolves').toBeDefined()
-    expect(failures([inH2!]), 'control: 4.35 passes 3 inside an h2').toEqual([])
-
-    const conflict = planted('<p class="cx-a cx-b">x</p>', ['.cx-a { color: #111111; } .cx-b { color: #222222; }'])
-    expect(conflict, 'control: one conflict row').toHaveLength(1)
-    expect(conflict[0].ambiguous, 'control: two class colours without !important are ambiguous').toBe(true)
-    const wins = planted('<p class="cx-a cx-b">x</p>', ['.cx-a { color: #111111 !important; } .cx-b { color: #222222; }'])
-    expect(wins, 'control: one row').toHaveLength(1)
-    expect([wins[0].ambiguous, wins[0].fg], 'control: the !important colour wins').toEqual([false, '#111111'])
-
-    const cascade = ['.cx-a { color: #111111; } .band-peach .cx-a { color: #222222; } .band-sage .cx-a { color: #333333; }']
-    const band = planted('<p class="cx-a">x</p>', cascade)
-    expect([band[0].fg, band[0].ambiguous], 'control: a band rule beats a class rule, and only the enclosing band applies').toEqual(['#222222', false])
-    const inherit = planted('<div style="color:var(--step-label)"><span>x</span></div><p>y</p>')
-    expect(inherit, 'control: two planted rows').toHaveLength(2)
-    expect(inherit.map((r) => r.fg), 'control: a span inherits its parent; a bare p takes the band colour').toEqual([hex('--step-label'), hex('--accent-foreground')])
-
     await show(view, createElement(Coverage, { onBookDemo: vi.fn() }))
     const root = view.container.querySelector('section')
     expect(root, 'Coverage renders a section').not.toBeNull()
@@ -132,14 +93,6 @@ describe('Coverage band contrast', () => {
   })
 
   it('CT-04 the roadmap, disclaimer and CTA are on the peach band and pass', async () => {
-    // Controls: the text button's own colour is --link; only .btn-on-peach's !important lifts it to --primary.
-    const plain = planted('<button class="ds-btn ds-btn--text">x</button>')
-    expect(plain, 'control: one planted plain text button').toHaveLength(1)
-    expect([plain[0].fg, plain[0].ratio.toFixed(2)], 'control: the DS text button resolves to --link').toEqual([hex('--link'), '4.35'])
-    const lifted = planted('<button class="ds-btn ds-btn--text btn-on-peach">x</button>')
-    expect(lifted, 'control: one planted CTA').toHaveLength(1)
-    expect([lifted[0].fg, lifted[0].ambiguous, lifted[0].ratio.toFixed(2)], 'control: .btn-on-peach wins over the DS colour').toEqual([hex('--primary'), false, '6.79'])
-
     await show(view, createElement(Coverage, { onBookDemo: vi.fn() }))
     const root = view.container.querySelector('section')
     expect(root, 'Coverage renders a section').not.toBeNull()

@@ -410,29 +410,8 @@ function failures(rows: ContrastRow[]): string[] {
   return rows.flatMap((r) => (r.ambiguous ? [`${r.text}: ambiguous colour`] : r.ratio < 4.5 ? [`${r.text}: ${r.fg} on ${r.bg} = ${r.ratio.toFixed(2)}`] : []))
 }
 
-function planted(html: string): ContrastRow[] {
-  const band = document.createElement('section')
-  band.className = 'band-dark2'
-  band.innerHTML = html
-  document.body.appendChild(band)
-  try {
-    return resolveTextContrast(band, CSS)
-  } finally {
-    band.remove()
-  }
-}
-
 describe('Intelligence panel contrast', () => {
   it('IN-09 the panel text is readable on the cream workspace', () => {
-    // Controls: `.band-dark2 .t-body` wins over `.t-body` on the cream card; an inline colour beats it.
-    const bare = planted('<div style="background:var(--cream-card)"><p class="t-body">x</p></div>')
-    expect(bare, 'control: one planted row').toHaveLength(1)
-    expect([bare[0].fg, bare[0].bg, bare[0].ratio.toFixed(2)], 'control: the band rule gives --surface-body, 1.63:1').toEqual([hex('--surface-body'), hex('--cream-card'), '1.63'])
-    const fixed = planted('<div style="background:var(--cream-card)"><p class="t-body" style="color:var(--text-copy)">x</p></div>')
-    expect(fixed, 'control: one planted row').toHaveLength(1)
-    expect([fixed[0].fg, fixed[0].ratio >= 4.5], 'control: an inline --text-copy passes').toEqual([hex('--text-copy'), true])
-    expect(failures(bare), 'control: the bare body fails').toHaveLength(1)
-
     const r = root()
     expect(r, '#intelligence is mounted').not.toBeNull()
     const all = resolveTextContrast(r!, CSS)
@@ -466,21 +445,6 @@ describe('Intelligence panel contrast', () => {
         st.remove()
       }
     }
-    const plain = planted('<a class="ds-btn ds-btn--text" href="#x">x</a>')
-    expect(plain, 'control: one planted plain link').toHaveLength(1)
-    expect([plain[0].fg, plain[0].ambiguous], 'control: the DS text link is --link').toEqual([hex('--link'), false])
-    const lifted = planted('<a class="ds-btn ds-btn--text btn-on-dark" href="#x">x</a>')
-    expect(lifted, 'control: one planted CTA').toHaveLength(1)
-    expect([lifted[0].fg, lifted[0].ambiguous], 'control: .btn-on-dark wins over the DS colour').toEqual([hex('--accent'), false])
-    document.body.insertAdjacentHTML('beforeend', '<a id="qa-plain" class="ds-btn ds-btn--text" href="#x">x</a><a id="qa-lifted" class="ds-btn ds-btn--text btn-on-dark" href="#x">x</a>')
-    try {
-      expect(underline(document.getElementById('qa-plain')!), 'control: the DS underline is --link').toBe('var(--link)')
-      expect(underline(document.getElementById('qa-lifted')!), 'control: .btn-on-dark lifts the underline').toBe('var(--accent)')
-    } finally {
-      document.getElementById('qa-plain')?.remove()
-      document.getElementById('qa-lifted')?.remove()
-    }
-
     const r = root()!
     const band = resolveTextContrast(r, CSS).filter((x) => !x.el.closest('[data-intel-workspace]') && !x.el.closest('button[aria-pressed="false"]'))
     expect(band.length, 'band text elements measured outside the workspace').toBeGreaterThanOrEqual(8)

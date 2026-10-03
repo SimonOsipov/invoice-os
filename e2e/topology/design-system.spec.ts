@@ -486,6 +486,7 @@ test('landing sections at 1440, 834 and 390', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
   await openLandingFrame(page)
   const measured: unknown[] = []
+  let measuredRing: unknown = null
 
   for (const vp of FRAME_VIEWPORTS) {
     const label = `${vp.width}px`
@@ -588,9 +589,35 @@ test('landing sections at 1440, 834 and 390', async ({ page }, testInfo) => {
         expect(tab.whiteSpace, `${label}: tab ${i} white-space`).toBe('nowrap')
         expect(tab.labelRects, `${label}: tab ${i} label client rects`).toEqual([1])
       }
+
+      // A key press first, so the script focus matches :focus-visible.
+      await page.keyboard.press('Shift')
+      await page.evaluate(() => (document.querySelector('#platform [role=tablist] [role=tab]') as HTMLElement).focus())
+      const ring = await page.evaluate(() => {
+        const list = document.querySelector('#platform [role=tablist]')!
+        const tab = document.activeElement as HTMLElement
+        const cs = getComputedStyle(tab)
+        const r = tab.getBoundingClientRect()
+        const c = list.getBoundingClientRect()
+        const grow = parseFloat(cs.outlineWidth) + parseFloat(cs.outlineOffset)
+        return {
+          isFirstTab: tab === list.querySelector('[role=tab]'),
+          outlineStyle: cs.outlineStyle,
+          grow,
+          out: { left: r.left - grow, top: r.top - grow, right: r.right + grow, bottom: r.bottom + grow },
+          clip: { left: c.left, top: c.top, right: c.right, bottom: c.bottom },
+        }
+      })
+      expect(ring.isFirstTab, `${label}: keyboard focus on the first tab`).toBe(true)
+      expect(ring.outlineStyle, `${label}: first tab focus outline style`).not.toBe('none')
+      expect(ring.out.left, `${label}: focus ring left`).toBeGreaterThanOrEqual(ring.clip.left - 1)
+      expect(ring.out.top, `${label}: focus ring top`).toBeGreaterThanOrEqual(ring.clip.top - 1)
+      expect(ring.out.right, `${label}: focus ring right`).toBeLessThanOrEqual(ring.clip.right + 1)
+      expect(ring.out.bottom, `${label}: focus ring bottom`).toBeLessThanOrEqual(ring.clip.bottom + 1)
+      measuredRing = ring
     }
 
-    measured.push({ width: vp.width, overflow, tablist, columns, cells: cells.length, grid, problemColumn, problemCard, panelColumn, panelCard, caps, h2s, want, read, tabs })
+    measured.push({ width: vp.width, overflow, tablist, columns, cells: cells.length, grid, problemColumn, problemCard, panelColumn, panelCard, caps, h2s, want, read, tabs, ring: vp.width === 390 ? measuredRing : null })
   }
 
   await attachJson(testInfo, 'sections.json', measured)

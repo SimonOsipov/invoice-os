@@ -288,6 +288,10 @@ button {
     white-space: nowrap;
     padding: 0 20px;
   }
+  /* Inset: the scroll container clips an outside ring. */
+  .a-tabs [role="tab"]:focus-visible {
+    outline-offset: -2px;
+  }
 }
 
 /* ------------------------------------------------------------------

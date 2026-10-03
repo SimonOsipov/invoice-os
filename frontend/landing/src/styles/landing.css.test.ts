@@ -351,6 +351,7 @@ function platformCssFailures(css: string): string[] {
     ['.a-tabs tab flex at max-width 640px', tab('.a-tabs [role="tab"]', 'flex'), '0 0 auto'],
     ['.a-tabs tab white-space at max-width 640px', tab('.a-tabs [role="tab"]', 'white-space'), 'nowrap'],
     ['.a-tabs tab padding at max-width 640px', tab('.a-tabs [role="tab"]', 'padding'), '0 20px'],
+    ['.a-tabs tab focus outline-offset at max-width 640px', tab('.a-tabs [role="tab"]:focus-visible', 'outline-offset'), '-2px'],
   ]
   return checks.filter(([, got, want]) => got !== want).map(([what, got, want]) => `${what}: ${got} != ${want}`)
 }
@@ -361,6 +362,7 @@ const PLATFORM_CSS_FIXTURE = (narrow: string) => `
 @media (max-width: ${narrow}) {
   .a-tabs [role="tablist"] { overflow-x: auto; scrollbar-width: none; }
   .a-tabs [role="tab"] { flex: 0 0 auto; white-space: nowrap; padding: 0 20px; }
+  .a-tabs [role="tab"]:focus-visible { outline-offset: -2px; }
 }
 `
 

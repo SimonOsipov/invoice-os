@@ -329,7 +329,7 @@ test.describe('bulk import+validate — 500-invoice/60s perf gate + Day-60 stamp
   // would get 403 and prove nothing about the strip. PERSONAS.A resolves to a
   // real seeded persona (topology/targets.ts's TENANTS.a), so login() mints a
   // token carrying tenant_id -- clears authorize(), reaches
-  // injectIdentity's Del(X-S2S-Token) (gateway.go:141), then 04's
+  // injectIdentity's Del(X-S2S-Token), then 04's
   // S2SMiddleware 401s on the missing
   // header. The check runs BEFORE the body is read (s2s.go's doc), so the
   // empty body here is deliberate -- what is being proved is unreachability,

@@ -93,7 +93,8 @@ PR opened ──> dev-env.yml:
                              from `development` (skipInitialDeploys, create-or-reuse)
                              ──> blank WAL_ARCHIVE_* on Postgres ──>
                              deploy Postgres + probe ──> assert Watch Paths empty
-                             (M3-16 invariant, now runtime-asserted) ──> discover the
+                             (M3-16 invariant, now runtime-asserted) ──> write a fresh
+                             gateway token (set-fork-gateway-token) ──> discover the
                              5 URLs ──> blank Sentry variables (set-sentry-off)
                              ──> point the fork gateway at reconciliation
                              (set-fork-reconciliation-url)
@@ -290,6 +291,10 @@ service on `development` (Settings → **Enable**), and disable/remove `dev-env.
 `dev-env-teardown.yml`, `dev-env-sweeper.yml` and `railway-invariants.yml` — the last of
 these will otherwise fail every PR once the deployment triggers are back.
 
+To roll back a deploy of the gateway token guard, roll back the gateway and the seven
+guarded services together. A guarded service's WARN `request refused: no gateway token`
+line is the symptom of a split rollback.
+
 ## Cold-fleet recovery (M3-16)
 
 **Root cause.** Each Railway service has a *service-level* **Watch Paths**
@@ -407,6 +412,7 @@ contradict what the docs imply.
 | Postgres volume | **No** — `volumeInstances == []`, while `development` has 5000MB | **CI must CREATE it.** Without a volume Postgres deploys to `SUCCESS` but **never accepts a connection** (corrected 2026-07-19 — see below). `prepare-env` creates it with `volumeCreate`, copying the `mountPath` and `region` from `development`, confirms by re-query, and redeploys Postgres if a deployment already existed. The database is still **ephemeral by design** and born empty — the gateway bootstraps, migrates, purges the demo tenants and seeds at boot. |
 | TCP proxy + `DATABASE_PUBLIC_URL` | Yes, with its own distinct port; `DATABASE_URL` resolves too | Since M4-22-08, `prepare-env` no longer probes or observes the proxy at all. `health-gate`'s `/healthz` 200 is now the sole Postgres liveness proof (`docs/migrations.md` §2) — strictly stronger. The proxy resource itself is scheduled for deletion via Escalation E2; until then it may still exist, unused. |
 | Sealed variables | **No** — they never fork | `prepare-env` fails loudly if `development` holds any, since they would otherwise go silently missing in every PR environment. Only exception: `GOTRUE_JWT_KEYS`, `GOTRUE_JWT_SECRET` and `GOTRUE_SMTP_PASS` on `auth`, which `set-fork-auth` writes per fork. |
+| Unsealed variables | Yes — verbatim | `GATEWAY_TOKEN` is the exception: `set-fork-gateway-token` overwrites it per fork on the gateway and the seven services (`TestSetForkGatewayToken_WritesOneFreshValueToTheEight`). |
 | Leftover PR environments | None existed before the probe | Independent confirmation that Railway's PR Environments feature never created any here. |
 
 ### Correction, 2026-07-19 — "no volume is fine" was false

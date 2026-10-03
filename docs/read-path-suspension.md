@@ -54,14 +54,16 @@ to the ungated core with the tenant set and no membership read
 no identity, or with a malformed tenant id, is refused with `db.ErrNoTenant` before any
 statement is issued at all (`TestRLS_RequestSeamIssuesNoStatementForAMalformedRequest`).
 
-**Why this is not a hole.** Over HTTP the arm above can never fire. `Verifier.validate`
-rejects any token whose `sub` claim is not a
-well-formed uuid with `ErrUnauthorized` — a 401 at token verification, before an `Identity` is
-ever built, let alone reaches this seam. The only way to reach this arm at all is to construct
-an `auth.Identity` by hand, in-process — exactly what §8.1's operator CLIs and boot-time seeders
-do, on purpose, for callers the network never produced. So the arm is a worker/CLI boundary, not
-read-path coverage this gate is failing to provide, and AUDIT-12 leaves it exactly as AUDIT-10
-wrote it.
+**Why this is not a hole.** Over HTTP the arm above does not fire. A context service builds
+its `Identity` in `identityMiddleware` from the gateway's headers, and for an empty or non-uuid
+`X-User-ID` it builds no identity and no tenant-less caller
+(`TestIdentityMiddleware_NonUUIDSubjectBuildsNoIdentity`,
+`TestIdentityMiddleware_EmptySubjectWithTenantBuildsNoIdentity`), so the seam refuses the
+request with `db.ErrNoTenant`. The arm serves only callers that construct an `auth.Identity` by
+hand, in-process: the extraction worker, `backfill-source-rows`, `revalidate-rule-set`, and
+§8.1's operator CLIs and boot-time seeders, on purpose, for callers the network never produced.
+So the arm is a worker/CLI boundary, not read-path coverage this gate is failing to provide,
+and AUDIT-12 leaves it exactly as AUDIT-10 wrote it.
 
 ## 2. The three-way refusal, and why 403 is not 401
 
@@ -193,7 +195,7 @@ tests across 12 packages** — the same 9 above, plus `internal/archive`, `inter
 `internal/validation`, whose fixtures build callers with `Subject: "system"`. 800/12 sits within
 3 tests and 1 package of AUDIT-10's 797/11; the small remaining gap is later commits, not a
 different rule. **723 across 9 is the cost of the rule this story actually ships**, and it is
-why `tenant.go:59`'s non-uuid arm (§1.1) stays exactly as AUDIT-10 wrote it: refusing that arm
+why `tenant.go:61`'s non-uuid arm (§1.1) stays exactly as AUDIT-10 wrote it: refusing that arm
 too buys nothing reachable over HTTP for +77 tests and +3 packages.
 
 ## 6. The gate is not free: +12 to +42 µs/op

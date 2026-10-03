@@ -294,9 +294,9 @@ describe('CV-10 the Coverage tabs keep their focus ring and hover dim', () => {
   })
 })
 
-// Source scan: jsdom applies no media queries or cascade, so only the rule text shows the roadmap collapse
-// at 900px and the two on-band button overrides. .btn-on-dark has no mounted consumer yet.
-describe('CV-13 the roadmap collapses at 900px and the on-band buttons override the DS colour', () => {
+// Source scan: jsdom applies no media queries, so only the rule text shows the roadmap collapse at 900px and the
+// .btn-on-peach underline. Intelligence.switch.dom.test.tsx IN-11 observes .btn-on-dark.
+describe('CV-13 the roadmap collapses at 900px and the peach button overrides the DS colour', () => {
   const rules = parseRules(LANDING_CSS)
 
   it('.cols3 is one column and .rm-chev is hidden at max-width 900px, both !important', () => {
@@ -308,10 +308,8 @@ describe('CV-13 the roadmap collapses at 900px and the on-band buttons override 
     expect(declared(rules, '.rm-chev', 'display', noAt), '.rm-chev sets no display outside the media block').toBeUndefined()
   })
 
-  it('.btn-on-peach is --primary and .btn-on-dark is --accent, colour and underline, !important', () => {
+  it('.btn-on-peach is --primary, colour and underline, !important', () => {
     expect(declared(rules, '.btn-on-peach', 'color', noAt)).toBe('var(--primary) !important')
     expect(declared(rules, '.btn-on-peach', 'border-bottom-color', noAt)).toBe('var(--primary) !important')
-    expect(declared(rules, '.btn-on-dark', 'color', noAt)).toBe('var(--accent) !important')
-    expect(declared(rules, '.btn-on-dark', 'border-bottom-color', noAt)).toBe('var(--accent) !important')
   })
 })

@@ -184,7 +184,7 @@ describe('Intelligence band', () => {
 
     expectAside('NG')
     const { aside } = workspace()
-    expect(aside.style.background, 'V307 aside surface').toBe('var(--sage-panel)')
+    expect([aside.style.background, aside.style.padding, aside.style.display, aside.style.flexDirection, aside.style.gap], 'V307 aside').toEqual(['var(--sage-panel)', '28px 24px', 'flex', 'column', '20px'])
     const link = aside.querySelector('a')!
     expect(link.className).toBe('ds-btn ds-btn--text')
     expect(link.getAttribute('href')).toBe('https://einvoice.nrs.gov.ng/')
@@ -213,6 +213,7 @@ describe('Intelligence band', () => {
 
   it('IN-04 the four steps and step 01 first', () => {
     const { main } = workspace()
+    expect([main.style.display, main.style.gap, main.style.minWidth], 'V313 main column').toEqual(['grid', '24px', '0'])
     expect(norm(main.querySelector('.t-step')?.textContent), 'V315 header').toBe('Change → Understanding → Action')
 
     const s = steps()
@@ -323,6 +324,19 @@ describe('Intelligence band', () => {
       expect(norm(x.textContent), `panel ${i} is not empty`).not.toBe('')
       expect(x.querySelectorAll('a[href], button, input, select, textarea, [tabindex]'), `panel ${i} focusables`).toHaveLength(0)
     })
+    // The whole band: three chips, the source link, four steps, the roadmap link, in DOM order.
+    const stops = Array.from(root()!.querySelectorAll<HTMLElement>('a[href], button, input, select, textarea, [tabindex]'))
+    expect(stops.map((e) => leafTexts(e).join(' '))).toEqual([
+      'Nigeria First launch',
+      'Kenya Planned',
+      'South Africa Planned',
+      'View official source ↗',
+      'Monitor 01',
+      'Understand 02',
+      'Review 03',
+      'Apply 04',
+      'Explore the roadmap →',
+    ])
   })
 
   it('IN-08 the closing line and the roadmap link', () => {
@@ -340,6 +354,37 @@ describe('Intelligence band', () => {
     expect(a.className).toBe('ds-btn ds-btn--text btn-on-dark')
     expect(a.hasAttribute('target'), 'no target').toBe(false)
     expect(a.parentElement, 'the paragraph and the link share one row').toBe(lines[0].parentElement)
+  })
+
+  it('IN-12 every chip and step pair resolves, and a repeat click keeps the selection', () => {
+    let prev = 0
+    for (const id of ORDER) {
+      for (let at = 0; at < 4; at++) {
+        click(chip(id))
+        expect(pressed(steps()), `${id}: the chip click leaves step ${prev + 1}`).toEqual(only(4, prev))
+        click(step(at))
+        prev = at
+        expect(pressed(chips()), `${id}/${at + 1} chips`).toEqual(ORDER.map((o) => String(o === id)))
+        expect(pressed(steps()), `${id}/${at + 1} steps`).toEqual(only(4, at))
+        expect(panels().map((x) => x.style.visibility), `${id}/${at + 1} panels`).toEqual(V_STEPS.map((_, i) => (i === at ? 'visible' : 'hidden')))
+        expectAside(id)
+        expectPanelCards(id)
+      }
+    }
+    // Repeat clicks and clicks on a child of the button: no toggle-off.
+    click(chip('ZA'))
+    expect(pressed(chips()), 'South Africa pressed').toEqual(only(3, 2))
+    click(chip('ZA'))
+    expect(pressed(chips()), 'a second click keeps South Africa').toEqual(only(3, 2))
+    click(chip('KE').lastElementChild as HTMLElement)
+    expect(pressed(chips()), 'a click on the tag span selects Kenya').toEqual(only(3, 1))
+    click(step(3))
+    expect(pressed(steps()), 'step 04 pressed').toEqual(only(4, 3))
+    click(step(3))
+    expect(pressed(steps()), 'a second click keeps step 04').toEqual(only(4, 3))
+    expect(panels().map((x) => x.getAttribute('aria-hidden')), 'step 04 alone is exposed').toEqual(['true', 'true', 'true', null])
+    click(step(1).querySelector('.ds-icontile') as HTMLElement)
+    expect(pressed(steps()), 'a click on the tile selects step 02').toEqual(only(4, 1))
   })
 
   it('IN-10 Coverage’s selection does not reach Intelligence', async () => {
@@ -400,6 +445,57 @@ describe('Intelligence panel contrast', () => {
     for (const b of bodies) {
       expect([b.fg, b.bg], `panel body "${b.text.slice(0, 24)}"`).toEqual([hex('--text-copy'), hex('--cream-card')])
     }
+    // V329 and V326 colours: no other test reads them.
+    for (const [key, token] of [['status', '--status-success-fg'], ['card', '--step-label']] as const) {
+      const hits = rows.filter((x) => V_STEPS.some((v) => v[key] === x.text))
+      expect(hits, `four ${key} lines are measured`).toHaveLength(4)
+      for (const h of hits) expect([h.fg, h.ambiguous], `${key} "${h.text}"`).toEqual([hex(token), false])
+    }
     expect(failures(rows)).toEqual([])
+  })
+
+  it('IN-11 the band text and the roadmap link resolve to their colours on the dark band', () => {
+    // jsdom's stylesheet cascade ignores !important and :hover, so only the colour (resolver) and the underline (order) are read.
+    const underline = (el: Element) => {
+      const st = document.createElement('style')
+      st.textContent = landingCss('ds.css') + landingCss('landing.css')
+      document.head.appendChild(st)
+      try {
+        return getComputedStyle(el).borderBottomColor
+      } finally {
+        st.remove()
+      }
+    }
+    const plain = planted('<a class="ds-btn ds-btn--text" href="#x">x</a>')
+    expect(plain, 'control: one planted plain link').toHaveLength(1)
+    expect([plain[0].fg, plain[0].ambiguous], 'control: the DS text link is --link').toEqual([hex('--link'), false])
+    const lifted = planted('<a class="ds-btn ds-btn--text btn-on-dark" href="#x">x</a>')
+    expect(lifted, 'control: one planted CTA').toHaveLength(1)
+    expect([lifted[0].fg, lifted[0].ambiguous], 'control: .btn-on-dark wins over the DS colour').toEqual([hex('--accent'), false])
+    document.body.insertAdjacentHTML('beforeend', '<a id="qa-plain" class="ds-btn ds-btn--text" href="#x">x</a><a id="qa-lifted" class="ds-btn ds-btn--text btn-on-dark" href="#x">x</a>')
+    try {
+      expect(underline(document.getElementById('qa-plain')!), 'control: the DS underline is --link').toBe('var(--link)')
+      expect(underline(document.getElementById('qa-lifted')!), 'control: .btn-on-dark lifts the underline').toBe('var(--accent)')
+    } finally {
+      document.getElementById('qa-plain')?.remove()
+      document.getElementById('qa-lifted')?.remove()
+    }
+
+    const r = root()!
+    const band = resolveTextContrast(r, CSS).filter((x) => !x.el.closest('[data-intel-workspace]') && !x.el.closest('button[aria-pressed="false"]'))
+    expect(band.length, 'band text elements measured outside the workspace').toBeGreaterThanOrEqual(8)
+    const row = (text: string) => {
+      const hits = band.filter((x) => x.text === text)
+      expect(hits, `"${text}" is measured once`).toHaveLength(1)
+      return hits[0]
+    }
+    const cta = row('Explore the roadmap →')
+    expect([cta.fg, cta.ambiguous, cta.bg], 'the CTA is --accent on the band, not --link').toEqual([hex('--accent'), false, hex('--surface-2')])
+    expect(underline(cta.el), 'the CTA underline is --accent').toBe('var(--accent)')
+    expect(row(V_HEADER_PARAGRAPH).fg, 'the header paragraph').toBe(hex('--surface-body'))
+    expect(row(V_CLOSING).fg, 'the closing line').toBe(hex('--surface-foreground'))
+    expect(row('Keep your next step clear.').fg, 'the highlighted H2 line').toBe(hex('--highlight-on-dark-2'))
+    expect(band.every((x) => x.bg === hex('--surface-2') || x.el.closest('button[aria-pressed="true"]')), 'band rows sit on --surface-2 or the pressed chip').toBe(true)
+    expect(failures(band)).toEqual([])
   })
 })

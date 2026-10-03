@@ -220,20 +220,6 @@ describe('AN-02 on /privacy every nav link carries the prefix', () => {
   })
 })
 
-describe('R4-AN-1 the landing renders #coverage once, the privacy page none', () => {
-  const count = (html: string) => (html.match(/<section id="coverage"/g) ?? []).length
-
-  it('/ renders one <section id="coverage" class="ds-section band-peach">, /privacy none', () => {
-    const landing = renderAppAt('/')
-    const privacy = renderAppAt('/privacy')
-    expect(landing, 'control: the landing rendered its sections').toContain('<section id="modules"')
-    expect(privacy, 'control: the privacy page rendered its footer').toContain('<footer')
-    expect(count(landing), 'sections on /').toBe(1)
-    expect(landing).toContain('<section id="coverage" class="ds-section band-peach">')
-    expect(count(privacy), 'sections on /privacy').toBe(0)
-  })
-})
-
 describe('R4-AN-2 the two sections render in v2 order', () => {
   const count = (html: string, id: string) => (html.match(new RegExp(`<section id="${id}"`, 'g')) ?? []).length
 
@@ -244,6 +230,7 @@ describe('R4-AN-2 the two sections render in v2 order', () => {
     expect(privacy, 'control: the privacy page rendered its footer').toContain('<footer')
     expect(count(landing, 'coverage'), '#coverage on /').toBe(1)
     expect(count(landing, 'intelligence'), '#intelligence on /').toBe(1)
+    expect(landing).toContain('<section id="coverage" class="ds-section band-peach">')
     expect(landing).toContain('<section id="intelligence" class="ds-section band-dark2">')
     expect(landing.indexOf('<section id="coverage"'), '#coverage comes first').toBeLessThan(landing.indexOf('<section id="intelligence"'))
     expect(count(privacy, 'coverage'), '#coverage on /privacy').toBe(0)

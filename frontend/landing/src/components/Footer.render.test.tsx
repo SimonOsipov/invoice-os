@@ -172,18 +172,6 @@ describe('FT-02 the Platform column is an in-order subsequence of V470', () => {
     const rendered = controlsOf(platformSlice(html)).map((c) => ({ label: c.label, href: c.attrs.href }))
     expect(rendered).toEqual(PLATFORM_LINKS.map((l) => ({ label: l.label, href: l.href })))
   })
-
-  it.each([
-    ['', '#coverage'],
-    ['/', '/#coverage'],
-  ])('R4-FT-1 with hrefPrefix %j the Platform column links Country roadmap to %s', (hrefPrefix, href) => {
-    const controls = controlsOf(platformSlice(renderToStaticMarkup(createElement(Footer, { onBookDemo: noop, hrefPrefix }))))
-    const roadmap = controls.filter((c) => c.label === 'Country roadmap')
-    expect(roadmap, 'one "Country roadmap" control in the Platform column').toHaveLength(1)
-    expect(roadmap[0].tag).toBe('a')
-    expect(roadmap[0].attrs.class).toBe('a-link')
-    expect(roadmap[0].attrs.href).toBe(href)
-  })
 })
 
 describe('R4-FT-2 the Platform column links both sections in V470 order', () => {

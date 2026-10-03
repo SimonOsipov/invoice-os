@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { resolveTarget } from '../targets'
-import { gaps, settleAnimations } from '../topology/layout'
+import { enclosesRect, gaps, settleAnimations, type Rect } from '../topology/layout'
 import { seedConsent } from './landingConsent'
 
 // The sign-in modal carries the email form above the persona list, so it is
@@ -49,6 +49,30 @@ for (const viewport of VIEWPORTS) {
     expect(cardBox, 'the card has no box').not.toBeNull()
     const side = gaps(cardBox!, { x: 0, width: viewport.width })
     expect(Math.abs(side.left - side.right), `the card is off-centre at ${viewport.width}x${viewport.height}: ${JSON.stringify(side)}`).toBeLessThanOrEqual(1)
+
+    // The card scrolls its own content, so x is the only axis a row must stay inside it on.
+    const xOnly = (r: Rect): Rect => ({ x: r.x, y: 0, width: r.width, height: 1 })
+    const grid = dialog.getByTestId('persona-picker').locator(':scope > div')
+    await expect(grid).toHaveCount(1)
+    const rows = dialog.locator('[data-persona]')
+    const rowCount = await rows.count()
+    expect(rowCount, 'the persona picker has no rows').toBeGreaterThan(0)
+    const gridBox = (await grid.boundingBox())!
+    expect(gridBox, 'the persona grid has no box').not.toBeNull()
+    for (let i = 0; i < rowCount; i++) {
+      const row = rows.nth(i)
+      const chevron = row.locator('svg').last()
+      const [rowBox, chevronBox] = await Promise.all([row.boundingBox(), chevron.boundingBox()])
+      expect(rowBox, `persona row ${i} has no box`).not.toBeNull()
+      expect(chevronBox, `persona row ${i} has no chevron box`).not.toBeNull()
+      const at = `persona row ${i} at ${viewport.width}x${viewport.height}`
+      expect(enclosesRect(xOnly(gridBox), xOnly(rowBox!), 0.5), `${at} overflows the persona grid: ${JSON.stringify({ gridBox, rowBox })}`).toBe(true)
+      expect(enclosesRect(xOnly(cardBox!), xOnly(rowBox!), 0.5), `${at} overflows the card: ${JSON.stringify({ cardBox, rowBox })}`).toBe(true)
+      expect(enclosesRect(rowBox!, chevronBox!, 0.5), `${at}: the chevron leaves its row: ${JSON.stringify({ rowBox, chevronBox })}`).toBe(true)
+      expect(enclosesRect(xOnly(cardBox!), xOnly(chevronBox!), 0.5), `${at}: the chevron is clipped by the card: ${JSON.stringify({ cardBox, chevronBox })}`).toBe(true)
+    }
+    const overflow = await card.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+    expect(overflow.scrollWidth, `the card scrolls sideways at ${viewport.width}x${viewport.height}: ${JSON.stringify(overflow)}`).toBeLessThanOrEqual(overflow.clientWidth + 1)
 
     const submit = dialog.getByRole('button', { name: 'Sign in →', exact: true })
     await submit.scrollIntoViewIfNeeded()

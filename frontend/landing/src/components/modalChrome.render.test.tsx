@@ -201,11 +201,12 @@ describe('the shared modal chrome', () => {
     }
   })
 
-  it('MC-10 only the demo overlay carries dm-overlay, the hook of its phone padding rule', () => {
-    const d = demo()
-    expect(d.dialog.getAttribute('class')).toBe('dm-overlay')
-    expect(d.html).toMatch(/@media\s*\(max-width:\s*480px\)\s*\{\s*\.dm-overlay\s*\{\s*padding:\s*14px\s*!important;/)
-    expect(signIn().dialog.getAttribute('class')).toBeNull()
+  it('MC-10 both overlays pad 24px and no media rule narrows that padding', () => {
+    for (const [label, r] of [['sign-in', signIn()], ['demo', demo()]] as const) {
+      expect(Object.fromEntries(declarations(r.dialog)).padding, `${label}: the scrim padding`).toBe('24px')
+      const phoneRules = Array.from(r.html.matchAll(/@media[^{]*\{[^@]*?\}\s*\}/g)).map((m) => m[0])
+      expect(phoneRules.filter((rule) => /padding/.test(rule)), `${label}: a media rule re-pads the overlay`).toEqual([])
+    }
   })
 
   it('MC-11 the shell carries no v1 token, no v1 keyframe name and no v1 wordmark', () => {

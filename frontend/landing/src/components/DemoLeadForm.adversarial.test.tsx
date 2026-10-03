@@ -65,7 +65,7 @@ function cssRules(css: string): string[] {
     .filter((r) => !r.startsWith(' '))
 }
 
-// The popup's rule SET is the contract (order aside): MODAL_CHROME_CSS, DEMO_FORM_CSS, the phone rule.
+// The popup's rule SET is the contract (order aside): MODAL_CHROME_CSS and DEMO_FORM_CSS.
 const POPUP_CSS_RULES = [
   'from { opacity: 0; }',
   'to { opacity: 1; }',
@@ -80,7 +80,6 @@ const POPUP_CSS_RULES = [
   '.si-close:hover { background: var(--muted); color: var(--ink); }',
   '.si-close:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }',
   '.dm-row { flex-direction: column !important; align-items: stretch !important; }',
-  '.dm-overlay { padding: 14px !important; }',
 ]
 
 const MODAL_PANEL_STYLE = 'padding:36px 24px 26px;text-align:center;display:grid;gap:12px;justify-items:center'
@@ -93,7 +92,7 @@ describe('the popup DOM survives the extraction (A1-A3)', () => {
     expect(ids).toEqual(['dm-name', 'dm-email', 'dm-company', 'dm-role', 'dm-size', 'dm-volume', 'dm-consent'])
   })
 
-  it('A2: the single <style> carries exactly the v2 chrome, form and phone rule set, order aside', () => {
+  it('A2: the single <style> carries exactly the v2 chrome and form rule set, order aside', () => {
     const styles = Array.from(popup.matchAll(/<style>([\s\S]*?)<\/style>/g))
     expect(styles.length).toBe(1)
     const rules = cssRules(styles[0][1])

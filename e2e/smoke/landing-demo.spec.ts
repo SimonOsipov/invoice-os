@@ -787,6 +787,15 @@ test('landing demo: the modal card fits and sits centred at every width', async 
     measured.push({ ...viewport, cardWidth: box.width, left: side.left, right: side.right })
   }
 
+  // Both scrims pad alike at 390: the demo overlay carries no phone-only override.
+  const demoPadding = await dialog.evaluate((el) => getComputedStyle(el).padding)
+  await page.goto(`${LANDING_URL}/?state=${'A'.repeat(43)}&signin=ready`)
+  const signIn = page.getByRole('dialog', { name: 'Platform login' })
+  await expect(signIn).toBeVisible()
+  const signInPadding = await signIn.evaluate((el) => getComputedStyle(el).padding)
+  expect(signInPadding, 'the sign-in scrim has no padding').not.toBe('')
+  expect(demoPadding, 'the demo scrim pads differently from the sign-in scrim at 390').toBe(signInPadding)
+
   await testInfo.attach('demo-modal-fit.json', { body: JSON.stringify(measured, null, 2), contentType: 'application/json' })
   expect(measured.length, 'one reading per width').toBe(WIDE_WIDTHS.length + 1)
   expect(measured[0].width, 'the widest width is read first').toBe(2560)

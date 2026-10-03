@@ -243,7 +243,11 @@ describe('NV-03 the hero Explore anchors land on Platform', () => {
     expect(heroHashes(html)).toEqual(['#platform', '#platform'])
     expect(unresolvedHashes(html, heroHashes(html))).toEqual([])
 
-    const ghost = html.replace('href="#platform"', 'href="#ghost"')
+    // Planted inside the #top slice: the header nav also links #platform, earlier in the markup.
+    const top = html.indexOf('<section id="top"')
+    const at = html.indexOf('href="#platform"', top)
+    const ghost = `${html.slice(0, at)}href="#ghost"${html.slice(at + 'href="#platform"'.length)}`
+    expect(heroHashes(ghost), 'control: the ghost sits in the hero').toEqual(['#ghost', '#platform'])
     expect(unresolvedHashes(ghost, heroHashes(ghost)), 'control: a ghost hero anchor is reported').toEqual(['#ghost'])
   })
 })

@@ -1,205 +1,166 @@
 import { HERO_CHECKS } from '../data'
+import { GLYPHS, Icon, type GlyphName } from '../icons'
+import { Badge } from './ds/Badge'
+import { Button } from './ds/Button'
+import { Eyebrow } from './ds/Eyebrow'
+import { IconTile } from './ds/IconTile'
+import { Section } from './ds/Section'
 
-// The hero sits on plain cream: the hairline-square background layer
-// (.hero-grid / .hero-grid-fade, still shipped by the design system for anything
-// that wants it) was removed here deliberately, as was the mandate pill that used
-// to sit above the H1 — so this section carries no absolutely-positioned layer and
-// needs no stacking context of its own.
-export function Hero({ onBookDemo, onSignIn }: { onBookDemo: () => void; onSignIn: () => void }) {
+const NOTES = ['Your systems, connected', 'Audit-ready invoice records']
+
+const TILES: { icon: GlyphName; tone: 'primary' | 'accent'; title: string; caption: string }[] = [
+  { icon: 'check-check', tone: 'primary', title: 'Invoice workflow', caption: 'Validate. Review. Keep the record.' },
+  { icon: 'sparkles', tone: 'accent', title: 'Regulatory intelligence', caption: 'AI-supported.' },
+]
+
+export function Hero({ onBookDemo }: { onBookDemo: () => void }) {
   return (
-    <section id="top" style={{ borderBottom: '1px solid var(--line-1)' }}>
-      <div
-        className="ios-grid ios-2"
-        style={{
-          maxWidth: 1280,
-          margin: '0 auto',
-          padding: '80px 32px 72px',
-          display: 'grid',
-          gridTemplateColumns: '1.02fr 0.98fr',
-          gap: 56,
-          alignItems: 'center',
-        }}
-      >
-        {/* left */}
-        <div>
-          <h1 className="ios-hero-h1" style={{ fontSize: 58, lineHeight: 1.02, letterSpacing: '-0.04em', margin: '0 0 22px' }}>
-            Get e-invoicing ready
-            <br />
-            <em>without replacing</em> your
-            <br />
-            accounting system.
+    <Section tone="dark" id="top" paddingBlock="clamp(48px, 6vw, 80px) 0">
+      <div className="split" style={{ gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.05fr)', gap: 64, alignItems: 'start' }}>
+        <div style={{ display: 'grid', gap: 28, justifyItems: 'start' }}>
+          <Eyebrow tone="dark">E-INVOICING SOLUTION FOR NIGERIA AND AFRICA</Eyebrow>
+          <h1 className="t-h1" style={{ margin: 0, color: 'var(--surface-foreground)' }}>
+            Africa moves.
+            <br /> Compliance
+            <br /> <span className="t-hl">keeps up.</span>
           </h1>
-          <p style={{ fontSize: 18, lineHeight: 1.6, color: 'var(--fg-2)', margin: '0 0 32px', maxWidth: 520 }}>
-            ASComply Africa is the solution between your business and Nigeria's Merchant Buyer Solution. Create,
-            validate, approve, archive, and transmit compliant invoices — through the dashboard or the API.
+          <p className="t-lead" style={{ margin: 0, maxWidth: 480, color: 'var(--surface-body)' }}>
+            Bring invoices, approvals and changing country requirements into one connected solution. Available for Nigeria.
           </p>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 36 }}>
-            <button onClick={onBookDemo} className="v2-btn v2-btn-primary" style={{ height: 46, padding: '0 22px', fontSize: 15, cursor: 'pointer' }}>
-              Book a demo →
-            </button>
-            {/* Same hand-off as the nav CTA: persona picker → workspace. */}
-            <button onClick={onSignIn} className="v2-btn v2-btn-ghost" style={{ height: 46, padding: '0 22px', fontSize: 15, cursor: 'pointer' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '16px 28px' }}>
+            <Button variant="accent" onClick={onBookDemo}>
+              Book a demo
+            </Button>
+            <Button variant="ghostDark" href="#platform">
               Explore the platform
-            </button>
+            </Button>
           </div>
-          {/* rollout timeline */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 0, maxWidth: 480 }}>
-            <div style={{ flex: 1 }}>
-              <div className="label" style={{ marginBottom: 6 }}>
-                Large taxpayers
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px 32px', marginTop: 4 }}>
+            {NOTES.map((note) => (
+              <div key={note} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, fontWeight: 600, color: 'var(--surface-body)' }}>
+                <span style={{ display: 'inline-flex', color: 'var(--accent)' }}>
+                  <Icon paths={GLYPHS.check} size={16} strokeWidth={2} />
+                </span>
+                {note}
               </div>
-              <div style={{ height: 4, background: 'var(--action)', borderRadius: 'var(--radius-xs)' }} />
-              <div className="mono" style={{ fontSize: 11, color: 'var(--action)', marginTop: 6, fontWeight: 600 }}>
-                LIVE
-              </div>
-            </div>
-            <div style={{ width: 16 }} />
-            <div style={{ flex: 1 }}>
-              <div className="label" style={{ marginBottom: 6 }}>
-                Medium taxpayers
-              </div>
-              <div style={{ height: 4, background: 'var(--status-amber-text)', opacity: 0.55, borderRadius: 'var(--radius-xs)' }} />
-              <div className="mono" style={{ fontSize: 11, color: 'var(--status-amber-text)', marginTop: 6, fontWeight: 600 }}>
-                NEXT
-              </div>
-            </div>
-            <div style={{ width: 16 }} />
-            <div style={{ flex: 1 }}>
-              <div className="label" style={{ marginBottom: 6 }}>
-                Small / SME
-              </div>
-              <div style={{ height: 4, background: 'var(--line-3)', borderRadius: 'var(--radius-xs)' }} />
-              <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 6, fontWeight: 600 }}>
-                PLANNED
-              </div>
-            </div>
+            ))}
           </div>
         </div>
 
-        {/* right: product mock */}
-        <div style={{ position: 'relative' }}>
-          <div
-            style={{
-              background: 'var(--bg-2)',
-              border: '1px solid var(--line-2)',
-              borderRadius: 'var(--radius-lg)',
-              overflow: 'hidden',
-              boxShadow: 'var(--shadow-elegant)',
-            }}
-          >
-            {/* window chrome */}
+        <div style={{ minWidth: 0 }}>
+          <div className="card-floating hero-card" style={{ position: 'relative', marginTop: 40, padding: '22px 24px 24px', boxShadow: 'var(--shadow-elegant)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
+              <span className="t-card-title">ASComply Platform</span>
+              <span className="t-meta">Illustrative view</span>
+            </div>
             <div
               style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '11px 14px',
-                borderBottom: '1px solid var(--line-1)',
-                background: 'var(--bg-1)',
+                background: 'var(--card)',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-md)',
+                overflow: 'hidden',
+                marginBottom: 16,
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
-                  INV-2026-00481
-                </span>
-              </div>
               <div
                 style={{
-                  display: 'inline-flex',
+                  display: 'flex',
                   alignItems: 'center',
-                  gap: 6,
-                  background: 'var(--status-amber-bg)',
-                  border: '1px solid var(--status-amber-border)',
-                  borderRadius: 999,
-                  padding: '3px 9px',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  padding: '10px 14px',
+                  borderBottom: '1px solid var(--border)',
+                  background: 'var(--muted)',
                 }}
               >
-                <span style={{ width: 6, height: 6, borderRadius: 99, background: 'var(--status-amber-text)' }} />
-                <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: 'var(--status-amber-text)', letterSpacing: '0.05em' }}>
-                  VALIDATING
+                <span className="t-meta">INV-2026-00481</span>
+                <Badge tone="progress" dot>
+                  Validating
+                </Badge>
+              </div>
+              <div style={{ position: 'relative', padding: '4px 0', overflow: 'hidden' }}>
+                <div className="hero-scan" aria-hidden="true" />
+                {HERO_CHECKS.map((c, i) => (
+                  <div key={c.label} className="hero-row" style={{ animationDelay: `${i * 120}ms` }}>
+                    <span
+                      style={{
+                        flex: 'none',
+                        width: 18,
+                        height: 18,
+                        borderRadius: 'var(--radius-pill)',
+                        display: 'grid',
+                        placeItems: 'center',
+                        background: c.bg,
+                        color: c.fg,
+                      }}
+                    >
+                      <Icon paths={GLYPHS[c.icon]} size={11} strokeWidth={2} />
+                    </span>
+                    <span style={{ flex: 1, fontSize: 13, color: 'var(--foreground)' }}>{c.label}</span>
+                    <span className="t-meta" style={{ color: c.fg, fontWeight: 700 }}>
+                      {c.tag}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '4px 12px',
+                  padding: '10px 14px',
+                  borderTop: '1px solid var(--border)',
+                  background: 'var(--muted)',
+                }}
+              >
+                {/* data-tally: hooks for the tally tests in Hero.validationPreview.dom.test.tsx and landing-content.spec.ts */}
+                <span data-tally="failures" className="t-meta" style={{ color: 'var(--destructive)', fontWeight: 700 }}>
+                  1 ERROR · 1 WARNING
+                </span>
+                <span data-tally="passed" className="t-meta">
+                  14 / 16 CHECKS PASSED
                 </span>
               </div>
             </div>
-            {/* validation rows */}
-            <div style={{ position: 'relative', padding: '6px 0' }}>
-              <div
-                style={{
-                  position: 'absolute',
-                  left: 0,
-                  right: 0,
-                  top: 0,
-                  height: 28,
-                  background: 'linear-gradient(180deg, var(--action-tint), transparent)',
-                  pointerEvents: 'none',
-                  animation: 'scanline 2.6s var(--ease-out) infinite',
-                }}
-              />
-              {HERO_CHECKS.map((c, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '9px 16px' }}>
-                  <span
-                    style={{
-                      flex: 'none',
-                      width: 18,
-                      height: 18,
-                      borderRadius: 99,
-                      display: 'grid',
-                      placeItems: 'center',
-                      background: c.bg,
-                      color: c.fg,
-                    }}
-                  >
-                    {c.icon}
-                  </span>
-                  <span style={{ flex: 1, fontSize: 13, color: 'var(--fg-2)' }}>{c.label}</span>
-                  <span className="mono" style={{ fontSize: 11, color: c.fg, fontWeight: 500 }}>
-                    {c.tag}
-                  </span>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '14px 20px' }}>
+              {TILES.map((t) => (
+                <div key={t.title} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <IconTile name={t.icon} tone={t.tone} size={40} />
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--ink)' }}>{t.title}</div>
+                    <div className="t-caption" style={{ lineHeight: 1.4 }}>
+                      {t.caption}
+                    </div>
+                  </div>
                 </div>
               ))}
-            </div>
-            {/* footer summary */}
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '13px 16px',
-                borderTop: '1px solid var(--line-1)',
-                background: 'var(--bg-1)',
-              }}
-            >
-              {/* data-tally: stable selector for the failure-count test oracle */}
-              <span data-tally="failures" className="mono" style={{ fontSize: 11, color: 'var(--status-red-text)', fontWeight: 600 }}>
-                1 ERROR · 1 WARNING
-              </span>
-              {/* data-tally: stable selector for the passed-count test oracle */}
-              <span data-tally="passed" className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
-                14 / 16 CHECKS PASSED
-              </span>
-            </div>
-          </div>
-          {/* floating ref tag */}
-          <div
-            style={{
-              position: 'absolute',
-              bottom: -16,
-              right: -14,
-              background: 'var(--surface)',
-              color: 'var(--text-on-dark)',
-              borderRadius: 'var(--radius-md)',
-              padding: '10px 14px',
-              boxShadow: 'var(--shadow-soft)',
-            }}
-          >
-            <div className="mono" style={{ fontSize: 10, letterSpacing: '0.08em', color: 'var(--teal-300)', marginBottom: 2 }}>
-              NRS REFERENCE
-            </div>
-            <div className="mono" style={{ fontSize: 13, fontWeight: 600, letterSpacing: '0.02em' }}>
-              CSID · pending transmit
             </div>
           </div>
         </div>
       </div>
-    </section>
+      <div
+        style={{
+          marginTop: 64,
+          padding: '28px 0',
+          borderTop: '1px solid var(--on-dark-10)',
+          display: 'flex',
+          flexWrap: 'wrap',
+          justifyContent: 'space-between',
+          gap: '12px 24px',
+          fontSize: 10,
+          fontWeight: 700,
+          letterSpacing: 'var(--tracking-eyebrow)',
+          textTransform: 'uppercase',
+          color: 'var(--eyebrow-on-dark)',
+        }}
+      >
+        <span>Local expertise. Pan-African ambition.</span>
+        <a href="#platform" style={{ color: 'var(--eyebrow-on-dark)' }}>
+          Explore the platform ↓
+        </a>
+      </div>
+    </Section>
   )
 }

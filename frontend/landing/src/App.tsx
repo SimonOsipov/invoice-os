@@ -127,7 +127,7 @@ export default function App() {
         <Privacy />
       ) : (
         <>
-          <Hero onBookDemo={book('hero')} onSignIn={onSignIn} />
+          <Hero onBookDemo={book('hero')} />
           <TrustStrip />
           <Problem />
           <Modules />
@@ -139,7 +139,7 @@ export default function App() {
           <DemoCta />
         </>
       )}
-      <Footer onBookDemo={book('footer')} hrefPrefix={privacy ? '/' : ''} onCookieChoices={() => setReopened(true)} />
+      <Footer onBookDemo={book('footer')} onSignIn={onSignIn} hrefPrefix={privacy ? '/' : ''} onCookieChoices={() => setReopened(true)} />
       {/* Pinned by "the notice mounts after Footer and before the modals": last in flow puts the
           spacer's scroll room at the document end and the tab order after the footer. */}
       {(consent === null || reopened) && (

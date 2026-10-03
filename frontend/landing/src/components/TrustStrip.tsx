@@ -1,37 +1,36 @@
-const AUDIENCES = [
-  'Medium taxpayers',
-  'Accounting firms',
-  'ERP consultants',
-  'Distributors',
-  'Manufacturers',
-  'Formal SMEs',
-  'Fintech',
-  'CRMs',
-]
+import { Section } from './ds/Section'
+
+const AUDIENCES = ['Finance teams', 'Accounting firms', 'Growing businesses', 'Fintech', 'Technology partners']
 
 export function TrustStrip() {
   // data-strip: stable selector for the audience-strip test oracle
   return (
-    <section data-strip="audience" style={{ borderBottom: '1px solid var(--line-1)', background: 'var(--bg-2)' }}>
-      <div
-        style={{
-          maxWidth: 1280,
-          margin: '0 auto',
-          padding: '22px 32px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          columnGap: 36,
-          rowGap: 12,
-          flexWrap: 'wrap',
-        }}
-      >
-        {AUDIENCES.map((a) => (
-          <span key={a} className="label" style={{ fontSize: 12 }}>
-            {a}
-          </span>
-        ))}
+    <Section tone="sage" paddingBlock="30px">
+      <div data-strip="audience" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '16px 48px' }}>
+        <div
+          style={{
+            flex: 'none',
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: 'var(--tracking-eyebrow)',
+            textTransform: 'uppercase',
+            color: 'var(--primary)',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          Built for the way your business works
+        </div>
+        <div style={{ flex: '1 1 520px', display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: '12px 32px' }}>
+          {AUDIENCES.map((a) => (
+            <span
+              key={a}
+              style={{ fontSize: 16, fontWeight: 700, letterSpacing: 'var(--tracking-card)', color: 'var(--ink)', whiteSpace: 'nowrap' }}
+            >
+              {a}
+            </span>
+          ))}
+        </div>
       </div>
-    </section>
+    </Section>
   )
 }

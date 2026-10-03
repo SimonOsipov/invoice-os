@@ -305,9 +305,6 @@ button {
   .ios-grid.ios-3 {
     grid-template-columns: 1fr !important;
   }
-  .ios-demo-card {
-    padding: 36px 22px !important;
-  }
 }
 
 @media (max-width: 640px) {

@@ -16,7 +16,7 @@ import { PLANS } from './data'
 
 const DIALOG = '[role="dialog"]'
 const DEMO_DIALOG_LABEL = 'Book a demo'
-const SCOPES = ['header', '#top', '#platform', '#coverage', '#solutions', '#integrations', '#api', '#faq', '[data-closing]', '#pricing', '#demo', 'footer']
+const SCOPES = ['header', '#top', '#platform', '#coverage', '#solutions', '#integrations', '#api', '#faq', '[data-closing]', '#pricing', 'footer']
 
 function memoryStorage(): ConsentStore {
   const map = new Map<string, string>()
@@ -91,17 +91,16 @@ const ROSTER: { scope: string; label: string }[] = [
   { scope: 'footer', label: 'Contact ASComply' }, // Footer.tsx, same onBookDemo (D-24)
 ]
 
-// The twenty-one controls in these twelve scopes that are NOT demo CTAs, named so the
-// 37-button completeness guard below (F3-f) is not a magic number:
+// The twenty controls in these eleven scopes that are NOT demo CTAs, named so the
+// 36-button completeness guard below (F3-f) is not a magic number:
 //   header        -- "Platform login" (sign-in), the burger
 //   #platform     -- the Validate / Approve / Submit tabs (3)
 //   #coverage     -- the Nigeria / Kenya / South Africa country tabs (3)
 //   #solutions    -- the three Who-it's-for tabs (3)
 //   #faq          -- the five question headers (5)
 //   #pricing      -- the Monthly / Annual billing-period toggle (2)
-//   #demo         -- the shared form's "Book my demo →" submit
 //   footer        -- "Open the cockpit" (sign-in), "Cookie choices"
-const NON_CTA_COUNT = 21
+const NON_CTA_COUNT = 20
 
 describe('F-3: every rendered demo CTA opens the same modal', () => {
   it('F3-a: control needle -- zero dialogs at rest, and every scope resolves to >= 1 button', async () => {
@@ -126,12 +125,12 @@ describe('F-3: every rendered demo CTA opens the same modal', () => {
   })
 
   // F3-f: measured 3 (header) + 1 (#top) + 4 (#platform) + 4 (#coverage) + 6 (#solutions) + 1 (#integrations) +
-  // 1 (#api) + 6 (#faq) + 1 (closing) + 5 (#pricing) + 1 (#demo) + 4 (footer) = 37 = the 16-entry roster + the 21 named non-CTA controls above. Asserted
+  // 1 (#api) + 6 (#faq) + 1 (closing) + 5 (#pricing) + 4 (footer) = 36 = the 16-entry roster + the 20 named non-CTA controls above. Asserted
   // with the demo modal closed -- App.tsx mounts SignInModal/DemoModal as
   // siblings of Footer, outside every one of these scopes, but an OPEN modal still
   // adds buttons to the page (its own Close, and form controls) that this total ignores
   // by construction.
-  it('F3-f: the twelve scopes hold exactly 37 buttons in total, modal closed', async () => {
+  it('F3-f: the eleven scopes hold exactly 36 buttons in total, modal closed', async () => {
     await mountApp()
     expect(document.querySelectorAll(DIALOG).length).toBe(0)
     const total = SCOPES.reduce((sum, scope) => {
@@ -423,23 +422,5 @@ describe('F3-i: the footer demo buttons keep the footer attribution; Open the co
     } finally {
       vi.doUnmock('./analytics')
     }
-  })
-})
-
-// A1 (AC-1.3, NEW-BEHAVIOUR): pins the end state directly -- #demo's button must stop
-// opening the popup. #dc-name-error proves the click was not inert (validation ran on
-// a real submit), rather than a dead handler that also opens no dialog.
-describe('A1: the card no longer opens the demo dialog', () => {
-  it('clicking "Book my demo ->" in #demo validates in place, opens nothing', async () => {
-    await mountApp()
-    const demoEl = document.querySelector('#demo')
-    expect(demoEl, 'expected #demo to resolve').not.toBeNull()
-    if (!demoEl) return
-
-    await clickByText(demoEl, 'Book my demo →')
-
-    expect(document.querySelectorAll(DIALOG).length).toBe(0)
-    expect(document.getElementById('dc-name-error'), 'expected the card to validate in place').not.toBeNull()
-    expect(consoleError).not.toHaveBeenCalled()
   })
 })

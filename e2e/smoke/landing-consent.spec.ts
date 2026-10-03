@@ -177,7 +177,7 @@ async function openLanding(page: Page, options: OpenOptions = {}) {
   else await expect(card).toHaveCount(0)
 
   if (privacy) await expect(page.getByTestId('privacy-container')).toBeVisible()
-  else await expect(page.locator('#demo')).toHaveCount(1)
+  else await expect(page.locator('[data-closing]')).toHaveCount(1)
 
   // Google-hosted fonts settle once, before any measurement (landing-nav.spec.ts's reason).
   await page.evaluate(() => document.fonts.ready.then(() => true))
@@ -222,9 +222,9 @@ test('landing consent: the notice mounts on both routes with no stored answer, a
 // band, not the one `scrollIntoViewIfNeeded` happens to land on. That single sample is
 // why this read green at 1080 and red at 720 on the same build.
 //
-// Right-anchored the card opens at x = W-484 while the CTA's left column ends at
-// 88 + 0.6*(min(W,1280)-224); those separate at W >= 1094, so across CTA_STATES the two
-// x bands cannot intersect and no scroll offset can produce an overlap. The sweep is
+// Right-anchored the card opens at x = W-484 while the CTA's copy column ends at most at
+// container left + gutter + clamp(32px, 6vw, 72px) + 520px (656px at W=1280); across
+// CTA_STATES (W >= 1280) the two x bands cannot intersect and no scroll offset can produce an overlap. The sweep is
 // what turns that from an argument into an assertion — and the y-band arm below is what
 // stops it passing on a page where the card simply never reaches the copy.
 test('landing consent: the notice never covers the closing CTA copy at any scroll offset', async ({
@@ -233,11 +233,14 @@ test('landing consent: the notice never covers the closing CTA copy at any scrol
   test.setTimeout(180_000)
   const { errors, card } = await openLanding(page)
 
-  const demo = page.locator('#demo')
+  const closing = page.locator('[data-closing]')
   const targets: Array<{ label: string; locator: Locator }> = [
-    { label: 'the BOOK A DEMO eyebrow', locator: demo.getByText('BOOK A DEMO', { exact: true }) },
-    { label: "the CTA's h2", locator: demo.getByRole('heading', { level: 2 }) },
-    { label: "the CTA's supporting paragraph", locator: demo.getByText(/A 20-minute walkthrough/) },
+    { label: 'the closing eyebrow', locator: closing.getByText("LET'S MAKE COMPLIANCE CLEARER.", { exact: true }) },
+    { label: "the CTA's h2", locator: closing.getByRole('heading', { level: 2 }) },
+    {
+      label: "the CTA's supporting paragraph",
+      locator: closing.getByText('See how ASComply fits your invoices, your systems and your team.'),
+    },
   ]
   for (const t of targets) await expect(t.locator, `${t.label} is not unique`).toHaveCount(1)
 
@@ -279,7 +282,7 @@ test('landing consent: the notice never covers the closing CTA copy at any scrol
           }
 
           const doc = document.documentElement
-          const demoEl = document.querySelector('#demo')
+          const demoEl = document.querySelector('[data-closing]')
           if (!demoEl) return { error: 'the closing CTA is not on the page' }
           const maxScroll = Math.max(0, doc.scrollHeight - doc.clientHeight)
           const box = demoEl.getBoundingClientRect()
@@ -401,7 +404,7 @@ test('landing consent: the notice moves nothing above it and reserves the band i
   await expect(card).toHaveCount(1)
 
   const header = page.getByRole('banner')
-  const demo = page.locator('#demo')
+  const demo = page.locator('[data-closing]')
   const footer = page.getByRole('contentinfo')
 
   const spacerRect = await rectOf(page.locator('.cn-spacer'), 'the desktop spacer', 'with the notice up')
@@ -826,7 +829,7 @@ test('landing consent: the closing CTA scrolls clear of the notice at 390px', as
   // boundingBox() is viewport-relative, and at the document end the spacer has carried the
   // button off the TOP of the viewport — a read there is clear of the notice on any layout.
   // Scroll it in: that is the state its click happens in (C4's reason).
-  const button = page.locator('#demo').getByRole('button', { name: /Book my demo/ })
+  const button = page.locator('[data-closing]').getByRole('button', { name: 'Book a demo' })
   await expect(button).toHaveCount(1)
   await button.scrollIntoViewIfNeeded()
   await settleLayout(page)

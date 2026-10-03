@@ -160,12 +160,6 @@ describe('RESKIN-01-03 (AC 5): the former --gradient-hero sites render the v2 fl
     expect(cards.filter((c) => c.includes('background:var(--bg-2);'))).toHaveLength(2)
   })
 
-  it('the DemoCta card is flat var(--surface)', () => {
-    const demo = /<div class="ios-grid ios-2 ios-demo-card"[^>]*>/.exec(section('demo'))?.[0] ?? ''
-    expect(demo, 'control: the card was found').toContain('padding:64px 56px')
-    expect(demo).toContain('background:var(--surface);')
-  })
-
   it('no rendered element names a gradient token or a font-variation axis', () => {
     expect(html.length).toBeGreaterThan(50_000)
     expect(html).not.toMatch(/--gradient-/)

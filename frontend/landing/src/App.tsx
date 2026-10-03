@@ -16,7 +16,6 @@ import { Api } from './components/Api'
 import { Faq } from './components/Faq'
 import { ClosingCta } from './components/ClosingCta'
 import { Pricing } from './components/Pricing'
-import { DemoCta } from './components/DemoCta'
 import { Footer } from './components/Footer'
 import { Privacy } from './components/Privacy'
 import { CookieNotice } from './components/CookieNotice'
@@ -145,7 +144,6 @@ export default function App() {
           <Faq onBookDemo={book('faq')} />
           <ClosingCta onBookDemo={book('closing')} />
           <Pricing onBookDemo={book('pricing')} />
-          <DemoCta />
         </>
       )}
       <Footer onBookDemo={book('footer')} onSignIn={onSignIn} hrefPrefix={privacy ? '/' : ''} onCookieChoices={() => setReopened(true)} />

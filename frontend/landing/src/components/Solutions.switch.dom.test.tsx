@@ -3,7 +3,7 @@
 import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GLYPHS, type GlyphName } from '../icons'
-import { click, focusedIndex, mountView, press, selectedIndex, show, spyConsoleError, tabsIn, unmountView, type View } from './ds/dsDom.test.util'
+import { click, fire, focusedIndex, mountView, press, selectedIndex, show, spyConsoleError, tabsIn, unmountView, type View } from './ds/dsDom.test.util'
 import { Solutions } from './Solutions'
 
 type Id = 'fin' | 'firm' | 'dev'
@@ -133,13 +133,16 @@ describe('Solutions band', () => {
   it('SL-06 the keyboard follows the DS tab keys', () => {
     tabs()[0].focus()
     expect(focusedIndex(tabs()), 'focus starts on Finance teams').toBe(0)
-    const steps: [string, Id][] = [['ArrowRight', 'firm'], ['End', 'dev'], ['Home', 'fin']]
-    steps.forEach(([key, id]) => {
+    const steps: [string, Id][] = [['ArrowRight', 'firm'], ['End', 'dev'], ['Home', 'fin'], ['ArrowLeft', 'dev'], ['ArrowRight', 'fin']]
+    steps.forEach(([key, id], i) => {
       press(document.activeElement as Element, key)
-      expectOnly(id, key)
+      expectOnly(id, `${key} (step ${i + 1})`)
       expect(selectedIndex(tabs()), `${key} selects`).toBe(ORDER.indexOf(id))
       expect(focusedIndex(tabs()), `${key} focuses the selected tab`).toBe(ORDER.indexOf(id))
     })
+    const withCtrl = fire(document.activeElement as Element, 'ArrowRight', { ctrlKey: true })
+    expect(withCtrl.defaultPrevented, 'Ctrl+ArrowRight is left to the browser').toBe(false)
+    expectOnly('fin', 'after Ctrl+ArrowRight')
   })
 
   it('SL-07 each panel carries V’s copy', () => {
@@ -187,5 +190,34 @@ describe('Solutions band', () => {
       expect([panel!.getAttribute('role'), panel!.dataset.solPanel], `${id} panel role and id`).toEqual(['tabpanel', id])
       expect(document.getElementById(panel!.getAttribute('aria-labelledby') ?? ''), `${id} panel is labelled by its tab`).toBe(tab)
     })
+  })
+
+  it('SL-10b the selected tab controls the panel that is visible', () => {
+    for (const id of ['dev', 'firm', 'fin'] as const) {
+      click(tabs()[ORDER.indexOf(id)])
+      const selected = tabs()[selectedIndex(tabs())]
+      const [panel] = visiblePanels()
+      expect(panel.id, `${id}: the visible panel has an id`).not.toBe('')
+      expect(selected.getAttribute('aria-controls'), `${id}: the selected tab controls the visible panel`).toBe(panel.id)
+      expect(panel.getAttribute('aria-labelledby'), `${id}: the visible panel is labelled by the selected tab`).toBe(selected.id)
+    }
+  })
+
+  it('SL-11 two bands in one document share no id', async () => {
+    const second = mountView()
+    try {
+      await show(second, createElement(Solutions, { onBookDemo: () => undefined }))
+      const ids = [view, second].flatMap((v) => Array.from(v.container.querySelectorAll('[role=tab], [role=tabpanel]'), (el) => el.id))
+      expect(ids, 'both bands carry a non-empty id on 3 tabs and 3 panels each').toHaveLength(12)
+      expect(ids.every((id) => id !== ''), 'no id is empty').toBe(true)
+      expect(new Set(ids).size, 'no id repeats across the two bands').toBe(ids.length)
+      for (const v of [view, second]) {
+        for (const tab of tabsIn(v.container)) {
+          expect(v.container.querySelector(`[id="${tab.getAttribute('aria-controls')}"]`), 'aria-controls resolves inside its own band').not.toBeNull()
+        }
+      }
+    } finally {
+      unmountView(second)
+    }
   })
 })

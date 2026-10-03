@@ -120,8 +120,6 @@ describe('F-3: every rendered demo CTA opens the same modal', () => {
     expect(new Set(PLANS.map((p) => p.cta)).size).toBe(3)
   })
 
-  // A2 (O3, NEW-BEHAVIOUR): the future roster, pinned against today's unedited
-  // ROSTER literal above -- fails honestly until #demo's entry is dropped.
   it('A2: the roster is exactly 16 entries, and no entry scopes to #demo', () => {
     expect(ROSTER.length).toBe(16)
     expect(ROSTER.some((entry) => entry.scope === '#demo')).toBe(false)
@@ -130,7 +128,7 @@ describe('F-3: every rendered demo CTA opens the same modal', () => {
   // F3-f: measured 3 (header) + 1 (#top) + 4 (#platform) + 4 (#coverage) + 6 (#solutions) + 1 (#integrations) +
   // 1 (#api) + 6 (#faq) + 1 (closing) + 5 (#pricing) + 1 (#demo) + 4 (footer) = 37 = the 16-entry roster + the 21 named non-CTA controls above. Asserted
   // with the demo modal closed -- App.tsx mounts SignInModal/DemoModal as
-  // siblings of Footer, outside every one of these ten scopes, but an OPEN modal still
+  // siblings of Footer, outside every one of these scopes, but an OPEN modal still
   // adds buttons to the page (its own Close, and form controls) that this total ignores
   // by construction.
   it('F3-f: the twelve scopes hold exactly 37 buttons in total, modal closed', async () => {

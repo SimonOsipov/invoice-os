@@ -94,6 +94,7 @@ describe('FAQ band', () => {
     const h2s = aside!.querySelectorAll('h2')
     expect(h2s, 'one h2').toHaveLength(1)
     expect(spaced(h2s[0])).toBe(V_H2)
+    expect(h2s[0].querySelectorAll('br'), 'the h2 breaks once, before the teal line').toHaveLength(1)
     const spans = h2s[0].querySelectorAll('span')
     expect(spans, 'one span').toHaveLength(1)
     expect([norm(spans[0].textContent), spans[0].style.color], 'the second line is teal').toEqual([V_HL, 'var(--teal)'])
@@ -104,6 +105,7 @@ describe('FAQ band', () => {
     expect(strong, 'one strong').toHaveLength(1)
     expect(norm(strong[0].textContent)).toBe(V_LEAD)
     expect(spaced(ps[0])).toBe(`${V_LEAD} ${V_REST}`)
+    expect(ps[0].querySelectorAll('br'), 'the paragraph breaks once, after the strong').toHaveLength(1)
 
     const buttons = aside!.querySelectorAll('button')
     expect(buttons, 'one button in the aside').toHaveLength(1)
@@ -147,5 +149,54 @@ describe('FAQ band', () => {
       expect(id, `item ${i + 1} names an id`).toBeTruthy()
       expect(document.getElementById(id!), `item ${i + 1} resolves to its answer`).toBe(answers()[i])
     })
+  })
+
+  it('FA-07 headers and answers stay in step through any click sequence', () => {
+    expect(heads(), 'control: five headers').toHaveLength(V_FAQ.length)
+    let model = 0
+    for (const at of [2, 2, 2, 4, 0, 0, 1, 1, 3]) {
+      click(heads()[at])
+      model = model === at ? -1 : at
+      const want = model === -1 ? [] : [model]
+      expect(openState(), `after clicking item ${at + 1}`).toEqual({ expanded: want, shown: want })
+      heads().forEach((h, i) => {
+        const target = document.getElementById(h.getAttribute('aria-controls') ?? '')
+        expect(target, `item ${i + 1}: aria-controls resolves`).toBe(answers()[i])
+        expect(target!.hidden, `item ${i + 1}: hidden is the inverse of aria-expanded`).toBe(h.getAttribute('aria-expanded') !== 'true')
+      })
+    }
+  })
+
+  it('FA-08 each header is a focusable native button and none of them asks to book a demo', async () => {
+    const onBookDemo = vi.fn()
+    expect(heads(), 'control: five headers').toHaveLength(V_FAQ.length)
+    await show(view, createElement(Faq, { onBookDemo }))
+    for (const h of heads()) {
+      expect([h.localName, h.type, h.disabled, h.tabIndex, h.hasAttribute('tabindex')], 'a native, enabled button in the Tab order').toEqual(['button', 'button', false, 0, false])
+      h.focus()
+      expect(document.activeElement, 'the header takes focus').toBe(h)
+      expect(h.querySelector('svg')?.getAttribute('aria-hidden'), 'the chevron is hidden from AT').toBe('true')
+    }
+    for (const at of [0, 3, 3]) click(heads()[at])
+    expect(onBookDemo, 'toggling an item opens no demo').not.toHaveBeenCalled()
+    const cta = Array.from(view.container.querySelectorAll('button')).find((b) => norm(b.textContent) === V_CTA)
+    expect(cta, 'control: the aside CTA rendered').toBeDefined()
+    const before = openState()
+    click(cta!)
+    expect(onBookDemo, 'the aside CTA books a demo once').toHaveBeenCalledTimes(1)
+    expect(openState(), 'booking a demo leaves the list as it was').toEqual(before)
+  })
+
+  it('FA-09 closed answers are display: none and the open one is not', () => {
+    expect(answers(), 'control: five answers').toHaveLength(V_FAQ.length)
+    for (const [at, open] of [[null, [0]], [3, [3]], [3, []]] as const) {
+      if (at !== null) click(heads()[at])
+      answers().forEach((a, i) => {
+        const none = getComputedStyle(a).display === 'none'
+        expect(none, `item ${i + 1}: display none iff closed`).toBe(!(open as readonly number[]).includes(i))
+        expect(a.textContent, `item ${i + 1}: the text stays mounted`).toBe(V_FAQ[i][1])
+        expect(a.closest('button'), `item ${i + 1}: the answer is not inside the header`).toBeNull()
+      })
+    }
   })
 })

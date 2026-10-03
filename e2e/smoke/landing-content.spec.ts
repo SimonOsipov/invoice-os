@@ -44,14 +44,11 @@ const LANDING_URL = resolveTarget('LANDING_URL')
 
 // F-6, retyped from frontend/landing/src/components/TrustStrip.tsx#AUDIENCES, in render order.
 const AUDIENCE_SEGMENTS = [
-  'Medium taxpayers',
+  'Finance teams',
   'Accounting firms',
-  'ERP consultants',
-  'Distributors',
-  'Manufacturers',
-  'Formal SMEs',
+  'Growing businesses',
   'Fintech',
-  'CRMs',
+  'Technology partners',
 ] as const
 
 // The accounting-system / data-format wordmarks the map drifted to on 2026-09-05 (this
@@ -79,7 +76,7 @@ const HERO_CHECK_ROWS: ReadonlyArray<{ label: string; tag: CheckTag }> = [
   { label: 'Line totals reconcile to header', tag: 'FAIL' },
 ]
 
-// Retyped from Hero.tsx's two data-tally spans (:172, :176). Both are hardcoded literals,
+// Retyped from Hero.tsx's two data-tally spans. Both are hardcoded literals,
 // not derived from HERO_CHECKS at render time — the fact the invariant below turns on.
 const TALLY_FAILURES_TEXT = '1 ERROR · 1 WARNING'
 const TALLY_PASSED_TEXT = '14 / 16 CHECKS PASSED'
@@ -123,8 +120,26 @@ test('landing content: the audience strip names buyer segments, never an account
   const strip = page.locator('[data-strip="audience"]')
   await expect(strip, 'the audience strip did not resolve to exactly one element').toHaveCount(1)
 
+  const band = page.locator('section.band-sage').filter({ has: strip })
+  await expect(band, 'the strip is not inside exactly one section.band-sage').toHaveCount(1)
+  const bandBg = await band.evaluate((el) => getComputedStyle(el).backgroundColor)
+  const sageBg = await page.evaluate(() => {
+    const probe = document.createElement('div')
+    probe.style.background = 'var(--sage)'
+    document.body.appendChild(probe)
+    const bg = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return bg
+  })
+  expect(sageBg, 'control: the --sage probe resolved to a colour').not.toBe('rgba(0, 0, 0, 0)')
+  expect(bandBg, 'the band background is not var(--sage)').toBe(sageBg)
+
+  const label = strip.locator(':scope > div').first()
+  await expect(label, 'the strip label is missing').toHaveCount(1)
+  await expect(label).toHaveText('Built for the way your business works')
+
   const segments = strip.locator('span')
-  await expect(segments, 'the strip does not hold exactly 8 segments').toHaveCount(AUDIENCE_SEGMENTS.length)
+  await expect(segments, 'the strip does not hold exactly 5 segments').toHaveCount(AUDIENCE_SEGMENTS.length)
   await expect(segments).toHaveText([...AUDIENCE_SEGMENTS])
 
   const stripText = (await strip.textContent()) ?? ''
@@ -245,19 +260,19 @@ test('landing content: the live-validation preview lists every check and its tal
 // E4 — the retired positioning copy. None of these four strings carries a data-* hook, so the
 // selectors are structural; App.landingCopy.dom.test.tsx asserts the same four on the SSR tree,
 // which is what keeps a bad selector here from costing a fleet rebuild to discover.
-const HERO_SOLUTION_TEXT =
-  "ASComply Africa is the solution between your business and Nigeria's Merchant Buyer Solution. Create, validate, approve, archive, and transmit compliant invoices — through the dashboard or the API."
+const HERO_LEAD_TEXT = 'Bring invoices, approvals and changing country requirements into one connected solution. Available for Nigeria.'
 const MODULES_HEADING_TEXT = 'ASComply is your invoice compliance solution.'
 const MODULES_SOLUTION_TEXT =
   'We help your team validate invoices before they are submitted, manage approvals internally, store audit-ready records and submit them to the regulatory bodies.'
-const FOOTER_TAGLINE_TEXT = 'E-invoicing compliance solution for African businesses.'
+// Retyped from Footer.tsx's tagline (V459-483).
+const FOOTER_TAGLINE_TEXT = 'Clarity for every invoice. Confidence for your business.'
 
 test('landing content: the retired positioning copy is replaced everywhere it shipped', async ({ page }) => {
   const sinks = await openLanding(page)
 
   const heroParagraph = page.locator('#top p')
   await expect(heroParagraph, '#top does not hold exactly one hero paragraph').toHaveCount(1)
-  await expect(heroParagraph).toHaveText(HERO_SOLUTION_TEXT)
+  await expect(heroParagraph).toHaveText(HERO_LEAD_TEXT)
 
   const modulesHeading = page.locator('#modules h2')
   await expect(modulesHeading, '#modules does not hold exactly one heading').toHaveCount(1)

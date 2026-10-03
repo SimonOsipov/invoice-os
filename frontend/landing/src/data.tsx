@@ -1,9 +1,8 @@
 // All landing content, re-authored from the prototype's support.js state as
 // typed, static TS constants (the support.js Mustache runtime is NOT ported).
-// Glyphs are pre-built <Icon> nodes so section components stay pure layout.
 
 import type { ReactNode } from 'react'
-import { Icon } from './icons'
+import { Icon, type GlyphName } from './icons'
 
 /* ------------------------------------------------------------------ */
 /* Hero — animated validation mock                                     */
@@ -12,25 +11,22 @@ import { Icon } from './icons'
 export type HeroCheck = {
   label: string
   tag: string
-  icon: ReactNode
+  icon: GlyphName
   bg: string
   fg: string
 }
 
-const tick = <Icon paths={['M20 6 9 17l-5-5']} size={11} strokeWidth={3} />
-const cross = <Icon paths={['M18 6 6 18M6 6l12 12']} size={11} strokeWidth={3} />
-const warn = <Icon paths={['M12 9v4M12 17h.01']} size={11} strokeWidth={3} />
-
-const OK_BG = 'var(--status-green-bg)'
-const OK_FG = 'var(--status-green-text)'
+const PASS = { bg: 'var(--status-success-bg)', fg: 'var(--status-success-fg)', icon: 'check' } as const
+const WARN = { bg: 'var(--status-progress-bg)', fg: 'var(--status-progress-fg)', icon: 'triangle-alert' } as const
+const FAIL = { bg: 'color-mix(in srgb, var(--destructive) 14%, var(--card))', fg: 'var(--destructive)', icon: 'x' } as const
 
 export const HERO_CHECKS: HeroCheck[] = [
-  { label: 'Buyer TIN format · 12345678-0001', tag: 'PASS', icon: tick, bg: OK_BG, fg: OK_FG },
-  { label: 'VAT computed at 7.5%', tag: 'PASS', icon: tick, bg: OK_BG, fg: OK_FG },
-  { label: 'Mandatory seller fields present', tag: 'PASS', icon: tick, bg: OK_BG, fg: OK_FG },
-  { label: 'WHT applied on services line', tag: 'WARN', icon: warn, bg: 'var(--status-amber-bg)', fg: 'var(--status-amber-text)' },
-  { label: 'Invoice number not duplicated', tag: 'PASS', icon: tick, bg: OK_BG, fg: OK_FG },
-  { label: 'Line totals reconcile to header', tag: 'FAIL', icon: cross, bg: 'var(--status-red-bg)', fg: 'var(--status-red-text)' },
+  { label: 'Buyer TIN format · 12345678-0001', tag: 'PASS', ...PASS },
+  { label: 'VAT computed at 7.5%', tag: 'PASS', ...PASS },
+  { label: 'Mandatory seller fields present', tag: 'PASS', ...PASS },
+  { label: 'WHT applied on services line', tag: 'WARN', ...WARN },
+  { label: 'Invoice number not duplicated', tag: 'PASS', ...PASS },
+  { label: 'Line totals reconcile to header', tag: 'FAIL', ...FAIL },
 ]
 
 /* ------------------------------------------------------------------ */

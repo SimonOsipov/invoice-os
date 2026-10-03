@@ -28,9 +28,9 @@ const MIN_PHONE_CARD_PX = 300 // floor: the third-of-viewport cap must not pass 
 const BOX_SLACK_PX = 0.5 // sub-pixel rounding only
 const TAB_PRESSES = 30
 const NARROW_WIDTHS = [390, 375] as const
-// copyright span + wrapper div + Cookie choices button: the three descendants the
-// copyright row is required to contain, so the walk's floor is counted, not invented.
-const MIN_COPYRIGHT_ROW_NODES = 3
+// copyright span, link group, Privacy policy and Cookie choices: the four descendants the
+// copyright row is required to contain (Footer.tsx bottom row), so the floor is counted.
+const MIN_COPYRIGHT_ROW_NODES = 4
 
 // WIDE_WIDTHS at 1080 plus 1280x720 — the viewport this suite actually runs at. A
 // clearance claim that only holds at 1080 is a claim about a viewport no test uses.
@@ -43,9 +43,9 @@ const CTA_SWEEP_STEP_PX = 50
 // The band is the CTA's height plus a viewport, ~1400px at 1280x720; anything near this
 // floor means the band collapsed and the sweep proved nothing.
 const MIN_SWEEP_STOPS = 10
-// Three footer link columns (3 + 3 + 4) plus the Cookie choices control. A floor, not the
+// Connect's three buttons, Privacy policy and Cookie choices (Footer.tsx). A floor, not the
 // count: the claim is that the query reached the footer at all.
-const MIN_FOOTER_CONTROLS = 8
+const MIN_FOOTER_CONTROLS = 5
 
 /** Attach the console/pageerror gate BEFORE navigating; returns the sink to assert on. */
 function consoleGate(page: Page): string[] {
@@ -468,7 +468,7 @@ test('landing consent: the notice moves nothing above it and reserves the band i
 //
 // This is the regression that must not come back. Right-anchored the card's x band holds
 // the footer's whole right-hand link column: measured on the deployed build before the
-// spacer existed, the privacy link, Cookie choices, Security, Status and Pricing were all
+// spacer existed, the privacy link and Cookie choices were all
 // covered AND unclickable at 1280, 1440 and 1920 — elementFromPoint returned the card.
 // So the oracle is elementFromPoint on EVERY footer control at every width, not a rect
 // check on one link: an overlap test alone cannot tell a covered control from a clear one
@@ -653,7 +653,7 @@ test('landing consent: the policy link inside the notice is underlined', async (
   expect(decorated.line, `the notice's policy link resolved to text-decoration-line "${decorated.line}"`).toContain('underline')
   expect(decorated.offset, 'the underline offset moved').toBe('3px')
 
-  // Control needle: the footer's .ios-link declares no decoration, so the same instrument
+  // Control needle: the footer's .a-link declares no decoration, so the same instrument
   // must read `none` there. Without it this test passes on a browser that underlines
   // every anchor.
   const plain = page.getByRole('contentinfo').locator('a[href="/privacy"]')
@@ -696,7 +696,7 @@ test('landing consent: keyboard focus cannot reach the notice while a modal is o
   const { errors, card } = await openLanding(page)
 
   const cases = [
-    { trigger: 'Explore the platform', dialog: 'Sign in' },
+    { trigger: 'Platform login', dialog: 'Sign in' },
     { trigger: 'Book a demo', dialog: 'Book a demo' },
   ]
 
@@ -928,11 +928,11 @@ test('landing consent: the Cookie choices control sits opposite the copyright in
 
   const footer = page.getByRole('contentinfo')
   const control = footer.getByRole('button', { name: 'Cookie choices' })
-  const copyright = footer.getByText('© 2026 ASCOMPLY AFRICA · LAGOS · NG', { exact: true })
+  const copyright = footer.getByText('© 2026 ASComply Africa Limited · Lagos, Nigeria', { exact: true })
   const group = control.locator('xpath=..')
   const row = copyright.locator('xpath=..')
-  // Retyped from Footer.tsx's inline `gap: 12` on the copyright row.
-  const COPYRIGHT_ROW_GAP_PX = 12
+  // Retyped from Footer.tsx's copyright row column gap ('12px 24px').
+  const COPYRIGHT_ROW_GAP_PX = 24
   for (const [label, locator] of [['the Cookie choices control', control], ['the copyright string', copyright]] as const) {
     await expect(locator, `${label} is not unique in the footer`).toHaveCount(1)
   }

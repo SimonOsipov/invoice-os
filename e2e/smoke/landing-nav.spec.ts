@@ -20,11 +20,10 @@ import { resolveTarget } from '../targets'
 
 const LANDING_URL = resolveTarget('LANDING_URL')
 
-// The six nav targets, in DOM order. Mirrors NAV_LINKS in
-// frontend/landing/src/components/Nav.tsx. `#how` is deliberately NOT here: the
-// How-it-works section still exists on the page, it just has no nav link — which
-// makes it a second non-nav section E8 could park in, alongside `#demo`.
-const NAV_HREFS = ['#problem', '#modules', '#compliance', '#accountants', '#developers', '#pricing'] as const
+// The nav targets, in DOM order. Mirrors NAV_LINKS in
+// frontend/landing/src/components/Nav.tsx. Sections without a link, such as `#demo`,
+// are what E8 parks in.
+const NAV_HREFS = ['#problem'] as const
 
 // Sub-pixel rects: a post-jump section top measures a fraction off the header's
 // bottom edge. Every geometry comparison carries this slack. It is NOT a header
@@ -99,8 +98,7 @@ test('landing nav: every link points at exactly one section that exists', async 
   const { errors } = await openLanding(page)
 
   for (const href of NAV_HREFS) {
-    // Count 1, not toBeAttached: a duplicated id must fail too. The id selector also
-    // means the footer's links, which share three of these hrefs, are irrelevant.
+    // Count 1, not toBeAttached: a duplicated id must fail too.
     await expect(page.locator(href), `expected exactly one element matching ${href}`).toHaveCount(1)
   }
 
@@ -138,7 +136,7 @@ test('landing nav: the jumped-to section heading sits below the header band', as
 
   for (const href of NAV_HREFS) {
     await nav.locator(`a[href="${href}"]`).click()
-    // Each of the six sections has exactly one <h2>; .first() is belt-and-braces.
+    // Each nav section has exactly one <h2>; .first() is belt-and-braces.
     await expect
       .poll(async () => (await page.locator(`${href} h2`).first().boundingBox())!.y, {
         message: `the heading of ${href} is occluded by the ${headerH}px header`,
@@ -204,7 +202,7 @@ test('landing nav: the primary navigation is a named landmark', async ({ page })
   // getByRole matches on accessible name, so this count is meaningful: 0 means the
   // label is missing or renamed, 2 means a second landmark took the same name.
   await expect(nav).toHaveCount(1)
-  // Doubles as the desktop-viewport guard — the nav is display:none under 600px.
+  // Doubles as the desktop-viewport guard — the nav is display:none at 1120px and below.
   await expect(nav).toBeVisible()
 
   expectNoConsoleErrors(errors)
@@ -240,10 +238,10 @@ test('landing nav: scrolling into a section marks exactly that link current', as
   expectNoConsoleErrors(errors)
 })
 
-// E8 — the indicator CLEARS outside the six nav sections rather than sticking on the
+// E8 — the indicator CLEARS outside the nav sections rather than sticking on the
 // first or last link. Vacuous against the pre-fix build, where nothing was ever
 // marked current; meaningful now that E7 proves the indicator does appear.
-test('landing nav: no link is marked current outside the six sections', async ({ page }) => {
+test('landing nav: no link is marked current outside the nav sections', async ({ page }) => {
   const { errors, nav, headerH } = await openLanding(page)
 
   // A count of 0 is trivially true on a page that never rendered, so prove the nav

@@ -9,7 +9,7 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { Nav } from './Nav'
+import { NAV_LINKS, Nav } from './Nav'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -25,12 +25,10 @@ class StubIntersectionObserver {
 }
 
 const SECTIONS: { id: string; top: number }[] = [
-  { id: 'problem', top: -400 },
-  { id: 'modules', top: -200 },
-  { id: 'compliance', top: -50 },
-  { id: 'accountants', top: 10 }, // last section crossed at threshold 66 — the expected winner
-  { id: 'developers', top: 500 },
-  { id: 'pricing', top: 900 },
+  { id: 'top', top: -500 },
+  { id: 'problem', top: 10 }, // last section crossed at threshold 87 — the expected winner
+  { id: 'modules', top: 500 },
+  { id: 'how', top: 900 },
 ]
 
 let container: HTMLDivElement
@@ -38,7 +36,7 @@ let root: Root
 
 beforeEach(() => {
   rootMargins.length = 0
-  document.documentElement.style.setProperty('--header-h', '65px')
+  document.documentElement.style.setProperty('--header-h', '86px')
   ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = StubIntersectionObserver
   for (const s of SECTIONS) {
     const el = document.createElement('section')
@@ -66,11 +64,12 @@ describe('Nav scroll-spy under a non-empty hrefPrefix', () => {
 
     const current = container.querySelectorAll('a[aria-current="true"]')
     expect(current.length).toBe(1)
-    expect(current[0].getAttribute('href')).toBe('/#accountants')
+    expect(current[0].getAttribute('href')).toBe('/#problem')
 
     // No other link is also marked current.
     const allLinks = container.querySelectorAll('.ios-nav-link')
-    expect(allLinks.length).toBe(6)
+    expect(allLinks.length).toBe(NAV_LINKS.length)
+    expect(allLinks.length).toBeGreaterThanOrEqual(1)
   })
 
   it('the same crossed section lights up with the default (root) prefix too', () => {
@@ -80,7 +79,7 @@ describe('Nav scroll-spy under a non-empty hrefPrefix', () => {
 
     const current = container.querySelectorAll('a[aria-current="true"]')
     expect(current.length).toBe(1)
-    expect(current[0].getAttribute('href')).toBe('#accountants')
+    expect(current[0].getAttribute('href')).toBe('#problem')
   })
 })
 
@@ -107,14 +106,14 @@ describe('Nav scroll-spy follows --header-h across the breakpoint', () => {
   })
 
   it('the active link uses the new header height after a resize', async () => {
-    // developers sits at 80px: crossed at threshold 87 (header 86px), not at 74 (header 73px)
-    document.getElementById('developers')!.getBoundingClientRect = () => ({ top: 80 }) as DOMRect
+    // problem sits at 80px: crossed at threshold 87 (header 86px), not at 74 (header 73px)
+    document.getElementById('problem')!.getBoundingClientRect = () => ({ top: 80 }) as DOMRect
     document.documentElement.style.setProperty('--header-h', '86px')
     mount()
-    expect(currentHref(), 'control: developers is crossed at the 86px header').toBe('#developers')
+    expect(currentHref(), 'control: problem is crossed at the 86px header').toBe('#problem')
 
     resizeTo(73)
     await frames()
-    expect(currentHref(), 'active link after --header-h 86px -> 73px').toBe('#accountants')
+    expect(currentHref(), 'no link is current once the last crossed section is top').toBeUndefined()
   })
 })

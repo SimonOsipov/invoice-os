@@ -47,8 +47,9 @@ Three notes on what does **not** fire:
   It routes through the shared stub, so a bot sees exactly what a human sees and reports nothing.
 - A submission on a **closed gate** (any non-production hostname) also fires neither: no HubSpot
   call is made, so there is no outcome to report.
-- Five `cta_location` values cover **nine** buttons. `Audience`'s three persona tabs all report
-  `audience`, and `Pricing`'s three tiers all report `pricing`.
+- Five `cta_location` values cover **ten** buttons. `Audience`'s three persona tabs all report
+  `audience`, `Pricing`'s three tiers all report `pricing`, and the footer's Book a demo and
+  Contact ASComply both report `footer`.
 
 ## Configuration
 
@@ -96,11 +97,6 @@ Seven items. None of them is dischargeable by CI, and the first is load-bearing.
    **all five** `cta_location` values appear: `nav`, `hero`, `audience`, `pricing`,
    `footer`, and that scrolling the page to the bottom reports `scroll_depth` once each at
    `percent_scrolled` 25, 50, 75 and 100 — four events, no repeats on scrolling back up.
-   Not optional polish. A mutation making `App.tsx`'s `book()` ignore its argument and hardcode one
-   source **survives every test in the repo**: `analytics.test.ts` matches the five literal call
-   sites against `App.tsx` as *text*, `analytics.dom.test.ts` calls `trackDemoOpen` directly rather
-   than through `book`, and no CI run loads the tag, so the e2e suite sees no payload. DebugView is
-   the only oracle that exists for it.
 6. **Re-prove the hostname gate against production.** Item 1 puts the id on
    `www.ascomply.com`, so the e2e biconditional in `e2e/smoke/landing-demo.spec.ts` can be run
    there directly, from a local checkout, instead of rigged on a PR environment:

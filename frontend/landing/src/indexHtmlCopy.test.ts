@@ -1,6 +1,5 @@
-// QA gap-fill. The <meta name="description"> restates the hero's first sentence, reaches no
-// rendered React tree, and is invisible to a screenshot — this is its only oracle short of a
-// browser read on the deployed build.
+// QA gap-fill. The <meta name="description"> reaches no rendered React tree and is invisible
+// to a screenshot — this is its only oracle short of a browser read on the deployed build.
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'

@@ -247,7 +247,7 @@ describe('AUTH-05-07: the boot sign-in params', () => {
     const setLocal = vi.spyOn(localStorage, 'setItem')
     const fetchMock = vi.fn().mockReturnValue(new Promise(() => undefined))
     vi.stubGlobal('fetch', fetchMock)
-    await bootAt(`/?state=${STATE}&signin=ready&verify=failed`)
+    await bootAt(`/?state=${STATE}&signin=ready&keep=1`)
 
     expect(document.querySelectorAll(DIALOG).length).toBe(1)
     const d = document.querySelector<HTMLElement>(DIALOG)!
@@ -257,7 +257,7 @@ describe('AUTH-05-07: the boot sign-in params', () => {
     expect(email.length).toBe(1)
     expect(password.length).toBe(1)
     expect(d.textContent).not.toContain('Continue with email')
-    expect(window.location.search).toBe('?verify=failed')
+    expect(window.location.search).toBe('?keep=1')
 
     // Held in memory: the submit carries it.
     const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!

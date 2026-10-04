@@ -179,9 +179,16 @@ describe('AUTH-05-07 adversarial: boot params', () => {
     expect(window.location.hash).toBe('#top')
   })
 
+  it('verified and verify are stripped whole with the sign-in params; a sign-in outcome still opens', async () => {
+    await bootAt(`/?keep=1&state=${STATE}&signin=ready&verified=1&verify=failed&verified=0#faq`)
+    onlyDialog()
+    expect(window.location.search).toBe('?keep=1')
+    expect(window.location.hash).toBe('#faq')
+  })
+
   it('a boot with neither param does not touch history', async () => {
     const replace = vi.spyOn(window.history, 'replaceState')
-    await bootAt('/?verify=failed')
+    await bootAt('/?keep=1')
     replace.mockClear()
     const mod = (await import('./App')) as { default: () => ReturnType<typeof createElement> }
     await act(async () => root.unmount())
@@ -189,7 +196,7 @@ describe('AUTH-05-07 adversarial: boot params', () => {
     await act(async () => root.render(createElement(mod.default)))
     pageMounted()
     expect(replace).not.toHaveBeenCalled()
-    expect(window.location.search).toBe('?verify=failed')
+    expect(window.location.search).toBe('?keep=1')
   })
 
   it('a malformed state alone opens nothing and is stripped', async () => {

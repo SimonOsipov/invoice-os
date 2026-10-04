@@ -39,7 +39,7 @@ func (rd *readiness) snapshot() map[string]ReadyCheck {
 // DBReset is "true" or "false" once a process has run boot-time database
 // provisioning, and empty on every process that does not — which is every
 // service except the gateway. /healthz omits the field entirely while it is
-// empty; every other body carries only status, build and sentry.
+// empty.
 //
 // The gateway sets it from db.ProvisionConfig.ResetWillRun — the same predicate
 // db.Provision branched on, never a second copy. It is published because the

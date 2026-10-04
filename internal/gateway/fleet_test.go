@@ -586,3 +586,35 @@ func TestFleetReportsEachServiceContacts(t *testing.T) {
 		}
 	}
 }
+
+// A contacts value that is not a string must not cost the entry its status, build or sentry.
+func TestFleetIgnoresANonStringContacts(t *testing.T) {
+	for name, body := range map[string]string{
+		"number":     `{"status":"ok","build":"abc1234","sentry":"off","contacts":5}`,
+		"null":       `{"status":"ok","build":"abc1234","sentry":"off","contacts":null}`,
+		"array":      `{"status":"ok","build":"abc1234","sentry":"off","contacts":["fake"]}`,
+		"object":     `{"status":"ok","build":"abc1234","sentry":"off","contacts":{"mode":"fake"}}`,
+		"first key":  `{"contacts":true,"status":"ok","build":"abc1234","sentry":"off"}`,
+		"empty text": `{"status":"ok","build":"abc1234","sentry":"off","contacts":""}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec, _ := doFleet(t, map[string]*url.URL{"notifications": buildUpstream(t, "", body)})
+			n, ok := rawFleetEntries(t, rec)["notifications"]
+			if !ok {
+				t.Fatalf("roll-up omits notifications: %s", rec.Body.String())
+			}
+			if n["status"] != statusUp || n["build"] != "abc1234" || n["sentry"] != "off" {
+				t.Errorf("notifications = %v, want up, build abc1234, sentry off: a bad contacts value is not a health verdict", n)
+			}
+			if v, has := n["contacts"]; has {
+				t.Errorf("contacts = %v, want no key for %s", v, body)
+			}
+		})
+	}
+
+	// The same entry reports a string value, so the cases above are the value's fault.
+	rec, _ := doFleet(t, map[string]*url.URL{"notifications": buildUpstream(t, "", `{"status":"ok","build":"abc1234","contacts":"off"}`)})
+	if n := rawFleetEntries(t, rec)["notifications"]; n["contacts"] != "off" {
+		t.Errorf("contacts = %v, want off", n["contacts"])
+	}
+}

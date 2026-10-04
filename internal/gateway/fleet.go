@@ -52,7 +52,7 @@ type ServiceHealth struct {
 	// Sentry is what the service reported, empty when its body has
 	// none or it is probed at a custom path. Never part of the up/down verdict.
 	Sentry string `json:"sentry,omitempty"`
-	// Contacts is notifications' delivery mode (real, fake or off); the health-gate reads it.
+	// Contacts is notifications' delivery mode: real, fake or off.
 	Contacts string `json:"contacts,omitempty"`
 }
 

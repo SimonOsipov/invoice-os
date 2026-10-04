@@ -871,3 +871,95 @@ func TestDeliver_BlankNamesAreStoredEmptyAndDropped(t *testing.T) {
 		}
 	}
 }
+
+// A Sync that fails after the intake asked for the opt-in must leave the opt-in unsent, so the retry sends it.
+func TestDeliver_FailedSyncDoesNotMarkTheOptIn(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "optinfail")
+	qaRegistrant(t, r.e, email, "Ada Lovelace", "", consentText)
+	r.rs.fn = func(n int, _ Contact, _ bool) error {
+		if n == 1 {
+			return &DeliveryError{Status: 503}
+		}
+		return nil
+	}
+
+	res, err := r.work(t, r.jobRow(t, email, "resend", 1))
+	qaRequireRetryable(t, res, err, "resend job with a failing Sync")
+	d := r.delivery(t, email)
+	if d.In != nil || d.ResendAt != nil {
+		t.Fatalf("resend_opt_in_sent_at = %v, resend_delivered_at = %v, want NULL, NULL: the opt-in never went out", d.In, d.ResendAt)
+	}
+
+	res, err = r.work(t, res.Job)
+	qaRequireCompleted(t, res, err, "retry")
+	calls := r.rs.got()
+	if len(calls) != 2 || !calls[0].OptIn || !calls[1].OptIn {
+		t.Fatalf("Sync sendOptIn = %+v, want [true true]: the retry owes the opt-in the first attempt never sent", calls)
+	}
+	if d := r.delivery(t, email); d.In == nil || d.ResendAt == nil {
+		t.Errorf("resend_opt_in_sent_at = %v, resend_delivered_at = %v, want both set after the retry", d.In, d.ResendAt)
+	}
+}
+
+// A contact that is gone completes the job instead of retrying it for three weeks.
+func TestDeliver_MissingContactCompletesWithoutACall(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "gone")
+	qaRegistrant(t, r.e, email, "Ada Lovelace", "", consentText)
+	hsRow, rsRow := r.jobRow(t, email, "hubspot", 1), r.jobRow(t, email, "resend", 1)
+	if _, err := r.e.admin.Exec(context.Background(), `DELETE FROM contacts WHERE email = $1`, email); err != nil {
+		t.Fatalf("delete the contact: %v", err)
+	}
+
+	for _, row := range []*rivertype.JobRow{hsRow, rsRow} {
+		res, err := r.work(t, row)
+		qaRequireCompleted(t, res, err, "job for a deleted contact")
+	}
+	if len(r.hs.got()) != 0 || len(r.rs.got()) != 0 {
+		t.Errorf("clients called %d + %d times for a deleted contact, want 0 + 0", len(r.hs.got()), len(r.rs.got()))
+	}
+}
+
+// A destination this build does not know is cancelled: no retry, no client call, no row change.
+func TestDeliver_UnknownDestinationIsCancelled(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "bogus")
+	qaRegistrant(t, r.e, email, "Ada Lovelace", "", consentText)
+	was := r.delivery(t, email)
+
+	res, err := r.work(t, r.freshJob(t, DeliverArgs{Email: email, Destination: "mailchimp", Version: 1}))
+	if res.EventKind != river.EventKindJobCancelled || res.Job.State != rivertype.JobStateCancelled {
+		t.Fatalf("err = %v, event %q, job state %q, want the job cancelled", err, res.EventKind, res.Job.State)
+	}
+	if len(r.hs.got()) != 0 || len(r.rs.got()) != 0 {
+		t.Errorf("clients called %d + %d times for an unknown destination, want 0 + 0", len(r.hs.got()), len(r.rs.got()))
+	}
+	now := r.delivery(t, email)
+	if now.HubSpotAt != nil || now.ResendAt != nil || now.In != nil || now.Version != was.Version {
+		t.Errorf("row after the cancelled job = %+v, want it untouched (%+v)", now, was)
+	}
+
+	// The known destinations still run, so the cancel above is the destination's fault.
+	res, err = r.work(t, r.jobRow(t, email, "hubspot", 1))
+	qaRequireCompleted(t, res, err, "hubspot job")
+}
+
+// A failure that is not a *DeliveryError has no status: WARN with status 0, never ERROR, never the email.
+func TestDeliver_UntypedClientErrorWarnsAndRetries(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "untyped")
+	qaRegistrant(t, r.e, email, "Zelda Quuxington", "Zeta Holdings", "")
+	r.hs.fn = func(int, Contact) error { return errors.New("dial tcp 10.0.0.1:443: connect: connection refused") }
+
+	res, err := r.work(t, r.jobRow(t, email, "hubspot", 1))
+	qaRequireRetryable(t, res, err, "hubspot job with a refused connection")
+	warns := r.worker.at(slog.LevelWarn)
+	if len(warns) == 0 || !strings.Contains(warns[0].Text, "hubspot") {
+		t.Fatalf("WARN lines = %+v, want one naming hubspot", warns)
+	}
+	if errs := r.worker.at(slog.LevelError); len(errs) != 0 {
+		t.Errorf("an untyped failure logged at ERROR: %+v", errs)
+	}
+	qaRequireNoLeak(t, nil, r.sinks(), email, "Zelda", "Quuxington", "Zeta Holdings")
+}

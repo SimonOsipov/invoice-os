@@ -3,6 +3,8 @@ package notifications
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"maps"
 	"net/http"
@@ -23,20 +25,21 @@ type qaIntakeStore struct {
 	meEmails    []string
 	me          Contact
 	meErr       error
+	writeErr    error // returned by Registrant and DemoRequest after they record the call
 }
 
 func (f *qaIntakeStore) Registrant(_ context.Context, in RegistrantIntake) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.registrants = append(f.registrants, in)
-	return nil
+	return f.writeErr
 }
 
 func (f *qaIntakeStore) DemoRequest(_ context.Context, in DemoIntake) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.demos = append(f.demos, in)
-	return nil
+	return f.writeErr
 }
 
 func (f *qaIntakeStore) Me(_ context.Context, email string) (Contact, error) {
@@ -149,12 +152,15 @@ func TestIntake_DemoAccepted(t *testing.T) {
 
 func TestIntake_MalformedIs400(t *testing.T) {
 	bad := map[string]string{
-		"not json":      `{"email":`,
-		"empty body":    ``,
-		"empty object":  `{}`,
-		"blank email":   `{"email":"","name":"Grace Hopper","company":"Navy"}`,
-		"wrong type":    `[1,2]`,
-		"email a float": `{"email":1.5}`,
+		"not json":         `{"email":`,
+		"empty body":       ``,
+		"empty object":     `{}`,
+		"blank email":      `{"email":"","name":"Grace Hopper","company":"Navy"}`,
+		"wrong type":       `[1,2]`,
+		"email a float":    `{"email":1.5}`,
+		"whitespace email": `{"email":"   ","name":"Grace Hopper","company":"Navy","display_name":"Ada"}`,
+		// The email decodes before the type error: a handler that ignores the decode error accepts it.
+		"valid email, wrong-typed field": `{"email":"ada@corp.example","name":5,"display_name":5}`,
 	}
 	store := &qaIntakeStore{}
 	for path, r := range qaIntakeRoutes(store, &qaLogSink{}) {
@@ -294,8 +300,190 @@ func TestIntake_MeReadsTheTokenEmail(t *testing.T) {
 		t.Errorf("hubspot = %v, want delivered_at null", fresh["hubspot"])
 	}
 
+	// The contract says tags is an array, never null.
+	store.me = Contact{Email: "ada@corp.example"}
+	rec = qaServe(h, "GET", "/v1/contacts/me", "", headers)
+	var untagged map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &untagged); err != nil {
+		t.Fatalf("body %q: %v", rec.Body, err)
+	}
+	if tags, ok := untagged["tags"].([]any); !ok || len(tags) != 0 {
+		t.Errorf("tags = %#v, want []", untagged["tags"])
+	}
+
 	store.meErr = ErrNotFound
 	if rec := qaServe(h, "GET", "/v1/contacts/me", "", headers); rec.Code != http.StatusNotFound {
 		t.Errorf("unknown contact: status %d, want 404", rec.Code)
+	}
+	store.meErr = fmt.Errorf("notifications: read contact: %w", ErrNotFound)
+	if rec := qaServe(h, "GET", "/v1/contacts/me", "", headers); rec.Code != http.StatusNotFound {
+		t.Errorf("wrapped ErrNotFound: status %d, want 404", rec.Code)
+	}
+	sink := &qaLogSink{}
+	store.meErr = errors.New("notifications: read contact: connection reset")
+	if rec := qaServe(MeHandler(store, sink.logger()), "GET", "/v1/contacts/me", "", headers); rec.Code != http.StatusInternalServerError {
+		t.Errorf("store failure: status %d, want 500 (not 404: the person may exist)", rec.Code)
+	}
+	if len(sink.at(slog.LevelError)) != 1 {
+		t.Errorf("ERROR lines = %+v, want one", sink.snapshot())
+	}
+	qaRequireNoLeak(t, nil, []*qaLogSink{sink}, "ada@corp.example")
+}
+
+// Postgres would refuse a user_id that is not a uuid with a 500; the handler answers 400 first.
+func TestIntake_RegistrantUserIDMustBeAUUID(t *testing.T) {
+	store := &qaIntakeStore{}
+	h := RegistrantsHandler(store, (&qaLogSink{}).logger())
+	for name, id := range map[string]string{"words": "not-a-uuid", "number": "12345", "one digit short": uuid.NewString()[1:]} {
+		t.Run(name, func(t *testing.T) {
+			if rec := qaServe(h, "POST", qaRegistrantsPath, qaRegistrantBody(id, "ada@corp.example", ""), nil); rec.Code != http.StatusBadRequest {
+				t.Errorf("status %d, want 400 (body %q)", rec.Code, rec.Body)
+			}
+		})
+	}
+	if n := store.calls(); n != 0 {
+		t.Fatalf("the store was called %d times for a bad user_id, want 0", n)
+	}
+
+	// No user_id is allowed (the row keeps a NULL); a uuid is passed through unchanged.
+	uid := uuid.NewString()
+	for _, id := range []string{"", uid} {
+		if rec := qaServe(h, "POST", qaRegistrantsPath, qaRegistrantBody(id, "ada@corp.example", ""), nil); rec.Code != http.StatusAccepted {
+			t.Errorf("user_id %q: status %d, want 202", id, rec.Code)
+		}
+	}
+	if len(store.registrants) != 2 || store.registrants[0].UserID != "" || store.registrants[1].UserID != uid {
+		t.Errorf("store calls = %+v, want one without a user id and one with %s", store.registrants, uid)
+	}
+}
+
+// The cap is 16 KiB: a body of exactly that is read, one byte more is refused as malformed.
+func TestIntake_BodyCapIsSixteenKiB(t *testing.T) {
+	const limit = 16 << 10
+	pad := func(route string, size int) string {
+		head, tail := `{"email":"ada@corp.example","name":"`, `"}`
+		if route == qaRegistrantsPath {
+			head = `{"email":"ada@corp.example","display_name":"`
+		}
+		return head + strings.Repeat("a", size-len(head)-len(tail)) + tail
+	}
+	store := &qaIntakeStore{}
+	for path, r := range qaIntakeRoutes(store, &qaLogSink{}) {
+		t.Run(strings.TrimPrefix(path, "/internal/contacts/"), func(t *testing.T) {
+			if rec := qaServe(r.h, "POST", path, pad(path, limit), nil); rec.Code != http.StatusAccepted {
+				t.Errorf("a body of exactly %d bytes: status %d, want 202", limit, rec.Code)
+			}
+			if rec := qaServe(r.h, "POST", path, pad(path, limit+1), nil); rec.Code != http.StatusBadRequest {
+				t.Errorf("a body of %d bytes: status %d, want 400", limit+1, rec.Code)
+			}
+		})
+	}
+	if n := store.calls(); n != 2 {
+		t.Errorf("the store was called %d times, want 2: only the bodies at the cap", n)
+	}
+}
+
+// A store failure answers 500 and logs ERROR without the person's address or name.
+func TestIntake_StoreErrorIs500(t *testing.T) {
+	email := "zelda.quux@corp.example"
+	store := &qaIntakeStore{writeErr: errors.New("notifications: merge contact: connection reset")}
+	sink := &qaLogSink{}
+	routes := map[string]qaIntakeRoute{
+		qaRegistrantsPath: {RegistrantsHandler(store, sink.logger()), qaRegistrantBody(uuid.NewString(), email, "")},
+		qaDemosPath:       {DemoRequestsHandler(store, sink.logger()), `{"email":"` + email + `","name":"Zelda Quuxington","company":"Zeta Holdings"}`},
+	}
+	for path, r := range routes {
+		t.Run(strings.TrimPrefix(path, "/internal/contacts/"), func(t *testing.T) {
+			rec := qaServe(r.h, "POST", path, r.body, nil)
+			if rec.Code != http.StatusInternalServerError {
+				t.Fatalf("status %d, want 500 (body %q)", rec.Code, rec.Body)
+			}
+			if strings.Contains(strings.ToLower(rec.Body.String()), "zelda") || strings.Contains(rec.Body.String(), "connection reset") {
+				t.Errorf("500 body %q echoes the request or the store's error text", rec.Body)
+			}
+		})
+	}
+	if n := store.calls(); n != 2 {
+		t.Fatalf("the store was called %d times, want 2", n)
+	}
+	if len(sink.at(slog.LevelError)) != 2 {
+		t.Errorf("ERROR lines = %+v, want one per failed intake", sink.snapshot())
+	}
+	qaRequireNoLeak(t, nil, []*qaLogSink{sink}, email, "Zelda", "Quuxington", "Zeta Holdings")
+
+	// The same bodies are accepted once the store works, so the 500s above are the store's.
+	store.writeErr = nil
+	for path, r := range routes {
+		if rec := qaServe(r.h, "POST", path, r.body, nil); rec.Code != http.StatusAccepted {
+			t.Errorf("%s: status %d after the store recovered, want 202", path, rec.Code)
+		}
+	}
+}
+
+// A consent object without its sentence is not consent, whatever time it carries.
+func TestIntake_ConsentNeedsItsSentence(t *testing.T) {
+	store := &qaIntakeStore{}
+	h := RegistrantsHandler(store, (&qaLogSink{}).logger())
+	empty := `{"text":"","at":"2026-10-04T10:30:00Z"}`
+	if rec := qaServe(h, "POST", qaRegistrantsPath, qaRegistrantBody(uuid.NewString(), "ada@corp.example", empty), nil); rec.Code != http.StatusAccepted {
+		t.Fatalf("status %d, want 202", rec.Code)
+	}
+	if got := store.registrants[0]; got.ConsentText != "" || !got.ConsentAt.IsZero() {
+		t.Errorf("consent = %q at %v, want none: no sentence, no consent", got.ConsentText, got.ConsentAt)
+	}
+}
+
+// Without the token's email the self-read finds nothing, and with it finds only that person's row.
+func TestIntake_MeFindsOnlyTheCallersRow(t *testing.T) {
+	e := newEnv(t)
+	ada, bob := uniqueEmail(t, e, "meada"), uniqueEmail(t, e, "mebob")
+	qaRegistrant(t, e, ada, "Ada Lovelace", "", consentText)
+	qaRegistrant(t, e, bob, "Bob Babbage", "", "")
+	h := MeHandler(e.store, (&qaLogSink{}).logger())
+
+	for name, headers := range map[string]map[string]string{
+		"no header":        nil,
+		"empty header":     {"X-User-Email": ""},
+		"blank header":     {"X-User-Email": "   "},
+		"a wildcard":       {"X-User-Email": "%"},
+		"an unknown email": {"X-User-Email": "nobody-" + uuid.NewString()[:8] + "@corp.example"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if rec := qaServe(h, "GET", "/v1/contacts/me", "", headers); rec.Code != http.StatusNotFound {
+				t.Errorf("status %d, want 404 (body %q)", rec.Code, rec.Body)
+			}
+		})
+	}
+
+	rec := qaServe(h, "GET", "/v1/contacts/me", "", map[string]string{"X-User-Email": " " + strings.ToUpper(ada) + " "})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mixed-case padded email: status %d, want 200 (body %q)", rec.Code, rec.Body)
+	}
+	var body struct {
+		Email             string   `json:"email"`
+		Tags              []string `json:"tags"`
+		MarketingEligible bool     `json:"marketing_eligible"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body %q: %v", rec.Body, err)
+	}
+	if body.Email != ada || !slices.Equal(body.Tags, []string{"registered"}) || !body.MarketingEligible {
+		t.Errorf("body = %+v, want Ada's row (%s, registered, eligible), not Bob's", body, ada)
+	}
+	if strings.Contains(rec.Body.String(), bob) {
+		t.Errorf("body %q holds another contact's address", rec.Body)
+	}
+}
+
+// google/uuid accepts the urn: form that Postgres rejects, so a body the handler lets through
+// would reach the store and answer 500. The handler's contract is 400 for a user_id that is not usable.
+func TestIntake_RegistrantUserIDUrnFormIs400(t *testing.T) {
+	store := &qaIntakeStore{}
+	h := RegistrantsHandler(store, (&qaLogSink{}).logger())
+	if rec := qaServe(h, "POST", qaRegistrantsPath, qaRegistrantBody("urn:uuid:"+uuid.NewString(), "ada@corp.example", ""), nil); rec.Code != http.StatusBadRequest {
+		t.Errorf("status %d, want 400: Postgres refuses the urn form of a uuid", rec.Code)
+	}
+	if n := store.calls(); n != 0 {
+		t.Errorf("the store was called %d times, want 0", n)
 	}
 }

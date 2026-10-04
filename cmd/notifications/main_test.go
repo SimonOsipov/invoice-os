@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -203,8 +204,7 @@ func TestDeliveryClients_ModeErrorIsReturned(t *testing.T) {
 	}
 }
 
-// The vendor constructors set noRedirect only on the client they build; a client injected
-// here keeps Go's default, which follows a 301 on a PATCH as a GET to the Location.
+// A 301 on a PATCH is the response, never followed as a GET to the Location.
 func TestDeliveryClients_RealDoesNotFollowRedirects(t *testing.T) {
 	redirect := func(n int, r *http.Request) *http.Response {
 		if n == 1 {
@@ -333,7 +333,7 @@ func qaStart(t *testing.T, bin string, vars map[string]string) *qaProc {
 	if err := p.cmd.Start(); err != nil {
 		t.Fatalf("start notifications: %v", err)
 	}
-	go func() { p.done <- p.cmd.Wait() }()
+	go func() { p.done <- p.cmd.Wait(); close(p.done) }()
 	t.Cleanup(func() {
 		_ = p.cmd.Process.Signal(syscall.SIGTERM)
 		select {
@@ -542,5 +542,292 @@ func TestNotificationsMain_WorkerRunsOnlyWhenDelivering(t *testing.T) {
 				time.Sleep(50 * time.Millisecond)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// QA: what the process does at its boundaries.
+// ---------------------------------------------------------------------------
+
+// qaProxy is an HTTPS proxy that records each CONNECT target and refuses it, so a vendor
+// request that honours the proxy is seen and never reaches the vendor.
+type qaProxy struct {
+	url      string
+	mu       sync.Mutex
+	targets  []string
+	connects chan string
+}
+
+func qaStartProxy(t *testing.T) *qaProxy {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("proxy listen: %v", err)
+	}
+	p := &qaProxy{url: "http://" + ln.Addr().String(), connects: make(chan string, 64)}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
+				line, _ := bufio.NewReader(c).ReadString('\n')
+				f := strings.Fields(line)
+				if len(f) < 2 || f[0] != http.MethodConnect {
+					return
+				}
+				p.mu.Lock()
+				p.targets = append(p.targets, f[1])
+				p.mu.Unlock()
+				select {
+				case p.connects <- f[1]:
+				default:
+				}
+				_, _ = c.Write([]byte("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"))
+			}()
+		}
+	}()
+	return p
+}
+
+func (p *qaProxy) seen() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.targets...)
+}
+
+func (p *qaProxy) vars() map[string]string {
+	return map[string]string{"HTTPS_PROXY": p.url, "HTTP_PROXY": p.url, "NO_PROXY": ""}
+}
+
+func qaMerge(maps ...map[string]string) map[string]string {
+	out := map[string]string{}
+	for _, m := range maps {
+		for k, v := range m {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+func qaAdminPool(t *testing.T) (admin *pgxpool.Pool, appURL string) {
+	t.Helper()
+	appURL, adminURL := os.Getenv("DATABASE_URL"), os.Getenv("DATABASE_SUPERUSER_URL")
+	if appURL == "" || adminURL == "" {
+		t.Skip("notifications boot test skipped: set DATABASE_URL and DATABASE_SUPERUSER_URL (or run `make test-rls`)")
+	}
+	admin, err := pgxpool.New(t.Context(), adminURL)
+	if err != nil {
+		t.Fatalf("admin pool: %v", err)
+	}
+	t.Cleanup(admin.Close)
+	return admin, appURL
+}
+
+func qaCleanupContact(t *testing.T, admin *pgxpool.Pool, email string) {
+	t.Helper()
+	t.Cleanup(func() {
+		ctx := context.Background()
+		_, _ = admin.Exec(ctx, `DELETE FROM river_job WHERE kind = 'contact_deliver' AND args->>'email' = $1`, email)
+		_, _ = admin.Exec(ctx, `DELETE FROM contacts WHERE email = $1`, email)
+	})
+}
+
+// qaCall sends one request to the booted service and returns the status and body.
+func (p *qaProc) call(t *testing.T, method, path, body string, headers map[string]string) (int, string) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), method, p.url(path), strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("build %s %s: %v", method, path, err)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+var qaViaGateway = map[string]string{"X-Gateway-Token": qaGatewayToken}
+
+// qaWaitDelivered polls until the contact has every named delivery column set, and returns its mode.
+func qaWaitDelivered(t *testing.T, admin *pgxpool.Pool, p *qaProc, email string, resend bool) string {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var hs, rs *time.Time
+		var mode *string
+		if err := admin.QueryRow(t.Context(), `SELECT hubspot_delivered_at, resend_delivered_at, delivery_mode FROM contacts WHERE email = $1`, email).Scan(&hs, &rs, &mode); err != nil {
+			t.Fatalf("read contact: %v", err)
+		}
+		if hs != nil && (rs != nil || !resend) {
+			if mode == nil {
+				t.Fatal("delivered with no delivery_mode")
+			}
+			return *mode
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the delivery was never recorded (hubspot %v, resend %v)\n%s", hs, rs, p.out)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// A fork inherits production's keys and the environment name pr-<N>: the process itself must
+// come up fake, deliver without a network call, and never refuse to boot.
+func TestNotificationsMain_PreviewEnvironmentBootsFake(t *testing.T) {
+	admin, appURL := qaAdminPool(t)
+	bin := qaBuildNotifications(t)
+
+	for _, tc := range []struct {
+		name string
+		vars map[string]string
+	}{
+		{"four keys", qaFourKeys()},
+		{"flag and four keys", qaFourKeys("CONTACTS_FAKE", "true")},
+		{"bad flag and a partial key set", map[string]string{"CONTACTS_FAKE": "banana", "HUBSPOT_TOKEN": "hs-secret-token"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proxy := qaStartProxy(t)
+			email := fmt.Sprintf("preview-%s@worker.example", uuid.NewString()[:8])
+			qaCleanupContact(t, admin, email)
+			p := qaStart(t, bin, qaMerge(tc.vars, proxy.vars(), map[string]string{"DATABASE_URL": appURL, "RAILWAY_ENVIRONMENT_NAME": "pr-7"}))
+			p.waitFor(t, "/readyz")
+			if got := p.healthz(t)["contacts"]; got != "fake" {
+				t.Fatalf("/healthz contacts = %q, want fake in a pr-7 environment", got)
+			}
+
+			body := fmt.Sprintf(`{"user_id":%q,"email":%q,"display_name":"Ada Lovelace","marketing_consent":{"text":"I agree","at":"2026-10-04T10:30:00Z"}}`, uuid.NewString(), email)
+			if code, out := p.call(t, http.MethodPost, "/internal/contacts/registrants", body, qaViaGateway); code != http.StatusAccepted {
+				t.Fatalf("POST registrants status %d (%s), want 202\n%s", code, out, p.out)
+			}
+			if mode := qaWaitDelivered(t, admin, p, email, true); mode != "fake" {
+				t.Errorf("delivery_mode = %q, want fake", mode)
+			}
+			if got := proxy.seen(); len(got) != 0 {
+				t.Errorf("the service dialled %v through the proxy, want no network call in a preview environment", got)
+			}
+			if strings.Contains(p.out.String(), "hs-secret-token") || strings.Contains(p.out.String(), "rs-secret-key") {
+				t.Errorf("output carries a vendor key\n%s", p.out)
+			}
+		})
+	}
+}
+
+// Real mode dials the vendors through HTTPS_PROXY: the transport is the default one, not a bare one.
+func TestNotificationsMain_RealModeHonoursTheProxy(t *testing.T) {
+	admin, appURL := qaAdminPool(t)
+	bin := qaBuildNotifications(t)
+	proxy := qaStartProxy(t)
+	email := fmt.Sprintf("proxy-%s@worker.example", uuid.NewString()[:8])
+	qaCleanupContact(t, admin, email)
+
+	p := qaStart(t, bin, qaMerge(qaFourKeys(), proxy.vars(), map[string]string{"DATABASE_URL": appURL}))
+	p.waitFor(t, "/readyz")
+	if got := p.healthz(t)["contacts"]; got != "real" {
+		t.Fatalf("/healthz contacts = %q, want real", got)
+	}
+	body := fmt.Sprintf(`{"user_id":%q,"email":%q,"display_name":"Ada Lovelace"}`, uuid.NewString(), email)
+	if code, out := p.call(t, http.MethodPost, "/internal/contacts/registrants", body, qaViaGateway); code != http.StatusAccepted {
+		t.Fatalf("POST registrants status %d (%s), want 202\n%s", code, out, p.out)
+	}
+	select {
+	case target := <-proxy.connects:
+		if target != "api.hubapi.com:443" && target != "api.resend.com:443" {
+			t.Errorf("the proxy was asked for %q, want a vendor host", target)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatalf("no vendor request reached the proxy in real mode\n%s", p.out)
+	}
+}
+
+// Every contact route is served by the binary behind the gateway token, in any mode.
+func TestNotificationsMain_ServesTheContactRoutes(t *testing.T) {
+	admin, appURL := qaAdminPool(t)
+	bin := qaBuildNotifications(t)
+	p := qaStart(t, bin, map[string]string{"DATABASE_URL": appURL})
+	p.waitFor(t, "/readyz")
+	email := fmt.Sprintf("routes-%s@worker.example", uuid.NewString()[:8])
+	qaCleanupContact(t, admin, email)
+
+	demo := fmt.Sprintf(`{"email":%q,"name":"Grace Hopper","company":"Navy"}`, strings.ToUpper(email))
+	registrant := fmt.Sprintf(`{"user_id":%q,"email":%q,"display_name":"Grace Hopper"}`, uuid.NewString(), email)
+	for path, body := range map[string]string{"/internal/contacts/demo-requests": demo, "/internal/contacts/registrants": registrant} {
+		if code, out := p.call(t, http.MethodPost, path, body, nil); code != http.StatusUnauthorized {
+			t.Errorf("POST %s without the gateway token: status %d (%s), want 401", path, code, out)
+		}
+		if code, out := p.call(t, http.MethodPost, path, body, qaMerge(qaViaGateway, map[string]string{"X-User-ID": uuid.NewString()})); code != http.StatusNotFound {
+			t.Errorf("POST %s with X-User-ID: status %d (%s), want 404", path, code, out)
+		}
+	}
+	var n int
+	if err := admin.QueryRow(t.Context(), `SELECT count(*) FROM contacts WHERE email = $1`, email).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("rows after the refused calls = %d (%v), want 0", n, err)
+	}
+
+	for path, body := range map[string]string{"/internal/contacts/demo-requests": demo, "/internal/contacts/registrants": registrant} {
+		if code, out := p.call(t, http.MethodPost, path, body, qaViaGateway); code != http.StatusAccepted {
+			t.Errorf("POST %s: status %d (%s), want 202\n%s", path, code, out, p.out)
+		}
+	}
+
+	if code, _ := p.call(t, http.MethodGet, "/v1/contacts/me", "", map[string]string{"X-User-Email": email}); code != http.StatusUnauthorized {
+		t.Errorf("GET me without the gateway token: status %d, want 401", code)
+	}
+	if code, out := p.call(t, http.MethodGet, "/v1/contacts/me", "", qaViaGateway); code != http.StatusNotFound {
+		t.Errorf("GET me without X-User-Email: status %d (%s), want 404", code, out)
+	}
+	code, out := p.call(t, http.MethodGet, "/v1/contacts/me", "", qaMerge(qaViaGateway, map[string]string{"X-User-Email": email}))
+	if code != http.StatusOK {
+		t.Fatalf("GET me: status %d (%s), want 200", code, out)
+	}
+	var me struct {
+		Email string   `json:"email"`
+		Tags  []string `json:"tags"`
+		Mode  *string  `json:"mode"`
+	}
+	if err := json.Unmarshal([]byte(out), &me); err != nil {
+		t.Fatalf("GET me body %q: %v", out, err)
+	}
+	if me.Email != email || len(me.Tags) != 2 || me.Mode != nil {
+		t.Errorf("GET me = %+v, want %s with registered + demo request tags and a null mode in off mode", me, email)
+	}
+}
+
+// /readyz is the database's verdict: an unreachable database is a 503 that names it, while /healthz stays up.
+func TestNotificationsMain_ReadinessReportsTheDatabase(t *testing.T) {
+	bin := qaBuildNotifications(t)
+	p := qaStart(t, bin, map[string]string{"DATABASE_URL": qaUnreachableDB})
+	p.waitFor(t, "/healthz")
+	code, out := p.call(t, http.MethodGet, "/readyz", "", nil)
+	if code != http.StatusServiceUnavailable || !strings.Contains(out, "database") {
+		t.Errorf("GET /readyz = %d %s, want 503 naming database", code, out)
+	}
+}
+
+// A service that cannot reach a database it needs must not boot: the fork's deploy gate sees a crash, not a half service.
+func TestNotificationsMain_RefusesToBootWithoutADatabase(t *testing.T) {
+	bin := qaBuildNotifications(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin)
+	cmd.Env = qaBootEnv(qaFreePort(t), nil)
+	var out qaLockedBuf
+	cmd.Stdout, cmd.Stderr = &out, &out
+	err := cmd.Run()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+		t.Fatalf("notifications ended with %v, want exit status 1\n%s", err, &out)
+	}
+	if !strings.Contains(out.String(), "DATABASE_URL") {
+		t.Errorf("output does not name DATABASE_URL\n%s", &out)
 	}
 }

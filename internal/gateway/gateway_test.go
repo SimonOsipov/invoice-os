@@ -1692,6 +1692,15 @@ func TestRouter_InternalPathRawRequestLinesNeverReachUpstream(t *testing.T) {
 		}
 	}
 
+	// Only CONNECT keeps the raw path; other methods are cleaned to /v1/contacts/me by the mux and proxy legitimately.
+	connectRefused := "/api/notifications/internal/../v1/contacts/me"
+	t.Run("CONNECT "+connectRefused, func(t *testing.T) {
+		c.reset()
+		status, _ := rig.rawDo(t, http.MethodConnect, connectRefused, token)
+		if status != http.StatusNotFound || c.any.Load() != 0 {
+			t.Errorf("answered %d, upstream hits %d, want 404 and 0", status, c.any.Load())
+		}
+	})
 	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodConnect} {
 		for _, target := range refused {
 			t.Run(method+" "+target, func(t *testing.T) {

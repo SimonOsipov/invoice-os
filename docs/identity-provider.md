@@ -379,7 +379,7 @@ guarded by `TestIdP_FreeMailVariantsAreNotAccepted`.
 
 The handler sets `Cache-Control: no-store` on every answer it writes. Any method but POST and a preflight answers 405. The route is public and unthrottled; the `ceiling:` line in `internal/gateway/contacts.go` `DemoRequestHandler` names the limit. Guarded by `internal/gateway/contacts_test.go` (`TestDemoRequest_*`).
 
-The `/api/` router answers 404 for any path whose first segment after the service is `internal`, before authorization, on the decoded path after `path.Clean`, so a dot-dot or empty segment that resolves to `internal` is refused for every method, CONNECT included. Guarded by `internal/gateway/gateway_test.go` `TestRouter_InternalPathNeverReachesUpstream`.
+The `/api/` router answers 404 for any path whose first segment after the service is `internal`, before authorization, on the decoded path, both raw and after `path.Clean`, so a dot-dot or empty segment that resolves to `internal`, or a raw `internal/..` prefix, is refused for every method, CONNECT included. Guarded by `internal/gateway/gateway_test.go` `TestRouter_InternalPathNeverReachesUpstream`.
 
 **`GET /auth/verify?token=…&type=signup`**, outside `/api/`:
 

@@ -1552,3 +1552,54 @@ describe('B17-D7: the checkbox cell fills the row height', () => {
     for (const cell of cells) expect(cell.style.alignSelf).toBe('stretch')
   })
 })
+
+describe('AP-TIP: the blocked-reason tip carries the card shadow', () => {
+  it('declares box-shadow: var(--shadow-card) and no oklch', async () => {
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: 'Blocked.', approval: null })
+    mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    fireEvent.mouseEnter(screen.getByTestId('approval-blocked-icon').parentElement as HTMLElement)
+    const card = screen.getByTestId('approval-blocked-tip').firstElementChild as HTMLElement
+    const style = card.getAttribute('style') ?? ''
+    expect(style).toContain('box-shadow: var(--shadow-card)')
+    expect(style).not.toContain('oklch')
+  })
+})
+
+describe('AP-LOOK: the v2 table, bar and icon values', () => {
+  it('step, unstaffed warning, blocked icon, checkbox and bar read the prototype values', async () => {
+    const warned = approvalRow({
+      id: 'inv-warn',
+      invoice_number: 'INV-WARN',
+      approval: { run_state: 'open', pending_ord: 0, pending_role_title: 'Compliance Officer', pending_holder_warn: true, due_at: null, overdue: false },
+    })
+    const blocked = approvalRow({ id: 'inv-bl', invoice_number: 'INV-BL', can_approve: false, approve_blocked_reason: 'Blocked.', approval: null })
+    mockBulkFetch([listResponse([warned, blocked], { limit: 50, offset: 0, total: 2 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-WARN')
+
+    const warnedRow = screen.getByText('INV-WARN').closest('[data-testid="approval-row"]') as HTMLElement
+    const styleOf = (el: Element | null | undefined) => el?.getAttribute('style') ?? ''
+    expect(styleOf(warnedRow.children[4]), 'step cell').toContain('color: var(--fg-2)')
+    const warning = styleOf(within(warnedRow).getByTestId('approval-unstaffed-warning'))
+    expect(warning).toContain('color: var(--status-amber-text)')
+    expect(warning).toContain('font-size: 9.5px')
+    expect(styleOf(screen.getByTestId('approval-blocked-icon')), 'blocked icon').toContain('color: var(--status-amber-text)')
+    const [warnedBox, blockedBox] = screen.getAllByTestId('approval-select-row').map(styleOf)
+    expect(warnedBox).toContain('width: 15px')
+    expect(warnedBox).toContain('accent-color: var(--action)')
+    expect(blockedBox).toContain('accent-color: var(--action)')
+
+    fireEvent.click(screen.getAllByTestId('approval-select-row')[0])
+    const bar = screen.getByTestId('approvals-bulk-bar')
+    // control: the style read sees the action row's flex and gap, so the absences below mean something.
+    expect(styleOf(bar.firstElementChild)).toContain('gap: 10px')
+    expect(styleOf(bar.firstElementChild)).toContain('display: flex')
+    expect(styleOf(bar)).not.toContain('flex-direction: column')
+    expect(styleOf(bar)).not.toContain('gap: 9')
+  })
+})

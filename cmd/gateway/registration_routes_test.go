@@ -453,6 +453,51 @@ func TestDemoRequest_AcceptsTheLandingWire(t *testing.T) {
 	}
 }
 
+// A field cap the landing sets above the handler's limit fails here: a value at the cap is taken, one past it is refused.
+func TestDemoRequest_LandingFieldCapsMatchTheHandler(t *testing.T) {
+	b, err := os.ReadFile("../../frontend/landing/src/components/demoForm.ts")
+	if err != nil {
+		t.Fatalf("read demoForm.ts: %v", err)
+	}
+	capOf := func(name string) int {
+		m := regexp.MustCompile(`(?m)^export const ` + name + ` = (\d+)$`).FindSubmatch(b)
+		if m == nil {
+			t.Fatalf("demoForm.ts: no exported %s numeric literal", name)
+		}
+		n, _ := strconv.Atoi(string(m[1]))
+		return n
+	}
+	nameCap, companyCap, emailCap := capOf("DEMO_NAME_MAX"), capOf("DEMO_COMPANY_MAX"), capOf("DEMO_EMAIL_MAX")
+
+	mux, sink := demoMux(t)
+	send := func(email, name, company string) int {
+		raw, _ := json.Marshal(map[string]string{"email": email, "name": name, "company": company})
+		return postJSON(mux, "/contacts/demo-request", registerAllowedOrigin, string(raw)).Code
+	}
+	const domain = "@corp.example"
+	emailOf := func(n int) string { return strings.Repeat("a", n-len(domain)) + domain }
+
+	for _, c := range []struct {
+		field string
+		with  func(n int) int
+		cap   int
+	}{
+		{"name", func(n int) int { return send("ada@corp.example", strings.Repeat("Ω", n), "Acme") }, nameCap},
+		{"company", func(n int) int { return send("ada@corp.example", "Ada", strings.Repeat("Ω", n)) }, companyCap},
+		{"email", func(n int) int { return send(emailOf(n), "Ada", "Acme") }, emailCap},
+	} {
+		if got := c.with(c.cap); got != http.StatusAccepted {
+			t.Errorf("%s at the landing cap (%d) = %d, want 202", c.field, c.cap, got)
+		}
+		if got := c.with(c.cap + 1); got != http.StatusBadRequest {
+			t.Errorf("%s one past the landing cap (%d) = %d, want 400: the cap is not the handler's limit", c.field, c.cap+1, got)
+		}
+	}
+	if got := len(sink.calls()); got != 3 {
+		t.Errorf("sink saw %d requests, want the three at-cap ones", got)
+	}
+}
+
 // An OPTIONS with no Origin is not a preflight: it reaches the handler, which must not take it for a demo request.
 func TestDemoRequest_OptionsWithoutOriginIsNotADemoRequest(t *testing.T) {
 	mux, sink := demoMux(t)

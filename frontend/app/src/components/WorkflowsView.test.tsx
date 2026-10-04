@@ -481,7 +481,7 @@ describe('APPR-09-04 QA: the intro states what publishing does today', () => {
 })
 
 // ============================================================================
-// RESKIN2-05-03 — the list's v2 look: heading rule, 6px/4px radii, ghost buttons, 12px errors
+// the list's v2 look: heading rule, 6px/4px radii, ghost buttons, 12px errors
 // ============================================================================
 // jsdom keeps `var(...)` strings as written and expands `flex`; resolved values are the
 // deployed build's to prove.

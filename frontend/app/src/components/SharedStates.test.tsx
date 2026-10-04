@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Pins the shared Loading / ErrorState / EmptyState look (RESKIN2-05-01) on the components
+// Pins the shared Loading / ErrorState / EmptyState look on the components
 // themselves. jsdom keeps var(...) strings as written, so rows assert tokens, not resolved colours.
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'

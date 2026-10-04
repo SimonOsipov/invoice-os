@@ -572,7 +572,7 @@ describe('ReportsView: the Validation summary — QA adversarial', () => {
   })
 })
 
-// --- RESKIN2-05-02: the v2 tax report (RP rows) --------------------------------------
+// --- the v2 tax report (RP rows) --------------------------------------
 const RULE_ROLLUP: Rollup = { ...summaryRollup(0, { blocked_by_rules: { num: 2, den: 13 } }), top_violations: [{ rule_key: 'vat_standard_rate', invoices: 2 }] }
 
 function labelDiv(container: HTMLElement, text: string): HTMLElement {

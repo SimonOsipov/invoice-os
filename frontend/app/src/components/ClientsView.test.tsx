@@ -561,7 +561,7 @@ describe('ClientsView: the health pill is unchanged by the needs-attention widen
   })
 })
 
-// --- RESKIN2-05-01: the v2 roster (CL rows) ------------------------------------------
+// --- the v2 roster (CL rows) ------------------------------------------
 // Fixtures are typed by hand: ClientsView.test.ts shadows this file out of tsc.
 function filterButton(name: string): HTMLElement {
   return screen.getByRole('button', { name })

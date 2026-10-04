@@ -302,7 +302,7 @@ describe('CustomersView: isEmpty is the shared allInvoicesIsEmpty predicate (tas
   })
 })
 
-// --- RESKIN2-05-02: the v2 register (CU rows) ----------------------------------------
+// --- the v2 register (CU rows) ----------------------------------------
 describe('CustomersView: the v2 register (RESKIN2-05-02)', () => {
   function readyRows() {
     return [

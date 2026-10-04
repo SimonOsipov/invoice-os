@@ -49,7 +49,8 @@ function badInvoiceFields(invoiceNumber: string) {
 
 test.beforeAll(async () => {
   const token = await login(PERSONAS.A)
-  entity = await createEntity(token, { name: `RESKIN2-05 ${Date.now()}`, tin: freshTin() })
+  // "Ae" sorts just after the seeded default (Adeyemi): the switcher shows only the first 200 entities by name.
+  entity = await createEntity(token, { name: `Ae RESKIN2-05 ${Date.now()}`, tin: freshTin() })
   const invoice = await createInvoice(token, { entity_id: entity.id, ...badInvoiceFields(`INV-RESKIN2-05-${Date.now()}`) })
   await validateInvoice(token, invoice.id)
 })

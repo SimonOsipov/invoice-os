@@ -51,7 +51,7 @@ type DeliverWorker struct {
 }
 
 // Work delivers the row at the version the job was queued for. A newer version has its own job,
-// so an older job returns nil and never races it. Neither the email nor a name reaches a log line or an error.
+// so an older job returns nil. An advisory lock per (destination, email) runs jobs for one person one at a time. Neither the email nor a name reaches a log line or an error.
 func (w *DeliverWorker) Work(ctx context.Context, job *river.Job[DeliverArgs]) error {
 	dest := job.Args.Destination
 	if dest != destHubSpot && dest != destResend {
@@ -64,7 +64,17 @@ func (w *DeliverWorker) Work(ctx context.Context, job *river.Job[DeliverArgs]) e
 		delivered, optInSent      bool
 		first, last, company      string
 	)
-	err := w.Pool.QueryRow(ctx, `
+	// ceiling: the lock and its connection are held across the vendor call (10 s timeout, MaxWorkers 2); revisit if MaxWorkers rises past the pool size.
+	tx, err := w.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("notifications: begin delivery: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('contact_deliver:' || $1::text || ':' || $2::text, 0))`, dest, job.Args.Email); err != nil {
+		return fmt.Errorf("notifications: lock delivery: %w", err)
+	}
+
+	err = tx.QueryRow(ctx, `
 		SELECT version, COALESCE(first_name, ''), COALESCE(last_name, ''), COALESCE(company, ''),
 		       registered_at IS NOT NULL, demo_requested_at IS NOT NULL, marketing_consented_at IS NOT NULL,
 		       CASE WHEN $2::text = 'hubspot' THEN hubspot_delivered_at ELSE resend_delivered_at END IS NOT NULL,
@@ -97,7 +107,7 @@ func (w *DeliverWorker) Work(ctx context.Context, job *river.Job[DeliverArgs]) e
 		}
 		sendOptIn := consent && !optInSent
 		if err = w.Resend.Sync(ctx, c, sendOptIn); err == nil && sendOptIn {
-			_, err = w.Pool.Exec(ctx, `UPDATE contacts SET resend_opt_in_sent_at = now() WHERE email = $1 AND resend_opt_in_sent_at IS NULL`, c.Email)
+			_, err = tx.Exec(ctx, `UPDATE contacts SET resend_opt_in_sent_at = now() WHERE email = $1 AND resend_opt_in_sent_at IS NULL`, c.Email)
 		}
 	}
 	if err != nil {
@@ -106,12 +116,15 @@ func (w *DeliverWorker) Work(ctx context.Context, job *river.Job[DeliverArgs]) e
 	}
 
 	col := dest + "_delivered_at"
-	_, err = w.Pool.Exec(ctx, `UPDATE contacts SET `+col+` = now(), delivery_mode = $2 WHERE email = $1 AND version = $3`,
+	_, err = tx.Exec(ctx, `UPDATE contacts SET `+col+` = now(), delivery_mode = $2 WHERE email = $1 AND version = $3`,
 		c.Email, string(w.Mode), version)
 	if err != nil {
 		return fmt.Errorf("notifications: record delivery: %w", err)
 	}
 	// A miss means a newer version, and its own job, landed during delivery.
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("notifications: commit delivery: %w", err)
+	}
 	return nil
 }
 

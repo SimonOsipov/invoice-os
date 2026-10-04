@@ -100,7 +100,7 @@ A registrant's `display_name` splits on the first run of whitespace into first a
 | Queue / kind | `contacts` / `contact_deliver`, 2 workers |
 | Args | `{email, destination, version}`; `destination` is `hubspot` or `resend` |
 | Retry | River's default policy: 25 attempts, `attempt^4` seconds, about three weeks. Any non-nil worker error retries |
-| Version guard | a job whose `version` differs from the row's returns without a vendor call; a newer version has its own job. A delivery is recorded only `WHERE version = <version read>`; a miss is not an error |
+| Version guard | a job whose `version` differs from the row's returns without a vendor call; a newer version has its own job. A delivery is recorded only `WHERE version = <version read>`; a miss is not an error. Delivery runs in one transaction under `pg_advisory_xact_lock` on (destination, email), so two versions of one person never overlap and the second reads the fresh row |
 | Log, HTTP 4xx other than 408 and 429 | ERROR `contacts: <destination> rejected the delivery` with `destination`, `status`. The job still retries, so each attempt logs again |
 | Log, any other failure | WARN `contacts: <destination> delivery failed` with `destination`, `status` (0 is no response) |
 | Sentry | River reports only the final attempt |

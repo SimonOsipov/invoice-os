@@ -1,4 +1,4 @@
-// AUTH-17-01: the `contacts` table keeps each fact once. Contacts carry no tenant, so
+// The `contacts` table keeps each fact once. Contacts carry no tenant, so
 // the guarantees here are grants, CHECKs and the facts-only-grow trigger, not RLS.
 // Rows are seeded through the superuser pool; each rejected statement runs on its own
 // implicit transaction so a failure cannot poison a later one.

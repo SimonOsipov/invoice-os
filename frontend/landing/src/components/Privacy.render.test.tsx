@@ -428,7 +428,7 @@ describe('T3-15/T3-17/T3-18: the page describes the control that now exists', ()
   })
 })
 
-// AUTH-17-09. Every fact below is read from the Go and TS that sends it (privacyCodeFacts.test.util.ts).
+// Every fact below is read from the Go and TS that sends it (privacyCodeFacts.test.util.ts).
 // A key table is the page's words for each code key; its keys must equal the code's, so a new
 // property forces both the table and the page to follow.
 describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {

@@ -545,10 +545,6 @@ func TestNotificationsMain_WorkerRunsOnlyWhenDelivering(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// QA: what the process does at its boundaries.
-// ---------------------------------------------------------------------------
-
 // qaProxy is an HTTPS proxy that records each CONNECT target and refuses it, so a vendor
 // request that honours the proxy is seen and never reaches the vendor.
 type qaProxy struct {

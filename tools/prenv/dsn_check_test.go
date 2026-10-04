@@ -333,15 +333,10 @@ func TestDSNCheckFlagsMissingRequiredVariable(t *testing.T) {
 	assertNoSentinel(t, stdout, stderr)
 }
 
-// T1-6 / T1-7: notifications.DATABASE_URL is required and must be valid.
-//
-// WHY. cmd/notifications/main.go opens a pool at boot (mustEnv("DATABASE_URL")) and exits
-// without it, so a fork that lacks the variable crash-loops. Required names the defect at the
-// DSN check instead of at a fleet gate that waits ten minutes for the service.
-//
-// KILLS: M-sev -- flipping the row to IfPresent breaks the absent case.
+// notifications.DATABASE_URL is required and must be valid: cmd/notifications/main.go exits at boot
+// without it, and the DSN check names the defect sooner than the fleet gate.
 func TestDSNCheckNotificationsDatabaseURLIsRequired(t *testing.T) {
-	t.Run("absent is an offender (T1-6)", func(t *testing.T) {
+	t.Run("absent is an offender", func(t *testing.T) {
 		m := healthyMap()
 		delete(m["notifications"], "DATABASE_URL")
 
@@ -355,7 +350,7 @@ func TestDSNCheckNotificationsDatabaseURLIsRequired(t *testing.T) {
 		assertNoSentinel(t, stdout, stderr)
 	})
 
-	t.Run("present but broken is an offender (T1-7)", func(t *testing.T) {
+	t.Run("present but broken is an offender", func(t *testing.T) {
 		m := healthyMap()
 		m["notifications"]["DATABASE_URL"] = "postgresql://invoice_app:@" + railwayHost
 

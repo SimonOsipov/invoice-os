@@ -551,7 +551,7 @@ describe('sentry: the ledger carries every new sentence', () => {
   })
 })
 
-// AUTH-17-09. The page and the ledger describe what notifications sends to HubSpot and Resend.
+// The page and the ledger describe what notifications sends to HubSpot and Resend.
 // Facts come from the Go and TS that send them (privacyCodeFacts.test.util.ts), not from the story.
 describe('AUTH-17-09: the page quotes the consent copy from code', () => {
   it('the page quotes the marketing sentence and the notice from code', () => {

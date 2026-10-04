@@ -97,8 +97,8 @@ test.describe('workspace provisioning (API E2E, over the deployed gateway)', () 
       expect(typeof body.tenant.id).toBe('string')
       expect(body.tenant.id).not.toBe('')
       expect(body.tenant.name).toBe(workspace.workspace_name)
-      // migrations/20260709153027_tenants_add_kind.sql: DEFAULT 'firm'.
-      expect(body.tenant.kind).toBe('firm')
+      // internal/tenancy/store.go ProvisionWorkspace: an absent kind is in_house.
+      expect(body.tenant.kind).toBe('in_house')
       expect(body.user).toEqual({ id: subject, role: 'admin' })
       tenantId = body.tenant.id
     })
@@ -121,7 +121,7 @@ test.describe('workspace provisioning (API E2E, over the deployed gateway)', () 
       const res = await rawFetch(ME, { headers: { Authorization: `Bearer ${tenantToken}` } })
       expect(res.status, JSON.stringify(res.body)).toBe(200)
       expect(res.body).toEqual({
-        tenant: { id: tenantId, name: workspace.workspace_name, kind: 'firm' },
+        tenant: { id: tenantId, name: workspace.workspace_name, kind: 'in_house' },
         user: { id: subject, role: 'admin', display_name: workspace.display_name, email: null },
       })
     })

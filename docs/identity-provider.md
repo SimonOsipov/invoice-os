@@ -317,7 +317,7 @@ scope, or `/token` with any other grant) is reachable from outside.
    on this one method and path only. Tenancy creates the tenant and its first active admin
    in one transaction through `public.provision_workspace`
    ([migrations.md](./migrations.md) §1) and answers 201 `{tenant:{id,name,kind}, user:{id,role}}`. An absent
-   `kind` stores `firm`, the column default. `provision_workspace` refuses an identity that
+   `kind` stores `in_house`. `provision_workspace` refuses an identity that
    already holds any membership, in any workspace and in any status (unique violation,
    constraint `one_workspace_per_identity`; the gateway answers 409), and takes a
    per-identity advisory lock so two concurrent calls cannot both pass. The same
@@ -374,7 +374,7 @@ would otherwise consume the single-use token.
 
 **`POST /api/tenancy/v1/workspaces`:** 201 with `{tenant:{id,name,kind}, user:{id,role}}`;
 400 for a malformed body, a name outside 1–200 characters, or a `kind` other than `firm` or
-`in_house`; 401 for no caller or a subject that is not a UUID; 409 `this account already has a workspace` when the token
+`in_house` (an absent `kind` is valid and stores `in_house`); 401 for no caller or a subject that is not a UUID; 409 `this account already has a workspace` when the token
 already carries a tenant, when the caller already provisioned one, or when the caller holds
 any membership in any workspace in any status; 500
 otherwise. The tenant id is a UUIDv5 of the caller's subject; the membership guard in

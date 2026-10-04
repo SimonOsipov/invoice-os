@@ -6220,6 +6220,7 @@ describe('InvoiceDetail cards, rail and inline edit take the v2 look (RESKIN2-03
     expect.soft(btn.style.height, 'resolve button height').toBe('32px')
     expect.soft(btn.style.fontSize, 'resolve button size').toBe('12.5px')
     expect(btn.style.flexShrink, 'the wrap recipe stays').toBe('0')
+    expect(btn.style.whiteSpace, 'the wrap recipe stays').toBe('nowrap')
   })
 
   it('the resolved block is plain text with a ghost Undo', async () => {
@@ -6311,10 +6312,13 @@ describe('InvoiceDetail cards, rail and inline edit take the v2 look (RESKIN2-03
   it('the edit form follows the prototype', async () => {
     const form = await openEdit()
 
+    for (const text of ['Invoice number', 'Issue date', 'Supplier name', 'Supplier TIN', 'Buyer name', 'Buyer TIN', 'Subtotal', 'VAT', 'Total', 'Currency']) {
+      const label = labelOf(form, text)
+      expect.soft(label.tagName, `${text}: the label stays a div for the e2e XPath`).toBe('DIV')
+      expect.soft(label.className.split(' '), `${text}: field label`).toContain('label')
+      expect.soft(label.style.marginBottom, `${text}: label marginBottom`).toBe('5px')
+    }
     const buyer = labelOf(form, 'Buyer name')
-    expect.soft(buyer.tagName, 'the label stays a div for the e2e XPath').toBe('DIV')
-    expect.soft(buyer.className.split(' '), 'field label').toContain('label')
-    expect.soft(buyer.style.marginBottom, 'label marginBottom').toBe('5px')
     const input = buyer.nextElementSibling as HTMLInputElement
     expect(input.tagName, 'control: the input follows its label directly').toBe('INPUT')
     expect.soft(input.style.height, 'editable input height').toBe('34px')
@@ -6340,6 +6344,9 @@ describe('InvoiceDetail cards, rail and inline edit take the v2 look (RESKIN2-03
     const add = screen.getByTestId('line-add')
     expect.soft(add.className.split(' '), 'line-add is a ghost button').toContain('v2-btn-ghost')
     expect.soft(add.className.split(' '), 'line-add is no chip').not.toContain('pf-chip')
+    expect.soft(add.className.split(' '), 'line-add is a pf-btn').toContain('pf-btn')
+    expect.soft(add.style.height, 'line-add height').toBe('30px')
+    expect.soft(add.style.fontSize, 'line-add size').toBe('12.5px')
     expect(add.textContent, 'control: line-add keeps its copy').toContain('Add line item')
     expect(add.querySelector('svg'), 'control: line-add keeps its glyph').not.toBeNull()
     expect.soft(screen.getByTestId('edit-cancel').style.height, 'Cancel height').toBe('34px')

@@ -145,8 +145,7 @@ function PolicyList({ ctx }: { ctx: PlatformCtx }) {
 }
 
 // The gateway's own sentence for a write it refused, verbatim. Inline rather than shared:
-// MembersTable.tsx:274-289, MemberDrawer.tsx:365-379 and RoleModal.tsx:298-305 each carry
-// their own copy, so a local one is the convention, not a fourth divergence.
+// MembersTable, MemberDrawer and RoleModal each carry their own copy.
 function PolicyError({ testId, maxWidth, children }: { testId: string; maxWidth?: number; children: ReactNode }) {
   return (
     <div

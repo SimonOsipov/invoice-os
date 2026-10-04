@@ -602,4 +602,31 @@ describe('RESKIN2-05-03 WL: the Workflows list takes the v2 look', () => {
       expect(html, `the list markup holds ${needle}`).not.toContain(needle)
     }
   })
+
+  it('WL-10 the header keeps its eyebrow and both mode subtitles, and the pill tones differ', () => {
+    const { unmount } = render(<WorkflowsView ctx={listCtx(two())} />)
+
+    expect(screen.getByText('APPROVAL WORKFLOW', { exact: true }), 'the eyebrow lost its copy').toBeTruthy()
+    expect(screen.getByText('Who must sign off before an invoice is transmitted — one set of policies across the firm.', { exact: true })).toBeTruthy()
+    expect(screen.getByText('PUBLISHED').style.color, 'PUBLISHED lost its green').toBe('var(--status-green-text)')
+    expect(screen.getByText('DRAFT').style.color, 'DRAFT is not muted').toBe('var(--status-muted-text)')
+    unmount()
+
+    render(<WorkflowsView ctx={listCtx(two(), { mode: 'inhouse' })} />)
+    expect(screen.getByText('Who must sign off before Lagos Freight transmits an invoice.', { exact: true }), 'the company subtitle lost its copy').toBeTruthy()
+  })
+
+  it('WL-11 Delete deletes without opening the builder, and Edit opens it exactly once', () => {
+    const deletePolicy = vi.fn(async () => {})
+    const openPolicy = vi.fn()
+    render(<WorkflowsView ctx={listCtx(two(), { deletePolicy, openPolicy })} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete First policy' }))
+    expect(deletePolicy, 'Delete is wired to nothing').toHaveBeenCalledWith('polA')
+    expect(openPolicy, 'the Delete click bubbled to the row and opened the builder').not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[1])
+    expect(openPolicy, 'the Edit click did not open its own row, or bubbled and opened it twice').toHaveBeenCalledTimes(1)
+    expect(openPolicy).toHaveBeenCalledWith('polB')
+  })
 })

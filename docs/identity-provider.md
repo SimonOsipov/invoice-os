@@ -346,6 +346,11 @@ scope, or `/token` with any other grant) is reachable from outside.
 | GoTrue unreachable, or any other answer | 502 `registration is unavailable`, logged |
 | `AUTH_SITE_URL` unset | 503 `registration is not configured` |
 
+A preflight (an OPTIONS with an `Origin`) is answered by CORS; any other non-POST, including an
+OPTIONS without an `Origin`, answers 405 `method not allowed` with `Allow: POST` at once, before the minimum
+wait and without a GoTrue call. Guarded by `cmd/gateway/registration_routes_test.go`
+`TestRegisterOptionsWithoutOriginIsNotARegistration`.
+
 The four 202 rows answer identically, so the response never tells whether an address
 already has an account. The answer never carries the user id or any GoTrue field except
 `msg`.

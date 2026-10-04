@@ -29,6 +29,12 @@ const DefaultRegisterMinResponse = 2 * time.Second
 func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, log *slog.Logger) http.Handler {
 	signup := authURL.JoinPath("signup").String()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Not postOnly: it sets headers on a POST, and a gone client must see no write.
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
 		start := time.Now()
 		var in struct {
 			Email         string  `json:"email"`

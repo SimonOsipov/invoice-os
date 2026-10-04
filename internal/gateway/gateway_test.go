@@ -1717,22 +1717,30 @@ func TestRouter_InternalPathRawRequestLinesNeverReachUpstream(t *testing.T) {
 	}
 }
 
-// Near misses of the internal segment still proxy: only a segment that resolves to "internal" is refused.
+// Near misses of the internal segment still proxy: only a path that resolves to "internal" first is refused.
+// Each request must reach the upstream once and never its /internal route, with and without the mux's cleaning (CONNECT).
 func TestRouter_InternalNearMissesStillProxy(t *testing.T) {
 	rig := newInternalRig(t)
 	token := rig.tg.validToken(t)
 	c := rig.counts["notifications"]
-	for _, target := range []string{
+	targets := []string{
 		"/api/notifications/v1/internal/x",
 		"/api/notifications/internals/x",
 		"/api/notifications/internal-status",
 		"/api/notifications/x/internal",
-	} {
-		t.Run(target, func(t *testing.T) {
-			c.reset()
-			if status, _ := rig.rawDo(t, http.MethodConnect, target, token); status == http.StatusNotFound && c.any.Load() == 0 {
-				t.Errorf("answered 404 with 0 upstream hits, want the request proxied")
-			}
-		})
+		"/api/notifications/v1/../v1/contacts/me",
+		"/api/notifications/v1/./contacts/me",
+		"/api/notifications//v1/contacts/me",
+	}
+	for _, method := range []string{http.MethodGet, http.MethodConnect} {
+		for _, target := range targets {
+			t.Run(method+" "+target, func(t *testing.T) {
+				c.reset()
+				rig.rawDo(t, method, target, token)
+				if c.any.Load() != 1 || c.internal.Load() != 0 {
+					t.Errorf("upstream saw %d requests and %d /internal hits, want 1 and 0", c.any.Load(), c.internal.Load())
+				}
+			})
+		}
 	}
 }

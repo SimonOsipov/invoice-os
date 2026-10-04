@@ -161,8 +161,7 @@ function PolicyError({ testId, children }: { testId: string; children: ReactNode
 function PolicyRow({ policy, onEdit, onDelete }: { policy: Policy; onEdit: () => void; onDelete: () => void }) {
   return (
     // pf-ROW, not pf-btn: the prototype markup says pf-btn, but in this repo that
-    // class forces `border-radius: var(--radius-pill) !important`, which would round
-    // a 72px-tall row into a stadium. pf-row is the repo's clickable-row hover.
+    // class forces `border-radius` with `!important`. pf-row is the repo's clickable-row hover.
     <div
       className="pf-row"
       onClick={onEdit}

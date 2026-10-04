@@ -468,7 +468,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
                 onDragEnd={endDrag}
                 onClick={() => append(b.type)}
                 disabled={submitting}
-                // pf-upcard, not pf-btn: pf-btn would force a pill radius on a tile,
+                // pf-upcard, not pf-btn: pf-btn would force its radius on a tile,
                 // and pf-upcard already carries exactly the hover this needs
                 // (border-color -> var(--action)).
                 className="pf-upcard"

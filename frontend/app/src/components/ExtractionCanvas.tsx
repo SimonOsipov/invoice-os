@@ -105,8 +105,7 @@ const SEGMENT: CSSProperties = {
   flex: 'none',
   height: 26,
   padding: '0 12px',
-  // A plain button, never `.pf-btn`/`.pf-chip`: both force `border-radius` with `!important`,
-  // from app-layer.css:193-197 and :275 respectively.
+  // A plain button, never `.pf-btn`/`.pf-chip`: both force `border-radius` with `!important`.
   borderRadius: 999,
   border: '1px solid transparent',
   fontFamily: 'var(--font-sans)',

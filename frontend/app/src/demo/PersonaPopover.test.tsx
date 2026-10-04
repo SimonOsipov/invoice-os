@@ -124,7 +124,7 @@ describe('PersonaPopover', () => {
   })
 
   // Row 9 (AC-9). The design's --accent resolves to teal under the prototype's own sheet
-  // (app-layer.css:10) -- var(--action) is the faithful reproduction, not a substitution.
+  // (app-layer.css) -- var(--action) is the faithful reproduction, not a substitution.
   it("the current row's tick uses var(--action)", () => {
     renderPopover({ members: FIRM_ROSTER, seatSubject: SEAT.id })
     const rows = screen.getAllByTestId('persona-row')

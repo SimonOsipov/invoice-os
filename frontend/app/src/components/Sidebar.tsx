@@ -165,7 +165,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
         {/* company switcher (firm mode) */}
         {isFirm && (
           <div style={{ position: 'relative' }}>
-            {/* no pf-btn: its !important pill radius beats radius-input (switcher_carriesNoPillButtonClass) */}
+            {/* no pf-btn: its !important radius beats radius-input (switcher_carriesNoPillButtonClass) */}
             <button
               onClick={ctx.toggleSwitcher}
               data-testid="company-switcher"

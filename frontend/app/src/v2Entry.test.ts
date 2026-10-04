@@ -29,6 +29,9 @@ describe('v2 entry', () => {
     expect(at(`${DS}/v2/app-layer.css`), 'v2/app-layer.css imported').toBeGreaterThan(at(`${DS}/v2/styles.css`))
     expect(at('./styles/platform.css'), 'platform.css after the layer').toBeGreaterThan(at(`${DS}/v2/app-layer.css`))
     expect(specifiers).not.toContain(`${DS}/styles.css`)
+    const designTokens = specifiers.filter((s) => s.startsWith(`${DS}/`))
+    expect(designTokens.length).toBeGreaterThan(0)
+    for (const s of designTokens) expect(s, 'only v2 entries').toContain('/v2/')
   })
 
   it('VE-02 every design-tokens specifier is exported (error row)', () => {
@@ -42,10 +45,10 @@ describe('v2 entry', () => {
 
   it('VE-03 index.html links Manrope and Plex only', () => {
     const html = INDEX_HTML.replace(/<!--[\s\S]*?-->/g, '').replace(/&amp;/g, '&')
-    const hrefs = [...html.matchAll(/<link\b[^>]*>/g)]
+    const hrefs = [...html.matchAll(/<link\b[^>]*>/gi)]
       .map((m) => m[0])
-      .filter((tag) => /\brel="stylesheet"/.test(tag))
-      .map((tag) => tag.match(/\bhref="([^"]*)"/)?.[1] ?? '')
+      .filter((tag) => /\brel\s*=\s*["']?stylesheet/i.test(tag))
+      .map((tag) => tag.match(/\bhref\s*=\s*["']([^"']*)["']/i)?.[1] ?? '')
     expect(hrefs).toHaveLength(2)
 
     const importOf = (css: string) => {

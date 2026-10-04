@@ -84,8 +84,8 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
             <button
               key={t.id}
               onClick={() => selectTab(t.id)}
-              // .pf-tab, not .pf-btn: the button classes are forced to a full
-              // pill radius, which bends this 2px underline into an arc.
+              // .pf-tab, not .pf-btn: the button classes force `border-radius`
+              // with `!important`.
               className="pf-tab"
               style={{ border: 0, background: 'transparent', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 14, fontWeight: a ? 600 : 500, color: a ? 'var(--fg-1)' : 'var(--fg-3)', padding: '0 0 12px', borderBottom: `2px solid ${a ? 'var(--action)' : 'transparent'}`, marginBottom: -1 }}
             >

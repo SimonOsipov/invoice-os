@@ -319,6 +319,15 @@ describe('Sidebar footer, flag-off card reads ctx.user (AUTH-09-02)', () => {
   })
 })
 
+describe('Sidebar brand mark', () => {
+  it('the wordmark link carries the 20px mark', async () => {
+    await renderSidebar(rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 }))
+    const mark = document.querySelector('aside.pf-sidebar a[href="#"] img')
+    expect(mark?.getAttribute('width')).toBe('20')
+    expect(mark?.getAttribute('height')).toBe('20')
+  })
+})
+
 // BUG-17-01: the v2 layer's `.pf-btn` rule forces --radius-btn with !important, which beats an
 // inline radius, so the firm switcher carries no button class.
 describe('BUG-17-01 company switcher corner', () => {
@@ -354,7 +363,7 @@ describe('BUG-17-01 company switcher corner', () => {
 
     expect(switcherRadius).toBe(chipRadius)
     expect(switcherRadius).toBe('var(--radius-input)')
-    expect(TOKENS_CSS).toMatch(/--radius-input:\s*var\(--radius-btn\);/)
+    expect(TOKENS_CSS.replace(/\/\*[\s\S]*?\*\//g, '')).toMatch(/--radius-input:\s*var\(--radius-btn\);/)
   })
 
   it('switcher_declaresBorderAndBackgroundTransitions', async () => {
@@ -404,7 +413,7 @@ describe('BUG-17-01 company switcher corner', () => {
     expect(screen.getByRole('button', { name: 'Sign out' }).className).toContain('pf-btn')
   })
 
-  // Bans every class, not only pf-btn: v2-btn, ops-btn, dev-btn and pf-chip force the same !important pill.
+  // Bans every class, not only pf-btn: v2-btn, ops-btn, dev-btn and pf-chip force the same !important radius.
   it('switcher_carriesNoClassAtAll', async () => {
     await renderSidebar(FIRM_EVEN_ROLLUP, firmCtx())
     expect(screen.getByTestId('company-switcher').getAttribute('class') ?? '').toBe('')

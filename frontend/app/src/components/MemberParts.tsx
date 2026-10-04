@@ -98,8 +98,8 @@ export function InitialsChip({ initials, status, size = 30 }: { initials: string
 // table in this app fills its status column on every row, so a blank cell on thirteen of
 // sixteen rows reads as missing data rather than as "the default".
 //
-// But MUTED, not green. Two reasons. The palette assigns meaning: "Teal = pass, amber =
-// attention, destructive = failure" (app-layer.css:71-73), and an active member is not a
+// But MUTED, not green. Two reasons. The palette assigns meaning: teal = pass, amber =
+// attention, destructive = failure, and an active member is not a
 // pass verdict, they are the baseline — --status-muted-* is what the app already uses for
 // a neutral state marker (DRAFT, SUPERSEDED). And thirteen saturated pills would out-shout
 // the three exceptions the column exists to surface. §10's "active = the solid default".
@@ -439,8 +439,8 @@ export function DepartmentField({ department, onDepartment, marginBottom }: {
  * §4's workflow-role picker — a wrapped row of pill toggles, one per role, ticked when held,
  * assigning and unassigning immediately. The ReviewInvoicesTab filter-pill idiom verbatim
  * (ReviewInvoicesTab.tsx:363-380): `.pf-chip`, `aria-pressed`, teal fill when on. No inline
- * `borderRadius` — `.pf-chip` is `border-radius: var(--radius-pill) !important`
- * (app-layer.css:275), so a radius here would be a declaration that never applies.
+ * `borderRadius` — `.pf-chip` forces `border-radius` with `!important`, so a radius here
+ * would be a declaration that never applies.
  *
  * NOT `RoleCards`: those are a three-way EXCLUSIVE choice over a closed union and carry real
  * radios. This is a multi-select over a list the user can edit, which is why the testids are
@@ -567,10 +567,8 @@ export function MoreMenu({ open, onOpen, onClose, label, items }: {
           else onOpen()
         }}
         className="pf-btn"
-        // `.pf-btn` is forced to `border-radius: var(--radius-pill) !important`
-        // (app-layer.css:194-197), so this square icon button renders as a circle. Taken
-        // deliberately: `.pf-signout` (Sidebar.tsx:271-279) is the same 28px transparent
-        // circle already shipped, and the radius is only visible while open or hovered.
+        // `.pf-btn` forces `border-radius` with `!important`; the radius is only visible
+        // while open or hovered.
         style={{
           display: 'inline-flex',
           alignItems: 'center',
@@ -632,7 +630,7 @@ export function MoreMenu({ open, onOpen, onClose, label, items }: {
                 // A disabled control gets NOTHING for free in this codebase:
                 // packages/design-tokens/*.css contains zero `:disabled` rules, and
                 // `.pf-menu-item:hover` is unguarded in BOTH stylesheets
-                // (platform.css:74-78, app-layer.css:272) — so a disabled row would still
+                // (platform.css, app-layer.css) — so a disabled row would still
                 // light up under the pointer and read as clickable. Four layers (InvoiceDetail's
                 // own recipe dropped to two in BUG-14-02; this menu keeps all four):
                 // (1) the real `disabled` attribute above — genuinely unclickable;

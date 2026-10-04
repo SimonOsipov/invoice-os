@@ -62,10 +62,8 @@ export function MemberRoleMatrix() {
         aria-expanded={open}
         aria-controls={bodyId}
         onClick={() => setOpen((v) => !v)}
-        // `.pf-tab`, not `.pf-btn`: the button classes are forced to
-        // `border-radius: var(--radius-pill) !important` (app-layer.css:194-197), which an
-        // inline radius cannot outrank — MEMB-01-04's 28px `⋯` trigger took `.pf-btn` and
-        // shipped as a circle, proving it empirically. SettingsView.tsx:59-68 is the same
+        // `.pf-tab`, not `.pf-btn`: the button classes force `border-radius` with
+        // `!important`, which an inline radius cannot outrank. SettingsView.tsx is the same
         // choice for the same reason and is the app's only other `.pf-tab`. `.pf-tab`
         // itself carries a colour transition and nothing else, so border, background and
         // padding are all reset here.
@@ -140,7 +138,7 @@ export function MemberRoleMatrix() {
                     return (
                       <td key={r.id} style={{ ...BODY_CELL, textAlign: 'center' }}>
                         {/* Teal tick / muted cross, NOT a green/red pass/fail pair.
-                            app-layer.css:71-73 assigns the palette meaning "teal =
+                            The palette means "teal =
                             pass, destructive = failure", and a Preparer who cannot approve
                             is not a failure — it is the role working as designed. */}
                         <span style={{ display: 'inline-flex', color: allowed ? 'var(--action)' : 'var(--fg-4)' }}>

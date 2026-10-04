@@ -1099,7 +1099,7 @@ describe('the screen renders inside its own tree', () => {
     expect(within(container).getByTestId('extraction-review')).toBeTruthy()
 
     // Every `--bg-*` / `--fg-*` / `--status-*` token is declared on `.asc-app`
-    // (packages/design-tokens/app-layer.css:18). Markup outside that tree resolves none of
+    // (packages/design-tokens/v2/app-layer.css). Markup outside that tree resolves none of
     // them, so a portalled node renders unstyled on the deployed build and jsdom, which
     // applies no CSS at all, would never say so.
     expect(outside(container), 'the screen rendered outside its own root').toEqual([])
@@ -1233,7 +1233,7 @@ describe('one shared draft, one Save', () => {
 
   it('disables Save while nothing is drafted, and neutralises its filter', async () => {
     // `.v2-btn-primary:hover` sets `filter: brightness(1.22)` with no `:disabled` guard
-    // (app-layer.css:213), so a disabled Save brightens under the cursor and reads enabled.
+    // (app-layer.css), so a disabled Save brightens under the cursor and reads enabled.
     // There is NO disabled reason: the only condition is "nothing settled yet", which is
     // self-evident, and both shipped precedents disable without one.
     const w = writing(AMBIGUOUS_JOB)

@@ -86,7 +86,7 @@ export function SourceDocumentCard({ meta, onOpen, extraction, onOpenExtraction 
         </button>
         {/* Disabled-with-a-visible-reason, never hidden and never a `title=` — a title on a
             disabled button is invisible in Chromium (APPR-16). Inline background/border
-            because `.v2-btn-ghost:hover` (app-layer.css:215) carries no `!important` and is
+            because `.v2-btn-ghost:hover` (app-layer.css) carries no `!important` and is
             not guarded by `:not(:disabled)`. */}
         <button
           type="button"

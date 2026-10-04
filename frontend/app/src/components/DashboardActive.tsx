@@ -109,7 +109,7 @@ function kpiValues(counts: Counts, needsAttention: number, vatLabel: string, awa
 }
 
 // Every tile on this page — the four KPI tiles included — wears the same head: a
-// Fraunces .card-title on the left, optional mono meta on the right, cut off from
+// .card-title on the left, optional mono meta on the right, cut off from
 // the body by a full-bleed hairline. The hairline only reaches both edges if the
 // CARD carries no padding — the head strip and the body each own theirs — hence
 // padding:0 + overflow:hidden here and an explicit padded body inside every tile.

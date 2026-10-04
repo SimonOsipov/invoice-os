@@ -314,7 +314,7 @@ describe('StatusStrip: tone', () => {
     expect(names).toHaveLength(15)
     for (const v of names) {
       expect(v).toMatch(/^var\(--status-[a-z-]+\)$/)
-      expect(TOKENS_CSS, `${v} is a real token`).toContain(`${v.slice(4, -1)}:`)
+      expect(TOKENS_CSS.replace(/\/\*[\s\S]*?\*\//g, ''), `${v} is a real token`).toContain(`${v.slice(4, -1)}:`)
     }
   })
 

@@ -285,7 +285,7 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
                     style={{
                       height: 30,
                       padding: '0 12px',
-                      // No borderRadius: .pf-chip forces --radius-pill with !important (app-layer.css:275).
+                      // No borderRadius: .pf-chip forces its radius with !important.
                       fontFamily: 'var(--font-sans)',
                       fontSize: 12.5,
                       fontWeight: 500,
@@ -517,7 +517,7 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
                   height: 36,
                   fontSize: 13,
                   // Spread ONLY when disabled; `filter:'none'` neutralises .v2-btn-primary:hover's
-                  // unguarded brightness(1.22) (app-layer.css:213). InvoiceDetail.tsx:926.
+                  // unguarded brightness(1.22). InvoiceDetail.tsx's Submit.
                   ...(canPrepare ? null : { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' }),
                 }}
               >

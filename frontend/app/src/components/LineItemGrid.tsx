@@ -121,7 +121,7 @@ const CHIP_WHERE: CSSProperties = {
 }
 
 // The role selector is the column heading. `.pf-input` for the box; no `.pf-btn`, which forces
-// a pill radius (app-layer.css:275).
+// its radius.
 const ROLE_SELECT: CSSProperties = { paddingRight: 8, fontSize: 11.5 }
 
 // LABEL_STRIP (`:88`) and PILL (`:94-105`), so a flag wraps rather than spilling its column.

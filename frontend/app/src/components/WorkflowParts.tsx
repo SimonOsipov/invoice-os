@@ -231,7 +231,7 @@ export function WfSelect({ label, value, options, onChange, height = 38, marginB
           disabled={disabled}
           title={title}
           aria-describedby={ariaDescribedBy}
-          // `backgroundColor`, never the `background` shorthand — app-layer.css:224-232.
+          // `backgroundColor`, never the `background` shorthand.
           style={{ width: '100%', height, padding: '0 32px 0 12px', border: '1px solid var(--line-2)', backgroundColor: 'var(--bg-1)', color: 'var(--fg-1)', fontSize: 13, cursor: 'pointer', boxSizing: 'border-box', ...(disabled ? { backgroundColor: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null) }}
         >
           {options.map((o) => (

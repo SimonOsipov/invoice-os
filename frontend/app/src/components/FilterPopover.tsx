@@ -9,8 +9,8 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { chevDownGlyph } from '../glyphs'
 import { useDismiss } from '../lib/useDismiss'
 
-// Duplicates MemberParts.tsx's exported POPOVER_SHADOW.
-const POPOVER_SHADOW = '0 16px 40px -16px oklch(20% .02 210 / 0.28)'
+// v2 card elevation; MemberParts keeps its own popover shadow.
+const POPOVER_SHADOW = 'var(--shadow-card)'
 
 export interface FilterPopoverProps {
   /** Prefixes every data-testid this component renders. */

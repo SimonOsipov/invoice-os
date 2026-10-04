@@ -165,6 +165,20 @@ describe('PersonaFooter (flag on)', () => {
     fireEvent.click(screen.getByTestId('persona-trigger'))
     expect(screen.getAllByTestId('persona-row').length).toBe(2)
     expect(footerOf().outerHTML).toContain('--fg-4')
+    expect(footerOf().outerHTML).not.toContain('oklch')
+
+    // Busy: the spinner and the amber trigger border render only here.
+    const gate = deferred<void>()
+    await renderDemoSidebar(demoCtx({ becomePersona: vi.fn(() => gate.promise), members: [SEAT, MUSA] }))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('persona-trigger'))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByText(MUSA.name).closest('button')!)
+    })
+    expect(screen.getByTestId('persona-spinner')).not.toBeNull()
+    expect(footerOf().outerHTML).not.toContain('--fg-4')
+    expect(footerOf().outerHTML).not.toContain('oklch')
   })
 
   // DM-03 (AC 9). 5px and 16px boxes: only the 50% string tells a circle from a 99px pill.
@@ -255,6 +269,8 @@ describe('PersonaFooter (flag on)', () => {
 
     const btn = screen.getByRole('button', { name: 'Sign out' })
     expect(btn.className).toBe('pf-signout')
+    // The icon button is 4px; the 7px text button is the suspended card's.
+    expect(btn.style.borderRadius).toBe('var(--radius-sm)')
     expect(btn.getAttribute('title')).toBe('Sign out')
     btn.click()
     expect(ctx.signOut).toHaveBeenCalledTimes(1)

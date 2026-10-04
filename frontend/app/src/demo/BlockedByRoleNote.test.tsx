@@ -53,5 +53,6 @@ describe('BlockedByRoleNote (task-594, DEMO-06-06)', () => {
     expect(glyph.style.color).toBe('var(--fg-4)')
     expect(text.style.color).toBe('var(--fg-3)')
     expect(note.style.borderRadius).toBe('var(--radius-md)')
+    expect(note.outerHTML).not.toContain('oklch')
   })
 })

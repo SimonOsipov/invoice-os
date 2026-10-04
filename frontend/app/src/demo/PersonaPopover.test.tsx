@@ -39,6 +39,7 @@ type PopoverProps = {
   membersError: ApiError | null
   seatSubject: string | undefined
   standingIn: boolean
+  rowError?: { memberId: string; message: string } | null
   onSelect: (member: Member) => void
   onReturn: () => void
 }
@@ -261,5 +262,49 @@ describe('PersonaPopover', () => {
     expect(within(active).getByTestId('persona-row-meta').style.color).toBe('var(--fg-3)')
     expect(within(blocked).getByTestId('persona-row-name').style.color).toBe('var(--fg-4)')
     expect(within(blocked).getByText(HALIMA.initials).style.color).toBe('var(--fg-4)')
+  })
+  // Q3 / D-3. Every --fg-4 sits on a blocked row; the other surfaces, the return row and the row
+  // error hold none. Floor: the blocked rows must supply a real --fg-4 for the scan to mean anything.
+  it('QA-06 --fg-4 appears only on blocked rows, and no surface holds oklch', () => {
+    const INVITED = member({ id: 'm-invited', name: 'Ife Invited', initials: 'II', role: 'preparer', status: 'invited', isYou: false })
+    const { container, unmount } = renderPopover({
+      members: [FOLAKE, HALIMA, INVITED],
+      seatSubject: FOLAKE.id,
+      standingIn: true,
+      rowError: { memberId: FOLAKE.id, message: 'boom' },
+    })
+    const rows = screen.getAllByTestId('persona-row')
+    expect(rows.length).toBe(3)
+    const fg4Of = (root: Element) => [root, ...Array.from(root.querySelectorAll<HTMLElement>('*'))].filter((e) => (e as HTMLElement).style.color === 'var(--fg-4)')
+    const enabled = rows.filter((r) => r.tagName === 'BUTTON')
+    const blocked = rows.filter((r) => r.tagName === 'DIV')
+    expect(enabled.length).toBe(1)
+    expect(blocked.length).toBe(2)
+    enabled.forEach((r) => expect(fg4Of(r).length).toBe(0))
+    // initials, name, lock on each blocked row; the invited row's meta is a fourth.
+    expect(fg4Of(blocked[0]).length).toBe(3)
+    expect(fg4Of(blocked[1]).length).toBe(4)
+    expect(within(blocked[1]).getByTestId('persona-row-meta').style.color).toBe('var(--fg-4)')
+    expect(within(blocked[0]).getByTestId('persona-row-meta').style.color).toBe('var(--status-red-text)')
+    expect(within(blocked[0]).getByTestId('persona-row-reason').style.color).toBe('var(--fg-3)')
+    expect(within(blocked[0]).getByTestId('persona-row-lock').style.color).toBe('var(--fg-4)')
+    expect(within(enabled[0]).queryByTestId('persona-row-lock')).toBeNull()
+    expect(fg4Of(screen.getByTestId('persona-return-row')).length).toBe(0)
+    expect(within(enabled[0]).getByTestId('persona-row-error').style.color).toBe('var(--status-red-text)')
+    expect(container.innerHTML).not.toContain('oklch')
+    unmount()
+
+    for (const [membersState, membersError] of [
+      ['loading', null],
+      ['error', new ApiError('http', 'boom', 503)],
+      ['empty', null],
+    ] as const) {
+      const r = renderPopover({ members: membersState === 'empty' ? [] : FIRM_ROSTER, membersState, membersError })
+      const surface = r.container.querySelector('[data-testid^="persona-surface-"]')
+      expect(surface, membersState).not.toBeNull()
+      expect(surface!.outerHTML).not.toContain('--fg-4')
+      expect(r.container.innerHTML).not.toContain('oklch')
+      r.unmount()
+    }
   })
 })

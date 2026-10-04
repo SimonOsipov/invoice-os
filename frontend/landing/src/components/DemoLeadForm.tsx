@@ -10,6 +10,9 @@ import {
   ROLE_OPTIONS,
   VOLUME_OPTIONS,
   DEFAULT_FORM,
+  DEMO_NAME_MAX,
+  DEMO_EMAIL_MAX,
+  DEMO_COMPANY_MAX,
   type DemoFormErrors,
   type DemoFormState,
   type DemoFieldKey,
@@ -221,6 +224,7 @@ export function DemoLeadForm({
                 onChange={(e: ChangeEvent<HTMLInputElement>) => setField('name', e.target.value)}
                 placeholder="Ada Okafor"
                 autoComplete="name"
+                maxLength={DEMO_NAME_MAX}
                 aria-required="true"
                 aria-invalid={Boolean(errors.name)}
                 aria-describedby={errors.name ? `${idPrefix}-name-error` : undefined}
@@ -246,6 +250,7 @@ export function DemoLeadForm({
                 onChange={(e: ChangeEvent<HTMLInputElement>) => setField('email', e.target.value)}
                 placeholder="you@company.com"
                 autoComplete="email"
+                maxLength={DEMO_EMAIL_MAX}
                 aria-required="true"
                 aria-invalid={Boolean(errors.email)}
                 aria-describedby={errors.email ? `${idPrefix}-email-error` : undefined}
@@ -271,6 +276,7 @@ export function DemoLeadForm({
                 onChange={(e: ChangeEvent<HTMLInputElement>) => setField('company', e.target.value)}
                 placeholder="Okafor & Partners"
                 autoComplete="organization"
+                maxLength={DEMO_COMPANY_MAX}
                 aria-required="true"
                 aria-invalid={Boolean(errors.company)}
                 aria-describedby={errors.company ? `${idPrefix}-company-error` : undefined}

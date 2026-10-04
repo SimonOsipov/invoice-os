@@ -7,7 +7,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { DemoModal } from './DemoModal'
-import { CONSENT_TEXT, DEFAULT_FORM, ROLE_OPTIONS, TAXPAYER_SIZE_OPTIONS, VOLUME_OPTIONS } from './demoForm'
+import { CONSENT_TEXT, DEFAULT_FORM, DEMO_COMPANY_MAX, DEMO_EMAIL_MAX, DEMO_NAME_MAX, ROLE_OPTIONS, TAXPAYER_SIZE_OPTIONS, VOLUME_OPTIONS } from './demoForm'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import { buildSubmission, hubspotTarget, submissionUrl, type DemoLead } from '../hubspot'
 
@@ -393,12 +393,12 @@ describe('MF-X3 (CHARACTERIZATION): the option lists are the imported constants'
 })
 
 describe('MF-X4 (CHARACTERIZATION): long answers survive intact', () => {
-  it('a 600-character company reaches the wire untruncated and the thank-you names the visitor', async () => {
+  it('a company at the 200-character cap reaches the wire untruncated and the thank-you names the visitor', async () => {
     openGate()
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 })
     vi.stubGlobal('fetch', fetchMock)
-    const company = 'Ω'.repeat(600)
-    const name = 'Adaobi'.repeat(40) + ' Okafor'
+    const company = 'Ω'.repeat(DEMO_COMPANY_MAX)
+    const name = 'Adaobi'.repeat(30) + ' Okafor'
     await mount()
     await fill(name, 'ada@okafor.ng', company)
     await tick('#dm-consent')
@@ -420,8 +420,18 @@ describe('MF-X4 (CHARACTERIZATION): long answers survive intact', () => {
     expect(body).toEqual(buildSubmission(lead, CONSENT_TEXT))
     expect(JSON.stringify(body)).toContain(company)
     expect(container.textContent).toContain("You're booked")
-    expect(container.textContent).toContain('Adaobi'.repeat(40))
+    expect(container.textContent).toContain('Adaobi'.repeat(30))
     expect(consoleError).not.toHaveBeenCalled()
+  })
+})
+
+describe('MF-X4b: inputs carry the gateway field caps', () => {
+  it('name and company cap at 200, email at 254', async () => {
+    await mount()
+    expect($<HTMLInputElement>('#dm-name').maxLength).toBe(200)
+    expect($<HTMLInputElement>('#dm-company').maxLength).toBe(200)
+    expect($<HTMLInputElement>('#dm-email').maxLength).toBe(254)
+    expect([DEMO_NAME_MAX, DEMO_COMPANY_MAX, DEMO_EMAIL_MAX]).toEqual([200, 200, 254])
   })
 })
 

@@ -136,8 +136,8 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
 
   // Sign out (M3-07-03). Replaces the old decorative gear: the gear read as
   // "settings" (already a nav item) and had no handler — this footer slot now holds
-  // one real action. Default/hover color live in `.pf-signout` (platform.css) so the
-  // :hover token can win (an inline color would beat the hover rule). Hoisted to a
+  // one real action. Default/hover color and fill live in `.pf-signout` (platform.css); an
+  // inline color or background would beat the :hover rule. Hoisted to a
   // const so the flag-on and flag-off footers render the identical element.
   const signOutButton = (
     <button
@@ -145,7 +145,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
       className="pf-signout"
       aria-label="Sign out"
       title="Sign out"
-      style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, padding: 0, border: 0, borderRadius: 'var(--radius-sm)', background: 'transparent', cursor: 'pointer' }}
+      style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, padding: 0, border: 0, borderRadius: 'var(--radius-sm)', cursor: 'pointer' }}
     >
       <Icon paths={['M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4', 'M16 17l5-5-5-5', 'M21 12H9']} size={16} />
     </button>

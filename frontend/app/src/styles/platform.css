@@ -143,6 +143,7 @@ body {
 }
 .pf-signout {
   color: var(--fg-3);
+  background: transparent;
   transition: color 120ms ease-out;
 }
 .pf-signout:hover {

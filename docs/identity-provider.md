@@ -496,7 +496,7 @@ persona until AUTH-15. A stored record without the name keeps a blank card: rene
 The access token travels only in the exchange and refresh answers and the `Authorization`
 header; the refresh token travels only in the exchange answer, the refresh request and
 answer, and the sign-out request (see Revocation). Landing never holds either. Landing renders the form only when `VITE_GATEWAY_URL` and `VITE_APP_URL` are set,
-and otherwise shows the persona list alone. A hand-off to a console also needs landing's
+and otherwise shows the persona list alone. The create-account entry also needs `VITE_REGISTRATION_OPEN=true`: `reconcile-urls` writes it on every PR fork, and production leaves it unset until registration U3. A hand-off to a console also needs landing's
 `VITE_OPS_URL` or `VITE_SUPPORT_URL`; without it landing does not navigate. The app ignores `?handoff=` when its
 `VITE_GATEWAY_URL` is unset.
 
@@ -1171,7 +1171,7 @@ E=6c864094-6a06-452f-8495-be77d8a94fe7
 |---|---|---|
 | U1 | any time after merge | gateway `AUTH_SITE_URL` |
 | U2 | any time after merge | auth `GOTRUE_MAILER_URLPATHS_CONFIRMATION` |
-| U3 | when registration opens: after AUTH-04 and AUTH-16 merge | auth `GOTRUE_DISABLE_SIGNUP=false` |
+| U3 | when registration opens: after AUTH-04 and AUTH-16 merge | auth `GOTRUE_DISABLE_SIGNUP=false`, landing `VITE_REGISTRATION_OPEN=true` |
 | U4 | after U1–U3 have deployed | none: an end-to-end check by hand; step 5 may raise `AUTH_REGISTER_MIN_RESPONSE` |
 
 Until U1 deploys, production's `POST /auth/register` and `GET /auth/verify` answer 503
@@ -1207,9 +1207,19 @@ railway variables -p "$P" -e "$E" -s auth --json | jq -r '.GOTRUE_DISABLE_SIGNUP
 # expected: false
 ```
 
-To close registration again, set the value back to `true` the same way and redeploy `auth`.
+Show the entry on the landing. `VITE_REGISTRATION_OPEN` is a build argument, so the landing
+needs a deploy to take it:
 
-**Deploy the writes.** The next push run on `main` deploys `gateway` and `auth` with the new
+```
+railway variables --set 'VITE_REGISTRATION_OPEN=true' -p "$P" -e "$E" -s landing --skip-deploys
+railway variables -p "$P" -e "$E" -s landing --json | jq -r '.VITE_REGISTRATION_OPEN'
+# expected: true
+```
+
+To close registration again, set `GOTRUE_DISABLE_SIGNUP` back to `true` the same way and
+redeploy `auth`, and unset `VITE_REGISTRATION_OPEN` on `landing` and redeploy it.
+
+**Deploy the writes.** The next push run on `main` deploys `gateway`, `auth` and `landing` with the new
 values; a push that changes only `docs/**` or `*.md` starts no run (`paths-ignore`). To
 deploy sooner, re-run the latest push `dev-env` run as a whole run
 (`gh run rerun <id>`, not `--failed`); if that re-run gates on stale containers, push an

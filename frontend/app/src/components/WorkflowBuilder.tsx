@@ -69,8 +69,7 @@ const SCOPE_NOT_ROUTED = 'Per-scope routing is not yet available — every polic
 /**
  * The in-flight lock's wrapper. The canvas's drop and click-to-place handlers hang off divs,
  * which no `disabled` prop reaches — so this stays a fieldset even though `WfSelect` now takes
- * a `disabled` of its own for the PERSISTENT recipe. A transient lock keeps the fieldset;
- * `MemberDrawer.tsx:64-71` records the same trade.
+ * a `disabled` of its own for the PERSISTENT recipe. A transient lock keeps the fieldset.
  */
 const FIELDSET_RESET = { border: 0, padding: 0, margin: 0, minInlineSize: 0 } as const
 

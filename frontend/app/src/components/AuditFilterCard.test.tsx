@@ -1245,3 +1245,15 @@ describe('AuditFilterCard: pills row adversarial coverage (AUDIT-07-07)', () => 
     }
   })
 })
+
+describe('AuditFilterCard: popover panels', () => {
+  it.each(['search', 'date', 'event', 'actor', 'company'])('audit-%s floats on shadow-card, not a v1 shadow', (name) => {
+    renderCard()
+    fireEvent.click(screen.getByTestId(`audit-${name}-trigger`))
+    const panel = screen.getByTestId(`audit-${name}-panel`)
+
+    expect(styleValue(panel, 'min-width'), 'control: the panel style is read').toBe('240px')
+    expect(styleValue(panel, 'box-shadow')).toBe('var(--shadow-card)')
+    expect(panel.getAttribute('style')).not.toContain('oklch')
+  })
+})

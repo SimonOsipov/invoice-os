@@ -50,11 +50,23 @@ describe('platform.css custom properties', () => {
       join(V2, 'utilities.css'),
       join(V2, 'app-layer.css'),
     ]
-    for (const f of files) for (const m of readFileSync(f, 'utf8').matchAll(/(--[\w-]+)\s*:/g)) declared.add(m[1])
+    for (const f of files) for (const m of uncomment(readFileSync(f, 'utf8')).matchAll(/(--[\w-]+)\s*:/g)) declared.add(m[1])
     const used = [...new Set([...platformCss().matchAll(/var\(\s*(--[\w-]+)/g)].map((m) => m[1]))]
 
     expect(declared.has('--ring'), 'control: the v2 files declare their tokens').toBe(true)
     expect(used.length, 'control: platform.css names tokens').toBeGreaterThan(5)
     expect(used.filter((n) => !declared.has(n))).toEqual([])
+  })
+})
+
+describe('platform.css toggle', () => {
+  it('the knob and track rules set only a transition, so the inline pill radius stays', () => {
+    const css = platformCss()
+
+    for (const selector of ['.pf-toggle', '.pf-knob']) {
+      const d = decls(css, selector)
+      expect(d.get('transition'), `control: ${selector} declarations are read`).toContain('ease-out')
+      expect([...d.keys()], selector).toEqual(['transition'])
+    }
   })
 })

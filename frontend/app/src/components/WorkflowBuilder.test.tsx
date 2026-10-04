@@ -835,7 +835,7 @@ describe('APPR-10-04 AC-5: both shut controls carry the muted paint', () => {
   // pin the wrong name on one of them: `.pf-select`'s own resting style sets
   // `backgroundColor` (WorkflowParts.tsx),
   // while `WfToggle`'s resting style sets the shorthand (:305). Both are INLINE — the
-  // `.pf-toggle` class sets only a transition (platform.css:169-171). Measured in jsdom: a
+  // `.pf-toggle` class sets only a transition (platform.css). Measured in jsdom: a
   // select's `style.background` reads '' and a toggle's `style.backgroundColor` reads ''.
   it('the select paints backgroundColor, the toggle paints background, and both mute the rest', () => {
     render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
@@ -949,6 +949,9 @@ describe('APPR-10-04 QA (R15): the disabled paint is CONDITIONAL', () => {
     expect(sel.style.color, 'an enabled WfSelect lost its resting foreground').toBe('var(--fg-1)')
     expect(tog.style.background, 'an enabled WfToggle lost its resting background').toBe('var(--line-3)')
     expect(tog.style.color, 'an enabled WfToggle grew a foreground it never had').toBe('')
+    // The v2 layer leaves the toggle a pill: the inline 99px is its only radius.
+    expect((tog.querySelector('.pf-knob') as HTMLElement).style.borderRadius, 'the knob is no longer a pill').toBe('99px')
+    expect(tog.style.borderRadius, 'the track is no longer a pill').toBe('99px')
     for (const [what, el] of [['WfSelect', sel], ['WfToggle', tog]] as [string, HTMLElement][]) {
       expect(el.style.cursor, `an enabled ${what} paints the not-allowed cursor`).toBe('pointer')
     }

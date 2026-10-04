@@ -200,7 +200,7 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
               <div
                 className="pf-row"
                 data-testid="member-row"
-                // What makes `.pf-row`'s `cursor: pointer` (platform.css:69) honest — until
+                // What makes `.pf-row`'s `cursor: pointer` (platform.css) honest — until
                 // now this was the app's only row that claimed to be clickable and was not.
                 // The InvoicesList.tsx:388-389 / RulesView.tsx:251 shape: `onClick` straight
                 // on the row div. No guard is needed against the `⋯` column — the trigger,

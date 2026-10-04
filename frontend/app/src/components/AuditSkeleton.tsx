@@ -5,7 +5,7 @@
 // exactly the bug AuditSkeleton.test.tsx asserts against, because a restatement drifts
 // silently and only shows up as a jump on the running page.
 //
-// The `shimmer` keyframe is global (styles/platform.css:22); the shipped consumers are
+// The `shimmer` keyframe is global (styles/platform.css); the shipped consumers are
 // SourceDocumentStates.tsx and ImportProgress.tsx.
 
 import { AUDIT_COLS, AUDIT_GRID_GAP, AUDIT_TABLE_MIN_WIDTH } from './AuditRow'

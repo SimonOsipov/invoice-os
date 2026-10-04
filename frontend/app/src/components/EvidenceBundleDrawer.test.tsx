@@ -351,6 +351,15 @@ describe('EvidenceBundleDrawer', () => {
   })
 
   // EB-04-4
+  it('drawerCompany_panelFloatsOnShadowCard', async () => {
+    await renderDrawer({ ctx: evidenceCtx([mkEntity('ent-a', 'Alpha')]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    const panel = screen.getByTestId('evidence-company-panel')
+
+    expect(panel.style.minWidth, 'control: the panel style is read').toBe('240px')
+    expect(panel.style.boxShadow).toBe('var(--shadow-card)')
+  })
+
   it('drawerCompany_listsTheEntityListNotTheFacets', async () => {
     const entities = [mkEntity('ent-a', 'Alpha'), mkEntity('ent-b', 'Beta'), mkEntity('ent-c', 'Gamma')]
     mockFetchSequence([logResponse({ facets: { event: [], actor: [], company: [{ value: 'ent-zenith', name: 'Zenith', count: 4 }] } })])

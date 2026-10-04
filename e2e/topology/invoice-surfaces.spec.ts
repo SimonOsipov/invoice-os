@@ -391,7 +391,7 @@ async function assertMarkerBesideStatus(page: Page, row: Locator, markerTestId: 
     // every WIDE_WIDTHS entry, in order.
     expect(wide.map((m) => m.width), `${label}: the wide sweep measured nothing`).toEqual([...WIDE_WIDTHS])
 
-    // The 390px collapse pass -- the 480px !important block (platform.css:307-327) is
+    // The 390px collapse pass -- the 480px !important block (platform.css) is
     // narrow-only, so the WIDE_WIDTHS sweep above cannot see a regression it introduces.
     await page.setViewportSize({ width: 390, height: 844 })
     await expect
@@ -3421,7 +3421,7 @@ test('detail surface: the armed decision block and approval card, plus their lay
   const spread = (ns: number[]) => Math.max(...ns) - Math.min(...ns)
 
   // G2a: the rail is a constant FRACTION of the grid, not a constant width. The inline
-  // `1fr 340px` (InvoiceDetail.tsx:1045) is overridden above 1180 by platform.css:233-236,
+  // `1fr 340px` (InvoiceDetail.tsx) is overridden above 1180 by platform.css,
   // `1fr minmax(220px, 25%) !important`, so the rail grows with the viewport (239/279/399/559
   // across WIDE_WIDTHS) and only its SHARE is invariant. Share of (rail + main), read from the
   // two boxes themselves, so a scrollbar gutter or a sidebar change cannot move it.

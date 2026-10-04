@@ -4,7 +4,7 @@
 // and would otherwise time out on an unhelpful locator wait.
 //
 // Geometry reads go through expect.poll, never a bare boundingBox() — @keyframes popIn
-// (styles/platform.css:30-39) animates translateY(4px) -> none over 140ms, and a raced
+// (styles/platform.css) animates translateY(4px) -> none over 140ms, and a raced
 // read reflects the transform (layout.ts's own stated idiom). scrollHeight/clientHeight
 // are untouched by that transform and are read directly.
 //

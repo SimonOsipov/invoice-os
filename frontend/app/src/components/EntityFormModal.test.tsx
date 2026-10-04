@@ -9,6 +9,7 @@ import { TIN_HINT } from '../lib/entityForm'
 import { createAuthedFetch } from '../lib/authedFetch'
 import { createEntity, updateEntity, type Entity } from '../lib/portfolio'
 import type { PlatformCtx } from '../types'
+import { AddCompanyTask } from './AddCompanyTask'
 import { ClientsView } from './ClientsView'
 import { EntityFormModal } from './EntityFormModal'
 import { SettingsView } from './SettingsView'
@@ -277,6 +278,86 @@ describe('PR-01 the entity modal sits 10px over the v2 scrim', () => {
     expect(decls.get('backdrop-filter')).toBe('blur(6px)')
     expect(decls.get('-webkit-backdrop-filter')).toBe('blur(6px)')
     expect(html).not.toContain('oklch')
+  })
+
+  describe('every caller opens the v2 panel', () => {
+    beforeEach(() => vi.stubEnv('VITE_GATEWAY_URL', 'https://gateway.test'))
+    afterEach(() => {
+      vi.unstubAllEnvs()
+      vi.unstubAllGlobals()
+    })
+
+    function expectV2Panel() {
+      const panel = screen.getByRole('dialog')
+      expect(panel.style.width, 'control: the panel style is read').toBe('480px')
+      expect(panel.style.borderRadius).toBe('var(--radius-lg)')
+      expect(panel.style.boxShadow).toBe('var(--shadow-card)')
+      expect(panel.parentElement?.style.position, 'the panel sits in the fixed backdrop').toBe('fixed')
+    }
+
+    it('ClientsView Add client', async () => {
+      const rows = [ENTITY]
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string) => {
+          const body = new URL(url).pathname.endsWith('/rollup')
+            ? { totals: { counts: {}, needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] }, clients: [], top_violations: [] }
+            : { entities: rows, pagination: { limit: 200, offset: 0, total: rows.length } }
+          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) })
+        }),
+      )
+      const ctx = {
+        mode: 'firm',
+        authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
+        user: { name: 'F', initials: 'F', tenantName: 'Acme', verified: true },
+        entities: rows,
+        entitiesState: 'ready',
+        entitiesError: null,
+        refetchEntities: vi.fn(),
+      } as unknown as PlatformCtx
+      render(<ClientsView ctx={ctx} />)
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Add client' }))
+      expectV2Panel()
+    })
+
+    it('AddCompanyTask Add company', () => {
+      const ctx = {
+        mode: 'inhouse',
+        entitiesState: 'empty',
+        entities: [],
+        clients: [],
+        activeEntity: null,
+        entitiesError: null,
+        refetchEntities: vi.fn(),
+        authedFetch: vi.fn(),
+        user: { name: 'Ada', initials: 'A', tenantName: 'Acme Ltd', verified: true },
+      } as unknown as PlatformCtx
+      render(<AddCompanyTask ctx={ctx} />)
+
+      fireEvent.click(within(screen.getByTestId('add-company-task')).getByRole('button', { name: 'Add company' }))
+      expectV2Panel()
+    })
+
+    it('SettingsView Company tab', () => {
+      const ctx = {
+        mode: 'inhouse',
+        settingsTab: 'company',
+        sandbox: false,
+        connectors: {},
+        connectorMappings: {},
+        activeEntity: null,
+        entitiesState: 'ready',
+        entitiesError: null,
+        refetchEntities: vi.fn(),
+        setSettingsTab: vi.fn(),
+        authedFetch: vi.fn(),
+      } as unknown as PlatformCtx
+      render(<SettingsView ctx={ctx} />)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Add company' }))
+      expectV2Panel()
+    })
   })
 
   // An inline border-color or box-shadow on the input would beat the class :focus ring.

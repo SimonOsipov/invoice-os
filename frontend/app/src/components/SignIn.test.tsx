@@ -20,10 +20,12 @@ function cardDecls(html: string): Map<string, string> {
   return declsOf(styles[0])
 }
 
-const styleText = (html: string) => decode(/<style>([\s\S]*?)<\/style>/.exec(html)?.[1] ?? '')
+// Comments are stripped so a rule that is commented out reads as gone.
+const styleText = (html: string) => decode(/<style>([\s\S]*?)<\/style>/.exec(html)?.[1] ?? '').replace(/\/\*[\s\S]*?\*\//g, '')
 
 const GATES: Array<[string, () => string]> = [
   ['SignIn', () => picker()],
+  ['SignIn mid sign-in', () => picker('firm')],
   ['SignInLoading', () => renderToStaticMarkup(<SignInLoading />)],
   ['SignInLoading with a persona', () => renderToStaticMarkup(<SignInLoading persona={APP_PERSONAS.firm} />)],
 ]

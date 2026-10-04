@@ -38,7 +38,7 @@ import { WfSelect, type WfOption } from './WorkflowParts'
 // The PERSON avatar, not the company one. Both exist in this app and the difference is a
 // deliberate signal, not drift: a COMPANY is a rounded rect in --action-tint on --action
 // at weight 700 (Sidebar.tsx:147/:173/:192, ClientsView.tsx:160, CustomersView.tsx:110,
-// SignIn.tsx:73), and a PERSON is a dark circle in --slate-800 on --text-on-dark at
+// SignIn.tsx), and a PERSON is a dark circle in --slate-800 on --text-on-dark at
 // weight 600 — Sidebar.tsx:251, until now the only person avatar in the product.
 //
 // A members table is people, so it takes the person chip. The `isYou` row settles it: it
@@ -521,7 +521,7 @@ export type MenuAction = {
  * the only popover it does have, the Sidebar company switcher (Sidebar.tsx:139-186): a
  * `position: relative` wrapper, an absolute panel at `calc(100% + 6px)` in --bg-2 with a
  * --line-2 hairline, --radius-md, the same long soft shadow and `popIn 140ms`
- * (platform.css:30-39), and `.pf-menu-item` rows.
+ * (platform.css), and `.pf-menu-item` rows.
  *
  * Two deliberate departures from it. The panel is right-aligned with its own width rather
  * than stretched `left:0; right:0` to the trigger — a 28px trigger is not a menu width.

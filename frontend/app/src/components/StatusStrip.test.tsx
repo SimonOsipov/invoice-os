@@ -129,7 +129,7 @@ const SENTINEL_NODES: StripNode[] = KEYS.map((key, i) => ({
   caption: `Sentinel caption ${i}`,
 }))
 
-// D-7: the prototype's strip map (Platform.dc.html:4314), with Q3 applied to the labels.
+// D-7: the prototype's status-strip look map, with Q3 applied to the labels.
 const PROTOTYPE_MAP: Record<StripState, { bg: string; border: string; fg: string; label: string }> = {
   done: { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', fg: 'var(--status-green-text)', label: 'var(--fg-1)' },
   failed: { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', fg: 'var(--status-red-text)', label: 'var(--fg-1)' },

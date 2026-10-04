@@ -88,7 +88,7 @@ const HONEYPOT_VALUE = 'https://bot.example/'
 
 // The Tab ring inside the modal card, in DOM order, as the trap's own selector
 // (`input,select,button,textarea,a[href]` filtered by isFocusable) sees it. The honeypot
-// sits between #dm-consent and the submit button in the DOM and is absent here on purpose:
+// sits between #dm-marketing and the submit button in the DOM and is absent here on purpose:
 // every step below asserts focus equals one of these keys, so the ring never containing
 // `[name=website]` IS the proof that focus never lands on the honeypot.
 const TAB_RING = [
@@ -391,16 +391,17 @@ test('landing demo: a complete submission on a closed gate succeeds locally and 
   await dialog.locator('#dm-marketing').check()
   await expect(dialog.locator('#dm-marketing')).toBeChecked()
 
-  const accepted = page.waitForResponse((res) => res.url().split('?')[0] === `${GATEWAY_URL}/contacts/demo-request`)
+  const accepted = page.waitForResponse((res) => res.request().method() === 'POST' && res.url().split('?')[0] === `${GATEWAY_URL}/contacts/demo-request`)
   const startedAt = Date.now()
   await submitButton(dialog).click()
   await expectSuccessPanel(dialog, 'dm')
   const elapsedMs = Date.now() - startedAt
   expect((await accepted).status(), 'the gateway did not accept the demo request').toBe(202)
 
-  expect(sinks.gatewayDemoRequests, 'exactly one request to the gateway').toHaveLength(1)
-  expect(sinks.gatewayDemoRequests[0].method).toBe('POST')
-  expect(JSON.parse(sinks.gatewayDemoRequests[0].body ?? 'null')).toMatchObject({
+  // A CORS preflight (OPTIONS) is not the submission; only POSTs count.
+  const posts = sinks.gatewayDemoRequests.filter((r) => r.method === 'POST')
+  expect(posts, 'exactly one POST to the gateway').toHaveLength(1)
+  expect(JSON.parse(posts[0].body ?? 'null')).toMatchObject({
     email: LEAD.email,
     marketing_consent_text: MARKETING_CONSENT_TEXT,
   })
@@ -412,6 +413,29 @@ test('landing demo: a complete submission on a closed gate succeeds locally and 
     elapsedMs,
     `the closed-gate submit resolved in ${elapsedMs}ms — far below the shared ${STUB_DELAY_FLOOR_MS}ms stub floor`,
   ).toBeGreaterThanOrEqual(STUB_DELAY_FLOOR_MS)
+
+  expectZeroHubSpotRequests(sinks)
+})
+
+// E1b — the other half of "the sentence only when ticked": an unticked box still sends the request, without a sentence.
+test('landing demo: an unticked marketing box sends the request to our own gateway without a consent sentence', async ({ page }) => {
+  const sinks = await openLanding(page)
+  const dialog = await openDemoModal(page)
+
+  await fillRequiredFields(dialog, 'dm')
+  await dialog.locator('#dm-consent').check()
+  await expect(dialog.locator('#dm-marketing')).not.toBeChecked()
+
+  const accepted = page.waitForResponse((res) => res.request().method() === 'POST' && res.url().split('?')[0] === `${GATEWAY_URL}/contacts/demo-request`)
+  await submitButton(dialog).click()
+  await expectSuccessPanel(dialog, 'dm')
+  expect((await accepted).status(), 'the gateway did not accept the demo request').toBe(202)
+
+  const posts = sinks.gatewayDemoRequests.filter((r) => r.method === 'POST')
+  expect(posts, 'exactly one POST to the gateway').toHaveLength(1)
+  const body = JSON.parse(posts[0].body ?? 'null') as Record<string, unknown>
+  expect(body).toMatchObject({ email: LEAD.email })
+  expect(body, 'an unticked box carried a consent sentence').not.toHaveProperty('marketing_consent_text')
 
   expectZeroHubSpotRequests(sinks)
 })

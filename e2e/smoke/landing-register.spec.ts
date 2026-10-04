@@ -174,15 +174,23 @@ test('landing registration window: the marketing row, its box and the notice kee
     await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))))
     const m = await page.evaluate(() => {
       const rect = (r: DOMRect) => ({ x: r.x, y: r.y, width: r.width, height: r.height })
+      const lines = (node: Node) => {
+        const range = document.createRange()
+        range.selectNodeContents(node)
+        return Array.from(range.getClientRects()).filter((r) => r.width > 0)
+      }
       const box = document.querySelector('[role="dialog"] input[type=checkbox]')!
       const row = box.closest('label')!
-      const text = document.createRange()
-      text.selectNodeContents(row)
-      const textRects = Array.from(text.getClientRects()).filter((r) => r.width > 0 && r.left >= box.getBoundingClientRect().right - 0.5)
+      // Only the label's own text nodes: a text run under the box must not be filtered out.
+      const labelText = Array.from(row.childNodes).filter((n) => n.nodeType === Node.TEXT_NODE).flatMap(lines)
+      const noticeLines = lines(Array.from(document.querySelectorAll('[role="dialog"] p')).find((p) => p.textContent?.startsWith('We will email you'))!)
       return {
         box: rect(box.getBoundingClientRect()),
         row: rect(row.getBoundingClientRect()),
-        textLeft: Math.min(...textRects.map((r) => r.left)),
+        labelLines: labelText.length,
+        textLeft: Math.min(...labelText.map((r) => r.left)),
+        noticeLines: noticeLines.length,
+        noticeTextMid: (Math.min(...noticeLines.map((r) => r.left)) + Math.max(...noticeLines.map((r) => r.right))) / 2,
       }
     })
     const [cardBox, emailBox, noticeBox, submitBox] = await Promise.all([card.boundingBox(), email.boundingBox(), notice.boundingBox(), submit.boundingBox()])
@@ -190,10 +198,12 @@ test('landing registration window: the marketing row, its box and the notice kee
       expect(b, `${at}: the ${name} has no box`).not.toBeNull()
     }
     expect(Math.abs(m.row.x - emailBox!.x), `${at}: marketing row left ${m.row.x} vs email input left ${emailBox!.x}`).toBeLessThanOrEqual(0.5)
+    expect(m.labelLines, `${at}: the marketing label has no text to measure`).toBeGreaterThan(0)
+    expect(m.noticeLines, `${at}: the notice has no text to measure`).toBeGreaterThan(0)
     expect(m.textLeft, `${at}: the checkbox overlaps its label text`).toBeGreaterThanOrEqual(m.box.x + m.box.width)
-    const noticeMid = noticeBox!.x + noticeBox!.width / 2
+    // The notice's text, not its box: a full-width <p> is centred on the button whatever its text-align.
     const submitMid = submitBox!.x + submitBox!.width / 2
-    expect(Math.abs(noticeMid - submitMid), `${at}: notice centre ${noticeMid} vs submit centre ${submitMid}`).toBeLessThanOrEqual(1)
+    expect(Math.abs(m.noticeTextMid - submitMid), `${at}: notice text centre ${m.noticeTextMid} vs submit centre ${submitMid}`).toBeLessThanOrEqual(1)
     expect(noticeBox!.y, `${at}: the notice is not below the submit`).toBeGreaterThanOrEqual(submitBox!.y + submitBox!.height - 1)
     for (const [name, b] of [['marketing row', m.row], ['notice', noticeBox!], ['submit', submitBox!]] as const) {
       expect(enclosesRect(cardBox!, b, 1), `${at}: the ${name} is not enclosed by the card`).toBe(true)

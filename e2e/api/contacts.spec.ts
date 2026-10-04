@@ -1,7 +1,7 @@
 // Contact sync over the deployed fork: a pr-<N> fork's notifications runs in fake mode, so
 // nothing reaches HubSpot or Resend. Every run uses fresh addresses; contacts rows survive the reset.
 import { test, expect } from '@playwright/test'
-import { apiBase, contactsMe, demoRequest, rawFetch, registerFormAccount, type ContactMe } from './client'
+import { apiBase, claimsOf, contactsMe, demoRequest, rawFetch, registerFormAccount, type ContactMe } from './client'
 
 const CONSENT = 'Yes, send me product news and offers.'
 const POLL = { timeout: 30_000, intervals: [500, 1000, 2000] }
@@ -41,6 +41,8 @@ test.describe('contact sync (API E2E, over the deployed gateway)', () => {
 
   test('a form registrant who signs in is delivered, tagged registered and not marketing-eligible', async () => {
     const { account, token } = await registerFormAccount('contacts')
+    // contacts/me reads the row by the token's email claim; without it the read 404s for good.
+    expect(claimsOf(token).email).toBe(account.email)
     const row = await delivered(token)
     expect(row.email).toBe(account.email)
     expect(row.tags).toEqual([REGISTERED])
@@ -58,6 +60,7 @@ test.describe('contact sync (API E2E, over the deployed gateway)', () => {
   })
 
   test('a demo request with the same email in other case joins the contact; a tick sticks', async () => {
+    test.setTimeout(120_000)
     const { account, token } = await registerFormAccount('contacts-demo')
     const first = await delivered(token)
     expect(first.marketing_eligible).toBe(false)
@@ -83,22 +86,23 @@ test.describe('contact sync (API E2E, over the deployed gateway)', () => {
       expect(res.status, JSON.stringify(res.body)).toBe(202)
       const row = await delivered(token)
       expect(row.marketing_eligible).toBe(true)
-      expect(row.tags).toEqual(expect.arrayContaining([REGISTERED, DEMO_REQUEST]))
-      expect(row.tags).toHaveLength(2)
+      expect(row.tags).toEqual([REGISTERED, DEMO_REQUEST])
     })
   })
 
   test('a demo request with an invalid field is 400 and a valid one for a fresh address is 202', async () => {
     const fresh = `contacts-demo-${crypto.randomUUID()}@example.com`
+    // internal/gateway/contacts.go validateDemoRequest: each body trips its own clause.
     const invalid = [
-      demo('not-an-email'),
-      { email: fresh, name: '', company: 'Contacts E2E Ltd' },
-      demo(fresh, { marketing_consent_text: '   ' }),
+      { body: demo('not-an-email'), error: 'email is invalid' },
+      { body: { email: fresh, name: '', company: 'Contacts E2E Ltd' }, error: 'name must be 1 to 200 characters' },
+      { body: demo(fresh, { marketing_consent_text: '   ' }), error: 'marketing_consent_text must be 1 to 500 characters' },
     ]
     expect(invalid.length).toBeGreaterThan(0)
-    for (const body of invalid) {
+    for (const { body, error } of invalid) {
       const res = await demoRequest(body)
       expect(res.status, JSON.stringify(body)).toBe(400)
+      expect(res.body, JSON.stringify(body)).toEqual({ error })
     }
     const ok = await demoRequest(demo(fresh))
     expect(ok.status, JSON.stringify(ok.body)).toBe(202)

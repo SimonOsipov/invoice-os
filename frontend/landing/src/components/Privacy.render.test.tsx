@@ -28,6 +28,7 @@ import {
   crmTags,
   deliveryIsQueued,
   demoPostsToOurServerAfterHubSpot,
+  registrantCompanyIsWorkspaceName,
   gatewayStampsRegisterConsentTime,
   hubspotCrmKeys,
   hubspotFormsKeys,
@@ -496,6 +497,13 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
     expect(demo, 'the demo section does not say when it is sent').toMatch(
       /(?:when|as soon as|once|after) you (?:submit|book|send)|on submit|when the form is (?:submitted|sent)/i,
     )
+  })
+
+  it('a registrant\'s company is the workspace name they typed, and the page says so', () => {
+    expect(registrantCompanyIsWorkspaceName(), 'control: store.go no longer maps the workspace name to company').toBe(true)
+    const registrant = blocks(html).filter((b) => /hubspot/i.test(b) && /after you verify/i.test(b))
+    expect(registrant.length, 'control: the registrant HubSpot paragraph exists').toBe(1)
+    expect(registrant[0], 'the page calls the workspace name "your company"').toMatch(/workspace name/i)
   })
 
   it('the registrant statements sit in an account section', () => {

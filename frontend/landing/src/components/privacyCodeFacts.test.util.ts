@@ -87,3 +87,8 @@ export function demoPostsToOurServerAfterHubSpot(): boolean {
 export function deliveryIsQueued(): boolean {
   return /river\.InsertTx\(/.test(readSource('internal/notifications/store.go'))
 }
+
+// A registrant's HubSpot company is the workspace name, not a company field (store.go Registrant).
+export function registrantCompanyIsWorkspaceName(): boolean {
+  return /company:\s*strings\.TrimSpace\(in\.WorkspaceName\)/.test(readSource('internal/notifications/store.go'))
+}

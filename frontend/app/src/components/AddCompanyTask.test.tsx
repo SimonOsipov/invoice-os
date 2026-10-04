@@ -237,6 +237,22 @@ describe('AddCompanyTask Overview look (D-28, D-37)', () => {
     expect(message.style.margin).toBe('0px 0px 20px')
   })
 
+  it('QA: both modes draw one dense card at width 460, the Add button its last child, also with no gateway', () => {
+    for (const [mode, gateway] of [['inhouse', 'https://gateway.test'], ['firm', 'https://gateway.test'], ['firm', '']] as const) {
+      vi.stubEnv('VITE_GATEWAY_URL', gateway)
+      const { unmount } = render(<AddCompanyTask ctx={mkCtx({ mode }).ctx} />)
+      const task = screen.getByTestId('add-company-task')
+      expect(task.children, `${mode}/${gateway}: one card`).toHaveLength(1)
+      const card = task.firstElementChild as HTMLElement
+      const button = within(card).getByRole('button')
+      expect(card.lastElementChild, `${mode}/${gateway}: the button is the card's last child`).toBe(button)
+      expect(card.style.padding).toBe('48px')
+      expect(within(card).getByText(ADD_COMPANY_COPY[mode].emptyMessage).style.maxWidth).toBe('460px')
+      expect((button as HTMLButtonElement).disabled, `${mode}/${gateway}: disabled only without a gateway`).toBe(gateway === '')
+      unmount()
+    }
+  })
+
   it('loading renders inside the same padded wrapper as the task', () => {
     for (const opts of [{ entitiesState: 'loading' }, { mode: 'firm', entitiesState: 'ready', entities: [ENTITY], clientsCount: 0 }] as CtxOpts[]) {
       const { container, unmount } = render(<AddCompanyTask ctx={mkCtx(opts).ctx} />)

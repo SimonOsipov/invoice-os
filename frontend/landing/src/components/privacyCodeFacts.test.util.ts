@@ -60,3 +60,30 @@ export function marketingColumns(): string[] {
   const cols = found(/INSERT INTO contacts \(([^)]*)\)/.exec(readSource('internal/notifications/store.go'))?.[1], 'the contacts INSERT column list')
   return cols.split(',').map((c) => c.trim()).filter((c) => c.startsWith('marketing_'))
 }
+
+// GoTrue sends the verification email through this SMTP host (sidecar/auth/Dockerfile).
+export function authSmtpHost(): string {
+  return found(/GOTRUE_SMTP_HOST=(\S+)/.exec(readFileSync(join(REPO, 'sidecar/auth/Dockerfile'), 'utf8'))?.[1], 'GOTRUE_SMTP_HOST')
+}
+
+// True when a landing client sends a consent time of its own; the page may say "ticked" only then.
+export function clientsSendConsentTime(): boolean {
+  return ['frontend/landing/src/register.ts', 'frontend/landing/src/demoRequest.ts'].some((f) =>
+    /marketing_consent_(?!text)\w+|consent(?:ed)?_at|ticked_at/.test(readSource(f)),
+  )
+}
+
+// The gateway stamps the registration consent time itself, at the register request.
+export function gatewayStampsRegisterConsentTime(): boolean {
+  return /"at":\s*time\.Now\(\)/.test(readSource('internal/gateway/register.go'))
+}
+
+// The demo form awaits the HubSpot Forms post, then the gateway post: the server send follows the browser's.
+export function demoPostsToOurServerAfterHubSpot(): boolean {
+  return /await trackedHubSpotSubmit[\s\S]*?await sendDemoRequest/.test(readSource('frontend/landing/src/components/DemoLeadForm.tsx'))
+}
+
+// notifications queues each delivery as a River job in the intake transaction, so it can be late and is retried.
+export function deliveryIsQueued(): boolean {
+  return /river\.InsertTx\(/.test(readSource('internal/notifications/store.go'))
+}

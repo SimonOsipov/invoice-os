@@ -23,7 +23,12 @@ import { PRODUCTION_HOSTNAMES, submissionUrl } from '../hubspot'
 import { CONSENT_DEFAULT_ANALYTICS } from '../consent'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import {
+  authSmtpHost,
+  clientsSendConsentTime,
   crmTags,
+  deliveryIsQueued,
+  demoPostsToOurServerAfterHubSpot,
+  gatewayStampsRegisterConsentTime,
   hubspotCrmKeys,
   hubspotFormsKeys,
   resendContactKeys,
@@ -501,7 +506,7 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
   it('the page says every verified registrant is a Resend contact and only a tick makes marketing', () => {
     const resend = blocks(html).filter((b) => b.includes('Resend'))
     expect(resend.length, 'the page does not name Resend').toBeGreaterThan(0)
-    const para = resend.find((b) => /(?:every|each|all)\b[^.]*\b(?:verified|registrant|register)/i.test(b))
+    const para = resend.find((b) => /\b(?:every|each)\b[^.]*\b(?:verified|registrant)/i.test(b))
     expect(para, 'no Resend paragraph says every verified registrant is a contact').toBeDefined()
     expect(para).toMatch(/product|service/i)
     expect(para, 'no statement that only a tick makes marketing').toMatch(
@@ -552,5 +557,50 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
     const quoted = blocks(html).filter((b) => b.includes(MARKETING_CONSENT_TEXT))
     expect(quoted.length, 'the page does not quote the marketing sentence').toBeGreaterThan(0)
     expect(quoted.some((b) => /stored|record/i.test(b) && /\btime\b|\bwhen you\b/i.test(b))).toBe(true)
+  })
+
+  it('Resend already has a registrant\'s address at sign-up, so the page does not say nothing reaches Resend before verification', () => {
+    expect(authSmtpHost(), 'control: the verification email no longer goes through Resend').toMatch(/resend\.com$/)
+    const account = sentences(plain(section(/account|regist/i)))
+    expect(account.length, 'control: the account section is empty').toBeGreaterThan(0)
+    expect(
+      account.filter((s) => /\b(?:nothing|no)\b[^.]*\bResend\b[^.]*\b(?:until|before)\b/i.test(s) && !/\b(?:else|other|more|apart|except|besides)\b/i.test(s)),
+      'the page says nothing reaches Resend before verification; GoTrue mails the address through Resend at sign-up',
+    ).toEqual([])
+    expect(
+      account.some((s) => /Resend/.test(s) && /verification|confirmation/i.test(s)),
+      'no sentence says Resend delivers the verification email',
+    ).toBe(true)
+  })
+
+  it('the server send to HubSpot follows the form and is queued, so the page does not say it happens at the same moment', () => {
+    expect(demoPostsToOurServerAfterHubSpot(), 'control: DemoLeadForm no longer posts to HubSpot first').toBe(true)
+    expect(deliveryIsQueued(), 'control: the delivery is no longer queued').toBe(true)
+    const server = sentences(plain(section(/book a demo/i))).filter((s) => /our own server\b[^.]*\bHubSpot/i.test(s))
+    expect(server.length, 'the demo section does not say what our server passes to HubSpot').toBeGreaterThan(0)
+    expect(
+      server.filter((s) => /same (?:moment|time)|at once|immediately|instantly|simultaneous/i.test(s)),
+      'the page says the server send happens at the same moment',
+    ).toEqual([])
+  })
+
+  it('no sentence says the marketing box is stored with the time you ticked it; the server stamps the submission', () => {
+    expect(clientsSendConsentTime(), 'control: a client now sends its own consent time').toBe(false)
+    expect(gatewayStampsRegisterConsentTime(), 'control: the gateway no longer stamps the consent time').toBe(true)
+    const stored = blocks(html).filter((b) => b.includes(MARKETING_CONSENT_TEXT))
+    expect(stored.length, 'control: the page quotes the marketing sentence').toBeGreaterThan(0)
+    expect(stored.filter((b) => /time you ticked/i.test(b)), 'the page claims the time you ticked it').toEqual([])
+    expect(stored.every((b) => /time you (?:submitted|sent|registered|signed up|booked)|when you (?:submitted|sent|registered|signed up|booked)/i.test(b))).toBe(true)
+  })
+
+  it('"HubSpot holds all of this" does not follow a paragraph about what Resend or our own server holds', () => {
+    const paras = blocks(section(/book a demo/i))
+    const at = paras.findIndex((b) => /EU servers/.test(b))
+    expect(at, 'the EU-servers paragraph is gone').toBeGreaterThan(-1)
+    expect(paras[at], 'the EU paragraph names HubSpot').toMatch(/HubSpot/)
+    const before = paras.slice(0, at)
+    expect(before.some((b) => b.includes('Resend')), 'control: a Resend paragraph precedes the EU paragraph').toBe(true)
+    expect(before.some((b) => /our own server/.test(b)), 'control: an own-server paragraph precedes the EU paragraph').toBe(true)
+    expect(paras[at], '"all of this" reaches the Resend and own-server paragraphs above it').not.toMatch(/\b(?:all of )?this\b/i)
   })
 })

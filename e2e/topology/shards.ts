@@ -24,6 +24,7 @@ export const UNITS: Unit[] = [
       'isolation.spec.ts',
       'persona-surfaces.spec.ts',
       'portfolio.spec.ts',
+      'portfolio-workflow-surfaces.spec.ts',
       'roles.spec.ts',
       'workflows.spec.ts',
     ],
@@ -46,6 +47,8 @@ export const UNITS: Unit[] = [
         "Builds the in-house approval queue and badge on the active policy `internal/demopolicy` seeds only on 1111 / 2222. Needs 2222's seeded `Honeywell Group` entity as its first client (the subtitle assertion).",
       'portfolio.spec.ts':
         'Cost, not shared state ([fork-lane-by-cost]): creates its own entities and scopes each assertion to their rows. A shard costs ~1 min of runner setup for ~37 s of tests.',
+      'portfolio-workflow-surfaces.spec.ts':
+        'Reads the `Standard approval policy` that `internal/demopolicy` seeds only on 1111 / 2222 (`planFor`), without saving it; creates its own entity and invoice in 1111.',
       'roles.spec.ts':
         'Asserts the exact seeded roles, staffing and rosters of both tenants, derived by hand from `db/seed.dev.sql`, and the demopolicy-sealed policies.',
       'workflows.spec.ts':

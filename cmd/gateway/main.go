@@ -157,14 +157,14 @@ func main() {
 
 	// Public registration, outside /api/ and the verifier, in every build. Register is
 	// CORS-wrapped for the landing page; the OPTIONS route stops the POST route 405ing the preflight.
-	reg := registrationHandlers(probed["auth"], siteURL, registerMinResponse, app.Logger)
+	reg := registrationHandlers(probed["auth"], siteURL, registerMinResponse, app.Logger, nil)
 	app.Mux.Handle("POST /auth/register", withCORS(reg.Register))
 	app.Mux.Handle("OPTIONS /auth/register", withCORS(reg.Register))
 	app.Mux.Handle("GET /auth/verify", reg.Verify)
 
 	// Public sign-in hand-off, session renewal and sign-out, outside the verifier, in every build.
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.
-	h := handoffHandlers(probed["auth"], sessions, app.Logger)
+	h := handoffHandlers(probed["auth"], sessions, app.Logger, nil)
 	app.Mux.Handle("POST /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("OPTIONS /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("POST /auth/exchange", withCORS(h.Exchange))
@@ -256,7 +256,7 @@ func newJWKSClient() *http.Client {
 
 // registrationHandlers builds the registration handlers against GoTrue at authURL.
 // A nil siteURL means AUTH_SITE_URL is unset: both routes answer 503.
-func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, log *slog.Logger) registration {
+func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, log *slog.Logger, sink gateway.ContactSink) registration {
 	if authURL == nil || siteURL == nil {
 		nc := gateway.RegistrationNotConfigured()
 		return registration{Register: nc, Verify: nc}
@@ -267,7 +267,7 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 	}
 	return registration{
 		Register: gateway.RegisterHandler(authURL, client, minResponse, log),
-		Verify:   gateway.VerifyHandler(authURL, siteURL, client, log),
+		Verify:   gateway.VerifyHandler(authURL, siteURL, client, log, sink),
 	}
 }
 
@@ -279,7 +279,7 @@ type handoff struct {
 // handoffHandlers builds the sign-in, exchange, refresh and sign-out handlers against GoTrue at authURL.
 // Sign-out evicts from sessions, the API's own checker.
 // Sign-in and exchange share one code store: a code minted by sign-in is redeemable only through exchange.
-func handoffHandlers(authURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger) handoff {
+func handoffHandlers(authURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger, sink gateway.ContactSink) handoff {
 	store := gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
 	throttle := gateway.NewSignInThrottle(gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
 	// Same settings as registrationHandlers; TestRegistrationClientTimeoutAndNoFollow pins that literal in place.
@@ -288,7 +288,7 @@ func handoffHandlers(authURL *url.URL, sessions *gateway.SessionChecker, log *sl
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	return handoff{
-		SignIn:   gateway.SignInHandler(authURL, client, store, throttle, log),
+		SignIn:   gateway.SignInHandler(authURL, client, store, throttle, log, sink),
 		Exchange: gateway.ExchangeHandler(store),
 		Refresh:  gateway.RefreshHandler(authURL, client, log),
 		SignOut:  gateway.SignOutHandler(authURL, client, sessions, log),

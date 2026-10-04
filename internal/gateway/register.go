@@ -168,7 +168,7 @@ func holdMinimum(ctx context.Context, log *slog.Logger, start time.Time, upstrea
 }
 
 // VerifyHandler answers the emailed link by calling GoTrue's /verify, then redirects to siteURL.
-func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Logger) http.Handler {
+func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Logger, sink ContactSink) http.Handler {
 	if siteURL == nil {
 		return RegistrationNotConfigured()
 	}

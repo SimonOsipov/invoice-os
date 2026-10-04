@@ -19,7 +19,7 @@ const (
 var stateShape = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 
 // SignInHandler answers POST /auth/sign-in with a single-use exchange code.
-func SignInHandler(authURL *url.URL, client *http.Client, store *HandoffStore, throttle *SignInThrottle, log *slog.Logger) http.Handler {
+func SignInHandler(authURL *url.URL, client *http.Client, store *HandoffStore, throttle *SignInThrottle, log *slog.Logger, sink ContactSink) http.Handler {
 	tokenURL := authURL.JoinPath("token")
 	tokenURL.RawQuery = "grant_type=password"
 	token := tokenURL.String()

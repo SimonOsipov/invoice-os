@@ -207,7 +207,7 @@ func registerMux(t *testing.T) (*http.ServeMux, func() []string) {
 	t.Helper()
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler))
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
 	withCORS := gateway.CORS([]string{registerAllowedOrigin})
 	mux := http.NewServeMux()
 	mux.Handle("POST /auth/register", withCORS(reg.Register))

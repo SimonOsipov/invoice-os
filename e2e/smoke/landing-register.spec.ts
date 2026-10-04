@@ -137,6 +137,29 @@ test('landing registration window: a long name and a long email stay inside the 
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
+test('landing registration window: the marketing box is unticked, named by its sentence and reached and toggled from the keyboard', async ({ page }) => {
+  const { errors, dialog } = await openRegister(page)
+  const box = dialog.getByRole('checkbox')
+  await expect(box, 'the marketing box is the only checkbox').toHaveCount(1)
+  await expect(box).not.toBeChecked()
+  await expect(box, 'its name is its sentence alone').toHaveAccessibleName(/^Allow marketing communications: .+ unsubscribe at any time\.$/)
+  await expect(dialog.getByText('We will email you about your account and the service.'), 'the notice is plain text').toBeVisible()
+  await expect(dialog.getByText('We will email you about your account and the service.').locator('xpath=ancestor-or-self::*[self::label or self::button or self::a]')).toHaveCount(0)
+
+  await dialog.getByLabel('Workspace name').focus()
+  await page.keyboard.press('Tab')
+  await expect(dialog.getByRole('radio').first(), 'Tab from the last field reaches the kind radios').toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(box, 'the next stop after the radios is the marketing box').toBeFocused()
+  await page.keyboard.press('Space')
+  await expect(box).toBeChecked()
+  await page.keyboard.press('Space')
+  await expect(box).not.toBeChecked()
+  await page.keyboard.press('Tab')
+  await expect(dialog.getByRole('button', { name: 'Create account →' }), 'the stop after the box is the submit').toBeFocused()
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
 // The route for the 1121-1219px band, where the header entry is hidden.
 test('landing sign-in window: its Create an account link opens the registration window at 1121', async ({ page }) => {
   await page.setViewportSize({ width: 1121, height: 900 })

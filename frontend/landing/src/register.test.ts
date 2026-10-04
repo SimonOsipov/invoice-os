@@ -153,12 +153,8 @@ describe('registerAccount', () => {
 const STORY_MARKETING_TEXT = 'Allow marketing communications: ASComply Africa may email me product news and offers. I can unsubscribe at any time.'
 
 describe('the marketing consent sentence', () => {
-  it('MARKETING_CONSENT_TEXT is the story sentence and passes the gateway rule', () => {
+  it('MARKETING_CONSENT_TEXT is the story sentence', () => {
     expect(MARKETING_CONSENT_TEXT).toBe(STORY_MARKETING_TEXT)
-    // internal/gateway/register.go: trimmed non-empty, at most 500 runes, no NUL.
-    expect(MARKETING_CONSENT_TEXT.trim(), 'not blank').not.toBe('')
-    expect([...MARKETING_CONSENT_TEXT].length).toBeLessThanOrEqual(500)
-    expect(MARKETING_CONSENT_TEXT).not.toContain('\u0000')
   })
 })
 
@@ -183,6 +179,16 @@ describe('registerAccount marketing consent', () => {
       display_name: VALID.displayName,
       workspace_name: VALID.workspaceName,
       kind: 'firm',
+      marketing_consent_text: MARKETING_CONSENT_TEXT,
+    })
+
+    const padded = await post({ email: ' d@corp.example ', password: 'pw', displayName: ' D ', workspaceName: ' W ', kind: 'in_house', marketing: true })
+    expect(padded, 'a ticked body still trims every other field').toStrictEqual({
+      email: 'd@corp.example',
+      password: 'pw',
+      display_name: 'D',
+      workspace_name: 'W',
+      kind: 'in_house',
       marketing_consent_text: MARKETING_CONSENT_TEXT,
     })
 

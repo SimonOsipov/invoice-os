@@ -622,6 +622,11 @@ describe('the product-email notice and the marketing box', () => {
     expect(fieldset.contains(box), 'the box is not inside the kind fieldset').toBe(false)
     expect(box.compareDocumentPosition(submitBtn) & Node.DOCUMENT_POSITION_FOLLOWING, 'the box precedes the submit button').toBeTruthy()
     expect(submitBtn.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING, 'the notice sits under the submit button').toBeTruthy()
+
+    const tabbable = Array.from(d.querySelectorAll<HTMLElement>('input, button, select, textarea, a[href]')).filter((el) => el.tabIndex >= 0 && !(el as HTMLInputElement).disabled)
+    const order = tabbable.map((el) => (el === box ? 'marketing' : el === submitBtn ? 'submit' : (el as HTMLInputElement).type === 'radio' ? 'radio' : 'other'))
+    expect(order.slice(-4), 'tab order ends: both kind radios, the marketing box, submit').toEqual(['radio', 'radio', 'marketing', 'submit'])
+    expect(order.filter((o) => o === 'marketing').length).toBe(1)
   })
 
   it('the notice follows the form error', async () => {
@@ -651,6 +656,10 @@ describe('the product-email notice and the marketing box', () => {
     expect(box.hasAttribute('aria-required'), 'no aria-required').toBe(false)
     expect(box.disabled).toBe(false)
     expect(box.tabIndex, 'in the tab order').toBeGreaterThanOrEqual(0)
+    for (const attr of ['aria-label', 'aria-labelledby', 'aria-describedby']) {
+      expect(box.hasAttribute(attr), `${attr} would replace or extend the visible sentence`).toBe(false)
+    }
+    expect(label.querySelectorAll('input').length, 'the label wraps this one control').toBe(1)
 
     await act(async () => {
       label.click()
@@ -686,6 +695,12 @@ describe('the product-email notice and the marketing box', () => {
     expect(box.getAttribute('style'), 'marketing input').toBe(wantInput)
     expect(demoLabel.getAttribute('style'), 'demo label').toBe(wantLabel)
     expect(demoBox!.getAttribute('style'), 'demo input').toBe(wantInput)
+    expect(demoLabel.getAttribute('style'), 'the lift left the demo label values as shipped').toBe(
+      'display: flex; align-items: flex-start; gap: 12px; font-size: 13px; line-height: 1.55; color: var(--foreground); cursor: pointer;',
+    )
+    expect(demoBox!.getAttribute('style'), 'the lift left the demo input values as shipped').toBe(
+      'flex: 0 0 auto; width: 18px; height: 18px; margin-top: 2px; accent-color: var(--primary); cursor: pointer;',
+    )
 
     act(() => demoRoot.unmount())
     demoHost.remove()
@@ -771,6 +786,69 @@ describe('the product-email notice and the marketing box', () => {
     await submit(d)
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(sentBody(fetchMock, 1).marketing_consent_text).toBe(MARKETING_CONSENT_TEXT)
+  })
+
+  it('a form that fails validation keeps the tick and sends nothing', async () => {
+    const fetchMock = stubFetch(ok)
+    await mountApp()
+    const d = await openRegistration()
+    await fillForm(d, { email: '' })
+    await tick(d)
+    await submit(d)
+
+    expect(alerts(d), 'control: validation refused').toEqual(['Enter your work email.'])
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(marketingBox(d).checked, 'the tick survives a validation refusal').toBe(true)
+    expect(marketingBox(d).disabled).toBe(false)
+  })
+
+  it('a field refusal from the gateway keeps the tick', async () => {
+    stubFetch(() => json(400, { error: FREE_MAIL_REFUSED }))
+    await mountApp()
+    const d = await openRegistration()
+    await fillForm(d, { email: 'ada@gmail.com' })
+    await tick(d)
+    await submit(d)
+
+    expect(alerts(d), 'control: the free-mail refusal shows').toEqual([FREE_MAIL_REFUSED])
+    expect(marketingBox(d).checked).toBe(true)
+  })
+
+  it('a second submit while creating sends no second request', async () => {
+    const fetchMock = vi.fn().mockReturnValue(new Promise(() => undefined))
+    vi.stubGlobal('fetch', fetchMock)
+    await mountApp()
+    const d = await openRegistration()
+    await fillForm(d)
+    await tick(d)
+    await submit(d)
+    expect(marketingBox(d).disabled, 'control: creating').toBe(true)
+
+    const form = d.querySelector('form')!
+    await act(async () => {
+      form.requestSubmit()
+    })
+    await act(async () => {
+      form.requestSubmit()
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('a disabled marketing box cannot be toggled while creating', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockReturnValue(new Promise(() => undefined)))
+    await mountApp()
+    const d = await openRegistration()
+    await fillForm(d)
+    await submit(d)
+    expect(marketingBox(d).disabled, 'control: creating').toBe(true)
+
+    await tick(d)
+    await act(async () => {
+      marketingBox(d).labels![0].click()
+    })
+
+    expect(marketingBox(d).checked, 'neither a click nor its label ticks it').toBe(false)
   })
 })
 
@@ -862,6 +940,7 @@ describe('adversarial: validation through the window', () => {
     const form = d.querySelector('form')!
     const inputs = Array.from(d.querySelectorAll('input'))
     expect(inputs.length, 'four text fields, two radios and the marketing checkbox').toBe(7)
+    expect(d.querySelectorAll('input:not([type=radio]):not([type=checkbox])').length, 'the smoke spec locator selects the four text fields').toBe(4)
     expect(inputs.every((i) => i.form === form), 'every field sits in the one form, so Enter in any of them submits it').toBe(true)
     expect(form.querySelectorAll('button[type="submit"]').length).toBe(1)
 

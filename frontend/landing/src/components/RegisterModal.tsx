@@ -1,4 +1,4 @@
-// Landing registration window: the sign-in window's chrome around a five-field form that posts to the gateway.
+// Landing registration window: the sign-in window's chrome around a form that posts to the gateway.
 
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'

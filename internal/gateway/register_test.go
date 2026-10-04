@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -786,6 +788,33 @@ func TestRegister_MarketingConsentStoredInMetadata(t *testing.T) {
 	}
 	if at.Before(before.Truncate(time.Second)) || at.After(after) {
 		t.Errorf("marketing_consent.at = %v, want the server's time between %v and %v", at, before, after)
+	}
+}
+
+// The landing's shown sentence is read from its source: a change on either side that the handler would refuse fails here.
+func TestRegister_AcceptsTheLandingMarketingSentence(t *testing.T) {
+	src, err := os.ReadFile("../../frontend/landing/src/components/MarketingConsent.tsx")
+	if err != nil {
+		t.Fatalf("read the landing component: %v", err)
+	}
+	m := regexp.MustCompile(`(?m)^export const MARKETING_CONSENT_TEXT = '([^'\\\n]+)'`).FindSubmatch(src)
+	if m == nil {
+		t.Fatal("MarketingConsent.tsx: no exported MARKETING_CONSENT_TEXT single-quoted literal without escapes")
+	}
+	sentence := string(m[1])
+	if len(sentence) < 40 {
+		t.Fatalf("sentence %q is too short to be the real copy", sentence)
+	}
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+
+	sent := doRegisterWithSignupBody(t, fake, map[string]any{
+		"workspace_name": "Acme Ltd", "display_name": "Ada", "kind": "firm", "marketing_consent_text": sentence,
+	})
+
+	data, _ := sent["data"].(map[string]any)
+	consent, _ := data["marketing_consent"].(map[string]any)
+	if consent["text"] != sentence {
+		t.Errorf("marketing_consent.text = %v, want the landing sentence %q", consent["text"], sentence)
 	}
 }
 

@@ -358,7 +358,7 @@ describe('APPR-09-04 QA: exactly one surface, over every status the fetch can re
   it('the empty card reads its title as the heading and its message as the body, not the reverse', () => {
     render(<WorkflowsView ctx={listCtx([], { policiesState: 'empty' })} />)
 
-    // `EmptyState` renders the title in a <div> and the message in a <p> (EmptyState.tsx:41-42).
+    // `EmptyState` renders the title in a <div> and the message in a <p>.
     // Both strings being present is not enough — swapping the two props keeps both on screen.
     expect(screen.getByText(EMPTY_TITLE).tagName, 'the title is rendered as the body copy').toBe('DIV')
     expect(screen.getByText(EMPTY_MESSAGE).tagName, 'the message is rendered as the heading').toBe('P')

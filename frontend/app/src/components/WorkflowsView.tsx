@@ -20,7 +20,7 @@ import type { PlatformCtx } from '../types'
 const INTRO =
   'Each policy decides who signs off before an invoice is stamped and transmitted. Steps run top to bottom; conditions split the flow. Publishing a policy opens an approval on every matching invoice.'
 
-// Two nodes, not one: the shipped sentence splits at its em dash. Module scope, the RolesView.tsx:34-37 shape.
+// Two nodes, not one: the shipped sentence splits at its em dash.
 const EMPTY_TITLE = 'No approval policies yet'
 const EMPTY_MESSAGE = 'Every invoice transmits as soon as it validates. Create one to require sign-off first.'
 

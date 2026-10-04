@@ -61,6 +61,9 @@ var DemoPurge string
 // 404 on the mint routes cannot tell an untagged build from a gated-off one.
 var MockIssuer string
 
+// Contacts is "real", "fake" or "off" on notifications and empty elsewhere.
+var Contacts string
+
 // AuthIssuers is the gateway's trusted-issuer count; empty elsewhere.
 var AuthIssuers string
 

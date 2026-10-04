@@ -5,10 +5,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
 
+	"github.com/SimonOsipov/invoice-os/internal/notifications"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 )
 
@@ -40,4 +42,9 @@ func mustEnv(key string) string {
 		platform.Fatal(slog.Default(), "notifications: %s is required", key)
 	}
 	return v
+}
+
+// deliveryClients is a compile-only stub (AUTH-17-04 red phase).
+func deliveryClients(func(string) string, string, http.RoundTripper) (notifications.Mode, notifications.HubSpotClient, notifications.ResendClient, error) {
+	return "", nil, nil, errors.New("notifications: deliveryClients not implemented")
 }

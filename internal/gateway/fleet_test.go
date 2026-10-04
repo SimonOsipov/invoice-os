@@ -556,3 +556,33 @@ func TestFleetRollupCarriesEachServicesSentryState(t *testing.T) {
 		}
 	})
 }
+
+// notifications reports its delivery mode on /healthz; the roll-up copies it per entry so the
+// dev-env health-gate can read it. A body without the key yields no key.
+func TestFleetReportsEachServiceContacts(t *testing.T) {
+	rec, _ := doFleet(t, map[string]*url.URL{
+		"notifications": buildUpstream(t, "", `{"status":"ok","build":"abc1234","sentry":"off","contacts":"fake"}`),
+		"invoice":       buildUpstream(t, "abc1234", ""),
+	})
+	entries := rawFleetEntries(t, rec)
+
+	n, ok := entries["notifications"]
+	if !ok {
+		t.Fatalf("roll-up omits notifications: %s", rec.Body.String())
+	}
+	if n["contacts"] != "fake" {
+		t.Errorf("notifications contacts = %v, want %q (entry %v)", n["contacts"], "fake", n)
+	}
+	if n["build"] != "abc1234" || n["status"] != statusUp {
+		t.Errorf("notifications = %v, want up with build abc1234: contacts costs nothing else", n)
+	}
+	for _, name := range []string{"invoice", "gateway"} {
+		e, ok := entries[name]
+		if !ok {
+			t.Fatalf("roll-up omits %s: %s", name, rec.Body.String())
+		}
+		if v, has := e["contacts"]; has {
+			t.Errorf("%s contacts = %v, want no key: its body carries none", name, v)
+		}
+	}
+}

@@ -480,6 +480,7 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
     const registrant = blocks(html).filter((b) => /hubspot/i.test(b) && /after you verify/i.test(b))
     expect(registrant.length, 'expected one HubSpot paragraph saying "after you verify"').toBe(1)
     for (const key of hubspotCrmKeys()) {
+      expect(HUBSPOT_WORDS[key], `no page word for ${key}`).toBeDefined()
       expect(registrant[0], `the registrant paragraph does not name ${key}`).toMatch(HUBSPOT_WORDS[key])
     }
     expect(registrant[0], 'the registrant paragraph does not name the tag').toContain(`“${crmTags()[0]}”`)
@@ -516,6 +517,7 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
     ).toBe(true)
     expect(para).toMatch(/marketing/i)
     for (const key of resendContactKeys()) {
+      expect(RESEND_WORDS[key], `no page word for ${key}`).toBeDefined()
       expect(para, `the Resend paragraph does not name ${key}`).toMatch(RESEND_WORDS[key])
     }
     for (const [key, word] of Object.entries(FORMS_ONLY_WORDS)) {
@@ -563,7 +565,7 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
     expect(quoted.length, 'the page does not quote the marketing sentence').toBeGreaterThan(0)
     expect(quoted.length, 'the page quotes the marketing sentence for demo bookers and for registrants').toBeGreaterThanOrEqual(2)
     for (const b of quoted) expect(b, 'a quoted marketing sentence is not said to be stored with its time').toMatch(/stored|record/i)
-    for (const b of quoted) expect(b).toMatch(/\btime\b|\bwhen you\b/i)
+    for (const b of quoted) expect(b.replace(MARKETING_CONSENT_TEXT, ''), 'a quoted marketing sentence is not said to be stored with its time').toMatch(/\btime\b|\bwhen you\b/i)
   })
 
   it('Resend already has a registrant\'s address at sign-up, so the page does not say nothing reaches Resend before verification', () => {

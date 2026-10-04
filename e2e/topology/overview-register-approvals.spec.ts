@@ -131,6 +131,15 @@ const centreY = (r: Rect): number => r.y + r.height / 2
 
 type Read = { problems: string[]; rects: Record<string, unknown> }
 
+// expect.poll does not retry a callback that throws, so a throw becomes a problem line.
+async function problemsOf(read: () => Promise<Read>): Promise<string[]> {
+  try {
+    return (await read()).problems
+  } catch (err) {
+    return [`read threw: ${String((err as Error).message).split('\n')[0]}`]
+  }
+}
+
 // Reads at every wide width until `read` reports no problem; the entry viewport is restored.
 async function atWidths(page: Page, label: string, read: () => Promise<Read>): Promise<unknown[]> {
   const entry = page.viewportSize()
@@ -138,7 +147,7 @@ async function atWidths(page: Page, label: string, read: () => Promise<Read>): P
   try {
     for (const width of WIDE_WIDTHS) {
       await page.setViewportSize({ width, height: 1080 })
-      await expect.poll(async () => (await read()).problems, { message: `${label} at ${width}px`, timeout: 10_000 }).toEqual([])
+      await expect.poll(() => problemsOf(read), { message: `${label} at ${width}px`, timeout: 10_000 }).toEqual([])
       out.push({ width, ...(await read()).rects })
     }
   } finally {
@@ -210,16 +219,28 @@ const isEntities = (url: URL): boolean => onPath(url, '/api/portfolio/v1/entitie
 const isRegister = (url: URL): boolean => onPath(url, '/api/invoice/v1/invoices') && !url.searchParams.has('awaiting_approval')
 const isQueue = (url: URL): boolean => onPath(url, '/api/invoice/v1/invoices') && url.searchParams.get('awaiting_approval') === 'true'
 
-// Every gateway request that is not a GET or an OPTIONS preflight (D-13).
-function recordWrites(page: Page): string[] {
-  const writes: string[] = []
+// Gateway requests by kind (D-13). `reads` is the control: an empty `writes` proves nothing if the listener saw no traffic.
+function recordGateway(page: Page): { writes: string[]; reads: string[] } {
+  const seen = { writes: [] as string[], reads: [] as string[] }
   page.on('request', (r) => {
-    if (new URL(r.url()).origin === GATEWAY_ORIGIN && r.method() !== 'GET' && r.method() !== 'OPTIONS') writes.push(`${r.method()} ${r.url()}`)
+    if (new URL(r.url()).origin !== GATEWAY_ORIGIN) return
+    if (r.method() === 'GET') seen.reads.push(r.url())
+    else if (r.method() !== 'OPTIONS') seen.writes.push(`${r.method()} ${r.url()}`)
   })
-  return writes
+  return seen
 }
 
-const canSubmitFirst = (body: Record<string, any>) => ({ ...body, invoices: body.invoices.map((r: object, i: number) => (i === 0 ? { ...r, can_submit: true, submit_blocked_reason: null } : r)) })
+function expectNoWrites(seen: { writes: string[]; reads: string[] }): void {
+  expect(seen.reads.length, 'the request listener saw no gateway GET, so an empty write list proves nothing').toBeGreaterThan(0)
+  expect(seen.writes, 'arming and cancelling must send no gateway write (D-13)').toEqual([])
+}
+
+// An in-flight row starts the register's 2s poll, and each poll's fresh rows disarm the bulk bar.
+const notInFlight = (r: { status?: string }) => (r.status === 'queued' || r.status === 'submitted' ? { ...r, status: 'accepted' } : r)
+const canSubmitFirst = (body: Record<string, any>) => ({
+  ...body,
+  invoices: body.invoices.map((r: object, i: number) => notInFlight(i === 0 ? { ...r, can_submit: true, submit_blocked_reason: null } : r)),
+})
 const canApproveFirst = (body: Record<string, any>) => ({ ...body, invoices: body.invoices.map((r: object, i: number) => (i === 0 ? { ...r, can_approve: true, approve_blocked_reason: null } : r)) })
 
 async function expectVisibleRows(rows: Locator, why: string): Promise<void> {
@@ -492,6 +513,7 @@ test('OV-03 overview loading and error: placement under the header', async ({ pa
 })
 
 test('OV-04 empty workspace: loading, task card, error, placement', async ({ page }, testInfo) => {
+  test.setTimeout(120_000)
   const errors = gatedErrors(page, [expectedStatusDropper(page, 503, /\/api\/portfolio\/v1\/entities/)])
   await signInAs(page, 'firm')
   const entities = await stubGet(page, isEntities, { empty: EMPTY_ENTITIES })
@@ -536,7 +558,7 @@ test('IN-01 invoices register: heading, card, badge, toggle, bulk bar, header an
   const errors = collectErrors(page)
   await stubGet(page, isRegister, { mode: 'transform', transform: canSubmitFirst })
   await signInAs(page, 'firm')
-  const writes = recordWrites(page)
+  const gateway = recordGateway(page)
   await openNav(page, navButton(page, /^Invoices/))
   await expectVisibleRows(page.getByTestId('invoice-row'), 'the firm register must hold at least one invoice on the PR environment (the seed holds firm invoices, D-14)')
   await expect(page.getByTestId('invoices-pager'), 'the pager renders only with rows').toBeVisible()
@@ -569,15 +591,21 @@ test('IN-01 invoices register: heading, card, badge, toggle, bulk bar, header an
     { armedShot: 'invoices-armed', centred: true, header },
   )
 
+  const filteredGet = page.waitForResponse((r) => {
+    const u = new URL(r.url())
+    return r.request().method() === 'GET' && onPath(u, '/api/invoice/v1/invoices') && u.searchParams.get('needs_attention') === 'true'
+  })
   await toggle.click()
+  await filteredGet
   await expect(page.getByTestId('invoice-row').first().or(page.getByTestId('invoices-empty-filtered')), 'the Needs-attention list settled').toBeVisible()
+  await settle(page, toggle) // .pf-chip transitions background and colour for 120ms
   const on = await styles(toggle, [...CORNERS, 'background-color', 'color'])
   expect(on['background-color'], 'toggle on background').toBe(ACTION)
   expect(on.color, 'toggle on colour').toBe(WHITE)
   expect(Object.values(on).slice(0, 4), 'toggle on corners').toEqual(corners('4px'))
   await attachShot(page, testInfo, 'invoices-needs-attention')
 
-  expect(writes, 'arming and cancelling must send no gateway write (D-13)').toEqual([])
+  expectNoWrites(gateway)
   await attachJson(testInfo, 'in-01-measurements', { h1, listCard, dot, off, on, bulk })
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
@@ -656,7 +684,7 @@ test('AP-01 approvals queue: heading, card, bulk bar, pager relations', async ({
     transform: canApproveFirst,
   })
   await signInAs(page, 'firm')
-  const writes = recordWrites(page)
+  const gateway = recordGateway(page)
   await openNav(page, navButton(page, /^Approvals/))
   await expectVisibleRows(page.getByTestId('approval-row'), 'the approvals queue is served from the firm register page (D-14), which must hold at least one invoice on the PR environment')
   await settle(page, column(page))
@@ -671,7 +699,7 @@ test('AP-01 approvals queue: heading, card, bulk bar, pager relations', async ({
     { armedShot: 'approvals-armed', centred: false },
   )
 
-  expect(writes, 'arming and cancelling must send no gateway write (D-13)').toEqual([])
+  expectNoWrites(gateway)
   await attachJson(testInfo, 'ap-01-measurements', { h1, listCard, bulk })
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })

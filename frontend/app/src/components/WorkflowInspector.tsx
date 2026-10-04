@@ -80,12 +80,12 @@ export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates,
   roleOptions: WfOption[]
   onManageRoles: () => void
 }) {
-  const card = { background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 16, overflow: 'hidden' } as const
+  const card = { background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' } as const
 
   if (!node) {
     return (
       <div style={card}>
-        <div style={{ padding: '13px 15px', borderBottom: '1px solid var(--line-1)', fontSize: 13.5, fontWeight: 600 }}>Step details</div>
+        <div style={{ padding: '13px 15px', borderBottom: '1px solid var(--line-1)', fontSize: 15, fontWeight: 700 }}>Step details</div>
         <div style={{ padding: '26px 18px', textAlign: 'center', fontSize: 12.5, color: 'var(--fg-3)', lineHeight: 1.6 }}>
           Select a step in the flow to edit who approves and when.
         </div>
@@ -99,12 +99,12 @@ export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates,
   return (
     <div style={card}>
       <div style={{ padding: '13px 15px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-        <span style={{ fontSize: 13.5, fontWeight: 600 }}>{TITLES[node.type]}</span>
+        <span style={{ fontSize: 15, fontWeight: 700 }}>{TITLES[node.type]}</span>
         <button
           type="button"
           onClick={() => onRemove(node.id)}
           className="pf-btn"
-          style={{ flex: 'none', padding: 0, border: 0, background: 'transparent', color: 'var(--status-red-text)', fontSize: 12, fontWeight: 500, fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
+          style={{ flex: 'none', padding: 0, border: 0, background: 'transparent', color: 'var(--status-red-text)', fontSize: 12.5, fontWeight: 600, fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
         >
           Remove
         </button>
@@ -124,13 +124,13 @@ export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates,
                 type="button"
                 onClick={onManageRoles}
                 className="pf-btn"
-                style={{ flex: 'none', padding: 0, border: 0, background: 'transparent', color: 'var(--action)', fontSize: 11.5, fontWeight: 600, fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
+                style={{ flex: 'none', padding: 0, border: 0, background: 'transparent', color: 'var(--action)', fontSize: 11.5, fontWeight: 500, fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
               >
                 Manage roles
               </button>
             </div>
             <WfSelect label="Deadline" value={node.sla} options={slaOptions(node.sla)} onChange={(v) => patch({ sla: v as Sla })} marginBottom={14} />
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '4px 0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '4px 0', opacity: 0.55, cursor: 'not-allowed' }}>
               <span style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>Allow delegation</span>
               <WfToggle
                 on={node.delegate}
@@ -177,20 +177,23 @@ export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates,
             <WfSelect label="Is" value={node.op} options={OP_OPTIONS} onChange={(v) => patch({ op: v as CondOp })} marginBottom={12} />
             <WfAmountInput value={node.value} onChange={(v) => patch({ value: v })} ariaLabel="Threshold amount in naira" marginBottom={10} />
             <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
-              {AMOUNT_PRESETS.map((p) => (
+              {AMOUNT_PRESETS.map((p) => {
+                const lit = Number(node.value) === p.value
+                return (
                 <button
                   key={p.label}
                   type="button"
                   onClick={() => patch({ value: p.value })}
                   className="pf-btn"
-                  style={{ flex: 1, height: 30, border: '1px solid var(--line-2)', background: 'var(--bg-1)', fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600, color: 'var(--fg-2)', cursor: 'pointer' }}
+                  style={{ flex: 1, height: 30, border: `1px solid ${lit ? 'var(--action)' : 'var(--line-2)'}`, background: lit ? 'var(--action-tint)' : 'var(--bg-1)', fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600, color: lit ? 'var(--action)' : 'var(--fg-2)', cursor: 'pointer' }}
                 >
                   {p.label}
                 </button>
-              ))}
+                )
+              })}
             </div>
 
-            <div style={{ background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 12, padding: '10px 12px' }}>
+            <div style={{ background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '10px 12px' }}>
               <div className="mono" style={{ fontSize: 9, color: 'var(--fg-3)', letterSpacing: '0.06em', marginBottom: 3 }}>
                 RULE
               </div>

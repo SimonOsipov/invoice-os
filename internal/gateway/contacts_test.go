@@ -579,7 +579,7 @@ func TestHTTPSink_OnlyAcceptedIsSuccess(t *testing.T) {
 			requireDemoAnswer(t, rec, http.StatusBadGateway, demoUnavail)
 
 			log, logs := newCaptureLog()
-			handOffRegistrant(context.Background(), log, sink, coWant)
+			handOffRegistrant(context.Background(), log, "verify", sink, coWant)
 			if got := logs.waitWarn(t).attrs["status"]; got != strconv.Itoa(status) {
 				t.Errorf("WARN status %q, want %d", got, status)
 			}
@@ -595,7 +595,7 @@ func TestHandOff_WarnNamesTheStatusTheHTTPSinkSaw(t *testing.T) {
 	base, reqs := intakeServer(t, http.StatusServiceUnavailable)
 	log, logs := newCaptureLog()
 
-	handOffRegistrant(context.Background(), log, NewHTTPContactSink(base, testClient(), "tok"), coWant)
+	handOffRegistrant(context.Background(), log, "verify", NewHTTPContactSink(base, testClient(), "tok"), coWant)
 
 	warn := logs.waitWarn(t)
 	if got := warn.attrs["status"]; got != "503" {
@@ -817,8 +817,13 @@ var offlineAuth = &url.URL{Scheme: "http", Host: "gotrue.invalid"}
 // verifyOffline serves one GET /auth/verify?query inside a synctest bubble: when it returns the hand-off has run to its end or sleeps.
 func verifyOffline(t *testing.T, client *http.Client, query string, sink ContactSink) *httptest.ResponseRecorder {
 	t.Helper()
+	return verifyOfflineLog(t, client, query, sink, slog.New(slog.DiscardHandler))
+}
+
+func verifyOfflineLog(t *testing.T, client *http.Client, query string, sink ContactSink, log *slog.Logger) *httptest.ResponseRecorder {
+	t.Helper()
 	rec := httptest.NewRecorder()
-	VerifyHandler(offlineAuth, siteURL(t), client, slog.New(slog.DiscardHandler), sink).ServeHTTP(rec, verifyRequest(context.Background(), query))
+	VerifyHandler(offlineAuth, siteURL(t), client, log, sink).ServeHTTP(rec, verifyRequest(context.Background(), query))
 	synctest.Wait()
 	return rec
 }
@@ -826,7 +831,11 @@ func verifyOffline(t *testing.T, client *http.Client, query string, sink Contact
 // signInOffline serves one POST /auth/sign-in inside a synctest bubble, like verifyOffline.
 func signInOffline(t *testing.T, client *http.Client, store *HandoffStore, sink ContactSink) *httptest.ResponseRecorder {
 	t.Helper()
-	log := slog.New(slog.DiscardHandler)
+	return signInOfflineLog(t, client, store, sink, slog.New(slog.DiscardHandler))
+}
+
+func signInOfflineLog(t *testing.T, client *http.Client, store *HandoffStore, sink ContactSink, log *slog.Logger) *httptest.ResponseRecorder {
+	t.Helper()
 	th := NewSignInThrottle(SignInMaxFailures, SignInMaxKeys, SignInWindow, time.Now)
 	rec := serve(SignInHandler(offlineAuth, client, store, th, log, sink), http.MethodPost, "/auth/sign-in", signInBody(regEmail, regPassword, randomState(t)))
 	synctest.Wait()
@@ -872,13 +881,32 @@ func TestHandOff_UserBodyShapes(t *testing.T) {
 			t.Run(entry+"/"+c.name, func(t *testing.T) {
 				synctest.Test(t, func(t *testing.T) {
 					sink := newRecSink(nil)
+					log, logs := newCaptureLog()
 					client := offlineClient(http.StatusOK, coSession(c.user))
 					want := c.verify
 					if entry == "verify" {
-						requireRedirect(t, verifyOffline(t, client, verifyQuery, sink), verifiedLocation)
+						requireRedirect(t, verifyOfflineLog(t, client, verifyQuery, sink, log), verifiedLocation)
 					} else {
 						want = c.sign
-						requireCode(t, signInOffline(t, client, NewHandoffStore(HandoffTTL, time.Now), sink))
+						requireCode(t, signInOfflineLog(t, client, NewHandoffStore(HandoffTTL, time.Now), sink, log))
+					}
+
+					var u struct {
+						Email string `json:"email"`
+					}
+					_ = json.Unmarshal([]byte(c.user), &u)
+					warns := logs.all()
+					if blank := strings.TrimSpace(u.Email) == ""; blank {
+						if len(warns) != 1 || warns[0].level != slog.LevelWarn || !strings.HasPrefix(warns[0].text, entry+": gotrue user has no email; no hand-off") {
+							t.Fatalf("logs = %+v, want exactly one %s WARN naming the missing email", warns, entry)
+						}
+						for _, pii := range []string{regEmail, coUserID, sessionAT, sessionRT} {
+							if strings.Contains(warns[0].text, pii) {
+								t.Errorf("WARN %q holds %q", warns[0].text, pii)
+							}
+						}
+					} else if len(warns) != 0 {
+						t.Fatalf("logs = %+v, want none", warns)
 					}
 
 					got := sink.got()
@@ -908,7 +936,7 @@ func TestHandOff_NilSinkIsANoOp(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		log, logs := newCaptureLog()
 
-		handOffRegistrant(context.Background(), log, nil, coWant)
+		handOffRegistrant(context.Background(), log, "verify", nil, coWant)
 		synctest.Wait()
 
 		if got := logs.all(); len(got) != 0 {
@@ -930,7 +958,7 @@ func TestHandOff_AttemptsAreSpacedFiveThenThirtySeconds(t *testing.T) {
 		sink := newRecSink(down)
 		log, logs := newCaptureLog()
 
-		handOffRegistrant(context.Background(), log, sink, coWant)
+		handOffRegistrant(context.Background(), log, "verify", sink, coWant)
 		synctest.Wait()
 		step := func(d time.Duration, wantCalls, wantWarns int) {
 			t.Helper()
@@ -969,7 +997,7 @@ func TestHandOff_StopsAtTheFirstSuccess(t *testing.T) {
 				})
 				log, logs := newCaptureLog()
 
-				handOffRegistrant(context.Background(), log, sink, coWant)
+				handOffRegistrant(context.Background(), log, "verify", sink, coWant)
 				time.Sleep(time.Hour)
 				synctest.Wait()
 

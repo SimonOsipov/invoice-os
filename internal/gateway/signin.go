@@ -80,7 +80,7 @@ func SignInHandler(authURL *url.URL, client *http.Client, store *HandoffStore, t
 			}
 			throttle.Reset(in.Email)
 			if sess.User.UserMetadata.Registration != nil {
-				handOffRegistrant(r.Context(), log, sink, sess.User.contact())
+				handOffRegistrant(r.Context(), log, "sign-in", sink, sess.User.contact())
 			}
 			writeJSON(w, http.StatusOK, map[string]string{"code": code})
 		// A banned address answers exactly like a wrong password; the reservation stands.

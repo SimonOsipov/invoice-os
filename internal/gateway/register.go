@@ -217,7 +217,7 @@ func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Log
 			http.Redirect(w, r, failed, http.StatusSeeOther)
 		default:
 			// ceiling: the session GoTrue issued is never delivered; any global sign-out or staff cut-off deletes it. Revisit when verifying should sign the user in.
-			handOffRegistrant(r.Context(), log, sink, confirmed.User.contact())
+			handOffRegistrant(r.Context(), log, "verify", sink, confirmed.User.contact())
 			http.Redirect(w, r, verified, http.StatusSeeOther)
 		}
 	})

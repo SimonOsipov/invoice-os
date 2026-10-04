@@ -118,9 +118,13 @@ func failureStatus(err error) int {
 }
 
 // handOffRegistrant delivers user to the sink in the background: up to three attempts, one WARN after the last fails.
-// A nil sink or a blank email is a no-op. The log carries the user id and the failing status only.
-func handOffRegistrant(ctx context.Context, log *slog.Logger, sink ContactSink, user RegistrantContact) {
-	if sink == nil || strings.TrimSpace(user.Email) == "" {
+// A nil sink is a no-op; a blank email logs one WARN naming source and skips. The log carries the user id and the failing status only.
+func handOffRegistrant(ctx context.Context, log *slog.Logger, source string, sink ContactSink, user RegistrantContact) {
+	if sink == nil {
+		return
+	}
+	if strings.TrimSpace(user.Email) == "" {
+		log.WarnContext(ctx, source+": gotrue user has no email; no hand-off")
 		return
 	}
 	ctx = context.WithoutCancel(ctx)

@@ -473,13 +473,17 @@ test('OV-02 in-house overview: tiles hold their head and body, columns align, fa
         problems.push(...within(rowBox, c, `failure row ${i} cell ${a}`))
         cellBoxes.slice(a + 1).forEach((d, k) => problems.push(...apart(c, d, `failure row ${i} cells ${a}/${a + 1 + k}`)))
       })
-      const lines = await key.evaluate((el) => {
+      // Lines are distinct rect tops: a clipped one-line key reports a second, wider rect on the same line.
+      const { lines, clipped } = await key.evaluate((el) => {
         const range = document.createRange()
         range.selectNodeContents(el)
-        return range.getClientRects().length
+        const tops = new Set([...range.getClientRects()].map((r) => Math.round(r.top)))
+        return { lines: tops.size, clipped: el.scrollWidth > el.clientWidth }
       })
       if (lines !== 1) problems.push(`failure key ${i} draws on ${lines} lines`)
-      rects[`failure row ${i}`] = { row: rowBox, cells: cellBoxes, lines }
+      const count = await cells.last().evaluate((el) => el.scrollWidth - el.clientWidth)
+      if (count > 1) problems.push(`failure count ${i} overflows its cell by ${count}px`)
+      rects[`failure row ${i}`] = { row: rowBox, cells: cellBoxes, lines, clipped, countOverflow: count }
     }
     await assertPageDoesNotScrollSideways(page, 'overview')
     return { problems, rects }

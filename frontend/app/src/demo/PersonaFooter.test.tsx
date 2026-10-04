@@ -192,7 +192,7 @@ describe('PersonaFooter (flag on)', () => {
     await renderDemoSidebar(ctx)
 
     const btn = screen.getByRole('button', { name: 'Sign out' })
-    expect(btn.className).toBe('pf-btn pf-signout')
+    expect(btn.className).toBe('pf-signout')
     expect(btn.getAttribute('title')).toBe('Sign out')
     btn.click()
     expect(ctx.signOut).toHaveBeenCalledTimes(1)

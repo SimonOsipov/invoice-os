@@ -278,12 +278,10 @@ describe('Sidebar nav badges, firm mode', () => {
   })
 })
 
-// DEMO-06-01: green on write by construction (nothing demo-related exists yet, so
-// today's markup trivially equals itself). This pin carries no coverage now -- its whole
-// value is as a tripwire for DEMO-06-03..06: any persona markup, padding, gap, avatar or
-// dot change leaking into the flag-off footer fails it.
+// Tripwire: any persona markup, padding, gap, avatar or dot change leaking into the flag-off
+// footer fails it. Circles are 50%; Sign out carries no pf-btn.
 describe('Sidebar footer, characterization pin', () => {
-  it("the flag-off footer renders exactly today's markup", async () => {
+  it('the flag-off footer renders the v2 markup', async () => {
     await renderSidebar(
       rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 }),
       sidebarCtx({ user: { name: 'Chinedu Okafor', initials: 'CO', verified: true, tenantName: 'Okafor & Partners' } }),
@@ -291,7 +289,7 @@ describe('Sidebar footer, characterization pin', () => {
 
     const footer = document.querySelector('aside.pf-sidebar > div:last-of-type')!
     expect(footer.outerHTML).toBe(
-      '<div style="flex: 0 0 auto; padding: 12px; border-top: 1px solid var(--line-1); display: flex; align-items: center; gap: 10px;"><span style="flex: 0 0 auto; width: 30px; height: 30px; border-radius: 99px; background: var(--slate-800); color: var(--text-on-dark); display: grid; place-items: center; font-size: 11px; font-weight: 600;">CO</span><div style="flex: 1 1 0%; min-width: 0;"><div style="font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Chinedu Okafor</div><div class="mono" style="display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--fg-3); white-space: nowrap; overflow: hidden;"><span style="flex: 0 0 auto; width: 5px; height: 5px; border-radius: 99px; background: var(--status-green-text);" title="Tenant verified via /v1/me"></span><span style="overflow: hidden; text-overflow: ellipsis;">OKAFOR &amp; PARTNERS</span></div></div><button class="pf-btn pf-signout" aria-label="Sign out" title="Sign out" style="flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0px; border: 0px; border-radius: var(--radius-sm); background: transparent; cursor: pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="M16 17l5-5-5-5"></path><path d="M21 12H9"></path></svg></button></div>',
+      '<div style="flex: 0 0 auto; padding: 12px; border-top: 1px solid var(--line-1); display: flex; align-items: center; gap: 10px;"><span style="flex: 0 0 auto; width: 30px; height: 30px; border-radius: 50%; background: var(--slate-800); color: var(--text-on-dark); display: grid; place-items: center; font-size: 11px; font-weight: 600;">CO</span><div style="flex: 1 1 0%; min-width: 0;"><div style="font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Chinedu Okafor</div><div class="mono" style="display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--fg-3); white-space: nowrap; overflow: hidden;"><span style="flex: 0 0 auto; width: 5px; height: 5px; border-radius: 50%; background: var(--status-green-text);" title="Tenant verified via /v1/me"></span><span style="overflow: hidden; text-overflow: ellipsis;">OKAFOR &amp; PARTNERS</span></div></div><button class="pf-signout" aria-label="Sign out" title="Sign out" style="flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0px; border: 0px; border-radius: var(--radius-sm); background: transparent; cursor: pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="M16 17l5-5-5-5"></path><path d="M21 12H9"></path></svg></button></div>',
     )
   })
 })
@@ -408,11 +406,6 @@ describe('BUG-17-01 company switcher corner', () => {
     expect(buttonRule).toContain('border-radius: var(--radius-btn) !important')
   })
 
-  it('signOut_keepsPfBtn', async () => {
-    await renderSidebar(rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 }))
-    expect(screen.getByRole('button', { name: 'Sign out' }).className).toContain('pf-btn')
-  })
-
   // Bans every class, not only pf-btn: v2-btn, ops-btn, dev-btn and pf-chip force the same !important radius.
   it('switcher_carriesNoClassAtAll', async () => {
     await renderSidebar(FIRM_EVEN_ROLLUP, firmCtx())
@@ -465,5 +458,130 @@ describe('Sidebar in-house chip ERP pill (AUTH-10-07, Core AC-7)', () => {
     const chip = screen.getByTestId('company-chip')
     expect(chip.textContent).toContain('WORKSPACE')
     expect(within(chip).getByText('ERP')).toBeDefined()
+  })
+})
+
+// Raw style attribute, not .style.*: jsdom's CSSStyleDeclaration can drop var() shorthands.
+function styleDecl(el: Element, prop: string): string | null {
+  return el.getAttribute('style')?.match(new RegExp(`(?:^|;\\s*)${prop}:\\s*([^;]+)`))?.[1].trim() ?? null
+}
+
+const asideEl = () => document.querySelector<HTMLElement>('aside.pf-sidebar')!
+const footerEl = () => document.querySelector<HTMLElement>('aside.pf-sidebar > div:last-of-type')!
+
+describe('Sidebar v2 dark scope', () => {
+  const ONES = { validated: 1, awaitingApproval: 1, needsAttention: 1 }
+  const V2_ROLLUP = rollup({ ...ONES, entity: ONES })
+  const VERIFIED_USER = { name: 'Chinedu Okafor', initials: 'CO', verified: true, tenantName: 'Okafor & Partners' }
+
+  async function renderFresh(ctx: PlatformCtx) {
+    cleanup()
+    vi.unstubAllGlobals()
+    return renderSidebar(V2_ROLLUP, ctx)
+  }
+
+  it('SB-01 the aside is the dark scope on --surface', async () => {
+    await renderSidebar(V2_ROLLUP, firmCtx())
+
+    const aside = asideEl()
+    expect(aside.classList.contains('pf-sidebar')).toBe(true)
+    expect(aside.classList.contains('asc-dark')).toBe(true)
+    expect(styleDecl(aside, 'background')).toBe('var(--surface)')
+    expect(styleDecl(aside, 'border-right')).toBe('1px solid var(--surface-panel-border)')
+  })
+
+  it('SB-02 the active row keeps its action bar and icon (pin, green at write)', async () => {
+    await renderSidebar(V2_ROLLUP, sidebarCtx({ view: 'invoices' }))
+
+    const active = navButton('Invoices')
+    expect(styleDecl(active, 'background')).toBe('var(--bg-3)')
+    const [bar, icon] = [active.children[0], active.children[1]]
+    expect(styleDecl(bar, 'background')).toBe('var(--action)')
+    expect(styleDecl(icon, 'color')).toBe('var(--action)')
+
+    const inactive = navButton('Overview')
+    expect(styleDecl(inactive, 'background')).toBe('transparent')
+    expect(styleDecl(inactive.children[0], 'background')).toBe('transparent')
+  })
+
+  it('SB-03 the dropdown is light inside the dark aside', async () => {
+    await renderSidebar(V2_ROLLUP, firmCtx({ switcherOpen: true }))
+
+    expect(screen.getAllByTestId('company-switcher-option').length).toBeGreaterThan(0)
+    const dropdown = screen.getByText('Switch company').parentElement!
+    expect(dropdown.classList.contains('asc-light')).toBe(true)
+    expect(styleDecl(dropdown, 'box-shadow')).toBe('var(--shadow-card)')
+  })
+
+  it('SB-04 the switcher states its own text colour', async () => {
+    await renderSidebar(V2_ROLLUP, firmCtx())
+
+    expect(styleDecl(screen.getByTestId('company-switcher'), 'color')).toBe('var(--fg-1)')
+  })
+
+  it('SB-05 badges are 4px, circles are 50%', async () => {
+    await renderSidebar(V2_ROLLUP, firmCtx())
+    const badge = badgeOf('Invoices')
+    expect(badge, 'Invoices badge rendered').not.toBeNull()
+    expect(styleDecl(badge!, 'border-radius')).toBe('var(--radius-sm)')
+
+    await renderFresh(sidebarCtx({ user: VERIFIED_USER }))
+    const erp = within(screen.getByTestId('company-chip')).getByText('ERP').parentElement!
+    expect(styleDecl(erp, 'border-radius')).toBe('var(--radius-sm)')
+    const erpDot = erp.firstElementChild!
+    expect(erpDot.tagName).toBe('SPAN')
+    expect(styleDecl(erpDot, 'border-radius')).toBe('50%')
+
+    const avatar = footerEl().querySelector('span')!
+    expect(avatar.textContent).toBe('CO')
+    expect(styleDecl(avatar, 'border-radius')).toBe('50%')
+    const verifiedDot = footerEl().querySelector('[title="Tenant verified via /v1/me"]')!
+    expect(verifiedDot, 'verified dot rendered').not.toBeNull()
+    expect(styleDecl(verifiedDot, 'border-radius')).toBe('50%')
+  })
+
+  it('SB-06 labels pass contrast; no --fg-4 text', async () => {
+    const modes: [string, PlatformCtx, number, number][] = [
+      ['firm', firmCtx({ switcherOpen: true }), 10, 2],
+      ['in-house', sidebarCtx(), 8, 1],
+    ]
+    for (const [mode, ctx, navCount, groupCount] of modes) {
+      await renderFresh(ctx)
+
+      expect(asideEl().querySelectorAll('nav button.pf-nav').length, `${mode} nav buttons`).toBeGreaterThanOrEqual(navCount)
+      const labels = [...asideEl().querySelectorAll('nav .label')]
+      expect(labels.length, `${mode} group labels`).toBe(groupCount)
+      for (const label of labels) expect(styleDecl(label, 'color'), `${mode} group label`).toBe('var(--eyebrow-on-dark)')
+      const scopes = [...asideEl().querySelectorAll('nav .label > span.mono')]
+      expect(scopes.length, `${mode} scope spans`).toBe(groupCount)
+      for (const scope of scopes) expect(styleDecl(scope, 'color'), `${mode} scope text`).toBe('var(--fg-3)')
+      expect(asideEl().outerHTML, `${mode} outerHTML`).not.toContain('--fg-4')
+    }
+  })
+
+  it('SB-07 signOut_carriesNoPfBtn', async () => {
+    await renderSidebar(V2_ROLLUP, sidebarCtx())
+
+    const btn = screen.getByRole('button', { name: 'Sign out' })
+    expect(btn.getAttribute('aria-label')).toBe('Sign out')
+    expect([...btn.classList]).toEqual(['pf-signout'])
+    expect(styleDecl(btn, 'border-radius')).toBe('var(--radius-sm)')
+  })
+
+  it('SB-08 no oklch or pill corners in the rendered sidebar (boundary)', async () => {
+    const modes: [string, PlatformCtx][] = [
+      ['firm', firmCtx({ switcherOpen: true })],
+      ['in-house', sidebarCtx({ user: VERIFIED_USER })],
+    ]
+    for (const [mode, ctx] of modes) {
+      await renderFresh(ctx)
+      const html = asideEl().outerHTML
+
+      if (mode === 'firm') expect(html, 'firm dropdown rendered').toContain('data-testid="company-switcher-option"')
+      expect(html, `${mode} oklch`).not.toContain('oklch')
+      expect(html, `${mode} 99px corner`).not.toContain('border-radius: 99px')
+      expect(html, `${mode} 999px corner`).not.toContain('border-radius: 999px')
+      expect(html, `${mode} circles`).toContain('border-radius: 50%')
+    }
   })
 })

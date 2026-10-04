@@ -38,6 +38,12 @@ describe('registrationOpen', () => {
       ['flag false', 'false', 'https://gw.x', 'https://app.x', false],
       ['flag true without the gateway URL', 'true', '', 'https://app.x', false],
       ['flag true without the app URL', 'true', 'https://gw.x', '', false],
+      ['flag true with a blank app URL', 'true', 'https://gw.x', '   ', false],
+      ['flag with a leading space', ' true', 'https://gw.x', 'https://app.x', false],
+      ['flag with a trailing space', 'true ', 'https://gw.x', 'https://app.x', false],
+      ['flag 1', '1', 'https://gw.x', 'https://app.x', false],
+      ['flag yes', 'yes', 'https://gw.x', 'https://app.x', false],
+      ['flag empty', '', 'https://gw.x', 'https://app.x', false],
     ]
     expect(cases.filter((c) => c[4])).toHaveLength(1)
     for (const [name, flag, gw, app, want] of cases) {
@@ -54,16 +60,21 @@ describe('validateRegisterForm', () => {
     expect(validateRegisterForm(VALID), 'control: a complete form has no errors').toEqual({})
 
     const empty = validateRegisterForm({ email: '', password: '', displayName: '', workspaceName: '', kind: '' })
-    expect(Object.keys(empty).sort()).toEqual(['displayName', 'email', 'kind', 'password', 'workspaceName'])
-    for (const [field, message] of Object.entries(empty)) {
-      expect(message, field).toEqual(expect.any(String))
-      expect(message, field).not.toBe('')
-    }
-    expect(empty.email).toBe('Enter your work email.')
-    expect(empty.kind).toBe('Choose how this workspace files invoices.')
+    expect(empty).toEqual({
+      email: 'Enter your work email.',
+      password: 'Choose a password.',
+      displayName: 'Enter your name.',
+      workspaceName: 'Enter your company or workspace name.',
+      kind: 'Choose how this workspace files invoices.',
+    })
 
     expect(validateRegisterForm({ ...VALID, kind: '' })).toEqual({ kind: 'Choose how this workspace files invoices.' })
     expect(validateRegisterForm({ ...VALID, email: 'a b@c.d' })).toEqual({ email: 'Enter a valid work email address.' })
+    expect(validateRegisterForm({ ...VALID, email: 'ada@okafor' })).toEqual({ email: 'Enter a valid work email address.' })
+    expect(validateRegisterForm({ ...VALID, email: '   ' }), 'blank is missing, not invalid').toEqual({ email: 'Enter your work email.' })
+    expect(validateRegisterForm({ ...VALID, email: '  ADA@Okafor.NG ' }), 'trimmed, case kept').toEqual({})
+    expect(validateRegisterForm({ ...VALID, displayName: '' })).toEqual({ displayName: 'Enter your name.' })
+    expect(validateRegisterForm({ ...VALID, workspaceName: '' })).toEqual({ workspaceName: 'Enter your company or workspace name.' })
   })
 
   it('validateRegisterForm bounds the names in code points', () => {
@@ -81,6 +92,10 @@ describe('validateRegisterForm', () => {
       expect(Object.keys(errors).sort(), `refused ${JSON.stringify(name.slice(0, 8))}…`).toEqual(['displayName', 'workspaceName'])
     }
 
+    const tooLong = 'Use 200 characters or fewer.'
+    expect(validateRegisterForm({ ...VALID, displayName: 'a'.repeat(201) })).toEqual({ displayName: tooLong })
+    expect(validateRegisterForm({ ...VALID, workspaceName: 'a'.repeat(201) })).toEqual({ workspaceName: tooLong })
+
     const spaced: RegisterValues = { ...VALID, password: ' pw ' }
     expect(validateRegisterForm(spaced), 'the password is never trimmed').toEqual({})
     expect(spaced.password).toBe(' pw ')
@@ -91,32 +106,35 @@ describe('validateRegisterForm', () => {
 describe('registerAccount', () => {
   it('registerAccount posts the snake_case body', async () => {
     vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.x/')
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'verification_pending' }), { status: 202 }))
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ status: 'verification_pending' }), { status: 202 })))
     vi.stubGlobal('fetch', fetchMock)
 
-    await registerAccount({
-      email: ' Ada@Corp.example ',
-      password: ' pw ',
-      displayName: '  Ada Okafor ',
-      workspaceName: ' Okafor & Partners  ',
-      kind: 'in_house',
-    })
-
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe('https://gw.x/auth/register')
-    expect(init.method).toBe('POST')
-    const headers = new Headers(init.headers)
-    expect(headers.get('Content-Type')).toBe('application/json')
-    expect(headers.has('Authorization')).toBe(false)
-    const body = JSON.parse(init.body as string) as Record<string, unknown>
-    expect(Object.keys(body).sort()).toEqual(['display_name', 'email', 'kind', 'password', 'workspace_name'])
-    expect(body).toStrictEqual({
-      email: 'Ada@Corp.example',
-      password: ' pw ',
-      display_name: 'Ada Okafor',
-      workspace_name: 'Okafor & Partners',
-      kind: 'in_house',
+    const cases: [RegisterValues, Record<string, unknown>][] = [
+      [
+        { email: ' Ada@Corp.example ', password: ' pw ', displayName: '  Ada Okafor ', workspaceName: ' Okafor & Partners  ', kind: 'in_house' },
+        { email: 'Ada@Corp.example', password: ' pw ', display_name: 'Ada Okafor', workspace_name: 'Okafor & Partners', kind: 'in_house' },
+      ],
+      [
+        { email: 'b@corp.example', password: '   ', displayName: 'B', workspaceName: 'W', kind: 'firm' },
+        { email: 'b@corp.example', password: '   ', display_name: 'B', workspace_name: 'W', kind: 'firm' },
+      ],
+      [
+        { email: 'c@corp.example', password: 'pw', displayName: 'C\u0000', workspaceName: 'W\u0000x', kind: 'firm' },
+        { email: 'c@corp.example', password: 'pw', display_name: 'C\u0000', workspace_name: 'W\u0000x', kind: 'firm' },
+      ],
+    ]
+    for (const [values] of cases) await registerAccount(values)
+    expect(fetchMock).toHaveBeenCalledTimes(cases.length)
+    cases.forEach(([, want], i) => {
+      const [url, init] = fetchMock.mock.calls[i] as [string, RequestInit]
+      expect(url).toBe('https://gw.x/auth/register')
+      expect(init.method).toBe('POST')
+      const headers = new Headers(init.headers)
+      expect(headers.get('Content-Type')).toBe('application/json')
+      expect(headers.has('Authorization')).toBe(false)
+      const body = JSON.parse(init.body as string) as Record<string, unknown>
+      expect(Object.keys(body).sort()).toEqual(['display_name', 'email', 'kind', 'password', 'workspace_name'])
+      expect(body).toStrictEqual(want)
     })
   })
 
@@ -151,5 +169,40 @@ describe('registerOutcome', () => {
     expect(registerOutcome(new Error('boom'))).toEqual({ form: UNAVAILABLE })
     expect(registerOutcome(httpError(500, 'pq: secret detail'))).toEqual({ form: UNAVAILABLE })
     expect(registerOutcome(httpError(409, FREE_MAIL_REFUSED)), 'the literal on a non-400 is not a free-mail answer').toEqual({ form: UNAVAILABLE })
+  })
+})
+
+describe('registerAccount through the wire', () => {
+  const outcomeFor = async (res: Response | Error) => {
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.x')
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(() => (res instanceof Error ? Promise.reject(res) : Promise.resolve(res))))
+    const err = await registerAccount(VALID).then(
+      () => null,
+      (e: unknown) => e,
+    )
+    expect(err, 'a refused registration rejects').not.toBeNull()
+    return registerOutcome(err)
+  }
+  const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status })
+
+  it('registerOutcome maps what the gateway and the network really send', async () => {
+    expect(await outcomeFor(json(400, { error: FREE_MAIL_REFUSED }))).toEqual({ field: 'email', message: FREE_MAIL_REFUSED })
+    expect(await outcomeFor(json(400, { error: 'workspace_name must not contain a NUL byte' }))).toEqual({
+      form: 'workspace_name must not contain a NUL byte',
+    })
+    expect(await outcomeFor(json(400, { error: 'kind must be "firm" or "in_house"' }))).toEqual({ form: 'kind must be "firm" or "in_house"' })
+    expect(await outcomeFor(json(503, { error: 'registration is closed' }))).toEqual({ form: 'Registration is not open yet.' })
+    expect(await outcomeFor(new Response('<html>Service Unavailable</html>', { status: 503 })), 'non-JSON 503').toEqual({
+      form: 'Registration is not open yet.',
+    })
+    expect(await outcomeFor(json(429, { error: 'too many requests' }))).toEqual({ form: 'Too many attempts. Try again in a minute.' })
+    expect(await outcomeFor(new Response('', { status: 502 }))).toEqual({ form: UNAVAILABLE })
+    expect(await outcomeFor(new TypeError('Failed to fetch')), 'fetch rejects').toEqual({ form: UNAVAILABLE })
+  })
+
+  it('registerOutcome never shows an empty message for a 400 without one', async () => {
+    for (const res of [json(400, {}), json(400, { error: '' }), new Response('<html>Bad Request</html>', { status: 400 }), new Response('', { status: 400 })]) {
+      expect(await outcomeFor(res)).toEqual({ form: UNAVAILABLE })
+    }
   })
 })

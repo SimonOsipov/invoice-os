@@ -28,12 +28,16 @@ const OLD_ME: Me = {
   user: { id: 'e0000000-0000-0000-0000-000000000004', role: 'authenticated', display_name: 'Adaeze Nwankwo', email: 'adaeze.nwankwo@example.com' },
 }
 
-function jwt(sub: string, exp: number): string {
+function jwt(sub: string, exp: number, extra: object = {}): string {
   const b64 = (o: object) => btoa(JSON.stringify(o)).replace(/=+$/, '')
-  return `${b64({ alg: 'RS256' })}.${b64({ sub, exp })}.sig`
+  return `${b64({ alg: 'RS256' })}.${b64({ sub, exp, ...extra })}.sig`
 }
 const nowSec = () => Math.floor(Date.now() / 1000)
 const T = jwt(ME.user.id, nowSec() + 3600)
+const ANSWERS = { workspace_name: ME.tenant.name, display_name: ME.user.display_name, kind: 'firm' }
+// A registered account's first token: no tenant, the answers in user_metadata.
+const T_ANSWERS = jwt(ME.user.id, nowSec() + 3600, { user_metadata: { registration: ANSWERS } })
+const T2 = jwt(ME.user.id, nowSec() + 7200, { tenant_id: ME.tenant.id })
 
 let capturedCtx: PlatformCtx | undefined
 let seenUsers: PlatformCtx['user'][] = []
@@ -110,6 +114,11 @@ let loginCalls = 0
 let exchangeReply: Reply = ok({ access_token: T })
 let meReply: Reply = ok(ME)
 let entityRows: unknown[] = []
+let meQueue: Reply[] = []
+let workspacesReply: Reply = ok({ tenant: ME.tenant })
+let refreshReply: Reply = ok({ access_token: T2, refresh_token: 'R1' })
+let workspacesCalls: { auth: string | null; body: unknown }[] = []
+let refreshBodies: unknown[] = []
 
 function routeFetch() {
   vi.stubGlobal(
@@ -123,7 +132,15 @@ function routeFetch() {
       }
       if (url === `${GATEWAY}/api/tenancy/v1/me`) {
         meAuth.push(init?.headers?.get('Authorization') ?? null)
-        return meReply()
+        return (meQueue.shift() ?? meReply)()
+      }
+      if (url === `${GATEWAY}/api/tenancy/v1/workspaces`) {
+        workspacesCalls.push({ auth: init?.headers?.get('Authorization') ?? null, body: JSON.parse(init?.body ?? 'null') })
+        return workspacesReply()
+      }
+      if (url === `${GATEWAY}/auth/refresh`) {
+        refreshBodies.push(JSON.parse(init?.body ?? 'null'))
+        return refreshReply()
       }
       if (url === `${GATEWAY}/auth/login`) {
         loginCalls++
@@ -200,6 +217,11 @@ beforeEach(() => {
   exchangeReply = ok({ access_token: T })
   meReply = ok(ME)
   entityRows = []
+  meQueue = []
+  workspacesReply = ok({ tenant: ME.tenant })
+  refreshReply = ok({ access_token: T2, refresh_token: 'R1' })
+  workspacesCalls = []
+  refreshBodies = []
   routeFetch()
 })
 
@@ -766,6 +788,8 @@ describe('a failed redemption bounces to landing (AC-7, D23)', () => {
     await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=no-workspace`]))
     expect(exchangeBodies).toHaveLength(1)
     expect(meAuth).toEqual([`Bearer ${T}`])
+    expect(workspacesCalls, 'a token without answers provisions nothing').toEqual([])
+    expect(refreshBodies).toEqual([])
     expect(localStorage.getItem(SESSION_KEY)).toBeNull()
   })
 
@@ -1374,6 +1398,84 @@ describe('AUTH-05-08 adversarial', () => {
 })
 
 // F5: each redemption call aborts after 15 s and takes the failure arm.
+describe('the first sign-in provisions the registered workspace (AUTH-15.5-03)', () => {
+  const CHAIN = (base: string) => [
+    `${base}/auth/exchange`,
+    `${base}/api/tenancy/v1/me`,
+    `${base}/api/tenancy/v1/workspaces`,
+    `${base}/auth/refresh`,
+    `${base}/api/tenancy/v1/me`,
+  ]
+
+  function registered(opts: { exchange?: Reply; me?: Reply[] } = {}) {
+    configure()
+    ensureSignInState()
+    exchangeReply = opts.exchange ?? ok({ access_token: T_ANSWERS, refresh_token: 'R0' })
+    meQueue = opts.me ?? [fail(403, 'forbidden'), ok(ME)]
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    return interceptHref()
+  }
+
+  it('a registered account lands in its new workspace on first sign-in', async () => {
+    const { hrefWrites } = registered()
+    const before = Date.now()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    expect(fetchUrls.slice(0, 5)).toEqual(CHAIN(GATEWAY))
+    expect(workspacesCalls).toEqual([{ auth: `Bearer ${T_ANSWERS}`, body: ANSWERS }])
+    expect(refreshBodies).toEqual([{ refresh_token: 'R0' }])
+    expect(meAuth).toEqual([`Bearer ${T_ANSWERS}`, `Bearer ${T2}`])
+    expect(hrefWrites, 'no landing navigation').toEqual([])
+    // No confirmation step: the first render with a user is the signed-in workspace.
+    expect(seenUsers[0]).toMatchObject({ tenantName: ME.tenant.name, verified: true })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    const rec = storedRecord()
+    expect(rec?.token).toBe(T2)
+    expect(rec?.refresh_token).toBe('R1')
+    // Refreshed just now, so not backdated by the hand-off TTL.
+    expect(rec?.received_at).toBeGreaterThanOrEqual(before)
+    expect(rec?.me).toEqual(ME)
+  })
+
+  it('a registered account whose workspace already exists lands after a 409', async () => {
+    workspacesReply = fail(409, 'already has a workspace')
+    const { hrefWrites } = registered()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    expect(fetchUrls.slice(0, 5)).toEqual(CHAIN(GATEWAY))
+    expect(hrefWrites).toEqual([])
+    expect(storedRecord()?.token).toBe(T2)
+  })
+
+  it('a registered account still blocked after a 409 reports no-workspace', async () => {
+    workspacesReply = fail(409, 'already has a workspace')
+    const { hrefWrites } = registered({ me: [fail(403, 'forbidden'), fail(403, 'forbidden')] })
+    await bootApp()
+    await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=no-workspace`]))
+    expect(fetchUrls.slice(0, 5)).toEqual(CHAIN(GATEWAY))
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+  })
+
+  const failures: [string, () => void, Reply | undefined, number][] = [
+    ['provisioning 400', () => (workspacesReply = fail(400, 'bad request')), undefined, 3],
+    ['provisioning 500', () => (workspacesReply = fail(500, 'boom')), undefined, 3],
+    ['refresh 401', () => (refreshReply = fail(401, 'invalid refresh token')), undefined, 4],
+    ['an exchange without a refresh token', () => {}, ok({ access_token: T_ANSWERS }), 3],
+  ]
+  for (const [name, arrange, exchange, calls] of failures) {
+    it(`a registered account with ${name} reports failed and stores nothing`, async () => {
+      arrange()
+      const { hrefWrites } = registered({ exchange })
+      await bootApp()
+      await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=failed`]))
+      expect(fetchUrls.slice(0, calls)).toEqual(CHAIN(GATEWAY).slice(0, calls))
+      expect(fetchUrls).toHaveLength(calls)
+      expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+    })
+  }
+})
+
 describe('a hung redemption times out', () => {
   const TIMEOUT_MS = 15_000
   let signals: Record<'exchange' | 'me', (AbortSignal | undefined)[]>

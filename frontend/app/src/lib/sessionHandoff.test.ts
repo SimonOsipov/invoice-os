@@ -1,8 +1,10 @@
 // The hand-off code helpers.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { ApiError } from '@invoice-os/api-client'
+
 import { APP_PERSONAS, type Me, type Session } from '../auth'
-import { HANDOFF_PARAM, handoffPersona, isLiveHandoffSession, readHandoffCode, redeemHandoff } from './sessionHandoff'
+import { HANDOFF_PARAM, handoffPersona, isLiveHandoffSession, readHandoffCode, redeemHandoff, registrationAnswers } from './sessionHandoff'
 
 const CODE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ'
 const STATE = 'ZYXWVUTSRQPONMLKJIHGFEDCBAzyxwvutsrqponmlk_'
@@ -18,6 +20,10 @@ function jwt(exp: number): string {
   return `${b64({ alg: 'RS256' })}.${b64({ sub: ME.user.id, exp })}.sig`
 }
 const NOW = 1_800_000_000_000
+function tokenWith(claims: object, exp = NOW / 1000 + 3600): string {
+  const b64 = (o: object) => btoa(JSON.stringify(o)).replace(/=+$/, '')
+  return `${b64({ alg: 'RS256' })}.${b64({ sub: ME.user.id, exp, ...claims })}.sig`
+}
 const LIVE = jwt(NOW / 1000 + 3600)
 const EXPIRED = jwt(NOW / 1000 - 1)
 
@@ -175,6 +181,173 @@ describe('redeemHandoff (D9, D25 step 5)', () => {
       expect(s.token, name).toBe(LIVE)
       expect(s.handoff, name).toBe(true)
       expect(s.renewal, name).toBeUndefined()
+    }
+  })
+})
+
+// AUTH-15.5-03: a tenant-less first sign-in provisions the workspace its token's answers name.
+describe('redeemHandoff provisions the registered workspace (AUTH-15.5-03)', () => {
+  const ANSWERS = { workspace_name: 'Adaeze Ventures', display_name: 'Adaeze Nwankwo', kind: 'in_house' }
+  const TOKEN = tokenWith({ user_metadata: { registration: ANSWERS } })
+  const TOKEN2 = tokenWith({ tenant_id: ME.tenant.id }, NOW / 1000 + 7200)
+  const FORBIDDEN = { status: 403, body: { error: 'forbidden' } }
+  type Reply = { status: number; body?: unknown }
+  type Call = { url: string; method: string; auth: string | null; body: unknown; signal: AbortSignal | null | undefined }
+
+  function stubChain(r: { exchange?: Reply; me?: Reply[]; workspaces?: Reply; refresh?: Reply }): Call[] {
+    const calls: Call[] = []
+    const me = [...(r.me ?? [FORBIDDEN, { status: 200, body: IN_HOUSE_ME }])]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init: { method?: string; headers: Headers; body?: string; signal?: AbortSignal | null }) => {
+        calls.push({
+          url: url.replace(GATEWAY, ''),
+          method: init.method ?? 'GET',
+          auth: init.headers.get('Authorization'),
+          body: init.body === undefined ? undefined : JSON.parse(init.body),
+          signal: init.signal,
+        })
+        const path = url.replace(GATEWAY, '')
+        const reply: Reply =
+          path === '/auth/exchange'
+            ? (r.exchange ?? { status: 200, body: { access_token: TOKEN, refresh_token: 'R0' } })
+            : path === '/api/tenancy/v1/me'
+              ? (me.shift() ?? { status: 500 })
+              : path === '/api/tenancy/v1/workspaces'
+                ? (r.workspaces ?? { status: 201, body: { tenant: IN_HOUSE_ME.tenant } })
+                : (r.refresh ?? { status: 200, body: { access_token: TOKEN2, refresh_token: 'R1' } })
+        return Promise.resolve({ ok: reply.status < 400, status: reply.status, statusText: String(reply.status), json: () => Promise.resolve(reply.body ?? {}) })
+      }),
+    )
+    return calls
+  }
+  const trace = (calls: Call[]) => calls.map((c) => `${c.method} ${c.url}`)
+  const CHAIN = [
+    'POST /auth/exchange',
+    'GET /api/tenancy/v1/me',
+    'POST /api/tenancy/v1/workspaces',
+    'POST /auth/refresh',
+    'GET /api/tenancy/v1/me',
+  ]
+
+  it("redeemHandoff provisions from the token's answers, refreshes and re-reads /me", async () => {
+    const calls = stubChain({})
+    const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
+    expect(trace(calls)).toEqual(CHAIN)
+    expect(calls[2].body).toEqual(ANSWERS)
+    expect(calls[2].auth).toBe(`Bearer ${TOKEN}`)
+    expect(calls[3].body).toEqual({ refresh_token: 'R0' })
+    expect(calls[3].auth).toBeNull()
+    expect(calls[1].auth).toBe(`Bearer ${TOKEN}`)
+    expect(calls[4].auth).toBe(`Bearer ${TOKEN2}`)
+    expect((s as Session).persona.mode).toBe('inhouse')
+  })
+
+  it('redeemHandoff keeps the refreshed tokens after provisioning', async () => {
+    const calls = stubChain({})
+    const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
+    expect(trace(calls)).toEqual(CHAIN)
+    expect(s).toEqual({
+      persona: handoffPersona(IN_HOUSE_ME),
+      token: TOKEN2,
+      me: IN_HOUSE_ME,
+      verified: true,
+      handoff: true,
+      renewal: { refreshToken: 'R1', receivedAt: 5000 },
+    })
+  })
+
+  it('redeemHandoff shares one 15 s abort signal across the whole chain', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout')
+    const calls = stubChain({})
+    await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
+    expect(trace(calls)).toEqual(CHAIN)
+    expect(timeout).toHaveBeenCalledTimes(1)
+    expect(timeout).toHaveBeenCalledWith(15000)
+    expect(calls[0].signal).toBeInstanceOf(AbortSignal)
+    expect(calls.every((c) => c.signal === calls[0].signal)).toBe(true)
+  })
+
+  it('redeemHandoff treats a 409 as provisioned and re-reads /me', async () => {
+    const landed = stubChain({ workspaces: { status: 409, body: { error: 'already has a workspace' } } })
+    const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
+    expect(trace(landed)).toEqual(CHAIN)
+    expect(s).toMatchObject({ token: TOKEN2, handoff: true, renewal: { refreshToken: 'R1', receivedAt: 5000 } })
+
+    const blocked = stubChain({ workspaces: { status: 409 }, me: [FORBIDDEN, FORBIDDEN] })
+    const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
+    expect(trace(blocked)).toEqual(CHAIN)
+    expect(err).toBeInstanceOf(ApiError)
+    expect(err).toMatchObject({ status: 403 })
+  })
+
+  it('redeemHandoff without answers makes no provisioning call', async () => {
+    const rows: [string, object][] = [
+      ['no user_metadata', {}],
+      ['no registration', { user_metadata: {} }],
+      ['blank workspace name', { user_metadata: { registration: { ...ANSWERS, workspace_name: '' } } }],
+      ['unknown kind', { user_metadata: { registration: { ...ANSWERS, kind: 'bogus' } } }],
+    ]
+    for (const [name, claims] of rows) {
+      const calls = stubChain({ exchange: { status: 200, body: { access_token: tokenWith(claims), refresh_token: 'R0' } }, me: [FORBIDDEN] })
+      const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
+      expect(trace(calls), name).toEqual(['POST /auth/exchange', 'GET /api/tenancy/v1/me'])
+      expect(err, name).toBeInstanceOf(ApiError)
+      expect(err, name).toMatchObject({ status: 403 })
+    }
+  })
+
+  it('redeemHandoff rejects when provisioning or refresh fails', async () => {
+    const NO_REFRESH = { status: 200, body: { access_token: TOKEN } }
+    const rows: [string, Parameters<typeof stubChain>[0], string[]][] = [
+      ['workspaces 400', { workspaces: { status: 400, body: { error: 'bad' } } }, CHAIN.slice(0, 3)],
+      ['workspaces 500', { workspaces: { status: 500 } }, CHAIN.slice(0, 3)],
+      ['refresh 401', { refresh: { status: 401, body: { error: 'invalid refresh token' } } }, CHAIN.slice(0, 4)],
+      ['exchange without a refresh token', { exchange: NO_REFRESH }, CHAIN.slice(0, 3)],
+    ]
+    for (const [name, r, want] of rows) {
+      const calls = stubChain(r)
+      const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000).then(
+        () => null,
+        (e: unknown) => e,
+      )
+      expect(trace(calls), name).toEqual(want)
+      expect(err, name).toBeInstanceOf(Error)
+      expect((err as { status?: number }).status, name).not.toBe(403)
+    }
+  })
+})
+
+describe('registrationAnswers (AUTH-15.5-03)', () => {
+  const NAMES = { workspace_name: 'Adaeze Ventures', display_name: 'Adaeze Nwankwo' }
+  const withReg = (registration: unknown) => tokenWith({ user_metadata: { registration } })
+
+  it('registrationAnswers accepts only complete answers', () => {
+    const accepted: [string, string, unknown][] = [
+      ['kind firm', withReg({ ...NAMES, kind: 'firm' }), { ...NAMES, kind: 'firm' }],
+      ['kind in_house', withReg({ ...NAMES, kind: 'in_house' }), { ...NAMES, kind: 'in_house' }],
+      ['kind absent', withReg(NAMES), NAMES],
+      ['extra keys dropped', withReg({ ...NAMES, email: 'x@example.com' }), NAMES],
+    ]
+    for (const [name, token, want] of accepted) {
+      expect(registrationAnswers(token), name).toStrictEqual(want)
+    }
+    const refused: [string, string][] = [
+      ['workspace name absent', withReg({ display_name: NAMES.display_name })],
+      ['display name absent', withReg({ workspace_name: NAMES.workspace_name })],
+      ['workspace name blank', withReg({ ...NAMES, workspace_name: '' })],
+      ['display name blank', withReg({ ...NAMES, display_name: '' })],
+      ['numeric name', withReg({ ...NAMES, workspace_name: 7 })],
+      ['unknown kind', withReg({ ...NAMES, kind: 'bogus' })],
+      ['numeric kind', withReg({ ...NAMES, kind: 1 })],
+      ['registration not an object', withReg('Adaeze Ventures')],
+      ['no registration', tokenWith({ user_metadata: {} })],
+      ['no user_metadata', tokenWith({})],
+      ['malformed token', 'not-a-jwt'],
+      ['empty token', ''],
+    ]
+    for (const [name, token] of refused) {
+      expect(registrationAnswers(token), name).toBeNull()
     }
   })
 })

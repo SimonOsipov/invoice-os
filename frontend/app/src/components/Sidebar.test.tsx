@@ -473,6 +473,10 @@ describe('Sidebar v2 dark scope', () => {
   const ONES = { validated: 1, awaitingApproval: 1, needsAttention: 1 }
   const V2_ROLLUP = rollup({ ...ONES, entity: ONES })
   const VERIFIED_USER = { name: 'Chinedu Okafor', initials: 'CO', verified: true, tenantName: 'Okafor & Partners' }
+  const bothModes = (): [string, PlatformCtx][] => [
+    ['firm', firmCtx({ switcherOpen: true, user: VERIFIED_USER })],
+    ['in-house', sidebarCtx({ user: VERIFIED_USER })],
+  ]
 
   async function renderFresh(ctx: PlatformCtx) {
     cleanup()
@@ -481,27 +485,40 @@ describe('Sidebar v2 dark scope', () => {
   }
 
   it('SB-01 the aside is the dark scope on --surface', async () => {
-    await renderSidebar(V2_ROLLUP, firmCtx())
+    for (const [mode, ctx] of bothModes()) {
+      await renderFresh(ctx)
 
-    const aside = asideEl()
-    expect(aside.classList.contains('pf-sidebar')).toBe(true)
-    expect(aside.classList.contains('asc-dark')).toBe(true)
-    expect(styleDecl(aside, 'background')).toBe('var(--surface)')
-    expect(styleDecl(aside, 'border-right')).toBe('1px solid var(--surface-panel-border)')
+      const aside = asideEl()
+      expect(aside.classList.contains('pf-sidebar'), `${mode} pf-sidebar`).toBe(true)
+      expect(aside.classList.contains('asc-dark'), `${mode} asc-dark`).toBe(true)
+      expect(styleDecl(aside, 'background'), `${mode} background`).toBe('var(--surface)')
+      expect(styleDecl(aside, 'border-right'), `${mode} edge`).toBe('1px solid var(--surface-panel-border)')
+    }
   })
 
   it('SB-02 the active row keeps its action bar and icon (pin, green at write)', async () => {
-    await renderSidebar(V2_ROLLUP, sidebarCtx({ view: 'invoices' }))
+    for (const [mode, ctx] of [
+      ['firm', firmCtx({ view: 'invoices' })],
+      ['in-house', sidebarCtx({ view: 'invoices' })],
+    ] as [string, PlatformCtx][]) {
+      await renderFresh(ctx)
 
-    const active = navButton('Invoices')
-    expect(styleDecl(active, 'background')).toBe('var(--bg-3)')
-    const [bar, icon] = [active.children[0], active.children[1]]
-    expect(styleDecl(bar, 'background')).toBe('var(--action)')
-    expect(styleDecl(icon, 'color')).toBe('var(--action)')
+      const active = navButton('Invoices')
+      expect(styleDecl(active, 'background'), `${mode} active bg`).toBe('var(--bg-3)')
+      const [bar, icon] = [active.children[0], active.children[1]]
+      expect(styleDecl(bar, 'background'), `${mode} active bar`).toBe('var(--action)')
+      expect(styleDecl(icon, 'color'), `${mode} active icon`).toBe('var(--action)')
 
-    const inactive = navButton('Overview')
-    expect(styleDecl(inactive, 'background')).toBe('transparent')
-    expect(styleDecl(inactive.children[0], 'background')).toBe('transparent')
+      const rows = [...asideEl().querySelectorAll<HTMLElement>('nav button.pf-nav')]
+      expect(rows.length, `${mode} nav rows`).toBeGreaterThanOrEqual(8)
+      const inactive = rows.filter((r) => r !== active)
+      expect(inactive.length, `${mode} inactive rows`).toBe(rows.length - 1)
+      for (const row of inactive) {
+        expect(styleDecl(row, 'background'), `${mode} ${row.textContent} bg`).toBe('transparent')
+        expect(styleDecl(row.children[0], 'background'), `${mode} ${row.textContent} bar`).toBe('transparent')
+        expect(styleDecl(row.children[1], 'color'), `${mode} ${row.textContent} icon`).toBe('var(--fg-3)')
+      }
+    }
   })
 
   it('SB-03 the dropdown is light inside the dark aside', async () => {
@@ -511,6 +528,7 @@ describe('Sidebar v2 dark scope', () => {
     const dropdown = screen.getByText('Switch company').parentElement!
     expect(dropdown.classList.contains('asc-light')).toBe(true)
     expect(styleDecl(dropdown, 'box-shadow')).toBe('var(--shadow-card)')
+    expect(asideEl().querySelectorAll('.asc-light').length, 'only the dropdown is light').toBe(1)
   })
 
   it('SB-04 the switcher states its own text colour', async () => {
@@ -520,24 +538,27 @@ describe('Sidebar v2 dark scope', () => {
   })
 
   it('SB-05 badges are 4px, circles are 50%', async () => {
-    await renderSidebar(V2_ROLLUP, firmCtx())
-    const badge = badgeOf('Invoices')
-    expect(badge, 'Invoices badge rendered').not.toBeNull()
-    expect(styleDecl(badge!, 'border-radius')).toBe('var(--radius-sm)')
+    for (const [mode, ctx] of bothModes()) {
+      await renderFresh(ctx)
 
-    await renderFresh(sidebarCtx({ user: VERIFIED_USER }))
+      for (const label of ['Invoices', 'Approvals']) {
+        const badge = badgeOf(label)
+        expect(badge, `${mode} ${label} badge rendered`).not.toBeNull()
+        expect(styleDecl(badge!, 'border-radius'), `${mode} ${label} badge`).toBe('var(--radius-sm)')
+      }
+      const avatar = footerEl().querySelector('span')!
+      expect(avatar.textContent, `${mode} avatar`).toBe('CO')
+      expect(styleDecl(avatar, 'border-radius'), `${mode} avatar`).toBe('50%')
+      const verifiedDot = footerEl().querySelector('[title="Tenant verified via /v1/me"]')!
+      expect(verifiedDot, `${mode} verified dot rendered`).not.toBeNull()
+      expect(styleDecl(verifiedDot, 'border-radius'), `${mode} verified dot`).toBe('50%')
+    }
+
     const erp = within(screen.getByTestId('company-chip')).getByText('ERP').parentElement!
     expect(styleDecl(erp, 'border-radius')).toBe('var(--radius-sm)')
     const erpDot = erp.firstElementChild!
     expect(erpDot.tagName).toBe('SPAN')
     expect(styleDecl(erpDot, 'border-radius')).toBe('50%')
-
-    const avatar = footerEl().querySelector('span')!
-    expect(avatar.textContent).toBe('CO')
-    expect(styleDecl(avatar, 'border-radius')).toBe('50%')
-    const verifiedDot = footerEl().querySelector('[title="Tenant verified via /v1/me"]')!
-    expect(verifiedDot, 'verified dot rendered').not.toBeNull()
-    expect(styleDecl(verifiedDot, 'border-radius')).toBe('50%')
   })
 
   it('SB-06 labels pass contrast; no --fg-4 text', async () => {
@@ -555,7 +576,9 @@ describe('Sidebar v2 dark scope', () => {
       const scopes = [...asideEl().querySelectorAll('nav .label > span.mono')]
       expect(scopes.length, `${mode} scope spans`).toBe(groupCount)
       for (const scope of scopes) expect(styleDecl(scope, 'color'), `${mode} scope text`).toBe('var(--fg-3)')
-      expect(asideEl().outerHTML, `${mode} outerHTML`).not.toContain('--fg-4')
+      const html = asideEl().outerHTML
+      expect(html, `${mode} control: the scan reads token refs`).toContain('var(--fg-3)')
+      expect(html, `${mode} outerHTML`).not.toMatch(/--fg-4/i)
     }
   })
 
@@ -569,19 +592,60 @@ describe('Sidebar v2 dark scope', () => {
   })
 
   it('SB-08 no oklch or pill corners in the rendered sidebar (boundary)', async () => {
-    const modes: [string, PlatformCtx][] = [
-      ['firm', firmCtx({ switcherOpen: true })],
-      ['in-house', sidebarCtx({ user: VERIFIED_USER })],
-    ]
-    for (const [mode, ctx] of modes) {
+    for (const [mode, ctx] of bothModes()) {
       await renderFresh(ctx)
       const html = asideEl().outerHTML
 
       if (mode === 'firm') expect(html, 'firm dropdown rendered').toContain('data-testid="company-switcher-option"')
-      expect(html, `${mode} oklch`).not.toContain('oklch')
-      expect(html, `${mode} 99px corner`).not.toContain('border-radius: 99px')
-      expect(html, `${mode} 999px corner`).not.toContain('border-radius: 999px')
+      expect(html, `${mode} badges rendered`).toContain('border-radius: var(--radius-sm)')
       expect(html, `${mode} circles`).toContain('border-radius: 50%')
+      expect(html, `${mode} oklch`).not.toMatch(/oklch/i)
+      expect(html, `${mode} 99px or 999px corner`).not.toMatch(/border-radius:\s*(?:9{2,}|\d{3,})px/i)
     }
+  })
+
+  it('SB-09 the roster, groups and badge placement are unchanged', async () => {
+    const roster = () =>
+      [...asideEl().querySelectorAll('nav > *')].map((el) => {
+        if (el.matches('.label')) return `group ${el.children[0].textContent} ${el.children[1].textContent}`
+        const badge = el.querySelector('span.mono')?.textContent
+        return `${el.children[2].textContent}${badge ? ` [${badge}]` : ''}`
+      })
+
+    await renderFresh(firmCtx({ switcherOpen: false }))
+    expect(roster()).toEqual([
+      'group Acme · CLIENT',
+      'Overview',
+      'Invoices [1]',
+      'Approvals [1]',
+      'Rules',
+      'Customers',
+      'Reports',
+      'group OKAFOR & PARTNERS · FIRM-WIDE',
+      'Workflows',
+      'Clients',
+      'Audit',
+      'Settings',
+    ])
+
+    await renderFresh(sidebarCtx())
+    expect(roster()).toEqual([
+      'group Workspace · Acme',
+      'Overview',
+      'Invoices [1]',
+      'Workflows',
+      'Rules',
+      'Approvals [1]',
+      'Reports',
+      'Audit',
+      'Settings',
+    ])
+  })
+
+  it('SB-10 the Sign out hover fill is not shadowed by an inline background', async () => {
+    await renderSidebar(V2_ROLLUP, sidebarCtx())
+
+    // An inline `background` beats `.pf-signout:hover`'s fill, so the button declares none.
+    expect(styleDecl(screen.getByRole('button', { name: 'Sign out' }), 'background')).toBeNull()
   })
 })

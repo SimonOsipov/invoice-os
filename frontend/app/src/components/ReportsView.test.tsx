@@ -704,6 +704,63 @@ describe('ReportsView: the v2 tax report (RESKIN2-05-02)', () => {
     for (const needle of ['999px', '99px', 'oklch', 'gradient', 'box-shadow']) expect(html, needle).not.toContain(needle)
   })
 
+  it('RP-11 KPI figures keep their size, weight and tone; only the WHT tile carries a chip', async () => {
+    const { container } = await renderReady()
+
+    const value = (label: string) => (labelDiv(container, label).parentElement?.nextElementSibling as HTMLElement)
+    for (const l of ['Taxable value', 'Output VAT', 'Total invoiced', 'WHT withheld · 5%', 'Invoices in period']) {
+      expect(value(l).style.fontSize, `${l} size`).toBe('25px')
+      expect(value(l).style.fontWeight, `${l} weight`).toBe('700')
+    }
+    expect(value('Output VAT').style.color).toBe('var(--action)')
+    expect(value('Taxable value').style.color).toBe('var(--fg-1)')
+    expect(value('WHT withheld · 5%').style.color, 'the sample figure reads subordinate').toBe('var(--fg-3)')
+    expect(value('WHT withheld · 5%').textContent, 'the sample figure carries the ~').toMatch(/^~/)
+    const chips = Array.from(container.querySelectorAll('span.mono')).filter((s) => s.textContent === 'SAMPLE')
+    expect(chips, 'exactly one SAMPLE chip').toHaveLength(1)
+    expect(labelDiv(container, 'Taxable value').nextElementSibling, 'a real tile has no chip').toBeNull()
+  })
+
+  it('RP-12 the PASS chip and the Passed / Failing figures keep their tone', async () => {
+    const { container } = await renderReady()
+
+    const chip = Array.from(container.querySelectorAll('span.mono')).find((s) => /% PASS$/.test(s.textContent ?? '')) as HTMLElement
+    expect(chip, 'the PASS chip renders on a ready rollup').toBeDefined()
+    expect(chip.style.color).toBe('var(--status-green-text)')
+    expect(chip.style.fontSize).toBe('11px')
+    const pass = labelDiv(container, 'Passed').previousElementSibling as HTMLElement
+    const fail = labelDiv(container, 'Failing').previousElementSibling as HTMLElement
+    expect(pass.style.color).toBe('var(--status-green-text)')
+    expect(fail.style.color).toBe('var(--status-red-text)')
+    expect(labelDiv(container, 'Passed').parentElement?.style.background).toBe('var(--status-green-bg)')
+    expect(labelDiv(container, 'Failing').parentElement?.style.background).toBe('var(--status-red-bg)')
+  })
+
+  it('RP-13 no violations: Passed renders and there is no Top failures head or FIRM-WIDE chip', async () => {
+    const { container } = await renderReady(ZERO_ROLLUP)
+
+    expect(screen.getByText('Passed')).toBeTruthy()
+    expect(screen.queryByText('Top failures')).toBeNull()
+    expect(screen.queryByText('FIRM-WIDE')).toBeNull()
+    expect(container.querySelectorAll('div.label').length, 'control: the report still renders its labels').toBeGreaterThan(5)
+  })
+
+  it('RP-14 loading and error render the shared state, never the KPI row', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+    const loading = render(<ReportsView ctx={reportsCtx()} />)
+    expect(await screen.findByText('Loading reports…')).toBeTruthy()
+    expect(screen.queryByText('Taxable value')).toBeNull()
+    expect(screen.queryByText('No data to report yet')).toBeNull()
+    expect(screen.getByRole('heading', { level: 1, name: 'Reports & analytics' }), 'control: the header still renders').toBeTruthy()
+    loading.unmount()
+
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: false, status: 503, json: () => Promise.resolve({ error: 'down' }) })))
+    render(<ReportsView ctx={reportsCtx()} />)
+    expect(await screen.findByText('Something went wrong')).toBeTruthy()
+    expect(screen.getAllByRole('button', { name: /retry/i }).length).toBeGreaterThan(0)
+    expect(screen.queryByText('Taxable value')).toBeNull()
+  })
+
   it('RP-10 a rollup error renders no PASS chip (error; pin, green at write)', async () => {
     mockFetchRollupError([listResponse([row({ id: 'inv-e', buyer_tin: tinFor(2), buyer_name: 'Ladder Buyer' })], { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 1 })])
     const { container } = render(<ReportsView ctx={reportsCtx()} />)

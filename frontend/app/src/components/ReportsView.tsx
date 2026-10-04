@@ -19,11 +19,9 @@
 // migrations/20260714103137_invoices.sql; line_items aren't in the list wire shape
 // either, [D7]/[D8]), so it is NOT recomputed from that. It applies the same
 // illustrative 5% rate to the real `taxable` sum that already feeds the first KPI tile —
-// a real base, an invented rate, not a wholly invented number — and it carries the same
-// "SAMPLE" mono chip DashboardActive.tsx's TileHead renders for its own fabricated
-// panels (readiness score/trend, recent activity), so nobody reads it as a computed
-// filing figure. "Total invoiced" (added by step 3 into WHT's old slot) is NOT evicted
-// to make room — the KPI row grows to five tiles instead.
+// a real base, an invented rate, not a wholly invented number — and it carries a
+// "SAMPLE" mono chip, so nobody reads it as a computed filing figure. "Total invoiced"
+// (added by step 3 into WHT's old slot) is NOT evicted to make room — the KPI row grows to five tiles instead.
 
 import { useMemo } from 'react'
 
@@ -109,7 +107,7 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
     { label: 'Total invoiced', value: fmtShort(totalInvoiced), color: 'var(--fg-1)' },
     // Muted fg-3 (not fg-1 like the four real tiles) + a leading `~`: on a filing-adjacent
     // screen the "SAMPLE" chip alone is easy to miss at a glance — the value itself has to
-    // read as subordinate/illustrative too, not just carry an 11px badge beside it.
+    // read as subordinate/illustrative too, not just carry a badge beside it.
     { label: 'WHT withheld · 5%', value: '~' + fmtShort(whtSample), color: 'var(--fg-3)', meta: 'SAMPLE' },
     { label: 'Invoices in period', value: String(rows.length), color: 'var(--fg-1)' },
   ]
@@ -187,7 +185,7 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
               <div key={k.label} style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '18px 20px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 12 }}>
                   <div className="label">{k.label}</div>
-                  {/* SAMPLE chip sits beside the label, same style as TileHead's `meta`. */}
+                  {/* SAMPLE chip sits beside the label. */}
                   {k.meta && (
                     <span className="mono" style={CHIP_STYLE}>
                       {k.meta}

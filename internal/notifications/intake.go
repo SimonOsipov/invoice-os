@@ -48,7 +48,8 @@ func decodeIntake(w http.ResponseWriter, r *http.Request, dst any) bool {
 		writeJSONBody(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return false
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxIntakeBody)).Decode(dst); err != nil {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxIntakeBody))
+	if err := dec.Decode(dst); err != nil || dec.More() {
 		writeJSONBody(w, http.StatusBadRequest, map[string]string{"error": "malformed body"})
 		return false
 	}
@@ -75,7 +76,7 @@ func RegistrantsHandler(store IntakeStore, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 		if b.UserID != "" {
-			if _, err := uuid.Parse(b.UserID); err != nil {
+			if _, err := uuid.Parse(b.UserID); err != nil || len(b.UserID) != 36 {
 				writeJSONBody(w, http.StatusBadRequest, map[string]string{"error": "user_id is invalid"})
 				return
 			}

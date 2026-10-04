@@ -193,7 +193,7 @@ export function PolicyStatusPill({ status, padding = '2px 8px' }: { status: Poli
  * the `.asc-app` rule outranks any component background — so the caller draws one
  * beside it. This is the first styled <select> in the app; every other screen dodged it.
  */
-export function WfSelect({ label, value, options, onChange, height = 38, marginBottom = 0, hideLabel = false, width, disabled, title, ariaDescribedBy }: {
+export function WfSelect({ label, value, options, onChange, height = 38, marginBottom = 0, hideLabel = false, width, background = 'var(--bg-1)', disabled, title, ariaDescribedBy }: {
   label: string
   value: string
   options: WfOption[]
@@ -203,6 +203,7 @@ export function WfSelect({ label, value, options, onChange, height = 38, marginB
   /** For the scope row, where a sibling `.label` already names the control on screen. */
   hideLabel?: boolean
   width?: number | string
+  background?: string
   /**
    * The persistent-disable recipe, all three landing on the `<select>` itself — never on the
    * `<label>` wrapper, which `hideLabel` aria-labels and `getByLabelText` hands back. Optional
@@ -229,7 +230,7 @@ export function WfSelect({ label, value, options, onChange, height = 38, marginB
           title={title}
           aria-describedby={ariaDescribedBy}
           // `backgroundColor`, never the `background` shorthand.
-          style={{ width: '100%', height, padding: '0 32px 0 12px', border: '1px solid var(--line-2)', backgroundColor: 'var(--bg-1)', color: 'var(--fg-1)', fontSize: 13, cursor: 'pointer', boxSizing: 'border-box', ...(disabled ? { backgroundColor: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null) }}
+          style={{ width: '100%', height, padding: '0 32px 0 12px', border: '1px solid var(--line-2)', backgroundColor: background, color: 'var(--fg-1)', fontSize: 13, cursor: 'pointer', boxSizing: 'border-box', ...(disabled ? { backgroundColor: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null) }}
         >
           {options.map((o) => (
             <option key={o.value} value={o.value}>
@@ -307,12 +308,11 @@ export function WfToggle({ on, onToggle, label, disabled, title, ariaDescribedBy
 }
 
 /** The small square action buttons that ride inside a card: delete, and arm-to-place. */
-export function WfIconButton({ label, glyph, onClick, size = 24, tone = 'plain', pressed }: {
+export function WfIconButton({ label, glyph, onClick, size = 24, pressed }: {
   label: string
   glyph: ReactNode
   onClick: () => void
   size?: number
-  tone?: 'plain' | 'danger'
   pressed?: boolean
 }) {
   return (
@@ -337,7 +337,7 @@ export function WfIconButton({ label, glyph, onClick, size = 24, tone = 'plain',
         padding: 0,
         cursor: 'pointer',
         background: pressed ? 'var(--action-tint)' : 'transparent',
-        color: pressed ? 'var(--action)' : tone === 'danger' ? 'var(--fg-4)' : 'var(--fg-3)',
+        color: pressed ? 'var(--action)' : 'var(--fg-4)',
       }}
     >
       {glyph}

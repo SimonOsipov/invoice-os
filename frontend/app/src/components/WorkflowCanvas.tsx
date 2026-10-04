@@ -75,19 +75,14 @@ export function WorkflowCanvas(api: CanvasProps) {
     <div
       style={{
         border: '1px solid var(--line-1)',
-        borderRadius: 14,
+        borderRadius: 'var(--radius-md)',
         padding: '24px 22px 28px',
-        // backgroundColor + backgroundImage as separate properties, never the
-        // `background` shorthand — the shorthand resets the other half.
         backgroundColor: 'var(--bg-0)',
-        backgroundImage: 'radial-gradient(var(--line-2) 1px, transparent 0)',
-        backgroundSize: '18px 18px',
-        backgroundPosition: '9px 9px',
       }}
     >
       <div style={{ width: '100%', maxWidth: 480, margin: '0 auto' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'var(--slate-800)', color: 'var(--text-on-dark)', borderRadius: 14, padding: '13px 16px', boxShadow: 'var(--shadow-soft)' }}>
-          <span style={{ flex: 'none', width: 34, height: 34, borderRadius: 12, background: 'var(--on-dark-10)', display: 'grid', placeItems: 'center' }}>{wfTriggerGlyph}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'var(--slate-800)', color: 'var(--text-on-dark)', borderRadius: 'var(--radius-md)', padding: '13px 16px' }}>
+          <span style={{ flex: 'none', width: 34, height: 34, borderRadius: 'var(--radius-md)', background: 'var(--on-dark-10)', display: 'grid', placeItems: 'center' }}>{wfTriggerGlyph}</span>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 13.5, fontWeight: 600 }}>Invoice submitted</div>
             <div className="mono" style={{ fontSize: 10, color: 'var(--on-dark-70)', letterSpacing: '0.05em' }}>
@@ -106,13 +101,13 @@ export function WorkflowCanvas(api: CanvasProps) {
         <Slot api={api} loc={`root#${nodes.length}`} variant="root" />
 
         {emptyIdle && (
-          <div style={{ border: '1px dashed var(--line-2)', borderRadius: 14, padding: 22, textAlign: 'center', fontSize: 12.5, color: 'var(--fg-4)', marginBottom: 4 }}>
+          <div style={{ border: '1px dashed var(--line-2)', borderRadius: 'var(--radius-md)', padding: 22, textAlign: 'center', fontSize: 12.5, color: 'var(--fg-3)', marginBottom: 4 }}>
             No approval steps — invoices transmit immediately. Drag a block here to require sign-off.
           </div>
         )}
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'var(--bg-2)', border: '1.5px solid var(--action)', borderRadius: 14, padding: '12px 16px', boxShadow: 'var(--shadow-card)' }}>
-          <span style={{ flex: 'none', width: 34, height: 34, borderRadius: 12, background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center' }}>{wfSendGlyph}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'var(--bg-2)', border: '1.5px solid var(--action)', borderRadius: 'var(--radius-md)', padding: '12px 16px' }}>
+          <span style={{ flex: 'none', width: 34, height: 34, borderRadius: 'var(--radius-md)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center' }}>{wfSendGlyph}</span>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 13.5, fontWeight: 600 }}>Transmit to NRS / MBS</div>
             <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.05em' }}>
@@ -143,7 +138,7 @@ function Slot({ api, loc, variant }: { api: CanvasProps; loc: Loc; variant: 'roo
 
   const borderColor = active ? 'var(--action)' : 'var(--line-2)'
   const bg = active ? 'var(--action-tint)' : 'transparent'
-  const textColor = active ? 'var(--action)' : 'var(--fg-4)'
+  const textColor = active ? 'var(--action)' : 'var(--fg-3)'
 
   return (
     <div
@@ -169,11 +164,11 @@ function Slot({ api, loc, variant }: { api: CanvasProps; loc: Loc; variant: 'roo
       {line && <span style={{ width: 2, height: 16, background: 'var(--line-2)' }} />}
       {dropBox &&
         (variant === 'root' ? (
-          <div style={{ width: '100%', height: 32, display: 'grid', placeItems: 'center', border: `1.5px dashed ${borderColor}`, background: bg, borderRadius: 12, fontSize: 11, fontWeight: 600, color: textColor }}>
+          <div style={{ width: '100%', height: 32, display: 'grid', placeItems: 'center', border: `1.5px dashed ${borderColor}`, background: bg, borderRadius: 'var(--radius-md)', fontSize: 11, fontWeight: 600, color: textColor }}>
             {active ? 'Release to place' : 'Drop step here'}
           </div>
         ) : (
-          <div style={{ width: '100%', height: 28, border: `1.5px dashed ${borderColor}`, background: bg, borderRadius: 7 }} />
+          <div style={{ width: '100%', height: 28, border: `1.5px dashed ${borderColor}`, background: bg, borderRadius: 'var(--radius-md)' }} />
         ))}
     </div>
   )
@@ -185,13 +180,13 @@ function StepActions({ api, node, size }: { api: CanvasProps; node: WfNode; size
   return (
     <>
       <WfIconButton label={`Move ${label}`} glyph={wfTargetGlyph} size={size} pressed={api.armedNodeId === node.id} onClick={() => api.onArmNode(node.id)} />
-      <WfIconButton label={`Delete ${label}`} glyph={wfCrossGlyph} size={size} tone="danger" onClick={() => api.onDelete(node.id)} />
+      <WfIconButton label={`Delete ${label}`} glyph={wfCrossGlyph} size={size} onClick={() => api.onDelete(node.id)} />
     </>
   )
 }
 
-function cardShell(selected: boolean): { border: string; boxShadow: string } {
-  return { border: `1.5px solid ${selected ? 'var(--action)' : 'var(--line-2)'}`, boxShadow: selected ? 'var(--shadow-soft)' : 'var(--shadow-card)' }
+function cardShell(highlight: boolean): { border: string } {
+  return { border: `1.5px solid ${highlight ? 'var(--action)' : 'var(--line-2)'}` }
 }
 
 function SimpleCard({ api, node }: { api: CanvasProps; node: BranchNode }) {
@@ -203,9 +198,9 @@ function SimpleCard({ api, node }: { api: CanvasProps; node: BranchNode }) {
       onDragStart={(e) => api.onNodeDragStart(node.id, e)}
       onDragEnd={api.onDragEnd}
       onClick={() => api.onSelect(node.id)}
-      style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 12, background: 'var(--bg-2)', borderRadius: 14, padding: '12px 14px', cursor: 'grab', ...cardShell(api.selId === node.id) }}
+      style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 12, background: 'var(--bg-2)', borderRadius: 'var(--radius-md)', padding: '12px 14px', cursor: 'grab', ...cardShell(api.selId === node.id || api.armedNodeId === node.id) }}
     >
-      <span style={{ flex: 'none', width: 34, height: 34, borderRadius: 12, background: tone.bg, color: tone.color, display: 'grid', placeItems: 'center' }}>
+      <span style={{ flex: 'none', width: 34, height: 34, borderRadius: 'var(--radius-md)', background: tone.bg, color: tone.color, display: 'grid', placeItems: 'center' }}>
         <NodeGlyph type={node.type} />
       </span>
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -222,7 +217,7 @@ function SimpleCard({ api, node }: { api: CanvasProps; node: BranchNode }) {
 
 function Badge({ children, tone, bg, border }: { children: ReactNode; tone: string; bg: string; border: string }) {
   return (
-    <span className="mono" style={{ flex: 'none', fontSize: 8.5, fontWeight: 600, color: tone, background: bg, border: `1px solid ${border}`, borderRadius: 8, padding: '2px 6px', letterSpacing: '0.05em' }}>
+    <span className="mono" style={{ flex: 'none', fontSize: 8.5, fontWeight: 600, color: tone, background: bg, border: `1px solid ${border}`, borderRadius: 'var(--radius-sm)', padding: '2px 6px', letterSpacing: '0.05em' }}>
       {children}
     </span>
   )
@@ -230,17 +225,17 @@ function Badge({ children, tone, bg, border }: { children: ReactNode; tone: stri
 
 function ConditionBlock({ api, node }: { api: CanvasProps; node: ConditionNode }) {
   const selected = api.selId === node.id
-  const shell = cardShell(selected)
+  const shell = cardShell(selected || api.armedNodeId === node.id)
   return (
-    <div style={{ background: 'var(--bg-2)', borderRadius: 16, overflow: 'hidden', ...shell }}>
+    <div style={{ background: 'var(--bg-2)', borderRadius: 'var(--radius-md)', overflow: 'hidden', ...shell }}>
       <div
         draggable
         onDragStart={(e) => api.onNodeDragStart(node.id, e)}
         onDragEnd={api.onDragEnd}
         onClick={() => api.onSelect(node.id)}
-        style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 14px', background: selected ? 'var(--action-tint)' : 'var(--bg-2)', borderBottom: '1px solid var(--line-1)', cursor: 'grab' }}
+        style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 14px', background: selected ? 'var(--action-tint)' : 'var(--bg-1)', borderBottom: '1px solid var(--line-1)', cursor: 'grab' }}
       >
-        <span style={{ flex: 'none', width: 30, height: 30, borderRadius: 7, background: 'var(--slate-100)', color: 'var(--fg-1)', display: 'grid', placeItems: 'center' }}>
+        <span style={{ flex: 'none', width: 30, height: 30, borderRadius: 'var(--radius-md)', background: 'var(--slate-100)', color: 'var(--fg-1)', display: 'grid', placeItems: 'center' }}>
           <NodeGlyph type="condition" />
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -282,7 +277,7 @@ function Lane({ api, node, branch }: { api: CanvasProps; node: ConditionNode; br
       <Slot api={api} loc={`${laneKey}#${items.length}`} variant="branch" />
 
       {emptyIdle && (
-        <div style={{ border: '1px dashed var(--line-2)', borderRadius: 7, padding: '12px 8px', textAlign: 'center', fontSize: 10.5, color: 'var(--fg-4)' }}>
+        <div style={{ border: '1px dashed var(--line-2)', borderRadius: 'var(--radius-md)', padding: '12px 8px', textAlign: 'center', fontSize: 10.5, color: 'var(--fg-3)' }}>
           {branch === 'then' ? 'Drop steps here' : 'Continue (no extra step)'}
         </div>
       )}
@@ -301,9 +296,9 @@ function MiniCard({ api, node }: { api: CanvasProps; node: BranchNode }) {
       onDragStart={(e) => api.onNodeDragStart(node.id, e)}
       onDragEnd={api.onDragEnd}
       onClick={() => api.onSelect(node.id)}
-      style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'var(--bg-2)', borderRadius: 9, padding: '9px 10px', cursor: 'grab', marginBottom: 6, ...cardShell(api.selId === node.id) }}
+      style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'var(--bg-2)', borderRadius: 'var(--radius-md)', padding: '9px 10px', cursor: 'grab', marginBottom: 6, ...cardShell(api.selId === node.id || api.armedNodeId === node.id) }}
     >
-      <span style={{ flex: 'none', width: 28, height: 28, borderRadius: 7, background: tone.bg, color: tone.color, display: 'grid', placeItems: 'center' }}>
+      <span style={{ flex: 'none', width: 28, height: 28, borderRadius: 'var(--radius-md)', background: tone.bg, color: tone.color, display: 'grid', placeItems: 'center' }}>
         <NodeGlyph type={node.type} size={15} />
       </span>
       {/* Only an approval step carries a sub-line here. The title's typography sits ON the

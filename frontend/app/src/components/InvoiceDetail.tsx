@@ -705,8 +705,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                     </div>
                   )}
                   {/* Inline reject row, never a modal ([no-modal]) -- a sibling OUTSIDE
-                      detail-decision-actions, resolve-outside's row shape verbatim
-                      (:944-991 below): flexWrap:'wrap' is mandatory, not cosmetic -- the
+                      detail-decision-actions: flexWrap:'wrap' is mandatory, not cosmetic -- the
                       input plus both button labels don't fit on one line at 320px. */}
                   {rejectOpen && (
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -871,7 +870,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   </div>
                   {/* Genuine-failure surface, moved here from the deleted fused card. Style
                       unchanged; only the card-relative `margin` is dropped, since the column's
-                      own `gap: 8` now does that spacing. */}
+                      own `gap` now does that spacing. */}
                   {revalidateError && (
                     <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)', textAlign: 'left' }}>
                       {revalidateError}

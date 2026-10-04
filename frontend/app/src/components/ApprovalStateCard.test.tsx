@@ -360,6 +360,7 @@ describe('ApprovalStateCard', () => {
     expect(hint.style.borderTop).toBe('1px solid var(--line-1)')
     expect(hint.style.paddingTop).toBe('8px')
     expect(hint.style.marginTop).toBe('4px')
+    expect(within(el).getByTestId('approval-holder-name').style.fontSize, 'holder line').toBe('12.5px')
     const role = within(el).getByText('Finance lead')
     expect(role.style.fontSize).toBe('13.5px')
     expect(role.style.fontWeight).toBe('600')
@@ -466,6 +467,9 @@ describe('ApprovalStateCard', () => {
     expect(within(el).getByTestId('approval-state').textContent).toBe(copyOf('stateApproved'))
     expect(within(el).queryAllByTestId('approval-holder')).toHaveLength(0)
     expect(within(el).queryAllByTestId('approval-voided')).toHaveLength(0)
+    const none = within(el).getByTestId('approval-no-pending')
+    expect(none.style.color, 'plain --fg-3 text').toBe('var(--fg-3)')
+    expect(none.getAttribute('style') ?? '', 'no box on the closed body').not.toMatch(/border|background/)
   })
 
   // ---- AUDIT-09-07 / AC-3: the one retired trail field no audit payload carries -------

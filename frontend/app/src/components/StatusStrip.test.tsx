@@ -11,9 +11,8 @@
 // caption ellipsised, the rail absorbing the slack -- are provable only in
 // a browser and belong to the sweep in e2e/topology/invoice-surfaces.spec.ts (arch §7 A-D).
 //
-// Two specs render nothing and are GREEN in the red commit by design -- the token
-// existence guard and the interactive-selector control needle. Both exist to stop the
-// specs above them passing vacuously.
+// One spec renders nothing and is GREEN in the red commit by design -- the
+// interactive-selector control needle. It exists to stop the specs above it passing vacuously.
 //
 // TIMEZONE: timestamps are offset-less, which ECMA-262 parses as LOCAL time, so fmtTime's
 // local getHours()/getMinutes() round-trip them in every timezone (invoiceStrip.test.ts).

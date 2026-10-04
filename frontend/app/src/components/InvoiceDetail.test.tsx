@@ -3948,6 +3948,7 @@ describe('InvoiceDetail header and action cluster take the v2 look (RESKIN2-03-0
       expect(row.style.gap, `${name}: button gap stays 8`).toBe('8px')
     }
     expect((decision.parentElement as HTMLElement).style.gap, 'the action column gap').toBe('10px')
+    expect(screen.getByTestId('invoice-actions').style.gap, 'the bar column gap').toBe('10px')
   })
 
   it('the confirm prompts take the v2 type', async () => {
@@ -3962,6 +3963,7 @@ describe('InvoiceDetail header and action cluster take the v2 look (RESKIN2-03-0
       const [first, second] = Array.from(prompt.children) as HTMLElement[]
       expect(first.style.fontSize, `${id} line 1 size`).toBe('13px')
       expect(first.style.fontWeight, `${id} line 1 weight`).toBe('600')
+      expect(first.style.color, `${id} line 1 colour`).toBe('var(--fg-1)')
       expect(second.style.fontSize, `${id} line 2 size`).toBe('12px')
       expect(second.style.color, `${id} line 2 colour`).toBe('var(--fg-3)')
     }

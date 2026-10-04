@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@invoice-os/api-client'
 
 import { APP_PERSONAS, type Me, type Session } from '../auth'
-import { HANDOFF_PARAM, handoffPersona, isLiveHandoffSession, readHandoffCode, redeemHandoff, registrationAnswers } from './sessionHandoff'
+import { HANDOFF_PARAM, HANDOFF_TTL_MS, handoffPersona, isLiveHandoffSession, readHandoffCode, redeemHandoff, registrationAnswers } from './sessionHandoff'
 
 const CODE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ'
 const STATE = 'ZYXWVUTSRQPONMLKJIHGFEDCBAzyxwvutsrqponmlk_'
@@ -286,6 +286,8 @@ describe('redeemHandoff provisions the registered workspace (AUTH-15.5-03)', () 
       ['no user_metadata', {}],
       ['no registration', { user_metadata: {} }],
       ['blank workspace name', { user_metadata: { registration: { ...ANSWERS, workspace_name: '' } } }],
+      ['whitespace-only workspace name', { user_metadata: { registration: { ...ANSWERS, workspace_name: '   ' } } }],
+      ['whitespace-only display name', { user_metadata: { registration: { ...ANSWERS, display_name: '\t ' } } }],
       ['unknown kind', { user_metadata: { registration: { ...ANSWERS, kind: 'bogus' } } }],
     ]
     for (const [name, claims] of rows) {
@@ -297,6 +299,24 @@ describe('redeemHandoff provisions the registered workspace (AUTH-15.5-03)', () 
     }
   })
 
+  it('redeemHandoff does not provision when /me fails for another reason or succeeds', async () => {
+    const rows: [string, Reply[], string[]][] = [
+      ['/me 500', [{ status: 500 }], CHAIN.slice(0, 2)],
+      ['/me 401', [{ status: 401, body: { error: 'unauthorized' } }], CHAIN.slice(0, 2)],
+      ['/me 200: a returning account', [{ status: 200, body: IN_HOUSE_ME }], CHAIN.slice(0, 2)],
+    ]
+    for (const [name, me, want] of rows) {
+      const calls = stubChain({ me })
+      const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
+      expect(trace(calls), name).toEqual(want)
+      if (name.includes('200')) {
+        expect(s, name).toMatchObject({ token: TOKEN, renewal: { refreshToken: 'R0', receivedAt: 5000 - HANDOFF_TTL_MS } })
+      } else {
+        expect(s, name).toBeInstanceOf(ApiError)
+      }
+    }
+  })
+
   it('redeemHandoff rejects when provisioning or refresh fails', async () => {
     const NO_REFRESH = { status: 200, body: { access_token: TOKEN } }
     const rows: [string, Parameters<typeof stubChain>[0], string[]][] = [
@@ -304,6 +324,10 @@ describe('redeemHandoff provisions the registered workspace (AUTH-15.5-03)', () 
       ['workspaces 500', { workspaces: { status: 500 } }, CHAIN.slice(0, 3)],
       ['refresh 401', { refresh: { status: 401, body: { error: 'invalid refresh token' } } }, CHAIN.slice(0, 4)],
       ['exchange without a refresh token', { exchange: NO_REFRESH }, CHAIN.slice(0, 3)],
+      ['exchange with an empty refresh token', { exchange: { status: 200, body: { access_token: TOKEN, refresh_token: '' } } }, CHAIN.slice(0, 3)],
+      ['refresh answering without tokens', { refresh: { status: 200, body: {} } }, CHAIN.slice(0, 4)],
+      ['second /me 500', { me: [FORBIDDEN, { status: 500 }] }, CHAIN],
+      ['second /me malformed', { me: [FORBIDDEN, { status: 200, body: {} }] }, CHAIN],
     ]
     for (const [name, r, want] of rows) {
       const calls = stubChain(r)
@@ -337,6 +361,11 @@ describe('registrationAnswers (AUTH-15.5-03)', () => {
       ['display name absent', withReg({ workspace_name: NAMES.workspace_name })],
       ['workspace name blank', withReg({ ...NAMES, workspace_name: '' })],
       ['display name blank', withReg({ ...NAMES, display_name: '' })],
+      ['workspace name whitespace only', withReg({ ...NAMES, workspace_name: ' \t ' })],
+      ['display name whitespace only', withReg({ ...NAMES, display_name: '   ' })],
+      ['null kind', withReg({ ...NAMES, kind: null })],
+      ['registration null', withReg(null)],
+      ['registration an array', withReg([NAMES])],
       ['numeric name', withReg({ ...NAMES, workspace_name: 7 })],
       ['unknown kind', withReg({ ...NAMES, kind: 'bogus' })],
       ['numeric kind', withReg({ ...NAMES, kind: 1 })],

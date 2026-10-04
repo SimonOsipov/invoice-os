@@ -37,7 +37,7 @@ export function readHandoffCode(search: string): string | null {
   return code !== null && BASE64URL_43.test(code) ? code : null
 }
 
-// No degraded fallback: any failure, a 15 s timeout included, rejects (a /me 403 means no workspace).
+// No degraded fallback: any failure, a 15 s timeout included, rejects.
 export async function redeemHandoff(base: string, code: string, state: string, now: number = Date.now()): Promise<Session> {
   const signal = AbortSignal.timeout(15000)
   const { access_token: token, refresh_token: refreshToken } = await apiFetch<{ access_token: string; refresh_token?: unknown }>(`${base}/auth/exchange`, {

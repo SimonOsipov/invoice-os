@@ -3,7 +3,7 @@
 
 import { StrictMode } from 'react'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, onTestFinished, vi } from 'vitest'
 
 import { APP_PERSONAS, type Me, type Session } from './auth'
 import { captureDestination } from './lib/deepLink'
@@ -1397,7 +1397,6 @@ describe('AUTH-05-08 adversarial', () => {
   })
 })
 
-// F5: each redemption call aborts after 15 s and takes the failure arm.
 describe('the first sign-in provisions the registered workspace (AUTH-15.5-03)', () => {
   const CHAIN = (base: string) => [
     `${base}/auth/exchange`,
@@ -1420,8 +1419,25 @@ describe('the first sign-in provisions the registered workspace (AUTH-15.5-03)',
   it('a registered account lands in its new workspace on first sign-in', async () => {
     const { hrefWrites } = registered()
     const before = Date.now()
+    // Every DOM state from boot to the workspace: the splash alone, never a prompt.
+    const frames: { text: string; prompts: number; usersSeen: number }[] = []
+    const observer = new MutationObserver(() =>
+      frames.push({
+        text: document.body.textContent ?? '',
+        prompts: document.querySelectorAll('button, input, form, a, [role="dialog"]').length,
+        usersSeen: seenUsers.length,
+      }),
+    )
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+    onTestFinished(() => observer.disconnect())
     await bootApp()
     await waitForVerifiedWorkspace()
+    const preWorkspace = frames.filter((f) => f.usersSeen === 0)
+    expect(preWorkspace.length, 'frames before the workspace').toBeGreaterThan(0)
+    const screens = [...new Set(preWorkspace.map((f) => f.text).filter((t) => t !== ''))]
+    expect(screens, 'one screen before the workspace: the splash').toHaveLength(1)
+    expect(screens[0]).toContain('Opening your workspace…')
+    expect(Math.max(...preWorkspace.map((f) => f.prompts)), 'no button, field, link or dialog before the workspace').toBe(0)
     expect(fetchUrls.slice(0, 5)).toEqual(CHAIN(GATEWAY))
     expect(workspacesCalls).toEqual([{ auth: `Bearer ${T_ANSWERS}`, body: ANSWERS }])
     expect(refreshBodies).toEqual([{ refresh_token: 'R0' }])
@@ -1446,6 +1462,15 @@ describe('the first sign-in provisions the registered workspace (AUTH-15.5-03)',
     expect(fetchUrls.slice(0, 5)).toEqual(CHAIN(GATEWAY))
     expect(hrefWrites).toEqual([])
     expect(storedRecord()?.token).toBe(T2)
+  })
+
+  it('a registered account provisions and refreshes once under StrictMode', async () => {
+    registered()
+    await bootApp({ strict: true })
+    await waitForVerifiedWorkspace()
+    expect(fetchUrls.filter((u) => u.endsWith('/auth/exchange'))).toHaveLength(1)
+    expect(workspacesCalls).toHaveLength(1)
+    expect(refreshBodies).toEqual([{ refresh_token: 'R0' }])
   })
 
   it('a registered account still blocked after a 409 reports no-workspace', async () => {
@@ -1476,6 +1501,7 @@ describe('the first sign-in provisions the registered workspace (AUTH-15.5-03)',
   }
 })
 
+// F5: each redemption call aborts after 15 s and takes the failure arm.
 describe('a hung redemption times out', () => {
   const TIMEOUT_MS = 15_000
   let signals: Record<'exchange' | 'me', (AbortSignal | undefined)[]>
@@ -1489,17 +1515,33 @@ describe('a hung redemption times out', () => {
     })
   }
 
-  function stubFetch(exchangeHangs: boolean) {
+  type Leg = 'exchange' | 'me' | 'workspaces' | 'refresh' | 'second /me'
+  let urls: string[]
+
+  // Every leg before `hangAt` answers at once, so a late leg proves the one signal spans the chain.
+  function stubFetch(hangAt: Leg) {
+    const registered = hangAt === 'workspaces' || hangAt === 'refresh' || hangAt === 'second /me'
+    let meCalls = 0
     vi.stubGlobal(
       'fetch',
       vi.fn((url: string, init?: RequestInit) => {
+        urls.push(url)
         if (url === `${GATEWAY}/auth/exchange`) {
           signals.exchange.push(init?.signal ?? undefined)
-          return exchangeHangs ? hang(init?.signal) : ok({ access_token: T })()
+          return hangAt === 'exchange'
+            ? hang(init?.signal)
+            : ok({ access_token: registered ? T_ANSWERS : T, refresh_token: 'R0' })()
         }
         if (url === `${GATEWAY}/api/tenancy/v1/me`) {
           signals.me.push(init?.signal ?? undefined)
-          return hang(init?.signal)
+          meCalls++
+          return registered && meCalls === 1 ? fail(403, 'forbidden')() : hang(init?.signal)
+        }
+        if (url === `${GATEWAY}/api/tenancy/v1/workspaces`) {
+          return hangAt === 'workspaces' ? hang(init?.signal) : ok({ tenant: ME.tenant })()
+        }
+        if (url === `${GATEWAY}/auth/refresh`) {
+          return hangAt === 'refresh' ? hang(init?.signal) : ok({ access_token: T2, refresh_token: 'R1' })()
         }
         return hang(init?.signal)
       }),
@@ -1515,6 +1557,7 @@ describe('a hung redemption times out', () => {
 
   beforeEach(() => {
     signals = { exchange: [], me: [] }
+    urls = []
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     // jsdom's AbortSignal.timeout runs on the window's real timers; route it through the fake ones.
     vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => {
@@ -1528,21 +1571,26 @@ describe('a hung redemption times out', () => {
     vi.useRealTimers()
   })
 
-  for (const [leg, exchangeHangs] of [
-    ['exchange', true],
-    ['/me', false],
-  ] as const) {
+  const LEGS: [Leg, string[], number][] = [
+    ['exchange', ['/auth/exchange'], 0],
+    ['me', ['/auth/exchange', '/api/tenancy/v1/me'], 1],
+    ['workspaces', ['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/workspaces'], 1],
+    ['refresh', ['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/workspaces', '/auth/refresh'], 1],
+    ['second /me', ['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/workspaces', '/auth/refresh', '/api/tenancy/v1/me'], 2],
+  ]
+  for (const [leg, path, meCalls] of LEGS) {
     it(`a hung ${leg} fails once at 15 s, not before`, async () => {
       configure()
       ensureSignInState()
-      stubFetch(exchangeHangs)
+      stubFetch(leg)
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       window.history.replaceState(null, '', `/?handoff=${CODE}`)
       const { hrefWrites } = interceptHref()
       await bootApp()
       await tick(0)
       expect(signals.exchange, 'one exchange call').toHaveLength(1)
-      expect(signals.me, 'the /me call').toHaveLength(exchangeHangs ? 0 : 1)
+      expect(signals.me, 'the /me calls').toHaveLength(meCalls)
+      expect(urls, 'the chain stops at the hung leg').toEqual(path.map((p) => `${GATEWAY}${p}`))
 
       await tick(TIMEOUT_MS - 1)
       expect(hrefWrites, 'no navigation before 15 s').toEqual([])
@@ -1551,11 +1599,13 @@ describe('a hung redemption times out', () => {
 
       await tick(1)
       expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=failed`])
+      expect(AbortSignal.timeout).toHaveBeenCalledTimes(1)
       expect(AbortSignal.timeout).toHaveBeenCalledWith(TIMEOUT_MS)
       expect(hrefWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=${STATE_RE}&signin=failed$`))
       expect(warn.mock.calls.filter((c) => String(c[0]).includes('hand-off redemption failed'))).toHaveLength(1)
       expect(warn).toHaveBeenCalledTimes(1)
       expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+      expect(urls, 'nothing runs after the abort').toHaveLength(path.length)
 
       await tick(TIMEOUT_MS)
       expect(hrefWrites, 'still one navigation').toHaveLength(1)
@@ -1565,7 +1615,7 @@ describe('a hung redemption times out', () => {
   it('both redemption calls carry an abort signal', async () => {
     configure()
     ensureSignInState()
-    stubFetch(false)
+    stubFetch('me')
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     window.history.replaceState(null, '', `/?handoff=${CODE}`)
     interceptHref()

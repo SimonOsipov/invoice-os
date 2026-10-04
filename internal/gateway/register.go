@@ -18,7 +18,8 @@ const (
 	// Caps what is read from GoTrue: an error body and a session body are both small.
 	maxGoTrueBodyBytes = 64 << 10
 	// Repeats tenancy's maxNameChars on purpose: the gateway does not import tenancy.
-	maxAnswerNameChars = 200
+	maxAnswerNameChars  = 200
+	maxConsentTextChars = 500
 )
 
 // DefaultRegisterMinResponse is the shortest time any non-400 register answer takes.
@@ -42,6 +43,7 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 			WorkspaceName *string `json:"workspace_name"`
 			DisplayName   *string `json:"display_name"`
 			Kind          *string `json:"kind"`
+			ConsentText   *string `json:"marketing_consent_text"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRegisterBodyBytes)).Decode(&in); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid request body")
@@ -57,13 +59,25 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 		}
 
 		body := map[string]any{"email": in.Email, "password": in.Password}
+		data := map[string]any{}
 		if in.WorkspaceName != nil || in.DisplayName != nil || in.Kind != nil {
 			reg, msg := registrationAnswers(in.WorkspaceName, in.DisplayName, in.Kind)
 			if msg != "" {
 				writeError(w, http.StatusBadRequest, msg)
 				return
 			}
-			body["data"] = map[string]any{"registration": reg}
+			data["registration"] = reg
+		}
+		if t := in.ConsentText; t != nil {
+			// Stored as sent: the text is what the person was shown.
+			if n := utf8.RuneCountInString(*t); strings.TrimSpace(*t) == "" || n > maxConsentTextChars || strings.ContainsRune(*t, 0) {
+				writeError(w, http.StatusBadRequest, "marketing_consent_text must be 1 to 500 characters")
+				return
+			}
+			data["marketing_consent"] = map[string]string{"text": *t, "at": time.Now().UTC().Format(time.RFC3339)}
+		}
+		if len(data) > 0 {
+			body["data"] = data
 		}
 
 		status, gt, err := postGoTrue(r, client, signup, body, nil)
@@ -190,7 +204,10 @@ func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Log
 			http.Redirect(w, r, failed, http.StatusSeeOther)
 			return
 		}
-		status, _, err := postGoTrue(r, client, verify, map[string]string{"type": "signup", "token_hash": token}, nil)
+		var confirmed struct {
+			User gotrueUser `json:"user"`
+		}
+		status, _, err := postGoTrue(r, client, verify, map[string]string{"type": "signup", "token_hash": token}, &confirmed)
 		switch {
 		case err != nil:
 			log.WarnContext(r.Context(), "verify: gotrue unreachable", slog.String("error", err.Error()))
@@ -200,6 +217,7 @@ func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Log
 			http.Redirect(w, r, failed, http.StatusSeeOther)
 		default:
 			// ceiling: the session GoTrue issued is never delivered; any global sign-out or staff cut-off deletes it. Revisit when verifying should sign the user in.
+			handOffRegistrant(r.Context(), log, sink, confirmed.User.contact())
 			http.Redirect(w, r, verified, http.StatusSeeOther)
 		}
 	})

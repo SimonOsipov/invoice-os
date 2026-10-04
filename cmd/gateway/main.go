@@ -155,16 +155,19 @@ func main() {
 	// operational, not tenant data.
 	app.Mux.HandleFunc("GET /healthz/fleet", fleetHandler)
 
+	// One sink for both hand-off paths; the sink bounds each call and never follows a redirect.
+	sink := gateway.NewHTTPContactSink(routed["notifications"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
+
 	// Public registration, outside /api/ and the verifier, in every build. Register is
 	// CORS-wrapped for the landing page; the OPTIONS route stops the POST route 405ing the preflight.
-	reg := registrationHandlers(probed["auth"], siteURL, registerMinResponse, app.Logger, nil)
+	reg := registrationHandlers(probed["auth"], siteURL, registerMinResponse, app.Logger, sink)
 	app.Mux.Handle("POST /auth/register", withCORS(reg.Register))
 	app.Mux.Handle("OPTIONS /auth/register", withCORS(reg.Register))
 	app.Mux.Handle("GET /auth/verify", reg.Verify)
 
 	// Public sign-in hand-off, session renewal and sign-out, outside the verifier, in every build.
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.
-	h := handoffHandlers(probed["auth"], sessions, app.Logger, nil)
+	h := handoffHandlers(probed["auth"], sessions, app.Logger, sink)
 	app.Mux.Handle("POST /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("OPTIONS /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("POST /auth/exchange", withCORS(h.Exchange))

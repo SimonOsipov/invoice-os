@@ -433,6 +433,11 @@ otherwise. The tenant id is a UUIDv5 of the caller's subject; the membership gua
   one form button, and `POST /auth/verify` verifies. The hijack half also needs password
   recovery, or a delete-and-re-create of an unconfirmed user on a repeat signup.
 
+**Accepted risks of user-editable metadata:**
+- *Self-asserted consent.* A user can edit their own GoTrue `user_metadata`, so
+  `user_metadata.marketing_consent` is self-asserted. The hand-off forwards it, and the contact
+  store records only the first tick.
+
 ## Sign-in and hand-off
 
 The landing SPA is the sign-in surface, and it is a different origin from the app. No cookie

@@ -230,6 +230,19 @@ describe('PersonaPopover', () => {
     expect(onReturn).toHaveBeenCalledTimes(1)
   })
 
+  // The prototype's personaReset button: menu-item class (hover rule), --bg-2 fill, the row padding.
+  it('QA-06 the return row is a menu item on --bg-2 with the 9px 12px padding', () => {
+    renderPopover({ members: FIRM_ROSTER, standingIn: true })
+    const row = screen.getByTestId('persona-return-row')
+    expect(row.tagName).toBe('BUTTON')
+    expect([...row.classList]).toEqual(['pf-menu-item'])
+    expect(row.style.background).toBe('var(--bg-2)')
+    expect(row.style.padding).toBe('9px 12px')
+    expect(row.style.display).toBe('flex')
+    expect(row.style.alignItems).toBe('center')
+    expect(row.style.gap).toBe('8px')
+  })
+
   // DM-04 (AC 6). Inside the dark aside the tokens re-point at the dark band; asc-light puts the
   // light vocabulary back. The class is the only handle jsdom has -- the resolved white is
   // read on the deployed build (AS-10).

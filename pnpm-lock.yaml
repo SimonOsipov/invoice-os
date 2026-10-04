@@ -148,6 +148,9 @@ importers:
       '@sentry/vite-plugin':
         specifier: 5.4.0
         version: 5.4.0
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.0
       '@types/react':
         specifier: ^19.2.17
         version: 19.2.17

@@ -744,8 +744,8 @@ func TestLoadUpstreamsRequiresReconciliationURL(t *testing.T) {
 		paths := slices.Clone(reconPaths)
 		reconCode = http.StatusServiceUnavailable
 		mu.Unlock()
-		if !slices.Equal(paths, []string{"/healthz"}) {
-			t.Errorf("reconciliation probed at %v, want exactly [/healthz]", paths)
+		if !slices.Equal(paths, []string{"/healthz", "/readyz"}) {
+			t.Errorf("reconciliation probed at %v, want exactly [/healthz /readyz]", paths)
 		}
 
 		code, status, st = rollup()

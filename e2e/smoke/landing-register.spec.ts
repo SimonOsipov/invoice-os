@@ -113,7 +113,7 @@ test('landing registration window: a long name and a long email stay inside the 
     await settleAnimations(card)
     const at = `${viewport.width}x${viewport.height}`
     const cardBox = (await card.boundingBox())!
-    const fields = dialog.locator('input:not([type=radio])')
+    const fields = dialog.locator('input:not([type=radio]):not([type=checkbox])')
     const count = await fields.count()
     expect(count, `${at}: text fields in the window`).toBe(4)
     const boxes: Rect[] = []

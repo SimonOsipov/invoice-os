@@ -1,6 +1,7 @@
 // Landing registration client.
 import { ApiError, apiFetch, gatewayBase } from '@invoice-os/api-client/client'
 
+import { MARKETING_CONSENT_TEXT } from './components/MarketingConsent'
 import { EMAIL_RE } from './components/demoForm'
 import { signInConfigured } from './signIn'
 
@@ -65,6 +66,7 @@ export async function registerAccount(v: RegisterValues): Promise<void> {
       display_name: v.displayName.trim(),
       workspace_name: v.workspaceName.trim(),
       kind: v.kind,
+      ...(v.marketing && { marketing_consent_text: MARKETING_CONSENT_TEXT }),
     },
   })
 }

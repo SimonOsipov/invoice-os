@@ -51,7 +51,7 @@ export const DEMO_FORM_CSS = `
 const INPUT_STYLE: CSSProperties = { width: '100%', height: 42, background: 'var(--card)', border: '1px solid var(--input)', borderRadius: 'var(--radius)', padding: '0 13px', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-sans)' }
 const SELECT_STYLE: CSSProperties = { ...INPUT_STYLE, padding: '0 32px 0 13px', cursor: 'pointer' }
 
-// Red-phase stub: AUTH-17-07 moves the consent box onto these and shares them with MarketingConsent.
+// Shared with MarketingConsent.
 export const CHECK_LABEL_STYLE: CSSProperties = { display: 'flex', alignItems: 'flex-start', gap: 12, fontSize: 13, lineHeight: 1.55, color: 'var(--foreground)', cursor: 'pointer' }
 export const CHECK_INPUT_STYLE: CSSProperties = { flex: 'none', width: 18, height: 18, marginTop: 2, accentColor: 'var(--primary)', cursor: 'pointer' }
 
@@ -346,7 +346,7 @@ export function DemoLeadForm({
             </div>
 
             <div>
-              <label htmlFor={`${idPrefix}-consent`} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, fontSize: 13, lineHeight: 1.55, color: 'var(--foreground)', cursor: 'pointer' }}>
+              <label htmlFor={`${idPrefix}-consent`} style={CHECK_LABEL_STYLE}>
                 <input
                   id={`${idPrefix}-consent`}
                   type="checkbox"
@@ -356,7 +356,7 @@ export function DemoLeadForm({
                   aria-invalid={Boolean(errors.consent)}
                   aria-describedby={errors.consent ? `${idPrefix}-consent-error` : undefined}
                   disabled={submitting}
-                  style={{ flex: 'none', width: 18, height: 18, marginTop: 2, accentColor: 'var(--primary)', cursor: 'pointer' }}
+                  style={CHECK_INPUT_STYLE}
                 />
                 {/* The imported constant, never a retyped sentence: this is the one
                     mechanism that keeps the wording the visitor was SHOWN identical to

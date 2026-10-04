@@ -6,6 +6,7 @@ import { registerAccount, registerOutcome, validateRegisterForm, type RegisterEr
 import { DEMO_FORM_CSS } from './DemoLeadForm'
 import { Alert, FIELD_STYLE } from './SignInForm'
 import { HEADING_STYLE } from './SignInModal'
+import { MarketingConsent } from './MarketingConsent'
 import { Eyebrow } from './ds/Eyebrow'
 import { MODAL_CHROME_CSS, MODAL_SCRIM_STYLE, ModalHeader, modalCardStyle } from './modalChrome'
 
@@ -14,7 +15,7 @@ const KINDS: { value: RegisterKind; label: string }[] = [
   { value: 'firm', label: 'For clients — an accounting or tax firm' },
   { value: 'in_house', label: 'For our own company — in-house' },
 ]
-export const PRODUCT_EMAIL_NOTICE = ''
+export const PRODUCT_EMAIL_NOTICE = 'We will email you about your account and the service. This is part of using ASComply Africa.'
 const EMPTY: RegisterValues = { email: '', password: '', displayName: '', workspaceName: '', kind: '', marketing: false }
 const FIELD_ORDER = ['email', 'password', 'displayName', 'workspaceName'] as const
 const FIELD_IDS = { email: `${ID}-email`, password: `${ID}-password`, displayName: `${ID}-name`, workspaceName: `${ID}-workspace` }
@@ -143,6 +144,7 @@ export function RegisterModal({ onClose }: { onClose: () => void }) {
                     ))}
                     {errors.kind && <Alert id={`${ID}-kind-error`} text={errors.kind} />}
                   </fieldset>
+                  <MarketingConsent id={`${ID}-marketing`} checked={values.marketing} onChange={(marketing) => setValues((prev) => ({ ...prev, marketing }))} disabled={submitting} />
                 </div>
                 <button type="submit" disabled={submitting} className="ds-btn ds-btn--primary ds-btn--md" style={{ width: '100%', marginTop: 18 }}>
                   {submitting ? (
@@ -155,6 +157,7 @@ export function RegisterModal({ onClose }: { onClose: () => void }) {
                   )}
                 </button>
                 {formError && <Alert text={formError} />}
+                <p className="t-caption" style={{ textAlign: 'center', margin: '14px 0 0' }}>{PRODUCT_EMAIL_NOTICE}</p>
               </form>
             </>
           )}

@@ -75,7 +75,7 @@ describe('v2 app layer', () => {
     expect(raw.startsWith('/* ASComply — product/app layer, v2 brand.')).toBe(true)
     expect(uncomment(raw).trimStart()).toMatch(/^@import url\(\s*['"]https:\/\/fonts\.googleapis\.com\/css2\?family=IBM\+Plex\+Mono/)
     const blocks = parseBlocks(uncomment(raw))
-    expect(blocks.some((b) => sameList(b, ['.asc-app', '.asc-light']))).toBe(true)
+    expect(blocks.some((b) => sameList(b, ['.asc-app', '.asc-light']) && b.decls.has('--font-mono')), 'prototype token block').toBe(true)
     expect(blocks.some((b) => sameList(b, ['.asc-dark']))).toBe(true)
   })
 
@@ -84,6 +84,10 @@ describe('v2 app layer', () => {
     expect(block, '.asc-app, .asc-light block holding --radius-input').toBeDefined()
     expect(block!.decls.get('--radius-input')).toBe('var(--radius-btn)')
     expect(block!.decls.get('--radius-xs')).toBe('var(--radius-sm)')
+    const css = uncomment(rawLayer())
+    for (const name of ['--radius-input', '--radius-xs']) {
+      expect(css.match(new RegExp(`${name}\\s*:`, 'g')), `${name} is declared once`).toHaveLength(1)
+    }
     const spacing = uncomment(readFileSync(join(DS, 'v2/tokens/spacing.css'), 'utf8'))
     expect(spacing).toMatch(/--radius-btn:\s*7px\s*;/)
     expect(spacing).toMatch(/--radius-sm:\s*4px\s*;/)
@@ -92,7 +96,7 @@ describe('v2 app layer', () => {
   it('AL-04 .card-title uses v2 type tokens', () => {
     const block = layerBlocks().find((b) => sameList(b, ['.asc-app .card-title']))
     expect(block, '.asc-app .card-title block').toBeDefined()
-    expect(Object.fromEntries(block!.decls)).toMatchObject({
+    expect(Object.fromEntries(block!.decls)).toEqual({
       'font-family': 'var(--font-sans)',
       'font-size': 'var(--fs-ui)',
       'font-weight': 'var(--fw-bold)',
@@ -100,9 +104,6 @@ describe('v2 app layer', () => {
       'letter-spacing': 'var(--tracking-card)',
       color: 'var(--fg-1)',
     })
-    const text = [...block!.decls].map(([p, v]) => `${p}: ${v}`).join(';')
-    expect(text).not.toContain('--font-display')
-    expect(text).not.toMatch(/opsz/)
   })
 
   it('AL-05 .pf-file is visually hidden and rings on keyboard focus', () => {
@@ -122,23 +123,20 @@ describe('v2 app layer', () => {
     })
     const focus = blocks.find((b) => sameList(b, ['.asc-app .pf-file:focus-visible + label']))
     expect(focus, '.asc-app .pf-file:focus-visible + label block').toBeDefined()
-    expect(focus!.decls.get('border-color')).toBe('var(--ring)')
-    expect(focus!.decls.get('box-shadow')).toBe('0 0 0 2px var(--ring)')
+    expect(Object.fromEntries(focus!.decls)).toEqual({ 'border-color': 'var(--ring)', 'box-shadow': '0 0 0 2px var(--ring)' })
   })
 
   it('AL-06 native select chrome is stripped', () => {
     const block = layerBlocks().find((b) => sameList(b, ['.asc-app select', '.asc-app .pf-select']))
     expect(block, '.asc-app select, .asc-app .pf-select block').toBeDefined()
-    expect(block!.decls.get('appearance')).toBe('none')
-    expect(block!.decls.get('-webkit-appearance')).toBe('none')
-    expect(block!.decls.get('padding-right')).toBe('32px')
+    expect(Object.fromEntries(block!.decls)).toEqual({ appearance: 'none', '-webkit-appearance': 'none', 'padding-right': '32px' })
   })
 
   it('AL-07 no DC syntax', () => {
-    const raw = rawLayer()
-    for (const needle of ['{{', '}}', '<sc-', 'hint-placeholder', 'data-dc']) {
-      expect(raw.includes(needle), `DC syntax ${needle}`).toBe(false)
-    }
+    const needles = ['{{', '}}', '<sc-', 'hint-placeholder', 'data-dc']
+    const hits = (css: string) => needles.filter((n) => css.includes(n))
+    expect(hits('a {{ b }} <sc-x hint-placeholder data-dc'), 'control: every needle is found').toEqual(needles)
+    expect(hits(rawLayer())).toEqual([])
   })
 
   it('AL-08 every var() resolves', () => {
@@ -160,7 +158,10 @@ describe('v2 app layer', () => {
   it('AL-09 no v1 vocabulary', () => {
     const css = uncomment(rawLayer())
     expect(parseBlocks(css).length, 'rule blocks').toBeGreaterThanOrEqual(40)
-    for (const re of [/oklch\(/i, /fraunces/i, /\binter\b/i, /--gradient-/, /opsz/]) {
+    const needles = [/oklch\(/i, /fraunces/i, /\binter\b/i, /--gradient-/i, /opsz/i]
+    const planted = 'a { x: OKLCH(1 0 0); y: Fraunces; z: INTER; --Gradient-a: 1; w: "OPSZ" 9 }'
+    expect(needles.filter((re) => !re.test(planted)), 'control: every needle is found in any letter case').toEqual([])
+    for (const re of needles) {
       expect(css.match(re), String(re)).toBeNull()
     }
   })
@@ -173,7 +174,9 @@ describe('v2 app layer', () => {
     const chip = blocks.find((b) => b.tokens.includes('.asc-app .pf-chip'))
     expect(chip, 'block whose selectors include .asc-app .pf-chip').toBeDefined()
     expect(chip!.decls.get('border-radius')).toBe('var(--radius-sm) !important')
-    const selectors = blocks.map((b) => b.selector).join('\n')
+    expect(blocks.length, 'rule blocks').toBeGreaterThanOrEqual(40)
+    expect(blocks.some((b) => b.tokens.includes('.asc-app .pf-nav')), 'control: a sibling shape rule is scanned').toBe(true)
+    const selectors = blocks.map((b) => b.selector).join('\n').toLowerCase()
     expect(selectors).not.toContain('.pf-knob')
     expect(selectors).not.toContain('.pf-toggle')
   })

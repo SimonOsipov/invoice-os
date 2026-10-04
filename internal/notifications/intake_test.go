@@ -189,11 +189,11 @@ func TestIntake_MalformedIs400(t *testing.T) {
 	}
 }
 
-// A proxied request always carries X-User-ID; the gateway's own call never does.
+// A proxied request always carries X-User-ID, even an empty one; the gateway's own call never does.
 func TestIntake_ProxiedRequestIs404(t *testing.T) {
 	store := &qaIntakeStore{}
 	for path, r := range qaIntakeRoutes(store, &qaLogSink{}) {
-		for name, id := range map[string]string{"opaque id": "u1", "uuid": uuid.NewString()} {
+		for name, id := range map[string]string{"opaque id": "u1", "uuid": uuid.NewString(), "present but empty": ""} {
 			t.Run(strings.TrimPrefix(path, "/internal/contacts/")+"/"+name, func(t *testing.T) {
 				if rec := qaServe(r.h, "POST", path, r.body, map[string]string{"X-User-ID": id}); rec.Code != http.StatusNotFound {
 					t.Errorf("status %d, want 404 (body %q)", rec.Code, rec.Body)

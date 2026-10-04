@@ -42,10 +42,10 @@ type demoBody struct {
 	MarketingConsentText string `json:"marketing_consent_text"`
 }
 
-// decodeIntake answers 404 for a proxied request (the gateway's own call has no X-User-ID),
+// decodeIntake answers 404 for a proxied request (the gateway's own call has no X-User-ID header, not even an empty one),
 // and 400 for a body that does not decode. It reports whether the caller may go on.
 func decodeIntake(w http.ResponseWriter, r *http.Request, dst any) bool {
-	if r.Header.Get("X-User-ID") != "" {
+	if len(r.Header.Values("X-User-ID")) > 0 {
 		writeJSONBody(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return false
 	}

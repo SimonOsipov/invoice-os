@@ -2173,8 +2173,7 @@ describe('QA BUG-10-01: the held envelope at its edges', () => {
 // source in the same commit.
 function aboveTable(container: HTMLElement): string[] {
   const root = container.firstElementChild as HTMLElement
-  // The three ready-state children are the header block, the table and the pager wrapper.
-  // Only the table is identified: the other two both fingerprint as the bare `DIV||`.
+  // The two ready-state children are the header block and the table (the pager sits inside it).
   return Array.from(root.children).map((el) => `${el.tagName}|${el.className}|${el.getAttribute('data-testid') ?? ''}`)
 }
 
@@ -2424,7 +2423,7 @@ describe('BUG-17-02 register status markers', () => {
     const style = marker!.getAttribute('style') ?? ''
     expect(style).toContain('background: var(--status-red-bg)')
     expect(style).toContain('border: 1px solid var(--status-red-border)')
-    expect(style).toContain('border-radius: 999px')
+    expect(style).toContain('border-radius: var(--radius-sm)')
     expect(style).toContain('padding: 3px 9px')
     const inner = marker!.querySelector('span')
     expect(inner?.getAttribute('style') ?? '').toContain('color: var(--status-red-text)')
@@ -2469,7 +2468,7 @@ describe('BUG-17-02 register status markers', () => {
     const style = marker!.getAttribute('style') ?? ''
     expect(style).toContain('background: var(--status-amber-bg)')
     expect(style).toContain('border: 1px solid var(--status-amber-border)')
-    expect(style).toContain('border-radius: 999px')
+    expect(style).toContain('border-radius: var(--radius-sm)')
     expect(style).toContain('padding: 3px 9px')
     const inner = marker!.querySelector('span')
     expect(inner?.getAttribute('style') ?? '').toContain('color: var(--status-amber-text)')
@@ -2498,7 +2497,7 @@ describe('BUG-17-02 register status markers', () => {
 
     const badge = screen.getByTestId('invoice-status-badge')
     expect(badge.getAttribute('style')).toBe(
-      'display: inline-flex; align-items: center; gap: 6px; background: var(--status-muted-bg); border: 1px solid var(--status-muted-border); border-radius: 999px; padding: 3px 9px;',
+      'display: inline-flex; align-items: center; gap: 6px; background: var(--status-muted-bg); border: 1px solid var(--status-muted-border); border-radius: var(--radius-sm); padding: 3px 9px;',
     )
   })
 
@@ -2620,5 +2619,39 @@ describe('BUG-17-02 register status markers', () => {
       expect(pill.firstElementChild!.className, `${id} text is mono`).toBe(badgeText.className)
       expect(withoutColor(pill.firstElementChild!), `${id} text size, weight and tracking`).toBe(withoutColor(badgeText))
     }
+  })
+})
+
+describe('IL-LOOK: register checkboxes and the bulk bar take the v2 look (D-11, D-25)', () => {
+  it('row checkboxes are 15px with the action accent; a blocked one keeps its cursor and dim', async () => {
+    const blocked = gateRow({ id: 'inv-no', invoice_number: 'INV-NO', status: 'validated', can_submit: false, submit_blocked_reason: 'Not ready' })
+    const ok = gateRow({ id: 'inv-ok', invoice_number: 'INV-OK', status: 'validated', can_submit: true, submit_blocked_reason: null })
+    mockFetchSequence([listResponse([ok, blocked], { limit: 50, offset: 0, total: 2 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-OK')
+
+    const [first, second] = screen.getAllByTestId('invoice-select')
+    const style = first.getAttribute('style') ?? ''
+    expect(style).toContain('width: 15px')
+    expect(style).toContain('height: 15px')
+    expect(style).toContain('accent-color: var(--action)')
+    const blockedStyle = second.getAttribute('style') ?? ''
+    expect(blockedStyle).toContain('width: 15px')
+    expect(blockedStyle).toContain('cursor: not-allowed')
+    expect(blockedStyle).toContain('opacity: 0.5')
+  })
+
+  it('the bulk bar outer element is a block: no flex-direction, no gap', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    mockFetchSequence([listResponse([a], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+    fireEvent.click(screen.getByTestId('invoice-select-all'))
+
+    const style = screen.getByTestId('batch-submit-summary').getAttribute('style') ?? ''
+    expect(style).not.toContain('flex-direction')
+    expect(style).not.toContain('gap')
   })
 })

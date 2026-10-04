@@ -201,7 +201,7 @@ describe('registerAccount through the wire', () => {
   })
 
   it('registerOutcome never shows an empty message for a 400 without one', async () => {
-    for (const res of [json(400, {}), json(400, { error: '' }), new Response('<html>Bad Request</html>', { status: 400 }), new Response('', { status: 400 })]) {
+    for (const res of [json(400, {}), json(400, { error: '' }), json(400, { error: '  ' }), new Response('<html>Bad Request</html>', { status: 400 }), new Response('', { status: 400 })]) {
       expect(await outcomeFor(res)).toEqual({ form: UNAVAILABLE })
     }
   })

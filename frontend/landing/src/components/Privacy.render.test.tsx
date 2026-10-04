@@ -21,6 +21,14 @@ import { CONSENT_TEXT } from './demoForm'
 import { CookieNotice } from './CookieNotice'
 import { PRODUCTION_HOSTNAMES, submissionUrl } from '../hubspot'
 import { CONSENT_DEFAULT_ANALYTICS } from '../consent'
+import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
+import {
+  crmTags,
+  hubspotCrmKeys,
+  hubspotFormsKeys,
+  resendContactKeys,
+  resendSkipsUntickedDemoBooker,
+} from './privacyCodeFacts.test.util'
 
 const SRC_DIR = fileURLToPath(new URL('.', import.meta.url))
 const PRIVACY_TSX = join(SRC_DIR, 'Privacy.tsx')
@@ -411,5 +419,138 @@ describe('T3-15/T3-17/T3-18: the page describes the control that now exists', ()
     expect(firstForbiddenHit('Manage this in our preference centre at any time.', narrowed)).toBe('preference centre')
     expect(firstForbiddenHit('Open the preference center to change it.', narrowed)).toBe('preference center')
     expect(firstForbiddenHit('There is a cookie notice with Accept and Reject.', narrowed)).toBeNull()
+  })
+})
+
+// AUTH-17-09. Every fact below is read from the Go and TS that sends it (privacyCodeFacts.test.util.ts).
+// A key table is the page's words for each code key; its keys must equal the code's, so a new
+// property forces both the table and the page to follow.
+describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
+  const html = renderToStaticMarkup(createElement(Privacy))
+  const plain = (s: string): string =>
+    s.replace(/<[^>]*>/g, '').replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim()
+  const blocks = (markup: string): string[] =>
+    markup
+      .split(/<\/(?:p|li)>/)
+      .map((seg) => {
+        const at = Math.max(seg.lastIndexOf('<p'), seg.lastIndexOf('<li'))
+        return at < 0 ? '' : plain(seg.slice(at))
+      })
+      .filter(Boolean)
+  const sentences = (text: string): string[] => text.split(/(?<=[.!?])\s+/)
+  const section = (headingRe: RegExp): string => {
+    const hit = html.split(/(?=<h2[ >])/).filter((part) => headingRe.test(plain(/^<h2[^>]*>([\s\S]*?)<\/h2>/.exec(part)?.[1] ?? '')))
+    expect(hit.length, `expected one h2 matching ${headingRe}`).toBe(1)
+    return hit[0]
+  }
+
+  const HUBSPOT_WORDS: Record<string, RegExp> = {
+    firstname: /first (?:and last )?name/i,
+    lastname: /last name|first and last name/i,
+    email: /e-?mail/i,
+    company: /company/i,
+    ascomply_contact_tags: /\btags?\b/i,
+  }
+  const FORMS_ONLY_WORDS: Record<string, RegExp> = {
+    jobtitle: /\brole\b/i,
+    company_size: /taxpayer size/i,
+    monthly_invoice_volume: /monthly invoice volume/i,
+  }
+  const RESEND_WORDS: Record<string, RegExp> = {
+    email: /e-?mail/i,
+    first_name: /first (?:and last )?name/i,
+    last_name: /last name|first and last name/i,
+  }
+
+  it('control: the word tables carry exactly the keys the code sends', () => {
+    expect(Object.keys(HUBSPOT_WORDS).sort()).toEqual(hubspotCrmKeys())
+    expect(Object.keys(RESEND_WORDS).sort()).toEqual(resendContactKeys())
+    const formsOnly = hubspotFormsKeys().filter((k) => !hubspotCrmKeys().includes(k))
+    expect(formsOnly.length, 'the forms-only list is empty').toBeGreaterThan(0)
+    expect(Object.keys(FORMS_ONLY_WORDS).sort()).toEqual(formsOnly)
+    expect(crmTags()).toEqual(['registered', 'demo request'])
+  })
+
+  it('the page names what HubSpot receives from a registrant and from a demo booker, and when', () => {
+    const registrant = blocks(html).filter((b) => /hubspot/i.test(b) && /after you verify/i.test(b))
+    expect(registrant.length, 'expected one HubSpot paragraph saying "after you verify"').toBe(1)
+    for (const key of hubspotCrmKeys()) {
+      expect(registrant[0], `the registrant paragraph does not name ${key}`).toMatch(HUBSPOT_WORDS[key])
+    }
+    expect(registrant[0], 'the registrant paragraph does not name the tag').toContain(crmTags()[0])
+    for (const [key, word] of Object.entries(FORMS_ONLY_WORDS)) {
+      expect(registrant[0], `a registrant is not sent ${key}`).not.toMatch(word)
+    }
+
+    const demo = plain(section(/book a demo/i))
+    for (const [key, word] of Object.entries(FORMS_ONLY_WORDS)) {
+      expect(demo, `the demo list lost ${key}`).toMatch(word)
+    }
+    expect(demo, 'the demo section does not name the tag').toContain(crmTags()[1])
+    expect(demo, 'the demo section does not say when it is sent').toMatch(
+      /(?:when|as soon as|once|after) you (?:submit|book|send)|on submit|when the form is (?:submitted|sent)/i,
+    )
+  })
+
+  it('the registrant statements sit in an account section', () => {
+    const account = plain(section(/account|regist/i))
+    expect(account).toMatch(/after you verify/i)
+    expect(account).toContain('Resend')
+  })
+
+  it('the page says every verified registrant is a Resend contact and only a tick makes marketing', () => {
+    const resend = blocks(html).filter((b) => b.includes('Resend'))
+    expect(resend.length, 'the page does not name Resend').toBeGreaterThan(0)
+    const para = resend.find((b) => /(?:every|each|all)\b[^.]*\b(?:verified|registrant|register)/i.test(b))
+    expect(para, 'no Resend paragraph says every verified registrant is a contact').toBeDefined()
+    expect(para).toMatch(/product|service/i)
+    expect(para, 'no statement that only a tick makes marketing').toMatch(
+      /only[^.]*\b(?:tick|ticked|ticks|box|checkbox)\b|\b(?:tick|ticked|box|checkbox)\b[^.]*\bonly\b/i,
+    )
+    expect(para).toMatch(/marketing/i)
+    for (const key of resendContactKeys()) {
+      expect(para, `the Resend paragraph does not name ${key}`).toMatch(RESEND_WORDS[key])
+    }
+    for (const [key, word] of Object.entries(FORMS_ONLY_WORDS)) {
+      expect(para, `Resend is not sent ${key}`).not.toMatch(word)
+    }
+    expect(para, 'Resend is not sent the company').not.toMatch(/company/i)
+  })
+
+  it('CF1: a demo booker is not promised marketing email, and Resend holds only a ticked one', () => {
+    expect(resendSkipsUntickedDemoBooker(), 'worker.go no longer skips Resend for an unticked demo booker').toBe(true)
+    const demo = plain(section(/book a demo/i))
+      .replace(CONSENT_TEXT, '')
+      .replace(MARKETING_CONSENT_TEXT, '')
+    const resend = sentences(demo).filter((s) => s.includes('Resend'))
+    expect(resend.length, 'the demo section does not say what reaches Resend').toBeGreaterThan(0)
+    expect(resend.some((s) => /\b(?:not|never|neither|nor|only|unless|without)\b/i.test(s)), 'no statement that an unticked booker is not in Resend').toBe(true)
+    const promise = sentences(demo).filter((s) =>
+      /\b(?:you will|you'll|we will|we'll|you can expect)\b[^.]*\b(?:receive|get|hear|send|email)\b[^.]*\b(?:marketing|news|offers|newsletters?|promotions?)\b/i.test(s),
+    )
+    expect(promise, 'the demo section promises marketing email').toEqual([])
+  })
+
+  it('E2: the consent box adds you to no list; only the separate marketing box does, in Resend', () => {
+    const demo = plain(section(/book a demo/i))
+    expect(sentences(demo).some((s) => s.includes('Resend') && /\b(?:box|checkbox|tick)/i.test(s)), 'no sentence ties the tick to Resend').toBe(true)
+    expect(sentences(demo).some((s) => /marketing/i.test(s) && /\b(?:box|checkbox|tick)/i.test(s)), 'no sentence names the marketing box').toBe(true)
+    expect(demo, 'the consent box no longer says it adds you to no list').toMatch(/does not add you to (?:a|any) (?:marketing )?list/i)
+  })
+
+  it('E5: the page says the records in HubSpot, Resend and our own server can be deleted on request', () => {
+    const write = blocks(html).find((b) => b.startsWith('Write to us'))
+    expect(write, 'the "Write to us" item is gone').toBeDefined()
+    for (const holder of [/hubspot/i, /resend/i, /our own (?:server|database)|our (?:server|database)|our own systems/i]) {
+      expect(write, `the delete-on-request item does not name ${holder}`).toMatch(holder)
+    }
+    expect(write).toMatch(/delete/i)
+    expect(write, 'a registrant record is not covered').toMatch(/regist/i)
+  })
+
+  it('C14: the page says the marketing sentence is stored with its time', () => {
+    const quoted = blocks(html).filter((b) => b.includes(MARKETING_CONSENT_TEXT))
+    expect(quoted.length, 'the page does not quote the marketing sentence').toBeGreaterThan(0)
+    expect(quoted.some((b) => /stored|record/i.test(b) && /\btime\b|\bwhen you\b/i.test(b))).toBe(true)
   })
 })

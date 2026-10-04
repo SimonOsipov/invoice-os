@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Nav } from './components/Nav'
 import { SignInModal } from './components/SignInModal'
 import { DemoModal } from './components/DemoModal'
+import { RegisterModal } from './components/RegisterModal'
 import { Hero } from './components/Hero'
 import { AudienceStrip } from './components/AudienceStrip'
 import { Problem } from './components/Problem'
@@ -21,6 +22,7 @@ import { isScrollable, scrollDepthPercent, trackDemoOpen, trackScrollDepth, type
 import { readConsent, type ConsentRecord } from './consent'
 import { applyChoice } from './consentActions'
 import { isPrivacyPath } from './route'
+import { registrationOpen } from './register'
 import { readSignInConsole, readSignInState } from './signIn'
 
 // Copy for the ?signin= outcome; `ready` opens the modal with no message.
@@ -55,6 +57,7 @@ export default function App() {
   const [signInOpen, setSignInOpen] = useState(signInBoot.open)
   const [signInError, setSignInError] = useState(signInBoot.error)
   const [demoOpen, setDemoOpen] = useState(false)
+  const [registerOpen, setRegisterOpen] = useState(false)
   // Read once at mount: a stored choice keeps the notice down until `reopened` flips.
   const [consent, setConsent] = useState<ConsentRecord | null>(() => readConsent())
   // Once a choice is stored the footer control is the only route back to the notice.
@@ -65,6 +68,13 @@ export default function App() {
     setDemoOpen(true)
   }
   const onSignIn = () => setSignInOpen(true)
+  const onCreateAccount = registrationOpen()
+    ? () => {
+        setSignInOpen(false)
+        setSignInError(undefined)
+        setRegisterOpen(true)
+      }
+    : undefined
   const privacy = isPrivacyPath(window.location.pathname)
 
   useEffect(() => {
@@ -125,7 +135,7 @@ export default function App() {
         overflowX: 'clip',
       }}
     >
-      <Nav onSignIn={onSignIn} onBookDemo={book('nav')} hrefPrefix={privacy ? '/' : ''} />
+      <Nav onSignIn={onSignIn} onBookDemo={book('nav')} onCreateAccount={onCreateAccount} hrefPrefix={privacy ? '/' : ''} />
       {privacy ? (
         <Privacy />
       ) : (
@@ -150,7 +160,7 @@ export default function App() {
       {(consent === null || reopened) && (
         <CookieNotice
           current={consent}
-          suppressed={signInOpen || demoOpen}
+          suppressed={signInOpen || demoOpen || registerOpen}
           onChoose={(choice) => {
             setConsent(applyChoice(choice))
             // consent is already non-null on a reopen, so only this closes it again.
@@ -163,6 +173,7 @@ export default function App() {
           heldState={heldState}
           initialError={signInError}
           consoleTarget={signInBoot.consoleTarget ?? undefined}
+          onCreateAccount={onCreateAccount}
           onClose={() => {
             setSignInOpen(false)
             setSignInError(undefined)
@@ -170,6 +181,7 @@ export default function App() {
         />
       )}
       {demoOpen && <DemoModal onClose={() => setDemoOpen(false)} />}
+      {registerOpen && <RegisterModal onClose={() => setRegisterOpen(false)} />}
     </div>
   )
 }

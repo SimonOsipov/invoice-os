@@ -185,6 +185,12 @@ button {
     display: inline-flex;
   }
 }
+/* The header entry needs 147px the row lacks between 1121 and 1200px. */
+@media (max-width: 1200px) {
+  .a-create {
+    display: none;
+  }
+}
 @media (min-width: 1120.02px) {
   .a-menu {
     display: none;

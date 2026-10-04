@@ -7,11 +7,11 @@ import { validateSignInForm, type SignInFormErrors } from '../signInForm'
 
 const ID = 'si-form'
 
-const FIELD_STYLE: CSSProperties = { width: '100%', height: 42, background: 'var(--card)', border: '1px solid var(--input)', borderRadius: 'var(--radius)', padding: '0 13px', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-sans)' }
+export const FIELD_STYLE: CSSProperties = { width: '100%', height: 42, background: 'var(--card)', border: '1px solid var(--input)', borderRadius: 'var(--radius)', padding: '0 13px', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-sans)' }
 const ALERT_STYLE: CSSProperties = { display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--destructive)' }
 const BUTTON_STYLE: CSSProperties = { width: '100%' }
 
-function Alert({ id, text }: { id?: string; text: string }) {
+export function Alert({ id, text }: { id?: string; text: string }) {
   return (
     <div id={id} role="alert" style={ALERT_STYLE}>
       <Glyph d={WARN_PATHS} size={15} sw={1.7} /> {text}

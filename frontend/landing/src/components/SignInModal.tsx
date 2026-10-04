@@ -15,11 +15,11 @@ const SIGN_IN_CSS = `
   .si-persona:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 `
 
-const HEADING_STYLE = { fontSize: 22, letterSpacing: '-0.03em', fontWeight: 700, color: 'var(--ink)' } as const
+export const HEADING_STYLE = { fontSize: 22, letterSpacing: '-0.03em', fontWeight: 700, color: 'var(--ink)' } as const
 
 const NO_STATE = () => null
 
-export function SignInModal({ onClose, heldState = NO_STATE, initialError, consoleTarget }: { onClose: () => void; heldState?: () => string | null; initialError?: string; consoleTarget?: ConsoleTarget }) {
+export function SignInModal({ onClose, heldState = NO_STATE, initialError, consoleTarget, onCreateAccount }: { onClose: () => void; heldState?: () => string | null; initialError?: string; consoleTarget?: ConsoleTarget; onCreateAccount?: () => void }) {
   // Close on Escape (never a native dialog).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -62,6 +62,12 @@ export function SignInModal({ onClose, heldState = NO_STATE, initialError, conso
             <>
               <h3 style={{ ...HEADING_STYLE, margin: '0 0 16px' }}>Sign in to your workspace</h3>
               <SignInForm heldState={heldState} initialError={initialError} consoleTarget={consoleTarget} />
+              {onCreateAccount && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--border)', fontSize: 13, color: 'var(--muted-foreground)' }}>
+                  New to ASComply?
+                  <button type="button" className="a-link" onClick={onCreateAccount} style={{ fontSize: 13 }}>Create an account</button>
+                </div>
+              )}
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '22px 0 18px', fontSize: 12, color: 'var(--muted-foreground)' }}>
                 <span style={{ flex: 1, height: 1, background: 'var(--border)' }} />
                 or explore with a demo profile

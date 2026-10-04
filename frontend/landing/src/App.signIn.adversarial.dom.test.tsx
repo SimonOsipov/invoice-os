@@ -124,7 +124,7 @@ async function closeDialog(): Promise<void> {
 }
 
 async function openFromNav(): Promise<void> {
-  const b = Array.from(document.querySelectorAll('header button')).find((x) => x.textContent?.trim() === 'Explore the platform')
+  const b = Array.from(document.querySelectorAll('header button')).find((x) => x.textContent?.trim() === 'Platform login')
   expect(b).toBeDefined()
   await act(async () => (b as HTMLButtonElement).click())
 }
@@ -163,11 +163,11 @@ describe('AUTH-05-07 adversarial: boot params', () => {
   })
 
   it('the strip keeps the path and the hash', async () => {
-    await bootAt(`/?utm_source=x&state=${STATE}&console=ops&signin=ready#pricing`)
+    await bootAt(`/?utm_source=x&state=${STATE}&console=ops&signin=ready#faq`)
     onlyDialog()
     expect(window.location.pathname).toBe('/')
     expect(window.location.search).toBe('?utm_source=x')
-    expect(window.location.hash).toBe('#pricing')
+    expect(window.location.hash).toBe('#faq')
 
     // A path that is not `/` tells a kept path from a rebuilt one.
     await act(async () => root.unmount())

@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { isPrivacyPath } from './route'
+import { isPrivacyPath, landingRouteName } from './route'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROUTE_SRC = readFileSync(join(HERE, 'route.ts'), 'utf8')
@@ -96,5 +96,22 @@ describe('isPrivacyPath', () => {
 
   it('a missing leading slash is not a match', () => {
     expect(isPrivacyPath('privacy')).toBe(false)
+  })
+})
+
+describe('landingRouteName', () => {
+  it('landingRouteName_namesTheTwoPages', () => {
+    expect(landingRouteName('/')).toBe('/')
+    for (const p of ['/privacy', '/privacy/', '/PRIVACY']) expect(landingRouteName(p)).toBe('/privacy')
+  })
+
+  it('landingRouteName_everythingElseIsUnmatched', () => {
+    const unknown = ['/privacy//', '/pricing', '/wp-admin/setup.php', '/invoices/3f2c9a1e-4b7d-4c2a-8e51-9d0f6a7b1c33', '']
+    // Control: a matched input does not map to the unmatched name.
+    expect(landingRouteName('/')).not.toBe('<unmatched>')
+    for (const p of unknown) {
+      expect(landingRouteName(p), p).toBe('<unmatched>')
+      expect(landingRouteName(p)).not.toBe(p)
+    }
   })
 })

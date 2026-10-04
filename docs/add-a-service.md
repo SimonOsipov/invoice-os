@@ -223,6 +223,23 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disa
   exempted by name in `fleet-gate`'s "Gate on the fleet's Sentry state" step. Only `auth` is exempt.
   A new outbound client to another first-party service uses `platform.TraceTransport`;
   a third-party client never does.
+  A new Go service built on `platform.New` gets Sentry with no code of its own: labels
+  (`environment`, `release`, `server_name`), 5xx, panic and boot-failure capture, logs,
+  tracing, the `/healthz` `sentry` field and the `SENTRY_TEST_EVENT` trigger. It needs its
+  production `SENTRY_DSN` and a place in `set-sentry-off`'s lists (above).
+  A new SPA needs, in its change:
+  - `initMonitoring` called from `src/instrument.ts`, and its name in the `Service` union
+    (`packages/monitoring/src/options.ts`).
+  - In the Dockerfile build stage, before the build `RUN`: the `ARG`/`ENV` pairs
+    `VITE_SENTRY_DSN`, `VITE_SENTRY_TEST_DIGEST` and `RAILWAY_GIT_COMMIT_SHA` →
+    `VITE_RAILWAY_GIT_COMMIT_SHA`, and `ARG SENTRY_AUTH_TOKEN` with no `ENV`
+    (`packages/monitoring/src/dockerfiles.test.ts` enforces both).
+  - `sentryVitePlugin(sourcemapUploadOptions(appDir))` and `build.sourcemap: 'hidden'` in
+    `vite.config.ts`. The Caddy `.map` 404 comes from the shared `Caddyfile`.
+  - Production `VITE_SENTRY_DSN`, `VITE_SENTRY_TEST_DIGEST` and `SENTRY_AUTH_TOKEN`.
+  `VITE_SENTRY_TEST_DIGEST` is the 64-hex SHA-256 of the operator's passphrase; it does
+  nothing without a DSN and stays in the bundle until it is deleted and the SPA rebuilt.
+  Variables, go-live and where to look: `docs/sentry.md`.
 
 ## 5. Provisioning runbook
 
@@ -350,6 +367,8 @@ Live services: `landing`, `app`, `ops-console`, `support-console` — see
 `support-console` (added 2026-07-27) is the most recent walk-through of this recipe, and
 confirmed step 1's warning is still live: `serviceCreate` **did** attach a `main` deployment
 trigger, which had to be `deploymentTriggerDelete`d before the invariants workflow would pass.
+
+A new SPA's Sentry requirements are listed in §4 ("Sentry variables are production-only").
 
 ---
 

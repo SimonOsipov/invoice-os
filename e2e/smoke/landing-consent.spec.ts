@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { resolveTarget } from '../targets'
 import { overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from '../topology/layout'
 import { seedConsent } from './landingConsent'
@@ -28,9 +28,9 @@ const MIN_PHONE_CARD_PX = 300 // floor: the third-of-viewport cap must not pass 
 const BOX_SLACK_PX = 0.5 // sub-pixel rounding only
 const TAB_PRESSES = 30
 const NARROW_WIDTHS = [390, 375] as const
-// copyright span + wrapper div + Cookie choices button: the three descendants the
-// copyright row is required to contain, so the walk's floor is counted, not invented.
-const MIN_COPYRIGHT_ROW_NODES = 3
+// copyright span, link group, Privacy policy and Cookie choices: the four descendants the
+// copyright row is required to contain (Footer.tsx bottom row), so the floor is counted.
+const MIN_COPYRIGHT_ROW_NODES = 4
 
 // WIDE_WIDTHS at 1080 plus 1280x720 — the viewport this suite actually runs at. A
 // clearance claim that only holds at 1080 is a claim about a viewport no test uses.
@@ -43,9 +43,9 @@ const CTA_SWEEP_STEP_PX = 50
 // The band is the CTA's height plus a viewport, ~1400px at 1280x720; anything near this
 // floor means the band collapsed and the sweep proved nothing.
 const MIN_SWEEP_STOPS = 10
-// Three footer link columns (3 + 3 + 4) plus the Cookie choices control. A floor, not the
+// Connect's three buttons, Privacy policy and Cookie choices (Footer.tsx). A floor, not the
 // count: the claim is that the query reached the footer at all.
-const MIN_FOOTER_CONTROLS = 8
+const MIN_FOOTER_CONTROLS = 5
 
 /** Attach the console/pageerror gate BEFORE navigating; returns the sink to assert on. */
 function consoleGate(page: Page): string[] {
@@ -132,15 +132,15 @@ async function rectOf(locator: Locator, label: string, at: string): Promise<Rect
 }
 
 /**
- * Is Inter actually available for layout?
+ * Is Manrope actually available for layout?
  *
- * The computed font-family always reads "Inter, ui-sans-serif, …" whether or not the
+ * The computed font-family always reads "Manrope, ui-sans-serif, ..." whether or not the
  * Google-hosted webfont arrived, and Chromium's document.fonts.check() answers true for a
- * family it has never heard of. Two probe spans — `Inter, monospace` against bare
- * `monospace` — differ only when Inter is real. The mobile body wraps with ~6px of slack,
- * so a missing Inter costs a whole line and reads as a layout bug unless this names it.
+ * family it has never heard of. Two probe spans, `Manrope, monospace` against bare
+ * `monospace`, differ only when Manrope is real. A missing Manrope reads as a layout bug
+ * unless this names it.
  */
-function interIsUsable(page: Page): Promise<{ usable: boolean; withInter: number; fallback: number }> {
+function manropeIsUsable(page: Page): Promise<{ usable: boolean; withManrope: number; fallback: number }> {
   return page.evaluate(() => {
     const measure = (family: string): number => {
       const s = document.createElement('span')
@@ -151,9 +151,9 @@ function interIsUsable(page: Page): Promise<{ usable: boolean; withInter: number
       s.remove()
       return w
     }
-    const withInter = measure('Inter, monospace')
+    const withManrope = measure('Manrope, monospace')
     const fallback = measure('monospace')
-    return { usable: Math.abs(withInter - fallback) > 1, withInter, fallback }
+    return { usable: Math.abs(withManrope - fallback) > 1, withManrope, fallback }
   })
 }
 
@@ -177,7 +177,7 @@ async function openLanding(page: Page, options: OpenOptions = {}) {
   else await expect(card).toHaveCount(0)
 
   if (privacy) await expect(page.getByTestId('privacy-container')).toBeVisible()
-  else await expect(page.locator('#demo')).toHaveCount(1)
+  else await expect(page.locator('[data-closing]')).toHaveCount(1)
 
   // Google-hosted fonts settle once, before any measurement (landing-nav.spec.ts's reason).
   await page.evaluate(() => document.fonts.ready.then(() => true))
@@ -222,9 +222,9 @@ test('landing consent: the notice mounts on both routes with no stored answer, a
 // band, not the one `scrollIntoViewIfNeeded` happens to land on. That single sample is
 // why this read green at 1080 and red at 720 on the same build.
 //
-// Right-anchored the card opens at x = W-484 while the CTA's left column ends at
-// 88 + 0.6*(min(W,1280)-224); those separate at W >= 1094, so across CTA_STATES the two
-// x bands cannot intersect and no scroll offset can produce an overlap. The sweep is
+// Right-anchored the card opens at x = W-484 while the CTA's copy column ends at most at
+// container left + gutter + clamp(32px, 6vw, 72px) + 520px (656px at W=1280); across
+// CTA_STATES (W >= 1280) the two x bands cannot intersect and no scroll offset can produce an overlap. The sweep is
 // what turns that from an argument into an assertion — and the y-band arm below is what
 // stops it passing on a page where the card simply never reaches the copy.
 test('landing consent: the notice never covers the closing CTA copy at any scroll offset', async ({
@@ -233,11 +233,14 @@ test('landing consent: the notice never covers the closing CTA copy at any scrol
   test.setTimeout(180_000)
   const { errors, card } = await openLanding(page)
 
-  const demo = page.locator('#demo')
+  const closing = page.locator('[data-closing]')
   const targets: Array<{ label: string; locator: Locator }> = [
-    { label: 'the BOOK A DEMO eyebrow', locator: demo.getByText('BOOK A DEMO', { exact: true }) },
-    { label: "the CTA's h2", locator: demo.getByRole('heading', { level: 2 }) },
-    { label: "the CTA's supporting paragraph", locator: demo.getByText(/A 20-minute walkthrough/) },
+    { label: 'the closing eyebrow', locator: closing.getByText("LET'S MAKE COMPLIANCE CLEARER.", { exact: true }) },
+    { label: "the CTA's h2", locator: closing.getByRole('heading', { level: 2 }) },
+    {
+      label: "the CTA's supporting paragraph",
+      locator: closing.getByText('See how ASComply fits your invoices, your systems and your team.'),
+    },
   ]
   for (const t of targets) await expect(t.locator, `${t.label} is not unique`).toHaveCount(1)
 
@@ -279,7 +282,7 @@ test('landing consent: the notice never covers the closing CTA copy at any scrol
           }
 
           const doc = document.documentElement
-          const demoEl = document.querySelector('#demo')
+          const demoEl = document.querySelector('[data-closing]')
           if (!demoEl) return { error: 'the closing CTA is not on the page' }
           const maxScroll = Math.max(0, doc.scrollHeight - doc.clientHeight)
           const box = demoEl.getBoundingClientRect()
@@ -401,7 +404,7 @@ test('landing consent: the notice moves nothing above it and reserves the band i
   await expect(card).toHaveCount(1)
 
   const header = page.getByRole('banner')
-  const demo = page.locator('#demo')
+  const demo = page.locator('[data-closing]')
   const footer = page.getByRole('contentinfo')
 
   const spacerRect = await rectOf(page.locator('.cn-spacer'), 'the desktop spacer', 'with the notice up')
@@ -468,7 +471,7 @@ test('landing consent: the notice moves nothing above it and reserves the band i
 //
 // This is the regression that must not come back. Right-anchored the card's x band holds
 // the footer's whole right-hand link column: measured on the deployed build before the
-// spacer existed, the privacy link, Cookie choices, Security, Status and Pricing were all
+// spacer existed, the privacy link and Cookie choices were all
 // covered AND unclickable at 1280, 1440 and 1920 — elementFromPoint returned the card.
 // So the oracle is elementFromPoint on EVERY footer control at every width, not a rect
 // check on one link: an overlap test alone cannot tell a covered control from a clear one
@@ -632,6 +635,15 @@ test('landing consent: Accept and Reject are the same box at the same weight', a
         reject: getComputedStyle(el.querySelector('[data-consent="reject"]')!).fontWeight,
       }))
       expect(weights.accept, `Accept and Reject differ in weight ${at}`).toBe(weights.reject)
+
+      // The outline must render: a per-button border-color that loses the cascade to the
+      // shared `border` shorthand leaves Reject transparent or Accept-coloured.
+      const borders = await card.evaluate((el) => ({
+        accept: getComputedStyle(el.querySelector('[data-consent="accept"]')!).borderTopColor,
+        reject: getComputedStyle(el.querySelector('[data-consent="reject"]')!).borderTopColor,
+      }))
+      expect(borders.reject, `Reject's outline is transparent ${at}`).not.toBe('rgba(0, 0, 0, 0)')
+      expect(borders.reject, `Reject's outline matches Accept's border ${at} (${borders.reject})`).not.toBe(borders.accept)
     }
   } finally {
     if (entry) await page.setViewportSize(entry)
@@ -639,8 +651,8 @@ test('landing consent: Accept and Reject are the same box at the same weight', a
   expectNoConsoleErrors(errors)
 })
 
-// C6 — the notice's policy link is underlined. `.asc-app a { text-decoration: none }` is
-// (0,1,1) and outranks a bare .cn-link, so this is the cascade resolution, not the source.
+// C6 — the notice's policy link is underlined. The v2 `a { text-decoration: none }` is
+// (0,0,1) and a.lnk sets no decoration, so this is the cascade resolution, not the source.
 test('landing consent: the policy link inside the notice is underlined', async ({ page }) => {
   const { errors, card } = await openLanding(page)
 
@@ -653,7 +665,7 @@ test('landing consent: the policy link inside the notice is underlined', async (
   expect(decorated.line, `the notice's policy link resolved to text-decoration-line "${decorated.line}"`).toContain('underline')
   expect(decorated.offset, 'the underline offset moved').toBe('3px')
 
-  // Control needle: the footer's .ios-link declares no decoration, so the same instrument
+  // Control needle: the footer's .a-link declares no decoration, so the same instrument
   // must read `none` there. Without it this test passes on a browser that underlines
   // every anchor.
   const plain = page.getByRole('contentinfo').locator('a[href="/privacy"]')
@@ -696,7 +708,7 @@ test('landing consent: keyboard focus cannot reach the notice while a modal is o
   const { errors, card } = await openLanding(page)
 
   const cases = [
-    { trigger: 'Explore the platform', dialog: 'Sign in' },
+    { trigger: 'Platform login', dialog: 'Platform login' },
     { trigger: 'Book a demo', dialog: 'Book a demo' },
   ]
 
@@ -736,21 +748,21 @@ test('landing consent: keyboard focus cannot reach the notice while a modal is o
 
 // C9 — first visit at 390x844. The standard overflow check is vacuous twice here: the
 // notice is position:fixed so it adds nothing to document.scrollWidth, and it sits inside
-// .asc-app's overflow-x: clip. The oracle is the card's OWN box.
+// the App root's overflow-x: clip. The oracle is the card's OWN box.
 test('landing consent: the first-visit card is at most a third of the phone viewport', async ({ page }, testInfo) => {
   await page.setViewportSize(PHONE)
   const { errors, card } = await openLanding(page)
   await expect(card.locator('.cn-setting'), 'a first visit must not render the current-setting line').toHaveCount(0)
 
-  const inter = await interIsUsable(page)
+  const manrope = await manropeIsUsable(page)
   expect(
-    inter.usable,
-    `Inter is not available for layout (probe ${inter.withInter}px vs fallback ${inter.fallback}px) — the body wraps with ~6px of slack, so a missing webfont costs a whole line and reads as a layout bug`,
+    manrope.usable,
+    `Manrope is not available for layout (probe ${manrope.withManrope}px vs fallback ${manrope.fallback}px) — a missing webfont reads as a layout bug`,
   ).toBe(true)
 
   const rect = await rectOf(card, 'the cookie notice', `at ${PHONE.width}x${PHONE.height}`)
   await testInfo.attach('cookie-notice-mobile-height.json', {
-    body: JSON.stringify({ state: 'first visit', viewport: PHONE, cap: MOBILE_THIRD_PX, rect, inter }, null, 2),
+    body: JSON.stringify({ state: 'first visit', viewport: PHONE, cap: MOBILE_THIRD_PX, rect, manrope }, null, 2),
     contentType: 'application/json',
   })
   testInfo.annotations.push({
@@ -780,15 +792,15 @@ test('landing consent: the reopened card is at most a third of the phone viewpor
   await expect(card.locator('.cn-setting'), 'the reopened card did not render its current-setting line, so this is the first-visit card again').toHaveText('Analytics cookies are on.')
   await settleLayout(page)
 
-  const inter = await interIsUsable(page)
+  const manrope = await manropeIsUsable(page)
   expect(
-    inter.usable,
-    `Inter is not available for layout (probe ${inter.withInter}px vs fallback ${inter.fallback}px) — a missing webfont costs a whole line of body copy`,
+    manrope.usable,
+    `Manrope is not available for layout (probe ${manrope.withManrope}px vs fallback ${manrope.fallback}px) — a missing webfont reads as a layout bug`,
   ).toBe(true)
 
   const rect = await rectOf(card, 'the reopened cookie notice', `at ${PHONE.width}x${PHONE.height}`)
   await testInfo.attach('cookie-notice-mobile-height-reopened.json', {
-    body: JSON.stringify({ state: 'reopened', viewport: PHONE, cap: MOBILE_THIRD_PX, rect, inter }, null, 2),
+    body: JSON.stringify({ state: 'reopened', viewport: PHONE, cap: MOBILE_THIRD_PX, rect, manrope }, null, 2),
     contentType: 'application/json',
   })
   testInfo.annotations.push({
@@ -817,7 +829,7 @@ test('landing consent: the closing CTA scrolls clear of the notice at 390px', as
   // boundingBox() is viewport-relative, and at the document end the spacer has carried the
   // button off the TOP of the viewport — a read there is clear of the notice on any layout.
   // Scroll it in: that is the state its click happens in (C4's reason).
-  const button = page.locator('#demo').getByRole('button', { name: /Book my demo/ })
+  const button = page.locator('[data-closing]').getByRole('button', { name: 'Book a demo' })
   await expect(button).toHaveCount(1)
   await button.scrollIntoViewIfNeeded()
   await settleLayout(page)
@@ -865,9 +877,8 @@ test('landing consent: the closing CTA scrolls clear of the notice at 390px', as
     spacerRect.height,
     `the spacer reserves ${spacerRect.height}px but the notice covers ${reserved}px`,
   ).toBeGreaterThanOrEqual(reserved)
-  // Bounded above too: the spacer is a bare literal coupled to nothing, so an over-reserve
-  // is as silent as an under-reserve. One further inset band is the ceiling — beyond that
-  // it reads as a second gap below the footer.
+  // Bounded above too: an over-reserve is as silent as an under-reserve. One further inset
+  // band is the ceiling — beyond that it reads as a second gap below the footer.
   expect(
     spacerRect.height,
     `the spacer reserves ${spacerRect.height}px for a ${reserved}px band, leaving dead scroll below the footer`,
@@ -928,11 +939,11 @@ test('landing consent: the Cookie choices control sits opposite the copyright in
 
   const footer = page.getByRole('contentinfo')
   const control = footer.getByRole('button', { name: 'Cookie choices' })
-  const copyright = footer.getByText('© 2026 ASCOMPLY AFRICA · LAGOS · NG', { exact: true })
+  const copyright = footer.getByText('© 2026 ASComply Africa Limited · Lagos, Nigeria', { exact: true })
   const group = control.locator('xpath=..')
   const row = copyright.locator('xpath=..')
-  // Retyped from Footer.tsx's inline `gap: 12` on the copyright row.
-  const COPYRIGHT_ROW_GAP_PX = 12
+  // Retyped from Footer.tsx's copyright row column gap ('12px 24px').
+  const COPYRIGHT_ROW_GAP_PX = 24
   for (const [label, locator] of [['the Cookie choices control', control], ['the copyright string', copyright]] as const) {
     await expect(locator, `${label} is not unique in the footer`).toHaveCount(1)
   }
@@ -1049,3 +1060,360 @@ test('landing consent: the Cookie choices control sits opposite the copyright in
 
   expectNoConsoleErrors(errors)
 })
+
+type Gaps = { left: number; right: number; bottom: number }
+
+/** Viewport-relative gaps of the notice, measured against the scrollbar-free client box. */
+async function noticeGaps(card: Locator): Promise<Gaps & { width: number }> {
+  return card.evaluate((el) => {
+    const r = el.getBoundingClientRect()
+    const root = document.documentElement
+    return { left: r.left, right: root.clientWidth - r.right, bottom: root.clientHeight - r.bottom, width: r.width }
+  })
+}
+
+// O3 — anchored bottom-right on desktop, a band under 640px. Relationships only: equal
+// right and bottom gaps, a wider left gap, and equal side and bottom gaps on a phone.
+test('landing consent: O3 the notice is anchored bottom-right on desktop and a band under 640px', async ({
+  page,
+}, testInfo) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  const { errors, card } = await openLanding(page)
+
+  const states = [
+    ...WIDE_WIDTHS.map((width) => ({ width, height: 1080, band: false })),
+    { width: 600, height: 844, band: true },
+    { ...PHONE, band: true },
+  ]
+  const measured: Array<Gaps & { state: string }> = []
+  const entry = page.viewportSize()
+  try {
+    for (const state of states) {
+      const at = `at ${state.width}x${state.height}`
+      await page.setViewportSize({ width: state.width, height: state.height })
+      await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(state.width)
+      await settleLayout(page)
+
+      const g = await noticeGaps(card)
+      measured.push({ state: at, left: g.left, right: g.right, bottom: g.bottom })
+      expect(g.width, `the notice collapsed ${at}`).toBeGreaterThan(0)
+      if (state.band) {
+        expect(Math.abs(g.left - g.right), `the band's side gaps differ ${at} (${g.left} vs ${g.right})`).toBeLessThanOrEqual(1)
+        expect(Math.abs(g.bottom - g.left), `the band's bottom gap differs from its side gap ${at} (${g.bottom} vs ${g.left})`).toBeLessThanOrEqual(1)
+      } else {
+        expect(Math.abs(g.right - g.bottom), `right and bottom gaps differ ${at} (${g.right} vs ${g.bottom})`).toBeLessThanOrEqual(1)
+        expect(g.left, `the notice is not right-anchored ${at} (left ${g.left} vs right ${g.right})`).toBeGreaterThan(g.right)
+      }
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+
+  await testInfo.attach('cookie-notice-anchoring.json', {
+    body: JSON.stringify(measured, null, 2),
+    contentType: 'application/json',
+  })
+  expect(measured.length, 'O3 measured fewer states than it declares').toBe(states.length)
+  expectNoConsoleErrors(errors)
+})
+
+const TAB_CAP = 80
+const MIN_O4_CONTROLS = 20 // fewer means the walk never crossed the page
+const MIN_O4_CONTROLS_PRIVACY = 5 // header and footer links
+
+type FocusRead = { inside: boolean; name: string; rect: Rect; notice: Rect } | null
+
+/** Park focus at the page top so the next Tab starts from the first control, not a stale starting point. */
+async function focusPageTop(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    window.scrollTo(0, 0)
+    const anchor = document.createElement('div')
+    anchor.tabIndex = -1
+    anchor.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0'
+    document.body.prepend(anchor)
+    anchor.focus({ preventScroll: true })
+  })
+}
+
+/** Tab until focus enters the notice (or the cap), returning every control focused outside it. */
+async function tabToNotice(page: Page): Promise<{ controls: Array<{ name: string; rect: Rect; notice: Rect }>; entered: boolean; presses: number }> {
+  const controls: Array<{ name: string; rect: Rect; notice: Rect }> = []
+  for (let press = 1; press <= TAB_CAP; press++) {
+    await page.keyboard.press('Tab')
+    // Wait for the scroll that focus triggers to land: the rects must repeat across frames.
+    const read: FocusRead = await page.evaluate(async () => {
+      const card = document.querySelector('[aria-label="Cookie notice"]')
+      const el = document.activeElement as HTMLElement | null
+      if (!card || !el || el === document.body) return null
+      const box = (e: Element) => {
+        const r = e.getBoundingClientRect()
+        return { x: r.x, y: r.y, width: r.width, height: r.height }
+      }
+      const key = () => JSON.stringify([box(el), box(card)])
+      let prev = ''
+      for (let i = 0; i < 12 && key() !== prev; i++) {
+        prev = key()
+        await new Promise<void>((r) => requestAnimationFrame(() => r()))
+      }
+      const name = `${el.tagName.toLowerCase()} "${(el.getAttribute('aria-label') ?? el.textContent ?? '').trim().slice(0, 40)}"`
+      return { inside: card.contains(el), name, rect: box(el), notice: box(card) }
+    })
+    if (!read) continue
+    if (read.inside) return { controls, entered: true, presses: press }
+    controls.push({ name: read.name, rect: read.rect, notice: read.notice })
+  }
+  return { controls, entered: false, presses: TAB_CAP }
+}
+
+async function expectTabClearsNotice(page: Page, testInfo: TestInfo, label: string, floor: number) {
+  await focusPageTop(page)
+  const walk = await tabToNotice(page)
+  await testInfo.attach(`cookie-notice-tab-${label}.json`, {
+    body: JSON.stringify(walk, null, 2),
+    contentType: 'application/json',
+  })
+  expect(walk.entered, `${label}: Tab never reached the notice in ${TAB_CAP} presses, so the walk did not cross the page`).toBe(true)
+  expect(walk.controls.length, `${label}: only ${walk.controls.length} controls measured before the notice`).toBeGreaterThanOrEqual(floor)
+
+  const covered = walk.controls
+    .filter((c) => rectsOverlap(c.notice, c.rect))
+    .map((c) => {
+      const o = overlapOf(c.notice, c.rect)
+      return `${c.name} is under the notice by ${Math.round(o.width)}x${Math.round(o.height)}px`
+    })
+  expect(covered, `${label}: focus landed under the notice:\n${covered.join('\n')}`).toEqual([])
+}
+
+// O4 — Tab never lands focus under the notice. The browser scrolls a focused control to
+// the viewport edge, which is under a fixed notice unless scroll-padding reserves the band.
+const O4_CASES = [
+  { label: '1440x900 first visit', viewport: { width: 1440, height: 900 }, reopen: false },
+  { label: '390x844 first visit', viewport: PHONE, reopen: false },
+  { label: '390x844 reopened', viewport: PHONE, reopen: true },
+  { label: '1280x720 first visit', viewport: { width: 1280, height: 720 }, reopen: false },
+]
+for (const c of O4_CASES) {
+  test(`landing consent: O4 Tab never lands focus under the notice (${c.label})`, async ({ page }, testInfo) => {
+    test.setTimeout(120_000)
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    await page.setViewportSize(c.viewport)
+    const { errors, card } = await openLanding(page)
+
+    if (c.reopen) {
+      await card.locator('[data-consent="accept"]').click()
+      await expect(card).toHaveCount(0)
+      await page.getByRole('contentinfo').getByRole('button', { name: 'Cookie choices' }).click()
+      await expect(card.locator('.cn-setting'), 'the notice did not reopen').toHaveText('Analytics cookies are on.')
+      await scrollToTop(page)
+    }
+
+    await expectTabClearsNotice(page, testInfo, c.label, MIN_O4_CONTROLS)
+    expectNoConsoleErrors(errors)
+  })
+}
+
+test('landing consent: O4 Tab never lands focus under the notice (/privacy 390x844)', async ({ page }, testInfo) => {
+  test.setTimeout(120_000)
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.setViewportSize(PHONE)
+  const { errors } = await openLanding(page, { url: PRIVACY_URL, privacy: true })
+
+  await expectTabClearsNotice(page, testInfo, 'privacy 390x844', MIN_O4_CONTROLS_PRIVACY)
+  expectNoConsoleErrors(errors)
+})
+
+/** The computed value of `prop` when set to `expr` (a token) on a probe element: the cascade-free reference. */
+function resolved(page: Page, prop: string, expr: string): Promise<string> {
+  return page.evaluate(
+    ([p, e]) => {
+      const probe = document.createElement('div')
+      probe.style.setProperty(p, e)
+      document.body.appendChild(probe)
+      const value = getComputedStyle(probe).getPropertyValue(p)
+      probe.remove()
+      return value
+    },
+    [prop, expr] as const,
+  )
+}
+
+// Resolved values: card-floating and the v2 tokens must win the cascade. CN-1 reads source
+// and cannot see a rule that beats the class. Each value is compared to its token, not a literal.
+for (const viewport of [{ width: 1440, height: 900 }, PHONE]) {
+  test(`landing consent: the card, label, setting line and buttons resolve to their v2 tokens (${viewport.width}x${viewport.height})`, async ({
+    page,
+  }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    await page.setViewportSize(viewport)
+    const { errors, card } = await openLanding(page)
+    await card.locator('[data-consent="accept"]').click()
+    await page.getByRole('contentinfo').getByRole('button', { name: 'Cookie choices' }).click()
+    await expect(card.locator('.cn-setting')).toHaveText('Analytics cookies are on.')
+    await settleLayout(page)
+
+    const read = (selector: string, props: string[]) =>
+      card.locator(selector).evaluate((el, ps) => {
+        const cs = getComputedStyle(el)
+        return Object.fromEntries(ps.map((p) => [p, cs.getPropertyValue(p)]))
+      }, props)
+    const rootRead = await card.evaluate((el, ps) => {
+      const cs = getComputedStyle(el)
+      return Object.fromEntries(ps.map((p) => [p, cs.getPropertyValue(p)]))
+    }, ['background-color', 'border-top-color', 'border-top-width', 'border-top-left-radius', 'box-shadow'])
+    expect(rootRead['border-top-width'], 'the card lost card-floating\'s 1px border').toBe('1px')
+    expect(rootRead['background-color'], 'card background').toBe(await resolved(page, 'background-color', 'var(--cream-card)'))
+    expect(rootRead['border-top-color'], 'card border colour').toBe(await resolved(page, 'border-top-color', 'var(--cream-card-border)'))
+    expect(rootRead['border-top-left-radius'], 'card radius').toBe(await resolved(page, 'border-top-left-radius', 'var(--radius-md)'))
+    expect(rootRead['box-shadow'], 'card shadow').toBe(await resolved(page, 'box-shadow', 'var(--shadow-card)'))
+
+    const label = await read('.t-step', ['font-size', 'text-transform', 'color'])
+    expect(label['font-size'], 'label size').toBe(await resolved(page, 'font-size', 'var(--fs-step)'))
+    expect(label['text-transform'], 'the label is uppercase').toBe('uppercase')
+    expect(label.color, 'label colour').toBe(await resolved(page, 'color', 'var(--step-label)'))
+
+    const setting = await read('.cn-setting', ['font-size', 'font-weight', 'color'])
+    expect(setting['font-size'], 'setting size').toBe(await resolved(page, 'font-size', 'var(--fs-card-title)'))
+    expect(setting['font-weight'], 'setting weight').toBe(await resolved(page, 'font-weight', 'var(--fw-bold)'))
+    expect(setting.color, 'setting colour').toBe(await resolved(page, 'color', 'var(--text-heading)'))
+
+    expect((await read('.cn-body', ['color'])).color, 'body colour').toBe(await resolved(page, 'color', 'var(--text-copy)'))
+    const link = await read('.cn-link', ['color'])
+    expect(link.color, 'link colour').toBe(await resolved(page, 'color', 'var(--link)'))
+
+    const accept = await read('[data-consent="accept"]', ['background-color', 'color', 'border-top-left-radius', 'font-size'])
+    const reject = await read('[data-consent="reject"]', ['color', 'border-top-color', 'border-top-left-radius', 'font-size'])
+    expect(accept['background-color'], 'Accept is the primary').toBe(await resolved(page, 'background-color', 'var(--primary)'))
+    expect(accept.color, 'Accept label colour').toBe(await resolved(page, 'color', 'var(--primary-foreground)'))
+    expect(reject.color, 'Reject label colour').toBe(await resolved(page, 'color', 'var(--ink)'))
+    expect(reject['border-top-color'], 'Reject outline colour').toBe(await resolved(page, 'border-top-color', 'var(--button-outline-border)'))
+    for (const button of [accept, reject]) {
+      expect(button['border-top-left-radius'], 'button radius').toBe(await resolved(page, 'border-top-left-radius', 'var(--radius-btn)'))
+      expect(button['font-size'], 'button size').toBe(await resolved(page, 'font-size', 'var(--fs-btn)'))
+    }
+
+    // The link sits at the start of its grid cell: narrower than the body, which fills the cell.
+    const at = `at ${viewport.width}x${viewport.height}`
+    const bodyBox = await rectOf(card.locator('.cn-body'), 'the notice body', at)
+    const linkBox = await rectOf(card.locator('.cn-link'), 'the policy link', at)
+    expect(linkBox.width, `the policy link spans ${linkBox.width}px of a ${bodyBox.width}px cell`).toBeLessThan(bodyBox.width - 1)
+    expect(Math.abs(linkBox.x - bodyBox.x), 'the policy link is not at the start of the cell').toBeLessThanOrEqual(BOX_SLACK_PX)
+    expectNoConsoleErrors(errors)
+  })
+}
+
+test('landing consent: hover — Accept brightens, Reject fills, the policy link turns teal', async ({ page }) => {
+  const { errors, card } = await openLanding(page)
+  const accept = card.locator('[data-consent="accept"]')
+  const reject = card.locator('[data-consent="reject"]')
+  const link = card.locator('a.cn-link')
+  const filterOf = () => accept.evaluate((el) => getComputedStyle(el).filter)
+  const fillOf = () => reject.evaluate((el) => getComputedStyle(el).backgroundColor)
+  const colourOf = () => link.evaluate((el) => getComputedStyle(el).color)
+
+  const rest = { filter: await filterOf(), fill: await fillOf(), colour: await colourOf() }
+  expect(rest.filter, 'control: Accept is not filtered at rest').toBe('none')
+  expect(rest.fill, 'control: Reject is transparent at rest').toBe('rgba(0, 0, 0, 0)')
+
+  await accept.hover()
+  await expect.poll(filterOf, { message: 'Accept did not brighten on hover' }).toBe('brightness(1.18)')
+  await reject.hover()
+  await expect.poll(fillOf, { message: 'Reject did not fill on hover' }).toBe(await resolved(page, 'background-color', 'var(--muted)'))
+  await expect.poll(filterOf, { message: 'Accept kept its hover filter after the pointer left' }).toBe('none')
+  await link.hover()
+  await expect.poll(colourOf, { message: 'the policy link did not turn teal on hover' }).toBe(await resolved(page, 'color', 'var(--teal)'))
+  expect(rest.colour, 'the hover colour must differ from the rest colour').not.toBe(await resolved(page, 'color', 'var(--teal)'))
+  expectNoConsoleErrors(errors)
+})
+
+test('landing consent: the entry animation runs by default and is dropped under reduced motion', async ({ page }) => {
+  const { errors, card } = await openLanding(page)
+  const animation = () => card.evaluate((el) => getComputedStyle(el).animationName)
+  expect(await animation(), 'the notice lost its entry animation').toBe('cn-in')
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await expect.poll(animation, { message: 'reduced motion did not drop the entry animation' }).toBe('none')
+  await page.emulateMedia({ reducedMotion: 'no-preference' })
+  await expect.poll(animation, { message: 'the animation did not return with motion allowed' }).toBe('cn-in')
+  expectNoConsoleErrors(errors)
+})
+
+// 640 is the last phone width: max-width is inclusive. The band, the spacer and the scroll
+// padding all follow the one --cn-band.
+test('landing consent: 640px is the phone band and 641px the desktop card', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  const { errors, card } = await openLanding(page)
+  const read = async (width: number) => {
+    await page.setViewportSize({ width, height: 844 })
+    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width)
+    await settleLayout(page)
+    const gaps = await noticeGaps(card)
+    const band = await page.evaluate(() => ({
+      spacer: document.querySelector('.cn-spacer')!.getBoundingClientRect().height,
+      padding: getComputedStyle(document.documentElement).scrollPaddingBottom,
+      token: getComputedStyle(document.documentElement).getPropertyValue('--cn-band').trim(),
+    }))
+    return { gaps, band }
+  }
+  const phone = await read(640)
+  const desktop = await read(641)
+
+  expect(Math.abs(phone.gaps.left - phone.gaps.right), 'at 640 the card is a band').toBeLessThanOrEqual(1)
+  expect(desktop.gaps.left, 'at 641 the card is right-anchored').toBeGreaterThan(desktop.gaps.right)
+  expect(phone.gaps.width, 'the phone band fills the viewport, the desktop card does not').toBeGreaterThan(desktop.gaps.width)
+  for (const [name, s] of [['640', phone], ['641', desktop]] as const) {
+    expect(s.band.token, `--cn-band at ${name}`).not.toBe('')
+    expect(s.band.spacer, `the spacer at ${name} is the band`).toBe(parseFloat(s.band.token))
+    expect(s.band.padding, `the scroll padding at ${name} is the band`).toBe(s.band.token)
+  }
+  expect(desktop.band.spacer, 'the desktop band exceeds the phone band').toBeGreaterThan(phone.band.spacer)
+  expectNoConsoleErrors(errors)
+})
+
+// The reopened card is the taller one and opens over the footer. The band and the scroll padding
+// exist only while a notice is up.
+for (const viewport of [{ width: 1280, height: 720 }, { width: 1440, height: 900 }]) {
+  test(`landing consent: the reopened desktop card clears the footer, and band and scroll padding follow the notice (${viewport.width}x${viewport.height})`, async ({
+    page,
+  }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    await page.setViewportSize(viewport)
+    const { errors, card } = await openLanding(page)
+    const padding = () => page.evaluate(() => getComputedStyle(document.documentElement).scrollPaddingBottom)
+    const spacerHeight = () => page.locator('.cn-spacer').evaluate((el) => `${el.getBoundingClientRect().height}px`)
+
+    const up = await spacerHeight()
+    expect(parseFloat(up), 'control: the first-visit spacer reserves nothing').toBeGreaterThan(0)
+    expect(await padding(), 'the scroll padding is not the spacer height while the notice is up').toBe(up)
+
+    await card.locator('[data-consent="accept"]').click()
+    await expect(card).toHaveCount(0)
+    await expect(page.locator('.cn-spacer'), 'the spacer outlived the notice').toHaveCount(0)
+    expect(await padding(), 'the scroll padding outlived the notice').toBe('auto')
+
+    await page.getByRole('contentinfo').getByRole('button', { name: 'Cookie choices' }).click()
+    await expect(card.locator('.cn-setting')).toHaveText('Analytics cookies are on.')
+    expect(await padding(), 'the reopened notice did not restore the scroll padding').toBe(await spacerHeight())
+
+    await scrollToDocumentEnd(page)
+    const noticeRect = await rectOf(card, 'the reopened notice', 'at the document end')
+    const footerRect = await rectOf(page.getByRole('contentinfo'), 'the footer', 'at the document end')
+    expect(
+      footerRect.y + footerRect.height,
+      `the reopened card (top ${noticeRect.y}) covers the footer (bottom ${footerRect.y + footerRect.height})`,
+    ).toBeLessThanOrEqual(noticeRect.y + BOX_SLACK_PX)
+    const covered = await page.evaluate(() => {
+      const notice = document.querySelector('[aria-label="Cookie notice"]')!.getBoundingClientRect()
+      const controls = [...document.querySelectorAll('footer a, footer button')]
+      return {
+        count: controls.length,
+        hit: controls.filter((el) => {
+          const r = el.getBoundingClientRect()
+          const at = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)
+          return !!at?.closest('[aria-label="Cookie notice"]') || (r.y + r.height > notice.y && r.y < notice.y + notice.height && r.x < notice.x + notice.width && r.x + r.width > notice.x)
+        }).length,
+      }
+    })
+    expect(covered.count, 'the footer query found too few controls').toBeGreaterThanOrEqual(MIN_FOOTER_CONTROLS)
+    expect(covered.hit, 'the reopened card covers a footer control').toBe(0)
+    expectNoConsoleErrors(errors)
+  })
+}

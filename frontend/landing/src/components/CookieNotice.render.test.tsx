@@ -73,7 +73,7 @@ function extractTag(html: string, re: RegExp): string {
 describe('CookieNotice SSR render (LAND-05-02)', () => {
   it('T2-1 / AC-1: the card is a polite live region, and is not a modal', async () => {
     const html = await render()
-    const root = extractTag(html, /<div[^>]*\bclass="cookie-note"[^>]*>/)
+    const root = extractTag(html, /<div[^>]*\bclass="cookie-note card-floating"[^>]*>/)
 
     expect(root).toContain('role="region"')
     expect(root).toContain('aria-label="Cookie notice"')
@@ -122,17 +122,14 @@ describe('CookieNotice SSR render (LAND-05-02)', () => {
     }
   })
 
-  it('T2-6 / AC-2: the eyebrow reuses the shared class and renders the copy-table text', async () => {
+  it('T2-6 / AC-2: the label is the v2 step label and renders the copy-table text', async () => {
     const html = await render()
 
-    // Rendered text, not the ALL-CAPS literal every other landing eyebrow passes:
-    // text-transform: uppercase makes the two render identically, so a literal check
-    // would let `COOKIES` through against a copy table that says `Cookies`.
-    expect(html).toMatch(/class="eyebrow"[^>]*>Cookies</)
+    // Rendered text, not an ALL-CAPS literal: text-transform: uppercase makes the two render
+    // identically, so a literal check would let `COOKIES` through against `Cookies`.
+    expect(html).toMatch(/class="t-step"[^>]*>Cookies</)
     expect(html).not.toContain('>COOKIES<')
-
-    // No hand-rolled 24px rule standing in for .eyebrow::before.
-    expect(html).not.toMatch(/<span[^>]*style="[^"]*24px/)
+    expect(html).not.toContain('class="eyebrow"')
   })
 
   it('T2-7 / AC-6: current === null renders no .cn-setting line', async () => {
@@ -156,7 +153,7 @@ describe('CookieNotice SSR render (LAND-05-02)', () => {
 
   it('T2-8 / AC-7: inert appears on the card root only when suppressed', async () => {
     const suppressed = await render({ suppressed: true })
-    const root = extractTag(suppressed, /<div[^>]*\bclass="cookie-note"[^>]*>/)
+    const root = extractTag(suppressed, /<div[^>]*\bclass="cookie-note card-floating"[^>]*>/)
     expect(root).toContain('inert=""')
 
     const live = await render({ suppressed: false })
@@ -233,6 +230,25 @@ describe('CookieNotice adversarial (LAND-05-02)', () => {
     const link = html.match(/<a class="lnk cn-link" href="\/privacy">([\s\S]*?)<\/a>/)
     expect(link, 'expected the policy link').not.toBeNull()
     expect(decode(link![1])).toBe('Read the privacy & cookie policy')
+  })
+
+  it('the reopened card keeps the v2 order — label, setting, body, link, Accept, Reject, spacer', async () => {
+    const html = await render({ current: GRANTED })
+    const marks = ['class="t-step"', 'class="cn-setting"', 'class="cn-body"', 'class="lnk cn-link"', 'class="cn-actions"', 'data-consent="accept"', 'data-consent="reject"', 'class="cn-spacer"']
+    const at = marks.map((m) => html.indexOf(m))
+    expect(at.every((i) => i >= 0), `a mark is missing: ${marks.filter((_, i) => at[i] < 0)}`).toBe(true)
+    expect(at, 'the marks are out of v2 order').toEqual([...at].sort((a, b) => a - b))
+  })
+
+  it('the spacer is the card root\'s next sibling, outside the fixed card', async () => {
+    const root = await tree()
+    const kids = (root.props as { children: ReactElement[] }).children
+    expect(kids.length, 'expected the card root and the spacer').toBe(2)
+    const [card, spacer] = kids as ReactElement<{ className: string; 'aria-hidden'?: string }>[]
+    expect(card.props.className).toBe('cookie-note card-floating')
+    expect(spacer.props.className).toBe('cn-spacer')
+    expect(spacer.props['aria-hidden']).toBe('true')
+    expect(buttonsOf(card).length, 'control: the walker reaches the card\'s children').toBe(2)
   })
 
   it('suppressing the card changes the inert attribute and NOTHING else', async () => {

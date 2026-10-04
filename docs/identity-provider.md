@@ -1284,7 +1284,7 @@ code, a whole-run re-run of the latest push `dev-env` run, or an empty commit.
    curl -sS -X POST https://api.ascomply.com/auth/exchange -H 'Content-Type: application/json' -d "{\"code\":\"x\",\"state\":\"$S\"}"
    ```
    It answers 400 `{"error":"invalid or expired code"}`.
-4. On `https://www.ascomply.com`, "Explore the platform" shows "Continue with email" above
+4. On `https://www.ascomply.com`, "Platform login" shows "Continue with email" above
    the persona list.
 5. An unknown refresh token is refused:
    ```

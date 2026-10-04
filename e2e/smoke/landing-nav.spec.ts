@@ -20,14 +20,13 @@ import { resolveTarget } from '../targets'
 
 const LANDING_URL = resolveTarget('LANDING_URL')
 
-// The six nav targets, in DOM order. Mirrors NAV_LINKS in
-// frontend/landing/src/components/Nav.tsx. `#how` is deliberately NOT here: the
-// How-it-works section still exists on the page, it just has no nav link — which
-// makes it a second non-nav section E8 could park in, alongside `#demo`.
-const NAV_HREFS = ['#problem', '#modules', '#compliance', '#accountants', '#developers', '#pricing'] as const
+// The nav targets, in DOM order. Mirrors NAV_LINKS in
+// frontend/landing/src/components/Nav.tsx. Sections without a link, such as `#faq`,
+// are what E8 parks in.
+const NAV_HREFS = ['#problem', '#solution', '#platform', '#solutions', '#integrations'] as const
 
-// Sub-pixel rects: a post-jump section top measures e.g. 64.77 or 65.16 against a
-// 65px header. Every geometry comparison carries this slack. It is NOT a header
+// Sub-pixel rects: a post-jump section top measures a fraction off the header's
+// bottom edge. Every geometry comparison carries this slack. It is NOT a header
 // height — the header's own measured box is the only height reference in this file.
 const PX = 1
 
@@ -99,8 +98,7 @@ test('landing nav: every link points at exactly one section that exists', async 
   const { errors } = await openLanding(page)
 
   for (const href of NAV_HREFS) {
-    // Count 1, not toBeAttached: a duplicated id must fail too. The id selector also
-    // means the footer's links, which share three of these hrefs, are irrelevant.
+    // Count 1, not toBeAttached: a duplicated id must fail too.
     await expect(page.locator(href), `expected exactly one element matching ${href}`).toHaveCount(1)
   }
 
@@ -138,7 +136,7 @@ test('landing nav: the jumped-to section heading sits below the header band', as
 
   for (const href of NAV_HREFS) {
     await nav.locator(`a[href="${href}"]`).click()
-    // Each of the six sections has exactly one <h2>; .first() is belt-and-braces.
+    // Each nav section has exactly one <h2>; .first() is belt-and-braces.
     await expect
       .poll(async () => (await page.locator(`${href} h2`).first().boundingBox())!.y, {
         message: `the heading of ${href} is occluded by the ${headerH}px header`,
@@ -204,7 +202,7 @@ test('landing nav: the primary navigation is a named landmark', async ({ page })
   // getByRole matches on accessible name, so this count is meaningful: 0 means the
   // label is missing or renamed, 2 means a second landmark took the same name.
   await expect(nav).toHaveCount(1)
-  // Doubles as the desktop-viewport guard — the nav is display:none under 600px.
+  // Doubles as the desktop-viewport guard — the nav is display:none at 1120px and below.
   await expect(nav).toBeVisible()
 
   expectNoConsoleErrors(errors)
@@ -240,10 +238,10 @@ test('landing nav: scrolling into a section marks exactly that link current', as
   expectNoConsoleErrors(errors)
 })
 
-// E8 — the indicator CLEARS outside the six nav sections rather than sticking on the
+// E8 — the indicator CLEARS outside the nav sections rather than sticking on the
 // first or last link. Vacuous against the pre-fix build, where nothing was ever
 // marked current; meaningful now that E7 proves the indicator does appear.
-test('landing nav: no link is marked current outside the six sections', async ({ page }) => {
+test('landing nav: no link is marked current outside the nav sections', async ({ page }) => {
   const { errors, nav, headerH } = await openLanding(page)
 
   // A count of 0 is trivially true on a page that never rendered, so prove the nav
@@ -260,17 +258,17 @@ test('landing nav: no link is marked current outside the six sections', async ({
   // deliberately loose (both positions sit thousands of pixels down) so it can only
   // ever fire on a genuinely collapsed document, never on sub-pixel drift.
 
-  // In the demo CTA — a section[id] that is deliberately not a nav target.
-  await scrollSectionUnderHeader(page, '#demo')
+  // In the FAQ — a section[id] that is deliberately not a nav target.
+  await scrollSectionUnderHeader(page, '#faq')
   await expect
     .poll(() => page.evaluate(() => window.scrollY), {
-      message: `the page did not scroll to the demo CTA, so this proves nothing`,
+      message: `the page did not scroll to the FAQ, so this proves nothing`,
     })
     .toBeGreaterThan(headerH)
   await expect(nav.locator('[aria-current]')).toHaveCount(0)
 
-  // And at the very bottom: the footer is a <footer>, not a section[id], so the demo
-  // CTA is still the last section crossed.
+  // And at the very bottom: the footer is a <footer> and the closing section has no id,
+  // so the FAQ is still the last section[id] crossed.
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
   await expect
     .poll(() => page.evaluate(() => window.scrollY), {
@@ -278,6 +276,30 @@ test('landing nav: no link is marked current outside the six sections', async ({
     })
     .toBeGreaterThan(headerH)
   await expect(nav.locator('[aria-current]')).toHaveCount(0)
+
+  expectNoConsoleErrors(errors)
+})
+
+// E9 - the hero's "Explore the platform" button lands the Platform heading below the header.
+test('landing nav: the hero Explore the platform button lands on Platform', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 })
+  const { errors, headerH } = await openLanding(page)
+
+  // The hero holds two #platform anchors; only the ghost button is the one under test.
+  await page.locator('#top a.ds-btn--ghostDark[href="#platform"]').click()
+
+  await expect(page).toHaveURL(/#platform$/)
+  // Two-sided: a lower bound alone passes before the smooth scroll has moved.
+  await expect
+    .poll(async () => Math.abs((await page.locator('#platform').boundingBox())!.y - headerH), {
+      message: `#platform did not settle at the ${headerH}px header edge after the hero click`,
+    })
+    .toBeLessThanOrEqual(PX)
+  await expect
+    .poll(async () => (await page.locator('#platform h2').first().boundingBox())!.y, {
+      message: `the #platform heading is occluded by the ${headerH}px header after the hero click`,
+    })
+    .toBeGreaterThanOrEqual(headerH - PX)
 
   expectNoConsoleErrors(errors)
 })

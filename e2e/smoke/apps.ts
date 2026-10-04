@@ -26,7 +26,7 @@ export const APPS: AppTarget[] = [
     assertMainView: async (page) => {
       const h1 = page.getByRole('heading', { level: 1 })
       await expect(h1).toBeVisible()
-      await expect(h1).toContainText(/e-invoicing/i)
+      await expect(page.locator('#top .t-eyebrow')).toContainText(/e-invoicing/i)
     },
   },
   {

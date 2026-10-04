@@ -2072,7 +2072,7 @@ describe('missing buyer TIN stated twice, in two grammars (disclosure, task-413)
 // no prior interaction, just status=draft + a stamped rule_set_version_id + a clean
 // stored violation set) rather than driving the actual edit flow.
 describe('stale violations beside a live-missing buyer TIN (disclosure, task-413)', () => {
-  it('a demoted-but-unrevalidated invoice shows red TIN MISSING, a green clean-pass panel, and the amber stale banner between them', async () => {
+  it('a demoted-but-unrevalidated invoice shows red TIN MISSING, a clean-pass line, and the amber stale banner between them', async () => {
     mockDetailFetch(
       detailRecord({
         status: 'draft',
@@ -6253,6 +6253,40 @@ describe('InvoiceDetail cards, rail and inline edit take the v2 look (RESKIN2-03
     expect.soft(undo.style.fontSize, 'Undo size').toBe('12.5px')
   })
 
+  it('Undo wears the ghost disabled recipe only when the wire forbids it', async () => {
+    const resolved = { id: ID, status: 'failed' as const, kept_as_is_at: '2026-08-06T12:00:00Z', kept_as_is_by: APP_PERSONAS.firm.subject, kept_as_is_reason: 'Filed manually.' }
+    mockDetailFetch(detailRecord({ ...resolved, can_resolve_outside: false }))
+    const locked = render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const off = (await screen.findByTestId('resolve-outside-undo')) as HTMLButtonElement
+    expect(off.disabled, 'control: the wire forbids it').toBe(true)
+    expect.soft(off.style.background, 'disabled fill').toBe('var(--bg-3)')
+    expect.soft(off.style.color, 'disabled colour').toBe('var(--fg-4)')
+    expect.soft(off.style.cursor, 'disabled cursor').toBe('not-allowed')
+    expect.soft(off.style.filter, 'no filter').toBe('')
+    locked.unmount()
+
+    mockDetailFetch(detailRecord({ ...resolved, can_resolve_outside: true }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const on = (await screen.findByTestId('resolve-outside-undo')) as HTMLButtonElement
+    expect(on.disabled, 'control: the wire allows it').toBe(false)
+    expect.soft(on.style.background, 'enabled carries no fill').toBe('')
+    expect.soft(on.style.color, 'enabled carries no colour').toBe('')
+    expect.soft(on.style.cursor, 'enabled carries no cursor').toBe('')
+  })
+
+  it('a fiscal record without a QR or CSID drops the plate and keeps the type', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'accepted', irn: 'IRN-2026-0002', csid: null, qr_png_base64: null }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const irn = await screen.findByTestId('fiscal-irn')
+    expect(screen.queryByTestId('fiscal-qr'), 'control: no QR, no plate').toBeNull()
+    expect.soft(irn.style.fontWeight, 'IRN weight').toBe('600')
+    const csid = screen.getByTestId('fiscal-csid')
+    expect(csid.textContent, 'control: a missing CSID reads as a dash').toBe('—')
+    expect.soft(csid.style.fontSize, 'CSID size').toBe('11px')
+    expect.soft(csid.style.color, 'CSID colour').toBe('var(--fg-2)')
+  })
+
   it('the fiscal card and QR plate follow v2', async () => {
     mockDetailFetch(detailRecord({ id: ID, status: 'accepted', irn: 'IRN-2026-0001', csid: 'CSID-2026-0001', qr_png_base64: 'iVBORw0KGgo=' }))
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
@@ -6309,6 +6343,29 @@ describe('InvoiceDetail cards, rail and inline edit take the v2 look (RESKIN2-03
     expect(add.textContent, 'control: line-add keeps its copy').toContain('Add line item')
     expect(add.querySelector('svg'), 'control: line-add keeps its glyph').not.toBeNull()
     expect.soft(screen.getByTestId('edit-cancel').style.height, 'Cancel height').toBe('34px')
+
+    const fields = (Array.from(form.querySelectorAll('input')) as HTMLInputElement[]).filter((el) => el.closest('[data-testid="line-row"]') === null)
+    expect(fields, 'control: ten field inputs outside the line table').toHaveLength(10)
+    expect(fields.filter((el) => el.readOnly), 'control: supplier name and TIN are the read-only pair').toHaveLength(2)
+    for (const el of fields) {
+      const name = el.readOnly ? `read-only ${el.value}` : `editable ${el.value}`
+      expect.soft(el.style.height, `${name} height`).toBe('34px')
+      expect.soft(el.style.fontSize, `${name} size`).toBe('13px')
+      expect.soft(el.style.padding, `${name} padding`).toBe('0px 10px')
+      expect.soft(el.style.background, `${name} fill`).toBe(el.readOnly ? 'var(--bg-3)' : '')
+    }
+  })
+
+  it('a locked invoice number takes the read-only fill and its caption stays 12px', async () => {
+    const form = await openEdit({ can_correct_invoice_number: false, invoice_number_blocked_reason: 'The number is fixed once validated.' })
+
+    const input = labelOf(form, 'Invoice number').nextElementSibling as HTMLInputElement
+    expect(input.readOnly, 'control: the number is locked').toBe(true)
+    expect.soft(input.style.background, 'locked fill').toBe('var(--bg-3)')
+    expect.soft(input.style.color, 'locked colour').toBe('var(--fg-3)')
+    expect.soft(input.style.height, 'locked height').toBe('34px')
+    const caption = screen.getByText('The number is fixed once validated.')
+    expect.soft(caption.style.fontSize, 'caption size').toBe('12px')
   })
 
   it('the edit body keeps its footer inside and Save matches Cancel', async () => {
@@ -6358,6 +6415,10 @@ describe('InvoiceDetail cards, rail and inline edit take the v2 look (RESKIN2-03
     const inputs = Array.from(row.querySelectorAll('input')) as HTMLInputElement[]
     expect(inputs, 'control: description plus four numeric inputs').toHaveLength(5)
     expect.soft(inputs[0].style.padding, 'description input padding').toBe('0px 10px')
+    for (const [i, input] of inputs.entries()) {
+      expect.soft(input.style.height, `line input ${i + 1} height`).toBe('30px')
+      expect.soft(input.style.fontSize, `line input ${i + 1} size`).toBe('13px')
+    }
     for (const numeric of inputs.slice(1)) {
       expect.soft(numeric.style.padding, 'numeric inputs keep their 0 8px override').toBe('0px 8px')
       expect.soft(numeric.style.fontSize, 'numeric input size').toBe('13px')

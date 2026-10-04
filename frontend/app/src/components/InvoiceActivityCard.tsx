@@ -159,8 +159,7 @@ export function InvoiceActivityCard({
         </div>
 
         {/* The toggle and the hand-off share one row: the cap note directly below points the
-            reader at ACTIVITY_COPY.auditLink, so pointer and target must be adjacent. marginTop
-            moves to the wrapper so spacing is the same whether or not the toggle renders. */}
+            reader at ACTIVITY_COPY.auditLink, so pointer and target must be adjacent. */}
         <div style={{ padding: '11px 18px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           {toggle.label != null && (
             <button

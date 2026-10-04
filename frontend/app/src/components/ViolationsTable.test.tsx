@@ -155,7 +155,7 @@ describe('ViolationsTable', () => {
 
   // QA Mode B (BUG-13-01). severityStyle falls back to MUTED_STYLE on an unmapped value.
   // Every prior case used a mapped severity, so the fallback row's shape was unpinned:
-  // a row that lost its pill would still have four cells, but not four RENDERED ones.
+  // a row that lost its badge would still have four cells, but not four RENDERED ones.
   it('violationsTable_unknownSeverityStillRendersAFullRow', () => {
     render(
       <ViolationsTable
@@ -188,7 +188,7 @@ describe('ViolationsTable', () => {
     for (const row of rows) {
       const cells = within(row).getAllByRole('cell') as HTMLElement[]
       expect(cells).toHaveLength(4)
-      // Severity (index 0) is a pill, not free text -- it is deliberately not in this set.
+      // Severity (index 0) is a badge, not free text -- it is deliberately not in this set.
       for (const cell of cells.slice(1)) expect(cell.style.overflowWrap).toBe('anywhere')
     }
     // The em-dash placeholder rides the same wrapping cell as a real path.
@@ -212,7 +212,11 @@ describe('ViolationsTable', () => {
   it('a severity badge is a 4px badge with no dot; rows follow v2', () => {
     render(
       <ViolationsTable
-        violations={[violation(), violation({ severity: 'warning', rule_key: 'vat-standard-rate', message: 'second violation', path: '$.vat' })]}
+        violations={[
+          violation(),
+          violation({ severity: 'warning', rule_key: 'vat-standard-rate', message: 'second violation', path: '$.vat' }),
+          violation({ severity: 'critical' as unknown as Violation['severity'], rule_key: 'unmapped.rule', message: 'third violation', path: '$.unmapped' }),
+        ]}
         ruleSetVersion={3}
       />,
     )
@@ -225,14 +229,14 @@ describe('ViolationsTable', () => {
     }
 
     const rows = within(screen.getByRole('table')).getAllByRole('row').slice(1)
-    expect(rows).toHaveLength(2)
+    expect(rows).toHaveLength(3)
     for (const row of rows) {
       const cells = within(row).getAllByRole('cell') as HTMLElement[]
       expect(cells).toHaveLength(4)
       const badge = cells[0].firstElementChild as HTMLElement
       expect(badge, 'the severity cell holds a badge').not.toBeNull()
       const label = badge.textContent
-      expect(label === 'Error' || label === 'Warning', `badge reads its severity, got ${label}`).toBe(true)
+      expect(['Error', 'Warning', 'Info'], `badge reads its severity, got ${label}`).toContain(label)
       expect.soft(badge.style.borderRadius, `${label} badge radius`).toBe('var(--radius-sm)')
       expect.soft(badge.style.padding, `${label} badge padding`).toBe('2px 7px')
       expect.soft(

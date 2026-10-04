@@ -1196,6 +1196,46 @@ describe('InvoiceActivityCard takes the v2 look (RESKIN2-03-02)', () => {
     expect.soft(audit.parentElement!.style.padding, 'footer padding').toBe('11px 18px')
   })
 
+  it('a short feed has no Show-all, and Open in Audit still sits right at 30px', async () => {
+    mockFetch(logResponse({ events: eventsOf([{ event: INVOICES_EVENT, n: ACTIVITY_REST_ROWS }]) }))
+    renderCard()
+    await loaded()
+
+    expect(screen.getAllByTestId('audit-row'), 'control: the feed has rows').toHaveLength(ACTIVITY_REST_ROWS)
+    expect(screen.queryByTestId('activity-toggle'), 'control: no toggle at the cap').toBeNull()
+    const audit = screen.getByTestId('activity-open-in-audit')
+    expect.soft(audit.style.marginLeft, 'Open in Audit pushes right').toBe('auto')
+    expect.soft(audit.style.height, 'Open in Audit height').toBe('30px')
+    expect.soft(audit.style.padding, 'Open in Audit padding').toBe('0px 13px')
+  })
+
+  it('the card body is flush once the feed has loaded and padded while it has not', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+    const pending = renderCard()
+    const waiting = await screen.findByText(copyOf('loading'))
+    expect(waiting, 'control: the loading line shows').toBeTruthy()
+    expect.soft(screen.getByTestId('invoice-activity-body').style.padding, 'loading').toBe('16px 18px')
+    pending.unmount()
+
+    mockFetch({ ok: false, status: 500, json: () => Promise.resolve({}) })
+    const failed = renderCard()
+    await screen.findByText('Retry')
+    expect.soft(screen.getByTestId('invoice-activity-body').style.padding, 'error').toBe('16px 18px')
+    failed.unmount()
+
+    mockFetch(logResponse({ events: [], total: 0 }))
+    const empty = renderCard()
+    await screen.findByTestId('invoice-activity-empty')
+    expect.soft(screen.getByTestId('invoice-activity-body').style.padding, 'empty').toBe('0px')
+    empty.unmount()
+
+    mockFetch(logResponse({ events: eventsOf([{ event: INVOICES_EVENT, n: 2 }]) }))
+    renderCard()
+    await loaded()
+    expect.soft(screen.getByTestId('invoice-activity-body').style.padding, 'loaded').toBe('0px')
+    expect.soft(within(screen.getByTestId('invoice-activity')).getByText('READ ONLY'), 'READ ONLY stays in the header').toBeTruthy()
+  })
+
   it('the empty state is centred plain text', async () => {
     mockFetch(logResponse({ events: [], total: 0 }))
     renderCard()

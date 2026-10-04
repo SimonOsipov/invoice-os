@@ -1,8 +1,6 @@
 // Reusable violations table. Imports ONLY from lib/validationApi + React, so any screen
 // can mount it unchanged.
-// Pure function of props (no state, no effects). Styling mirrors ClientsView.tsx's
-// token usage (container/header/row + the severity-pill pattern at L109-111) so it
-// reads as the same design language.
+// Pure function of props (no state, no effects).
 //
 // Empty violations -> the clean-pass block (AC-5); this is the single source of that
 // state, inherited by M4 without change. Non-empty -> a semantic <table>, columns

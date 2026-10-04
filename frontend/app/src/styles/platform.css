@@ -225,9 +225,8 @@ pre.pf-json {
    it is legible.
 
    Bounded BELOW at 1180, the breakpoint the dashboard already stacks at. Between 861 and
-   1179 the document column is independently too tight -- LINE_EDIT_GRID needs ~372px before
-   Description gets any width and only has 200px at an 880 viewport -- and that is a
-   pre-existing problem this rule deliberately neither fixes nor touches. */
+   1179 the document column is independently too tight, and that is a pre-existing problem
+   this rule deliberately neither fixes nor touches. */
 @media (min-width: 1180px) {
   .pf-detail-grid {
     grid-template-columns: 1fr minmax(220px, 25%) !important;

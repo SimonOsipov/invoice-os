@@ -1396,11 +1396,10 @@ function InvoiceEditBody({
               aria-readonly is redundant with the native `readonly` attribute for assistive tech
               (already implicit) but stated explicitly anyway. color: var(--fg-3) (an EXISTING
               token this file already uses for de-emphasized text, e.g. the computed-line-sum
-              hint below) is the one concession to ".pf-input has no :disabled/:read-only style
+              hint below) is a concession to ".pf-input has no :disabled/:read-only style
               at all today" (product-advisor review, 2026-07-31) -- without it this field is
               visually IDENTICAL to every editable one beside it, which is worse than "unstyled"
-              for a control that no longer does what it looks like it does; not a new visual
-              language, just this file's own existing muted-text color applied to two inputs. */}
+              for a control that no longer does what it looks like it does. */}
           <div>
             <div className="label" style={{ marginBottom: 5 }}>Supplier name</div>
             {fieldFlag('supplier_name')}

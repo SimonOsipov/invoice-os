@@ -22,6 +22,7 @@ export const UNITS: Unit[] = [
       'design-system.spec.ts',
       'environment-posture.spec.ts',
       'isolation.spec.ts',
+      'overview-register-approvals.spec.ts',
       'persona-surfaces.spec.ts',
       'portfolio.spec.ts',
       'portfolio-workflow-surfaces.spec.ts',
@@ -43,6 +44,8 @@ export const UNITS: Unit[] = [
         'Cost, not shared state ([fork-lane-by-cost]): reads and writes no tenant data. A shard costs ~1 min of runner setup for one 1.4 s test.',
       'isolation.spec.ts':
         'Asserts the exact seeded membership sets (firm: 6 members) and tenant identities of 1111 and 2222.',
+      'overview-register-approvals.spec.ts':
+        'Cost, not shared state ([fork-lane-by-cost]): signs in the seeded firm and in-house personas and reaches every state with page.route; writes no tenant data.',
       'persona-surfaces.spec.ts':
         "Builds the in-house approval queue and badge on the active policy `internal/demopolicy` seeds only on 1111 / 2222. Needs 2222's seeded `Honeywell Group` entity as its first client (the subtitle assertion).",
       'portfolio.spec.ts':

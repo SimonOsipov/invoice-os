@@ -73,4 +73,16 @@ describe('Pager behaviour', () => {
       expect(document.getElementById(id!)?.textContent).toBe('B-reason')
     }
   })
+
+  it('PG-01: range left, page label carries the auto margin, buttons are 30px', () => {
+    const { container } = render(<Pager pagination={MIDDLE} busy={false} onGo={vi.fn()} />)
+    const root = container.firstElementChild as HTMLElement
+    const [range, page, group] = Array.from(root.children) as HTMLElement[]
+    expect(range.compareDocumentPosition(page) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(page.getAttribute('style') ?? '').toContain('margin-left: auto')
+    expect(group.getAttribute('style') ?? '').not.toContain('margin-left')
+    const { prev, next } = buttons(container)
+    expect(prev.style.height).toBe('30px')
+    expect(next.style.height).toBe('30px')
+  })
 })

@@ -3,15 +3,17 @@ import { Nav } from './components/Nav'
 import { SignInModal } from './components/SignInModal'
 import { DemoModal } from './components/DemoModal'
 import { Hero } from './components/Hero'
-import { TrustStrip } from './components/TrustStrip'
+import { AudienceStrip } from './components/AudienceStrip'
 import { Problem } from './components/Problem'
 import { Modules } from './components/Modules'
-import { HowItWorks } from './components/HowItWorks'
-import { Compliance } from './components/Compliance'
-import { Audience } from './components/Audience'
-import { Developers } from './components/Developers'
-import { Pricing } from './components/Pricing'
-import { DemoCta } from './components/DemoCta'
+import { Platform } from './components/Platform'
+import { Coverage } from './components/Coverage'
+import { Intelligence } from './components/Intelligence'
+import { Solutions } from './components/Solutions'
+import { Integrations } from './components/Integrations'
+import { Api } from './components/Api'
+import { Faq } from './components/Faq'
+import { ClosingCta } from './components/ClosingCta'
 import { Footer } from './components/Footer'
 import { Privacy } from './components/Privacy'
 import { CookieNotice } from './components/CookieNotice'
@@ -38,9 +40,7 @@ function readSignInBoot(search: string) {
   return { state, bootAt: Date.now(), error: SIGN_IN_OUTCOMES.get(outcome), open: SIGN_IN_OUTCOMES.has(outcome) }
 }
 
-// The whole page lives under `.asc-app` — that scope defines the design-system
-// tokens (--accent, --bg-*, --fg-*, …) and the utility classes (.v2-btn, .label,
-// .mono, .grid-bg, .dot-bg) that every section relies on.
+// Tokens and utility classes (.v2-btn, .label, .mono) are global: v2 plus bridge.css.
 export default function App() {
   // The state is held in memory only, never in storage.
   const [signInBoot] = useState(() => readSignInBoot(window.location.search))
@@ -58,8 +58,7 @@ export default function App() {
   const [consent, setConsent] = useState<ConsentRecord | null>(() => readConsent())
   // Once a choice is stored the footer control is the only route back to the notice.
   const [reopened, setReopened] = useState(false)
-  // Source-bound per call site: the five components keep `onBookDemo: () => void`
-  // and stay untouched, so one file carries the attribution instead of six.
+  // Source-bound per call site: the components keep `onBookDemo: () => void`, so this file carries the attribution.
   const book = (source: DemoCtaSource) => () => {
     trackDemoOpen(source)
     setDemoOpen(true)
@@ -91,7 +90,7 @@ export default function App() {
     const measure = () => {
       frame = 0
       // documentElement, not body: body.scrollHeight excludes body margins. The height is
-      // never cached — the Who-it's-for toggle swaps mocks of different heights.
+      // never cached — a toggle can swap content of different heights.
       const documentH = document.documentElement.scrollHeight
       // A page that fits the viewport is 100% seen but nothing was scrolled; reporting it
       // at mount would burn all four milestones. Pinned by "guards the mount-time measurement".
@@ -112,7 +111,6 @@ export default function App() {
 
   return (
     <div
-      className="asc-app"
       style={{
         minHeight: '100vh',
         background: 'var(--bg-1)',
@@ -130,19 +128,21 @@ export default function App() {
         <Privacy />
       ) : (
         <>
-          <Hero onBookDemo={book('hero')} onSignIn={onSignIn} />
-          <TrustStrip />
+          <Hero onBookDemo={book('hero')} />
+          <AudienceStrip />
           <Problem />
           <Modules />
-          <HowItWorks />
-          <Compliance />
-          <Audience onBookDemo={book('audience')} />
-          <Developers />
-          <Pricing onBookDemo={book('pricing')} />
-          <DemoCta />
+          <Platform onBookDemo={book('platform')} />
+          <Coverage onBookDemo={book('coverage')} />
+          <Intelligence />
+          <Solutions onBookDemo={book('audience')} />
+          <Integrations onBookDemo={book('integrations')} />
+          <Api onBookDemo={book('api')} />
+          <Faq onBookDemo={book('faq')} />
+          <ClosingCta onBookDemo={book('closing')} />
         </>
       )}
-      <Footer onBookDemo={book('footer')} hrefPrefix={privacy ? '/' : ''} onCookieChoices={() => setReopened(true)} />
+      <Footer onBookDemo={book('footer')} onSignIn={onSignIn} hrefPrefix={privacy ? '/' : ''} onCookieChoices={() => setReopened(true)} />
       {/* Pinned by "the notice mounts after Footer and before the modals": last in flow puts the
           spacer's scroll room at the document end and the tab order after the footer. */}
       {(consent === null || reopened) && (

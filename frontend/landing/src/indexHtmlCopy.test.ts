@@ -1,11 +1,19 @@
-// QA gap-fill. The <meta name="description"> restates the hero's first sentence, reaches no
-// rendered React tree, and is invisible to a screenshot — this is its only oracle short of a
-// browser read on the deployed build.
+// QA gap-fill. The <meta name="description"> reaches no rendered React tree and is invisible
+// to a screenshot — this is its only oracle short of a browser read on the deployed build.
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 const INDEX_HTML = fileURLToPath(new URL('../index.html', import.meta.url))
+const TYPOGRAPHY_CSS = fileURLToPath(
+  new URL('../../../packages/design-tokens/v2/tokens/typography.css', import.meta.url),
+)
+
+const DOCS = fileURLToPath(new URL('../../../docs/', import.meta.url))
+
+function familyParams(html: string): string[] {
+  return [...html.replaceAll('&amp;', '&').matchAll(/[?&]family=([^&"'\s]+)/g)].map((m) => m[1])
+}
 
 const META_DESCRIPTION =
   "ASComply Africa is the solution between your business and Nigeria's Merchant Buyer Solution. Create, validate, approve, archive, and transmit compliant invoices."
@@ -20,12 +28,36 @@ describe('index.html head copy', () => {
 
   // docs/privacy-policy-claims.md and docs/analytics.md both cite the font tags by line
   // number, and nothing re-derives those ranges. Pin the lines so a reflow of this head
-  // fails here instead of silently falsifying two docs.
-  it('the Google Fonts tags stay on lines 13-16', () => {
+  // fails here instead of silently falsifying two docs. Cited as lines 11-13.
+  it('the Google Fonts tags stay on lines 11-13 and request Manrope', () => {
+    const importUrl = /@import\s+url\(\s*['"]([^'"]+)['"]\s*\)/.exec(
+      readFileSync(TYPOGRAPHY_CSS, 'utf8').replace(/\/\*[\s\S]*?\*\//g, ''),
+    )?.[1]
+    expect(importUrl, 'typography.css has an @import url()').toContain('family=Manrope')
+
     const lines = readFileSync(INDEX_HTML, 'utf8').split('\n')
-    expect(lines[12], 'line 13').toContain('rel="preconnect" href="https://fonts.googleapis.com"')
-    expect(lines[13], 'line 14').toContain('rel="preconnect" href="https://fonts.gstatic.com"')
-    expect(lines[14], 'line 15').toContain('rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter')
-    expect(lines[15], 'line 16').toContain('rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono')
+    expect(lines[10], 'line 11').toContain('rel="preconnect" href="https://fonts.googleapis.com"')
+    expect(lines[11], 'line 12').toContain('rel="preconnect" href="https://fonts.gstatic.com" crossorigin')
+    const href = /<link rel="stylesheet" href="([^"]+)"/.exec(lines[12])?.[1]
+    expect(href, 'line 13 is a stylesheet link').toBeTruthy()
+    expect(href!.replaceAll('&amp;', '&'), 'line 13 href equals the typography.css @import URL').toBe(importUrl)
+
+    const analytics = readFileSync(`${DOCS}analytics.md`, 'utf8')
+    expect(analytics, 'docs/analytics.md cites the font tags as 11-13').toContain('frontend/landing/index.html:11-13')
+    const c10 = readFileSync(`${DOCS}privacy-policy-claims.md`, 'utf8').split('\n').find((l) => l.startsWith('| C10 |'))
+    expect(c10, 'the C10 row exists').toBeTruthy()
+    const [, , claim, , evidence] = c10!.split('|').map((c) => c.trim())
+    expect(evidence, 'C10 evidence cites the font tags as 11-13').toContain('frontend/landing/index.html:11-13')
+    expect(claim, 'C10 claim text is unchanged').toBe(
+      'Google also serves the fonts this site is typeset in. Loading a font tells Google your IP address and which site asked for it. This happens on every page, whatever you choose about analytics.',
+    )
+  })
+
+  it('index.html requests one font family, Manrope 400-800', () => {
+    const planted = familyParams('<link href="https://x.test/css2?family=A:wght@1&amp;family=B+C&amp;display=swap">')
+    expect(planted, 'control: every family= parameter is collected, display= is not').toEqual(['A:wght@1', 'B+C'])
+
+    const families = familyParams(readFileSync(INDEX_HTML, 'utf8').replace(/<!--[\s\S]*?-->/g, ''))
+    expect(families).toEqual(['Manrope:wght@400;500;600;700;800'])
   })
 })

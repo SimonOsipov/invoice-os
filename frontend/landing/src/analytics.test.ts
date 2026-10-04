@@ -23,7 +23,7 @@ const ANALYTICS_SRC = readFileSync(join(HERE, 'analytics.ts'), 'utf8')
 const MAIN_SRC = readFileSync(join(HERE, 'main.tsx'), 'utf8')
 const APP_SRC = readFileSync(join(HERE, 'App.tsx'), 'utf8')
 const DEMO_MODAL_SRC = readFileSync(join(HERE, 'components', 'DemoModal.tsx'), 'utf8')
-const CTA_COMPONENTS = ['Nav.tsx', 'Hero.tsx', 'Audience.tsx', 'Pricing.tsx', 'Footer.tsx']
+const CTA_COMPONENTS = ['Nav.tsx', 'Hero.tsx', 'Platform.tsx', 'Coverage.tsx', 'Solutions.tsx', 'Integrations.tsx', 'Api.tsx', 'Faq.tsx', 'ClosingCta.tsx', 'Footer.tsx']
 const DEMO_LEAD_FORM_PATH = join(HERE, 'components', 'DemoLeadForm.tsx')
 
 const ID = 'G-E409H76XYY'
@@ -237,16 +237,21 @@ describe('main.tsx boot wiring', () => {
 })
 
 describe('App.tsx CTA bindings (AC-3)', () => {
-  it('all five App.tsx call sites are bound to distinct sources', () => {
+  it('every App.tsx call site is bound to a distinct source', () => {
     // Control needle first (A-14): a misresolved/empty read would otherwise pass vacuously.
     expect(APP_SRC.length).toBeGreaterThan(0)
     expect(APP_SRC).toContain('onBookDemo')
 
     const bound = Array.from(APP_SRC.matchAll(/book\('([a-z_]+)'\)/g)).map((m) => m[1])
     expect(bound.length).toBe(DEMO_CTA_SOURCES.length)
+    expect(bound.length).toBe(10)
+    expect(bound).toContain('platform')
+    expect(bound.filter((s) => s === 'coverage'), "book('coverage') is bound once").toHaveLength(1)
     expect(new Set(bound).size).toBe(bound.length)
     expect(new Set(bound)).toEqual(new Set(DEMO_CTA_SOURCES))
+    expect(bound, 'bindings follow the page order DEMO_CTA_SOURCES lists').toEqual([...DEMO_CTA_SOURCES])
     expect(APP_SRC).not.toMatch(/onBookDemo=\{onBookDemo\}/)
+    expect(APP_SRC, 'Pricing left App.tsx').not.toMatch(/pricing/i)
   })
 })
 
@@ -336,7 +341,8 @@ describe('honeypot cannot reach outcome senders (AC-5)', () => {
     // Floor on the population: a walk that silently returned one directory would
     // otherwise read as "nothing else calls it".
     expect(files.length).toBeGreaterThanOrEqual(25)
-    expect(files).toContain(join(HERE, 'components', 'DemoCta.tsx'))
+    expect(files).toContain(join(HERE, 'components', 'DemoModal.tsx'))
+    expect(files, 'the inline demo form is gone').not.toContain(join(HERE, 'components', 'DemoCta.tsx'))
     const matches = files.filter((f) => readFileSync(f, 'utf8').includes('trackedHubSpotSubmit('))
     expect(matches.length).toBe(1)
     expect(matches[0]).toBe(DEMO_LEAD_FORM_PATH)
@@ -377,15 +383,9 @@ describe('honeypot cannot reach outcome senders (AC-5)', () => {
     expect(src).not.toMatch(/import\s*\*\s*as\s+\w+\s*from\s*['"]\.\.\/analytics['"]/)
   })
 
-  // S4 (NEW-BEHAVIOUR): today DemoModal.tsx still imports trackedHubSpotSubmit directly
-  // (:23) — fails honestly until the extraction moves it to DemoLeadForm.tsx.
-  it('S4: DemoModal.tsx and DemoCta.tsx import nothing from ../analytics', () => {
+  it('S4: DemoModal.tsx imports nothing from ../analytics', () => {
     expect(DEMO_MODAL_SRC.length).toBeGreaterThan(0)
     expect(DEMO_MODAL_SRC).not.toMatch(/from\s*['"]\.\.\/analytics['"]/)
-
-    const demoCtaSrc = readFileSync(join(HERE, 'components', 'DemoCta.tsx'), 'utf8')
-    expect(demoCtaSrc.length).toBeGreaterThan(0)
-    expect(demoCtaSrc).not.toMatch(/from\s*['"]\.\.\/analytics['"]/)
   })
 })
 
@@ -428,21 +428,23 @@ describe('DemoModal SSR graph purity (AC-8, gap)', () => {
   })
 })
 
-// N2 (O4, NEW-BEHAVIOUR): pinned against today's unedited CTA_COMPONENTS literal
-// above -- fails honestly until DemoCta.tsx drops out of the list.
 describe('CTA components untouched (AC-3), gap-fill', () => {
-  it('N2: CTA_COMPONENTS excludes DemoCta.tsx and holds five entries', () => {
-    expect(CTA_COMPONENTS.length).toBe(5)
+  it('N2: CTA_COMPONENTS excludes DemoCta.tsx and holds ten entries', () => {
+    expect(CTA_COMPONENTS.length).toBe(10)
+    expect(CTA_COMPONENTS).not.toContain('Pricing.tsx')
     expect(CTA_COMPONENTS).not.toContain('DemoCta.tsx')
   })
 })
 
 // N3 (AC #7, NEW-BEHAVIOUR): had no oracle before this plan. Protects
 // [analytics-line-count-frozen] -- the four send() lines docs cite by number
-// must hold their position however DEMO_CTA_SOURCES shrinks.
-describe('DEMO_CTA_SOURCES shrinks without moving the four cited sends (AC #7, gap)', () => {
-  it('N3: demo_cta drops out, and analytics.ts keeps its four send() lines in place', () => {
-    expect(DEMO_CTA_SOURCES.length).toBe(5)
+// must hold their position.
+describe('DEMO_CTA_SOURCES and the four cited sends (AC #7, gap)', () => {
+  it('N3: the ten sources in page order, no pricing or demo_cta, and analytics.ts keeps its four send() lines in place', () => {
+    expect(DEMO_CTA_SOURCES.length).toBe(10)
+    expect([...DEMO_CTA_SOURCES], 'DEMO_CTA_SOURCES, in page order').toEqual(['nav', 'hero', 'platform', 'coverage', 'audience', 'integrations', 'api', 'faq', 'closing', 'footer'])
+    expect(DEMO_CTA_SOURCES).not.toContain('pricing')
+    expect(ANALYTICS_SRC, 'Pricing left analytics.ts').not.toMatch(/pricing/i)
     expect(DEMO_CTA_SOURCES).not.toContain('demo_cta')
 
     const lines = ANALYTICS_SRC.split('\n')
@@ -454,12 +456,12 @@ describe('DEMO_CTA_SOURCES shrinks without moving the four cited sends (AC #7, g
   })
 })
 
-// AC #8 gap-fill. docs/analytics.md's four count-bearing sites are hand-maintained and
+// AC #8 gap-fill. docs/analytics.md's three count-bearing sites are hand-maintained and
 // were guarded by nothing -- stalerefs tracks only multi-word quoted literals. Derived
 // from DEMO_CTA_SOURCES so a retired source cannot survive in the page.
 describe('docs/analytics.md tracks DEMO_CTA_SOURCES (AC #8, gap)', () => {
   const ANALYTICS_DOC = readFileSync(join(HERE, '..', '..', '..', 'docs', 'analytics.md'), 'utf8')
-  const WORD = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten']
+  const WORD = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven']
 
   it('N4: the demo_open row lists exactly the shipped cta_location values, in order', () => {
     expect(ANALYTICS_DOC.length, 'population floor: the doc must actually resolve').toBeGreaterThan(2000)
@@ -478,14 +480,19 @@ describe('docs/analytics.md tracks DEMO_CTA_SOURCES (AC #8, gap)', () => {
     const capitalised = n[0].toUpperCase() + n.slice(1)
     expect(ANALYTICS_DOC).toContain(`${capitalised} \`cta_location\` values cover`)
     expect(ANALYTICS_DOC).toContain(`**all ${n}** \`cta_location\` values appear`)
-    expect(ANALYTICS_DOC).toContain(`matches the ${n} literal call`)
+    expect(ANALYTICS_DOC, 'Pricing left the doc').not.toMatch(/pricing/i)
     for (const source of DEMO_CTA_SOURCES) expect(ANALYTICS_DOC).toContain(`\`${source}\``)
+    // The operator checklist lists the values itself; the loop above is satisfied by the table row alone.
+    const checklist = ANALYTICS_DOC.replace(/\s+/g, ' ').match(/values appear: ((?:`[a-z_]+`,? ?)+)/)
+    expect(checklist, 'expected the checklist list after "values appear:"').not.toBeNull()
+    expect(Array.from(checklist![1].matchAll(/`([a-z_]+)`/g), (m) => m[1])).toEqual([...DEMO_CTA_SOURCES])
     expect(ANALYTICS_DOC, 'a retired source must not survive anywhere in the page').not.toContain('demo_cta')
   })
 
   it('N6: the button total the doc quotes is the one F3-f measures', () => {
     // The rendered-button total itself is measured by App.demoCtas.dom.test.tsx's F3-f
     // (ROSTER.length + NON_CTA_COUNT); this pins the doc's copy of it.
-    expect(ANALYTICS_DOC).toContain('values cover **nine** buttons')
+    expect(ANALYTICS_DOC).toContain('values cover **thirteen** buttons')
+    expect(ANALYTICS_DOC.replace(/\s+/g, ' '), "line 50 names Coverage's button").toContain("Coverage's Discuss your country reports `coverage`")
   })
 })

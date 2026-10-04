@@ -5,7 +5,7 @@
 
 // `sections` are viewport-relative tops in DOM order; the LAST one crossed wins.
 // Returns null when nothing has crossed yet, or when the section that won has no
-// nav link (the page has 8 section[id] but only 6 are nav targets). The
+// nav link (not every section[id] is a nav target). The
 // membership test applies to the winner, not to the candidate set — filtering
 // first would light a stale link while the visitor reads a non-nav section.
 export function activeNavHref(

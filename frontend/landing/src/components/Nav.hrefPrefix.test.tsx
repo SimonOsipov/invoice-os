@@ -6,12 +6,11 @@ import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
-import { Nav } from './Nav'
+import { NAV_LINKS, Nav } from './Nav'
 
-const NAV_ONLY_TARGETS = ['#problem', '#modules', '#compliance', '#accountants', '#developers', '#pricing']
+const NAV_ONLY_TARGETS = NAV_LINKS.map((l) => l.href)
 
-// Scoped to <a href> only — BrandMark also renders a <link rel="preload" href=...>
-// for the logo asset, which is not a nav target and must not count here.
+// Scoped to <a href> only; the Logo img src is not a nav target.
 const ANCHOR_HREF = /<a\s+href="([^"]*)"/g
 
 describe('Nav hrefPrefix contract', () => {
@@ -23,7 +22,7 @@ describe('Nav hrefPrefix contract', () => {
     expect(hrefs).toEqual(['#top', ...NAV_ONLY_TARGETS])
   })
 
-  it('AC-4: hrefPrefix="/" prefixes all six nav links', () => {
+  it('AC-4: hrefPrefix="/" prefixes every nav link', () => {
     const html = renderToStaticMarkup(
       createElement(Nav, { onSignIn: () => {}, onBookDemo: () => {}, hrefPrefix: '/' }),
     )
@@ -47,14 +46,15 @@ describe('Nav hrefPrefix contract', () => {
     const hrefs = Array.from(html.matchAll(ANCHOR_HREF)).map((m) => m[1])
     // Control needle first: guards the two every()/some() checks below against a
     // vacuous pass on an empty (misresolved) href set.
-    expect(hrefs.length).toBe(7)
+    expect(hrefs.length).toBe(1 + NAV_LINKS.length)
     expect(hrefs.every((h) => h.startsWith('/#'))).toBe(true)
     expect(hrefs.some((h) => h.startsWith('//'))).toBe(false)
   })
 
-  it('control: exactly 6 .ios-nav-link occurrences', () => {
+  it('control: one .ios-nav-link per NAV_LINKS entry', () => {
     const html = renderToStaticMarkup(createElement(Nav, { onSignIn: () => {}, onBookDemo: () => {} }))
     const matches = html.match(/ios-nav-link/g) ?? []
-    expect(matches.length).toBe(6)
+    expect(matches.length).toBe(NAV_LINKS.length)
+    expect(NAV_LINKS.length).toBeGreaterThanOrEqual(1)
   })
 })

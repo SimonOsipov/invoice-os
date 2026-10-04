@@ -1,11 +1,9 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
-// F-2: the nav's "Explore the platform" control opens the sign-in modal specifically,
+// F-2: the nav's "Platform login" control opens the sign-in modal specifically (the hero has no sign-in control),
 // without navigating away, and dismissing it restores the page. Same setup contract as
 // consentActions.mount.dom.test.tsx: production URL, an installed memory localStorage,
-// a console.error spy asserted empty. "Explore the platform" also renders in Hero
-// (Hero.tsx:42), so the control is reached scoped to `header`, never by an unscoped find.
-/// <reference types="node" />
+// a console.error spy asserted empty. The control is reached scoped to `header`.
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -14,7 +12,7 @@ import type { ConsentStore } from './consent'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const SIGN_IN_CTA = 'Explore the platform'
+const SIGN_IN_CTA = 'Platform login'
 const DIALOG = '[role="dialog"]'
 
 function memoryStorage(): ConsentStore {
@@ -60,7 +58,7 @@ async function mountApp(): Promise<void> {
 
 // Local, unexported copy per Decisions -> [click-by-text-duplicated]: the two existing
 // copies (consentActions.mount.dom.test.tsx, consentActions.dom.test.tsx) query
-// `document` and cannot express "the nav one, not the hero one". The `root` parameter
+// `document` and cannot express "the nav one". The `root` parameter
 // is the one difference.
 async function clickByText(root: ParentNode, text: string): Promise<void> {
   const button = Array.from(root.querySelectorAll('button')).find((b) => b.textContent?.trim() === text)
@@ -78,17 +76,21 @@ describe('F-2: the sign-in control opens the sign-in modal', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('F2-b: exactly one "Explore the platform" in header, exactly two on the page', async () => {
+  it('F2-b / HD-16: exactly one "Platform login" in header and on the page, and no retired trigger label', async () => {
     await mountApp()
     const header = document.querySelector('header')!
     const inHeader = Array.from(header.querySelectorAll('button')).filter((b) => b.textContent?.trim() === SIGN_IN_CTA)
     const onPage = Array.from(document.querySelectorAll('button')).filter((b) => b.textContent?.trim() === SIGN_IN_CTA)
+    const oldLabel = Array.from(header.querySelectorAll('button')).filter(
+      (b) => b.textContent?.trim() === 'Explore the platform',
+    )
     expect(inHeader.length, 'nav CTA missing or duplicated').toBe(1)
-    expect(onPage.length, 'expected nav + hero copies').toBe(2)
+    expect(onPage.length, 'expected the header copy only').toBe(1)
+    expect(oldLabel.length, 'the retired trigger label is still on a header control').toBe(0)
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('F2-c/d/e: clicking opens the Sign-in dialog, does not navigate, and Close restores the page', async () => {
+  it('F2-c/d/e: clicking opens the Platform login dialog, does not navigate, and Close restores the page', async () => {
     await mountApp()
     const header = document.querySelector('header')!
     const sectionsBefore = document.querySelectorAll('section[id]').length
@@ -97,14 +99,14 @@ describe('F-2: the sign-in control opens the sign-in modal', () => {
 
     await clickByText(header, SIGN_IN_CTA)
 
-    // F2-c: exactly one dialog, and it is the Sign-in one -- not Book a demo.
+    // F2-c: exactly one dialog, and it is the Platform login one -- not Book a demo.
     expect(document.querySelectorAll(DIALOG).length).toBe(1)
     const dialog = document.querySelector(DIALOG)!
-    expect(dialog.getAttribute('aria-label')).toBe('Sign in')
+    expect(dialog.getAttribute('aria-label')).toBe('Platform login')
 
     // F2-d: no navigation.
     expect(window.location.pathname).toBe(pathBefore)
-    expect(document.querySelector('#pricing')).not.toBeNull()
+    expect(document.querySelector('#faq')).not.toBeNull()
 
     // F2-e: Close leaves zero dialogs and restores the pre-open snapshot.
     const closeButton = dialog.querySelector<HTMLButtonElement>('button[aria-label="Close"]')
@@ -134,7 +136,48 @@ describe('F-2: the sign-in control opens the sign-in modal', () => {
 
     await clickByText(header, SIGN_IN_CTA)
     expect(document.querySelectorAll(DIALOG).length).toBe(1)
-    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Sign in')
+    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Platform login')
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+})
+
+describe('F-2 footer: Open the cockpit', () => {
+  it('FT-11: the footer Open the cockpit opens the Sign-in dialog and Close leaves none', async () => {
+    await mountApp()
+    const footer = document.querySelector('footer')!
+    expect(document.querySelectorAll(DIALOG).length, 'control: no dialog yet').toBe(0)
+
+    await clickByText(footer, 'Open the cockpit')
+
+    expect(document.querySelectorAll(DIALOG).length).toBe(1)
+    const dialog = document.querySelector(DIALOG)!
+    expect(dialog.getAttribute('aria-label')).toBe('Platform login')
+    await act(async () => {
+      dialog.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click()
+    })
+    expect(document.querySelectorAll(DIALOG).length).toBe(0)
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+})
+
+describe('F-2 menu: sign-in from the burger menu', () => {
+  it('F2-g: the menu Platform login opens the Sign-in dialog and the menu is gone behind it', async () => {
+    await mountApp()
+    const burger = document.querySelector<HTMLButtonElement>('header button.a-burger')
+    expect(burger, 'expected the header burger').not.toBeNull()
+    await act(async () => {
+      burger!.click()
+    })
+    const menu = document.querySelector('.a-menu')
+    expect(menu, 'control: the burger opened the menu').not.toBeNull()
+    expect(document.querySelectorAll(DIALOG).length, 'control: no dialog yet').toBe(0)
+
+    await clickByText(menu!, SIGN_IN_CTA)
+
+    expect(document.querySelectorAll(DIALOG).length).toBe(1)
+    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Platform login')
+    expect(document.querySelector('.a-menu'), 'the menu closes before the modal opens').toBeNull()
+    expect(burger!.getAttribute('aria-expanded')).toBe('false')
     expect(consoleError).not.toHaveBeenCalled()
   })
 })
@@ -172,7 +215,7 @@ describe('AUTH-05-07: the boot sign-in params', () => {
   it('a no-workspace outcome opens the modal with its message', async () => {
     await bootAt('/?signin=no-workspace')
     expect(document.querySelectorAll(DIALOG).length).toBe(1)
-    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Sign in')
+    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Platform login')
     const got = dialogAlerts()
     expect(got.length).toBe(1)
     expect(got[0].textContent).toContain(NO_WORKSPACE)

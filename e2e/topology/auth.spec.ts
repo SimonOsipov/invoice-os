@@ -480,10 +480,9 @@ test('deployed app: a signed-out deep link returns to its destination after sign
   await page.goto(`${APP_URL}/audit`)
   await page.waitForURL((url) => url.href.startsWith(LANDING_URL), { timeout: 20_000 })
 
-  // Same modal drive as the parametrised walk below. 'Explore the platform' renders TWICE on
-  // the landing page (header + hero), so the banner scope is required, not stylistic.
-  await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
-  await expect(page.getByRole('dialog', { name: 'Sign in' })).toBeVisible()
+  // Same modal drive as the parametrised walk below.
+  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
+  await expect(page.getByRole('dialog', { name: 'Platform login' })).toBeVisible()
   await page.locator(`[data-persona="${FIRM_PERSONA.param}"]`).click()
 
   // The hand-off lands on the app ROOT (destUrl carries no path), so arriving on /audit can
@@ -529,8 +528,8 @@ test('deployed app: a signed-out deep link returns to its FILTER after sign-in',
   await page.goto(`${APP_URL}/audit?invoice=${unknownInvoice}`)
   await page.waitForURL((url) => url.href.startsWith(LANDING_URL), { timeout: 20_000 })
 
-  await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
-  await expect(page.getByRole('dialog', { name: 'Sign in' })).toBeVisible()
+  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
+  await expect(page.getByRole('dialog', { name: 'Platform login' })).toBeVisible()
 
   // The only browser proof that a keyboard pick works: the persona is a native button.
   const pick = page.locator(`[data-persona="${FIRM_PERSONA.param}"]`)
@@ -588,8 +587,8 @@ for (const id of PERSONA_IDS) {
     })
 
     await page.goto(LANDING_URL)
-    await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
-    const dialog = page.getByRole('dialog', { name: 'Sign in' })
+    await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Platform login' })
     await expect(dialog).toBeVisible()
 
     // Positive control first: an absence check on an unrendered picker passes vacuously.
@@ -846,7 +845,7 @@ function gatedErrors(page: Page, drops: Dropper[]): string[] {
 }
 
 async function submitSignIn(page: Page, email: string, password: string): Promise<void> {
-  const dialog = page.getByRole('dialog', { name: 'Sign in' })
+  const dialog = page.getByRole('dialog', { name: 'Platform login' })
   await dialog.getByLabel('Work email', { exact: true }).fill(email)
   await dialog.getByLabel('Password', { exact: true }).fill(password)
   await dialog.getByRole('button', { name: 'Sign in →', exact: true }).click()
@@ -890,8 +889,8 @@ test('deployed app: a real sign-in from the front door returns to its destinatio
     .poll(() => new URL(page.url()).searchParams.has('state'), { message: `landing kept ?state= at ${page.url()}` })
     .toBe(false)
 
-  await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
-  await expect(page.getByRole('dialog', { name: 'Sign in' })).toBeVisible()
+  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
+  await expect(page.getByRole('dialog', { name: 'Platform login' })).toBeVisible()
   const [handoffNav] = await Promise.all([
     page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
     submitSignIn(page, account.email, account.password),
@@ -944,8 +943,8 @@ test('deployed app: a real sign-in from a direct landing visit bounces for a sta
   const urls = recordUrls(page)
 
   await page.goto(LANDING_URL)
-  await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
-  const dialog = page.getByRole('dialog', { name: 'Sign in' })
+  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Platform login' })
   await expect(dialog.getByRole('button', { name: 'Continue with email', exact: true })).toBeVisible()
   await expect(dialog.getByLabel('Work email', { exact: true }), 'a stateless landing must not offer the form').toHaveCount(0)
 
@@ -992,7 +991,7 @@ test('deployed app: a hand-off code minted in another browser signs no tab in', 
 
       await victim.goto(`${APP_URL}/?handoff=${c1}`)
       await victim.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-      await expect(victim.getByRole('dialog', { name: 'Sign in' })).toContainText(HANDOFF_FAILED)
+      await expect(victim.getByRole('dialog', { name: 'Platform login' })).toContainText(HANDOFF_FAILED)
       expect(exchanges, 'the victim tab called /auth/exchange').toEqual([])
       expect(await storedSession(context), 'the victim tab stored a session').toBeNull()
       expect(errors, `console errors in the victim tab:\n${errors.join('\n')}`).toEqual([])
@@ -1022,7 +1021,7 @@ test('deployed app: a hand-off code minted in another browser signs no tab in', 
       // An expired code answers the same 400, which would prove nothing about the state.
       expect(Date.now() - mintedAt, 'the code could have expired before the victim tab redeemed it').toBeLessThan(HANDOFF_TTL_MS)
       await victim.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-      await expect(victim.getByRole('dialog', { name: 'Sign in' })).toContainText(HANDOFF_FAILED)
+      await expect(victim.getByRole('dialog', { name: 'Platform login' })).toContainText(HANDOFF_FAILED)
       expect(await storedSession(context), 'the victim tab stored a session').toBeNull()
       expect(errors, `console errors in the victim tab:\n${errors.join('\n')}`).toEqual([])
     } finally {
@@ -1327,7 +1326,7 @@ async function ageStoredSession(page: Page, patch: Partial<StoredRenewal> = {}):
 async function signInAtFrontDoor(page: Page, account: RealAccount, path: string): Promise<void> {
   await page.goto(`${APP_URL}${path}`)
   await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-  await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
+  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
   await Promise.all([
     page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
     submitSignIn(page, account.email, account.password),
@@ -1472,7 +1471,7 @@ test('deployed app: a refused renewal returns to landing and keeps the destinati
   ).toBe(true)
   expect(await storedSession(page.context()), 'the app origin kept a stored session').toBeNull()
 
-  await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
+  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
   await Promise.all([
     page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
     submitSignIn(page, account.email, account.password),
@@ -1562,7 +1561,7 @@ test('deployed app: signing out on one device ends the session on every device',
       await b.page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: 'Invoices' }).click()
       expect((await refused).status(), "B's first /api/ answer after the sign-out").toBe(401)
       expect((await bFrontDoor).status(), "B's front door answer").toBe(200)
-      await expect(b.page.getByRole('banner').getByRole('button', { name: 'Explore the platform' })).toBeVisible()
+      await expect(b.page.getByRole('banner').getByRole('button', { name: 'Platform login' })).toBeVisible()
       expect(await storedSession(b.context), 'B kept a stored session').toBeNull()
 
       const renewed = await rawFetch('/auth/refresh', { method: 'POST', body: { refresh_token: recordB.refresh_token } })
@@ -1570,7 +1569,7 @@ test('deployed app: signing out on one device ends the session on every device',
     })
 
     await test.step('B signs in again and lands on /, not the old destination', async () => {
-      await b.page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
+      await b.page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
       await Promise.all([
         b.page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
         submitSignIn(b.page, account.email, account.password),

@@ -775,6 +775,12 @@ func detectionHitAllowed(file, line string) bool {
 	if strings.HasPrefix(file, "internal/extraction/") {
 		return !namesRuleSetConstruct(line)
 	}
+	// contacts.version is the per-row optimistic-concurrency version, never read from
+	// rule_sets. Narrowed like the entries above.
+	if file == "internal/platform/db/contacts_rls_test.go" ||
+		strings.HasPrefix(file, "internal/notifications/") {
+		return !namesRuleSetConstruct(line)
+	}
 	// The SPA's Policy.version / Policy.activeVersion (APPR-09) is that same
 	// approval-policy version, not the rule-set version. Narrowed twice -- the line
 	// must name no rule-set construct AND every identifier it pins to 1 must be
@@ -886,6 +892,15 @@ func TestRuleSetV2_DetectionAllowlistScope(t *testing.T) {
 			`internal/extraction/resolve.go:9:  rs := RuleSet{Version: 1}`, false},
 		{"a snake-case rule_set pin in extraction", "internal/extraction/store.go",
 			`internal/extraction/store.go:9:  SELECT id FROM rule_sets WHERE version = 1`, false},
+
+		{"a contacts row version in the RLS test", "internal/platform/db/contacts_rls_test.go",
+			`internal/platform/db/contacts_rls_test.go:122:	if version != 1 {`, true},
+		{"a contacts row version in notifications", "internal/notifications/contacts_store.go",
+			`internal/notifications/contacts_store.go:9:  if c.Version != 1 {`, true},
+		{"a rule-set pin smuggled into the contacts RLS test", "internal/platform/db/contacts_rls_test.go",
+			`internal/platform/db/contacts_rls_test.go:9:  rs := RuleSet{Version: 1}`, false},
+		{"a rule-set pin smuggled into notifications", "internal/notifications/contacts_store.go",
+			`internal/notifications/contacts_store.go:9:  SELECT id FROM rule_sets WHERE version = 1`, false},
 
 		{"a SPA policy fixture's first version", "frontend/app/src/lib/policies.fixture.ts",
 			`frontend/app/src/lib/policies.fixture.ts:33:    version: 1,`, true},

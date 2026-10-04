@@ -401,7 +401,7 @@ describe('the console hand-back', () => {
   it('boot_notStaffShowsItsMessage', async () => {
     await bootAt('/?signin=not-staff')
     expect(document.querySelectorAll(DIALOG).length).toBe(1)
-    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Sign in')
+    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Platform login')
     const alerts = Array.from(document.querySelector(DIALOG)!.querySelectorAll<HTMLElement>('[role="alert"]'))
     expect(alerts.length).toBe(1)
     expect(alerts[0].textContent).toContain(NOT_STAFF)

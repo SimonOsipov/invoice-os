@@ -955,6 +955,18 @@ func TestStore_WhitespaceCompanyNeverOverwritesACompany(t *testing.T) {
 	if r := readRow(t, e, email); deref(r.Company) != "Navy" {
 		t.Errorf("company = %q, want %q kept: a whitespace-only company is blank, as a whitespace-only name is", deref(r.Company), "Navy")
 	}
+
+	// The registrant path trims its workspace name the same way.
+	if err := e.store.Registrant(ctx, RegistrantIntake{UserID: uuid.NewString(), Email: email, WorkspaceName: " \t "}); err != nil {
+		t.Fatalf("whitespace-workspace Registrant: %v", err)
+	}
+	r := readRow(t, e, email)
+	if r.RegisteredAt == nil {
+		t.Fatal("registered_at is NULL: the registrant did not merge into the row")
+	}
+	if deref(r.Company) != "Navy" {
+		t.Errorf("company = %q after a whitespace workspace name, want %q kept", deref(r.Company), "Navy")
+	}
 }
 
 func TestSplitName(t *testing.T) {

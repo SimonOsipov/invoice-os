@@ -2783,4 +2783,53 @@ describe('RESKIN2-05-05 WB: the builder inspector and simulator', () => {
     expect(row.style.opacity, 'the delegation row is not muted').toBe('0.55')
     expect(row.style.cursor, 'the delegation row cursor is not not-allowed').toBe('not-allowed')
   })
+
+  it('WB-19 the lit preset follows the typed threshold, not the last click (boundary)', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={thresholdPolicy(250_000_000)} />)
+    selectThreshold(RULE_TITLE)
+    const input = within(inspectorPanel()).getByLabelText('Threshold amount in naira') as HTMLInputElement
+
+    fireEvent.change(input, { target: { value: '1000000000' } })
+    expect(input.value.replace(/\D/g, ''), 'the typed threshold did not land').toBe('1000000000')
+    expect(presetPaint('₦1B'), 'a typed value equal to a preset does not light it').toEqual(PRESET_LIT)
+    expect(presetPaint('₦100M')).toEqual(PRESET_REST)
+    expect(presetPaint('₦500M')).toEqual(PRESET_REST)
+
+    fireEvent.change(input, { target: { value: '1000000001' } })
+    expect(input.value.replace(/\D/g, ''), 'the edited threshold did not land').toBe('1000000001')
+    for (const label of ['₦100M', '₦500M', '₦1B']) expect(presetPaint(label), `${label} stays lit one naira off its value`).toEqual(PRESET_REST)
+
+    fireEvent.change(input, { target: { value: '' } })
+    for (const label of ['₦100M', '₦500M', '₦1B']) expect(presetPaint(label), `${label} is lit on a cleared threshold`).toEqual(PRESET_REST)
+  })
+
+  it('WB-15 one step draws no connector; a three-kind path draws two between its circles (boundary)', () => {
+    const connectors = (panel: HTMLElement) =>
+      (Array.from(panel.querySelectorAll('*')) as HTMLElement[]).filter((el) => el.tagName === 'SPAN' && el.style.position === 'absolute' && !el.hasAttribute('aria-hidden'))
+    const dots = (panel: HTMLElement) =>
+      (Array.from(panel.querySelectorAll('*')) as HTMLElement[]).filter((el) => el.tagName === 'SPAN' && el.style.width === '24px' && el.style.height === '24px')
+
+    const one: Policy = { ...policyWith('fin_mgr'), nodes: [{ id: 'n1', type: 'approval', role: 'fin_mgr', sla: '24', delegate: false }] }
+    const first = render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={one} />)
+    expect(dots(simulatorPanel()), 'one step renders one dot').toHaveLength(1)
+    expect(connectors(simulatorPanel()), 'the last step draws a connector below it').toHaveLength(0)
+    first.unmount()
+
+    const mixed: Policy = {
+      ...policyWith('fin_mgr'),
+      nodes: [
+        { id: 'n1', type: 'approval', role: 'fin_mgr', sla: '24', delegate: false },
+        { id: 'n2', type: 'notify', target: 'Tax Team', channel: 'In-app' },
+        { id: 'a1', type: 'autoapprove' },
+      ],
+    }
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={mixed} />)
+    const panel = simulatorPanel()
+    const circles = dots(panel)
+    expect(circles, 'approval, notify and auto-approve render three dots').toHaveLength(3)
+    for (const dot of circles) expect(dot.style.borderRadius, 'a non-approval step dot is not a circle').toBe('50%')
+    const lines = connectors(panel)
+    expect(lines, 'three steps draw two connectors').toHaveLength(2)
+    for (const line of lines) expect(line.style.borderRadius, 'a connector carries a corner').toBe('')
+  })
 })

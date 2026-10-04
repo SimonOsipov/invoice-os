@@ -949,8 +949,8 @@ describe('APPR-10-04 QA (R15): the disabled paint is CONDITIONAL', () => {
     expect(sel.style.color, 'an enabled WfSelect lost its resting foreground').toBe('var(--fg-1)')
     expect(tog.style.background, 'an enabled WfToggle lost its resting background').toBe('var(--line-3)')
     expect(tog.style.color, 'an enabled WfToggle grew a foreground it never had').toBe('')
-    // The v2 layer leaves the toggle a pill: the inline 99px is its only radius.
-    expect((tog.querySelector('.pf-knob') as HTMLElement).style.borderRadius, 'the knob is no longer a pill').toBe('99px')
+    // The track stays a pill (D3); the knob is a circle.
+    expect((tog.querySelector('.pf-knob') as HTMLElement).style.borderRadius, 'the knob is no longer a circle').toBe('50%')
     expect(tog.style.borderRadius, 'the track is no longer a pill').toBe('99px')
     for (const [what, el] of [['WfSelect', sel], ['WfToggle', tog]] as [string, HTMLElement][]) {
       expect(el.style.cursor, `an enabled ${what} paints the not-allowed cursor`).toBe('pointer')
@@ -2327,5 +2327,34 @@ describe('APPR-10-05 QA AC-2: the simulator claim is held to the inspector claim
     expect(STORAGE_AFFIRMED.test(text), `the claim never says the target and channel are kept: ${text}`).toBe(true)
     expect(STORAGE_DENIED.test(text), `the claim says the value is not kept, which is false — it is persisted, sealed and materialised: ${text}`).toBe(false)
     expect(/not available yet/i.test(text), `the claim borrows DELEGATE_NOTE's own clause: ${text}`).toBe(false)
+  })
+})
+
+describe('RESKIN2-05-03 WB: the shared workflow atoms', () => {
+  it('WB-01 the builder status pill is a 4px chip', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+
+    const pills = screen.getAllByText('DRAFT')
+    expect(pills, 'exactly one DRAFT pill must render').toHaveLength(1)
+    const pill = pills[0]
+    expect(pill.className, 'the pill is not a mono span').toContain('mono')
+    expect(pill.style.borderRadius, 'the pill corner is not the 4px token').toBe('var(--radius-sm)')
+    expect(pill.style.padding, 'the builder passes its own padding').toBe('3px 9px')
+    expect(pill.children, 'the pill still nests a dot or an inner label').toHaveLength(0)
+  })
+
+  it('WB-02 the knob is a circle without a shadow; the track stays a pill', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+    fireEvent.click(screen.getByText('Engagement Manager must approve'))
+
+    const switches = screen.getAllByRole('switch')
+    expect(switches.length, 'selecting an approval step rendered no switch').toBeGreaterThan(0)
+    for (const tog of switches as HTMLElement[]) {
+      const knob = tog.querySelector('.pf-knob') as HTMLElement
+      expect(knob, 'the switch has no knob').toBeTruthy()
+      expect(tog.style.borderRadius, 'the track is no longer a pill').toBe('99px')
+      expect(knob.style.borderRadius, 'the knob is not a circle').toBe('50%')
+      expect(knob.style.boxShadow, 'the knob still carries a shadow').toBe('')
+    }
   })
 })

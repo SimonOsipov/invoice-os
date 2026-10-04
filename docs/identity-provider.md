@@ -449,7 +449,7 @@ hand-off is the app by default and a console when the visitor came from one (Con
 2. The app goes to `<landing>/?state=<s>[&signin=<outcome>]`: from the front-door redirect,
    from the start bounce (step 3) with `signin=ready`, and from a failed hand-off (step 7).
    A console adds `console=ops` or `console=support`. Landing keeps the state and the console
-   target in memory only and strips `state`, `signin` and `console` at boot.
+   target in memory only and strips the params it read at boot.
 3. A visitor who opened landing directly has no state. The modal then shows "Continue with
    email", which goes to `<app>?auth=start`, or to the held console's `?auth=start`. The app
    or console ensures a state and returns to landing with `signin=ready`, which opens the

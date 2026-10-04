@@ -53,13 +53,21 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-async function bootAt(path: string, strict = false): Promise<void> {
+function setUrl(path: string): void {
   window.history.replaceState(null, '', path)
   expect(window.location.pathname + window.location.search + window.location.hash).toBe(path)
+}
+
+async function renderApp(strict = false): Promise<void> {
   const mod = (await import('./App')) as { default: () => ReturnType<typeof createElement> }
   await act(async () => {
     root.render(strict ? createElement(StrictMode, null, createElement(mod.default)) : createElement(mod.default))
   })
+}
+
+async function bootAt(path: string, strict = false): Promise<void> {
+  setUrl(path)
+  await renderApp(strict)
 }
 
 async function rebootAt(path: string): Promise<void> {
@@ -130,11 +138,13 @@ describe('verify notice: the emailed-link landing', () => {
   })
 
   it('the verify params are stripped and others stay', async () => {
+    setUrl('/?a=1&verified=1&b=2#faq')
     const replace = vi.spyOn(window.history, 'replaceState')
-    await bootAt('/?a=1&verified=1&b=2#faq')
+    await renderApp()
     expect(window.location.search).toBe('?a=1&b=2')
     expect(window.location.hash).toBe('#faq')
     expect(replace).toHaveBeenCalledTimes(1)
+    expect(replace).toHaveBeenCalledWith(null, '', '/?a=1&b=2#faq')
     onlyNotice(VERIFIED)
 
     await rebootAt('/privacy?keep=1&verify=failed#top')
@@ -144,7 +154,7 @@ describe('verify notice: the emailed-link landing', () => {
     onlyNotice(FAILED)
   })
 
-  it('the notice outlives the strip and a re-render (read once at boot, StrictMode included)', async () => {
+  it('the notice outlives the strip and a re-render, read once at boot with StrictMode included', async () => {
     await bootAt('/?verified=1', true)
     onlyNotice(VERIFIED)
     expect(window.location.search).toBe('')
@@ -159,15 +169,27 @@ describe('verify notice: the emailed-link landing', () => {
   })
 
   it('Dismiss removes the notice and nothing else', async () => {
-    await bootAt('/?verified=1')
-    const n = onlyNotice(VERIFIED)
-    const dismiss = Array.from(n.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Dismiss')
-    expect(dismiss).toBeDefined()
-    await act(async () => (dismiss as HTMLButtonElement).click())
-    expect(statuses().length).toBe(0)
-    expect(document.body.textContent).not.toContain(VERIFIED)
-    expect(dialogs().length).toBe(0)
-    pageMounted()
+    for (const [search, text] of [
+      ['?verified=1', VERIFIED],
+      ['?verify=failed', FAILED],
+    ] as const) {
+      await rebootAt(`/${search}`)
+      const n = onlyNotice(text)
+      const dismiss = Array.from(n.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Dismiss')
+      expect(dismiss, search).toBeDefined()
+      await act(async () => (dismiss as HTMLButtonElement).click())
+      expect(statuses().length, search).toBe(0)
+      expect(document.body.textContent, search).not.toContain(text)
+      expect(dialogs().length, search).toBe(0)
+      pageMounted()
+
+      // A later re-render does not bring it back.
+      const login = Array.from(document.querySelectorAll('header button')).find((b) => b.textContent?.trim() === 'Platform login')
+      expect(login, search).toBeDefined()
+      await act(async () => (login as HTMLButtonElement).click())
+      expect(dialogs().length, search).toBe(1)
+      expect(statuses().length, search).toBe(0)
+    }
   })
 
   it('other verify values show nothing', async () => {
@@ -175,23 +197,35 @@ describe('verify notice: the emailed-link landing', () => {
     await bootAt('/?verified=1')
     onlyNotice(VERIFIED)
 
-    for (const search of [
+    const searches = [
       '?verified=0',
       '?verified=true',
       '?verified=',
       '?verified=1&verified=1',
+      '?verified=1&verified=0',
+      '?verified=0&verified=1',
       '?verify=ok',
       '?verify=',
       '?verify=failed&verify=failed',
+      '?verify=FAILED',
+      '?verify=Failed',
       '?Verified=1',
       '?verified=%201',
-    ]) {
+      '?verified=1&verify=failed',
+      '?verify=failed&verified=1',
+    ]
+    expect(searches.length).toBeGreaterThan(0)
+    for (const search of searches) {
       await rebootAt(`/${search}`)
       pageMounted()
       expect(statuses().length, search).toBe(0)
       expect(document.body.textContent, search).not.toContain(VERIFIED)
       expect(document.body.textContent, search).not.toContain(FAILED)
       expect(dialogs().length, search).toBe(0)
+      // Owned params go for any value, a mixed pair included.
+      const left = new URLSearchParams(window.location.search)
+      expect(left.has('verified'), search).toBe(false)
+      expect(left.has('verify'), search).toBe(false)
     }
   })
 })

@@ -207,8 +207,9 @@ test('AS-01 firm shell at 1440: aside, header, switch, colour fixes', async ({ p
   expect(labelReadings[0].scope, 'the first group is the client scope').toContain('CLIENT')
 
   const badges = aside(page).locator('nav button.pf-nav .mono')
+  await expect.poll(() => badges.count(), { message: 'the firm sidebar draws at least one nav badge once the counts load', timeout: 15_000 }).toBeGreaterThanOrEqual(1)
   const badgeCount = await badges.count()
-  if (badgeCount > 0) expect(await radii(badges.first()), 'nav badge corners').toEqual(Array(4).fill('4px'))
+  for (const badge of await badges.all()) expect(await radii(badge), 'nav badge corners').toEqual(Array(4).fill('4px'))
 
   const before = (await styles(signOut, ['background-color']))['background-color']
   await signOut.hover()

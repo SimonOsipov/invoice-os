@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
-// Mounted shell behaviour of the two modals:
+// Mounted shell behaviour of the sign-in and demo modals:
 // Close, overlay click, and the demo modal's Escape, focus restore and Tab trap.
 /// <reference types="node" />
 import { act, createElement } from 'react'

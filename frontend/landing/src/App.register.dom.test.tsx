@@ -341,6 +341,7 @@ describe('the window and its form', () => {
     await submit(d)
 
     expect(alerts(d)).toEqual(['Choose how this workspace files invoices.'])
+    expect(d.querySelector('fieldset')!.getAttribute('aria-describedby'), 'the kind message is tied to its fieldset').toBe(d.querySelector('[role="alert"]')!.id)
     expect(document.activeElement).toBe(d.querySelector('input[type="radio"][value="firm"]'))
     expect(fetchMock).not.toHaveBeenCalled()
     expect(d.querySelector('button[type="submit"]')?.hasAttribute('disabled'), 'never disabled for validation').toBe(false)
@@ -367,7 +368,7 @@ describe('the window and its form', () => {
     const fetchMock = stubFetch(() => json(202, { status: 'verification_pending' }))
     await mountApp()
     const d = await openRegistration()
-    await fillForm(d, { email: '  ada@okafor.ng ', kind: 'in_house' })
+    await fillForm(d, { kind: 'in_house' })
 
     await submit(d)
 
@@ -465,6 +466,7 @@ describe('the outcomes', () => {
       await submit(d)
 
       expect(alerts(d), name).toEqual([copy])
+      expect(labelled(d, 'Work email').hasAttribute('aria-describedby'), `${name}: a form-level message is not tied to the email field`).toBe(false)
       const btn = d.querySelector<HTMLButtonElement>('button[type="submit"]')
       expect(btn, `${name}: the form is still shown`).not.toBeNull()
       expect(btn!.disabled, `${name}: submit re-enabled`).toBe(false)
@@ -538,5 +540,205 @@ describe('the window as a dialog', () => {
 
     await openRegistration()
     expect(document.querySelectorAll(REGISTER_DIALOG).length).toBe(1)
+  })
+})
+
+function stubFetchSequence(...makers: (() => Response | Promise<Response>)[]) {
+  let i = 0
+  const fetchMock = vi.fn().mockImplementation(async () => makers[Math.min(i++, makers.length - 1)]())
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+const ok = () => json(202, { status: 'verification_pending' })
+const closed = () => json(503, { error: 'registration is closed' })
+const pending = () => new Promise<Response>(() => undefined)
+
+describe('adversarial: validation through the window', () => {
+  it('each missing or invalid field shows its own message, takes focus and sends nothing', async () => {
+    const cases: [string, Fill, string, string][] = [
+      ['empty email', { email: '' }, 'Work email', 'Enter your work email.'],
+      ['malformed email', { email: 'ada@' }, 'Work email', 'Enter a valid work email address.'],
+      ['empty password', { password: '' }, 'Password', 'Choose a password.'],
+      ['empty name', { name: '' }, 'Your name', 'Enter your name.'],
+      ['blank name', { name: '   ' }, 'Your name', 'Enter your name.'],
+      ['empty workspace', { workspace: '' }, 'Workspace name', 'Enter your company or workspace name.'],
+      ['over-long workspace', { workspace: 'x'.repeat(201) }, 'Workspace name', 'Use 200 characters or fewer.'],
+    ]
+    expect(cases.length).toBeGreaterThan(0)
+    const fetchMock = stubFetch(ok)
+    for (const [name, over, label, message] of cases) {
+      await remountApp()
+      const d = await openRegistration()
+      await fillForm(d, over)
+
+      await submit(d)
+
+      const found = alerts(d)
+      expect(found, name).toEqual([message])
+      const input = labelled(d, label)
+      expect(document.activeElement, `${name}: focus`).toBe(input)
+      expect(input.getAttribute('aria-invalid'), name).toBe('true')
+      expect(input.getAttribute('aria-describedby'), name).toBe(d.querySelector('[role="alert"]')!.id)
+      expect(fetchMock, `${name}: no request`).not.toHaveBeenCalled()
+    }
+  })
+
+  it('with several fields missing, focus goes to the first in form order, ahead of a missing kind', async () => {
+    const fetchMock = stubFetch(ok)
+    await mountApp()
+    const d = await openRegistration()
+    await fillForm(d, { name: '', workspace: '', kind: null })
+
+    await submit(d)
+
+    expect(alerts(d).length).toBe(3)
+    expect(document.activeElement).toBe(labelled(d, 'Your name'))
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('editing a field clears only its own message', async () => {
+    stubFetch(ok)
+    await mountApp()
+    const d = await openRegistration()
+    await submit(d)
+    expect(alerts(d).length, 'control: five messages after an empty submit').toBe(5)
+
+    await type(labelled(d, 'Work email'), 'ada@okafor.ng')
+    expect(alerts(d).length).toBe(4)
+    expect(labelled(d, 'Work email').hasAttribute('aria-describedby')).toBe(false)
+    expect(labelled(d, 'Password').hasAttribute('aria-describedby'), 'the password message stays').toBe(true)
+
+    await act(async () => {
+      d.querySelector<HTMLInputElement>('input[type="radio"][value="firm"]')!.click()
+    })
+    expect(alerts(d).length, 'picking a kind clears the kind message only').toBe(3)
+    expect(alerts(d)).not.toContain('Choose how this workspace files invoices.')
+  })
+
+  it('the radios are native, enabled and in the tab order, and a form submit posts', async () => {
+    const fetchMock = stubFetch(ok)
+    await mountApp()
+    const d = await openRegistration()
+    const radios = Array.from(d.querySelectorAll<HTMLInputElement>('input[type="radio"]'))
+    expect(radios.length).toBe(2)
+    for (const r of radios) {
+      expect(r.disabled).toBe(false)
+      expect(r.closest('fieldset')!.disabled).toBe(false)
+      expect(r.tabIndex, 'not removed from the tab order').toBeGreaterThanOrEqual(0)
+    }
+
+    const form = d.querySelector('form')!
+    const inputs = Array.from(d.querySelectorAll('input'))
+    expect(inputs.length).toBe(6)
+    expect(inputs.every((i) => i.form === form), 'every field sits in the one form, so Enter in any of them submits it').toBe(true)
+    expect(form.querySelectorAll('button[type="submit"]').length).toBe(1)
+
+    await fillForm(d)
+    await act(async () => {
+      form.requestSubmit()
+    })
+    await settle()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('adversarial: outcomes through the window', () => {
+  it('a free-mail refusal stays while other fields are edited, goes on an email edit, and a resend still posts', async () => {
+    const fetchMock = stubFetch(() => json(400, { error: FREE_MAIL_REFUSED }))
+    await mountApp()
+    const d = await openRegistration()
+    await fillForm(d, { email: 'ada@gmail.com' })
+    await submit(d)
+    const email = labelled(d, 'Work email')
+    expect(email.getAttribute('aria-describedby'), 'control: the refusal shows').toBeTruthy()
+
+    await type(labelled(d, 'Password'), 'another-pw-1')
+    await type(labelled(d, 'Your name'), 'Ada O.')
+    await type(labelled(d, 'Workspace name'), 'Okafor Ltd')
+    await act(async () => {
+      d.querySelector<HTMLInputElement>('input[type="radio"][value="in_house"]')!.click()
+    })
+    expect(alerts(d), 'other edits keep the refusal').toEqual([FREE_MAIL_REFUSED])
+    expect(email.getAttribute('aria-describedby')).toBe(d.querySelector('[role="alert"]')!.id)
+
+    await submit(d)
+    expect(fetchMock, 'the same address posts again and is refused again').toHaveBeenCalledTimes(2)
+    expect(alerts(d)).toEqual([FREE_MAIL_REFUSED])
+
+    await type(email, 'ada@okafor.ng')
+    expect(alerts(d)).toEqual([])
+  })
+
+  it('a 202 after a free-mail refusal or a closed answer shows only the check view', async () => {
+    for (const [name, first] of [['free-mail', () => json(400, { error: FREE_MAIL_REFUSED })], ['closed', closed]] as const) {
+      stubFetchSequence(first, ok)
+      await remountApp()
+      const d = await openRegistration()
+      await fillForm(d, { email: 'ada@gmail.com' })
+      await submit(d)
+      expect(alerts(d).length, `control: ${name} showed an error`).toBe(1)
+
+      await type(labelled(d, 'Work email'), 'ada@okafor.ng')
+      await submit(d)
+
+      expect(alerts(d), name).toEqual([])
+      expect(d.textContent, name).toContain('Check your email')
+      expect(d.textContent).toContain('ada@okafor.ng')
+      expect(d.querySelectorAll('input').length).toBe(0)
+    }
+  })
+
+  it('a retry clears the previous form error while it sends', async () => {
+    const fetchMock = stubFetchSequence(closed, pending)
+    await mountApp()
+    const d = await openRegistration()
+    await fillForm(d)
+    await submit(d)
+    expect(alerts(d), 'control: the first answer shows').toEqual(['Registration is not open yet.'])
+
+    await submit(d)
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(d.querySelector('button[type="submit"]')?.textContent?.trim(), 'control: the retry is sending').toBe('Creating…')
+    expect(alerts(d), 'no stale error beside Creating…').toEqual([])
+  })
+})
+
+describe('adversarial: the window among its neighbours', () => {
+  it('the window mounts after the cookie notice', async () => {
+    await mountApp()
+    const notice = document.querySelector(NOTICE)
+    expect(notice, 'control: the notice is mounted').not.toBeNull()
+    const d = await openRegistration()
+    expect(notice!.compareDocumentPosition(d) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('the cookie notice stays inert through the swap from the sign-in window', async () => {
+    await mountApp()
+    await clickByText(header(), LOGIN)
+    expect(document.querySelector(NOTICE)!.hasAttribute('inert'), 'control: inert under sign-in').toBe(true)
+
+    await clickByText(document.querySelector<HTMLElement>(DIALOG)!, CREATE)
+
+    expect(document.querySelectorAll(REGISTER_DIALOG).length).toBe(1)
+    expect(document.querySelector(NOTICE)!.hasAttribute('inert')).toBe(true)
+  })
+
+  it('leaving the sign-in window for registration drops its boot error', async () => {
+    await bootAt(`/?state=${STATE}&signin=failed`)
+    const signIn = document.querySelector<HTMLElement>(`${DIALOG}[aria-label="${LOGIN}"]`)!
+    expect(signIn.textContent, 'control: boot shows the error').toContain("We couldn't open your workspace.")
+    await clickByText(signIn, CREATE)
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    expect(document.querySelectorAll(DIALOG).length).toBe(0)
+
+    await clickByText(header(), LOGIN)
+
+    const again = document.querySelector<HTMLElement>(`${DIALOG}[aria-label="${LOGIN}"]`)
+    expect(again, 'control: the sign-in window reopens').not.toBeNull()
+    expect(again!.textContent).not.toContain("We couldn't open your workspace.")
   })
 })

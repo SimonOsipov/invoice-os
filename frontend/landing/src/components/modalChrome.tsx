@@ -1,4 +1,4 @@
-// Shared v2 chrome for the sign-in and demo modals: scrim, card, header. No hooks, no state.
+// Shared v2 modal chrome: scrim, card, header. No hooks, no state.
 
 import type { CSSProperties } from 'react'
 import { GLYPHS, Icon } from '../icons'

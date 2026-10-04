@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
-// SSR markup of both modals, parsed into a detached DOM; nothing is mounted.
+// SSR markup of the sign-in and demo modals, parsed into a detached DOM; nothing is mounted.
 // modalChrome loads through a runtime specifier so a missing module fails as an assertion.
 /// <reference types="node" />
 import { describe, expect, it, vi } from 'vitest'

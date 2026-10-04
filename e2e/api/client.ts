@@ -131,7 +131,7 @@ export type TenantKind = 'firm' | 'in_house'
 
 // A fresh GoTrue account with a workspace of its own. Forks auto-confirm, so
 // the account signs in at once; a later sign-in carries the new tenant claim.
-// The kind is always sent, 'firm' by default; the API treats an absent kind as in_house.
+// The kind is always sent, 'firm' by default; Store.ProvisionWorkspace resolves an absent one.
 export async function provisionRealAccount(prefix: string, kind: TenantKind = 'firm', displayName = 'Hand-off E2E', workspaceName?: string): Promise<RealAccount> {
   const id = crypto.randomUUID()
   const account = { email: `${prefix}-${id}@example.com`, password: id.slice(0, 16), workspaceName: workspaceName ?? `Hand-off E2E ${id.slice(0, 8)}`, displayName }

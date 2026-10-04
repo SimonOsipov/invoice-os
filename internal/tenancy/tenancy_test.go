@@ -2723,6 +2723,7 @@ func TestProvision_Created201MeShape(t *testing.T) {
 	}{
 		{"names trimmed, kind absent", `{"workspace_name":"  Acme Ltd  ","display_name":" Ada "}`, ProvisionInput{WorkspaceName: "Acme Ltd", DisplayName: "Ada"}, "in_house"},
 		{"kind in_house", `{"workspace_name":"Acme Ltd","display_name":"Ada","kind":"in_house"}`, ProvisionInput{WorkspaceName: "Acme Ltd", DisplayName: "Ada", Kind: "in_house"}, "in_house"},
+		{"kind firm", `{"workspace_name":"Acme Ltd","display_name":"Ada","kind":"firm"}`, ProvisionInput{WorkspaceName: "Acme Ltd", DisplayName: "Ada", Kind: "firm"}, "firm"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			spy.calls = nil

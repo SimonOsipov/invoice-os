@@ -298,7 +298,7 @@ const maxNameChars = 200
 const maxProvisionBodyBytes = 4 << 10
 
 // provisionRequest is the POST /v1/workspaces wire body. Kind is a pointer so an
-// absent kind is distinct from an invalid one; absent means in_house.
+// absent kind is distinct from an invalid one.
 type provisionRequest struct {
 	WorkspaceName string  `json:"workspace_name"`
 	DisplayName   string  `json:"display_name"`

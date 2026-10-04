@@ -6,6 +6,8 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
+import { stripComments } from '@invoice-os/api-client/strip-comments'
+
 import { BrandMark } from './icons'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -18,7 +20,6 @@ const INDEX_HTML = read(join(HERE, '../index.html'))
 const OPS_CSS = read(join(HERE, 'styles/ops.css'))
 const OVERVIEW = read(join(HERE, 'components/Overview.tsx'))
 
-const stripJsComments = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 const stripCssComments = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '')
 const DS = '@invoice-os/design-tokens'
 
@@ -32,7 +33,7 @@ function cssBlock(css: string, selector: string, nth = 0): string {
 
 describe('v2 entry', () => {
   it('VE-01 main.tsx loads the v2 entry, then the layer, then ops.css', () => {
-    const specifiers = [...stripJsComments(MAIN).matchAll(/^\s*import\s+['"]([^'"]+)['"]/gm)].map((m) => m[1])
+    const specifiers = [...stripComments(MAIN).matchAll(/^\s*import\s+['"]([^'"]+)['"]/gm)].map((m) => m[1])
     expect(specifiers.length).toBeGreaterThan(0)
     const at = (s: string) => specifiers.indexOf(s)
 
@@ -43,12 +44,13 @@ describe('v2 entry', () => {
     const designTokens = specifiers.filter((s) => s.startsWith(`${DS}/`))
     expect(designTokens.length).toBeGreaterThan(0)
     for (const s of designTokens) expect(s, 'only v2 entries').toContain('/v2/')
+    expect(designTokens, 'no other design-tokens stylesheet').toEqual([`${DS}/v2/styles.css`, `${DS}/v2/app-layer.css`])
   })
 
   it('VE-02 every design-tokens specifier is exported (error row)', () => {
     const exported = Object.keys(JSON.parse(read(join(TOKENS, 'package.json'))).exports)
     const specifiers = [MAIN, ICONS].flatMap((src) =>
-      [...stripJsComments(src).matchAll(/['"]@invoice-os\/design-tokens\/([^'"]+)['"]/g)].map((m) => `./${m[1]}`),
+      [...stripComments(src).matchAll(/['"]@invoice-os\/design-tokens\/([^'"]+)['"]/g)].map((m) => `./${m[1]}`),
     )
     expect(specifiers.length).toBeGreaterThan(0)
     for (const s of specifiers) expect(exported, `${s} is a key of package.json exports`).toContain(s)
@@ -74,7 +76,10 @@ describe('v2 entry', () => {
       expect(h).not.toMatch(/inter\b/i)
       expect(h).not.toMatch(/fraunces/i)
     }
-    expect(tags.filter((t) => /\brel\s*=\s*["']?preconnect/i.test(t))).toHaveLength(2)
+    const preconnects = tags
+      .filter((t) => /\brel\s*=\s*["']?preconnect/i.test(t))
+      .map((t) => t.match(/\bhref\s*=\s*["']([^"']*)["']/i)?.[1])
+    expect(preconnects.sort()).toEqual(['https://fonts.googleapis.com', 'https://fonts.gstatic.com'])
   })
 
   it('VE-04 BrandMark renders the v2 mark at 22 with no radius', () => {
@@ -92,26 +97,30 @@ describe('v2 entry', () => {
     expect.soft(attr('style')).toContain('display:block')
     expect.soft(attr('style')).not.toContain('border-radius')
 
-    expect(imgOf({ size: 20 })('width'), 'the size prop still wins').toBe('20')
+    const sized = imgOf({ size: 20 })
+    expect(sized('width'), 'the size prop still wins').toBe('20')
+    expect(sized('height'), 'the size prop sets the height too').toBe('20')
   })
 
   it('VE-05 ops.css and Overview.tsx drop the bar-grow animation', () => {
-    expect(OPS_CSS.length).toBeGreaterThan(0)
-    expect(OVERVIEW).toContain('ops-kpi-strip')
-    expect(OPS_CSS.includes('opsGrow'), 'ops.css holds opsGrow').toBe(false)
-    expect(OPS_CSS.includes('.ops-bar'), 'ops.css holds .ops-bar').toBe(false)
-    expect(OVERVIEW.includes('ops-bar'), 'Overview.tsx holds ops-bar').toBe(false)
+    const css = stripCssComments(OPS_CSS)
+    const overview = stripComments(OVERVIEW)
+    expect(css, 'control: ops.css is read').toContain('.ops-row')
+    expect(overview, 'control: Overview.tsx is read').toContain('ops-kpi-strip')
+    expect(css, 'ops.css holds opsGrow').not.toMatch(/opsgrow/i)
+    expect(css, 'ops.css holds .ops-bar').not.toMatch(/ops-bar/i)
+    expect(overview, 'Overview.tsx holds ops-bar').not.toMatch(/ops-bar/i)
   })
 
   it('VE-05 (source pin) .ops-input:focus sets the ring border; app-layer.css forces it with !important', () => {
     const focus = cssBlock(OPS_CSS, '.ops-input:focus')
-    expect(focus).toContain('border-color: var(--ring)')
+    expect(focus).toMatch(/(?:^|;)\s*border-color:\s*var\(--ring\)\s*(?:;|$)/)
     expect(focus).not.toContain('var(--accent)')
   })
 
   it('VE-05b ops.css pad and JSON corner follow the prototype', () => {
-    expect(cssBlock(OPS_CSS, '.ops-screen-pad', 0)).toContain('padding: 26px 28px 56px')
-    expect(cssBlock(OPS_CSS, 'pre.ops-json')).toContain('border-radius: var(--radius-md)')
+    expect(cssBlock(OPS_CSS, '.ops-screen-pad', 0)).toMatch(/(?:^|;)\s*padding:\s*26px 28px 56px\s*(?:;|$)/)
+    expect(cssBlock(OPS_CSS, 'pre.ops-json')).toMatch(/(?:^|;)\s*border-radius:\s*var\(--radius-md\)\s*(?:;|$)/)
     // boundary: the 480px override stays
     expect(cssBlock(OPS_CSS, '.ops-screen-pad', 1)).toContain('padding: 18px 14px 40px')
   })
@@ -134,17 +143,21 @@ describe('v2 entry', () => {
         e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)],
       )
     const owned = [...walk(HERE).filter((f) => /\.tsx?$/.test(f) && !/\.test\.tsx?$/.test(f)), join(HERE, 'styles/ops.css')]
+    expect(owned.length, 'control: owned files collected').toBeGreaterThan(10)
 
     const used = new Set<string>()
     const undeclared: string[] = []
+    const dynamic: string[] = []
     for (const f of owned) {
-      const src = f.endsWith('.css') ? stripCssComments(read(f)) : stripJsComments(read(f))
+      const src = f.endsWith('.css') ? stripCssComments(read(f)) : stripComments(read(f))
+      for (const m of src.matchAll(/var\(\s*--(?![\w-]+\s*[,)])/g)) dynamic.push(`${m[0]} (${relative(HERE, f)})`)
       for (const m of src.matchAll(/var\(\s*(--[\w-]+)/g)) {
         used.add(m[1])
         if (!declared.has(m[1])) undeclared.push(`${m[1]} (${relative(HERE, f)})`)
       }
     }
     expect(used.size, 'control: var() names collected').toBeGreaterThan(30)
+    expect(dynamic, 'var() names built at runtime cannot be resolved here').toEqual([])
     expect([...new Set(undeclared)].sort(), 'var() names not declared by the v2 entry or layer').toEqual([])
   })
 })

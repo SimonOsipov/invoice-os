@@ -160,6 +160,48 @@ test('landing registration window: the marketing box is unticked, named by its s
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
+test('landing registration window: the marketing row, its box and the notice keep their relationships at 1440 and 390', async ({ page }) => {
+  const { errors, dialog, card } = await openRegister(page)
+  const email = dialog.getByLabel('Work email')
+  const notice = dialog.getByText('We will email you about your account and the service.')
+  const submit = dialog.getByRole('button', { name: 'Create account →' })
+
+  for (const viewport of [{ width: 1440, height: 1080 }, PHONE]) {
+    await page.setViewportSize(viewport)
+    const at = `${viewport.width}px`
+    await settleAnimations(card)
+    await notice.scrollIntoViewIfNeeded()
+    await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))))
+    const m = await page.evaluate(() => {
+      const rect = (r: DOMRect) => ({ x: r.x, y: r.y, width: r.width, height: r.height })
+      const box = document.querySelector('[role="dialog"] input[type=checkbox]')!
+      const row = box.closest('label')!
+      const text = document.createRange()
+      text.selectNodeContents(row)
+      const textRects = Array.from(text.getClientRects()).filter((r) => r.width > 0 && r.left >= box.getBoundingClientRect().right - 0.5)
+      return {
+        box: rect(box.getBoundingClientRect()),
+        row: rect(row.getBoundingClientRect()),
+        textLeft: Math.min(...textRects.map((r) => r.left)),
+      }
+    })
+    const [cardBox, emailBox, noticeBox, submitBox] = await Promise.all([card.boundingBox(), email.boundingBox(), notice.boundingBox(), submit.boundingBox()])
+    for (const [name, b] of [['card', cardBox], ['email', emailBox], ['notice', noticeBox], ['submit', submitBox]] as const) {
+      expect(b, `${at}: the ${name} has no box`).not.toBeNull()
+    }
+    expect(Math.abs(m.row.x - emailBox!.x), `${at}: marketing row left ${m.row.x} vs email input left ${emailBox!.x}`).toBeLessThanOrEqual(0.5)
+    expect(m.textLeft, `${at}: the checkbox overlaps its label text`).toBeGreaterThanOrEqual(m.box.x + m.box.width)
+    const noticeMid = noticeBox!.x + noticeBox!.width / 2
+    const submitMid = submitBox!.x + submitBox!.width / 2
+    expect(Math.abs(noticeMid - submitMid), `${at}: notice centre ${noticeMid} vs submit centre ${submitMid}`).toBeLessThanOrEqual(1)
+    expect(noticeBox!.y, `${at}: the notice is not below the submit`).toBeGreaterThanOrEqual(submitBox!.y + submitBox!.height - 1)
+    for (const [name, b] of [['marketing row', m.row], ['notice', noticeBox!], ['submit', submitBox!]] as const) {
+      expect(enclosesRect(cardBox!, b, 1), `${at}: the ${name} is not enclosed by the card`).toBe(true)
+    }
+  }
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
 // The route for the 1121-1219px band, where the header entry is hidden.
 test('landing sign-in window: its Create an account link opens the registration window at 1121', async ({ page }) => {
   await page.setViewportSize({ width: 1121, height: 900 })

@@ -746,8 +746,9 @@ func TestRuleSetV2_DetectionCommandBaseline(t *testing.T) {
 		}
 		if !detectionHitAllowed(file, line) {
 			t.Errorf("detection command hit in an unexpected location: %q -- expected only "+
-				"internal/validation/**, a non-rule-set version pin in internal/approval/** "+
-				"or internal/extraction/**, a "+
+				"internal/validation/**, a non-rule-set version pin in internal/approval/**, "+
+				"internal/extraction/**, internal/notifications/** or "+
+				"internal/platform/db/contacts_rls_test.go, a "+
 				"Policy.version/activeVersion pin in frontend/app/src/**, an ApprovalPolicy."+
 				"version pin in e2e/api/policy-restore.test.ts, the two §c e2e "+
 				"artifacts, validationApi.test.ts, the version-defining seed "+
@@ -854,8 +855,8 @@ func pinsOnlyPolicyVersion(line string) bool {
 }
 
 // TestRuleSetV2_DetectionAllowlistScope pins the internal/approval,
-// internal/extraction, frontend/app/src, and e2e/api/policy-restore.test.ts
-// carve-outs to the shape
+// internal/extraction, internal/notifications, internal/platform/db/contacts_rls_test.go,
+// frontend/app/src, and e2e/api/policy-restore.test.ts carve-outs to the shape
 // each was opened for. A directory-wide (or tree-wide) exemption would make
 // every one of the "still trips" rows below pass silently.
 func TestRuleSetV2_DetectionAllowlistScope(t *testing.T) {

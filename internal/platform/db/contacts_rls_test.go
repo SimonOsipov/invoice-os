@@ -343,6 +343,13 @@ func TestRLS_ContactsEmailIsTrimmedLowerCase(t *testing.T) {
 		t.Fatalf("insert of a 254-byte address: %v", err)
 	}
 
+	// 3 bytes is the floor and is accepted; 2 and 0 are refused.
+	const at3 = "abc"
+	contactsCleanup(t, at3)
+	if _, err := hh.app.Exec(ctx, insert, at3); err != nil {
+		t.Fatalf("insert of a 3-byte address: %v", err)
+	}
+
 	over := strings.Repeat("é", 125) + "@a.io"
 	if got := len(over); got != 255 {
 		t.Fatalf("fixture is %d bytes, want 255", got)
@@ -352,6 +359,8 @@ func TestRLS_ContactsEmailIsTrimmedLowerCase(t *testing.T) {
 		"capitals only":              "Ada@corp.example",
 		"trailing space":             "ada@corp.example ",
 		"255 bytes of multi-byte":    over,
+		"2 bytes":                    "ab",
+		"empty":                      "",
 	}
 	for name, email := range bad {
 		contactsCleanup(t, email)
@@ -365,8 +374,8 @@ func TestRLS_ContactsEmailIsTrimmedLowerCase(t *testing.T) {
 			t.Errorf("%s: got %v, want SQLSTATE %s", name, err, pgCheckViolation)
 		}
 	}
-	if n := contactsRowCount(t, ok) + contactsRowCount(t, at254); n != 2 {
-		t.Fatalf("accepted addresses stored %d rows, want 2", n)
+	if n := contactsRowCount(t, ok) + contactsRowCount(t, at254) + contactsRowCount(t, at3); n != 3 {
+		t.Fatalf("accepted addresses stored %d rows, want 3", n)
 	}
 }
 
@@ -543,4 +552,320 @@ func TestRLS_ContactsMigrationUpRestoresWhatDownDropped(t *testing.T) {
 	}
 	_, err := tx.Exec(ctx, `UPDATE contacts SET registered_at = registered_at + interval '1 day' WHERE email = $1`, email)
 	wantPgCode(t, err, pgRestrictViolation)
+}
+
+// --- Adversarial contract: live DB as invoice_app, and the migration file replayed ----
+//
+// The cases above see a DB that was migrated before the run, so a regression in the
+// migration SQL cannot fail them. contactsContract runs against both: the live DB as
+// invoice_app, and the file's own Down then Up inside a rolled-back owner transaction.
+
+// contactsConn is satisfied by *pgxpool.Pool and by contactsSavepointConn.
+type contactsConn interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// contactsSavepointConn runs each Exec in a savepoint so a refusal leaves the transaction usable.
+type contactsSavepointConn struct{ tx pgx.Tx }
+
+func (c contactsSavepointConn) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	sp, err := c.tx.Begin(ctx)
+	if err != nil {
+		return pgconn.CommandTag{}, err
+	}
+	tag, err := sp.Exec(ctx, sql, args...)
+	if err != nil {
+		_ = sp.Rollback(ctx)
+		return tag, err
+	}
+	return tag, sp.Commit(ctx)
+}
+
+func (c contactsSavepointConn) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return c.tx.QueryRow(ctx, sql, args...)
+}
+
+// contactsReplayed returns the table as the migration file creates it: Down, then Up.
+// The transaction rolls back before the cleanups run: they DELETE rows and would block on its lock.
+func contactsReplayed(t *testing.T) pgx.Tx {
+	t.Helper()
+	requireHarness(t)
+	ctx := context.Background()
+	tx := migratorTx(t, ctx)
+	contactsExec(t, ctx, tx, "Down")
+	contactsExec(t, ctx, tx, "Up")
+	return tx
+}
+
+func contactsRollback(tx pgx.Tx) { _ = tx.Rollback(context.Background()) }
+
+var (
+	contactsRegAt     = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	contactsDemoAt    = time.Date(2026, 1, 3, 3, 4, 5, 0, time.UTC)
+	contactsConsentAt = time.Date(2026, 1, 4, 3, 4, 5, 0, time.UTC)
+)
+
+const contactsConsentText = "Yes, send me product news."
+
+func contactsMustExec(t *testing.T, c contactsConn, sql string, args ...any) pgconn.CommandTag {
+	t.Helper()
+	tag, err := c.Exec(context.Background(), sql, args...)
+	if err != nil {
+		t.Fatalf("%s: %v", sql, err)
+	}
+	return tag
+}
+
+func contactsRefuse(t *testing.T, c contactsConn, code, sql string, args ...any) {
+	t.Helper()
+	_, err := c.Exec(context.Background(), sql, args...)
+	wantPgCode(t, err, code)
+}
+
+func contactsSeedFull(t *testing.T, c contactsConn) string {
+	t.Helper()
+	email := contactsEmail(t)
+	contactsMustExec(t, c,
+		`INSERT INTO contacts (email, registered_at, demo_requested_at, marketing_consent_text, marketing_consented_at)
+		 VALUES ($1, $2, $3, $4, $5)`, email, contactsRegAt, contactsDemoAt, contactsConsentText, contactsConsentAt)
+	return email
+}
+
+func contactsFactsIntact(t *testing.T, c contactsConn, email string) {
+	t.Helper()
+	var ok bool
+	err := c.QueryRow(context.Background(),
+		`SELECT coalesce(registered_at = $2 AND demo_requested_at = $3
+		            AND marketing_consent_text = $4 AND marketing_consented_at = $5, false)
+		   FROM contacts WHERE email = $1`,
+		email, contactsRegAt, contactsDemoAt, contactsConsentText, contactsConsentAt).Scan(&ok)
+	if err != nil || !ok {
+		t.Fatalf("protected facts changed or row missing (err=%v)", err)
+	}
+}
+
+func contactsFactCases() []struct{ name, col, rewrite string } {
+	return []struct{ name, col, rewrite string }{
+		{"registered_at", "registered_at", "registered_at + interval '1 day'"},
+		{"demo_requested_at", "demo_requested_at", "demo_requested_at + interval '1 day'"},
+		{"marketing_consent_text", "marketing_consent_text", "'A different text.'"},
+		{"marketing_consented_at", "marketing_consented_at", "marketing_consented_at + interval '1 day'"},
+	}
+}
+
+type contactsContractCase struct {
+	name string
+	live bool // also run as invoice_app on the live DB
+	run  func(t *testing.T, c contactsConn)
+}
+
+func contactsContract() []contactsContractCase {
+	var cases []contactsContractCase
+	// Each fact alone: clearing text without time would also trip the pair CHECK, so the
+	// SQLSTATE proves the trigger ran first and named the fact.
+	for _, f := range contactsFactCases() {
+		cases = append(cases, contactsContractCase{"FactsCannotChange_" + f.name, true, func(t *testing.T, c contactsConn) {
+			email := contactsSeedFull(t, c)
+			contactsRefuse(t, c, pgRestrictViolation, `UPDATE contacts SET `+f.col+` = NULL WHERE email = $1`, email)
+			contactsFactsIntact(t, c, email)
+			contactsRefuse(t, c, pgRestrictViolation, `UPDATE contacts SET `+f.col+` = `+f.rewrite+` WHERE email = $1`, email)
+			contactsFactsIntact(t, c, email)
+		}})
+	}
+	cases = append(cases,
+		contactsContractCase{"WriteBackSucceeds", true, func(t *testing.T, c contactsConn) {
+			email := contactsSeedFull(t, c)
+			tag := contactsMustExec(t, c,
+				`UPDATE contacts SET registered_at = registered_at, demo_requested_at = demo_requested_at,
+				        marketing_consent_text = marketing_consent_text, marketing_consented_at = marketing_consented_at,
+				        company = 'Same Co' WHERE email = $1`, email)
+			if tag.RowsAffected() != 1 {
+				t.Fatalf("write-back touched %d rows, want 1", tag.RowsAffected())
+			}
+			tag = contactsMustExec(t, c,
+				`UPDATE contacts SET registered_at = $2, demo_requested_at = $3,
+				        marketing_consent_text = $4, marketing_consented_at = $5 WHERE email = $1`,
+				email, contactsRegAt, contactsDemoAt, contactsConsentText, contactsConsentAt)
+			if tag.RowsAffected() != 1 {
+				t.Fatalf("literal write-back touched %d rows, want 1", tag.RowsAffected())
+			}
+			contactsFactsIntact(t, c, email)
+		}},
+		// The notifications merge upsert keeps a set fact with COALESCE(contacts.x, EXCLUDED.x).
+		contactsContractCase{"MergeUpsertKeepsSetFacts", true, func(t *testing.T, c contactsConn) {
+			email := contactsSeedFull(t, c)
+			tag := contactsMustExec(t, c,
+				`INSERT INTO contacts (email, registered_at, demo_requested_at, marketing_consent_text, marketing_consented_at, first_name)
+				 VALUES ($1, now(), now(), 'Later text.', now(), 'Grace')
+				 ON CONFLICT (email) DO UPDATE SET
+				   registered_at = COALESCE(contacts.registered_at, EXCLUDED.registered_at),
+				   demo_requested_at = COALESCE(contacts.demo_requested_at, EXCLUDED.demo_requested_at),
+				   marketing_consent_text = COALESCE(contacts.marketing_consent_text, EXCLUDED.marketing_consent_text),
+				   marketing_consented_at = COALESCE(contacts.marketing_consented_at, EXCLUDED.marketing_consented_at),
+				   first_name = COALESCE(NULLIF(EXCLUDED.first_name, ''), contacts.first_name)`, email)
+			if tag.RowsAffected() != 1 {
+				t.Fatalf("merge upsert touched %d rows, want 1", tag.RowsAffected())
+			}
+			contactsFactsIntact(t, c, email)
+			var first string
+			if err := c.QueryRow(context.Background(), `SELECT first_name FROM contacts WHERE email = $1`, email).Scan(&first); err != nil || first != "Grace" {
+				t.Fatalf("first_name = %q (err=%v), want Grace", first, err)
+			}
+		}},
+		contactsContractCase{"FirstSetSucceeds", true, func(t *testing.T, c contactsConn) {
+			demoOnly := contactsEmail(t)
+			contactsMustExec(t, c, `INSERT INTO contacts (email, demo_requested_at) VALUES ($1, $2)`, demoOnly, contactsDemoAt)
+			contactsMustExec(t, c, `UPDATE contacts SET registered_at = $2 WHERE email = $1`, demoOnly, contactsRegAt)
+			contactsMustExec(t, c,
+				`UPDATE contacts SET marketing_consent_text = $2, marketing_consented_at = $3 WHERE email = $1`,
+				demoOnly, contactsConsentText, contactsConsentAt)
+			contactsFactsIntact(t, c, demoOnly)
+
+			regOnly := contactsEmail(t)
+			contactsMustExec(t, c, `INSERT INTO contacts (email, registered_at) VALUES ($1, $2)`, regOnly, contactsRegAt)
+			contactsMustExec(t, c, `UPDATE contacts SET demo_requested_at = $2 WHERE email = $1`, regOnly, contactsDemoAt)
+			var got time.Time
+			if err := c.QueryRow(context.Background(), `SELECT demo_requested_at FROM contacts WHERE email = $1`, regOnly).Scan(&got); err != nil || !got.Equal(contactsDemoAt) {
+				t.Fatalf("demo_requested_at = %v (err=%v), want %v", got, err, contactsDemoAt)
+			}
+		}},
+		contactsContractCase{"NonFactColumnsStayWritable", true, func(t *testing.T, c contactsConn) {
+			email := contactsSeedFull(t, c)
+			tag := contactsMustExec(t, c,
+				`UPDATE contacts SET first_name = 'A', last_name = 'B', company = 'C', user_id = $2, version = version + 1,
+				        hubspot_delivered_at = now(), resend_delivered_at = now(), resend_opt_in_sent_at = now(),
+				        delivery_mode = 'real', updated_at = now() WHERE email = $1`, email, uuid.New())
+			if tag.RowsAffected() != 1 {
+				t.Fatalf("UPDATE touched %d rows, want 1 (a trigger returning NULL would skip the row)", tag.RowsAffected())
+			}
+			var version int64
+			var mode string
+			var delivered bool
+			if err := c.QueryRow(context.Background(),
+				`SELECT version, delivery_mode, hubspot_delivered_at IS NOT NULL FROM contacts WHERE email = $1`, email,
+			).Scan(&version, &mode, &delivered); err != nil {
+				t.Fatalf("read back: %v", err)
+			}
+			if version != 2 || mode != "real" || !delivered {
+				t.Fatalf("read back (v%d, %q, delivered=%v), want (v2, real, true)", version, mode, delivered)
+			}
+			contactsFactsIntact(t, c, email)
+		}},
+		contactsContractCase{"VersionDefaultsToOne", true, func(t *testing.T, c contactsConn) {
+			email := contactsEmail(t)
+			contactsMustExec(t, c, `INSERT INTO contacts (email, registered_at) VALUES ($1, now())`, email)
+			var version int64
+			var stamped bool
+			if err := c.QueryRow(context.Background(),
+				`SELECT version, created_at IS NOT NULL AND updated_at IS NOT NULL FROM contacts WHERE email = $1`, email,
+			).Scan(&version, &stamped); err != nil || version != 1 || !stamped {
+				t.Fatalf("defaults (v%d, stamped=%v, err=%v), want (v1, true)", version, stamped, err)
+			}
+		}},
+		contactsContractCase{"DeliveryModeIsRealOrFake", true, func(t *testing.T, c contactsConn) {
+			for _, ok := range []any{"real", "fake", nil} {
+				contactsMustExec(t, c, `INSERT INTO contacts (email, registered_at, delivery_mode) VALUES ($1, now(), $2)`, contactsEmail(t), ok)
+			}
+			for _, bad := range []string{"off", "", "REAL", "real "} {
+				contactsRefuse(t, c, pgCheckViolation,
+					`INSERT INTO contacts (email, registered_at, delivery_mode) VALUES ($1, now(), $2)`, contactsEmail(t), bad)
+			}
+		}},
+		// user_id carries no CHECK: its uuid type is the whole constraint.
+		contactsContractCase{"UserIDMustBeAUUID", true, func(t *testing.T, c contactsConn) {
+			contactsMustExec(t, c, `INSERT INTO contacts (email, registered_at, user_id) VALUES ($1, now(), $2)`, contactsEmail(t), uuid.New())
+			contactsRefuse(t, c, "22P02",
+				`INSERT INTO contacts (email, registered_at, user_id) VALUES ($1, now(), 'not-a-uuid')`, contactsEmail(t))
+		}},
+		contactsContractCase{"ConsentNeedsTextAndTime", false, func(t *testing.T, c contactsConn) {
+			contactsMustExec(t, c, `INSERT INTO contacts (email, registered_at, marketing_consent_text, marketing_consented_at)
+				VALUES ($1, now(), 'Yes.', now())`, contactsEmail(t))
+			contactsMustExec(t, c, `INSERT INTO contacts (email, registered_at) VALUES ($1, now())`, contactsEmail(t))
+			contactsRefuse(t, c, pgCheckViolation,
+				`INSERT INTO contacts (email, registered_at, marketing_consent_text) VALUES ($1, now(), 'Yes.')`, contactsEmail(t))
+			contactsRefuse(t, c, pgCheckViolation,
+				`INSERT INTO contacts (email, registered_at, marketing_consented_at) VALUES ($1, now(), now())`, contactsEmail(t))
+		}},
+		contactsContractCase{"NeedsATag", false, func(t *testing.T, c contactsConn) {
+			for _, col := range []string{"registered_at", "demo_requested_at", "registered_at, demo_requested_at"} {
+				vals := strings.Repeat("now(), ", strings.Count(col, ",")+1)
+				contactsMustExec(t, c, `INSERT INTO contacts (email, `+col+`) VALUES ($1, `+strings.TrimSuffix(vals, ", ")+`)`, contactsEmail(t))
+			}
+			contactsRefuse(t, c, pgCheckViolation, `INSERT INTO contacts (email, first_name) VALUES ($1, 'Ada')`, contactsEmail(t))
+		}},
+		contactsContractCase{"EmailShape", false, func(t *testing.T, c contactsConn) {
+			const insert = `INSERT INTO contacts (email, registered_at) VALUES ($1, now())`
+			good := []string{
+				"abc", // 3 bytes: the floor
+				strings.Repeat("é", 124) + "@a.ioo",
+				"t-" + uuid.NewString() + "@contacts.test",
+			}
+			bad := []string{
+				"", "ab", // under the floor
+				strings.Repeat("é", 125) + "@a.io", // 255 bytes, 130 runes
+				" ada@corp.example", "ada@corp.example ", "Ada@corp.example",
+			}
+			for _, e := range good {
+				contactsCleanup(t, e)
+				contactsMustExec(t, c, insert, e)
+			}
+			for _, e := range bad {
+				contactsCleanup(t, e)
+				contactsRefuse(t, c, pgCheckViolation, insert, e)
+			}
+		}},
+	)
+	return cases
+}
+
+func TestRLS_ContactsContractAsApp(t *testing.T) {
+	hh := requireHarness(t)
+	ran := 0
+	for _, tc := range contactsContract() {
+		if !tc.live {
+			continue
+		}
+		ran++
+		t.Run(tc.name, func(t *testing.T) { tc.run(t, hh.app) })
+	}
+	if ran == 0 {
+		t.Fatal("no live cases ran")
+	}
+}
+
+func TestRLS_ContactsReplayedMigrationHoldsContract(t *testing.T) {
+	requireHarness(t)
+	cases := contactsContract()
+	if len(cases) == 0 {
+		t.Fatal("no contract cases")
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tx := contactsReplayed(t)
+			defer contactsRollback(tx)
+			tc.run(t, contactsSavepointConn{tx})
+		})
+	}
+
+	for _, g := range []struct {
+		role, priv string
+		want       bool
+	}{
+		{"invoice_app", "SELECT", true}, {"invoice_app", "INSERT", true}, {"invoice_app", "UPDATE", true},
+		{"invoice_app", "DELETE", false}, {"invoice_app", "TRUNCATE", false},
+		{"invoice_tenant_reader", "SELECT", false}, {"invoice_tenant_reader", "INSERT", false},
+		{"invoice_tenant_reader", "UPDATE", false}, {"invoice_tenant_reader", "DELETE", false},
+	} {
+		t.Run("Grant_"+g.role+"_"+g.priv, func(t *testing.T) {
+			tx := contactsReplayed(t)
+			defer contactsRollback(tx)
+			var got bool
+			err := tx.QueryRow(context.Background(),
+				`SELECT has_table_privilege($1, 'public.contacts', $2)`, g.role, g.priv).Scan(&got)
+			if err != nil || got != g.want {
+				t.Fatalf("%s %s on contacts = %v (err=%v), want %v", g.role, g.priv, got, err, g.want)
+			}
+		})
+	}
 }

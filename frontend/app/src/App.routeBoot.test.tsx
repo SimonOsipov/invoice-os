@@ -996,6 +996,99 @@ describe('an in-house workspace does not open the Clients UI by URL', () => {
     expect(requireCtx().view, 'a firm nav must open the portfolio').toBe('clients')
     expect(pushSpy.mock.calls[0]?.[2], 'the firm pushed path must be /clients').toBe('/clients')
   })
+
+  it('boot_inhouseClientsWithTrailingSlashQueryAndHashFallsBackToABareRoot', async () => {
+    await bootAt('/clients/?q=abc&invoice=x#frag', { persona: APP_PERSONAS.inhouse })
+    const ctx = requireCtx()
+    expect(ctx.mode, 'sanity: in-house mode').toBe('inhouse')
+    expect(ctx.view, `got '${ctx.view}'`).toBe('dashboard')
+    expect(window.location.pathname, 'the path must be the bare root').toBe('/')
+    expect(window.location.search, 'the clients URL carries no owned query, so none survives').toBe('')
+    expect(window.location.hash, 'the hash must not survive the rewrite').toBe('')
+    expect(portfolioHeading(), 'no Client portfolio heading may render for in-house').toBeNull()
+
+    cleanup()
+    await bootAt('/clients/?q=abc#frag')
+    expect(requireCtx().view, 'control: the same URL still opens the firm portfolio').toBe('clients')
+    expect(window.location.pathname, 'control: the firm URL is normalised to /clients').toBe('/clients')
+  })
+
+  it('boot_inhouseRestoredClientsDestinationFallsBack', async () => {
+    const restore = () =>
+      sessionStorage.setItem(
+        DEEP_LINK_KEY,
+        JSON.stringify({ v: DEEP_LINK_SCHEMA_VERSION, path: '/clients', query: '', at: Date.now() }),
+      )
+    restore()
+    await bootAt('/', { persona: APP_PERSONAS.inhouse })
+    expect(requireCtx().view, 'a restored /clients destination must fall back for in-house').toBe('dashboard')
+    expect(window.location.pathname, 'the alignment must land on the bare root').toBe('/')
+    expect(portfolioHeading(), 'no Client portfolio heading may render for in-house').toBeNull()
+
+    cleanup()
+    sessionStorage.clear()
+    restore()
+    await bootAt('/')
+    expect(requireCtx().view, 'control: the same stored destination opens the firm portfolio').toBe('clients')
+    expect(window.location.pathname, 'control: firm lands on /clients').toBe('/clients')
+  })
+
+  it('boot_inhouseDemoCarryOfClientsFallsBack', async () => {
+    await bootAt('/', { demoMode: true, persona: APP_PERSONAS.inhouse })
+    let ctx = requireCtx()
+    expect(ctx.mode, 'sanity: in-house mode').toBe('inhouse')
+    expect(typeof ctx.becomePersona, 'DEMO_MODE must expose becomePersona on ctx').toBe('function')
+
+    await act(async () => {
+      await ctx.becomePersona!(MEMBER, 'clients')
+    })
+    ctx = requireCtx()
+    expect(ctx.view, `an initialView carry of clients must fall back for in-house, got '${ctx.view}'`).toBe(
+      'dashboard',
+    )
+    expect(window.location.pathname, 'the alignment must land on the bare root').toBe('/')
+    expect(portfolioHeading(), 'no Client portfolio heading may render for in-house').toBeNull()
+
+    cleanup()
+    await bootAt('/', { demoMode: true })
+    ctx = requireCtx()
+    await act(async () => {
+      await ctx.becomePersona!(MEMBER, 'clients')
+    })
+    expect(requireCtx().view, 'control: the firm carry of clients still opens the portfolio').toBe('clients')
+  })
+
+  it('popstate_anInHouseClientsEntryWithAQueryIsClampedAndLeavesTheSettingsTabAlone', async () => {
+    await bootAt('/settings/company', { persona: APP_PERSONAS.inhouse })
+    expect(requireCtx().settingsTab, 'sanity: the company tab is live for in-house').toBe('company')
+
+    window.history.pushState(null, '', '/clients/?q=abc')
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    expect(requireCtx().view, 'floor: the handler ran and left settings').toBe('dashboard')
+    expect(portfolioHeading(), 'no Client portfolio heading may render for in-house').toBeNull()
+
+    window.history.pushState(null, '', '/settings/company')
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    expect(requireCtx().view, 'the settings entry still opens settings for in-house').toBe('settings')
+    expect(requireCtx().settingsTab, 'the clients clamp must not touch the settings clamp').toBe('company')
+  })
+
+  it('nav_inhouseClampsOnlyClientsAndLeavesEveryOtherViewAlone', async () => {
+    await bootAt('/', { persona: APP_PERSONAS.inhouse })
+    const views: View[] = ['invoices', 'rules', 'workflows', 'reports', 'settings', 'approvals', 'audit', 'customers']
+    // Floor: a loop over an empty list asserts nothing.
+    expect(views, 'the list must carry every non-clients top-level view').toHaveLength(8)
+    for (const v of views) {
+      await act(async () => {
+        capturedCtx!.nav(v)
+      })
+      expect(requireCtx().view, `nav('${v}') must stay '${v}' for in-house`).toBe(v)
+    }
+  })
 })
 
 // --- ROUTE-07-04: a policy has an address -------------------------------------------

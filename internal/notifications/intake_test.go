@@ -161,6 +161,8 @@ func TestIntake_MalformedIs400(t *testing.T) {
 		"whitespace email": `{"email":"   ","name":"Grace Hopper","company":"Navy","display_name":"Ada"}`,
 		// The email decodes before the type error: a handler that ignores the decode error accepts it.
 		"valid email, wrong-typed field": `{"email":"ada@corp.example","name":5,"display_name":5}`,
+		"a second object follows":        `{"email":"ada@corp.example"}{"email":"bob@corp.example"}`,
+		"junk follows":                   `{"email":"ada@corp.example"} junk`,
 	}
 	store := &qaIntakeStore{}
 	for path, r := range qaIntakeRoutes(store, &qaLogSink{}) {
@@ -334,7 +336,10 @@ func TestIntake_MeReadsTheTokenEmail(t *testing.T) {
 func TestIntake_RegistrantUserIDMustBeAUUID(t *testing.T) {
 	store := &qaIntakeStore{}
 	h := RegistrantsHandler(store, (&qaLogSink{}).logger())
-	for name, id := range map[string]string{"words": "not-a-uuid", "number": "12345", "one digit short": uuid.NewString()[1:]} {
+	for name, id := range map[string]string{
+		"words": "not-a-uuid", "number": "12345", "one digit short": uuid.NewString()[1:],
+		"braces": "{" + uuid.NewString() + "}", "36 non-hex": strings.Repeat("g", 36), "no hyphens": strings.ReplaceAll(uuid.NewString(), "-", ""),
+	} {
 		t.Run(name, func(t *testing.T) {
 			if rec := qaServe(h, "POST", qaRegistrantsPath, qaRegistrantBody(id, "ada@corp.example", ""), nil); rec.Code != http.StatusBadRequest {
 				t.Errorf("status %d, want 400 (body %q)", rec.Code, rec.Body)
@@ -482,6 +487,41 @@ func TestIntake_RegistrantUserIDUrnFormIs400(t *testing.T) {
 	h := RegistrantsHandler(store, (&qaLogSink{}).logger())
 	if rec := qaServe(h, "POST", qaRegistrantsPath, qaRegistrantBody("urn:uuid:"+uuid.NewString(), "ada@corp.example", ""), nil); rec.Code != http.StatusBadRequest {
 		t.Errorf("status %d, want 400: Postgres refuses the urn form of a uuid", rec.Code)
+	}
+	if n := store.calls(); n != 0 {
+		t.Errorf("the store was called %d times, want 0", n)
+	}
+}
+
+// Whitespace after the one object is not a second body.
+func TestIntake_TrailingWhitespaceIsAccepted(t *testing.T) {
+	store := &qaIntakeStore{}
+	for path, r := range qaIntakeRoutes(store, &qaLogSink{}) {
+		for name, tail := range map[string]string{"newline": "\n", "spaces": "   ", "crlf": "\r\n\t"} {
+			t.Run(strings.TrimPrefix(path, "/internal/contacts/")+"/"+name, func(t *testing.T) {
+				if rec := qaServe(r.h, "POST", path, r.body+tail, nil); rec.Code != http.StatusAccepted {
+					t.Errorf("status %d, want 202 (body %q)", rec.Code, rec.Body)
+				}
+			})
+		}
+	}
+	if n := store.calls(); n != 6 {
+		t.Errorf("the store was called %d times, want 6", n)
+	}
+}
+
+// json.Decoder.More reports false before a closing bracket, so a stray "}" or "]" after the
+// object slips past a More() check; the body is still not one JSON object.
+func TestIntake_StrayClosingBracketIsNotOneBody(t *testing.T) {
+	store := &qaIntakeStore{}
+	for path, r := range qaIntakeRoutes(store, &qaLogSink{}) {
+		for name, tail := range map[string]string{"brace": "}", "bracket": "]"} {
+			t.Run(strings.TrimPrefix(path, "/internal/contacts/")+"/"+name, func(t *testing.T) {
+				if rec := qaServe(r.h, "POST", path, r.body+tail, nil); rec.Code != http.StatusBadRequest {
+					t.Errorf("status %d, want 400 (body %q)", rec.Code, rec.Body)
+				}
+			})
+		}
 	}
 	if n := store.calls(); n != 0 {
 		t.Errorf("the store was called %d times, want 0", n)

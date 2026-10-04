@@ -68,4 +68,35 @@ describe('PersonaToast', () => {
     fireEvent.click(screen.getByRole('button', { name: TOAST_DISMISS }))
     expect(onDismiss).toHaveBeenCalledTimes(1)
   })
+
+  // DM-06 (AC 6, D-2). The toast mounts outside the shell, so asc-app supplies its light
+  // vocabulary and font. Resolved values are read on the deployed build (AS-10).
+  it('DM-06 the toast is a light float in the app scope', () => {
+    const { container } = render(<PersonaToast name="Musa Danjuma" initials="MD" role="reviewer" onDismiss={vi.fn()} />)
+    const toast = screen.getByTestId('persona-toast')
+    expect(toast.classList.contains('asc-app')).toBe(true)
+    expect(toast.style.background).toBe('var(--bg-2)')
+    expect(toast.style.borderLeft).toBe('3px solid var(--status-amber-text)')
+    expect(toast.style.boxShadow).toBe('var(--shadow-card)')
+    expect(toast.style.borderRadius).toBe('var(--radius-md)')
+    expect(container.innerHTML).not.toContain('oklch')
+
+    // Floor: the meta line is enabled text on --fg-3, so the --fg-4 absence below is not vacuous.
+    expect(screen.getByTestId('persona-toast-meta').style.color).toBe('var(--fg-3)')
+    expect(container.innerHTML).not.toContain('--fg-4')
+  })
+
+  // DM-07 (AC 6).
+  it("DM-07 the toast's avatar and Dismiss follow the shape rules", () => {
+    render(<PersonaToast name="Musa Danjuma" initials="MD" role="reviewer" onDismiss={vi.fn()} />)
+    const avatar = screen.getByText('MD')
+    expect(avatar.style.width).toBe('28px')
+    expect(avatar.style.borderRadius).toBe('50%')
+
+    const dismiss = screen.getByTestId('persona-toast-dismiss')
+    expect(dismiss.style.width).toBe('24px')
+    expect(dismiss.style.height).toBe('24px')
+    expect(dismiss.style.borderRadius).toBe('var(--radius-btn)')
+    expect(dismiss.style.padding).toBe('')
+  })
 })

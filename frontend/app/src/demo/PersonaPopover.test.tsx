@@ -228,4 +228,38 @@ describe('PersonaPopover', () => {
     fireEvent.click(returnRow)
     expect(onReturn).toHaveBeenCalledTimes(1)
   })
+
+  // DM-04 (AC 6). Inside the dark aside the tokens re-point at the dark band; asc-light puts the
+  // light vocabulary back. The class is the only handle jsdom has -- the resolved white is
+  // read on the deployed build (AS-10).
+  it('DM-04 the popover is light and floats on shadow-card', () => {
+    const { container } = renderPopover({ members: FIRM_ROSTER })
+    const pop = screen.getByTestId('persona-popover')
+    expect(pop.classList.contains('asc-light')).toBe(true)
+    expect(pop.style.boxShadow).toBe('var(--shadow-card)')
+    expect(pop.style.borderRadius).toBe('var(--radius-md)')
+    expect(container.innerHTML).not.toContain('oklch')
+
+    const rows = screen.getAllByTestId('persona-row')
+    expect(rows.length).toBe(FIRM_ROSTER.length)
+    rows.forEach((row, i) => {
+      expect(within(row).getByText(FIRM_ROSTER[i].initials).style.borderRadius).toBe('50%')
+    })
+  })
+
+  // DM-05 (pin, green at write). Blocked rows keep --fg-4 (D-3, Q3); enabled rows read.
+  it('DM-05 blocked rows stay muted, enabled rows read (boundary)', () => {
+    renderPopover({ members: [FOLAKE, HALIMA] })
+    const rows = screen.getAllByTestId('persona-row')
+    expect(rows.length).toBe(2)
+    const active = rows.find((r) => r.tagName === 'BUTTON')!
+    const blocked = rows.find((r) => r.tagName === 'DIV')!
+    expect(active).not.toBeUndefined()
+    expect(blocked).not.toBeUndefined()
+
+    expect(within(active).getByTestId('persona-row-name').style.color).toBe('var(--fg-1)')
+    expect(within(active).getByTestId('persona-row-meta').style.color).toBe('var(--fg-3)')
+    expect(within(blocked).getByTestId('persona-row-name').style.color).toBe('var(--fg-4)')
+    expect(within(blocked).getByText(HALIMA.initials).style.color).toBe('var(--fg-4)')
+  })
 })

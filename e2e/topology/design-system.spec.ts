@@ -2,9 +2,11 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
+import { provisionStaffAccount } from '../api/client'
 import { collectErrors, signInAs } from '../personaSession'
 import type { PersonaId } from '../personas'
 import { seedConsent } from '../smoke/landingConsent'
+import { seedStaffSession, type ConsoleTarget } from '../staffSession'
 import { resolveTarget } from '../targets'
 import { enclosesRect, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
 
@@ -137,16 +139,17 @@ for (const path of ['/', '/privacy']) {
   })
 }
 
-const V1_SURFACES: { id: PersonaId; name: string }[] = [
+const V1_SURFACES: { id: PersonaId; name: string; console?: ConsoleTarget }[] = [
   { id: 'firm', name: 'app (firm)' },
-  { id: 'developer', name: 'ops console' },
-  { id: 'support', name: 'support console' },
+  { id: 'developer', name: 'ops console', console: 'ops' },
+  { id: 'support', name: 'support console', console: 'support' },
 ]
 
-for (const { id, name } of V1_SURFACES) {
+for (const { id, name, console: consoleTarget } of V1_SURFACES) {
   test(`${name} reads v1: Fraunces h1, Inter ground, v1 accent, no Manrope`, async ({ page }, testInfo) => {
     const errors = collectErrors(page)
-    await signInAs(page, id)
+    if (consoleTarget) await seedStaffSession(page, consoleTarget, await provisionStaffAccount(`design-${consoleTarget}`))
+    else await signInAs(page, id)
 
     const p = await probe(page)
     await attachProbe(testInfo, id, p)
@@ -246,7 +249,7 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
 }
 
 // BURGER_MAX + 1 is the narrowest width that shows the five nav links.
-// Widest first (layout.ts); 1201 and 1200 straddle the entry's edge.
+// Widest first (layout.ts); 1220 and 1219 straddle the entry's edge.
 test('landing header row: inside the viewport and no overlap from 2560 to 834', async ({ page }, testInfo) => {
   await assertHeaderRow(page, testInfo, [...WIDE_WIDTHS, 1240, CREATE_MAX + 1, CREATE_MAX, BURGER_MAX + 1, 1080, 834])
 })
@@ -265,8 +268,8 @@ const FRAME_VIEWPORTS = [
 // Burger shows at <=1120px (landing.css .a-burger).
 const BURGER_MAX = 1120
 
-// The header entry hides at <=1200px (landing.css .a-create).
-const CREATE_MAX = 1200
+// The header entry hides at <=1219px (landing.css .a-create).
+const CREATE_MAX = 1219
 const CREATE_LABEL = 'Create an account'
 
 type Frame = { width: number; height: number }

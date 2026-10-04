@@ -137,7 +137,7 @@ test('landing registration window: a long name and a long email stay inside the 
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-// The route for the 1121-1200px band, where the header entry is hidden.
+// The route for the 1121-1219px band, where the header entry is hidden.
 test('landing sign-in window: its Create an account link opens the registration window at 1121', async ({ page }) => {
   await page.setViewportSize({ width: 1121, height: 900 })
   const errors = await openLanding(page)

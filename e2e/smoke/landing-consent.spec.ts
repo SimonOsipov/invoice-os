@@ -710,7 +710,7 @@ test('landing consent: keyboard focus cannot reach the notice while a modal is o
   const cases = [
     { trigger: 'Platform login', dialog: 'Platform login' },
     { trigger: 'Book a demo', dialog: 'Book a demo' },
-    // The header entry shows above 1200px; the default viewport is 1280.
+    // The header entry shows above 1219px; the default viewport is 1280.
     { trigger: 'Create an account', dialog: 'Create an account' },
   ]
 

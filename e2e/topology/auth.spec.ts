@@ -632,7 +632,7 @@ for (const id of PERSONA_IDS) {
       await expect(page.locator('aside.pf-sidebar')).toContainText(persona.tenantName!.toUpperCase())
     } else {
       expect((await door).status(), `the ${persona.destination} front door answer`).toBe(200)
-      await expect(page.getByRole('banner').getByRole('button', { name: 'Explore the platform' })).toBeVisible()
+      await expect(page.getByRole('banner').getByRole('button', { name: 'Platform login' })).toBeVisible()
     }
 
     expect(errors, `console errors on the ${persona.destination} arrival:\n${errors.join('\n')}`).toEqual([])
@@ -1685,7 +1685,7 @@ async function visitConsole(page: Page, target: ConsoleTarget): Promise<void> {
 }
 
 async function signInThroughLanding(page: Page, target: ConsoleTarget, account: { email: string; password: string }): Promise<Request> {
-  await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
+  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click({ timeout: 15_000 })
   const [handoff] = await Promise.all([
     page.waitForRequest((r) => r.isNavigationRequest() && isConsoleHandoff(r.url(), target)),
     submitSignIn(page, account.email, account.password),
@@ -1760,7 +1760,7 @@ test("deployed consoles: a customer's real session opens neither console and is 
         await signInThroughLanding(page, target, account)
         expect((await notStaff).status(), `the ${target} not-staff landing answer`).toBe(200)
         await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-        await expect(page.getByRole('dialog', { name: 'Sign in' }).getByRole('alert')).toContainText(NOT_STAFF)
+        await expect(page.getByRole('dialog', { name: 'Platform login' }).getByRole('alert')).toContainText(NOT_STAFF)
 
         expect(await consoleRecord(context, target), `${target} kept a session for a customer`).toBeNull()
         expect(urls.length, 'no URLs were recorded').toBeGreaterThan(0)
@@ -1955,8 +1955,18 @@ async function expectNoDialog(page: Page): Promise<void> {
 test('deployed journey: a stranger registers through the landing and lands in a workspace of each kind', async ({ page, browser }) => {
   // Two real sign-ins at the 180 s one-sign-in budget of the journeys above, plus three registrations.
   test.setTimeout(300_000)
-  // The free-mail refusal is a deliberate 400, which Chromium logs as a console error.
-  const errors = gatedErrors(page, [expectedStatusDropper(page, 400, /\/auth\/register$/)])
+  // The free-mail refusal and the first sign-in's /me before provisioning are deliberate 4xx, which Chromium logs as console errors.
+  const errors = gatedErrors(page, [
+    expectedStatusDropper(page, 400, /\/auth\/register$/),
+    expectedStatusDropper(page, 403, /\/api\/tenancy\/v1\/me$/),
+  ])
+  let meForbidden = 0
+  let workspacesCreated = 0
+  page.on('response', (res) => {
+    const url = res.url().split('?')[0]
+    if (res.status() === 403 && url.endsWith('/api/tenancy/v1/me')) meForbidden += 1
+    if (res.status() === 201 && res.request().method() === 'POST' && url.endsWith('/api/tenancy/v1/workspaces')) workspacesCreated += 1
+  })
   const firm = freshRegistration('firm')
   const inHouse = freshRegistration('in_house')
 
@@ -2023,6 +2033,8 @@ test('deployed journey: a stranger registers through the landing and lands in a 
     }
   })
 
+  expect(meForbidden, 'one /me 403 per kind before provisioning').toBe(2)
+  expect(workspacesCreated, 'one workspace created per kind').toBe(2)
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })
 

@@ -9,6 +9,7 @@ import (
 	"go/types"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"strconv"
@@ -202,20 +203,20 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 const registerAllowedOrigin = "https://landing.example"
 
 // registerMux mounts the real register handler behind the CORS allow-list on both patterns, as main does.
-func registerMux(t *testing.T) *http.ServeMux {
+func registerMux(t *testing.T) (*http.ServeMux, func() []string) {
 	t.Helper()
-	authURL, _ := fakeAuth(t)
+	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
 	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler))
 	withCORS := gateway.CORS([]string{registerAllowedOrigin})
 	mux := http.NewServeMux()
 	mux.Handle("POST /auth/register", withCORS(reg.Register))
 	mux.Handle("OPTIONS /auth/register", withCORS(reg.Register))
-	return mux
+	return mux, calls
 }
 
 func TestRegisterPreflightGrantsTheAllowedOrigin(t *testing.T) {
-	mux := registerMux(t)
+	mux, calls := registerMux(t)
 
 	rec := preflight(mux, "/auth/register", registerAllowedOrigin)
 	if rec.Code != http.StatusNoContent {
@@ -227,10 +228,21 @@ func TestRegisterPreflightGrantsTheAllowedOrigin(t *testing.T) {
 	if !allowHeaderSet(rec.Header())["content-type"] {
 		t.Errorf("preflight grants %v, want content-type for the JSON body", allowHeaderSet(rec.Header()))
 	}
+	if got := rec.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(got, http.MethodPost) {
+		t.Errorf("preflight Access-Control-Allow-Methods = %q, want POST granted", got)
+	}
 
 	rec = preflight(mux, "/auth/register", "https://evil.example")
-	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
-		t.Errorf("preflight from a disallowed origin got grant %q, want none", got)
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("preflight from a disallowed origin = %d, want 204", rec.Code)
+	}
+	for _, h := range []string{"Access-Control-Allow-Origin", "Access-Control-Allow-Methods", "Access-Control-Allow-Headers"} {
+		if got := rec.Header().Get(h); got != "" {
+			t.Errorf("preflight from a disallowed origin carries %s = %q, want none", h, got)
+		}
+	}
+	if got := calls(); len(got) != 0 {
+		t.Errorf("a preflight reached GoTrue: %v", got)
 	}
 
 	const body = `{"email":"new@corp.example","password":"Corr3ct-Horse","workspace_name":"Acme","display_name":"Ada","kind":"firm"}`
@@ -242,8 +254,48 @@ func TestRegisterPreflightGrantsTheAllowedOrigin(t *testing.T) {
 		t.Errorf("POST Access-Control-Allow-Origin = %q, want %q", got, registerAllowedOrigin)
 	}
 
+	// The landing form reads the 400 message, so a refusal carries the grant too.
+	const badAnswers = `{"email":"new@corp.example","password":"Corr3ct-Horse","workspace_name":"","display_name":"Ada"}`
+	rec = postJSON(mux, "/auth/register", registerAllowedOrigin, badAnswers)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("POST with a blank workspace_name = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != registerAllowedOrigin {
+		t.Errorf("400 Access-Control-Allow-Origin = %q, want %q", got, registerAllowedOrigin)
+	}
+	if got := calls(); len(got) != 1 {
+		t.Errorf("GoTrue saw %v after one good POST and one refused one, want one call", got)
+	}
+
 	rec = postJSON(mux, "/auth/register", "https://evil.example", body)
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("POST from a disallowed origin got grant %q, want none", got)
+	}
+}
+
+// Only a preflight (an OPTIONS carrying an Origin) is answered by CORS. Any other OPTIONS reaches the
+// handler, which must refuse it as sign-in does (TestHandoffPreflightIsAnsweredByCORS), not register.
+func TestRegisterOptionsWithoutOriginIsNotARegistration(t *testing.T) {
+	mux, calls := registerMux(t)
+
+	const body = `{"email":"new@corp.example","password":"Corr3ct-Horse","workspace_name":"Acme","display_name":"Ada","kind":"firm"}`
+	req := httptest.NewRequest(http.MethodOptions, "/auth/register", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != http.MethodPost {
+		t.Errorf("OPTIONS with no Origin = %d Allow %q, want 405 Allow POST: %s", rec.Code, rec.Header().Get("Allow"), rec.Body.String())
+	}
+	if got := calls(); len(got) != 0 {
+		t.Errorf("an OPTIONS request reached GoTrue: %v", got)
+	}
+
+	// Positive pair: the same body as a POST does register.
+	if rec := postJSON(mux, "/auth/register", registerAllowedOrigin, body); rec.Code != http.StatusAccepted {
+		t.Fatalf("POST = %d, want 202: %s", rec.Code, rec.Body.String())
+	}
+	if got := calls(); len(got) != 1 {
+		t.Errorf("GoTrue saw %v after one POST, want one call", got)
 	}
 }

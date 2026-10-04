@@ -422,3 +422,41 @@ func TestIdP_ProvisionedWorkspaceReachesTheNextToken(t *testing.T) {
 		t.Errorf("Store.Me = %+v role %q, want the new workspace IdP Works (in_house), role admin", tenant, role)
 	}
 }
+
+// docs/identity-provider.md, "First registrant's answers": a repeat signup changes neither the password nor the answers.
+func TestIdP_RepeatRegistrationKeepsTheFirstAnswers(t *testing.T) {
+	base := idpMailURL(t)
+	gw, _ := startGateway(t, base, 0)
+	first := map[string]string{"workspace_name": "First Co", "display_name": "First", "kind": "firm"}
+	u := registrant(t, gw, first)
+
+	repeat, _ := json.Marshal(map[string]string{"email": u.email, "password": "other-" + uuid.NewString(),
+		"workspace_name": "Second Co", "display_name": "Second", "kind": "in_house"})
+	resp, err := noRedirect.Post(gw+"/auth/register", "application/json", bytes.NewReader(repeat))
+	if err != nil {
+		t.Fatalf("POST /auth/register (repeat): %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("repeat register status = %d, want 202", resp.StatusCode)
+	}
+
+	if got := follow(t, confirmationLink(t, u.email)); got != siteURL+"/?verified=1" {
+		t.Fatalf("verify redirect = %q, want %s/?verified=1", got, siteURL)
+	}
+	status, session := signIn(t, base, u)
+	tok, _ := session["access_token"].(string)
+	if status != http.StatusOK || tok == "" {
+		t.Fatalf("sign in with the first password: status %d, body %v", status, session)
+	}
+	um, _ := jwtPart(t, tok, 1)["user_metadata"].(map[string]any)
+	stored, _ := um["registration"].(map[string]any)
+	if len(stored) != len(first) {
+		t.Fatalf("user_metadata.registration = %v, want exactly the first registrant's %v", um["registration"], first)
+	}
+	for k, want := range first {
+		if stored[k] != want {
+			t.Errorf("user_metadata.registration[%q] = %v, want %q", k, stored[k], want)
+		}
+	}
+}

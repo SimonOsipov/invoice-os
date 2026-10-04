@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Nav } from './components/Nav'
+import { VerifyNotice } from './components/VerifyNotice'
 import { SignInModal } from './components/SignInModal'
 import { DemoModal } from './components/DemoModal'
 import { RegisterModal } from './components/RegisterModal'
@@ -24,6 +25,7 @@ import { applyChoice } from './consentActions'
 import { isPrivacyPath } from './route'
 import { registrationOpen } from './register'
 import { readSignInConsole, readSignInState } from './signIn'
+import { readVerifyOutcome, VERIFIED_PARAM, VERIFY_PARAM } from './verify'
 
 // Copy for the ?signin= outcome; `ready` opens the modal with no message.
 const SIGN_IN_OUTCOMES = new Map<string, string | undefined>([
@@ -32,6 +34,9 @@ const SIGN_IN_OUTCOMES = new Map<string, string | undefined>([
   ['failed', "We couldn't open your workspace. Sign in again."],
   ['not-staff', 'This account cannot open the ASComply consoles.'],
 ])
+
+// Params the boot reads once and removes from the address bar.
+const BOOT_PARAMS = ['state', 'console', 'signin', VERIFIED_PARAM, VERIFY_PARAM]
 
 // Held a minute short of the 10-minute state TTL, so a posted state is still live.
 const STATE_HOLD_MS = 9 * 60 * 1000
@@ -56,6 +61,8 @@ export default function App() {
   )
   const [signInOpen, setSignInOpen] = useState(signInBoot.open)
   const [signInError, setSignInError] = useState(signInBoot.error)
+  // Read once at mount; the strip below removes the params, so a re-read would lose the notice.
+  const [verifyOutcome, setVerifyOutcome] = useState(() => readVerifyOutcome(window.location.search))
   const [demoOpen, setDemoOpen] = useState(false)
   const [registerOpen, setRegisterOpen] = useState(false)
   // Read once at mount: a stored choice keeps the notice down until `reopened` flips.
@@ -85,13 +92,11 @@ export default function App() {
     return () => window.removeEventListener('pageshow', onShow)
   }, [])
 
-  // Strip `state`, `console` and `signin` for any value; every other param stays.
+  // Strip the boot params for any value; every other param stays.
   useEffect(() => {
     const url = new URL(window.location.href)
-    if (!['state', 'console', 'signin'].some((k) => url.searchParams.has(k))) return
-    url.searchParams.delete('state')
-    url.searchParams.delete('console')
-    url.searchParams.delete('signin')
+    if (!BOOT_PARAMS.some((k) => url.searchParams.has(k))) return
+    BOOT_PARAMS.forEach((k) => url.searchParams.delete(k))
     window.history.replaceState(null, '', url.pathname + url.search + url.hash)
   }, [])
 
@@ -136,6 +141,7 @@ export default function App() {
       }}
     >
       <Nav onSignIn={onSignIn} onBookDemo={book('nav')} onCreateAccount={onCreateAccount} hrefPrefix={privacy ? '/' : ''} />
+      {verifyOutcome && <VerifyNotice outcome={verifyOutcome} onDismiss={() => setVerifyOutcome(null)} />}
       {privacy ? (
         <Privacy />
       ) : (

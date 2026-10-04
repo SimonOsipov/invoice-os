@@ -92,16 +92,16 @@ func TestStoreProvisionWorkspace_CreatesTenantAndActiveAdmin(t *testing.T) {
 	if err != nil {
 		t.Errorf("ProvisionWorkspace: %v", err)
 	}
-	if tenant.ID != r.tenantID || tenant.Name != in.WorkspaceName || tenant.Kind != "firm" {
-		t.Errorf("returned tenant = %+v, want {ID:%s Name:%s Kind:firm}", tenant, r.tenantID, in.WorkspaceName)
+	if tenant.ID != r.tenantID || tenant.Name != in.WorkspaceName || tenant.Kind != "in_house" {
+		t.Errorf("returned tenant = %+v, want {ID:%s Name:%s Kind:in_house}", tenant, r.tenantID, in.WorkspaceName)
 	}
 	if subject != r.id.Subject {
 		t.Errorf("returned subject = %q, want %q", subject, r.id.Subject)
 	}
 
 	tenants, members := provisionedRows(t, r.super, r.tenantID)
-	if len(tenants) != 1 || tenants[0] != [2]string{in.WorkspaceName, "firm"} {
-		t.Fatalf("tenants at uuidv5(subject) %s = %v, want exactly [{%s firm}]", r.tenantID, tenants, in.WorkspaceName)
+	if len(tenants) != 1 || tenants[0] != [2]string{in.WorkspaceName, "in_house"} {
+		t.Fatalf("tenants at uuidv5(subject) %s = %v, want exactly [{%s in_house}]", r.tenantID, tenants, in.WorkspaceName)
 	}
 	if len(members) != 1 {
 		t.Fatalf("memberships = %+v, want exactly one", members)
@@ -118,25 +118,79 @@ func TestStoreProvisionWorkspace_CreatesTenantAndActiveAdmin(t *testing.T) {
 	}
 }
 
-func TestStoreProvisionWorkspace_KindDefaultsToFirm(t *testing.T) {
+func TestStoreProvisionWorkspace_AbsentKindIsInHouse(t *testing.T) {
 	r := newRegistrant(t)
-	if _, _, err := NewStore(r.app).ProvisionWorkspace(r.ctx(), ProvisionInput{WorkspaceName: "Default Kind", DisplayName: "Ada"}); err != nil {
-		t.Errorf("ProvisionWorkspace: %v", err)
+	tenant, _, err := NewStore(r.app).ProvisionWorkspace(r.ctx(), ProvisionInput{WorkspaceName: "Default Kind", DisplayName: "Ada"})
+	if err != nil {
+		t.Fatalf("ProvisionWorkspace: %v", err)
 	}
-	tenants, _ := provisionedRows(t, r.super, r.tenantID)
-	if len(tenants) != 1 || tenants[0][1] != "firm" {
-		t.Errorf("tenants = %v, want one row with kind firm", tenants)
-	}
-}
-
-func TestStoreProvisionWorkspace_KeepsInHouse(t *testing.T) {
-	r := newRegistrant(t)
-	if _, _, err := NewStore(r.app).ProvisionWorkspace(r.ctx(), ProvisionInput{WorkspaceName: "In House", DisplayName: "Ada", Kind: "in_house"}); err != nil {
-		t.Errorf("ProvisionWorkspace: %v", err)
+	if tenant.Kind != "in_house" {
+		t.Errorf("returned kind = %q, want in_house", tenant.Kind)
 	}
 	tenants, _ := provisionedRows(t, r.super, r.tenantID)
 	if len(tenants) != 1 || tenants[0][1] != "in_house" {
 		t.Errorf("tenants = %v, want one row with kind in_house", tenants)
+	}
+}
+
+func TestStoreProvisionWorkspace_ExplicitKindIsKept(t *testing.T) {
+	for _, kind := range []string{"firm", "in_house"} {
+		t.Run(kind, func(t *testing.T) {
+			r := newRegistrant(t)
+			tenant, _, err := NewStore(r.app).ProvisionWorkspace(r.ctx(), ProvisionInput{WorkspaceName: "Explicit " + kind, DisplayName: "Ada", Kind: kind})
+			if err != nil {
+				t.Fatalf("ProvisionWorkspace: %v", err)
+			}
+			if tenant.Kind != kind {
+				t.Errorf("returned kind = %q, want %q", tenant.Kind, kind)
+			}
+			tenants, _ := provisionedRows(t, r.super, r.tenantID)
+			if len(tenants) != 1 || tenants[0][1] != kind {
+				t.Errorf("tenants = %v, want one row with kind %s", tenants, kind)
+			}
+		})
+	}
+}
+
+func TestStoreProvisionWorkspace_AbsentKindLeavesOtherTenantsAlone(t *testing.T) {
+	r := newRegistrant(t)
+	ctx := context.Background()
+	seededID := uuid.NewString()
+	if _, err := r.super.Exec(ctx, `INSERT INTO tenants (id, name) VALUES ($1, 'Seeded Without Kind')`, seededID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() { _, _ = r.super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, seededID) })
+	kindOf := func() string {
+		var k string
+		if err := r.super.QueryRow(ctx, `SELECT kind FROM tenants WHERE id = $1`, seededID).Scan(&k); err != nil {
+			t.Fatalf("read seeded kind: %v", err)
+		}
+		return k
+	}
+	if k := kindOf(); k != "firm" {
+		t.Fatalf("seeded kind before = %q, want the column default firm", k)
+	}
+
+	if _, _, err := NewStore(r.app).ProvisionWorkspace(r.ctx(), ProvisionInput{WorkspaceName: "Newcomer", DisplayName: "Ada"}); err != nil {
+		t.Fatalf("ProvisionWorkspace: %v", err)
+	}
+	if k := kindOf(); k != "firm" {
+		t.Errorf("seeded kind after = %q, want firm", k)
+	}
+}
+
+func TestProvisionHandler_AbsentKindAnswersInHouse(t *testing.T) {
+	r := newRegistrant(t)
+	rec := postProvision(NewStore(r.app), r.ctx(), `{"workspace_name":"Acme","display_name":"Ada"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var me meBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &me); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if me.Tenant.Kind != "in_house" {
+		t.Errorf("tenant.kind = %q, want in_house (body=%s)", me.Tenant.Kind, rec.Body.String())
 	}
 }
 
@@ -486,8 +540,8 @@ func TestStoreProvisionWorkspace_WritesOneProvisionedEvent(t *testing.T) {
 	if e.EntityID != nil {
 		t.Errorf("entity_id = %q, want NULL", *e.EntityID)
 	}
-	// kind is the stored default, not an input echo.
-	want := map[string]any{"tenant_id": r.tenantID, "user_id": r.id.Subject, "name": in.WorkspaceName, "kind": "firm"}
+	// kind is what the store resolved for an absent kind, not an input echo.
+	want := map[string]any{"tenant_id": r.tenantID, "user_id": r.id.Subject, "name": in.WorkspaceName, "kind": "in_house"}
 	if !reflect.DeepEqual(e.Payload, want) {
 		t.Errorf("payload = %v, want exactly %v", e.Payload, want)
 	}

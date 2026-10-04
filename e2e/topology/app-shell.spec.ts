@@ -65,6 +65,31 @@ async function settle(page: Page, ...targets: Locator[]): Promise<void> {
   await settleAnimations(...targets)
 }
 
+// Counts in-flight /api/ requests. `quiet` waits until none has been in flight for 300 ms, then until no
+// loading text or audit skeleton row is left; it fails with a named message on timeout.
+function trackApi(page: Page): { quiet: (where: string) => Promise<void> } {
+  const inflight = new Set<unknown>()
+  const isApi = (url: string) => new URL(url).pathname.includes('/api/')
+  page.on('request', (r) => { if (isApi(r.url())) inflight.add(r) })
+  const done = (r: { url(): string }) => inflight.delete(r)
+  page.on('requestfinished', done)
+  page.on('requestfailed', done)
+  return {
+    quiet: async (where) => {
+      const deadline = Date.now() + 15_000
+      let idleSince = Date.now()
+      while (Date.now() - idleSince < 300) {
+        if (Date.now() > deadline) throw new Error(`${where}: /api/ requests still in flight after 15s (${inflight.size})`)
+        if (inflight.size > 0) idleSince = Date.now()
+        await page.waitForTimeout(50)
+      }
+      const main = page.locator('main.pf-main')
+      await expect(main.getByText(/^Loading .+…$/), `${where}: a loading label never went away`).toHaveCount(0, { timeout: 15_000 })
+      await expect(main.getByTestId('audit-skeleton-row'), `${where}: audit skeleton rows never went away`).toHaveCount(0, { timeout: 15_000 })
+    },
+  }
+}
+
 // Computed values of one element, by CSS property name, in one evaluate.
 function styles(loc: Locator, props: string[]): Promise<Record<string, string>> {
   return loc.evaluate((el, props) => {
@@ -387,6 +412,7 @@ function sweepScreen(page: Page, plant: boolean): Promise<Sweep> {
 test('AS-06 every nav destination of both modes: no sideways scroll, no unresolved var(), v2 corners', async ({ page }, testInfo) => {
   test.setTimeout(300_000)
   const errors = collectErrors(page)
+  const api = trackApi(page)
   const report: Record<string, unknown>[] = []
   let chipTotal = 0
 
@@ -399,8 +425,12 @@ test('AS-06 every nav destination of both modes: no sideways scroll, no unresolv
       for (let i = 0; i < count; i++) {
         const label = ((await nav.nth(i).innerText()) ?? '').replace(/\d+$/, '').trim()
         await openNav(page, nav.nth(i))
-        await settle(page, page.locator('main.pf-main .pf-scroll'))
         const where = `${persona} / ${label}`
+        await api.quiet(where)
+        if (persona === 'firm' && /^Invoices/.test(label)) {
+          await expect(page.getByTestId('invoices-pager'), `${where}: the pager must be on screen before the sweep, or the sweep runs on a skeleton`).toBeVisible()
+        }
+        await settle(page, page.locator('main.pf-main .pf-scroll'))
         const scroll = await assertPageDoesNotScrollSideways(page, where)
 
         if (i === 0) {

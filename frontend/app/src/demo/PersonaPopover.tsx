@@ -33,6 +33,7 @@ export function PersonaPopover({
   return (
     <div
       data-testid="persona-popover"
+      className="asc-light"
       style={{
         position: 'absolute',
         bottom: 'calc(100% + 6px)',
@@ -42,7 +43,7 @@ export function PersonaPopover({
         background: 'var(--bg-2)',
         border: '1px solid var(--status-amber-border)',
         borderRadius: 'var(--radius-md)',
-        boxShadow: '0 -16px 40px -16px oklch(20% .02 210 / 0.28)',
+        boxShadow: 'var(--shadow-card)',
         overflow: 'hidden',
         animation: 'popIn 140ms ease-out',
       }}
@@ -106,7 +107,7 @@ export function PersonaPopover({
                     flex: 'none',
                     width: 26,
                     height: 26,
-                    borderRadius: 99,
+                    borderRadius: '50%',
                     display: 'grid',
                     placeItems: 'center',
                     fontSize: 10,
@@ -188,15 +189,18 @@ export function PersonaPopover({
         <button
           type="button"
           data-testid="persona-return-row"
+          className="pf-menu-item"
           onClick={onReturn}
           style={{
             width: '100%',
-            display: 'block',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
             textAlign: 'left',
             border: 0,
             borderTop: '1px solid var(--line-1)',
-            background: 'transparent',
-            padding: '10px 12px',
+            background: 'var(--bg-2)',
+            padding: '9px 12px',
             cursor: 'pointer',
             fontFamily: 'var(--font-sans)',
             fontSize: 12,

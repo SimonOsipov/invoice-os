@@ -143,8 +143,8 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
                     <span className="money" style={{ fontSize: 13, textAlign: 'right', fontWeight: 600 }}>{fmt(it.qty * it.price)}</span>
                     {/* No visible text, so it carries an aria-label — otherwise the row's only
                         destructive control is nameless to a screen reader and to Playwright.
-                        Rendered round by .pf-btn's own `border-radius: var(--radius-pill)
-                        !important`, so no radius is set here; an inline one would never apply. */}
+                        `.pf-btn` forces `border-radius` with `!important`, so no radius is set
+                        here; an inline one would never apply. */}
                     <button
                       onClick={() => ctx.removeItem(i)}
                       disabled={!canRemoveLine}

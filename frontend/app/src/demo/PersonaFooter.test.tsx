@@ -124,7 +124,83 @@ describe('PersonaFooter (flag on)', () => {
 
     const trigger = screen.getByTestId('persona-trigger')
     expect(trigger.className).not.toMatch(/\bpf-btn\b/)
-    expect(trigger.style.borderRadius).toBe('var(--radius-sm)')
+    expect(trigger.style.borderRadius).toBe('var(--radius-btn)')
+  })
+
+  // DM-01 (AC 6). A button with no colour reads the UA buttontext, dark on the dark aside.
+  it('DM-01 the trigger is a 7px button with its own text colour', async () => {
+    await renderDemoSidebar(demoCtx())
+
+    const trigger = screen.getByTestId('persona-trigger')
+    expect(trigger.style.borderRadius).toBe('var(--radius-btn)')
+    expect(trigger.style.color).toBe('var(--fg-1)')
+  })
+
+  // DM-02 (AC 6, Q3). The closed footer is the floor; the open popover with a blocked row is the
+  // control that the needle sees a real --fg-4 (blocked rows keep it, D-3).
+  it('DM-02 no enabled footer text on --fg-4', async () => {
+    const footerOf = () => {
+      const row = screen.getByText('DEMO BUILD').parentElement!
+      const footer = row.parentElement!
+      expect(footer.contains(screen.getByTestId('persona-trigger'))).toBe(true)
+      return footer
+    }
+
+    await renderDemoSidebar(demoCtx())
+    const verifiedLabel = screen.getByText('OKAFOR & PARTNERS').closest('span.mono') as HTMLElement
+    expect(verifiedLabel.style.color).toBe('var(--fg-3)')
+    expect(footerOf().outerHTML).not.toContain('--fg-4')
+    expect(footerOf().outerHTML).not.toContain('oklch')
+
+    await renderDemoSidebar(
+      demoCtx({ user: { name: SEAT.name, initials: SEAT.initials, verified: false, tenantName: null } }),
+    )
+    const orgLabel = screen.getByText('ACME · FINANCE').closest('span.mono') as HTMLElement
+    expect(orgLabel.style.color).toBe('var(--fg-3)')
+    expect(footerOf().outerHTML).not.toContain('--fg-4')
+    expect(footerOf().outerHTML).not.toContain('oklch')
+
+    const HALIMA: Member = { ...MUSA, id: 'm-halima-001', name: 'Halima Yusuf', initials: 'HY', status: 'suspended', isYou: false }
+    await renderDemoSidebar(demoCtx({ members: [SEAT, HALIMA] }))
+    fireEvent.click(screen.getByTestId('persona-trigger'))
+    expect(screen.getAllByTestId('persona-row').length).toBe(2)
+    expect(footerOf().outerHTML).toContain('--fg-4')
+    expect(footerOf().outerHTML).not.toContain('oklch')
+
+    // Busy: the spinner and the amber trigger border render only here.
+    const gate = deferred<void>()
+    await renderDemoSidebar(demoCtx({ becomePersona: vi.fn(() => gate.promise), members: [SEAT, MUSA] }))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('persona-trigger'))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByText(MUSA.name).closest('button')!)
+    })
+    expect(screen.getByTestId('persona-spinner')).not.toBeNull()
+    expect(footerOf().outerHTML).not.toContain('--fg-4')
+    expect(footerOf().outerHTML).not.toContain('oklch')
+  })
+
+  // DM-03 (AC 9). 5px and 16px boxes: only the 50% string tells a circle from a 99px pill.
+  it('DM-03 spinner, initials and dots are circles', async () => {
+    await renderDemoSidebar(demoCtx())
+    expect(screen.getByTestId('persona-initials').style.borderRadius).toBe('50%')
+    expect(screen.getByTestId('persona-dot').style.borderRadius).toBe('50%')
+    const verifiedDot = document.querySelector<HTMLElement>('aside.pf-sidebar [title="Tenant verified via /v1/me"]')!
+    expect(verifiedDot.style.borderRadius).toBe('50%')
+
+    const gate = deferred<void>()
+    const becomePersona = vi.fn(() => gate.promise)
+    await renderDemoSidebar(demoCtx({ becomePersona, members: [SEAT, MUSA], view: 'invoices' }))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('persona-trigger'))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByText(MUSA.name).closest('button')!)
+    })
+    expect(screen.getByTestId('persona-spinner').style.borderRadius).toBe('50%')
+    expect(screen.getByTestId('persona-initials').style.borderRadius).toBe('50%')
+    expect(screen.getByTestId('persona-dot').style.borderRadius).toBe('50%')
   })
 
   it('the verified marker survives the flag-on footer', async () => {
@@ -192,7 +268,9 @@ describe('PersonaFooter (flag on)', () => {
     await renderDemoSidebar(ctx)
 
     const btn = screen.getByRole('button', { name: 'Sign out' })
-    expect(btn.className).toBe('pf-btn pf-signout')
+    expect(btn.className).toBe('pf-signout')
+    // The icon button is 4px; the 7px text button is the suspended card's.
+    expect(btn.style.borderRadius).toBe('var(--radius-sm)')
     expect(btn.getAttribute('title')).toBe('Sign out')
     btn.click()
     expect(ctx.signOut).toHaveBeenCalledTimes(1)
@@ -307,7 +385,7 @@ describe('PersonaFooter -- the switch (DEMO-06-05)', () => {
     expect(spinner.style.animation).toContain('spin')
     expect(spinner.style.width).toBe('16px')
     expect(spinner.style.height).toBe('16px')
-    expect(spinner.style.borderRadius).toBe('99px')
+    expect(spinner.style.borderRadius).toBe('50%')
 
     expect(screen.getByTestId('persona-name').textContent).toBe(BUSY_NAME.replace('{first name}', 'Musa'))
     expect(screen.getByTestId('persona-role').textContent).toBe(TRIGGER_BUSY_ROLE)

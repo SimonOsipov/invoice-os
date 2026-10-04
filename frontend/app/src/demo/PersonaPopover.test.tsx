@@ -39,6 +39,7 @@ type PopoverProps = {
   membersError: ApiError | null
   seatSubject: string | undefined
   standingIn: boolean
+  rowError?: { memberId: string; message: string } | null
   onSelect: (member: Member) => void
   onReturn: () => void
 }
@@ -124,7 +125,7 @@ describe('PersonaPopover', () => {
   })
 
   // Row 9 (AC-9). The design's --accent resolves to teal under the prototype's own sheet
-  // (app-layer.css:10) -- var(--action) is the faithful reproduction, not a substitution.
+  // (app-layer.css) -- var(--action) is the faithful reproduction, not a substitution.
   it("the current row's tick uses var(--action)", () => {
     renderPopover({ members: FIRM_ROSTER, seatSubject: SEAT.id })
     const rows = screen.getAllByTestId('persona-row')
@@ -227,5 +228,96 @@ describe('PersonaPopover', () => {
     expect(returnRow.textContent).toContain(SEAT.name)
     fireEvent.click(returnRow)
     expect(onReturn).toHaveBeenCalledTimes(1)
+  })
+
+  // The prototype's personaReset button: menu-item class (hover rule), --bg-2 fill, the row padding.
+  it('QA-06 the return row is a menu item on --bg-2 with the 9px 12px padding', () => {
+    renderPopover({ members: FIRM_ROSTER, standingIn: true })
+    const row = screen.getByTestId('persona-return-row')
+    expect(row.tagName).toBe('BUTTON')
+    expect([...row.classList]).toEqual(['pf-menu-item'])
+    expect(row.style.background).toBe('var(--bg-2)')
+    expect(row.style.padding).toBe('9px 12px')
+    expect(row.style.display).toBe('flex')
+    expect(row.style.alignItems).toBe('center')
+    expect(row.style.gap).toBe('8px')
+  })
+
+  // DM-04 (AC 6). Inside the dark aside the tokens re-point at the dark band; asc-light puts the
+  // light vocabulary back. The class is the only handle jsdom has -- the resolved white is
+  // read on the deployed build (AS-10).
+  it('DM-04 the popover is light and floats on shadow-card', () => {
+    const { container } = renderPopover({ members: FIRM_ROSTER })
+    const pop = screen.getByTestId('persona-popover')
+    expect(pop.classList.contains('asc-light')).toBe(true)
+    expect(pop.style.boxShadow).toBe('var(--shadow-card)')
+    expect(pop.style.borderRadius).toBe('var(--radius-md)')
+    expect(container.innerHTML).not.toContain('oklch')
+
+    const rows = screen.getAllByTestId('persona-row')
+    expect(rows.length).toBe(FIRM_ROSTER.length)
+    rows.forEach((row, i) => {
+      expect(within(row).getByText(FIRM_ROSTER[i].initials).style.borderRadius).toBe('50%')
+    })
+  })
+
+  // DM-05 (pin, green at write). Blocked rows keep --fg-4 (D-3, Q3); enabled rows read.
+  it('DM-05 blocked rows stay muted, enabled rows read (boundary)', () => {
+    renderPopover({ members: [FOLAKE, HALIMA] })
+    const rows = screen.getAllByTestId('persona-row')
+    expect(rows.length).toBe(2)
+    const active = rows.find((r) => r.tagName === 'BUTTON')!
+    const blocked = rows.find((r) => r.tagName === 'DIV')!
+    expect(active).not.toBeUndefined()
+    expect(blocked).not.toBeUndefined()
+
+    expect(within(active).getByTestId('persona-row-name').style.color).toBe('var(--fg-1)')
+    expect(within(active).getByTestId('persona-row-meta').style.color).toBe('var(--fg-3)')
+    expect(within(blocked).getByTestId('persona-row-name').style.color).toBe('var(--fg-4)')
+    expect(within(blocked).getByText(HALIMA.initials).style.color).toBe('var(--fg-4)')
+  })
+  // Q3 / D-3. Every --fg-4 sits on a blocked row; the other surfaces, the return row and the row
+  // error hold none. Floor: the blocked rows must supply a real --fg-4 for the scan to mean anything.
+  it('QA-06 --fg-4 appears only on blocked rows, and no surface holds oklch', () => {
+    const INVITED = member({ id: 'm-invited', name: 'Ife Invited', initials: 'II', role: 'preparer', status: 'invited', isYou: false })
+    const { container, unmount } = renderPopover({
+      members: [FOLAKE, HALIMA, INVITED],
+      seatSubject: FOLAKE.id,
+      standingIn: true,
+      rowError: { memberId: FOLAKE.id, message: 'boom' },
+    })
+    const rows = screen.getAllByTestId('persona-row')
+    expect(rows.length).toBe(3)
+    const fg4Of = (root: Element) => [root, ...Array.from(root.querySelectorAll<HTMLElement>('*'))].filter((e) => (e as HTMLElement).style.color === 'var(--fg-4)')
+    const enabled = rows.filter((r) => r.tagName === 'BUTTON')
+    const blocked = rows.filter((r) => r.tagName === 'DIV')
+    expect(enabled.length).toBe(1)
+    expect(blocked.length).toBe(2)
+    enabled.forEach((r) => expect(fg4Of(r).length).toBe(0))
+    // initials, name, lock on each blocked row; the invited row's meta is a fourth.
+    expect(fg4Of(blocked[0]).length).toBe(3)
+    expect(fg4Of(blocked[1]).length).toBe(4)
+    expect(within(blocked[1]).getByTestId('persona-row-meta').style.color).toBe('var(--fg-4)')
+    expect(within(blocked[0]).getByTestId('persona-row-meta').style.color).toBe('var(--status-red-text)')
+    expect(within(blocked[0]).getByTestId('persona-row-reason').style.color).toBe('var(--fg-3)')
+    expect(within(blocked[0]).getByTestId('persona-row-lock').style.color).toBe('var(--fg-4)')
+    expect(within(enabled[0]).queryByTestId('persona-row-lock')).toBeNull()
+    expect(fg4Of(screen.getByTestId('persona-return-row')).length).toBe(0)
+    expect(within(enabled[0]).getByTestId('persona-row-error').style.color).toBe('var(--status-red-text)')
+    expect(container.innerHTML).not.toContain('oklch')
+    unmount()
+
+    for (const [membersState, membersError] of [
+      ['loading', null],
+      ['error', new ApiError('http', 'boom', 503)],
+      ['empty', null],
+    ] as const) {
+      const r = renderPopover({ members: membersState === 'empty' ? [] : FIRM_ROSTER, membersState, membersError })
+      const surface = r.container.querySelector('[data-testid^="persona-surface-"]')
+      expect(surface, membersState).not.toBeNull()
+      expect(surface!.outerHTML).not.toContain('--fg-4')
+      expect(r.container.innerHTML).not.toContain('oklch')
+      r.unmount()
+    }
   })
 })

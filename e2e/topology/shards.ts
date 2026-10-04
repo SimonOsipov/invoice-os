@@ -15,6 +15,7 @@ export const UNITS: Unit[] = [
   {
     name: 'serial-lane',
     specs: [
+      'app-shell.spec.ts',
       'audit.spec.ts',
       'auth.spec.ts',
       'demo-persona.spec.ts',
@@ -27,6 +28,8 @@ export const UNITS: Unit[] = [
       'workflows.spec.ts',
     ],
     reasons: {
+      'app-shell.spec.ts':
+        'Cost, not shared state ([fork-lane-by-cost]): signs in the seeded firm and in-house personas and stands the firm seat in for a seeded member; writes no tenant data.',
       'audit.spec.ts':
         'Reads both persona tenants\' audit trails, which need rows the seed and the earlier suites wrote ("the seed alone writes audit rows"; the pager needs more than one page).',
       'auth.spec.ts':

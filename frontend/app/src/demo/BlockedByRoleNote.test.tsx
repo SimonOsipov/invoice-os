@@ -39,4 +39,20 @@ describe('BlockedByRoleNote (task-594, DEMO-06-06)', () => {
     // {role} replace would leave the literal token, caught by the assertions above.
     expect(text).toContain(accessRoleLabel('preparer'))
   })
+
+  // DM-08. The corner is red at write; the lock glyph and text colours are pins (Q3: the icon
+  // keeps --fg-4, the sentence is enabled text on --fg-3).
+  it('DM-08 the blocked note is a 6px panel', () => {
+    render(<BlockedByRoleNote member={FOLAKE} />)
+
+    const note = screen.getByTestId('persona-blocked-note')
+    const [glyph, text] = Array.from(note.children) as HTMLElement[]
+    expect(glyph).not.toBeUndefined()
+    expect(text).not.toBeUndefined()
+    expect(text.textContent).toContain('Folake Adesina')
+    expect(glyph.style.color).toBe('var(--fg-4)')
+    expect(text.style.color).toBe('var(--fg-3)')
+    expect(note.style.borderRadius).toBe('var(--radius-md)')
+    expect(note.outerHTML).not.toContain('oklch')
+  })
 })

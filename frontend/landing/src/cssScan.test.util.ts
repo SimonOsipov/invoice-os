@@ -2,7 +2,7 @@
 // The `.test.` in the name keeps this file out of every build-input scan.
 /// <reference types="node" />
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { stripComments } from '@invoice-os/api-client/strip-comments'
 
@@ -234,11 +234,12 @@ export function scanBuildInput(files: Readonly<Record<string, string>>, needles:
   return hits
 }
 
-/** Every v2 stylesheet, comment-stripped, keyed relative to the v2 dir. */
+/** Every v2 stylesheet the landing loads (the relative `@import`s of `v2/styles.css`), comment-stripped, keyed relative to the v2 dir. */
 export function readV2Css(): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const f of readdirSync(V2_DIR, { recursive: true, encoding: 'utf8' })) {
-    if (f.endsWith('.css')) out[f.split('\\').join('/')] = stripSource(f, readFileSync(join(V2_DIR, f), 'utf8'))
+  const out: Record<string, string> = { 'styles.css': stripSource('styles.css', readFileSync(join(V2_DIR, 'styles.css'), 'utf8')) }
+  for (const m of out['styles.css'].matchAll(/@import\s+url\(\s*['"]?(\.?\/?[^'")]+\.css)['"]?\s*\)/g)) {
+    const key = normalize(m[1]).split('\\').join('/')
+    out[key] = stripSource(key, readFileSync(join(V2_DIR, key), 'utf8'))
   }
   return out
 }

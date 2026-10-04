@@ -77,14 +77,14 @@ export function PersonaFooter({ ctx, orgLabel, signOutButton }: { ctx: PlatformC
             fontSize: 9,
             fontWeight: 500,
             letterSpacing: '0.06em',
-            color: 'var(--fg-4)',
+            color: 'var(--fg-3)',
             whiteSpace: 'nowrap',
             overflow: 'hidden',
           }}
         >
           {user.verified && user.tenantName ? (
             <>
-              <span style={{ flex: 'none', width: 5, height: 5, borderRadius: 99, background: 'var(--status-green-text)' }} title="Tenant verified via /v1/me" />
+              <span style={{ flex: 'none', width: 5, height: 5, borderRadius: '50%', background: 'var(--status-green-text)' }} title="Tenant verified via /v1/me" />
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.tenantName.toUpperCase()}</span>
             </>
           ) : (
@@ -108,7 +108,8 @@ export function PersonaFooter({ ctx, orgLabel, signOutButton }: { ctx: PlatformC
               gap: 10,
               background: 'var(--bg-1)',
               border: `1px dashed ${open || busy != null ? 'var(--status-amber-text)' : 'var(--status-amber-border)'}`,
-              borderRadius: 'var(--radius-sm)',
+              borderRadius: 'var(--radius-btn)',
+              color: 'var(--fg-1)',
               padding: '6px 8px',
               cursor: 'pointer',
               textAlign: 'left',
@@ -121,7 +122,7 @@ export function PersonaFooter({ ctx, orgLabel, signOutButton }: { ctx: PlatformC
                 flex: 'none',
                 width: 30,
                 height: 30,
-                borderRadius: 99,
+                borderRadius: '50%',
                 background: busy != null ? 'transparent' : 'var(--slate-800)',
                 color: 'var(--text-on-dark)',
                 display: 'grid',
@@ -136,7 +137,7 @@ export function PersonaFooter({ ctx, orgLabel, signOutButton }: { ctx: PlatformC
                   style={{
                     width: 16,
                     height: 16,
-                    borderRadius: 99,
+                    borderRadius: '50%',
                     border: '2px solid var(--status-amber-border)',
                     borderTopColor: 'var(--status-amber-text)',
                     animation: 'spin 700ms linear infinite',
@@ -156,7 +157,7 @@ export function PersonaFooter({ ctx, orgLabel, signOutButton }: { ctx: PlatformC
               <span className="mono" style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: 'var(--fg-3)', marginTop: 1 }}>
                 <span
                   data-testid="persona-dot"
-                  style={{ flex: 'none', width: 5, height: 5, borderRadius: 99, background: busy != null || standingIn ? 'var(--status-amber-text)' : 'var(--status-green-text)' }}
+                  style={{ flex: 'none', width: 5, height: 5, borderRadius: '50%', background: busy != null || standingIn ? 'var(--status-amber-text)' : 'var(--status-green-text)' }}
                 />
                 <span data-testid="persona-role">{busy != null ? TRIGGER_BUSY_ROLE : current ? accessRoleLabel(current.role).toUpperCase() : '—'}</span>
               </span>

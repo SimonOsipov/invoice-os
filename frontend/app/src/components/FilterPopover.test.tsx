@@ -50,6 +50,17 @@ describe('FilterPopover', () => {
     expect(src, 'no background-image chevron').not.toMatch(/background-image/)
   })
 
+  it('PR-02 the filter panel floats on shadow-card', () => {
+    const { container } = renderPopover(true)
+    const panel = screen.getByTestId('fp-panel')
+
+    expect(panel.style.minWidth, 'control: the panel style is read').toBe('240px')
+    expect(panel.style.boxShadow).toBe('var(--shadow-card)')
+    expect(panel.style.borderRadius).toBe('var(--radius-md)')
+    expect(screen.getByTestId('fp-trigger').classList.contains('pf-btn')).toBe(true)
+    expect(container.innerHTML).not.toContain('oklch')
+  })
+
   it('filterPopover_escapeCloses', () => {
     const { onClose } = renderPopover(true)
     fireEvent.keyDown(window, { key: 'Escape' })

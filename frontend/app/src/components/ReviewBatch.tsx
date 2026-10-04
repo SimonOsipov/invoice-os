@@ -395,7 +395,7 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
       {files.length > 1 && <FilesStripView files={files} />}
 
       {/* §7.2 tabs. SettingsView.tsx's precedent: .pf-tab, NOT .pf-btn — the button
-          classes force a full pill radius, which bends this 2px underline into an arc.
+          classes force `border-radius` with `!important`.
           The second tab is absent from `tabs` entirely at zero, never hidden with CSS. */}
       <div style={{ display: 'flex', gap: 26, borderBottom: '1px solid var(--line-1)' }}>
         {tabs.map((t) => {

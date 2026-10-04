@@ -139,7 +139,7 @@ const TONE: Record<StripState, { bg: string; border: string; text: string }> = {
 }
 
 const TOKENS_CSS = readFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), '../../../../packages/design-tokens/app-layer.css'),
+  join(dirname(fileURLToPath(import.meta.url)), '../../../../packages/design-tokens/v2/app-layer.css'),
   'utf8',
 )
 
@@ -307,14 +307,14 @@ describe('StatusStrip: the rail and the step blocks (inline style props, not geo
 })
 
 describe('StatusStrip: tone', () => {
-  it('every --status-* token the tone map names is defined in app-layer.css', () => {
+  it('every --status-* token the tone map names is defined in the v2 app layer', () => {
     // Non-vacuity guard for the tone assertions: a typo'd custom property renders as
     // nothing in a browser and still matches a string comparison.
     const names = Object.values(TONE).flatMap((t) => [t.bg, t.border, t.text])
     expect(names).toHaveLength(15)
     for (const v of names) {
       expect(v).toMatch(/^var\(--status-[a-z-]+\)$/)
-      expect(TOKENS_CSS, `${v} is a real token`).toContain(`${v.slice(4, -1)}:`)
+      expect(TOKENS_CSS.replace(/\/\*[\s\S]*?\*\//g, ''), `${v} is a real token`).toContain(`${v.slice(4, -1)}:`)
     }
   })
 

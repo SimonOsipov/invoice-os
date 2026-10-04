@@ -145,7 +145,7 @@ const MARKER: CSSProperties = {
 const INPUT: CSSProperties = { paddingRight: 30 }
 const LOCKED_INPUT: CSSProperties = { ...INPUT, color: 'var(--fg-3)' }
 
-// `:312-320`. `.pf-chip` is barred here: app-layer.css:275 forces `border-radius: pill` over the
+// `:312-320`. `.pf-chip` is barred here: it forces `border-radius` over the
 // artboard's 10px card, and the pane's own walk forbids the class for that reason.
 const CHIP_ROW: CSSProperties = { display: 'flex', gap: 8 }
 
@@ -201,7 +201,7 @@ const UNDO_BUTTON: CSSProperties = {
   transition: 'background 120ms ease-out',
 }
 
-// `:324`, without `.pf-btn` (it forces a pill radius over the artboard's 10px card) and without
+// `:324`, without `.pf-btn` (it forces its radius over the artboard's 10px card) and without
 // its `width: 100%` (the cell is a flex column, so the button already stretches).
 // The 1.5px is the artboard's, and load-bearing: `moves the border, the ground and the label
 // together when it arms` pins both dashes, so rounding it to 1px reds.

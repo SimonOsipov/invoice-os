@@ -126,7 +126,7 @@ describe('AuditRow evidence affordance', () => {
 
 describe('AuditRow degrades by scrolling, not by collapsing', () => {
   it('auditRow_takesNoClassThatCollapsesTheGrid', () => {
-    // platform.css:306-319 forces `grid-template-columns: minmax(0,1fr) !important` on
+    // platform.css forces `grid-template-columns: minmax(0,1fr) !important` on
     // .pf-list-row and .pf-list-head at <=480px. On a min-width table that produces a
     // single 868px column, not a narrow table -- the opposite of the Core AC, which says
     // this table degrades by SCROLLING. MembersTable.tsx avoids both classes for exactly

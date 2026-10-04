@@ -1,8 +1,5 @@
-/* Local page styles — ported verbatim from the ASComply Africa Platform
-   prototype's inline <style> block (reset + keyframes + hover/focus/active
-   transitions), plus a responsive media-query layer for the app shell.
-   Token vars (--action, --bg-2, --line-2, …) resolve via inheritance from .asc-app;
-   --accent is the design system's amber and resolves from :root. */
+/* Local page styles for the v2 app layer: reset, keyframes, hover/focus transitions and the
+   responsive shell. Token vars resolve from .asc-app; focus rings use --ring. */
 
 * {
   box-sizing: border-box;
@@ -91,7 +88,7 @@ body {
   transition: border-color 120ms, box-shadow 120ms;
 }
 .pf-input:focus {
-  border-color: var(--accent);
+  border-color: var(--ring);
   box-shadow: 0 0 0 2px var(--ring);
 }
 .pf-num {
@@ -108,7 +105,7 @@ body {
   text-align: right;
 }
 .pf-num:focus {
-  border-color: var(--accent);
+  border-color: var(--ring);
   box-shadow: 0 0 0 2px var(--ring);
 }
 /* Keyboard-focus ring for StatusStrip's horizontal scroll wrapper, the class's only
@@ -121,7 +118,7 @@ body {
   box-shadow: 0 0 0 2px var(--ring);
 }
 /* The invite modal's email chip box is a bordered <div> wrapping a bare <input>,
-   so app-layer.css:236's `.asc-app input:focus` rang the INNER input — a second
+   so app-layer.css's `.asc-app input:focus` rang the INNER input — a second
    rounded rectangle 9px inside the box. Moved onto the box, which makes it ring
    as one field, like `WfAmountInput`. `.asc-app`-scoped unlike the rest of this
    file because the specificity IS the mechanism: the suppressor's (0,3,1) beats
@@ -130,7 +127,7 @@ body {
    reason it exists there — beating the box's inline `border` shorthand. Nothing
    competes for the box-shadow, so it stays a normal declaration. */
 .asc-app .pf-chipbox:focus-within {
-  border-color: var(--accent) !important;
+  border-color: var(--ring) !important;
   box-shadow: 0 0 0 2px var(--ring);
 }
 .asc-app .pf-chipbox input:focus {
@@ -143,10 +140,12 @@ body {
 }
 .pf-signout {
   color: var(--fg-3);
+  background: transparent;
   transition: color 120ms ease-out;
 }
 .pf-signout:hover {
   color: var(--fg-1);
+  background: var(--bg-3);
 }
 .pf-chip {
   transition: background 120ms, border-color 120ms, color 120ms;

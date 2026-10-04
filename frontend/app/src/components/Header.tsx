@@ -1,8 +1,5 @@
-// Top header bar — breadcrumb, search box (static), env switch, "New invoice" CTA.
-// Ported from Platform.dc.html ~L121-137, except the env control: that is the
-// two-segment SANDBOX|LIVE switch from the ops console (ops-console TopBar.tsx),
-// deliberately adopted here in place of the prototype's single toggling pill so
-// both consoles state the environment the same way.
+// Top header bar: crumb, invoice search, Sandbox/Live switch, "New invoice" CTA.
+// The switch is the ops-console two-segment control, not the prototype's single pill.
 
 import { useEffect, useState } from 'react'
 
@@ -26,14 +23,13 @@ const CRUMB_MAP: Record<View, string> = {
   extraction: 'Extraction review',
 }
 
-// Segment colours mirror ops-console TopBar.tsx: the active segment is filled with
-// its status colour and its dot flips to the on-dark text colour; the inactive one
-// stays transparent and keeps a tinted dot.
+// Active segment is filled primary; the environment colour lives only on the dot
+// and the track border.
 function segStyle(active: boolean, kind: 'sandbox' | 'live') {
   return {
-    bg: active ? (kind === 'live' ? 'var(--status-green-text)' : 'var(--status-amber-text)') : 'transparent',
-    color: active ? 'var(--text-on-dark)' : 'var(--fg-3)',
-    dot: active ? 'var(--text-on-dark)' : kind === 'live' ? 'var(--status-green-text)' : 'var(--status-amber-text)',
+    bg: active ? 'var(--primary)' : 'transparent',
+    color: active ? 'var(--primary-foreground)' : 'var(--fg-3)',
+    dot: active ? 'var(--accent)' : kind === 'live' ? 'var(--status-green-text)' : 'var(--status-amber-text)',
   }
 }
 
@@ -42,7 +38,7 @@ const SEG_BASE = {
   cursor: 'pointer',
   height: 28,
   padding: '0 12px',
-  borderRadius: 'var(--radius-input)',
+  borderRadius: 'var(--radius-sm)',
   fontFamily: 'var(--font-mono)',
   fontSize: 10,
   fontWeight: 700,
@@ -62,7 +58,7 @@ export function Header({ ctx }: { ctx: PlatformCtx }) {
   useEffect(() => setQuery(ctx.invoiceQuery), [ctx.invoiceQuery])
 
   return (
-    <header style={{ flex: 'none', height: 56, borderBottom: '1px solid var(--line-1)', background: 'oklch(98.5% .008 85 / .82)', backdropFilter: 'blur(12px)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px' }}>
+    <header style={{ flex: 'none', height: 56, borderBottom: '1px solid var(--line-1)', background: 'var(--header-bg)', backdropFilter: 'blur(var(--header-blur))', WebkitBackdropFilter: 'blur(var(--header-blur))', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
           {active.initials}
@@ -104,17 +100,16 @@ export function Header({ ctx }: { ctx: PlatformCtx }) {
             </button>
           )}
         </form>
-        {/* Sandbox / Live switch — segment heights (28 + 2px padding + 1px border = 34)
-            keep the control flush with the search box and "New invoice" beside it. */}
-        <div data-testid="env-pill" style={{ display: 'flex', alignItems: 'center', background: 'var(--bg-2)', border: `1px solid ${sandbox ? 'var(--status-amber-border)' : 'var(--status-green-border)'}`, borderRadius: 'var(--radius-md)', padding: 2 }}>
+        {/* Sandbox / Live switch: 28px segments + 3px padding + 1px border = 36px, centred
+            against the 34px search box and "New invoice". */}
+        <div data-testid="env-pill" style={{ display: 'flex', alignItems: 'center', background: 'var(--sage)', border: `1px solid ${sandbox ? 'var(--status-amber-border)' : 'var(--status-green-border)'}`, borderRadius: 'var(--radius-btn)', padding: 3, gap: 2 }}>
           <button
             type="button"
             onClick={() => ctx.setSandbox(true)}
             aria-pressed={sandbox}
-            className="pf-btn"
             style={{ ...SEG_BASE, background: sbx.bg, color: sbx.color }}
           >
-            <span style={{ width: 6, height: 6, borderRadius: 99, background: sbx.dot }} />
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: sbx.dot }} />
             SANDBOX
           </button>
           {/* Disabled, not hidden — InvoiceDetail.tsx:406-444's idiom, with the banner
@@ -127,10 +122,9 @@ export function Header({ ctx }: { ctx: PlatformCtx }) {
             disabled
             aria-pressed={!sandbox}
             title="Live filing switches on at NRS accreditation."
-            className="pf-btn"
             style={{ ...SEG_BASE, background: 'transparent', color: 'var(--fg-4)', cursor: 'not-allowed' }}
           >
-            <span style={{ width: 6, height: 6, borderRadius: 99, background: 'var(--fg-4)' }} />
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--fg-4)' }} />
             LIVE
           </button>
         </div>

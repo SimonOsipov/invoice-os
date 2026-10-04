@@ -59,7 +59,7 @@ const PAGE_FAILED = 'This page could not be loaded.'
 const ERROR_STATE_HEADING = 'Something went wrong'
 
 // SourceDocumentPages.test.tsx:31's list, verbatim: both classes force `border-radius`
-// with `!important`, from two different rules (app-layer.css:193-197 and :275).
+// with `!important`, from two different rules.
 const RADIUS_FORCING = ['pf-btn', 'pf-chip', 'v2-btn', 'ops-btn', 'dev-btn', 'ops-chip', 'dev-chip']
 
 const LETTER: ExtractionPage = { page: 1, width_px: 1275, height_px: 1651 } // US-Letter @150

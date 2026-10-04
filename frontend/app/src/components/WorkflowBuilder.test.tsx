@@ -832,10 +832,10 @@ describe('APPR-10-04 AC-4: one reason node, two aria-describedby pointers', () =
 describe('APPR-10-04 AC-5: both shut controls carry the muted paint', () => {
   // P5 — no `:disabled` rule exists anywhere in this repo, so the inline paint is mandatory
   // rather than stylistic. The PROPERTY NAME differs per control and one shared assertion would
-  // pin the wrong name on one of them: app-layer.css:224-232 forbids the `background` shorthand
-  // on `.pf-select`, whose own resting style sets `backgroundColor` (WorkflowParts.tsx:235),
+  // pin the wrong name on one of them: `.pf-select`'s own resting style sets
+  // `backgroundColor` (WorkflowParts.tsx),
   // while `WfToggle`'s resting style sets the shorthand (:305). Both are INLINE — the
-  // `.pf-toggle` class sets only a transition (platform.css:169-171). Measured in jsdom: a
+  // `.pf-toggle` class sets only a transition (platform.css). Measured in jsdom: a
   // select's `style.background` reads '' and a toggle's `style.backgroundColor` reads ''.
   it('the select paints backgroundColor, the toggle paints background, and both mute the rest', () => {
     render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
@@ -849,8 +849,8 @@ describe('APPR-10-04 AC-5: both shut controls carry the muted paint', () => {
     for (const [what, el] of delegationControls()) {
       expect(el.style.color, `${what} keeps its live foreground`).toBe('var(--fg-4)')
       expect(el.style.cursor, `${what} still invites a click`).toBe('not-allowed')
-      // NO `filter: 'none'` (R13). The unguarded `filter: brightness(1.22)` at
-      // app-layer.css:213 targets `.v2-btn-primary` alone; `.pf-toggle` and `.pf-select` carry
+      // NO `filter: 'none'` (R13). The unguarded `filter: brightness(1.22)` in
+      // app-layer.css targets `.v2-btn-primary` alone; `.pf-toggle` and `.pf-select` carry
       // no `:hover` rule at all, so neutralising a filter here would state a hazard that does
       // not exist. Pinned rather than left silent — InvoiceDetail.test.tsx:2071-2084's shape.
       expect(el.style.filter, `${what} neutralises a filter no rule applies to it`).toBe('')
@@ -949,6 +949,9 @@ describe('APPR-10-04 QA (R15): the disabled paint is CONDITIONAL', () => {
     expect(sel.style.color, 'an enabled WfSelect lost its resting foreground').toBe('var(--fg-1)')
     expect(tog.style.background, 'an enabled WfToggle lost its resting background').toBe('var(--line-3)')
     expect(tog.style.color, 'an enabled WfToggle grew a foreground it never had').toBe('')
+    // The v2 layer leaves the toggle a pill: the inline 99px is its only radius.
+    expect((tog.querySelector('.pf-knob') as HTMLElement).style.borderRadius, 'the knob is no longer a pill').toBe('99px')
+    expect(tog.style.borderRadius, 'the track is no longer a pill').toBe('99px')
     for (const [what, el] of [['WfSelect', sel], ['WfToggle', tog]] as [string, HTMLElement][]) {
       expect(el.style.cursor, `an enabled ${what} paints the not-allowed cursor`).toBe('pointer')
     }
@@ -1492,8 +1495,8 @@ describe('APPR-09-06 AC-5: the form is inert while a write is in flight', () => 
 // APPR-09-06 follow-up — the in-flight lock states that it is in flight
 // ----------------------------------------------------------------------------
 // AC-5's `disabled` lands with no pending affordance: no `:disabled` rule exists in
-// frontend/app/src/styles/platform.css or packages/design-tokens/app-layer.css, and
-// `.asc-app .v2-btn-ghost` sets an explicit `color` (app-layer.css:214), so the UA grey never
+// frontend/app/src/styles/platform.css or packages/design-tokens/v2/app-layer.css, and
+// `.asc-app .v2-btn-ghost` sets an explicit `color` (app-layer.css), so the UA grey never
 // paints. The form silently froze. Both precedents AC-5 cites flip their label instead
 // (RoleModal.tsx:382, EntityFormModal.tsx:208), which is what these pin.
 
@@ -1570,7 +1573,7 @@ describe('APPR-09-06 follow-up: each write control names the verb in flight', ()
 //
 // These read the INLINE style, not `getComputedStyle`: jsdom applies no stylesheet, which is
 // exactly why a green 2137-spec suite never saw this. The inline layer is also where the fix
-// belongs — it is what outranks `.v2-btn-ghost:hover` (app-layer.css:215).
+// belongs — it is what outranks `.v2-btn-ghost:hover` (app-layer.css).
 
 describe('APPR-09-06 follow-up: a control shut by a write in flight is PAINTED shut', () => {
   it('Publish takes the muted paint on the same condition as its `disabled`', () => {

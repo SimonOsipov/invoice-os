@@ -1063,6 +1063,7 @@ test.describe('Audit screen', () => {
         borderTopColor: cs.borderTopColor,
         backgroundColor: cs.backgroundColor,
         color: cs.color,
+        radius: cs.borderTopLeftRadius,
       }
     })
     const refBox = await ref.boundingBox()
@@ -1099,7 +1100,10 @@ test.describe('Audit screen', () => {
     expect(pillStyle.color, "the range pill must share the reference chip's text color").toBe(refStyle.color)
     if (refBox && pillBox) {
       expect(Math.abs(pillBox.height - refBox.height), "the range pill must stand the reference chip's height").toBeLessThanOrEqual(0.5)
-      expect(parseFloat(pillStyle.radius), 'the pill must stay fully rounded').toBeGreaterThanOrEqual(pillBox.height / 2)
+      // v2 chip corner: the reference chip's positive radius, under half the height.
+      expect(parseFloat(pillStyle.radius), 'the range pill must carry a corner').toBeGreaterThan(0)
+      expect(parseFloat(pillStyle.radius), 'the range pill corner must be less than half its height').toBeLessThan(pillBox.height / 2)
+      expect(pillStyle.radius, "the range pill must share the reference chip's corner").toBe(refStyle.radius)
     }
 
     // Who column (E-1): the header span every avatar below is measured against.

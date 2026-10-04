@@ -231,7 +231,7 @@ export function WfSelect({ label, value, options, onChange, height = 38, marginB
           disabled={disabled}
           title={title}
           aria-describedby={ariaDescribedBy}
-          // `backgroundColor`, never the `background` shorthand — app-layer.css:224-232.
+          // `backgroundColor`, never the `background` shorthand.
           style={{ width: '100%', height, padding: '0 32px 0 12px', border: '1px solid var(--line-2)', backgroundColor: 'var(--bg-1)', color: 'var(--fg-1)', fontSize: 13, cursor: 'pointer', boxSizing: 'border-box', ...(disabled ? { backgroundColor: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null) }}
         >
           {options.map((o) => (
@@ -281,7 +281,7 @@ export function WfAmountInput({ value, onChange, ariaLabel, marginBottom = 0 }: 
  * `backgroundColor` — nothing forbids the shorthand here, and overriding a shorthand with a
  * longhand would leave the resting value half-standing. And there is no `aria-disabled`: native
  * `disabled` on a `<button>` already covers focus, the keyboard and the a11y tree. No
- * `filter: 'none'`: `.pf-toggle` sets only a transition, no `:hover` (platform.css:167-171).
+ * `filter: 'none'`: `.pf-toggle` sets only a transition, no `:hover` (platform.css).
  */
 export function WfToggle({ on, onToggle, label, disabled, title, ariaDescribedBy }: {
   on: boolean

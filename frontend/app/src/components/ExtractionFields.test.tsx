@@ -113,7 +113,7 @@ const HEADER_FIELDS = [
 ]
 
 // SourceDocumentPages.test.tsx:31's list, verbatim: every class here forces `border-radius`
-// with `!important`, from app-layer.css:193-197 and :275.
+// with `!important`.
 const RADIUS_FORCING = ['pf-btn', 'pf-chip', 'v2-btn', 'ops-btn', 'dev-btn', 'ops-chip', 'dev-chip']
 
 // RulePills.tsx:7-22 is the near-miss: the amber triple is identical, the two font metrics
@@ -622,8 +622,7 @@ describe('an empty fields array', () => {
     expect(panel.style.background).toBe('transparent')
 
     // CreateForm.tsx:132 carries `pf-chip`, whose
-    // `border-radius: var(--radius-pill) !important` (app-layer.css:275) overrides its own
-    // inline radius. Copying it brings the override with it.
+    // `border-radius` is `!important` and overrides its own inline radius. Copying it brings the override with it.
     for (const forced of RADIUS_FORCING) {
       expect(classesOf(panel), `the empty panel carries ${forced}`).not.toContain(forced)
     }
@@ -1279,7 +1278,7 @@ describe('a corrected field', () => {
     expect(label, `the corrected field does not say "${MARKER_TYPED}"`).toBeTruthy()
 
     // The positive equality FIRST: a bare not.toBe('var(--accent)') is green on 'red', on ''
-    // and on an element that never rendered. app-layer.css:38-43 states the translation the
+    // and on an element that never rendered. app-layer.css states the translation the
     // artboard's `var(--accent)` at :307 and :335 takes here.
     expect(marker!.style.background).toBe('var(--action)')
     expect(label!.style.color).toBe('var(--action)')

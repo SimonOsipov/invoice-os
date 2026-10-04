@@ -209,9 +209,8 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
             className="pf-btn"
             aria-label="Close"
             data-testid="member-drawer-close"
-            // No inline `borderRadius`: `.pf-btn` is `border-radius: var(--radius-pill)
-            // !important` (app-layer.css:194-197), so RuleDrawer.tsx:63's `--radius-input`
-            // here would never apply. The pill is wanted on a 30px icon button.
+            // No inline `borderRadius`: `.pf-btn` forces `border-radius` with `!important`,
+            // so RuleDrawer.tsx's `--radius-input` here would never apply.
             style={{ flex: 'none', width: 30, height: 30, border: 0, background: 'var(--bg-3)', color: 'var(--fg-2)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}
           >
             {closeGlyph}
@@ -391,7 +390,7 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
                 data-testid="member-remove"
                 // RuleDrawer's own footer treatment (RuleDrawer.tsx:133-142) — same surface
                 // type, same band, same tokens. Its inline `borderRadius: var(--radius-sm)`
-                // is NOT copied: `.pf-btn` forces the pill with `!important`, so that
+                // is NOT copied: `.pf-btn` forces its radius with `!important`, so that
                 // declaration has never applied and carrying it forward would propagate a
                 // false claim.
                 style={{

@@ -89,8 +89,8 @@ export function SourceDocumentRail({
               type="button"
               data-testid="copy-hash"
               onClick={copyHash}
-              // A plain button, not `.pf-btn` — that class forces a pill radius with
-              // `!important` (app-layer.css:192-201).
+              // A plain button, not `.pf-btn` — that class forces its radius with
+              // `!important`.
               style={{ flex: 'none', whiteSpace: 'nowrap', height: 26, padding: '0 9px', borderRadius: 'var(--radius-xs)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 11.5, fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: 5 }}
             >
               <span style={{ display: 'inline-flex' }}>{copyGlyph}</span> {copied ? 'Copied' : 'Copy'}

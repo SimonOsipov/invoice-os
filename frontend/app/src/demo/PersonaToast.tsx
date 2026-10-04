@@ -27,6 +27,7 @@ export function PersonaToast({
   return (
     <div
       data-testid="persona-toast"
+      className="asc-app"
       role="status"
       style={{
         position: 'fixed',
@@ -40,7 +41,7 @@ export function PersonaToast({
         border: '1px solid var(--line-2)',
         borderLeft: '3px solid var(--status-amber-text)',
         borderRadius: 'var(--radius-md)',
-        boxShadow: '0 16px 40px -16px oklch(20% .02 210 / 0.28)',
+        boxShadow: 'var(--shadow-card)',
         padding: '11px 14px',
         maxWidth: 440,
         animation: 'popIn 160ms ease-out',
@@ -51,7 +52,7 @@ export function PersonaToast({
           flex: 'none',
           width: 28,
           height: 28,
-          borderRadius: 99,
+          borderRadius: '50%',
           background: 'var(--slate-800)',
           color: 'var(--text-on-dark)',
           display: 'grid',
@@ -80,7 +81,7 @@ export function PersonaToast({
         onClick={onDismiss}
         aria-label={TOAST_DISMISS}
         title={TOAST_DISMISS}
-        style={{ flex: 'none', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--fg-3)', display: 'grid', placeItems: 'center', padding: 4 }}
+        style={{ flex: 'none', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--fg-3)', display: 'grid', placeItems: 'center', width: 24, height: 24, borderRadius: 'var(--radius-btn)' }}
       >
         {demoCloseGlyph}
       </button>

@@ -799,8 +799,8 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         the edit -> demote -> re-validate loop undiscoverable. TWO layers, the
                         recipe every control in this cluster follows, because a disabled button
                         gets NO styling for free here: packages/design-tokens/*.css has zero
-                        `:disabled` rules and `.v2-btn-ghost` (app-layer.css:214) carries a
-                        :hover (:215) that is NOT guarded by `:not(:disabled)`.
+                        `:disabled` rules and `.v2-btn-ghost` (app-layer.css) carries a
+                        :hover that is NOT guarded by `:not(:disabled)`.
                         (1) the real HTML `disabled` attribute -- genuinely unclickable;
                         (2) the inline background/color/cursor swap below, which mutes the button
                             and, being inline, outranks that unguarded :hover so a disabled button
@@ -834,7 +834,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         Always rendered, disabled rather than hidden when
                         `!inv.can_submit` ([revalidate-visibility], same convention as Re-validate
                         above) -- the same two layers, plus `filter: 'none'`: Submit is
-                        `.v2-btn-primary`, whose unguarded `:hover` (app-layer.css:213) also sets
+                        `.v2-btn-primary`, whose unguarded `:hover` (app-layer.css) also sets
                         `filter: brightness(1.22)`, which the ghost recipe above never had to
                         neutralise. A disabled button emits no click, so the arm/confirm flow
                         below is unreachable while disabled; `handleSubmit`'s own `!inv.can_submit`
@@ -1140,7 +1140,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         />
                         {/* Same two-layer disabled recipe as Submit -- `filter: 'none'` is
                             mandatory: this is `.v2-btn-primary`, whose unguarded `:hover`
-                            (app-layer.css:213) sets `filter: brightness(1.22)`. */}
+                            (app-layer.css) sets `filter: brightness(1.22)`. */}
                         <button
                           type="button"
                           data-testid="resolve-outside"
@@ -1227,7 +1227,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
         </div>
 
         {/* Rendered inline, never portalled: `--bg-*`/`--fg-*` are declared on `.asc-app`
-            (app-layer.css:25-27), and this tree is inside it. Modal open state is local
+            (app-layer.css), and this tree is inside it. Modal open state is local
             to this component -- nothing about it belongs on PlatformCtx. */}
         {previewOpen && (
           <SourceDocumentModal
@@ -1559,7 +1559,7 @@ function InvoiceEditBody({
       </div>
       {/* Cancel + Save pairing, heights and button variants from EntityFormModal.tsx:190/193
           — the repo's only shipped Cancel+Submit pair. There is no `.v2-btn-secondary` in
-          packages/design-tokens/app-layer.css; ghost and primary are the two that exist. */}
+          packages/design-tokens/v2/app-layer.css; ghost and primary are the two that exist. */}
       <div style={{ padding: '16px 24px', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
         <button type="button" data-testid="edit-cancel" onClick={onCancel} disabled={submitting} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 36, fontSize: 13 }}>
           Cancel

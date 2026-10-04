@@ -6,6 +6,7 @@ import path from 'node:path'
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { SANDBOX_DEFAULT } from '../App'
@@ -29,6 +30,7 @@ type HeaderCtx = Pick<
 function headerCtx(over: {
   sandbox: boolean
   setSandbox?: () => void
+  openCreate?: () => void
   nav?: PlatformCtx['nav']
   setInvoiceQuery?: (q: string) => void
   searchInvoices?: (q: string) => void
@@ -40,7 +42,7 @@ function headerCtx(over: {
   const ctx: HeaderCtx = {
     active: { initials: 'OP' },
     view: over.view ?? 'dashboard',
-    openCreate: () => {},
+    openCreate: over.openCreate ?? (() => {}),
     setSandbox: over.setSandbox ?? vi.fn(),
     sandbox: over.sandbox,
     nav: over.nav ?? vi.fn(),
@@ -433,5 +435,172 @@ describe("EXTR-11-08 AC-10: the extraction view has its own breadcrumb", () => {
     expect(match, "CRUMB_MAP has no `extraction: '...'` entry").not.toBeNull()
     expect(match![1].trim().length, 'the extraction crumb is an empty string').toBeGreaterThan(0)
     expect(match![1], 'the declared crumb must be the story table\'s string').toBe(EXTRACTION_CRUMB)
+  })
+})
+
+// jsdom drops backdrop-filter from the style attribute, so the look is read from SSR markup.
+function ssr(sandbox: boolean): HTMLElement {
+  const host = document.createElement('div')
+  host.innerHTML = renderToStaticMarkup(<Header ctx={headerCtx({ sandbox })} />)
+  return host
+}
+
+function decls(el: Element | null): Map<string, string> {
+  expect(el, 'expected the element in the SSR markup').not.toBeNull()
+  const style = el!.getAttribute('style')
+  expect(style, 'the element has no inline style').toBeTruthy()
+  return new Map(style!.split(';').filter(Boolean).map((d) => [d.slice(0, d.indexOf(':')), d.slice(d.indexOf(':') + 1)]))
+}
+
+function segments(host: HTMLElement) {
+  const buttons = host.querySelectorAll('[data-testid="env-pill"] button')
+  expect(buttons, 'the switch renders two segments').toHaveLength(2)
+  const [sandboxBtn, liveBtn] = Array.from(buttons)
+  return { sandboxBtn: sandboxBtn!, liveBtn: liveBtn! }
+}
+
+describe('HD-01 the header wears the v2 header tokens', () => {
+  it('background, both backdrop-filter properties and the border are tokens, with no oklch', () => {
+    const header = ssr(true).querySelector('header')
+    const d = decls(header)
+
+    expect(d.get('height'), 'control: the frame declarations are read').toBe('56px')
+    expect(d.get('background')).toBe('var(--header-bg)')
+    expect(d.get('backdrop-filter')).toBe('blur(var(--header-blur))')
+    expect(d.get('-webkit-backdrop-filter')).toBe('blur(var(--header-blur))')
+    expect(d.get('border-bottom')).toBe('1px solid var(--line-1)')
+    expect(header!.getAttribute('style')).not.toContain('oklch')
+  })
+})
+
+describe('HD-02 the switch sits on a sage track', () => {
+  it('sandbox: sage fill, amber border, button corner, 3px padding, 2px gap', () => {
+    const d = decls(ssr(true).querySelector('[data-testid="env-pill"]'))
+
+    expect(d.get('background')).toBe('var(--sage)')
+    expect(d.get('border')).toBe('1px solid var(--status-amber-border)')
+    expect(d.get('border-radius')).toBe('var(--radius-btn)')
+    expect(d.get('padding')).toBe('3px')
+    expect(d.get('gap')).toBe('2px')
+  })
+})
+
+describe('HD-03 the active segment is filled primary at 4px', () => {
+  it('sandbox: SANDBOX is primary on primary-foreground with an accent dot and no pf-btn on either segment', () => {
+    const { sandboxBtn, liveBtn } = segments(ssr(true))
+    const d = decls(sandboxBtn)
+
+    expect(sandboxBtn.textContent).toBe('SANDBOX')
+    expect(d.get('background')).toBe('var(--primary)')
+    expect(d.get('color')).toBe('var(--primary-foreground)')
+    expect(d.get('border-radius')).toBe('var(--radius-sm)')
+    expect(decls(sandboxBtn.querySelector('span')).get('background')).toBe('var(--accent)')
+    expect(decls(liveBtn).get('border-radius'), 'the LIVE segment has the same corner').toBe('var(--radius-sm)')
+    for (const seg of [sandboxBtn, liveBtn]) {
+      expect(seg.getAttribute('class') ?? '', 'pf-btn forces 7px over the inline corner').not.toContain('pf-btn')
+    }
+  })
+})
+
+// The live-mode row guards the inactive look the story keeps.
+describe('HD-04 the inactive segment shows its mode only on the dot (boundary)', () => {
+  it('(pin, green at write) live mode: SANDBOX is transparent with an amber-text dot, the track border is green, no segment fill names a status token', () => {
+    const host = ssr(false)
+    const { sandboxBtn, liveBtn } = segments(host)
+    const d = decls(sandboxBtn)
+
+    expect(d.get('background')).toBe('transparent')
+    expect(d.get('color')).toBe('var(--fg-3)')
+    expect(decls(sandboxBtn.querySelector('span')).get('background')).toBe('var(--status-amber-text)')
+    expect(decls(host.querySelector('[data-testid="env-pill"]')).get('border')).toBe('1px solid var(--status-green-border)')
+    for (const seg of [sandboxBtn, liveBtn]) {
+      expect(decls(seg).get('background'), 'a segment fill never carries the environment colour').not.toContain('--status-')
+    }
+  })
+
+  it('sandbox mode: the active segment fill names no status token', () => {
+    const { sandboxBtn, liveBtn } = segments(ssr(true))
+
+    for (const seg of [sandboxBtn, liveBtn]) {
+      expect(decls(seg).get('background')).toBeTruthy()
+      expect(decls(seg).get('background')).not.toContain('--status-')
+    }
+  })
+})
+
+describe('HD-05 dots are circles', () => {
+  it.each([true, false])('sandbox=%s: both segment dots are circles', (sandbox) => {
+    const { sandboxBtn, liveBtn } = segments(ssr(sandbox))
+
+    for (const seg of [sandboxBtn, liveBtn]) {
+      expect(decls(seg.querySelector('span')).get('border-radius')).toBe('50%')
+    }
+  })
+})
+
+// (pin, green at write) the LIVE segment keeps its disabled look in both modes.
+describe('HD-06 the LIVE segment keeps its disabled look', () => {
+  it.each([true, false])('sandbox=%s: disabled, transparent, --fg-4, not-allowed', (sandbox) => {
+    const { liveBtn } = segments(ssr(sandbox))
+    const d = decls(liveBtn)
+
+    expect(liveBtn.hasAttribute('disabled')).toBe(true)
+    expect(liveBtn.getAttribute('title')).toContain('accreditation')
+    expect(d.get('background')).toBe('transparent')
+    expect(d.get('color')).toBe('var(--fg-4)')
+    expect(d.get('cursor')).toBe('not-allowed')
+  })
+})
+
+// Every inline declaration that names an environment colour, as element|label|property.
+function statusDecls(host: HTMLElement): string[] {
+  const hits: string[] = []
+  for (const el of Array.from(host.querySelectorAll('[style]'))) {
+    for (const [prop, value] of decls(el)) {
+      if (!value.includes('--status-')) continue
+      const label = el.getAttribute('data-testid') ?? el.closest('button')?.textContent ?? ''
+      hits.push(`${el.tagName}|${label}|${prop}`)
+    }
+  }
+  return hits.sort()
+}
+
+describe('HD-07 the environment colour appears only on the track border and the dots', () => {
+  it('sandbox: the track border is the only status-coloured declaration', () => {
+    expect(statusDecls(ssr(true))).toEqual(['DIV|env-pill|border'])
+  })
+
+  it('live mode: the track border and the inactive SANDBOX dot are the only ones', () => {
+    expect(statusDecls(ssr(false))).toEqual(['DIV|env-pill|border', 'SPAN|SANDBOX|background'])
+  })
+})
+
+describe('HD-08 the switch and the CTA behave as before', () => {
+  it('clicking SANDBOX in live mode selects sandbox exactly once', async () => {
+    const setSandbox = vi.fn()
+    render(<Header ctx={headerCtx({ sandbox: false, setSandbox })} />)
+
+    await userEvent.setup().click(sandboxSeg())
+
+    expect(setSandbox).toHaveBeenCalledTimes(1)
+    expect(setSandbox).toHaveBeenCalledWith(true)
+  })
+
+  it('New invoice opens the create flow and keeps the v2 primary button classes with no inline fill or filter', async () => {
+    const openCreate = vi.fn()
+    const { container } = render(<Header ctx={headerCtx({ sandbox: true, openCreate })} />)
+
+    await userEvent.setup().click(newInvoiceBtn())
+
+    expect(openCreate).toHaveBeenCalledTimes(1)
+    const cls = newInvoiceBtn().className.split(/\s+/)
+    expect(cls).toEqual(expect.arrayContaining(['v2-btn', 'v2-btn-primary', 'pf-btn']))
+    // An inline fill or filter would beat `.asc-app .v2-btn-primary:hover` (cascade).
+    const cta = Array.from(ssr(true).querySelectorAll('button')).find((b) => b.textContent?.includes('New invoice'))
+    const d = decls(cta ?? null)
+    expect(d.get('height'), 'control: the inline declarations are read').toBe('34px')
+    expect(d.has('background')).toBe(false)
+    expect(d.has('filter')).toBe(false)
+    expect(container.querySelectorAll('[data-testid="env-pill"] .pf-btn')).toHaveLength(0)
   })
 })

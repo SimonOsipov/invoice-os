@@ -230,7 +230,6 @@ func RegistrationNotConfigured() http.Handler {
 	})
 }
 
-// gotrueError is the only part of a GoTrue response the gateway reads.
 type gotrueError struct {
 	ErrorCode string `json:"error_code"`
 	Msg       string `json:"msg"`

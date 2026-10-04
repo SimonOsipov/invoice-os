@@ -10,9 +10,11 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/uuid"
@@ -164,6 +166,10 @@ func TestVerify_HandOffWithoutConsent(t *testing.T) {
 	for _, c := range []struct{ name, meta string }{
 		{"key absent", coMetaNoConsent},
 		{"key null", `{` + coRegistration + `,"marketing_consent":null}`},
+		{"text empty", `{` + coRegistration + `,"marketing_consent":{"text":"","at":"` + coConsentAt + `"}}`},
+		{"text a number", `{` + coRegistration + `,"marketing_consent":{"text":5,"at":"` + coConsentAt + `"}}`},
+		{"consent a string", `{` + coRegistration + `,"marketing_consent":"yes"}`},
+		{"consent an empty object", `{` + coRegistration + `,"marketing_consent":{}}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			fake := newFakeGoTrue(t, http.StatusOK, coSession(coUser(c.meta)))
@@ -179,39 +185,45 @@ func TestVerify_HandOffWithoutConsent(t *testing.T) {
 }
 
 func TestVerify_NoHandOffWhenRefused(t *testing.T) {
-	sink := newRecSink(nil)
 	good := coSession(coUser(coMetaFull))
 	for _, c := range []struct {
 		name   string
-		url    func(t *testing.T) *url.URL
 		query  string
-		status int
+		status int // 0 = unreachable
 		body   string
 	}{
-		{"link expired, 403", nil, verifyQuery, http.StatusForbidden, gtOTPExpired},
-		{"gotrue 500", nil, verifyQuery, http.StatusInternalServerError, gtInternal},
-		{"gotrue unreachable", closedURL, verifyQuery, 0, ""},
-		{"missing token", nil, "type=signup", http.StatusOK, good},
-		{"wrong type", nil, "token=" + verifyToken + "&type=recovery", http.StatusOK, good},
+		{"link expired, 403", verifyQuery, http.StatusForbidden, gtOTPExpired},
+		{"gotrue 500", verifyQuery, http.StatusInternalServerError, gtInternal},
+		{"gotrue 201", verifyQuery, http.StatusCreated, good},
+		{"gotrue 204", verifyQuery, http.StatusNoContent, good},
+		{"gotrue unreachable", verifyQuery, 0, ""},
+		{"missing token", "type=signup", http.StatusOK, good},
+		{"wrong type", "token=" + verifyToken + "&type=recovery", http.StatusOK, good},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			authURL := closedURL(t)
-			if c.url == nil {
-				authURL = newFakeGoTrue(t, c.status, c.body).URL
-			}
+			synctest.Test(t, func(t *testing.T) {
+				sink := newRecSink(nil)
 
-			requireRedirect(t, doVerifySink(t, authURL, c.query, sink), failedLocation)
+				requireRedirect(t, verifyOffline(t, offlineClient(c.status, c.body), c.query, sink), failedLocation)
 
-			if n := len(sink.got()); n != 0 {
-				t.Fatalf("sink saw %d calls after a refused verify, want 0", n)
-			}
+				if n := len(sink.got()); n != 0 {
+					t.Fatalf("sink saw %d calls after a refused verify, want 0", n)
+				}
+			})
 		})
 	}
 
-	// Positive control on the same sink: a 200 hands off, and it is the only call ever made.
-	fake := newFakeGoTrue(t, http.StatusOK, good)
-	requireRedirect(t, doVerifySink(t, fake.URL, verifyQuery, sink), verifiedLocation)
-	requireOneHandOff(t, sink, coWant)
+	t.Run("control: the same GoTrue answered 200 hands off one registrant", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			sink := newRecSink(nil)
+
+			requireRedirect(t, verifyOffline(t, offlineClient(http.StatusOK, good), verifyQuery, sink), verifiedLocation)
+
+			if got := sink.got(); len(got) != 1 || !reflect.DeepEqual(got[0], coWant) {
+				t.Fatalf("hand-offs = %+v, want exactly [%+v]", got, coWant)
+			}
+		})
+	})
 }
 
 func doSignInSink(t *testing.T, rig *signInRig) *httptest.ResponseRecorder {
@@ -229,8 +241,14 @@ func TestSignIn_HandsOffAFormRegistrant(t *testing.T) {
 	requireOneHandOff(t, sink, coWant)
 }
 
+func requireOneNow(t *testing.T, sink *recSink, want RegistrantContact) {
+	t.Helper()
+	if got := sink.got(); len(got) != 1 || !reflect.DeepEqual(got[0], want) {
+		t.Fatalf("hand-offs = %+v, want exactly [%+v]", got, want)
+	}
+}
+
 func TestSignIn_NoHandOffWithoutRegistration(t *testing.T) {
-	sink := newRecSink(nil)
 	for _, c := range []struct{ name, meta string }{
 		{"empty metadata", `{}`},
 		{"no user_metadata key", ``},
@@ -238,25 +256,31 @@ func TestSignIn_NoHandOffWithoutRegistration(t *testing.T) {
 		{"consent without registration", `{` + coConsent + `}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			fake := newTokenFake(t, http.StatusOK, coSession(coUser(c.meta)))
-			rig := newSignInRigSink(t, fake.URL, nil, sink)
+			synctest.Test(t, func(t *testing.T) {
+				sink := newRecSink(nil)
 
-			requireCode(t, doSignInSink(t, rig))
+				requireCode(t, signInOffline(t, offlineClient(http.StatusOK, coSession(coUser(c.meta))), NewHandoffStore(HandoffTTL, time.Now), sink))
 
-			if n := len(sink.got()); n != 0 {
-				t.Fatalf("sink saw %d calls for an account without registration, want 0", n)
-			}
+				if n := len(sink.got()); n != 0 {
+					t.Fatalf("sink saw %d calls for an account without registration, want 0", n)
+				}
+			})
 		})
 	}
 
-	// Positive control on the same sink.
-	fake := newTokenFake(t, http.StatusOK, coSession(coUser(coMetaFull)))
-	requireCode(t, doSignInSink(t, newSignInRigSink(t, fake.URL, nil, sink)))
-	requireOneHandOff(t, sink, coWant)
+	t.Run("control: with registration the same sign-in hands off", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			sink := newRecSink(nil)
+
+			requireCode(t, signInOffline(t, offlineClient(http.StatusOK, coSession(coUser(coMetaFull))), NewHandoffStore(HandoffTTL, time.Now), sink))
+
+			requireOneNow(t, sink, coWant)
+		})
+	})
 }
 
 func TestSignIn_NoHandOffWhenRefused(t *testing.T) {
-	sink := newRecSink(nil)
+	good := coSession(coUser(coMetaFull))
 	for _, c := range []struct {
 		name   string
 		status int // 0 = unreachable
@@ -268,29 +292,35 @@ func TestSignIn_NoHandOffWhenRefused(t *testing.T) {
 		{"gotrue 429", http.StatusTooManyRequests, gtOverRequestRateLimit},
 		{"gotrue 500", http.StatusInternalServerError, gtInternal},
 		{"200 without a refresh token", http.StatusOK, `{"access_token":"` + sessionAT + `","user":` + coUser(coMetaFull) + `}`},
+		{"200 without an access token", http.StatusOK, `{"refresh_token":"` + sessionRT + `","user":` + coUser(coMetaFull) + `}`},
+		{"200 with an empty body", http.StatusOK, ``},
+		{"201", http.StatusCreated, good},
 		{"unreachable", 0, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			authURL := closedURL(t)
-			if c.status != 0 {
-				authURL = newTokenFake(t, c.status, c.body).URL
-			}
-			rig := newSignInRigSink(t, authURL, nil, sink)
+			synctest.Test(t, func(t *testing.T) {
+				sink := newRecSink(nil)
 
-			if rec := doSignInSink(t, rig); rec.Code == http.StatusOK {
-				t.Fatalf("sign-in answered 200, want a refusal: %s", rec.Body.String())
-			}
+				if rec := signInOffline(t, offlineClient(c.status, c.body), NewHandoffStore(HandoffTTL, time.Now), sink); rec.Code == http.StatusOK {
+					t.Fatalf("sign-in answered 200, want a refusal: %s", rec.Body.String())
+				}
 
-			if n := len(sink.got()); n != 0 {
-				t.Fatalf("sink saw %d calls after a refused sign-in, want 0", n)
-			}
+				if n := len(sink.got()); n != 0 {
+					t.Fatalf("sink saw %d calls after a refused sign-in, want 0", n)
+				}
+			})
 		})
 	}
 
-	// Positive control on the same sink.
-	fake := newTokenFake(t, http.StatusOK, coSession(coUser(coMetaFull)))
-	requireCode(t, doSignInSink(t, newSignInRigSink(t, fake.URL, nil, sink)))
-	requireOneHandOff(t, sink, coWant)
+	t.Run("control: the same sign-in answered 200 hands off one registrant", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			sink := newRecSink(nil)
+
+			requireCode(t, signInOffline(t, offlineClient(http.StatusOK, good), NewHandoffStore(HandoffTTL, time.Now), sink))
+
+			requireOneNow(t, sink, coWant)
+		})
+	})
 }
 
 // answersWithin serves req on h and fails when no answer arrives within d.
@@ -527,23 +557,6 @@ func TestHandOff_FailingSinkIsTriedThreeTimes(t *testing.T) {
 	}
 }
 
-func TestRegister_NeverHandsOff(t *testing.T) {
-	// An autoconfirming GoTrue answers signup with a confirmed user and a session.
-	fake := newFakeGoTrue(t, http.StatusOK, coSession(coUser(coMetaFull)))
-	sink := newRecSink(nil)
-
-	requirePending202(t, doRegister(t, fake.URL, nil, registerBodyWithAnswers(regEmail,
-		map[string]any{"workspace_name": coWorkspace, "display_name": coDisplay, "marketing_consent_text": coConsentText})))
-
-	if n := len(sink.got()); n != 0 {
-		t.Fatalf("sink saw %d calls after register, want 0", n)
-	}
-
-	// Positive control: the same GoTrue and sink, the verify route hands off, so an empty sink above means something.
-	requireRedirect(t, doVerifySink(t, fake.URL, verifyQuery, sink), verifiedLocation)
-	requireOneHandOff(t, sink, coWant)
-}
-
 type sinkRequest struct {
 	method, path string
 	header       http.Header
@@ -660,6 +673,66 @@ func TestHTTPContactSink_PostsTheIntakeContract(t *testing.T) {
 		}
 	})
 
+	t.Run("a base URL with a trailing slash posts to the same path", func(t *testing.T) {
+		base, reqs := intakeServer(t, http.StatusAccepted)
+		base.Path = "/"
+
+		err := NewHTTPContactSink(base, testClient(), token).Registrant(context.Background(), coWant)
+
+		if err != nil {
+			t.Fatalf("Registrant: %v", err)
+		}
+		requireOneIntakeRequest(t, reqs(), "/internal/contacts/registrants", token)
+	})
+
+	t.Run("a redirect is an error and is never followed", func(t *testing.T) {
+		for _, status := range []int{http.StatusMovedPermanently, http.StatusFound, http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+			var calls []string
+			client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+				calls = append(calls, r.URL.String())
+				h := http.Header{"Location": {"http://elsewhere.invalid/steal"}}
+				return &http.Response{StatusCode: status, Header: h, Body: http.NoBody, Request: r}, nil
+			})}
+			base, _ := url.Parse("http://notifications.invalid")
+			sink := NewHTTPContactSink(base, client, token)
+
+			errR := sink.Registrant(context.Background(), coWant)
+			errD := sink.DemoRequest(context.Background(), DemoRequest{Email: regEmail})
+
+			if errR == nil || errD == nil {
+				t.Errorf("%d: Registrant err %v, DemoRequest err %v, want an error from both", status, errR, errD)
+			}
+			if len(calls) != 2 {
+				t.Errorf("%d: transport saw %v, want exactly the two original requests", status, calls)
+			}
+		}
+	})
+
+	t.Run("each call ends at the 5 s bound, whatever the caller's context", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+				<-r.Context().Done()
+				return nil, r.Context().Err()
+			})}
+			base, _ := url.Parse("http://notifications.invalid")
+			sink := NewHTTPContactSink(base, client, token)
+
+			for name, call := range map[string]func() error{
+				"registrant":   func() error { return sink.Registrant(context.Background(), coWant) },
+				"demo request": func() error { return sink.DemoRequest(context.Background(), DemoRequest{Email: regEmail}) },
+			} {
+				start := time.Now()
+				err := call()
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Errorf("%s: err = %v, want the deadline", name, err)
+				}
+				if got := time.Since(start); got != 5*time.Second {
+					t.Errorf("%s ended after %v, want exactly 5s", name, got)
+				}
+			}
+		})
+	})
+
 	for _, status := range []int{http.StatusInternalServerError, http.StatusNotFound, http.StatusBadRequest} {
 		t.Run("a "+http.StatusText(status)+" answer is an error", func(t *testing.T) {
 			base, reqs := intakeServer(t, status)
@@ -674,4 +747,199 @@ func TestHTTPContactSink_PostsTheIntakeContract(t *testing.T) {
 			}
 		})
 	}
+}
+
+type rtFunc func(*http.Request) (*http.Response, error)
+
+func (f rtFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// offlineClient answers every request with status and body without a network; status 0 is a refused connection.
+func offlineClient(status int, body string) *http.Client {
+	return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		if status == 0 {
+			return nil, errors.New("connection refused")
+		}
+		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+	})}
+}
+
+var offlineAuth = &url.URL{Scheme: "http", Host: "gotrue.invalid"}
+
+// verifyOffline serves one GET /auth/verify?query inside a synctest bubble: when it returns the hand-off has run to its end or sleeps.
+func verifyOffline(t *testing.T, client *http.Client, query string, sink ContactSink) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	VerifyHandler(offlineAuth, siteURL(t), client, slog.New(slog.DiscardHandler), sink).ServeHTTP(rec, verifyRequest(context.Background(), query))
+	synctest.Wait()
+	return rec
+}
+
+// signInOffline serves one POST /auth/sign-in inside a synctest bubble, like verifyOffline.
+func signInOffline(t *testing.T, client *http.Client, store *HandoffStore, sink ContactSink) *httptest.ResponseRecorder {
+	t.Helper()
+	log := slog.New(slog.DiscardHandler)
+	th := NewSignInThrottle(SignInMaxFailures, SignInMaxKeys, SignInWindow, time.Now)
+	rec := serve(SignInHandler(offlineAuth, client, store, th, log, sink), http.MethodPost, "/auth/sign-in", signInBody(regEmail, regPassword, randomState(t)))
+	synctest.Wait()
+	return rec
+}
+
+func TestHandOff_UserBodyShapes(t *testing.T) {
+	idEmail := RegistrantContact{UserID: coUserID, Email: regEmail}
+	noConsent := coWant
+	noConsent.Consent = nil
+	meta := func(consent string) string { return `{` + coRegistration + `,"marketing_consent":` + consent + `}` }
+	str := func(v string) string { return `"` + v + `"` }
+	extras := `{"id":"` + coUserID + `","aud":"authenticated","email":"` + regEmail + `","app_metadata":{"provider":"email"},"identities":[{"provider":"email"}],` +
+		`"user_metadata":{"email_verified":true,` + coRegistration + `,` + coConsent + `,"avatar":null}}`
+	withAt := func(at string) RegistrantContact {
+		c := coWant
+		c.Consent = &MarketingConsent{Text: coConsentText, At: at}
+		return c
+	}
+	none := (*RegistrantContact)(nil)
+	for _, c := range []struct {
+		name         string
+		user         string
+		verify, sign *RegistrantContact
+	}{
+		{"unknown fields beside the known ones", extras, &coWant, &coWant},
+		{"no user_metadata: any verified account is handed off, a sign-in is not", coUser(``), &idEmail, none},
+		{"empty metadata", coUser(`{}`), &idEmail, none},
+		{"user_metadata null", coUser(`null`), &idEmail, none},
+		{"user_metadata a string", coUser(str("x")), &idEmail, none},
+		{"registration a string still counts as present", coUser(`{"registration":"x"}`), &idEmail, &idEmail},
+		{"registration an array still counts as present", coUser(`{"registration":[]}`), &idEmail, &idEmail},
+		{"registration an empty object counts as present", coUser(`{"registration":{}}`), &idEmail, &idEmail},
+		{"consent text a number", coUser(meta(`{"text":5,"at":"` + coConsentAt + `"}`)), &noConsent, &noConsent},
+		{"consent an array", coUser(meta(`[]`)), &noConsent, &noConsent},
+		{"consent at not a time is passed on for notifications to refuse", coUser(meta(`{"text":"` + coConsentText + `","at":"yesterday"}`)), contactPtr(withAt("yesterday")), contactPtr(withAt("yesterday"))},
+		{"consent at a number", coUser(meta(`{"text":"` + coConsentText + `","at":5}`)), contactPtr(withAt("")), contactPtr(withAt(""))},
+	} {
+		for _, entry := range []string{"verify", "sign-in"} {
+			t.Run(entry+"/"+c.name, func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					sink := newRecSink(nil)
+					client := offlineClient(http.StatusOK, coSession(c.user))
+					want := c.verify
+					if entry == "verify" {
+						requireRedirect(t, verifyOffline(t, client, verifyQuery, sink), verifiedLocation)
+					} else {
+						want = c.sign
+						requireCode(t, signInOffline(t, client, NewHandoffStore(HandoffTTL, time.Now), sink))
+					}
+
+					got := sink.got()
+					if want == nil {
+						if len(got) != 0 {
+							t.Fatalf("handed off %+v, want nothing", got)
+						}
+						return
+					}
+					if len(got) != 1 || !reflect.DeepEqual(got[0], *want) {
+						t.Fatalf("hand-offs = %+v, want exactly [%+v]", got, *want)
+					}
+				})
+			})
+		}
+	}
+}
+
+func contactPtr(c RegistrantContact) *RegistrantContact { return &c }
+
+func TestHandOff_NilSinkIsANoOp(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		log, logs := newCaptureLog()
+
+		handOffRegistrant(context.Background(), log, nil, coWant)
+		synctest.Wait()
+
+		if got := logs.all(); len(got) != 0 {
+			t.Errorf("a nil sink logged %+v, want silence", got)
+		}
+	})
+	t.Run("verify and sign-in answer as without a sink", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			client := offlineClient(http.StatusOK, coSession(coUser(coMetaFull)))
+			requireRedirect(t, verifyOffline(t, client, verifyQuery, nil), verifiedLocation)
+			requireCode(t, signInOffline(t, client, NewHandoffStore(HandoffTTL, time.Now), nil))
+		})
+	})
+}
+
+func TestHandOff_AttemptsAreSpacedFiveThenThirtySeconds(t *testing.T) {
+	down := func(context.Context, int, RegistrantContact) error { return errors.New("notifications unavailable") }
+	synctest.Test(t, func(t *testing.T) {
+		sink := newRecSink(down)
+		log, logs := newCaptureLog()
+
+		handOffRegistrant(context.Background(), log, sink, coWant)
+		synctest.Wait()
+		step := func(d time.Duration, wantCalls, wantWarns int) {
+			t.Helper()
+			time.Sleep(d)
+			synctest.Wait()
+			if n := len(sink.got()); n != wantCalls {
+				t.Fatalf("%d calls, want %d", n, wantCalls)
+			}
+			if n := len(logs.all()); n != wantWarns {
+				t.Fatalf("%d log lines, want %d", n, wantWarns)
+			}
+		}
+		if n := len(sink.got()); n != 1 {
+			t.Fatalf("%d calls at once, want 1", n)
+		}
+		step(5*time.Second-time.Millisecond, 1, 0)
+		step(time.Millisecond, 2, 0)
+		step(30*time.Second-time.Millisecond, 2, 0)
+		step(time.Millisecond, 3, 1)
+		step(time.Hour, 3, 1)
+		if w := <-logs.warn; w.attrs["user_id"] != coUserID || w.level != slog.LevelWarn {
+			t.Errorf("WARN = %+v, want a WARN with user_id %s", w, coUserID)
+		}
+	})
+}
+
+func TestHandOff_StopsAtTheFirstSuccess(t *testing.T) {
+	for _, failures := range []int{0, 1, 2} {
+		t.Run(strconv.Itoa(failures)+" failures first", func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				sink := newRecSink(func(_ context.Context, n int, _ RegistrantContact) error {
+					if n <= failures {
+						return errors.New("notifications unavailable")
+					}
+					return nil
+				})
+				log, logs := newCaptureLog()
+
+				handOffRegistrant(context.Background(), log, sink, coWant)
+				time.Sleep(time.Hour)
+				synctest.Wait()
+
+				if n := len(sink.got()); n != failures+1 {
+					t.Errorf("%d calls, want %d", n, failures+1)
+				}
+				if n := len(logs.all()); n != 0 {
+					t.Errorf("%d log lines after a success, want 0: %+v", n, logs.all())
+				}
+			})
+		})
+	}
+}
+
+func TestSignIn_NoHandOffWhenTheCodeStoreIsFull(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		sink := newRecSink(nil)
+		store := NewHandoffStore(HandoffTTL, time.Now)
+		fillStore(t, store, HandoffMaxLive)
+
+		rec := signInOffline(t, offlineClient(http.StatusOK, coSession(coUser(coMetaFull))), store, sink)
+
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("sign-in answered %d, want 503", rec.Code)
+		}
+		if n := len(sink.got()); n != 0 {
+			t.Fatalf("handed off %d registrants for a refused sign-in, want 0", n)
+		}
+	})
 }

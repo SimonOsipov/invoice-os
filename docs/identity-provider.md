@@ -301,9 +301,8 @@ scope, or `/token` with any other grant) is reachable from outside.
    may also carry `workspace_name`, `display_name` and `kind?`. When any of them is present,
    the gateway validates them with the tenancy rules (trimmed, 1 to 200 characters, no NUL,
    `kind` `firm` or `in_house`) and posts them to GoTrue `/signup` as
-   `data.registration`; GoTrue stores them as `user_metadata.registration`. Without them the
-   gateway posts only `{"email","password"}`. A free-mail address answers 400 first, and
-   GoTrue is not called. GoTrue creates an unconfirmed user and
+   `data.registration`; GoTrue stores them as `user_metadata.registration`. A free-mail
+   address answers 400 first, and GoTrue is not called. GoTrue creates an unconfirmed user and
    mails a confirmation link through Resend. Every answer except a 400 arrives no earlier
    than `AUTH_REGISTER_MIN_RESPONSE` after the request reached the handler, so a new address
    and a known one take the same time while GoTrue answers faster than that (see Ceilings).

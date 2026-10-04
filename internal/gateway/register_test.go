@@ -754,6 +754,9 @@ func doRegisterWithSignupBody(t *testing.T, fake *fakeGoTrue, fields map[string]
 }
 
 func TestRegister_MarketingConsentStoredInMetadata(t *testing.T) {
+	local := time.Local
+	time.Local = time.FixedZone("UTC+3", 3*3600)
+	t.Cleanup(func() { time.Local = local })
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 	before := time.Now().Add(-time.Second)
 
@@ -806,6 +809,16 @@ func TestRegister_NoMarketingConsentLeavesDataUnchanged(t *testing.T) {
 			t.Errorf("signup body carries data %v, want none", sent["data"])
 		}
 	})
+	t.Run("text null is the same as absent", func(t *testing.T) {
+		fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+
+		sent := doRegisterWithSignupBody(t, fake, map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada", "kind": "firm", "marketing_consent_text": nil})
+
+		want := map[string]any{"registration": map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada", "kind": "firm"}}
+		if !reflect.DeepEqual(sent["data"], want) {
+			t.Errorf("signup data = %v, want %v", sent["data"], want)
+		}
+	})
 	t.Run("control: a text adds marketing_consent to the same data", func(t *testing.T) {
 		fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 
@@ -818,6 +831,22 @@ func TestRegister_NoMarketingConsentLeavesDataUnchanged(t *testing.T) {
 			t.Errorf("signup data = %v, want marketing_consent beside registration", sent["data"])
 		}
 	})
+}
+
+func TestRegister_MarketingConsentWithoutAnswers(t *testing.T) {
+	// Stored as sent: the text is the sentence the person was shown.
+	const text = "  I agree \u2014 yes\n"
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+
+	sent := doRegisterWithSignupBody(t, fake, map[string]any{"marketing_consent_text": text})
+
+	data, _ := sent["data"].(map[string]any)
+	if got, want := slices.Sorted(maps.Keys(data)), []string{"marketing_consent"}; !slices.Equal(got, want) {
+		t.Fatalf("signup data keys = %v, want %v", got, want)
+	}
+	if consent, _ := data["marketing_consent"].(map[string]any); consent["text"] != text {
+		t.Errorf("marketing_consent.text = %q, want %q unchanged", consent["text"], text)
+	}
 }
 
 func TestRegister_InvalidMarketingTextIs400(t *testing.T) {
@@ -838,6 +867,17 @@ func TestRegister_InvalidMarketingTextIs400(t *testing.T) {
 		}
 	})
 
+	t.Run("control: one rune is accepted", func(t *testing.T) {
+		fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+
+		sent := doRegisterWithSignupBody(t, fake, map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada", "marketing_consent_text": "x"})
+
+		data, _ := sent["data"].(map[string]any)
+		if consent, _ := data["marketing_consent"].(map[string]any); consent["text"] != "x" {
+			t.Errorf("marketing_consent = %v, want the one-rune text", data["marketing_consent"])
+		}
+	})
+
 	for _, c := range []struct {
 		name    string
 		text    any
@@ -851,6 +891,11 @@ func TestRegister_InvalidMarketingTextIs400(t *testing.T) {
 		{"501 runes", strings.Repeat("é", 501), msg},
 		{"NUL", "I agree\u0000", ""},
 		{"a number", 5, ""},
+		{"a bool", true, ""},
+		{"an array", []string{"I agree"}, ""},
+		{"an object", map[string]string{"text": "I agree"}, ""},
+		{"NUL alone", "\u0000", ""},
+		{"NUL inside valid text", "I \u0000agree", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)

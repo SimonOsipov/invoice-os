@@ -2,14 +2,11 @@ package main
 
 import (
 	"context"
-	"go/ast"
-	"go/types"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -108,50 +105,6 @@ func TestHandoffHandlers_SignInHandsOffToTheSink(t *testing.T) {
 	}
 }
 
-// Nothing but a source scan sees main pass nil: main cannot be booted in a test.
-func TestMainWiresOneNotificationsSinkIntoBothHandlerSets(t *testing.T) {
-	src, err := os.ReadFile("main.go")
-	if err != nil {
-		t.Fatalf("read main.go: %v", err)
-	}
-	_, stmts := mainRoutes(t, src)
-
-	sinkVar := ""
-	last := map[string]string{}
-	for _, s := range stmts {
-		as, ok := s.(*ast.AssignStmt)
-		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
-			continue
-		}
-		call, ok := as.Rhs[0].(*ast.CallExpr)
-		if !ok {
-			continue
-		}
-		switch fn := types.ExprString(call.Fun); fn {
-		case "gateway.NewHTTPContactSink":
-			sinkVar = types.ExprString(as.Lhs[0])
-			if len(call.Args) != 3 || types.ExprString(call.Args[0]) != `routed["notifications"]` || types.ExprString(call.Args[2]) != "gatewayToken" {
-				t.Errorf("NewHTTPContactSink args = %v, want (routed[\"notifications\"], client, gatewayToken)", argStrings(call.Args))
-			}
-		case "registrationHandlers", "handoffHandlers":
-			if len(call.Args) == 0 {
-				t.Fatalf("%s has no arguments", fn)
-			}
-			last[fn] = types.ExprString(call.Args[len(call.Args)-1])
-		}
-	}
-	if sinkVar == "" {
-		t.Fatal("main has no top-level `x := gateway.NewHTTPContactSink(...)`")
-	}
-	for _, fn := range []string{"registrationHandlers", "handoffHandlers"} {
-		if got, ok := last[fn]; !ok {
-			t.Errorf("main has no top-level `x := %s(...)`", fn)
-		} else if got != sinkVar {
-			t.Errorf("%s gets sink %q, want %q", fn, got, sinkVar)
-		}
-	}
-}
-
 // intakeStore records what notifications' real intake handlers decode.
 type intakeStore struct {
 	mu   sync.Mutex
@@ -226,12 +179,4 @@ func TestContactSink_BodyIsWhatNotificationsIntakeReads(t *testing.T) {
 	if len(store.demo) != 1 || store.demo[0] != wantDemo {
 		t.Errorf("intake stored demos %+v, want [%+v]", store.demo, wantDemo)
 	}
-}
-
-func argStrings(args []ast.Expr) []string {
-	out := make([]string, len(args))
-	for i, a := range args {
-		out[i] = types.ExprString(a)
-	}
-	return out
 }

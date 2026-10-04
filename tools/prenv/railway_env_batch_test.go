@@ -28,7 +28,7 @@ const (
 	batchProdAppURL     = "https://app.ascomply.com"
 	batchProdLandingURL = "https://www.ascomply.com"
 
-	batchAllConfirmed = "All 12 environment variables confirmed" // reconcile_url_variables
+	batchAllConfirmed = "All 13 environment variables confirmed" // reconcile_url_variables
 )
 
 // Secret names print `= <redacted>` (Design, "Variable writes").
@@ -53,7 +53,7 @@ func reconcileIntended() map[string]map[string]string {
 	return map[string]map[string]string{
 		sentrySvcID("gateway"):         {"CORS_ALLOWED_ORIGINS": batchOrigins},
 		sentrySvcID("app"):             {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL, "VITE_DEMO_MODE": "true"},
-		sentrySvcID("landing"):         {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_APP_URL": batchAppURL, "VITE_OPS_URL": batchOpsURL, "VITE_SUPPORT_URL": batchSupportURL},
+		sentrySvcID("landing"):         {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_APP_URL": batchAppURL, "VITE_OPS_URL": batchOpsURL, "VITE_SUPPORT_URL": batchSupportURL, "VITE_REGISTRATION_OPEN": "true"},
 		sentrySvcID("ops-console"):     {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL},
 		sentrySvcID("support-console"): {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL},
 	}
@@ -482,12 +482,62 @@ func TestSetServiceVars_OnlyChangedNamesAreWritten(t *testing.T) {
 	if ups := s.upserts(t); len(ups) != 1 {
 		t.Errorf("writes = %v, want app.VITE_LANDING_URL only: every other value is already intended", names(ups))
 	}
-	wantHeld := map[string]string{"gateway": "1 of 1", "app": "2 of 3", "landing": "4 of 4", "ops-console": "2 of 2", "support-console": "2 of 2"}
+	wantHeld := map[string]string{"gateway": "1 of 1", "app": "2 of 3", "landing": "5 of 5", "ops-console": "2 of 2", "support-console": "2 of 2"}
 	if got := heldLines(out); !reflect.DeepEqual(got, wantHeld) {
 		t.Errorf("held lines = %v, want %v", got, wantHeld)
 	}
 	if got := echoLines(out, "app", "VITE_LANDING_URL"); len(got) != 1 || got[0] != "  app.VITE_LANDING_URL = "+batchLandingURL {
 		t.Errorf("app.VITE_LANDING_URL write lines = %q, want one with its value", got)
+	}
+}
+
+// The flag is a build-time switch the fork never inherits: absent or not exactly "true" is rewritten.
+func TestReconcileURLs_WritesTheRegistrationFlag(t *testing.T) {
+	landing := sentrySvcID("landing")
+	for _, stale := range []string{"", "false", "TRUE"} {
+		t.Run("stale="+stale, func(t *testing.T) {
+			stores := reconcileIntended()
+			if stale == "" {
+				delete(stores[landing], "VITE_REGISTRATION_OPEN")
+			} else {
+				stores[landing]["VITE_REGISTRATION_OPEN"] = stale
+			}
+			s := newAuthShim(t, nil, stores)
+			stdout, stderr, code := runReconcileURLs(t, s)
+			out := stdout + stderr
+			if code != 0 {
+				t.Fatalf("exit %d, want 0; output = %q", code, out)
+			}
+			ups := s.upserts(t)
+			if len(ups) != 1 || oneUpsert(t, ups, landing, "VITE_REGISTRATION_OPEN") != "true" {
+				t.Errorf("writes = %v, want landing.VITE_REGISTRATION_OPEN=true only", names(ups))
+			}
+			if got := readStore(t, s, landing)["VITE_REGISTRATION_OPEN"]; got != "true" {
+				t.Errorf("landing.VITE_REGISTRATION_OPEN holds %v, want true", got)
+			}
+			if at := lastWriteOf(s.calls(t), landing, "VITE_REGISTRATION_OPEN"); at < 0 || !s.readAfter(t, landing, at) {
+				t.Errorf("landing was not re-read after the flag write (write at call %d)", at)
+			}
+			if !strings.Contains(out, "  landing.VITE_REGISTRATION_OPEN = true\n") {
+				t.Errorf("no write line for landing.VITE_REGISTRATION_OPEN; output = %q", out)
+			}
+		})
+	}
+}
+
+// guard, passes at HEAD: the flag write must not widen the refusal of the persistent environment.
+func TestReconcileURLs_RefusesThePersistentEnvironment(t *testing.T) {
+	s := newAuthShim(t, nil, reconcileIntended())
+	stdout, stderr, code := s.run(t, batchExports(), "reconcile-urls", persistentEnvironmentID, batchGatewayURL, batchAppURL, batchLandingURL, batchOpsURL, batchSupportURL)
+	out := stdout + stderr
+	if code != 1 {
+		t.Errorf("exit %d, want 1; output = %q", code, out)
+	}
+	if !strings.Contains(errorLines(out), "persistent development environment") {
+		t.Errorf("no ::error:: line refusing the persistent environment; error lines = %q", errorLines(out))
+	}
+	if ups := s.upserts(t); len(ups) != 0 {
+		t.Errorf("a refused run wrote %v", names(ups))
 	}
 }
 

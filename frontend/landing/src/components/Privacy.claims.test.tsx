@@ -520,12 +520,14 @@ describe('sentry: the ledger carries every new sentence', () => {
     }
   })
 
-  it('E3 and E6 carry the Sentry scope note and the four senders', () => {
+  it('E3 and E6 carry the Sentry scope note and the five senders', () => {
     const e3 = rowOf('E3')[0] ?? ''
     const e6 = rowOf('E6')[0] ?? ''
     expect(e3, 'control: E3 row missing').not.toBe('')
     expect(e3).toContain('Sentry')
-    expect(e6).toContain('four network senders')
+    expect(e6).toContain('five network senders')
+    expect(e6).toContain('`register.ts`')
+    expect(flat, 'no ledger row may keep the old count').not.toContain('four network senders')
     expect(e6).toContain('the Sentry SDK started by `instrument.ts`')
   })
 

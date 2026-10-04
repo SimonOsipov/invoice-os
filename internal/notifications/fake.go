@@ -1,9 +1,8 @@
 package notifications
 
-// STUB (AUTH-17-03 red): compile-only; the executor replaces it.
-
 import "context"
 
+// FakeHubSpot and FakeResend stand in for the vendors in fake mode: no network.
 type FakeHubSpot struct{}
 
 func (FakeHubSpot) Upsert(context.Context, Contact) error { return nil }

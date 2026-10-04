@@ -29,6 +29,10 @@ describe('SharedStates: Loading', () => {
     expect(spin.style.width).toBe('16px')
     expect(spin.style.borderRadius).toBe('50%')
     expect(spin.style.borderTopColor).toBe('var(--action)')
+
+    const label = screen.getByText('Loading entities…')
+    expect(label.style.fontSize).toBe('13px')
+    expect(label.style.color).toBe('var(--fg-3)')
   })
 })
 
@@ -46,11 +50,18 @@ describe('SharedStates: ErrorState', () => {
     expect(root.style.border).toBe('1px solid var(--line-1)')
     expect(root.style.borderRadius).toBe('var(--radius-md)')
     expect(root.style.maxWidth).toBe('520px')
+    expect(root.style.padding).toBe('28px')
     expect(container.querySelector('svg'), 'no icon tile').toBeNull()
 
     const title = screen.getByText('Something went wrong')
     expect(title.style.fontSize).toBe('15px')
     expect(title.style.fontWeight).toBe('700')
+    expect(title.style.color, 'title reads --fg-1, as the prototype card inherits it').toBe('var(--fg-1)')
+
+    const message = screen.getByText('The entity list could not be loaded.')
+    expect(message.tagName).toBe('P')
+    expect(message.style.fontSize).toBe('13px')
+    expect(message.style.color).toBe('var(--fg-2)')
 
     const http = screen.getByText('HTTP 503')
     expect(http.classList.contains('mono')).toBe(true)
@@ -90,5 +101,7 @@ describe('SharedStates: EmptyState', () => {
     expect(tile.style.borderRadius).toBe('var(--radius-md)')
     expect(screen.getByText('No entities yet').style.fontWeight).toBe('700')
     expect(message.style.maxWidth).toBe('340px')
+    expect(root.style.border, 'the empty card stays dashed').toBe('1px dashed var(--line-3)')
+    expect(root.style.padding).toBe('56px')
   })
 })

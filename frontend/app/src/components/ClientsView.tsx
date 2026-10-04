@@ -78,9 +78,6 @@ export function healthPillStyle(h: EntityHealth): { bg: string; border: string; 
   }
 }
 
-// One portfolio-row health cell. `health === null` is the not-ready window (rollup still
-// loading/error/idle) → a neutral em-dash, NOT "NO INVOICES YET" (QA finding #1). Renders
-// a single element either way, so the row grid still sees exactly one Health cell.
 type StatusChipStyle = { bg: string; border: string; text: string; label: string }
 
 // Mono chip in a plain wrapper span, so the inline-flex chip does not stretch to its grid track.
@@ -97,6 +94,9 @@ function StatusChip({ s }: { s: StatusChipStyle }) {
   )
 }
 
+// One portfolio-row health cell. `health === null` is the not-ready window (rollup still
+// loading/error/idle) → a neutral em-dash, NOT "NO INVOICES YET" (QA finding #1). Renders
+// a single element either way, so the row grid still sees exactly one Health cell.
 function HealthCell({ health }: { health: EntityHealth | null }) {
   if (health === null) {
     return <span style={{ fontSize: 12.5, color: 'var(--fg-3)' }}>—</span>

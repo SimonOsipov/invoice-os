@@ -623,6 +623,9 @@ describe('ClientsView: the v2 roster (RESKIN2-05-01)', () => {
       expect(chip.style.borderRadius, `${what} corner`).toBe('var(--radius-sm)')
       expect(chip.style.padding, `${what} padding`).toBe('3px 9px')
       expect(chip.style.letterSpacing, `${what} tracking`).toBe('0.04em')
+      expect(chip.style.display, `${what} display`).toBe('inline-flex')
+      expect(chip.style.fontSize, `${what} size`).toBe('10px')
+      expect(chip.style.fontWeight, `${what} weight`).toBe('600')
       expect(chip.childElementCount, `${what} holds no dot`).toBe(0)
       const wrapper = chip.parentElement as HTMLElement
       expect(wrapper.tagName, `${what} sits in a plain span`).toBe('SPAN')

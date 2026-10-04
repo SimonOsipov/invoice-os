@@ -124,6 +124,12 @@ export function DemoLeadForm({
     setErrors((prev) => ({ ...prev, consent: undefined }))
   }
 
+  // Compile-only stub until AUTH-17-08 is implemented.
+  function setMarketing(next: boolean) {
+    void next
+  }
+  void setMarketing
+
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     if (demoStep === 'submitting') return
@@ -153,6 +159,7 @@ export function DemoLeadForm({
       size: form.size,
       volume: form.volume,
       consent: form.consent,
+      marketing: form.marketing,
     }
 
     // All four branches share ONE success/error transition. A tripped honeypot is

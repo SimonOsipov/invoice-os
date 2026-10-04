@@ -25,6 +25,7 @@ beforeEach(() => {
   root = createRoot(container)
   consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
   consoleLog = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+  vi.stubEnv('VITE_GATEWAY_URL', '')
 })
 
 afterEach(async () => {
@@ -202,12 +203,15 @@ describe('B4: two instances in one document share nothing', () => {
     })
 
     const ids = Array.from(container.querySelectorAll<HTMLElement>('[id]')).map((el) => el.id)
-    expect(ids.length).toBe(14)
+    expect(ids.length).toBe(16)
     expect(new Set(ids).size).toBe(ids.length)
 
     await act(async () => typeInto($<HTMLInputElement>('#dm-name'), 'Popup Person'))
     await act(async () => $<HTMLInputElement>('#dc-consent').click())
+    await act(async () => $<HTMLInputElement>('#dc-marketing').click())
 
+    expect($<HTMLInputElement>('#dc-marketing').checked).toBe(true)
+    expect($<HTMLInputElement>('#dm-marketing').checked).toBe(false)
     expect($<HTMLInputElement>('#dm-name').value).toBe('Popup Person')
     expect($<HTMLInputElement>('#dc-name').value).toBe('')
     expect($<HTMLInputElement>('#dc-consent').checked).toBe(true)
@@ -264,9 +268,29 @@ describe('B6: the injected submit prop still short-circuits the wire', () => {
       size: 'Medium ₦1bn–₦5bn',
       volume: '1k–10k',
       consent: true,
+      marketing: false,
     })
     expect(fetchMock).not.toHaveBeenCalled()
     expect(container.textContent).toContain('Something went wrong')
+  })
+
+  it('an injected submit receives marketing: true when the box is ticked, and the gateway is not called', async () => {
+    openGate()
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.x')
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 })
+    vi.stubGlobal('fetch', fetchMock)
+    const injected = vi.fn<(lead: DemoLead) => Promise<void>>().mockResolvedValue(undefined)
+    await mountCard({ submit: injected })
+    await fillValid()
+    await act(async () => $<HTMLInputElement>('#dc-marketing').click())
+
+    await act(async () => $<HTMLButtonElement>('button[type="submit"]').click())
+    await flushAsync()
+
+    expect(injected).toHaveBeenCalledTimes(1)
+    expect(injected.mock.calls[0][0]).toMatchObject({ consent: true, marketing: true })
+    expect(fetchMock, 'an injected submit replaces both the Forms and the gateway calls').not.toHaveBeenCalled()
+    expect(container.textContent).toContain("You're booked")
   })
 })
 

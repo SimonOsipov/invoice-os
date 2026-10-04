@@ -55,6 +55,7 @@ export type DemoLead = {
   size: string
   volume: string
   consent: boolean
+  marketing: boolean
 }
 
 export type HubSpotField = { objectTypeId: '0-1'; name: string; value: string }

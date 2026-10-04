@@ -8,6 +8,7 @@ import (
 	"html"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -103,7 +104,8 @@ func (s *syncWriter) Write(p []byte) (int, error) {
 }
 
 // registrant signs up through the gateway handler; the superuser deletes the GoTrue user and any workspace afterwards.
-func registrant(t *testing.T, gw string) idpUser {
+// answers, when given, ride in the register body as the landing form sends them.
+func registrant(t *testing.T, gw string, answers ...map[string]string) idpUser {
 	t.Helper()
 	conn := superConn(t)
 	u := idpUser{email: "idp-mail-" + uuid.NewString() + "@example.test", password: "pw-" + uuid.NewString()}
@@ -114,8 +116,12 @@ func registrant(t *testing.T, gw string) idpUser {
 		_, _ = conn.Exec(ctx, `DELETE FROM auth.users WHERE email = $1`, u.email)
 	})
 
-	body := strings.NewReader(`{"email":"` + u.email + `","password":"` + u.password + `"}`)
-	resp, err := noRedirect.Post(gw+"/auth/register", "application/json", body)
+	fields := map[string]string{"email": u.email, "password": u.password}
+	for _, a := range answers {
+		maps.Copy(fields, a)
+	}
+	payload, _ := json.Marshal(fields)
+	resp, err := noRedirect.Post(gw+"/auth/register", "application/json", bytes.NewReader(payload))
 	if err != nil {
 		t.Fatalf("POST /auth/register: %v", err)
 	}
@@ -336,7 +342,8 @@ func TestIdP_VerificationLinkIsSingleUse(t *testing.T) {
 func TestIdP_ProvisionedWorkspaceReachesTheNextToken(t *testing.T) {
 	base := idpMailURL(t)
 	gw, _ := startGateway(t, base, 0)
-	u := registrant(t, gw)
+	answers := map[string]string{"workspace_name": "IdP Works", "display_name": "Ada", "kind": "in_house"}
+	u := registrant(t, gw, answers)
 	if got := follow(t, confirmationLink(t, u.email)); got != siteURL+"/?verified=1" {
 		t.Fatalf("verify redirect = %q, want %s/?verified=1", got, siteURL)
 	}
@@ -352,6 +359,17 @@ func TestIdP_ProvisionedWorkspaceReachesTheNextToken(t *testing.T) {
 	if am, _ := jwtPart(t, first, 1)["app_metadata"].(map[string]any); am["tenant_id"] != nil {
 		t.Fatalf("first token app_metadata.tenant_id = %v, want absent", am["tenant_id"])
 	}
+	// The answers survive register, the mailed link and sign-in, and are the only source of the provision body.
+	um, _ := jwtPart(t, first, 1)["user_metadata"].(map[string]any)
+	stored, _ := um["registration"].(map[string]any)
+	if len(stored) != len(answers) {
+		t.Fatalf("first token user_metadata.registration = %v, want exactly %v", um["registration"], answers)
+	}
+	for k, want := range answers {
+		if stored[k] != want {
+			t.Errorf("user_metadata.registration[%q] = %v, want %q", k, stored[k], want)
+		}
+	}
 	caller, err := v.Verify(ctx, first)
 	if err != nil || caller.TenantID != "" {
 		t.Fatalf("Verify the first token: identity %+v, err %v; want a tenant-less identity", caller, err)
@@ -365,8 +383,8 @@ func TestIdP_ProvisionedWorkspaceReachesTheNextToken(t *testing.T) {
 	store := tenancy.NewStore(pool)
 
 	// The caller goes on the context the way identityMiddleware places it.
-	req := httptest.NewRequest(http.MethodPost, "/v1/workspaces",
-		strings.NewReader(`{"workspace_name":"IdP Works","display_name":"Ada","kind":"in_house"}`))
+	provisionBody, _ := json.Marshal(stored)
+	req := httptest.NewRequest(http.MethodPost, "/v1/workspaces", bytes.NewReader(provisionBody))
 	rec := httptest.NewRecorder()
 	tenancy.ProvisionHandler(store.ProvisionWorkspace, nil).ServeHTTP(rec, req.WithContext(auth.WithTenantlessCaller(ctx, caller)))
 	if rec.Code != http.StatusCreated {

@@ -225,14 +225,12 @@ export function RoleCards({ value, onChange, disabledIds, note, noteId: noteIdPr
               // Layer (2) of MoreMenu's four-layer disabled treatment, by CLASS OMISSION
               // rather than by an inline override — the idiom's PURPOSE (a disabled control
               // stops reacting to the pointer), not its form. `.pf-upcard:hover` is
-              // `border-color: var(--action) !important` (platform.css:134-136) and a React
-              // style object cannot emit `!important`, so unlike the unguarded
+              // `border-color: var(--action) !important` and a React style object
+              // cannot emit `!important`, so unlike the unguarded
               // `.pf-menu-item:hover` this one cannot be outranked inline and a dead card
               // would still light up. Omitting the class costs nothing else: `.pf-upcard`
-              // carries only that hover, a transition and a font-family — every card's
-              // padding, radius, border and background is inline, here and at both other
-              // call sites. Adding a `[aria-disabled]` rule to the shared stylesheet would
-              // fix it globally for a state only -07 reaches, which is the edit
+              // carries only that hover, a transition and a font-family.
+              // Adding a `[aria-disabled]` rule to the shared stylesheet would fix it globally for a state only -07 reaches, which is the edit
               // MemberRoleMatrix.tsx:32-33 already declines to make. Do not restore it.
               className={disabled ? undefined : 'pf-upcard'}
               style={{

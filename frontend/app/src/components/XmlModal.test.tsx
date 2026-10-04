@@ -18,6 +18,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
@@ -380,7 +381,7 @@ describe('XmlModal retired copy and the deleted client builder (task-402)', () =
 })
 
 describe('XmlModal shell -- unchanged chrome and dismissal (task-402)', () => {
-  it('V17/AC7: scrim, panel and header chrome are unchanged', async () => {
+  it('V17/AC7: the panel is the v2 panel and the shell keeps its geometry', async () => {
     stubPending() // the header must read the PROP, so the fetch never answers
     renderModal()
     await settle()
@@ -393,7 +394,8 @@ describe('XmlModal shell -- unchanged chrome and dismissal (task-402)', () => {
     const panel = panelOf()
     expect(panel.style.width).toBe('760px')
     expect(panel.style.background).toBe('var(--bg-2)')
-    expect(panel.style.borderRadius).toBe('var(--radius-md)')
+    expect.soft(panel.style.borderRadius).toBe('var(--radius-lg)')
+    expect.soft(panel.style.boxShadow).toBe('var(--shadow-card)')
 
     expect(screen.queryByText('UBL 2.1 document')).not.toBeNull()
     expect(within(scrim).getByText(/^PEPPOL BIS 3\.0 ·/).textContent).toBe(`PEPPOL BIS 3.0 · ${NUMBER}`)
@@ -443,6 +445,71 @@ describe('XmlModal shell -- unchanged chrome and dismissal (task-402)', () => {
     await settle()
     fireEvent.click(panelOf())
     expect(inner.onClose, 'reading the document must not dismiss it').not.toHaveBeenCalled()
+  })
+})
+
+// jsdom drops backdrop-filter from the style attribute, so the scrim is read from SSR markup.
+function ssrScrim(): { html: string; decls: Map<string, string> } {
+  const html = renderToStaticMarkup(
+    <XmlModal ctx={modalCtx()} base={BASE} invoiceId={ID} invoiceNumber={NUMBER} onClose={() => {}} />,
+  )
+  const style = /^<div [^>]*style="([^"]*)"/.exec(html)?.[1]
+  expect(style, 'the outermost element is the scrim').toBeTruthy()
+  return { html, decls: new Map(style!.split(';').filter(Boolean).map((d) => [d.slice(0, d.indexOf(':')), d.slice(d.indexOf(':') + 1)])) }
+}
+
+describe('XmlModal follows the v2 modal (RESKIN2-03-03)', () => {
+  it('the scrim is a token mix with both blur properties, and no oklch', () => {
+    const { html, decls } = ssrScrim()
+
+    expect(decls.get('position'), 'control: the scrim declarations are read').toBe('fixed')
+    expect.soft(decls.get('background')).toBe('color-mix(in srgb, var(--surface) 55%, transparent)')
+    expect.soft(decls.get('backdrop-filter')).toBe('blur(6px)')
+    expect.soft(decls.get('-webkit-backdrop-filter')).toBe('blur(6px)')
+    expect.soft(html).not.toContain('oklch')
+  })
+
+  it('header chrome follows v2', async () => {
+    stubOk(DOC)
+    renderModal()
+    await settle()
+
+    const title = screen.getByText('UBL 2.1 document')
+    const provenance = screen.getByTestId('ubl-provenance')
+    expect(screen.getByTestId('ubl-xml').textContent, 'control: the document is on screen').toBe(DOC)
+    expect(title.className, 'pin: the title keeps card-title').toContain('card-title')
+
+    expect.soft(screen.getByTestId('ubl-modal-close').style.borderRadius).toBe('var(--radius-btn)')
+    expect.soft(title.style.fontSize).toBe('15px')
+    expect.soft(provenance.style.fontSize).toBe('12px')
+    expect.soft(provenance.style.padding).toBe('9px 20px')
+    expect.soft(provenance.style.lineHeight, 'the prototype row declares no lineHeight').toBe('')
+  })
+
+  // Pins: values the prototype draws that already hold at head.
+  it('the rest of the shell keeps the prototype geometry', async () => {
+    stubOk(DOC)
+    renderModal()
+    await settle()
+
+    const scrim = screen.getByTestId('ubl-modal')
+    const panel = panelOf()
+    const header = panel.firstElementChild as HTMLElement
+    const meta = within(scrim).getByText(/^PEPPOL BIS 3\.0 ·/)
+    expect(header.style.padding, 'control: the header style is read').toBe('16px 20px')
+
+    expect.soft(scrim.style.zIndex).toBe('80')
+    expect.soft(scrim.style.padding).toBe('40px')
+    expect.soft(panel.style.maxWidth).toBe('100%')
+    expect.soft(panel.style.border).toBe('1px solid var(--line-2)')
+    expect.soft(meta.style.fontSize).toBe('10px')
+    expect.soft(meta.style.letterSpacing).toBe('0.04em')
+    expect.soft(screen.getByTestId('ubl-modal-close').style.width).toBe('34px')
+    expect.soft(screen.getByTestId('ubl-modal-close').style.height).toBe('34px')
+    expect.soft(screen.getByTestId('download-ubl').style.height).toBe('34px')
+    expect.soft(screen.getByTestId('download-ubl').style.fontSize).toBe('13px')
+    expect.soft(screen.getByTestId('ubl-xml').style.fontSize).toBe('12px')
+    expect.soft(screen.getByTestId('ubl-xml').style.lineHeight).toBe('1.6')
   })
 })
 

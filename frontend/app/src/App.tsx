@@ -220,6 +220,9 @@ const carryView = (view: View): View => (view === 'create' || view === 'detail' 
 const availableSettingsTab = (tab: SettingsTab, mode: Mode): SettingsTab =>
   tab === 'company' && mode !== 'inhouse' ? 'members' : tab
 
+// An in-house workspace has no client portfolio; its /clients URL falls back to the dashboard.
+const availableView = (view: View, mode: Mode): View => (view === 'clients' && mode === 'inhouse' ? 'dashboard' : view)
+
 // The busy beat's floor: resolved after ms regardless of what else is happening.
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
@@ -363,7 +366,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   const [seed] = useState(() => parseLocation(bootPath, bootSearch))
   // Plain const, not a useState: read by the lazy initializers below (all run once at
   // mount) and by the mount-alignment effect further down, so no memoization is needed.
-  const bootView: View = initialView ?? seed.view
+  const bootView: View = availableView(initialView ?? seed.view, mode)
   // Gated on the winning view, like invoiceId/jobId: seed.reviewBatchIds only applies
   // when bootView actually settles on create.
   const bootBatchIds = bootView === 'create' ? seed.reviewBatchIds : []
@@ -641,7 +644,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
       const search = stale ? '' : window.location.search
       if (stale) window.history.replaceState({ e: here }, '', path)
       const at = parseLocation(path, search)
-      setView(at.view)
+      setView(availableView(at.view, mode))
       setDetailInvoiceId(at.invoiceId)
       setExtractionJobId(at.jobId)
       setEditingPolicyId(at.policyId)
@@ -692,6 +695,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // BEFORE their own setState commits, so reading detailInvoiceId/extractionJobId here
   // would serialise the PREVIOUS id.
   function navigate(view: View, params?: RouteParams) {
+    view = availableView(view, mode)
     // settingsTab and q are DURABLE -- a param overrides, absence leaves state alone.
     const tabNext = params?.settingsTab ?? settingsTab
     const qNext = params?.q ?? invoiceQuery

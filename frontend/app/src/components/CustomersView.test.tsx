@@ -301,3 +301,77 @@ describe('CustomersView: isEmpty is the shared allInvoicesIsEmpty predicate (tas
     expect(src).toMatch(/isEmpty:\s*allInvoicesIsEmpty\b/)
   })
 })
+
+// --- RESKIN2-05-02: the v2 register (CU rows) ----------------------------------------
+describe('CustomersView: the v2 register (RESKIN2-05-02)', () => {
+  function readyRows() {
+    return [
+      row({ id: 'a', buyer_tin: '20000000-0001', buyer_name: 'Alpha Traders' }),
+      row({ id: 'b', buyer_tin: '123', buyer_name: 'Beta Traders' }),
+    ]
+  }
+
+  async function renderReady() {
+    mockFetchSequence([listResponse(readyRows(), { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 2 })])
+    const utils = render(<CustomersView ctx={custCtx()} />)
+    await screen.findByText('Alpha Traders')
+    return utils
+  }
+
+  it("CU-01 the h1 takes the heading rule's weight", async () => {
+    await renderReady()
+
+    const h1 = screen.getByRole('heading', { level: 1, name: 'Customers & vendors' })
+    expect(h1.style.fontSize, 'control: the h1 keeps its size').toBe('26px')
+    expect(h1.style.fontWeight, 'the h1 must carry no inline font-weight').toBe('')
+  })
+
+  it('CU-02 the tax-status chip is a 4px mono chip with no dot', async () => {
+    await renderReady()
+
+    const chips = [screen.getByText('VALID', { exact: true }), screen.getByText('NEEDS TIN', { exact: true })]
+    expect(chips).toHaveLength(2)
+    for (const chip of chips) {
+      const what = chip.textContent
+      expect(chip.classList.contains('mono'), `${what} is a mono span`).toBe(true)
+      expect(chip.style.borderRadius, `${what} corner`).toBe('var(--radius-sm)')
+      expect(chip.style.padding, `${what} padding`).toBe('3px 9px')
+      expect(chip.style.letterSpacing, `${what} tracking`).toBe('0.04em')
+      expect(chip.childElementCount, `${what} holds no dot`).toBe(0)
+      const wrapper = chip.parentElement as HTMLElement
+      expect(wrapper.tagName, `${what} sits in a plain span`).toBe('SPAN')
+      expect(wrapper.getAttribute('style'), `${what} wrapper takes no style`).toBeNull()
+    }
+  })
+
+  it('CU-03 avatars are circles', async () => {
+    await renderReady()
+
+    const avatars = ['AT', 'BT'].map((i) => screen.getByText(i, { exact: true }))
+    expect(avatars).toHaveLength(2)
+    for (const a of avatars) expect(a.style.borderRadius, `${a.textContent} avatar`).toBe('50%')
+  })
+
+  it('CU-04 the empty title is 700', async () => {
+    mockFetchSequence([listResponse([], { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 0 })])
+    render(<CustomersView ctx={custCtx()} />)
+
+    const title = await screen.findByText('No customers yet')
+    expect(title.style.fontSize, 'control: the title keeps its size').toBe('16px')
+    expect(title.style.fontWeight).toBe('700')
+  })
+
+  it('CU-05 the register carries no v1 vocabulary (boundary)', async () => {
+    pagedFetchMock(2500, readyRows())
+    const { container } = render(<CustomersView ctx={custCtx()} />)
+    await screen.findByText('Alpha Traders')
+    await screen.findByTestId('customers-truncated-notice')
+
+    const html = container.innerHTML
+    const radii = Array.from(html.matchAll(/(?<![-\w])border-radius:\s*([^;"]+)/g), (m) => m[1].trim())
+    expect(radii.length).toBeGreaterThan(0)
+    expect(radii.filter((r) => r === 'var(--radius-sm)').length, 'control: the chips carry --radius-sm').toBeGreaterThanOrEqual(2)
+    for (const r of radii) expect(['var(--radius-sm)', 'var(--radius-md)', '50%'], `corner "${r}"`).toContain(r)
+    for (const needle of ['999px', '99px', 'oklch', 'gradient', 'box-shadow']) expect(html, needle).not.toContain(needle)
+  })
+})

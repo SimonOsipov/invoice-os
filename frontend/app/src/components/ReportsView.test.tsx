@@ -148,14 +148,14 @@ function topCustomerNames(container: HTMLElement): string[] {
 
 // The queued responses fetchAllInvoices' own paging produces for a given total: page 1
 // (caller-supplied rows) + one filler row per remaining page up to the cap.
-function pagedFetchMock(total: number, firstPageRows: InvoiceRecord[]) {
+function pagedFetchMock(total: number, firstPageRows: InvoiceRecord[], rollup: Rollup = ZERO_ROLLUP) {
   const limit = AGGREGATE_PAGE_SIZE
   const pages = Math.min(Math.ceil(total / limit), AGGREGATE_MAX_PAGES)
   const responses = [listResponse(firstPageRows, { limit, offset: 0, total })]
   for (let page = 2; page <= pages; page++) {
     responses.push(listResponse([row({ id: `filler-${page}`, buyer_tin: tinFor(9000 + page), buyer_name: `Filler Buyer ${page}` })], { limit, offset: (page - 1) * limit, total }))
   }
-  return mockFetch(responses)
+  return mockFetch(responses, rollup)
 }
 
 beforeEach(() => {
@@ -569,5 +569,150 @@ describe('ReportsView: the Validation summary — QA adversarial', () => {
     const summary = await renderSummary({ totals, clients: [], top_violations: [] }, reportsCtx('ent-absent'))
 
     expect(summary).toEqual({ passed: '0', failing: '0', pct: '0% PASS' })
+  })
+})
+
+// --- RESKIN2-05-02: the v2 tax report (RP rows) --------------------------------------
+const RULE_ROLLUP: Rollup = { ...summaryRollup(0, { blocked_by_rules: { num: 2, den: 13 } }), top_violations: [{ rule_key: 'vat_standard_rate', invoices: 2 }] }
+
+function labelDiv(container: HTMLElement, text: string): HTMLElement {
+  const el = Array.from(container.querySelectorAll('div.label')).find((d) => d.textContent === text)
+  if (!el) throw new Error(`no div.label "${text}"`)
+  return el as HTMLElement
+}
+
+describe('ReportsView: the v2 tax report (RESKIN2-05-02)', () => {
+  async function renderReady(rollup: Rollup = RULE_ROLLUP) {
+    mockFetch([listResponse([row({ id: 'inv-r', buyer_tin: tinFor(1), buyer_name: 'Ready Buyer' })], { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 1 })], rollup)
+    const utils = render(<ReportsView ctx={reportsCtx()} />)
+    await screen.findByText('Ready Buyer')
+    await screen.findByText('Passed')
+    return utils
+  }
+
+  it("RP-01 the h1 takes the heading rule's weight", async () => {
+    await renderReady()
+
+    const h1 = screen.getByRole('heading', { level: 1, name: 'Reports & analytics' })
+    expect(h1.style.fontSize, 'control: the h1 keeps its size').toBe('26px')
+    expect(h1.style.fontWeight, 'the h1 must carry no inline font-weight').toBe('')
+  })
+
+  it('RP-02 SAMPLE sits beside its label as a 4px chip', async () => {
+    const { container } = await renderReady()
+
+    const head = labelDiv(container, 'WHT withheld · 5%').parentElement as HTMLElement
+    expect(head.style.display, 'the tile head is a flex row').toBe('flex')
+    expect(head.style.gap).toBe('7px')
+    expect(head.style.justifyContent, 'the chip sits beside the label, not pushed to the far edge').toBe('')
+    const chip = labelDiv(container, 'WHT withheld · 5%').nextElementSibling as HTMLElement
+    expect(chip, 'the label has a sibling chip').not.toBeNull()
+    expect(chip.textContent).toBe('SAMPLE')
+    expect(chip.classList.contains('mono'), 'SAMPLE is a mono span').toBe(true)
+    expect(chip.style.fontSize).toBe('9px')
+    expect(chip.style.fontWeight).toBe('700')
+    expect(chip.style.border).toBe('1px solid var(--line-2)')
+    expect(chip.style.borderRadius).toBe('var(--radius-sm)')
+    expect(chip.style.padding).toBe('1px 5px')
+  })
+
+  it('RP-03 all five KPI values are .money beside a div.label (pin, green at write)', async () => {
+    const { container } = await renderReady()
+
+    const labels = ['Taxable value', 'Output VAT', 'Total invoiced', 'WHT withheld · 5%', 'Invoices in period']
+    const found = labels.map((l) => Array.from(container.querySelectorAll('div')).find((d) => d.className === 'label' && d.textContent === l))
+    expect(found.filter(Boolean), 'all five labels render as div.label').toHaveLength(5)
+    for (const labelEl of found as HTMLElement[]) {
+      const value = (labelEl.parentElement as HTMLElement).nextElementSibling
+      expect(value?.tagName, `${labelEl.textContent} value is a span`).toBe('SPAN')
+      expect(value?.classList.contains('money'), `${labelEl.textContent} value is .money`).toBe(true)
+    }
+  })
+
+  it('RP-04 card titles are 15px card titles', async () => {
+    const { container } = await renderReady()
+
+    const titles = Array.from(container.querySelectorAll('span.card-title'))
+    expect(titles.map((t) => t.textContent)).toEqual(['Top customers by value', 'Validation summary', 'Export & filings'])
+    for (const t of titles) expect((t as HTMLElement).style.fontSize, `${t.textContent} size`).toBe('15px')
+  })
+
+  it('RP-05 Passed and Failing boxes are 6px', async () => {
+    const { container } = await renderReady()
+
+    for (const name of ['Passed', 'Failing']) {
+      const box = labelDiv(container, name).parentElement as HTMLElement
+      expect(box.style.borderRadius, `${name} box corner`).toBe('var(--radius-md)')
+    }
+  })
+
+  it('RP-06 FIRM-WIDE is the 4px chip beside Top failures', async () => {
+    const { container } = await renderReady()
+
+    const label = await screen.findByText('Top failures')
+    const head = label.parentElement as HTMLElement
+    expect(head.style.display).toBe('flex')
+    expect(head.style.gap).toBe('8px')
+    expect(head.style.justifyContent, 'the chip sits beside the label').toBe('')
+    const chip = label.nextElementSibling as HTMLElement
+    expect(chip, 'Top failures has a sibling chip').not.toBeNull()
+    expect(chip.textContent).toBe('FIRM-WIDE')
+    expect(chip.classList.contains('mono')).toBe(true)
+    expect(chip.style.borderRadius).toBe('var(--radius-sm)')
+    expect(chip.style.border).toBe('1px solid var(--line-2)')
+    expect(chip.style.fontSize).toBe('9px')
+    expect(chip.style.fontWeight).toBe('700')
+    expect(chip.style.padding).toBe('1px 5px')
+    expect(container.contains(chip)).toBe(true)
+  })
+
+  it('RP-07 disabled exports read --fg-4 throughout', async () => {
+    await renderReady()
+
+    expect(EXPORT_BUTTONS.length).toBeGreaterThan(0)
+    for (const { name, fmt } of EXPORT_BUTTONS) {
+      const btn = screen.getByRole('button', { name: new RegExp(name) })
+      const chip = btn.querySelector('span.mono') as HTMLElement
+      expect(chip?.textContent, `${name} format chip`).toBe(fmt)
+      expect(chip.style.color, `${name} format chip colour`).toBe('var(--fg-4)')
+      expect(chip.style.borderRadius, `${name} format chip corner`).toBe('var(--radius-sm)')
+    }
+    expect(screen.getByTestId('exports-blocked-reason').style.fontSize, 'the reason is 12px').toBe('12px')
+  })
+
+  it('RP-08 the empty title is 700', async () => {
+    mockFetch([listResponse([], { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 0 })])
+    render(<ReportsView ctx={reportsCtx()} />)
+
+    const title = await screen.findByText('No data to report yet')
+    expect(title.style.fontSize, 'control: the title keeps its size').toBe('16px')
+    expect(title.style.fontWeight).toBe('700')
+  })
+
+  it('RP-09 the report carries no v1 vocabulary (boundary)', async () => {
+    pagedFetchMock(2500, [row({ id: 'inv-a', buyer_tin: tinFor(1), buyer_name: 'Alpha Traders' })], RULE_ROLLUP)
+    const { container } = render(<ReportsView ctx={reportsCtx()} />)
+    await screen.findByText('Alpha Traders')
+    await screen.findByTestId('reports-truncated-notice')
+    await screen.findByText('Top failures')
+
+    const html = container.innerHTML
+    const radii = Array.from(html.matchAll(/(?<![-\w])border-radius:\s*([^;"]+)/g), (m) => m[1].trim())
+    expect(radii.length).toBeGreaterThan(0)
+    expect(radii.filter((r) => r === 'var(--radius-sm)').length, 'control: the chips and bars carry --radius-sm').toBeGreaterThanOrEqual(3)
+    for (const r of radii) expect(['var(--radius-sm)', 'var(--radius-md)'], `corner "${r}"`).toContain(r)
+    for (const needle of ['999px', '99px', 'oklch', 'gradient', 'box-shadow']) expect(html, needle).not.toContain(needle)
+  })
+
+  it('RP-10 a rollup error renders no PASS chip (error; pin, green at write)', async () => {
+    mockFetchRollupError([listResponse([row({ id: 'inv-e', buyer_tin: tinFor(2), buyer_name: 'Ladder Buyer' })], { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 1 })])
+    const { container } = render(<ReportsView ctx={reportsCtx()} />)
+
+    await screen.findByText('Validation summary')
+    await screen.findByRole('button', { name: /retry/i })
+    const title = Array.from(container.querySelectorAll('span.card-title')).find((s) => s.textContent === 'Validation summary')
+    const card = title?.parentElement?.parentElement as HTMLElement
+    expect(card.textContent, 'the Validation summary card holds the shared error card').toContain('Something went wrong')
+    expect(passPct(container), 'no PASS chip beside a failed rollup').toBeUndefined()
   })
 })

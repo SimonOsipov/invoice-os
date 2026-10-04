@@ -69,8 +69,8 @@ const SCOPE_NOT_ROUTED = 'Per-scope routing is not yet available — every polic
 /**
  * The in-flight lock's wrapper. The canvas's drop and click-to-place handlers hang off divs,
  * which no `disabled` prop reaches — so this stays a fieldset even though `WfSelect` now takes
- * a `disabled` of its own (WorkflowParts.tsx:199) for the PERSISTENT recipe. A transient lock
- * keeps the fieldset, per the split at :411-416; `MemberDrawer.tsx:64-71` records the same trade.
+ * a `disabled` of its own for the PERSISTENT recipe. A transient lock keeps the fieldset;
+ * `MemberDrawer.tsx:64-71` records the same trade.
  */
 const FIELDSET_RESET = { border: 0, padding: 0, margin: 0, minInlineSize: 0 } as const
 
@@ -356,14 +356,14 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
 
   return (
     <>
-        <button
-          type="button"
-          onClick={ctx.closePolicy}
-          className="pf-btn"
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginBottom: 12, padding: 0, border: 0, background: 'transparent', color: 'var(--fg-3)', fontSize: 12.5, fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
-        >
-          <span style={{ display: 'inline-flex' }}>{wfBackGlyph}</span> All policies
-        </button>
+      <button
+        type="button"
+        onClick={ctx.closePolicy}
+        className="pf-btn"
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginBottom: 12, padding: 0, border: 0, background: 'transparent', color: 'var(--fg-3)', fontSize: 12.5, fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
+      >
+        <span style={{ display: 'inline-flex' }}>{wfBackGlyph}</span> All policies
+      </button>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 20, flexWrap: 'wrap', marginBottom: 18 }}>
         <div style={{ flex: '1 1 320px', minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', rowGap: 8 }}>
@@ -395,8 +395,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
           </div>
         </div>
 
-        {/* A column, not a row: each control's reason follows it down when the header wraps
-            (WorkflowsView.tsx:86-99). */}
+        {/* A column, not a row: each control's reason follows it down when the header wraps. */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, flex: 'none', maxWidth: 420 }}>
           <div style={{ display: 'flex', gap: 10 }}>
             <button type="button" onClick={clear} disabled={submitting} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 36, padding: '0 14px', fontSize: 13, ...(submitting ? DISABLED_GHOST : null) }}>

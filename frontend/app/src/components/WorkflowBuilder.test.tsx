@@ -2525,6 +2525,19 @@ describe('RESKIN2-05-04 WB: the builder header, palette and canvas', () => {
       expect(screen.getByRole('button', { name }).getAttribute('aria-pressed'), `${name} did not arm`).toBe('true')
       expect(card().style.border, `${name}: an armed card has no action border`).toBe(action)
     }
+
+    cleanup()
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={cardsPolicy()} />)
+    fireEvent.click(within(canvasPanel()).getByText(SIMPLE_TITLE))
+    fireEvent.click(screen.getByRole('button', { name: `Move ${MINI_TITLE}` }))
+    expect(borders(), 'a selected card and an armed card in another lane are both lit').toEqual([action, action, rest])
+
+    fireEvent.click(screen.getByRole('button', { name: `Move ${MINI_TITLE}` }))
+    expect(borders(), 'disarming dims the armed card and leaves the selected one lit').toEqual([action, rest, rest])
+
+    fireEvent.click(screen.getByRole('button', { name: `Move ${SIMPLE_TITLE}` }))
+    fireEvent.click(screen.getByRole('button', { name: `Move ${SIMPLE_TITLE}` }))
+    expect(borders(), 'a card both selected and armed stays lit once disarmed').toEqual([action, rest, rest])
   })
 
   it('WB-11 hints read --fg-3 in 6px boxes (boundary)', () => {
@@ -2585,6 +2598,13 @@ describe('RESKIN2-05-04 WB: the builder header, palette and canvas', () => {
       expect(select.tagName, `${name} is not a select`).toBe('SELECT')
       expect(select.style.backgroundColor, `${name} left --bg-1`).toBe('var(--bg-1)')
     }
+  })
+
+  it('WB-17b a disabled WfSelect keeps --bg-3 whatever background it is given', () => {
+    render(<WfSelect label="Probe" value="a" options={[{ value: 'a', label: 'A' }]} onChange={() => {}} background="var(--bg-2)" disabled />)
+
+    const select = control(screen.getByLabelText('Probe'))
+    expect(select.style.backgroundColor, 'the disabled paint did not outrank the background prop').toBe('var(--bg-3)')
   })
 
   it('WB-18 the Move glyph rests on --fg-4', () => {

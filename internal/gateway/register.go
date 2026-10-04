@@ -10,12 +10,15 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
 	maxRegisterBodyBytes = 4 << 10
 	// Caps what is read from GoTrue: an error body and a session body are both small.
 	maxGoTrueBodyBytes = 64 << 10
+	// Repeats tenancy's maxNameChars on purpose: the gateway does not import tenancy.
+	maxAnswerNameChars = 200
 )
 
 // DefaultRegisterMinResponse is the shortest time any non-400 register answer takes.
@@ -28,8 +31,11 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		var in struct {
-			Email    string `json:"email"`
-			Password string `json:"password"`
+			Email         string  `json:"email"`
+			Password      string  `json:"password"`
+			WorkspaceName *string `json:"workspace_name"`
+			DisplayName   *string `json:"display_name"`
+			Kind          *string `json:"kind"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRegisterBodyBytes)).Decode(&in); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid request body")
@@ -44,7 +50,17 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 			return
 		}
 
-		status, gt, err := postGoTrue(r, client, signup, in, nil)
+		body := map[string]any{"email": in.Email, "password": in.Password}
+		if in.WorkspaceName != nil || in.DisplayName != nil || in.Kind != nil {
+			reg, msg := registrationAnswers(in.WorkspaceName, in.DisplayName, in.Kind)
+			if msg != "" {
+				writeError(w, http.StatusBadRequest, msg)
+				return
+			}
+			body["data"] = map[string]any{"registration": reg}
+		}
+
+		status, gt, err := postGoTrue(r, client, signup, body, nil)
 		upstream := time.Since(start)
 		pending := func() { writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"}) }
 		var send func()
@@ -87,6 +103,38 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 			send()
 		}
 	})
+}
+
+// registrationAnswers trims and validates the answers with tenancy.ProvisionHandler's rules and
+// wording (internal/tenancy/tenancy.go). It returns a refusal message, or the answers to store.
+func registrationAnswers(workspace, display, kind *string) (map[string]string, string) {
+	var w, d string
+	if workspace != nil {
+		w = strings.TrimSpace(*workspace)
+	}
+	if display != nil {
+		d = strings.TrimSpace(*display)
+	}
+	if n := utf8.RuneCountInString(w); n == 0 || n > maxAnswerNameChars {
+		return nil, "workspace_name must be 1 to 200 characters"
+	}
+	if n := utf8.RuneCountInString(d); n == 0 || n > maxAnswerNameChars {
+		return nil, "display_name must be 1 to 200 characters"
+	}
+	if strings.ContainsRune(w, 0) {
+		return nil, "workspace_name must not contain a NUL byte"
+	}
+	if strings.ContainsRune(d, 0) {
+		return nil, "display_name must not contain a NUL byte"
+	}
+	out := map[string]string{"workspace_name": w, "display_name": d}
+	if kind != nil {
+		if *kind != "firm" && *kind != "in_house" {
+			return nil, `kind must be "firm" or "in_house"`
+		}
+		out["kind"] = *kind
+	}
+	return out, ""
 }
 
 // holdMinimum logs the signup timing and waits out what is left of minResponse since start.

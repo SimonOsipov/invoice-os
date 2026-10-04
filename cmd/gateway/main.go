@@ -155,10 +155,11 @@ func main() {
 	// operational, not tenant data.
 	app.Mux.HandleFunc("GET /healthz/fleet", fleetHandler)
 
-	// Public registration, outside /api/ and the verifier, in every build. No CORS wrap:
-	// no browser client calls it yet.
+	// Public registration, outside /api/ and the verifier, in every build. Register is
+	// CORS-wrapped for the landing page; the OPTIONS route stops the POST route 405ing the preflight.
 	reg := registrationHandlers(probed["auth"], siteURL, registerMinResponse, app.Logger)
-	app.Mux.Handle("POST /auth/register", reg.Register)
+	app.Mux.Handle("POST /auth/register", withCORS(reg.Register))
+	app.Mux.Handle("OPTIONS /auth/register", withCORS(reg.Register))
 	app.Mux.Handle("GET /auth/verify", reg.Verify)
 
 	// Public sign-in hand-off, session renewal and sign-out, outside the verifier, in every build.

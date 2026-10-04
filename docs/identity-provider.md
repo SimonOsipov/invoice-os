@@ -297,9 +297,13 @@ query, so no other GoTrue route (`/recover`, `/otp`, `/admin/*`, `/logout` with 
 scope, or `/token` with any other grant) is reachable from outside.
 
 **The flow:**
-1. The client posts `{"email","password"}` to `POST /auth/register` on the gateway. Unless
-   the address is at a free-mail domain (400, GoTrue not called), the gateway posts only
-   those two fields to GoTrue `/signup`. GoTrue creates an unconfirmed user and
+1. The client posts `{"email","password"}` to `POST /auth/register` on the gateway. The body
+   may also carry `workspace_name`, `display_name` and `kind?`. When any of them is present,
+   the gateway validates them with the tenancy rules (trimmed, 1 to 200 characters, no NUL,
+   `kind` `firm` or `in_house`) and posts them to GoTrue `/signup` as
+   `data.registration`; GoTrue stores them as `user_metadata.registration`. Without them the
+   gateway posts only `{"email","password"}`. A free-mail address answers 400 first, and
+   GoTrue is not called. GoTrue creates an unconfirmed user and
    mails a confirmation link through Resend. Every answer except a 400 arrives no earlier
    than `AUTH_REGISTER_MIN_RESPONSE` after the request reached the handler, so a new address
    and a known one take the same time while GoTrue answers faster than that (see Ceilings).
@@ -325,7 +329,7 @@ scope, or `/token` with any other grant) is reachable from outside.
 6. After every 201 the caller holds exactly one active membership, so the next token (a
    refresh grant or a new sign-in) carries `app_metadata.tenant_id`.
 
-**`POST /auth/register`**, outside `/api/`, no verifier, no CORS wrap, in every build:
+**`POST /auth/register`**, outside `/api/`, no verifier, in every build. It is CORS-wrapped, with an `OPTIONS /auth/register` preflight route:
 
 | Outcome | Answer |
 |---|---|
@@ -334,6 +338,7 @@ scope, or `/token` with any other grant) is reachable from outside.
 | GoTrue `over_email_send_rate_limit` (an unconfirmed repeat within 60 s, or the instance mail cap) | the same 202, logged at WARN |
 | GoTrue 5xx whose `code` is SQLSTATE `23505` (the loser of two concurrent signups for one address) | the same 202, logged at WARN |
 | a malformed body, or an empty email or password | 400 `{"error"}` |
+| an answer field is present but `workspace_name` or `display_name` is missing, blank, over 200 characters or holds a NUL byte, or `kind` (even `""`) is not `firm` or `in_house` | 400 with the tenancy wording (`workspace_name must be 1 to 200 characters`, `workspace_name must not contain a NUL byte`, `kind must be "firm" or "in_house"`, and the `display_name` equivalents); GoTrue is not called |
 | an address at a listed free-mail domain or its subdomain | 400 `{"error":"a business email address is required; personal email providers are not accepted"}`; GoTrue is not called |
 | GoTrue `validation_failed`, `weak_password`, `email_address_invalid` | 400 with GoTrue's `msg` |
 | GoTrue `signup_disabled` | 503 `registration is closed` |
@@ -405,6 +410,11 @@ otherwise. The tenant id is a UUIDv5 of the caller's subject; the membership gua
   (see Revocation and Cutting an account off). Its tokens never reach anyone.
 
 **Accepted risks of a link that verifies on GET:**
+- *First registrant's answers.* GoTrue does not update an unconfirmed user on a repeat signup,
+  so the answers (`user_metadata.registration`) of the **first** registrant stay, whoever
+  confirms. A victim who registers after an attacker provisions the attacker's workspace
+  name and kind. This adds no exposure beyond the hijack below, which already hands over the
+  account.
 - *Pre-account hijack.* GoTrue does not update an existing unconfirmed user on a repeat
   signup; it re-sends the confirmation mail for the **first** registrant's password. An
   attacker who registers `victim@corp` first causes a mail to the victim. If the victim then
@@ -1117,9 +1127,8 @@ redirects to the landing page". **The first console that reads real data must ma
 fail closed when `VITE_LANDING_URL` is unset**, and must check the staff claim on the server.
 
 **CORS.** The gateway's one origin list wraps `/api/`, `/auth/sign-in`, `/auth/exchange`,
-`/auth/refresh` and `/auth/sign-out`, so console U2 lets browser JavaScript on the two console
-origins call all of them, not only exchange, refresh and sign-out. `/auth/register` and
-`/auth/verify` are not wrapped. Every `/api/` call still needs a verified bearer, the session check and RLS; the
+`/auth/refresh`, `/auth/sign-out` and `/auth/register`, so console U2 lets browser JavaScript on the two console
+origins call all of them, not only exchange, refresh and sign-out. `/auth/verify` is not wrapped. Every `/api/` call still needs a verified bearer, the session check and RLS; the
 console origins serve only our own bundle, and the same token works from `curl`.
 
 Guarded by the package's `boot.test.ts`, `StaffGate.dom.test.tsx`, `signOut.test.ts`,

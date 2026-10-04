@@ -189,15 +189,18 @@ export function PersonaPopover({
         <button
           type="button"
           data-testid="persona-return-row"
+          className="pf-menu-item"
           onClick={onReturn}
           style={{
             width: '100%',
-            display: 'block',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
             textAlign: 'left',
             border: 0,
             borderTop: '1px solid var(--line-1)',
-            background: 'transparent',
-            padding: '10px 12px',
+            background: 'var(--bg-2)',
+            padding: '9px 12px',
             cursor: 'pointer',
             fontFamily: 'var(--font-sans)',
             fontSize: 12,

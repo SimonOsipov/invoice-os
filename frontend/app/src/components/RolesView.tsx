@@ -124,8 +124,7 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
           {noRoles ? (
             <div data-testid="roles-empty">
               <EmptyState title={EMPTY_TITLE} message={EMPTY_MESSAGE} />
-              {/* Beneath, not inside: `EmptyState` takes {title, message} only, and widening a
-                  shared package for one tab's button is the wrong edit. */}
+              {/* Beneath, not inside: widening a shared package for one tab's button is the wrong edit. */}
               <div style={{ display: 'flex', justifyContent: 'center', marginTop: 14 }}>
                 <NewRoleButton testId="roles-empty-new" onClick={() => openRoleModal('create')} />
               </div>

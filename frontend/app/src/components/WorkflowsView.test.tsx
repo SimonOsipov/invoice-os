@@ -141,7 +141,7 @@ describe('APPR-09-04 AC-1/AC-2/AC-3: the surface is chosen by policiesState, nev
     render(<WorkflowsView ctx={listCtx([], { policiesState: 'empty' })} />)
 
     expect(screen.getByTestId('policies-empty')).toBeTruthy()
-    // TWO nodes, not one: `EmptyState` takes {title, message}, so the shipped sentence splits
+    // TWO nodes, not one: the shipped sentence splits
     // at its em dash and no assertion on the joined string could ever match.
     expect(screen.getByText(EMPTY_TITLE)).toBeTruthy()
     expect(screen.getByText(EMPTY_MESSAGE)).toBeTruthy()

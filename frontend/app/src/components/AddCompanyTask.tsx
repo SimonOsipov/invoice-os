@@ -56,12 +56,17 @@ export function AddCompanyTask({ ctx }: { ctx: PlatformCtx }) {
         </p>
       </div>
       <div data-testid="add-company-task">
-        <EmptyState title={copy.emptyTitle} message={copy.emptyMessage} />
-        <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
-          <button onClick={() => setOpen(true)} disabled={base == null} className="v2-btn v2-btn-primary pf-btn">
-            <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> {copy.button}
-          </button>
-        </div>
+        <EmptyState
+          dense
+          messageMaxWidth={460}
+          title={copy.emptyTitle}
+          message={copy.emptyMessage}
+          action={
+            <button onClick={() => setOpen(true)} disabled={base == null} className="v2-btn v2-btn-primary pf-btn">
+              <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> {copy.button}
+            </button>
+          }
+        />
       </div>
       {open && base != null && (
         <EntityFormModal

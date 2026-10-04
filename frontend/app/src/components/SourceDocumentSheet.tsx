@@ -31,12 +31,12 @@ type Scope = 'file' | 'invoice'
 
 const TOOLBAR: CSSProperties = {
   flex: 'none',
-  padding: '9px 14px',
+  padding: '11px 16px',
   borderBottom: '1px solid var(--line-1)',
   background: 'var(--bg-2)',
   display: 'flex',
   alignItems: 'center',
-  gap: 10,
+  gap: 12,
 }
 
 /** design §6: without these the toolbar labels wrap at narrow widths. */
@@ -45,33 +45,28 @@ const CONTROL: CSSProperties = { whiteSpace: 'nowrap', flex: 'none' }
 const SEGMENT: CSSProperties = {
   ...CONTROL,
   height: 26,
-  padding: '0 12px',
-  // A plain button, never `.pf-btn`/`.pf-chip`: both force `border-radius` with `!important`.
-  borderRadius: 999,
-  border: '1px solid transparent',
+  padding: '0 13px',
+  // A plain button, not `.pf-btn`/`.pf-chip` (they force a radius): the inline token is the corner that renders.
+  borderRadius: 'var(--radius-btn)',
   fontFamily: 'var(--font-sans)',
-  fontSize: 12.5,
+  fontSize: 12,
   fontWeight: 500,
   cursor: 'pointer',
 }
 
 const BANNER: CSSProperties = {
   flex: 'none',
-  padding: '8px 14px',
+  padding: '10px 16px',
   background: 'var(--status-amber-bg)',
-  border: '1px solid var(--status-amber-border)',
-  color: 'var(--status-amber-text)',
-  fontSize: 12.5,
-  lineHeight: 1.55,
+  borderBottom: '1px solid var(--status-amber-border)',
+  color: 'var(--fg-1)',
+  fontSize: 12,
+  lineHeight: 1.5,
 }
 
 const HEAD_CELL: CSSProperties = {
   flex: 'none',
-  padding: '0 8px',
-  fontSize: 10.5,
-  fontWeight: 600,
-  letterSpacing: '0.05em',
-  color: 'var(--fg-3)',
+  padding: '8px 10px',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
@@ -79,12 +74,18 @@ const HEAD_CELL: CSSProperties = {
 
 const CELL: CSSProperties = {
   flex: 'none',
-  padding: '0 8px',
+  padding: '0 10px',
   fontSize: 12,
   color: 'var(--fg-2)',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
+}
+
+function segmentStyle(active: boolean): CSSProperties {
+  return active
+    ? { ...SEGMENT, background: 'var(--bg-2)', border: '1px solid var(--line-2)', color: 'var(--fg-1)' }
+    : { ...SEGMENT, background: 'transparent', border: '1px solid transparent', color: 'var(--fg-3)' }
 }
 
 function plural(n: number, one: string, many: string): string {
@@ -207,14 +208,14 @@ export function SourceDocumentSheet({
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <div data-testid="sheet-toolbar" style={TOOLBAR}>
         <div
-          style={{ ...CONTROL, display: 'flex', alignItems: 'center', gap: 2, padding: 2, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 999 }}
+          style={{ ...CONTROL, display: 'flex', alignItems: 'center', gap: 3, padding: 3, background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-sm)' }}
         >
           <button
             type="button"
             data-testid="sheet-scope-file"
             aria-pressed={scope === 'file'}
             onClick={() => setScope('file')}
-            style={{ ...SEGMENT, background: scope === 'file' ? 'var(--action)' : 'transparent', color: scope === 'file' ? 'var(--text-on-dark)' : 'var(--fg-2)' }}
+            style={segmentStyle(scope === 'file')}
           >
             {`Whole file · ${fmtPlain(total)} ${plural(total, 'row', 'rows')}`}
           </button>
@@ -224,7 +225,7 @@ export function SourceDocumentSheet({
               data-testid="sheet-scope-invoice"
               aria-pressed={scope === 'invoice'}
               onClick={() => setScope('invoice')}
-              style={{ ...SEGMENT, background: scope === 'invoice' ? 'var(--action)' : 'transparent', color: scope === 'invoice' ? 'var(--text-on-dark)' : 'var(--fg-2)' }}
+              style={segmentStyle(scope === 'invoice')}
             >
               {`This invoice · ${fmtPlain(invoiceRowCount)} ${plural(invoiceRowCount, 'row', 'rows')}`}
             </button>
@@ -244,7 +245,8 @@ export function SourceDocumentSheet({
             type="button"
             data-testid="sheet-jump"
             onClick={onJump}
-            style={{ ...CONTROL, height: 28, padding: '0 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--line-2)', background: 'var(--bg-1)', color: 'var(--fg-2)', fontFamily: 'var(--font-sans)', fontSize: 12.5, cursor: 'pointer' }}
+            className="v2-btn v2-btn-ghost pf-btn"
+            style={{ ...CONTROL, height: 30, padding: '0 12px', fontSize: 12 }}
           >
             {`Jump to ${jumpLabel}`}
           </button>
@@ -253,7 +255,7 @@ export function SourceDocumentSheet({
         <span
           className="mono"
           data-testid="sheet-status"
-          style={{ ...CONTROL, marginLeft: 'auto', fontSize: 10.5, letterSpacing: '0.05em', color: 'var(--fg-3)' }}
+          style={{ ...CONTROL, marginLeft: 'auto', fontSize: 10, letterSpacing: '0.06em', color: 'var(--fg-3)' }}
         >
           {status}
         </span>
@@ -285,18 +287,18 @@ export function SourceDocumentSheet({
             setScrollTop(e.currentTarget.scrollTop)
             setViewportH(e.currentTarget.clientHeight)
           }}
-          style={{ flex: 1, overflow: 'auto', position: 'relative', minWidth: 0 }}
+          style={{ flex: 1, overflow: 'auto', position: 'relative', minWidth: 0, background: 'var(--bg-2)' }}
         >
           <div data-testid="sheet-grid" style={{ minWidth: 'min-content' }}>
             <div
               data-testid="sheet-header"
-              style={{ position: 'sticky', top: 0, zIndex: 1, display: 'flex', alignItems: 'center', height: ROW_H, background: 'var(--bg-2)', borderBottom: '1px solid var(--line-2)' }}
+              style={{ position: 'sticky', top: 0, zIndex: 1, display: 'flex', alignItems: 'center', height: ROW_H, background: 'var(--bg-1)', borderBottom: '1px solid var(--line-2)' }}
             >
-              <div className="mono" style={{ ...HEAD_CELL, width: GUTTER_W }}>
+              <div className="label" style={{ ...HEAD_CELL, width: GUTTER_W, textAlign: 'right' }}>
                 #
               </div>
               {sheet.columns.map((c, i) => (
-                <div key={i} style={{ ...HEAD_CELL, width: CELL_W }}>
+                <div key={i} className="label" style={{ ...HEAD_CELL, width: CELL_W }}>
                   {c}
                 </div>
               ))}
@@ -316,13 +318,13 @@ export function SourceDocumentSheet({
                     alignItems: 'center',
                     height: ROW_H,
                     borderBottom: '1px solid var(--line-1)',
-                    ...(marked ? { background: 'var(--accent-10)', boxShadow: 'inset 2px 0 0 var(--accent)' } : null),
+                    ...(marked ? { background: 'var(--action-tint)', boxShadow: 'inset 2px 0 0 var(--action)' } : null),
                   }}
                 >
                   <div
                     className="mono"
                     data-testid="sheet-row-number"
-                    style={{ ...CELL, width: GUTTER_W, color: marked ? 'var(--accent)' : 'var(--fg-4)' }}
+                    style={{ ...CELL, width: GUTTER_W, fontSize: 10.5, textAlign: 'right', color: marked ? 'var(--action)' : 'var(--fg-3)' }}
                   >
                     {row.sheetRow}
                   </div>
@@ -350,21 +352,21 @@ export function SourceDocumentSheet({
             <div
               key={from}
               data-testid="marker-invoice-block"
-              style={{ position: 'absolute', left: 0, right: 0, top: `${pct(from - firstRow, total)}%`, height: `${pct(to - from + 1, total)}%`, minHeight: 4, background: 'var(--accent)' }}
+              style={{ position: 'absolute', left: 2, right: 2, top: `${pct(from - firstRow, total)}%`, height: `${pct(to - from + 1, total)}%`, minHeight: 4, background: 'var(--action)', borderRadius: 2 }}
             />
           ))}
           {viewRuns.map(([from, to]) => (
             <div
               key={from}
               data-testid="marker-viewport"
-              style={{ position: 'absolute', left: 0, right: 0, top: `${pct(from - firstRow, total)}%`, height: `${pct(to - from + 1, total)}%`, minHeight: 4, background: 'var(--action-tint)', border: '1px solid var(--action)' }}
+              style={{ position: 'absolute', left: 2, right: 2, top: `${pct(from - firstRow, total)}%`, height: `${pct(to - from + 1, total)}%`, minHeight: 14, background: 'rgba(83, 107, 109, 0.07)', border: '1px solid var(--line-3)', borderRadius: 3 }}
             />
           ))}
           {ticks.map((n, i) => (
             <div
               key={i}
               data-testid="marker-tick"
-              style={{ position: 'absolute', left: 0, right: 0, top: `${pct(n - firstRow, total)}%`, height: 1, background: 'var(--line-3)' }}
+              style={{ position: 'absolute', left: 4, right: 4, top: `${pct(n - firstRow, total)}%`, height: 1, background: 'var(--line-3)' }}
             />
           ))}
         </div>

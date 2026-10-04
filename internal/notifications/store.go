@@ -88,7 +88,7 @@ type intake struct {
 func (s *Store) Registrant(ctx context.Context, in RegistrantIntake) error {
 	first, last := splitName(in.DisplayName)
 	return s.merge(ctx, intake{
-		email: in.Email, userID: in.UserID, first: first, last: last, company: in.WorkspaceName,
+		email: in.Email, userID: in.UserID, first: first, last: last, company: strings.TrimSpace(in.WorkspaceName),
 		registered: true, consentText: in.ConsentText, consentAt: in.ConsentAt,
 	})
 }
@@ -96,7 +96,7 @@ func (s *Store) Registrant(ctx context.Context, in RegistrantIntake) error {
 func (s *Store) DemoRequest(ctx context.Context, in DemoIntake) error {
 	first, last := splitName(in.Name)
 	return s.merge(ctx, intake{
-		email: in.Email, first: first, last: last, company: in.Company,
+		email: in.Email, first: first, last: last, company: strings.TrimSpace(in.Company),
 		demo: true, consentText: in.ConsentText,
 	})
 }

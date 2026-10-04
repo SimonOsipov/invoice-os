@@ -20,6 +20,7 @@ export type RegisterValues = {
   displayName: string
   workspaceName: string
   kind: RegisterKind | ''
+  marketing: boolean
 }
 
 export type RegisterErrors = Partial<Record<keyof RegisterValues, string>>

@@ -14,7 +14,8 @@ const KINDS: { value: RegisterKind; label: string }[] = [
   { value: 'firm', label: 'For clients — an accounting or tax firm' },
   { value: 'in_house', label: 'For our own company — in-house' },
 ]
-const EMPTY: RegisterValues = { email: '', password: '', displayName: '', workspaceName: '', kind: '' }
+export const PRODUCT_EMAIL_NOTICE = ''
+const EMPTY: RegisterValues = { email: '', password: '', displayName: '', workspaceName: '', kind: '', marketing: false }
 const FIELD_ORDER = ['email', 'password', 'displayName', 'workspaceName'] as const
 const FIELD_IDS = { email: `${ID}-email`, password: `${ID}-password`, displayName: `${ID}-name`, workspaceName: `${ID}-workspace` }
 

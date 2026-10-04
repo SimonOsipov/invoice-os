@@ -2620,3 +2620,167 @@ describe('RESKIN2-05-04 WB: the builder header, palette and canvas', () => {
     expect(screen.getByRole('button', { name: /^Move / }).style.color, 'the armed Move glyph is not --action').toBe('var(--action)')
   })
 })
+
+/** The inspector card of a nothing-selected builder, scoped off its own header. */
+const emptyInspector = () => screen.getByText('Step details').parentElement as HTMLElement
+
+function thresholdPolicy(value: number): Policy {
+  return { ...conditionPolicy(), nodes: [{ id: 'c1', type: 'condition', field: 'amount', op: '>', value, then: [], else: [] }] }
+}
+
+/** Selects the one condition from the canvas by its rule title. */
+function selectThreshold(title: string): void {
+  fireEvent.click(within(canvasPanel()).getByText(title))
+}
+
+const preset = (label: string) => within(inspectorPanel()).getByRole('button', { name: label })
+
+const PRESET_REST = { background: 'var(--bg-1)', color: 'var(--fg-2)', border: '1px solid var(--line-2)' }
+const PRESET_LIT = { background: 'var(--action-tint)', color: 'var(--action)', border: '1px solid var(--action)' }
+
+function presetPaint(label: string) {
+  const s = preset(label).style
+  return { background: s.background, color: s.color, border: s.border }
+}
+
+describe('RESKIN2-05-05 WB: the builder inspector and simulator', () => {
+  it('WB-12 the inspector is a 6px panel with 15px titles', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+
+    const empty = emptyInspector()
+    expect(empty.style.borderRadius, 'the empty inspector is not 6px').toBe('var(--radius-md)')
+    const heading = within(empty).getByText('Step details')
+    expect(heading.style.fontSize, 'the Step details title is not 15px').toBe('15px')
+    expect(heading.style.fontWeight, 'the Step details title is not bold').toBe('700')
+
+    fireEvent.click(within(canvasPanel()).getByText(SIMPLE_TITLE))
+
+    const panel = inspectorPanel()
+    expect(panel.style.borderRadius, 'the selected inspector is not 6px').toBe('var(--radius-md)')
+    const title = within(panel).getByText('Approval step')
+    expect(title.style.fontSize, 'the selected title is not 15px').toBe('15px')
+    expect(title.style.fontWeight, 'the selected title is not bold').toBe('700')
+    const remove = within(panel).getByRole('button', { name: 'Remove' })
+    expect(remove.style.fontSize, 'Remove is not 12.5px').toBe('12.5px')
+    expect(remove.style.fontWeight, 'Remove is not 600').toBe('600')
+    const roles = within(panel).getByRole('button', { name: 'Manage roles' })
+    expect(roles.style.fontWeight, 'Manage roles is not 500').toBe('500')
+  })
+
+  it('WB-13 the RULE box is 6px', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={conditionPolicy()} />)
+    selectThreshold(RULE_TITLE)
+
+    const label = within(inspectorPanel()).getByText('RULE')
+    const box = label.parentElement as HTMLElement
+    expect(box.contains(within(inspectorPanel()).getAllByText(RULE_TITLE)[0]), 'the box holding RULE does not hold the rule sentence').toBe(true)
+    expect(box.style.borderRadius, 'the RULE box is not 6px').toBe('var(--radius-md)')
+  })
+
+  it('WB-14 the builder carries no v1 vocabulary (boundary)', () => {
+    const policy: Policy = {
+      ...conditionPolicy(),
+      nodes: [
+        { id: 'n1', type: 'approval', role: 'fin_mgr', sla: '24', delegate: false },
+        { id: 'c1', type: 'condition', field: 'amount', op: '>', value: 250_000_000, then: [{ id: 'm1', type: 'approval', role: 'cfo', sla: '24', delegate: false }], else: [] },
+        { id: 'n2', type: 'notify', target: 'Tax Team', channel: 'In-app' },
+        { id: 'a1', type: 'autoapprove' },
+      ],
+    }
+    const { container } = render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policy} />)
+    fireEvent.click(within(canvasPanel()).getByText(SIMPLE_TITLE))
+
+    const switches = container.querySelectorAll('button[role="switch"]')
+    expect(switches.length, 'no switch rendered, so the 99px exemption is unobserved').toBeGreaterThan(0)
+
+    const styled = Array.from(container.querySelectorAll('[style]')) as HTMLElement[]
+    expect(styled.length, 'the builder rendered no inline-styled element').toBeGreaterThan(0)
+
+    const allowed = new Set(['var(--radius-sm)', 'var(--radius-md)', '50%', '99px'])
+    const seen = new Set<string>()
+    for (const el of styled) {
+      const css = el.getAttribute('style') ?? ''
+      for (const m of css.matchAll(/border[a-z-]*radius:\s*([^;]+)/g)) {
+        const v = m[1].trim()
+        seen.add(v)
+        expect(allowed.has(v), `an off-vocabulary corner: ${v} on <${el.tagName.toLowerCase()}> ${(el.textContent ?? '').slice(0, 30)}`).toBe(true)
+        if (v === '99px') {
+          expect(el.matches('button[role="switch"]'), `99px outside the toggle track: <${el.tagName.toLowerCase()}> ${(el.textContent ?? '').slice(0, 30)}`).toBe(true)
+        }
+      }
+      expect(css, 'a box-shadow is still painted').not.toMatch(/box-shadow/i)
+      expect(css, 'an oklch colour is still painted').not.toMatch(/oklch/i)
+      expect(css, 'a gradient is still painted').not.toMatch(/gradient/i)
+    }
+    expect(seen.has('var(--radius-md)'), 'no 6px corner observed, so the scan is not reading corners').toBe(true)
+    expect(seen.has('99px'), 'the toggle track pill was not observed').toBe(true)
+  })
+
+  it('WB-15 the simulator\'s dots are circles and its connector a plain line', () => {
+    const policy: Policy = {
+      ...policyWith('fin_mgr'),
+      nodes: [
+        { id: 'n1', type: 'approval', role: 'fin_mgr', sla: '24', delegate: false },
+        { id: 'n2', type: 'approval', role: 'cfo', sla: '24', delegate: false },
+      ],
+    }
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policy} />)
+
+    const panel = simulatorPanel()
+    expect(panel.style.borderRadius, 'the simulator panel is not 6px').toBe('var(--radius-md)')
+    const title = within(panel).getByText('Test a scenario')
+    expect(title.style.fontSize, 'the simulator title is not 15px').toBe('15px')
+    expect(title.style.fontWeight, 'the simulator title is not bold').toBe('700')
+
+    const all = Array.from(panel.querySelectorAll('*')) as HTMLElement[]
+    const dots = all.filter((el) => el.tagName === 'SPAN' && el.style.width === '24px' && el.style.height === '24px')
+    expect(dots, 'two approvals render two step dots').toHaveLength(2)
+    for (const dot of dots) expect(dot.style.borderRadius, 'a step dot is not a circle').toBe('50%')
+
+    // The amount input's ₦ prefix is also an absolute span; it is aria-hidden, the connector parts are not.
+    const lines = all.filter((el) => el.tagName === 'SPAN' && el.style.position === 'absolute' && !el.hasAttribute('aria-hidden'))
+    expect(lines, 'two steps leave one connector line and no arrowhead').toHaveLength(1)
+    expect(lines[0].style.borderRadius, 'the connector still carries a corner').toBe('')
+
+    const arrowheads = all.filter((el) => /border-top:\s*5px solid/.test(el.getAttribute('style') ?? ''))
+    expect(arrowheads, 'the connector arrowhead remains').toHaveLength(0)
+  })
+
+  it('WB-19 the preset matching the threshold is highlighted', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={thresholdPolicy(500_000_000)} />)
+    selectThreshold('Amount greater than ₦500,000,000')
+
+    expect(presetPaint('₦500M'), 'the preset equal to the threshold is not lit').toEqual(PRESET_LIT)
+    expect(presetPaint('₦100M'), '₦100M is not at rest').toEqual(PRESET_REST)
+    expect(presetPaint('₦1B'), '₦1B is not at rest').toEqual(PRESET_REST)
+
+    fireEvent.click(preset('₦1B'))
+
+    expect(presetPaint('₦1B'), 'the clicked preset is not lit').toEqual(PRESET_LIT)
+    expect(presetPaint('₦500M'), 'the previous preset did not return to rest').toEqual(PRESET_REST)
+    expect(presetPaint('₦100M')).toEqual(PRESET_REST)
+  })
+
+  it('WB-20 a threshold matching no preset highlights none (boundary)', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={thresholdPolicy(250_000_000)} />)
+    selectThreshold(RULE_TITLE)
+
+    const labels = ['₦100M', '₦500M', '₦1B']
+    for (const label of labels) expect(presetPaint(label), `${label} is lit though no preset equals the threshold`).toEqual(PRESET_REST)
+
+    const input = within(inspectorPanel()).getByLabelText('Threshold amount in naira') as HTMLInputElement
+    expect(input.value.replace(/\D/g, ''), 'the threshold input no longer reads 250000000').toBe('250000000')
+  })
+
+  it('WB-21 the disabled delegation row is muted at 0.55 with a not-allowed cursor', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+    fireEvent.click(within(canvasPanel()).getByText(SIMPLE_TITLE))
+
+    const tog = within(inspectorPanel()).getByRole('switch', { name: 'Allow delegation' })
+    expect((tog as HTMLButtonElement).disabled, 'the delegation switch is not shut').toBe(true)
+    const row = tog.parentElement as HTMLElement
+    expect(within(row).getByText('Allow delegation'), 'the switch parent is not the delegation row').toBeTruthy()
+    expect(row.style.opacity, 'the delegation row is not muted').toBe('0.55')
+    expect(row.style.cursor, 'the delegation row cursor is not not-allowed').toBe('not-allowed')
+  })
+})

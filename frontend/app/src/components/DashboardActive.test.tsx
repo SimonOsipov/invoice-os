@@ -841,7 +841,7 @@ describe('DashboardActive Recent activity (AUTH-10-07, Core AC-7)', () => {
   })
 })
 
-// RESKIN2-02-02: inline-token reads only; jsdom has no cascade, so resolved values are OV-01..OV-04's.
+// inline-token reads only; jsdom has no cascade, so resolved values are OV-01..OV-04's.
 const cardOf = (title: string) => screen.getByText(title).parentElement!.parentElement as HTMLElement
 const headOf = (title: string) => screen.getByText(title).parentElement as HTMLElement
 const settle = () => screen.findByText('Readiness score')
@@ -859,7 +859,7 @@ const TILE_TITLES = [
 ]
 const PILL_GONE = /radius-pill|border-radius:\s*(99|999)px/
 
-describe('DashboardActive DA-LOOK (RESKIN2-02, D-29)', () => {
+describe('DashboardActive DA-LOOK (D-29)', () => {
   it('each of the 7 legend swatches is a 2px square at 10x10', async () => {
     mockRollupFetch(rollup(0, { draft: 1, validated: 2 }))
     render(<DashboardActive ctx={dashCtx()} />)
@@ -927,7 +927,7 @@ describe('DashboardActive DA-LOOK (RESKIN2-02, D-29)', () => {
   })
 })
 
-describe('DashboardActive Overview header (RESKIN2-02, D-24)', () => {
+describe('DashboardActive Overview header (D-24)', () => {
   it('the h1 is 28px / -0.03em and sets no inline weight, in loading and ready alike', async () => {
     mockRollupFetch(rollup(0))
     render(<DashboardActive ctx={dashCtx()} />)
@@ -945,7 +945,7 @@ describe('DashboardActive Overview header (RESKIN2-02, D-24)', () => {
   })
 })
 
-describe('DashboardActive Needs-attention block flow (RESKIN2-02, D-8)', () => {
+describe('DashboardActive Needs-attention block flow (D-8)', () => {
   const NA = (title = 'Needs attention') => {
     const head = headOf(title)
     return { card: head.parentElement!, body: head.nextElementSibling as HTMLElement }
@@ -1027,7 +1027,7 @@ describe('DashboardActive Needs-attention block flow (RESKIN2-02, D-8)', () => {
   })
 })
 
-describe('DashboardActive small clearances (RESKIN2-02, D-24)', () => {
+describe('DashboardActive small clearances (D-24)', () => {
   it('the donut legend is a 9px column and every count reserves 18px', async () => {
     mockRollupFetch(rollup(0, { draft: 1, validated: 2 }))
     render(<DashboardActive ctx={dashCtx()} />)
@@ -1065,7 +1065,7 @@ describe('DashboardActive small clearances (RESKIN2-02, D-24)', () => {
     expect(none.textContent).toBe('—No invoices yet')
   })
 
-  it('each failure row gives the rule key 150px and the count 40px, and keeps four cells', async () => {
+  it('each failure row gives the rule key 150px on one line and the count a 40px minimum, and keeps four cells', async () => {
     const data = rollup(0, { rejected: 6 })
     data.totals.top_violations = [
       { rule_key: 'buyer-tin-format', invoices: 4 },
@@ -1082,8 +1082,14 @@ describe('DashboardActive small clearances (RESKIN2-02, D-24)', () => {
       expect(keyCell.textContent).toBe(key)
       expect(keyCell.style.width).toBe('150px')
       expect(keyCell.style.flex).toBe('0 0 auto')
+      expect(keyCell.style.whiteSpace).toBe('nowrap')
+      expect(keyCell.style.overflow).toBe('hidden')
+      expect(keyCell.style.textOverflow).toBe('ellipsis')
+      expect(keyCell.title).toBe(key)
       const count = row.children[3] as HTMLElement
-      expect(count.style.width).toBe('40px')
+      expect(count.style.width).toBe('')
+      expect(count.style.minWidth).toBe('40px')
+      expect(count.style.whiteSpace).toBe('nowrap')
       expect(count.style.flex).toBe('0 0 auto')
       expect(count.style.textAlign).toBe('right')
     }
@@ -1103,7 +1109,7 @@ describe('DashboardActive small clearances (RESKIN2-02, D-24)', () => {
   })
 })
 
-describe('DashboardActive states sit inside the page wrapper (RESKIN2-02, D-37)', () => {
+describe('DashboardActive states sit inside the page wrapper (D-37)', () => {
   const wrapperOf = () => screen.getByRole('heading', { level: 1 }).parentElement!.parentElement as HTMLElement
 
   it('loading renders under the header, inside the padded wrapper', () => {

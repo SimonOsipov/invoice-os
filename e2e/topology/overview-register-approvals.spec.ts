@@ -1,6 +1,6 @@
-// The deployed v2 Overview, Invoices and Approvals (RESKIN2-02): resolved values and layout relationships on the PR environment.
+// The deployed v2 Overview, Invoices and Approvals: resolved values and layout relationships on the PR environment.
 // Every state is reached with page.route (D-12); no tenant data is written and no confirm button is clicked (D-13).
-// The api-client Loading / ErrorState / EmptyState look belongs to RESKIN2-05: those states assert placement only (D-37).
+// The api-client Loading / ErrorState / EmptyState look belongs to a later story: those states assert placement only (D-37).
 // Screenshots are attached for the reviewer and never asserted.
 import { test, expect, type Locator, type Page, type Route, type TestInfo } from '@playwright/test'
 import { collectErrors, signInAs } from '../personaSession'
@@ -17,6 +17,7 @@ const EMPTY_PAGE = { invoices: [], pagination: { limit: 50, offset: 0, total: 12
 const EMPTY_ENTITIES = { entities: [], pagination: { limit: 200, offset: 0, total: 0 } }
 const UNAVAILABLE = { error: 'service unavailable' }
 const VIOLATIONS = [
+  { rule_key: 'no-duplicate-invoice-number', invoices: 12345 }, // longest seeded key: ruleKeyDuplicateInvoiceNumber, internal/importer/service.go
   { rule_key: 'buyer-tin-format', invoices: 3 },
   { rule_key: 'vat-standard-rate', invoices: 1 },
 ]
@@ -131,15 +132,6 @@ const centreY = (r: Rect): number => r.y + r.height / 2
 
 type Read = { problems: string[]; rects: Record<string, unknown> }
 
-// expect.poll does not retry a callback that throws, so a throw becomes a problem line.
-async function problemsOf(read: () => Promise<Read>): Promise<string[]> {
-  try {
-    return (await read()).problems
-  } catch (err) {
-    return [`read threw: ${String((err as Error).message).split('\n')[0]}`]
-  }
-}
-
 // Reads at every wide width until `read` reports no problem; the entry viewport is restored.
 async function atWidths(page: Page, label: string, read: () => Promise<Read>): Promise<unknown[]> {
   const entry = page.viewportSize()
@@ -147,8 +139,23 @@ async function atWidths(page: Page, label: string, read: () => Promise<Read>): P
   try {
     for (const width of WIDE_WIDTHS) {
       await page.setViewportSize({ width, height: 1080 })
-      await expect.poll(() => problemsOf(read), { message: `${label} at ${width}px`, timeout: 10_000 }).toEqual([])
-      out.push({ width, ...(await read()).rects })
+      let rects: unknown
+      await expect
+        .poll(
+          async () => {
+            // expect.poll does not retry a throw, so a throw becomes a problem line.
+            try {
+              const r = await read()
+              rects = r.rects
+              return r.problems
+            } catch (err) {
+              return [`read threw: ${String((err as Error).message).split('\n')[0]}`]
+            }
+          },
+          { message: `${label} at ${width}px`, timeout: 10_000 },
+        )
+        .toEqual([])
+      out.push({ width, ...(rects as object) })
     }
   } finally {
     if (entry) await page.setViewportSize(entry)

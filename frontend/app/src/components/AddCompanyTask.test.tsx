@@ -183,8 +183,8 @@ describe('AddCompanyTask (AUTH-10-03)', () => {
   })
 })
 
-// RESKIN2-02-02: inline-token reads; geometry (left edges equal) is OV-04's, deployed.
-describe('AddCompanyTask Overview look (RESKIN2-02, D-28, D-37)', () => {
+// inline-token reads; geometry (left edges equal) is OV-04's, deployed.
+describe('AddCompanyTask Overview look (D-28, D-37)', () => {
   const PAD = '30px 36px 56px'
 
   beforeEach(() => {

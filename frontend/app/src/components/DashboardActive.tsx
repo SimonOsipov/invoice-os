@@ -368,10 +368,10 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
                     <div style={{ width: f.bar, height: '100%', background: 'var(--action)', borderRadius: 'var(--radius-sm)' }} />
                   </div>
                 </div>
-                <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', flex: 'none', width: 150 }}>
+                <span className="mono" title={f.ruleKey} style={{ fontSize: 11, color: 'var(--fg-3)', flex: 'none', width: 150, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {f.ruleKey}
                 </span>
-                <div style={{ textAlign: 'right', flex: 'none', width: 40 }}>
+                <div style={{ textAlign: 'right', flex: 'none', minWidth: 40, whiteSpace: 'nowrap' }}>
                   <span className="money" style={{ fontSize: 16, fontWeight: 700, color: 'var(--status-red-text)' }}>
                     {f.count}
                   </span>

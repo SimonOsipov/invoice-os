@@ -224,8 +224,8 @@ export function RoleCards({ value, onChange, disabledIds, note, noteId: noteIdPr
               data-testid={`${idPrefix}-role-${r.id}`}
               // Layer (2) of MoreMenu's four-layer disabled treatment, by CLASS OMISSION
               // rather than by an inline override — the idiom's PURPOSE (a disabled control
-              // stops reacting to the pointer), not its form. `.pf-upcard:hover` is
-              // `border-color: var(--action) !important` and a React style object
+              // stops reacting to the pointer), not its form. `.pf-upcard:hover` sets
+              // `border-color` with `!important` and a React style object
               // cannot emit `!important`, so unlike the unguarded
               // `.pf-menu-item:hover` this one cannot be outranked inline and a dead card
               // would still light up.

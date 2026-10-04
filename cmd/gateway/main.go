@@ -164,6 +164,8 @@ func main() {
 	app.Mux.Handle("POST /auth/register", withCORS(reg.Register))
 	app.Mux.Handle("OPTIONS /auth/register", withCORS(reg.Register))
 	app.Mux.Handle("GET /auth/verify", reg.Verify)
+	app.Mux.Handle("POST /contacts/demo-request", withCORS(reg.DemoRequest))
+	app.Mux.Handle("OPTIONS /contacts/demo-request", withCORS(reg.DemoRequest))
 
 	// Public sign-in hand-off, session renewal and sign-out, outside the verifier, in every build.
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.

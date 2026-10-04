@@ -13,6 +13,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // MarketingConsent is the sentence the person was shown and when they ticked it (RFC 3339).
@@ -160,4 +162,64 @@ func (u gotrueUser) contact() RegistrantContact {
 		c.Consent = mc
 	}
 	return c
+}
+
+const maxDemoBodyBytes = 4096
+
+// DemoRequestHandler takes the landing's demo-request form and hands it to the sink once, with no retry.
+// ceiling: public and unthrottled, any address can be ticked; no marketing email to demo-route contacts until double opt-in exists, per-IP limit before signup opens (U3).
+func DemoRequestHandler(sink ContactSink, log *slog.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var in struct {
+			Email   string  `json:"email"`
+			Name    string  `json:"name"`
+			Company string  `json:"company"`
+			Text    *string `json:"marketing_consent_text"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxDemoBodyBytes)).Decode(&in); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		d := DemoRequest{Email: strings.TrimSpace(in.Email), Name: strings.TrimSpace(in.Name), Company: strings.TrimSpace(in.Company)}
+		if msg := validateDemoRequest(d, in.Text); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
+		if in.Text != nil {
+			d.MarketingConsentText = *in.Text
+		}
+		if err := sink.DemoRequest(r.Context(), d); err != nil {
+			log.WarnContext(r.Context(), "contacts: demo request hand-off failed", slog.Int("status", failureStatus(err)))
+			writeError(w, http.StatusBadGateway, "demo request is unavailable")
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+	})
+}
+
+// validateDemoRequest returns the 400 message for the first bad field, or "".
+func validateDemoRequest(d DemoRequest, text *string) string {
+	if n := len(d.Email); n < 3 || n > 254 || strings.Count(d.Email, "@") != 1 || strings.IndexFunc(d.Email, unicode.IsSpace) >= 0 {
+		return "email is invalid"
+	}
+	for _, f := range []struct{ label, v string }{{"name", d.Name}, {"company", d.Company}} {
+		if n := utf8.RuneCountInString(f.v); n < 1 || n > 200 {
+			return f.label + " must be 1 to 200 characters"
+		}
+		if strings.ContainsRune(f.v, 0) {
+			return f.label + " must not contain a NUL byte"
+		}
+	}
+	if text != nil {
+		if n := utf8.RuneCountInString(*text); strings.TrimSpace(*text) == "" || n > maxConsentTextChars || strings.ContainsRune(*text, 0) {
+			return "marketing_consent_text must be 1 to 500 characters"
+		}
+	}
+	return ""
 }

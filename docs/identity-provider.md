@@ -366,6 +366,21 @@ add one lower-case domain; its subdomains are refused too. Fullwidth, ideographi
 inner-whitespace forms of a listed domain are refused by GoTrue's own format check (400),
 guarded by `TestIdP_FreeMailVariantsAreNotAccepted`.
 
+**`POST /contacts/demo-request`**, outside `/api/`, no verifier, in every build. CORS-wrapped, with an `OPTIONS` preflight route. Body `{"email","name","company","marketing_consent_text"?}`; other keys are ignored and not forwarded. The body limit is 4096 bytes. Fields are trimmed; `marketing_consent_text` is forwarded as sent.
+
+| Outcome | Answer |
+|---|---|
+| forwarded once to notifications (no retry) | 202 `{"status":"accepted"}` |
+| a malformed or oversized body | 400 `{"error":"invalid request body"}` |
+| email not 3 to 254 bytes, not exactly one `@`, or holds whitespace | 400 `email is invalid` |
+| `name` or `company` not 1 to 200 characters, or holds a NUL byte | 400 `name must be 1 to 200 characters`, `name must not contain a NUL byte`, and the `company` equivalents |
+| `marketing_consent_text` present but blank, over 500 characters or holding a NUL byte | 400 `marketing_consent_text must be 1 to 500 characters` |
+| notifications fails or exceeds 5 s | 502 `demo request is unavailable`; the log carries the status only |
+
+Every answer sets `Cache-Control: no-store`. Any non-POST answers 405. The route is public and unthrottled; the `ceiling:` line in `internal/gateway/contacts.go` `DemoRequestHandler` names the limit. Guarded by `internal/gateway/contacts_test.go` (`TestDemoRequest_*`).
+
+The `/api/` router answers 404 for any path whose first segment after the service is `internal`, before authorization, on the decoded path. Guarded by `internal/gateway/gateway_test.go` `TestRouter_InternalPathNeverReachesUpstream`.
+
 **`GET /auth/verify?token=…&type=signup`**, outside `/api/`:
 
 | Outcome | Answer |
@@ -1146,7 +1161,7 @@ redirects to the landing page". **The first console that reads real data must ma
 fail closed when `VITE_LANDING_URL` is unset**, and must check the staff claim on the server.
 
 **CORS.** The gateway's one origin list wraps `/api/`, `/auth/sign-in`, `/auth/exchange`,
-`/auth/refresh`, `/auth/sign-out` and `/auth/register`, so console U2 lets browser JavaScript on the two console
+`/auth/refresh`, `/auth/sign-out`, `/auth/register` and `/contacts/demo-request`, so console U2 lets browser JavaScript on the two console
 origins call all of them, not only exchange, refresh and sign-out. `/auth/verify` is not wrapped. Every `/api/` call still needs a verified bearer, the session check and RLS; the
 console origins serve only our own bundle, and the same token works from `curl`.
 

@@ -83,9 +83,10 @@ type router struct {
 }
 
 func (rt *router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	service, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, routePrefix), "/")
+	service, rest, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, routePrefix), "/")
 	proxy, ok := rt.proxies[service]
-	if !ok {
+	// Decoded path: the proxy forwards it, so %69nternal reaches the upstream's /internal.
+	if first, _, _ := strings.Cut(rest, "/"); !ok || first == "internal" {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}

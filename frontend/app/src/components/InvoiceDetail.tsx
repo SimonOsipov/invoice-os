@@ -597,10 +597,10 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               INVOICE DETAIL
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>
-              <h1 className="mono" style={{ fontSize: 22, fontWeight: 600, letterSpacing: '-0.01em', margin: 0, whiteSpace: 'nowrap' }}>{inv.invoice_number}</h1>
-              <span data-testid="invoice-status-badge" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: st.bg, border: `1px solid ${st.border}`, borderRadius: 999, padding: '4px 10px' }}>
-                <span style={{ width: 6, height: 6, borderRadius: 99, background: st.text }} />
-                <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: st.text }}>{st.label}</span>
+              <h1 className="mono" style={{ fontSize: 22, letterSpacing: '-0.01em', margin: 0, whiteSpace: 'nowrap' }}>{inv.invoice_number}</h1>
+              <span data-testid="invoice-status-badge" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: st.bg, border: `1px solid ${st.border}`, borderRadius: 'var(--radius-sm)', padding: '3px 9px' }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: st.text }} />
+                <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: st.text, letterSpacing: '0.04em' }}>{st.label}</span>
               </span>
             </div>
             <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>{inv.buyer_name ?? '—'} · {fmtDate(inv.issue_date ?? inv.created_at)}</p>
@@ -615,7 +615,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               still render -- [never-report-success-on-a-skip] is not allowed to depend on
               the bar being mounted. */}
           {(!editing || submitSkipped != null || submitError != null) && (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, maxWidth: 320 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10, maxWidth: 320 }}>
               {/* The decision pair, gated on `!editing` alone -- NOT
                   `can_edit` (task-554, AC-1/AC-2): approve/reject must survive on statuses
                   where `can_edit` is false (queued, submitted, failed, ...), and a decision
@@ -629,7 +629,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   (ghost) does not. */}
               {!editing && (
                 <>
-                  <div data-testid="detail-decision-actions" style={{ display: 'flex', gap: 8 }}>
+                  <div data-testid="detail-decision-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                     {/* Arm -> confirm, same inline machine as Submit below ([no-modal]) --
                         swaps in place to detail-approve-cancel/-confirm while armed. Reject
                         stays independently clickable throughout (disabled only while its own
@@ -643,9 +643,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         title={!inv.can_approve ? (inv.approve_blocked_reason ?? undefined) : undefined}
                         className="v2-btn v2-btn-primary pf-btn"
                         style={{
-                          height: 32,
-                          padding: '0 14px',
-                          fontSize: 13,
+                          height: 34,
                           ...(!inv.can_approve
                             ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' }
                             : null),
@@ -662,9 +660,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                           disabled={approvePhase === 'submitting'}
                           className="v2-btn v2-btn-ghost pf-btn"
                           style={{
-                            height: 32,
-                            padding: '0 14px',
-                            fontSize: 13,
+                            height: 34,
                             ...(approvePhase === 'submitting' ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
                           }}
                         >
@@ -677,9 +673,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                           disabled={approvePhase === 'submitting'}
                           className="v2-btn v2-btn-primary pf-btn"
                           style={{
-                            height: 32,
-                            padding: '0 14px',
-                            fontSize: 13,
+                            height: 34,
                             ...(approvePhase === 'submitting' ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
                           }}
                         >
@@ -695,22 +689,19 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       title={!inv.can_reject ? (inv.reject_blocked_reason ?? undefined) : undefined}
                       className="v2-btn v2-btn-ghost pf-btn"
                       style={{
-                        height: 32,
-                        padding: '0 14px',
-                        fontSize: 13,
+                        height: 34,
                         ...(!inv.can_reject || rejectOpen ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
                       }}
                     >
                       {DETAIL_DECISION_COPY.reject}
                     </button>
                   </div>
-                  {demoBlockedMember != null && <BlockedByRoleNote member={demoBlockedMember} />}
                   {/* Founder-pinned copy, verbatim (DETAIL_DECISION_COPY) -- same placement
                       and styling as detail-submit-confirm-prompt below. */}
                   {approvePhase !== 'idle' && (
-                    <div data-testid="detail-approve-confirm-prompt" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
-                      <div>{DETAIL_DECISION_COPY.approvePrompt}</div>
-                      <div>{DETAIL_DECISION_COPY.approveDetail}</div>
+                    <div data-testid="detail-approve-confirm-prompt" style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)' }}>{DETAIL_DECISION_COPY.approvePrompt}</div>
+                      <div style={{ fontSize: 12, color: 'var(--fg-3)' }}>{DETAIL_DECISION_COPY.approveDetail}</div>
                     </div>
                   )}
                   {/* Inline reject row, never a modal ([no-modal]) -- a sibling OUTSIDE
@@ -718,7 +709,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       (:944-991 below): flexWrap:'wrap' is mandatory, not cosmetic -- the
                       input plus both button labels don't fit on one line at 320px. */}
                   {rejectOpen && (
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                       <input
                         type="text"
                         data-testid="detail-reject-reason"
@@ -728,7 +719,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         onChange={(e) => setRejectReason(e.target.value)}
                         disabled={rejecting}
                         className="pf-input"
-                        style={{ flex: '1 1 220px', minWidth: 160, height: 32, fontSize: 12.5 }}
+                        style={{ flex: '1 1 100%', height: 34, fontSize: 13, padding: '0 10px' }}
                       />
                       <button
                         type="button"
@@ -740,9 +731,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         disabled={rejecting}
                         className="v2-btn v2-btn-ghost pf-btn"
                         style={{
-                          height: 32,
-                          padding: '0 14px',
-                          fontSize: 13,
+                          height: 34,
                           flexShrink: 0,
                           whiteSpace: 'nowrap',
                           ...(rejecting ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
@@ -757,9 +746,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         disabled={rejecting || !canRejectReason(rejectReason)}
                         className="v2-btn v2-btn-primary pf-btn"
                         style={{
-                          height: 32,
-                          padding: '0 14px',
-                          fontSize: 13,
+                          height: 34,
                           flexShrink: 0,
                           whiteSpace: 'nowrap',
                           ...(rejecting || !canRejectReason(rejectReason)
@@ -771,11 +758,12 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       </button>
                     </div>
                   )}
+                  {demoBlockedMember != null && <BlockedByRoleNote member={demoBlockedMember} />}
                 </>
               )}
               {!editing && (
-                <div data-testid="invoice-actions" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
-                  <div style={{ display: 'flex', gap: 8 }}>
+                <div data-testid="invoice-actions" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10 }}>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                     <button
                       type="button"
                       data-testid="edit-toggle"
@@ -787,9 +775,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       disabled={!inv.can_edit}
                       className="v2-btn v2-btn-primary pf-btn"
                       style={{
-                        height: 32,
-                        padding: '0 14px',
-                        fontSize: 13,
+                        height: 34,
                         ...(!inv.can_edit ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' } : null),
                       }}
                     >
@@ -819,9 +805,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       title={!inv.can_revalidate ? (inv.revalidate_blocked_reason ?? undefined) : undefined}
                       className="v2-btn v2-btn-ghost pf-btn"
                       style={{
-                        height: 32,
-                        padding: '0 14px',
-                        fontSize: 13,
+                        height: 34,
                         // Spread ONLY when disabled: an inline `background` on the enabled
                         // button would also kill its legitimate :hover affordance.
                         ...(revalidateDisabled ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
@@ -848,9 +832,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                           title={!inv.can_submit ? (inv.submit_blocked_reason ?? undefined) : undefined}
                           className="v2-btn v2-btn-primary pf-btn"
                           style={{
-                            height: 32,
-                            padding: '0 14px',
-                            fontSize: 13,
+                            height: 34,
                             ...(!inv.can_submit ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' } : null),
                           }}
                         >
@@ -865,9 +847,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                             disabled={submitPhase === 'submitting'}
                             className="v2-btn v2-btn-ghost pf-btn"
                             style={{
-                              height: 32,
-                              padding: '0 14px',
-                              fontSize: 13,
+                              height: 34,
                               ...(submitPhase === 'submitting' ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
                             }}
                           >
@@ -880,9 +860,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                             disabled={submitPhase === 'submitting'}
                             className="v2-btn v2-btn-primary pf-btn"
                             style={{
-                              height: 32,
-                              padding: '0 14px',
-                              fontSize: 13,
+                              height: 34,
                               ...(submitPhase === 'submitting' ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
                             }}
                           >
@@ -902,9 +880,9 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   {/* Founder-pinned copy, verbatim (DETAIL_SUBMIT_COPY) -- two sentences as two
                       lines, matching ReviewInvoicesTab's bulk-bar confirm stage. */}
                   {submitPhase !== 'idle' && (
-                    <div data-testid="detail-submit-confirm-prompt" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
-                      <div>{DETAIL_SUBMIT_COPY.prompt}</div>
-                      <div>{DETAIL_SUBMIT_COPY.detail}</div>
+                    <div data-testid="detail-submit-confirm-prompt" style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)' }}>{DETAIL_SUBMIT_COPY.prompt}</div>
+                      <div style={{ fontSize: 12, color: 'var(--fg-3)' }}>{DETAIL_SUBMIT_COPY.detail}</div>
                     </div>
                   )}
                 </div>

@@ -37,7 +37,7 @@ const T = jwt(ME.user.id, nowSec() + 3600)
 const ANSWERS = { workspace_name: ME.tenant.name, display_name: ME.user.display_name, kind: 'firm' }
 // A registered account's first token: no tenant, the answers in user_metadata.
 const T_ANSWERS = jwt(ME.user.id, nowSec() + 3600, { user_metadata: { registration: ANSWERS } })
-const T2 = jwt(ME.user.id, nowSec() + 7200, { tenant_id: ME.tenant.id })
+const T2 = jwt(ME.user.id, nowSec() + 7200, { iat: nowSec(), app_metadata: { tenant_id: ME.tenant.id } })
 
 let capturedCtx: PlatformCtx | undefined
 let seenUsers: PlatformCtx['user'][] = []

@@ -62,7 +62,7 @@ export function UblDocumentCard({
         </span>
       </div>
       <div data-testid="ubl-document-card" style={{ padding: '15px 18px 16px' }}>
-        <div style={{ display: 'flex', gap: 11 }}>
+        <div style={{ display: 'flex', gap: 11, marginBottom: 13 }}>
           <span style={{ flex: 'none', width: 38, height: 38, borderRadius: 'var(--radius-md)', background: 'var(--bg-3)', color: 'var(--action)', display: 'grid', placeItems: 'center' }}>
             {docGlyph2}
           </span>
@@ -70,7 +70,7 @@ export function UblDocumentCard({
             <div className="mono" data-testid="ubl-card-filename" style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg-1)', wordBreak: 'break-all', lineHeight: 1.4 }}>
               {ublFilename(invoiceNumber)}
             </div>
-            <div className="mono" data-testid="ubl-card-meta" style={{ margin: '3px 0 13px', fontSize: 10, letterSpacing: '0.05em', color: 'var(--fg-3)' }}>
+            <div className="mono" data-testid="ubl-card-meta" style={{ marginTop: 3, fontSize: 10, letterSpacing: '0.05em', color: 'var(--fg-3)' }}>
               UBL 2.1 · PEPPOL BIS 3.0
             </div>
           </div>

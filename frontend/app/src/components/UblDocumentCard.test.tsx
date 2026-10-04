@@ -463,6 +463,7 @@ describe('UblDocumentCard', () => {
     const meta = screen.getByTestId('ubl-card-meta')
     expect.soft(meta.style.fontSize).toBe('10px')
     expect.soft(meta.style.marginTop).toBe('3px')
-    expect.soft(meta.style.marginBottom).toBe('13px')
+    expect.soft(meta.style.marginBottom, 'meta has no bottom margin').toBe('')
+    expect.soft((meta.parentElement as HTMLElement).parentElement!.style.marginBottom, 'identity row bottom margin').toBe('13px')
   })
 })

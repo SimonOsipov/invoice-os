@@ -34,7 +34,7 @@ export function SourceDocumentCard({ meta, onOpen, extraction, onOpenExtraction 
     body = (
       <>
         <div style={{ padding: '13px 14px', marginBottom: 12, border: '1px dashed var(--line-3)', borderRadius: 'var(--radius-md)', background: 'transparent' }}>
-          <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--fg-2)', marginBottom: 4 }}>No source document</div>
+          <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 4 }}>No source document</div>
           <div style={{ fontSize: 12, lineHeight: 1.5, color: 'var(--fg-2)' }}>
             This invoice was typed into ASComply. There is no uploaded file behind it.
           </div>
@@ -59,7 +59,7 @@ export function SourceDocumentCard({ meta, onOpen, extraction, onOpenExtraction 
     const blockedReason = extraction.loading ? null : extraction.failed ? LOOKUP_FAILED : extraction.jobId === null ? NO_EXTRACTION : null
     body = (
       <>
-        <div style={{ display: 'flex', gap: 11 }}>
+        <div style={{ display: 'flex', gap: 11, marginBottom: 13 }}>
           <span style={{ flex: 'none', width: 38, height: 38, borderRadius: 'var(--radius-md)', background: tone.bg, color: tone.fg, display: 'grid', placeItems: 'center' }}>
             {docGlyph2}
           </span>
@@ -67,7 +67,7 @@ export function SourceDocumentCard({ meta, onOpen, extraction, onOpenExtraction 
             <div style={{ fontSize: 13, fontWeight: 600, wordBreak: 'break-all', lineHeight: 1.35 }}>
               {record.filename ?? 'Filename not recorded'}
             </div>
-            <div className="mono" data-testid="source-document-card-meta" style={{ margin: '3px 0 13px', fontSize: 9.5, letterSpacing: '0.05em', color: 'var(--fg-3)' }}>
+            <div className="mono" data-testid="source-document-card-meta" style={{ marginTop: 3, fontSize: 9.5, letterSpacing: '0.05em', color: 'var(--fg-3)' }}>
               {formatLabel(record.filename, record.declared_content_type)} · {formatBytes(record.size_bytes)}
             </div>
           </div>

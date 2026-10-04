@@ -40,6 +40,9 @@ type DemoIntake struct {
 
 type Contact struct {
 	Email              string
+	FirstName          string
+	LastName           string
+	Company            string
 	Tags               []string
 	MarketingEligible  bool
 	ResendApplies      bool

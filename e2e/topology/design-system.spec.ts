@@ -164,13 +164,16 @@ for (const { id, name } of V1_SURFACES) {
   })
 }
 
-type Measured = { tag: string; text: string; left: number; right: number; top: number; bottom: number }
+type Measured = { tag: string; text: string; left: number; right: number; top: number; bottom: number; nav?: boolean }
 
 // Relationships, not pixel values.
 async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[]): Promise<void> {
   const errors = collectErrors(page)
   const res = await page.goto(`${LANDING_URL}/`)
   expect(res?.ok(), `/ returned HTTP ${res?.status()}`).toBeTruthy()
+
+  // A tight row wraps a label rather than overlapping it, so the widest reading is the one-line height.
+  let navLineHeight: number | undefined
 
   for (const width of widths) {
     await page.setViewportSize({ width, height: width === 390 ? 844 : 900 })
@@ -187,6 +190,7 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
           right: r.right,
           top: r.top,
           bottom: r.bottom,
+          nav: Boolean(el.closest('nav')),
           shown: r.width > 0 && r.height > 0 && getComputedStyle(el).visibility === 'visible',
         }
       }
@@ -194,7 +198,7 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
       const row = [...document.querySelectorAll('header a, header button')].map(measure).filter((e) => e.shown)
       return { innerWidth: window.innerWidth, all, row }
     })
-    const strip = ({ tag, text, left, right, top, bottom }: Measured & { shown?: boolean }): Measured => ({ tag, text, left, right, top, bottom })
+    const strip = ({ tag, text, left, right, top, bottom, nav }: Measured & { shown?: boolean }): Measured => ({ tag, text, left, right, top, bottom, nav })
     const all = m.all.map(strip)
     const row = m.row.map(strip).sort((a, b) => a.left - b.left)
     await testInfo.attach(`header-${width}.json`, {
@@ -222,8 +226,19 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
       expect(login!.right, `${width}px: "${CREATE_LABEL}" left ${create!.left} is not right of Platform login right ${login!.right}`).toBeLessThanOrEqual(create!.left + 1)
       const centreGap = Math.abs((create!.top + create!.bottom) / 2 - (login!.top + login!.bottom) / 2)
       expect(centreGap, `${width}px: "${CREATE_LABEL}" and Platform login centre lines differ by ${centreGap}`).toBeLessThanOrEqual(1)
+      const heightGap = Math.abs(create!.bottom - create!.top - (login!.bottom - login!.top))
+      expect(heightGap, `${width}px: "${CREATE_LABEL}" wraps: its height differs from Platform login's by ${heightGap}`).toBeLessThanOrEqual(1)
     } else {
       expect(create, `${width}px: "${CREATE_LABEL}" must be hidden at or below ${CREATE_MAX}px`).toBeUndefined()
+    }
+
+    const navLinks = row.filter((e) => e.tag === 'a' && e.nav)
+    expect(navLinks.length > 0, `${width}px: Primary nav links shown`).toBe(width > BURGER_MAX)
+    if (navLinks.length > 0) {
+      navLineHeight ??= Math.min(...navLinks.map((e) => e.bottom - e.top))
+      for (const e of navLinks) {
+        expect(e.bottom - e.top, `${width}px: nav link "${e.text}" wraps (one line is ${navLineHeight})`).toBeLessThanOrEqual(navLineHeight + 1)
+      }
     }
   }
 

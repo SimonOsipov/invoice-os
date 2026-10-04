@@ -58,8 +58,10 @@ test('landing registration window: the card is enclosed and centred at every wid
         if (!box) return null
         const side = gaps(box, { x: 0, width: viewport.width })
         const fits = enclosesRect({ x: 0, y: 0, width: viewport.width, height: viewport.height }, box, 0.5)
-        return fits && Math.abs(side.left - side.right) <= 1
-      }, { message: `the registration card is not enclosed and centred at ${at}` })
+        const above = box.y
+        const below = viewport.height - (box.y + box.height)
+        return fits && Math.abs(side.left - side.right) <= 1 && Math.abs(above - below) <= 1
+      }, { message: `the registration card is not enclosed and centred (both axes) at ${at}` })
       .toBe(true)
     const box = (await card.boundingBox())!
     const side = gaps(box, { x: 0, width: viewport.width })
@@ -77,13 +79,13 @@ test('landing registration window: at 390x667 the card scrolls itself and the pa
   const { errors, dialog, card } = await openRegister(page)
   await page.setViewportSize(PHONE)
   await settleAnimations(card)
+  const scrollY0 = await page.evaluate(() => window.scrollY)
 
   // An empty submit fails validation before any request, and lengthens the card with its alerts.
   const submit = dialog.getByRole('button', { name: 'Create account →' })
   await submit.click()
   await expect(dialog.getByRole('alert').first()).toBeVisible()
 
-  const scrollY0 = await page.evaluate(() => window.scrollY)
   await submit.scrollIntoViewIfNeeded()
   const overflow = await card.evaluate((el) => ({ scrollHeight: el.scrollHeight, clientHeight: el.clientHeight }))
   expect(overflow.scrollHeight, 'the card has no overflow to scroll at 390x667').toBeGreaterThan(overflow.clientHeight + 1)

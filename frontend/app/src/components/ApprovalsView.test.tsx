@@ -198,6 +198,18 @@ describe('A03-3: empty vs mid-set-empty are different rungs', () => {
     expect(screen.queryByTestId('approvals-pager')).toBeNull()
   })
 
+  it('ES-05 the approvals empty message is 360 wide', async () => {
+    mockFetchSequence([listResponse([], { limit: 50, offset: 0, total: 0 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+
+    const empty = await screen.findByTestId('approvals-empty')
+    const message = within(empty).getByText(APPROVALS_COPY.emptyMessage)
+    expect(message.style.maxWidth).toBe('360px')
+    expect(message.style.margin).toBe('0px')
+    expect(within(empty).queryByRole('button'), 'control: the card has no action').toBeNull()
+  })
+
   it('a mid-set empty page (total>0, this page []) still renders the Pager', async () => {
     const page1 = Array.from({ length: 50 }, (_, i) => approvalRow({ id: `inv-${i}`, invoice_number: `INV-${i}` }))
     mockFetchSequence([

@@ -3,7 +3,7 @@
 // WorkflowsView's oracle: the four-surface ladder and its gates, each row's two claims,
 // and the two write-error slots.
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
@@ -362,6 +362,13 @@ describe('APPR-09-04 QA: exactly one surface, over every status the fetch can re
     // Both strings being present is not enough — swapping the two props keeps both on screen.
     expect(screen.getByText(EMPTY_TITLE).tagName, 'the title is rendered as the body copy').toBe('DIV')
     expect(screen.getByText(EMPTY_MESSAGE).tagName, 'the message is rendered as the heading').toBe('P')
+  })
+
+  it('ES-06 the policies empty message is 360 wide', () => {
+    render(<WorkflowsView ctx={listCtx([], { policiesState: 'empty' })} />)
+
+    const empty = screen.getByTestId('policies-empty')
+    expect(within(empty).getByText(EMPTY_MESSAGE).style.maxWidth).toBe('360px')
   })
 })
 

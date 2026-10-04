@@ -824,6 +824,20 @@ async function readClientsState(page: Page, kind: Kind): Promise<Record<string, 
   return { corners, weight }
 }
 
+// The Workflows empty card: its message draws at 360 and sits inside the card.
+async function readWorkflowsEmpty(page: Page): Promise<Record<string, unknown>> {
+  const empty = page.getByTestId('policies-empty')
+  const message = empty.locator('p')
+  const card = empty.locator('> :first-child')
+  const maxWidth = (await styles(message, ['max-width']))['max-width']
+  expect(maxWidth, 'Workflows empty message max-width').toBe('360px')
+  const { rects, problems } = await boxes({ card, message })
+  inside(rects, 'card', ['message'], problems)
+  if (rects.message && rects.message.width > 360.5) problems.push(`the message is ${rects.message.width}px wide`)
+  expect(problems, 'Workflows empty message placement').toEqual([])
+  return { maxWidth, rects }
+}
+
 for (const c of STATE_CASES) {
   test(`PW-10 ${c.name}`, async ({ page }, testInfo) => {
     test.setTimeout(90_000)
@@ -864,7 +878,8 @@ for (const c of STATE_CASES) {
     if (c.kind === 'error') await expect(page.getByText('HTTP 503', { exact: true }), `${c.name}: the status line`).toBeVisible()
     await settle(page, main(page))
 
-    const reading = c.screen === 'Clients' ? await readClientsState(page, c.kind) : {}
+    const reading =
+      c.screen === 'Clients' ? await readClientsState(page, c.kind) : c.screen === 'Workflows' && c.kind === 'empty' ? await readWorkflowsEmpty(page) : {}
     if (c.screen !== 'Workflows') {
       await expect(page.getByTestId('company-switcher'), `${c.name}: the stub reached the shell, so the switcher lost the entity`).toContainText(entity.name)
     }

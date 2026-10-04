@@ -219,20 +219,22 @@ describe('AddCompanyTask Overview look (D-28, D-37)', () => {
     }
   })
 
-  it('the task keeps its live structure: header, then the EmptyState with the Add button below it', () => {
+  it('the task card holds the Add button (dense, in-card)', () => {
     render(<AddCompanyTask ctx={mkCtx().ctx} />)
 
     const task = screen.getByTestId('add-company-task')
     const header = screen.getByRole('heading', { level: 1 }).parentElement
     expect(header!.nextElementSibling).toBe(task)
-    expect(task.children).toHaveLength(2)
-    const [card, buttonRow] = [...task.children] as HTMLElement[]
-    expect(within(card).getByText(ADD_COMPANY_COPY.inhouse.emptyTitle)).toBeTruthy()
-    expect(within(card).getByText(ADD_COMPANY_COPY.inhouse.emptyMessage)).toBeTruthy()
-    expect(within(card).queryByRole('button')).toBeNull()
-    expect(within(buttonRow).getAllByRole('button')).toHaveLength(1)
-    expect(buttonRow.style.justifyContent).toBe('center')
-    expect(buttonRow.style.marginTop).toBe('16px')
+    expect(task.children, 'one card, no button row beside it').toHaveLength(1)
+    const card = task.firstElementChild as HTMLElement
+    const buttons = within(card).getAllByRole('button')
+    expect(buttons).toHaveLength(1)
+    expect(card.lastElementChild).toBe(buttons[0])
+    expect(card.style.padding).toBe('48px')
+    expect(card.style.background).toBe('transparent')
+    const message = within(card).getByText(ADD_COMPANY_COPY.inhouse.emptyMessage)
+    expect(message.style.maxWidth).toBe('460px')
+    expect(message.style.margin).toBe('0px 0px 20px')
   })
 
   it('loading renders inside the same padded wrapper as the task', () => {

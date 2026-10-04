@@ -144,3 +144,7 @@
   -webkit-appearance: none;
   padding-right: 32px;
 }
+
+/* Dark scopes keep their own scrollbar colours over the .asc-app ones. */
+.asc-app .asc-dark ::-webkit-scrollbar-track { background: transparent; }
+.asc-app .asc-dark ::-webkit-scrollbar-thumb { background: var(--surface-panel-border); }

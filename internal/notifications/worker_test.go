@@ -689,7 +689,22 @@ func TestDeliver_OptInIsNotResentAfterAVersionMiss(t *testing.T) {
 	}
 }
 
-// Two workers: the version 2 job runs while the version 1 job is inside the Resend call, before it records the opt-in.
+// qaNotDoneFor is how long a delivery that waits on the per-person lock must stay pending.
+const qaNotDoneFor = 300 * time.Millisecond
+
+func qaRequireStillWaiting(t *testing.T, ch <-chan qaAttempt, vendorCalls func() int, what string) {
+	t.Helper()
+	select {
+	case a := <-ch:
+		t.Fatalf("%s finished (err = %v) while the earlier version was inside the vendor call", what, a.err)
+	case <-time.After(qaNotDoneFor):
+	}
+	if n := vendorCalls(); n != 1 {
+		t.Fatalf("vendor calls = %d while the earlier version is parked, want 1: %s must wait", n, what)
+	}
+}
+
+// Two workers, one person: the version 2 job waits for the version 1 job, then reads the opt-in it recorded.
 func TestDeliver_OptInIsSentOnceWhenTwoVersionsRunTogether(t *testing.T) {
 	r := qaNewRig(t, ModeReal)
 	email := uniqueEmail(t, r.e, "optinrace")
@@ -697,29 +712,33 @@ func TestDeliver_OptInIsSentOnceWhenTwoVersionsRunTogether(t *testing.T) {
 	gate := qaNewBlockOnce(t, r, 1)
 	r.rs.fn = func(n int, _ Contact, _ bool) error { return gate.wait(n) }
 
-	running := r.workAsync(t, r.jobRow(t, email, "resend", 1))
+	first := r.workAsync(t, r.jobRow(t, email, "resend", 1))
 	gate.awaitEntered(t)
 	qaIntakeWhileRunning(t, func(ctx context.Context, s *Store) error {
 		return s.DemoRequest(ctx, DemoIntake{Email: email, Name: "Ada Lovelace"})
 	}, r.e)
-	res, err := r.work(t, r.jobRow(t, email, "resend", 2))
-	qaRequireCompleted(t, res, err, "version 2 job")
-	gate.open()
-	a := qaAwaitAttempt(t, running)
-	qaRequireCompleted(t, a.res, a.err, "version 1 job")
+	second := r.workAsync(t, r.jobRow(t, email, "resend", 2))
+	qaRequireStillWaiting(t, second, func() int { return len(r.rs.got()) }, "version 2 job")
 
+	gate.open()
+	a := qaAwaitAttempt(t, first)
+	qaRequireCompleted(t, a.res, a.err, "version 1 job")
+	b := qaAwaitAttempt(t, second)
+	qaRequireCompleted(t, b.res, b.err, "version 2 job")
+
+	calls := r.rs.got()
 	opts := 0
-	for _, c := range r.rs.got() {
+	for _, c := range calls {
 		if c.OptIn {
 			opts++
 		}
 	}
-	if opts != 1 {
-		t.Fatalf("opt-in sent %d times, want 1: %+v", opts, r.rs.got())
+	if len(calls) != 2 || opts != 1 || !calls[0].OptIn {
+		t.Fatalf("Sync calls = %+v, want two with the opt-in on the first only", calls)
 	}
 }
 
-// Two workers: the version 2 job delivers while the version 1 call is still in flight and lands after it.
+// Two workers, one person: the version 2 call lands after the version 1 call, so the vendor ends current.
 func TestDeliver_StaleCallLandingLastDoesNotLeaveTheVendorStale(t *testing.T) {
 	r := qaNewRig(t, ModeReal)
 	email := uniqueEmail(t, r.e, "landrace")
@@ -735,25 +754,60 @@ func TestDeliver_StaleCallLandingLastDoesNotLeaveTheVendorStale(t *testing.T) {
 		return err
 	}
 
-	running := r.workAsync(t, r.jobRow(t, email, "hubspot", 1))
+	first := r.workAsync(t, r.jobRow(t, email, "hubspot", 1))
 	gate.awaitEntered(t)
 	qaIntakeWhileRunning(t, func(ctx context.Context, s *Store) error {
 		return s.DemoRequest(ctx, DemoIntake{Email: email, Name: "Ada Lovelace"})
 	}, r.e)
-	res, err := r.work(t, r.jobRow(t, email, "hubspot", 2))
-	qaRequireCompleted(t, res, err, "version 2 job")
+	second := r.workAsync(t, r.jobRow(t, email, "hubspot", 2))
+	qaRequireStillWaiting(t, second, func() int { return len(r.hs.got()) }, "version 2 job")
+
 	gate.open()
-	a := qaAwaitAttempt(t, running)
+	a := qaAwaitAttempt(t, first)
 	qaRequireCompleted(t, a.res, a.err, "version 1 job")
+	b := qaAwaitAttempt(t, second)
+	qaRequireCompleted(t, b.res, b.err, "version 2 job")
 
 	mu.Lock()
 	defer mu.Unlock()
 	if len(landed) != 2 {
 		t.Fatalf("vendor calls landed = %d, want 2", len(landed))
 	}
-	if last := landed[len(landed)-1]; !qaHasTag(last, "demo request") && r.delivery(t, email).HubSpotAt != nil {
-		t.Fatalf("the last call to land = %+v and the row says delivered: the vendor holds version 1", last)
+	if qaHasTag(landed[0], "demo request") || !qaHasTag(landed[1], "demo request") {
+		t.Fatalf("landed = %+v, want version 1 first and version 2 (registered + demo request) last", landed)
 	}
+	if d := r.delivery(t, email); d.Version != 2 || d.HubSpotAt == nil {
+		t.Errorf("version = %d, hubspot_delivered_at = %v, want a delivery recorded at version 2", d.Version, d.HubSpotAt)
+	}
+}
+
+// The lock is per person and destination: a parked HubSpot call for one person holds up neither
+// that person's Resend job nor another person's HubSpot job.
+func TestDeliver_TheLockIsPerPersonAndDestination(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	ada := uniqueEmail(t, r.e, "lockada")
+	bob := uniqueEmail(t, r.e, "lockbob")
+	qaRegistrant(t, r.e, ada, "Ada Lovelace", "", consentText)
+	qaRegistrant(t, r.e, bob, "Bob Babbage", "", "")
+	gate := qaNewBlockOnce(t, r, 1)
+	r.hs.fn = func(n int, _ Contact) error { return gate.wait(n) }
+
+	parked := r.workAsync(t, r.jobRow(t, ada, "hubspot", 1))
+	gate.awaitEntered(t)
+	otherDest := r.workAsync(t, r.jobRow(t, ada, "resend", 1))
+	otherPerson := r.workAsync(t, r.jobRow(t, bob, "hubspot", 1))
+
+	a := qaAwaitAttempt(t, otherDest)
+	qaRequireCompleted(t, a.res, a.err, "same person, other destination")
+	b := qaAwaitAttempt(t, otherPerson)
+	qaRequireCompleted(t, b.res, b.err, "other person, same destination")
+	if d := r.delivery(t, ada); d.ResendAt == nil || d.HubSpotAt != nil {
+		t.Errorf("resend_delivered_at = %v, hubspot_delivered_at = %v, want Resend delivered and HubSpot still parked", d.ResendAt, d.HubSpotAt)
+	}
+
+	gate.open()
+	c := qaAwaitAttempt(t, parked)
+	qaRequireCompleted(t, c.res, c.err, "parked job")
 }
 
 func TestDeliver_UntickedRegistrantNeverOptsIn(t *testing.T) {

@@ -1664,6 +1664,8 @@ func TestRouter_InternalPathRawRequestLinesNeverReachUpstream(t *testing.T) {
 		"http://gw.test/api/notifications/internal" + reg,
 		"/api/notifications/internal",
 		"/api/notifications/internal/",
+		"/api/notifications/v1/../internal" + reg,
+		"/api/notifications//internal" + reg,
 	}
 	// Reach the upstream, which is a case-sensitive Go mux, but no /internal route there.
 	proxiedHarmless := []string{
@@ -1679,9 +1681,7 @@ func TestRouter_InternalPathRawRequestLinesNeverReachUpstream(t *testing.T) {
 	}
 	// A non-CONNECT request is cleaned by the mux (301) before the router; CONNECT is not, so the router sees these unclean.
 	cleanedOrUnclean := []string{
-		"/api/notifications/v1/../internal" + reg,
 		"/api/notifications/INTERNAL/../internal" + reg,
-		"/api/notifications//internal" + reg,
 		"/api/notifications/./internal" + reg,
 		"/api/notifications/%2Finternal" + reg,
 		"/api/notifications/\xff/../internal" + reg,
@@ -1714,5 +1714,25 @@ func TestRouter_InternalPathRawRequestLinesNeverReachUpstream(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// Near misses of the internal segment still proxy: only a segment that resolves to "internal" is refused.
+func TestRouter_InternalNearMissesStillProxy(t *testing.T) {
+	rig := newInternalRig(t)
+	token := rig.tg.validToken(t)
+	c := rig.counts["notifications"]
+	for _, target := range []string{
+		"/api/notifications/v1/internal/x",
+		"/api/notifications/internals/x",
+		"/api/notifications/internal-status",
+		"/api/notifications/x/internal",
+	} {
+		t.Run(target, func(t *testing.T) {
+			c.reset()
+			if status, _ := rig.rawDo(t, http.MethodConnect, target, token); status == http.StatusNotFound && c.any.Load() == 0 {
+				t.Errorf("answered 404 with 0 upstream hits, want the request proxied")
+			}
+		})
 	}
 }

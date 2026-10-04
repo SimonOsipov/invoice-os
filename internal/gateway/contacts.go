@@ -97,13 +97,13 @@ func (s *httpContactSink) post(ctx context.Context, name string, body any) error
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxGoTrueBodyBytes))
-	if resp.StatusCode/100 != 2 {
+	if resp.StatusCode != http.StatusAccepted {
 		return sinkStatusError(resp.StatusCode)
 	}
 	return nil
 }
 
-// sinkStatusError is a non-2xx answer from notifications; the hand-off WARN logs its code.
+// sinkStatusError is any answer from notifications but 202; the hand-off WARN logs its code.
 type sinkStatusError int
 
 func (e sinkStatusError) Error() string { return fmt.Sprintf("notifications answered %d", int(e)) }
@@ -205,7 +205,7 @@ func DemoRequestHandler(sink ContactSink, log *slog.Logger) http.Handler {
 
 // validateDemoRequest returns the 400 message for the first bad field, or "".
 func validateDemoRequest(d DemoRequest, text *string) string {
-	if n := len(d.Email); n < 3 || n > 254 || strings.Count(d.Email, "@") != 1 || strings.IndexFunc(d.Email, unicode.IsSpace) >= 0 {
+	if n := len(d.Email); n < 3 || n > 254 || strings.Count(d.Email, "@") != 1 || strings.IndexFunc(d.Email, unicode.IsSpace) >= 0 || strings.ContainsRune(d.Email, 0) {
 		return "email is invalid"
 	}
 	for _, f := range []struct{ label, v string }{{"name", d.Name}, {"company", d.Company}} {

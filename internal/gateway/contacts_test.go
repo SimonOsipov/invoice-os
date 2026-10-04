@@ -567,6 +567,29 @@ func TestHandOff_FailingSinkIsTriedThreeTimes(t *testing.T) {
 	}
 }
 
+// Only 202 is success; any other 2xx from notifications is a failed hand-off.
+func TestHTTPSink_OnlyAcceptedIsSuccess(t *testing.T) {
+	for _, status := range []int{http.StatusOK, http.StatusNoContent} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			withHandOffDelays(t, 0, 0)
+			base, reqs := intakeServer(t, status)
+			sink := NewHTTPContactSink(base, testClient(), "tok")
+
+			rec := serveDemo(newDemoHandler(sink), demoJSON(map[string]any{"marketing_consent_text": "I agree."}))
+			requireDemoAnswer(t, rec, http.StatusBadGateway, demoUnavail)
+
+			log, logs := newCaptureLog()
+			handOffRegistrant(context.Background(), log, sink, coWant)
+			if got := logs.waitWarn(t).attrs["status"]; got != strconv.Itoa(status) {
+				t.Errorf("WARN status %q, want %d", got, status)
+			}
+			if n := len(reqs()); n != 4 {
+				t.Errorf("notifications saw %d requests, want 1 demo + 3 hand-off attempts", n)
+			}
+		})
+	}
+}
+
 func TestHandOff_WarnNamesTheStatusTheHTTPSinkSaw(t *testing.T) {
 	withHandOffDelays(t, 0, 0)
 	base, reqs := intakeServer(t, http.StatusServiceUnavailable)

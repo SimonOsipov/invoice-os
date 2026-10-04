@@ -375,11 +375,11 @@ guarded by `TestIdP_FreeMailVariantsAreNotAccepted`.
 | email not 3 to 254 bytes, not exactly one `@`, or holds whitespace | 400 `email is invalid` |
 | `name` or `company` not 1 to 200 characters, or holds a NUL byte | 400 `name must be 1 to 200 characters`, `name must not contain a NUL byte`, and the `company` equivalents |
 | `marketing_consent_text` present but blank, over 500 characters or holding a NUL byte | 400 `marketing_consent_text must be 1 to 500 characters` |
-| notifications fails or exceeds 5 s | 502 `demo request is unavailable`; the log carries the status only |
+| notifications fails, answers anything but 202, or exceeds 5 s | 502 `demo request is unavailable`; the log carries the status only |
 
 The handler sets `Cache-Control: no-store` on every answer it writes. Any method but POST and a preflight answers 405. The route is public and unthrottled; the `ceiling:` line in `internal/gateway/contacts.go` `DemoRequestHandler` names the limit. Guarded by `internal/gateway/contacts_test.go` (`TestDemoRequest_*`).
 
-The `/api/` router answers 404 for any path whose first segment after the service is `internal`, before authorization, on the decoded path. Guarded by `internal/gateway/gateway_test.go` `TestRouter_InternalPathNeverReachesUpstream`.
+The `/api/` router answers 404 for any path whose first segment after the service is `internal`, before authorization, on the decoded path after `path.Clean`, so a dot-dot or empty segment that resolves to `internal` is refused for every method, CONNECT included. Guarded by `internal/gateway/gateway_test.go` `TestRouter_InternalPathNeverReachesUpstream`.
 
 **`GET /auth/verify?token=…&type=signup`**, outside `/api/`:
 

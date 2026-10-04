@@ -11,7 +11,7 @@ export function BlockedByRoleNote({ member }: { member: Member }) {
   return (
     <div
       data-testid="persona-blocked-note"
-      style={{ display: 'flex', gap: 8, alignItems: 'flex-start', background: 'var(--bg-3)', borderRadius: 8, padding: '10px 11px' }}
+      style={{ display: 'flex', gap: 8, alignItems: 'flex-start', background: 'var(--bg-3)', borderRadius: 'var(--radius-md)', padding: '10px 11px' }}
     >
       <span style={{ flex: 'none', color: 'var(--fg-4)', marginTop: 2 }}>{demoLockGlyph}</span>
       <span style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5 }}>

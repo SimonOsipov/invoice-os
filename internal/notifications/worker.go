@@ -50,8 +50,8 @@ type DeliverWorker struct {
 	Logger  *slog.Logger
 }
 
-// Work delivers the row as it is now, not as it was queued: a retry after a version miss
-// carries the new facts. Neither the email nor a name reaches a log line or an error.
+// Work delivers the row at the version the job was queued for. A newer version has its own job,
+// so an older job returns nil and never races it. Neither the email nor a name reaches a log line or an error.
 func (w *DeliverWorker) Work(ctx context.Context, job *river.Job[DeliverArgs]) error {
 	dest := job.Args.Destination
 	if dest != destHubSpot && dest != destResend {
@@ -77,7 +77,7 @@ func (w *DeliverWorker) Work(ctx context.Context, job *river.Job[DeliverArgs]) e
 	if err != nil {
 		return fmt.Errorf("notifications: read contact: %w", err)
 	}
-	if delivered {
+	if delivered || version != job.Args.Version {
 		return nil
 	}
 
@@ -106,14 +106,12 @@ func (w *DeliverWorker) Work(ctx context.Context, job *river.Job[DeliverArgs]) e
 	}
 
 	col := dest + "_delivered_at"
-	tag, err := w.Pool.Exec(ctx, `UPDATE contacts SET `+col+` = now(), delivery_mode = $2 WHERE email = $1 AND version = $3`,
+	_, err = w.Pool.Exec(ctx, `UPDATE contacts SET `+col+` = now(), delivery_mode = $2 WHERE email = $1 AND version = $3`,
 		c.Email, string(w.Mode), version)
 	if err != nil {
 		return fmt.Errorf("notifications: record delivery: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return errors.New("notifications: contact changed during delivery")
-	}
+	// A miss means a newer version, and its own job, landed during delivery.
 	return nil
 }
 

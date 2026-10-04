@@ -518,8 +518,8 @@ func TestDeliver_FailureLeavesDeliveryUnset(t *testing.T) {
 	}
 }
 
-// Intake lands while the client runs: the update misses the new version and River retries.
-func TestDeliver_FactAddedBeforeUpdateIsRetried(t *testing.T) {
+// Intake lands while the client runs: the update misses the new version; the version 2 job delivers.
+func TestDeliver_FactAddedBeforeUpdateIsDeliveredByTheNewJob(t *testing.T) {
 	r := qaNewRig(t, ModeReal)
 	email := uniqueEmail(t, r.e, "before")
 	qaRegistrant(t, r.e, email, "Zelda Quuxington", "Zeta Holdings", "")
@@ -534,16 +534,16 @@ func TestDeliver_FactAddedBeforeUpdateIsRetried(t *testing.T) {
 	gate.open()
 
 	a := qaAwaitAttempt(t, running)
-	qaRequireRetryable(t, a.res, a.err, "attempt 1 after the version moved")
+	qaRequireCompleted(t, a.res, a.err, "attempt 1 after the version moved")
 	d := r.delivery(t, email)
 	if d.Version != 2 || d.HubSpotAt != nil {
 		t.Fatalf("version = %d, hubspot_delivered_at = %v, want 2 and NULL: the stale attempt must not record a delivery", d.Version, d.HubSpotAt)
 	}
 
 	before := dbNow(t, r.e)
-	res, err := r.work(t, a.res.Job)
+	res, err := r.work(t, r.jobRow(t, email, "hubspot", 2))
 	after := dbNow(t, r.e)
-	qaRequireCompleted(t, res, err, "retry with the new facts")
+	qaRequireCompleted(t, res, err, "version 2 job")
 	calls := r.hs.got()
 	if len(calls) != 2 {
 		t.Fatalf("HubSpot.Upsert called %d times, want 2", len(calls))
@@ -551,19 +551,39 @@ func TestDeliver_FactAddedBeforeUpdateIsRetried(t *testing.T) {
 	if first := calls[0]; qaHasTag(first, "demo request") || first.MarketingEligible {
 		t.Errorf("first call = %+v, want the facts as read before the intake", first)
 	}
-	if retry := calls[1]; !qaHasTag(retry, "demo request") || !qaHasTag(retry, "registered") || !retry.MarketingEligible {
-		t.Errorf("retry call = %+v, want registered + demo request and marketing eligible", retry)
+	if second := calls[1]; !qaHasTag(second, "demo request") || !qaHasTag(second, "registered") || !second.MarketingEligible {
+		t.Errorf("version 2 call = %+v, want registered + demo request and marketing eligible", second)
 	}
 	d = r.delivery(t, email)
 	requireSetBetween(t, "hubspot_delivered_at", d.HubSpotAt, before, after)
 
-	// The version-2 job the intake queued finds the destination delivered.
-	res, err = r.work(t, r.jobRow(t, email, "hubspot", 2))
-	qaRequireCompleted(t, res, err, "version 2 job")
-	if n := len(r.hs.got()); n != 2 {
-		t.Errorf("HubSpot.Upsert called %d times after the version 2 job, want 2", n)
-	}
 	qaRequireNoLeak(t, a.err, r.sinks(), email, "Zelda", "Quuxington", "Zeta Holdings")
+}
+
+// A job queued for an older version is dropped before any vendor call: the newer job delivers.
+func TestDeliver_StaleVersionJobMakesNoCall(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "stale")
+	qaRegistrant(t, r.e, email, "Ada Lovelace", "", consentText)
+	if err := r.e.store.DemoRequest(context.Background(), DemoIntake{Email: email, Name: "Ada Lovelace"}); err != nil {
+		t.Fatalf("DemoRequest: %v", err)
+	}
+
+	for _, dest := range []string{"hubspot", "resend"} {
+		res, err := r.work(t, r.jobRow(t, email, dest, 1))
+		qaRequireCompleted(t, res, err, dest+" version 1 job")
+	}
+	if n, m := len(r.hs.got()), len(r.rs.got()); n != 0 || m != 0 {
+		t.Fatalf("client calls = hubspot %d, resend %d, want none from a stale job", n, m)
+	}
+
+	res, err := r.work(t, r.jobRow(t, email, "hubspot", 2))
+	qaRequireCompleted(t, res, err, "hubspot version 2 job")
+	res, err = r.work(t, r.jobRow(t, email, "resend", 2))
+	qaRequireCompleted(t, res, err, "resend version 2 job")
+	if n, m := len(r.hs.got()), len(r.rs.got()); n != 1 || m != 1 {
+		t.Fatalf("client calls = hubspot %d, resend %d, want 1 each from the current job", n, m)
+	}
 }
 
 // Intake lands after the update committed but while River still holds the job running.
@@ -639,7 +659,7 @@ func TestDeliver_OptInSentOnce(t *testing.T) {
 	}
 }
 
-// The opt-in is sent and recorded, then the guarded update misses: the retry must not send it again.
+// The opt-in is sent and recorded, then the guarded update misses: the version 2 job must not send it again.
 func TestDeliver_OptInIsNotResentAfterAVersionMiss(t *testing.T) {
 	r := qaNewRig(t, ModeReal)
 	email := uniqueEmail(t, r.e, "optinretry")
@@ -655,17 +675,17 @@ func TestDeliver_OptInIsNotResentAfterAVersionMiss(t *testing.T) {
 	gate.open()
 
 	a := qaAwaitAttempt(t, running)
-	qaRequireRetryable(t, a.res, a.err, "attempt 1 after the version moved")
+	qaRequireCompleted(t, a.res, a.err, "attempt 1 after the version moved")
 	d := r.delivery(t, email)
 	if d.In == nil || d.ResendAt != nil {
 		t.Fatalf("resend_opt_in_sent_at = %v, resend_delivered_at = %v, want the opt-in recorded and no delivery", d.In, d.ResendAt)
 	}
 
-	res, err := r.work(t, a.res.Job)
-	qaRequireCompleted(t, res, err, "retry")
+	res, err := r.work(t, r.jobRow(t, email, "resend", 2))
+	qaRequireCompleted(t, res, err, "version 2 job")
 	calls := r.rs.got()
 	if len(calls) != 2 || !calls[0].OptIn || calls[1].OptIn {
-		t.Fatalf("Sync sendOptIn = %+v, want [true false]: a retry must not send the opt-in again", calls)
+		t.Fatalf("Sync sendOptIn = %+v, want [true false]: the version 2 job must not send the opt-in again", calls)
 	}
 }
 

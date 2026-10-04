@@ -977,3 +977,272 @@ func TestSignIn_NoHandOffWhenTheCodeStoreIsFull(t *testing.T) {
 		}
 	})
 }
+
+const (
+	demoEmail   = "ada@corp.example"
+	demoName    = "Ada Lovelace"
+	demoCompany = "Analytical Engines Ltd"
+	demoUnavail = `{"error":"demo request is unavailable"}`
+	demoNameMsg = "name must be 1 to 200 characters"
+	demoCoMsg   = "company must be 1 to 200 characters"
+	demoTextMsg = "marketing_consent_text must be 1 to 500 characters"
+)
+
+// demoSink records every DemoRequest call; err is the answer.
+type demoSink struct {
+	mu   sync.Mutex
+	reqs []DemoRequest
+	err  error
+}
+
+func (s *demoSink) Registrant(context.Context, RegistrantContact) error {
+	return errors.New("unexpected registrant")
+}
+
+func (s *demoSink) DemoRequest(_ context.Context, d DemoRequest) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reqs = append(s.reqs, d)
+	return s.err
+}
+
+func (s *demoSink) got() []DemoRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]DemoRequest(nil), s.reqs...)
+}
+
+// dropField removes a key from demoJSON's fields.
+var dropField = new(int)
+
+// demoJSON is a valid demo-request body with over applied; a dropField value deletes the key.
+func demoJSON(over map[string]any) string {
+	f := map[string]any{"email": demoEmail, "name": demoName, "company": demoCompany}
+	for k, v := range over {
+		if v == dropField {
+			delete(f, k)
+		} else {
+			f[k] = v
+		}
+	}
+	b, _ := json.Marshal(f)
+	return string(b)
+}
+
+func serveDemo(h http.Handler, body string) *httptest.ResponseRecorder {
+	return serve(h, http.MethodPost, "/contacts/demo-request", body)
+}
+
+func newDemoHandler(sink ContactSink) http.Handler {
+	return DemoRequestHandler(sink, slog.New(slog.DiscardHandler))
+}
+
+// requireDemoAnswer fails unless rec is a JSON answer with this status and body and Cache-Control: no-store.
+func requireDemoAnswer(t *testing.T, rec *httptest.ResponseRecorder, status int, wantBody string) {
+	t.Helper()
+	if rec.Code != status {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, status, rec.Body.String())
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("%d Cache-Control = %q, want no-store", status, got)
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
+		t.Errorf("%d Content-Type = %q, want application/json", status, got)
+	}
+	if wantBody != "" && strings.TrimSpace(rec.Body.String()) != wantBody {
+		t.Errorf("%d body = %q, want %s", status, rec.Body.String(), wantBody)
+	}
+}
+
+func TestDemoRequest_ForwardsAndAccepts(t *testing.T) {
+	sink := &demoSink{}
+	rec := serveDemo(newDemoHandler(sink), demoJSON(map[string]any{
+		"email": "  " + demoEmail + "\t", "name": "\n " + demoName + "  ", "company": "  " + demoCompany + " ",
+	}))
+
+	requireDemoAnswer(t, rec, http.StatusAccepted, `{"status":"accepted"}`)
+	want := []DemoRequest{{Email: demoEmail, Name: demoName, Company: demoCompany}}
+	if got := sink.got(); !reflect.DeepEqual(got, want) {
+		t.Errorf("sink got %+v, want exactly %+v", got, want)
+	}
+}
+
+func TestDemoRequest_ConsentTextIsOptional(t *testing.T) {
+	const text = "I agree to receive product news from ASComply — éà, no spam."
+	for _, tc := range []struct {
+		name string
+		over map[string]any
+		want string
+	}{
+		{"absent", nil, ""},
+		{"ticked", map[string]any{"marketing_consent_text": text}, text},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sink := &demoSink{}
+			requireDemoAnswer(t, serveDemo(newDemoHandler(sink), demoJSON(tc.over)), http.StatusAccepted, `{"status":"accepted"}`)
+			want := []DemoRequest{{Email: demoEmail, Name: demoName, Company: demoCompany, MarketingConsentText: tc.want}}
+			if got := sink.got(); !reflect.DeepEqual(got, want) {
+				t.Errorf("sink got %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestDemoRequest_InvalidFieldsAre400(t *testing.T) {
+	email254 := strings.Repeat("a", 254-len("@corp.example")) + "@corp.example"
+	// valid fields plus an ignored key that pushes the body past 4 KiB.
+	over4KiB := func(n int) string { return demoJSON(map[string]any{"pad": strings.Repeat("x", n)}) }
+	cases := []struct {
+		name string
+		body string
+		msg  string // "" asserts only that an error is reported
+	}{
+		{"email absent", demoJSON(map[string]any{"email": dropField}), "email is invalid"},
+		{"email empty", demoJSON(map[string]any{"email": ""}), "email is invalid"},
+		{"email blank", demoJSON(map[string]any{"email": "  \t"}), "email is invalid"},
+		{"email without at", demoJSON(map[string]any{"email": "ada.corp.example"}), "email is invalid"},
+		{"email with two ats", demoJSON(map[string]any{"email": "a@b@corp.example"}), "email is invalid"},
+		{"email with inner space", demoJSON(map[string]any{"email": "ada @corp.example"}), "email is invalid"},
+		{"email with inner tab", demoJSON(map[string]any{"email": "ada@corp\t.example"}), "email is invalid"},
+		{"email of two bytes", demoJSON(map[string]any{"email": "a@"}), "email is invalid"},
+		{"email of 255 bytes", demoJSON(map[string]any{"email": "a" + email254}), "email is invalid"},
+		{"email wrong type", `{"email":7,"name":"` + demoName + `","company":"` + demoCompany + `"}`, ""},
+		{"name absent", demoJSON(map[string]any{"name": dropField}), demoNameMsg},
+		{"name empty", demoJSON(map[string]any{"name": ""}), demoNameMsg},
+		{"name blank", demoJSON(map[string]any{"name": " \t\n"}), demoNameMsg},
+		{"name of 201 runes", demoJSON(map[string]any{"name": strings.Repeat("é", 201)}), demoNameMsg},
+		{"name with NUL", demoJSON(map[string]any{"name": "Ada\x00Lovelace"}), "name must not contain a NUL byte"},
+		{"company absent", demoJSON(map[string]any{"company": dropField}), demoCoMsg},
+		{"company empty", demoJSON(map[string]any{"company": ""}), demoCoMsg},
+		{"company blank", demoJSON(map[string]any{"company": "   "}), demoCoMsg},
+		{"company of 201 runes", demoJSON(map[string]any{"company": strings.Repeat("c", 201)}), demoCoMsg},
+		{"company with NUL", demoJSON(map[string]any{"company": "Acme\x00"}), "company must not contain a NUL byte"},
+		{"text empty", demoJSON(map[string]any{"marketing_consent_text": ""}), demoTextMsg},
+		{"text blank spaces", demoJSON(map[string]any{"marketing_consent_text": "    "}), demoTextMsg},
+		{"text blank mixed whitespace", demoJSON(map[string]any{"marketing_consent_text": " \n\t\r "}), demoTextMsg},
+		{"text of 501 runes", demoJSON(map[string]any{"marketing_consent_text": strings.Repeat("é", 501)}), demoTextMsg},
+		{"text with NUL", demoJSON(map[string]any{"marketing_consent_text": "I agree\x00"}), demoTextMsg},
+		{"text wrong type", demoJSON(map[string]any{"marketing_consent_text": 5}), ""},
+		{"body over 4 KiB", over4KiB(4097), ""},
+		{"malformed JSON", `{"email":`, ""},
+		{"empty body", ``, ""},
+		{"JSON array", `[]`, ""},
+		{"JSON null", `null`, ""},
+	}
+	if len(cases) < 30 {
+		t.Fatalf("table shrank to %d cases", len(cases))
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sink := &demoSink{}
+			rec := serveDemo(newDemoHandler(sink), tc.body)
+
+			requireDemoAnswer(t, rec, http.StatusBadRequest, "")
+			var got map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got["error"] == "" {
+				t.Fatalf("body = %q, want {\"error\": <message>}", rec.Body.String())
+			}
+			if tc.msg != "" && got["error"] != tc.msg {
+				t.Errorf("error = %q, want %q", got["error"], tc.msg)
+			}
+			if n := len(sink.got()); n != 0 {
+				t.Errorf("sink saw %d calls for an invalid request, want none: %+v", n, sink.got())
+			}
+		})
+	}
+}
+
+// The limits are inclusive: the same fields one step further are the 400s of the table above.
+func TestDemoRequest_BoundaryValuesAreAccepted(t *testing.T) {
+	email254 := strings.Repeat("a", 254-len("@corp.example")) + "@corp.example"
+	name200, company200, text500 := strings.Repeat("é", 200), strings.Repeat("ç", 200), strings.Repeat("ß", 500)
+	fields := map[string]any{"email": email254, "name": name200, "company": company200, "marketing_consent_text": text500}
+
+	sink := &demoSink{}
+	requireDemoAnswer(t, serveDemo(newDemoHandler(sink), demoJSON(fields)), http.StatusAccepted, `{"status":"accepted"}`)
+	want := []DemoRequest{{Email: email254, Name: name200, Company: company200, MarketingConsentText: text500}}
+	if got := sink.got(); !reflect.DeepEqual(got, want) {
+		t.Errorf("sink got %+v, want %+v", got, want)
+	}
+
+	// A body of exactly 4096 bytes is accepted.
+	empty := len(demoJSON(map[string]any{"pad": ""}))
+	body := demoJSON(map[string]any{"pad": strings.Repeat("x", 4096-empty)})
+	if len(body) != 4096 {
+		t.Fatalf("test body is %d bytes, want 4096", len(body))
+	}
+	sink = &demoSink{}
+	requireDemoAnswer(t, serveDemo(newDemoHandler(sink), body), http.StatusAccepted, `{"status":"accepted"}`)
+	if n := len(sink.got()); n != 1 {
+		t.Errorf("sink saw %d calls for a 4096-byte body, want 1", n)
+	}
+}
+
+func TestDemoRequest_UpstreamFailureIs502(t *testing.T) {
+	const secret = "secret-upstream-detail"
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"transport error naming the email", errors.New(secret + " for " + demoEmail)},
+		{"notifications 500", sinkStatusError(http.StatusInternalServerError)},
+		{"notifications 400", sinkStatusError(http.StatusBadRequest)},
+		{"notifications 404", sinkStatusError(http.StatusNotFound)},
+		{"deadline exceeded", context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sink := &demoSink{err: tc.err}
+			rec := serveDemo(newDemoHandler(sink), demoJSON(map[string]any{"marketing_consent_text": "I agree."}))
+
+			requireDemoAnswer(t, rec, http.StatusBadGateway, demoUnavail)
+			for _, leak := range []string{demoEmail, secret, "500", "notifications"} {
+				if strings.Contains(rec.Body.String(), leak) {
+					t.Errorf("502 body %q leaks %q", rec.Body.String(), leak)
+				}
+			}
+			if n := len(sink.got()); n != 1 {
+				t.Errorf("sink saw %d attempts, want exactly 1 (the browser retries)", n)
+			}
+		})
+	}
+
+	// The 502 never puts the visitor's data in a log line.
+	t.Run("log carries no personal data", func(t *testing.T) {
+		log, store := newCaptureLog()
+		sink := &demoSink{err: errors.New("connection refused")}
+		rec := serveDemo(DemoRequestHandler(sink, log), demoJSON(map[string]any{"marketing_consent_text": "I agree to everything."}))
+		requireDemoAnswer(t, rec, http.StatusBadGateway, demoUnavail)
+		for _, l := range store.all() {
+			for _, pii := range []string{demoEmail, demoName, demoCompany, "I agree to everything."} {
+				if strings.Contains(l.text, pii) {
+					t.Errorf("log line %q carries %q", l.text, pii)
+				}
+			}
+		}
+	})
+}
+
+// A notifications that never answers is cut at 5 s by the real HTTP sink, once, on the fake clock.
+func TestDemoRequest_UpstreamTimeoutIs502(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		calls := 0
+		client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			calls++
+			<-r.Context().Done()
+			return nil, r.Context().Err()
+		})}
+		sink := NewHTTPContactSink(&url.URL{Scheme: "http", Host: "notifications.invalid"}, client, "tok")
+
+		start := time.Now()
+		rec := serveDemo(newDemoHandler(sink), demoJSON(nil))
+		elapsed := time.Since(start)
+
+		requireDemoAnswer(t, rec, http.StatusBadGateway, demoUnavail)
+		if elapsed != 5*time.Second {
+			t.Errorf("answered after %v, want the 5 s timeout", elapsed)
+		}
+		if calls != 1 {
+			t.Errorf("notifications was called %d times, want 1", calls)
+		}
+	})
+}

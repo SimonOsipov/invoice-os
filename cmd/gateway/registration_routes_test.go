@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -12,8 +13,10 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
@@ -185,6 +188,9 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 		"POST /auth/register":    "withCORS(" + recv + ".Register)",
 		"OPTIONS /auth/register": "withCORS(" + recv + ".Register)",
 		"GET /auth/verify":       recv + ".Verify",
+
+		"POST /contacts/demo-request":    "withCORS(" + recv + ".DemoRequest)",
+		"OPTIONS /contacts/demo-request": "withCORS(" + recv + ".DemoRequest)",
 	} {
 		s := sitesFor(sites, pattern)
 		if len(s) != 1 {
@@ -297,5 +303,125 @@ func TestRegisterOptionsWithoutOriginIsNotARegistration(t *testing.T) {
 	}
 	if got := calls(); len(got) != 1 {
 		t.Errorf("GoTrue saw %v after one POST, want one call", got)
+	}
+}
+
+// demoRecSink records every demo request it is handed.
+type demoRecSink struct {
+	mu  sync.Mutex
+	got []gateway.DemoRequest
+}
+
+func (s *demoRecSink) Registrant(context.Context, gateway.RegistrantContact) error { return nil }
+
+func (s *demoRecSink) DemoRequest(_ context.Context, d gateway.DemoRequest) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.got = append(s.got, d)
+	return nil
+}
+
+func (s *demoRecSink) calls() []gateway.DemoRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]gateway.DemoRequest(nil), s.got...)
+}
+
+// demoMux mounts the real demo handler behind the CORS allow-list on both patterns, as main does.
+func demoMux(t *testing.T) (*http.ServeMux, *demoRecSink) {
+	t.Helper()
+	authURL, _ := fakeAuth(t)
+	site, _ := url.Parse("https://site.example")
+	sink := &demoRecSink{}
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), sink)
+	withCORS := gateway.CORS([]string{registerAllowedOrigin})
+	mux := http.NewServeMux()
+	mux.Handle("POST /contacts/demo-request", withCORS(reg.DemoRequest))
+	mux.Handle("OPTIONS /contacts/demo-request", withCORS(reg.DemoRequest))
+	return mux, sink
+}
+
+func TestDemoRequest_PreflightFromLanding(t *testing.T) {
+	mux, sink := demoMux(t)
+	const path = "/contacts/demo-request"
+
+	rec := preflight(mux, path, registerAllowedOrigin)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("preflight from the allowed origin = %d, want 204", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != registerAllowedOrigin {
+		t.Errorf("preflight Access-Control-Allow-Origin = %q, want %q", got, registerAllowedOrigin)
+	}
+	if !allowHeaderSet(rec.Header())["content-type"] {
+		t.Errorf("preflight grants %v, want content-type for the JSON body", allowHeaderSet(rec.Header()))
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(got, http.MethodPost) {
+		t.Errorf("preflight Access-Control-Allow-Methods = %q, want POST granted", got)
+	}
+
+	rec = preflight(mux, path, "https://evil.example")
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("preflight from a disallowed origin = %d, want 204", rec.Code)
+	}
+	for _, h := range []string{"Access-Control-Allow-Origin", "Access-Control-Allow-Methods", "Access-Control-Allow-Headers"} {
+		if got := rec.Header().Get(h); got != "" {
+			t.Errorf("preflight from a disallowed origin carries %s = %q, want none", h, got)
+		}
+	}
+	if got := sink.calls(); len(got) != 0 {
+		t.Fatalf("a preflight reached the sink: %+v", got)
+	}
+
+	// The behind-CORS handler answers the real request, and the landing form reads a refusal too.
+	const good = `{"email":" ada@corp.example ","name":"Ada Lovelace","company":"Analytical Engines Ltd","marketing_consent_text":"I agree."}`
+	rec = postJSON(mux, path, registerAllowedOrigin, good)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("POST from the allowed origin = %d, want 202: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != registerAllowedOrigin {
+		t.Errorf("202 Access-Control-Allow-Origin = %q, want %q", got, registerAllowedOrigin)
+	}
+	want := []gateway.DemoRequest{{Email: "ada@corp.example", Name: "Ada Lovelace", Company: "Analytical Engines Ltd", MarketingConsentText: "I agree."}}
+	if got := sink.calls(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("sink got %+v, want %+v", got, want)
+	}
+
+	rec = postJSON(mux, path, registerAllowedOrigin, `{"email":"ada@corp.example","name":"","company":"Analytical Engines Ltd"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("POST with a blank name = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != registerAllowedOrigin {
+		t.Errorf("400 Access-Control-Allow-Origin = %q, want %q", got, registerAllowedOrigin)
+	}
+
+	rec = postJSON(mux, path, "https://evil.example", good)
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("POST from a disallowed origin got grant %q, want none", got)
+	}
+}
+
+// An OPTIONS with no Origin is not a preflight: it reaches the handler, which must not take it for a demo request.
+func TestDemoRequest_OptionsWithoutOriginIsNotADemoRequest(t *testing.T) {
+	mux, sink := demoMux(t)
+	const body = `{"email":"ada@corp.example","name":"Ada Lovelace","company":"Analytical Engines Ltd"}`
+
+	req := httptest.NewRequest(http.MethodOptions, "/contacts/demo-request", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code < 400 {
+		t.Errorf("OPTIONS with no Origin = %d, want a refusal: %s", rec.Code, rec.Body.String())
+	}
+	if got := sink.calls(); len(got) != 0 {
+		t.Errorf("an OPTIONS request reached the sink: %+v", got)
+	}
+
+	// Positive pair: the same body as a POST is forwarded.
+	if rec := postJSON(mux, "/contacts/demo-request", registerAllowedOrigin, body); rec.Code != http.StatusAccepted {
+		t.Fatalf("POST = %d, want 202: %s", rec.Code, rec.Body.String())
+	}
+	if got := sink.calls(); len(got) != 1 {
+		t.Errorf("sink saw %+v after one POST, want one call", got)
 	}
 }

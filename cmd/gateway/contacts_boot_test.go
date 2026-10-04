@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +21,8 @@ import (
 	"testing"
 	"time"
 )
+
+const bootLandingOrigin = "https://landing.example"
 
 type bootIntake struct {
 	path   string
@@ -102,6 +105,7 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 		"DATABASE_MIGRATION_URL=" + migrationURL,
 		"AUTH_ISSUER=http://issuer.invalid", "AUTH_JWKS_URL=http://issuer.invalid/jwks",
 		"AUTH_SITE_URL=http://site.invalid", "AUTH_REGISTER_MIN_RESPONSE=10ms",
+		"CORS_ALLOWED_ORIGINS=" + bootLandingOrigin,
 	}
 	for _, svc := range append(append([]string{}, routedServices...), probedServices...) {
 		u := goTrue.URL
@@ -207,6 +211,69 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 			t.Fatalf("sign-in answered %d\n%s", resp.StatusCode, out)
 		}
 		requireIntake(t, next(t), signInID)
+	})
+	// The route is registered at runtime and its sink is main's: a demo request reaches notifications once.
+	t.Run("demo request refusals forward nothing", func(t *testing.T) {
+		for name, body := range map[string]string{
+			"blank name":         `{"email":"d@corp.example","name":" ","company":"Corp"}`,
+			"bad email":          `{"email":"not-an-email","name":"Dee","company":"Corp"}`,
+			"blank consent text": `{"email":"d@corp.example","name":"Dee","company":"Corp","marketing_consent_text":"  "}`,
+		} {
+			resp, err := client.Post(base+"/contacts/demo-request", "application/json", strings.NewReader(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("%s answered %d, want 400\n%s", name, resp.StatusCode, out)
+			}
+		}
+	})
+	t.Run("demo request preflight", func(t *testing.T) {
+		for origin, want := range map[string]string{bootLandingOrigin: bootLandingOrigin, "https://evil.example": ""} {
+			req, _ := http.NewRequest(http.MethodOptions, base+"/contacts/demo-request", nil)
+			req.Header.Set("Origin", origin)
+			req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusNoContent || resp.Header.Get("Access-Control-Allow-Origin") != want {
+				t.Errorf("preflight from %s = %d grant %q, want 204 grant %q", origin, resp.StatusCode, resp.Header.Get("Access-Control-Allow-Origin"), want)
+			}
+		}
+	})
+	t.Run("demo request", func(t *testing.T) {
+		body := `{"email":" d@corp.example ","name":" Dee Quill ","company":"Corp Ltd","marketing_consent_text":"I agree."}`
+		req, _ := http.NewRequest(http.MethodPost, base+"/contacts/demo-request", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", bootLandingOrigin)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusAccepted {
+			t.Fatalf("demo request answered %d, want 202\n%s", resp.StatusCode, out)
+		}
+		if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+			t.Errorf("Cache-Control = %q, want no-store", got)
+		}
+		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != bootLandingOrigin {
+			t.Errorf("Access-Control-Allow-Origin = %q, want %q", got, bootLandingOrigin)
+		}
+		in := next(t)
+		if in.path != "/internal/contacts/demo-requests" {
+			t.Errorf("hand-off path = %q, want /internal/contacts/demo-requests", in.path)
+		}
+		if got := in.header.Get("X-Gateway-Token"); got != token {
+			t.Errorf("X-Gateway-Token = %q, want the gateway token", got)
+		}
+		want := map[string]any{"email": "d@corp.example", "name": "Dee Quill", "company": "Corp Ltd", "marketing_consent_text": "I agree."}
+		if !reflect.DeepEqual(in.body, want) {
+			t.Errorf("hand-off body = %v, want %v", in.body, want)
+		}
 	})
 	if n := len(intake); n != 0 {
 		t.Errorf("notifications received %d further hand-offs, want none", n)

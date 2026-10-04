@@ -249,7 +249,7 @@ func gatewayHandlers(
 
 // registration holds the public registration handlers main mounts outside /api/.
 type registration struct {
-	Register, Verify http.Handler
+	Register, Verify, DemoRequest http.Handler
 }
 
 // newJWKSClient builds the JWKS fetch client.
@@ -262,7 +262,7 @@ func newJWKSClient() *http.Client {
 func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, log *slog.Logger, sink gateway.ContactSink) registration {
 	if authURL == nil || siteURL == nil {
 		nc := gateway.RegistrationNotConfigured()
-		return registration{Register: nc, Verify: nc}
+		return registration{Register: nc, Verify: nc, DemoRequest: gateway.DemoRequestHandler(sink, log)}
 	}
 	client := &http.Client{
 		Timeout:       10 * time.Second,
@@ -271,6 +271,8 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 	return registration{
 		Register: gateway.RegisterHandler(authURL, client, minResponse, log),
 		Verify:   gateway.VerifyHandler(authURL, siteURL, client, log, sink),
+
+		DemoRequest: gateway.DemoRequestHandler(sink, log),
 	}
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -178,5 +179,125 @@ func TestContactSink_BodyIsWhatNotificationsIntakeReads(t *testing.T) {
 	wantDemo := notifications.DemoIntake{Email: cwEmail, Name: "Zelda Quill", Company: "Quillworks Ltd", ConsentText: cwText}
 	if len(store.demo) != 1 || store.demo[0] != wantDemo {
 		t.Errorf("intake stored demos %+v, want [%+v]", store.demo, wantDemo)
+	}
+}
+
+// What the demo route forwards is exactly what notifications' own intake reads: the four contract fields,
+// none of the extras a caller adds, and none of the caller's headers.
+func TestDemoRequest_ForwardedBodyPassesNotificationsIntake(t *testing.T) {
+	const token = "gw-token-value"
+	type seen struct {
+		path   string
+		header http.Header
+		body   []byte
+	}
+	var (
+		mu   sync.Mutex
+		reqs []seen
+	)
+	store := &intakeStore{}
+	log := slog.New(slog.DiscardHandler)
+	mux := http.NewServeMux()
+	mux.Handle("POST /internal/contacts/demo-requests", notifications.DemoRequestsHandler(store, log))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(strings.NewReader(string(b)))
+		mu.Lock()
+		reqs = append(reqs, seen{r.URL.Path, r.Header.Clone(), b})
+		mu.Unlock()
+		if r.Header.Get("X-Gateway-Token") != token {
+			http.Error(w, "no token", http.StatusUnauthorized)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	base, _ := url.Parse(srv.URL)
+	sink := gateway.NewHTTPContactSink(base, &http.Client{Timeout: 5 * time.Second}, token)
+	site, _ := url.Parse("https://site.example")
+	reg := registrationHandlers(goTrueAnswering(t, cwSession), site, 0, log, sink)
+
+	const extras = `"user_id":"` + cwUserID + `","marketing_consent":{"text":"forged","at":"2026-01-01T00:00:00Z"},"demo_requested_at":"2026-01-01T00:00:00Z","tags":["registered"],"version":9`
+	for _, tc := range []struct {
+		name, body string
+		want       notifications.DemoIntake
+	}{
+		{"unticked", `{"email":"  ` + cwEmail + ` ","name":" Zelda Quill ","company":" Quillworks Ltd ",` + extras + `}`,
+			notifications.DemoIntake{Email: cwEmail, Name: "Zelda Quill", Company: "Quillworks Ltd"}},
+		{"ticked", `{"email":"` + cwEmail + `","name":"Zelda Quill","company":"Quillworks Ltd","marketing_consent_text":"` + cwText + `",` + extras + `}`,
+			notifications.DemoIntake{Email: cwEmail, Name: "Zelda Quill", Company: "Quillworks Ltd", ConsentText: cwText}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mu.Lock()
+			reqs = nil
+			mu.Unlock()
+			before := len(store.demo)
+
+			req := httptest.NewRequest(http.MethodPost, "/contacts/demo-request", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			// A caller cannot make notifications see a proxied request, or borrow the gateway's token.
+			req.Header.Set("X-User-ID", cwUserID)
+			req.Header.Set("X-Gateway-Token", "attacker")
+			rec := httptest.NewRecorder()
+			reg.DemoRequest.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusAccepted || strings.TrimSpace(rec.Body.String()) != `{"status":"accepted"}` {
+				t.Fatalf("demo request answered %d %s, want 202 accepted", rec.Code, rec.Body.String())
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(reqs) != 1 {
+				t.Fatalf("notifications saw %d requests, want 1", len(reqs))
+			}
+			got := reqs[0]
+			if got.path != "/internal/contacts/demo-requests" {
+				t.Errorf("path = %q, want /internal/contacts/demo-requests", got.path)
+			}
+			if got.header.Get("X-Gateway-Token") != token || got.header.Get("X-User-ID") != "" {
+				t.Errorf("forwarded headers X-Gateway-Token=%q X-User-ID=%q, want the gateway token and no user id", got.header.Get("X-Gateway-Token"), got.header.Get("X-User-ID"))
+			}
+			var keys map[string]json.RawMessage
+			if err := json.Unmarshal(got.body, &keys); err != nil {
+				t.Fatalf("forwarded body %q: %v", got.body, err)
+			}
+			for k, v := range keys {
+				switch k {
+				case "email", "name", "company":
+				case "marketing_consent_text":
+					if string(v) != `""` && tc.want.ConsentText == "" {
+						t.Errorf("unticked request forwards marketing_consent_text = %s", v)
+					}
+				default:
+					t.Errorf("forwarded body carries %q: %s", k, got.body)
+				}
+			}
+			if len(store.demo) != before+1 || store.demo[before] != tc.want {
+				t.Errorf("intake stored %+v, want one more: %+v", store.demo, tc.want)
+			}
+		})
+	}
+}
+
+// The demo route needs neither GoTrue nor the site URL, so an unconfigured registration does not close it.
+func TestRegistrationHandlers_DemoRequestWorksWithoutAuthConfig(t *testing.T) {
+	sink := &demoRecSink{}
+	reg := registrationHandlers(nil, nil, 0, slog.New(slog.DiscardHandler), sink)
+
+	ctl := httptest.NewRecorder()
+	reg.Register.ServeHTTP(ctl, httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(`{}`)))
+	if ctl.Code != http.StatusServiceUnavailable {
+		t.Fatalf("control: unconfigured register = %d, want 503", ctl.Code)
+	}
+	if reg.DemoRequest == nil {
+		t.Fatal("an unconfigured registration has no DemoRequest handler")
+	}
+	req := httptest.NewRequest(http.MethodPost, "/contacts/demo-request", strings.NewReader(`{"email":"ada@corp.example","name":"Ada","company":"Acme"}`))
+	rec := httptest.NewRecorder()
+	reg.DemoRequest.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("demo request without auth config = %d, want 202: %s", rec.Code, rec.Body.String())
+	}
+	if got := sink.calls(); len(got) != 1 {
+		t.Errorf("sink saw %+v, want one call", got)
 	}
 }

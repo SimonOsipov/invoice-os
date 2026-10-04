@@ -482,7 +482,7 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
     for (const key of hubspotCrmKeys()) {
       expect(registrant[0], `the registrant paragraph does not name ${key}`).toMatch(HUBSPOT_WORDS[key])
     }
-    expect(registrant[0], 'the registrant paragraph does not name the tag').toContain(crmTags()[0])
+    expect(registrant[0], 'the registrant paragraph does not name the tag').toContain(`“${crmTags()[0]}”`)
     for (const [key, word] of Object.entries(FORMS_ONLY_WORDS)) {
       expect(registrant[0], `a registrant is not sent ${key}`).not.toMatch(word)
     }
@@ -491,7 +491,7 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
     for (const [key, word] of Object.entries(FORMS_ONLY_WORDS)) {
       expect(demo, `the demo list lost ${key}`).toMatch(word)
     }
-    expect(demo, 'the demo section does not name the tag').toContain(crmTags()[1])
+    expect(demo, 'the demo section does not name the tag').toContain(`“${crmTags()[1]}”`)
     expect(demo, 'the demo section does not say when it is sent').toMatch(
       /(?:when|as soon as|once|after) you (?:submit|book|send)|on submit|when the form is (?:submitted|sent)/i,
     )
@@ -509,9 +509,11 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
     const para = resend.find((b) => /\b(?:every|each)\b[^.]*\b(?:verified|registrant)/i.test(b))
     expect(para, 'no Resend paragraph says every verified registrant is a contact').toBeDefined()
     expect(para).toMatch(/product|service/i)
-    expect(para, 'no statement that only a tick makes marketing').toMatch(
-      /only[^.]*\b(?:tick|ticked|ticks|box|checkbox)\b|\b(?:tick|ticked|box|checkbox)\b[^.]*\bonly\b/i,
-    )
+    const onlyTick = /\bonly\b[^;.]*\b(?:tick|ticked|ticks|box|checkbox)\b|\b(?:tick|ticked|ticks)\b[^;.]*\bonly\b/i
+    expect(
+      para!.split(/[;.]/).some((clause) => /\bmarketing\b/i.test(clause) && onlyTick.test(clause)),
+      'no clause says only a tick makes marketing',
+    ).toBe(true)
     expect(para).toMatch(/marketing/i)
     for (const key of resendContactKeys()) {
       expect(para, `the Resend paragraph does not name ${key}`).toMatch(RESEND_WORDS[key])
@@ -529,7 +531,10 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
       .replace(MARKETING_CONSENT_TEXT, '')
     const resend = sentences(demo).filter((s) => s.includes('Resend'))
     expect(resend.length, 'the demo section does not say what reaches Resend').toBeGreaterThan(0)
-    expect(resend.some((s) => /\b(?:not|never|neither|nor|only|unless|without)\b/i.test(s)), 'no statement that an unticked booker is not in Resend').toBe(true)
+    expect(
+      resend.some((s) => /\b(?:unticked|not ticked|without (?:a|the) tick|leave it)\b/i.test(s) && /\b(?:not|never|neither|nor|no)\b/i.test(s)),
+      'no statement that an unticked booker is not in Resend',
+    ).toBe(true)
     const promise = sentences(demo).filter((s) =>
       /\b(?:you will|you'll|we will|we'll|you can expect)\b[^.]*\b(?:receive|get|hear|send|email)\b[^.]*\b(?:marketing|news|offers|newsletters?|promotions?)\b/i.test(s),
     )
@@ -556,7 +561,9 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
   it('C14: the page says the marketing sentence is stored with its time', () => {
     const quoted = blocks(html).filter((b) => b.includes(MARKETING_CONSENT_TEXT))
     expect(quoted.length, 'the page does not quote the marketing sentence').toBeGreaterThan(0)
-    expect(quoted.some((b) => /stored|record/i.test(b) && /\btime\b|\bwhen you\b/i.test(b))).toBe(true)
+    expect(quoted.length, 'the page quotes the marketing sentence for demo bookers and for registrants').toBeGreaterThanOrEqual(2)
+    for (const b of quoted) expect(b, 'a quoted marketing sentence is not said to be stored with its time').toMatch(/stored|record/i)
+    for (const b of quoted) expect(b).toMatch(/\btime\b|\bwhen you\b/i)
   })
 
   it('Resend already has a registrant\'s address at sign-up, so the page does not say nothing reaches Resend before verification', () => {

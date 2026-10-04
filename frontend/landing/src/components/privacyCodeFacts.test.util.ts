@@ -35,8 +35,8 @@ export function hubspotFormsKeys(): string[] {
 // Fields internal/notifications/resend.go sends when it creates a contact.
 export function resendContactKeys(): string[] {
   const body = found(/func \(r \*Resend\) Sync\b[\s\S]*?\n}\n/.exec(readSource('internal/notifications/resend.go'))?.[0], 'Resend.Sync')
-  const create = found(/body\s*:=\s*map\[string\]string\{\s*"([a-z_]+)"/.exec(body)?.[1], 'the Resend create body')
-  return unique([create, ...keysOf(/body\["([a-z_]+)"\]\s*=/g, body)])
+  const literal = found(/body\s*:=\s*map\[string\]string\{([^}]*)\}/.exec(body)?.[1], 'the Resend create body')
+  return unique([...keysOf(/"([a-z_]+)"\s*:/g, literal), ...keysOf(/body\["([a-z_]+)"\]\s*=/g, body)])
 }
 
 export function resendSubscription(): string {

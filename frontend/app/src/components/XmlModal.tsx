@@ -1,6 +1,5 @@
 // UBL viewer: fetches the server's canonical UBL 2.1 document for one invoice and shows it
-// verbatim. Shell ported from Platform.dc.html ~L957-976 — backdrop click closes, inner
-// click is stopped.
+// verbatim. Shell ported from Platform.dc.html — backdrop click closes, inner click is stopped.
 
 import type { ReactNode } from 'react'
 

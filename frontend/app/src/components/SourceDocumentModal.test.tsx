@@ -111,7 +111,7 @@ function mockFetchByDoc(sheets: Record<string, DocumentSheet>) {
   )
 }
 
-function modalEl(meta: SourceDocumentAsync) {
+function modalEl(meta: SourceDocumentAsync, onClose: () => void = vi.fn()) {
   return (
     <SourceDocumentModal
       ctx={modalCtx()}
@@ -119,7 +119,7 @@ function modalEl(meta: SourceDocumentAsync) {
       invoiceNumber="INV-2026-0037"
       invoiceCreatedAt="2026-06-12T09:15:00Z"
       createdBy="c0000000-0000-0000-0000-000000000001"
-      onClose={vi.fn()}
+      onClose={onClose}
     />
   )
 }
@@ -251,6 +251,59 @@ describe('SourceDocumentModal shell', () => {
     cleanup()
 
     expectV2Scrim(ssrScrim(loading).decls)
+  })
+
+  // The shell does not depend on the state arm, and the badge is the one conditional piece.
+  it('the v2 shell holds on every state arm, and the badge follows the record', async () => {
+    const arms: Array<[string, SourceDocumentAsync, string, boolean]> = [
+      ['sheet', metaAsync(), 'june-sales.xlsx', true],
+      ['no-source', metaAsync({ data: response({ document: null, source_rows: null }) }), 'Source document', false],
+      ['loading', metaAsync({ status: 'loading', data: null }), 'Source document', false],
+      ['failed', metaAsync({ status: 'error', data: null, error: new ApiError('http', 'boom', 503) }), 'Source document', false],
+      [
+        'unrenderable',
+        metaAsync({ data: response({ document: record({ filename: 'ledger.dat', declared_content_type: null }) }) }),
+        'ledger.dat',
+        true,
+      ],
+    ]
+    expect(arms.length).toBeGreaterThan(0)
+
+    for (const [label, meta, titleText, hasBadge] of arms) {
+      const { html, decls } = ssrScrim(meta)
+      expectV2Scrim(decls)
+      expect(html, `${label}: oklch`).not.toContain('oklch')
+
+      renderModal(meta)
+      const panel = screen.getByRole('dialog')
+      const header = panel.firstElementChild as HTMLElement
+      const title = within(header).getByText(titleText)
+      expect(header.style.padding, `${label}: control: the header style is read`).toBe('14px 18px')
+      expect(panel.style.borderRadius, `${label}: panel radius`).toBe('var(--radius-lg)')
+      expect(panel.style.boxShadow, `${label}: panel shadow`).toBe('var(--shadow-card)')
+      expect(title.style.fontSize, `${label}: title size`).toBe('15px')
+      expect(title.style.fontWeight, `${label}: title weight`).toBe('700')
+      expect(screen.getByTestId('source-modal-close').style.borderRadius, `${label}: close radius`).toBe('var(--radius-btn)')
+      expect(within(header).queryByText('IMMUTABLE RECORD') !== null, `${label}: badge`).toBe(hasBadge)
+      cleanup()
+    }
+  })
+
+  it('the source modal closes from the backdrop, Escape and the close button, not from the panel', async () => {
+    const onClose = vi.fn()
+    render(modalEl(metaAsync(), onClose))
+
+    fireEvent.click(screen.getByRole('dialog'))
+    expect(onClose, 'a click inside the panel must not dismiss it').not.toHaveBeenCalled()
+    fireEvent.keyDown(window, { key: 'Enter' })
+    expect(onClose, 'only Escape dismisses').not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('dialog').parentElement!)
+    expect(onClose, 'the scrim closes').toHaveBeenCalledTimes(1)
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onClose, 'Escape closes').toHaveBeenCalledTimes(2)
+    fireEvent.click(screen.getByTestId('source-modal-close'))
+    expect(onClose, 'the close button closes').toHaveBeenCalledTimes(3)
   })
 
   it("renders each non-sheet state's own copy", async () => {

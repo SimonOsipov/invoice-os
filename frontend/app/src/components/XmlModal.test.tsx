@@ -380,7 +380,7 @@ describe('XmlModal retired copy and the deleted client builder (task-402)', () =
   })
 })
 
-describe('XmlModal shell -- unchanged chrome and dismissal (task-402)', () => {
+describe('XmlModal shell -- chrome geometry and dismissal (task-402)', () => {
   it('V17/AC7: the panel is the v2 panel and the shell keeps its geometry', async () => {
     stubPending() // the header must read the PROP, so the fetch never answers
     renderModal()
@@ -510,6 +510,40 @@ describe('XmlModal follows the v2 modal (RESKIN2-03-03)', () => {
     expect.soft(screen.getByTestId('download-ubl').style.fontSize).toBe('13px')
     expect.soft(screen.getByTestId('ubl-xml').style.fontSize).toBe('12px')
     expect.soft(screen.getByTestId('ubl-xml').style.lineHeight).toBe('1.6')
+  })
+
+  // The shell does not depend on the load arm, and the ready arm renders markup the SSR
+  // read never reaches (the document block), so oklch is read from the DOM per arm.
+  it('the v2 shell holds on every load arm, with no oklch on any of them', async () => {
+    const arms: Array<[string, () => void]> = [
+      ['loading', () => stubPending()],
+      ['409', () => stubFail(409, REASON)],
+      ['404', () => stubFail(404, 'not found')],
+      ['ready', () => stubOk(DOC)],
+      ['500', () => stubFail(500, 'internal server error')],
+    ]
+    expect(arms.length).toBeGreaterThan(0)
+
+    for (const [label, stub] of arms) {
+      stub()
+      const { container } = renderModal()
+      await settle()
+
+      const scrim = screen.getByTestId('ubl-modal')
+      const panel = panelOf()
+      expect(panel.style.width, `${label}: control: the panel style is read`).toBe('760px')
+      expect(scrim.style.zIndex, `${label}: scrim zIndex`).toBe('80')
+      expect(scrim.style.padding, `${label}: scrim padding`).toBe('40px')
+      expect(panel.style.borderRadius, `${label}: panel radius`).toBe('var(--radius-lg)')
+      expect(panel.style.boxShadow, `${label}: panel shadow`).toBe('var(--shadow-card)')
+      expect(screen.getByTestId('ubl-modal-close').style.borderRadius, `${label}: close radius`).toBe('var(--radius-btn)')
+      expect(screen.getByText('UBL 2.1 document').style.fontSize, `${label}: title size`).toBe('15px')
+      expect(screen.getByTestId('ubl-provenance').style.padding, `${label}: provenance padding`).toBe('9px 20px')
+      expect(container.innerHTML, `${label}: oklch`).not.toContain('oklch')
+
+      cleanup()
+      vi.unstubAllGlobals()
+    }
   })
 })
 

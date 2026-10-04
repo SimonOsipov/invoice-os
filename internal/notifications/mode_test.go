@@ -1,6 +1,7 @@
 package notifications
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 
@@ -52,6 +53,13 @@ func TestModeFromEnv_PreviewIsAlwaysFake(t *testing.T) {
 		{"four keys, fake flag false", keyEnv(map[string]string{"CONTACTS_FAKE": "false"})},
 		{"partial keys", map[string]string{"HUBSPOT_TOKEN": "sekret-hubspot_token"}},
 		{"no keys", nil},
+		// Each of these refuses outside preview.
+		{"fake flag and one key", map[string]string{"CONTACTS_FAKE": "true", "HUBSPOT_TOKEN": "sekret-hubspot_token"}},
+		{"fake flag and four keys", keyEnv(map[string]string{"CONTACTS_FAKE": "true"})},
+		{"fake flag alone", map[string]string{"CONTACTS_FAKE": "true"}},
+		{"bad fake flag", map[string]string{"CONTACTS_FAKE": "yes!"}},
+		{"bad fake flag and four keys", keyEnv(map[string]string{"CONTACTS_FAKE": "yes!"})},
+		{"padded fake flag", map[string]string{"CONTACTS_FAKE": " true"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -121,12 +129,22 @@ func TestModeFromEnv_Table(t *testing.T) {
 	}
 }
 
+// refuses calls ModeFromEnv and requires a refusal to carry no mode and no keys.
+func refuses(t *testing.T, getenv func(string) string, posture platform.PostureKind) error {
+	t.Helper()
+	mode, keys, err := ModeFromEnv(getenv, posture)
+	if err != nil && (mode != "" || keys != (Keys{})) {
+		t.Errorf("refusal returned mode %q and keys %+v, want neither", mode, keys)
+	}
+	return err
+}
+
 func TestModeFromEnv_FakeWithAKeyRefuses(t *testing.T) {
 	for _, posture := range []platform.PostureKind{platform.PostureLocal, platform.PostureHosted} {
 		for _, key := range modeKeyVars {
 			t.Run(string(posture)+"/"+key, func(t *testing.T) {
 				env := map[string]string{"CONTACTS_FAKE": "true", key: "sekret-" + strings.ToLower(key)}
-				_, _, err := ModeFromEnv(getenvFrom(env), posture)
+				err := refuses(t, getenvFrom(env), posture)
 				if err == nil {
 					t.Fatal("ModeFromEnv() err = nil, want a refusal")
 				}
@@ -140,7 +158,7 @@ func TestModeFromEnv_FakeWithAKeyRefuses(t *testing.T) {
 
 	t.Run("all four keys", func(t *testing.T) {
 		env := keyEnv(map[string]string{"CONTACTS_FAKE": "true"})
-		_, _, err := ModeFromEnv(getenvFrom(env), platform.PostureHosted)
+		err := refuses(t, getenvFrom(env), platform.PostureHosted)
 		if err == nil {
 			t.Fatal("ModeFromEnv() err = nil, want a refusal")
 		}
@@ -149,7 +167,7 @@ func TestModeFromEnv_FakeWithAKeyRefuses(t *testing.T) {
 
 	t.Run("a whitespace key counts as set", func(t *testing.T) {
 		env := map[string]string{"CONTACTS_FAKE": "true", "RESEND_API_KEY": " "}
-		_, _, err := ModeFromEnv(getenvFrom(env), platform.PostureHosted)
+		err := refuses(t, getenvFrom(env), platform.PostureHosted)
 		if err == nil || !strings.Contains(err.Error(), "RESEND_API_KEY") {
 			t.Errorf("err = %v, want a refusal naming RESEND_API_KEY", err)
 		}
@@ -161,7 +179,7 @@ func TestModeFromEnv_PartialKeysRefuse(t *testing.T) {
 		t.Run("missing "+missing, func(t *testing.T) {
 			env := keyEnv(nil)
 			delete(env, missing)
-			_, _, err := ModeFromEnv(getenvFrom(env), platform.PostureHosted)
+			err := refuses(t, getenvFrom(env), platform.PostureHosted)
 			if err == nil {
 				t.Fatal("ModeFromEnv() err = nil, want a refusal")
 			}
@@ -174,7 +192,7 @@ func TestModeFromEnv_PartialKeysRefuse(t *testing.T) {
 
 	t.Run("one key names the other three", func(t *testing.T) {
 		env := map[string]string{"RESEND_TOPIC_ID": "sekret-resend_topic_id"}
-		_, _, err := ModeFromEnv(getenvFrom(env), platform.PostureLocal)
+		err := refuses(t, getenvFrom(env), platform.PostureLocal)
 		if err == nil {
 			t.Fatal("ModeFromEnv() err = nil, want a refusal")
 		}
@@ -188,7 +206,7 @@ func TestModeFromEnv_PartialKeysRefuse(t *testing.T) {
 
 	// Values are not trimmed: a whitespace value is set, so one of them is partial, not off.
 	t.Run("a whitespace key is not off", func(t *testing.T) {
-		_, _, err := ModeFromEnv(getenvFrom(map[string]string{"HUBSPOT_TOKEN": " "}), platform.PostureHosted)
+		err := refuses(t, getenvFrom(map[string]string{"HUBSPOT_TOKEN": " "}), platform.PostureHosted)
 		if err == nil {
 			t.Error("ModeFromEnv() err = nil, want a refusal for one whitespace key")
 		}
@@ -199,7 +217,7 @@ func TestModeFromEnv_BadFakeFlagRefuses(t *testing.T) {
 	for _, posture := range []platform.PostureKind{platform.PostureLocal, platform.PostureHosted} {
 		for _, bad := range []string{"yes!", "zz-nope", "tr ue"} {
 			t.Run(string(posture)+"/"+bad, func(t *testing.T) {
-				_, _, err := ModeFromEnv(getenvFrom(map[string]string{"CONTACTS_FAKE": bad}), posture)
+				err := refuses(t, getenvFrom(map[string]string{"CONTACTS_FAKE": bad}), posture)
 				if err == nil {
 					t.Fatal("ModeFromEnv() err = nil, want a refusal")
 				}
@@ -216,7 +234,7 @@ func TestModeFromEnv_BadFakeFlagRefuses(t *testing.T) {
 	// Not trimmed: a padded "true" is unparseable, never fake.
 	for _, padded := range []string{" true", "true ", "true\n"} {
 		t.Run("padded "+strings.TrimSpace(padded), func(t *testing.T) {
-			_, _, err := ModeFromEnv(getenvFrom(map[string]string{"CONTACTS_FAKE": padded}), platform.PostureHosted)
+			err := refuses(t, getenvFrom(map[string]string{"CONTACTS_FAKE": padded}), platform.PostureHosted)
 			if err == nil {
 				t.Errorf("CONTACTS_FAKE=%q: err = nil, want a refusal", padded)
 			}
@@ -224,9 +242,43 @@ func TestModeFromEnv_BadFakeFlagRefuses(t *testing.T) {
 	}
 
 	t.Run("a bad flag beats four keys", func(t *testing.T) {
-		_, _, err := ModeFromEnv(getenvFrom(keyEnv(map[string]string{"CONTACTS_FAKE": "yes!"})), platform.PostureHosted)
+		err := refuses(t, getenvFrom(keyEnv(map[string]string{"CONTACTS_FAKE": "yes!"})), platform.PostureHosted)
 		if err == nil {
 			t.Error("ModeFromEnv() err = nil, want a refusal, never real")
 		}
 	})
+}
+
+// failTransport fails the test when any request goes through it.
+type failTransport struct{ t *testing.T }
+
+func (f failTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	f.t.Errorf("fake made a network call: %s %s", r.Method, r.URL)
+	return nil, http.ErrUseLastResponse
+}
+
+func TestFakes_MakeNoNetworkCallAndNeverFail(t *testing.T) {
+	prev := http.DefaultTransport
+	http.DefaultTransport = failTransport{t}
+	t.Cleanup(func() { http.DefaultTransport = prev })
+
+	var hs HubSpotClient = FakeHubSpot{}
+	var rs ResendClient = FakeResend{}
+	for _, c := range []Contact{
+		fullContact("ada@corp.example"),
+		{Email: "bare@corp.example"},
+	} {
+		if err := hs.Upsert(t.Context(), c); err != nil {
+			t.Errorf("FakeHubSpot.Upsert(%q) err = %v, want nil", c.Email, err)
+		}
+		for _, optIn := range []bool{false, true} {
+			if err := rs.Sync(t.Context(), c, optIn); err != nil {
+				t.Errorf("FakeResend.Sync(%q, %v) err = %v, want nil", c.Email, optIn, err)
+			}
+		}
+	}
+
+	// The real clients satisfy the same interfaces the worker takes.
+	var _ HubSpotClient = (*HubSpot)(nil)
+	var _ ResendClient = (*Resend)(nil)
 }

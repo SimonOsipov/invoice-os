@@ -96,6 +96,24 @@ func TestResendSync_CreatesOnlyWhenAbsent(t *testing.T) {
 		}
 	})
 
+	t.Run("no name sends the email only", func(t *testing.T) {
+		v := newVendor(t, resendAbsent.respond)
+		c := regContact(adaEmail)
+		c.FirstName, c.LastName = "", ""
+		syncOK(t, v, c, false)
+		calls := v.calls()
+		if len(calls) < 2 {
+			t.Fatalf("requests = %v, want a create", v.labels())
+		}
+		var body map[string]any
+		if err := json.Unmarshal(calls[1].Body, &body); err != nil {
+			t.Fatalf("create body %q is not JSON: %v", calls[1].Body, err)
+		}
+		if want := map[string]any{"email": adaEmail}; !reflect.DeepEqual(body, want) {
+			t.Errorf("create body = %v, want %v", body, want)
+		}
+	})
+
 	t.Run("a blank name is not sent", func(t *testing.T) {
 		v := newVendor(t, resendAbsent.respond)
 		c := regContact(adaEmail)
@@ -240,6 +258,37 @@ func TestResendSync_ErrorsOnFailure(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("any 2xx delivers at every step", func(t *testing.T) {
+		for _, ok := range []int{200, 201, 202, 204, 299} {
+			for _, base := range []resendStatus{resendAbsent, resendPresent} {
+				st := resendStatus{get: base.get, create: ok, segment: ok, topics: ok}
+				if st.get == 200 {
+					st.get = ok
+				}
+				v := newVendor(t, st.respond)
+				if err := resendAt(v, nil).Sync(t.Context(), regContact(adaEmail), true); err != nil {
+					t.Errorf("statuses %+v: err = %v, want nil", st, err)
+				}
+				if got := len(v.labels()); got < 3 {
+					t.Errorf("statuses %+v: %d requests, want every step", st, got)
+				}
+			}
+		}
+	})
+
+	t.Run("a 3xx at any step is an error", func(t *testing.T) {
+		for _, bad := range []resendStatus{
+			{get: 304}, {get: 404, create: 300}, {get: 200, segment: 304}, {get: 200, segment: 200, topics: 300},
+		} {
+			v := newVendor(t, bad.respond)
+			var de *DeliveryError
+			err := resendAt(v, nil).Sync(t.Context(), regContact(adaEmail), true)
+			if !errors.As(err, &de) || de.Permanent() {
+				t.Errorf("statuses %+v: err = %v, want a transient *DeliveryError", bad, err)
+			}
+		}
+	})
 
 	hangs := []struct {
 		name      string

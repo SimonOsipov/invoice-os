@@ -25,7 +25,7 @@ type Store struct {
 	river *river.Client[pgx.Tx]
 }
 
-// RegistrantIntake: empty UserID is NULL; empty ConsentText (or zero ConsentAt) is unticked.
+// RegistrantIntake: empty UserID is NULL; empty ConsentText is unticked.
 type RegistrantIntake struct {
 	UserID, Email, DisplayName, WorkspaceName string
 	ConsentText                               string

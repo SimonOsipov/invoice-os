@@ -134,3 +134,6 @@ export const NAV_SETTINGS: NavDef = {
     />
   ),
 }
+
+// Red stub: RESKIN2-02-01 replaces it with the 2x2 grid <Icon> (size 18).
+export const gridGlyph: ReactNode = null

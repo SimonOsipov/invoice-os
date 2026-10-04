@@ -62,6 +62,8 @@ End a turn only in these cases:
 - The run outputs `ALL_TASKS_COMPLETE`.
 - A background command or Monitor you started is still running. Its completion wakes you.
 
+A loop that waits for a file has a deadline: `until <check> || [ $SECONDS -gt 3600 ]; do sleep 15; done`. A deleted worktree removes the file, and a loop without a deadline never ends.
+
 In every other case, take the next step. Do not end a turn on "Starting X now", "Next: subtask 4", or an offer to continue.
 
 ---

@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -54,6 +56,17 @@ type ServiceHealth struct {
 	Sentry string `json:"sentry,omitempty"`
 	// Contacts is notifications' delivery mode: real, fake or off.
 	Contacts string `json:"contacts,omitempty"`
+	// Ready is the service's /readyz verdict (its dependencies, e.g. the database); nil when
+	// it serves no /readyz or is probed at a custom path. Never part of the up/down verdict.
+	Ready *bool `json:"ready,omitempty"`
+	// NotReady names the failing readiness checks, never their errors: the roll-up is public.
+	NotReady []string `json:"not_ready,omitempty"`
+}
+
+// String is the entry's JSON, so the degraded log shows Ready's value, not its address.
+func (s ServiceHealth) String() string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }
 
 // FleetHealth is the GET /healthz/fleet body: an overall roll-up plus per-service detail.
@@ -140,8 +153,8 @@ func FleetHealthHandler(upstreams map[string]*url.URL, healthPaths map[string]st
 // probeService issues GET <base>/<path> (healthz when path is empty) with a per-probe
 // timeout and maps the outcome to up/down. Any transport error or non-2xx status is down,
 // with the reason recorded so the body names why the service failed.
-func probeService(ctx context.Context, client *http.Client, name string, base *url.URL, path string) ServiceHealth {
-	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+func probeService(parent context.Context, client *http.Client, name string, base *url.URL, path string) ServiceHealth {
+	ctx, cancel := context.WithTimeout(parent, probeTimeout)
 	defer cancel()
 
 	custom := path != ""
@@ -174,5 +187,38 @@ func probeService(ctx context.Context, client *http.Client, name string, base *u
 		Contacts string `json:"contacts"`
 	}
 	_ = json.NewDecoder(io.LimitReader(resp.Body, maxHealthzBody)).Decode(&payload)
-	return ServiceHealth{Name: name, Status: statusUp, Build: payload.Build, Sentry: payload.Sentry, Contacts: payload.Contacts}
+	ready, notReady := probeReady(parent, client, base)
+	return ServiceHealth{Name: name, Status: statusUp, Build: payload.Build, Sentry: payload.Sentry, Contacts: payload.Contacts, Ready: ready, NotReady: notReady}
+}
+
+// probeReady issues GET <base>/readyz. A 404 means the service serves no /readyz (docling):
+// readiness unknown. A failure names the checks the body lists, or "readyz" when it lists none.
+func probeReady(parent context.Context, client *http.Client, base *url.URL) (*bool, []string) {
+	ctx, cancel := context.WithTimeout(parent, probeTimeout)
+	defer cancel()
+	ready, notReady := true, false
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base.JoinPath("readyz").String(), nil)
+	if err != nil {
+		return &notReady, []string{"readyz"}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return &notReady, []string{"readyz"}
+	}
+	defer resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		return nil, nil
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		return &ready, nil
+	}
+	var payload struct {
+		Failures map[string]string `json:"failures"`
+	}
+	_ = json.NewDecoder(io.LimitReader(resp.Body, maxHealthzBody)).Decode(&payload)
+	names := slices.Sorted(maps.Keys(payload.Failures))
+	if len(names) == 0 {
+		names = []string{"readyz"}
+	}
+	return &notReady, names
 }

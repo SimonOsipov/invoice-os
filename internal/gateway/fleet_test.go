@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/getsentry/sentry-go"
 )
@@ -305,8 +307,8 @@ func TestFleetProbesAuthAtJWKSPath(t *testing.T) {
 	if inv := byName["invoice"]; inv.Status != statusUp || inv.Build != "abc1234" {
 		t.Errorf("invoice = %+v, want up with build abc1234", inv)
 	}
-	if hits := invoiceHits(); len(hits) == 0 || slices.ContainsFunc(hits, func(p string) bool { return p != "/healthz" }) {
-		t.Errorf("invoice upstream was asked for %v, want /healthz only", hits)
+	if hits := invoiceHits(); !slices.Equal(hits, []string{"/healthz", "/readyz"}) {
+		t.Errorf("invoice upstream was asked for %v, want /healthz then /readyz only", hits)
 	}
 	if rec.Code != http.StatusOK || body.Status != fleetOK {
 		t.Errorf("roll-up = %d %q, want 200 %q", rec.Code, body.Status, fleetOK)
@@ -356,10 +358,9 @@ func TestFleetDefaultHealthPathUnchanged(t *testing.T) {
 				if len(hits) == 0 {
 					t.Errorf("%s was never probed", svc)
 				}
-				for _, p := range hits {
-					if p != "/healthz" {
-						t.Errorf("%s was probed at %q, want /healthz", svc, p)
-					}
+				// /healthz is the liveness probe; /readyz is the report-only readiness probe.
+				if !slices.Equal(hits, []string{"/healthz", "/readyz"}) {
+					t.Errorf("%s was probed at %q, want /healthz then /readyz", svc, hits)
 				}
 			}
 			for _, svc := range []string{"invoice", "tenancy"} {
@@ -616,5 +617,91 @@ func TestFleetIgnoresANonStringContacts(t *testing.T) {
 	rec, _ := doFleet(t, map[string]*url.URL{"notifications": buildUpstream(t, "", `{"status":"ok","build":"abc1234","contacts":"off"}`)})
 	if n := rawFleetEntries(t, rec)["notifications"]; n["contacts"] != "off" {
 		t.Errorf("contacts = %v, want off", n["contacts"])
+	}
+}
+
+// readyUpstream answers /healthz 200 and /readyz with code and body; any other path 404s.
+func readyUpstream(t *testing.T, code int, body string) *url.URL {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz":
+			_, _ = w.Write([]byte(`{"status":"ok","build":"abc1234"}`))
+		case "/readyz":
+			if code == 0 {
+				time.Sleep(probeTimeout + time.Second) // a hung dependency check
+				return
+			}
+			w.WriteHeader(code)
+			_, _ = w.Write([]byte(body))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	u, _ := url.Parse(srv.URL)
+	return u
+}
+
+// Readiness is reported per service and never changes the verdict: the deploy gate reads
+// only status and the HTTP code. A failure names the checks, never their errors.
+func TestFleetReportsEachServicesReadinessWithoutChangingTheVerdict(t *testing.T) {
+	leak := "failed to connect to `user=invoice_app database=railway`: 10.168.8.165:5432 (postgres.railway.internal)"
+	rec, body := doFleet(t, map[string]*url.URL{
+		"invoice":        readyUpstream(t, http.StatusOK, `{"status":"ready"}`),
+		"reconciliation": readyUpstream(t, http.StatusServiceUnavailable, `{"status":"not ready","failures":{"reader-database":"`+leak+`","database":"`+leak+`"}}`),
+		"tenancy":        readyUpstream(t, http.StatusInternalServerError, `oops`),
+		"docling":        healthzUpstream(t, false), // serves no /readyz
+	})
+	if rec.Code != http.StatusOK || body.Status != fleetOK {
+		t.Fatalf("a not-ready service changed the verdict: %d %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "10.168.8.165") || strings.Contains(rec.Body.String(), "invoice_app") {
+		t.Fatalf("a readiness error reached the public roll-up: %s", rec.Body.String())
+	}
+	by := statusByName(body)
+	for name, want := range map[string]struct {
+		ready    *bool
+		notReady []string
+	}{
+		"invoice":        {ptr(true), nil},
+		"reconciliation": {ptr(false), []string{"database", "reader-database"}},
+		"tenancy":        {ptr(false), []string{"readyz"}},
+		"docling":        {nil, nil},
+		"gateway":        {nil, nil},
+	} {
+		s := by[name]
+		if s.Status != statusUp || (s.Ready == nil) != (want.ready == nil) || (s.Ready != nil && *s.Ready != *want.ready) || !slices.Equal(s.NotReady, want.notReady) {
+			t.Errorf("%s = %+v (ready %v), want ready %v not_ready %v", name, s, deref(s.Ready), deref(want.ready), want.notReady)
+		}
+	}
+	if raw := rawFleetEntries(t, rec)["docling"]; raw["ready"] != nil || raw["not_ready"] != nil {
+		t.Errorf("docling's entry carries readiness keys: %v", raw)
+	}
+}
+
+func TestFleetAHungReadinessCheckIsNotReadyWithinItsTimeout(t *testing.T) {
+	start := time.Now()
+	rec, body := doFleet(t, map[string]*url.URL{"invoice": readyUpstream(t, 0, "")})
+	s := statusByName(body)["invoice"]
+	if rec.Code != http.StatusOK || s.Status != statusUp || s.Ready == nil || *s.Ready || !slices.Equal(s.NotReady, []string{"readyz"}) {
+		t.Fatalf("invoice = %+v, code %d", s, rec.Code)
+	}
+	if d := time.Since(start); d > 2*probeTimeout {
+		t.Fatalf("the roll-up took %v", d)
+	}
+}
+
+func deref(b *bool) any {
+	if b == nil {
+		return nil
+	}
+	return *b
+}
+
+func TestFleetServiceHealthLogsItsReadinessValue(t *testing.T) {
+	got := fmt.Sprintf("%+v", []ServiceHealth{{Name: "reconciliation", Status: statusUp, Ready: ptr(false), NotReady: []string{"database"}}})
+	if !strings.Contains(got, `"ready":false`) || strings.Contains(got, "0x") {
+		t.Fatalf("logged as %s", got)
 	}
 }

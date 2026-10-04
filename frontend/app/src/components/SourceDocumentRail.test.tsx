@@ -328,6 +328,14 @@ describe('SourceDocumentRail follows the prototype', () => {
     expect.soft(sectionOf(rail, box, '18px 20px'), 'section padding 18px 20px').not.toBeNull()
   })
 
+  it('the original filename value is sans', () => {
+    renderRail({ record: record({ filename: 'june-sales.xlsx' }) })
+    const value = screen.getByText('june-sales.xlsx', { selector: '[class]:not([data-testid]), span' })
+    expect(value.className, 'pin').not.toContain('mono')
+    expect(value.closest('.mono'), 'no mono ancestor in the record row').toBeNull()
+    expect(value.style.fontFamily).toBe('')
+  })
+
   it('the unresolved uploader id stays mono', () => {
     const unknown = '7f214c0a-9d33-4b21-8e55-0a1b2c3d4e5f'
     renderRail({ record: record({ uploaded_by: unknown }) })

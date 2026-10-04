@@ -98,7 +98,7 @@ export function SourceDocumentImage({ url, filename }: { url: string; filename: 
 
       <div
         data-testid="image-ground"
-        style={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: 30, background: 'var(--surface-2)' }}
+        style={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'grid', placeItems: 'center', padding: 30, background: 'var(--surface-2)' }}
       >
         {/* Zoom moves `width`, never `transform: scale()`: a scale leaves the layout box
             alone, so the ground would never scroll to reveal the enlarged photograph. */}

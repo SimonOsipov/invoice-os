@@ -242,6 +242,8 @@ describe('SourceDocumentImage', () => {
     expect.soft(ground.style.background).toBe('var(--surface-2)')
     expect.soft(ground.style.padding).toBe('30px')
     expect(ground.style.overflow, 'pin: live zoom scrolls the ground').toBe('auto')
+    expect.soft(ground.style.display, 'grid keeps a zoomed photo scrollable from its left edge').toBe('grid')
+    expect.soft(ground.style.placeItems).toBe('center')
     expect.soft(img.style.boxShadow).toBe('var(--shadow-card)')
     expect.soft(container.innerHTML, 'no oklch literal').not.toContain('oklch')
 

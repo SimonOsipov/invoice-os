@@ -125,7 +125,7 @@ export function SourceDocumentRail({
             Document record
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <Row label="Original filename" value={record.filename ?? 'Not recorded'} mono />
+            <Row label="Original filename" value={record.filename ?? 'Not recorded'} />
             <Row label="File size" value={formatBytes(record.size_bytes)} />
             <Row label="Uploaded" value={fmtDateTime(record.uploaded_at)} />
             <Row label="Uploaded by" value={uploader.text} mono={uploader.mono} />

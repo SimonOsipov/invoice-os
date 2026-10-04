@@ -21,8 +21,8 @@ import {
   type SourceDocumentResponse,
 } from '../lib/sourceDocument'
 
-// The bad and error tiles draw the warn triangle at 15; `warnTriGlyph` is fixed at 16.
-const triangle15 = <Icon paths={['m21.7 18-8-14a2 2 0 0 0-3.5 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3Z', 'M12 9v4', 'M12 17h.01']} size={15} />
+// The prototype's own warn triangle at 15 (stroke 1.6 is the Icon default); `warnTriGlyph` is a different path at 16.
+const triangle15 = <Icon paths={['M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z', 'M12 9v4', 'M12 17h.01']} size={15} />
 
 /** The `useAsync` result the card and the modal share — one record fetch, two readers. */
 export type SourceDocumentAsync = {

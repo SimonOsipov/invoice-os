@@ -186,6 +186,17 @@ describe('bad, error and none states follow v2', () => {
     { name: 'error', testid: 'source-document-failed', heading: 'The document did not load', maxWidth: '520px', mount: failed },
   ]
 
+  it('the bad and error tiles draw the prototype warn triangle at 15', () => {
+    for (const st of states.filter((x) => x.name !== 'none')) {
+      st.mount()
+      const svg = screen.getByTestId(st.testid).querySelector('svg') as SVGElement
+      expect(svg, `${st.name}: control: the glyph rendered`).not.toBeNull()
+      expect.soft(svg.querySelector('path')?.getAttribute('d'), `${st.name}: path`).toMatch(/^M10\.29 3\.86 1\.82 18a2 2 0 0 0 1\.71 3h16\.94/)
+      expect.soft(svg.getAttribute('width'), `${st.name}: size`).toBe('15')
+      cleanup()
+    }
+  })
+
   it('state headings and tiles follow v2', () => {
     for (const st of states) {
       st.mount()

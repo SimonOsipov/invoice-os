@@ -48,6 +48,8 @@ export const EXPORTS_BLOCKED_REASON_ID = 'exports-blocked-reason-text'
 // Pinned copy, verbatim -- no delivery promise, no ETA.
 export const EXPORTS_BLOCKED_REASON = 'Not built yet — none of these four exports produces a file.'
 
+const CHIP_STYLE = { fontSize: 9, fontWeight: 700, color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 5px' } as const
+
 export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
   const { active } = ctx
   const base = gatewayBase()
@@ -138,7 +140,7 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
         <div className="eyebrow" style={{ marginBottom: 10 }}>
           TAX REPORTING
         </div>
-        <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Reports &amp; analytics</h1>
+        <h1 style={{ fontSize: 26, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Reports &amp; analytics</h1>
         <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>{active.name} · tax summary, period to date</p>
       </div>
 
@@ -159,7 +161,7 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
       {(state === 'idle' || state === 'empty' || (state === 'ready' && list.data != null && fresh && rows.length === 0)) && (
         <div style={{ background: 'var(--bg-2)', border: '1px dashed var(--line-3)', borderRadius: 'var(--radius-md)', padding: 56, display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
           <span style={{ width: 44, height: 44, borderRadius: 'var(--radius-md)', background: 'var(--bg-3)', color: 'var(--fg-3)', display: 'grid', placeItems: 'center', marginBottom: 14 }}>{docGlyph}</span>
-          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>No data to report yet</div>
+          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>No data to report yet</div>
           <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: '0 0 20px', maxWidth: 340 }}>Reports populate once {active.short} has validated invoices in the period.</p>
           <button onClick={ctx.openCreate} className="v2-btn v2-btn-primary pf-btn">
             <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> New invoice
@@ -183,13 +185,11 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
           <div className="pf-grid-5" style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 16, marginBottom: 20 }}>
             {reportKpis.map((k) => (
               <div key={k.label} style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '18px 20px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 12 }}>
                   <div className="label">{k.label}</div>
-                  {/* Same SAMPLE-chip styling TileHead's `meta` renders (DashboardActive.tsx)
-                      — this tile row predates that shared-head refactor and has no header
-                      strip of its own, so the chip sits inline beside the label instead. */}
+                  {/* SAMPLE chip sits beside the label, same style as TileHead's `meta`. */}
                   {k.meta && (
-                    <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
+                    <span className="mono" style={CHIP_STYLE}>
                       {k.meta}
                     </span>
                   )}
@@ -203,7 +203,7 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
           <div className="pf-grid-2" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.3fr) minmax(0, 1fr)', gap: 20, marginBottom: 20 }}>
             <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
               <div style={{ padding: '15px 20px', borderBottom: '1px solid var(--line-1)' }}>
-                <span className="card-title">Top customers by value</span>
+                <span className="card-title" style={{ fontSize: 15 }}>Top customers by value</span>
               </div>
               <div style={{ padding: '6px 20px 12px' }}>
                 {topCustomers.map((t) => (
@@ -221,7 +221,7 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
             </div>
             <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
               <div style={{ padding: '15px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span className="card-title">Validation summary</span>
+                <span className="card-title" style={{ fontSize: 15 }}>Validation summary</span>
                 {/* % PASS is derived from `bucket` (scopedBucket), which is null until
                     `roll` resolves — held back a beat rather than flashing "0% PASS". */}
                 {rollState === 'ready' && (
@@ -236,13 +236,13 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
                 {rollState === 'ready' && (
                   <>
                     <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
-                      <div style={{ flex: 1, background: 'var(--status-green-bg)', border: '1px solid var(--status-green-border)', borderRadius: 'var(--radius-input)', padding: '12px 14px' }}>
+                      <div style={{ flex: 1, background: 'var(--status-green-bg)', border: '1px solid var(--status-green-border)', borderRadius: 'var(--radius-md)', padding: '12px 14px' }}>
                         <div className="money" style={{ fontSize: 22, fontWeight: 700, color: 'var(--status-green-text)' }}>{repPassed}</div>
                         <div className="label" style={{ marginTop: 2 }}>
                           Passed
                         </div>
                       </div>
-                      <div style={{ flex: 1, background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', borderRadius: 'var(--radius-input)', padding: '12px 14px' }}>
+                      <div style={{ flex: 1, background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', borderRadius: 'var(--radius-md)', padding: '12px 14px' }}>
                         <div className="money" style={{ fontSize: 22, fontWeight: 700, color: 'var(--status-red-text)' }}>{repFail}</div>
                         <div className="label" style={{ marginTop: 2 }}>
                           Failing
@@ -255,9 +255,9 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
                             wire (see the file-header comment) — disclosed the same way
                             DashboardActive.tsx's own top-failures panel does, so this list
                             is never mistaken for THIS client's own failures alone. */}
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                           <span className="label">Top failures</span>
-                          <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>FIRM-WIDE</span>
+                          <span className="mono" style={CHIP_STYLE}>FIRM-WIDE</span>
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                           {reportFailures.map((f) => (
@@ -277,7 +277,7 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
           </div>
           <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '18px 20px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-              <span className="card-title">Export &amp; filings</span>
+              <span className="card-title" style={{ fontSize: 15 }}>Export &amp; filings</span>
               <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
                 NRS-READY FORMATS
               </span>
@@ -295,13 +295,13 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
                   style={{ height: 38, background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' }}
                 >
                   <span style={{ display: 'inline-flex' }}>{downloadGlyph}</span> {e.name}{' '}
-                  <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 5px', marginLeft: 2 }}>
+                  <span className="mono" style={{ fontSize: 10, color: 'var(--fg-4)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 5px', marginLeft: 2 }}>
                     {e.fmt}
                   </span>
                 </button>
               ))}
             </div>
-            <div id={EXPORTS_BLOCKED_REASON_ID} data-testid="exports-blocked-reason" style={{ marginTop: 10, fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5 }}>
+            <div id={EXPORTS_BLOCKED_REASON_ID} data-testid="exports-blocked-reason" style={{ marginTop: 10, fontSize: 12, color: 'var(--fg-3)', lineHeight: 1.5 }}>
               {EXPORTS_BLOCKED_REASON}
             </div>
           </div>

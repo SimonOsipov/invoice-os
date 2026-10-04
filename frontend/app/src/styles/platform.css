@@ -147,6 +147,7 @@ body {
 }
 .pf-signout:hover {
   color: var(--fg-1);
+  background: var(--bg-3);
 }
 .pf-chip {
   transition: background 120ms, border-color 120ms, color 120ms;

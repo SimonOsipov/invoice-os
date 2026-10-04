@@ -567,6 +567,22 @@ func TestHandOff_FailingSinkIsTriedThreeTimes(t *testing.T) {
 	}
 }
 
+func TestHandOff_WarnNamesTheStatusTheHTTPSinkSaw(t *testing.T) {
+	withHandOffDelays(t, 0, 0)
+	base, reqs := intakeServer(t, http.StatusServiceUnavailable)
+	log, logs := newCaptureLog()
+
+	handOffRegistrant(context.Background(), log, NewHTTPContactSink(base, testClient(), "tok"), coWant)
+
+	warn := logs.waitWarn(t)
+	if got := warn.attrs["status"]; got != "503" {
+		t.Errorf("WARN %q has status %q, want 503", warn.text, got)
+	}
+	if n := len(reqs()); n != 3 {
+		t.Errorf("notifications saw %d requests, want 3", n)
+	}
+}
+
 type sinkRequest struct {
 	method, path string
 	header       http.Header

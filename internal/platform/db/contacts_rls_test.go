@@ -144,7 +144,7 @@ func TestRLS_ContactsAppMayInsertSelectUpdate(t *testing.T) {
 func TestRLS_ContactsAppMayNotDelete(t *testing.T) {
 	hh := requireHarness(t)
 	email := contactsEmail(t)
-	contactsSeed(t, email, []string{"registered_at"}, []any{time.Now()})
+	contactsSeed(t, email, []string{"registered_at"}, []any{contactsNow()})
 	if n := contactsRowCount(t, email); n != 1 {
 		t.Fatalf("seeded row count = %d, want 1", n)
 	}
@@ -159,7 +159,7 @@ func TestRLS_ContactsAppMayNotDelete(t *testing.T) {
 func TestRLS_ContactsReaderMayNotSelect(t *testing.T) {
 	hh := requireHarness(t)
 	email := contactsEmail(t)
-	contactsSeed(t, email, []string{"registered_at"}, []any{time.Now()})
+	contactsSeed(t, email, []string{"registered_at"}, []any{contactsNow()})
 	if n := contactsRowCount(t, email); n != 1 {
 		t.Fatalf("seeded row count = %d, want 1", n)
 	}
@@ -184,7 +184,7 @@ func contactsFactsUnchanged(t *testing.T, email string, reg, demo, consented tim
 func TestRLS_ContactsConsentCannotBeCleared(t *testing.T) {
 	hh := requireHarness(t)
 	email := contactsEmail(t)
-	reg, demo, consented := time.Now().Add(-3*time.Hour), time.Now().Add(-2*time.Hour), time.Now().Add(-time.Hour)
+	reg, demo, consented := contactsNow().Add(-3*time.Hour), contactsNow().Add(-2*time.Hour), contactsNow().Add(-time.Hour)
 	contactsSeedConsented(t, email, reg, demo, consented)
 
 	_, err := hh.app.Exec(context.Background(),
@@ -197,7 +197,7 @@ func TestRLS_ContactsConsentCannotBeRewritten(t *testing.T) {
 	hh := requireHarness(t)
 	ctx := context.Background()
 	email := contactsEmail(t)
-	reg, demo, consented := time.Now().Add(-3*time.Hour), time.Now().Add(-2*time.Hour), time.Now().Add(-time.Hour)
+	reg, demo, consented := contactsNow().Add(-3*time.Hour), contactsNow().Add(-2*time.Hour), contactsNow().Add(-time.Hour)
 	contactsSeedConsented(t, email, reg, demo, consented)
 
 	_, err := hh.app.Exec(ctx,
@@ -215,7 +215,7 @@ func TestRLS_ContactsTagFactsCannotBeCleared(t *testing.T) {
 	hh := requireHarness(t)
 	ctx := context.Background()
 	email := contactsEmail(t)
-	reg, demo, consented := time.Now().Add(-3*time.Hour), time.Now().Add(-2*time.Hour), time.Now().Add(-time.Hour)
+	reg, demo, consented := contactsNow().Add(-3*time.Hour), contactsNow().Add(-2*time.Hour), contactsNow().Add(-time.Hour)
 	contactsSeedConsented(t, email, reg, demo, consented)
 
 	for _, col := range []string{"registered_at", "demo_requested_at"} {
@@ -233,7 +233,7 @@ func TestRLS_ContactsOwnerCannotRewriteFacts(t *testing.T) {
 	hh := requireHarness(t)
 	ctx := context.Background()
 	email := contactsEmail(t)
-	reg, demo, consented := time.Now().Add(-3*time.Hour), time.Now().Add(-2*time.Hour), time.Now().Add(-time.Hour)
+	reg, demo, consented := contactsNow().Add(-3*time.Hour), contactsNow().Add(-2*time.Hour), contactsNow().Add(-time.Hour)
 	contactsSeedConsented(t, email, reg, demo, consented)
 
 	// Positive control: the owner may write a non-fact column, so the refusal below is the trigger.
@@ -252,7 +252,7 @@ func TestRLS_ContactsOwnerCannotRewriteFacts(t *testing.T) {
 func TestRLS_ContactsFactSetOnceSucceeds(t *testing.T) {
 	hh := requireHarness(t)
 	email := contactsEmail(t)
-	demo := time.Now().Add(-time.Hour)
+	demo := contactsNow().Add(-time.Hour)
 	contactsSeed(t, email, []string{"demo_requested_at"}, []any{demo})
 
 	tag, err := hh.app.Exec(context.Background(),
@@ -869,3 +869,6 @@ func TestRLS_ContactsReplayedMigrationHoldsContract(t *testing.T) {
 		})
 	}
 }
+
+// timestamptz holds microseconds; a finer Go time never round-trips equal.
+func contactsNow() time.Time { return time.Now().Truncate(time.Microsecond) }

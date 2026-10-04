@@ -152,8 +152,8 @@ export function Privacy() {
             them, the pre-selected answer is what gets sent.
           </p>
           <p style={P}>
-            At the same moment our own server sends HubSpot your first and last name, your work email, your company and a
-            tag, “demo request”, that marks you as someone who asked for a demo.
+            Right after you submit, our own server queues the same details for HubSpot (your first and last name, your
+            work email, your company and a tag, “demo request”) and tries again if HubSpot cannot be reached.
           </p>
           <p style={P}>
             The sentence you tick before submitting is stored alongside your details, word for word: “{CONSENT_TEXT}”
@@ -162,13 +162,13 @@ export function Privacy() {
           </p>
           <p style={P}>
             The form also has a separate marketing box. If you tick it, its sentence is stored on our own server, word
-            for word, with the time you ticked it: “{MARKETING_CONSENT_TEXT}”
+            for word, with the time you submitted the form: “{MARKETING_CONSENT_TEXT}”
           </p>
           <p style={P}>
             Resend is the service we use to send email. Only a ticked marketing box sends your email address and your
             first and last name to Resend from a demo request. Leave it unticked and Resend never receives them.
           </p>
-          <p style={P}>HubSpot holds all of this on their EU servers.</p>
+          <p style={P}>HubSpot holds what it receives from you on their EU servers.</p>
           <p style={P}>
             We do not send HubSpot your browsing history, the pages you visited, or HubSpot's own tracking cookie. The
             form carries your answers and nothing else.
@@ -176,11 +176,14 @@ export function Privacy() {
 
           <h2 style={H2}>If you create an account</h2>
           <p style={P}>
-            When you create an account, nothing goes to HubSpot or Resend until you have verified your email address.
+            When you create an account, Resend receives your email address at once, because it delivers the verification
+            email we send you. Nothing else goes to Resend, and nothing at all goes to HubSpot, until you have verified
+            your email address.
           </p>
           <p style={P}>
             After you verify your email address, our own server sends HubSpot your email address, your first and last
-            name, your company and a tag, “registered”, that marks you as a registered user.
+            name, your workspace name, filed in HubSpot as your company, and a tag, “registered”, that marks you as a
+            registered user.
           </p>
           <p style={P}>
             Every verified registrant becomes a contact in Resend, so that we can send you product and service email. Resend
@@ -190,7 +193,7 @@ export function Privacy() {
           <p style={P}>The registration form tells you about that email: “{PRODUCT_EMAIL_NOTICE}”</p>
           <p style={P}>
             The registration form has the same separate marketing box. Its sentence is stored on our own server, word for
-            word, with the time you ticked it: “{MARKETING_CONSENT_TEXT}”
+            word, with the time you submitted the form: “{MARKETING_CONSENT_TEXT}”
           </p>
 
           <h2 style={H2}>Error and performance monitoring</h2>

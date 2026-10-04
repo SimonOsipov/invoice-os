@@ -28,7 +28,9 @@ M2-14.4).
    past the access token's lifetime, a refused renewal returns to landing and keeps the
    destination, an account provisioned as in-house or as a firm opens in that mode, a new workspace
    lands on the add-company task, and adding its company opens the import step it gated, the
-   identity card shows the account's own name, and a long name stays inside the card
+   identity card shows the account's own name, a long name stays inside the card, and a stranger
+   registers through the landing window as a firm and as an in-house account, then signs in and
+   lands in the workspace it named (the verify step is a stand-in: only the failed-link redirect is real)
    ([identity-provider.md](./identity-provider.md) "Sign-in and hand-off",
    "Renewal"). The same file's "deployed consoles:" journeys sign a staff account in through
    landing and open both consoles, refuse a customer's session and a forged record, renew the

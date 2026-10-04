@@ -20,8 +20,10 @@ import {
   PERSONAS as API_PERSONAS,
   type Me,
   type RealAccount,
+  type TenantKind,
 } from '../api/client'
 import { freshTin } from '../api/fixtures'
+import { seedConsent } from '../smoke/landingConsent'
 import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS } from './layout'
 
@@ -1901,3 +1903,132 @@ test('deployed consoles: signing out of the Support Console ends the Ops Console
     await context.close()
   }
 })
+
+// frontend/landing/src/register.ts FREE_MAIL_REFUSED, from internal/gateway/register.go's isFreeMail guard.
+const FREE_MAIL_REFUSED = 'a business email address is required; personal email providers are not accepted'
+// frontend/landing/src/components/RegisterModal.tsx KINDS: the radio labels, by tenants.kind value.
+const KIND_LABEL: Record<TenantKind, string> = {
+  firm: 'For clients — an accounting or tax firm',
+  in_house: 'For our own company — in-house',
+}
+const CREATE = 'Create an account'
+
+// Opens the registration window from the header, fills it, submits, and ends on "Check your email".
+// A firstEmail is submitted first: the window must refuse it inline and keep every other field.
+async function registerThroughLanding(page: Page, account: RealAccount, kind: TenantKind, firstEmail?: string): Promise<void> {
+  await seedConsent(page, false)
+  await page.goto(LANDING_URL)
+  await page.getByRole('banner').getByRole('button', { name: CREATE }).click()
+  const dialog = page.getByRole('dialog', { name: CREATE })
+  await expect(dialog).toBeVisible()
+  const email = dialog.getByLabel('Work email', { exact: true })
+  const submit = dialog.getByRole('button', { name: 'Create account →' })
+
+  await email.fill(firstEmail ?? account.email)
+  await dialog.getByLabel('Password', { exact: true }).fill(account.password)
+  await dialog.getByLabel('Your name', { exact: true }).fill(account.displayName)
+  await dialog.getByLabel('Workspace name', { exact: true }).fill(account.workspaceName)
+  await dialog.getByRole('radio', { name: KIND_LABEL[kind] }).check()
+
+  if (firstEmail !== undefined) {
+    await submit.click()
+    const refusal = dialog.getByRole('alert')
+    await expect(refusal).toHaveCount(1)
+    await expect(refusal).toHaveText(FREE_MAIL_REFUSED)
+    await expect(email).toHaveAttribute('aria-invalid', 'true')
+    await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue(account.password)
+    await expect(dialog.getByLabel('Your name', { exact: true })).toHaveValue(account.displayName)
+    await expect(dialog.getByLabel('Workspace name', { exact: true })).toHaveValue(account.workspaceName)
+    await expect(dialog.getByRole('radio', { name: KIND_LABEL[kind] })).toBeChecked()
+    await email.fill(account.email)
+  }
+
+  await submit.click()
+  await expect(dialog.getByRole('heading', { name: 'Check your email', exact: true })).toBeVisible({ timeout: 30_000 })
+  await expect(dialog).toContainText(account.email)
+}
+
+async function expectNoDialog(page: Page): Promise<void> {
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+}
+
+test('deployed journey: a stranger registers through the landing and lands in a workspace of each kind', async ({ page, browser }) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+  const firm = freshRegistration('firm')
+  const inHouse = freshRegistration('in_house')
+
+  for (const { kind, account, path } of [
+    { kind: 'firm', account: firm, path: '/' },
+    { kind: 'in_house', account: inHouse, path: '/clients' },
+  ] as const) {
+    await test.step(`${kind}: registers through the landing window`, async () => {
+      // The firm pass submits a free-mail address first; the in-house pass registers directly.
+      await registerThroughLanding(page, account, kind, kind === 'firm' ? `${crypto.randomUUID()}@gmail.com` : undefined)
+    })
+
+    await test.step(`${kind}: the emailed link's landing shows the failed and the verified notice`, async () => {
+      // Step 2 of the verify half is a stand-in, and the failed-link half is the only real one:
+      // a bogus token makes the deployed gateway answer 303 to ?verify=failed (real).
+      // `?verified=1` below is COPY-ONLY: the test types the query itself, so it proves the notice
+      // text and that no dialog opens, not that the gateway verified anything. The verified redirect
+      // is proven in CI by TestIdP_EmailedLinkVerifiesThenSignInSucceeds.
+      await page.goto(`${GATEWAY_URL}/auth/verify?token=bogus-${crypto.randomUUID()}&type=signup`)
+      await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
+      await expect(page.getByRole('status').filter({ hasText: 'That link did not work' })).toBeVisible()
+      await expect.poll(() => new URL(page.url()).searchParams.has('verify'), { message: 'the landing strips ?verify' }).toBe(false)
+      await expectNoDialog(page)
+
+      await page.goto(`${LANDING_URL}/?verified=1`)
+      await expect(page.getByRole('status').filter({ hasText: 'Your email address is verified' })).toBeVisible()
+      await expectNoDialog(page)
+    })
+
+    await test.step(`${kind}: signs in and lands in the workspace it registered`, async () => {
+      const urls = recordUrls(page)
+      await signInAtFrontDoor(page, account, path)
+      expect(urls.length, 'recorded navigations').toBeGreaterThan(0)
+      expect(urls.filter((u) => u.includes('signin=no-workspace')), 'a navigation carried signin=no-workspace').toEqual([])
+      await expect(page.getByTestId('persona-name')).toHaveText(account.displayName)
+
+      if (kind === 'firm') {
+        await expectAddCompanyTask(page, 'Add your first client')
+        await expect.poll(() => sidebarRoster(page), { message: 'firm sidebar roster' }).toContain('Clients')
+      } else {
+        // The in-house workspace closes /clients: the app settles on the dashboard, with no portfolio.
+        await expect(page).toHaveURL(new URL('/', APP_URL).href)
+        await expect(page.getByRole('heading', { level: 1, name: 'Client portfolio', exact: true })).toHaveCount(0)
+        await expectAddCompanyTask(page, 'Add your company')
+        await expect.poll(() => sidebarRoster(page), { message: 'in-house sidebar roster' }).toContain('Settings')
+        expect(await sidebarRoster(page), 'the in-house sidebar').not.toContain('Clients')
+      }
+    })
+
+    // The next kind starts signed out: a stored session would skip the front door.
+    await page.evaluate(() => localStorage.clear())
+  }
+
+  await test.step('a confirmed address registered again answers the same Check your email', async () => {
+    const context = await browser.newContext()
+    try {
+      const repeat = await context.newPage()
+      const repeatErrors = collectErrors(repeat)
+      await registerThroughLanding(repeat, firm, 'firm')
+      expect(repeatErrors, `console errors on the repeat registration:\n${repeatErrors.join('\n')}`).toEqual([])
+    } finally {
+      await context.close()
+    }
+  })
+
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+function freshRegistration(kind: TenantKind): RealAccount {
+  const id = crypto.randomUUID()
+  return {
+    email: `reg-${kind}-${id}@example.com`,
+    password: id.slice(0, 16),
+    displayName: `Reg ${kind === 'firm' ? 'Firm' : 'House'} ${id.slice(0, 6)}`,
+    workspaceName: `Reg ${kind} ${id.slice(0, 8)}`,
+  }
+}

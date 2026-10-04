@@ -491,19 +491,26 @@ func (s *logStore) waitWarn(t *testing.T) logRecord {
 }
 
 func TestHandOff_FailingSinkIsTriedThreeTimes(t *testing.T) {
-	down := func(context.Context, int, RegistrantContact) error { return errors.New("notifications unavailable") }
+	transport := func(context.Context, int, RegistrantContact) error { return errors.New("notifications unavailable") }
+	refused := func(context.Context, int, RegistrantContact) error {
+		return sinkStatusError(http.StatusServiceUnavailable)
+	}
 	for _, c := range []struct {
 		name          string
 		entry         string
 		first, second time.Duration
+		down          func(context.Context, int, RegistrantContact) error
+		status        string
 	}{
-		{"verify, zero delays", "verify", 0, 0},
-		{"sign-in, zero delays", "sign-in", 0, 0},
-		{"verify, the injected delays are waited", "verify", 40 * time.Millisecond, 80 * time.Millisecond},
+		{"verify, zero delays", "verify", 0, 0, transport, "0"},
+		{"sign-in, zero delays", "sign-in", 0, 0, transport, "0"},
+		{"verify, the injected delays are waited", "verify", 40 * time.Millisecond, 80 * time.Millisecond, transport, "0"},
+		{"verify, notifications answered 503", "verify", 0, 0, refused, "503"},
+		{"sign-in, notifications answered 503", "sign-in", 0, 0, refused, "503"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			withHandOffDelays(t, c.first, c.second)
-			sink := newRecSink(down)
+			sink := newRecSink(c.down)
 			log, logs := newCaptureLog()
 
 			switch c.entry {
@@ -536,6 +543,9 @@ func TestHandOff_FailingSinkIsTriedThreeTimes(t *testing.T) {
 				t.Errorf("third attempt after %v, want at least %v", gap, c.second)
 			}
 
+			if warn.attrs["status"] != c.status {
+				t.Errorf("WARN %q has status %q, want %q", warn.text, warn.attrs["status"], c.status)
+			}
 			if warn.attrs["user_id"] != coUserID {
 				t.Errorf("WARN %q has user_id %q, want %q", warn.text, warn.attrs["user_id"], coUserID)
 			}
@@ -804,6 +814,9 @@ func TestHandOff_UserBodyShapes(t *testing.T) {
 		verify, sign *RegistrantContact
 	}{
 		{"unknown fields beside the known ones", extras, &coWant, &coWant},
+		{"blank email is not handed off", blankEmail(coMetaFull, ``), none, none},
+		{"whitespace email is not handed off", blankEmail(coMetaFull, " \\t "), none, none},
+		{"no email key is not handed off", `{"id":"` + coUserID + `","user_metadata":` + coMetaFull + `}`, none, none},
 		{"no user_metadata: any verified account is handed off, a sign-in is not", coUser(``), &idEmail, none},
 		{"empty metadata", coUser(`{}`), &idEmail, none},
 		{"user_metadata null", coUser(`null`), &idEmail, none},
@@ -843,6 +856,11 @@ func TestHandOff_UserBodyShapes(t *testing.T) {
 			})
 		}
 	}
+}
+
+// blankEmail is a GoTrue user whose email is email.
+func blankEmail(meta, email string) string {
+	return `{"id":"` + coUserID + `","email":"` + email + `","user_metadata":` + meta + `}`
 }
 
 func contactPtr(c RegistrantContact) *RegistrantContact { return &c }

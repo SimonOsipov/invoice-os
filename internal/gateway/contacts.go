@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -94,15 +96,29 @@ func (s *httpContactSink) post(ctx context.Context, name string, body any) error
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxGoTrueBodyBytes))
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("notifications answered %d", resp.StatusCode)
+		return sinkStatusError(resp.StatusCode)
 	}
 	return nil
 }
 
+// sinkStatusError is a non-2xx answer from notifications; the hand-off WARN logs its code.
+type sinkStatusError int
+
+func (e sinkStatusError) Error() string { return fmt.Sprintf("notifications answered %d", int(e)) }
+
+// failureStatus is the HTTP status behind err, or 0 for a transport or timeout error.
+func failureStatus(err error) int {
+	var se sinkStatusError
+	if errors.As(err, &se) {
+		return int(se)
+	}
+	return 0
+}
+
 // handOffRegistrant delivers user to the sink in the background: up to three attempts, one WARN after the last fails.
-// A nil sink is a no-op. The log carries the user id only.
+// A nil sink or a blank email is a no-op. The log carries the user id and the failing status only.
 func handOffRegistrant(ctx context.Context, log *slog.Logger, sink ContactSink, user RegistrantContact) {
-	if sink == nil {
+	if sink == nil || strings.TrimSpace(user.Email) == "" {
 		return
 	}
 	ctx = context.WithoutCancel(ctx)
@@ -118,7 +134,7 @@ func handOffRegistrant(ctx context.Context, log *slog.Logger, sink ContactSink, 
 			}
 			time.Sleep(delays[attempt])
 		}
-		log.WarnContext(ctx, "contacts: registrant hand-off failed", slog.String("user_id", user.UserID), slog.Int("attempts", len(delays)+1))
+		log.WarnContext(ctx, "contacts: registrant hand-off failed", slog.String("user_id", user.UserID), slog.Int("attempts", len(delays)+1), slog.Int("status", failureStatus(err)))
 	}()
 }
 

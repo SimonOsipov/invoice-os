@@ -119,7 +119,7 @@ export function DemoLeadForm({
     }
   }
 
-  // setField's sibling for the one boolean: a computed-key spread carrying
+  // setField's sibling: a computed-key spread carrying
   // `value: string` cannot also carry a checkbox.
   function setConsent(next: boolean) {
     setForm((prev) => ({ ...prev, consent: next }))
@@ -149,7 +149,7 @@ export function DemoLeadForm({
     setErrors({})
     setDemoStep('submitting')
 
-    // Built field by field from the seven answers. The honeypot's value is
+    // Built field by field. The honeypot's value is
     // deliberately absent — it is not part of the form's data model.
     const lead: DemoLead = {
       name: form.name,

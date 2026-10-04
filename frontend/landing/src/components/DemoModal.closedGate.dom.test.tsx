@@ -129,6 +129,28 @@ describe('AUTH-17-08: off production the gateway call and the stub run together'
     expect(container.textContent).toContain("You're booked")
   })
 
+  it('a gateway answering inside the stub window adds nothing to it', async () => {
+    openPreviewGate()
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.x')
+    vi.useFakeTimers()
+    const fetchMock = vi.fn().mockImplementation(() => new Promise<Response>((resolve) => setTimeout(() => resolve(accepted()), 1000)))
+    vi.stubGlobal('fetch', fetchMock)
+    await mountAndFill()
+
+    await act(async () => $<HTMLButtonElement>('button[type="submit"]').click())
+    expect(fetchMock, 'control: the gateway call is in flight').toHaveBeenCalledTimes(1)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1299)
+    })
+    expect(container.textContent, 'control: both the gateway and the stub are still pending').toContain('Booking…')
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    vi.useRealTimers()
+    expect(container.textContent, 'the stub started with the gateway call, not after it').toContain("You're booked")
+  })
+
   it('a slow gateway delays success past the stub', async () => {
     openPreviewGate()
     vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.x')

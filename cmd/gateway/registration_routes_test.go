@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -14,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -397,6 +399,57 @@ func TestDemoRequest_PreflightFromLanding(t *testing.T) {
 	rec = postJSON(mux, path, "https://evil.example", good)
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("POST from a disallowed origin got grant %q, want none", got)
+	}
+}
+
+// The landing's wire is read from its source: a key, path or method the handler would not take fails here.
+func TestDemoRequest_AcceptsTheLandingWire(t *testing.T) {
+	read := func(path string) string {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		return string(b)
+	}
+	client := read("../../frontend/landing/src/demoRequest.ts")
+	consent := read("../../frontend/landing/src/components/MarketingConsent.tsx")
+
+	sentence := regexp.MustCompile(`(?m)^export const MARKETING_CONSENT_TEXT = '([^'\\\n]+)'`).FindStringSubmatch(consent)
+	if sentence == nil {
+		t.Fatal("MarketingConsent.tsx: no exported single-quoted MARKETING_CONSENT_TEXT literal")
+	}
+	path := regexp.MustCompile("`\\$\\{base\\}(/[^`]+)`").FindStringSubmatch(client)
+	method := regexp.MustCompile(`method: '([A-Z]+)'`).FindStringSubmatch(client)
+	block := regexp.MustCompile(`(?s)\n    body: \{(.*?)\n    \},`).FindStringSubmatch(client)
+	if path == nil || method == nil || block == nil {
+		t.Fatalf("demoRequest.ts: cannot read the url, method and body literal (url %v, method %v, body %v)", path != nil, method != nil, block != nil)
+	}
+	if method[1] != http.MethodPost {
+		t.Fatalf("the landing sends %s, the route takes POST", method[1])
+	}
+
+	values := map[string]string{"email": " ada@corp.example ", "name": " Ada Lovelace ", "company": "Analytical Engines Ltd", "marketing_consent_text": sentence[1]}
+	body := map[string]string{}
+	for _, m := range regexp.MustCompile(`\b([a-z_]+):`).FindAllStringSubmatch(block[1], -1) {
+		v, known := values[m[1]]
+		if !known {
+			t.Fatalf("the landing sends key %q, which the handler does not read", m[1])
+		}
+		body[m[1]] = v
+	}
+	if len(body) != len(values) {
+		t.Fatalf("the landing body carries %d keys, want the handler's %d: %v", len(body), len(values), body)
+	}
+	raw, _ := json.Marshal(body)
+
+	mux, sink := demoMux(t)
+	rec := postJSON(mux, path[1], registerAllowedOrigin, string(raw))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("POST %s with the landing body = %d, want 202: %s", path[1], rec.Code, rec.Body.String())
+	}
+	want := []gateway.DemoRequest{{Email: "ada@corp.example", Name: "Ada Lovelace", Company: "Analytical Engines Ltd", MarketingConsentText: sentence[1]}}
+	if got := sink.calls(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("sink got %+v, want %+v", got, want)
 	}
 }
 

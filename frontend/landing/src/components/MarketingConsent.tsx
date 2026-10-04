@@ -1,4 +1,4 @@
-// Optional marketing opt-in for the registration form; it never blocks submit.
+// Optional marketing opt-in; it never blocks submit.
 import { CHECK_INPUT_STYLE, CHECK_LABEL_STYLE } from './DemoLeadForm'
 
 export const MARKETING_CONSENT_TEXT = 'Allow marketing communications: ASComply Africa may email me product news and offers. I can unsubscribe at any time.'

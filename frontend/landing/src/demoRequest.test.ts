@@ -78,6 +78,7 @@ describe('sendDemoRequest', () => {
     const headers = new Headers(init?.headers)
     expect(headers.get('Content-Type')).toBe('application/json')
     expect(headers.has('Authorization')).toBe(false)
+    expect([...headers.keys()], 'the preflight grants exactly these request headers').toEqual(['content-type'])
   })
 
   it('sendDemoRequest is null without a gateway', async () => {

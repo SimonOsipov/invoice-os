@@ -4,11 +4,8 @@
 // exists: the canvas, the inspector and the simulator all need the node tone/title
 // vocabulary, and none of them should have to import a sibling screen to get it.
 //
-// Token note: the prototype's teal is `--accent`; in this repo `--accent` is the design
-// system's AMBER and is deliberately not aliased (app-layer.css). Every teal below is
-// `--action` / `--action-tint`. `--shadow-xs`/`--shadow-sm` map to `--shadow-card`/
-// `--shadow-soft`, and the prototype's `--shadow-accent` has no repo equivalent, so the
-// primary CTA carries no shadow — same as every other primary button in the app.
+// Token note: the prototype's teal `--accent` is the repo's AMBER; every teal here is `--action` / `--action-tint`.
+// No shadows: the v2 look is flat, so the toggle knob and the primary CTA carry none.
 
 import type { ReactNode } from 'react'
 
@@ -181,11 +178,11 @@ export const POLICY_TONE: Record<PolicyStatus, { bg: string; border: string; tex
 export function PolicyStatusPill({ status, padding = '2px 8px' }: { status: PolicyStatus; padding?: string }) {
   const tone = POLICY_TONE[status]
   return (
-    <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 5, background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 999, padding }}>
-      <span style={{ width: 5, height: 5, borderRadius: 99, background: tone.text }} />
-      <span className="mono" style={{ fontSize: 8.5, fontWeight: 600, color: tone.text, letterSpacing: '0.05em' }}>
-        {tone.label}
-      </span>
+    <span
+      className="mono"
+      style={{ flex: 'none', display: 'inline-flex', fontSize: 8.5, fontWeight: 600, letterSpacing: '0.05em', color: tone.text, background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 'var(--radius-sm)', padding }}
+    >
+      {tone.label}
     </span>
   )
 }
@@ -304,7 +301,7 @@ export function WfToggle({ on, onToggle, label, disabled, title, ariaDescribedBy
       className="pf-toggle"
       style={{ flex: 'none', position: 'relative', display: 'inline-block', width: 34, height: 18, padding: 0, border: 0, borderRadius: 99, cursor: 'pointer', background: on ? 'var(--action)' : 'var(--line-3)', ...(disabled ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null) }}
     >
-      <span className="pf-knob" style={{ position: 'absolute', top: 2, left: 2, width: 14, height: 14, borderRadius: 99, background: 'var(--bg-2)', transform: on ? 'translateX(16px)' : 'translateX(0)', boxShadow: 'var(--shadow-card)' }} />
+      <span className="pf-knob" style={{ position: 'absolute', top: 2, left: 2, width: 14, height: 14, borderRadius: '50%', background: 'var(--bg-2)', transform: on ? 'translateX(16px)' : 'translateX(0)' }} />
     </button>
   )
 }

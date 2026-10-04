@@ -71,7 +71,7 @@ export async function registerAccount(v: RegisterValues): Promise<void> {
 export function registerOutcome(err: unknown): RegisterOutcome {
   if (err instanceof ApiError && err.kind === 'http') {
     if (err.status === 400) {
-      return err.message === FREE_MAIL_REFUSED ? { field: 'email', message: FREE_MAIL_REFUSED } : { form: err.message }
+      return err.message === FREE_MAIL_REFUSED ? { field: 'email', message: FREE_MAIL_REFUSED } : { form: err.message.trim() || UNAVAILABLE }
     }
     if (err.status === 503) return { form: CLOSED }
     if (err.status === 429) return { form: THROTTLED }

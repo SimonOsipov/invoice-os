@@ -17,7 +17,9 @@ import {
 } from './demoForm'
 import { resolveSubmitTarget, submitDemoLead, type DemoLead } from '../hubspot'
 import { trackedHubSpotSubmit } from '../analytics'
+import { sendDemoRequest } from '../demoRequest'
 import { IconTile } from './ds/IconTile'
+import { MarketingConsent } from './MarketingConsent'
 
 export function Glyph({ d, size = 16, sw = 1.7 }: { d: string | string[]; size?: number; sw?: number }) {
   const paths = Array.isArray(d) ? d : [d]
@@ -124,11 +126,9 @@ export function DemoLeadForm({
     setErrors((prev) => ({ ...prev, consent: undefined }))
   }
 
-  // Compile-only stub until AUTH-17-08 is implemented.
   function setMarketing(next: boolean) {
-    void next
+    setForm((prev) => ({ ...prev, marketing: next }))
   }
-  void setMarketing
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -175,8 +175,13 @@ export function DemoLeadForm({
         const target = resolveSubmitTarget(window.location.hostname)
         // Wrapped here, not around the shared success transition below: this is the
         // only branch of the four that reaches HubSpot.
-        if (target) await trackedHubSpotSubmit(() => submitDemoLead(target, lead, CONSENT_TEXT))
-        else await runStub()
+        if (target) {
+          await trackedHubSpotSubmit(() => submitDemoLead(target, lead, CONSENT_TEXT))
+          await sendDemoRequest(lead)
+        } else {
+          // The stub runs beside the gateway post so the stub's delay is never added to it.
+          await Promise.all([sendDemoRequest(lead) ?? Promise.resolve(), runStub()])
+        }
       }
       if (mounted.current) setDemoStep('success')
     } catch {
@@ -376,6 +381,8 @@ export function DemoLeadForm({
                 </div>
               )}
             </div>
+
+            <MarketingConsent id={`${idPrefix}-marketing`} checked={form.marketing} onChange={setMarketing} disabled={submitting} />
           </div>
 
           {/* Honeypot. Bots fill every input they find; humans never see this one, so

@@ -287,6 +287,9 @@ time. The production key exists only in the Railway variable U3b writes and then
 
 ## Registration
 
+A verified registrant reaches HubSpot and Resend through the gateway hand-off: see
+[contact-sync.md](./contact-sync.md).
+
 GoTrue stays private. The gateway is the only public surface, and it calls GoTrue under
 `AUTH_URL` at: `/signup` and `/verify` for registration, `/token?grant_type=password` for
 sign-in (see Sign-in and hand-off), `/token?grant_type=refresh_token` for renewal and
@@ -298,7 +301,10 @@ scope, or `/token` with any other grant) is reachable from outside.
 
 **The flow:**
 1. The client posts `{"email","password"}` to `POST /auth/register` on the gateway. The body
-   may also carry `workspace_name`, `display_name` and `kind?`. When any of them is present,
+   may also carry `workspace_name`, `display_name`, `kind?` and `marketing_consent_text?`
+   (optional; the marketing sentence the person ticked, 1 to 500 characters; the gateway
+   stores it as `data.marketing_consent{text,at}` with the server's time). When any of the
+   first three is present,
    the gateway validates them with the tenancy rules (trimmed, 1 to 200 characters, no NUL,
    `kind` `firm` or `in_house`) and posts them to GoTrue `/signup` as
    `data.registration`; GoTrue stores them as `user_metadata.registration`. A free-mail

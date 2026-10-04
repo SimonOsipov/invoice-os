@@ -228,8 +228,7 @@ export function RoleCards({ value, onChange, disabledIds, note, noteId: noteIdPr
               // `border-color: var(--action) !important` and a React style object
               // cannot emit `!important`, so unlike the unguarded
               // `.pf-menu-item:hover` this one cannot be outranked inline and a dead card
-              // would still light up. Omitting the class costs nothing else: `.pf-upcard`
-              // carries only that hover, a transition and a font-family.
+              // would still light up.
               // Adding a `[aria-disabled]` rule to the shared stylesheet would fix it globally for a state only -07 reaches, which is the edit
               // MemberRoleMatrix.tsx:32-33 already declines to make. Do not restore it.
               className={disabled ? undefined : 'pf-upcard'}

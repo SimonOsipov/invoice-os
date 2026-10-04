@@ -189,4 +189,18 @@ describe('v2 app layer', () => {
     expect(appended).toContain('--radius-input')
     expect(appended).not.toContain('!important')
   })
+
+  it('AL-12 the dark scope keeps its scrollbar colours: its rules outrank the .asc-app ones', () => {
+    const blocks = layerBlocks()
+    const classes = (sel: string) => (sel.match(/\.[\w-]+/g) ?? []).length
+    const appRule = (part: string) => blocks.find((b) => b.selector === `.asc-app ::-webkit-scrollbar-${part}`)
+    const darkRule = (part: string) => blocks.find((b) => b.selector === `.asc-app .asc-dark ::-webkit-scrollbar-${part}`)
+    expect(appRule('track'), 'control: the light track rule is scanned').toBeDefined()
+    expect(appRule('thumb'), 'control: the light thumb rule is scanned').toBeDefined()
+    expect(darkRule('track')?.decls.get('background'), 'dark track rule').toBe('transparent')
+    expect(darkRule('thumb')?.decls.get('background'), 'dark thumb rule').toBe('var(--surface-panel-border)')
+    for (const part of ['track', 'thumb']) {
+      expect(classes(darkRule(part)!.selector), `dark ${part} selector class count`).toBeGreaterThan(classes(appRule(part)!.selector))
+    }
+  })
 })

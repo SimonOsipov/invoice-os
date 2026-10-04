@@ -284,7 +284,7 @@ predicates it would previously have hit inside the transaction.
 | `POST /contacts/demo-request` | gateway | exempt | no database; hands the form to notifications |
 | `OPTIONS /contacts/demo-request` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `GET /.well-known/jwks.json` | gateway | exempt | serves the public verification keys; unauthenticated by design |
-| `/api/` | gateway | exempt | the proxy mount, not an endpoint — it forwards to the seven services whose own routes are listed here |
+| `/api/` | gateway | exempt | the proxy mount, not an endpoint — it forwards to the seven services |
 | `GET /v1/me` | tenancy | exempt | §4 — the SPA's boot round trip; gating it would make the 403 unreachable |
 | `POST /v1/workspaces` | tenancy | exempt | the caller has no membership yet (AC-5) |
 | `POST /v1/validate/batch` | validation | exempt | `S2SMiddleware` peer call with no caller identity by construction, and the gateway strips any client-supplied `X-S2S-Token` (`internal/gateway/gateway.go`, `injectIdentity`) |

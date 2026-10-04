@@ -417,6 +417,19 @@ func TestDemoRequest_OptionsWithoutOriginIsNotADemoRequest(t *testing.T) {
 		t.Errorf("an OPTIONS request reached the sink: %+v", got)
 	}
 
+	// No other method reaches the handler either; the mux answers 405 for them.
+	for _, m := range []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+		req := httptest.NewRequest(m, "/contacts/demo-request", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s /contacts/demo-request = %d, want 405", m, rec.Code)
+		}
+	}
+	if got := sink.calls(); len(got) != 0 {
+		t.Errorf("a non-POST request reached the sink: %+v", got)
+	}
+
 	// Positive pair: the same body as a POST is forwarded.
 	if rec := postJSON(mux, "/contacts/demo-request", registerAllowedOrigin, body); rec.Code != http.StatusAccepted {
 		t.Fatalf("POST = %d, want 202: %s", rec.Code, rec.Body.String())

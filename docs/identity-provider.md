@@ -377,7 +377,7 @@ guarded by `TestIdP_FreeMailVariantsAreNotAccepted`.
 | `marketing_consent_text` present but blank, over 500 characters or holding a NUL byte | 400 `marketing_consent_text must be 1 to 500 characters` |
 | notifications fails or exceeds 5 s | 502 `demo request is unavailable`; the log carries the status only |
 
-Every answer sets `Cache-Control: no-store`. Any non-POST answers 405. The route is public and unthrottled; the `ceiling:` line in `internal/gateway/contacts.go` `DemoRequestHandler` names the limit. Guarded by `internal/gateway/contacts_test.go` (`TestDemoRequest_*`).
+The handler sets `Cache-Control: no-store` on every answer it writes. Any method but POST and a preflight answers 405. The route is public and unthrottled; the `ceiling:` line in `internal/gateway/contacts.go` `DemoRequestHandler` names the limit. Guarded by `internal/gateway/contacts_test.go` (`TestDemoRequest_*`).
 
 The `/api/` router answers 404 for any path whose first segment after the service is `internal`, before authorization, on the decoded path. Guarded by `internal/gateway/gateway_test.go` `TestRouter_InternalPathNeverReachesUpstream`.
 

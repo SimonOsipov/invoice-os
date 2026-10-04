@@ -1106,6 +1106,7 @@ func TestDemoRequest_InvalidFieldsAre400(t *testing.T) {
 		{"email with inner tab", demoJSON(map[string]any{"email": "ada@corp\t.example"}), "email is invalid"},
 		{"email of two bytes", demoJSON(map[string]any{"email": "a@"}), "email is invalid"},
 		{"email of 255 bytes", demoJSON(map[string]any{"email": "a" + email254}), "email is invalid"},
+		{"email with NUL", demoJSON(map[string]any{"email": "ada\x00@corp.example"}), "email is invalid"},
 		{"email wrong type", `{"email":7,"name":"` + demoName + `","company":"` + demoCompany + `"}`, ""},
 		{"name absent", demoJSON(map[string]any{"name": dropField}), demoNameMsg},
 		{"name empty", demoJSON(map[string]any{"name": ""}), demoNameMsg},
@@ -1161,6 +1162,15 @@ func TestDemoRequest_BoundaryValuesAreAccepted(t *testing.T) {
 	sink := &demoSink{}
 	requireDemoAnswer(t, serveDemo(newDemoHandler(sink), demoJSON(fields)), http.StatusAccepted, `{"status":"accepted"}`)
 	want := []DemoRequest{{Email: email254, Name: name200, Company: company200, MarketingConsentText: text500}}
+	if got := sink.got(); !reflect.DeepEqual(got, want) {
+		t.Errorf("sink got %+v, want %+v", got, want)
+	}
+
+	// The lower limits are inclusive too, and the consent sentence is forwarded as sent, padding included.
+	const padded = "  I agree.\n"
+	sink = &demoSink{}
+	requireDemoAnswer(t, serveDemo(newDemoHandler(sink), demoJSON(map[string]any{"email": "a@b", "name": "A", "company": "é", "marketing_consent_text": padded})), http.StatusAccepted, `{"status":"accepted"}`)
+	want = []DemoRequest{{Email: "a@b", Name: "A", Company: "é", MarketingConsentText: padded}}
 	if got := sink.got(); !reflect.DeepEqual(got, want) {
 		t.Errorf("sink got %+v, want %+v", got, want)
 	}
@@ -1245,4 +1255,30 @@ func TestDemoRequest_UpstreamTimeoutIs502(t *testing.T) {
 			t.Errorf("notifications was called %d times, want 1", calls)
 		}
 	})
+}
+
+func TestDemoRequest_OnlyPostIsServed(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions} {
+		t.Run(method, func(t *testing.T) {
+			sink := &demoSink{}
+			rec := serve(newDemoHandler(sink), method, "/contacts/demo-request", demoJSON(nil))
+
+			requireDemoAnswer(t, rec, http.StatusMethodNotAllowed, "")
+			if got := rec.Header().Get("Allow"); got != http.MethodPost {
+				t.Errorf("Allow = %q, want POST", got)
+			}
+			if method != http.MethodHead && strings.TrimSpace(rec.Body.String()) != `{"error":"method not allowed"}` {
+				t.Errorf("body = %q, want the method-not-allowed envelope", rec.Body.String())
+			}
+			if n := len(sink.got()); n != 0 {
+				t.Errorf("sink saw %d calls for %s, want none", n, method)
+			}
+		})
+	}
+
+	sink := &demoSink{}
+	requireDemoAnswer(t, serveDemo(newDemoHandler(sink), demoJSON(nil)), http.StatusAccepted, `{"status":"accepted"}`)
+	if n := len(sink.got()); n != 1 {
+		t.Errorf("sink saw %d calls for the POST, want 1", n)
+	}
 }

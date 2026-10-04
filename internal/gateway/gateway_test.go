@@ -1,10 +1,12 @@
 package gateway
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1477,7 +1479,11 @@ func TestRouter_InternalPathNeverReachesUpstream(t *testing.T) {
 
 	// Control: the upstream does serve /internal, and its mux is case-sensitive, so /Internal is no internal route.
 	direct, c := countingUpstream(t)
-	for path, want := range map[string]int32{"/internal/contacts/registrants": 1, "/Internal/contacts/registrants": 1} {
+	for _, tc := range []struct {
+		path string
+		want int32
+	}{{"/internal/contacts/registrants", 1}, {"/Internal/contacts/registrants", 1}} {
+		path, want := tc.path, tc.want
 		resp, err := http.Post(direct.String()+path, "application/json", strings.NewReader("{}"))
 		if err != nil {
 			t.Fatal(err)
@@ -1601,5 +1607,112 @@ func TestRouter_SelfReadIsProxied(t *testing.T) {
 				t.Errorf("GET %s reached the upstream's /internal route", path)
 			}
 		})
+	}
+}
+
+// rawDo writes request line target verbatim over a socket, which a Go client would clean or refuse,
+// and follows redirects by hand; it returns the final status and the number of redirects followed.
+func (r *internalRig) rawDo(t *testing.T, method, target, bearer string) (status, redirects int) {
+	t.Helper()
+	for range 6 {
+		conn, err := net.Dial("tcp", r.srv.Listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+		fmt.Fprintf(conn, "%s %s HTTP/1.1\r\nHost: gw.test\r\nAuthorization: Bearer %s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", method, target, bearer)
+		resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: method})
+		if err != nil {
+			_ = conn.Close()
+			t.Logf("%s %q: %v", method, target, err)
+			return 0, redirects
+		}
+		_ = resp.Body.Close()
+		_ = conn.Close()
+		if resp.StatusCode/100 != 3 {
+			return resp.StatusCode, redirects
+		}
+		loc, err := resp.Location()
+		if err != nil {
+			t.Fatalf("%s %q: %v", method, target, err)
+		}
+		target = loc.RequestURI()
+		redirects++
+	}
+	t.Fatalf("%s %q: redirect loop", method, target)
+	return 0, 0
+}
+
+// Request lines a Go client cleans or refuses, written to the socket as is. Whatever the method,
+// no variant may reach the upstream's /internal route; refused ones must not reach the upstream at all.
+func TestRouter_InternalPathRawRequestLinesNeverReachUpstream(t *testing.T) {
+	rig := newInternalRig(t)
+	token := rig.tg.validToken(t)
+	c := rig.counts["notifications"]
+	const reg = "/contacts/registrants"
+
+	// Control: the raw helper reaches the upstream when it should, and the refusal is a 404 with no upstream hit.
+	c.reset()
+	if status, _ := rig.rawDo(t, http.MethodGet, "/api/notifications/v1/contacts/me", token); status != http.StatusOK || c.selfRead.Load() != 1 {
+		t.Fatalf("control: raw self-read answered %d with %d upstream self-reads, want 200 and 1", status, c.selfRead.Load())
+	}
+
+	refused := []string{
+		"/api/notifications/%69%6e%74%65%72%6e%61%6c" + reg,
+		"/api/notifications/%69nternal%2Fcontacts/registrants",
+		"/api/notifications/internal%2F..%2Finternal" + reg,
+		"http://gw.test/api/notifications/internal" + reg,
+		"/api/notifications/internal",
+		"/api/notifications/internal/",
+	}
+	// Reach the upstream, which is a case-sensitive Go mux, but no /internal route there.
+	proxiedHarmless := []string{
+		"/api/notifications/internal;x=1" + reg,
+		"/api/notifications/internal%00" + reg,
+		"/api/notifications/internal." + reg,
+		"/api/notifications/internal%20" + reg,
+		"/api/notifications/%c0%af..%c0%afinternal" + reg,
+		"/api/notifications/%e2%80%8binternal" + reg,
+		"/api/notifications/%ef%bd%89nternal" + reg,
+		"/api/notifications/v1/..%2finternal" + reg,
+		"/api/notifications/v1/%2e%2e/internal" + reg,
+	}
+	// A non-CONNECT request is cleaned by the mux (301) before the router; CONNECT is not, so the router sees these unclean.
+	cleanedOrUnclean := []string{
+		"/api/notifications/v1/../internal" + reg,
+		"/api/notifications/INTERNAL/../internal" + reg,
+		"/api/notifications//internal" + reg,
+		"/api/notifications/./internal" + reg,
+		"/api/notifications/%2Finternal" + reg,
+		"/api/notifications/\xff/../internal" + reg,
+	}
+	for _, set := range [][]string{refused, proxiedHarmless, cleanedOrUnclean} {
+		if len(set) == 0 {
+			t.Fatal("empty case set")
+		}
+	}
+
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodConnect} {
+		for _, target := range refused {
+			t.Run(method+" "+target, func(t *testing.T) {
+				c.reset()
+				status, _ := rig.rawDo(t, method, target, token)
+				if status != http.StatusNotFound || c.any.Load() != 0 {
+					t.Errorf("answered %d, upstream hits %d, want 404 and 0", status, c.any.Load())
+				}
+			})
+		}
+		for _, target := range append(slices.Clone(proxiedHarmless), cleanedOrUnclean...) {
+			t.Run(method+" "+target, func(t *testing.T) {
+				c.reset()
+				status, _ := rig.rawDo(t, method, target, token)
+				if c.internal.Load() != 0 {
+					t.Errorf("reached the upstream's /internal route %d times (answered %d)", c.internal.Load(), status)
+				}
+				if status/100 == 2 {
+					t.Errorf("answered %d, want a refusal", status)
+				}
+			})
+		}
 	}
 }

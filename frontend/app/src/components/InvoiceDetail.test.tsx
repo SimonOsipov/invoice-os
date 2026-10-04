@@ -3532,13 +3532,14 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
 
     const input = (await screen.findByTestId('detail-reject-reason')) as HTMLInputElement
     const confirmBtn = screen.getByTestId('detail-reject-confirm') as HTMLButtonElement
-    expect(input.style.flex).toBe('1 1 220px')
-    expect(input.style.minWidth).toBe('160px')
-    expect(input.style.height).toBe('32px')
-    expect(input.style.fontSize).toBe('12.5px')
+    expect(input.style.flex).toBe('1 1 100%')
+    expect(input.style.height).toBe('34px')
+    expect(input.style.fontSize).toBe('13px')
+    expect(input.style.padding).toBe('0px 10px')
     expect(confirmBtn.style.flexShrink).toBe('0')
     expect(confirmBtn.style.whiteSpace).toBe('nowrap')
     expect(input.parentElement?.style.flexWrap).toBe('wrap')
+    expect(input.parentElement?.style.justifyContent, 'the buttons wrap to a right-aligned row').toBe('flex-end')
   })
 
   // ---- AC-6: the non-optimistic refetch sequence ----------------------------------------
@@ -3873,6 +3874,100 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
   })
 })
 
+describe('InvoiceDetail header and action cluster take the v2 look (RESKIN2-03-01)', () => {
+  const ID = 'inv-header-v2-1'
+  const actionable = { id: ID, status: 'validated' as InvoiceStatus, can_edit: true, can_revalidate: true, can_submit: true, can_approve: true, can_reject: true }
+
+  it('the detail h1 carries no inline weight and stays mono', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated' }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const h1 = within(await screen.findByTestId('invoice-detail')).getByRole('heading', { level: 1 })
+    expect(h1.textContent).toBe('INV-FAILED-1')
+    expect(h1.className.split(' ')).toContain('mono')
+    expect(h1.style.fontWeight).toBe('')
+  })
+
+  it('the detail status badge is a 4px badge with a round dot', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'failed' }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const badge = await screen.findByTestId('invoice-status-badge')
+    expect(badge.style.borderRadius).toBe('var(--radius-sm)')
+    expect(badge.style.padding).toBe('3px 9px')
+    expect((badge.firstElementChild as HTMLElement).style.borderRadius).toBe('50%')
+    const label = badge.lastElementChild as HTMLElement
+    expect(label.textContent).toContain('FAILED')
+    expect(label.style.letterSpacing).toBe('0.04em')
+  })
+
+  it('every cluster button takes the v2 box', async () => {
+    mockDetailFetch(detailRecord(actionable))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('detail-approve')
+
+    const seen = new Set<string>()
+    const sweep = (ids: string[]) => {
+      for (const id of ids) {
+        const btn = screen.getByTestId(id)
+        expect(btn.style.height, `${id} height`).toBe('34px')
+        expect(btn.style.padding, `${id} inline padding`).toBe('')
+        expect(btn.style.fontSize, `${id} inline font size`).toBe('')
+        seen.add(id)
+      }
+    }
+    sweep(['detail-approve', 'detail-reject', 'edit-toggle', 'revalidate', 'detail-submit'])
+    fireEvent.click(screen.getByTestId('detail-approve'))
+    sweep(['detail-approve-cancel', 'detail-approve-confirm'])
+    fireEvent.click(screen.getByTestId('detail-submit'))
+    sweep(['detail-submit-cancel', 'detail-submit-confirm'])
+    fireEvent.click(screen.getByTestId('detail-reject'))
+    sweep(['detail-reject-cancel', 'detail-reject-confirm'])
+
+    expect([...seen].sort(), 'all eleven cluster buttons were swept').toEqual(
+      [
+        'detail-approve', 'detail-approve-cancel', 'detail-approve-confirm', 'detail-reject', 'detail-reject-cancel',
+        'detail-reject-confirm', 'detail-submit', 'detail-submit-cancel', 'detail-submit-confirm', 'edit-toggle', 'revalidate',
+      ].sort(),
+    )
+  })
+
+  it('both action rows wrap to the end', async () => {
+    mockDetailFetch(detailRecord(actionable))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const decision = await screen.findByTestId('detail-decision-actions')
+    const inner = screen.getByTestId('invoice-actions').firstElementChild as HTMLElement
+    expect(within(inner).getByTestId('edit-toggle'), 'the first child is the button row').toBeTruthy()
+    for (const [name, row] of [['detail-decision-actions', decision], ['invoice-actions inner row', inner]] as const) {
+      expect(row.style.flexWrap, name).toBe('wrap')
+      expect(row.style.justifyContent, name).toBe('flex-end')
+      expect(row.style.gap, `${name}: button gap stays 8`).toBe('8px')
+    }
+    expect((decision.parentElement as HTMLElement).style.gap, 'the action column gap').toBe('10px')
+  })
+
+  it('the confirm prompts take the v2 type', async () => {
+    mockDetailFetch(detailRecord(actionable))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    fireEvent.click(screen.getByTestId('detail-submit'))
+
+    for (const id of ['detail-approve-confirm-prompt', 'detail-submit-confirm-prompt']) {
+      const prompt = screen.getByTestId(id)
+      expect(prompt.children, `${id} has two lines`).toHaveLength(2)
+      const [first, second] = Array.from(prompt.children) as HTMLElement[]
+      expect(first.style.fontSize, `${id} line 1 size`).toBe('13px')
+      expect(first.style.fontWeight, `${id} line 1 weight`).toBe('600')
+      expect(second.style.fontSize, `${id} line 2 size`).toBe('12px')
+      expect(second.style.color, `${id} line 2 colour`).toBe('var(--fg-3)')
+    }
+  })
+})
+
 describe('InvoiceDetail demo-only blocked-by-role note (task-594, DEMO-06-06)', () => {
   const ID = 'inv-blocked-by-role-1'
   const FOLAKE: Member = {
@@ -3924,6 +4019,17 @@ describe('InvoiceDetail demo-only blocked-by-role note (task-594, DEMO-06-06)', 
     expect(approveBtn.disabled).toBe(true)
     expect(approveBtn.getAttribute('title')).toBe(S)
     expect(screen.getByTestId('persona-blocked-note')).toBeTruthy()
+  })
+
+  it('the reject row comes before the role note', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_approve: false, can_reject: true, approve_blocked_reason: S }))
+
+    await renderDemoDetail([FOLAKE])
+
+    fireEvent.click(await screen.findByTestId('detail-reject'))
+    const reason = await screen.findByTestId('detail-reject-reason')
+    const note = screen.getByTestId('persona-blocked-note')
+    expect(reason.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING, 'the note follows the reject row').toBeTruthy()
   })
 
   it('5: an approver sees no note (AC-3)', async () => {

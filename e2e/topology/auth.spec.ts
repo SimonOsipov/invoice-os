@@ -1953,8 +1953,10 @@ async function expectNoDialog(page: Page): Promise<void> {
 }
 
 test('deployed journey: a stranger registers through the landing and lands in a workspace of each kind', async ({ page, browser }) => {
+  // Two real sign-ins at the 180 s one-sign-in budget of the journeys above, plus three registrations.
   test.setTimeout(300_000)
-  const errors = collectErrors(page)
+  // The free-mail refusal is a deliberate 400, which Chromium logs as a console error.
+  const errors = gatedErrors(page, [expectedStatusDropper(page, 400, /\/auth\/register$/)])
   const firm = freshRegistration('firm')
   const inHouse = freshRegistration('in_house')
 
@@ -1996,9 +1998,10 @@ test('deployed journey: a stranger registers through the landing and lands in a 
         await expect.poll(() => sidebarRoster(page), { message: 'firm sidebar roster' }).toContain('Clients')
       } else {
         // The in-house workspace closes /clients: the app settles on the dashboard, with no portfolio.
+        // The task comes first: only the dashboard renders it, so the URL below is read after the mount settled.
+        await expectAddCompanyTask(page, 'Add your company')
         await expect(page).toHaveURL(new URL('/', APP_URL).href)
         await expect(page.getByRole('heading', { level: 1, name: 'Client portfolio', exact: true })).toHaveCount(0)
-        await expectAddCompanyTask(page, 'Add your company')
         await expect.poll(() => sidebarRoster(page), { message: 'in-house sidebar roster' }).toContain('Settings')
         expect(await sidebarRoster(page), 'the in-house sidebar').not.toContain('Clients')
       }

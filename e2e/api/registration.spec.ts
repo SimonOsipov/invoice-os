@@ -60,19 +60,21 @@ test.describe('registration (API E2E, over the deployed gateway)', () => {
     expect(repeat.body).toEqual(VERIFICATION_PENDING)
   })
 
-  test('a body carrying the registration answers answers 202', async () => {
-    const res = await rawFetch('/auth/register', {
-      method: 'POST',
-      body: {
-        email: `reg-${crypto.randomUUID()}@example.com`,
-        password: crypto.randomUUID().slice(0, 12),
-        workspace_name: `Registration E2E ${crypto.randomUUID().slice(0, 8)}`,
-        display_name: 'Registration E2E',
-        kind: 'firm',
-      },
-    })
-    expect(res.status, JSON.stringify(res.body)).toBe(202)
-    expect(res.body).toEqual(VERIFICATION_PENDING)
+  test('a body carrying the registration answers answers 202, a name at the limit included', async () => {
+    for (const workspace_name of [`Registration E2E ${crypto.randomUUID().slice(0, 8)}`, 'W'.repeat(NAME_MAX_CHARS)]) {
+      const res = await rawFetch('/auth/register', {
+        method: 'POST',
+        body: {
+          email: `reg-${crypto.randomUUID()}@example.com`,
+          password: crypto.randomUUID().slice(0, 12),
+          workspace_name,
+          display_name: 'Registration E2E',
+          kind: 'firm',
+        },
+      })
+      expect(res.status, `${workspace_name.length} characters: ${JSON.stringify(res.body)}`).toBe(202)
+      expect(res.body).toEqual(VERIFICATION_PENDING)
+    }
   })
 
   test('a workspace name one character over the limit is refused with 400', async () => {

@@ -212,6 +212,22 @@ describe('SourceDocumentPdf toolbar', () => {
   })
 })
 
+describe('SourceDocumentPdf ground', () => {
+  it('the PDF ground is a padded --bg-3 wrapper around the embed', () => {
+    const { container } = render(<SourceDocumentPdf url="blob:pdf-1" />)
+
+    const embed = screen.getByTestId('pdf-embed')
+    const canvas = screen.getByTestId('source-document-pdf')
+    const ground = embed.parentElement as HTMLElement
+    expect(ground, 'control: the embed sits in its own wrapper').not.toBe(canvas)
+    expect(canvas.contains(ground), 'control: the wrapper is inside the canvas').toBe(true)
+    expect.soft(ground.style.padding).toBe('22px')
+    expect.soft(ground.style.background).toBe('var(--bg-3)')
+    expect.soft(ground.style.display).toBe('flex')
+    expect.soft(container.innerHTML, 'no oklch literal').not.toContain('oklch')
+  })
+})
+
 describe('SourceDocumentImage', () => {
   it('the image canvas renders the photograph on the surface ground', () => {
     const { container } = render(<SourceDocumentImage url="blob:img-1" filename="receipt.jpg" />)

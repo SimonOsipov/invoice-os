@@ -484,6 +484,7 @@ describe('SourceDocumentSheet', () => {
     for (const btn of [file, invoice]) {
       expect.soft(btn.style.borderRadius).toBe('var(--radius-btn)')
       expect.soft(btn.style.fontSize).toBe('12px')
+      expect.soft(btn.style.fontFamily).toBe('var(--font-sans)')
       expect.soft(btn.style.fontWeight).toBe('500')
       expect.soft(btn.style.height).toBe('26px')
       expect.soft(btn.style.padding).toBe('0px 13px')
@@ -536,6 +537,34 @@ describe('SourceDocumentSheet', () => {
     expect.soft(bar.style.fontSize).toBe('12px')
     expect.soft(bar.style.color).toBe('var(--fg-1)')
     expect.soft(bar.style.lineHeight).toBe('1.5')
+  })
+
+  it('the truncation banner takes the same v2 banner look as the filtered banner', () => {
+    renderSheet(sheet(5000, { rows_total: 5001, truncated: true }), [44, 5002])
+
+    const bar = screen.getByTestId('sheet-truncation')
+    expect(bar.textContent, 'control: the banner is read').toContain('5,001')
+    expect.soft(bar.style.background).toBe('var(--status-amber-bg)')
+    expect.soft(bar.style.padding).toBe('10px 16px')
+    expect.soft(bar.style.borderBottom).toBe('1px solid var(--status-amber-border)')
+    expect.soft(bar.style.borderTop, 'bottom border only').toBe('')
+    expect.soft(bar.style.fontSize).toBe('12px')
+    expect.soft(bar.style.color).toBe('var(--fg-1)')
+    expect.soft(bar.style.lineHeight).toBe('1.5')
+
+    const missing = screen.getByText(/OF THIS INVOICE IS NOT IN THE SHOWN WINDOW/)
+    expect(missing.className, 'pin').toContain('mono')
+    expect.soft(missing.style.marginTop).toBe('5px')
+  })
+
+  it('the marker track frame follows the prototype', () => {
+    renderSheet(sheet(1479), INVOICE_ROWS)
+
+    const track = screen.getByTestId('sheet-marker-track')
+    expect(track.querySelectorAll('[data-testid^="marker-"]').length, 'control: the track draws something').toBeGreaterThan(0)
+    expect.soft(track.style.width).toBe('16px')
+    expect.soft(track.style.background).toBe('var(--bg-1)')
+    expect.soft(track.style.borderLeft).toBe('1px solid var(--line-1)')
   })
 
   it('the viewport ground, header row and cells follow the prototype', () => {

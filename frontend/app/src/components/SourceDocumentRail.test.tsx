@@ -201,6 +201,7 @@ describe('SourceDocumentRail follows the prototype', () => {
     expect.soft(footer?.style.marginTop, 'footer pinned to the bottom of the scroll area').toBe('auto')
     expect.soft(footer?.style.background, 'footer has no fill').toBe('')
     expect.soft(footer?.style.gap).toBe('9px')
+    expect.soft(footer?.style.borderTop, 'footer top border').toBe('1px solid var(--line-1)')
 
     // the footer is inside the scrolling area, not a fixed strip below it
     const scrolls = Array.from(rail.querySelectorAll<HTMLElement>('*')).find((el) => el.style.overflow === 'auto')
@@ -216,11 +217,19 @@ describe('SourceDocumentRail follows the prototype', () => {
     expect(copy.textContent, 'control: the copy button is read').toContain('Copy')
     expect.soft(copy.className, 'Copy is the ghost button').toContain('v2-btn-ghost')
     expect.soft(copy.style.height).toBe('24px')
+    expect.soft(copy.style.padding).toBe('0px 9px')
+    expect.soft(copy.style.fontSize).toBe('11.5px')
     expect(copy.querySelector('svg'), 'pin: the copy glyph stays').not.toBeNull()
 
     const header = copy.parentElement as HTMLElement
     expect.soft(header.style.padding).toBe('8px 12px')
     expect.soft(header.style.background).toBe('var(--bg-1)')
+    expect.soft(header.style.borderBottom).toBe('1px solid var(--line-1)')
+    const box = header.parentElement as HTMLElement
+    expect(box.contains(screen.getAllByTestId('hash-line')[0]), 'control: the fingerprint box holds the hash').toBe(true)
+    expect.soft(box.style.border, 'fingerprint box border').toBe('1px solid var(--line-2)')
+    expect.soft(box.style.borderRadius).toBe('var(--radius-md)')
+    expect.soft(box.style.overflow).toBe('hidden')
     const title = screen.getByText('Content fingerprint · SHA-256')
     expect.soft(title.className.split(/\s+/)).toContain('label')
 
@@ -270,6 +279,10 @@ describe('SourceDocumentRail follows the prototype', () => {
     const heading = screen.getByText('Document record')
     expect.soft(heading.className.split(/\s+/)).toContain('label')
     expect.soft(heading.style.marginBottom).toBe('12px')
+    const list = screen.getByText('Original filename').parentElement?.parentElement as HTMLElement
+    expect(list.children.length, 'control: the record rows share one list').toBeGreaterThanOrEqual(6)
+    expect.soft(list.style.gap, 'gap between record rows').toBe('10px')
+    expect.soft(list.style.flexDirection).toBe('column')
 
     for (const label of ['Original filename', 'File size', 'Uploaded', 'Uploaded by', 'Invoices created', 'Rows in file']) {
       const k = screen.getByText(label, { exact: true })

@@ -123,6 +123,7 @@ describe('LoadingCanvas follows the prototype skeleton', () => {
     expect.soft(toolbar.style.padding).toBe('11px 16px')
     expect.soft(toolbar.style.gap).toBe('12px')
     expect(toolbar.style.background, 'pin').toBe('var(--bg-2)')
+    expect(label.className, 'pin: the label is mono').toContain('mono')
     expect.soft(label.style.fontSize).toBe('10px')
     expect.soft(label.style.color).toBe('var(--fg-3)')
     expect(label.style.letterSpacing, 'pin').toBe('0.06em')
@@ -161,6 +162,11 @@ describe('LoadingCanvas follows the prototype skeleton', () => {
     expect.soft(para.style.lineHeight).toBe('1.55')
     expect.soft(para.style.maxWidth).toBe('460px')
     expect.soft(para.style.marginTop).toBe('20px')
+  })
+
+  it('loading with a zero size still names the read', () => {
+    render(<LoadingCanvas sizeBytes={0} />)
+    expect(screen.getByTestId('source-document-loading').textContent, 'a size of 0 is known, not missing').toContain('READING 0 B FROM DOCUMENT STORAGE')
   })
 
   it('loading without a size drops the label and keeps the skeleton', () => {
@@ -209,7 +215,8 @@ describe('bad, error and none states follow v2', () => {
       expect.soft(tile.style.height, at('tile height')).toBe('44px')
       expect.soft(tile.style.borderRadius, at('tile radius')).toBe('var(--radius-md)')
       expect.soft(tile.style.marginBottom, at('tile margin')).toBe('16px')
-      if (st.name !== 'none') expect.soft(svg.getAttribute('width'), at('warn glyph size')).toBe('15')
+      expect.soft(svg.getAttribute('width'), at('glyph size')).toBe(st.name === 'none' ? '20' : '15')
+      expect.soft(svg.getAttribute('height'), at('glyph height')).toBe(st.name === 'none' ? '20' : '15')
       cleanup()
     }
   })
@@ -292,6 +299,21 @@ describe('bad, error and none states follow v2', () => {
     expect.soft(foot.style.lineHeight).toBe('1.55')
   })
 
+  it('the error chip names the real failure', () => {
+    const cases: Array<[ApiError | null, string]> = [
+      [new ApiError('http', 'boom', 503), 'HTTP 503'],
+      [new ApiError('http', 'boom', 404), 'HTTP 404'],
+      [new ApiError('malformed', 'boom'), 'MALFORMED RESPONSE'],
+      [new ApiError('network', 'boom'), 'NETWORK ERROR'],
+      [null, 'NETWORK ERROR'],
+    ]
+    for (const [error, line] of cases) {
+      render(<FailedCanvas error={error} onRetry={vi.fn()} />)
+      expect(screen.getByTestId('source-document-failure-line').textContent).toBe(line)
+      cleanup()
+    }
+  })
+
   it('the error chip and the none block follow v2', () => {
     failed()
     const chip = screen.getByTestId('source-document-failure-line')
@@ -303,9 +325,11 @@ describe('bad, error and none states follow v2', () => {
     expect.soft(chip.style.border).toContain('--line-2')
     expect.soft(chip.style.borderRadius).toBe('var(--radius-md)')
     expect.soft(chip.style.padding).toBe('8px 11px')
+    expect.soft(chip.style.marginBottom).toBe('20px')
 
     const retry = screen.getByTestId('source-document-retry')
     expect(retry.className, 'pin').toContain('v2-btn')
+    expect.soft(retry.className.split(/\s+/), 'ghost: v2-btn alone has no border').toContain('v2-btn-ghost')
     expect.soft(retry.style.height).toBe('36px')
     cleanup()
 
@@ -316,6 +340,7 @@ describe('bad, error and none states follow v2', () => {
     expect.soft(block.style.borderRadius, 'pin').toBe('var(--radius-md)')
     expect.soft(block.style.padding).toBe('16px 18px')
     expect.soft(block.style.background).toBe('var(--bg-2)')
+    expect.soft(label.className.split(/\s+/), 'label class').toContain('label')
     expect.soft(label.style.marginBottom).toBe('8px')
     const text = screen.getByText(/A source document can only arrive through an import run/)
     expect.soft(text.style.fontSize).toBe('12.5px')

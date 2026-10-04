@@ -1,4 +1,4 @@
-// The deployed v2 Clients, Customers, Reports and Workflows surfaces (RESKIN2-05): resolved values and layout
+// The deployed v2 Clients, Customers, Reports and Workflows surfaces: resolved values and layout
 // relationships on the PR environment, plus a live capture of each state. jsdom has no cascade, so this file
 // pins what the cascade resolves. Layout claims assert a relationship; screenshots are attached, never asserted.
 // It reads the seeded firm policy and never writes one: every builder test fails on a POST, PUT or DELETE.
@@ -308,6 +308,7 @@ test('PW-02 Clients header row fits at every wide width', async ({ page }, testI
     return { problems, rects }
   })
   await attachJson(testInfo, 'pw-02-measurements', measured)
+  await attachShot(page, testInfo, 'clients-header')
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
@@ -433,6 +434,7 @@ test('PW-05 Reports chips sit beside their labels at every wide width', async ({
     return { problems, rects }
   })
   await attachJson(testInfo, 'pw-05-measurements', measured)
+  await attachShot(page, testInfo, 'reports-chips')
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
@@ -508,6 +510,7 @@ test('PW-07 Workflows list row and intro fit at every wide width', async ({ page
     return { problems, rects }
   })
   await attachJson(testInfo, 'pw-07-measurements', measured)
+  await attachShot(page, testInfo, 'workflows-list-row')
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
@@ -528,6 +531,7 @@ test('PW-08 builder at 1440: canvas, nodes, inspector, simulator, header control
   const trigger = page.getByText('Invoice submitted', { exact: true }).locator('xpath=../..')
   const canvas = trigger.locator('xpath=../..')
   const terminal = page.getByText('Transmit to NRS / MBS', { exact: true }).locator('xpath=../..')
+  // internal/demopolicy firmPlan.steps: approval, condition > 250000000.00, condition > 1000000000.00, approval.
   const simple = canvas.locator('xpath=./div/div/div[@draggable="true"]')
   const selected = simple.first()
   const unselected = simple.nth(1)
@@ -538,8 +542,8 @@ test('PW-08 builder at 1440: canvas, nodes, inspector, simulator, header control
   await settle(page, canvas, inspector)
 
   // Canvas, trigger, terminal.
-  const canvasStyle = await styles(canvas, ['background-color', 'background-image', ...CORNERS])
-  expect(canvasStyle['border-top-left-radius'], 'canvas corner').toBe('6px')
+  const canvasStyle = await styles(canvas, ['background-color', 'background-image'])
+  await expectCorners(canvas, '6px', 'canvas')
   expect(canvasStyle['background-color'], 'canvas background').toBe('rgb(243, 241, 233)')
   expect(canvasStyle['background-image'], 'canvas background-image').toBe('none')
   const triggerStyle = await styles(trigger, ['background-color', 'box-shadow'])
@@ -632,8 +636,9 @@ test('PW-08 builder at 1440: canvas, nodes, inspector, simulator, header control
   expect(restPaint['border-top-color'], 'a non-matching preset border').toBe(LINE_2)
   expect(restPaint['background-color'], 'a non-matching preset background').toBe(bg1)
   await preset('₦500M').click()
-  expect((await presetPaint('₦500M'))['border-top-color'], 'the clicked preset lights').toBe(ACTION)
-  expect((await presetPaint('₦1B'))['border-top-color'], 'the previous preset rests').toBe(LINE_2)
+  // .pf-btn eases border-color over --dur-fast, so a read right after the click is mid-transition.
+  await expect.poll(async () => (await presetPaint('₦500M'))['border-top-color'], { message: 'the clicked preset lights' }).toBe(ACTION)
+  await expect.poll(async () => (await presetPaint('₦1B'))['border-top-color'], { message: 'the previous preset rests' }).toBe(LINE_2)
   await expectCorners(inspector.getByText('RULE', { exact: true }).locator('xpath=..'), '6px', 'RULE box')
   await attachJson(testInfo, 'pw-08-condition-measurements', { actionTint, litPaint, restPaint })
 

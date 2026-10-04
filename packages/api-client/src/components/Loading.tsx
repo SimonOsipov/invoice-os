@@ -1,8 +1,5 @@
-// Presentational loading indicator (M3-06-03): a small CSS spinner + optional label.
-// Styled via @invoice-os/design-tokens vars (--line-2/--accent/--fg-3/--font-sans),
-// mirroring the app's SignIn.tsx spinner — a locally scoped keyframe via an inline
-// <style> tag so the package needs no separate CSS import. Presentational only: no
-// data fetching, no wiring to a live surface (that's M3-08/09).
+// Inline loading row: a 16px spinner and an optional label. The keyframe ships inline so
+// the package needs no CSS import; `.apic-loading-spin` is the test hook.
 import type * as React from 'react'
 
 export function Loading(props: { label?: string }): React.JSX.Element {
@@ -10,11 +7,9 @@ export function Loading(props: { label?: string }): React.JSX.Element {
     <div
       style={{
         display: 'flex',
-        flexDirection: 'column',
         alignItems: 'center',
-        justifyContent: 'center',
         gap: 10,
-        padding: 'var(--space-8)',
+        padding: '40px 0',
         fontFamily: 'var(--font-sans)',
       }}
     >
@@ -25,11 +20,11 @@ export function Loading(props: { label?: string }): React.JSX.Element {
       <span
         className="apic-loading-spin"
         style={{
-          width: 22,
-          height: 22,
+          width: 16,
+          height: 16,
           border: '2px solid var(--line-2)',
-          borderTopColor: 'var(--accent)',
-          borderRadius: 99,
+          borderTopColor: 'var(--action)',
+          borderRadius: '50%',
           display: 'inline-block',
         }}
       />

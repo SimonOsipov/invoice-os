@@ -12,7 +12,7 @@ export function EmptyState(props: { title?: string; message?: string }): React.J
       style={{
         background: 'var(--bg-2)',
         border: '1px dashed var(--line-3)',
-        borderRadius: 'var(--radius-xl)',
+        borderRadius: 'var(--radius-md)',
         padding: 56,
         display: 'flex',
         flexDirection: 'column',
@@ -25,7 +25,7 @@ export function EmptyState(props: { title?: string; message?: string }): React.J
         style={{
           width: 44,
           height: 44,
-          borderRadius: 'var(--radius-xl)',
+          borderRadius: 'var(--radius-md)',
           background: 'var(--bg-3)',
           color: 'var(--fg-3)',
           display: 'grid',
@@ -38,8 +38,8 @@ export function EmptyState(props: { title?: string; message?: string }): React.J
           <path d="M4 9h16M9 4v16" />
         </svg>
       </span>
-      {title ? <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4, color: 'var(--fg-1)' }}>{title}</div> : null}
-      {message ? <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0, maxWidth: 320 }}>{message}</p> : null}
+      {title ? <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4, color: 'var(--fg-1)' }}>{title}</div> : null}
+      {message ? <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0, maxWidth: 340 }}>{message}</p> : null}
     </div>
   )
 }

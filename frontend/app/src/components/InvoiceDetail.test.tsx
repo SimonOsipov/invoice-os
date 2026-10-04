@@ -2298,13 +2298,19 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
     expect((await screen.findByTestId('resolve-outside')).hasAttribute('title')).toBe(false)
   })
 
-  it("T7-5: the disabled primary button neutralises its hover filter", async () => {
+  it('T7-5: the disabled resolve button wears the ghost disabled recipe', async () => {
     mockDetailFetch(detailRecord({ status: 'failed', can_resolve_outside: false }))
 
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
 
-    const btn = await screen.findByTestId('resolve-outside')
-    expect(btn.style.filter).toBe('none')
+    const btn = (await screen.findByTestId('resolve-outside')) as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    expect.soft(btn.className.split(' '), 'a ghost button').toContain('v2-btn-ghost')
+    expect.soft(btn.className.split(' '), 'no longer primary').not.toContain('v2-btn-primary')
+    expect.soft(btn.style.background).toBe('var(--bg-3)')
+    expect.soft(btn.style.color).toBe('var(--fg-4)')
+    expect.soft(btn.style.cursor).toBe('not-allowed')
+    expect.soft(btn.style.filter, 'the ghost sibling sets no filter').toBe('')
   })
 
   it('T7-6: a resolved invoice shows the banner and an undo', async () => {
@@ -2363,15 +2369,24 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
   })
 
   // QA adversarial: T7-5 only covers the persistent (`can_resolve_outside: false`) disabled
-  // reason; the far more common one -- an empty reason -- must neutralise the filter too.
-  it('T7-9: the disabled button still neutralises its hover filter when blocked only by an empty reason', async () => {
+  // reason; the far more common one -- an empty reason -- must wear the recipe too.
+  it('T7-9: the disabled resolve button wears the ghost disabled recipe when blocked only by an empty reason', async () => {
     mockDetailFetch(detailRecord({ status: 'failed', can_resolve_outside: true }))
 
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
 
     const btn = (await screen.findByTestId('resolve-outside')) as HTMLButtonElement
     expect(btn.disabled).toBe(true)
-    expect(btn.style.filter).toBe('none')
+    expect.soft(btn.className.split(' '), 'a ghost button').toContain('v2-btn-ghost')
+    expect.soft(btn.style.background).toBe('var(--bg-3)')
+    expect.soft(btn.style.color).toBe('var(--fg-4)')
+    expect.soft(btn.style.cursor).toBe('not-allowed')
+    expect.soft(btn.style.filter, 'the ghost sibling sets no filter').toBe('')
+
+    fireEvent.change(screen.getByTestId('resolve-outside-reason'), { target: { value: 'Filed manually.' } })
+    expect(btn.disabled, 'control: a typed reason enables it').toBe(false)
+    expect(btn.style.background, 'control: the enabled button carries no disabled fill').toBe('')
+    expect(btn.style.cursor).toBe('')
   })
 
   // QA adversarial: existing coverage checks each banner's absence in isolation; neither
@@ -6014,3 +6029,351 @@ describe('InvoiceDetail edit form: the invoice number cell', () => {
     expect(numberCaption.getAttribute('style')).toBe(tinCaption.getAttribute('style'))
   })
 })
+
+describe('InvoiceDetail cards, rail and inline edit take the v2 look (RESKIN2-03-02)', () => {
+  const ID = 'inv-cards-v2-1'
+  const LINE = { id: 'li-1', line_no: 1, description: 'Widget', quantity: '2', unit_price: '10.00', line_total: '20.00', line_tax: '1.50' }
+  const REASONS = [
+    { code: 'NGE-4102', message: 'Buyer TIN failed validation', path: 'buyer.tin' },
+    { code: 'NGE-4107', message: 'Total does not match the lines' },
+  ]
+  const editable = { id: ID, status: 'validated' as InvoiceStatus, can_edit: true, line_items: [LINE] }
+
+  // First ancestor-or-self of `el` below `stop` that satisfies `match`.
+  function climb(el: HTMLElement, stop: HTMLElement, match: (e: HTMLElement) => boolean): HTMLElement | null {
+    for (let cur: HTMLElement | null = el; cur && cur !== stop; cur = cur.parentElement) if (match(cur)) return cur
+    return null
+  }
+  const hasLine1Top = (e: HTMLElement) => e.style.borderTop.includes('--line-1')
+
+  async function openEdit(over: Partial<InvoiceDetailRecord> = {}) {
+    mockDetailFetch(detailRecord({ ...editable, ...over }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    return screen.getByTestId('edit-invoice')
+  }
+
+  const labelOf = (form: HTMLElement, text: string) => within(form).getByText(text)
+
+  it('both line tables are 6px tables', async () => {
+    mockDetailFetch(detailRecord(editable))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const readTable = ((await screen.findByText('Description')).parentElement as HTMLElement).parentElement as HTMLElement
+    expect(readTable.textContent, 'control: the read table holds the line').toContain('Widget')
+    expect.soft(readTable.style.borderRadius, 'read view').toBe('var(--radius-md)')
+
+    fireEvent.click(screen.getByTestId('edit-toggle'))
+    const editTable = screen.getByTestId('line-row').parentElement as HTMLElement
+    expect(editTable.textContent, 'control: the edit table holds the header').toContain('Description')
+    expect.soft(editTable.style.borderRadius, 'edit view').toBe('var(--radius-md)')
+  })
+
+  it('the rail may shrink below its content', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated' }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    expect((await screen.findByTestId('invoice-rail')).style.minWidth).toMatch(/^0(px)?$/)
+  })
+
+  it('the compliance card header and body follow table B', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', rule_set_version: 3, rule_set_version_id: 'rsv-3', violations: [] }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const card = await screen.findByTestId('compliance-card')
+    const header = card.firstElementChild as HTMLElement
+    const body = card.lastElementChild as HTMLElement
+    expect(within(header).getByTestId('compliance-ruleset-version'), 'control: the version chip is in the header').toBeTruthy()
+    expect.soft(header.style.gap, 'header gap').toBe('10px')
+    expect.soft(screen.getByTestId('compliance-ruleset-version').style.fontSize, 'rule-set size').toBe('10.5px')
+    expect.soft(body.style.padding, 'body padding').toBe('14px 18px')
+    expect.soft(body.style.display, 'body is a column').toBe('flex')
+    expect.soft(body.style.flexDirection, 'body is a column').toBe('column')
+    expect.soft(body.style.gap, 'body gap').toBe('10px')
+  })
+
+  it('the stale banner and the kept banner follow table B', async () => {
+    mockDetailFetch(
+      detailRecord({
+        id: ID,
+        status: 'draft',
+        rule_set_version: 3,
+        rule_set_version_id: 'rsv-3',
+        violations: [],
+        kept_as_is_at: '2026-07-31T00:00:00Z',
+        kept_as_is_by: APP_PERSONAS.firm.subject,
+        kept_as_is_reason: 'Buyer confirmed the discrepancy is intentional.',
+      }),
+    )
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const stale = await screen.findByTestId('stale-verdict')
+    const kept = screen.getByTestId('detail-kept-banner')
+    expect.soft(stale.style.padding, 'stale banner padding').toBe('9px 12px')
+    expect.soft(stale.style.marginBottom, 'the column gap spaces the stale banner').toBe('')
+    expect.soft(kept.style.marginBottom, 'the column gap spaces the kept banner').toBe('')
+  })
+
+  it('compliance pass and not-validated are plain text', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', rule_set_version: 3, rule_set_version_id: 'rsv-3', violations: [] }))
+    const clean = render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const pass = await screen.findByText(/Passes all rules/)
+    expect.soft(pass.style.background, 'pass: no fill').toBe('')
+    expect.soft(pass.style.border, 'pass: no border').toBe('')
+    expect.soft(pass.style.fontSize, 'pass size').toBe('13px')
+    expect.soft(pass.style.color, 'pass colour').toBe('var(--fg-2)')
+    clean.unmount()
+
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft', rule_set_version: null, rule_set_version_id: null }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const never = await screen.findByTestId('not-validated')
+    expect.soft(never.style.background, 'not validated: no fill').toBe('')
+    expect.soft(never.style.border, 'not validated: no border').toBe('')
+    expect.soft(never.style.fontSize, 'not validated size').toBe('13px')
+    expect.soft(never.style.color, 'not validated colour').toBe('var(--fg-3)')
+  })
+
+  it('the failed card wears the red chrome', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'failed' }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const card = await screen.findByTestId('failed-dead-end')
+    const band = card.firstElementChild as HTMLElement
+    expect.soft(card.style.border, 'card border').toContain('--status-red-border')
+    expect.soft(band.style.background, 'header band').toBe('var(--status-red-bg)')
+    expect.soft(band.style.borderBottom, 'band keeps its --line-1 rule').toContain('--line-1')
+    expect.soft((band.firstElementChild as HTMLElement).style.color, 'title colour').toBe('var(--status-red-text)')
+  })
+
+  it('the failed body follows D-8', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'failed' }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const headline = await screen.findByTestId('failure-headline')
+    const body = headline.parentElement as HTMLElement
+    expect.soft(body.style.padding, 'body padding').toBe('14px 18px')
+    expect.soft(body.style.gap, 'body gap').toBe('9px')
+    expect.soft(body.style.fontSize, 'body size').toBe('12.5px')
+    expect.soft(body.style.lineHeight, 'body line height').toBe('1.5')
+    expect.soft(headline.style.fontSize, 'the headline inherits the body size').toBe('')
+  })
+
+  it('the current rejection card is red, the historical one neutral', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'rejected', rejection_reasons: REASONS }))
+    const current = render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const live = await screen.findByTestId('rejection-reasons')
+    expect(live.textContent, 'control: the current card').toContain('This invoice was rejected')
+    expect.soft(live.style.border, 'current border').toContain('--status-red-border')
+    expect.soft((live.firstElementChild as HTMLElement).style.background, 'current band').toBe('var(--status-red-bg)')
+    expect.soft(((live.firstElementChild as HTMLElement).firstElementChild as HTMLElement).style.color, 'current title').toBe('var(--status-red-text)')
+    current.unmount()
+
+    mockDetailFetch(detailRecord({ id: ID, status: 'failed', rejection_reasons: REASONS }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const past = await screen.findByTestId('rejection-reasons')
+    expect(past.textContent, 'control: the historical card').toContain('Last APP rejection')
+    expect.soft(past.style.border, 'historical border').toContain('--line-1')
+    expect.soft(past.style.border, 'historical border is not red').not.toContain('--status-red-border')
+    expect.soft((past.firstElementChild as HTMLElement).style.background, 'historical band is not red').not.toBe('var(--status-red-bg)')
+  })
+
+  it('rejection rows are unboxed baseline rows', async () => {
+    for (const status of ['rejected', 'failed'] as const) {
+      mockDetailFetch(detailRecord({ id: ID, status, rejection_reasons: REASONS }))
+      const view = render(<InvoiceDetail ctx={detailCtx(ID)} />)
+      const rows = await screen.findAllByTestId('rejection-reason-row')
+      expect(rows, `${status}: one row per reason`).toHaveLength(2)
+      for (const [i, row] of rows.entries()) {
+        const name = `${status} row ${i + 1}`
+        expect.soft(row.style.background, `${name} fill`).toBe('')
+        expect.soft(row.style.borderRadius, `${name} corner`).toBe('')
+        expect.soft(row.style.display, `${name} display`).toBe('flex')
+        expect.soft(row.style.alignItems, `${name} alignment`).toBe('baseline')
+        expect.soft(row.style.gap, `${name} gap`).toBe('10px')
+        expect.soft(row.style.padding, `${name} padding`).toBe('12px 18px')
+        expect.soft((row.lastElementChild as HTMLElement).style.marginTop, `${name} message sits beside the code`).toBe('')
+      }
+      expect.soft(rows[0].style.borderTop, `${status}: the first row has no top rule`).toBe('')
+      expect.soft(rows[1].style.borderTop, `${status}: the second row has a --line-1 top rule`).toContain('--line-1')
+      expect.soft((rows[0].parentElement as HTMLElement).style.padding, `${status}: the body wrapper has no padding`).toBe('')
+      view.unmount()
+    }
+  })
+
+  it('the unresolved failed body follows the prototype', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'failed', can_resolve_outside: true }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const card = await screen.findByTestId('failed-dead-end')
+    const next = screen.getByTestId('failure-next-step')
+    expect.soft(next.style.background, 'next step is plain').toBe('')
+    expect.soft(next.style.border, 'next step has no border').toBe('')
+    expect.soft(next.style.color, 'next step colour').toBe('var(--fg-2)')
+
+    const btn = screen.getByTestId('resolve-outside')
+    const reason = screen.getByTestId('resolve-outside-reason')
+    const divider = climb(btn.parentElement as HTMLElement, card, hasLine1Top)
+    expect.soft(divider, 'the resolve block sits under a --line-1 divider').not.toBeNull()
+    expect.soft(divider?.style.paddingTop, 'divider padding').toBe('10px')
+    expect.soft(divider?.contains(reason), 'the divider wraps the reason input too').toBe(true)
+    expect.soft(reason.style.height, 'reason input').toBe('34px')
+    expect.soft(btn.className.split(' '), 'a ghost button').toContain('v2-btn-ghost')
+    expect.soft(btn.style.height, 'resolve button height').toBe('32px')
+    expect.soft(btn.style.fontSize, 'resolve button size').toBe('12.5px')
+    expect(btn.style.flexShrink, 'the wrap recipe stays').toBe('0')
+  })
+
+  it('the resolved block is plain text with a ghost Undo', async () => {
+    const at = '2026-08-06T12:00:00Z'
+    const why = 'Filed manually with the tax authority.'
+    mockDetailFetch(
+      detailRecord({ id: ID, status: 'failed', can_resolve_outside: true, kept_as_is_at: at, kept_as_is_by: APP_PERSONAS.firm.subject, kept_as_is_reason: why }),
+    )
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const card = await screen.findByTestId('failed-dead-end')
+    const banner = screen.getByTestId('detail-resolved-banner')
+    const undo = screen.getByTestId('resolve-outside-undo')
+    expect.soft(banner.style.background, 'banner has no amber fill').toBe('')
+    expect.soft(banner.style.border, 'banner has no border').toBe('')
+    const divider = climb(banner, card, hasLine1Top)
+    expect.soft(divider, 'the resolved block sits under a --line-1 divider').not.toBeNull()
+    expect.soft(divider?.style.paddingTop, 'divider padding').toBe('10px')
+    expect.soft(divider?.contains(undo), 'the divider wraps Undo').toBe(true)
+
+    const line = screen.getByText(why, { exact: false })
+    expect.soft(line.style.fontWeight, 'reason weight').toBe('600')
+    expect.soft(line.style.color, 'reason colour').toBe('var(--fg-1)')
+    const meta = screen.getByText(fmtDateTime(at), { exact: false })
+    expect.soft(meta.className.split(' '), 'meta is mono').toContain('mono')
+    expect.soft(meta.style.fontSize, 'meta size').toBe('11px')
+    expect.soft(meta.style.color, 'meta colour').toBe('var(--fg-3)')
+    expect.soft(meta.style.marginTop, 'meta marginTop').toBe('3px')
+    expect.soft(meta.style.marginBottom, 'meta marginBottom').toBe('8px')
+    expect.soft(undo.style.height, 'Undo height').toBe('30px')
+    expect.soft(undo.style.fontSize, 'Undo size').toBe('12.5px')
+  })
+
+  it('the fiscal card and QR plate follow v2', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'accepted', irn: 'IRN-2026-0001', csid: 'CSID-2026-0001', qr_png_base64: 'iVBORw0KGgo=' }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const irn = await screen.findByTestId('fiscal-irn')
+    const csid = screen.getByTestId('fiscal-csid')
+    const column = (irn.parentElement as HTMLElement).parentElement as HTMLElement
+    expect.soft(column.style.padding, 'body padding').toBe('16px 18px')
+    expect.soft(column.style.gap, 'body gap').toBe('11px')
+    expect.soft(irn.style.fontSize, 'IRN size').toBe('11.5px')
+    expect.soft(irn.style.fontWeight, 'IRN weight').toBe('600')
+    expect.soft(csid.style.fontSize, 'CSID size').toBe('11px')
+    expect.soft(csid.style.color, 'CSID colour').toBe('var(--fg-2)')
+
+    const plate = screen.getByTestId('fiscal-qr').parentElement as HTMLElement
+    expect.soft(plate.style.background, 'plate stays white').toMatch(/^(#fff|rgb\(255, 255, 255\))$/)
+    expect.soft(plate.style.border, 'plate border').toContain('--line-1')
+    expect.soft(plate.style.padding, 'plate padding').toBe('7px')
+    expect.soft(plate.style.alignSelf, 'plate hugs the QR').toBe('flex-start')
+  })
+
+  it('the edit form follows the prototype', async () => {
+    const form = await openEdit()
+
+    const buyer = labelOf(form, 'Buyer name')
+    expect.soft(buyer.tagName, 'the label stays a div for the e2e XPath').toBe('DIV')
+    expect.soft(buyer.className.split(' '), 'field label').toContain('label')
+    expect.soft(buyer.style.marginBottom, 'label marginBottom').toBe('5px')
+    const input = buyer.nextElementSibling as HTMLInputElement
+    expect(input.tagName, 'control: the input follows its label directly').toBe('INPUT')
+    expect.soft(input.style.height, 'editable input height').toBe('34px')
+    expect.soft(input.style.fontSize, 'editable input size').toBe('13px')
+    expect.soft(input.style.padding, 'editable input padding').toBe('0px 10px')
+
+    const locked = labelOf(form, 'Supplier name').nextElementSibling as HTMLInputElement
+    expect(locked.readOnly, 'control: supplier name is read-only').toBe(true)
+    expect.soft(locked.style.background, 'read-only fill').toBe('var(--bg-3)')
+    expect.soft(locked.style.color, 'read-only colour').toBe('var(--fg-3)')
+
+    const row = screen.getByTestId('line-row')
+    const head = (row.parentElement as HTMLElement).firstElementChild as HTMLElement
+    expect.soft(row.style.gridTemplateColumns, 'line row columns').toBe('1fr 64px 110px 110px 100px 28px')
+    expect.soft(head.style.gridTemplateColumns, 'line header columns').toBe('1fr 64px 110px 110px 100px 28px')
+    const lineInput = row.querySelector('input') as HTMLInputElement
+    expect.soft(lineInput.style.height, 'line input height').toBe('30px')
+
+    const remove = screen.getByTestId('line-remove')
+    expect.soft(['', '0px', 'none'], 'line-remove is borderless').toContain(remove.style.border)
+    expect.soft(remove.style.background, 'line-remove is transparent').toBe('transparent')
+    expect.soft(remove.style.color, 'line-remove glyph').toBe('var(--fg-3)')
+    const add = screen.getByTestId('line-add')
+    expect.soft(add.className.split(' '), 'line-add is a ghost button').toContain('v2-btn-ghost')
+    expect.soft(add.className.split(' '), 'line-add is no chip').not.toContain('pf-chip')
+    expect(add.textContent, 'control: line-add keeps its copy').toContain('Add line item')
+    expect(add.querySelector('svg'), 'control: line-add keeps its glyph').not.toBeNull()
+    expect.soft(screen.getByTestId('edit-cancel').style.height, 'Cancel height').toBe('34px')
+  })
+
+  it('the edit body keeps its footer inside and Save matches Cancel', async () => {
+    const form = await openEdit()
+
+    const cancel = screen.getByTestId('edit-cancel')
+    const save = within(form).getByRole('button', { name: 'Save changes' })
+    expect.soft(save.style.height, 'Save height').toBe('34px')
+    expect.soft(cancel.style.fontSize, 'Cancel has no inline size').toBe('')
+    expect.soft(save.style.fontSize, 'Save has no inline size').toBe('')
+    const footer = cancel.parentElement as HTMLElement
+    expect(footer, 'control: Cancel and Save share a footer').toBe(save.parentElement)
+    expect.soft(footer.style.borderTop, 'footer rule').toContain('--line-1')
+    expect.soft(footer.style.paddingTop, 'footer padding').toBe('14px')
+    const body = footer.parentElement as HTMLElement
+    expect.soft(body.style.padding, 'body padding').toBe('22px 24px')
+    expect.soft(body.style.display, 'body is a column').toBe('flex')
+    expect.soft(body.style.flexDirection, 'body is a column').toBe('column')
+    expect.soft(body.style.gap, 'body gap').toBe('16px')
+    expect.soft(body.contains(screen.getByTestId('line-add')), 'the footer shares the body with the fields').toBe(true)
+    expect.soft(body.style.borderBottom, 'the body no longer carries the footer rule').toBe('')
+  })
+
+  it('the edit grids, hints and line-item chrome follow table B', async () => {
+    const form = await openEdit()
+
+    const grid = (labelOf(form, 'Buyer name').parentElement as HTMLElement).parentElement as HTMLElement
+    expect.soft(grid.style.gap, 'field grid gap').toBe('14px')
+    const note = screen.getByText(/Supplier details come from/)
+    expect.soft(note.style.fontSize, 'supplier note size').toBe('12px')
+    expect.soft(note.style.color, 'supplier note colour').toBe('var(--fg-3)')
+    expect.soft(screen.getByTestId('computed-line-sum').style.marginTop, 'lines-total hint').toBe('4px')
+
+    const heading = labelOf(form, 'Line items')
+    expect.soft(heading.style.marginBottom, 'Line items marginBottom').toBe('5px')
+    expect.soft(heading.style.marginTop, 'Line items has no top margin').toBe('')
+
+    const row = screen.getByTestId('line-row')
+    const table = row.parentElement as HTMLElement
+    const head = table.firstElementChild as HTMLElement
+    for (const [name, el] of [['header', head], ['row', row]] as const) {
+      expect.soft(el.style.gap, `line ${name} gap`).toBe('8px')
+      expect.soft(el.style.padding, `line ${name} padding`).toBe('8px 12px')
+    }
+    expect.soft(within(head).getByText('Amount').style.textAlign, 'Amount header').toBe('right')
+    expect.soft(within(head).getByText('Tax').style.textAlign, 'Tax header').toBe('right')
+    const inputs = Array.from(row.querySelectorAll('input')) as HTMLInputElement[]
+    expect(inputs, 'control: description plus four numeric inputs').toHaveLength(5)
+    expect.soft(inputs[0].style.padding, 'description input padding').toBe('0px 10px')
+    for (const numeric of inputs.slice(1)) {
+      expect.soft(numeric.style.padding, 'numeric inputs keep their 0 8px override').toBe('0px 8px')
+      expect.soft(numeric.style.fontSize, 'numeric input size').toBe('13px')
+    }
+    expect.soft(['', '0px'], 'the table sits flush on the add button').toContain(table.style.marginBottom)
+    expect.soft(screen.getByTestId('line-add').style.marginTop, 'line-add marginTop').toBe('10px')
+  })
+
+  it('the field flag is a 4px badge', async () => {
+    mockDetailFetch(detailRecord({ ...editable, status: 'rejected', rejection_reasons: [REASONS[0]] }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+
+    const flag = screen.getByTestId('field-flag')
+    expect(flag.textContent, 'control: the flag names its reason').toBe('NGE-4102')
+    expect(flag.style.borderRadius).toBe('var(--radius-sm)')
+  })
+})
+

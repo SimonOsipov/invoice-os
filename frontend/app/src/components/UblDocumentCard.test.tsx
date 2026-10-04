@@ -338,9 +338,7 @@ describe('UblDocumentCard', () => {
     expect(tile.style.background).toBe('var(--bg-3)')
     expect(tile.style.color).toBe('var(--action)')
     expect(tile.querySelector('svg'), 'the tile holds the document glyph').not.toBeNull()
-    expect(screen.getByTestId('ubl-card-filename').getAttribute('style')).toBe((srcRow.children[1].firstElementChild as HTMLElement).getAttribute('style'))
     expect(screen.getByTestId('ubl-card-filename').style.wordBreak).toBe('break-all')
-    expect(screen.getByTestId('ubl-card-meta').getAttribute('style')).toBe(within(withDoc.container).getByTestId('source-document-card-meta').getAttribute('style'))
 
     const btn = screen.getByTestId('ubl-card-download') as HTMLButtonElement
     const idle = btn.getAttribute('style')
@@ -421,5 +419,50 @@ describe('UblDocumentCard', () => {
     renderCard()
     expect(screen.getByRole('button', { name: 'View UBL/XML' }).getAttribute('data-testid')).toBe('ubl-card-view')
     expect(screen.getByRole('button', { name: 'Download .xml' }).getAttribute('data-testid')).toBe('ubl-card-download')
+  })
+
+  // RESKIN2-03-02 (D-4, table B). Soft assertions: every new value shows red on its own line.
+  it('READ ONLY is 9/700/0.09em on --fg-3', () => {
+    const source = render(<SourceDocumentCard meta={sourceMeta()} onOpen={vi.fn()} extraction={{ jobId: 'job-1', loading: false, failed: false }} onOpenExtraction={vi.fn()} />)
+    const ubl = renderCard()
+
+    for (const [card, utils] of [['Source', source], ['UBL', ubl]] as const) {
+      const el = within(utils.container).getByText('READ ONLY')
+      expect.soft(el.style.fontSize, `${card} size`).toBe('9px')
+      expect.soft(el.style.fontWeight, `${card} weight`).toBe('700')
+      expect.soft(el.style.letterSpacing, `${card} tracking`).toBe('0.09em')
+      expect.soft(el.style.color, `${card} colour`).toBe('var(--fg-3)')
+    }
+  })
+
+  it('rail card buttons centre their labels', () => {
+    renderCard()
+
+    const view = screen.getByTestId('ubl-card-view')
+    const download = screen.getByTestId('ubl-card-download')
+    for (const [name, btn] of [['View', view], ['Download', download]] as const) {
+      expect.soft(btn.style.justifyContent, `${name} centres its label`).toBe('center')
+      expect.soft(btn.style.marginTop, `${name} has no own top margin`).toBe('')
+      expect.soft(btn.querySelector('svg'), `${name} leads with an icon`).not.toBeNull()
+    }
+    const column = view.parentElement as HTMLElement
+    expect(column, 'the buttons share one column').toBe(download.parentElement)
+    expect.soft(column.style.display).toBe('flex')
+    expect.soft(column.style.flexDirection).toBe('column')
+    expect.soft(column.style.gap).toBe('8px')
+  })
+
+  it('the UBL card body follows table B', () => {
+    renderCard()
+
+    expect.soft(body().style.padding).toBe('15px 18px 16px')
+    const name = screen.getByTestId('ubl-card-filename')
+    expect.soft(name.className.split(' '), 'file name is mono').toContain('mono')
+    expect.soft(name.style.fontSize).toBe('12px')
+    expect.soft(name.style.fontWeight).toBe('600')
+    const meta = screen.getByTestId('ubl-card-meta')
+    expect.soft(meta.style.fontSize).toBe('10px')
+    expect.soft(meta.style.marginTop).toBe('3px')
+    expect.soft(meta.style.marginBottom).toBe('13px')
   })
 })

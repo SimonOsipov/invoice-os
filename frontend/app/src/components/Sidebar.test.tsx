@@ -319,11 +319,10 @@ describe('Sidebar footer, flag-off card reads ctx.user (AUTH-09-02)', () => {
   })
 })
 
-// BUG-17-01: the firm switcher's `pf-btn` !important pill radius (app-layer.css:192-205)
-// beats the inline radius-input -- this is a separate corner-declaration surface from
-// the badge/footer specs above.
+// BUG-17-01: the v2 layer's `.pf-btn` rule forces --radius-btn with !important, which beats an
+// inline radius, so the firm switcher carries no button class.
 describe('BUG-17-01 company switcher corner', () => {
-  const TOKENS_CSS = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../../../packages/design-tokens/app-layer.css'), 'utf8')
+  const TOKENS_CSS = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../../../packages/design-tokens/v2/app-layer.css'), 'utf8')
 
   // Raw style attribute, not .style.*: jsdom's CSSStyleDeclaration can drop var() shorthands.
   function borderRadiusOf(el: HTMLElement): string | null {
@@ -355,6 +354,7 @@ describe('BUG-17-01 company switcher corner', () => {
 
     expect(switcherRadius).toBe(chipRadius)
     expect(switcherRadius).toBe('var(--radius-input)')
+    expect(TOKENS_CSS).toMatch(/--radius-input:\s*var\(--radius-btn\);/)
   })
 
   it('switcher_declaresBorderAndBackgroundTransitions', async () => {
@@ -383,20 +383,20 @@ describe('BUG-17-01 company switcher corner', () => {
     expect(closedCtx.toggleSwitcher).toHaveBeenCalledTimes(1)
   })
 
-  it('pfBtnRule_stillForcesThePill', () => {
+  it('pfBtnRule_forcesTheButtonCorner', () => {
     const noComments = TOKENS_CSS.replace(/\/\*[\s\S]*?\*\//g, '')
     const blocks = noComments.match(/[^{}]+\{[^{}]*\}/g) ?? []
-    // Exact selector-token match, not substring: the :active block at app-layer.css:202-205
-    // also contains the substring ".asc-app .pf-btn" but carries no radius.
-    const pillRule = blocks.find((b) =>
+    // Exact selector-token match, not substring: the `.pf-btn:active` block also contains
+    // ".asc-app .pf-btn" but carries no radius.
+    const buttonRule = blocks.find((b) =>
       b
         .slice(0, b.indexOf('{'))
         .split(',')
         .map((s) => s.trim())
         .includes('.asc-app .pf-btn'),
     )
-    expect(pillRule, '.asc-app .pf-btn rule block (not its :active sibling)').toBeDefined()
-    expect(pillRule).toContain('border-radius: var(--radius-pill) !important')
+    expect(buttonRule, '.asc-app .pf-btn rule block (not its :active sibling)').toBeDefined()
+    expect(buttonRule).toContain('border-radius: var(--radius-btn) !important')
   })
 
   it('signOut_keepsPfBtn', async () => {

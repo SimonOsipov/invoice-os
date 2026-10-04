@@ -139,7 +139,7 @@ Merge rule (`store.go`):
 
 ## Read a person's state
 
-Signed in as that person:
+Signed in as that person, with a tenant-scoped token (the gateway answers 403 to a tenant-less one; sign in again after the workspace exists):
 
 ```
 GET /api/notifications/v1/contacts/me
@@ -225,14 +225,14 @@ railway redeploy -s notifications -p "$P" -e "$E" -y
 Health check, after the redeploy:
 
 ```
-curl -fsS https://api.ascomply.com/healthz/fleet | jq -r '.services[] | select(.name == "notifications") | .contacts'
+curl -sS https://api.ascomply.com/healthz/fleet | jq -r '.services[] | select(.name == "notifications") | .contacts'
 # expected: real
 ```
 
-`off` means the keys did not reach the running container. A refusal to boot shows as `notifications` down.
+`off` means the keys did not reach the running container. A refusal to boot shows as `notifications` down and the fleet answers 503 (hence no `-f`).
 
 **U4 - Production proof.**
 1. Book one demo on www.ascomply.com with the marketing box ticked. In HubSpot, read the contact: it carries "demo request" (HubSpot MCP `search_crm_objects`, read-only). In Resend, the contact is opted in to topic "Marketing".
 2. After production signup opens: register one real person and verify the email. HubSpot shows "registered"; Resend shows segment "Registered", and topic "Marketing" opt-in only if they ticked.
-3. As that registrant, `GET /api/notifications/v1/contacts/me` shows `mode: "real"` and both delivery times.
+3. As that registrant, with a tenant-scoped token (see Read a person's state), `GET /api/notifications/v1/contacts/me` shows `mode: "real"` and both delivery times.
 4. Book a second demo with the same address. Read `ascomply_contact_tags` again: both options, each once.

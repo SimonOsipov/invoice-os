@@ -20,10 +20,16 @@ function jwt(exp: number): string {
   return `${b64({ alg: 'RS256' })}.${b64({ sub: ME.user.id, exp })}.sig`
 }
 const NOW = 1_800_000_000_000
+// Segments are built the way GoTrue does: UTF-8 bytes, base64url, no padding.
 function tokenWith(claims: object, exp = NOW / 1000 + 3600): string {
-  const b64 = (o: object) => btoa(JSON.stringify(o)).replace(/=+$/, '')
+  const b64 = (o: object) =>
+    btoa(Array.from(new TextEncoder().encode(JSON.stringify(o)), (b) => String.fromCharCode(b)).join(''))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '')
   return `${b64({ alg: 'RS256' })}.${b64({ sub: ME.user.id, exp, ...claims })}.sig`
 }
+const NON_ASCII = ['Soci\u00e9t\u00e9 G\u00e9n\u00e9rale', 'Ad\u00e9b\u00e1y\u1ecd\u0300', 'Acme \u{1F680}', '\u682a\u5f0f\u4f1a\u793e \u6771\u4eac']
 const LIVE = jwt(NOW / 1000 + 3600)
 const EXPIRED = jwt(NOW / 1000 - 1)
 
@@ -185,8 +191,8 @@ describe('redeemHandoff (D9, D25 step 5)', () => {
   })
 })
 
-// AUTH-15.5-03: a tenant-less first sign-in provisions the workspace its token's answers name.
-describe('redeemHandoff provisions the registered workspace (AUTH-15.5-03)', () => {
+// A tenant-less first sign-in provisions the workspace its token's answers name.
+describe('redeemHandoff provisions the registered workspace', () => {
   const ANSWERS = { workspace_name: 'Adaeze Ventures', display_name: 'Adaeze Nwankwo', kind: 'in_house' }
   const TOKEN = tokenWith({ user_metadata: { registration: ANSWERS } })
   const TOKEN2 = tokenWith({ tenant_id: ME.tenant.id }, NOW / 1000 + 7200)
@@ -241,6 +247,13 @@ describe('redeemHandoff provisions the registered workspace (AUTH-15.5-03)', () 
     expect(calls[1].auth).toBe(`Bearer ${TOKEN}`)
     expect(calls[4].auth).toBe(`Bearer ${TOKEN2}`)
     expect((s as Session).persona.mode).toBe('inhouse')
+
+    for (const text of ['Adaeze Ventures', ...NON_ASCII]) {
+      const sent = { workspace_name: text, display_name: `${text} Admin`, kind: 'firm' }
+      const utf8 = stubChain({ exchange: { status: 200, body: { access_token: tokenWith({ user_metadata: { registration: sent } }), refresh_token: 'R0' } } })
+      await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
+      expect.soft(utf8[2]?.body, text).toStrictEqual(sent)
+    }
   })
 
   it('redeemHandoff keeps the refreshed tokens after provisioning', async () => {
@@ -342,7 +355,7 @@ describe('redeemHandoff provisions the registered workspace (AUTH-15.5-03)', () 
   })
 })
 
-describe('registrationAnswers (AUTH-15.5-03)', () => {
+describe('registrationAnswers', () => {
   const NAMES = { workspace_name: 'Adaeze Ventures', display_name: 'Adaeze Nwankwo' }
   const withReg = (registration: unknown) => tokenWith({ user_metadata: { registration } })
 
@@ -355,6 +368,10 @@ describe('registrationAnswers (AUTH-15.5-03)', () => {
     ]
     for (const [name, token, want] of accepted) {
       expect(registrationAnswers(token), name).toStrictEqual(want)
+    }
+    for (const text of ['Adaeze Ventures', ...NON_ASCII]) {
+      const sent = { workspace_name: text, display_name: `${text} Admin`, kind: 'in_house' }
+      expect.soft(registrationAnswers(withReg(sent)), text).toStrictEqual(sent)
     }
     const refused: [string, string][] = [
       ['workspace name absent', withReg({ display_name: NAMES.display_name })],

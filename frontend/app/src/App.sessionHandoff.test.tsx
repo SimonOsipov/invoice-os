@@ -1397,7 +1397,7 @@ describe('AUTH-05-08 adversarial', () => {
   })
 })
 
-describe('the first sign-in provisions the registered workspace (AUTH-15.5-03)', () => {
+describe('the first sign-in provisions the registered workspace', () => {
   const CHAIN = (base: string) => [
     `${base}/auth/exchange`,
     `${base}/api/tenancy/v1/me`,

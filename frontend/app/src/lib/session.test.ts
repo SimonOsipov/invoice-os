@@ -318,6 +318,13 @@ describe('isTokenExpired / resolveBootSession', () => {
     return `header.${b64}.signature`
   }
 
+  // Built the way GoTrue does: UTF-8 bytes, base64url, no padding.
+  function utf8Jwt(claims: object): string {
+    const bytes = new TextEncoder().encode(JSON.stringify(claims))
+    const b64 = btoa(Array.from(bytes, (b) => String.fromCharCode(b)).join('')).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+    return `header.${b64}.signature`
+  }
+
   it('S24: a token whose exp is in the past is expired', () => {
     expect(isTokenExpired(jwt({ exp: 1000 }), 2000_000)).toBe(true)
   })
@@ -373,6 +380,16 @@ describe('isTokenExpired / resolveBootSession', () => {
     expect(payload).toContain('_')
     expect(payload.length % 4).not.toBe(0)
     expect(decodeJwtPayload(`header.${payload}.signature`)).toEqual(claims)
+
+    const text = ['Soci\u00e9t\u00e9 G\u00e9n\u00e9rale', 'Ad\u00e9b\u00e1y\u1ecd\u0300', 'Acme \u{1F680}', '\u682a\u5f0f\u4f1a\u793e \u6771\u4eac', 'Adaeze Ventures']
+    const claimsFor = (s: string) => ({ sub: 'x', pad: '???>>>', user_metadata: { registration: { workspace_name: s } } })
+    const tokens = text.map((s) => utf8Jwt(claimsFor(s)))
+    expect(tokens.some((t) => t.split('.')[1].includes('-'))).toBe(true)
+    expect(tokens.some((t) => t.split('.')[1].includes('_'))).toBe(true)
+    expect(tokens.some((t) => t.split('.')[1].length % 4 !== 0)).toBe(true)
+    text.forEach((s, i) => {
+      expect.soft(decodeJwtPayload(tokens[i]), s).toEqual(claimsFor(s))
+    })
 
     const nonObject = ['5', '[{"exp":1}]', 'null', '"exp"'].map((j) => `header.${btoa(j).replace(/=+$/, '')}.signature`)
     const unreadable = [null, '', 'opaque', `header.${payload}`, `header.${btoa('{not json')}.signature`, 'a.!!!not-base64!!!.c', ...nonObject]

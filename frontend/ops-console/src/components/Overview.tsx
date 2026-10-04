@@ -285,7 +285,6 @@ export function Overview({ range, onRangeChange }: Props) {
             {SPEND_BARS.map((b, i) => (
               <div
                 key={i}
-                className="ops-bar"
                 style={{ flex: 1, height: b.h, background: b.fill, border: b.border, borderRadius: '2px 2px 0 0', minHeight: 2 }}
               />
             ))}
@@ -365,7 +364,7 @@ export function Overview({ range, onRangeChange }: Props) {
                   </span>
                 </div>
                 <div style={{ height: 7, background: 'var(--bg-3)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
-                  <div className="ops-bar" style={{ width: r.width, height: '100%', background: r.color, borderRadius: 'var(--radius-sm)' }} />
+                  <div style={{ width: r.width, height: '100%', background: r.color, borderRadius: 'var(--radius-sm)' }} />
                 </div>
               </div>
             ))}

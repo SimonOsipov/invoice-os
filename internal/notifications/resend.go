@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"slices"
 	"strings"
-	"time"
 )
 
 type ResendClient interface {
@@ -21,7 +20,7 @@ type Resend struct {
 // NewResend: a nil hc means http.Client{Timeout: 10s}.
 func NewResend(baseURL string, k Keys, hc *http.Client) *Resend {
 	if hc == nil {
-		hc = &http.Client{Timeout: 10 * time.Second, CheckRedirect: noRedirect}
+		hc = NewHTTPClient(nil)
 	}
 	return &Resend{
 		baseURL: strings.TrimRight(baseURL, "/"), apiKey: k.ResendAPIKey,

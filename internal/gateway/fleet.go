@@ -52,6 +52,8 @@ type ServiceHealth struct {
 	// Sentry is what the service reported, empty when its body has
 	// none or it is probed at a custom path. Never part of the up/down verdict.
 	Sentry string `json:"sentry,omitempty"`
+	// Contacts is notifications' delivery mode (real, fake or off); the health-gate reads it.
+	Contacts string `json:"contacts,omitempty"`
 }
 
 // FleetHealth is the GET /healthz/fleet body: an overall roll-up plus per-service detail.
@@ -167,9 +169,10 @@ func probeService(ctx context.Context, client *http.Client, name string, base *u
 	// up/down, and the deploy gate reports a missing build as a mismatch on its
 	// own terms.
 	var payload struct {
-		Build  string `json:"build"`
-		Sentry string `json:"sentry"`
+		Build    string `json:"build"`
+		Sentry   string `json:"sentry"`
+		Contacts string `json:"contacts"`
 	}
 	_ = json.NewDecoder(io.LimitReader(resp.Body, maxHealthzBody)).Decode(&payload)
-	return ServiceHealth{Name: name, Status: statusUp, Build: payload.Build, Sentry: payload.Sentry}
+	return ServiceHealth{Name: name, Status: statusUp, Build: payload.Build, Sentry: payload.Sentry, Contacts: payload.Contacts}
 }

@@ -15,6 +15,8 @@ M2-14.4).
    fails naming any that are down.
    The same roll-up must show every Go service and `docling` reporting `sentry` `off` on a PR,
    and `on` or `off` on the persistent environment; `auth` is exempt by name.
+   It must also show `notifications` reporting `contacts` `fake` on a PR (a fork never writes
+   to HubSpot or Resend) and `real` or `off` on the persistent environment.
    The context services are private-network-only, so this route is the only way CI sees
    their health through the one public backend surface.
 2. **Live browser login** — a Playwright test drives the persona mock-login on the deployed

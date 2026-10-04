@@ -2,8 +2,14 @@ package notifications
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
 )
 
 // IntakeStore is what the intake and self-read handlers need; *Store satisfies it.
@@ -15,11 +21,129 @@ type IntakeStore interface {
 
 var _ IntakeStore = (*Store)(nil)
 
-// Compile-only stubs (AUTH-17-04 red phase): every handler answers 501.
-func notImplemented(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotImplemented) }
+const maxIntakeBody = 16 << 10
 
-func RegistrantsHandler(IntakeStore, *slog.Logger) http.HandlerFunc { return notImplemented }
+type registrantBody struct {
+	UserID        string `json:"user_id"`
+	Email         string `json:"email"`
+	DisplayName   string `json:"display_name"`
+	WorkspaceName string `json:"workspace_name"`
+	Consent       *struct {
+		Text string `json:"text"`
+		At   string `json:"at"`
+	} `json:"marketing_consent"`
+}
 
-func DemoRequestsHandler(IntakeStore, *slog.Logger) http.HandlerFunc { return notImplemented }
+type demoBody struct {
+	Email                string `json:"email"`
+	Name                 string `json:"name"`
+	Company              string `json:"company"`
+	MarketingConsentText string `json:"marketing_consent_text"`
+}
 
-func MeHandler(IntakeStore, *slog.Logger) http.HandlerFunc { return notImplemented }
+// decodeIntake answers 404 for a proxied request (the gateway's own call has no X-User-ID),
+// and 400 for a body that is not one JSON object. It reports whether the caller may go on.
+func decodeIntake(w http.ResponseWriter, r *http.Request, dst any) bool {
+	if r.Header.Get("X-User-ID") != "" {
+		writeJSONBody(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return false
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxIntakeBody)).Decode(dst); err != nil {
+		writeJSONBody(w, http.StatusBadRequest, map[string]string{"error": "malformed body"})
+		return false
+	}
+	return true
+}
+
+func intakeResult(w http.ResponseWriter, r *http.Request, log *slog.Logger, err error) {
+	if err != nil {
+		log.ErrorContext(r.Context(), "contacts: intake failed", slog.Any("err", err))
+		writeJSONBody(w, http.StatusInternalServerError, map[string]string{"error": "intake failed"})
+		return
+	}
+	writeJSONBody(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+}
+
+func RegistrantsHandler(store IntakeStore, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var b registrantBody
+		if !decodeIntake(w, r, &b) {
+			return
+		}
+		if strings.TrimSpace(b.Email) == "" {
+			writeJSONBody(w, http.StatusBadRequest, map[string]string{"error": "email is required"})
+			return
+		}
+		if b.UserID != "" {
+			if _, err := uuid.Parse(b.UserID); err != nil {
+				writeJSONBody(w, http.StatusBadRequest, map[string]string{"error": "user_id is invalid"})
+				return
+			}
+		}
+		in := RegistrantIntake{UserID: b.UserID, Email: b.Email, DisplayName: b.DisplayName, WorkspaceName: b.WorkspaceName}
+		if b.Consent != nil && b.Consent.Text != "" {
+			// Fail closed: consent without a readable time is not recorded.
+			if at, err := time.Parse(time.RFC3339, b.Consent.At); err != nil {
+				log.WarnContext(r.Context(), "contacts: marketing consent time unreadable; consent dropped", slog.String("user_id", b.UserID))
+			} else {
+				in.ConsentText, in.ConsentAt = b.Consent.Text, at
+			}
+		}
+		intakeResult(w, r, log, store.Registrant(r.Context(), in))
+	}
+}
+
+func DemoRequestsHandler(store IntakeStore, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var b demoBody
+		if !decodeIntake(w, r, &b) {
+			return
+		}
+		if strings.TrimSpace(b.Email) == "" {
+			writeJSONBody(w, http.StatusBadRequest, map[string]string{"error": "email is required"})
+			return
+		}
+		intakeResult(w, r, log, store.DemoRequest(r.Context(), DemoIntake{
+			Email: b.Email, Name: b.Name, Company: b.Company, ConsentText: b.MarketingConsentText,
+		}))
+	}
+}
+
+type destination struct {
+	DeliveredAt *time.Time `json:"delivered_at"`
+	Applies     *bool      `json:"applies,omitempty"`
+}
+
+// MeHandler reads the caller's own row by the token's email, which the gateway sets.
+func MeHandler(store IntakeStore, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		c, err := store.Me(r.Context(), r.Header.Get("X-User-Email"))
+		if errors.Is(err, ErrNotFound) {
+			writeJSONBody(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+		if err != nil {
+			log.ErrorContext(r.Context(), "contacts: self-read failed", slog.Any("err", err))
+			writeJSONBody(w, http.StatusInternalServerError, map[string]string{"error": "read failed"})
+			return
+		}
+		tags := c.Tags
+		if tags == nil {
+			tags = []string{}
+		}
+		writeJSONBody(w, http.StatusOK, map[string]any{
+			"email":              c.Email,
+			"tags":               tags,
+			"marketing_eligible": c.MarketingEligible,
+			"hubspot":            destination{DeliveredAt: c.HubSpotDeliveredAt},
+			"resend":             destination{DeliveredAt: c.ResendDeliveredAt, Applies: &c.ResendApplies},
+			"mode":               c.Mode,
+		})
+	}
+}
+
+func writeJSONBody(w http.ResponseWriter, status int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
+}

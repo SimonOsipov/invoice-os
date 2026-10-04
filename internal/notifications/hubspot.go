@@ -24,9 +24,15 @@ type HubSpot struct {
 // NewHubSpot: a nil hc means http.Client{Timeout: 10s}.
 func NewHubSpot(baseURL string, k Keys, hc *http.Client) *HubSpot {
 	if hc == nil {
-		hc = &http.Client{Timeout: 10 * time.Second, CheckRedirect: noRedirect}
+		hc = NewHTTPClient(nil)
 	}
 	return &HubSpot{baseURL: strings.TrimRight(baseURL, "/"), token: k.HubSpotToken, hc: hc}
+}
+
+// NewHTTPClient is the vendor client: 10 s timeout, and a 3xx is the response, never followed.
+// A nil rt means http.DefaultTransport.
+func NewHTTPClient(rt http.RoundTripper) *http.Client {
+	return &http.Client{Transport: rt, Timeout: 10 * time.Second, CheckRedirect: noRedirect}
 }
 
 // noRedirect surfaces a 3xx as the response; following it would turn a write into a GET.

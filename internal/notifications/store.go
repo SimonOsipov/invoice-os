@@ -25,6 +25,10 @@ type Store struct {
 	river *river.Client[pgx.Tx]
 }
 
+func NewStore(pool *pgxpool.Pool, riverClient *river.Client[pgx.Tx]) *Store {
+	return &Store{pool: pool, river: riverClient}
+}
+
 // RegistrantIntake: empty UserID is NULL; empty ConsentText is unticked.
 type RegistrantIntake struct {
 	UserID, Email, DisplayName, WorkspaceName string

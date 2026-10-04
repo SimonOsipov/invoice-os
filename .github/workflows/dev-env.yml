@@ -974,6 +974,29 @@ jobs:
           fi
           echo "Sentry $direction on $EXPECTED_BUILD for: $names (auth exempt)."
 
+      # A PR fork must deliver nothing to HubSpot or Resend; production must not be fake.
+      - name: Gate on notifications' contacts delivery mode
+        env:
+          IS_PR: ${{ github.event_name == 'pull_request' }}
+        run: |
+          set -euo pipefail
+          if [ "$IS_PR" = "true" ]; then want="fake"; else want="real off"; fi
+          mode=""
+          for _ in $(seq 1 5); do
+            if curl -sS --connect-timeout 5 --max-time 10 -o /tmp/contacts-fleet.json "$GATEWAY_URL/healthz/fleet"; then
+              mode=$(jq -r '[.services[] | select(.name == "notifications") | .contacts // "none"][0] // "absent"' /tmp/contacts-fleet.json)
+              case " $want " in *" $mode "*) break ;; esac
+            fi
+            sleep 5
+          done
+          case " $want " in
+            *" $mode "*) echo "notifications reports contacts=$mode." ;;
+            *)
+              echo "::error::notifications reports contacts='${mode:-unreachable}', want one of: $want. 'none' means it predates the contacts field; 'absent' means the roll-up does not name notifications. On a PR, anything but 'fake' means the fork could write to HubSpot or Resend: check RAILWAY_ENVIRONMENT_NAME is the pr-<N> shape. On a push, 'fake' means CONTACTS_FAKE is set on production."
+              exit 1
+              ;;
+          esac
+
       # auth has no build stamp; its deployment status is the verdict for `railway up`.
       - name: Wait for the auth deployment
         env:

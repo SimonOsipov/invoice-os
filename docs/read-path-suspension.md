@@ -286,6 +286,9 @@ predicates it would previously have hit inside the transaction.
 | `GET /v1/me` | tenancy | exempt | §4 — the SPA's boot round trip; gating it would make the 403 unreachable |
 | `POST /v1/workspaces` | tenancy | exempt | the caller has no membership yet (AC-5) |
 | `POST /v1/validate/batch` | validation | exempt | `S2SMiddleware` peer call with no caller identity by construction, and the gateway strips any client-supplied `X-S2S-Token` (`internal/gateway/gateway.go`, `injectIdentity`) |
+| `POST /internal/contacts/registrants` | notifications | exempt | gateway-token call with no caller; contacts carry no tenant, so a membership has nothing to gate |
+| `POST /internal/contacts/demo-requests` | notifications | exempt | same, and a request carrying `X-User-ID` is refused 404 |
+| `GET /v1/contacts/me` | notifications | exempt | reads the caller's own contact by the token's email; contacts carry no tenant |
 | `GET /v1/memberships` | tenancy | covered | |
 | `PATCH /v1/memberships/{user_id}` | tenancy | covered | |
 | `GET /v1/entities` | portfolio | covered | |
@@ -345,7 +348,7 @@ predicates it would previously have hit inside the transaction.
 | `POST /v1/extractions/{id}/fields/{name}/corrections` | submission | covered | |
 | `POST /v1/extractions/{id}/line-items` | submission | covered | |
 
-81 distinct routes, 87 registrations (`GET /v1/ping` is registered once per service).
+84 distinct routes, 90 registrations (`GET /v1/ping` is registered once per service).
 
 ### 8.1 The non-HTTP callers, so nobody looks for them above
 

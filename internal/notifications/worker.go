@@ -2,8 +2,11 @@ package notifications
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
@@ -47,5 +50,82 @@ type DeliverWorker struct {
 	Logger  *slog.Logger
 }
 
-// Work is a compile-only stub (AUTH-17-04 red phase).
-func (w *DeliverWorker) Work(context.Context, *river.Job[DeliverArgs]) error { return nil }
+// Work delivers the row as it is now, not as it was queued: a retry after a version miss
+// carries the new facts. Neither the email nor a name reaches a log line or an error.
+func (w *DeliverWorker) Work(ctx context.Context, job *river.Job[DeliverArgs]) error {
+	dest := job.Args.Destination
+	if dest != destHubSpot && dest != destResend {
+		return river.JobCancel(fmt.Errorf("notifications: unknown destination %q", dest))
+	}
+
+	var (
+		version                   int64
+		registered, demo, consent bool
+		delivered, optInSent      bool
+		first, last, company      string
+	)
+	err := w.Pool.QueryRow(ctx, `
+		SELECT version, COALESCE(first_name, ''), COALESCE(last_name, ''), COALESCE(company, ''),
+		       registered_at IS NOT NULL, demo_requested_at IS NOT NULL, marketing_consented_at IS NOT NULL,
+		       CASE WHEN $2::text = 'hubspot' THEN hubspot_delivered_at ELSE resend_delivered_at END IS NOT NULL,
+		       resend_opt_in_sent_at IS NOT NULL
+		FROM contacts WHERE email = $1`, job.Args.Email, dest).Scan(
+		&version, &first, &last, &company, &registered, &demo, &consent, &delivered, &optInSent)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("notifications: read contact: %w", err)
+	}
+	if delivered {
+		return nil
+	}
+
+	c := Contact{Email: job.Args.Email, FirstName: first, LastName: last, Company: company, MarketingEligible: consent}
+	if registered {
+		c.Tags = append(c.Tags, "registered")
+	}
+	if demo {
+		c.Tags = append(c.Tags, "demo request")
+	}
+
+	if dest == destHubSpot {
+		err = w.HubSpot.Upsert(ctx, c)
+	} else {
+		if !registered && !consent {
+			return nil
+		}
+		sendOptIn := consent && !optInSent
+		if err = w.Resend.Sync(ctx, c, sendOptIn); err == nil && sendOptIn {
+			_, err = w.Pool.Exec(ctx, `UPDATE contacts SET resend_opt_in_sent_at = now() WHERE email = $1 AND resend_opt_in_sent_at IS NULL`, c.Email)
+		}
+	}
+	if err != nil {
+		w.logFailure(ctx, dest, err)
+		return err
+	}
+
+	col := dest + "_delivered_at"
+	tag, err := w.Pool.Exec(ctx, `UPDATE contacts SET `+col+` = now(), delivery_mode = $2 WHERE email = $1 AND version = $3`,
+		c.Email, string(w.Mode), version)
+	if err != nil {
+		return fmt.Errorf("notifications: record delivery: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return errors.New("notifications: contact changed during delivery")
+	}
+	return nil
+}
+
+func (w *DeliverWorker) logFailure(ctx context.Context, dest string, err error) {
+	var de *DeliveryError
+	if errors.As(err, &de) && de.Permanent() {
+		w.Logger.ErrorContext(ctx, "contacts: "+dest+" rejected the delivery", slog.String("destination", dest), slog.Int("status", de.Status))
+		return
+	}
+	status := 0
+	if de != nil {
+		status = de.Status
+	}
+	w.Logger.WarnContext(ctx, "contacts: "+dest+" delivery failed", slog.String("destination", dest), slog.Int("status", status))
+}

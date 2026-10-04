@@ -694,6 +694,8 @@ jobs:
         # the caller's tenant under RLS and write audit rows in the same tx. Needs
         # DATABASE_URL (app) + DATABASE_SUPERUSER_URL (seed) — both already in this job's env.
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/portfolio/...
+      - name: Contact store suite (intake merge + delivery queue as invoice_app) + per-test visibility & skip gate
+        run: scripts/ci/rls-test-gate.sh -count=1 ./internal/notifications/...
       - name: Invoice /v1 suite (RLS-scoped store CRUD + genesis history + audit as invoice_app) + per-test visibility & skip gate
         # M4-02: proves the invoice store's Create/Get/List/Update resolve to exactly
         # the caller's tenant under RLS and write the genesis invoice_status_history +

@@ -982,8 +982,9 @@ jobs:
           set -euo pipefail
           if [ "$IS_PR" = "true" ]; then want="fake"; else want="real off"; fi
           mode=""
+          # worst case 12s: 2 waves of probes x (/healthz + /readyz) x 3s
           for _ in $(seq 1 5); do
-            if curl -sS --connect-timeout 5 --max-time 10 -o /tmp/contacts-fleet.json "$GATEWAY_URL/healthz/fleet" \
+            if curl -sS --connect-timeout 5 --max-time 20 -o /tmp/contacts-fleet.json "$GATEWAY_URL/healthz/fleet" \
               && jq -e '.services | type == "array"' /tmp/contacts-fleet.json >/dev/null 2>&1; then
               mode=$(jq -r '[.services[] | select(.name == "notifications") | .contacts // "none"][0] // "absent"' /tmp/contacts-fleet.json)
               case " $want " in *" $mode "*) break ;; esac

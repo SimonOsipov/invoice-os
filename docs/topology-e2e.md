@@ -28,7 +28,9 @@ M2-14.4).
    past the access token's lifetime, a refused renewal returns to landing and keeps the
    destination, an account provisioned as in-house or as a firm opens in that mode, a new workspace
    lands on the add-company task, and adding its company opens the import step it gated, the
-   identity card shows the account's own name, and a long name stays inside the card
+   identity card shows the account's own name, a long name stays inside the card, and a stranger
+   registers through the landing window as a firm and as an in-house account, then signs in and
+   lands in the workspace it named (the verify step is a stand-in: only the failed-link redirect is real)
    ([identity-provider.md](./identity-provider.md) "Sign-in and hand-off",
    "Renewal"). The same file's "deployed consoles:" journeys sign a staff account in through
    landing and open both consoles, refuse a customer's session and a forged record, renew the
@@ -111,7 +113,7 @@ for is in [identity-provider.md](./identity-provider.md) "Granting staff".
 `reconcile-urls` step writes and re-reads the fork's own `gateway.CORS_ALLOWED_ORIGINS` (all
 four SPA origins), `VITE_GATEWAY_URL` on `app`, `landing` and each console, `app.VITE_LANDING_URL`,
 the landing's `VITE_APP_URL`, `VITE_OPS_URL` and `VITE_SUPPORT_URL`, each console's
-`VITE_LANDING_URL`, and `app.VITE_DEMO_MODE=true`. It refuses the persistent environment.
+`VITE_LANDING_URL`, `app.VITE_DEMO_MODE=true` and `landing.VITE_REGISTRATION_OPEN=true`. It refuses the persistent environment.
 
 **Written per fork, not inherited:** `gateway.RECONCILIATION_URL`. A fork is reused per PR, so
 it never picks up a production write made after its creation. `set-fork-reconciliation-url`

@@ -1,17 +1,21 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Nav } from './components/Nav'
+import { VerifyNotice } from './components/VerifyNotice'
 import { SignInModal } from './components/SignInModal'
 import { DemoModal } from './components/DemoModal'
+import { RegisterModal } from './components/RegisterModal'
 import { Hero } from './components/Hero'
-import { TrustStrip } from './components/TrustStrip'
+import { AudienceStrip } from './components/AudienceStrip'
 import { Problem } from './components/Problem'
 import { Modules } from './components/Modules'
-import { HowItWorks } from './components/HowItWorks'
-import { Compliance } from './components/Compliance'
-import { Audience } from './components/Audience'
-import { Developers } from './components/Developers'
-import { Pricing } from './components/Pricing'
-import { DemoCta } from './components/DemoCta'
+import { Platform } from './components/Platform'
+import { Coverage } from './components/Coverage'
+import { Intelligence } from './components/Intelligence'
+import { Solutions } from './components/Solutions'
+import { Integrations } from './components/Integrations'
+import { Api } from './components/Api'
+import { Faq } from './components/Faq'
+import { ClosingCta } from './components/ClosingCta'
 import { Footer } from './components/Footer'
 import { Privacy } from './components/Privacy'
 import { CookieNotice } from './components/CookieNotice'
@@ -19,7 +23,9 @@ import { isScrollable, scrollDepthPercent, trackDemoOpen, trackScrollDepth, type
 import { readConsent, type ConsentRecord } from './consent'
 import { applyChoice } from './consentActions'
 import { isPrivacyPath } from './route'
+import { registrationOpen } from './register'
 import { readSignInConsole, readSignInState } from './signIn'
+import { readVerifyOutcome, VERIFIED_PARAM, VERIFY_PARAM } from './verify'
 
 // Copy for the ?signin= outcome; `ready` opens the modal with no message.
 const SIGN_IN_OUTCOMES = new Map<string, string | undefined>([
@@ -28,6 +34,9 @@ const SIGN_IN_OUTCOMES = new Map<string, string | undefined>([
   ['failed', "We couldn't open your workspace. Sign in again."],
   ['not-staff', 'This account cannot open the ASComply consoles.'],
 ])
+
+// Params the boot reads once and removes from the address bar.
+const BOOT_PARAMS = ['state', 'console', 'signin', VERIFIED_PARAM, VERIFY_PARAM]
 
 // Held a minute short of the 10-minute state TTL, so a posted state is still live.
 const STATE_HOLD_MS = 9 * 60 * 1000
@@ -39,9 +48,7 @@ function readSignInBoot(search: string) {
   return { state, consoleTarget: readSignInConsole(search), bootAt: Date.now(), error: SIGN_IN_OUTCOMES.get(outcome), open: SIGN_IN_OUTCOMES.has(outcome) }
 }
 
-// The whole page lives under `.asc-app` — that scope defines the design-system
-// tokens (--accent, --bg-*, --fg-*, …) and the utility classes (.v2-btn, .label,
-// .mono, .grid-bg, .dot-bg) that every section relies on.
+// Tokens and utility classes (.v2-btn, .label, .mono) are global: v2 plus bridge.css.
 export default function App() {
   // The state is held in memory only, never in storage.
   const [signInBoot] = useState(() => readSignInBoot(window.location.search))
@@ -54,18 +61,27 @@ export default function App() {
   )
   const [signInOpen, setSignInOpen] = useState(signInBoot.open)
   const [signInError, setSignInError] = useState(signInBoot.error)
+  // Read once at mount; the strip below removes the params, so a re-read would lose the notice.
+  const [verifyOutcome, setVerifyOutcome] = useState(() => readVerifyOutcome(window.location.search))
   const [demoOpen, setDemoOpen] = useState(false)
+  const [registerOpen, setRegisterOpen] = useState(false)
   // Read once at mount: a stored choice keeps the notice down until `reopened` flips.
   const [consent, setConsent] = useState<ConsentRecord | null>(() => readConsent())
   // Once a choice is stored the footer control is the only route back to the notice.
   const [reopened, setReopened] = useState(false)
-  // Source-bound per call site: the five components keep `onBookDemo: () => void`
-  // and stay untouched, so one file carries the attribution instead of six.
+  // Source-bound per call site: the components keep `onBookDemo: () => void`, so this file carries the attribution.
   const book = (source: DemoCtaSource) => () => {
     trackDemoOpen(source)
     setDemoOpen(true)
   }
   const onSignIn = () => setSignInOpen(true)
+  const onCreateAccount = registrationOpen()
+    ? () => {
+        setSignInOpen(false)
+        setSignInError(undefined)
+        setRegisterOpen(true)
+      }
+    : undefined
   const privacy = isPrivacyPath(window.location.pathname)
 
   useEffect(() => {
@@ -76,13 +92,11 @@ export default function App() {
     return () => window.removeEventListener('pageshow', onShow)
   }, [])
 
-  // Strip `state`, `console` and `signin` for any value; every other param stays.
+  // Strip the boot params for any value; every other param stays.
   useEffect(() => {
     const url = new URL(window.location.href)
-    if (!['state', 'console', 'signin'].some((k) => url.searchParams.has(k))) return
-    url.searchParams.delete('state')
-    url.searchParams.delete('console')
-    url.searchParams.delete('signin')
+    if (!BOOT_PARAMS.some((k) => url.searchParams.has(k))) return
+    BOOT_PARAMS.forEach((k) => url.searchParams.delete(k))
     window.history.replaceState(null, '', url.pathname + url.search + url.hash)
   }, [])
 
@@ -93,7 +107,7 @@ export default function App() {
     const measure = () => {
       frame = 0
       // documentElement, not body: body.scrollHeight excludes body margins. The height is
-      // never cached — the Who-it's-for toggle swaps mocks of different heights.
+      // never cached — a toggle can swap content of different heights.
       const documentH = document.documentElement.scrollHeight
       // A page that fits the viewport is 100% seen but nothing was scrolled; reporting it
       // at mount would burn all four milestones. Pinned by "guards the mount-time measurement".
@@ -114,7 +128,6 @@ export default function App() {
 
   return (
     <div
-      className="asc-app"
       style={{
         minHeight: '100vh',
         background: 'var(--bg-1)',
@@ -127,30 +140,33 @@ export default function App() {
         overflowX: 'clip',
       }}
     >
-      <Nav onSignIn={onSignIn} onBookDemo={book('nav')} hrefPrefix={privacy ? '/' : ''} />
+      <Nav onSignIn={onSignIn} onBookDemo={book('nav')} onCreateAccount={onCreateAccount} hrefPrefix={privacy ? '/' : ''} />
+      {verifyOutcome && <VerifyNotice outcome={verifyOutcome} onDismiss={() => setVerifyOutcome(null)} />}
       {privacy ? (
         <Privacy />
       ) : (
         <>
-          <Hero onBookDemo={book('hero')} onSignIn={onSignIn} />
-          <TrustStrip />
+          <Hero onBookDemo={book('hero')} />
+          <AudienceStrip />
           <Problem />
           <Modules />
-          <HowItWorks />
-          <Compliance />
-          <Audience onBookDemo={book('audience')} />
-          <Developers />
-          <Pricing onBookDemo={book('pricing')} />
-          <DemoCta />
+          <Platform onBookDemo={book('platform')} />
+          <Coverage onBookDemo={book('coverage')} />
+          <Intelligence />
+          <Solutions onBookDemo={book('audience')} />
+          <Integrations onBookDemo={book('integrations')} />
+          <Api onBookDemo={book('api')} />
+          <Faq onBookDemo={book('faq')} />
+          <ClosingCta onBookDemo={book('closing')} />
         </>
       )}
-      <Footer onBookDemo={book('footer')} hrefPrefix={privacy ? '/' : ''} onCookieChoices={() => setReopened(true)} />
+      <Footer onBookDemo={book('footer')} onSignIn={onSignIn} hrefPrefix={privacy ? '/' : ''} onCookieChoices={() => setReopened(true)} />
       {/* Pinned by "the notice mounts after Footer and before the modals": last in flow puts the
           spacer's scroll room at the document end and the tab order after the footer. */}
       {(consent === null || reopened) && (
         <CookieNotice
           current={consent}
-          suppressed={signInOpen || demoOpen}
+          suppressed={signInOpen || demoOpen || registerOpen}
           onChoose={(choice) => {
             setConsent(applyChoice(choice))
             // consent is already non-null on a reopen, so only this closes it again.
@@ -163,6 +179,7 @@ export default function App() {
           heldState={heldState}
           initialError={signInError}
           consoleTarget={signInBoot.consoleTarget ?? undefined}
+          onCreateAccount={onCreateAccount}
           onClose={() => {
             setSignInOpen(false)
             setSignInError(undefined)
@@ -170,6 +187,7 @@ export default function App() {
         />
       )}
       {demoOpen && <DemoModal onClose={() => setDemoOpen(false)} />}
+      {registerOpen && <RegisterModal onClose={() => setRegisterOpen(false)} />}
     </div>
   )
 }

@@ -20,8 +20,10 @@ import {
   PERSONAS as API_PERSONAS,
   type Me,
   type RealAccount,
+  type TenantKind,
 } from '../api/client'
 import { freshTin } from '../api/fixtures'
+import { seedConsent } from '../smoke/landingConsent'
 import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS } from './layout'
 
@@ -342,7 +344,7 @@ test("deployed app: Back from an invoice detail returns to the list, not the lan
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// The Caddyfile:20-24 try_files fallback has served this since M1-06; nothing in the
+// The Caddyfile `try_files` fallback has served this; nothing in the
 // suite has ever cold-booted a top-level path until now.
 test('deployed app: a top-level path is a working deep link', async ({ page }) => {
   const errors = collectErrors(page)
@@ -483,10 +485,9 @@ test('deployed app: a signed-out deep link returns to its destination after sign
   await page.goto(`${APP_URL}/audit`)
   await page.waitForURL((url) => url.href.startsWith(LANDING_URL), { timeout: 20_000 })
 
-  // Same modal drive as the parametrised walk below. 'Explore the platform' renders TWICE on
-  // the landing page (header + hero), so the banner scope is required, not stylistic.
-  await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
-  await expect(page.getByRole('dialog', { name: 'Sign in' })).toBeVisible()
+  // Same modal drive as the parametrised walk below.
+  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
+  await expect(page.getByRole('dialog', { name: 'Platform login' })).toBeVisible()
   await page.locator(`[data-persona="${FIRM_PERSONA.param}"]`).click()
 
   // The hand-off lands on the app ROOT (destUrl carries no path), so arriving on /audit can
@@ -532,8 +533,8 @@ test('deployed app: a signed-out deep link returns to its FILTER after sign-in',
   await page.goto(`${APP_URL}/audit?invoice=${unknownInvoice}`)
   await page.waitForURL((url) => url.href.startsWith(LANDING_URL), { timeout: 20_000 })
 
-  await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
-  await expect(page.getByRole('dialog', { name: 'Sign in' })).toBeVisible()
+  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
+  await expect(page.getByRole('dialog', { name: 'Platform login' })).toBeVisible()
 
   // The only browser proof that a keyboard pick works: the persona is a native button.
   const pick = page.locator(`[data-persona="${FIRM_PERSONA.param}"]`)
@@ -605,8 +606,8 @@ for (const id of PERSONA_IDS) {
     })
 
     await page.goto(LANDING_URL)
-    await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
-    const dialog = page.getByRole('dialog', { name: 'Sign in' })
+    await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Platform login' })
     await expect(dialog).toBeVisible()
 
     // Positive control first: an absence check on an unrendered picker passes vacuously.
@@ -631,7 +632,7 @@ for (const id of PERSONA_IDS) {
       await expect(page.locator('aside.pf-sidebar')).toContainText(persona.tenantName!.toUpperCase())
     } else {
       expect((await door).status(), `the ${persona.destination} front door answer`).toBe(200)
-      await expect(page.getByRole('banner').getByRole('button', { name: 'Explore the platform' })).toBeVisible()
+      await expect(page.getByRole('banner').getByRole('button', { name: 'Platform login' })).toBeVisible()
     }
 
     expect(errors, `console errors on the ${persona.destination} arrival:\n${errors.join('\n')}`).toEqual([])
@@ -863,7 +864,7 @@ function gatedErrors(page: Page, drops: Dropper[]): string[] {
 }
 
 async function submitSignIn(page: Page, email: string, password: string): Promise<void> {
-  const dialog = page.getByRole('dialog', { name: 'Sign in' })
+  const dialog = page.getByRole('dialog', { name: 'Platform login' })
   await dialog.getByLabel('Work email', { exact: true }).fill(email)
   await dialog.getByLabel('Password', { exact: true }).fill(password)
   await dialog.getByRole('button', { name: 'Sign in →', exact: true }).click()
@@ -907,8 +908,8 @@ test('deployed app: a real sign-in from the front door returns to its destinatio
     .poll(() => new URL(page.url()).searchParams.has('state'), { message: `landing kept ?state= at ${page.url()}` })
     .toBe(false)
 
-  await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
-  await expect(page.getByRole('dialog', { name: 'Sign in' })).toBeVisible()
+  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
+  await expect(page.getByRole('dialog', { name: 'Platform login' })).toBeVisible()
   const [handoffNav] = await Promise.all([
     page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
     submitSignIn(page, account.email, account.password),
@@ -961,8 +962,8 @@ test('deployed app: a real sign-in from a direct landing visit bounces for a sta
   const urls = recordUrls(page)
 
   await page.goto(LANDING_URL)
-  await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
-  const dialog = page.getByRole('dialog', { name: 'Sign in' })
+  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Platform login' })
   await expect(dialog.getByRole('button', { name: 'Continue with email', exact: true })).toBeVisible()
   await expect(dialog.getByLabel('Work email', { exact: true }), 'a stateless landing must not offer the form').toHaveCount(0)
 
@@ -1009,7 +1010,7 @@ test('deployed app: a hand-off code minted in another browser signs no tab in', 
 
       await victim.goto(`${APP_URL}/?handoff=${c1}`)
       await victim.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-      await expect(victim.getByRole('dialog', { name: 'Sign in' })).toContainText(HANDOFF_FAILED)
+      await expect(victim.getByRole('dialog', { name: 'Platform login' })).toContainText(HANDOFF_FAILED)
       expect(exchanges, 'the victim tab called /auth/exchange').toEqual([])
       expect(await storedSession(context), 'the victim tab stored a session').toBeNull()
       expect(errors, `console errors in the victim tab:\n${errors.join('\n')}`).toEqual([])
@@ -1039,7 +1040,7 @@ test('deployed app: a hand-off code minted in another browser signs no tab in', 
       // An expired code answers the same 400, which would prove nothing about the state.
       expect(Date.now() - mintedAt, 'the code could have expired before the victim tab redeemed it').toBeLessThan(HANDOFF_TTL_MS)
       await victim.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-      await expect(victim.getByRole('dialog', { name: 'Sign in' })).toContainText(HANDOFF_FAILED)
+      await expect(victim.getByRole('dialog', { name: 'Platform login' })).toContainText(HANDOFF_FAILED)
       expect(await storedSession(context), 'the victim tab stored a session').toBeNull()
       expect(errors, `console errors in the victim tab:\n${errors.join('\n')}`).toEqual([])
     } finally {
@@ -1344,7 +1345,7 @@ async function ageStoredSession(page: Page, patch: Partial<StoredRenewal> = {}):
 async function signInAtFrontDoor(page: Page, account: RealAccount, path: string): Promise<void> {
   await page.goto(`${APP_URL}${path}`)
   await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-  await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
+  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
   await Promise.all([
     page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
     submitSignIn(page, account.email, account.password),
@@ -1489,7 +1490,7 @@ test('deployed app: a refused renewal returns to landing and keeps the destinati
   ).toBe(true)
   expect(await storedSession(page.context()), 'the app origin kept a stored session').toBeNull()
 
-  await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
+  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
   await Promise.all([
     page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
     submitSignIn(page, account.email, account.password),
@@ -1579,7 +1580,7 @@ test('deployed app: signing out on one device ends the session on every device',
       await b.page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: 'Invoices' }).click()
       expect((await refused).status(), "B's first /api/ answer after the sign-out").toBe(401)
       expect((await bFrontDoor).status(), "B's front door answer").toBe(200)
-      await expect(b.page.getByRole('banner').getByRole('button', { name: 'Explore the platform' })).toBeVisible()
+      await expect(b.page.getByRole('banner').getByRole('button', { name: 'Platform login' })).toBeVisible()
       expect(await storedSession(b.context), 'B kept a stored session').toBeNull()
 
       const renewed = await rawFetch('/auth/refresh', { method: 'POST', body: { refresh_token: recordB.refresh_token } })
@@ -1587,7 +1588,7 @@ test('deployed app: signing out on one device ends the session on every device',
     })
 
     await test.step('B signs in again and lands on /, not the old destination', async () => {
-      await b.page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
+      await b.page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
       await Promise.all([
         b.page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
         submitSignIn(b.page, account.email, account.password),
@@ -1684,7 +1685,7 @@ async function visitConsole(page: Page, target: ConsoleTarget): Promise<void> {
 }
 
 async function signInThroughLanding(page: Page, target: ConsoleTarget, account: { email: string; password: string }): Promise<Request> {
-  await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
+  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click({ timeout: 15_000 })
   const [handoff] = await Promise.all([
     page.waitForRequest((r) => r.isNavigationRequest() && isConsoleHandoff(r.url(), target)),
     submitSignIn(page, account.email, account.password),
@@ -1759,7 +1760,7 @@ test("deployed consoles: a customer's real session opens neither console and is 
         await signInThroughLanding(page, target, account)
         expect((await notStaff).status(), `the ${target} not-staff landing answer`).toBe(200)
         await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-        await expect(page.getByRole('dialog', { name: 'Sign in' }).getByRole('alert')).toContainText(NOT_STAFF)
+        await expect(page.getByRole('dialog', { name: 'Platform login' }).getByRole('alert')).toContainText(NOT_STAFF)
 
         expect(await consoleRecord(context, target), `${target} kept a session for a customer`).toBeNull()
         expect(urls.length, 'no URLs were recorded').toBeGreaterThan(0)
@@ -1902,3 +1903,147 @@ test('deployed consoles: signing out of the Support Console ends the Ops Console
     await context.close()
   }
 })
+
+// frontend/landing/src/register.ts FREE_MAIL_REFUSED, from internal/gateway/register.go's isFreeMail guard.
+const FREE_MAIL_REFUSED = 'a business email address is required; personal email providers are not accepted'
+// frontend/landing/src/components/RegisterModal.tsx KINDS: the radio labels, by tenants.kind value.
+const KIND_LABEL: Record<TenantKind, string> = {
+  firm: 'For clients — an accounting or tax firm',
+  in_house: 'For our own company — in-house',
+}
+const CREATE = 'Create an account'
+
+// Opens the registration window from the header, fills it, submits, and ends on "Check your email".
+// A firstEmail is submitted first: the window must refuse it inline and keep every other field.
+async function registerThroughLanding(page: Page, account: RealAccount, kind: TenantKind, firstEmail?: string): Promise<void> {
+  await seedConsent(page, false)
+  await page.goto(LANDING_URL)
+  await page.getByRole('banner').getByRole('button', { name: CREATE }).click()
+  const dialog = page.getByRole('dialog', { name: CREATE })
+  await expect(dialog).toBeVisible()
+  const email = dialog.getByLabel('Work email', { exact: true })
+  const submit = dialog.getByRole('button', { name: 'Create account →' })
+
+  await email.fill(firstEmail ?? account.email)
+  await dialog.getByLabel('Password', { exact: true }).fill(account.password)
+  await dialog.getByLabel('Your name', { exact: true }).fill(account.displayName)
+  await dialog.getByLabel('Workspace name', { exact: true }).fill(account.workspaceName)
+  await dialog.getByRole('radio', { name: KIND_LABEL[kind] }).check()
+
+  if (firstEmail !== undefined) {
+    await submit.click()
+    const refusal = dialog.getByRole('alert')
+    await expect(refusal).toHaveCount(1)
+    await expect(refusal).toHaveText(FREE_MAIL_REFUSED)
+    await expect(email).toHaveAttribute('aria-invalid', 'true')
+    await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue(account.password)
+    await expect(dialog.getByLabel('Your name', { exact: true })).toHaveValue(account.displayName)
+    await expect(dialog.getByLabel('Workspace name', { exact: true })).toHaveValue(account.workspaceName)
+    await expect(dialog.getByRole('radio', { name: KIND_LABEL[kind] })).toBeChecked()
+    await email.fill(account.email)
+  }
+
+  await submit.click()
+  await expect(dialog.getByRole('heading', { name: 'Check your email', exact: true })).toBeVisible({ timeout: 30_000 })
+  await expect(dialog).toContainText(account.email)
+}
+
+async function expectNoDialog(page: Page): Promise<void> {
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+}
+
+test('deployed journey: a stranger registers through the landing and lands in a workspace of each kind', async ({ page, browser }) => {
+  // Two real sign-ins at the 180 s one-sign-in budget of the journeys above, plus three registrations.
+  test.setTimeout(300_000)
+  // The free-mail refusal and the first sign-in's /me before provisioning are deliberate 4xx, which Chromium logs as console errors.
+  const errors = gatedErrors(page, [
+    expectedStatusDropper(page, 400, /\/auth\/register$/),
+    expectedStatusDropper(page, 403, /\/api\/tenancy\/v1\/me$/),
+  ])
+  let meForbidden = 0
+  let workspacesCreated = 0
+  page.on('response', (res) => {
+    const url = res.url().split('?')[0]
+    if (res.status() === 403 && url.endsWith('/api/tenancy/v1/me')) meForbidden += 1
+    if (res.status() === 201 && res.request().method() === 'POST' && url.endsWith('/api/tenancy/v1/workspaces')) workspacesCreated += 1
+  })
+  const firm = freshRegistration('firm')
+  const inHouse = freshRegistration('in_house')
+
+  for (const { kind, account, path } of [
+    { kind: 'firm', account: firm, path: '/' },
+    { kind: 'in_house', account: inHouse, path: '/clients' },
+  ] as const) {
+    await test.step(`${kind}: registers through the landing window`, async () => {
+      // The firm pass submits a free-mail address first; the in-house pass registers directly.
+      await registerThroughLanding(page, account, kind, kind === 'firm' ? `${crypto.randomUUID()}@gmail.com` : undefined)
+    })
+
+    await test.step(`${kind}: the emailed link's landing shows the failed and the verified notice`, async () => {
+      // Step 2 of the verify half is a stand-in, and the failed-link half is the only real one:
+      // a bogus token makes the deployed gateway answer 303 to ?verify=failed (real).
+      // `?verified=1` below is COPY-ONLY: the test types the query itself, so it proves the notice
+      // text and that no dialog opens, not that the gateway verified anything. The verified redirect
+      // is proven in CI by TestIdP_EmailedLinkVerifiesThenSignInSucceeds.
+      await page.goto(`${GATEWAY_URL}/auth/verify?token=bogus-${crypto.randomUUID()}&type=signup`)
+      await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
+      await expect(page.getByRole('status').filter({ hasText: 'That link did not work' })).toBeVisible()
+      await expect.poll(() => new URL(page.url()).searchParams.has('verify'), { message: 'the landing strips ?verify' }).toBe(false)
+      await expectNoDialog(page)
+
+      await page.goto(`${LANDING_URL}/?verified=1`)
+      await expect(page.getByRole('status').filter({ hasText: 'Your email address is verified' })).toBeVisible()
+      await expectNoDialog(page)
+    })
+
+    await test.step(`${kind}: signs in and lands in the workspace it registered`, async () => {
+      const urls = recordUrls(page)
+      await signInAtFrontDoor(page, account, path)
+      expect(urls.length, 'recorded navigations').toBeGreaterThan(0)
+      expect(urls.filter((u) => u.includes('signin=no-workspace')), 'a navigation carried signin=no-workspace').toEqual([])
+      await expect(page.getByTestId('persona-name')).toHaveText(account.displayName)
+
+      if (kind === 'firm') {
+        await expectAddCompanyTask(page, 'Add your first client')
+        await expect.poll(() => sidebarRoster(page), { message: 'firm sidebar roster' }).toContain('Clients')
+      } else {
+        // The in-house workspace closes /clients: the app settles on the dashboard, with no portfolio.
+        // The task comes first: only the dashboard renders it, so the URL below is read after the mount settled.
+        await expectAddCompanyTask(page, 'Add your company')
+        await expect(page).toHaveURL(new URL('/', APP_URL).href)
+        await expect(page.getByRole('heading', { level: 1, name: 'Client portfolio', exact: true })).toHaveCount(0)
+        await expect.poll(() => sidebarRoster(page), { message: 'in-house sidebar roster' }).toContain('Settings')
+        expect(await sidebarRoster(page), 'the in-house sidebar').not.toContain('Clients')
+      }
+    })
+
+    // The next kind starts signed out: a stored session would skip the front door.
+    await page.evaluate(() => localStorage.clear())
+  }
+
+  await test.step('a confirmed address registered again answers the same Check your email', async () => {
+    const context = await browser.newContext()
+    try {
+      const repeat = await context.newPage()
+      const repeatErrors = collectErrors(repeat)
+      await registerThroughLanding(repeat, firm, 'firm')
+      expect(repeatErrors, `console errors on the repeat registration:\n${repeatErrors.join('\n')}`).toEqual([])
+    } finally {
+      await context.close()
+    }
+  })
+
+  expect(meForbidden, 'one /me 403 per kind before provisioning').toBe(2)
+  expect(workspacesCreated, 'one workspace created per kind').toBe(2)
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+function freshRegistration(kind: TenantKind): RealAccount {
+  const id = crypto.randomUUID()
+  return {
+    email: `reg-${kind}-${id}@example.com`,
+    password: id.slice(0, 16),
+    displayName: `Reg ${kind === 'firm' ? 'Firm' : 'House'} ${id.slice(0, 6)}`,
+    workspaceName: `Reg ${kind} ${id.slice(0, 8)}`,
+  }
+}

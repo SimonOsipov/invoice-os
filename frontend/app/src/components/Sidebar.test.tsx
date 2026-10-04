@@ -423,6 +423,18 @@ describe('BUG-17-01 company switcher corner', () => {
     expect(screen.queryByTestId('company-chip')).toBeNull()
   })
 
+  it('nav_offersClientsToFirmOnly', async () => {
+    await renderSidebar(rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 }))
+    expect(screen.queryByText('Invoices'), 'floor: the in-house nav rendered').not.toBeNull()
+    expect(screen.queryByText('Clients'), 'an in-house nav must not offer Clients').toBeNull()
+
+    cleanup()
+    vi.unstubAllGlobals()
+
+    await renderSidebar(FIRM_EVEN_ROLLUP, firmCtx())
+    expect(screen.queryByText('Clients'), 'control: the firm nav offers Clients').not.toBeNull()
+  })
+
   it('switcher_borderAndClientListFollowSwitcherOpen', async () => {
     const ctx = firmCtx({ switcherOpen: false })
     const view = await renderSidebar(FIRM_EVEN_ROLLUP, ctx)

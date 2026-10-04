@@ -1,0 +1,28 @@
+/* Landing-local bridge: app-layer names still read by Privacy, the forms, CookieNotice, App, auth.ts
+   and @invoice-os/monitoring. */
+:root {
+  --bg-1: var(--background);
+  --bg-2: var(--card);
+  --fg-1: var(--ink);
+  --fg-2: var(--foreground);
+  --fg-3: var(--muted-foreground);
+  --line-1: var(--border);
+  --line-2: var(--input);
+  --action: var(--primary);
+  --action-tint: var(--primary-10);
+  --slate-900: var(--ink);
+  --status-red-bg: #fbeaea;
+  --status-red-text: var(--destructive);
+}
+
+.mono { font-family: var(--font-mono); letter-spacing: -0.015em; }
+.label { font-family: var(--font-sans); font-size: 10.5px; font-weight: var(--fw-semibold); color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.07em; }
+.eyebrow { display: inline-flex; align-items: center; gap: 12px; white-space: nowrap; font-family: var(--font-sans); font-size: var(--fs-eyebrow); font-weight: var(--fw-bold); line-height: 1; letter-spacing: var(--tracking-eyebrow); text-transform: uppercase; color: var(--text-eyebrow); }
+.eyebrow::before { content: ''; width: 24px; height: 1px; background: currentColor; flex: none; }
+.v2-btn { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 20px; border: 0; border-radius: var(--radius-btn); font-family: var(--font-sans); font-size: 14px; font-weight: var(--fw-medium); cursor: pointer; transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), filter var(--dur-fast) var(--ease-out); }
+.v2-btn-primary { background: var(--primary); color: var(--primary-foreground); }
+.v2-btn-primary:hover { filter: brightness(1.22); }
+a.lnk { color: var(--primary); transition: color var(--dur-fast) var(--ease-out); }
+a.lnk:hover { color: var(--teal); }
+em { font-style: normal; color: var(--primary); }
+::placeholder { color: var(--muted-foreground); opacity: 0.8; }

@@ -19,6 +19,10 @@ const FREE_MAIL_REFUSED = 'a business email address is required; personal email 
 const ALREADY_PROVISIONED = 'this account already has a workspace'
 // internal/gateway/gateway.go ServeHTTP: strings.ToLower(http.StatusText(403)).
 const FORBIDDEN = 'forbidden'
+// internal/gateway/register.go registrationAnswers: the workspace_name refusal.
+const NAME_REFUSED = 'workspace_name must be 1 to 200 characters'
+// internal/gateway/register.go maxAnswerNameChars.
+const NAME_MAX_CHARS = 200
 // internal/gateway/register.go VerifyHandler: the failure redirect's query.
 const VERIFY_FAILED = '?verify=failed'
 
@@ -54,6 +58,38 @@ test.describe('registration (API E2E, over the deployed gateway)', () => {
     expect(repeatMs, 'a repeat waits out the minimum').toBeGreaterThanOrEqual(REGISTER_MIN_MS)
     expect(repeat.status, 'a repeat must not reveal the address is taken').toBe(202)
     expect(repeat.body).toEqual(VERIFICATION_PENDING)
+  })
+
+  test('a body carrying the registration answers answers 202, a name at the limit included', async () => {
+    for (const workspace_name of [`Registration E2E ${crypto.randomUUID().slice(0, 8)}`, 'W'.repeat(NAME_MAX_CHARS)]) {
+      const res = await rawFetch('/auth/register', {
+        method: 'POST',
+        body: {
+          email: `reg-${crypto.randomUUID()}@example.com`,
+          password: crypto.randomUUID().slice(0, 12),
+          workspace_name,
+          display_name: 'Registration E2E',
+          kind: 'firm',
+        },
+      })
+      expect(res.status, `${workspace_name.length} characters: ${JSON.stringify(res.body)}`).toBe(202)
+      expect(res.body).toEqual(VERIFICATION_PENDING)
+    }
+  })
+
+  test('a workspace name one character over the limit is refused with 400', async () => {
+    const res = await rawFetch('/auth/register', {
+      method: 'POST',
+      body: {
+        email: `reg-${crypto.randomUUID()}@example.com`,
+        password: crypto.randomUUID().slice(0, 12),
+        workspace_name: 'W'.repeat(NAME_MAX_CHARS + 1),
+        display_name: 'Registration E2E',
+        kind: 'firm',
+      },
+    })
+    assertErrorEnvelope(res, 400, 'over-long workspace name')
+    expect((res.body as { error: string }).error).toBe(NAME_REFUSED)
   })
 
   test('an empty password is refused with 400', async () => {
@@ -97,8 +133,8 @@ test.describe('workspace provisioning (API E2E, over the deployed gateway)', () 
       expect(typeof body.tenant.id).toBe('string')
       expect(body.tenant.id).not.toBe('')
       expect(body.tenant.name).toBe(workspace.workspace_name)
-      // migrations/20260709153027_tenants_add_kind.sql: DEFAULT 'firm'.
-      expect(body.tenant.kind).toBe('firm')
+      // internal/tenancy/store.go ProvisionWorkspace: an absent kind is in_house.
+      expect(body.tenant.kind).toBe('in_house')
       expect(body.user).toEqual({ id: subject, role: 'admin' })
       tenantId = body.tenant.id
     })
@@ -121,7 +157,7 @@ test.describe('workspace provisioning (API E2E, over the deployed gateway)', () 
       const res = await rawFetch(ME, { headers: { Authorization: `Bearer ${tenantToken}` } })
       expect(res.status, JSON.stringify(res.body)).toBe(200)
       expect(res.body).toEqual({
-        tenant: { id: tenantId, name: workspace.workspace_name, kind: 'firm' },
+        tenant: { id: tenantId, name: workspace.workspace_name, kind: 'in_house' },
         user: { id: subject, role: 'admin', display_name: workspace.display_name, email: null },
       })
     })

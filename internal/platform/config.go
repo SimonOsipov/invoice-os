@@ -23,6 +23,7 @@ type Config struct {
 	Port              int           // HTTP listen port
 	LogLevel          string        // debug, info, warn, error
 	SentryDSN         string        // empty disables Sentry
+	SentryTestEvent   bool          // send one test event at boot; only the exact value "true"
 	ShutdownTimeout   time.Duration // graceful-shutdown grace period
 }
 
@@ -51,6 +52,7 @@ func LoadConfig(service string) (Config, error) {
 		Port:              port,
 		LogLevel:          envString("LOG_LEVEL", "info"),
 		SentryDSN:         envString("SENTRY_DSN", ""),
+		SentryTestEvent:   os.Getenv("SENTRY_TEST_EVENT") == "true",
 		ShutdownTimeout:   shutdown,
 	}, nil
 }

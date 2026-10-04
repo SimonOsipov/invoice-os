@@ -297,9 +297,13 @@ query, so no other GoTrue route (`/recover`, `/otp`, `/admin/*`, `/logout` with 
 scope, or `/token` with any other grant) is reachable from outside.
 
 **The flow:**
-1. The client posts `{"email","password"}` to `POST /auth/register` on the gateway. Unless
-   the address is at a free-mail domain (400, GoTrue not called), the gateway posts only
-   those two fields to GoTrue `/signup`. GoTrue creates an unconfirmed user and
+1. The client posts `{"email","password"}` to `POST /auth/register` on the gateway. The body
+   may also carry `workspace_name`, `display_name` and `kind?`. When any of them is present,
+   the gateway validates them with the tenancy rules (trimmed, 1 to 200 characters, no NUL,
+   `kind` `firm` or `in_house`) and posts them to GoTrue `/signup` as
+   `data.registration`; GoTrue stores them as `user_metadata.registration`. Without them the
+   gateway posts only `{"email","password"}`. A free-mail address answers 400 first, and
+   GoTrue is not called. GoTrue creates an unconfirmed user and
    mails a confirmation link through Resend. Every answer except a 400 arrives no earlier
    than `AUTH_REGISTER_MIN_RESPONSE` after the request reached the handler, so a new address
    and a known one take the same time while GoTrue answers faster than that (see Ceilings).
@@ -317,7 +321,7 @@ scope, or `/token` with any other grant) is reachable from outside.
    on this one method and path only. Tenancy creates the tenant and its first active admin
    in one transaction through `public.provision_workspace`
    ([migrations.md](./migrations.md) §1) and answers 201 `{tenant:{id,name,kind}, user:{id,role}}`. An absent
-   `kind` stores `firm`, the column default. `provision_workspace` refuses an identity that
+   `kind` stores `in_house`. `provision_workspace` refuses an identity that
    already holds any membership, in any workspace and in any status (unique violation,
    constraint `one_workspace_per_identity`; the gateway answers 409), and takes a
    per-identity advisory lock so two concurrent calls cannot both pass. The same
@@ -325,7 +329,7 @@ scope, or `/token` with any other grant) is reachable from outside.
 6. After every 201 the caller holds exactly one active membership, so the next token (a
    refresh grant or a new sign-in) carries `app_metadata.tenant_id`.
 
-**`POST /auth/register`**, outside `/api/`, no verifier, no CORS wrap, in every build:
+**`POST /auth/register`**, outside `/api/`, no verifier, in every build. It is CORS-wrapped, with an `OPTIONS /auth/register` preflight route:
 
 | Outcome | Answer |
 |---|---|
@@ -334,12 +338,18 @@ scope, or `/token` with any other grant) is reachable from outside.
 | GoTrue `over_email_send_rate_limit` (an unconfirmed repeat within 60 s, or the instance mail cap) | the same 202, logged at WARN |
 | GoTrue 5xx whose `code` is SQLSTATE `23505` (the loser of two concurrent signups for one address) | the same 202, logged at WARN |
 | a malformed body, or an empty email or password | 400 `{"error"}` |
+| an answer field is present but `workspace_name` or `display_name` is missing, blank, over 200 characters or holds a NUL byte, or `kind` (even `""`) is not `firm` or `in_house` | 400 with the tenancy wording (`workspace_name must be 1 to 200 characters`, `workspace_name must not contain a NUL byte`, `kind must be "firm" or "in_house"`, and the `display_name` equivalents); GoTrue is not called |
 | an address at a listed free-mail domain or its subdomain | 400 `{"error":"a business email address is required; personal email providers are not accepted"}`; GoTrue is not called |
 | GoTrue `validation_failed`, `weak_password`, `email_address_invalid` | 400 with GoTrue's `msg` |
 | GoTrue `signup_disabled` | 503 `registration is closed` |
 | any other GoTrue 429 | 429 `too many requests` |
 | GoTrue unreachable, or any other answer | 502 `registration is unavailable`, logged |
 | `AUTH_SITE_URL` unset | 503 `registration is not configured` |
+
+A preflight (an OPTIONS with an `Origin`) is answered by CORS; any other non-POST, including an
+OPTIONS without an `Origin`, answers 405 `method not allowed` with `Allow: POST` at once, before the minimum
+wait and without a GoTrue call. Guarded by `cmd/gateway/registration_routes_test.go`
+`TestRegisterOptionsWithoutOriginIsNotARegistration`.
 
 The four 202 rows answer identically, so the response never tells whether an address
 already has an account. The answer never carries the user id or any GoTrue field except
@@ -374,7 +384,7 @@ would otherwise consume the single-use token.
 
 **`POST /api/tenancy/v1/workspaces`:** 201 with `{tenant:{id,name,kind}, user:{id,role}}`;
 400 for a malformed body, a name outside 1–200 characters, or a `kind` other than `firm` or
-`in_house`; 401 for no caller or a subject that is not a UUID; 409 `this account already has a workspace` when the token
+`in_house` (an absent `kind` is valid and stores `in_house`); 401 for no caller or a subject that is not a UUID; 409 `this account already has a workspace` when the token
 already carries a tenant, when the caller already provisioned one, or when the caller holds
 any membership in any workspace in any status; 500
 otherwise. The tenant id is a UUIDv5 of the caller's subject; the membership guard in
@@ -405,6 +415,11 @@ otherwise. The tenant id is a UUIDv5 of the caller's subject; the membership gua
   (see Revocation and Cutting an account off). Its tokens never reach anyone.
 
 **Accepted risks of a link that verifies on GET:**
+- *First registrant's answers.* GoTrue does not update an unconfirmed user on a repeat signup,
+  so the answers (`user_metadata.registration`) of the **first** registrant stay, whoever
+  confirms. A victim who registers after an attacker provisions the attacker's workspace
+  name and kind. This adds no exposure beyond the hijack below, which already hands over the
+  account.
 - *Pre-account hijack.* GoTrue does not update an existing unconfirmed user on a repeat
   signup; it re-sends the confirmation mail for the **first** registrant's password. An
   attacker who registers `victim@corp` first causes a mail to the victim. If the victim then
@@ -434,7 +449,7 @@ hand-off is the app by default and a console when the visitor came from one (Con
 2. The app goes to `<landing>/?state=<s>[&signin=<outcome>]`: from the front-door redirect,
    from the start bounce (step 3) with `signin=ready`, and from a failed hand-off (step 7).
    A console adds `console=ops` or `console=support`. Landing keeps the state and the console
-   target in memory only and strips `state`, `signin` and `console` at boot.
+   target in memory only and strips the params it read at boot.
 3. A visitor who opened landing directly has no state. The modal then shows "Continue with
    email", which goes to `<app>?auth=start`, or to the held console's `?auth=start`. The app
    or console ensures a state and returns to landing with `signin=ready`, which opens the
@@ -450,7 +465,17 @@ hand-off is the app by default and a console when the visitor came from one (Con
    `handoff: true`, the refresh token (`refresh_token`) and `received_at` (epoch ms): the
    local time the exchange was sent, backdated by `HandoffTTL` (60 s) because the token may
    have waited that long in the store. A tab with no live state makes no exchange call and
-   goes to step 7.
+   goes to step 7. When `/me` answers 403 and the token's `user_metadata.registration`
+   holds both names (and a `kind` that is absent, `firm` or `in_house`), the app posts them to
+   `POST /api/tenancy/v1/workspaces` with the same token, silently and without a
+   confirmation screen. After a 201, or a 409 (the identity already holds a membership), it
+   posts the exchange's refresh token to `POST /auth/refresh` and calls `/me` with the new
+   access token. The session then holds the refreshed access and refresh tokens, and
+   `received_at` is the local time of the refresh, not backdated. One 15 s timeout covers the
+   whole chain. Without answers the 403 stands. A provisioning 400 or 5xx, a failed refresh or an
+   exchange without a refresh token ends in step 7 as `signin=failed`. An account whose
+   workspace an operator deleted re-provisions at its next sign-in (accepted; revisit when
+   workspace deletion ships).
 7. On any failure the app returns to landing with `signin=no-workspace` (the `/me` call
    answered 403) or `signin=failed` (anything else), carrying the state `ensureSignInState`
    returns: a newly minted one, because step 6 removed the old. Landing opens
@@ -471,7 +496,7 @@ persona until AUTH-15. A stored record without the name keeps a blank card: rene
 The access token travels only in the exchange and refresh answers and the `Authorization`
 header; the refresh token travels only in the exchange answer, the refresh request and
 answer, and the sign-out request (see Revocation). Landing never holds either. Landing renders the form only when `VITE_GATEWAY_URL` and `VITE_APP_URL` are set,
-and otherwise shows the persona list alone. A hand-off to a console also needs landing's
+and otherwise shows the persona list alone. The create-account entry also needs `VITE_REGISTRATION_OPEN=true`: `reconcile-urls` writes it on every PR fork, and production leaves it unset until registration U3. A hand-off to a console also needs landing's
 `VITE_OPS_URL` or `VITE_SUPPORT_URL`; without it landing does not navigate. The app ignores `?handoff=` when its
 `VITE_GATEWAY_URL` is unset.
 
@@ -1117,9 +1142,8 @@ redirects to the landing page". **The first console that reads real data must ma
 fail closed when `VITE_LANDING_URL` is unset**, and must check the staff claim on the server.
 
 **CORS.** The gateway's one origin list wraps `/api/`, `/auth/sign-in`, `/auth/exchange`,
-`/auth/refresh` and `/auth/sign-out`, so console U2 lets browser JavaScript on the two console
-origins call all of them, not only exchange, refresh and sign-out. `/auth/register` and
-`/auth/verify` are not wrapped. Every `/api/` call still needs a verified bearer, the session check and RLS; the
+`/auth/refresh`, `/auth/sign-out` and `/auth/register`, so console U2 lets browser JavaScript on the two console
+origins call all of them, not only exchange, refresh and sign-out. `/auth/verify` is not wrapped. Every `/api/` call still needs a verified bearer, the session check and RLS; the
 console origins serve only our own bundle, and the same token works from `curl`.
 
 Guarded by the package's `boot.test.ts`, `StaffGate.dom.test.tsx`, `signOut.test.ts`,
@@ -1147,7 +1171,7 @@ E=6c864094-6a06-452f-8495-be77d8a94fe7
 |---|---|---|
 | U1 | any time after merge | gateway `AUTH_SITE_URL` |
 | U2 | any time after merge | auth `GOTRUE_MAILER_URLPATHS_CONFIRMATION` |
-| U3 | when registration opens: after AUTH-04 and AUTH-16 merge | auth `GOTRUE_DISABLE_SIGNUP=false` |
+| U3 | when registration opens: after AUTH-04 and AUTH-16 merge | auth `GOTRUE_DISABLE_SIGNUP=false`, landing `VITE_REGISTRATION_OPEN=true` |
 | U4 | after U1–U3 have deployed | none: an end-to-end check by hand; step 5 may raise `AUTH_REGISTER_MIN_RESPONSE` |
 
 Until U1 deploys, production's `POST /auth/register` and `GET /auth/verify` answer 503
@@ -1183,9 +1207,19 @@ railway variables -p "$P" -e "$E" -s auth --json | jq -r '.GOTRUE_DISABLE_SIGNUP
 # expected: false
 ```
 
-To close registration again, set the value back to `true` the same way and redeploy `auth`.
+Show the entry on the landing. `VITE_REGISTRATION_OPEN` is a build argument, so the landing
+needs a deploy to take it:
 
-**Deploy the writes.** The next push run on `main` deploys `gateway` and `auth` with the new
+```
+railway variables --set 'VITE_REGISTRATION_OPEN=true' -p "$P" -e "$E" -s landing --skip-deploys
+railway variables -p "$P" -e "$E" -s landing --json | jq -r '.VITE_REGISTRATION_OPEN'
+# expected: true
+```
+
+To close registration again, set `GOTRUE_DISABLE_SIGNUP` back to `true` the same way and
+redeploy `auth`, and unset `VITE_REGISTRATION_OPEN` on `landing` and redeploy it.
+
+**Deploy the writes.** The next push run on `main` deploys `gateway`, `auth` and `landing` with the new
 values; a push that changes only `docs/**` or `*.md` starts no run (`paths-ignore`). To
 deploy sooner, re-run the latest push `dev-env` run as a whole run
 (`gh run rerun <id>`, not `--failed`); if that re-run gates on stale containers, push an
@@ -1284,7 +1318,7 @@ code, a whole-run re-run of the latest push `dev-env` run, or an empty commit.
    curl -sS -X POST https://api.ascomply.com/auth/exchange -H 'Content-Type: application/json' -d "{\"code\":\"x\",\"state\":\"$S\"}"
    ```
    It answers 400 `{"error":"invalid or expired code"}`.
-4. On `https://www.ascomply.com`, "Explore the platform" shows "Continue with email" above
+4. On `https://www.ascomply.com`, "Platform login" shows "Continue with email" above
    the persona list.
 5. An unknown refresh token is refused:
    ```

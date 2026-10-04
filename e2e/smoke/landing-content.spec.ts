@@ -2,8 +2,8 @@ import { expect, test, type Page } from '@playwright/test'
 import { resolveTarget } from '../targets'
 import { seedConsent } from './landingConsent'
 
-// The landing page's content contract (TEST-01-07): F-6 audience strip, F-7 how-it-works
-// steps, and F-5's live-validation preview. Named for the capability the three share
+// The landing page's content contract (TEST-01-07): F-6 audience strip and F-5's
+// live-validation preview. Named for the capability they share
 // (docs/e2e-convention.md's "organize by capability, not by date"), alongside
 // landing-nav/landing-demo/landing-privacy/landing-consent.
 //
@@ -15,16 +15,16 @@ import { seedConsent } from './landingConsent'
 //
 // TARGET SURFACE: `landing` is a static marketing surface (docs/e2e-convention.md → "Target
 // surface"), so these assertions pin what the deployed build actually SERVES, not a backend
-// contract — there is no API behind any of F-5/F-6/F-7.
+// contract — there is no API behind F-5 or F-6.
 //
-// WHY THIS IS E2E AND NOT UNIT: F-6 and F-7 carry `unit_applicable = 0` in the system map — a
-// unit test on either raises no coverage, because the unit slot is not in their denominator.
-// Only a Playwright citation can close them. F-5 needs both dimensions; its unit half lives in
+// WHY THIS IS E2E AND NOT UNIT: F-6 carries `unit_applicable = 0` in the system map — a
+// unit test on it raises no coverage, because the unit slot is not in its denominator.
+// Only a Playwright citation can close it. F-5 needs both dimensions; its unit half lives in
 // Hero.validationPreview.dom.test.tsx (TEST-01-03).
 //
 // RETYPED, NOT IMPORTED — the opposite of the unit tests' convention, and deliberately so.
 // Every expected value below is retyped from its source rather than imported: importing
-// TrustStrip.tsx#AUDIENCES / data.tsx#STEPS / data.tsx#HERO_CHECKS into e2e/ would make these
+// AudienceStrip.tsx#AUDIENCES / data.tsx#HERO_CHECKS into e2e/ would make these
 // assertions agree with themselves no matter what the deployed build actually serves — the
 // same reasoning landing-demo.spec.ts already applies at :41-46. Unit tests do the opposite
 // (assert against the imported constant) because there the risk runs the other way: a retyped
@@ -36,36 +36,22 @@ import { seedConsent } from './landingConsent'
 //
 // LOCAL GREEN IS NOT EXPECTED YET. `[data-strip]` / `[data-tally]` (TEST-01-01) exist in this
 // branch's source but are not deployed anywhere. This spec's first real green run is this
-// story's own PR deploy gate, once that PR has deployed. `#how`'s hook (`id="how"`) already
-// ships in production, which is why its test is expected to pass against a production target
-// today while the other two are not.
+// story's own PR deploy gate, once that PR has deployed.
 
 const LANDING_URL = resolveTarget('LANDING_URL')
 
-// F-6, retyped from frontend/landing/src/components/TrustStrip.tsx#AUDIENCES, in render order.
+// F-6, retyped from frontend/landing/src/components/AudienceStrip.tsx#AUDIENCES, in render order.
 const AUDIENCE_SEGMENTS = [
-  'Medium taxpayers',
+  'Finance teams',
   'Accounting firms',
-  'ERP consultants',
-  'Distributors',
-  'Manufacturers',
-  'Formal SMEs',
+  'Growing businesses',
   'Fintech',
-  'CRMs',
+  'Technology partners',
 ] as const
 
 // The accounting-system / data-format wordmarks the map drifted to on 2026-09-05 (this
 // story's Objective) — the criterion's own negative half, and the half that actually broke.
 const FORBIDDEN_ACCOUNTING_TERMS = ['SAP', 'NetSuite', 'Sage', 'QuickBooks', 'Zoho', 'CSV/XLSX'] as const
-
-// F-7, retyped from frontend/landing/src/data.tsx#STEPS, in order.
-const STEP_TITLES = ['Connect or import', 'Validate against MBS rules — and your own', 'Approve, archive & transmit'] as const
-const STEP_NUMBERS = ['01', '02', '03'] as const
-const STEP_POINTS: ReadonlyArray<readonly string[]> = [
-  ['REST API & webhooks', 'CSV / XLSX / PDF import', 'ERP connectors'],
-  ['Golden MBS rule pack', 'Your own company rules', 'Inline fix suggestions'],
-  ['Approval workflow', 'PDF + JSON/XML/UBL export', 'Immutable audit log'],
-]
 
 type CheckTag = 'PASS' | 'WARN' | 'FAIL'
 
@@ -79,7 +65,7 @@ const HERO_CHECK_ROWS: ReadonlyArray<{ label: string; tag: CheckTag }> = [
   { label: 'Line totals reconcile to header', tag: 'FAIL' },
 ]
 
-// Retyped from Hero.tsx's two data-tally spans (:172, :176). Both are hardcoded literals,
+// Retyped from Hero.tsx's two data-tally spans. Both are hardcoded literals,
 // not derived from HERO_CHECKS at render time — the fact the invariant below turns on.
 const TALLY_FAILURES_TEXT = '1 ERROR · 1 WARNING'
 const TALLY_PASSED_TEXT = '14 / 16 CHECKS PASSED'
@@ -123,8 +109,26 @@ test('landing content: the audience strip names buyer segments, never an account
   const strip = page.locator('[data-strip="audience"]')
   await expect(strip, 'the audience strip did not resolve to exactly one element').toHaveCount(1)
 
+  const band = page.locator('section.band-sage').filter({ has: strip })
+  await expect(band, 'the strip is not inside exactly one section.band-sage').toHaveCount(1)
+  const bandBg = await band.evaluate((el) => getComputedStyle(el).backgroundColor)
+  const sageBg = await page.evaluate(() => {
+    const probe = document.createElement('div')
+    probe.style.background = 'var(--sage)'
+    document.body.appendChild(probe)
+    const bg = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return bg
+  })
+  expect(sageBg, 'control: the --sage probe resolved to a colour').not.toBe('rgba(0, 0, 0, 0)')
+  expect(bandBg, 'the band background is not var(--sage)').toBe(sageBg)
+
+  const label = strip.locator(':scope > div').first()
+  await expect(label, 'the strip label is missing').toHaveCount(1)
+  await expect(label).toHaveText('Built for the way your business works')
+
   const segments = strip.locator('span')
-  await expect(segments, 'the strip does not hold exactly 8 segments').toHaveCount(AUDIENCE_SEGMENTS.length)
+  await expect(segments, 'the strip does not hold exactly 5 segments').toHaveCount(AUDIENCE_SEGMENTS.length)
   await expect(segments).toHaveText([...AUDIENCE_SEGMENTS])
 
   const stripText = (await strip.textContent()) ?? ''
@@ -136,33 +140,6 @@ test('landing content: the audience strip names buyer segments, never an account
   )
   for (const term of FORBIDDEN_ACCOUNTING_TERMS) {
     expect(stripText, `the audience strip names the accounting system/format "${term}"`).not.toContain(term)
-  }
-
-  expectNoConsoleErrors(sinks)
-})
-
-// E2 — F-7. Three ordered, numbered steps, each naming its own capabilities.
-test('landing content: How it works renders three ordered, numbered steps', async ({ page }) => {
-  const sinks = await openLanding(page)
-
-  const how = page.locator('#how')
-  await expect(how, '#how did not resolve to exactly one element').toHaveCount(1)
-
-  const headings = how.locator('h3')
-  await expect(headings, '#how does not hold exactly 3 h3 headings').toHaveCount(STEP_TITLES.length)
-  await expect(headings).toHaveText([...STEP_TITLES])
-
-  const numbers = how.locator('.mono')
-  await expect(numbers, '#how does not hold exactly 3 step numbers').toHaveCount(STEP_NUMBERS.length)
-  await expect(numbers).toHaveText([...STEP_NUMBERS])
-
-  const cells = how.locator('.ios-grid > div')
-  await expect(cells, '#how does not hold exactly 3 grid cells').toHaveCount(STEP_POINTS.length)
-  for (let i = 0; i < STEP_POINTS.length; i++) {
-    const cellText = (await cells.nth(i).textContent()) ?? ''
-    for (const point of STEP_POINTS[i]) {
-      expect(cellText, `step ${i + 1}'s cell is missing capability "${point}"`).toContain(point)
-    }
   }
 
   expectNoConsoleErrors(sinks)
@@ -245,28 +222,28 @@ test('landing content: the live-validation preview lists every check and its tal
 // E4 — the retired positioning copy. None of these four strings carries a data-* hook, so the
 // selectors are structural; App.landingCopy.dom.test.tsx asserts the same four on the SSR tree,
 // which is what keeps a bad selector here from costing a fleet rebuild to discover.
-const HERO_SOLUTION_TEXT =
-  "ASComply Africa is the solution between your business and Nigeria's Merchant Buyer Solution. Create, validate, approve, archive, and transmit compliant invoices — through the dashboard or the API."
-const MODULES_HEADING_TEXT = 'ASComply is your invoice compliance solution.'
-const MODULES_SOLUTION_TEXT =
+const HERO_LEAD_TEXT = 'Bring invoices, approvals and changing country requirements into one connected solution. Available for Nigeria.'
+const SOLUTION_HEADING_TEXT = 'ASComply is your invoice compliance solution.'
+const SOLUTION_BODY_TEXT =
   'We help your team validate invoices before they are submitted, manage approvals internally, store audit-ready records and submit them to the regulatory bodies.'
-const FOOTER_TAGLINE_TEXT = 'E-invoicing compliance solution for African businesses.'
+// Retyped from Footer.tsx's tagline (V459-483).
+const FOOTER_TAGLINE_TEXT = 'Clarity for every invoice. Confidence for your business.'
 
 test('landing content: the retired positioning copy is replaced everywhere it shipped', async ({ page }) => {
   const sinks = await openLanding(page)
 
   const heroParagraph = page.locator('#top p')
   await expect(heroParagraph, '#top does not hold exactly one hero paragraph').toHaveCount(1)
-  await expect(heroParagraph).toHaveText(HERO_SOLUTION_TEXT)
+  await expect(heroParagraph).toHaveText(HERO_LEAD_TEXT)
 
-  const modulesHeading = page.locator('#modules h2')
-  await expect(modulesHeading, '#modules does not hold exactly one heading').toHaveCount(1)
-  await expect(modulesHeading).toHaveText(MODULES_HEADING_TEXT)
+  const solutionHeading = page.locator('#solution h2')
+  await expect(solutionHeading, '#solution does not hold exactly one heading').toHaveCount(1)
+  await expect(solutionHeading).toHaveText(SOLUTION_HEADING_TEXT)
 
-  // .mod-body excluded: those are the four module-card paragraphs, not the section intro.
-  const modulesIntro = page.locator('#modules p:not(.mod-body)')
-  await expect(modulesIntro, '#modules does not hold exactly two intro paragraphs').toHaveCount(2)
-  await expect(modulesIntro.nth(1)).toHaveText(MODULES_SOLUTION_TEXT)
+  // .mod-body excluded: those are the module-card paragraphs, not the section intro.
+  const solutionIntro = page.locator('#solution p:not(.mod-body)')
+  await expect(solutionIntro, '#solution does not hold exactly two intro paragraphs').toHaveCount(2)
+  await expect(solutionIntro.nth(1)).toHaveText(SOLUTION_BODY_TEXT)
 
   const footerTagline = page.locator('footer p')
   await expect(footerTagline, 'footer does not hold exactly one tagline paragraph').toHaveCount(1)

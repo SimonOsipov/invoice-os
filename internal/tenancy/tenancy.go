@@ -280,7 +280,7 @@ func SetMembershipStatusHandler(set MembershipStatusSetter, log *slog.Logger) ht
 }
 
 // ProvisionInput is the POST /v1/workspaces body after trimming and validation.
-// An empty Kind lets the database default apply.
+// An empty Kind is stored as in_house (Store.ProvisionWorkspace).
 type ProvisionInput struct {
 	WorkspaceName string
 	DisplayName   string
@@ -298,7 +298,7 @@ const maxNameChars = 200
 const maxProvisionBodyBytes = 4 << 10
 
 // provisionRequest is the POST /v1/workspaces wire body. Kind is a pointer so an
-// absent kind lets the database default apply.
+// absent kind is distinct from an invalid one.
 type provisionRequest struct {
 	WorkspaceName string  `json:"workspace_name"`
 	DisplayName   string  `json:"display_name"`

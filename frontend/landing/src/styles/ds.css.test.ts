@@ -1,0 +1,395 @@
+// The DS primitives' stylesheet values. Source scans: jsdom has no cascade and no page mounts a primitive yet.
+// Every expected token is also checked against the vendored v2 tokens, so the spec cannot name a token v2 lacks.
+// Literals (brightness steps, 0.45, 2px ring) are the DS Button.jsx / README values, not implementation text.
+/// <reference types="node" />
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
+import {
+  LANDING_SRC,
+  customPropNames,
+  declarations,
+  parseRules,
+  readV2Css,
+  selectorParts,
+  stripSource,
+} from '../cssScan.test.util'
+
+const DS_PATH = join(LANDING_SRC, 'styles', 'ds.css')
+
+function readDs(): string {
+  expect(existsSync(DS_PATH), `expected ${DS_PATH} to exist (RESKIN-01-05 adds it)`).toBe(true)
+  return stripSource('ds.css', readFileSync(DS_PATH, 'utf8'))
+}
+
+const norm = (v: string) => v.replace(/\s+/g, ' ').trim()
+
+/** Like `valueOf`, for the selector parts that start with `prefix`. */
+function valueOfPrefix(css: string, prefix: string, ...props: string[]): string | undefined {
+  const values = parseRules(css)
+    .filter((r) => selectorParts(r).some((s) => s.startsWith(prefix)))
+    .flatMap((r) => declarations(r.body))
+    .filter((d) => props.includes(d.prop))
+    .map((d) => norm(d.value))
+  return values.at(-1)
+}
+
+/** Last declared value of `props` across the rules whose selector list holds `selector` exactly. */
+function valueOf(css: string, selector: string, ...props: string[]): string | undefined {
+  const values = parseRules(css)
+    .filter((r) => selectorParts(r).includes(selector))
+    .flatMap((r) => declarations(r.body))
+    .filter((d) => props.includes(d.prop))
+    .map((d) => norm(d.value))
+  return values.at(-1)
+}
+
+function expectDecl(css: string, selector: string, props: string[], want: string) {
+  expect(valueOf(css, selector, ...props), `${selector} { ${props[0]} }`).toBe(want)
+}
+
+const v2Tokens = () => new Set(Object.values(readV2Css()).flatMap(customPropNames))
+
+describe('ds.css values', () => {
+  it('DSC-01 buttons use the 7px radius and the DS hovers', () => {
+    const css = readDs()
+    expectDecl(css, '.ds-btn', ['border-radius'], 'var(--radius-btn)')
+    const hovers: [string, string[], string][] = [
+      ['primary', ['filter'], 'brightness(1.18)'],
+      ['accent', ['filter'], 'brightness(1.06)'],
+      ['ghostDark', ['filter'], 'brightness(1.12)'],
+      ['outline', ['background', 'background-color'], 'var(--muted)'],
+      ['text', ['color'], 'var(--teal)'],
+    ]
+    expect(hovers).toHaveLength(5)
+    for (const [variant, props, want] of hovers) {
+      expect(valueOfPrefix(css, `.ds-btn--${variant}:hover`, ...props), `.ds-btn--${variant}:hover { ${props[0]} }`).toBe(want)
+    }
+    expectDecl(css, '.ds-btn:disabled', ['opacity'], '0.45')
+    const tokens = v2Tokens()
+    for (const name of ['--radius-btn', '--muted', '--teal']) expect(tokens.has(name), `v2 declares ${name}`).toBe(true)
+  })
+
+  it('DSC-12 a disabled link looks disabled and takes no hover', () => {
+    const css = readDs()
+    const off = parseRules(css).flatMap((r) => (selectorParts(r).includes('.ds-btn--disabled') ? declarations(r.body) : []))
+    expect(off.length, '.ds-btn--disabled rule exists').toBeGreaterThan(0)
+    expectDecl(css, '.ds-btn--disabled', ['opacity'], valueOf(css, '.ds-btn:disabled', 'opacity') as string)
+    expectDecl(css, '.ds-btn--disabled', ['opacity'], '0.45')
+    expectDecl(css, '.ds-btn--disabled', ['cursor'], valueOf(css, '.ds-btn:disabled', 'cursor') as string)
+    expectDecl(css, '.ds-btn--disabled', ['cursor'], 'not-allowed')
+
+    const hovers = parseRules(css).flatMap((r) => selectorParts(r)).filter((s) => /^\.ds-btn--\w+:hover/.test(s))
+    expect(hovers.length, 'one hover selector per variant').toBeGreaterThanOrEqual(5)
+    expect(hovers.filter((s) => !s.includes(':not(:disabled)') || !s.includes(':not(.ds-btn--disabled)'))).toEqual([])
+  })
+
+  it('DSC-02 badges and tags use the 4px radius', () => {
+    const css = readDs()
+    expectDecl(css, '.ds-badge', ['border-radius'], 'var(--radius-sm)')
+    expectDecl(css, '.ds-tag', ['border-radius'], 'var(--radius-sm)')
+    expect(v2Tokens().has('--radius-sm')).toBe(true)
+  })
+
+  it('DSC-03 only the badge dot and the play circle are pills', () => {
+    const PILL = /999|--radius-pill|50%/
+    const OWNER = /\.(?:ds-badge-dot|ds-btn-play)$/
+    const pillSelectors = (css: string) =>
+      parseRules(css).flatMap((r) =>
+        declarations(r.body).some((d) => /^border(?:-[a-z]+){0,2}-radius$/.test(d.prop) && PILL.test(d.value))
+          ? selectorParts(r)
+          : [],
+      )
+
+    const stray = (css: string) => pillSelectors(css).filter((s) => !OWNER.test(s))
+    expect(stray('.ds-btn { border-radius: 9999px; }'), 'planted pill on .ds-btn').toEqual(['.ds-btn'])
+
+    const owners = pillSelectors(readDs())
+    expect(stray(readDs())).toEqual([])
+    expect(owners.some((s) => s.endsWith('.ds-badge-dot')), 'badge dot is a pill').toBe(true)
+    expect(owners.some((s) => s.endsWith('.ds-btn-play')), 'play circle is a pill').toBe(true)
+  })
+
+  it('DSC-05 every colour in ds.css is a v2 token', () => {
+    const NAMED = /\b(?:white|black|red|green|blue|gray|grey|orange|yellow|purple|pink|brown|silver|navy|maroon|olive|lime|aqua|cyan|magenta|gold|ivory|beige|tan|salmon|coral|crimson)\b/gi
+    const LITERAL = /#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?|oklch|oklab|lch|lab|hwb)\(/gi
+    const values = (css: string) => parseRules(css).flatMap((r) => declarations(r.body).map((d) => d.value))
+    const literals = (css: string) =>
+      values(css).flatMap((v) => [...v.matchAll(LITERAL)].concat([...v.replace(/var\([^)]*\)/g, '').matchAll(NAMED)]))
+
+    expect(literals('.x { color: #FFF; background: RGBA(0,0,0,.1) }')).toHaveLength(2)
+    expect(literals('.x { border: 1px solid white; color: var(--teal) }')).toHaveLength(1)
+
+    const css = readDs()
+    const tokenised = values(css).filter((v) => v.includes('var(--'))
+    expect(tokenised.length, 'ds.css declares at least 10 var(--…) values').toBeGreaterThanOrEqual(10)
+    expect(literals(css).map((m) => m[0])).toEqual([])
+  })
+
+  it('DSC-06 focus-visible draws the sibling ring', () => {
+    const css = readDs()
+    expectDecl(css, '.ds-btn:focus-visible', ['outline'], '2px solid var(--ring)')
+    expectDecl(css, '.ds-btn:focus-visible', ['outline-offset'], '2px')
+    expect(v2Tokens().has('--ring')).toBe(true)
+  })
+
+  it('DSC-10 the Logo mark has the 6px corner', () => {
+    expectDecl(readDs(), '.ds-logo-mark', ['border-radius'], 'var(--radius-md)')
+    expect(v2Tokens().has('--radius-md')).toBe(true)
+  })
+
+  it('DSC-07 the tab panel is sage with 10px bottom corners only', () => {
+    const css = readDs()
+    expectDecl(css, '.ds-tabs-panel', ['background'], 'var(--sage-panel)')
+    expectDecl(css, '.ds-tabs-panel', ['border-radius'], '0 0 var(--radius-lg) var(--radius-lg)')
+    expectDecl(css, '.ds-tabs-panel', ['padding'], '32px')
+    expectDecl(css, '.ds-tabs-list', ['display'], 'flex')
+    const tokens = v2Tokens()
+    for (const name of ['--sage-panel', '--radius-lg']) expect(tokens.has(name), `v2 declares ${name}`).toBe(true)
+  })
+
+  it('DSC-08 the selected tab is underlined and the step is mono', () => {
+    const css = readDs()
+    expectDecl(css, '.ds-tab', ['height'], '58px')
+    expectDecl(css, '.ds-tab', ['border-bottom'], '2px solid var(--tab-border)')
+    expectDecl(css, '.ds-tab', ['flex'], '1')
+    expectDecl(css, '.ds-tab', ['gap'], '12px')
+    expectDecl(css, '.ds-tab', ['padding'], '0 16px')
+    expectDecl(css, '.ds-tab', ['color'], 'var(--muted-foreground)')
+    expectDecl(css, '.ds-tab', ['display'], 'flex')
+    expectDecl(css, '.ds-tab', ['align-items'], 'center')
+    expectDecl(css, '.ds-tab', ['justify-content'], 'center')
+    expectDecl(css, '.ds-tab', ['background'], 'transparent')
+    expectDecl(css, '.ds-tab', ['border'], 'none')
+    expectDecl(css, '.ds-tab', ['cursor'], 'pointer')
+    expectDecl(css, '.ds-tab', ['font-family'], 'var(--font-sans)')
+    expectDecl(css, '.ds-tab', ['font-size'], 'var(--fs-ui)')
+    expectDecl(css, '.ds-tab', ['font-weight'], 'var(--fw-bold)')
+    expectDecl(css, '.ds-tab', ['transition'], 'background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out)')
+    const on = (...props: string[]) => valueOfPrefix(css, '.ds-tab[aria-selected', ...props)
+    expect(on('border-bottom-color'), 'selected tab underline').toBe('var(--tab-active-border)')
+    expect(on('background'), 'selected tab fill').toBe('var(--sage-panel)')
+    expect(on('color'), 'selected tab text').toBe('var(--tab-active-text)')
+    expectDecl(css, '.ds-tab-step', ['font-family'], 'var(--font-mono)')
+    expectDecl(css, '.ds-tab-step', ['font-size'], '12px')
+    expectDecl(css, '.ds-tab-step', ['opacity'], '0.8')
+    expectDecl(css, '.ds-tab-step', ['font-weight'], 'var(--fw-regular)')
+    expect(on('opacity'), 'selected step is full opacity').toBe('1')
+    const tokens = v2Tokens()
+    for (const name of ['--tab-border', '--tab-active-border', '--tab-active-text', '--font-mono', '--muted-foreground', '--font-sans', '--fs-ui', '--fw-bold', '--fw-regular', '--dur-fast', '--ease-out'])
+      expect(tokens.has(name), `v2 declares ${name}`).toBe(true)
+  })
+
+  it('DSC-09 the segmented group is sage with a border and the selected segment is primary at 4px', () => {
+    const css = readDs()
+    expectDecl(css, '.ds-seg', ['background'], 'var(--sage)')
+    expectDecl(css, '.ds-seg', ['border'], '1px solid var(--sage-card-border)')
+    expectDecl(css, '.ds-seg', ['border-radius'], 'var(--radius-md)')
+    expectDecl(css, '.ds-seg', ['display'], 'inline-flex')
+    expectDecl(css, '.ds-seg', ['gap'], '2px')
+    expectDecl(css, '.ds-seg', ['padding'], '4px')
+    expectDecl(css, '.ds-seg-btn', ['border-radius'], 'var(--radius-sm)')
+    expectDecl(css, '.ds-seg-btn', ['height'], '36px')
+    expectDecl(css, '.ds-seg-btn', ['padding'], '0 16px')
+    expectDecl(css, '.ds-seg-btn', ['color'], 'var(--ink)')
+    expectDecl(css, '.ds-seg-btn', ['background'], 'transparent')
+    expectDecl(css, '.ds-seg-btn', ['border'], 'none')
+    expectDecl(css, '.ds-seg-btn', ['cursor'], 'pointer')
+    expectDecl(css, '.ds-seg-btn', ['font-family'], 'var(--font-sans)')
+    expectDecl(css, '.ds-seg-btn', ['font-size'], 'var(--fs-btn-sm)')
+    expectDecl(css, '.ds-seg-btn', ['font-weight'], 'var(--fw-bold)')
+    expectDecl(css, '.ds-seg-btn', ['transition'], 'background var(--dur-fast) var(--ease-out)')
+    const on = (...props: string[]) => valueOfPrefix(css, '.ds-seg-btn[aria-selected', ...props)
+    expect(on('background'), 'selected segment fill').toBe('var(--primary)')
+    expect(on('color'), 'selected segment text').toBe('var(--primary-foreground)')
+    const tokens = v2Tokens()
+    for (const name of ['--sage', '--sage-card-border', '--radius-md', '--radius-sm', '--primary', '--primary-foreground', '--ink', '--font-sans', '--fs-btn-sm', '--fw-bold', '--dur-fast', '--ease-out'])
+      expect(tokens.has(name), `v2 declares ${name}`).toBe(true)
+  })
+
+  it('DSC-13 the tabs, segments and FAQ question draw the sibling focus ring', () => {
+    const css = readDs()
+    const selectors = ['.ds-tab:focus-visible', '.ds-seg-btn:focus-visible', '.ds-faq-btn:focus-visible']
+    expect(selectors).toHaveLength(3)
+    for (const sel of selectors) {
+      expectDecl(css, sel, ['outline'], '2px solid var(--ring)')
+      expectDecl(css, sel, ['outline-offset'], '2px')
+    }
+  })
+
+  it('DSC-15 the focusable tab panel draws the sibling focus ring', () => {
+    const css = readDs()
+    expectDecl(css, '.ds-tabs-panel:focus-visible', ['outline'], '2px solid var(--ring)')
+    expectDecl(css, '.ds-tabs-panel:focus-visible', ['outline-offset'], '2px')
+  })
+
+  it('DSC-14 the FAQ row is a bordered accordion with a 760px answer', () => {
+    const css = readDs()
+    expectDecl(css, '.ds-faq', ['border-bottom'], '1px solid var(--border)')
+    expectDecl(css, '.ds-faq-btn', ['display'], 'flex')
+    expectDecl(css, '.ds-faq-btn', ['justify-content'], 'space-between')
+    expectDecl(css, '.ds-faq-btn', ['gap'], '24px')
+    expectDecl(css, '.ds-faq-btn', ['width'], '100%')
+    expectDecl(css, '.ds-faq-btn', ['padding'], '20px 0')
+    expectDecl(css, '.ds-faq-btn', ['font-size'], '15px')
+    expectDecl(css, '.ds-faq-btn', ['color'], 'var(--ink)')
+    expectDecl(css, '.ds-faq-btn', ['align-items'], 'center')
+    expectDecl(css, '.ds-faq-btn', ['background'], 'transparent')
+    expectDecl(css, '.ds-faq-btn', ['border'], 'none')
+    expectDecl(css, '.ds-faq-btn', ['cursor'], 'pointer')
+    expectDecl(css, '.ds-faq-btn', ['text-align'], 'left')
+    expectDecl(css, '.ds-faq-btn', ['font-family'], 'var(--font-sans)')
+    expectDecl(css, '.ds-faq-btn', ['font-weight'], 'var(--fw-bold)')
+    expectDecl(css, '.ds-faq-btn', ['line-height'], 'var(--lh-snug)')
+    expectDecl(css, '.ds-faq-btn svg', ['color'], 'var(--muted-foreground)')
+    expectDecl(css, '.ds-faq-btn svg', ['flex'], 'none')
+    expectDecl(css, '.ds-faq-a', ['padding'], '0 0 22px')
+    expectDecl(css, '.ds-faq-a', ['max-width'], '760px')
+    expectDecl(css, '.ds-faq-a', ['color'], 'var(--text-copy)')
+    expectDecl(css, '.ds-faq-a', ['font-family'], 'var(--font-sans)')
+    expectDecl(css, '.ds-faq-a', ['font-size'], 'var(--fs-body-sm)')
+    expectDecl(css, '.ds-faq-a', ['line-height'], 'var(--lh-body)')
+    expect(valueOf(css, '.ds-faq-a', 'display'), 'an author display would override the hidden attribute on a closed answer').toBeUndefined()
+    const tokens = v2Tokens()
+    for (const name of ['--border', '--text-copy', '--lh-snug', '--lh-body', '--fs-body-sm', '--font-sans', '--fw-bold', '--ink', '--muted-foreground'])
+      expect(tokens.has(name), `v2 declares ${name}`).toBe(true)
+  })
+})
+
+type Specificity = [number, number, number]
+
+function dropWhere(selector: string): string {
+  for (let at = selector.indexOf(':where('); at !== -1; at = selector.indexOf(':where(')) {
+    let depth = 0
+    let end = at + ':where'.length
+    for (; end < selector.length; end++) {
+      if (selector[end] === '(') depth++
+      else if (selector[end] === ')' && --depth === 0) break
+    }
+    selector = selector.slice(0, at) + selector.slice(end + 1)
+  }
+  return selector
+}
+
+function specificity(selector: string): Specificity {
+  let [a, b, c] = [0, 0, 0]
+  let rest = dropWhere(selector.trim())
+  rest = rest.replace(/:(?:not|is|has)\(([^()]*)\)/g, (_m, arg: string) => {
+    const [x, y, z] = specificity(arg)
+    a += x
+    b += y
+    c += z
+    return ''
+  })
+  rest = rest.replace(/\[[^\]]*\]/g, () => (b++, ''))
+  rest = rest.replace(/#[\w-]+/g, () => (a++, ''))
+  rest = rest.replace(/::[\w-]+/g, () => (c++, ''))
+  rest = rest.replace(/:[\w-]+/g, () => (b++, ''))
+  rest = rest.replace(/\.[\w-]+/g, () => (b++, ''))
+  c += (rest.match(/(?:^|[\s>+~])[a-zA-Z][\w-]*/g) ?? []).length
+  return [a, b, c]
+}
+
+const beats = (x: Specificity, y: Specificity) => (x[0] - y[0] || x[1] - y[1] || x[2] - y[2]) > 0
+
+const HOVER_COLOUR: Record<string, string> = {
+  primary: 'var(--primary-foreground)',
+  accent: 'var(--accent-foreground)',
+  outline: 'var(--ink)',
+  ghostDark: 'var(--surface-foreground)',
+  text: 'var(--teal)',
+}
+
+/** One entry per enabled variant hover rule (disabled-link hovers belong to DSC-16) that misses its colour or fails to outrank `floor`; one per variant with no hover rule. */
+function hoverDefects(css: string, floor: Specificity): string[] {
+  const defects: string[] = []
+  for (const [variant, colour] of Object.entries(HOVER_COLOUR)) {
+    const hits = parseRules(css).flatMap((r) =>
+      selectorParts(r)
+        .filter((s) => s.includes(`.ds-btn--${variant}`) && s.includes(':hover') && !/\.ds-btn--disabled(?![\w-])/.test(s.replace(/:not\([^()]*\)/g, '')))
+        .map((s) => ({ s, colour: declarations(r.body).filter((d) => d.prop === 'color').map((d) => norm(d.value)).at(-1) })),
+    )
+    if (hits.length === 0) defects.push(`${variant}: no hover rule`)
+    for (const h of hits) {
+      if (h.colour !== colour) defects.push(`${variant}: ${h.s} declares color ${h.colour ?? 'nothing'}, want ${colour}`)
+      if (!beats(specificity(h.s), floor)) defects.push(`${variant}: ${h.s} does not outrank the v2 a:hover`)
+    }
+  }
+  return defects
+}
+
+describe('ds.css hover cascade', () => {
+  it('DSC-11 every button hover pins its colour above the v2 a:hover rule', () => {
+    const utilities = readV2Css()['utilities.css']
+    expect(utilities, 'v2 utilities.css is vendored').toBeDefined()
+    const rule = parseRules(utilities).find((r) => selectorParts(r).includes('a:hover'))
+    expect(rule, 'v2 utilities.css has an a:hover rule').toBeDefined()
+    const v2Hover = specificity('a:hover')
+    expect(v2Hover).toEqual([0, 1, 1])
+    expect(declarations((rule as { body: string }).body).find((d) => d.prop === 'color')?.value).toBe('var(--teal)')
+
+    const planted = [
+      '.ds-btn--primary:hover { filter: brightness(1.18); }',
+      ...Object.entries(HOVER_COLOUR)
+        .filter(([v]) => v !== 'primary')
+        .map(([v, c]) => `.ds-btn--${v}:hover:not(:disabled) { color: ${c}; }`),
+    ].join('\n')
+    expect(hoverDefects(planted, v2Hover), 'planted colourless primary hover').toEqual([
+      'primary: .ds-btn--primary:hover declares color nothing, want var(--primary-foreground)',
+    ])
+    expect(
+      hoverDefects(':where(.ds-btn--primary):hover { color: var(--primary-foreground); }', v2Hover),
+      'planted rule that does not outrank a:hover',
+    ).toContain('primary: :where(.ds-btn--primary):hover does not outrank the v2 a:hover')
+    expect(
+      hoverDefects(':where(.ds-btn--primary:hover:not(:disabled)) { color: var(--primary-foreground); }', v2Hover),
+      'planted :where around a nested :not does not outrank a:hover',
+    ).toContain('primary: :where(.ds-btn--primary:hover:not(:disabled)) does not outrank the v2 a:hover')
+    expect(specificity('.ds-btn--primary:hover:not(:disabled)')).toEqual([0, 3, 0])
+
+    expect(hoverDefects(readDs(), v2Hover)).toEqual([])
+  })
+
+  // Contract: a rule whose selector holds `.ds-btn--{variant}`, `.ds-btn--disabled` (outside any :not) and `:hover`,
+  // e.g. `.ds-btn--{variant}.ds-btn--disabled:hover`; it declares the variant's base colour and outranks `a:hover`.
+  it('DSC-16 a disabled link button keeps its variant colour on hover', () => {
+    const v2Hover = specificity('a:hover')
+    const has = (s: string, token: string) => new RegExp(`${token.replace('.', '\\.')}(?![\\w-])`).test(s)
+    const defects = (css: string): string[] => {
+      const out: string[] = []
+      for (const variant of Object.keys(HOVER_COLOUR)) {
+        const base = valueOf(css, `.ds-btn--${variant}`, 'color')
+        if (base === undefined) out.push(`${variant}: no base colour`)
+        const hits = parseRules(css).flatMap((r) =>
+          selectorParts(r)
+            .filter((s) => {
+              const bare = s.replace(/:not\([^()]*\)/g, '')
+              return has(bare, `.ds-btn--${variant}`) && has(bare, '.ds-btn--disabled') && bare.includes(':hover')
+            })
+            .map((s) => ({ s, colour: declarations(r.body).filter((d) => d.prop === 'color').map((d) => norm(d.value)).at(-1) })),
+        )
+        if (hits.length === 0) out.push(`${variant}: no rule matches a disabled link on hover`)
+        for (const h of hits) {
+          if (h.colour !== base) out.push(`${variant}: ${h.s} declares color ${h.colour ?? 'nothing'}, want ${base}`)
+          if (!beats(specificity(h.s), v2Hover)) out.push(`${variant}: ${h.s} does not outrank the v2 a:hover`)
+        }
+      }
+      return out
+    }
+
+    const base = Object.keys(HOVER_COLOUR)
+      .map((v) => `.ds-btn--${v} { color: var(--c-${v}); }`)
+      .join('\n')
+    const rules = (make: (v: string) => string) => base + '\n' + Object.keys(HOVER_COLOUR).map(make).join('\n')
+    expect(defects(rules((v) => `.ds-btn--${v}.ds-btn--disabled:hover { color: var(--c-${v}); }`)), 'planted correct rules').toEqual([])
+    expect(defects(rules((v) => `.ds-btn--${v}:hover:not(:disabled):not(.ds-btn--disabled) { color: var(--c-${v}); }`)), 'planted enabled-only rules').toHaveLength(5)
+    expect(defects(rules((v) => `.ds-btn--${v}.ds-btn--disabled:hover { color: var(--teal); }`)), 'planted teal rules').toHaveLength(5)
+    expect(defects(rules((v) => `:where(.ds-btn--${v}.ds-btn--disabled):hover { color: var(--c-${v}); }`)), 'planted rules below a:hover').toHaveLength(5)
+
+    const css = readDs()
+    for (const variant of Object.keys(HOVER_COLOUR)) {
+      expect(valueOf(css, `.ds-btn--${variant}`, 'color'), `.ds-btn--${variant} declares a base colour`).toBeDefined()
+    }
+    expect(defects(css), 'ds.css disabled-link hover rules').toEqual([])
+  })
+})

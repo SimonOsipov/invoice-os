@@ -1,68 +1,55 @@
 import { MODULES } from '../data'
+import { GLYPHS, Icon } from '../icons'
+import { Eyebrow } from './ds/Eyebrow'
+import { Section } from './ds/Section'
 
-// Ported from the prototype's #modules section: a --gradient-hero band, a 16px
-// single panel divided by --on-dark-10 hairlines, and cells that carry a bare
-// amber glyph (no tile) with no numeral. The cells DO hover — .mod-cell lifts
-// its fill to --on-dark-10, which is the design system's "buttons on dark"
-// behaviour, plus a brightness/translate on the icon. Motion tokens only.
 export function Modules() {
   return (
-    <section id="modules" className="band-gradient" style={{ backgroundImage: 'var(--gradient-hero)', color: 'var(--text-on-dark)' }}>
-      <div style={{ maxWidth: 1280, margin: '0 auto', padding: '88px 32px' }}>
-        <div style={{ marginBottom: 44 }}>
-          <div className="eyebrow eyebrow-dark" style={{ marginBottom: 14 }}>
-            THE SOLUTION
-          </div>
-          <h2
-            style={{
-              fontSize: 40,
-              lineHeight: 1.08,
-              letterSpacing: '-0.02em',
-              margin: '0 0 14px',
-              maxWidth: 640,
-              color: 'var(--surface-foreground)',
-            }}
-          >
-            ASComply is your invoice compliance solution.
-          </h2>
-          <p style={{ fontSize: 16, lineHeight: 1.6, color: 'var(--on-dark-70)', maxWidth: 560, margin: '0 0 12px' }}>
-            ASComply sits between your business, your accounting system, your tax adviser and the regulated e-invoicing
-            infrastructure.
-          </p>
-          <p style={{ fontSize: 16, lineHeight: 1.6, color: 'var(--on-dark-70)', maxWidth: 560, margin: 0 }}>
-            We help your team validate invoices before they are submitted, manage approvals internally, store
-            audit-ready records and submit them to the regulatory bodies.
-          </p>
-        </div>
-        <div
-          className="ios-grid ios-4"
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(4, 1fr)',
-            gap: 1,
-            background: 'var(--on-dark-10)',
-            border: '1px solid var(--on-dark-10)',
-            borderRadius: 'var(--radius-lg)',
-            overflow: 'hidden',
-          }}
-        >
-          {MODULES.map((m) => (
-            <div
-              key={m.title}
-              className="mod-cell"
-              style={{ background: 'var(--on-dark-5)', padding: '24px 22px 26px', minHeight: 168, display: 'flex', flexDirection: 'column' }}
-            >
-              <span className="mod-icon" style={{ color: 'var(--accent)', marginBottom: 16, display: 'inline-flex' }}>
-                {m.glyph}
-              </span>
-              <h3 style={{ fontSize: 15, letterSpacing: '-0.01em', margin: '0 0 6px', color: 'var(--surface-foreground)' }}>{m.title}</h3>
-              <p className="mod-body" style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--on-dark-70)', margin: 0 }}>
-                {m.body}
-              </p>
-            </div>
-          ))}
-        </div>
+    <Section tone="dark" id="solution">
+      <div style={{ display: 'grid', gap: 20, justifyItems: 'start', marginBottom: 44 }}>
+        <Eyebrow tone="dark">THE SOLUTION</Eyebrow>
+        <h2 className="t-h2" style={{ margin: 0, color: 'var(--surface-foreground)', maxWidth: 640 }}>
+          ASComply is your invoice
+          <br /> <span className="t-hl-dark2">compliance solution.</span>
+        </h2>
+        <p className="t-body" style={{ margin: 0, maxWidth: 560, color: 'var(--surface-body)' }}>
+          ASComply sits between your business, your accounting system, your tax adviser and the regulated e-invoicing
+          infrastructure.
+        </p>
+        <p className="t-body" style={{ margin: 0, maxWidth: 560, color: 'var(--surface-body)' }}>
+          We help your team validate invoices before they are submitted, manage approvals internally, store audit-ready
+          records and submit them to the regulatory bodies.
+        </p>
       </div>
-    </section>
+      <div
+        className="mod-grid"
+        style={{
+          display: 'grid',
+          gap: 1,
+          background: 'var(--on-dark-10)',
+          border: '1px solid var(--on-dark-10)',
+          borderRadius: 'var(--radius-md)',
+          overflow: 'hidden',
+        }}
+      >
+        {MODULES.map((m) => (
+          <div
+            key={m.title}
+            className="mod-cell"
+            style={{ background: 'var(--surface)', padding: '24px 22px 26px', minHeight: 168, display: 'grid', gap: 8, alignContent: 'start' }}
+          >
+            <span className="mod-icon" style={{ display: 'inline-flex', justifySelf: 'start', marginBottom: 8, color: 'var(--accent)' }}>
+              <Icon paths={GLYPHS[m.icon]} size={20} strokeWidth={2} />
+            </span>
+            <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700, letterSpacing: 'var(--tracking-card)', color: 'var(--surface-foreground)' }}>
+              {m.title}
+            </h3>
+            <p className="t-body-sm mod-body" style={{ margin: 0, color: 'var(--surface-body)' }}>
+              {m.body}
+            </p>
+          </div>
+        ))}
+      </div>
+    </Section>
   )
 }

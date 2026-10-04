@@ -5,7 +5,7 @@
 //
 // The document URL is the production host ON PURPOSE. ensureTag's gate needs
 // isProductionHost(hostname) and PRODUCTION_HOSTNAMES is ['www.ascomply.com'], exact
-// match only (hubspot.ts:9). Under the default localhost URL the gate closes and both
+// match only (hubspot.ts). Under the default localhost URL the gate closes and both
 // "Accept loads the tag" and "Reject does not" pass while asserting nothing. A control
 // below pins that the environment option actually took effect.
 //
@@ -284,7 +284,7 @@ describe('T3-11: inert tracks the modal state', () => {
     expect(card, 'expected the notice to mount').not.toBeNull()
     expect(card!.hasAttribute('inert'), 'the notice was inert with no modal open').toBe(false)
 
-    await clickByText('Explore the platform')
+    await clickByText('Platform login')
     expect(document.querySelectorAll('[role="dialog"]').length, 'the sign-in modal did not open').toBe(1)
     expect(document.querySelector(NOTICE)!.hasAttribute('inert'), 'the notice is reachable under the scrim').toBe(true)
 
@@ -396,7 +396,7 @@ describe('the Cookie choices control under repeated and out-of-order use', () =>
     granted()
     await mountApp()
 
-    await clickByText('Explore the platform')
+    await clickByText('Platform login')
     expect(document.querySelectorAll('[role="dialog"]').length, 'the sign-in modal did not open').toBe(1)
 
     await clickByText('Cookie choices')

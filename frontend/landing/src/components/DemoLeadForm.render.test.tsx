@@ -54,7 +54,7 @@ describe('DemoLeadForm renders every control under any idPrefix (S6, NEW-BEHAVIO
 
     const labelTargets = Array.from(html.matchAll(/<label[^>]*\sfor="([^"]+)"/g)).map((m) => m[1])
     expect(labelTargets.length).toBeGreaterThan(0)
-    for (const field of ['name', 'email', 'company']) {
+    for (const field of ['name', 'email', 'company', 'role', 'size', 'volume']) {
       expect(labelTargets).toContain(`zz-${field}`)
     }
 
@@ -162,7 +162,7 @@ describe('an absent heading emits nothing; the popup heading sits above the firs
     expect(between).not.toMatch(/<div><\/div>/)
   })
 
-  it('S10b (CHARACTERIZATION, already green): the popup heading sits between <form> and #dm-name', () => {
+  it('S10b: the popup heading sits between <form> and #dm-name', () => {
     const html = renderToStaticMarkup(createElement(DemoModal, { onClose: noop }))
     const formStart = html.indexOf('<form')
     const fieldStart = html.indexOf('id="dm-name"')
@@ -171,8 +171,10 @@ describe('an absent heading emits nothing; the popup heading sits above the firs
     const between = html.slice(formStart, fieldStart)
     expect(between).toContain('BOOK A DEMO')
     expect(between).toContain('<h3')
-    expect(between).toContain('See your invoices pass compliance in real time.')
+    expect(between).toContain('class="t-eyebrow"')
+    expect(between).toContain('Let&#x27;s talk about your workflow.')
     expect(between).toContain('A 20-minute walkthrough')
+    expect(between).not.toContain('See your invoices pass compliance')
   })
 })
 
@@ -186,7 +188,7 @@ describe('exactly one style element carries both halves (S16, NEW-BEHAVIOUR)', (
     const html = renderToStaticMarkup(createElement(DemoModal, { onClose: noop }))
     const styleTags = html.match(/<style/g) ?? []
     expect(styleTags.length).toBe(1)
-    for (const needle of ['dmOvIn', 'dmCardIn', '.si-close', '.dm-overlay', 'dmSpin', '.dm-input:focus', '.dm-err', '.dm-row']) {
+    for (const needle of ['ovIn', 'cardIn', '.si-close', 'dmSpin', '.dm-input:focus', '.dm-err', '.dm-row']) {
       expect(html).toContain(needle)
     }
     expect(html).toContain(mod.DEMO_FORM_CSS)

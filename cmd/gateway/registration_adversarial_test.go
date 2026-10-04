@@ -251,7 +251,6 @@ func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 		{http.MethodGet, "/auth/register"},
 		{http.MethodHead, "/auth/register"},
 		{http.MethodPut, "/auth/register"},
-		{http.MethodOptions, "/auth/register"},
 		{http.MethodPost, "/auth/verify?token=T&type=signup"},
 		{http.MethodPut, "/auth/verify?token=T&type=signup"},
 		{http.MethodOptions, "/auth/verify?token=T&type=signup"},

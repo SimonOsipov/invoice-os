@@ -94,7 +94,12 @@ a bug against correct behaviour: what omits is a defaulted *query* param, never 
 
 **R3 — The parse is total and never produces an unrenderable state.** An unknown settings
 tab resolves to `members` in `parseLocation`; an unavailable one (`company` when `mode` is
-not `inhouse`) is clamped the same way by `availableSettingsTab`. A non-UUID `invoice`
+not `inhouse`) is clamped the same way by `availableSettingsTab`. `clients` when `mode` is
+`inhouse` resolves to `dashboard` by `availableView`, at the boot seed, on popstate and in
+`navigate`; at boot the mount alignment also rewrites the URL to `/`
+(`App.routeBoot.test.tsx`'s `boot_inhouseClientsFallsBackToDashboardAndTheUrlIsCorrected`,
+`popstate_aClientsEntryIsClampedForAnInHouseWorkspace`,
+`nav_clientsIsClampedForAnInHouseWorkspace`). A non-UUID `invoice`
 is dropped — the audit reader 400s on a malformed id, so forwarding it would render an error
 state where the ordinary empty state is correct. An over-long `q` goes through
 `clampFilterText` (200 UTF-8 bytes, the server's cap). Every string in the world yields a

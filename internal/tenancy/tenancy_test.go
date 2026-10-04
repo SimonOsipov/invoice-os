@@ -2711,7 +2711,7 @@ func TestProvision_Created201MeShape(t *testing.T) {
 	spy := &provisionSpy{fn: func(in ProvisionInput) (Tenant, string, error) {
 		kind := in.Kind
 		if kind == "" {
-			kind = "firm"
+			kind = "in_house"
 		}
 		return Tenant{ID: tenantID, Name: in.WorkspaceName, Kind: kind}, subject, nil
 	}}
@@ -2721,8 +2721,9 @@ func TestProvision_Created201MeShape(t *testing.T) {
 		wantIn     ProvisionInput
 		wantKind   string
 	}{
-		{"names trimmed, kind absent", `{"workspace_name":"  Acme Ltd  ","display_name":" Ada "}`, ProvisionInput{WorkspaceName: "Acme Ltd", DisplayName: "Ada"}, "firm"},
+		{"names trimmed, kind absent", `{"workspace_name":"  Acme Ltd  ","display_name":" Ada "}`, ProvisionInput{WorkspaceName: "Acme Ltd", DisplayName: "Ada"}, "in_house"},
 		{"kind in_house", `{"workspace_name":"Acme Ltd","display_name":"Ada","kind":"in_house"}`, ProvisionInput{WorkspaceName: "Acme Ltd", DisplayName: "Ada", Kind: "in_house"}, "in_house"},
+		{"kind firm", `{"workspace_name":"Acme Ltd","display_name":"Ada","kind":"firm"}`, ProvisionInput{WorkspaceName: "Acme Ltd", DisplayName: "Ada", Kind: "firm"}, "firm"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			spy.calls = nil

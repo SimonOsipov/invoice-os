@@ -7,11 +7,11 @@ import { validateSignInForm, type SignInFormErrors } from '../signInForm'
 
 const ID = 'si-form'
 
-const FIELD_STYLE: CSSProperties = { width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', padding: '0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)' }
-const ALERT_STYLE: CSSProperties = { display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--status-red-text)' }
-const BUTTON_STYLE: CSSProperties = { width: '100%', justifyContent: 'center', height: 44, cursor: 'pointer', gap: 9 }
+export const FIELD_STYLE: CSSProperties = { width: '100%', height: 42, background: 'var(--card)', border: '1px solid var(--input)', borderRadius: 'var(--radius)', padding: '0 13px', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-sans)' }
+const ALERT_STYLE: CSSProperties = { display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--destructive)' }
+const BUTTON_STYLE: CSSProperties = { width: '100%' }
 
-function Alert({ id, text }: { id?: string; text: string }) {
+export function Alert({ id, text }: { id?: string; text: string }) {
   return (
     <div id={id} role="alert" style={ALERT_STYLE}>
       <Glyph d={WARN_PATHS} size={15} sw={1.7} /> {text}
@@ -56,7 +56,7 @@ export function SignInForm({ heldState, initialError, consoleTarget }: { heldSta
             const url = startUrl(consoleTarget)
             if (url) window.location.href = url
           }}
-          className="v2-btn v2-btn-primary"
+          className="ds-btn ds-btn--primary ds-btn--md"
           style={BUTTON_STYLE}
         >
           Continue with email
@@ -140,10 +140,10 @@ export function SignInForm({ heldState, initialError, consoleTarget }: { heldSta
           {errors.password && <Alert id={`${ID}-password-error`} text={errors.password} />}
         </div>
       </div>
-      <button type="submit" disabled={submitting} className="v2-btn v2-btn-primary" style={{ ...BUTTON_STYLE, marginTop: 18 }}>
+      <button type="submit" disabled={submitting} className="ds-btn ds-btn--primary ds-btn--md" style={{ ...BUTTON_STYLE, marginTop: 18 }}>
         {submitting ? (
           <>
-            <span style={{ width: 15, height: 15, border: '2px solid color-mix(in oklch, var(--text-on-dark) 40%, transparent)', borderTopColor: 'var(--text-on-dark)', borderRadius: 99, animation: 'dmSpin 0.7s linear infinite' }} />
+            <span style={{ width: 15, height: 15, border: '2px solid color-mix(in srgb, var(--primary-foreground) 40%, transparent)', borderTopColor: 'var(--primary-foreground)', borderRadius: 'var(--radius-pill)', animation: 'dmSpin 0.7s linear infinite' }} />
             Checking…
           </>
         ) : (

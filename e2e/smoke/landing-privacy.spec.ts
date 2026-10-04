@@ -137,12 +137,12 @@ test('landing privacy: the nav returns the visitor to the sales page', async ({ 
   const nav = page.getByRole('navigation', { name: 'Primary' })
 
   const hrefs = await nav.locator('a').evaluateAll((els) => els.map((e) => e.getAttribute('href')))
-  expect(hrefs).toHaveLength(6)
+  expect(hrefs).toEqual(['/#problem', '/#solution', '/#platform', '/#solutions', '/#integrations']) // Nav.tsx#NAV_LINKS under hrefPrefix '/'
   for (const href of hrefs) {
     expect(href ?? '', 'a nav link lost its /privacy hrefPrefix').toMatch(/^\/#/)
   }
 
-  // "The Problem" carries no shed class, so it stays visible at the default viewport.
+  // The default viewport is wide enough for the nav to show.
   await nav.locator('a[href="/#problem"]').click()
   await expect(page).toHaveURL(/\/#problem$/)
   await expect(page.getByTestId('privacy-container')).toHaveCount(0)
@@ -246,7 +246,7 @@ test('landing privacy: the prose column renders as wide as it declares itself to
   expectNoConsoleErrors(errors)
 })
 
-// P9 — 390px. Assertion 2 is what actually carries the readability claim: .asc-app's
+// P9 — 390px. Assertion 2 is what actually carries the readability claim: the App root's
 // overflowX:'clip' (App.tsx) removes descendant overflow from the document's
 // scrollable region, so an overflowing element is invisible AND unscrollable to
 // assertion 3 alone.

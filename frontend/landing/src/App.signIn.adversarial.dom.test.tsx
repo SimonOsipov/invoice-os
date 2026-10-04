@@ -124,7 +124,7 @@ async function closeDialog(): Promise<void> {
 }
 
 async function openFromNav(): Promise<void> {
-  const b = Array.from(document.querySelectorAll('header button')).find((x) => x.textContent?.trim() === 'Explore the platform')
+  const b = Array.from(document.querySelectorAll('header button')).find((x) => x.textContent?.trim() === 'Platform login')
   expect(b).toBeDefined()
   await act(async () => (b as HTMLButtonElement).click())
 }
@@ -163,11 +163,11 @@ describe('AUTH-05-07 adversarial: boot params', () => {
   })
 
   it('the strip keeps the path and the hash', async () => {
-    await bootAt(`/?utm_source=x&state=${STATE}&console=ops&signin=ready#pricing`)
+    await bootAt(`/?utm_source=x&state=${STATE}&console=ops&signin=ready#faq`)
     onlyDialog()
     expect(window.location.pathname).toBe('/')
     expect(window.location.search).toBe('?utm_source=x')
-    expect(window.location.hash).toBe('#pricing')
+    expect(window.location.hash).toBe('#faq')
 
     // A path that is not `/` tells a kept path from a rebuilt one.
     await act(async () => root.unmount())
@@ -179,9 +179,16 @@ describe('AUTH-05-07 adversarial: boot params', () => {
     expect(window.location.hash).toBe('#top')
   })
 
+  it('verified and verify are stripped whole with the sign-in params; a sign-in outcome still opens', async () => {
+    await bootAt(`/?keep=1&state=${STATE}&signin=ready&verified=1&verify=failed&verified=0#faq`)
+    onlyDialog()
+    expect(window.location.search).toBe('?keep=1')
+    expect(window.location.hash).toBe('#faq')
+  })
+
   it('a boot with neither param does not touch history', async () => {
     const replace = vi.spyOn(window.history, 'replaceState')
-    await bootAt('/?verify=failed')
+    await bootAt('/?keep=1')
     replace.mockClear()
     const mod = (await import('./App')) as { default: () => ReturnType<typeof createElement> }
     await act(async () => root.unmount())
@@ -189,7 +196,7 @@ describe('AUTH-05-07 adversarial: boot params', () => {
     await act(async () => root.render(createElement(mod.default)))
     pageMounted()
     expect(replace).not.toHaveBeenCalled()
-    expect(window.location.search).toBe('?verify=failed')
+    expect(window.location.search).toBe('?keep=1')
   })
 
   it('a malformed state alone opens nothing and is stripped', async () => {

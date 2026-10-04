@@ -1,11 +1,10 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { resolveTarget } from '../targets'
-import { enclosesRect, rectsOverlap, WIDE_WIDTHS, type Rect } from '../topology/layout'
+import { enclosesRect, gaps, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from '../topology/layout'
 import { seedConsent } from './landingConsent'
 import { isProductionHost, isSentryHost } from './sentryHost'
 
-// The Book-a-Demo lead capture, both the modal and the inline #demo card, against the
-// PR's own deployed landing (LAND-02).
+// The Book-a-Demo lead capture modal, against the PR's own deployed landing (LAND-02).
 //
 // EVERY test in this file runs with the HubSpot gate CLOSED. The gate is
 // `resolveSubmitTarget(window.location.hostname)`, which returns a target only on an
@@ -49,11 +48,9 @@ const EXPECT_SENTRY_SILENT = !isProductionHost(LANDING_URL)
 // band separator is U+2013 EN DASH; both are exact.
 const TAXPAYER_SIZE_BANDS = ['Large ₦5bn+', 'Medium ₦1bn–₦5bn', 'Small ₦50m–₦1bn', 'Below ₦50m'] as const
 
-// The band both surfaces default to. Pinned by name rather than by index into the list
+// The band the modal select defaults to. Pinned by name rather than by index into the list
 // above, and used ONLY by E6: it is the value whose fit is being measured, so a build that
-// quietly defaulted to a shorter band must fail rather than pass by being easy to fit. E4
-// deliberately does NOT route through this constant — comparing two surfaces to one literal
-// is not the same claim as the two surfaces agreeing with each other.
+// quietly defaulted to a shorter band must fail rather than pass by being easy to fit.
 const DEFAULT_TAXPAYER_SIZE = 'Medium ₦1bn–₦5bn'
 
 // The bare size words the bands replaced. A build that regressed to any of these would
@@ -116,12 +113,8 @@ const HONEYPOT_ATTRS: ReadonlyArray<readonly [string, string]> = [
   ['data-form-type', 'other'],
 ]
 
-// Viewports for E6. 1280 is AC #6's mandated measurement. 600 is the exact width at which
-// landing.css's `@media (max-width: 600px)` .ios-demo-card padding rule turns on, so it is
-// the narrow width that actually exercises the rule named in the plan.
-// The other eight are the widths at which the UNGUARDED value measurably broke: 1150/1100/
-// 960/921 in the band just above the 920px single-column breakpoint, where the 0.8fr column
-// is at its narrowest, and 500/430/390/375 below it. All ten are asserted.
+// Viewports for E6, measured on the open modal. 1280 is AC #6's mandated measurement.
+// The rest are the widths at which the UNGUARDED value measurably broke, wide to phone.
 const ASSERTED_WIDTHS = [1280, 1150, 1100, 960, 921, 600, 500, 430, 390, 375] as const
 
 type LandingSinks = {
@@ -253,7 +246,7 @@ async function openLanding(page: Page): Promise<LandingSinks> {
 
   await expect(page.getByRole('banner')).toBeVisible()
 
-  // Inter and Fraunces are Google-hosted with display=swap. A swap AFTER a measurement
+  // Manrope is Google-hosted with display=swap. A swap AFTER a measurement
   // reflows geometry that has already been read, and E6 measures geometry to the
   // sub-pixel. Settle once, here, before anything else — same reason as landing-nav.spec.ts.
   await page.evaluate(() => document.fonts.ready.then(() => true))
@@ -285,13 +278,10 @@ function submitButton(root: Locator): Locator {
  * path is indistinguishable from the closed-gate path is exactly "E1 and E5 both end here,
  * both no faster than the shared stub" — so both call THIS, rather than each describing
  * success in its own words.
- *
- * The Done button renders only where the form is given an onDone — the card is not — so
- * `opts.done` selects whether that half is asserted.
  */
-async function expectSuccessPanel(root: Locator, prefix: string, opts: { done: boolean }): Promise<void> {
+async function expectSuccessPanel(root: Locator, prefix: string): Promise<void> {
   await expect(root.locator(`#${prefix}-success`)).toBeVisible()
-  if (opts.done) await expect(root.locator(`#${prefix}-success-done`)).toBeVisible()
+  await expect(root.locator(`#${prefix}-success-done`)).toBeVisible()
   await expect(root).toContainText(`Thanks, ${LEAD.firstName}.`)
   await expect(root).toContainText(LEAD.email)
   // The form is gone, not merely covered.
@@ -360,7 +350,7 @@ test('landing analytics: the analytics-host classifier accepts GA hosts and noth
   }
 
   for (const url of [
-    // The two highest-value rejections: this page requests both on every single run.
+    // The two highest-value rejections: Google Fonts hosts.
     'https://fonts.googleapis.com/css2?family=Inter',
     'https://fonts.gstatic.com/s/inter/v13/x.woff2',
     'https://www.googletagmanager.com.attacker.example/gtag/js',
@@ -387,7 +377,7 @@ test('landing demo: a complete submission on a closed gate succeeds locally and 
 
   const startedAt = Date.now()
   await submitButton(dialog).click()
-  await expectSuccessPanel(dialog, 'dm', { done: true })
+  await expectSuccessPanel(dialog, 'dm')
   const elapsedMs = Date.now() - startedAt
 
   // The closed gate routes through the same 1300ms stub the honeypot uses. Asserted here as
@@ -496,10 +486,9 @@ async function readSizeOptions(select: Locator): Promise<Array<{ value: string; 
   )
 }
 
-// E4 — the modal's select and the inline card agree about the turnover bands ON THE
-// DEPLOYED BUILD. Two surfaces, one shared component, one contract. This asserts agreement and
-// membership only; whether the agreed value FITS its box is E6's job.
-test('landing demo: the modal select and the inline card agree on the turnover bands', async ({ page }) => {
+// E4 — the modal select offers exactly the four turnover bands ON THE DEPLOYED BUILD.
+// This asserts membership only; whether the value FITS its box is E6's job.
+test('landing demo: the modal select offers exactly the four turnover bands', async ({ page }) => {
   const sinks = await openLanding(page)
   const dialog = await openDemoModal(page)
 
@@ -526,28 +515,6 @@ test('landing demo: the modal select and the inline card agree on the turnover b
   expect(TAXPAYER_SIZE_BANDS, 'the select defaults to something that is not one of the four bands').toContain(
     selectDefault,
   )
-
-  // Close the modal and read the OTHER surface. Escape is the modal's own close path.
-  await page.keyboard.press('Escape')
-  await expect(dialog).toHaveCount(0)
-
-  // The surface-to-surface equality below is now STRUCTURAL — one component rendered
-  // twice — so it guards a future split, not two hand-maintained lists. The comparison
-  // against TAXPAYER_SIZE_BANDS (retyped above, never imported) is what stays falsifiable.
-  const cardSelect = page.locator('#dc-size')
-  await expect(cardSelect.locator('option')).toHaveCount(TAXPAYER_SIZE_BANDS.length + 1)
-  const cardRendered = await readSizeOptions(cardSelect)
-  const cardSelectable = cardRendered.filter((o) => !o.disabled)
-
-  expect(cardSelectable.map((o) => o.value)).toEqual([...TAXPAYER_SIZE_BANDS])
-  expect(cardSelectable.map((o) => o.text)).toEqual([...TAXPAYER_SIZE_BANDS])
-  expect(cardRendered).toEqual(modalRendered)
-
-  for (const word of BARE_SIZE_WORDS) {
-    expect(cardRendered.map((o) => o.text), `the card still offers the bare word "${word}"`).not.toContain(word)
-  }
-
-  expect(await cardSelect.inputValue()).toBe(selectDefault)
 
   expectClosedGateStayedSilent(sinks)
 })
@@ -583,7 +550,7 @@ test('landing demo: a tripped honeypot is dropped silently, and no faster than a
 
   const startedAt = Date.now()
   await submitButton(dialog).click()
-  await expectSuccessPanel(dialog, 'dm', { done: true })
+  await expectSuccessPanel(dialog, 'dm')
   const elapsedMs = Date.now() - startedAt
 
   expect(
@@ -595,33 +562,11 @@ test('landing demo: a tripped honeypot is dropped silently, and no faster than a
   expectClosedGateStayedSilent(sinks)
 })
 
-// AC-T2 — the inline card submits independently of the modal, on the same closed gate.
-test('landing demo: the inline card submits on a closed gate and sends nothing', async ({ page }) => {
-  const sinks = await openLanding(page)
-  const card = page.locator('#demo')
-
-  await fillRequiredFields(card, 'dc')
-  await card.locator('#dc-consent').check()
-
-  const startedAt = Date.now()
-  await submitButton(card).click()
-  await expectSuccessPanel(card, 'dc', { done: false })
-  const elapsedMs = Date.now() - startedAt
-
-  // The card's closed-gate path routes through the same shared stub E1 asserts against.
-  expect(
-    elapsedMs,
-    `the card's closed-gate submit resolved in ${elapsedMs}ms — below the shared ${STUB_DELAY_FLOOR_MS}ms stub floor`,
-  ).toBeGreaterThanOrEqual(STUB_DELAY_FLOOR_MS)
-
-  expectClosedGateStayedSilent(sinks)
-})
-
 // The wide end has room to strand a band; ASSERTED_WIDTHS alone had never swept above 1280.
 const CARD_FIT_WIDTHS = [...new Set([...WIDE_WIDTHS, ...ASSERTED_WIDTHS])]
 
 type CardSizeMeasurement = {
-  /** #dc-size.value, read from the deployed build. */
+  /** #dm-size.value, read from the deployed build. */
   sizeValue: string
   /** Rounded to 2dp. */
   sizeHeightPx: number
@@ -634,7 +579,7 @@ type CardSizeMeasurement = {
 }
 
 /**
- * Reads the card's taxpayer-size control and its neighbours by id, throwing a named
+ * Reads the modal's taxpayer-size control and its neighbours by id, throwing a named
  * error per missing node rather than measuring nulls.
  */
 function measureCardSizeControl(page: Page): Promise<CardSizeMeasurement> {
@@ -647,24 +592,24 @@ function measureCardSizeControl(page: Page): Promise<CardSizeMeasurement> {
       return { x: round(r.x), y: round(r.y), width: round(r.width), height: round(r.height) }
     }
 
-    const size = document.getElementById('dc-size')
-    if (!size) throw new Error('no #dc-size select inside the card')
+    const size = document.getElementById('dm-size')
+    if (!size) throw new Error('no #dm-size select in the open modal')
     // The caret is named by being the wrapper's only span, not by position.
     const wrapper = size.parentElement
     const spans = wrapper ? Array.from(wrapper.querySelectorAll('span')) : []
     if (spans.length !== 1) {
-      throw new Error(`#dc-size's wrapper has ${spans.length} <span> children, expected the one caret`)
+      throw new Error(`#dm-size's wrapper has ${spans.length} <span> children, expected the one caret`)
     }
     const caret = spans[0]
 
-    const volume = document.getElementById('dc-volume')
-    if (!volume) throw new Error('no #dc-volume select inside the card')
+    const volume = document.getElementById('dm-volume')
+    if (!volume) throw new Error('no #dm-volume select in the open modal')
 
-    const row = document.querySelector('#demo .dm-row')
-    if (!row) throw new Error('no .dm-row inside #demo')
+    const row = document.querySelector('[role="dialog"] .dm-row')
+    if (!row) throw new Error('no .dm-row inside the modal')
 
-    const card = document.querySelector('#demo .ios-demo-card')
-    if (!card) throw new Error('no .ios-demo-card inside #demo')
+    const card = document.querySelector('[role="dialog"] > div')
+    if (!card) throw new Error('no card inside the modal')
 
     return {
       sizeValue: (size as HTMLSelectElement).value,
@@ -688,16 +633,19 @@ async function measureCardStable(page: Page, width: number): Promise<CardSizeMea
   const first = await measureCardSizeControl(page)
   await settleLayout(page)
   const second = await measureCardSizeControl(page)
-  expect(second, `the card's taxpayer-size control was still reflowing at ${width}px`).toEqual(first)
+  expect(second, `the modal's taxpayer-size control was still reflowing at ${width}px`).toEqual(first)
   return second
 }
 
-// E6 — AC #6's measurement obligation. The card now renders a real <select>, so the
+// E6 — AC #6's measurement obligation. The modal renders a real <select>, so the
 // browser owns wrapping and truncation and the old text-level oracles are gone. What is
 // still ours: the control and its caret stay inside the boxes that clip them, and the
 // two-select row shrinks rather than overflowing.
-test('landing demo: the inline card taxpayer-size value fits its box', async ({ page }, testInfo) => {
+test('landing demo: the modal taxpayer-size value fits its card', async ({ page }, testInfo) => {
   const sinks = await openLanding(page)
+  const dialog = await openDemoModal(page)
+  // The open animation moves the card; settle it before the first stable-read pair.
+  await settleAnimations(dialog.locator(':scope > div'))
 
   const sweep: Array<CardSizeMeasurement & { viewportWidth: number }> = []
   for (const width of CARD_FIT_WIDTHS) {
@@ -723,11 +671,11 @@ test('landing demo: the inline card taxpayer-size value fits its box', async ({ 
   for (const m of sweep) {
     const at = `at ${m.viewportWidth}px`
     // Non-vacuity: a build that regressed to a short bare word would fit everywhere.
-    expect(m.sizeValue, `the card is not showing the default turnover band ${at}`).toBe(DEFAULT_TAXPAYER_SIZE)
+    expect(m.sizeValue, `the modal is not showing the default turnover band ${at}`).toBe(DEFAULT_TAXPAYER_SIZE)
     expect(enclosesRect(m.size, m.caret, 1), `the chevron caret is not contained by its control ${at}`).toBe(true)
     expect(enclosesRect(m.card, m.size, 1), `the size control is not contained by the card ${at}`).toBe(true)
-    // #dc-size is the row's first flex item: an overflowing row pushes #dc-volume out, not
-    // #dc-size, so the card must be asserted to enclose both.
+    // #dm-size is the row's first flex item: an overflowing row pushes #dm-volume out, not
+    // #dm-size, so the card must be asserted to enclose both.
     expect(enclosesRect(m.card, m.volume, 1), `the volume control is not contained by the card ${at}`).toBe(true)
 
     if (m.viewportWidth >= 480) {
@@ -756,6 +704,77 @@ test('landing demo: the inline card taxpayer-size value fits its box', async ({ 
   }
 
   expectClosedGateStayedSilent(sinks)
+})
+
+// O1: the modal card fits the viewport and sits centred, widest first, then a phone.
+test('landing demo: the modal card fits and sits centred at every width', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 1080 })
+  await openLanding(page)
+  const dialog = await openDemoModal(page)
+  const card = dialog.locator(':scope > div')
+  await expect(card).toHaveCount(1)
+
+  const viewports = [...WIDE_WIDTHS.map((width) => ({ width, height: 1080 })), { width: 390, height: 667 }]
+  const measured: Array<{ width: number; height: number; cardWidth: number; left: number; right: number }> = []
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport)
+    const at = `${viewport.width}x${viewport.height}`
+    // The resize re-lays the overlay; poll until the card is settled, enclosed and centred.
+    await expect
+      .poll(async () => {
+        await settleAnimations(card)
+        const box = await card.boundingBox()
+        if (!box) return null
+        const side = gaps(box, { x: 0, width: viewport.width })
+        const fits = enclosesRect({ x: 0, y: 0, width: viewport.width, height: viewport.height }, box, 0.5)
+        return fits && Math.abs(side.left - side.right) <= 1
+      }, { message: `the card is not enclosed and centred at ${at}` })
+      .toBe(true)
+    const box = (await card.boundingBox())!
+    const side = gaps(box, { x: 0, width: viewport.width })
+    measured.push({ ...viewport, cardWidth: box.width, left: side.left, right: side.right })
+  }
+
+  // Both scrims pad alike at 390: the demo overlay carries no phone-only override.
+  const demoPadding = await dialog.evaluate((el) => getComputedStyle(el).padding)
+  await page.goto(`${LANDING_URL}/?state=${'A'.repeat(43)}&signin=ready`)
+  const signIn = page.getByRole('dialog', { name: 'Platform login' })
+  await expect(signIn).toBeVisible()
+  const signInPadding = await signIn.evaluate((el) => getComputedStyle(el).padding)
+  expect(signInPadding, 'the sign-in scrim has no padding').not.toBe('')
+  expect(demoPadding, 'the demo scrim pads differently from the sign-in scrim at 390').toBe(signInPadding)
+
+  await testInfo.attach('demo-modal-fit.json', { body: JSON.stringify(measured, null, 2), contentType: 'application/json' })
+  expect(measured.length, 'one reading per width').toBe(WIDE_WIDTHS.length + 1)
+  expect(measured[0].width, 'the widest width is read first').toBe(2560)
+  for (const m of measured) expect(m.cardWidth, `the card has no width at ${m.width}`).toBeGreaterThan(0)
+})
+
+// O2: at 390x667 the card scrolls its own content; the page behind it does not move.
+test('landing demo: the modal card scrolls inside itself at 390', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1080 })
+  await openLanding(page)
+  const dialog = await openDemoModal(page)
+  const card = dialog.locator(':scope > div')
+  await expect(card).toHaveCount(1)
+  await page.setViewportSize({ width: 390, height: 667 })
+  await settleAnimations(card)
+
+  const scrollY0 = await page.evaluate(() => window.scrollY)
+  const submit = submitButton(dialog)
+  await submit.scrollIntoViewIfNeeded()
+
+  const overflow = await card.evaluate((el) => ({ scrollHeight: el.scrollHeight, clientHeight: el.clientHeight }))
+  // Non-vacuity: a card that fits has nothing to scroll.
+  expect(overflow.scrollHeight, 'the card has no overflow to scroll at 390x667').toBeGreaterThan(overflow.clientHeight + 1)
+  await expect.poll(() => card.evaluate((el) => el.scrollTop), { message: 'the card did not scroll' }).toBeGreaterThan(0)
+
+  const [cardBox, submitBox] = await Promise.all([card.boundingBox(), submit.boundingBox()])
+  expect(cardBox, 'the card has no box').not.toBeNull()
+  expect(submitBox, 'the submit has no box').not.toBeNull()
+  expect(enclosesRect(cardBox!, submitBox!, 0.5), 'the card does not enclose the submit').toBe(true)
+  await expect(submit).toBeInViewport()
+  expect(await page.evaluate(() => window.scrollY), 'the page behind the modal scrolled').toBe(scrollY0)
 })
 
 // E7 — the deployed scroll-depth path. Reads the whole page, opens no modal, and asserts

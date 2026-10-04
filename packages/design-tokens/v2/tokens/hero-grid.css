@@ -1,0 +1,20 @@
+/* ============================================================
+   ASComply — hero grid texture
+   The ONE sanctioned background texture: a 48px hairline grid,
+   hero band only. Never behind body copy, never on a card.
+   ============================================================ */
+
+.hero-grid {
+  background-image:
+    linear-gradient(to right, var(--border) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--border) 1px, transparent 1px);
+  background-size: 48px 48px;
+  background-position: -1px -1px;
+}
+
+/* Fades the grid out toward the bottom of the band so the section below
+   meets flat cream. Apply to the element carrying .hero-grid. */
+.hero-grid-fade {
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 55%, transparent 100%);
+  mask-image: linear-gradient(180deg, #000 0%, #000 55%, transparent 100%);
+}

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -611,5 +612,127 @@ func TestRegister_EmptyFieldCheckPrecedesFreeMail(t *testing.T) {
 	}
 	if n := len(fake.Calls()); n != 0 {
 		t.Errorf("GoTrue saw %d calls, want 0", n)
+	}
+}
+
+func registerBodyWithAnswers(email string, answers map[string]any) string {
+	m := map[string]any{"email": email, "password": regPassword}
+	maps.Copy(m, answers)
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+// signupData decodes the single recorded /signup body and returns its "data" value (nil when absent).
+func signupData(t *testing.T, fake *fakeGoTrue) any {
+	t.Helper()
+	calls := fake.Calls()
+	if len(calls) != 1 || calls[0].Path != "/signup" {
+		t.Fatalf("GoTrue saw %+v, want exactly one /signup call", calls)
+	}
+	var sent map[string]any
+	if err := json.Unmarshal(calls[0].Body, &sent); err != nil {
+		t.Fatalf("signup body %q is not JSON: %v", calls[0].Body, err)
+	}
+	return sent["data"]
+}
+
+func TestRegister_AnswersReachGoTrueAsRegistrationData(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+
+	rec := doRegister(t, fake.URL, nil, registerBodyWithAnswers(regEmail,
+		map[string]any{"workspace_name": "  Acme Ltd ", "display_name": " Ada ", "kind": "firm"}))
+
+	requirePending202(t, rec)
+	want := map[string]any{"registration": map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada", "kind": "firm"}}
+	if got := signupData(t, fake); !reflect.DeepEqual(got, want) {
+		t.Errorf("signup data = %v, want %v", got, want)
+	}
+}
+
+func TestRegister_AnswersWithoutKindOmitKind(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+
+	rec := doRegister(t, fake.URL, nil, registerBodyWithAnswers(regEmail,
+		map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada"}))
+
+	requirePending202(t, rec)
+	want := map[string]any{"registration": map[string]any{"workspace_name": "Acme Ltd", "display_name": "Ada"}}
+	if got := signupData(t, fake); !reflect.DeepEqual(got, want) {
+		t.Errorf("signup data = %v, want %v (no kind key)", got, want)
+	}
+}
+
+func TestRegister_BadAnswersAre400WithoutGoTrue(t *testing.T) {
+	const (
+		wsMsg   = "workspace_name must be 1 to 200 characters"
+		dnMsg   = "display_name must be 1 to 200 characters"
+		wsNul   = "workspace_name must not contain a NUL byte"
+		kindMsg = `kind must be "firm" or "in_house"`
+	)
+	for _, c := range []struct {
+		name    string
+		answers map[string]any
+		want    string
+	}{
+		{"only workspace_name", map[string]any{"workspace_name": "Acme"}, dnMsg},
+		{"only display_name", map[string]any{"display_name": "Ada"}, wsMsg},
+		{"only kind", map[string]any{"kind": "firm"}, wsMsg},
+		{"blank display_name", map[string]any{"workspace_name": "Acme", "display_name": "   "}, dnMsg},
+		{"blank workspace_name", map[string]any{"workspace_name": "\t ", "display_name": "Ada"}, wsMsg},
+		{"201-rune workspace_name", map[string]any{"workspace_name": strings.Repeat("a", 201), "display_name": "Ada"}, wsMsg},
+		{"NUL in workspace_name", map[string]any{"workspace_name": "Ac\u0000me", "display_name": "Ada"}, wsNul},
+		{"NUL in display_name", map[string]any{"workspace_name": "Acme", "display_name": "A\u0000da"}, "display_name must not contain a NUL byte"},
+		{"kind bogus", map[string]any{"workspace_name": "Acme", "display_name": "Ada", "kind": "bogus"}, kindMsg},
+		{"kind empty", map[string]any{"workspace_name": "Acme", "display_name": "Ada", "kind": ""}, kindMsg},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+
+			rec, elapsed := serveFloor(t, fake.URL, 3*time.Second, nil, registerBodyWithAnswers(regEmail, c.answers))
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+			}
+			if got := errorBody(t, rec); got != c.want {
+				t.Errorf("error = %q, want %q", got, c.want)
+			}
+			if n := len(fake.Calls()); n != 0 {
+				t.Errorf("GoTrue saw %d calls, want 0", n)
+			}
+			if elapsed >= time.Second {
+				t.Errorf("answered after %v, want a validation 400 without the minimum wait", elapsed)
+			}
+		})
+	}
+}
+
+// Rune count, not byte count: 200 three-byte runes are 600 bytes.
+func TestRegister_AnswerAt200RunesIsAccepted(t *testing.T) {
+	name := strings.Repeat("é", 200)
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+
+	rec := doRegister(t, fake.URL, nil, registerBodyWithAnswers(regEmail,
+		map[string]any{"workspace_name": name, "display_name": name, "kind": "in_house"}))
+
+	requirePending202(t, rec)
+	want := map[string]any{"registration": map[string]any{"workspace_name": name, "display_name": name, "kind": "in_house"}}
+	if got := signupData(t, fake); !reflect.DeepEqual(got, want) {
+		t.Errorf("signup data = %v, want the 200-rune names forwarded intact", got)
+	}
+}
+
+// The free-mail check precedes the answer checks, so an invalid answer cannot mask it.
+func TestRegister_FreeMailWithAnswersIsTheFreeMail400(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		answers map[string]any
+	}{
+		{"valid answers", map[string]any{"workspace_name": "Acme", "display_name": "Ada", "kind": "firm"}},
+		{"invalid answers", map[string]any{"workspace_name": "", "display_name": "Ada", "kind": "bogus"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+			requireFreeMailRefused(t, fake, doRegister(t, fake.URL, nil, registerBodyWithAnswers("x@gmail.com", c.answers)))
+		})
 	}
 }

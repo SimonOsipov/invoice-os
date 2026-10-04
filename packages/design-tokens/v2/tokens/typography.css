@@ -1,0 +1,79 @@
+/* ============================================================
+   ASComply — Typography
+   One sans family: Manrope (400–800) for display, headings, body and UI.
+   No serif, no optical-size axis. Desktop values @1440, mobile @390.
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap');
+
+:root {
+  /* ---------- FAMILIES ---------- */
+  --font-display: 'Manrope', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-sans: 'Manrope', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace; /* small meta labels: ILLUSTRATIVE, step numbers */
+
+  /* ---------- ROLE SIZES ---------- */
+  --fs-h1: clamp(54px, 5.55vw, 80px); /* @kind other */ /* 80 desktop · 54 mobile */
+  --fs-h2: 46px; /* 35 mobile */
+  --fs-h3: 36px; /* large card / panel title · 32 mobile */
+  --fs-card-title: 17px; /* small card title, 16–18 */
+  --fs-body: 16px;
+  --fs-lead: 16px; /* hero lead paragraph · 15 mobile */
+  --fs-body-sm: 14px;
+  --fs-ui: 14px;
+  --fs-btn: 14px; /* primary button label · 12 mobile */
+  --fs-btn-sm: 13px; /* outline / ghost button label */
+  --fs-eyebrow: 10px;
+  --fs-step: 11px; /* step label "01 / VALIDATE" */
+  --fs-meta: 10px; /* mono meta label */
+  --fs-caption: 13px;
+
+  /* ---------- STEP SCALE ---------- */
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-base: 14px;
+  --fs-md: 16px;
+  --fs-lg: 18px;
+  --fs-xl: 20px;
+  --fs-2xl: 24px;
+  --fs-3xl: 30px;
+  --fs-4xl: 46px;
+  --fs-5xl: 56px;
+  --fs-6xl: 68px;
+  --fs-display: 80px;
+
+  /* ---------- LINE HEIGHTS ---------- */
+  --lh-display: 1.07; /* @kind other */ /* H1: 1.05–1.09 */
+  --lh-heading: 1.2; /* @kind other */ /* H2, H3 */
+  --lh-snug: 1.4; /* @kind other */
+  --lh-body: 1.8; /* @kind other */
+  --lh-ui: 1.43; /* @kind other */
+
+  /* ---------- WEIGHTS ---------- */
+  --fw-regular: 400; /* @kind other */
+  --fw-medium: 500; /* @kind other */
+  --fw-semibold: 600; /* @kind other */
+  --fw-bold: 700; /* @kind other */ /* every heading */
+  --fw-extrabold: 800; /* @kind other */
+
+  /* ---------- TRACKING ---------- */
+  --tracking-display: -0.05em; /* @kind other */ /* H1 */
+  --tracking-tight: -0.05em; /* @kind other */ /* H2 */
+  --tracking-h3: -0.04em; /* @kind other */
+  --tracking-card: -0.01em; /* @kind other */ /* small card title */
+  --tracking-normal: 0; /* @kind other */
+  --tracking-eyebrow: 0.135em; /* @kind other */
+  --tracking-step: 0.12em; /* @kind other */
+  --tracking-meta: 0.05em; /* @kind other */
+  --tracking-wide: 0.08em; /* @kind other */
+  --tracking-brand: 0.2em; /* @kind other */ /* AFRICA under the wordmark */
+}
+
+@media (max-width: 767px) {
+  :root {
+    --fs-h2: 35px;
+    --fs-h3: 32px;
+    --fs-lead: 15px;
+    --fs-btn: 12px;
+  }
+}

@@ -1,25 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 
-import { BrandMark } from '../icons'
+import { GLYPHS, Icon } from '../icons'
+import { Button } from './ds/Button'
+import { Logo } from './ds/Logo'
 import { activeNavHref } from './activeSection'
 
-// Page order, not feature order. Two deliberate absences:
-//   - `Platform` is gone; its #modules target is now carried by `The Solution`.
-//   - `How it works` has no link at all. The section stays on the page (between
-//     The Solution and Compliance), it just isn't a nav destination.
-// `shed` names the class that drops the link below a breakpoint (landing.css). The
-// nav must never wrap or clip, and it has no room for six links under ~1240px, so
-// the tail is shed rather than allowed to collide with the lockup or the CTAs.
-// Annotated rather than inferred: without it the element type is a union of "has
-// shed" and "has no shed", and whether `l.shed` is even readable then depends on
-// TypeScript's object-literal normalisation rather than on anything stated here.
-const NAV_LINKS: { label: string; href: string; shed?: string }[] = [
-  { label: 'The Problem', href: '#problem' },
-  { label: 'The Solution', href: '#modules' },
-  { label: 'Compliance', href: '#compliance', shed: 'ios-nav-shed-1080' },
-  { label: "Who it's for", href: '#accountants', shed: 'ios-nav-shed-1080' },
-  { label: 'Developers', href: '#developers', shed: 'ios-nav-shed-1240' },
-  { label: 'Pricing', href: '#pricing', shed: 'ios-nav-shed-1240' },
+// Only sections on the page; App.render.test.tsx AN-01 pins that each href resolves.
+export const NAV_LINKS: { label: string; href: string }[] = [
+  { label: 'The problem', href: '#problem' },
+  { label: 'The solution', href: '#solution' },
+  { label: 'Platform', href: '#platform' },
+  { label: "Who it's for", href: '#solutions' },
+  { label: 'Integrations', href: '#integrations' },
 ]
 
 const NAV_HREFS = NAV_LINKS.map((l) => l.href)
@@ -27,21 +19,27 @@ const NAV_HREFS = NAV_LINKS.map((l) => l.href)
 export function Nav({
   onSignIn,
   onBookDemo,
+  onCreateAccount,
   hrefPrefix = '',
 }: {
   onSignIn: () => void
   onBookDemo: () => void
+  onCreateAccount?: () => void
   hrefPrefix?: string
 }) {
   const [activeHref, setActiveHref] = useState<string | null>(null)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuId = useId()
+  const burgerRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     // Header height comes from --header-h, the single source of truth (it also
-    // drives this file's calc() below and landing.css's scroll-padding-top).
+    // drives landing.css's scroll-padding-top).
     // No fallback on purpose: if the token ever went missing, parseFloat('') is
     // NaN, every `top <= NaN` is false and no link lights — the failure is dark,
     // never wrong. Do not "fix" this with a hardcoded pixel fallback.
-    const headerH = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--header-h'))
+    const readHeaderH = () => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--header-h'))
+    let headerH = readHeaderH()
 
     let frame = 0
     const measure = () => {
@@ -65,7 +63,7 @@ export function Nav({
     // writer with its own notion of active would fight the scroll one for the
     // indicator, and activeNavHref is the tested answer (activeSection.test.ts).
     // What it adds is the crossings a scroll listener never sees: a section that
-    // changes height under a parked viewport (the Who-it's-for toggle swaps mocks
+    // changes height under a parked viewport (a tab or toggle swaps content
     // of different heights), and the tail of a smooth anchor jump that settles
     // after the last scroll event.
     //
@@ -73,17 +71,41 @@ export function Nav({
     // fallback: `-NaNpx` is not a legal rootMargin and would THROW out of this
     // effect, taking the scroll listener down with it. Missing token => no spy.
     let io: IntersectionObserver | null = null
-    if (Number.isFinite(headerH)) {
+    const observe = () => {
+      io?.disconnect()
+      io = null
+      if (!Number.isFinite(headerH)) return
       io = new IntersectionObserver(schedule, { rootMargin: `-${headerH}px 0px -60% 0px` })
       document.querySelectorAll('section[id]').forEach((el) => io!.observe(el))
     }
+    observe()
+
+    // --header-h changes across the breakpoint; re-read it and rebuild the observer.
+    const onResize = () => {
+      headerH = readHeaderH()
+      observe()
+      measure()
+    }
+    window.addEventListener('resize', onResize)
 
     return () => {
       window.removeEventListener('scroll', schedule)
+      window.removeEventListener('resize', onResize)
       io?.disconnect()
       if (frame) cancelAnimationFrame(frame)
     }
   }, [])
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      setMenuOpen(false)
+      burgerRef.current?.focus()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [menuOpen])
 
   return (
     <header
@@ -91,76 +113,37 @@ export function Nav({
         position: 'sticky',
         top: 0,
         zIndex: 50,
-        background: 'oklch(98.5% .008 85 / .82)',
-        backdropFilter: 'blur(16px)',
-        WebkitBackdropFilter: 'blur(16px)',
-        borderBottom: '1px solid var(--line-1)',
+        height: 'var(--header-h)',
+        background: 'var(--header-bg)',
+        backdropFilter: 'blur(var(--header-blur))',
+        WebkitBackdropFilter: 'blur(var(--header-blur))',
+        borderBottom: '1px solid var(--header-border)',
       }}
     >
       <div
-        style={{
-          maxWidth: 1280,
-          margin: '0 auto',
-          padding: '0 32px',
-          height: 'calc(var(--header-h) - 1px)',
-          // auto | minmax(0,1fr) | auto — lockup, nav, actions. The nav owning its
-          // OWN track is what stops it colliding with either neighbour: both outer
-          // tracks size to their content and the middle one absorbs whatever is
-          // left. minmax(0,…) rather than a bare 1fr so the track may shrink below
-          // its content width instead of forcing the row wider than the container.
-          display: 'grid',
-          gridTemplateColumns: 'auto minmax(0, 1fr) auto',
-          gap: 28,
-          alignItems: 'center',
-        }}
+        className="container"
+        style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 24 }}
       >
-        <a href={`${hrefPrefix}#top`} style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--fg-1)' }}>
-          <BrandMark size={22} />
-          <span style={{ fontWeight: 600, fontSize: 16, letterSpacing: '-0.02em' }}>ASComply</span>
-          <span
-            className="mono"
-            style={{
-              fontSize: 10,
-              fontWeight: 500,
-              letterSpacing: '0.08em',
-              color: 'var(--fg-3)',
-              border: '1px solid var(--line-2)',
-              borderRadius: 'var(--radius-sm)',
-              padding: '2px 5px',
-            }}
-          >
-            AFRICA
-          </span>
+        <a href={`${hrefPrefix}#top`} aria-label="ASComply Africa" style={{ display: 'inline-flex', flex: 'none' }}>
+          <Logo size={32} />
         </a>
-        <nav
-          aria-label="Primary"
-          className="ios-hide-mobile"
-          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 30, minWidth: 0 }}
-        >
+        <nav aria-label="Primary" className="a-nav">
           {NAV_LINKS.map((l) => {
             const active = l.href === activeHref
             return (
               <a
                 key={l.href}
                 href={`${hrefPrefix}${l.href}`}
-                // Not .ios-link: that rule's hover resolves to amber (the prototype's
-                // generic link behaviour, still what the footer wants). The nav's own
-                // state machine is teal-on-hover, teal-when-current.
-                className={l.shed ? `ios-nav-link ${l.shed}` : 'ios-nav-link'}
-                // The spy is a scroll-time answer, so it cannot light the destination
-                // until the jump lands. Setting it here means the indicator moves with
-                // the click; the next measurement then confirms (or corrects) it.
+                className="ios-nav-link"
+                // The spy only answers at scroll time; this moves the indicator with the click.
                 onClick={() => setActiveHref(l.href)}
-                // Must be 'true' | undefined, never a boolean: React passes a
-                // boolean straight to setAttribute for aria-* names, which would
-                // render aria-current="false" on every inactive link.
+                // 'true' | undefined, never a boolean: React would render aria-current="false".
                 aria-current={active ? 'true' : undefined}
                 style={{
                   fontSize: 14,
-                  color: active ? 'var(--action)' : 'var(--fg-2)',
-                  borderBottom: `2px solid ${active ? 'var(--action)' : 'transparent'}`,
-                  // 6 above vs 4 + 2px border below keeps the text centred on the
-                  // row alongside the brand lockup and both CTA buttons.
+                  fontWeight: 600,
+                  color: active ? 'var(--primary)' : 'var(--ink)',
+                  borderBottom: `2px solid ${active ? 'var(--primary)' : 'transparent'}`,
                   paddingTop: 6,
                   paddingBottom: 4,
                 }}
@@ -170,16 +153,77 @@ export function Nav({
             )
           })}
         </nav>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          {/* Opens the persona picker; a pick routes to the workspace the chosen role may open. */}
-          <button onClick={onSignIn} className="v2-btn v2-btn-ghost" style={{ height: 38, cursor: 'pointer' }}>
-            Explore the platform
+        <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
+          <button type="button" className="a-login a-link" onClick={onSignIn} style={{ fontSize: 14, fontWeight: 600 }}>
+            Platform login
           </button>
-          <button onClick={onBookDemo} className="v2-btn v2-btn-primary" style={{ height: 38, cursor: 'pointer' }}>
+          {onCreateAccount && (
+            <button type="button" className="a-create a-link" onClick={onCreateAccount} style={{ fontSize: 14, fontWeight: 600 }}>
+              Create an account
+            </button>
+          )}
+          <Button
+            size="sm"
+            onClick={() => {
+              setMenuOpen(false)
+              onBookDemo()
+            }}
+          >
             Book a demo
+          </Button>
+          <button
+            type="button"
+            ref={burgerRef}
+            className="a-burger"
+            aria-label="Menu"
+            aria-expanded={menuOpen}
+            aria-controls={menuId}
+            onClick={() => setMenuOpen((o) => !o)}
+          >
+            <Icon paths={GLYPHS[menuOpen ? 'x' : 'menu']} size={20} strokeWidth={2} />
           </button>
         </div>
       </div>
+      {menuOpen && (
+        <div id={menuId} className="a-menu">
+          {NAV_LINKS.map((l) => (
+            <a
+              key={l.href}
+              href={`${hrefPrefix}${l.href}`}
+              className="a-menu-link"
+              onClick={() => {
+                setActiveHref(l.href)
+                setMenuOpen(false)
+              }}
+              aria-current={l.href === activeHref ? 'true' : undefined}
+            >
+              {l.label}
+            </a>
+          ))}
+          <button
+            type="button"
+            className="a-link a-menu-login"
+            onClick={() => {
+              setMenuOpen(false)
+              onSignIn()
+            }}
+          >
+            Platform login
+          </button>
+          {onCreateAccount && (
+            <button
+              type="button"
+              className="a-link a-menu-login"
+              onClick={() => {
+                setMenuOpen(false)
+                onCreateAccount()
+              }}
+            >
+              Create an account
+            </button>
+          )}
+        </div>
+      )}
     </header>
   )
 }

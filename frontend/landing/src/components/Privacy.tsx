@@ -13,7 +13,7 @@ const H2 = { fontSize: 21, lineHeight: 1.3, letterSpacing: '-0.02em', fontWeight
 const P = { fontSize: 16, lineHeight: 1.65, color: 'var(--fg-2)', margin: '0 0 14px' } as const
 const LIST = { ...P, paddingLeft: 22 } as const
 const ITEM = { margin: '0 0 10px' } as const
-// .asc-app a is `color: inherit; text-decoration: none`, so an unstyled link is invisible.
+// The v2 `a` rule sets no underline, so an unstyled link would not read as a link.
 // overflowWrap lets the long gaoptout URL break instead of overhanging its column at 390px.
 const LINK = { color: 'var(--action)', textDecoration: 'underline', overflowWrap: 'anywhere' } as const
 
@@ -44,9 +44,10 @@ export function Privacy() {
             It is not legal advice, and we do not claim here that it satisfies any particular data-protection law.
           </p>
           <p style={P}>
-            Two other companies receive information about your visit. Google serves the fonts this site is typeset
+            Three other companies receive information about your visit. Google serves the fonts this site is typeset
             in, and measures how the site is used if you have allowed analytics. HubSpot stores the answers you give
-            if you book a demo. Your browser loads nothing on this site from any other company.
+            if you book a demo. Sentry receives a report when a page fails, and measures how long pages take to load.
+            Your browser loads nothing on this site from, and sends nothing to, any other company.
           </p>
 
           <h2 style={H2}>Google Analytics</h2>
@@ -128,8 +129,9 @@ export function Privacy() {
           </p>
           <p style={P}>
             This happens on every page of this site, every time, whatever you decide about analytics. It is not behind
-            the analytics switch and it is not behind any consent check — it is the one flow on this site with no gate
-            in front of it, and none of the controls further down stops it.
+            the analytics switch and it is not behind any consent check, and none of the controls further down stops
+            it. Sentry's error and performance reports, described below, are the only other flow on this site with no
+            consent gate.
           </p>
 
           <h2 style={H2}>If you book a demo</h2>
@@ -157,6 +159,19 @@ export function Privacy() {
             form carries your answers and nothing else.
           </p>
 
+          <h2 style={H2}>Error and performance monitoring</h2>
+          <p style={P}>
+            We use Sentry to find out when something breaks or runs slowly. When a page on this site or in the signed-in
+            ASComply product shows an error, your browser sends Sentry a report. Each page you open also sends Sentry
+            how long it took to load. These reports say what went wrong or how long it took, which page it happened on
+            (the address without anything after a '?'), and your browser, operating system and device type. This
+            happens on every visit to the live site, whatever you chose on the cookie notice. It is how we keep the
+            site working. It is not analytics, and it is not used to measure how you use the site. Sentry does not
+            store your IP address. It sets no cookies and writes nothing to your browser's storage. It never receives
+            what you type into the demo form. Sentry stores these reports in the EU. Our preview and test builds send
+            Sentry nothing.
+          </p>
+
           <h2 style={H2}>How to stop being measured</h2>
           <p style={P}>
             <strong>{ANALYTICS_DEFAULT_SENTENCE}</strong> The cookie notice on this site is where you choose: Accept
@@ -172,8 +187,8 @@ export function Privacy() {
             <li style={ITEM}>
               <strong>Block or clear cookies for this site.</strong> Your browser's own site settings can delete the _ga
               cookies and stop new ones being issued. That breaks the thread between your visits: Google can no longer
-              tell that today's visit and last week's came from the same browser. If you have not allowed analytics, you
-              are not being measured at all, so there is nothing here to stop. If you have allowed analytics, it does not
+              tell that today's visit and last week's came from the same browser. If you have not allowed analytics, Google
+              is not measuring you at all, so there is nothing here to stop. If you have allowed analytics, it does not
               stop the measurement itself — the Google Analytics code still runs, and Google still receives the page you
               are on and the IP address your request comes from.
             </li>

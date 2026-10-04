@@ -5,6 +5,7 @@ import { wasReported } from './reported'
 const DROPPED_KEYS = new Set(['http.query', 'http.fragment'])
 const GLOBAL_HANDLERS = 'auto.browser.global_handlers'
 const TRANSPORT_DECIDED = new Set(['ApiError', 'AbortError', 'TimeoutError', 'SessionEndedError'])
+const CAPACITY_KEYS = ['effectiveConnectionType', 'connectionType', 'deviceMemory', 'hardwareConcurrency', 'connection.rtt']
 const KEPT_BREADCRUMBS = new Set(['navigation', 'fetch', 'xhr'])
 
 type Bag = Record<string, unknown>
@@ -39,12 +40,17 @@ function walk(v: unknown, keys = false): unknown {
   return v
 }
 
+function dropCapacity(bag: unknown): void {
+  if (bag && typeof bag === 'object') for (const k of CAPACITY_KEYS) delete (bag as Bag)[k]
+}
+
 function scrubSpanLike<T extends { description?: string; data?: unknown }>(span: T): T {
   const out: T = { ...span }
   if (typeof out.description === 'string') out.description = clean(out.description)
   if (out.data && typeof out.data === 'object') {
     const data = walk(out.data) as Bag
     delete data['client.address']
+    dropCapacity(data)
     out.data = data
   }
   return out
@@ -89,6 +95,8 @@ export function scrubTransaction(event: TransactionEvent): TransactionEvent {
   const out = scrubEvent(event as unknown as ErrorEvent) as unknown as TransactionEvent
   delete out.request
   if (out.measurements) out.measurements = walk(out.measurements, true) as typeof out.measurements
+  dropCapacity(out.measurements)
+  dropCapacity((out.contexts as { trace?: { data?: unknown } } | undefined)?.trace?.data)
   if (out.spans) out.spans = out.spans.map((s) => scrubSpanLike(s))
   return out
 }

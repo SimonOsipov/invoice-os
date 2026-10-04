@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url'
 
 import { PROSE_MAX_WIDTH, Privacy } from './Privacy'
 import { Footer } from './Footer'
+import { sentryOptions } from '@invoice-os/monitoring'
 
 const SRC_DIR = fileURLToPath(new URL('.', import.meta.url))
 const PRIVACY_TSX = join(SRC_DIR, 'Privacy.tsx')
@@ -41,7 +42,7 @@ const LEDGER_NEEDLES: readonly (readonly [string, string])[] = [
   ['E1 optional answers are pre-selected', 'come with an answer already selected when the form opens'],
   ['E2 not a marketing list', 'does not add you to a marketing list'],
   ['E3 our code sets no cookies', 'Our own code sets no cookies at all'],
-  ['lede: no third company', 'Your browser loads nothing on this site from any other company'],
+  ['lede: no third company', 'Your browser loads nothing on this site from, and sends nothing to, any other company'],
 ]
 
 // AC7: each mechanism must state what it does NOT stop. Deleting either
@@ -57,7 +58,7 @@ const WITHDRAWAL_NEEDLES: readonly (readonly [string, string])[] = [
   // Without this the denied branch could be deleted and every other row stays green.
   [
     'W3 there is nothing to stop, while analytics is not allowed',
-    'If you have not allowed analytics, you are not being measured at all',
+    'If you have not allowed analytics, Google is not measuring you at all, so there is nothing here to stop.',
   ],
   ['W4 does not stop fonts or the form', 'It does not affect the fonts and it does not affect the demo form'],
   ['W5 lead-in', 'Block googletagmanager.com with a content blocker'],
@@ -123,11 +124,13 @@ describe('outline', () => {
 })
 
 describe('AC11 + AC12: the docs this page is defended by', () => {
-  it('the claim ledger exists and covers C1 to C19', () => {
+  it('the claim ledger exists and covers C1 to C31', () => {
     const ledger = readFileSync(join(DOCS, 'privacy-policy-claims.md'), 'utf8')
-    for (let n = 1; n <= 19; n += 1) {
+    for (let n = 1; n <= 31; n += 1) {
       expect(ledger, `ledger has no row C${n}`).toContain(`| C${n} |`)
     }
+    expect(ledger).toContain('(C1–C31)')
+    expect(ledger, 'the Table 1 heading still ends at C22').not.toContain('(C1–C22)')
     expect(ledger).toContain('Privacy.tsx')
   })
 
@@ -380,5 +383,160 @@ describe('T4-14 (AC-11): the ledger no longer forbids what the page now says', (
   it('the section this subtask discharges is recorded as closed, per the ledger own rule', () => {
     expect(flat, 'the LAND-05-03 marker must survive').toContain('Closed at LAND-05-03')
     expect(flat, 'no Closed at LAND-05-04 marker').toContain('Closed at LAND-05-04')
+  })
+})
+
+// pm-approved copy: change these strings only with a new approval.
+const APPROVED_INTRO =
+  'Three other companies receive information about your visit. Google serves the fonts this site is typeset in, and measures how the site is used if you have allowed analytics. HubSpot stores the answers you give if you book a demo. Sentry receives a report when a page fails, and measures how long pages take to load. Your browser loads nothing on this site from, and sends nothing to, any other company.'
+const APPROVED_MONITORING =
+  "We use Sentry to find out when something breaks or runs slowly. When a page on this site or in the signed-in ASComply product shows an error, your browser sends Sentry a report. Each page you open also sends Sentry how long it took to load. These reports say what went wrong or how long it took, which page it happened on (the address without anything after a '?'), and your browser, operating system and device type. This happens on every visit to the live site, whatever you chose on the cookie notice. It is how we keep the site working. It is not analytics, and it is not used to measure how you use the site. Sentry does not store your IP address. It sets no cookies and writes nothing to your browser's storage. It never receives what you type into the demo form. Sentry stores these reports in the EU. Our preview and test builds send Sentry nothing."
+const APPROVED_FONTS =
+  "This happens on every page of this site, every time, whatever you decide about analytics. It is not behind the analytics switch and it is not behind any consent check, and none of the controls further down stops it. Sentry's error and performance reports, described below, are the only other flow on this site with no consent gate."
+
+// SSR escapes ASCII ' to &#x27;; copy is compared as a visitor reads it.
+const plainText = (markup: string): string =>
+  markup
+    .replace(/<[^>]*>/g, '')
+    .replace(/&#x27;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
+
+const MONITORING_H2 = /<h2[^>]*>Error and performance monitoring<\/h2>/g
+
+describe('sentry: the page discloses Sentry', () => {
+  it('the lede is the approved text, in one paragraph', () => {
+    const hits = privacyParagraphs('Three other companies receive information about your visit')
+    expect(hits.length, 'expected exactly one lede paragraph').toBe(1)
+    expect(plainText(paragraphBody(hits[0]))).toBe(APPROVED_INTRO)
+    expect(html).not.toContain('Two other companies')
+    expect(html).not.toContain('Your browser loads nothing on this site from any other company')
+  })
+
+  it('the monitoring section is the approved text, between HubSpot and withdrawal', () => {
+    expect(html.match(MONITORING_H2) ?? [], 'expected exactly one monitoring h2').toHaveLength(1)
+    const heading = html.search(MONITORING_H2)
+    const booking = html.indexOf('>If you book a demo</h2>')
+    const lastHubspot = html.indexOf('The form carries your answers and nothing else')
+    const stop = html.indexOf('>How to stop being measured</h2>')
+    expect(booking, 'control: the demo section anchor is gone').toBeGreaterThan(-1)
+    expect(lastHubspot, 'control: the last HubSpot sentence anchor is gone').toBeGreaterThan(booking)
+    expect(stop, 'control: the withdrawal section anchor is gone').toBeGreaterThan(-1)
+    expect(heading).toBeGreaterThan(lastHubspot)
+    expect(heading).toBeLessThan(stop)
+
+    // One paragraph, then straight into the withdrawal heading.
+    const after = html.slice(heading).replace(MONITORING_H2, '')
+    const section = after.match(/^\s*<p[^>]*>([\s\S]*?)<\/p>\s*<h2[^>]*>How to stop being measured<\/h2>/)
+    expect(section, 'the heading is not followed by exactly one paragraph and then the withdrawal heading').not.toBeNull()
+    expect(plainText(section![1])).toBe(APPROVED_MONITORING)
+  })
+
+  it('the load-time sentence tracks the landing sample rate', () => {
+    const rate = sentryOptions({
+      service: 'landing',
+      dsn: 'https://public@o1.ingest.de.sentry.io/1',
+      release: 'r',
+    })!.tracesSampleRate
+    expect(typeof rate).toBe('number')
+    expect(html.includes('Each page you open')).toBe(rate === 1)
+    expect(html.includes('Some of the pages you open')).toBe(rate !== 1)
+  })
+
+  it('the fonts paragraph names the other ungated flow', () => {
+    const hits = privacyParagraphs('not behind any consent check')
+    expect(hits.length, 'expected exactly one fonts paragraph').toBe(1)
+    const para = paragraphBody(hits[0])
+    expect(para).toContain('Sentry')
+    expect(para).toContain('no consent gate')
+    expect(plainText(para)).toBe(APPROVED_FONTS)
+  })
+
+  it('the withdrawal passage no longer says a visitor who declined is not measured at all', () => {
+    expect(html, 'control: the replacement sentence is missing').toContain(
+      'If you have not allowed analytics, Google is not measuring you at all',
+    )
+    expect(html).not.toContain('you are not being measured at all')
+    expect(html).not.toContain('it is the one flow on this site with no gate')
+  })
+})
+
+describe('sentry: the ledger carries every new sentence', () => {
+  const ledger = readFileSync(join(DOCS, 'privacy-policy-claims.md'), 'utf8')
+  const flat = ledger.replace(/\s+/g, ' ')
+  const rowOf = (id: string): string[] => ledger.split('\n').filter((line) => line.startsWith(`| ${id} |`))
+  const NEW_IDS = Array.from({ length: 9 }, (_, i) => `C${23 + i}`)
+
+  it('each new ledger row has a claim, a class and evidence', () => {
+    expect(NEW_IDS).toHaveLength(9)
+    for (const id of NEW_IDS) {
+      const rows = rowOf(id)
+      expect(rows.length, `expected exactly one ${id} row`).toBe(1)
+      const cells = rows[0].split('|').map((cell) => cell.trim())
+      expect(cells[1], `${id}: column 1 is not the id`).toBe(id)
+      expect(cells[2], `${id} has no claim`).not.toBe('')
+      expect(cells[3], `${id} has no class`).not.toBe('')
+      expect(cells[4], `${id} has no evidence`).not.toBe('')
+    }
+    const order = NEW_IDS.map((id) => ledger.indexOf(`| ${id} |`))
+    expect(order, 'C23 to C31 are out of order').toEqual([...order].sort((a, b) => a - b))
+  })
+
+  it('C17 names the Sentry host and transport', () => {
+    const rows = rowOf('C17')
+    expect(rows.length).toBe(1)
+    expect(rows[0], 'control: C17 lost its HubSpot host').toContain('api-eu1.hsforms.com')
+    expect(rows[0]).toContain('sentry.io')
+    expect(rows[0]).toContain('fetch')
+  })
+
+  it('the ledger no longer counts what Sentry changed', () => {
+    expect(flat, 'control: the ledger read resolved').toContain('Privacy.tsx')
+    expect(flat).not.toContain('only three network senders')
+    expect(flat).not.toContain('the two third parties that receive visitor data')
+    expect(flat).not.toContain('exactly four external hosts')
+    expect(flat).toContain('the three third parties')
+  })
+
+  it('each new ledger claim is a sentence the monitoring section makes', () => {
+    const KEYS: Record<string, string> = {
+      C23: 'shows an error',
+      C24: 'how long it took to load',
+      C25: 'your browser, operating system and device type',
+      C26: 'every visit to the live site',
+      C27: 'not analytics',
+      C28: 'does not store your IP address',
+      C29: 'no cookies',
+      C30: 'what you type into the demo form',
+      C31: 'stores these reports in the EU',
+    }
+    const page = plainText(html)
+    expect(Object.keys(KEYS), 'one key per new row').toEqual(NEW_IDS)
+    for (const id of NEW_IDS) {
+      const claim = rowOf(id)[0]?.split('|')[2] ?? ''
+      expect(claim, `${id}: claim cell missing`).not.toBe('')
+      expect(page, `${id}: the page lacks "${KEYS[id]}"`).toContain(KEYS[id])
+      expect(claim, `${id}: the claim does not say "${KEYS[id]}"`).toContain(KEYS[id])
+    }
+  })
+
+  it('E3 and E6 carry the Sentry scope note and the five senders', () => {
+    const e3 = rowOf('E3')[0] ?? ''
+    const e6 = rowOf('E6')[0] ?? ''
+    expect(e3, 'control: E3 row missing').not.toBe('')
+    expect(e3).toContain('Sentry')
+    expect(e6).toContain('five network senders')
+    expect(e6).toContain('`register.ts`')
+    expect(flat, 'no ledger row may keep the old count').not.toContain('four network senders')
+    expect(e6).toContain('the Sentry SDK started by `instrument.ts`')
+  })
+
+  it('C10, W3 and W7 carry the D-19 changes', () => {
+    expect(flat, 'C10').toContain("Sentry's reports (C26) are the only other ungated flow")
+    expect(flat, 'W3').toContain('is not being measured by Google at all')
+    expect(flat, 'W3 old wording').not.toContain('is not being measured at all')
+    const w7 = rowOf('W7')[0]?.split('|')[2] ?? ''
+    expect(w7, 'control: W7 claim cell').toContain('stops Google Fonts')
+    expect(w7, 'W7 claim must not cite Sentry; the closing note does not').not.toContain('Sentry')
   })
 })

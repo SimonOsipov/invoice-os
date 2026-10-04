@@ -333,12 +333,12 @@ describe('transport inventory', () => {
       'frontend/app/src/lib/extractionReview.ts': 1,
       'frontend/app/src/lib/importApi.ts': 4, // XhrCtor type + three xhrCtor defaults
       'frontend/app/src/lib/sourceDocument.ts': 1,
-      'frontend/landing/src/hubspot.ts': 1, // carved out: landing's own form post
+      'frontend/landing/src/hubspot.ts': 1,
       'packages/api-client/src/client.ts': 1,
     })
 
-    const reported = Object.keys(hits).filter((f) => f !== 'frontend/landing/src/hubspot.ts')
-    expect(reported.length).toBe(5)
+    const reported = Object.keys(hits)
+    expect(reported.length).toBe(6)
     expect(reported.filter((f) => !code[f].includes('reportApiFailure('))).toEqual([])
   })
 })

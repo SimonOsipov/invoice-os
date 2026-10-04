@@ -95,12 +95,18 @@ func (s *Store) ProvisionWorkspace(ctx context.Context, in ProvisionInput) (Tena
 	subject := parsed.String()
 	tenantID := uuid.NewSHA1(workspaceNamespace, []byte(subject)).String()
 
+	kind := in.Kind
+	if kind == "" {
+		// ceiling: the SQL function still stores 'firm' for a direct NULL call; revisit if a second caller appears.
+		kind = "in_house"
+	}
+
 	var t Tenant
 	// The caller has no membership yet, so the gated seam would refuse before
 	// the closure; exempt like Me (TestRLS_UngatedCoreIsWorkerAndExemptionOnly).
 	err = db.WithinTenantTx(ctx, s.pool, tenantID, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT public.provision_workspace($1, $2, $3, $4, $5, $6)`,
-			tenantID, in.WorkspaceName, nullIfEmpty(in.Kind), subject, in.DisplayName, nullIfEmpty(caller.Email),
+			tenantID, in.WorkspaceName, kind, subject, in.DisplayName, nullIfEmpty(caller.Email),
 		); err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) && pgErr.Code == "23505" &&

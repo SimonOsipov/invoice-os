@@ -1,7 +1,7 @@
-/* Local page styles — ported verbatim from the ASComply Africa prototype's
-   inline <style> block. Keyframes for the hero product mock + hover transitions.
-   Token vars (--action, --bg-2, --line-3) resolve via inheritance from .asc-app;
-   --accent is the design system's amber and resolves from :root. */
+/* Local page styles — ported from the ASComply Africa prototype's inline <style>
+   block. Keyframes for the hero product mock + hover transitions.
+   --accent is the v2 peach and resolves from :root.
+*/
 
 * {
   box-sizing: border-box;
@@ -12,13 +12,12 @@ body {
   padding: 0;
 }
 
-/* Anchor clearance under the sticky header. --header-h comes from the design
-   system (packages/design-tokens/tokens/spacing.css) and carries no comment
-   there, so its meaning is pinned here at the point of use: 65px is the total
-   vertical space the landing's sticky header OCCUPIES — Nav's 64px inner row
-   plus its own 1px bottom hairline. Declared once by the design system,
-   consumed here, never redeclared. Three consumers read it: this rule, the Nav
-   inner row, and (from LAND-01-03) the scroll-spy threshold. */
+/* Anchor clearance under the sticky header. --header-h is declared once by the
+   v2 design system (v2/tokens/spacing.css): the total height the sticky header
+   occupies. Never redeclared here.
+   Consumers: this rule, the Nav inner row, the scroll-spy threshold.
+   Heights differ by viewport, so no pixel value is pinned in this comment.
+   The e2e nav spec measures the real header. */
 html {
   scroll-padding-top: var(--header-h);
   scroll-behavior: smooth;
@@ -32,9 +31,19 @@ html {
   }
 }
 
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+button {
+  font-family: inherit;
+}
+
 @keyframes scanline {
   0% {
-    transform: translateY(0);
+    transform: translateY(-30px);
     opacity: 0;
   }
   10% {
@@ -44,7 +53,7 @@ html {
     opacity: 1;
   }
   100% {
-    transform: translateY(190px);
+    transform: translateY(240px);
     opacity: 0;
   }
 }
@@ -59,55 +68,152 @@ html {
   }
 }
 
-/* Hover, ported verbatim from the prototype's own <style> block.
-   Links: teal → amber. Feature cards and list rows have none — they are content,
-   not controls. The two exceptions the prototype ships are the pricing card's
-   hairline and the module cells on the dark band. */
+/* Hover, ported from the prototype's own <style> block.
+   Links hover to --teal (v2 link hover). Feature cards and list rows have none — they are content,
+   not controls. The one exception the prototype ships is the module cells on the dark band. */
 .ios-link {
   transition: color 120ms ease-out;
 }
 .ios-link:hover {
-  color: var(--accent) !important;
-}
-.ios-price:hover {
-  border-color: var(--line-3) !important;
+  color: var(--teal) !important;
 }
 
-/* Top-nav links. Separate from .ios-link because the two want different hovers:
-   .ios-link goes teal -> amber (the prototype's generic link rule, which the footer
-   still uses), whereas the nav is teal throughout — teal on hover, teal when current.
-   `!important` for the same reason .ios-link needs it: the colour is set inline per
-   link, and an inline declaration outranks a class rule without it.
-
-   The active state carries NO transition: the underline appears instantly, so a
-   fading colour would arrive after it and read as two separate events. */
+/* Top-nav links. Separate from .ios-link: the nav has its own current state.
+   `!important` because the colour is set inline per link. The active state has no
+   transition, so the underline and colour change together. */
 .ios-nav-link {
   transition: color 120ms ease-out;
 }
 .ios-nav-link:hover {
-  color: var(--action) !important;
+  color: var(--teal) !important;
 }
 .ios-nav-link[aria-current] {
   transition: none;
 }
 
-/* Nav shedding. The six links need ~1240px alongside the lockup and both CTAs;
-   below that the tail is dropped rather than allowed to wrap or collide. The
-   sections themselves stay reachable by scrolling — only the shortcut goes. */
-@media (max-width: 1239.98px) {
-  .ios-nav-shed-1240 {
-    display: none !important;
+/* v2 header: below 1120px the nav and login collapse into the burger menu. */
+.a-link {
+  color: var(--ink);
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 14px;
+  cursor: pointer;
+  text-align: left;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+.a-link:hover {
+  color: var(--teal);
+}
+.a-link:focus-visible,
+.a-burger:focus-visible,
+.ios-nav-link:focus-visible,
+.a-menu-link:focus-visible,
+.a-card-btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+/* Inset: the steps scroller clips an outside ring. */
+[data-intel-steps] .a-card-btn:focus-visible {
+  outline-offset: -2px;
+}
+/* Inset: the panel clips an outside ring. */
+.api-sample:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.a-tab-pill:hover {
+  filter: brightness(0.97);
+}
+.cov-marker:focus {
+  outline: none;
+}
+.cov-marker-focus {
+  opacity: 0;
+}
+.cov-marker:focus-visible .cov-marker-focus {
+  opacity: 1;
+}
+.a-nav {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+}
+.a-burger {
+  display: none;
+  width: 44px;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--button-outline-border);
+  border-radius: var(--radius-btn);
+  color: var(--ink);
+  cursor: pointer;
+}
+.a-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: var(--header-h);
+  display: grid;
+  padding: 8px var(--gutter) 24px;
+  background: var(--background);
+  border-bottom: 1px solid var(--header-border);
+}
+.a-menu-link {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.a-menu-link[aria-current] {
+  color: var(--primary);
+}
+.a-menu-login {
+  padding: 16px 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+@media (max-width: 1120px) {
+  .a-nav,
+  .a-login {
+    display: none;
+  }
+  .a-burger {
+    display: inline-flex;
   }
 }
-@media (max-width: 1079.98px) {
-  .ios-nav-shed-1080 {
-    display: none !important;
+/* The entry needs ~149px on Linux Chromium metrics; hidden 1121-1219px. */
+@media (max-width: 1219px) {
+  .a-create {
+    display: none;
+  }
+}
+@media (min-width: 1120.02px) {
+  .a-menu {
+    display: none;
   }
 }
 
-/* Modules grid on the gradient band: the fill lifts to --on-dark-10 (the design
-   system's "buttons on dark" behaviour), the amber icon brightens and nudges up,
-   and the body copy brightens. Motion tokens only — no scale, no shadow. */
+/* Module grid: 4 / 2 / 1 columns; cells lift on hover (motion tokens only). */
+.mod-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+@media (max-width: 1000px) {
+  .mod-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .cols6 {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+@media (max-width: 560px) {
+  .mod-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 .mod-cell {
   transition: background var(--dur-base) var(--ease-out);
 }
@@ -125,7 +231,47 @@ html {
   transition: color var(--dur-base) var(--ease-out);
 }
 .mod-cell:hover .mod-body {
-  color: oklch(100% 0 0 / 0.88) !important;
+  color: rgba(255, 255, 255, 0.88) !important;
+}
+
+.split {
+  display: grid;
+}
+.cols6 {
+  display: grid;
+}
+[data-sol-tabs] .ds-seg-btn {
+  white-space: nowrap;
+}
+.cols3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.hero-scan {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 30px;
+  background: linear-gradient(180deg, var(--accent-20), transparent);
+  pointer-events: none;
+  animation: scanline 2.8s var(--ease-out) infinite;
+}
+.hero-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 7px 14px;
+  animation: rowIn 320ms var(--ease-out) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hero-row {
+    animation: none;
+  }
+  .hero-scan {
+    display: none;
+  }
 }
 
 /* ------------------------------------------------------------------
@@ -135,29 +281,44 @@ html {
    required to override the inline grid-template-columns the sections
    set on themselves.
    ------------------------------------------------------------------ */
-@media (max-width: 920px) {
-  .ios-grid.ios-2 {
-    grid-template-columns: 1fr !important;
+@media (max-width: 900px) {
+  .split {
+    grid-template-columns: minmax(0, 1fr) !important;
   }
-  .ios-grid.ios-3,
-  .ios-grid.ios-4 {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  .hero-card {
+    margin-top: 0 !important;
+  }
+  .cols3 {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .rm-chev {
+    display: none !important;
+  }
+  .cta-mark {
+    display: none !important;
+  }
+  /* a sticky grid item slides over the list in one column */
+  [data-faq-aside] {
+    position: static !important;
   }
 }
 
-@media (max-width: 600px) {
-  .ios-grid.ios-3,
-  .ios-grid.ios-4 {
-    grid-template-columns: 1fr !important;
+@media (max-width: 640px) {
+  .cols6 {
+    grid-template-columns: minmax(0, 1fr) !important;
   }
-  .ios-hide-mobile {
-    display: none !important;
+  .a-tabs [role="tablist"] {
+    overflow-x: auto;
+    scrollbar-width: none;
   }
-  .ios-hero-h1 {
-    font-size: 40px !important;
+  .a-tabs [role="tab"] {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    padding: 0 20px;
   }
-  .ios-demo-card {
-    padding: 36px 22px !important;
+  /* Inset: the scroll container clips an outside ring. */
+  .a-tabs [role="tab"]:focus-visible {
+    outline-offset: -2px;
   }
 }
 
@@ -183,16 +344,11 @@ html {
   bottom: 24px;
   z-index: 40;
   width: 460px;
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: 16px;
   padding: 24px;
-  font-size: 14px;
-  line-height: 1.43;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-elegant);
+  font-size: var(--fs-body-sm);
+  line-height: var(--lh-ui);
   animation: cn-in var(--dur-base) var(--ease-out) both;
 }
 
@@ -204,19 +360,24 @@ html {
 
 .cn-setting {
   margin: 0;
-  color: var(--ink);
-  font-weight: 600;
+  font-family: var(--font-display);
+  font-size: var(--fs-card-title);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-snug);
+  letter-spacing: var(--tracking-card);
+  color: var(--text-heading);
 }
 
 .cn-body {
   margin: 0;
-  color: var(--foreground);
+  color: var(--text-copy);
 }
 
-/* Two classes (0,2,0) to outrank `.asc-app a { text-decoration: none }` (0,1,1);
-   a single-class rule loses and the link ships un-underlined. Colour is left to
-   .lnk, which is (0,2,1) and would win over this rule anyway. */
+/* Two classes (0,2,0) outrank the v2 `a { text-decoration: none }` (0,0,1).
+   Pinned by CookieNotice.css.test.ts. */
 .lnk.cn-link {
+  justify-self: start;
+  color: var(--link);
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -226,9 +387,8 @@ html {
   gap: 12px;
 }
 
-/* Every box-affecting property is declared here once, so the two buttons cannot
-   diverge. font-family / font-size / cursor are in the list because a native
-   <button> inherits none of them and there is no `.asc-app button` rule. */
+/* Every box property is declared here once so the two buttons cannot diverge;
+   font-family, font-size and cursor are listed because a native <button> inherits none. */
 .cn-actions button {
   flex: 1;
   display: inline-flex;
@@ -236,11 +396,11 @@ html {
   justify-content: center;
   height: 40px;
   padding: 0 16px;
-  border: 1px solid var(--primary);
-  border-radius: var(--radius-pill);
+  border: 1px solid transparent;
+  border-radius: var(--radius-btn);
   font-family: var(--font-sans);
-  font-size: 14px;
-  font-weight: 500;
+  font-size: var(--fs-btn);
+  font-weight: var(--fw-bold);
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out), filter var(--dur-fast) var(--ease-out);
 }
@@ -250,31 +410,39 @@ html {
   outline-offset: 2px;
 }
 
-/* Accept's border matches its own fill, so it is invisible; it exists only so the
-   two buttons occupy an identical box. */
-[data-consent="accept"] {
+/* (0,2,0) outranks the shared (0,1,1) border shorthand; colours only. */
+.cn-actions [data-consent="accept"] {
   background: var(--primary);
   color: var(--primary-foreground);
 }
-[data-consent="reject"] {
-  background: var(--card);
-  color: var(--primary);
+.cn-actions [data-consent="reject"] {
+  background: transparent;
+  color: var(--ink);
+  border-color: var(--button-outline-border);
 }
-[data-consent="accept"]:hover {
-  filter: brightness(1.22);
+.cn-actions [data-consent="accept"]:hover {
+  filter: brightness(1.18);
 }
-[data-consent="reject"]:hover {
-  background: var(--primary-10);
+.cn-actions [data-consent="reject"]:hover {
+  background: var(--muted);
 }
 
-/* Reopened card 266.08px + the 24px inset + one 20.02px body line (14px x 1.43) = 310.1,
-   rounded up. The extra line is deliberate headroom: the footer's link column sits inside
-   the card's x band, so a wrap this does not cover puts those links back under it. */
+/* One band serves the footer spacer and the focus scroll padding.
+   landing-consent.spec.ts C10 re-derives it live. */
+:root {
+  --cn-band: 320px;
+}
 .cn-spacer {
-  height: 320px;
+  height: var(--cn-band);
+}
+html:has(.cookie-note) {
+  scroll-padding-bottom: var(--cn-band);
 }
 
 @media (max-width: 640px) {
+  :root {
+    --cn-band: 282px;
+  }
   .cookie-note {
     left: 12px;
     right: 12px;
@@ -289,9 +457,14 @@ html {
   .cn-actions button {
     height: 44px;
   }
-  /* Reopened card ~264.1px (256.09 measured at gap 10, +8 restoring its 4 gaps to 12px) + the 12px
-     inset. Modeled, not measured: landing-consent.spec.ts C10 re-derives the band on the live build. */
-  .cn-spacer {
-    height: 282px;
-  }
+}
+
+.btn-on-dark {
+  color: var(--accent) !important;
+  border-bottom-color: var(--accent) !important;
+}
+
+.btn-on-peach {
+  color: var(--primary) !important;
+  border-bottom-color: var(--primary) !important;
 }

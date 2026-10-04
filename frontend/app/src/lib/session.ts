@@ -175,7 +175,9 @@ export function decodeJwtPayload(token: string | null): Record<string, unknown> 
   }
   try {
     const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
-    const claims: unknown = JSON.parse(atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, '=')))
+    // atob yields Latin-1; decode the bytes as UTF-8 so non-ASCII names survive.
+    const bytes = Uint8Array.from(atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, '=')), (c) => c.charCodeAt(0))
+    const claims: unknown = JSON.parse(new TextDecoder().decode(bytes))
     return claims !== null && typeof claims === 'object' && !Array.isArray(claims) ? (claims as Record<string, unknown>) : null
   } catch {
     return null

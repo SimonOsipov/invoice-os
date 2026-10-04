@@ -689,6 +689,73 @@ func TestDeliver_OptInIsNotResentAfterAVersionMiss(t *testing.T) {
 	}
 }
 
+// Two workers: the version 2 job runs while the version 1 job is inside the Resend call, before it records the opt-in.
+func TestDeliver_OptInIsSentOnceWhenTwoVersionsRunTogether(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "optinrace")
+	qaRegistrant(t, r.e, email, "Ada Lovelace", "", consentText)
+	gate := qaNewBlockOnce(t, r, 1)
+	r.rs.fn = func(n int, _ Contact, _ bool) error { return gate.wait(n) }
+
+	running := r.workAsync(t, r.jobRow(t, email, "resend", 1))
+	gate.awaitEntered(t)
+	qaIntakeWhileRunning(t, func(ctx context.Context, s *Store) error {
+		return s.DemoRequest(ctx, DemoIntake{Email: email, Name: "Ada Lovelace"})
+	}, r.e)
+	res, err := r.work(t, r.jobRow(t, email, "resend", 2))
+	qaRequireCompleted(t, res, err, "version 2 job")
+	gate.open()
+	a := qaAwaitAttempt(t, running)
+	qaRequireCompleted(t, a.res, a.err, "version 1 job")
+
+	opts := 0
+	for _, c := range r.rs.got() {
+		if c.OptIn {
+			opts++
+		}
+	}
+	if opts != 1 {
+		t.Fatalf("opt-in sent %d times, want 1: %+v", opts, r.rs.got())
+	}
+}
+
+// Two workers: the version 2 job delivers while the version 1 call is still in flight and lands after it.
+func TestDeliver_StaleCallLandingLastDoesNotLeaveTheVendorStale(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "landrace")
+	qaRegistrant(t, r.e, email, "Ada Lovelace", "", "")
+	gate := qaNewBlockOnce(t, r, 1)
+	var mu sync.Mutex
+	var landed []Contact
+	r.hs.fn = func(n int, c Contact) error {
+		err := gate.wait(n)
+		mu.Lock()
+		landed = append(landed, c)
+		mu.Unlock()
+		return err
+	}
+
+	running := r.workAsync(t, r.jobRow(t, email, "hubspot", 1))
+	gate.awaitEntered(t)
+	qaIntakeWhileRunning(t, func(ctx context.Context, s *Store) error {
+		return s.DemoRequest(ctx, DemoIntake{Email: email, Name: "Ada Lovelace"})
+	}, r.e)
+	res, err := r.work(t, r.jobRow(t, email, "hubspot", 2))
+	qaRequireCompleted(t, res, err, "version 2 job")
+	gate.open()
+	a := qaAwaitAttempt(t, running)
+	qaRequireCompleted(t, a.res, a.err, "version 1 job")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(landed) != 2 {
+		t.Fatalf("vendor calls landed = %d, want 2", len(landed))
+	}
+	if last := landed[len(landed)-1]; !qaHasTag(last, "demo request") && r.delivery(t, email).HubSpotAt != nil {
+		t.Fatalf("the last call to land = %+v and the row says delivered: the vendor holds version 1", last)
+	}
+}
+
 func TestDeliver_UntickedRegistrantNeverOptsIn(t *testing.T) {
 	r := qaNewRig(t, ModeReal)
 	email := uniqueEmail(t, r.e, "noopt")

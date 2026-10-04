@@ -37,19 +37,19 @@ function WaitingOn({ pending }: { pending: NonNullable<ApprovalStateView['pendin
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <div className="label">{APPROVAL_CARD_COPY.waitingOn}</div>
-      <div data-testid="approval-holder">
-        <div style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.3 }}>{pending.roleTitle}</div>
-        {pending.holderText != null && (
-          <div data-testid="approval-holder-name" style={{ marginTop: 3, fontSize: 12.5, color: 'var(--fg-2)' }}>
-            {pending.holderText}
-            {pending.holderWarn && (
-              <span data-testid="approval-holder-warn" className="mono" style={{ marginLeft: 6, fontSize: 10, color: 'var(--status-amber-text)' }}>
-                {APPROVAL_CARD_COPY.unstaffedSeat}
-              </span>
-            )}
-          </div>
-        )}
+      <div data-testid="approval-holder" style={{ fontSize: 13.5, fontWeight: 600 }}>
+        {pending.roleTitle}
       </div>
+      {pending.holderText != null && (
+        <div data-testid="approval-holder-name" style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>
+          {pending.holderText}
+          {pending.holderWarn && (
+            <span data-testid="approval-holder-warn" className="mono" style={{ marginLeft: 6, fontSize: 10, color: 'var(--status-amber-text)' }}>
+              {APPROVAL_CARD_COPY.unstaffedSeat}
+            </span>
+          )}
+        </div>
+      )}
       {pending.dueLabel != null && (
         <div data-testid="approval-due" className="mono" style={{ fontSize: 11, color: pending.overdue ? 'var(--status-red-text)' : 'var(--fg-3)' }}>
           {pending.dueLabel}
@@ -58,7 +58,7 @@ function WaitingOn({ pending }: { pending: NonNullable<ApprovalStateView['pendin
       {/* Points at the page-header pair (D-AC-7); this card renders no control of its own. */}
       <div
         data-testid="approval-decide-hint"
-        style={{ marginTop: 4, paddingTop: 8, borderTop: '1px solid var(--line-1)', fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}
+        style={{ marginTop: 4, paddingTop: 8, borderTop: '1px solid var(--line-1)', color: 'var(--fg-3)' }}
       >
         {APPROVAL_CARD_COPY.decideAbove}
       </div>

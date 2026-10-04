@@ -367,6 +367,21 @@ describe('ApprovalStateCard', () => {
     expect(within(el).getByTestId('approval-due').style.fontSize).toBe('11px')
   })
 
+  it('the hint inherits the body size; role and holder are separate column items', () => {
+    const step = stepFixture({ workflow_role_title: 'Finance lead', holder: { text: 'Ada Obi', warn: false } })
+    render(<ApprovalStateCard run={readyRun(runFixture({ steps: [step] }))} />)
+
+    const el = card()
+    const column = within(el).getByTestId('approval-decide-hint').parentElement as HTMLElement
+    expect(within(el).getByTestId('approval-decide-hint').style.fontSize, 'hint inherits 12.5px').toBe('')
+    const role = within(el).getByText('Finance lead')
+    const holder = within(el).getByTestId('approval-holder-name')
+    expect(role.parentElement, 'role is a column item').toBe(column)
+    expect(holder.parentElement, 'holder is a column item').toBe(column)
+    expect(role.style.lineHeight, 'role inherits 1.5').toBe('')
+    expect(holder.style.marginTop, 'the column gap spaces the holder').toBe('')
+  })
+
   it('approvalStateCard_overdueBeatsAFormattedDueDate', () => {
     const DUE = '2026-07-01T00:00:00Z'
 

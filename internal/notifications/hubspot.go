@@ -24,10 +24,13 @@ type HubSpot struct {
 // NewHubSpot: a nil hc means http.Client{Timeout: 10s}.
 func NewHubSpot(baseURL string, k Keys, hc *http.Client) *HubSpot {
 	if hc == nil {
-		hc = &http.Client{Timeout: 10 * time.Second}
+		hc = &http.Client{Timeout: 10 * time.Second, CheckRedirect: noRedirect}
 	}
 	return &HubSpot{baseURL: strings.TrimRight(baseURL, "/"), token: k.HubSpotToken, hc: hc}
 }
+
+// noRedirect surfaces a 3xx as the response; following it would turn a write into a GET.
+func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 const hubspotContacts = "/crm/v3/objects/contacts"
 
@@ -43,7 +46,9 @@ func (h *HubSpot) Upsert(ctx context.Context, c Contact) error {
 	for _, t := range c.Tags {
 		tags.WriteString(";" + strings.ReplaceAll(t, " ", "_"))
 	}
-	props["ascomply_contact_tags"] = tags.String()
+	if tags.Len() > 0 { // an empty value would clear tags HubSpot already holds
+		props["ascomply_contact_tags"] = tags.String()
+	}
 
 	patchURL := h.baseURL + hubspotContacts + "/" + url.PathEscape(c.Email) + "?idProperty=email"
 	status, err := doJSON(ctx, h.hc, http.MethodPatch, patchURL, h.token, map[string]any{"properties": props})

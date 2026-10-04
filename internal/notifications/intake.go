@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -49,7 +50,7 @@ func decodeIntake(w http.ResponseWriter, r *http.Request, dst any) bool {
 		return false
 	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxIntakeBody))
-	if err := dec.Decode(dst); err != nil || dec.More() {
+	if err := dec.Decode(dst); err != nil || dec.Decode(&struct{}{}) != io.EOF {
 		writeJSONBody(w, http.StatusBadRequest, map[string]string{"error": "malformed body"})
 		return false
 	}

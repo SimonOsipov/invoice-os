@@ -18,8 +18,7 @@ import type { PlatformCtx } from '../types'
 const CARD: React.CSSProperties = { background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)' }
 const CARD_HEAD: React.CSSProperties = { padding: '14px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }
 
-// Env-switch segment. Header.tsx's SEG_BASE at this card header's smaller scale — the two
-// controls share the pattern and the tokens, not a module.
+// Env-switch segment, at this card header's smaller scale.
 const SEG: React.CSSProperties = { border: 0, cursor: 'pointer', height: 22, padding: '0 10px', borderRadius: 999, fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: 600, letterSpacing: '0.06em', display: 'inline-flex', alignItems: 'center', gap: 6 }
 
 // Faint = the connector doing its own housekeeping (a scheduled pull, a poll); the

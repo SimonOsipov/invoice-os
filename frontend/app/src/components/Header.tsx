@@ -100,8 +100,8 @@ export function Header({ ctx }: { ctx: PlatformCtx }) {
             </button>
           )}
         </form>
-        {/* Sandbox / Live switch — segment heights (28 + 2px padding + 1px border = 34)
-            keep the control flush with the search box and "New invoice" beside it. */}
+        {/* Sandbox / Live switch: 28px segments + 3px padding + 1px border = 36px, centred
+            against the 34px search box and "New invoice". */}
         <div data-testid="env-pill" style={{ display: 'flex', alignItems: 'center', background: 'var(--sage)', border: `1px solid ${sandbox ? 'var(--status-amber-border)' : 'var(--status-green-border)'}`, borderRadius: 'var(--radius-btn)', padding: 3, gap: 2 }}>
           <button
             type="button"

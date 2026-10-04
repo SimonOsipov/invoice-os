@@ -30,6 +30,7 @@ type HeaderCtx = Pick<
 function headerCtx(over: {
   sandbox: boolean
   setSandbox?: () => void
+  openCreate?: () => void
   nav?: PlatformCtx['nav']
   setInvoiceQuery?: (q: string) => void
   searchInvoices?: (q: string) => void
@@ -41,7 +42,7 @@ function headerCtx(over: {
   const ctx: HeaderCtx = {
     active: { initials: 'OP' },
     view: over.view ?? 'dashboard',
-    openCreate: () => {},
+    openCreate: over.openCreate ?? (() => {}),
     setSandbox: over.setSandbox ?? vi.fn(),
     sandbox: over.sandbox,
     nav: over.nav ?? vi.fn(),
@@ -501,7 +502,7 @@ describe('HD-03 the active segment is filled primary at 4px', () => {
   })
 })
 
-// The sandbox-mode row is red today; the live-mode row guards the inactive look the story keeps.
+// The live-mode row guards the inactive look the story keeps.
 describe('HD-04 the inactive segment shows its mode only on the dot (boundary)', () => {
   it('(pin, green at write) live mode: SANDBOX is transparent with an amber-text dot, the track border is green, no segment fill names a status token', () => {
     const host = ssr(false)
@@ -548,5 +549,58 @@ describe('HD-06 the LIVE segment keeps its disabled look', () => {
     expect(d.get('background')).toBe('transparent')
     expect(d.get('color')).toBe('var(--fg-4)')
     expect(d.get('cursor')).toBe('not-allowed')
+  })
+})
+
+// Every inline declaration that names an environment colour, as element|label|property.
+function statusDecls(host: HTMLElement): string[] {
+  const hits: string[] = []
+  for (const el of Array.from(host.querySelectorAll('[style]'))) {
+    for (const [prop, value] of decls(el)) {
+      if (!value.includes('--status-')) continue
+      const label = el.getAttribute('data-testid') ?? el.closest('button')?.textContent ?? ''
+      hits.push(`${el.tagName}|${label}|${prop}`)
+    }
+  }
+  return hits.sort()
+}
+
+describe('HD-07 the environment colour appears only on the track border and the dots', () => {
+  it('sandbox: the track border is the only status-coloured declaration', () => {
+    expect(statusDecls(ssr(true))).toEqual(['DIV|env-pill|border'])
+  })
+
+  it('live mode: the track border and the inactive SANDBOX dot are the only ones', () => {
+    expect(statusDecls(ssr(false))).toEqual(['DIV|env-pill|border', 'SPAN|SANDBOX|background'])
+  })
+})
+
+describe('HD-08 the switch and the CTA behave as before', () => {
+  it('clicking SANDBOX in live mode selects sandbox exactly once', async () => {
+    const setSandbox = vi.fn()
+    render(<Header ctx={headerCtx({ sandbox: false, setSandbox })} />)
+
+    await userEvent.setup().click(sandboxSeg())
+
+    expect(setSandbox).toHaveBeenCalledTimes(1)
+    expect(setSandbox).toHaveBeenCalledWith(true)
+  })
+
+  it('New invoice opens the create flow and keeps the v2 primary button classes with no inline fill or filter', async () => {
+    const openCreate = vi.fn()
+    const { container } = render(<Header ctx={headerCtx({ sandbox: true, openCreate })} />)
+
+    await userEvent.setup().click(newInvoiceBtn())
+
+    expect(openCreate).toHaveBeenCalledTimes(1)
+    const cls = newInvoiceBtn().className.split(/\s+/)
+    expect(cls).toEqual(expect.arrayContaining(['v2-btn', 'v2-btn-primary', 'pf-btn']))
+    // An inline fill or filter would beat `.asc-app .v2-btn-primary:hover` (cascade).
+    const cta = Array.from(ssr(true).querySelectorAll('button')).find((b) => b.textContent?.includes('New invoice'))
+    const d = decls(cta ?? null)
+    expect(d.get('height'), 'control: the inline declarations are read').toBe('34px')
+    expect(d.has('background')).toBe(false)
+    expect(d.has('filter')).toBe(false)
+    expect(container.querySelectorAll('[data-testid="env-pill"] .pf-btn')).toHaveLength(0)
   })
 })

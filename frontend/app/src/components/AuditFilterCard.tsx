@@ -704,7 +704,7 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
             data-testid="audit-clear-all"
             onClick={() => onChange(clearAllFilters())}
             className="pf-btn"
-            style={{ border: 0, background: 'transparent', color: 'var(--action)', fontFamily: 'var(--font-sans)', fontSize: 12.5, fontWeight: 600, marginLeft: 4, cursor: 'pointer' }}
+            style={{ border: 0, background: 'transparent', color: 'var(--action)', fontFamily: 'var(--font-sans)', fontSize: 12, fontWeight: 600, marginLeft: 4, cursor: 'pointer' }}
           >
             Clear all
           </button>

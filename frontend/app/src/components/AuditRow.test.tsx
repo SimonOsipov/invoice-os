@@ -231,6 +231,7 @@ describe('AuditRow density per variant (D-4)', () => {
       expect(sv(row.lastElementChild as HTMLElement, 'color'), `${v} chevron`).toBe('var(--fg-3)')
       // Audit turns the glyph inside the cell; activity turns the cell.
       const cell = row.lastElementChild as HTMLElement
+      expect(cell.querySelector('svg')!.getAttribute('width'), `${v} chevron is 14px`).toBe('14')
       const inner = cell.firstElementChild as HTMLElement | null
       expect([sv(cell, 'transform'), inner ? sv(inner, 'transform') : null], `${v} chevron rotation`).toEqual(v === 'activity' ? ['rotate(-90deg)', null] : [null, 'rotate(-90deg)'])
       cleanup()

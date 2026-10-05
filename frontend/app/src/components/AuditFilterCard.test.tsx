@@ -1307,7 +1307,7 @@ describe('AuditFilterCard: v2 restyle (RESKIN2-06-02)', () => {
     expect([row.style.gap, row.style.marginTop, row.style.paddingTop, row.style.borderTop]).toEqual(['7px', '12px', '12px', '1px solid var(--line-1)'])
 
     const clear = screen.getByTestId('audit-clear-all')
-    expect([clear.style.fontSize, clear.style.fontWeight, clear.style.marginLeft, clear.style.color]).toEqual(['12.5px', '600', '4px', 'var(--action)'])
+    expect([clear.style.fontSize, clear.style.fontWeight, clear.style.marginLeft, clear.style.color]).toEqual(['12px', '600', '4px', 'var(--action)'])
     cleanup()
 
     // A dateless custom range draws no pill but is non-default: the row stays for Clear all.

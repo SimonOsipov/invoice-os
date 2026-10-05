@@ -90,6 +90,7 @@ describe('ConnectorDetail > header and health strip', () => {
     mount()
     const tile = screen.getByText(CONNECTOR_DEFS[0].mono, { exact: true })
     expect(tile.style.color).toBe('var(--primary-foreground)')
+    expect(tile.style.letterSpacing, 'the prototype detail tile sets none').toBe('')
     expect(sandbox().style.color).toBe('var(--primary-foreground)')
     expect((sandbox().querySelector('span') as HTMLElement).style.background).toBe('var(--primary-foreground)')
   })

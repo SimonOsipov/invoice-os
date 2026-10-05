@@ -8,7 +8,7 @@
 // REVIEW_GRID_COLUMNS precedent: the row owns the geometry and the header imports it, so
 // the two can never drift apart.
 
-import { chevDownGlyph } from '../glyphs'
+import { chevDownGlyph14 } from '../glyphs'
 import type { AuditEvent } from '../lib/audit'
 import { auditEventView } from '../lib/auditVocabulary'
 import { fmtDateTime } from '../lib/format'
@@ -105,7 +105,7 @@ export function AuditRow({ event, expanded, onToggle, onFilterToInvoice, variant
         <span className="mono" style={{ fontSize: 11, color: audit ? 'var(--fg-2)' : 'var(--fg-3)', whiteSpace: 'nowrap' }}>{fmtDateTime(event.created_at)}</span>
         {/* Audit rotates the glyph, not the 44px cell: turning the cell moves the chevron off the row centre. */}
         <span aria-hidden style={{ display: 'inline-flex', justifyContent: 'flex-end', color: 'var(--fg-3)', pointerEvents: 'none', ...(audit ? null : chevSpin) }}>
-          {audit ? <span style={{ display: 'inline-flex', ...chevSpin }}>{chevDownGlyph}</span> : chevDownGlyph}
+          {audit ? <span style={{ display: 'inline-flex', ...chevSpin }}>{chevDownGlyph14}</span> : chevDownGlyph14}
         </span>
       </div>
       {expanded && (

@@ -230,7 +230,6 @@ describe('Settings > connector list paint', () => {
   it('the monogram tile text is white, as the prototype #fff', () => {
     render(<SettingsView ctx={settingsCtx('connectors', false)} />)
     expect(screen.getByText('SAP', { exact: true }).style.color).toBe('var(--primary-foreground)')
-    expect(screen.getByText('SAP', { exact: true }).className, 'tracked by .mono').toBe('mono')
   })
 })
 

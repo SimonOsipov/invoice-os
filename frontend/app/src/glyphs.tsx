@@ -6,6 +6,7 @@ import type { CSSProperties, ReactNode } from 'react'
 import { Icon } from './icons'
 
 export const chevDownGlyph = <Icon paths={['m6 9 6 6 6-6']} size={16} />
+export const chevDownGlyph14 = <Icon paths={['m6 9 6 6 6-6']} size={14} />
 export const tickGlyph11 = <Icon paths={['M20 6 9 17l-5-5']} size={11} strokeWidth={3} />
 export const tickGlyph13 = <Icon paths={['M20 6 9 17l-5-5']} size={13} strokeWidth={3} />
 export const crossGlyph = <Icon paths={['M18 6 6 18M6 6l12 12']} size={11} strokeWidth={3} />

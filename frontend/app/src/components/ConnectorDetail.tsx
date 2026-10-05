@@ -95,7 +95,7 @@ export function ConnectorDetail({
 
       {/* Header */}
       <div style={{ ...CARD, padding: '18px 20px', display: 'flex', alignItems: 'center', gap: 15, marginBottom: 16 }}>
-        <span style={{ flex: 'none', width: 42, height: 42, borderRadius: 'var(--radius-md)', background: 'var(--slate-800)', color: 'var(--primary-foreground)', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.02em' }}>{def.mono}</span>
+        <span style={{ flex: 'none', width: 42, height: 42, borderRadius: 'var(--radius-md)', background: 'var(--slate-800)', color: 'var(--primary-foreground)', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700 }}>{def.mono}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
             <span style={{ fontSize: 16, fontWeight: 700 }}>{def.name}</span>

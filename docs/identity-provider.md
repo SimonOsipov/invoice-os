@@ -520,8 +520,7 @@ persona until AUTH-15. A stored record without the name keeps a blank card: rene
 
 The access token travels only in the exchange and refresh answers and the `Authorization`
 header; the refresh token travels only in the exchange answer, the refresh request and
-answer, and the sign-out request (see Revocation). Landing never holds either. Landing renders the form only when `VITE_GATEWAY_URL` and `VITE_APP_URL` are set,
-and otherwise shows the persona list alone. The create-account entry also needs `VITE_REGISTRATION_OPEN=true`: `reconcile-urls` writes it on every PR fork, and production leaves it unset until registration U3. A hand-off to a console also needs landing's
+answer, and the sign-out request (see Revocation). Landing never holds either. Landing renders the form only when `VITE_GATEWAY_URL` and `VITE_APP_URL` are set. The create-account entry also needs `VITE_REGISTRATION_OPEN=true`: `reconcile-urls` writes it on every PR fork, and production leaves it unset until registration U3. A hand-off to a console also needs landing's
 `VITE_OPS_URL` or `VITE_SUPPORT_URL`; without it landing does not navigate. The app ignores `?handoff=` when its
 `VITE_GATEWAY_URL` is unset.
 

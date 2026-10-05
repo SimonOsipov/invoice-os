@@ -20,6 +20,7 @@ func TestMockIssuerBuildPassesItsTaggedTests(t *testing.T) {
 		"TestTaggedMockIssuerRoutesValueDomain",
 		"TestTaggedMockIssuerRoutesKeepTheirWiring",
 		"TestTaggedMockStaffRouteWiresTheGrant",
+		"TestTaggedMockMemberRouteWiresTheGrant",
 	} {
 		if !strings.Contains(string(out), "--- PASS: "+name+" (") {
 			t.Errorf("go test -tags mockissuer: %s did not pass", name)

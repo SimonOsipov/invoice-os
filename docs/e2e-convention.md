@@ -117,9 +117,8 @@ What a spec still cannot assume is an empty table:
     console specs (`staffSession.ts`), and one per console journey in `topology/auth.spec.ts`.
     `POST /auth/mock/staff`, which writes the row, exists only in the mock build that every PR
     fork runs.
-  - Every `POST /auth/mock/member` call leaves one `memberships` row (the account's `auth.users`
-    row and tenant are its caller's). Only the mock build serves it; the next deploy's reset
-    truncates it.
+  - `POST /auth/mock/member` leaves a `memberships` row (the account's `auth.users` row and
+    tenant are its caller's). Only the mock build serves it.
 
   This is harmless, because every run registers a fresh address and provisions for a fresh
   subject.

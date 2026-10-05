@@ -151,3 +151,113 @@ func TestRLS_GrantMembershipUnknownTenant(t *testing.T) {
 		t.Errorf("control: memberships for the user = %d, want 1", n)
 	}
 }
+
+type memberSnapshot struct{ id, role, name, email, status string }
+
+// snapshotMember reads one (tenant, user) row, id included, so a rewritten row shows.
+func snapshotMember(t *testing.T, tenantID string, userID uuid.UUID) memberSnapshot {
+	t.Helper()
+	var s memberSnapshot
+	if err := h.super.QueryRow(context.Background(),
+		`SELECT id::text, role, display_name, email, status FROM memberships WHERE tenant_id = $1 AND user_id = $2`,
+		tenantID, userID).Scan(&s.id, &s.role, &s.name, &s.email, &s.status); err != nil {
+		t.Fatalf("read the membership of %s in %s: %v", userID, tenantID, err)
+	}
+	return s
+}
+
+func TestRLS_GrantMembershipUpsertTouchesOnlyItsOwnRow(t *testing.T) {
+	h := requireHarness(t)
+	subject, bystander := uuid.New(), uuid.New()
+	for _, g := range []struct {
+		tenant string
+		user   uuid.UUID
+		row    grantedRow
+	}{
+		{h.tenantA, subject, grantedRow{"admin", "Subject In A", "subject-a@example.test", ""}},
+		{h.tenantB, subject, grantedRow{"reviewer", "Subject In B", "subject-b@example.test", ""}},
+		{h.tenantA, bystander, grantedRow{"preparer", "Bystander In A", "bystander@example.test", ""}},
+	} {
+		if err := grantTo(t, g.tenant, g.user, g.row); err != nil {
+			t.Fatalf("seed GrantMembership into %s: %v", g.tenant, err)
+		}
+	}
+	// Suspended rows show a stray status = 'active' write as well as a stray role or name.
+	if _, err := h.super.Exec(context.Background(),
+		`UPDATE memberships SET status = 'suspended' WHERE (tenant_id = $1 AND user_id = $2) OR (tenant_id = $3 AND user_id = $4)`,
+		h.tenantB, subject, h.tenantA, bystander); err != nil {
+		t.Fatalf("suspend the other rows: %v", err)
+	}
+	subjectInA := snapshotMember(t, h.tenantA, subject)
+	subjectInB := snapshotMember(t, h.tenantB, subject)
+	bystanderInA := snapshotMember(t, h.tenantA, bystander)
+	if subjectInB.status != "suspended" || bystanderInA.status != "suspended" || subjectInA.status != "active" {
+		t.Fatalf("setup statuses = %q/%q/%q, want the two other rows suspended and the subject's A row active",
+			subjectInB.status, bystanderInA.status, subjectInA.status)
+	}
+
+	if err := grantTo(t, h.tenantA, subject, grantedRow{"reviewer", "Subject Renamed", "renamed@example.test", ""}); err != nil {
+		t.Fatalf("repeat GrantMembership: %v", err)
+	}
+
+	want := memberSnapshot{subjectInA.id, "reviewer", "Subject Renamed", "renamed@example.test", "active"}
+	if got := snapshotMember(t, h.tenantA, subject); got != want {
+		t.Errorf("the granted row = %+v, want %+v (same id: updated in place)", got, want)
+	}
+	if got := snapshotMember(t, h.tenantB, subject); got != subjectInB {
+		t.Errorf("the same subject's row in the other tenant = %+v, want unchanged %+v", got, subjectInB)
+	}
+	if got := snapshotMember(t, h.tenantA, bystander); got != bystanderInA {
+		t.Errorf("another user's row in the granted tenant = %+v, want unchanged %+v", got, bystanderInA)
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM memberships WHERE user_id = $1`, subject); n != 2 {
+		t.Errorf("rows for the subject = %d, want 2, one per tenant", n)
+	}
+}
+
+func TestRLS_GrantMembershipUnknownRoleWritesNothing(t *testing.T) {
+	h := requireHarness(t)
+	user := uuid.New()
+
+	if err := grantTo(t, h.tenantA, user, grantedRow{"owner", "Not A Role", "owner@example.test", ""}); err == nil {
+		t.Error("GrantMembership with a role outside roles(name) returned no error")
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM memberships WHERE user_id = $1`, user); n != 0 {
+		t.Errorf("memberships after the refused grant = %d, want 0", n)
+	}
+
+	if err := grantTo(t, h.tenantA, user, grantedRow{"reviewer", "A Role", "role@example.test", ""}); err != nil {
+		t.Fatalf("control: GrantMembership with a real role: %v", err)
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM memberships WHERE user_id = $1`, user); n != 1 {
+		t.Errorf("control: memberships = %d, want 1", n)
+	}
+}
+
+func TestRLS_GrantMembershipReactivationRestoresTheProjection(t *testing.T) {
+	h := requireHarness(t)
+	auth := authAdminPool(t)
+	user := uuid.New()
+	grant := func() {
+		t.Helper()
+		if err := grantTo(t, h.tenantA, user, grantedRow{"admin", "Back Again", "back@example.test", ""}); err != nil {
+			t.Fatalf("GrantMembership: %v", err)
+		}
+	}
+	grant()
+	if md := appMetadataOf(t, mustHookClaims(t, auth, user.String())); md["tenant_id"] != h.tenantA {
+		t.Fatalf("app_metadata.tenant_id after the grant = %v, want %s", md["tenant_id"], h.tenantA)
+	}
+	if _, err := h.super.Exec(context.Background(), `UPDATE memberships SET status = 'suspended' WHERE user_id = $1`, user); err != nil {
+		t.Fatalf("suspend: %v", err)
+	}
+	if md := appMetadataOf(t, mustHookClaims(t, auth, user.String())); md["tenant_id"] != nil {
+		t.Fatalf("app_metadata.tenant_id while suspended = %v, want absent, so the projection below proves the repeat grant", md["tenant_id"])
+	}
+
+	grant()
+
+	if md := appMetadataOf(t, mustHookClaims(t, auth, user.String())); md["tenant_id"] != h.tenantA {
+		t.Errorf("app_metadata.tenant_id after the repeat grant = %v, want %s", md["tenant_id"], h.tenantA)
+	}
+}

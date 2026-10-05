@@ -3,6 +3,7 @@ package gateway
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -557,6 +558,84 @@ func TestMockLoginMalformedBodyMintsDefaults(t *testing.T) {
 		if id.Role != personaRole {
 			t.Errorf("body %q: default role = %q, want %q", body, id.Role, personaRole)
 		}
+	}
+}
+
+// The mint reflects whatever the body decodes into and validates nothing: role and tenant are
+// free strings, and a body the decoder half-reads keeps the fields it reached.
+func TestMockLoginMintsWhatTheBodyDecodesInto(t *testing.T) {
+	tg := setupGateway(t)
+	h := MockLoginHandler(tg.issuer)
+	const s1, s2 = "c0000000-0000-0000-0000-0000000000a1", "c0000000-0000-0000-0000-0000000000a2"
+	pad := strings.Repeat("x", 1<<20)
+
+	cases := []struct {
+		name, body, contentType string
+		wantSubject             string // empty: any UUID
+		wantTenant, wantRole    string
+	}{
+		{"a role other than authenticated", `{"subject":"` + s1 + `","role":"service_role"}`, "", s1, "", "service_role"},
+		{"a tenant that is not a UUID", `{"tenant_id":"not a uuid/../"}`, "", "", "not a uuid/../", personaRole},
+		{"an empty role defaults", `{"subject":"` + s1 + `","role":""}`, "", s1, "", personaRole},
+		{"an unknown extra field is ignored", `{"subject":"` + s1 + `","tenant_id":"t-1","admin_override":true}`, "", s1, "t-1", personaRole},
+		{"a duplicate key keeps the last value", `{"subject":"` + s1 + `","subject":"` + s2 + `","tenant_id":"t-1"}`, "", s2, "t-1", personaRole},
+		{"a wrongly typed field keeps the fields decoded after it", `{"subject":1,"tenant_id":"t-1"}`, "", "", "t-1", personaRole},
+		{"a truncated body keeps nothing", `{"subject":"` + s1 + `","tenant_id":"t-1"`, "", "", "", personaRole},
+		{"null mints defaults", `null`, "", "", "", personaRole},
+		{"a non-JSON Content-Type is ignored", `{"subject":"` + s1 + `","tenant_id":"t-1"}`, "text/plain", s1, "t-1", personaRole},
+		{"a body padded past 1 MiB still mints", `{"subject":"` + s1 + `","tenant_id":"t-1","pad":"` + pad + `"}`, "", s1, "t-1", personaRole},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest("POST", "/auth/login", strings.NewReader(tc.body))
+			if tc.contentType != "" {
+				r.Header.Set("Content-Type", tc.contentType)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, r)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+			}
+			var resp struct {
+				AccessToken string `json:"access_token"`
+			}
+			if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil || resp.AccessToken == "" {
+				t.Fatalf("login body carries no access_token (decode err %v)", err)
+			}
+			id, err := tg.verifier.Verify(t.Context(), resp.AccessToken)
+			if err != nil {
+				t.Fatalf("minted token does not verify: %v", err)
+			}
+			if tc.wantSubject == "" {
+				if _, err := uuid.Parse(id.Subject); err != nil {
+					t.Errorf("subject %q, want a default UUID", id.Subject)
+				}
+			} else if id.Subject != tc.wantSubject {
+				t.Errorf("subject = %q, want %q", id.Subject, tc.wantSubject)
+			}
+			if id.TenantID != tc.wantTenant || id.Role != tc.wantRole {
+				t.Errorf("(tenant, role) = (%q, %q), want (%q, %q)", id.TenantID, id.Role, tc.wantTenant, tc.wantRole)
+			}
+		})
+	}
+}
+
+// The mint takes a subject that is not a UUID, but the verifier refuses the token downstream.
+func TestMockLoginNonUUIDSubjectMintsATokenTheVerifierRefuses(t *testing.T) {
+	tg := setupGateway(t)
+	rec := httptest.NewRecorder()
+	MockLoginHandler(tg.issuer).ServeHTTP(rec, httptest.NewRequest("POST", "/auth/login", strings.NewReader(`{"subject":"../etc"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil || resp.AccessToken == "" {
+		t.Fatalf("login body carries no access_token (decode err %v)", err)
+	}
+	if _, err := tg.verifier.Verify(t.Context(), resp.AccessToken); !errors.Is(err, auth.ErrUnauthorized) {
+		t.Errorf("Verify = %v, want auth.ErrUnauthorized", err)
 	}
 }
 

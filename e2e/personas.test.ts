@@ -304,7 +304,7 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
       } else if (!specSrc.includes(surface.label)) {
         failures.push(`${cell.navConst}: ${cell.coveredBy} does not mention label "${surface.label}"`)
       }
-      if (specToken === undefined) {
+      if (!specToken) {
         failures.push(`${cell.navConst}: its persona has no specToken`)
       } else if (!specSrc.includes(specToken)) {
         failures.push(`${cell.navConst}: ${cell.coveredBy} does not mention specToken "${specToken}"`)
@@ -656,7 +656,7 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
   // G3/G6 above go red either way; this row states the claim rather than leaving it implied,
   // so a later story that quietly adds a Documents surface meets a named expectation.
   it('EXTR09-P-1 -- the document fork adds no nav surface and no coverage cell', () => {
-    // Hand-written literal, never SURFACES.map(...) -- row 3's rule: registry exports must
+    // Hand-written literal, never SURFACES.map(...) -- row 10's rule: registry exports must
     // not supply the expectation used to test the registry.
     expect(SURFACES.map((s) => s.navConst), 'the app SPA nav catalogue is unchanged by EXTR-09').toEqual([
       'NAV_DASHBOARD',

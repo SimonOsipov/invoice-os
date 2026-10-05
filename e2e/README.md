@@ -53,8 +53,8 @@ Covers the three SPAs the landing page hands off to — `landing`, `ops-console`
   what each console is *for*. Both consoles' data is mock with no backend, so these
   assertions pin fixture behaviour rather than a contract — `docs/e2e-convention.md` says
   when that is allowed.
-- **Boundary matrix** (`persona-boundaries.spec.ts`): every destination handed a persona
-  it does not admit must bounce the visitor back to the landing page. This drives **all
+- **Boundary matrix** (`persona-boundaries.spec.ts`): every destination visited with
+  `?persona=<id>` and no session must bounce the visitor back to the landing page. This drives **all
   three destinations including the app**, which is why smoke needs `APP_URL` too. Every
   cell is refused before any gateway contact — no database reads —
   so the suite stays safe under `fullyParallel: true` (`[boundaries-in-smoke]`).

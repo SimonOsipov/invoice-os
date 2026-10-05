@@ -100,8 +100,10 @@ test('deployed app: a ?persona=firm visit with a live session keeps that session
   await signInAs(page, 'firm')
   const before = await browserToken(page)
 
+  const seen: string[] = []
   const logins: string[] = []
   page.on('request', (r) => {
+    seen.push(r.url())
     if (new URL(r.url()).pathname === '/auth/login') logins.push(r.method())
   })
   await page.goto(`${APP_URL}?persona=firm`)
@@ -109,6 +111,8 @@ test('deployed app: a ?persona=firm visit with a live session keeps that session
   await expect(page.locator('aside.pf-sidebar')).toContainText(FIRM_PERSONA.tenantName.toUpperCase())
 
   expect(await browserToken(page), 'the visit replaced the stored session token').toBe(before)
+  // Positive control: the listener saw the visit itself, so an empty `logins` is not blindness.
+  expect(seen.some((u) => u.includes('persona=firm')), 'the request listener missed the visit').toBe(true)
   expect(logins, 'the visit minted a session through /auth/login').toEqual([])
 })
 
@@ -131,8 +135,7 @@ test('deployed app: a visit with no session redirects to the landing page', asyn
 // file it depends on (docs/e2e-convention.md: organize by capability, not by date).
 //
 // goBack() alone would only prove Chromium reused a bfcached page, not that the router
-// restored the view -- the same trap the strip test above (:111-113) already records for
-// a query param. So every step asserts the URL AND the rendered panel, never one alone.
+// restored the view. So every step asserts the URL AND the rendered panel, never one alone.
 test("deployed app: Back walks the workspace's own history instead of leaving it", async ({ page }) => {
   const errors = collectErrors(page)
 
@@ -281,11 +284,15 @@ test("deployed app: Back from an invoice detail returns to the list, not the lan
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// The Caddyfile `try_files` fallback serves a top-level path; the sign-in restores it.
+// The Caddyfile `try_files` fallback serves a top-level path; a stored session cold-boots it.
 test('deployed app: a top-level path is a working deep link', async ({ page }) => {
   const errors = collectErrors(page)
 
-  await signInAs(page, 'firm', { path: '/audit' })
+  await signInAs(page, 'firm')
+  const url = `${APP_URL}/audit`
+  const res = await page.goto(url)
+  expect(res, `no response from ${url}`).toBeTruthy()
+  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
 
   await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
   await expect(page, 'the deep link did not settle on /audit').toHaveURL(/\/audit$/)
@@ -327,8 +334,8 @@ function cleanInvoiceFields(invoiceNumber: string) {
   }
 }
 
-// ROUTE-02-07 (X-1/X-2): a top-level /invoices/<uuid> deep link opens the detail panel
-// directly after the sign-in restores it.
+// ROUTE-02-07 (X-1/X-2): a top-level /invoices/<uuid> deep link cold-boots the detail panel
+// directly on a stored session.
 test('deployed app: /invoices/<uuid> is a working deep link', async ({ page }) => {
   const errors = collectErrors(page)
 
@@ -337,7 +344,11 @@ test('deployed app: /invoices/<uuid> is a working deep link', async ({ page }) =
   const invoiceNumber = `INV-ROUTE02-CB-${Date.now()}`
   const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
 
-  await signInAs(page, 'firm', { path: `/invoices/${inv.id}` })
+  await signInAs(page, 'firm')
+  const url = `${APP_URL}/invoices/${inv.id}`
+  const res = await page.goto(url)
+  expect(res, `no response from ${url}`).toBeTruthy()
+  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
 
   await expect(page.getByTestId('invoice-detail'), 'the cold boot must render this invoice, not the empty state').toContainText(
     invoiceNumber,
@@ -349,11 +360,15 @@ test('deployed app: /invoices/<uuid> is a working deep link', async ({ page }) =
 })
 }
 
-// The tab is a PATH SEGMENT (lib/route.ts's routeUrl), so the sign-in restores it with the path.
+// The tab is a PATH SEGMENT (lib/route.ts's routeUrl), so a cold boot on a stored session restores it.
 test('deployed app: a settings tab is a working deep link', async ({ page }) => {
   const errors = collectErrors(page)
 
-  await signInAs(page, 'firm', { path: '/settings/roles' })
+  await signInAs(page, 'firm')
+  const url = `${APP_URL}/settings/roles`
+  const res = await page.goto(url)
+  expect(res, `no response from ${url}`).toBeTruthy()
+  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
 
   await expect(page.getByTestId('roles-grid'), 'the deep link must open the Roles tab').toBeVisible()
   // The discriminator: SettingsView renders one panel at a time, so a boot that fell back to
@@ -493,8 +508,8 @@ test('deployed app: every top-level path cold-boots to its own screen', async ({
     expect(res, `no response from ${url}`).toBeTruthy()
     expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
 
-    // URL alone would pass on a Chromium bfcache reuse -- the trap :155-157 already
-    // records -- so every path asserts both the URL AND a landmark from that screen's DOM.
+    // URL alone would pass on a Chromium bfcache reuse, so every path asserts both the URL
+    // AND a landmark from that screen's DOM.
     await expect(page, `${path} did not settle on its own path`).toHaveURL(new RegExp(`${path}$`))
 
     if (heading != null) {

@@ -40,7 +40,7 @@ export const DATE_PRESETS: { id: AuditRangePreset; label: string }[] = [
 ]
 
 // Fixed group order + display headings (D-4). Row lists come from AUDIT_EVENTS, never
-// hand-typed, so auditVocabulary.test.ts's 38-identifier pin is the only place that count lives.
+// hand-typed, so auditVocabulary.test.ts's identifier-count pin is the only place that count lives.
 const DOMAIN_ORDER: AuditDomain[] = [
   'invoices',
   'approvals',

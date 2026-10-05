@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { APP_PERSONAS, type Me } from './auth'
 import { EMPTY_BUCKET } from './lib/dashboard'
 import { DEEP_LINK_KEY, readDestination } from './lib/deepLink'
-import type { Member } from './lib/members'
 import { SESSION_KEY } from './lib/session'
 import { ensureSignInState } from './lib/signInState'
 import type { PlatformCtx } from './types'
@@ -61,26 +60,8 @@ function record(token: string, receivedAt: number, me: Me = ME, refresh = 'R0'):
   return JSON.stringify({ v: 1, personaId: 'firm', token, me, verified: true, handoff: true, refresh_token: refresh, received_at: receivedAt })
 }
 
-// The /auth/login mint below answers this token for the DEMO_MODE stand-in.
-const standInToken = (at: number) => jwt(OTHER_ME, nowSec(at), 'P')
-const SEAT_MEMBER: Member = {
-  id: ME.user.id,
-  name: APP_PERSONAS.firm.name,
-  initials: APP_PERSONAS.firm.initials,
-  email: null,
-  role: 'admin',
-  status: 'active',
-  isYou: true,
-}
-const STAND_IN: Member = {
-  id: OTHER_ME.user.id,
-  name: 'Tunde Bello',
-  initials: 'TB',
-  email: 'tunde@example.ng',
-  role: 'preparer',
-  status: 'active',
-  isYou: false,
-}
+// The /auth/login mint below answers this token.
+const personaToken = (at: number) => jwt(OTHER_ME, nowSec(at), 'P')
 
 let capturedCtx: PlatformCtx | undefined
 vi.mock('./components/Sidebar', () => ({
@@ -178,7 +159,7 @@ function routeFetch() {
       if (url === `${GATEWAY}/api/tenancy/v1/me`) return meReply()
       if (url === EXCHANGE) return exchangeReply()
       if (url === `${GATEWAY}/auth/login`) {
-        return answer(200, { access_token: standInToken(Date.now()) })()
+        return answer(200, { access_token: personaToken(Date.now()) })()
       }
       return answer(200, {
         entities: [],
@@ -318,7 +299,7 @@ async function probe(ctx: PlatformCtx | undefined, path = ''): Promise<unknown> 
 let originalLocation: PropertyDescriptor | undefined
 
 beforeEach(() => {
-  // Only Date: becomePersona's real BUSY_MS delay must still run.
+  // Only Date: the real timers must still run.
   vi.useFakeTimers({ toFake: ['Date'] })
   vi.setSystemTime(NOW)
   originalLocation = Object.getOwnPropertyDescriptor(window, 'location')
@@ -404,42 +385,6 @@ describe('a due stored session renews at boot (AC-1, AC-2, AC-3, AC-10, AC-16)',
     expect(apiCalls().filter((c) => c.auth === `Bearer ${A0_OLD}`), 'the expired token is never sent').toEqual([])
   })
 
-  it('an expired renewable hand-off session loses to ?persona=', async () => {
-    const { hrefWrites } = await bootWith(record(A0_OLD, OLD_AT), '/?persona=firm')
-    await waitFor(() => expect(capturedCtx?.user, 'the persona workspace must mount').toBeDefined())
-    await settle()
-
-    expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`), 'the persona is minted').toHaveLength(1)
-    expect(refreshes(), 'the stored refresh token is never sent').toEqual([])
-    expect(storedRecord()?.handoff, 'the persona session replaces the record').toBeUndefined()
-    expect(storedRecord()?.refresh_token).toBeUndefined()
-    expect(storedRecord()?.token).toBe(standInToken(NOW))
-    expect(window.location.search).toBe('')
-    expect(hrefWrites).toEqual([])
-  })
-
-  // Due, so the workspace waits on the renewal: only the boot strip clears the param meanwhile.
-  it('a live renewable hand-off session still beats ?persona=', async () => {
-    const refresh = deferRefresh()
-    const { hrefWrites } = await bootWith(record(A0_DUE, DUE_AT), '/?persona=firm')
-
-    expect(screen.queryByText('Opening your workspace…'), 'a due boot shows the splash').not.toBeNull()
-    expect(window.location.search, 'the suppressed persona is stripped before the renewal answers').toBe('')
-
-    await act(async () => refresh.release(renewed()))
-    await waitForVerifiedWorkspace()
-    await settle()
-
-    expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`), 'the persona is not minted').toEqual([])
-    expect(refreshes()).toHaveLength(1)
-    expect(apiCalls().length).toBeGreaterThan(0)
-    expect(apiCalls().filter((c) => c.auth !== `Bearer ${renewedToken()}`)).toEqual([])
-    expect(storedRecord()?.handoff).toBe(true)
-    expect(storedRecord()?.refresh_token).toBe('R1')
-    expect(window.location.search).toBe('')
-    expect(hrefWrites).toEqual([])
-  })
-
   // A code is a sign-in the user just made; only an unexpired stored session beats it.
   it('a ?handoff= code wins over an expired renewable hand-off session', async () => {
     const NEW_T = jwt(OTHER_ME, nowSec(NOW), 'N')
@@ -455,20 +400,6 @@ describe('a due stored session renews at boot (AC-1, AC-2, AC-3, AC-10, AC-16)',
     expect(storedRecord()?.token).toBe(NEW_T)
     expect(storedRecord()?.refresh_token).toBe('RN')
     expect(storedRecord()?.me).toEqual(OTHER_ME)
-    expect(window.location.search).toBe('')
-    expect(hrefWrites).toEqual([])
-  })
-
-  it('an expired hand-off session without renewal loses to ?persona=', async () => {
-    const bare = JSON.stringify({ v: 1, personaId: 'firm', token: A0_OLD, me: ME, verified: true, handoff: true })
-    const { hrefWrites } = await bootWith(bare, '/?persona=firm')
-    await waitFor(() => expect(capturedCtx?.user, 'the persona workspace must mount').toBeDefined())
-    await settle()
-
-    expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`), 'the persona is minted').toHaveLength(1)
-    expect(refreshes()).toEqual([])
-    expect(storedRecord()?.handoff, 'the persona session replaces the record').toBeUndefined()
-    expect(storedRecord()?.token).toBe(standInToken(NOW))
     expect(window.location.search).toBe('')
     expect(hrefWrites).toEqual([])
   })
@@ -577,8 +508,8 @@ describe('a refused renewal returns to landing with the destination (AC-4, AC-6,
 })
 
 describe('an ended renewal and the next boot', () => {
-  // The refused record is gone, so the next ?persona= link signs the persona in without a refresh.
-  it('a refused renewal at boot clears the record for the next persona link', async () => {
+  // The refused record is gone, so the next ?persona= link finds no session: landing again, no refresh.
+  it('a refused renewal at boot clears the record for the next boot', async () => {
     refreshReply = REFUSED
     const first = await bootWith(record(A0_OLD, OLD_AT), '/')
     await waitFor(() => expect(first.hrefWrites, 'a refused boot renewal navigates to landing').toHaveLength(1))
@@ -591,13 +522,12 @@ describe('an ended renewal and the next boot', () => {
 
     const mark = calls.length
     const second = await reload('/?persona=firm')
-    await waitFor(() => expect(capturedCtx?.user, 'the persona workspace must mount').toBeDefined())
+    await waitFor(() => expect(second.hrefWrites, 'the next boot leaves for landing').toHaveLength(1))
     await settle()
 
-    expect(calls.slice(mark).filter((c) => c.url === `${GATEWAY}/auth/login`), 'the persona is minted').toHaveLength(1)
+    expect(calls.slice(mark).filter((c) => c.url === `${GATEWAY}/auth/login`), 'nothing is minted').toEqual([])
     expect(refreshes(mark), 'the refused record is never tried again').toEqual([])
-    expect(storedRecord()?.token).toBe(standInToken(NOW))
-    expect(second.hrefWrites).toEqual([])
+    expect(capturedCtx, 'no workspace opens').toBeUndefined()
   })
 
   // The refresh token may outlive the access token, so the next boot tries it again.
@@ -628,30 +558,73 @@ describe('an ended renewal and the next boot', () => {
   })
 })
 
-describe('a kept record and a ?persona= link', () => {
-  // A kept record must not beat a ?persona= link, or while renewal is down every link bounces to landing.
-  it('a ?persona= link after a transient boot failure does not bounce to landing again', async () => {
-    refreshReply = UNAVAILABLE
-    const first = await bootWith(record(A0_OLD, OLD_AT), '/')
-    await waitFor(() => expect(first.hrefWrites, 'a failed boot renewal navigates to landing').toHaveLength(1))
+describe('?persona= is not a credential', () => {
+  it('a stored live session ignores ?persona=', async () => {
+    const { hrefWrites } = await bootWith(record(A0_FRESH, FRESH_AT), '/?persona=firm')
+    await waitForVerifiedWorkspace()
     await settle()
 
-    expect(refreshes(), 'the first boot tries the renewal').toHaveLength(1)
-    expect(capturedCtx, 'the workspace never mounts').toBeUndefined()
-    expect(storedRecord()?.token, 'the transient end keeps the record').toBe(A0_OLD)
-    expect(storedRecord()?.refresh_token).toBe('R0')
+    expect(apiCalls().length, 'the workspace loaded on the stored session').toBeGreaterThan(0)
+    expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`), 'nothing is minted').toEqual([])
+    expect(refreshes(), 'a fresh session renews nothing').toEqual([])
+    expect(storedRecord()?.token).toBe(A0_FRESH)
+    expect(hrefWrites).toEqual([])
+  })
 
-    const mark = calls.length
-    const second = await reload('/?persona=firm')
-    await waitFor(() => expect(capturedCtx?.user, 'the persona workspace must mount').toBeDefined())
+  // The in-house seat differs from the param, so a mint would swap the identity.
+  it('a stored live persona session keeps its own seat under ?persona=firm', async () => {
+    const stored = JSON.stringify({ v: 1, personaId: 'inhouse', token: A0_FRESH, me: IN_HOUSE_ME, verified: true })
+    const { hrefWrites } = await bootWith(stored, '/?persona=firm')
+    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
     await settle()
 
-    expect(calls.slice(mark).filter((c) => c.url === `${GATEWAY}/auth/login`), 'the persona is minted').toHaveLength(1)
-    expect(refreshes(mark), 'the kept refresh token is not sent').toEqual([])
-    expect(second.hrefWrites, 'no second bounce to landing').toEqual([])
-    expect(storedRecord()?.token).toBe(standInToken(NOW))
-    expect(storedRecord()?.handoff).toBeUndefined()
-    expect(window.location.search).toBe('')
+    expect(capturedCtx?.mode, 'the stored in-house seat, not the param persona').toBe('inhouse')
+    expect(capturedCtx?.user.name).toBe(APP_PERSONAS.inhouse.name)
+    expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`), 'nothing is minted').toEqual([])
+    expect(storedRecord()?.personaId).toBe('inhouse')
+    expect(hrefWrites).toEqual([])
+  })
+
+  // One page load: what it fetched from /auth, where it navigated, what it left in storage.
+  async function observeBoot(raw: string, path: string) {
+    cleanup()
+    capturedCtx = undefined
+    calls = []
+    refreshesOut = 0
+    refreshReply = renewed()
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    vi.stubGlobal('localStorage', createMemoryStorage())
+    vi.stubGlobal('sessionStorage', createMemoryStorage())
+    const { hrefWrites } = await bootWith(raw, path)
+    await settle(60)
+    return {
+      auth: calls.filter((c) => c.url.startsWith(`${GATEWAY}/auth/`)).map((c) => `${c.url} ${JSON.stringify(c.body)}`),
+      navs: hrefWrites.map((h) => h.replace(new RegExp(STATE_RE), 'STATE')),
+      stored: localStorage.getItem(SESSION_KEY),
+      // A bounce leaves the old URL behind; only a mounted boot has a live search to compare.
+      search: hrefWrites.length ? '' : window.location.search,
+    }
+  }
+
+  it('expired renewable / bare sessions behave as without the param', async () => {
+    const bare = JSON.stringify({ v: 1, personaId: 'firm', token: A0_OLD, me: ME, verified: true, handoff: true })
+    const records = [
+      { name: 'expired renewable', raw: record(A0_OLD, OLD_AT) },
+      { name: 'expired bare', raw: bare },
+      { name: 'live renewable due', raw: record(A0_DUE, DUE_AT) },
+    ]
+    expect(records.length).toBe(3)
+    const diffs: string[] = []
+    for (const { name, raw } of records) {
+      const without = await observeBoot(raw, '/')
+      const withParam = await observeBoot(raw, '/?persona=firm')
+
+      expect(without.auth.length + without.navs.length, `${name}: the baseline boot did something`).toBeGreaterThan(0)
+      if (JSON.stringify(withParam) !== JSON.stringify(without)) {
+        diffs.push(`${name}: without ${JSON.stringify(without)} / with ${JSON.stringify(withParam)}`)
+      }
+    }
+    expect(diffs, 'a ?persona= link changed what a stored record does at boot').toEqual([])
   })
 })
 
@@ -716,24 +689,20 @@ describe('mid-session renewal (AC-5, AC-8, AC-9)', () => {
   })
 
   it('a persona session never renews', async () => {
-    vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
-    vi.stubEnv('VITE_LANDING_URL', LANDING)
-    window.history.replaceState(null, '', '/?persona=firm')
-    const { hrefWrites } = interceptHref()
-    await bootApp()
+    const stored = JSON.stringify({ v: 1, personaId: 'firm', token: personaToken(NOW), me: ME, verified: true })
+    const { hrefWrites } = await bootWith(stored)
     // The persona keeps its own name although /me answers a display name (D1).
     await waitForVerifiedWorkspace(ME.tenant.name, { name: APP_PERSONAS.firm.name, initials: APP_PERSONAS.firm.initials })
     expect(capturedCtx?.handoff, 'a persona session is not a hand-off session').toBe(false)
     await settle()
-    const login = calls.filter((c) => c.url === `${GATEWAY}/auth/login`)
-    expect(login).toHaveLength(1)
+    expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`), 'nothing is minted').toEqual([])
     vi.setSystemTime(NOW + 2 * HOUR)
     const mark = calls.length
 
     const out = await probe(capturedCtx)
 
     expect(out).toBe('resolved')
-    expect(probes(mark).map((c) => c.auth), 'the expired persona token is still sent').toEqual([`Bearer ${standInToken(NOW)}`])
+    expect(probes(mark).map((c) => c.auth), 'the expired persona token is still sent').toEqual([`Bearer ${personaToken(NOW)}`])
     expect(refreshes()).toEqual([])
     expect(hrefWrites).toEqual([])
   })
@@ -833,44 +802,11 @@ describe('a renewed hand-off session stays a hand-off session (AUTH-10-06, F17)'
     expect(capturedCtx?.handoff).toBe(true)
   })
 
-  it('a stand-in is not a hand-off session, and the seat is again after the return', async () => {
-    vi.stubEnv('VITE_DEMO_MODE', 'true')
+  it('a hand-off seat shows no demo state', async () => {
     await mountFresh()
-    expect(capturedCtx?.handoff, 'the seat').toBe(true)
-    meReply = answer(200, OTHER_ME)
-    await act(async () => {
-      await capturedCtx!.becomePersona!(STAND_IN, 'dashboard')
-    })
-    await waitFor(() => expect(capturedCtx?.user.name).toBe('Tunde Bello'))
-    expect(capturedCtx?.handoff, 'the stand-in').toBe(false)
-    meReply = answer(200, ME)
-    await act(async () => {
-      await capturedCtx!.returnToSeat!('dashboard', SEAT_MEMBER)
-    })
-    await waitFor(() => expect(capturedCtx?.user.name).toBe(ME.user.display_name))
-    expect(capturedCtx?.handoff, 'back on the seat').toBe(true)
-  })
-
-  it('the stand-in shows the demo state and the seat is blank again after the return', async () => {
-    vi.stubEnv('VITE_DEMO_MODE', 'true')
-    await mountFresh()
-    const connected = () => Object.values(capturedCtx!.connectors).filter(Boolean).length
-    expect(connected(), 'the seat').toBe(0)
-    expect(capturedCtx?.customRules, 'the seat').toEqual([])
-    meReply = answer(200, OTHER_ME)
-    await act(async () => {
-      await capturedCtx!.becomePersona!(STAND_IN, 'dashboard')
-    })
-    await waitFor(() => expect(capturedCtx?.user.name).toBe('Tunde Bello'))
-    expect(connected(), 'the stand-in').toBe(2)
-    expect(capturedCtx?.customRules, 'the stand-in').toHaveLength(5)
-    meReply = answer(200, ME)
-    await act(async () => {
-      await capturedCtx!.returnToSeat!('dashboard', SEAT_MEMBER)
-    })
-    await waitFor(() => expect(capturedCtx?.user.name).toBe(ME.user.display_name))
-    expect(connected(), 'back on the seat').toBe(0)
-    expect(capturedCtx?.customRules, 'back on the seat').toEqual([])
+    const connected = Object.values(capturedCtx!.connectors).filter(Boolean).length
+    expect(connected).toBe(0)
+    expect(capturedCtx?.customRules).toEqual([])
   })
 })
 
@@ -907,45 +843,6 @@ describe('a renewal never outlives its session (AC-14, AC-15, AC-17)', () => {
     expect(hrefWrites, 'the settled renewal adds no navigation').toEqual(afterSignOut)
   })
 
-  it('a stand-in begun during a seat renewal keeps its own token', async () => {
-    vi.stubEnv('VITE_DEMO_MODE', 'true')
-    const { hrefWrites } = await mountFresh()
-    const refresh = deferRefresh()
-    vi.setSystemTime(MID_RENEW_AT)
-    const mark = calls.length
-
-    const seatCtx = capturedCtx
-    let pending: Promise<unknown> = Promise.resolve()
-    await act(async () => {
-      pending = seatCtx!.authedFetch(`${PROBE}/seat`).then(
-        () => 'resolved',
-        (e: unknown) => e,
-      )
-    })
-    meReply = answer(200, OTHER_ME)
-    await act(async () => {
-      await seatCtx!.becomePersona!(STAND_IN, 'dashboard')
-    })
-    await waitFor(() => expect(capturedCtx?.user.name).toBe('Tunde Bello'))
-    await act(async () => refresh.release(renewed()))
-    let seatOut: unknown
-    await act(async () => {
-      seatOut = await pending
-    })
-    await settle()
-    const out = await probe(capturedCtx, '/stand-in')
-
-    expect(refreshes(mark), 'the seat request waited on a renewal').toHaveLength(1)
-    expect(errorName(seatOut)).toBe('SessionEndedError')
-    expect(out).toBe('resolved')
-    expect(probes(mark).map((c) => [c.url, c.auth]), 'only the stand-in request is sent, on its own token').toEqual([
-      [`${PROBE}/stand-in`, `Bearer ${standInToken(MID_RENEW_AT)}`],
-    ])
-    expect(storedRecord()?.token, 'the discarded answer is never stored').toBe(A0_FRESH)
-    expect(storedRecord()?.refresh_token).toBe('R0')
-    expect(hrefWrites).toEqual([])
-  })
-
   it("another user's record survives a foreign-subject end", async () => {
     const { hrefWrites } = await mountFresh()
     // Another tab signed in a different user.
@@ -962,59 +859,5 @@ describe('a renewal never outlives its session (AC-14, AC-15, AC-17)', () => {
     expect(localStorage.getItem(SESSION_KEY), "the other user's record is untouched").toBe(X_RAW)
     expect(refreshes(mark), 'nothing is renewed for the foreign record').toEqual([])
     expect(probes(mark)).toEqual([])
-  })
-
-  it('a stand-in from an in-house hand-off seat is in-house, and so is the return to the seat', async () => {
-    vi.stubEnv('VITE_DEMO_MODE', 'true')
-    await bootWith(record(A0_FRESH, FRESH_AT, IN_HOUSE_ME))
-    await waitForVerifiedWorkspace()
-    await settle()
-    expect(capturedCtx?.mode, 'the seat').toBe('inhouse')
-    meReply = answer(200, OTHER_ME)
-    await act(async () => {
-      await capturedCtx!.becomePersona!(STAND_IN, 'dashboard')
-    })
-    await waitFor(() => expect(capturedCtx?.user.name).toBe('Tunde Bello'))
-    expect(capturedCtx?.mode, 'the stand-in').toBe('inhouse')
-    meReply = answer(200, IN_HOUSE_ME)
-    await act(async () => {
-      await capturedCtx!.returnToSeat!('dashboard', SEAT_MEMBER)
-    })
-    await waitFor(() => expect(capturedCtx?.user.name).toBe(ME.user.display_name))
-    expect(capturedCtx?.mode, 'back on the seat').toBe('inhouse')
-  })
-
-  it('returning from a stand-in renews the seat', async () => {
-    vi.stubEnv('VITE_DEMO_MODE', 'true')
-    await mountFresh()
-    meReply = answer(200, OTHER_ME)
-    await act(async () => {
-      await capturedCtx!.becomePersona!(STAND_IN, 'dashboard')
-    })
-    await waitFor(() => expect(capturedCtx?.user.name).toBe('Tunde Bello'))
-    await settle()
-    expect(refreshes(), 'a stand-in never renews').toEqual([])
-    expect(await probe(capturedCtx, '/stand-in')).toBe('resolved')
-    expect(
-      probes().map((c) => c.auth),
-      "a stand-in's requests carry its own token",
-    ).toEqual([`Bearer ${standInToken(NOW)}`])
-    meReply = answer(200, ME)
-    vi.setSystemTime(NOW + 2 * HOUR)
-    const mark = calls.length
-
-    await act(async () => {
-      await capturedCtx!.returnToSeat!('dashboard', SEAT_MEMBER)
-    })
-    await waitFor(() => expect(capturedCtx?.user.name).toBe(ME.user.display_name))
-    await settle()
-    const ctx = capturedCtx
-    const out = await probe(ctx)
-
-    expect(out).toBe('resolved')
-    expect(refreshes(mark), 'the seat renews on return').toHaveLength(1)
-    expect(calls[mark]?.url, 'the renewal precedes every request').toBe(REFRESH)
-    expect(apiCalls(mark).length).toBeGreaterThan(0)
-    expect(apiCalls(mark).filter((c) => c.auth !== `Bearer ${renewedToken()}`)).toEqual([])
   })
 })

@@ -9,12 +9,22 @@
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { PROSE_MAX_WIDTH, Privacy } from './Privacy'
 import { Footer } from './Footer'
+import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
+import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
+import {
+  crmTags,
+  hubspotCrmKeys,
+  hubspotFormsKeys,
+  marketingColumns,
+  resendContactKeys,
+  resendSubscription,
+} from './privacyCodeFacts.test.util'
 import { sentryOptions } from '@invoice-os/monitoring'
 
 const SRC_DIR = fileURLToPath(new URL('.', import.meta.url))
@@ -40,7 +50,7 @@ const LEDGER_NEEDLES: readonly (readonly [string, string])[] = [
   ['C17 no advertising network', 'We run no advertising network on this site'],
   ['C18 the notice is the control', 'The cookie notice on this site is where you choose'],
   ['E1 optional answers are pre-selected', 'come with an answer already selected when the form opens'],
-  ['E2 not a marketing list', 'does not add you to a marketing list'],
+  ['E2 the separate marketing box is quoted from code', MARKETING_CONSENT_TEXT],
   ['E3 our code sets no cookies', 'Our own code sets no cookies at all'],
   ['lede: no third company', 'Your browser loads nothing on this site from, and sends nothing to, any other company'],
 ]
@@ -124,12 +134,14 @@ describe('outline', () => {
 })
 
 describe('AC11 + AC12: the docs this page is defended by', () => {
-  it('the claim ledger exists and covers C1 to C31', () => {
+  it('the claim ledger exists and its heading counts every C row', () => {
     const ledger = readFileSync(join(DOCS, 'privacy-policy-claims.md'), 'utf8')
-    for (let n = 1; n <= 31; n += 1) {
+    const last = Number(/\(C1–C(\d+)\)/.exec(ledger)?.[1])
+    expect(last, 'the Table 1 heading carries no (C1–Cn) range').toBeGreaterThanOrEqual(31)
+    for (let n = 1; n <= last; n += 1) {
       expect(ledger, `ledger has no row C${n}`).toContain(`| C${n} |`)
     }
-    expect(ledger).toContain('(C1–C31)')
+    expect(ledger, `a row C${last + 1} exists beyond the heading range`).not.toContain(`| C${last + 1} |`)
     expect(ledger, 'the Table 1 heading still ends at C22').not.toContain('(C1–C22)')
     expect(ledger).toContain('Privacy.tsx')
   })
@@ -520,12 +532,12 @@ describe('sentry: the ledger carries every new sentence', () => {
     }
   })
 
-  it('E3 and E6 carry the Sentry scope note and the four senders', () => {
+  it('E3 and E6 carry the Sentry scope note', () => {
     const e3 = rowOf('E3')[0] ?? ''
     const e6 = rowOf('E6')[0] ?? ''
     expect(e3, 'control: E3 row missing').not.toBe('')
     expect(e3).toContain('Sentry')
-    expect(e6).toContain('four network senders')
+    expect(flat, 'no ledger row may keep the old count').not.toContain('four network senders')
     expect(e6).toContain('the Sentry SDK started by `instrument.ts`')
   })
 
@@ -536,5 +548,187 @@ describe('sentry: the ledger carries every new sentence', () => {
     const w7 = rowOf('W7')[0]?.split('|')[2] ?? ''
     expect(w7, 'control: W7 claim cell').toContain('stops Google Fonts')
     expect(w7, 'W7 claim must not cite Sentry; the closing note does not').not.toContain('Sentry')
+  })
+})
+
+// The page and the ledger describe what notifications sends to HubSpot and Resend.
+// Facts come from the Go and TS that send them (privacyCodeFacts.test.util.ts), not from the story.
+describe('AUTH-17-09: the page quotes the consent copy from code', () => {
+  it('the page quotes the marketing sentence and the notice from code', () => {
+    expect(MARKETING_CONSENT_TEXT.length, 'control: the marketing sentence is empty').toBeGreaterThan(0)
+    expect(PRODUCT_EMAIL_NOTICE.length, 'control: the notice is empty').toBeGreaterThan(0)
+    const page = plainText(html)
+    expect(page, 'the page does not quote MARKETING_CONSENT_TEXT').toContain(MARKETING_CONSENT_TEXT)
+    expect(page, 'the page does not quote PRODUCT_EMAIL_NOTICE').toContain(PRODUCT_EMAIL_NOTICE)
+
+    const src = readFileSync(PRIVACY_TSX, 'utf8')
+    expect(src).toMatch(/import\s*\{[^}]*MARKETING_CONSENT_TEXT[^}]*\}\s*from\s*['"]\.\/MarketingConsent['"]/)
+    expect(src).toMatch(/import\s*\{[^}]*PRODUCT_EMAIL_NOTICE[^}]*\}\s*from\s*['"]\.\/RegisterModal['"]/)
+    expect(src, 'the marketing sentence is retyped, not imported').not.toContain(MARKETING_CONSENT_TEXT)
+    expect(src, 'the notice is retyped, not imported').not.toContain(PRODUCT_EMAIL_NOTICE)
+  })
+})
+
+describe('AUTH-17-09: the ledger matches the new HubSpot and Resend paths', () => {
+  const ledger = readFileSync(join(DOCS, 'privacy-policy-claims.md'), 'utf8')
+  const lines = ledger.split('\n').filter((line) => line.startsWith('| '))
+  const cellsOf = (row: string): string[] => row.split('|').map((cell) => cell.trim())
+  const claimOf = (row: string): string => cellsOf(row)[2]
+  const evidenceOf = (row: string): string => cellsOf(row).at(-2) ?? ''
+  const rowOf = (id: string): string => {
+    const rows = lines.filter((line) => line.startsWith(`| ${id} |`))
+    expect(rows.length, `expected exactly one ${id} row`).toBe(1)
+    return rows[0]
+  }
+  const tick = (key: string): string => `\`${key}\``
+
+  it('control: the ledger rows and the code facts resolved', () => {
+    expect(lines.length).toBeGreaterThan(50)
+    expect(hubspotCrmKeys()).toEqual(['ascomply_contact_tags', 'company', 'email', 'firstname', 'lastname'])
+    expect(resendContactKeys()).toEqual(['email', 'first_name', 'last_name'])
+    expect(crmTags()).toEqual(['registered', 'demo request'])
+    expect(marketingColumns().length).toBeGreaterThan(0)
+  })
+
+  it('C11 says registrants go to HubSpot after verifying and demo bookers on submit, with both tags', () => {
+    const row = rowOf('C11')
+    expect(claimOf(row)).toMatch(/regist/i)
+    expect(claimOf(row)).toMatch(/verif/i)
+    expect(claimOf(row)).toMatch(/demo/i)
+    for (const tag of crmTags()) expect(row, `C11 does not name the tag "${tag}"`).toContain(tag)
+    expect(evidenceOf(row)).toContain('internal/notifications/worker.go')
+    expect(evidenceOf(row)).toContain('internal/notifications/hubspot.go')
+  })
+
+  it('C12 names every property each source sends, tag property included', () => {
+    const row = rowOf('C12')
+    for (const key of [...hubspotCrmKeys(), ...hubspotFormsKeys()]) {
+      expect(row, `C12 does not name ${key}`).toContain(tick(key))
+    }
+    expect(row).toMatch(/registrant/i)
+    expect(row).toMatch(/demo/i)
+  })
+
+  it('C14 says our own server stores the marketing sentence with its time', () => {
+    const row = rowOf('C14')
+    expect(row).toContain('MARKETING_CONSENT_TEXT')
+    for (const column of marketingColumns()) expect(row, `C14 does not name ${column}`).toContain(column)
+    expect(claimOf(row)).toMatch(/\btime\b/i)
+  })
+
+  it('C16 still claims no browsing data and cites the CRM client', () => {
+    expect(hubspotCrmKeys().filter((k) => /^(?:context|hutk|pageuri|pagename)$/i.test(k))).toEqual([])
+    const row = rowOf('C16')
+    expect(claimOf(row)).toContain('browsing history')
+    expect(evidenceOf(row)).toContain('internal/notifications/hubspot.go')
+  })
+
+  it('E2 says only the separate marketing box adds you to a list', () => {
+    const row = rowOf('E2')
+    expect(claimOf(row), 'E2 does not name the marketing box').toMatch(/marketing (?:box|checkbox)/i)
+    expect(claimOf(row) + evidenceOf(row), 'E2 does not name Resend').toContain('Resend')
+    expect(evidenceOf(row), 'E2 cites communications: [] alone').toMatch(/internal\/notifications\/(?:worker|resend)\.go/)
+  })
+
+  it('E5 covers the records in HubSpot, Resend and our own server', () => {
+    const row = rowOf('E5')
+    expect(row).toContain('HubSpot')
+    expect(row).toContain('Resend')
+    expect(row).toMatch(/our own server|our server|contacts table|database/i)
+  })
+
+  it("E6 names the landing's network senders and their count", () => {
+    const NUMBER_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten']
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+        const path = join(dir, entry.name)
+        if (entry.isDirectory()) return walk(path)
+        return entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts') ? [path] : []
+      })
+    const senders = walk(join(SRC_DIR, '..'))
+      .filter((path) => /fetch\(|apiFetch/.test(readFileSync(path, 'utf8')))
+      .map((path) => path.slice(path.lastIndexOf('/') + 1))
+      .sort()
+    expect(senders, 'control: the scan must see the demo request client').toContain('demoRequest.ts')
+    expect(readFileSync(join(SRC_DIR, '..', 'instrument.ts'), 'utf8'), 'control: instrument.ts starts the SDK').toContain('initMonitoring')
+
+    const e6 = (ledger.split('\n').find((line) => line.startsWith('| E6 |')) ?? '').replace(/\s+/g, ' ')
+    expect(e6, 'control: E6 row missing').not.toBe('')
+    const count = /\b([a-z]+) network senders\b/.exec(e6)
+    expect(count, 'E6 states no sender count').not.toBeNull()
+    expect(NUMBER_WORDS.indexOf(count![1]), `E6 says "${count![1]} network senders", the source has ${senders.length} plus the Sentry SDK`).toBe(senders.length + 1)
+    for (const file of senders) expect(e6, `E6 does not name ${file}`).toContain(tick(file))
+
+    const end = e6.indexOf('none reads', count!.index)
+    expect(end, 'E6 no longer ends the sender list with "none reads the key"').toBeGreaterThan(-1)
+    const named = Array.from(e6.slice(count!.index, end).matchAll(/`([A-Za-z]+\.ts)`/g), (m) => m[1]).filter((n) => n !== 'instrument.ts')
+    expect(Array.from(new Set(named)).sort(), 'E6 names a sender the scan does not find, or misses one').toEqual(senders)
+    expect(e6).toContain('the Sentry SDK started by `instrument.ts`')
+  })
+
+  it('the Resend row says "only a tick opts in" rests on the topic default the operator owes, which no code reads', () => {
+    expect(readFileSync(join(SRC_DIR, '..', '..', '..', '..', 'internal/notifications/resend.go'), 'utf8'), 'control: the client now sets a topic default').not.toMatch(/default_subscription/)
+    const rows = lines.filter((line) => /^\| C\d+ \|/.test(line) && claimOf(line).includes('Resend') && /only a ticked/i.test(claimOf(line)))
+    expect(rows.length, 'control: no Resend row says only a tick makes a person marketing-eligible').toBeGreaterThan(0)
+    for (const row of rows) {
+      const evidence = evidenceOf(row)
+      expect(cellsOf(row)[3], 'the class cell must say CODE').toMatch(/\bCODE\b/)
+      expect(cellsOf(row)[3], 'OPERATOR-CONFIRMED claims U2 happened; it is owed').not.toContain('OPERATOR-CONFIRMED')
+      expect(evidence, 'the evidence never names the topic default it depends on').toMatch(/opt_out/)
+      expect(evidence, 'the evidence never names the operator step U2').toMatch(/\bU2\b/)
+      expect(evidence, 'the evidence does not say U2 is owed or not yet confirmed').toMatch(/owed|not yet/i)
+    }
+  })
+
+  it('the Resend ledger row cites the notifications clients', () => {
+    const rows = lines.filter((line) => /^\| C\d+ \|/.test(line) && claimOf(line).includes('Resend'))
+    expect(rows.length, 'no Table 1 row names Resend').toBeGreaterThan(0)
+    for (const row of rows) {
+      const id = Number(/^\| C(\d+) \|/.exec(row)![1])
+      expect(id, 'the Resend row must be a new row after C31').toBeGreaterThan(31)
+      expect(evidenceOf(row)).toContain('internal/notifications/resend.go')
+      expect(evidenceOf(row)).toContain('internal/notifications/worker.go')
+      for (const field of [...resendContactKeys(), resendSubscription()]) {
+        expect(row, `the Resend row does not name ${field}`).toContain(field)
+      }
+      expect(claimOf(row)).toMatch(/registrant/i)
+      expect(claimOf(row)).toMatch(/verif/i)
+      expect(claimOf(row)).toMatch(/tick/i)
+      expect(claimOf(row)).toMatch(/product|service/i)
+    }
+  })
+})
+
+describe('AUTH-17-09: no Resend region claim without a vendor citation', () => {
+  const REGION =
+    /\b(?:regions?|located|locations?|countr(?:y|ies)|EU|EEA|Europe|European|US|USA|U\.S\.|United States|America|Ireland|Frankfurt|Germany|data cent(?:er|re)s?)\b/
+  const NO_CLAIM = /\bno\b[^.]*\b(?:region|location|country)\b|\b(?:region|location)\b[^.]*\b(?:not|never) (?:claimed|stated|named|given)\b|\bno claim\b/i
+  const sentencesOf = (text: string): string[] => text.split(/(?<=[.!?])\s+/)
+  const claimsRegion = (sentence: string): boolean => sentence.includes('Resend') && REGION.test(sentence) && !NO_CLAIM.test(sentence)
+
+  const ledger = readFileSync(join(DOCS, 'privacy-policy-claims.md'), 'utf8')
+  const rows = ledger.split('\n').filter((line) => line.startsWith('| ') && line.includes('Resend'))
+  const pageText = html.replace(/<\/(?:p|li|h\d)>/g, '\n').replace(/<[^>]*>/g, '').replace(/&#x27;/g, "'")
+
+  it('control: the detector fires on a region claim and stays quiet on shipped and meta sentences', () => {
+    expect(claimsRegion('Resend stores your contacts in the EU.')).toBe(true)
+    expect(claimsRegion('Resend does not store data in the US.')).toBe(true)
+    expect(claimsRegion('The page makes no Resend region claim.')).toBe(false)
+    expect(claimsRegion('HubSpot holds all of this on their EU servers.')).toBe(false)
+    expect(claimsRegion('Resend receives your email address.')).toBe(false)
+  })
+
+  it('no Resend region claim without a vendor citation', () => {
+    const pageResend = sentencesOf(pageText.replace(/\s*\n\s*/g, ' \n')).flatMap((s) => s.split('\n')).filter((s) => s.includes('Resend'))
+    expect(pageResend.length, 'the page does not name Resend, so there is nothing to check').toBeGreaterThan(0)
+    expect(pageResend.filter(claimsRegion), 'the page claims a Resend region').toEqual([])
+
+    expect(rows.length, 'no ledger row names Resend, so there is nothing to check').toBeGreaterThan(0)
+    for (const row of rows) {
+      const cells = row.split('|').map((cell) => cell.trim())
+      if (!cells.flatMap(sentencesOf).some(claimsRegion)) continue
+      expect(cells.some((cell) => cell.includes('VENDOR-ASSERTED')), `a Resend region claim is not VENDOR-ASSERTED: ${row.slice(0, 60)}`).toBe(true)
+      expect(row, 'a Resend region claim cites no Resend document').toMatch(/https?:\/\/\S*resend\.com/)
+    }
   })
 })

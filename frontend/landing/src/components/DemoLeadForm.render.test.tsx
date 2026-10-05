@@ -116,7 +116,7 @@ describe('DemoLeadForm honeypot hardening under any idPrefix (S7, NEW-BEHAVIOUR)
 })
 
 describe('two mounted instances never collide (S8, NEW-BEHAVIOUR)', () => {
-  it('S8: idPrefix="dm" and idPrefix="dc" rendered together produce 14 unique ids', async () => {
+  it('S8: idPrefix="dm" and idPrefix="dc" rendered together produce 16 unique ids', async () => {
     const mod = await demoLeadFormModule()
     expect(mod, 'expected ./DemoLeadForm.tsx to exist').not.toBeNull()
     if (!mod) return
@@ -124,7 +124,7 @@ describe('two mounted instances never collide (S8, NEW-BEHAVIOUR)', () => {
     const dm = renderToStaticMarkup(createElement(mod.DemoLeadForm, { idPrefix: 'dm', variant: 'modal' }))
     const dc = renderToStaticMarkup(createElement(mod.DemoLeadForm, { idPrefix: 'dc', variant: 'card' }))
     const ids = Array.from((dm + dc).matchAll(/\sid="([^"]+)"/g)).map((m) => m[1])
-    expect(ids.length).toBe(14)
+    expect(ids.length).toBe(16)
     expect(new Set(ids).size).toBe(ids.length)
   })
 })

@@ -4,7 +4,6 @@
 // Screenshots are attached for the reviewer and never asserted.
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { collectErrors, signInAs } from '../personaSession'
-import { signInUrl } from '../personas'
 import { expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { APP_URL, GATEWAY_URL } from './targets'
@@ -14,7 +13,6 @@ test.use({ viewport: { width: 1440, height: 900 } })
 const SHADOW_CARD = 'rgba(40, 83, 52, 0.21) 0px 14px 22px -16px'
 const NOT_ACTIVE_BODY = JSON.stringify({ error: 'your membership in this workspace is not active' })
 const ME_URL = `${GATEWAY_URL}/api/tenancy/v1/me`
-const VERIFIED = '[title="Tenant verified via /v1/me"]'
 
 const firstFamily = (raw: string): string => raw.split(',')[0].replace(/["']/g, '').trim()
 
@@ -463,28 +461,33 @@ test('AS-07 the held sign-in card: radius, fill, border, no shadow', async ({ pa
   let held = false
   await page.route(ME_URL, async (route) => {
     const req = route.request()
-    if (req.method() !== 'GET' || held) return route.continue()
+    // Only the app's own /me is held; the landing and gateway calls of the sign-in pass through.
+    if (req.method() !== 'GET' || held || !req.frame().url().startsWith(APP_URL)) return route.continue()
     held = true
     await gate
     await route.continue()
   })
 
-  await page.goto(signInUrl('firm'), { waitUntil: 'commit' })
-  await expect.poll(() => held, { message: 'the first GET /me was never held, so the card is not the in-flight one' }).toBe(true)
-  const text = page.getByText(/^Signing in as .+…$/)
-  await expect(text, 'the loading card names the persona being signed in').toBeVisible()
-  const card = text.locator('xpath=../..')
-  await settle(page, card)
-  const reading = await styles(card, ['border-top-left-radius', 'background-color', 'border-top-color', 'box-shadow'])
-  expect(reading['border-top-left-radius'], 'card radius').toBe('10px')
-  expect(reading['background-color'], 'card fill').toBe('rgb(255, 255, 255)')
-  expect(reading['border-top-color'], 'card border').toBe('rgb(201, 217, 214)')
-  expect(reading['box-shadow'], 'card shadow').toBe('none')
+  const signing = signInAs(page, 'firm')
+  const signed = signing.then(() => null, (e: unknown) => e)
+  try {
+    await expect.poll(() => held, { timeout: 60_000, message: 'the first app GET /me was never held, so the card is not the in-flight one' }).toBe(true)
+    const text = page.getByText('Opening your workspace…', { exact: true })
+    await expect(text, 'the hand-off loading card is up while /me is held').toBeVisible()
+    const card = text.locator('xpath=../..')
+    await settle(page, card)
+    const reading = await styles(card, ['border-top-left-radius', 'background-color', 'border-top-color', 'box-shadow'])
+    expect(reading['border-top-left-radius'], 'card radius').toBe('10px')
+    expect(reading['background-color'], 'card fill').toBe('rgb(255, 255, 255)')
+    expect(reading['border-top-color'], 'card border').toBe('rgb(201, 217, 214)')
+    expect(reading['box-shadow'], 'card shadow').toBe('none')
 
-  await attachJson(testInfo, 'as-07-measurements', reading)
-  await attachShot(page, testInfo, 'loading')
-  release()
-  await expect(page.locator(VERIFIED), 'the held /me was released and the workspace drew').toBeAttached()
+    await attachJson(testInfo, 'as-07-measurements', reading)
+    await attachShot(page, testInfo, 'loading')
+  } finally {
+    release()
+  }
+  expect(await signed, 'the sign-in after the held /me').toBeNull()
   await page.unroute(ME_URL)
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })

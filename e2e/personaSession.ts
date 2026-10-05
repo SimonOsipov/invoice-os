@@ -3,20 +3,19 @@
 // from e2e/personas.test.ts, which runs under vitest in `node` and would break if the pure
 // registry pulled in Playwright.
 
-import { expect, type Page } from '@playwright/test'
+import { expect, type Page, type Request } from '@playwright/test'
 
-import { DESTINATION_ENV, PERSONAS, signInUrl, type Destination, type PersonaId } from './personas'
+import { DESTINATION_ENV, type Destination, type PersonaId } from './personas'
 import { resolveTarget } from './targets'
 
 // Each destination's own proof that it actually drew for a signed-in persona — not that the
 // shell HTML was served. All three are verified rendered:
 //   app     -> the green dot the sidebar's user card renders ONLY once /v1/me has resolved
-//              (Sidebar.tsx flag-off, PersonaFooter.tsx's marker row flag-on), i.e. the
+//              (Sidebar.tsx's identity card), i.e. the
 //              backend round trip completed, not just a mount.
-//              The same discriminator the four existing signInFirm copies already wait on.
 //   ops     -> the default Overview screen's h1 (ops-console/src/components/Overview.tsx:154)
 //   support -> the default Submissions ops h1 (support-console/src/components/Submissions.tsx:48)
-const DESTINATION_READY: Record<Destination, (page: Page) => Promise<void>> = {
+export const DESTINATION_READY: Record<Destination, (page: Page) => Promise<void>> = {
   app: async (page) => {
     await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
   },
@@ -28,26 +27,90 @@ const DESTINATION_READY: Record<Destination, (page: Page) => Promise<void>> = {
   },
 }
 
-// Sign in as a persona through the landing hand-off and wait until its destination has
-// actually drawn. The landing page is the single sign-in front door, so no deployed build
-// has a picker to click — `?persona=` IS the sign-in, exactly as landing destUrl() hands
-// off. The response is asserted ok() BEFORE the discriminator so an HTTP failure reports as
-// itself rather than as a selector timeout.
-export async function signInAs(page: Page, id: PersonaId): Promise<void> {
-  const url = signInUrl(id)
-  const res = await page.goto(url)
-  expect(res, `no response from ${url}`).toBeTruthy()
-  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
-  await DESTINATION_READY[PERSONAS[id].destination](page)
+export const VERIFIED = '[title="Tenant verified via /v1/me"]'
+const SESSION_KEY = 'invoice-os.session'
+
+export function isHandoffNavigation(url: string): boolean {
+  return url.startsWith(resolveTarget('APP_URL')) && new URL(url).searchParams.has('handoff')
 }
 
-// The refusal half of the axis: hand a destination a persona it does not admit and assert it
-// bounces back to the landing page. All three gates refuse the same way — no session, so the
-// SPA navigates to landingBase() (app/src/App.tsx, ops-console/src/App.tsx:40-44,
-// support-console/src/App.tsx:41-45) — which is why one helper covers all of them.
-//
-// Builds the URL from DESTINATION_ENV rather than signInUrl(), because the whole point is to
-// pair a persona with a destination that is NOT its own.
+export async function submitSignIn(page: Page, email: string, password: string): Promise<void> {
+  const dialog = page.getByRole('dialog', { name: 'Platform login' })
+  await dialog.getByLabel('Work email', { exact: true }).fill(email)
+  await dialog.getByLabel('Password', { exact: true }).fill(password)
+  await dialog.getByRole('button', { name: 'Sign in →', exact: true }).click()
+}
+
+export async function expectInWorkspace(page: Page, account: { workspaceName: string }): Promise<void> {
+  await expect(page.locator(VERIFIED)).toBeAttached({ timeout: 30_000 })
+  await expect(page.locator('aside.pf-sidebar')).toContainText(account.workspaceName.toUpperCase())
+}
+
+// App path -> landing front door -> "Platform login" -> hand-off navigation back to the app.
+// A stored session is rehydrated at boot and suppresses the front-door bounce (App.tsx resolveBootSession,
+// the `activeSession` guard of the bounce effect), so a page already on the app drops it first.
+// ceiling: a page parked on another origin keeps its stored session, sign out there first.
+async function passFrontDoor(page: Page, account: { email: string; password: string }, path: string): Promise<void> {
+  if (new URL(page.url(), 'about:blank').origin === new URL(resolveTarget('APP_URL')).origin) {
+    await page.evaluate((key) => localStorage.removeItem(key), SESSION_KEY)
+  }
+  await page.goto(`${resolveTarget('APP_URL')}${path}`)
+  await page.waitForURL((u) => u.href.startsWith(resolveTarget('LANDING_URL')), { timeout: 20_000 })
+  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
+  await Promise.all([
+    page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
+    submitSignIn(page, account.email, account.password),
+  ])
+}
+
+export async function signInAtFrontDoor(page: Page, account: { email: string; password: string; workspaceName: string }, path: string): Promise<void> {
+  await passFrontDoor(page, account, path)
+  await expectInWorkspace(page, account)
+}
+
+// Sign in as the e2e member of a tenant (realAccounts.ts) through the landing form, then wait for the app to draw.
+// `tenantId` defaults to the seeded 1111 (firm) / 2222 (inhouse); `path` is where the app lands.
+// Postcondition: the stored session is a hand-off session for the tenant, and no main-frame navigation carried `persona=` (the app ignores it).
+// ceiling: about two extra SPA loads per test, revisit with per-worker storageState above +3 min per unit.
+export async function signInAs(page: Page, id: PersonaId, opts: { tenantId?: string; path?: string } = {}): Promise<void> {
+  if (id !== 'firm' && id !== 'inhouse') throw new Error(`signInAs: persona "${id}" has no e2e member`)
+  const { TENANTS } = await import('./topology/targets')
+  const { ensureMember } = await import('./realAccounts')
+  const tenantId = opts.tenantId ?? TENANTS[id === 'firm' ? 'a' : 'b'].id
+  const member = await ensureMember(tenantId, id === 'firm' ? 'firm' : 'in_house')
+
+  const personaNavs: string[] = []
+  const onRequest = (r: Request): void => {
+    if (r.isNavigationRequest() && r.frame() === page.mainFrame() && new URL(r.url()).searchParams.has('persona')) personaNavs.push(r.url())
+  }
+  page.on('request', onRequest)
+  try {
+    await passFrontDoor(page, member, opts.path ?? '/')
+    await DESTINATION_READY.app(page)
+  } finally {
+    page.off('request', onRequest)
+  }
+
+  expect(personaNavs, 'signInAs navigated with ?persona=, which the real door never carries').toEqual([])
+  const raw = await page.evaluate((key) => localStorage.getItem(key), SESSION_KEY)
+  expect(raw, 'no stored session after sign-in').not.toBeNull()
+  const session = JSON.parse(raw!) as { handoff?: boolean; me?: { tenant?: { id?: string } } }
+  expect(session.handoff, 'the stored session is not a hand-off session').toBe(true)
+  expect(session.me?.tenant?.id, `the session is bound to another tenant than ${tenantId}`).toBe(tenantId)
+}
+
+// The browser session's own access token, for live reads compared with what the page shows.
+export async function browserToken(page: Page): Promise<string> {
+  const raw = await page.evaluate((key) => localStorage.getItem(key), SESSION_KEY)
+  const token = raw === null ? undefined : (JSON.parse(raw) as { token?: string }).token
+  if (!token) throw new Error('browserToken: no stored session token, sign in first')
+  return token
+}
+
+// The refusal half of the axis: visit a destination with `?persona=<id>` and assert it bounces
+// back to the landing page. The param is no credential at any of the three destinations: no
+// session, so the SPA navigates to landingBase() (the console's StaffGate does it after an
+// async boot), which is why one helper covers all of them.
 export async function expectRefused(page: Page, id: PersonaId, destination: Destination): Promise<void> {
   const url = `${resolveTarget(DESTINATION_ENV[destination])}?persona=${id}`
   const landingUrl = resolveTarget('LANDING_URL')
@@ -73,10 +136,6 @@ export async function sidebarRoster(page: Page): Promise<string[]> {
 
 // Console errors + uncaught exceptions, for specs that assert a persona's surfaces draw
 // clean. Attach before navigating so load-time errors are captured.
-//
-// Hoisted here for NEW specs to import. It deliberately does NOT refactor the three existing
-// inline copies (portfolio.spec.ts:23, import-wizard.spec.ts:83, invoice-surfaces.spec.ts:35)
-// — those files are passing and out of this subtask's scope.
 export function collectErrors(page: Page): string[] {
   const errors: string[] = []
   page.on('console', (msg) => {

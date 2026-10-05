@@ -77,9 +77,8 @@ actually existing: CI now creates, tears down and sweeps them itself.
 > vocabulary across this doc and `railway-env.sh` is a separate cleanup.
 
 **E2E runs against ephemeral environments only** — on `pull_request`, not on push or
-dispatch. The api suite is not read-only (it self-heals rule state in `beforeAll` and
-restores it in `afterAll`), so running it against the persistent environment would mutate
-live data. No coverage is lost by merging: that suite already ran against the PR's own
+dispatch. The api suite is not read-only, so running it against the persistent environment would
+mutate live data. No coverage is lost by merging: that suite already ran against the PR's own
 environment, on the same commit, as the gate for merging it.
 
 Each PR's ephemeral environment and its four public URLs (gateway, app, landing,
@@ -92,7 +91,9 @@ across PRs the way `development`'s own four URLs (still constant, still hardcode
 PR opened ──> dev-env.yml:
                 prepare-env: derive `pr-<N>` (prenv.Name) ──> environmentCreate, forked
                              from `development` (skipInitialDeploys, create-or-reuse)
-                             ──> blank WAL_ARCHIVE_* on Postgres (a kept BUCKET must differ from production's) ──>
+                             ──> write a fresh gateway token (set-fork-gateway-token,
+                             right after set-fork-auth) ──> blank WAL_ARCHIVE_* on
+                             Postgres (a kept BUCKET must differ from production's) ──>
                              deploy Postgres + probe ──> assert Watch Paths empty
                              (M3-16 invariant, now runtime-asserted) ──> discover the
                              5 URLs ──> blank Sentry variables (set-sentry-off)
@@ -104,13 +105,14 @@ PR opened ──> dev-env.yml:
                 NON-fatal, so /healthz carries a `demo_purge` field the gate
                 asserts == "true" separately — DEMO-04; mock_issuer == "on";
                 auth_issuers == "2": the mock plus the fork's own GoTrue)
-                ──> 8 context services + docling + auth + 4 SPAs (app is gateway-wired)
+                ──> 8 context services + docling + auth + 4 SPAs (all four are gateway-wired)
                 ──> `fleet-gate` job: fleet /healthz/fleet gate + its Sentry
                     state check: every Go service and docling report sentry "off"
+                    + notifications reports `contacts: fake`
                 ──> verify, `e2e` job: smoke (landing + both consoles) + api
                 ──> verify, `topology` job: one parallel leg per unit (serial-lane,
                     import-wizard, invoice-surfaces; app login, cross-tenant
-                    isolation, demo persona)
+                    isolation)
               ──> PR stays open: environment stays up
 PR closed  ──> dev-env-teardown.yml (M4-23-05): prenv name ──> look the name up among
                ephemeral environments ──> environmentDelete ──> confirm by re-query.
@@ -123,7 +125,8 @@ merge to main ──> dev-env.yml (push): await green CI on the merge commit
                       "absent", auth_issuers == "1", then GET /.well-known/jwks.json and
                       POST /auth/login must answer 404) ──> 8 context + docling + auth +
                       4 SPAs ──> fleet gate + Sentry state check (every Go service and
-                      docling reports sentry "on" or "off", never absent)
+                      docling reports sentry "on" or "off", never absent; notifications
+                      reports `contacts` "real" or "off", never "fake")
                   ──> no E2E (ephemeral environments only)
 
 workflow_dispatch ──> targets the persistent environment directly (never torn down),
@@ -291,6 +294,11 @@ service on `development` (Settings → **Enable**), and disable/remove `dev-env.
 `dev-env-teardown.yml`, `dev-env-sweeper.yml` and `railway-invariants.yml` — the last of
 these will otherwise fail every PR once the deployment triggers are back.
 
+To roll back a deploy of the gateway token guard, roll back the gateway and the seven
+guarded services together. A guarded service's WARN `request refused: no gateway token`
+line is the symptom of a split rollback. The client sees 502 `{"error":"bad gateway"}`, not
+401, and the gateway logs an ERROR `gateway token refused by upstream` naming the service.
+
 ## Cold-fleet recovery (M3-16)
 
 **Root cause.** Each Railway service has a *service-level* **Watch Paths**
@@ -408,6 +416,7 @@ contradict what the docs imply.
 | Postgres volume | **No** — `volumeInstances == []`, while `development` has 5000MB | **CI must CREATE it.** Without a volume Postgres deploys to `SUCCESS` but **never accepts a connection** (corrected 2026-07-19 — see below). `prepare-env` creates it with `volumeCreate`, copying the `mountPath` and `region` from `development`, confirms by re-query, and redeploys Postgres if a deployment already existed. The database is still **ephemeral by design** and born empty — the gateway bootstraps, migrates, purges the demo tenants and seeds at boot. |
 | TCP proxy + `DATABASE_PUBLIC_URL` | Yes, with its own distinct port; `DATABASE_URL` resolves too | Since M4-22-08, `prepare-env` no longer probes or observes the proxy at all. `health-gate`'s `/healthz` 200 is now the sole Postgres liveness proof (`docs/migrations.md` §2) — strictly stronger. The proxy resource itself is scheduled for deletion via Escalation E2; until then it may still exist, unused. |
 | Sealed variables | **No** — they never fork | `prepare-env` fails loudly if `development` holds any, since they would otherwise go silently missing in every PR environment. Only exception: `GOTRUE_JWT_KEYS`, `GOTRUE_JWT_SECRET` and `GOTRUE_SMTP_PASS` on `auth`, which `set-fork-auth` writes per fork. |
+| Unsealed variables | Yes — verbatim | `GATEWAY_TOKEN` is the exception: `set-fork-gateway-token` overwrites it per fork on the gateway and the seven services (`TestSetForkGatewayToken_WritesOneFreshValueToTheEight`). |
 | Leftover PR environments | None existed before the probe | Independent confirmation that Railway's PR Environments feature never created any here. |
 
 ### Correction, 2026-07-19 — "no volume is fine" was false

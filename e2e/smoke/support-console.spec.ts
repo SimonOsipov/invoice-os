@@ -1,15 +1,15 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 
-import { collectErrors, signInAs } from '../personaSession'
+import { collectErrors } from '../personaSession'
+import { seedStaffSession, test } from '../staffSession'
 
 // The Support Console, driven as the cross-tenant operator it is for (PERSONA-01-05,
-// Backlog task-274). Persona `support` -> destination `support`.
+// Backlog task-274), on a seeded real staff session (staffSession.ts).
 //
-// MOCK-ONLY, AND THAT LIMITS WHAT A GREEN RUN MEANS. This console has no backend: a grep
-// for fetch/XMLHttpRequest/axios/WebSocket across frontend/support-console/src returns
-// nothing, and its own session module says so in prose
-// (frontend/support-console/src/session.ts:3-9 — "Deliberately NOT access control... a
-// fabricated localStorage entry is enough to get in"). Every assertion below pins this
+// MOCK-ONLY, AND THAT LIMITS WHAT A GREEN RUN MEANS. This console's data has no backend: a
+// grep for fetch/XMLHttpRequest/axios/WebSocket across frontend/support-console/src returns
+// nothing, and its only gateway calls are the session's renewal and sign-out
+// (packages/console-session). Every assertion below pins this
 // console's CLIENT-SIDE BEHAVIOUR over the fixtures in src/data.tsx. It is not a contract
 // test and says nothing about any server. Counts are read from the rendered UI rather than
 // hardcoded, so a seed edit does not break these — but the entities are fiction, and when
@@ -23,15 +23,14 @@ import { collectErrors, signInAs } from '../personaSession'
 // "Target surface" section is amended by [PERSONA-01-07] in this same PR — note it does not
 // currently mention this console at all.
 //
-// PARALLEL-SAFE. Zero network calls and zero database contact, so smoke's
-// `fullyParallel: true` needs no carve-out here: nothing this file does can be observed by
-// another worker. Every mutation below lives in React state inside one page.
+// PARALLEL-SAFE. Each test seeds its own gateway session for the worker's one staff account,
+// and none signs it out, so smoke's `fullyParallel: true` needs no carve-out here. Every
+// mutation below lives in React state inside one page.
 //
-// ALREADY COVERED ELSEWHERE, DELIBERATELY NOT REPEATED HERE: smoke/apps.ts:53-60 (the
-// ASComply mark, the default `Submissions ops` h1, and `CROSS-TENANT VIEW` on the landing
-// screen), smoke.spec.ts:66-75 (a bare-URL visit redirects to the landing page),
-// smoke/persona-boundaries.spec.ts (this console refuses the developer/firm/inhouse
-// personas).
+// ALREADY COVERED ELSEWHERE, DELIBERATELY NOT REPEATED HERE: smoke/apps.ts (the ASComply
+// mark, the default `Submissions ops` h1, and `CROSS-TENANT VIEW` on the landing screen),
+// smoke.spec.ts (a bare-URL visit redirects to the landing page),
+// smoke/persona-boundaries.spec.ts (this console refuses every persona param).
 //
 // DELIBERATELY NOT ASSERTED, because a fixture assertion earns its place only if a
 // plausible CODE change can break it: the sidebar operator name (hardcoded in Sidebar.tsx,
@@ -49,7 +48,7 @@ import { collectErrors, signInAs } from '../personaSession'
 //
 // The nav LABEL differs from the h1 on four of the five screens (data.tsx:73-96 vs the
 // screen components). Click the label, assert the heading. The sweep ends back on
-// Submissions so the return leg is covered without restating what signInAs already waited for.
+// Submissions so the return leg is covered without restating what seedStaffSession already waited for.
 const SCREENS: { nav: string; h1: string }[] = [
   { nav: 'Rules', h1: 'Rules admin' },
   { nav: 'Audit', h1: 'Audit & evidence explorer' },
@@ -109,9 +108,9 @@ async function goTo(page: Page, nav: string, h1: string): Promise<void> {
   await expect(heading(page)).toHaveText(h1)
 }
 
-test('support-console: every screen is reachable from the sidebar and renders its own h1', async ({ page }) => {
+test('support-console: every screen is reachable from the sidebar and renders its own h1', async ({ page, staffAccount }) => {
   const errors = collectErrors(page)
-  await signInAs(page, 'support')
+  await seedStaffSession(page, 'support', staffAccount)
 
   // A sixth screen must turn this red rather than being silently skipped by the loop.
   await expect(navButtons(page)).toHaveCount(SCREENS.length)
@@ -143,9 +142,9 @@ test('support-console: every screen is reachable from the sidebar and renders it
 //
 // `dlCount` is React state with no persistence, so a page.reload() anywhere in here would
 // silently undo the mutation — there is deliberately none.
-test('support-console: Re-drive all clears the dead-letter queue everywhere it is reported', async ({ page }) => {
+test('support-console: Re-drive all clears the dead-letter queue everywhere it is reported', async ({ page, staffAccount }) => {
   const errors = collectErrors(page)
-  await signInAs(page, 'support') // lands on Submissions ops
+  await seedStaffSession(page, 'support', staffAccount) // lands on Submissions ops
 
   // The count is READ from the sub-stat tile rather than the badge, because the tile always
   // renders (Submissions.tsx:29-34) and the badge does not: at zero the badge is absent, so
@@ -203,9 +202,9 @@ test('support-console: Re-drive all clears the dead-letter queue everywhere it i
   expect(errors, `console errors re-driving the support dead-letter queue:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('support-console: each filter chip re-filters the table, tracks aria-pressed, and its count matches the rows it shows', async ({ page }) => {
+test('support-console: each filter chip re-filters the table, tracks aria-pressed, and its count matches the rows it shows', async ({ page, staffAccount }) => {
   const errors = collectErrors(page)
-  await signInAs(page, 'support')
+  await seedStaffSession(page, 'support', staffAccount)
 
   await expect(chips(page)).toHaveCount(CHIP_LABELS.length)
 
@@ -250,9 +249,9 @@ test('support-console: each filter chip re-filters the table, tracks aria-presse
 // claims: the search narrows the list, the selection SURVIVES being narrowed out of it
 // (Tenants.tsx:38-40 — the detail pane keeps showing what the operator opened), and
 // selecting re-resolves the whole record rather than just its name.
-test('support-console: tenant search narrows the list, selection fills the detail pane, and view-as is audited', async ({ page }) => {
+test('support-console: tenant search narrows the list, selection fills the detail pane, and view-as is audited', async ({ page, staffAccount }) => {
   const errors = collectErrors(page)
-  await signInAs(page, 'support')
+  await seedStaffSession(page, 'support', staffAccount)
   await goTo(page, 'Tenants', 'Tenants & entities')
 
   // The tenant rows reuse the sidebar's `.ops-nav` class (Tenants.tsx:69); scoping to

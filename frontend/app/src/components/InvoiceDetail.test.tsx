@@ -3988,103 +3988,23 @@ describe('InvoiceDetail header and action cluster take the v2 look (RESKIN2-03-0
   })
 })
 
-describe('InvoiceDetail demo-only blocked-by-role note (task-594, DEMO-06-06)', () => {
-  const ID = 'inv-blocked-by-role-1'
-  const FOLAKE: Member = {
-    id: 'm-folake-001',
-    name: 'Folake Adesina',
-    initials: 'FA',
-    email: 'folake@example.ng',
-    role: 'preparer',
-    status: 'active',
-    isYou: true,
-  }
-  const MUSA: Member = {
-    id: 'm-musa-001',
-    name: 'Musa Danjuma',
-    initials: 'MD',
-    email: 'musa@example.ng',
-    role: 'reviewer',
-    status: 'active',
-    isYou: true,
-  }
-  const S = 'Only an admin or a reviewer can approve or reject an invoice — ask an approver on your team.'
-
-  // detailCtx (:97-108) does not set `members` -- flag-on rows spread the roster in
-  // rather than rely on the helper (hazard C4).
-  async function renderDemoDetail(members: Member[]) {
-    vi.stubEnv('VITE_DEMO_MODE', 'true')
-    vi.resetModules()
-    const { InvoiceDetail: DemoInvoiceDetail } = await import('./InvoiceDetail')
-    const ctx = { ...detailCtx(ID), members } as unknown as PlatformCtx
-    render(<DemoInvoiceDetail ctx={ctx} />)
-  }
-
-  it('1: flag off, a blocked preparer sees no demo note (AC-1)', async () => {
+describe('InvoiceDetail has no blocked-by-role note', () => {
+  it('no blocked-by-role note', async () => {
+    const ID = 'inv-no-blocked-note-1'
+    const PREPARER: Member = {
+      id: 'm-prep-001',
+      name: 'Folake Adesina',
+      initials: 'FA',
+      email: 'folake@example.ng',
+      role: 'preparer',
+      status: 'active',
+      isYou: true,
+    }
     mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_approve: false }))
-    const ctx = { ...detailCtx(ID), members: [FOLAKE] } as unknown as PlatformCtx
+    render(<InvoiceDetail ctx={{ ...detailCtx(ID), members: [PREPARER] } as unknown as PlatformCtx} />)
 
-    render(<InvoiceDetail ctx={ctx} />)
-
-    await screen.findByTestId('detail-approve')
-    expect(screen.queryByTestId('persona-blocked-note')).toBeNull()
-  })
-
-  it('4: the note is a sibling of the disabled Approve, never its replacement (AC-2, AC-4)', async () => {
-    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_approve: false, approve_blocked_reason: S }))
-
-    await renderDemoDetail([FOLAKE])
-
-    const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
-    expect(approveBtn.disabled).toBe(true)
-    expect(approveBtn.getAttribute('title')).toBe(S)
-    expect(screen.getByTestId('persona-blocked-note')).toBeTruthy()
-  })
-
-  it('the reject row comes before the role note', async () => {
-    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_approve: false, can_reject: true, approve_blocked_reason: S }))
-
-    await renderDemoDetail([FOLAKE])
-
-    fireEvent.click(await screen.findByTestId('detail-reject'))
-    const reason = await screen.findByTestId('detail-reject-reason')
-    const note = screen.getByTestId('persona-blocked-note')
-    expect(reason.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING, 'the note follows the reject row').toBeTruthy()
-  })
-
-  it('5: an approver sees no note (AC-3)', async () => {
-    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_approve: true }))
-
-    await renderDemoDetail([MUSA])
-
-    await screen.findByTestId('detail-approve')
-    expect(screen.queryByTestId('persona-blocked-note')).toBeNull()
-  })
-
-  it('6: a blocked reviewer sees no note -- the block is not about their role (AC-3)', async () => {
-    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_approve: false }))
-
-    await renderDemoDetail([MUSA])
-
-    await screen.findByTestId('detail-approve')
-    expect(screen.queryByTestId('persona-blocked-note')).toBeNull()
-  })
-
-  it('7: a preparer on a non-validated invoice sees no note (AC-3)', async () => {
-    mockDetailFetch(detailRecord({ id: ID, status: 'accepted', can_approve: false }))
-
-    await renderDemoDetail([FOLAKE])
-
-    await screen.findByTestId('detail-approve')
-    expect(screen.queryByTestId('persona-blocked-note')).toBeNull()
-  })
-
-  it('8: an unresolved roster renders no note and does not throw (AC-3)', async () => {
-    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_approve: false }))
-
-    await renderDemoDetail([])
-
-    await screen.findByTestId('detail-approve')
+    const approve = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
+    expect(approve.disabled, 'the viewer cannot approve').toBe(true)
     expect(screen.queryByTestId('persona-blocked-note')).toBeNull()
   })
 })

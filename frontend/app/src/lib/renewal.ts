@@ -53,17 +53,22 @@ export function isRenewalDue(session: Session, now: number = Date.now()): boolea
 }
 
 // A 200 without two non-empty string tokens throws a 'malformed' ApiError, which the renewer treats as transient.
-export async function refreshSession(base: string, session: Session, now: number = Date.now()): Promise<Session> {
+export async function refreshTokens(base: string, refreshToken: string, signal: AbortSignal): Promise<{ access: string; refresh: string }> {
   const body = await apiFetch<{ access_token?: unknown; refresh_token?: unknown } | null>(`${base}/auth/refresh`, {
     method: 'POST',
-    body: { refresh_token: session.renewal?.refreshToken },
-    signal: AbortSignal.timeout(RENEW_TIMEOUT_MS),
+    body: { refresh_token: refreshToken },
+    signal,
   })
   const access = body?.access_token
   const refresh = body?.refresh_token
   if (typeof access !== 'string' || access === '' || typeof refresh !== 'string' || refresh === '') {
     throw new ApiError('malformed', 'refresh answered without both tokens', 200)
   }
+  return { access, refresh }
+}
+
+export async function refreshSession(base: string, session: Session, now: number = Date.now()): Promise<Session> {
+  const { access, refresh } = await refreshTokens(base, session.renewal?.refreshToken ?? '', AbortSignal.timeout(RENEW_TIMEOUT_MS))
   return { ...session, token: access, renewal: { refreshToken: refresh, receivedAt: now } }
 }
 

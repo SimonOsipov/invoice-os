@@ -1,46 +1,44 @@
-// M3-10-03 — kill-switch end-to-end suite (Core AC 3): jointly proves, for
-// TWO distinct seeded rule types (vat-standard-rate, a tax_math rule; and
-// currency-allowed, an enum rule), that ToggleRule's validate-effect
-// (no-redeploy live reload — store_test.go's TestStore_ToggleLiveReload
-// pattern, seed_test.go/seed_adversarial_test.go's TestSeed_KillSwitch /
-// TestSeed_KillSwitchSymmetry pattern), same-tx audit trail (store_test.go's
-// TestStore_ToggleFlipsAndAudits / TestStore_ToggleRoundTripEvents pattern),
-// and reversibility all hold TOGETHER for each rule, not just individually
-// across separate single-purpose tests.
+// Kill-switch suite: staff switch a rule off with an owner-role statement
+// (docs/rule-kill-switch.md). `rules` is global, so these tests mutate the
+// shared seeded rows; each registers a superuser restore in t.Cleanup before
+// its first write. No t.Parallel().
 //
-// `rules` is a GLOBAL, untenanted table (no tenant_id, no RLS — see
-// store.go's file header): toggling mutates the one shared migrated v1 row
-// for real. t.Cleanup (registered FIRST, before any mutation) restores both
-// keys to enabled=true via a superuser UPDATE unconditionally — it must run
-// even if the test fails partway through, or every other test in this
-// package that assumes v1's rules start enabled would break. This suite does
-// NOT call t.Parallel() (matching every other file in this package), since
-// the toggle affects process-wide shared DB state.
-//
-// Each rule type runs under its OWN freshly-generated tenantID (uuid.NewString
-// in its own t.Run) rather than sharing one across both — auditCountTenant
-// counts ALL rows for {tenantID, event}, so sharing a tenant across both
-// subtests would make the second subtest's "delta of 1" assertion collide
-// with the first's row (see store_test.go's auditCountTenant/auditPayloadTenant,
-// reused here verbatim, both scoped by tenantID+event).
-//
-// Run (same env gate as the rest of the package):
-//
-//	DATABASE_URL="postgres://invoice_app:app@localhost:5432/invoice_os?sslmode=disable" \
-//	DATABASE_SUPERUSER_URL="postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disable" \
-//	go test -count=1 ./internal/validation/...
+//	DATABASE_URL=... DATABASE_SUPERUSER_URL=... go test -p 1 -count=1 ./internal/validation/...
 package validation
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
+
+// killSwitchStatement is the statement docs/rule-kill-switch.md gives the
+// operator: the active version's row for $2, by key.
+const killSwitchStatement = "UPDATE rules r SET enabled = $1 FROM rule_set_versions v WHERE r.rule_set_version_id = v.id AND v.is_active AND r.key = $2"
+
+// runKillSwitch runs killSwitchStatement as invoice_migrator in its own tx and
+// returns the rows affected.
+func runKillSwitch(t *testing.T, super *pgxpool.Pool, key string, enabled bool) int64 {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin kill-switch tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, "SET LOCAL ROLE invoice_migrator"); err != nil {
+		t.Fatalf("SET LOCAL ROLE invoice_migrator: %v", err)
+	}
+	tag, err := tx.Exec(ctx, killSwitchStatement, enabled, key)
+	if err != nil {
+		t.Fatalf("kill switch (%s, %t): %v", key, enabled, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit kill switch (%s, %t): %v", key, enabled, err)
+	}
+	return tag.RowsAffected()
+}
 
 // killSwitchCase pairs a seeded rule key with a mutator that, applied to a
 // fresh validInvoicePayload(), fires exactly that rule (and no other) so the
@@ -52,26 +50,12 @@ type killSwitchCase struct {
 	mutate func(p Payload)
 }
 
-// TestKillSwitch_E2E drives the kill-switch flow (baseline fire -> disable ->
-// validate-effect drop -> same-tx audit -> re-enable -> paired audit ->
-// reversibility) over two seeded rules from different rule TYPES
-// (tax_math and enum), proving the mechanism generalizes rather than only
-// working for the one rule (vat-standard-rate) the earlier seed_test.go /
-// seed_adversarial_test.go suites already covered individually.
+// TestKillSwitch_E2E disables and restores two seeded rules of different types
+// (tax_math, enum) through runKillSwitch and checks the effect on evaluation.
 func TestKillSwitch_E2E(t *testing.T) {
 	super, app := dbTestPools(t)
 
-	// Registered FIRST, before either subtest mutates anything: must run
-	// unconditionally (pass or fail, and even if a subtest never reaches its
-	// own re-enable step) so no other test in this package ever observes a
-	// disabled seeded rule.
-	t.Cleanup(func() {
-		if _, err := super.Exec(context.Background(),
-			`UPDATE rules SET enabled = true WHERE key IN ('vat-standard-rate', 'currency-allowed')`,
-		); err != nil {
-			t.Errorf("cleanup: restore vat-standard-rate/currency-allowed enabled=true: %v", err)
-		}
-	})
+	restoreRulesOnCleanup(t, super)
 
 	cases := []killSwitchCase{
 		{
@@ -92,174 +76,233 @@ func TestKillSwitch_E2E(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
-			tenantID := uuid.NewString()
-			c := auth.WithIdentity(ctx, auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: tenantID})
-
 			firePayload := validInvoicePayload()
 			tc.mutate(firePayload)
-
-			store := NewStore(app)
 			engine := NewDefaultEngine()
 
-			// Both event names are needed from step 2 onward (disable) AND at
-			// step 2/4's cross-event isolation checks (a disable must not also
-			// write an enabled-event row, and vice versa) -- declared together
-			// up front rather than one per step.
-			const disabledEvent = "validation.rule.disabled"
-			const enabledEvent = "validation.rule.enabled"
-
-			// Step 1: baseline -- the rule fires on the seeded, enabled v1.
 			rs := loadActive(t, app)
 			result, err := engine.Evaluate(firePayload, rs)
 			if err != nil {
 				t.Fatalf("Evaluate(firePayload) baseline: %v", err)
 			}
 			if !hasViolation(result, tc.key) {
-				t.Fatalf("baseline: %s did not fire -- violations=%+v (fixture payload must trip this rule before toggling)", tc.key, result.Violations)
+				t.Fatalf("baseline: %s did not fire -- violations=%+v (fixture payload must trip this rule before the kill switch)", tc.key, result.Violations)
 			}
 
-			// Step 2: disable -- exactly one new "validation.rule.disabled" audit
-			// row under this tenant, same tx as the UPDATE.
-			beforeDisabled := auditCountTenant(t, app, tenantID, disabledEvent)
-
-			toggled, err := store.ToggleRule(c, tc.key, false)
-			if err != nil {
-				t.Fatalf("ToggleRule(%s, false): %v", tc.key, err)
+			if n := runKillSwitch(t, super, tc.key, false); n != 1 {
+				t.Fatalf("kill switch (%s, false) rows = %d, want 1", tc.key, n)
 			}
-			if toggled.Enabled {
-				t.Errorf("ToggleRule(%s, false).Enabled = true, want false", tc.key)
+			if ruleEnabledActive(t, super, tc.key) {
+				t.Errorf("%s: rules.enabled = true after the kill switch, want false", tc.key)
 			}
 
-			afterDisabled := auditCountTenant(t, app, tenantID, disabledEvent)
-			if afterDisabled != beforeDisabled+1 {
-				t.Fatalf("%s audit_log rows for %s = %d, want %d (exactly one new row)", tc.key, disabledEvent, afterDisabled, beforeDisabled+1)
-			}
-			assertTogglePayload(t, app, tenantID, disabledEvent, tc.key, rs.Version, true, false)
-
-			// Adversarial: column-level persistence, read directly via
-			// superuser -- independent of and complementary to step 3's
-			// validate-effect check (which goes through loadActive+Evaluate, not
-			// the raw column). A ToggleRule that returned Enabled=false in its
-			// Rule struct without the UPDATE actually landing would pass the
-			// earlier `toggled.Enabled` check but fail here.
-			if got := ruleEnabledActive(t, super, tc.key); got {
-				t.Errorf("%s: rules.enabled column = true after ToggleRule(false), want false (column-level persistence)", tc.key)
-			}
-			// Adversarial: event isolation -- a disable must not ALSO write an
-			// "enabled" event for this tenant. The two events are mutually
-			// exclusive per flip, not "logs both, caller checks the one it
-			// cares about."
-			if n := auditCountTenant(t, app, tenantID, enabledEvent); n != 0 {
-				t.Errorf("%s: %s audit_log rows after disable = %d, want 0 (disable must not also write an enabled-event row)", tc.key, enabledEvent, n)
-			}
-
-			// Step 3: validate-effect -- a FRESH load+evaluate must no longer fire
-			// the disabled rule (no redeploy). A control rule (supplier-tin-format,
-			// untouched, format-type) on the independently-bad demo payload must
-			// STILL fire, proving only the toggled rule dropped.
+			// A fresh load sees it with no redeploy; the other rule still fires.
 			rs2 := loadActive(t, app)
 			result2, err := engine.Evaluate(firePayload, rs2)
 			if err != nil {
 				t.Fatalf("Evaluate(firePayload) after disable: %v", err)
 			}
 			if hasViolation(result2, tc.key) {
-				t.Errorf("%s still fired after being disabled via ToggleRule -- violations=%+v", tc.key, result2.Violations)
+				t.Errorf("%s still fired after the kill switch -- violations=%+v", tc.key, result2.Violations)
 			}
 			controlResult, err := engine.Evaluate(badInvoicePayload(), rs2)
 			if err != nil {
 				t.Fatalf("Evaluate(badInvoicePayload) control check after disabling %s: %v", tc.key, err)
 			}
 			if !hasViolation(controlResult, "supplier-tin-format") {
-				t.Errorf("control rule supplier-tin-format did not fire after disabling %s -- only the toggled rule should have dropped, not the whole rule set", tc.key)
+				t.Errorf("control rule supplier-tin-format did not fire after disabling %s -- only the switched rule should drop", tc.key)
 			}
 
-			// Step 4: re-enable -- paired "validation.rule.enabled" audit row.
-			beforeEnabled := auditCountTenant(t, app, tenantID, enabledEvent)
-
-			restored, err := store.ToggleRule(c, tc.key, true)
-			if err != nil {
-				t.Fatalf("ToggleRule(%s, true) restore: %v", tc.key, err)
+			if n := runKillSwitch(t, super, tc.key, true); n != 1 {
+				t.Fatalf("kill switch (%s, true) rows = %d, want 1", tc.key, n)
 			}
-			if !restored.Enabled {
-				t.Errorf("ToggleRule(%s, true).Enabled = false, want true", tc.key)
+			if !ruleEnabledActive(t, super, tc.key) {
+				t.Errorf("%s: rules.enabled = false after restore, want true", tc.key)
 			}
 
-			afterEnabled := auditCountTenant(t, app, tenantID, enabledEvent)
-			if afterEnabled != beforeEnabled+1 {
-				t.Fatalf("%s audit_log rows for %s = %d, want %d (exactly one new row)", tc.key, enabledEvent, afterEnabled, beforeEnabled+1)
-			}
-			assertTogglePayload(t, app, tenantID, enabledEvent, tc.key, rs.Version, false, true)
-
-			// Adversarial: column-level persistence after re-enable (mirrors
-			// the step 2 check above).
-			if got := ruleEnabledActive(t, super, tc.key); !got {
-				t.Errorf("%s: rules.enabled column = false after ToggleRule(true), want true (column-level persistence)", tc.key)
-			}
-			// Adversarial: event isolation -- re-enabling must not ALSO write a
-			// second "disabled" event for this tenant; the disabled count from
-			// step 2 must stay exactly afterDisabled (unchanged), not
-			// double-fire.
-			if n := auditCountTenant(t, app, tenantID, disabledEvent); n != afterDisabled {
-				t.Errorf("%s: %s audit_log rows after re-enable = %d, want %d (re-enable must not also write a disabled-event row)", tc.key, disabledEvent, n, afterDisabled)
-			}
-
-			// Step 5: reversibility -- a FRESH load+evaluate fires the rule again.
 			rs3 := loadActive(t, app)
 			result3, err := engine.Evaluate(firePayload, rs3)
 			if err != nil {
-				t.Fatalf("Evaluate(firePayload) after re-enable: %v", err)
+				t.Fatalf("Evaluate(firePayload) after restore: %v", err)
 			}
 			if !hasViolation(result3, tc.key) {
-				t.Errorf("%s did not fire after being re-enabled via ToggleRule -- violations=%+v (toggle must be reversible)", tc.key, result3.Violations)
+				t.Errorf("%s did not fire after restore -- violations=%+v", tc.key, result3.Violations)
 			}
 		})
 	}
 }
 
-// assertTogglePayload reads the most recent audit_log row for tenantID+event
-// (auditPayloadTenant, store_test.go) and asserts its payload carries the
-// exact field names store.go's ToggleRule actually serializes: "key",
-// "version", "from", "to" (see store.go's audit.Record call). wantVersion is
-// the caller's own baseline-load RuleSet.Version (step 1's loadActive, taken
-// before any toggle) rather than a hardcoded literal -- it asserts the
-// payload's "version" is actually the active rule_set_versions.version at
-// toggle time, not merely "some number" (store_test.go's
-// TestStore_ToggleFlipsAndAudits established the type-only precedent this
-// tightens).
-func assertTogglePayload(t *testing.T, pool *pgxpool.Pool, tenantID, event, key string, wantVersion int, wantFrom, wantTo bool) {
+// restoreRulesOnCleanup snapshots every rules row and registers a superuser
+// restore of any row whose enabled value differs at cleanup. Call it before the
+// first write.
+func restoreRulesOnCleanup(t *testing.T, super *pgxpool.Pool) {
 	t.Helper()
-	payload := auditPayloadTenant(t, pool, tenantID, event)
-	var p map[string]any
-	if err := json.Unmarshal(payload, &p); err != nil {
-		t.Fatalf("unmarshal audit payload %s: %v", payload, err)
+	snap := rulesEnabledByID(t, super)
+	if len(snap) == 0 {
+		t.Fatal("no rules rows to snapshot")
 	}
-	if p["key"] != key {
-		t.Errorf("audit payload key = %v, want %q", p["key"], key)
+	t.Cleanup(func() {
+		for id, want := range snap {
+			if _, err := super.Exec(context.Background(),
+				`UPDATE rules SET enabled = $1 WHERE id = $2 AND enabled IS DISTINCT FROM $1`, want, id,
+			); err != nil {
+				t.Errorf("cleanup: restore rules.id=%s enabled=%t: %v", id, want, err)
+			}
+		}
+	})
+}
+
+// rulesEnabledByID reads rules.id -> enabled for every version.
+func rulesEnabledByID(t *testing.T, pool *pgxpool.Pool) map[string]bool {
+	t.Helper()
+	rows, err := pool.Query(context.Background(), `SELECT id::text, enabled FROM rules`)
+	if err != nil {
+		t.Fatalf("read rules.enabled: %v", err)
 	}
-	if got, ok := p["version"].(float64); !ok {
-		t.Errorf("audit payload version = %v (%T), want a numeric version", p["version"], p["version"])
-	} else if got != float64(wantVersion) {
-		t.Errorf("audit payload version = %v, want %d (the active rule_set_versions.version at toggle time)", got, wantVersion)
+	defer rows.Close()
+	got := map[string]bool{}
+	for rows.Next() {
+		var id string
+		var enabled bool
+		if err := rows.Scan(&id, &enabled); err != nil {
+			t.Fatalf("scan rules row: %v", err)
+		}
+		got[id] = enabled
 	}
-	if p["from"] != wantFrom {
-		t.Errorf("audit payload from = %v, want %v", p["from"], wantFrom)
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate rules rows: %v", err)
 	}
-	if p["to"] != wantTo {
-		t.Errorf("audit payload to = %v, want %v", p["to"], wantTo)
+	return got
+}
+
+// TestKillSwitch_TouchesOnlyTheActiveVersion: sealed versions keep their rows'
+// prior enabled value.
+func TestKillSwitch_TouchesOnlyTheActiveVersion(t *testing.T) {
+	super, _ := dbTestPools(t)
+	const key = "vat-standard-rate"
+
+	restoreRulesOnCleanup(t, super)
+
+	sealedRows := func() map[string]bool {
+		rows, err := super.Query(context.Background(),
+			`SELECT r.id::text, r.enabled FROM rules r JOIN rule_set_versions v ON v.id = r.rule_set_version_id
+			 WHERE NOT v.is_active AND r.key = $1`, key)
+		if err != nil {
+			t.Fatalf("read sealed rows for %s: %v", key, err)
+		}
+		defer rows.Close()
+		got := map[string]bool{}
+		for rows.Next() {
+			var id string
+			var enabled bool
+			if err := rows.Scan(&id, &enabled); err != nil {
+				t.Fatalf("scan sealed row: %v", err)
+			}
+			got[id] = enabled
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("iterate sealed rows: %v", err)
+		}
+		return got
+	}
+
+	before := sealedRows()
+	if len(before) == 0 {
+		t.Fatalf("no non-active version carries %s: the test cannot discriminate", key)
+	}
+
+	if n := runKillSwitch(t, super, key, false); n != 1 {
+		t.Fatalf("kill switch (%s, false) rows = %d, want 1", key, n)
+	}
+	if ruleEnabledActive(t, super, key) {
+		t.Errorf("active %s row enabled = true after the kill switch, want false", key)
+	}
+	after := sealedRows()
+	for id, want := range before {
+		if got, ok := after[id]; !ok || got != want {
+			t.Errorf("sealed row %s enabled = %t (present=%t), want %t unchanged", id, got, ok, want)
+		}
 	}
 }
 
-// ruleEnabledActive reads rules.enabled directly via the superuser pool for key
-// under the ACTIVE rule_set_versions row -- column-level persistence,
-// independent of and complementary to the validate-effect assertions (steps
-// 3/5 above), which go through loadActive+Evaluate rather than the raw column.
-//
-// It matches on `v.is_active`, the same predicate ToggleRule itself writes
-// through (store.go:137-139), so this read and the production write it verifies
-// can never target different rows. Hardcoding `v.version = 1` would have read a
-// stale, inactive version's column -- reporting the rule still enabled while
-// ToggleRule had in fact disabled it on the live set.
+// TestKillSwitch_UnknownKeyUpdatesNothing: a key absent from the active version
+// matches no row, including one that a non-active version carries.
+func TestKillSwitch_UnknownKeyUpdatesNothing(t *testing.T) {
+	super, _ := dbTestPools(t)
+	restoreRulesOnCleanup(t, super)
+
+	const nonActiveOnly = "ks-non-active-only"
+	versionID, _ := seedVersion(t, super, false)
+	seedRule(t, super, versionID, nonActiveOnly)
+
+	for _, key := range []string{"no-such-rule", nonActiveOnly} {
+		t.Run(key, func(t *testing.T) {
+			before := rulesEnabledByID(t, super)
+			if n := runKillSwitch(t, super, key, false); n != 0 {
+				t.Errorf("kill switch (%s, false) rows = %d, want 0", key, n)
+			}
+			after := rulesEnabledByID(t, super)
+			if len(after) != len(before) {
+				t.Fatalf("rules row count %d -> %d", len(before), len(after))
+			}
+			for id, want := range before {
+				if after[id] != want {
+					t.Errorf("rules.id=%s enabled = %t, want %t unchanged", id, after[id], want)
+				}
+			}
+		})
+	}
+}
+
+// TestKillSwitch_OnlyTheOwnerCanRunIt: killSwitchStatement updates 1 row as
+// invoice_migrator and is refused with 42501 as invoice_app. Both run in a tx
+// that is rolled back.
+func TestKillSwitch_OnlyTheOwnerCanRunIt(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+	const key = "vat-standard-rate"
+
+	restoreRulesOnCleanup(t, super)
+
+	run := func(role string) (rows int64, who string, err error) {
+		tx, err := super.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin %s tx: %v", role, err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		if _, err := tx.Exec(ctx, "SET LOCAL ROLE "+role); err != nil {
+			t.Fatalf("SET LOCAL ROLE %s: %v", role, err)
+		}
+		if err := tx.QueryRow(ctx, "SELECT current_user").Scan(&who); err != nil {
+			t.Fatalf("SELECT current_user as %s: %v", role, err)
+		}
+		tag, err := tx.Exec(ctx, killSwitchStatement, false, key)
+		return tag.RowsAffected(), who, err
+	}
+
+	_, who, err := run("invoice_app")
+	if who != "invoice_app" {
+		t.Fatalf("current_user = %q, want invoice_app", who)
+	}
+	assertAppRefused(t, err, "kill switch statement")
+
+	rows, who, err := run("invoice_migrator")
+	if who != "invoice_migrator" {
+		t.Fatalf("current_user = %q, want invoice_migrator", who)
+	}
+	if err != nil {
+		t.Fatalf("kill switch as invoice_migrator: %v", err)
+	}
+	if rows != 1 {
+		t.Errorf("kill switch as invoice_migrator rows = %d, want 1", rows)
+	}
+	if !ruleEnabledActive(t, super, key) {
+		t.Errorf("%s enabled = false after rolled-back statements, want true", key)
+	}
+}
+
+// ruleEnabledActive reads rules.enabled for key on the active version via the
+// superuser pool, with the same row choice as killSwitchStatement.
 func ruleEnabledActive(t *testing.T, pool *pgxpool.Pool, key string) bool {
 	t.Helper()
 	var enabled bool

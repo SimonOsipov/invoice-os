@@ -295,6 +295,7 @@ func TestCheckDSNs_DSNKindUnchanged(t *testing.T) {
 		{"invoice", "DATABASE_URL", DefectNoPassword},
 		{"validation", "DATABASE_URL", DefectUnparseable},
 		{"submission", "DATABASE_URL", DefectMissing},
+		{"notifications", "DATABASE_URL", DefectMissing},
 	}
 
 	got := CheckDSNs(m)

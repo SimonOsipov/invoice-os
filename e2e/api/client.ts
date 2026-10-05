@@ -1,5 +1,5 @@
 // M3-14-01: the reusable typed API-E2E seam (Core AC 1). Every api/ spec
-// (isolation.spec.ts, validation.spec.ts, portfolio.spec.ts — M3-14-02..04)
+// (isolation.spec.ts, portfolio.spec.ts — M3-14-02..04)
 // drives the deployed gateway headless through this ONE module, built on the
 // M3-06 typed client (@invoice-os/api-client/client) so this suite shares the
 // exact apiFetch/ApiError seam and normalized error contract the frontend
@@ -131,8 +131,8 @@ export type TenantKind = 'firm' | 'in_house'
 
 // A fresh GoTrue account with a workspace of its own. Forks auto-confirm, so
 // the account signs in at once; a later sign-in carries the new tenant claim.
-// An absent kind stores the column default, 'firm'.
-export async function provisionRealAccount(prefix: string, kind?: TenantKind, displayName = 'Hand-off E2E', workspaceName?: string): Promise<RealAccount> {
+// The kind is always sent, 'firm' by default; Store.ProvisionWorkspace resolves an absent one.
+export async function provisionRealAccount(prefix: string, kind: TenantKind = 'firm', displayName = 'Hand-off E2E', workspaceName?: string): Promise<RealAccount> {
   const id = crypto.randomUUID()
   const account = { email: `${prefix}-${id}@example.com`, password: id.slice(0, 16), workspaceName: workspaceName ?? `Hand-off E2E ${id.slice(0, 8)}`, displayName }
   await apiFetch(`${apiBase()}/auth/register`, { method: 'POST', body: { email: account.email, password: account.password } })
@@ -141,9 +141,116 @@ export async function provisionRealAccount(prefix: string, kind?: TenantKind, di
   await apiFetch(`${apiBase()}/api/tenancy/v1/workspaces`, {
     method: 'POST',
     token,
-    body: { workspace_name: account.workspaceName, display_name: displayName, ...(kind && { kind }) },
+    body: { workspace_name: account.workspaceName, display_name: displayName, kind },
   })
   return account
+}
+
+// A fresh GoTrue account with no workspace. Forks auto-confirm, so it signs in at once.
+export async function registerFresh(prefix = 'handoff'): Promise<{ email: string; password: string }> {
+  const id = crypto.randomUUID()
+  const account = { email: `${prefix}-${id}@example.com`, password: id.slice(0, 16) }
+  const res = await rawFetch('/auth/register', { method: 'POST', body: account })
+  if (res.status !== 202) throw new Error(`register answered ${res.status}: ${JSON.stringify(res.body)}`)
+  return account
+}
+
+// A form registrant: the answers ride in user_metadata, so /auth/sign-in hands the contact off.
+// Signs in once before provisioning (the hand-off) and again after (the tenant claim).
+export async function registerFormAccount(
+  prefix: string,
+  opts: { marketingConsentText?: string } = {},
+): Promise<{ account: RealAccount; token: string }> {
+  const id = crypto.randomUUID()
+  const account: RealAccount = { email: `${prefix}-${id}@example.com`, password: id.slice(0, 16), workspaceName: `Contacts E2E ${id.slice(0, 8)}`, displayName: 'Contacts E2E' }
+  const res = await rawFetch('/auth/register', {
+    method: 'POST',
+    body: {
+      email: account.email,
+      password: account.password,
+      workspace_name: account.workspaceName,
+      display_name: account.displayName,
+      kind: 'firm',
+      ...(opts.marketingConsentText !== undefined && { marketing_consent_text: opts.marketingConsentText }),
+    },
+  })
+  if (res.status !== 202) throw new Error(`register answered ${res.status}: ${JSON.stringify(res.body)}`)
+  const first = (await signInSession(account.email, account.password)).access_token
+  await apiFetch(`${apiBase()}/api/tenancy/v1/workspaces`, {
+    method: 'POST',
+    token: first,
+    body: { workspace_name: account.workspaceName, display_name: account.displayName, kind: 'firm' },
+  })
+  return { account, token: (await signInSession(account.email, account.password)).access_token }
+}
+
+// GET /api/notifications/v1/contacts/me: the caller's own contact row.
+export interface ContactMe {
+  email: string
+  tags: string[]
+  marketing_eligible: boolean
+  hubspot: { delivered_at: string | null }
+  resend: { delivered_at: string | null; applies: boolean }
+  mode: string
+}
+
+// Null while the hand-off has not landed (404); any other failure throws.
+export async function contactsMe(token: string): Promise<ContactMe | null> {
+  const res = await rawFetch('/api/notifications/v1/contacts/me', { headers: { Authorization: `Bearer ${token}` } })
+  if (res.status === 404) return null
+  if (res.status !== 200) throw new Error(`contacts/me answered ${res.status}: ${JSON.stringify(res.body)}`)
+  return res.body as ContactMe
+}
+
+// POST /contacts/demo-request, raw so a spec can assert the status.
+export function demoRequest(body: unknown): Promise<{ status: number; body: unknown }> {
+  return rawFetch('/contacts/demo-request', { method: 'POST', body })
+}
+
+// One sign-in, one GoTrue session.
+export async function signInSession(email: string, password: string): Promise<{ access_token: string; refresh_token: string }> {
+  const state = mintSignInState()
+  const res = await rawFetch('/auth/exchange', { method: 'POST', body: { code: await signInForCode(email, password, state), state } })
+  if (res.status !== 200) throw new Error(`exchange answered ${res.status}: ${JSON.stringify(res.body)}`)
+  return res.body as { access_token: string; refresh_token: string }
+}
+
+// Unverified payload of a JWT the gateway just minted.
+export function claimsOf(token: string): Record<string, unknown> {
+  return JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8')) as Record<string, unknown>
+}
+
+export function subjectOf(token: string): string {
+  return claimsOf(token).sub as string
+}
+
+export interface StaffAccount {
+  email: string
+  password: string
+  userId: string
+}
+
+// POST /auth/mock/staff exists only in the mock build, which every PR fork runs.
+export async function provisionStaffAccount(prefix: string): Promise<StaffAccount> {
+  const account = await registerFresh(prefix)
+  const userId = subjectOf((await signInSession(account.email, account.password)).access_token)
+  const grant = await rawFetch('/auth/mock/staff', { method: 'POST', body: { user_id: userId } })
+  if (grant.status !== 204) throw new Error(`staff grant answered ${grant.status}: ${JSON.stringify(grant.body)}`)
+  return { ...account, userId }
+}
+
+export interface MemberGrant {
+  user_id: string
+  tenant_id: string
+  role: 'admin' | 'preparer' | 'reviewer'
+  display_name: string
+  email: string
+}
+
+// POST /auth/mock/member (internal/gateway/mockmember.go answers 204); mock build only.
+export async function grantMembership(grant: MemberGrant): Promise<void> {
+  const res = await rawFetch('/auth/mock/member', { method: 'POST', body: grant })
+  if (res.status !== 204) throw new Error(`member grant answered ${res.status}: ${JSON.stringify(res.body)}`)
 }
 
 // ---- Wire contract types, declared locally to the verified contract
@@ -201,20 +308,6 @@ export interface Violation {
   severity: string
   message: string
   path?: string
-}
-
-// Rule mirrors internal/validation/rule.go's Rule struct (the PATCH
-// /v1/rules/{key} response body).
-export interface Rule {
-  key: string
-  type: string
-  target: string
-  params: unknown
-  severity: string
-  when?: string | null
-  message: string
-  scope: string
-  enabled: boolean
 }
 
 export interface EntityInput {
@@ -294,14 +387,6 @@ export function offboardEntity(token: string, id: string): Promise<Entity> {
 
 export function onboardEntity(token: string, id: string): Promise<Entity> {
   return apiFetch<Entity>(`${apiBase()}/api/portfolio/v1/entities/${id}/onboard`, { method: 'POST', token })
-}
-
-export function toggleRule(token: string, key: string, enabled: boolean): Promise<Rule> {
-  return apiFetch<Rule>(`${apiBase()}/api/validation/v1/rules/${key}`, {
-    method: 'PATCH',
-    body: { enabled },
-    token,
-  })
 }
 
 // RejectionReason mirrors internal/submission/result.go's Reason struct (M5-01/M5-03):

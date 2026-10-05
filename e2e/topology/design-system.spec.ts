@@ -1,7 +1,9 @@
 // The deployed proof of the v2 entries, the landing frame's geometry and the Problem, Solution, Platform, Coverage and Intelligence sections, and the whole-page bands, Solutions, Integrations, API, FAQ and closing panel; one topology spec on purpose, a recorded deviation from docs/e2e-convention.md.
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
+import { provisionStaffAccount } from '../api/client'
 import { collectErrors, signInAs } from '../personaSession'
 import { seedConsent } from '../smoke/landingConsent'
+import { seedStaffSession } from '../staffSession'
 import { resolveTarget } from '../targets'
 import { enclosesRect, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
 
@@ -147,7 +149,7 @@ test('app (firm) reads v2: Manrope h1 and ground, #f5bc88, no Fraunces or Inter,
 
 test('ops console reads v2: Manrope h1 and ground, #f5bc88, no Fraunces or Inter, IBM Plex Mono loaded', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
-  await signInAs(page, 'developer')
+  await seedStaffSession(page, 'ops', await provisionStaffAccount('design-ops'))
 
   const p = await probe(page)
   await attachProbe(testInfo, 'developer', p)
@@ -166,7 +168,7 @@ test('ops console reads v2: Manrope h1 and ground, #f5bc88, no Fraunces or Inter
 
 test('support console reads v2: Manrope h1 and ground, #f5bc88, no Fraunces or Inter, IBM Plex Mono loaded', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
-  await signInAs(page, 'support')
+  await seedStaffSession(page, 'support', await provisionStaffAccount('design-support'))
 
   const p = await probe(page)
   await attachProbe(testInfo, 'support', p)
@@ -183,13 +185,16 @@ test('support console reads v2: Manrope h1 and ground, #f5bc88, no Fraunces or I
   expect(errors, `console errors on support console:\n${errors.join('\n')}`).toEqual([])
 })
 
-type Measured = { tag: string; text: string; left: number; right: number; top: number; bottom: number }
+type Measured = { tag: string; text: string; left: number; right: number; top: number; bottom: number; nav?: boolean }
 
 // Relationships, not pixel values.
 async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[]): Promise<void> {
   const errors = collectErrors(page)
   const res = await page.goto(`${LANDING_URL}/`)
   expect(res?.ok(), `/ returned HTTP ${res?.status()}`).toBeTruthy()
+
+  // A tight row wraps a label rather than overlapping it, so the widest reading is the one-line height.
+  let navLineHeight: number | undefined
 
   for (const width of widths) {
     await page.setViewportSize({ width, height: width === 390 ? 844 : 900 })
@@ -206,6 +211,7 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
           right: r.right,
           top: r.top,
           bottom: r.bottom,
+          nav: Boolean(el.closest('nav')),
           shown: r.width > 0 && r.height > 0 && getComputedStyle(el).visibility === 'visible',
         }
       }
@@ -213,7 +219,7 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
       const row = [...document.querySelectorAll('header a, header button')].map(measure).filter((e) => e.shown)
       return { innerWidth: window.innerWidth, all, row }
     })
-    const strip = ({ tag, text, left, right, top, bottom }: Measured & { shown?: boolean }): Measured => ({ tag, text, left, right, top, bottom })
+    const strip = ({ tag, text, left, right, top, bottom, nav }: Measured & { shown?: boolean }): Measured => ({ tag, text, left, right, top, bottom, nav })
     const all = m.all.map(strip)
     const row = m.row.map(strip).sort((a, b) => a.left - b.left)
     await testInfo.attach(`header-${width}.json`, {
@@ -232,14 +238,38 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
         `${width}px: "${row[i].text}" overlaps "${row[i + 1].text}"`,
       ).toBeLessThanOrEqual(row[i + 1].left + 1)
     }
+
+    const login = row.find((e) => e.tag === 'button' && e.text === 'Platform login')
+    const create = row.find((e) => e.tag === 'button' && e.text === CREATE_LABEL)
+    expect(Boolean(login), `${width}px: Platform login shown`).toBe(width > BURGER_MAX)
+    if (width > CREATE_MAX) {
+      expect(create, `${width}px: the "${CREATE_LABEL}" entry is missing from the header (is landing.VITE_REGISTRATION_OPEN on?)`).toBeDefined()
+      expect(login!.right, `${width}px: "${CREATE_LABEL}" left ${create!.left} is not right of Platform login right ${login!.right}`).toBeLessThanOrEqual(create!.left + 1)
+      const centreGap = Math.abs((create!.top + create!.bottom) / 2 - (login!.top + login!.bottom) / 2)
+      expect(centreGap, `${width}px: "${CREATE_LABEL}" and Platform login centre lines differ by ${centreGap}`).toBeLessThanOrEqual(1)
+      const heightGap = Math.abs(create!.bottom - create!.top - (login!.bottom - login!.top))
+      expect(heightGap, `${width}px: "${CREATE_LABEL}" wraps: its height differs from Platform login's by ${heightGap}`).toBeLessThanOrEqual(1)
+    } else {
+      expect(create, `${width}px: "${CREATE_LABEL}" must be hidden at or below ${CREATE_MAX}px`).toBeUndefined()
+    }
+
+    const navLinks = row.filter((e) => e.tag === 'a' && e.nav)
+    expect(navLinks.length > 0, `${width}px: Primary nav links shown`).toBe(width > BURGER_MAX)
+    if (navLinks.length > 0) {
+      navLineHeight ??= Math.min(...navLinks.map((e) => e.bottom - e.top))
+      for (const e of navLinks) {
+        expect(e.bottom - e.top, `${width}px: nav link "${e.text}" wraps (one line is ${navLineHeight})`).toBeLessThanOrEqual(navLineHeight + 1)
+      }
+    }
   }
 
   expect(errors, `console errors on the header sweep:\n${errors.join('\n')}`).toEqual([])
 }
 
 // BURGER_MAX + 1 is the narrowest width that shows the five nav links.
-test('landing header row: inside the viewport and no overlap at 1440, 1240, 1121, 1080 and 834', async ({ page }, testInfo) => {
-  await assertHeaderRow(page, testInfo, [1440, 1240, BURGER_MAX + 1, 1080, 834])
+// Widest first (layout.ts); 1220 and 1219 straddle the entry's edge.
+test('landing header row: inside the viewport and no overlap from 2560 to 834', async ({ page }, testInfo) => {
+  await assertHeaderRow(page, testInfo, [...WIDE_WIDTHS, 1240, CREATE_MAX + 1, CREATE_MAX, BURGER_MAX + 1, 1080, 834])
 })
 
 test('landing header row at 390: inside the viewport and no overlap', async ({ page }, testInfo) => {
@@ -255,6 +285,10 @@ const FRAME_VIEWPORTS = [
 
 // Burger shows at <=1120px (landing.css .a-burger).
 const BURGER_MAX = 1120
+
+// The header entry hides at <=1219px (landing.css .a-create).
+const CREATE_MAX = 1219
+const CREATE_LABEL = 'Create an account'
 
 type Frame = { width: number; height: number }
 
@@ -691,8 +725,9 @@ test('landing mobile menu at 834 and 390', async ({ page }, testInfo) => {
   const burger = header.getByRole('button', { name: 'Menu' })
   const measured: unknown[] = []
 
-  for (const vp of FRAME_VIEWPORTS.filter((v) => v.width <= BURGER_MAX)) {
-    const label = `${vp.width}px`
+  // 390x667 is the short phone: the menu with its extra item must still end inside the viewport.
+  for (const vp of [...FRAME_VIEWPORTS, { width: 390, height: 667, headerH: 73 }].filter((v) => v.width <= BURGER_MAX)) {
+    const label = `${vp.width}x${vp.height}`
     await settleFrame(page, vp)
     await burger.click()
     await expect(burger, `${label}: aria-expanded`).toHaveAttribute('aria-expanded', 'true')
@@ -711,8 +746,16 @@ test('landing mobile menu at 834 and 390', async ({ page }, testInfo) => {
     expect(navLinks, `${label}: Primary nav links`).toBeGreaterThan(0)
     await expect(menu.locator('a'), `${label}: one menu link per nav link`).toHaveCount(navLinks)
     await expect(menu.getByRole('button', { name: 'Platform login' }), `${label}: Platform login in the menu`).toHaveCount(1)
+    const create = menu.getByRole('button', { name: CREATE_LABEL })
+    await expect(create, `${label}: exactly one "${CREATE_LABEL}" in the menu (is landing.VITE_REGISTRATION_OPEN on?)`).toHaveCount(1)
+    await expect(menu.getByRole('button'), `${label}: the menu buttons, in order`).toHaveText(['Platform login', CREATE_LABEL])
+    const loginBox = await box(menu.getByRole('button', { name: 'Platform login' }), `${label} menu login`)
+    const createBox = await box(create, `${label} menu create`)
+    expect(createBox.y, `${label}: "${CREATE_LABEL}" top vs Platform login bottom`).toBeGreaterThanOrEqual(loginBox.y + loginBox.height - 1)
+    expect(enclosesRect(menuBox, createBox, 1), `${label}: "${CREATE_LABEL}" leaves the menu`).toBe(true)
+    expect(createBox.y + createBox.height, `${label}: "${CREATE_LABEL}" bottom vs viewport`).toBeLessThanOrEqual(vp.height + 1)
 
-    measured.push({ width: vp.width, headerBox, menuBox, navLinks })
+    measured.push({ width: vp.width, headerBox, menuBox, loginBox, createBox, navLinks })
 
     await page.keyboard.press('Escape')
     await expect(menu, `${label}: menu after Escape`).toHaveCount(0)
@@ -738,6 +781,13 @@ test('landing breakpoint edges', async ({ page }, testInfo) => {
     await expect(burger, `${width}px: burger`).toBeVisible({ visible: collapsed })
     await expect(nav, `${width}px: Primary nav`).toBeVisible({ visible: !collapsed })
     await expect(login, `${width}px: Platform login`).toBeVisible({ visible: !collapsed })
+  }
+
+  const create = header.getByRole('button', { name: CREATE_LABEL })
+  for (const [width, shown] of [[CREATE_MAX, false], [CREATE_MAX + 1, true]] as const) {
+    await settleFrame(page, { width, height: 900 })
+    await expect(create, `${width}px: "${CREATE_LABEL}" (a hidden entry at ${CREATE_MAX + 1} may mean landing.VITE_REGISTRATION_OPEN is off)`).toBeVisible({ visible: shown })
+    await expect(burger, `${width}px: burger`).toBeHidden()
   }
 
   const heights: number[] = []

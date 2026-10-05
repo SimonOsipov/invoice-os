@@ -224,20 +224,20 @@ environment routes real extraction through it until `EXTRACTOR=docling` is set o
 
 **Default.** `submission` reads `EXTRACTOR` and `DOCLING_URL` at boot
 (`cmd/submission/main.go:138`) and passes them to `selectExtractor`
-(`cmd/submission/main.go:548-569`). An unset or empty `EXTRACTOR`, and the literal value
+(`cmd/submission/main.go:552-573`). An unset or empty `EXTRACTOR`, and the literal value
 `mock`, both resolve to `extraction.NewMockExtractor()`
-(`cmd/submission/main.go:550-551`) — a fleet with the variable absent behaves exactly as it
+(`cmd/submission/main.go:554-555`) — a fleet with the variable absent behaves exactly as it
 did before the sidecar existed. `TestSelectExtractor_MockIsTheDefault`
-(`cmd/submission/main_test.go:1400`) pins this.
+(`cmd/submission/main_test.go:1365`) pins this.
 
 **Boot-fatal, not silent fallback.** `EXTRACTOR=docling` requires `DOCLING_URL` to be set:
 `selectExtractor` returns an error naming `DOCLING_URL` when it is empty
-(`cmd/submission/main.go:553-555`), and `main()` treats any `selectExtractor` error as fatal
+(`cmd/submission/main.go:557-559`), and `main()` treats any `selectExtractor` error as fatal
 in every environment — `platform.Fatal(app.Logger, "submission: %v", err)`
-(`cmd/submission/main.go:139-141`). A malformed (but non-empty) `DOCLING_URL` fails the same
+(`cmd/submission/main.go:139-143`). A malformed (but non-empty) `DOCLING_URL` fails the same
 way, one line down, when `NewDoclingExtractor` rejects it
-(`cmd/submission/main.go:561-564`). `TestSelectExtractor_DoclingRequiresURL`
-(`cmd/submission/main_test.go:1433`) pins the empty case. Practically: a flip with a missing
+(`cmd/submission/main.go:565-568`). `TestSelectExtractor_DoclingRequiresURL`
+(`cmd/submission/main_test.go:1398`) pins the empty case. Practically: a flip with a missing
 or broken `DOCLING_URL` takes `submission` down at boot — it never comes up half-flipped
 serving mock extraction under a `docling` label.
 

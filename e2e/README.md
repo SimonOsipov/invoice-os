@@ -26,17 +26,17 @@ deploys to its own ephemeral Railway environment with an unpredictable domain su
 (M4-23), so a missing var throws naming itself rather than silently falling back to the
 shared `development` fleet (Decision `[fail-loud-targets]`, `targets.ts`):
 
-| Target          | Env var               | Needed by       |
-| --------------- | --------------------- | --------------- |
-| landing         | `LANDING_URL`         | smoke, topology |
-| ops-console     | `OPS_CONSOLE_URL`     | smoke           |
-| support-console | `SUPPORT_CONSOLE_URL` | smoke           |
-| app             | `APP_URL`             | smoke, topology |
-| gateway         | `GATEWAY_URL`         | api, topology   |
+| Target          | Env var               | Needed by            |
+| --------------- | --------------------- | -------------------- |
+| landing         | `LANDING_URL`         | smoke, topology      |
+| ops-console     | `OPS_CONSOLE_URL`     | smoke                |
+| support-console | `SUPPORT_CONSOLE_URL` | smoke                |
+| app             | `APP_URL`             | smoke, topology      |
+| gateway         | `GATEWAY_URL`         | smoke, api, topology |
 
 CI sets all five for the whole `e2e` job, so this table matters mainly when running a
 suite by hand. Most are resolved at module scope and throw during collection; a few
-(smoke's `APP_URL`) resolve lazily and throw on the first test that needs them.
+resolve lazily and throw on the first test that needs them.
 
 ## Smoke suite
 
@@ -45,23 +45,23 @@ suite by hand. Most are resolved at module scope and throw during collection; a 
 Covers the three SPAs the landing page hands off to — `landing`, `ops-console` and
 `support-console`. It is no longer only a render check:
 
-- **Render** (`smoke/apps.ts`, `smoke.spec.ts`): each app is opened through the real
-  landing sign-in hand-off (`?persona=`, never a test-only backdoor) and asserts a
+- **Render** (`smoke/apps.ts`, `smoke.spec.ts`): landing is opened bare and each console on a
+  seeded real staff session (`staffSession.ts`, which needs `GATEWAY_URL`). Each asserts a
   signature element of its main view, failing on any console error or uncaught page error.
 - **Behaviour on backend-less surfaces** (`landing-nav.spec.ts`, `ops-console.spec.ts`,
   `support-console.spec.ts`): the landing nav's scroll-spy, and functional navigation over
-  what each console is *for*. Both consoles are mock data with no backend, so these
+  what each console is *for*. Both consoles' data is mock with no backend, so these
   assertions pin fixture behaviour rather than a contract — `docs/e2e-convention.md` says
   when that is allowed.
-- **Boundary matrix** (`persona-boundaries.spec.ts`): every destination handed a persona
-  it does not admit must bounce the visitor back to the landing page. This drives **all
+- **Boundary matrix** (`persona-boundaries.spec.ts`): every destination visited with
+  a `persona` query parameter and no session must bounce the visitor back to the landing page. This drives **all
   three destinations including the app**, which is why smoke needs `APP_URL` too. Every
-  cell is refused synchronously before any fetch — no gateway contact, no database reads —
+  cell is refused before any gateway contact — no database reads —
   so the suite stays safe under `fullyParallel: true` (`[boundaries-in-smoke]`).
 
 ```bash
 pnpm --filter @invoice-os/e2e exec playwright install chromium   # first run only
-LANDING_URL=... OPS_CONSOLE_URL=... SUPPORT_CONSOLE_URL=... APP_URL=... \
+LANDING_URL=... OPS_CONSOLE_URL=... SUPPORT_CONSOLE_URL=... APP_URL=... GATEWAY_URL=... \
   pnpm --filter @invoice-os/e2e test:smoke    # `test` is the same command
 ```
 
@@ -74,12 +74,10 @@ all**, so the config declares no browser project and `playwright install` is not
 for it. `api/client.ts` resolves `GATEWAY_URL` itself, mirroring `topology/targets.ts`,
 which is why `baseURL` is intentionally unset.
 
-**The serial setting is load-bearing, not a leftover default.** The kill-switch spec
-mutates the **global `rules` table** and every spec shares one deployed database, so
-parallel workers would race — a concurrent validate observing a mid-toggle rule, or
-entity-namespace contention (Decision A8). For the same reason the suite is not read-only:
-it self-heals rule state in `beforeAll` and restores it in `afterAll`, which is why CI
-runs it against ephemeral PR environments only.
+**The serial setting is load-bearing, not a leftover default.** Every spec shares one
+deployed database, so parallel workers would race — entity-namespace contention
+(Decision A8). The suite is not read-only, which is why CI runs it against ephemeral PR
+environments only.
 
 ```bash
 GATEWAY_URL=... pnpm --filter @invoice-os/e2e test:api
@@ -95,14 +93,14 @@ config load.
 
 The M2 exit criterion: it drives the **app** SPA and the **live gateway** together, not
 just an SPA in isolation. In the unified dev env the app is always gateway-wired
-(`VITE_GATEWAY_URL` set), so this suite owns the app's assertion — the persona sign-in
+(`VITE_GATEWAY_URL` set), so this suite owns the app's assertion — the real sign-in
 hand-off must render the backend-verified tenant identity, not the mock-only shell render
 the smoke suite used to check. It also asserts cross-tenant isolation over the live edge,
 and drives the app's persona-scoped surfaces, the import wizard, invoices and Workflows.
 
 Each unit is serial on one worker, for the same reason as the api suite: the specs of a
 unit share the same non-reset deployed dev database (`[topology-config-conforms-workers-1]`).
-The two shard units sign in on their own seeded tenants (`topology/shardSession.ts`), so
+The two shard units sign in on their own seeded tenants (`signInAs` with a `tenantId`), so
 they do not contend with the lane. Beyond `GATEWAY_URL` + `APP_URL` it
 also needs `LANDING_URL` — `topology/auth.spec.ts` starts at the landing front door.
 
@@ -151,6 +149,4 @@ pnpm --filter @invoice-os/e2e test:hooks
 
 `dev-env.yml`'s `e2e` job runs **smoke → api**, in that order, on pull requests only. The
 `topology` job runs after it (`needs: e2e`), one matrix leg per unit, in parallel.
-**The api → topology ordering is load-bearing**: the api suite's `beforeAll` self-heal and
-`afterAll` rule-restore must complete before topology's rule-dependent assertions run, and
-the two share the global `rules` fixture.
+**The api → topology ordering is load-bearing**: the two share one deployed database.

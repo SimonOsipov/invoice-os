@@ -30,7 +30,7 @@ Read from `lib/route.ts`'s `ROUTE_PATHS`, not retyped by hand:
 | `workflows` (drill-down) | `/workflows/:id` |
 
 Two surprises: `dashboard` is the bare root `/`, not `/dashboard` — the landing hand-off
-and the persona strip both land on that pathname. `detail` is `/invoice`, singular, not
+and the `?auth=`/`?handoff=` strip both land on that pathname. `detail` is `/invoice`, singular, not
 `/invoices` — segment count is what tells the two-segment drill-down form apart (below).
 
 The last three rows aren't a 14th/15th/16th `View`: `ROUTE_PATHS` stays a 13-row table, total
@@ -94,7 +94,12 @@ a bug against correct behaviour: what omits is a defaulted *query* param, never 
 
 **R3 — The parse is total and never produces an unrenderable state.** An unknown settings
 tab resolves to `members` in `parseLocation`; an unavailable one (`company` when `mode` is
-not `inhouse`) is clamped the same way by `availableSettingsTab`. A non-UUID `invoice`
+not `inhouse`) is clamped the same way by `availableSettingsTab`. `clients` when `mode` is
+`inhouse` resolves to `dashboard` by `availableView`, at the boot seed, on popstate and in
+`navigate`; at boot the mount alignment also rewrites the URL to `/`
+(`App.routeBoot.test.tsx`'s `boot_inhouseClientsFallsBackToDashboardAndTheUrlIsCorrected`,
+`popstate_aClientsEntryIsClampedForAnInHouseWorkspace`,
+`nav_clientsIsClampedForAnInHouseWorkspace`). A non-UUID `invoice`
 is dropped — the audit reader 400s on a malformed id, so forwarding it would render an error
 state where the ordinary empty state is correct. An over-long `q` goes through
 `clampFilterText` (200 UTF-8 bytes, the server's cap). Every string in the world yields a
@@ -134,18 +139,18 @@ owned params from the same `params` object, then pushes `routeUrl(...)` — path
 query, never a hash. State and the address bar come from one object, so they cannot diverge.
 
 No path writer reads `window.location.search`. This is a security fence, not a style choice:
-`App.tsx` once left `?persona=` in the URL after sign-in, which turned it into a
-credential-free sign-in link — Back to that history entry walked back into the workspace
-with no sign-in. R1 keeps that fence intact now that URLs carry a query: the writer never echoes
-the live search, it re-serialises only the params the codec owns, and `persona` is owned by
-no view.
+A URL param that signs a visitor in would become a credential-free sign-in link once it sat in a
+history entry: Back to that entry would walk into the workspace with no sign-in. The app reads
+no such param (the `persona` query parameter is inert), and R1 keeps the fence now that URLs carry a query: the
+writer never echoes the live search, it re-serialises only the params the codec owns, and
+`persona` is owned by no view.
 
 Two writers sit outside `navigate` and are pinned rather than folded in. The review-path
 mirror in `Workspace` (the `replaceState` keyed on `[view, createStep,
 reviewBatchIds.join(',')]`) rebuilds only `create`'s own path from state and never reads
 `location.search` — it joined the ten writer bodies `lib/routeWriterGuard.test.ts` proves
-clean, rather than staying that guard's one deliberate exception. The persona-strip clear
-(the effect commented *"Drop the consumed `?persona=` from the URL"*) is now that guard's
+clean, rather than staying that guard's one deliberate exception. The one-shot strip
+(the effect commented *"Drop the one-shot ?auth= and ?handoff= from the URL"*) is now that guard's
 sole reader of `search`, and its `new URLSearchParams(window.location.search)` is the control
 needle proving the other ten assertions can see a match at all. Both writers' own write
 lines are still pinned byte-identical by `App.routeReviewHash.test.tsx`'s
@@ -160,7 +165,7 @@ still passing a literal `null`. The value is `active.entityId` — the memo that
 `switchClient`'s own write, so stamping it directly would mark every pre-first-switch entry
 unknown and the clamp could never fire. `switchClient` stamps its `id` **parameter** instead
 of either state read: `setActiveEntityId(id)` one line above has not committed. `signOut` and
-the persona strip stay `null`-stamped; both live in `App`, outside the slice that guard
+the one-shot strip stay `null`-stamped; both live in `App`, outside the slice that guard
 counts.
 
 Two of the nine are new machinery. The **stamp backfill** fills the boot entry once the
@@ -251,37 +256,30 @@ fails if a name, its `switchClient` reset, or its verdict disagrees with the mod
 | `runSeq` | yes | none | `correctly-reset` |
 | `lockBy` | no | none | `deliberate` |
 
-## Why `Workspace` can't mount while `?persona=` is live
+## Why `Workspace` can't mount while a `?handoff=` is pending
 
 `App.tsx`'s `seat` initializer: `const [seat, setSeat] = useState<Session | null>(() =>
-(autoPersona || handoffCode ? null : bootSession))`, where `bootSession` is
-`resolveBootSession()`. Whenever `autoPersona` is set (the URL names an openable persona),
-`seat` initialises to `null`, so `App` renders `<SignInLoading>` and never
-mounts `Workspace` — which owns every line of the router — on that commit. This is
-structural, not an effect-ordering guarantee to remember: there is no child to order
-against. It's what makes the writer rule above actually hold, and it's pinned by
-`App.routePersonaOrdering.test.tsx`, not by comment.
+(handoffCode ? null : bootSession))`, where `bootSession` is `resolveBootSession()`. While
+a `?handoff=` code is being redeemed, `seat` is `null`, so `App` renders `<SignInLoading>` and
+never mounts `Workspace` — which owns every line of the router — on that commit. This is
+structural, not an effect-ordering guarantee to remember: there is no child to order against.
+The `persona` query parameter has no such state: it signs no one in, so a stored seat mounts on the first commit
+whatever the URL carries, and the writers never emit `persona` (no view owns it).
+`App.routePersonaOrdering.test.tsx` pins that.
 
-The one exception: a live stored hand-off session suppresses `?persona=`, so `autoPersona`
-is `null` and `Workspace` mounts on that session while the param is still in the URL. The
-writers never emit `persona` (no view owns it), and `App`'s strip effect removes it.
-
-**A path segment survives the strip; a query does not.** The strip rebuilds the URL as
-`pathname` alone, discarding the whole search string, and it runs at `App`'s mount while
-`<SignInLoading>` renders — before `Workspace`, which owns the boot seed, exists. So
-`?persona=` cannot coexist with an owned query param, and the deployed `?q=` and `?invoice=`
-deep-link specs in `e2e/topology/invoice-surfaces.spec.ts` sign in first and navigate
-second, never in one goto. The review batch ids are the second worked example: they live in
-`pathname` too (`/imports/<ids>/review`), so a `?persona=firm` visit to a review link loses
-only the query, never the ids — the same guarantee `/invoices/:id` gets, extended to
-`create`.
+**A path segment survives the strip; a query does not.** The `?auth=`/`?handoff=` strip
+rebuilds the URL as `pathname` alone, discarding the whole search string, at `App`'s mount —
+before `Workspace`, which owns the boot seed, exists. So a one-shot param cannot coexist with an
+owned query param, and the deployed `?q=` and `?invoice=` deep-link specs in
+`e2e/topology/invoice-surfaces.spec.ts` sign in first and navigate second, never in one goto.
+The review batch ids are the second worked example: they live in `pathname` too
+(`/imports/<ids>/review`), so a visit to a review link carrying a one-shot param loses only the
+query, never the ids — the same guarantee `/invoices/:id` gets, extended to `create`.
 
 ## Boot precedence
 
-`initialView` (DEMO-06 persona-switch carry) → path → `dashboard`. See the `view` lazy
-initializer in `Workspace`. Three tiers, not four: the review hash was its own tier only
-because it was a second carrier the path tier couldn't see, and now that review is a path,
-`seed.view` resolves it directly. The path tier reads the `{ path, search }` boot seed, not
+The boot view is the path's view, else `dashboard`. See the `view` lazy
+initializer in `Workspace`. The review route is a path, so `seed.view` resolves it directly. The path tier reads the `{ path, search }` boot seed, not
 `window.location.pathname` directly — ROUTE-05 substitutes a restored deep-link destination
 there when the live path is the bare root; it is not a new precedence tier. See the section
 below. A booted review path seeds `createStep`/`reviewBatchIds` the same way, off `bootPath`
@@ -289,8 +287,8 @@ rather than the live pathname, so a signed-out `/imports/<ids>/review` visit rou
 through the signed-out deep link below for free.
 
 All three drill-down ids — and the review batch ids — gate on the *winning* view, `bootView`,
-never `seed.view` directly (`[ids-gate-on-the-winning-view]`) — only `initialView` can
-outrank the path now, and a `create` boot must never inherit a review batch, an invoice id,
+never `seed.view` directly (`[ids-gate-on-the-winning-view]`): `availableView` can overrule the
+path (an in-house workspace has no `clients` view), and a `create` boot must never inherit a review batch, an invoice id,
 a job id or a policy id from a URL that lost. The mount-alignment effect then serialises that same boot
 state back into the URL
 (`[alignment-must-carry-the-id]`): without it, a correct deep link renders right and then
@@ -348,16 +346,15 @@ A sessionless visit to a real path is remembered across the landing round trip i
   location through `parseLocation` and re-serialises with `routeQuery`, so an unowned param
   is discarded before storage is touched.
 - **Restore** — `Workspace`'s one-source `{ path, search }` boot seed, and only when the live
-  pathname is the bare root. That is the shape the `?persona=` and `?handoff=` hand-offs always
-  arrive in (`destUrl` and `handoffUrl` carry no path); a live non-root path is the URL the browser is showing and
+  pathname is the bare root. That is the shape the `?handoff=` hand-off always
+  arrives in (`handoffUrl` carries no path); a live non-root path is the URL the browser is showing and
   always wins. Path and query resolve in one statement, so a restored destination's query can
   never be paired with the live root's.
 - **Clear** — `Workspace`'s mount-alignment effect (consume-once, on every mount) and
   `signOut`.
 
-The restore cannot re-attach a consumed `?persona=`: `Workspace` cannot mount while the param
-is live (section above), and the capture stores only the query `routeQuery` authored — `persona`
-is owned by no view. `sessionStorage` is user-writable, so the restore re-validates through
+The restore cannot re-attach a `persona` query parameter: the capture stores only the query `routeQuery`
+authored, and `persona` is owned by no view. `sessionStorage` is user-writable, so the restore re-validates through
 the same `parseLocation` a live URL gets rather than trusting the blob.
 
 **Schema version 2.** `readDestination` compares `parsed.v === DEEP_LINK_SCHEMA_VERSION`
@@ -369,11 +366,12 @@ bounds the window to ten minutes. `lib/deepLink.test.ts` pins one version below 
 above current.
 
 The round trip crosses two origins, so nothing below the browser can observe it. Its three
-oracles are all in `e2e/topology/auth.spec.ts`: `deployed app: a signed-out deep link
+oracles are all in `e2e/topology/auth.spec.ts`. `deployed app: a signed-out deep link
 returns to its destination after sign-in` (the path) and `deployed app: a signed-out deep
 link returns to its FILTER after sign-in` (the query — the only spec anywhere that exercises
-a restored query end to end) drive the persona door; `deployed app: a real sign-in from the
-front door returns to its destination with no token in any URL` drives the real sign-in (the
+a restored query end to end) sign in through `signInAs` with `path`, which drives the landing
+form as the stable e2e member. `deployed app: a real sign-in from the front door returns to
+its destination with no token in any URL` drives the same form with a fresh account (the
 path).
 
 **The merged shape (ROUTE-02 merge).** The `{ path, search }` seed resolves the destination
@@ -386,7 +384,7 @@ restored destination carries its drill-down id too (ROUTE-02 merge)` block.
 
 - **ROUTE-02** — **shipped.** Drill-down ids (`/invoices/:id`, `/extraction/:jobId`) and
   cold-boot seeding for both. `carryView` collapses `detail`/`extraction`
-  back to `invoices` on a persona switch, id included: a remounted identity cannot resume a
+  back to `invoices` on a company switch, id included: a switched company cannot resume a
   selection it may not be entitled to (`[carryview-drops-the-id]`).
 - **ROUTE-03** — **shipped.** Migrated the retired hash form into the path
   (`/imports/:batchIds/review`, epic Q7): one URL scheme, not two, with no back-compat for a
@@ -498,7 +496,7 @@ restored destination carries its drill-down id too (ROUTE-02 merge)` block.
   edit — but the *selection* is newly dropped. Back now restores it, which did not work at all
   before, because `/settings/roles` had no `/workflows/<id>` entry behind it to return to.
 
-  Finally, the id drop on a persona switch and on the identity clamp is **inherited, not
+  Finally, the id drop on a company switch and on the identity clamp is **inherited, not
   added**. Both sites call `routePath` with no id argument and `carryView('workflows')` is
   `workflows`, so a stale `/workflows/<id>` entry collapses to the bare list by construction;
   no code was written for it, only specs. `carryView` was deliberately *not* taught about

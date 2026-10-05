@@ -1,17 +1,17 @@
-// Landing email/password sign-in. Posts to the gateway, then hands the code to the app.
+// Landing email/password sign-in. Posts to the gateway, then returns the code to whichever app asked.
 import { useEffect, useState } from 'react'
 import type { CSSProperties, FormEvent } from 'react'
 import { DEMO_FORM_CSS, Glyph, WARN_PATHS } from './DemoLeadForm'
-import { handoffUrl, signInErrorMessage, signInWithPassword, startUrl } from '../signIn'
+import { handoffUrl, signInErrorMessage, signInWithPassword, startUrl, type ConsoleTarget } from '../signIn'
 import { validateSignInForm, type SignInFormErrors } from '../signInForm'
 
 const ID = 'si-form'
 
-const FIELD_STYLE: CSSProperties = { width: '100%', height: 42, background: 'var(--card)', border: '1px solid var(--input)', borderRadius: 'var(--radius)', padding: '0 13px', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-sans)' }
+export const FIELD_STYLE: CSSProperties = { width: '100%', height: 42, background: 'var(--card)', border: '1px solid var(--input)', borderRadius: 'var(--radius)', padding: '0 13px', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-sans)' }
 const ALERT_STYLE: CSSProperties = { display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--destructive)' }
 const BUTTON_STYLE: CSSProperties = { width: '100%' }
 
-function Alert({ id, text }: { id?: string; text: string }) {
+export function Alert({ id, text }: { id?: string; text: string }) {
   return (
     <div id={id} role="alert" style={ALERT_STYLE}>
       <Glyph d={WARN_PATHS} size={15} sw={1.7} /> {text}
@@ -20,7 +20,7 @@ function Alert({ id, text }: { id?: string; text: string }) {
 }
 
 // heldState is read at open and again at submit: an expired or dropped state is never posted.
-export function SignInForm({ heldState, initialError }: { heldState: () => string | null; initialError?: string }) {
+export function SignInForm({ heldState, initialError, consoleTarget }: { heldState: () => string | null; initialError?: string; consoleTarget?: ConsoleTarget }) {
   const [state, setState] = useState(heldState)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -45,7 +45,7 @@ export function SignInForm({ heldState, initialError }: { heldState: () => strin
     return () => window.removeEventListener('pageshow', onShow)
   }, [])
 
-  // No state in memory: the app mints one and bounces back with ?state=.
+  // No state in memory: the bounce mints one and returns with ?state=.
   if (!state) {
     return (
       <div>
@@ -53,7 +53,7 @@ export function SignInForm({ heldState, initialError }: { heldState: () => strin
         <button
           type="button"
           onClick={() => {
-            const url = startUrl()
+            const url = startUrl(consoleTarget)
             if (url) window.location.href = url
           }}
           className="ds-btn ds-btn--primary ds-btn--md"
@@ -83,7 +83,7 @@ export function SignInForm({ heldState, initialError }: { heldState: () => strin
     setFormError(undefined)
     setSubmitting(true)
     try {
-      const url = handoffUrl(await signInWithPassword(email.trim(), password, live))
+      const url = handoffUrl(await signInWithPassword(email.trim(), password, live), consoleTarget)
       if (url) {
         window.location.href = url
         return

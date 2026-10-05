@@ -421,10 +421,13 @@ describe('SignInForm adversarial: pageshow', () => {
 })
 
 describe('SignInModal adversarial: the configured gate', () => {
-  it('the unconfigured modal holds no form, divider or form heading, for either missing base', async () => {
+  it('the unconfigured modal holds the heading and no form or divider, for either missing base', async () => {
     configure()
-    const configuredPicker = one<HTMLElement>(await mountModal(STATE), '[data-testid="persona-picker"]').innerHTML
-    expect(configuredPicker.length).toBeGreaterThan(0)
+    const configuredDialog = await mountModal(STATE)
+    const inputs = Array.from(configuredDialog.querySelectorAll('input'))
+    expect(inputs.length, 'control: the configured modal has the form').toBeGreaterThan(0)
+    expect(inputs[0], 'the form leads the dialog').toBe(one<HTMLInputElement>(configuredDialog, 'input[type="email"]'))
+    expect(configuredDialog.querySelectorAll('[data-testid="persona-picker"]').length).toBe(0)
     await act(async () => root.unmount())
 
     const halves: [string, string, string][] = [
@@ -439,12 +442,11 @@ describe('SignInModal adversarial: the configured gate', () => {
       expect(d.querySelectorAll('form').length, label).toBe(0)
       expect(d.querySelectorAll('input').length, label).toBe(0)
       expect(d.querySelectorAll('[role="alert"]').length, label).toBe(0)
-      expect(Array.from(d.querySelectorAll('h3')).map((h) => h.textContent), label).toEqual(['Choose an account'])
+      expect(Array.from(d.querySelectorAll('h3')).map((h) => h.textContent), label).toEqual([FORM_HEADING])
+      expect(d.textContent, label).toContain(UNAVAILABLE)
       expect(d.textContent, label).not.toContain(DIVIDER)
-      expect(d.textContent, label).not.toContain(FORM_HEADING)
       expect(d.textContent, label).not.toContain('Continue with email')
-      // The persona block is the same markup either way.
-      expect(one<HTMLElement>(d, '[data-testid="persona-picker"]').innerHTML, label).toBe(configuredPicker)
+      expect(d.querySelectorAll('[data-testid="persona-picker"]').length, label).toBe(0)
       await act(async () => root.unmount())
     }
     root = createRoot(container)

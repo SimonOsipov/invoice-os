@@ -349,10 +349,6 @@ var anVariableEvents = []anIndirect{
 		file: "internal/tenancy/store.go", fn: "SetMembershipStatus",
 		reason: "membership.suspended or reactivated, chosen by the target status",
 	},
-	{
-		file: "internal/validation/store.go", fn: "ToggleRule",
-		reason: "validation.rule.enabled or disabled, chosen by the target state",
-	},
 }
 
 func anTables() map[string][]anIndirect {

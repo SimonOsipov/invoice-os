@@ -16,6 +16,7 @@ const FULL_LEAD: DemoLead = {
   size: 'Medium ₦1bn–₦5bn',
   volume: '1k–10k',
   consent: true,
+  marketing: false,
 }
 const CONSENT_TEXT_FIXTURE =
   'I agree to ASComply Africa storing and processing my details so a compliance specialist can contact me about this demo request.'

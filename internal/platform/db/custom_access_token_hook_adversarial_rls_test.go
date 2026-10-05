@@ -19,19 +19,33 @@ func hookMigrationVersion(t *testing.T) int64 {
 	return migrationVersion(t, "*_custom_access_token_hook.sql")
 }
 
-// reapplyHookMigrationOnCleanup runs the hook migration's Down then Up after the test.
+func staffMigrationVersion(t *testing.T) int64 {
+	t.Helper()
+	return migrationVersion(t, "*_staff_members.sql")
+}
+
+// reapplyHookMigrationOnCleanup rolls the staff and hook migrations back and forward after the test.
 // A memberships Down/Up round-trip drops status, which strips auth_hook_reader's column grant.
+// Staff Down runs first: it restores the tenant-only body over the function the hook Down drops.
 func reapplyHookMigrationOnCleanup(t *testing.T, provider *goose.Provider) {
 	t.Helper()
-	v := hookMigrationVersion(t)
+	staff, hook := staffMigrationVersion(t), hookMigrationVersion(t)
 	t.Cleanup(func() {
 		ctx := context.Background()
-		if _, err := provider.ApplyVersion(ctx, v, false); err != nil {
-			t.Errorf("roll back the hook migration: %v", err)
-			return
-		}
-		if _, err := provider.ApplyVersion(ctx, v, true); err != nil {
-			t.Errorf("re-apply the hook migration: %v", err)
+		for _, step := range []struct {
+			what    string
+			version int64
+			up      bool
+		}{
+			{"roll back the staff migration", staff, false},
+			{"roll back the hook migration", hook, false},
+			{"re-apply the hook migration", hook, true},
+			{"re-apply the staff migration", staff, true},
+		} {
+			if _, err := provider.ApplyVersion(ctx, step.version, step.up); err != nil {
+				t.Errorf("%s: %v", step.what, err)
+				return
+			}
 		}
 	})
 }
@@ -276,6 +290,7 @@ func TestRLS_AuthAdminCannotSetRoleToAuthHookReader(t *testing.T) {
 // STABLE plus an owner with no write privilege anywhere: the hook cannot write.
 func TestRLS_CustomAccessTokenHookIsStableAndItsOwnerCannotWrite(t *testing.T) {
 	requireHarness(t)
+	reapplyStaffMigration(t)
 	ctx := context.Background()
 
 	var volatility string
@@ -288,26 +303,46 @@ func TestRLS_CustomAccessTokenHookIsStableAndItsOwnerCannotWrite(t *testing.T) {
 		t.Errorf("provolatile = %q, want s (STABLE)", volatility)
 	}
 
-	var cols, tables int
-	if err := h.super.QueryRow(ctx,
-		`SELECT (SELECT count(*) FROM information_schema.column_privileges WHERE grantee = 'auth_hook_reader'),
-		        (SELECT count(*) FROM information_schema.table_privileges  WHERE grantee = 'auth_hook_reader')`,
-	).Scan(&cols, &tables); err != nil {
-		t.Fatalf("read auth_hook_reader privileges: %v", err)
+	rows, err := h.super.Query(ctx,
+		`SELECT table_name, count(*) FROM information_schema.column_privileges
+		 WHERE grantee = 'auth_hook_reader' GROUP BY table_name`)
+	if err != nil {
+		t.Fatalf("read auth_hook_reader column privileges: %v", err)
 	}
-	if cols != 3 {
-		t.Errorf("auth_hook_reader holds %d column privileges, want the 3 SELECTs on memberships", cols)
+	defer rows.Close()
+	cols := map[string]int{}
+	for rows.Next() {
+		var table string
+		var n int
+		if err := rows.Scan(&table, &n); err != nil {
+			t.Fatalf("scan column privileges: %v", err)
+		}
+		cols[table] = n
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate column privileges: %v", err)
+	}
+	if want := map[string]int{"memberships": 3, "staff_members": 1}; !reflect.DeepEqual(cols, want) {
+		t.Errorf("auth_hook_reader column privileges per table = %v, want %v", cols, want)
+	}
+
+	var tables int
+	if err := h.super.QueryRow(ctx,
+		`SELECT count(*) FROM information_schema.table_privileges WHERE grantee = 'auth_hook_reader'`,
+	).Scan(&tables); err != nil {
+		t.Fatalf("read auth_hook_reader table privileges: %v", err)
 	}
 	if tables != 0 {
 		t.Errorf("auth_hook_reader holds %d table-level privileges, want 0", tables)
 	}
 }
 
-// Drives the shipped Down and Up through goose for this one version.
+// Drives the shipped Downs and Ups through goose, staff first on the way down (D23).
 func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.T) {
 	requireHarness(t)
+	reapplyStaffMigration(t)
 	ctx := context.Background()
-	version := hookMigrationVersion(t)
+	hook, staff := hookMigrationVersion(t), staffMigrationVersion(t)
 
 	sqlDB, err := sql.Open("pgx", os.Getenv("DATABASE_MIGRATION_URL"))
 	if err != nil {
@@ -319,13 +354,16 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 		t.Fatalf("build migration provider: %v", err)
 	}
 
+	// Counts memberships privileges only: staff_members' column grant is not the hook's (P16).
 	footprint := func() (fn, policy, privs int) {
 		t.Helper()
 		if err := h.super.QueryRow(ctx,
 			`SELECT (SELECT count(*) FROM pg_proc WHERE proname = 'custom_access_token_hook'),
 			        (SELECT count(*) FROM pg_policies WHERE policyname = 'auth_hook_lookup'),
-			        (SELECT count(*) FROM information_schema.column_privileges WHERE grantee = 'auth_hook_reader')
-			      + (SELECT count(*) FROM information_schema.table_privileges  WHERE grantee = 'auth_hook_reader')`,
+			        (SELECT count(*) FROM information_schema.column_privileges
+			          WHERE grantee = 'auth_hook_reader' AND table_name = 'memberships')
+			      + (SELECT count(*) FROM information_schema.table_privileges
+			          WHERE grantee = 'auth_hook_reader' AND table_name = 'memberships')`,
 		).Scan(&fn, &policy, &privs); err != nil {
 			t.Fatalf("read hook footprint: %v", err)
 		}
@@ -336,26 +374,53 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 		t.Fatalf("before Down: function=%d policy=%d privileges=%d, want 1 1 3", fn, policy, privs)
 	}
 
-	needsUp := true
+	staffApplied, hookApplied := true, true
 	t.Cleanup(func() {
-		if needsUp {
-			if _, err := provider.ApplyVersion(context.Background(), version, true); err != nil {
+		ctx := context.Background()
+		if !hookApplied {
+			if _, err := provider.ApplyVersion(ctx, hook, true); err != nil {
 				t.Errorf("restore the hook migration: %v", err)
+				return
+			}
+		}
+		if !staffApplied {
+			if _, err := provider.ApplyVersion(ctx, staff, true); err != nil {
+				t.Errorf("restore the staff migration: %v", err)
 			}
 		}
 	})
-	if _, err := provider.ApplyVersion(ctx, version, false); err != nil {
-		needsUp = false
-		t.Fatalf("roll back the hook migration: %v", err)
+
+	for _, step := range []struct {
+		what    string
+		version int64
+		up      bool
+		applied *bool
+	}{
+		{"roll back the staff migration", staff, false, &staffApplied},
+		{"roll back the hook migration", hook, false, &hookApplied},
+	} {
+		if _, err := provider.ApplyVersion(ctx, step.version, step.up); err != nil {
+			t.Fatalf("%s: %v", step.what, err)
+		}
+		*step.applied = step.up
 	}
 	if fn, policy, privs := footprint(); fn != 0 || policy != 0 || privs != 0 {
 		t.Errorf("after Down: function=%d policy=%d privileges=%d, want 0 0 0", fn, policy, privs)
 	}
 
-	if _, err := provider.ApplyVersion(ctx, version, true); err != nil {
-		t.Fatalf("re-apply the hook migration: %v", err)
+	for _, step := range []struct {
+		what    string
+		version int64
+		applied *bool
+	}{
+		{"re-apply the hook migration", hook, &hookApplied},
+		{"re-apply the staff migration", staff, &staffApplied},
+	} {
+		if _, err := provider.ApplyVersion(ctx, step.version, true); err != nil {
+			t.Fatalf("%s: %v", step.what, err)
+		}
+		*step.applied = true
 	}
-	needsUp = false
 	if fn, policy, privs := footprint(); fn != 1 || policy != 1 || privs != 3 {
 		t.Errorf("after Up: function=%d policy=%d privileges=%d, want 1 1 3", fn, policy, privs)
 	}

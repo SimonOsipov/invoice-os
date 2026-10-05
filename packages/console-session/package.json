@@ -1,0 +1,31 @@
+{
+  "name": "@invoice-os/console-session",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared staff-session gate for the ASComply Africa consoles: hand-off redemption, renewal, sign-out and the StaffGate boot component.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "react": ">=19"
+  },
+  "dependencies": {
+    "@invoice-os/api-client": "workspace:*"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.3.2",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "jsdom": "^27.4.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
+  }
+}

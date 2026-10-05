@@ -1,12 +1,12 @@
-import { test, expect } from '@playwright/test'
+import { expect } from '@playwright/test'
 import { APPS } from './apps'
-import { signInUrl } from '../personas'
+import { seedStaffSession, test } from '../staffSession'
 import { resolveTarget } from '../targets'
 
 // One smoke test per deployed SPA: the main mock view renders and the page logs
-// no console errors or uncaught exceptions during load.
+// no console errors or uncaught exceptions during load. A console opens on a seeded real staff session.
 for (const app of APPS) {
-  test(`${app.name}: main view renders with no console errors`, async ({ page }) => {
+  test(`${app.name}: main view renders with no console errors`, async ({ page, staffAccount }) => {
     const errors: string[] = []
     // Attach listeners before navigating so load-time errors are captured.
     page.on('console', (msg) => {
@@ -16,9 +16,13 @@ for (const app of APPS) {
       errors.push(`pageerror: ${err.message}`)
     })
 
-    const response = await page.goto(app.url)
-    expect(response, `no response from ${app.url}`).toBeTruthy()
-    expect(response!.ok(), `${app.url} returned HTTP ${response!.status()}`).toBeTruthy()
+    if (app.console) {
+      await seedStaffSession(page, app.console, staffAccount)
+    } else {
+      const response = await page.goto(app.url)
+      expect(response, `no response from ${app.url}`).toBeTruthy()
+      expect(response!.ok(), `${app.url} returned HTTP ${response!.status()}`).toBeTruthy()
+    }
 
     // Auto-waits for the signature element, so client-side render has completed
     // (and any load-time console errors have fired) by the time this resolves.
@@ -28,25 +32,14 @@ for (const app of APPS) {
   })
 }
 
-// The sign-in gate. The Ops Console used to render for anyone who had the URL — it had no
-// session concept at all, so there was nothing to be signed out OF. It now refuses to draw
-// without the landing page's hand-off and sends a bare visit back to the front door.
-//
-// Pinned as its own spec because the APPS entry above deliberately arrives WITH the
-// hand-off: without this, the console could quietly become open again and every smoke test
-// would still pass. Playwright gives each test a fresh context, so the session the entry
-// above persists cannot leak in here.
-//
-// Not a security assertion — a fabricated localStorage entry still gets in, and there is no
-// backend behind this console to protect (M7/M8 own that). This pins ROUTING.
 // The developer console's org card became a real switcher, matching the Platform app's
 // company switcher rather than being a static label. Pinned here because the repo has no
 // component-test harness (every frontend vitest project runs in `node`, with no DOM), so a
 // browser check is the only place this control can be exercised at all. Asserting the menu
 // OPENS, not merely that a chevron is drawn — the whole point of the change is that the
 // affordance is honest.
-test('ops-console: the org card is a switcher whose menu opens', async ({ page }) => {
-  await page.goto(signInUrl('developer'))
+test('ops-console: the org card is a switcher whose menu opens', async ({ page, staffAccount }) => {
+  await seedStaffSession(page, 'ops', staffAccount)
 
   const switcher = page.getByRole('button', { expanded: false }).filter({ hasText: 'Zephyr Pay' })
   await expect(switcher).toBeVisible()
@@ -59,6 +52,12 @@ test('ops-console: the org card is a switcher whose menu opens', async ({ page }
   await expect(menu.getByRole('menuitem')).toHaveCount(1)
 })
 
+// The sign-in gate: a console draws only for a real staff session, and a bare visit goes
+// back to the front door. Pinned as its own spec because the APPS entry above arrives WITH a
+// session: without this, the console could quietly become open again and every smoke test
+// would still pass. Playwright gives each test a fresh context, so the session the entry
+// above seeds cannot leak in here. This pins ROUTING; the forged and customer sessions are
+// refused by topology/auth.spec.ts.
 for (const [name, target] of [
   ['ops-console', 'OPS_CONSOLE_URL'],
   ['support-console', 'SUPPORT_CONSOLE_URL'],
@@ -71,5 +70,21 @@ for (const [name, target] of [
     await page.waitForURL((url) => url.href.startsWith(landingUrl), { timeout: 20_000 })
 
     expect(page.url(), `expected a redirect from ${consoleUrl} to ${landingUrl}`).toContain(landingUrl)
+  })
+}
+
+// Each console build must hold this environment's gateway host: without it no hand-off code can
+// be redeemed. The host is baked in from VITE_GATEWAY_URL at the image build.
+for (const app of APPS.filter((a) => a.console)) {
+  test(`${app.name}: the served main script holds this environment's gateway host`, async ({ request }) => {
+    const page = await request.get(app.url)
+    expect(page.ok(), `${app.url} returned HTTP ${page.status()}`).toBe(true)
+    const src = (await page.text()).match(/<script\b[^>]*\btype="module"[^>]*\bsrc="([^"]+)"/)?.[1]
+    expect(src, `no module script in the ${app.name} document`).toBeTruthy()
+    const scriptUrl = new URL(src!, app.url).href
+    const script = await request.get(scriptUrl)
+    expect(script.ok(), `${scriptUrl} returned HTTP ${script.status()}`).toBe(true)
+    const host = new URL(resolveTarget('GATEWAY_URL')).host
+    expect(await script.text(), `${scriptUrl} does not contain ${host}`).toContain(host)
   })
 }

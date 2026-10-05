@@ -315,12 +315,7 @@ func TestSeed_RangeNonNumericValue(t *testing.T) {
 func TestSeed_KillSwitchSymmetry(t *testing.T) {
 	super, app := dbTestPools(t)
 
-	// Restore on the ACTIVE version -- matching ToggleRule's own predicate
-	// (`WHERE is_active`, store.go:137-139), which is what disabled the rule
-	// below. The same live-data hazard as TestSeed_KillSwitch's cleanup
-	// (RS-V2-11): `v.version = 1` would silently leave supplier-tin-format
-	// DISABLED on the live active rule-set once the active version is not
-	// literally 1.
+	// Restore on the active version, the row the kill switch writes.
 	t.Cleanup(func() {
 		if _, err := super.Exec(context.Background(),
 			`UPDATE rules r SET enabled = true
@@ -331,9 +326,8 @@ func TestSeed_KillSwitchSymmetry(t *testing.T) {
 		}
 	})
 
-	store := NewStore(app)
-	if _, err := store.ToggleRule(newTestIdentity(), "supplier-tin-format", false); err != nil {
-		t.Fatalf("ToggleRule(supplier-tin-format, false): %v", err)
+	if n := runKillSwitch(t, super, "supplier-tin-format", false); n != 1 {
+		t.Fatalf("kill switch (supplier-tin-format, false) rows = %d, want 1", n)
 	}
 
 	engine := NewDefaultEngine()
@@ -350,8 +344,8 @@ func TestSeed_KillSwitchSymmetry(t *testing.T) {
 
 	// Restore explicitly (in addition to the Cleanup above) and reverify both
 	// violations return -- proves the switch is symmetric, not one-way.
-	if _, err := store.ToggleRule(newTestIdentity(), "supplier-tin-format", true); err != nil {
-		t.Fatalf("ToggleRule(supplier-tin-format, true) restore: %v", err)
+	if n := runKillSwitch(t, super, "supplier-tin-format", true); n != 1 {
+		t.Fatalf("kill switch (supplier-tin-format, true) restore rows = %d, want 1", n)
 	}
 	rsRestored := loadActive(t, app)
 	result, err = engine.Evaluate(badInvoicePayload(), rsRestored)

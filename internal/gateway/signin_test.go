@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -103,6 +104,11 @@ type signInRig struct {
 
 func newSignInRig(t *testing.T, authURL *url.URL, log *slog.Logger) *signInRig {
 	t.Helper()
+	return newSignInRigSink(t, authURL, log, nil)
+}
+
+func newSignInRigSink(t *testing.T, authURL *url.URL, log *slog.Logger, sink ContactSink) *signInRig {
+	t.Helper()
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
@@ -113,7 +119,7 @@ func newSignInRig(t *testing.T, authURL *url.URL, log *slog.Logger) *signInRig {
 		store:    store,
 		throttle: th,
 		clock:    clk,
-		signIn:   SignInHandler(authURL, testClient(), store, th, log),
+		signIn:   SignInHandler(authURL, testClient(), store, th, log, sink),
 		exchange: ExchangeHandler(store),
 	}
 }
@@ -287,7 +293,7 @@ func TestSignIn_MissingRefreshToken502(t *testing.T) {
 			clk := newTestClock()
 			store := NewHandoffStore(HandoffTTL, clk.Now)
 			th := NewSignInThrottle(1, SignInMaxKeys, SignInWindow, clk.Now)
-			h := SignInHandler(fake.URL, testClient(), store, th, slog.New(slog.DiscardHandler))
+			h := SignInHandler(fake.URL, testClient(), store, th, slog.New(slog.DiscardHandler), nil)
 			s := randomState(t)
 
 			for i := 1; i <= 2; i++ {
@@ -316,16 +322,25 @@ func TestSignIn_MissingRefreshToken502(t *testing.T) {
 }
 
 func TestExchange_AnswersBothTokens(t *testing.T) {
-	// GoTrue's other secrets and the user object never reach the app.
-	body := `{"access_token":"` + sessionAT + `","refresh_token":"` + sessionRT + `","provider_token":"pt-secret","provider_refresh_token":"prt-secret","user":{"id":"u1"}}`
+	// GoTrue's other secrets and the user object never reach the app, even one that is handed off.
+	body := `{"access_token":"` + sessionAT + `","refresh_token":"` + sessionRT + `","provider_token":"pt-secret","provider_refresh_token":"prt-secret","user":` + coUser(coMetaFull) + `}`
 	fake := newTokenFake(t, http.StatusOK, body)
-	rig := newSignInRig(t, fake.URL, nil)
+	sink := newRecSink(nil)
+	rig := newSignInRigSink(t, fake.URL, nil, sink)
 	s := randomState(t)
 
 	code := requireCode(t, rig.doSignIn(signInBody(regEmail, regPassword, s)))
 	rec := rig.doExchange(exchangeBody(code, s))
 
 	requireSessionAnswer(t, rec)
+	if got := sink.wait(t); !reflect.DeepEqual(got, coWant) {
+		t.Errorf("hand-off = %+v, want %+v", got, coWant)
+	}
+	for _, leak := range []string{coUserID, regEmail, coDisplay, coWorkspace, coConsentText} {
+		if strings.Contains(rec.Body.String(), leak) {
+			t.Errorf("exchange answer carries %q: %s", leak, rec.Body.String())
+		}
+	}
 	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
 		t.Errorf("Content-Type = %q, want application/json", got)
 	}

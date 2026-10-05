@@ -607,9 +607,8 @@ func TestRLS_RequestSeamRefusalIsNotTheUnauthenticatedSentinel(t *testing.T) {
 	}
 }
 
-// TestRLS_RequestSeamSkipsTheLookupForAnEmptySubject (AC-4): a gateway that forwards no
-// user id yields Subject "". Empty is not a uuid, so the lookup is skipped rather than
-// sent as the 22P02 that would poison the batch.
+// TestRLS_RequestSeamSkipsTheLookupForAnEmptySubject (AC-4): empty is not a uuid, so the
+// lookup is skipped rather than sent as the 22P02 that would poison the batch.
 func TestRLS_RequestSeamSkipsTheLookupForAnEmptySubject(t *testing.T) {
 	h := requireHarness(t)
 	pool, tr := tracedSeamPool(t)

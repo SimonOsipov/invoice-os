@@ -10,8 +10,8 @@ import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { approvalRun404Dropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
-import { assertShardSession, seedShardSession } from './shardSession'
-import { APP_URL, FIRM_PERSONA, GATEWAY_URL, shardTenants } from './targets'
+import { GATEWAY_URL, shardTenants } from './targets'
+import { signInAs } from '../personaSession'
 import { buildAir07UnsteeredCsv, buildHeaderOnlyCsv, buildMixedCsv } from '../importFixtures'
 
 const SHARD = shardTenants('import-review-surfaces.spec.ts')
@@ -36,21 +36,6 @@ function collectErrors(page: Page, extra?: Dropper): string[] {
     errors.push(`pageerror: ${err.message}`)
   })
   return errors
-}
-
-async function signInPersona(page: Page, param: string): Promise<void> {
-  const tenant = SHARD.a
-  await seedShardSession(page, 'firm', tenant)
-  const url = `${APP_URL}?persona=${param}`
-  const res = await page.goto(url)
-  expect(res, `no response from ${url}`).toBeTruthy()
-  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
-  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
-  await assertShardSession(page, tenant.id)
-}
-
-async function signInFirm(page: Page): Promise<void> {
-  await signInPersona(page, FIRM_PERSONA.param)
 }
 
 async function selectEntity(page: Page, entityName: string): Promise<void> {
@@ -273,7 +258,7 @@ function recordWrites(page: Page): { writes: string[]; stop: () => void } {
 async function startWizard(page: Page, label: string): Promise<{ token: string; entityId: string }> {
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `${label} ${Date.now()}`, tin: freshTin() })
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   return { token, entityId: entity.id }
@@ -354,7 +339,7 @@ async function extractOneDocument(
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `${label} ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
@@ -562,7 +547,7 @@ test.describe('RESKIN2-04 v2 create, progress and review at 1440', () => {
       },
     )
 
-    await signInFirm(page)
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id })
     await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
     await expect(page.getByText('Add a client before you file', { exact: true }), 'the no-company panel renders').toBeVisible({ timeout: 30_000 })
     expect(stubbed, 'the entity-list stub answered at least once').toBeGreaterThan(0)

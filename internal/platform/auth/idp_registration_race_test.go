@@ -13,7 +13,7 @@ import (
 // GoTrue answers the losing concurrent /signup 500 with SQLSTATE 23505.
 func TestIdP_ConcurrentRegistrationsAnswerTheSame(t *testing.T) {
 	base := idpMailURL(t)
-	gw := startGateway(t, base)
+	gw, _ := startGateway(t, base, 0, nil)
 	u := idpUser{email: "idp-mail-" + uuid.NewString() + "@example.test", password: "pw-" + uuid.NewString()}
 	conn := superConn(t)
 	t.Cleanup(func() { _, _ = conn.Exec(context.Background(), `DELETE FROM auth.users WHERE email = $1`, u.email) })

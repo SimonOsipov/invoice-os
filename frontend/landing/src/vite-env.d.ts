@@ -3,9 +3,9 @@
 interface ImportMetaEnv {
   // The gateway the sign-in form posts to. Unset means no sign-in form.
   readonly VITE_GATEWAY_URL?: string
-  // Base URLs of the sibling SPAs the sign-in routes to after a persona pick. Each PR
+  // Base URLs of the sibling SPAs the sign-in routes to. Each PR
   // now deploys to its own ephemeral Railway environment with an unpredictable domain
-  // suffix (M4-23), so there is no hardcoded default — unset means destUrl() returns null
+  // suffix (M4-23), so there is no hardcoded default — unset means the resolver returns null
   // (see auth.ts) rather than routing to the wrong environment.
   readonly VITE_APP_URL?: string
   // The ops-console service, which serves the Ops Console.
@@ -22,6 +22,8 @@ interface ImportMetaEnv {
   // The GA4 measurement id. Unset means measurementId() returns null and the gate stays
   // closed (see analytics.ts), so a PR or fork build reports nothing.
   readonly VITE_GA_MEASUREMENT_ID?: string
+  // Exactly 'true' shows the create-account entry (see register.ts). Unset hides it.
+  readonly VITE_REGISTRATION_OPEN?: string
   readonly VITE_SENTRY_DSN?: string
   readonly VITE_SENTRY_TEST_DIGEST?: string
   readonly VITE_RAILWAY_GIT_COMMIT_SHA?: string

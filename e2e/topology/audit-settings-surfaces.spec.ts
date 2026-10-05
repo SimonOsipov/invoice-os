@@ -8,7 +8,7 @@ import { freshTin } from '../api/fixtures'
 import { signInAs } from '../personaSession'
 import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertFillsColumn, assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
-import { APP_URL, FIRM_PERSONA } from './targets'
+import { APP_URL } from './targets'
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
@@ -497,7 +497,7 @@ test('AE-05 the invoice activity table meets the card edges at every wide width'
   test.setTimeout(120_000)
   const errors = gatedErrors(page, [approvalRun404Dropper(page)])
   await signInAs(page, 'firm')
-  await page.goto(`${APP_URL}/invoices/${invoiceId}?persona=${FIRM_PERSONA.param}`)
+  await page.goto(`${APP_URL}/invoices/${invoiceId}`)
   const card = tid(page, 'invoice-activity')
   await expect(card, 'the activity card never drew').toBeVisible({ timeout: 20_000 })
   await expect(card.getByTestId('audit-row').first(), 'the activity card drew no audit rows').toBeVisible({ timeout: 20_000 })

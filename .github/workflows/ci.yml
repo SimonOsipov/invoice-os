@@ -57,6 +57,7 @@ jobs:
             migrations:
               - 'migrations/**'
               - 'db/**'
+              - 'internal/platform/db/restore_check_test.go'
               - 'Makefile'
               - 'go.mod'
               - 'go.sum'
@@ -539,9 +540,9 @@ jobs:
           --health-retries 5
     env:
       # bootstrap runs as the superuser; goose runs as the migrator. DATABASE_URL
-      # (the app role) is added ONLY so TestSuperuserDSNNotRetainedForRequestPath
-      # (task-128 / AC-4) can prove the request-serving pool it opens comes from
-      # DATABASE_URL, not the superuser DSN — no other step in this job uses it.
+      # (the app role) is for TestSuperuserDSNNotRetainedForRequestPath,
+      # which proves the request-serving pool it opens comes from DATABASE_URL, not the
+      # superuser DSN, and for TestRestoreCheck_FailsWithoutBypassRLS.
       # Dev-safe passwords only — this is an ephemeral throwaway DB.
       DATABASE_SUPERUSER_URL: postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disable
       DATABASE_MIGRATION_URL: postgres://invoice_migrator:migrator@localhost:5432/invoice_os?sslmode=disable
@@ -603,9 +604,9 @@ jobs:
         # caller (not just psql) can execute the identical file (Decision
         # [one-bootstrap-file]). Covers create-or-converge, security-attribute
         # re-assertion, fail-closed on a missing/empty password GUC, idempotency,
-        # deterministic password rotation, and schema-grant shape. Needs only
-        # DATABASE_SUPERUSER_URL, already in this job's env; self-skips everywhere else.
-        run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestBootstrap|TestMakefileDevDB' ./internal/platform/db/...
+        # deterministic password rotation, and schema-grant shape.
+        # TestRestoreCheck* runs db/restore-check.sql against this job's Postgres.
+        run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestBootstrap|TestMakefileDevDB|TestRestoreCheck' ./internal/platform/db/...
       - name: Gateway boot-path provisioning suite + per-test visibility & skip gate
         # M4-21-04 (task-128, AC-6): proves db.Provision — the entry point
         # cmd/gateway/main.go calls at boot — composes bootstrap (gated) -> migrate
@@ -693,6 +694,12 @@ jobs:
         # the caller's tenant under RLS and write audit rows in the same tx. Needs
         # DATABASE_URL (app) + DATABASE_SUPERUSER_URL (seed) — both already in this job's env.
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/portfolio/...
+      - name: Contact store suite (intake merge + delivery queue as invoice_app) + per-test visibility & skip gate
+        run: scripts/ci/rls-test-gate.sh -count=1 ./internal/notifications/...
+      - name: Notifications boot suite (the worker runs only when delivering; its DB test must not skip) + per-test visibility & skip gate
+        run: scripts/ci/rls-test-gate.sh -count=1 ./cmd/notifications/...
+      - name: Gateway hand-off boot test (main wires one notifications sink into verify and sign-in; it must not skip) + per-test visibility & skip gate
+        run: scripts/ci/rls-test-gate.sh -count=1 ./cmd/gateway/...
       - name: Invoice /v1 suite (RLS-scoped store CRUD + genesis history + audit as invoice_app) + per-test visibility & skip gate
         # M4-02: proves the invoice store's Create/Get/List/Update resolve to exactly
         # the caller's tenant under RLS and write the genesis invoice_status_history +
@@ -708,8 +715,8 @@ jobs:
         # + DATABASE_SUPERUSER_URL (seed) — both already in this job's env.
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/importer/...
       - name: Validation /v1 suite (engine + store + handlers as invoice_app) + per-test visibility & skip gate
-        # M3-04: proves the rules-as-data engine, the DB-backed Store (LoadActiveRuleSet
-        # + ToggleRule audit) and the HTTP handlers over the migrated rules tables. Needs
+        # M3-04: proves the rules-as-data engine, the DB-backed Store (LoadActiveRuleSet)
+        # and the HTTP handlers over the migrated rules tables. Needs
         # DATABASE_URL (app) + DATABASE_SUPERUSER_URL (seed) — both already in this job's env.
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/validation/...
       - name: Dashboard /v1/rollup suite (RLS-scoped rollup + top-violations reads as invoice_app) + per-test visibility & skip gate
@@ -755,6 +762,11 @@ jobs:
         # exactly the caller's tenant under RLS. Needs DATABASE_URL (app) +
         # DATABASE_SUPERUSER_URL (seed + subtask 05's ANALYZE) — both already in this job's env.
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/archive/...
+      - name: Context-service gateway guard (each built main refuses a forged request) + per-test visibility & skip gate
+        # Boots the seven routedServices mains against a throwaway copy of this
+        # job's database (invoice's boot seeds demo approval runs); needs DATABASE_URL (app) +
+        # DATABASE_SUPERUSER_URL, already in this job's env. Before the seed step, which must stay last.
+        run: scripts/ci/rls-test-gate.sh -count=1 -run TestRLS_EveryContextServiceRefusesAForgedRequest ./internal/platform
       - name: Actor identity-resolution suite (RLS-scoped memberships batch read as invoice_app) + per-test visibility & skip gate
         # AUDIT-02: proves actor.Resolve issues at most ONE memberships statement per
         # call, filters `system` and free-text actors out of the uuid[] bind (a 22P02
@@ -992,6 +1004,8 @@ jobs:
         run: pnpm --filter @invoice-os/api-client test
       - name: Unit tests (monitoring)
         run: pnpm --filter @invoice-os/monitoring test
+      - name: Unit tests (console-session)
+        run: pnpm --filter @invoice-os/console-session test
       - name: Unit tests (app)
         run: pnpm --filter @invoice-os/app test
       - name: Unit tests (ops-console)

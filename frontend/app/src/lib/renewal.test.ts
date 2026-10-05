@@ -233,12 +233,12 @@ describe('createRenewer', () => {
     expect(h.onEnded).toHaveBeenCalledTimes(1)
   })
 
-  it('a renewal that outlives a stand-in round trip still ends the session once', async () => {
+  it('a renewal that outlives a track of another session still ends the session once', async () => {
     const h = setup({ now: RENEW_AT })
     const seat = h.store.session
     const first = outcome(h.renewer.fresh())
     await flush()
-    h.renewer.track({ persona: APP_PERSONAS.firm, token: 'stand-in', me: ME, verified: true })
+    h.renewer.track({ persona: APP_PERSONAS.firm, token: 'other', me: ME, verified: true })
     h.renewer.track(seat)
     const second = outcome(h.renewer.fresh())
     await flush()

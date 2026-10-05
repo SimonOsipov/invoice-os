@@ -10,6 +10,9 @@ import {
   ROLE_OPTIONS,
   VOLUME_OPTIONS,
   DEFAULT_FORM,
+  DEMO_NAME_MAX,
+  DEMO_EMAIL_MAX,
+  DEMO_COMPANY_MAX,
   type DemoFormErrors,
   type DemoFormState,
   type DemoFieldKey,
@@ -17,7 +20,9 @@ import {
 } from './demoForm'
 import { resolveSubmitTarget, submitDemoLead, type DemoLead } from '../hubspot'
 import { trackedHubSpotSubmit } from '../analytics'
+import { sendDemoRequest } from '../demoRequest'
 import { IconTile } from './ds/IconTile'
+import { MarketingConsent } from './MarketingConsent'
 
 export function Glyph({ d, size = 16, sw = 1.7 }: { d: string | string[]; size?: number; sw?: number }) {
   const paths = Array.isArray(d) ? d : [d]
@@ -50,6 +55,10 @@ export const DEMO_FORM_CSS = `
 
 const INPUT_STYLE: CSSProperties = { width: '100%', height: 42, background: 'var(--card)', border: '1px solid var(--input)', borderRadius: 'var(--radius)', padding: '0 13px', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-sans)' }
 const SELECT_STYLE: CSSProperties = { ...INPUT_STYLE, padding: '0 32px 0 13px', cursor: 'pointer' }
+
+// Shared with MarketingConsent.
+export const CHECK_LABEL_STYLE: CSSProperties = { display: 'flex', alignItems: 'flex-start', gap: 12, fontSize: 13, lineHeight: 1.55, color: 'var(--foreground)', cursor: 'pointer' }
+export const CHECK_INPUT_STYLE: CSSProperties = { flex: 'none', width: 18, height: 18, margin: '2px 0 0', accentColor: 'var(--primary)', cursor: 'pointer' }
 
 export function DemoLeadForm({
   idPrefix,
@@ -113,11 +122,15 @@ export function DemoLeadForm({
     }
   }
 
-  // setField's sibling for the one boolean: a computed-key spread carrying
+  // setField's sibling: a computed-key spread carrying
   // `value: string` cannot also carry a checkbox.
   function setConsent(next: boolean) {
     setForm((prev) => ({ ...prev, consent: next }))
     setErrors((prev) => ({ ...prev, consent: undefined }))
+  }
+
+  function setMarketing(next: boolean) {
+    setForm((prev) => ({ ...prev, marketing: next }))
   }
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
@@ -139,7 +152,7 @@ export function DemoLeadForm({
     setErrors({})
     setDemoStep('submitting')
 
-    // Built field by field from the seven answers. The honeypot's value is
+    // Built field by field. The honeypot's value is
     // deliberately absent — it is not part of the form's data model.
     const lead: DemoLead = {
       name: form.name,
@@ -149,6 +162,7 @@ export function DemoLeadForm({
       size: form.size,
       volume: form.volume,
       consent: form.consent,
+      marketing: form.marketing,
     }
 
     // All four branches share ONE success/error transition. A tripped honeypot is
@@ -164,8 +178,13 @@ export function DemoLeadForm({
         const target = resolveSubmitTarget(window.location.hostname)
         // Wrapped here, not around the shared success transition below: this is the
         // only branch of the four that reaches HubSpot.
-        if (target) await trackedHubSpotSubmit(() => submitDemoLead(target, lead, CONSENT_TEXT))
-        else await runStub()
+        if (target) {
+          await trackedHubSpotSubmit(() => submitDemoLead(target, lead, CONSENT_TEXT))
+          await sendDemoRequest(lead)
+        } else {
+          // The stub runs beside the gateway post so the stub's delay is never added to it.
+          await Promise.all([sendDemoRequest(lead) ?? Promise.resolve(), runStub()])
+        }
       }
       if (mounted.current) setDemoStep('success')
     } catch {
@@ -205,6 +224,7 @@ export function DemoLeadForm({
                 onChange={(e: ChangeEvent<HTMLInputElement>) => setField('name', e.target.value)}
                 placeholder="Ada Okafor"
                 autoComplete="name"
+                maxLength={DEMO_NAME_MAX}
                 aria-required="true"
                 aria-invalid={Boolean(errors.name)}
                 aria-describedby={errors.name ? `${idPrefix}-name-error` : undefined}
@@ -230,6 +250,7 @@ export function DemoLeadForm({
                 onChange={(e: ChangeEvent<HTMLInputElement>) => setField('email', e.target.value)}
                 placeholder="you@company.com"
                 autoComplete="email"
+                maxLength={DEMO_EMAIL_MAX}
                 aria-required="true"
                 aria-invalid={Boolean(errors.email)}
                 aria-describedby={errors.email ? `${idPrefix}-email-error` : undefined}
@@ -255,6 +276,7 @@ export function DemoLeadForm({
                 onChange={(e: ChangeEvent<HTMLInputElement>) => setField('company', e.target.value)}
                 placeholder="Okafor & Partners"
                 autoComplete="organization"
+                maxLength={DEMO_COMPANY_MAX}
                 aria-required="true"
                 aria-invalid={Boolean(errors.company)}
                 aria-describedby={errors.company ? `${idPrefix}-company-error` : undefined}
@@ -342,7 +364,7 @@ export function DemoLeadForm({
             </div>
 
             <div>
-              <label htmlFor={`${idPrefix}-consent`} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, fontSize: 13, lineHeight: 1.55, color: 'var(--foreground)', cursor: 'pointer' }}>
+              <label htmlFor={`${idPrefix}-consent`} style={CHECK_LABEL_STYLE}>
                 <input
                   id={`${idPrefix}-consent`}
                   type="checkbox"
@@ -352,7 +374,7 @@ export function DemoLeadForm({
                   aria-invalid={Boolean(errors.consent)}
                   aria-describedby={errors.consent ? `${idPrefix}-consent-error` : undefined}
                   disabled={submitting}
-                  style={{ flex: 'none', width: 18, height: 18, marginTop: 2, accentColor: 'var(--primary)', cursor: 'pointer' }}
+                  style={CHECK_INPUT_STYLE}
                 />
                 {/* The imported constant, never a retyped sentence: this is the one
                     mechanism that keeps the wording the visitor was SHOWN identical to
@@ -365,6 +387,8 @@ export function DemoLeadForm({
                 </div>
               )}
             </div>
+
+            <MarketingConsent id={`${idPrefix}-marketing`} checked={form.marketing} onChange={setMarketing} disabled={submitting} />
           </div>
 
           {/* Honeypot. Bots fill every input they find; humans never see this one, so

@@ -29,6 +29,7 @@ func TestProvision_Adversarial400(t *testing.T) {
 		{"kind FIRM", `{"workspace_name":"Acme","display_name":"Ada","kind":"FIRM"}`},
 		{"kind In_House", `{"workspace_name":"Acme","display_name":"Ada","kind":"In_House"}`},
 		{"kind padded", `{"workspace_name":"Acme","display_name":"Ada","kind":" firm"}`},
+		{"kind whitespace only", `{"workspace_name":"Acme","display_name":"Ada","kind":"  "}`},
 		{"kind number", `{"workspace_name":"Acme","display_name":"Ada","kind":1}`},
 		{"workspace_name unicode whitespace only", `{"workspace_name":" 　 \n","display_name":"Ada"}`},
 		{"display_name unicode whitespace only", `{"workspace_name":"Acme","display_name":"  "}`},
@@ -64,6 +65,8 @@ func TestProvision_AdversarialAccepted(t *testing.T) {
 		{"200 two-byte runes", `{"workspace_name":"` + multi200 + `","display_name":"` + multi200 + `"}`,
 			ProvisionInput{WorkspaceName: multi200, DisplayName: multi200}},
 		{"unicode whitespace trimmed", `{"workspace_name":"　Acme ","display_name":" Ada\n"}`,
+			ProvisionInput{WorkspaceName: "Acme", DisplayName: "Ada"}},
+		{"kind null is absent", `{"workspace_name":"Acme","display_name":"Ada","kind":null}`,
 			ProvisionInput{WorkspaceName: "Acme", DisplayName: "Ada"}},
 		// Unknown fields are ignored, as every tenancy/portfolio decoder does; none reaches the store.
 		{"unknown fields ignored", `{"workspace_name":"Acme","display_name":"Ada","kind":"firm","role":"owner","tenant_id":"` + uuid.NewString() + `","email":"x@evil.test"}`,
@@ -103,24 +106,28 @@ func postProvision(store *Store, ctx context.Context, body string) *httptest.Res
 }
 
 func TestProvisionHandler_RealStore201(t *testing.T) {
-	r := newRegistrant(t)
-	rec := postProvision(NewStore(r.app), r.ctx(), `{"workspace_name":" Real Works ","display_name":"Ada","kind":"in_house"}`)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
-	}
-	var me meBody
-	if err := json.Unmarshal(rec.Body.Bytes(), &me); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if me.Tenant.ID != r.tenantID || me.Tenant.Name != "Real Works" || me.Tenant.Kind != "in_house" {
-		t.Errorf("tenant = %+v, want {%s Real Works in_house}", me.Tenant, r.tenantID)
-	}
-	_, members := provisionedRows(t, r.super, r.tenantID)
-	if len(members) != 1 {
-		t.Fatalf("memberships = %+v, want exactly one", members)
-	}
-	if me.User.ID != members[0].UserID || me.User.Role != "admin" {
-		t.Errorf("user = %+v, want {%s admin} (the stored membership)", me.User, members[0].UserID)
+	for _, kind := range []string{"in_house", "firm"} {
+		t.Run(kind, func(t *testing.T) {
+			r := newRegistrant(t)
+			rec := postProvision(NewStore(r.app), r.ctx(), `{"workspace_name":" Real Works ","display_name":"Ada","kind":"`+kind+`"}`)
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
+			}
+			var me meBody
+			if err := json.Unmarshal(rec.Body.Bytes(), &me); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if me.Tenant.ID != r.tenantID || me.Tenant.Name != "Real Works" || me.Tenant.Kind != kind {
+				t.Errorf("tenant = %+v, want {%s Real Works %s}", me.Tenant, r.tenantID, kind)
+			}
+			_, members := provisionedRows(t, r.super, r.tenantID)
+			if len(members) != 1 {
+				t.Fatalf("memberships = %+v, want exactly one", members)
+			}
+			if me.User.ID != members[0].UserID || me.User.Role != "admin" {
+				t.Errorf("user = %+v, want {%s admin} (the stored membership)", me.User, members[0].UserID)
+			}
+		})
 	}
 }
 
@@ -156,6 +163,9 @@ func TestProvisionHandler_ConcurrentDoubleSubmitIsOne201AndOne409(t *testing.T) 
 	tenants, members := provisionedRows(t, r.super, r.tenantID)
 	if len(tenants) != 1 || len(members) != 1 {
 		t.Errorf("tenants = %v, memberships = %+v, want one of each", tenants, members)
+	}
+	if n := len(provisionedEvents(t, r.super, r.tenantID)); n != 1 {
+		t.Errorf("workspace.provisioned rows = %d, want exactly 1 (the 409 loser writes none)", n)
 	}
 }
 

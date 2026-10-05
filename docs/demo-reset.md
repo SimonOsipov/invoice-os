@@ -75,7 +75,7 @@ reverse of `db/seed.dev.sql`'s parent-first inserts.
 | 11 | `business_entities` | the curated demo supplier portfolio, re-inserted by the seed |
 | 12 | `extraction_anchor_rules` | the anchor rules a demo tenant's corrections taught the extractor; nothing re-seeds them, so a survivor would keep steering reads of documents the seed has just replaced |
 | 13 | `extraction_field_results` | the per-field results of a demo document read, meaningless once their job is gone. Purged **before** `extraction_jobs`: the foreign key is `ON DELETE CASCADE`, so purging the parent first would take these rows silently and report a count of 0 |
-| 14 | `extraction_field_corrections` | the append-only record of every field a demo persona corrected by hand; the seed re-creates none of them, so a survivor would claim a correction on an invoice that no longer exists. Purged **before** `extraction_jobs` for the same reason as the row above |
+| 14 | `extraction_field_corrections` | the append-only record of every field a demo user corrected by hand; the seed re-creates none of them, so a survivor would claim a correction on an invoice that no longer exists. Purged **before** `extraction_jobs` for the same reason as the row above |
 | 15 | `extraction_jobs` | one row per demo document read; nothing re-links a survivor, and its RESTRICT foreign key would otherwise block the `documents` delete below |
 | 16 | `extraction_page_images` | the rendered-page inventory of a demo document, regenerable and meaningless once its document is gone. The rows go and the stored PNGs do not: the purge issues SQL only, exactly as for `documents` below |
 | 17 | `documents` | the source-document records; `internal/demodocs` rebuilds them on the next invoice-service boot (see the checklist below). The purge issues SQL only, so the stored object itself is left in the bucket — the row goes, the bytes do not |
@@ -107,7 +107,7 @@ Four tables carry `tenant_id` and are deliberately never purged.
 
 | Table | Why it is spared |
 |---|---|
-| `memberships` | the only runtime `INSERT` (`provision_workspace`) creates a new tenant's first admin, never a demo tenant's row, so nothing accumulates; the seed's `DO UPDATE` converges identity and status on every boot anyway |
+| `memberships` | `provision_workspace` inserts a new tenant's first admin, never a demo tenant's row; the seed's `DO UPDATE` converges identity and status on every boot anyway |
 | `approval_policies` | `internal/demopolicy` rebuilds a policy for the **two persona tenants only**, so purging all four would leave the other two with no policy and nothing to restore one |
 | `approval_policy_versions` | same reason — and the sealed version a run pointed at must outlive that run |
 | `approval_policy_steps` | same reason; the step tree belongs to a sealed version |
@@ -219,30 +219,15 @@ A large `audit_log_rows` therefore means the demo environment was used a lot bet
 deploys. It does not indicate that anything went wrong, and it is not comparable to the
 counts beside it in `by_table`.
 
-## Demo mode flag
+## App build variables
 
-The purge above runs regardless of whether the demo persona switcher is visible — the two are
-independent. This section documents that switch: `VITE_DEMO_MODE`, the flag gating the demo
-persona-switcher UI (`frontend/app/src/demo/`) in the sidebar footer.
+The app reads no demo-mode build variable. `frontend/app/Dockerfile`
+declares no such build arg, and `reconcile_url_variables` in `scripts/ci/railway-env.sh` writes only
+`VITE_GATEWAY_URL` and `VITE_LANDING_URL` on the `app` service. The purge above does not depend on
+either.
 
-`VITE_DEMO_MODE` is a Vite build-time flag, not a runtime one: `import.meta.env.VITE_DEMO_MODE
-=== 'true'` is folded into the bundle at `vite build` (`frontend/app/src/demo/flag.ts:3`), so an
-off build tree-shakes `src/demo/` out entirely rather than shipping the switcher hidden. It
-**defaults to off** — an unset build arg resolves to an empty string, which is not `'true'`.
-
-CI sets it on every non-draft PR environment, **app service only**. `reconcile_url_variables`
-in `scripts/ci/railway-env.sh` upserts and independently re-verifies `app.VITE_DEMO_MODE = true`
-(`:1242`, `:1252`) against `$RAILWAY_SVC_APP_ID`, the same `ARG`/`ENV` build-arg mechanism
-`frontend/app/Dockerfile` already uses for `VITE_GATEWAY_URL` and `VITE_LANDING_URL` (`:17-26`).
-It runs from the `Point the fork's URL variables at the fork` step
-(`.github/workflows/dev-env.yml`), gated `github.event_name == 'pull_request'` and, at
-the enclosing `prepare-env` job, on the PR being non-draft — so a draft PR's
-environment never gets the flag and never deploys at all.
-
-**Production.** The `app` service has `VITE_DEMO_MODE=true` (measured 2026-09-23), so the
-persona switcher ships on `app.ascomply.com`. It mints through `POST /auth/login`, which
-production no longer serves, so it does not work there. The production gateway's
-`ENVIRONMENT` was set to `production` once, by hand, with `railway-env.sh
+**Production.** Production's `app` service still carries a demo-mode variable; nothing reads it.
+The production gateway's `ENVIRONMENT` was set to `production` once, by hand, with `railway-env.sh
 set-production-environment`. CI still writes nothing to that environment —
 `reconcile_url_variables` exits 1 the moment `env_id` matches `$RAILWAY_DEV_ENVIRONMENT_ID`,
 the same refusal that protects every other URL variable this function reconciles.

@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react'
 import { sentryVitePlugin } from '@sentry/vite-plugin'
 import { sourcemapUploadOptions } from '../../packages/monitoring/src/upload'
 
-// OPS-01 — local-only ops console showcase. No proxy/backend; all content is static.
+// OPS-01 — ops console showcase. No dev proxy; the staff gate calls the gateway by its absolute URL, and all content is static.
 export default defineConfig({
   plugins: [react(), sentryVitePlugin(sourcemapUploadOptions(fileURLToPath(new URL('.', import.meta.url))))],
   // Maps go to Sentry, never to browsers.

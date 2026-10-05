@@ -2,7 +2,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
-import { APP_PERSONAS, type PersonaId } from '../auth'
+import type { PersonaId } from '../auth'
 import { SignIn, SignInLoading } from './SignIn'
 
 const picker = (signingIn: PersonaId | null = null) => renderToStaticMarkup(<SignIn signingIn={signingIn} onPick={() => {}} />)
@@ -27,7 +27,6 @@ const GATES: Array<[string, () => string]> = [
   ['SignIn', () => picker()],
   ['SignIn mid sign-in', () => picker('firm')],
   ['SignInLoading', () => renderToStaticMarkup(<SignInLoading />)],
-  ['SignInLoading with a persona', () => renderToStaticMarkup(<SignInLoading persona={APP_PERSONAS.firm} />)],
 ]
 
 describe('GT-01 the sign-in and loading cards are 10px with no shadow', () => {

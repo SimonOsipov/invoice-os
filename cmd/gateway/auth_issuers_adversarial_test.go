@@ -205,7 +205,7 @@ func TestGatewayNeverProxiesAuthUnderAPI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadUpstreams: %v", err)
 	}
-	apiHandler, fleetHandler := gatewayHandlers(verifier, nilURLSessions(), routed, probed, map[string]string{"auth": ".well-known/jwks.json"}, slog.Default())
+	apiHandler, fleetHandler := gatewayHandlers(verifier, nilURLSessions(), routed, probed, map[string]string{"auth": ".well-known/jwks.json"}, slog.Default(), "gw-test-token")
 	mux := http.NewServeMux()
 	mux.Handle("/api/", apiHandler)
 	mux.HandleFunc("GET /healthz/fleet", fleetHandler)

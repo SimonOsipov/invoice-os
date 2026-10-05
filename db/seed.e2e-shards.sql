@@ -20,6 +20,7 @@ ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, kind = EXCLUDED.kind;
 INSERT INTO memberships (tenant_id, user_id, role, display_name, email, status)
 SELECT m.shard_id, s.user_id, s.role, s.display_name, s.email, s.status
 FROM shard_map m JOIN memberships s ON s.tenant_id = m.source_id
+WHERE s.user_id::text LIKE 'c0000000-0000-0000-0000-%' -- seeded personas only; e2e-granted members stay on 1111 / 2222
 ON CONFLICT (tenant_id, user_id) DO UPDATE SET
     role         = EXCLUDED.role,
     display_name = EXCLUDED.display_name,

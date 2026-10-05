@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { SignInForm } from './SignInForm'
 import { SignInModal } from './SignInModal'
+import type { ConsoleTarget } from '../signIn'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -56,9 +57,9 @@ function unconfigure(): void {
   vi.stubEnv('VITE_APP_URL', 'https://app.x/')
 }
 
-async function mountForm(state: string | null, initialError?: string): Promise<void> {
+async function mountForm(state: string | null, initialError?: string, consoleTarget?: ConsoleTarget): Promise<void> {
   await act(async () => {
-    root.render(createElement(SignInForm, { heldState: () => state, initialError }))
+    root.render(createElement(SignInForm, { heldState: () => state, initialError, consoleTarget }))
   })
 }
 
@@ -131,17 +132,16 @@ describe('AC-1: the form sits in the modal only when configured', () => {
       root.render(createElement(SignInModal, { onClose: vi.fn(), heldState: () => STATE }))
     })
     let d = one<HTMLElement>(document, '[role="dialog"]')
-    const picker = one<HTMLElement>(d, '[data-testid="persona-picker"]')
-    expect(picker.querySelectorAll('[data-persona]').length).toBe(4)
-    expect(d.textContent).toContain('Sign in to your workspace')
-    expect(d.textContent).toContain('or explore with a demo profile')
     const pw = one<HTMLInputElement>(d, 'input[type="password"]')
-    expect(picker.contains(pw)).toBe(false)
-    // The form sits above the persona list.
-    expect(pw.compareDocumentPosition(picker) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    const heading = Array.from(d.querySelectorAll('h3')).map((h) => h.textContent)
-    expect(heading.indexOf('Sign in to your workspace')).toBeGreaterThanOrEqual(0)
-    expect(heading.indexOf('Sign in to your workspace')).toBeLessThan(heading.indexOf('Choose an account'))
+    expect(d.textContent).toContain('Sign in to your workspace')
+    // The form leads the dialog: its email input is the first input in the window.
+    const inputs = Array.from(d.querySelectorAll('input'))
+    expect(inputs.length).toBeGreaterThan(0)
+    expect(inputs[0]).toBe(one<HTMLInputElement>(d, 'input[type="email"]'))
+    expect(inputs).toContain(pw)
+    expect(d.querySelectorAll('[data-testid="persona-picker"]').length).toBe(0)
+    expect(d.querySelectorAll('[data-persona]').length).toBe(0)
+    expect(d.textContent).not.toContain('or explore with a demo profile')
 
     await act(async () => root.unmount())
     root = createRoot(container)
@@ -150,11 +150,11 @@ describe('AC-1: the form sits in the modal only when configured', () => {
       root.render(createElement(SignInModal, { onClose: vi.fn(), heldState: () => STATE }))
     })
     d = one<HTMLElement>(document, '[role="dialog"]')
-    expect(d.querySelectorAll('[data-persona]').length).toBe(4)
-    expect(d.textContent).toContain('Choose an account')
+    expect(d.textContent).toContain('Sign in to your workspace')
     expect(d.querySelectorAll('input').length).toBe(0)
     expect(d.querySelectorAll('form').length).toBe(0)
-    expect(d.textContent).not.toContain('Sign in to your workspace')
+    expect(d.querySelectorAll('[data-testid="persona-picker"]').length).toBe(0)
+    expect(d.textContent).not.toContain('Choose an account')
     expect(d.textContent).not.toContain('or explore with a demo profile')
     expect(consoleError).not.toHaveBeenCalled()
   })
@@ -174,6 +174,23 @@ describe('AC-2: the held state', () => {
       buttons[0].click()
     })
     expect(locationStub.href).toBe('https://app.x?auth=start')
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('continueWithEmail_bouncesThroughTheHeldConsole', async () => {
+    configure()
+    vi.stubEnv('VITE_SUPPORT_URL', 'https://support.x/')
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await mountForm(null, undefined, 'support')
+    const buttons = Array.from(container.querySelectorAll('button'))
+    expect(buttons.length).toBe(1)
+    expect(buttons[0].textContent?.trim()).toBe('Continue with email')
+    await act(async () => {
+      buttons[0].click()
+    })
+    expect(locationStub.href).toBe('https://support.x?auth=start')
     expect(fetchMock).not.toHaveBeenCalled()
     expect(consoleError).not.toHaveBeenCalled()
   })

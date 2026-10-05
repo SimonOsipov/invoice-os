@@ -54,14 +54,16 @@ to the ungated core with the tenant set and no membership read
 no identity, or with a malformed tenant id, is refused with `db.ErrNoTenant` before any
 statement is issued at all (`TestRLS_RequestSeamIssuesNoStatementForAMalformedRequest`).
 
-**Why this is not a hole.** Over HTTP the arm above can never fire. `Verifier.validate`
-rejects any token whose `sub` claim is not a
-well-formed uuid with `ErrUnauthorized` — a 401 at token verification, before an `Identity` is
-ever built, let alone reaches this seam. The only way to reach this arm at all is to construct
-an `auth.Identity` by hand, in-process — exactly what §8.1's operator CLIs and boot-time seeders
-do, on purpose, for callers the network never produced. So the arm is a worker/CLI boundary, not
-read-path coverage this gate is failing to provide, and AUDIT-12 leaves it exactly as AUDIT-10
-wrote it.
+**Why this is not a hole.** Over HTTP the arm above does not fire. A context service builds
+its `Identity` in `identityMiddleware` from the gateway's headers, and for an empty or non-uuid
+`X-User-ID` it builds no identity and no tenant-less caller
+(`TestIdentityMiddleware_NonUUIDSubjectBuildsNoIdentity`,
+`TestIdentityMiddleware_EmptySubjectWithTenantBuildsNoIdentity`), so the seam refuses the
+request with `db.ErrNoTenant`. The arm serves only callers that construct an `auth.Identity` by
+hand, in-process: the extraction worker, `backfill-source-rows`, `revalidate-rule-set`, and
+§8.1's operator CLIs and boot-time seeders, on purpose, for callers the network never produced.
+So the arm is a worker/CLI boundary, not read-path coverage this gate is failing to provide,
+and AUDIT-12 leaves it exactly as AUDIT-10 wrote it.
 
 ## 2. The three-way refusal, and why 403 is not 401
 
@@ -193,7 +195,7 @@ tests across 12 packages** — the same 9 above, plus `internal/archive`, `inter
 `internal/validation`, whose fixtures build callers with `Subject: "system"`. 800/12 sits within
 3 tests and 1 package of AUDIT-10's 797/11; the small remaining gap is later commits, not a
 different rule. **723 across 9 is the cost of the rule this story actually ships**, and it is
-why `tenant.go:59`'s non-uuid arm (§1.1) stays exactly as AUDIT-10 wrote it: refusing that arm
+why `tenant.go:61`'s non-uuid arm (§1.1) stays exactly as AUDIT-10 wrote it: refusing that arm
 too buys nothing reachable over HTTP for +77 tests and +3 packages.
 
 ## 6. The gate is not free: +12 to +42 µs/op
@@ -249,7 +251,7 @@ fragile part of it.
 ## 8. The endpoint table — every route, covered or exempt
 
 **`covered` is structural, not per-route inspection.** Scans 1 and 2 (§9) make the gated seam a
-monopoly: outside eight named files and one named func, nothing in `internal/` **or `cmd/`** can
+monopoly: outside the exemptions named in `scPoolAllowlist`, nothing in `internal/` **or `cmd/`** can
 obtain a database handle at all, and the only callers allowed to reach the identity-free core
 are workers, boot-time seeders, two operator CLIs, `GET /v1/me` and `POST /v1/workspaces`. Every route that touches
 tenant data is therefore gated by construction, and `covered` records that. `exempt` rows each
@@ -267,6 +269,8 @@ predicates it would previously have hit inside the transaction.
 | `GET /healthz/fleet` | gateway | exempt | fleet roll-up across services, deliberately outside the verifier |
 | `POST /auth/login` | gateway | exempt | unauthenticated by definition; there is no caller yet to hold a membership |
 | `OPTIONS /auth/login` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
+| `POST /auth/mock/staff` | gateway | exempt | mock builds only; grants staff on the owner DSN for the E2E fork, with no caller identity |
+| `POST /auth/mock/member` | gateway | exempt | mock builds only; grants a tenant membership on the owner DSN for the E2E fork, with no caller identity |
 | `POST /auth/sign-in` | gateway | exempt | no database; calls GoTrue |
 | `OPTIONS /auth/sign-in` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `POST /auth/exchange` | gateway | exempt | no database; in-process code store |
@@ -276,12 +280,18 @@ predicates it would previously have hit inside the transaction.
 | `POST /auth/sign-out` | gateway | exempt | no database; calls GoTrue |
 | `OPTIONS /auth/sign-out` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `POST /auth/register` | gateway | exempt | no database; calls GoTrue |
+| `OPTIONS /auth/register` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `GET /auth/verify` | gateway | exempt | no database; calls GoTrue |
+| `POST /contacts/demo-request` | gateway | exempt | no database; hands the form to notifications |
+| `OPTIONS /contacts/demo-request` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `GET /.well-known/jwks.json` | gateway | exempt | serves the public verification keys; unauthenticated by design |
-| `/api/` | gateway | exempt | the proxy mount, not an endpoint — it forwards to the seven services whose own routes are listed here |
+| `/api/` | gateway | exempt | the proxy mount, not an endpoint — it forwards to the seven services |
 | `GET /v1/me` | tenancy | exempt | §4 — the SPA's boot round trip; gating it would make the 403 unreachable |
 | `POST /v1/workspaces` | tenancy | exempt | the caller has no membership yet (AC-5) |
 | `POST /v1/validate/batch` | validation | exempt | `S2SMiddleware` peer call with no caller identity by construction, and the gateway strips any client-supplied `X-S2S-Token` (`internal/gateway/gateway.go`, `injectIdentity`) |
+| `POST /internal/contacts/registrants` | notifications | exempt | gateway-token call with no caller; contacts carry no tenant, so a membership has nothing to gate |
+| `POST /internal/contacts/demo-requests` | notifications | exempt | same, and a request carrying `X-User-ID` is refused 404 |
+| `GET /v1/contacts/me` | notifications | exempt | reads the caller's own contact by the token's email; contacts carry no tenant |
 | `GET /v1/memberships` | tenancy | covered | |
 | `PATCH /v1/memberships/{user_id}` | tenancy | covered | |
 | `GET /v1/entities` | portfolio | covered | |
@@ -291,7 +301,7 @@ predicates it would previously have hit inside the transaction.
 | `POST /v1/entities/{id}/offboard` | portfolio | covered | |
 | `POST /v1/entities/{id}/onboard` | portfolio | covered | |
 | `GET /v1/rollup` | dashboard | covered | |
-| `PATCH /v1/rules/{key}` | validation | covered | |
+| `PATCH /v1/rules/{key}` | validation | exempt | refuses every caller with 403 and reaches no database (AUTH-12) |
 | `GET /v1/invoices` | invoice | covered | |
 | `POST /v1/invoices` | invoice | covered | |
 | `GET /v1/invoices/{id}` | invoice | covered | |
@@ -341,7 +351,7 @@ predicates it would previously have hit inside the transaction.
 | `POST /v1/extractions/{id}/fields/{name}/corrections` | submission | covered | |
 | `POST /v1/extractions/{id}/line-items` | submission | covered | |
 
-79 distinct routes, 85 registrations (`GET /v1/ping` is registered once per service).
+87 distinct routes, 93 registrations (`GET /v1/ping` is registered once per service).
 
 ### 8.1 The non-HTTP callers, so nobody looks for them above
 
@@ -372,7 +382,7 @@ it", so a stale exemption cannot outlive its reason.
 
 | Guard | What it asserts | Needles | Floor (measured at AUDIT-10-04) |
 |---|---|---|---|
-| `TestRLS_NoDirectPoolUseOutsideTheSeam` | **no database handle is acquired outside eight named files and one named func**: no pool method on a `*pgxpool.Pool`-typed name, and no `pgx.Connect`, `pgxpool.New`, `pgconn.Connect` or `sql.Open` off a DSN | a fixture holding both `r.ReaderPool.Query(...)` and `r.URL.Query()` must find **exactly 1**; a bare pool parameter; a non-database method; an aliased local; all three DSN entry points; a renamed import; an acquisition inside a func literal, attributed to the literal | ≥130 files walked (139); ≥4 pool-typed names (4); ≥9 sites across ≥8 files (10 across 9) |
+| `TestRLS_NoDirectPoolUseOutsideTheSeam` | **no database handle is acquired outside the `scPoolAllowlist` entries**: no pool method on a `*pgxpool.Pool`-typed name, and no `pgx.Connect`, `pgxpool.New`, `pgconn.Connect` or `sql.Open` off a DSN | a fixture holding both `r.ReaderPool.Query(...)` and `r.URL.Query()` must find **exactly 1**; a bare pool parameter; a non-database method; an aliased local; all three DSN entry points; a renamed import; an acquisition inside a func literal, attributed to the literal | ≥130 files walked (139); ≥4 pool-typed names (4); ≥9 sites across ≥8 files (10 across 9) |
 | `TestRLS_UngatedCoreIsWorkerAndExemptionOnly` | every call of the identity-free `db.WithinTenantTx`/`Opts` is a worker, a boot-time seeder, an operator CLI, or `tenancy` func `Me` or `ProvisionWorkspace` | a call in a named func; a doc comment naming the seam (0 sites); a call inside a func literal, attributed to the literal | ≥130 files walked (139); ≥12 sites across ≥6 packages (14 across 7) |
 | `TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute` | every `app.Mux` route in `cmd/*/main.go` and `internal/platform/server.go` has a row in §8 with a verdict, and no row classifies a route nobody registers | a const-indirected route resolves; an unresolvable argument fails loudly; a verdict cell must read exactly `covered` or `exempt`; a longer path cannot answer for a shorter one | ≥8 roots yielding routes (9); ≥55 registrations (63) |
 | `TestRLS_ReadPathSuspensionDocHasNoStaleNarrowRuleClaim` | this page carries no sentence still asserting AUDIT-10's narrow rule (§5) | a fixture planting both stale phrases must be flagged; a fixture holding only the legitimate active-row line must not | this file parses to ≥10 top-level (`## `) section headings |
@@ -484,14 +494,12 @@ and is already recorded in `audit-log-read-contract.md` §10.7. Not AUDIT-10's, 
 here.
 
 **11.4 Whether an `e2e/api` spec can mint a token for a suspended subject in a PR
-environment. SETTLED — it can.** `platform.Posture()` maps a `pr-<N>` environment name to
-`PosturePreview`, and `MockLoginHandler` consults its persona allowlist only under
-`PostureHosted`, so the triple is never matched. That is not only a code reading:
-`contract-tenancy.spec.ts` already mints a random-UUID tenant and a tenant-A token for persona
-B's subject — neither triple is in `loginPersonas` — and both are green in this job.
-`e2e/api/suspension.spec.ts` is the deployed proof of §2 that rides on it, and it does not
-rely on minting alone: it also suspends and reactivates a live membership mid-spec, which
-holds under either posture.
+environment. SETTLED — it can.** `MockLoginHandler` keeps no allowlist and ignores the
+environment name, so it mints for any triple. That is not only a code reading:
+`contract-tenancy.spec.ts` already mints a random-UUID tenant and a tenant-A token for
+persona B's subject, and both are green in this job. `e2e/api/suspension.spec.ts` is the
+deployed proof of §2 that rides on it, and it does not rely on minting alone: it also
+suspends and reactivates a live membership mid-spec.
 
 **11.5 The demo seed un-suspends on every boot.** `docs/demo-reset.md` §103 records that the
 `memberships` seed converges identity and status at each boot. That was harmless when

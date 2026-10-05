@@ -9,6 +9,8 @@ node_modules
 **/node_modules
 frontend
 packages
+!packages/design-tokens/v2/assets/mark.png
+!packages/design-tokens/v2/assets/embed.go
 package.json
 pnpm-lock.yaml
 pnpm-workspace.yaml

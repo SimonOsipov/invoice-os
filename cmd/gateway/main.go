@@ -155,6 +155,14 @@ func main() {
 	// operational, not tenant data.
 	app.Mux.HandleFunc("GET /healthz/fleet", fleetHandler)
 
+	// Public account-mail template and logo for GoTrue and mail clients; static, no CORS.
+	confirmationMail, err := gateway.MailTemplate("confirmation")
+	if err != nil {
+		platform.Fatal(app.Logger, "gateway: account mail: %v", err)
+	}
+	app.Mux.Handle("GET /emails/confirmation.html", confirmationMail)
+	app.Mux.Handle("GET /emails/mark.png", gateway.MailLogo())
+
 	// One sink for both hand-off paths; the sink bounds each call and never follows a redirect.
 	sink := gateway.NewHTTPContactSink(routed["notifications"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
 

@@ -5440,6 +5440,10 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
       baselines[leg] = { at1440, sweep }
     })
   }
+  await testInfo.attach('pdf-render.json', {
+    body: JSON.stringify({ pdfViewerEnabled: await page.evaluate(() => navigator.pdfViewerEnabled), observed: observed.pdf }, null, 2),
+    contentType: 'application/json',
+  })
   await testInfo.attach('fact-baselines.json', { body: JSON.stringify(baselines, null, 2), contentType: 'application/json' })
 
   await testInfo.attach('documentPreviewer.md', {
@@ -5534,6 +5538,8 @@ const DV_PROPS = [
   'font-weight',
   'font-size',
   'backdrop-filter',
+  'opacity',
+  'cursor',
 ]
 const DV_CORNERS = DV_PROPS.slice(0, 4)
 
@@ -5788,6 +5794,8 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
         failedNode: failedNodes.first().locator('span[aria-hidden="true"]').first(),
         badge: detail.getByTestId('invoice-status-badge'),
         submit: page.getByTestId('detail-submit'),
+        approve: page.getByTestId('detail-approve'),
+        edit: page.getByTestId('edit-toggle'),
         resolve,
         readOnly: page.getByTestId('invoice-activity').getByText('READ ONLY', { exact: true }),
         h1: detail.locator('h1'),
@@ -5799,9 +5807,22 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
           railCards: { of: 'rail', sel: ':scope > *' },
           clusterButtons: { of: 'actions', sel: 'button' },
         },
+        tokens: ['--primary', '--primary-foreground'],
       },
     )
     const t = read.targets
+    const disabledButtons = {
+      approve: page.getByTestId('detail-approve'),
+      edit: page.getByTestId('edit-toggle'),
+      submit: page.getByTestId('detail-submit'),
+    }
+    for (const [name, loc] of Object.entries(disabledButtons) as [keyof typeof disabledButtons, Locator][]) {
+      await expect(loc, `AC 4: ${name} is disabled`).toBeDisabled()
+      expect(t[name].style.opacity, `AC 4: ${name} opacity`).toBe('0.45')
+      expect(t[name].style.cursor, `AC 4: ${name} cursor`).toBe('not-allowed')
+      expect(t[name].style['background-color'], `AC 4: ${name} background is --primary`).toBe(read.tokens['--primary'])
+      expect(t[name].style.color, `AC 4: ${name} colour is --primary-foreground`).toBe(read.tokens['--primary-foreground'])
+    }
     // Pins: these hold at head already and are read to keep them held.
     for (const name of ['compliance', 'deadEnd', 'activity'] as const) {
       dvExpectCorners(t[name], '6px', `pin: ${name}`)
@@ -5941,6 +5962,26 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
     expect(record.targets.plate.style['background-color'], 'QR plate background').toBe('rgb(255, 255, 255)')
     expect(record.targets.plate.style['border-top-width'], 'QR plate border-top-width').toBe('1px')
 
+    const uCard = await dvRead(page, {
+      card: page.getByTestId('ubl-document-card'),
+      name: page.getByTestId('ubl-card-filename'),
+    })
+    const uGeo = await page.evaluate(() => {
+      const body = document.querySelector('[data-testid="ubl-document-card"]') as HTMLElement
+      const name = document.querySelector('[data-testid="ubl-card-filename"]') as HTMLElement
+      return {
+        firstIsName: body.firstElementChild === name,
+        strays: [...body.querySelectorAll('svg')].filter((s) => !s.closest('button')).length,
+        paddingLeft: parseFloat(getComputedStyle(body).paddingLeft),
+      }
+    })
+    expect(uGeo.firstIsName, 'AC 1: the filename is the first element child of the UBL card').toBe(true)
+    expect(uGeo.strays, 'AC 1: no svg outside a button in the UBL card').toBe(0)
+    expect(
+      Math.abs(uCard.targets.name.rect.x - (uCard.targets.card.rect.x + uGeo.paddingLeft)),
+      'AC 1: the filename starts at the card content edge',
+    ).toBeLessThanOrEqual(1)
+
     await page.getByTestId('ubl-card-view').click()
     const dialog = page.getByRole('dialog', { name: 'UBL 2.1 document' })
     await expect(dialog).toBeVisible()
@@ -5955,6 +5996,11 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
     dvExpectCorners(m.dialog, '10px', 'UBL dialog')
     expect(m.dialog.style['box-shadow'], 'UBL dialog shadow').toBe(SHADOW_CARD)
     dvExpectScrim(m.scrim, 'UBL modal')
+    expect(Math.abs(m.dialog.rect.width - 760), 'AC 5: the XML panel is 760px wide at 1440').toBeLessThanOrEqual(0.5)
+    const vp = page.viewportSize()!
+    expect(enclosesRect({ x: 0, y: 0, width: vp.width, height: vp.height }, m.dialog.rect, 1), 'AC 5: the XML panel lies inside the viewport').toBe(true)
+    const gapRight = vp.width - (m.dialog.rect.x + m.dialog.rect.width)
+    expect(Math.abs(m.dialog.rect.x - gapRight), 'AC 5: the XML panel is centred').toBeLessThanOrEqual(1)
     expect(enclosesRect(m.dialog.rect, m.close.rect, 1), 'close lies inside the panel').toBe(true)
     expect(enclosesRect(m.dialog.rect, m.download.rect, 1), 'Download lies inside the panel').toBe(true)
     expect(rectsOverlap(m.close.rect, m.download.rect), 'close and Download do not overlap').toBe(false)

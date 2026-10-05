@@ -508,9 +508,34 @@ describe('the drawer shell and bands', () => {
   it('the access-role radios are painted by the design, not by the browser default', () => {
     open()
 
-    const radio = screen.getByTestId('drawer-role-preparer').querySelector('input') as HTMLInputElement
-    expect(radio.style.appearance).toBe('none')
-    expect(radio.style.width).toBe('15px')
+    const radios = ['admin', 'preparer', 'reviewer'].map((id) => screen.getByTestId(`drawer-role-${id}`).querySelector('input') as HTMLInputElement)
+    expect(radios.map((r) => r.checked)).toEqual([false, true, false])
+    for (const radio of radios) {
+      expect(radio.style.appearance).toBe('none')
+      expect(radio.style.width).toBe('15px')
+      expect(radio.style.height).toBe('15px')
+    }
+    expect(radios[1].style.border).toBe('1.5px solid var(--action)')
+    expect(radios[1].style.background).toContain('radial-gradient(circle, var(--action)')
+    expect(radios[0].style.border).toBe('1.5px solid var(--line-3)')
+    expect(radios[0].style.background).toBe('transparent')
+  })
+
+  it('the Client access scope radios share that paint and sit flush in their cards', () => {
+    open({ mode: 'firm' })
+
+    const all = screen.getByTestId('drawer-scope-all').querySelector('input') as HTMLInputElement
+    const selected = screen.getByTestId('drawer-scope-selected').querySelector('input') as HTMLInputElement
+    expect([all.checked, selected.checked]).toEqual([true, false])
+    for (const radio of [all, selected]) {
+      expect(radio.style.appearance).toBe('none')
+      expect(radio.style.width).toBe('15px')
+      expect(radio.style.marginLeft, 'the browser default 5px margin pushes the ring off the card padding').toBe('0px')
+      expect(radio.style.marginRight).toBe('0px')
+      expect(radio.style.marginTop).toBe('0px')
+    }
+    expect(all.style.border).toBe('1.5px solid var(--action)')
+    expect(selected.style.border).toBe('1.5px solid var(--line-3)')
   })
 
   it('the workflow pills are 32px with the held one tinted', () => {
@@ -543,6 +568,10 @@ describe('the drawer shell and bands', () => {
     expect(dims.length, 'nothing above the Client access pair dims it').toBeGreaterThan(0)
     expect(Math.min(...dims)).toBeGreaterThanOrEqual(0.45)
     expect(Math.max(...dims)).toBeLessThanOrEqual(0.7)
+    const dimmed = screen.getByTestId('drawer-scope-all').closest('fieldset') as HTMLElement
+    expect(dimmed.style.opacity).toBe('0.45')
+    expect(dimmed.style.cursor).toBe('not-allowed')
+    expect(dimmed.style.filter).toBe('none')
   })
 
   it('in-house leaves the Department select to its own disabled paint', () => {

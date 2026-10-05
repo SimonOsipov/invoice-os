@@ -364,3 +364,39 @@ describe('the status-error strip', () => {
     expect(strips[0].previousElementSibling).toBe(screen.getByText('Bo Active').closest('[data-testid="member-row"]'))
   })
 })
+
+describe('the room reserved under an open menu', () => {
+  // 205px is the tallest menu's overhang below the card, measured in Chromium; layout is not
+  // observable in jsdom, so the reserved padding is the only handle.
+  const scroller = () => screen.getByTestId('members-table').parentElement as HTMLElement
+
+  it('reserves the measured overhang plus a small margin while a menu is open, and nothing when closed', () => {
+    renderRows(ROSTER())
+    expect(scroller().style.paddingBottom).toBe('0px')
+
+    fireEvent.click(rowOf('Cy Invited').getByTestId('member-menu-trigger'))
+
+    const reserved = parseFloat(scroller().style.paddingBottom)
+    expect(reserved).toBeGreaterThanOrEqual(205)
+    expect(reserved, 'over-reserving leaves a visible gap under the card').toBeLessThanOrEqual(220)
+
+    fireEvent.click(rowOf('Cy Invited').getByTestId('member-menu-trigger'))
+    expect(scroller().style.paddingBottom).toBe('0px')
+  })
+
+  it('releases the room when a filter removes the row whose menu was open', () => {
+    const all = ROSTER()
+    const { rerender } = render(
+      <MembersTable ctx={ctxWith({ members: all })} rows={all} policies={[]} roles={[]} onOpen={vi.fn()} onStatus={vi.fn()} statusError={null} />,
+    )
+    fireEvent.click(rowOf('Cy Invited').getByTestId('member-menu-trigger'))
+    expect(parseFloat(scroller().style.paddingBottom)).toBeGreaterThan(0)
+
+    rerender(
+      <MembersTable ctx={ctxWith({ members: all })} rows={all.slice(0, 2)} policies={[]} roles={[]} onOpen={vi.fn()} onStatus={vi.fn()} statusError={null} />,
+    )
+
+    expect(screen.queryByText('Cy Invited')).toBeNull()
+    expect(scroller().style.paddingBottom).toBe('0px')
+  })
+})

@@ -348,7 +348,7 @@ export function ClientAccessPicker({ value, onChange, idPrefix }: {
               // Toggling back to `All clients` KEEPS the ticked set — `ids` is carried
               // through untouched, so switching back re-emits exactly what was ticked.
               onChange={() => pick(s, ids)}
-              style={radioPaint(scope === s)}
+              style={{ ...radioPaint(scope === s), margin: 0 }}
             />
             {s === 'all' ? 'All clients' : 'Selected clients'}
           </label>

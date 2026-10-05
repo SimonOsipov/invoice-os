@@ -17,6 +17,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { PickedFile } from '../lib/importRun'
 import type { PlatformCtx } from '../types'
+import { capRefusal } from '../lib/importRun'
+import { MAX_UPLOAD_BYTES } from '../lib/importFlow'
 import { AMBER_COPY, CreateUpload } from './CreateUpload'
 
 const UNSUPPORTED_NOTE = /Unsupported file type/i
@@ -333,5 +335,153 @@ describe('CreateUpload — the amber panel copy (AUTH-10-04)', () => {
     expect(container.textContent).not.toContain(AMBER_COPY.title[mode])
     expect(container.textContent).not.toContain(AMBER_COPY.body)
     expect(container.textContent).not.toContain(AMBER_COPY.footnote)
+  })
+})
+
+// RESKIN2-04-01: the v2 look of the upload card. Inline styles are the oracle; jsdom
+// resolves no stylesheet, so a class-driven value would not show here.
+describe('CreateUpload — the v2 card, accepted line and primary (RESKIN2-04-01)', () => {
+  beforeEach(() => {
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gateway.test')
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    cleanup()
+  })
+
+  function extractButton(container: HTMLElement): HTMLButtonElement {
+    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>('button.v2-btn-primary'))
+    expect(buttons, 'the primary did not render').toHaveLength(1)
+    expect(buttons[0].textContent).toContain('Extract invoices')
+    return buttons[0]
+  }
+
+  function noteP(container: HTMLElement, text: RegExp): HTMLElement {
+    const ps = Array.from(container.querySelectorAll<HTMLElement>('p')).filter((p) => text.test(p.textContent ?? ''))
+    expect(ps, `no paragraph matched ${text}`).toHaveLength(1)
+    return ps[0]
+  }
+
+  it('the upload card header follows the prototype', () => {
+    const { container } = render(<CreateUpload ctx={uploadCtx([])} />)
+    const titles = container.querySelectorAll<HTMLElement>('.card-title')
+    expect(titles).toHaveLength(1)
+    expect(titles[0].textContent).toContain('Import invoices')
+    expect(titles[0].style.fontSize).toBe('15px')
+    expect((titles[0].parentElement as HTMLElement).style.gap).toBe('12px')
+  })
+
+  it('the accepted-types line is enabled text', () => {
+    const { container } = render(<CreateUpload ctx={uploadCtx([])} />)
+    const spans = Array.from(container.querySelectorAll<HTMLElement>('span')).filter(
+      (s) => (s.textContent ?? '').trim() === 'ACCEPTED · CSV · XLSX · PDF · DOCX',
+    )
+    expect(spans).toHaveLength(1)
+    expect(spans[0].style.color).toBe('var(--fg-3)')
+  })
+
+  it('Extract invoices wears the v2 primary', () => {
+    const { container } = render(<CreateUpload ctx={uploadCtx([picked('scan.pdf', 'application/pdf')])} />)
+    const b = extractButton(container)
+    expect(b.disabled).toBe(false)
+    expect(b.style.background).toBe('var(--action)')
+    expect(b.style.color).toBe('var(--primary-foreground)')
+    expect(b.style.opacity).toBe('')
+    expect(b.style.filter).toBe('')
+  })
+
+  it('a refused file dims Extract invoices (#114)', () => {
+    // pdf first fixes the run kind, so the jpg is the refused one and the label stays Extract.
+    const ctx = uploadCtx([picked('scan.pdf', 'application/pdf'), picked('photo.jpg', 'image/jpeg')])
+    const { container } = render(<CreateUpload ctx={ctx} />)
+    const b = extractButton(container)
+    expect(b.disabled).toBe(true)
+    expect(b.style.background).toBe('var(--action)')
+    expect(b.style.opacity).toBe('0.45')
+    expect(b.style.cursor).toBe('not-allowed')
+    expect(b.style.filter).toBe('none')
+    const note = noteP(container, UNSUPPORTED_NOTE)
+    expect(note.style.fontSize).toBe('11.5px')
+    expect(note.style.color).toBe('var(--status-red-text)')
+  })
+
+  it('with no gateway base a ready spreadsheet run is disabled and dimmed', () => {
+    vi.stubEnv('VITE_GATEWAY_URL', '')
+    const { container } = render(<CreateUpload ctx={uploadCtx([picked('ledger.csv', 'text/csv')])} />)
+    const b = container.querySelector('button.v2-btn-primary') as HTMLButtonElement
+    expect(b, 'the primary did not render').not.toBeNull()
+    expect(b.textContent).toContain('Read columns')
+    expect(b.disabled).toBe(true)
+    expect(b.style.opacity).toBe('0.45')
+    expect(b.style.cursor).toBe('not-allowed')
+  })
+
+  it('the oversize note keeps the red note recipe', () => {
+    const big = new File([], 'big.csv', { type: 'text/csv' })
+    Object.defineProperty(big, 'size', { value: 16 * 1024 * 1024 })
+    expect(big.size).toBeGreaterThan(MAX_UPLOAD_BYTES)
+    const { container } = render(<CreateUpload ctx={uploadCtx([{ id: 'pf-big', file: big, documentId: null }])} />)
+    const note = noteP(container, /over the/)
+    expect(note.style.fontSize).toBe('11.5px')
+    expect(note.style.color).toBe('var(--status-red-text)')
+  })
+
+  it('six files: the cap refusal keeps the amber recipe', () => {
+    const five = ['a', 'b', 'c', 'd', 'e'].map((n) => picked(`${n}.pdf`, 'application/pdf'))
+    const ctx = { ...uploadCtx(five), filesRefusal: capRefusal(1) } as unknown as PlatformCtx
+    const { container } = render(<CreateUpload ctx={ctx} />)
+    const note = noteP(container, /A run accepts at most/)
+    expect(note.style.fontSize).toBe('12.5px')
+    expect(note.style.color).toBe('var(--status-amber-text)')
+  })
+
+  it('the no-company upload keeps its amber panel and dims Extract', () => {
+    // One case with a PDF (label Extract invoices), one with no file (label Read columns).
+    for (const files of [[picked('scan.pdf', 'application/pdf')], []]) {
+      const ctx = { ...noEntityCtx('firm', vi.fn(), vi.fn()), pickedFiles: files } as unknown as PlatformCtx
+      const { container, unmount } = render(<CreateUpload ctx={ctx} />)
+      const panel = amberPanel(container)
+      expect((panel.firstElementChild as HTMLElement).textContent).toBe('Add a client before you file')
+      expect(panel.style.background).toBe('var(--status-amber-bg)')
+      expect(panel.style.border).toBe('1px solid var(--status-amber-border)')
+      const b = container.querySelector('button.v2-btn-primary') as HTMLButtonElement
+      expect(b, 'the primary did not render').not.toBeNull()
+      expect(b.disabled).toBe(true)
+      expect(b.style.opacity, `files=${files.length}`).toBe('0.45')
+      expect(b.style.cursor, `files=${files.length}`).toBe('not-allowed')
+      expect(b.style.filter, `files=${files.length}`).toBe('none')
+      expect(b.style.background, `files=${files.length}`).toBe('var(--action)')
+      unmount()
+    }
+  })
+
+  it('Read columns wears the same primary: live for a spreadsheet, dimmed with no file or a mixed run', () => {
+    const button = (files: PickedFile[]) => {
+      const { container } = render(<CreateUpload ctx={uploadCtx(files)} />)
+      const b = container.querySelector('button.v2-btn-primary') as HTMLButtonElement
+      expect(b, 'the primary did not render').not.toBeNull()
+      expect(b.textContent).toContain('Read columns')
+      return b
+    }
+
+    const live = button([picked('ledger.csv', 'text/csv')])
+    expect(live.disabled).toBe(false)
+    expect(live.style.background).toBe('var(--action)')
+    expect(live.style.color).toBe('var(--primary-foreground)')
+    expect(live.style.opacity).toBe('')
+    expect(live.style.filter).toBe('')
+    cleanup()
+
+    // csv first fixes the run kind, so the pdf is the refused file.
+    const mixed = button([picked('ledger.csv', 'text/csv'), picked('scan.pdf', 'application/pdf')])
+    cleanup()
+    const none = button([])
+    for (const b of [mixed, none]) {
+      expect(b.disabled).toBe(true)
+      expect(b.style.background).toBe('var(--action)')
+      expect(b.style.opacity).toBe('0.45')
+      expect(b.style.cursor).toBe('not-allowed')
+      expect(b.style.filter).toBe('none')
+    }
   })
 })

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // Component tests for Row; mirrors InvoiceDetail.test.tsx's fetch-mock + ctx-cast idiom.
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
@@ -301,6 +301,7 @@ describe('ReviewRow row-expansion: an unevaluated invoice never renders as passi
 
     const expansion = screen.getByTestId('review-row-expansion')
     expect(expansion.querySelectorAll('.eyebrow')).toHaveLength(0)
+    expect(expansion.querySelectorAll('.label'), 'no section label on the not-validated arm').toHaveLength(0)
     expect(expansion.textContent).not.toContain('passed')
   })
 
@@ -375,9 +376,10 @@ describe('ReviewRow row-expansion: an unevaluated invoice never renders as passi
     const expansion = screen.getByTestId('review-row-expansion')
     expect(screen.queryByTestId('review-row-not-validated')).toBeNull()
     expect(screen.queryByTestId('review-row-passing')).toBeNull()
-    const eyebrows = expansion.querySelectorAll('.eyebrow')
-    expect(eyebrows).toHaveLength(1)
-    expect(eyebrows[0].textContent).toBe(ROW_EXPANSION_COPY.advisorySectionLabel)
+    const labels = expansion.querySelectorAll('.label')
+    expect(labels).toHaveLength(1)
+    expect(labels[0].textContent).toBe(ROW_EXPANSION_COPY.advisorySectionLabel)
+    expect(expansion.querySelectorAll('.eyebrow'), 'the section label moved to .label').toHaveLength(0)
     expect(expansion.textContent).toContain('Advisory only.')
     expect(expansion.textContent).not.toContain('passed')
   })
@@ -920,3 +922,367 @@ function mockRegisterFetch(invoices: InvoiceRecord[]) {
   const body: InvoiceListResponse = { invoices, pagination: { limit: 50, offset: 0, total: invoices.length } }
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve(body) }))
 }
+
+// RESKIN2-04-04: the review prototype's row, verdict and expansion values (D-15, D-16, D-44).
+describe('ReviewRow: the review prototype look (RESKIN2-04-04)', () => {
+  const ERR = { rule_key: 'buyer-tin-required', severity: 'error' as const, message: 'Buyer TIN is required.', path: 'buyer.tin' }
+  const WARN = { rule_key: 'advisory-x', severity: 'warning' as const, message: 'Advisory only.', path: 'buyer.tin' }
+  const UNMAPPABLE = { rule_key: 'line-items-required', severity: 'error' as const, message: 'At least one line item is required.', path: 'line_items' }
+  const PANEL_PADDING = '4px 18px 16px 54px'
+
+  function failing(over: Partial<InvoiceDetailRecord> = {}) {
+    return detailFixture({ status: 'failed', violations: [ERR], rule_set_version: 3, rule_set_version_id: 'rsv-3', ...over })
+  }
+
+  // Non-GET calls answer 500 with `mutationError`; GETs answer the detail record.
+  function stubDetail(detail: InvoiceDetailRecord, mutationError?: string) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url: string, init?: { method?: string }) => {
+        if ((init?.method ?? 'GET') !== 'GET') {
+          return Promise.resolve<MockResponse>({ ok: false, status: 500, json: () => Promise.resolve({ error: mutationError ?? 'boom' }) })
+        }
+        return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve(detail) })
+      }),
+    )
+  }
+
+  async function renderOpen(detail: InvoiceDetailRecord, mutationError?: string) {
+    stubDetail(detail, mutationError)
+    render(
+      <Row r={listRow({ status: detail.status })} batches={[]} checked={false} expanded onToggleExpand={() => {}} onToggle={() => {}} ctx={rowCtx()} base="https://gw" onChanged={() => {}} />,
+    )
+    return (await screen.findByTestId('review-revalidate')) as HTMLButtonElement
+  }
+
+  const styleOf = (el: Element) => (el as HTMLElement).style
+
+  it('the verdict pill is a 4px pill with no dot', () => {
+    const r = { status: 'failed' as const, violations: [ERR] }
+    renderRow(r)
+    const pill = screen.getByTestId('review-verdict').firstElementChild as HTMLElement
+
+    expect(pill.textContent, 'the first child is the status pill').toBe(verdictPill(r).status.label)
+    expect(pill.style.borderRadius).toBe('var(--radius-sm)')
+    expect(pill.style.fontSize).toBe('9px')
+    expect(pill.style.fontWeight).toBe('700')
+    expect(pill.style.letterSpacing).toBe('0.04em')
+    expect(pill.style.padding).toBe('2px 7px')
+    expect(pill.children, 'no dot or inner span').toHaveLength(0)
+    expect(pill.className).toContain('mono')
+  })
+
+  it('the rule badge is bare text', () => {
+    const r = {
+      status: 'failed' as const,
+      violations: [ERR, { rule_key: 'vat-standard-rate', severity: 'error' as const, message: 'bad rate' }],
+    }
+    renderRow(r)
+    const cell = screen.getByTestId('review-verdict')
+    const badge = cell.children[1] as HTMLElement
+    const expected = verdictPill(r).badges[0]
+
+    expect(expected.label, 'two failing rules').toBe('2 RULES FAILED')
+    expect(badge.textContent).toBe(expected.label)
+    expect(badge.style.border).toBe('')
+    expect(badge.style.background).toBe('')
+    expect(badge.style.fontSize).toBe('8.5px')
+    expect(badge.style.fontWeight).toBe('700')
+    expect(badge.style.letterSpacing).toBe('0.04em')
+    expect(badge.style.color).toBe(expected.tone.text)
+  })
+
+  it('row cells follow the prototype', async () => {
+    await renderOpen(failing())
+    const rowEl = screen.getByTestId('review-row')
+
+    expect(rowEl.style.background).toBe('var(--bg-1)')
+    expect(rowEl.style.gap, 'REVIEW_GRID_GAP').toBe('10px')
+    expect(styleOf(within(rowEl).getByText('INV-1')).fontWeight).toBe('600')
+    const buyer = within(rowEl).getByText('Beta Ltd')
+    expect(buyer.style.fontSize).toBe('13px')
+    expect(buyer.style.fontWeight, 'no inline weight').toBe('')
+    const tin = screen.getByTestId('buyer-tin')
+    expect(tin.style.display).toBe('block')
+    expect(tin.style.fontSize).toBe('10.5px')
+    const issueDate = rowEl.children[3] as HTMLElement
+    expect(issueDate.textContent, 'the 4th cell is the issue date').not.toBe('')
+    expect(issueDate.style.fontSize).toBe('11.5px')
+    expect(issueDate.style.color).toBe('var(--fg-2)')
+    expect(styleOf(rowEl.querySelector('.money') as Element).fontSize).toBe('13px')
+    const chevron = rowEl.lastElementChild as HTMLElement
+    expect(chevron.style.color).toBe('var(--fg-3)')
+    expect(chevron.style.transform).toBe('rotate(180deg)')
+
+    cleanup()
+    renderRow()
+    const collapsed = screen.getByTestId('review-row')
+    expect(collapsed.style.background, 'only an expanded row takes --bg-1').not.toBe('var(--bg-1)')
+    expect((collapsed.lastElementChild as HTMLElement).style.transform).toBe('none')
+    expect((collapsed.lastElementChild as HTMLElement).style.color).toBe('var(--fg-3)')
+  })
+
+  it('the row checkbox is 15px teal and a blocked one keeps its 0.5 dim', () => {
+    renderGateRow({ status: 'validated', can_submit: true })
+    const box = screen.getByTestId('review-select') as HTMLInputElement
+    expect(box.disabled).toBe(false)
+    expect(box.style.width).toBe('15px')
+    expect(box.style.height).toBe('15px')
+    expect(box.style.accentColor).toBe('var(--action)')
+    expect(box.style.opacity, 'an enabled box is not dimmed').toBe('')
+    cleanup()
+
+    renderGateRow({ status: 'draft', can_submit: false, submit_blocked_reason: SUBMIT_REASON.notValidated })
+    const blocked = screen.getByTestId('review-select') as HTMLInputElement
+    expect(blocked.disabled).toBe(true)
+    expect(blocked.style.width).toBe('15px')
+    expect(blocked.style.accentColor).toBe('var(--action)')
+    expect(blocked.style.opacity).toBe('0.5')
+    expect(blocked.style.cursor).toBe('not-allowed')
+  })
+
+  it('the expansion follows the prototype', async () => {
+    await renderOpen(failing())
+    const expansion = screen.getByTestId('review-row-expansion')
+    const card = screen.getByTestId('review-fix-card')
+    const pill = card.firstElementChild?.firstElementChild as HTMLElement
+    const input = screen.getByTestId('review-fix-input') as HTMLInputElement
+
+    expect(expansion.style.padding).toBe(PANEL_PADDING)
+    const sectionLabels = expansion.querySelectorAll('.label')
+    expect(sectionLabels, 'the section label is the only .label').toHaveLength(1)
+    expect(sectionLabels[0].textContent).toBe(ROW_EXPANSION_COPY.sectionLabel)
+    expect(expansion.querySelectorAll('.eyebrow')).toHaveLength(0)
+    expect(card.style.border).toBe('1px solid var(--status-red-border)')
+    expect(pill.textContent, 'the first head child is the severity pill').toBe('Error')
+    expect(pill.style.borderRadius).toBe('var(--radius-sm)')
+    expect(pill.children, 'no dot').toHaveLength(0)
+    expect(pill.style.fontSize).toBe('9px')
+    expect(pill.style.fontWeight).toBe('700')
+    expect(pill.style.letterSpacing).toBe('0.06em')
+    const fieldLabel = within(card).getByText('Buyer TIN')
+    expect(fieldLabel.classList.contains('label'), 'the field label is a plain div').toBe(false)
+    expect(input.style.maxWidth).toBe('240px')
+    expect(input.style.height).toBe('34px')
+    expect(input.style.fontSize).toBe('13px')
+    expect(input.style.fontFamily).toBe('var(--font-mono)')
+  })
+
+  it('actions are 34px', async () => {
+    const revalidate = await renderOpen(failing())
+    fireEvent.change(screen.getByTestId('review-fix-input'), { target: { value: '99999999-0001' } })
+    const save = await screen.findByTestId('review-fix-save')
+    const keep = screen.getByTestId('review-keep')
+    const reason = screen.getByTestId('review-keep-reason')
+
+    expect(styleOf(save).height).toBe('34px')
+    expect(styleOf(revalidate).height).toBe('34px')
+    expect(styleOf(keep).height).toBe('34px')
+    expect(styleOf(reason).minWidth).toBe('260px')
+    expect(styleOf(reason).maxWidth).toBe('460px')
+    expect(styleOf(reason).height).toBe('34px')
+  })
+
+  it('a blocked Re-validate dims (#114)', async () => {
+    const blocked = await renderOpen(failing({ can_revalidate: false, revalidate_blocked_reason: 'Re-validation is not available for this invoice.' }))
+
+    expect(blocked.disabled).toBe(true)
+    expect(blocked.style.opacity).toBe('0.45')
+    expect(blocked.style.cursor).toBe('not-allowed')
+    expect(blocked.style.background, 'inline rest fill so .v2-btn-ghost:hover cannot repaint').toBe('transparent')
+    cleanup()
+
+    const enabled = await renderOpen(failing())
+    expect(enabled.disabled).toBe(false)
+    expect(enabled.style.opacity, 'an enabled button is not dimmed').toBe('')
+    expect(enabled.style.background, 'hover stays live').toBe('')
+  })
+
+  it('a warning card takes its severity border', async () => {
+    await renderOpen(detailFixture({ status: 'draft', violations: [WARN], rule_set_version: 3, rule_set_version_id: 'rsv-3' }))
+    const card = screen.getByTestId('review-fix-card')
+
+    expect(card.style.border).toBe('1px solid var(--status-amber-border)')
+    expect(card.style.border).not.toBe('1px solid var(--status-red-border)')
+  })
+
+  it('the passing strip carries a tick and plain text', async () => {
+    await renderOpen(detailFixture({ status: 'validated', violations: [], rule_set_version: 3, rule_set_version_id: 'rsv-3' }))
+    const strip = screen.getByTestId('review-row-passing')
+    const tick = strip.querySelector('[aria-hidden]') as HTMLElement | null
+    const text = screen.getByText(/passed\.$/)
+
+    expect(strip.style.display).toBe('flex')
+    expect(strip.style.gap).toBe('10px')
+    expect(strip.style.background).toBe('var(--status-green-bg)')
+    expect(tick, 'an aria-hidden tick glyph').not.toBeNull()
+    expect(tick?.style.color).toBe('var(--status-green-text)')
+    expect(strip.contains(text)).toBe(true)
+    expect(text.style.fontSize).toBe('12.5px')
+    expect(text.style.color).toBe('var(--fg-2)')
+  })
+
+  it('the kept banner is the prototype shape', async () => {
+    await renderOpen(detailFixture({
+      status: 'draft',
+      violations: [ERR],
+      kept_as_is_at: '2026-07-30T00:00:00Z',
+      kept_as_is_by: 'someone',
+      kept_as_is_reason: 'Buyer confirmed the discrepancy is intentional.',
+    }))
+    const banner = screen.getByTestId('review-kept-banner')
+
+    expect(banner.style.padding).toBe('9px 12px')
+    expect(banner.style.borderRadius).toBe('var(--radius-md)')
+  })
+
+  it('loading and error expansions use the panel padding', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<MockResponse>(() => {})))
+    render(
+      <Row r={listRow()} batches={[]} checked={false} expanded onToggleExpand={() => {}} onToggle={() => {}} ctx={rowCtx()} base="https://gw" onChanged={() => {}} />,
+    )
+    const loading = screen.getByTestId('review-row-expansion')
+    expect(loading.textContent, 'the read is pending').toContain('Loading this invoice')
+    expect(loading.style.padding).toBe(PANEL_PADDING)
+    cleanup()
+
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve<MockResponse>({ ok: false, status: 500, json: () => Promise.resolve({ error: 'read boom' }) })))
+    render(
+      <Row r={listRow()} batches={[]} checked={false} expanded onToggleExpand={() => {}} onToggle={() => {}} ctx={rowCtx()} base="https://gw" onChanged={() => {}} />,
+    )
+    await screen.findByText('Something went wrong')
+    const errored = screen.getByTestId('review-row-expansion')
+    expect(errored.textContent).not.toContain('Loading this invoice')
+    expect(errored.style.padding).toBe(PANEL_PADDING)
+  })
+
+  it('the not-validated strip takes the passing strip\'s shape', async () => {
+    await renderOpen(detailFixture({ status: 'draft', violations: [], rule_set_version: null }))
+    const strip = screen.getByTestId('review-row-not-validated')
+
+    expect(strip.style.display).toBe('flex')
+    expect(strip.style.gap).toBe('10px')
+    expect(strip.style.background).toBe('var(--bg-3)')
+    expect(strip.style.border).toBe('1px solid var(--line-2)')
+    expect(strip.querySelector('[aria-hidden]'), 'no tick on this arm').toBeNull()
+  })
+
+  it('an unmappable card is an error card without an input', async () => {
+    await renderOpen(failing({ violations: [UNMAPPABLE] }))
+    const card = screen.getByTestId('review-fix-card')
+
+    expect(card.textContent).toContain(UNMAPPABLE.message)
+    expect(card.style.border).toBe('1px solid var(--status-red-border)')
+    expect(card.querySelector('[data-testid="review-fix-input"]')).toBeNull()
+  })
+
+  it('the revalidate reason stays the hint line (pin)', async () => {
+    await renderOpen(failing({ can_revalidate: false, revalidate_blocked_reason: 'Re-validation is not available for this invoice.' }))
+    const reason = screen.getByTestId('review-revalidate-reason')
+
+    expect(reason.textContent).toBe('Re-validation is not available for this invoice.')
+    expect(reason.style.fontSize).toBe('11.5px')
+    expect(reason.style.color).toBe('var(--fg-3)')
+  })
+
+  it('save, keep and revalidate errors take the banner shape in red', async () => {
+    const cases: Array<{ label: string; message: string; act: () => void }> = [
+      {
+        label: 'save',
+        message: 'save boom',
+        act: () => {
+          fireEvent.change(screen.getByTestId('review-fix-input'), { target: { value: '99999999-0001' } })
+          fireEvent.click(screen.getByTestId('review-fix-save'))
+        },
+      },
+      {
+        label: 'keep',
+        message: 'keep boom',
+        act: () => {
+          fireEvent.change(screen.getByTestId('review-keep-reason'), { target: { value: 'because' } })
+          fireEvent.click(screen.getByTestId('review-keep'))
+        },
+      },
+      { label: 'revalidate', message: 'revalidate boom', act: () => fireEvent.click(screen.getByTestId('review-revalidate')) },
+    ]
+
+    let checked = 0
+    for (const { label, message, act } of cases) {
+      await renderOpen(failing(), message)
+      act()
+      const box = await screen.findByText(message)
+
+      expect(box.style.padding, label).toBe('9px 12px')
+      expect(box.style.fontSize, label).toBe('12.5px')
+      expect(box.style.background, label).toBe('var(--status-red-bg)')
+      expect(box.style.borderRadius, label).toBe('var(--radius-md)')
+      cleanup()
+      checked += 1
+    }
+    expect(checked).toBe(3)
+  })
+  it('a fix card hint sits inline beside its input; an unmappable card keeps it as its own block', async () => {
+    await renderOpen(failing({ violations: [{ ...ERR, expected: '12345678-0001', actual: '123' }] }))
+    const input = screen.getByTestId('review-fix-input')
+    const hint = screen.getByTestId('review-fix-hint')
+    const row = input.parentElement as HTMLElement
+
+    expect(hint.textContent).toBe('Expected 12345678-0001 · got 123')
+    expect(hint.parentElement, 'the hint shares the input row').toBe(row)
+    expect(row.style.display).toBe('flex')
+    expect(row.style.gap).toBe('11px')
+    expect(row.style.flexWrap).toBe('wrap')
+    expect(hint.className).toContain('mono')
+    expect(hint.style.fontSize).toBe('10.5px')
+    expect(hint.style.color).toBe('var(--fg-3)')
+    cleanup()
+
+    await renderOpen(failing({ violations: [{ ...UNMAPPABLE, expected: '1', actual: '0' }] }))
+    const card = screen.getByTestId('review-fix-card')
+    const block = screen.getByTestId('review-fix-hint')
+    expect(card.querySelector('[data-testid="review-fix-input"]')).toBeNull()
+    expect(block.parentElement, 'no input to sit beside: the hint is a direct child of the card').toBe(card)
+    expect(block.style.fontSize).toBe('10.5px')
+  })
+
+  it('the section label sits 10px above the first card (margin plus flex gap)', async () => {
+    await renderOpen(failing())
+    const label = screen.getByTestId('review-row-expansion').querySelector('.label') as HTMLElement
+    const column = label.parentElement as HTMLElement
+    const card = screen.getByTestId('review-fix-card')
+
+    expect(column.contains(card), 'the label and the cards share one flex column').toBe(true)
+    expect(label.style.marginTop).toBe('12px')
+    expect(parseFloat(label.style.marginBottom) + parseFloat(column.style.gap), 'prototype: label margin-bottom 10 above the card list').toBe(10)
+  })
+
+  it('an info card takes the muted severity border', async () => {
+    await renderOpen(detailFixture({ status: 'draft', violations: [{ ...WARN, rule_key: 'note-x', severity: 'info' as const }], rule_set_version: 3, rule_set_version_id: 'rsv-3' }))
+    const card = screen.getByTestId('review-fix-card')
+
+    expect(card.style.border).toBe('1px solid var(--status-muted-border)')
+  })
+  it('the scope note line height is 1.5', async () => {
+    await renderOpen(failing())
+    const note = screen.getByTestId('review-row-note')
+
+    expect(note.textContent).not.toBe('')
+    expect(note.style.fontSize).toBe('11.5px')
+    expect(note.style.lineHeight).toBe('1.5')
+  })
+
+  it('the passing and not-validated strips take the prototype 12px 0 10px margin (bottom net of the 14px column gap)', async () => {
+    for (const [detail, id] of [
+      [detailFixture({ status: 'validated', violations: [], rule_set_version: 3, rule_set_version_id: 'rsv-3' }), 'review-row-passing'],
+      [detailFixture({ status: 'draft', violations: [] }), 'review-row-not-validated'],
+    ] as const) {
+      cleanup()
+      await renderOpen(detail)
+      const strip = screen.getByTestId(id)
+      const column = strip.parentElement as HTMLElement
+
+      expect(strip.style.marginTop, id).toBe('12px')
+      expect(parseFloat(strip.style.marginBottom) + parseFloat(column.style.gap), `${id}: prototype margin-bottom 10`).toBe(10)
+    }
+  })
+})

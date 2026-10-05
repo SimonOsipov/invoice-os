@@ -2832,4 +2832,32 @@ describe('RESKIN2-05-05 WB: the builder inspector and simulator', () => {
     expect(lines, 'three steps draw two connectors').toHaveLength(2)
     for (const line of lines) expect(line.style.borderRadius, 'a connector carries a corner').toBe('')
   })
+
+  it('WB-22 the select hints read 11px / 1.5; the resolved-role line keeps 11.5px / 1.45', () => {
+    const { unmount } = render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+    fireEvent.click(within(canvasPanel()).getByText(SIMPLE_TITLE))
+    const panel = inspectorPanel()
+
+    const reason = within(panel).getByTestId('delegation-blocked-reason')
+    expect(reason.style.fontSize, 'the delegation reason is not 11px').toBe('11px')
+    expect(reason.style.lineHeight, 'the delegation reason is not 1.5').toBe('1.5')
+    const note = control(within(panel).getByLabelText('Delegate to')).closest('div')?.lastElementChild as HTMLElement
+    expect(note, 'the delegate picker has a sibling hint').toBeTruthy()
+    expect(note.textContent, 'the located hint is the note, not the picker').toMatch(/Admins and Reviewers/)
+    expect(note.style.fontSize, 'the delegate note is not 11px').toBe('11px')
+    expect(note.style.lineHeight, 'the delegate note is not 1.5').toBe('1.5')
+
+    const resolved = within(panel).getByRole('button', { name: 'Manage roles' }).parentElement as HTMLElement
+    expect(resolved.firstElementChild?.textContent, 'control: the row leads with the resolved-role sentence').toBeTruthy()
+    expect(resolved.style.display, 'control: the resolved line is the flex row holding Manage roles').toBe('flex')
+    expect(resolved.style.fontSize, 'the resolved line is not 11.5px').toBe('11.5px')
+    expect(resolved.style.lineHeight, 'the resolved line is not 1.45').toBe('1.45')
+    unmount()
+
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={notifyPolicy()} />)
+    selectNotify()
+    const notify = within(inspectorPanel()).getByTestId('notify-not-delivered')
+    expect(notify.style.fontSize, 'the notify note is not 11px').toBe('11px')
+    expect(notify.style.lineHeight, 'the notify note is not 1.5').toBe('1.5')
+  })
 })

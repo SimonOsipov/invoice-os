@@ -824,6 +824,35 @@ async function readClientsState(page: Page, kind: Kind): Promise<Record<string, 
   return { corners, weight }
 }
 
+// The Reports rollup states draw inline in the Validation summary card: no card chrome, no 40px block padding.
+async function readRollupState(page: Page, kind: Kind): Promise<Record<string, unknown>> {
+  if (kind === 'loading') {
+    const row = page.getByText('Loading validation summary…', { exact: true })
+    const rowPad = await styles(row, ['padding-top', 'padding-bottom', 'gap'])
+    expect(rowPad['padding-top'], 'rollup loading row top padding').toBe('0px')
+    expect(rowPad['padding-bottom'], 'rollup loading row bottom padding').toBe('0px')
+    expect(rowPad.gap, 'rollup loading row gap').toBe('10px')
+    const spinner = row.locator('> span')
+    const s = await styles(spinner, ['width', 'height', 'border-top-left-radius', 'border-top-color', 'border-right-color', 'border-right-width', 'border-right-style', 'animation-name'])
+    expect(s.width, 'rollup spinner width').toBe('16px')
+    expect(s.height, 'rollup spinner height').toBe('16px')
+    expect(s['border-top-left-radius'], 'rollup spinner corner').toBe('50%')
+    expect(s['border-top-color'], 'rollup spinner arc colour').toBe(ACTION)
+    expect(`${s['border-right-width']} ${s['border-right-style']} ${s['border-right-color']}`, 'rollup spinner track').toBe(`2px solid ${LINE_2}`)
+    expect(s['animation-name'], 'rollup spinner animation').toBe('spin')
+    return { rowPad, spinner: s }
+  }
+  const title = page.getByText('Something went wrong', { exact: true })
+  const body = title.locator('xpath=..')
+  const paint = await styles(body, ['border-top-width', 'box-shadow', 'padding-top', 'padding-left', 'max-width'])
+  expect(paint['border-top-width'], 'rollup error draws no nested card border').toBe('0px')
+  expect(paint['box-shadow'], 'rollup error draws no nested card shadow').toBe('none')
+  expect(paint['padding-top'], 'rollup error sits at the summary card padding').toBe('18px')
+  expect(paint['padding-left'], 'rollup error sits at the summary card side padding').toBe('20px')
+  expect(paint['max-width'], 'rollup error has no 520px card width').toBe('none')
+  return { paint }
+}
+
 // The Workflows empty card: its message draws at 360 and sits inside the card.
 async function readWorkflowsEmpty(page: Page): Promise<Record<string, unknown>> {
   const empty = page.getByTestId('policies-empty')
@@ -879,7 +908,13 @@ for (const c of STATE_CASES) {
     await settle(page, main(page))
 
     const reading =
-      c.screen === 'Clients' ? await readClientsState(page, c.kind) : c.screen === 'Workflows' && c.kind === 'empty' ? await readWorkflowsEmpty(page) : {}
+      c.screen === 'Clients'
+        ? await readClientsState(page, c.kind)
+        : c.screen === 'Reports' && c.match === 'rollup'
+          ? await readRollupState(page, c.kind)
+          : c.screen === 'Workflows' && c.kind === 'empty'
+            ? await readWorkflowsEmpty(page)
+            : {}
     if (c.screen !== 'Workflows') {
       await expect(page.getByTestId('company-switcher'), `${c.name}: the stub reached the shell, so the switcher lost the entity`).toContainText(entity.name)
     }

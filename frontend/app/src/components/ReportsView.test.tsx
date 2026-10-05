@@ -769,7 +769,97 @@ describe('ReportsView: the v2 tax report (RESKIN2-05-02)', () => {
     await screen.findByRole('button', { name: /retry/i })
     const title = Array.from(container.querySelectorAll('span.card-title')).find((s) => s.textContent === 'Validation summary')
     const card = title?.parentElement?.parentElement as HTMLElement
-    expect(card.textContent, 'the Validation summary card holds the shared error card').toContain('Something went wrong')
+    expect(card.textContent, 'the Validation summary card holds the rollup error').toContain('Something went wrong')
     expect(passPct(container), 'no PASS chip beside a failed rollup').toBeUndefined()
+  })
+
+  // The invoices half lands; the rollup half never settles or fails, so only the card body differs.
+  function summaryBody(container: HTMLElement): HTMLElement {
+    const title = Array.from(container.querySelectorAll('span.card-title')).find((s) => s.textContent === 'Validation summary')
+    const card = title?.parentElement?.parentElement as HTMLElement
+    expect(card, 'the Validation summary card renders').toBeTruthy()
+    expect(card.children.length, 'the card is a header and a body').toBe(2)
+    return card.children[1] as HTMLElement
+  }
+
+  it('RP-15 a loading rollup draws an inline spinner row, not the shared Loading block', async () => {
+    const invoices = [listResponse([row({ id: 'inv-l', buyer_tin: tinFor(3), buyer_name: 'Loading Buyer' })], { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 1 })]
+    const queue = [...invoices]
+    vi.stubGlobal('fetch', vi.fn((url: string) => (isRollupUrl(url) ? new Promise(() => {}) : Promise.resolve(queue.shift()))))
+    const { container } = render(<ReportsView ctx={reportsCtx()} />)
+
+    await screen.findByText('Loading validation summary…')
+    const body = summaryBody(container)
+    expect(body.style.padding, 'the card body keeps the prototype padding').toBe('18px 20px')
+    const rowEl = body.firstElementChild as HTMLElement
+    expect(rowEl.textContent, 'the first child of the body is the loading row').toBe('Loading validation summary…')
+    expect(rowEl.style.display).toBe('flex')
+    expect(rowEl.style.alignItems).toBe('center')
+    expect(rowEl.style.gap).toBe('10px')
+    expect(rowEl.style.color).toBe('var(--fg-3)')
+    expect(rowEl.style.fontSize).toBe('13px')
+    expect(rowEl.style.padding, 'no 40px block padding: the row sits at the card padding').toBe('')
+
+    const spinner = rowEl.firstElementChild as HTMLElement
+    expect(spinner.tagName).toBe('SPAN')
+    expect(spinner.style.width).toBe('16px')
+    expect(spinner.style.height).toBe('16px')
+    expect(spinner.style.borderRadius).toBe('50%')
+    expect(spinner.style.borderTopColor).toBe('var(--action)')
+    expect(spinner.style.animation).toBe('spin 700ms linear infinite')
+    expect(body.querySelector('.apic-loading-spin'), 'the shared Loading component is not used here').toBeNull()
+    expect(screen.getByText('Loading Buyer'), 'control: the invoices half rendered').toBeTruthy()
+  })
+
+  it('RP-16 a failed rollup draws the error inline with the message, the HTTP line and a wired Retry', async () => {
+    const fetchMock = mockFetchRollupError([listResponse([row({ id: 'inv-i', buyer_tin: tinFor(4), buyer_name: 'Inline Buyer' })], { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 1 })])
+    const { container } = render(<ReportsView ctx={reportsCtx()} />)
+
+    const retry = await screen.findByRole('button', { name: 'Retry' })
+    const body = summaryBody(container)
+    expect(body.style.padding).toBe('18px 20px')
+    const title = body.firstElementChild as HTMLElement
+    expect(title.textContent).toBe('Something went wrong')
+    expect(title.style.fontSize).toBe('15px')
+    expect(title.style.fontWeight).toBe('700')
+    expect(title.style.marginBottom).toBe('6px')
+    const message = title.nextElementSibling as HTMLElement
+    expect(message.tagName).toBe('P')
+    expect(message.textContent, 'the server message').toBe('rollup unavailable')
+    expect(message.style.fontSize).toBe('13px')
+    expect(message.style.color).toBe('var(--fg-2)')
+    const http = message.nextElementSibling as HTMLElement
+    expect(http.textContent).toBe('HTTP 500')
+    expect(http.classList.contains('mono')).toBe(true)
+    expect(http.style.fontSize).toBe('11px')
+    expect(http.style.color).toBe('var(--fg-3)')
+    expect(http.style.marginBottom, 'the prototype gap is 14px, not the shared card 16px').toBe('14px')
+    expect(http.nextElementSibling, 'the Retry follows the HTTP line').toBe(retry)
+    expect(retry.className).toBe('v2-btn v2-btn-ghost pf-btn')
+    expect(retry.style.height).toBe('34px')
+
+    const nested = (Array.from(body.querySelectorAll('div')) as HTMLElement[]).filter((d) => d.style.border !== '' || d.style.maxWidth !== '' || d.style.padding === '28px' || d.style.background !== '')
+    expect(nested, 'no nested bordered card inside the summary card').toHaveLength(0)
+
+    const rollupCalls = () => fetchMock.mock.calls.filter((c) => isRollupUrl(c[0] as string)).length
+    const before = rollupCalls()
+    expect(before, 'control: the rollup was requested').toBeGreaterThan(0)
+    fireEvent.click(retry)
+    await vi.waitFor(() => expect(rollupCalls(), 'Retry re-requests the rollup').toBeGreaterThan(before))
+  })
+
+  it('RP-17 each top-failure glyph span is inline-flex so the row stays one label tall', async () => {
+    const { container } = await renderReady()
+
+    const topLabel = Array.from(container.querySelectorAll('span.label')).find((l) => l.textContent === 'Top failures')
+    expect(topLabel, 'the Top failures head renders').toBeTruthy()
+    const head = topLabel!.parentElement as HTMLElement
+    const list = head.nextElementSibling as HTMLElement
+    expect(list.children.length, 'the rollup carries one failing rule').toBeGreaterThan(0)
+    for (const rowEl of Array.from(list.children) as HTMLElement[]) {
+      const glyph = rowEl.firstElementChild as HTMLElement
+      expect(glyph.querySelector('svg'), 'the first cell holds the cross glyph').not.toBeNull()
+      expect(glyph.style.display).toBe('inline-flex')
+    }
   })
 })

@@ -10,7 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { ErrorState, toApiError, useAsync, type ApiError } from '@invoice-os/api-client'
 
-import { closeGlyph } from '../glyphs'
+import { closeGlyph, downloadGlyph } from '../glyphs'
 import { AUDIT_FILTER_DEFAULT, type AuditRange } from '../lib/auditFilters'
 import {
   bundleRequestFor,
@@ -183,7 +183,15 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
       <div
         data-testid="evidence-bundle-scrim"
         onClick={onClose}
-        style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'oklch(20% .02 210 / 0.32)', animation: 'pfFade 160ms ease-out' }}
+        style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 80,
+          background: 'color-mix(in srgb, var(--surface) 55%, transparent)',
+          backdropFilter: 'blur(6px)',
+          WebkitBackdropFilter: 'blur(6px)',
+          animation: 'pfFade 160ms ease-out',
+        }}
       />
       <div
         className="pf-drawer"
@@ -201,18 +209,17 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
           maxWidth: '94vw',
           background: 'var(--bg-1)',
           borderLeft: '1px solid var(--line-2)',
-          boxShadow: '-24px 0 48px -24px oklch(20% .02 210 / 0.3)',
           display: 'flex',
           flexDirection: 'column',
           animation: 'pfDrawer 200ms ease-out',
         }}
       >
-        <div style={{ flex: 'none', padding: '18px 22px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-2)', display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        <div style={{ flex: 'none', padding: '20px 24px 16px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'flex-start', gap: 14 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div data-testid="evidence-bundle-title" style={{ fontSize: 15, fontWeight: 600, color: 'var(--fg-1)' }}>
+            <div data-testid="evidence-bundle-title" style={{ marginBottom: 4, fontSize: 19, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--fg-1)' }}>
               {EVIDENCE_COPY.drawerTitle}
             </div>
-            <div data-testid="evidence-bundle-subtitle" style={{ marginTop: 3, fontSize: 12.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
+            <div data-testid="evidence-bundle-subtitle" style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--fg-3)' }}>
               {EVIDENCE_COPY.drawerSubtitle}
             </div>
           </div>
@@ -228,19 +235,19 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
           </button>
         </div>
 
-        <div data-testid="evidence-bundle-body" style={{ flex: 1, overflowY: 'auto', padding: '20px 22px' }}>
+        <div data-testid="evidence-bundle-body" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 24px 28px' }}>
           {phase.kind === 'form' ? (
             <>
               <FilterPopover
                 testId="evidence-company"
                 label={EVIDENCE_COPY.companyLabel}
-                summary={company?.name ?? EVIDENCE_COPY.companyPlaceholder}
+                summary={company ? <span style={{ color: 'var(--fg-1)' }}>{company.name}</span> : EVIDENCE_COPY.companyPlaceholder}
                 open={companyOpen}
                 onOpen={openCompany}
                 onClose={closeCompany}
                 block
               >
-                <div style={{ width: 260, maxHeight: 380, overflowY: 'auto', padding: 6 }}>
+                <div style={{ maxHeight: 380, overflowY: 'auto', padding: '4px 0' }}>
                   {companies.map((e) => (
                     <button
                       key={e.id}
@@ -258,7 +265,8 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
                         padding: '9px 12px',
                         fontFamily: 'var(--font-sans)',
                         fontSize: 13,
-                        color: e.id === company?.id ? 'var(--action)' : 'var(--fg-1)',
+                        fontWeight: e.id === company?.id ? 600 : 500,
+                        color: 'var(--fg-1)',
                         cursor: 'pointer',
                       }}
                     >
@@ -267,14 +275,14 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
                   ))}
                 </div>
               </FilterPopover>
-              <div data-testid="evidence-company-helper" style={{ marginTop: 8, fontSize: 11.5, lineHeight: 1.45, color: 'var(--fg-3)' }}>
+              <div data-testid="evidence-company-helper" style={{ marginTop: 8, fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
                 {EVIDENCE_COPY.companyHelper}
               </div>
 
-              <div className="label" style={{ margin: '20px 0 6px' }}>
+              <div className="label" style={{ margin: '20px 0 7px' }}>
                 {EVIDENCE_COPY.periodLabel}
               </div>
-              <div data-testid="evidence-period-chips" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              <div data-testid="evidence-period-chips" style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
                 {DATE_PRESETS.map(({ id, label }) => (
                   <button
                     key={id}
@@ -284,15 +292,16 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
                     onClick={() => setRange({ preset: id })}
                     className="pf-chip"
                     style={{
-                      height: 30,
-                      padding: '0 12px',
+                      height: 32,
+                      padding: '0 13px',
                       // No borderRadius: .pf-chip forces its radius with !important.
                       fontFamily: 'var(--font-sans)',
                       fontSize: 12.5,
                       fontWeight: 500,
+                      cursor: 'pointer',
                       border: `1px solid ${range.preset === id ? 'var(--action)' : 'var(--line-2)'}`,
-                      background: range.preset === id ? 'var(--action)' : 'var(--bg-2)',
-                      color: range.preset === id ? 'var(--text-on-dark)' : 'var(--fg-2)',
+                      background: range.preset === id ? 'var(--action)' : 'transparent',
+                      color: range.preset === id ? 'var(--primary-foreground)' : 'var(--fg-2)',
                     }}
                   >
                     {label}
@@ -302,23 +311,25 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
               {/* No Apply button -- Custom commits immediately. bundleRequestFor returns null
                   until both dates are set, so nothing fires per keystroke (task-667 §4). */}
               {range.preset === 'custom' && (
-                <div data-testid="evidence-period-custom-fields" style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11.5, color: 'var(--fg-3)' }}>
-                    From
+                <div data-testid="evidence-period-custom-fields" style={{ marginTop: 10, display: 'flex', gap: 10 }}>
+                  <label style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span className="label">From</span>
                     <input
                       type="date"
                       data-testid="evidence-period-from"
                       className="pf-input"
+                      style={{ height: 34, fontSize: 12.5 }}
                       value={range.from ?? ''}
                       onChange={(e) => setRange({ ...range, from: e.target.value })}
                     />
                   </label>
-                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11.5, color: 'var(--fg-3)' }}>
-                    To
+                  <label style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span className="label">To</span>
                     <input
                       type="date"
                       data-testid="evidence-period-to"
                       className="pf-input"
+                      style={{ height: 34, fontSize: 12.5 }}
                       value={range.to ?? ''}
                       onChange={(e) => setRange({ ...range, to: e.target.value })}
                     />
@@ -330,61 +341,63 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
                 <div
                   data-testid="evidence-confirm-block"
                   style={{
-                    marginTop: 20,
-                    background: 'var(--action-tint)',
-                    border: '1px solid var(--teal-200)',
+                    marginTop: 22,
+                    background: 'var(--bg-2)',
+                    border: '1px solid var(--line-2)',
                     borderRadius: 'var(--radius-md)',
-                    padding: '11px 14px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 9,
+                    padding: '17px 18px',
                   }}
                 >
-                  <div className="label" data-testid="evidence-confirm-heading" style={{ color: 'var(--action)' }}>
+                  <div
+                    className="mono"
+                    data-testid="evidence-confirm-heading"
+                    style={{ marginBottom: 10, fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', color: 'var(--action)' }}
+                  >
                     {EVIDENCE_COPY.confirmHeading}
                   </div>
 
-                  <div>
+                  <div style={{ marginBottom: 14 }}>
                     <div
                       data-testid="evidence-confirm-company"
-                      style={{ fontSize: 15, fontWeight: 600, color: 'var(--fg-1)', wordBreak: 'break-word' }}
+                      style={{ marginBottom: 3, fontSize: 17, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--fg-1)', wordBreak: 'break-word' }}
                     >
                       {shown.entity.name}
                     </div>
-                    <div data-testid="evidence-confirm-period" style={{ marginTop: 2, fontSize: 12.5, color: 'var(--fg-2)' }}>
+                    <div data-testid="evidence-confirm-period" style={{ marginBottom: 8, fontSize: 13.5, color: 'var(--fg-2)' }}>
                       {bundlePeriodLabel(shown.period)}
                     </div>
                     {/* The server's basis, never a hardcoded claim (D-08-11). */}
-                    <div
-                      data-testid="evidence-confirm-basis"
-                      style={{ marginTop: 4, fontSize: 11.5, lineHeight: 1.55, color: 'var(--fg-2)' }}
-                    >
+                    <div data-testid="evidence-confirm-basis" style={{ fontSize: 12, lineHeight: 1.5, color: 'var(--fg-3)' }}>
                       {bundleBasisLine(shown.period)}
                     </div>
                   </div>
 
-                  <div style={{ borderTop: '1px solid var(--teal-200)', paddingTop: 9 }}>
-                    <div className="label" data-testid="evidence-confirm-contents-heading" style={{ color: 'var(--action)' }}>
+                  <div style={{ borderTop: '1px solid var(--line-1)', paddingTop: 13 }}>
+                    <div
+                      className="mono"
+                      data-testid="evidence-confirm-contents-heading"
+                      style={{ marginBottom: 8, fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', color: 'var(--fg-3)' }}
+                    >
                       {EVIDENCE_COPY.contentsHeading}
                     </div>
-                    <div
-                      data-testid="evidence-confirm-contents"
-                      style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 5 }}
-                    >
+                    <div data-testid="evidence-confirm-contents" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                       {bundleManifestLines(shown).map((line) => (
                         <div
                           key={line.label}
                           data-testid="evidence-confirm-row"
-                          style={{ display: 'flex', alignItems: 'baseline', gap: 10, fontSize: 11.5, lineHeight: 1.5 }}
+                          style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}
                         >
-                          <span data-testid="evidence-confirm-row-label" style={{ flex: 1, minWidth: 0, color: 'var(--fg-2)' }}>
+                          <span
+                            data-testid="evidence-confirm-row-label"
+                            style={{ flex: 1, minWidth: 0, fontSize: 12, lineHeight: 1.45, color: 'var(--fg-1)' }}
+                          >
                             {line.label}
                           </span>
                           {line.value != null && (
                             <span
                               data-testid="evidence-confirm-row-value"
                               className="mono"
-                              style={{ flex: 'none', fontWeight: 600, color: 'var(--fg-1)' }}
+                              style={{ flex: 'none', fontSize: 11, color: 'var(--fg-2)' }}
                             >
                               {line.value}
                             </span>
@@ -394,21 +407,21 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
                     </div>
                   </div>
 
-                  <div style={{ borderTop: '1px solid var(--teal-200)', paddingTop: 9 }}>
-                    <div className="label" data-testid="evidence-confirm-filename-label">
+                  <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line-1)' }}>
+                    <div className="label" data-testid="evidence-confirm-filename-label" style={{ marginBottom: 4 }}>
                       {EVIDENCE_COPY.filenameLabel}
                     </div>
-                    {/* break-all, not ellipsis: the whole name is the claim (AC-2). ReviewBatch.tsx:500. */}
+                    {/* break-all, not ellipsis: the whole name is the claim (AC-2). */}
                     <div
                       data-testid="evidence-confirm-filename"
                       className="mono"
-                      style={{ marginTop: 4, fontSize: 12, color: 'var(--fg-1)', wordBreak: 'break-all' }}
+                      style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-1)', wordBreak: 'break-all' }}
                     >
                       {shown.filename}
                     </div>
                   </div>
 
-                  <div data-testid="evidence-confirm-footnote" style={{ fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-2)' }}>
+                  <div data-testid="evidence-confirm-footnote" style={{ marginTop: 12, fontSize: 11.5, color: 'var(--fg-3)' }}>
                     {EVIDENCE_COPY.confirmFooter}
                   </div>
                 </div>
@@ -427,7 +440,7 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
                 <div
                   id={REASON_ID}
                   data-testid={REASON_ID}
-                  style={{ marginTop: 12, fontSize: 12, lineHeight: 1.5, color: 'var(--fg-2)' }}
+                  style={{ marginTop: 12, fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}
                 >
                   {reason}
                 </div>
@@ -437,41 +450,36 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
                 <div
                   id={HELPER_ID}
                   data-testid={HELPER_ID}
-                  style={{ marginTop: 12, fontSize: 11.5, lineHeight: 1.45, color: 'var(--fg-3)' }}
+                  style={{ marginTop: 12, fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}
                 >
                   {EVIDENCE_COPY.prepareHelper}
                 </div>
               )}
             </>
           ) : phase.kind === 'building' ? (
-            <div data-testid="evidence-building">
-              <div data-testid="evidence-building-title" style={{ fontSize: 15, fontWeight: 600, color: 'var(--fg-1)' }}>
+            <div
+              data-testid="evidence-building"
+              style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: 22 }}
+            >
+              <div data-testid="evidence-building-title" style={{ marginBottom: 12, fontSize: 15, fontWeight: 600, color: 'var(--fg-1)' }}>
                 {EVIDENCE_COPY.buildingTitle}
               </div>
-              {/* Indeterminate by construction (ImportProgress.tsx:101-119): a repeating gradient
-                  twice its box's width, slid end to end. It encodes no position, so no number
-                  can be wrong. A full-width block here, not that row's 28px inline pill. */}
-              <div
-                data-testid="evidence-building-bar"
-                style={{
-                  marginTop: 14,
-                  height: 6,
-                  borderRadius: 99,
-                  overflow: 'hidden',
-                  background: 'repeating-linear-gradient(115deg, var(--action) 0 6px, var(--action-tint) 6px 13px)',
-                  backgroundSize: '200% 100%',
-                  animation: 'shimmer 1.15s linear infinite',
-                }}
-              />
-              <div
-                data-testid="evidence-building-note"
-                style={{ marginTop: 14, fontSize: 12.5, lineHeight: 1.55, color: 'var(--fg-2)' }}
-              >
+              {/* Indeterminate: one childless fill that pulses, so it encodes no position. */}
+              <div style={{ height: 6, borderRadius: 'var(--radius-sm)', background: 'var(--bg-3)', overflow: 'hidden', marginBottom: 12 }}>
+                <div
+                  data-testid="evidence-building-bar"
+                  style={{ height: '100%', width: '100%', background: 'var(--action)', opacity: 0.6, animation: 'pulse 1.2s linear infinite' }}
+                />
+              </div>
+              <div data-testid="evidence-building-note" style={{ fontSize: 12.5, lineHeight: 1.5, color: 'var(--fg-2)' }}>
                 {EVIDENCE_COPY.buildingNote}
               </div>
             </div>
           ) : phase.kind === 'ready' ? (
-            <div data-testid="evidence-ready">
+            <div
+              data-testid="evidence-ready"
+              style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: 16 }}
+            >
               <div data-testid="evidence-ready-title" style={{ fontSize: 15, fontWeight: 600, color: 'var(--fg-1)' }}>
                 {EVIDENCE_COPY.readyTitle}
               </div>
@@ -480,14 +488,14 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
               <div
                 data-testid="evidence-ready-filename"
                 className="mono"
-                style={{ marginTop: 10, fontSize: 12, color: 'var(--fg-1)', wordBreak: 'break-all' }}
+                style={{ marginTop: 10, marginBottom: 6, fontSize: 11.5, fontWeight: 600, color: 'var(--fg-1)', wordBreak: 'break-all' }}
               >
                 {phase.filename}
               </div>
               <div
                 data-testid="evidence-ready-line"
                 className="mono"
-                style={{ marginTop: 6, fontSize: 11, color: 'var(--fg-3)', letterSpacing: '0.04em' }}
+                style={{ fontSize: 9.5, color: 'var(--fg-3)', letterSpacing: '0.06em' }}
               >
                 {bundleReadyLine(phase.blob.size)}
               </div>
@@ -503,7 +511,7 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
 
         <div
           data-testid="evidence-bundle-footer"
-          style={{ flex: 'none', padding: '14px 22px', borderTop: '1px solid var(--line-1)', background: 'var(--bg-2)', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10 }}
+          style={{ flex: 'none', padding: '14px 24px', borderTop: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: 10 }}
         >
           {phase.kind === 'form' ? (
             <>
@@ -515,11 +523,9 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
                 aria-describedby={describedBy}
                 className="v2-btn v2-btn-primary pf-btn"
                 style={{
-                  height: 36,
-                  fontSize: 13,
-                  // Spread ONLY when disabled; `filter:'none'` neutralises .v2-btn-primary:hover's
-                  // unguarded brightness(1.22). InvoiceDetail.tsx's Submit.
-                  ...(canPrepare ? null : { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' }),
+                  height: 38,
+                  // `filter: 'none'` neutralises .v2-btn-primary:hover's brightness(1.22).
+                  ...(canPrepare ? null : { opacity: 0.45, cursor: 'not-allowed', filter: 'none' }),
                 }}
               >
                 {EVIDENCE_COPY.prepareLabel}
@@ -529,7 +535,7 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
                 data-testid="evidence-bundle-cancel"
                 onClick={onClose}
                 className="v2-btn v2-btn-ghost pf-btn"
-                style={{ height: 36, fontSize: 13 }}
+                style={{ height: 38 }}
               >
                 {EVIDENCE_COPY.cancelLabel}
               </button>
@@ -540,7 +546,7 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
               data-testid="evidence-building-cancel"
               onClick={cancelBuild}
               className="v2-btn v2-btn-ghost pf-btn"
-              style={{ height: 36, fontSize: 13 }}
+              style={{ height: 38 }}
             >
               {EVIDENCE_COPY.cancelLabel}
             </button>
@@ -551,8 +557,9 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
                 data-testid="evidence-ready-download"
                 onClick={onDownload}
                 className="v2-btn v2-btn-primary pf-btn"
-                style={{ height: 36, fontSize: 13 }}
+                style={{ height: 38, gap: 8 }}
               >
+                <span style={{ display: 'inline-flex' }}>{downloadGlyph}</span>
                 {EVIDENCE_COPY.downloadLabel}
               </button>
               <button
@@ -560,7 +567,7 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
                 data-testid="evidence-ready-start-another"
                 onClick={() => setPhase({ kind: 'form' })}
                 className="v2-btn v2-btn-ghost pf-btn"
-                style={{ height: 36, fontSize: 13 }}
+                style={{ height: 38 }}
               >
                 {EVIDENCE_COPY.startAnotherLabel}
               </button>
@@ -572,7 +579,7 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
                 data-testid="evidence-failed-retry"
                 onClick={retryBuild}
                 className="v2-btn v2-btn-primary pf-btn"
-                style={{ height: 36, fontSize: 13 }}
+                style={{ height: 38 }}
               >
                 {EVIDENCE_COPY.retryLabel}
               </button>
@@ -581,7 +588,7 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
                 data-testid="evidence-failed-cancel"
                 onClick={onClose}
                 className="v2-btn v2-btn-ghost pf-btn"
-                style={{ height: 36, fontSize: 13 }}
+                style={{ height: 38 }}
               >
                 {EVIDENCE_COPY.cancelLabel}
               </button>

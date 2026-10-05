@@ -608,7 +608,7 @@ test.describe('Audit screen', () => {
     const header = panel.locator(':scope > div').first()
     // Direct children of their bands, so each one's inset from its band IS that band's padding.
     const bodyContent = page.getByTestId('evidence-company-helper')
-    const footerContent = page.getByTestId('evidence-bundle-cancel')
+    const footerContent = page.getByTestId('evidence-bundle-prepare')
     await expect(panel).toBeVisible({ timeout: 15_000 })
     await settleDrawerAnimation(page)
     await expect(header.getByTestId('evidence-bundle-title')).toHaveCount(1)
@@ -669,12 +669,11 @@ test.describe('Audit screen', () => {
       const bandDrift = Math.max(Math.abs(bodyBox.x - footerBox.x), Math.abs(bodyBox.x - headerBox.x))
       expect(bandDrift, `the three bands must be full-width siblings at ${width}px`).toBeLessThanOrEqual(SLACK_PX)
 
-      // The footer is justify-content:flex-end, so its content column is measured from the
-      // RIGHT edge; the other two from the left. Equal insets is the relationship, and no
-      // number appears -- the three are only ever compared against each other.
+      // All three bands are left-aligned, so each content column is measured from the left
+      // edge. Equal insets is the relationship; no number appears.
       const headerInset = titleBox.x - headerBox.x
       const bodyInset = bodyContentBox.x - bodyBox.x
-      const footerInset = footerBox.x + footerBox.width - (footerContentBox.x + footerContentBox.width)
+      const footerInset = footerContentBox.x - footerBox.x
       const insetDrift = Math.max(Math.abs(headerInset - bodyInset), Math.abs(headerInset - footerInset))
       expect(insetDrift, `the three bands must share one content column at ${width}px`).toBeLessThanOrEqual(SLACK_PX)
 
@@ -879,7 +878,6 @@ test.describe('Audit screen', () => {
     await openBundleDrawer(page)
 
     const drawer = page.getByTestId('evidence-bundle-drawer')
-    const body = page.getByTestId('evidence-bundle-body')
     const footer = page.getByTestId('evidence-bundle-footer')
     const SLACK_PX = 2
 
@@ -904,12 +902,14 @@ test.describe('Audit screen', () => {
       const fillChildren = await bar.locator(':scope > *').count()
       expect(fillChildren, 'an indeterminate bar must have no fill child').toBe(0)
 
-      const [barBox, bodyBox] = await Promise.all([bar.boundingBox(), body.boundingBox()])
-      if (barBox && bodyBox) {
-        expect(barBox.x, 'the bar must start at the body column').toBeGreaterThanOrEqual(bodyBox.x - SLACK_PX)
-        expect(barBox.x + barBox.width, 'the bar must fill the body column').toBeGreaterThanOrEqual(
-          bodyBox.x + bodyBox.width - 24,
-        )
+      // The bar fills the building card's content box: 1px border + 22px padding each side.
+      const [barBox, cardBox] = await Promise.all([bar.boundingBox(), building.boundingBox()])
+      if (barBox && cardBox) {
+        expect(Math.abs(barBox.x - (cardBox.x + 23)), 'the bar must start at the card content box').toBeLessThanOrEqual(SLACK_PX)
+        expect(
+          Math.abs(barBox.x + barBox.width - (cardBox.x + cardBox.width - 23)),
+          'the bar must fill the card content box',
+        ).toBeLessThanOrEqual(SLACK_PX)
       }
     }
 

@@ -358,6 +358,7 @@ describe('EvidenceBundleDrawer', () => {
 
     expect(panel.style.minWidth, 'control: the panel style is read').toBe('240px')
     expect(panel.style.boxShadow).toBe('var(--shadow-card)')
+    expect([panel.style.left, panel.style.right], 'the panel spans the trigger').toEqual(['0px', '0px'])
   })
 
   it('drawerCompany_listsTheEntityListNotTheFacets', async () => {
@@ -429,7 +430,14 @@ describe('EvidenceBundleDrawer', () => {
   it('drawerCompanyPicker_isTheFullWidthFortyTallBlockTrigger', async () => {
     await renderDrawer()
     const trigger = screen.getByTestId('evidence-company-trigger')
-    expect([trigger.style.width, trigger.style.height, trigger.style.justifyContent]).toEqual(['100%', '40px', 'space-between'])
+    expect([trigger.style.width, trigger.style.height, trigger.style.padding, trigger.style.gap]).toEqual(['100%', '40px', '0px 12px', '10px'])
+    // The label sits above the trigger and still names it.
+    const label = screen.getByTestId('evidence-company-label')
+    expect(label.className).toBe('label')
+    expect(label.compareDocumentPosition(trigger) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(trigger.contains(label)).toBe(false)
+    expect(trigger.getAttribute('aria-labelledby')).toContain(label.id)
+    expect(trigger.style.justifyContent, 'the summary flexes; the trigger does not space-between').toBe('')
   })
 
   // EB-04-9
@@ -515,6 +523,9 @@ describe('EvidenceBundleDrawer', () => {
     const panel = screen.getByTestId('evidence-bundle-drawer') as HTMLElement
     expect(panel.style.width).toBe('560px')
     expect(panel.style.maxWidth).toBe('94vw')
+    expect(panel.style.borderLeft).toBe('1px solid var(--line-2)')
+    expect(panel.style.boxShadow, 'drawers carry a border only').toBe('')
+    expect(panel.style.background).toBe('var(--bg-1)')
     expect(panel.style.position).toBe('fixed')
     expect(panel.style.top).toBe('0px')
     expect(panel.style.right).toBe('0px')
@@ -740,6 +751,7 @@ describe('EvidenceBundleDrawer', () => {
     const enabled = screen.getByTestId('evidence-bundle-prepare') as HTMLButtonElement
     expect(enabled.style.filter).toBe('')
     expect(enabled.style.background).toBe('')
+    expect([enabled.style.opacity, enabled.style.cursor]).toEqual(['', ''])
     cleanup()
 
     const empty = { ...PREVIEW, counts: { ...PREVIEW.counts, invoices: 0 } }
@@ -751,7 +763,8 @@ describe('EvidenceBundleDrawer', () => {
 
     const disabled = screen.getByTestId('evidence-bundle-prepare') as HTMLButtonElement
     expect(disabled.style.filter).toBe('none')
-    expect(disabled.style.background).toBe('var(--bg-3)')
+    expect(disabled.style.background, 'the primary fill is kept').toBe('')
+    expect(disabled.style.opacity).toBe('0.45')
     expect(disabled.style.cursor).toBe('not-allowed')
   })
 
@@ -772,6 +785,8 @@ describe('EvidenceBundleDrawer', () => {
     const prepare = screen.getByTestId('evidence-bundle-prepare') as HTMLButtonElement
     expect(prepare.disabled).toBe(true)
     expect(prepare.style.filter).toBe('none')
+    const reasonEl = screen.getByTestId('evidence-bundle-reason')
+    expect([reasonEl.style.fontSize, reasonEl.style.color, reasonEl.style.lineHeight]).toEqual(['11.5px', 'var(--fg-3)', '1.5'])
 
     await waitFor(() => expect(previewCalls(fetchMock)).toHaveLength(1))
     expect(downloadCalls(fetchMock)).toHaveLength(0)
@@ -803,8 +818,8 @@ describe('EvidenceBundleDrawer', () => {
 
   // EB-05-10 -- jsdom applies no stylesheet, so only the inline `style` attribute is a live
   // oracle, and it must be scoped to the block: ErrorState ships '#fff' and the drawer's own
-  // scrim ships an oklch() literal, both correct and both outside this block.
-  it('confirmBlock_usesTealTokensOnly', async () => {
+  // scrim ships a color-mix() expression, both correct and both outside this block.
+  it('confirmBlock_usesTheV2CardTokens', async () => {
     mockFetchSequence([previewResponse(PREVIEW)])
     await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
     fireEvent.click(screen.getByTestId('evidence-company-trigger'))
@@ -812,9 +827,20 @@ describe('EvidenceBundleDrawer', () => {
 
     const block = await screen.findByTestId('evidence-confirm-block')
     const heading = screen.getByTestId('evidence-confirm-heading')
-    expect(block.style.background).toBe('var(--action-tint)')
-    expect(block.style.border).toBe('1px solid var(--teal-200)')
+    expect(block.style.background).toBe('var(--bg-2)')
+    expect(block.style.border).toBe('1px solid var(--line-2)')
+    expect(block.style.padding).toBe('17px 18px')
+    expect(block.style.borderRadius).toBe('var(--radius-md)')
     expect(heading.style.color).toBe('var(--action)')
+    expect([heading.style.fontSize, heading.style.fontWeight, heading.style.letterSpacing]).toEqual(['9px', '700', '0.1em'])
+    expect(heading.className).toBe('mono')
+    const contentsHeading = screen.getByTestId('evidence-confirm-contents-heading')
+    expect([contentsHeading.style.color, contentsHeading.style.fontSize]).toEqual(['var(--fg-3)', '9px'])
+    const company = screen.getByTestId('evidence-confirm-company')
+    expect([company.style.fontSize, company.style.fontWeight]).toEqual(['17px', '700'])
+    expect(contentsHeading.parentElement?.style.borderTop, 'inner divider').toBe('1px solid var(--line-1)')
+    expect(screen.getByTestId('evidence-confirm-filename').parentElement?.style.borderTop, 'inner divider').toBe('1px solid var(--line-1)')
+    expect(block.innerHTML).not.toContain('--teal')
 
     const nodes = [block, ...Array.from(block.querySelectorAll('*'))]
     expect(nodes.length).toBeGreaterThanOrEqual(15)

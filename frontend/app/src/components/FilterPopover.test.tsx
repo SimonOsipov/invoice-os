@@ -68,7 +68,7 @@ describe('FilterPopover', () => {
       </FilterPopover>,
     )
     const trigger = screen.getByTestId('fp-trigger')
-    expect([trigger.style.width, trigger.style.height, trigger.style.justifyContent]).toEqual(['100%', '40px', 'space-between'])
+    expect([trigger.style.width, trigger.style.height, trigger.style.justifyContent]).toEqual(['100%', '40px', ''])
     cleanup()
 
     renderPopover(false)
@@ -96,7 +96,12 @@ describe('FilterPopover', () => {
       </FilterPopover>,
     )
     const block = screen.getByTestId('fp-trigger')
-    expect([block.style.gap, block.style.padding, block.style.fontSize], 'block changes only width, height, packing').toEqual(['8px', '0px 11px', '13px'])
+    expect([block.style.gap, block.style.padding, block.style.fontSize, block.style.fontWeight]).toEqual(['10px', '0px 12px', '13.5px', '400'])
+    const blockSummary = screen.getByText('Acme')
+    expect([blockSummary.style.flex, blockSummary.style.textOverflow]).toEqual(['1 1 0%', 'ellipsis'])
+    const label = screen.getByText('Company')
+    expect(block.contains(label), 'block draws the label above the trigger, not inside it').toBe(false)
+    expect(block.getAttribute('aria-labelledby')).toBe('fp-label fp-summary')
   })
 
   it('filterPopover_enabledTriggerCarriesNoDisabledPaint', () => {

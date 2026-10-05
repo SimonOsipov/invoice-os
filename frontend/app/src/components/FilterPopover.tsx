@@ -22,7 +22,7 @@ export interface FilterPopoverProps {
   onClose: () => void
   /** Mirrors AuditPager's busy treatment -- disabled while a request is in flight. */
   disabled?: boolean
-  /** Full-width, 40-tall trigger for a form field. */
+  /** Form field: label above a full-width 40-tall trigger, full-width panel. */
   block?: boolean
   children: ReactNode
 }
@@ -43,12 +43,15 @@ export function FilterPopover({ testId, label, summary, open, onOpen, onClose, d
   }, [onClose])
   useDismiss(isOpen, dismiss, wrapRef)
 
-  return (
-    <div ref={wrapRef} style={{ position: 'relative' }}>
+  const labelId = `${testId}-label`
+  const summaryId = `${testId}-summary`
+  const field = (
+    <>
       <button
         type="button"
         data-testid={`${testId}-trigger`}
         aria-expanded={isOpen}
+        aria-labelledby={block ? `${labelId} ${summaryId}` : undefined}
         disabled={disabled}
         onClick={(e) => {
           e.stopPropagation()
@@ -64,26 +67,37 @@ export function FilterPopover({ testId, label, summary, open, onOpen, onClose, d
         style={{
           display: 'inline-flex',
           alignItems: 'center',
-          gap: 8,
+          gap: block ? 10 : 8,
           height: block ? 40 : 34,
-          padding: '0 11px',
-          ...(block ? { width: '100%', justifyContent: 'space-between' } : {}),
+          padding: block ? '0 12px' : '0 11px',
+          ...(block ? { width: '100%', textAlign: 'left' as const } : {}),
           border: '1px solid var(--line-2)',
-          background: isOpen ? 'var(--bg-3)' : 'var(--bg-2)',
-          color: isOpen ? 'var(--action)' : 'var(--fg-1)',
+          background: isOpen && !block ? 'var(--bg-3)' : 'var(--bg-2)',
+          color: isOpen && !block ? 'var(--action)' : 'var(--fg-1)',
           fontFamily: 'var(--font-sans)',
-          fontSize: 13,
-          fontWeight: 500,
+          fontSize: block ? 13.5 : 13,
+          fontWeight: block ? 400 : 500,
           cursor: disabled ? 'not-allowed' : 'pointer',
           ...(disabled ? { opacity: 0.45, filter: 'none' } : {}),
         }}
       >
-        <span>{label}</span>
-        {summary && <span style={{ color: 'var(--fg-3)', fontWeight: 400 }}>{summary}</span>}
+        {!block && <span>{label}</span>}
+        {summary && (
+          <span
+            id={summaryId}
+            style={{
+              color: 'var(--fg-3)',
+              fontWeight: 400,
+              ...(block ? { flex: 1, minWidth: 0, whiteSpace: 'nowrap' as const, overflow: 'hidden', textOverflow: 'ellipsis' } : {}),
+            }}
+          >
+            {summary}
+          </span>
+        )}
         <span
           data-testid={`${testId}-chevron`}
           aria-hidden
-          style={{ display: 'inline-flex', color: 'var(--fg-3)', transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 160ms' }}
+          style={{ display: 'inline-flex', flex: 'none', color: 'var(--fg-3)', transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 160ms' }}
         >
           {chevDownGlyph}
         </span>
@@ -96,6 +110,7 @@ export function FilterPopover({ testId, label, summary, open, onOpen, onClose, d
             position: 'absolute',
             top: 'calc(100% + 6px)',
             left: 0,
+            ...(block ? { right: 0 } : {}),
             zIndex: 60,
             minWidth: 240,
             background: 'var(--bg-2)',
@@ -109,6 +124,22 @@ export function FilterPopover({ testId, label, summary, open, onOpen, onClose, d
           {children}
         </div>
       )}
+    </>
+  )
+
+  if (!block) {
+    return (
+      <div ref={wrapRef} style={{ position: 'relative' }}>
+        {field}
+      </div>
+    )
+  }
+  return (
+    <div ref={wrapRef}>
+      <div id={labelId} data-testid={labelId} className="label" style={{ marginBottom: 7 }}>
+        {label}
+      </div>
+      <div style={{ position: 'relative' }}>{field}</div>
     </div>
   )
 }

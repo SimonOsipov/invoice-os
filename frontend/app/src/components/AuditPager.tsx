@@ -7,7 +7,7 @@
 import { AUDIT_PAGE_SIZES } from '../lib/auditView'
 
 function btn(enabled: boolean) {
-  return { height: 32, padding: '0 12px', fontSize: 12.5, opacity: enabled ? 1 : 0.4, cursor: enabled ? 'pointer' : 'not-allowed' }
+  return { height: 30, padding: '0 12px', fontSize: 12.5, ...(enabled ? {} : { opacity: 0.45, cursor: 'not-allowed', filter: 'none' }) }
 }
 
 export function AuditPager({
@@ -35,10 +35,10 @@ export function AuditPager({
   const nextOn = canNext && !busy
 
   return (
-    <div data-testid="audit-pager" style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginTop: 16 }}>
-      <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)', letterSpacing: '0.05em' }}>{range}</span>
-      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--fg-3)' }}>
-        Rows
+    <div data-testid="audit-pager" style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', padding: '12px 2px' }}>
+      <span className="mono" style={{ fontSize: 11.5, color: 'var(--fg-2)' }}>{range}</span>
+      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+        <span className="label">Rows</span>
         {/* A native select: the constraint bans background-image chevrons, and the app has
             no select component of its own. */}
         <select

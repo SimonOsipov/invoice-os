@@ -145,12 +145,13 @@ export function InvoiceActivityCard({
           </div>
         </div>
 
-        <div style={{ padding: '14px 18px 0' }}>
-          <AuditTable>
+        <div style={{ padding: 0 }}>
+          <AuditTable variant="activity">
             {rows.map((e) => (
               <AuditRow
                 key={e.id}
                 event={e}
+                variant="activity"
                 expanded={expandedId === e.id}
                 onToggle={() => setExpandedId(expandedId === e.id ? null : e.id)}
               />

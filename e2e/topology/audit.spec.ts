@@ -252,7 +252,7 @@ test.describe('Audit screen', () => {
           timeout: 10_000,
         })
         .toBeGreaterThan(0)
-      // clientWidth is the table's box inside its 1px border, which is the row's full span.
+      // audit-table has no border, so clientWidth is its full width, the row's full span.
       const [rowBox, headBox, tableWidth] = await Promise.all([
         row.boundingBox(),
         head.boundingBox(),

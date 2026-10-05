@@ -603,6 +603,7 @@ describe('InvoiceActivityCard scroll containment (AC-7, unit half)', () => {
     const scroller = table.parentElement
     expect(scroller, 'the table must sit inside a scroll container').toBeTruthy()
     expect(scroller!.style.overflowX).toBe('auto')
+    expect(scroller!.parentElement!.style.padding).toBe('0px')
     // ...and the card clips at its own rounded border rather than letting the row escape.
     expect(screen.getByTestId('invoice-activity').style.overflow).toBe('hidden')
   })

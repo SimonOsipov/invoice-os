@@ -25,10 +25,12 @@ describe('ActorCell', () => {
   it('actorCell_personAndSystemShareTheRoundAvatar', () => {
     const person = actorAvatar('person')
     const system = actorAvatar('system')
-    // Round for both now -- background and glyph tell person and System apart, not shape.
+    // Round and same fill for both -- the glyph colour tells person and System apart.
     expect(person.borderRadius).toBe('50%')
     expect(system.borderRadius).toBe('50%')
-    expect(person.background).not.toBe(system.background)
+    expect(person.background).toBe('var(--bg-3)')
+    expect(system.background).toBe('var(--bg-3)')
+    expect(person.color).not.toBe(system.color)
     // The design pins both at 26px.
     expect(person.width).toBe(26)
     expect(person.height).toBe(26)
@@ -40,13 +42,13 @@ describe('ActorCell', () => {
     const { unmount } = render(<ActorCell {...SYSTEM} />)
     const systemAvatar = screen.getByTestId('actor-bolt').parentElement as HTMLElement
     expect(screen.queryByTestId('actor-initials')).toBeNull()
-    expect(styleValue(systemAvatar, 'background')).toBe('var(--status-muted-bg)')
+    expect(styleValue(systemAvatar, 'background')).toBe('var(--bg-3)')
     unmount()
 
     render(<ActorCell {...PERSON} />)
     expect(screen.getByTestId('actor-initials').textContent).toBe('CO')
     const personAvatar = screen.getByTestId('actor-initials').parentElement as HTMLElement
-    expect(styleValue(personAvatar, 'background')).toBe('var(--bg-4)')
+    expect(styleValue(personAvatar, 'background')).toBe('var(--bg-3)')
   })
 
   it('actorCell_freeTextAvatarIsUnchanged', () => {
@@ -71,8 +73,8 @@ describe('ActorCell', () => {
     const person = props.map((p) => styleValue(personAvatar, p))
 
     // Reads the rendered span: an inline key after the actorAvatar spread would override it.
-    expect(system).toEqual(['50%', '26px', '26px', 'var(--fg-2)'])
-    expect(person).toEqual(['50%', '26px', '26px', 'var(--fg-1)'])
+    expect(system).toEqual(['50%', '26px', '26px', 'var(--fg-3)'])
+    expect(person).toEqual(['50%', '26px', '26px', 'var(--fg-2)'])
   })
 
   it('actorCell_freeTextActorIsNotAPerson', () => {

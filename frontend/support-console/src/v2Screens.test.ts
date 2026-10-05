@@ -297,6 +297,13 @@ describe('v2 screens', () => {
       expect.soft([s['font-family'], s.color], 'tenant row font and colour').toEqual(['var(--font-sans)', 'var(--fg-1)'])
     }
 
+    for (const t of TENANTS) {
+      const navs = buttonsOf(tenants('', t.id)).filter((b) => classes(b).includes('ops-nav'))
+      const pressed = navs.filter((b) => attr(b, 'aria-pressed') === 'true')
+      expect(pressed, `${t.id}: one selected row`).toHaveLength(1)
+      expect.soft([pressed[0].text.includes(t.name), style(pressed[0]).background], `${t.id}: the selected row and its fill`).toEqual([true, 'var(--bg-3)'])
+    }
+
     for (const screen of ['audit', 'tenants'] as const) {
       const fields = withClass(tagsOf(screen), 'ops-input')
       expect(fields, `${screen}: one search wrapper`).toHaveLength(1)

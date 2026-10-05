@@ -99,6 +99,14 @@ export async function signInAs(page: Page, id: PersonaId, opts: { tenantId?: str
   expect(session.me?.tenant?.id, `the session is bound to another tenant than ${tenantId}`).toBe(tenantId)
 }
 
+// The browser session's own access token, for live reads compared with what the page shows.
+export async function browserToken(page: Page): Promise<string> {
+  const raw = await page.evaluate((key) => localStorage.getItem(key), SESSION_KEY)
+  const token = raw === null ? undefined : (JSON.parse(raw) as { token?: string }).token
+  if (!token) throw new Error('browserToken: no stored session token, sign in first')
+  return token
+}
+
 // The refusal half of the axis: hand a destination a persona it does not admit and assert it
 // bounces back to the landing page. All three gates refuse the same way — no session, so the
 // SPA navigates to landingBase() (the console's StaffGate does it after an async boot) —

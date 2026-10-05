@@ -70,7 +70,6 @@ import {
 import { collectErrors, signInAs } from '../personaSession'
 import {
   MEMBERS_TABLE_HEADS,
-  PROTECTED_ADMIN_NOTE,
   SEED_FIRM_MEMBERS,
   SEED_INHOUSE_MEMBERS,
   SUSPEND_EXPLANATION,
@@ -564,20 +563,21 @@ test('firm Settings: the live member directory, the live role grid, and every co
   await toggleRowMenu(page, 'Chiamaka Nwosu')
   await expect(menu).toHaveCount(0)
 
-  // --- the same menu on YOUR OWN row, which is the last-admin lock ---------------------------
-  // Derived from the LIVE roster: …0001 is the only membership row in this tenant whose role
-  // is `admin` and whose status is `active`, so the server's own rows are what disable this.
+  // --- two active admins (Chinedu + the e2e member): no row is locked ------------------------
+  // The one-admin lock is isProtectedAdmin's, proven in lib/members.test.ts (T2.40, T2.42, "sole active admin ... suspended second admin").
   await toggleRowMenu(page, 'Chinedu Okafor')
   await expect(menu).toBeVisible()
-  await expectDisabledWithReason(
-    menu.getByRole('button', { name: 'Suspend', exact: true }),
-    menu.getByTestId('member-menu-reason'),
-    PROTECTED_ADMIN_NOTE,
-    "your own Suspend, as the tenant's only admin",
-  )
-  // §6: your own menu has no Remove at all — OMITTED, a different fact from disabled.
-  await expect(menu.getByRole('button', { name: 'Remove', exact: true })).toHaveCount(0)
+  await expect(menu.getByRole('button', { name: 'Suspend', exact: true })).toBeEnabled()
   await toggleRowMenu(page, 'Chinedu Okafor')
+
+  // The driver's own row: YOU chip, Suspend enabled, no Remove at all (§6 -- omitted, not disabled).
+  await expect(memberRow(page, 'E2E Firm Admin').getByText('YOU', { exact: true })).toHaveCount(1)
+  await expect(memberRow(page, 'Chinedu Okafor').getByText('YOU', { exact: true })).toHaveCount(0)
+  await toggleRowMenu(page, 'E2E Firm Admin')
+  await expect(menu).toBeVisible()
+  await expect(menu.getByRole('button', { name: 'Suspend', exact: true })).toBeEnabled()
+  await expect(menu.getByRole('button', { name: 'Remove', exact: true })).toHaveCount(0)
+  await toggleRowMenu(page, 'E2E Firm Admin')
   await expect(menu).toHaveCount(0)
 
   // --- the Members tab speaks in roles ------------------------------------------------------

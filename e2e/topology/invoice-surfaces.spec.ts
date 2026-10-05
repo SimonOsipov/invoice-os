@@ -38,7 +38,8 @@ import { freshTin } from '../api/fixtures'
 import { buildMixedCsv, buildPerfCsv } from '../importFixtures'
 import { approvalRun404Dropper, type Dropper, expectedStatusDropper, notFoundIdDropper } from './consoleGate'
 import { assertFillsColumn, assertSameHeight, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS } from './layout'
-import { signInAs } from '../personaSession'
+import { browserToken, signInAs } from '../personaSession'
+import { e2eMember } from '../realAccounts'
 import { APP_URL, shardTenants, VALIDATION_EXPECTED } from './targets'
 
 // This file runs in its own shard, on its own tenants: PERSONAS shadows the api client's 1111 / 2222 pair.
@@ -47,6 +48,8 @@ const PERSONAS: { A: Persona; B: Persona } = {
   A: { ...SHARD.a, tenantId: SHARD.a.id },
   B: { ...SHARD.b, tenantId: SHARD.b.id },
 }
+// Who the browser acts as: the e2e member. The strip first-names a resolved person (invoiceStrip.ts display()).
+const DRIVER = e2eMember(SHARD.a.id).displayName.split(' ')[0]
 
 // [topology-never-publishes] scoped to policy IDENTITY (docs/e2e-convention.md): this
 // self-heal restores the tenant's OWN seeded policy, never a new one. Unwrapped -- the shard seed leaves the firm tenant's
@@ -1059,7 +1062,7 @@ test('detail surface: violations render against the rule-set version, the fix lo
   await expect(page.getByTestId('not-validated')).toBeVisible()
   await expectStripStates(page, { draft: 'current', validated: 'unreached', queued: 'unreached' })
   // A `current` node renders its own row's attribution -- here the genesis row, written by
-  // createInvoice's login(PERSONAS.A), the same subject this page signs in as.
+  // createInvoice's login(PERSONAS.A): a seeded member, not this page's e2e member.
   await expect(stripCaption(page, 'draft')).toHaveText(/^\d\d:\d\d · Chinedu$/)
 
   // 2. First Re-validate: the bad fixture fires exactly BAD_INVOICE_KEYS
@@ -1150,12 +1153,11 @@ test('detail surface: violations render against the rule-set version, the fix lo
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
   await expectStripStates(page, { draft: 'done', validated: 'done' })
   // The draft->validated row this click just wrote: ApplyValidation stamps the JWT caller
-  // (store.go actorFromContext), which is this page's persona.
-  await expect(stripCaption(page, 'validated')).toHaveText(/^\d\d:\d\d · Chinedu$/)
+  // (store.go actorFromContext), which is the e2e member.
+  await expect(stripCaption(page, 'validated')).toHaveText(new RegExp(`^\\d\\d:\\d\\d · ${DRIVER}$`))
 
   // AUDIT-02-07 (AC-1/AC-4): the genesis row's subject is createInvoice's
-  // login(PERSONAS.A), the same c0000000-...-0001 as this page's firm persona
-  // (targets.ts:27, frontend/app/src/auth.ts:44), whom db/seed.dev.sql:41 names. Count
+  // login(PERSONAS.A), c0000000-...-0001, whom db/seed.dev.sql:41 names. Count
   // first: an empty locator satisfies every assertion after it.
   await expect(page.getByTestId('strip-actor')).toHaveCount(5)
   // Both reached nodes are attributed; this pins the Draft node's, on the genesis row.
@@ -1712,11 +1714,9 @@ test('detail surface: a rejected invoice is edited back to draft with its reason
   // and its relabel, and everything past Draft is unreached again.
   await expectStripStates(page, { draft: 'current', validated: 'unreached', queued: 'unreached', accepted: 'unreached' })
   await expect(stripNode(page, 'accepted')).toContainText('Accepted by FIRS')
-  // Shape only: the demotion row and the genesis row share this actor and can share this
-  // minute, so no caption here tells them apart. That discrimination is S-16 in
-  // frontend/app/src/lib/invoiceStrip.test.ts, whose fixture gives the two `-> draft` rows
-  // distinct times and distinct actors.
-  await expect(stripCaption(page, 'draft')).toHaveText(/^\d\d:\d\d · Chinedu$/)
+  // The node takes the latest `-> draft` row (S-16, lib/invoiceStrip.test.ts): the browser's
+  // demotion, not the mock-issuer genesis row (Chinedu).
+  await expect(stripCaption(page, 'draft')).toHaveText(new RegExp(`^\\d\\d:\\d\\d · ${DRIVER}$`))
   await expect(stripCaption(page, 'validated')).toHaveText('Not reached')
 
   // AC-4: once submitted, the number stays fixed even back at draft. `not.toBeEditable()`
@@ -1739,8 +1739,7 @@ test('detail surface: a rejected invoice is edited back to draft with its reason
   await expect(page.getByTestId('violations-table')).toContainText('Passes all rules')
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
   await expectStripStates(page, { draft: 'done', validated: 'done' })
-  // The SHAPE, never a value: node 1 stays attributed across the re-validate. Which of the
-  // two `-> draft` rows it took is not observable here -- see the note above.
+  // Node 1 stays attributed across the re-validate.
   await expect(stripCaption(page, 'draft')).toHaveText(/^\d\d:\d\d · /)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
@@ -2682,10 +2681,8 @@ test('register: a search query is a working deep link', async ({ page }) => {
     'the decoy must leave the register holding more than the filter admits',
   ).toBeGreaterThan(filtered.pagination.total)
 
-  // TWO navigations, not one: ?persona= cannot carry ?q=. The strip rewrites the URL to
-  // `pathname + hash` (App.tsx) before Workspace mounts, so the query is gone before anything
-  // can read it. The session is in localStorage and rehydrates with no network, so this second
-  // goto is a real signed-in cold boot.
+  // TWO navigations: signInAs lands on `/` and the boot strips the query. The session is in
+  // localStorage and rehydrates with no network, so the second goto is a real signed-in cold boot.
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   const url = `${APP_URL}/invoices?q=${searchTin}`
   const res = await page.goto(url)
@@ -3287,7 +3284,7 @@ test('detail surface: the armed decision block and approval card, plus their lay
 
   // The real backend, over the real wire: this invoice's total sits below both firm
   // conditions, so materialise emits fin_mgr (ord0) then compliance (ord1), both pending.
-  // PERSONAS.A holds neither seat, so the lowest-ord pending check (fin_mgr) fails and
+  // The e2e member holds neither seat, so the lowest-ord pending check (fin_mgr) fails and
   // both controls stay disabled with the AXIS-2 sentence (handlers.go:394) reaching the
   // browser on the wire and in `title` (BUG-14-02 deleted the rendered node,
   // [reason-text-disappears]). NOT a duplicate of InvoiceDetail.test.tsx, which
@@ -3295,7 +3292,8 @@ test('detail surface: the armed decision block and approval card, plus their lay
   const detailReject = page.getByTestId('detail-reject')
   await expect(detailReject).toBeVisible()
   await expect(detailReject).toBeDisabled()
-  const armedWire = await getInvoice(token, invoice.id)
+  // can_approve is per caller: read with the browser's own token.
+  const armedWire = await getInvoice(await browserToken(page), invoice.id)
   // Substring, never the em dash literal -- an encoding hazard through a CI shell.
   expect(armedWire.approve_blocked_reason, 'the AXIS-2 gate sentence still reaches this seat').toContain(
     "Only an approver staffed to this step's workflow role can approve or reject it",
@@ -4269,7 +4267,6 @@ test.describe.serial("detail surface: the action cluster's geometry (firm admin)
     // sweeps on a possibly cold fleet.
     test.setTimeout(120_000)
     const errors = collectErrors(page)
-    const token = await login(PERSONAS.A)
 
     await signInAs(page, 'firm', { tenantId: SHARD.a.id })
     await selectEntity(page, entityName)
@@ -4372,7 +4369,7 @@ test.describe.serial("detail surface: the action cluster's geometry (firm admin)
       // off getInvoice(), never off the DOM and never authored here: a wire read proves the
       // sentence the BACKEND sent is unprinted, where a title read would only prove the SPA
       // agrees with itself.
-      const wire = await getInvoice(token, ids[status])
+      const wire = await getInvoice(await browserToken(page), ids[status])
       const reasons = [
         wire.revalidate_blocked_reason,
         wire.submit_blocked_reason,
@@ -4427,10 +4424,9 @@ test.describe.serial("detail surface: the action cluster's geometry (firm admin)
 // `Zenith journey` sorts after every seeded business_entity name, "Honeywell Group"
 // included, so this fixture can never become another spec's default active entity.
 //
-// The approve/reject DECISIONS are driven through the API, not the browser: APP_PERSONAS
-// holds only Okafor (...0001) and Balogun (...0002), neither of which is staffed to a firm
-// approval step -- the shipped "armed decision block" test above proves detail-approve and
-// detail-reject are DISABLED for the signed-in persona, with the AXIS-2 sentence on screen.
+// The approve/reject DECISIONS are driven through the API, not the browser: the e2e member
+// is staffed to no firm approval step -- the "armed decision block" test above proves
+// detail-approve and detail-reject are DISABLED for it, with the AXIS-2 sentence on screen.
 // Validation and submission ARE driven from the browser. What this block asserts is that
 // three surfaces agree on one fact, which is a claim about the reader, not the writer.
 test.describe.serial('detail surface: the deployed journey -- strip, approval card, feed and hand-off', () => {
@@ -4848,9 +4844,8 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
       `the workspace log holds ${wholeLog.total} events and this invoice ${server.total} -- with nothing else in the log, a dropped filter would be indistinguishable from a live one`,
     ).toBeGreaterThan(server.total)
 
-    // TWO navigations: ?persona= cannot carry ?invoice=. The strip rewrites the URL to
-    // `pathname + hash` (App.tsx) before Workspace mounts. The session rehydrates from
-    // localStorage with no network, so the second goto is a real signed-in cold boot.
+    // TWO navigations: signInAs lands on `/` and the boot strips the query. The session
+    // rehydrates from localStorage with no network, so the second goto is a real signed-in cold boot.
     await signInAs(page, 'firm', { tenantId: SHARD.a.id })
     const url = `${APP_URL}/audit?invoice=${invoiceId}`
     const res = await page.goto(url)

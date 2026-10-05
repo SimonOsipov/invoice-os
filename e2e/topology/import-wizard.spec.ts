@@ -1440,20 +1440,19 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await page.getByRole('button', { name: 'Skip — enter manually' }).click()
 
+  // The hand-off form starts blank: its primary names the missing number, not the entity refusal.
   const fileBtn = page.getByRole('button', { name: 'File invoice' })
-  await expect(fileBtn, 'manual build step is armed for in-house now, not refused').toBeVisible()
+  await expect(page.getByRole('button', { name: 'Invoice number is required' }), 'the blank form refuses until a number is typed').toBeDisabled()
   await expect(
     page.getByRole('button', { name: 'Filing needs a linked entity' }),
     'the manual refusal is gone too',
   ).toHaveCount(0)
 
-  // A fresh number: the default draft seeds a FIXED literal (lib/clients.ts's
-  // defaultDraft), so a second create under it would 409 on
-  // (tenant_id, entity_id, invoice_number) -- which a Playwright retry of this very test
-  // does, against the invoice its own first attempt already filed.
+  // A fresh number per attempt: a retry would 409 on (tenant_id, entity_id, invoice_number)
+  // against the invoice its first attempt filed. The hand-off form starts blank, so one is required.
   const manualNumber = `INH-MAN-${Date.now()}`
   await page.getByPlaceholder('INV-0000-00000').fill(manualNumber)
-  await expect(fileBtn).toBeEnabled()
+  await expect(fileBtn, 'manual build step is armed for in-house now, not refused').toBeEnabled()
 
   const createResp = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices'),
@@ -3485,7 +3484,7 @@ test('deployed app: /extraction/<jobId> is a working deep link', async ({ page }
   await extractOneDocument(page, 'ROUTE-02 cold boot')
   const detail = await openExtractionReview(page)
 
-  await signInAs(page, 'firm', { path: `/extraction/${detail.id}` })
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/extraction/${detail.id}` })
   await expect(page.getByTestId('extraction-review'), 'the cold boot must reopen the review screen').toBeVisible()
   await expect(page.getByTestId('extraction-save'), 'control: the settled footer rendered').toBeVisible({ timeout: 60_000 })
   await expect(page.getByTestId('extraction-open-invoice'), 'a cold boot holds no invoice id, so no exit').toHaveCount(0)

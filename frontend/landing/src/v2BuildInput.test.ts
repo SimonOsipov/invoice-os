@@ -230,6 +230,7 @@ describe('the landing loads only v2', () => {
       'components/DemoLeadForm.tsx': 1,
       'components/Hero.tsx': 1,
       'components/Intelligence.tsx': 1,
+      'components/RegisterModal.tsx': 1,
       'components/SignInForm.tsx': 1,
       'styles/ds.css': 2,
     })

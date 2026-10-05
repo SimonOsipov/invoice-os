@@ -27,8 +27,7 @@
 // not-found case below therefore uses crypto.randomUUID() — a syntactically
 // valid, RLS-invisible UUID — never a non-UUID string.
 //
-// Persona A only, fresh entities only: no cross-tenant writes, no global
-// `rules` table mutation (that's validation.spec.ts's concern).
+// Persona A only, fresh entities only: no cross-tenant writes.
 import { test, expect } from '@playwright/test'
 import { login, createEntity, offboardEntity, listEntities, rawFetch, PERSONAS } from './client'
 import { freshTin } from './fixtures'

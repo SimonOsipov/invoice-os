@@ -24,7 +24,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// The 21 attributable events, by rule, plus the 17 workspace-level ones.
+// The 21 attributable events, by rule, plus the 18 workspace-level ones.
 var (
 	triggerRuleAEvents = []string{ // bare `id`, looked up through invoices
 		"invoice.created",
@@ -78,6 +78,7 @@ func triggerRuleDPayloads(invoiceID string) map[string]map[string]any {
 		"extraction.failed":         {"document_id": docID, "id": invoiceID},
 		"membership.suspended":      {"user_id": userID},
 		"membership.reactivated":    {"user_id": userID},
+		"workspace.provisioned":     {"tenant_id": uuid.NewString(), "user_id": userID},
 		"validation.rule.enabled":   {"key": "buyer-tin-present"},
 		"validation.rule.disabled":  {"key": "buyer-tin-present"},
 	}
@@ -149,7 +150,7 @@ func TestAudit_InsertTriggerResolvesPortfolioEventsFromTheirOwnPayload(t *testin
 	}
 }
 
-// AC-13: the 17 workspace-level events stay NULL even when their payload holds a real
+// AC-13: the 18 workspace-level events stay NULL even when their payload holds a real
 // invoice id. The rule-A row in the same test is the positive control.
 //
 // For the two extraction.* names this is a DRIFT GUARD, not proof of their scope: the
@@ -161,8 +162,8 @@ func TestAudit_InsertTriggerLeavesWorkspaceEventsNull(t *testing.T) {
 	fx := seedTriggerFixture(t, f)
 
 	ruleD := triggerRuleDPayloads(fx.invoice)
-	if len(ruleD) != 17 {
-		t.Fatalf("rule-D payload map holds %d events, want 17", len(ruleD))
+	if len(ruleD) != 18 {
+		t.Fatalf("rule-D payload map holds %d events, want 18", len(ruleD))
 	}
 	for event, payload := range ruleD {
 		recordAudit(t, f, fx.tenant, event, payload)

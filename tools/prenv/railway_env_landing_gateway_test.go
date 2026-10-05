@@ -82,7 +82,7 @@ func TestReconcileURLVariablesSetsAndVerifiesLandingGateway(t *testing.T) {
 	}
 }
 
-// Every label names its own service id, and VITE_GATEWAY_URL goes to app and landing only.
+// Every label names its own service id.
 func TestReconcileURLVariablesGatewayURLNotOnOtherServices(t *testing.T) {
 	idForLabel := map[string]string{
 		"gateway":         "RAILWAY_SVC_GATEWAY_ID",
@@ -123,8 +123,8 @@ func TestReconcileURLVariablesGatewayURLNotOnOtherServices(t *testing.T) {
 		got = append(got, l)
 	}
 	sort.Strings(got)
-	if strings.Join(got, ",") != "app,landing" {
-		t.Errorf("set_service_vars writes VITE_GATEWAY_URL on %v, want exactly [app landing]", got)
+	if strings.Join(got, ",") != "app,landing,ops-console,support-console" {
+		t.Errorf("set_service_vars writes VITE_GATEWAY_URL on %v, want exactly [app landing ops-console support-console]", got)
 	}
 }
 

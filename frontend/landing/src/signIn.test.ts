@@ -5,6 +5,7 @@ import { ApiError } from '@invoice-os/api-client/client'
 
 import {
   handoffUrl,
+  readSignInConsole,
   readSignInState,
   signInConfigured,
   signInErrorMessage,
@@ -33,6 +34,36 @@ describe('handoffUrl', () => {
     for (const v of ['', '   ']) {
       vi.stubEnv('VITE_APP_URL', v)
       expect(handoffUrl('abc'), `VITE_APP_URL ${JSON.stringify(v)}`).toBeNull()
+    }
+  })
+})
+
+describe('handoffUrl to a console', () => {
+  it('handoffUrl_routesToTheTargetConsole', () => {
+    vi.stubEnv('VITE_APP_URL', 'https://app.x/')
+    vi.stubEnv('VITE_OPS_URL', 'https://ops.x/')
+    vi.stubEnv('VITE_SUPPORT_URL', 'https://support.x/')
+    expect(handoffUrl('abc', 'ops')).toBe('https://ops.x?handoff=abc')
+    expect(handoffUrl('abc', 'support')).toBe('https://support.x?handoff=abc')
+    expect(handoffUrl('abc')).toBe('https://app.x?handoff=abc')
+    expect(handoffUrl('a+b/c=', 'ops')).toBe('https://ops.x?handoff=a%2Bb%2Fc%3D')
+
+    // An unset base is null for its own target only, never a fall-through to another base.
+    const unset: [string, string, 'ops' | 'support' | undefined, string | null][] = [
+      ['VITE_OPS_URL', '', 'ops', null],
+      ['VITE_OPS_URL', '   ', 'ops', null],
+      ['VITE_SUPPORT_URL', '', 'support', null],
+      ['VITE_APP_URL', '', undefined, null],
+      ['VITE_OPS_URL', '', 'support', 'https://support.x?handoff=abc'],
+      ['VITE_SUPPORT_URL', '', undefined, 'https://app.x?handoff=abc'],
+    ]
+    expect(unset.length).toBeGreaterThan(0)
+    for (const [name, value, target, want] of unset) {
+      vi.stubEnv('VITE_APP_URL', 'https://app.x/')
+      vi.stubEnv('VITE_OPS_URL', 'https://ops.x/')
+      vi.stubEnv('VITE_SUPPORT_URL', 'https://support.x/')
+      vi.stubEnv(name, value)
+      expect(handoffUrl('abc', target), `${name}=${JSON.stringify(value)} target=${target}`).toBe(want)
     }
   })
 })
@@ -100,12 +131,56 @@ describe('readSignInState', () => {
   })
 })
 
+describe('readSignInConsole', () => {
+  it('readSignInConsole_acceptsExactlyOneKnownValue', () => {
+    expect(readSignInConsole(search([['console', 'ops']]))).toBe('ops')
+    expect(readSignInConsole(search([['console', 'support']]))).toBe('support')
+    expect(readSignInConsole(search([['state', STATE], ['console', 'ops'], ['signin', 'ready']]))).toBe('ops')
+
+    const refused: [string, string][] = [
+      ['absent', ''],
+      ['absent, other params', '?signin=ready'],
+      ['the same value twice', search([['console', 'ops'], ['console', 'ops']])],
+      ['two different values', search([['console', 'ops'], ['console', 'support']])],
+      ['an unknown value', search([['console', 'app']])],
+      ['a URL', search([['console', 'https://x']])],
+      ['upper case', search([['console', 'OPS']])],
+      ['trailing space', search([['console', 'ops ']])],
+      ['leading space', search([['console', ' support']])],
+      ['empty value', '?console='],
+      ['no value', '?console'],
+      ['a list', search([['console', 'ops,support']])],
+      ['a differently cased key', search([['Console', 'ops']])],
+      ['a prefix', search([['console', 'opsx']])],
+    ]
+    expect(refused.length).toBeGreaterThan(0)
+    for (const [name, s] of refused) {
+      expect(readSignInConsole(s), name).toBeNull()
+    }
+  })
+})
+
 describe('startUrl', () => {
   it('startUrl builds the app start bounce', () => {
     vi.stubEnv('VITE_APP_URL', 'https://app.x/')
     expect(startUrl()).toBe('https://app.x?auth=start')
     vi.stubEnv('VITE_APP_URL', '')
     expect(startUrl()).toBeNull()
+  })
+})
+
+describe('startUrl to a console', () => {
+  it('startUrl_bouncesThroughTheTargetConsole', () => {
+    vi.stubEnv('VITE_APP_URL', 'https://app.x/')
+    vi.stubEnv('VITE_OPS_URL', 'https://ops.x/')
+    vi.stubEnv('VITE_SUPPORT_URL', 'https://support.x/')
+    expect(startUrl('ops')).toBe('https://ops.x?auth=start')
+    expect(startUrl('support')).toBe('https://support.x?auth=start')
+    expect(startUrl()).toBe('https://app.x?auth=start')
+
+    vi.stubEnv('VITE_SUPPORT_URL', '')
+    expect(startUrl('support')).toBeNull()
+    expect(startUrl('ops')).toBe('https://ops.x?auth=start')
   })
 })
 

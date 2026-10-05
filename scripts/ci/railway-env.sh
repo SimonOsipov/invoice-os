@@ -13,6 +13,8 @@
 #                            set-fork-auth <environment-id|--self-test>|
 #                            set-fork-auth-site <environment-id> <landing-url>|
 #                            set-production-auth <--pre-merge|--post-merge> <environment-id>|
+#                            set-fork-gateway-token <environment-id>|
+#                            set-production-gateway-token <environment-id>|
 #                            set-sentry-off <environment-id|--self-test>|
 #                            set-fork-reconciliation-url <environment-id>|
 #                            delete-environment <name>|list-environments|
@@ -23,6 +25,9 @@
 #
 # `set-production-auth` is run by hand, once, never from a workflow: it writes
 # the persistent environment's auth configuration, before and after merge.
+#
+# `set-production-gateway-token` is run by hand, once, never from a workflow: it
+# writes the persistent environment's GATEWAY_TOKEN, and only when none is set.
 #
 # M4-23-02: Railway's PR Environments must stay OFF for this project.
 #
@@ -1537,16 +1542,15 @@ reconcile_url_variables() {
   echo "Reconciling per-environment URL variables in $env_id ..."
   set_service_vars "$env_id" "$RAILWAY_SVC_GATEWAY_ID" gateway "" "CORS_ALLOWED_ORIGINS=$origins"
   auth_check gateway "${SET_VARS_PAIRS[@]}" || exit 1
-  # VITE_DEMO_MODE is baked into the same vite build, so it lands before the same deploy as the URLs.
-  set_service_vars "$env_id" "$RAILWAY_SVC_APP_ID" app "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url" VITE_DEMO_MODE=true
+  set_service_vars "$env_id" "$RAILWAY_SVC_APP_ID" app "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url"
   auth_check app "${SET_VARS_PAIRS[@]}" || exit 1
-  set_service_vars "$env_id" "$RAILWAY_SVC_LANDING_ID" landing "" "VITE_GATEWAY_URL=$gateway_url" "VITE_APP_URL=$app_url" "VITE_OPS_URL=$ops_url" "VITE_SUPPORT_URL=$support_url"
+  set_service_vars "$env_id" "$RAILWAY_SVC_LANDING_ID" landing "" "VITE_GATEWAY_URL=$gateway_url" "VITE_APP_URL=$app_url" "VITE_OPS_URL=$ops_url" "VITE_SUPPORT_URL=$support_url" VITE_REGISTRATION_OPEN=true
   auth_check landing "${SET_VARS_PAIRS[@]}" || exit 1
-  set_service_vars "$env_id" "$RAILWAY_SVC_OPS_CONSOLE_ID" ops-console "" "VITE_LANDING_URL=$landing_url"
+  set_service_vars "$env_id" "$RAILWAY_SVC_OPS_CONSOLE_ID" ops-console "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url"
   auth_check ops-console "${SET_VARS_PAIRS[@]}" || exit 1
-  set_service_vars "$env_id" "$RAILWAY_SVC_SUPPORT_CONSOLE_ID" support-console "" "VITE_LANDING_URL=$landing_url"
+  set_service_vars "$env_id" "$RAILWAY_SVC_SUPPORT_CONSOLE_ID" support-console "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url"
   auth_check support-console "${SET_VARS_PAIRS[@]}" || exit 1
-  echo "All 10 environment variables confirmed by independent re-query."
+  echo "All 12 environment variables confirmed by independent re-query."
 }
 
 # cmd_reconcile_urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url>
@@ -3056,6 +3060,151 @@ cmd_set_production_auth() {
   echo "Production auth configuration confirmed in environment $env_id. Seal the secrets in the dashboard now."
 }
 
+# --- Gateway token --------------------------------------------------------------
+#
+# GATEWAY_TOKEN: gateway plus routedServices (TestGatewayTokenServicesMatchTheRoutedFleet).
+# One generated value on all eight; a fork never keeps production's.
+
+GATEWAY_TOKEN_SERVICES=(gateway tenancy portfolio invoice validation submission dashboard notifications)
+
+# gateway_token_ids <env-id> <settle-response-json>: fills GT_IDS, parallel to GATEWAY_TOKEN_SERVICES.
+# Resolves all eight before the caller writes anything.
+gateway_token_ids() {
+  local env_id="$1" settle="$2" svc id
+  GT_IDS=()
+  for svc in "${GATEWAY_TOKEN_SERVICES[@]}"; do
+    id=$(service_id_by_name "$settle" "$svc" "environment $env_id" GATEWAY_TOKEN) || exit 1
+    GT_IDS+=("$id")
+  done
+}
+
+# gateway_token_write <env-id> <token>: writes and re-reads each target; exits 1 naming each miss.
+gateway_token_write() {
+  local env_id="$1" token="$2" i bad=0
+  for i in "${!GATEWAY_TOKEN_SERVICES[@]}"; do
+    set_service_vars "$env_id" "${GT_IDS[$i]}" "${GATEWAY_TOKEN_SERVICES[$i]}" GATEWAY_TOKEN "GATEWAY_TOKEN=$token"
+    secret_verdict "$GQL_RESPONSE" "${GATEWAY_TOKEN_SERVICES[$i]}" GATEWAY_TOKEN "$token" || bad=1
+  done
+  if [ "$bad" != "0" ]; then
+    echo "::error::GATEWAY_TOKEN in environment $env_id did not read back as written."
+    exit 1
+  fi
+  echo "GATEWAY_TOKEN confirmed on ${#GATEWAY_TOKEN_SERVICES[@]} services in environment $env_id."
+}
+
+# gateway_token_write_generated <env-id>: refuses unless openssl yields 64 lowercase hex; then writes.
+gateway_token_write_generated() {
+  local env_id="$1" token
+  token=$(openssl rand -hex 32)
+  if ! [[ "$token" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "::error::The generated GATEWAY_TOKEN is not 64 lowercase hex characters (openssl rand -hex 32). Value not printed. Nothing was written."
+    exit 1
+  fi
+  gateway_token_write "$env_id" "$token"
+}
+
+# cmd_set_fork_gateway_token <environment-id>
+# Generated, never read from the source: a fork must not trust production's token.
+cmd_set_fork_gateway_token() {
+  local env_id="${1:-}"
+
+  if [ -z "$env_id" ]; then
+    echo "::error::usage: railway-env.sh set-fork-gateway-token <environment-id>"
+    exit 2
+  fi
+
+  require_source_env
+  if [ "$env_id" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to write GATEWAY_TOKEN in the persistent environment ($env_id). This command only writes a pr-<N> fork."
+    exit 1
+  fi
+  require_env
+  assert_environment_is_ephemeral "$env_id" GATEWAY_TOKEN
+
+  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+    "listing service instances in environment $env_id"
+  gateway_token_ids "$env_id" "$GQL_RESPONSE"
+
+  gateway_token_write_generated "$env_id"
+}
+
+# cmd_set_production_gateway_token <environment-id>
+# Run by hand, once, never from a workflow. Writes only when all eight are absent or empty.
+cmd_set_production_gateway_token() {
+  local env_id="${1:-}"
+
+  if [ -z "$env_id" ]; then
+    echo "::error::usage: railway-env.sh set-production-gateway-token <environment-id>"
+    exit 2
+  fi
+
+  require_source_env
+  if [ "$env_id" != "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to write the production GATEWAY_TOKEN in $env_id. This command writes only the persistent environment ($RAILWAY_DEV_ENVIRONMENT_ID)."
+    exit 1
+  fi
+  require_env
+
+  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+    "listing service instances in environment $env_id"
+  gateway_token_ids "$env_id" "$GQL_RESPONSE"
+
+  # kinds[i] is the auth_kind of target i; held[i] its value when present.
+  local i j kind got kinds=() held=() present=0
+  for i in "${!GATEWAY_TOKEN_SERVICES[@]}"; do
+    auth_read "$env_id" "${GT_IDS[$i]}" "${GATEWAY_TOKEN_SERVICES[$i]}"
+    kind=$(auth_kind "$GQL_RESPONSE" GATEWAY_TOKEN)
+    got=""
+    if [ "$kind" = "present" ]; then
+      got=$(printf '%s' "$GQL_RESPONSE" | jq -j '.data.variables.GATEWAY_TOKEN' && printf x)
+      got=${got%x}
+      present=$((present + 1))
+    fi
+    kinds+=("$kind")
+    held+=("$got")
+  done
+
+  for kind in "${kinds[@]}"; do
+    if [ "$kind" = "unreadable" ]; then
+      echo "::error::A GATEWAY_TOKEN target's variable map is unreadable in environment $env_id. Nothing was written."
+      exit 1
+    fi
+  done
+
+  if [ "$present" = "0" ]; then
+    gateway_token_write_generated "$env_id"
+    return
+  fi
+
+  # The value held by most targets is the reference; every other target is an offender.
+  local ref="" best=0 n offenders=()
+  for i in "${!held[@]}"; do
+    [ "${kinds[$i]}" = "present" ] || continue
+    n=0
+    for j in "${!held[@]}"; do
+      if [ "${kinds[$j]}" = "present" ] && [ "${held[$j]}" = "${held[$i]}" ]; then
+        n=$((n + 1))
+      fi
+    done
+    if [ "$n" -gt "$best" ]; then
+      best=$n
+      ref=${held[$i]}
+    fi
+  done
+  for i in "${!held[@]}"; do
+    if [ "${kinds[$i]}" != "present" ] || [ "${held[$i]}" != "$ref" ]; then
+      offenders+=("${GATEWAY_TOKEN_SERVICES[$i]}")
+    fi
+  done
+
+  if [ "${#offenders[@]}" = "0" ]; then
+    echo "GATEWAY_TOKEN is already set to one value on all ${#GATEWAY_TOKEN_SERVICES[@]} services in environment $env_id. Nothing was written."
+    return
+  fi
+  echo "::error::GATEWAY_TOKEN in environment $env_id is partly set. These services lack it or differ: ${offenders[*]}. Nothing was written, and no value is printed."
+  exit 1
+}
+
 # --- Sentry off in a fork ----------------------------------------------------
 #
 # A fork inherits production's variables, so a production DSN would spend the
@@ -3351,6 +3500,8 @@ case "${1:-}" in
   set-fork-auth)             cmd_set_fork_auth "${2:-}" ;;
   set-fork-auth-site)        shift; cmd_set_fork_auth_site "$@" ;;
   set-production-auth)       shift; cmd_set_production_auth "$@" ;;
+  set-fork-gateway-token)    cmd_set_fork_gateway_token "${2:-}" ;;
+  set-production-gateway-token) cmd_set_production_gateway_token "${2:-}" ;;
   set-sentry-off)            cmd_set_sentry_off "${2:-}" ;;
   set-fork-reconciliation-url) cmd_set_fork_reconciliation_url "${2:-}" ;;
   delete-environment)        cmd_delete_environment "${2:-}" ;;
@@ -3359,7 +3510,7 @@ case "${1:-}" in
   wait-deployment)           shift; cmd_wait_deployment "$@" ;;
   report-api-calls)          cmd_report_api_calls ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments|query <context>|wait-deployment <label> <deployment-id>|report-api-calls>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-fork-gateway-token <environment-id>|set-production-gateway-token <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments|query <context>|wait-deployment <label> <deployment-id>|report-api-calls>"
     exit 2
     ;;
 esac

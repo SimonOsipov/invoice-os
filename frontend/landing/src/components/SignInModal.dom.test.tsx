@@ -6,27 +6,17 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { LANDING_PERSONAS } from '../auth'
-import { GLYPHS } from '../icons'
+import { SIGN_IN_UNAVAILABLE as UNAVAILABLE } from '../signIn'
 import { SignInModal } from './SignInModal'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const HOME = 'https://www.ascomply.com/'
-const CODE_STEP_TEXT = ["Verify it's you", 'Verify & continue', 'Back to accounts', 'Resend code', 'Signing in', '481920', "That code doesn't match"]
-const FOOTER_TEXT = ['Forgot password?', 'Password reset is disabled', 'SSO · OAUTH2', 'OAUTH2']
-
 let container: HTMLDivElement
 let root: Root
 let consoleError: ReturnType<typeof vi.spyOn>
-let locationStub: { href: string }
-let originalLocationDescriptor: PropertyDescriptor | undefined
 
 beforeEach(() => {
   vi.useFakeTimers()
-  originalLocationDescriptor = Object.getOwnPropertyDescriptor(window, 'location')
-  locationStub = { href: HOME }
-  Object.defineProperty(window, 'location', { value: locationStub, writable: true, configurable: true })
 
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -37,23 +27,15 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount())
   container.remove()
-  if (originalLocationDescriptor) Object.defineProperty(window, 'location', originalLocationDescriptor)
   vi.restoreAllMocks()
   vi.unstubAllEnvs()
   vi.useRealTimers()
 })
 
-async function mount(onClose: () => void = vi.fn(), state: string | null = null, initialError?: string): Promise<void> {
+async function mount(onClose: () => void = vi.fn(), state: string | null = null, initialError?: string, onCreateAccount?: () => void): Promise<void> {
   await act(async () => {
-    root.render(createElement(SignInModal, { onClose, heldState: () => state, initialError }))
+    root.render(createElement(SignInModal, { onClose, heldState: () => state, initialError, onCreateAccount }))
   })
-}
-
-// The picker anchor: absence checks scope here, not to the whole dialog.
-function picker(): HTMLElement {
-  const p = dialog().querySelector<HTMLElement>('[data-testid="persona-picker"]')
-  expect(p, 'expected the persona picker').not.toBeNull()
-  return p!
 }
 
 // Gateway unset: signInConfigured() is false whatever the SPA targets are.
@@ -73,164 +55,59 @@ function dialog(): HTMLElement {
   return d!
 }
 
-// Asserts presence first so a missing persona fails as an assertion, not a TypeError.
-async function clickPersona(id: string): Promise<void> {
-  const b = document.querySelector<HTMLButtonElement>(`[data-persona="${id}"]`)
-  expect(b, `expected persona ${id} on the picker`).not.toBeNull()
-  await act(async () => {
-    b!.click()
-  })
-}
-
 // Unset targets are stubbed to '' (resolveBase → null) so a shell-exported VITE_* cannot leak in.
 function stubTargets(env: Partial<Record<'VITE_APP_URL' | 'VITE_OPS_URL' | 'VITE_SUPPORT_URL', string>>): void {
   for (const k of ['VITE_APP_URL', 'VITE_OPS_URL', 'VITE_SUPPORT_URL'] as const) vi.stubEnv(k, env[k] ?? '')
 }
 
 const ALL_TARGETS = { VITE_APP_URL: 'https://app.example.test', VITE_OPS_URL: 'https://ops.example.test', VITE_SUPPORT_URL: 'https://support.example.test' }
-const CASES = [
-  ['developer', 'https://ops.example.test?persona=developer'],
-  ['support', 'https://support.example.test?persona=support'],
-  ['firm', 'https://app.example.test?persona=firm'],
-  ['inhouse', 'https://app.example.test?persona=inhouse'],
-] as const
 
-describe('controls', () => {
-  it('T01-1: control — the location stub captures an assignment', () => {
-    window.location.href = 'https://example.test/probe'
-    expect(locationStub.href).toBe('https://example.test/probe')
-    expect(consoleError).not.toHaveBeenCalled()
-  })
+describe('the real door only', () => {
+  const h3s = (d: HTMLElement) => Array.from(d.querySelectorAll('h3'), (h) => h.textContent)
 
-  it('T01-2: control — the picker renders four personas in order', async () => {
-    await mount()
-    const d = dialog()
-    expect(d.getAttribute('aria-label')).toBe('Platform login')
-    expect(d.textContent).toContain('Choose an account')
-    expect(d.textContent).toContain('Pick a demo profile to continue')
-    const ids = Array.from(d.querySelectorAll<HTMLElement>('[data-persona]'), (b) => b.dataset.persona)
-    expect(ids).toEqual(['developer', 'support', 'firm', 'inhouse'])
-    expect(consoleError).not.toHaveBeenCalled()
-  })
-})
-
-describe('the pick', () => {
-  it('T01-3: each persona control is a focusable button', async () => {
-    await mount()
-    const buttons = dialog().querySelectorAll<HTMLButtonElement>('[data-persona]')
-    expect(buttons.length).toBe(4)
-    for (const b of Array.from(buttons)) {
-      expect(b.tagName).toBe('BUTTON')
-      expect(b.disabled).toBe(false)
-      expect(b.tabIndex).toBeGreaterThanOrEqual(0)
-      b.focus()
-      expect(document.activeElement).toBe(b)
-    }
-    expect(consoleError).not.toHaveBeenCalled()
-  })
-
-  it.each(CASES)('T01-4: %s navigates at once to its own target', async (id, expected) => {
-    expect(CASES).toHaveLength(4)
+  it('SM-01: the configured dialog is the real door only', async () => {
     stubTargets(ALL_TARGETS)
-    await mount()
-    await clickPersona(id)
-    expect(locationStub.href).toBe(expected)
-    expect(vi.getTimerCount()).toBe(0)
-    expect(consoleError).not.toHaveBeenCalled()
-  })
-
-  it('T01-5 unconfigured: no intermediate step follows a pick', async () => {
-    stubTargets(ALL_TARGETS)
-    unconfigured()
-    await mount()
-    await clickPersona('firm')
-    const d = dialog()
-    expect(picker().querySelectorAll('input').length).toBe(0)
-    expect(d.querySelectorAll('form').length).toBe(0)
-    for (const s of CODE_STEP_TEXT) {
-      expect(d.textContent, `dialog still shows "${s}"`).not.toContain(s)
-    }
-    expect(d.querySelectorAll('[data-persona]').length).toBe(4)
-    expect(consoleError).not.toHaveBeenCalled()
-  })
-
-  it('T01-6 unconfigured: an unconfigured target is a no-op', async () => {
-    stubTargets({})
-    unconfigured()
-    await mount()
-    await clickPersona('firm')
-    expect(locationStub.href).toBe(HOME)
-    expect(dialog().querySelectorAll('[data-persona]').length).toBe(4)
-    expect(picker().querySelectorAll('input').length).toBe(0)
-    expect(dialog().querySelectorAll('form').length).toBe(0)
-    expect(vi.getTimerCount()).toBe(0)
-    expect(consoleError).not.toHaveBeenCalled()
-  })
-
-  it('T01-7: the null target is per persona, not all-or-nothing', async () => {
-    stubTargets({ VITE_OPS_URL: 'https://ops.example.test' })
-    await mount()
-    await clickPersona('firm')
-    expect(locationStub.href).toBe(HOME)
-    await clickPersona('developer')
-    expect(locationStub.href).toBe('https://ops.example.test?persona=developer')
-    expect(consoleError).not.toHaveBeenCalled()
-  })
-
-  it('T01-5/T01-6 configured counterparts', async () => {
-    // App and gateway set (configured); ops unset, so developer is an unconfigured target.
-    stubTargets({ VITE_APP_URL: 'https://app.example.test' })
     configured()
-    await mount(vi.fn(), STATE)
-    expect(dialog().querySelectorAll('input[type="password"]').length).toBe(1)
-
-    await clickPersona('developer')
-    expect(locationStub.href).toBe(HOME)
-    expect(vi.getTimerCount()).toBe(0)
-
-    await clickPersona('firm')
-    expect(locationStub.href).toBe('https://app.example.test?persona=firm')
+    await mount(vi.fn(), STATE, undefined, vi.fn())
     const d = dialog()
-    for (const s of CODE_STEP_TEXT) {
-      expect(d.textContent, `dialog still shows "${s}"`).not.toContain(s)
-    }
-    expect(picker().querySelectorAll('[data-persona]').length).toBe(4)
-    expect(picker().querySelectorAll('input').length).toBe(0)
-    expect(consoleError).not.toHaveBeenCalled()
-  })
-})
-
-describe('removed chrome', () => {
-  it('T01-8 unconfigured: the picker has no password or SSO footer', async () => {
-    unconfigured()
-    await mount(vi.fn(), STATE)
-    const d = dialog()
-    expect(d.textContent).toContain('Choose an account')
-    expect(picker().querySelectorAll('input').length).toBe(0)
-    expect(d.querySelectorAll('input').length).toBe(0)
-    expect(d.querySelectorAll('a').length).toBe(0)
-    expect(FOOTER_TEXT.length).toBeGreaterThan(0)
-    for (const s of FOOTER_TEXT) {
-      expect(d.textContent, `dialog still shows "${s}"`).not.toContain(s)
-    }
+    expect(d.querySelectorAll('form').length, 'the email form').toBe(1)
+    expect(Array.from(d.querySelectorAll('button')).some((b) => b.textContent === 'Create an account'), 'the create link').toBe(true)
+    expect(h3s(d)).toEqual(['Sign in to your workspace'])
+    expect(d.querySelectorAll('[data-persona]').length).toBe(0)
+    expect(d.querySelectorAll('[data-testid="persona-picker"]').length).toBe(0)
+    expect(d.textContent).not.toContain('Choose an account')
+    expect(d.textContent).not.toContain('demo profile')
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('T01-8 configured: the persona picker has no password or SSO footer', async () => {
+  it('SM-13: registration closed hides only the create link', async () => {
     stubTargets(ALL_TARGETS)
     configured()
     await mount(vi.fn(), STATE)
     const d = dialog()
-    // Positive half: the configured form is on the dialog.
+    expect(d.querySelectorAll('form').length, 'control: the form stays').toBe(1)
     expect(d.querySelectorAll('input[type="password"]').length).toBe(1)
-    const p = picker()
-    expect(p.querySelectorAll('[data-persona]').length).toBe(4)
-    expect(p.querySelectorAll('input').length).toBe(0)
-    expect(p.querySelectorAll('a').length).toBe(0)
-    expect(FOOTER_TEXT.length).toBeGreaterThan(0)
-    for (const s of FOOTER_TEXT) {
-      expect(d.textContent, `dialog shows "${s}"`).not.toContain(s)
-    }
+    expect(h3s(d), 'the heading stays and nothing else is added').toEqual(['Sign in to your workspace'])
+    expect(d.textContent).not.toContain('Create an account')
+    expect(d.textContent).not.toContain('New to ASComply?')
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['gateway unset', () => { stubTargets(ALL_TARGETS); unconfigured() }],
+    ['app unset', () => { stubTargets({}); configured() }],
+  ] as const)('SM-12 %s: unconfigured shows the unavailable copy', async (label, setup) => {
+    setup()
+    await mount(vi.fn(), STATE, undefined, vi.fn())
+    const d = dialog()
+    expect(h3s(d), label).toEqual(['Sign in to your workspace'])
+    expect(d.textContent, label).toContain(UNAVAILABLE)
+    expect(d.querySelectorAll('form').length, label).toBe(0)
+    expect(d.querySelectorAll('input').length, label).toBe(0)
+    expect(d.textContent, label).not.toContain('Create an account')
+    expect(d.querySelectorAll('[data-persona]').length, label).toBe(0)
+    expect(d.textContent, label).not.toContain('Choose an account')
+    expect(d.textContent, label).not.toContain('demo profile')
     expect(consoleError).not.toHaveBeenCalled()
   })
 })
@@ -262,73 +139,18 @@ describe('v2 content', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('SM-03: the headings share the v2 style', async () => {
+  it('SM-03: the heading keeps the v2 style', async () => {
     stubTargets(ALL_TARGETS)
     configured()
     await mount(vi.fn(), STATE)
     const h3s = Array.from(dialog().querySelectorAll<HTMLElement>('h3'))
-    expect(h3s.map((h) => h.textContent)).toEqual(['Sign in to your workspace', 'Choose an account'])
+    expect(h3s.map((h) => h.textContent)).toEqual(['Sign in to your workspace'])
     for (const h of h3s) {
       const label = h.textContent ?? ''
       expect(h.style.fontSize, label).toBe('22px')
       expect(h.style.fontWeight, label).toBe('700')
       expect(h.style.letterSpacing, label).toBe('-0.03em')
       expect(h.style.color, label).toBe('var(--ink)')
-    }
-    expect(consoleError).not.toHaveBeenCalled()
-  })
-
-  it('SM-04: each persona row is the v2 row', async () => {
-    unconfigured()
-    await mount()
-    const rows = Array.from(dialog().querySelectorAll<HTMLElement>('[data-persona]'))
-    expect(rows.length).toBe(4)
-    for (const row of rows) {
-      const p = LANDING_PERSONAS.find((x) => x.id === row.dataset.persona)
-      expect(p, `no persona for ${row.dataset.persona}`).toBeDefined()
-      const id = p!.id
-      expect(row.classList.contains('si-persona'), id).toBe(true)
-      expect(row.style.border, id).toBe('1px solid var(--border)')
-      expect(row.style.borderRadius, id).toBe('var(--radius-md)')
-      const meta = row.querySelectorAll('.t-meta')
-      expect(meta.length, id).toBe(1)
-      expect(meta[0].textContent, id).toBe(p!.access)
-      const chevron = Array.from(row.querySelectorAll('svg path'), (x) => x.getAttribute('d'))
-      expect(chevron, id).toEqual([...GLYPHS['chevron-right']])
-
-      const st = (prop: string) => row.style.getPropertyValue(prop)
-      expect(st('display'), id).toBe('flex')
-      expect(st('align-items'), id).toBe('center')
-      expect(st('gap'), id).toBe('12px')
-      expect(st('width'), id).toBe('100%')
-      expect(st('text-align'), id).toBe('left')
-      expect(st('background'), id).toBe('var(--card)')
-      expect(st('padding'), id).toBe('12px 14px')
-      expect(st('cursor'), id).toBe('pointer')
-      expect(st('font-family'), id).toBe('var(--font-sans)')
-
-      const m = meta[0] as HTMLElement
-      expect(m.style.color, id).toBe('var(--teal)')
-      expect(m.style.display, id).toBe('inline-block')
-      expect(m.style.marginTop, id).toBe('6px')
-
-      const svg = row.querySelector('svg')!
-      expect(svg.getAttribute('width'), id).toBe('16')
-      expect(svg.getAttribute('height'), id).toBe('16')
-      expect(svg.getAttribute('stroke-width'), id).toBe('2')
-      expect((svg.parentElement as HTMLElement).style.color, id).toBe('var(--muted-foreground)')
-
-      const avatar = row.firstElementChild as HTMLElement
-      expect(avatar.textContent, id).toBe(p!.initials)
-      expect(avatar.style.width, id).toBe('38px')
-      expect(avatar.style.height, id).toBe('38px')
-      expect(avatar.style.borderRadius, id).toBe('var(--radius-md)')
-      expect(avatar.style.background, id).toBe(p!.avBg)
-      expect(avatar.style.color, id).toBe(p!.avColor)
-
-      const text = row.textContent ?? ''
-      expect(text, id).toContain(p!.name)
-      expect(text, id).toContain(`${p!.title} · ${p!.org}`)
     }
     expect(consoleError).not.toHaveBeenCalled()
   })
@@ -341,74 +163,51 @@ describe('v2 content', () => {
       const body = d.querySelector<HTMLElement>('.t-eyebrow')!.parentElement!.parentElement as HTMLElement
       expect(body.style.padding, label).toBe('22px 20px 20px')
       expect((body.firstElementChild as HTMLElement).style.marginBottom, `${label} eyebrow wrapper`).toBe('14px')
-      const pick = picker()
-      const heading = pick.querySelector<HTMLElement>('h3')!
-      expect(heading.style.margin, `${label} picker heading`).toBe('0px 0px 6px')
-      const para = pick.querySelector<HTMLElement>('p')!
-      expect(para.className, label).toBe('t-body-sm')
-      expect(para.style.lineHeight, label).toBe('1.55')
-      expect(para.style.margin, label).toBe('0px')
-      const list = pick.querySelector<HTMLElement>('[data-persona]')!.parentElement as HTMLElement
-      expect(list.style.display, label).toBe('grid')
-      expect(list.style.gap, label).toBe('10px')
-      expect(list.style.marginTop, label).toBe('18px')
-      expect(list.children.length, label).toBe(4)
+      const headings = Array.from(d.querySelectorAll<HTMLElement>('h3'))
+      expect(headings.map((h) => h.textContent), label).toEqual(['Sign in to your workspace'])
+      expect(headings[0].parentElement, `${label} heading sits in the body`).toBe(body)
+      expect(d.querySelectorAll('[data-persona]').length, `${label} no persona rows`).toBe(0)
+      expect(d.querySelectorAll('[data-testid="persona-picker"]').length, `${label} no picker`).toBe(0)
       act(() => root.render(null))
     }
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('SM-07 configured: the workspace heading, form and divider precede the picker in v2 order', async () => {
+  it('SM-07 configured: the workspace heading, form and create link follow in v2 order', async () => {
     stubTargets(ALL_TARGETS)
     configured()
-    await mount(vi.fn(), STATE)
+    await mount(vi.fn(), STATE, undefined, vi.fn())
     const d = dialog()
+    const create = Array.from(d.querySelectorAll('button')).find((b) => b.textContent === 'Create an account')
     const order = [
       d.querySelector('.t-eyebrow'),
       Array.from(d.querySelectorAll('h3')).find((h) => h.textContent === 'Sign in to your workspace'),
       d.querySelector('form'),
-      Array.from(d.querySelectorAll('div')).find((x) => x.textContent?.trim() === 'or explore with a demo profile'),
-      picker(),
+      create,
     ]
     order.forEach((el, i) => expect(el, `step ${i} missing`).toBeTruthy())
     for (let i = 1; i < order.length; i++) {
       expect(order[i - 1]!.compareDocumentPosition(order[i]!) & Node.DOCUMENT_POSITION_FOLLOWING, `step ${i - 1} must precede step ${i}`).toBeTruthy()
     }
     expect((order[1] as HTMLElement).style.margin).toBe('0px 0px 16px')
-    const divider = order[3] as HTMLElement
-    expect(divider.style.margin).toBe('22px 0px 18px')
-    expect(divider.style.fontSize).toBe('12px')
-    expect(divider.style.color).toBe('var(--muted-foreground)')
-    const rules = divider.querySelectorAll<HTMLElement>('span')
-    expect(rules.length).toBe(2)
-    for (const r of Array.from(rules)) expect(r.style.background).toBe('var(--border)')
-    expect(consoleError).not.toHaveBeenCalled()
-  })
-
-  it('SM-08 unconfigured: no workspace heading, form or divider; the picker heading and eyebrow stay', async () => {
-    unconfigured()
-    await mount(vi.fn(), STATE)
-    const d = dialog()
-    expect(Array.from(d.querySelectorAll('h3'), (h) => h.textContent)).toEqual(['Choose an account'])
-    expect(d.querySelectorAll('.t-eyebrow').length).toBe(1)
-    expect(d.querySelectorAll('[data-persona]').length).toBe(4)
-    expect(d.textContent).not.toContain('Sign in to your workspace')
+    const row = create!.parentElement as HTMLElement
+    expect(row.textContent).toContain('New to ASComply?')
+    expect(row.nextElementSibling, 'the create row ends the body').toBeNull()
+    expect(d.querySelectorAll('[data-persona]').length).toBe(0)
     expect(d.textContent).not.toContain('or explore with a demo profile')
-    expect(d.querySelectorAll('form').length).toBe(0)
     expect(consoleError).not.toHaveBeenCalled()
   })
 
   it('SM-09: held state and initialError reach the form under the new body', async () => {
     stubTargets(ALL_TARGETS)
     configured()
-    // No held state: the form offers the start bounce, and the picker is untouched.
+    // No held state: the form offers the start bounce.
     await mount(vi.fn(), null, 'Sign-in failed. Try again.')
     let d = dialog()
     const bounce = Array.from(d.querySelectorAll('button')).find((b) => b.textContent === 'Continue with email')
     expect(bounce, 'expected the start-bounce button').toBeDefined()
     expect(d.querySelectorAll('input[type="password"]').length).toBe(0)
     expect(Array.from(d.querySelectorAll('[role="alert"]'), (a) => a.textContent?.trim())).toEqual(['Sign-in failed. Try again.'])
-    expect(d.querySelectorAll('[data-persona]').length).toBe(4)
     expect(d.querySelectorAll('.t-eyebrow').length).toBe(1)
 
     // A held state: the credentials form replaces the bounce, and the error still shows.
@@ -418,65 +217,26 @@ describe('v2 content', () => {
     expect(d.querySelectorAll('input[type="password"]').length).toBe(1)
     expect(Array.from(d.querySelectorAll('button')).some((b) => b.textContent === 'Continue with email')).toBe(false)
     expect(Array.from(d.querySelectorAll('[role="alert"]'), (a) => a.textContent?.trim())).toEqual(['Sign-in failed. Try again.'])
-    expect(d.querySelectorAll('[data-persona]').length).toBe(4)
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('SM-10: a click on any part of a row picks that persona and does not close the modal', async () => {
+  it('SM-11: nothing defeats the focus ring, and the dialog is modal and named Platform login', async () => {
     stubTargets(ALL_TARGETS)
-    const onClose = vi.fn()
-    await mount(onClose)
-    const row = document.querySelector<HTMLElement>('[data-persona="firm"]')!
-    const parts = [row.querySelector('.t-meta'), row.querySelector('svg'), row.firstElementChild].filter((x): x is Element => x != null)
-    expect(parts.length).toBe(3)
-    for (const part of parts) {
-      locationStub.href = HOME
-      await act(async () => {
-        part.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-      })
-      expect(locationStub.href).toBe('https://app.example.test?persona=firm')
-    }
-    expect(onClose).not.toHaveBeenCalled()
-    expect(consoleError).not.toHaveBeenCalled()
-  })
-
-  it('SM-11: nothing defeats the hover or focus ring, and the dialog is modal and named Platform login', async () => {
-    unconfigured()
-    await mount()
+    configured()
+    await mount(vi.fn(), STATE)
     const d = dialog()
+    expect(d.getAttribute('role')).toBe('dialog')
     expect(d.getAttribute('aria-modal')).toBe('true')
+    expect(d.getAttribute('aria-label')).toBe('Platform login')
     expect(d.querySelectorAll('[aria-label="Sign in"]').length).toBe(0)
-    const rows = Array.from(d.querySelectorAll<HTMLElement>('[data-persona]'))
-    expect(rows.length).toBe(4)
-    for (const row of rows) {
-      expect(row.style.getPropertyValue('outline'), row.dataset.persona).toBe('')
-      expect(row.style.getPropertyValue('filter'), row.dataset.persona).toBe('')
-    }
-    expect(declsOf('.si-persona:focus-visible'), 'control: the parser finds the ring rule').toContain('outline: 2px solid var(--ring)')
-    const all = [...declsOf('.si-persona'), ...declsOf('.si-persona:hover'), ...declsOf('.si-persona:focus-visible')]
-    expect(all.length).toBeGreaterThan(0)
-    expect(all.filter((x) => /^outline(-style)?: (none|0)/.test(x))).toEqual([])
-    expect(declsOf('.si-persona:focus-visible')).toContain('outline-offset: 2px')
+    expect(declsOf('.si-close:focus-visible'), 'control: the parser finds the ring rule').toContain('outline: 2px solid var(--ring)')
+    const css = Array.from(d.querySelectorAll('style'), (s) => s.textContent ?? '').join('\n')
+    expect(css, 'the picker rules are gone with the picker').not.toContain('.si-persona')
+    expect(css).not.toMatch(/outline(-style)?\s*:\s*(none|0)/)
+    const controls = Array.from(d.querySelectorAll<HTMLElement>('input, button'))
+    expect(controls.length).toBeGreaterThan(0)
+    for (const c of controls) expect(c.style.getPropertyValue('outline'), c.outerHTML.slice(0, 60)).not.toMatch(/^(none|0)/)
     expect(consoleError).not.toHaveBeenCalled()
-  })
-
-  it('SM-05: the persona CSS is the v2 hover and ring', async () => {
-    unconfigured()
-    await mount()
-    expect(declsOf('.si-persona:hover')).toContain('filter: brightness(0.97)')
-    expect(declsOf('.si-persona:focus-visible')).toContain('outline: 2px solid var(--ring)')
-    expect(consoleError).not.toHaveBeenCalled()
-  })
-})
-
-describe('persona data', () => {
-  it('QA-1: personas carry no email or destLabel', () => {
-    expect(LANDING_PERSONAS.map((p) => p.id)).toEqual(['developer', 'support', 'firm', 'inhouse'])
-    for (const p of LANDING_PERSONAS) {
-      expect(Object.keys(p)).toContain('target')
-      expect(Object.keys(p)).not.toContain('email')
-      expect(Object.keys(p)).not.toContain('destLabel')
-    }
   })
 })
 
@@ -503,5 +263,25 @@ describe('Escape', () => {
     })
     expect(onClose).toHaveBeenCalledTimes(1)
     expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('SM-14: a click inside the card keeps the dialog open and a scrim click closes it', async () => {
+    stubTargets(ALL_TARGETS)
+    configured()
+    const onClose = vi.fn()
+    await mount(onClose, STATE)
+    const d = dialog()
+    const inside = [d.querySelector('.t-eyebrow'), d.querySelector('h3'), d.querySelector('input')]
+    inside.forEach((el, i) => expect(el, `inside target ${i} missing`).not.toBeNull())
+    for (const el of inside) {
+      await act(async () => {
+        el!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      })
+    }
+    expect(onClose, 'a click in the card does not close').not.toHaveBeenCalled()
+    await act(async () => {
+      d.click()
+    })
+    expect(onClose).toHaveBeenCalledTimes(1)
   })
 })

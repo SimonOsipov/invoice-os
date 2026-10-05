@@ -92,9 +92,7 @@ var DSNRequirements = []DSNRequirement{
 	{"submission", "DOCUMENT_REGION", Required, KindOpaque},
 	{"submission", "DOCUMENT_ACCESS_KEY_ID", Required, KindOpaque},
 	{"submission", "DOCUMENT_SECRET_ACCESS_KEY", Required, KindOpaque},
-	// cmd/notifications/main.go opens no pool -- it has no db/pgxpool/sql
-	// reference at all -- so an absent DATABASE_URL is not a defect there.
-	{"notifications", "DATABASE_URL", IfPresent, KindDSN},
+	{"notifications", "DATABASE_URL", Required, KindDSN},
 	// Production has none until the post-merge write; every fork writes one.
 	{"auth", "DATABASE_URL", IfPresent, KindDSN},
 }

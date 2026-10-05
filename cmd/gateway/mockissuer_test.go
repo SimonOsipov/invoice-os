@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -10,6 +11,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -17,8 +21,6 @@ import (
 
 func TestTaggedGatewayRegistersMintRoutesOutsideProduction(t *testing.T) {
 	t.Setenv("AUTH_ISSUER", mountTestIssuer)
-	// Empty is local posture, the only one where an empty body mints.
-	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "")
 	withCORS := gateway.CORS([]string{"https://app.ascomply.test"})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
@@ -61,7 +63,7 @@ func TestTaggedGatewayRegistersMintRoutesOutsideProduction(t *testing.T) {
 	rec = httptest.NewRecorder()
 	login.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{}`)))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("POST /auth/login {} = %d, want 200 under local posture (body %s)", rec.Code, rec.Body.String())
+		t.Fatalf("POST /auth/login {} = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 	var tok struct {
 		AccessToken string `json:"access_token"`
@@ -105,12 +107,11 @@ func TestTaggedMockIssuerRoutesValueDomain(t *testing.T) {
 	}
 }
 
-// Both routes come from one issuer stamped with AUTH_ISSUER, login keeps its CORS
-// layer, and posture is read from RAILWAY_ENVIRONMENT_NAME.
+// Both routes come from one issuer stamped with AUTH_ISSUER, and login keeps its CORS
+// layer.
 func TestTaggedMockIssuerRoutesKeepTheirWiring(t *testing.T) {
 	const origin = "https://app.ascomply.test"
 	t.Setenv("AUTH_ISSUER", mountTestIssuer)
-	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	jwks, login := mockIssuerRoutes("development", "true", gateway.CORS([]string{origin}), logger)
 	if jwks == nil || login == nil {
@@ -188,16 +189,124 @@ func TestTaggedMockIssuerRoutesKeepTheirWiring(t *testing.T) {
 		}
 	})
 
-	t.Run("hosted posture refuses an empty body", func(t *testing.T) {
+	t.Run("an empty body mints whatever RAILWAY_ENVIRONMENT_NAME says", func(t *testing.T) {
 		t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
 		_, hosted := mockIssuerRoutes("development", "true", gateway.CORS([]string{origin}), logger)
 		if hosted == nil {
 			t.Fatal("mockIssuerRoutes returned no login handler")
 		}
 		rec := httptest.NewRecorder()
-		hosted.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{}`)))
-		if rec.Code != http.StatusForbidden {
-			t.Errorf("POST {} under RAILWAY_ENVIRONMENT_NAME=production = %d, want 403 (body %s)", rec.Code, rec.Body.String())
+		hosted.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader("")))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("POST empty body under RAILWAY_ENVIRONMENT_NAME=production = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		var tok struct {
+			AccessToken string `json:"access_token"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &tok); err != nil || tok.AccessToken == "" {
+			t.Errorf("login body %q carries no access_token (decode err %v)", rec.Body.String(), err)
 		}
 	})
+}
+
+// The mint serves any identity wherever MockIssuerEnabled is set; the Railway environment name must not gate it.
+func TestTaggedMockLoginIgnoresRailwayEnvironmentName(t *testing.T) {
+	t.Setenv("AUTH_ISSUER", mountTestIssuer)
+	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	_, login := mockIssuerRoutes("preview", "true", gateway.CORS([]string{"https://app.ascomply.test"}), logger)
+	if login == nil {
+		t.Fatal(`mockIssuerRoutes("preview", "true") returned no login handler`)
+	}
+	rec := httptest.NewRecorder()
+	login.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST {} under RAILWAY_ENVIRONMENT_NAME=production = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// A DSN that cannot connect gives 502 for a valid body; a bad body is refused before any connection.
+func TestTaggedMockStaffRouteWiresTheGrant(t *testing.T) {
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	const dsnHost = "staff-dsn-marker.invalid"
+	h := mockStaffRoute("postgres://u@"+dsnHost+":5432/db", logger)
+	post := func(body string) *httptest.ResponseRecorder {
+		ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+		defer cancel()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequestWithContext(ctx, http.MethodPost, "/auth/mock/staff", strings.NewReader(body)))
+		return rec
+	}
+	// Messages from gateway.MockStaffHandler (Design § API contracts).
+	const (
+		unavailable = `{"error":"staff grant unavailable"}`
+		invalid     = `{"error":"invalid request body"}`
+	)
+
+	for _, c := range []struct {
+		name, body string
+		code       int
+		want       string
+	}{
+		{"valid body, unreachable database", `{"user_id":"` + uuid.NewString() + `"}`, http.StatusBadGateway, unavailable},
+		{"malformed body", `{`, http.StatusBadRequest, invalid},
+	} {
+		rec := post(c.body)
+		if rec.Code != c.code {
+			t.Errorf("%s: POST = %d (body %s), want %d", c.name, rec.Code, rec.Body.String(), c.code)
+			continue
+		}
+		if got := strings.TrimSpace(rec.Body.String()); got != c.want {
+			t.Errorf("%s: body = %s, want %s", c.name, got, c.want)
+		}
+	}
+	// The failed connection names the DSN host, so the route is bound to the DSN it was given.
+	if !strings.Contains(logs.String(), dsnHost) {
+		t.Errorf("log %q does not name the DSN host %q", logs.String(), dsnHost)
+	}
+}
+
+// Same shape as TestTaggedMockStaffRouteWiresTheGrant: an unreachable DSN gives 502 for a valid body.
+func TestTaggedMockMemberRouteWiresTheGrant(t *testing.T) {
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	const dsnHost = "member-dsn-marker.invalid"
+	h := mockMemberRoute("postgres://u@"+dsnHost+":5432/db", logger)
+	post := func(body string) *httptest.ResponseRecorder {
+		ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+		defer cancel()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequestWithContext(ctx, http.MethodPost, "/auth/mock/member", strings.NewReader(body)))
+		return rec
+	}
+	valid := `{"user_id":"` + uuid.NewString() + `","tenant_id":"` + uuid.NewString() +
+		`","role":"admin","display_name":"Ada Okafor","email":"ada@example.test"}`
+	// Messages from gateway.MockMemberHandler (Design § API contract).
+	const (
+		unavailable = `{"error":"membership grant unavailable"}`
+		invalid     = `{"error":"invalid request body"}`
+	)
+
+	for _, c := range []struct {
+		name, body string
+		code       int
+		want       string
+	}{
+		{"valid body, unreachable database", valid, http.StatusBadGateway, unavailable},
+		{"malformed body", `{`, http.StatusBadRequest, invalid},
+	} {
+		rec := post(c.body)
+		if rec.Code != c.code {
+			t.Errorf("%s: POST = %d (body %s), want %d", c.name, rec.Code, rec.Body.String(), c.code)
+			continue
+		}
+		if got := strings.TrimSpace(rec.Body.String()); got != c.want {
+			t.Errorf("%s: body = %s, want %s", c.name, got, c.want)
+		}
+	}
+	// The failed connection names the DSN host, so the route is bound to the DSN it was given.
+	if !strings.Contains(logs.String(), dsnHost) {
+		t.Errorf("log %q does not name the DSN host %q", logs.String(), dsnHost)
+	}
 }

@@ -392,13 +392,14 @@ func TestTracing_TransactionShapeAndNoRequestData(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/things/"+uuid.NewString()+"?q="+sentrytest.MarkerTIN+"&k="+sentrytest.MarkerCred+"-query#"+sentrytest.MarkerIRN, strings.NewReader(body))
 	tenant := uuid.NewString()
 	for k, v := range map[string]string{
-		"X-Tenant-ID":   tenant,
-		"X-Request-Id":  "req-shape-1",
-		"X-S2S-Token":   sentrytest.MarkerCred + "-s2s",
-		"Authorization": "Bearer " + sentrytest.MarkerCred + "-authz",
-		"Cookie":        "s=" + sentrytest.MarkerCred + "-cookie",
-		"Referer":       "https://app.example/things?q=" + sentrytest.MarkerTIN + "&k=" + sentrytest.MarkerCred + "-ref",
-		"Content-Type":  "application/json",
+		"X-Tenant-ID":     tenant,
+		"X-Request-Id":    "req-shape-1",
+		"X-S2S-Token":     sentrytest.MarkerCred + "-s2s",
+		"X-Gateway-Token": sentrytest.MarkerCred + "-gw",
+		"Authorization":   "Bearer " + sentrytest.MarkerCred + "-authz",
+		"Cookie":          "s=" + sentrytest.MarkerCred + "-cookie",
+		"Referer":         "https://app.example/things?q=" + sentrytest.MarkerTIN + "&k=" + sentrytest.MarkerCred + "-ref",
+		"Content-Type":    "application/json",
 	} {
 		req.Header.Set(k, v)
 	}

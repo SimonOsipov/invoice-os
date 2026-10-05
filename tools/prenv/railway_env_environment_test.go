@@ -1050,10 +1050,11 @@ func TestCIGoFilterCoversTheDeployWorkflows(t *testing.T) {
 }
 
 const (
-	productionEnvironmentUsage = "usage: railway-env.sh set-production-environment <environment-id>"
-	productionConfirmation     = "gateway ENVIRONMENT=production confirmed in environment " + persistentEnvironmentID
-	productionGatewayID        = "svc-gw-production"
-	productionNeedle           = "set-production-environment"
+	productionEnvironmentUsage   = "usage: railway-env.sh set-production-environment <environment-id>"
+	productionConfirmation       = "gateway ENVIRONMENT=production confirmed in environment " + persistentEnvironmentID
+	productionGatewayID          = "svc-gw-production"
+	productionNeedle             = "set-production-environment"
+	productionGatewayTokenNeedle = "set-production-gateway-token"
 )
 
 var onlyThePersistentEnvironment = regexp.MustCompile(`(?i)only the persistent environment`)

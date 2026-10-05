@@ -1,8 +1,7 @@
 import { useState, type CSSProperties } from 'react'
 import { BrandMark, Icon } from '../icons'
 import { CHEV_DOWN_ICON, DEV_ORGS, NAV_ITEMS, TICK_ICON } from '../data'
-import { landingBase } from '../auth'
-import { clearOpsSession } from '../session'
+import { signOut } from '../auth'
 import type { Screen } from '../types'
 
 type Props = {
@@ -188,19 +187,9 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
             OPS · ADMIN
           </div>
         </div>
-        {/* Sign out. Replaces the decorative gear, following the same call the app made
-            in M3-07-03: the gear had no handler, and this footer slot is the one place a
-            user looks for the way out. Clears the stored session FIRST — navigating alone
-            would leave it behind, and the console would let the next visitor straight back
-            in. landingBase() is null when VITE_LANDING_URL isn't configured (standalone
-            showcase build) — never navigate to `null`, which stringifies to "null". */}
+        {/* Sign out: clears the session, then leaves (signOutConsole). */}
         <button
-          onClick={() => {
-            clearOpsSession()
-            const dest = landingBase()
-            if (dest) window.location.href = dest
-            else window.location.reload()
-          }}
+          onClick={signOut}
           className="ops-btn ops-hide-narrow"
           aria-label="Sign out"
           title="Sign out"

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
 import { Submissions } from './components/Submissions'
@@ -13,8 +13,9 @@ import { KillConfirm } from './components/KillConfirm'
 import { PublishModal } from './components/PublishModal'
 import { Toast } from './components/Toast'
 import { AUDIT_ENTRIES, SEED_JOBS, SEED_RULES } from './data'
-import { landingBase } from './auth'
-import { resolveSupportBootSession } from './session'
+import { gatewayBase } from '@invoice-os/api-client'
+import { StaffGate } from '@invoice-os/console-session'
+import { SESSION_KEY, landingBase } from './auth'
 import type { AuditFilter, DrawerState, Env, JobFilter, Screen, SubTab, ToastState, ToastTone } from './types'
 
 // The whole console lives under `.asc-app` — that scope defines the design-system tokens
@@ -22,42 +23,13 @@ import type { AuditFilter, DrawerState, Env, JobFilter, Screen, SubTab, ToastSta
 // every screen relies on. A full-height app shell: fixed sidebar + scrolling main column,
 // with drawers/modals/toast layered on top.
 export default function App() {
-  // Sign-in gate. The landing page is the single front door: it hands off here as
-  // ?persona=support, which this persists once so the following reload needs no param.
-  // Resolved ONCE at boot — a later re-render must not re-read the URL, since the effect
-  // below strips the param from it.
-  const [session] = useState(() => resolveSupportBootSession(window.location.search))
-
-  useEffect(() => {
-    if (session) {
-      // Drop the consumed ?persona= so a copied URL isn't a sign-in link and a refresh
-      // goes through the stored session instead. replaceState, not a navigation: it must
-      // not add a history entry the back button can bounce off.
-      if (new URLSearchParams(window.location.search).has('persona')) {
-        window.history.replaceState(null, '', window.location.pathname + window.location.hash)
-      }
-      return
-    }
-    // Not signed in -> the front door. landingBase() is null on the standalone showcase
-    // build (no VITE_LANDING_URL); there is nowhere to send anyone, so the console renders
-    // rather than becoming a dead end — see the gate below.
-    const dest = landingBase()
-    if (dest) window.location.href = dest
-  }, [session])
-
-  // Redirecting: render nothing rather than a frame of console chrome the visitor was
-  // never signed in to see. Only reached when a landing URL exists — without one the
-  // showcase build falls through and renders normally.
-  if (!session && landingBase()) {
-    return null
-  }
-
-  return <Console />
+  return (
+    <StaffGate storageKey={SESSION_KEY} target="support" gateway={gatewayBase()} landing={landingBase()}>
+      <Console />
+    </StaffGate>
+  )
 }
 
-// The console proper. Split out of the gate above so that `App`'s early return can never
-// skip these hooks — a conditional return placed above them would violate the Rules of
-// Hooks the moment the gate's outcome changed.
 function Console() {
   // Mirrors the prototype's constructor state (Support Console.dc.html:708).
   const [screen, setScreen] = useState<Screen>('submissions')

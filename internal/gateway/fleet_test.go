@@ -558,6 +558,68 @@ func TestFleetRollupCarriesEachServicesSentryState(t *testing.T) {
 	})
 }
 
+// notifications reports its delivery mode on /healthz; the roll-up copies it per entry so the
+// dev-env health-gate can read it. A body without the key yields no key.
+func TestFleetReportsEachServiceContacts(t *testing.T) {
+	rec, _ := doFleet(t, map[string]*url.URL{
+		"notifications": buildUpstream(t, "", `{"status":"ok","build":"abc1234","sentry":"off","contacts":"fake"}`),
+		"invoice":       buildUpstream(t, "abc1234", ""),
+	})
+	entries := rawFleetEntries(t, rec)
+
+	n, ok := entries["notifications"]
+	if !ok {
+		t.Fatalf("roll-up omits notifications: %s", rec.Body.String())
+	}
+	if n["contacts"] != "fake" {
+		t.Errorf("notifications contacts = %v, want %q (entry %v)", n["contacts"], "fake", n)
+	}
+	if n["build"] != "abc1234" || n["status"] != statusUp {
+		t.Errorf("notifications = %v, want up with build abc1234: contacts costs nothing else", n)
+	}
+	for _, name := range []string{"invoice", "gateway"} {
+		e, ok := entries[name]
+		if !ok {
+			t.Fatalf("roll-up omits %s: %s", name, rec.Body.String())
+		}
+		if v, has := e["contacts"]; has {
+			t.Errorf("%s contacts = %v, want no key: its body carries none", name, v)
+		}
+	}
+}
+
+// A contacts value that is not a string must not cost the entry its status, build or sentry.
+func TestFleetIgnoresANonStringContacts(t *testing.T) {
+	for name, body := range map[string]string{
+		"number":     `{"status":"ok","build":"abc1234","sentry":"off","contacts":5}`,
+		"null":       `{"status":"ok","build":"abc1234","sentry":"off","contacts":null}`,
+		"array":      `{"status":"ok","build":"abc1234","sentry":"off","contacts":["fake"]}`,
+		"object":     `{"status":"ok","build":"abc1234","sentry":"off","contacts":{"mode":"fake"}}`,
+		"first key":  `{"contacts":true,"status":"ok","build":"abc1234","sentry":"off"}`,
+		"empty text": `{"status":"ok","build":"abc1234","sentry":"off","contacts":""}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec, _ := doFleet(t, map[string]*url.URL{"notifications": buildUpstream(t, "", body)})
+			n, ok := rawFleetEntries(t, rec)["notifications"]
+			if !ok {
+				t.Fatalf("roll-up omits notifications: %s", rec.Body.String())
+			}
+			if n["status"] != statusUp || n["build"] != "abc1234" || n["sentry"] != "off" {
+				t.Errorf("notifications = %v, want up, build abc1234, sentry off: a bad contacts value is not a health verdict", n)
+			}
+			if v, has := n["contacts"]; has {
+				t.Errorf("contacts = %v, want no key for %s", v, body)
+			}
+		})
+	}
+
+	// The same entry reports a string value, so the cases above are the value's fault.
+	rec, _ := doFleet(t, map[string]*url.URL{"notifications": buildUpstream(t, "", `{"status":"ok","build":"abc1234","contacts":"off"}`)})
+	if n := rawFleetEntries(t, rec)["notifications"]; n["contacts"] != "off" {
+		t.Errorf("contacts = %v, want off", n["contacts"])
+	}
+}
+
 // readyUpstream answers /healthz 200 and /readyz with code and body; any other path 404s.
 func readyUpstream(t *testing.T, code int, body string) *url.URL {
 	t.Helper()

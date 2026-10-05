@@ -247,7 +247,7 @@ export type PlatformCtx = {
   // apiFetch always res.json()s.
   // makeImportAuth's getter: a promise while a renewal is due, rejected once the session ended.
   getToken: () => string | null | Promise<string | null>
-  // A hand-off session hides demo data; persona sessions keep it until AUTH-15.
+  // A hand-off session hides demo data.
   handoff: boolean
   user: SignedInUser
   clients: Client[]
@@ -552,9 +552,4 @@ export type PlatformCtx = {
   staffRole: (key: string, members: readonly string[]) => Promise<Role>
   deleteRole: (key: string) => Promise<void>
   signOut: () => void
-  // Demo-only (DEMO-06). App supplies these ONLY under DEMO_MODE, so they are
-  // `undefined` in every customer build and nothing outside src/demo/ may read them.
-  becomePersona?: (member: Member, view: View) => Promise<void>
-  returnToSeat?: (view: View, seat: Member) => Promise<void>
-  seatSubject?: string
 }

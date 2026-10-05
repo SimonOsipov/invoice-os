@@ -27,6 +27,7 @@ describe('dockerfiles', () => {
         'VITE_SENTRY_DSN=$VITE_SENTRY_DSN',
         'VITE_SENTRY_TEST_DIGEST=$VITE_SENTRY_TEST_DIGEST',
         'VITE_RAILWAY_GIT_COMMIT_SHA=$RAILWAY_GIT_COMMIT_SHA',
+        'VITE_GATEWAY_URL=$VITE_GATEWAY_URL',
       ]) {
         const arg = lines.indexOf(`ARG ${key.split('=$')[1]}`)
         const env = lines.indexOf(`ENV ${key}`)
@@ -40,6 +41,8 @@ describe('dockerfiles', () => {
         'ENV VITE_SENTRY_TEST_DIGEST=$VITE_SENTRY_TEST_DIGEST',
         'ARG RAILWAY_GIT_COMMIT_SHA',
         'ENV VITE_RAILWAY_GIT_COMMIT_SHA=$RAILWAY_GIT_COMMIT_SHA',
+        'ARG VITE_GATEWAY_URL',
+        'ENV VITE_GATEWAY_URL=$VITE_GATEWAY_URL',
       ]) {
         const at = lines.indexOf(want)
         expect(at, `${name}/Dockerfile lacks "${want}" before its build RUN`).toBeGreaterThan(-1)

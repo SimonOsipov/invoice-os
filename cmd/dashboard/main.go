@@ -49,6 +49,8 @@ func main() {
 	store := dashboard.NewStore(pool)
 	app.Mux.HandleFunc("GET /v1/rollup", dashboard.RollupHandler(store.Rollup, app.Logger))
 
+	app.RequireGateway(mustEnv("GATEWAY_TOKEN"))
+
 	if err := app.Run(context.Background()); err != nil {
 		platform.Fatal(app.Logger, "dashboard: %v", err)
 	}

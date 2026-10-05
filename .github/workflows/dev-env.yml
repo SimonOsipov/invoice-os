@@ -345,6 +345,13 @@ jobs:
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
         run: bash scripts/ci/railway-env.sh set-fork-auth "$ENV_ID"
 
+      - name: Write the fork's gateway token (never in the persistent env)
+        if: github.event_name == 'pull_request'
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
+        run: bash scripts/ci/railway-env.sh set-fork-gateway-token "$ENV_ID"
+
       - name: Audit sealed variables in the source environment (only the auth allowlist may be sealed)
         if: github.event_name == 'pull_request'
         env:
@@ -967,6 +974,31 @@ jobs:
           fi
           echo "Sentry $direction on $EXPECTED_BUILD for: $names (auth exempt)."
 
+      # A PR fork must deliver nothing to HubSpot or Resend; production must not be fake.
+      - name: Gate on notifications' contacts delivery mode
+        env:
+          IS_PR: ${{ github.event_name == 'pull_request' }}
+        run: |
+          set -euo pipefail
+          if [ "$IS_PR" = "true" ]; then want="fake"; else want="real off"; fi
+          mode=""
+          # worst case 12s: 2 waves of probes x (/healthz + /readyz) x 3s
+          for _ in $(seq 1 5); do
+            if curl -sS --connect-timeout 5 --max-time 20 -o /tmp/contacts-fleet.json "$GATEWAY_URL/healthz/fleet" \
+              && jq -e '.services | type == "array"' /tmp/contacts-fleet.json >/dev/null 2>&1; then
+              mode=$(jq -r '[.services[] | select(.name == "notifications") | .contacts // "none"][0] // "absent"' /tmp/contacts-fleet.json)
+              case " $want " in *" $mode "*) break ;; esac
+            fi
+            sleep 5
+          done
+          case " $want " in
+            *" $mode "*) echo "notifications reports contacts=$mode." ;;
+            *)
+              echo "::error::notifications reports contacts='${mode:-unreachable}', want one of: $want. 'none' means it predates the contacts field; 'absent' means the roll-up does not name notifications. On a PR, anything but 'fake' means the fork could write to HubSpot or Resend: check RAILWAY_ENVIRONMENT_NAME is the pr-<N> shape. On a push, 'fake' means CONTACTS_FAKE is set on production."
+              exit 1
+              ;;
+          esac
+
       # auth has no build stamp; its deployment status is the verdict for `railway up`.
       - name: Wait for the auth deployment
         env:
@@ -1003,10 +1035,8 @@ jobs:
   #    (M4-22-07); the DB is self-seeded at gateway boot, never reset here.
   #
   #    EPHEMERAL ENVIRONMENTS ONLY — hence `== 'pull_request'`, which now
-  #    excludes push as well as dispatch. The api suite is not read-only: it
-  #    self-heals rule state in beforeAll and restores it in afterAll, so a run
-  #    against the persistent environment would mutate live data, and a failure
-  #    between the two hooks would leave it mutated. Merging does not lose
+  #    excludes push as well as dispatch. The api suite is not read-only, so a run
+  #    against the persistent environment would mutate live data. Merging does not lose
   #    coverage: this exact suite already ran against the PR's own environment,
   #    on the same commit, as the gate for merging it.
   e2e:
@@ -1103,9 +1133,8 @@ jobs:
         # verdict (APPR-14 fix) — always() would also run this on a
         # cancelled workflow, which we don't want.
         if: "!cancelled() && steps.attempt.outcome == 'success'"
-        # Finishes before the topology job starts (`needs: e2e`): its beforeAll
-        # self-heal + afterAll rule-restore share the global `rules` fixture with
-        # topology (D4). GATEWAY_URL comes from this job's `env:`
+        # Finishes before the topology job starts (`needs: e2e`): it shares the
+        # deployed database with topology. GATEWAY_URL comes from this job's `env:`
         # (needs.prepare-env.outputs.gateway_url — the seam reads it
         # directly) — no chromium needed (A6: the api config declares no
         # browser project). Does not touch the database directly (M4-22-05) --

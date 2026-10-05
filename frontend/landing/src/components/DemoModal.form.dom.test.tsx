@@ -7,8 +7,9 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { DemoModal } from './DemoModal'
-import { CONSENT_TEXT, DEFAULT_FORM, ROLE_OPTIONS, TAXPAYER_SIZE_OPTIONS, VOLUME_OPTIONS } from './demoForm'
-import { buildSubmission, type DemoLead } from '../hubspot'
+import { CONSENT_TEXT, DEFAULT_FORM, DEMO_COMPANY_MAX, DEMO_EMAIL_MAX, DEMO_NAME_MAX, ROLE_OPTIONS, TAXPAYER_SIZE_OPTIONS, VOLUME_OPTIONS } from './demoForm'
+import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
+import { buildSubmission, hubspotTarget, submissionUrl, type DemoLead } from '../hubspot'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -23,6 +24,7 @@ beforeEach(() => {
   document.body.appendChild(container)
   root = createRoot(container)
   consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  vi.stubEnv('VITE_GATEWAY_URL', '')
 })
 
 afterEach(async () => {
@@ -62,6 +64,20 @@ function openGate(): void {
   vi.stubEnv('VITE_HUBSPOT_PORTAL_ID', '148915098')
   vi.stubEnv('VITE_HUBSPOT_FORM_GUID', 'abc-123')
 }
+
+const GATEWAY_URL = 'https://gw.x/contacts/demo-request'
+
+// Routes by URL: the HubSpot Forms host and the gateway answer separately.
+function routeFetch(hs: () => Promise<Response> | Response, gw: () => Promise<Response> | Response) {
+  vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.x')
+  const fetchMock = vi.fn<typeof fetch>(async (url) => (String(url) === GATEWAY_URL ? gw() : hs()))
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+const hsOk = () => new Response('{}', { status: 200 })
+const gwAccepted = () => new Response(JSON.stringify({ status: 'accepted' }), { status: 202 })
+const urlOf = (fetchMock: { mock: { calls: Parameters<typeof fetch>[] } }, i: number) => String(fetchMock.mock.calls[i]?.[0])
+const bodyOf = (fetchMock: { mock: { calls: Parameters<typeof fetch>[] } }, i: number) => String(fetchMock.mock.calls[i]?.[1]?.body)
 
 async function flushAsync(): Promise<void> {
   await act(async () => {
@@ -175,6 +191,130 @@ describe('MF-D6 (CHARACTERIZATION): a tripped honeypot sends nothing, still than
     expect(container.textContent).toContain("You're booked")
     expect(consoleError).not.toHaveBeenCalled()
   })
+
+  it('a tripped honeypot sends nothing anywhere, even with the gateway set and marketing ticked', async () => {
+    openGate()
+    const fetchMock = routeFetch(hsOk, gwAccepted)
+    await mount()
+    await fill('Ada Okafor', 'ada@okafor.ng', 'Okafor & Partners')
+    await tick('#dm-consent')
+    await tick('#dm-marketing')
+    $<HTMLInputElement>('input[name="website"]').value = 'https://spam.example'
+
+    vi.useFakeTimers()
+    await submit()
+    expect(container.textContent, 'control: the submit was processed').toContain('Booking…')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1400)
+    })
+    vi.useRealTimers()
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(container.textContent).toContain("You're booked")
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+})
+
+describe('AUTH-17-08: the marketing box and the gateway post', () => {
+  it('the marketing box sits under the consent box, unticked, with its treatment', async () => {
+    await mount()
+    const consent = $<HTMLInputElement>('#dm-consent')
+    const box = $<HTMLInputElement>('#dm-marketing')
+
+    expect(box.type).toBe('checkbox')
+    expect(box.checked).toBe(false)
+    expect(consent.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const controls = Array.from($('form').querySelectorAll('input, select'))
+    expect(controls.indexOf(box), 'directly under the consent box').toBe(controls.indexOf(consent) + 1)
+
+    expect(consent.getAttribute('style'), 'control: the consent input carries a style').toBeTruthy()
+    expect(box.getAttribute('style')).toBe(consent.getAttribute('style'))
+    expect(box.labels?.[0]?.getAttribute('style')).toBe(consent.labels?.[0]?.getAttribute('style'))
+    expect(box.labels?.[0]?.textContent).toBe(MARKETING_CONSENT_TEXT)
+    expect(consent.hasAttribute('aria-required'), 'control: the consent box is required').toBe(true)
+    expect(box.hasAttribute('aria-required'), 'the marketing box is not').toBe(false)
+  })
+
+  it('the marketing box is disabled while submitting, as its siblings are', async () => {
+    openGate()
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+    await mount()
+    await fill('Ada Okafor', 'ada@okafor.ng', 'Okafor & Partners')
+    await tick('#dm-consent')
+    await submit()
+
+    expect($<HTMLInputElement>('#dm-consent').disabled, 'control: submitting disables the consent box').toBe(true)
+    expect($<HTMLInputElement>('#dm-marketing').disabled).toBe(true)
+  })
+
+  it('an unticked marketing box never blocks a booking', async () => {
+    openGate()
+    routeFetch(hsOk, gwAccepted)
+    await mount()
+    expect($<HTMLInputElement>('#dm-marketing').checked, 'control: the box exists, unticked').toBe(false)
+    await fill('Ada Okafor', 'ada@okafor.ng', 'Okafor & Partners')
+    await tick('#dm-consent')
+    await submit()
+    await flushAsync()
+
+    expect(container.textContent).toContain("You're booked")
+    expect(container.querySelector('#dm-marketing-error')).toBeNull()
+  })
+
+  it('on the production host HubSpot goes first, then the gateway', async () => {
+    openGate()
+    let releaseHs: () => void = () => undefined
+    const hsGate = new Promise<void>((resolve) => (releaseHs = resolve))
+    const fetchMock = routeFetch(() => hsGate.then(hsOk), gwAccepted)
+    await mount()
+    await fill('Ada Okafor', 'ada@okafor.ng', 'Okafor & Partners')
+    await tick('#dm-consent')
+    await submit()
+    await flushAsync()
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(urlOf(fetchMock, 0)).toBe(submissionUrl(hubspotTarget()!))
+
+    await act(async () => releaseHs())
+    await flushAsync()
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(urlOf(fetchMock, 1)).toBe(GATEWAY_URL)
+    expect(JSON.parse(bodyOf(fetchMock, 1))).toEqual({ email: 'ada@okafor.ng', name: 'Ada Okafor', company: 'Okafor & Partners' })
+    expect(container.textContent).toContain("You're booked")
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('a ticked marketing box sends its sentence to the gateway and leaves the HubSpot body byte-identical', async () => {
+    openGate()
+    const fetchMock = routeFetch(hsOk, gwAccepted)
+    await mount()
+    await fill('Ada Okafor', 'ada@okafor.ng', 'Okafor & Partners')
+    await tick('#dm-consent')
+    await tick('#dm-marketing')
+    await submit()
+    await flushAsync()
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const lead: DemoLead = {
+      name: 'Ada Okafor',
+      email: 'ada@okafor.ng',
+      company: 'Okafor & Partners',
+      role: DEFAULT_FORM.role,
+      size: DEFAULT_FORM.size,
+      volume: DEFAULT_FORM.volume,
+      consent: true,
+      marketing: false,
+    }
+    expect(bodyOf(fetchMock, 0), 'the Forms body is the unticked payload, byte for byte').toBe(JSON.stringify(buildSubmission(lead, CONSENT_TEXT)))
+    expect(bodyOf(fetchMock, 0)).not.toMatch(/marketing/i)
+    expect(JSON.parse(bodyOf(fetchMock, 1))).toEqual({
+      email: 'ada@okafor.ng',
+      name: 'Ada Okafor',
+      company: 'Okafor & Partners',
+      marketing_consent_text: MARKETING_CONSENT_TEXT,
+    })
+  })
 })
 
 describe('MF-X1 (CHARACTERIZATION): a blank submit names every missing field at once', () => {
@@ -253,12 +393,12 @@ describe('MF-X3 (CHARACTERIZATION): the option lists are the imported constants'
 })
 
 describe('MF-X4 (CHARACTERIZATION): long answers survive intact', () => {
-  it('a 600-character company reaches the wire untruncated and the thank-you names the visitor', async () => {
+  it('a company at the 200-character cap reaches the wire untruncated and the thank-you names the visitor', async () => {
     openGate()
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 })
     vi.stubGlobal('fetch', fetchMock)
-    const company = 'Ω'.repeat(600)
-    const name = 'Adaobi'.repeat(40) + ' Okafor'
+    const company = 'Ω'.repeat(DEMO_COMPANY_MAX)
+    const name = 'Adaobi'.repeat(30) + ' Okafor'
     await mount()
     await fill(name, 'ada@okafor.ng', company)
     await tick('#dm-consent')
@@ -275,12 +415,23 @@ describe('MF-X4 (CHARACTERIZATION): long answers survive intact', () => {
       size: DEFAULT_FORM.size,
       volume: DEFAULT_FORM.volume,
       consent: true,
+      marketing: false,
     }
     expect(body).toEqual(buildSubmission(lead, CONSENT_TEXT))
     expect(JSON.stringify(body)).toContain(company)
     expect(container.textContent).toContain("You're booked")
-    expect(container.textContent).toContain('Adaobi'.repeat(40))
+    expect(container.textContent).toContain('Adaobi'.repeat(30))
     expect(consoleError).not.toHaveBeenCalled()
+  })
+})
+
+describe('MF-X4b: inputs carry the gateway field caps', () => {
+  it('name and company cap at 200, email at 254', async () => {
+    await mount()
+    expect($<HTMLInputElement>('#dm-name').maxLength).toBe(200)
+    expect($<HTMLInputElement>('#dm-company').maxLength).toBe(200)
+    expect($<HTMLInputElement>('#dm-email').maxLength).toBe(254)
+    expect([DEMO_NAME_MAX, DEMO_COMPANY_MAX, DEMO_EMAIL_MAX]).toEqual([200, 200, 254])
   })
 })
 
@@ -316,7 +467,7 @@ describe('MF-X5 (CHARACTERIZATION): retry restores the select choices', () => {
   })
 })
 
-describe('MF-X6 (CHARACTERIZATION): the form\'s Tab order is the seven answers then the submit', () => {
+describe('MF-X6 (CHARACTERIZATION): the form\'s Tab order is the seven answers, the marketing box, then the submit', () => {
   it('the tabbable sequence inside the <form> is fixed; the honeypot is skipped', async () => {
     await mount()
     // jsdom has no layout, so isFocusable's offsetParent clause is always false here; tabIndex
@@ -325,7 +476,7 @@ describe('MF-X6 (CHARACTERIZATION): the form\'s Tab order is the seven answers t
     const all = Array.from(form.querySelectorAll<HTMLElement>('input, select, button'))
     expect(all.length).toBeGreaterThan(0)
     const tabbable = all.filter((el) => el.tabIndex >= 0 && !(el as HTMLButtonElement).disabled).map((el) => el.id || el.getAttribute('type'))
-    expect(tabbable).toEqual(['dm-name', 'dm-email', 'dm-company', 'dm-role', 'dm-size', 'dm-volume', 'dm-consent', 'submit'])
+    expect(tabbable).toEqual(['dm-name', 'dm-email', 'dm-company', 'dm-role', 'dm-size', 'dm-volume', 'dm-consent', 'dm-marketing', 'submit'])
 
     const honeypot = $<HTMLInputElement>('input[name="website"]')
     expect(form.contains(honeypot), 'control: the honeypot is inside the form').toBe(true)

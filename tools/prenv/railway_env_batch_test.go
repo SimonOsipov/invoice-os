@@ -28,7 +28,7 @@ const (
 	batchProdAppURL     = "https://app.ascomply.com"
 	batchProdLandingURL = "https://www.ascomply.com"
 
-	batchAllConfirmed = "All 10 environment variables confirmed" // reconcile_url_variables
+	batchAllConfirmed = "All 12 environment variables confirmed" // reconcile_url_variables
 )
 
 // Secret names print `= <redacted>` (Design, "Variable writes").
@@ -52,10 +52,10 @@ func batchExports() string {
 func reconcileIntended() map[string]map[string]string {
 	return map[string]map[string]string{
 		sentrySvcID("gateway"):         {"CORS_ALLOWED_ORIGINS": batchOrigins},
-		sentrySvcID("app"):             {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL, "VITE_DEMO_MODE": "true"},
-		sentrySvcID("landing"):         {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_APP_URL": batchAppURL, "VITE_OPS_URL": batchOpsURL, "VITE_SUPPORT_URL": batchSupportURL},
-		sentrySvcID("ops-console"):     {"VITE_LANDING_URL": batchLandingURL},
-		sentrySvcID("support-console"): {"VITE_LANDING_URL": batchLandingURL},
+		sentrySvcID("app"):             {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL},
+		sentrySvcID("landing"):         {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_APP_URL": batchAppURL, "VITE_OPS_URL": batchOpsURL, "VITE_SUPPORT_URL": batchSupportURL, "VITE_REGISTRATION_OPEN": "true"},
+		sentrySvcID("ops-console"):     {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL},
+		sentrySvcID("support-console"): {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL},
 	}
 }
 
@@ -482,7 +482,7 @@ func TestSetServiceVars_OnlyChangedNamesAreWritten(t *testing.T) {
 	if ups := s.upserts(t); len(ups) != 1 {
 		t.Errorf("writes = %v, want app.VITE_LANDING_URL only: every other value is already intended", names(ups))
 	}
-	wantHeld := map[string]string{"gateway": "1 of 1", "app": "2 of 3", "landing": "4 of 4", "ops-console": "1 of 1", "support-console": "1 of 1"}
+	wantHeld := map[string]string{"gateway": "1 of 1", "app": "1 of 2", "landing": "5 of 5", "ops-console": "2 of 2", "support-console": "2 of 2"}
 	if got := heldLines(out); !reflect.DeepEqual(got, wantHeld) {
 		t.Errorf("held lines = %v, want %v", got, wantHeld)
 	}
@@ -491,25 +491,94 @@ func TestSetServiceVars_OnlyChangedNamesAreWritten(t *testing.T) {
 	}
 }
 
-// guard, passes at HEAD
-func TestSetServiceVars_StaleValueIsRewritten(t *testing.T) {
-	stores := reconcileIntended()
-	stores[sentrySvcID("landing")]["VITE_APP_URL"] = batchProdAppURL
-	s := newAuthShim(t, nil, stores)
-	stdout, stderr, code := runReconcileURLs(t, s)
-	out := stdout + stderr
-	if code != 0 {
-		t.Fatalf("exit %d, want 0; output = %q", code, out)
-	}
+// The flag is a build-time switch the fork never inherits: absent or not exactly "true" is rewritten.
+func TestReconcileURLs_WritesTheRegistrationFlag(t *testing.T) {
 	landing := sentrySvcID("landing")
-	if got := readStore(t, s, landing)["VITE_APP_URL"]; got != batchAppURL {
-		t.Errorf("landing.VITE_APP_URL holds %v, want the fork URL %s", got, batchAppURL)
+	for _, stale := range []string{"", "false", "TRUE"} {
+		t.Run("stale="+stale, func(t *testing.T) {
+			stores := reconcileIntended()
+			if stale == "" {
+				delete(stores[landing], "VITE_REGISTRATION_OPEN")
+			} else {
+				stores[landing]["VITE_REGISTRATION_OPEN"] = stale
+			}
+			s := newAuthShim(t, nil, stores)
+			stdout, stderr, code := runReconcileURLs(t, s)
+			out := stdout + stderr
+			if code != 0 {
+				t.Fatalf("exit %d, want 0; output = %q", code, out)
+			}
+			ups := s.upserts(t)
+			if len(ups) != 1 || oneUpsert(t, ups, landing, "VITE_REGISTRATION_OPEN") != "true" {
+				t.Errorf("writes = %v, want landing.VITE_REGISTRATION_OPEN=true only", names(ups))
+			}
+			if got := readStore(t, s, landing)["VITE_REGISTRATION_OPEN"]; got != "true" {
+				t.Errorf("landing.VITE_REGISTRATION_OPEN holds %v, want true", got)
+			}
+			if at := lastWriteOf(s.calls(t), landing, "VITE_REGISTRATION_OPEN"); at < 0 || !s.readAfter(t, landing, at) {
+				t.Errorf("landing was not re-read after the flag write (write at call %d)", at)
+			}
+			if !strings.Contains(out, "  landing.VITE_REGISTRATION_OPEN = true\n") {
+				t.Errorf("no write line for landing.VITE_REGISTRATION_OPEN; output = %q", out)
+			}
+		})
 	}
-	if at := lastWriteOf(s.calls(t), landing, "VITE_APP_URL"); at < 0 || !s.readAfter(t, landing, at) {
-		t.Errorf("landing was not re-read after the VITE_APP_URL write (write at call %d)", at)
+}
+
+// guard, passes at HEAD: the flag write must not widen the refusal of the persistent environment.
+func TestReconcileURLs_RefusesThePersistentEnvironment(t *testing.T) {
+	s := newAuthShim(t, nil, reconcileIntended())
+	stdout, stderr, code := s.run(t, batchExports(), "reconcile-urls", persistentEnvironmentID, batchGatewayURL, batchAppURL, batchLandingURL, batchOpsURL, batchSupportURL)
+	out := stdout + stderr
+	if code != 1 {
+		t.Errorf("exit %d, want 1; output = %q", code, out)
 	}
-	if !strings.Contains(out, batchAllConfirmed) {
-		t.Errorf("no %q line; output = %q", batchAllConfirmed, out)
+	if !strings.Contains(errorLines(out), "persistent development environment") {
+		t.Errorf("no ::error:: line refusing the persistent environment; error lines = %q", errorLines(out))
+	}
+	if ups := s.upserts(t); len(ups) != 0 {
+		t.Errorf("a refused run wrote %v", names(ups))
+	}
+}
+
+// A stale or absent value is rewritten to the fork URL and re-read; the consoles' VITE_GATEWAY_URL may be absent.
+func TestSetServiceVars_StaleValueIsRewritten(t *testing.T) {
+	for _, c := range []struct {
+		svc, name, want string
+		stale           string // "" deletes the name from the store
+	}{
+		{"landing", "VITE_APP_URL", batchAppURL, batchProdAppURL},
+		{"ops-console", "VITE_GATEWAY_URL", batchGatewayURL, ""},
+		{"support-console", "VITE_GATEWAY_URL", batchGatewayURL, ""},
+		{"ops-console", "VITE_GATEWAY_URL", batchGatewayURL, batchProdAppURL},
+	} {
+		t.Run(c.svc+"."+c.name+" stale="+c.stale, func(t *testing.T) {
+			id := sentrySvcID(c.svc)
+			stores := reconcileIntended()
+			if c.stale == "" {
+				delete(stores[id], c.name)
+			} else {
+				stores[id][c.name] = c.stale
+			}
+			s := newAuthShim(t, nil, stores)
+			stdout, stderr, code := runReconcileURLs(t, s)
+			out := stdout + stderr
+			if code != 0 {
+				t.Fatalf("exit %d, want 0; output = %q", code, out)
+			}
+			if got := readStore(t, s, id)[c.name]; got != c.want {
+				t.Errorf("%s.%s holds %v, want the fork URL %s", c.svc, c.name, got, c.want)
+			}
+			if at := lastWriteOf(s.calls(t), id, c.name); at < 0 || !s.readAfter(t, id, at) {
+				t.Errorf("%s was not re-read after the %s write (write at call %d)", c.svc, c.name, at)
+			}
+			if ups := s.upserts(t); len(ups) != 1 || len(upsertsOf(ups, id, c.name)) != 1 {
+				t.Errorf("writes = %v, want %s.%s only", names(ups), c.svc, c.name)
+			}
+			if !strings.Contains(out, batchAllConfirmed) {
+				t.Errorf("no %q line; output = %q", batchAllConfirmed, out)
+			}
+		})
 	}
 }
 
@@ -702,6 +771,28 @@ func TestSetServiceVars_ReReadMismatchFails(t *testing.T) {
 			t.Errorf("a failed re-read printed the confirmation line; output = %q", out)
 		}
 	})
+	// Each console's gateway URL is verified by its own auth_check.
+	for _, svc := range []string{"ops-console", "support-console"} {
+		t.Run("reconcile-urls "+svc, func(t *testing.T) {
+			id := sentrySvcID(svc)
+			s := newAuthShim(t, nil, reconcileStale())
+			s.bendRead(t, id, `.VITE_GATEWAY_URL = "`+batchProdLandingURL+`"`)
+			stdout, stderr, code := runReconcileURLs(t, s)
+			out := stdout + stderr
+			if code != 1 {
+				t.Errorf("exit %d, want 1; output = %q", code, out)
+			}
+			if !strings.Contains(errorLines(out), svc+".VITE_GATEWAY_URL") {
+				t.Errorf("no ::error:: line names %s.VITE_GATEWAY_URL; error lines = %q", svc, errorLines(out))
+			}
+			if len(upsertsOf(s.upserts(t), id, "VITE_GATEWAY_URL")) == 0 {
+				t.Errorf("%s.VITE_GATEWAY_URL was never written, so the failure is not a re-read failure", svc)
+			}
+			if strings.Contains(out, batchAllConfirmed) {
+				t.Errorf("a failed re-read printed the confirmation line; output = %q", out)
+			}
+		})
+	}
 }
 
 func TestSetServiceVars_UnreadableMapWritesNothing(t *testing.T) {

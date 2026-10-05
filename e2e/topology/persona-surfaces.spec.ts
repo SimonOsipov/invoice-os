@@ -27,12 +27,13 @@
 // Approvals badge, the Overview KPI), and (2) containment of rows this test itself created.
 // A hardcoded '3' would pass on a clean fixture and fail the moment anything ran first.
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { createEntity, createInvoice, getInvoice, listInvoices, login, rollup, validateInvoice, PERSONAS } from '../api/client'
+import { createEntity, createInvoice, getInvoice, listInvoices, listWorkflowRoles, login, rollup, signInSession, staffWorkflowRole, subjectOf, validateInvoice, PERSONAS } from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
-import { collectErrors, sidebarRoster, signInAs } from '../personaSession'
+import { browserToken, collectErrors, sidebarRoster, signInAs } from '../personaSession'
+import { ensureMember } from '../realAccounts'
 import { rectsOverlap, WIDE_WIDTHS } from './layout'
-import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
+import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA, TENANTS } from './targets'
 
 // cleanInvoiceFields(): a local copy of invoice-surfaces.spec.ts:127-141 (that file exports
 // nothing). The FLAT wire shape POST /v1/invoices takes -- supplier_tin/vat as strings --
@@ -176,6 +177,26 @@ async function awaitingNumbers(token: string): Promise<Set<string>> {
   const res = await listInvoices(token, { awaiting_approval: true })
   return new Set(res.invoices.map((i) => i.invoice_number))
 }
+
+// The in-house plan's one step is fin_dir; the e2e member holds no seat, so the bulk-approve journey
+// staffs it in and restores the seeded holders (roles.spec.ts asserts them).
+const INHOUSE_APPROVER_ROLE = 'fin_dir'
+let seededApprovers: string[] | null = null
+
+test.beforeAll(async () => {
+  const token = await login(PERSONAS.B)
+  const role = (await listWorkflowRoles(token)).workflow_roles.find((r) => r.key === INHOUSE_APPROVER_ROLE)
+  if (!role) throw new Error(`no ${INHOUSE_APPROVER_ROLE} workflow role on the in-house tenant`)
+  const member = await ensureMember(TENANTS.b.id, 'in_house')
+  const driver = subjectOf((await signInSession(member.email, member.password)).access_token)
+  // Without the filter a retry after a failed afterAll would record the driver as seeded.
+  seededApprovers = role.members.filter((m) => m !== driver)
+  await staffWorkflowRole(token, INHOUSE_APPROVER_ROLE, [...seededApprovers, driver])
+})
+
+test.afterAll(async () => {
+  if (seededApprovers) await staffWorkflowRole(await login(PERSONAS.B), INHOUSE_APPROVER_ROLE, seededApprovers)
+})
 
 // selectEntity(): a fourth copy of invoice-surfaces.spec.ts / import-wizard.spec.ts's
 // helper of the same name -- this package's convention for small Page-driving helpers (see
@@ -378,8 +399,7 @@ test('Approvals: the in-house badge equals the live awaiting-approval count, and
   // getRollup -> GET /api/dashboard/v1/rollup (lib/dashboard.ts:102-104), scopedBucket()
   // returns rollup.totals for in-house (:234-247, in-house branch at :235), and the badge
   // is bucket.awaiting_approval (Sidebar.tsx:88); rollup(token) below hits the identical
-  // route and reads the identical field. The browser's in-house session mints a token for
-  // the same subject/tenant as PERSONAS.B (frontend/app/src/auth.ts).
+  // route and reads the identical field. The rollup is tenant-scoped, so any in-house token reads it.
   const live = await rollup(token)
   const expectedAwaiting = live.totals.awaiting_approval
   // The badge is ABSENT, not "0", when the count is zero (Sidebar.tsx:88) -- so this guard
@@ -455,8 +475,7 @@ test('Approvals: the in-house badge equals the live awaiting-approval count, and
 test('sidebar roster: the firm and in-house personas render different, exact nav rosters', async ({ page }) => {
   const errors = collectErrors(page)
 
-  // Two sign-ins on one page, the pattern auth.spec.ts:89-102 already proves works: the
-  // ?persona= hand-off overrides the stored session rather than losing to it.
+  // Two sign-ins on one page.
   await signInAs(page, 'firm')
   await expect(sidebar(page)).toContainText(FIRM_PERSONA.tenantName.toUpperCase())
   await expect
@@ -733,8 +752,8 @@ async function elementFromPointMatches(page: Page, x: number, y: number, testId:
 // Test -- a firm row this seat cannot approve (Core AC C-1..C-4, D-1..D-3). Declared
 // immediately before Test 7, which must stay last.
 // ---------------------------------------------------------------------------------------
-// PERSONAS.A holds only cfo (db/seed.dev.sql); for a 1,075 total the firm plan arms fin_mgr
-// then compliance (demopolicy.go firmPlan), so this seat is blocked. Policy tables survive
+// The e2e member holds no seat; for a 1,075 total the firm plan arms fin_mgr then compliance
+// (demopolicy.go firmPlan), so this seat is blocked. Policy tables survive
 // the per-deploy reset, so ensureFirmPolicyActive restores the seeded policy first.
 test('firm Approvals: a row the seat cannot approve shows the reason icon, no sentence line, and opens its invoice', async ({ page }) => {
   test.setTimeout(90_000)
@@ -747,18 +766,19 @@ test('firm Approvals: a row the seat cannot approve shows the reason icon, no se
   const number = `INV-B17-REASON-${stamp}`
   const id = await createValidatedInvoice(token, entity.id, number)
 
-  // --- fixture guard, at the wire, before the browser is driven --------------------------
-  const wire = await getInvoice(token, id)
+  // --- fixture guard, at the wire, read with the browser's own token (can_approve is per caller) ---
+  await signInAs(page, 'firm')
+  const driverToken = await browserToken(page)
+  const wire = await getInvoice(driverToken, id)
   expect(
     wire.can_approve,
-    `${number} must be blocked for this seat; if this fails ensureFirmPolicyActive did not restore the seeded policy`,
+    `${number} must be blocked for the e2e member (no seat); if this fails ensureFirmPolicyActive did not restore the seeded policy`,
   ).toBe(false)
   const reason = wire.approve_blocked_reason
   expect(reason, `${number} must carry a blocked reason`).toBeTruthy()
   expect(reason!.length, 'the reason sentence must be a real message, not a stub').toBeGreaterThanOrEqual(20)
-  expect((await awaitingNumbers(token)).has(number), `${number} must be awaiting approval`).toBe(true)
+  expect((await awaitingNumbers(driverToken)).has(number), `${number} must be awaiting approval`).toBe(true)
 
-  await signInAs(page, 'firm')
   await selectEntity(page, entity.name)
   await goTo(page, 'Approvals')
   const row = approvalRowByNumber(page, number)
@@ -946,15 +966,15 @@ test('firm Approvals: a row the seat cannot approve shows the reason icon, no se
 // their own aria-label.
 //
 // A blocked row's reason icon sits inside track 1, so every row keeps exactly 7 children.
-// This journey's rows stay approvable through the sweep; the firm test above and the Emeka
-// leg below cover blocked rows.
+// This journey's rows stay approvable through the sweep; the firm test above and the
+// unstaffed leg below cover blocked rows.
 //
 // Cannot be run locally, same as Test 5: every Playwright config in this package is
 // deliberately webServer-less and points at deployed URLs, so its first real run -- red or
 // green -- is the post-deploy gate (dev-env.yml).
 test('in-house Approvals: the queue narrows, bulk approve settles per item, and the refetch confirms it', async ({ page }, testInfo) => {
   // Four fixtures with their own validate round trips, four viewport sweeps, a two-request
-  // fan-out, two invoice opens and a seat switch. Same in-file headroom precedent as Tests 1
+  // fan-out, two invoice opens and a staffing change. Same in-file headroom precedent as Tests 1
   // and 4.
   test.setTimeout(150_000)
 
@@ -1162,18 +1182,13 @@ test('in-house Approvals: the queue narrows, bulk approve settles per item, and 
 
   // Core AC C-1: this row's approvable height, compared once it is blocked at the same viewport.
   const approvableHeightBox = await untickedRow.boundingBox()
-  expect(approvableHeightBox, 'the unticked row never rendered before the seat switch').toBeTruthy()
+  expect(approvableHeightBox, 'the unticked row never rendered before the unstaffing').toBeTruthy()
 
-  // --- Core AC C-1, C-2, C-4, D-1, D-3: the same row, blocked for another seat ------------
-  // Emeka Uzowulu holds only line_mgr (db/seed.dev.sql); the in-house plan's one step is
-  // fin_dir (demopolicy.go inhousePlan). A seat switch yields a blocked row without publishing
-  // a policy. No restore: the stand-in is never persisted and each test gets a fresh context.
-  await page.getByTestId('persona-trigger').click()
-  await expect(page.getByTestId('persona-row-list')).toBeVisible()
-  await page.getByTestId('persona-row').filter({ hasText: 'Emeka Uzowulu' }).click()
-  await expect(page.getByTestId('persona-toast-title')).toBeVisible()
-  await page.getByTestId('persona-toast-dismiss').click()
-  await expect(page.getByTestId('persona-name')).toHaveText('Emeka Uzowulu')
+  // --- Core AC C-1, C-2, C-4, D-1, D-3: the same row, blocked once the member leaves fin_dir ---
+  // Unstaffing publishes no policy; the driver's afterAll restore stays the seeded list.
+  await staffWorkflowRole(token, INHOUSE_APPROVER_ROLE, seededApprovers!)
+  await page.reload()
+  await expect(page.getByTestId('persona-name')).toBeVisible()
 
   await goTo(page, 'Approvals')
   const blockedRow = approvalRowByNumber(page, untickedNumber)
@@ -1181,7 +1196,7 @@ test('in-house Approvals: the queue narrows, bulk approve settles per item, and 
   await expect(blockedRow.getByTestId('approval-select-row'), 'the seat really is blocked').toBeDisabled()
   await expect(blockedRow.getByTestId('approval-blocked-icon')).toBeVisible()
   const blockedHeightBox = await blockedRow.boundingBox()
-  expect(blockedHeightBox, 'the blocked row never rendered after the seat switch').toBeTruthy()
+  expect(blockedHeightBox, 'the blocked row never rendered after the unstaffing').toBeTruthy()
   expect(
     Math.abs(blockedHeightBox!.height - approvableHeightBox!.height),
     `the blocked row (${blockedHeightBox!.height}px) must stand the same height as the approvable row it replaced (${approvableHeightBox!.height}px)`,

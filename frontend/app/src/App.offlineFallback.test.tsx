@@ -1,10 +1,8 @@
 // @vitest-environment jsdom
-// @vitest-environment-options { "url": "http://localhost:3000/?persona=firm" }
-// F-021 unit half: a rejected mint (doSignIn's catch, App.tsx:1542-1547) still seats the
-// visitor unverified instead of dead-ending. Harness copied from App.standIn.test.tsx, but
-// with an EMPTY store + ?persona=firm URL (not renderAppWithSeat's pre-seeded signed-in
-// session) so the auto-sign-in effect actually fires doSignIn on mount.
-import { cleanup, render, waitFor } from '@testing-library/react'
+// F-021 unit half: a rejected mint (doSignIn's catch) still seats the visitor unverified
+// instead of dead-ending. Harness: the real <App/> with an EMPTY store
+// (no pre-seeded session); the in-app picker click drives doSignIn.
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
@@ -20,7 +18,7 @@ vi.mock('./auth', async (importOriginal) => {
   return { ...actual, signIn: signInMock }
 })
 
-// The only way to reach the ctx App builds -- see App.standIn.test.tsx.
+// The only way to reach the ctx App builds.
 let capturedCtx: PlatformCtx | undefined
 vi.mock('./components/Sidebar', () => ({
   Sidebar: (p: { ctx: PlatformCtx }) => {
@@ -51,10 +49,6 @@ beforeEach(() => {
   vi.stubGlobal('localStorage', createMemoryStorage())
   signInMock.mockClear()
   window.history.replaceState(null, '', '/')
-  // App.tsx strips ?persona= from the URL via replaceState once consumed (App.tsx:1615-
-  // 1620), and jsdom's window persists across tests in this file -- restore it every time
-  // or only the first test would ever see the deep-link param.
-  window.history.replaceState(null, '', '/?persona=firm')
 })
 
 afterEach(() => {
@@ -64,13 +58,13 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-// Deliberately NOT renderAppWithSeat (App.standIn.test.tsx) -- that pre-seeds a signed-in
-// session, which never reaches doSignIn's catch. This needs an empty store + the boot URL's
-// ?persona=firm to drive the auto-sign-in effect.
+// A pre-seeded signed-in session never reaches doSignIn's catch. This needs an empty store and a picker click.
 async function renderAppFresh() {
   vi.resetModules()
   const { default: App } = await import('./App')
-  return render(<App />)
+  const view = render(<App />)
+  fireEvent.click(screen.getByText(APP_PERSONAS.firm.name))
+  return view
 }
 
 // doSignIn's promise settles across several microtask hops (mock rejection -> catch ->

@@ -700,16 +700,18 @@ test('landing consent: Escape, an outside click and an in-notice click all leave
   expectNoConsoleErrors(errors)
 })
 
-// C8 — under either modal the notice stays mounted, inert and keyboard-unreachable.
+// C8 — under any modal the notice stays mounted, inert and keyboard-unreachable.
 // SignInModal is the load-bearing case: it handles only Escape, on window, so it has no
 // Tab trap of its own.
 test('landing consent: keyboard focus cannot reach the notice while a modal is open', async ({ page }) => {
-  test.setTimeout(60_000) // 2 modals x 30 Tab presses, each press read back over the wire
+  test.setTimeout(90_000) // 3 modals x 30 Tab presses, each press read back over the wire
   const { errors, card } = await openLanding(page)
 
   const cases = [
     { trigger: 'Platform login', dialog: 'Platform login' },
     { trigger: 'Book a demo', dialog: 'Book a demo' },
+    // The header entry shows above 1219px; the default viewport is 1280.
+    { trigger: 'Create an account', dialog: 'Create an account' },
   ]
 
   for (const c of cases) {
@@ -727,7 +729,7 @@ test('landing consent: keyboard focus cannot reach the notice while a modal is o
       expect(inside, `focus entered the cookie notice under the ${c.dialog} modal on Tab press ${i}`).toBe(false)
     }
 
-    // The overlay itself closes both modals (its root div owns onClick={onClose}).
+    // The overlay itself closes every modal (its root div owns onClick={onClose}).
     await page.mouse.click(5, 5)
     await expect(page.getByRole('dialog', { name: c.dialog })).toHaveCount(0)
   }

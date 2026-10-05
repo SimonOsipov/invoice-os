@@ -1,11 +1,11 @@
 // Registration and workspace provisioning over the deployed gateway.
 // The fork's GoTrue has signup on, SMTP blanked and autoconfirm on, so it mails nothing; the
 // emailed-link path is proven in CI by TestIdP_EmailedLinkVerifiesThenSignInSucceeds instead.
-// A pr-<N> fork is PosturePreview, so /auth/login mints any subject, an empty tenant included.
+// /auth/login mints any subject in a mock build, an empty tenant included.
 // Every run uses a fresh address and subject: the auth.users, tenants and memberships rows
 // it creates survive the per-deploy reset.
 import { test, expect } from '@playwright/test'
-import { login, memberships, rawFetch, PERSONAS, type Me, type Persona } from './client'
+import { getAuditLog, login, memberships, rawFetch, PERSONAS, type Me, type Persona } from './client'
 import { assertErrorEnvelope } from './contract-helpers'
 import { resolveTarget } from '../targets'
 
@@ -19,8 +19,17 @@ const FREE_MAIL_REFUSED = 'a business email address is required; personal email 
 const ALREADY_PROVISIONED = 'this account already has a workspace'
 // internal/gateway/gateway.go ServeHTTP: strings.ToLower(http.StatusText(403)).
 const FORBIDDEN = 'forbidden'
+// internal/gateway/register.go registrationAnswers: the workspace_name refusal.
+const NAME_REFUSED = 'workspace_name must be 1 to 200 characters'
+// internal/gateway/register.go maxAnswerNameChars.
+const NAME_MAX_CHARS = 200
 // internal/gateway/register.go VerifyHandler: the failure redirect's query.
 const VERIFY_FAILED = '?verify=failed'
+
+// internal/gateway/register.go DefaultRegisterMinResponse; a pr-<N> fork inherits the default.
+const REGISTER_MIN_MS = 2000
+// db/seed.dev.sql: reviewer 'Halima Yusuf', status suspended, in tenant 1111...
+const SUSPENDED_MEMBER = 'c0000000-0000-0000-0000-000000000007'
 
 const WORKSPACES = '/api/tenancy/v1/workspaces'
 const ME = '/api/tenancy/v1/me'
@@ -34,14 +43,53 @@ test.describe('registration (API E2E, over the deployed gateway)', () => {
     const credentials = { email: `reg-${crypto.randomUUID()}@example.com`, password: crypto.randomUUID().slice(0, 12) }
     expect(credentials.password).toHaveLength(12)
 
+    // Lower bounds only: the deployed app's upper latency is not ours to assert.
+    let t0 = performance.now()
     const first = await rawFetch('/auth/register', { method: 'POST', body: credentials })
+    const firstMs = performance.now() - t0
     expect(first.status, 'a new address').toBe(202)
+    expect(firstMs, 'a new address waits out the minimum').toBeGreaterThanOrEqual(REGISTER_MIN_MS)
     expect(first.body).toEqual(VERIFICATION_PENDING)
 
     // GoTrue answers the repeat 422 user_already_exists; the gateway maps it to 202.
+    t0 = performance.now()
     const repeat = await rawFetch('/auth/register', { method: 'POST', body: credentials })
+    const repeatMs = performance.now() - t0
+    expect(repeatMs, 'a repeat waits out the minimum').toBeGreaterThanOrEqual(REGISTER_MIN_MS)
     expect(repeat.status, 'a repeat must not reveal the address is taken').toBe(202)
     expect(repeat.body).toEqual(VERIFICATION_PENDING)
+  })
+
+  test('a body carrying the registration answers answers 202, a name at the limit included', async () => {
+    for (const workspace_name of [`Registration E2E ${crypto.randomUUID().slice(0, 8)}`, 'W'.repeat(NAME_MAX_CHARS)]) {
+      const res = await rawFetch('/auth/register', {
+        method: 'POST',
+        body: {
+          email: `reg-${crypto.randomUUID()}@example.com`,
+          password: crypto.randomUUID().slice(0, 12),
+          workspace_name,
+          display_name: 'Registration E2E',
+          kind: 'firm',
+        },
+      })
+      expect(res.status, `${workspace_name.length} characters: ${JSON.stringify(res.body)}`).toBe(202)
+      expect(res.body).toEqual(VERIFICATION_PENDING)
+    }
+  })
+
+  test('a workspace name one character over the limit is refused with 400', async () => {
+    const res = await rawFetch('/auth/register', {
+      method: 'POST',
+      body: {
+        email: `reg-${crypto.randomUUID()}@example.com`,
+        password: crypto.randomUUID().slice(0, 12),
+        workspace_name: 'W'.repeat(NAME_MAX_CHARS + 1),
+        display_name: 'Registration E2E',
+        kind: 'firm',
+      },
+    })
+    assertErrorEnvelope(res, 400, 'over-long workspace name')
+    expect((res.body as { error: string }).error).toBe(NAME_REFUSED)
   })
 
   test('an empty password is refused with 400', async () => {
@@ -85,8 +133,8 @@ test.describe('workspace provisioning (API E2E, over the deployed gateway)', () 
       expect(typeof body.tenant.id).toBe('string')
       expect(body.tenant.id).not.toBe('')
       expect(body.tenant.name).toBe(workspace.workspace_name)
-      // migrations/20260709153027_tenants_add_kind.sql: DEFAULT 'firm'.
-      expect(body.tenant.kind).toBe('firm')
+      // internal/tenancy/store.go ProvisionWorkspace: an absent kind is in_house.
+      expect(body.tenant.kind).toBe('in_house')
       expect(body.user).toEqual({ id: subject, role: 'admin' })
       tenantId = body.tenant.id
     })
@@ -109,7 +157,7 @@ test.describe('workspace provisioning (API E2E, over the deployed gateway)', () 
       const res = await rawFetch(ME, { headers: { Authorization: `Bearer ${tenantToken}` } })
       expect(res.status, JSON.stringify(res.body)).toBe(200)
       expect(res.body).toEqual({
-        tenant: { id: tenantId, name: workspace.workspace_name, kind: 'firm' },
+        tenant: { id: tenantId, name: workspace.workspace_name, kind: 'in_house' },
         user: { id: subject, role: 'admin', display_name: workspace.display_name, email: null },
       })
     })
@@ -123,6 +171,27 @@ test.describe('workspace provisioning (API E2E, over the deployed gateway)', () 
       // The mock token carries no email claim.
       expect(row!.email).toBeNull()
     })
+
+    await test.step('the new admin reads exactly one workspace.provisioned event', async () => {
+      const { events } = await getAuditLog(tenantToken, { event: ['workspace.provisioned'] })
+      expect(events).toHaveLength(1)
+      const [event] = events
+      expect(event.actor).toBe(subject)
+      expect(event.company_scope).toBe('workspace')
+      expect(event.entity_id).toBeNull()
+      expect((event.payload as { tenant_id: string }).tenant_id).toBe(tenantId)
+    })
+  })
+
+  test('a member of another workspace cannot provision a second one', async () => {
+    const token = await login(asSubject(SUSPENDED_MEMBER, ''))
+    const res = await rawFetch(WORKSPACES, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: { workspace_name: `Registration E2E ${crypto.randomUUID().slice(0, 8)}`, display_name: 'Registration E2E' },
+    })
+    assertErrorEnvelope(res, 409, 'suspended member provision')
+    expect((res.body as { error: string }).error).toBe(ALREADY_PROVISIONED)
   })
 
   test('a tenant-bearing caller is refused with 409', async () => {

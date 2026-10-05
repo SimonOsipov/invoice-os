@@ -3,9 +3,9 @@ import { resolveTarget } from '../targets'
 import { enclosesRect, gaps, settleAnimations, type Rect } from '../topology/layout'
 import { seedConsent } from './landingConsent'
 
-// The sign-in modal carries the email form above the persona list, so it is
-// taller than the viewport on a short phone. Its card must stay inside the viewport and
-// scroll its own content. Geometry has no jsdom oracle; this is behaviour, not a visual diff.
+// The sign-in dialog holds the form and no account chooser. Its card must stay inside the
+// viewport, stay centred, and keep the form's controls inside it on a short phone. Geometry
+// has no jsdom oracle; this is behaviour, not a visual diff.
 
 const LANDING_URL = resolveTarget('LANDING_URL')
 
@@ -35,54 +35,43 @@ for (const viewport of VIEWPORTS) {
 
     const card = dialog.locator(':scope > div')
     await expect(card).toHaveCount(1)
+    const viewportRect: Rect = { x: 0, y: 0, width: viewport.width, height: viewport.height }
     // The entry animation moves the card; wait for its box to settle inside the viewport.
     await expect
       .poll(async () => {
         const box = await card.boundingBox()
-        return box != null && box.x >= 0 && box.y >= 0 && box.x + box.width <= viewport.width && box.y + box.height <= viewport.height
+        return box != null && enclosesRect(viewportRect, box)
       }, { message: `the card overflows ${viewport.width}x${viewport.height}` })
       .toBe(true)
 
-    // O1: equal side gaps, read after the entry animation has finished.
     await settleAnimations(card)
     const cardBox = await card.boundingBox()
     expect(cardBox, 'the card has no box').not.toBeNull()
-    const side = gaps(cardBox!, { x: 0, width: viewport.width })
+    const side = gaps(cardBox!, viewportRect)
     expect(Math.abs(side.left - side.right), `the card is off-centre at ${viewport.width}x${viewport.height}: ${JSON.stringify(side)}`).toBeLessThanOrEqual(1)
 
-    // The card scrolls its own content, so x is the only axis a row must stay inside it on.
+    // The card scrolls its own content, so x is the only axis a control must stay inside it on.
     const xOnly = (r: Rect): Rect => ({ x: r.x, y: 0, width: r.width, height: 1 })
-    const grid = dialog.getByTestId('persona-picker').locator(':scope > div')
-    await expect(grid).toHaveCount(1)
-    const rows = dialog.locator('[data-persona]')
-    const rowCount = await rows.count()
-    expect(rowCount, 'the persona picker has no rows').toBeGreaterThan(0)
-    const gridBox = (await grid.boundingBox())!
-    expect(gridBox, 'the persona grid has no box').not.toBeNull()
-    for (let i = 0; i < rowCount; i++) {
-      const row = rows.nth(i)
-      const chevron = row.locator('svg').last()
-      const [rowBox, chevronBox] = await Promise.all([row.boundingBox(), chevron.boundingBox()])
-      expect(rowBox, `persona row ${i} has no box`).not.toBeNull()
-      expect(chevronBox, `persona row ${i} has no chevron box`).not.toBeNull()
-      const at = `persona row ${i} at ${viewport.width}x${viewport.height}`
-      expect(enclosesRect(xOnly(gridBox), xOnly(rowBox!), 0.5), `${at} overflows the persona grid: ${JSON.stringify({ gridBox, rowBox })}`).toBe(true)
-      expect(enclosesRect(xOnly(cardBox!), xOnly(rowBox!), 0.5), `${at} overflows the card: ${JSON.stringify({ cardBox, rowBox })}`).toBe(true)
-      expect(enclosesRect(rowBox!, chevronBox!, 0.5), `${at}: the chevron leaves its row: ${JSON.stringify({ rowBox, chevronBox })}`).toBe(true)
-      expect(enclosesRect(xOnly(cardBox!), xOnly(chevronBox!), 0.5), `${at}: the chevron is clipped by the card: ${JSON.stringify({ cardBox, chevronBox })}`).toBe(true)
+    const controls = {
+      'email input': dialog.getByLabel('Work email', { exact: true }),
+      'password input': dialog.getByLabel('Password', { exact: true }),
+      'Sign in button': dialog.getByRole('button', { name: 'Sign in →', exact: true }),
     }
+    for (const [name, control] of Object.entries(controls)) {
+      await control.scrollIntoViewIfNeeded()
+      await expect(control, `the ${name} is not visible`).toBeVisible()
+      const box = await control.boundingBox()
+      expect(box, `the ${name} has no box`).not.toBeNull()
+      expect(enclosesRect(xOnly(cardBox!), xOnly(box!), 0.5), `the ${name} leaves the card at ${viewport.width}x${viewport.height}: ${JSON.stringify({ cardBox, box })}`).toBe(true)
+    }
+    await expect(controls['Sign in button']).toBeInViewport()
+
     const overflow = await card.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
     expect(overflow.scrollWidth, `the card scrolls sideways at ${viewport.width}x${viewport.height}: ${JSON.stringify(overflow)}`).toBeLessThanOrEqual(overflow.clientWidth + 1)
 
-    const submit = dialog.getByRole('button', { name: 'Sign in →', exact: true })
-    await submit.scrollIntoViewIfNeeded()
-    await expect(submit).toBeVisible()
-    await expect(submit).toBeInViewport()
-
-    const lastPersona = dialog.locator('[data-persona]').last()
-    await lastPersona.scrollIntoViewIfNeeded()
-    await expect(lastPersona).toBeVisible()
-    await expect(lastPersona).toBeInViewport()
+    // The form is visible above, so these absences are not vacuous.
+    await expect(dialog.locator('[data-persona]')).toHaveCount(0)
+    await expect(dialog.getByText('Choose an account')).toHaveCount(0)
 
     expect(errors, `console errors on the landing page:\n${errors.join('\n')}`).toEqual([])
   })

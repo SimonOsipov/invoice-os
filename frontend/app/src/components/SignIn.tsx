@@ -1,7 +1,6 @@
 // The Platform app's bare sign-in (M2-13, "deliberately minimal UI"). It gates the
 // workspace: pick a seeded persona and App runs the real round trip (mint a JWT via the
-// gateway, GET /api/tenancy/v1/me) before revealing the app. The landing's persona picker
-// deep-links here with ?persona=<id>, which auto-drives this same sign-in.
+// gateway, GET /api/tenancy/v1/me) before revealing the app.
 
 import { BrandMark } from '../icons'
 import { APP_PERSONAS, type Persona, type PersonaId } from '../auth'
@@ -97,10 +96,9 @@ export function SignIn({ signingIn, onPick }: { signingIn: PersonaId | null; onP
   )
 }
 
-// Loading splash shown while a `?persona=` auto-sign-in or a `?handoff=` redemption is in
-// flight (App.tsx render gate), so the picker never flashes first. With no persona (the
-// hand-off) it reads "Opening your workspace…". Same card chrome as SignIn.
-export function SignInLoading({ persona }: { persona?: Persona }) {
+// Loading splash shown while a `?handoff=` redemption is in flight (App.tsx render gate),
+// so the picker never flashes first. Same card chrome as SignIn.
+export function SignInLoading() {
   return (
     <div
       className="asc-app"
@@ -122,7 +120,7 @@ export function SignInLoading({ persona }: { persona?: Persona }) {
 
         <div style={{ padding: '44px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
           <Spinner />
-          <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--fg-2)' }}>{persona ? `Signing in as ${persona.name}…` : 'Opening your workspace…'}</div>
+          <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--fg-2)' }}>Opening your workspace…</div>
           <div style={{ fontSize: 12.5, color: 'var(--fg-3)' }}>Resolving your workspace with the backend.</div>
         </div>
       </div>

@@ -99,7 +99,7 @@ func TestHandoffRoutesRegisteredWithPreflight(t *testing.T) {
 func handoffMux(t *testing.T, authURL *url.URL, withOptions bool) *http.ServeMux {
 	t.Helper()
 	log := slog.New(slog.DiscardHandler)
-	h := handoffHandlers(authURL, gateway.NewSessionChecker(nil, nil, time.Now, log), log)
+	h := handoffHandlers(authURL, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil)
 	withCORS := gateway.CORS([]string{handoffAllowedOrigin})
 	fields := map[string]http.Handler{"SignIn": h.SignIn, "Exchange": h.Exchange, "Refresh": h.Refresh, "SignOut": h.SignOut}
 	mux := http.NewServeMux()

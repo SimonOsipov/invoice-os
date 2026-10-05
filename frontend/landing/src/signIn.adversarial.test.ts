@@ -154,9 +154,11 @@ describe('readSignInState adversarial', () => {
 })
 
 describe('signIn module surface', () => {
-  it('exports only the D12 and D25 functions and keeps the D12 copy private', () => {
+  it('exports only the D12 and D25 functions and the unavailable copy', () => {
     expect(Object.keys(signIn).sort()).toEqual([
+      'SIGN_IN_UNAVAILABLE',
       'handoffUrl',
+      'readSignInConsole',
       'readSignInState',
       'signInConfigured',
       'signInErrorMessage',

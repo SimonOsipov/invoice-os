@@ -200,20 +200,17 @@ describe('D20 comment corrections', () => {
 
   it('session.ts states the D18 precedence and the handoff field', () => {
     const s = src('lib/session.ts')
-    expect(s).not.toContain('A valid param WINS over a stored session.')
-    expect(s).toContain('a live hand-off session wins over the')
     expect(s).toMatch(/verified: boolean, handoff\?: true \}/)
   })
 
   it('App.tsx states that a live hand-off session is not dropped', () => {
     const s = src('App.tsx')
     expect(s).not.toContain('boots with NO session even when one is stored: the user just chose')
-    expect(s).toContain('unless that stored session is a live hand-off session: the user just chose')
+    expect(s).toContain('unless the stored one is a live hand-off session')
   })
 
   it('SignIn.tsx names the hand-off in the SignInLoading comment', () => {
     const s = src('components/SignIn.tsx')
-    expect(s).not.toContain('Loading splash shown while a landing deep-link (?persona=) auto-sign-in is in flight')
     expect(s).toMatch(/`\?handoff=` redemption/)
   })
 })

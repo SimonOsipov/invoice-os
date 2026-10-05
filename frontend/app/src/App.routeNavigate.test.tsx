@@ -14,7 +14,6 @@ import { APP_PERSONAS, type Session } from './auth'
 import { EMPTY_BUCKET } from './lib/dashboard'
 import { MAX_RUN_FILES } from './lib/importRun'
 import { ROUTE_PATHS, routeUrl } from './lib/route'
-import type { Member } from './lib/members'
 import { SESSION_KEY, serializeSession } from './lib/session'
 import type { AuditPrefilter, PlatformCtx, View } from './types'
 
@@ -24,29 +23,7 @@ const INVOICE_ID = 'aaaaaaaa-0000-4000-8000-000000000001'
 const OTHER_INVOICE_ID = 'bbbbbbbb-0000-4000-8000-000000000002'
 const JOB_A = 'c3d4e5f6-a7b8-4c3d-9e4f-5a6b7c8d9e0f'
 
-const MEMBER: Member = {
-  id: 'm-nav-001',
-  name: 'Tunde Bello',
-  initials: 'TB',
-  email: 'tunde@example.ng',
-  role: 'preparer',
-  status: 'active',
-  isYou: false,
-}
-
-// Same subject as the seat -- becomePersona short-circuits into returnToSeat for this row
-// (App.standIn.test.tsx's SEAT_AS_MEMBER, same shape).
-const SEAT_AS_MEMBER: Member = {
-  id: SEAT_SESSION.persona.subject,
-  name: SEAT_SESSION.persona.name,
-  initials: SEAT_SESSION.persona.initials,
-  email: null,
-  role: 'admin',
-  status: 'active',
-  isYou: true,
-}
-
-// Node v25's native localStorage collides with jsdom's (App.standIn.test.tsx:74-75).
+// Node v25's native localStorage collides with jsdom's.
 function createMemoryStorage() {
   const store = new Map<string, string>()
   return {
@@ -109,10 +86,9 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-async function bootAt(path: string, opts: { demoMode?: boolean } = {}) {
+async function bootAt(path: string) {
   window.history.replaceState(null, '', path)
   localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
-  if (opts.demoMode) vi.stubEnv('VITE_DEMO_MODE', 'true')
   vi.resetModules()
   const { default: App } = await import('./App')
   return render(<App />)
@@ -372,40 +348,16 @@ describe('AC-3: a pushed URL never carries a query string', () => {
   })
 })
 
-describe('AC-5: a DEMO-06 persona switch corrects the URL and adds no entry', () => {
-  it('personaSwitch_replacesTheUrlWithTheCarriedViewAndAddsNoEntry', async () => {
-    await bootAt('/extraction', { demoMode: true })
-    let ctx = requireCtx()
-    expect(ctx.view, 'sanity: booting at /extraction should seed that view').toBe('extraction')
-    expect(typeof ctx.becomePersona, 'DEMO_MODE must expose becomePersona on ctx').toBe('function')
+describe('the workspace carries no identity-switch props', () => {
+  // `in`, not `!== undefined`: a present-but-undefined key is still a prop the shell receives.
+  it('Workspace gets no switch props', async () => {
+    await bootAt('/')
+    const ctx = requireCtx()
 
-    const lengthBefore = window.history.length
-    await act(async () => {
-      await ctx.becomePersona!(MEMBER, 'extraction')
-    })
-    ctx = requireCtx()
-
-    expect(window.location.pathname, 'a persona switch must land the URL on the carried view').toBe('/invoices')
-    expect(window.history.length, 'a persona switch must add no history entry').toBe(lengthBefore)
-    expect(ctx.view, 'the carried view must be invoices, not extraction').toBe('invoices')
-  })
-
-  // route-02-06, V-1: the detail-drill-down mirror of the extraction case above. Assertion
-  // only -- the collapse and the id-null boot seeding both come from ROUTE-02-01..05.
-  it('personaSwitch_fromInvoiceDetailLandsOnInvoicesWithNoImportedId', async () => {
-    await bootAt(`/invoices/${INVOICE_ID}`, { demoMode: true })
-    let ctx = requireCtx()
-    expect(ctx.view, 'sanity: booting at /invoices/<id> should seed detail').toBe('detail')
-    expect(ctx.importedInvoiceId, 'sanity: the boot id must seed the selection').toBe(INVOICE_ID)
-
-    await act(async () => {
-      await ctx.becomePersona!(MEMBER, 'detail')
-    })
-    ctx = requireCtx()
-
-    expect(window.location.pathname, 'a persona switch must land the URL on invoices').toBe('/invoices')
-    expect(ctx.view, 'the carried view must be invoices, not detail').toBe('invoices')
-    expect(ctx.importedInvoiceId, 'the drill-down id must not survive the collapse').toBeNull()
+    expect(Object.keys(ctx), 'sanity: the captured ctx is the real workspace ctx').toEqual(expect.arrayContaining(['nav', 'signOut']))
+    expect('becomePersona' in ctx).toBe(false)
+    expect('returnToSeat' in ctx).toBe(false)
+    expect('seatSubject' in ctx).toBe(false)
   })
 })
 
@@ -490,33 +442,6 @@ describe('QA adversarial: navigate() no longer carries a fragment forward', () =
     const call = pushSpy.mock.calls.find((c) => typeof c[2] === 'string' && c[2].startsWith('/invoices'))
     expect(call, 'no pushState call to /invoices was recorded').toBeDefined()
     expect(call![2], 'navigate() must no longer carry a fragment forward').toBe('/invoices')
-  })
-})
-
-describe('QA adversarial: returnToSeat with no stand-in is a true no-op', () => {
-  // No identity change means no Workspace remount, so nothing should touch the URL or
-  // history -- carrying 'create' to 'invoices' only matters for a freshly mounted Workspace.
-  it('returnToSeat_withNoStandInLeavesTheUrlAndHistoryUntouched', async () => {
-    await bootAt('/create', { demoMode: true })
-    const lengthBefore = window.history.length
-    await act(async () => {
-      await capturedCtx!.returnToSeat!('create', SEAT_AS_MEMBER)
-    })
-    requireCtx()
-    expect(window.location.pathname, 'no stand-in to return from means nothing to correct').toBe('/create')
-    expect(window.history.length, 'returnToSeat must add no history entry').toBe(lengthBefore)
-  })
-
-  // Formerly it.fails(): the explicit write fired unconditionally while the remount that
-  // moves ctx.view did not, desyncing the two. Deleting the write (App.tsx) closes the gap.
-  it('returnToSeat_withNoStandInLeavesCtxViewAgreeingWithTheUrl', async () => {
-    await bootAt('/create', { demoMode: true })
-    await act(async () => {
-      await capturedCtx!.returnToSeat!('create', SEAT_AS_MEMBER)
-    })
-    const ctx = requireCtx()
-    expect(window.location.pathname).toBe('/create')
-    expect(ctx.view, 'the screen must agree with the address bar').toBe('create')
   })
 })
 
@@ -1318,7 +1243,7 @@ describe('QA adversarial (route-02-06): two switchClient calls in a row each scr
 // Nine sites, counted after the fix: the seven that ship today plus the boot-entry stamp
 // backfill and the popstate clamp's own replaceState. Both new writers live inside
 // Workspace, so they are inside this slice by construction.
-// Out of the slice on purpose: signOut and the persona strip both live in App.
+// Out of the slice on purpose: signOut and the one-shot strip both live in App.
 describe('ROUTE-06-02 AC-7: every Workspace history write carries the company stamp', () => {
   it('guard_everyWorkspaceHistoryWriteCarriesTheStamp', () => {
     const src = readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8')

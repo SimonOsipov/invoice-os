@@ -132,6 +132,12 @@ importers:
 
   frontend/ops-console:
     dependencies:
+      '@invoice-os/api-client':
+        specifier: workspace:*
+        version: link:../../packages/api-client
+      '@invoice-os/console-session':
+        specifier: workspace:*
+        version: link:../../packages/console-session
       '@invoice-os/design-tokens':
         specifier: workspace:*
         version: link:../../packages/design-tokens
@@ -169,6 +175,12 @@ importers:
 
   frontend/support-console:
     dependencies:
+      '@invoice-os/api-client':
+        specifier: workspace:*
+        version: link:../../packages/api-client
+      '@invoice-os/console-session':
+        specifier: workspace:*
+        version: link:../../packages/console-session
       '@invoice-os/design-tokens':
         specifier: workspace:*
         version: link:../../packages/design-tokens
@@ -222,6 +234,40 @@ importers:
       react:
         specifier: ^19.2.7
         version: 19.2.7
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@types/node@22.20.0)(jsdom@27.4.0)(vite@8.1.3(@types/node@22.20.0))
+
+  packages/console-session:
+    dependencies:
+      '@invoice-os/api-client':
+        specifier: workspace:*
+        version: link:../api-client
+    devDependencies:
+      '@testing-library/react':
+        specifier: ^16.3.2
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.0
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      jsdom:
+        specifier: ^27.4.0
+        version: 27.4.0
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
       typescript:
         specifier: ^6.0.3
         version: 6.0.3

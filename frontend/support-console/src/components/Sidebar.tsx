@@ -1,8 +1,7 @@
 import type { CSSProperties } from 'react'
 import { BrandMark } from '../icons'
 import { GLOBE_ICON, NAV_ITEMS, SIGN_OUT_ICON } from '../data'
-import { landingBase } from '../auth'
-import { clearSupportSession } from '../session'
+import { signOut } from '../auth'
 import type { Screen } from '../types'
 
 type Props = {
@@ -144,19 +143,10 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
             SUPPORT ENGINEER · L2
           </div>
         </div>
-        {/* Sign out, replacing the prototype's decorative gear (proto:86) — the same call
-            the app and the developer console already made. Clears the stored session
-            FIRST: navigating alone would leave it behind and let the next visitor back in.
-            landingBase() is null on the standalone showcase build; never navigate to
-            `null`, which stringifies to "null". */}
+        {/* Sign out: clears the session, then leaves (signOutConsole). */}
         <button
           type="button"
-          onClick={() => {
-            clearSupportSession()
-            const dest = landingBase()
-            if (dest) window.location.href = dest
-            else window.location.reload()
-          }}
+          onClick={signOut}
           className="ops-btn ops-hide-narrow"
           aria-label="Sign out"
           title="Sign out"

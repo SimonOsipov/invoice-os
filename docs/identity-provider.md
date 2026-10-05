@@ -126,6 +126,7 @@ Nothing below is a secret value; secrets are named, never shown.
 | `AUTH_ADDITIONAL_ISSUERS` | unset: production trusts one issuer (`/healthz` `auth_issuers=1`) | the fork's GoTrue issuer and JWKS URL (`auth_issuers=2`) |
 | `AUTH_ADMIN_PASSWORD` | **secret, not sealed**: 64 hex characters, rendered into `auth.DATABASE_URL` | freshly generated per fork |
 | `AUTH_SITE_URL` | `https://www.ascomply.com` after registration U1; unset before it | the fork's landing URL (`set-fork-auth-site`) |
+| `AUTH_REGISTER_MIN_RESPONSE` | unset: the default `2s`, until registration U4 tunes it | not written; a fork inherits production's value |
 
 `AUTH_ADMIN_PASSWORD` stays unsealed: the `auth.DATABASE_URL` reference renders it, and
 every fork overwrites it with its own.
@@ -134,6 +135,11 @@ every fork overwrites it with its own.
 registration routes answer 503 `registration is not configured`. A value that is not an
 absolute `http(s)` URL, or that carries user info, a query or a fragment, stops the
 gateway at boot.
+
+`AUTH_REGISTER_MIN_RESPONSE` is a Go duration (`2s`, `3500ms`): the shortest time any
+`POST /auth/register` answer except a 400 takes. Unset means `2s`. A value that does not parse
+or is not above zero stops the gateway at boot with an ERROR that names the variable and does
+not echo the value. There is no upper bound.
 
 ## Script behaviour on writes
 
@@ -185,7 +191,8 @@ Production writes are the user's. The environment id is
 - Until done, the PR gate is red at prepare-env's `set-fork-auth` step, which cannot resolve
   a service named `auth`.
 - This is the **only** production action the PR gate needs. The fork writes everything else
-  itself.
+  itself. It is not the only one before a production deploy of this code: `GATEWAY_TOKEN`
+  must be written first (`set-production-gateway-token`, `docs/add-a-service.md` §5).
 
 **U2 — Create the roles and schema on production Postgres by hand**, as superuser through
 `railway ssh --service Postgres` (production Postgres is private-only). Generate the
@@ -280,6 +287,9 @@ time. The production key exists only in the Railway variable U3b writes and then
 
 ## Registration
 
+A verified registrant reaches HubSpot and Resend through the gateway hand-off: see
+[contact-sync.md](./contact-sync.md).
+
 GoTrue stays private. The gateway is the only public surface, and it calls GoTrue under
 `AUTH_URL` at: `/signup` and `/verify` for registration, `/token?grant_type=password` for
 sign-in (see Sign-in and hand-off), `/token?grant_type=refresh_token` for renewal and
@@ -290,10 +300,18 @@ query, so no other GoTrue route (`/recover`, `/otp`, `/admin/*`, `/logout` with 
 scope, or `/token` with any other grant) is reachable from outside.
 
 **The flow:**
-1. The client posts `{"email","password"}` to `POST /auth/register` on the gateway. Unless
-   the address is at a free-mail domain (400, GoTrue not called), the gateway posts only
-   those two fields to GoTrue `/signup`. GoTrue creates an unconfirmed user and
-   mails a confirmation link through Resend.
+1. The client posts `{"email","password"}` to `POST /auth/register` on the gateway. The body
+   may also carry `workspace_name`, `display_name`, `kind?` and `marketing_consent_text?`
+   (optional; the marketing sentence the person ticked, 1 to 500 characters; the gateway
+   stores it as `data.marketing_consent{text,at}` with the server's time). When any of the
+   first three is present,
+   the gateway validates them with the tenancy rules (trimmed, 1 to 200 characters, no NUL,
+   `kind` `firm` or `in_house`) and posts them to GoTrue `/signup` as
+   `data.registration`; GoTrue stores them as `user_metadata.registration`. A free-mail
+   address answers 400 first, and GoTrue is not called. GoTrue creates an unconfirmed user and
+   mails a confirmation link through Resend. Every answer except a 400 arrives no earlier
+   than `AUTH_REGISTER_MIN_RESPONSE` after the request reached the handler, so a new address
+   and a known one take the same time while GoTrue answers faster than that (see Ceilings).
 2. The link targets `GOTRUE_MAILER_URLPATHS_CONFIRMATION`, which is the gateway's
    `GET /auth/verify`. A relative value would resolve against `API_EXTERNAL_URL`, a private
    host, so production sets an absolute URL.
@@ -308,10 +326,15 @@ scope, or `/token` with any other grant) is reachable from outside.
    on this one method and path only. Tenancy creates the tenant and its first active admin
    in one transaction through `public.provision_workspace`
    ([migrations.md](./migrations.md) §1) and answers 201 `{tenant:{id,name,kind}, user:{id,role}}`. An absent
-   `kind` stores `firm`, the column default.
-6. The next token (a refresh grant or a new sign-in) carries `app_metadata.tenant_id`.
+   `kind` stores `in_house`. `provision_workspace` refuses an identity that
+   already holds any membership, in any workspace and in any status (unique violation,
+   constraint `one_workspace_per_identity`; the gateway answers 409), and takes a
+   per-identity advisory lock so two concurrent calls cannot both pass. The same
+   transaction writes one `workspace.provisioned` audit event.
+6. After every 201 the caller holds exactly one active membership, so the next token (a
+   refresh grant or a new sign-in) carries `app_metadata.tenant_id`.
 
-**`POST /auth/register`**, outside `/api/`, no verifier, no CORS wrap, in every build:
+**`POST /auth/register`**, outside `/api/`, no verifier, in every build. It is CORS-wrapped, with an `OPTIONS /auth/register` preflight route:
 
 | Outcome | Answer |
 |---|---|
@@ -320,6 +343,7 @@ scope, or `/token` with any other grant) is reachable from outside.
 | GoTrue `over_email_send_rate_limit` (an unconfirmed repeat within 60 s, or the instance mail cap) | the same 202, logged at WARN |
 | GoTrue 5xx whose `code` is SQLSTATE `23505` (the loser of two concurrent signups for one address) | the same 202, logged at WARN |
 | a malformed body, or an empty email or password | 400 `{"error"}` |
+| an answer field is present but `workspace_name` or `display_name` is missing, blank, over 200 characters or holds a NUL byte, or `kind` (even `""`) is not `firm` or `in_house` | 400 with the tenancy wording (`workspace_name must be 1 to 200 characters`, `workspace_name must not contain a NUL byte`, `kind must be "firm" or "in_house"`, and the `display_name` equivalents); GoTrue is not called |
 | an address at a listed free-mail domain or its subdomain | 400 `{"error":"a business email address is required; personal email providers are not accepted"}`; GoTrue is not called |
 | GoTrue `validation_failed`, `weak_password`, `email_address_invalid` | 400 with GoTrue's `msg` |
 | GoTrue `signup_disabled` | 503 `registration is closed` |
@@ -327,14 +351,41 @@ scope, or `/token` with any other grant) is reachable from outside.
 | GoTrue unreachable, or any other answer | 502 `registration is unavailable`, logged |
 | `AUTH_SITE_URL` unset | 503 `registration is not configured` |
 
+A preflight (an OPTIONS with an `Origin`) is answered by CORS; any other non-POST, including an
+OPTIONS without an `Origin`, answers 405 `method not allowed` with `Allow: POST` at once, before the minimum
+wait and without a GoTrue call. Guarded by `cmd/gateway/registration_routes_test.go`
+`TestRegisterOptionsWithoutOriginIsNotARegistration`.
+
 The four 202 rows answer identically, so the response never tells whether an address
 already has an account. The answer never carries the user id or any GoTrue field except
 `msg`.
+
+The four 202 rows and the 503 `registration is closed`, 429 and 502 rows wait for
+`AUTH_REGISTER_MIN_RESPONSE` (default `2s`), counted from when the request reached the handler. The 400 rows
+answer at once. The 503 `registration is not configured` answers at once too, because the
+route is not wired. If the client disconnects during the wait, no answer is written. Each
+waiting request logs `registration: signup timing` with `upstream_ms` (how long GoTrue took)
+and `min_ms` (the minimum): INFO while `upstream_ms` is below `min_ms`, WARN at or above it.
 
 The free-mail list lives in `internal/gateway/freemail.go` `freeMailDomains`. To extend it,
 add one lower-case domain; its subdomains are refused too. Fullwidth, ideographic-dot and
 inner-whitespace forms of a listed domain are refused by GoTrue's own format check (400),
 guarded by `TestIdP_FreeMailVariantsAreNotAccepted`.
+
+**`POST /contacts/demo-request`**, outside `/api/`, no verifier, in every build. CORS-wrapped, with an `OPTIONS` preflight route. Body `{"email","name","company","marketing_consent_text"?}`; other keys are ignored and not forwarded. The body limit is 4096 bytes. Fields are trimmed; `marketing_consent_text` is forwarded as sent.
+
+| Outcome | Answer |
+|---|---|
+| forwarded once to notifications (no retry) | 202 `{"status":"accepted"}` |
+| a malformed or oversized body | 400 `{"error":"invalid request body"}` |
+| email not 3 to 254 bytes, not exactly one `@`, or holds whitespace | 400 `email is invalid` |
+| `name` or `company` not 1 to 200 characters, or holds a NUL byte | 400 `name must be 1 to 200 characters`, `name must not contain a NUL byte`, and the `company` equivalents |
+| `marketing_consent_text` present but blank, over 500 characters or holding a NUL byte | 400 `marketing_consent_text must be 1 to 500 characters` |
+| notifications fails, answers anything but 202, or exceeds 5 s | 502 `demo request is unavailable`; the log carries the status only |
+
+The handler sets `Cache-Control: no-store` on every answer it writes. Any method but POST and a preflight answers 405. The route is public and unthrottled; the `ceiling:` line in `internal/gateway/contacts.go` `DemoRequestHandler` names the limit. Guarded by `internal/gateway/contacts_test.go` (`TestDemoRequest_*`).
+
+The `/api/` router answers 404 for any path whose first segment after the service is `internal`, before authorization, on the decoded path, both raw and after `path.Clean`, so a dot-dot or empty segment that resolves to `internal`, or a raw `internal/..` prefix, is refused for every method, CONNECT included. Guarded by `internal/gateway/gateway_test.go` `TestRouter_InternalPathNeverReachesUpstream`.
 
 **`GET /auth/verify?token=…&type=signup`**, outside `/api/`:
 
@@ -353,9 +404,12 @@ would otherwise consume the single-use token.
 
 **`POST /api/tenancy/v1/workspaces`:** 201 with `{tenant:{id,name,kind}, user:{id,role}}`;
 400 for a malformed body, a name outside 1–200 characters, or a `kind` other than `firm` or
-`in_house`; 401 for no caller or a subject that is not a UUID; 409 `this account already has a workspace` when the token
-already carries a tenant or the caller already provisioned one; 500 otherwise. The tenant id
-is a UUIDv5 of the caller's subject, so one identity provisions at most one workspace.
+`in_house` (an absent `kind` is valid and stores `in_house`); 401 for no caller or a subject that is not a UUID; 409 `this account already has a workspace` when the token
+already carries a tenant, when the caller already provisioned one, or when the caller holds
+any membership in any workspace in any status; 500
+otherwise. The tenant id is a UUIDv5 of the caller's subject; the membership guard in
+`provision_workspace` is what holds one identity to one workspace. Every 201 writes one
+`workspace.provisioned` audit event in the same transaction.
 
 **Ceilings:**
 - `ceiling:` GoTrue's per-request rate limiters, `/verify` and `/token` included, are off in
@@ -369,12 +423,23 @@ is a UUIDv5 of the caller's subject, so one identity provisions at most one work
   about 30 confirmation mails per hour. A registrant during the cap gets 202 and no mail; the
   WARN log line `registration: gotrue email send rate limit` is the only signal. Set
   `GOTRUE_RATE_LIMIT_EMAIL_SENT` when signup traffic approaches it.
+- `ceiling:` the registration minimum hides GoTrue's timing only while GoTrue answers faster
+  than `AUTH_REGISTER_MIN_RESPONSE`. A slower answer still leaks timing. Revisit when
+  `registration: signup timing` logs WARN, and raise the minimum (registration U4 step 5).
+- `ceiling:` each waiting register request holds a connection for up to the minimum, and
+  register has no per-client limit. Revisit with the per-client-IP limit owed before
+  registration U3.
 - `ceiling:` the session GoTrue issues on verify is discarded but stays live in
   `auth.sessions` and `auth.refresh_tokens`. No route revokes it by itself; a global
   sign-out or a staff cut-off of the account deletes it with the account's other sessions
   (see Revocation and Cutting an account off). Its tokens never reach anyone.
 
 **Accepted risks of a link that verifies on GET:**
+- *First registrant's answers.* GoTrue does not update an unconfirmed user on a repeat signup,
+  so the answers (`user_metadata.registration`) of the **first** registrant stay, whoever
+  confirms. A victim who registers after an attacker provisions the attacker's workspace
+  name and kind. This adds no exposure beyond the hijack below, which already hands over the
+  account.
 - *Pre-account hijack.* GoTrue does not update an existing unconfirmed user on a repeat
   signup; it re-sends the confirmation mail for the **first** registrant's password. An
   attacker who registers `victim@corp` first causes a mail to the victim. If the victim then
@@ -388,12 +453,18 @@ is a UUIDv5 of the caller's subject, so one identity provisions at most one work
   one form button, and `POST /auth/verify` verifies. The hijack half also needs password
   recovery, or a delete-and-re-create of an unconfirmed user on a repeat signup.
 
+**Accepted risks of user-editable metadata:**
+- *Self-asserted consent.* A user can edit their own GoTrue `user_metadata`, so
+  `user_metadata.marketing_consent` is self-asserted. The hand-off forwards it, and the contact
+  store records only the first tick.
+
 ## Sign-in and hand-off
 
 The landing SPA is the sign-in surface, and it is a different origin from the app. No cookie
 or other channel is shared between them, so the session crosses in the URL as a short-lived,
-single-use code, never as a token. The code is bound to a `state` that the app minted in the
-same tab, so a code minted in another browser signs nobody in.
+single-use code, never as a token. The code is bound to a `state` that the app, or a console,
+minted in the same tab, so a code minted in another browser signs nobody in. The target of the
+hand-off is the app by default and a console when the visitor came from one (Console sessions).
 
 **The flow:**
 1. A signed-out app tab calls `ensureSignInState` (`frontend/app/src/lib/signInState.ts`). It
@@ -402,41 +473,56 @@ same tab, so a code minted in another browser signs nobody in.
    a state from a URL.
 2. The app goes to `<landing>/?state=<s>[&signin=<outcome>]`: from the front-door redirect,
    from the start bounce (step 3) with `signin=ready`, and from a failed hand-off (step 7).
-   Landing keeps the state in memory only and strips `state` and `signin` at boot.
+   A console adds `console=ops` or `console=support`. Landing keeps the state and the console
+   target in memory only and strips the params it read at boot.
 3. A visitor who opened landing directly has no state. The modal then shows "Continue with
-   email", which goes to `<app>?auth=start`. The app ensures a state and returns to landing
-   with `signin=ready`, which opens the modal with the form.
+   email", which goes to `<app>?auth=start`, or to the held console's `?auth=start`. The app
+   or console ensures a state and returns to landing with `signin=ready`, which opens the
+   modal with the form.
 4. Landing posts `{"email","password","state"}` to `POST /auth/sign-in`. The gateway posts
    `{"email","password"}` to GoTrue `/token?grant_type=password`. On a 200 it keeps the access
    token and the refresh token with `sha256(state)` and answers a code.
-5. Landing navigates to `<app>?handoff=<code>`. The app strips the param at mount, before
-   redemption resolves.
+5. Landing navigates to `<app>?handoff=<code>`, or to `<console>?handoff=<code>` for a held
+   console target. The app or console strips the param at mount, before redemption resolves.
 6. The app reads and removes its stored state (`consumeSignInState`) and posts
    `{"code","state"}` to `POST /auth/exchange`. It then calls `GET /api/tenancy/v1/me` with
    the access token and stores the session at `localStorage['invoice-os.session']` with
    `handoff: true`, the refresh token (`refresh_token`) and `received_at` (epoch ms): the
    local time the exchange was sent, backdated by `HandoffTTL` (60 s) because the token may
    have waited that long in the store. A tab with no live state makes no exchange call and
-   goes to step 7.
+   goes to step 7. When `/me` answers 403 and the token's `user_metadata.registration`
+   holds both names (and a `kind` that is absent, `firm` or `in_house`), the app posts them to
+   `POST /api/tenancy/v1/workspaces` with the same token, silently and without a
+   confirmation screen. After a 201, or a 409 (the identity already holds a membership), it
+   posts the exchange's refresh token to `POST /auth/refresh` and calls `/me` with the new
+   access token. The session then holds the refreshed access and refresh tokens, and
+   `received_at` is the local time of the refresh, not backdated. One 15 s timeout covers the
+   whole chain. Without answers the 403 stands. A provisioning 400 or 5xx, a failed refresh or an
+   exchange without a refresh token ends in step 7 as `signin=failed`. An account whose
+   workspace an operator deleted re-provisions at its next sign-in (accepted; revisit when
+   workspace deletion ships).
 7. On any failure the app returns to landing with `signin=no-workspace` (the `/me` call
    answered 403) or `signin=failed` (anything else), carrying the state `ensureSignInState`
    returns: a newly minted one, because step 6 removed the old. Landing opens
    the modal with "This account has no workspace yet." or "We couldn't open your workspace.
-   Sign in again." An unknown `signin` value is stripped and ignored.
+   Sign in again." A console redeems the same way, but instead of `/me` it reads the token:
+   one without the staff claim returns `signin=not-staff` ("This account cannot open the
+   ASComply consoles."). An unknown `signin` value is stripped and ignored.
 
 **Workspace mode.** A hand-off session takes its mode from `/me` `tenant.kind`: `firm` opens
 the firm workspace, `in_house` the in-house one. A `/me` answer, or a stored hand-off record,
 without a known `kind` fails the redemption (step 7, `signin=failed`) or drops the record. A
-persona session keeps its persona's mode until AUTH-15.
+session from the in-app picker of a build with no landing URL (the standalone showcase build and
+local dev) keeps the picked persona's mode.
 
 **Identity card.** A hand-off session's card shows `/me` `user.display_name`, else
-`user.email`, else nothing; its initials follow the same order. A persona session shows its
-persona until AUTH-15. A stored record without the name keeps a blank card: renewal does not re-read `/me`, so only a new sign-in fills it.
+`user.email`, else nothing; its initials follow the same order. A picker session shows the picked
+persona's name. A stored record without the name keeps a blank card: renewal does not re-read `/me`, so only a new sign-in fills it.
 
 The access token travels only in the exchange and refresh answers and the `Authorization`
 header; the refresh token travels only in the exchange answer, the refresh request and
-answer, and the sign-out request (see Revocation). Landing never holds either. Landing renders the form only when `VITE_GATEWAY_URL` and `VITE_APP_URL` are set,
-and otherwise shows the persona list alone. The app ignores `?handoff=` when its
+answer, and the sign-out request (see Revocation). Landing never holds either. Landing renders the form only when `VITE_GATEWAY_URL` and `VITE_APP_URL` are set. The create-account entry also needs `VITE_REGISTRATION_OPEN=true`: `reconcile-urls` writes it on every PR fork, and production leaves it unset until registration U3. A hand-off to a console also needs landing's
+`VITE_OPS_URL` or `VITE_SUPPORT_URL`; without it landing does not navigate. The app ignores `?handoff=` when its
 `VITE_GATEWAY_URL` is unset.
 
 **`POST /auth/sign-in`** `{"email","password","state"}`, 4 KiB body limit, outside `/api/`,
@@ -487,15 +573,13 @@ first attempt (`SignInMaxFailures`, `SignInWindow`).
   once a minute, or at once when the map is full. When it is still full, a new address gets
   429 and the gateway logs one WARN per minute; an address already counted keeps its count.
 
-**Precedence in the app.** A live stored hand-off session wins over `?handoff=` and
-`?persona=`: both are stripped and not acted on, so a URL never replaces a real session. A
+**Precedence in the app.** A live stored hand-off session wins over `?handoff=`: the code is
+stripped and not acted on, so a URL never replaces a real session. A
 user signed in as A who signs in on landing as B arrives back in A's workspace with no
 message; B's code expires unused. Sign out first to switch accounts. A stored hand-off
-session whose access token has expired loses to both, even when it carries a refresh token:
-a kept record must not bounce every `?persona=` link while renewal is down. Guarded by
-`App.sessionRenewal.test.tsx` "an expired renewable hand-off session loses to ?persona=",
-"a ?handoff= code wins over an expired renewable hand-off session" and "a ?persona= link
-after a transient boot failure does not bounce to landing again".
+session whose access token has expired loses to `?handoff=`, even when it carries a refresh
+token. Guarded by `App.sessionRenewal.test.tsx` "a ?handoff= code wins over an expired
+renewable hand-off session".
 
 **Ceilings:**
 - `ceiling:` the code store and the throttle are in-process. A gateway restart drops
@@ -526,8 +610,8 @@ after a transient boot failure does not bounce to landing again".
 ## Renewal
 
 A hand-off session renews itself before its access token expires, so the user is not sent
-back to landing after `GOTRUE_JWT_EXP`. Persona sessions do not renew: `/auth/login` answers
-no refresh token, so a persona session still ends after one hour (forks and dev only).
+back to landing after `GOTRUE_JWT_EXP`. A picker session does not renew: `/auth/login` answers
+no refresh token, so it ends after one hour (a build with no landing URL only).
 
 **`POST /auth/refresh`** `{"refresh_token"}`, 1 KiB body limit, outside `/api/`, no verifier
 (it must work with an expired access token), wrapped in CORS, POST and OPTIONS, in every
@@ -678,15 +762,14 @@ production") with
   (see Revocation). Revisit if a sign-out whose server call failed is reported to leave a
   usable record.
 - `ceiling:` a request from a chain that outlives an ended session is refused only while no
-  session is tracked. After a DEMO_MODE stand-in switch, a leftover chain gets the new
-  identity's token. DEMO_MODE runs on forks only.
+  session is tracked.
 - `ceiling:` a byte download (evidence bundle, page image, source document) that finds the session ended sends nothing, and its error card can show until the front door's navigation unloads the page; revisit if a user reports it.
 - `ceiling:` on a transient failure the renewer keeps the tracked session's token and deadline even when another tab's newer stored pair supplied the refresh token, so repeated transient failures can end a session while storage holds a newer valid pair (the next boot adopts it); revisit if two-tab users report early sign-outs.
 
 ## Revocation
 
 Signing out ends every session of the account, on every device and tab, server-side. The
-app sends its refresh token to `POST /auth/sign-out`; the gateway turns it into GoTrue's
+app, or a console, sends its refresh token to `POST /auth/sign-out`; the gateway turns it into GoTrue's
 global logout, which deletes every row of the account in `auth.sessions` (its refresh tokens
 cascade). The edge then refuses every access token of those sessions, because the gateway
 asks GoTrue whether a token's session is still live before any `/api/` request reaches a
@@ -764,8 +847,8 @@ working until its entry is 30 s old. After that, and at once for every uncached 
 so an outage signs nobody out. An outage of GoTrue therefore stops sign-in, renewal and
 sign-out at once, and the API after 30 s.
 
-**Tokens without `session_id` skip the check.** Mock-issuer (persona) tokens carry none, so
-persona sessions on forks and in dev never call GoTrue. Production has no mock issuer. A
+**Tokens without `session_id` skip the check.** Mock-issuer tokens carry none, so
+a picker session never calls GoTrue. Production has no mock issuer. A
 GoTrue-signed token without `session_id` can be minted only with GoTrue's private key, which
 can forge any claim. `TestIdP_AccessTokenCarriesSessionID` fails if a GoTrue upgrade drops
 the claim. `ceiling:` the check keys on the claim, not the issuer; revisit if a second real
@@ -829,8 +912,7 @@ and `endRevokedSession`):
   the record belongs to the seat's user (another tab may have rotated it), else the seat's
   own. Only then does it clear state, the stored record and the destination, and navigate to
   landing: the navigation would cancel the request. The worst wait is 5 s.
-- A persona seat, or a DEMO_MODE stand-in's own identity, sends nothing: neither has a
-  server session. With a stand-in active, the seat's refresh token is sent.
+- A picker seat sends nothing: it has no server session.
 - **A failed revoke is silent** (user decision, AUTH-07 CF5). Any failure (gateway
   unreachable, the timeout, any non-2xx answer) still completes the local sign-out and logs
   `console.warn('[session] sign-out could not reach the server; other sessions stay signed in')`.
@@ -841,7 +923,7 @@ and `endRevokedSession`):
   before the 204, so a poll from the signing-out tab can meet a 401 while the revoke is in
   flight, and that 401 must not start a second navigation. The ref stays set once sign-out
   navigates to landing. A build with no landing URL (the showcase build) does not navigate
-  and shows the persona picker, so there the ref is cleared at the end of sign-out, and the
+  and shows the in-app picker, so there the ref is cleared at the end of sign-out, and the
   next sign-in can sign out again.
 - **A 401 ends a revoked session without revoking** (`endRevokedSession`, the
   `onUnauthorized` callback of every authed fetch and of the import client). It sends
@@ -850,12 +932,12 @@ and `endRevokedSession`):
   stored token and the ended session's token carry a readable `session_id` and the two
   differ: the record then belongs to a newer sign-in in another tab, and it stays
   byte-identical. In every other case (the same `session_id`, a missing or non-JWT token, a
-  JWT with no `session_id` such as a persona token) it clears the record. After revocation a
+  JWT with no `session_id` such as a mock-issuer token) it clears the record. After revocation a
   401 is the normal way another tab learns its session ended; without this rule that tab's
   401 would wipe the record the first tab just wrote on signing in again.
 - **Where the tab ends up.** Both handlers navigate to landing. For a hand-off seat the front
   door then redirects once more to `<landing>/?state=<43 characters>` and stores no
-  destination. A `?persona=`-booted seat ends on bare landing.
+  destination.
 - **Another tab that learns through a renewal** (user decision, AUTH-07 CF6). After tab 1
   signs out, tab 2 ends at whichever comes first: its next request (edge 401 →
   `endRevokedSession`, destination cleared) or its next due renewal, which finds the stored
@@ -878,10 +960,9 @@ and `endRevokedSession`):
 - **Unchanged:** a record with a fabricated token still mounts the app shell from storage
   before its first request, then 401s and ends. The shell shows only what the record itself
   holds. Gating the mount on a network check would add a round trip to every boot.
-- **Left to AUTH-11:** both consoles. They hold no token, so nothing server-side can refuse a
-  fabricated `{v:1, operator}` entry, and a sign-out anywhere cannot end a console session.
-  AUTH-11 owns both (its Core AC 5, a fabricated entry no longer gets in; its Core AC 9, a
-  console session ends when its account's sessions are revoked).
+- **Consoles:** a console renews its stored record at every load, so a fabricated record or a
+  forged token is refused by the renewal and the record is cleared, and a session revoked
+  anywhere ends at the console's next load (Console sessions). A `v:1` record opens nothing.
 
 ## Cutting an account off
 
@@ -925,6 +1006,195 @@ access token refused at once, a cached one live until 30 s and refused at 30 s, 
 refresh tokens refused, and a new sign-in live. `ceiling:` the statement depends on GoTrue's
 schema at the pinned tag; an upgrade that changes `auth.sessions` fails that test.
 
+## Staff role
+
+A staff account is an `auth.users` row with a row in `public.staff_members`. The access-token
+hook (`public.custom_access_token_hook`, migration `staff_members`) reads that table and puts
+`app_metadata.staff: true` into the token. GoTrue runs the hook on every sign-in and every
+refresh, so a grant or a removal reaches the account's next token with no other change. The
+consoles read this claim and nothing else (Console sessions). It is not a Postgres role: the
+verifier binds the top-level `role` claim, and `app_metadata` is the namespace the hook owns.
+
+- `public.staff_members (user_id uuid PRIMARY KEY, created_at timestamptz NOT NULL DEFAULT
+  now())`. RLS is enabled without `FORCE`: the table has no tenant, and its only writers are
+  its owner (the migrator) and a superuser. It has no foreign key to `auth.users`, because
+  GoTrue creates that table at its own boot, outside `goose`. A row for a deleted account
+  grants nothing, since no token can be minted for it.
+- `auth_hook_reader` holds `SELECT (user_id)` and the policy `staff_hook_lookup`. No other
+  role holds a grant: `invoice_app`, `invoice_tenant_reader` and `supabase_auth_admin` are
+  refused. Registration and `provision_workspace` write no row. No user-supplied field reaches
+  the hook's staff decision: `user_metadata` is user-writable and is not read.
+- The table is not in `resetTables` and not in the demo purge, so a grant on a PR fork
+  survives a redeploy of that fork.
+
+**Hook contract.** The staff step runs after the unchanged tenant step. A non-staff token gains
+no key, so `TestIdP_TokenShapeMatchesGolden` stays valid.
+
+| `staff_members` has `user_id` | incoming `app_metadata` | outgoing `app_metadata` |
+|---|---|---|
+| yes | an object | incoming keys (tenant step applied) plus `"staff": true` |
+| yes | absent | `{"staff": true}`, plus `tenant_id` when the tenant step projects one |
+| yes | not an object (`null`, a string) | `{"staff": true}` |
+| no | has `staff` (any JSON value) | `staff` removed, other keys kept |
+| no | no `staff` | unchanged (no key added) |
+| no | not an object | unchanged |
+| `user_id` not a UUID | | the hook call fails (SQLSTATE 22P02) and GoTrue refuses the token (`TestRLS_CustomAccessTokenHookMalformedUserID`) |
+| `user_id` `null` or absent | has `staff` | no row matches: `staff` removed, other keys kept (`TestRLS_CustomAccessTokenHookStripsStaffForANullOrAbsentUserID`) |
+
+`ceiling:` a staff user whose incoming `app_metadata` is not an object loses a projected
+tenant. GoTrue always sends an object. A leaked `supabase_auth_admin` DSN can call the hook and
+so also learns the staff bit (migrations.md, `auth_hook_reader`).
+
+Guarded by the `rls` job's `staff_members_rls_test.go` (`TestRLS_StaffMembers*`,
+`TestRLS_CustomAccessTokenHook*Staff*`, `TestRLS_ProvisionWorkspaceGrantsNoStaff`) and the
+`idp` job's `TestIdP_RegisteredAccountCarriesNoStaffClaim`,
+`TestIdP_StaffGrantReachesTheNextToken` and `TestIdP_StaffClaimSurvivesRenewalPastTheTTL`
+(`idp-short`, `GOTRUE_JWT_EXP=5`).
+
+## Granting staff
+
+Registration creates the account; one statement grants the role. "Staff" here is the operator
+with production database access, as in "Cutting an account off". Production Postgres is
+private-only, so run it inside the Postgres container:
+
+1. `railway ssh --service Postgres`
+2. `psql` (a superuser)
+3. Run, replacing `<address>`:
+   ```sql
+   INSERT INTO public.staff_members (user_id) SELECT id FROM auth.users WHERE email = lower('<address>');
+   ```
+   It must answer `INSERT 0 1`. `INSERT 0 0` means no account has that address.
+
+To remove the role:
+
+```sql
+DELETE FROM public.staff_members WHERE user_id = (SELECT id FROM auth.users WHERE email = lower('<address>'));
+```
+
+A removal reaches the next token only. A console that is already open keeps rendering until it
+reloads (Console sessions). When the person must leave at once, also run the cut-off in
+"Cutting an account off".
+
+**Pinned by** `TestIdP_StaffGrantReachesTheNextToken`, `TestIdP_StaffRemovalReachesTheNextToken`
+and `TestIdP_StaffGrantStatementMatchesTheAddressInAnyCase` (`internal/platform/auth/idp_staff_integration_test.go`).
+They run the two statements above verbatim, as a superuser, against the real `supabase/auth`
+containers. The grant and the removal each reach the account's next refresh and next sign-in
+and leave other accounts alone. The grant statement matches an address typed in any case and
+answers `INSERT 0 0` for an unregistered one.
+
+An in-product staff screen is out of scope. On production no account can be created while
+signup is closed, so the first staff account waits for registration U3 or for console U3.
+
+## The mock issuer
+
+A gateway built with `-tags mockissuer` (`cmd/gateway/mockissuer.go`) can serve the mock issuer:
+`POST /auth/login`, the mock JWKS, `POST /auth/mock/staff` and `POST /auth/mock/member`. The
+production binary is built without the tag, so it carries none of that code and
+`cmd/gateway/nomockissuer.go` registers nothing. In a tagged build `gateway.MockIssuerEnabled`
+serves the routes only when `GATEWAY_MOCK_ISSUER=true` and `ENVIRONMENT` is not `production`
+(trimmed, any case). The build tag and `MockIssuerEnabled` are the whole control. `MockLoginHandler`
+keeps no identity allowlist and no posture check: wherever it is wired it mints for any identity,
+an empty body included. The in-app sign-in picker of a build with no landing URL calls it. The
+deployed apps carry no in-app identity switch.
+
+## Granting a membership in a mock build
+
+A PR fork's mock gateway serves `POST /auth/mock/member`
+`{"user_id","tenant_id","role","display_name","email"}`. It upserts an active `memberships`
+row with the migrator DSN, so an e2e spec can admit a registered account to a tenant. It
+answers 204, 400, 405 or 502. Production has no such route: `TestProductionGatewayBinaryCannotMint`
+requires `MockMemberHandler` and `db.GrantMembership` absent from that binary. The control is
+the `mockissuer` build tag, not an environment variable.
+
+## Console sessions
+
+Both consoles (`ops-console`, `support-console`) render one shared gate, `StaffGate` from
+`@invoice-os/console-session`. Each console passes its own storage key and target (`ops` or
+`support`). A console opens only for a session the gateway has just renewed or exchanged and
+whose token carries `app_metadata.staff === true`.
+
+**Honest limit.** The consoles render mock data compiled into a public bundle, and their
+only gateway calls are the session's exchange, renewal and sign-out. The gate makes the door
+right, and nothing server-side enforces staff access to console data, because there is none. A console that reads real data must check the staff claim
+on the server. The same words head `packages/console-session/src/StaffGate.tsx`.
+
+**The record.** `localStorage[<storageKey>] = {"v":2,"token":"<access>","refresh_token":"<refresh>"}`
+under `invoice-os.ops-session` or `invoice-os.support-session`. A `v:1` record (`{v:1, operator}`)
+reads as no record and logs one `console.warn`; it stays in storage and the next staff sign-in
+overwrites it. The sign-in state sits in `sessionStorage['invoice-os.signInState']` on the
+console's own origin, in the app's shape.
+
+**Boot order.** The gate renders nothing until one of these steps ends it.
+1. Standalone (`VITE_LANDING_URL` unset): render the console. No storage read, no request.
+2. `?auth=start`: mint a fresh state and go to `<landing>/?state=<s>&console=<target>&signin=ready`.
+3. `?handoff=<code>` (exactly one `handoff` parameter, 43 base64url characters): strip it at mount, then,
+   with a live state in this tab, `POST /auth/exchange`. A staff token is stored and the console
+   renders. A token without the claim is discarded unstored and the visitor goes to landing with
+   `signin=not-staff`. Any failure goes to landing with `signin=failed` and leaves a stored
+   record alone. With no live state the code is ignored and the gate continues at step 4.
+4. A stored `v:2` record: `POST /auth/refresh` with its refresh token, 15 s timeout. A 200 with
+   the staff claim stores the new pair and renders. A 200 without it clears the record and goes
+   to landing with `signin=not-staff`. A 400 or 401 clears the record and goes to the front
+   door. A network error, timeout, 429, 5xx or malformed 200 keeps the record and goes to
+   landing with `signin=failed`.
+5. Nothing stored: the front door, `<landing>/?state=<s>&console=<target>`. The state is reused
+   when minted under 60 s ago.
+
+With `VITE_LANDING_URL` set and `VITE_GATEWAY_URL` unset, steps 3 and 4 cannot run: a code
+leaves with `signin=failed`, otherwise the gate leaves by the front door. A console with no gateway URL
+therefore opens for nobody.
+
+**What the renewal proves.** A load asks the gateway, not the browser, whether the session is
+live: the refresh token exists in GoTrue, the account exists, its sessions are not revoked, and
+the staff claim is minted now from the current `staff_members` row. The console decodes the
+claim, unverified, from the token the gateway has just answered over TLS. A forged claim needs a
+forged gateway answer. The cost is one GoTrue refresh grant per console load, and a stored
+record whose access token expired hours ago loads normally.
+
+**Revocation.** A sign-out anywhere and a staff cut-off delete the session's refresh token, so
+the console's next load gets 401, clears its record and goes to the front door. A staff role
+removal reaches the next load the same way: the refresh answers 200 without the claim, and the
+visitor goes to landing with `signin=not-staff`. `/auth/refresh` is not cached, so the stale
+window is 0 s from the next load. An open console tab keeps rendering until it reloads; what it
+renders is mock data in the public bundle.
+
+**Sign out.** The Sign out button posts the stored refresh token to `/auth/sign-out` (5 s,
+never rejects; a failure logs `console.warn`), clears the record and goes to landing. It ends
+every session of the account, so it also signs the account out of the app and the other
+console. With no gateway the sign-out is local only.
+
+**Ceilings.**
+- `ceiling:` no timer renews an open console tab. When a console gains a backend, its requests
+  must ask for a fresh token first, as the app's `fresh()` does.
+- `ceiling:` no lock serialises two loads of one console. GoTrue answers the parent of the
+  active refresh token with the active token, and only a token two or more generations old
+  revokes the family (`TestIdP_RefreshRotationAndReuse`), which two overlapping loads do not
+  reach.
+- `ceiling:` a transient boot failure sends a still-valid staff user to sign in again; the
+  next load after recovery succeeds with the kept record.
+- `ceiling:` a customer's refused sign-in leaves its GoTrue session live in `auth.sessions`,
+  reachable by nobody, until the account's next global sign-out or a cut-off.
+- `ceiling:` a console's transient failure reuses landing's `failed` copy, "We couldn't open
+  your workspace. Sign in again."
+
+**The standalone build keeps no gate (VITE_LANDING_URL unset).** Today that costs nothing,
+because both consoles are mock data in a public bundle, every deployed console sets
+`VITE_LANDING_URL`, and a fork that lost it fails `smoke.spec.ts` "a visit with no session
+redirects to the landing page". **The first console that reads real data must make the gate
+fail closed when `VITE_LANDING_URL` is unset**, and must check the staff claim on the server.
+
+**CORS.** The gateway's one origin list wraps `/api/`, `/auth/sign-in`, `/auth/exchange`,
+`/auth/refresh`, `/auth/sign-out`, `/auth/register` and `/contacts/demo-request`, so console U2 lets browser JavaScript on the two console
+origins call all of them, not only exchange, refresh and sign-out. `/auth/verify` is not wrapped. Every `/api/` call still needs a verified bearer, the session check and RLS; the
+console origins serve only our own bundle, and the same token works from `curl`.
+
+Guarded by the package's `boot.test.ts`, `StaffGate.dom.test.tsx`, `signOut.test.ts`,
+`state.test.ts` and `session.test.ts`, each console's `App.test.tsx`, landing's `signIn.test.ts`
+and `App.signIn.dom.test.tsx`, and the deployed `e2e/topology/auth.spec.ts` "deployed consoles:"
+journeys (a staff session opens both consoles, a customer's session opens neither, a forged
+record opens nothing, a load renews the stored session, signing out of one console ends the
+other's).
+
 ## Opening registration in production (registration U1–U4)
 
 These steps are separate from the first-time setup's U1–U4 above. Production writes are the
@@ -943,8 +1213,8 @@ E=6c864094-6a06-452f-8495-be77d8a94fe7
 |---|---|---|
 | U1 | any time after merge | gateway `AUTH_SITE_URL` |
 | U2 | any time after merge | auth `GOTRUE_MAILER_URLPATHS_CONFIRMATION` |
-| U3 | when registration opens: after AUTH-04 and AUTH-16 merge | auth `GOTRUE_DISABLE_SIGNUP=false` |
-| U4 | after U1–U3 have deployed | none: an end-to-end check by hand |
+| U3 | when registration opens: after AUTH-04 and AUTH-16 merge | auth `GOTRUE_DISABLE_SIGNUP=false`, landing `VITE_REGISTRATION_OPEN=true` |
+| U4 | after U1–U3 have deployed | none: an end-to-end check by hand; step 5 may raise `AUTH_REGISTER_MIN_RESPONSE` |
 
 Until U1 deploys, production's `POST /auth/register` and `GET /auth/verify` answer 503
 `registration is not configured`. Between U1 and U3, register answers 503
@@ -970,7 +1240,8 @@ railway variables -p "$P" -e "$E" -s auth --json | jq -r '.GOTRUE_MAILER_URLPATH
 **U3 — auth `GOTRUE_DISABLE_SIGNUP=false`. Do this only after AUTH-04 and AUTH-16 merge.** The
 AUTH-00 decision S6 makes registration open with free-mail domains refused. AUTH-04 ships
 that refusal; opening production before it admits free-mail registrants. AUTH-16 closes the
-registration timing leak.
+registration timing leak while GoTrue answers faster than `AUTH_REGISTER_MIN_RESPONSE` (see
+Registration Ceilings and U4 step 5).
 
 ```
 railway variables --set 'GOTRUE_DISABLE_SIGNUP=false' -p "$P" -e "$E" -s auth --skip-deploys
@@ -978,23 +1249,48 @@ railway variables -p "$P" -e "$E" -s auth --json | jq -r '.GOTRUE_DISABLE_SIGNUP
 # expected: false
 ```
 
-To close registration again, set the value back to `true` the same way and redeploy `auth`.
+Show the entry on the landing. `VITE_REGISTRATION_OPEN` is a build argument, so the landing
+needs a deploy to take it:
 
-**Deploy the writes.** The next push run on `main` deploys `gateway` and `auth` with the new
+```
+railway variables --set 'VITE_REGISTRATION_OPEN=true' -p "$P" -e "$E" -s landing --skip-deploys
+railway variables -p "$P" -e "$E" -s landing --json | jq -r '.VITE_REGISTRATION_OPEN'
+# expected: true
+```
+
+To close registration again, set `GOTRUE_DISABLE_SIGNUP` back to `true` the same way and
+redeploy `auth`, and unset `VITE_REGISTRATION_OPEN` on `landing` and redeploy it.
+
+**Deploy the writes.** The next push run on `main` deploys `gateway`, `auth` and `landing` with the new
 values; a push that changes only `docs/**` or `*.md` starts no run (`paths-ignore`). To
 deploy sooner, re-run the latest push `dev-env` run as a whole run
 (`gh run rerun <id>`, not `--failed`); if that re-run gates on stale containers, push an
 empty commit instead.
 
 **U4 — check by hand with a real business mailbox:**
-1. `curl -sS -X POST https://api.ascomply.com/auth/register -H 'Content-Type: application/json' -d '{"email":"<you>@<your-company-domain>","password":"<12+ characters>"}'`
-   answers 202 `{"status":"verification_pending"}`.
+1. `curl -sS -w '\n%{time_total}\n' -X POST https://api.ascomply.com/auth/register -H 'Content-Type: application/json' -d '{"email":"<you>@<your-company-domain>","password":"<12+ characters>"}'`
+   answers 202 `{"status":"verification_pending"}`, after at least the minimum (`2s` by default).
 2. The mail arrives from `no-reply@ascomply.com`. Its link starts
    `https://api.ascomply.com/auth/verify?token=`.
 3. Opening the link lands on `https://www.ascomply.com/?verified=1`. Opening it a second
    time lands on `?verify=failed`.
 4. `curl -sS -X POST https://api.ascomply.com/auth/register -H 'Content-Type: application/json' -d '{"email":"someone@gmail.com","password":"<12+ characters>"}'`
    answers 400 `{"error":"a business email address is required; personal email providers are not accepted"}`.
+5. Time a real signup. A client-side `curl` time cannot separate GoTrue's time from the minimum, so read the gateway's
+   `registration: signup timing` line for the step 1 request (Railway logs, service
+   `gateway`): `upstream_ms` is how long GoTrue took, `min_ms` the minimum in force. When
+   `upstream_ms` exceeds about three quarters of `min_ms`, or the line is WARN, raise the
+   minimum, re-read it and deploy the gateway:
+
+   ```
+   railway variables --set 'AUTH_REGISTER_MIN_RESPONSE=<n>s' -p "$P" -e "$E" -s gateway --skip-deploys
+   railway variables -p "$P" -e "$E" -s gateway --json | jq -r '.AUTH_REGISTER_MIN_RESPONSE'
+   # expected: <n>s
+   ```
+
+   Deploy as in "Deploy the writes" above. Do not set a value below `2s`: the end-to-end
+   assertion `REGISTER_MIN_MS = 2000` in `e2e/api/registration.spec.ts` fails on every PR
+   fork, because a fork inherits production's value.
 
 To check provisioning, sign in with the U4 account and redeem the code (the `curl` pair in
 sign-in U3 below, with the real password), then post
@@ -1006,7 +1302,7 @@ stay in production; no route deletes them.
 
 These steps are separate from the two U1–U4 lists above. Production writes are the user's.
 The sign-in routes answer from the first deploy after AUTH-05 merges. Until U1 and U2 deploy,
-production landing renders no sign-in form and the persona door is unchanged.
+production landing renders no sign-in form.
 
 Production's gateway allows the app origin alone, and production's landing has no
 `VITE_GATEWAY_URL`. `reconcile-urls` writes both on a PR fork only and refuses the persistent
@@ -1064,8 +1360,8 @@ code, a whole-run re-run of the latest push `dev-env` run, or an empty commit.
    curl -sS -X POST https://api.ascomply.com/auth/exchange -H 'Content-Type: application/json' -d "{\"code\":\"x\",\"state\":\"$S\"}"
    ```
    It answers 400 `{"error":"invalid or expired code"}`.
-4. On `https://www.ascomply.com`, "Platform login" shows "Continue with email" above
-   the persona list.
+4. On `https://www.ascomply.com`, "Platform login" shows the sign-in form:
+   Work email, Password and "Sign in →".
 5. An unknown refresh token is refused:
    ```
    curl -sS -X POST https://api.ascomply.com/auth/refresh -H 'Content-Type: application/json' -d '{"refresh_token":"aaaaaaaaaaaa"}'
@@ -1076,6 +1372,65 @@ With a verified account, step 2 with the real password answers 200 `{"code":"…
 with that code and the same `S` answers 200 `{"access_token":"…","refresh_token":"…"}`.
 Step 5 with that `refresh_token` answers 200 with a new pair. A full sign-in through the
 browser also needs a provisioned workspace, and so registration U3 and U4 above.
+
+## Opening the consoles in production (console U1–U3)
+
+These steps are separate from the first-time setup's U1–U4, registration U1–U4 and sign-in
+U1–U3 above. Production writes are the user's. They use the same `P` and `E` as "Opening
+registration". Console U2 extends the value that sign-in U1 left in the gateway's
+`CORS_ALLOWED_ORIGINS`.
+
+**Until the first staff account is granted (console U3), production's consoles open for
+nobody.** After the merge deploy, every visitor to either console is sent to landing's sign-in,
+and no production account can carry the staff claim. A fabricated storage
+entry does not open a console either. The user accepted this (AUTH-11, CF1): the consoles hold mock
+data only.
+
+| Step | When | Production write |
+|---|---|---|
+| U1 | before the merge push | `VITE_GATEWAY_URL` on `ops-console` and `support-console` |
+| U2 | after merge | gateway `CORS_ALLOWED_ORIGINS` gains the two console origins |
+| U3 | after U1 and U2 have deployed | the first staff account, then its grant |
+
+**U1 — `VITE_GATEWAY_URL` on both consoles.** It is a build argument, so write it before the
+merge push builds them. A variable write triggers an unstamped rebuild.
+
+```
+railway variables --set 'VITE_GATEWAY_URL=https://api.ascomply.com' -p "$P" -e "$E" -s ops-console --skip-deploys
+railway variables --set 'VITE_GATEWAY_URL=https://api.ascomply.com' -p "$P" -e "$E" -s support-console --skip-deploys
+railway variables -p "$P" -e "$E" -s ops-console --json | jq -r '.VITE_GATEWAY_URL'
+railway variables -p "$P" -e "$E" -s support-console --json | jq -r '.VITE_GATEWAY_URL'
+# expected, both: https://api.ascomply.com
+```
+
+Without it a deployed console has no gateway to ask and opens for nobody.
+
+**U2 — gateway `CORS_ALLOWED_ORIGINS`.** The console origin's preflight is refused until this
+write. `reconcile_url_variables` refuses the persistent environment, so this is by hand. Read
+the value first and keep every origin it holds.
+
+```
+railway variables -p "$P" -e "$E" -s gateway --json | jq -r '.CORS_ALLOWED_ORIGINS'
+# expected before: https://app.ascomply.com,https://www.ascomply.com
+railway variables --set 'CORS_ALLOWED_ORIGINS=https://app.ascomply.com,https://www.ascomply.com,https://ops.ascomply.com,https://sup.ascomply.com' -p "$P" -e "$E" -s gateway --skip-deploys
+railway variables -p "$P" -e "$E" -s gateway --json | jq -r '.CORS_ALLOWED_ORIGINS'
+# expected: https://app.ascomply.com,https://www.ascomply.com,https://ops.ascomply.com,https://sup.ascomply.com
+```
+
+This also lets browser calls from the two console origins reach `/api/` and the sign-in,
+exchange, refresh and sign-out routes (Console sessions, CORS).
+
+**Deploy the writes** as in "Opening registration".
+
+**U3 — the first staff account.** Register it once production signup is open (registration
+U3). Or set `GOTRUE_DISABLE_SIGNUP=false` on the `auth` service as in registration U3, register
+and verify the account, then set it back to `true` the same way. Registration needs
+registration U1 and U2 deployed (Opening registration). Then run the grant statement in
+"Granting staff". Until then production's consoles open for nobody.
+
+Check by hand, for each of `https://ops.ascomply.com` and `https://sup.ascomply.com`: the visit
+goes to landing's sign-in, and a sign-in with the staff account returns to that console, which
+opens. A console holds its own session, so the second console asks for its own sign-in.
 
 ## Sealed secrets
 

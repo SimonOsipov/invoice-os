@@ -1,0 +1,261 @@
+// The real-account helpers, with the gateway stubbed at global fetch.
+// topology/targets.ts reads GATEWAY_URL at import, so every import is dynamic after the env is set.
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { UNITS } from './topology/shards'
+
+type Realm = typeof import('./realAccounts')
+type Targets = typeof import('./topology/targets')
+
+const SUBJECT = 'a1b2c3d4-0000-4000-8000-000000000001'
+const ACCESS_TOKEN = `h.${Buffer.from(JSON.stringify({ sub: SUBJECT })).toString('base64url')}.s`
+
+type Answer = { status: number; body?: unknown }
+type Step = 'register' | 'sign-in' | 'exchange' | 'grant'
+const PATHS: Record<Step, string> = {
+  register: '/auth/register',
+  'sign-in': '/auth/sign-in',
+  exchange: '/auth/exchange',
+  grant: '/auth/mock/member',
+}
+const OK: Record<Step, Answer> = {
+  register: { status: 202, body: {} },
+  'sign-in': { status: 200, body: { code: 'code-1' } },
+  exchange: { status: 200, body: { access_token: ACCESS_TOKEN, refresh_token: 'refresh-1' } },
+  grant: { status: 204 },
+}
+
+let fetched: { url: string; method: string; body: any }[] = []
+
+// Answers by path; `override` replaces one step's answer.
+function stubGateway(override: Partial<Record<Step, Answer>> = {}): void {
+  fetched = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: { method?: string; body?: string }) => {
+      fetched.push({ url, method: init?.method ?? 'GET', body: init?.body ? JSON.parse(init.body) : undefined })
+      const step = (Object.keys(PATHS) as Step[]).find((s) => url.endsWith(PATHS[s]))
+      if (!step) return new Response('{}', { status: 404 })
+      const { status, body } = { ...OK, ...override }[step]
+      return new Response(body === undefined ? null : JSON.stringify(body), { status })
+    }),
+  )
+}
+
+async function load(): Promise<{ realm: Realm; targets: Targets }> {
+  vi.resetModules()
+  process.env.GATEWAY_URL = 'https://gateway.test'
+  process.env.APP_URL = 'https://app.test'
+  return { realm: await import('./realAccounts'), targets: await import('./topology/targets') }
+}
+
+// The six tenants the topology suite signs in to: the two seeded ones and each shard's pair.
+function sixTenantIds(targets: Targets): string[] {
+  const shards = UNITS.flatMap((u) => (u.tenants ? [u.tenants.firm, u.tenants.inHouse] : []))
+  return [targets.TENANTS.a.id, targets.TENANTS.b.id, ...shards]
+}
+
+async function rejection(p: Promise<unknown>): Promise<string> {
+  try {
+    await p
+  } catch (e) {
+    return (e as Error).message
+  }
+  throw new Error('expected the promise to reject, but it resolved')
+}
+
+beforeEach(() => stubGateway())
+afterEach(() => vi.unstubAllGlobals())
+
+describe('e2eMember', () => {
+  it('e2eMember is deterministic', async () => {
+    const { realm, targets } = await load()
+    const id = targets.TENANTS.a.id
+    expect(id).toBe('11111111-1111-1111-1111-111111111111')
+
+    expect(realm.e2eMember(id)).toEqual(realm.e2eMember(id))
+    expect(realm.e2eMember(id).email).toBe(`e2e-member-${id}@example.com`)
+  })
+
+  it('e2eMember is distinct per tenant', async () => {
+    const { realm, targets } = await load()
+    const ids = sixTenantIds(targets)
+    expect(ids).toHaveLength(6)
+    expect(new Set(ids).size).toBe(6)
+
+    const members = ids.map((id) => realm.e2eMember(id))
+
+    expect(new Set(members.map((m) => m.email)).size).toBe(6)
+    expect(new Set(members.map((m) => m.password)).size).toBe(6)
+  })
+
+  it('e2eMember password floor', async () => {
+    const { realm, targets } = await load()
+    const ids = sixTenantIds(targets)
+    expect(ids.length).toBeGreaterThan(0)
+
+    for (const id of ids) expect(realm.e2eMember(id).password.length, id).toBeGreaterThanOrEqual(16)
+  })
+
+  it('e2eMember display name follows kind', async () => {
+    const { realm, targets } = await load()
+    const firm = realm.e2eMember(targets.TENANTS.a.id).displayName
+    const inHouse = realm.e2eMember(targets.TENANTS.b.id).displayName
+
+    expect(firm).toBe('E2E Firm Admin')
+    expect(inHouse).toBe('E2E In-house Admin')
+    expect(firm).not.toBe(inHouse)
+
+    const shards = UNITS.filter((u) => u.tenants)
+    expect(shards.length).toBeGreaterThan(0)
+    for (const u of shards) {
+      expect(realm.e2eMember(u.tenants!.firm).displayName, u.name).toBe(firm)
+      expect(realm.e2eMember(u.tenants!.inHouse).displayName, u.name).toBe(inHouse)
+    }
+  })
+})
+
+describe('isSeededMember', () => {
+  it('isSeededMember accepts the seed block', async () => {
+    const { realm, targets } = await load()
+    const seeded = [...targets.TENANTS.a.members, ...targets.TENANTS.b.members]
+    expect(targets.TENANTS.a.members.length).toBeGreaterThan(0)
+    expect(targets.TENANTS.b.members.length).toBeGreaterThan(0)
+
+    for (const id of seeded) expect(realm.isSeededMember(id), id).toBe(true)
+  })
+
+  it('isSeededMember refuses others', async () => {
+    const { realm, targets } = await load()
+    expect(realm.isSeededMember(targets.TENANTS.a.subject)).toBe(true)
+
+    expect(realm.isSeededMember(crypto.randomUUID())).toBe(false)
+    expect(realm.isSeededMember('c0000000-0000-0000-0000-00000000001')).toBe(false)
+    expect(realm.isSeededMember('')).toBe(false)
+    expect(realm.isSeededMember('c0000000-0000-0000-0000-0000000000011')).toBe(false)
+    expect(realm.isSeededMember('xc0000000-0000-0000-0000-000000000001')).toBe(false)
+    expect(realm.isSeededMember('C0000000-0000-0000-0000-000000000001')).toBe(false)
+    expect(realm.isSeededMember('c0000000-0000-0000-0000-000000000001\n')).toBe(false)
+    for (const { tenants } of UNITS) {
+      if (tenants) expect([tenants.firm, tenants.inHouse].some(realm.isSeededMember)).toBe(false)
+    }
+  })
+})
+
+describe('ensureMember', () => {
+  const FIRM = '11111111-1111-1111-1111-111111111111'
+  const IN_HOUSE = '22222222-2222-2222-2222-222222222222'
+
+  it('ensureMember refuses a kind that disagrees with the tenant id prefix', async () => {
+    const { realm } = await load()
+
+    const asInHouse = await rejection(realm.ensureMember(FIRM, 'in_house'))
+    const asFirm = await rejection(realm.ensureMember(IN_HOUSE, 'firm'))
+
+    expect(asInHouse).toContain(FIRM)
+    expect(asFirm).toContain(IN_HOUSE)
+    expect(fetched).toHaveLength(0)
+  })
+
+  it('ensureMember names a refused register', async () => {
+    const { realm } = await load()
+    stubGateway({ register: { status: 500, body: { error: 'boom' } } })
+
+    const message = await rejection(realm.ensureMember(FIRM, 'firm'))
+
+    expect(message).toContain('register')
+    expect(message).toContain(realm.e2eMember(FIRM).email)
+    expect(message).toMatch(/^ensureMember: register /)
+  })
+
+  it('ensureMember names a refused sign-in', async () => {
+    const { realm } = await load()
+    stubGateway({ 'sign-in': { status: 400, body: { error: 'invalid credentials' } } })
+
+    const message = await rejection(realm.ensureMember(FIRM, 'firm'))
+
+    expect(message).toContain('sign-in')
+    expect(message).toContain(realm.e2eMember(FIRM).email)
+    expect(message).toContain('e2e/realAccounts.ts')
+    expect(message).toMatch(/^ensureMember: sign-in /)
+  })
+
+  it('ensureMember names a refused grant', async () => {
+    const { realm } = await load()
+    stubGateway({ grant: { status: 502, body: { error: 'membership grant unavailable' } } })
+
+    const message = await rejection(realm.ensureMember(FIRM, 'firm'))
+
+    expect(message).toContain('grant')
+    expect(message).toContain('502')
+    expect(message).toContain(realm.e2eMember(FIRM).email)
+    expect(message).toMatch(/^ensureMember: grant /)
+  })
+
+  it('ensureMember registers, signs in and grants the e2e member as admin', async () => {
+    const { realm } = await load()
+    const member = realm.e2eMember(IN_HOUSE)
+
+    await realm.ensureMember(IN_HOUSE, 'in_house')
+
+    expect(fetched.map((c) => `${c.method} ${new URL(c.url).pathname}`)).toEqual([
+      'POST /auth/register',
+      'POST /auth/sign-in',
+      'POST /auth/exchange',
+      'POST /auth/mock/member',
+    ])
+    expect(fetched[0].body).toEqual({ email: member.email, password: member.password })
+    expect(fetched[1].body).toMatchObject({ email: member.email, password: member.password })
+    expect(fetched[3].body).toEqual({
+      user_id: SUBJECT,
+      tenant_id: IN_HOUSE,
+      role: 'admin',
+      display_name: 'E2E In-house Admin',
+      email: member.email,
+    })
+  })
+
+  it.each([400, 429, 503])('ensureMember refuses a register that answers %i', async (status) => {
+    const { realm } = await load()
+    stubGateway({ register: { status, body: { error: 'no' } } })
+
+    const message = await rejection(realm.ensureMember(FIRM, 'firm'))
+
+    expect(message).toContain('register')
+    expect(message).toContain(String(status))
+    expect(fetched).toHaveLength(1)
+  })
+
+  it('ensureMember does not cache a failed provision', async () => {
+    const { realm } = await load()
+    stubGateway({ register: { status: 500, body: { error: 'boom' } } })
+    await rejection(realm.ensureMember(FIRM, 'firm'))
+    expect(fetched).toHaveLength(1)
+
+    stubGateway()
+    await realm.ensureMember(FIRM, 'firm')
+    expect(fetched).toHaveLength(4)
+
+    await realm.ensureMember(FIRM, 'firm')
+    expect(fetched).toHaveLength(4)
+  })
+
+  it('ensureMember shares one in-flight provision between concurrent callers', async () => {
+    const { realm } = await load()
+
+    const [a, b] = await Promise.all([realm.ensureMember(FIRM, 'firm'), realm.ensureMember(FIRM, 'firm')])
+
+    expect(a).toEqual(b)
+    expect(fetched).toHaveLength(4)
+  })
+
+  it('ensureMember caches per tenant', async () => {
+    const { realm } = await load()
+
+    await realm.ensureMember(FIRM, 'firm')
+    await realm.ensureMember(FIRM, 'firm')
+    await realm.ensureMember(IN_HOUSE, 'in_house')
+
+    expect(fetched).toHaveLength(8)
+  })
+})

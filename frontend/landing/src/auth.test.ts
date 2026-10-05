@@ -1,51 +1,47 @@
-// RED-then-GREEN spec (M4-21-10, AC-1) — pins appBase()/opsBase()'s null-when-unset
-// contract, mirroring gatewayBase()'s C8b behaviour (packages/api-client/src/client.test.ts),
-// before their hardcoded dev-deploy fallbacks are removed. destUrl() must degrade to the
-// documented no-gateway path (return null) rather than pointing at `development`.
+// The four base resolvers: null when unset (mirrors gatewayBase()), trailing slashes trimmed.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { destUrl, LANDING_PERSONAS, type LandingPersona } from './auth'
+import { appBase, consoleBase, opsBase, supportBase } from './auth'
+
+// Unset targets are stubbed to '' so a shell-exported VITE_* cannot leak in.
+function stubTargets(env: Partial<Record<'VITE_APP_URL' | 'VITE_OPS_URL' | 'VITE_SUPPORT_URL', string>>): void {
+  for (const k of ['VITE_APP_URL', 'VITE_OPS_URL', 'VITE_SUPPORT_URL'] as const) vi.stubEnv(k, env[k] ?? '')
+}
 
 afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-describe('destUrl', () => {
-  it('appBase/opsBase/supportBase: return null when their VITE_* vars are unset', () => {
-    // Every persona, so a newly added target can never quietly skip the null contract.
-    for (const p of LANDING_PERSONAS) {
-      expect(destUrl(p), `persona ${p.id}`).toBeNull()
-    }
+describe('base resolvers', () => {
+  it('bases return null when unset', () => {
+    stubTargets({})
+    expect(appBase()).toBeNull()
+    expect(opsBase()).toBeNull()
+    expect(supportBase()).toBeNull()
+    // Whitespace-only is unset too.
+    stubTargets({ VITE_APP_URL: '  ', VITE_OPS_URL: ' ', VITE_SUPPORT_URL: '\t' })
+    expect([appBase(), opsBase(), supportBase()]).toEqual([null, null, null])
   })
 
-  it('destUrl_carriesOnlyThePersonaParam', () => {
-    // ROUTE-05 adds NOTHING to the landing -> app contract. The spec above only pins the
-    // null arm, so a `&next=` appended to the configured arm would ship green.
-    vi.stubEnv('VITE_APP_URL', 'https://app.example')
-    vi.stubEnv('VITE_OPS_URL', 'https://ops.example')
-    vi.stubEnv('VITE_SUPPORT_URL', 'https://support.example')
-    const base: Record<LandingPersona['target'], string> = {
-      app: 'https://app.example',
-      ops: 'https://ops.example',
-      support: 'https://support.example',
-    }
-    // toBe on the whole string: any extra param, path segment or reordering is red.
-    for (const p of LANDING_PERSONAS) {
-      expect(destUrl(p), `persona ${p.id}`).toBe(`${base[p.target]}?persona=${p.id}`)
-    }
-  })
-})
-
-describe('LANDING_PERSONAS', () => {
-  it('ids are unique and each carries the persona id into the destination', () => {
-    expect(new Set(LANDING_PERSONAS.map((p) => p.id)).size).toBe(LANDING_PERSONAS.length)
+  it('bases trim trailing slashes', () => {
+    stubTargets({ VITE_APP_URL: 'https://a.x//', VITE_OPS_URL: 'https://o.x/', VITE_SUPPORT_URL: 'https://s.x' })
+    expect(appBase()).toBe('https://a.x')
+    expect(opsBase()).toBe('https://o.x')
+    expect(supportBase()).toBe('https://s.x')
   })
 
-  // The four shipped surfaces: two tenant workspaces on the app, the Ops Console on
-  // the ops-console service, and the Support Console on its own. A persona pointing at the
-  // wrong service is the one bug this list can have that nothing else would catch.
-  it('routes each persona to its own console', () => {
-    const byId = Object.fromEntries(LANDING_PERSONAS.map((p) => [p.id, p.target]))
-    expect(byId).toEqual({ developer: 'ops', support: 'support', firm: 'app', inhouse: 'app' })
+  it('consoleBase picks by target', () => {
+    stubTargets({ VITE_APP_URL: 'https://a.x', VITE_OPS_URL: 'https://ops.x', VITE_SUPPORT_URL: 'https://support.x' })
+    expect(consoleBase('ops')).toBe('https://ops.x')
+    expect(consoleBase('support')).toBe('https://support.x')
+  })
+
+  it('consoleBase is null when its target is unset', () => {
+    // The app base is set so a fallback from an unset console to the app would show.
+    stubTargets({ VITE_APP_URL: 'https://a.x', VITE_OPS_URL: 'https://ops.x' })
+    expect(consoleBase('ops'), 'control: the set target resolves').toBe('https://ops.x')
+    expect(consoleBase('support')).toBeNull()
+    stubTargets({ VITE_APP_URL: 'https://a.x', VITE_SUPPORT_URL: 'https://support.x' })
+    expect(consoleBase('ops')).toBeNull()
   })
 })

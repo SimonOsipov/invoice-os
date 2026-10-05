@@ -316,8 +316,7 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   await expect(page.getByTestId('publish-blocked-reason'), 'the step reached the server').toHaveCount(0)
 
   // --- 13. the reload IS the per-tenant proof, and now the ADDRESS's too ---------------------
-  // `?persona=` is stripped at boot and lib/session.ts rehydrates from localStorage, so the
-  // session survives (roles.spec.ts:880 already relies on this). `editingPolicyId` is no longer
+  // lib/session.ts rehydrates the stored hand-off session on reload. `editingPolicyId` is no longer
   // hand-driven back: `/workflows/<id>` reopens the builder on its own
   // (App.routeBoot.test.tsx, boot_workflowsPathSeedsThePolicyIdOnTheFirstCommittedRender).
   const policyUrl = new RegExp(`/workflows/${createdPolicyId}$`)

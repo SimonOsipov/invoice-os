@@ -15,10 +15,12 @@ M2-14.4).
    fails naming any that are down.
    The same roll-up must show every Go service and `docling` reporting `sentry` `off` on a PR,
    and `on` or `off` on the persistent environment; `auth` is exempt by name.
+   It must also show `notifications` reporting `contacts` `fake` on a PR (a fork never writes
+   to HubSpot or Resend) and `real` or `off` on the persistent environment.
    The context services are private-network-only, so this route is the only way CI sees
    their health through the one public backend surface.
-2. **Live browser login** — a Playwright test drives the persona mock-login on the deployed
-   app SPA and asserts the **verified** tenant identity renders: the sidebar marker
+2. **Live browser login** — a Playwright test signs the firm tenant's e2e member in through
+   the landing form on the deployed stack and asserts the **verified** tenant identity renders: the sidebar marker
    `title="Tenant verified via /v1/me"`. That marker is the discriminator — the static firm
    fallback shows the same "OKAFOR & PARTNERS" label, so only the marker proves the round
    trip (mint → `GET /api/tenancy/v1/me`) resolved a backend identity.
@@ -28,9 +30,14 @@ M2-14.4).
    past the access token's lifetime, a refused renewal returns to landing and keeps the
    destination, an account provisioned as in-house or as a firm opens in that mode, a new workspace
    lands on the add-company task, and adding its company opens the import step it gated, the
-   identity card shows the account's own name, and a long name stays inside the card
+   identity card shows the account's own name, a long name stays inside the card, and a stranger
+   registers through the landing window as a firm and as an in-house account, then signs in and
+   lands in the workspace it named (the verify step is a stand-in: only the failed-link redirect is real)
    ([identity-provider.md](./identity-provider.md) "Sign-in and hand-off",
-   "Renewal").
+   "Renewal"). The same file's "deployed consoles:" journeys sign a staff account in through
+   landing and open both consoles, refuse a customer's session and a forged record, renew the
+   stored session on a load, and end both console sessions from one sign-out ("Console
+   sessions").
 3. **Cross-tenant isolation** — mints a tenant-A and a tenant-B token via the gateway's mock
    issuer and asserts `GET /api/tenancy/v1/me` returns exactly the caller's own tenant. Both
    rows exist in the seeded table, so RLS (JWT-verify → inject `X-Tenant-ID` → `SET LOCAL
@@ -55,9 +62,9 @@ gateway     ──> gate on /healthz (schema migrated at boot; a PR fork's DB is
                 (`db/seed.e2e-shards.sql`), and its demo-tenant purge is NON-fatal, so the gate asserts
                 /healthz's `demo_purge` field separately: `true` on a PR fork, `false`
                 on `development` — DEMO-04)
-            ──> deploy 8 context services + docling + auth + 4 SPAs (app and landing are
+            ──> deploy 8 context services + docling + auth + 4 SPAs (all four are
                 gateway-wired: prepare-env's `reconcile-urls` writes VITE_GATEWAY_URL on
-                both per run)
+                each per run)
             ──> verify: `e2e` job: smoke (landing + consoles) + api (typed contract suite)
             ──> `topology` job, one parallel leg per unit (browser login, isolation)
 ```
@@ -94,16 +101,37 @@ which is off). `GATEWAY_MOCK_ISSUER` forks, but only a `-tags mockissuer` gatewa
 honours it. `deploy-gateway` stamps that tag on `pull_request` only
 (`scripts/ci/stamp-mock-issuer.sh`).
 
+**The fork staff grant route.** The same mock-issuer branch of the gateway mounts
+`POST /auth/mock/staff {"user_id":"<uuid>"}`, beside `/auth/login`. It inserts the
+`staff_members` row with the migrator DSN and answers 204, so a spec can make a registered
+fork account staff (`provisionStaffAccount`, `e2e/api/client.ts`). A production build omits
+it: `mintsymbols_test.go` requires its handler and `db.GrantStaff` to be absent from that
+binary. Anyone who reaches a PR fork can make any fork account staff, as the mock issuer
+already lets anyone mint any persona; the consoles hold mock data only. It answers 204, 400 (a
+body without a hyphenated UUID `user_id`), 405 and 502. The production statement it stands in
+for is in [identity-provider.md](./identity-provider.md) "Granting staff".
+
+**The fork member grant route.** The same branch mounts `POST /auth/mock/member`
+`{"user_id","tenant_id","role","display_name","email"}` beside it. It upserts an active
+`memberships` row with the migrator DSN and answers 204, 400, 405 or 502, so a spec can admit a
+registered fork account to a tenant (`mintsymbols_test.go` requires its handler and
+`db.GrantMembership` absent from a production binary). Unlike staff, a membership opens real
+tenant data on that fork: the control is the `mockissuer` build tag, which only PR forks stamp.
+
 **Written per run, not inherited:** the URL variables. On a PR, prepare-env's
 `reconcile-urls` step writes and re-reads the fork's own `gateway.CORS_ALLOWED_ORIGINS` (all
-four SPA origins), `VITE_GATEWAY_URL` on both `app` and `landing`, `app.VITE_LANDING_URL`,
+four SPA origins), `VITE_GATEWAY_URL` on `app`, `landing` and each console, `app.VITE_LANDING_URL`,
 the landing's `VITE_APP_URL`, `VITE_OPS_URL` and `VITE_SUPPORT_URL`, each console's
-`VITE_LANDING_URL`, and `app.VITE_DEMO_MODE=true`. It refuses the persistent environment.
+`VITE_LANDING_URL` and `landing.VITE_REGISTRATION_OPEN=true`. It refuses the persistent environment.
 
 **Written per fork, not inherited:** `gateway.RECONCILIATION_URL`. A fork is reused per PR, so
 it never picks up a production write made after its creation. `set-fork-reconciliation-url`
 writes `http://reconciliation.railway.internal:8080` and re-reads it
 (`TestSetForkReconciliationURLAgainstAScriptedRailway`).
+
+**Written per fork, not inherited:** `GATEWAY_TOKEN`. `set-fork-gateway-token` generates one
+fresh value per PR run and writes it to the gateway and the seven guarded services, so a fork
+never keeps production's token (`TestSetForkGatewayToken_WritesOneFreshValueToTheEight`).
 
 **New (persona-handoff-fix, Decision [pr-only-reset]): `gateway.GATEWAY_DB_RESET=true`.**
 A plain (non-sealed, non-reference) variable, set on `development`'s gateway service

@@ -20,7 +20,6 @@ import {
   resolveBootSession,
   saveSession,
   serializeSession,
-  shouldAutoSignIn,
 } from './session'
 
 afterEach(() => {
@@ -283,29 +282,6 @@ describe('saveSession / loadSession / clearSession I/O', () => {
   })
 })
 
-describe('shouldAutoSignIn deep-link guard', () => {
-  it('S14: auto-signs-in when personaParam is a known persona', () => {
-    expect(shouldAutoSignIn('firm')).toBe(true)
-  })
-
-  // Was the inverse (a rehydrated session beat the param) until that turned out to BE the
-  // persona-switch bug: the landing page is a different origin, so it cannot clear this
-  // origin's stored session when the user picks a profile — reaching landing without the
-  // in-app Sign out and choosing the other accountant silently reopened the previous one.
-  // The param is a choice made seconds ago on the only front door; it wins.
-  it('S15: a persona deep-link param wins over a rehydrated boot session', () => {
-    expect(shouldAutoSignIn('inhouse')).toBe(true)
-  })
-
-  it('S16: does not auto-sign-in for an unknown persona param', () => {
-    expect(shouldAutoSignIn('bogus')).toBe(false)
-  })
-
-  it('S17: does not auto-sign-in when there is no persona param', () => {
-    expect(shouldAutoSignIn(null)).toBe(false)
-  })
-})
-
 // Boot-time expiry gate. A reload on a token past its `exp` used to enter the workspace
 // and only discover the problem when the first fetch 401'd, leaving the user on a dead
 // dashboard behind an error card. These pin the pure half of that fix; the redirect half
@@ -315,6 +291,13 @@ describe('isTokenExpired / resolveBootSession', () => {
   // Minimal JWT shape: only the payload segment is read, and only its `exp`.
   function jwt(claims: object): string {
     const b64 = btoa(JSON.stringify(claims)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+    return `header.${b64}.signature`
+  }
+
+  // Built the way GoTrue does: UTF-8 bytes, base64url, no padding.
+  function utf8Jwt(claims: object): string {
+    const bytes = new TextEncoder().encode(JSON.stringify(claims))
+    const b64 = btoa(Array.from(bytes, (b) => String.fromCharCode(b)).join('')).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
     return `header.${b64}.signature`
   }
 
@@ -373,6 +356,16 @@ describe('isTokenExpired / resolveBootSession', () => {
     expect(payload).toContain('_')
     expect(payload.length % 4).not.toBe(0)
     expect(decodeJwtPayload(`header.${payload}.signature`)).toEqual(claims)
+
+    const text = ['Soci\u00e9t\u00e9 G\u00e9n\u00e9rale', 'Ad\u00e9b\u00e1y\u1ecd\u0300', 'Acme \u{1F680}', '\u682a\u5f0f\u4f1a\u793e \u6771\u4eac', 'Adaeze Ventures']
+    const claimsFor = (s: string) => ({ sub: 'x', pad: '???>>>', user_metadata: { registration: { workspace_name: s } } })
+    const tokens = text.map((s) => utf8Jwt(claimsFor(s)))
+    expect(tokens.some((t) => t.split('.')[1].includes('-'))).toBe(true)
+    expect(tokens.some((t) => t.split('.')[1].includes('_'))).toBe(true)
+    expect(tokens.some((t) => t.split('.')[1].length % 4 !== 0)).toBe(true)
+    text.forEach((s, i) => {
+      expect.soft(decodeJwtPayload(tokens[i]), s).toEqual(claimsFor(s))
+    })
 
     const nonObject = ['5', '[{"exp":1}]', 'null', '"exp"'].map((j) => `header.${btoa(j).replace(/=+$/, '')}.signature`)
     const unreadable = [null, '', 'opaque', `header.${payload}`, `header.${btoa('{not json')}.signature`, 'a.!!!not-base64!!!.c', ...nonObject]
@@ -459,10 +452,6 @@ describe('adversarial / edge coverage (QA)', () => {
 
     expect(restored).toEqual(session)
     expect(restored?.persona).toBe(APP_PERSONAS.inhouse)
-  })
-
-  it("S19: does not auto-sign-in for the landing-only 'support' persona (an Ops Console persona, not an APP_PERSONAS entry — only 'firm'/'inhouse' auto-sign-in)", () => {
-    expect(shouldAutoSignIn('support')).toBe(false)
   })
 
   it('S20: parseStoredSession ignores unknown extra fields in a stored blob (a forward-compat blob from a later schema still parses, picking only known fields)', () => {

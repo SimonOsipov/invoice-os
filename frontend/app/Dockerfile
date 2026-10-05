@@ -20,10 +20,6 @@ ENV VITE_GATEWAY_URL=$VITE_GATEWAY_URL
 # returns null (frontend/app/src/auth.ts) rather than routing to a hardcoded deploy.
 ARG VITE_LANDING_URL
 ENV VITE_LANDING_URL=$VITE_LANDING_URL
-# Same mechanism, for the demo persona switcher. Unset → DEMO_MODE is false and src/demo is
-# tree-shaken out, so a customer build cannot carry the control at all.
-ARG VITE_DEMO_MODE
-ENV VITE_DEMO_MODE=$VITE_DEMO_MODE
 # Empty means Sentry off; `set-sentry-off` blanks it in forks.
 ARG VITE_SENTRY_DSN
 ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN

@@ -13,7 +13,7 @@
 //
 // Concrete Evaluators (required/format/enum/range/tax_math/cross_field/
 // conditional/date) land in M3-04-03/04; the CEL evaluator + guard backend
-// in M3-04-05; the DB-backed Store (LoadActiveRuleSet/ToggleRule) in
+// in M3-04-05; the DB-backed Store (LoadActiveRuleSet) in
 // M3-04-06. This subtask's own tests (engine_test.go) exercise the pipeline
 // with fake Evaluators/GuardFunc only.
 package validation

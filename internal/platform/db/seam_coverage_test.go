@@ -192,15 +192,19 @@ func (e scPoolExemption) covers(s scPoolSite) bool {
 
 // scPoolAllowlist is every caller allowed to reach the database without the seam.
 var scPoolAllowlist = []scPoolExemption{
-	{file: "internal/platform/db/db.go"},                                  // declares the identity-free core; its pool.BeginTx IS what every other caller wraps
-	{file: "internal/platform/db/tenant.go"},                              // declares the gated seam; its pool.BeginTx IS the gate this story shipped
-	{file: "internal/platform/db/migrate.go"},                             // goose needs a database/sql handle, which no pgx pool can supply; it runs at boot on the migrator role
-	{file: "internal/platform/db/bootstrap.go"},                           // boot-time role and password provisioning on a superuser connection, before any request or tenant exists
-	{file: "internal/platform/db/provision.go"},                           // boot-time readiness probe on the same pre-request phase; it waits for Postgres to speak the wire
-	{file: "internal/validation/store.go", fn: "LoadActiveRuleSetGlobal"}, // the S2S peer path, which has no caller identity at all to gate on; func-scoped because internal/validation serves HTTP and its file-mates are gated
-	{file: "internal/importer/backfill.go"},                               // operator CLI tools/backfill-source-rows; it carries a job tenant and never a request identity
-	{file: "internal/invoice/revalidate.go"},                              // operator CLI tools/revalidate-invoices; same shape, same absence of a caller
-	{file: "internal/reconciliation/sweep.go"},                            // enumerateTenants reads tenants as invoice_tenant_reader with no GUC set, which a tenant-scoped tx cannot express
+	{file: "internal/platform/db/db.go"},                                      // declares the identity-free core; its pool.BeginTx IS what every other caller wraps
+	{file: "internal/platform/db/tenant.go"},                                  // declares the gated seam; its pool.BeginTx IS the gate this story shipped
+	{file: "internal/platform/db/migrate.go"},                                 // goose needs a database/sql handle, which no pgx pool can supply; it runs at boot on the migrator role
+	{file: "internal/platform/db/bootstrap.go"},                               // boot-time role and password provisioning on a superuser connection, before any request or tenant exists
+	{file: "internal/platform/db/provision.go"},                               // boot-time readiness probe on the same pre-request phase; it waits for Postgres to speak the wire
+	{file: "internal/validation/store.go", fn: "LoadActiveRuleSetGlobal"},     // the S2S peer path, which has no caller identity at all to gate on; func-scoped because internal/validation serves HTTP and its file-mates are gated
+	{file: "internal/importer/backfill.go"},                                   // operator CLI tools/backfill-source-rows; it carries a job tenant and never a request identity
+	{file: "internal/invoice/revalidate.go"},                                  // operator CLI tools/revalidate-invoices; same shape, same absence of a caller
+	{file: "internal/reconciliation/sweep.go"},                                // enumerateTenants reads tenants as invoice_tenant_reader with no GUC set, which a tenant-scoped tx cannot express
+	{file: "internal/platform/db/staff.go", fn: "GrantStaff"},                 // mock builds only: the E2E fork grants staff on the owner DSN; no caller identity exists
+	{file: "internal/platform/db/membership_grant.go", fn: "GrantMembership"}, // mock builds only: the E2E fork grants a membership on the owner DSN; no caller identity exists
+	{file: "internal/notifications/store.go"},                                 // contacts carry no tenant, so no tenant seam can scope them; the store opens its transactions on the pool
+	{file: "internal/notifications/worker.go"},                                // a River job carries no caller identity and no tenant, and contacts are not tenant data; the worker reads and updates them on the pool
 }
 
 // scPoolSite is one direct pool call: recv is the pool-typed name it was made on,
@@ -3380,6 +3384,7 @@ var scSweepSkipAllowlist = []scSweepSkipExemption{
 	{file: "internal/platform/db/provision_test.go", fn: "TestSuperuserDSNNotRetainedForRequestPath"},         // pre-existing: skips without DATABASE_URL, unrelated to the sweep
 	{file: "internal/platform/db/rls_harness_test.go", fn: "requireHarness"},                                  // pre-existing: skips without DATABASE_URL/DATABASE_MIGRATION_URL/DATABASE_SUPERUSER_URL, unrelated to the sweep
 	{file: "internal/platform/db/workflow_roles_seed_store_test.go", fn: "requireAppDSN"},                     // pre-existing: skips without DATABASE_URL, unrelated to the sweep
+	{file: "internal/platform/db/restore_check_test.go", fn: "TestRestoreCheck_FailsWithoutBypassRLS"},        // env-gated: skips without DATABASE_URL, the invoice_app role it must run as
 	{file: "internal/submission/exchange_db_test.go", fn: "requireExchangeDB"},                                // pre-existing: skips without DATABASE_URL/DATABASE_MIGRATION_URL, unrelated to the sweep
 	{file: "internal/submission/failure_modes_test.go", fn: "requireEffects"},                                 // same guard, the M2-09 exactly-once suite's own gate
 	{file: "internal/submission/seed_evidence_honesty_test.go", fn: "sehRequireSuperuserDSN"},                 // pre-existing: skips without DATABASE_SUPERUSER_URL, unrelated to the sweep

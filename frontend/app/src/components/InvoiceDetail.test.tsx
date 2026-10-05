@@ -6077,6 +6077,10 @@ describe('InvoiceDetail cards, rail and inline edit take the v2 look (RESKIN2-03
     const editTable = screen.getByTestId('line-row').parentElement as HTMLElement
     expect(editTable.textContent, 'control: the edit table holds the header').toContain('Description')
     expect.soft(editTable.style.overflowX, 'edit table scrolls sideways').toBe('auto')
+    expect.soft((editTable.firstElementChild as HTMLElement).style.minWidth, 'header keeps its content width').toBe('max-content')
+    for (const [i, row] of screen.getAllByTestId('line-row').entries()) {
+      expect.soft(row.style.minWidth, `line row ${i} keeps its content width`).toBe('max-content')
+    }
   })
 
   it('the rail may shrink below its content', async () => {

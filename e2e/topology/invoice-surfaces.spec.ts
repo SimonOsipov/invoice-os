@@ -5991,6 +5991,11 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
       for (const width of [1180, 1120]) {
         await page.setViewportSize({ width, height: 900 })
         const removes = form.getByTestId('line-remove')
+        expect(await removes.count(), `the edit form holds line rows at ${width}px`).toBeGreaterThan(0)
+        // scrollIntoView also scrolls an overflow:hidden box, so the box must scroll for a pointer too.
+        const table = await form.getByTestId('line-row').first().locator('xpath=..').evaluate((el) => ({ overflowX: getComputedStyle(el).overflowX, needsRoom: el.scrollWidth > el.clientWidth }))
+        expect(table.needsRoom, `the line rows are wider than their box at ${width}px`).toBe(true)
+        expect(['auto', 'scroll'], `the line table box scrolls sideways at ${width}px`).toContain(table.overflowX)
         for (let i = 0; i < (await removes.count()); i++) {
           const remove = removes.nth(i)
           await remove.scrollIntoViewIfNeeded()

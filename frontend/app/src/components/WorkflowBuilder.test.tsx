@@ -2427,6 +2427,7 @@ describe('RESKIN2-05-04 WB: the builder header, palette and canvas', () => {
     expect(publish.disabled, 'Publish is already blocked, so its enabled paint is not under test').toBe(false)
     expect(publish.style.background).toBe('var(--action)')
     expect(publish.style.color, 'the enabled Publish label is not primary-foreground').toBe('var(--primary-foreground)')
+    expect([publish.style.opacity, publish.style.cursor, publish.style.filter], 'an enabled Publish is dimmed').toEqual(['', '', ''])
 
     fireEvent.change(nameInput(), { target: { value: 'Renamed' } })
 

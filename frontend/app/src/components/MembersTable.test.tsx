@@ -15,6 +15,7 @@ import { MEMBER_UNBACKED, PROTECTED_ADMIN_NOTE, type Member } from '../lib/membe
 import type { Role } from '../lib/roles'
 import type { Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
+import { InitialsChip } from './MemberParts'
 import { MembersTable } from './MembersTable'
 
 function member(over: Partial<Member> = {}): Member {
@@ -398,5 +399,39 @@ describe('the room reserved under an open menu', () => {
 
     expect(screen.queryByText('Cy Invited')).toBeNull()
     expect(scroller().style.paddingBottom).toBe('0px')
+  })
+})
+
+describe('InitialsChip type scale and ring', () => {
+  const chipAt = (size: number | undefined, extra: { fontSize?: number; ring?: boolean; status?: Member['status'] } = {}) => {
+    cleanup()
+    const { container } = render(<InitialsChip initials="AP" status={extra.status ?? 'active'} size={size} fontSize={extra.fontSize} ring={extra.ring} />)
+    return container.firstElementChild as HTMLElement
+  }
+
+  it('the glyph is 9px up to 26, 10.5px between, 13px from 40; the roster default stays 10.5px', () => {
+    const scale = [24, 26, 27, undefined, 39, 40, 44].map((size) => [size, chipAt(size).style.fontSize])
+    expect(scale).toEqual([
+      [24, '9px'],
+      [26, '9px'],
+      [27, '10.5px'],
+      [undefined, '10.5px'],
+      [39, '10.5px'],
+      [40, '13px'],
+      [44, '13px'],
+    ])
+  })
+
+  it('an explicit fontSize outranks the scale', () => {
+    expect(chipAt(26, { fontSize: 9.5 }).style.fontSize).toBe('9.5px')
+    expect(chipAt(40, { fontSize: 9 }).style.fontSize).toBe('9px')
+  })
+
+  it('ring swaps the tone border for a 2px card-ground one on active and suspended, never on invited', () => {
+    const plain = chipAt(26).style.border
+    expect(plain, 'control: the plain chip keeps its tone border').toBe('1px solid transparent')
+    expect(chipAt(26, { ring: true }).style.border).toBe('2px solid var(--bg-2)')
+    expect(chipAt(26, { ring: true, status: 'suspended' }).style.border).toBe('2px solid var(--bg-2)')
+    expect(chipAt(26, { ring: true, status: 'invited' }).style.border, 'invited stays dashed over its transparent ground').toBe('1px dashed var(--line-3)')
   })
 })

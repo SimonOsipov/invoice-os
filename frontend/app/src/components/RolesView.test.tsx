@@ -328,3 +328,178 @@ describe('a null-email member in the role modal picker renders the shared em das
     expect(within(picker).queryByText(/null/i)).toBeNull()
   })
 })
+
+// ============================================================================
+// v2 paint: the Roles tab against the prototype's resolved values
+// ============================================================================
+
+describe('Roles tab v2 paint', () => {
+  const crew = [
+    member({ id: 'u1', name: 'Ada Person', initials: 'AP', role: 'reviewer' }),
+    member({ id: 'u2', name: 'Bo Person', initials: 'BP', role: 'reviewer' }),
+    member({ id: 'u3', name: 'Cy Person', initials: 'CP', role: 'reviewer', status: 'invited' }),
+    member({ id: 'u4', name: 'Di Person', initials: 'DP', role: 'reviewer', status: 'suspended' }),
+    member({ id: 'u5', name: 'Ed Person', initials: 'EP', role: 'reviewer' }),
+    member({ id: 'u6', name: 'Fi Person', initials: 'FP', role: 'reviewer' }),
+    member({ id: 'u7', name: 'Gi Person', initials: 'GP', role: 'reviewer' }),
+  ]
+  const crewRoles = [
+    role({ key: 'many', title: 'Many', desc: 'Seven hold it', members: crew.map((m) => m.id) }),
+    role({ key: 'one', title: 'One', desc: 'Ada holds it', members: ['u1'] }),
+    role({ key: 'nobody', title: 'Nobody', desc: '', members: [] }),
+    role({ key: 'mixed', title: 'Mixed', desc: 'Invited and suspended', members: ['u3', 'u4'] }),
+  ]
+  const cardFor = (title: string) =>
+    screen.getAllByTestId('role-card').find((c) => c.textContent?.includes(title)) as HTMLElement
+
+  function renderCrew() {
+    render(<Harness members={crew} roles={crewRoles} policies={[policy()]} rolesState="ready" membersState="ready" />)
+  }
+
+  it('no oklch, no 99/999 radius and no avatar box-shadow in the grid, the no-match card or the empty card', () => {
+    const states: [string, () => void][] = [
+      ['grid', () => renderCrew()],
+      [
+        'no match',
+        () => {
+          renderCrew()
+          fireEvent.change(screen.getByLabelText('Search roles'), { target: { value: 'zzzz' } })
+        },
+      ],
+      ['empty', () => render(<Harness roles={[]} rolesState="ready" membersState="ready" />)],
+    ]
+    for (const [name, mount] of states) {
+      cleanup()
+      mount()
+      const all = Array.from(document.body.querySelectorAll<HTMLElement>('*'))
+      expect(all.length, `${name}: nothing rendered`).toBeGreaterThan(10)
+      expect(document.body.innerHTML, `${name}: oklch`).not.toContain('oklch')
+      for (const el of all) {
+        expect(['99px', '999px'], `${name}: radius on <${el.tagName.toLowerCase()}>`).not.toContain(el.style.borderRadius)
+      }
+    }
+    cleanup()
+    renderCrew()
+    const avatars = within(cardFor('Many')).getAllByText(/^[A-Z]P$/)
+    expect(avatars.length, 'the avatar stack rendered').toBe(5)
+    for (const a of avatars) {
+      expect([a.style.boxShadow, a.parentElement!.style.boxShadow], `avatar ${a.textContent} box-shadow`).toEqual(['', ''])
+    }
+  })
+
+  it('the card is padded 16/16/14, gapped 12, with a 15/700 title and a 12px lh 1.5 description', () => {
+    renderCrew()
+    const card = cardFor('One')
+    expect(card.style.padding).toBe('16px 16px 14px')
+    expect(card.style.gap).toBe('12px')
+    expect(card.style.border).toContain('var(--line-1)')
+    expect(card.style.borderRadius).toBe('var(--radius-md)')
+    const title = screen.getAllByText('One', { exact: true })[0]
+    expect([title.style.fontSize, title.style.fontWeight]).toEqual(['15px', '700'])
+    const desc = screen.getByText('Ada holds it', { exact: true })
+    expect([desc.style.fontSize, desc.style.lineHeight, desc.style.marginTop, desc.style.minHeight]).toEqual(['12px', '1.5', '3px', '36px'])
+  })
+
+  it('Edit is the 28px ghost: 12px, padding 0 11px, no inline border or fill', () => {
+    renderCrew()
+    const edits = screen.getAllByTestId('role-card-edit')
+    expect(edits.length).toBe(crewRoles.length)
+    for (const e of edits) {
+      expect(e.className).toContain('v2-btn-ghost')
+      expect([e.style.height, e.style.padding, e.style.fontSize]).toEqual(['28px', '0px 11px', '12px'])
+      expect([e.style.border, e.style.background]).toEqual(['', ''])
+    }
+  })
+
+  it('avatars overlap by -7 with the card-ground ring, and +N shows only past five holders', () => {
+    renderCrew()
+    const many = within(cardFor('Many'))
+    const stack = many.getByText('AP').parentElement!.parentElement as HTMLElement
+    expect(stack.style.paddingRight).toBe('7px')
+    for (const a of many.getAllByText(/^[A-Z]P$/)) {
+      expect(a.style.border, `${a.textContent} ring`).toBe(a.textContent === 'CP' ? '1px dashed var(--line-3)' : '2px solid var(--bg-2)')
+      expect(a.parentElement!.style.marginRight).toBe('-7px')
+      expect(a.style.borderRadius).toBe('50%')
+    }
+    const more = many.getByText('+2')
+    expect([more.className, more.style.fontSize, more.style.color]).toEqual(['mono', '10px', 'var(--fg-3)'])
+    expect(within(cardFor('One')).queryByText(/^\+\d/)).toBeNull()
+    expect(many.getByText('AP').parentElement!.getAttribute('title'), 'avatar names itself').toBe('Ada Person')
+  })
+
+  it('the holder line keeps var(--fg-2), and var(--status-red-text) when the seat cannot sign', () => {
+    renderCrew()
+    expect(screen.getByText('Ada Person', { exact: true }).style.color).toBe('var(--fg-2)')
+    const nobody = within(cardFor('Nobody')).getByText('Nobody assigned')
+    expect(nobody.style.color).toBe('var(--status-red-text)')
+    expect(nobody.style.flex).toContain('1')
+  })
+
+  it('the footer is a bordered, space-between row of 9.5px mono labels', () => {
+    renderCrew()
+    const footer = cardFor('One').children[2] as HTMLElement
+    expect([footer.style.borderTop, footer.style.paddingTop, footer.style.justifyContent]).toEqual(['1px solid var(--line-1)', '10px', 'space-between'])
+    expect(footer.children.length).toBe(2)
+    for (const label of Array.from(footer.children) as HTMLElement[]) {
+      expect([label.className, label.style.fontSize, label.style.textTransform, label.style.letterSpacing]).toEqual(['mono', '9.5px', 'uppercase', '0.05em'])
+    }
+    expect(footer.textContent).toContain('1 person')
+  })
+
+  it('New role is the 36px primary pf-btn, in the toolbar and in the empty card', () => {
+    renderCrew()
+    const toolbarBtn = screen.getByTestId('roles-new') as HTMLButtonElement
+    cleanup()
+    render(<Harness roles={[]} rolesState="ready" membersState="ready" />)
+    for (const b of [toolbarBtn, screen.getByTestId('roles-empty-new') as HTMLButtonElement]) {
+      expect(b.className.split(' ').sort()).toEqual(['pf-btn', 'v2-btn', 'v2-btn-primary'])
+      expect(b.style.height).toBe('36px')
+      expect(b.style.background, 'the primary fill is the class').toBe('')
+    }
+  })
+
+  it('the empty card holds New role as its last child, under a 460px message', () => {
+    render(<Harness roles={[]} rolesState="ready" membersState="ready" />)
+    const empty = screen.getByTestId('roles-empty')
+    expect(empty.children.length, 'the wrapper is the card alone').toBe(1)
+    const card = empty.firstElementChild as HTMLElement
+    expect(card.lastElementChild).toBe(screen.getByTestId('roles-empty-new'))
+    expect(within(card).getByText(/Create the seats/).style.maxWidth).toBe('460px')
+    expect(screen.getAllByRole('button', { name: /New role/ }).length, 'the toolbar button is the only other').toBe(2)
+  })
+
+  it('the intro reads 680 wide at lh 1.6 and the toolbar search is the 300x36 bordered box with a glyph', () => {
+    renderCrew()
+    const intro = screen.getByText(/A role is a named seat/)
+    expect([intro.style.maxWidth, intro.style.lineHeight, intro.style.margin]).toEqual(['680px', '1.6', '-4px 0px 16px'])
+    const input = screen.getByTestId('roles-search')
+    expect(input.className, 'a bare input inside the wrapper').toBe('')
+    const box = input.parentElement as HTMLElement
+    expect([box.style.width, box.style.height, box.style.padding, box.style.background]).toEqual(['300px', '36px', '0px 12px', 'var(--bg-2)'])
+    expect(box.style.border).toContain('var(--line-2)')
+    expect(box.querySelector('svg'), 'the search glyph').toBeTruthy()
+  })
+
+  it('the unassigned notice carries 14px under it and a bold names line', () => {
+    renderCrew()
+    const note = screen.getByTestId('roles-unassigned')
+    expect(note.style.marginBottom).toBe('14px')
+    const names = note.querySelector('div') as HTMLElement
+    expect(names.style.fontWeight).toBe('700')
+    expect(names.textContent).toBe('Nobody · Mixed')
+  })
+
+  it('the no-match card is centred, 12.5px, padded 26/16', () => {
+    renderCrew()
+    fireEvent.change(screen.getByLabelText('Search roles'), { target: { value: 'zzzz' } })
+    const card = screen.getByTestId('roles-no-match')
+    expect([card.style.textAlign, card.style.fontSize, card.style.padding]).toEqual(['center', '12.5px', '26px 16px'])
+  })
+
+  it('the unassigned notice sits above the toolbar', () => {
+    renderCrew()
+    const note = screen.getByTestId('roles-unassigned')
+    const toolbar = screen.getByTestId('roles-new').parentElement as HTMLElement
+    expect(note.compareDocumentPosition(toolbar) & Node.DOCUMENT_POSITION_FOLLOWING, 'notice precedes toolbar').toBeTruthy()
+  })
+})

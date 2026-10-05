@@ -1318,7 +1318,7 @@ describe('QA adversarial (route-02-06): two switchClient calls in a row each scr
 // Nine sites, counted after the fix: the seven that ship today plus the boot-entry stamp
 // backfill and the popstate clamp's own replaceState. Both new writers live inside
 // Workspace, so they are inside this slice by construction.
-// Out of the slice on purpose: signOut and the persona strip both live in App.
+// Out of the slice on purpose: signOut and the one-shot strip both live in App.
 describe('ROUTE-06-02 AC-7: every Workspace history write carries the company stamp', () => {
   it('guard_everyWorkspaceHistoryWriteCarriesTheStamp', () => {
     const src = readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8')

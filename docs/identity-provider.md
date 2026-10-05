@@ -573,15 +573,13 @@ first attempt (`SignInMaxFailures`, `SignInWindow`).
   once a minute, or at once when the map is full. When it is still full, a new address gets
   429 and the gateway logs one WARN per minute; an address already counted keeps its count.
 
-**Precedence in the app.** A live stored hand-off session wins over `?handoff=` and
-`?persona=`: both are stripped and not acted on, so a URL never replaces a real session. A
+**Precedence in the app.** A live stored hand-off session wins over `?handoff=`: the code is
+stripped and not acted on, so a URL never replaces a real session. A
 user signed in as A who signs in on landing as B arrives back in A's workspace with no
 message; B's code expires unused. Sign out first to switch accounts. A stored hand-off
-session whose access token has expired loses to both, even when it carries a refresh token:
-a kept record must not bounce every `?persona=` link while renewal is down. Guarded by
-`App.sessionRenewal.test.tsx` "an expired renewable hand-off session loses to ?persona=",
-"a ?handoff= code wins over an expired renewable hand-off session" and "a ?persona= link
-after a transient boot failure does not bounce to landing again".
+session whose access token has expired loses to `?handoff=`, even when it carries a refresh
+token. Guarded by `App.sessionRenewal.test.tsx` "a ?handoff= code wins over an expired
+renewable hand-off session".
 
 **Ceilings:**
 - `ceiling:` the code store and the throttle are in-process. A gateway restart drops

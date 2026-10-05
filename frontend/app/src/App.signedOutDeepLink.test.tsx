@@ -947,7 +947,7 @@ describe('The destination never travels in a URL (ROUTE-05-06)', () => {
     // empty or truncated line. window.location.search no longer appears on any write site --
     // the mirror is now barred from reading it (routeWriterGuard's
     // guard_theSeamsWriterNeverReadsLocationSearch) -- so this pins window.location.pathname
-    // instead, carried by the persona strip's own write. Evaluated on the SITE line, never
+    // instead, carried by the one-shot strip's own write. Evaluated on the SITE line, never
     // the window -- the strip's `URLSearchParams(window.location.search)` READ sits on a
     // different line than its write, so the needle could never resolve there.
     expect(

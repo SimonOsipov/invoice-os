@@ -1089,12 +1089,13 @@ describe('ReviewRow: the review prototype look (RESKIN2-04-04)', () => {
     expect(blocked.disabled).toBe(true)
     expect(blocked.style.opacity).toBe('0.45')
     expect(blocked.style.cursor).toBe('not-allowed')
-    expect(blocked.style.background, 'the grey recipe is gone').toBe('')
+    expect(blocked.style.background, 'inline rest fill so .v2-btn-ghost:hover cannot repaint').toBe('transparent')
     cleanup()
 
     const enabled = await renderOpen(failing())
     expect(enabled.disabled).toBe(false)
     expect(enabled.style.opacity, 'an enabled button is not dimmed').toBe('')
+    expect(enabled.style.background, 'hover stays live').toBe('')
   })
 
   it('a warning card takes its severity border', async () => {

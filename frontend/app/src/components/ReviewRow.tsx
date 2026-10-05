@@ -155,8 +155,6 @@ export function Row({
           checked={checked}
           disabled={!isRowSelectable(r)}
           title={blockedReason ?? undefined}
-          // Disabled-only: matches InvoicesList.tsx's own guard against killing an
-          // enabled control's hover affordance.
           style={{ width: 15, height: 15, accentColor: 'var(--action)', margin: 0, ...(blockedReason == null ? null : { cursor: 'not-allowed', opacity: 0.5 }) }}
           // BOTH handlers stop propagation — the row's own onClick toggles expansion and
           // must never fire from a checkbox interaction.
@@ -189,8 +187,7 @@ export function Row({
             as the issue date is a small lie on a compliance screen. */}
         <span className="mono" style={{ fontSize: 11.5, color: 'var(--fg-2)' }}>{r.issue_date != null ? fmtDate(r.issue_date) : '—'}</span>
         <span className="money" style={{ fontSize: 13, fontWeight: 600, textAlign: 'right' }}>{r.total != null ? fmt(Number(r.total)) : '—'}</span>
-        {/* The status badge is InvoicesList.tsx:425-433's markup verbatim, driven entirely
-            by verdictPill(...).status — no colour and no label is authored here. The
+        {/* Driven entirely by verdictPill(...).status — no colour and no label is authored here. The
             derived badge stacks BENEATH rather than beside it: 124px cannot hold both. */}
         {/* `data-testid="review-verdict"` sits on this OUTER span, not the inner status
             pill alone -- "the verdict pill" (this file's own doc comments, and the e2e
@@ -510,7 +507,7 @@ function ExpandedFixPanel({
               height: 34,
               padding: '0 14px',
               fontSize: 13,
-              ...(revalidateDisabled ? { opacity: 0.45, cursor: 'not-allowed', filter: 'none' } : null),
+              ...(revalidateDisabled ? { background: 'transparent', opacity: 0.45, cursor: 'not-allowed', filter: 'none' } : null),
             }}
           >
             {revalidating ? ROW_EXPANSION_COPY.revalidating : ROW_EXPANSION_COPY.revalidateLabel}

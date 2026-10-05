@@ -310,7 +310,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
               onClick={documentRun ? ctx.startDocumentRun : ctx.readAllColumns}
               disabled={base == null || !readReady}
               className="v2-btn v2-btn-primary pf-btn"
-              style={{ height: 42, padding: '0 18px', justifyContent: 'center', background: 'var(--action)', color: 'var(--primary-foreground)', cursor: 'pointer', ...(readReady ? null : { opacity: 0.45, cursor: 'not-allowed', filter: 'none' }) }}
+              style={{ height: 42, padding: '0 18px', justifyContent: 'center', background: 'var(--action)', color: 'var(--primary-foreground)', cursor: 'pointer', ...(base == null || !readReady ? { opacity: 0.45, cursor: 'not-allowed', filter: 'none' } : null) }}
             >
               <span style={{ display: 'inline-flex' }}>{importGlyph}</span> {documentRun ? 'Extract invoices' : 'Read columns'}
             </button>

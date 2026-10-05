@@ -251,13 +251,24 @@ async function shoot(page: Page, testInfo: TestInfo, file: string): Promise<void
   await testInfo.attach(file, { body: await page.screenshot(), contentType: 'image/png' })
 }
 
+// An extraction screenshot waits for the page image: the frame is visible before the bitmap paints.
+async function shootExtraction(page: Page, testInfo: TestInfo, file: string): Promise<void> {
+  await expect
+    .poll(() => page.locator('[data-testid^="extraction-page-image-"]').first().evaluate((el) => (el as HTMLImageElement).complete && (el as HTMLImageElement).naturalWidth > 0), {
+      message: 'the page image has loaded before the screenshot',
+      timeout: 60_000,
+    })
+    .toBe(true)
+  await shoot(page, testInfo, file)
+}
+
 // Records every request that could write, so a test can assert none left the page.
 function recordWrites(page: Page): { writes: string[]; stop: () => void } {
   const writes: string[] = []
   const onRequest = (req: Request) => {
     if (req.method() === 'GET' || req.method() === 'OPTIONS') return
     const url = new URL(req.url())
-    if (url.origin === GATEWAY_ORIGIN) writes.push(`${req.method()} ${url.pathname}`)
+    if (url.origin === GATEWAY_ORIGIN && url.pathname.startsWith('/api/')) writes.push(`${req.method()} ${url.pathname}`)
   }
   page.on('request', onRequest)
   return { writes, stop: () => page.off('request', onRequest) }
@@ -1029,6 +1040,7 @@ test.describe('RESKIN2-04 v2 extraction review at 1440', () => {
     await expect(input, 'a header field must render an editable input').toBeVisible()
     await input.focus()
     const focused = await readAll(page, { input }, ['--ring'])
+    expect(focused.tokens['--ring'], '--ring resolves to the design teal').toBe('rgb(56, 135, 126)')
     expect(focused.reads.input[0].style['border-top-color'], 'focused field border colour is the resolved --ring').toBe(focused.tokens['--ring'])
     expect(shadowColor(focused.reads.input[0].style['box-shadow']), 'focused field box-shadow colour is the resolved --ring').toBe(focused.tokens['--ring'])
     await input.blur()
@@ -1057,11 +1069,19 @@ test.describe('RESKIN2-04 v2 extraction review at 1440', () => {
     await attachJson(testInfo, 'rx-01-reads', read)
     await assertPageDoesNotScrollSideways(page, 'extraction review at 1440')
     expect((await boxOf(page, 'extraction-page-1')).width, 'the page frame has a width').toBeGreaterThan(0)
-    await shoot(page, testInfo, 'extraction-flagged.png')
+    await shootExtraction(page, testInfo, 'extraction-flagged.png')
 
     // RX-03: point at a missing field, read the armed button, then stop.
-    const missing = detail.fields.find((f) => f.reason === 'missing')
-    expect(missing, 'no field on this document is missing -- there is nothing to point at').toBeTruthy()
+    // A header field only: the point button is not rendered for a line-item field.
+    const missingNames = detail.fields.filter((f) => f.reason === 'missing').map((f) => f.name)
+    let missing: { name: string } | undefined
+    for (const name of missingNames) {
+      if ((await page.getByTestId(`extraction-point-${name}`).count()) > 0) {
+        missing = { name }
+        break
+      }
+    }
+    expect(missing, `no header field is missing -- there is nothing to point at (missing: ${missingNames.join(', ')})`).toBeTruthy()
     const point = page.getByTestId(`extraction-point-${missing!.name}`)
     await expect(point, `${missing!.name} offers no way to point at it`).toBeVisible({ timeout: 30_000 })
     await point.click()
@@ -1071,7 +1091,7 @@ test.describe('RESKIN2-04 v2 extraction review at 1440', () => {
     const armed = await readAll(page, { point })
     expectCorners(armed.reads.point[0].style, '6px', 'armed point button')
     await attachJson(testInfo, 'rx-03-reads', armed)
-    await shoot(page, testInfo, 'extraction-selecting.png')
+    await shootExtraction(page, testInfo, 'extraction-selecting.png')
     await stop.click()
     await expect(stop, 'Stop pointing leaves the armed state').toHaveCount(0)
     await expect(point, 'the field returns to idle').toHaveText(POINT_IDLE)
@@ -1113,13 +1133,20 @@ test.describe('RESKIN2-04 v2 extraction review at 1440', () => {
       { name: 'advisory_register.pdf', bytes: () => withFreshComment(ADVISORY_REGISTER_PDF) },
       { name: 'ai_steered_invoice.pdf', bytes: () => withFreshComment(AI_STEERED_PDF) },
     ]
-    const tried: { fixture: string; flagged: number }[] = []
+    const tried: { fixture: string; flagged: number; rendered: number }[] = []
     for (const fixture of fixtures) {
       await extractOneDocument(page, `RESKIN2-04 extraction ${fixture.name}`, { name: fixture.name, buffer: fixture.bytes() })
       const detail = await openExtractionReview(page)
       const flagged = detail.fields.filter((f) => f.reason !== '').length
-      tried.push({ fixture: fixture.name, flagged })
-      await shoot(page, testInfo, flagged === 0 ? 'extraction-confident.png' : `extraction-least-flagged-candidate-${flagged}-${fixture.name}.png`)
+      // A header cell's pill slot also carries the NO REGION cue; only a reason pill counts as a flag.
+      const cells = page.locator('[data-testid^="extraction-field-"]')
+      await floor(cells, 1, 'the review must render its header fields')
+      const rendered = await cells.evaluateAll(
+        (els) => els.filter((el) => { const pill = el.querySelector('span.mono'); return pill !== null && pill.textContent !== 'NO REGION' }).length,
+      )
+      expect(rendered, `${fixture.name}: flagged fields rendered must equal the detail API's flagged count`).toBe(flagged)
+      tried.push({ fixture: fixture.name, flagged, rendered })
+      await shootExtraction(page, testInfo, flagged === 0 ? 'extraction-confident.png' : `extraction-least-flagged-candidate-${flagged}-${fixture.name}.png`)
       if (flagged === 0) break
     }
     expect(tried.length, 'at least one fixture was read').toBeGreaterThan(0)

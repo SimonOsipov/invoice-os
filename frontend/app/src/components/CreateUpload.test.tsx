@@ -405,6 +405,17 @@ describe('CreateUpload — the v2 card, accepted line and primary (RESKIN2-04-01
     expect(note.style.color).toBe('var(--status-red-text)')
   })
 
+  it('with no gateway base a ready spreadsheet run is disabled and dimmed', () => {
+    vi.stubEnv('VITE_GATEWAY_URL', '')
+    const { container } = render(<CreateUpload ctx={uploadCtx([picked('ledger.csv', 'text/csv')])} />)
+    const b = container.querySelector('button.v2-btn-primary') as HTMLButtonElement
+    expect(b, 'the primary did not render').not.toBeNull()
+    expect(b.textContent).toContain('Read columns')
+    expect(b.disabled).toBe(true)
+    expect(b.style.opacity).toBe('0.45')
+    expect(b.style.cursor).toBe('not-allowed')
+  })
+
   it('the oversize note keeps the red note recipe', () => {
     const big = new File([], 'big.csv', { type: 'text/csv' })
     Object.defineProperty(big, 'size', { value: 16 * 1024 * 1024 })

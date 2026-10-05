@@ -160,7 +160,7 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
   // sharing. Gated on `groups`/`groupIndex` (BULK-01-04) rather than a single-group
   // literal so a single-group run (the common case) still reads exactly as shipped.
   const isLastGroup = groupIndex >= groups.length - 1
-  // Dimmed by style, not `disabled`, while invoice_number is unmapped: the click arms it (INVCR-01-05).
+  // Dimmed by style, not `disabled`, while invoice_number is unmapped: the click arms it.
   const continueDim = !canFile || !invNumMapped
   const continueLabel = !canFile
     ? 'Filing needs a linked entity'

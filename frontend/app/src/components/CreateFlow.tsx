@@ -178,7 +178,7 @@ function DocumentFailureRow({
                 padding: '0 12px',
                 fontSize: 12.5,
                 flex: 'none',
-                ...(blocked ? { opacity: 0.45, cursor: 'not-allowed' } : null),
+                ...(blocked ? { background: 'transparent', opacity: 0.45, cursor: 'not-allowed' } : null),
               }}
             >
               Enter it by hand

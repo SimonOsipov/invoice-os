@@ -305,7 +305,7 @@ describe('RESKIN2-04-03 D-17 / D-4: the Unreadable tab wears the prototype value
     expect(off.disabled).toBe(true)
     expect(off.style.opacity).toBe('0.45')
     expect(off.style.cursor).toBe('not-allowed')
-    expect(off.style.background, 'the dim replaces the grey fill').toBe('')
+    expect(off.style.background, 'inline rest fill so .v2-btn-ghost:hover cannot repaint').toBe('transparent')
     expect(off.style.color, 'the dim replaces the grey text').toBe('')
     cleanup()
 
@@ -314,6 +314,7 @@ describe('RESKIN2-04-03 D-17 / D-4: the Unreadable tab wears the prototype value
     expect(on.disabled).toBe(false)
     expect(on.style.opacity, 'an enabled hand-off keeps its hover affordance').toBe('')
     expect(on.style.cursor).toBe('')
+    expect(on.style.background, 'hover stays live').toBe('')
   })
 })
 

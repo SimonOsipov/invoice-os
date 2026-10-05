@@ -98,7 +98,7 @@ export function ReviewAlreadyImportedTab({
                     height: 30,
                     padding: '0 12px',
                     fontSize: 12.5,
-                    ...(invoiceId == null ? { opacity: 0.45, cursor: 'not-allowed' } : null),
+                    ...(invoiceId == null ? { background: 'transparent', opacity: 0.45, cursor: 'not-allowed' } : null),
                   }}
                 >
                   View invoice

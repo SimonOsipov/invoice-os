@@ -924,7 +924,7 @@ describe('CreateFlow — the v2 strip and blocked hand-off (RESKIN2-04-01)', () 
     expect(buttons[0].disabled).toBe(true)
     expect(buttons[0].style.opacity).toBe('0.45')
     expect(buttons[0].style.cursor).toBe('not-allowed')
-    expect(buttons[0].style.background).toBe('')
+    expect(buttons[0].style.background, 'inline rest fill so .v2-btn-ghost:hover cannot repaint').toBe('transparent')
   })
 
   it('an enabled hand-off carries no dimming', () => {
@@ -934,6 +934,7 @@ describe('CreateFlow — the v2 strip and blocked hand-off (RESKIN2-04-01)', () 
     expect(buttons[0].disabled).toBe(false)
     expect(buttons[0].style.opacity).toBe('')
     expect(buttons[0].style.cursor).toBe('')
+    expect(buttons[0].style.background, 'hover stays live').toBe('')
   })
 })
 

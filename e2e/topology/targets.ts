@@ -74,9 +74,7 @@ type ShardTenant = Omit<(typeof TENANTS)['a' | 'b'], 'id'> & { id: string }
 //
 // `param` replaced the old `buttonName`: the app no longer ships its own persona picker
 // (the landing page is the single sign-in front door), so there is no button to click on a
-// deployed build. Signing in is the same ?persona= hand-off the landing performs —
-// landing/src/auth.ts destUrl() — which makes these specs exercise the real entry path
-// rather than a picker only the standalone showcase build still renders.
+// deployed build.
 //
 // `tenantName` is optional on PersonaDef (the two console personas have no tenant), but every
 // consumer here calls .toUpperCase() on it, so narrow it once at the seam and fail loudly —

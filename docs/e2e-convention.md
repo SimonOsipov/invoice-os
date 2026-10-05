@@ -58,12 +58,8 @@ tenants (1111 / 2222), plus one shard per big file
 `--project=<unit>` runs one. A new topology spec file must be added to a unit in `shards.ts`,
 or every topology run fails at config load.
 
-**A dedicated-shard spec seeds the session before it navigates.** It signs in with
-`signInAs(page, id, { tenantId })`, which calls `seedShardSession` (`e2e/topology/shardSession.ts`).
-That logs in as the shard tenant through the mock issuer and writes the session record the SPA stores after a real sign-in. A bare
-`?persona=firm` or `?persona=inhouse` binds to the seeded tenants 1111 / 2222. The firm path may
-still carry `?persona=firm`: the stored hand-off session wins over the param. `assertShardSession`
-fails a sign-in that landed in another tenant.
+**A dedicated-shard spec signs in with `signInAs(page, id, { tenantId })`.** `signInAs` fails a
+sign-in whose stored session is not a hand-off session for that tenant.
 
 **Every run gets a database of its own, and shares it across all three suites.**
 
@@ -224,10 +220,9 @@ enforces the ceiling; keeping the layer thin stays a review judgement.
 
 ## Persona is an axis, not a constant
 
-`?persona=` is the sign-in front door for the two app personas (`firm`, `inhouse`), and the
-suite treats it as a **parameter** rather than a constant baked into each spec. The two console
-personas (`developer`, `support`) no longer open a console that way: a console takes a staff
-session (Target surface), and `e2e/personas.ts` records the console pairs as refusals.
+The suite treats the persona as a **parameter** rather than a constant baked into each spec.
+The two console personas (`developer`, `support`) take a staff session to open a console
+(Target surface), and `e2e/personas.ts` records the console pairs as refusals.
 
 - **`e2e/personas.ts`** is the registry: four personas, the three destinations they route
   to, the app SPA's 10 nav surfaces, and a **coverage map** naming which persona is proven

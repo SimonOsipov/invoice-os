@@ -455,8 +455,7 @@ test('Approvals: the in-house badge equals the live awaiting-approval count, and
 test('sidebar roster: the firm and in-house personas render different, exact nav rosters', async ({ page }) => {
   const errors = collectErrors(page)
 
-  // Two sign-ins on one page, the pattern auth.spec.ts:89-102 already proves works: the
-  // ?persona= hand-off overrides the stored session rather than losing to it.
+  // Two sign-ins on one page.
   await signInAs(page, 'firm')
   await expect(sidebar(page)).toContainText(FIRM_PERSONA.tenantName.toUpperCase())
   await expect

@@ -346,7 +346,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
 
         <div style={{ flex: 'none', padding: '14px 20px', borderTop: '1px solid var(--line-1)' }}>
           {/* The SERVER's own reason for the write it just refused, verbatim — no prefix,
-              no substitute. MemberDrawer's `statusError` precedent (MemberDrawer.tsx:311-329). */}
+              no substitute. MemberDrawer's `statusError` precedent. */}
           {writeError && (
             <div
               data-testid="role-modal-error"

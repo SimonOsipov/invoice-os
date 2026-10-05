@@ -92,12 +92,16 @@ describe('ConnectorDetail > header and health strip', () => {
     expect(sandbox().style.color).toBe('var(--primary-foreground)')
   })
 
-  it('the back link is the 15px chevron-left at 12.5px with a 5px gap', () => {
+  it('the back link is 12.5px with a 5px gap', () => {
     mount()
     const back = screen.getByText('All connectors', { exact: false }).closest('button') as HTMLButtonElement
     expect(back.style.fontSize).toBe('12.5px')
     expect(back.style.gap).toBe('5px')
-    const svg = back.querySelector('svg') as SVGElement
+  })
+
+  it('the back link glyph is the 15px chevron-left', () => {
+    mount()
+    const svg = screen.getByText('All connectors', { exact: false }).closest('button')!.querySelector('svg') as SVGElement
     expect(svg.getAttribute('width')).toBe('15')
     expect(svg.querySelector('path')?.getAttribute('d')).toBe('M15 18l-6-6 6-6')
   })

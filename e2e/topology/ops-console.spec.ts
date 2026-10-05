@@ -7,9 +7,37 @@ import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } 
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
-const SHADOW_CARD = 'rgba(40, 83, 52, 0.21) 0px 14px 22px -16px'
-const DRAWER_LINE = 'rgb(201, 217, 214)'
-const SURFACE_RGB = [8, 47, 49] as const
+// Resolved colours, each named by its v2 token (packages/design-tokens/v2/tokens/colors.css) or its prototype read.
+const C = {
+  surface: 'rgb(8, 47, 49)', // --surface #082f31
+  surfacePanel: 'rgb(12, 60, 57)', // --surface-panel #0c3c39
+  surfacePanelBorder: 'rgb(22, 71, 66)', // --surface-panel-border #164742
+  surfaceForeground: 'rgb(247, 246, 237)', // --surface-foreground #f7f6ed
+  accent: 'rgb(245, 188, 136)', // --accent #f5bc88 (peach)
+  primary: 'rgb(7, 60, 61)', // --primary #073c3d
+  white: 'rgb(255, 255, 255)', // --card / --primary-foreground / --destructive-foreground #fff
+  background: 'rgb(250, 248, 242)', // --background #faf8f2
+  sage: 'rgb(231, 236, 223)', // --sage #e7ecdf
+  sageCardBorder: 'rgb(206, 218, 199)', // --sage-card-border #cedac7
+  border: 'rgb(220, 231, 228)', // --border #dce7e4
+  input: 'rgb(201, 217, 214)', // --input #c9d9d6
+  muted: 'rgb(239, 246, 244)', // --muted #eff6f4
+  ink: 'rgb(11, 48, 50)', // --ink #0b3032
+  link: 'rgb(13, 93, 76)', // --link #0d5d4c
+  destructive: 'rgb(181, 59, 59)', // --destructive #b53b3b
+  mint: 'rgb(203, 241, 221)', // --mint #cbf1dd
+  ring: 'rgb(56, 135, 126)', // --ring #38877e
+  teal300: 'rgb(159, 200, 191)', // --teal-300 #9fc8bf
+  liveDot: 'rgb(143, 220, 170)', // .asc-dark --status-green-text #8fdcaa (prototype Live dot)
+  redIcon: 'rgb(244, 176, 176)', // .asc-dark --status-red-text #f4b0b0
+  headerBg: 'rgba(250, 248, 242, 0.95)', // --header-bg
+  greenBorder: 'rgba(29, 115, 67, 0.25)', // light --status-green-border
+  primary10: 'rgba(7, 60, 61, 0.1)', // --primary-10
+  transparent: 'rgba(0, 0, 0, 0)',
+}
+const R = { sm: '4px', md: '6px', btn: '7px', lg: '10px', circle: '50%' } // --radius-sm / -md / -btn / -lg; dots and avatars
+const SHADOW_CARD = 'rgba(40, 83, 52, 0.21) 0px 14px 22px -16px' // --shadow-card
+const SURFACE_RGB = [8, 47, 49] as const // --surface channels; scrims are colour-mixes of it
 
 const firstFamily = (raw: string): string => raw.split(',')[0].replace(/["']/g, '').trim()
 
@@ -220,9 +248,9 @@ async function open(page: Page, key: string): Promise<Screen> {
 async function readDrawer(page: Page, drawer: Locator): Promise<Record<string, unknown>> {
   await settle(page, drawer)
   const panel = await check(drawer, 'drawer', {
-    'background-color': 'rgb(250, 248, 242)', // --bg-1 on the v2 ground (prototype drawer)
+    'background-color': C.background, // --bg-1 on the v2 ground (prototype drawer)
     'border-left-width': '1px',
-    'border-left-color': DRAWER_LINE,
+    'border-left-color': C.input,
     'box-shadow': 'none',
   })
   const box = await drawer.boundingBox()
@@ -233,7 +261,7 @@ async function readDrawer(page: Page, drawer: Locator): Promise<Record<string, u
   const s = await styles(scrim, ['background-color', 'backdrop-filter'])
   const c = parseColor(s['background-color'])
   SURFACE_RGB.forEach((v, i) => expect(Math.abs([c.r, c.g, c.b][i] - v), `drawer scrim channel ${i}`).toBeLessThanOrEqual(1))
-  expect(Math.abs(c.a - 0.32), 'drawer scrim alpha').toBeLessThanOrEqual(0.01)
+  expect(Math.abs(c.a - 0.32), 'drawer scrim alpha').toBeLessThanOrEqual(0.01) // P-26
   expect(s['backdrop-filter'], 'drawer scrim backdrop-filter').toBe('none')
   return { panel, scrim: s }
 }
@@ -256,14 +284,14 @@ test('OPS-01 shell at 1440: aside, header, env switch, banner', async ({ page },
 
   const className = await aside(page).getAttribute('class')
   expect(className, 'aside scope class').toContain('asc-dark')
-  measured.aside = await check(aside(page), 'aside', { 'background-color': 'rgb(8, 47, 49)', 'border-right-color': 'rgb(22, 71, 66)' })
+  measured.aside = await check(aside(page), 'aside', { 'background-color': C.surface, 'border-right-color': C.surfacePanelBorder })
 
   const active = navButton(page, /^Overview/)
   await expect(active, 'the default view is Overview, so its row is the active one (weight 600)').toHaveCSS('font-weight', '600')
-  measured.activeRow = await check(active, 'active nav row', { 'background-color': 'rgb(12, 60, 57)' })
-  await corners(active, 'active nav row', '6px')
-  await check(active.locator('> span').nth(0), 'active nav bar', { 'background-color': 'rgb(245, 188, 136)' })
-  await check(active.locator('> span').nth(1), 'active nav icon', { color: 'rgb(245, 188, 136)' })
+  measured.activeRow = await check(active, 'active nav row', { 'background-color': C.surfacePanel })
+  await corners(active, 'active nav row', R.md)
+  await check(active.locator('> span').nth(0), 'active nav bar', { 'background-color': C.accent })
+  await check(active.locator('> span').nth(1), 'active nav icon', { color: C.accent })
 
   const eyebrow = await resolveColor(aside(page), '--eyebrow-on-dark')
   await check(aside(page).getByText('Console', { exact: true }), 'Console label', { color: eyebrow })
@@ -286,13 +314,13 @@ test('OPS-01 shell at 1440: aside, header, env switch, banner', async ({ page },
   const src = await mark.evaluate((el) => (el as HTMLImageElement).currentSrc)
   expect(src, 'brand mark is the v2 mark').toMatch(/\/mark(-[\w-]+)?\.png/)
   expect(src, 'brand mark is not the v1 logo-mark').not.toContain('logo-mark')
-  await corners(mark, 'brand mark', '0px')
+  await corners(mark, 'brand mark', '0px') // the raster carries its own corners (P-26)
 
-  await corners(navButton(page, /^Submissions/).locator('span.mono'), 'Submissions nav badge', '4px')
-  await corners(aside(page).getByText('AO', { exact: true }), 'avatar', '50%')
-  await corners(aside(page).getByRole('button', { name: 'Sign out' }), 'Sign out', '7px')
+  await corners(navButton(page, /^Submissions/).locator('span.mono'), 'Submissions nav badge', R.sm)
+  await corners(aside(page).getByText('AO', { exact: true }), 'avatar', R.circle)
+  await corners(aside(page).getByRole('button', { name: 'Sign out' }), 'Sign out', R.btn)
 
-  measured.header = await check(header(page), 'main header', { 'background-color': 'rgba(250, 248, 242, 0.95)', 'backdrop-filter': 'blur(18px)' })
+  measured.header = await check(header(page), 'main header', { 'background-color': C.headerBg, 'backdrop-filter': 'blur(18px)' }) // --header-blur 18px
 
   const track = envTrack(page)
   const amberBorder = await resolveColor(page.locator('main'), '--status-amber-border')
@@ -300,23 +328,23 @@ test('OPS-01 shell at 1440: aside, header, env switch, banner', async ({ page },
   const amberText = await resolveColor(page.locator('main'), '--status-amber-text')
   const greenText = await resolveColor(page.locator('main'), '--status-green-text')
   for (const [name, v] of Object.entries({ amberBorder, amberBg, amberText, greenText })) {
-    expect(v, `control: resolved ${name} is not transparent`).not.toBe('rgba(0, 0, 0, 0)')
+    expect(v, `control: resolved ${name} is not transparent`).not.toBe(C.transparent)
   }
-  measured.track = await check(track, 'env track', { 'background-color': 'rgb(231, 236, 223)', 'column-gap': '2px', 'border-top-color': amberBorder })
-  await corners(track, 'env track', '7px')
+  measured.track = await check(track, 'env track', { 'background-color': C.sage, 'column-gap': '2px', 'border-top-color': amberBorder }) // gap: D-12
+  await corners(track, 'env track', R.btn)
 
   const sandbox = header(page).getByRole('button', { name: 'SANDBOX', exact: true })
   const live = header(page).getByRole('button', { name: 'LIVE', exact: true })
   measured.sandbox = await check(sandbox, 'SANDBOX segment', {
-    'background-color': 'rgb(7, 60, 61)',
-    color: 'rgb(255, 255, 255)',
-    height: '28px',
-    'padding-left': '13px',
+    'background-color': C.primary,
+    color: C.white,
+    height: '28px', // D-12 / D-35
+    'padding-left': '13px', // D-12 / D-35
   })
-  await corners(sandbox, 'SANDBOX segment', '4px')
-  await check(sandbox.locator('> span').first(), 'SANDBOX dot', { 'background-color': 'rgb(245, 188, 136)' })
-  await corners(sandbox.locator('> span').first(), 'SANDBOX dot', '50%')
-  await check(live, 'LIVE segment (idle)', { 'background-color': 'rgba(0, 0, 0, 0)' })
+  await corners(sandbox, 'SANDBOX segment', R.sm)
+  await check(sandbox.locator('> span').first(), 'SANDBOX dot', { 'background-color': C.accent })
+  await corners(sandbox.locator('> span').first(), 'SANDBOX dot', R.circle)
+  await check(live, 'LIVE segment (idle)', { 'background-color': C.transparent })
   await check(live.locator('> span').first(), 'LIVE dot (idle)', { 'background-color': greenText })
 
   const bn = banner(page)
@@ -371,8 +399,8 @@ test('OPS-01 org switcher: menu look and placement', async ({ page }, testInfo) 
   await expect(menu, 'the org menu never opened').toBeVisible()
   await settle(page, menu)
   expect(await menu.getAttribute('class'), 'menu scope class').toContain('asc-light')
-  const look = await check(menu, 'org menu', { 'background-color': 'rgb(255, 255, 255)', 'box-shadow': SHADOW_CARD })
-  await corners(menu, 'org menu', '6px')
+  const look = await check(menu, 'org menu', { 'background-color': C.white, 'box-shadow': SHADOW_CARD })
+  await corners(menu, 'org menu', R.md)
 
   const r = await boxes(page, { button, menu })
   expect(Math.abs(r.menu.x - r.button.x), 'menu left edge equals the button').toBeLessThanOrEqual(1)
@@ -401,12 +429,12 @@ test('OPS-02 Live environment: switch, track and banner', async ({ page }, testI
   await settle(page, header(page), banner(page))
   const amberText = await resolveColor(page.locator('main'), '--status-amber-text')
 
-  await check(live, 'LIVE segment (active)', { 'background-color': 'rgb(7, 60, 61)' })
-  await check(live.locator('> span').first(), 'LIVE dot (active)', { 'background-color': 'rgb(143, 220, 170)' })
+  await check(live, 'LIVE segment (active)', { 'background-color': C.primary })
+  await check(live.locator('> span').first(), 'LIVE dot (active)', { 'background-color': C.liveDot })
   await check(sandbox.locator('> span').first(), 'SANDBOX dot (idle) equals --status-amber-text', { 'background-color': amberText })
-  await check(envTrack(page), 'Live track', { 'border-top-color': 'rgba(29, 115, 67, 0.25)' })
-  await check(banner(page), 'Live banner', { 'background-color': 'rgba(7, 60, 61, 0.1)', 'border-bottom-color': 'rgb(203, 241, 221)' })
-  await check(banner(page).locator('> span').nth(1), 'Live banner message', { color: 'rgb(7, 60, 61)' })
+  await check(envTrack(page), 'Live track', { 'border-top-color': C.greenBorder })
+  await check(banner(page), 'Live banner', { 'background-color': C.primary10, 'border-bottom-color': C.mint })
+  await check(banner(page).locator('> span').nth(1), 'Live banner message', { color: C.primary })
 
   await attachShot(page, testInfo, 'live-env')
   expect(errors, errorsOf(errors)).toEqual([])
@@ -421,6 +449,7 @@ async function titles(ctx: Ctx, names: string[], size: '16px' | '14px'): Promise
   for (const name of names) {
     const t = pad(ctx.page).getByText(name, { exact: true })
     await expect(t, `title ${name} never drew`).toHaveCount(1)
+    // 16px card titles: P-24, -0.02em; 14px panel titles: no tracking
     await font(t, `title ${name}`, { family: 'Manrope', weight: '700', size, ...(size === '16px' ? { spacing: '-0.32px' } : {}) })
     await check(t, `title ${name}`, { color: ctx.ink })
   }
@@ -431,27 +460,27 @@ const SCREEN_TESTS: Record<string, (ctx: Ctx) => Promise<void>> = {
     const cards = page.locator('.ops-kpi-strip > div')
     await expect(cards, 'the KPI strip draws six cards').toHaveCount(6)
     for (const [i, card] of (await cards.all()).entries()) {
-      await corners(card, `KPI ${i}`, '6px')
+      await corners(card, `KPI ${i}`, R.md)
       await check(card, `KPI ${i}`, {
         'border-top-width': '1px',
         'border-top-style': 'solid',
-        'border-top-color': 'rgb(220, 231, 228)',
+        'border-top-color': C.border,
         'box-shadow': 'none',
-        'background-color': 'rgb(255, 255, 255)',
-        'min-height': '124px',
+        'background-color': C.white,
+        'min-height': '124px', // D-12
       })
-      await font(card.locator('.money').first(), `KPI ${i} figure`, { family: 'Manrope', weight: '700', size: '24px' })
+      await font(card.locator('.money').first(), `KPI ${i} figure`, { family: 'Manrope', weight: '700', size: '24px' }) // P-25
       await check(card.locator('.money').first(), `KPI ${i} figure`, { 'font-variant-numeric': 'tabular-nums' })
       await check(card.locator('span.mono').first(), `KPI ${i} delta`, { 'font-weight': '600' })
     }
 
     const track = page.getByRole('button', { name: '30D', exact: true }).locator('xpath=..')
-    await check(track, 'range track', { 'background-color': 'rgb(231, 236, 223)', 'border-top-color': 'rgb(206, 218, 199)', 'column-gap': '2px' })
-    await corners(track, 'range track', '7px')
+    await check(track, 'range track', { 'background-color': C.sage, 'border-top-color': C.sageCardBorder, 'column-gap': '2px' }) // gap: D-12
+    await corners(track, 'range track', R.btn)
     const segs = track.locator('button')
     await expect(segs, 'the range track draws three buttons').toHaveCount(3)
-    for (const [i, b] of (await segs.all()).entries()) await corners(b, `range button ${i}`, '4px')
-    await check(page.getByRole('button', { name: '30D', exact: true }), 'active range button', { 'background-color': 'rgb(7, 60, 61)' })
+    for (const [i, b] of (await segs.all()).entries()) await corners(b, `range button ${i}`, R.sm)
+    await check(page.getByRole('button', { name: '30D', exact: true }), 'active range button', { 'background-color': C.primary })
 
     const fg4 = await resolveColor(pad(page), '--fg-4')
     expect(fg3, 'control: --fg-3 differs from --fg-4').not.toBe(fg4)
@@ -459,12 +488,12 @@ const SCREEN_TESTS: Record<string, (ctx: Ctx) => Promise<void>> = {
     for (const [i, l] of (await every(axis, 'axis labels', 2)).entries()) await check(l, `axis label ${i}`, { color: fg3 })
     for (const t of ['30d ago', 'today']) await check(pad(page).getByText(t, { exact: true }), `latency label ${t}`, { color: fg3 })
 
-    for (const t of ['API requests over time', 'Submission outcomes']) await check(pad(page).getByText(t, { exact: true }), `title ${t}`, { 'margin-bottom': '4px' })
+    for (const t of ['API requests over time', 'Submission outcomes']) await check(pad(page).getByText(t, { exact: true }), `title ${t}`, { 'margin-bottom': '4px' }) // P-28
     await titles({ page, measured, fg3, ink }, ['API requests over time', 'Spend over time', 'Submission outcomes', 'Top rejection reasons', 'Clearance latency'], '16px')
-    await corners(pad(page).getByText('ELEVATED', { exact: true }).locator('xpath=preceding-sibling::span[1]'), 'ELEVATED dot', '50%')
+    await corners(pad(page).getByText('ELEVATED', { exact: true }).locator('xpath=preceding-sibling::span[1]'), 'ELEVATED dot', R.circle)
     const barTrack = pad(page).getByText('Invalid buyer TIN', { exact: true }).locator('xpath=../following-sibling::div[1]')
-    await corners(barTrack, 'rejection bar track', '2px')
-    await corners(barTrack.locator('> div'), 'rejection bar fill', '0px')
+    await corners(barTrack, 'rejection bar track', '2px') // P-28
+    await corners(barTrack.locator('> div'), 'rejection bar fill', '0px') // P-28
 
     measured.widths = await atWidths(page, 'OPS-03 overview layout', async () => {
       const kpis = await boxList(page, cards, 'KPI card', 6)
@@ -500,21 +529,21 @@ const SCREEN_TESTS: Record<string, (ctx: Ctx) => Promise<void>> = {
   async submissions({ page, measured, fg3 }) {
     const tiles = page.locator('.ops-sub-stats > div')
     for (const [i, t] of (await every(tiles, 'sub-stat tiles', 1)).entries()) {
-      await corners(t, `sub-stat ${i}`, '6px')
+      await corners(t, `sub-stat ${i}`, R.md)
       await check(t, `sub-stat ${i}`, { 'box-shadow': 'none' })
-      await font(t.locator('.money'), `sub-stat ${i} figure`, { family: 'Manrope', weight: '700', size: '20px' })
+      await font(t.locator('.money'), `sub-stat ${i} figure`, { family: 'Manrope', weight: '700', size: '20px' }) // P-25
     }
     const chips = page.locator('button.ops-chip')
-    for (const [i, c] of (await every(chips, 'filter chips', 2)).entries()) await corners(c, `chip ${i}`, '4px')
+    for (const [i, c] of (await every(chips, 'filter chips', 2)).entries()) await corners(c, `chip ${i}`, R.sm)
     const row = firstRow(page)
     await expect(row, 'Submissions drew no job row').toBeVisible()
     const pill = row.locator('> span').nth(3).locator('> span')
-    await corners(pill, 'state pill', '4px')
-    await corners(pill.locator('> span').first(), 'state pill dot', '50%')
-    await check(page.locator('.ops-jobs-table:not(.ops-row)'), 'table head row', { 'background-color': 'rgb(239, 246, 244)' })
+    await corners(pill, 'state pill', R.sm)
+    await corners(pill.locator('> span').first(), 'state pill dot', R.circle)
+    await check(page.locator('.ops-jobs-table:not(.ops-row)'), 'table head row', { 'background-color': C.muted })
     const redrive = page.getByRole('button', { name: /Re-drive all/ })
     await expect(redrive, 'the dead-letter callout draws no Re-drive all').toBeVisible()
-    await check(redrive, 'Re-drive all', { 'background-color': 'rgb(181, 59, 59)', color: 'rgb(255, 255, 255)' })
+    await check(redrive, 'Re-drive all', { 'background-color': C.destructive, color: C.white })
 
     measured.widths = await atWidths(page, 'OPS-03 submissions layout', async () => {
       const t = await boxList(page, tiles, 'sub-stat tile', 4)
@@ -525,9 +554,16 @@ const SCREEN_TESTS: Record<string, (ctx: Ctx) => Promise<void>> = {
 
     const input = page.locator('input.ops-input')
     await input.focus()
-    // The input has a 120 ms border and shadow transition.
-    await expect.poll(async () => (await styles(input, ['border-top-color']))['border-top-color'], { message: 'focused input border colour' }).toBe('rgb(56, 135, 126)')
-    expect((await styles(input, ['box-shadow']))['box-shadow'], 'focused input shadow').toContain('rgb(56, 135, 126)')
+    // Border and shadow each run a 120 ms transition, so both are polled in one read.
+    await expect
+      .poll(
+        async () => {
+          const s = await styles(input, ['border-top-color', 'box-shadow'])
+          return { border: s['border-top-color'], ringShadow: s['box-shadow'].includes(C.ring) }
+        },
+        { message: 'focused input border colour and ring shadow' },
+      )
+      .toEqual({ border: C.ring, ringShadow: true })
     await input.fill('zz-no-match')
     const empty = page.getByText(/^No submissions match/)
     await expect(empty, 'the empty state never drew').toBeVisible()
@@ -537,24 +573,24 @@ const SCREEN_TESTS: Record<string, (ctx: Ctx) => Promise<void>> = {
   async evidence({ page }) {
     const row = firstRow(page)
     await expect(row, 'Evidence drew no bundle row').toBeVisible()
-    await check(row.locator('> span').nth(1), 'IRN', { color: 'rgb(13, 93, 76)' })
-    await corners(row.locator('> span').nth(5).locator('> span'), 'bundle badge', '4px')
+    await check(row.locator('> span').nth(1), 'IRN', { color: C.link })
+    await corners(row.locator('> span').nth(5).locator('> span'), 'bundle badge', R.sm)
   },
 
   async api({ page, measured, ink, fg3 }) {
     const keys = page.locator('.ops-api-grid').first()
     const cards = keys.locator('> div')
-    for (const [i, c] of (await every(cards, 'key cards', 2)).entries()) await corners(c, `key card ${i}`, '6px')
-    for (const [i, b] of (await every(keys.getByRole('button', { name: 'Rotate' }), 'Rotate buttons', 2)).entries()) await corners(b, `Rotate ${i}`, '7px')
+    for (const [i, c] of (await every(cards, 'key cards', 2)).entries()) await corners(c, `key card ${i}`, R.md)
+    for (const [i, b] of (await every(keys.getByRole('button', { name: 'Rotate' }), 'Rotate buttons', 2)).entries()) await corners(b, `Rotate ${i}`, R.btn)
     for (const tag of ['LIVE', 'SANDBOX']) {
       const t = keys.getByText(tag, { exact: true })
       await expect(t, `key tag ${tag}`).toHaveCount(1)
-      await corners(t.locator('xpath=preceding-sibling::span[1]'), `${tag} tag dot`, '50%')
+      await corners(t.locator('xpath=preceding-sibling::span[1]'), `${tag} tag dot`, R.circle)
     }
     const active = pad(page).getByText('ACTIVE', { exact: true })
     for (const [i, a] of (await every(active, 'ACTIVE pills', 1)).entries()) {
-      await corners(a.locator('xpath=..'), `ACTIVE pill ${i}`, '4px')
-      await corners(a.locator('xpath=preceding-sibling::span[1]'), `ACTIVE dot ${i}`, '50%')
+      await corners(a.locator('xpath=..'), `ACTIVE pill ${i}`, R.sm)
+      await corners(a.locator('xpath=preceding-sibling::span[1]'), `ACTIVE dot ${i}`, R.circle)
     }
     await titles({ page, measured, fg3, ink }, ['API keys', 'Webhook endpoints'], '16px')
     await titles({ page, measured, fg3, ink }, ['Recent deliveries', 'Recent API requests'], '14px')
@@ -572,11 +608,11 @@ const SCREEN_TESTS: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
 
   async billing({ page, measured, ink, fg3 }) {
-    await font(pad(page).locator('.money', { hasText: '48,214' }).first(), 'plan usage 48,214', { family: 'Manrope', weight: '700', size: '30px' })
+    await font(pad(page).locator('.money', { hasText: '48,214' }).first(), 'plan usage 48,214', { family: 'Manrope', weight: '700', size: '30px' }) // P-25
     const kpis = pad(page).locator('.ops-billing-kpis .money')
-    for (const [i, k] of (await every(kpis, 'billing KPI figures', 3)).entries()) await font(k, `billing KPI ${i}`, { family: 'Manrope', weight: '700', size: '18px' })
-    await check(page.locator('.ops-billing-grid'), 'billing grid', { 'margin-bottom': '26px' })
-    await corners(page.locator('.ops-invoice-table').nth(1).locator('> span').nth(3).locator('> span'), 'first status pill', '4px')
+    for (const [i, k] of (await every(kpis, 'billing KPI figures', 3)).entries()) await font(k, `billing KPI ${i}`, { family: 'Manrope', weight: '700', size: '18px' }) // P-25
+    await check(page.locator('.ops-billing-grid'), 'billing grid', { 'margin-bottom': '26px' }) // D-12 / D-35
+    await corners(page.locator('.ops-invoice-table').nth(1).locator('> span').nth(3).locator('> span'), 'first status pill', R.sm)
     await titles({ page, measured, fg3, ink }, ['Itemized spend · July 2026', 'Invoices from ASComply'], '16px')
 
     measured.widths = await atWidths(page, 'OPS-03 billing layout', async () => {
@@ -591,17 +627,17 @@ const SCREEN_TESTS: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
 
   async status({ page, measured, fg3, ink }) {
-    await font(pad(page).getByText('99.98%', { exact: true }), '99.98%', { family: 'Manrope', weight: '700', size: '22px' })
+    await font(pad(page).getByText('99.98%', { exact: true }), '99.98%', { family: 'Manrope', weight: '700', size: '22px' }) // P-25
     await check(pad(page).getByText('99.98%', { exact: true }), '99.98%', { 'font-variant-numeric': 'tabular-nums' })
     const overall = pad(page).locator('> div').nth(1)
     const card = pad(page).locator('> div').nth(2)
-    await check(card, 'components card', { 'margin-bottom': '26px' })
+    await check(card, 'components card', { 'margin-bottom': '26px' }) // D-12 / D-35
     const badge = card.locator('> div').first().locator('> div').first().locator('> span').last()
-    await corners(badge, 'component badge', '4px')
-    await corners(badge.locator('> span').first(), 'component badge dot', '50%')
+    await corners(badge, 'component badge', R.sm)
+    await corners(badge.locator('> span').first(), 'component badge dot', R.circle)
     for (const [i, l] of (await every(pad(page).locator('span.mono', { hasText: /^90 days ago$/ }), '90 days ago labels', 2)).entries()) await check(l, `90 days ago ${i}`, { color: fg3 })
     for (const [i, l] of (await every(pad(page).locator('span.mono', { hasText: /uptime$/ }), 'uptime labels', 2)).entries()) await check(l, `uptime ${i}`, { color: fg3 })
-    await check(overall.locator('> span').first(), 'banner icon tile', { color: 'rgb(255, 255, 255)' })
+    await check(overall.locator('> span').first(), 'banner icon tile', { color: C.white })
     await titles({ page, measured, fg3, ink }, ['Incident history'], '16px')
 
     measured.widths = await atWidths(page, 'OPS-03 status layout', async () => {
@@ -620,8 +656,9 @@ for (const s of SCREENS) {
     await openScreen(page, s)
     const measured: Record<string, unknown> = {}
 
+    // h1: Manrope 28 / 700 / -0.04em (Q10); clearances: D-12 / D-35
     await font(h1Of(page, s), 'h1', { family: 'Manrope', weight: '700', size: '28px', spacing: '-1.12px' })
-    await check(h1Of(page, s), 'h1', { color: 'rgb(11, 48, 50)' })
+    await check(h1Of(page, s), 'h1', { color: C.ink })
     await check(pad(page), 'screen padding', { 'padding-top': '26px', 'padding-left': '28px', 'padding-right': '28px', 'padding-bottom': '56px' })
     const head = pad(page).locator('> div').first()
     await check(head, 'header row', { 'margin-bottom': '22px' })
@@ -655,13 +692,13 @@ test('OPS-04 job drawer: panel, scrim, badge, timeline, JSON', async ({ page }, 
   const measured = await readDrawer(page, drawer)
 
   const badge = drawer.locator('> div').first().locator('> div').first().locator('> div').first().locator('> span').nth(1)
-  await corners(badge, 'state badge', '4px')
-  await corners(badge.locator('> span').first(), 'state badge dot', '50%')
+  await corners(badge, 'state badge', R.sm)
+  await corners(badge.locator('> span').first(), 'state badge dot', R.circle)
   const dots = drawer.locator('span[style*="width: 11px"][style*="height: 11px"]')
-  for (const [i, d] of (await every(dots, 'timeline dots', 4)).entries()) await corners(d, `timeline dot ${i}`, '50%')
+  for (const [i, d] of (await every(dots, 'timeline dots', 4)).entries()) await corners(d, `timeline dot ${i}`, R.circle)
   const json = drawer.locator('pre.ops-json').first()
-  await corners(json, 'JSON block', '6px')
-  await check(json, 'JSON block', { 'background-color': 'rgb(8, 47, 49)' })
+  await corners(json, 'JSON block', R.md)
+  await check(json, 'JSON block', { 'background-color': C.surface })
 
   await attachJson(testInfo, 'ops-04-job-drawer', measured)
   await attachShot(page, testInfo, 'job-drawer')
@@ -683,7 +720,7 @@ test('OPS-04 red toast: Cancel draws an asc-dark toast with a red icon', async (
     .locator('xpath=..')
     .evaluate((el) => ({ cls: el.className, icon: getComputedStyle(el.firstElementChild as Element).color }))
   expect(read.cls, 'red toast scope class').toContain('asc-dark')
-  expect(read.icon, 'red toast icon colour (.asc-dark --status-red-text)').toBe('rgb(244, 176, 176)')
+  expect(read.icon, 'red toast icon colour (.asc-dark --status-red-text)').toBe(C.redIcon)
   expect(errors, errorsOf(errors)).toEqual([])
 })
 
@@ -698,9 +735,9 @@ test('OPS-04 evidence drawer: panel, scrim, QR tile', async ({ page }, testInfo)
 
   const qr = drawer.locator('svg[viewBox="0 0 64 64"]')
   const tile = qr.locator('xpath=..')
-  await check(tile, 'QR tile', { 'background-color': 'rgb(8, 47, 49)' })
-  await corners(tile, 'QR tile', '6px')
-  await check(qr.locator('rect').first(), 'QR first rect', { stroke: 'rgb(255, 255, 255)' })
+  await check(tile, 'QR tile', { 'background-color': C.surface })
+  await corners(tile, 'QR tile', R.md)
+  await check(qr.locator('rect').first(), 'QR first rect', { stroke: C.white })
 
   await attachJson(testInfo, 'ops-04-evidence-drawer', measured)
   await attachShot(page, testInfo, 'evidence-drawer')
@@ -723,11 +760,11 @@ test('OPS-04 rotate modal: panel, scrim, heading', async ({ page }, testInfo) =>
 
   const look = await check(panel, 'rotate panel', {
     'box-shadow': 'none',
-    'background-color': 'rgb(255, 255, 255)',
+    'background-color': C.white,
     'border-top-width': '1px',
-    'border-top-color': DRAWER_LINE,
+    'border-top-color': C.input,
   })
-  await corners(panel, 'rotate panel', '10px')
+  await corners(panel, 'rotate panel', R.lg)
   const box = await panel.boundingBox()
   const vp = page.viewportSize()!
   expect(box, 'rotate panel has no box').toBeTruthy()
@@ -736,9 +773,9 @@ test('OPS-04 rotate modal: panel, scrim, heading', async ({ page }, testInfo) =>
   const s = await styles(scrim, ['background-color', 'backdrop-filter'])
   const c = parseColor(s['background-color'])
   SURFACE_RGB.forEach((v, i) => expect(Math.abs([c.r, c.g, c.b][i] - v), `modal scrim channel ${i}`).toBeLessThanOrEqual(1))
-  expect(Math.abs(c.a - 0.55), 'modal scrim alpha').toBeLessThanOrEqual(0.01)
-  expect(s['backdrop-filter'], 'modal scrim backdrop-filter').toBe('blur(6px)')
-  await font(h3, 'rotate heading', { family: 'Manrope', weight: '700', size: '18px' })
+  expect(Math.abs(c.a - 0.55), 'modal scrim alpha').toBeLessThanOrEqual(0.01) // P-26
+  expect(s['backdrop-filter'], 'modal scrim backdrop-filter').toBe('blur(6px)') // P-26
+  await font(h3, 'rotate heading', { family: 'Manrope', weight: '700', size: '18px' }) // P-26
 
   await attachJson(testInfo, 'ops-04-rotate-modal', { look, scrim: s })
   await attachShot(page, testInfo, 'rotate-modal')
@@ -771,15 +808,16 @@ test('OPS-04 toast: the Rotate-key toast on --surface with the card shadow', asy
     }
   })
   expect(read.cls, 'toast scope class').toContain('asc-dark')
-  expect(read.background, 'toast background (--surface)').toBe('rgb(8, 47, 49)')
-  expect(read.color, 'toast text (--surface-foreground)').toBe('rgb(247, 246, 237)')
-  expect(read.radii, 'toast corners').toEqual(Array(4).fill('6px'))
+  expect(read.background, 'toast background (--surface)').toBe(C.surface)
+  expect(read.color, 'toast text (--surface-foreground)').toBe(C.surfaceForeground)
+  expect(read.radii, 'toast corners').toEqual(Array(4).fill(R.md))
   expect(read.shadow, 'toast shadow (--shadow-card)').toBe(SHADOW_CARD)
-  expect(read.icon, 'toast ok icon (--teal-300)').toBe('rgb(159, 200, 191)')
+  expect(read.icon, 'toast ok icon (--teal-300)').toBe(C.teal300)
 
-  // The screenshot comes last; a toast that already cleared is raised again, and never re-read.
+  // The screenshot comes last, after the 200 ms rise; a toast that already cleared is raised again, and never re-read.
   if (!(await msg.isVisible())) await rotate()
   await expect(msg, 'the toast did not draw for the screenshot').toBeVisible()
+  await settle(page, msg.locator('xpath=..'))
   await attachJson(testInfo, 'ops-04-toast', read)
   await attachShot(page, testInfo, 'toast')
   expect(errors, errorsOf(errors)).toEqual([])

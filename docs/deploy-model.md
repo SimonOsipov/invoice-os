@@ -109,6 +109,12 @@ PR opened ──> dev-env.yml:
                 ──> `fleet-gate` job: fleet /healthz/fleet gate + its Sentry
                     state check: every Go service and docling report sentry "off"
                     + notifications reports `contacts: fake`
+                    + "Gate on the account-mail templates" (PR and push, not
+                    dispatch): `railway-env.sh check-mail-templates <environment_id>`
+                    with `RAILWAY_API_TOKEN`, after "Wait for the auth deployment"
+                    and an `actions/setup-go` step; reads auth's variables unrendered
+                    + "Gate on the account-mail logo" (push only):
+                    `go run ./tools/prenv mail-logo-check`
                 ──> verify, `e2e` job: smoke (landing + both consoles) + api
                 ──> verify, `topology` job: one parallel leg per unit (serial-lane,
                     import-wizard, invoice-surfaces; app login, cross-tenant
@@ -519,6 +525,18 @@ A service outside the table has no later check, so a lost poll fails the step.
 status is its verdict. `deploy-context` publishes the auth deployment id as a job output;
 `fleet-gate` polls that deployment (`SUCCESS` or `SLEEPING` passes; `FAILED`, `CRASHED`,
 `REMOVED`, `REMOVING` or `SKIPPED` fails). An empty or malformed id fails before any call.
+
+**Account-mail gates.** After "Wait for the auth deployment" and an `actions/setup-go` step,
+`fleet-gate` has two more steps. "Gate on the account-mail templates" runs
+`railway-env.sh check-mail-templates <environment_id>` with `RAILWAY_API_TOKEN` on PR and
+push, not `workflow_dispatch` (its project token cannot read variables). It loads every
+non-empty `GOTRUE_MAILER_TEMPLATES_*` of that environment's `auth` through
+`prenv mail-template-check`, reading variables unrendered, so a Railway reference in a
+template URL is fetched literally and fails; it also fails when `GOTRUE_SITE_URL` is absent
+from `auth`'s variables. "Gate on the account-mail logo" runs
+`go run ./tools/prenv mail-logo-check` on push only, because production serves the logo only
+after a push deploy. See [identity-provider.md](./identity-provider.md) "Branding the account
+mails in production".
 
 **`spa-build-gate`.** On push and dispatch `e2e` does not run, so this job runs
 `scripts/ci/wait-spa-builds.sh` against the four SPA URLs. Each must serve `/health` and a

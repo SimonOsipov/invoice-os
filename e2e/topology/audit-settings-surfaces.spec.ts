@@ -186,6 +186,15 @@ function inside(rects: Record<string, Rect>, outer: string, names: string[], pro
   for (const n of names) if (rects[outer] && rects[n] && !enclosesRect(rects[outer], rects[n], slack)) problems.push(`${n} sticks out of ${outer}`)
 }
 
+// Horizontal containment only: `outer` is a column band whose height is not the content's (a tab strip, a scrolling main).
+function insideX(rects: Record<string, Rect>, outer: string, names: string[], problems: string[], slack = 1): void {
+  const o = rects[outer]
+  for (const n of names) {
+    const r = rects[n]
+    if (o && r && (r.x < o.x - slack || r.x + r.width > o.x + o.width + slack)) problems.push(`${n} sticks out of ${outer} sideways`)
+  }
+}
+
 // Runs `read` at every WIDE_WIDTHS width, polling until it reports no problem; restores the entry viewport.
 async function sweep(
   page: Page,
@@ -676,12 +685,13 @@ test('AE-09 the first five audit rows stay one line tall at every wide width', a
       }
       heights.push(box.height)
       for (const cell of ['audit-what', 'audit-company']) {
-        const lines = await row.getByTestId(cell).evaluate((el) => {
+        // Distinct line tops, not rect count: an ellipsised line reports its full and its clipped fragment at one top.
+        const tops = await row.getByTestId(cell).evaluate((el) => {
           const range = document.createRange()
           range.selectNodeContents(el)
-          return range.getClientRects().length
+          return [...new Set([...range.getClientRects()].map((r) => Math.round(r.top)))]
         })
-        if (lines !== 1) problems.push(`row ${i} ${cell} wraps onto ${lines} client rects`)
+        if (tops.length !== 1) problems.push(`row ${i} ${cell} sits on ${tops.length} lines`)
       }
     }
     if (heights.length && Math.max(...heights) - Math.min(...heights) > 1) problems.push(`row heights differ: ${heights.join(', ')}`)
@@ -844,8 +854,11 @@ test('ST-02 the Members toolbar shares one row inside the tab column at every wi
   const measured = await sweep(page, 'Members toolbar', async () => {
     await settle(page, main(page))
     const { rects, problems } = await boxes({ strip, search, roleFilter, invite, reason })
-    inside(rects, 'strip', ['search', 'roleFilter', 'invite'], problems)
+    insideX(rects, 'strip', ['search', 'roleFilter', 'invite'], problems)
     noOverlap(rects, ['search', 'roleFilter', 'invite'], problems)
+    for (const n of ['search', 'roleFilter', 'invite']) {
+      if (rects.strip && rects[n] && rects[n].y < rects.strip.y + rects.strip.height - 1) problems.push(`${n} sits above the tab strip's bottom edge`)
+    }
     const names = ['search', 'roleFilter', 'invite']
     const centres = names.filter((n) => rects[n]).map((n) => rects[n].y + rects[n].height / 2)
     if (centres.length && Math.max(...centres) - Math.min(...centres) > 2) problems.push(`the toolbar spans more than one row: ${centres.join(', ')}`)
@@ -931,8 +944,12 @@ test('ST-04 Settings › Roles: card, avatars, holder spacing, role modal, picke
   expect(focus.check, 'Tab from the search box did not reach a picker checkbox').toBe(true)
   const ring = await resolveColor(modal, '--ring')
   expect(focus.shadow, 'keyboard focus ring').toBe(`${ring} 0px 0px 0px 2px`)
-  const checkbox = modal.locator('input.pf-check').first()
+  // A different box from the keyboard-focused one: re-clicking a box that already matches :focus-visible keeps the ring.
+  const checkboxes = modal.locator('input.pf-check')
+  expect(await checkboxes.count(), 'the picker needs two members to separate keyboard from mouse focus').toBeGreaterThanOrEqual(2)
+  const checkbox = checkboxes.nth(1)
   await checkbox.click()
+  expect(await checkbox.evaluate((el) => el === document.activeElement), 'the mouse click did not focus the checkbox').toBe(true)
   const afterClick = await checkbox.evaluate((el) => getComputedStyle(el.nextElementSibling as Element).boxShadow)
   expect(afterClick, 'a mouse click draws no focus ring').toBe('none')
 
@@ -1235,7 +1252,8 @@ test('ST-12 connector detail: five cards, 6px, flat, inside main and clear of ea
     named[h] = card
   }
   const { rects, problems } = await boxes({ main: main(page), ...named })
-  inside(rects, 'main', headings, problems)
+  // main scrolls, so cards below the fold lie outside its visible rect by design; only the horizontal band is a claim.
+  insideX(rects, 'main', headings, problems)
   noOverlap(rects, headings, problems)
   expect(problems, 'connector detail card placement').toEqual([])
   await attachJson(testInfo, 'st-12-measurements', { segments, paint, rects })

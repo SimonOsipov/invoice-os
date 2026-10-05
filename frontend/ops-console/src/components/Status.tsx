@@ -28,12 +28,12 @@ export function Status() {
   return (
     <div className="ops-screen-pad">
       {/* header (proto:530-536) */}
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 22 }}>
         <div>
-          <div className="eyebrow" style={{ marginBottom: 8 }}>
+          <div className="eyebrow" style={{ marginBottom: 10 }}>
             06 — API STATUS
           </div>
-          <h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-0.03em', margin: 0 }}>API status</h1>
+          <h1 style={{ fontSize: 28, letterSpacing: '-0.04em', margin: 0 }}>API status</h1>
         </div>
         <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)', letterSpacing: '0.05em' }}>
           LIVE · REFRESHED {UPDATED_AGO}
@@ -60,7 +60,7 @@ export function Status() {
             height: 40,
             borderRadius: 'var(--radius-md)',
             background: 'var(--status-amber-text)',
-            color: 'var(--text-on-dark)',
+            color: 'var(--primary-foreground)',
             display: 'grid',
             placeItems: 'center',
           }}
@@ -68,15 +68,15 @@ export function Status() {
           {ALERT_ICON}
         </span>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--status-amber-text)' }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--status-amber-text)' }}>
             Partial degradation — tax-authority latency elevated
           </div>
-          <div className="mono" style={{ fontSize: 11, color: 'var(--status-amber-text)', opacity: 0.85, marginTop: 2 }}>
+          <div className="mono" style={{ fontSize: 11, color: 'var(--status-amber-text)', marginTop: 2 }}>
             5 of 6 components operational · clearance times above target
           </div>
         </div>
         <div style={{ textAlign: 'right' }}>
-          <div className="mono" style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--status-amber-text)' }}>
+          <div className="money" style={{ fontSize: 22, fontWeight: 700, color: 'var(--status-amber-text)' }}>
             99.98%
           </div>
           <div className="label" style={{ marginTop: 2, color: 'var(--status-amber-text)' }}>
@@ -86,7 +86,7 @@ export function Status() {
       </div>
 
       {/* components (proto:549-563) */}
-      <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', overflow: 'hidden', marginBottom: 24 }}>
+      <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', overflow: 'hidden', marginBottom: 26 }}>
         {STATUS_COMPONENTS.map((c) => {
           const tone = STATUS_TONE[c.tone]
           return (
@@ -105,11 +105,11 @@ export function Status() {
                     gap: 6,
                     background: tone.bg,
                     border: '1px solid ' + tone.border,
-                    borderRadius: 999,
-                    padding: '3px 10px',
+                    borderRadius: 'var(--radius-sm)',
+                    padding: '3px 8px',
                   }}
                 >
-                  <span style={{ width: 7, height: 7, borderRadius: 99, background: tone.text }} />
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: tone.text }} />
                   <span className="mono" style={{ fontSize: 9.5, fontWeight: 700, color: tone.text, letterSpacing: '0.04em' }}>
                     {c.status}
                   </span>
@@ -130,10 +130,10 @@ export function Status() {
                 ))}
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6 }}>
-                <span className="mono" style={{ fontSize: 9.5, color: 'var(--fg-4)' }}>
+                <span className="mono" style={{ fontSize: 9.5, color: 'var(--fg-3)' }}>
                   90 days ago
                 </span>
-                <span className="mono" style={{ fontSize: 9.5, color: 'var(--fg-4)' }}>
+                <span className="mono" style={{ fontSize: 9.5, color: 'var(--fg-3)' }}>
                   {c.uptime} uptime
                 </span>
               </div>
@@ -143,7 +143,7 @@ export function Status() {
       </div>
 
       {/* incident history (proto:566-577) */}
-      <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>Incident history</div>
+      <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--ink)', marginBottom: 12 }}>Incident history</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
         {INCIDENTS.map((inc) => {
           const tone = STATUS_TONE[inc.tone]
@@ -174,7 +174,7 @@ export function Status() {
                     {inc.status}
                   </span>
                 </div>
-                <div style={{ fontSize: 12.5, color: 'var(--fg-2)', lineHeight: 1.5 }}>{inc.detail}</div>
+                <div style={{ fontSize: 13, color: 'var(--fg-2)', lineHeight: 1.55 }}>{inc.detail}</div>
               </div>
             </div>
           )

@@ -146,12 +146,12 @@ export function Overview({ range, onRangeChange }: Props) {
 
   return (
     <div className="ops-screen-pad">
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 20, gap: 24 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 22, gap: 24 }}>
         <div>
-          <div className="eyebrow" style={{ marginBottom: 8 }}>
+          <div className="eyebrow" style={{ marginBottom: 10 }}>
             01 — INTEGRATION HEALTH
           </div>
-          <h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-0.03em', margin: 0 }}>Overview</h1>
+          <h1 style={{ fontSize: 28, letterSpacing: '-0.04em', margin: 0 }}>Overview</h1>
         </div>
         <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)', letterSpacing: '0.05em' }}>
           {periodLabel} · UPDATED {UPDATED_AGO}
@@ -164,18 +164,18 @@ export function Overview({ range, onRangeChange }: Props) {
         {KPIS.map((k) => (
           <div
             key={k.label}
-            style={{ border: '1px solid var(--line-1)', background: 'var(--bg-2)', borderRadius: 'var(--radius-md)', padding: '14px 15px', display: 'flex', flexDirection: 'column', minHeight: 122 }}
+            style={{ border: '1px solid var(--line-1)', background: 'var(--bg-2)', borderRadius: 'var(--radius-md)', padding: '14px 15px', display: 'flex', flexDirection: 'column', minHeight: 124 }}
           >
             <div className="label" style={{ lineHeight: 1.3, marginBottom: 9, minHeight: 24 }}>
               {k.label}
             </div>
-            <div className="mono" style={{ fontSize: 23, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--fg-1)', lineHeight: 1 }}>
+            <div className="money" style={{ fontSize: 24, fontWeight: 700, color: 'var(--ink)', lineHeight: 1 }}>
               {k.value}
             </div>
             <div style={{ marginTop: 7, display: 'flex', alignItems: 'center', gap: 5 }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, color: k.deltaColor }}>
                 {k.deltaGlyph}
-                <span className="mono" style={{ fontSize: 11, fontWeight: 700 }}>
+                <span className="mono" style={{ fontSize: 11, fontWeight: 600 }}>
                   {k.delta}
                 </span>
               </span>
@@ -198,9 +198,9 @@ export function Overview({ range, onRangeChange }: Props) {
       <div style={{ ...CARD, padding: '18px 20px 14px', marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 14 }}>
           <div>
-            <div className="card-title" style={{ marginBottom: 3 }}>API requests over time</div>
+            <div className="card-title" style={{ fontSize: 16, lineHeight: 'normal', letterSpacing: '-0.02em', marginBottom: 4 }}>API requests over time</div>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-              <span className="mono" style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.02em' }}>
+              <span className="money" style={{ fontSize: 22, fontWeight: 700, color: 'var(--ink)' }}>
                 {reqTotal}
               </span>
               <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
@@ -208,7 +208,7 @@ export function Overview({ range, onRangeChange }: Props) {
               </span>
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-input)', padding: 3 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 2, background: 'var(--sage)', border: '1px solid var(--sage-card-border)', borderRadius: 'var(--radius-btn)', padding: 3 }}>
             {RANGES.map((r) => {
               const active = range === r
               return (
@@ -216,7 +216,6 @@ export function Overview({ range, onRangeChange }: Props) {
                   key={r}
                   type="button"
                   onClick={() => onRangeChange(r)}
-                  className="ops-btn"
                   style={{
                     border: 0,
                     cursor: 'pointer',
@@ -227,8 +226,9 @@ export function Overview({ range, onRangeChange }: Props) {
                     fontSize: 10.5,
                     fontWeight: 700,
                     letterSpacing: '0.04em',
-                    background: active ? 'var(--bg-2)' : 'transparent',
-                    color: active ? 'var(--action)' : 'var(--fg-3)',
+                    background: active ? 'var(--primary)' : 'transparent',
+                    color: active ? 'var(--primary-foreground)' : 'var(--fg-3)',
+                    transition: 'background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), filter var(--dur-fast) var(--ease-out)',
                   }}
                 >
                   {r.toUpperCase()}
@@ -247,7 +247,7 @@ export function Overview({ range, onRangeChange }: Props) {
         </svg>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
           {reqAxis.map((a, i) => (
-            <span key={i} className="mono" style={{ fontSize: 10, color: 'var(--fg-4)' }}>
+            <span key={i} className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>
               {a}
             </span>
           ))}
@@ -257,15 +257,15 @@ export function Overview({ range, onRangeChange }: Props) {
       {/* SPEND + OUTCOMES — prototype 170–214 */}
       <div className="ops-overview-grid" style={{ display: 'grid', gridTemplateColumns: '1.15fr 1fr', gap: 16, marginBottom: 16 }}>
         <div style={{ ...CARD, padding: '18px 20px 16px' }}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 4 }}>
-            <div className="card-title">Spend over time</div>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 6 }}>
+            <div className="card-title" style={{ fontSize: 16, lineHeight: 'normal', letterSpacing: '-0.02em' }}>Spend over time</div>
             <span className="mono" style={{ fontSize: 9.5, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
               ₦ FEES / DAY · JUL
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, marginBottom: 16 }}>
             <div>
-              <div className="mono" style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.02em' }}>
+              <div className="money" style={{ fontSize: 22, fontWeight: 700, color: 'var(--ink)' }}>
                 {nairaC(SPEND.mtd)}
               </div>
               <div className="label" style={{ marginTop: 2 }}>
@@ -273,7 +273,7 @@ export function Overview({ range, onRangeChange }: Props) {
               </div>
             </div>
             <div>
-              <div className="mono" style={{ fontSize: 16, fontWeight: 600, color: 'var(--fg-3)' }}>
+              <div className="money" style={{ fontSize: 16, fontWeight: 600, color: 'var(--fg-3)' }}>
                 {nairaC(SPEND.proj)}
               </div>
               <div className="label" style={{ marginTop: 2 }}>
@@ -285,20 +285,19 @@ export function Overview({ range, onRangeChange }: Props) {
             {SPEND_BARS.map((b, i) => (
               <div
                 key={i}
-                className="ops-bar"
                 style={{ flex: 1, height: b.h, background: b.fill, border: b.border, borderRadius: '2px 2px 0 0', minHeight: 2 }}
               />
             ))}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginTop: 12 }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ width: 10, height: 10, borderRadius: '2', background: 'var(--action)' }} />
+              <span style={{ width: 10, height: 10, borderRadius: 2, background: 'var(--action)' }} />
               <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>
                 ACTUAL · 22 DAYS
               </span>
             </span>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ width: 10, height: 10, borderRadius: '2', background: 'var(--action-tint)', border: '1px dashed var(--action)' }} />
+              <span style={{ width: 10, height: 10, borderRadius: 2, background: 'var(--action-tint)', border: '1px dashed var(--action)' }} />
               <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>
                 PROJECTED
               </span>
@@ -309,18 +308,18 @@ export function Overview({ range, onRangeChange }: Props) {
         <div style={{ ...CARD, padding: '18px 20px 16px' }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 16 }}>
             <div>
-              <div className="card-title" style={{ marginBottom: 3 }}>Submission outcomes</div>
+              <div className="card-title" style={{ fontSize: 16, lineHeight: 'normal', letterSpacing: '-0.02em', marginBottom: 4 }}>Submission outcomes</div>
               <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
                 last 24 days · % of daily volume
               </div>
             </div>
-            <span className="mono" style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--status-green-text)' }}>
+            <span className="money" style={{ fontSize: 22, fontWeight: 700, color: 'var(--status-green-text)' }}>
               {ACCEPT_RATE}
             </span>
           </div>
           <div style={{ display: 'flex', gap: 4, height: 150, alignItems: 'stretch' }}>
             {OUTCOME_COLS.map((c, i) => (
-              <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', borderRadius: '2', overflow: 'hidden' }}>
+              <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', borderRadius: 2, overflow: 'hidden' }}>
                 {/* Stack order top→bottom is pend, fail, rej, acc (prototype 203–206) —
                     deliberately NOT the legend order. */}
                 <div style={{ height: c.pend, background: 'var(--status-amber-text)' }} />
@@ -333,7 +332,7 @@ export function Overview({ range, onRangeChange }: Props) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 12, flexWrap: 'wrap' }}>
             {OUTCOME_LEGEND.map((l) => (
               <span key={l.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ width: 9, height: 9, borderRadius: '2', background: l.color }} />
+                <span style={{ width: 9, height: 9, borderRadius: 2, background: l.color }} />
                 <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>
                   {l.label}
                 </span>
@@ -346,13 +345,13 @@ export function Overview({ range, onRangeChange }: Props) {
       {/* REJECTIONS + LATENCY — prototype 217–243 */}
       <div className="ops-overview-grid" style={{ display: 'grid', gridTemplateColumns: '1.15fr 1fr', gap: 16 }}>
         <div style={{ ...CARD, padding: '18px 20px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-            <div className="card-title">Top rejection reasons</div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+            <div className="card-title" style={{ fontSize: 16, lineHeight: 'normal', letterSpacing: '-0.02em' }}>Top rejection reasons</div>
             <span className="mono" style={{ fontSize: 9.5, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
               CAUGHT PRE-SUBMISSION
             </span>
           </div>
-          <p style={{ fontSize: 12, color: 'var(--fg-3)', margin: '0 0 16px', lineHeight: 1.5 }}>
+          <p style={{ fontSize: 12.5, color: 'var(--fg-3)', margin: '0 0 16px', lineHeight: 1.5 }}>
             Errors ASComply caught before the tax authority — protecting your acceptance rate.
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
@@ -364,8 +363,8 @@ export function Overview({ range, onRangeChange }: Props) {
                     {r.count}
                   </span>
                 </div>
-                <div style={{ height: 7, background: 'var(--bg-3)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
-                  <div className="ops-bar" style={{ width: r.width, height: '100%', background: r.color, borderRadius: 'var(--radius-sm)' }} />
+                <div style={{ height: 7, background: 'var(--bg-3)', borderRadius: 2, overflow: 'hidden' }}>
+                  <div style={{ width: r.width, height: '100%', background: r.color }} />
                 </div>
               </div>
             ))}
@@ -374,16 +373,16 @@ export function Overview({ range, onRangeChange }: Props) {
 
         <div style={{ ...CARD, padding: '18px 20px', display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-            <div className="card-title">Clearance latency</div>
+            <div className="card-title" style={{ fontSize: 16, lineHeight: 'normal', letterSpacing: '-0.02em' }}>Clearance latency</div>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-              <span style={{ width: 7, height: 7, borderRadius: 99, background: 'var(--status-amber-text)' }} />
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--status-amber-text)' }} />
               <span className="mono" style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--status-amber-text)', letterSpacing: '0.04em' }}>
                 ELEVATED
               </span>
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, margin: '10px 0 4px' }}>
-            <span className="mono" style={{ fontSize: 30, fontWeight: 700, letterSpacing: '-0.02em' }}>
+            <span className="money" style={{ fontSize: 30, fontWeight: 700, color: 'var(--ink)' }}>
               1.8
             </span>
             <span className="mono" style={{ fontSize: 13, color: 'var(--fg-3)' }}>
@@ -404,10 +403,10 @@ export function Overview({ range, onRangeChange }: Props) {
             />
           </svg>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
-            <span className="mono" style={{ fontSize: 10, color: 'var(--fg-4)' }}>
+            <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>
               30d ago
             </span>
-            <span className="mono" style={{ fontSize: 10, color: 'var(--fg-4)' }}>
+            <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>
               today
             </span>
           </div>

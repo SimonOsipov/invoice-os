@@ -24,12 +24,12 @@ export function Evidence({ query, onQueryChange, onOpen, onExportAll }: Props) {
 
   return (
     <div className="ops-screen-pad">
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 20, gap: 24 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 22, gap: 24 }}>
         <div>
-          <div className="eyebrow" style={{ marginBottom: 8 }}>
+          <div className="eyebrow" style={{ marginBottom: 10 }}>
             03 — COMPLIANCE EVIDENCE
           </div>
-          <h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-0.03em', margin: 0 }}>Compliance evidence</h1>
+          <h1 style={{ fontSize: 28, letterSpacing: '-0.04em', margin: 0 }}>Compliance evidence</h1>
         </div>
         <span
           style={{
@@ -38,8 +38,9 @@ export function Evidence({ query, onQueryChange, onOpen, onExportAll }: Props) {
             gap: 7,
             background: 'var(--status-muted-bg)',
             border: '1px solid var(--line-2)',
-            borderRadius: 'var(--radius-input)',
-            padding: '7px 12px',
+            borderRadius: 'var(--radius-sm)',
+            padding: '6px 11px',
+            color: 'var(--fg-2)',
           }}
         >
           {LOCK_ICON}
@@ -49,7 +50,7 @@ export function Evidence({ query, onQueryChange, onOpen, onExportAll }: Props) {
         </span>
       </div>
 
-      <p style={{ fontSize: 13, color: 'var(--fg-2)', margin: '0 0 16px', maxWidth: 720, lineHeight: 1.5 }}>
+      <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: '0 0 16px', maxWidth: 720, lineHeight: 1.55 }}>
         Every cleared invoice returns an evidence bundle you can export for your own records or audits. Filing to NRS/MBS switches on at
         accreditation — until then a bundle records a simulated clearance, not a tax-authority acceptance.
       </p>
@@ -66,7 +67,7 @@ export function Evidence({ query, onQueryChange, onOpen, onExportAll }: Props) {
             onChange={(e) => onQueryChange(e.target.value)}
           />
         </div>
-        <button type="button" onClick={onExportAll} className="ops-btn v2-btn v2-btn-ghost" style={{ height: 34 }}>
+        <button type="button" onClick={onExportAll} className="ops-btn v2-btn v2-btn-ghost" style={{ height: 34, padding: '0 14px', fontSize: 13 }}>
           {EXPORT_ICON} Export all
         </button>
       </div>
@@ -79,7 +80,7 @@ export function Evidence({ query, onQueryChange, onOpen, onExportAll }: Props) {
             display: 'grid',
             gridTemplateColumns: EVIDENCE_GRID,
             padding: '11px 16px',
-            background: 'var(--bg-1)',
+            background: 'var(--bg-3)',
             borderBottom: '1px solid var(--line-1)',
             minWidth: 940,
           }}
@@ -109,7 +110,7 @@ export function Evidence({ query, onQueryChange, onOpen, onExportAll }: Props) {
             <span className="mono" style={{ fontSize: 12, fontWeight: 600 }}>
               {e.invoice}
             </span>
-            <span className="mono" style={{ fontSize: 11, color: 'var(--action)' }}>
+            <span className="mono" style={{ fontSize: 11, color: 'var(--link)' }}>
               {e.irn}
             </span>
             <span style={{ fontSize: 12.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', paddingRight: 10 }}>{e.buyer}</span>
@@ -127,8 +128,9 @@ export function Evidence({ query, onQueryChange, onOpen, onExportAll }: Props) {
                   gap: 5,
                   background: 'var(--status-green-bg)',
                   border: '1px solid var(--status-green-border)',
-                  borderRadius: 999,
-                  padding: '2px 8px',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '2px 7px',
+                  color: 'var(--status-green-text)',
                 }}
               >
                 {SHIELD_ICON}

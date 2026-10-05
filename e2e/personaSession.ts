@@ -13,7 +13,6 @@ import { resolveTarget } from './targets'
 //   app     -> the green dot the sidebar's user card renders ONLY once /v1/me has resolved
 //              (Sidebar.tsx flag-off, PersonaFooter.tsx's marker row flag-on), i.e. the
 //              backend round trip completed, not just a mount.
-//              The same discriminator the four existing signInFirm copies already wait on.
 //   ops     -> the default Overview screen's h1 (ops-console/src/components/Overview.tsx:154)
 //   support -> the default Submissions ops h1 (support-console/src/components/Submissions.tsx:48)
 export const DESTINATION_READY: Record<Destination, (page: Page) => Promise<void>> = {
@@ -29,17 +28,26 @@ export const DESTINATION_READY: Record<Destination, (page: Page) => Promise<void
 }
 
 // Sign in as an app persona through the landing hand-off and wait until its destination has
-// actually drawn. The landing page is the single sign-in front door, so no deployed build
-// has a picker to click — `?persona=` IS the sign-in, exactly as landing destUrl() hands
-// off. A console takes a real staff session instead (staffSession.ts). The response is
-// asserted ok() BEFORE the discriminator so an HTTP failure reports as itself rather than
-// as a selector timeout.
-export async function signInAs(page: Page, id: PersonaId): Promise<void> {
-  const url = signInUrl(id)
+// drawn. The landing page is the only front door, so `?persona=` IS the sign-in. A console
+// takes a staff session instead (staffSession.ts). The response is asserted ok() BEFORE the
+// discriminator so an HTTP failure reports as itself, not as a selector timeout.
+// `tenantId` signs in to a shard tenant: the session is seeded first and asserted after.
+// `path` is where the app lands.
+export async function signInAs(page: Page, id: PersonaId, opts: { tenantId?: string; path?: string } = {}): Promise<void> {
+  const { tenantId, path } = opts
+  let url = signInUrl(id, path)
+  if (tenantId !== undefined) {
+    if (id !== 'firm' && id !== 'inhouse') throw new Error(`signInAs: persona "${id}" has no shard tenant`)
+    const { TENANTS } = await import('./topology/targets')
+    await (await import('./topology/shardSession')).seedShardSession(page, id, { ...TENANTS[id === 'firm' ? 'a' : 'b'], id: tenantId })
+    // The seeded in-house session is the sign-in; its `?persona=` would re-mint seeded tenant 2222.
+    if (id === 'inhouse') url = url.split('?')[0]
+  }
   const res = await page.goto(url)
   expect(res, `no response from ${url}`).toBeTruthy()
   expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
   await DESTINATION_READY[PERSONAS[id].destination](page)
+  if (tenantId !== undefined) await (await import('./topology/shardSession')).assertShardSession(page, tenantId)
 }
 
 // The refusal half of the axis: hand a destination a persona it does not admit and assert it
@@ -75,9 +83,6 @@ export async function sidebarRoster(page: Page): Promise<string[]> {
 // Console errors + uncaught exceptions, for specs that assert a persona's surfaces draw
 // clean. Attach before navigating so load-time errors are captured.
 //
-// Hoisted here for NEW specs to import. It deliberately does NOT refactor the three existing
-// inline copies (portfolio.spec.ts:23, import-wizard.spec.ts:83, invoice-surfaces.spec.ts:35)
-// — those files are passing and out of this subtask's scope.
 export function collectErrors(page: Page): string[] {
   const errors: string[] = []
   page.on('console', (msg) => {

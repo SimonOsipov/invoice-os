@@ -102,7 +102,7 @@ export const PERSONAS: Record<PersonaId, PersonaDef> = {
     id: 'firm',
     destination: 'app',
     displayName: 'Chinedu Okafor',
-    specToken: 'FIRM_PERSONA',
+    specToken: "signInAs(page, 'firm'",
     tenantName: 'Okafor & Partners',
     // Every surface here is DRIVEN as the firm persona except NAV_RULES, which is only
     // proven to EXIST for it (see its own note below). Each cell is added in the SAME
@@ -180,9 +180,9 @@ export const DESTINATIONS: readonly Destination[] = ['app', 'ops', 'support']
 // what landing/src/auth.ts's destUrl() builds. resolveTarget is called HERE, not at module
 // scope, so importing this module never requires a deployed environment (see the header).
 // It throws naming the missing variable rather than defaulting ([fail-loud-targets]).
-export function signInUrl(id: PersonaId): string {
+export function signInUrl(id: PersonaId, path = ''): string {
   const base = resolveTarget(DESTINATION_ENV[PERSONAS[id].destination])
-  return `${base}?persona=${id}`
+  return `${base}${path}?persona=${id}`
 }
 
 // Whether a destination's gate lets this persona in. Only the app does, via shouldAutoSignIn

@@ -38,8 +38,8 @@ import { freshTin } from '../api/fixtures'
 import { buildMixedCsv, buildPerfCsv } from '../importFixtures'
 import { approvalRun404Dropper, type Dropper, expectedStatusDropper, notFoundIdDropper } from './consoleGate'
 import { assertFillsColumn, assertSameHeight, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS } from './layout'
-import { assertShardSession, seedShardSession } from './shardSession'
-import { APP_URL, FIRM_PERSONA, shardTenants, VALIDATION_EXPECTED } from './targets'
+import { signInAs } from '../personaSession'
+import { APP_URL, shardTenants, VALIDATION_EXPECTED } from './targets'
 
 // This file runs in its own shard, on its own tenants: PERSONAS shadows the api client's 1111 / 2222 pair.
 const SHARD = shardTenants('invoice-surfaces.spec.ts')
@@ -59,10 +59,7 @@ test.beforeAll(async () => {
   await ensureFirmPolicyActive(token)
 })
 
-// collectErrors()/signInFirm(): the same console/pageerror + firm-persona
-// sign-in idiom topology.spec.ts and import-wizard.spec.ts each inline (no
-// spec file in this package exports its own helpers today, so this is a third
-// copy, not a new seam).
+// collectErrors(): console/pageerror collection, with the approval-run 404 dropped.
 function collectErrors(page: Page, extra?: Dropper): string[] {
   const errors: string[] = []
   const droppers = [approvalRun404Dropper(page), ...(extra ? [extra] : [])]
@@ -75,18 +72,6 @@ function collectErrors(page: Page, extra?: Dropper): string[] {
     errors.push(`pageerror: ${err.message}`)
   })
   return errors
-}
-
-async function signInFirm(page: Page): Promise<void> {
-  await seedShardSession(page, 'firm', SHARD.a)
-  // The landing page is the single sign-in front door, so the app has no picker to click
-  // on a deployed build.
-  const url = `${APP_URL}?persona=${FIRM_PERSONA.param}`
-  const res = await page.goto(url)
-  expect(res, `no response from ${url}`).toBeTruthy()
-  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
-  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
-  await assertShardSession(page, SHARD.a.id)
 }
 
 // goToInvoices()/openInvoiceRow(): the two navigation seams every scenario
@@ -153,7 +138,7 @@ async function expectStripStates(page: Page, want: Partial<Record<StripKey, stri
 // Overview/Invoices CLIENT-scoped surfaces (Sidebar.tsx's CLIENT nav group) -- every
 // fixture entity this file creates via the API seam must become the ACTIVE workspace
 // switcher selection before its own invoices/rollup bucket show up on either surface.
-// signInFirm() alone leaves the switcher's default selection at whatever `clients[0]`
+// signInAs() alone leaves the switcher's default selection at whatever `clients[0]`
 // resolves to (portfolio's List `ORDER BY name ASC, id ASC`, internal/portfolio/store.go)
 // -- never the fresh entity, which sorts wherever its own Date.now()-suffixed name lands
 // among the seeded portfolio and every other entity this run has created. Sidebar.tsx:
@@ -660,7 +645,7 @@ test('list surface: real rows render with real status badges, and Needs attentio
   const clean = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(cleanNumber) })
   await validateInvoice(token, clean.id)
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   // Invoices is CLIENT-scoped now ([dashboard-scope-per-client]) -- see selectEntity's
   // own doc comment for why this is required, not optional, before goToInvoices.
   await selectEntity(page, entity.name)
@@ -726,7 +711,7 @@ test('register-disclosure: a blocked draft and a clean draft render differently'
   const clean = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(cleanNumber) })
   await validateInvoice(token, clean.id)
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToInvoices(page)
 
@@ -781,7 +766,7 @@ test('register geometry: a blocked row costs no extra line and stands the same h
   // BOTH. Closing exactly one is what makes the pair blocked-vs-clean.
   await approveUntilClosed(clean.id, await firmApproverTokens(SHARD.a.id))
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToInvoices(page)
 
@@ -862,7 +847,7 @@ test('register geometry: toggling needs-attention moves nothing above the rows a
   const clean = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(cleanNumber) })
   await validateInvoice(token, clean.id)
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToInvoices(page)
 
@@ -965,7 +950,7 @@ test('register empty state: a filter that matches nothing says so, and offers th
     await validateInvoice(token, created.id)
   }
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToInvoices(page)
 
@@ -1065,7 +1050,7 @@ test('detail surface: violations render against the rule-set version, the fix lo
   const inv = await createInvoice(token, { entity_id: entity.id, ...badInvoiceFields(invoiceNumber) })
   expect(inv.rule_set_version_id, 'a freshly created invoice must start unvalidated').toBeNull()
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToInvoices(page)
   await openInvoiceRow(page, invoiceNumber)
@@ -1239,15 +1224,13 @@ test('deployed app: a cross-tenant invoice id and a random UUID render the same 
   // is this test's premise, a 404 on anything else is still a failure. See
   // consoleGate.ts's notFoundIdDropper for why one 404 is really four.
   const errors = collectErrors(page, notFoundIdDropper(page, [crossTenantInvoice.id, randomId]))
-  await seedShardSession(page, 'firm', SHARD.a)
 
   // toContainText is only the settle signal -- innerText() is a one-shot read, not
   // auto-retrying. The assertion is the equality below; nothing here hardcodes a copy
   // string, so a future error-message change does not need this test rewritten.
   async function renderedTextFor(id: string): Promise<string> {
-    await page.goto(`${APP_URL}/invoices/${id}?persona=${FIRM_PERSONA.param}`)
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/invoices/${id}` })
     await expect(page.getByTestId('invoice-detail')).toContainText('HTTP 404')
-    await assertShardSession(page, SHARD.a.id)
     return page.getByTestId('invoice-detail').innerText()
   }
 
@@ -1275,7 +1258,7 @@ interface MixedImportResponse {
 // M4-14-02 (task-209): the Day-60 moment-of-value, folded into this capability flow
 // instead of a new dated demo ([capability-not-date], docs/e2e-convention.md) -- import a
 // batch, open one of THOSE failing invoices, fix it inline, re-validate to green, and see
-// the dashboard rollup update. Reuses this file's own signInFirm/collectErrors and
+// the dashboard rollup update. Reuses signInAs and this file's own collectErrors and
 // import-wizard.spec.ts's proven mixed-CSV upload recipe (buildMixedCsv/E2E-04) rather
 // than re-deriving either. Does NOT reuse goToInvoices()/openInvoiceRow() -- opening the
 // invoice here needs a captured invoice_id tied to its row (see step 4 below), which
@@ -1301,7 +1284,7 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `M4-14 arc ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   // Overview/Invoices are CLIENT-scoped surfaces now ([dashboard-scope-per-client]) --
   // make `entity` the active workspace switcher selection BEFORE anything else, so both
   // this arc's Invoices step (4) and its dashboard-rollup step (7a) actually show ITS
@@ -1477,7 +1460,7 @@ test('submission surface: batch-select and submit a validated invoice, badge adv
   // checkbox (submitGate). Close the run over the side channel before the row is selected.
   await approveUntilClosed(inv.id, await firmApproverTokens(SHARD.a.id))
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToInvoices(page)
 
@@ -1557,7 +1540,7 @@ test('submission surface: reject → fix → re-validate → resubmit → accept
   await validateInvoice(token, inv.id)
   await approveUntilClosed(inv.id, await firmApproverTokens(SHARD.a.id))
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToInvoices(page)
 
@@ -1689,7 +1672,7 @@ test('detail surface: a rejected invoice is edited back to draft with its reason
   await validateInvoice(token, inv.id)
   await approveUntilClosed(inv.id, await firmApproverTokens(SHARD.a.id))
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToInvoices(page)
 
@@ -1786,7 +1769,7 @@ test("EXTR27-E2E-02: a never-submitted draft's number is corrected on its edit f
 
   const errors = collectErrors(page, expectedStatusDropper(page, 409, new RegExp(`/api/invoice/v1/invoices/${invoiceA.id}$`)))
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToInvoices(page)
   await openInvoiceRow(page, numberA)
@@ -1871,7 +1854,7 @@ test('detail surface: the draft line editor -- add, remove, cancel, and a live c
     if (r.method() === 'PATCH' && new URL(r.url()).pathname.endsWith(`/invoices/${inv.id}`)) patchCalls.push(r.url())
   })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToInvoices(page)
   await openInvoiceRow(page, invoiceNumber)
@@ -1953,7 +1936,7 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
   await transitionInvoice(token, inv.id, 'queued')
   await transitionInvoice(token, inv.id, 'failed')
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToInvoices(page)
 
@@ -2027,7 +2010,7 @@ test('resolve/unresolve loop: marking a failed invoice resolved drops it from ne
   await transitionInvoice(token, inv.id, 'queued')
   await transitionInvoice(token, inv.id, 'failed')
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToInvoices(page)
   await openInvoiceRow(page, invoiceNumber)
@@ -2113,7 +2096,7 @@ test('resolve/unresolve loop: marking a failed invoice resolved drops it from ne
 test('submission surface: a failed invoice with a recorded kind explains itself', async ({ page }) => {
   const errors = collectErrors(page)
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   // shortName() (frontend/app/src/lib/clients.ts) strips a trailing " Ltd"/"Limited"/"Plc"
   // before the switcher renders it -- selectEntity() matches on that rendered text, so the
   // literal business_entities.name ('Adeyemi & Sons Trading Ltd') would time out.
@@ -2164,7 +2147,7 @@ test('detail surface: submit one invoice from its own page -- cancel sends nothi
     if (r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices/submissions')) submitPosts.push(r)
   })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToInvoices(page)
 
@@ -2291,7 +2274,7 @@ test('submit gate: the register row and its own detail page never disagree -- re
   const armed = await getInvoiceApproval(token, inv.id)
   expect(armed.state, 'without an OPEN run both legs below collapse into one polarity').toBe('open')
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToInvoices(page)
 
@@ -2349,7 +2332,7 @@ test('submit gate: the register row and its own detail page never disagree -- re
 test('INVCR-E2E-3 firm: manual entry persists and affirms nothing before the response', async ({ page }) => {
   const errors = collectErrors(page)
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await page.getByRole('button', { name: 'Skip — enter manually' }).click()
   await expect(page.getByRole('button', { name: 'Invoice number is required' }), 'the hand-off form starts blank').toBeDisabled()
@@ -2432,7 +2415,7 @@ test('register-pagination: the list discloses its true total and the last page i
   const entity = await createEntity(token, { name: `BUG-01-03 page ${Date.now()}`, tin: freshTin() })
   const { anchorNumber } = await buildAnchoredPage(token, entity.id, 50)
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToInvoices(page)
 
@@ -2479,7 +2462,7 @@ test('register-selection: select-all is page-scoped and paging clears it', async
   const approverTokens = await firmApproverTokens(SHARD.a.id)
   await Promise.all(bulk.slice(0, SELECTABLE_COUNT).map((inv) => approveUntilClosed(inv.id, approverTokens)))
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToInvoices(page)
 
@@ -2531,7 +2514,7 @@ test('register-confirm-stage: arm, a selection change disarms, re-arm sends exac
   const approverTokens = await firmApproverTokens(SHARD.a.id)
   await Promise.all([approveUntilClosed(inv1.id, approverTokens), approveUntilClosed(inv2.id, approverTokens)])
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToInvoices(page)
 
@@ -2636,7 +2619,7 @@ test('register-search: a term matching only a row past page 1 is found, and the 
   const searchTin = freshTin()
   const { anchorNumber } = await buildAnchoredPage(token, entity.id, 50, { buyer_tin: searchTin })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToInvoices(page)
 
@@ -2703,7 +2686,7 @@ test('register: a search query is a working deep link', async ({ page }) => {
   // `pathname + hash` (App.tsx) before Workspace mounts, so the query is gone before anything
   // can read it. The session is in localStorage and rehydrates with no network, so this second
   // goto is a real signed-in cold boot.
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   const url = `${APP_URL}/invoices?q=${searchTin}`
   const res = await page.goto(url)
   expect(res, `no response from ${url}`).toBeTruthy()
@@ -2748,7 +2731,7 @@ test('customers-whole-set: every buyer appears and no KPI cards render', async (
     ),
   )
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await page.getByRole('button', { name: /Customers/ }).click()
   await expect(page, 'inline nav to Customers did not update the URL').toHaveURL(/\/customers$/)
@@ -2793,7 +2776,7 @@ test('reports-whole-set: the period invoice count covers the whole set', async (
   const BULK_COUNT = 50
   await buildAnchoredPage(token, entity.id, BULK_COUNT) // 1 anchor (oldest) + 50 bulk = 51
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToReports(page)
 
@@ -2823,7 +2806,7 @@ test('reports-whole-set: top customers ranks over the whole set', async ({ page 
   // artifact, which is what makes the assertion robust rather than just incidentally true.
   await buildAnchoredPage(token, entity.id, 50, { buyer_tin: freshTin(), buyer_name: anchorName, total: '60000.00' })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToReports(page)
 
@@ -2851,7 +2834,7 @@ test("invoice detail: the source-document card states the real range, and the mo
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `DOC-02 preview ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   // import-wizard.spec.ts's own proven E2E-04 recipe, reused verbatim (this file's own
@@ -2921,7 +2904,7 @@ test('invoice detail: a 1,500-row source file renders through the window, not al
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `DOC-02 window ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
@@ -3020,7 +3003,7 @@ test('invoice detail: a manually created invoice shows the no-source state', asy
   const invoiceNumber = `INV-DOC02-NOSRC-${freshTin()}`
   await createInvoice(token, { entity_id: entity.id, invoice_number: invoiceNumber })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToInvoices(page)
   await openInvoiceRow(page, invoiceNumber)
@@ -3049,7 +3032,7 @@ test('buyer-tin: register and detail agree on missing, malformed, and well-forme
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `BUG-05 buyer-tin ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   const cases: { label: string; buyerTin: string | undefined; expectMissing: boolean }[] = [
@@ -3124,7 +3107,7 @@ test("invoice detail: the UBL document card fetches nothing on open, Download sa
   const invoiceNumber = `INV-BUG04-UBL-${Date.now()}`
   const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToInvoices(page)
 
@@ -3245,7 +3228,7 @@ test("invoice detail: an incomplete invoice's UBL document card prints the serve
     buyer_name: 'Buyer Ltd',
   })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToInvoices(page)
 
@@ -3297,7 +3280,7 @@ test('detail surface: the armed decision block and approval card, plus their lay
   const invoice = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
   await validateInvoice(token, invoice.id)
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToInvoices(page)
   await openInvoiceRow(page, invoiceNumber)
@@ -3513,7 +3496,7 @@ test.describe.serial("detail surface: the state strip's geometry", () => {
   }
 
   async function openStrip(page: Page) {
-    await signInFirm(page)
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id })
     await selectEntity(page, entityName)
     await goToInvoices(page)
     await openInvoiceRow(page, invoiceNumber)
@@ -3661,7 +3644,7 @@ test.describe.serial("detail surface: the activity card's geometry", () => {
   }
 
   async function openActivity(page: Page) {
-    await signInFirm(page)
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id })
     await selectEntity(page, entityName)
     await goToInvoices(page)
     await openInvoiceRow(page, invoiceNumber)
@@ -3864,7 +3847,7 @@ test.describe.serial("detail surface: the compliance card's geometry", () => {
   }
 
   async function openCompliance(page: Page): Promise<Locator> {
-    await signInFirm(page)
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id })
     await selectEntity(page, entityName)
     await goToInvoices(page)
     await openInvoiceRow(page, invoiceNumber)
@@ -4288,7 +4271,7 @@ test.describe.serial("detail surface: the action cluster's geometry (firm admin)
     const errors = collectErrors(page)
     const token = await login(PERSONAS.A)
 
-    await signInFirm(page)
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id })
     await selectEntity(page, entityName)
 
     const measured: ClusterFit[] = []
@@ -4497,7 +4480,7 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
   })
 
   async function openJourneyInvoice(page: Page): Promise<void> {
-    await signInFirm(page)
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id })
     await selectEntity(page, entityName)
     await goToInvoices(page)
     await openInvoiceRow(page, invoiceNumber)
@@ -4708,7 +4691,7 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
     test.setTimeout(150_000)
     const errors = collectErrors(page)
 
-    await signInFirm(page)
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id })
     await selectEntity(page, entityName)
     await goToInvoices(page)
 
@@ -4868,7 +4851,7 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
     // TWO navigations: ?persona= cannot carry ?invoice=. The strip rewrites the URL to
     // `pathname + hash` (App.tsx) before Workspace mounts. The session rehydrates from
     // localStorage with no network, so the second goto is a real signed-in cold boot.
-    await signInFirm(page)
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id })
     const url = `${APP_URL}/audit?invoice=${invoiceId}`
     const res = await page.goto(url)
     expect(res, `no response from ${url}`).toBeTruthy()
@@ -4921,7 +4904,7 @@ test('detail surface: the untouched rail order is unchanged', async ({ page }) =
   // while one is open -- close it before the row is selected.
   await approveUntilClosed(inv.id, await firmApproverTokens(SHARD.a.id))
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToInvoices(page)
 
@@ -4980,7 +4963,7 @@ test("detail surface: the UBL document card is the rail's last card, beneath Sou
   const invoiceNumber = `INV-BUG18-UBLCARD-${Date.now()}`
   await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await goToInvoices(page)
   await openInvoiceRow(page, invoiceNumber)
@@ -5328,7 +5311,7 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
     })
   })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   // openPreviewer() remounts InvoiceDetail every time: the source-document fetch is

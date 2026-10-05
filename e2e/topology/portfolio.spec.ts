@@ -13,12 +13,9 @@
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { login, createEntity, createInvoice, validateInvoice, offboardEntity, PERSONAS } from '../api/client'
 import { freshTin } from '../api/fixtures'
-import { APP_URL, FIRM_PERSONA } from './targets'
+import { signInAs } from '../personaSession'
 
-// collectErrors()/signInFirm(): the same console/pageerror + firm-persona sign-in idiom
-// topology.spec.ts, import-wizard.spec.ts, and invoice-surfaces.spec.ts each already
-// inline or define locally (no spec file in this package exports its own helpers today) --
-// this is a fourth copy, not a new seam.
+// collectErrors(): a local copy of the console/pageerror collector.
 function collectErrors(page: Page): string[] {
   const errors: string[] = []
   page.on('console', (msg) => {
@@ -28,16 +25,6 @@ function collectErrors(page: Page): string[] {
     errors.push(`pageerror: ${err.message}`)
   })
   return errors
-}
-
-async function signInFirm(page: Page): Promise<void> {
-  // The landing page is the single sign-in front door, so the app has no picker to click
-  // on a deployed build; ?persona= IS the sign-in, exactly as landing destUrl() hands off.
-  const url = `${APP_URL}?persona=${FIRM_PERSONA.param}`
-  const res = await page.goto(url)
-  expect(res, `no response from ${url}`).toBeTruthy()
-  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
-  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
 }
 
 // goToClients(): the Clients sidebar nav button (glyphs.tsx's NAV_CLIENTS, label
@@ -96,7 +83,7 @@ test('edit-client: row click opens the edit modal, and Save issues PATCH /entiti
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `M4-14 portfolio edit ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm')
   await goToClients(page)
 
   // Reused across the pre- and post-Save assertion below -- Playwright locators re-resolve
@@ -142,7 +129,7 @@ test('create-client: the Add-client control opens create mode, and submit on a f
 }) => {
   const errors = collectErrors(page)
 
-  await signInFirm(page)
+  await signInAs(page, 'firm')
   await goToClients(page)
 
   const onboardTin = freshTin()
@@ -187,7 +174,7 @@ test('status-pill: a fresh active entity and a fresh offboardEntity-archived ent
   const archivedEntity = await createEntity(token, { name: `M4-14 portfolio archived ${Date.now()}`, tin: freshTin() })
   await offboardEntity(token, archivedEntity.id)
 
-  await signInFirm(page)
+  await signInAs(page, 'firm')
   await goToClients(page)
 
   const activeRow = page.locator('.pf-list-row').filter({ hasText: activeEntity.name })
@@ -229,7 +216,7 @@ test('health-pill: a fresh entity with a needs-attention invoice reads "1 NEEDS 
 
   const emptyEntity = await createEntity(token, { name: `M4-14 portfolio empty ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm')
   await goToClients(page)
 
   const attnRow = page.locator('.pf-list-row').filter({ hasText: attnEntity.name })
@@ -253,7 +240,7 @@ test('status-filter: each position requests its status and renders only those ro
   const archivedEntity = await createEntity(token, { name: `M4-14 portfolio filter-archived ${Date.now()}`, tin: freshTin() })
   await offboardEntity(token, archivedEntity.id)
 
-  await signInFirm(page)
+  await signInAs(page, 'firm')
   await goToClients(page)
 
   const activeRow = page.locator('.pf-list-row').filter({ hasText: activeEntity.name })
@@ -302,7 +289,7 @@ test('status-filter: the header count follows the filter', async ({ page }) => {
   const archivedEntity = await createEntity(token, { name: `M4-14 portfolio count-archived ${Date.now()}`, tin: freshTin() })
   await offboardEntity(token, archivedEntity.id)
 
-  await signInFirm(page)
+  await signInAs(page, 'firm')
   await goToClients(page)
   await expect(page.locator('.pf-list-row').filter({ hasText: activeEntity.name })).toBeVisible()
 
@@ -337,7 +324,7 @@ test('archive-restore: a client can be archived and restored from the row', asyn
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `M4-14 portfolio archive-restore ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm')
   await goToClients(page)
 
   const row = page.locator('.pf-list-row').filter({ hasText: entity.name })
@@ -374,7 +361,7 @@ test('archive-restore: a redundant transition surfaces the 409', async ({ page }
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `M4-14 portfolio archive-409 ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm')
   await goToClients(page)
 
   const row = page.locator('.pf-list-row').filter({ hasText: entity.name })
@@ -410,7 +397,7 @@ test('archive-restore: archiving the open client leaves the switcher and the tab
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `M4-14 portfolio archive-open ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm')
   await selectEntity(page, entity.name)
 
   await goToClients(page)
@@ -444,7 +431,7 @@ test('archive-restore: the row action does not open the edit modal', async ({ pa
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `M4-14 portfolio archive-noclick ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm')
   await goToClients(page)
 
   const row = page.locator('.pf-list-row').filter({ hasText: entity.name })

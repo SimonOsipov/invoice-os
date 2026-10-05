@@ -862,3 +862,43 @@ describe('CreateFlow — the blank hand-off draft (AUTH-10-07)', () => {
     expect(lineInputs[0]!.value).toBe('')
   })
 })
+
+// RESKIN2-04-01 (D-43): the v2 wizard strip and the blocked hand-off, in their own describe.
+describe('CreateFlow — the v2 strip and blocked hand-off (RESKIN2-04-01)', () => {
+  afterEach(() => cleanup())
+
+  it('the wizard paints the current, done and pending steps in v2', () => {
+    const { container } = render(<CreateFlow ctx={createFlowCtx('mapping', 'spreadsheet')} />)
+    const circles = Array.from(container.querySelectorAll<HTMLElement>('span')).filter(
+      (s) => s.style.width === '22px' && s.style.height === '22px',
+    )
+    // Import done, Map current, Review pending.
+    expect(circles.map((c) => c.nextElementSibling?.textContent)).toEqual(['Import', 'Map', 'Review'])
+    const [done, current, pending] = circles
+    for (const c of circles) expect(c.style.borderRadius).toBe('50%')
+    expect(current.style.color).toBe('var(--primary-foreground)')
+    expect((done.nextElementSibling as HTMLElement).style.color).toBe('var(--fg-2)')
+    expect((pending.nextElementSibling as HTMLElement).style.color).toBe('var(--fg-3)')
+    // Control: the current label stays the strongest.
+    expect((current.nextElementSibling as HTMLElement).style.color).toBe('var(--fg-1)')
+  })
+
+  it('a blocked document hand-off dims (#114)', () => {
+    const { container } = renderFailures([STORED], { activeEntity: null })
+    const buttons = handOffButtons(container)
+    expect(buttons).toHaveLength(1)
+    expect(buttons[0].disabled).toBe(true)
+    expect(buttons[0].style.opacity).toBe('0.45')
+    expect(buttons[0].style.cursor).toBe('not-allowed')
+    expect(buttons[0].style.background).toBe('')
+  })
+
+  it('an enabled hand-off carries no dimming', () => {
+    const { container } = renderFailures([STORED])
+    const buttons = handOffButtons(container)
+    expect(buttons).toHaveLength(1)
+    expect(buttons[0].disabled).toBe(false)
+    expect(buttons[0].style.opacity).toBe('')
+    expect(buttons[0].style.cursor).toBe('')
+  })
+})

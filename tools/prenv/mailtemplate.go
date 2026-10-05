@@ -31,7 +31,7 @@ func isHTTPURL(u string) bool {
 	return strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")
 }
 
-// RunMailTemplateCheck applies D12 to each URL: exit 0 all pass, 1 any fails, 2 malformed call.
+// RunMailTemplateCheck checks each URL: exit 0 all pass, 1 any fails, 2 malformed call.
 func RunMailTemplateCheck(client *http.Client, urls []string, out io.Writer) int {
 	if len(urls) == 0 {
 		fmt.Fprintln(out, "::error::usage: prenv mail-template-check <http(s)-url>...")
@@ -55,7 +55,7 @@ func RunMailTemplateCheck(client *http.Client, urls []string, out io.Writer) int
 	return code
 }
 
-// RunMailLogoCheck applies D12's image rule to one URL: exit 0 pass, 1 fail.
+// RunMailLogoCheck checks that one URL serves an image: exit 0 pass, 1 fail.
 func RunMailLogoCheck(client *http.Client, url string, out io.Writer) int {
 	if err := checkMailImage(client, url); err != nil {
 		fmt.Fprintf(out, "::error::%s: %v\n", url, err)

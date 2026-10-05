@@ -1,6 +1,6 @@
-// railway_env_mail_templates_test.go pins railway-env.sh check-mail-templates (D11) against the scripted
-// Railway of railway_env_auth_test.go. Template URLs are plain-HTTP httptest servers with no <img>
-// (QA F7): the built prenv cannot trust an httptest TLS certificate.
+// railway_env_mail_templates_test.go pins railway-env.sh check-mail-templates against the scripted
+// Railway of railway_env_auth_test.go. Template URLs are plain-HTTP httptest servers with no <img>:
+// the built prenv cannot trust an httptest TLS certificate.
 package main
 
 import (
@@ -109,7 +109,7 @@ func TestCheckMailTemplates_SPAFailsNamingTheVariable(t *testing.T) {
 	}
 }
 
-// AC 7: GoTrue resolves a value that does not start with http against GOTRUE_SITE_URL (P5).
+// AC 7: GoTrue resolves a value that does not start with http.
 func TestCheckMailTemplates_RelativeValueFails(t *testing.T) {
 	for _, value := range []string{"/emails/confirmation.html", "emails/confirmation.html"} {
 		t.Run(value, func(t *testing.T) {

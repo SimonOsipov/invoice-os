@@ -1,4 +1,4 @@
-// mailtemplate_test.go pins prenv mail-template-check and mail-logo-check (D11, D12) against httptest servers.
+// mailtemplate_test.go pins prenv mail-template-check and mail-logo-check against httptest servers.
 package main
 
 import (
@@ -19,7 +19,7 @@ const (
 	// GoTrue v2.197.0 conf TemplateMaxSize; its io.LimitReader reads this many bytes.
 	goTrueTemplateMaxSize = 1_000_000
 
-	// The sample ConfirmationURL of the plan (RESEND-01-04, QA F11); html/template writes its & as &amp;.
+	// The sample ConfirmationURL; html/template writes its & as &amp;.
 	mailSampleURL = "https://x.test/verify?token=t&type=signup"
 
 	mailMinimalTemplate = `<p>{{ .ConfirmationURL }}</p>`
@@ -190,8 +190,8 @@ func TestMailTemplateCheck_ParseErrorFails(t *testing.T) {
 	wantOneError(t, out, srv.URL, parseErrRE)
 }
 
-// AC 3. The plan's `{{ .Nope.deeper }}` body does not error under Go 1.26 (a missing map key
-// renders empty, P11), so the rows use bodies that do: `len 3` always, `len .Data.registration`
+// AC 3. A `{{ .Nope.deeper }}` body does not error under Go 1.26 (a missing map key
+// renders empty), so the rows use bodies that do: `len 3` always, `len .Data.registration`
 // only when the answers are absent.
 func TestMailTemplateCheck_ExecuteErrorFails(t *testing.T) {
 	cases := map[string]string{

@@ -208,7 +208,7 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 	}
 }
 
-// The account-mail routes are public GETs read by GoTrue and mail clients: top-level, once, no CORS wrap (D19).
+// The account-mail routes are public GETs read by GoTrue and mail clients: top-level, once, no CORS wrap.
 func TestAccountMailRoutesRegisteredUnconditionally(t *testing.T) {
 	src, err := os.ReadFile("main.go")
 	if err != nil {

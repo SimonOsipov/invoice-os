@@ -163,7 +163,7 @@ func TestMailRoutes_UnknownPathIsA404NotAPage(t *testing.T) {
 	}
 }
 
-// D19: GoTrue and mail clients are not browsers; the routes grant no cross-origin read.
+// GoTrue and mail clients are not browsers; the routes grant no cross-origin read.
 func TestMailRoutes_CarryNoCORSHeaders(t *testing.T) {
 	mux := emailsMux(t)
 	for _, path := range []string{"/emails/confirmation.html", "/emails/mark.png"} {

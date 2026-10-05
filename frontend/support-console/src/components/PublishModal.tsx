@@ -29,7 +29,7 @@ export function PublishModal({ onClose, onConfirm }: Props) {
   return (
     <Modal width={560} onClose={onClose}>
       <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--line-1)' }}>
-        <h3 style={{ fontSize: 17, fontWeight: 500, letterSpacing: '-0.02em', margin: '0 0 4px' }}>Publish draft → v9</h3>
+        <h3 style={{ fontSize: 17, margin: '0 0 4px' }}>Publish draft → v9</h3>
         <p style={{ fontSize: 13, color: 'var(--fg-3)', margin: 0 }}>
           Creates a new immutable version. Diff vs active{' '}
           <span className="mono" style={{ fontWeight: 600 }}>

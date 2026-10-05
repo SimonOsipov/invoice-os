@@ -20,7 +20,7 @@ type Props = {
 export function Drawer({ header, footer, banner, width = 560, onClose, children }: Props) {
   return (
     <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'oklch(20% .02 210 / 0.32)', animation: 'opsFade 160ms ease-out' }} />
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'color-mix(in srgb, var(--surface) 55%, transparent)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', animation: 'opsFade 160ms ease-out' }} />
       <div
         className="ops-drawer"
         role="dialog"
@@ -35,7 +35,6 @@ export function Drawer({ header, footer, banner, width = 560, onClose, children 
           maxWidth: '94vw',
           background: 'var(--bg-1)',
           borderLeft: '1px solid var(--line-2)',
-          boxShadow: '-24px 0 48px -24px oklch(20% .02 210 / 0.3)',
           display: 'flex',
           flexDirection: 'column',
           animation: 'opsDrawer 200ms ease-out',
@@ -48,7 +47,7 @@ export function Drawer({ header, footer, banner, width = 560, onClose, children 
             onClick={onClose}
             className="ops-btn"
             aria-label="Close"
-            style={{ border: 0, background: 'var(--bg-3)', cursor: 'pointer', width: 30, height: 30, borderRadius: 'var(--radius-input)', color: 'var(--fg-2)', display: 'grid', placeItems: 'center', flex: 'none' }}
+            style={{ border: 0, background: 'var(--bg-3)', cursor: 'pointer', width: 30, height: 30, borderRadius: 'var(--radius-btn)', color: 'var(--fg-2)', display: 'grid', placeItems: 'center', flex: 'none' }}
           >
             {CLOSE_ICON}
           </button>

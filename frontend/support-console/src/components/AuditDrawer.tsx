@@ -51,7 +51,7 @@ export function AuditDrawer({ entry, env, onClose, onCopy, onExport }: Props) {
         </>
       }
       banner={
-        <div style={{ flex: 'none', background: 'var(--status-muted-bg)', borderBottom: '1px solid var(--line-1)', padding: '9px 22px', display: 'flex', alignItems: 'center', gap: 9 }}>
+        <div style={{ flex: 'none', background: 'var(--status-muted-bg)', borderBottom: '1px solid var(--line-1)', padding: '9px 22px', display: 'flex', alignItems: 'center', gap: 9, color: 'var(--fg-2)' }}>
           {LOCK_ICON}
           <span className="mono" style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--fg-2)', letterSpacing: '0.03em' }}>
             SIMULATED ENTRY · DIGESTS NOT STORED IN AUDIT LOG

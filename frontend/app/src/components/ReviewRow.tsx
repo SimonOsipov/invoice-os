@@ -427,7 +427,7 @@ function ExpandedFixPanel({
       {view.passing ? (
         <div
           data-testid="review-row-passing"
-          style={{ display: 'flex', gap: 10, padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--status-green-bg)', border: '1px solid var(--status-green-border)' }}
+          style={{ display: 'flex', gap: 10, padding: '12px 14px', margin: '12px 0 -4px', borderRadius: 'var(--radius-md)', background: 'var(--status-green-bg)', border: '1px solid var(--status-green-border)' }}
         >
           <span aria-hidden style={{ color: 'var(--status-green-text)' }}>✓</span>
           <span style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>{view.summary}</span>
@@ -435,7 +435,7 @@ function ExpandedFixPanel({
       ) : view.notValidated ? (
         <div
           data-testid="review-row-not-validated"
-          style={{ display: 'flex', gap: 10, padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--bg-3)', border: '1px solid var(--line-2)', fontSize: 12.5, color: 'var(--fg-2)' }}
+          style={{ display: 'flex', gap: 10, padding: '12px 14px', margin: '12px 0 -4px', borderRadius: 'var(--radius-md)', background: 'var(--bg-3)', border: '1px solid var(--line-2)', fontSize: 12.5, color: 'var(--fg-2)' }}
         >
           {ROW_EXPANSION_COPY.notValidated}
         </div>
@@ -444,7 +444,7 @@ function ExpandedFixPanel({
           {/* AC-8/§10.12's trap: a warning-only invoice renders the ADVISORY label here,
               never "Failed rules" -- rowExpansionView already resolved which one, this
               never re-derives `blocking` itself. */}
-          <div className="label" style={{ margin: '12px 0 10px' }}>{view.sectionLabel}</div>
+          <div className="label" style={{ margin: '12px 0 0' }}>{view.sectionLabel}</div>
           {view.cards.map((card, i) => (
             <FixCardView
               key={`${card.ruleKey}-${card.field ?? 'unmapped'}-${i}`}
@@ -574,7 +574,7 @@ function ExpandedFixPanel({
           </div>
         )}
         {/* §7.3's provenance/scope note (AC-7) — always rendered while expanded. */}
-        <p data-testid="review-row-note" style={{ fontSize: 11.5, color: 'var(--fg-3)', margin: 0, lineHeight: 1.55 }}>
+        <p data-testid="review-row-note" style={{ fontSize: 11.5, color: 'var(--fg-3)', margin: 0, lineHeight: 1.5 }}>
           {view.note}
         </p>
       </div>

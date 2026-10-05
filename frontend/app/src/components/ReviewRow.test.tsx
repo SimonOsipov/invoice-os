@@ -1269,4 +1269,19 @@ describe('ReviewRow: the review prototype look (RESKIN2-04-04)', () => {
     expect(note.style.fontSize).toBe('11.5px')
     expect(note.style.lineHeight).toBe('1.5')
   })
+
+  it('the passing and not-validated strips take the prototype 12px 0 10px margin (bottom net of the 14px column gap)', async () => {
+    for (const [detail, id] of [
+      [detailFixture({ status: 'validated', violations: [], rule_set_version: 3, rule_set_version_id: 'rsv-3' }), 'review-row-passing'],
+      [detailFixture({ status: 'draft', violations: [] }), 'review-row-not-validated'],
+    ] as const) {
+      cleanup()
+      await renderOpen(detail)
+      const strip = screen.getByTestId(id)
+      const column = strip.parentElement as HTMLElement
+
+      expect(strip.style.marginTop, id).toBe('12px')
+      expect(parseFloat(strip.style.marginBottom) + parseFloat(column.style.gap), `${id}: prototype margin-bottom 10`).toBe(10)
+    }
+  })
 })

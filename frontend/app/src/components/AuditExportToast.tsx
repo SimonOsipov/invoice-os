@@ -3,9 +3,10 @@
 
 import { useEffect } from 'react'
 
-import { closeGlyph } from '../glyphs'
+import { dismissGlyph } from '../glyphs'
 
 const EXPORT_TOAST_MS = 5200
+const DEFAULT_TEST_ID = 'audit-export-toast'
 
 export function AuditExportToast({
   kind,
@@ -13,12 +14,14 @@ export function AuditExportToast({
   onDismiss,
   // AUDIT-07's assertions address this toast by its default; only the evidence-bundle
   // download passes a different one. EB-06-9's second render is the oracle.
-  testId = 'audit-export-toast',
+  testId = DEFAULT_TEST_ID,
+  maxWidth = 640,
 }: {
   kind: 'success' | 'error'
   text: string
   onDismiss: () => void
   testId?: string
+  maxWidth?: number
 }) {
   useEffect(() => {
     const timer = setTimeout(onDismiss, EXPORT_TOAST_MS)
@@ -38,26 +41,27 @@ export function AuditExportToast({
         zIndex: 200,
         display: 'flex',
         alignItems: 'center',
-        gap: 11,
+        gap: 12,
         background: 'var(--bg-2)',
         border: '1px solid var(--line-2)',
         borderLeft: `3px solid ${accent}`,
         borderRadius: 'var(--radius-md)',
-        boxShadow: '0 16px 40px -16px oklch(20% .02 210 / 0.28)',
-        padding: '11px 14px',
-        maxWidth: 440,
+        boxShadow: 'var(--shadow-card)',
+        padding: '11px 12px 11px 14px',
+        maxWidth,
         animation: 'popIn 160ms ease-out',
       }}
     >
-      <span style={{ flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.5, color: 'var(--fg-1)' }}>{text}</span>
+      <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, lineHeight: 1.45, color: 'var(--fg-1)' }}>{text}</span>
       <button
         type="button"
         data-testid="audit-export-toast-dismiss"
         onClick={onDismiss}
         aria-label="Dismiss"
-        style={{ flex: 'none', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--fg-3)', display: 'grid', placeItems: 'center', padding: 4 }}
+        className="pf-btn"
+        style={{ flex: 'none', width: 22, height: 22, borderRadius: 4, background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--fg-3)', display: 'grid', placeItems: 'center' }}
       >
-        {closeGlyph}
+        {dismissGlyph}
       </button>
     </div>
   )

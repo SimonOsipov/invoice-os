@@ -9,10 +9,10 @@
 // `environment: node`, so a string authored here is a string no spec can hold. The one
 // exception is marked below, matching `RolesView`'s own `NO_MATCH`.
 
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { toApiError } from '@invoice-os/api-client'
-import { closeGlyph } from '../glyphs'
+import { closeGlyph, tickGlyph11 } from '../glyphs'
 import { accessRoleLabel, emailLabel, membersSurface } from '../lib/members'
 import {
   canSaveRole,
@@ -42,7 +42,10 @@ export type RoleModalSubject = { mode: 'create' } | { mode: 'edit'; role: Role }
 const NO_PERSON_MATCH = 'No one matches that search.'
 
 /** Beyond this the list scrolls — both seeds are taller than it. */
-const LIST_MAX_HEIGHT = 232
+const LIST_MAX_HEIGHT = 268
+
+const DISABLED = { opacity: 0.45, cursor: 'not-allowed', filter: 'none' } as const
+const DISABLED_GHOST = { background: 'transparent', ...DISABLED } as const
 
 /** Set comparison, not array equality — a re-tick in a different order is not a change. */
 function membersChanged(selected: readonly string[], original: readonly string[]): boolean {
@@ -68,6 +71,11 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
   // MODAL-LOCAL, the MemberDrawer posture: it dies with the modal rather than needing to be
   // cleared on close.
   const [confirming, setConfirming] = useState(false)
+  const confirmRef = useRef<HTMLDivElement>(null)
+  // The confirm sits at the end of the scrolling body, so bring it on screen.
+  useEffect(() => {
+    if (confirming) confirmRef.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [confirming])
   // EntityFormModal's idiom (EntityFormModal.tsx:64,94): a write in flight disables the
   // form and blocks a second submit; a rejected one renders the gateway's own sentence here
   // instead of closing on it.
@@ -153,7 +161,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
       onClick={() => {
         if (!submitting) onClose()
       }}
-      style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'oklch(20% .02 210 / 0.42)', backdropFilter: 'blur(2px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40, animation: 'popIn 140ms ease-out' }}
+      style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'color-mix(in srgb, var(--surface) 55%, transparent)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40, animation: 'popIn 140ms ease-out' }}
     >
       <div
         onClick={(e) => e.stopPropagation()}
@@ -161,11 +169,11 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
         aria-modal="true"
         aria-label={role ? 'Edit role' : 'New role'}
         data-testid="role-modal"
-        style={{ width: 560, maxWidth: '100%', maxHeight: '86vh', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', boxShadow: '0 24px 60px -20px oklch(20% .02 210 / 0.4)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+        style={{ width: 560, maxWidth: '100%', maxHeight: '86vh', background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-card)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
       >
-        <div style={{ flex: 'none', padding: '16px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+        <div style={{ flex: 'none', padding: '18px 20px 14px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
           <div style={{ minWidth: 0 }}>
-            <div className="card-title">{role ? 'Edit role' : 'New role'}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--fg-1)' }}>{role ? 'Edit role' : 'New role'}</div>
             {/* A sentence, so NOT the `.mono` eyebrow a modal's second line usually takes. */}
             <div style={{ marginTop: 3, fontSize: 12.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
               {role ? EDIT_ROLE_SUBTITLE : NEW_ROLE_SUBTITLE}
@@ -178,13 +186,13 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
             aria-label="Close"
             data-testid="role-modal-close"
             // No inline `borderRadius` — `.pf-btn` forces `border-radius` with `!important`.
-            style={{ flex: 'none', width: 34, height: 34, border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}
+            style={{ flex: 'none', width: 30, height: 30, border: 0, background: 'var(--bg-3)', color: 'var(--fg-2)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}
           >
             {closeGlyph}
           </button>
         </div>
 
-        <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px 18px' }}>
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 20px 20px' }}>
           {/* `.label` is `text-transform: uppercase` (app-layer.css), so these render
               ROLE NAME / WHAT THIS ROLE SIGNS OFF / WHO HOLDS THIS ROLE — the invite modal's
               and the drawer's own field labels. */}
@@ -200,9 +208,10 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
             aria-label="Role name"
             data-testid="role-modal-name"
             disabled={submitting}
+            style={{ height: 38, marginBottom: 14 }}
           />
 
-          <div className="label" style={{ margin: '16px 0 6px' }}>
+          <div className="label" style={{ marginBottom: 6 }}>
             What this role signs off
           </div>
           <input
@@ -214,21 +223,21 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
             aria-label="What this role signs off"
             data-testid="role-modal-desc"
             disabled={submitting}
+            style={{ height: 38, marginBottom: 18 }}
           />
 
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, margin: '16px 0 6px' }}>
-            <div className="label" style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
+            <div className="label" style={{ minWidth: 0 }}>
               Who holds this role
             </div>
             {/* The denominator is the SELECTABLE count, so it agrees with the rows below. */}
-            <span className="mono" data-testid="role-modal-count" style={{ flex: 'none', fontSize: 11, color: 'var(--fg-3)' }}>
+            <span className="mono" data-testid="role-modal-count" style={{ flex: 'none', fontSize: 10, letterSpacing: '0.04em', color: 'var(--fg-3)' }}>
               {pickerSelectionCount(selected.length, ctx.members)}
               {hiddenSelected > 0 && <span data-testid="role-modal-count-hidden"> ({hiddenSelectionNote(hiddenSelected)})</span>}
             </span>
           </div>
 
-          {/* `ClientAccessPicker`'s panel (MemberParts.tsx:355) — same ground, same radius. */}
-          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-1)', padding: 10 }}>
+          <div style={{ border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', padding: '10px 10px 6px' }}>
             <input
               type="text"
               className="pf-input"
@@ -237,12 +246,12 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
               placeholder="Search people"
               aria-label="Search people"
               data-testid="role-modal-search"
-              style={{ height: 34, fontSize: 13, marginBottom: 8 }}
+              style={{ height: 32, fontSize: 12.5, marginBottom: 6 }}
               disabled={submitting}
             />
             <div style={{ maxHeight: LIST_MAX_HEIGHT, overflowY: 'auto' }}>
               {shown.length === 0 ? (
-                <div data-testid="role-modal-empty" style={{ padding: '8px 10px', fontSize: 12.5, color: 'var(--fg-3)' }}>
+                <div data-testid="role-modal-empty" style={{ padding: '16px 8px', textAlign: 'center', fontSize: 12.5, color: 'var(--fg-3)' }}>
                   {NO_PERSON_MATCH}
                 </div>
               ) : (
@@ -256,15 +265,31 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
                       key={m.id}
                       className="pf-row"
                       data-testid="role-modal-member"
-                      style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 8px', borderRadius: 'var(--radius-md)', background: sel ? 'var(--action-tint)' : 'transparent' }}
+                      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 8px', borderRadius: 'var(--radius-md)', background: sel ? 'var(--action-tint)' : 'transparent', cursor: submitting ? 'not-allowed' : 'pointer' }}
                     >
-                      <input type="checkbox" checked={sel} onChange={() => toggle(m.id)} disabled={submitting} style={{ flex: 'none' }} />
-                      <InitialsChip initials={m.initials} status={m.status} size={26} />
+                      {/* A native input under a painted box: `.asc-app input` forces a 7px radius. */}
+                      <span style={{ position: 'relative', flex: 'none', width: 16, height: 16 }}>
+                        <input
+                          type="checkbox"
+                          className="pf-check"
+                          checked={sel}
+                          onChange={() => toggle(m.id)}
+                          disabled={submitting}
+                          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', margin: 0, opacity: 0, zIndex: 1, cursor: 'inherit' }}
+                        />
+                        <span
+                          aria-hidden="true"
+                          style={{ position: 'absolute', inset: 0, boxSizing: 'border-box', borderRadius: 4, border: `1px solid ${sel ? 'var(--action)' : 'var(--line-2)'}`, background: sel ? 'var(--action)' : 'var(--bg-2)', color: 'var(--primary-foreground)', display: 'grid', placeItems: 'center', ...(submitting ? DISABLED : null) }}
+                        >
+                          {sel ? tickGlyph11 : null}
+                        </span>
+                      </span>
+                      <InitialsChip initials={m.initials} status="active" size={26} fontSize={9.5} />
                       <span style={{ flex: 1, minWidth: 0 }}>
-                        <span style={{ display: 'block', fontSize: 13, color: 'var(--fg-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <span style={{ display: 'block', fontSize: 12.5, color: 'var(--fg-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {m.name}
                         </span>
-                        <span className="mono" style={{ display: 'block', fontSize: 11, color: 'var(--fg-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <span className="mono" style={{ display: 'block', marginTop: 1, fontSize: 10, color: 'var(--fg-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {emailLabel(m)}
                         </span>
                       </span>
@@ -283,44 +308,31 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
             {hidden > 0 && (
               <div
                 data-testid="role-modal-hidden"
-                style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--line-1)', fontSize: 11.5, lineHeight: 1.45, color: 'var(--fg-3)' }}
+                style={{ marginTop: 4, padding: '8px 4px 6px', borderTop: '1px solid var(--line-1)', fontSize: 11.5, color: 'var(--fg-3)' }}
               >
                 {hiddenInvitedFootnote(ctx.members)}
               </div>
             )}
           </div>
-        </div>
 
-        <div style={{ flex: 'none', padding: '14px 20px', borderTop: '1px solid var(--line-1)' }}>
-          {/* The SERVER's own reason for the write it just refused, verbatim — no prefix,
-              no substitute. MemberDrawer's `statusError` precedent (MemberDrawer.tsx:311-329). */}
-          {writeError && (
+          {confirming && role && (
+            // Inline in the body, so Cancel and Save stay in the footer beside it.
             <div
-              data-testid="role-modal-error"
-              style={{ marginBottom: 10, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12.5, lineHeight: 1.5, color: 'var(--status-red-text)' }}
-            >
-              {writeError}
-            </div>
-          )}
-          {confirming && role ? (
-            // `[delete-confirms-inline]`, on MemberDrawer's danger-zone shape. It replaces the
-            // whole button row rather than only its left slot: at 560px a three-line red block
-            // beside Cancel/Save reads as two competing questions.
-            <div
+              ref={confirmRef}
               data-testid="role-delete-confirm"
-              style={{ padding: '11px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)' }}
+              style={{ marginTop: 14, padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)' }}
             >
-              <div style={{ fontSize: 12.5, lineHeight: 1.5, color: 'var(--status-red-text)' }}>
+              <p style={{ margin: '0 0 10px', fontSize: 12.5, lineHeight: 1.5, color: 'var(--status-red-text)' }}>
                 {policiesLanded ? deleteRoleConfirm(role.title, steps(ctx.policies, role.key)) : deleteRoleConfirmUnknownUsage(role.title)}
-              </div>
-              <div style={{ display: 'flex', gap: 9, marginTop: 10 }}>
+              </p>
+              <div style={{ display: 'flex', gap: 8 }}>
                 <button
                   type="button"
                   onClick={() => setConfirming(false)}
                   disabled={submitting}
                   className="v2-btn v2-btn-ghost pf-btn"
                   data-testid="role-delete-cancel"
-                  style={{ height: 32, fontSize: 12.5 }}
+                  style={{ height: 32, fontSize: 12.5, ...(submitting ? DISABLED_GHOST : null) }}
                 >
                   Keep role
                 </button>
@@ -328,60 +340,64 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
                   type="button"
                   onClick={() => void remove()}
                   disabled={submitting}
-                  className="pf-btn"
+                  className="v2-btn pf-btn"
                   data-testid="role-delete-confirmed"
-                  style={{ border: '1px solid var(--status-red-border)', background: 'var(--bg-2)', cursor: 'pointer', height: 32, padding: '0 14px', fontFamily: 'var(--font-sans)', fontSize: 12.5, fontWeight: 600, color: 'var(--status-red-text)' }}
+                  style={{ height: 32, fontSize: 12.5, background: 'var(--status-red-text)', color: 'var(--primary-foreground)', ...(submitting ? DISABLED : null) }}
                 >
                   Delete role
                 </button>
               </div>
             </div>
-          ) : (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-              {role && (
-                <button
-                  type="button"
-                  onClick={() => setConfirming(true)}
-                  disabled={submitting}
-                  className="pf-btn"
-                  data-testid="role-delete"
-                  // MemberDrawer's Remove treatment (MemberDrawer.tsx:341-354), same tokens.
-                  style={{ flex: 'none', height: 36, padding: '0 14px', border: '1px solid var(--status-red-border)', background: 'var(--status-red-bg)', color: 'var(--status-red-text)', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 600 }}
-                >
-                  Delete role
-                </button>
-              )}
-              <div style={{ flex: 1 }} />
-              <button
-                type="button"
-                onClick={onClose}
-                disabled={submitting}
-                className="v2-btn v2-btn-ghost pf-btn"
-                data-testid="role-modal-cancel"
-                style={{ height: 36, fontSize: 13 }}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => void save()}
-                disabled={!canSave || submitting}
-                className="v2-btn v2-btn-primary pf-btn"
-                data-testid="role-modal-save"
-                // The app's disabled-primary treatment: the real attribute, plus an inline swap
-                // so a dead button is not still painted as the action.
-                style={{
-                  height: 36,
-                  fontSize: 13,
-                  background: canSave && !submitting ? 'var(--action)' : 'var(--bg-3)',
-                  color: canSave && !submitting ? 'var(--text-on-dark)' : 'var(--fg-4)',
-                  cursor: canSave && !submitting ? 'pointer' : 'not-allowed',
-                }}
-              >
-                {submitting ? 'Saving…' : role ? 'Save role' : 'Create role'}
-              </button>
+          )}
+        </div>
+
+        <div style={{ flex: 'none', padding: '14px 20px', borderTop: '1px solid var(--line-1)' }}>
+          {/* The SERVER's own reason for the write it just refused, verbatim — no prefix,
+              no substitute. MemberDrawer's `statusError` precedent. */}
+          {writeError && (
+            <div
+              data-testid="role-modal-error"
+              style={{ marginBottom: 10, padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 13, lineHeight: 1.5, color: 'var(--status-red-text)' }}
+            >
+              {writeError}
             </div>
           )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {role && !confirming && (
+              <button
+                type="button"
+                onClick={() => setConfirming(true)}
+                disabled={submitting}
+                className="v2-btn v2-btn-ghost pf-btn"
+                data-testid="role-delete"
+                style={{ flex: 'none', height: 36, color: 'var(--status-red-text)', borderColor: 'var(--status-red-border)', ...(submitting ? DISABLED_GHOST : null) }}
+              >
+                Delete role
+              </button>
+            )}
+            <div style={{ flex: 1 }} />
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={submitting}
+              className="v2-btn v2-btn-ghost pf-btn"
+              data-testid="role-modal-cancel"
+              style={{ height: 36, ...(submitting ? DISABLED_GHOST : null) }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void save()}
+              disabled={!canSave || submitting || confirming}
+              className="v2-btn v2-btn-primary pf-btn"
+              data-testid="role-modal-save"
+              // Inline: the repo has no `:disabled` rule, and `filter: none` outranks the hover lift.
+              style={{ height: 36, ...(!canSave || submitting || confirming ? DISABLED : null) }}
+            >
+              {submitting ? 'Saving…' : role ? 'Save role' : 'Create role'}
+            </button>
+          </div>
         </div>
       </div>
     </div>

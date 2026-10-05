@@ -27,7 +27,7 @@ import {
   unassignedRoles,
   type Role,
 } from '../lib/roles'
-import { AmberNote, InitialsChip } from './MemberParts'
+import { AmberNote, InitialsChip, SearchBox } from './MemberParts'
 import { RoleModal, type RoleModalSubject } from './RoleModal'
 import type { PlatformCtx } from '../types'
 
@@ -80,20 +80,20 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
 
   return (
     <>
-      <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: '0 0 16px', maxWidth: 620, lineHeight: 1.55 }}>{intro(roles)}</p>
+      <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: '-4px 0 16px', maxWidth: 680, lineHeight: 1.6 }}>{intro(roles)}</p>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-        <input
-          type="text"
-          className="pf-input"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search roles"
-          aria-label="Search roles"
-          data-testid="roles-search"
-          // .pf-input is width: 100%, so a box in a toolbar row needs its own width.
-          style={{ flex: 'none', width: 260 }}
-        />
+      {/* Above the toolbar, the grid and both empty surfaces: coverage is a statement about the
+          workspace, which a search box cannot change. Gated on the roster having landed,
+          though — over an errored fetch every role reads unheld. */}
+      {surface === 'roster' && unassigned.length > 0 && (
+        <AmberNote testId="roles-unassigned" style={{ marginBottom: 14 }}>
+          {unassignedNotice(unassigned.length)}
+          <div style={{ fontWeight: 700, marginTop: 3 }}>{unassigned.map((r) => r.title).join(' · ')}</div>
+        </AmberNote>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+        <SearchBox value={query} onChange={setQuery} placeholder="Search roles" label="Search roles" testId="roles-search" />
         <div style={{ flex: 1 }} />
         {flash && (
           <span data-testid="roles-flash" style={{ flex: 'none', fontSize: 12.5, color: 'var(--status-green-text)' }}>
@@ -111,29 +111,21 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
 
       {surface !== 'loading' && surface !== 'error' && (
         <>
-          {/* Above the grid AND above both empty surfaces: coverage is a statement about the
-              workspace, which a search box cannot change. Gated on the roster having landed,
-              though — over an errored fetch every role reads unheld. */}
-          {surface === 'roster' && unassigned.length > 0 && (
-            <AmberNote testId="roles-unassigned" style={{ marginBottom: 16 }}>
-              {unassignedNotice(unassigned.length)}
-              <div style={{ fontWeight: 600, marginTop: 3 }}>{unassigned.map((r) => r.title).join(' · ')}</div>
-            </AmberNote>
-          )}
-
           {noRoles ? (
             <div data-testid="roles-empty">
-              <EmptyState title={EMPTY_TITLE} message={EMPTY_MESSAGE} />
-              <div style={{ display: 'flex', justifyContent: 'center', marginTop: 14 }}>
-                <NewRoleButton testId="roles-empty-new" onClick={() => openRoleModal('create')} />
-              </div>
+              <EmptyState
+                title={EMPTY_TITLE}
+                message={EMPTY_MESSAGE}
+                messageMaxWidth={460}
+                action={<NewRoleButton testId="roles-empty-new" onClick={() => openRoleModal('create')} />}
+              />
             </div>
           ) : shown.length === 0 ? (
             // WorkflowsView's empty-list card (WorkflowsView.tsx:73): a card grid has no table
             // chrome to hang a muted row inside, so the muted row is its own card.
             <div
               data-testid="roles-no-match"
-              style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', padding: '26px 20px', fontSize: 13, lineHeight: 1.6, color: 'var(--fg-3)' }}
+              style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', padding: '26px 16px', textAlign: 'center', fontSize: 12.5, color: 'var(--fg-3)' }}
             >
               {NO_MATCH}
             </div>
@@ -159,8 +151,8 @@ function NewRoleButton({ onClick, testId }: { onClick: () => void; testId: strin
       type="button"
       onClick={onClick}
       data-testid={testId}
-      className="v2-btn pf-btn"
-      style={{ flex: 'none', height: 38, padding: '0 16px', fontSize: 13, background: 'var(--action)', color: 'var(--text-on-dark)', gap: 7 }}
+      className="v2-btn v2-btn-primary pf-btn"
+      style={{ flex: 'none', height: 36, gap: 7 }}
     >
       <span style={{ display: 'inline-flex' }}>{plusGlyph}</span> New role
     </button>
@@ -183,15 +175,15 @@ function RoleCard({ ctx, role, onEdit }: { ctx: PlatformCtx; role: Role; onEdit:
     // `Edit` is the only thing here that acts.
     <div
       data-testid="role-card"
-      style={{ height: '100%', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '16px 18px' }}
+      style={{ height: '100%', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '16px 16px 14px', gap: 12 }}
     >
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 14.5, fontWeight: 600, color: 'var(--fg-1)' }}>{role.title}</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--fg-1)' }}>{role.title}</div>
           {/* Two lines RESERVED whatever the text says: `desc` is the only variable-height
               thing on a card, so without this the avatar rows across a grid row stagger. */}
           <div
-            style={{ marginTop: 4, fontSize: 12.5, lineHeight: '18px', minHeight: 36, color: 'var(--fg-3)', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: '2', overflow: 'hidden' }}
+            style={{ marginTop: 3, fontSize: 12, lineHeight: 1.5, minHeight: 36, color: 'var(--fg-3)', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: '2', overflow: 'hidden' }}
           >
             {role.desc}
           </div>
@@ -200,36 +192,31 @@ function RoleCard({ ctx, role, onEdit }: { ctx: PlatformCtx; role: Role; onEdit:
           type="button"
           onClick={onEdit}
           data-testid="role-card-edit"
-          className="pf-btn"
-          style={{ flex: 'none', height: 28, padding: '0 12px', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 12.5, fontWeight: 500 }}
+          className="v2-btn v2-btn-ghost pf-btn"
+          style={{ flex: 'none', height: 28, padding: '0 11px', fontSize: 12 }}
         >
           Edit
         </button>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 26 }}>
         {held.length > 0 && (
-          <span style={{ flex: 'none', display: 'inline-flex' }}>
-            {held.slice(0, AVATAR_MAX).map((m, i) => (
-              // The ring is the card's own ground, so overlapping circles stay distinct.
-              <span key={m.id} style={{ display: 'inline-flex', borderRadius: 99, boxShadow: '0 0 0 2px var(--bg-2)', marginLeft: i === 0 ? 0 : -8 }}>
-                <InitialsChip initials={m.initials} status={m.status} size={26} />
-              </span>
-            ))}
-            {overflow > 0 && (
-              <span
-                className="mono"
-                aria-hidden="true"
-                style={{ display: 'grid', placeItems: 'center', boxSizing: 'border-box', width: 26, height: 26, marginLeft: -8, borderRadius: 99, boxShadow: '0 0 0 2px var(--bg-2)', background: 'var(--bg-3)', color: 'var(--fg-3)', fontSize: 10, fontWeight: 600 }}
-              >
-                +{overflow}
-              </span>
-            )}
-          </span>
+          <>
+            <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', paddingRight: 7 }}>
+              {held.slice(0, AVATAR_MAX).map((m) => (
+                <span key={m.id} title={m.name} style={{ display: 'inline-flex', marginRight: -7 }}>
+                  <InitialsChip initials={m.initials} status={m.status} size={26} ring />
+                </span>
+              ))}
+            </span>
+            <span className="mono" aria-hidden="true" data-testid="role-card-overflow" style={{ flex: 'none', fontSize: 10, color: 'var(--fg-3)' }}>
+              {overflow > 0 ? `+${overflow}` : ''}
+            </span>
+          </>
         )}
         {/* Red carries the whole fact: `resolve` deliberately appends no "suspended". */}
         <span
-          style={{ minWidth: 0, fontSize: 12.5, color: who.warn ? 'var(--status-red-text)' : 'var(--fg-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: who.warn ? 'var(--status-red-text)' : 'var(--fg-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
         >
           {who.text}
         </span>
@@ -237,11 +224,11 @@ function RoleCard({ ctx, role, onEdit }: { ctx: PlatformCtx; role: Role; onEdit:
 
       {/* Pinned. With `height: 100%` on the card, the tallest card in a grid row sets that
           row's height and every footer in it lands on one line. */}
-      <div style={{ marginTop: 'auto', paddingTop: 14, display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span className="mono" style={{ flex: 1, minWidth: 0, fontSize: 9.5, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--fg-3)' }}>
+      <div style={{ marginTop: 'auto', paddingTop: 10, borderTop: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+        <span className="mono" style={{ minWidth: 0, fontSize: 9.5, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--fg-3)' }}>
           {policiesLanded ? roleUsage(steps(policies, role.key)) : ''}
         </span>
-        <span className="mono" style={{ flex: 'none', fontSize: 9.5, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--fg-3)' }}>
+        <span className="mono" style={{ flex: 'none', fontSize: 9.5, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--fg-3)' }}>
           {holderCount(held.length)}
         </span>
       </div>

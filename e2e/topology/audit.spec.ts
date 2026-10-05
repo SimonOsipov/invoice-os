@@ -17,12 +17,11 @@
 // a containment, or a comparison against a live read taken in the same test.
 import { test, expect, type Locator, type Page } from '@playwright/test'
 
-import { createEntity, createInvoice, getAuditLog, login, PERSONAS } from '../api/client'
+import { createEntity, getAuditLog, login, PERSONAS } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { collectErrors, signInAs } from '../personaSession'
-import { approvalRun404Dropper } from './consoleGate'
 import { assertFillsColumn, assertPageDoesNotScrollSideways, gaps, rectsOverlap, settleAnimations, WIDE_WIDTHS } from './layout'
-import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
+import { FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 
 // Narrow enough to force the table past its floor -- see the file header.
 const SCROLL_WIDTH = 900
@@ -98,23 +97,6 @@ async function openBundleDrawer(page: Page): Promise<string> {
   await page.getByTestId('evidence-period-30d').click({ timeout: 15_000 })
   await expect(page.getByTestId('evidence-confirm-block')).toBeVisible({ timeout: 30_000 })
   return chosen
-}
-
-// Zero violations and never validated: only its invoice.created event is read.
-function cleanInvoiceFields(invoiceNumber: string) {
-  return {
-    invoice_number: invoiceNumber,
-    issue_date: '2026-01-01T00:00:00Z',
-    supplier_tin: freshTin(),
-    supplier_name: 'Acme Nigeria Ltd',
-    buyer_tin: '87654321-0002',
-    buyer_name: 'Buyer Ltd',
-    currency: 'NGN',
-    subtotal: '1000',
-    vat: '75',
-    total: '1075',
-    line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
-  }
 }
 
 test.describe('Audit screen', () => {
@@ -252,7 +234,7 @@ test.describe('Audit screen', () => {
           timeout: 10_000,
         })
         .toBeGreaterThan(0)
-      // clientWidth is the table's box inside its 1px border, which is the row's full span.
+      // audit-table has no border, so clientWidth is its full width, the row's full span.
       const [rowBox, headBox, tableWidth] = await Promise.all([
         row.boundingBox(),
         head.boundingBox(),
@@ -626,7 +608,7 @@ test.describe('Audit screen', () => {
     const header = panel.locator(':scope > div').first()
     // Direct children of their bands, so each one's inset from its band IS that band's padding.
     const bodyContent = page.getByTestId('evidence-company-helper')
-    const footerContent = page.getByTestId('evidence-bundle-cancel')
+    const footerContent = page.getByTestId('evidence-bundle-prepare')
     await expect(panel).toBeVisible({ timeout: 15_000 })
     await settleDrawerAnimation(page)
     await expect(header.getByTestId('evidence-bundle-title')).toHaveCount(1)
@@ -682,17 +664,15 @@ test.describe('Audit screen', () => {
       // L7 -- header, body and footer share one content column. Two claims, and the second is
       // the one that bites: the bands are full-width siblings, AND each band insets its own
       // content by the same amount. Comparing a band's OUTER box against another band's INNER
-      // content compares two different edges and fails by exactly the padding -- the first
-      // deploy-gate run reported 22, which is the padding, not a misalignment.
+      // content compares two different edges and fails by exactly the padding.
       const bandDrift = Math.max(Math.abs(bodyBox.x - footerBox.x), Math.abs(bodyBox.x - headerBox.x))
       expect(bandDrift, `the three bands must be full-width siblings at ${width}px`).toBeLessThanOrEqual(SLACK_PX)
 
-      // The footer is justify-content:flex-end, so its content column is measured from the
-      // RIGHT edge; the other two from the left. Equal insets is the relationship, and no
-      // number appears -- the three are only ever compared against each other.
+      // All three bands are left-aligned, so each content column is measured from the left
+      // edge. Equal insets is the relationship; no number appears.
       const headerInset = titleBox.x - headerBox.x
       const bodyInset = bodyContentBox.x - bodyBox.x
-      const footerInset = footerBox.x + footerBox.width - (footerContentBox.x + footerContentBox.width)
+      const footerInset = footerContentBox.x - footerBox.x
       const insetDrift = Math.max(Math.abs(headerInset - bodyInset), Math.abs(headerInset - footerInset))
       expect(insetDrift, `the three bands must share one content column at ${width}px`).toBeLessThanOrEqual(SLACK_PX)
 
@@ -897,7 +877,6 @@ test.describe('Audit screen', () => {
     await openBundleDrawer(page)
 
     const drawer = page.getByTestId('evidence-bundle-drawer')
-    const body = page.getByTestId('evidence-bundle-body')
     const footer = page.getByTestId('evidence-bundle-footer')
     const SLACK_PX = 2
 
@@ -922,12 +901,14 @@ test.describe('Audit screen', () => {
       const fillChildren = await bar.locator(':scope > *').count()
       expect(fillChildren, 'an indeterminate bar must have no fill child').toBe(0)
 
-      const [barBox, bodyBox] = await Promise.all([bar.boundingBox(), body.boundingBox()])
-      if (barBox && bodyBox) {
-        expect(barBox.x, 'the bar must start at the body column').toBeGreaterThanOrEqual(bodyBox.x - SLACK_PX)
-        expect(barBox.x + barBox.width, 'the bar must fill the body column').toBeGreaterThanOrEqual(
-          bodyBox.x + bodyBox.width - 24,
-        )
+      // The bar fills the building card's content box: 1px border + 22px padding each side.
+      const [barBox, cardBox] = await Promise.all([bar.boundingBox(), building.boundingBox()])
+      if (barBox && cardBox) {
+        expect(Math.abs(barBox.x - (cardBox.x + 23)), 'the bar must start at the card content box').toBeLessThanOrEqual(SLACK_PX)
+        expect(
+          Math.abs(barBox.x + barBox.width - (cardBox.x + cardBox.width - 23)),
+          'the bar must fill the card content box',
+        ).toBeLessThanOrEqual(SLACK_PX)
       }
     }
 
@@ -1005,7 +986,7 @@ test.describe('Audit screen', () => {
   })
 
   // Core AC E-1/E-2 and F: the System avatar against the person avatar (shape shared, glyph
-  // distinct), and the range/actor-kind pills against the Activity card's own reference chip.
+  // distinct), and the range/actor-kind pills against the prototype's applied-filter pill.
   test('audit_systemIconAndFilterPillsMatchTheirReferences', async ({ page }) => {
     test.setTimeout(90_000)
 
@@ -1021,32 +1002,16 @@ test.describe('Audit screen', () => {
     const stamp = Date.now()
     // Sorts after "Honeywell Group": in-house has no switcher, so its active entity is the first by name.
     const entity = await createEntity(token, { name: `Zenith BUG-17 audit ${stamp}`, tin: freshTin() })
-    const invoiceNumber = `INV-BUG17-AUDIT-${stamp}`
-    const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
 
     // People floor, scoped to this fixture's own company: a workspace-wide read could land
     // on a free-text actor (backfill-source-rows) that resolves to no initials at all.
     const peopleFloor = await getAuditLog(token, { actor_kind: 'people', company: entity.id, limit: 1 })
     expect(peopleFloor.total, "no person-actor row on the fixture's own company").toBeGreaterThan(0)
 
-    // The fixture is never validated, so LiveInvoiceDetail's approval-run GET 404s on mount
-    // (docs/e2e-convention.md) -- dropped locally, the invoice-surfaces.spec.ts:60-72 shape.
-    // Registered before signInAs: a listener attached after navigation misses what already fired.
-    const errors: string[] = []
-    const dropApprovalRun404 = approvalRun404Dropper(page)
-    page.on('console', (msg) => {
-      if (msg.type() !== 'error') return
-      if (dropApprovalRun404(msg.text(), msg.location().url)) return
-      errors.push(msg.text())
-    })
-    page.on('pageerror', (err) => {
-      errors.push(`pageerror: ${err.message}`)
-    })
+    // Before signInAs: a listener attached after navigation misses what already fired.
+    const errors = collectErrors(page)
 
     await signInAs(page, 'inhouse')
-    await page.goto(`${APP_URL}/invoices/${inv.id}`)
-    await expect(page, 'the invoice detail must settle on its own URL').toHaveURL(new RegExp(`/invoices/${inv.id}$`))
-    await expect(page.getByTestId('invoice-activity')).toBeVisible()
 
     // Pill (F): the pill follows the prototype's applied-filter pill, not the activity chip.
     await openAudit(page)
@@ -1071,14 +1036,22 @@ test.describe('Audit screen', () => {
 
     expect(pillStyle.fontFamily.split(',')[0].replace(/"/g, '').trim(), 'the range pill font family').toBe('Manrope')
     expect(pillStyle.fontSize, 'the range pill font size').toBe('12px')
-    expect(pillStyle.fontWeight, 'the range pill font weight').toBe('500')
+    expect(pillStyle.fontWeight, 'the range pill font weight').toBe('400')
     expect(pillStyle.borderTopWidth, 'the range pill border width').toBe('1px')
     expect(pillStyle.borderTopStyle, 'the range pill border style').toBe('solid')
     expect(pillStyle.borderTopColor, 'the range pill border color').toBe('rgb(201, 217, 214)')
     expect(pillStyle.backgroundColor, 'the range pill fill').toBe('rgb(250, 248, 242)')
     expect(pillStyle.color, 'the range pill text color').toBe('rgb(11, 48, 50)')
+    // Height is padding plus the text line, so it is a relationship: taller than its own
+    // text, shorter than the old fixed 28px.
+    const textLine = await pill.evaluate((el) => {
+      const range = document.createRange()
+      range.selectNodeContents(el.firstChild as Node)
+      return range.getBoundingClientRect().height
+    })
     if (pillBox) {
-      expect(pillBox.height, 'the range pill height').toBeCloseTo(28, 0)
+      expect(pillBox.height, 'the range pill is taller than its text line').toBeGreaterThan(textLine)
+      expect(pillBox.height, 'the range pill is shorter than the old 28px').toBeLessThan(28)
       expect(pillStyle.radius, 'the range pill corner').toBe('4px')
     }
 
@@ -1095,6 +1068,10 @@ test.describe('Audit screen', () => {
     await page.keyboard.press('Escape')
     // Prefix regex: the pill's remove glyph abuts its label (AuditFilterCard.tsx), as in auth.spec.ts's FILTER deep-link test.
     await expect(page.getByTestId('audit-pill-actorKind')).toHaveText(/^System only/)
+    const actorKindBox = await page.getByTestId('audit-pill-actorKind').boundingBox()
+    if (pillBox && actorKindBox) {
+      expect(Math.abs(pillBox.height - actorKindBox.height), 'every pill kind shares one height').toBeLessThanOrEqual(0.5)
+    }
 
     const sysRow = page.getByTestId('audit-row').first()
     await expect(sysRow).toBeVisible()

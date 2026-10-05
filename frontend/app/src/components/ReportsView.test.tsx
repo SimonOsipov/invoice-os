@@ -344,16 +344,17 @@ describe('ReportsView: export buttons are disabled-with-reason', () => {
     }
   })
 
-  // QA adversarial (mutation survivor): the disabled-attribute test above passes even if
-  // the inline mute is stripped entirely -- AC #1 also requires background/color/cursor,
-  // and nothing else in this file checks them.
-  it('all four export buttons carry the inline mute style (AC #1)', async () => {
+  // The disabled-attribute test above passes with the inline dimming stripped; this one pins
+  // the recipe (opacity, cursor, filter) and the absence of a fill or colour override.
+  it('all four export buttons carry the inline dimming recipe (AC #1)', async () => {
     await renderReady()
     for (const { name } of EXPORT_BUTTONS) {
       const btn = screen.getByRole('button', { name: new RegExp(name) }) as HTMLButtonElement
-      expect(btn.style.background, `${name} button background`).toBe('var(--bg-3)')
-      expect(btn.style.color, `${name} button color`).toBe('var(--fg-4)')
+      expect(btn.style.opacity, `${name} button opacity`).toBe('0.45')
       expect(btn.style.cursor, `${name} button cursor`).toBe('not-allowed')
+      expect(btn.style.filter, `${name} button filter`).toBe('none')
+      expect(btn.style.background, `${name} button keeps the ghost fill`).toBe('transparent')
+      expect(btn.style.color, `${name} button keeps the ghost colour`).toBe('')
     }
   })
 

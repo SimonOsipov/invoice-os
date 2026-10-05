@@ -185,6 +185,11 @@ pre.pf-json {
   white-space: pre;
 }
 
+/* Keyboard focus ring for a native checkbox hidden under a painted box. */
+.asc-app .pf-check:focus-visible + span {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
 /* ------------------------------------------------------------------
    Responsive degradation. The prototype is a fixed 1280×860 app shell
    with a 252px sidebar + multi-column grids. These media queries collapse

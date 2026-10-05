@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { AuditEvent, AuditResponse } from '../lib/audit'
@@ -337,10 +338,13 @@ describe('EvidenceBundleDrawer', () => {
     const entities = [mkEntity('ent-a', 'Alpha'), mkEntity('ent-b', 'Beta'), mkEntity('ent-c', 'Gamma')]
     await renderDrawer({ ctx: evidenceCtx(entities) })
     fireEvent.click(screen.getByTestId('evidence-company-trigger'))
-    const rows = entities.map((e) => screen.getByTestId(`evidence-company-row-${e.id}`))
-    rows.forEach((r) => expect(r.getAttribute('aria-pressed')).toBe('false'))
-    fireEvent.click(rows[0])
-    fireEvent.click(rows[1])
+    const rowsOf = () => entities.map((e) => screen.getByTestId(`evidence-company-row-${e.id}`))
+    rowsOf().forEach((r) => expect(r.getAttribute('aria-pressed')).toBe('false'))
+    fireEvent.click(rowsOf()[0])
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(rowsOf()[1])
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    const rows = rowsOf()
     const pressed = rows.filter((r) => r.getAttribute('aria-pressed') === 'true')
     expect(pressed).toHaveLength(1)
     expect(pressed[0]).toBe(rows[1])
@@ -358,6 +362,7 @@ describe('EvidenceBundleDrawer', () => {
 
     expect(panel.style.minWidth, 'control: the panel style is read').toBe('240px')
     expect(panel.style.boxShadow).toBe('var(--shadow-card)')
+    expect([panel.style.left, panel.style.right], 'the panel spans the trigger').toEqual(['0px', '0px'])
   })
 
   it('drawerCompany_listsTheEntityListNotTheFacets', async () => {
@@ -426,6 +431,19 @@ describe('EvidenceBundleDrawer', () => {
     expect(second.to).toBe(expected7d?.to)
   })
 
+  it('drawerCompanyPicker_isTheFullWidthFortyTallBlockTrigger', async () => {
+    await renderDrawer()
+    const trigger = screen.getByTestId('evidence-company-trigger')
+    expect([trigger.style.width, trigger.style.height, trigger.style.padding, trigger.style.gap]).toEqual(['100%', '40px', '0px 12px', '10px'])
+    // The label sits above the trigger and still names it.
+    const label = screen.getByTestId('evidence-company-label')
+    expect(label.className).toBe('label')
+    expect(label.compareDocumentPosition(trigger) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(trigger.contains(label)).toBe(false)
+    expect(trigger.getAttribute('aria-labelledby')).toContain(label.id)
+    expect(trigger.style.justifyContent, 'the summary flexes; the trigger does not space-between').toBe('')
+  })
+
   // EB-04-9
   it('drawerDisclosure_isAnInlineSvgChevronAndNoBackgroundImage', async () => {
     await renderDrawer()
@@ -456,6 +474,15 @@ describe('EvidenceBundleDrawer', () => {
     expect(onClose).not.toHaveBeenCalled()
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('drawerCompany_pickClosesThePanel', async () => {
+    await renderDrawer({ ctx: evidenceCtx([mkEntity('ent-a', 'Alpha')]) })
+    const trigger = screen.getByTestId('evidence-company-trigger')
+    fireEvent.click(trigger)
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+    expect(screen.queryByTestId('evidence-company-panel')).toBeNull()
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
   })
 
   // EB-04-11
@@ -509,6 +536,9 @@ describe('EvidenceBundleDrawer', () => {
     const panel = screen.getByTestId('evidence-bundle-drawer') as HTMLElement
     expect(panel.style.width).toBe('560px')
     expect(panel.style.maxWidth).toBe('94vw')
+    expect(panel.style.borderLeft).toBe('1px solid var(--line-2)')
+    expect(panel.style.boxShadow, 'drawers carry a border only').toBe('')
+    expect(panel.style.background).toBe('var(--bg-1)')
     expect(panel.style.position).toBe('fixed')
     expect(panel.style.top).toBe('0px')
     expect(panel.style.right).toBe('0px')
@@ -555,6 +585,7 @@ describe('EvidenceBundleDrawer', () => {
     fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
     await waitFor(() => expect(previewCalls(fetchMock)).toHaveLength(1))
 
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
     fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
     await new Promise((resolve) => setTimeout(resolve, 10))
     expect(previewCalls(fetchMock)).toHaveLength(1)
@@ -734,6 +765,7 @@ describe('EvidenceBundleDrawer', () => {
     const enabled = screen.getByTestId('evidence-bundle-prepare') as HTMLButtonElement
     expect(enabled.style.filter).toBe('')
     expect(enabled.style.background).toBe('')
+    expect([enabled.style.opacity, enabled.style.cursor]).toEqual(['', ''])
     cleanup()
 
     const empty = { ...PREVIEW, counts: { ...PREVIEW.counts, invoices: 0 } }
@@ -745,7 +777,8 @@ describe('EvidenceBundleDrawer', () => {
 
     const disabled = screen.getByTestId('evidence-bundle-prepare') as HTMLButtonElement
     expect(disabled.style.filter).toBe('none')
-    expect(disabled.style.background).toBe('var(--bg-3)')
+    expect(disabled.style.background, 'the primary fill is kept').toBe('')
+    expect(disabled.style.opacity).toBe('0.45')
     expect(disabled.style.cursor).toBe('not-allowed')
   })
 
@@ -766,6 +799,8 @@ describe('EvidenceBundleDrawer', () => {
     const prepare = screen.getByTestId('evidence-bundle-prepare') as HTMLButtonElement
     expect(prepare.disabled).toBe(true)
     expect(prepare.style.filter).toBe('none')
+    const reasonEl = screen.getByTestId('evidence-bundle-reason')
+    expect([reasonEl.style.fontSize, reasonEl.style.color, reasonEl.style.lineHeight]).toEqual(['12px', 'var(--fg-2)', '1.5'])
 
     await waitFor(() => expect(previewCalls(fetchMock)).toHaveLength(1))
     expect(downloadCalls(fetchMock)).toHaveLength(0)
@@ -797,8 +832,8 @@ describe('EvidenceBundleDrawer', () => {
 
   // EB-05-10 -- jsdom applies no stylesheet, so only the inline `style` attribute is a live
   // oracle, and it must be scoped to the block: ErrorState ships '#fff' and the drawer's own
-  // scrim ships an oklch() literal, both correct and both outside this block.
-  it('confirmBlock_usesTealTokensOnly', async () => {
+  // scrim ships a color-mix() expression, both correct and both outside this block.
+  it('confirmBlock_usesTheV2CardTokens', async () => {
     mockFetchSequence([previewResponse(PREVIEW)])
     await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
     fireEvent.click(screen.getByTestId('evidence-company-trigger'))
@@ -806,9 +841,35 @@ describe('EvidenceBundleDrawer', () => {
 
     const block = await screen.findByTestId('evidence-confirm-block')
     const heading = screen.getByTestId('evidence-confirm-heading')
-    expect(block.style.background).toBe('var(--action-tint)')
-    expect(block.style.border).toBe('1px solid var(--teal-200)')
+    expect(block.style.background).toBe('var(--bg-2)')
+    expect(block.style.border).toBe('1px solid var(--line-2)')
+    expect(block.style.padding).toBe('17px 18px')
+    expect(block.style.borderRadius).toBe('var(--radius-md)')
     expect(heading.style.color).toBe('var(--action)')
+    expect([heading.style.fontSize, heading.style.fontWeight, heading.style.letterSpacing]).toEqual(['9px', '700', '0.1em'])
+    expect(heading.className).toBe('mono')
+    const contentsHeading = screen.getByTestId('evidence-confirm-contents-heading')
+    expect([contentsHeading.style.color, contentsHeading.style.fontSize]).toEqual(['var(--fg-3)', '9px'])
+    const company = screen.getByTestId('evidence-confirm-company')
+    expect([company.style.fontSize, company.style.fontWeight]).toEqual(['17px', '700'])
+    expect(contentsHeading.parentElement?.style.borderTop, 'inner divider').toBe('1px solid var(--line-1)')
+    expect(screen.getByTestId('evidence-confirm-filename').parentElement?.style.borderTop, 'inner divider').toBe('1px solid var(--line-1)')
+    expect(block.innerHTML).not.toContain('--teal')
+    expect(block.style.marginTop).toBe('22px')
+    const period = screen.getByTestId('evidence-confirm-period')
+    const basis = screen.getByTestId('evidence-confirm-basis')
+    expect([period.style.fontSize, period.style.color]).toEqual(['13.5px', 'var(--fg-2)'])
+    expect([basis.style.fontSize, basis.style.lineHeight, basis.style.color]).toEqual(['12px', '1.5', 'var(--fg-3)'])
+    const rowLabels = screen.getAllByTestId('evidence-confirm-row-label')
+    const rowValues = screen.getAllByTestId('evidence-confirm-row-value')
+    expect(rowLabels.length).toBeGreaterThan(1)
+    expect(rowValues.length).toBeGreaterThan(1)
+    for (const l of rowLabels) expect([l.style.fontSize, l.style.lineHeight, l.style.color]).toEqual(['12px', '1.45', 'var(--fg-1)'])
+    for (const v of rowValues) expect([v.style.fontSize, v.style.color, v.style.fontWeight, v.className]).toEqual(['11px', 'var(--fg-2)', '', 'mono'])
+    const filename = screen.getByTestId('evidence-confirm-filename')
+    expect([filename.style.fontSize, filename.style.fontWeight, filename.style.color]).toEqual(['11px', '600', 'var(--fg-1)'])
+    const footnote = screen.getByTestId('evidence-confirm-footnote')
+    expect([footnote.style.fontSize, footnote.style.color, footnote.style.marginTop]).toEqual(['11.5px', 'var(--fg-3)', '12px'])
 
     const nodes = [block, ...Array.from(block.querySelectorAll('*'))]
     expect(nodes.length).toBeGreaterThanOrEqual(15)
@@ -1334,7 +1395,7 @@ describe('EvidenceBundleDrawer', () => {
       company: 'Honeywell Group',
       period: bundlePeriodLabel(PREVIEW.period),
     })
-    expect(onToast.mock.calls[0][0]).toEqual({ kind: 'success', text: expectedText, testId: 'evidence-bundle-toast' })
+    expect(onToast.mock.calls[0][0]).toEqual({ kind: 'success', text: expectedText, testId: 'evidence-bundle-toast', maxWidth: 440 })
 
     // The AC's own five facts, independent of the lib producing the sentence: toEqual above
     // passes whatever bundleToastCopy returns, including a string missing a fact.
@@ -1641,5 +1702,235 @@ describe('EvidenceBundleDrawer', () => {
     // The bytes are already held: Download is a save, not a second build.
     expect(downloadCalls(fetchMock)).toHaveLength(1)
     expect(phaseOnScreen()).toEqual(['evidence-ready'])
+  })
+
+  describe('surface geometry (RESKIN2-06-03)', () => {
+    const st = (id: string) => screen.getByTestId(id).style
+    const declsOf = (html: string, testId: string) => {
+      const tag = new RegExp(`<[^>]*data-testid="${testId}"[^>]*>`).exec(html)?.[0] ?? ''
+      return new Map((/style="([^"]*)"/.exec(tag)?.[1] ?? '').split(';').filter(Boolean).map((d) => d.split(/:(.+)/).slice(0, 2).map((x) => x.trim()) as [string, string]))
+    }
+
+    it('drawerScrim_isTheV2MixWithBothBlurs', async () => {
+      await renderDrawer()
+      expect(st('evidence-bundle-scrim').background).toBe('color-mix(in srgb, var(--surface) 55%, transparent)')
+      // jsdom drops backdrop-filter, so read the server-rendered style attribute.
+      const html = renderToStaticMarkup(<EvidenceBundleDrawer ctx={evidenceCtx()} base={BASE} onClose={vi.fn()} onToast={vi.fn()} />)
+      const scrim = declsOf(html, 'evidence-bundle-scrim')
+      expect(scrim.get('position'), 'control: the scrim declarations are read').toBe('fixed')
+      expect(scrim.get('backdrop-filter')).toBe('blur(6px)')
+      expect(scrim.get('-webkit-backdrop-filter')).toBe('blur(6px)')
+      expect(html).not.toContain('oklch')
+    })
+
+    it('drawerBands_headerBodyFooterFollowThePrototype', async () => {
+      await renderDrawer()
+      const header = screen.getByTestId('evidence-bundle-title').parentElement!.parentElement!
+      expect(header.parentElement, 'control: the header is a direct child of the panel').toBe(screen.getByTestId('evidence-bundle-drawer'))
+      expect([header.style.padding, header.style.background, header.style.borderBottom, header.style.gap]).toEqual(['20px 24px 16px', '', '1px solid var(--line-1)', '14px'])
+      expect([st('evidence-bundle-title').fontSize, st('evidence-bundle-title').fontWeight, st('evidence-bundle-title').letterSpacing, st('evidence-bundle-title').marginBottom]).toEqual(['19px', '700', '-0.02em', '4px'])
+      expect([st('evidence-bundle-subtitle').fontSize, st('evidence-bundle-subtitle').lineHeight, st('evidence-bundle-subtitle').color]).toEqual(['13px', '1.5', 'var(--fg-3)'])
+      const close = screen.getByTestId('evidence-bundle-close')
+      expect([close.style.width, close.style.height, close.style.background, close.style.color]).toEqual(['30px', '30px', 'var(--bg-3)', 'var(--fg-2)'])
+
+      expect(st('evidence-bundle-body').padding).toBe('20px 24px 28px')
+      expect(st('evidence-bundle-body').minHeight, 'the body can shrink so the footer stays on screen').toMatch(/^0(px)?$/)
+      expect([st('evidence-company-helper').fontSize, st('evidence-company-helper').lineHeight, st('evidence-company-helper').color]).toEqual(['11.5px', '1.5', 'var(--fg-3)'])
+
+      const footer = st('evidence-bundle-footer')
+      expect([footer.padding, footer.borderTop, footer.justifyContent, footer.background]).toEqual(['14px 24px', '1px solid var(--line-1)', 'flex-start', ''])
+    })
+
+    it('drawerFooter_everyPhaseButtonIsThirtyEightTallAndPrimaryReadsFirst', async () => {
+      const heightsIn = () => {
+        const buttons = Array.from(screen.getByTestId('evidence-bundle-footer').querySelectorAll('button'))
+        expect(buttons.length, 'control: the footer holds buttons').toBeGreaterThan(0)
+        return buttons.map((b) => [b.getAttribute('data-testid'), b.style.height])
+      }
+      routedFetch({ bundle: () => new Promise<MockResponse>(() => {}) })
+      await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+      expect(heightsIn()).toEqual([['evidence-bundle-prepare', '38px'], ['evidence-bundle-cancel', '38px']])
+      await prepareBundle()
+      await screen.findByTestId('evidence-building')
+      expect(heightsIn()).toEqual([['evidence-building-cancel', '38px']])
+      cleanup()
+
+      routedFetch()
+      await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+      await prepareBundle()
+      await screen.findByTestId('evidence-ready')
+      expect(heightsIn()).toEqual([['evidence-ready-download', '38px'], ['evidence-ready-start-another', '38px']])
+      expect(st('evidence-ready-download').gap).toBe('8px')
+      expect(screen.getByTestId('evidence-ready-download').querySelector('svg'), 'the download glyph').toBeTruthy()
+      cleanup()
+
+      routedFetch({ bundle: () => errorResponse(502, 'bad gateway') })
+      await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+      await prepareBundle()
+      await screen.findByTestId('evidence-bundle-failure')
+      expect(heightsIn()).toEqual([['evidence-failed-retry', '38px'], ['evidence-failed-cancel', '38px']])
+    })
+
+    it('drawerChips_followThePrototypeAndTheActiveOneIsFilled', async () => {
+      await renderDrawer()
+      expect([st('evidence-period-chips').gap, st('evidence-period-chips').flexWrap]).toEqual(['7px', 'wrap'])
+      const chips = DATE_PRESETS.map(({ id }) => screen.getByTestId(`evidence-period-${id}`))
+      expect(chips.length, 'control: there are chips').toBeGreaterThan(1)
+      for (const c of chips) expect([c.style.height, c.style.padding, c.style.fontSize, c.style.fontWeight, c.style.cursor]).toEqual(['32px', '0px 13px', '12.5px', '500', 'pointer'])
+      const active = chips.filter((c) => c.getAttribute('aria-pressed') === 'true')
+      const idle = chips.filter((c) => c.getAttribute('aria-pressed') === 'false')
+      expect(active).toHaveLength(1)
+      expect(idle.length).toBe(chips.length - 1)
+      expect([active[0].style.background, active[0].style.border, active[0].style.color]).toEqual(['var(--action)', '1px solid var(--action)', 'var(--primary-foreground)'])
+      for (const c of idle) expect([c.style.background, c.style.border, c.style.color]).toEqual(['transparent', '1px solid var(--line-2)', 'var(--fg-2)'])
+      fireEvent.click(idle[0])
+      expect(idle[0].style.background, 'a clicked chip takes the fill').toBe('var(--action)')
+      expect(active[0].style.background, 'the previous chip gives it up').toBe('transparent')
+    })
+
+    // The prototype draws the chips as `.pf-btn` (7px via the cascade); `.pf-chip` resolves to 4px.
+    it('drawerChips_renderAtTheButtonRadius', async () => {
+      await renderDrawer()
+      const chips = DATE_PRESETS.map(({ id }) => screen.getByTestId(`evidence-period-${id}`))
+      expect(chips.length).toBeGreaterThan(1)
+      for (const c of chips) {
+        expect(c.classList.contains('pf-btn'), `${c.textContent} wears pf-btn`).toBe(true)
+        expect(c.classList.contains('pf-chip'), `${c.textContent} does not wear pf-chip`).toBe(false)
+      }
+    })
+
+    // The prototype's auXGlyph is 12px, stroke 2.
+    it('drawerClose_glyphIsTwelvePx', async () => {
+      await renderDrawer()
+      const svg = screen.getByTestId('evidence-bundle-close').querySelector('svg')
+      expect(svg, 'the close button draws an svg').toBeTruthy()
+      expect([svg?.getAttribute('width'), svg?.getAttribute('height'), svg?.getAttribute('stroke-width')]).toEqual(['12', '12', '2'])
+    })
+
+    it('drawerCustomDates_sitSideBySideAndEachInputKeepsItsName', async () => {
+      await renderDrawer()
+      fireEvent.click(screen.getByTestId('evidence-period-custom'))
+      const wrap = st('evidence-period-custom-fields')
+      expect([wrap.display, wrap.gap, wrap.marginTop, wrap.flexDirection]).toEqual(['flex', '10px', '10px', ''])
+      const from = screen.getByLabelText('From') as HTMLInputElement
+      const to = screen.getByLabelText('To') as HTMLInputElement
+      expect(from).toBe(screen.getByTestId('evidence-period-from'))
+      expect(to).toBe(screen.getByTestId('evidence-period-to'))
+      for (const input of [from, to]) {
+        expect([input.style.height, input.style.fontSize]).toEqual(['34px', '12.5px'])
+        const field = input.parentElement!
+        expect(field.tagName).toBe('LABEL')
+        expect(field.style.flex).toBe('1 1 0%')
+        expect(field.querySelector('.label'), 'the caption wears .label').toBeTruthy()
+      }
+    })
+
+    it('drawerCompanyPicker_nameIsLabelPlusSummaryAndOptionsFollowThePrototype', async () => {
+      const long = 'Extraordinarily Long Registered Company Name Of The Federal Republic Trading As Something Else Ltd'
+      await renderDrawer({ ctx: evidenceCtx([mkEntity('ent-a', long), mkEntity('ent-b', 'Beta')]) })
+      const trigger = screen.getByTestId('evidence-company-trigger')
+      expect(screen.getByRole('button', { name: `${EVIDENCE_COPY.companyLabel} ${EVIDENCE_COPY.companyPlaceholder}` })).toBe(trigger)
+
+      fireEvent.click(trigger)
+      expect(trigger.style.background, 'a block trigger takes no open tint').toBe('var(--bg-2)')
+      const list = screen.getByTestId('evidence-company-row-ent-a').parentElement!
+      expect([list.style.maxHeight, list.style.overflowY, list.style.padding]).toEqual(['380px', 'auto', '4px 0px'])
+      const [rowA, rowB] = ['ent-a', 'ent-b'].map((id) => screen.getByTestId(`evidence-company-row-${id}`))
+      for (const r of [rowA, rowB]) expect([r.style.padding, r.style.fontSize, r.style.color]).toEqual(['9px 12px', '13px', 'var(--fg-1)'])
+      expect([rowA.style.background, rowA.style.fontWeight, rowB.style.fontWeight]).toEqual(['transparent', '500', '500'])
+
+      fireEvent.click(rowA)
+      fireEvent.click(trigger)
+      // The whole name is in the accessible name even though the box ellipsises it.
+      expect(screen.getByRole('button', { name: `${EVIDENCE_COPY.companyLabel} ${long}` })).toBe(trigger)
+      const chosen = trigger.querySelector('[id] > span') as HTMLElement
+      expect(chosen.textContent, 'control: the chosen name is in the trigger').toBe(long)
+      const summary = chosen.parentElement as HTMLElement
+      expect([summary.style.whiteSpace, summary.style.overflow, summary.style.textOverflow]).toEqual(['nowrap', 'hidden', 'ellipsis'])
+      expect(chosen.style.color, 'a chosen company reads in --fg-1').toBe('var(--fg-1)')
+      expect([screen.getByTestId('evidence-company-row-ent-a').style.background, screen.getByTestId('evidence-company-row-ent-a').style.fontWeight]).toEqual(['var(--bg-3)', '600'])
+      expect(screen.getByTestId('evidence-company-row-ent-a').style.color, 'the chosen row keeps --fg-1').toBe('var(--fg-1)')
+    })
+
+    it('building_isACardHoldingATrackAndOneChildlessPulsingFill', async () => {
+      routedFetch({ bundle: () => new Promise<MockResponse>(() => {}) })
+      await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+      await prepareBundle()
+      const card = await screen.findByTestId('evidence-building')
+      expect([card.style.background, card.style.border, card.style.borderRadius, card.style.padding]).toEqual(['var(--bg-2)', '1px solid var(--line-1)', 'var(--radius-md)', '22px'])
+
+      const bar = screen.getByTestId('evidence-building-bar')
+      expect(bar.children.length, 'the fill has no child').toBe(0)
+      expect([bar.style.background, bar.style.height, bar.style.width]).toEqual(['var(--action)', '100%', '100%'])
+      expect(bar.style.animation, 'the prototype fill: pulse 1.2s').toBe('pulse 1.2s linear infinite')
+      expect(bar.style.opacity, 'the pulse keyframe owns opacity').toBe('')
+      const track = bar.parentElement!
+      expect(track.parentElement, 'the track sits directly in the card').toBe(card)
+      expect([track.style.height, track.style.background, track.style.borderRadius, track.style.overflow]).toEqual(['6px', 'var(--bg-3)', 'var(--radius-sm)', 'hidden'])
+      expect(track.children, 'the track holds only the fill').toHaveLength(1)
+      expect(card.contains(screen.getByTestId('evidence-building-title')) && card.contains(screen.getByTestId('evidence-building-note'))).toBe(true)
+    })
+
+    it('ready_isACardWithAMonoFilenameAndMetaLine', async () => {
+      routedFetch()
+      await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+      await prepareBundle()
+      const card = await screen.findByTestId('evidence-ready')
+      expect([card.style.background, card.style.border, card.style.borderRadius, card.style.padding]).toEqual(['var(--bg-2)', '1px solid var(--line-1)', 'var(--radius-md)', '16px'])
+      const name = screen.getByTestId('evidence-ready-filename')
+      const line = screen.getByTestId('evidence-ready-line')
+      expect([name.style.fontSize, name.style.fontWeight, name.style.color]).toEqual(['11.5px', '600', 'var(--fg-1)'])
+      expect([line.style.fontSize, line.style.letterSpacing, line.style.color]).toEqual(['9.5px', '0.06em', 'var(--fg-3)'])
+      expect(card.contains(name) && card.contains(line)).toBe(true)
+    })
+
+    it('drawerSurface_noOklchGradientOrPillRadiusInAnyPhase', async () => {
+      const BAD = /oklch|gradient|border-radius:\s*(99|999)/i
+      expect(BAD.test('background: repeating-linear-gradient(1px)')).toBe(true)
+      expect(BAD.test('border-radius: 99px')).toBe(true)
+      const scan = (label: string) => {
+        const nodes = Array.from(screen.getByTestId('evidence-bundle-drawer').querySelectorAll('*'))
+        expect(nodes.length, `${label}: control: nodes were scanned`).toBeGreaterThan(5)
+        expect(nodes.filter((n) => BAD.test(n.getAttribute('style') ?? '')).map((n) => n.getAttribute('data-testid')), label).toEqual([])
+      }
+      routedFetch({ bundle: () => new Promise<MockResponse>(() => {}) })
+      await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+      scan('form')
+      await prepareBundle()
+      await screen.findByTestId('evidence-building')
+      scan('building')
+      cleanup()
+      routedFetch()
+      await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+      await prepareBundle()
+      await screen.findByTestId('evidence-ready')
+      scan('ready')
+      cleanup()
+      routedFetch({ bundle: () => errorResponse(502, 'bad gateway') })
+      await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+      await prepareBundle()
+      await screen.findByTestId('evidence-bundle-failure')
+      scan('failed')
+    })
+
+    it('prepare_dimsOnARefusalAndRecoversOnceThePeriodIsComplete', async () => {
+      routedFetch()
+      await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+      fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+      fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+      await screen.findByTestId('evidence-confirm-block')
+      const prepare = () => screen.getByTestId('evidence-bundle-prepare') as HTMLButtonElement
+      expect([prepare().disabled, prepare().style.opacity]).toEqual([false, ''])
+
+      fireEvent.click(screen.getByTestId('evidence-period-custom'))
+      expect([prepare().disabled, prepare().style.opacity, prepare().style.cursor, prepare().style.filter]).toEqual([true, '0.45', 'not-allowed', 'none'])
+      expect(screen.getByTestId('evidence-bundle-reason').textContent).toBe(EVIDENCE_COPY.noPeriodReason)
+
+      fireEvent.change(screen.getByTestId('evidence-period-from'), { target: { value: '2026-07-01' } })
+      fireEvent.change(screen.getByTestId('evidence-period-to'), { target: { value: '2026-07-31' } })
+      await screen.findByTestId('evidence-confirm-block')
+      await waitFor(() => expect(prepare().disabled).toBe(false))
+      expect([prepare().style.opacity, prepare().style.cursor, prepare().style.filter]).toEqual(['', '', ''])
+    })
   })
 })

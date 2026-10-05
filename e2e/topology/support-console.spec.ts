@@ -1,4 +1,4 @@
-// The deployed v2 Support Console (RESKIN2-08). The console is mock-backed: this spec pins fixture behaviour and the v2 look, not a contract.
+// The deployed v2 Support Console. The console is mock-backed: this spec pins fixture behaviour and the v2 look, not a contract.
 // Resolved values are read at 1440; layout claims assert a relationship at every wide width.
 // Screenshots are attached for the reviewer and never asserted.
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'

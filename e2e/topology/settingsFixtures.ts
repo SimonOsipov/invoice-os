@@ -38,10 +38,10 @@ export interface SeededMember {
 // inserted later would sort after these however it was named. The SET and its size are the
 // claim.
 //
-// A literal length IS pinned, against persona-surfaces.spec.ts's ban on literal counts over
-// live lists, because this list cannot grow: no endpoint mints a membership (there is no
-// invite), and PATCH writes `status` only. api/isolation.spec.ts already pins the exact
-// user_id set for the same reason.
+// The seeded list cannot grow: no endpoint mints a membership (there is no invite), and PATCH
+// writes `status` only. The live roster is this list plus the tenant's e2e member
+// (realAccounts.ts, granted through /auth/mock/member), so a spec compares the seeded subset
+// (`isSeededMember`) exactly and counts one extra row. api/isolation.spec.ts pins the user_id set.
 export const SEED_FIRM_MEMBERS: readonly SeededMember[] = [
   { name: 'Chinedu Okafor', email: 'c.okafor@okafor.ng', accessRole: 'Admin', pill: 'ACTIVE' },
   { name: 'Folake Adesina', email: 'f.adesina@okafor.ng', accessRole: 'Preparer', pill: 'ACTIVE' },

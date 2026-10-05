@@ -100,7 +100,7 @@ and drives the app's persona-scoped surfaces, the import wizard, invoices and Wo
 
 Each unit is serial on one worker, for the same reason as the api suite: the specs of a
 unit share the same non-reset deployed dev database (`[topology-config-conforms-workers-1]`).
-The two shard units sign in on their own seeded tenants (`topology/shardSession.ts`), so
+The two shard units sign in on their own seeded tenants (`signInAs` with a `tenantId`), so
 they do not contend with the lane. Beyond `GATEWAY_URL` + `APP_URL` it
 also needs `LANDING_URL` — `topology/auth.spec.ts` starts at the landing front door.
 

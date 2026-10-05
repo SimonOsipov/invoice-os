@@ -3,9 +3,9 @@
 // from e2e/personas.test.ts, which runs under vitest in `node` and would break if the pure
 // registry pulled in Playwright.
 
-import { expect, type Page } from '@playwright/test'
+import { expect, type Page, type Request } from '@playwright/test'
 
-import { DESTINATION_ENV, PERSONAS, signInUrl, type Destination, type PersonaId } from './personas'
+import { DESTINATION_ENV, type Destination, type PersonaId } from './personas'
 import { resolveTarget } from './targets'
 
 // Each destination's own proof that it actually drew for a signed-in persona — not that the
@@ -27,27 +27,70 @@ export const DESTINATION_READY: Record<Destination, (page: Page) => Promise<void
   },
 }
 
-// Sign in as an app persona through the landing hand-off and wait until its destination has
-// drawn. The landing page is the only front door, so `?persona=` IS the sign-in. A console
-// takes a staff session instead (staffSession.ts). The response is asserted ok() BEFORE the
-// discriminator so an HTTP failure reports as itself, not as a selector timeout.
-// `tenantId` signs in to a shard tenant: the session is seeded first and asserted after.
-// `path` is where the app lands.
+export const VERIFIED = '[title="Tenant verified via /v1/me"]'
+const SESSION_KEY = 'invoice-os.session'
+
+export function isHandoffNavigation(url: string): boolean {
+  return url.startsWith(resolveTarget('APP_URL')) && new URL(url).searchParams.has('handoff')
+}
+
+export async function submitSignIn(page: Page, email: string, password: string): Promise<void> {
+  const dialog = page.getByRole('dialog', { name: 'Platform login' })
+  await dialog.getByLabel('Work email', { exact: true }).fill(email)
+  await dialog.getByLabel('Password', { exact: true }).fill(password)
+  await dialog.getByRole('button', { name: 'Sign in →', exact: true }).click()
+}
+
+export async function expectInWorkspace(page: Page, account: { workspaceName: string }): Promise<void> {
+  await expect(page.locator(VERIFIED)).toBeAttached({ timeout: 30_000 })
+  await expect(page.locator('aside.pf-sidebar')).toContainText(account.workspaceName.toUpperCase())
+}
+
+// App path -> landing front door -> "Platform login" -> hand-off navigation back to the app.
+async function passFrontDoor(page: Page, account: { email: string; password: string }, path: string): Promise<void> {
+  await page.goto(`${resolveTarget('APP_URL')}${path}`)
+  await page.waitForURL((u) => u.href.startsWith(resolveTarget('LANDING_URL')), { timeout: 20_000 })
+  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
+  await Promise.all([
+    page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
+    submitSignIn(page, account.email, account.password),
+  ])
+}
+
+export async function signInAtFrontDoor(page: Page, account: { email: string; password: string; workspaceName: string }, path: string): Promise<void> {
+  await passFrontDoor(page, account, path)
+  await expectInWorkspace(page, account)
+}
+
+// Sign in as the e2e member of a tenant (realAccounts.ts) through the landing form, then wait for the app to draw.
+// `tenantId` defaults to the seeded 1111 (firm) / 2222 (inhouse); `path` is where the app lands.
+// Postcondition: no main-frame navigation carried `persona=`, and the stored session is a hand-off session for the tenant.
+// ceiling: about two extra SPA loads per test, revisit with per-worker storageState above +3 min per unit.
 export async function signInAs(page: Page, id: PersonaId, opts: { tenantId?: string; path?: string } = {}): Promise<void> {
-  const { tenantId, path } = opts
-  let url = signInUrl(id, path)
-  if (tenantId !== undefined) {
-    if (id !== 'firm' && id !== 'inhouse') throw new Error(`signInAs: persona "${id}" has no shard tenant`)
-    const { TENANTS } = await import('./topology/targets')
-    await (await import('./topology/shardSession')).seedShardSession(page, id, { ...TENANTS[id === 'firm' ? 'a' : 'b'], id: tenantId })
-    // The seeded in-house session is the sign-in; its `?persona=` would re-mint seeded tenant 2222.
-    if (id === 'inhouse') url = url.split('?')[0]
+  if (id !== 'firm' && id !== 'inhouse') throw new Error(`signInAs: persona "${id}" has no e2e member`)
+  const { TENANTS } = await import('./topology/targets')
+  const { ensureMember } = await import('./realAccounts')
+  const tenantId = opts.tenantId ?? TENANTS[id === 'firm' ? 'a' : 'b'].id
+  const member = await ensureMember(tenantId, id === 'firm' ? 'firm' : 'in_house')
+
+  const personaNavs: string[] = []
+  const onRequest = (r: Request): void => {
+    if (r.isNavigationRequest() && r.frame() === page.mainFrame() && new URL(r.url()).searchParams.has('persona')) personaNavs.push(r.url())
   }
-  const res = await page.goto(url)
-  expect(res, `no response from ${url}`).toBeTruthy()
-  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
-  await DESTINATION_READY[PERSONAS[id].destination](page)
-  if (tenantId !== undefined) await (await import('./topology/shardSession')).assertShardSession(page, tenantId)
+  page.on('request', onRequest)
+  try {
+    await passFrontDoor(page, member, opts.path ?? '/')
+    await DESTINATION_READY.app(page)
+  } finally {
+    page.off('request', onRequest)
+  }
+
+  expect(personaNavs, 'signInAs navigated with ?persona=, the removed mock door').toEqual([])
+  const raw = await page.evaluate((key) => localStorage.getItem(key), SESSION_KEY)
+  expect(raw, 'no stored session after sign-in').not.toBeNull()
+  const session = JSON.parse(raw!) as { handoff?: boolean; me?: { tenant?: { id?: string } } }
+  expect(session.handoff, 'the stored session is not a hand-off session').toBe(true)
+  expect(session.me?.tenant?.id, `the session is bound to another tenant than ${tenantId}`).toBe(tenantId)
 }
 
 // The refusal half of the axis: hand a destination a persona it does not admit and assert it

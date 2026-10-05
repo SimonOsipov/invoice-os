@@ -31,8 +31,8 @@
 // COUNT ASSERTIONS: persona-surfaces.spec.ts bans literal counts over LIVE, tenant-wide lists
 // on the deployment every suite in the run shares, and permits exactly two shapes — (1) compared against a live API
 // read taken in the same test, (2) containment of rows this test itself created. The member
-// roster is exempt from the ban and stays a literal count: no endpoint mints a membership
-// (there is no invite) and PATCH writes `status` only, so that list cannot grow.
+// roster is exempt from the ban and stays a literal count: the seeded list cannot grow (no
+// invite, PATCH writes `status` only), and signInAs adds exactly one e2e member (realAccounts.ts).
 // workflow_roles is NOT exempt — Test 3 creates one from this very screen — so every
 // role-grid count below uses shape (1) (Test 1, Test 2, via e2e/api/client.ts's
 // listWorkflowRoles) or shape (2) (Test 3, via the created/deleted role's own locator).
@@ -285,9 +285,9 @@ const FIRM_ROSTER_CELLS: readonly SeedRosterCell[] = [
 // em-dash example — the firm carries that case above.
 const INHOUSE_ROSTER_CELLS: readonly SeedRosterCell[] = [{ member: 'Ngozi Balogun', text: 'Finance Director', tooltip: 'Finance Director' }]
 
-// `pickerMembers().length` — every seeded member, since none of them is `invited`.
-const FIRM_PICKER_SELECTABLE = SEED_FIRM_MEMBERS.length
-const INHOUSE_PICKER_SELECTABLE = SEED_INHOUSE_MEMBERS.length
+// `pickerMembers().length` — every seeded member plus the e2e member, since none is `invited`.
+const FIRM_PICKER_SELECTABLE = SEED_FIRM_MEMBERS.length + 1
+const INHOUSE_PICKER_SELECTABLE = SEED_INHOUSE_MEMBERS.length + 1
 
 // …0004 Musa Danjuma holds TWO seats, which is what makes his drawer's pill loop a real check
 // rather than an all-false one. The drawer's step count and its policy list used to be
@@ -528,9 +528,10 @@ test('firm Settings: the live member directory, the live role grid, and every co
   // --- the roster is the SERVER's ----------------------------------------------------------
   // Members is the default tab, so this renders without a click. Six rows, each carrying an
   // email no fixture in this repo ever held — that is what makes this a live read and not a
-  // renamed mock.
+  // renamed mock. Plus one row: the e2e member signInAs made an admin.
   await expect(page.getByTestId('members-table')).toBeVisible()
-  await expect(page.getByTestId('member-row')).toHaveCount(SEED_FIRM_MEMBERS.length)
+  await expect(page.getByTestId('member-row')).toHaveCount(SEED_FIRM_MEMBERS.length + 1)
+  await expect(memberRow(page, 'E2E Firm Admin')).toHaveCount(1)
   for (const m of SEED_FIRM_MEMBERS) {
     await expectRosterRow(page, m)
   }
@@ -690,7 +691,8 @@ test('in-house Settings: its own live roster, three unsignable seats, and the su
   // each token reads only its own is RLS's claim, proven at the wire in api/isolation.spec.ts
   // and rendered here.
   await expect(page.getByTestId('members-table')).toBeVisible()
-  await expect(page.getByTestId('member-row')).toHaveCount(SEED_INHOUSE_MEMBERS.length)
+  await expect(page.getByTestId('member-row')).toHaveCount(SEED_INHOUSE_MEMBERS.length + 1)
+  await expect(memberRow(page, 'E2E In-house Admin')).toHaveCount(1)
   for (const m of SEED_INHOUSE_MEMBERS) {
     await expectRosterRow(page, m)
   }

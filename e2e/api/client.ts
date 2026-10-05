@@ -247,8 +247,11 @@ export interface MemberGrant {
   email: string
 }
 
-// RED stub (AUTH-15-03 Mode A): POST /auth/mock/member, mock build only.
-export async function grantMembership(_grant: MemberGrant): Promise<void> {}
+// POST /auth/mock/member (internal/gateway/mockmember.go answers 204); mock build only.
+export async function grantMembership(grant: MemberGrant): Promise<void> {
+  const res = await rawFetch('/auth/mock/member', { method: 'POST', body: grant })
+  if (res.status !== 204) throw new Error(`member grant answered ${res.status}: ${JSON.stringify(res.body)}`)
+}
 
 // ---- Wire contract types, declared locally to the verified contract
 // (internal/tenancy, internal/portfolio/portfolio.go, internal/validation/

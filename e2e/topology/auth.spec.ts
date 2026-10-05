@@ -1,7 +1,7 @@
 import { test, expect, type BrowserContext, type Frame, type Page, type Request, type Response } from '@playwright/test'
 import { APP_URL, FIRM_PERSONA, GATEWAY_URL, INHOUSE_PERSONA } from './targets'
 import { resolveTarget } from '../targets'
-import { DESTINATION_READY, collectErrors, sidebarRoster } from '../personaSession'
+import { DESTINATION_READY, VERIFIED, collectErrors, expectInWorkspace, isHandoffNavigation, sidebarRoster, signInAtFrontDoor, submitSignIn } from '../personaSession'
 import { CONSOLE_SESSION_KEY, consoleUrl, seedStaffSession, type ConsoleTarget } from '../staffSession'
 import { PERSONAS, PERSONA_IDS, DESTINATION_ENV, type PersonaId } from '../personas'
 import {
@@ -834,7 +834,6 @@ test("deployed app: Back past a company switch cannot resume the previous compan
 
 // The real sign-in hand-off, driven through the landing form against a fresh GoTrue
 // account with its own workspace (forks auto-confirm).
-const VERIFIED = '[title="Tenant verified via /v1/me"]'
 const SESSION_KEY = 'invoice-os.session'
 const JWT_IN_URL = /eyJ[\w-]+\.[\w-]+\./
 // internal/gateway/handoff.go HandoffTTL.
@@ -864,13 +863,6 @@ function gatedErrors(page: Page, drops: Dropper[]): string[] {
   return errors
 }
 
-async function submitSignIn(page: Page, email: string, password: string): Promise<void> {
-  const dialog = page.getByRole('dialog', { name: 'Platform login' })
-  await dialog.getByLabel('Work email', { exact: true }).fill(email)
-  await dialog.getByLabel('Password', { exact: true }).fill(password)
-  await dialog.getByRole('button', { name: 'Sign in →', exact: true }).click()
-}
-
 // Origin and path only: a failure message must not print the leaked secret.
 function leakingUrls(urls: string[], ...secrets: string[]): string[] {
   return urls
@@ -879,15 +871,6 @@ function leakingUrls(urls: string[], ...secrets: string[]): string[] {
       const at = new URL(u)
       return at.origin + at.pathname.replace(/eyJ[\w.-]*/g, '<jwt>')
     })
-}
-
-function isHandoffNavigation(url: string): boolean {
-  return url.startsWith(APP_URL) && new URL(url).searchParams.has('handoff')
-}
-
-async function expectInWorkspace(page: Page, account: RealAccount): Promise<void> {
-  await expect(page.locator(VERIFIED)).toBeAttached({ timeout: 30_000 })
-  await expect(page.locator('aside.pf-sidebar')).toContainText(account.workspaceName.toUpperCase())
 }
 
 // The app origin's stored session in this context, or null.
@@ -1341,17 +1324,6 @@ async function ageStoredSession(page: Page, patch: Partial<StoredRenewal> = {}):
     },
     { key: SESSION_KEY, patch, ageMs: 61 * 60_000 },
   )
-}
-
-async function signInAtFrontDoor(page: Page, account: RealAccount, path: string): Promise<void> {
-  await page.goto(`${APP_URL}${path}`)
-  await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
-  await Promise.all([
-    page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
-    submitSignIn(page, account.email, account.password),
-  ])
-  await expectInWorkspace(page, account)
 }
 
 // Gateway requests in send order. The browser's CORS preflights are not application requests.

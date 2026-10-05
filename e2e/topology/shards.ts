@@ -38,13 +38,13 @@ export const UNITS: Unit[] = [
       'environment-posture.spec.ts':
         'Cost, not shared state ([fork-lane-by-cost]): reads and writes no tenant data. A shard costs ~1 min of runner setup for one 1.4 s test.',
       'isolation.spec.ts':
-        'Asserts the exact seeded membership sets (firm: 6 members) and tenant identities of 1111 and 2222.',
+        'Asserts the exact seeded membership subsets (firm: 6 seeded members, plus at most its e2e member) and tenant identities of 1111 and 2222.',
       'persona-surfaces.spec.ts':
         "Builds the in-house approval queue and badge on the active policy `internal/demopolicy` seeds only on 1111 / 2222. Needs 2222's seeded `Honeywell Group` entity as its first client (the subtitle assertion).",
       'portfolio.spec.ts':
         'Cost, not shared state ([fork-lane-by-cost]): creates its own entities and scopes each assertion to their rows. A shard costs ~1 min of runner setup for ~37 s of tests.',
       'roles.spec.ts':
-        'Asserts the exact seeded roles, staffing and rosters of both tenants, derived by hand from `db/seed.dev.sql`, and the demopolicy-sealed policies.',
+        'Asserts the exact seeded roles, staffing and rosters of both tenants (the seeded rows plus exactly one e2e member row), derived by hand from `db/seed.dev.sql`, and the demopolicy-sealed policies.',
       'workflows.spec.ts':
         "Creates and deletes one firm policy in 1111 and asserts the list count as `baseline` / `baseline + 1`, where the baseline includes the demopolicy-seeded firm policy. The count holds only while no other spec writes 1111's policies at the same time, which the lane guarantees. It never publishes (`[topology-never-publishes]`).",
     },

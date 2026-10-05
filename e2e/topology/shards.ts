@@ -66,7 +66,7 @@ export const UNITS: Unit[] = [
   },
   {
     name: 'import-wizard',
-    specs: ['import-wizard.spec.ts'],
+    specs: ['import-wizard.spec.ts', 'import-review-surfaces.spec.ts'],
     tenants: {
       firm: '11111111-1111-1111-1111-00000000e2e1',
       inHouse: '22222222-2222-2222-2222-00000000e2e1',

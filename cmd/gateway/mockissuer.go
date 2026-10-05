@@ -45,3 +45,8 @@ func mockStaffRoute(dsn string, logger *slog.Logger) http.Handler {
 		return db.GrantStaff(ctx, dsn, userID)
 	}, logger)
 }
+
+// mockMemberRoute is a stub (AUTH-15-02 Mode A): it never reaches the grant.
+func mockMemberRoute(dsn string, logger *slog.Logger) http.Handler {
+	return http.NotFoundHandler()
+}

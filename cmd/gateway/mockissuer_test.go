@@ -247,3 +247,47 @@ func TestTaggedMockStaffRouteWiresTheGrant(t *testing.T) {
 		t.Errorf("log %q does not name the DSN host %q", logs.String(), dsnHost)
 	}
 }
+
+// Same shape as TestTaggedMockStaffRouteWiresTheGrant: an unreachable DSN gives 502 for a valid body.
+func TestTaggedMockMemberRouteWiresTheGrant(t *testing.T) {
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	const dsnHost = "member-dsn-marker.invalid"
+	h := mockMemberRoute("postgres://u@"+dsnHost+":5432/db", logger)
+	post := func(body string) *httptest.ResponseRecorder {
+		ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+		defer cancel()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequestWithContext(ctx, http.MethodPost, "/auth/mock/member", strings.NewReader(body)))
+		return rec
+	}
+	valid := `{"user_id":"` + uuid.NewString() + `","tenant_id":"` + uuid.NewString() +
+		`","role":"admin","display_name":"Ada Okafor","email":"ada@example.test"}`
+	// Messages from gateway.MockMemberHandler (Design § API contract).
+	const (
+		unavailable = `{"error":"membership grant unavailable"}`
+		invalid     = `{"error":"invalid request body"}`
+	)
+
+	for _, c := range []struct {
+		name, body string
+		code       int
+		want       string
+	}{
+		{"valid body, unreachable database", valid, http.StatusBadGateway, unavailable},
+		{"malformed body", `{`, http.StatusBadRequest, invalid},
+	} {
+		rec := post(c.body)
+		if rec.Code != c.code {
+			t.Errorf("%s: POST = %d (body %s), want %d", c.name, rec.Code, rec.Body.String(), c.code)
+			continue
+		}
+		if got := strings.TrimSpace(rec.Body.String()); got != c.want {
+			t.Errorf("%s: body = %s, want %s", c.name, got, c.want)
+		}
+	}
+	// The failed connection names the DSN host, so the route is bound to the DSN it was given.
+	if !strings.Contains(logs.String(), dsnHost) {
+		t.Errorf("log %q does not name the DSN host %q", logs.String(), dsnHost)
+	}
+}

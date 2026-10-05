@@ -156,7 +156,7 @@ describe('RulesView, reskin surface', () => {
     suggest.forEach((b, i) => expect.soft(css(b).get('border-radius'), `suggest button ${i}`).toBe('var(--radius-btn)'))
   })
 
-  // Pin: D-3 and shared AC 1 exempt the toggle track.
+  // Pin: the toggle track is exempt.
   it('the toggle track stays a 99px pill', () => {
     const tracks = [...mountSsr(rulesCtx(false)).querySelectorAll('.pf-toggle')]
 

@@ -421,7 +421,7 @@ describe('UblDocumentCard', () => {
     expect(screen.getByRole('button', { name: 'Download .xml' }).getAttribute('data-testid')).toBe('ubl-card-download')
   })
 
-  // RESKIN2-03-02 (D-4, table B). Soft assertions: every new value shows red on its own line.
+  // Table B. Soft assertions: every new value shows red on its own line.
   it('READ ONLY is 9/700/0.09em on --fg-3', () => {
     const source = render(<SourceDocumentCard meta={sourceMeta()} onOpen={vi.fn()} extraction={{ jobId: 'job-1', loading: false, failed: false }} onOpenExtraction={vi.fn()} />)
     const ubl = renderCard()

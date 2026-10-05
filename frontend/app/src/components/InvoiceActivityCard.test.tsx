@@ -1154,7 +1154,7 @@ describe('InvoiceActivityCard takes the v2 look (RESKIN2-03-02)', () => {
     }
     const inert = screen.getByTestId('activity-chip-documents')
     expect(inert).toHaveProperty('disabled', true)
-    expect.soft(inert.style.opacity, 'inert chip opacity').toBe('0.8')
+    expect.soft(inert.style.opacity, 'inert chip opacity').toBe('0.4')
   })
 
   it('the chips band is a ruled strip', async () => {

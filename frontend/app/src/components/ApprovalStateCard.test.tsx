@@ -304,7 +304,7 @@ describe('ApprovalStateCard', () => {
     expect(within(el).queryAllByTestId('approval-due')).toHaveLength(0)
   })
 
-  // ---- RESKIN2-03-01: the card takes the prototype's approvals-card look ----
+  // ---- the card takes the prototype's approvals-card look ----
 
   it('the approvals pill is a 4px badge with no dot', () => {
     render(<ApprovalStateCard run={readyRun(runFixture({ steps: [stepFixture()] }))} />)

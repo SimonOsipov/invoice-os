@@ -94,7 +94,7 @@ export function RuleDrawer({ rule, scope, onClose, onRemove }: Props) {
                 <div className="label" style={{ marginBottom: 5, textTransform: 'none', letterSpacing: 0 }}>
                   {p.label}
                 </div>
-                <div className="mono" style={{ display: 'flex', alignItems: 'center', height: 36, padding: '0 11px', fontSize: 12, color: 'var(--fg-1)', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)' }}>
+                <div className="mono" style={{ display: 'flex', alignItems: 'center', minHeight: 36, padding: '8px 11px', overflowWrap: 'anywhere', fontSize: 12, color: 'var(--fg-1)', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)' }}>
                   {p.value}
                 </div>
               </div>

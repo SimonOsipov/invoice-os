@@ -5463,7 +5463,7 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// RESKIN2-03: the v2 look of the invoice detail, the source modal and the rules view, as the
+// The v2 look of the invoice detail, the source modal and the rules view, as the
 // cascade resolves it on the PR environment. Value reads, never a pixel diff; layout claims
 // assert a relationship. Screenshots are attached for the reviewer and never asserted.
 const SHEET_URL = /\/api\/invoice\/v1\/documents\/[^/]+\/sheet(\?|$)/
@@ -5736,7 +5736,7 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
     }
     await dvAttach(page, testInfo, 'dv-01', { ...read, scroll })
 
-    // D-38: the resolve button stays inside its card at every wide width.
+    // The resolve button stays inside its card at every wide width.
     const sweep = await dvSweepWide(page, async () => {
       const r = await dvRead(page, { deadEnd, resolve })
       return { deadEnd: r.targets.deadEnd.rect, resolve: r.targets.resolve.rect }
@@ -5968,7 +5968,7 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
     expect(enclosesRect(e.column.rect, e.form.rect, 1), 'the edit form lies inside the detail column').toBe(true)
     await dvAttach(page, testInfo, 'dv-06', { view, edit })
 
-    // D-38: no line row scrolls sideways and every remove button stays inside the form.
+    // No line row scrolls sideways and every remove button stays inside the form.
     const sweep = await dvSweepWide(page, async () => {
       const r = await dvRead(page, { form }, { within: { lineRows: { of: 'form', sel: '[data-testid="line-row"]' }, lineRemoves: { of: 'form', sel: '[data-testid="line-remove"]' } } })
       return { form: r.targets.form.rect, lineRows: r.within.lineRows, lineRemoves: r.within.lineRemoves }
@@ -5983,6 +5983,24 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
       for (const [i, remove] of s.lineRemoves.entries()) {
         expect(enclosesRect(s.form, remove.rect, 1), `line-remove ${i} lies inside the edit form at ${s.width}px`).toBe(true)
       }
+    }
+
+    // Below 1180px the rail is a fixed 340px: the rows scroll inside their own box and stay reachable.
+    const entry = page.viewportSize()
+    try {
+      for (const width of [1180, 1120]) {
+        await page.setViewportSize({ width, height: 900 })
+        const removes = form.getByTestId('line-remove')
+        for (let i = 0; i < (await removes.count()); i++) {
+          const remove = removes.nth(i)
+          await remove.scrollIntoViewIfNeeded()
+          const box = await remove.locator('xpath=ancestor::*[@data-testid="line-row"]/parent::*').boundingBox()
+          const at = await remove.boundingBox()
+          expect(box && at && enclosesRect(box, at, 1), `line-remove ${i} is reachable in the scroll box at ${width}px`).toBe(true)
+        }
+      }
+    } finally {
+      if (entry) await page.setViewportSize(entry)
     }
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])

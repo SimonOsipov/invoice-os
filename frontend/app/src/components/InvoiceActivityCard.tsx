@@ -119,7 +119,7 @@ export function InvoiceActivityCard({
                     background: on ? 'var(--action)' : 'transparent',
                     color: on ? 'var(--primary-foreground)' : 'var(--fg-2)',
                     // Inline, matching the repo: there is no `:disabled` rule anywhere.
-                    ...(c.inert ? { opacity: 0.8, cursor: 'not-allowed' } : {}),
+                    ...(c.inert ? { opacity: 0.4, cursor: 'not-allowed' } : {}),
                   }}
                 >
                   {c.label}

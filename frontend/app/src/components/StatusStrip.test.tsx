@@ -129,7 +129,7 @@ const SENTINEL_NODES: StripNode[] = KEYS.map((key, i) => ({
   caption: `Sentinel caption ${i}`,
 }))
 
-// D-7: the prototype's status-strip look map, with Q3 applied to the labels.
+// The prototype's status-strip look map, with the label colours applied.
 const PROTOTYPE_MAP: Record<StripState, { bg: string; border: string; fg: string; label: string }> = {
   done: { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', fg: 'var(--status-green-text)', label: 'var(--fg-1)' },
   failed: { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', fg: 'var(--status-red-text)', label: 'var(--fg-1)' },
@@ -360,7 +360,7 @@ describe('StatusStrip: tone', () => {
     }
     expect(labels.length, 'labels were read').toBeGreaterThan(0)
     expect(labels).not.toContain('var(--fg-4)')
-    // Control: --fg-4 stays on the unreached node glyph (an icon use, Q3), so the absence above is about labels.
+    // Control: --fg-4 stays on the unreached node glyph (an icon use), so the absence above is about labels.
     expect(glyphs).toContain('var(--fg-4)')
   })
 

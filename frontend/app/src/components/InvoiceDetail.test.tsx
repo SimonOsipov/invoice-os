@@ -6068,6 +6068,17 @@ describe('InvoiceDetail cards, rail and inline edit take the v2 look (RESKIN2-03
     expect.soft(editTable.style.borderRadius, 'edit view').toBe('var(--radius-md)')
   })
 
+  it('the edit line table scrolls sideways inside its own box', async () => {
+    mockDetailFetch(detailRecord(editable))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByText('Description')
+
+    fireEvent.click(screen.getByTestId('edit-toggle'))
+    const editTable = screen.getByTestId('line-row').parentElement as HTMLElement
+    expect(editTable.textContent, 'control: the edit table holds the header').toContain('Description')
+    expect.soft(editTable.style.overflowX, 'edit table scrolls sideways').toBe('auto')
+  })
+
   it('the rail may shrink below its content', async () => {
     mockDetailFetch(detailRecord({ id: ID, status: 'validated' }))
     render(<InvoiceDetail ctx={detailCtx(ID)} />)

@@ -197,7 +197,7 @@ describe('ViolationsTable', () => {
     for (const cell of placeholderCells) expect((cell as HTMLElement).style.overflowWrap).toBe('anywhere')
   })
 
-  // RESKIN2-03-02 (D-10, table B). Soft assertions: every new value shows red on its own line.
+  // Table B. Soft assertions: every new value shows red on its own line.
   it('compliance pass and not-validated are plain text', () => {
     render(<ViolationsTable violations={[]} ruleSetVersion={4} />)
 

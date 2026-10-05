@@ -116,8 +116,7 @@ export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
 type LineRowState = Record<'description' | 'quantity' | 'unit_price' | 'line_total' | 'line_tax', string>
 
 // description / qty / unit / amount / tax / remove, declared once so header and rows cannot drift.
-// Tracks are the prototype's. No `minmax()` floor on description: a bare `1fr` shrinks instead of
-// pushing the row past the card's `overflow: hidden` and hiding the remove button.
+// Tracks are the prototype's; the table box scrolls sideways when the rail is narrower than the rows.
 // The numeric inputs override .pf-input's side padding down to 8px to keep the mono digits legible.
 const LINE_EDIT_GRID = '1fr 64px 110px 110px 100px 28px'
 const EDIT_INPUT = { height: 34, fontSize: 13, padding: '0 10px' } as const
@@ -1471,8 +1470,8 @@ function InvoiceEditBody({
           <div className="label" style={{ marginBottom: 5 }}>
             Line items
           </div>
-          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: LINE_EDIT_GRID, gap: 8, padding: '8px 12px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
+          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflowX: 'auto' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: LINE_EDIT_GRID, gap: 8, padding: '8px 12px', minWidth: 'max-content', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
               <span className="label">Description</span>
               <span className="label">Qty</span>
               <span className="label">Unit</span>
@@ -1481,7 +1480,7 @@ function InvoiceEditBody({
               <span />
             </div>
             {rows.map((row, i) => (
-              <div key={i} data-testid="line-row" style={{ display: 'grid', gridTemplateColumns: LINE_EDIT_GRID, gap: 8, padding: '8px 12px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}>
+              <div key={i} data-testid="line-row" style={{ display: 'grid', gridTemplateColumns: LINE_EDIT_GRID, gap: 8, padding: '8px 12px', minWidth: 'max-content', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}>
                 <input className="pf-input" type="text" value={row.description} onChange={(e) => updateRow(i, 'description', e.target.value)} style={{ ...LINE_INPUT }} disabled={submitting} />
                 <input className="pf-input" type="text" value={row.quantity} onChange={(e) => updateRow(i, 'quantity', e.target.value)} style={{ ...LINE_INPUT, fontFamily: 'var(--font-mono)', padding: '0 8px' }} disabled={submitting} />
                 <input className="pf-input" type="text" value={row.unit_price} onChange={(e) => updateRow(i, 'unit_price', e.target.value)} style={{ ...LINE_INPUT, fontFamily: 'var(--font-mono)', padding: '0 8px' }} disabled={submitting} />

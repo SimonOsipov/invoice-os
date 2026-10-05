@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // ROUTE-05-02: the capture call inside the front-door effect (App.tsx, the effect under the
-// "The single front door" comment), which must run under the same activeSession/authStart/handoffPending
+// "The single front door" comment), which must run under the same seat/authStart/handoffPending
 // guards as the bounce it precedes.
 
 import { readFileSync } from 'node:fs'
@@ -546,8 +546,8 @@ function interceptHref() {
 }
 
 // ROUTE-05-05. signOut's own pathname rewrite (App.tsx:1589) already lands before the
-// front-door effect re-fires on the resulting activeSession->null transition (its deps are
-// [activeSession, authStart, handoffPending]) -- App.routeBoot.test.tsx's
+// front-door effect re-fires on the resulting seat->null transition (its deps are
+// [seat, authStart, handoffPending]) -- App.routeBoot.test.tsx's
 // signOut_thePathnameDoesNotSurviveIntoTheNextSignIn proves that ordering under real
 // navigation. So AC-2/AC-4 below hold today without any new production line; only AC-1's
 // OTHER scenario -- a destination stored BEFORE this signOut, left by an earlier, unrelated
@@ -574,7 +574,7 @@ describe('Sign-out clears the captured destination (ROUTE-05-05)', () => {
 
     expect(
       captureDestinationSpy,
-      "the front-door effect's dependency array is [activeSession, authStart, handoffPending] -- it must re-run on this transition and reach its capture call",
+      "the front-door effect's dependency array is [seat, authStart, handoffPending] -- it must re-run on this transition and reach its capture call",
     ).toHaveBeenCalledWith('/', '')
     expect(readDestination(), 'the rewritten root path is refused, so nothing is captured').toBeNull()
   })
@@ -669,7 +669,7 @@ describe('Sign-out clears the captured destination (ROUTE-05-05)', () => {
     })
 
     // Two writes: signOut's own tail goes to bare landing (unchanged), then the
-    // front-door effect re-fires on activeSession->null and bounces with the stored state.
+    // front-door effect re-fires on seat->null and bounces with the stored state.
     expect(hrefWrites, 'signOut writes href twice: its own tail, then the front-door re-fire').toEqual([
       'https://landing.example',
       stateBounce(),

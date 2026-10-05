@@ -135,8 +135,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
   // Sign out (M3-07-03). Replaces the old decorative gear: the gear read as
   // "settings" (already a nav item) and had no handler — this footer slot now holds
   // one real action. Default/hover color live in `.pf-signout` (platform.css) so the
-  // :hover token can win (an inline color would beat the hover rule). Hoisted to a
-  // const so the flag-on and flag-off footers render the identical element.
+  // :hover token can win (an inline color would beat the hover rule).
   const signOutButton = (
     <button
       onClick={ctx.signOut}

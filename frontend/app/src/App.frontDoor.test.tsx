@@ -203,7 +203,7 @@ describe('front door: the redirect arm (F-201)', () => {
   })
 
   it('FD-4: an existing session suppresses the redirect', () => {
-    // Fails if `activeSession ||` is dropped -- the effect would fire the assignment over
+    // Fails if `seat ||` is dropped -- the effect would fire the assignment over
     // a live session and bounce every signed-in reload back to landing.
     localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
     stubLocation()

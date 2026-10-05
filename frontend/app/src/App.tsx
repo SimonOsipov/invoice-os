@@ -207,8 +207,8 @@ function SuspendedNotice({ onSignOut }: { onSignOut: () => void }) {
   )
 }
 
-// A remounted workspace cannot resume a half-built draft or a selected invoice, so both
-// collapse to the list they came from.
+// A half-built draft or a selected invoice cannot outlive its screen, so both collapse to
+// the list they came from.
 const carryView = (view: View): View => (view === 'create' || view === 'detail' || view === 'extraction' ? 'invoices' : view)
 
 // `company` is in the union but only in an in-house strip (SettingsView builds it). A firm
@@ -565,15 +565,14 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
       setEntityId(active.entityId)
     }
   }, [createStep, entityId, active.entityId])
-  // Aligns a boot URL that named no path (a DEMO-06 carry, an unknown
+  // Aligns a boot URL that named no path (an unknown
   // path) with the view it produced. `replaceState`, mount-only: never a history entry.
   // It also normalises a URL that DID name a path: unowned params are dropped and the
   // owned ones re-emitted from state.
   // Reads bootView/seed rather than the live atoms -- at mount they agree, and seed is
   // what the URL actually carried. A restored deep link therefore lands in the address
   // bar addressed, not collapsed to /invoices.
-  // Also clears the stored destination unconditionally: a persona-switch remount must not
-  // inherit a stray one.
+  // Also clears the stored destination unconditionally.
   // Deps stay []: a mount alignment, not a mirror --
   // boot_theAlignmentDoesNotReRunWhenViewChangesAfterMount.
   useEffect(() => {
@@ -732,7 +731,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   function switchClient(id: string) {
     setActiveEntityId(id)
     // The entry being left names a drill-down of the company being left. Scrub its id
-    // through the same collapse a persona switch uses, so Back cannot return to it.
+    // through carryView, so Back cannot return to it.
     // `id`, never a state read: setActiveEntityId(id) above has not committed, so
     // active.entityId here still names the company being LEFT. Same discipline as
     // navigate's own `id` comment.

@@ -293,7 +293,7 @@ describe('Sidebar footer, characterization pin', () => {
   })
 })
 
-describe('Sidebar footer, flag-off card reads ctx.user (AUTH-09-02)', () => {
+describe('Sidebar footer, the card reads ctx.user (AUTH-09-02)', () => {
   const BADGE = '[title="Tenant verified via /v1/me"]'
   const ROLLUP = rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 })
   const footer = () => document.querySelector('aside.pf-sidebar > div:last-of-type')!

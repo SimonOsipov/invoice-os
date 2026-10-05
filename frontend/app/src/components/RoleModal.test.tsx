@@ -3,6 +3,9 @@
 // RED specs for RoleModal's write path (AC-5 through AC-10): save()/remove() go async, the
 // modal renders a rejected write's server sentence instead of closing on it, and no key is
 // composed client-side any more.
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -546,6 +549,9 @@ describe('Role modal v2 paint', () => {
     renderModal(editSubject, { members: crew, staffRole })
     const input = within(rowOf('Bo Person')).getByRole('checkbox') as HTMLInputElement
     expect(input.style.opacity, 'transparent over the painted box').toBe('0')
+    expect(input.style.zIndex, 'above the painted box, so it takes the pointer').toBe('1')
+    expect(input.className, 'the focus-ring rule keys on this class').toBe('pf-check')
+    expect(input.nextElementSibling, 'the focus-ring rule rings the next sibling').toBe(boxOf(rowOf('Bo Person')))
     expect(input.checked).toBe(false)
     fireEvent.click(input)
     expect(input.checked).toBe(true)
@@ -668,6 +674,15 @@ describe('Role modal v2 paint', () => {
     expect(save.textContent).toBe('Save role')
     expect(save.disabled).toBe(false)
     expect(recipeOf(save), 'the dimming lifts with the lock').toEqual(['', '', ''])
+  })
+
+  // jsdom cannot evaluate :focus-visible, so the rule text is the oracle; a deployed Tab covers the paint.
+  it('platform.css rings the painted box of a keyboard-focused picker checkbox', () => {
+    const platformCss = readFileSync(join(process.cwd(), 'src/styles/platform.css'), 'utf8')
+    const rule = /\.asc-app \.pf-check:focus-visible \+ span\s*\{([^}]*)\}/.exec(platformCss)
+    expect(platformCss.length, 'the sheet loaded').toBeGreaterThan(1000)
+    expect(rule, 'the rule exists').toBeTruthy()
+    expect(rule![1]).toMatch(/box-shadow:\s*0 0 0 2px var\(--ring\)/)
   })
 
   it('the close button is the 30px bg-3 square and closes when idle', () => {

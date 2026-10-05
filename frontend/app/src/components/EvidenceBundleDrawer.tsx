@@ -1,7 +1,5 @@
 // AUDIT-08-04: the drawer shell + Form phase. Forked from MemberDrawer for structure/
-// behaviour and RuleDrawer for the panel/band colour split (task-667 §2) -- FilterPopover
-// and .pf-chip paint themselves --bg-2, so a --bg-2 panel here would be ground-on-ground,
-// MemberDrawer's own documented defect in mirror image.
+// behaviour and RuleDrawer for the panel colour.
 //
 // AUDIT-08-05 adds the confirmation block, refusal rendering and the disabled Prepare button.
 // AUDIT-08-06 adds the build phases (Building/Ready/Failed), the abort and the download toast.
@@ -10,7 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { ErrorState, toApiError, useAsync, type ApiError } from '@invoice-os/api-client'
 
-import { closeGlyph, downloadGlyph } from '../glyphs'
+import { downloadGlyph } from '../glyphs'
 import { AUDIT_FILTER_DEFAULT, type AuditRange } from '../lib/auditFilters'
 import {
   bundleRequestFor,
@@ -34,6 +32,7 @@ import { useDismiss } from '../lib/useDismiss'
 import type { PlatformCtx } from '../types'
 
 import { DATE_PRESETS } from './AuditFilterCard'
+import { dismissGlyph } from './AuditExportToast'
 import { FilterPopover } from './FilterPopover'
 
 // id === data-testid, the shipped shape at AuditView.tsx:244.
@@ -231,7 +230,7 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
             data-testid="evidence-bundle-close"
             style={{ flex: 'none', width: 30, height: 30, border: 0, background: 'var(--bg-3)', color: 'var(--fg-2)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}
           >
-            {closeGlyph}
+            {dismissGlyph}
           </button>
         </div>
 
@@ -290,11 +289,10 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
                     data-testid={`evidence-period-${id}`}
                     aria-pressed={range.preset === id}
                     onClick={() => setRange({ preset: id })}
-                    className="pf-chip"
+                    className="pf-btn"
                     style={{
                       height: 32,
                       padding: '0 13px',
-                      // No borderRadius: .pf-chip forces its radius with !important.
                       fontFamily: 'var(--font-sans)',
                       fontSize: 12.5,
                       fontWeight: 500,
@@ -440,7 +438,7 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
                 <div
                   id={REASON_ID}
                   data-testid={REASON_ID}
-                  style={{ marginTop: 12, fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}
+                  style={{ marginTop: 12, fontSize: 12, lineHeight: 1.5, color: 'var(--fg-2)' }}
                 >
                   {reason}
                 </div>

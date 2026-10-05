@@ -7,7 +7,7 @@ import { Icon } from '../icons'
 
 const EXPORT_TOAST_MS = 5200
 const DEFAULT_TEST_ID = 'audit-export-toast'
-const dismissGlyph = <Icon paths={['M18 6 6 18', 'm6 6 12 12']} size={12} strokeWidth={2} />
+export const dismissGlyph = <Icon paths={['M18 6 6 18', 'm6 6 12 12']} size={12} strokeWidth={2} />
 
 export function AuditExportToast({
   kind,

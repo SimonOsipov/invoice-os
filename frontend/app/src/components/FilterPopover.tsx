@@ -1,7 +1,7 @@
 // Shared popover shell for the five audit filter triggers (AUDIT-07). Anatomy: MoreMenu
 // (MemberParts.tsx:534-618) -- wrapper ref covers trigger + panel, useDismiss(open,
 // onDismiss, wrapRef), trigger toggles explicitly on click so its own button can close an
-// open panel. Two departures: a labelled trigger carrying chevDownGlyph (not icon-only),
+// open panel. Two departures: a trigger carrying chevDownGlyph (not icon-only),
 // and arbitrary children instead of MenuAction[].
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'

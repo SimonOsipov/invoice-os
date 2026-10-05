@@ -787,7 +787,7 @@ describe('EvidenceBundleDrawer', () => {
     expect(prepare.disabled).toBe(true)
     expect(prepare.style.filter).toBe('none')
     const reasonEl = screen.getByTestId('evidence-bundle-reason')
-    expect([reasonEl.style.fontSize, reasonEl.style.color, reasonEl.style.lineHeight]).toEqual(['11.5px', 'var(--fg-3)', '1.5'])
+    expect([reasonEl.style.fontSize, reasonEl.style.color, reasonEl.style.lineHeight]).toEqual(['12px', 'var(--fg-2)', '1.5'])
 
     await waitFor(() => expect(previewCalls(fetchMock)).toHaveLength(1))
     expect(downloadCalls(fetchMock)).toHaveLength(0)

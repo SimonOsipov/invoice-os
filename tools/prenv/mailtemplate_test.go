@@ -4,6 +4,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -15,7 +16,7 @@ import (
 )
 
 const (
-	// GoTrue v2.197.0 conf/configuration.go:677 TemplateMaxSize; its io.LimitReader reads this many bytes.
+	// GoTrue v2.197.0 conf TemplateMaxSize; its io.LimitReader reads this many bytes.
 	goTrueTemplateMaxSize = 1_000_000
 
 	// The sample ConfirmationURL of the plan (RESEND-01-04, QA F11); html/template writes its & as &amp;.
@@ -363,6 +364,7 @@ func TestMailTemplateCheck_OneFailureFailsTheRun(t *testing.T) {
 // AC 11: html/template writes the & of the sample URL as &amp;; the check compares the unescaped output.
 func TestMailTemplateCheck_ConfirmationURLWithAmpersand(t *testing.T) {
 	escaped := strings.ReplaceAll(mailSampleURL, "&", "&amp;")
+	i := strings.Index(mailSampleURL, "&")
 	if escaped == mailSampleURL {
 		t.Fatal("the sample URL carries no &; the case proves nothing")
 	}
@@ -370,6 +372,8 @@ func TestMailTemplateCheck_ConfirmationURLWithAmpersand(t *testing.T) {
 		"rendered in text":        mailMinimalTemplate,
 		"rendered in an href":     `<a href="{{ .ConfirmationURL }}">Confirm</a>`,
 		"the sample, pre-escaped": `<a href="` + escaped + `">Confirm</a>`,
+		"the check's sample has the & where the plan puts it": fmt.Sprintf(
+			`{{ if eq (slice .ConfirmationURL %d %d) "&" }}{{ .ConfirmationURL }}{{ end }}`, i, i+1),
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {

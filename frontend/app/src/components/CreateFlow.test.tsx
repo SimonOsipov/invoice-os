@@ -936,3 +936,138 @@ describe('CreateFlow — the v2 strip and blocked hand-off (RESKIN2-04-01)', () 
     expect(buttons[0].style.cursor).toBe('')
   })
 })
+
+// RESKIN2-04-02 (D-4, D-11, D-43): the manual and carried form in the v2 look.
+describe('CreateFlow — the manual form follows the v2 prototype (RESKIN2-04-02)', () => {
+  afterEach(() => cleanup())
+
+  const TWO_LINES: LineItem[] = [
+    { desc: 'Bolts', qty: 2, price: 10 },
+    { desc: 'Nuts', qty: 1, price: 5 },
+  ]
+  const draftOf = (items: LineItem[], number = 'INV-1'): Draft => ({ number, buyer: '', buyerTin: '', date: '', currency: 'NGN', items })
+  const COLS = '1fr 70px 120px 130px 24px'
+
+  function formCtx(over: Record<string, unknown> = {}): PlatformCtx {
+    return createFlowCtx('form', null, { draft: draftOf(TWO_LINES), activeEntity: S_ENTITY, ...over })
+  }
+  function button(container: HTMLElement, label: string | RegExp): HTMLButtonElement {
+    const hit = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+      typeof label === 'string' ? b.textContent === label : label.test(b.textContent ?? ''),
+    )
+    expect(hit, `control: button "${String(label)}" must render`).not.toBeUndefined()
+    return hit as HTMLButtonElement
+  }
+  function lineTable(container: HTMLElement): { table: HTMLElement; header: HTMLElement } {
+    const header = Array.from(container.querySelectorAll<HTMLElement>('span.label')).find((s) => s.textContent === 'Description')
+      ?.parentElement as HTMLElement
+    expect(header, 'control: the line table header must render').not.toBeUndefined()
+    return { table: header.parentElement as HTMLElement, header }
+  }
+
+  it('the manual form follows the prototype', () => {
+    const { container } = render(<CreateFlow ctx={formCtx()} />)
+    const title = Array.from(container.querySelectorAll<HTMLElement>('.card-title')).find((t) => t.textContent?.startsWith('New invoice'))
+    expect(title, 'control: the form card title must render').not.toBeUndefined()
+    expect.soft(title!.className).toContain('card-title')
+    expect.soft(title!.style.fontSize).toBe('15px')
+
+    const { table, header } = lineTable(container)
+    expect.soft(table.style.borderRadius).toBe('var(--radius-md)')
+    expect.soft(header.style.gridTemplateColumns).toBe(COLS)
+    const rows = Array.from(container.querySelectorAll<HTMLElement>('input[placeholder="Description"]')).map((i) => i.parentElement as HTMLElement)
+    expect(rows, 'control: two line rows').toHaveLength(2)
+    for (const row of rows) expect.soft(row.style.gridTemplateColumns).toBe(COLS)
+
+    const add = button(container, /Add line/)
+    // .pf-chip forces the corner, so an inline radius is dead (D-44); the class stays.
+    expect.soft(add.className).toContain('pf-chip')
+    expect.soft(add.style.borderRadius).toBe('')
+  })
+
+  it('the carried note and File invoice follow the prototype', () => {
+    const { container } = render(<CreateFlow ctx={carriedCtx({ draft: draftOf([]) })} />)
+    const note = Array.from(container.querySelectorAll<HTMLElement>('p')).find((p) => p.textContent === C_CAPTION)
+    expect(note, 'control: the carried note must render').not.toBeUndefined()
+    expect.soft(note!.style.fontSize).toBe('12.5px')
+    expect.soft(note!.style.color).toBe('var(--fg-2)')
+    expect.soft(note!.style.margin).toBe('0px 0px 16px')
+
+    const { table, header } = lineTable(container)
+    expect.soft(table.style.borderRadius).toBe('var(--radius-md)')
+    expect.soft(header.style.gridTemplateColumns).toBe(COLS)
+    const rows = container.querySelectorAll<HTMLElement>('[data-testid="carried-line-row"]')
+    expect(rows, 'control: two carried line rows').toHaveLength(2)
+    for (const row of Array.from(rows)) expect.soft(row.style.gridTemplateColumns).toBe(COLS)
+  })
+
+  it('File invoice is teal text-on-teal when the gate passes', () => {
+    for (const [kind, ctx] of [
+      ['manual', formCtx()],
+      ['carried', carriedCtx({ draft: draftOf([]) })],
+    ] as const) {
+      const { container, unmount } = render(<CreateFlow ctx={ctx} />)
+      const file = button(container, 'File invoice')
+      expect(file.disabled, kind).toBe(false)
+      expect.soft(file.style.background, kind).toBe('var(--action)')
+      expect.soft(file.style.color, kind).toBe('var(--primary-foreground)')
+      expect.soft(file.style.opacity, kind).toBe('')
+      expect.soft(file.style.cursor, kind).toBe('pointer')
+      expect.soft(file.style.filter, kind).toBe('')
+      unmount()
+    }
+  })
+
+  it('the filing gate dims File invoice (#114)', () => {
+    const REASONS = [
+      ['no number', formCtx({ draft: draftOf(TWO_LINES, '') }), 'Invoice number is required'],
+      ['no entity', formCtx({ activeEntity: null }), 'Filing needs a linked entity'],
+    ] as const
+    for (const [why, ctx, reason] of REASONS) {
+      const { container, unmount } = render(<CreateFlow ctx={ctx} />)
+      const file = button(container, reason)
+      expect(file.disabled, why).toBe(true)
+      expect.soft(file.style.background, why).toBe('var(--action)')
+      expect.soft(file.style.color, why).toBe('var(--primary-foreground)')
+      expect.soft(file.style.opacity, why).toBe('0.45')
+      expect.soft(file.style.cursor, why).toBe('not-allowed')
+      expect.soft(file.style.filter, why).toBe('none')
+      unmount()
+    }
+  })
+
+  it('filing keeps the progress cursor', () => {
+    const { container } = render(<CreateFlow ctx={formCtx({ filing: true })} />)
+    const file = button(container, 'Filing…')
+    expect(file.disabled).toBe(true)
+    expect.soft(file.style.background).toBe('var(--action)')
+    expect.soft(file.style.color).toBe('var(--primary-foreground)')
+    expect.soft(file.style.opacity).toBe('0.45')
+    expect.soft(file.style.cursor).toBe('progress')
+    const spinner = file.querySelector<HTMLElement>('span')
+    expect(spinner, 'control: the filing spinner must render').not.toBeNull()
+    expect.soft(spinner!.style.borderRadius).toBe('50%')
+  })
+
+  it('the last line cannot be removed', () => {
+    const only = render(<CreateFlow ctx={formCtx({ draft: draftOf([TWO_LINES[0]]) })} />)
+    const last = only.container.querySelector<HTMLButtonElement>('button[aria-label="Remove line 1"]')
+    expect(last, 'control: the remove button must render').not.toBeNull()
+    expect(last!.disabled).toBe(true)
+    expect.soft(last!.style.color).toBe('var(--fg-3)')
+    expect.soft(last!.style.opacity).toBe('0.45')
+    expect.soft(last!.style.cursor).toBe('not-allowed')
+    only.unmount()
+
+    // Control: with two lines both stay live and undimmed.
+    const two = render(<CreateFlow ctx={formCtx()} />)
+    const buttons = Array.from(two.container.querySelectorAll<HTMLButtonElement>('button[aria-label^="Remove line"]'))
+    expect(buttons).toHaveLength(2)
+    for (const b of buttons) {
+      expect(b.disabled).toBe(false)
+      expect.soft(b.style.color).toBe('var(--fg-3)')
+      expect.soft(b.style.opacity).toBe('')
+      expect.soft(b.style.cursor).toBe('pointer')
+    }
+  })
+})

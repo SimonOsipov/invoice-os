@@ -3,9 +3,11 @@
 
 import { useEffect } from 'react'
 
-import { closeGlyph } from '../glyphs'
+import { Icon } from '../icons'
 
 const EXPORT_TOAST_MS = 5200
+const DEFAULT_TEST_ID = 'audit-export-toast'
+const dismissGlyph = <Icon paths={['M18 6 6 18', 'm6 6 12 12']} size={12} strokeWidth={2} />
 
 export function AuditExportToast({
   kind,
@@ -13,7 +15,7 @@ export function AuditExportToast({
   onDismiss,
   // AUDIT-07's assertions address this toast by its default; only the evidence-bundle
   // download passes a different one. EB-06-9's second render is the oracle.
-  testId = 'audit-export-toast',
+  testId = DEFAULT_TEST_ID,
 }: {
   kind: 'success' | 'error'
   text: string
@@ -45,7 +47,8 @@ export function AuditExportToast({
         borderRadius: 'var(--radius-md)',
         boxShadow: 'var(--shadow-card)',
         padding: '11px 12px 11px 14px',
-        maxWidth: 640,
+        // The bundle toast is longer and must stay clear of the open drawer panel.
+        maxWidth: testId === DEFAULT_TEST_ID ? 640 : 440,
         animation: 'popIn 160ms ease-out',
       }}
     >
@@ -58,7 +61,7 @@ export function AuditExportToast({
         className="pf-btn"
         style={{ flex: 'none', width: 22, height: 22, borderRadius: 4, background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--fg-3)', display: 'grid', placeItems: 'center' }}
       >
-        {closeGlyph}
+        {dismissGlyph}
       </button>
     </div>
   )

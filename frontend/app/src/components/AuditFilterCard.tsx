@@ -29,6 +29,7 @@ export interface AuditFilterCardProps {
   onChange: (next: AuditFilterState) => void
 }
 
+const LABEL_ELLIPSIS = { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as const
 const COUNT_STYLE = { fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--fg-3)' } as const
 
 export const DATE_PRESETS: { id: AuditRangePreset; label: string }[] = [
@@ -255,30 +256,34 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
           disabled={busy}
         >
           <div style={{ padding: '4px 0', width: 250 }}>
-            {DATE_PRESETS.map(({ id, label }) => (
-              <button
-                key={id}
-                type="button"
-                data-testid={`audit-date-preset-${id}`}
-                aria-pressed={id === 'custom' ? isCustomActive(state.range) : state.range.preset === id}
-                onClick={() => (id === 'custom' ? setCustomView(true) : applyPreset(id))}
-                className="pf-menu-item"
-                style={{
-                  display: 'block',
-                  width: '100%',
-                  textAlign: 'left',
-                  border: 0,
-                  background: 'transparent',
-                  padding: '8px 12px',
-                  fontFamily: 'var(--font-sans)',
-                  fontSize: 13,
-                  color: 'var(--fg-1)',
-                  cursor: 'pointer',
-                }}
-              >
-                {label}
-              </button>
-            ))}
+            {DATE_PRESETS.map(({ id, label }) => {
+              const pressed = id === 'custom' ? isCustomActive(state.range) : state.range.preset === id
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  data-testid={`audit-date-preset-${id}`}
+                  aria-pressed={pressed}
+                  onClick={() => (id === 'custom' ? setCustomView(true) : applyPreset(id))}
+                  className="pf-menu-item"
+                  style={{
+                    display: 'block',
+                    width: '100%',
+                    textAlign: 'left',
+                    border: 0,
+                    background: pressed ? 'var(--bg-3)' : 'transparent',
+                    padding: '8px 12px',
+                    fontFamily: 'var(--font-sans)',
+                    fontSize: 13,
+                    fontWeight: pressed ? 600 : 500,
+                    color: 'var(--fg-1)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {label}
+                </button>
+              )
+            })}
             {customView && (
               <div style={{ padding: '11px 12px', borderTop: '1px solid var(--line-1)', display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -414,7 +419,7 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
                         width: '100%',
                         alignItems: 'center',
                         justifyContent: 'space-between',
-                        gap: 8,
+                        gap: 10,
                         border: 0,
                         background: selected ? 'var(--bg-3)' : 'transparent',
                         padding: '6px 12px',
@@ -426,7 +431,9 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
                         cursor: 'pointer',
                       }}
                     >
-                      <span data-testid={`audit-event-label-${id}`}>{auditEventView(id).label}</span>
+                      <span data-testid={`audit-event-label-${id}`} style={{ flex: 1, minWidth: 0 }}>
+                        {auditEventView(id).label}
+                      </span>
                       <span data-testid={`audit-event-count-${id}`} style={COUNT_STYLE}>
                         {eventCount(facets, id)}
                       </span>
@@ -473,7 +480,7 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
                     fontFamily: 'var(--font-sans)',
                     fontSize: 13,
                     fontWeight: row.pressed ? 600 : 500,
-                    color: row.pressed ? 'var(--action)' : 'var(--fg-1)',
+                    color: 'var(--fg-1)',
                     cursor: 'pointer',
                   }}
                 >
@@ -501,7 +508,7 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
                           width: '100%',
                           alignItems: 'center',
                           justifyContent: 'space-between',
-                          gap: 8,
+                          gap: 10,
                           border: 0,
                           background: selected ? 'var(--bg-3)' : 'transparent',
                           padding: '7px 12px',
@@ -515,7 +522,10 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
                       >
                         <span
                           data-testid={`audit-actor-label-${id}`}
-                          style={{ fontFamily: label.mono ? 'var(--font-mono)' : 'var(--font-sans)' }}
+                          style={{
+                            ...LABEL_ELLIPSIS,
+                            fontFamily: label.mono ? 'var(--font-mono)' : 'var(--font-sans)',
+                          }}
                         >
                           {label.text}
                         </span>
@@ -557,7 +567,7 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
                   fontFamily: 'var(--font-sans)',
                   fontSize: 12.5,
                   fontWeight: state.company.mode === 'all' ? 600 : 500,
-                  color: state.company.mode === 'all' ? 'var(--action)' : 'var(--fg-1)',
+                  color: 'var(--fg-1)',
                   cursor: 'pointer',
                 }}
               >
@@ -582,7 +592,7 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
                   fontFamily: 'var(--font-sans)',
                   fontSize: 12.5,
                   fontWeight: state.company.mode === 'workspace' ? 600 : 500,
-                  color: state.company.mode === 'workspace' ? 'var(--action)' : 'var(--fg-1)',
+                  color: 'var(--fg-1)',
                   cursor: 'pointer',
                 }}
               >
@@ -622,19 +632,21 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
                         width: '100%',
                         alignItems: 'center',
                         justifyContent: 'space-between',
-                        gap: 8,
+                        gap: 10,
                         border: 0,
                         background: selected ? 'var(--bg-3)' : 'transparent',
                         padding: '7px 12px',
                         fontFamily: 'var(--font-sans)',
                         fontSize: 12.5,
                         fontWeight: selected ? 600 : 500,
-                        color: selected ? 'var(--action)' : 'var(--fg-1)',
+                        color: 'var(--fg-1)',
                         textAlign: 'left',
                         cursor: 'pointer',
                       }}
                     >
-                      <span data-testid={`audit-company-label-${id}`}>{label}</span>
+                      <span data-testid={`audit-company-label-${id}`} style={LABEL_ELLIPSIS}>
+                        {label}
+                      </span>
                       <span data-testid={`audit-company-count-${id}`} style={COUNT_STYLE}>
                         {f.count}
                       </span>
@@ -648,58 +660,56 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
       </div>
 
       {/* Second row (AUDIT-07-07): one removable pill per applied filter, plus Clear all. */}
-      {(pills.length > 0 || showClearAll) && (
-        <div
-          style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            alignItems: 'center',
-            gap: 7,
-            marginTop: 12,
-            paddingTop: 12,
-            borderTop: '1px solid var(--line-1)',
-          }}
-        >
-          {pills.map((pill) => (
-            <button
-              key={pill.key}
-              type="button"
-              data-testid={`audit-pill-${pill.key}`}
-              className="pf-chip"
-              onClick={() => onChange(pill.onRemove(state))}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 7,
-                padding: '3px 5px 3px 10px',
-                fontFamily: pill.mono ? 'var(--font-mono)' : 'var(--font-sans)',
-                fontSize: 12,
-                fontWeight: 400,
-                border: '1px solid var(--line-2)',
-                background: 'var(--bg-1)',
-                color: 'var(--fg-2)',
-                cursor: 'pointer',
-              }}
-            >
-              {pill.label}
-              <span aria-hidden style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, color: 'var(--fg-3)' }}>
-                ×
-              </span>
-            </button>
-          ))}
-          {showClearAll && (
-            <button
-              type="button"
-              data-testid="audit-clear-all"
-              onClick={() => onChange(clearAllFilters())}
-              className="pf-btn"
-              style={{ border: 0, background: 'transparent', color: 'var(--action)', fontSize: 12.5, fontWeight: 600, marginLeft: 4, cursor: 'pointer' }}
-            >
-              Clear all
-            </button>
-          )}
-        </div>
-      )}
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          gap: 7,
+          marginTop: 12,
+          paddingTop: 12,
+          borderTop: '1px solid var(--line-1)',
+        }}
+      >
+        {pills.map((pill) => (
+          <button
+            key={pill.key}
+            type="button"
+            data-testid={`audit-pill-${pill.key}`}
+            className="pf-chip"
+            onClick={() => onChange(pill.onRemove(state))}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 7,
+              padding: '3px 5px 3px 10px',
+              fontFamily: pill.mono ? 'var(--font-mono)' : 'var(--font-sans)',
+              fontSize: 12,
+              fontWeight: 400,
+              border: '1px solid var(--line-2)',
+              background: 'var(--bg-1)',
+              color: 'var(--fg-2)',
+              cursor: 'pointer',
+            }}
+          >
+            {pill.label}
+            <span aria-hidden style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, color: 'var(--fg-3)' }}>
+              ×
+            </span>
+          </button>
+        ))}
+        {showClearAll && (
+          <button
+            type="button"
+            data-testid="audit-clear-all"
+            onClick={() => onChange(clearAllFilters())}
+            className="pf-btn"
+            style={{ border: 0, background: 'transparent', color: 'var(--action)', fontSize: 12.5, fontWeight: 600, marginLeft: 4, cursor: 'pointer' }}
+          >
+            Clear all
+          </button>
+        )}
+      </div>
     </div>
   )
 }

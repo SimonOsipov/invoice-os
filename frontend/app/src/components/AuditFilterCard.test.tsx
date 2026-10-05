@@ -1373,4 +1373,55 @@ describe('AuditFilterCard: v2 restyle (RESKIN2-06-02)', () => {
     expect(screen.getByTestId('audit-company-row-co-acme').style.fontWeight).toBe('600')
     expect(screen.getByTestId('audit-company-kind-all').style.fontWeight, 'unselected row is 500').toBe('500')
   })
+
+  it('auditDate_selectedPresetIsBg3AndSixHundredOthersFiveHundred', () => {
+    renderCard()
+    fireEvent.click(screen.getByTestId('audit-date-trigger'))
+    const selected = screen.getByTestId('audit-date-preset-30d')
+    expect(selected.getAttribute('aria-pressed'), 'control needle: 30d is the default').toBe('true')
+    expect([selected.style.background, selected.style.fontWeight, selected.style.color]).toEqual(['var(--bg-3)', '600', 'var(--fg-1)'])
+    const other = screen.getByTestId('audit-date-preset-7d')
+    expect([other.style.background, other.style.fontWeight, other.style.color]).toEqual(['transparent', '500', 'var(--fg-1)'])
+  })
+
+  it('auditActorAndCompany_selectedKindAndCompanyRowsKeepFg1AndLabelsEllipsize', () => {
+    const f = facets()
+    f.actor = [{ value: 'user-a', name: 'Amara Chen', kind: 'person', count: 4 }]
+    f.company = [{ value: 'co-acme', name: 'Acme Ltd', count: 40 }]
+    const state = { ...AUDIT_FILTER_DEFAULT, actorKind: 'people', actors: ['user-a'], company: { mode: 'named', id: 'co-acme', name: 'Acme Ltd' } } as AuditFilterState
+    renderCard(state, f)
+
+    fireEvent.click(screen.getByTestId('audit-actor-trigger'))
+    const kind = screen.getByTestId('audit-actor-kind-people')
+    expect(kind.getAttribute('aria-pressed'), 'control needle: the kind row is selected').toBe('true')
+    expect([kind.style.background, kind.style.color]).toEqual(['var(--bg-3)', 'var(--fg-1)'])
+    const facet = screen.getByTestId('audit-actor-row-user-a')
+    expect([facet.style.color, facet.style.gap]).toEqual(['var(--action)', '10px'])
+    const actorLabel = screen.getByTestId('audit-actor-label-user-a')
+    expect([actorLabel.style.flex, actorLabel.style.minWidth, actorLabel.style.overflow, actorLabel.style.textOverflow, actorLabel.style.whiteSpace]).toEqual(['1 1 0%', '0', 'hidden', 'ellipsis', 'nowrap'])
+    cleanup()
+
+    renderCard(state, f)
+    fireEvent.click(screen.getByTestId('audit-company-trigger'))
+    const named = screen.getByTestId('audit-company-row-co-acme')
+    expect(named.getAttribute('aria-pressed'), 'control needle: the company row is selected').toBe('true')
+    expect([named.style.background, named.style.color, named.style.gap]).toEqual(['var(--bg-3)', 'var(--fg-1)', '10px'])
+    const label = screen.getByTestId('audit-company-label-co-acme')
+    expect([label.style.minWidth, label.style.overflow, label.style.textOverflow, label.style.whiteSpace]).toEqual(['0', 'hidden', 'ellipsis', 'nowrap'])
+    cleanup()
+
+    for (const [mode, id] of [['all', 'audit-company-kind-all'], ['workspace', 'audit-company-kind-workspace']] as const) {
+      renderCard({ ...AUDIT_FILTER_DEFAULT, company: { mode } }, f)
+      fireEvent.click(screen.getByTestId('audit-company-trigger'))
+      const row = screen.getByTestId(id)
+      expect(row.getAttribute('aria-pressed'), `control needle: ${mode} is selected`).toBe('true')
+      expect([row.style.background, row.style.color], mode).toEqual(['var(--bg-3)', 'var(--fg-1)'])
+      cleanup()
+    }
+    cleanup()
+
+    renderCard({ ...AUDIT_FILTER_DEFAULT, events: ['invoice.created'] }, facets())
+    fireEvent.click(screen.getByTestId('audit-event-trigger'))
+    expect(screen.getByTestId('audit-event-row-invoice.created').style.gap).toBe('10px')
+  })
 })

@@ -1903,6 +1903,12 @@ describe('AuditExportToast shell (RESKIN2-06-02)', () => {
     expect([text.style.fontSize, text.style.lineHeight]).toEqual(['12.5px', '1.45'])
     const dismiss = screen.getByTestId('audit-export-toast-dismiss')
     expect([dismiss.style.width, dismiss.style.height, dismiss.style.borderRadius]).toEqual(['22px', '22px', '4px'])
+    expect(dismiss.querySelector('svg')?.getAttribute('width'), 'dismiss glyph is 12px').toBe('12')
+  })
+
+  it('toast_bundleVariantKeepsTheNarrowCapSoItClearsTheDrawer', () => {
+    render(<AuditExportToast kind="success" text="Bundle ready" testId="evidence-bundle-toast" onDismiss={vi.fn()} />)
+    expect(screen.getByTestId('evidence-bundle-toast').style.maxWidth).toBe('440px')
   })
 })
 

@@ -223,7 +223,7 @@ test('AS-01 firm shell at 1440: aside, header, switch, colour fixes', async ({ p
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('AS-02 in-house shell at 1440: aside, active row, ERP chip', async ({ page }, testInfo) => {
+test('AS-02 in-house shell at 1440: aside, active row, no ERP chip under hand-off', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
   await signInAs(page, 'inhouse')
   await settle(page, aside(page), page.locator('main.pf-main'))
@@ -466,28 +466,34 @@ test('AS-07 the held sign-in card: radius, fill, border, no shadow', async ({ pa
     if (req.method() !== 'GET' || held || !req.frame().url().startsWith(APP_URL)) return route.continue()
     held = true
     await gate
-    await route.continue()
+    await route.continue().catch(() => {}) // the app aborts /me at 15s; a late continue then throws
   })
 
   const signing = signInAs(page, 'firm')
   const signed = signing.then(() => null, (e: unknown) => e)
+  let shot: Buffer | undefined
+  let reading: Record<string, string> = {}
   try {
-    await expect.poll(() => held, { timeout: 60_000, message: 'the first app GET /me was never held, so the card is not the in-flight one' }).toBe(true)
+    // The app aborts /me after 15s (redeemHandoff): the held window is the poll, visibility, style reads and one screenshot.
+    let signInError: unknown = null
+    void signed.then((e) => (signInError = e))
+    await expect.poll(() => held || signInError !== null, { timeout: 30_000, message: 'the first app GET /me was never held, so the card is not the in-flight one' }).toBe(true)
+    if (signInError !== null) throw signInError
     const text = page.getByText('Opening your workspace…', { exact: true })
-    await expect(text, 'the hand-off loading card is up while /me is held').toBeVisible()
+    await expect(text, 'the hand-off loading card is up while /me is held').toBeVisible({ timeout: 5_000 })
     const card = text.locator('xpath=../..')
     await settle(page, card)
-    const reading = await styles(card, ['border-top-left-radius', 'background-color', 'border-top-color', 'box-shadow'])
-    expect(reading['border-top-left-radius'], 'card radius').toBe('10px')
-    expect(reading['background-color'], 'card fill').toBe('rgb(255, 255, 255)')
-    expect(reading['border-top-color'], 'card border').toBe('rgb(201, 217, 214)')
-    expect(reading['box-shadow'], 'card shadow').toBe('none')
-
-    await attachJson(testInfo, 'as-07-measurements', reading)
-    await attachShot(page, testInfo, 'loading')
+    reading = await styles(card, ['border-top-left-radius', 'background-color', 'border-top-color', 'box-shadow'])
+    shot = await page.screenshot({ timeout: 5_000 })
   } finally {
     release()
   }
+  expect(reading['border-top-left-radius'], 'card radius').toBe('10px')
+  expect(reading['background-color'], 'card fill').toBe('rgb(255, 255, 255)')
+  expect(reading['border-top-color'], 'card border').toBe('rgb(201, 217, 214)')
+  expect(reading['box-shadow'], 'card shadow').toBe('none')
+  await attachJson(testInfo, 'as-07-measurements', reading)
+  await testInfo.attach('loading.png', { body: shot!, contentType: 'image/png' })
   expect(await signed, 'the sign-in after the held /me').toBeNull()
   await page.unroute(ME_URL)
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])

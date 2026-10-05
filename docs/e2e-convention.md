@@ -113,11 +113,11 @@ What a spec still cannot assume is an empty table:
     provisions no workspace. The staff-claim test also leaves the tenant and membership of
     its `provisionRealAccount` call and one `staff_members` row.
   - Every `provisionStaffAccount` call (`api/client.ts`) leaves one `auth.users` row and one
-    `staff_members` row, and no workspace: one per Playwright worker per run for the smoke
-    console specs (`staffSession.ts`) and for `topology/ops-console.spec.ts` and
-    `topology/support-console.spec.ts`, one per console test in `topology/design-system.spec.ts`,
-    and one per console journey in `topology/auth.spec.ts`.
-    `POST /auth/mock/staff`, which writes the row, exists only in the mock build that every PR
+    `staff_members` row, and no workspace: the smoke
+    console specs (`staffSession.ts`), `topology/ops-console.spec.ts` and
+    `topology/support-console.spec.ts` call it; so does each console test in `topology/design-system.spec.ts`
+    and each console journey in `topology/auth.spec.ts`.
+        `POST /auth/mock/staff`, which writes the row, exists only in the mock build that every PR
     fork runs.
   - `signInAs` leaves one `auth.users` row and one admin `memberships` row per tenant: the
     stable e2e member (`ensureMember`, `e2e/realAccounts.ts`) registers once and

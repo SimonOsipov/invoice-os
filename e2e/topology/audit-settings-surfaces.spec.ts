@@ -968,9 +968,8 @@ test('ST-05 ERP connectors: status pills, connector detail pill, field-mapping m
   await openSettings(page, 'firm')
   await openTab(page, 'ERP connectors', 'connectors')
   await page.getByRole('button', { name: 'Connect', exact: true }).first().click()
-  await expect(page.getByText('CONNECTED', { exact: true }).first(), 'Connect did not turn a connector on').toBeVisible()
   const connected = page.getByText('CONNECTED', { exact: true }).first()
-  await expect(connected, 'no connector reads CONNECTED').toBeVisible()
+  await expect(connected, 'Connect did not turn a connector on').toBeVisible()
   await settle(page, main(page))
   const reads: Record<string, unknown> = {}
   for (const [label, text] of [['connected', 'CONNECTED'], ['idle', 'NOT CONNECTED']] as const) {

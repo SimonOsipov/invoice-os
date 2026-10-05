@@ -1220,4 +1220,53 @@ describe('ReviewRow: the review prototype look (RESKIN2-04-04)', () => {
     }
     expect(checked).toBe(3)
   })
+  it('a fix card hint sits inline beside its input; an unmappable card keeps it as its own block', async () => {
+    await renderOpen(failing({ violations: [{ ...ERR, expected: '12345678-0001', actual: '123' }] }))
+    const input = screen.getByTestId('review-fix-input')
+    const hint = screen.getByTestId('review-fix-hint')
+    const row = input.parentElement as HTMLElement
+
+    expect(hint.textContent).toBe('Expected 12345678-0001 · got 123')
+    expect(hint.parentElement, 'the hint shares the input row').toBe(row)
+    expect(row.style.display).toBe('flex')
+    expect(row.style.gap).toBe('11px')
+    expect(row.style.flexWrap).toBe('wrap')
+    expect(hint.className).toContain('mono')
+    expect(hint.style.fontSize).toBe('10.5px')
+    expect(hint.style.color).toBe('var(--fg-3)')
+    cleanup()
+
+    await renderOpen(failing({ violations: [{ ...UNMAPPABLE, expected: '1', actual: '0' }] }))
+    const card = screen.getByTestId('review-fix-card')
+    const block = screen.getByTestId('review-fix-hint')
+    expect(card.querySelector('[data-testid="review-fix-input"]')).toBeNull()
+    expect(block.parentElement, 'no input to sit beside: the hint is a direct child of the card').toBe(card)
+    expect(block.style.fontSize).toBe('10.5px')
+  })
+
+  it('the section label sits 10px above the first card (margin plus flex gap)', async () => {
+    await renderOpen(failing())
+    const label = screen.getByTestId('review-row-expansion').querySelector('.label') as HTMLElement
+    const column = label.parentElement as HTMLElement
+    const card = screen.getByTestId('review-fix-card')
+
+    expect(column.contains(card), 'the label and the cards share one flex column').toBe(true)
+    expect(label.style.marginTop).toBe('12px')
+    expect(parseFloat(label.style.marginBottom) + parseFloat(column.style.gap), 'prototype: label margin-bottom 10 above the card list').toBe(10)
+  })
+
+  it('an info card takes the muted severity border', async () => {
+    await renderOpen(detailFixture({ status: 'draft', violations: [{ ...WARN, rule_key: 'note-x', severity: 'info' as const }], rule_set_version: 3, rule_set_version_id: 'rsv-3' }))
+    const card = screen.getByTestId('review-fix-card')
+
+    expect(card.style.border).toBe('1px solid var(--status-muted-border)')
+  })
+  it('the scope note line height is 1.5', async () => {
+    await renderOpen(failing())
+    const note = screen.getByTestId('review-row-note')
+
+    expect(note.textContent).not.toBe('')
+    expect(note.style.fontSize).toBe('11.5px')
+    expect(note.style.lineHeight).toBe('1.5')
+  })
 })

@@ -553,7 +553,7 @@ export function ReviewInvoicesTab({
         </div>
       )}
 
-      {/* §7.3's bulk bar. Accent-tinted per AC-1, using the ENV_BANNER.live token pair. */}
+      {/* §7.3's bulk bar: `--action-tint` fill, `--line-2` border and divider. */}
       {bar.visible && (
         <div
           data-testid="review-bulk-bar"

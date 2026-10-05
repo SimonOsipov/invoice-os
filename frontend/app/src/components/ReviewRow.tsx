@@ -75,13 +75,13 @@ import type { PlatformCtx } from '../types'
 export const REVIEW_GRID_COLUMNS = '26px 122px minmax(120px,1fr) 92px 114px 124px 22px'
 export const REVIEW_GRID_GAP = 10
 
+// Aligns the panel content with the invoice-number column.
+const PANEL_PADDING = '4px 18px 16px 54px'
+
 // `aria-describedby` target for the disabled Re-validate button's reason text. A module
 // const (InvoiceDetail's own copy was retired with the reason nodes in BUG-14-02) — safe because
 // at most one row is ever expanded at a time (ReviewInvoicesTab.tsx's `expandedId`), so
 // this id cannot collide with itself in one document.
-// Aligns the panel content with the invoice-number column.
-const PANEL_PADDING = '4px 18px 16px 54px'
-
 const REVALIDATE_REASON_ID = 'review-row-revalidate-blocked-reason-text'
 
 export function Row({
@@ -168,8 +168,7 @@ export function Row({
         />
         {/* Invoice # + (AC #4, multi-file runs only) its source file, in the SAME
             two-lines-in-one-cell idiom the Buyer column already uses below (name +
-            TIN) -- REVIEW_GRID_COLUMNS/REVIEW_GRID_GAP are unchanged, this is an extra
-            line inside the existing cell, never a new grid column. */}
+            TIN) -- an extra line inside the existing cell, never a new grid column. */}
         <span style={{ minWidth: 0 }}>
           <span className="mono" style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg-1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {r.invoice_number}
@@ -219,9 +218,8 @@ export function Row({
           )}
         </span>
         {/* The row-disclosure indicator (INVCR-01-14) — the row itself is the click
-            target (onClick above); this glyph is purely presentational, matching
-            Sidebar.tsx's own switcher-chevron rotation idiom. Collapsed points down,
-            expanded points up (P:5663). */}
+            target (onClick above); this glyph is purely presentational. Collapsed
+            points down, expanded points up (the review prototype's orientation). */}
         <span aria-hidden style={{ display: 'inline-flex', color: 'var(--fg-3)', pointerEvents: 'none', transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 160ms' }}>
           {chevDownGlyph}
         </span>

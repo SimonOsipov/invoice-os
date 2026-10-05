@@ -104,6 +104,60 @@ func checkMailImage(client *http.Client, src string) error {
 	return nil
 }
 
+// mailSampleData is the data GoTrue hands a mail template, in the shapes a registration can leave.
+func mailSampleData() []map[string]any {
+	registration := map[string]any{"display_name": "Ada Obi", "workspace_name": "Obi Partners"}
+	variants := []map[string]any{
+		{"Data": map[string]any{"registration": registration}},
+		{"Data": map[string]any{}},
+		{},
+	}
+	var all []map[string]any
+	for _, extra := range variants {
+		data := map[string]any{
+			"SiteURL":         "https://x.test",
+			"ConfirmationURL": mailSampleConfirmationURL,
+			"Email":           "ada@x.test",
+			"Token":           "123456",
+			"TokenHash":       "hash",
+			"RedirectTo":      "https://x.test/",
+		}
+		for k, v := range extra {
+			data[k] = v
+		}
+		all = append(all, data)
+	}
+	return all
+}
+
+// RunMailSubjectCheck parses and executes one subject as GoTrue does: exit 0 pass, 1 fails, 2 malformed call.
+func RunMailSubjectCheck(args []string, out io.Writer) int {
+	if len(args) != 1 || args[0] == "" {
+		fmt.Fprintln(out, "::error::usage: prenv mail-subject-check <subject>")
+		return 2
+	}
+	if err := checkMailSubject(args[0]); err != nil {
+		fmt.Fprintf(out, "::error::%v\n", err)
+		return 1
+	}
+	fmt.Fprintf(out, "ok %s\n", args[0])
+	return 0
+}
+
+// GoTrue falls back to its default subject and body when the subject does not parse.
+func checkMailSubject(subject string) error {
+	tpl, err := template.New("Subject").Parse(subject)
+	if err != nil {
+		return fmt.Errorf("subject does not parse: %w", err)
+	}
+	for _, data := range mailSampleData() {
+		if err := tpl.Execute(io.Discard, data); err != nil {
+			return fmt.Errorf("subject does not execute: %w", err)
+		}
+	}
+	return nil
+}
+
 func checkMailTemplate(client *http.Client, url string) error {
 	resp, cancel, err := mailGet(client, url)
 	if err != nil {
@@ -126,25 +180,8 @@ func checkMailTemplate(client *http.Client, url string) error {
 		return fmt.Errorf("template does not parse: %w", err)
 	}
 
-	registration := map[string]any{"display_name": "Ada Obi", "workspace_name": "Obi Partners"}
-	variants := []map[string]any{
-		{"Data": map[string]any{"registration": registration}},
-		{"Data": map[string]any{}},
-		{},
-	}
 	seen := map[string]bool{}
-	for _, extra := range variants {
-		data := map[string]any{
-			"SiteURL":         "https://x.test",
-			"ConfirmationURL": mailSampleConfirmationURL,
-			"Email":           "ada@x.test",
-			"Token":           "123456",
-			"TokenHash":       "hash",
-			"RedirectTo":      "https://x.test/",
-		}
-		for k, v := range extra {
-			data[k] = v
-		}
+	for _, data := range mailSampleData() {
 		var buf bytes.Buffer
 		if err := tpl.Execute(&buf, data); err != nil {
 			return fmt.Errorf("template does not execute: %w", err)

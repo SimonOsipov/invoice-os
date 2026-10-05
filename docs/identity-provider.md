@@ -328,7 +328,9 @@ scope, or `/token` with any other grant) is reachable from outside.
    `templatemailer_template_body_http_error`. So the template URL is checked before it
    reaches `auth`: `prenv mail-template-check <url>` loads it, and `railway-env.sh
    check-mail-templates <environment-id>` runs that check on every non-empty
-   `GOTRUE_MAILER_TEMPLATES_*` of an environment's `auth`. It runs in the `fleet-gate` job of
+   `GOTRUE_MAILER_TEMPLATES_*` of an environment's `auth`. It also parses and executes every
+   non-empty `GOTRUE_MAILER_SUBJECTS_*` (`prenv mail-subject-check`), because a subject that
+   fails to parse makes GoTrue send its default subject and body. It runs in the `fleet-gate` job of
    `dev-env.yml` (see [deploy-model.md](./deploy-model.md)) and by hand in mail U1. It reads
    variables unrendered, so a Railway reference (`${{...}}`) in a template URL is fetched
    literally and fails loudly. It also fails (`variables are unreadable`) when

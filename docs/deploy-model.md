@@ -531,7 +531,8 @@ status is its verdict. `deploy-context` publishes the auth deployment id as a jo
 `railway-env.sh check-mail-templates <environment_id>` with `RAILWAY_API_TOKEN` on PR and
 push, not `workflow_dispatch` (its project token cannot read variables). It loads every
 non-empty `GOTRUE_MAILER_TEMPLATES_*` of that environment's `auth` through
-`prenv mail-template-check`, reading variables unrendered, so a Railway reference in a
+`prenv mail-template-check` and every non-empty `GOTRUE_MAILER_SUBJECTS_*` through
+`prenv mail-subject-check`, reading variables unrendered, so a Railway reference in a
 template URL is fetched literally and fails; it also fails when `GOTRUE_SITE_URL` is absent
 from `auth`'s variables. "Gate on the account-mail logo" runs
 `go run ./tools/prenv mail-logo-check` on push only, because production serves the logo only

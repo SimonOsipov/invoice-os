@@ -49,6 +49,9 @@ const usage = `usage:
   prenv mail-template-check <url>...
                                check each URL serves a GoTrue mail template
                                (exit 0 = all pass, 1 = any fails, 2 = bad call)
+  prenv mail-subject-check <subject>
+                               check a GoTrue mail subject parses and executes
+                               (exit 0 = pass, 1 = fails, 2 = bad call)
   prenv mail-logo-check        check accountmail.LogoURL serves an image
                                (exit 0 = pass, 1 = fails)`
 
@@ -159,6 +162,9 @@ func main() {
 
 	case "mail-template-check":
 		os.Exit(RunMailTemplateCheck(&http.Client{}, os.Args[2:], os.Stdout))
+
+	case "mail-subject-check":
+		os.Exit(RunMailSubjectCheck(os.Args[2:], os.Stdout))
 
 	case "mail-logo-check":
 		if len(os.Args) != 2 {

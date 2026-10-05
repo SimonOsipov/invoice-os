@@ -48,10 +48,10 @@ func nonBlankLines(s string) []string {
 	return out
 }
 
-// AC 6. Sibling variables that are not templates (a subject, a URL path) and an empty template are ignored.
+// AC 6. Sibling variables that are not templates (a URL path) and an empty template or subject are ignored.
 func TestCheckMailTemplates_NoneSetPasses(t *testing.T) {
 	s := newMailTemplatesShim(t, map[string]string{
-		"GOTRUE_MAILER_SUBJECTS_CONFIRMATION": "Confirm your ASComply account",
+		"GOTRUE_MAILER_SUBJECTS_CONFIRMATION": "",
 		"GOTRUE_MAILER_URLPATHS_CONFIRMATION": "/auth/verify",
 		"GOTRUE_MAILER_TEMPLATES_RECOVERY":    "",
 		mailSiteURLVar:                        "https://www.ascomply.com",
@@ -272,5 +272,36 @@ func TestCheckMailTemplates_IsInTheDispatcherUsage(t *testing.T) {
 	out, errOut, code := runBashScript(t, s.prelude+"bash '"+railwayEnvScript(t)+"'\n")
 	if got := out + errOut; code != 2 || !strings.Contains(got, "|check-mail-templates <environment-id>|") {
 		t.Errorf("exit %d; the generic usage does not list `check-mail-templates <environment-id>`: %q", code, got)
+	}
+}
+
+// GoTrue falls back to its default mail when a subject does not parse, so a bad subject fails the gate.
+func TestCheckMailTemplates_SubjectIsChecked(t *testing.T) {
+	const subjectVar = "GOTRUE_MAILER_SUBJECTS_CONFIRMATION"
+	t.Run("a good subject passes", func(t *testing.T) {
+		s := newMailTemplatesShim(t, map[string]string{subjectVar: "Confirm your ASComply account"})
+		out, code := runCheckMailTemplates(t, s, authForkEnvID)
+		if code != 0 || strings.Contains(out, "::error::") {
+			t.Errorf("exit %d, want 0 with no error; output = %q", code, out)
+		}
+	})
+	for name, subject := range map[string]string{
+		"unclosed action":   "Confirm {{ ",
+		"errors on execute": "Confirm {{ index .Email 99 }}",
+	} {
+		t.Run(name+" fails naming the variable", func(t *testing.T) {
+			good := htmlServer(t, mailMinimalTemplate)
+			s := newMailTemplatesShim(t, map[string]string{subjectVar: subject, mailTemplateVar: good.URL})
+			out, code := runCheckMailTemplates(t, s, authForkEnvID)
+			if code != 1 {
+				t.Errorf("exit %d, want 1; output = %q", code, out)
+			}
+			if e := errorLines(out); !strings.HasPrefix(e, "::error::"+subjectVar+": ") {
+				t.Errorf("want an error line starting `::error::%s: `, got %q", subjectVar, e)
+			}
+			if !strings.Contains(out, "ok "+good.URL) {
+				t.Errorf("the passing template printed no ok line: %q", out)
+			}
+		})
 	}
 }

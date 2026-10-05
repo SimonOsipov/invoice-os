@@ -3483,7 +3483,8 @@ cmd_report_api_calls() {
     }' "$rl" "$log" || true
 }
 
-# check-mail-templates <environment-id>: every non-empty GOTRUE_MAILER_TEMPLATES_* on auth must serve a mail template.
+# check-mail-templates <environment-id>: every non-empty GOTRUE_MAILER_TEMPLATES_* on auth must serve a mail template,
+# and every non-empty GOTRUE_MAILER_SUBJECTS_* must parse and execute.
 cmd_check_mail_templates() {
   local env_id="${1:-}"
   if [ -z "$env_id" ]; then
@@ -3501,19 +3502,33 @@ cmd_check_mail_templates() {
   auth_read "$env_id" "$auth_id" auth
   # Production auth always sets GOTRUE_SITE_URL, so a map without it is a token that cannot read variables.
   if [ "$(auth_kind "$GQL_RESPONSE" GOTRUE_SITE_URL)" != present ]; then
-    echo "::error::auth's variables are unreadable in environment $env_id, so GOTRUE_MAILER_TEMPLATES_* could not be checked."
+    echo "::error::auth's variables are unreadable in environment $env_id, so GOTRUE_MAILER_TEMPLATES_* and GOTRUE_MAILER_SUBJECTS_* could not be checked."
     exit 1
   fi
 
-  local pairs name value rc=0 checked=0
+  local pairs subjects name value rc=0 checked=0
   pairs=$(printf '%s' "$GQL_RESPONSE" | jq -r '.data.variables | to_entries[]
     | select((.key | startswith("GOTRUE_MAILER_TEMPLATES_")) and .value != "") | [.key, .value] | @tsv')
-  if [ -z "$pairs" ]; then
-    echo "No GOTRUE_MAILER_TEMPLATES_* is set on auth in environment $env_id; GoTrue sends its default mail."
+  subjects=$(printf '%s' "$GQL_RESPONSE" | jq -r '.data.variables | to_entries[]
+    | select((.key | startswith("GOTRUE_MAILER_SUBJECTS_")) and .value != "") | .key')
+  if [ -z "$pairs" ] && [ -z "$subjects" ]; then
+    echo "No GOTRUE_MAILER_TEMPLATES_* or GOTRUE_MAILER_SUBJECTS_* is set on auth in environment $env_id; GoTrue sends its default mail."
     return 0
   fi
 
+  # A subject that fails to parse makes GoTrue send its default subject and body.
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    value=$(printf '%s' "$GQL_RESPONSE" | jq -r --arg k "$name" '.data.variables[$k]')
+    if [ "$checked" = 0 ]; then
+      auth_build_prenv "the account-mail template check"
+    fi
+    checked=1
+    "$AUTH_PRENV" mail-subject-check "$value" | sed "s/^::error::/::error::$name: /" || rc=1
+  done <<<"$subjects"
+
   while IFS=$'\t' read -r name value; do
+    [ -n "$name" ] || continue
     case "$value" in
       http*) ;;
       *)

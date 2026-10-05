@@ -103,8 +103,10 @@ const HAND_OFF_LABEL = 'Enter it by hand'
 
 // Both halves of AC-5's "no layout constant changes": the source literal, and the
 // serialized inline style it produces. UT-5 reads both.
-const UNREADABLE_GRID_SOURCE = "const UNREADABLE_GRID = '150px 90px 170px 1fr'"
-const UNREADABLE_GRID_STYLE = 'grid-template-columns: 150px 90px 170px 1fr'
+const UNREADABLE_GRID_SOURCE = "const UNREADABLE_GRID = '200px 60px 140px 1fr'"
+const UNREADABLE_GRID_STYLE = 'grid-template-columns: 200px 60px 140px 1fr'
+// Row finders match any grid, so only UT-5 owns the track literal.
+const GRID_PROP = 'grid-template-columns:'
 
 const DOC_A = '9a4c1e77-2f80-4c53-b6d2-51e0a3f8cc19'
 const DOC_B = 'a0000000-0000-4000-8000-00000000000b'
@@ -169,7 +171,7 @@ function handOffButtons(root: HTMLElement): HTMLButtonElement[] {
 // from demanding a DOM marker AC-2 does not ask for.
 function gridDivs(container: HTMLElement): HTMLElement[] {
   return Array.from(container.querySelectorAll<HTMLElement>('div')).filter((d) =>
-    (d.getAttribute('style') ?? '').includes(UNREADABLE_GRID_STYLE),
+    (d.getAttribute('style') ?? '').includes(GRID_PROP),
   )
 }
 
@@ -267,6 +269,54 @@ describe('EXTR-15-11: the entity gate refuses with a visible reason (AC-3)', () 
   })
 })
 
+describe('RESKIN2-04-03 D-17 / D-4: the Unreadable tab wears the prototype values', () => {
+  afterEach(() => cleanup())
+
+  it('unreadable cells take the prototype values', () => {
+    const { container } = renderTab([THREE_ROWS[0], THREE_ROWS[1]], 'spreadsheet')
+    const rows = dataRows(container)
+    expect(rows, 'both unreadable rows must render before any cell is read').toHaveLength(2)
+
+    for (const [i, r] of rows.entries()) {
+      const field = r.children[2] as HTMLElement
+      const why = r.children[3] as HTMLElement
+      expect(field.textContent, `row ${i}: cell 3 is not the field cell`).toBe(THREE_ROWS[i].column)
+      expect(why.textContent, `row ${i}: cell 4 is not the why cell`).toContain(THREE_ROWS[i].message)
+      expect(field.style.color, `row ${i}: field cell colour`).toBe('var(--fg-1)')
+      expect(why.style.fontSize, `row ${i}: why text size`).toBe('12.5px')
+      expect(why.style.color, `row ${i}: why text colour`).toBe('var(--fg-2)')
+    }
+
+    // First row keeps no top border (P would draw a double rule under the header); the next does.
+    expect(rows[0].style.borderTop, 'the first row must draw no top border').not.toContain('solid')
+    expect(rows[1].style.borderTop, 'the second row must draw its rule').toContain('1px solid var(--line-1)')
+
+    const footnote = Array.from(container.querySelectorAll<HTMLElement>('div')).find((d) =>
+      (d.textContent ?? '').startsWith('Field names are the importer'),
+    )
+    expect(footnote, 'the footnote did not render').toBeDefined()
+    expect(footnote!.style.fontSize).toBe('12px')
+  })
+
+  it('a blocked hand-off dims (#114), and an enabled one does not', () => {
+    const blocked = renderTab([THREE_ROWS[0]], 'document', { activeEntity: null })
+    const [off] = handOffButtons(blocked.container)
+    expect(off, 'the blocked hand-off must still render').toBeDefined()
+    expect(off.disabled).toBe(true)
+    expect(off.style.opacity).toBe('0.45')
+    expect(off.style.cursor).toBe('not-allowed')
+    expect(off.style.background, 'the dim replaces the grey fill').toBe('')
+    expect(off.style.color, 'the dim replaces the grey text').toBe('')
+    cleanup()
+
+    const open = renderTab([THREE_ROWS[0]], 'document')
+    const [on] = handOffButtons(open.container)
+    expect(on.disabled).toBe(false)
+    expect(on.style.opacity, 'an enabled hand-off keeps its hover affordance').toBe('')
+    expect(on.style.cursor).toBe('')
+  })
+})
+
 describe('EXTR-15-11: the hand-off carries THIS row’s document (AC-4)', () => {
   afterEach(() => cleanup())
 
@@ -291,16 +341,22 @@ describe('EXTR-15-11: the hand-off carries THIS row’s document (AC-4)', () => 
 describe('EXTR-15-11: the control lands in the existing "why" cell (AC-5)', () => {
   afterEach(() => cleanup())
 
-  it('UT-5 (AC-5): the grid literal is untouched, the header keeps its four cells, and the button sits in cell 4', () => {
+  it('UT-5 (AC-5): the grid literal is the prototype’s four tracks, the header keeps its four cells, and the button sits in cell 4', () => {
     const src = readSrc('src/components/ReviewUnreadableTab.tsx')
     // Control, paired with the literal claim below: a moved or renamed file scans as clean.
     expect(src, 'ReviewUnreadableTab.tsx was not read').toContain('export function ReviewUnreadableTab')
-    expect(src, 'the unreadable grid changed — AC-5 forbids a new column').toContain(UNREADABLE_GRID_SOURCE)
+    expect(src, 'the unreadable grid is not the prototype’s four tracks').toContain(UNREADABLE_GRID_SOURCE)
 
     const documentRender = renderTab(THREE_ROWS, 'document')
     const documentHeader = headerCells(documentRender.container).length
     const rows = dataRows(documentRender.container)
     expect(rows).toHaveLength(3)
+
+    // The rendered half of the literal: the header and every data row carry the same tracks.
+    const headerEl = gridDivs(documentRender.container).find((d) => d.classList.contains('label'))
+    expect(headerEl, 'the header row did not render').toBeDefined()
+    expect(headerEl!.getAttribute('style')).toContain(UNREADABLE_GRID_STYLE)
+    expect(rows.map((r) => (r.getAttribute('style') ?? '').includes(UNREADABLE_GRID_STYLE))).toEqual([true, true, true])
 
     // Four direct children, matching the four grid tracks. A fifth would be a new column.
     expect(rows.map((r) => r.children.length)).toEqual([4, 4, 4])

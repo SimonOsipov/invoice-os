@@ -764,3 +764,123 @@ describe('EXTR-30-05 QN-3..QN-5: whole tab bodies, an all-quarantined run, and a
     }
   })
 })
+
+// --- RESKIN2-04-03 (D-13, D-18): the review header, tiles, strip dot and rejected surfaces ---
+describe('RESKIN2-04-03 D-13: the review header and tiles wear the prototype values', () => {
+  const NE_TOTALS = { ...TOTALS, notEvaluatedTotal: 2 }
+
+  function byText(container: HTMLElement, text: string): HTMLElement {
+    const hit = Array.from(container.querySelectorAll<HTMLElement>('div')).find((d) => d.textContent === text)
+    expect(hit, `no node with the exact text ${JSON.stringify(text)}`).toBeTruthy()
+    return hit!
+  }
+
+  it('the review heading takes the 700 rule', async () => {
+    mockReviewFetchAll(cleanRun('.csv'), TOTALS)
+    const { container } = render(<ReviewBatch ctx={reviewCtx(['b1'])} />)
+    await waitFor(() => expect(container.textContent ?? '').toContain(BATCH_ANCHOR))
+
+    const h2 = container.querySelector<HTMLElement>('h2')
+    expect(h2, 'the review h2 did not render').not.toBeNull()
+    expect(h2!.style.fontWeight, 'the h2 must take the global 700 rule, not an inline weight').toBe('')
+    expect(h2!.style.fontSize).toBe('19px')
+
+    const batchLine = Array.from(container.querySelectorAll<HTMLElement>('div')).find((d) => (d.textContent ?? '').startsWith('BATCH '))
+    expect(batchLine, 'the BATCH line did not render').toBeDefined()
+    expect(batchLine!.style.color).toBe('var(--fg-3)')
+  })
+
+  it('tile figures are money at 700', async () => {
+    mockReviewFetchAll(cleanRun('.csv'), NE_TOTALS)
+    const { container } = render(<ReviewBatch ctx={reviewCtx(['b1'])} />)
+    await waitFor(() => expect(container.textContent ?? '').toContain(BATCH_ANCHOR))
+
+    const values = ['474 valid', '20 failed a rule', '2 not yet validated']
+    for (const text of values) {
+      const value = byText(container, text)
+      expect(value.className.split(/\s+/), `${text}: figure class`).toContain('money')
+      expect(value.style.fontWeight, `${text}: figure weight`).toBe('700')
+      expect(value.style.fontSize, `${text}: figure size`).toBe('15px')
+      const caption = value.nextElementSibling as HTMLElement | null
+      expect(caption, `${text}: caption`).not.toBeNull()
+      expect(caption!.style.color, `${text}: caption colour`).toBe('var(--fg-2)')
+      expect(caption!.style.lineHeight, `${text}: caption line height`).toBe('1.45')
+    }
+    expect(new Set(values.map((t) => byText(container, t).parentElement)).size, 'three distinct tiles').toBe(3)
+  })
+
+  it('the strip dot is a circle', async () => {
+    const batches = [
+      batch({ id: 'b1', filename: 'a.csv' }),
+      batch({ id: 'b2', filename: 'b.csv', status: 'failed', rows_valid: 0, errors: [] }),
+    ]
+    mockReviewFetchAll(batches, TOTALS)
+    const { container } = render(<ReviewBatch ctx={reviewCtx(['b1', 'b2'])} />)
+    await waitFor(() => expect(container.textContent ?? '').toContain(BATCH_ANCHOR))
+
+    const stripRows = Array.from(container.querySelectorAll<HTMLElement>('[data-testid="review-files-strip-row"]'))
+    expect(stripRows, 'both files must render in the strip').toHaveLength(2)
+    expect(stripRows[0].textContent).toContain('a.csv')
+    expect(stripRows[1].textContent).toContain('b.csv')
+    const dots = stripRows.map((r) => r.firstElementChild!.firstElementChild as HTMLElement)
+    expect(dots.map((d) => d.style.width), 'the first span of each row is the dot').toEqual(['8px', '8px'])
+    expect(dots.map((d) => d.style.borderRadius)).toEqual(['50%', '50%'])
+    // one green, one red: both outcomes wear the circle
+    expect(new Set(dots.map((d) => d.style.background)).size).toBe(2)
+  })
+})
+
+describe('RESKIN2-04-03 D-18: the rejected surfaces wear the prototype title and tiles', () => {
+  it('the rejected run wears the prototype title and tiles', async () => {
+    mockReviewFetchAll(rejectedFileRun('.csv'), TOTALS)
+    const { container } = render(<ReviewBatch ctx={reviewCtx(['b1'])} />)
+    await waitFor(() => expect(container.textContent ?? '').toContain(REJECTED_ANCHOR))
+
+    const title = Array.from(container.querySelectorAll<HTMLElement>('div')).find((d) => d.textContent === REJECTED_ANCHOR)
+    expect(title, 'the rejected title did not render').toBeDefined()
+    expect(title!.style.fontSize).toBe('16px')
+    expect(title!.style.fontWeight).toBe('700')
+
+    const captions = ['Invoices created', 'Rows stored', 'Rows quarantined']
+    for (const text of captions) {
+      const caption = Array.from(container.querySelectorAll<HTMLElement>('div')).find((d) => d.textContent === text)
+      expect(caption, `${text}: caption did not render`).toBeDefined()
+      const value = caption!.previousElementSibling as HTMLElement | null
+      const tile = caption!.parentElement!
+      expect(value, `${text}: value`).not.toBeNull()
+      expect(value!.className.split(/\s+/), `${text}: value stays mono`).toContain('mono')
+      expect(value!.style.fontSize, `${text}: value size`).toBe('20px')
+      expect(value!.style.fontWeight, `${text}: value weight`).toBe('700')
+      expect(value!.style.color, `${text}: value colour`).toBe('var(--fg-2)')
+      expect(caption!.style.fontSize, `${text}: caption size`).toBe('11.5px')
+      expect(caption!.style.color, `${text}: caption colour`).toBe('var(--fg-3)')
+      expect(caption!.style.marginTop, `${text}: caption margin`).toBe('3px')
+      expect(tile.style.flex, `${text}: tile flex`).toBe('1 1 150px')
+      expect(tile.style.background, `${text}: tile fill`).toBe('var(--bg-3)')
+      expect(tile.style.border, `${text}: tile border`).toContain('var(--line-2)')
+    }
+    const quarantined = Array.from(container.querySelectorAll<HTMLElement>('div')).find((d) => d.textContent === 'Rows quarantined')!
+    expect(quarantined.parentElement!.style.border, 'the quarantined tile stays dashed').toContain('dashed')
+
+    const restart = screen.getByRole('button', { name: 'Choose another file' })
+    expect(restart.style.background, 'the primary class supplies the fill').toBe('')
+    expect(restart.style.color, 'the primary class supplies the text colour').toBe('')
+  })
+
+  it('the multi-file rejected card wears the 16px / 700 title and class-only buttons', async () => {
+    mockReviewFetchAll(rejectedRunRun('.csv'), TOTALS)
+    const { container } = render(<ReviewBatch ctx={reviewCtx(['b1', 'b2'])} />)
+    await waitFor(() => expect(container.querySelector('[data-testid="review-rejected-run"]')).not.toBeNull())
+
+    const card = container.querySelector<HTMLElement>('[data-testid="review-rejected-run"]')!
+    expect(card.querySelectorAll('[data-testid="review-rejected-run-file"]'), 'both files must render').toHaveLength(2)
+    const title = Array.from(card.querySelectorAll<HTMLElement>('div')).find((d) => d.textContent === REJECTED_ANCHOR)
+    expect(title, 'the rejected title did not render').toBeDefined()
+    expect(title!.style.fontSize).toBe('16px')
+    expect(title!.style.fontWeight).toBe('700')
+
+    const restart = screen.getByRole('button', { name: 'Choose another file' })
+    expect(restart.style.background).toBe('')
+    expect(restart.style.color).toBe('')
+  })
+})

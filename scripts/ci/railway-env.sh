@@ -3483,6 +3483,12 @@ cmd_report_api_calls() {
     }' "$rl" "$log" || true
 }
 
+# Stub: RESEND-01-04 implements it.
+cmd_check_mail_templates() {
+  echo "::error::check-mail-templates is a stub."
+  exit 1
+}
+
 case "${1:-}" in
   assert-project-settings)   cmd_assert_project_settings ;;
   disable-pr-environments)   cmd_disable_pr_environments ;;
@@ -3508,6 +3514,7 @@ case "${1:-}" in
   list-environments)         cmd_list_environments ;;
   query)                     cmd_query "${2:-}" ;;
   wait-deployment)           shift; cmd_wait_deployment "$@" ;;
+  check-mail-templates)      cmd_check_mail_templates "${2:-}" ;;
   report-api-calls)          cmd_report_api_calls ;;
   *)
     echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-fork-gateway-token <environment-id>|set-production-gateway-token <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments|query <context>|wait-deployment <label> <deployment-id>|report-api-calls>"

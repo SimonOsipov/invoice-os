@@ -1157,7 +1157,7 @@ test('detail surface: violations render against the rule-set version, the fix lo
   await expect(stripCaption(page, 'validated')).toHaveText(new RegExp(`^\\d\\d:\\d\\d · ${DRIVER}$`))
 
   // AUDIT-02-07 (AC-1/AC-4): the genesis row's subject is createInvoice's
-  // login(PERSONAS.A), c0000000-...-0001, whom db/seed.dev.sql:41 names. Count
+  // login(PERSONAS.A), c0000000-...-0001, whom db/seed.dev.sql names. Count
   // first: an empty locator satisfies every assertion after it.
   await expect(page.getByTestId('strip-actor')).toHaveCount(5)
   // Both reached nodes are attributed; this pins the Draft node's, on the genesis row.

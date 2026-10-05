@@ -58,9 +58,9 @@ tenants (1111 / 2222), plus one shard per big file
 `--project=<unit>` runs one. A new topology spec file must be added to a unit in `shards.ts`,
 or every topology run fails at config load.
 
-**A dedicated-shard spec seeds the session before it navigates.** It calls
-`seedShardSession` (`e2e/topology/shardSession.ts`), which logs in as the shard tenant through
-the mock issuer and writes the session record the SPA stores after a real sign-in. A bare
+**A dedicated-shard spec seeds the session before it navigates.** It signs in with
+`signInAs(page, id, { tenantId })`, which calls `seedShardSession` (`e2e/topology/shardSession.ts`).
+That logs in as the shard tenant through the mock issuer and writes the session record the SPA stores after a real sign-in. A bare
 `?persona=firm` or `?persona=inhouse` binds to the seeded tenants 1111 / 2222. The firm path may
 still carry `?persona=firm`: the stored hand-off session wins over the param. `assertShardSession`
 fails a sign-in that landed in another tenant.

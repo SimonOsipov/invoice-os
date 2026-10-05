@@ -305,6 +305,7 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     process.env.APP_URL = 'https://app.example.test///'
     expect(signInUrl('firm')).toBe('https://app.example.test?persona=firm')
     expect(signInUrl('inhouse')).toBe('https://app.example.test?persona=inhouse')
+    expect(signInUrl('firm', '/invoices/x')).toBe('https://app.example.test/invoices/x?persona=firm')
   })
 
   it('row 2 (AC-1) -- signInUrl throws naming the missing variable', () => {

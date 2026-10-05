@@ -77,9 +77,9 @@ export interface PersonaDef {
   destination: Destination
   displayName: string // LANDING_PERSONAS[].name
   // The token a covering spec must literally contain to prove it drives THIS persona.
-  // Deliberately not the bare persona id: `firm` matches spec PROSE (portfolio.spec.ts's
-  // only lowercase `firm` is inside a comment), so an id match would both pass on a
-  // reformatted comment and let a spec that signs in as the wrong persona still qualify.
+  // Deliberately not the bare persona id: `firm` matches spec PROSE, so an id match would
+  // both pass on a reformatted comment and let a spec that signs in as the wrong persona
+  // still qualify.
   specToken: string
   tenantName?: string // app personas only — the two console personas have no tenant
   coverage?: Cell[] // app personas only

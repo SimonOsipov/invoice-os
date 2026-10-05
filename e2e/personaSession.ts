@@ -82,7 +82,6 @@ export async function sidebarRoster(page: Page): Promise<string[]> {
 
 // Console errors + uncaught exceptions, for specs that assert a persona's surfaces draw
 // clean. Attach before navigating so load-time errors are captured.
-//
 export function collectErrors(page: Page): string[] {
   const errors: string[] = []
   page.on('console', (msg) => {

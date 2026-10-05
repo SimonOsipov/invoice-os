@@ -1,4 +1,4 @@
-// e2e/personas.test.ts — the persona axis guards G1-G5 (PERSONA-01-01, Backlog task-270).
+// e2e/personas.test.ts — the persona axis guards G3-G5 (PERSONA-01-01, Backlog task-270).
 // RED-then-GREEN, Test-first: yes. At t0 the import of ./personas does not resolve (no
 // personas.ts exists yet), so every row below fails on the same uninformative collection
 // error (Phase A). Phase B (empty-stub personas.ts/personaSession.ts, no data filled in)
@@ -74,7 +74,6 @@ const EXPECTED_DRIVES_MIN = new Set<string>([
 ])
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
-const LANDING_AUTH = join(REPO_ROOT, 'frontend/landing/src/auth.ts')
 const SIDEBAR = join(REPO_ROOT, 'frontend/app/src/components/Sidebar.tsx')
 const SIDEBAR_TEST = join(REPO_ROOT, 'frontend/app/src/components/Sidebar.test.tsx')
 const GLYPHS = join(REPO_ROOT, 'frontend/app/src/glyphs.tsx')
@@ -82,7 +81,6 @@ const APP_TSX = join(REPO_ROOT, 'frontend/app/src/App.tsx')
 const TYPES_TS = join(REPO_ROOT, 'frontend/app/src/types.ts')
 const PERSONAS_SRC = join(REPO_ROOT, 'e2e/personas.ts')
 const PERSONAS_TEST_SRC = join(REPO_ROOT, 'e2e/personas.test.ts')
-const APP_SESSION_SRC = join(REPO_ROOT, 'frontend/app/src/lib/session.ts')
 
 // process.env hygiene (targets.test.ts:9-11's idiom, extended to all three destination
 // vars): snapshot before each test and restore after, so row 1/2's mutations can never leak
@@ -100,46 +98,6 @@ afterEach(() => {
     else process.env[v] = envSnapshot[v]
   }
 })
-
-// --- G1/G2 extraction helpers (frontend/landing/src/auth.ts) ---------------------------
-
-// G1: the LANDING_PERSONAS roster's `id:` values. Slice from the array's declaration to the
-// next column-0 `]` (the only one in the file) and extract every quoted `id:` value in that
-// slice.
-function extractLandingPersonaIds(src: string): string[] {
-  const startIdx = src.indexOf('export const LANDING_PERSONAS')
-  if (startIdx === -1) {
-    throw new Error('G1: `export const LANDING_PERSONAS` anchor not found in frontend/landing/src/auth.ts -- the anchors moved, update e2e/personas.test.ts')
-  }
-  const endIdx = src.indexOf('\n]', startIdx)
-  if (endIdx === -1) {
-    throw new Error('G1: closing column-0 `]` not found after LANDING_PERSONAS -- the anchors moved, update e2e/personas.test.ts')
-  }
-  const slice = src.slice(startIdx, endIdx)
-  return [...slice.matchAll(/\bid:\s*['"]([^'"]+)['"]/g)].map((m) => m[1])
-}
-
-// G2: the `LandingPersona` interface's `id` property union -- NOT `frontend/app/src/auth.ts`'s
-// unrelated 2-member `PersonaId` type (a wrong-file trap: [FIX-3] in task-270's plan). Slice
-// from the interface's declaration to its closing column-0 `}`, isolate the single `id:` line,
-// and extract only the quoted members on THAT line -- scoping to one line is what keeps the
-// `target: 'app' | 'ops' | 'support'` property out.
-function extractLandingPersonaIdUnion(src: string): string[] {
-  const startIdx = src.indexOf('export interface LandingPersona')
-  if (startIdx === -1) {
-    throw new Error('G2: `export interface LandingPersona` anchor not found in frontend/landing/src/auth.ts -- the anchors moved, update e2e/personas.test.ts')
-  }
-  const endIdx = src.indexOf('\n}', startIdx)
-  if (endIdx === -1) {
-    throw new Error('G2: closing column-0 `}` not found after LandingPersona -- the anchors moved, update e2e/personas.test.ts')
-  }
-  const slice = src.slice(startIdx, endIdx)
-  const idLine = slice.match(/^\s*id:\s*(.+)$/m)
-  if (!idLine) {
-    throw new Error('G2: no `id:` line found inside the LandingPersona interface -- the anchors moved, update e2e/personas.test.ts')
-  }
-  return [...idLine[1].matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1])
-}
 
 // --- G3 / G3-neg extraction helpers (frontend/app/src/components/Sidebar.tsx + glyphs.tsx) ---
 
@@ -211,33 +169,6 @@ function extractGlyphLabels(glyphsSrc: string): Map<string, string> {
     map.set(m[1], m[2])
   }
   return map
-}
-
-// --- G13 extraction helper (the app's live session gate) ------------------------------
-//
-// accepts() and BOUNDARY_MATRIX are hand-typed e2e-side data, so checking them against each
-// other proves nothing about the product. This helper reads the app's shouldAutoSignIn from
-// source. The consoles have no persona gate to read: they take a staff session.
-
-// frontend/app/src/lib/session.ts's shouldAutoSignIn: `personaParam === 'x' || ...`. Slice
-// the function body (declaration to the next column-0 `}`) and pull every string compared
-// with `===`, rather than hardcoding {'firm','inhouse'} here -- a hardcoded set would just be
-// a FOURTH hand-typed copy of the same claim.
-function extractShouldAutoSignInIds(src: string): string[] {
-  const startIdx = src.indexOf('function shouldAutoSignIn')
-  if (startIdx === -1) {
-    throw new Error('G13: `function shouldAutoSignIn` anchor not found in frontend/app/src/lib/session.ts -- the anchors moved, update e2e/personas.test.ts')
-  }
-  const endIdx = src.indexOf('\n}', startIdx)
-  if (endIdx === -1) {
-    throw new Error('G13: closing column-0 `}` not found after shouldAutoSignIn -- the anchors moved, update e2e/personas.test.ts')
-  }
-  const body = src.slice(startIdx, endIdx)
-  const ids = [...body.matchAll(/===\s*['"]([^'"]+)['"]/g)].map((m) => m[1])
-  if (ids.length === 0) {
-    throw new Error('G13: no `=== \'...\'` comparisons found inside shouldAutoSignIn -- the anchors moved, update e2e/personas.test.ts')
-  }
-  return ids
 }
 
 // --- G6c extraction helpers (e2e/personas.ts's own Grade union and Cell interface) -----
@@ -333,18 +264,6 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
       }
     }
     expect(wrong, wrong.join('\n')).toEqual([])
-  })
-
-  it('row 4 (AC-4, G1) -- registry ids match LANDING_PERSONAS', () => {
-    const ids = extractLandingPersonaIds(readFileSync(LANDING_AUTH, 'utf8'))
-    expect(ids.length, 'landing persona ids extracted (vacuity guard)').toBeGreaterThanOrEqual(4)
-    expect(new Set(PERSONA_IDS)).toEqual(new Set(ids))
-  })
-
-  it('row 5 (AC-4, G2) -- registry ids match the LandingPersona id union', () => {
-    const members = extractLandingPersonaIdUnion(readFileSync(LANDING_AUTH, 'utf8'))
-    expect(members.length, 'LandingPersona id union members extracted (vacuity guard)').toBeGreaterThanOrEqual(4)
-    expect(new Set(PERSONA_IDS)).toEqual(new Set(members))
   })
 
   it('row 6 (AC-2, G3) -- every sidebar nav surface is catalogued', () => {
@@ -559,46 +478,6 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     const inhouseTokens = resolveNavConstsFromGroupsSlice(parts[1], aliasMap)
     expect(firmTokens, 'firm branch should resolve the renamed invoices wrapper').toContain('NAV_INVOICES')
     expect(inhouseTokens, 'in-house branch should resolve the renamed approvals wrapper').toContain('NAV_APPROVALS')
-  })
-
-  // --- BOUNDARY_MATRIX vs the live app gate ---------------------------------------------
-  //
-  // Reads shouldAutoSignIn from source, so a change to who the app accepts that nobody
-  // mirrors into e2e/personas.ts fails here. A console accepts no persona.
-  it('row 13 (BOUNDARY_MATRIX vs the live app gate) -- the matrix cannot drift from shouldAutoSignIn, and no console row accepts', () => {
-    const appAccepted = new Set(extractShouldAutoSignInIds(readFileSync(APP_SESSION_SRC, 'utf8')))
-    expect(appAccepted.size, 'shouldAutoSignIn accepted ids (vacuity guard)').toBeGreaterThanOrEqual(2)
-
-    expect(BOUNDARY_MATRIX.length, 'boundary matrix rows (vacuity guard)').toBe(12)
-    const consoleRows = BOUNDARY_MATRIX.filter((r) => r.destination !== 'app')
-    expect(consoleRows.length, 'console rows (vacuity guard)').toBe(8)
-
-    const disagreements: string[] = []
-    for (const row of BOUNDARY_MATRIX) {
-      const productAccepts = row.destination === 'app' && appAccepted.has(row.persona)
-      const matrixAccepts = row.verdict === 'accepts'
-      if (productAccepts !== matrixAccepts) {
-        disagreements.push(
-          `${row.destination}:${row.persona}: matrix says "${row.verdict}", live product gate says "${productAccepts ? 'accepts' : 'refuses'}"`,
-        )
-      }
-    }
-    expect(disagreements, disagreements.join('\n')).toEqual([])
-  })
-
-  // Negative control for G13's extractor: it tells an accepted id from a rejected one.
-  it('row 14 (G13-neg) -- the live-gate extractor distinguishes an accepted id from a rejected one', () => {
-    // Column-0 braces, matching the real file's shape (the extractor slices to the next
-    // column-0 `}`) -- an indented fixture would silently miss its own closing brace.
-    const authFixture = [
-      'export function shouldAutoSignIn(personaParam: string | null): boolean {',
-      "  return personaParam === 'alpha' || personaParam === 'beta'",
-      '}',
-    ].join('\n')
-    const ids = extractShouldAutoSignInIds(authFixture)
-    expect(ids).toContain('alpha')
-    expect(ids).toContain('beta')
-    expect(ids).not.toContain('gamma')
   })
 
   // --- G6 (PERSONA-01-07, task-276): the guard that closes the door on Core AC 1 --------

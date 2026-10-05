@@ -17,15 +17,13 @@
 
 import { resolveTarget } from './targets'
 
-// The four landing personas (frontend/landing/src/auth.ts's LandingPersona.id). These ids are WIRE VALUES:
-// each one is the `?persona=` param the landing hands off with, and the app's session gate
-// checks it verbatim. Not to be conflated with frontend/app/src/auth.ts's unrelated,
-// two-member `PersonaId` (firm | inhouse) — different package, different job.
+// The four personas. These ids are WIRE VALUES: each one is the `?persona=` param a sign-in
+// URL carries, and the app's session gate checks it verbatim. Not to be conflated with
+// frontend/app/src/auth.ts's unrelated, two-member `PersonaId` (firm | inhouse).
 export type PersonaId = 'developer' | 'support' | 'firm' | 'inhouse'
 
-// The three deployed SPAs a persona can be routed to. Mirrors LandingPersona.target
-// (frontend/landing/src/auth.ts) — `ops` is the ops-console service, and the `developer`
-// persona routing to it is the wire-value/display-name split documented there, not a mistake.
+// The three deployed SPAs a persona can be routed to. `ops` is the ops-console service; the
+// `developer` persona routing to it is the wire-value/display-name split, not a mistake.
 export type Destination = 'app' | 'ops' | 'support'
 
 // Which environment variable carries each destination's base URL on this run's ephemeral
@@ -75,7 +73,7 @@ export interface Cell {
 export interface PersonaDef {
   id: PersonaId
   destination: Destination
-  displayName: string // LANDING_PERSONAS[].name
+  displayName: string
   // The token a covering spec must literally contain to prove it drives THIS persona.
   // Deliberately not the bare persona id: `firm` matches spec PROSE, so an id match would
   // both pass on a reformatted comment and let a spec that signs in as the wrong persona
@@ -171,22 +169,20 @@ export const PERSONAS: Record<PersonaId, PersonaDef> = {
   },
 }
 
-// LANDING_PERSONAS' own order (frontend/landing/src/auth.ts).
 export const PERSONA_IDS: readonly PersonaId[] = ['developer', 'support', 'firm', 'inhouse']
 
 export const DESTINATIONS: readonly Destination[] = ['app', 'ops', 'support']
 
-// The landing hand-off URL for a persona: `<its destination's base>?persona=<id>`, exactly
-// what landing/src/auth.ts's destUrl() builds. resolveTarget is called HERE, not at module
-// scope, so importing this module never requires a deployed environment (see the header).
+// The sign-in URL for a persona: `<its destination's base>?persona=<id>`. resolveTarget is called HERE, not at
+// module scope, so importing this module never requires a deployed environment (see the header).
 // It throws naming the missing variable rather than defaulting ([fail-loud-targets]).
 export function signInUrl(id: PersonaId, path = ''): string {
   const base = resolveTarget(DESTINATION_ENV[PERSONAS[id].destination])
   return `${base}${path}?persona=${id}`
 }
 
-// Whether a destination's gate lets this persona in. Only the app does, via shouldAutoSignIn
-// (frontend/app/src/lib/session.ts); the consoles take a staff session, not a persona.
+// Whether a destination's gate lets this persona in. Only the app does;
+// the consoles take a staff session, not a persona.
 export function accepts(destination: Destination, id: PersonaId): boolean {
   return destination === 'app' && PERSONAS[id].destination === 'app'
 }

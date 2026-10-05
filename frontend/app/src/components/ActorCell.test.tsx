@@ -137,10 +137,8 @@ describe('ActorCell', () => {
     expect(screen.queryByText(/Okafor/)).toBeNull()
   })
 
-describe('ActorCell initials tracking', () => {
   it('actorCell_initialsCarryTheMonoClass', () => {
     render(<ActorCell {...PERSON} />)
     expect(screen.getByTestId('actor-initials').parentElement!.className).toBe('mono')
   })
-})
 })

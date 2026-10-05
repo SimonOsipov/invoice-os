@@ -382,10 +382,8 @@ describe('AuditRow expansion per variant (D-4, D-14)', () => {
     expect(sv(link, 'font-weight')).toBe('600')
   })
 
-describe('AuditRow button faces', () => {
   it('auditRow_invoiceLinkUsesTheAppFace', () => {
     render(<AuditRow event={ev({ payload: { invoice_id: 'i-1', invoice_number: 'INV-1' } })} expanded onToggle={() => {}} onFilterToInvoice={() => {}} />)
     expect(sv(screen.getByTestId('audit-invoice-affordance'), 'font-family')).toBe('var(--font-sans)')
   })
-})
 })

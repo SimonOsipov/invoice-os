@@ -87,8 +87,7 @@ export function ReviewAlreadyImportedTab({
               <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>{r.row == null ? '—' : r.row}</span>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
                 {/* Disabled-with-reason, never hidden — InvoiceDetail.tsx:480-518's four
-                    layers. Ghost, so no
-                    `filter: 'none'` — that neutraliser is .v2-btn-primary's alone. */}
+                    layers. Ghost, so no `filter: 'none'` — that is .v2-btn-primary's alone. */}
                 <button
                   onClick={invoiceId == null ? undefined : () => onOpenInvoice(invoiceId)}
                   disabled={invoiceId == null}

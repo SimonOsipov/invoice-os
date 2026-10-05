@@ -809,6 +809,23 @@ describe('RESKIN2-04-03 D-13: the review header and tiles wear the prototype val
     expect(new Set(values.map((t) => byText(container, t).parentElement)).size, 'three distinct tiles').toBe(3)
   })
 
+  it('every live tile, the not-imported pair included, wears the money recipe', async () => {
+    mockReviewFetchAll(mixedRun('.csv'), NE_TOTALS)
+    const { container } = render(<ReviewBatch ctx={reviewCtx(['b1'])} />)
+    await waitFor(() => expect(container.textContent ?? '').toContain(BATCH_ANCHOR))
+
+    const figures = Array.from(container.querySelectorAll<HTMLElement>('div.money'))
+    expect(figures.map((f) => f.textContent), 'valid, failed, not yet validated, already imported, unreadable').toHaveLength(5)
+    for (const f of figures) {
+      expect(f.style.fontSize, `${f.textContent}: size`).toBe('15px')
+      expect(f.style.fontWeight, `${f.textContent}: weight`).toBe('700')
+      const caption = f.nextElementSibling as HTMLElement | null
+      expect(caption, `${f.textContent}: caption`).not.toBeNull()
+      expect(caption!.style.color, `${f.textContent}: caption colour`).toBe('var(--fg-2)')
+      expect(caption!.style.marginTop, `${f.textContent}: caption margin`).toBe('4px')
+    }
+  })
+
   it('the strip dot is a circle', async () => {
     const batches = [
       batch({ id: 'b1', filename: 'a.csv' }),
@@ -831,6 +848,32 @@ describe('RESKIN2-04-03 D-13: the review header and tiles wear the prototype val
 })
 
 describe('RESKIN2-04-03 D-18: the rejected surfaces wear the prototype title and tiles', () => {
+  it.each([
+    ['.csv', ['Invoices created', 'Rows stored', 'Rows quarantined']],
+    ['.pdf', ['Invoices created', 'Documents stored', 'Documents quarantined']],
+  ])('every reject tile of a %s run wears the reject recipe, never the live one', async (ext, captions) => {
+    mockReviewFetchAll(rejectedFileRun(ext), TOTALS)
+    const { container } = render(<ReviewBatch ctx={reviewCtx(['b1'])} />)
+    await waitFor(() => expect(container.textContent ?? '').toContain(REJECTED_ANCHOR))
+
+    expect(container.querySelector('div.money'), 'a reject figure is mono, never the live money figure').toBeNull()
+    for (const text of captions) {
+      const caption = Array.from(container.querySelectorAll<HTMLElement>('div')).find((d) => d.textContent === text)
+      expect(caption, `${text}: caption did not render`).toBeDefined()
+      const value = caption!.previousElementSibling as HTMLElement
+      const tile = caption!.parentElement!
+      expect(value.className.split(/\s+/), `${text}: value class`).toEqual(['mono'])
+      expect([value.style.fontSize, value.style.fontWeight, value.style.color], `${text}: value`).toEqual(['20px', '700', 'var(--fg-2)'])
+      expect([caption!.style.fontSize, caption!.style.color, caption!.style.marginTop], `${text}: caption`).toEqual(['11.5px', 'var(--fg-3)', '3px'])
+      expect(tile.style.flex, `${text}: tile flex`).toBe('1 1 150px')
+      expect(tile.style.minWidth, `${text}: reject tile has no min-width`).toBe('')
+      expect([tile.style.background, tile.style.border], `${text}: tile`).toEqual([
+        'var(--bg-3)',
+        text.endsWith('quarantined') ? '1px dashed var(--line-2)' : '1px solid var(--line-2)',
+      ])
+    }
+  })
+
   it('the rejected run wears the prototype title and tiles', async () => {
     mockReviewFetchAll(rejectedFileRun('.csv'), TOTALS)
     const { container } = render(<ReviewBatch ctx={reviewCtx(['b1'])} />)

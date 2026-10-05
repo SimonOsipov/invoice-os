@@ -131,6 +131,21 @@ func TestVerifyPage_GetRendersThePage(t *testing.T) {
 	if got := strings.TrimSpace(vpText(h1[0])); got != "Confirm your email address" {
 		t.Errorf("h1 = %q, want %q", got, "Confirm your email address")
 	}
+	titles := vpFind(doc, vpTag("title"))
+	if len(titles) != 1 || vpText(titles[0]) != "Confirm your email \u00b7 ASComply" {
+		t.Errorf("title elements = %d, want exactly 1 reading %q", len(titles), "Confirm your email \u00b7 ASComply")
+	}
+	var paras []string
+	for _, p := range vpFind(doc, vpTag("p")) {
+		paras = append(paras, strings.TrimSpace(vpText(p)))
+	}
+	want := []string{
+		"Click the button to finish creating your ASComply account.",
+		"If you did not create an ASComply account, close this page.",
+	}
+	if !slices.Equal(paras, want) {
+		t.Errorf("paragraphs = %q, want %q", paras, want)
+	}
 }
 
 func TestVerifyPage_HeadAnswersLikeGet(t *testing.T) {
@@ -160,6 +175,9 @@ func TestVerifyPage_HeadAnswersLikeGet(t *testing.T) {
 	}
 	if headBody != "" {
 		t.Errorf("HEAD body = %q, want empty", headBody)
+	}
+	if rec := vpDo(t, vpHandler(t), http.MethodHead, vpQuery(vpToken)); rec.Code != http.StatusOK || rec.Body.Len() != 0 {
+		t.Errorf("HEAD at the handler: status %d, body %q; want 200 and no body", rec.Code, rec.Body.String())
 	}
 	gh, hh := get.Header.Clone(), head.Header.Clone()
 	gh.Del("Date")
@@ -254,6 +272,10 @@ func TestVerifyPage_RevealsNothingButTheToken(t *testing.T) {
 	if !headersEqual(recA.Header(), recB.Header()) {
 		t.Errorf("headers differ:\nA %v\nB %v", recA.Header(), recB.Header())
 	}
+	rep := vpDo(t, h, http.MethodGet, "token=first-one&token=second-one&type=signup")
+	if rep.Code != http.StatusOK || !strings.Contains(rep.Body.String(), "first-one") || strings.Contains(rep.Body.String(), "second-one") {
+		t.Errorf("repeated token: status %d; want 200 rendering only the first value", rep.Code)
+	}
 	for _, leak := range []string{"evil.example", "leak"} {
 		if strings.Contains(recA.Body.String(), leak) {
 			t.Errorf("body contains %q from the query", leak)
@@ -262,20 +284,39 @@ func TestVerifyPage_RevealsNothingButTheToken(t *testing.T) {
 }
 
 func TestVerifyPage_TokenIsEscaped(t *testing.T) {
-	const raw = `"><script>alert(1)</script>`
-	_, doc := vpPage(t, raw)
-	if script := vpScript(t, doc); strings.Contains(script, "alert") {
-		t.Errorf("the one script holds the token: %q", script)
-	}
-	var got []string
-	for _, in := range vpFind(doc, vpTag("input")) {
-		if name, _ := vpAttr(in, "name"); name == "token" {
-			v, _ := vpAttr(in, "value")
-			got = append(got, v)
-		}
-	}
-	if len(got) != 1 || got[0] != raw {
-		t.Errorf("token input values = %q, want [%q]", got, raw)
+	_, base := vpPage(t, vpToken)
+	baseScript := vpScript(t, base)
+	baseElems := len(vpFind(base, func(*html.Node) bool { return true }))
+	for name, raw := range map[string]string{
+		"quote and script":     `"><script>alert(1)</script>`,
+		"closing script":       `</script><script>alert(1)</script>`,
+		"quotes and ampersand": `'"&amp;<>`,
+		"comment opener":       `<!--`,
+		"javascript scheme":    `javascript:alert(1)`,
+		"template syntax":      `{{.Script}}{{.Token}}`,
+		"space plus percent":   `a b+c%20d`,
+		"unicode":              "ключ-令牌-\U0001F511",
+		"attribute breakout":   `x" onfocus="alert(1)" autofocus="`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, doc := vpPage(t, raw)
+			if script := vpScript(t, doc); script != baseScript {
+				t.Errorf("the one script = %q, want the submit-once script %q", script, baseScript)
+			}
+			if n := len(vpFind(doc, func(*html.Node) bool { return true })); n != baseElems {
+				t.Errorf("elements = %d, want %d: the token added markup", n, baseElems)
+			}
+			var got []string
+			for _, in := range vpFind(doc, vpTag("input")) {
+				if name, _ := vpAttr(in, "name"); name == "token" {
+					v, _ := vpAttr(in, "value")
+					got = append(got, v)
+				}
+			}
+			if len(got) != 1 || got[0] != raw {
+				t.Errorf("token input values = %q, want [%q]", got, raw)
+			}
+		})
 	}
 }
 
@@ -340,7 +381,7 @@ func TestVerifyPage_LoadsOnlySameOriginResources(t *testing.T) {
 	}
 	var refs []string
 	for _, n := range vpFind(doc, func(*html.Node) bool { return true }) {
-		for _, k := range []string{"src", "href", "action"} {
+		for _, k := range []string{"src", "href", "action", "formaction"} {
 			if v, has := vpAttr(n, k); has {
 				refs = append(refs, v)
 				if !strings.HasPrefix(v, "/") || strings.HasPrefix(v, "//") {
@@ -351,6 +392,30 @@ func TestVerifyPage_LoadsOnlySameOriginResources(t *testing.T) {
 	}
 	if len(refs) == 0 {
 		t.Fatal("the page references no resource, so the sweep proves nothing")
+	}
+	styles := vpFind(doc, vpTag("style"))
+	if len(styles) == 0 {
+		t.Fatal("the page has no <style>, so the style sweep proves nothing")
+	}
+	for _, st := range styles {
+		css := vpText(st)
+		if strings.TrimSpace(css) == "" {
+			t.Error("the <style> is empty")
+		}
+		for _, bad := range []string{"@import", "url(", "://"} {
+			if strings.Contains(css, bad) {
+				t.Errorf("the <style> holds %q: an external load", bad)
+			}
+		}
+	}
+	for _, tag := range []string{"iframe", "frame", "object", "embed", "base", "meta http-equiv"} {
+		if tag == "meta http-equiv" {
+			if m := vpFind(doc, func(n *html.Node) bool { _, has := vpAttr(n, "http-equiv"); return n.Data == "meta" && has }); len(m) != 0 {
+				t.Errorf("page holds %d <meta http-equiv>", len(m))
+			}
+		} else if e := vpFind(doc, vpTag(tag)); len(e) != 0 {
+			t.Errorf("page holds %d <%s>", len(e), tag)
+		}
 	}
 	icon := vpFind(doc, func(n *html.Node) bool {
 		rel, _ := vpAttr(n, "rel")
@@ -375,6 +440,12 @@ func TestVerifyPage_MalformedLinkRedirectsToFailed(t *testing.T) {
 		"type recovery":        "token=" + vpToken + "&type=recovery",
 		"type Signup":          "token=" + vpToken + "&type=Signup",
 		"recovery then signup": "token=" + vpToken + "&type=recovery&type=signup",
+		"type SIGNUP":          "token=" + vpToken + "&type=SIGNUP",
+		"type padded":          "token=" + vpToken + "&type=%20signup",
+		"type suffixed":        "token=" + vpToken + "&type=signupx",
+		"type prefix only":     "token=" + vpToken + "&type=sign",
+		"token key upper":      "TOKEN=" + vpToken + "&type=signup",
+		"type key upper":       "token=" + vpToken + "&TYPE=signup",
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec := vpDo(t, h, http.MethodGet, query)
@@ -420,6 +491,33 @@ func TestVerifyPage_TokenLengthCap(t *testing.T) {
 	}
 }
 
+func TestVerifyPage_TokenLengthCapCountsBytes(t *testing.T) {
+	h := vpHandler(t)
+	atCap := strings.Repeat("\u00e9", vpMaxLen/2)
+	if rec := vpDo(t, h, http.MethodGet, vpQuery(atCap)); rec.Code != http.StatusOK {
+		t.Errorf("%d-byte token of 2-byte runes: status %d, want 200", len(atCap), rec.Code)
+	}
+	over := atCap + "\u00e9"
+	if rec := vpDo(t, h, http.MethodGet, vpQuery(over)); rec.Code != http.StatusSeeOther {
+		t.Errorf("%d-byte token of %d runes: status %d, want 303", len(over), len([]rune(over)), rec.Code)
+	}
+}
+
+func TestVerifyPage_RedirectUsesTheSiteWithoutDoubleSlash(t *testing.T) {
+	site, err := url.Parse(siteURLValue + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := VerifyPageHandler(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := vpDo(t, h, http.MethodGet, "token=&type=signup")
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != failedLocation {
+		t.Errorf("answer = %d Location %q, want 303 %q", rec.Code, rec.Header().Get("Location"), failedLocation)
+	}
+}
+
 func TestVerifyPage_RepeatedTypeFirstValueWins(t *testing.T) {
 	rec := vpDo(t, vpHandler(t), http.MethodGet, "token="+vpToken+"&type=signup&type=recovery")
 	if rec.Code != http.StatusOK {
@@ -450,9 +548,9 @@ func TestVerifyPage_NotConfigured503(t *testing.T) {
 
 func TestVerifyPage_OtherMethods405(t *testing.T) {
 	h := vpHandler(t)
-	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodOptions} {
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodOptions, http.MethodDelete, http.MethodPatch} {
 		t.Run(method, func(t *testing.T) {
-			rec := vpDo(t, h, method, vpQuery(vpToken))
+			rec := vpDo(t, h, method, "token=&type=signup")
 			if rec.Code != http.StatusMethodNotAllowed {
 				t.Fatalf("status = %d, want 405", rec.Code)
 			}

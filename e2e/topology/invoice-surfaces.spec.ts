@@ -1229,8 +1229,9 @@ test('deployed app: a cross-tenant invoice id and a random UUID render the same 
   // toContainText is only the settle signal -- innerText() is a one-shot read, not
   // auto-retrying. The assertion is the equality below; nothing here hardcodes a copy
   // string, so a future error-message change does not need this test rewritten.
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   async function renderedTextFor(id: string): Promise<string> {
-    await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/invoices/${id}` })
+    await page.goto(`${APP_URL}/invoices/${id}`)
     await expect(page.getByTestId('invoice-detail')).toContainText('HTTP 404')
     return page.getByTestId('invoice-detail').innerText()
   }

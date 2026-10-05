@@ -1,5 +1,5 @@
 import { expect, type Page } from '@playwright/test'
-import { signInAs } from '../personaSession'
+import { browserToken, signInAs } from '../personaSession'
 import { CONSOLE_SESSION_KEY, seedStaffStorage, test, type ConsoleTarget } from '../staffSession'
 import { resolveTarget } from '../targets'
 import { APPS } from './apps'
@@ -44,7 +44,6 @@ for (const target of TARGETS) {
   test(`${target.name}: no request reaches a Sentry host`, async ({ page, staffAccount }) => {
     const url = target.url()
     test.skip(isProductionHost(url), `${new URL(url).hostname} is a production host, where Sentry may be on`)
-    await target.signIn?.(page)
     const allRequests: { url: string; type: string }[] = []
     const sentryRequests: string[] = []
     page.on('request', (req) => {
@@ -56,6 +55,7 @@ for (const target of TARGETS) {
       (route) => route.fulfill({ status: 200, body: '{}', headers: { 'access-control-allow-origin': '*' } }),
     )
 
+    await target.signIn?.(page)
     if (target.console) await seedStaffStorage(page, target.console, staffAccount)
     await page.goto(url)
     await target.mainView(page)
@@ -80,7 +80,6 @@ for (const target of TARGETS) {
 }
 
 const CRASH_MESSAGE = 'e2e: induced render crash'
-const SESSION_KEY = 'invoice-os.session'
 // internal/gateway/cors.go corsAllowHeaders grants Authorization, Content-Type, sentry-trace, baggage.
 const TRACE_HEADERS = {
   'sentry-trace': '0123456789abcdef0123456789abcdef-0123456789abcdef-1',
@@ -94,7 +93,6 @@ for (const target of TARGETS.filter((t) => t.name !== 'landing')) {
   test(`${target.name}: an induced render crash shows the recovery screen`, async ({ page, staffAccount }, testInfo) => {
     const url = target.url()
     test.skip(isProductionHost(url), `${new URL(url).hostname} is a production host, where Sentry may be on`)
-    await target.signIn?.(page)
     const consoleErrors: string[] = []
     const pageErrors: string[] = []
     const sentryRequests: string[] = []
@@ -105,6 +103,8 @@ for (const target of TARGETS.filter((t) => t.name !== 'landing')) {
     page.on('request', (req) => {
       if (isSentryHost(req.url())) sentryRequests.push(req.url())
     })
+    // The crash init script comes after sign-in, so the sign-in itself is not crashed.
+    await target.signIn?.(page)
     // Added after the seed, so the seed's own setItem is the original.
     if (target.console) await seedStaffStorage(page, target.console, staffAccount)
     await page.addInitScript(
@@ -178,8 +178,7 @@ test('app: a traced gateway call passes the CORS preflight', async ({ page }) =>
   test.skip(isProductionHost(url), `${new URL(url).hostname} is a production host`)
   const gateway = resolveTarget('GATEWAY_URL')
   await signInAs(page, 'firm')
-  const token = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? '{}').token as string | undefined, SESSION_KEY)
-  expect(token, 'no stored session token after sign-in').toBeTruthy()
+  const token = await browserToken(page)
 
   const call = (extra: Record<string, string>) =>
     page.evaluate(

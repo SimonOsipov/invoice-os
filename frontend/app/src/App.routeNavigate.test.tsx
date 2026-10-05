@@ -348,7 +348,7 @@ describe('AC-3: a pushed URL never carries a query string', () => {
   })
 })
 
-describe('AUTH-15-11: the workspace carries no identity-switch props', () => {
+describe('the workspace carries no identity-switch props', () => {
   // `in`, not `!== undefined`: a present-but-undefined key is still a prop the shell receives.
   it('Workspace gets no switch props', async () => {
     await bootAt('/')

@@ -1,4 +1,4 @@
-// AUTH-15-03: the real-account helpers, with the gateway stubbed at global fetch.
+// The real-account helpers, with the gateway stubbed at global fetch.
 // topology/targets.ts reads GATEWAY_URL at import, so every import is dynamic after the env is set.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 

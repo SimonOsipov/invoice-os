@@ -3873,7 +3873,7 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
   })
 })
 
-describe('InvoiceDetail has no blocked-by-role note (AUTH-15-11)', () => {
+describe('InvoiceDetail has no blocked-by-role note', () => {
   it('no blocked-by-role note', async () => {
     const ID = 'inv-no-blocked-note-1'
     const PREPARER: Member = {

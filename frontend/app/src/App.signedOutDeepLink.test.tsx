@@ -257,7 +257,7 @@ describe('front door: capturing the destination before the bounce (ROUTE-05-02)'
 })
 
 // A signed-out deep link carrying a once-openable persona is captured like any other.
-describe('front door: a persona param on a deep link (AUTH-15-08)', () => {
+describe('front door: a persona param on a deep link', () => {
   it('capture_aPersonaParamIsDiscardedFromTheStoredQuery', () => {
     const { hrefWrites } = stubLocation({ pathname: '/audit', search: '?persona=firm' })
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')

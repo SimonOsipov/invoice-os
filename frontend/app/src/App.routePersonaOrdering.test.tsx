@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // vitest.config.ts stays `environment: 'node'` for every other suite.
 //
-// ROUTE-01-05, Mode A; re-specified by AUTH-15-08. No history write ever carries `?persona=`:
+// ROUTE-01-05, Mode A. No history write ever carries `?persona=`:
 // the param is not a credential, so a stored seat boots on the first commit and the router
 // seam drops the unowned param. Harness is App.routeNavigate.test.tsx's: the real <App/>, a
 // session in a stubbed localStorage, ctx captured through a mocked Sidebar.
@@ -119,8 +119,8 @@ describe('AC-1: an unrelated query string is dropped by a push, never carried', 
   })
 })
 
-// AUTH-15-08: `?persona=` is not a credential, so a stored seat boots on the first commit.
-describe('AUTH-15-08: a stored seat ignores ?persona=', () => {
+// `?persona=` is not a credential, so a stored seat boots on the first commit.
+describe('a stored seat ignores ?persona=', () => {
   const INHOUSE_SEAT: Session = { persona: APP_PERSONAS.inhouse, token: null, me: null, verified: true }
 
   it('ordering_noHistoryWriteEverCarriesThePersonaParam_afterTwoNavigations', async () => {

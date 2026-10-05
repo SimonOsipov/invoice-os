@@ -558,7 +558,7 @@ describe('an ended renewal and the next boot', () => {
   })
 })
 
-describe('?persona= is not a credential (AUTH-15-08)', () => {
+describe('?persona= is not a credential', () => {
   it('a stored live session ignores ?persona=', async () => {
     const { hrefWrites } = await bootWith(record(A0_FRESH, FRESH_AT), '/?persona=firm')
     await waitForVerifiedWorkspace()

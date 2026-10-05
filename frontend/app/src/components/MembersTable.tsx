@@ -26,52 +26,30 @@ import {
 } from '../lib/members'
 import { rosterRoleCell, stepsForMember, stepsWarning, type Role } from '../lib/roles'
 import type { Policy } from '../lib/workflows'
-import { AmberNote, InitialsChip, MemberStatusPill, MoreMenu, YouChip, type MenuAction } from './MemberParts'
+import { InitialsChip, MemberStatusPill, MoreMenu, YouChip, type MenuAction } from './MemberParts'
 import type { PlatformCtx } from '../types'
 
-// §15.7's grid, plus the two things a grid template does not state and this table needs:
-// the gap and the row padding. Both are the house constants — gap 16, head '11px 18px',
-// row '14px 18px' (InvoicesList.tsx:361/:392, ClientsView.tsx:140/:157).
-const COLS = 'minmax(190px,1fr) 130px 160px 120px 44px'
+// Gap 12, head '11px 16px' and row '12px 16px' sit in the head and row styles below.
+const COLS = 'minmax(220px,1.4fr) 110px minmax(150px,1fr) 120px 36px'
 
-// The trailing '' is the `⋯` column: at 44px no uppercase 10.5px label fits, and every
+// The trailing '' is the `⋯` column: at 36px no uppercase 10.5px label fits, and every
 // action column in the app is unlabelled.
 const HEADS = ['Person', 'Access role', 'Workflow roles', 'Status', '']
 
-// The width the grid actually needs. RulesView.tsx:19-29's arithmetic redone for this
-// table — RulesView's own 790 does not transfer, because its rationale is sitting beside a
-// fixed 244px rail and this table has none.
-//
-//   190 person floor + 454 fixed (130+160+120+44) + 4 gaps x 16 + 36 padding = 744
-//
-// 160px is the old in-house Approval-position column's width, which already carried titles
-// this long. "WORKFLOW ROLES" as a 10.5px uppercase `.label` measures ~102px, so no head
-// truncates.
-//
-// The Settings content box is ~1116px at a 1440px viewport (1440 - 252 sidebar,
-// Sidebar.tsx:128 - 72 page padding, SettingsView.tsx:47), so at 744 the table no longer
-// overflows it — the three deleted columns took ~300px with them. The scroll container
-// below is kept anyway: it is what stops an overflow at a narrow viewport scrolling the
-// WHOLE Settings page sideways, dragging the h1 and the tab strip with it (App.tsx:800's
-// `.pf-scroll` sets only `overflowY`, and CSS raises the other axis from `visible` to
-// `auto`). Every direct child restates `minWidth`, exactly as RulesView.tsx does.
-const TABLE_MIN_WIDTH = 744
+// Floors 220 + 110 + 150 + 120 + 36, 4 gaps x 12, padding 32. The scroll container below stops a
+// narrow viewport scrolling the whole Settings page sideways (`.pf-scroll` sets only `overflowY`).
+// Every direct child restates `minWidth`, as RulesView does.
+const TABLE_MIN_WIDTH = 716
 
 // `overflowX: 'auto'` makes that container a scroll container on BOTH axes, for the same
 // reason `.pf-scroll` is — so the absolutely-positioned `⋯` menu would be clipped, and
 // would spawn a vertical scrollbar, on any row without room below it. The scroller simply
 // makes room for whichever menu is open.
 //
-// Sized for the tallest REACHABLE menu — the active non-self row (Edit + Suspend + Remove,
-// one reason note) — measured on the deployed build at 189.73px required clearance;
-// viewport-independent, since the panel is a fixed 196px wide at 11px/1.45.
-//
-// The obvious alternative — flip the menu upward for the last few rows — was measured and
-// rejected: a row is ~58px, so opening downward needs three rows below and upward needs
-// two above, and ANY filtered list under about four rows then clips in both directions.
-// Searching one person's name produces exactly that list. The app has no portal and no
-// fixed-position popover to borrow instead.
-const MENU_CLEARANCE = 192
+// Sized for the tallest reachable menu, an invited row: 3 items and 2 reasons wrapped at the 280px
+// panel (~235px), less the ~15px of row below the trigger, plus one spare wrapped line per reason.
+// ceiling: derived, not measured on a deployed build; re-measure if a menu reason grows.
+const MENU_CLEARANCE = 256
 
 // The INVED-01 regression class. A grid cell only ellipsises if it is allowed to be
 // narrower than its content, so `minWidth: 0` is as load-bearing as the other three.
@@ -150,25 +128,17 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
     <div style={{ overflowX: 'auto', paddingBottom: menuOpen ? MENU_CLEARANCE : 0 }}>
       <div
         data-testid="members-table"
-        // No `overflow: 'hidden'` here, unlike InvoicesList.tsx:360 — it would clip the
-        // menu right back. The head row's tint therefore squares off the top corners
-        // fractionally, exactly as it does on RulesView.
+        // No `overflow: 'hidden'`: it would clip the `⋯` menu.
         style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', minWidth }}
       >
-        {/* Deliberately NOT `.pf-list-head`/`.pf-list-row`: those carry a <=480px collapse to
-            a single column (platform.css:264-276) that would fight the minWidth this table
-            depends on, and Members is a desktop surface. `.pf-row` is taken on the body rows
-            for its hover highlight — with a `⋯` sitting hundreds of pixels from the name it
-            acts on, the row highlight is what ties the two together — and its
-            `cursor: pointer` is now honest: MEMB-01-07 gave the row its own click. */}
+        {/* Not `.pf-list-head`/`.pf-list-row`: their <=480px single-column collapse would fight
+            `minWidth`. `.pf-row` is taken for its hover highlight and pointer cursor. */}
         <div
           style={{
             display: 'grid',
             gridTemplateColumns: COLS,
-            gap: 16,
-            padding: '11px 18px',
-            background: 'var(--bg-1)',
-            borderBottom: '1px solid var(--line-1)',
+            gap: 12,
+            padding: '11px 16px',
             alignItems: 'center',
             minWidth,
           }}
@@ -179,6 +149,15 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
             </span>
           ))}
         </div>
+
+        {rows.length === 0 && (
+          <div
+            data-testid="members-no-match"
+            style={{ borderTop: '1px solid var(--line-1)', padding: '26px 16px', textAlign: 'center', fontSize: 12.5, color: 'var(--fg-3)', minWidth }}
+          >
+            No members match this search.
+          </div>
+        )}
 
         {rows.map((m) => {
           // The CURRENT row from the CURRENT list. `isProtectedAdmin` does no identity lookup
@@ -215,20 +194,18 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
                 style={{
                   display: 'grid',
                   gridTemplateColumns: COLS,
-                  gap: 16,
-                  padding: '14px 18px',
-                  // The warning strip below carries the hairline when there is one, so the
-                  // row and its warning read as one unit rather than two.
-                  borderBottom: blocked > 0 ? undefined : '1px solid var(--line-1)',
+                  gap: 12,
+                  padding: '12px 16px',
+                  borderTop: '1px solid var(--line-1)',
                   alignItems: 'center',
                   minWidth,
                 }}
               >
                 {/* Person — chip + name + email, two lines (InvoicesList.tsx:410-413). */}
-                <span style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 11, minWidth: 0 }}>
                   <InitialsChip initials={m.initials} status={m.status} />
                   <span style={{ flex: 1, minWidth: 0 }}>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
                       {/* §10.1 softens the INVITED name only. Suspended keeps full-strength
                           text — its distinctness is carried by the red chip and red pill,
                           and softening it too would make the two states converge. */}
@@ -237,24 +214,24 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
                       </span>
                       {m.isYou && <YouChip />}
                     </span>
-                    <span className="mono" style={{ display: 'block', ...ELLIPSIS, fontSize: 11, color: 'var(--fg-3)' }}>
+                    <span className="mono" style={{ display: 'block', ...ELLIPSIS, fontSize: 10.5, marginTop: 2, color: 'var(--fg-3)' }}>
                       {emailLabel(m)}
                     </span>
                   </span>
                 </span>
 
-                <span style={{ ...ELLIPSIS, fontSize: 13, color: 'var(--fg-2)' }}>{accessRoleLabel(m.role)}</span>
+                <span style={{ ...ELLIPSIS, fontSize: 12.5, color: 'var(--fg-2)' }}>{accessRoleLabel(m.role)}</span>
 
                 {/* Newline-joined tooltip; empty on a roleless row, which is the `—` case and
                     wants no tooltip at all. */}
                 <span
                   title={roleCell.tooltip || undefined}
-                  style={{ ...ELLIPSIS, fontSize: 13, color: roleCell.tooltip ? 'var(--fg-2)' : 'var(--fg-4)' }}
+                  style={{ ...ELLIPSIS, fontSize: 12.5, color: roleCell.tooltip ? 'var(--fg-1)' : 'var(--fg-3)' }}
                 >
                   {roleCell.text}
                 </span>
 
-                <span style={{ minWidth: 0 }}>
+                <span style={{ minWidth: 0, display: 'flex' }}>
                   <MemberStatusPill status={m.status} />
                 </span>
 
@@ -271,31 +248,36 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
                   occupies. Here and not in the `⋯` menu because `MoreMenu` closes on select,
                   so the control that started the write no longer exists when it settles. */}
               {statusError?.id === m.id && (
-                <div style={{ padding: '0 18px 12px', minWidth }}>
-                  <div
-                    data-testid="member-status-error"
-                    style={{
-                      padding: '10px 12px',
-                      borderRadius: 'var(--radius-md)',
-                      background: 'var(--status-red-bg)',
-                      border: '1px solid var(--status-red-border)',
-                      fontSize: 12.5,
-                      lineHeight: 1.5,
-                      color: 'var(--status-red-text)',
-                    }}
-                  >
-                    {statusError.message}
-                  </div>
+                <div
+                  data-testid="member-status-error"
+                  style={{
+                    padding: '7px 16px',
+                    background: 'var(--status-red-bg)',
+                    borderTop: '1px solid var(--status-red-border)',
+                    fontSize: 11.5,
+                    color: 'var(--status-red-text)',
+                    minWidth,
+                  }}
+                >
+                  {statusError.message}
                 </div>
               )}
 
               {blocked > 0 && (
-                // A full-width strip under the row rather than a third line inside the Person
-                // cell: AC#12 wants row 5 / row 11 to leave the column widths alone, and a
-                // warning inside a fixed cell would have to ellipsise away exactly when it
-                // matters.
-                <div style={{ padding: '0 18px 12px', borderBottom: '1px solid var(--line-1)', minWidth }}>
-                  <AmberNote testId="member-steps-warning">{stepsWarning(blocked)}</AmberNote>
+                // A full-width strip under the row: a warning inside a fixed cell would have to
+                // ellipsise away exactly when it matters.
+                <div
+                  data-testid="member-steps-warning"
+                  style={{
+                    padding: '7px 16px',
+                    background: 'var(--status-amber-bg)',
+                    borderTop: '1px solid var(--status-amber-border)',
+                    fontSize: 11.5,
+                    color: 'var(--status-amber-text)',
+                    minWidth,
+                  }}
+                >
+                  {stepsWarning(blocked)}
                 </div>
               )}
             </Fragment>

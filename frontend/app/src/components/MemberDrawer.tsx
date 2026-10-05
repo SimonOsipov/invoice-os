@@ -6,21 +6,9 @@
 // max-width media query (platform.css:259-261), so omitting it silently deletes the mobile
 // collapse.
 //
-// TWO deliberate departures from that shell.
-//
-// (1) THE PANEL IS `--bg-2`, WITH `--bg-1` BANDS — RuleDrawer has it the other way round.
-// Every control this drawer reuses was drawn for a `--bg-2` ground: `RoleCards` paints its
-// unselected cards `--bg-1` (MemberParts.tsx, and its docblock says so explicitly),
-// `WfSelect` paints its box `--bg-1` (WorkflowParts.tsx:235) and `ClientAccessPicker`'s
-// panel is `--bg-1` too. On RuleDrawer's `--bg-1` body all three would be ground-on-ground.
-// Fixed at the CALLER, per the architect: `RoleCards` is not edited, and the same
-// `--bg-2` card with a `--bg-1` band relationship already ships eight inches away on this
-// very tab (MembersTable.tsx's card and its head row).
-//
-// (2) IT CLOSES ON ESCAPE. `RuleDrawer` registers no keydown listener at all — it predates
-// `useDismiss` — and AC#1 requires one. `useDismiss(true, onClose)` with no `outsideRef`:
-// the scrim's own `onClick` is the outside click, which is the call shape useDismiss.ts:20-21
-// pre-authorises for this drawer by name.
+// One departure from that shell: it closes on Escape. `RuleDrawer` registers no keydown listener,
+// so `useDismiss(true, onClose)` with no `outsideRef` does it; the scrim's own `onClick` is the
+// outside click, the call shape useDismiss.ts pre-authorises for this drawer by name.
 //
 // No derivation and no copy is authored here. §8/§9's sentences and the three facts behind
 // them live in lib/members.ts with specs, because vitest is `environment: node` and this
@@ -80,7 +68,7 @@ function UnbackedField({ reason, noteId, children }: { reason: string; noteId: s
       >
         {children}
       </fieldset>
-      <div id={noteId} style={{ marginTop: 8, fontSize: 11.5, lineHeight: 1.45, color: 'var(--fg-3)' }}>
+      <div id={noteId} style={{ marginTop: 8, fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
         {reason}
       </div>
     </>
@@ -142,7 +130,7 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
   const canSuspend = row.status !== 'invited'
   const suspending = row.status !== 'suspended'
 
-  const disabledGhost = { background: 'transparent', borderColor: 'var(--line-1)', color: 'var(--fg-4)', cursor: 'not-allowed' } as const
+  const disabledGhost = { background: 'transparent', opacity: 0.45, cursor: 'not-allowed', filter: 'none' } as const
 
   // Writes straight through, like every other control here — §8 says each change persists
   // immediately and there is no Save button. Holders live on the ROLE, so the write funnel is
@@ -167,7 +155,18 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
 
   return (
     <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'oklch(20% .02 210 / 0.32)', animation: 'pfFade 160ms ease-out' }} />
+      <div
+        onClick={onClose}
+        style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 80,
+          background: 'color-mix(in srgb, var(--surface) 55%, transparent)',
+          backdropFilter: 'blur(6px)',
+          WebkitBackdropFilter: 'blur(6px)',
+          animation: 'pfFade 160ms ease-out',
+        }}
+      />
       <div
         className="pf-drawer"
         role="dialog"
@@ -182,9 +181,8 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
           zIndex: 81,
           width: 560,
           maxWidth: '94vw',
-          background: 'var(--bg-2)',
+          background: 'var(--bg-1)',
           borderLeft: '1px solid var(--line-2)',
-          boxShadow: '-24px 0 48px -24px oklch(20% .02 210 / 0.3)',
           display: 'flex',
           flexDirection: 'column',
           animation: 'pfDrawer 200ms ease-out',
@@ -192,14 +190,14 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
       >
         {/* Header — AC#2. NOT an <h1>: SettingsView.tsx:49-53 owns the page heading and a
             second one inside a tab would give the page two. */}
-        <div style={{ flex: 'none', padding: '18px 22px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)', display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        <div style={{ flex: 'none', padding: '18px 24px 16px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', gap: 13 }}>
           <InitialsChip initials={row.initials} status={row.status} size={40} />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', marginBottom: 3 }}>
-              <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--fg-1)', wordBreak: 'break-word' }}>{row.name}</span>
-              <MemberStatusPill status={row.status} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
+              <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--fg-1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.name}</span>
+              <MemberStatusPill status={row.status} compact />
             </div>
-            <div className="mono" style={{ fontSize: 11.5, color: 'var(--fg-3)', wordBreak: 'break-all' }}>
+            <div className="mono" style={{ marginTop: 3, fontSize: 11, color: 'var(--fg-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {emailLabel(row)}
             </div>
           </div>
@@ -216,8 +214,8 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
           </button>
         </div>
 
-        <div style={{ flex: 1, overflowY: 'auto', padding: '20px 22px' }}>
-          <div className="label" style={{ marginBottom: 6 }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '18px 24px 26px' }}>
+          <div className="label" style={{ marginBottom: 8 }}>
             Access role
           </div>
           {/* Every card disabled: the membership endpoint writes status only. Shown at the
@@ -228,7 +226,7 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
 
           {ctx.mode === 'firm' ? (
             <>
-              <div className="label" style={{ margin: '20px 0 6px' }}>
+              <div className="label" style={{ margin: '22px 0 8px' }}>
                 Client access
               </div>
               {/* `'all'` is the honest value, not a fallback: nothing stores client access per
@@ -238,7 +236,7 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
               </UnbackedField>
             </>
           ) : (
-            <div style={{ marginTop: 20 }}>
+            <div style={{ marginTop: 22 }}>
               <UnbackedField reason={MEMBER_UNBACKED.department} noteId={scopeNoteId}>
                 <DepartmentField department={null} />
               </UnbackedField>
@@ -246,7 +244,7 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
           )}
 
           {/* BOTH modes — a role staffs people in either workspace now. */}
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, margin: '20px 0 6px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, margin: '22px 0 9px' }}>
             <div className="label" style={{ flex: 1, minWidth: 0 }}>
               Workflow roles
             </div>
@@ -260,7 +258,7 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
               }}
               className="pf-btn"
               data-testid="drawer-manage-roles"
-              style={{ flex: 'none', padding: 0, border: 0, background: 'none', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 12, fontWeight: 600, color: 'var(--action)' }}
+              style={{ flex: 'none', padding: 0, border: 0, background: 'none', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 12, fontWeight: 500, color: 'var(--action)' }}
             >
               {MANAGE_ROLES}
             </button>
@@ -294,7 +292,7 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
               {roleError.message}
             </div>
           )}
-          <div data-testid="drawer-wfrole-helper" style={{ marginTop: 8, fontSize: 11.5, lineHeight: 1.45, color: 'var(--fg-3)' }}>
+          <div data-testid="drawer-wfrole-helper" style={{ marginTop: 8, fontSize: 11.5, lineHeight: 1.55, color: 'var(--fg-3)' }}>
             {drawerRoleHelper(row.role)}
           </div>
 
@@ -304,35 +302,41 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
 
           {steps && (
             <>
-              <div className="label" style={{ margin: '20px 0 6px' }}>
+              <div className="label" style={{ margin: '24px 0 10px' }}>
                 Approval involvement
               </div>
-              <div data-testid="member-steps-named" style={{ fontSize: 13, color: 'var(--fg-1)' }}>
-                {stepsNamedLine(steps.total)}
+              <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '13px 14px' }}>
+                <div data-testid="member-steps-named" style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)' }}>
+                  {stepsNamedLine(steps.total)}
+                </div>
+                {/* Joined on ' · ', the one separator for lists of names on this tab. */}
+                <div style={{ marginTop: 4, fontSize: 12.5, color: 'var(--fg-2)' }}>
+                  {steps.policies.map((p) => p.policyName).join(' · ')}
+                </div>
+                {row.status === 'suspended' && (
+                  <AmberNote testId="member-drawer-steps-warning" style={{ marginTop: 10, padding: '9px 11px', fontSize: 11.5 }}>
+                    {SUSPENDED_STEPS_NOTE}
+                  </AmberNote>
+                )}
               </div>
-              {/* Joined on ' · ', the same way MembersView joins the unassigned role titles —
-                  one separator for lists of names on this tab. */}
-              <div style={{ marginTop: 3, fontSize: 12.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
-                {steps.policies.map((p) => p.policyName).join(' · ')}
-              </div>
-              {row.status === 'suspended' && (
-                <AmberNote testId="member-drawer-steps-warning" style={{ marginTop: 10 }}>
-                  {SUSPENDED_STEPS_NOTE}
-                </AmberNote>
-              )}
             </>
           )}
         </div>
 
-        {/* §8: "Footer is the danger zone." Its copy is the most important text in the story,
-            so both explanations are rendered as visible prose beside their buttons rather than
-            hidden behind a hover. */}
-        <div
-          data-testid="member-danger-zone"
-          style={{ flex: 'none', padding: '14px 22px', borderTop: '1px solid var(--line-1)', background: 'var(--bg-1)', display: 'flex', flexDirection: 'column', gap: 12 }}
-        >
+        {/* §8: "Footer is the danger zone." Both explanations are visible prose beside their buttons. */}
+        <div data-testid="member-danger-zone" style={{ flex: 'none', padding: '14px 24px 16px', borderTop: '1px solid var(--line-1)' }}>
           {canSuspend && (
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 12 }}>
+              <div style={{ flex: 1, minWidth: 0, fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
+                {/* SUSPEND ONLY: beside `Reactivate` this sentence would assert the opposite of the button's effect. */}
+                {suspending && <span>{SUSPEND_EXPLANATION}</span>}
+                {/* Layer (3) for the SUSPEND lock: a disabled control is out of the tab order and `title` never fires on one. */}
+                {protectedAdmin && (
+                  <div id={noteId} data-testid="member-danger-note" style={{ marginTop: 4, color: 'var(--status-amber-text)' }}>
+                    {PROTECTED_ADMIN_NOTE}
+                  </div>
+                )}
+              </div>
               <button
                 type="button"
                 onClick={() => onStatus(row.id, suspending ? 'suspended' : 'active')}
@@ -341,36 +345,25 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
                 aria-describedby={protectedAdmin ? noteId : undefined}
                 className="v2-btn v2-btn-ghost pf-btn"
                 data-testid="member-suspend"
-                // Layers (1) and (2) of the four-layer disabled treatment: the real attribute,
-                // plus an inline swap that outranks `.v2-btn-ghost:hover`'s unguarded
-                // `background: var(--muted)` (app-layer.css) so a dead button stops reacting
-                // to the pointer. (3) is the visible note below, (4) the title and
-                // aria-describedby above — additions to it, never its replacement.
-                style={{ flex: 'none', minWidth: 118, justifyContent: 'center', height: 36, fontSize: 13, ...(protectedAdmin ? disabledGhost : null) }}
+                // `disabledGhost` outranks `.v2-btn-ghost:hover`'s unguarded background.
+                style={{ flex: 'none', height: 36, ...(protectedAdmin ? disabledGhost : null) }}
               >
                 {suspending ? 'Suspend' : 'Reactivate'}
               </button>
-              {/* SUSPEND ONLY. The sentence describes what suspension DOES, so beside
-                  `Reactivate` it asserted the opposite of the button's effect. Nothing takes
-                  its place — an invented reactivate sentence is the one outcome worse than an
-                  absent one. The button keeps its `minWidth`, so the Remove row stays aligned. */}
-              {suspending && <span style={{ fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>{SUSPEND_EXPLANATION}</span>}
             </div>
           )}
 
-          {/* The SERVER's own reason for the write it just refused, beside the control that
-              asked for it. Verbatim, no prefix: a client sentence here would tell the user
-              the write failed and never why. */}
+          {/* The SERVER's own reason for the refused write, verbatim: a client sentence would
+              say it failed and never why. Full width of the footer, in the red triplet. */}
           {statusError?.id === row.id && (
             <div
               data-testid="member-drawer-status-error"
               style={{
-                padding: '10px 12px',
-                borderRadius: 'var(--radius-md)',
+                margin: '0 -24px 12px',
+                padding: '7px 24px',
                 background: 'var(--status-red-bg)',
-                border: '1px solid var(--status-red-border)',
-                fontSize: 12.5,
-                lineHeight: 1.5,
+                borderTop: '1px solid var(--status-red-border)',
+                fontSize: 11.5,
                 color: 'var(--status-red-text)',
               }}
             >
@@ -379,45 +372,22 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
           )}
 
           {canRemove && (
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, paddingTop: 12, borderTop: '1px solid var(--line-1)' }}>
+              <span id={removeNoteId} style={{ flex: 1, minWidth: 0, fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
+                {REMOVE_EXPLANATION}
+                <span style={{ display: 'block', marginTop: 4 }}>{MEMBER_UNBACKED.remove}</span>
+              </span>
               <button
                 type="button"
                 disabled
                 title={MEMBER_UNBACKED.remove}
                 aria-describedby={removeNoteId}
-                className="pf-btn"
+                className="v2-btn v2-btn-ghost pf-btn"
                 data-testid="member-remove"
-                // RuleDrawer's own footer treatment — same surface type, same band, same tokens.
-                style={{
-                  flex: 'none',
-                  minWidth: 118,
-                  height: 36,
-                  padding: '0 14px',
-                  fontFamily: 'var(--font-sans)',
-                  fontSize: 13,
-                  fontWeight: 600,
-                  border: '1px solid var(--line-1)',
-                  ...disabledGhost,
-                }}
+                style={{ flex: 'none', height: 36, color: 'var(--status-red-text)', borderColor: 'var(--status-red-border)', ...disabledGhost }}
               >
                 Remove
               </button>
-              {/* Layer (3), and the reason the two-step confirm went with the button: there
-                  is nothing to confirm. The first sentence still says what removal WOULD do;
-                  the second says why it cannot be asked for yet. */}
-              <span id={removeNoteId} style={{ fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
-                {REMOVE_EXPLANATION}
-                <span style={{ display: 'block', marginTop: 4 }}>{MEMBER_UNBACKED.remove}</span>
-              </span>
-            </div>
-          )}
-
-          {/* Layer (3) for the SUSPEND lock — the only layer a screenshot, a keyboard user and
-              a text assertion can all reach, since a disabled control is out of the tab order
-              and `title` never fires on one in Chromium. */}
-          {protectedAdmin && (
-            <div id={noteId} data-testid="member-danger-note" style={{ fontSize: 11.5, lineHeight: 1.45, color: 'var(--fg-3)' }}>
-              {PROTECTED_ADMIN_NOTE}
             </div>
           )}
         </div>

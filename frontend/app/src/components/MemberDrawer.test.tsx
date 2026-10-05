@@ -411,7 +411,7 @@ describe('APPR-10-04 QA AC-1/AC-10: the Department field keeps the fieldset trad
     // Unrepainted: the fieldset's own `pointerEvents: none` is the visual layer here, and the
     // select must keep its resting colours. An unconditional paint inside the primitive would
     // mute it and no Members spec would have noticed.
-    expect(select.style.backgroundColor, 'the Department select lost its resting background').toBe('var(--bg-1)')
+    expect(select.style.backgroundColor, 'the Department select lost its resting background').toBe('var(--bg-2)')
     expect(select.style.color, 'the Department select lost its resting foreground').toBe('var(--fg-1)')
     expect(select.style.cursor, 'the Department select paints itself dead').toBe('pointer')
 
@@ -420,5 +420,26 @@ describe('APPR-10-04 QA AC-1/AC-10: the Department field keeps the fieldset trad
     const note = document.getElementById(lock!.getAttribute('aria-describedby')!)
     expect(note, 'the fieldset points at a reason node that does not exist').toBeTruthy()
     expect((note!.textContent ?? '').trim(), 'the reason note rendered empty').not.toBe('')
+  })
+})
+
+describe('the drawer status-error strip', () => {
+  it('renders the server sentence in the red status triplet, as a top-bordered strip', () => {
+    render(
+      <MemberDrawer
+        ctx={drawerCtx()}
+        memberId="u1"
+        onClose={vi.fn()}
+        onStatus={vi.fn()}
+        statusError={{ id: 'u1', message: 'the last active admin cannot be suspended' }}
+      />,
+    )
+
+    const strip = screen.getByTestId('member-drawer-status-error')
+    expect(strip.textContent).toBe('the last active admin cannot be suspended')
+    expect(strip.style.background).toBe('var(--status-red-bg)')
+    expect(strip.style.borderTop).toBe('1px solid var(--status-red-border)')
+    expect(strip.style.color).toBe('var(--status-red-text)')
+    expect(strip.style.fontSize).toBe('11.5px')
   })
 })

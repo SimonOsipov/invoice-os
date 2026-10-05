@@ -13,7 +13,7 @@
 
 import { useId, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 
-import { moreGlyph } from '../glyphs'
+import { moreGlyph, tickGlyph11 } from '../glyphs'
 import { useDismiss } from '../lib/useDismiss'
 import {
   ABSENT_LABEL,
@@ -35,29 +35,14 @@ import { WfSelect, type WfOption } from './WorkflowParts'
 // Initials chip
 // ---------------------------------------------------------------------------
 
-// The PERSON avatar, not the company one. Both exist in this app and the difference is a
-// deliberate signal, not drift: a COMPANY is a rounded rect in --action-tint on --action
-// at weight 700 (Sidebar.tsx:147/:173/:192, ClientsView.tsx:160, CustomersView.tsx:110,
-// SignIn.tsx), and a PERSON is a dark circle in --slate-800 on --text-on-dark at
-// weight 600 — Sidebar.tsx:251, until now the only person avatar in the product.
-//
-// A members table is people, so it takes the person chip. The `isYou` row settles it: it
-// renders the same human the sidebar footer renders two inches away, and the seed sources
-// that row from APP_PERSONAS (members.ts:128-131) precisely so the two can never drift.
-// Giving it the company chip here would re-open the one gap that was deliberately closed.
-//
-// §15.3's plan named --action-tint/--action for the default chip; that is the company
-// family. Picked, not blended.
+// The PERSON avatar (a dark circle), not the company one (a rounded rect in --action-tint),
+// and it matches Sidebar.tsx's footer avatar: the `isYou` row renders the same human.
 const CHIP_TONE: Record<MemberStatus, { background: string; color: string; border: string }> = {
-  // Sidebar.tsx:251, verbatim. The transparent border keeps all three variants the same
-  // box, since `box-sizing: border-box` means the dashed variant's border eats 2px.
-  active: { background: 'var(--slate-800)', color: 'var(--text-on-dark)', border: '1px solid transparent' },
-  // §10.1. The app's dashed idiom is always `1px dashed var(--line-3)` over a transparent
-  // ground — empty-state cards (CustomersView.tsx:134), add chips (InvoiceDetail.tsx:934),
-  // dropzones — and never over a fill, so the fill goes with it.
+  // The transparent border keeps all three variants the same box.
+  active: { background: 'var(--slate-800)', color: 'var(--primary-foreground)', border: '1px solid transparent' },
+  // Dashed over a transparent ground, never over a fill.
   invited: { background: 'transparent', color: 'var(--fg-3)', border: '1px dashed var(--line-3)' },
-  // §10.2's red tint. Double-encoded with the SUSPENDED pill on purpose: AC#2 spells out
-  // chip AND pill for both non-active states, so the redundancy is the specification.
+  // Double-encoded with the SUSPENDED pill on purpose.
   suspended: { background: 'var(--status-red-bg)', color: 'var(--status-red-text)', border: '1px solid var(--status-red-border)' },
 }
 
@@ -72,11 +57,11 @@ export function InitialsChip({ initials, status, size = 30 }: { initials: string
         width: size,
         height: size,
         boxSizing: 'border-box',
-        borderRadius: 99,
+        borderRadius: '50%',
         display: 'grid',
         placeItems: 'center',
-        fontSize: size >= 40 ? 14 : 11,
-        fontWeight: 600,
+        fontSize: size >= 40 ? 13 : 10.5,
+        fontWeight: 700,
         ...tone,
       }}
     >
@@ -89,43 +74,43 @@ export function InitialsChip({ initials, status, size = 30 }: { initials: string
 // Status pill
 // ---------------------------------------------------------------------------
 
-// One more tone map over the app's single pill idiom — a {bg, border, text} record drawn
-// as a 999-radius pill with a small solid dot in `text` (the InvoicesList, ViolationsTable and
-// RulesView pills). Three distinct tones, no treatment reused (AC#2).
-//
-// Active keeps a pill rather than an empty cell — `Status` is a column, and every other
-// table in this app fills its status column on every row, so a blank cell on thirteen of
-// sixteen rows reads as missing data rather than as "the default".
-//
-// But MUTED, not green. Two reasons. The palette assigns meaning: teal = pass, amber =
-// attention, destructive = failure, and an active member is not a
-// pass verdict, they are the baseline — --status-muted-* is what the app already uses for
-// a neutral state marker (DRAFT, SUPERSEDED). And thirteen saturated pills would out-shout
-// the three exceptions the column exists to surface. §10's "active = the solid default".
+// Active is MUTED, not green: an active member is the baseline, not a pass verdict, and a column of
+// saturated pills would out-shout the exceptions it exists to surface.
 const STATUS_TONE: Record<MemberStatus, { bg: string; border: string; text: string; label: string }> = {
   active: { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)', label: 'ACTIVE' },
   invited: { bg: 'var(--status-amber-bg)', border: 'var(--status-amber-border)', text: 'var(--status-amber-text)', label: 'INVITED' },
   suspended: { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', text: 'var(--status-red-text)', label: 'SUSPENDED' },
 }
 
-export function MemberStatusPill({ status }: { status: MemberStatus }) {
+/** `compact` is the drawer header's 2px pill; the table's is 3px. */
+export function MemberStatusPill({ status, compact = false }: { status: MemberStatus; compact?: boolean }) {
   const tone = STATUS_TONE[status]
   return (
-    <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 5, background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 999, padding: '2px 8px' }}>
-      <span style={{ flex: 'none', width: 5, height: 5, borderRadius: 99, background: tone.text }} />
-      <span className="mono" style={{ fontSize: 8.5, fontWeight: 600, color: tone.text, letterSpacing: '0.05em' }}>
-        {tone.label}
-      </span>
+    <span
+      className="mono"
+      style={{
+        flex: 'none',
+        fontSize: 8.5,
+        fontWeight: 600,
+        letterSpacing: '0.06em',
+        color: tone.text,
+        background: tone.bg,
+        border: `1px solid ${tone.border}`,
+        borderRadius: 4,
+        padding: compact ? '2px 8px' : '3px 8px',
+      }}
+    >
+      {tone.label}
     </span>
   )
 }
 
-/** §6's "small YOU chip" — the micro-badge idiom (RulesView.tsx:163, Sidebar.tsx:237). */
+/** §6's "small YOU chip". The text stays a bare `YOU` span: demo-persona.spec.ts matches it by exact text. */
 export function YouChip() {
   return (
     <span
       className="mono"
-      style={{ flex: 'none', fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', background: 'var(--action-tint)', color: 'var(--action)', borderRadius: 99, padding: '1px 6px' }}
+      style={{ flex: 'none', fontSize: 8.5, fontWeight: 700, letterSpacing: '0.06em', background: 'var(--action-tint)', color: 'var(--action)', border: '1px solid var(--action)', borderRadius: 4, padding: '1px 5px' }}
     >
       YOU
     </span>
@@ -136,23 +121,17 @@ export function YouChip() {
 // Amber note
 // ---------------------------------------------------------------------------
 
-/**
- * One amber banner shape for both of the story's warnings — the unassigned-roles notice
- * above the table and §10.4's suspended-in-steps row warning. Treatment copied
- * from the app's shipped inline warning (InvoiceDetail.tsx:583-589). No icon, because
- * that one has none and a second, icon-bearing amber banner would read as a different
- * severity rather than the same one.
- */
+/** The amber banner: the unassigned-roles notice and the drawer's suspended-in-steps note. No icon. */
 export function AmberNote({ children, testId, style }: { children: ReactNode; testId?: string; style?: CSSProperties }) {
   return (
     <div
       data-testid={testId}
       style={{
-        padding: '10px 12px',
+        padding: '12px 14px',
         borderRadius: 'var(--radius-md)',
         background: 'var(--status-amber-bg)',
         border: '1px solid var(--status-amber-border)',
-        fontSize: 12.5,
+        fontSize: 13,
         lineHeight: 1.5,
         color: 'var(--status-amber-text)',
         ...style,
@@ -239,7 +218,8 @@ export function RoleCards({ value, onChange, disabledIds, note, noteId: noteIdPr
                 borderRadius: 'var(--radius-md)',
                 border: `1px solid ${sel ? 'var(--action)' : 'var(--line-2)'}`,
                 background: sel ? 'var(--action-tint)' : 'var(--bg-1)',
-                cursor: disabled ? 'not-allowed' : 'pointer',
+                cursor: 'pointer',
+                ...(disabled ? { opacity: 0.45, cursor: 'not-allowed', filter: 'none' } : null),
               }}
             >
               <input
@@ -254,8 +234,8 @@ export function RoleCards({ value, onChange, disabledIds, note, noteId: noteIdPr
                 style={{ flex: 'none', margin: '2px 0 0' }}
               />
               <span style={{ minWidth: 0 }}>
-                <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: disabled ? 'var(--fg-4)' : 'var(--fg-1)' }}>{r.label}</span>
-                <span style={{ display: 'block', fontSize: 11.5, lineHeight: 1.45, marginTop: 2, color: disabled ? 'var(--fg-4)' : 'var(--fg-3)' }}>
+                <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: 'var(--fg-1)' }}>{r.label}</span>
+                <span style={{ display: 'block', fontSize: 11.5, lineHeight: 1.5, marginTop: 2, color: 'var(--fg-3)' }}>
                   {r.description}
                 </span>
               </span>
@@ -264,7 +244,7 @@ export function RoleCards({ value, onChange, disabledIds, note, noteId: noteIdPr
         })}
       </div>
       {note && (
-        <div id={noteId} style={{ marginTop: 8, fontSize: 11.5, lineHeight: 1.45, color: 'var(--fg-3)' }}>
+        <div id={noteId} style={{ marginTop: 8, fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
           {note}
         </div>
       )}
@@ -330,9 +310,25 @@ export function ClientAccessPicker({ value, onChange, idPrefix }: {
 
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+      <div style={{ display: 'flex', gap: 8 }}>
         {(['all', 'selected'] as const).map((s) => (
-          <label key={s} data-testid={`${idPrefix}-scope-${s}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13, cursor: 'pointer' }}>
+          <label
+            key={s}
+            data-testid={`${idPrefix}-scope-${s}`}
+            style={{
+              flex: 1,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 9,
+              padding: '10px 12px',
+              borderRadius: 'var(--radius-md)',
+              border: `1px solid ${scope === s ? 'var(--action)' : 'var(--line-2)'}`,
+              background: scope === s ? 'var(--action-tint)' : 'var(--bg-1)',
+              fontSize: 13,
+              fontWeight: 500,
+              cursor: 'pointer',
+            }}
+          >
             <input
               type="radio"
               name={`${idPrefix}-scope`}
@@ -425,22 +421,20 @@ export function DepartmentField({ department, onDepartment, marginBottom }: {
       value={department ?? ''}
       options={department == null ? ABSENT_OPTIONS : DEPARTMENT_OPTIONS}
       onChange={(v) => onDepartment?.(v as Department)}
-      width="100%"
+      width={260}
+      background="var(--bg-2)"
       marginBottom={marginBottom}
     />
   )
 }
 
 /**
- * §4's workflow-role picker — a wrapped row of pill toggles, one per role, ticked when held,
- * assigning and unassigning immediately. The ReviewInvoicesTab filter-pill idiom verbatim
- * (ReviewInvoicesTab.tsx:363-380): `.pf-chip`, `aria-pressed`, teal fill when on. No inline
- * `borderRadius` — `.pf-chip` forces `border-radius` with `!important`, so a radius here
- * would be a declaration that never applies.
+ * §4's workflow-role picker: a wrapped row of toggle pills, one per role, ticked when held,
+ * assigning and unassigning immediately. `.pf-btn`, as the prototype draws it, so the cascade
+ * forces the 7px radius.
  *
- * NOT `RoleCards`: those are a three-way EXCLUSIVE choice over a closed union and carry real
- * radios. This is a multi-select over a list the user can edit, which is why the testids are
- * `-wfrole-` and cannot collide with `-role-` in the same drawer.
+ * NOT `RoleCards`: those are a three-way EXCLUSIVE choice with real radios. The test IDs are
+ * `-wfrole-` so they cannot collide with `-role-` in the same drawer.
  */
 export function WorkflowRolePills({ roles, held, onToggle, idPrefix }: {
   roles: readonly Role[]
@@ -451,7 +445,7 @@ export function WorkflowRolePills({ roles, held, onToggle, idPrefix }: {
   idPrefix: string
 }) {
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
       {roles.map((r) => {
         const on = held.includes(r.key)
         return (
@@ -461,20 +455,23 @@ export function WorkflowRolePills({ roles, held, onToggle, idPrefix }: {
             data-testid={`${idPrefix}-wfrole-${r.key}`}
             aria-pressed={on}
             onClick={() => onToggle(r.key)}
-            className="pf-chip"
+            className="pf-btn"
             style={{
               display: 'inline-flex',
               alignItems: 'center',
-              height: 28,
-              padding: '0 12px',
+              gap: 6,
+              height: 32,
+              padding: '0 13px',
+              cursor: 'pointer',
               fontFamily: 'var(--font-sans)',
               fontSize: 12.5,
               fontWeight: 500,
               border: `1px solid ${on ? 'var(--action)' : 'var(--line-2)'}`,
-              background: on ? 'var(--action)' : 'var(--bg-1)',
-              color: on ? 'var(--text-on-dark)' : 'var(--fg-2)',
+              background: on ? 'var(--action-tint)' : 'var(--bg-2)',
+              color: on ? 'var(--action)' : 'var(--fg-2)',
             }}
           >
+            {on && tickGlyph11}
             {r.title}
           </button>
         )
@@ -486,16 +483,6 @@ export function WorkflowRolePills({ roles, held, onToggle, idPrefix }: {
 // ---------------------------------------------------------------------------
 // Row overflow menu
 // ---------------------------------------------------------------------------
-
-// The app's popover shadow, and its second use — the first is the Sidebar company
-// switcher (Sidebar.tsx:155). Off-system already: the three shipped shadow tokens
-// (--shadow-elegant / -soft / -card, tokens/colors.css:62-64) are a hero panel, a floating
-// chip and a resting card, none of them this. Named here rather than inlined a second time
-// so the duplication is visible, and reused verbatim rather than swapped for
-// --shadow-elegant so the app's two popovers cannot drift apart. Promoting it to a real
-// token means editing the shared stylesheet and the design-system doc — flagged, not done
-// inside a table subtask.
-export const POPOVER_SHADOW = '0 16px 40px -16px oklch(20% .02 210 / 0.28)'
 
 export type MenuAction = {
   label: string
@@ -586,15 +573,16 @@ export function MoreMenu({ open, onOpen, onClose, label, items }: {
           onClick={(e) => e.stopPropagation()}
           style={{
             position: 'absolute',
-            top: 'calc(100% + 6px)',
+            top: 'calc(100% + 4px)',
             right: 0,
-            width: 196,
+            width: 280,
             zIndex: 60,
             background: 'var(--bg-2)',
             border: '1px solid var(--line-2)',
             borderRadius: 'var(--radius-md)',
-            boxShadow: POPOVER_SHADOW,
+            boxShadow: 'var(--shadow-card)',
             overflow: 'hidden',
+            padding: '4px 0',
             animation: 'popIn 140ms ease-out',
           }}
         >
@@ -616,44 +604,31 @@ export function MoreMenu({ open, onOpen, onClose, label, items }: {
                 width: '100%',
                 border: 0,
                 textAlign: 'left',
-                padding: '9px 12px',
+                padding: '8px 12px',
                 fontFamily: 'var(--font-sans)',
                 fontSize: 13,
-                fontWeight: 500,
+                fontWeight: 400,
                 background: 'transparent',
                 color: item.danger ? 'var(--status-red-text)' : 'var(--fg-1)',
                 cursor: 'pointer',
-                // A disabled control gets NOTHING for free in this codebase:
-                // packages/design-tokens/*.css contains zero `:disabled` rules, and
-                // `.pf-menu-item:hover` is unguarded in BOTH stylesheets
-                // (platform.css, app-layer.css) — so a disabled row would still
-                // light up under the pointer and read as clickable. Four layers (InvoiceDetail's
-                // own recipe dropped to two in BUG-14-02; this menu keeps all four):
-                // (1) the real `disabled` attribute above — genuinely unclickable;
-                // (2) this inline swap, which outranks that unguarded :hover so the row
-                //     stops reacting to the pointer. `transparent` rather than
-                //     InvoiceDetail's --bg-3: in a menu, a grey fill IS the hover state,
-                //     so filling a dead row would say the opposite of what it means;
-                // (3) the visible `note` below — the only layer a screenshot, a keyboard
-                //     user and a text assertion can all reach, since a disabled control is
-                //     out of the tab order and `title` never fires on one in Chromium;
-                // (4) title + aria-describedby, as ADDITIONS to (3), never the sole carrier.
-                ...(item.disabled ? { background: 'transparent', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                // Nothing in the stylesheets paints `:disabled`: the inline recipe keeps the enabled
+                // paint, dims it, and outranks the unguarded `.pf-menu-item:hover`. The reason
+                // below is the layer a screenshot, a keyboard user and a text assertion can reach.
+                ...(item.disabled ? { opacity: 0.45, cursor: 'not-allowed', filter: 'none' } : null),
               }}
             >
               {item.label}
             </button>
           ))}
-          {reasons.map((reason) => (
-            <div
-              key={reason}
-              id={reasonId(reason)}
-              data-testid="member-menu-reason"
-              style={{ padding: '8px 12px 10px', borderTop: '1px solid var(--line-1)', fontSize: 11, lineHeight: 1.45, color: 'var(--fg-3)' }}
-            >
-              {reason}
+          {reasons.length > 0 && (
+            <div style={{ borderTop: '1px solid var(--line-1)', marginTop: 4, padding: '8px 12px 6px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {reasons.map((reason) => (
+                <span key={reason} id={reasonId(reason)} data-testid="member-menu-reason" style={{ fontSize: 11, lineHeight: 1.45, color: 'var(--fg-3)' }}>
+                  {reason}
+                </span>
+              ))}
             </div>
-          ))}
+          )}
         </div>
       )}
     </div>

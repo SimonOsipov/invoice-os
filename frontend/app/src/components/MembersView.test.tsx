@@ -460,7 +460,7 @@ describe('APPR-10-04 QA AC-1: the Access role filter is untouched by WfSelect\'s
 
     // The resting paint, not merely "not the disabled paint" — an unconditional spread is caught
     // by the first two, a defaulted-away resting style only by these.
-    expect(select.style.backgroundColor, 'the filter lost its resting background').toBe('var(--bg-1)')
+    expect(select.style.backgroundColor, 'the filter lost its resting background').toBe('var(--bg-2)')
     expect(select.style.color, 'the filter lost its resting foreground').toBe('var(--fg-1)')
     expect(select.style.cursor, 'the filter paints itself dead').toBe('pointer')
 
@@ -471,5 +471,45 @@ describe('APPR-10-04 QA AC-1: the Access role filter is untouched by WfSelect\'s
     fireEvent.change(select, { target: { value: 'admin' } })
     expect(select.value, 'the change never landed, so the filter was inert').toBe('admin')
     expect(screen.queryByText('Other Person'), 'the filter no longer narrows the roster').toBeNull()
+  })
+})
+
+describe('the roster table chrome', () => {
+  it('a search that matches nobody renders members-no-match inside members-table, under the head', () => {
+    render(<Harness initial={[member(), otherMember()]} />)
+
+    fireEvent.change(screen.getByLabelText('Search members'), { target: { value: 'zzz-nobody' } })
+
+    const table = screen.getByTestId('members-table')
+    const noMatch = within(table).getByTestId('members-no-match')
+    expect(noMatch.textContent).toBe('No members match this search.')
+    expect(within(table).queryAllByTestId('member-row')).toHaveLength(0)
+    expect(within(table).getByText('Person'), 'the head must stay over the no-match row').toBeTruthy()
+    const head = table.firstElementChild as HTMLElement
+    expect(head.contains(noMatch)).toBe(false)
+    expect(head.nextElementSibling).toBe(noMatch)
+  })
+
+  it('a failed suspend renders member-status-error as a full-width red strip under the row', async () => {
+    const m = member()
+    mockedSetMembershipStatus.mockRejectedValue(new ApiError('http', REASON, 409))
+
+    render(<Harness initial={[m, otherMember()]} />)
+    const row = rowFor('Ada Person')
+    suspendFromRowMenu(row)
+
+    const strip = await screen.findByTestId('member-status-error')
+    expect(strip.textContent).toBe(REASON)
+    expect(strip.style.background).toBe('var(--status-red-bg)')
+    expect(strip.style.borderTop).toBe('1px solid var(--status-red-border)')
+    expect(strip.style.color).toBe('var(--status-red-text)')
+    expect(strip.style.padding).toBe('7px 16px')
+  })
+
+  it('a roleless workflow-roles cell renders --fg-3, never --fg-4', () => {
+    render(<Harness initial={[member(), otherMember()]} />)
+
+    const cell = rowFor('Ada Person').children[2] as HTMLElement
+    expect(cell.style.color).toBe('var(--fg-3)')
   })
 })

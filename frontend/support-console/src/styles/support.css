@@ -93,25 +93,34 @@ body {
   font-size: 13px;
   color: var(--fg-1);
   background: var(--bg-2);
-  border: 1px solid var(--line-2);
-  border-radius: var(--radius-input);
+  border: 1px solid var(--input);
+  border-radius: var(--radius-btn);
   height: 34px;
   padding: 0 11px;
   outline: none;
   transition: border-color 120ms, box-shadow 120ms;
 }
-/* Amber focus at 2px — the design system's ring, not the prototype's 3px teal glow
-   (proto:33 used `--accent-glow` back when `--accent` was aliased to the action teal).
-   Same correction ops.css already carries. */
 .ops-input:focus {
-  border-color: var(--accent);
+  border-color: var(--ring); /* dead under the layer; source pin */
   box-shadow: 0 0 0 2px var(--ring);
+}
+.ops-field:focus-within {
+  border-color: var(--ring) !important;
+  box-shadow: 0 0 0 2px var(--ring) !important;
+}
+.asc-app .ops-field input:focus {
+  box-shadow: none !important;
 }
 .mono {
   font-variant-numeric: tabular-nums;
 }
 .ops-screen-pad {
   padding: 24px 26px 56px;
+}
+/* Prototype eyebrow: 10px tall, block-level so no line-box strut sits above it. SUP-03 reads both. */
+.ops-screen-pad .eyebrow {
+  display: flex;
+  line-height: 1;
 }
 pre.ops-json {
   margin: 0;
@@ -120,7 +129,7 @@ pre.ops-json {
   line-height: 1.6;
   color: var(--slate-200);
   background: var(--surface);
-  border-radius: var(--radius-input);
+  border-radius: var(--radius-md);
   padding: 14px 16px;
   overflow-x: auto;
   white-space: pre;

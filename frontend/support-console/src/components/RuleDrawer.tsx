@@ -65,7 +65,7 @@ export function RuleDrawer({ rule, testRan, onRunTest, onKill, onClose }: Props)
               type="button"
               onClick={onKill}
               className="ops-btn"
-              style={{ border: '1px solid var(--status-red-border)', background: 'var(--status-red-bg)', cursor: 'pointer', height: 38, padding: '0 14px', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 600, color: 'var(--status-red-text)', display: 'inline-flex', alignItems: 'center', gap: 7 }}
+              style={{ border: '1px solid var(--status-red-border)', background: 'var(--status-red-bg)', cursor: 'pointer', height: 38, padding: '0 14px', borderRadius: 'var(--radius-btn)', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 600, color: 'var(--status-red-text)', display: 'inline-flex', alignItems: 'center', gap: 7 }}
             >
               {KILL_ICON} Kill-switch
             </button>
@@ -115,8 +115,8 @@ export function RuleDrawer({ rule, testRan, onRunTest, onKill, onClose }: Props)
           <button
             type="button"
             onClick={onRunTest}
-            className="ops-btn"
-            style={{ border: '1px solid var(--action)', background: 'var(--action)', cursor: 'pointer', height: 28, padding: '0 12px', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-sans)', fontSize: 11.5, fontWeight: 600, color: 'var(--text-on-dark)' }}
+            className="ops-btn v2-btn v2-btn-primary"
+            style={{ height: 28, padding: '0 12px', fontSize: 11.5 }}
           >
             Run test
           </button>
@@ -126,12 +126,12 @@ export function RuleDrawer({ rule, testRan, onRunTest, onKill, onClose }: Props)
             SAMPLE-INV-2026-09931 · ₦4,120,000 · VAT 7.5%
           </div>
           {testRan ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'var(--status-green-bg)', border: '1px solid var(--status-green-border)', borderRadius: 'var(--radius-input)', padding: '10px 12px' }}>
-              <span style={{ color: 'var(--status-green-text)' }}>{CHECK_ICON}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'var(--status-green-bg)', border: '1px solid var(--status-green-border)', borderRadius: 'var(--radius-md)', padding: '10px 12px' }}>
+              <span style={{ color: 'var(--status-green-text)', display: 'inline-flex' }}>{CHECK_ICON}</span>
               <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--status-green-text)' }}>Rule passed · computed VAT ₦309,000 matches expected</span>
             </div>
           ) : (
-            <div className="mono" style={{ fontSize: 11.5, color: 'var(--fg-4)' }}>
+            <div className="mono" style={{ fontSize: 11.5, color: 'var(--fg-3)' }}>
               No test run yet.
             </div>
           )}

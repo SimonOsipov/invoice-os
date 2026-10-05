@@ -45,12 +45,12 @@ export function Submissions({ jobs, filter, subTab, onFilterChange, onSubTabChan
           <div className="eyebrow" style={{ marginBottom: 8 }}>
             SUBMISSION PIPELINE
           </div>
-          <h1 style={{ fontSize: 24, fontWeight: 500, letterSpacing: '-0.03em', margin: 0 }}>Submissions ops</h1>
+          <h1 style={{ fontSize: 24, margin: 0 }}>Submissions ops</h1>
         </div>
         <div className="ops-sub-stats" style={{ display: 'flex', gap: 10 }}>
           {stats.map((s) => (
             <div key={s.label} style={{ border: '1px solid var(--line-1)', background: 'var(--bg-2)', borderRadius: 'var(--radius-md)', padding: '10px 16px', minWidth: 96 }}>
-              <div className="mono" style={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.02em', color: s.color }}>
+              <div className="money" style={{ fontSize: 20, fontWeight: 700, color: s.color }}>
                 {s.value}
               </div>
               <div className="label" style={{ marginTop: 3 }}>
@@ -69,6 +69,7 @@ export function Submissions({ jobs, filter, subTab, onFilterChange, onSubTabChan
             <button
               key={t.key}
               type="button"
+              className="ops-tab"
               onClick={() => onSubTabChange(t.key)}
               style={{ border: 0, background: 'transparent', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: active ? 600 : 500, color: active ? 'var(--fg-1)' : 'var(--fg-3)', padding: '10px 4px', marginRight: 18, borderBottom: `2px solid ${active ? 'var(--action)' : 'transparent'}` }}
             >
@@ -96,7 +97,7 @@ export function Submissions({ jobs, filter, subTab, onFilterChange, onSubTabChan
                 type="button"
                 onClick={onReDriveAll}
                 className="ops-btn"
-                style={{ border: 0, cursor: 'pointer', height: 34, padding: '0 14px', borderRadius: 'var(--radius-input)', background: 'var(--status-red-text)', color: 'var(--text-on-dark)', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 7 }}
+                style={{ border: 0, cursor: 'pointer', height: 34, padding: '0 14px', borderRadius: 'var(--radius-btn)', background: 'var(--status-red-text)', color: 'var(--primary-foreground)', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 7 }}
               >
                 {REDRIVE_ICON} Re-drive all
               </button>
@@ -120,7 +121,7 @@ export function Submissions({ jobs, filter, subTab, onFilterChange, onSubTabChan
                     border: `1px solid ${active ? (s ? s.border : 'var(--line-3)') : 'var(--line-1)'}`,
                     background: active ? (s ? s.bg : 'var(--bg-3)') : 'var(--bg-2)',
                     color: active ? (s ? s.text : 'var(--fg-1)') : 'var(--fg-3)',
-                    borderRadius: 99,
+                    borderRadius: 'var(--radius-sm)',
                     height: 30,
                     padding: '0 12px',
                     fontFamily: 'var(--font-mono)',
@@ -133,7 +134,7 @@ export function Submissions({ jobs, filter, subTab, onFilterChange, onSubTabChan
                   }}
                 >
                   {s ? s.label : 'ALL'}
-                  <span style={{ fontSize: 10, opacity: 0.7 }}>{count}</span>
+                  <span style={{ fontSize: 10 }}>{count}</span>
                 </button>
               )
             })}
@@ -198,11 +199,11 @@ export function Submissions({ jobs, filter, subTab, onFilterChange, onSubTabChan
                 <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
                   {j.app}
                 </span>
-                <span style={{ color: 'var(--fg-4)' }}>{CHEVRON_RIGHT_ICON}</span>
+                <span style={{ display: 'inline-flex', color: 'var(--fg-4)' }}>{CHEVRON_RIGHT_ICON}</span>
               </div>
             ))}
             {rows.length === 0 && (
-              <div className="mono" style={{ padding: '28px 16px', textAlign: 'center', fontSize: 12, color: 'var(--fg-4)' }}>
+              <div className="mono" style={{ padding: '28px 16px', textAlign: 'center', fontSize: 12, color: 'var(--fg-3)' }}>
                 No jobs in this state.
               </div>
             )}
@@ -214,7 +215,7 @@ export function Submissions({ jobs, filter, subTab, onFilterChange, onSubTabChan
         <div className="ops-recon-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 300px', gap: 18 }}>
           <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflowX: 'auto', background: 'var(--bg-2)' }}>
             <div style={{ padding: '13px 16px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', minWidth: 900 }}>
-              <span style={{ fontSize: 14, fontWeight: 500, fontFamily: 'var(--font-display)' }}>State mismatches · internal vs APP</span>
+              <span style={{ fontSize: 14, fontWeight: 700, letterSpacing: 'var(--tracking-card)', fontFamily: 'var(--font-display)' }}>State mismatches · internal vs APP</span>
               <span className="mono" style={{ fontSize: 11, color: 'var(--status-red-text)', fontWeight: 600 }}>
                 {RECON_ROWS.length} OPEN
               </span>
@@ -247,7 +248,7 @@ export function Submissions({ jobs, filter, subTab, onFilterChange, onSubTabChan
                     type="button"
                     onClick={() => onReconcile(r.id, statusStyle(r.app).label.toLowerCase())}
                     className="ops-btn"
-                    style={{ border: '1px solid var(--line-2)', background: 'var(--bg-2)', cursor: 'pointer', height: 28, padding: '0 10px', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-sans)', fontSize: 11.5, fontWeight: 600, color: 'var(--fg-1)' }}
+                    style={{ border: '1px solid var(--button-outline-border)', background: 'var(--bg-2)', cursor: 'pointer', height: 28, padding: '0 10px', borderRadius: 'var(--radius-btn)', fontFamily: 'var(--font-sans)', fontSize: 11.5, fontWeight: 600, color: 'var(--fg-1)' }}
                   >
                     Reconcile
                   </button>
@@ -262,15 +263,15 @@ export function Submissions({ jobs, filter, subTab, onFilterChange, onSubTabChan
                 APP rate limit
               </div>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 4 }}>
-                <span className="mono" style={{ fontSize: 30, fontWeight: 700, letterSpacing: '-0.02em' }}>
+                <span className="money" style={{ fontSize: 30, fontWeight: 700 }}>
                   82
                 </span>
                 <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>
                   / 100 req·s
                 </span>
               </div>
-              <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 'var(--radius-sm)', overflow: 'hidden', margin: '12px 0 8px' }}>
-                <div style={{ width: '82%', height: '100%', background: 'var(--status-amber-text)', borderRadius: 'var(--radius-sm)' }} />
+              <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 2, overflow: 'hidden', margin: '12px 0 8px' }}>
+                <div style={{ width: '82%', height: '100%', background: 'var(--status-amber-text)', borderRadius: 2 }} />
               </div>
               <div className="mono" style={{ fontSize: 10.5, color: 'var(--status-amber-text)', fontWeight: 600 }}>
                 APPROACHING LIMIT · BACKOFF ACTIVE
@@ -303,8 +304,8 @@ export function Submissions({ jobs, filter, subTab, onFilterChange, onSubTabChan
               <button
                 type="button"
                 onClick={onRunSweep}
-                className="ops-btn"
-                style={{ marginTop: 16, width: '100%', border: '1px solid var(--line-2)', background: 'var(--bg-2)', cursor: 'pointer', height: 34, borderRadius: 'var(--radius-input)', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 600, color: 'var(--fg-1)' }}
+                className="ops-btn v2-btn v2-btn-ghost"
+                style={{ marginTop: 16, width: '100%', justifyContent: 'center', height: 34, fontSize: 13 }}
               >
                 Run sweep now
               </button>

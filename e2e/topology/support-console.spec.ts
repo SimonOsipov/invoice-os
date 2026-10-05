@@ -137,11 +137,13 @@ async function noSidewaysScroll(page: Page, label: string): Promise<{ scrollWidt
   return m
 }
 
-// Rects of every match; a match with no box throws.
+// Rects of every match; no match, or a match with no box, fails.
 async function rectsOf(page: Page, loc: Locator, what: string): Promise<Rect[]> {
   await settle(page, loc.first())
   const out: Rect[] = []
-  for (const [i, el] of (await loc.all()).entries()) {
+  const all = await loc.all()
+  expect(all.length, `${what}: none found`).toBeGreaterThan(0)
+  for (const [i, el] of all.entries()) {
     const box = await el.boundingBox()
     if (!box) throw new Error(`${what} #${i} has no box`)
     out.push(box)
@@ -272,7 +274,7 @@ test('SUP-01 shell and Submissions: sidebar, header, env switch and sandbox bann
     ['APP backpressure', side.getByText('APP backpressure', { exact: true })],
   ] as const) {
     await expectStyles(el, `${what} eyebrow`, { color: eyebrow })
-    expect(contrast(eyebrow, 'rgb(8, 47, 49)'), `${what}: contrast on the sidebar`).toBeGreaterThanOrEqual(4.5)
+    await legible(el, el, `${what} eyebrow`)
   }
   await expectStyles(subm.locator('span.mono'), 'Submissions nav badge', { radius: '4px' })
   await expectStyles(rulesNav.locator('span.mono'), 'Rules nav badge', { radius: '4px' })
@@ -427,6 +429,7 @@ const FIGURE = (size: string): Want => ({ family: 'Manrope', 'font-weight': '700
 // The focus ring lives on the .ops-field wrapper; the input itself draws none.
 async function expectFieldRing(page: Page, input: Locator, what: string): Promise<void> {
   const field = parent(input)
+  await expect(field, `${what}: the input sits in an .ops-field wrapper`).toHaveClass(/\bops-field\b/)
   await input.focus()
   await settle(page, field)
   await expectStyles(field, `${what} field`, { 'border-top-color': 'rgb(56, 135, 126)' })
@@ -841,6 +844,7 @@ test('SUP-04 re-drive toast, empty jobs and a clear health card', async ({ page 
   }
   expect(t.radii, 'toast corners').toEqual(['6px', '6px', '6px', '6px'])
   expect(t.shadow, 'toast shadow').toBe(SHADOW_CARD)
+  await settle(page, toast)
   await attachShot(page, testInfo, 'redrive-toast')
 
   await mn.locator('button.ops-chip').filter({ hasText: 'DEAD-LETTER' }).click()

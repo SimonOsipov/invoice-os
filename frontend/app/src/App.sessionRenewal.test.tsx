@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { APP_PERSONAS, type Me } from './auth'
 import { EMPTY_BUCKET } from './lib/dashboard'
 import { DEEP_LINK_KEY, readDestination } from './lib/deepLink'
-import type { Member } from './lib/members'
 import { SESSION_KEY } from './lib/session'
 import { ensureSignInState } from './lib/signInState'
 import type { PlatformCtx } from './types'
@@ -61,26 +60,8 @@ function record(token: string, receivedAt: number, me: Me = ME, refresh = 'R0'):
   return JSON.stringify({ v: 1, personaId: 'firm', token, me, verified: true, handoff: true, refresh_token: refresh, received_at: receivedAt })
 }
 
-// The /auth/login mint below answers this token for the DEMO_MODE stand-in.
-const standInToken = (at: number) => jwt(OTHER_ME, nowSec(at), 'P')
-const SEAT_MEMBER: Member = {
-  id: ME.user.id,
-  name: APP_PERSONAS.firm.name,
-  initials: APP_PERSONAS.firm.initials,
-  email: null,
-  role: 'admin',
-  status: 'active',
-  isYou: true,
-}
-const STAND_IN: Member = {
-  id: OTHER_ME.user.id,
-  name: 'Tunde Bello',
-  initials: 'TB',
-  email: 'tunde@example.ng',
-  role: 'preparer',
-  status: 'active',
-  isYou: false,
-}
+// The /auth/login mint below answers this token.
+const personaToken = (at: number) => jwt(OTHER_ME, nowSec(at), 'P')
 
 let capturedCtx: PlatformCtx | undefined
 vi.mock('./components/Sidebar', () => ({
@@ -178,7 +159,7 @@ function routeFetch() {
       if (url === `${GATEWAY}/api/tenancy/v1/me`) return meReply()
       if (url === EXCHANGE) return exchangeReply()
       if (url === `${GATEWAY}/auth/login`) {
-        return answer(200, { access_token: standInToken(Date.now()) })()
+        return answer(200, { access_token: personaToken(Date.now()) })()
       }
       return answer(200, {
         entities: [],
@@ -318,7 +299,7 @@ async function probe(ctx: PlatformCtx | undefined, path = ''): Promise<unknown> 
 let originalLocation: PropertyDescriptor | undefined
 
 beforeEach(() => {
-  // Only Date: becomePersona's real BUSY_MS delay must still run.
+  // Only Date: the real timers must still run.
   vi.useFakeTimers({ toFake: ['Date'] })
   vi.setSystemTime(NOW)
   originalLocation = Object.getOwnPropertyDescriptor(window, 'location')
@@ -708,7 +689,7 @@ describe('mid-session renewal (AC-5, AC-8, AC-9)', () => {
   })
 
   it('a persona session never renews', async () => {
-    const stored = JSON.stringify({ v: 1, personaId: 'firm', token: standInToken(NOW), me: ME, verified: true })
+    const stored = JSON.stringify({ v: 1, personaId: 'firm', token: personaToken(NOW), me: ME, verified: true })
     const { hrefWrites } = await bootWith(stored)
     // The persona keeps its own name although /me answers a display name (D1).
     await waitForVerifiedWorkspace(ME.tenant.name, { name: APP_PERSONAS.firm.name, initials: APP_PERSONAS.firm.initials })
@@ -721,7 +702,7 @@ describe('mid-session renewal (AC-5, AC-8, AC-9)', () => {
     const out = await probe(capturedCtx)
 
     expect(out).toBe('resolved')
-    expect(probes(mark).map((c) => c.auth), 'the expired persona token is still sent').toEqual([`Bearer ${standInToken(NOW)}`])
+    expect(probes(mark).map((c) => c.auth), 'the expired persona token is still sent').toEqual([`Bearer ${personaToken(NOW)}`])
     expect(refreshes()).toEqual([])
     expect(hrefWrites).toEqual([])
   })
@@ -821,44 +802,11 @@ describe('a renewed hand-off session stays a hand-off session (AUTH-10-06, F17)'
     expect(capturedCtx?.handoff).toBe(true)
   })
 
-  it('a stand-in is not a hand-off session, and the seat is again after the return', async () => {
-    vi.stubEnv('VITE_DEMO_MODE', 'true')
+  it('a hand-off seat shows no demo state', async () => {
     await mountFresh()
-    expect(capturedCtx?.handoff, 'the seat').toBe(true)
-    meReply = answer(200, OTHER_ME)
-    await act(async () => {
-      await capturedCtx!.becomePersona!(STAND_IN, 'dashboard')
-    })
-    await waitFor(() => expect(capturedCtx?.user.name).toBe('Tunde Bello'))
-    expect(capturedCtx?.handoff, 'the stand-in').toBe(false)
-    meReply = answer(200, ME)
-    await act(async () => {
-      await capturedCtx!.returnToSeat!('dashboard', SEAT_MEMBER)
-    })
-    await waitFor(() => expect(capturedCtx?.user.name).toBe(ME.user.display_name))
-    expect(capturedCtx?.handoff, 'back on the seat').toBe(true)
-  })
-
-  it('the stand-in shows the demo state and the seat is blank again after the return', async () => {
-    vi.stubEnv('VITE_DEMO_MODE', 'true')
-    await mountFresh()
-    const connected = () => Object.values(capturedCtx!.connectors).filter(Boolean).length
-    expect(connected(), 'the seat').toBe(0)
-    expect(capturedCtx?.customRules, 'the seat').toEqual([])
-    meReply = answer(200, OTHER_ME)
-    await act(async () => {
-      await capturedCtx!.becomePersona!(STAND_IN, 'dashboard')
-    })
-    await waitFor(() => expect(capturedCtx?.user.name).toBe('Tunde Bello'))
-    expect(connected(), 'the stand-in').toBe(2)
-    expect(capturedCtx?.customRules, 'the stand-in').toHaveLength(5)
-    meReply = answer(200, ME)
-    await act(async () => {
-      await capturedCtx!.returnToSeat!('dashboard', SEAT_MEMBER)
-    })
-    await waitFor(() => expect(capturedCtx?.user.name).toBe(ME.user.display_name))
-    expect(connected(), 'back on the seat').toBe(0)
-    expect(capturedCtx?.customRules, 'back on the seat').toEqual([])
+    const connected = Object.values(capturedCtx!.connectors).filter(Boolean).length
+    expect(connected).toBe(0)
+    expect(capturedCtx?.customRules).toEqual([])
   })
 })
 
@@ -895,45 +843,6 @@ describe('a renewal never outlives its session (AC-14, AC-15, AC-17)', () => {
     expect(hrefWrites, 'the settled renewal adds no navigation').toEqual(afterSignOut)
   })
 
-  it('a stand-in begun during a seat renewal keeps its own token', async () => {
-    vi.stubEnv('VITE_DEMO_MODE', 'true')
-    const { hrefWrites } = await mountFresh()
-    const refresh = deferRefresh()
-    vi.setSystemTime(MID_RENEW_AT)
-    const mark = calls.length
-
-    const seatCtx = capturedCtx
-    let pending: Promise<unknown> = Promise.resolve()
-    await act(async () => {
-      pending = seatCtx!.authedFetch(`${PROBE}/seat`).then(
-        () => 'resolved',
-        (e: unknown) => e,
-      )
-    })
-    meReply = answer(200, OTHER_ME)
-    await act(async () => {
-      await seatCtx!.becomePersona!(STAND_IN, 'dashboard')
-    })
-    await waitFor(() => expect(capturedCtx?.user.name).toBe('Tunde Bello'))
-    await act(async () => refresh.release(renewed()))
-    let seatOut: unknown
-    await act(async () => {
-      seatOut = await pending
-    })
-    await settle()
-    const out = await probe(capturedCtx, '/stand-in')
-
-    expect(refreshes(mark), 'the seat request waited on a renewal').toHaveLength(1)
-    expect(errorName(seatOut)).toBe('SessionEndedError')
-    expect(out).toBe('resolved')
-    expect(probes(mark).map((c) => [c.url, c.auth]), 'only the stand-in request is sent, on its own token').toEqual([
-      [`${PROBE}/stand-in`, `Bearer ${standInToken(MID_RENEW_AT)}`],
-    ])
-    expect(storedRecord()?.token, 'the discarded answer is never stored').toBe(A0_FRESH)
-    expect(storedRecord()?.refresh_token).toBe('R0')
-    expect(hrefWrites).toEqual([])
-  })
-
   it("another user's record survives a foreign-subject end", async () => {
     const { hrefWrites } = await mountFresh()
     // Another tab signed in a different user.
@@ -950,59 +859,5 @@ describe('a renewal never outlives its session (AC-14, AC-15, AC-17)', () => {
     expect(localStorage.getItem(SESSION_KEY), "the other user's record is untouched").toBe(X_RAW)
     expect(refreshes(mark), 'nothing is renewed for the foreign record').toEqual([])
     expect(probes(mark)).toEqual([])
-  })
-
-  it('a stand-in from an in-house hand-off seat is in-house, and so is the return to the seat', async () => {
-    vi.stubEnv('VITE_DEMO_MODE', 'true')
-    await bootWith(record(A0_FRESH, FRESH_AT, IN_HOUSE_ME))
-    await waitForVerifiedWorkspace()
-    await settle()
-    expect(capturedCtx?.mode, 'the seat').toBe('inhouse')
-    meReply = answer(200, OTHER_ME)
-    await act(async () => {
-      await capturedCtx!.becomePersona!(STAND_IN, 'dashboard')
-    })
-    await waitFor(() => expect(capturedCtx?.user.name).toBe('Tunde Bello'))
-    expect(capturedCtx?.mode, 'the stand-in').toBe('inhouse')
-    meReply = answer(200, IN_HOUSE_ME)
-    await act(async () => {
-      await capturedCtx!.returnToSeat!('dashboard', SEAT_MEMBER)
-    })
-    await waitFor(() => expect(capturedCtx?.user.name).toBe(ME.user.display_name))
-    expect(capturedCtx?.mode, 'back on the seat').toBe('inhouse')
-  })
-
-  it('returning from a stand-in renews the seat', async () => {
-    vi.stubEnv('VITE_DEMO_MODE', 'true')
-    await mountFresh()
-    meReply = answer(200, OTHER_ME)
-    await act(async () => {
-      await capturedCtx!.becomePersona!(STAND_IN, 'dashboard')
-    })
-    await waitFor(() => expect(capturedCtx?.user.name).toBe('Tunde Bello'))
-    await settle()
-    expect(refreshes(), 'a stand-in never renews').toEqual([])
-    expect(await probe(capturedCtx, '/stand-in')).toBe('resolved')
-    expect(
-      probes().map((c) => c.auth),
-      "a stand-in's requests carry its own token",
-    ).toEqual([`Bearer ${standInToken(NOW)}`])
-    meReply = answer(200, ME)
-    vi.setSystemTime(NOW + 2 * HOUR)
-    const mark = calls.length
-
-    await act(async () => {
-      await capturedCtx!.returnToSeat!('dashboard', SEAT_MEMBER)
-    })
-    await waitFor(() => expect(capturedCtx?.user.name).toBe(ME.user.display_name))
-    await settle()
-    const ctx = capturedCtx
-    const out = await probe(ctx)
-
-    expect(out).toBe('resolved')
-    expect(refreshes(mark), 'the seat renews on return').toHaveLength(1)
-    expect(calls[mark]?.url, 'the renewal precedes every request').toBe(REFRESH)
-    expect(apiCalls(mark).length).toBeGreaterThan(0)
-    expect(apiCalls(mark).filter((c) => c.auth !== `Bearer ${renewedToken()}`)).toEqual([])
   })
 })

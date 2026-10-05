@@ -16,7 +16,7 @@
 //   `gridTemplateColumns: '1fr 1fr'` round-trips raw
 //   setting `overflowY` alone leaves `style.overflow` EMPTY — which is what makes the
 //   body's y-only assertion a real oracle rather than a restatement
-//   a `border` shorthand carrying `var()` round-trips raw (PersonaFooter.test.tsx:294)
+//   a `border` shorthand carrying `var()` round-trips raw
 //
 // This file installs NO `Element.prototype.scrollTo` shim, and does not need one.
 // `scrollRegionIntoView` (extractionReview.ts:151) is reached from exactly one call site,

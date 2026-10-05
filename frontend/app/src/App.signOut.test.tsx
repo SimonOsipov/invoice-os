@@ -8,7 +8,6 @@ import type { Me } from './auth'
 import { EMPTY_BUCKET } from './lib/dashboard'
 import { captureDestination, readDestination } from './lib/deepLink'
 import { NOT_ACTIVE_MEMBER_MESSAGE } from './lib/authedFetch'
-import type { Member } from './lib/members'
 import type { ImportAuth } from './lib/importApi'
 import { SESSION_KEY } from './lib/session'
 import type { PlatformCtx } from './types'
@@ -31,15 +30,6 @@ const ME: Me = {
 const OTHER_ME: Me = {
   tenant: { id: '44444444-4444-4444-4444-444444444444', name: 'Earlier Holdings', kind: 'firm' },
   user: { id: 'e0000000-0000-0000-0000-000000000004', role: 'authenticated', display_name: 'Adaeze Nwankwo', email: 'adaeze.nwankwo@example.com' },
-}
-const STAND_IN: Member = {
-  id: OTHER_ME.user.id,
-  name: 'Tunde Bello',
-  initials: 'TB',
-  email: 'tunde@example.ng',
-  role: 'preparer',
-  status: 'active',
-  isYou: false,
 }
 
 const b64url = (s: string) => btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
@@ -303,24 +293,6 @@ describe('Sign out revokes every session, then leaves (AC-1..AC-5)', () => {
     await settle()
 
     expect(signOutPosts()).toEqual([])
-    expect(localStorage.getItem(SESSION_KEY)).toBeNull()
-    expect(hrefWrites).toEqual(HANDOFF_EXIT)
-  })
-
-  it('a stand-in sign-out revokes the seat', async () => {
-    vi.stubEnv('VITE_DEMO_MODE', 'true')
-    const { hrefWrites } = await mount(handoffRecord(A_SID1, 'R1'))
-    meReply = answer(200, OTHER_ME)
-    await act(async () => {
-      await capturedCtx!.becomePersona!(STAND_IN, 'dashboard')
-    })
-    await waitFor(() => expect(capturedCtx?.user.name, 'the stand-in is active').toBe('Tunde Bello'))
-    await settle()
-
-    await clickSignOut()
-    await settle()
-
-    expect(signOutPosts()).toEqual([{ url: SIGN_OUT, method: 'POST', auth: null, body: { refresh_token: 'R1' } }])
     expect(localStorage.getItem(SESSION_KEY)).toBeNull()
     expect(hrefWrites).toEqual(HANDOFF_EXIT)
   })

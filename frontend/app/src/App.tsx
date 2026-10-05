@@ -105,10 +105,6 @@ import {
 import { removePolicy, replacePolicy, type Policy } from './lib/workflows'
 import { flaskGlyph, shieldGlyph15 } from './glyphs'
 import { BrandMark } from './icons'
-import { DEMO_MODE } from './demo/flag'
-import { personaFromMember } from './demo/identity'
-import { BUSY_MS } from './demo/timing'
-import { PersonaToast } from './demo/PersonaToast'
 import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
 import { DashboardActive } from './components/DashboardActive'
@@ -223,9 +219,6 @@ const availableSettingsTab = (tab: SettingsTab, mode: Mode): SettingsTab =>
 // An in-house workspace has no client portfolio; its /clients URL falls back to the dashboard.
 const availableView = (view: View, mode: Mode): View => (view === 'clients' && mode === 'inhouse' ? 'dashboard' : view)
 
-// The busy beat's floor: resolved after ms regardless of what else is happening.
-const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
-
 // One refusal copy. Matched by identity when a release clears it.
 const STILL_WORKING = new ApiError('network', 'An import or filing is still in progress. Try again when it finishes.')
 
@@ -233,13 +226,9 @@ const STILL_WORKING = new ApiError('network', 'An import or filing is still in p
 // (Platform.dc.html ~L980-1263): `this.state` becomes typed `useState` hooks below,
 // and every handler in the "actions" section is ported 1:1 as a plain function.
 // Rendered only once signed in (see App).
-function Workspace({ session, onSignOut, initialView, becomePersona, returnToSeat, seatSubject, freshToken, onUnauthorized }: {
+function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   session: Session
   onSignOut: () => void
-  initialView?: View
-  becomePersona?: (member: Member, view: View) => Promise<void>
-  returnToSeat?: (view: View, seat: Member) => Promise<void>
-  seatSubject?: string
   freshToken?: () => string | null | Promise<string | null>
   onUnauthorized: () => void
 }) {
@@ -366,7 +355,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   const [seed] = useState(() => parseLocation(bootPath, bootSearch))
   // Plain const, not a useState: read by the lazy initializers below (all run once at
   // mount) and by the mount-alignment effect further down, so no memoization is needed.
-  const bootView: View = availableView(initialView ?? seed.view, mode)
+  const bootView: View = availableView(seed.view, mode)
   // Gated on the winning view, like invoiceId/jobId: seed.reviewBatchIds only applies
   // when bootView actually settles on create.
   const bootBatchIds = bootView === 'create' ? seed.reviewBatchIds : []
@@ -1765,9 +1754,6 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     staffRole,
     deleteRole,
     signOut: onSignOut,
-    becomePersona,
-    returnToSeat,
-    seatSubject,
   }
 
   // Below every hook, so latching does not change the hook order. The whole workspace goes,
@@ -1847,23 +1833,12 @@ export default function App() {
   // A `?handoff=` boot starts with NO session
   // unless the stored one is a live hand-off session: the fresh code wins over a stale identity.
   const [seat, setSeat] = useState<Session | null>(() => (handoffCode ? null : bootSession))
-  // Demo-only stand-in, never persisted: `standIn === null` iff the active identity IS the seat.
-  const [standIn, setStandIn] = useState<Session | null>(null)
-  const [carriedView, setCarriedView] = useState<View | null>(null)
-  const activeSession = standIn ?? seat
   const [signingIn, setSigningIn] = useState<PersonaId | null>(null)
-  // Demo-only. Bumped by every identity-changing verb so a commit that lands after a
-  // newer one (sign-out, or a later switch) can detect it is stale and no-op instead of
-  // resurrecting a dead Workspace.
-  const identityGen = useRef(0)
-  const toastSeq = useRef(0)
-  const [toast, setToast] = useState<{ name: string; initials: string; role: Member['role']; seq: number } | null>(null)
 
   // Set when storage belongs to another tab's sign-in or sign-out.
   const keepStoredRecord = useRef(false)
 
   // Mirror the SEAT to storage: persist while signed in, wipe on sign out / cleared session.
-  // A stand-in is deliberately absent here, so a reload returns to the seat.
   useEffect(() => {
     if (seat) saveSession(seat)
     else if (keepStoredRecord.current) keepStoredRecord.current = false
@@ -1875,12 +1850,8 @@ export default function App() {
   const renewerRef = useRef<Renewer | null>(null)
   const expireSession = useCallback(({ keepStorage }: { keepStorage: boolean }) => {
     renewerRef.current?.track(null)
-    identityGen.current++
     keepStoredRecord.current = keepStorage
     setSeat(null)
-    setStandIn(null)
-    setCarriedView(null)
-    setToast(null)
     if (!keepStorage) clearSession()
   }, [])
   if (renewerRef.current === null) {
@@ -1897,10 +1868,9 @@ export default function App() {
   const renewer = renewerRef.current
   // Layout, not passive: the workspace's first loaders run in child passive effects.
   useLayoutEffect(() => {
-    renewer.track(activeSession)
-  }, [renewer, activeSession])
+    renewer.track(seat)
+  }, [renewer, seat])
   // Nothing tracked means the session ended: a request from a chain that outlived it sends nothing.
-  // ceiling: the gate is "some session tracked", not this Workspace's; a leftover chain after a DEMO_MODE stand-in switch gets the new identity's token. Revisit if a stand-in switch shows a cross-identity request.
   const freshToken = useCallback(
     () => (renewer.tracking() ? renewer.fresh() : Promise.reject(new SessionEndedError())),
     [renewer],
@@ -1938,19 +1908,14 @@ export default function App() {
     }
     // First: a renewal settling after this must not restore the session.
     renewerRef.current?.track(null)
-    identityGen.current++
     // Drop the in-memory session, not just the persisted copy. clearSession() only wipes
     // localStorage, so without this the invalidated session stayed in React state and
     // Workspace kept rendering — which is exactly how a 401'd reload left the user parked
     // on a dead dashboard behind an "unauthorized / HTTP 401" card instead of signed out.
     // The old comment below claimed this fallback already happened; it did not.
     setSeat(null)
-    setStandIn(null)
-    setCarriedView(null)
-    // Since the boot seed, the URL carries `view` too. Clear it where carriedView is
-    // cleared, or the next sign-in boots onto the signed-out session's screen.
+    // The URL carries `view` too; clear it or the next sign-in boots onto this screen.
     window.history.replaceState(null, '', '/')
-    setToast(null)
     clearSession()
     // Wipes a destination captured before this session — the pathname reset above only
     // stops a NEW one being captured on the way out.
@@ -1968,17 +1933,13 @@ export default function App() {
   // only when it holds another sign-in (both tokens carry session_ids that differ).
   const endRevokedSession = useCallback(() => {
     if (signingOut.current) return
-    const endedSid = decodeJwtPayload(activeSession?.token ?? null)?.session_id
+    const endedSid = decodeJwtPayload(seat?.token ?? null)?.session_id
     const storedSid = decodeJwtPayload(loadSession()?.token ?? null)?.session_id
     const keep = typeof endedSid === 'string' && typeof storedSid === 'string' && endedSid !== storedSid
     renewerRef.current?.track(null)
-    identityGen.current++
     keepStoredRecord.current = keep
     setSeat(null)
-    setStandIn(null)
-    setCarriedView(null)
     window.history.replaceState(null, '', '/')
-    setToast(null)
     if (!keep) clearSession()
     clearDestination()
     const dest = landingBase()
@@ -1986,7 +1947,7 @@ export default function App() {
       signingOut.current = true
       window.location.href = dest
     }
-  }, [activeSession])
+  }, [seat])
 
   const doSignIn = useCallback(async (persona: Persona) => {
     setSigningIn(persona.id)
@@ -2001,54 +1962,6 @@ export default function App() {
       setSigningIn(null)
     }
   }, [])
-
-  // Demo-only. The same two beats as becomePersona: a floor (no round trip to wait on,
-  // so no failure branch) then the commit. Toasts only when a stand-in was actually in
-  // force -- becomePersona's seat-row short-circuit below delegates here too, and
-  // clicking your own row while already seated must not announce a switch nobody made.
-  const returnToSeat = useCallback(
-    async (view: View, seatMember: Member) => {
-      const gen = ++identityGen.current
-      const wasStandingIn = standIn !== null
-      await delay(BUSY_MS)
-      // Symmetric with becomePersona: a sign-out (or a newer switch) mid-floor
-      // invalidates this commit.
-      if (identityGen.current !== gen) return
-      const carried = carryView(view)
-      setCarriedView(carried)
-      setStandIn(null)
-      if (wasStandingIn) {
-        setToast({ name: seatMember.name, initials: seatMember.initials, role: seatMember.role, seq: ++toastSeq.current })
-      }
-    },
-    [standIn],
-  )
-
-  // Demo-only. Unlike doSignIn above this NEVER degrades: every setter sits after the
-  // await, so a rejected mint leaves seat, standIn and carriedView untouched and signIn's
-  // own ApiError reaches the caller unreshaped. Painting a new name over the old token
-  // would make the footer claim an identity the requests do not hold.
-  const becomePersona = useCallback(
-    async (member: Member, view: View) => {
-      if (!seat) return
-      // The seat's own row returns to the seat rather than minting a same-subject
-      // stand-in, which would leave isSeat true while the return row still rendered.
-      if (member.id === seat.persona.subject) {
-        return returnToSeat(view, member)
-      }
-      identityGen.current++
-      const gen = identityGen.current
-      const [next] = await Promise.all([signIn(personaFromMember(member, seat.persona)), delay(BUSY_MS)])
-      // A sign-out (or a newer switch) mid-mint invalidates this commit -- the Workspace
-      // it would resurrect is already gone.
-      if (identityGen.current !== gen) return
-      const carried = carryView(view)
-      setCarriedView(carried)
-      setStandIn(next)
-      setToast({ name: member.name, initials: member.initials, role: member.role, seq: ++toastSeq.current })
-    },
-    [seat, returnToSeat],
-  )
 
   // Drop the one-shot ?auth= and ?handoff= from the URL, used or not. replaceState: no history entry.
   useEffect(() => {
@@ -2104,7 +2017,7 @@ export default function App() {
   // redemption navigates itself), so bouncing to landing would break landing → app. Also skipped when no
   // landing URL is configured (the standalone showcase build), which keeps its own picker.
   useEffect(() => {
-    if (activeSession || authStart || handoffPending || frontDoorBounced.current) return
+    if (seat || authStart || handoffPending || frontDoorBounced.current) return
     const dest = landingBase() ? landingSignInUrl(ensureSignInState()) : null
     if (dest) {
       // The ref keeps StrictMode to one navigation.
@@ -2116,12 +2029,12 @@ export default function App() {
       captureDestination(window.location.pathname, routeQuery(at.view, at))
       window.location.href = dest
     }
-  }, [activeSession, authStart, handoffPending])
+  }, [seat, authStart, handoffPending])
 
   // Mounting Workspace would clear the captured destination before the start bounce leaves.
   if (authStart && landingBase()) return null
-  if (bootRenewing && activeSession) return <SignInLoading />
-  if (!activeSession) {
+  if (bootRenewing && seat) return <SignInLoading />
+  if (!seat) {
     if (handoffPending) return <SignInLoading />
     // No session and no deep link. The landing page is the product's single sign-in front
     // door, so go there rather than offer a SECOND place to sign in — the effect above has
@@ -2134,23 +2047,11 @@ export default function App() {
     return <SignIn signingIn={signingIn} onPick={doSignIn} />
   }
   return (
-    <>
-      <Workspace
-        key={DEMO_MODE ? activeSession.persona.subject : undefined}
-        session={activeSession}
-        onSignOut={signOut}
-        initialView={DEMO_MODE ? (carriedView ?? undefined) : undefined}
-        becomePersona={DEMO_MODE ? becomePersona : undefined}
-        returnToSeat={DEMO_MODE ? returnToSeat : undefined}
-        seatSubject={DEMO_MODE ? seat?.persona.subject : undefined}
-        freshToken={freshToken}
-        onUnauthorized={endRevokedSession}
-      />
-      {/* Sibling of the keyed Workspace above, not inside it -- a successful switch
-          remounts Workspace, which would destroy a toast mounted underneath it. */}
-      {DEMO_MODE && toast && (
-        <PersonaToast key={toast.seq} name={toast.name} initials={toast.initials} role={toast.role} onDismiss={() => setToast(null)} />
-      )}
-    </>
+    <Workspace
+      session={seat}
+      onSignOut={signOut}
+      freshToken={freshToken}
+      onUnauthorized={endRevokedSession}
+    />
   )
 }

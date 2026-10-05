@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // AUDIT-09-05 Mode A. The "Open in Audit ->" hand-off, observed on PlatformCtx.
 //
-// Harness is App.standIn.test.tsx's: the real <App/>, a session seeded into a stubbed
+// Harness: the real <App/>, a session seeded into a stubbed
 // localStorage, and ctx captured through a mocked Sidebar. VITE_GATEWAY_URL stays unstubbed,
 // so gatewayBase() is null and nothing on any screen fetches.
 //
@@ -50,7 +50,7 @@ const SEAT_SESSION: Session = { persona: APP_PERSONAS.firm, token: null, me: nul
 const INVOICE_ID = 'aaaaaaaa-0000-4000-8000-000000000001'
 const INVOICE_NUMBER = 'INV-1'
 
-// Node v25's native localStorage collides with jsdom's (App.standIn.test.tsx:74-75).
+// Node v25's native localStorage collides with jsdom's.
 function createMemoryStorage() {
   const store = new Map<string, string>()
   return {

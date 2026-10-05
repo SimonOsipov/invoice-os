@@ -16,7 +16,7 @@ import App from './App'
 
 let originalLocation: PropertyDescriptor | undefined
 
-// Node v25's native localStorage collides with jsdom's (App.standIn.test.tsx:74-75).
+// Node v25's native localStorage collides with jsdom's.
 function createMemoryStorage() {
   const store = new Map<string, string>()
   return {

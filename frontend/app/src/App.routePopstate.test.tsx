@@ -21,7 +21,7 @@ const REVIEW_ID_3 = 'c1c2c3c4-c5c6-47c7-89c8-c9cacbcccdce'
 const AUDIT_INVOICE_ID = 'd1e2f3a4-b5c6-47d8-89ab-cdef01234567'
 const INVOICE_ID = 'aaaaaaaa-0000-4000-8000-000000000001'
 
-// Node v25's native localStorage collides with jsdom's (App.standIn.test.tsx:74-75).
+// Node v25's native localStorage collides with jsdom's.
 function createMemoryStorage() {
   const store = new Map<string, string>()
   return {

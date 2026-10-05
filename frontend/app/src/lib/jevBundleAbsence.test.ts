@@ -1,6 +1,6 @@
 // jevBundleAbsence.test.ts (CHECK-01-07 AC-10): the jev measurement harness must never ride
 // into a shipped build or a shipped source file. First describe reads the BUILT bundle,
-// following src/demo/bundleAbsence.test.ts's shape. Second content-scans src/ itself.
+// scanning dist/. Second content-scans src/ itself.
 import { describe, expect, it } from 'vitest'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // F-021 unit half: a rejected mint (doSignIn's catch) still seats the visitor unverified
-// instead of dead-ending. Harness copied from App.standIn.test.tsx, but with an EMPTY store
-// (not renderAppWithSeat's pre-seeded session); the in-app picker click drives doSignIn.
+// instead of dead-ending. Harness: the real <App/> with an EMPTY store
+// (no pre-seeded session); the in-app picker click drives doSignIn.
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -18,7 +18,7 @@ vi.mock('./auth', async (importOriginal) => {
   return { ...actual, signIn: signInMock }
 })
 
-// The only way to reach the ctx App builds -- see App.standIn.test.tsx.
+// The only way to reach the ctx App builds.
 let capturedCtx: PlatformCtx | undefined
 vi.mock('./components/Sidebar', () => ({
   Sidebar: (p: { ctx: PlatformCtx }) => {
@@ -58,8 +58,7 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-// Deliberately NOT renderAppWithSeat (App.standIn.test.tsx) -- that pre-seeds a signed-in
-// session, which never reaches doSignIn's catch. This needs an empty store and a picker click.
+// A pre-seeded signed-in session never reaches doSignIn's catch. This needs an empty store and a picker click.
 async function renderAppFresh() {
   vi.resetModules()
   const { default: App } = await import('./App')

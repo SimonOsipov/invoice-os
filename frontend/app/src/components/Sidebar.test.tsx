@@ -278,12 +278,9 @@ describe('Sidebar nav badges, firm mode', () => {
   })
 })
 
-// DEMO-06-01: green on write by construction (nothing demo-related exists yet, so
-// today's markup trivially equals itself). This pin carries no coverage now -- its whole
-// value is as a tripwire for DEMO-06-03..06: any persona markup, padding, gap, avatar or
-// dot change leaking into the flag-off footer fails it.
+// Tripwire: any padding, gap, avatar or dot change in the footer fails it.
 describe('Sidebar footer, characterization pin', () => {
-  it("the flag-off footer renders exactly today's markup", async () => {
+  it("the footer renders exactly today's markup", async () => {
     await renderSidebar(
       rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 }),
       sidebarCtx({ user: { name: 'Chinedu Okafor', initials: 'CO', verified: true, tenantName: 'Okafor & Partners' } }),
@@ -291,7 +288,7 @@ describe('Sidebar footer, characterization pin', () => {
 
     const footer = document.querySelector('aside.pf-sidebar > div:last-of-type')!
     expect(footer.outerHTML).toBe(
-      '<div style="flex: 0 0 auto; padding: 12px; border-top: 1px solid var(--line-1); display: flex; align-items: center; gap: 10px;"><span style="flex: 0 0 auto; width: 30px; height: 30px; border-radius: 99px; background: var(--slate-800); color: var(--text-on-dark); display: grid; place-items: center; font-size: 11px; font-weight: 600;">CO</span><div style="flex: 1 1 0%; min-width: 0;"><div style="font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Chinedu Okafor</div><div class="mono" style="display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--fg-3); white-space: nowrap; overflow: hidden;"><span style="flex: 0 0 auto; width: 5px; height: 5px; border-radius: 99px; background: var(--status-green-text);" title="Tenant verified via /v1/me"></span><span style="overflow: hidden; text-overflow: ellipsis;">OKAFOR &amp; PARTNERS</span></div></div><button class="pf-btn pf-signout" aria-label="Sign out" title="Sign out" style="flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0px; border: 0px; border-radius: var(--radius-sm); background: transparent; cursor: pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="M16 17l5-5-5-5"></path><path d="M21 12H9"></path></svg></button></div>',
+      '<div data-testid="identity-card" style="flex: 0 0 auto; padding: 12px; border-top: 1px solid var(--line-1); display: flex; align-items: center; gap: 10px;"><span style="flex: 0 0 auto; width: 30px; height: 30px; border-radius: 99px; background: var(--slate-800); color: var(--text-on-dark); display: grid; place-items: center; font-size: 11px; font-weight: 600;" data-testid="persona-initials">CO</span><div style="flex: 1 1 0%; min-width: 0;"><div style="font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" data-testid="persona-name">Chinedu Okafor</div><div class="mono" style="display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--fg-3); white-space: nowrap; overflow: hidden;"><span style="flex: 0 0 auto; width: 5px; height: 5px; border-radius: 99px; background: var(--status-green-text);" title="Tenant verified via /v1/me"></span><span style="overflow: hidden; text-overflow: ellipsis;">OKAFOR &amp; PARTNERS</span></div></div><button class="pf-btn pf-signout" aria-label="Sign out" title="Sign out" style="flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0px; border: 0px; border-radius: var(--radius-sm); background: transparent; cursor: pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="M16 17l5-5-5-5"></path><path d="M21 12H9"></path></svg></button></div>',
     )
   })
 })
@@ -346,7 +343,8 @@ describe('Sidebar identity card (AUTH-15-11)', () => {
     expect(card.textContent).not.toContain('ACME HOLDINGS')
 
     cleanup()
-    mockRollupFetch(ROLLUP)
+    // Firm badges read the selected entity's row, so the settle signal needs one.
+    mockRollupFetch(rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1, entity: { validated: 1, awaitingApproval: 1, needsAttention: 1 } }))
     render(<Sidebar ctx={firmCtx({ user: unverified })} />)
     await within(navButton('Invoices')).findByText('1')
     card = screen.getByTestId('identity-card')
@@ -363,21 +361,15 @@ describe('Sidebar identity card (AUTH-15-11)', () => {
     expect(ctx.signOut).toHaveBeenCalledTimes(1)
   })
 
-  // Red only in the build that renders a trigger today, so this one stubs the demo flag;
-  // drop the stub and the module reset with the flag.
   it('the card switches nobody', async () => {
-    vi.stubEnv('VITE_DEMO_MODE', 'true')
-    vi.resetModules()
-    const { Sidebar: FlagSidebar } = await import('./Sidebar')
     mockRollupFetch(ROLLUP)
     const ctx = sidebarCtx({
       members: [
         { id: 'm-seat', name: 'Ada Nwosu', initials: 'AN', email: null, role: 'admin', status: 'active', isYou: true },
         { id: 'm-other', name: 'Tunde Bello', initials: 'TB', email: null, role: 'preparer', status: 'active', isYou: false },
       ],
-      seatSubject: 'm-seat',
     })
-    const { container } = render(<FlagSidebar ctx={ctx} />)
+    const { container } = render(<Sidebar ctx={ctx} />)
     await within(navButton('Invoices')).findByText('1')
 
     const noSwitcher = () => {

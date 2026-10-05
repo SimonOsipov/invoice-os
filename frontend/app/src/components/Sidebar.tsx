@@ -12,8 +12,6 @@
 
 import { Fragment } from 'react'
 import { gatewayBase, useAsync } from '@invoice-os/api-client'
-import { DEMO_MODE } from '../demo/flag'
-import { PersonaFooter } from '../demo/PersonaFooter'
 import { BrandMark, Icon } from '../icons'
 import { entityHealth, getRollup, scopedBucket, type Rollup } from '../lib/dashboard'
 import { visibleEntityIds } from '../lib/portfolio'
@@ -276,29 +274,25 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
 
       {/* `flex: 0 0 auto` — the user card is the one thing that must stay pinned when the
           nav above it scrolls. */}
-      {DEMO_MODE ? (
-        <PersonaFooter ctx={ctx} orgLabel={orgLabel} signOutButton={signOutButton} />
-      ) : (
-        <div style={{ flex: '0 0 auto', padding: 12, borderTop: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ flex: 'none', width: 30, height: 30, borderRadius: 99, background: 'var(--slate-800)', color: 'var(--text-on-dark)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 600 }}>{user.initials}</span>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.name}</div>
-            <div className="mono" style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: 'var(--fg-3)', whiteSpace: 'nowrap', overflow: 'hidden' }}>
-              {/* When /me verified, show the tenant name resolved from the live backend with a
-                  green dot; otherwise fall back to the mode-derived workspace label. */}
-              {user.verified && user.tenantName ? (
-                <>
-                  <span style={{ flex: 'none', width: 5, height: 5, borderRadius: 99, background: 'var(--status-green-text)' }} title="Tenant verified via /v1/me" />
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.tenantName.toUpperCase()}</span>
-                </>
-              ) : (
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{orgLabel}</span>
-              )}
-            </div>
+      <div data-testid="identity-card" style={{ flex: '0 0 auto', padding: 12, borderTop: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={{ flex: 'none', width: 30, height: 30, borderRadius: 99, background: 'var(--slate-800)', color: 'var(--text-on-dark)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 600 }} data-testid="persona-initials">{user.initials}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} data-testid="persona-name">{user.name}</div>
+          <div className="mono" style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: 'var(--fg-3)', whiteSpace: 'nowrap', overflow: 'hidden' }}>
+            {/* When /me verified, show the tenant name resolved from the live backend with a
+                green dot; otherwise fall back to the mode-derived workspace label. */}
+            {user.verified && user.tenantName ? (
+              <>
+                <span style={{ flex: 'none', width: 5, height: 5, borderRadius: 99, background: 'var(--status-green-text)' }} title="Tenant verified via /v1/me" />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.tenantName.toUpperCase()}</span>
+              </>
+            ) : (
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{orgLabel}</span>
+            )}
           </div>
-          {signOutButton}
         </div>
-      )}
+        {signOutButton}
+      </div>
     </aside>
   )
 }

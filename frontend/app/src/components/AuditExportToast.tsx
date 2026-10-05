@@ -1,5 +1,5 @@
 // The audit export's outcome toast (success or an aborted download). Same fixed geometry
-// and own-expiry-timer pattern as demo/PersonaToast.tsx, with no persona/DEMO_MODE coupling.
+// and own-expiry-timer pattern as the removed persona toast.
 
 import { useEffect } from 'react'
 

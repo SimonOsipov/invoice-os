@@ -28,7 +28,7 @@ const BATCH_ID = 'bbbbbbbb-1111-4111-8111-111111111111'
 const SINGLE_BATCH_ID = 'cccccccc-2222-4222-8222-222222222222'
 const SINGLE_INVOICE_ID = 'aaaaaaaa-5555-4555-8555-555555555555'
 
-// Node v25's native localStorage collides with jsdom's (App.standIn.test.tsx:74-75).
+// Node v25's native localStorage collides with jsdom's.
 function createMemoryStorage() {
   const store = new Map<string, string>()
   return {

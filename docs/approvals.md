@@ -902,10 +902,9 @@ the refusal.
 holds only `cfo` on the firm tenant and cannot approve the firm plan's two unconditional
 steps (`fin_mgr`, `compliance`) — he can neither approve nor submit the firm tenant's own
 seeded invoices from the UI. The mock login mints for any
-identity, so all eleven seeded active members can sign in. The
-missing half is now the demo persona switcher (DEMO-06): the SPA's `APP_PERSONAS` and
-sign-in screen deliberately stay at two personas, and the rest of each tenant's roster
-will be reached through the switcher.
+identity, so all eleven seeded active members can sign in through the API. The SPA's
+`APP_PERSONAS` and sign-in screen deliberately stay at two personas, and the app has no
+switcher to reach the rest of each tenant's roster.
 
 ### Enforcement changes nothing on a seeded dev tenant — except the two demo ones
 

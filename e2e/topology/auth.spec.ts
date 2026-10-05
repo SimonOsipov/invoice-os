@@ -1111,7 +1111,7 @@ test('deployed app: a 197-character name stays inside the identity card at every
   const aside = page.locator('aside.pf-sidebar')
   const main = page.locator('main.pf-main')
   const name = page.getByTestId('persona-name')
-  const trigger = page.getByTestId('persona-trigger')
+  const trigger = page.getByTestId('identity-card')
   const signOut = aside.getByRole('button', { name: 'Sign out' })
   await expect(page.getByTestId('add-company-task')).toBeVisible({ timeout: 30_000 })
   await expect(main.getByText(LONG_WORKSPACE, { exact: false })).toBeVisible()

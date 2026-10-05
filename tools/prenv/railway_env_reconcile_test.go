@@ -1,13 +1,6 @@
-// railway_env_demo_mode_test.go pins the CI contract for VITE_DEMO_MODE on the app
-// service's ephemeral PR environments (DEMO-06-07, task-595). T1 and T5 are RED at
-// HEAD; T2, T3 and T4 are GUARDs, each already green, that fence the change against a
-// specific named regression (see each test's doc comment).
-//
-// These tests read the source; railway_env_batch_test.go drives the writes against a
-// scripted Railway. The only live oracle for "Railway actually holds it" is a
-// green prepare-env run on a real PR; the only oracle for "Vite actually baked it
-// into the bundle" is e2e/topology/demo-persona.spec.ts, which cannot pass with the
-// flag unset because the trigger it looks for is tree-shaken out of a flag-off build.
+// railway_env_reconcile_test.go pins the CI contract for reconcile_url_variables' ephemeral
+// PR environments. These tests read the source; railway_env_batch_test.go drives the writes
+// against a scripted Railway.
 package main
 
 import (
@@ -45,27 +38,6 @@ func reconcileURLVariablesBody(t *testing.T) string {
 	return rest[:end[0]]
 }
 
-// T1 (AC-1) — RED at HEAD: VITE_DEMO_MODE appears nowhere in railway-env.sh
-// (verified via git grep, Stage 2 correction S2-1). Passes once the app service is
-// both upserted AND independently re-verified.
-//
-// KILLS: the upsert added with no matching verify (or vice versa); either call
-// targeting a service other than $RAILWAY_SVC_APP_ID.
-func TestReconcileURLVariablesSetsAndVerifiesDemoMode(t *testing.T) {
-	var demo []reconcileCall
-	for _, c := range reconcileCalls(t) {
-		if c.name == "VITE_DEMO_MODE" {
-			demo = append(demo, c)
-		}
-	}
-	if len(demo) != 1 || demo[0].label != "app" || demo[0].idVar != "RAILWAY_SVC_APP_ID" || strings.Trim(demo[0].value, `"`) != "true" {
-		t.Errorf("reconcile_url_variables does not set VITE_DEMO_MODE=true on the app service ($RAILWAY_SVC_APP_ID) exactly once: %+v", demo)
-	}
-	if len(demo) == 1 && !demo[0].verified {
-		t.Errorf("reconcile_url_variables does not check VITE_DEMO_MODE=true on the app service's re-read — \"the mutation's own response is never the evidence\"")
-	}
-}
-
 // T2 (AC-2) — GUARD: the closing line's count equals the NAME=VALUE pairs on the
 // set_service_vars lines. Wording-agnostic; only the COUNT is this test's claim.
 //
@@ -96,9 +68,8 @@ func TestConfirmedVariableCountMatchesUpserts(t *testing.T) {
 // four-line block, not as scattered substrings, so a reflow that keeps the words but
 // drops the exit still fails.
 //
-// KILLS: an executor restructuring the function around the new VITE_DEMO_MODE calls
-// and dropping (or reordering past) this guard — which would re-open rewriting
-// production's URL variables from a PR-environment run.
+// KILLS: a restructure that drops (or reorders past) this guard, which would re-open
+// rewriting production's URL variables from a PR-environment run.
 func TestReconcileURLVariablesRefusesThePersistentEnvironment(t *testing.T) {
 	body := reconcileURLVariablesBody(t)
 
@@ -112,13 +83,9 @@ func TestReconcileURLVariablesRefusesThePersistentEnvironment(t *testing.T) {
 	}
 }
 
-// T4 (AC-1) — GUARD, green before and after this change (Stage 2 correction S2-2:
-// VITE_DEMO_MODE's own ARG/ENV pair already ships at Dockerfile:25-26, so this test
-// closes no gap here — it is a standing fence for a future 4th VITE_ variable).
-//
-// KILLS the one silent gap in the whole chain: Railway holds the variable,
-// the re-read passes, the prepare-env log reads "app.VITE_DEMO_MODE = true", and
-// the bundle is STILL flag-off because no build arg carried it into `vite build`.
+// T4 (AC-1) — GUARD: every VITE_* variable upserted onto the app service has an ARG/ENV pair
+// in its Dockerfile. KILLS the silent gap where Railway holds the variable and the re-read
+// passes, but no build arg carries it into `vite build`.
 func TestEveryAppViteVariableHasADockerfileArg(t *testing.T) {
 	names := make(map[string]bool)
 	matches := 0

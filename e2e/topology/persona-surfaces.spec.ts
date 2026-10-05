@@ -974,7 +974,7 @@ test('firm Approvals: a row the seat cannot approve shows the reason icon, no se
 // green -- is the post-deploy gate (dev-env.yml).
 test('in-house Approvals: the queue narrows, bulk approve settles per item, and the refetch confirms it', async ({ page }, testInfo) => {
   // Four fixtures with their own validate round trips, four viewport sweeps, a two-request
-  // fan-out, two invoice opens and a seat switch. Same in-file headroom precedent as Tests 1
+  // fan-out, two invoice opens and a staffing change. Same in-file headroom precedent as Tests 1
   // and 4.
   test.setTimeout(150_000)
 
@@ -1182,18 +1182,13 @@ test('in-house Approvals: the queue narrows, bulk approve settles per item, and 
 
   // Core AC C-1: this row's approvable height, compared once it is blocked at the same viewport.
   const approvableHeightBox = await untickedRow.boundingBox()
-  expect(approvableHeightBox, 'the unticked row never rendered before the seat switch').toBeTruthy()
+  expect(approvableHeightBox, 'the unticked row never rendered before the unstaffing').toBeTruthy()
 
-  // --- Core AC C-1, C-2, C-4, D-1, D-3: the same row, blocked for another seat ------------
-  // Emeka Uzowulu holds only line_mgr (db/seed.dev.sql); the in-house plan's one step is
-  // fin_dir (demopolicy.go inhousePlan). A seat switch yields a blocked row without publishing
-  // a policy. No restore: the stand-in is never persisted and each test gets a fresh context.
-  await page.getByTestId('persona-trigger').click()
-  await expect(page.getByTestId('persona-row-list')).toBeVisible()
-  await page.getByTestId('persona-row').filter({ hasText: 'Emeka Uzowulu' }).click()
-  await expect(page.getByTestId('persona-toast-title')).toBeVisible()
-  await page.getByTestId('persona-toast-dismiss').click()
-  await expect(page.getByTestId('persona-name')).toHaveText('Emeka Uzowulu')
+  // --- Core AC C-1, C-2, C-4, D-1, D-3: the same row, blocked once the member leaves fin_dir ---
+  // Unstaffing publishes no policy; the driver's afterAll restore stays the seeded list.
+  await staffWorkflowRole(token, INHOUSE_APPROVER_ROLE, seededApprovers!)
+  await page.reload()
+  await expect(page.getByTestId('persona-name')).toBeVisible()
 
   await goTo(page, 'Approvals')
   const blockedRow = approvalRowByNumber(page, untickedNumber)
@@ -1201,7 +1196,7 @@ test('in-house Approvals: the queue narrows, bulk approve settles per item, and 
   await expect(blockedRow.getByTestId('approval-select-row'), 'the seat really is blocked').toBeDisabled()
   await expect(blockedRow.getByTestId('approval-blocked-icon')).toBeVisible()
   const blockedHeightBox = await blockedRow.boundingBox()
-  expect(blockedHeightBox, 'the blocked row never rendered after the seat switch').toBeTruthy()
+  expect(blockedHeightBox, 'the blocked row never rendered after the unstaffing').toBeTruthy()
   expect(
     Math.abs(blockedHeightBox!.height - approvableHeightBox!.height),
     `the blocked row (${blockedHeightBox!.height}px) must stand the same height as the approvable row it replaced (${approvableHeightBox!.height}px)`,

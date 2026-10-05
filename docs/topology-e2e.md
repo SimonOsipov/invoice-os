@@ -122,7 +122,7 @@ tenant data on that fork: the control is the `mockissuer` build tag, which only 
 `reconcile-urls` step writes and re-reads the fork's own `gateway.CORS_ALLOWED_ORIGINS` (all
 four SPA origins), `VITE_GATEWAY_URL` on `app`, `landing` and each console, `app.VITE_LANDING_URL`,
 the landing's `VITE_APP_URL`, `VITE_OPS_URL` and `VITE_SUPPORT_URL`, each console's
-`VITE_LANDING_URL`, `app.VITE_DEMO_MODE=true` and `landing.VITE_REGISTRATION_OPEN=true`. It refuses the persistent environment.
+`VITE_LANDING_URL` and `landing.VITE_REGISTRATION_OPEN=true`. It refuses the persistent environment.
 
 **Written per fork, not inherited:** `gateway.RECONCILIATION_URL`. A fork is reused per PR, so
 it never picks up a production write made after its creation. `set-fork-reconciliation-url`

@@ -221,28 +221,13 @@ counts beside it in `by_table`.
 
 ## Demo mode flag
 
-The purge above runs regardless of whether the demo persona switcher is visible — the two are
-independent. This section documents that switch: `VITE_DEMO_MODE`, the flag gating the demo
-persona-switcher UI (`frontend/app/src/demo/`) in the sidebar footer.
+The app has no demo persona switcher and no demo-mode build flag. `frontend/app/Dockerfile`
+declares no such build arg, and `reconcile_url_variables` in `scripts/ci/railway-env.sh` writes only
+`VITE_GATEWAY_URL` and `VITE_LANDING_URL` on the `app` service. The purge above does not depend on
+either.
 
-`VITE_DEMO_MODE` is a Vite build-time flag, not a runtime one: `import.meta.env.VITE_DEMO_MODE
-=== 'true'` is folded into the bundle at `vite build` (`frontend/app/src/demo/flag.ts:3`), so an
-off build tree-shakes `src/demo/` out entirely rather than shipping the switcher hidden. It
-**defaults to off** — an unset build arg resolves to an empty string, which is not `'true'`.
-
-CI sets it on every non-draft PR environment, **app service only**. `reconcile_url_variables`
-in `scripts/ci/railway-env.sh` upserts and independently re-verifies `app.VITE_DEMO_MODE = true`
-(`:1242`, `:1252`) against `$RAILWAY_SVC_APP_ID`, the same `ARG`/`ENV` build-arg mechanism
-`frontend/app/Dockerfile` already uses for `VITE_GATEWAY_URL` and `VITE_LANDING_URL` (`:17-26`).
-It runs from the `Point the fork's URL variables at the fork` step
-(`.github/workflows/dev-env.yml`), gated `github.event_name == 'pull_request'` and, at
-the enclosing `prepare-env` job, on the PR being non-draft — so a draft PR's
-environment never gets the flag and never deploys at all.
-
-**Production.** The `app` service has `VITE_DEMO_MODE=true` (measured 2026-09-23), so the
-persona switcher ships on `app.ascomply.com`. It mints through `POST /auth/login`, which
-production no longer serves, so it does not work there. The production gateway's
-`ENVIRONMENT` was set to `production` once, by hand, with `railway-env.sh
+**Production.** The `app` service may still carry a leftover demo-mode variable; nothing reads it.
+The production gateway's `ENVIRONMENT` was set to `production` once, by hand, with `railway-env.sh
 set-production-environment`. CI still writes nothing to that environment —
 `reconcile_url_variables` exits 1 the moment `env_id` matches `$RAILWAY_DEV_ENVIRONMENT_ID`,
 the same refusal that protects every other URL variable this function reconciles.

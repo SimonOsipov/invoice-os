@@ -464,8 +464,7 @@ async function toggleNeedsAttention(page: Page, want: boolean): Promise<void> {
   await listFetchOn(page, want, () => page.getByTestId('needs-attention-toggle').click())
 }
 
-// installRowLatch()/readRowLatch(): the presence-over-time sampler, modelled on
-// demo-persona.spec.ts's installSwitchLatch. An OBSERVER, never a timer: a fixed-period
+// installRowLatch()/readRowLatch(): the presence-over-time sampler. An OBSERVER, never a timer: a fixed-period
 // sampler straddles a flash shorter than its period, and a single post-toggle snapshot
 // cannot see a container that emptied and refilled inside the round trip.
 //
@@ -4183,9 +4182,8 @@ test.describe.serial("detail surface: the compliance card's geometry", () => {
 // a file of its own -- invoice detail IS this file's capability (docs/e2e-convention.md).
 //
 // SCOPE: the firm ADMIN seat, at two statuses. The ROLE axis (AC-3: a caller who can do
-// nothing sees five disabled controls, never a shorter cluster) is demo-persona.spec.ts's
-// T17, where the persona switcher lives; splitting it there keeps this block off a
-// switcher journey it would otherwise have to reimplement.
+// nothing sees five disabled controls, never a shorter cluster) is out of
+// this file's scope.
 //
 // A width is never pinned, only a relationship (layout.ts's file header). The measurements
 // are attached so the numbers outlive the run.

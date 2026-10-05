@@ -761,8 +761,7 @@ production") with
   (see Revocation). Revisit if a sign-out whose server call failed is reported to leave a
   usable record.
 - `ceiling:` a request from a chain that outlives an ended session is refused only while no
-  session is tracked. After a DEMO_MODE stand-in switch, a leftover chain gets the new
-  identity's token. DEMO_MODE runs on forks only.
+  session is tracked.
 - `ceiling:` a byte download (evidence bundle, page image, source document) that finds the session ended sends nothing, and its error card can show until the front door's navigation unloads the page; revisit if a user reports it.
 - `ceiling:` on a transient failure the renewer keeps the tracked session's token and deadline even when another tab's newer stored pair supplied the refresh token, so repeated transient failures can end a session while storage holds a newer valid pair (the next boot adopts it); revisit if two-tab users report early sign-outs.
 
@@ -912,8 +911,7 @@ and `endRevokedSession`):
   the record belongs to the seat's user (another tab may have rotated it), else the seat's
   own. Only then does it clear state, the stored record and the destination, and navigate to
   landing: the navigation would cancel the request. The worst wait is 5 s.
-- A persona seat, or a DEMO_MODE stand-in's own identity, sends nothing: neither has a
-  server session. With a stand-in active, the seat's refresh token is sent.
+- A persona seat sends nothing: it has no server session.
 - **A failed revoke is silent** (user decision, AUTH-07 CF5). Any failure (gateway
   unreachable, the timeout, any non-2xx answer) still completes the local sign-out and logs
   `console.warn('[session] sign-out could not reach the server; other sessions stay signed in')`.

@@ -28,7 +28,7 @@ const (
 	batchProdAppURL     = "https://app.ascomply.com"
 	batchProdLandingURL = "https://www.ascomply.com"
 
-	batchAllConfirmed = "All 13 environment variables confirmed" // reconcile_url_variables
+	batchAllConfirmed = "All 12 environment variables confirmed" // reconcile_url_variables
 )
 
 // Secret names print `= <redacted>` (Design, "Variable writes").
@@ -52,7 +52,7 @@ func batchExports() string {
 func reconcileIntended() map[string]map[string]string {
 	return map[string]map[string]string{
 		sentrySvcID("gateway"):         {"CORS_ALLOWED_ORIGINS": batchOrigins},
-		sentrySvcID("app"):             {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL, "VITE_DEMO_MODE": "true"},
+		sentrySvcID("app"):             {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL},
 		sentrySvcID("landing"):         {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_APP_URL": batchAppURL, "VITE_OPS_URL": batchOpsURL, "VITE_SUPPORT_URL": batchSupportURL, "VITE_REGISTRATION_OPEN": "true"},
 		sentrySvcID("ops-console"):     {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL},
 		sentrySvcID("support-console"): {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL},
@@ -482,7 +482,7 @@ func TestSetServiceVars_OnlyChangedNamesAreWritten(t *testing.T) {
 	if ups := s.upserts(t); len(ups) != 1 {
 		t.Errorf("writes = %v, want app.VITE_LANDING_URL only: every other value is already intended", names(ups))
 	}
-	wantHeld := map[string]string{"gateway": "1 of 1", "app": "2 of 3", "landing": "5 of 5", "ops-console": "2 of 2", "support-console": "2 of 2"}
+	wantHeld := map[string]string{"gateway": "1 of 1", "app": "1 of 2", "landing": "5 of 5", "ops-console": "2 of 2", "support-console": "2 of 2"}
 	if got := heldLines(out); !reflect.DeepEqual(got, wantHeld) {
 		t.Errorf("held lines = %v, want %v", got, wantHeld)
 	}

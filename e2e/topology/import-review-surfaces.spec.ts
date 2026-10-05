@@ -5,16 +5,17 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import { test, expect, type Locator, type Page, type Request, type Response, type TestInfo } from '@playwright/test'
-import { login, createEntity, listInvoices, approveUntilClosed, firmApproverTokens, type Persona } from '../api/client'
+import { login, createEntity, listInvoices, approveUntilClosed, firmApproverTokens, type ExtractionDetail, type Persona } from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { approvalRun404Dropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { assertShardSession, seedShardSession } from './shardSession'
-import { APP_URL, FIRM_PERSONA, shardTenants } from './targets'
+import { APP_URL, FIRM_PERSONA, GATEWAY_URL, shardTenants } from './targets'
 import { buildAir07UnsteeredCsv, buildHeaderOnlyCsv, buildMixedCsv } from '../importFixtures'
 
 const SHARD = shardTenants('import-review-surfaces.spec.ts')
+const GATEWAY_ORIGIN = new URL(GATEWAY_URL).origin
 const PERSONAS: { A: Persona } = { A: { ...SHARD.a, tenantId: SHARD.a.id } }
 
 test.beforeAll(async () => {
@@ -64,6 +65,11 @@ const NATIVE_INVOICE_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'rich_invoice.pd
 function uniquePdfBytes(): Buffer {
   return Buffer.concat([NATIVE_INVOICE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
+
+const ADVISORY_REGISTER_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'advisory_register.pdf'))
+const CHROME_REGISTER_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'chrome_register.pdf'))
+const AI_STEERED_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'ai_steered_invoice.pdf'))
+const withFreshComment = (pdf: Buffer): Buffer => Buffer.concat([pdf, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 
 // A dispatched drop: addPickedFiles sees it without `accept`. `bytes` sizes the file; nothing dropped is uploaded.
 async function dropFiles(page: Page, specs: { name: string; type: string; bytes?: number }[]): Promise<void> {
@@ -250,7 +256,8 @@ function recordWrites(page: Page): { writes: string[]; stop: () => void } {
   const writes: string[] = []
   const onRequest = (req: Request) => {
     if (req.method() === 'GET' || req.method() === 'OPTIONS') return
-    if (new URL(req.url()).pathname.startsWith('/api/')) writes.push(`${req.method()} ${new URL(req.url()).pathname}`)
+    const url = new URL(req.url())
+    if (url.origin === GATEWAY_ORIGIN) writes.push(`${req.method()} ${url.pathname}`)
   }
   page.on('request', onRequest)
   return { writes, stop: () => page.off('request', onRequest) }
@@ -330,6 +337,129 @@ async function assertGridAligned(page: Page, headerLabel: string, label: string)
     }
   }
   return { rows: m.rows.length }
+}
+
+// Copied from import-wizard.spec.ts: the document journey to the invoice detail, then the review screen.
+async function extractOneDocument(
+  page: Page,
+  label: string,
+  file: { name: string; buffer: Buffer } = { name: 'native_invoice.pdf', buffer: uniquePdfBytes() },
+): Promise<void> {
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `${label} ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"]#pf-import-file')
+    .setInputFiles({ name: file.name, mimeType: 'application/pdf', buffer: file.buffer })
+  await page.getByRole('button', { name: 'Extract invoices' }).click()
+
+  await expect(page.getByTestId('extraction-review'), 'the document run must land on its extraction review').toBeVisible({
+    timeout: 240_000,
+  })
+  await expect
+    .poll(() => new URL(page.url()).pathname, { message: 'the landing must be addressed at its own job path' })
+    .toMatch(/^\/extraction\/[0-9a-fA-F-]{36}$/)
+  await expect(page.getByTestId('extraction-open-invoice'), 'the review must offer its exit').toBeVisible({ timeout: 60_000 })
+  await page.getByTestId('extraction-open-invoice').click()
+  await expect(page.getByTestId('invoice-detail'), 'the exit must reach the real invoice detail').toBeVisible({ timeout: 60_000 })
+}
+
+// Opens the review screen and returns the 200 the SPA itself consumed.
+async function openExtractionReview(page: Page): Promise<ExtractionDetail> {
+  const [res] = await Promise.all([
+    page.waitForResponse(
+      (r) =>
+        r.request().method() === 'GET' &&
+        /\/api\/submission\/v1\/extractions\/[0-9a-fA-F-]{36}$/.test(new URL(r.url()).pathname),
+      { timeout: 120_000 },
+    ),
+    page.getByTestId('open-extraction-review').click(),
+  ])
+
+  expect(res.status(), 'the review screen must read its detail over a 200').toBe(200)
+  await expect(page.getByTestId('extraction-review'), 'the review screen must open').toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId('extraction-page-1'), 'the canvas must render at least one frame').toBeVisible({
+    timeout: 60_000,
+  })
+  return (await res.json()) as ExtractionDetail
+}
+
+async function boxOf(page: Page, testid: string): Promise<Rect> {
+  const box = await page.getByTestId(testid).boundingBox()
+  expect(box, `${testid} did not render`).not.toBeNull()
+  return box as Rect
+}
+
+// The CONTENT box plus scroll metrics: a border-box comparison passes a row that overflows its gutter.
+function edgesOf(el: HTMLElement) {
+  const r = el.getBoundingClientRect()
+  const cs = getComputedStyle(el)
+  return {
+    left: r.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft),
+    right: r.right - parseFloat(cs.borderRightWidth) - parseFloat(cs.paddingRight),
+    outerLeft: r.left,
+    outerRight: r.right,
+    scrollWidth: el.scrollWidth,
+    clientWidth: el.clientWidth,
+  }
+}
+
+const POINT_IDLE = 'Not found — point at it on the document'
+const POINT_CANCEL = 'Stop pointing'
+
+// The leading colour of a computed box-shadow, "rgb(...) 0px 0px 0px 2px".
+const shadowColor = (shadow: string): string => shadow.match(/^(rgba?\([^)]*\))/)?.[1] ?? shadow
+
+// Zoom toolbar and fields grid at one width: EX-01 and EX-02 (D-31).
+async function measureReviewChrome(page: Page): Promise<{
+  toolbar: Rect
+  toolbarFit: { scrollWidth: number; clientWidth: number }
+  group: Rect
+  segments: Rect[]
+  scroll: Rect
+  headerRow: Rect
+  heads: number[]
+  firstBody: number[]
+}> {
+  await page.evaluate(async () => {
+    await document.fonts.ready
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+  })
+  return settledRead(
+    () =>
+      page.evaluate(() => {
+        const rect = (el: Element): Rect => {
+          const r = el.getBoundingClientRect()
+          return { x: r.x, y: r.y, width: r.width, height: r.height }
+        }
+        const q = (sel: string) => {
+          const el = document.querySelector(sel)
+          if (!el) throw new Error(`${sel} not found`)
+          return el as HTMLElement
+        }
+        const toolbar = q('[data-testid="extraction-toolbar"]')
+        const segments = [...document.querySelectorAll('[data-testid^="extraction-zoom-"]')]
+        const group = segments[0]?.parentElement
+        const scroll = q('[data-testid="line-item-scroll"]')
+        const headerRow = q('[data-testid="line-item-scroll"] thead tr')
+        const body = document.querySelector('[data-testid="line-item-scroll"] tbody tr')
+        return {
+          toolbar: rect(toolbar),
+          toolbarFit: { scrollWidth: toolbar.scrollWidth, clientWidth: toolbar.clientWidth },
+          group: group ? rect(group) : { x: 0, y: 0, width: 0, height: 0 },
+          segments: segments.map(rect),
+          scroll: rect(scroll),
+          headerRow: rect(headerRow),
+          heads: [...headerRow.children].map((c) => c.getBoundingClientRect().x),
+          firstBody: body ? [...body.children].map((c) => c.getBoundingClientRect().x) : [],
+        }
+      }),
+    'extraction chrome geometry',
+  )
 }
 
 test.describe('RESKIN2-04 v2 create, progress and review at 1440', () => {
@@ -642,6 +772,12 @@ test.describe('RESKIN2-04 v2 create, progress and review at 1440', () => {
     const heading = page.getByRole('heading', { level: 2, name: '2 invoices imported' })
     await expect(heading, 'the mixed import lands on its review').toBeVisible({ timeout: 60_000 })
     // The validated rows arm approval runs at import; closing them makes the rows selectable for the bulk bar.
+    await expect
+      .poll(async () => (await listInvoices(token, { entity_id: entityId })).invoices.filter((inv) => inv.approval?.run_state === 'open').length, {
+        message: 'the import must arm at least one open approval run before the runs are closed',
+        timeout: 60_000,
+      })
+      .toBeGreaterThan(0)
     await approveOpenRunsForEntity(token, entityId)
     await page.reload()
     await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
@@ -867,6 +1003,123 @@ test.describe('RESKIN2-04 v2 create, progress and review at 1440', () => {
       return { tiles: m.tiles.length }
     })
     await attachJson(testInfo, 'rk-06-rv-04', rv4)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+})
+
+test.describe('RESKIN2-04 v2 extraction review at 1440', () => {
+  test.use({ viewport: { width: 1440, height: 900 } })
+
+  test('RX-01 (AC 8) + RX-03 (AC 5) + EX-01 + EX-02: the flagged reading reads its v2 values, selecting, and fits at every width', async ({ page }, testInfo) => {
+    test.setTimeout(420_000)
+    const errors = collectErrors(page)
+
+    await extractOneDocument(page, 'RESKIN2-04 extraction flagged')
+    const detail = await openExtractionReview(page)
+    await expect(page.locator('main h1'), 'no h1 inside main on the extraction view').toHaveCount(0)
+
+    const flagged = detail.fields.filter((f) => f.reason !== '')
+    expect(flagged.length, 'the default upload must read with flagged fields').toBeGreaterThan(0)
+    await attachJson(testInfo, 'rx-01-flag-count', { flagged: flagged.length, reasons: flagged.map((f) => `${f.name}:${f.reason}`) })
+
+    const input = page.locator('input[data-testid^="extraction-input-"]:not([readonly])').first()
+    await expect(input, 'a header field must render an editable input').toBeVisible()
+    await input.focus()
+    const focused = await readAll(page, { input }, ['--ring'])
+    expect(focused.reads.input[0].style['border-top-color'], 'focused field border colour is the resolved --ring').toBe(focused.tokens['--ring'])
+    expect(shadowColor(focused.reads.input[0].style['box-shadow']), 'focused field box-shadow colour is the resolved --ring').toBe(focused.tokens['--ring'])
+    await input.blur()
+
+    const pillCell = page.locator('[data-testid^="extraction-field-"]').filter({ has: page.locator('span.mono') }).first()
+    const pills = pillCell.locator('span.mono')
+    const chips = page.locator('button[data-testid^="extraction-chip-"]')
+    const zoomSegments = page.locator('[data-testid^="extraction-zoom-"]')
+    const zoomGroup = zoomSegments.first().locator('xpath=..')
+    const frame = page.getByTestId('extraction-page-1')
+    const lineScroll = page.getByTestId('line-item-scroll')
+    await floor(pills, 1, 'a flagged header field must render a reason pill')
+    await floor(chips, 1, 'the ambiguous field must render at least one chip')
+    await floor(zoomSegments, 1, 'the zoom group must render its segments')
+    await floor(lineScroll, 1, 'the default upload must read with line items')
+
+    const read = await readAll(page, { pill: pills.first(), chip: chips, group: zoomGroup, segments: zoomSegments, frame, lineScroll })
+    expectCorners(read.reads.pill[0].style, '4px', 'reason pill')
+    for (const [i, chip] of read.reads.chip.entries()) expectCorners(chip.style, '6px', `chip ${i}`)
+    expectCorners(read.reads.group[0].style, '6px', 'zoom group')
+    expect(read.reads.segments.length, 'the zoom group holds at least one segment').toBeGreaterThan(0)
+    for (const [i, seg] of read.reads.segments.entries()) expectCorners(seg.style, '4px', `zoom segment ${i}`)
+    expect(read.reads.frame[0].style['box-shadow'], 'page frame box-shadow').toBe('none')
+    expectCorners(read.reads.lineScroll[0].style, '6px', 'line-item-scroll')
+    expect(read.reads.lineScroll[0].style['border-top-width'], 'line-item-scroll border').toBe('1px')
+    await attachJson(testInfo, 'rx-01-reads', read)
+    await assertPageDoesNotScrollSideways(page, 'extraction review at 1440')
+    expect((await boxOf(page, 'extraction-page-1')).width, 'the page frame has a width').toBeGreaterThan(0)
+    await shoot(page, testInfo, 'extraction-flagged.png')
+
+    // RX-03: point at a missing field, read the armed button, then stop.
+    const missing = detail.fields.find((f) => f.reason === 'missing')
+    expect(missing, 'no field on this document is missing -- there is nothing to point at').toBeTruthy()
+    const point = page.getByTestId(`extraction-point-${missing!.name}`)
+    await expect(point, `${missing!.name} offers no way to point at it`).toBeVisible({ timeout: 30_000 })
+    await point.click()
+    const stop = page.getByTestId(`extraction-point-cancel-${missing!.name}`)
+    await expect(stop, 'arming shows Stop pointing').toBeVisible({ timeout: 15_000 })
+    await expect(stop, 'the Stop pointing label').toHaveText(POINT_CANCEL)
+    const armed = await readAll(page, { point })
+    expectCorners(armed.reads.point[0].style, '6px', 'armed point button')
+    await attachJson(testInfo, 'rx-03-reads', armed)
+    await shoot(page, testInfo, 'extraction-selecting.png')
+    await stop.click()
+    await expect(stop, 'Stop pointing leaves the armed state').toHaveCount(0)
+    await expect(point, 'the field returns to idle').toHaveText(POINT_IDLE)
+
+    // EX-01 and EX-02 over every width.
+    const swept = await sweep(page, 'EX-01 + EX-02', async () => measureReviewChrome(page))
+    for (const m of swept) {
+      expect(m.segments.length, `zoom segments at ${m.width}px`).toBeGreaterThan(0)
+      expect(m.toolbarFit.scrollWidth, `the toolbar spills sideways at ${m.width}px`).toBeLessThanOrEqual(m.toolbarFit.clientWidth)
+      expect(enclosesRect(m.toolbar, m.group), `the zoom group lies inside the toolbar at ${m.width}px`).toBe(true)
+      for (const [i, seg] of m.segments.entries()) {
+        expect(enclosesRect(m.group, seg), `zoom segment ${i} lies inside the group at ${m.width}px`).toBe(true)
+        for (const other of m.segments.slice(i + 1)) {
+          expect(rectsOverlap(seg, other), `two zoom segments overlap at ${m.width}px`).toBe(false)
+        }
+      }
+      expect(m.heads.length, `grid header cells at ${m.width}px`).toBeGreaterThan(0)
+      expect(m.firstBody.length, `grid first body row cells at ${m.width}px`).toBe(m.heads.length)
+      expect(enclosesRect(m.scroll, m.headerRow, 1), `the header row lies inside the scroll box at ${m.width}px`).toBe(true)
+      for (const [c, x] of m.heads.entries()) {
+        expect(Math.abs(x - m.firstBody[c]), `header cell ${c} left edge vs its first body cell at ${m.width}px`).toBeLessThanOrEqual(1)
+      }
+    }
+    await attachJson(testInfo, 'ex-01-ex-02-sweep', swept)
+    const fit = await lineScroll.evaluate(edgesOf)
+    await attachJson(testInfo, 'ex-02-scroll-edges', fit)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('RX-02 (AC 8): the confident reading is the first fixture with no flagged field; its flag count is attached', async ({ page }, testInfo) => {
+    test.setTimeout(1_200_000)
+    const errors = collectErrors(page)
+
+    const fixtures = [
+      { name: 'chrome_register.pdf', bytes: () => withFreshComment(CHROME_REGISTER_PDF) },
+      { name: 'advisory_register.pdf', bytes: () => withFreshComment(ADVISORY_REGISTER_PDF) },
+      { name: 'ai_steered_invoice.pdf', bytes: () => withFreshComment(AI_STEERED_PDF) },
+    ]
+    const tried: { fixture: string; flagged: number }[] = []
+    for (const fixture of fixtures) {
+      await extractOneDocument(page, `RESKIN2-04 extraction ${fixture.name}`, { name: fixture.name, buffer: fixture.bytes() })
+      const detail = await openExtractionReview(page)
+      const flagged = detail.fields.filter((f) => f.reason !== '').length
+      tried.push({ fixture: fixture.name, flagged })
+      await shoot(page, testInfo, flagged === 0 ? 'extraction-confident.png' : `extraction-least-flagged-candidate-${flagged}-${fixture.name}.png`)
+      if (flagged === 0) break
+    }
+    expect(tried.length, 'at least one fixture was read').toBeGreaterThan(0)
+    await attachJson(testInfo, 'rx-02-flag-counts', { tried, chosen: tried.reduce((a, b) => (b.flagged < a.flagged ? b : a)) })
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })

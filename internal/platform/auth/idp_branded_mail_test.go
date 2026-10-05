@@ -93,6 +93,30 @@ func TestIdP_ConfirmationMailWithoutAnswersIsBranded(t *testing.T) {
 	accessToken(t, base, u)
 }
 
+// A registrant picks the answers but the mail goes to the address they typed, so markup must arrive escaped.
+func TestIdP_ConfirmationMailEscapesTheAnswers(t *testing.T) {
+	gw, _ := startGateway(t, idpMailURL(t), 0, nil)
+	u := registrant(t, gw, map[string]string{
+		"display_name":   `<script>alert(1)</script> "Ada" & <b>Obi</b>`,
+		"workspace_name": `<a href="https://evil.test">Obi</a> & Co`,
+	})
+	msg := mailFor(t, u.email)
+
+	if msg.HTML == "" {
+		t.Fatal("the mail has no HTML body")
+	}
+	for _, raw := range []string{"<script>alert(1)</script>", "<b>Obi</b>", `<a href="https://evil.test">`} {
+		if strings.Contains(msg.HTML, raw) {
+			t.Errorf("mail HTML carries the registrant's markup unescaped: %q", raw)
+		}
+	}
+	for _, want := range []string{"&lt;script&gt;alert(1)&lt;/script&gt;", "&lt;b&gt;Obi&lt;/b&gt;", "&lt;a href=", "&amp; Co"} {
+		if !strings.Contains(msg.HTML, want) {
+			t.Errorf("mail HTML lacks the escaped answer %q", want)
+		}
+	}
+}
+
 func TestConfirmationLinkSelection(t *testing.T) {
 	const link = "http://localhost:9995/auth/verify?token=t1&type=signup&redirect_to=http://localhost:3000"
 	const other = "http://localhost:9995/auth/verify?token=t2&type=signup&redirect_to=http://localhost:3000"
@@ -118,6 +142,9 @@ func TestConfirmationLinkSelection(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("render the branded template: %v", err)
 	}
+	if !strings.Contains(branded.String(), "&amp;") {
+		t.Fatal("the rendered branded body does not escape the URL's &; the branded_body case would not exercise unescaping")
+	}
 
 	for _, c := range []struct {
 		name, body string
@@ -130,6 +157,8 @@ func TestConfirmationLinkSelection(t *testing.T) {
 		{"button_and_fallback_differ", anchor(link, "Confirm email address") + anchor(other, other), ""},
 		{"two_different_fallback_urls", anchor(link, "Confirm email address") + anchor(link, link) + anchor(other, other), ""},
 		{"fallback_without_a_button", anchor(link, link), ""},
+		{"fallback_wrapped_in_a_tag_is_refused", anchor(link, "<span>"+link+"</span>") + anchor(link, "Go"), ""},
+		{"escaped_ampersand_in_both_anchors", anchor(strings.ReplaceAll(link, "&", "&amp;"), "Go") + anchor(strings.ReplaceAll(link, "&", "&amp;"), strings.ReplaceAll(link, "&", "&amp;")), link},
 		{"no_anchor", "<p>no link</p>", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {

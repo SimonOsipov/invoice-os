@@ -12,7 +12,7 @@
 // Following contract-tenancy.spec.ts:
 //   - titles come from freshRoleTitle(), unique per run — here for identifiability in the
 //     cleanup sweep, not constraint safety: duplicate titles are legal;
-//   - staffing targets are never …0001/…0002 (each tenant's sole admin);
+//   - staffing targets are never …0001/…0002 (each tenant's seeded admin);
 //   - no assertion depends on a key VALUE. The server suffixes a colliding key to -2, so a
 //     re-run cannot predict what it minted;
 //   - no assertion depends on the list's LENGTH or on which other roles exist. It is not

@@ -189,8 +189,9 @@ test.beforeAll(async () => {
   if (!role) throw new Error(`no ${INHOUSE_APPROVER_ROLE} workflow role on the in-house tenant`)
   const member = await ensureMember(TENANTS.b.id, 'in_house')
   const driver = subjectOf((await signInSession(member.email, member.password)).access_token)
-  seededApprovers = role.members
-  await staffWorkflowRole(token, INHOUSE_APPROVER_ROLE, [...role.members.filter((m) => m !== driver), driver])
+  // Without the filter a retry after a failed afterAll would record the driver as seeded.
+  seededApprovers = role.members.filter((m) => m !== driver)
+  await staffWorkflowRole(token, INHOUSE_APPROVER_ROLE, [...seededApprovers, driver])
 })
 
 test.afterAll(async () => {

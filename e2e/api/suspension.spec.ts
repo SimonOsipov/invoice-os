@@ -43,7 +43,7 @@ import { assertErrorEnvelope, type RawResult } from './contract-helpers'
 // deployed-wire assertion, not a duplicate of a guarded literal.
 const NOT_ACTIVE_MESSAGE = 'your membership in this workspace is not active'
 
-// Tenant A's seeded suspended reviewer (db/seed.dev.sql), and never a tenant's sole admin —
+// Tenant A's seeded suspended reviewer (db/seed.dev.sql), and never a tenant's seeded admin —
 // a tenant stranded at zero active admins needs a superuser to recover.
 const SUSPENDED_SUBJECT = 'c0000000-0000-0000-0000-000000000007'
 

@@ -296,15 +296,15 @@ describe('Sign out revokes every session, then leaves (AC-1..AC-5)', () => {
 
   // Regression guard: green at head.
   it('a persona sign-out sends nothing', async () => {
-    const { hrefWrites } = await mount(null, '/?persona=firm')
-    expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`), 'control: the persona was minted').toHaveLength(1)
+    const stored = JSON.stringify({ v: 1, personaId: 'firm', token: A_SID1, me: ME, verified: true })
+    const { hrefWrites } = await mount(stored)
 
     await clickSignOut()
     await settle()
 
     expect(signOutPosts()).toEqual([])
     expect(localStorage.getItem(SESSION_KEY)).toBeNull()
-    expect(hrefWrites).toEqual([LANDING])
+    expect(hrefWrites).toEqual(HANDOFF_EXIT)
   })
 
   it('a stand-in sign-out revokes the seat', async () => {

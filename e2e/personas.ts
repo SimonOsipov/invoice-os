@@ -18,7 +18,7 @@
 import { resolveTarget } from './targets'
 
 // The four personas. These ids are WIRE VALUES: each one is the `?persona=` param a sign-in
-// URL carries, and the app's session gate checks it verbatim. Not to be conflated with
+// URL carries. The app no longer reads that param (AUTH-15-08). Not to be conflated with
 // frontend/app/src/auth.ts's unrelated, two-member `PersonaId` (firm | inhouse).
 export type PersonaId = 'developer' | 'support' | 'firm' | 'inhouse'
 

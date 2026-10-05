@@ -404,42 +404,6 @@ describe('a due stored session renews at boot (AC-1, AC-2, AC-3, AC-10, AC-16)',
     expect(apiCalls().filter((c) => c.auth === `Bearer ${A0_OLD}`), 'the expired token is never sent').toEqual([])
   })
 
-  it('an expired renewable hand-off session loses to ?persona=', async () => {
-    const { hrefWrites } = await bootWith(record(A0_OLD, OLD_AT), '/?persona=firm')
-    await waitFor(() => expect(capturedCtx?.user, 'the persona workspace must mount').toBeDefined())
-    await settle()
-
-    expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`), 'the persona is minted').toHaveLength(1)
-    expect(refreshes(), 'the stored refresh token is never sent').toEqual([])
-    expect(storedRecord()?.handoff, 'the persona session replaces the record').toBeUndefined()
-    expect(storedRecord()?.refresh_token).toBeUndefined()
-    expect(storedRecord()?.token).toBe(standInToken(NOW))
-    expect(window.location.search).toBe('')
-    expect(hrefWrites).toEqual([])
-  })
-
-  // Due, so the workspace waits on the renewal: only the boot strip clears the param meanwhile.
-  it('a live renewable hand-off session still beats ?persona=', async () => {
-    const refresh = deferRefresh()
-    const { hrefWrites } = await bootWith(record(A0_DUE, DUE_AT), '/?persona=firm')
-
-    expect(screen.queryByText('Opening your workspace…'), 'a due boot shows the splash').not.toBeNull()
-    expect(window.location.search, 'the suppressed persona is stripped before the renewal answers').toBe('')
-
-    await act(async () => refresh.release(renewed()))
-    await waitForVerifiedWorkspace()
-    await settle()
-
-    expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`), 'the persona is not minted').toEqual([])
-    expect(refreshes()).toHaveLength(1)
-    expect(apiCalls().length).toBeGreaterThan(0)
-    expect(apiCalls().filter((c) => c.auth !== `Bearer ${renewedToken()}`)).toEqual([])
-    expect(storedRecord()?.handoff).toBe(true)
-    expect(storedRecord()?.refresh_token).toBe('R1')
-    expect(window.location.search).toBe('')
-    expect(hrefWrites).toEqual([])
-  })
-
   // A code is a sign-in the user just made; only an unexpired stored session beats it.
   it('a ?handoff= code wins over an expired renewable hand-off session', async () => {
     const NEW_T = jwt(OTHER_ME, nowSec(NOW), 'N')
@@ -455,20 +419,6 @@ describe('a due stored session renews at boot (AC-1, AC-2, AC-3, AC-10, AC-16)',
     expect(storedRecord()?.token).toBe(NEW_T)
     expect(storedRecord()?.refresh_token).toBe('RN')
     expect(storedRecord()?.me).toEqual(OTHER_ME)
-    expect(window.location.search).toBe('')
-    expect(hrefWrites).toEqual([])
-  })
-
-  it('an expired hand-off session without renewal loses to ?persona=', async () => {
-    const bare = JSON.stringify({ v: 1, personaId: 'firm', token: A0_OLD, me: ME, verified: true, handoff: true })
-    const { hrefWrites } = await bootWith(bare, '/?persona=firm')
-    await waitFor(() => expect(capturedCtx?.user, 'the persona workspace must mount').toBeDefined())
-    await settle()
-
-    expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`), 'the persona is minted').toHaveLength(1)
-    expect(refreshes()).toEqual([])
-    expect(storedRecord()?.handoff, 'the persona session replaces the record').toBeUndefined()
-    expect(storedRecord()?.token).toBe(standInToken(NOW))
     expect(window.location.search).toBe('')
     expect(hrefWrites).toEqual([])
   })
@@ -577,8 +527,8 @@ describe('a refused renewal returns to landing with the destination (AC-4, AC-6,
 })
 
 describe('an ended renewal and the next boot', () => {
-  // The refused record is gone, so the next ?persona= link signs the persona in without a refresh.
-  it('a refused renewal at boot clears the record for the next persona link', async () => {
+  // The refused record is gone, so the next ?persona= link finds no session: landing again, no refresh.
+  it('a refused renewal at boot clears the record for the next boot', async () => {
     refreshReply = REFUSED
     const first = await bootWith(record(A0_OLD, OLD_AT), '/')
     await waitFor(() => expect(first.hrefWrites, 'a refused boot renewal navigates to landing').toHaveLength(1))
@@ -591,13 +541,12 @@ describe('an ended renewal and the next boot', () => {
 
     const mark = calls.length
     const second = await reload('/?persona=firm')
-    await waitFor(() => expect(capturedCtx?.user, 'the persona workspace must mount').toBeDefined())
+    await waitFor(() => expect(second.hrefWrites, 'the next boot leaves for landing').toHaveLength(1))
     await settle()
 
-    expect(calls.slice(mark).filter((c) => c.url === `${GATEWAY}/auth/login`), 'the persona is minted').toHaveLength(1)
+    expect(calls.slice(mark).filter((c) => c.url === `${GATEWAY}/auth/login`), 'nothing is minted').toEqual([])
     expect(refreshes(mark), 'the refused record is never tried again').toEqual([])
-    expect(storedRecord()?.token).toBe(standInToken(NOW))
-    expect(second.hrefWrites).toEqual([])
+    expect(capturedCtx, 'no workspace opens').toBeUndefined()
   })
 
   // The refresh token may outlive the access token, so the next boot tries it again.
@@ -625,33 +574,6 @@ describe('an ended renewal and the next boot', () => {
     expect(calls[mark]?.body).toEqual({ refresh_token: 'R0' })
     expect(storedRecord()?.refresh_token).toBe('R1')
     expect(second.hrefWrites).toEqual([])
-  })
-})
-
-describe('a kept record and a ?persona= link', () => {
-  // A kept record must not beat a ?persona= link, or while renewal is down every link bounces to landing.
-  it('a ?persona= link after a transient boot failure does not bounce to landing again', async () => {
-    refreshReply = UNAVAILABLE
-    const first = await bootWith(record(A0_OLD, OLD_AT), '/')
-    await waitFor(() => expect(first.hrefWrites, 'a failed boot renewal navigates to landing').toHaveLength(1))
-    await settle()
-
-    expect(refreshes(), 'the first boot tries the renewal').toHaveLength(1)
-    expect(capturedCtx, 'the workspace never mounts').toBeUndefined()
-    expect(storedRecord()?.token, 'the transient end keeps the record').toBe(A0_OLD)
-    expect(storedRecord()?.refresh_token).toBe('R0')
-
-    const mark = calls.length
-    const second = await reload('/?persona=firm')
-    await waitFor(() => expect(capturedCtx?.user, 'the persona workspace must mount').toBeDefined())
-    await settle()
-
-    expect(calls.slice(mark).filter((c) => c.url === `${GATEWAY}/auth/login`), 'the persona is minted').toHaveLength(1)
-    expect(refreshes(mark), 'the kept refresh token is not sent').toEqual([])
-    expect(second.hrefWrites, 'no second bounce to landing').toEqual([])
-    expect(storedRecord()?.token).toBe(standInToken(NOW))
-    expect(storedRecord()?.handoff).toBeUndefined()
-    expect(window.location.search).toBe('')
   })
 })
 
@@ -698,7 +620,8 @@ describe('?persona= is not a credential (AUTH-15-08)', () => {
       auth: calls.filter((c) => c.url.startsWith(`${GATEWAY}/auth/`)).map((c) => `${c.url} ${JSON.stringify(c.body)}`),
       navs: hrefWrites.map((h) => h.replace(new RegExp(STATE_RE), 'STATE')),
       stored: localStorage.getItem(SESSION_KEY),
-      search: window.location.search,
+      // A bounce leaves the old URL behind; only a mounted boot has a live search to compare.
+      search: hrefWrites.length ? '' : window.location.search,
     }
   }
 
@@ -785,17 +708,13 @@ describe('mid-session renewal (AC-5, AC-8, AC-9)', () => {
   })
 
   it('a persona session never renews', async () => {
-    vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
-    vi.stubEnv('VITE_LANDING_URL', LANDING)
-    window.history.replaceState(null, '', '/?persona=firm')
-    const { hrefWrites } = interceptHref()
-    await bootApp()
+    const stored = JSON.stringify({ v: 1, personaId: 'firm', token: standInToken(NOW), me: ME, verified: true })
+    const { hrefWrites } = await bootWith(stored)
     // The persona keeps its own name although /me answers a display name (D1).
     await waitForVerifiedWorkspace(ME.tenant.name, { name: APP_PERSONAS.firm.name, initials: APP_PERSONAS.firm.initials })
     expect(capturedCtx?.handoff, 'a persona session is not a hand-off session').toBe(false)
     await settle()
-    const login = calls.filter((c) => c.url === `${GATEWAY}/auth/login`)
-    expect(login).toHaveLength(1)
+    expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`), 'nothing is minted').toEqual([])
     vi.setSystemTime(NOW + 2 * HOUR)
     const mark = calls.length
 

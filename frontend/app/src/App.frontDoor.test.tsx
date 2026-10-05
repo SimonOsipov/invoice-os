@@ -33,10 +33,8 @@ function createMemoryStorage() {
   }
 }
 
-// One stub serves both jobs: capturing an `href` assignment AND seeding the query string
-// `autoPersona` reads once at first render (App.tsx:1476-1479) -- both read the same
-// window.location. history.replaceState (App.tsx:1615-1620) writes to jsdom's real,
-// un-stubbed internal location and never touches this object.
+// One stub serves both jobs: capturing an `href` assignment AND seeding the query string.
+// history.replaceState writes to jsdom's real, un-stubbed internal location and never touches it.
 function stubLocation(overrides: { search?: string } = {}) {
   Object.defineProperty(window, 'location', {
     configurable: true,
@@ -165,19 +163,6 @@ describe('front door: the redirect arm (F-201)', () => {
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     render(<App />)
     expect(screen.queryByText('Choose an account')).toBeNull()
-  })
-
-  it('FD-3: a ?persona= hand-off suppresses the redirect', async () => {
-    // Fails if the `|| autoPersona` half of the guard is dropped -- the effect would fire
-    // the assignment and this would read the landing URL instead of "untouched".
-    stubLocation({ search: '?persona=firm' })
-    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
-    // autoPersona truthy fires a real auto-sign-in (VITE_GATEWAY_URL stays unset, so it
-    // resolves with no network); await act so that pending promise settles before assert.
-    await act(async () => {
-      render(<App />)
-    })
-    expect(window.location.href).toBe('http://localhost/')
   })
 
   // `?persona=` is unowned: the sweep covers the two openable ids and three that never were.

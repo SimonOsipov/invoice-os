@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // ROUTE-05-02: the capture call inside the front-door effect (App.tsx, the effect under the
-// "The single front door" comment), which must run under the same activeSession/autoPersona
+// "The single front door" comment), which must run under the same activeSession/authStart/handoffPending
 // guards as the bounce it precedes.
 
 import { readFileSync } from 'node:fs'
@@ -232,21 +232,6 @@ describe('front door: capturing the destination before the bounce (ROUTE-05-02)'
     expect(workspaceIsRendered()).toBe(true)
   })
 
-  it('capture_aLivePersonaParamStoresNothing', () => {
-    const { hrefWrites } = stubLocation({ pathname: '/audit', search: '?persona=firm' })
-    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
-    // Deliberately un-awaited: with VITE_GATEWAY_URL unset the auto-sign-in resolves with
-    // no network (auth.ts:89) fast enough that awaiting act() here would settle straight
-    // through SignInLoading into Workspace, which is a different, unrelated assertion.
-    // The guard this row targets (`|| autoPersona`) fires synchronously on mount, so the
-    // capture check doesn't need the sign-in to finish.
-    render(<App />)
-    expect(readDestination()).toBeNull()
-    expect(hrefWrites).toEqual([])
-    expect(screen.getByText(/Signing in as/)).toBeTruthy()
-    expect(workspaceIsRendered()).toBe(false)
-  })
-
   it('capture_theShowcaseBuildStoresNothingAndStaysPut', () => {
     // VITE_LANDING_URL deliberately left unset -- landingBase() returns null (auth.ts:70-73).
     const { hrefWrites } = stubLocation({ pathname: '/audit' })
@@ -270,10 +255,7 @@ describe('front door: capturing the destination before the bounce (ROUTE-05-02)'
     expect(hrefWrites).toEqual([stateBounce()])
   })
 
-  // shouldAutoSignIn('bogus') is false, so autoPersona stays null and the front door DOES
-  // capture (unlike capture_aLivePersonaParamStoresNothing's valid ?persona=firm below). The
-  // reachable proof of AC-3: an unowned param survives the early return but is still
-  // discarded by the codec at capture time, not merely refused before it.
+  // The reachable proof of AC-3: an unowned param is discarded by the codec at capture time.
   it('capture_anUnownedPersonaParamIsDiscardedFromTheStoredQuery', () => {
     const { hrefWrites } = stubLocation({ pathname: '/audit', search: '?persona=bogus' })
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
@@ -300,7 +282,7 @@ describe('front door: a persona param on a deep link (AUTH-15-08)', () => {
 })
 
 // QA adversarial coverage (Stage 4). A path+?persona= combination is already exercised
-// by capture_aLivePersonaParamStoresNothing above -- not repeated here.
+// by capture_aPersonaParamIsDiscardedFromTheStoredQuery above -- not repeated here.
 describe('front door: adversarial coverage (QA)', () => {
   it('capture_aDeepPathWithAHashCapturesPathOnly', () => {
     // window.location.pathname structurally excludes the fragment, so a hash present at
@@ -662,7 +644,7 @@ function interceptHref() {
 
 // ROUTE-05-05. signOut's own pathname rewrite (App.tsx:1589) already lands before the
 // front-door effect re-fires on the resulting activeSession->null transition (its deps are
-// [activeSession, autoPersona]) -- App.routeBoot.test.tsx's
+// [activeSession, authStart, handoffPending]) -- App.routeBoot.test.tsx's
 // signOut_thePathnameDoesNotSurviveIntoTheNextSignIn proves that ordering under real
 // navigation. So AC-2/AC-4 below hold today without any new production line; only AC-1's
 // OTHER scenario -- a destination stored BEFORE this signOut, left by an earlier, unrelated
@@ -689,7 +671,7 @@ describe('Sign-out clears the captured destination (ROUTE-05-05)', () => {
 
     expect(
       captureDestinationSpy,
-      "the front-door effect's dependency array is [activeSession, autoPersona] -- it must re-run on this transition and reach its capture call",
+      "the front-door effect's dependency array is [activeSession, authStart, handoffPending] -- it must re-run on this transition and reach its capture call",
     ).toHaveBeenCalledWith('/', '')
     expect(readDestination(), 'the rewritten root path is refused, so nothing is captured').toBeNull()
   })

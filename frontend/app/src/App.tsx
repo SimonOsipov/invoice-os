@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { APP_PERSONAS, landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
+import { landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn, SignInLoading } from './components/SignIn'
-import { resolveBootSession, loadSession, saveSession, clearSession, shouldAutoSignIn, decodeJwtPayload, cardIdentity } from './lib/session'
+import { resolveBootSession, loadSession, saveSession, clearSession, decodeJwtPayload, cardIdentity } from './lib/session'
 import { revokeSessions } from './lib/revoke'
 import { createRenewer, isRenewalDue, SessionEndedError, type Renewer } from './lib/renewal'
 import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
@@ -689,7 +689,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
 
   // One writer for a navigation: the view, the destination's owned params and the URL all
   // come from the same `params` object, so state and the address bar cannot diverge.
-  // Never reads location.search (AC-3): echoing it would re-attach a consumed ?persona=
+  // Never reads location.search (AC-3): echoing it would re-attach a consumed one-shot param
   // to every pushed entry.
   // `id` is a parameter, never a state read: openImportedInvoice/openExtraction call this
   // BEFORE their own setState commits, so reading detailInvoiceId/extractionJobId here
@@ -1824,14 +1824,8 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
 // real round trip (mint → GET /v1/me) when a gateway is configured; on failure it enters
 // with the persona's static identity, marked unverified, so the showcase never hard-fails.
 export default function App() {
-  // Persona to auto-sign-in from a landing deep-link (?persona=), resolved ONCE at boot:
-  // non-null when the param names a persona this app can open. A non-null value means an
-  // auto-sign-in is in flight, so the render gate shows a loading splash instead of the
-  // "Choose an account" picker — the landing → app hand-off never flashes that redundant
-  // card before the mint → /me round trip resolves. Declared BEFORE `session` because the
-  // session initializer below reads it.
   const [bootSession] = useState(() => resolveBootSession())
-  // A live stored hand-off session wins over `?handoff=` and `?persona=`.
+  // A live stored hand-off session wins over `?handoff=`.
   const [liveHandoff] = useState(() => isLiveHandoffSession(bootSession))
   // An unconfigured gateway ignores the code (it is still stripped).
   const [handoffCode] = useState(() =>
@@ -1839,15 +1833,9 @@ export default function App() {
   )
   const [handoffPending, setHandoffPending] = useState(handoffCode !== null)
   const redeemStarted = useRef(false)
-  // An expired stored session, even a renewable one, loses to `?persona=`: a kept record must not bounce every link.
-  const [autoPersona] = useState<PersonaId | null>(() => {
-    if (liveHandoff || handoffCode) return null
-    const p = new URLSearchParams(window.location.search).get('persona')
-    return shouldAutoSignIn(p) ? (p as PersonaId) : null
-  })
-  // `?auth=start`: landing asks for a state. `?handoff=` and `?persona=` win over it.
+  // `?auth=start`: landing asks for a state. `?handoff=` wins over it.
   const [authStart] = useState(
-    () => !autoPersona && !handoffCode && new URLSearchParams(window.location.search).get('auth') === 'start',
+    () => !handoffCode && new URLSearchParams(window.location.search).get('auth') === 'start',
   )
   const startBounced = useRef(false)
   const frontDoorBounced = useRef(false)
@@ -1856,14 +1844,9 @@ export default function App() {
   // token past its `exp` resolves to NO session unless it carries a refresh token; then the
   // boot renewal below runs before the workspace mounts.
   //
-  // A deep-link hand-off (`?persona=` or `?handoff=`) boots with NO session even when one is
-  // stored, unless that stored session is a live hand-off session: the user just chose
-  // on the landing page and that choice wins (see shouldAutoSignIn). Rehydrating
-  // here would render the PREVIOUS persona's workspace for the duration of the mint → /me
-  // round trip — and re-persist it via the mirror effect below — before swapping identity
-  // under the user. Starting empty shows the loading splash for the persona actually being
-  // signed in, and the same mirror effect clears the superseded session on that first pass.
-  const [seat, setSeat] = useState<Session | null>(() => (autoPersona || handoffCode ? null : bootSession))
+  // A `?handoff=` boot starts with NO session
+  // unless the stored one is a live hand-off session: the fresh code wins over a stale identity.
+  const [seat, setSeat] = useState<Session | null>(() => (handoffCode ? null : bootSession))
   // Demo-only stand-in, never persisted: `standIn === null` iff the active identity IS the seat.
   const [standIn, setStandIn] = useState<Session | null>(null)
   const [carriedView, setCarriedView] = useState<View | null>(null)
@@ -1938,10 +1921,7 @@ export default function App() {
 
   // Sign out returns the user to the marketing landing page (the real sign-in front
   // door). Nulling React state alone would only swap in the app's own minimal
-  // persona-picker, so wipe the persisted session and navigate away. The `?persona=`
-  // deep-link is no longer this function's problem — it is stripped from the URL when
-  // consumed at boot, so no history entry behind this navigation can auto-sign the same
-  // persona back in.
+  // persona-picker, so wipe the persisted session and navigate away.
   // A hand-off seat revokes every session of the account first; the navigation would cancel the request.
   const signOut = useCallback(async () => {
     if (signingOut.current) return
@@ -2070,31 +2050,13 @@ export default function App() {
     [seat, returnToSeat],
   )
 
-  // task-21 hand-off: the landing routes here as ?persona=firm|inhouse; auto-sign-in that
-  // persona. autoPersona already encodes the shouldAutoSignIn guard (the param names a
-  // persona this app can open), resolved once at boot, so this fires at most once on mount.
-  useEffect(() => {
-    if (autoPersona) void doSignIn(APP_PERSONAS[autoPersona])
-  }, [autoPersona, doSignIn])
-
-  // Drop the consumed ?persona= from the URL. The param is a one-shot hand-off, and leaving
-  // it behind made it a credential-free sign-in link: after Sign out, Back to the
-  // `?persona=firm` history entry walked straight into the workspace again with no sign-in —
-  // which reads as "logging out doesn't work". Stripping it also removes the stale-leftover
-  // case that used to justify letting a stored session beat the param, so a plain reload now
-  // resolves through the stored session instead of re-minting.
-  //
-  // replaceState, not a navigation: it must not add a history entry the back button can
-  // bounce off. Reads the URL directly rather than depending on render state — this is the
-  // only writer, and it runs once.
-  // `auth` and `handoff` are one-shot too, and are stripped whether used or not. A `persona`
-  // suppressed by a live hand-off session is stripped as well.
+  // Drop the one-shot ?auth= and ?handoff= from the URL, used or not. replaceState: no history entry.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
-    if (((autoPersona || liveHandoff) && params.has('persona')) || params.has('auth') || params.has(HANDOFF_PARAM)) {
+    if (params.has('auth') || params.has(HANDOFF_PARAM)) {
       window.history.replaceState(null, '', window.location.pathname)
     }
-  }, [autoPersona, liveHandoff])
+  }, [])
 
   // Redeem the code once (the ref survives StrictMode's double effect). No stored
   // state means a code this tab never asked for: no exchange, failure arm.
@@ -2138,11 +2100,11 @@ export default function App() {
   // expired while the tab was closed, or token invalidated by a 401 — goes to the landing
   // page rather than being offered a second place to sign in here.
   //
-  // Suppressed while a ?persona= mint or a ?handoff= redemption is in flight (the failed
+  // Suppressed while a ?handoff= redemption is in flight (the failed
   // redemption navigates itself), so bouncing to landing would break landing → app. Also skipped when no
   // landing URL is configured (the standalone showcase build), which keeps its own picker.
   useEffect(() => {
-    if (activeSession || autoPersona || authStart || handoffPending || frontDoorBounced.current) return
+    if (activeSession || authStart || handoffPending || frontDoorBounced.current) return
     const dest = landingBase() ? landingSignInUrl(ensureSignInState()) : null
     if (dest) {
       // The ref keeps StrictMode to one navigation.
@@ -2154,16 +2116,12 @@ export default function App() {
       captureDestination(window.location.pathname, routeQuery(at.view, at))
       window.location.href = dest
     }
-  }, [activeSession, autoPersona, authStart, handoffPending])
+  }, [activeSession, authStart, handoffPending])
 
   // Mounting Workspace would clear the captured destination before the start bounce leaves.
   if (authStart && landingBase()) return null
   if (bootRenewing && activeSession) return <SignInLoading />
   if (!activeSession) {
-    // A deep-link auto-sign-in is in flight: show a loading splash, NOT the persona
-    // picker, so the landing → app hand-off doesn't flash "Choose an account" before the
-    // mint → /me round trip resolves.
-    if (autoPersona) return <SignInLoading persona={APP_PERSONAS[autoPersona]} />
     if (handoffPending) return <SignInLoading />
     // No session and no deep link. The landing page is the product's single sign-in front
     // door, so go there rather than offer a SECOND place to sign in — the effect above has

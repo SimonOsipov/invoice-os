@@ -1,14 +1,10 @@
 // @vitest-environment jsdom
 // vitest.config.ts stays `environment: 'node'` for every other suite.
 //
-// ROUTE-01-05, Mode A. Pins Core AC 6/7: no history write ever carries `?persona=`, and the
-// structural reason it cannot -- App.tsx:1518 starts `seat` at null whenever `?persona=`
-// names an openable persona, so Workspace (and the whole router seam) never mounts on that
-// commit. Harness is App.routeNavigate.test.tsx's: the real <App/>, a session in a stubbed
-// localStorage, ctx captured through a mocked Sidebar.
-
-import { readFileSync } from 'node:fs'
-import path from 'node:path'
+// ROUTE-01-05, Mode A; re-specified by AUTH-15-08. No history write ever carries `?persona=`:
+// the param is not a credential, so a stored seat boots on the first commit and the router
+// seam drops the unowned param. Harness is App.routeNavigate.test.tsx's: the real <App/>, a
+// session in a stubbed localStorage, ctx captured through a mocked Sidebar.
 
 import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -69,8 +65,7 @@ function requireCtx(): PlatformCtx {
 }
 
 // Imports and renders the real App against whatever URL/localStorage the test already set,
-// then waits for the persona hand-off (mint -> /me, no gateway in this harness so it
-// resolves with no network call) to settle into a mounted Workspace.
+// then waits for the Workspace to mount.
 async function mountApp() {
   vi.resetModules()
   const { default: App } = await import('./App')
@@ -96,89 +91,6 @@ function installHistorySpies(): HistoryCall[] {
   })
   return calls
 }
-
-describe('AC-1: no history write performed by the seam ever contains persona=', () => {
-  it('ordering_noHistoryWriteEverCarriesThePersonaParam', async () => {
-    window.history.replaceState(null, '', '/?persona=firm')
-    localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
-    const calls = installHistorySpies()
-
-    await mountApp()
-    const ctx = requireCtx()
-    await act(async () => {
-      ctx.nav('audit')
-    })
-
-    // Vacuity floor: an unmounted Workspace or a spy installed too late leaves this array
-    // empty, and the negative assertion below would pass on a completely broken feature.
-    expect(calls.length, 'no history write was ever recorded -- the spy or the mount is broken').toBeGreaterThan(0)
-    // QA (route-01-06, closing out -05): a compound net, not two independent guarantees.
-    // Every seam writer builds its URL from `view` plus state, never from search, so
-    // this can only go red if BOTH the never-echo rule (guarded statically by
-    // routeWriterGuard.test.ts) AND the mount-ordering guarantee (guarded dynamically by
-    // ordering_workspaceDoesNotMountWhileThePersonaParamIsLive below) break at once --
-    // verified by mutation, single-cause breaks of either one leave this green. Kept as a
-    // cheap end-to-end net for that double-fault case; it is not, on its own, an ordering
-    // oracle. (A `navCall.searchAtCallTime` check used to sit here asserting nav('audit')
-    // pushes only after the strip ran -- deleted: nav() is called well after Workspace has
-    // fully mounted, by which point the strip has ALREADY settled in every reachable
-    // execution path, correct or broken, so that assertion could not fail and added no
-    // coverage over the checks already in this file.)
-    expect(
-      calls.some((c) => /persona=/.test(c.url)),
-      'a history write carried the persona param forward',
-    ).toBe(false)
-  })
-})
-
-describe('AC-2: Workspace provably does not mount while ?persona= is live', () => {
-  it('ordering_workspaceDoesNotMountWhileThePersonaParamIsLive', async () => {
-    window.history.replaceState(null, '', '/?persona=firm')
-    localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
-
-    await mountApp()
-
-    expect(firstSidebarSearch, 'Sidebar never rendered -- no search string was ever captured').toBeDefined()
-    expect(
-      firstSidebarSearch,
-      'the first render inside Workspace must never see a live persona param',
-    ).not.toMatch(/persona/)
-  })
-
-  it('ordering_theSeatInitialiserIsWhatGuaranteesIt', () => {
-    const src = readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8')
-    expect(
-      /autoPersona \|\| handoffCode \? null :/.test(src),
-      'App.tsx no longer starts `seat` at null when autoPersona is set -- the ordering claim above must be re-derived',
-    ).toBe(true)
-  })
-})
-
-describe('AC-4: ?persona= does not survive the hand-off', () => {
-  it('ordering_thePersonaParamDoesNotSurviveTheHandOff', async () => {
-    window.history.replaceState(null, '', '/?persona=firm')
-
-    // QA (route-01-06, closing out -05): checked in TWO places, not one. Asserting only
-    // after mountApp() settles is vacuous -- proven by mutation: with the strip effect
-    // (App.tsx:1637-1650) neutered outright, this still passed, because Workspace's own
-    // mount-alignment effect (App.tsx:535-543) rewrites the whole URL from the view and the
-    // params that view owns, incidentally dropping an unowned search as a side effect. The
-    // check below runs BEFORE Workspace can mount -- render() is synchronous and RTL's
-    // implicit act() flushes the strip's effect (declared in App, no signIn to await) before
-    // returning, while doSignIn is still in flight -- so it is decoupled from that side
-    // effect and isolates the strip itself.
-    vi.resetModules()
-    const { default: App } = await import('./App')
-    render(<App />)
-    expect(
-      new URLSearchParams(window.location.search).has('persona'),
-      'persona survived the FIRST synchronous render, before Workspace (and its mount-alignment writer) ever mounted',
-    ).toBe(false)
-
-    await waitFor(() => requireCtx())
-    expect(new URLSearchParams(window.location.search).has('persona')).toBe(false)
-  })
-})
 
 describe('AC-1: an unrelated query string is dropped by a push, never carried', () => {
   // Delta over App.routeNavigate.test.tsx's nav_neverEchoesASearchStringThatAppearsAfterMount:
@@ -211,7 +123,6 @@ describe('AC-1: an unrelated query string is dropped by a push, never carried', 
 describe('AUTH-15-08: a stored seat ignores ?persona=', () => {
   const INHOUSE_SEAT: Session = { persona: APP_PERSONAS.inhouse, token: null, me: null, verified: true }
 
-  // The unsuffixed name exists above for the pre-cut case; the suffix keeps them apart.
   it('ordering_noHistoryWriteEverCarriesThePersonaParam_afterTwoNavigations', async () => {
     window.history.replaceState(null, '', '/?persona=firm')
     localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))

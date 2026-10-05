@@ -37,7 +37,7 @@ export function AuditPager({
   return (
     <div data-testid="audit-pager" style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', padding: '12px 2px' }}>
       <span className="mono" style={{ fontSize: 11.5, color: 'var(--fg-2)' }}>{range}</span>
-      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
         <span className="label">Rows</span>
         {/* A native select: the constraint bans background-image chevrons, and the app has
             no select component of its own. */}
@@ -54,14 +54,12 @@ export function AuditPager({
           ))}
         </select>
       </label>
-      <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
-        <button data-testid="audit-pager-prev" onClick={onPrev} disabled={!prevOn} className="v2-btn v2-btn-ghost pf-btn" style={btn(prevOn)}>
-          ← Previous
-        </button>
-        <button data-testid="audit-pager-next" onClick={onNext} disabled={!nextOn} className="v2-btn v2-btn-ghost pf-btn" style={btn(nextOn)}>
-          Next →
-        </button>
-      </div>
+      <button data-testid="audit-pager-prev" onClick={onPrev} disabled={!prevOn} className="v2-btn v2-btn-ghost pf-btn" style={btn(prevOn)}>
+        ← Previous
+      </button>
+      <button data-testid="audit-pager-next" onClick={onNext} disabled={!nextOn} className="v2-btn v2-btn-ghost pf-btn" style={btn(nextOn)}>
+        Next →
+      </button>
     </div>
   )
 }

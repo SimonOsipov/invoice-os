@@ -607,6 +607,24 @@ describe('InvoiceActivityCard scroll containment (AC-7, unit half)', () => {
     // ...and the card clips at its own rounded border rather than letting the row escape.
     expect(screen.getByTestId('invoice-activity').style.overflow).toBe('hidden')
   })
+
+  it('invoiceActivity_passesTheActivityVariantToTableAndEveryRow', async () => {
+    mockFetch(logResponse({ events: eventsOf([{ event: INVOICES_EVENT, n: 3 }]) }))
+    renderCard()
+    await loaded()
+
+    const sv = (el: Element, prop: string) => (el.getAttribute('style') ?? '').match(new RegExp(`(?:^|;\\s*)${prop}:\\s*([^;]+)`))?.[1].trim() ?? null
+    const scroller = screen.getByTestId('audit-table').parentElement!
+    // The card draws its own border: the flat variant carries none on the scroller.
+    expect(sv(scroller, 'border')).toBeNull()
+    expect(sv(scroller, 'background')).toBeNull()
+    expect(sv(screen.getByTestId('audit-table-head'), 'padding')).toBe('9px 18px')
+    const rows = screen.getAllByTestId('audit-row')
+    expect(rows.length).toBeGreaterThan(0)
+    for (const r of rows) expect(sv(r, 'padding')).toBe('10px 18px')
+    fireEvent.click(rows[0]!)
+    expect(sv(screen.getByTestId('audit-expansion'), 'padding')).toBe('14px 18px 14px 52px')
+  })
 })
 
 // AUDIT-09-05 Mode A: the "Open in Audit →" control. The card's whole job is to call

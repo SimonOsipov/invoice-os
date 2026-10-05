@@ -316,7 +316,7 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
         />
       )}
 
-      {/* The real chrome plus shimmer rows, never a spinner: the layout must not move
+      {/* The real chrome plus skeleton rows, never a spinner: the layout must not move
           when data lands. */}
       {state === 'loading' && (
         <AuditTable>

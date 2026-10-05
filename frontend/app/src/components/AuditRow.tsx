@@ -85,7 +85,7 @@ export function AuditRow({ event, expanded, onToggle, onFilterToInvoice, variant
         data-testid="audit-row"
         aria-expanded={expanded}
         className="pf-row"
-        style={{ display: 'grid', gridTemplateColumns: AUDIT_COLS, gap: AUDIT_GRID_GAP, minWidth: AUDIT_TABLE_MIN_WIDTH, padding: audit ? '11px 18px' : '10px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}
+        style={{ display: 'grid', gridTemplateColumns: AUDIT_COLS, gap: AUDIT_GRID_GAP, minWidth: AUDIT_TABLE_MIN_WIDTH, padding: audit ? '11px 18px' : '10px 18px', borderBottom: expanded ? 0 : '1px solid var(--line-1)', alignItems: 'center' }}
       >
         <ActorCell actor={event.actor} actor_name={event.actor_name} actor_kind={event.actor_kind} variant={variant} />
         {/* Colour is reserved for outcome (auditVocabulary.ts) -- an event with no outcome
@@ -95,7 +95,7 @@ export function AuditRow({ event, expanded, onToggle, onFilterToInvoice, variant
         </span>
         {/* company_scope, not a null check: 'workspace' means the event belongs to the firm
             itself, which is not the same absence as an unattributed row. */}
-        <span data-testid="audit-company" style={{ fontSize: audit ? 12.5 : 12, color: event.company_scope === 'company' ? 'var(--fg-1)' : 'var(--fg-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        <span data-testid="audit-company" style={{ fontSize: audit ? 12.5 : 12, color: event.company_scope === 'company' ? (audit ? 'var(--fg-1)' : 'var(--fg-2)') : 'var(--fg-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {event.company_scope === 'company' ? (event.company_name ?? '—') : event.company_scope === 'workspace' ? 'Workspace' : '—'}
         </span>
         <span className="mono" style={{ fontSize: 11, color: audit ? 'var(--fg-2)' : 'var(--fg-3)', whiteSpace: 'nowrap' }}>{fmtDateTime(event.created_at)}</span>

@@ -2,7 +2,7 @@
 //
 // MembersTable.tsx's shape, for the same reasons: a CSS grid rather than a <table> (the
 // screen idiom here), `overflowX: 'auto'` on the outer div, and `minWidth` restated on the
-// card AND on every direct child. The restatement is what makes a row refuse to collapse
+// table AND on every direct child. The restatement is what makes a row refuse to collapse
 // -- the container alone would scroll while the rows squeezed.
 //
 // The geometry constants come from AuditRow.tsx, which owns them (the shipped

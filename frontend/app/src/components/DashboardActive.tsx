@@ -84,7 +84,7 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
 
       {/* 'idle' is the no-gateway build: nothing live to draw, so keep the zero-state. */}
       {state === 'idle' && (
-        <EmptyState title="No invoice activity yet" message="Counts appear once invoices are created." />
+        <EmptyState dense title="No invoice activity yet" message="Counts appear once invoices are created." />
       )}
 
       {state === 'ready' && roll.data && (

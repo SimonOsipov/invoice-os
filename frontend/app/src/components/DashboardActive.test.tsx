@@ -1142,4 +1142,16 @@ describe('DashboardActive states sit inside the page wrapper (D-37)', () => {
     expect(screen.getByText('Counts appear once invoices are created.')).toBeDefined()
     expect(wrapperOf().style.padding).toBe('30px 36px 56px')
   })
+
+  it('ES-02 the dashboard idle card is dense', () => {
+    vi.stubEnv('VITE_GATEWAY_URL', '')
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    const title = screen.getByText('No invoice activity yet')
+    const card = title.parentElement as HTMLElement
+    expect(card.style.padding).toBe('48px')
+    expect(card.style.background).toBe('transparent')
+    expect(title.style.fontSize).toBe('15px')
+    expect(card.querySelector('button'), 'control: the idle card has no action').toBeNull()
+  })
 })

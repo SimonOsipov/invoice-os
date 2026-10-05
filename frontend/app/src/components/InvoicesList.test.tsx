@@ -286,6 +286,22 @@ describe('InvoicesList pagination (task-329, BUG-01-03)', () => {
     expect((screen.getByRole('button', { name: '← Previous' }) as HTMLButtonElement).disabled, 'Previous must stay usable so the user can get back').toBe(false)
   })
 
+  it('ES-07 the empty-page card takes no new prop (pin; boundary)', async () => {
+    const p1 = Array.from({ length: 50 }, (_, i) => row({ id: `inv-${i}`, invoice_number: `INV-${i}` }))
+    mockFetchSequence([listResponse(p1, { limit: 50, offset: 0, total: 110 }), listResponse([], { limit: 50, offset: 50, total: 45 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByTestId('invoices-pager')
+    fireEvent.click(screen.getByRole('button', { name: 'Next →' }))
+
+    const pageEmpty = await screen.findByTestId('invoices-empty-page')
+    const card = pageEmpty.firstElementChild as HTMLElement
+    expect(card.style.padding).toBe('56px')
+    expect(card.style.background).toBe('var(--bg-2)')
+    expect(within(card).getByText('Go back to see the rest of the register.').style.maxWidth).toBe('340px')
+    expect(card.contains(screen.getByTestId('invoices-pager')), 'the pager stays below the card').toBe(false)
+  })
+
   it('AC-6: the live-refresh tick re-sends the CURRENT offset, not page 1 ([poll-tick-follows-the-page])', async () => {
     // status:'queued' keeps shouldPollList active so useLiveRefresh actually installs
     // an interval; a real 2s wait avoids fake-timer/act() interaction pitfalls with
@@ -2299,6 +2315,47 @@ describe('InvoicesList: an empty register says which kind of empty it is', () =>
 
     expect(await screen.findByText('INV-A1'), 'the rest of the register must come back').toBeDefined()
     expect(screen.queryByTestId('invoices-empty-filtered'), 'the filtered empty state must not survive its own exit').toBeNull()
+  })
+
+  it('ES-03 New invoice lies inside the empty card', async () => {
+    mockFetchSequence([listResponse([], { limit: 50, offset: 0, total: 0 })])
+    const openCreate = vi.fn()
+
+    render(<InvoicesList ctx={{ ...listCtx(), openCreate } as PlatformCtx} />)
+
+    const empty = await screen.findByTestId('invoices-empty')
+    expect(empty.children, 'one card, no button row beside it').toHaveLength(1)
+    const card = empty.firstElementChild as HTMLElement
+    const button = within(card).getByRole('button', { name: /New invoice/ })
+    expect(card.lastElementChild).toBe(button)
+    const message = within(card).getByText('Create or import an invoice to start tracking compliance.')
+    expect(message.style.maxWidth).toBe('320px')
+    expect(message.style.margin).toBe('0px 0px 20px')
+
+    fireEvent.click(button)
+    expect(openCreate).toHaveBeenCalledTimes(1)
+  })
+
+  it('ES-04 Show all invoices lies inside the filtered empty card', async () => {
+    mockFetchSequence([
+      listResponse([row({ id: 'a1', invoice_number: 'INV-A1' })], { limit: 50, offset: 0, total: 1 }),
+      listResponse([], { limit: 50, offset: 0, total: 0 }),
+      listResponse([row({ id: 'a1', invoice_number: 'INV-A1' })], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A1')
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+
+    const filtered = await screen.findByTestId('invoices-empty-filtered')
+    expect(filtered.children, 'one card, no button row beside it').toHaveLength(1)
+    const card = filtered.firstElementChild as HTMLElement
+    expect(card.lastElementChild).toBe(within(card).getByTestId('clear-needs-attention'))
+    const message = within(card).getByText('No invoice in this register is waiting on you. Clear the filter to see the rest.')
+    expect(message.style.maxWidth).toBe('360px')
+
+    fireEvent.click(within(card).getByTestId('clear-needs-attention'))
+    await waitFor(() => expect(screen.queryByTestId('invoices-empty-filtered')).toBeNull())
   })
 
   it('a genuinely invoice-less workspace still reads No invoices yet with New invoice', async () => {

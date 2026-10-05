@@ -3,7 +3,7 @@
 // WorkflowsView's oracle: the four-surface ladder and its gates, each row's two claims,
 // and the two write-error slots.
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
@@ -141,7 +141,7 @@ describe('APPR-09-04 AC-1/AC-2/AC-3: the surface is chosen by policiesState, nev
     render(<WorkflowsView ctx={listCtx([], { policiesState: 'empty' })} />)
 
     expect(screen.getByTestId('policies-empty')).toBeTruthy()
-    // TWO nodes, not one: `EmptyState` takes {title, message}, so the shipped sentence splits
+    // TWO nodes, not one: the shipped sentence splits
     // at its em dash and no assertion on the joined string could ever match.
     expect(screen.getByText(EMPTY_TITLE)).toBeTruthy()
     expect(screen.getByText(EMPTY_MESSAGE)).toBeTruthy()
@@ -358,10 +358,17 @@ describe('APPR-09-04 QA: exactly one surface, over every status the fetch can re
   it('the empty card reads its title as the heading and its message as the body, not the reverse', () => {
     render(<WorkflowsView ctx={listCtx([], { policiesState: 'empty' })} />)
 
-    // `EmptyState` renders the title in a <div> and the message in a <p> (EmptyState.tsx:41-42).
+    // `EmptyState` renders the title in a <div> and the message in a <p>.
     // Both strings being present is not enough — swapping the two props keeps both on screen.
     expect(screen.getByText(EMPTY_TITLE).tagName, 'the title is rendered as the body copy').toBe('DIV')
     expect(screen.getByText(EMPTY_MESSAGE).tagName, 'the message is rendered as the heading').toBe('P')
+  })
+
+  it('ES-06 the policies empty message is 360 wide', () => {
+    render(<WorkflowsView ctx={listCtx([], { policiesState: 'empty' })} />)
+
+    const empty = screen.getByTestId('policies-empty')
+    expect(within(empty).getByText(EMPTY_MESSAGE).style.maxWidth).toBe('360px')
   })
 })
 
@@ -477,5 +484,156 @@ describe('APPR-09-04 QA: the intro states what publishing does today', () => {
     expect(intro.length, 'the intro rendered no text').toBeGreaterThan(0)
     expect(intro, 'a sentence follows the publishing sentence').toMatch(/Publishing a policy opens an approval on every matching invoice\.$/)
     expect(intro, 'the intro says transmission is not held, in some letter case').not.toMatch(/transmission is not held/i)
+  })
+})
+
+// ============================================================================
+// the list's v2 look: heading rule, 6px/4px radii, ghost buttons, 12px errors
+// ============================================================================
+// jsdom keeps `var(...)` strings as written and expands `flex`; resolved values are the
+// deployed build's to prove.
+
+describe('RESKIN2-05-03 WL: the Workflows list takes the v2 look', () => {
+  const two = () => [
+    policy({ id: 'polA', name: 'First policy', status: 'published', version: 2, activeVersion: 2 }),
+    policy({ id: 'polB', name: 'Second policy', status: 'draft', version: 1, activeVersion: null }),
+  ]
+  const rowsOf = () => Array.from(document.querySelectorAll<HTMLElement>('.pf-row'))
+
+  it('WL-01 the h1 takes the heading rules weight', () => {
+    render(<WorkflowsView ctx={listCtx(two())} />)
+
+    const h1 = screen.getByRole('heading', { level: 1, name: 'Approval policies' })
+    expect(h1.style.fontSize, 'the h1 lost its 26px').toBe('26px')
+    expect(h1.style.fontWeight, 'the h1 still sets its own weight').toBe('')
+  })
+
+  it('WL-02 New policy labels in primary-foreground', () => {
+    render(<WorkflowsView ctx={listCtx(two())} />)
+
+    const btn = screen.getByRole('button', { name: 'New policy' })
+    expect(btn.style.background, 'the control lost its fill').toBe('var(--action)')
+    expect(btn.style.color, 'the label is not primary-foreground').toBe('var(--primary-foreground)')
+  })
+
+  it('WL-03 the intro row centres its count', () => {
+    render(<WorkflowsView ctx={listCtx(two())} />)
+
+    const row = screen.getByText(/^Each policy decides who signs off/).parentElement as HTMLElement
+    const count = screen.getByText('2 POLICIES')
+    expect(row.contains(count), 'the count is not in the intro row').toBe(true)
+    expect(row.style.alignItems, 'the intro row does not centre its count').toBe('center')
+  })
+
+  it('WL-04 rows and icon tiles are 6px with no shadow', () => {
+    render(<WorkflowsView ctx={listCtx(two())} />)
+
+    const rows = rowsOf()
+    expect(rows, 'no rows rendered').toHaveLength(2)
+    for (const row of rows) {
+      expect(row.style.borderRadius, 'the row corner is not the 6px token').toBe('var(--radius-md)')
+      expect(row.style.boxShadow, 'the row carries a shadow').toBe('')
+      const tile = row.firstElementChild as HTMLElement
+      expect(tile.style.borderRadius, 'the icon tile corner is not the 6px token').toBe('var(--radius-md)')
+      expect(tile.style.boxShadow, 'the icon tile carries a shadow').toBe('')
+    }
+  })
+
+  it('WL-05 the status pill is a 4px mono chip, DRAFT muted', () => {
+    render(<WorkflowsView ctx={listCtx(two())} />)
+
+    const pills = [screen.getByText('PUBLISHED'), screen.getByText('DRAFT')]
+    for (const pill of pills) {
+      expect(pill.className, `${pill.textContent} is not a mono span`).toContain('mono')
+      expect(pill.style.borderRadius, `${pill.textContent} corner is not the 4px token`).toBe('var(--radius-sm)')
+      expect(pill.style.padding, `${pill.textContent} padding`).toBe('2px 8px')
+      expect(pill.children, `${pill.textContent} still nests a dot or an inner label`).toHaveLength(0)
+    }
+    expect(pills[1].style.color, 'DRAFT is not muted').toBe('var(--status-muted-text)')
+  })
+
+  it('WL-06 the standing reads --fg-3 at 10.5px', () => {
+    render(<WorkflowsView ctx={listCtx(two())} />)
+
+    const standing = screen.getByText('Never published')
+    expect(standing.style.fontSize, 'the standing is not 10.5px').toBe('10.5px')
+    expect(standing.style.color, 'the standing is not --fg-3').toBe('var(--fg-3)')
+  })
+
+  it('WL-07 Edit and Delete are ghost buttons', () => {
+    render(<WorkflowsView ctx={listCtx([policy()])} />)
+
+    const edit = screen.getByRole('button', { name: 'Edit' })
+    const del = screen.getByRole('button', { name: 'Delete Standard approval policy' })
+    expect(edit.className, 'Edit is not a ghost pf-btn').toBe('v2-btn v2-btn-ghost pf-btn')
+    expect(del.className, 'Delete is not a ghost pf-btn').toBe('v2-btn v2-btn-ghost pf-btn')
+    expect(edit.style.cssText, 'Edit still paints its own border or background').not.toMatch(/border|background/)
+    expect(del.style.width, 'Delete is not 34px wide').toBe('34px')
+    expect(del.style.height, 'Delete is not 34px tall').toBe('34px')
+    expect(del.style.color, 'the Delete glyph left --fg-4').toBe('var(--fg-4)')
+  })
+
+  it('WL-08 a refused delete reads at 12px (error)', async () => {
+    const deletePolicy = vi.fn(() => Promise.reject(new ApiError('http', DELETE_REFUSAL, 403)))
+    render(<WorkflowsView ctx={listCtx(two(), { deletePolicy })} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete First policy' }))
+
+    const err = await screen.findByTestId('policy-delete-error')
+    expect(err.textContent).toBe(DELETE_REFUSAL)
+    expect(err.style.fontSize, 'the row error is not 12px').toBe('12px')
+    expect(err.style.maxWidth, 'the row error carries a max width').toBe('')
+  })
+
+  it('WL-08b a refused create is capped at 320px (error)', async () => {
+    const createPolicy = vi.fn(() => Promise.reject(new ApiError('http', CREATE_REFUSAL, 403)))
+    render(<WorkflowsView ctx={listCtx(two(), { createPolicy })} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'New policy' }))
+
+    const err = await screen.findByTestId('policy-create-error')
+    expect(err.textContent).toBe(CREATE_REFUSAL)
+    expect(err.style.fontSize, 'the create error is not 12px').toBe('12px')
+    expect(err.style.maxWidth, 'the create error is not capped at 320px').toBe('320px')
+  })
+
+  it('WL-09 the list carries no v1 vocabulary (boundary)', () => {
+    const { container } = render(<WorkflowsView ctx={listCtx(two())} />)
+
+    expect(rowsOf(), 'no rows rendered').toHaveLength(2)
+    const html = container.innerHTML
+    const radii = Array.from(html.matchAll(/border-radius:\s*([^;"]+)/g), (m) => m[1].trim())
+    expect(radii.filter((r) => r === 'var(--radius-sm)').length, 'the pills lost their 4px corner, so the sweep below is vacuous').toBeGreaterThanOrEqual(2)
+    for (const r of radii) expect(['var(--radius-sm)', 'var(--radius-md)'], `a ${r} corner is not a radius token`).toContain(r)
+    for (const needle of ['999px', '99px', 'oklch', 'gradient', 'box-shadow']) {
+      expect(html, `the list markup holds ${needle}`).not.toContain(needle)
+    }
+  })
+
+  it('WL-10 the header keeps its eyebrow and both mode subtitles, and the pill tones differ', () => {
+    const { unmount } = render(<WorkflowsView ctx={listCtx(two())} />)
+
+    expect(screen.getByText('APPROVAL WORKFLOW', { exact: true }), 'the eyebrow lost its copy').toBeTruthy()
+    expect(screen.getByText('Who must sign off before an invoice is transmitted — one set of policies across the firm.', { exact: true })).toBeTruthy()
+    expect(screen.getByText('PUBLISHED').style.color, 'PUBLISHED lost its green').toBe('var(--status-green-text)')
+    expect(screen.getByText('DRAFT').style.color, 'DRAFT is not muted').toBe('var(--status-muted-text)')
+    unmount()
+
+    render(<WorkflowsView ctx={listCtx(two(), { mode: 'inhouse' })} />)
+    expect(screen.getByText('Who must sign off before Lagos Freight transmits an invoice.', { exact: true }), 'the company subtitle lost its copy').toBeTruthy()
+  })
+
+  it('WL-11 Delete deletes without opening the builder, and Edit opens it exactly once', () => {
+    const deletePolicy = vi.fn(async () => {})
+    const openPolicy = vi.fn()
+    render(<WorkflowsView ctx={listCtx(two(), { deletePolicy, openPolicy })} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete First policy' }))
+    expect(deletePolicy, 'Delete is wired to nothing').toHaveBeenCalledWith('polA')
+    expect(openPolicy, 'the Delete click bubbled to the row and opened the builder').not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[1])
+    expect(openPolicy, 'the Edit click did not open its own row, or bubbled and opened it twice').toHaveBeenCalledTimes(1)
+    expect(openPolicy).toHaveBeenCalledWith('polB')
   })
 })

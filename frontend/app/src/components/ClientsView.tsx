@@ -78,6 +78,22 @@ export function healthPillStyle(h: EntityHealth): { bg: string; border: string; 
   }
 }
 
+type StatusChipStyle = { bg: string; border: string; text: string; label: string }
+
+// Mono chip in a plain wrapper span, so the inline-flex chip does not stretch to its grid track.
+function StatusChip({ s }: { s: StatusChipStyle }) {
+  return (
+    <span>
+      <span
+        className="mono"
+        style={{ display: 'inline-flex', fontSize: 10, fontWeight: 600, letterSpacing: '0.04em', color: s.text, background: s.bg, border: `1px solid ${s.border}`, borderRadius: 'var(--radius-sm)', padding: '3px 9px' }}
+      >
+        {s.label}
+      </span>
+    </span>
+  )
+}
+
 // One portfolio-row health cell. `health === null` is the not-ready window (rollup still
 // loading/error/idle) → a neutral em-dash, NOT "NO INVOICES YET" (QA finding #1). Renders
 // a single element either way, so the row grid still sees exactly one Health cell.
@@ -85,15 +101,7 @@ function HealthCell({ health }: { health: EntityHealth | null }) {
   if (health === null) {
     return <span style={{ fontSize: 12.5, color: 'var(--fg-3)' }}>—</span>
   }
-  const hs = healthPillStyle(health)
-  return (
-    <span>
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: hs.bg, border: `1px solid ${hs.border}`, borderRadius: 999, padding: '3px 9px' }}>
-        <span style={{ width: 6, height: 6, borderRadius: 99, background: hs.text }} />
-        <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: hs.text }}>{hs.label}</span>
-      </span>
-    </span>
-  )
+  return <StatusChip s={healthPillStyle(health)} />
 }
 
 export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
@@ -177,14 +185,13 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
           <div className="eyebrow" style={{ marginBottom: 10 }}>
             FIRM PORTFOLIO
           </div>
-          <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Client portfolio</h1>
+          <h1 style={{ fontSize: 26, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Client portfolio</h1>
           <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>
             {orgSegment}
             {portfolioCountLabel(shown, total)} · partner program
           </p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
-          <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {FILTER_POSITIONS.map(({ pos: p, label }) => (
               <button
                 key={p}
@@ -193,19 +200,17 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
                 style={{
                   height: 30,
                   padding: '0 12px',
-                  borderRadius: 'var(--radius-md)',
                   fontFamily: 'var(--font-sans)',
                   fontSize: 12.5,
                   fontWeight: 500,
                   border: `1px solid ${pos === p ? 'var(--action)' : 'var(--line-2)'}`,
                   background: pos === p ? 'var(--action)' : 'var(--bg-2)',
-                  color: pos === p ? 'var(--text-on-dark)' : 'var(--fg-2)',
+                  color: pos === p ? 'var(--primary-foreground)' : 'var(--fg-2)',
                 }}
               >
                 {label}
               </button>
             ))}
-          </div>
           <button
             onClick={() => setModal({ mode: 'create' })}
             disabled={base == null}
@@ -257,7 +262,7 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
                 style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) 160px 130px 150px 160px', gap: 16, padding: '14px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}
               >
                 <span style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
-                  <span style={{ flex: 'none', width: 32, height: 32, borderRadius: 'var(--radius-input)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700 }}>
+                  <span style={{ flex: 'none', width: 32, height: 32, borderRadius: '50%', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700 }}>
                     {initials(e.name)}
                   </span>
                   <span style={{ minWidth: 0 }}>
@@ -265,13 +270,8 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
                     <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>TIN {e.tin ?? '—'}</span>
                   </span>
                 </span>
-                <span style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>{e.sector ?? '—'}</span>
-                <span>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: st.bg, border: `1px solid ${st.border}`, borderRadius: 999, padding: '3px 9px' }}>
-                    <span style={{ width: 6, height: 6, borderRadius: 99, background: st.text }} />
-                    <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: st.text }}>{st.label}</span>
-                  </span>
-                </span>
+                <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>{e.sector ?? '—'}</span>
+                <StatusChip s={st} />
                 <HealthCell health={health} />
                 <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4, minWidth: 0 }}>
                   <button
@@ -282,12 +282,12 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
                     }}
                     disabled={archivingId === e.id}
                     className="v2-btn v2-btn-ghost pf-btn"
-                    style={{ height: 28, padding: '0 10px', fontSize: 12 }}
+                    style={{ height: 30, padding: '0 12px', fontSize: 12.5, color: action.confirming ? 'var(--status-red-text)' : 'var(--fg-1)' }}
                   >
                     {action.label}
                   </button>
-                  {action.notice && <span style={{ fontSize: 10.5, color: 'var(--fg-3)' }}>{action.notice}</span>}
-                  {archiveError?.id === e.id && <span style={{ fontSize: 10.5, color: 'var(--status-red-text)' }}>{archiveError.message}</span>}
+                  {action.notice && <span style={{ fontSize: 11.5, lineHeight: 1.4, color: 'var(--fg-3)' }}>{action.notice}</span>}
+                  {archiveError?.id === e.id && <span style={{ fontSize: 11.5, lineHeight: 1.4, color: 'var(--status-red-text)' }}>{archiveError.message}</span>}
                 </span>
               </div>
             )

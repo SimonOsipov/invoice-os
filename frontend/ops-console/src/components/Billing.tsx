@@ -22,8 +22,8 @@ type Props = {
 // grep — no CSS rule resolves off them (nor off `.ops-evidence-table`/`.ops-jobs-table`),
 // so do NOT add one and do NOT reflow these tables at any breakpoint: wide tables
 // scroll, they do not stack. Because nothing resolves off the name, where it is applied
-// is free, and the two existing screens disagree — Evidence.tsx:76 puts it on the header
-// alone, Submissions.tsx:150/179 on the header and every row. Following Submissions: it
+// is free, and the two existing screens disagree — Evidence puts it on the header
+// alone, Submissions on the header and every row. Following Submissions: it
 // names every element that actually shares the grid.
 //
 // USAGE_MIN_WIDTH is driven by the total row, not the 180px first track: `Total ·
@@ -47,24 +47,24 @@ export function Billing({ onManagePlan, onDownloadInvoice }: Props) {
 
   return (
     <div className="ops-screen-pad">
-      <div style={{ marginBottom: 20 }}>
-        <div className="eyebrow" style={{ marginBottom: 8 }}>
+      <div style={{ marginBottom: 22 }}>
+        <div className="eyebrow" style={{ marginBottom: 10 }}>
           05 — USAGE &amp; BILLING
         </div>
-        <h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-0.03em', margin: 0 }}>Usage &amp; billing</h1>
+        <h1 style={{ fontSize: 28, letterSpacing: '-0.04em', margin: 0 }}>Usage &amp; billing</h1>
       </div>
 
       {/* plan + usage (proto:457-488) */}
-      <div className="ops-billing-grid" style={{ display: 'grid', gridTemplateColumns: '300px minmax(0,1fr)', gap: 16, marginBottom: 24 }}>
+      <div className="ops-billing-grid" style={{ display: 'grid', gridTemplateColumns: '300px minmax(0,1fr)', gap: 16, marginBottom: 26 }}>
         <div style={{ border: '1px solid var(--line-1)', background: 'var(--bg-2)', borderRadius: 'var(--radius-md)', padding: '18px 20px' }}>
           <div className="label" style={{ marginBottom: 10 }}>
             Current plan
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 14 }}>
-            <span style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.02em' }}>Scale</span>
+            <span style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.03em', color: 'var(--ink)' }}>Scale</span>
             <span
               className="mono"
-              style={{ fontSize: 9.5, fontWeight: 700, background: 'var(--action-tint)', color: 'var(--action)', border: '1px solid var(--teal-200)', borderRadius: 'var(--radius-sm)', padding: '2px 8px' }}
+              style={{ fontSize: 9.5, fontWeight: 700, background: 'var(--action-tint)', color: 'var(--action)', border: '1px solid var(--action-border)', borderRadius: 'var(--radius-sm)', padding: '2px 7px' }}
             >
               ACTIVE
             </span>
@@ -91,7 +91,7 @@ export function Billing({ onManagePlan, onDownloadInvoice }: Props) {
               </span>
             </div>
           </div>
-          <button type="button" onClick={onManagePlan} className="ops-btn v2-btn v2-btn-ghost" style={{ width: '100%', justifyContent: 'center', height: 36, marginTop: 16 }}>
+          <button type="button" onClick={onManagePlan} className="ops-btn v2-btn v2-btn-ghost" style={{ width: '100%', justifyContent: 'center', height: 36, marginTop: 16, fontSize: 13 }}>
             Manage plan
           </button>
         </div>
@@ -109,14 +109,14 @@ export function Billing({ onManagePlan, onDownloadInvoice }: Props) {
                 background: 'var(--status-amber-bg)',
                 border: '1px solid var(--status-amber-border)',
                 borderRadius: 'var(--radius-sm)',
-                padding: '2px 8px',
+                padding: '2px 7px',
               }}
             >
               OVER QUOTA
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 12 }}>
-            <span className="mono" style={{ fontSize: 30, fontWeight: 700, letterSpacing: '-0.02em' }}>
+            <span className="money" style={{ fontSize: 30, fontWeight: 700, color: 'var(--ink)' }}>
               {fmt(QUOTA.used)}
             </span>
             <span className="mono" style={{ fontSize: 13, color: 'var(--fg-3)' }}>
@@ -125,19 +125,19 @@ export function Billing({ onManagePlan, onDownloadInvoice }: Props) {
           </div>
           {/* Two flex segments summing to 100%, not a single fill over a track — the
               widths are prototype literals (proto:475-476), see data.tsx's Quota note. */}
-          <div style={{ height: 12, background: 'var(--bg-3)', borderRadius: 'var(--radius-input)', overflow: 'hidden', display: 'flex', marginBottom: 8 }}>
+          <div style={{ height: 12, background: 'var(--bg-3)', borderRadius: 2, overflow: 'hidden', display: 'flex', marginBottom: 8 }}>
             <div style={{ width: QUOTA.includedWidth, height: '100%', background: 'var(--action)' }} />
             <div style={{ width: QUOTA.overWidth, height: '100%', background: 'var(--status-amber-text)' }} />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ width: 9, height: 9, borderRadius: '2', background: 'var(--action)' }} />
+              <span style={{ width: 9, height: 9, borderRadius: 2, background: 'var(--action)' }} />
               <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)' }}>
                 {fmt(SCALE_PLAN.includedRequests)} INCLUDED
               </span>
             </span>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ width: 9, height: 9, borderRadius: '2', background: 'var(--status-amber-text)' }} />
+              <span style={{ width: 9, height: 9, borderRadius: 2, background: 'var(--status-amber-text)' }} />
               <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)' }}>
                 {fmt(over)} OVERAGE
               </span>
@@ -148,7 +148,7 @@ export function Billing({ onManagePlan, onDownloadInvoice }: Props) {
             style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginTop: 20, borderTop: '1px solid var(--line-1)', paddingTop: 16 }}
           >
             <div>
-              <div className="mono" style={{ fontSize: 18, fontWeight: 600 }}>
+              <div className="money" style={{ fontSize: 18, fontWeight: 700, color: 'var(--ink)' }}>
                 {fmt(QUOTA.clearedInvoices)}
               </div>
               <div className="label" style={{ marginTop: 3 }}>
@@ -156,7 +156,7 @@ export function Billing({ onManagePlan, onDownloadInvoice }: Props) {
               </div>
             </div>
             <div>
-              <div className="mono" style={{ fontSize: 18, fontWeight: 600 }}>
+              <div className="money" style={{ fontSize: 18, fontWeight: 700, color: 'var(--ink)' }}>
                 {fmt(QUOTA.evidenceExports)}
               </div>
               <div className="label" style={{ marginTop: 3 }}>
@@ -164,7 +164,7 @@ export function Billing({ onManagePlan, onDownloadInvoice }: Props) {
               </div>
             </div>
             <div>
-              <div className="mono" style={{ fontSize: 18, fontWeight: 600, color: 'var(--action)' }}>
+              <div className="money" style={{ fontSize: 18, fontWeight: 700, color: 'var(--action)' }}>
                 {nairaC(spend.mtd)}
               </div>
               <div className="label" style={{ marginTop: 3 }}>
@@ -176,7 +176,7 @@ export function Billing({ onManagePlan, onDownloadInvoice }: Props) {
       </div>
 
       {/* itemized spend (proto:491-508) */}
-      <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>Itemized spend · July 2026</div>
+      <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--ink)', marginBottom: 12 }}>Itemized spend · July 2026</div>
       <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', overflowX: 'auto', marginBottom: 28 }}>
         <div
           className="ops-usage-table"
@@ -184,7 +184,7 @@ export function Billing({ onManagePlan, onDownloadInvoice }: Props) {
             display: 'grid',
             gridTemplateColumns: USAGE_GRID,
             padding: '11px 18px',
-            background: 'var(--bg-1)',
+            background: 'var(--bg-3)',
             borderBottom: '1px solid var(--line-1)',
             minWidth: USAGE_MIN_WIDTH,
           }}
@@ -228,7 +228,7 @@ export function Billing({ onManagePlan, onDownloadInvoice }: Props) {
             BILL_ITEMS. The empty third span holds the Qty track and must stay. */}
         <div
           className="ops-usage-table"
-          style={{ display: 'grid', gridTemplateColumns: USAGE_GRID, padding: '14px 18px', background: 'var(--bg-1)', alignItems: 'center', minWidth: USAGE_MIN_WIDTH }}
+          style={{ display: 'grid', gridTemplateColumns: USAGE_GRID, padding: '14px 18px', background: 'var(--bg-3)', alignItems: 'center', minWidth: USAGE_MIN_WIDTH }}
         >
           <span style={{ fontSize: 13.5, fontWeight: 700 }}>Total · projected month-end</span>
           <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
@@ -242,7 +242,7 @@ export function Billing({ onManagePlan, onDownloadInvoice }: Props) {
       </div>
 
       {/* past invoices (proto:511-523) */}
-      <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>Invoices from ASComply</div>
+      <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--ink)', marginBottom: 12 }}>Invoices from ASComply</div>
       <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', overflowX: 'auto' }}>
         <div
           className="ops-invoice-table"
@@ -251,7 +251,7 @@ export function Billing({ onManagePlan, onDownloadInvoice }: Props) {
             gridTemplateColumns: INVOICE_GRID,
             columnGap: INVOICE_COL_GAP,
             padding: '11px 18px',
-            background: 'var(--bg-1)',
+            background: 'var(--bg-3)',
             borderBottom: '1px solid var(--line-1)',
             minWidth: INVOICE_MIN_WIDTH,
           }}
@@ -288,7 +288,7 @@ export function Billing({ onManagePlan, onDownloadInvoice }: Props) {
                 {p.amount}
               </span>
               <span>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: st.bg, border: '1px solid ' + st.border, borderRadius: 999, padding: '2px 9px' }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: st.bg, border: '1px solid ' + st.border, borderRadius: 'var(--radius-sm)', padding: '2px 7px' }}>
                   <span className="mono" style={{ fontSize: 9, fontWeight: 700, color: st.text }}>
                     {st.label}
                   </span>
@@ -298,22 +298,8 @@ export function Billing({ onManagePlan, onDownloadInvoice }: Props) {
                 <button
                   type="button"
                   onClick={() => onDownloadInvoice(p.id)}
-                  className="ops-btn"
-                  style={{
-                    border: '1px solid var(--line-2)',
-                    background: 'var(--bg-2)',
-                    cursor: 'pointer',
-                    height: 28,
-                    padding: '0 10px',
-                    borderRadius: 'var(--radius-sm)',
-                    fontFamily: 'var(--font-sans)',
-                    fontSize: 11.5,
-                    fontWeight: 600,
-                    color: 'var(--fg-1)',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 6,
-                  }}
+                  className="ops-btn v2-btn v2-btn-ghost"
+                  style={{ height: 28, padding: '0 10px', fontSize: 11.5, gap: 6 }}
                 >
                   {EXPORT_ICON} PDF
                 </button>

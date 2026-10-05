@@ -32,17 +32,17 @@ export function Submissions({ jobs, filter, query, onFilterChange, onQueryChange
 
   return (
     <div className="ops-screen-pad">
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 20, gap: 24 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 22, gap: 24 }}>
         <div>
-          <div className="eyebrow" style={{ marginBottom: 8 }}>
+          <div className="eyebrow" style={{ marginBottom: 10 }}>
             02 — SUBMISSION JOBS
           </div>
-          <h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-0.03em', margin: 0 }}>Submissions</h1>
+          <h1 style={{ fontSize: 28, letterSpacing: '-0.04em', margin: 0 }}>Submissions</h1>
         </div>
         <div className="ops-sub-stats" style={{ display: 'flex', gap: 10 }}>
           {subStats.map((s) => (
             <div key={s.label} style={{ border: '1px solid var(--line-1)', background: 'var(--bg-2)', borderRadius: 'var(--radius-md)', padding: '10px 16px', minWidth: 96 }}>
-              <div className="mono" style={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.02em', color: s.color }}>
+              <div className="money" style={{ fontSize: 20, fontWeight: 700, color: s.color }}>
                 {s.value}
               </div>
               <div className="label" style={{ marginTop: 3 }}>
@@ -83,9 +83,9 @@ export function Submissions({ jobs, filter, query, onFilterChange, onQueryChange
               cursor: 'pointer',
               height: 34,
               padding: '0 14px',
-              borderRadius: 'var(--radius-input)',
-              background: 'var(--status-red-text)',
-              color: 'var(--text-on-dark)',
+              borderRadius: 'var(--radius-btn)',
+              background: 'var(--destructive)',
+              color: 'var(--destructive-foreground)',
               fontFamily: 'var(--font-sans)',
               fontSize: 13,
               fontWeight: 600,
@@ -115,9 +115,9 @@ export function Submissions({ jobs, filter, query, onFilterChange, onQueryChange
                 border: `1px solid ${active ? (k === 'all' ? 'var(--line-3)' : b.border) : 'var(--line-1)'}`,
                 background: active ? (k === 'all' ? 'var(--bg-3)' : b.bg) : 'var(--bg-2)',
                 color: active ? (k === 'all' ? 'var(--fg-1)' : b.text) : 'var(--fg-3)',
-                borderRadius: 99,
+                borderRadius: 'var(--radius-sm)',
                 height: 30,
-                padding: '0 12px',
+                padding: '0 11px',
                 fontFamily: 'var(--font-mono)',
                 fontSize: 10.5,
                 fontWeight: 600,
@@ -128,7 +128,7 @@ export function Submissions({ jobs, filter, query, onFilterChange, onQueryChange
               }}
             >
               {k === 'all' ? 'ALL' : jobStateStyle(k).label}
-              <span style={{ fontSize: 10, opacity: 0.7 }}>{count}</span>
+              <span style={{ fontSize: 10 }}>{count}</span>
             </button>
           )
         })}
@@ -153,7 +153,7 @@ export function Submissions({ jobs, filter, query, onFilterChange, onQueryChange
             gridTemplateColumns: '150px minmax(200px,1.3fr) 130px 122px 116px 56px 74px 22px',
             gap: 0,
             padding: '10px 16px',
-            background: 'var(--bg-1)',
+            background: 'var(--bg-3)',
             borderBottom: '1px solid var(--line-1)',
             minWidth: 980,
           }}
@@ -202,9 +202,9 @@ export function Submissions({ jobs, filter, query, onFilterChange, onQueryChange
               </span>
               <span>
                 <span
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: b.bg, border: `1px solid ${b.border}`, borderRadius: 999, padding: '2px 8px' }}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: b.bg, border: `1px solid ${b.border}`, borderRadius: 'var(--radius-sm)', padding: '2px 7px' }}
                 >
-                  <span style={{ width: 6, height: 6, borderRadius: 99, background: b.dot }} />
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: b.dot }} />
                   <span className="mono" style={{ fontSize: 9.5, fontWeight: 700, color: b.text, letterSpacing: '0.03em' }}>
                     {b.label}
                   </span>
@@ -225,7 +225,7 @@ export function Submissions({ jobs, filter, query, onFilterChange, onQueryChange
         })}
         {filtered.length === 0 && (
           <div style={{ padding: 40, textAlign: 'center' }}>
-            <div className="mono" style={{ fontSize: 12, color: 'var(--fg-4)' }}>
+            <div className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>
               No submissions match "{query}".
             </div>
           </div>

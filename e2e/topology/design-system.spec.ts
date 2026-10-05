@@ -1,9 +1,6 @@
-// The deployed proof of the v2/v1 split, the landing frame's geometry and the Problem, Solution, Platform, Coverage and Intelligence sections, and the whole-page bands, Solutions, Integrations, API, FAQ and closing panel; one topology spec on purpose, a recorded deviation from docs/e2e-convention.md.
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+// The deployed proof of the v2 entries, the landing frame's geometry and the Problem, Solution, Platform, Coverage and Intelligence sections, and the whole-page bands, Solutions, Integrations, API, FAQ and closing panel; one topology spec on purpose, a recorded deviation from docs/e2e-convention.md.
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { collectErrors, signInAs } from '../personaSession'
-import type { PersonaId } from '../personas'
 import { seedConsent } from '../smoke/landingConsent'
 import { resolveTarget } from '../targets'
 import { enclosesRect, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
@@ -16,14 +13,6 @@ function familyName(raw: string): string {
 }
 
 const firstFamily = (raw: string | null): string | null => (raw === null ? null : familyName(raw.split(',')[0]))
-
-// The v1 --accent, from disk. Value text only; the trailing comment is not part of it.
-function v1Accent(): string {
-  const css = readFileSync(fileURLToPath(new URL('../../packages/design-tokens/tokens/colors.css', import.meta.url)), 'utf8')
-  const m = css.match(/--accent:\s*([^;]+);/)
-  if (!m) throw new Error('--accent not found in packages/design-tokens/tokens/colors.css')
-  return m[1].trim()
-}
 
 type RawProbe = {
   url: string
@@ -137,31 +126,6 @@ for (const path of ['/', '/privacy']) {
   })
 }
 
-const V1_SURFACES: { id: PersonaId; name: string }[] = [
-  { id: 'developer', name: 'ops console' },
-]
-
-for (const { id, name } of V1_SURFACES) {
-  test(`${name} reads v1: Fraunces h1, Inter ground, v1 accent, no Manrope`, async ({ page }, testInfo) => {
-    const errors = collectErrors(page)
-    await signInAs(page, id)
-
-    const p = await probe(page)
-    await attachProbe(testInfo, id, p)
-
-    expect(p.h1Family, 'h1 first family').toBe('Fraunces')
-    expect(p.groundFamily, 'ground first family').toBe('Inter')
-    expect(p.accent, '--accent equals the v1 value on disk').toBe(v1Accent())
-    expect(families(p), 'no Manrope face on a v1 surface').not.toContain('Manrope')
-    // Positive control: the face list is not empty for want of a read.
-    const loaded = families(p, 'loaded')
-    expect(loaded.has('Inter') || loaded.has('Fraunces'), `a loaded Inter or Fraunces face; loaded: ${[...loaded].join(', ')}`).toBe(true)
-    expect(p.appCount, 'at least one .asc-app element').toBeGreaterThanOrEqual(1)
-
-    expect(errors, `console errors on ${name}:\n${errors.join('\n')}`).toEqual([])
-  })
-}
-
 test('app (firm) reads v2: Manrope h1 and ground, #f5bc88, no Fraunces or Inter, IBM Plex Mono loaded', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
   await signInAs(page, 'firm')
@@ -179,6 +143,25 @@ test('app (firm) reads v2: Manrope h1 and ground, #f5bc88, no Fraunces or Inter,
   expect(p.appCount, 'at least one .asc-app element').toBeGreaterThanOrEqual(1)
 
   expect(errors, `console errors on app (firm):\n${errors.join('\n')}`).toEqual([])
+})
+
+test('ops console reads v2: Manrope h1 and ground, #f5bc88, no Fraunces or Inter, IBM Plex Mono loaded', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  await signInAs(page, 'developer')
+
+  const p = await probe(page)
+  await attachProbe(testInfo, 'developer', p)
+
+  expect(p.h1Family, 'h1 first family').toBe('Manrope')
+  expect(p.groundFamily, 'ground first family').toBe('Manrope')
+  expect(p.accent.toLowerCase(), '--accent').toBe('#f5bc88')
+  for (const banned of ['Inter', 'Fraunces']) {
+    expect(families(p), `no ${banned} face on the ops console`).not.toContain(banned)
+  }
+  expect(families(p, 'loaded'), 'a loaded IBM Plex Mono face').toContain('IBM Plex Mono')
+  expect(p.appCount, 'at least one .asc-app element').toBeGreaterThanOrEqual(1)
+
+  expect(errors, `console errors on ops console:\n${errors.join('\n')}`).toEqual([])
 })
 
 test('support console reads v2: Manrope h1 and ground, #f5bc88, no Fraunces or Inter, IBM Plex Mono loaded', async ({ page }, testInfo) => {

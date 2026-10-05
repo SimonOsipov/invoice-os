@@ -22,13 +22,15 @@ export interface FilterPopoverProps {
   onClose: () => void
   /** Mirrors AuditPager's busy treatment -- disabled while a request is in flight. */
   disabled?: boolean
+  /** Full-width, 40-tall trigger for a form field. */
+  block?: boolean
   children: ReactNode
 }
 
 // `open` is the source of truth for cross-popover coordination, but the trigger also flips
 // local state immediately on its own click -- filterPopover_triggerClickClosesAnOpenPanel
 // pins that the panel is gone in the SAME click, not on the parent's next render.
-export function FilterPopover({ testId, label, summary, open, onOpen, onClose, disabled, children }: FilterPopoverProps) {
+export function FilterPopover({ testId, label, summary, open, onOpen, onClose, disabled, block, children }: FilterPopoverProps) {
   const [isOpen, setIsOpen] = useState(open)
   useEffect(() => setIsOpen(open), [open])
 
@@ -62,25 +64,26 @@ export function FilterPopover({ testId, label, summary, open, onOpen, onClose, d
         style={{
           display: 'inline-flex',
           alignItems: 'center',
-          gap: 7,
-          height: 34,
-          padding: '0 14px',
+          gap: 8,
+          height: block ? 40 : 34,
+          padding: '0 11px',
+          ...(block ? { width: '100%', justifyContent: 'space-between' } : {}),
           border: '1px solid var(--line-2)',
           background: isOpen ? 'var(--bg-3)' : 'var(--bg-2)',
           color: isOpen ? 'var(--action)' : 'var(--fg-1)',
           fontFamily: 'var(--font-sans)',
-          fontSize: 12.5,
+          fontSize: 13,
           fontWeight: 500,
           cursor: disabled ? 'not-allowed' : 'pointer',
-          opacity: disabled ? 0.5 : 1,
+          ...(disabled ? { opacity: 0.45, filter: 'none' } : {}),
         }}
       >
         <span>{label}</span>
-        {summary && <span style={{ color: 'var(--fg-3)' }}>{summary}</span>}
+        {summary && <span style={{ color: 'var(--fg-3)', fontWeight: 400 }}>{summary}</span>}
         <span
           data-testid={`${testId}-chevron`}
           aria-hidden
-          style={{ display: 'inline-flex', transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 160ms' }}
+          style={{ display: 'inline-flex', color: 'var(--fg-3)', transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 160ms' }}
         >
           {chevDownGlyph}
         </span>

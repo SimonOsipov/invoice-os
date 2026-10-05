@@ -215,12 +215,12 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
     <div style={{ padding: '30px 36px 56px' }}>
       {/* Two-column row: the title stack on the left, the export control on the right --
           absent on a new workspace, same as the filter card below. */}
-      <div style={{ marginBottom: 22, display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 20 }}>
-        <div>
+      <div style={{ marginBottom: 16, display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 32, flexWrap: 'wrap' }}>
+        <div style={{ minWidth: 0 }}>
           <div className="eyebrow" style={{ marginBottom: 10 }}>
             {AUDIT_COPY.eyebrow}
           </div>
-          <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>{AUDIT_COPY.h1}</h1>
+          <h1 style={{ fontSize: 26, letterSpacing: '-0.025em', margin: '0 0 4px' }}>{AUDIT_COPY.h1}</h1>
           <p data-testid="audit-subtitle" style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>
             {ctx.user.tenantName ?? AUDIT_COPY.tenantFallback} · {AUDIT_COPY.subtitle}
           </p>
@@ -234,7 +234,7 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
             {/* The pair gets its own flex row: this wrapper is textAlign:right with no gap, so a
                 second child would sit on collapsed whitespace. The reason line below stays a
                 sibling of the row, never a flex item beside the buttons (EB-03-6). */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10 }}>
               {/* Primary first because a primary reads first in a right-aligned group; the ghost
                   keeping the column's right edge is a consequence of that, not the reason for it.
                   aria-haspopup/aria-expanded are the first dialog trigger in this SPA -- the
@@ -252,13 +252,13 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: 8,
-                  height: 36,
-                  padding: '0 14px',
-                  fontSize: 13,
+                  height: 38,
                 }}
               >
                 <span style={{ display: 'inline-flex' }}>{shieldGlyph15}</span>
-                <span className="mono">{EVIDENCE_COPY.openCaption}</span>
+                <span className="mono" style={{ fontSize: 10.5, letterSpacing: '0.05em' }}>
+                  {EVIDENCE_COPY.openCaption}
+                </span>
               </button>
               <button
                 type="button"
@@ -271,18 +271,18 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: 8,
-                  height: 36,
-                  padding: '0 14px',
-                  fontSize: 13,
-                  ...(exportDisabled ? { opacity: 0.4, cursor: 'not-allowed', background: 'transparent' } : {}),
+                  height: 38,
+                  ...(exportDisabled ? { opacity: 0.45, cursor: 'not-allowed', filter: 'none', background: 'transparent' } : {}),
                 }}
               >
                 <span style={{ display: 'inline-flex' }}>{downloadGlyph}</span>
-                <span className="mono">{AUDIT_COPY.exportCaption}</span>
+                <span className="mono" style={{ fontSize: 10.5, letterSpacing: '0.05em' }}>
+                  {AUDIT_COPY.exportCaption}
+                </span>
               </button>
             </div>
             {zeroRows && (
-              <div id="audit-export-reason" data-testid="audit-export-reason" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 6 }}>
+              <div id="audit-export-reason" data-testid="audit-export-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 6 }}>
                 {AUDIT_COPY.exportDisabledReason}
               </div>
             )}
@@ -294,11 +294,11 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
           holds on an empty workspace exactly as it does on a full one. */}
       <div
         data-testid="audit-immutability-strip"
-        style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', marginBottom: 16, padding: '10px 14px', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-1)', fontSize: 12.5, color: 'var(--fg-2)', lineHeight: 1.6 }}
+        style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 16, padding: '11px 16px', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-1)' }}
       >
-        <span>{AUDIT_IMMUTABILITY_CLAIM}</span>
+        <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, lineHeight: 1.5, color: 'var(--fg-2)' }}>{AUDIT_IMMUTABILITY_CLAIM}</span>
         {auditStripCount(lifetimeTotal) != null && (
-          <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', letterSpacing: '0.04em', marginLeft: 'auto' }}>
+          <span className="mono" style={{ flex: 'none', fontSize: 10.5, color: 'var(--fg-3)' }}>
             {auditStripCount(lifetimeTotal)}
           </span>
         )}
@@ -329,7 +329,7 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
           would invite the user to go looking for one that is not there. */}
       {state === 'new-workspace' && (
         <div data-testid="audit-new-workspace">
-          <EmptyState title={AUDIT_COPY.emptyTitle} message={AUDIT_COPY.emptyMessage} />
+          <EmptyState title={AUDIT_COPY.emptyTitle} message={AUDIT_COPY.emptyMessage} messageMaxWidth={440} />
         </div>
       )}
 

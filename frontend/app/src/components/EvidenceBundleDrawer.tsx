@@ -238,6 +238,7 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
                 open={companyOpen}
                 onOpen={openCompany}
                 onClose={closeCompany}
+                block
               >
                 <div style={{ width: 260, maxHeight: 380, overflowY: 'auto', padding: 6 }}>
                   {companies.map((e) => (

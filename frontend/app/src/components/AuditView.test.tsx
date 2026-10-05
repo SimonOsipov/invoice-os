@@ -1126,8 +1126,9 @@ describe('AuditView export control (AUDIT-07-10)', () => {
 
     const btn = screen.getByTestId('audit-export') as HTMLButtonElement
     expect(btn.disabled, 'zero rows must disable the export control').toBe(true)
-    expect(btn.style.opacity, 'the disabled dim must read exactly 0.4').toBe('0.4')
+    expect(btn.style.opacity, 'the disabled dim must read exactly 0.45').toBe('0.45')
     expect(btn.style.cursor, 'the disabled cursor must read not-allowed').toBe('not-allowed')
+    expect(btn.style.filter, 'the disabled recipe neutralises the hover brightness').toBe('none')
     expect(btn.style.background, 'the disabled background must read transparent').toBe('transparent')
     expect(btn.hidden, 'a disabled control must still be a real, unhidden DOM node').toBe(false)
 
@@ -1424,13 +1425,13 @@ describe('AuditView evidence-bundle trigger (AUDIT-08-03)', () => {
     expect(ghost.className, 'the sibling stays ghost').toContain('v2-btn-ghost')
     expect(ghost.className, 'the sibling must not be promoted to primary').not.toContain('v2-btn-primary')
 
-    // The diff is weight and glyph, never geometry: one measured 36px control height on the
+    // The diff is weight and glyph, never geometry: one measured 38px control height on the
     // row. Compared against the sibling, not against literals, so the pair can only drift
     // together -- and the sibling's own literals are fenced by EB-03-10.
     for (const prop of ['display', 'alignItems', 'gap', 'height', 'padding', 'fontSize'] as const) {
       expect(bundle.style[prop], `geometry must match the sibling byte-for-byte: ${prop}`).toBe(ghost.style[prop])
     }
-    expect(bundle.style.height, 'control needle: the compared geometry must be real, not two empty strings').toBe('36px')
+    expect(bundle.style.height, 'control needle: the compared geometry must be real, not two empty strings').toBe('38px')
   })
 
   it('EB-03-2 bundleButton_captionIsTheZipTag', async () => {
@@ -1598,11 +1599,10 @@ describe('AuditView evidence-bundle trigger (AUDIT-08-03)', () => {
       expect(btn.style.display).toBe('inline-flex')
       expect(btn.style.alignItems).toBe('center')
       expect(btn.style.gap).toBe('8px')
-      expect(btn.style.height).toBe('36px')
-      expect(btn.style.fontSize).toBe('13px')
-      expect(btn.style.paddingTop).toBe('0px')
-      expect(btn.style.paddingLeft).toBe('14px')
-      expect(btn.style.paddingRight).toBe('14px')
+      expect(btn.style.height).toBe('38px')
+      // Padding and size come from .v2-btn, not inline.
+      expect(btn.style.fontSize).toBe('')
+      expect(btn.style.padding).toBe('')
       expect(btn.textContent?.trim()).toBe('CSV · THE ROWS ON SCREEN')
     }
 
@@ -1618,7 +1618,7 @@ describe('AuditView evidence-bundle trigger (AUDIT-08-03)', () => {
     const dimmed = screen.getByTestId('audit-export') as HTMLButtonElement
     assertGhost(dimmed)
     expect(dimmed.disabled, 'zero rows still disables it').toBe(true)
-    expect(dimmed.style.opacity, 'the dim recipe is unchanged').toBe('0.4')
+    expect(dimmed.style.opacity, 'the dim recipe is unchanged').toBe('0.45')
     expect(dimmed.style.cursor).toBe('not-allowed')
     expect(dimmed.style.background).toBe('transparent')
     expect(dimmed.getAttribute('aria-describedby')).toBe('audit-export-reason')
@@ -1774,7 +1774,7 @@ describe('AuditView evidence-bundle trigger, adversarial (AUDIT-08-03 QA)', () =
         expect(g.disabled, 'landed needle: the export must actually be in flight').toBe(true)
         return g
       })
-      expect(ghost.style.opacity, "the ghost wears AUDIT-07's dim while exporting").toBe('0.4')
+      expect(ghost.style.opacity, "the ghost wears AUDIT-07's dim while exporting").toBe('0.45')
       expect(screen.queryByTestId('audit-export-reason'), 'needle: rows are on screen, so this is exporting, not zeroRows').toBeNull()
 
       const bundle = screen.getByTestId('audit-bundle-open') as HTMLButtonElement

@@ -61,6 +61,31 @@ describe('FilterPopover', () => {
     expect(container.innerHTML).not.toContain('oklch')
   })
 
+  it('filterPopover_blockTriggerIsFullWidthAndForty', () => {
+    render(
+      <FilterPopover testId="fp" label="Company" open={false} onOpen={vi.fn()} onClose={vi.fn()} block>
+        <div>body</div>
+      </FilterPopover>,
+    )
+    const trigger = screen.getByTestId('fp-trigger')
+    expect([trigger.style.width, trigger.style.height, trigger.style.justifyContent]).toEqual(['100%', '40px', 'space-between'])
+    cleanup()
+
+    renderPopover(false)
+    const plain = screen.getByTestId('fp-trigger')
+    expect([plain.style.width, plain.style.height, plain.style.padding]).toEqual(['', '34px', '0px 11px'])
+  })
+
+  it('filterPopover_disabledKeepsPaintAndDims', () => {
+    render(
+      <FilterPopover testId="fp" label="Company" open={false} onOpen={vi.fn()} onClose={vi.fn()} disabled>
+        <div>body</div>
+      </FilterPopover>,
+    )
+    const trigger = screen.getByTestId('fp-trigger')
+    expect([trigger.style.opacity, trigger.style.cursor, trigger.style.filter]).toEqual(['0.45', 'not-allowed', 'none'])
+  })
+
   it('filterPopover_escapeCloses', () => {
     const { onClose } = renderPopover(true)
     fireEvent.keyDown(window, { key: 'Escape' })

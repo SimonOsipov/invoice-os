@@ -1221,17 +1221,18 @@ describe('AuditFilterCard: pills row adversarial coverage (AUDIT-07-07)', () => 
       'audit-pill-invoice',
     ])
     const props = ['display', 'align-items', 'gap', 'height', 'padding', 'font-size', 'font-weight', 'border', 'background', 'color']
+    // No inline height: the pill sizes from its padding and line height.
     for (const pill of pills) {
       const id = pill.dataset.testid
       expect(pill.className.split(/\s+/).filter(Boolean), id).toEqual(['pf-chip'])
       expect(Object.fromEntries(props.map((p) => [p, styleValue(pill, p)])), id).toEqual({
         display: 'inline-flex',
         'align-items': 'center',
-        gap: '8px',
-        height: '28px',
-        padding: '0px 12px',
+        gap: '7px',
+        height: null,
+        padding: '3px 5px 3px 10px',
         'font-size': '12px',
-        'font-weight': '500',
+        'font-weight': '400',
         border: '1px solid var(--line-2)',
         background: 'var(--bg-1)',
         color: 'var(--fg-2)',
@@ -1242,12 +1243,19 @@ describe('AuditFilterCard: pills row adversarial coverage (AUDIT-07-07)', () => 
       const glyph = pill.querySelector('span[aria-hidden]')
       expect(glyph?.textContent, id).toBe('×')
       expect(glyph && styleValue(glyph, 'color'), id).toBe('var(--fg-3)')
+      expect(glyph && [styleValue(glyph, 'width'), styleValue(glyph, 'height')], id).toEqual(['16px', '16px'])
     }
   })
 })
 
 describe('AuditFilterCard: popover panels', () => {
-  it.each(['search', 'date', 'event', 'actor', 'company'])('audit-%s floats on shadow-card, not a v1 shadow', (name) => {
+  it.each([
+    ['search', '340px'],
+    ['date', '250px'],
+    ['event', '340px'],
+    ['actor', '280px'],
+    ['company', '310px'],
+  ])('audit-%s floats on shadow-card, not a v1 shadow, at its width', (name, width) => {
     renderCard()
     fireEvent.click(screen.getByTestId(`audit-${name}-trigger`))
     const panel = screen.getByTestId(`audit-${name}-panel`)
@@ -1255,5 +1263,6 @@ describe('AuditFilterCard: popover panels', () => {
     expect(styleValue(panel, 'min-width'), 'control: the panel style is read').toBe('240px')
     expect(styleValue(panel, 'box-shadow')).toBe('var(--shadow-card)')
     expect(panel.getAttribute('style')).not.toContain('oklch')
+    expect(styleValue(panel.firstElementChild as HTMLElement, 'width')).toBe(width)
   })
 })

@@ -1423,5 +1423,7 @@ describe('AuditFilterCard: v2 restyle (RESKIN2-06-02)', () => {
     renderCard({ ...AUDIT_FILTER_DEFAULT, events: ['invoice.created'] }, facets())
     fireEvent.click(screen.getByTestId('audit-event-trigger'))
     expect(screen.getByTestId('audit-event-row-invoice.created').style.gap).toBe('10px')
+    const eventLabel = screen.getByTestId('audit-event-label-invoice.created')
+    expect([eventLabel.style.flex, eventLabel.style.minWidth]).toEqual(['1 1 0%', '0'])
   })
 })

@@ -227,6 +227,7 @@ describe('v2 screens', () => {
       const s = buttonStyle(b)
       expect.soft(attr(b, 'class'), `${b.text}: ops-btn forces 7px`).not.toContain('ops-btn')
       expect.soft(s['border-radius'], `${b.text}: corner`).toBe('var(--radius-sm)')
+      expect.soft(s.transition, `${b.text}: transition`).toContain('background var(--dur-fast) var(--ease-out)')
       const on = b.text === active
       expect.soft(s.background, `${b.text}: background`).toBe(on ? 'var(--primary)' : 'transparent')
       expect.soft(s.color, `${b.text}: colour`).toBe(on ? 'var(--primary-foreground)' : 'var(--fg-3)')

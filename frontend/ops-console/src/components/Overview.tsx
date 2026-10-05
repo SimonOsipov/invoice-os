@@ -228,6 +228,7 @@ export function Overview({ range, onRangeChange }: Props) {
                     letterSpacing: '0.04em',
                     background: active ? 'var(--primary)' : 'transparent',
                     color: active ? 'var(--primary-foreground)' : 'var(--fg-3)',
+                    transition: 'background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), filter var(--dur-fast) var(--ease-out)',
                   }}
                 >
                   {r.toUpperCase()}

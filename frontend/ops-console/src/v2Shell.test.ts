@@ -234,6 +234,7 @@ describe('v2 shell', () => {
         expect(css(seg)['border-radius']).toBe('var(--radius-sm)')
         expect(css(seg).height).toBe('28px')
         expect(css(seg).padding).toBe('0 13px')
+        expect(css(seg).transition, `${c.env} seg ${i} transition`).toContain('background var(--dur-fast) var(--ease-out)')
         expect(css(seg).background, `${c.env} seg ${i} bg`).toBe(active ? 'var(--primary)' : 'transparent')
         expect(css(seg).color, `${c.env} seg ${i} fg`).toBe(active ? 'var(--primary-foreground)' : 'var(--fg-3)')
       })

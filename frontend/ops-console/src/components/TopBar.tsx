@@ -98,6 +98,7 @@ export function TopBar({ screen, env, onSetEnv }: Props) {
                 gap: 6,
                 background: sbx.bg,
                 color: sbx.color,
+                transition: 'background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), filter var(--dur-fast) var(--ease-out)',
               }}
             >
               <span style={{ width: 6, height: 6, borderRadius: '50%', background: sbx.dot }} />
@@ -121,6 +122,7 @@ export function TopBar({ screen, env, onSetEnv }: Props) {
                 gap: 6,
                 background: liv.bg,
                 color: liv.color,
+                transition: 'background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), filter var(--dur-fast) var(--ease-out)',
               }}
             >
               <span style={{ width: 6, height: 6, borderRadius: '50%', background: liv.dot }} />

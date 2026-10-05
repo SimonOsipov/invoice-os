@@ -285,6 +285,28 @@ func TestCheckMailTemplates_SubjectIsChecked(t *testing.T) {
 			t.Errorf("exit %d, want 0 with no error; output = %q", code, out)
 		}
 	})
+	t.Run("a good subject alone prints one ok line and no error", func(t *testing.T) {
+		s := newMailTemplatesShim(t, map[string]string{subjectVar: "Confirm your ASComply account"})
+		out, code := runCheckMailTemplates(t, s, authForkEnvID)
+		if lines := nonBlankLines(out); code != 0 || len(lines) != 1 || !strings.HasPrefix(lines[0], "ok ") {
+			t.Errorf("exit %d; want 0 and one ok line, got %q", code, out)
+		}
+	})
+	t.Run("a bad subject alone fails without a template variable", func(t *testing.T) {
+		s := newMailTemplatesShim(t, map[string]string{subjectVar: "Confirm {{ "})
+		out, code := runCheckMailTemplates(t, s, authForkEnvID)
+		if code != 1 || !strings.HasPrefix(errorLines(out), "::error::"+subjectVar+": ") {
+			t.Errorf("exit %d; want 1 and an error line naming %s, got %q", code, subjectVar, out)
+		}
+	})
+	t.Run("a template alone checks no subject", func(t *testing.T) {
+		good := htmlServer(t, mailMinimalTemplate)
+		s := newMailTemplatesShim(t, map[string]string{mailTemplateVar: good.URL})
+		out, code := runCheckMailTemplates(t, s, authForkEnvID)
+		if lines := nonBlankLines(out); code != 0 || len(lines) != 1 || lines[0] != "ok "+good.URL {
+			t.Errorf("exit %d; want 0 and the one line `ok %s`, got %q", code, good.URL, out)
+		}
+	})
 	for name, subject := range map[string]string{
 		"unclosed action":   "Confirm {{ ",
 		"errors on execute": "Confirm {{ index .Email 99 }}",

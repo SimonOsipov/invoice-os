@@ -363,10 +363,11 @@ func TestMailTemplateCheck_ImageInsideABranchIsChecked_NoAnswers(t *testing.T) {
 func TestMailTemplateCheck_ImageSrcSpellings_Unread(t *testing.T) {
 	imgs := newImageServer(t)
 	cases := map[string]string{
-		"a data-src before the real src": `<img data-src="` + imgs.logoURL() + `" src="assets/mark.png">`,
-		"an unquoted src":                `<img src=assets/mark.png>`,
-		"src right after a quote":        `<img alt="x"src="assets/mark.png">`,
-		"src after a slash":              `<img/src=assets/mark.png>`,
+		"a data-src before the real src":        `<img data-src="` + imgs.logoURL() + `" src="assets/mark.png">`,
+		"an unquoted src":                       `<img src=assets/mark.png>`,
+		"src right after a quote":               `<img alt="x"src="assets/mark.png">`,
+		"src after a slash":                     `<img/src=assets/mark.png>`,
+		"src right after a single-quoted value": `<img alt='x'src="assets/mark.png">`,
 	}
 	for name, img := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -72,4 +72,10 @@ func TestFleetGateMailStepsRunOnTheirEvents(t *testing.T) {
 	if !strings.Contains(runText(lstep), "go run ./tools/prenv mail-logo-check") {
 		t.Errorf("the logo step runs %q, want `go run ./tools/prenv mail-logo-check`", runText(lstep))
 	}
+
+	for name, st := range map[string][]string{"template": step, "logo": lstep} {
+		if v, ok := stepKey(st, "continue-on-error"); ok {
+			t.Errorf("the %s step carries continue-on-error: %s; a failing check would not fail the gate", name, v)
+		}
+	}
 }

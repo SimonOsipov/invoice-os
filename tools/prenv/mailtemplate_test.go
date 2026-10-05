@@ -352,6 +352,12 @@ func TestMailTemplateCheck_OneFailureFailsTheRun(t *testing.T) {
 		t.Errorf("want one `ok %s` line, got %d; output = %q", good.URL, len(got), out)
 	}
 	wantOneError(t, out, spa.URL, confURLRE)
+	if got := linesWith(out, "ok "+spa.URL); len(got) != 0 {
+		t.Errorf("the failing URL also printed an ok line: %q", out)
+	}
+	if lines := nonBlankLines(out); len(lines) != 2 {
+		t.Errorf("want one line per URL, got %d: %q", len(lines), out)
+	}
 }
 
 // AC 11: html/template writes the & of the sample URL as &amp;; the check compares the unescaped output.

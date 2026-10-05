@@ -14,6 +14,8 @@ import { SignInModal } from './SignInModal'
 
 const HOME = 'https://www.ascomply.com/'
 const CODE_STEP_TEXT = ["Verify it's you", 'Verify & continue', 'Back to accounts', 'Resend code', 'Signing in', '481920', "That code doesn't match"]
+// Literal copy of signIn.ts UNAVAILABLE: the constant is not exported yet.
+const UNAVAILABLE = 'Sign-in is unavailable right now. Try again shortly.'
 const FOOTER_TEXT = ['Forgot password?', 'Password reset is disabled', 'SSO · OAUTH2', 'OAUTH2']
 
 let container: HTMLDivElement
@@ -43,9 +45,9 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-async function mount(onClose: () => void = vi.fn(), state: string | null = null, initialError?: string): Promise<void> {
+async function mount(onClose: () => void = vi.fn(), state: string | null = null, initialError?: string, onCreateAccount?: () => void): Promise<void> {
   await act(async () => {
-    root.render(createElement(SignInModal, { onClose, heldState: () => state, initialError }))
+    root.render(createElement(SignInModal, { onClose, heldState: () => state, initialError, onCreateAccount }))
   })
 }
 
@@ -235,6 +237,55 @@ describe('removed chrome', () => {
   })
 })
 
+describe('the real door only', () => {
+  const h3s = (d: HTMLElement) => Array.from(d.querySelectorAll('h3'), (h) => h.textContent)
+
+  it('SM-01: the configured dialog is the real door only', async () => {
+    stubTargets(ALL_TARGETS)
+    configured()
+    await mount(vi.fn(), STATE, undefined, vi.fn())
+    const d = dialog()
+    expect(d.querySelectorAll('form').length, 'the email form').toBe(1)
+    expect(Array.from(d.querySelectorAll('button')).some((b) => b.textContent === 'Create an account'), 'the create link').toBe(true)
+    expect(h3s(d)).toEqual(['Sign in to your workspace'])
+    expect(d.querySelectorAll('[data-persona]').length).toBe(0)
+    expect(d.querySelectorAll('[data-testid="persona-picker"]').length).toBe(0)
+    expect(d.textContent).not.toContain('Choose an account')
+    expect(d.textContent).not.toContain('demo profile')
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('SM-13: registration closed hides only the create link', async () => {
+    stubTargets(ALL_TARGETS)
+    configured()
+    await mount(vi.fn(), STATE)
+    const d = dialog()
+    expect(d.querySelectorAll('form').length, 'control: the form stays').toBe(1)
+    expect(d.querySelectorAll('input[type="password"]').length).toBe(1)
+    expect(h3s(d), 'the heading stays and nothing else is added').toEqual(['Sign in to your workspace'])
+    expect(d.textContent).not.toContain('Create an account')
+    expect(d.textContent).not.toContain('New to ASComply?')
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['gateway unset', () => { stubTargets(ALL_TARGETS); unconfigured() }],
+    ['app unset', () => { stubTargets({}); configured() }],
+  ] as const)('SM-12 %s: unconfigured shows the unavailable copy', async (label, setup) => {
+    setup()
+    await mount(vi.fn(), STATE, undefined, vi.fn())
+    const d = dialog()
+    expect(h3s(d), label).toEqual(['Sign in to your workspace'])
+    expect(d.textContent, label).toContain(UNAVAILABLE)
+    expect(d.querySelectorAll('form').length, label).toBe(0)
+    expect(d.querySelectorAll('input').length, label).toBe(0)
+    expect(d.textContent, label).not.toContain('Create an account')
+    expect(d.querySelectorAll('[data-persona]').length, label).toBe(0)
+    expect(d.textContent, label).not.toContain('Choose an account')
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+})
+
 describe('v2 content', () => {
   const norm = (s: string) => s.replace(/\s+/g, ' ').trim()
 
@@ -262,12 +313,12 @@ describe('v2 content', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('SM-03: the headings share the v2 style', async () => {
+  it('SM-03: the heading keeps the v2 style', async () => {
     stubTargets(ALL_TARGETS)
     configured()
     await mount(vi.fn(), STATE)
     const h3s = Array.from(dialog().querySelectorAll<HTMLElement>('h3'))
-    expect(h3s.map((h) => h.textContent)).toEqual(['Sign in to your workspace', 'Choose an account'])
+    expect(h3s.map((h) => h.textContent)).toEqual(['Sign in to your workspace'])
     for (const h of h3s) {
       const label = h.textContent ?? ''
       expect(h.style.fontSize, label).toBe('22px')
@@ -341,47 +392,38 @@ describe('v2 content', () => {
       const body = d.querySelector<HTMLElement>('.t-eyebrow')!.parentElement!.parentElement as HTMLElement
       expect(body.style.padding, label).toBe('22px 20px 20px')
       expect((body.firstElementChild as HTMLElement).style.marginBottom, `${label} eyebrow wrapper`).toBe('14px')
-      const pick = picker()
-      const heading = pick.querySelector<HTMLElement>('h3')!
-      expect(heading.style.margin, `${label} picker heading`).toBe('0px 0px 6px')
-      const para = pick.querySelector<HTMLElement>('p')!
-      expect(para.className, label).toBe('t-body-sm')
-      expect(para.style.lineHeight, label).toBe('1.55')
-      expect(para.style.margin, label).toBe('0px')
-      const list = pick.querySelector<HTMLElement>('[data-persona]')!.parentElement as HTMLElement
-      expect(list.style.display, label).toBe('grid')
-      expect(list.style.gap, label).toBe('10px')
-      expect(list.style.marginTop, label).toBe('18px')
-      expect(list.children.length, label).toBe(4)
+      const headings = Array.from(d.querySelectorAll<HTMLElement>('h3'))
+      expect(headings.map((h) => h.textContent), label).toEqual(['Sign in to your workspace'])
+      expect(headings[0].parentElement, `${label} heading sits in the body`).toBe(body)
+      expect(d.querySelectorAll('[data-persona]').length, `${label} no persona rows`).toBe(0)
+      expect(d.querySelectorAll('[data-testid="persona-picker"]').length, `${label} no picker`).toBe(0)
       act(() => root.render(null))
     }
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('SM-07 configured: the workspace heading, form and divider precede the picker in v2 order', async () => {
+  it('SM-07 configured: the workspace heading, form and create link follow in v2 order', async () => {
     stubTargets(ALL_TARGETS)
     configured()
-    await mount(vi.fn(), STATE)
+    await mount(vi.fn(), STATE, undefined, vi.fn())
     const d = dialog()
+    const create = Array.from(d.querySelectorAll('button')).find((b) => b.textContent === 'Create an account')
     const order = [
       d.querySelector('.t-eyebrow'),
       Array.from(d.querySelectorAll('h3')).find((h) => h.textContent === 'Sign in to your workspace'),
       d.querySelector('form'),
-      Array.from(d.querySelectorAll('div')).find((x) => x.textContent?.trim() === 'or explore with a demo profile'),
-      picker(),
+      create,
     ]
     order.forEach((el, i) => expect(el, `step ${i} missing`).toBeTruthy())
     for (let i = 1; i < order.length; i++) {
       expect(order[i - 1]!.compareDocumentPosition(order[i]!) & Node.DOCUMENT_POSITION_FOLLOWING, `step ${i - 1} must precede step ${i}`).toBeTruthy()
     }
     expect((order[1] as HTMLElement).style.margin).toBe('0px 0px 16px')
-    const divider = order[3] as HTMLElement
-    expect(divider.style.margin).toBe('22px 0px 18px')
-    expect(divider.style.fontSize).toBe('12px')
-    expect(divider.style.color).toBe('var(--muted-foreground)')
-    const rules = divider.querySelectorAll<HTMLElement>('span')
-    expect(rules.length).toBe(2)
-    for (const r of Array.from(rules)) expect(r.style.background).toBe('var(--border)')
+    const row = create!.parentElement as HTMLElement
+    expect(row.textContent).toContain('New to ASComply?')
+    expect(row.nextElementSibling, 'the create row ends the body').toBeNull()
+    expect(d.querySelectorAll('[data-persona]').length).toBe(0)
+    expect(d.textContent).not.toContain('or explore with a demo profile')
     expect(consoleError).not.toHaveBeenCalled()
   })
 
@@ -440,23 +482,22 @@ describe('v2 content', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('SM-11: nothing defeats the hover or focus ring, and the dialog is modal and named Platform login', async () => {
-    unconfigured()
-    await mount()
+  it('SM-11: nothing defeats the focus ring, and the dialog is modal and named Platform login', async () => {
+    stubTargets(ALL_TARGETS)
+    configured()
+    await mount(vi.fn(), STATE)
     const d = dialog()
+    expect(d.getAttribute('role')).toBe('dialog')
     expect(d.getAttribute('aria-modal')).toBe('true')
+    expect(d.getAttribute('aria-label')).toBe('Platform login')
     expect(d.querySelectorAll('[aria-label="Sign in"]').length).toBe(0)
-    const rows = Array.from(d.querySelectorAll<HTMLElement>('[data-persona]'))
-    expect(rows.length).toBe(4)
-    for (const row of rows) {
-      expect(row.style.getPropertyValue('outline'), row.dataset.persona).toBe('')
-      expect(row.style.getPropertyValue('filter'), row.dataset.persona).toBe('')
-    }
-    expect(declsOf('.si-persona:focus-visible'), 'control: the parser finds the ring rule').toContain('outline: 2px solid var(--ring)')
-    const all = [...declsOf('.si-persona'), ...declsOf('.si-persona:hover'), ...declsOf('.si-persona:focus-visible')]
-    expect(all.length).toBeGreaterThan(0)
-    expect(all.filter((x) => /^outline(-style)?: (none|0)/.test(x))).toEqual([])
-    expect(declsOf('.si-persona:focus-visible')).toContain('outline-offset: 2px')
+    expect(declsOf('.si-close:focus-visible'), 'control: the parser finds the ring rule').toContain('outline: 2px solid var(--ring)')
+    const css = Array.from(d.querySelectorAll('style'), (s) => s.textContent ?? '').join('\n')
+    expect(css, 'the picker rules are gone with the picker').not.toContain('.si-persona')
+    expect(css).not.toMatch(/outline(-style)?\s*:\s*(none|0)/)
+    const controls = Array.from(d.querySelectorAll<HTMLElement>('input, button'))
+    expect(controls.length).toBeGreaterThan(0)
+    for (const c of controls) expect(c.style.getPropertyValue('outline'), c.outerHTML.slice(0, 60)).not.toMatch(/^(none|0)/)
     expect(consoleError).not.toHaveBeenCalled()
   })
 

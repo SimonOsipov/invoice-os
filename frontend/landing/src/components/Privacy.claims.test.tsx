@@ -666,13 +666,17 @@ describe('AUTH-17-09: the ledger matches the new HubSpot and Resend paths', () =
     expect(e6).toContain('the Sentry SDK started by `instrument.ts`')
   })
 
-  it('the Resend row says "only a tick opts in" rests on the topic default the operator set, which no code reads', () => {
+  it('the Resend row says "only a tick opts in" rests on the topic default the operator owes, which no code reads', () => {
     expect(readFileSync(join(SRC_DIR, '..', '..', '..', '..', 'internal/notifications/resend.go'), 'utf8'), 'control: the client now sets a topic default').not.toMatch(/default_subscription/)
     const rows = lines.filter((line) => /^\| C\d+ \|/.test(line) && claimOf(line).includes('Resend') && /only a ticked/i.test(claimOf(line)))
     expect(rows.length, 'control: no Resend row says only a tick makes a person marketing-eligible').toBeGreaterThan(0)
     for (const row of rows) {
-      expect(row, 'the row never names the topic default (default_subscription opt_out) it depends on').toMatch(/default_subscription|opt_out/)
-      expect(cellsOf(row)[3], 'the row is CODE only; the topic default is operator-set').toContain('OPERATOR-CONFIRMED')
+      const evidence = evidenceOf(row)
+      expect(cellsOf(row)[3], 'the class cell must say CODE').toMatch(/\bCODE\b/)
+      expect(cellsOf(row)[3], 'OPERATOR-CONFIRMED claims U2 happened; it is owed').not.toContain('OPERATOR-CONFIRMED')
+      expect(evidence, 'the evidence never names the topic default it depends on').toMatch(/opt_out/)
+      expect(evidence, 'the evidence never names the operator step U2').toMatch(/\bU2\b/)
+      expect(evidence, 'the evidence does not say U2 is owed or not yet confirmed').toMatch(/owed|not yet/i)
     }
   })
 

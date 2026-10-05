@@ -181,11 +181,12 @@ async function noSidewaysScroll(page: Page, label: string): Promise<string[]> {
   return over <= 1 ? [] : [`${label}: scrolls sideways by ${over}px`]
 }
 
-// Asserts every named property of one element and returns the reading.
+// Polls every named property of one element to its exact value (a colour transition may still be running); returns the settled reading.
 async function check(loc: Locator, what: string, want: Record<string, string>): Promise<Record<string, string>> {
-  const got = await styles(loc, Object.keys(want))
-  for (const [k, v] of Object.entries(want)) expect(got[k], `${what}: ${k}`).toBe(v)
-  return got
+  for (const [k, v] of Object.entries(want)) {
+    await expect.poll(async () => (await styles(loc, [k]))[k], { message: `${what}: ${k}` }).toBe(v)
+  }
+  return styles(loc, Object.keys(want))
 }
 
 async function corners(loc: Locator, what: string, value: string): Promise<void> {

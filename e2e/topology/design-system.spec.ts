@@ -152,7 +152,7 @@ test('ops console reads v2: Manrope h1 and ground, #f5bc88, no Fraunces or Inter
   await seedStaffSession(page, 'ops', await provisionStaffAccount('design-ops'))
 
   const p = await probe(page)
-  await attachProbe(testInfo, 'developer', p)
+  await attachProbe(testInfo, 'ops', p)
 
   expect(p.h1Family, 'h1 first family').toBe('Manrope')
   expect(p.groundFamily, 'ground first family').toBe('Manrope')

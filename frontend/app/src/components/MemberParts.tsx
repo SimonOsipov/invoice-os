@@ -126,7 +126,7 @@ export function MemberStatusPill({ status, compact = false }: { status: MemberSt
   )
 }
 
-/** §6's "small YOU chip". The text stays a bare `YOU` span: demo-persona.spec.ts matches it by exact text. */
+/** §6's "small YOU chip". */
 export function YouChip() {
   return (
     <span

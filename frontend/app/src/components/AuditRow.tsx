@@ -77,6 +77,8 @@ export function AuditRow({ event, expanded, onToggle, onFilterToInvoice, variant
   const inv = invoiceRef(event.payload)
   const payload = asRecord(event.payload)
   const keys = payload ? Object.keys(payload) : []
+  const showLink = inv != null && onFilterToInvoice != null
+  const showEvidence = view.domain === 'submissions' && inv != null
 
   return (
     <>
@@ -117,35 +119,39 @@ export function AuditRow({ event, expanded, onToggle, onFilterToInvoice, variant
               ))}
             </div>
           )}
-          {inv != null && onFilterToInvoice != null && (
-            <button
-              type="button"
-              data-testid="audit-invoice-affordance"
-              onClick={() => onFilterToInvoice(inv.id, inv.number)}
-              className="pf-btn"
-              style={{ marginTop: 14, border: 0, padding: 0, background: 'transparent', color: 'var(--action)', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
-            >
-              {inv.number != null ? `All events for ${inv.number} →` : 'All events for this invoice →'}
-            </button>
-          )}
-          {/* AUDIT-08 owns the evidence drawer. Disabled with a VISIBLE reason rather than
-              hidden (InvoiceDetail.tsx's idiom) -- a title= on a disabled button never
-              fires in Chromium, so the reason has to be text. */}
-          {view.domain === 'submissions' && inv != null && (
-            <div style={{ marginTop: 10 }}>
-              <button
-                type="button"
-                data-testid="audit-evidence-affordance"
-                disabled
-                aria-describedby={EVIDENCE_REASON_ID}
-                className="v2-btn v2-btn-ghost pf-btn"
-                style={{ height: 30, fontSize: audit ? 12 : 12.5, background: 'transparent', opacity: 0.45, cursor: 'not-allowed', filter: 'none' }}
-              >
-                View transmission evidence →
-              </button>
-              <div id={EVIDENCE_REASON_ID} data-testid="audit-evidence-blocked-reason" style={{ marginTop: 2, fontSize: 11.5, color: 'var(--fg-3)' }}>
-                {EVIDENCE_REASON}
-              </div>
+          {(showLink || showEvidence) && (
+            <div style={{ marginTop: audit ? 14 : 12, display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+              {showLink && (
+                <button
+                  type="button"
+                  data-testid="audit-invoice-affordance"
+                  onClick={() => onFilterToInvoice(inv.id, inv.number)}
+                  className="pf-btn"
+                  style={{ border: 0, padding: 0, background: 'transparent', color: 'var(--action)', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
+                >
+                  {inv.number != null ? `All events for ${inv.number} →` : 'All events for this invoice →'}
+                </button>
+              )}
+              {/* AUDIT-08 owns the evidence drawer. Disabled with a VISIBLE reason rather than
+                  hidden (InvoiceDetail.tsx's idiom) -- a title= on a disabled button never
+                  fires in Chromium, so the reason has to be text. */}
+              {showEvidence && (
+                <div style={audit ? { display: 'inline-flex', alignItems: 'center', gap: 10 } : undefined}>
+                  <button
+                    type="button"
+                    data-testid="audit-evidence-affordance"
+                    disabled
+                    aria-describedby={EVIDENCE_REASON_ID}
+                    className="v2-btn v2-btn-ghost pf-btn"
+                    style={{ height: 30, fontSize: audit ? 12 : 12.5, background: 'transparent', opacity: 0.45, cursor: 'not-allowed', filter: 'none' }}
+                  >
+                    View transmission evidence →
+                  </button>
+                  <div id={EVIDENCE_REASON_ID} data-testid="audit-evidence-blocked-reason" style={{ marginTop: audit ? 0 : 5, fontSize: 11.5, color: 'var(--fg-3)' }}>
+                    {EVIDENCE_REASON}
+                  </div>
+                </div>
+              )}
             </div>
           )}
           {/* The row shows the human label; the footer keeps the identifier that label was

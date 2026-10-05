@@ -340,6 +340,21 @@ describe('AuditRow expansion per variant (D-4, D-14)', () => {
     expect(sv(footer, 'gap')).toBe('14px')
   })
 
+  it('auditRow_evidenceReasonSpacingFollowsTheVariant', () => {
+    const e = ev({ event: 'submission.accepted', payload: { id: 'inv-1' } })
+    mount('audit', e, true)
+    const wrap = screen.getByTestId('audit-evidence-affordance').parentElement as HTMLElement
+    expect(sv(wrap, 'display')).toBe('inline-flex')
+    expect(sv(wrap, 'gap')).toBe('10px')
+    expect(sv(screen.getByTestId('audit-evidence-blocked-reason'), 'margin-top')).toBe('0px')
+    expect(sv(wrap.parentElement as HTMLElement, 'gap')).toBe('14px')
+    cleanup()
+    mount('activity', e, true)
+    expect(sv(screen.getByTestId('audit-evidence-blocked-reason'), 'margin-top')).toBe('5px')
+    expect(sv(screen.getByTestId('audit-evidence-affordance').parentElement?.parentElement as HTMLElement, 'margin-top')).toBe('12px')
+    expect(screen.getByTestId('audit-evidence-affordance').getAttribute('aria-describedby')).toBe(screen.getByTestId('audit-evidence-blocked-reason').id)
+  })
+
   it('auditRow_invoiceAffordanceIsActionSemibold', () => {
     render(<AuditRow event={ev({ payload: { id: 'inv-1' } })} expanded onToggle={() => {}} onFilterToInvoice={() => {}} />)
     const link = screen.getByTestId('audit-invoice-affordance')

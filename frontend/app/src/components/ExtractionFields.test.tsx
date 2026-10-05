@@ -921,7 +921,7 @@ describe('the pane and the sentence, pinned', () => {
   })
 
   it('paints the selected row in the app’s marked-row amber', () => {
-    // `SourceDocumentSheet.tsx:317`. The style-inequality row above passes on ANY difference, `opacity: 0.99`
+    // The marked-row style in `SourceDocumentSheet` (`sheet-row-marked`). The style-inequality row above passes on ANY difference, `opacity: 0.99`
     // included, so it pins the fact of a treatment and this row pins which one.
     render(fieldsPane({ selected: 'issue_date' }))
 

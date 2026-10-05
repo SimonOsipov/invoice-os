@@ -3146,7 +3146,8 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
     const rejectBtn = screen.getByTestId('detail-reject') as HTMLButtonElement
     expect(approveBtn.disabled).toBe(true)
     expect(rejectBtn.disabled).toBe(true)
-    expect(approveBtn.style.background).not.toBe('')
+    expect(approveBtn.style.background).toBe('')
+    expect(approveBtn.style.opacity).toBe('0.45')
     expect(rejectBtn.style.background).not.toBe('')
     expect(approveBtn.getAttribute('title')).toBe(S)
     expect(rejectBtn.getAttribute('title')).toBe(S)
@@ -3162,7 +3163,8 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
     const rejectBtn = screen.getByTestId('detail-reject') as HTMLButtonElement
     expect(approveBtn.disabled).toBe(true)
     expect(rejectBtn.disabled).toBe(true)
-    expect(approveBtn.style.background).not.toBe('')
+    expect(approveBtn.style.background).toBe('')
+    expect(approveBtn.style.opacity).toBe('0.45')
     expect(rejectBtn.style.background).not.toBe('')
     expect(approveBtn.hasAttribute('title')).toBe(false)
     expect(approveBtn.hasAttribute('aria-describedby')).toBe(false)
@@ -3212,6 +3214,7 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
     expect(btn.style.background).toBe('')
     expect(btn.style.color).toBe('')
     expect(btn.style.cursor).toBe('')
+    expect(btn.style.opacity).toBe('')
   })
 
   it('11: the disabled Approve refuses focus, and still carries its reason (AC-2)', async () => {
@@ -4908,7 +4911,7 @@ describe('InvoiceDetail action cluster: the control set is stable (BUG-14-01, AC
   // The closed set AC-2/AC-3 are about -- the story's "stable control set" table.
   const CONTROLS = ['detail-approve', 'detail-reject', 'edit-toggle', 'revalidate', 'detail-submit']
   // The disabled recipe .v2-btn-primary needs; detail-submit is the sibling to match.
-  const MUTED_PROPS = ['background', 'color', 'cursor', 'filter'] as const
+  const MUTED_PROPS = ['background', 'color', 'cursor', 'filter', 'opacity'] as const
 
   it('the actions bar mounts on every status, never unmounting with can_edit', async () => {
     const mounted: InvoiceStatus[] = []
@@ -4958,7 +4961,7 @@ describe('InvoiceDetail action cluster: the control set is stable (BUG-14-01, AC
     expect(submit, 'Submit must mount to be compared').not.toBeNull()
     const editStyle = (edit as HTMLButtonElement).style
     const submitStyle = (submit as HTMLButtonElement).style
-    for (const prop of MUTED_PROPS) expect(submitStyle[prop], `disabled Submit sets ${prop}`).not.toBe('')
+    for (const prop of ['cursor', 'filter', 'opacity'] as const) expect(submitStyle[prop], `disabled Submit sets ${prop}`).not.toBe('')
     for (const prop of MUTED_PROPS) expect(editStyle[prop], `disabled Edit matches Submit's ${prop}`).toBe(submitStyle[prop])
   })
 
@@ -4972,6 +4975,48 @@ describe('InvoiceDetail action cluster: the control set is stable (BUG-14-01, AC
 
     expect(edit.disabled).toBe(false)
     for (const prop of MUTED_PROPS) expect(edit.style[prop], `enabled Edit must not set ${prop}`).toBe('')
+  })
+
+  it('AC4: a disabled idle primary dims, it does not swap', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'accepted', can_approve: false, can_edit: false, can_submit: false }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('invoice-status-badge')
+    for (const id of ['detail-approve', 'edit-toggle', 'detail-submit']) {
+      const btn = screen.getByTestId(id) as HTMLButtonElement
+      expect(btn.disabled, `${id} is disabled`).toBe(true)
+      expect(btn.style.opacity, `${id} opacity`).toBe('0.45')
+      expect(btn.style.cursor, `${id} cursor`).toBe('not-allowed')
+      expect(btn.style.filter, `${id} filter`).toBe('none')
+      expect(btn.style.background, `${id} background`).toBe('')
+      expect(btn.style.color, `${id} color`).toBe('')
+    }
+  })
+
+  it('AC4: the disabled ghosts beside them keep the swap', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'accepted', can_reject: false, can_revalidate: false }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('invoice-status-badge')
+    for (const id of ['detail-reject', 'revalidate']) {
+      const btn = screen.getByTestId(id) as HTMLButtonElement
+      expect(btn.disabled, `${id} is disabled`).toBe(true)
+      expect(btn.style.background, `${id} background`).not.toBe('')
+      expect(btn.style.color, `${id} color`).not.toBe('')
+      expect(btn.style.opacity, `${id} opacity`).toBe('')
+    }
+  })
+
+  it('AC4: the disabled reject-confirm keeps the swap', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_reject: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-reject'))
+    const confirm = (await screen.findByTestId('detail-reject-confirm')) as HTMLButtonElement
+    expect(confirm.disabled).toBe(true)
+    expect(confirm.style.background).not.toBe('')
+    expect(confirm.style.color).not.toBe('')
+    expect(confirm.style.opacity).toBe('')
   })
 
   it('a role that permits nothing yields five controls, all disabled', async () => {

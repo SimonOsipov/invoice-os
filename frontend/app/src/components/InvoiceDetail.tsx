@@ -610,13 +610,9 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   `can_edit` (task-554, AC-1/AC-2): approve/reject must survive on statuses
                   where `can_edit` is false (queued, submitted, failed, ...), and a decision
                   is taken on the STORED record, never on a dirty edit form.
-                  A row wrapper (`detail-decision-actions`), not bare siblings --
-                  two buttons side by side need a flex row, same pattern as
-                  `invoice-actions`'s own inner row below -- but the wrapper itself sits
-                  outside `invoice-actions`, never inside it, so it survives that div's
-                  disappearance. Same two disabled layers as Re-validate/Submit;
-                  Approve additionally needs `filter: 'none'` (`.v2-btn-primary`), Reject
-                  (ghost) does not. */}
+                  A row wrapper (`detail-decision-actions`), not bare siblings, sits outside
+                  `invoice-actions` so it survives that div's disappearance. Disabled: the
+                  ghost swaps background/color; Approve dims to .45 with `filter: 'none'`. */}
               {!editing && (
                 <>
                   <div data-testid="detail-decision-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -635,7 +631,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         style={{
                           height: 34,
                           ...(!inv.can_approve
-                            ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' }
+                            ? { opacity: 0.45, cursor: 'not-allowed', filter: 'none' }
                             : null),
                         }}
                       >
@@ -765,25 +761,15 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       className="v2-btn v2-btn-primary pf-btn"
                       style={{
                         height: 34,
-                        ...(!inv.can_edit ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' } : null),
+                        ...(!inv.can_edit ? { opacity: 0.45, cursor: 'not-allowed', filter: 'none' } : null),
                       }}
                     >
                       Edit
                     </button>
                     {/* Disabled rather than hidden ([revalidate-visibility]) -- hiding it makes
-                        the edit -> demote -> re-validate loop undiscoverable. TWO layers, the
-                        recipe every control in this cluster follows, because a disabled button
-                        gets NO styling for free here: packages/design-tokens/*.css has zero
-                        `:disabled` rules and `.v2-btn-ghost` (app-layer.css) carries a
-                        :hover that is NOT guarded by `:not(:disabled)`.
-                        (1) the real HTML `disabled` attribute -- genuinely unclickable;
-                        (2) the inline background/color/cursor swap below, which mutes the button
-                            and, being inline, outranks that unguarded :hover so a disabled button
-                            stops reacting to the pointer. Copied from CreateUpload.tsx:277-284,
-                            the repo's shipped PERSISTENT disabled gating; deliberately NOT
-                            InvoicesList.tsx:347's `opacity`, a sub-second in-flight state that
-                            does not suppress the hover swap (Surface Conflicts -- one precedent
-                            picked, not blended).
+                        the edit -> demote -> re-validate loop undiscoverable. Real `disabled` attribute;
+                        the ghost swaps background/color inline (`.v2-btn-ghost:hover` is unguarded),
+                        Edit dims to .45.
                         `title` rides along ([title-survives]) but only while the WIRE says blocked,
                         never on an enabled control and never on a transient in-flight disable. */}
                     <button
@@ -804,14 +790,9 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                     </button>
                     {/* Inline arm -> confirm, not a modal ([no-modal], ReviewInvoicesTab.tsx file
                         header) -- the second stage renders below, in this same actions column.
-                        Always rendered, disabled rather than hidden when
-                        `!inv.can_submit` ([revalidate-visibility], same convention as Re-validate
-                        above) -- the same two layers, plus `filter: 'none'`: Submit is
-                        `.v2-btn-primary`, whose unguarded `:hover` (app-layer.css) also sets
-                        `filter: brightness(1.22)`, which the ghost recipe above never had to
-                        neutralise. A disabled button emits no click, so the arm/confirm flow
-                        below is unreachable while disabled; `handleSubmit`'s own `!inv.can_submit`
-                        guard is the second line of defence. */}
+                        Always rendered, disabled rather than hidden when `!inv.can_submit`. Disabled
+                        Submit dims to .45 with `filter: 'none'` (`.v2-btn-primary:hover` brightens);
+                        `handleSubmit`'s `!inv.can_submit` guard backs the `disabled` attribute. */}
                     {submitPhase === 'idle' ? (
                         <button
                           type="button"
@@ -822,7 +803,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                           className="v2-btn v2-btn-primary pf-btn"
                           style={{
                             height: 34,
-                            ...(!inv.can_submit ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' } : null),
+                            ...(!inv.can_submit ? { opacity: 0.45, cursor: 'not-allowed', filter: 'none' } : null),
                           }}
                         >
                           {DETAIL_SUBMIT_COPY.submit}

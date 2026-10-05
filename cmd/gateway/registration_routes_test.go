@@ -214,11 +214,49 @@ func TestAccountMailRoutesRegisteredUnconditionally(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read main.go: %v", err)
 	}
-	sites, _ := mainRoutes(t, src)
+	sites, stmts := mainRoutes(t, src)
 	if len(sites) < 4 {
 		t.Fatalf("found %d literal-pattern routes in main, want at least 4; the scan went blind: %+v", len(sites), sites)
 	}
-	for _, pattern := range []string{"GET /emails/confirmation.html", "GET /emails/mark.png"} {
+
+	// The template handler is the first result of the top-level `x, err := gateway.MailTemplate("confirmation")`,
+	// and the statement after it must stop boot through platform.Fatal.
+	tpl, fatalOnErr := "", false
+	for i, s := range stmts {
+		as, ok := s.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 2 || len(as.Rhs) != 1 {
+			continue
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok || types.ExprString(call.Fun) != "gateway.MailTemplate" {
+			continue
+		}
+		if len(call.Args) != 1 || types.ExprString(call.Args[0]) != `"confirmation"` {
+			t.Errorf("gateway.MailTemplate args = %v, want \"confirmation\" (the name in /emails/confirmation.html)", call.Args)
+		}
+		tpl = types.ExprString(as.Lhs[0])
+		if i+1 < len(stmts) {
+			if is, ok := stmts[i+1].(*ast.IfStmt); ok && types.ExprString(is.Cond) == "err != nil" {
+				ast.Inspect(is.Body, func(n ast.Node) bool {
+					if c, ok := n.(*ast.CallExpr); ok && types.ExprString(c.Fun) == "platform.Fatal" {
+						fatalOnErr = true
+					}
+					return true
+				})
+			}
+		}
+	}
+	if tpl == "" {
+		t.Fatal("main has no top-level `x, err := gateway.MailTemplate(...)`")
+	}
+	if !fatalOnErr {
+		t.Error("a MailTemplate error does not reach platform.Fatal in the statement after it; the gateway would boot without its template")
+	}
+
+	for pattern, want := range map[string]string{
+		"GET /emails/confirmation.html": tpl,
+		"GET /emails/mark.png":          "gateway.MailLogo()",
+	} {
 		s := sitesFor(sites, pattern)
 		if len(s) != 1 {
 			t.Errorf("%s is registered %d times, want exactly once", pattern, len(s))
@@ -227,9 +265,21 @@ func TestAccountMailRoutesRegisteredUnconditionally(t *testing.T) {
 		if !s[0].topLevel {
 			t.Errorf("%s is registered under a condition; it must be a top-level statement of main", pattern)
 		}
-		if strings.Contains(s[0].handler, "withCORS") {
-			t.Errorf("%s handler = %s, want no CORS wrap", pattern, s[0].handler)
+		// Exact handler: a CORS wrap under any name, or the other route's handler, is a different string.
+		if s[0].handler != want {
+			t.Errorf("%s handler = %s, want %s (no CORS wrap)", pattern, s[0].handler, want)
 		}
+	}
+
+	// No catch-all or sibling under /emails: an unknown path must stay a 404.
+	n := 0
+	for _, s := range sites {
+		if _, path, ok := strings.Cut(s.pattern, " "); ok && strings.HasPrefix(path, "/emails") {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("main registers %d routes under /emails, want exactly the 2 account-mail routes", n)
 	}
 }
 

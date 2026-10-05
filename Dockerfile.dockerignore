@@ -4,7 +4,7 @@
 # root .dockerignore. KEEP go.mod, go.sum, cmd/**, internal/** — everything the Go
 # build needs; exclude everything else to keep the context small and the cache stable.
 
-# Frontend / Node — never part of a Go image
+# Frontend / Node
 node_modules
 **/node_modules
 frontend

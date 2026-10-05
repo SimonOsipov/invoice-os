@@ -428,7 +428,7 @@ func TestIdpUpRefusesANonAuthAdminDSN(t *testing.T) {
 // plannedIdPFilter is the idp paths filter the plan lists; the job must run when any of them changes.
 var plannedIdPFilter = []string{
 	"sidecar/auth/**", "internal/platform/auth/**", "migrations/**", "db/**", "tools/prenv/**",
-	"internal/gateway/**", "internal/tenancy/**", "internal/platform/*.go", "internal/platform/db/**",
+	"internal/gateway/**", "internal/accountmail/**", "packages/design-tokens/v2/assets/**", "internal/tenancy/**", "internal/platform/*.go", "internal/platform/db/**",
 	"internal/tools/idppin/**", "scripts/ci/idp-*.sh", "Makefile", ".github/workflows/ci.yml", "go.mod", "go.sum",
 }
 
@@ -447,6 +447,14 @@ func TestIdPFilterListsEveryPlannedPath(t *testing.T) {
 		if !slices.Contains(paths, want) {
 			t.Errorf("the idp paths filter %v does not list %q", paths, want)
 		}
+	}
+	// The gateway embeds the assets, so the go job (docker-canary) must run when they change.
+	goPaths := filterPaths(jobBlock(yamlCode(readCIYAML(t)), "changes"), "go")
+	if len(goPaths) == 0 {
+		t.Fatal("found no go paths filter in ci.yml; the scan is broken")
+	}
+	if !slices.Contains(goPaths, "packages/design-tokens/v2/assets/**") {
+		t.Errorf("the go paths filter %v does not list packages/design-tokens/v2/assets/**", goPaths)
 	}
 	if got := fmt.Sprint(filterPaths(jobBlock(yamlCode(readCIYAML(t)), "changes"), "sidecar")); !strings.Contains(got, "sidecar/**") {
 		t.Errorf("the docling sidecar filter %s lost sidecar/**", got)

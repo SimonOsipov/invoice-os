@@ -1240,7 +1240,7 @@ func TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute(t *testing.T) {
 		}
 	}
 
-	// RESEND-01-02: the static account-mail routes are registered and exempt, each with its own row.
+	// The static account-mail routes are registered and exempt, each with its own row.
 	for _, route := range []string{"GET /emails/confirmation.html", "GET /emails/mark.png"} {
 		found := false
 		for _, r := range routes {

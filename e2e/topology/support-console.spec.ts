@@ -423,6 +423,23 @@ async function expectHeader(page: Page, nav: string, h1Name: string, rowUp: numb
   await expectStyles(mainOf(page).locator('.ops-screen-pad'), `${nav} page pad`, { 'padding-top': '24px', 'padding-left': '26px', 'padding-right': '26px', 'padding-bottom': '56px' })
 }
 
+// No blank band above the eyebrow: it starts at its title block's top, and the h1 sits one eyebrow plus 8px below that top.
+async function titleBlockRead(page: Page, h1Name: string): Promise<Read> {
+  const m = await mainOf(page)
+    .getByRole('heading', { level: 1, name: h1Name })
+    .evaluate((h) => {
+      const eb = h.previousElementSibling as HTMLElement
+      const block = eb.parentElement as HTMLElement
+      const ebTop = eb.getBoundingClientRect().top
+      const blockTop = block.getBoundingClientRect().top
+      return { above: ebTop - blockTop, ebHeight: eb.getBoundingClientRect().height, h1Offset: h.getBoundingClientRect().top - blockTop }
+    })
+  const problems: string[] = []
+  if (!near(m.above, 0, 1)) problems.push(`${h1Name}: ${m.above}px blank above the eyebrow`)
+  if (!near(m.h1Offset, m.ebHeight + 8, 1)) problems.push(`${h1Name}: h1 sits ${m.h1Offset}px below the title block top, want eyebrow ${m.ebHeight} + 8`)
+  return { problems, rects: { titleBlock: m } }
+}
+
 const CARD = { radius: '6px', 'border-top-width': '1px', 'border-top-style': 'solid', 'border-top-color': 'rgb(220, 231, 228)', 'box-shadow': 'none', 'background-color': 'rgb(255, 255, 255)' }
 const FIGURE = (size: string): Want => ({ family: 'Manrope', 'font-weight': '700', 'font-size': size, 'font-variant-numeric': 'tabular-nums' })
 
@@ -606,6 +623,7 @@ for (const s of SCREENS) {
     await expectHeader(page, s.nav, s.h1, s.rowUp)
     await s.reads(page, testInfo)
 
+    await atWidths(page, `SUP-03 ${s.nav} title block`, () => titleBlockRead(page, s.h1))
     await atWidths(page, `SUP-03 ${s.nav} layout`, () => s.layout(page))
 
     noErrors(errors, `SUP-03 ${s.nav}`)

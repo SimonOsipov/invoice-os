@@ -15,7 +15,7 @@ export function Health({ deadLetterCount }: Props) {
           <div className="eyebrow" style={{ marginBottom: 8 }}>
             INFRASTRUCTURE
           </div>
-          <h1 style={{ fontSize: 24, fontWeight: 500, letterSpacing: '-0.03em', margin: 0 }}>System health</h1>
+          <h1 style={{ fontSize: 24, margin: 0 }}>System health</h1>
         </div>
         <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)', letterSpacing: '0.05em' }}>
           LIVE · REFRESHED 8s AGO
@@ -31,14 +31,14 @@ export function Health({ deadLetterCount }: Props) {
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, gap: 10 }}>
                 <span className="label">{c.label}</span>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                  <span style={{ width: 7, height: 7, borderRadius: 99, background: tone.dot }} />
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: tone.dot }} />
                   <span className="mono" style={{ fontSize: 9.5, fontWeight: 700, color: tone.dot, letterSpacing: '0.04em' }}>
                     {c.status}
                   </span>
                 </span>
               </div>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 12 }}>
-                <span className="mono" style={{ fontSize: 30, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--fg-1)' }}>
+                <span className="money" style={{ fontSize: 30, fontWeight: 700, color: 'var(--fg-1)' }}>
                   {c.value}
                 </span>
                 <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>

@@ -42,9 +42,9 @@ export function Audit({ query, filter, onQueryChange, onFilterChange, onOpen }: 
           <div className="eyebrow" style={{ marginBottom: 8 }}>
             AUDIT &amp; EVIDENCE
           </div>
-          <h1 style={{ fontSize: 24, fontWeight: 500, letterSpacing: '-0.03em', margin: 0 }}>Audit &amp; evidence explorer</h1>
+          <h1 style={{ fontSize: 24, margin: 0 }}>Audit &amp; evidence explorer</h1>
         </div>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: 'var(--status-muted-bg)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', padding: '7px 12px' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: 'var(--status-muted-bg)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', color: 'var(--fg-2)', padding: '7px 12px' }}>
           {LOCK_ICON}
           <span className="mono" style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--fg-2)', letterSpacing: '0.04em' }}>
             APPEND-ONLY · IMMUTABLE
@@ -53,8 +53,8 @@ export function Audit({ query, filter, onQueryChange, onFilterChange, onOpen }: 
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-        <div className="ops-input" style={{ flex: 1, minWidth: 280, display: 'flex', alignItems: 'center', gap: 9 }}>
-          <span style={{ color: 'var(--fg-3)' }}>{SEARCH_ICON}</span>
+        <div className="ops-input ops-field" style={{ flex: 1, minWidth: 280, display: 'flex', alignItems: 'center', gap: 9 }}>
+          <span style={{ display: 'inline-flex', color: 'var(--fg-3)' }}>{SEARCH_ICON}</span>
           <input
             style={{ border: 0, outline: 'none', background: 'transparent', fontFamily: 'var(--font-sans)', fontSize: 13, color: 'var(--fg-1)', height: 30, flex: 1, padding: 0 }}
             placeholder="Filter by tenant, invoice, actor, action…"
@@ -72,7 +72,7 @@ export function Audit({ query, filter, onQueryChange, onFilterChange, onOpen }: 
               onClick={() => onFilterChange(f.key)}
               className="ops-chip"
               aria-pressed={active}
-              style={{ border: `1px solid ${active ? 'var(--teal-200)' : 'var(--line-1)'}`, background: active ? 'var(--action-tint)' : 'var(--bg-2)', color: active ? 'var(--action)' : 'var(--fg-3)', borderRadius: 99, height: 34, padding: '0 13px', fontFamily: 'var(--font-mono)', fontSize: 10.5, fontWeight: 600, letterSpacing: '0.04em' }}
+              style={{ border: `1px solid ${active ? 'var(--teal-200)' : 'var(--line-1)'}`, background: active ? 'var(--action-tint)' : 'var(--bg-2)', color: active ? 'var(--action)' : 'var(--fg-3)', borderRadius: 'var(--radius-sm)', height: 34, padding: '0 13px', fontFamily: 'var(--font-mono)', fontSize: 10.5, fontWeight: 600, letterSpacing: '0.04em' }}
             >
               {f.label}
             </button>
@@ -108,17 +108,17 @@ export function Audit({ query, filter, onQueryChange, onFilterChange, onOpen }: 
               </span>
               <span style={{ fontSize: 12, color: 'var(--fg-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', paddingRight: 10 }}>{a.tenant}</span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                <span style={{ width: 22, height: 22, borderRadius: 99, background: 'var(--slate-800)', color: 'var(--text-on-dark)', display: 'grid', placeItems: 'center', fontSize: 9, fontWeight: 700 }}>{a.who}</span>
+                <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--slate-800)', color: 'var(--text-on-dark)', display: 'grid', placeItems: 'center', fontSize: 9, fontWeight: 700 }}>{a.who}</span>
                 <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)' }}>
                   {a.actor}
                 </span>
               </span>
-              <span style={{ color: 'var(--fg-4)' }}>{CHEVRON_RIGHT_ICON}</span>
+              <span style={{ display: 'inline-flex', color: 'var(--fg-4)' }}>{CHEVRON_RIGHT_ICON}</span>
             </div>
           )
         })}
         {rows.length === 0 && (
-          <div className="mono" style={{ padding: '28px 16px', textAlign: 'center', fontSize: 12, color: 'var(--fg-4)' }}>
+          <div className="mono" style={{ padding: '28px 16px', textAlign: 'center', fontSize: 12, color: 'var(--fg-3)' }}>
             No audit entries match this filter.
           </div>
         )}

@@ -149,9 +149,11 @@ describe('ensureMember', () => {
   it('ensureMember refuses a kind that disagrees with the tenant id prefix', async () => {
     const { realm } = await load()
 
-    const message = await rejection(realm.ensureMember(FIRM, 'in_house'))
+    const asInHouse = await rejection(realm.ensureMember(FIRM, 'in_house'))
+    const asFirm = await rejection(realm.ensureMember(IN_HOUSE, 'firm'))
 
-    expect(message).toContain(FIRM)
+    expect(asInHouse).toContain(FIRM)
+    expect(asFirm).toContain(IN_HOUSE)
     expect(fetched).toHaveLength(0)
   })
 

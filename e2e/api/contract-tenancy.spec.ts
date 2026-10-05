@@ -171,14 +171,14 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
       for (const m of rows) {
         expect(
           typeof m.display_name === 'string' && m.display_name.length > 0,
-          `${label}: ${m.user_id} has no display_name — the switcher would render a bare uuid`,
+          `${label}: ${m.user_id} has no display_name — the Members tab would render a bare uuid`,
         ).toBe(true)
         expect(SEEDED_ROLES, `${label}: ${m.user_id} role`).toContain(m.role)
         expect(SEEDED_STATUSES, `${label}: ${m.user_id} status`).toContain(m.status)
       }
       expect(
         rows.some((m) => m.status === 'suspended'),
-        `${label}: no row reports status "suspended" — the switcher has nothing to render disabled`,
+        `${label}: no row reports status "suspended" — the Members tab has no suspended row to render`,
       ).toBe(true)
     }
 
@@ -199,7 +199,7 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
       for (const m of rows) {
         expect(
           Object.keys(m).sort(),
-          `${m.user_id}: a switcher takes the tenant from GET /v1/me, never from a roster row`,
+          `${m.user_id}: the app takes the tenant from GET /v1/me, never from a roster row`,
         ).toEqual(MEMBERSHIP_KEYS)
       }
     })

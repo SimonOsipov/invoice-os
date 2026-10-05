@@ -58,8 +58,8 @@ tenants (1111 / 2222), plus one shard per big file
 `--project=<unit>` runs one. A new topology spec file must be added to a unit in `shards.ts`,
 or every topology run fails at config load.
 
-**Every browser spec signs in with `signInAs(page, id, { tenantId })`** (`e2e/personaSession.ts`).
-It drives the landing "Platform login" form as the tenant's e2e member (`e2e/realAccounts.ts`:
+**A browser spec that needs an app session on a seeded tenant signs in with `signInAs(page, id, { tenantId })`**
+(`e2e/personaSession.ts`). It drives the landing "Platform login" form as the tenant's e2e member (`e2e/realAccounts.ts`:
 `e2e-member-<tenantId>@example.com`, an admin that `ensureMember` registers and admits through
 `POST /auth/mock/member`, once per worker) and waits for the app to draw. It fails a sign-in whose
 stored session is not a hand-off session bound to that tenant. `tenantId` defaults to the seeded

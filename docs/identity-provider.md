@@ -512,8 +512,8 @@ hand-off is the app by default and a console when the visitor came from one (Con
 **Workspace mode.** A hand-off session takes its mode from `/me` `tenant.kind`: `firm` opens
 the firm workspace, `in_house` the in-house one. A `/me` answer, or a stored hand-off record,
 without a known `kind` fails the redemption (step 7, `signin=failed`) or drops the record. A
-session from the in-app picker of a build with no landing URL (forks and dev only) keeps the
-picked persona's mode.
+session from the in-app picker of a build with no landing URL (the standalone showcase build and
+local dev) keeps the picked persona's mode.
 
 **Identity card.** A hand-off session's card shows `/me` `user.display_name`, else
 `user.email`, else nothing; its initials follow the same order. A picker session shows the picked
@@ -611,7 +611,7 @@ renewable hand-off session".
 
 A hand-off session renews itself before its access token expires, so the user is not sent
 back to landing after `GOTRUE_JWT_EXP`. A picker session does not renew: `/auth/login` answers
-no refresh token, so it ends after one hour (forks and dev only).
+no refresh token, so it ends after one hour (a build with no landing URL only).
 
 **`POST /auth/refresh`** `{"refresh_token"}`, 1 KiB body limit, outside `/api/`, no verifier
 (it must work with an expired access token), wrapped in CORS, POST and OPTIONS, in every
@@ -848,7 +848,7 @@ so an outage signs nobody out. An outage of GoTrue therefore stops sign-in, rene
 sign-out at once, and the API after 30 s.
 
 **Tokens without `session_id` skip the check.** Mock-issuer tokens carry none, so
-a picker session on a fork or in dev never calls GoTrue. Production has no mock issuer. A
+a picker session never calls GoTrue. Production has no mock issuer. A
 GoTrue-signed token without `session_id` can be minted only with GoTrue's private key, which
 can forge any claim. `TestIdP_AccessTokenCarriesSessionID` fails if a GoTrue upgrade drops
 the claim. `ceiling:` the check keys on the claim, not the issuer; revisit if a second real

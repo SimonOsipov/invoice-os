@@ -338,10 +338,13 @@ describe('EvidenceBundleDrawer', () => {
     const entities = [mkEntity('ent-a', 'Alpha'), mkEntity('ent-b', 'Beta'), mkEntity('ent-c', 'Gamma')]
     await renderDrawer({ ctx: evidenceCtx(entities) })
     fireEvent.click(screen.getByTestId('evidence-company-trigger'))
-    const rows = entities.map((e) => screen.getByTestId(`evidence-company-row-${e.id}`))
-    rows.forEach((r) => expect(r.getAttribute('aria-pressed')).toBe('false'))
-    fireEvent.click(rows[0])
-    fireEvent.click(rows[1])
+    const rowsOf = () => entities.map((e) => screen.getByTestId(`evidence-company-row-${e.id}`))
+    rowsOf().forEach((r) => expect(r.getAttribute('aria-pressed')).toBe('false'))
+    fireEvent.click(rowsOf()[0])
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(rowsOf()[1])
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    const rows = rowsOf()
     const pressed = rows.filter((r) => r.getAttribute('aria-pressed') === 'true')
     expect(pressed).toHaveLength(1)
     expect(pressed[0]).toBe(rows[1])
@@ -473,6 +476,15 @@ describe('EvidenceBundleDrawer', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 
+  it('drawerCompany_pickClosesThePanel', async () => {
+    await renderDrawer({ ctx: evidenceCtx([mkEntity('ent-a', 'Alpha')]) })
+    const trigger = screen.getByTestId('evidence-company-trigger')
+    fireEvent.click(trigger)
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+    expect(screen.queryByTestId('evidence-company-panel')).toBeNull()
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+  })
+
   // EB-04-11
   it('drawer_opensWithNoCompanyAndTheThirtyDayDefault', async () => {
     await renderDrawer()
@@ -573,6 +585,7 @@ describe('EvidenceBundleDrawer', () => {
     fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
     await waitFor(() => expect(previewCalls(fetchMock)).toHaveLength(1))
 
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
     fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
     await new Promise((resolve) => setTimeout(resolve, 10))
     expect(previewCalls(fetchMock)).toHaveLength(1)
@@ -1827,6 +1840,7 @@ describe('EvidenceBundleDrawer', () => {
       expect([rowA.style.background, rowA.style.fontWeight, rowB.style.fontWeight]).toEqual(['transparent', '500', '500'])
 
       fireEvent.click(rowA)
+      fireEvent.click(trigger)
       // The whole name is in the accessible name even though the box ellipsises it.
       expect(screen.getByRole('button', { name: `${EVIDENCE_COPY.companyLabel} ${long}` })).toBe(trigger)
       const chosen = trigger.querySelector('[id] > span') as HTMLElement

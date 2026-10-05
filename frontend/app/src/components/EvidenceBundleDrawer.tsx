@@ -66,9 +66,8 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
   const [phase, setPhase] = useState<BuildPhase>({ kind: 'form' })
 
   // `!companyOpen`: FilterPopover has its own window keydown and neither listener stops
-  // propagation, so one Escape would close both it and the drawer (EB-04-10). `phase.kind`:
-  // the popover only mounts in the form phase, and companyOpen stays true after a pick, so a
-  // later phase must not inherit that gate (EB-06-4b).
+  // propagation, so one Escape would close both it and the drawer. `phase.kind`: the popover
+  // only mounts in the form phase, so a later phase must not inherit that gate.
   useDismiss(phase.kind !== 'form' || !companyOpen, onClose)
   // A ref, not state: the controller is not render data, and the unmount cleanup below cannot
   // reach a value that lives only in the closure of the render that created it.
@@ -79,7 +78,10 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
 
   // Sorted by name (AC-5, D-08-09) -- ctx.entities includes archived rows already.
   const companies = useMemo(() => [...ctx.entities].sort((a, b) => a.name.localeCompare(b.name)), [ctx.entities])
-  const pickCompany = (e: Entity) => setCompany({ id: e.id, name: e.name })
+  const pickCompany = (e: Entity) => {
+    setCompany({ id: e.id, name: e.name })
+    setCompanyOpen(false)
+  }
 
   // `now` is captured per SELECTION (inside the memo), never per render: re-deriving it on
   // every render would drift a relative preset's `from` and refetch forever

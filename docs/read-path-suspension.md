@@ -283,7 +283,8 @@ predicates it would previously have hit inside the transaction.
 | `OPTIONS /auth/sign-out` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `POST /auth/register` | gateway | exempt | no database; calls GoTrue |
 | `OPTIONS /auth/register` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
-| `GET /auth/verify` | gateway | exempt | no database; calls GoTrue |
+| `GET /auth/verify` | gateway | exempt | no database; renders the confirm page |
+| `POST /auth/verify` | gateway | exempt | no database; calls GoTrue |
 | `POST /contacts/demo-request` | gateway | exempt | no database; hands the form to notifications |
 | `OPTIONS /contacts/demo-request` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `GET /.well-known/jwks.json` | gateway | exempt | serves the public verification keys; unauthenticated by design |
@@ -353,7 +354,7 @@ predicates it would previously have hit inside the transaction.
 | `POST /v1/extractions/{id}/fields/{name}/corrections` | submission | covered | |
 | `POST /v1/extractions/{id}/line-items` | submission | covered | |
 
-89 distinct routes, 95 registrations (`GET /v1/ping` is registered once per service).
+90 distinct routes, 96 registrations (`GET /v1/ping` is registered once per service).
 
 ### 8.1 The non-HTTP callers, so nobody looks for them above
 

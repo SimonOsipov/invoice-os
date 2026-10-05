@@ -1,11 +1,11 @@
 package gateway
 
 import (
-	"bytes"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
-	"html/template"
+	"html"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -19,6 +19,9 @@ const maxVerifyTokenBytes = 256
 const verifyScript = `// A second submit would show the spent token's failure to a verified registrant.
 document.querySelector('form').addEventListener('submit', function (e) { if (this.dataset.sent) e.preventDefault(); else this.dataset.sent = '1' })`
 
+// Filled by strings.NewReplacer, not html/template: its reflection keeps every exported method
+// in the binary, which TestProductionGatewayBinaryCannotMint rejects.
+//
 //go:embed verify_page.html
 var verifyPageHTML string
 
@@ -26,10 +29,6 @@ var verifyPageHTML string
 func VerifyPageHandler(siteURL *url.URL) (http.Handler, error) {
 	if siteURL == nil {
 		return RegistrationNotConfigured(), nil
-	}
-	tmpl, err := template.New("verify_page").Parse(verifyPageHTML)
-	if err != nil {
-		return nil, err
 	}
 	sum := sha256.Sum256([]byte(verifyScript))
 	csp := "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'sha256-" +
@@ -53,19 +52,12 @@ func VerifyPageHandler(siteURL *url.URL) (http.Handler, error) {
 			http.Redirect(w, r, failed, http.StatusSeeOther)
 			return
 		}
-		var page bytes.Buffer
-		if err := tmpl.Execute(&page, struct {
-			Token  string
-			Script template.JS
-		}{token, template.JS(verifyScript)}); err != nil {
-			writeError(w, http.StatusInternalServerError, "page unavailable")
-			return
-		}
+		page := strings.NewReplacer("{{.Token}}", html.EscapeString(token), "{{.Script}}", verifyScript).Replace(verifyPageHTML)
 		h.Set("Content-Type", "text/html; charset=utf-8")
-		h.Set("Content-Length", strconv.Itoa(page.Len()))
+		h.Set("Content-Length", strconv.Itoa(len(page)))
 		w.WriteHeader(http.StatusOK)
 		if r.Method == http.MethodGet {
-			_, _ = w.Write(page.Bytes())
+			_, _ = io.WriteString(w, page)
 		}
 	}), nil
 }

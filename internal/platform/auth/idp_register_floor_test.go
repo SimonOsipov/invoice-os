@@ -26,7 +26,7 @@ func timedRegister(t *testing.T, gw string, u idpUser) (int, string, time.Durati
 func TestIdP_RegisterWaitsTheMinimumForEveryAccountState(t *testing.T) {
 	base := idpMailURL(t)
 	const floor = 400 * time.Millisecond
-	gw, logs := startGateway(t, base, floor)
+	gw, logs := startGateway(t, base, floor, nil)
 	conn := superConn(t)
 	fresh := func() idpUser {
 		u := idpUser{email: "idp-mail-" + uuid.NewString() + "@example.test", password: "pw-" + uuid.NewString()}

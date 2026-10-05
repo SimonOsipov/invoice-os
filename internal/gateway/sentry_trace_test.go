@@ -206,11 +206,13 @@ func TestGatewayTrace_FleetIsUntracedAndProbesCarryNoHeader(t *testing.T) {
 	}
 
 	for name, probe := range map[string]*sentrytest.HeaderStub{"alpha": alpha, "beta": beta} {
-		call := probe.Only(t, 1)
-		if call.Path != "/healthz" {
-			t.Errorf("%s probed at %q, want /healthz", name, call.Path)
+		calls := probe.Calls()
+		if len(calls) != 2 || calls[0].Path != "/healthz" || calls[1].Path != "/readyz" {
+			t.Errorf("%s probed at %+v, want /healthz then /readyz", name, calls)
 		}
-		call.AssertUntraced(t)
+		for _, call := range calls {
+			call.AssertUntraced(t)
+		}
 	}
 	if got := rec.Transactions(); len(got) != 0 {
 		t.Fatalf("/healthz/fleet sent %d transactions, want none", len(got))
@@ -225,7 +227,12 @@ func TestGatewayTrace_FleetIsUntracedAndProbesCarryNoHeader(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("fleet under a span: status = %d, want 200", rr.Code)
 	}
-	alpha.Only(t, 2).AssertUntraced(t)
+	if calls := alpha.Calls(); len(calls) != 4 {
+		t.Fatalf("alpha received %d requests, want 4", len(calls))
+	} else {
+		calls[2].AssertUntraced(t)
+		calls[3].AssertUntraced(t)
+	}
 
 	// Positive control on the same recorder: an API call is the one transaction.
 	if code := proxyWith(h, tok, "/api/tenancy/v1/me", nil); code != http.StatusOK {

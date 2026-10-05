@@ -113,7 +113,7 @@ test('landing registration window: a long name and a long email stay inside the 
     await settleAnimations(card)
     const at = `${viewport.width}x${viewport.height}`
     const cardBox = (await card.boundingBox())!
-    const fields = dialog.locator('input:not([type=radio])')
+    const fields = dialog.locator('input:not([type=radio]):not([type=checkbox])')
     const count = await fields.count()
     expect(count, `${at}: text fields in the window`).toBe(4)
     const boxes: Rect[] = []
@@ -134,6 +134,81 @@ test('landing registration window: a long name and a long email stay inside the 
   }
 
   await testInfo.attach('register-long-values.json', { body: JSON.stringify(measured, null, 2), contentType: 'application/json' })
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('landing registration window: the marketing box is unticked, named by its sentence and reached and toggled from the keyboard', async ({ page }) => {
+  const { errors, dialog } = await openRegister(page)
+  const box = dialog.getByRole('checkbox')
+  await expect(box, 'the marketing box is the only checkbox').toHaveCount(1)
+  await expect(box).not.toBeChecked()
+  await expect(box, 'its name is its sentence alone').toHaveAccessibleName(/^Allow marketing communications: .+ unsubscribe at any time\.$/)
+  await expect(dialog.getByText('We will email you about your account and the service.'), 'the notice is plain text').toBeVisible()
+  await expect(dialog.getByText('We will email you about your account and the service.').locator('xpath=ancestor-or-self::*[self::label or self::button or self::a]')).toHaveCount(0)
+
+  await dialog.getByLabel('Workspace name').focus()
+  await page.keyboard.press('Tab')
+  await expect(dialog.getByRole('radio').first(), 'Tab from the last field reaches the kind radios').toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(box, 'the next stop after the radios is the marketing box').toBeFocused()
+  await page.keyboard.press('Space')
+  await expect(box).toBeChecked()
+  await page.keyboard.press('Space')
+  await expect(box).not.toBeChecked()
+  await page.keyboard.press('Tab')
+  await expect(dialog.getByRole('button', { name: 'Create account →' }), 'the stop after the box is the submit').toBeFocused()
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('landing registration window: the marketing row, its box and the notice keep their relationships at 1440 and 390', async ({ page }) => {
+  const { errors, dialog, card } = await openRegister(page)
+  const email = dialog.getByLabel('Work email')
+  const notice = dialog.getByText('We will email you about your account and the service.')
+  const submit = dialog.getByRole('button', { name: 'Create account →' })
+
+  for (const viewport of [{ width: 1440, height: 1080 }, PHONE]) {
+    await page.setViewportSize(viewport)
+    const at = `${viewport.width}px`
+    await settleAnimations(card)
+    await notice.scrollIntoViewIfNeeded()
+    await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))))
+    const m = await page.evaluate(() => {
+      const rect = (r: DOMRect) => ({ x: r.x, y: r.y, width: r.width, height: r.height })
+      const lines = (node: Node) => {
+        const range = document.createRange()
+        range.selectNodeContents(node)
+        return Array.from(range.getClientRects()).filter((r) => r.width > 0)
+      }
+      const box = document.querySelector('[role="dialog"] input[type=checkbox]')!
+      const row = box.closest('label')!
+      // Only the label's own text nodes: a text run under the box must not be filtered out.
+      const labelText = Array.from(row.childNodes).filter((n) => n.nodeType === Node.TEXT_NODE).flatMap(lines)
+      const noticeLines = lines(Array.from(document.querySelectorAll('[role="dialog"] p')).find((p) => p.textContent?.startsWith('We will email you'))!)
+      return {
+        box: rect(box.getBoundingClientRect()),
+        row: rect(row.getBoundingClientRect()),
+        labelLines: labelText.length,
+        textLeft: Math.min(...labelText.map((r) => r.left)),
+        noticeLines: noticeLines.length,
+        noticeTextMid: (Math.min(...noticeLines.map((r) => r.left)) + Math.max(...noticeLines.map((r) => r.right))) / 2,
+      }
+    })
+    const [cardBox, emailBox, noticeBox, submitBox] = await Promise.all([card.boundingBox(), email.boundingBox(), notice.boundingBox(), submit.boundingBox()])
+    for (const [name, b] of [['card', cardBox], ['email', emailBox], ['notice', noticeBox], ['submit', submitBox]] as const) {
+      expect(b, `${at}: the ${name} has no box`).not.toBeNull()
+    }
+    expect(Math.abs(m.row.x - emailBox!.x), `${at}: marketing row left ${m.row.x} vs email input left ${emailBox!.x}`).toBeLessThanOrEqual(0.5)
+    expect(m.labelLines, `${at}: the marketing label has no text to measure`).toBeGreaterThan(0)
+    expect(m.noticeLines, `${at}: the notice has no text to measure`).toBeGreaterThan(0)
+    expect(m.textLeft, `${at}: the checkbox overlaps its label text`).toBeGreaterThanOrEqual(m.box.x + m.box.width)
+    // The notice's text, not its box: a full-width <p> is centred on the button whatever its text-align.
+    const submitMid = submitBox!.x + submitBox!.width / 2
+    expect(Math.abs(m.noticeTextMid - submitMid), `${at}: notice text centre ${m.noticeTextMid} vs submit centre ${submitMid}`).toBeLessThanOrEqual(1)
+    expect(noticeBox!.y, `${at}: the notice is not below the submit`).toBeGreaterThanOrEqual(submitBox!.y + submitBox!.height - 1)
+    for (const [name, b] of [['marketing row', m.row], ['notice', noticeBox!], ['submit', submitBox!]] as const) {
+      expect(enclosesRect(cardBox!, b, 1), `${at}: the ${name} is not enclosed by the card`).toBe(true)
+    }
+  }
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 

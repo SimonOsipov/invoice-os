@@ -41,7 +41,7 @@ Throughout this doc:
 - `<svc>` — the service name, identical in: the `cmd/<svc>` directory, the Railway
   service name, and the private-networking hostname `<svc>.railway.internal`.
   Lowercase, no separators (matches existing `cmd/` dirs: `tenancy`, `portfolio`,
-  `invoice`, `validation`, `submission`, `dashboard`, `notifications`, `reconciliation`,
+  `invoice`, `validation`, `submission`, `dashboard`, `notifications` (contact sync: [contact-sync.md](./contact-sync.md)), `reconciliation`,
   `opsconsole`; plus `gateway`).
 - `<ctx>` — the service's domain context dir `internal/<ctx>`. For the eight context
   services `<ctx>` = `<svc>`. The gateway has no context dir — drop that line wherever

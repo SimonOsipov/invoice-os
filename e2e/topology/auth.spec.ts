@@ -5,6 +5,7 @@ import { DESTINATION_READY, collectErrors, sidebarRoster } from '../personaSessi
 import { CONSOLE_SESSION_KEY, consoleUrl, seedStaffSession, type ConsoleTarget } from '../staffSession'
 import { PERSONAS, PERSONA_IDS, DESTINATION_ENV, type PersonaId } from '../personas'
 import {
+  contactsMe,
   login,
   createEntity,
   createInvoice,
@@ -1915,7 +1916,7 @@ const CREATE = 'Create an account'
 
 // Opens the registration window from the header, fills it, submits, and ends on "Check your email".
 // A firstEmail is submitted first: the window must refuse it inline and keep every other field.
-async function registerThroughLanding(page: Page, account: RealAccount, kind: TenantKind, firstEmail?: string): Promise<void> {
+async function registerThroughLanding(page: Page, account: RealAccount, kind: TenantKind, firstEmail?: string, marketing = false): Promise<void> {
   await seedConsent(page, false)
   await page.goto(LANDING_URL)
   await page.getByRole('banner').getByRole('button', { name: CREATE }).click()
@@ -1929,6 +1930,7 @@ async function registerThroughLanding(page: Page, account: RealAccount, kind: Te
   await dialog.getByLabel('Your name', { exact: true }).fill(account.displayName)
   await dialog.getByLabel('Workspace name', { exact: true }).fill(account.workspaceName)
   await dialog.getByRole('radio', { name: KIND_LABEL[kind] }).check()
+  if (marketing) await dialog.getByRole('checkbox').check()
 
   if (firstEmail !== undefined) {
     await submit.click()
@@ -1953,8 +1955,8 @@ async function expectNoDialog(page: Page): Promise<void> {
 }
 
 test('deployed journey: a stranger registers through the landing and lands in a workspace of each kind', async ({ page, browser }) => {
-  // Two real sign-ins at the 180 s one-sign-in budget of the journeys above, plus three registrations.
-  test.setTimeout(300_000)
+  // Two real sign-ins at the 180 s one-sign-in budget of the journeys above, plus three registrations and two 30 s contact polls.
+  test.setTimeout(360_000)
   // The free-mail refusal and the first sign-in's /me before provisioning are deliberate 4xx, which Chromium logs as console errors.
   const errors = gatedErrors(page, [
     expectedStatusDropper(page, 400, /\/auth\/register$/),
@@ -1976,7 +1978,7 @@ test('deployed journey: a stranger registers through the landing and lands in a 
   ] as const) {
     await test.step(`${kind}: registers through the landing window`, async () => {
       // The firm pass submits a free-mail address first; the in-house pass registers directly.
-      await registerThroughLanding(page, account, kind, kind === 'firm' ? `${crypto.randomUUID()}@gmail.com` : undefined)
+      await registerThroughLanding(page, account, kind, kind === 'firm' ? `${crypto.randomUUID()}@gmail.com` : undefined, kind === 'firm')
     })
 
     await test.step(`${kind}: the emailed link's landing shows the failed and the verified notice`, async () => {
@@ -2015,6 +2017,19 @@ test('deployed journey: a stranger registers through the landing and lands in a 
         await expect.poll(() => sidebarRoster(page), { message: 'in-house sidebar roster' }).toContain('Settings')
         expect(await sidebarRoster(page), 'the in-house sidebar').not.toContain('Clients')
       }
+    })
+
+    await test.step(`${kind}: the gateway hand-off made a registered contact, eligible only if ticked`, async () => {
+      const session = JSON.parse((await page.evaluate((key) => localStorage.getItem(key), SESSION_KEY)) ?? 'null') as { token?: string } | null
+      expect(session?.token, 'no app session token after landing in the workspace').toBeTruthy()
+      // The hand-off retries at 0 s, 5 s and 35 s; 30 s covers the first two.
+      await expect
+        .poll(() => contactsMe(session!.token!), { timeout: 30_000, message: 'no contact row for the registrant' })
+        .not.toBeNull()
+      const row = (await contactsMe(session!.token!))!
+      expect(row.marketing_eligible, `${kind}: marketing_eligible`).toBe(kind === 'firm')
+      expect(row.tags, `${kind}: tags`).toEqual(['registered'])
+      expect(row.mode, `${kind}: contact mode`).toBe('fake')
     })
 
     // The next kind starts signed out: a stored session would skip the front door.

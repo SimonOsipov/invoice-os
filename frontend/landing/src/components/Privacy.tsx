@@ -1,5 +1,7 @@
 import { useEffect } from 'react'
 import { CONSENT_TEXT } from './demoForm'
+import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
+import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
 import { PRODUCTION_HOSTNAMES } from '../hubspot'
 
 export const GA_RETENTION_MONTHS = 14
@@ -140,23 +142,58 @@ export function Privacy() {
             has asked for one.
           </p>
           <p style={P}>
-            HubSpot receives exactly this: your first and last name — split from the single full name you typed — your
-            work email, your company, and, unless you cleared them, your role, your taxpayer size and your monthly
-            invoice volume. Anything left empty is not sent at all, neither as a blank value nor as an empty field.
+            When you submit the form, your browser sends HubSpot exactly this: your first and last name — split from the
+            single full name you typed — your work email, your company, and, unless you cleared them, your role, your
+            taxpayer size and your monthly invoice volume. Anything left empty is not sent at all, neither as a blank
+            value nor as an empty field.
           </p>
           <p style={P}>
             The three optional questions come with an answer already selected when the form opens, so unless you change
             them, the pre-selected answer is what gets sent.
           </p>
           <p style={P}>
+            Right after you submit, our own server queues the same details for HubSpot (your first and last name, your
+            work email, your company and a tag, “demo request”) and tries again if HubSpot cannot be reached.
+          </p>
+          <p style={P}>
             The sentence you tick before submitting is stored alongside your details, word for word: “{CONSENT_TEXT}”
             Ticking it does not add you to a marketing list — the record says only that you agreed to be contacted about
             this demo request.
           </p>
-          <p style={P}>HubSpot holds all of this on their EU servers.</p>
+          <p style={P}>
+            The form also has a separate marketing box. If you tick it, its sentence is stored on our own server, word
+            for word, with the time you submitted the form: “{MARKETING_CONSENT_TEXT}”
+          </p>
+          <p style={P}>
+            Resend is the service we use to send email. Only a ticked marketing box sends your email address and your
+            first and last name to Resend from a demo request. Leave it unticked and Resend never receives them.
+          </p>
+          <p style={P}>HubSpot holds what it receives from you on their EU servers.</p>
           <p style={P}>
             We do not send HubSpot your browsing history, the pages you visited, or HubSpot's own tracking cookie. The
             form carries your answers and nothing else.
+          </p>
+
+          <h2 style={H2}>If you create an account</h2>
+          <p style={P}>
+            When you create an account, Resend receives your email address at once, because it delivers the verification
+            email we send you. Nothing else goes to Resend, and nothing at all goes to HubSpot, until you have verified
+            your email address.
+          </p>
+          <p style={P}>
+            After you verify your email address, our own server sends HubSpot your email address, your first and last
+            name, your workspace name, filed in HubSpot as your company, and a tag, “registered”, that marks you as a
+            registered user.
+          </p>
+          <p style={P}>
+            Every verified registrant becomes a contact in Resend, so that we can send you product and service email. Resend
+            receives your email address and your first and last name. Only a ticked marketing box makes you eligible for
+            marketing email; with the box unticked, Resend holds you for product and service email only.
+          </p>
+          <p style={P}>The registration form tells you about that email: “{PRODUCT_EMAIL_NOTICE}”</p>
+          <p style={P}>
+            The registration form has the same separate marketing box. Its sentence is stored on our own server, word for
+            word, with the time you submitted the form: “{MARKETING_CONSENT_TEXT}”
           </p>
 
           <h2 style={H2}>Error and performance monitoring</h2>
@@ -213,8 +250,8 @@ export function Privacy() {
               <a href={`mailto:${PRIVACY_CONTACT}`} className="ios-link" style={LINK}>
                 {PRIVACY_CONTACT}
               </a>{' '}
-              and tell us what you want done, and we will act on it. If you have booked a demo, the record we hold is in
-              HubSpot and we can delete it. Analytics data sits with Google under an identifier that is not tied to your
+              and tell us what you want done, and we will act on it. If you have registered or booked a demo, the
+              records we hold are in HubSpot, in Resend and on our own server, and we can delete them. Analytics data sits with Google under an identifier that is not tied to your
               name, so tell us as much as you can about when you visited.
             </li>
           </ol>

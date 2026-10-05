@@ -39,7 +39,7 @@ func (rd *readiness) snapshot() map[string]ReadyCheck {
 // DBReset is "true" or "false" once a process has run boot-time database
 // provisioning, and empty on every process that does not — which is every
 // service except the gateway. /healthz omits the field entirely while it is
-// empty; every other body carries only status, build and sentry.
+// empty.
 //
 // The gateway sets it from db.ProvisionConfig.ResetWillRun — the same predicate
 // db.Provision branched on, never a second copy. It is published because the
@@ -61,6 +61,9 @@ var DemoPurge string
 // 404 on the mint routes cannot tell an untagged build from a gated-off one.
 var MockIssuer string
 
+// Contacts is "real", "fake" or "off" on notifications and empty elsewhere.
+var Contacts string
+
 // AuthIssuers is the gateway's trusted-issuer count; empty elsewhere.
 var AuthIssuers string
 
@@ -75,6 +78,9 @@ func healthzHandler(w http.ResponseWriter, _ *http.Request) {
 	}
 	if MockIssuer != "" {
 		body["mock_issuer"] = MockIssuer
+	}
+	if Contacts != "" {
+		body["contacts"] = Contacts
 	}
 	if AuthIssuers != "" {
 		body["auth_issuers"] = AuthIssuers

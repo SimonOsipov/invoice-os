@@ -45,6 +45,7 @@ const FULL_LEAD: DemoLead = {
   size: 'Medium ₦1bn–₦5bn',
   volume: '1k–10k',
   consent: true,
+  marketing: false,
 }
 const CONSENT_TEXT_FIXTURE =
   'I agree to ASComply Africa storing and processing my details so a compliance specialist can contact me about this demo request.'
@@ -190,6 +191,17 @@ describe('buildSubmission', () => {
     expect(names).not.toContain('website')
   })
 
+  it('a ticked marketing box leaves the Forms payload byte-identical to an unticked one', () => {
+    const unticked = JSON.stringify(buildSubmission({ ...FULL_LEAD, marketing: false }, CONSENT_TEXT_FIXTURE))
+    const ticked = JSON.stringify(buildSubmission({ ...FULL_LEAD, marketing: true }, CONSENT_TEXT_FIXTURE))
+    expect(unticked.length, 'control: the payload is not empty').toBeGreaterThan(100)
+    expect(ticked).toBe(unticked)
+    expect(ticked).not.toMatch(/marketing/i)
+    const parsed = JSON.parse(ticked)
+    expect(parsed.fields).toHaveLength(7)
+    expect(parsed.legalConsentOptions.consent.communications).toEqual([])
+  })
+
   it('U23: legalConsentOptions.consent is structured exactly, and no context key is emitted', () => {
     const result = buildSubmission(FULL_LEAD, CONSENT_TEXT_FIXTURE)
     expect(result.legalConsentOptions.consent).toEqual({
@@ -238,7 +250,7 @@ describe('buildSubmission', () => {
   })
 
   it('QA-U32: a lead with every field blank emits zero fields but a well-formed consent block', () => {
-    const lead: DemoLead = { name: '', email: '', company: '', role: '', size: '', volume: '', consent: false }
+    const lead: DemoLead = { name: '', email: '', company: '', role: '', size: '', volume: '', consent: false, marketing: false }
     const result = buildSubmission(lead, CONSENT_TEXT_FIXTURE)
     expect(result.fields).toEqual([])
     expect(result.legalConsentOptions.consent).toEqual({

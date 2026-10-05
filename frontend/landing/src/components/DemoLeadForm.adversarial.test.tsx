@@ -87,9 +87,9 @@ const MODAL_PANEL_STYLE = 'padding:36px 24px 26px;text-align:center;display:grid
 describe('the popup DOM survives the extraction (A1-A3)', () => {
   const popup = renderToStaticMarkup(createElement(DemoModal, { onClose: noop }))
 
-  it('A1: the popup still carries every id it shipped with, and no new one', () => {
+  it('A1: the popup carries every id it shipped with, plus dm-marketing and no other new one', () => {
     const ids = Array.from(popup.matchAll(/\sid="([^"]+)"/g)).map((m) => m[1])
-    expect(ids).toEqual(['dm-name', 'dm-email', 'dm-company', 'dm-role', 'dm-size', 'dm-volume', 'dm-consent'])
+    expect(ids).toEqual(['dm-name', 'dm-email', 'dm-company', 'dm-role', 'dm-size', 'dm-volume', 'dm-consent', 'dm-marketing'])
   })
 
   it('A2: the single <style> carries exactly the v2 chrome and form rule set, order aside', () => {
@@ -251,7 +251,7 @@ describe('the demo form wears the v2 field, ring and buttons (FL rows)', () => {
   const popup = renderToStaticMarkup(createElement(DemoModal, { onClose: noop }))
 
   it('FL-01: every demo field wears the v2 field', () => {
-    const fields = tagsOf(popup, 'input|select').filter((t) => /^dm-/.test(attrOf(t, 'id')) && attrOf(t, 'id') !== 'dm-consent')
+    const fields = tagsOf(popup, 'input|select').filter((t) => /^dm-/.test(attrOf(t, 'id')) && !['dm-consent', 'dm-marketing'].includes(attrOf(t, 'id')))
     expect(fields.length).toBe(6)
     for (const tag of fields) {
       const d = declarations(attrOf(tag, 'style'))

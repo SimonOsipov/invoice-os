@@ -1,10 +1,12 @@
 package gateway
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1381,5 +1383,373 @@ func TestProxyPassesAServiceOwn401Through(t *testing.T) {
 	h.ServeHTTP(rec, request("GET", "/api/tenancy/v1/ping", tg.validToken(t)))
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+}
+
+// upstreamCount counts what one upstream received: every request, hits on an /internal route, hits on the self-read.
+type upstreamCount struct {
+	any, internal, selfRead atomic.Int32
+}
+
+func (c *upstreamCount) reset() { c.any.Store(0); c.internal.Store(0); c.selfRead.Store(0) }
+
+// countingUpstream serves an /internal route and the self-read from a case-sensitive Go mux, as a context service does.
+func countingUpstream(t *testing.T) (*url.URL, *upstreamCount) {
+	t.Helper()
+	c := &upstreamCount{}
+	mux := http.NewServeMux()
+	internal := func(w http.ResponseWriter, _ *http.Request) { c.internal.Add(1); w.WriteHeader(http.StatusAccepted) }
+	mux.HandleFunc("/internal", internal)
+	mux.HandleFunc("/internal/", internal)
+	mux.HandleFunc("GET /v1/contacts/me", func(w http.ResponseWriter, _ *http.Request) {
+		c.selfRead.Add(1)
+		_, _ = w.Write([]byte(`{}`))
+	})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c.any.Add(1)
+		mux.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u, c
+}
+
+// internalRig is the gateway mounted on a ServeMux at routePrefix behind a real listener, as cmd/gateway/main.go mounts it.
+type internalRig struct {
+	tg       *testGateway
+	srv      *httptest.Server
+	counts   map[string]*upstreamCount
+	services []string
+}
+
+func newInternalRig(t *testing.T) *internalRig {
+	t.Helper()
+	tg := setupGateway(t)
+	services := []string{"tenancy", "portfolio", "invoice", "validation", "submission", "dashboard", "notifications"}
+	ups := map[string]*url.URL{}
+	counts := map[string]*upstreamCount{}
+	for _, svc := range services {
+		ups[svc], counts[svc] = countingUpstream(t)
+	}
+	api := Handler(Options{Verifier: tg.verifier, Sessions: liveSessions(t), Upstreams: ups, GatewayToken: testGatewayToken})
+	mux := http.NewServeMux()
+	mux.Handle(routePrefix, CORS(nil)(api))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return &internalRig{tg: tg, srv: srv, counts: counts, services: services}
+}
+
+// do sends one request and follows every redirect; it returns the final status and how many redirects it followed.
+func (r *internalRig) do(t *testing.T, method, rawPath, bearer string) (status, redirects int) {
+	t.Helper()
+	client := &http.Client{CheckRedirect: func(_ *http.Request, via []*http.Request) error {
+		redirects++
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after %d redirects", len(via))
+		}
+		return nil
+	}}
+	req, err := http.NewRequest(method, r.srv.URL+rawPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, rawPath, err)
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode, redirects
+}
+
+// {svc} is replaced by each service name.
+func (r *internalRig) path(tmpl, svc string) string { return strings.ReplaceAll(tmpl, "{svc}", svc) }
+
+func (r *internalRig) tenantless(t *testing.T) string {
+	return r.tg.mint(t, auth.MintOptions{Subject: testSubject, Role: testRole})
+}
+
+func TestRouter_InternalPathNeverReachesUpstream(t *testing.T) {
+	rig := newInternalRig(t)
+
+	// Control: the upstream does serve /internal, and its mux is case-sensitive, so /Internal is no internal route.
+	direct, c := countingUpstream(t)
+	for _, tc := range []struct {
+		path string
+		want int32
+	}{{"/internal/contacts/registrants", 1}, {"/Internal/contacts/registrants", 1}} {
+		path, want := tc.path, tc.want
+		resp, err := http.Post(direct.String()+path, "application/json", strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if got := c.internal.Load(); got != want {
+			t.Fatalf("control: after POST %s the upstream's /internal route has %d hits, want %d", path, got, want)
+		}
+	}
+
+	// The first segment after the service is exactly internal once the mux cleans the path (301) or the router decodes it.
+	blocked := []struct {
+		name, tmpl string
+		redirects  bool
+	}{
+		{"bare", "/api/{svc}/internal", false},
+		{"trailing slash", "/api/{svc}/internal/", false},
+		{"registrants", "/api/{svc}/internal/contacts/registrants", false},
+		{"demo-requests", "/api/{svc}/internal/contacts/demo-requests", false},
+		{"dot segment", "/api/{svc}/./internal/contacts/registrants", true},
+		{"double slash", "/api/{svc}//internal/contacts/registrants", true},
+		{"dot-dot segment", "/api/{svc}/v1/../internal/contacts/registrants", true},
+		{"double slash before the service", "/api//{svc}/internal/contacts/registrants", true},
+		{"dot segment before the service", "/api/./{svc}/internal/contacts/registrants", true},
+		{"dot-dot into the service", "/api/x/../{svc}/internal/contacts/registrants", true},
+		{"percent-encoded letter", "/api/{svc}/%69nternal/contacts/registrants", false},
+	}
+	// Go's mux does not clean an encoded dot segment and matches case-sensitively, and the upstream mux does the same,
+	// so these may be proxied or refused but must reach no /internal route.
+	noInternalRoute := []struct{ name, tmpl string }{
+		{"encoded dot segment", "/api/{svc}/%2e/internal/contacts/registrants"},
+		{"encoded dot-dot segment", "/api/{svc}/v1/%2e%2e/internal/contacts/registrants"},
+		{"percent-encoded slash after internal", "/api/{svc}/internal%2Fcontacts%2Fregistrants"},
+		{"percent-encoded slash after the service", "/api/{svc}%2Finternal/contacts/registrants"},
+		{"Internal", "/api/{svc}/Internal/contacts/registrants"},
+		{"INTERNAL", "/api/{svc}/INTERNAL/contacts/registrants"},
+		{"encoded I", "/api/{svc}/%49nternal/contacts/registrants"},
+	}
+	tokens := map[string]string{"tenant-scoped": rig.tg.validToken(t), "tenantless": rig.tenantless(t)}
+
+	for _, svc := range rig.services {
+		for tokName, token := range tokens {
+			for _, method := range []string{http.MethodGet, http.MethodPost} {
+				for _, b := range blocked {
+					t.Run(svc+"/"+tokName+"/"+method+"/"+b.name, func(t *testing.T) {
+						rig.counts[svc].reset()
+						path := rig.path(b.tmpl, svc)
+						status, redirects := rig.do(t, method, path, token)
+						if status != http.StatusNotFound {
+							t.Errorf("%s %s answered %d, want 404", method, path, status)
+						}
+						if (redirects > 0) != b.redirects {
+							t.Errorf("%s %s followed %d redirects, want some=%v: the case no longer meets the mux's own cleaning", method, path, redirects, b.redirects)
+						}
+						if n := rig.counts[svc].any.Load(); n != 0 {
+							t.Errorf("%s %s reached the %s upstream %d times, want 0", method, path, svc, n)
+						}
+					})
+				}
+				for _, v := range noInternalRoute {
+					t.Run(svc+"/"+tokName+"/"+method+"/"+v.name, func(t *testing.T) {
+						rig.counts[svc].reset()
+						path := rig.path(v.tmpl, svc)
+						status, _ := rig.do(t, method, path, token)
+						// A tenantless token meets authorize's 403 on a path the router does not refuse.
+						if status != http.StatusNotFound && (tokName != "tenantless" || status != http.StatusForbidden) {
+							t.Errorf("%s %s answered %d, want 404", method, path, status)
+						}
+						if n := rig.counts[svc].internal.Load(); n != 0 {
+							t.Errorf("%s %s reached the %s upstream's /internal route %d times, want 0", method, path, svc, n)
+						}
+					})
+				}
+			}
+		}
+	}
+
+	// A tenantless token gets 404, not authorize's 403, and no token still gets the verifier's 401.
+	t.Run("no token is 401", func(t *testing.T) {
+		rig.counts["notifications"].reset()
+		status, _ := rig.do(t, http.MethodGet, "/api/notifications/internal/contacts/registrants", "")
+		if status != http.StatusUnauthorized {
+			t.Errorf("answered %d, want 401", status)
+		}
+		if n := rig.counts["notifications"].any.Load(); n != 0 {
+			t.Errorf("upstream hit %d times, want 0", n)
+		}
+	})
+}
+
+func TestRouter_SelfReadIsProxied(t *testing.T) {
+	rig := newInternalRig(t)
+	token := rig.tg.validToken(t)
+
+	t.Run("self-read", func(t *testing.T) {
+		c := rig.counts["notifications"]
+		status, redirects := rig.do(t, http.MethodGet, "/api/notifications/v1/contacts/me", token)
+		if status != http.StatusOK || redirects != 0 {
+			t.Fatalf("answered %d after %d redirects, want 200 with none", status, redirects)
+		}
+		if c.any.Load() != 1 || c.selfRead.Load() != 1 {
+			t.Errorf("upstream saw %d requests and %d self-reads, want 1 and 1", c.any.Load(), c.selfRead.Load())
+		}
+	})
+
+	// The refusal is for the first segment after the service, exactly: near misses still proxy.
+	for _, path := range []string{
+		"/api/notifications/v1/internal/contacts/registrants",
+		"/api/notifications/internals/contacts/registrants",
+		"/api/notifications/internal-status",
+		"/api/notifications/x/internal",
+	} {
+		t.Run(path, func(t *testing.T) {
+			c := rig.counts["notifications"]
+			c.reset()
+			rig.do(t, http.MethodGet, path, token)
+			if c.any.Load() != 1 {
+				t.Errorf("GET %s reached the upstream %d times, want 1 (it is not an internal first segment)", path, c.any.Load())
+			}
+			if c.internal.Load() != 0 {
+				t.Errorf("GET %s reached the upstream's /internal route", path)
+			}
+		})
+	}
+}
+
+// rawDo writes request line target verbatim over a socket, which a Go client would clean or refuse,
+// and follows redirects by hand; it returns the final status and the number of redirects followed.
+func (r *internalRig) rawDo(t *testing.T, method, target, bearer string) (status, redirects int) {
+	t.Helper()
+	for range 6 {
+		conn, err := net.Dial("tcp", r.srv.Listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+		fmt.Fprintf(conn, "%s %s HTTP/1.1\r\nHost: gw.test\r\nAuthorization: Bearer %s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", method, target, bearer)
+		resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: method})
+		if err != nil {
+			_ = conn.Close()
+			t.Logf("%s %q: %v", method, target, err)
+			return 0, redirects
+		}
+		_ = resp.Body.Close()
+		_ = conn.Close()
+		if resp.StatusCode/100 != 3 {
+			return resp.StatusCode, redirects
+		}
+		loc, err := resp.Location()
+		if err != nil {
+			t.Fatalf("%s %q: %v", method, target, err)
+		}
+		target = loc.RequestURI()
+		redirects++
+	}
+	t.Fatalf("%s %q: redirect loop", method, target)
+	return 0, 0
+}
+
+// Request lines a Go client cleans or refuses, written to the socket as is. Whatever the method,
+// no variant may reach the upstream's /internal route; refused ones must not reach the upstream at all.
+func TestRouter_InternalPathRawRequestLinesNeverReachUpstream(t *testing.T) {
+	rig := newInternalRig(t)
+	token := rig.tg.validToken(t)
+	c := rig.counts["notifications"]
+	const reg = "/contacts/registrants"
+
+	// Control: the raw helper reaches the upstream when it should, and the refusal is a 404 with no upstream hit.
+	c.reset()
+	if status, _ := rig.rawDo(t, http.MethodGet, "/api/notifications/v1/contacts/me", token); status != http.StatusOK || c.selfRead.Load() != 1 {
+		t.Fatalf("control: raw self-read answered %d with %d upstream self-reads, want 200 and 1", status, c.selfRead.Load())
+	}
+
+	refused := []string{
+		"/api/notifications/%69%6e%74%65%72%6e%61%6c" + reg,
+		"/api/notifications/%69nternal%2Fcontacts/registrants",
+		"/api/notifications/internal%2F..%2Finternal" + reg,
+		"http://gw.test/api/notifications/internal" + reg,
+		"/api/notifications/internal",
+		"/api/notifications/internal/",
+		"/api/notifications/v1/../internal" + reg,
+		"/api/notifications//internal" + reg,
+	}
+	// Reach the upstream, which is a case-sensitive Go mux, but no /internal route there.
+	proxiedHarmless := []string{
+		"/api/notifications/internal;x=1" + reg,
+		"/api/notifications/internal%00" + reg,
+		"/api/notifications/internal." + reg,
+		"/api/notifications/internal%20" + reg,
+		"/api/notifications/%c0%af..%c0%afinternal" + reg,
+		"/api/notifications/%e2%80%8binternal" + reg,
+		"/api/notifications/%ef%bd%89nternal" + reg,
+		"/api/notifications/v1/..%2finternal" + reg,
+		"/api/notifications/v1/%2e%2e/internal" + reg,
+	}
+	// A non-CONNECT request is cleaned by the mux (301) before the router; CONNECT is not, so the router sees these unclean.
+	cleanedOrUnclean := []string{
+		"/api/notifications/INTERNAL/../internal" + reg,
+		"/api/notifications/./internal" + reg,
+		"/api/notifications/%2Finternal" + reg,
+		"/api/notifications/\xff/../internal" + reg,
+	}
+	for _, set := range [][]string{refused, proxiedHarmless, cleanedOrUnclean} {
+		if len(set) == 0 {
+			t.Fatal("empty case set")
+		}
+	}
+
+	// Only CONNECT keeps the raw path; other methods are cleaned to /v1/contacts/me by the mux and proxy legitimately.
+	connectRefused := "/api/notifications/internal/../v1/contacts/me"
+	t.Run("CONNECT "+connectRefused, func(t *testing.T) {
+		c.reset()
+		status, _ := rig.rawDo(t, http.MethodConnect, connectRefused, token)
+		if status != http.StatusNotFound || c.any.Load() != 0 {
+			t.Errorf("answered %d, upstream hits %d, want 404 and 0", status, c.any.Load())
+		}
+	})
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodConnect} {
+		for _, target := range refused {
+			t.Run(method+" "+target, func(t *testing.T) {
+				c.reset()
+				status, _ := rig.rawDo(t, method, target, token)
+				if status != http.StatusNotFound || c.any.Load() != 0 {
+					t.Errorf("answered %d, upstream hits %d, want 404 and 0", status, c.any.Load())
+				}
+			})
+		}
+		for _, target := range append(slices.Clone(proxiedHarmless), cleanedOrUnclean...) {
+			t.Run(method+" "+target, func(t *testing.T) {
+				c.reset()
+				status, _ := rig.rawDo(t, method, target, token)
+				if c.internal.Load() != 0 {
+					t.Errorf("reached the upstream's /internal route %d times (answered %d)", c.internal.Load(), status)
+				}
+				if status/100 == 2 {
+					t.Errorf("answered %d, want a refusal", status)
+				}
+			})
+		}
+	}
+}
+
+// Near misses of the internal segment still proxy: only a path that resolves to "internal" first is refused.
+// Each request must reach the upstream once and never its /internal route, with and without the mux's cleaning (CONNECT).
+func TestRouter_InternalNearMissesStillProxy(t *testing.T) {
+	rig := newInternalRig(t)
+	token := rig.tg.validToken(t)
+	c := rig.counts["notifications"]
+	targets := []string{
+		"/api/notifications/v1/internal/x",
+		"/api/notifications/internals/x",
+		"/api/notifications/internal-status",
+		"/api/notifications/x/internal",
+		"/api/notifications/v1/../v1/contacts/me",
+		"/api/notifications/v1/./contacts/me",
+		"/api/notifications//v1/contacts/me",
+	}
+	for _, method := range []string{http.MethodGet, http.MethodConnect} {
+		for _, target := range targets {
+			t.Run(method+" "+target, func(t *testing.T) {
+				c.reset()
+				rig.rawDo(t, method, target, token)
+				if c.any.Load() != 1 || c.internal.Load() != 0 {
+					t.Errorf("upstream saw %d requests and %d /internal hits, want 1 and 0", c.any.Load(), c.internal.Load())
+				}
+			})
+		}
 	}
 }

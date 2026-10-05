@@ -45,12 +45,18 @@ export const DEFAULT_FORM = {
   size: DEFAULT_TAXPAYER_SIZE,
   volume: '1k–10k',
   consent: false,
+  marketing: false,
 }
 
 export type DemoFormState = typeof DEFAULT_FORM
-// Every key except the one boolean — setField carries strings, setConsent the box.
-export type DemoFieldKey = Exclude<keyof DemoFormState, 'consent'>
+// Every key except the two booleans — setField carries strings, setConsent and setMarketing the boxes.
+export type DemoFieldKey = Exclude<keyof DemoFormState, 'consent' | 'marketing'>
 export type DemoStep = 'form' | 'submitting' | 'success' | 'error'
+
+// Gateway limits (validateDemoRequest): name and company in runes, email in bytes.
+export const DEMO_NAME_MAX = 200
+export const DEMO_COMPANY_MAX = 200
+export const DEMO_EMAIL_MAX = 254
 
 export const EMAIL_RE =/^[^\s@]+@[^\s@]+\.[^\s@]+$/
 

@@ -436,7 +436,7 @@ func TestVerify_NonGetIs405WithoutUpstreamCall(t *testing.T) {
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(method, "/auth/verify?token="+verifyToken+"&type=signup", nil)
 
-			VerifyHandler(fake.URL, siteURL(t), testClient(), slog.New(slog.DiscardHandler)).ServeHTTP(rec, req)
+			VerifyHandler(fake.URL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), nil).ServeHTTP(rec, req)
 
 			if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != http.MethodGet {
 				t.Errorf("%s = %d Allow %q, want 405 Allow GET", method, rec.Code, rec.Header().Get("Allow"))

@@ -67,7 +67,7 @@ func mailEnv(t *testing.T, name string) string {
 }
 
 // startGateway serves the real register and verify handlers where the mailed link points, and returns its JSON log.
-func startGateway(t *testing.T, authBase string, minResponse time.Duration) (string, *bytes.Buffer) {
+func startGateway(t *testing.T, authBase string, minResponse time.Duration, sink gateway.ContactSink) (string, *bytes.Buffer) {
 	t.Helper()
 	authURL, err := url.Parse(authBase)
 	if err != nil {
@@ -78,7 +78,7 @@ func startGateway(t *testing.T, authBase string, minResponse time.Duration) (str
 	log := slog.New(slog.NewJSONHandler(&syncWriter{w: logs}, nil))
 	mux := http.NewServeMux()
 	mux.Handle("POST /auth/register", gateway.RegisterHandler(authURL, noRedirect, minResponse, log))
-	mux.Handle("GET /auth/verify", gateway.VerifyHandler(authURL, site, noRedirect, log))
+	mux.Handle("GET /auth/verify", gateway.VerifyHandler(authURL, site, noRedirect, log, sink))
 
 	l, err := net.Listen("tcp", gatewayAddr)
 	if err != nil {
@@ -151,7 +151,7 @@ func postRegister(t *testing.T, gw, email string) (int, string) {
 
 // None may register. The gateway refuses the trailing-dot row; real GoTrue decides the rest.
 func TestIdP_FreeMailVariantsAreNotAccepted(t *testing.T) {
-	gw, _ := startGateway(t, idpMailURL(t), 0)
+	gw, _ := startGateway(t, idpMailURL(t), 0, nil)
 	conn := superConn(t)
 	ctx := context.Background()
 
@@ -279,7 +279,7 @@ func follow(t *testing.T, link string) string {
 
 func TestIdP_RegisterLeavesTheAccountUnverified(t *testing.T) {
 	base := idpMailURL(t)
-	gw, _ := startGateway(t, base, 0)
+	gw, _ := startGateway(t, base, 0, nil)
 	u := registrant(t, gw)
 
 	var confirmed bool
@@ -298,7 +298,7 @@ func TestIdP_RegisterLeavesTheAccountUnverified(t *testing.T) {
 
 func TestIdP_ConfirmationLinkTargetsTheGateway(t *testing.T) {
 	base := idpMailURL(t)
-	gw, _ := startGateway(t, base, 0)
+	gw, _ := startGateway(t, base, 0, nil)
 	u := registrant(t, gw)
 
 	link := confirmationLink(t, u.email)
@@ -314,20 +314,85 @@ func TestIdP_ConfirmationLinkTargetsTheGateway(t *testing.T) {
 	}
 }
 
+// recordingSink keeps every registrant the gateway hands off and signals each on calls.
+type recordingSink struct {
+	mu    sync.Mutex
+	all   []gateway.RegistrantContact
+	calls chan gateway.RegistrantContact
+}
+
+func newRecordingSink() *recordingSink {
+	return &recordingSink{calls: make(chan gateway.RegistrantContact, 8)}
+}
+
+func (s *recordingSink) Registrant(_ context.Context, c gateway.RegistrantContact) error {
+	s.mu.Lock()
+	s.all = append(s.all, c)
+	s.mu.Unlock()
+	s.calls <- c
+	return nil
+}
+
+func (s *recordingSink) DemoRequest(context.Context, gateway.DemoRequest) error { return nil }
+
+func (s *recordingSink) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.all)
+}
+
+// next waits for a hand-off, which the gateway sends in the background.
+func (s *recordingSink) next(t *testing.T) gateway.RegistrantContact {
+	t.Helper()
+	select {
+	case c := <-s.calls:
+		return c
+	case <-time.After(10 * time.Second):
+		t.Fatal("no hand-off within 10s of following the mailed link")
+		return gateway.RegistrantContact{}
+	}
+}
+
 func TestIdP_EmailedLinkVerifiesThenSignInSucceeds(t *testing.T) {
 	base := idpMailURL(t)
-	gw, _ := startGateway(t, base, 0)
-	u := registrant(t, gw)
+	sink := newRecordingSink()
+	gw, _ := startGateway(t, base, 0, sink)
+	const consentText = "I agree to receive product news from ASComply."
+	u := registrant(t, gw, map[string]string{
+		"workspace_name": "IdP Hand-off", "display_name": "Ada", "marketing_consent_text": consentText,
+	})
 
-	if got := follow(t, confirmationLink(t, u.email)); got != siteURL+"/?verified=1" {
+	link := confirmationLink(t, u.email)
+	if n := sink.count(); n != 0 {
+		t.Fatalf("%d registrants handed off before the link was followed, want 0", n)
+	}
+	if got := follow(t, link); got != siteURL+"/?verified=1" {
 		t.Fatalf("verify redirect = %q, want %s/?verified=1", got, siteURL)
+	}
+
+	got := sink.next(t)
+	var id string
+	if err := superConn(t).QueryRow(context.Background(), `SELECT id::text FROM auth.users WHERE email = $1`, u.email).Scan(&id); err != nil {
+		t.Fatalf("read the registered user: %v", err)
+	}
+	if got.UserID != id || got.Email != u.email || got.DisplayName != "Ada" || got.WorkspaceName != "IdP Hand-off" {
+		t.Errorf("hand-off = %+v, want user %s, email %s, Ada, IdP Hand-off", got, id, u.email)
+	}
+	if got.Consent == nil || got.Consent.Text != consentText {
+		t.Fatalf("hand-off consent = %+v, want the text given at register", got.Consent)
+	}
+	if at, err := time.Parse(time.RFC3339, got.Consent.At); err != nil || time.Since(at) > 2*time.Minute || time.Until(at) > time.Minute {
+		t.Errorf("hand-off consent time = %q (%v), want an RFC 3339 time from the register call", got.Consent.At, err)
+	}
+	if n := sink.count(); n != 1 {
+		t.Errorf("%d registrants handed off, want exactly 1", n)
 	}
 	accessToken(t, base, u)
 }
 
 func TestIdP_VerificationLinkIsSingleUse(t *testing.T) {
 	base := idpMailURL(t)
-	gw, _ := startGateway(t, base, 0)
+	gw, _ := startGateway(t, base, 0, nil)
 	u := registrant(t, gw)
 
 	link := confirmationLink(t, u.email)
@@ -341,7 +406,7 @@ func TestIdP_VerificationLinkIsSingleUse(t *testing.T) {
 
 func TestIdP_ProvisionedWorkspaceReachesTheNextToken(t *testing.T) {
 	base := idpMailURL(t)
-	gw, _ := startGateway(t, base, 0)
+	gw, _ := startGateway(t, base, 0, nil)
 	answers := map[string]string{"workspace_name": "IdP Works", "display_name": "Ada", "kind": "in_house"}
 	u := registrant(t, gw, answers)
 	if got := follow(t, confirmationLink(t, u.email)); got != siteURL+"/?verified=1" {
@@ -426,7 +491,7 @@ func TestIdP_ProvisionedWorkspaceReachesTheNextToken(t *testing.T) {
 // docs/identity-provider.md, "First registrant's answers": a repeat signup changes neither the password nor the answers.
 func TestIdP_RepeatRegistrationKeepsTheFirstAnswers(t *testing.T) {
 	base := idpMailURL(t)
-	gw, _ := startGateway(t, base, 0)
+	gw, _ := startGateway(t, base, 0, nil)
 	first := map[string]string{"workspace_name": "First Co", "display_name": "First", "kind": "firm"}
 	u := registrant(t, gw, first)
 

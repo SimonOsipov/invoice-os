@@ -1,11 +1,14 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
 // The registration window, driven through App: entries, form, outcomes. Setup mirrors App.signIn.dom.test.tsx.
-import { act, createElement } from 'react'
+import { act, createElement, type CSSProperties } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ConsentStore } from './consent'
+import { CHECK_INPUT_STYLE, CHECK_LABEL_STYLE, DemoLeadForm } from './components/DemoLeadForm'
+import { MARKETING_CONSENT_TEXT } from './components/MarketingConsent'
+import { PRODUCT_EMAIL_NOTICE } from './components/RegisterModal'
 import { FREE_MAIL_REFUSED } from './register'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -543,6 +546,312 @@ describe('the window as a dialog', () => {
   })
 })
 
+// The story's [copy] sentences, pinned once: a wording change is a deliberate edit here and in the story.
+const STORY_NOTICE = 'We will email you about your account and the service. This is part of using ASComply Africa.'
+const STORY_MARKETING = 'Allow marketing communications: ASComply Africa may email me product news and offers. I can unsubscribe at any time.'
+const MARKETING = '#reg-marketing'
+
+function marketingBox(d: ParentNode): HTMLInputElement {
+  const box = d.querySelector<HTMLInputElement>(MARKETING)
+  expect(box, 'expected the marketing checkbox #reg-marketing').not.toBeNull()
+  return box as HTMLInputElement
+}
+
+function noticeOf(d: ParentNode): HTMLElement {
+  expect(PRODUCT_EMAIL_NOTICE.trim(), 'the notice copy is not blank').not.toBe('')
+  const n = Array.from(d.querySelectorAll<HTMLElement>('p')).find((p) => p.textContent?.trim() === PRODUCT_EMAIL_NOTICE)
+  expect(n, 'expected the product-email notice paragraph').toBeDefined()
+  return n as HTMLElement
+}
+
+async function tick(d: ParentNode): Promise<void> {
+  await act(async () => {
+    marketingBox(d).click()
+  })
+}
+
+function sentBody(fetchMock: { mock: { calls: unknown[][] } }, call = 0): Record<string, unknown> {
+  return JSON.parse((fetchMock.mock.calls[call] as [string, RequestInit])[1].body as string) as Record<string, unknown>
+}
+
+// The style attribute React writes for a style object, read back from jsdom.
+async function renderedStyle(tag: 'label' | 'input', style: CSSProperties): Promise<string> {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const r = createRoot(host)
+  await act(async () => {
+    r.render(createElement(tag, { style }))
+  })
+  const attr = host.firstElementChild!.getAttribute('style') ?? ''
+  act(() => r.unmount())
+  host.remove()
+  return attr
+}
+
+describe('the product-email notice and the marketing box', () => {
+  it('the notice and the marketing sentence are the story copy, in one place each', () => {
+    expect(PRODUCT_EMAIL_NOTICE).toBe(STORY_NOTICE)
+    expect(MARKETING_CONSENT_TEXT).toBe(STORY_MARKETING)
+  })
+
+  it('a registration window shows the product-email notice and an unticked marketing box', async () => {
+    await mountApp()
+    const d = await openRegistration()
+
+    const box = marketingBox(d)
+    expect(box.type).toBe('checkbox')
+    expect(box.checked, 'unticked on open').toBe(false)
+    expect(box.form, 'inside the form').toBe(d.querySelector('form'))
+
+    const notice = noticeOf(d)
+    expect(notice.tagName).toBe('P')
+    expect(notice.classList.contains('t-caption')).toBe(true)
+    expect(notice.style.textAlign).toBe('center')
+    const probe = document.createElement('p')
+    probe.style.margin = '14px 0 0'
+    expect(notice.style.margin, 'the demo form caption margin').toBe(probe.style.margin)
+    expect(notice.closest('label'), 'not inside a label').toBeNull()
+    expect(notice.closest('button, a'), 'not inside a control').toBeNull()
+    expect(notice.querySelector('input, button, a, label, select, textarea'), 'holds no control').toBeNull()
+    expect(d.querySelectorAll('input[type="checkbox"]').length, 'the marketing box is the only checkbox').toBe(1)
+    expect(box.labels![0].textContent, 'the notice is not part of the box label').not.toContain(PRODUCT_EMAIL_NOTICE)
+
+    const fieldset = d.querySelector('fieldset')!
+    const submitBtn = d.querySelector('button[type="submit"]')!
+    expect(fieldset.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING, 'the box follows the kind fieldset').toBeTruthy()
+    expect(fieldset.contains(box), 'the box is not inside the kind fieldset').toBe(false)
+    expect(box.compareDocumentPosition(submitBtn) & Node.DOCUMENT_POSITION_FOLLOWING, 'the box precedes the submit button').toBeTruthy()
+    expect(submitBtn.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING, 'the notice sits under the submit button').toBeTruthy()
+
+    const tabbable = Array.from(d.querySelectorAll<HTMLElement>('input, button, select, textarea, a[href]')).filter((el) => el.tabIndex >= 0 && !(el as HTMLInputElement).disabled)
+    const order = tabbable.map((el) => (el === box ? 'marketing' : el === submitBtn ? 'submit' : (el as HTMLInputElement).type === 'radio' ? 'radio' : 'other'))
+    expect(order.slice(-4), 'tab order ends: both kind radios, the marketing box, submit').toEqual(['radio', 'radio', 'marketing', 'submit'])
+    expect(order.filter((o) => o === 'marketing').length).toBe(1)
+  })
+
+  it('the notice follows the form error', async () => {
+    stubFetch(() => json(503, { error: 'registration is closed' }))
+    await mountApp()
+    const d = await openRegistration()
+    await fillForm(d)
+    await submit(d)
+    const alert = d.querySelector('[role="alert"]')
+    expect(alert?.textContent?.trim(), 'control: the form error shows').toBe('Registration is not open yet.')
+
+    expect(alert!.compareDocumentPosition(noticeOf(d)) & Node.DOCUMENT_POSITION_FOLLOWING, 'the notice is after the form error').toBeTruthy()
+  })
+
+  it('the marketing box is a real labelled checkbox that is never required', async () => {
+    await mountApp()
+    const d = await openRegistration()
+    const box = marketingBox(d)
+
+    expect(box.labels?.length, 'exactly one label').toBe(1)
+    const label = box.labels![0]
+    expect(label.textContent?.trim(), 'the accessible name is the sentence').toBe(MARKETING_CONSENT_TEXT)
+    expect(label.htmlFor === 'reg-marketing' || label.contains(box), 'label tied by htmlFor or wrapping').toBe(true)
+    expect(box.id).toBe('reg-marketing')
+    expect(box.required).toBe(false)
+    expect(box.hasAttribute('required')).toBe(false)
+    expect(box.hasAttribute('aria-required'), 'no aria-required').toBe(false)
+    expect(box.disabled).toBe(false)
+    expect(box.tabIndex, 'in the tab order').toBeGreaterThanOrEqual(0)
+    for (const attr of ['aria-label', 'aria-labelledby', 'aria-describedby']) {
+      expect(box.hasAttribute(attr), `${attr} would replace or extend the visible sentence`).toBe(false)
+    }
+    expect(label.querySelectorAll('input').length, 'the label wraps this one control').toBe(1)
+
+    await act(async () => {
+      label.click()
+    })
+    expect(box.checked, 'clicking the label ticks the box').toBe(true)
+    await act(async () => {
+      label.click()
+    })
+    expect(box.checked, 'and unticks it').toBe(false)
+  })
+
+  it('the marketing box copies the demo consent box treatment', async () => {
+    await mountApp()
+    const d = await openRegistration()
+    const box = marketingBox(d)
+    const label = box.labels![0]
+
+    const demoHost = document.createElement('div')
+    document.body.appendChild(demoHost)
+    const demoRoot = createRoot(demoHost)
+    await act(async () => {
+      demoRoot.render(createElement(DemoLeadForm, { idPrefix: 'tdemo', variant: 'card' }))
+    })
+    const demoBox = demoHost.querySelector<HTMLInputElement>('#tdemo-consent')
+    expect(demoBox, 'control: the demo consent checkbox renders').not.toBeNull()
+    const demoLabel = demoBox!.labels![0]
+
+    const wantLabel = await renderedStyle('label', CHECK_LABEL_STYLE)
+    const wantInput = await renderedStyle('input', CHECK_INPUT_STYLE)
+    expect(wantLabel.length, 'control: the label style object renders a style').toBeGreaterThan(0)
+    expect(wantInput.length, 'control: the input style object renders a style').toBeGreaterThan(0)
+    expect(label.getAttribute('style'), 'marketing label').toBe(wantLabel)
+    expect(box.getAttribute('style'), 'marketing input').toBe(wantInput)
+    expect(demoLabel.getAttribute('style'), 'demo label').toBe(wantLabel)
+    expect(demoBox!.getAttribute('style'), 'demo input').toBe(wantInput)
+    expect(demoLabel.getAttribute('style'), 'the lift left the demo label values as shipped').toBe(
+      'display: flex; align-items: flex-start; gap: 12px; font-size: 13px; line-height: 1.55; color: var(--foreground); cursor: pointer;',
+    )
+    expect(demoBox!.getAttribute('style'), 'the demo input carries the prototype values (margin: 2px 0 0)').toBe(
+      'flex: 0 0 auto; width: 18px; height: 18px; margin: 2px 0px 0px; accent-color: var(--primary); cursor: pointer;',
+    )
+
+    act(() => demoRoot.unmount())
+    demoHost.remove()
+  })
+
+  it('the shown label and the sent sentence are one constant', async () => {
+    const fetchMock = stubFetch(ok)
+    await mountApp()
+    const d = await openRegistration()
+    await fillForm(d)
+    await tick(d)
+    expect(marketingBox(d).checked, 'control: ticked').toBe(true)
+    const shown = marketingBox(d).labels![0].textContent?.trim()
+
+    await submit(d)
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const body = sentBody(fetchMock)
+    expect(body).toHaveProperty('marketing_consent_text')
+    expect(body.marketing_consent_text, 'the label the person saw').toBe(shown)
+    expect(body.marketing_consent_text).toBe(MARKETING_CONSENT_TEXT)
+  })
+
+  it('an unticked box never blocks the submit and sends no marketing key', async () => {
+    const fetchMock = stubFetch(ok)
+    await mountApp()
+    const d = await openRegistration()
+    await fillForm(d)
+    expect(marketingBox(d).checked, 'control: unticked').toBe(false)
+
+    await submit(d)
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const body = sentBody(fetchMock)
+    expect('marketing_consent_text' in body, 'no key at all').toBe(false)
+    expect(Object.keys(body).sort()).toEqual(['display_name', 'email', 'kind', 'password', 'workspace_name'])
+    expect(d.textContent).toContain('Check your email')
+    expect(alerts(d)).toEqual([])
+  })
+
+  it('ticking then unticking before submit sends no marketing key', async () => {
+    const fetchMock = stubFetch(ok)
+    await mountApp()
+    const d = await openRegistration()
+    await fillForm(d)
+    await tick(d)
+    expect(marketingBox(d).checked, 'control: ticked').toBe(true)
+    await tick(d)
+    expect(marketingBox(d).checked, 'control: unticked again').toBe(false)
+
+    await submit(d)
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect('marketing_consent_text' in sentBody(fetchMock)).toBe(false)
+  })
+
+  it('the marketing box is disabled while creating', async () => {
+    const fetchMock = vi.fn().mockReturnValue(new Promise(() => undefined))
+    vi.stubGlobal('fetch', fetchMock)
+    await mountApp()
+    const d = await openRegistration()
+    await fillForm(d)
+    expect(marketingBox(d).disabled, 'control: enabled before the submit').toBe(false)
+
+    await submit(d)
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(marketingBox(d).disabled).toBe(true)
+  })
+
+  it('a refused submit re-enables the marketing box and keeps its tick', async () => {
+    const fetchMock = stubFetchSequence(closed, ok)
+    await mountApp()
+    const d = await openRegistration()
+    await fillForm(d)
+    await tick(d)
+    await submit(d)
+    expect(alerts(d), 'control: the refusal shows').toEqual(['Registration is not open yet.'])
+
+    expect(marketingBox(d).disabled).toBe(false)
+    expect(marketingBox(d).checked, 'the tick survives a refusal').toBe(true)
+
+    await submit(d)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(sentBody(fetchMock, 1).marketing_consent_text).toBe(MARKETING_CONSENT_TEXT)
+  })
+
+  it('a form that fails validation keeps the tick and sends nothing', async () => {
+    const fetchMock = stubFetch(ok)
+    await mountApp()
+    const d = await openRegistration()
+    await fillForm(d, { email: '' })
+    await tick(d)
+    await submit(d)
+
+    expect(alerts(d), 'control: validation refused').toEqual(['Enter your work email.'])
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(marketingBox(d).checked, 'the tick survives a validation refusal').toBe(true)
+    expect(marketingBox(d).disabled).toBe(false)
+  })
+
+  it('a field refusal from the gateway keeps the tick', async () => {
+    stubFetch(() => json(400, { error: FREE_MAIL_REFUSED }))
+    await mountApp()
+    const d = await openRegistration()
+    await fillForm(d, { email: 'ada@gmail.com' })
+    await tick(d)
+    await submit(d)
+
+    expect(alerts(d), 'control: the free-mail refusal shows').toEqual([FREE_MAIL_REFUSED])
+    expect(marketingBox(d).checked).toBe(true)
+  })
+
+  it('a second submit while creating sends no second request', async () => {
+    const fetchMock = vi.fn().mockReturnValue(new Promise(() => undefined))
+    vi.stubGlobal('fetch', fetchMock)
+    await mountApp()
+    const d = await openRegistration()
+    await fillForm(d)
+    await tick(d)
+    await submit(d)
+    expect(marketingBox(d).disabled, 'control: creating').toBe(true)
+
+    const form = d.querySelector('form')!
+    await act(async () => {
+      form.requestSubmit()
+    })
+    await act(async () => {
+      form.requestSubmit()
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('a disabled marketing box cannot be toggled while creating', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockReturnValue(new Promise(() => undefined)))
+    await mountApp()
+    const d = await openRegistration()
+    await fillForm(d)
+    await submit(d)
+    expect(marketingBox(d).disabled, 'control: creating').toBe(true)
+
+    await tick(d)
+    await act(async () => {
+      marketingBox(d).labels![0].click()
+    })
+
+    expect(marketingBox(d).checked, 'neither a click nor its label ticks it').toBe(false)
+  })
+})
+
 function stubFetchSequence(...makers: (() => Response | Promise<Response>)[]) {
   let i = 0
   const fetchMock = vi.fn().mockImplementation(async () => makers[Math.min(i++, makers.length - 1)]())
@@ -630,7 +939,8 @@ describe('adversarial: validation through the window', () => {
 
     const form = d.querySelector('form')!
     const inputs = Array.from(d.querySelectorAll('input'))
-    expect(inputs.length).toBe(6)
+    expect(inputs.length, 'four text fields, two radios and the marketing checkbox').toBe(7)
+    expect(d.querySelectorAll('input:not([type=radio]):not([type=checkbox])').length, 'the smoke spec locator selects the four text fields').toBe(4)
     expect(inputs.every((i) => i.form === form), 'every field sits in the one form, so Enter in any of them submits it').toBe(true)
     expect(form.querySelectorAll('button[type="submit"]').length).toBe(1)
 

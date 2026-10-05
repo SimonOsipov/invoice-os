@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client/client'
 
+import { MARKETING_CONSENT_TEXT } from './components/MarketingConsent'
 import {
   FREE_MAIL_REFUSED,
   registerAccount,
@@ -23,6 +24,7 @@ const VALID: RegisterValues = {
   displayName: 'Ada Okafor',
   workspaceName: 'Okafor & Partners',
   kind: 'firm',
+  marketing: false,
 }
 
 const UNAVAILABLE = 'Registration is unavailable right now. Try again shortly.'
@@ -59,7 +61,7 @@ describe('validateRegisterForm', () => {
   it('validateRegisterForm names every missing field', () => {
     expect(validateRegisterForm(VALID), 'control: a complete form has no errors').toEqual({})
 
-    const empty = validateRegisterForm({ email: '', password: '', displayName: '', workspaceName: '', kind: '' })
+    const empty = validateRegisterForm({ email: '', password: '', displayName: '', workspaceName: '', kind: '', marketing: false })
     expect(empty).toEqual({
       email: 'Enter your work email.',
       password: 'Choose a password.',
@@ -111,15 +113,15 @@ describe('registerAccount', () => {
 
     const cases: [RegisterValues, Record<string, unknown>][] = [
       [
-        { email: ' Ada@Corp.example ', password: ' pw ', displayName: '  Ada Okafor ', workspaceName: ' Okafor & Partners  ', kind: 'in_house' },
+        { email: ' Ada@Corp.example ', password: ' pw ', displayName: '  Ada Okafor ', workspaceName: ' Okafor & Partners  ', kind: 'in_house', marketing: false },
         { email: 'Ada@Corp.example', password: ' pw ', display_name: 'Ada Okafor', workspace_name: 'Okafor & Partners', kind: 'in_house' },
       ],
       [
-        { email: 'b@corp.example', password: '   ', displayName: 'B', workspaceName: 'W', kind: 'firm' },
+        { email: 'b@corp.example', password: '   ', displayName: 'B', workspaceName: 'W', kind: 'firm', marketing: false },
         { email: 'b@corp.example', password: '   ', display_name: 'B', workspace_name: 'W', kind: 'firm' },
       ],
       [
-        { email: 'c@corp.example', password: 'pw', displayName: 'C\u0000', workspaceName: 'W\u0000x', kind: 'firm' },
+        { email: 'c@corp.example', password: 'pw', displayName: 'C\u0000', workspaceName: 'W\u0000x', kind: 'firm', marketing: false },
         { email: 'c@corp.example', password: 'pw', display_name: 'C\u0000', workspace_name: 'W\u0000x', kind: 'firm' },
       ],
     ]
@@ -144,6 +146,56 @@ describe('registerAccount', () => {
     vi.stubGlobal('fetch', fetchMock)
     await expect(registerAccount(VALID)).rejects.toThrow()
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+// The story's [copy] sentence, pinned once: a wording change is a deliberate edit here and in the story.
+const STORY_MARKETING_TEXT = 'Allow marketing communications: ASComply Africa may email me product news and offers. I can unsubscribe at any time.'
+
+describe('the marketing consent sentence', () => {
+  it('MARKETING_CONSENT_TEXT is the story sentence', () => {
+    expect(MARKETING_CONSENT_TEXT).toBe(STORY_MARKETING_TEXT)
+  })
+})
+
+describe('registerAccount marketing consent', () => {
+  const post = async (v: RegisterValues) => {
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.x/')
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ status: 'verification_pending' }), { status: 202 })))
+    vi.stubGlobal('fetch', fetchMock)
+    await registerAccount(v)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    return JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string) as Record<string, unknown>
+  }
+
+  it('registerAccount sends the marketing sentence only when ticked', async () => {
+    const ticked = await post({ ...VALID, marketing: true })
+    expect(ticked).toHaveProperty('marketing_consent_text')
+    expect(ticked.marketing_consent_text).toBe(MARKETING_CONSENT_TEXT)
+    expect(Object.keys(ticked).sort(), 'ticked adds that one key').toEqual(['display_name', 'email', 'kind', 'marketing_consent_text', 'password', 'workspace_name'])
+    expect(ticked).toStrictEqual({
+      email: VALID.email,
+      password: VALID.password,
+      display_name: VALID.displayName,
+      workspace_name: VALID.workspaceName,
+      kind: 'firm',
+      marketing_consent_text: MARKETING_CONSENT_TEXT,
+    })
+
+    const padded = await post({ email: ' d@corp.example ', password: 'pw', displayName: ' D ', workspaceName: ' W ', kind: 'in_house', marketing: true })
+    expect(padded, 'a ticked body still trims every other field').toStrictEqual({
+      email: 'd@corp.example',
+      password: 'pw',
+      display_name: 'D',
+      workspace_name: 'W',
+      kind: 'in_house',
+      marketing_consent_text: MARKETING_CONSENT_TEXT,
+    })
+
+    const unticked = await post({ ...VALID, marketing: false })
+    expect(Object.keys(unticked).sort(), 'control: the five-key body is unchanged').toEqual(['display_name', 'email', 'kind', 'password', 'workspace_name'])
+    expect('marketing_consent_text' in unticked, 'no key at all, not "" / null / false').toBe(false)
+    expect(JSON.stringify(unticked)).not.toContain('marketing')
   })
 })
 

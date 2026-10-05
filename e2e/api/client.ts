@@ -155,6 +155,58 @@ export async function registerFresh(prefix = 'handoff'): Promise<{ email: string
   return account
 }
 
+// A form registrant: the answers ride in user_metadata, so /auth/sign-in hands the contact off.
+// Signs in once before provisioning (the hand-off) and again after (the tenant claim).
+export async function registerFormAccount(
+  prefix: string,
+  opts: { marketingConsentText?: string } = {},
+): Promise<{ account: RealAccount; token: string }> {
+  const id = crypto.randomUUID()
+  const account: RealAccount = { email: `${prefix}-${id}@example.com`, password: id.slice(0, 16), workspaceName: `Contacts E2E ${id.slice(0, 8)}`, displayName: 'Contacts E2E' }
+  const res = await rawFetch('/auth/register', {
+    method: 'POST',
+    body: {
+      email: account.email,
+      password: account.password,
+      workspace_name: account.workspaceName,
+      display_name: account.displayName,
+      kind: 'firm',
+      ...(opts.marketingConsentText !== undefined && { marketing_consent_text: opts.marketingConsentText }),
+    },
+  })
+  if (res.status !== 202) throw new Error(`register answered ${res.status}: ${JSON.stringify(res.body)}`)
+  const first = (await signInSession(account.email, account.password)).access_token
+  await apiFetch(`${apiBase()}/api/tenancy/v1/workspaces`, {
+    method: 'POST',
+    token: first,
+    body: { workspace_name: account.workspaceName, display_name: account.displayName, kind: 'firm' },
+  })
+  return { account, token: (await signInSession(account.email, account.password)).access_token }
+}
+
+// GET /api/notifications/v1/contacts/me: the caller's own contact row.
+export interface ContactMe {
+  email: string
+  tags: string[]
+  marketing_eligible: boolean
+  hubspot: { delivered_at: string | null }
+  resend: { delivered_at: string | null; applies: boolean }
+  mode: string
+}
+
+// Null while the hand-off has not landed (404); any other failure throws.
+export async function contactsMe(token: string): Promise<ContactMe | null> {
+  const res = await rawFetch('/api/notifications/v1/contacts/me', { headers: { Authorization: `Bearer ${token}` } })
+  if (res.status === 404) return null
+  if (res.status !== 200) throw new Error(`contacts/me answered ${res.status}: ${JSON.stringify(res.body)}`)
+  return res.body as ContactMe
+}
+
+// POST /contacts/demo-request, raw so a spec can assert the status.
+export function demoRequest(body: unknown): Promise<{ status: number; body: unknown }> {
+  return rawFetch('/contacts/demo-request', { method: 'POST', body })
+}
+
 // One sign-in, one GoTrue session.
 export async function signInSession(email: string, password: string): Promise<{ access_token: string; refresh_token: string }> {
   const state = mintSignInState()

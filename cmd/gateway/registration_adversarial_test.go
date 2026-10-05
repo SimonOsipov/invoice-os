@@ -115,7 +115,7 @@ func TestGatewayMainWiresAuthSiteURLIntoRegistration(t *testing.T) {
 					siteVar, parseAt = types.ExprString(as.Lhs[0]), i
 				}
 			}
-			if call, ok := isCallTo(as.Rhs[0], "", "registrationHandlers"); ok && len(call.Args) == 4 {
+			if call, ok := isCallTo(as.Rhs[0], "", "registrationHandlers"); ok && len(call.Args) == 5 {
 				wiredArg = types.ExprString(call.Args[1])
 			}
 		}
@@ -212,7 +212,7 @@ func TestRegistrationHandlers_DoNotFollowGoTrueRedirects(t *testing.T) {
 	t.Cleanup(srv.Close)
 	authURL, _ := url.Parse(srv.URL)
 	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler))
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
 
 	if rec := serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`); rec.Code != http.StatusBadGateway {
 		t.Errorf("Register = %d, want 502: %s", rec.Code, rec.Body.String())
@@ -233,7 +233,7 @@ func TestRegistrationHandlers_DoNotFollowGoTrueRedirects(t *testing.T) {
 func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler))
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
 	mux := http.NewServeMux()
 	mux.Handle("POST /auth/register", reg.Register)
 	mux.Handle("GET /auth/verify", reg.Verify)
@@ -268,7 +268,7 @@ func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 func TestVerify_HeadIsRefusedWithoutConsumingTheToken(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler))
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
 	mux := http.NewServeMux()
 	mux.Handle("GET /auth/verify", reg.Verify)
 

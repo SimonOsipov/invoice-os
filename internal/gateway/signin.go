@@ -19,7 +19,7 @@ const (
 var stateShape = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 
 // SignInHandler answers POST /auth/sign-in with a single-use exchange code.
-func SignInHandler(authURL *url.URL, client *http.Client, store *HandoffStore, throttle *SignInThrottle, log *slog.Logger) http.Handler {
+func SignInHandler(authURL *url.URL, client *http.Client, store *HandoffStore, throttle *SignInThrottle, log *slog.Logger, sink ContactSink) http.Handler {
 	tokenURL := authURL.JoinPath("token")
 	tokenURL.RawQuery = "grant_type=password"
 	token := tokenURL.String()
@@ -56,9 +56,11 @@ func SignInHandler(authURL *url.URL, client *http.Client, store *HandoffStore, t
 			return
 		}
 
+		// user stays out of the exchanged answer, which is exactly the two tokens.
 		var sess struct {
-			AccessToken  string `json:"access_token"`
-			RefreshToken string `json:"refresh_token"`
+			AccessToken  string     `json:"access_token"`
+			RefreshToken string     `json:"refresh_token"`
+			User         gotrueUser `json:"user"`
 		}
 		status, gt, err := postGoTrue(r, client, token, map[string]string{"email": in.Email, "password": in.Password}, &sess)
 		switch {
@@ -67,7 +69,7 @@ func SignInHandler(authURL *url.URL, client *http.Client, store *HandoffStore, t
 			log.WarnContext(r.Context(), "sign-in: gotrue unreachable", slog.String("error", err.Error()))
 			writeError(w, http.StatusBadGateway, "sign-in is unavailable")
 		case status == http.StatusOK && sess.AccessToken != "" && sess.RefreshToken != "":
-			answer, _ := json.Marshal(sess) // two strings; cannot fail
+			answer, _ := json.Marshal(map[string]string{"access_token": sess.AccessToken, "refresh_token": sess.RefreshToken}) // cannot fail
 			code, ok := store.Put(string(answer), sha256.Sum256([]byte(in.State)))
 			if !ok {
 				throttle.Refund(in.Email)
@@ -77,6 +79,9 @@ func SignInHandler(authURL *url.URL, client *http.Client, store *HandoffStore, t
 				return
 			}
 			throttle.Reset(in.Email)
+			if sess.User.UserMetadata.Registration != nil {
+				handOffRegistrant(r.Context(), log, "sign-in", sink, sess.User.contact())
+			}
 			writeJSON(w, http.StatusOK, map[string]string{"code": code})
 		// A banned address answers exactly like a wrong password; the reservation stands.
 		case gt.ErrorCode == "invalid_credentials", gt.ErrorCode == "user_banned":

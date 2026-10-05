@@ -51,7 +51,7 @@ func emailConfirmed(t *testing.T, email string) bool {
 
 func TestIdP_TamperedLinkFailsAndLeavesTheRealOneUsable(t *testing.T) {
 	base := idpMailURL(t)
-	gw, _ := startGateway(t, base, 0)
+	gw, _ := startGateway(t, base, 0, nil)
 	u := registrant(t, gw)
 	link := confirmationLink(t, u.email)
 
@@ -84,7 +84,7 @@ func TestIdP_TamperedLinkFailsAndLeavesTheRealOneUsable(t *testing.T) {
 
 func TestIdP_ExpiredLinkFails(t *testing.T) {
 	base := idpMailURL(t)
-	gw, _ := startGateway(t, base, 0)
+	gw, _ := startGateway(t, base, 0, nil)
 	u := registrant(t, gw)
 	link := confirmationLink(t, u.email)
 
@@ -107,7 +107,7 @@ func TestIdP_ExpiredLinkFails(t *testing.T) {
 // GoTrue answers a repeat within the minute 429 over_email_send_rate_limit and sends nothing.
 func TestIdP_RepeatRegistrationIsAcceptedAndMailsOnce(t *testing.T) {
 	base := idpMailURL(t)
-	gw, _ := startGateway(t, base, 0)
+	gw, _ := startGateway(t, base, 0, nil)
 	u := registrant(t, gw)
 	if n := mailCount(t, u.email); n != 1 {
 		t.Fatalf("control: mailpit holds %d mails after one registration, want 1", n)
@@ -125,7 +125,7 @@ func TestIdP_RepeatRegistrationIsAcceptedAndMailsOnce(t *testing.T) {
 // GoTrue answers a confirmed address 200 with a sanitized user and sends nothing.
 func TestIdP_VerifiedAddressRegisteringAgainSendsNoMailAndKeepsThePassword(t *testing.T) {
 	base := idpMailURL(t)
-	gw, _ := startGateway(t, base, 0)
+	gw, _ := startGateway(t, base, 0, nil)
 	u := registrant(t, gw)
 	if got := follow(t, confirmationLink(t, u.email)); got != siteURL+"/?verified=1" {
 		t.Fatalf("verify redirect = %q", got)

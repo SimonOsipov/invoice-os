@@ -287,6 +287,9 @@ time. The production key exists only in the Railway variable U3b writes and then
 
 ## Registration
 
+A verified registrant reaches HubSpot and Resend through the gateway hand-off: see
+[contact-sync.md](./contact-sync.md).
+
 GoTrue stays private. The gateway is the only public surface, and it calls GoTrue under
 `AUTH_URL` at: `/signup` and `/verify` for registration, `/token?grant_type=password` for
 sign-in (see Sign-in and hand-off), `/token?grant_type=refresh_token` for renewal and
@@ -298,12 +301,14 @@ scope, or `/token` with any other grant) is reachable from outside.
 
 **The flow:**
 1. The client posts `{"email","password"}` to `POST /auth/register` on the gateway. The body
-   may also carry `workspace_name`, `display_name` and `kind?`. When any of them is present,
+   may also carry `workspace_name`, `display_name`, `kind?` and `marketing_consent_text?`
+   (optional; the marketing sentence the person ticked, 1 to 500 characters; the gateway
+   stores it as `data.marketing_consent{text,at}` with the server's time). When any of the
+   first three is present,
    the gateway validates them with the tenancy rules (trimmed, 1 to 200 characters, no NUL,
    `kind` `firm` or `in_house`) and posts them to GoTrue `/signup` as
-   `data.registration`; GoTrue stores them as `user_metadata.registration`. Without them the
-   gateway posts only `{"email","password"}`. A free-mail address answers 400 first, and
-   GoTrue is not called. GoTrue creates an unconfirmed user and
+   `data.registration`; GoTrue stores them as `user_metadata.registration`. A free-mail
+   address answers 400 first, and GoTrue is not called. GoTrue creates an unconfirmed user and
    mails a confirmation link through Resend. Every answer except a 400 arrives no earlier
    than `AUTH_REGISTER_MIN_RESPONSE` after the request reached the handler, so a new address
    and a known one take the same time while GoTrue answers faster than that (see Ceilings).
@@ -366,6 +371,21 @@ The free-mail list lives in `internal/gateway/freemail.go` `freeMailDomains`. To
 add one lower-case domain; its subdomains are refused too. Fullwidth, ideographic-dot and
 inner-whitespace forms of a listed domain are refused by GoTrue's own format check (400),
 guarded by `TestIdP_FreeMailVariantsAreNotAccepted`.
+
+**`POST /contacts/demo-request`**, outside `/api/`, no verifier, in every build. CORS-wrapped, with an `OPTIONS` preflight route. Body `{"email","name","company","marketing_consent_text"?}`; other keys are ignored and not forwarded. The body limit is 4096 bytes. Fields are trimmed; `marketing_consent_text` is forwarded as sent.
+
+| Outcome | Answer |
+|---|---|
+| forwarded once to notifications (no retry) | 202 `{"status":"accepted"}` |
+| a malformed or oversized body | 400 `{"error":"invalid request body"}` |
+| email not 3 to 254 bytes, not exactly one `@`, or holds whitespace | 400 `email is invalid` |
+| `name` or `company` not 1 to 200 characters, or holds a NUL byte | 400 `name must be 1 to 200 characters`, `name must not contain a NUL byte`, and the `company` equivalents |
+| `marketing_consent_text` present but blank, over 500 characters or holding a NUL byte | 400 `marketing_consent_text must be 1 to 500 characters` |
+| notifications fails, answers anything but 202, or exceeds 5 s | 502 `demo request is unavailable`; the log carries the status only |
+
+The handler sets `Cache-Control: no-store` on every answer it writes. Any method but POST and a preflight answers 405. The route is public and unthrottled; the `ceiling:` line in `internal/gateway/contacts.go` `DemoRequestHandler` names the limit. Guarded by `internal/gateway/contacts_test.go` (`TestDemoRequest_*`).
+
+The `/api/` router answers 404 for any path whose first segment after the service is `internal`, before authorization, on the decoded path, both raw and after `path.Clean`, so a dot-dot or empty segment that resolves to `internal`, or a raw `internal/..` prefix, is refused for every method, CONNECT included. Guarded by `internal/gateway/gateway_test.go` `TestRouter_InternalPathNeverReachesUpstream`.
 
 **`GET /auth/verify?token=…&type=signup`**, outside `/api/`:
 
@@ -432,6 +452,11 @@ otherwise. The tenant id is a UUIDv5 of the caller's subject; the membership gua
 - The smallest change that closes the scanner half: `GET /auth/verify` renders a page with
   one form button, and `POST /auth/verify` verifies. The hijack half also needs password
   recovery, or a delete-and-re-create of an unconfirmed user on a repeat signup.
+
+**Accepted risks of user-editable metadata:**
+- *Self-asserted consent.* A user can edit their own GoTrue `user_metadata`, so
+  `user_metadata.marketing_consent` is self-asserted. The hand-off forwards it, and the contact
+  store records only the first tick.
 
 ## Sign-in and hand-off
 
@@ -1142,7 +1167,7 @@ redirects to the landing page". **The first console that reads real data must ma
 fail closed when `VITE_LANDING_URL` is unset**, and must check the staff claim on the server.
 
 **CORS.** The gateway's one origin list wraps `/api/`, `/auth/sign-in`, `/auth/exchange`,
-`/auth/refresh`, `/auth/sign-out` and `/auth/register`, so console U2 lets browser JavaScript on the two console
+`/auth/refresh`, `/auth/sign-out`, `/auth/register` and `/contacts/demo-request`, so console U2 lets browser JavaScript on the two console
 origins call all of them, not only exchange, refresh and sign-out. `/auth/verify` is not wrapped. Every `/api/` call still needs a verified bearer, the session check and RLS; the
 console origins serve only our own bundle, and the same token works from `curl`.
 

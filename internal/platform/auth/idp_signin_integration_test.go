@@ -32,7 +32,7 @@ func newHandoff(t *testing.T, base string) handoff {
 	throttle := gateway.NewSignInThrottle(gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return handoff{
-		signIn:   gateway.SignInHandler(authURL, idpHTTP, store, throttle, log),
+		signIn:   gateway.SignInHandler(authURL, idpHTTP, store, throttle, log, nil),
 		exchange: gateway.ExchangeHandler(store),
 	}
 }

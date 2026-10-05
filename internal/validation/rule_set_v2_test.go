@@ -746,8 +746,9 @@ func TestRuleSetV2_DetectionCommandBaseline(t *testing.T) {
 		}
 		if !detectionHitAllowed(file, line) {
 			t.Errorf("detection command hit in an unexpected location: %q -- expected only "+
-				"internal/validation/**, a non-rule-set version pin in internal/approval/** "+
-				"or internal/extraction/**, a "+
+				"internal/validation/**, a non-rule-set version pin in internal/approval/**, "+
+				"internal/extraction/**, internal/notifications/** or "+
+				"internal/platform/db/contacts_rls_test.go, a "+
 				"Policy.version/activeVersion pin in frontend/app/src/**, an ApprovalPolicy."+
 				"version pin in e2e/api/policy-restore.test.ts, the two §c e2e "+
 				"artifacts, validationApi.test.ts, the version-defining seed "+
@@ -773,6 +774,12 @@ func detectionHitAllowed(file, line string) bool {
 	// exempted, so a genuine rule-set v1 pin written inside internal/extraction/ still
 	// trips this guard.
 	if strings.HasPrefix(file, "internal/extraction/") {
+		return !namesRuleSetConstruct(line)
+	}
+	// contacts.version is the per-row optimistic-concurrency version, never read from
+	// rule_sets. Narrowed like the entries above.
+	if file == "internal/platform/db/contacts_rls_test.go" ||
+		strings.HasPrefix(file, "internal/notifications/") {
 		return !namesRuleSetConstruct(line)
 	}
 	// The SPA's Policy.version / Policy.activeVersion (APPR-09) is that same
@@ -848,8 +855,8 @@ func pinsOnlyPolicyVersion(line string) bool {
 }
 
 // TestRuleSetV2_DetectionAllowlistScope pins the internal/approval,
-// internal/extraction, frontend/app/src, and e2e/api/policy-restore.test.ts
-// carve-outs to the shape
+// internal/extraction, internal/notifications, internal/platform/db/contacts_rls_test.go,
+// frontend/app/src, and e2e/api/policy-restore.test.ts carve-outs to the shape
 // each was opened for. A directory-wide (or tree-wide) exemption would make
 // every one of the "still trips" rows below pass silently.
 func TestRuleSetV2_DetectionAllowlistScope(t *testing.T) {
@@ -886,6 +893,15 @@ func TestRuleSetV2_DetectionAllowlistScope(t *testing.T) {
 			`internal/extraction/resolve.go:9:  rs := RuleSet{Version: 1}`, false},
 		{"a snake-case rule_set pin in extraction", "internal/extraction/store.go",
 			`internal/extraction/store.go:9:  SELECT id FROM rule_sets WHERE version = 1`, false},
+
+		{"a contacts row version in the RLS test", "internal/platform/db/contacts_rls_test.go",
+			`internal/platform/db/contacts_rls_test.go:122:	if version != 1 {`, true},
+		{"a contacts row version in notifications", "internal/notifications/contacts_store.go",
+			`internal/notifications/contacts_store.go:9:  if c.Version != 1 {`, true},
+		{"a rule-set pin smuggled into the contacts RLS test", "internal/platform/db/contacts_rls_test.go",
+			`internal/platform/db/contacts_rls_test.go:9:  rs := RuleSet{Version: 1}`, false},
+		{"a rule-set pin smuggled into notifications", "internal/notifications/contacts_store.go",
+			`internal/notifications/contacts_store.go:9:  SELECT id FROM rule_sets WHERE version = 1`, false},
 
 		{"a SPA policy fixture's first version", "frontend/app/src/lib/policies.fixture.ts",
 			`frontend/app/src/lib/policies.fixture.ts:33:    version: 1,`, true},

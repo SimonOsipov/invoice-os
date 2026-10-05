@@ -108,6 +108,7 @@ PR opened ──> dev-env.yml:
                 ──> 8 context services + docling + auth + 4 SPAs (all four are gateway-wired)
                 ──> `fleet-gate` job: fleet /healthz/fleet gate + its Sentry
                     state check: every Go service and docling report sentry "off"
+                    + notifications reports `contacts: fake`
                 ──> verify, `e2e` job: smoke (landing + both consoles) + api
                 ──> verify, `topology` job: one parallel leg per unit (serial-lane,
                     import-wizard, invoice-surfaces; app login, cross-tenant
@@ -124,7 +125,8 @@ merge to main ──> dev-env.yml (push): await green CI on the merge commit
                       "absent", auth_issuers == "1", then GET /.well-known/jwks.json and
                       POST /auth/login must answer 404) ──> 8 context + docling + auth +
                       4 SPAs ──> fleet gate + Sentry state check (every Go service and
-                      docling reports sentry "on" or "off", never absent)
+                      docling reports sentry "on" or "off", never absent; notifications
+                      reports `contacts` "real" or "off", never "fake")
                   ──> no E2E (ephemeral environments only)
 
 workflow_dispatch ──> targets the persistent environment directly (never torn down),

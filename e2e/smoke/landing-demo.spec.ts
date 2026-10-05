@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
+import { readFileSync } from 'node:fs'
 import { resolveTarget } from '../targets'
 import { enclosesRect, gaps, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from '../topology/layout'
 import { seedConsent } from './landingConsent'
@@ -34,6 +35,12 @@ import { isProductionHost, isSentryHost } from './sentryHost'
 // claim the moment the guard started doing real work.
 
 const LANDING_URL = resolveTarget('LANDING_URL')
+const GATEWAY_URL = resolveTarget('GATEWAY_URL')
+
+// Read from the landing source, not retyped: the request must carry the sentence the box shows.
+const MARKETING_SRC = new URL('../../frontend/landing/src/components/MarketingConsent.tsx', import.meta.url)
+const MARKETING_CONSENT_TEXT = /export const MARKETING_CONSENT_TEXT = '((?:[^'\\]|\\.)*)'/.exec(readFileSync(MARKETING_SRC, 'utf8'))?.[1]
+if (MARKETING_CONSENT_TEXT == null) throw new Error(`${MARKETING_SRC.pathname}: no MARKETING_CONSENT_TEXT literal`)
 
 // The GA4 tag's gate is an exact-hostname allowlist (frontend/landing/src/hubspot.ts), so
 // which arm the assertions expect is decided once, here, from the target under test.
@@ -81,7 +88,7 @@ const HONEYPOT_VALUE = 'https://bot.example/'
 
 // The Tab ring inside the modal card, in DOM order, as the trap's own selector
 // (`input,select,button,textarea,a[href]` filtered by isFocusable) sees it. The honeypot
-// sits between #dm-consent and the submit button in the DOM and is absent here on purpose:
+// sits between #dm-marketing and the submit button in the DOM and is absent here on purpose:
 // every step below asserts focus equals one of these keys, so the ring never containing
 // `[name=website]` IS the proof that focus never lands on the honeypot.
 const TAB_RING = [
@@ -93,6 +100,7 @@ const TAB_RING = [
   '#dm-size',
   '#dm-volume',
   '#dm-consent',
+  '#dm-marketing',
   'button[type=submit]',
 ] as const
 
@@ -122,6 +130,8 @@ type LandingSinks = {
   consoleErrors: string[]
   /** THE oracle for "no visitor data left the browser". Fed by page.on('request'). */
   hubspotRequests: string[]
+  /** Requests to the gateway's POST /contacts/demo-request: method and body. */
+  gatewayDemoRequests: Array<{ method: string; body: string | null }>
   /** Non-vacuity guard: proves the request listener was live at all. */
   allRequests: string[]
   /** THE oracle for "the GA4 tag loaded". Filled by the SAME listener as allRequests. */
@@ -178,6 +188,7 @@ function attachSinks(page: Page): LandingSinks {
   const sinks: LandingSinks = {
     consoleErrors: [],
     hubspotRequests: [],
+    gatewayDemoRequests: [],
     allRequests: [],
     gaRequests: [],
     sentryRequests: [],
@@ -195,6 +206,9 @@ function attachSinks(page: Page): LandingSinks {
     const url = req.url()
     sinks.allRequests.push(url)
     if (isHubSpotHost(url)) sinks.hubspotRequests.push(url)
+    if (url.split('?')[0] === `${GATEWAY_URL}/contacts/demo-request`) {
+      sinks.gatewayDemoRequests.push({ method: req.method(), body: req.postData() })
+    }
     if (isGoogleAnalyticsHost(url)) sinks.gaRequests.push(url)
     if (isSentryHost(url)) sinks.sentryRequests.push(url)
   })
@@ -288,8 +302,8 @@ async function expectSuccessPanel(root: Locator, prefix: string): Promise<void> 
   await expect(root.locator(`#${prefix}-name`)).toHaveCount(0)
 }
 
-/** AC #2 + AC #3, asserted at the end of every test in this file. */
-function expectClosedGateStayedSilent(sinks: LandingSinks): void {
+/** AC #2 + AC #3, asserted at the end of every test in this file: zero HubSpot requests, and no console errors. */
+function expectZeroHubSpotRequests(sinks: LandingSinks): void {
   // Non-vacuity: an empty hubspotRequests list proves nothing if the listener never fired
   // at all. The landing always issues at least its own document/asset requests.
   expect(
@@ -365,20 +379,32 @@ test('landing analytics: the analytics-host classifier accepts GA hosts and noth
   }
 })
 
-// E1 — the whole happy path with the gate closed: the visitor sees success, and NOTHING
-// leaves the browser. This is the story's Core AC 2 stated as an assertion.
-test('landing demo: a complete submission on a closed gate succeeds locally and sends nothing', async ({ page }) => {
+// E1 — the whole happy path with the gate closed: the visitor sees success, HubSpot sees
+// nothing, and our own gateway gets exactly one request carrying the marketing sentence.
+test('landing demo: a complete submission on a closed gate succeeds locally and sends the request to our own gateway only', async ({ page }) => {
   const sinks = await openLanding(page)
   const dialog = await openDemoModal(page)
 
   await fillRequiredFields(dialog, 'dm')
   await dialog.locator('#dm-consent').check()
   await expect(dialog.locator('#dm-consent')).toBeChecked()
+  await dialog.locator('#dm-marketing').check()
+  await expect(dialog.locator('#dm-marketing')).toBeChecked()
 
+  const accepted = page.waitForResponse((res) => res.request().method() === 'POST' && res.url().split('?')[0] === `${GATEWAY_URL}/contacts/demo-request`)
   const startedAt = Date.now()
   await submitButton(dialog).click()
   await expectSuccessPanel(dialog, 'dm')
   const elapsedMs = Date.now() - startedAt
+  expect((await accepted).status(), 'the gateway did not accept the demo request').toBe(202)
+
+  // A CORS preflight (OPTIONS) is not the submission; only POSTs count.
+  const posts = sinks.gatewayDemoRequests.filter((r) => r.method === 'POST')
+  expect(posts, 'exactly one POST to the gateway').toHaveLength(1)
+  expect(JSON.parse(posts[0].body ?? 'null')).toMatchObject({
+    email: LEAD.email,
+    marketing_consent_text: MARKETING_CONSENT_TEXT,
+  })
 
   // The closed gate routes through the same 1300ms stub the honeypot uses. Asserted here as
   // well as in E5 so that the pair establishes "both paths are slow" WITHOUT comparing two
@@ -388,7 +414,30 @@ test('landing demo: a complete submission on a closed gate succeeds locally and 
     `the closed-gate submit resolved in ${elapsedMs}ms — far below the shared ${STUB_DELAY_FLOOR_MS}ms stub floor`,
   ).toBeGreaterThanOrEqual(STUB_DELAY_FLOOR_MS)
 
-  expectClosedGateStayedSilent(sinks)
+  expectZeroHubSpotRequests(sinks)
+})
+
+// E1b — the other half of "the sentence only when ticked": an unticked box still sends the request, without a sentence.
+test('landing demo: an unticked marketing box sends the request to our own gateway without a consent sentence', async ({ page }) => {
+  const sinks = await openLanding(page)
+  const dialog = await openDemoModal(page)
+
+  await fillRequiredFields(dialog, 'dm')
+  await dialog.locator('#dm-consent').check()
+  await expect(dialog.locator('#dm-marketing')).not.toBeChecked()
+
+  const accepted = page.waitForResponse((res) => res.request().method() === 'POST' && res.url().split('?')[0] === `${GATEWAY_URL}/contacts/demo-request`)
+  await submitButton(dialog).click()
+  await expectSuccessPanel(dialog, 'dm')
+  expect((await accepted).status(), 'the gateway did not accept the demo request').toBe(202)
+
+  const posts = sinks.gatewayDemoRequests.filter((r) => r.method === 'POST')
+  expect(posts, 'exactly one POST to the gateway').toHaveLength(1)
+  const body = JSON.parse(posts[0].body ?? 'null') as Record<string, unknown>
+  expect(body).toMatchObject({ email: LEAD.email })
+  expect(body, 'an unticked box carried a consent sentence').not.toHaveProperty('marketing_consent_text')
+
+  expectZeroHubSpotRequests(sinks)
 })
 
 // E2 — consent is a hard gate. An unticked box must block the submit, say so inline, move
@@ -418,7 +467,7 @@ test('landing demo: an unticked consent box blocks the submit and names the reas
   await expect(submitButton(dialog)).toBeVisible()
   await expect(dialog.locator('#dm-success-done')).toHaveCount(0)
 
-  expectClosedGateStayedSilent(sinks)
+  expectZeroHubSpotRequests(sinks)
 })
 
 // E3 — the honeypot did not break the Tab trap. The trap's own selector matches the
@@ -473,7 +522,7 @@ test('landing demo: the Tab trap wraps in both directions and never lands on the
     .poll(() => honeypot.evaluate((el) => getComputedStyle(el).display))
     .not.toBe('none')
 
-  expectClosedGateStayedSilent(sinks)
+  expectZeroHubSpotRequests(sinks)
 })
 
 /** A `<select>`'s rendered options: value, text, and disabled state, in DOM order. */
@@ -516,7 +565,7 @@ test('landing demo: the modal select offers exactly the four turnover bands', as
     selectDefault,
   )
 
-  expectClosedGateStayedSilent(sinks)
+  expectZeroHubSpotRequests(sinks)
 })
 
 // E5 — TIMING INDISTINGUISHABILITY of the honeypot path. Carried in from LAND-02-02's QA,
@@ -558,8 +607,9 @@ test('landing demo: a tripped honeypot is dropped silently, and no faster than a
     `the tripped honeypot resolved in ${elapsedMs}ms. An early return is time-distinguishable ` +
       `from a real submit, which lets a bot detect the trap and retry without it.`,
   ).toBeGreaterThanOrEqual(STUB_DELAY_FLOOR_MS)
+  expect(sinks.gatewayDemoRequests, 'a tripped honeypot reached the gateway').toEqual([])
 
-  expectClosedGateStayedSilent(sinks)
+  expectZeroHubSpotRequests(sinks)
 })
 
 // The wide end has room to strand a band; ASSERTED_WIDTHS alone had never swept above 1280.
@@ -703,7 +753,7 @@ test('landing demo: the modal taxpayer-size value fits its card', async ({ page 
     expect(rectsOverlap(m.size, m.volume), `the size and volume controls overlap ${at}`).toBe(false)
   }
 
-  expectClosedGateStayedSilent(sinks)
+  expectZeroHubSpotRequests(sinks)
 })
 
 // O1: the modal card fits the viewport and sits centred, widest first, then a phone.
@@ -777,6 +827,44 @@ test('landing demo: the modal card scrolls inside itself at 390', async ({ page 
   expect(await page.evaluate(() => window.scrollY), 'the page behind the modal scrolled').toBe(scrollY0)
 })
 
+// O3: the marketing row sits under the consent row on the same left edge, inside the card.
+test('landing demo: the marketing row lines up under the consent row at 1440 and 390', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1080 })
+  await openLanding(page)
+  const dialog = await openDemoModal(page)
+  const card = dialog.locator(':scope > div')
+  await expect(card).toHaveCount(1)
+
+  for (const viewport of [{ width: 1440, height: 1080 }, { width: 390, height: 667 }]) {
+    await page.setViewportSize(viewport)
+    const at = `${viewport.width}px`
+    await settleAnimations(card)
+    // The card scrolls its own height at 390; both rows must be reachable, then measured.
+    await dialog.locator('#dm-marketing').scrollIntoViewIfNeeded()
+    await settleLayout(page)
+    const m = await page.evaluate(() => {
+      const rect = (el: Element) => {
+        const r = el.getBoundingClientRect()
+        return { x: r.x, y: r.y, width: r.width, height: r.height }
+      }
+      const consent = document.getElementById('dm-consent')!
+      const marketing = document.getElementById('dm-marketing')!
+      return {
+        card: rect(document.querySelector('[role="dialog"] > div')!),
+        consentBox: rect(consent),
+        marketingBox: rect(marketing),
+        consentRow: rect(consent.closest('label')!),
+        marketingRow: rect(marketing.closest('label')!),
+      }
+    })
+    expect(Math.abs(m.marketingBox.x - m.consentBox.x), `${at}: marketing checkbox left ${m.marketingBox.x} vs consent ${m.consentBox.x}`).toBeLessThanOrEqual(0.5)
+    expect(m.marketingRow.y, `${at}: the marketing row does not start below the consent row`).toBeGreaterThanOrEqual(m.consentRow.y + m.consentRow.height - 1)
+    for (const [name, box] of [['consent row', m.consentRow], ['marketing row', m.marketingRow]] as const) {
+      expect(enclosesRect(m.card, box, 1), `${at}: the ${name} is not enclosed by the card: ${JSON.stringify({ card: m.card, box })}`).toBe(true)
+    }
+  }
+})
+
 // E7 — the deployed scroll-depth path. Reads the whole page, opens no modal, and asserts
 // the same gate biconditional: the only run in this file that drives App.tsx's scroll
 // listener on the build that shipped.
@@ -794,5 +882,5 @@ test('landing analytics: reading the whole page requests gtag.js only on the liv
   expect(await page.evaluate(() => window.scrollY), 'the landing page did not scroll').toBeGreaterThan(0)
   await expect(page.getByRole('dialog')).toHaveCount(0)
 
-  expectClosedGateStayedSilent(sinks)
+  expectZeroHubSpotRequests(sinks)
 })

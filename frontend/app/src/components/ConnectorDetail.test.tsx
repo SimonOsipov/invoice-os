@@ -90,6 +90,7 @@ describe('ConnectorDetail > header and health strip', () => {
     const tile = screen.getByText(CONNECTOR_DEFS[0].mono, { exact: true })
     expect(tile.style.color).toBe('var(--primary-foreground)')
     expect(sandbox().style.color).toBe('var(--primary-foreground)')
+    expect((sandbox().querySelector('span') as HTMLElement).style.background).toBe('var(--primary-foreground)')
   })
 
   it('the back link is 12.5px with a 5px gap', () => {
@@ -147,6 +148,7 @@ describe('ConnectorDetail > funnel, volume', () => {
     arrows.forEach((a) => {
       expect(a.querySelector('svg path')?.getAttribute('d')).toBe('M5 12h14M13 6l6 6-6 6')
       expect((a as HTMLElement).style.marginTop).toBe('10px')
+      expect((a as HTMLElement).style.color).toBe('var(--fg-4)')
     })
     expect(funnel.textContent).not.toContain('→')
   })

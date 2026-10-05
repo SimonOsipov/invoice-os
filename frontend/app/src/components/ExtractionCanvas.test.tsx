@@ -831,6 +831,7 @@ describe('the toolbar', () => {
     for (const seg of segments) {
       expect(seg.style.borderRadius, `${seg.dataset.testid} radius`).toBe('var(--radius-sm)')
       expect(seg.style.fontWeight, `${seg.dataset.testid} weight`).toBe('600')
+      expect(seg.style.transition, `${seg.dataset.testid} transition`).toBe('background 120ms, color 120ms')
       expect(['0px', 'none'], `${seg.dataset.testid} border`).toContain(seg.style.border)
     }
     const [idle50, pressed100, idle150] = segments

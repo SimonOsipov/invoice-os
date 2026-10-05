@@ -112,6 +112,7 @@ const SEGMENT: CSSProperties = {
   fontSize: 12.5,
   fontWeight: 600,
   cursor: 'pointer',
+  transition: 'background 120ms, color 120ms',
 }
 
 const BANNER: CSSProperties = {

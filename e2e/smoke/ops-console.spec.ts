@@ -39,7 +39,7 @@ import { collectErrors, signInAs } from '../personaSession'
 // in charts.test.ts / helpers.test.ts — re-asserting them in a browser would duplicate the
 // base of the pyramid, which docs/e2e-convention.md forbids).
 
-// ASSERT THE <h1>, NOT THE CRUMB. TopBar renders CRUMB_BY_SCREEN inside <main> (TopBar.tsx:64)
+// ASSERT THE <h1>, NOT THE CRUMB. TopBar renders CRUMB_BY_SCREEN inside <main> (TopBar.tsx)
 // and the crumb differs from BOTH the nav label and the h1 on some screens by design
 // (data.tsx:94-95), so a getByText sweep would be ambiguous where they agree and wrong where
 // they do not. `getByRole('heading', { level: 1 })` is the screen's own claim about itself,
@@ -74,7 +74,7 @@ const rows = (page: Page) => page.getByRole('main').locator('.ops-row')
 
 // The sidebar's dead-letter badge. It is the only `.mono` inside that nav button (the label
 // span carries `ops-nav-label`), and it is not rendered at all when the count is zero
-// (Sidebar.tsx:141) — which is what makes `toHaveCount(0)` a real post-condition rather
+// (Sidebar.tsx) — which is what makes `toHaveCount(0)` a real post-condition rather
 // than a text comparison. `{ name: 'Submissions' }` matches by substring, so it still finds
 // the button when the badge has widened its accessible name to "Submissions 1".
 const deadLetterBadge = (page: Page) => sidebar(page).getByRole('button', { name: 'Submissions' }).locator('.mono')

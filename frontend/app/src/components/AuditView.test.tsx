@@ -1907,8 +1907,13 @@ describe('AuditExportToast shell (RESKIN2-06-02)', () => {
   })
 
   it('toast_bundleVariantKeepsTheNarrowCapSoItClearsTheDrawer', () => {
-    render(<AuditExportToast kind="success" text="Bundle ready" testId="evidence-bundle-toast" onDismiss={vi.fn()} />)
+    render(<AuditExportToast kind="success" text="Bundle ready" testId="evidence-bundle-toast" maxWidth={440} onDismiss={vi.fn()} />)
     expect(screen.getByTestId('evidence-bundle-toast').style.maxWidth).toBe('440px')
+  })
+
+  it('toast_maxWidthDefaultsTo640WhateverTheTestId', () => {
+    render(<AuditExportToast kind="success" text="Exported" testId="evidence-bundle-toast" onDismiss={vi.fn()} />)
+    expect(screen.getByTestId('evidence-bundle-toast').style.maxWidth).toBe('640px')
   })
 })
 

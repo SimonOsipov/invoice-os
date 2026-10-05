@@ -488,6 +488,13 @@ describe('APPR-10-04 QA AC-1: the Access role filter is untouched by WfSelect\'s
   })
 })
 
+describe('the search box', () => {
+  it('the wrapper carries pf-chipbox so the box rings once', () => {
+    render(<Harness initial={[member(), otherMember()]} />)
+    expect(screen.getByLabelText('Search members').parentElement!.className).toBe('pf-chipbox')
+  })
+})
+
 describe('the roster table chrome', () => {
   it('a search that matches nobody renders members-no-match inside members-table, under the head', () => {
     render(<Harness initial={[member(), otherMember()]} />)
@@ -620,8 +627,9 @@ describe('the capability matrix card', () => {
     expect(toggle.getAttribute('aria-controls')).toBe(body.id)
 
     const table = within(body).getByRole('table', { name: 'What can each role do?' })
-    expect(within(table).getAllByRole('columnheader').map((c) => c.textContent)).toEqual(ACCESS_ROLES.map((r) => r.label))
+    expect(within(table).getAllByRole('columnheader').map((c) => c.textContent)).toEqual(['', ...ACCESS_ROLES.map((r) => r.label)])
     const rows = within(table).getAllByRole('row')
+    expect(rows[0].children.length, 'the header row has as many cells as a body row').toBe(rows[1].children.length)
     expect(rows).toHaveLength(CAPABILITY_ROWS.length + 1)
     rows.forEach((row) => expect(row.style.gridTemplateColumns).toBe('minmax(0,1fr) 90px 90px 90px'))
     CAPABILITY_ROWS.forEach((cap, i) => {

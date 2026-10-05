@@ -8,7 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { ErrorState, toApiError, useAsync, type ApiError } from '@invoice-os/api-client'
 
-import { downloadGlyph } from '../glyphs'
+import { dismissGlyph, downloadGlyph } from '../glyphs'
 import { AUDIT_FILTER_DEFAULT, type AuditRange } from '../lib/auditFilters'
 import {
   bundleRequestFor,
@@ -32,7 +32,6 @@ import { useDismiss } from '../lib/useDismiss'
 import type { PlatformCtx } from '../types'
 
 import { DATE_PRESETS } from './AuditFilterCard'
-import { dismissGlyph } from './AuditExportToast'
 import { FilterPopover } from './FilterPopover'
 
 // id === data-testid, the shipped shape at AuditView.tsx:244.
@@ -43,7 +42,7 @@ export interface EvidenceBundleDrawerProps {
   ctx: PlatformCtx
   base: string
   onClose: () => void
-  onToast: (t: { kind: 'success' | 'error'; text: string; testId?: string }) => void
+  onToast: (t: { kind: 'success' | 'error'; text: string; testId?: string; maxWidth?: number }) => void
 }
 
 // One capture per build. Holding (req, preview) in the phase -- not re-reading them at
@@ -174,6 +173,8 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
         period: bundlePeriodLabel(phase.preview.period),
       }),
       testId: 'evidence-bundle-toast',
+      // Clear of the open drawer panel.
+      maxWidth: 440,
     })
   }
 
@@ -466,7 +467,7 @@ export function EvidenceBundleDrawer({ ctx, base, onClose, onToast }: EvidenceBu
               <div style={{ height: 6, borderRadius: 'var(--radius-sm)', background: 'var(--bg-3)', overflow: 'hidden', marginBottom: 12 }}>
                 <div
                   data-testid="evidence-building-bar"
-                  style={{ height: '100%', width: '100%', background: 'var(--action)', opacity: 0.6, animation: 'pulse 1.2s linear infinite' }}
+                  style={{ height: '100%', width: '100%', background: 'var(--action)', animation: 'pulse 1.2s linear infinite' }}
                 />
               </div>
               <div data-testid="evidence-building-note" style={{ fontSize: 12.5, lineHeight: 1.5, color: 'var(--fg-2)' }}>

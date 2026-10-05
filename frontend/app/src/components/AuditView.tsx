@@ -95,7 +95,7 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   const [exporting, setExporting] = useState(false)
   // testId is optional so the CSV path keeps AuditExportToast's default; the drawer's
   // download names its own (EB-06-8b).
-  const [exportToast, setExportToast] = useState<{ kind: 'success' | 'error'; text: string; testId?: string } | null>(
+  const [exportToast, setExportToast] = useState<{ kind: 'success' | 'error'; text: string; testId?: string; maxWidth?: number } | null>(
     null,
   )
   // Drives the trigger's aria-expanded and the drawer mount below.
@@ -376,6 +376,7 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
           kind={exportToast.kind}
           text={exportToast.text}
           testId={exportToast.testId}
+          maxWidth={exportToast.maxWidth}
           onDismiss={() => setExportToast(null)}
         />
       )}

@@ -1382,7 +1382,7 @@ describe('EvidenceBundleDrawer', () => {
       company: 'Honeywell Group',
       period: bundlePeriodLabel(PREVIEW.period),
     })
-    expect(onToast.mock.calls[0][0]).toEqual({ kind: 'success', text: expectedText, testId: 'evidence-bundle-toast' })
+    expect(onToast.mock.calls[0][0]).toEqual({ kind: 'success', text: expectedText, testId: 'evidence-bundle-toast', maxWidth: 440 })
 
     // The AC's own five facts, independent of the lib producing the sentence: toEqual above
     // passes whatever bundleToastCopy returns, including a string missing a fact.
@@ -1848,8 +1848,8 @@ describe('EvidenceBundleDrawer', () => {
       const bar = screen.getByTestId('evidence-building-bar')
       expect(bar.children.length, 'the fill has no child').toBe(0)
       expect([bar.style.background, bar.style.height, bar.style.width]).toEqual(['var(--action)', '100%', '100%'])
-      expect(bar.style.animation, 'the prototype fill: pulse 1.2s at opacity .6').toBe('pulse 1.2s linear infinite')
-      expect(bar.style.opacity).toBe('0.6')
+      expect(bar.style.animation, 'the prototype fill: pulse 1.2s').toBe('pulse 1.2s linear infinite')
+      expect(bar.style.opacity, 'the pulse keyframe owns opacity').toBe('')
       const track = bar.parentElement!
       expect(track.parentElement, 'the track sits directly in the card').toBe(card)
       expect([track.style.height, track.style.background, track.style.borderRadius, track.style.overflow]).toEqual(['6px', 'var(--bg-3)', 'var(--radius-sm)', 'hidden'])

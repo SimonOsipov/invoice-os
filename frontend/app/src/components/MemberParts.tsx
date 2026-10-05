@@ -13,7 +13,7 @@
 
 import { useId, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 
-import { moreGlyph, tickGlyph11 } from '../glyphs'
+import { moreGlyph, searchGlyph, tickGlyph11 } from '../glyphs'
 import { useDismiss } from '../lib/useDismiss'
 import {
   ABSENT_LABEL,
@@ -650,6 +650,32 @@ export function MoreMenu({ open, onOpen, onClose, label, items }: {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+/** The Members and Roles search box; `.pf-chipbox` rings the box once instead of the inner input. */
+export function SearchBox({ value, onChange, placeholder, label, testId }: {
+  value: string
+  onChange: (v: string) => void
+  placeholder: string
+  label: string
+  testId?: string
+}) {
+  return (
+    <div className="pf-chipbox" style={{ display: 'flex', alignItems: 'center', gap: 8, width: 300, height: 36, padding: '0 12px', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)' }}>
+      <span aria-hidden="true" style={{ flex: 'none', display: 'inline-flex', color: 'var(--fg-3)' }}>
+        {searchGlyph}
+      </span>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        aria-label={label}
+        data-testid={testId}
+        style={{ flex: 1, minWidth: 0, border: 0, outline: 'none', background: 'transparent', fontFamily: 'var(--font-sans)', fontSize: 13, color: 'var(--fg-1)' }}
+      />
     </div>
   )
 }

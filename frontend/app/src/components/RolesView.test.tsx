@@ -484,6 +484,7 @@ describe('Roles tab v2 paint', () => {
     expect(input.className, 'a bare input inside the wrapper').toBe('')
     const box = input.parentElement as HTMLElement
     expect([box.style.width, box.style.height, box.style.padding, box.style.background]).toEqual(['300px', '36px', '0px 12px', 'var(--bg-2)'])
+    expect(box.className, 'the box rings once, not the inner input').toBe('pf-chipbox')
     expect(box.style.border).toContain('var(--line-2)')
     expect(box.querySelector('svg'), 'the search glyph').toBeTruthy()
   })

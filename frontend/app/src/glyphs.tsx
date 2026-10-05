@@ -33,6 +33,8 @@ export const copyGlyph = (
 )
 export const docGlyph = <Icon paths={['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M14 2v6h6']} size={20} />
 export const closeGlyph = <Icon paths={['M18 6 6 18M6 6l12 12']} size={16} strokeWidth={2} />
+export const dismissGlyph = <Icon paths={['M18 6 6 18', 'm6 6 12 12']} size={12} strokeWidth={2} />
+export const matrixCross = <Icon paths={['M18 6 6 18M6 6l12 12']} size={11} strokeWidth={2.4} />
 export const backGlyph = <Icon paths={['M15 18l-6-6 6-6']} size={15} strokeWidth={1.7} />
 export const arrowGlyph = <Icon paths={['M5 12h14M13 6l6 6-6 6']} size={14} strokeWidth={1.7} />
 export const refreshGlyph = <Icon paths={['M21 4v6h-6', 'M3 20v-6h6', 'M3.5 9a9 9 0 0 1 14.9-3.4L21 8', 'M20.5 15a9 9 0 0 1-14.9 3.4L3 16']} size={14} />

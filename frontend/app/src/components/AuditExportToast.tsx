@@ -3,11 +3,10 @@
 
 import { useEffect } from 'react'
 
-import { Icon } from '../icons'
+import { dismissGlyph } from '../glyphs'
 
 const EXPORT_TOAST_MS = 5200
 const DEFAULT_TEST_ID = 'audit-export-toast'
-export const dismissGlyph = <Icon paths={['M18 6 6 18', 'm6 6 12 12']} size={12} strokeWidth={2} />
 
 export function AuditExportToast({
   kind,
@@ -16,11 +15,13 @@ export function AuditExportToast({
   // AUDIT-07's assertions address this toast by its default; only the evidence-bundle
   // download passes a different one. EB-06-9's second render is the oracle.
   testId = DEFAULT_TEST_ID,
+  maxWidth = 640,
 }: {
   kind: 'success' | 'error'
   text: string
   onDismiss: () => void
   testId?: string
+  maxWidth?: number
 }) {
   useEffect(() => {
     const timer = setTimeout(onDismiss, EXPORT_TOAST_MS)
@@ -47,8 +48,7 @@ export function AuditExportToast({
         borderRadius: 'var(--radius-md)',
         boxShadow: 'var(--shadow-card)',
         padding: '11px 12px 11px 14px',
-        // The bundle toast is longer and must stay clear of the open drawer panel.
-        maxWidth: testId === DEFAULT_TEST_ID ? 640 : 440,
+        maxWidth,
         animation: 'popIn 160ms ease-out',
       }}
     >

@@ -15,7 +15,7 @@
 import { useCallback, useId, useState } from 'react'
 
 import { EmptyState, ErrorState, Loading, toApiError } from '@invoice-os/api-client'
-import { plusGlyph, searchGlyph } from '../glyphs'
+import { plusGlyph } from '../glyphs'
 import {
   ACCESS_ROLES,
   filterMembers,
@@ -26,7 +26,7 @@ import {
 } from '../lib/members'
 import { rolesSurface, unassignedNotice, unassignedRoles } from '../lib/roles'
 import { MemberDrawer } from './MemberDrawer'
-import { AmberNote } from './MemberParts'
+import { AmberNote, SearchBox } from './MemberParts'
 import { ClientUsersCard, MemberRoleMatrix } from './MemberRoleMatrix'
 import { MembersTable } from './MembersTable'
 import { WfSelect, type WfOption } from './WorkflowParts'
@@ -114,19 +114,7 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
       <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: '-4px 0 16px', maxWidth: 680, lineHeight: 1.6 }}>{INTRO[mode]}</p>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: 300, height: 36, padding: '0 12px', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)' }}>
-          <span aria-hidden="true" style={{ flex: 'none', display: 'inline-flex', color: 'var(--fg-3)' }}>
-            {searchGlyph}
-          </span>
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search name or email"
-            aria-label="Search members"
-            style={{ flex: 1, minWidth: 0, border: 0, outline: 'none', background: 'transparent', fontFamily: 'var(--font-sans)', fontSize: 13, color: 'var(--fg-1)' }}
-          />
-        </div>
+        <SearchBox value={query} onChange={setQuery} placeholder="Search name or email" label="Search members" />
         <WfSelect
           label="Access role"
           hideLabel

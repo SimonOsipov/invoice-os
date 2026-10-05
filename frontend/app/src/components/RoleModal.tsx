@@ -9,7 +9,7 @@
 // `environment: node`, so a string authored here is a string no spec can hold. The one
 // exception is marked below, matching `RolesView`'s own `NO_MATCH`.
 
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { toApiError } from '@invoice-os/api-client'
 import { closeGlyph, tickGlyph11 } from '../glyphs'
@@ -71,6 +71,11 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
   // MODAL-LOCAL, the MemberDrawer posture: it dies with the modal rather than needing to be
   // cleared on close.
   const [confirming, setConfirming] = useState(false)
+  const confirmRef = useRef<HTMLDivElement>(null)
+  // The confirm sits at the end of the scrolling body, so bring it on screen.
+  useEffect(() => {
+    if (confirming) confirmRef.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [confirming])
   // EntityFormModal's idiom (EntityFormModal.tsx:64,94): a write in flight disables the
   // form and blocks a second submit; a rejected one renders the gateway's own sentence here
   // instead of closing on it.
@@ -313,6 +318,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
           {confirming && role && (
             // Inline in the body, so Cancel and Save stay in the footer beside it.
             <div
+              ref={confirmRef}
               data-testid="role-delete-confirm"
               style={{ marginTop: 14, padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)' }}
             >
@@ -383,11 +389,11 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
             <button
               type="button"
               onClick={() => void save()}
-              disabled={!canSave || submitting}
+              disabled={!canSave || submitting || confirming}
               className="v2-btn v2-btn-primary pf-btn"
               data-testid="role-modal-save"
               // Inline: the repo has no `:disabled` rule, and `filter: none` outranks the hover lift.
-              style={{ height: 36, ...(!canSave || submitting ? DISABLED : null) }}
+              style={{ height: 36, ...(!canSave || submitting || confirming ? DISABLED : null) }}
             >
               {submitting ? 'Saving…' : role ? 'Save role' : 'Create role'}
             </button>

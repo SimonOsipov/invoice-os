@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { EmptyState, ErrorState, Loading } from '@invoice-os/api-client'
-import { plusGlyph, searchGlyph } from '../glyphs'
+import { plusGlyph } from '../glyphs'
 import { membersSurface } from '../lib/members'
 import {
   filterRoles,
@@ -27,7 +27,7 @@ import {
   unassignedRoles,
   type Role,
 } from '../lib/roles'
-import { AmberNote, InitialsChip } from './MemberParts'
+import { AmberNote, InitialsChip, SearchBox } from './MemberParts'
 import { RoleModal, type RoleModalSubject } from './RoleModal'
 import type { PlatformCtx } from '../types'
 
@@ -93,20 +93,7 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
       )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: 300, height: 36, padding: '0 12px', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)' }}>
-          <span aria-hidden="true" style={{ flex: 'none', display: 'inline-flex', color: 'var(--fg-3)' }}>
-            {searchGlyph}
-          </span>
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search roles"
-            aria-label="Search roles"
-            data-testid="roles-search"
-            style={{ flex: 1, minWidth: 0, border: 0, outline: 'none', background: 'transparent', fontFamily: 'var(--font-sans)', fontSize: 13, color: 'var(--fg-1)' }}
-          />
-        </div>
+        <SearchBox value={query} onChange={setQuery} placeholder="Search roles" label="Search roles" testId="roles-search" />
         <div style={{ flex: 1 }} />
         {flash && (
           <span data-testid="roles-flash" style={{ flex: 'none', fontSize: 12.5, color: 'var(--status-green-text)' }}>

@@ -182,6 +182,21 @@ describe('AC-5: edit writes split on what actually changed', () => {
   })
 })
 
+describe('the delete confirm', () => {
+  it('scrolls into view and disables Save while it is pending', () => {
+    const scroll = vi.fn()
+    Element.prototype.scrollIntoView = scroll
+    renderModal({ mode: 'edit', role: role() })
+    const save = screen.getByTestId('role-modal-save') as HTMLButtonElement
+    expect(save.disabled).toBe(false)
+    fireEvent.click(screen.getByTestId('role-delete'))
+    expect(scroll).toHaveBeenCalledWith({ block: 'nearest' })
+    expect([save.disabled, save.style.opacity, save.style.cursor, save.style.filter]).toEqual([true, '0.45', 'not-allowed', 'none'])
+    fireEvent.click(screen.getByTestId('role-delete-cancel'))
+    expect(save.disabled).toBe(false)
+  })
+})
+
 describe('AC-6/AC-10: remove() awaits ctx.deleteRole and does not close on rejection', () => {
   it('a rejected delete keeps the modal open and shows the reason', async () => {
     const deleteRole = vi.fn().mockRejectedValue(new ApiError('http', 'workflow role not found', 404))

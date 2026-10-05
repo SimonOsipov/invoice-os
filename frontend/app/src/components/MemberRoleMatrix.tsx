@@ -13,8 +13,7 @@
 
 import { useId, useState, type CSSProperties } from 'react'
 
-import { chevDownGlyph, tickGlyph11 } from '../glyphs'
-import { Icon } from '../icons'
+import { chevDownGlyph, matrixCross, tickGlyph11 } from '../glyphs'
 import { ACCESS_ROLES, CAPABILITY_FOOTNOTE, CAPABILITY_ROWS, CLIENT_USERS_COPY } from '../lib/members'
 
 // §6 names this in backticks as the affordance, not as prose, so AC#1's "capability rows
@@ -28,9 +27,6 @@ const MATRIX_HEADING = 'What can each role do?'
 // screen readers, its content always is. Declared locally — a shared `.sr-only` utility
 // would mean editing the design-system stylesheet, which is not a copy subtask's business.
 const SR_ONLY: CSSProperties = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' }
-
-// Not the shared `crossGlyph` (stroke 3): the matrix draws a lighter cross.
-const matrixCross = <Icon paths={['M18 6 6 18M6 6l12 12']} size={11} strokeWidth={2.4} />
 
 const MATRIX_COLS = 'minmax(0,1fr) 90px 90px 90px'
 
@@ -56,7 +52,7 @@ export function MemberRoleMatrix() {
         aria-expanded={open}
         aria-controls={bodyId}
         onClick={() => setOpen((v) => !v)}
-        // `.pf-tab`, not `.pf-btn`: App.routeBoot.test.tsx filters this toggle out of its `.pf-tab` scan.
+        // `.pf-tab`, not `.pf-btn`: `.pf-btn` forces a 7px radius with `!important`.
         className="pf-tab"
         style={{
           width: '100%',
@@ -85,8 +81,8 @@ export function MemberRoleMatrix() {
         <div id={bodyId} data-testid="role-matrix" style={{ borderTop: '1px solid var(--line-1)', padding: '6px 18px 18px' }}>
           <div role="table" aria-labelledby={headingId}>
             <div role="row" style={{ display: 'grid', gridTemplateColumns: MATRIX_COLS, alignItems: 'center', gap: 8, padding: '10px 0 8px' }}>
-              {/* The corner cell heads neither a row nor a column, so it carries no role. */}
-              <span />
+              {/* An empty header keeps the row at four cells, as the body rows are. */}
+              <span role="columnheader" />
               {/* Column order is ACCESS_ROLES order by construction: Admin, Preparer, Reviewer. */}
               {ACCESS_ROLES.map((r) => (
                 <span key={r.id} role="columnheader" className="label" style={{ textAlign: 'center' }}>

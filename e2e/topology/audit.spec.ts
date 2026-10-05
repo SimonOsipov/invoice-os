@@ -664,8 +664,7 @@ test.describe('Audit screen', () => {
       // L7 -- header, body and footer share one content column. Two claims, and the second is
       // the one that bites: the bands are full-width siblings, AND each band insets its own
       // content by the same amount. Comparing a band's OUTER box against another band's INNER
-      // content compares two different edges and fails by exactly the padding -- the first
-      // deploy-gate run reported 22, which is the padding, not a misalignment.
+      // content compares two different edges and fails by exactly the padding.
       const bandDrift = Math.max(Math.abs(bodyBox.x - footerBox.x), Math.abs(bodyBox.x - headerBox.x))
       expect(bandDrift, `the three bands must be full-width siblings at ${width}px`).toBeLessThanOrEqual(SLACK_PX)
 

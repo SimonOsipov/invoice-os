@@ -104,6 +104,59 @@ describe('FilterPopover', () => {
     expect(block.getAttribute('aria-labelledby')).toBe('fp-label fp-summary')
   })
 
+  it('filterPopover_blockNameIsLabelPlusSummaryAndNonBlockIsUnchanged', () => {
+    const { rerender } = render(
+      <FilterPopover testId="fp" label="Company" summary="Acme" open={false} onOpen={vi.fn()} onClose={vi.fn()} block>
+        <div>body</div>
+      </FilterPopover>,
+    )
+    const trigger = screen.getByTestId('fp-trigger')
+    expect(screen.getByRole('button', { name: 'Company Acme' })).toBe(trigger)
+    expect(screen.getByTestId('fp-label').className).toBe('label')
+    expect(screen.getByTestId('fp-label').style.marginBottom).toBe('7px')
+    rerender(
+      <FilterPopover testId="fp" label="Company" open={false} onOpen={vi.fn()} onClose={vi.fn()} block>
+        <div>body</div>
+      </FilterPopover>,
+    )
+    expect(screen.getByRole('button', { name: 'Company' }), 'no summary: the label alone names it').toBe(trigger)
+    cleanup()
+
+    renderPopover(true)
+    const plain = screen.getByTestId('fp-trigger')
+    expect(plain.getAttribute('aria-labelledby')).toBeNull()
+    expect(screen.queryByTestId('fp-label'), 'non-block draws no outside label').toBeNull()
+    expect(plain.textContent, 'non-block keeps the label inside the trigger').toContain('Test filter')
+    const panel = screen.getByTestId('fp-panel')
+    expect([panel.style.left, panel.style.right]).toEqual(['0px', ''])
+    expect(panel.parentElement?.style.position).toBe('relative')
+    expect(panel.parentElement).toBe(plain.parentElement)
+  })
+
+  it('filterPopover_blockPanelAnchorsToTheTriggerAndOpenKeepsThePlainPaint', () => {
+    render(
+      <FilterPopover testId="fp" label="Company" summary="Acme" open onOpen={vi.fn()} onClose={vi.fn()} block>
+        <div>body</div>
+      </FilterPopover>,
+    )
+    const trigger = screen.getByTestId('fp-trigger')
+    const panel = screen.getByTestId('fp-panel')
+    expect([panel.style.left, panel.style.right, panel.style.top]).toEqual(['0px', '0px', 'calc(100% + 6px)'])
+    expect(panel.parentElement, 'the panel anchors to the trigger box, not the label above it').toBe(trigger.parentElement)
+    expect(panel.parentElement?.style.position).toBe('relative')
+    expect(panel.parentElement?.contains(screen.getByTestId('fp-label')), 'the label sits outside the anchor').toBe(false)
+    expect([trigger.style.background, trigger.style.color], 'a block trigger takes no open tint').toEqual(['var(--bg-2)', 'var(--fg-1)'])
+    expect(screen.getByTestId('fp-chevron').style.transform).toBe('rotate(180deg)')
+    cleanup()
+
+    render(
+      <FilterPopover testId="fp" label="Company" summary="Acme" open onOpen={vi.fn()} onClose={vi.fn()}>
+        <div>body</div>
+      </FilterPopover>,
+    )
+    expect([screen.getByTestId('fp-trigger').style.background, screen.getByTestId('fp-trigger').style.color], 'non-block keeps the open tint').toEqual(['var(--bg-3)', 'var(--action)'])
+  })
+
   it('filterPopover_enabledTriggerCarriesNoDisabledPaint', () => {
     renderPopover(false)
     const trigger = screen.getByTestId('fp-trigger')

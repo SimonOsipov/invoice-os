@@ -12,7 +12,7 @@ import { useMemo } from 'react'
 import { CONNECTOR_TAX_CODES, type ConnectorDef } from '../data'
 import { connectorDetail, mappingFor, type SyncEventKind } from '../lib/connectors'
 import { fmtPlain } from '../lib/format'
-import { backGlyph, refreshGlyph, warnTriGlyph } from '../glyphs'
+import { arrowGlyph, backGlyph, refreshGlyph, warnTriGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
 
 const CARD: React.CSSProperties = { background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)' }
@@ -58,8 +58,8 @@ function FunnelStep({ n, label, sub }: { n: number; label: string; sub: string }
 
 function Arrow() {
   return (
-    <span className="mono" style={{ fontSize: 15, color: 'var(--fg-4)', alignSelf: 'start', paddingTop: 8 }} aria-hidden="true">
-      →
+    <span style={{ color: 'var(--fg-4)', display: 'inline-flex', marginTop: 10 }} aria-hidden="true">
+      {arrowGlyph}
     </span>
   )
 }
@@ -95,7 +95,7 @@ export function ConnectorDetail({
 
       {/* Header */}
       <div style={{ ...CARD, padding: '18px 20px', display: 'flex', alignItems: 'center', gap: 15, marginBottom: 16 }}>
-        <span style={{ flex: 'none', width: 42, height: 42, borderRadius: 'var(--radius-md)', background: 'var(--slate-800)', color: 'var(--text-on-dark)', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.02em' }}>{def.mono}</span>
+        <span style={{ flex: 'none', width: 42, height: 42, borderRadius: 'var(--radius-md)', background: 'var(--slate-800)', color: 'var(--primary-foreground)', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.02em' }}>{def.mono}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
             <span style={{ fontSize: 16, fontWeight: 700 }}>{def.name}</span>
@@ -113,10 +113,9 @@ export function ConnectorDetail({
             type="button"
             disabled
             aria-pressed={!live}
-            className="pf-btn"
-            style={{ ...SEG, cursor: 'default', background: live ? 'transparent' : 'var(--status-amber-text)', color: live ? 'var(--fg-3)' : 'var(--text-on-dark)' }}
+            style={{ ...SEG, opacity: 0.45, cursor: 'not-allowed', filter: 'none', background: live ? 'transparent' : 'var(--status-amber-text)', color: live ? 'var(--fg-3)' : 'var(--primary-foreground)' }}
           >
-            <span style={{ width: 5, height: 5, borderRadius: '50%', background: live ? 'var(--status-amber-text)' : 'var(--text-on-dark)' }} />
+            <span style={{ width: 5, height: 5, borderRadius: '50%', background: live ? 'var(--status-amber-text)' : 'var(--primary-foreground)' }} />
             SANDBOX
           </button>
           <button
@@ -125,7 +124,6 @@ export function ConnectorDetail({
             disabled
             aria-pressed={live}
             title="Live filing switches on at NRS accreditation."
-            className="pf-btn"
             style={{ ...SEG, background: 'transparent', color: 'var(--fg-4)', opacity: 0.45, cursor: 'not-allowed', filter: 'none' }}
           >
             <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--fg-4)' }} />

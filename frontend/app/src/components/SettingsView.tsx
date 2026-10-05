@@ -202,7 +202,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
               const on = !!connectors[c.id]
               return (
                 <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 15, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '16px 18px' }}>
-                  <span style={{ flex: 'none', width: 42, height: 42, borderRadius: 'var(--radius-md)', background: 'var(--slate-800)', color: 'var(--text-on-dark)', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.02em' }}>{c.mono}</span>
+                  <span style={{ flex: 'none', width: 42, height: 42, borderRadius: 'var(--radius-md)', background: 'var(--slate-800)', color: 'var(--primary-foreground)', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.02em' }}>{c.mono}</span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
                       <span style={{ fontSize: 14.5, fontWeight: 600 }}>{c.name}</span>
@@ -255,7 +255,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
           </div>
           <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
             <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--line-1)' }}>
-              <span className="card-title">API keys</span>
+              <span style={{ fontSize: 14, fontWeight: 600 }}>API keys</span>
             </div>
             {API_KEYS.map((k) => {
               const dim = k.env === 'LIVE' ? (sandbox ? 0.45 : 1) : sandbox ? 1 : 0.45
@@ -277,7 +277,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
           </div>
           <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
             <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--line-1)' }}>
-              <span className="card-title">Endpoints</span>
+              <span style={{ fontSize: 14, fontWeight: 600 }}>Endpoints</span>
             </div>
             {ENDPOINTS.map((e) => {
               const mc = methodColor(e.m)
@@ -294,7 +294,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
           </div>
           <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
             <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span className="card-title">Webhooks</span>
+              <span style={{ fontSize: 14, fontWeight: 600 }}>Webhooks</span>
               <button className="pf-btn" style={{ height: 30, padding: '0 11px', borderRadius: 'var(--radius-btn)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5 }}>
                 {plusGlyph} Add endpoint
               </button>

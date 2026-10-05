@@ -1,6 +1,6 @@
 // Field-mapping editor for one connector, opened from the connector detail view's Edit
 // button. Structurally mirrors EntityFormModal (fixed backdrop, stopPropagation'd panel,
-// header + close, ghost/primary footer) — it edits a local draft of the mapping rows and
+// header + close) — it edits a local draft of the mapping rows and
 // only lifts them to the workspace (ctx.saveConnectorMapping) on Save, so Cancel and the
 // backdrop both discard cleanly.
 

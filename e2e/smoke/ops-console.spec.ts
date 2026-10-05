@@ -80,7 +80,7 @@ const rows = (page: Page) => page.getByRole('main').locator('.ops-row')
 const deadLetterBadge = (page: Page) => sidebar(page).getByRole('button', { name: 'Submissions' }).locator('.mono')
 
 // The Submissions "Dead-letter" sub-stat tile — a second consumer of the same count,
-// computed independently of the sidebar's (Submissions.tsx:17,30). Its figure is `.money`.
+// computed independently of the sidebar's (`dlCount` in Submissions.tsx). Its figure is `.money`.
 const deadLetterTile = (page: Page) =>
   page.getByRole('main').locator('.ops-sub-stats > div').filter({ hasText: 'Dead-letter' }).locator('.money')
 

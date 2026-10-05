@@ -463,6 +463,21 @@ func TestRLS_InvitationsTokenColumnsExist(t *testing.T) {
 		return e
 	})
 	pgViolation(t, "send_status = 'bogus'", err, "23514", "invitations_send_status_check")
+
+	for _, v := range []string{"Sent", "", " sent"} {
+		err = inTenantRollback(t, h.tenantA, func(ctx context.Context, tx pgx.Tx) error {
+			_, e := tx.Exec(ctx, `INSERT INTO invitations (tenant_id, role, invitee_email, status, send_status)
+				VALUES ($1, 'preparer', 'send-case@e.io', 'revoked', $2)`, h.tenantA, v)
+			return e
+		})
+		pgViolation(t, fmt.Sprintf("send_status = %q", v), err, "23514", "invitations_send_status_check")
+	}
+	err = inTenantRollback(t, h.tenantA, func(ctx context.Context, tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `INSERT INTO invitations (tenant_id, role, invitee_email, status, send_status)
+			VALUES ($1, 'preparer', 'send-null@e.io', 'revoked', NULL)`, h.tenantA)
+		return e
+	})
+	pgViolation(t, "send_status = NULL", err, "23502", "")
 }
 
 // RESEND-05-01 AC 2: a pending row missing any of the three is refused; a complete one stores.
@@ -493,6 +508,17 @@ func TestRLS_InvitationsPendingRowNeedsItsToken(t *testing.T) {
 		})
 		pgViolation(t, "pending row missing "+c.missing, err, "23514", "invitations_pending_has_token")
 	}
+
+	// The rule binds an UPDATE too: clearing any of the three on a stored pending row is refused.
+	id, cleanup := seedInvitation(t, h.tenantA, "preparer", "clear-token@example.com")
+	defer cleanup()
+	for _, col := range []string{"token_hash", "expires_at", "invited_by"} {
+		err := inTenantRollback(t, h.tenantA, func(ctx context.Context, tx pgx.Tx) error {
+			_, e := tx.Exec(ctx, `UPDATE invitations SET `+col+` = NULL WHERE id = $1`, id)
+			return e
+		})
+		pgViolation(t, "UPDATE clearing "+col+" of a pending row", err, "23514", "invitations_pending_has_token")
+	}
 }
 
 // RESEND-05-01 AC 3: only a pending row needs the token fields.
@@ -515,6 +541,25 @@ func TestRLS_InvitationsNonPendingRowNeedsNoToken(t *testing.T) {
 	if n != 1 || !hashIsNull {
 		t.Errorf("stored revoked row: count=%d token_hash null=%v, want 1 and true", n, hashIsNull)
 	}
+
+	// NULL is not a collision for the unique index: several token-less rows coexist, whatever
+	// their status.
+	err = inTenantRollback(t, h.tenantA, func(ctx context.Context, tx pgx.Tx) error {
+		for i, st := range []string{"revoked", "revoked", "accepted"} {
+			if _, e := tx.Exec(ctx, `INSERT INTO invitations (tenant_id, role, invitee_email, status)
+				VALUES ($1, 'preparer', $2, $3)`, h.tenantA, fmt.Sprintf("bare-%d@e.io", i), st); e != nil {
+				return fmt.Errorf("token-less %s row %d: %w", st, i, e)
+			}
+		}
+		n = mustCount(t, tx, `SELECT count(*) FROM invitations WHERE token_hash IS NULL AND invitee_email LIKE 'bare-%'`)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("several token-less non-pending rows were refused: %v", err)
+	}
+	if n != 3 {
+		t.Errorf("token-less non-pending rows stored = %d, want 3", n)
+	}
 }
 
 // RESEND-05-01 AC 4 (boundary): a token hash is exactly 32 bytes.
@@ -522,12 +567,22 @@ func TestRLS_InvitationsTokenHashIsThirtyTwoBytes(t *testing.T) {
 	h := requireHarness(t)
 	exp, by := time.Now().Add(7*24*time.Hour), uuid.NewString()
 
-	for _, n := range []int{31, 33} {
+	// 0 bytes is an empty hash, not a missing one: it passes the pending rule and meets the length rule.
+	for _, n := range []int{0, 31, 33} {
 		err := inTenantRollback(t, h.tenantA, func(ctx context.Context, tx pgx.Tx) error {
 			_, e := tx.Exec(ctx, insertPending, h.tenantA, "len@e.io", tokenHash(t, n), exp, by)
 			return e
 		})
 		pgViolation(t, fmt.Sprintf("token_hash of %d bytes", n), err, "23514", "invitations_token_hash_len")
+	}
+	// The length rule holds for every status, not only pending.
+	for _, n := range []int{0, 31, 33} {
+		err := inTenantRollback(t, h.tenantA, func(ctx context.Context, tx pgx.Tx) error {
+			_, e := tx.Exec(ctx, `INSERT INTO invitations (tenant_id, role, invitee_email, status, token_hash)
+				VALUES ($1, 'preparer', 'len-revoked@e.io', 'revoked', $2)`, h.tenantA, tokenHash(t, n))
+			return e
+		})
+		pgViolation(t, fmt.Sprintf("revoked row with token_hash of %d bytes", n), err, "23514", "invitations_token_hash_len")
 	}
 	if err := inTenantRollback(t, h.tenantA, func(ctx context.Context, tx pgx.Tx) error {
 		_, e := tx.Exec(ctx, insertPending, h.tenantA, "len@e.io", tokenHash(t, 32), exp, by)
@@ -589,28 +644,47 @@ func TestRLS_InvitationsTokenColumnsCrossTenantRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var updated int64
+	// Control: the owner's UPDATE of the new columns lands, so B's zero below is the policy.
+	var ownUpdated int64
+	if err := inTenantRollback(t, h.tenantA, func(ctx context.Context, tx pgx.Tx) error {
+		tag, e := tx.Exec(ctx, `UPDATE invitations SET send_status = 'sent', invited_by = $1 WHERE id = $2`, uuid.NewString(), idA)
+		ownUpdated = tag.RowsAffected()
+		return e
+	}); err != nil || ownUpdated != 1 {
+		t.Fatalf("tenant A's own UPDATE of send_status and invited_by affected %d rows (err %v), want 1", ownUpdated, err)
+	}
+
+	var updated, updatedOther int64
 	if err := inTenantRollback(t, h.tenantB, func(ctx context.Context, tx pgx.Tx) error {
 		if n := mustCount(t, tx, byHash, hash); n != 0 {
 			t.Errorf("tenant B sees %d of A's rows by token_hash, want 0", n)
 		}
-		tag, e := tx.Exec(ctx, `UPDATE invitations SET token_hash = $1, expires_at = now() WHERE id = $2`, tokenHash(t, 32), idA)
+		if n := mustCount(t, tx, `SELECT count(*) FROM invitations WHERE id = $1 AND send_status IS NOT NULL`, idA); n != 0 {
+			t.Errorf("tenant B reads send_status of %d of A's rows, want 0", n)
+		}
+		tag, e := tx.Exec(ctx, `UPDATE invitations SET send_status = 'failed', invited_by = $1 WHERE id = $2`, uuid.NewString(), idA)
+		updatedOther = tag.RowsAffected()
+		if e != nil {
+			return e
+		}
+		tag, e = tx.Exec(ctx, `UPDATE invitations SET token_hash = $1, expires_at = now() WHERE id = $2`, tokenHash(t, 32), idA)
 		updated = tag.RowsAffected()
 		return e
 	}); err != nil {
 		t.Fatalf("scoped to B: %v", err)
 	}
-	if updated != 0 {
-		t.Errorf("B's UPDATE of A's row affected %d rows, want 0", updated)
+	if updated != 0 || updatedOther != 0 {
+		t.Errorf("B's UPDATEs of A's row affected %d (token_hash, expires_at) and %d (send_status, invited_by) rows, want 0 and 0", updated, updatedOther)
 	}
 
 	var gotHash []byte
 	var gotExp time.Time
-	if err := h.super.QueryRow(ctx, `SELECT token_hash, expires_at FROM invitations WHERE id = $1`, idA).Scan(&gotHash, &gotExp); err != nil {
+	var gotStatus string
+	if err := h.super.QueryRow(ctx, `SELECT token_hash, expires_at, send_status FROM invitations WHERE id = $1`, idA).Scan(&gotHash, &gotExp, &gotStatus); err != nil {
 		t.Fatalf("re-read A's row: %v", err)
 	}
-	if string(gotHash) != string(hash) || !gotExp.Equal(wantExp) {
-		t.Errorf("A's row after B's UPDATE: token_hash changed=%v expires_at %v, want unchanged %v", string(gotHash) != string(hash), gotExp, wantExp)
+	if string(gotHash) != string(hash) || !gotExp.Equal(wantExp) || gotStatus != "sending" {
+		t.Errorf("A's row after B's UPDATE: token_hash changed=%v expires_at %v send_status %q, want unchanged %v and sending", string(gotHash) != string(hash), gotExp, gotStatus, wantExp)
 	}
 
 	tx, err := h.app.Begin(ctx)
@@ -665,5 +739,164 @@ func TestRLS_InvitationsTokenMigrationKeepsALegacyPendingRow(t *testing.T) {
 	if status != "pending" || email != "legacy@example.com" || !hashNull || !expNull || !byNull {
 		t.Errorf("legacy row after Up: status=%q email=%q token_hash null=%v expires_at null=%v invited_by null=%v, want it unchanged",
 			status, email, hashNull, expNull, byNull)
+	}
+
+	// NOT VALID spares the stored row but binds its next write: an unrelated UPDATE is refused,
+	// while reissuing a token or revoking the row is accepted.
+	err = savepointTry(ctx, tx, func(sp pgx.Tx) error {
+		_, e := sp.Exec(ctx, `UPDATE invitations SET role = 'reviewer' WHERE id = $1`, id)
+		return e
+	})
+	pgViolation(t, "UPDATE of a legacy pending row that adds no token", err, "23514", "invitations_pending_has_token")
+	for _, c := range []struct {
+		what, stmt string
+		args       []any
+	}{
+		{"reissue a token", `UPDATE invitations SET token_hash = $2, expires_at = now() + interval '7 days', invited_by = $3 WHERE id = $1`, []any{id, tokenHash(t, 32), uuid.NewString()}},
+		{"revoke the row", `UPDATE invitations SET status = 'revoked' WHERE id = $1`, []any{id}},
+	} {
+		var n int64
+		if err := savepointTry(ctx, tx, func(sp pgx.Tx) error {
+			tag, e := sp.Exec(ctx, c.stmt, c.args...)
+			n = tag.RowsAffected()
+			return e
+		}); err != nil || n != 1 {
+			t.Errorf("UPDATE to %s on a legacy pending row affected %d rows (err %v), want 1", c.what, n, err)
+		}
+	}
+}
+
+// savepointTry runs fn in a savepoint and always rolls it back, so a refused statement does not
+// abort tx and an accepted one leaves no trace.
+func savepointTry(ctx context.Context, tx pgx.Tx, fn func(sp pgx.Tx) error) error {
+	sp, err := tx.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = sp.Rollback(ctx) }()
+	return fn(sp)
+}
+
+// RESEND-05-01 AC 1-6, read from the migration file: Down then Up run in a rolled-back migrator
+// tx, so an edit to the file changes what the cases below see. The live-schema tests above read
+// the already-migrated database, which a file edit does not touch.
+func TestRLS_InvitationsTokenMigrationFileEnforcesItsConstraints(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	matches, err := fs.Glob(migrations.FS, invitationsTokenMigrationGlob)
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("migrations.FS holds %d files matching %s (%v, err %v), want exactly 1", len(matches), invitationsTokenMigrationGlob, matches, err)
+	}
+	tx := migratorTx(t, ctx)
+	if _, err := tx.Exec(ctx, auditEntitySectionOf(t, matches[0], "Down")); err != nil {
+		t.Fatalf("Down body: %v", err)
+	}
+	if _, err := tx.Exec(ctx, auditEntitySectionOf(t, matches[0], "Up")); err != nil {
+		t.Fatalf("Up body: %v", err)
+	}
+	scope := func(tenant string) {
+		t.Helper()
+		if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true)`, tenant); err != nil {
+			t.Fatalf("set tenant: %v", err)
+		}
+	}
+	try := func(stmt string, args ...any) error {
+		return savepointTry(ctx, tx, func(sp pgx.Tx) error {
+			_, e := sp.Exec(ctx, stmt, args...)
+			return e
+		})
+	}
+	exp, by := time.Now().Add(7*24*time.Hour), uuid.NewString()
+	scope(h.tenantA)
+
+	// AC 1: types, nullability, default.
+	type col struct{ dataType, nullable, deflt string }
+	rows, err := tx.Query(ctx, `SELECT column_name, data_type, is_nullable, coalesce(column_default, '')
+		FROM information_schema.columns
+		WHERE table_name = 'invitations' AND column_name IN ('token_hash','expires_at','invited_by','send_status')`)
+	if err != nil {
+		t.Fatalf("read columns: %v", err)
+	}
+	got := map[string]col{}
+	for rows.Next() {
+		var name string
+		var c col
+		if err := rows.Scan(&name, &c.dataType, &c.nullable, &c.deflt); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got[name] = c
+	}
+	rows.Close()
+	want := map[string]col{
+		"token_hash":  {"bytea", "YES", ""},
+		"expires_at":  {"timestamp with time zone", "YES", ""},
+		"invited_by":  {"uuid", "YES", ""},
+		"send_status": {"text", "NO", "'sending'::text"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("columns after Up = %v, want %v", got, want)
+	}
+	for name, w := range want {
+		if got[name] != w {
+			t.Errorf("column %s after Up = %+v, want %+v", name, got[name], w)
+		}
+	}
+	for _, v := range []string{"sending", "sent", "failed"} {
+		if err := try(`INSERT INTO invitations (tenant_id, role, invitee_email, status, send_status) VALUES ($1, 'preparer', 'f@e.io', 'revoked', $2)`, h.tenantA, v); err != nil {
+			t.Errorf("send_status %q refused after Up: %v", v, err)
+		}
+	}
+	pgViolation(t, "send_status = 'bogus'", try(`INSERT INTO invitations (tenant_id, role, invitee_email, status, send_status) VALUES ($1, 'preparer', 'f@e.io', 'revoked', 'bogus')`, h.tenantA), "23514", "invitations_send_status_check")
+
+	// AC 2-3: pending needs all three, revoked needs none.
+	if err := try(insertPending, h.tenantA, "f-ok@e.io", tokenHash(t, 32), exp, by); err != nil {
+		t.Errorf("complete pending row refused after Up: %v", err)
+	}
+	for _, c := range []struct {
+		missing string
+		hash    []byte
+		exp     *time.Time
+		by      *string
+	}{{"token_hash", nil, &exp, &by}, {"expires_at", tokenHash(t, 32), nil, &by}, {"invited_by", tokenHash(t, 32), &exp, nil}} {
+		pgViolation(t, "pending row missing "+c.missing, try(insertPending, h.tenantA, "f-miss@e.io", c.hash, c.exp, c.by), "23514", "invitations_pending_has_token")
+	}
+	if err := try(`INSERT INTO invitations (tenant_id, role, invitee_email, status) VALUES ($1, 'preparer', 'f-rev@e.io', 'revoked')`, h.tenantA); err != nil {
+		t.Errorf("revoked row with no token fields refused after Up: %v", err)
+	}
+
+	// AC 4: exactly 32 bytes.
+	if err := try(insertPending, h.tenantA, "f-32@e.io", tokenHash(t, 32), exp, by); err != nil {
+		t.Errorf("32-byte token_hash refused after Up: %v", err)
+	}
+	for _, n := range []int{31, 33} {
+		pgViolation(t, fmt.Sprintf("%d-byte token_hash", n), try(insertPending, h.tenantA, "f-len@e.io", tokenHash(t, n), exp, by), "23514", "invitations_token_hash_len")
+	}
+
+	// AC 5: one token, one invite, across tenants. The first row stays in tx for the cases below.
+	hash := tokenHash(t, 32)
+	var idA string
+	if err := tx.QueryRow(ctx, insertPending+` RETURNING id`, h.tenantA, "f-uniq@e.io", hash, exp, by).Scan(&idA); err != nil {
+		t.Fatalf("insert tenant A's pending row: %v", err)
+	}
+	pgViolation(t, "same token_hash, same tenant", try(insertPending, h.tenantA, "f-uniq2@e.io", hash, exp, by), "23505", "invitations_token_hash_uq")
+	scope(h.tenantB)
+	pgViolation(t, "same token_hash, other tenant", try(insertPending, h.tenantB, "f-uniq3@e.io", hash, exp, by), "23505", "invitations_token_hash_uq")
+
+	// AC 6: scoped to B, A's row is invisible and unwritable by token_hash and expires_at.
+	if n := mustCount(t, tx, `SELECT count(*) FROM invitations WHERE token_hash = $1`, hash); n != 0 {
+		t.Errorf("tenant B sees %d of A's rows by token_hash after Up, want 0", n)
+	}
+	tag, err := tx.Exec(ctx, `UPDATE invitations SET token_hash = $1, expires_at = now() WHERE id = $2`, tokenHash(t, 32), idA)
+	if err != nil || tag.RowsAffected() != 0 {
+		t.Errorf("tenant B's UPDATE of A's row affected %d rows (err %v), want 0", tag.RowsAffected(), err)
+	}
+	scope(h.tenantA)
+	if n := mustCount(t, tx, `SELECT count(*) FROM invitations WHERE token_hash = $1 AND id = $2`, hash, idA); n != 1 {
+		t.Errorf("tenant A sees %d of its own rows by token_hash after B's UPDATE, want 1", n)
+	}
+	scope("")
+	if n := mustCount(t, tx, `SELECT count(*) FROM invitations WHERE token_hash = $1`, hash); n != 0 {
+		t.Errorf("with no tenant set the owner role sees %d rows by token_hash after Up, want 0", n)
 	}
 }

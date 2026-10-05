@@ -100,6 +100,7 @@ function Tile({
   border,
   text,
   dashed = false,
+  reject = false,
 }: {
   value: string
   caption: string
@@ -107,11 +108,12 @@ function Tile({
   border: string
   text: string
   dashed?: boolean
+  reject?: boolean
 }) {
   return (
-    <div style={{ flex: 1, minWidth: 150, background: bg, border: `1px ${dashed ? 'dashed' : 'solid'} ${border}`, borderRadius: 'var(--radius-md)', padding: '12px 14px' }}>
-      <div className="mono" style={{ fontSize: 15, fontWeight: 600, color: text }}>{value}</div>
-      <div style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 4, lineHeight: 1.5 }}>{caption}</div>
+    <div style={{ ...(reject ? { flex: '1 1 150px' } : { flex: 1, minWidth: 150 }), background: bg, border: `1px ${dashed ? 'dashed' : 'solid'} ${border}`, borderRadius: 'var(--radius-md)', padding: '12px 14px' }}>
+      <div className={reject ? 'mono' : 'mono money'} style={{ fontSize: reject ? 20 : 15, fontWeight: 700, color: text }}>{value}</div>
+      <div style={reject ? { fontSize: 11.5, color: 'var(--fg-3)', marginTop: 3, lineHeight: 1.5 } : { fontSize: 11.5, color: 'var(--fg-2)', marginTop: 4, lineHeight: 1.45 }}>{caption}</div>
     </div>
   )
 }
@@ -284,9 +286,9 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
             There is also no teal "STORED & VALIDATED" pill: it asserts a verdict that
             contradicts the red tile 40px below it whenever anything failed, and the
             sub-line already carries the honest version. */}
-        <h2 style={{ fontSize: 19, fontWeight: 600, letterSpacing: '-0.02em', margin: '0 0 6px' }}>{header.title}</h2>
+        <h2 style={{ fontSize: 19, letterSpacing: '-0.02em', margin: '0 0 6px' }}>{header.title}</h2>
         <div className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>{header.subline}</div>
-        <div className="mono" style={{ fontSize: 10.5, color: 'var(--fg-4)', letterSpacing: '0.05em', marginTop: 3, wordBreak: 'break-all' }}>
+        <div className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)', letterSpacing: '0.05em', marginTop: 3, wordBreak: 'break-all' }}>
           {/* `header.batchIds` is `[batchId]` at one batch -- `.join(', ')` over a
               single-element array returns that element verbatim, so this line stays
               byte-identical to the shipped single-batch text. */}
@@ -488,7 +490,7 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
 function RejectedFile({ ctx, batch, allTotal, unit }: { ctx: PlatformCtx; batch: ImportBatch; allTotal: number; unit: ReviewUnit }) {
   return (
     <div style={{ background: 'var(--bg-2)', border: '1px solid var(--status-red-border)', borderRadius: 'var(--radius-md)', padding: '24px 22px', maxWidth: 720 }}>
-      <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--status-red-text)', marginBottom: 8 }}>Nothing was imported</div>
+      <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--status-red-text)', marginBottom: 8 }}>Nothing was imported</div>
       {/* Hedged, deliberately. The header-only spreadsheet is the usual cause and the
           only one reachable by importing, but the tiles below can show non-zero stored
           rows for a batch that failed another way — and a flat "it has a header row and
@@ -502,21 +504,21 @@ function RejectedFile({ ctx, batch, allTotal, unit }: { ctx: PlatformCtx; batch:
       </p>
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 18 }}>
-        <Tile value={String(allTotal)} caption="Invoices created" bg="var(--bg-3)" border="var(--line-2)" text="var(--fg-2)" />
+        <Tile value={String(allTotal)} caption="Invoices created" bg="var(--bg-3)" border="var(--line-2)" text="var(--fg-2)" reject />
         {/* Whole elements per arm, not one Tile with a `caption={...}` expression: the
             copy census (reviewCopy.census.test.ts, B5/B6) needles each caption attribute
             as written. */}
         {unit === 'document' ? (
-          <Tile value={String(batch.rows_valid)} caption="Documents stored" bg="var(--bg-3)" border="var(--line-2)" text="var(--fg-2)" />
+          <Tile value={String(batch.rows_valid)} caption="Documents stored" bg="var(--bg-3)" border="var(--line-2)" text="var(--fg-2)" reject />
         ) : (
-          <Tile value={String(batch.rows_valid)} caption="Rows stored" bg="var(--bg-3)" border="var(--line-2)" text="var(--fg-2)" />
+          <Tile value={String(batch.rows_valid)} caption="Rows stored" bg="var(--bg-3)" border="var(--line-2)" text="var(--fg-2)" reject />
         )}
         {/* Dashed, matching the not-imported channel on the batch surface: the same
             fact deserves the same visual language on both screens. */}
         {unit === 'document' ? (
-          <Tile value={String(batch.rows_invalid)} caption="Documents quarantined" bg="var(--bg-3)" border="var(--line-2)" text="var(--fg-2)" dashed />
+          <Tile value={String(batch.rows_invalid)} caption="Documents quarantined" bg="var(--bg-3)" border="var(--line-2)" text="var(--fg-2)" reject dashed />
         ) : (
-          <Tile value={String(batch.rows_invalid)} caption="Rows quarantined" bg="var(--bg-3)" border="var(--line-2)" text="var(--fg-2)" dashed />
+          <Tile value={String(batch.rows_invalid)} caption="Rows quarantined" bg="var(--bg-3)" border="var(--line-2)" text="var(--fg-2)" reject dashed />
         )}
       </div>
 
@@ -524,7 +526,7 @@ function RejectedFile({ ctx, batch, allTotal, unit }: { ctx: PlatformCtx; batch:
       <div className="mono" style={{ fontSize: 12, color: 'var(--fg-2)', wordBreak: 'break-all', marginBottom: 18 }}>{batch.id}</div>
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        <button onClick={ctx.restartImport} className="v2-btn v2-btn-primary pf-btn" style={{ height: 38, padding: '0 16px', fontSize: 13, background: 'var(--action)', color: 'var(--text-on-dark)' }}>
+        <button onClick={ctx.restartImport} className="v2-btn v2-btn-primary pf-btn" style={{ height: 38, padding: '0 16px', fontSize: 13 }}>
           Choose another file
         </button>
         <button onClick={ctx.skipUpload} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 38, padding: '0 16px', fontSize: 13 }}>
@@ -551,7 +553,7 @@ function RejectedRun({ ctx, batches, run, unit }: { ctx: PlatformCtx; batches: I
   const files = filesStrip(batches, run, unit)
   return (
     <div data-testid="review-rejected-run" style={{ background: 'var(--bg-2)', border: '1px solid var(--status-red-border)', borderRadius: 'var(--radius-md)', padding: '24px 22px', maxWidth: 720 }}>
-      <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--status-red-text)', marginBottom: 8 }}>Nothing was imported</div>
+      <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--status-red-text)', marginBottom: 8 }}>Nothing was imported</div>
       <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: '0 0 18px', lineHeight: 1.6 }}>
         The server rejected every file in this run and created no invoices. This usually means{' '}
         {unit === 'document'
@@ -577,7 +579,7 @@ function RejectedRun({ ctx, batches, run, unit }: { ctx: PlatformCtx; batches: I
       </div>
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        <button onClick={ctx.restartImport} className="v2-btn v2-btn-primary pf-btn" style={{ height: 38, padding: '0 16px', fontSize: 13, background: 'var(--action)', color: 'var(--text-on-dark)' }}>
+        <button onClick={ctx.restartImport} className="v2-btn v2-btn-primary pf-btn" style={{ height: 38, padding: '0 16px', fontSize: 13 }}>
           Choose another file
         </button>
         <button onClick={ctx.skipUpload} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 38, padding: '0 16px', fontSize: 13 }}>
@@ -605,7 +607,7 @@ function FilesStripView({ files }: { files: FileStripRow[] }) {
         return (
           <div key={f.id} data-testid="review-files-strip-row" style={{ padding: '10px 14px', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ width: 8, height: 8, borderRadius: 99, background: ok ? 'var(--status-green-text)' : 'var(--status-red-text)', flex: 'none' }} />
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: ok ? 'var(--status-green-text)' : 'var(--status-red-text)', flex: 'none' }} />
               <span className="mono" style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--fg-1)', wordBreak: 'break-all', flex: 1 }}>{f.filename}</span>
               <span
                 className="mono"

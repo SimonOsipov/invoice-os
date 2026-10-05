@@ -6,7 +6,7 @@
 
 import { alreadyImportedCsvAll, type AlreadyImportedRowAll, type ReviewUnit } from '../lib/reviewBatch'
 
-const ALREADY_IMPORTED_GRID = '150px 90px 1fr'
+const ALREADY_IMPORTED_GRID = '200px 60px 1fr'
 
 // Rendered as visible text AND as `title`; a disabled button is out of the tab order, so
 // the visible sibling is the only layer a keyboard/SR user can reach.
@@ -87,9 +87,7 @@ export function ReviewAlreadyImportedTab({
               <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>{r.row == null ? '—' : r.row}</span>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
                 {/* Disabled-with-reason, never hidden — InvoiceDetail.tsx:480-518's four
-                    layers. The inline spread is disabled-only: on an enabled button it
-                    would kill the legitimate :hover affordance. Ghost, so no
-                    `filter: 'none'` — that neutraliser is .v2-btn-primary's alone. */}
+                    layers. Ghost, so no `filter: 'none'` — that is .v2-btn-primary's alone. */}
                 <button
                   onClick={invoiceId == null ? undefined : () => onOpenInvoice(invoiceId)}
                   disabled={invoiceId == null}
@@ -100,7 +98,7 @@ export function ReviewAlreadyImportedTab({
                     height: 30,
                     padding: '0 12px',
                     fontSize: 12.5,
-                    ...(invoiceId == null ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                    ...(invoiceId == null ? { background: 'transparent', opacity: 0.45, cursor: 'not-allowed' } : null),
                   }}
                 >
                   View invoice

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"html"
 	"html/template"
-	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -163,6 +162,17 @@ func TestTemplate_RendersWithAnswersMissingOneField(t *testing.T) {
 	if inner != "Obi Partners" {
 		t.Fatalf("Organisation value = %q, want %q", inner, "Obi Partners")
 	}
+	if _, got := intro(t, out); got != "Hi, your ASComply account for Obi Partners has been created. Confirm ada@obi.test to open your workspace." {
+		t.Errorf("workspace-only intro = %q", got)
+	}
+
+	out = renderConfirmation(t, adaEmail, reg("display_name", "Ada Obi"))
+	if _, got := intro(t, out); got != "Hi Ada Obi, your ASComply account has been created. Confirm ada@obi.test to open your workspace." {
+		t.Errorf("name-only intro = %q", got)
+	}
+	if strings.Contains(text(out), "Organisation") {
+		t.Error("Organisation row renders without a workspace name")
+	}
 }
 
 func TestTemplate_ShowsTheRegistrationAnswers(t *testing.T) {
@@ -184,17 +194,31 @@ func TestTemplate_ShowsTheRegistrationAnswers(t *testing.T) {
 }
 
 func TestTemplate_RendersWithoutRegistrationAnswers(t *testing.T) {
-	out := renderConfirmation(t, adaEmail, jsonMap{})
-	_, got := intro(t, out)
+	src := confirmationSrc(t)
 	want := "Hi, your ASComply account has been created. Confirm ada@obi.test to open your workspace."
-	if got != want {
-		t.Errorf("intro = %q, want %q", got, want)
+	cases := []struct {
+		name string
+		data map[string]any
+	}{
+		{"empty Data", gotrueData(adaEmail, jsonMap{}, true)},
+		{"nil Data map", gotrueData(adaEmail, nil, true)},
+		{"no Data key", gotrueData(adaEmail, nil, false)},
+		{"empty registration", gotrueData(adaEmail, jsonMap{"registration": map[string]interface{}{}}, true)},
+		{"empty answers", gotrueData(adaEmail, reg("display_name", "", "workspace_name", ""), true)},
 	}
-	if strings.Contains(text(out), "Organisation") {
-		t.Error("Organisation row renders without registration answers")
-	}
-	if _, v := mustRow(t, out, "Email"); v != adaEmail {
-		t.Errorf("Email = %q, want %s", v, adaEmail)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := renderSrc(t, src, tc.data)
+			if _, got := intro(t, out); got != want {
+				t.Errorf("intro = %q, want %q", got, want)
+			}
+			if strings.Contains(text(out), "Organisation") {
+				t.Error("Organisation row renders without registration answers")
+			}
+			if _, v := mustRow(t, out, "Email"); v != adaEmail {
+				t.Errorf("Email = %q, want %s", v, adaEmail)
+			}
+		})
 	}
 }
 
@@ -218,6 +242,17 @@ func TestTemplate_ActionURLIsTheButtonAndTheFallbackLink(t *testing.T) {
 	if !strings.Contains(text(out), "Button not working?") {
 		t.Error(`"Button not working?" box missing`)
 	}
+
+	const hostile = `https://api.example.test/v?a="><script>x</script>&b=<i>`
+	d := gotrueData(adaEmail, jsonMap{}, true)
+	d["ConfirmationURL"] = hostile
+	bad := renderSrc(t, confirmationSrc(t), d)
+	if strings.Contains(bad, "<script") || strings.Contains(bad, "<i>") {
+		t.Error("a hostile ConfirmationURL injects markup")
+	}
+	if n := len(anchorRe.FindAllString(bad, -1)); n != 3 {
+		t.Errorf("hostile URL changed the anchor count to %d, want 3 (button, fallback, Privacy)", n)
+	}
 }
 
 func TestTemplate_EscapesTheAnswers(t *testing.T) {
@@ -233,6 +268,18 @@ func TestTemplate_EscapesTheAnswers(t *testing.T) {
 	}
 	if _, v := mustRow(t, out, "Organisation"); v != "A &amp; B" {
 		t.Errorf("Organisation row = %q, want the escaped name", v)
+	}
+
+	const payload = `"><img src=x onerror=alert(1)>`
+	out = renderConfirmation(t, payload+"@obi.test", reg("display_name", payload, "workspace_name", payload))
+	if n := len(imgRe.FindAllString(out, -1)); n != 2 {
+		t.Errorf("payload injected an element: %d <img>, want 2", n)
+	}
+	if strings.Contains(out, "<img src=x") || strings.Contains(out, "onerror=alert(1)>") {
+		t.Error("payload survives unescaped in the mail")
+	}
+	if _, got := intro(t, out); !strings.Contains(got, payload) {
+		t.Errorf("intro does not show the payload as text: %q", got)
 	}
 }
 
@@ -340,7 +387,7 @@ func TestLayout_LongAnswersWrap(t *testing.T) {
 
 // The stub defines every slot except next; the shell must come from layout.html alone.
 func TestLayout_ServesAnyMailThatDefinesItsSlots(t *testing.T) {
-	layout, err := os.ReadFile("layout.html")
+	layout, err := files.ReadFile("layout.html")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,7 +413,8 @@ func TestLayout_ServesAnyMailThatDefinesItsSlots(t *testing.T) {
 	out := text(renderSrc(t, []byte(string(layout)+slots+call), data))
 	for _, want := range []string{
 		LogoURL, "#082f31", "#f5bc88", "#dce7e4", "Button not working?", "ASComply Africa · Lagos, Nigeria",
-		"Stub title", "Stub heading", "Stub accent", "Stub intro for " + adaEmail, "Stub action", "Stub label", "Stub value",
+		"Stub title", "Stub preheader", "Stub eyebrow", "Stub heading", "Stub accent", "Stub intro for " + adaEmail,
+		"Stub action", "Stub expiry", "Stub label", "Stub value", "Stub ignore", "Stub reason",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("shell does not hold %q", want)
@@ -374,6 +422,17 @@ func TestLayout_ServesAnyMailThatDefinesItsSlots(t *testing.T) {
 	}
 	if strings.Contains(out, "What happens next") {
 		t.Error("shell renders the next section though the mail does not define it")
+	}
+	for _, leak := range []string{
+		"Confirm email address", "You are registered", "Registration", "24 hours", "If you did not register",
+		"Organisation", "Admin", "Add your company", "You received this email because",
+	} {
+		if strings.Contains(out, leak) {
+			t.Errorf("layout hard-codes the confirmation copy %q", leak)
+		}
+	}
+	if n := strings.Count(out, confirmURL); n != 3 {
+		t.Errorf("the action_url slot renders %d times, want 3 (button href, fallback href, fallback text)", n)
 	}
 
 	withNext := text(renderSrc(t, []byte(string(layout)+slots+`{{define "next"}}Stub next steps{{end}}`+call), data))
@@ -386,7 +445,7 @@ func TestTemplate_UnknownNameIsAnError(t *testing.T) {
 	if src, err := Template("confirmation"); err != nil || len(src) == 0 {
 		t.Fatalf("Template(confirmation) = %d bytes, %v; want bytes and no error", len(src), err)
 	}
-	for _, name := range []string{"nope", "", "../layout"} {
+	for _, name := range []string{"nope", "", "../layout", "layout", "confirmation.html"} {
 		src, err := Template(name)
 		if err == nil {
 			t.Errorf("Template(%q) returned no error", name)
@@ -394,5 +453,23 @@ func TestTemplate_UnknownNameIsAnError(t *testing.T) {
 		if src != nil {
 			t.Errorf("Template(%q) returned %d bytes, want nil", name, len(src))
 		}
+	}
+}
+
+func TestTemplate_ReturnsACopyAndAWholeDocument(t *testing.T) {
+	a := confirmationSrc(t)
+	want := string(a)
+	for i := range a {
+		a[i] = 'X'
+	}
+	if got := string(confirmationSrc(t)); got != want {
+		t.Error("a second Template call sees the first caller's mutation")
+	}
+	out := renderConfirmation(t, adaEmail, jsonMap{})
+	if n := strings.Count(out, "<html"); n != 1 {
+		t.Errorf("output holds %d <html>, want 1", n)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(out), "</html>") {
+		t.Error("output does not end with </html>")
 	}
 }

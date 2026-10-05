@@ -987,7 +987,7 @@ test.describe('Audit screen', () => {
   })
 
   // Core AC E-1/E-2 and F: the System avatar against the person avatar (shape shared, glyph
-  // distinct), and the range/actor-kind pills against the Activity card's own reference chip.
+  // distinct), and the range/actor-kind pills against the prototype's applied-filter pill.
   test('audit_systemIconAndFilterPillsMatchTheirReferences', async ({ page }) => {
     test.setTimeout(90_000)
 

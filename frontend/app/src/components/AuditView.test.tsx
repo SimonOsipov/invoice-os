@@ -257,6 +257,56 @@ describe('AuditView immutability strip', () => {
   })
 })
 
+describe('AuditView header and strip geometry (RESKIN2-06-02)', () => {
+  it('auditHeader_rowAndTitleFollowThePrototype', async () => {
+    mockFetchSequence([logResponse()])
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-export'), 'control needle: the header buttons render').toBeTruthy())
+
+    const h1 = screen.getByRole('heading', { level: 1 })
+    expect(h1.textContent?.length, 'control needle: the h1 is the audit title').toBeGreaterThan(0)
+    expect(h1.style.fontWeight, 'the weight comes from the cascade, not inline').toBe('')
+
+    const row = h1.parentElement!.parentElement as HTMLElement
+    expect([row.style.alignItems, row.style.gap, row.style.flexWrap, row.style.marginBottom]).toEqual(['flex-end', '32px', 'wrap', '16px'])
+    expect(row.contains(screen.getByTestId('audit-export')), 'control needle: the row is the one that holds the buttons').toBe(true)
+    // Prototype's button pair wrapper is gap 10 (the story AC "gap 8" is the in-button gap).
+    expect((screen.getByTestId('audit-export').parentElement as HTMLElement).style.gap).toBe('10px')
+    // Enabled export wears none of the disabled recipe.
+    const enabled = screen.getByTestId('audit-export') as HTMLButtonElement
+    expect(enabled.disabled).toBe(false)
+    expect([enabled.style.opacity, enabled.style.cursor, enabled.style.filter]).toEqual(['', '', ''])
+  })
+
+  it('auditStrip_isACentredFlexRowWithAFlexTextAndMonoCount', async () => {
+    mockFetchSequence([logResponse({ total: 1248 })])
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-immutability-strip').textContent).toContain('1,248'))
+
+    const strip = screen.getByTestId('audit-immutability-strip')
+    expect([strip.style.display, strip.style.alignItems, strip.style.gap, strip.style.padding]).toEqual(['flex', 'center', '16px', '11px 16px'])
+    expect([strip.style.background, strip.style.borderRadius, strip.style.border]).toEqual([
+      'var(--bg-1)',
+      'var(--radius-md)',
+      '1px solid var(--line-1)',
+    ])
+    expect(strip.children.length, 'control needle: claim and count are two children').toBe(2)
+    const [text, count] = Array.from(strip.children) as HTMLElement[]
+    expect([text.style.flex, text.style.fontSize, text.style.lineHeight, text.style.color]).toEqual(['1 1 0%', '12.5px', '1.5', 'var(--fg-2)'])
+    expect(count.className).toContain('mono')
+    expect([count.style.fontSize, count.style.color]).toEqual(['10.5px', 'var(--fg-3)'])
+  })
+
+  it('auditNewWorkspace_messageIsCappedAt440', async () => {
+    mockFetchSequence([logResponse({ events: [], total: 0, log_is_empty: true })])
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-new-workspace')).toBeTruthy())
+
+    const message = screen.getByText(AUDIT_COPY.emptyMessage)
+    expect(message.style.maxWidth).toBe('440px')
+  })
+})
+
 describe('AuditView keeps the table mounted across a page change', () => {
   it('auditPager_tableAndPagerSurviveAPageLoad', async () => {
     // Found by the deploy gate (PR #180, ac2f576): with the pager inside the loading rung,
@@ -1154,6 +1204,7 @@ describe('AuditView export control (AUDIT-07-10)', () => {
     expect(reason.id, 'aria-describedby must resolve to the visible reason element, not some other id').toBe(describedbyId)
     expect((reason.textContent ?? '').trim().length, 'the reason text must not be empty').toBeGreaterThan(0)
     expect(reason.hidden, 'a title-only or aria-label-only reason would leave no visible element -- this one must not be hidden').toBe(false)
+    expect([reason.style.fontSize, reason.style.color]).toEqual(['11.5px', 'var(--fg-3)'])
   })
 
   it('auditExport_carriesNoTitleAttribute', async () => {
@@ -1618,7 +1669,7 @@ describe('AuditView evidence-bundle trigger (AUDIT-08-03)', () => {
     const dimmed = screen.getByTestId('audit-export') as HTMLButtonElement
     assertGhost(dimmed)
     expect(dimmed.disabled, 'zero rows still disables it').toBe(true)
-    expect(dimmed.style.opacity, 'the dim recipe is unchanged').toBe('0.45')
+    expect(dimmed.style.opacity, 'the dim is the D-3 recipe').toBe('0.45')
     expect(dimmed.style.cursor).toBe('not-allowed')
     expect(dimmed.style.background).toBe('transparent')
     expect(dimmed.getAttribute('aria-describedby')).toBe('audit-export-reason')
@@ -1832,6 +1883,26 @@ describe('AuditExportToast testId prop (AUDIT-08-06)', () => {
     render(<AuditExportToast kind="success" text="x" onDismiss={vi.fn()} testId="probe-toast" />)
     expect(screen.getByTestId('probe-toast')).toBeTruthy()
     expect(screen.queryByTestId('audit-export-toast')).toBeNull()
+  })
+})
+
+describe('AuditExportToast shell (RESKIN2-06-02)', () => {
+  it.each([
+    ['success', 'var(--status-green-text)'],
+    ['error', 'var(--status-red-text)'],
+  ] as const)('toast_%sShellIsTheV2FloatingCard', (kind, accent) => {
+    render(<AuditExportToast kind={kind} text="Export outcome" onDismiss={vi.fn()} />)
+    const toast = screen.getByTestId('audit-export-toast')
+    expect(toast.textContent, 'control needle: the toast renders its text').toContain('Export outcome')
+    expect(toast.style.boxShadow).toBe('var(--shadow-card)')
+    expect(toast.getAttribute('style')).not.toContain('oklch')
+    expect([toast.style.gap, toast.style.padding, toast.style.maxWidth]).toEqual(['12px', '11px 12px 11px 14px', '640px'])
+    expect(toast.style.borderLeft).toBe(`3px solid ${accent}`)
+
+    const text = screen.getByText('Export outcome')
+    expect([text.style.fontSize, text.style.lineHeight]).toEqual(['12.5px', '1.45'])
+    const dismiss = screen.getByTestId('audit-export-toast-dismiss')
+    expect([dismiss.style.width, dismiss.style.height, dismiss.style.borderRadius]).toEqual(['22px', '22px', '4px'])
   })
 })
 

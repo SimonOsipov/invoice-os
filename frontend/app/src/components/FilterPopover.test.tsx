@@ -76,6 +76,36 @@ describe('FilterPopover', () => {
     expect([plain.style.width, plain.style.height, plain.style.padding]).toEqual(['', '34px', '0px 11px'])
   })
 
+  it('filterPopover_triggerValuesFollowD9WithAndWithoutBlock', () => {
+    render(
+      <FilterPopover testId="fp" label="Company" summary="Acme" open={false} onOpen={vi.fn()} onClose={vi.fn()}>
+        <div>body</div>
+      </FilterPopover>,
+    )
+    const trigger = screen.getByTestId('fp-trigger')
+    expect([trigger.style.gap, trigger.style.padding, trigger.style.fontSize, trigger.style.fontWeight]).toEqual(['8px', '0px 11px', '13px', '500'])
+    const summary = screen.getByText('Acme')
+    expect([summary.style.fontWeight, summary.style.color]).toEqual(['400', 'var(--fg-3)'])
+    expect(screen.getByTestId('fp-chevron').style.color).toBe('var(--fg-3)')
+    expect(trigger.style.justifyContent, 'without block the trigger packs left').toBe('')
+    cleanup()
+
+    render(
+      <FilterPopover testId="fp" label="Company" summary="Acme" open={false} onOpen={vi.fn()} onClose={vi.fn()} block>
+        <div>body</div>
+      </FilterPopover>,
+    )
+    const block = screen.getByTestId('fp-trigger')
+    expect([block.style.gap, block.style.padding, block.style.fontSize], 'block changes only width, height, packing').toEqual(['8px', '0px 11px', '13px'])
+  })
+
+  it('filterPopover_enabledTriggerCarriesNoDisabledPaint', () => {
+    renderPopover(false)
+    const trigger = screen.getByTestId('fp-trigger')
+    expect(trigger.style.cursor, 'control needle: an enabled trigger is a pointer').toBe('pointer')
+    expect([trigger.style.opacity, trigger.style.filter]).toEqual(['', ''])
+  })
+
   it('filterPopover_disabledKeepsPaintAndDims', () => {
     render(
       <FilterPopover testId="fp" label="Company" open={false} onOpen={vi.fn()} onClose={vi.fn()} disabled>

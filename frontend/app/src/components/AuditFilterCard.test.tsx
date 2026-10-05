@@ -1250,12 +1250,12 @@ describe('AuditFilterCard: pills row adversarial coverage (AUDIT-07-07)', () => 
 
 describe('AuditFilterCard: popover panels', () => {
   it.each([
-    ['search', '340px'],
-    ['date', '250px'],
-    ['event', '340px'],
-    ['actor', '280px'],
-    ['company', '310px'],
-  ])('audit-%s floats on shadow-card, not a v1 shadow, at its width', (name, width) => {
+    ['search', '340px', null],
+    ['date', '250px', null],
+    ['event', '340px', '460px'],
+    ['actor', '280px', '420px'],
+    ['company', '310px', '420px'],
+  ])('audit-%s floats on shadow-card, not a v1 shadow, at its width', (name, width, maxHeight) => {
     renderCard()
     fireEvent.click(screen.getByTestId(`audit-${name}-trigger`))
     const panel = screen.getByTestId(`audit-${name}-panel`)
@@ -1264,5 +1264,113 @@ describe('AuditFilterCard: popover panels', () => {
     expect(styleValue(panel, 'box-shadow')).toBe('var(--shadow-card)')
     expect(panel.getAttribute('style')).not.toContain('oklch')
     expect(styleValue(panel.firstElementChild as HTMLElement, 'width')).toBe(width)
+    expect(styleValue(panel.firstElementChild as HTMLElement, 'max-height')).toBe(maxHeight)
+  })
+})
+
+describe('AuditFilterCard: v2 restyle (RESKIN2-06-02)', () => {
+  const MONO_COUNT = ['var(--font-mono)', '10px', 'var(--fg-3)']
+
+  it('auditCard_shellAndRowGapFollowThePrototype', () => {
+    renderCard()
+    const card = screen.getByTestId('audit-filter-card')
+    expect([card.style.padding, card.style.marginBottom]).toEqual(['13px 14px', '14px'])
+    const controls = card.children[0] as HTMLElement
+    expect(controls.contains(screen.getByTestId('audit-search-trigger')), 'control needle: first child is the trigger row').toBe(true)
+    expect(controls.style.gap).toBe('9px')
+  })
+
+  it('auditCard_everyTriggerIsInlineAndThirtyFourTall', () => {
+    renderCard()
+    const triggers = screen.getAllByTestId(/^audit-(search|date|event|actor|company)-trigger$/)
+    expect(triggers.length, 'population floor: five triggers').toBe(5)
+    for (const t of triggers) {
+      expect([t.style.height, t.style.width, t.style.padding, t.style.fontSize], t.dataset.testid).toEqual(['34px', '', '0px 11px', '13px'])
+    }
+  })
+
+  it('auditCard_pillsRowCarriesTheD5TopRuleWithPillsOrOnlyClearAll', () => {
+    renderCard({ ...AUDIT_FILTER_DEFAULT, q: 'kept' })
+    const card = screen.getByTestId('audit-filter-card')
+    expect(card.children.length, 'the triggers row and the pills row').toBe(2)
+    const row = card.children[1] as HTMLElement
+    expect(row.contains(screen.getByTestId('audit-pill-q'))).toBe(true)
+    expect([row.style.gap, row.style.marginTop, row.style.paddingTop, row.style.borderTop]).toEqual(['7px', '12px', '12px', '1px solid var(--line-1)'])
+
+    const clear = screen.getByTestId('audit-clear-all')
+    expect([clear.style.fontSize, clear.style.fontWeight, clear.style.marginLeft, clear.style.color]).toEqual(['12.5px', '600', '4px', 'var(--action)'])
+    cleanup()
+
+    // A dateless custom range draws no pill but is non-default: the row stays for Clear all.
+    renderCard({ ...AUDIT_FILTER_DEFAULT, range: { preset: 'custom' } })
+    expect(screen.queryAllByTestId(/^audit-pill-/).length, 'control needle: no pill in this state').toBe(0)
+    expect(screen.getByTestId('audit-clear-all')).toBeTruthy()
+    expect(screen.getByTestId('audit-filter-card').children.length).toBe(2)
+  })
+
+  it('auditDate_applyWearsTheD3DisabledPaintOnlyWhileInvalid', () => {
+    const invalid: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, range: { preset: 'custom', from: '2026-08-20', to: '2026-08-10' } }
+    renderCard(invalid)
+    fireEvent.click(screen.getByTestId('audit-date-trigger'))
+    const apply = screen.getByTestId('audit-date-apply') as HTMLButtonElement
+    expect(apply.disabled, 'control needle: the range is invalid').toBe(true)
+    expect(apply.className).toContain('v2-btn-primary')
+    expect([apply.style.height, apply.style.opacity, apply.style.cursor, apply.style.filter]).toEqual(['32px', '0.45', 'not-allowed', 'none'])
+    cleanup()
+
+    const valid: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, range: { preset: 'custom', from: '2026-08-10', to: '2026-08-20' } }
+    renderCard(valid)
+    fireEvent.click(screen.getByTestId('audit-date-trigger'))
+    const ok = screen.getByTestId('audit-date-apply') as HTMLButtonElement
+    expect(ok.disabled).toBe(false)
+    expect([ok.style.opacity, ok.style.cursor, ok.style.filter]).toEqual(['', '', ''])
+  })
+
+  it('auditEvent_rowsAndHeadsFollowThePrototype', () => {
+    const f = facets()
+    f.event = [{ value: 'invoice.created', name: null, count: 7 }]
+    renderCard({ ...AUDIT_FILTER_DEFAULT, events: ['invoice.created'] }, f)
+    fireEvent.click(screen.getByTestId('audit-event-trigger'))
+
+    const count = screen.getByTestId('audit-event-count-invoice.created')
+    expect(count.textContent, 'control needle: the facet count renders').toBe('7')
+    expect([count.style.fontFamily, count.style.fontSize, count.style.color]).toEqual(MONO_COUNT)
+
+    const selected = screen.getByTestId('audit-event-row-invoice.created')
+    expect([selected.style.fontSize, selected.style.fontWeight, selected.style.color, selected.style.background]).toEqual(['12.5px', '600', 'var(--action)', 'var(--bg-3)'])
+    const other = screen.getAllByTestId(/^audit-event-row-/).find((el) => el !== selected)!
+    expect([other.style.fontWeight, other.style.color, other.style.background]).toEqual(['500', 'var(--fg-1)', 'transparent'])
+
+    const heading = screen.getAllByTestId(/^audit-event-group-.*-heading$/)[0]
+    expect([heading.style.fontFamily, heading.style.fontSize, heading.style.fontWeight, heading.style.letterSpacing]).toEqual(['var(--font-mono)', '9.5px', '700', '0.08em'])
+    const all = screen.getAllByTestId(/^audit-event-group-.*-all$/)[0]
+    expect([all.style.color, all.style.fontWeight]).toEqual(['var(--action)', '600'])
+  })
+
+  it('auditActorAndCompany_countsAreMonoTenAndSelectedRowsWeightSixHundred', () => {
+    const f = facets()
+    f.actor = [{ value: 'user-a', name: 'Amara Chen', kind: 'person', count: 4 }]
+    f.company = [
+      { value: null, name: null, count: 4 },
+      { value: 'co-acme', name: 'Acme Ltd', count: 40 },
+    ]
+    renderCard({ ...AUDIT_FILTER_DEFAULT, actors: ['user-a'], company: { mode: 'named', id: 'co-acme', name: 'Acme Ltd' } }, f)
+
+    fireEvent.click(screen.getByTestId('audit-actor-trigger'))
+    const actorCount = screen.getByTestId('audit-actor-count-user-a')
+    expect(actorCount.textContent).toBe('4')
+    expect([actorCount.style.fontFamily, actorCount.style.fontSize, actorCount.style.color]).toEqual(MONO_COUNT)
+    expect(screen.getByTestId('audit-actor-row-user-a').style.fontWeight).toBe('600')
+    cleanup()
+
+    renderCard({ ...AUDIT_FILTER_DEFAULT, company: { mode: 'named', id: 'co-acme', name: 'Acme Ltd' } }, f)
+    fireEvent.click(screen.getByTestId('audit-company-trigger'))
+    for (const id of ['audit-company-count-co-acme', 'audit-company-count-workspace']) {
+      const el = screen.getByTestId(id)
+      expect(el.textContent?.length, id).toBeGreaterThan(0)
+      expect([el.style.fontFamily, el.style.fontSize, el.style.color], id).toEqual(MONO_COUNT)
+    }
+    expect(screen.getByTestId('audit-company-row-co-acme').style.fontWeight).toBe('600')
+    expect(screen.getByTestId('audit-company-kind-all').style.fontWeight, 'unselected row is 500').toBe('500')
   })
 })

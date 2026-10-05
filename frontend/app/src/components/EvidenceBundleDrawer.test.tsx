@@ -426,6 +426,12 @@ describe('EvidenceBundleDrawer', () => {
     expect(second.to).toBe(expected7d?.to)
   })
 
+  it('drawerCompanyPicker_isTheFullWidthFortyTallBlockTrigger', async () => {
+    await renderDrawer()
+    const trigger = screen.getByTestId('evidence-company-trigger')
+    expect([trigger.style.width, trigger.style.height, trigger.style.justifyContent]).toEqual(['100%', '40px', 'space-between'])
+  })
+
   // EB-04-9
   it('drawerDisclosure_isAnInlineSvgChevronAndNoBackgroundImage', async () => {
     await renderDrawer()

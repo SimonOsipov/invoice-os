@@ -128,7 +128,7 @@ export function Submissions({ jobs, filter, query, onFilterChange, onQueryChange
               }}
             >
               {k === 'all' ? 'ALL' : jobStateStyle(k).label}
-              <span style={{ fontSize: 10, opacity: 0.7 }}>{count}</span>
+              <span style={{ fontSize: 10 }}>{count}</span>
             </button>
           )
         })}

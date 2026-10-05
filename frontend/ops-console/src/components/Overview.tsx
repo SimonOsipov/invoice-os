@@ -198,7 +198,7 @@ export function Overview({ range, onRangeChange }: Props) {
       <div style={{ ...CARD, padding: '18px 20px 14px', marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 14 }}>
           <div>
-            <div className="card-title" style={{ fontSize: 16, letterSpacing: '-0.02em', marginBottom: 4 }}>API requests over time</div>
+            <div className="card-title" style={{ fontSize: 16, lineHeight: 'normal', letterSpacing: '-0.02em', marginBottom: 4 }}>API requests over time</div>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
               <span className="money" style={{ fontSize: 22, fontWeight: 700, color: 'var(--ink)' }}>
                 {reqTotal}
@@ -258,7 +258,7 @@ export function Overview({ range, onRangeChange }: Props) {
       <div className="ops-overview-grid" style={{ display: 'grid', gridTemplateColumns: '1.15fr 1fr', gap: 16, marginBottom: 16 }}>
         <div style={{ ...CARD, padding: '18px 20px 16px' }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 6 }}>
-            <div className="card-title" style={{ fontSize: 16, letterSpacing: '-0.02em' }}>Spend over time</div>
+            <div className="card-title" style={{ fontSize: 16, lineHeight: 'normal', letterSpacing: '-0.02em' }}>Spend over time</div>
             <span className="mono" style={{ fontSize: 9.5, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
               ₦ FEES / DAY · JUL
             </span>
@@ -308,7 +308,7 @@ export function Overview({ range, onRangeChange }: Props) {
         <div style={{ ...CARD, padding: '18px 20px 16px' }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 16 }}>
             <div>
-              <div className="card-title" style={{ fontSize: 16, letterSpacing: '-0.02em', marginBottom: 4 }}>Submission outcomes</div>
+              <div className="card-title" style={{ fontSize: 16, lineHeight: 'normal', letterSpacing: '-0.02em', marginBottom: 4 }}>Submission outcomes</div>
               <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
                 last 24 days · % of daily volume
               </div>
@@ -346,7 +346,7 @@ export function Overview({ range, onRangeChange }: Props) {
       <div className="ops-overview-grid" style={{ display: 'grid', gridTemplateColumns: '1.15fr 1fr', gap: 16 }}>
         <div style={{ ...CARD, padding: '18px 20px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-            <div className="card-title" style={{ fontSize: 16, letterSpacing: '-0.02em' }}>Top rejection reasons</div>
+            <div className="card-title" style={{ fontSize: 16, lineHeight: 'normal', letterSpacing: '-0.02em' }}>Top rejection reasons</div>
             <span className="mono" style={{ fontSize: 9.5, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
               CAUGHT PRE-SUBMISSION
             </span>
@@ -373,7 +373,7 @@ export function Overview({ range, onRangeChange }: Props) {
 
         <div style={{ ...CARD, padding: '18px 20px', display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-            <div className="card-title" style={{ fontSize: 16, letterSpacing: '-0.02em' }}>Clearance latency</div>
+            <div className="card-title" style={{ fontSize: 16, lineHeight: 'normal', letterSpacing: '-0.02em' }}>Clearance latency</div>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
               <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--status-amber-text)' }} />
               <span className="mono" style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--status-amber-text)', letterSpacing: '0.04em' }}>

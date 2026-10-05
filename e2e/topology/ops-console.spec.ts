@@ -460,6 +460,9 @@ const SCREEN_TESTS: Record<string, (ctx: Ctx) => Promise<void>> = {
   async overview({ page, measured, fg3, ink }) {
     const cards = page.locator('.ops-kpi-strip > div')
     await expect(cards, 'the KPI strip draws six cards').toHaveCount(6)
+    for (const name of ['API requests over time', 'Spend over time', 'Submission outcomes', 'Top rejection reasons', 'Clearance latency']) {
+      await check(pad(page).getByText(name, { exact: true }), `card title ${name}`, { 'line-height': 'normal' })
+    }
     for (const [i, card] of (await cards.all()).entries()) {
       await corners(card, `KPI ${i}`, R.md)
       await check(card, `KPI ${i}`, {
@@ -536,6 +539,14 @@ const SCREEN_TESTS: Record<string, (ctx: Ctx) => Promise<void>> = {
     }
     const chips = page.locator('button.ops-chip')
     for (const [i, c] of (await every(chips, 'filter chips', 2)).entries()) await corners(c, `chip ${i}`, R.sm)
+    // The first chip (All) is active; every other count must clear 4.5:1 on its own fill.
+    for (const [i, c] of [...(await every(chips, 'filter chips', 2)).entries()].slice(1)) {
+      await expect
+        .poll(async () => contrast((await styles(c.locator('> span'), ['color'])).color, (await styles(c, ['background-color']))['background-color']), {
+          message: `inactive chip ${i} count contrast`,
+        })
+        .toBeGreaterThanOrEqual(4.5)
+    }
     const row = firstRow(page)
     await expect(row, 'Submissions drew no job row').toBeVisible()
     const pill = row.locator('> span').nth(3).locator('> span')
@@ -595,6 +606,8 @@ const SCREEN_TESTS: Record<string, (ctx: Ctx) => Promise<void>> = {
     }
     await titles({ page, measured, fg3, ink }, ['API keys', 'Webhook endpoints'], '16px')
     await titles({ page, measured, fg3, ink }, ['Recent deliveries', 'Recent API requests'], '14px')
+    await check(pad(page).getByText('Recent API requests', { exact: true }).locator('xpath=..'), 'requests header', { display: 'block' })
+    await check(pad(page).getByText('Recent deliveries', { exact: true }).locator('xpath=..'), 'deliveries header', { display: 'flex' })
 
     measured.widths = await atWidths(page, 'OPS-03 api layout', async () => {
       const problems: string[] = []

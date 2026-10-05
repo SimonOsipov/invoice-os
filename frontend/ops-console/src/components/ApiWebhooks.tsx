@@ -319,9 +319,6 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
               style={{
                 padding: '12px 16px',
                 borderBottom: '1px solid var(--line-1)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
               }}
             >
               <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--ink)' }}>Recent API requests</span>

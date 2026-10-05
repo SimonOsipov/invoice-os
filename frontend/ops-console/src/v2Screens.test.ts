@@ -110,6 +110,8 @@ describe('v2 screens', () => {
       expect.soft(s.color ?? 'var(--ink)', `${text}: colour`).toBe('var(--ink)')
     }
 
+    for (const text of cardTitles) expect.soft(style(withText(ov, text))['line-height'], `${text}: line-height`).toBe('normal')
+
     const plain: [Screen, string][] = [
       ['api', 'API keys'],
       ['api', 'Webhook endpoints'],
@@ -237,6 +239,15 @@ describe('v2 screens', () => {
     expect.soft([track.gap, track.background, track.border, track['border-radius']], 'range track').toEqual(['2px', 'var(--sage)', '1px solid var(--sage-card-border)', 'var(--radius-btn)'])
   })
 
+  it('SC-06 API: the requests panel header is a plain block, as in the prototype', () => {
+    const ts = tagsOf('api')
+    const header = ts[ts.indexOf(withText(ts, 'Recent API requests')) - 1]
+    expect(header.name).toBe('div')
+    expect(style(header).display, 'requests header display').toBeUndefined()
+    const deliveries = ts[ts.indexOf(withText(ts, 'Recent deliveries')) - 1]
+    expect(style(deliveries).display, 'deliveries header display').toBe('flex')
+  })
+
   it('SC-07 Submissions: Re-drive all, chips, state pills, sub-stat tiles, head and the empty state', () => {
     const html = SCREENS.submissions
     const ts = tagsOf('submissions')
@@ -249,6 +260,14 @@ describe('v2 screens', () => {
       expect.soft(style(c)['border-radius'], 'chip corner').toBe('var(--radius-sm)')
       expect.soft(style(c).padding, 'chip padding').toBe('0 11px')
     }
+
+    // Inactive counts inherit the chip's --fg-3 at full strength (4.5:1 floor); opacity drops them to ~3:1.
+    chips.forEach((c, i) => {
+      const count = ts[ts.indexOf(c) + 1]
+      expect(count.text, `chip ${i} count text`).toMatch(/^\d+$/)
+      expect.soft(Object.keys(style(count)), `chip ${i} count`).not.toContain('opacity')
+    })
+    for (const c of chips.slice(1)) expect.soft(style(c).color, 'inactive chip colour').toBe('var(--fg-3)')
 
     const pills = ts.filter((t) => style(t).padding === '2px 7px')
     expect(pills, 'one state pill per job').toHaveLength(SEED_SUBMISSIONS.length)

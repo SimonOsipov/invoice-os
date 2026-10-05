@@ -5163,7 +5163,7 @@ import { apiBase, getExtractions, listEntities, listInvoices, type ExtractionJob
 
 // --- EXTR09-E2E-06 (EXTR-09-09) · the previewer's newly-reachable branches --------------
 //
-// An OBSERVATION HARNESS. DOC-02 shipped `pdf`, `image` and `unrenderable`
+// DOC-02 shipped `pdf`, `image` and `unrenderable`
 // canvases that no real document could reach: before EXTR-09 the only route into `documents`
 // was POST /v1/imports/preview, which stores nothing that does not classify as a spreadsheet.
 // This records what each branch actually renders now.
@@ -5484,7 +5484,7 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
   })
 
   // The instrument, not the product: without this a probe whose route never fired would record
-  // the PDF's canvas for every leg and read as evidence. Every other line above is observation.
+  // the PDF's canvas for every leg and read as evidence.
   expect(
     intercepted,
     `each synthesized leg (${SYNTHESIZED_LEGS.join(', ')}) must have substituted exactly one meta response`,

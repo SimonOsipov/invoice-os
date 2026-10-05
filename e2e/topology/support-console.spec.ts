@@ -633,48 +633,40 @@ for (const s of SCREENS) {
 // Seeded mismatches (RECON_ROWS in the console's data.tsx).
 const RECON_ROW_COUNT = 4
 
-// Card without sideways overflow; every Reconcile whole inside its cell and the card. Empty array = fine.
-async function reconProblems(card: Locator, reconcile: Locator): Promise<string[]> {
+// Every Reconcile whole inside its cell and the card. Empty array = fine.
+// scrolled: below 1440 the card must scroll, and the buttons are read at the scroll end.
+async function reconProblems(card: Locator, reconcile: Locator, scrolled = false): Promise<string[]> {
   const problems: string[] = []
   const m = await card.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
-  if (m.scrollWidth - m.clientWidth > 1) problems.push(`recon card overflows by ${m.scrollWidth - m.clientWidth}px`)
-  const cardBox = await card.boundingBox()
-  const buttons = await reconcile.all()
-  if (!cardBox) return [...problems, 'recon card has no box']
-  if (buttons.length < RECON_ROW_COUNT) problems.push(`Reconcile buttons: ${buttons.length}, want ${RECON_ROW_COUNT}`)
-  for (const [i, btn] of buttons.entries()) {
-    const box = await btn.boundingBox()
-    const cell = await btn.evaluate((el) => {
-      const r = el.parentElement!.getBoundingClientRect()
-      return { x: r.x, y: r.y, width: r.width, height: r.height }
-    })
-    if (!box) problems.push(`Reconcile ${i} has no box`)
-    else problems.push(...within(cell, box, `Reconcile ${i} in its cell`), ...within(cardBox, box, `Reconcile ${i} in the card`))
-  }
-  return problems
-}
-
-// At 1280 the card scrolls: every Reconcile is reachable at the end of the scroll.
-async function reconProblemsScrolledToEnd(card: Locator, reconcile: Locator): Promise<string[]> {
-  const m = await card.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
-  const problems = m.scrollWidth > m.clientWidth ? [] : ['recon card does not scroll at 1280']
+  if (scrolled) {
+    if (m.scrollWidth <= m.clientWidth) problems.push(`recon card does not scroll at ${card.page().viewportSize()!.width}`)
+  } else if (m.scrollWidth - m.clientWidth > 1) problems.push(`recon card overflows by ${m.scrollWidth - m.clientWidth}px`)
   try {
-    await card.evaluate((el) => {
-      el.scrollLeft = el.scrollWidth
-    })
+    if (scrolled) {
+      await card.evaluate((el) => {
+        el.scrollLeft = el.scrollWidth
+      })
+    }
     const cardBox = await card.boundingBox()
     const buttons = await reconcile.all()
     if (!cardBox) return [...problems, 'recon card has no box']
     if (buttons.length < RECON_ROW_COUNT) problems.push(`Reconcile buttons: ${buttons.length}, want ${RECON_ROW_COUNT}`)
+    const where = scrolled ? ' at the scroll end' : ''
     for (const [i, btn] of buttons.entries()) {
       const box = await btn.boundingBox()
+      const cell = await btn.evaluate((el) => {
+        const r = el.parentElement!.getBoundingClientRect()
+        return { x: r.x, y: r.y, width: r.width, height: r.height }
+      })
       if (!box) problems.push(`Reconcile ${i} has no box`)
-      else problems.push(...within(cardBox, box, `Reconcile ${i} reachable at the scroll end`))
+      else problems.push(...within(cell, box, `Reconcile ${i} in its cell${where}`), ...within(cardBox, box, `Reconcile ${i} in the card${where}`))
     }
   } finally {
-    await card.evaluate((el) => {
-      el.scrollLeft = 0
-    })
+    if (scrolled) {
+      await card.evaluate((el) => {
+        el.scrollLeft = 0
+      })
+    }
   }
   return problems
 }
@@ -708,7 +700,7 @@ test('SUP-03 Reconciliation: tables, meter and whole Reconcile buttons at 1440',
     const kids = await gridKids(page, '.ops-recon-grid', 'recon grid')
     await noSidewaysScroll(page, 'Reconciliation')
     const width = page.viewportSize()!.width
-    const recon = width >= 1440 ? await reconProblems(card, reconcile) : await reconProblemsScrolledToEnd(card, reconcile)
+    const recon = width >= 1440 ? await reconProblems(card, reconcile) : await reconProblems(card, reconcile, true)
     return { problems: [...apart(kids[0], kids[1], 'recon grid columns'), ...sameTops(kids, 'recon grid'), ...recon], rects: { kids } }
   })
 

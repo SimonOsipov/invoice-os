@@ -1048,28 +1048,7 @@ test.describe('Audit screen', () => {
     await expect(page, 'the invoice detail must settle on its own URL').toHaveURL(new RegExp(`/invoices/${inv.id}$`))
     await expect(page.getByTestId('invoice-activity')).toBeVisible()
 
-    // Reference chip (F): unpressed, because the default chip is 'all' (InvoiceActivityCard.tsx:42).
-    const ref = page.getByTestId('activity-chip-invoices')
-    await expect(ref).toBeEnabled()
-    await expect(ref).toHaveAttribute('aria-pressed', 'false')
-    const refStyle = await ref.evaluate((el) => {
-      const cs = getComputedStyle(el)
-      return {
-        fontFamily: cs.fontFamily,
-        fontSize: cs.fontSize,
-        fontWeight: cs.fontWeight,
-        borderTopWidth: cs.borderTopWidth,
-        borderTopStyle: cs.borderTopStyle,
-        borderTopColor: cs.borderTopColor,
-        backgroundColor: cs.backgroundColor,
-        color: cs.color,
-        radius: cs.borderTopLeftRadius,
-      }
-    })
-    const refBox = await ref.boundingBox()
-    expect(refBox, 'the reference chip never rendered').not.toBeNull()
-
-    // Pill (F): every computed value must equal the reference's.
+    // Pill (F): the pill follows the prototype's applied-filter pill, not the activity chip.
     await openAudit(page)
     const pill = page.getByTestId('audit-pill-range')
     await expect(pill).toBeVisible()
@@ -1090,20 +1069,17 @@ test.describe('Audit screen', () => {
     const pillBox = await pill.boundingBox()
     expect(pillBox, 'the range pill never rendered').not.toBeNull()
 
-    expect(pillStyle.fontFamily, "the range pill must share the reference chip's font family").toBe(refStyle.fontFamily)
-    expect(pillStyle.fontSize, "the range pill must share the reference chip's font size").toBe(refStyle.fontSize)
-    expect(pillStyle.fontWeight, "the range pill must share the reference chip's font weight").toBe(refStyle.fontWeight)
-    expect(pillStyle.borderTopWidth, "the range pill must share the reference chip's border width").toBe(refStyle.borderTopWidth)
-    expect(pillStyle.borderTopStyle, "the range pill must share the reference chip's border style").toBe(refStyle.borderTopStyle)
-    expect(pillStyle.borderTopColor, "the range pill must share the reference chip's border color").toBe(refStyle.borderTopColor)
-    expect(pillStyle.backgroundColor, "the range pill must share the reference chip's fill").toBe(refStyle.backgroundColor)
-    expect(pillStyle.color, "the range pill must share the reference chip's text color").toBe(refStyle.color)
-    if (refBox && pillBox) {
-      expect(Math.abs(pillBox.height - refBox.height), "the range pill must stand the reference chip's height").toBeLessThanOrEqual(0.5)
-      // v2 chip corner: the reference chip's positive radius, under half the height.
-      expect(parseFloat(pillStyle.radius), 'the range pill must carry a corner').toBeGreaterThan(0)
-      expect(parseFloat(pillStyle.radius), 'the range pill corner must be less than half its height').toBeLessThan(pillBox.height / 2)
-      expect(pillStyle.radius, "the range pill must share the reference chip's corner").toBe(refStyle.radius)
+    expect(pillStyle.fontFamily.split(',')[0].replace(/"/g, '').trim(), 'the range pill font family').toBe('Manrope')
+    expect(pillStyle.fontSize, 'the range pill font size').toBe('12px')
+    expect(pillStyle.fontWeight, 'the range pill font weight').toBe('500')
+    expect(pillStyle.borderTopWidth, 'the range pill border width').toBe('1px')
+    expect(pillStyle.borderTopStyle, 'the range pill border style').toBe('solid')
+    expect(pillStyle.borderTopColor, 'the range pill border color').toBe('rgb(201, 217, 214)')
+    expect(pillStyle.backgroundColor, 'the range pill fill').toBe('rgb(250, 248, 242)')
+    expect(pillStyle.color, 'the range pill text color').toBe('rgb(11, 48, 50)')
+    if (pillBox) {
+      expect(pillBox.height, 'the range pill height').toBeCloseTo(28, 0)
+      expect(pillStyle.radius, 'the range pill corner').toBe('4px')
     }
 
     // Who column (E-1): the header span every avatar below is measured against.

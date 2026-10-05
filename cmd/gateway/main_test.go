@@ -31,6 +31,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"golang.org/x/net/html"
 )
 
 // TestGatewayMainPrefersUnprefixedPasswordVars: Test Spec #1. Static
@@ -1134,6 +1135,69 @@ func serveRegistration(h http.Handler, method, target, body string) *httptest.Re
 	return rec
 }
 
+// serveForm posts body as an urlencoded form, as the confirm page's button does.
+func serveForm(h http.Handler, target, body string) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// pageForm returns the one form of a confirm page: its action resolved against pageURL, and its named inputs.
+func pageForm(t *testing.T, pageURL, body string) (string, url.Values) {
+	t.Helper()
+	doc, err := html.Parse(strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("parse page: %v", err)
+	}
+	attr := func(n *html.Node, key string) string {
+		for _, a := range n.Attr {
+			if a.Key == key {
+				return a.Val
+			}
+		}
+		return ""
+	}
+	var forms []*html.Node
+	var find func(*html.Node)
+	find = func(n *html.Node) {
+		if n.Type == html.ElementNode && n.Data == "form" {
+			forms = append(forms, n)
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			find(c)
+		}
+	}
+	find(doc)
+	if len(forms) != 1 {
+		t.Fatalf("page has %d forms, want exactly one:\n%s", len(forms), body)
+	}
+	if m := attr(forms[0], "method"); !strings.EqualFold(m, "post") {
+		t.Fatalf("form method = %q, want post", m)
+	}
+	values := url.Values{}
+	var collect func(*html.Node)
+	collect = func(n *html.Node) {
+		if n.Type == html.ElementNode && n.Data == "input" && attr(n, "name") != "" {
+			values.Add(attr(n, "name"), attr(n, "value"))
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			collect(c)
+		}
+	}
+	collect(forms[0])
+	page, err := url.Parse(pageURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	action, err := url.Parse(attr(forms[0], "action"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return page.ResolveReference(action).String(), values
+}
+
 func TestRegistrationHandlers_WiresBothRoutes(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
@@ -1148,7 +1212,7 @@ func TestRegistrationHandlers_WiresBothRoutes(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Errorf("Register = %d, want 202: %s", rec.Code, rec.Body.String())
 	}
-	rec = serveRegistration(reg.Verify, http.MethodGet, "/auth/verify?token=T&type=signup", "")
+	rec = serveForm(reg.Verify, "/auth/verify", "token=T&type=signup")
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "https://site.example/?verified=1" {
 		t.Errorf("Verify = %d Location %q, want 303 https://site.example/?verified=1", rec.Code, rec.Header().Get("Location"))
 	}
@@ -1164,7 +1228,7 @@ func TestRegistrationHandlers_NotConfigured503(t *testing.T) {
 
 	for name, rec := range map[string]*httptest.ResponseRecorder{
 		"Register": serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`),
-		"Verify":   serveRegistration(reg.Verify, http.MethodGet, "/auth/verify?token=T&type=signup", ""),
+		"Verify":   serveForm(reg.Verify, "/auth/verify", "token=T&type=signup"),
 	} {
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Errorf("%s = %d, want 503: %s", name, rec.Code, rec.Body.String())

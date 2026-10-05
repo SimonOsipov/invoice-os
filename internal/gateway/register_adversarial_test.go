@@ -1,9 +1,11 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"log/slog"
 	"maps"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -324,7 +326,7 @@ func TestRegister_LogsNeverCarryCredentials(t *testing.T) {
 	}
 }
 
-// The token is decoded from the query once and JSON-encoded, never spliced into a string.
+// The token is decoded from the form once and JSON-encoded, never spliced into a string.
 func TestVerify_TokenWithSpecialCharactersIsJSONEncoded(t *testing.T) {
 	const token = `a"b\c&d=e+f/g%h}{,`
 	fake := newFakeGoTrue(t, http.StatusOK, gtSession)
@@ -428,9 +430,9 @@ func TestVerify_HugeSessionBodyIsDiscarded(t *testing.T) {
 	}
 }
 
-// Only GET verifies; any other method, HEAD included, is refused before GoTrue sees the token.
-func TestVerify_NonGetIs405WithoutUpstreamCall(t *testing.T) {
-	for _, method := range []string{http.MethodHead, http.MethodPost, http.MethodPut, http.MethodOptions} {
+// Only POST verifies; every other method is refused, uncacheable, before GoTrue sees the token.
+func TestVerify_NonPostIs405WithoutUpstreamCall(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodOptions} {
 		t.Run(method, func(t *testing.T) {
 			fake := newFakeGoTrue(t, http.StatusOK, gtSession)
 			rec := httptest.NewRecorder()
@@ -438,11 +440,96 @@ func TestVerify_NonGetIs405WithoutUpstreamCall(t *testing.T) {
 
 			VerifyHandler(fake.URL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), nil).ServeHTTP(rec, req)
 
-			if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != http.MethodGet {
-				t.Errorf("%s = %d Allow %q, want 405 Allow GET", method, rec.Code, rec.Header().Get("Allow"))
+			if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != http.MethodPost {
+				t.Errorf("%s = %d Allow %q, want 405 Allow POST", method, rec.Code, rec.Header().Get("Allow"))
+			}
+			if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+				t.Errorf("%s Cache-Control = %q, want no-store", method, got)
 			}
 			if n := len(fake.Calls()); n != 0 {
 				t.Errorf("%s reached GoTrue %d times, want 0", method, n)
+			}
+		})
+	}
+}
+
+// The token is read from the form body only; the URL query never counts.
+func TestVerify_QueryTokenIsIgnored(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, gtSession)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/auth/verify?token="+verifyToken+"&type=signup", nil)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	VerifyHandler(fake.URL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), nil).ServeHTTP(rec, req)
+
+	requireRedirect(t, rec, failedLocation)
+	if n := len(fake.Calls()); n != 0 {
+		t.Errorf("GoTrue saw %d calls, want 0", n)
+	}
+}
+
+const formType = "application/x-www-form-urlencoded"
+
+func multipartVerifyBody(t *testing.T) (string, string) {
+	t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	for k, v := range map[string]string{"token": verifyToken, "type": "signup"} {
+		if err := mw.WriteField(k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return mw.FormDataContentType(), buf.String()
+}
+
+// paddedForm is a valid verify form of exactly n bytes.
+func paddedForm(n int) string {
+	head := "token=" + verifyToken + "&type=signup&pad="
+	return head + strings.Repeat("x", n-len(head))
+}
+
+// Anything but a small urlencoded form with a good token is a failure notice and never reaches GoTrue.
+func TestVerify_BadFormIsFailureWithoutUpstreamCall(t *testing.T) {
+	mpType, mpBody := multipartVerifyBody(t)
+	const good = "token=" + verifyToken + "&type=signup"
+	for _, c := range []struct {
+		name, contentType, body string
+		wantCalls               int
+	}{
+		{"control: a good form", formType, good, 1},
+		{"JSON body", "application/json", `{"token":"` + verifyToken + `","type":"signup"}`, 0},
+		{"multipart body", mpType, mpBody, 0},
+		{"no Content-Type", "", good, 0},
+		{"malformed percent-escape", formType, "token=%zz&type=signup", 0},
+		{"empty token", formType, "token=&type=signup", 0},
+		{"wrong type", formType, "token=" + verifyToken + "&type=recovery", 0},
+		// 256 is maxVerifyTokenBytes.
+		{"token at the cap", formType, "token=" + strings.Repeat("a", 256) + "&type=signup", 1},
+		{"token over the cap", formType, "token=" + strings.Repeat("a", 257) + "&type=signup", 0},
+		// 1024 is the 1 KiB body cap.
+		{"body at the cap", formType, paddedForm(1024), 1},
+		{"body over the cap", formType, paddedForm(1025), 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fake := newFakeGoTrue(t, http.StatusOK, gtSession)
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/auth/verify", strings.NewReader(c.body))
+			if c.contentType != "" {
+				req.Header.Set("Content-Type", c.contentType)
+			}
+
+			VerifyHandler(fake.URL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), nil).ServeHTTP(rec, req)
+
+			want := failedLocation
+			if c.wantCalls == 1 {
+				want = verifiedLocation
+			}
+			requireRedirect(t, rec, want)
+			if n := len(fake.Calls()); n != c.wantCalls {
+				t.Errorf("GoTrue saw %d calls, want %d", n, c.wantCalls)
 			}
 		})
 	}

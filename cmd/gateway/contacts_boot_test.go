@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -70,11 +71,16 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 			`"registration":{"workspace_name":"Quillworks Ltd","display_name":"Zelda Quill"},` +
 			`"marketing_consent":{"text":"I agree.","at":"2026-09-24T10:00:00Z"}}}}`
 	}
+	var verifyMu sync.Mutex
+	var verifyBodies []string
 	goTrue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.Copy(io.Discard, r.Body)
+		b, _ := io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/verify":
+			verifyMu.Lock()
+			verifyBodies = append(verifyBodies, string(b))
+			verifyMu.Unlock()
 			_, _ = io.WriteString(w, session(verifyID))
 		case "/token":
 			_, _ = io.WriteString(w, session(signInID))
@@ -188,13 +194,48 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 		}
 	})
 	t.Run("verify", func(t *testing.T) {
-		resp, err := client.Get(base + "/auth/verify?token=tok&type=signup")
+		verifyCalls := func() []string {
+			verifyMu.Lock()
+			defer verifyMu.Unlock()
+			return slices.Clone(verifyBodies)
+		}
+		link := base + "/auth/verify?token=tok&type=signup"
+		var page string
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			req, _ := http.NewRequest(method, link, nil)
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("%s of the link answered %d, want 200\n%s", method, resp.StatusCode, out)
+			}
+			if method == http.MethodGet {
+				page = string(b)
+			}
+		}
+		if got := verifyCalls(); len(got) != 0 {
+			t.Fatalf("opening the link reached GoTrue /verify %d times: %v", len(got), got)
+		}
+
+		action, values := pageForm(t, link, page)
+		resp, err := client.PostForm(action, values)
 		if err != nil {
 			t.Fatal(err)
 		}
 		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "http://site.invalid/?verified=1" {
-			t.Fatalf("verify answered %d Location %q", resp.StatusCode, resp.Header.Get("Location"))
+			t.Fatalf("the click answered %d Location %q", resp.StatusCode, resp.Header.Get("Location"))
+		}
+		got := verifyCalls()
+		if len(got) != 1 {
+			t.Fatalf("GoTrue /verify saw %d calls %v, want exactly 1", len(got), got)
+		}
+		var sent map[string]string
+		if err := json.Unmarshal([]byte(got[0]), &sent); err != nil || !reflect.DeepEqual(sent, map[string]string{"type": "signup", "token_hash": "tok"}) {
+			t.Errorf("GoTrue /verify got %s, want {\"type\":\"signup\",\"token_hash\":\"tok\"}", got[0])
 		}
 		requireIntake(t, next(t), verifyID)
 	})

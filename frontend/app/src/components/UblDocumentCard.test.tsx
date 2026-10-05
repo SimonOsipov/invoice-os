@@ -251,7 +251,7 @@ describe('UblDocumentCard', () => {
 
   it('T02-9: a refused document with no reason prints nothing extra', () => {
     renderCard({ canView: false, blockedReason: null })
-    expect(body().textContent, 'floor: identity row').toBe(FILENAME + META)
+    expect(body().textContent, 'floor: name and meta').toBe(FILENAME + META)
     expect(screen.queryAllByTestId('ubl-card-blocked')).toHaveLength(0)
     expect(outer().querySelectorAll('button')).toHaveLength(0)
   })
@@ -265,7 +265,7 @@ describe('UblDocumentCard', () => {
 
   it('T02-11: while editing the card keeps its identity and offers no action', () => {
     renderCard({ editing: true, canView: true })
-    expect(screen.getByTestId('ubl-card-filename').textContent, 'floor: identity row').toBe(FILENAME)
+    expect(screen.getByTestId('ubl-card-filename').textContent, 'floor: name').toBe(FILENAME)
     expect(outer().querySelectorAll('button')).toHaveLength(0)
     expect(screen.queryAllByTestId('ubl-card-blocked')).toHaveLength(0)
     cleanup()
@@ -301,10 +301,8 @@ describe('UblDocumentCard', () => {
     expect(mock).toHaveBeenCalledTimes(1)
   })
 
-  it('T02-13: the identity row, refusal block, disabled Download and error copy the Source card', async () => {
+  it('T02-13: the refusal block, disabled Download and error copy the Source card', async () => {
     const withDoc = render(<SourceDocumentCard meta={sourceMeta()} onOpen={vi.fn()} extraction={{ jobId: null, loading: false, failed: true }} onOpenExtraction={vi.fn()} />)
-    const srcBody = within(withDoc.container).getByTestId('source-document-card')
-    const srcRow = srcBody.firstElementChild as HTMLElement
     const srcDisabled = within(withDoc.container).getByTestId('open-extraction-review') as HTMLButtonElement
     const srcReason = srcDisabled.nextElementSibling as HTMLElement
     expect(srcDisabled.disabled, 'floor: the Source control is disabled').toBe(true)
@@ -327,17 +325,6 @@ describe('UblDocumentCard', () => {
     const mock = vi.fn(() => new Promise(() => {}))
     vi.stubGlobal('fetch', mock)
     renderCard()
-    const row = body().firstElementChild as HTMLElement
-    expect(row.getAttribute('style')).toBe(srcRow.getAttribute('style'))
-    const tile = row.firstElementChild as HTMLElement
-    const srcTile = srcRow.firstElementChild as HTMLElement
-    for (const prop of ['flex', 'width', 'height', 'border-radius', 'display', 'place-items']) {
-      expect(tile.style.getPropertyValue(prop), prop).toBe(srcTile.style.getPropertyValue(prop))
-    }
-    expect(tile.style.width).toBe('38px')
-    expect(tile.style.background).toBe('var(--bg-3)')
-    expect(tile.style.color).toBe('var(--action)')
-    expect(tile.querySelector('svg'), 'the tile holds the document glyph').not.toBeNull()
     expect(screen.getByTestId('ubl-card-filename').style.wordBreak).toBe('break-all')
 
     const btn = screen.getByTestId('ubl-card-download') as HTMLButtonElement
@@ -410,7 +397,7 @@ describe('UblDocumentCard', () => {
 
   it('T02-16: editing hides the actions even when the wire also sends a reason', () => {
     renderCard({ editing: true, canView: true, blockedReason: REASON })
-    expect(screen.getByTestId('ubl-card-filename').textContent, 'floor: identity row').toBe(FILENAME)
+    expect(screen.getByTestId('ubl-card-filename').textContent, 'floor: name').toBe(FILENAME)
     expect(outer().querySelectorAll('button')).toHaveLength(0)
     expect(screen.queryAllByTestId('ubl-card-blocked')).toHaveLength(0)
   })
@@ -462,8 +449,10 @@ describe('UblDocumentCard', () => {
     expect.soft(name.style.fontWeight).toBe('600')
     const meta = screen.getByTestId('ubl-card-meta')
     expect.soft(meta.style.fontSize).toBe('10px')
-    expect.soft(meta.style.marginTop).toBe('3px')
-    expect.soft(meta.style.marginBottom, 'meta has no bottom margin').toBe('')
-    expect.soft((meta.parentElement as HTMLElement).parentElement!.style.marginBottom, 'identity row bottom margin').toBe('13px')
+    expect.soft(meta.style.margin).toBe('3px 0px 13px')
+    expect.soft(meta.style.color).toBe('var(--fg-3)')
+    expect.soft(name.style.lineHeight).toBe('')
+    expect.soft(body().firstElementChild, 'the name leads the body').toBe(name)
+    expect.soft(Array.from(body().querySelectorAll('svg')).filter((s) => s.closest('button') == null), 'no glyph outside a button').toHaveLength(0)
   })
 })

@@ -293,6 +293,8 @@ describe('bad, error and none states follow v2', () => {
       expect.soft(row.style.gridTemplateColumns, `${key}: columns`).toBe('96px 1fr')
       expect.soft(row.style.gap, `${key}: gap`).toBe('12px')
       expect.soft(row.style.padding, `${key}: padding`).toBe('8px 14px')
+      expect.soft(row.style.alignItems, `${key}: row aligns on the baseline`).toBe('baseline')
+      expect.soft(k.style.paddingTop, `${key}: key has no padding-top`).toBe('')
       expect(k.className, `${key}: key pin`).toContain('mono')
       expect.soft(k.style.fontSize, `${key}: key size`).toBe('9.5px')
       expect.soft(k.style.fontWeight, `${key}: key weight`).toBe('700')

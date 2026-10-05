@@ -58,7 +58,7 @@ const SELECT_STYLE: CSSProperties = { ...INPUT_STYLE, padding: '0 32px 0 13px', 
 
 // Shared with MarketingConsent.
 export const CHECK_LABEL_STYLE: CSSProperties = { display: 'flex', alignItems: 'flex-start', gap: 12, fontSize: 13, lineHeight: 1.55, color: 'var(--foreground)', cursor: 'pointer' }
-export const CHECK_INPUT_STYLE: CSSProperties = { flex: 'none', width: 18, height: 18, marginTop: 2, accentColor: 'var(--primary)', cursor: 'pointer' }
+export const CHECK_INPUT_STYLE: CSSProperties = { flex: 'none', width: 18, height: 18, margin: '2px 0 0', accentColor: 'var(--primary)', cursor: 'pointer' }
 
 export function DemoLeadForm({
   idPrefix,

@@ -698,8 +698,8 @@ describe('the product-email notice and the marketing box', () => {
     expect(demoLabel.getAttribute('style'), 'the lift left the demo label values as shipped').toBe(
       'display: flex; align-items: flex-start; gap: 12px; font-size: 13px; line-height: 1.55; color: var(--foreground); cursor: pointer;',
     )
-    expect(demoBox!.getAttribute('style'), 'the lift left the demo input values as shipped').toBe(
-      'flex: 0 0 auto; width: 18px; height: 18px; margin-top: 2px; accent-color: var(--primary); cursor: pointer;',
+    expect(demoBox!.getAttribute('style'), 'the demo input carries the prototype values (margin: 2px 0 0)').toBe(
+      'flex: 0 0 auto; width: 18px; height: 18px; margin: 2px 0px 0px; accent-color: var(--primary); cursor: pointer;',
     )
 
     act(() => demoRoot.unmount())

@@ -185,6 +185,11 @@ pre.pf-json {
   white-space: pre;
 }
 
+/* Keyboard focus ring for a native checkbox hidden under a painted box. */
+.asc-app .pf-check:focus-visible + span {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
 /* ------------------------------------------------------------------
    Responsive degradation. The prototype is a fixed 1280×860 app shell
    with a 252px sidebar + multi-column grids. These media queries collapse
@@ -206,11 +211,6 @@ pre.pf-json {
    Bounded BELOW at 861 on purpose: `.pf-dash-row-a > .pf-grid-2` outranks the
    `.pf-grid-2` rule in the 860 block, so an unbounded version would force two
    KPI columns back on at phone widths, where that block deliberately sets one. */
-/* Keyboard focus ring for a native checkbox hidden under a painted box. */
-.asc-app .pf-check:focus-visible + span {
-  box-shadow: 0 0 0 2px var(--ring);
-}
-
 @media (min-width: 861px) and (max-width: 1179px) {
   .pf-dash-row-a,
   .pf-dash-row-b,

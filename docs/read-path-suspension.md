@@ -495,10 +495,9 @@ here.
 
 **11.4 Whether an `e2e/api` spec can mint a token for a suspended subject in a PR
 environment. SETTLED — it can.** `platform.Posture()` maps a `pr-<N>` environment name to
-`PosturePreview`, and `MockLoginHandler` consults its persona allowlist only under
-`PostureHosted`, so the triple is never matched. That is not only a code reading:
-`contract-tenancy.spec.ts` already mints a random-UUID tenant and a tenant-A token for persona
-B's subject — neither triple is in `loginPersonas` — and both are green in this job.
+`PosturePreview`, and `MockLoginHandler` keeps no allowlist, so it mints for any triple.
+That is not only a code reading: `contract-tenancy.spec.ts` already mints a random-UUID
+tenant and a tenant-A token for persona B's subject, and both are green in this job.
 `e2e/api/suspension.spec.ts` is the deployed proof of §2 that rides on it, and it does not
 rely on minting alone: it also suspends and reactivates a live membership mid-spec, which
 holds under either posture.

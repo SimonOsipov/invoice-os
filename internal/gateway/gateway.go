@@ -15,7 +15,6 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"path"
-	"slices"
 	"strings"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform"
@@ -191,36 +190,11 @@ func MockIssuerEnabled(environment, flag string) bool {
 	return flag == "true" && strings.ToLower(strings.TrimSpace(environment)) != "production"
 }
 
-// loginPersona is an identity the mock issuer will mint for under PostureHosted.
-type loginPersona struct{ subject, tenantID, role string }
-
-// Every seeded active membership (db/seed.dev.sql). role is the GoTrue JWT role every
-// client sends, NOT that seed's memberships.role — that substitution locks the persona
-// out of the hosted demo. Suspended members are excluded: every role-gated call refuses
-// them anyway. TestLoginPersonasMatchEverySeededActiveMembership holds the two in step.
-var loginPersonas = []loginPersona{
-	{"c0000000-0000-0000-0000-000000000001", "11111111-1111-1111-1111-111111111111", "authenticated"},
-	{"c0000000-0000-0000-0000-000000000002", "22222222-2222-2222-2222-222222222222", "authenticated"},
-	{"c0000000-0000-0000-0000-000000000003", "11111111-1111-1111-1111-111111111111", "authenticated"},
-	// The firm policy's two unconditional approval seats: fin_mgr and compliance.
-	// Without them nobody on the hosted demo can close a firm run.
-	{"c0000000-0000-0000-0000-000000000004", "11111111-1111-1111-1111-111111111111", "authenticated"},
-	{"c0000000-0000-0000-0000-000000000005", "11111111-1111-1111-1111-111111111111", "authenticated"},
-	// firm — second preparer
-	{"c0000000-0000-0000-0000-000000000006", "11111111-1111-1111-1111-111111111111", "authenticated"},
-	// in-house — four reviewers and the preparer
-	{"c0000000-0000-0000-0000-000000000008", "22222222-2222-2222-2222-222222222222", "authenticated"},
-	{"c0000000-0000-0000-0000-000000000009", "22222222-2222-2222-2222-222222222222", "authenticated"},
-	{"c0000000-0000-0000-0000-000000000010", "22222222-2222-2222-2222-222222222222", "authenticated"},
-	{"c0000000-0000-0000-0000-000000000011", "22222222-2222-2222-2222-222222222222", "authenticated"},
-	{"c0000000-0000-0000-0000-000000000013", "22222222-2222-2222-2222-222222222222", "authenticated"},
-}
-
 // MockLoginHandler mints a GoTrue-shaped token for the requested identity. It is
 // the mock stand-in for GoTrue's login; main wires it only when the mock issuer
-// is enabled (see MockIssuerEnabled). Under PostureHosted — the one public
-// deployment — it mints only for an exact seeded persona.
-func MockLoginHandler(issuer *auth.MockIssuer, posture platform.PostureKind) http.HandlerFunc {
+// is enabled (see MockIssuerEnabled). It mints for any identity, an empty body
+// included, wherever it is wired.
+func MockLoginHandler(issuer *auth.MockIssuer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Subject  string `json:"subject"`
@@ -230,16 +204,6 @@ func MockLoginHandler(issuer *auth.MockIssuer, posture platform.PostureKind) htt
 		// The body is optional; on any decode error the zero value yields
 		// GoTrue-shaped defaults (random subject, "authenticated" role).
 		_ = json.NewDecoder(r.Body).Decode(&req)
-
-		// Matched raw, before Mint fills its defaults, so an omitted role cannot
-		// default its way into a persona. Preview stays permissive: the tenancy
-		// contract specs mint deliberately mismatched identities — one against a
-		// per-run random tenant no allowlist could hold — to prove /me fails closed.
-		if posture == platform.PostureHosted &&
-			!slices.Contains(loginPersonas, loginPersona{req.Subject, req.TenantID, req.Role}) {
-			writeError(w, http.StatusForbidden, "forbidden")
-			return
-		}
 
 		token, err := issuer.Mint(auth.MintOptions{
 			Subject:  req.Subject,

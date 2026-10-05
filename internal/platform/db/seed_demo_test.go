@@ -4444,8 +4444,7 @@ func TestSeedCoversAllThreeRolesPerPersonaTenant(t *testing.T) {
 }
 
 // seedOnlySubjectIDPattern matches the seed-only c0000000-...-0000000000NN
-// subject block (internal/gateway/gateway.go's loginPersonas never mints a
-// token for anything outside it).
+// subject block.
 var seedOnlySubjectIDPattern = regexp.MustCompile(`^c0000000-0000-0000-0000-0000000000[0-9]{2}$`)
 
 // TestSeedMembershipSubjectsAreSeedOnlyBlock: story §5 AC-6. Every seeded

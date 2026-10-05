@@ -1,7 +1,7 @@
 // Registration and workspace provisioning over the deployed gateway.
 // The fork's GoTrue has signup on, SMTP blanked and autoconfirm on, so it mails nothing; the
 // emailed-link path is proven in CI by TestIdP_EmailedLinkVerifiesThenSignInSucceeds instead.
-// A pr-<N> fork is PosturePreview, so /auth/login mints any subject, an empty tenant included.
+// /auth/login mints any subject in a mock build, an empty tenant included.
 // Every run uses a fresh address and subject: the auth.users, tenants and memberships rows
 // it creates survive the per-deploy reset.
 import { test, expect } from '@playwright/test'

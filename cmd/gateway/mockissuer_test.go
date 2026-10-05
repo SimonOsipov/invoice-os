@@ -21,8 +21,6 @@ import (
 
 func TestTaggedGatewayRegistersMintRoutesOutsideProduction(t *testing.T) {
 	t.Setenv("AUTH_ISSUER", mountTestIssuer)
-	// Empty is local posture, the only one where an empty body mints.
-	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "")
 	withCORS := gateway.CORS([]string{"https://app.ascomply.test"})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
@@ -65,7 +63,7 @@ func TestTaggedGatewayRegistersMintRoutesOutsideProduction(t *testing.T) {
 	rec = httptest.NewRecorder()
 	login.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{}`)))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("POST /auth/login {} = %d, want 200 under local posture (body %s)", rec.Code, rec.Body.String())
+		t.Fatalf("POST /auth/login {} = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 	var tok struct {
 		AccessToken string `json:"access_token"`
@@ -109,12 +107,11 @@ func TestTaggedMockIssuerRoutesValueDomain(t *testing.T) {
 	}
 }
 
-// Both routes come from one issuer stamped with AUTH_ISSUER, login keeps its CORS
-// layer, and posture is read from RAILWAY_ENVIRONMENT_NAME.
+// Both routes come from one issuer stamped with AUTH_ISSUER, and login keeps its CORS
+// layer.
 func TestTaggedMockIssuerRoutesKeepTheirWiring(t *testing.T) {
 	const origin = "https://app.ascomply.test"
 	t.Setenv("AUTH_ISSUER", mountTestIssuer)
-	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	jwks, login := mockIssuerRoutes("development", "true", gateway.CORS([]string{origin}), logger)
 	if jwks == nil || login == nil {
@@ -192,16 +189,22 @@ func TestTaggedMockIssuerRoutesKeepTheirWiring(t *testing.T) {
 		}
 	})
 
-	t.Run("hosted posture refuses an empty body", func(t *testing.T) {
+	t.Run("an empty body mints whatever RAILWAY_ENVIRONMENT_NAME says", func(t *testing.T) {
 		t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
 		_, hosted := mockIssuerRoutes("development", "true", gateway.CORS([]string{origin}), logger)
 		if hosted == nil {
 			t.Fatal("mockIssuerRoutes returned no login handler")
 		}
 		rec := httptest.NewRecorder()
-		hosted.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{}`)))
-		if rec.Code != http.StatusForbidden {
-			t.Errorf("POST {} under RAILWAY_ENVIRONMENT_NAME=production = %d, want 403 (body %s)", rec.Code, rec.Body.String())
+		hosted.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader("")))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("POST empty body under RAILWAY_ENVIRONMENT_NAME=production = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		var tok struct {
+			AccessToken string `json:"access_token"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &tok); err != nil || tok.AccessToken == "" {
+			t.Errorf("login body %q carries no access_token (decode err %v)", rec.Body.String(), err)
 		}
 	})
 }

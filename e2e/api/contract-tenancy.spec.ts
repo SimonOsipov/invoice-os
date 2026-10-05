@@ -67,7 +67,7 @@ import { assertErrorEnvelope } from './contract-helpers'
 const MEMBERSHIP_KEYS = ['display_name', 'email', 'role', 'status', 'user_id']
 
 // Seeded subjects (db/seed.dev.sql), never a tenant's seeded admin. Every active
-// seeded member can sign in now, and the mint allowlist is static, so a leaked
+// seeded member can sign in, and the mint takes any subject, so a leaked
 // suspension does not block the login — but since AUDIT-10 it hands that persona a
 // session whose every tenant-scoped call refuses with 403, GET /v1/me excepted, until
 // the next deploy re-seeds. A leak is that much more expensive than it used to be.
@@ -205,9 +205,8 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
     })
 
     test('a newly admitted in-house reviewer resolves its seeded access role', async () => {
-      // Proves ROLE RESOLUTION only, not the sign-in allowlist: the gate deploys a pr-<N>
-      // environment (PosturePreview), where the hosted allowlist is not consulted, so
-      // /auth/login is permissive here for any subject. The refusal proof is a Go test.
+      // Proves ROLE RESOLUTION only: /auth/login mints for any subject, so signing in
+      // proves nothing about membership.
       const reviewerToken = await login({ ...PERSONAS.B, subject: INHOUSE_REVIEWER })
       const res = await rawFetch('/api/tenancy/v1/me', {
         headers: { Authorization: `Bearer ${reviewerToken}` },

@@ -166,8 +166,7 @@ function DocumentFailureRow({
         {documentId !== undefined && (
           <>
             {/* Disabled-with-reason, never hidden — ReviewAlreadyImportedTab.tsx:77-94's
-                four layers. The inline spread is disabled-only: on an enabled button it
-                would kill the legitimate :hover affordance. */}
+                four layers. The inline spread is disabled-only. */}
             <button
               onClick={blocked ? undefined : () => ctx.enterByHand(documentId)}
               disabled={blocked}

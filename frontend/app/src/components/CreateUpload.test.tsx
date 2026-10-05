@@ -437,7 +437,40 @@ describe('CreateUpload — the v2 card, accepted line and primary (RESKIN2-04-01
       expect(b, 'the primary did not render').not.toBeNull()
       expect(b.disabled).toBe(true)
       expect(b.style.opacity, `files=${files.length}`).toBe('0.45')
+      expect(b.style.cursor, `files=${files.length}`).toBe('not-allowed')
+      expect(b.style.filter, `files=${files.length}`).toBe('none')
+      expect(b.style.background, `files=${files.length}`).toBe('var(--action)')
       unmount()
+    }
+  })
+
+  it('Read columns wears the same primary: live for a spreadsheet, dimmed with no file or a mixed run', () => {
+    const button = (files: PickedFile[]) => {
+      const { container } = render(<CreateUpload ctx={uploadCtx(files)} />)
+      const b = container.querySelector('button.v2-btn-primary') as HTMLButtonElement
+      expect(b, 'the primary did not render').not.toBeNull()
+      expect(b.textContent).toContain('Read columns')
+      return b
+    }
+
+    const live = button([picked('ledger.csv', 'text/csv')])
+    expect(live.disabled).toBe(false)
+    expect(live.style.background).toBe('var(--action)')
+    expect(live.style.color).toBe('var(--primary-foreground)')
+    expect(live.style.opacity).toBe('')
+    expect(live.style.filter).toBe('')
+    cleanup()
+
+    // csv first fixes the run kind, so the pdf is the refused file.
+    const mixed = button([picked('ledger.csv', 'text/csv'), picked('scan.pdf', 'application/pdf')])
+    cleanup()
+    const none = button([])
+    for (const b of [mixed, none]) {
+      expect(b.disabled).toBe(true)
+      expect(b.style.background).toBe('var(--action)')
+      expect(b.style.opacity).toBe('0.45')
+      expect(b.style.cursor).toBe('not-allowed')
+      expect(b.style.filter).toBe('none')
     }
   })
 })

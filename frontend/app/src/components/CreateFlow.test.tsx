@@ -883,6 +883,40 @@ describe('CreateFlow — the v2 strip and blocked hand-off (RESKIN2-04-01)', () 
     expect((current.nextElementSibling as HTMLElement).style.color).toBe('var(--fg-1)')
   })
 
+  it('the strip paints each step by its position, on both runs', () => {
+    // [step, run kind, index of the current step, step count]. The document strip has no Map.
+    const CASES: readonly [CreateStep, 'spreadsheet' | 'document', number, number][] = [
+      ['upload', 'spreadsheet', 0, 3],
+      ['mapping', 'spreadsheet', 1, 3],
+      ['review', 'spreadsheet', 2, 3],
+      ['documents', 'document', 0, 2],
+      ['review', 'document', 1, 2],
+    ]
+    for (const [step, kind, at, count] of CASES) {
+      const { container, unmount } = render(<CreateFlow ctx={createFlowCtx(step, kind)} />)
+      const circles = Array.from(container.querySelectorAll<HTMLElement>('span')).filter(
+        (s) => s.style.width === '22px' && s.style.height === '22px',
+      )
+      expect(circles, `${step}/${kind}: strip did not render`).toHaveLength(count)
+      circles.forEach((c, i) => {
+        const label = (c.nextElementSibling as HTMLElement).style.color
+        const where = `${step} step ${i}`
+        expect(c.style.borderRadius, where).toBe('50%')
+        if (i === at) {
+          expect(c.style.color, where).toBe('var(--primary-foreground)')
+          expect(label, where).toBe('var(--fg-1)')
+        } else if (i < at) {
+          expect(c.style.color, where).toBe('var(--action)')
+          expect(label, where).toBe('var(--fg-2)')
+        } else {
+          expect(c.style.color, where).toBe('var(--fg-3)')
+          expect(label, where).toBe('var(--fg-3)')
+        }
+      })
+      unmount()
+    }
+  })
+
   it('a blocked document hand-off dims (#114)', () => {
     const { container } = renderFailures([STORED], { activeEntity: null })
     const buttons = handOffButtons(container)

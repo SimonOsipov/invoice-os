@@ -348,11 +348,27 @@ describe('AuditRow expansion per variant (D-4, D-14)', () => {
     expect(sv(wrap, 'gap')).toBe('10px')
     expect(sv(screen.getByTestId('audit-evidence-blocked-reason'), 'margin-top')).toBe('0px')
     expect(sv(wrap.parentElement as HTMLElement, 'gap')).toBe('14px')
+    expect(sv(wrap.parentElement as HTMLElement, 'margin-top')).toBe('14px')
     cleanup()
     mount('activity', e, true)
     expect(sv(screen.getByTestId('audit-evidence-blocked-reason'), 'margin-top')).toBe('5px')
     expect(sv(screen.getByTestId('audit-evidence-affordance').parentElement?.parentElement as HTMLElement, 'margin-top')).toBe('12px')
     expect(screen.getByTestId('audit-evidence-affordance').getAttribute('aria-describedby')).toBe(screen.getByTestId('audit-evidence-blocked-reason').id)
+  })
+
+  it('auditRow_linkAndEvidenceShareOneActionRowAndALinkOnlyRowStillRenders', () => {
+    const open = () => {}
+    // Submission row with an invoice: link and disabled evidence sit in the same flex row.
+    render(<AuditRow event={ev({ payload: { id: 'inv-1' } })} expanded onToggle={() => {}} onFilterToInvoice={open} />)
+    const row = screen.getByTestId('audit-invoice-affordance').parentElement as HTMLElement
+    expect(row.contains(screen.getByTestId('audit-evidence-affordance'))).toBe(true)
+    cleanup()
+    // Invoices-domain row: no evidence button, the link still gets the row.
+    render(<AuditRow event={ev({ event: 'invoice.updated', payload: { id: 'inv-1' } })} expanded onToggle={() => {}} onFilterToInvoice={open} />)
+    expect(screen.queryByTestId('audit-evidence-affordance')).toBeNull()
+    const linkRow = screen.getByTestId('audit-invoice-affordance').parentElement as HTMLElement
+    expect(sv(linkRow, 'display')).toBe('flex')
+    expect(sv(linkRow, 'margin-top')).toBe('14px')
   })
 
   it('auditRow_invoiceAffordanceIsActionSemibold', () => {

@@ -1,24 +1,10 @@
-// Rotate-key confirmation modal (prototype lines 705-726). Mock only — confirming
-// rotates nothing; it closes and toasts.
-//
-// Structurally this is NOT the drawer shell. JobDrawer/EvidenceDrawer render the scrim
-// and the panel as siblings in a fragment; here the scrim is the PARENT and the panel is
-// its child (proto:707-708), which is why the panel needs its own stopPropagation — a
-// click that reaches the scrim closes the modal, and without it every click on the panel
-// would too. The other deltas from the drawers are deliberate: z-index 90 (drawers are
-// 80/81, Toast is 95, so this layers between them), scrim alpha 0.42 (drawers 0.32) and a
-// 140ms fade (drawers 160ms).
-//
-// Dismiss paths are exactly two — the scrim and Cancel. There is deliberately no Escape
-// handler, no close X, no role="dialog"/aria-modal and no focus trap: the prototype has
-// none, and neither do the two drawers that sit on this same shell. Overlay a11y is a
-// repo-wide follow-up, not a change to make on one of three overlays.
+// Rotate-key confirm (mock: closes and toasts). The scrim is the PARENT of the panel, so the
+// panel stops propagation. Dismiss: scrim and Cancel only; no Escape, dialog role or focus trap.
 
 import { ALERT_ICON, REDRIVE_ICON } from '../data'
 
 type Props = {
-  // The env label ('LIVE' | 'SANDBOX') the rotate button carried, not the key id
-  // (proto:998) — it is the string interpolated into the heading and the toast.
+  // The env label ('LIVE' | 'SANDBOX'), not the key id; interpolated into the heading and toast.
   env: string
   onClose: () => void
   onConfirm: () => void
@@ -32,7 +18,9 @@ export function RotateConfirm({ env, onClose, onConfirm }: Props) {
         position: 'fixed',
         inset: 0,
         zIndex: 90,
-        background: 'oklch(20% .02 210 / 0.42)',
+        background: 'color-mix(in srgb, var(--surface) 55%, transparent)',
+        backdropFilter: 'blur(6px)',
+        WebkitBackdropFilter: 'blur(6px)',
         display: 'grid',
         placeItems: 'center',
         animation: 'opsFade 140ms ease-out',
@@ -45,9 +33,8 @@ export function RotateConfirm({ env, onClose, onConfirm }: Props) {
           maxWidth: '92vw',
           background: 'var(--bg-2)',
           border: '1px solid var(--line-2)',
-          borderRadius: 'var(--radius-md)',
+          borderRadius: 'var(--radius-lg)',
           overflow: 'hidden',
-          boxShadow: '0 24px 60px -20px oklch(20% .02 210 / 0.4)',
           animation: 'opsPop 160ms ease-out',
         }}
       >
@@ -67,7 +54,7 @@ export function RotateConfirm({ env, onClose, onConfirm }: Props) {
             >
               {REDRIVE_ICON}
             </span>
-            <h3 style={{ fontSize: 17, fontWeight: 600, letterSpacing: '-0.02em', margin: 0 }}>Rotate {env} key?</h3>
+            <h3 style={{ fontSize: 18, fontWeight: 700, letterSpacing: '-0.03em', margin: 0 }}>Rotate {env} key?</h3>
           </div>
 
           <p style={{ fontSize: 13.5, lineHeight: 1.6, color: 'var(--fg-2)', margin: '0 0 14px' }}>
@@ -82,7 +69,7 @@ export function RotateConfirm({ env, onClose, onConfirm }: Props) {
             style={{
               background: 'var(--status-amber-bg)',
               border: '1px solid var(--status-amber-border)',
-              borderRadius: 'var(--radius-input)',
+              borderRadius: 'var(--radius-md)',
               padding: '10px 12px',
               display: 'flex',
               gap: 9,

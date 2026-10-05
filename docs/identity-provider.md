@@ -1089,6 +1089,15 @@ answers `INSERT 0 0` for an unregistered one.
 An in-product staff screen is out of scope. On production no account can be created while
 signup is closed, so the first staff account waits for registration U3 or for console U3.
 
+## Granting a membership in a mock build
+
+A PR fork's mock gateway serves `POST /auth/mock/member`
+`{"user_id","tenant_id","role","display_name","email"}`. It upserts an active `memberships`
+row with the migrator DSN, so an e2e spec can admit a registered account to a tenant. It
+answers 204, 400, 405 or 502. Production has no such route: `TestProductionGatewayBinaryCannotMint`
+requires `MockMemberHandler` and `db.GrantMembership` absent from that binary. The control is
+the `mockissuer` build tag, not an environment variable.
+
 ## Console sessions
 
 Both consoles (`ops-console`, `support-console`) render one shared gate, `StaffGate` from

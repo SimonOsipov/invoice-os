@@ -46,7 +46,9 @@ func mockStaffRoute(dsn string, logger *slog.Logger) http.Handler {
 	}, logger)
 }
 
-// mockMemberRoute is a stub (AUTH-15-02 Mode A): it never reaches the grant.
+// mockMemberRoute binds the membership grant handler to the owner DSN.
 func mockMemberRoute(dsn string, logger *slog.Logger) http.Handler {
-	return http.NotFoundHandler()
+	return gateway.MockMemberHandler(func(ctx context.Context, g gateway.MemberGrant) error {
+		return db.GrantMembership(ctx, dsn, db.MemberGrant(g))
+	}, logger)
 }

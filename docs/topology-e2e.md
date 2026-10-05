@@ -111,6 +111,13 @@ already lets anyone mint any persona; the consoles hold mock data only. It answe
 body without a hyphenated UUID `user_id`), 405 and 502. The production statement it stands in
 for is in [identity-provider.md](./identity-provider.md) "Granting staff".
 
+**The fork member grant route.** The same branch mounts `POST /auth/mock/member`
+`{"user_id","tenant_id","role","display_name","email"}` beside it. It upserts an active
+`memberships` row with the migrator DSN and answers 204, 400, 405 or 502, so a spec can admit a
+registered fork account to a tenant (`mintsymbols_test.go` requires its handler and
+`db.GrantMembership` absent from a production binary). Unlike staff, a membership opens real
+tenant data on that fork: the control is the `mockissuer` build tag, which only PR forks stamp.
+
 **Written per run, not inherited:** the URL variables. On a PR, prepare-env's
 `reconcile-urls` step writes and re-reads the fork's own `gateway.CORS_ALLOWED_ORIGINS` (all
 four SPA origins), `VITE_GATEWAY_URL` on `app`, `landing` and each console, `app.VITE_LANDING_URL`,

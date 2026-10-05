@@ -117,7 +117,7 @@ const PILL: CSSProperties = {
   color: 'var(--status-amber-text)',
   background: 'var(--status-amber-bg)',
   border: '1px solid var(--status-amber-border)',
-  borderRadius: 999,
+  borderRadius: 'var(--radius-sm)',
   padding: '2px 8px',
   whiteSpace: 'nowrap',
 }
@@ -128,7 +128,7 @@ const NOTE: CSSProperties = { margin: '12px 0 0', fontSize: 11.5, color: 'var(--
 // full-width input and the wrapper's box is unchanged, so the marker's geometry does not move.
 const CONTROL: CSSProperties = { position: 'relative', display: 'flex', alignItems: 'center' }
 
-// `:307`. The artboard's `var(--accent)` there means teal, which is `--action` in the app layer.
+// The prototype's `var(--accent)` is teal; here that is `--action`.
 const MARKER: CSSProperties = {
   position: 'absolute',
   right: 11,
@@ -155,7 +155,7 @@ const CHIP: CSSProperties = {
   textAlign: 'left',
   border: '1px solid var(--line-2)',
   background: 'var(--bg-2)',
-  borderRadius: 10,
+  borderRadius: 'var(--radius-md)',
   padding: '8px 11px',
   fontFamily: 'var(--font-sans)',
   cursor: 'pointer',
@@ -213,7 +213,7 @@ const POINT_BUTTON: CSSProperties = {
   padding: '0 12px',
   border: '1.5px dashed var(--line-3)',
   background: 'transparent',
-  borderRadius: 10,
+  borderRadius: 'var(--radius-md)',
   color: 'var(--fg-2)',
   fontFamily: 'var(--font-sans)',
   fontSize: 12.5,
@@ -222,8 +222,7 @@ const POINT_BUTTON: CSSProperties = {
   cursor: 'pointer',
 }
 
-// `--ds-amber` in the artboard (`:658`) does not exist here; the DS amber IS `--accent`. All
-// three declarations move together, so the armed state is legible without hover.
+// The prototype's `--ds-amber` is `--accent` here; the three declarations move together.
 const POINT_ARMED_BUTTON: CSSProperties = {
   ...POINT_BUTTON,
   border: '1.5px dashed var(--accent)',
@@ -436,7 +435,7 @@ export function ExtractionFields({
                         type="button"
                         data-testid={`extraction-point-cancel-${f.name}`}
                         onClick={onDisarm}
-                        style={UNDO_BUTTON}
+                        style={{ ...UNDO_BUTTON, alignSelf: 'flex-start' }}
                       >
                         {POINT_CANCEL}
                       </button>

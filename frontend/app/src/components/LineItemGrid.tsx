@@ -39,7 +39,17 @@ const WRAP: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 10,
 
 // x only, and on this node alone: the grid's overflow is absorbed here rather than by the pane
 // body or the page. The deployed oracle is EXTR13-LAYOUT-01/02, not this declaration.
-const SCROLL: CSSProperties = { overflowX: 'auto', minWidth: 0 }
+const SCROLL: CSSProperties = {
+  overflowX: 'auto',
+  minWidth: 0,
+  border: '1px solid var(--line-1)',
+  borderRadius: 'var(--radius-md)',
+  background: 'var(--bg-2)',
+}
+
+const HEAD_ROW: CSSProperties = { background: 'var(--bg-0)', borderBottom: '1px solid var(--line-1)' }
+
+const BODY_ROW: CSSProperties = { borderBottom: '1px solid var(--line-1)' }
 
 const TABLE: CSSProperties = {
   width: '100%',
@@ -48,7 +58,7 @@ const TABLE: CSSProperties = {
   borderCollapse: 'collapse',
 }
 
-const TH: CSSProperties = { padding: '0 6px 6px', textAlign: 'left', verticalAlign: 'bottom' }
+const TH: CSSProperties = { padding: '8px 6px 6px', textAlign: 'left', verticalAlign: 'bottom' }
 
 // ExtractionFields' CELL (`:66`), as a table cell: the same radius and ground, so a selected
 // line reads as the same object a selected header field does.
@@ -81,7 +91,7 @@ const MARKER: CSSProperties = {
 
 // INPUT (`:127`): the class carries the box and `width: 100%`; the padding is the marker's room
 // and there is no inline width.
-const INPUT: CSSProperties = { paddingRight: 30 }
+const INPUT: CSSProperties = { paddingRight: 30, fontSize: 12.5 }
 
 // CHIP_ROW/CHIP/CHIP_PICKED/CHIP_VALUE/CHIP_WHERE (ExtractionFields.tsx), unchanged: an
 // ambiguous line cell reads as the same object an ambiguous header field does.
@@ -93,7 +103,7 @@ const CHIP: CSSProperties = {
   textAlign: 'left',
   border: '1px solid var(--line-2)',
   background: 'var(--bg-2)',
-  borderRadius: 10,
+  borderRadius: 'var(--radius-md)',
   padding: '8px 11px',
   fontFamily: 'var(--font-sans)',
   cursor: 'pointer',
@@ -122,7 +132,7 @@ const CHIP_WHERE: CSSProperties = {
 
 // The role selector is the column heading. `.pf-input` for the box; no `.pf-btn`, which forces
 // its radius.
-const ROLE_SELECT: CSSProperties = { paddingRight: 8, fontSize: 11.5 }
+const ROLE_SELECT: CSSProperties = { height: 32, padding: '0 8px', fontSize: 11.5 }
 
 // LABEL_STRIP (`:88`) and PILL (`:94-105`), so a flag wraps rather than spilling its column.
 const LABEL_STRIP: CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, minHeight: 18, flexWrap: 'wrap' }
@@ -135,7 +145,7 @@ const PILL: CSSProperties = {
   color: 'var(--status-amber-text)',
   background: 'var(--status-amber-bg)',
   border: '1px solid var(--status-amber-border)',
-  borderRadius: 999,
+  borderRadius: 'var(--radius-sm)',
   padding: '2px 8px',
   whiteSpace: 'nowrap',
 }
@@ -153,7 +163,7 @@ const TEXT_BUTTON: CSSProperties = {
   transition: 'background 120ms ease-out',
 }
 
-const SUM_LINE: CSSProperties = { fontSize: 11.5, color: 'var(--fg-2)', lineHeight: 1.5 }
+const SUM_LINE: CSSProperties = { margin: 0, fontSize: 11.5, color: 'var(--fg-2)', lineHeight: 1.5 }
 
 // EMPTY_PANEL (`:232-239`): MemberParts.tsx:55-57's rule, a dashed edge over a transparent
 // ground.
@@ -213,7 +223,7 @@ export function LineItemGrid({
           <div data-testid="line-item-scroll" style={SCROLL}>
             <table style={TABLE}>
               <thead>
-                <tr>
+                <tr style={HEAD_ROW}>
                   {LINE_ROLES.map((role) => (
                     <th key={role} style={{ ...TH, width: COLUMN_WIDTH[role] }}>
                       {/* The selector reads its own column's role every render: remapRoles moves
@@ -252,7 +262,7 @@ export function LineItemGrid({
                       (c) => c !== null,
                     ) ?? null
                   return (
-                    <tr key={row.key} data-testid={`line-item-row-${n}`}>
+                    <tr key={row.key} data-testid={`line-item-row-${n}`} style={BODY_ROW}>
                       {LINE_ROLES.map((role) => {
                         const cell = row.cells[role]
                         // A cell the extractor never named -- an added row -- resolves to no
@@ -280,7 +290,7 @@ export function LineItemGrid({
                                   value={cell.value}
                                   aria-label={`Line ${n} ${ROLE_LABEL[role].toLowerCase()}`}
                                   onChange={(e) => onEditCell(at, role, e.target.value)}
-                                  style={INPUT}
+                                  style={role === 'description' ? INPUT : { ...INPUT, textAlign: 'right' }}
                                 />
                                 {changed ? (
                                   <span data-testid={`line-item-marker-${n}-${role}`} style={MARKER} />

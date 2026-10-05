@@ -80,9 +80,9 @@ const rows = (page: Page) => page.getByRole('main').locator('.ops-row')
 const deadLetterBadge = (page: Page) => sidebar(page).getByRole('button', { name: 'Submissions' }).locator('.mono')
 
 // The Submissions "Dead-letter" sub-stat tile — a second consumer of the same count,
-// computed independently of the sidebar's (Submissions.tsx:17,30).
+// computed independently of the sidebar's (Submissions.tsx:17,30). Its figure is `.money`.
 const deadLetterTile = (page: Page) =>
-  page.getByRole('main').locator('.ops-sub-stats > div').filter({ hasText: 'Dead-letter' }).locator('.mono')
+  page.getByRole('main').locator('.ops-sub-stats > div').filter({ hasText: 'Dead-letter' }).locator('.money')
 
 // A chip renders `LABEL` immediately followed by its count with no separator ("CLEARED3").
 // No label contains a digit, so trimming a trailing run of digits splits it unambiguously —

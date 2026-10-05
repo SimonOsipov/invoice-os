@@ -31,6 +31,28 @@ function cssBlock(css: string, selector: string, nth = 0): string {
   return body!.replace(/\s+/g, ' ').trim()
 }
 
+const walk = (dir: string): string[] =>
+  readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)],
+  )
+
+// Comments become blank text, newlines kept, so a hit's line number is the file's line number.
+const blankComments = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ''))
+const blankHtmlComments = (s: string) => s.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, ''))
+
+// Every non-test .ts/.tsx/.css under src, plus index.html, comments blanked.
+function scanSources(): { file: string; lines: string[] }[] {
+  const files = [...walk(HERE).filter((f) => /\.(tsx?|css)$/.test(f) && !/\.test\.tsx?$/.test(f)), join(HERE, '../index.html')]
+  return files.map((f) => {
+    const raw = read(f)
+    const text = f.endsWith('.css') ? blankComments(raw) : f.endsWith('.html') ? blankHtmlComments(raw) : stripComments(raw)
+    return { file: relative(HERE, f), lines: text.split('\n') }
+  })
+}
+
+const hits = (sources: ReturnType<typeof scanSources>, re: RegExp) =>
+  sources.flatMap(({ file, lines }) => lines.flatMap((l, i) => (re.test(l) ? [`${file}:${i + 1}: ${l.trim()}`] : [])))
+
 describe('v2 entry', () => {
   it('VE-01 main.tsx loads the v2 entry, then the layer, then ops.css', () => {
     const specifiers = [...stripComments(MAIN).matchAll(/^\s*import\s+['"]([^'"]+)['"]/gm)].map((m) => m[1])
@@ -138,10 +160,6 @@ describe('v2 entry', () => {
     )
     expect(declared.size).toBeGreaterThan(30)
 
-    const walk = (dir: string): string[] =>
-      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
-        e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)],
-      )
     const owned = [...walk(HERE).filter((f) => /\.tsx?$/.test(f) && !/\.test\.tsx?$/.test(f)), join(HERE, 'styles/ops.css')]
     expect(owned.length, 'control: owned files collected').toBeGreaterThan(10)
 
@@ -159,5 +177,63 @@ describe('v2 entry', () => {
     expect(used.size, 'control: var() names collected').toBeGreaterThan(30)
     expect(dynamic, 'var() names built at runtime cannot be resolved here').toEqual([])
     expect([...new Set(undeclared)].sort(), 'var() names not declared by the v2 entry or layer').toEqual([])
+  })
+
+  it('VE-07 no owned file carries v1 vocabulary (pin, green at write)', () => {
+    const sources = scanSources()
+    expect(sources.length, 'control: owned files scanned').toBeGreaterThanOrEqual(20)
+    const names = sources.map((s) => s.file)
+    for (const f of ['components/Overview.tsx', 'styles/ops.css', '../index.html']) expect(names, `control: ${f} is read`).toContain(f)
+    // Case-insensitive on purpose: a lower-case `inter` font name is the same v1 font.
+    expect(hits(sources, /oklch\(|fraunces|\binter\b|--gradient-|radius-pill/i), 'v1 vocabulary').toEqual([])
+  })
+
+  it('VE-08 no pill or unitless corner remains', () => {
+    const sources = scanSources()
+    const values = sources.flatMap(({ file, lines }) =>
+      lines.flatMap((l, i) =>
+        [...l.matchAll(/border-?[Rr]adius\s*:\s*(?:'([^']*)'|"([^"]*)"|`([^`]*)`|([^,;}\s]+))/g)].map((m) => ({
+          at: `${file}:${i + 1}`,
+          quoted: m[4] === undefined,
+          value: (m[1] ?? m[2] ?? m[3] ?? m[4]).trim(),
+        })),
+      ),
+    )
+    expect(values.length, 'control: corner values collected').toBeGreaterThan(40)
+    expect(values.some((v) => v.quoted && v.value === '50%'), "control: a '50%' circle is read").toBe(true)
+    expect(values.some((v) => !v.quoted && v.value === '2'), 'control: a numeric 2 bar is read').toBe(true)
+
+    const bad = values.filter(({ quoted, value }) => {
+      if (/^\d+(\.\d+)?$/.test(value)) return quoted ? value !== '0' : Number(value) >= 99
+      return [...value.matchAll(/(\d+(?:\.\d+)?)px/g)].some((m) => Number(m[1]) >= 99)
+    })
+    expect(bad.map((v) => `${v.at}: ${v.quoted ? `'${v.value}'` : v.value}`), 'pill corners and unitless string corners').toEqual([])
+  })
+
+  // Decorative stays (D-10): needle per file; a needle that matches no line is stale.
+  const FG4_STAYS: [file: string, needle: string][] = [
+    ['components/TopBar.tsx', "whiteSpace: 'nowrap' }}>Search invoice"],
+    ['components/TopBar.tsx', "marginLeft: 'auto', fontSize: 10, color: 'var(--fg-4)'"],
+    ['components/Evidence.tsx', '{CHEVRON_RIGHT_ICON}'],
+    ['components/Submissions.tsx', '{CHEVRON_RIGHT_ICON}'],
+    ['components/Submissions.tsx', "=== '—' ? 'var(--fg-4)'"],
+    ['components/ApiWebhooks.tsx', "=== '—' ? 'var(--fg-4)'"],
+    ['helpers.ts', "done ? 'var(--fg-2)' : 'var(--fg-4)'"],
+  ]
+
+  it('VE-09 --fg-4 stays only on the decorative uses', () => {
+    const sources = scanSources()
+    const lines = sources.flatMap(({ file, lines }) =>
+      lines.flatMap((text, i) => (/fg-4/i.test(text) ? [{ file, at: `${file}:${i + 1}`, text }] : [])),
+    )
+    expect(lines.length, 'control: --fg-4 lines found').toBeGreaterThanOrEqual(FG4_STAYS.length)
+
+    const matches = (l: { file: string; text: string }, [file, needle]: [string, string]) =>
+      l.file === file && l.text.includes(needle)
+    const unmatched = lines.filter((l) => !FG4_STAYS.some((stay) => matches(l, stay)))
+    expect(unmatched.map((l) => `${l.at}: ${l.text.trim()}`), '--fg-4 on enabled text (move to --fg-3)').toEqual([])
+
+    const stale = FG4_STAYS.filter((stay) => !lines.some((l) => matches(l, stay)))
+    expect(stale.map(([f, n]) => `${f}: ${n}`), 'stale allowlist needles').toEqual([])
   })
 })

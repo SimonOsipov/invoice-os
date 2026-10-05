@@ -308,7 +308,7 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
                   title={EXPORTS_BLOCKED_REASON}
                   aria-describedby={EXPORTS_BLOCKED_REASON_ID}
                   className="v2-btn v2-btn-ghost pf-btn"
-                  style={{ height: 38, background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' }}
+                  style={{ height: 38, opacity: 0.45, cursor: 'not-allowed', filter: 'none' }}
                 >
                   <span style={{ display: 'inline-flex' }}>{downloadGlyph}</span> {e.name}{' '}
                   <span className="mono" style={{ fontSize: 10, color: 'var(--fg-4)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 5px', marginLeft: 2 }}>

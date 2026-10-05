@@ -351,9 +351,11 @@ describe('ReportsView: export buttons are disabled-with-reason', () => {
     await renderReady()
     for (const { name } of EXPORT_BUTTONS) {
       const btn = screen.getByRole('button', { name: new RegExp(name) }) as HTMLButtonElement
-      expect(btn.style.background, `${name} button background`).toBe('var(--bg-3)')
-      expect(btn.style.color, `${name} button color`).toBe('var(--fg-4)')
+      expect(btn.style.opacity, `${name} button opacity`).toBe('0.45')
       expect(btn.style.cursor, `${name} button cursor`).toBe('not-allowed')
+      expect(btn.style.filter, `${name} button filter`).toBe('none')
+      expect(btn.style.background, `${name} button keeps the ghost fill`).toBe('')
+      expect(btn.style.color, `${name} button keeps the ghost colour`).toBe('')
     }
   })
 

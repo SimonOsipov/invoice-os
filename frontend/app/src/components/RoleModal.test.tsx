@@ -282,6 +282,36 @@ describe('AC-7: the EntityFormModal in-flight idiom', () => {
     expect(screen.getByTestId('role-modal-save').textContent).toBe('Saving…')
   })
 
+  it('Saving… keeps the primary fill and dims at the disabled recipe', () => {
+    const createRole = vi.fn(() => new Promise<Role>(() => {}))
+    renderModal({ mode: 'create' }, { createRole })
+
+    fireEvent.change(screen.getByTestId('role-modal-name'), { target: { value: 'Seat' } })
+    fireEvent.click(screen.getByTestId('role-modal-save'))
+
+    const save = screen.getByTestId('role-modal-save') as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    expect(save.className, 'the primary fill is the class, not an inline override').toContain('v2-btn-primary')
+    expect(save.style.background).toBe('')
+    expect([save.style.opacity, save.style.cursor, save.style.filter]).toEqual(['0.45', 'not-allowed', 'none'])
+  })
+
+  it('a rejected write renders the server sentence in the red block', async () => {
+    const createRole = vi.fn().mockRejectedValue(new ApiError('http', 'invalid request', 400))
+    renderModal({ mode: 'create' }, { createRole })
+
+    fireEvent.change(screen.getByTestId('role-modal-name'), { target: { value: 'Seat' } })
+    fireEvent.click(screen.getByTestId('role-modal-save'))
+    await drain(createRole)
+
+    const err = screen.getByTestId('role-modal-error')
+    expect(err.style.background).toBe('var(--status-red-bg)')
+    expect(err.style.border).toContain('var(--status-red-border)')
+    expect(err.style.color).toBe('var(--status-red-text)')
+    expect(err.style.padding).toBe('12px 14px')
+    expect(err.style.fontSize).toBe('13px')
+  })
+
   it('backdrop click does not close the modal while a write is in flight', () => {
     const createRole = vi.fn(() => new Promise<Role>(() => {}))
     const { onClose } = renderModal({ mode: 'create' }, { createRole })

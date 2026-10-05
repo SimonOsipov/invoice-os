@@ -394,9 +394,10 @@ test('PW-04 Reports at 1440: KPI tiles, chips, PASS colour, disabled exports', a
   const exportReads: Record<string, unknown>[] = []
   for (const btn of await exportsList.all()) {
     const corners = await expectCorners(btn, '7px', 'export button')
-    const paint = await styles(btn, ['background-color', 'color'])
-    expect(paint['background-color'], 'export background').toBe('rgb(239, 246, 244)')
-    expect(paint.color, 'export colour').toBe(FG_4)
+    const paint = await styles(btn, ['background-color', 'color', 'opacity'])
+    expect(paint['background-color'], 'export background keeps the ghost fill').toBe('rgba(0, 0, 0, 0)')
+    expect(paint.color, 'export colour keeps the ghost ink').toBe('rgb(11, 48, 50)')
+    expect(paint.opacity, 'export opacity').toBe('0.45')
     exportReads.push({ corners, paint })
   }
   const scroll = await assertPageDoesNotScrollSideways(page, 'Reports')

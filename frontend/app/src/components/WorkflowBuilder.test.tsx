@@ -1593,8 +1593,10 @@ describe('APPR-09-06 follow-up: a control shut by a write in flight is PAINTED s
     fireEvent.click(publish)
 
     expect(publish.disabled, 'the lock never closed, so the paint assertions below are vacuous').toBe(true)
-    expect(publish.style.background, 'a dead Publish is still painted as the action').toBe('var(--bg-3)')
-    expect(publish.style.color, 'a dead Publish still carries the on-dark label colour').toBe('var(--fg-4)')
+    expect(publish.style.background, 'a dead Publish lost the action fill').toBe('var(--action)')
+    expect(publish.style.color, 'a dead Publish lost the on-dark label colour').toBe('var(--primary-foreground)')
+    expect(publish.style.opacity, 'a dead Publish is not dimmed').toBe('0.45')
+    expect(publish.style.filter).toBe('none')
     expect(publish.style.cursor, 'a dead Publish still invites the click').toBe('not-allowed')
     // The other half of the split, re-pinned HERE so the fix above cannot drag the reason
     // layers along with the paint: the paint tracks BOTH causes, the reason tracks only
@@ -2429,8 +2431,11 @@ describe('RESKIN2-05-04 WB: the builder header, palette and canvas', () => {
     fireEvent.change(nameInput(), { target: { value: 'Renamed' } })
 
     expect(publishButton().disabled, 'an edit did not block Publish').toBe(true)
-    expect(publishButton().style.background).toBe('var(--bg-3)')
-    expect(publishButton().style.color).toBe('var(--fg-4)')
+    expect(publishButton().style.background).toBe('var(--action)')
+    expect(publishButton().style.color).toBe('var(--primary-foreground)')
+    expect(publishButton().style.opacity).toBe('0.45')
+    expect(publishButton().style.cursor).toBe('not-allowed')
+    expect(publishButton().style.filter).toBe('none')
   })
 
   it('WB-06 the consequence reads --fg-2', () => {

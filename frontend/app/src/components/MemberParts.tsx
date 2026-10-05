@@ -60,7 +60,14 @@ const CHIP_TONE: Record<MemberStatus, { background: string; color: string; borde
 }
 
 /** `aria-hidden`: the name it abbreviates is always rendered beside it. */
-export function InitialsChip({ initials, status, size = 30 }: { initials: string; status: MemberStatus; size?: number }) {
+export function InitialsChip({ initials, status, size = 30, fontSize, ring = false }: {
+  initials: string
+  status: MemberStatus
+  size?: number
+  fontSize?: number
+  /** Overlapped stacks: a 2px card-ground border keeps neighbouring circles distinct. */
+  ring?: boolean
+}) {
   const tone = CHIP_TONE[status]
   return (
     <span
@@ -73,9 +80,10 @@ export function InitialsChip({ initials, status, size = 30 }: { initials: string
         borderRadius: '50%',
         display: 'grid',
         placeItems: 'center',
-        fontSize: size >= 40 ? 13 : 10.5,
+        fontSize: fontSize ?? (size >= 40 ? 13 : size <= 26 ? 9 : 10.5),
         fontWeight: 700,
         ...tone,
+        ...(ring && status !== 'invited' ? { border: '2px solid var(--bg-2)' } : null),
       }}
     >
       {initials}

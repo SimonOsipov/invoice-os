@@ -404,11 +404,9 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
               {pendingVerb === 'save' ? 'Saving…' : saved ? 'Saved' : 'Save draft'}
             </button>
             {/* Disabled-with-a-reason, never hidden: the visible sibling below is the only layer
-                a keyboard user and a text assertion can both reach. No `filter: 'none'` — that
-                neutralises .v2-btn-primary's :hover, and this carries neither.
-                The paint tracks BOTH causes and the reason only ONE: a dead button must not stay
-                painted as the action (RoleModal.tsx:370-383), but a transient lock has no reason
-                to state, and 'Save your changes first' is untrue mid-publish. */}
+                a keyboard user and a text assertion can both reach.
+                The dimming tracks BOTH causes and the reason only ONE: a transient lock has no
+                reason to state, and 'Save your changes first' is untrue mid-publish. */}
             <button
               type="button"
               onClick={() => void publish()}
@@ -422,7 +420,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
                 fontSize: 13,
                 background: 'var(--action)',
                 color: 'var(--primary-foreground)',
-                ...(blockedReason !== null || submitting ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                ...(blockedReason !== null || submitting ? { opacity: 0.45, cursor: 'not-allowed', filter: 'none' } : null),
               }}
             >
               {pendingVerb === 'publish' ? 'Publishing…' : 'Publish'}

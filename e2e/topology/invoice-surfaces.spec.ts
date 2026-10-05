@@ -5523,7 +5523,8 @@ type DvTarget = DvBox & {
 type DvRead = { targets: Record<string, DvTarget>; within: Record<string, DvBox[]>; tokens: Record<string, string> }
 
 // Fonts settled, two frames painted and the targets' animations finished, then every value in one evaluate.
-// `within` lists the elements matching `sel` inside a target; `tokens` resolves a colour token through a probe span.
+// `within` lists the elements matching `sel` inside a target; `tokens` resolves a colour token through a probe span
+// placed in the first target's `.asc-app`.
 async function dvRead(
   page: Page,
   locs: Record<string, Locator>,
@@ -5563,10 +5564,15 @@ async function dvRead(
           inside[key] = [...(handles[names.indexOf(of)] as Element).querySelectorAll(sel)].map(box)
         }
         const resolved: Record<string, string> = {}
+        // The tokens are declared on `.asc-app`, so a probe on <body> would resolve none of them.
+        const host = (handles[0] as Element).closest('.asc-app')
         for (const token of tokens) {
+          if (!host || getComputedStyle(host).getPropertyValue(token).trim() === '') {
+            throw new Error(`token ${token} is not declared on the .asc-app that holds the first target`)
+          }
           const probe = document.createElement('span')
           probe.style.color = `var(${token})`
-          document.body.appendChild(probe)
+          host.appendChild(probe)
           resolved[token] = getComputedStyle(probe).color
           probe.remove()
         }
@@ -5685,7 +5691,7 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
         readOnly: page.getByTestId('invoice-activity').getByText('READ ONLY', { exact: true }),
         h1: detail.locator('h1'),
         rail: page.getByTestId('invoice-rail'),
-        actions: page.getByTestId('invoice-actions'),
+        actions: actionCluster(page),
       },
       {
         within: {
@@ -5766,6 +5772,8 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
     await transitionInvoice(token, inv.id, 'submitted')
 
     // No submission job exists for a hand-driven `submitted`; the finally leaves no in-flight row behind.
+    // A failed cleanup must not replace the body's own error.
+    let bodyFailed = false
     try {
       await dvOpenDetail(page, entity.name, invoiceNumber)
       await expect(page.getByTestId('invoice-detail').getByTestId('invoice-status-badge')).toContainText('SUBMITTED')
@@ -5783,13 +5791,21 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
       const t = read.targets
       dvExpectCorners(t.badge, '4px', 'status badge')
       expect(t.badge.text.trim(), 'badge text').toBe('SUBMITTED')
+      expect(read.tokens['--status-amber-bg'], 'the two looks differ, so the equalities below discriminate').not.toBe(read.tokens['--bg-2'])
       expect(t.queued.style['background-color'], 'queued node is the current look').toBe(read.tokens['--status-amber-bg'])
       expect(t.final.style['background-color'], 'final node is the unreached look').toBe(read.tokens['--bg-2'])
       await dvAttach(page, testInfo, 'dv-02', read)
 
       expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+    } catch (err) {
+      bodyFailed = true
+      throw err
     } finally {
-      await transitionInvoice(token, inv.id, 'accepted')
+      try {
+        await transitionInvoice(token, inv.id, 'accepted')
+      } catch (err) {
+        if (!bodyFailed) throw err
+      }
     }
   })
 
@@ -5934,7 +5950,7 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
       page,
       {
         form,
-        detail: page.getByTestId('invoice-detail'),
+        column: page.getByTestId('invoice-main-column'),
         add: page.getByTestId('line-add'),
         input: form.locator('xpath=.//div[normalize-space(text())="Issue date"]/following-sibling::input'),
       },
@@ -5949,7 +5965,7 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
     dvExpectCorners(e.add, '7px', 'line-add')
     expect(e.add.style.height, 'line-add height').toBe('30px')
     expect(e.input.style.height, 'editable input height').toBe('34px')
-    expect(enclosesRect(e.detail.rect, e.form.rect, 1), 'the edit form lies inside the detail column').toBe(true)
+    expect(enclosesRect(e.column.rect, e.form.rect, 1), 'the edit form lies inside the detail column').toBe(true)
     await dvAttach(page, testInfo, 'dv-06', { view, edit })
 
     // D-38: no line row scrolls sideways and every remove button stays inside the form.

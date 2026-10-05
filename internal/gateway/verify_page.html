@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Confirm your email · ASComply</title>
+<link rel="icon" href="/emails/mark.png">
+<style>
+body{margin:0;padding:24px 16px;background:#faf8f2;font-family:Manrope,'Helvetica Neue',Helvetica,Arial,sans-serif;color:#536b6d;line-height:1.5}
+main{display:block;max-width:440px;width:100%;box-sizing:border-box;margin:48px auto 0;padding:32px;background:#fff;border-radius:12px}
+.brand{display:flex;align-items:center;gap:10px;font-size:18px;font-weight:700;color:#0b3032}
+h1{margin:24px 0 8px;font-size:22px;color:#0b3032}
+p{margin:0 0 16px;font-size:15px}
+button{display:block;width:100%;margin:24px 0;padding:12px 16px;border:0;border-radius:7px;background:#f5bc88;color:#163c35;font:700 14px/1.4 inherit;cursor:pointer}
+.note{margin:0;font-size:13px}
+</style>
+</head>
+<body>
+<main>
+  <div class="brand"><img src="/emails/mark.png" width="36" height="36" alt=""><span>ASComply</span></div>
+  <h1>Confirm your email address</h1>
+  <p>Click the button to finish creating your ASComply account.</p>
+  <form method="post" action="/auth/verify">
+    <input type="hidden" name="token" value="{{.Token}}">
+    <input type="hidden" name="type" value="signup">
+    <button type="submit">Confirm my email</button>
+  </form>
+  <p class="note">If you did not create an ASComply account, close this page.</p>
+</main>
+<script>{{.Script}}</script>
+</body>
+</html>

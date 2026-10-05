@@ -123,7 +123,7 @@ export function AuditRow({ event, expanded, onToggle, onFilterToInvoice, variant
               data-testid="audit-invoice-affordance"
               onClick={() => onFilterToInvoice(inv.id, inv.number)}
               className="pf-btn"
-              style={{ marginTop: 14, border: 0, padding: 0, background: 'transparent', color: 'var(--accent-text, var(--fg-1))', fontSize: 12.5, fontWeight: 500, cursor: 'pointer' }}
+              style={{ marginTop: 14, border: 0, padding: 0, background: 'transparent', color: 'var(--action)', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
             >
               {inv.number != null ? `All events for ${inv.number} →` : 'All events for this invoice →'}
             </button>
@@ -138,8 +138,8 @@ export function AuditRow({ event, expanded, onToggle, onFilterToInvoice, variant
                 data-testid="audit-evidence-affordance"
                 disabled
                 aria-describedby={EVIDENCE_REASON_ID}
-                className="pf-btn"
-                style={{ border: 0, padding: 0, background: 'transparent', color: 'var(--accent-text, var(--fg-1))', fontSize: 12.5, fontWeight: 500, opacity: 0.45, cursor: 'not-allowed', filter: 'none' }}
+                className="v2-btn v2-btn-ghost pf-btn"
+                style={{ height: 30, fontSize: audit ? 12 : 12.5, background: 'transparent', opacity: 0.45, cursor: 'not-allowed', filter: 'none' }}
               >
                 View transmission evidence →
               </button>
@@ -150,7 +150,7 @@ export function AuditRow({ event, expanded, onToggle, onFilterToInvoice, variant
           )}
           {/* The row shows the human label; the footer keeps the identifier that label was
               derived from, so a support conversation can name the exact event. */}
-          <div className="mono" style={{ marginTop: 14, paddingTop: 11, borderTop: '1px solid var(--line-1)', display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 10, color: 'var(--fg-3)' }}>
+          <div className="mono" style={{ marginTop: audit ? 14 : 12, paddingTop: audit ? 11 : 10, borderTop: '1px solid var(--line-1)', display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 10, color: 'var(--fg-3)' }}>
             <span data-testid="audit-event-identifier">{event.event}</span>
             <span data-testid="audit-event-id">{event.id}</span>
           </div>

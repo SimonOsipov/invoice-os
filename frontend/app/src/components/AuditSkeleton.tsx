@@ -11,11 +11,11 @@ import { AUDIT_COLS, AUDIT_GRID_GAP, AUDIT_TABLE_MIN_WIDTH } from './AuditRow'
 
 const ROWS = 8
 
-const BAR = { background: 'var(--bg-3)', animation: 'pulse 1.4s ease-in-out infinite' } as const
+const BAR = { background: 'var(--bg-3)', animation: 'pulse 1.4s linear infinite' } as const
 
 // Uneven widths: equal bars read as a rendered table of identical values rather than as
 // pending content.
-const WIDTHS = ['62%', '78%', '54%', '70%', '0%']
+const WIDTHS = ['62%', '78%', '100%', '100%', '0%']
 
 export function AuditSkeleton() {
   return (

@@ -3,7 +3,7 @@
 // identical to frontend/ops-console/src/icons.tsx. All icons are stroke-based, 24x24
 // viewBox, currentColor — the parent sets color/size to match the design.
 
-import markUrl from '@invoice-os/design-tokens/assets/logo-mark.png'
+import markUrl from '@invoice-os/design-tokens/v2/assets/mark.png'
 
 type IconProps = {
   paths: string[]
@@ -33,6 +33,6 @@ export function Icon({ paths, size = 16, strokeWidth = 1.6 }: IconProps) {
 
 // ASComply brand mark. RASTER ONLY — the design system says so in bold. Decorative; the
 // "ASComply" wordmark beside every call site is live text.
-export function BrandMark({ size = 22 }: { size?: number }) {
-  return <img src={markUrl} alt="" aria-hidden="true" width={size} height={size} style={{ display: 'block' }} />
+export function BrandMark({ size = 26 }: { size?: number }) {
+  return <img src={markUrl} alt="" aria-hidden="true" width={size} height={size} style={{ display: 'block', borderRadius: 'var(--radius-md)' }} />
 }

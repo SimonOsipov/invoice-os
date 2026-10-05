@@ -219,10 +219,13 @@ describe('SourceDocumentRail follows the prototype', () => {
     expect.soft(copy.style.height).toBe('24px')
     expect.soft(copy.style.padding).toBe('0px 9px')
     expect.soft(copy.style.fontSize).toBe('11.5px')
-    expect(copy.querySelector('svg'), 'pin: the copy glyph stays').not.toBeNull()
+    expect.soft(copy.style.flex, 'Copy does not shrink').toBe('0 0 auto')
+    expect.soft(copy.style.gap, 'Copy has no glyph gap').toBe('')
+    expect(copy.querySelector('svg'), 'Copy is text only').toBeNull()
 
     const header = copy.parentElement as HTMLElement
     expect.soft(header.style.padding).toBe('8px 12px')
+    expect.soft(header.style.gap, 'header has no gap').toBe('')
     expect.soft(header.style.background).toBe('var(--bg-1)')
     expect.soft(header.style.borderBottom).toBe('1px solid var(--line-1)')
     const box = header.parentElement as HTMLElement

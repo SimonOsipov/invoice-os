@@ -5,7 +5,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 
-import { copyGlyph, shieldGlyph } from '../glyphs'
+import { shieldGlyph } from '../glyphs'
 import { actorLabel } from '../lib/actor'
 import { fmtDateTime, fmtPlain } from '../lib/format'
 import { formatBytes, type SourceDocumentRecord } from '../lib/sourceDocument'
@@ -86,16 +86,16 @@ export function SourceDocumentRail({
       <div style={scroll}>
         <div style={{ padding: '18px 20px 22px' }}>
           <div style={{ border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-            <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+            <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span className="label">Content fingerprint · SHA-256</span>
               <button
                 type="button"
                 data-testid="copy-hash"
                 onClick={copyHash}
                 className="v2-btn v2-btn-ghost pf-btn"
-                style={{ flex: 'none', whiteSpace: 'nowrap', height: 24, padding: '0 9px', fontSize: 11.5, display: 'inline-flex', alignItems: 'center', gap: 5 }}
+                style={{ flex: 'none', height: 24, padding: '0 9px', fontSize: 11.5 }}
               >
-                <span style={{ display: 'inline-flex' }}>{copyGlyph}</span> {copied ? 'Copied' : 'Copy'}
+                {copied ? 'Copied' : 'Copy'}
               </button>
             </div>
             <div className="mono" style={{ padding: '10px 12px', fontSize: 11, lineHeight: 1.65, color: 'var(--fg-1)', wordBreak: 'break-all' }}>

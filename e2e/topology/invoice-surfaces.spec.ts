@@ -2901,6 +2901,7 @@ test("invoice detail: the source-document card states the real range, and the mo
   // correction C2).
   await expect(page.getByTestId('source-document-range')).toHaveText('Row 4 of this file became this invoice.')
 
+  await page.setViewportSize({ width: 1440, height: 900 })
   await page.getByTestId('view-source-document').click()
   const modal = page.getByTestId('source-document-modal')
   await expect(modal).toBeVisible()
@@ -2914,8 +2915,15 @@ test("invoice detail: the source-document card states the real range, and the mo
   // A SHA-256 hex digest chunked 16 chars/line is always exactly 4 lines (64 / 16).
   await expect(page.getByTestId('hash-line')).toHaveCount(4)
 
+  expectWidth1440(page)
   const sheetRead = await dvModal(page, testInfo, 'source-modal-sheet')
   dvExpectModal(sheetRead, 'sheet')
+
+  const fit1440 = await fingerprintFit(page)
+  expectFingerprintFit(fit1440, 'at 1440')
+  const fitSweep = await dvSweepWide(page, () => fingerprintFit(page))
+  for (const f of fitSweep) expectFingerprintFit(f, `at ${f.width}`)
+  await testInfo.attach('fingerprint-fit.json', { body: JSON.stringify({ at1440: fit1440, sweep: fitSweep }, null, 2), contentType: 'application/json' })
 
   await page.getByTestId('source-modal-close').click()
   await expect(modal).toHaveCount(0)
@@ -2932,6 +2940,7 @@ test("invoice detail: the source-document card states the real range, and the mo
   await page.route(SHEET_URL, hold)
   await page.getByTestId('view-source-document').click()
   await expect(page.getByTestId('source-document-loading')).toBeVisible()
+  expectWidth1440(page)
   const loadingRead = await dvModal(page, testInfo, 'source-modal-loading', 'source-document-loading')
   expect(loadingRead.canvas, 'the loading canvas was read').toBeTruthy()
   expect(
@@ -2954,6 +2963,7 @@ test("invoice detail: the source-document card states the real range, and the mo
   await page.getByTestId('view-source-document').click()
   await failResp
   await expect(page.getByTestId('source-document-failed')).toBeVisible()
+  expectWidth1440(page)
   await dvModal(page, testInfo, 'source-modal-error', 'source-document-failed')
   await page.getByTestId('source-modal-close').click()
   await expect(modal).toHaveCount(0)
@@ -5344,6 +5354,7 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
 
   const { invoices } = await listInvoices(token, { entity_id: entity.id, limit: 50 })
   const invoiceNumber = invoices[0]?.invoice_number ?? ''
+  expect(invoiceNumber, 'AC 2, AC 3 and AC 7 need the PDF import to produce an invoice').not.toBe('')
 
   // The substitution. `null` leaves the response untouched, which is what the PDF leg runs
   // under; a record replaces ONLY the `document` object of the server's own response.
@@ -5388,13 +5399,17 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
   // openPreviewer() remounts InvoiceDetail every time: the source-document fetch is
   // `immediate` with `deps: [invoiceId]`, so leaving the surface and coming back is what makes
   // the next substitution take effect.
-  async function openPreviewer(shot?: string): Promise<string> {
+  async function openPreviewer(shot?: string, read?: () => Promise<void>): Promise<string> {
     await goToInvoices(page)
     await openInvoiceRow(page, invoiceNumber)
     await page.getByTestId('view-source-document').click()
     await expect(page.getByTestId('source-document-modal')).toBeVisible()
     const canvas = await extr09Canvas(page)
-    if (shot) await dvModal(page, testInfo, shot, undefined, { canvas })
+    if (shot) {
+      expectWidth1440(page)
+      await dvModal(page, testInfo, shot, undefined, { canvas })
+    }
+    await read?.()
     await page.getByTestId('source-modal-close').click()
     return canvas
   }
@@ -5402,25 +5417,31 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
   const observed: Record<string, string> = {}
   const pdfEmbed: Record<string, string> = {}
 
-  if (invoiceNumber === '') {
-    observed.pdf = 'not reached — the PDF import produced no invoice'
-  } else {
-    observed.pdf = await openPreviewer('source-modal-pdf')
-    // Re-opened for the embed read: the close above unmounted the canvas.
-    if (observed.pdf === 'source-document-pdf') {
-      await goToInvoices(page)
-      await openInvoiceRow(page, invoiceNumber)
-      await page.getByTestId('view-source-document').click()
-      pdfEmbed.src_scheme = (await page.getByTestId('pdf-embed').getAttribute('src'))?.split(':')[0] ?? 'no src'
-      pdfEmbed.type = (await page.getByTestId('pdf-embed').getAttribute('type')) ?? 'no type'
-      await page.getByTestId('source-modal-close').click()
-    }
-
-    for (const leg of SYNTHESIZED_LEGS) {
-      substitute = { pdf, docx }[leg]
-      observed[leg] = await openPreviewer('source-modal-bad')
-    }
+  await page.setViewportSize({ width: 1440, height: 900 })
+  observed.pdf = await openPreviewer('source-modal-pdf')
+  // Re-opened for the embed read: the close above unmounted the canvas.
+  if (observed.pdf === 'source-document-pdf') {
+    await goToInvoices(page)
+    await openInvoiceRow(page, invoiceNumber)
+    await page.getByTestId('view-source-document').click()
+    pdfEmbed.src_scheme = (await page.getByTestId('pdf-embed').getAttribute('src'))?.split(':')[0] ?? 'no src'
+    pdfEmbed.type = (await page.getByTestId('pdf-embed').getAttribute('type')) ?? 'no type'
+    await page.getByTestId('source-modal-close').click()
   }
+
+  const baselines: Record<string, unknown> = {}
+  for (const leg of SYNTHESIZED_LEGS) {
+    substitute = { pdf, docx }[leg]
+    observed[leg] = await openPreviewer('source-modal-bad', async () => {
+      if (leg !== 'docx') return
+      const at1440 = await factBaselines(page)
+      expectFactBaselines(at1440, 'at 1440')
+      const sweep = await dvSweepWide(page, async () => ({ rows: await factBaselines(page) }))
+      for (const m of sweep) expectFactBaselines(m.rows, `at ${m.width}`)
+      baselines[leg] = { at1440, sweep }
+    })
+  }
+  await testInfo.attach('fact-baselines.json', { body: JSON.stringify(baselines, null, 2), contentType: 'application/json' })
 
   await testInfo.attach('documentPreviewer.md', {
     contentType: 'text/markdown',
@@ -5630,6 +5651,81 @@ async function dvModal(
   })
   await dvAttach(page, testInfo, name, { ...note, ...read.targets })
   return { panel: read.targets.panel, scrim: read.targets.scrim, canvas: read.targets.canvas }
+}
+
+type FitRect = { x: number; y: number; width: number; height: number }
+
+// The fingerprint header of the open source modal, read after fonts and two frames settle.
+async function fingerprintFit(page: Page): Promise<{
+  labelRects: number
+  label: FitRect
+  copy: FitRect
+  header: FitRect
+  copyHasSvg: boolean
+}> {
+  return page.evaluate(async () => {
+    await document.fonts.ready
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+    const rail = document.querySelector('[data-testid="source-document-rail"]')!
+    const label = [...rail.querySelectorAll('.label')].find((e) => e.textContent === 'Content fingerprint \u00b7 SHA-256')!
+    const copy = rail.querySelector('[data-testid="copy-hash"]')!
+    const box = (e: Element) => {
+      const r = e.getBoundingClientRect()
+      return { x: r.x, y: r.y, width: r.width, height: r.height }
+    }
+    const range = document.createRange()
+    range.selectNodeContents(label)
+    return {
+      labelRects: range.getClientRects().length,
+      label: box(label),
+      copy: box(copy),
+      header: box(copy.parentElement!),
+      copyHasSvg: copy.querySelector('svg') !== null,
+    }
+  })
+}
+
+function expectFingerprintFit(fit: Awaited<ReturnType<typeof fingerprintFit>>, at: string): void {
+  expect(fit.labelRects, `AC 2 ${at}: the fingerprint label is one line`).toBe(1)
+  expect(fit.label.x + fit.label.width, `AC 2 ${at}: the label ends left of Copy`).toBeLessThanOrEqual(fit.copy.x)
+  expect(enclosesRect(fit.header, fit.copy, 1), `AC 2 ${at}: Copy lies inside the header`).toBe(true)
+  expect(fit.copyHasSvg, `AC 2 ${at}: Copy holds no glyph`).toBe(false)
+  expect(fit.copy.height, `AC 2 ${at}: Copy is 24px tall`).toBeCloseTo(24, 0)
+}
+
+// Label and value baseline y per fact row of the bad-state canvas; a zero-size inline-block's bottom is the baseline.
+async function factBaselines(page: Page): Promise<Array<{ key: string; label: number; value: number }>> {
+  return page.evaluate(async () => {
+    await document.fonts.ready
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+    const canvas = document.querySelector('[data-testid="source-document-unrenderable"]')!
+    const title = [...canvas.querySelectorAll('.label')].find((e) => e.textContent === 'What we know about this file')!
+    const rows = [...(title.parentElement!.parentElement!.children[1]?.children ?? [])]
+    const baseline = (span: Element) => {
+      const probe = document.createElement('span')
+      probe.style.cssText = 'display:inline-block;width:0;height:0'
+      span.insertBefore(probe, span.firstChild)
+      const y = probe.getBoundingClientRect().bottom
+      probe.remove()
+      return y
+    }
+    return rows.map((row) => ({
+      key: row.children[0].textContent ?? '',
+      label: baseline(row.children[0]),
+      value: baseline(row.children[1]),
+    }))
+  })
+}
+
+function expectFactBaselines(rows: Awaited<ReturnType<typeof factBaselines>>, at: string): void {
+  expect(rows.length, `AC 3 ${at}: at least one fact row was read`).toBeGreaterThan(0)
+  for (const r of rows) {
+    expect(Math.abs(r.label - r.value), `AC 3 ${at}: ${r.key} label sits on its value's baseline`).toBeLessThanOrEqual(0.5)
+  }
+}
+
+function expectWidth1440(page: Page): void {
+  expect(page.viewportSize()!.width, 'AC 7: the source-modal shot is taken at 1440').toBe(1440)
 }
 
 async function dvOpenDetail(page: Page, entityName: string, invoiceNumber: string): Promise<void> {

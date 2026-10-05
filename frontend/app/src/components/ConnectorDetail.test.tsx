@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// RESKIN2-06-04: ConnectorDetail resolved paint against Platform.dc.html:2724-2850.
+// ConnectorDetail resolved paint against the prototype connector detail view.
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -52,7 +52,7 @@ describe('ConnectorDetail > env pill and DRIFT', () => {
     expect(live().style.filter).toBe('none')
   })
 
-  // The prototype's `button:disabled` rule dims every disabled button, SANDBOX included (Platform.dc.html:51).
+  // The prototype's `button:disabled` rule dims every disabled button, SANDBOX included.
   it('SANDBOX is a disabled control too and takes the same D-3 paint', () => {
     mount()
     expect(sandbox().disabled).toBe(true)

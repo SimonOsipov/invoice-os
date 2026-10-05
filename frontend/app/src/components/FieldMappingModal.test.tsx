@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// RESKIN2-06-04: FieldMappingModal against Platform.dc.html:3224-3253, with D-1, D-11 and D-23.
+// FieldMappingModal against the prototype mapping modal.
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 

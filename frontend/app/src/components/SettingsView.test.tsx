@@ -119,7 +119,7 @@ describe('Settings > Signing', () => {
   })
 })
 
-// RESKIN2-06-04: resolved paint against Platform.dc.html:2422-2930 (radius, dots, rows, titles).
+// Resolved paint against the prototype Settings view (radius, dots, rows, titles).
 const ENTITY = { id: 'e1', name: 'Honeywell Group', tin: '12345678-0001', sector: 'Food', registration: null, address: '1 Marina Rd', status: 'active', created_at: '2026-01-01T00:00:00.000Z' }
 const inhouse = (over: Record<string, unknown> = {}) => settingsCtx('company', false, { mode: 'inhouse', ...over })
 const radii = (c: HTMLElement) => [...c.querySelectorAll<HTMLElement>('*')].map((e) => e.style.borderRadius).filter(Boolean)

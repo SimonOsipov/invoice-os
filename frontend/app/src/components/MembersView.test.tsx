@@ -21,7 +21,19 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError, type AsyncStatus } from '@invoice-os/api-client'
-import { PROTECTED_ADMIN_NOTE, replaceMember, setMembershipStatus, toMember, type Member, type MembershipWire } from '../lib/members'
+import {
+  ACCESS_ROLES,
+  CAPABILITY_FOOTNOTE,
+  CAPABILITY_ROWS,
+  CLIENT_USERS_COPY,
+  MEMBER_UNBACKED,
+  PROTECTED_ADMIN_NOTE,
+  replaceMember,
+  setMembershipStatus,
+  toMember,
+  type Member,
+  type MembershipWire,
+} from '../lib/members'
 import type { AuthedFetch } from '../lib/portfolio'
 import type { Role } from '../lib/roles'
 import type { PlatformCtx } from '../types'
@@ -83,8 +95,10 @@ function Harness({
   rolesState,
   rolesError,
   refetchRoles,
+  mode,
 }: {
   initial: Member[]
+  mode?: 'firm' | 'inhouse'
   membersState?: AsyncStatus
   membersError?: ApiError | null
   refetchMembers?: () => void
@@ -102,7 +116,7 @@ function Harness({
 
   const ctx = {
     members,
-    mode: 'firm',
+    mode: mode ?? 'firm',
     policies: [],
     policiesState: 'ready',
     policiesError: null,
@@ -511,5 +525,148 @@ describe('the roster table chrome', () => {
 
     const cell = rowFor('Ada Person').children[2] as HTMLElement
     expect(cell.style.color).toBe('var(--fg-3)')
+  })
+})
+
+describe('the toolbar and the invite control', () => {
+  it('Invite people is a disabled 36px primary that states its reason, right-aligned', () => {
+    render(<Harness initial={[member(), otherMember()]} />)
+
+    const invite = screen.getByTestId('members-invite') as HTMLButtonElement
+    const reason = screen.getByTestId('members-invite-reason')
+    expect(invite.disabled).toBe(true)
+    expect(invite.className).toContain('v2-btn-primary')
+    expect(invite.style.height).toBe('36px')
+    expect(invite.style.opacity).toBe('0.45')
+    expect(invite.style.cursor).toBe('not-allowed')
+    expect(invite.style.filter, 'the hover lift must stay neutralised').toBe('none')
+    expect(invite.getAttribute('aria-describedby')).toBe(reason.id)
+    expect(reason.textContent).toBe(MEMBER_UNBACKED.invite)
+    expect(reason.style.fontSize).toBe('11.5px')
+    expect(reason.style.color).toBe('var(--fg-3)')
+    expect(reason.style.textAlign).toBe('right')
+  })
+
+  it('the Access role filter is auto-width, as the prototype draws it', () => {
+    render(<Harness initial={[member(), otherMember()]} />)
+
+    const wrapper = screen.getByLabelText('Access role') as HTMLElement
+    expect(wrapper.tagName).toBe('LABEL')
+    expect(wrapper.style.width).toBe('')
+  })
+})
+
+describe('the roster table chrome, head to rows', () => {
+  it('the head has no fill and every row repeats the head tracks under a top border', () => {
+    render(<Harness initial={[member(), otherMember()]} />)
+
+    const table = screen.getByTestId('members-table')
+    const head = table.firstElementChild as HTMLElement
+    const rows = within(table).getAllByTestId('member-row')
+    expect(rows.length).toBeGreaterThan(1)
+    expect(head.style.background, 'the head must not carry a fill').toBe('')
+    expect(head.style.gridTemplateColumns).toBe('minmax(220px,1.4fr) 110px minmax(150px,1fr) 120px 36px')
+    expect(head.style.gap).toBe('12px')
+    expect(head.style.padding).toBe('11px 16px')
+    for (const row of rows) {
+      expect(row.style.gridTemplateColumns).toBe(head.style.gridTemplateColumns)
+      expect(row.style.gap).toBe('12px')
+      expect(row.style.padding).toBe('12px 16px')
+      expect(row.style.borderTop).toBe('1px solid var(--line-1)')
+    }
+  })
+
+  it('a role filter that matches nobody renders members-no-match under the head and keeps the matrix', () => {
+    render(<Harness initial={[member(), otherMember()]} />)
+    expect(within(screen.getByTestId('members-table')).getAllByTestId('member-row')).toHaveLength(2)
+
+    fireEvent.change(screen.getByLabelText('Access role').querySelector('select')!, { target: { value: 'reviewer' } })
+
+    const table = screen.getByTestId('members-table')
+    expect(within(table).queryAllByTestId('member-row')).toHaveLength(0)
+    expect((table.firstElementChild as HTMLElement).nextElementSibling).toBe(within(table).getByTestId('members-no-match'))
+    expect(screen.getByTestId('role-matrix-toggle'), 'a filter must not hide the capability matrix').toBeTruthy()
+  })
+
+  it('a search on a roster of one keeps the table and its no-match row, never the "just you" card', () => {
+    render(<Harness initial={[member()]} />)
+    expect(screen.getByText('Just you at the firm'), 'the roster-of-one floor').toBeTruthy()
+
+    fireEvent.change(screen.getByLabelText('Search members'), { target: { value: 'zzz-nobody' } })
+
+    expect(screen.queryByText('Just you at the firm')).toBeNull()
+    expect(within(screen.getByTestId('members-table')).getByTestId('members-no-match')).toBeTruthy()
+  })
+})
+
+describe('the capability matrix card', () => {
+  it('the toggle sits in the card; the body opens inside it as a table with named rows, columns and cells', () => {
+    render(<Harness initial={[member(), otherMember()]} />)
+
+    const toggle = screen.getByTestId('role-matrix-toggle')
+    const card = toggle.parentElement as HTMLElement
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByTestId('role-matrix')).toBeNull()
+    expect(card.style.background).toBe('var(--bg-2)')
+    expect(card.style.border).toBe('1px solid var(--line-1)')
+    expect(card.style.borderRadius).toBe('var(--radius-md)')
+    expect(toggle.style.width).toBe('100%')
+
+    fireEvent.click(toggle)
+
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    const body = screen.getByTestId('role-matrix')
+    expect(card.contains(body)).toBe(true)
+    expect(toggle.getAttribute('aria-controls')).toBe(body.id)
+
+    const table = within(body).getByRole('table', { name: 'What can each role do?' })
+    expect(within(table).getAllByRole('columnheader').map((c) => c.textContent)).toEqual(ACCESS_ROLES.map((r) => r.label))
+    const rows = within(table).getAllByRole('row')
+    expect(rows).toHaveLength(CAPABILITY_ROWS.length + 1)
+    rows.forEach((row) => expect(row.style.gridTemplateColumns).toBe('minmax(0,1fr) 90px 90px 90px'))
+    CAPABILITY_ROWS.forEach((cap, i) => {
+      const row = rows[i + 1]
+      expect(within(row).getByRole('rowheader').textContent).toBe(cap.label)
+      const cells = within(row).getAllByRole('cell')
+      expect(cells.map((c) => c.textContent)).toEqual(ACCESS_ROLES.map((r) => (cap[r.id] ? 'Yes' : 'No')))
+    })
+    expect(body.textContent).toContain(CAPABILITY_FOOTNOTE)
+
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByTestId('role-matrix')).toBeNull()
+  })
+
+  it('every "No" cell draws the prototype cross: 11px, 2.4 stroke', () => {
+    render(<Harness initial={[member(), otherMember()]} />)
+    fireEvent.click(screen.getByTestId('role-matrix-toggle'))
+
+    const nos = within(screen.getByTestId('role-matrix')).getAllByRole('cell').filter((c) => c.textContent === 'No')
+    expect(nos.length).toBeGreaterThan(0)
+    for (const cell of nos) {
+      const svg = cell.querySelector('svg')!
+      expect(svg.getAttribute('width')).toBe('11')
+      expect(svg.getAttribute('stroke-width')).toBe('2.4')
+    }
+  })
+})
+
+describe('the Client users placeholder', () => {
+  it('firm gets the dashed NOT BUILT card with the stored copy', () => {
+    render(<Harness initial={[member(), otherMember()]} />)
+
+    const card = screen.getByTestId('client-users-card')
+    expect(card.textContent).toContain(CLIENT_USERS_COPY)
+    expect(within(card).getByText('NOT BUILT')).toBeTruthy()
+    expect(card.style.border).toBe('1px dashed var(--line-2)')
+    expect(card.style.background).toBe('var(--bg-1)')
+    expect(card.style.padding).toBe('14px 16px')
+  })
+
+  it('in-house renders no node for it', () => {
+    render(<Harness mode="inhouse" initial={[member(), otherMember()]} />)
+
+    expect(screen.getByTestId('role-matrix-toggle'), 'the matrix is the population floor under the absence').toBeTruthy()
+    expect(screen.queryByTestId('client-users-card')).toBeNull()
   })
 })

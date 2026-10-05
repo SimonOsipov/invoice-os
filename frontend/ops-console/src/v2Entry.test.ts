@@ -211,7 +211,7 @@ describe('v2 entry', () => {
     expect(bad.map((v) => `${v.at}: ${v.quoted ? `'${v.value}'` : v.value}`), 'pill corners and unitless string corners').toEqual([])
   })
 
-  // Decorative stays (D-10): needle per file; a needle that matches no line is stale.
+  // Decorative stays: needle per file; a needle that matches no line is stale.
   const FG4_STAYS: [file: string, needle: string][] = [
     ['components/TopBar.tsx', "whiteSpace: 'nowrap' }}>Search invoice"],
     ['components/TopBar.tsx', "marginLeft: 'auto', fontSize: 10, color: 'var(--fg-4)'"],

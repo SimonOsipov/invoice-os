@@ -1,4 +1,4 @@
-// The deployed v2 Ops Console (RESKIN2-07): resolved values and layout relationships on the PR environment.
+// The deployed v2 Ops Console: resolved values and layout relationships on the PR environment.
 // The console is mock-backed: this spec pins fixture behaviour and the v2 look, not a contract.
 // Value reads copy a value from its source (token or prototype) and name it; screenshots are attached, never asserted.
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
@@ -261,7 +261,7 @@ async function readDrawer(page: Page, drawer: Locator): Promise<Record<string, u
   const s = await styles(scrim, ['background-color', 'backdrop-filter'])
   const c = parseColor(s['background-color'])
   SURFACE_RGB.forEach((v, i) => expect(Math.abs([c.r, c.g, c.b][i] - v), `drawer scrim channel ${i}`).toBeLessThanOrEqual(1))
-  expect(Math.abs(c.a - 0.32), 'drawer scrim alpha').toBeLessThanOrEqual(0.01) // P-26
+  expect(Math.abs(c.a - 0.32), 'drawer scrim alpha').toBeLessThanOrEqual(0.01)
   expect(s['backdrop-filter'], 'drawer scrim backdrop-filter').toBe('none')
   return { panel, scrim: s }
 }
@@ -314,7 +314,7 @@ test('OPS-01 shell at 1440: aside, header, env switch, banner', async ({ page },
   const src = await mark.evaluate((el) => (el as HTMLImageElement).currentSrc)
   expect(src, 'brand mark is the v2 mark').toMatch(/\/mark(-[\w-]+)?\.png/)
   expect(src, 'brand mark is not the v1 logo-mark').not.toContain('logo-mark')
-  await corners(mark, 'brand mark', '0px') // the raster carries its own corners (P-26)
+  await corners(mark, 'brand mark', '0px') // the raster carries its own corners
 
   await corners(navButton(page, /^Submissions/).locator('span.mono'), 'Submissions nav badge', R.sm)
   await corners(aside(page).getByText('AO', { exact: true }), 'avatar', R.circle)
@@ -330,7 +330,7 @@ test('OPS-01 shell at 1440: aside, header, env switch, banner', async ({ page },
   for (const [name, v] of Object.entries({ amberBorder, amberBg, amberText, greenText })) {
     expect(v, `control: resolved ${name} is not transparent`).not.toBe(C.transparent)
   }
-  measured.track = await check(track, 'env track', { 'background-color': C.sage, 'column-gap': '2px', 'border-top-color': amberBorder }) // gap: D-12
+  measured.track = await check(track, 'env track', { 'background-color': C.sage, 'column-gap': '2px', 'border-top-color': amberBorder })
   await corners(track, 'env track', R.btn)
 
   const sandbox = header(page).getByRole('button', { name: 'SANDBOX', exact: true })
@@ -338,8 +338,8 @@ test('OPS-01 shell at 1440: aside, header, env switch, banner', async ({ page },
   measured.sandbox = await check(sandbox, 'SANDBOX segment', {
     'background-color': C.primary,
     color: C.white,
-    height: '28px', // D-12 / D-35
-    'padding-left': '13px', // D-12 / D-35
+    height: '28px',
+    'padding-left': '13px',
   })
   await corners(sandbox, 'SANDBOX segment', R.sm)
   await check(sandbox.locator('> span').first(), 'SANDBOX dot', { 'background-color': C.accent })
@@ -449,7 +449,7 @@ async function titles(ctx: Ctx, names: string[], size: '16px' | '14px'): Promise
   for (const name of names) {
     const t = pad(ctx.page).getByText(name, { exact: true })
     await expect(t, `title ${name} never drew`).toHaveCount(1)
-    // 16px card titles: P-24, -0.02em; 14px panel titles: no tracking
+    // 16px card titles: -0.02em; 14px panel titles: no tracking
     await font(t, `title ${name}`, { family: 'Manrope', weight: '700', size, ...(size === '16px' ? { spacing: '-0.32px' } : {}) })
     await check(t, `title ${name}`, { color: ctx.ink })
   }
@@ -467,15 +467,15 @@ const SCREEN_TESTS: Record<string, (ctx: Ctx) => Promise<void>> = {
         'border-top-color': C.border,
         'box-shadow': 'none',
         'background-color': C.white,
-        'min-height': '124px', // D-12
+        'min-height': '124px',
       })
-      await font(card.locator('.money').first(), `KPI ${i} figure`, { family: 'Manrope', weight: '700', size: '24px' }) // P-25
+      await font(card.locator('.money').first(), `KPI ${i} figure`, { family: 'Manrope', weight: '700', size: '24px' })
       await check(card.locator('.money').first(), `KPI ${i} figure`, { 'font-variant-numeric': 'tabular-nums' })
       await check(card.locator('span.mono').first(), `KPI ${i} delta`, { 'font-weight': '600' })
     }
 
     const track = page.getByRole('button', { name: '30D', exact: true }).locator('xpath=..')
-    await check(track, 'range track', { 'background-color': C.sage, 'border-top-color': C.sageCardBorder, 'column-gap': '2px' }) // gap: D-12
+    await check(track, 'range track', { 'background-color': C.sage, 'border-top-color': C.sageCardBorder, 'column-gap': '2px' })
     await corners(track, 'range track', R.btn)
     const segs = track.locator('button')
     await expect(segs, 'the range track draws three buttons').toHaveCount(3)
@@ -488,12 +488,12 @@ const SCREEN_TESTS: Record<string, (ctx: Ctx) => Promise<void>> = {
     for (const [i, l] of (await every(axis, 'axis labels', 2)).entries()) await check(l, `axis label ${i}`, { color: fg3 })
     for (const t of ['30d ago', 'today']) await check(pad(page).getByText(t, { exact: true }), `latency label ${t}`, { color: fg3 })
 
-    for (const t of ['API requests over time', 'Submission outcomes']) await check(pad(page).getByText(t, { exact: true }), `title ${t}`, { 'margin-bottom': '4px' }) // P-28
+    for (const t of ['API requests over time', 'Submission outcomes']) await check(pad(page).getByText(t, { exact: true }), `title ${t}`, { 'margin-bottom': '4px' })
     await titles({ page, measured, fg3, ink }, ['API requests over time', 'Spend over time', 'Submission outcomes', 'Top rejection reasons', 'Clearance latency'], '16px')
     await corners(pad(page).getByText('ELEVATED', { exact: true }).locator('xpath=preceding-sibling::span[1]'), 'ELEVATED dot', R.circle)
     const barTrack = pad(page).getByText('Invalid buyer TIN', { exact: true }).locator('xpath=../following-sibling::div[1]')
-    await corners(barTrack, 'rejection bar track', '2px') // P-28
-    await corners(barTrack.locator('> div'), 'rejection bar fill', '0px') // P-28
+    await corners(barTrack, 'rejection bar track', '2px')
+    await corners(barTrack.locator('> div'), 'rejection bar fill', '0px')
 
     measured.widths = await atWidths(page, 'OPS-03 overview layout', async () => {
       const kpis = await boxList(page, cards, 'KPI card', 6)
@@ -531,7 +531,7 @@ const SCREEN_TESTS: Record<string, (ctx: Ctx) => Promise<void>> = {
     for (const [i, t] of (await every(tiles, 'sub-stat tiles', 1)).entries()) {
       await corners(t, `sub-stat ${i}`, R.md)
       await check(t, `sub-stat ${i}`, { 'box-shadow': 'none' })
-      await font(t.locator('.money'), `sub-stat ${i} figure`, { family: 'Manrope', weight: '700', size: '20px' }) // P-25
+      await font(t.locator('.money'), `sub-stat ${i} figure`, { family: 'Manrope', weight: '700', size: '20px' })
     }
     const chips = page.locator('button.ops-chip')
     for (const [i, c] of (await every(chips, 'filter chips', 2)).entries()) await corners(c, `chip ${i}`, R.sm)
@@ -608,10 +608,10 @@ const SCREEN_TESTS: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
 
   async billing({ page, measured, ink, fg3 }) {
-    await font(pad(page).locator('.money', { hasText: '48,214' }).first(), 'plan usage 48,214', { family: 'Manrope', weight: '700', size: '30px' }) // P-25
+    await font(pad(page).locator('.money', { hasText: '48,214' }).first(), 'plan usage 48,214', { family: 'Manrope', weight: '700', size: '30px' })
     const kpis = pad(page).locator('.ops-billing-kpis .money')
-    for (const [i, k] of (await every(kpis, 'billing KPI figures', 3)).entries()) await font(k, `billing KPI ${i}`, { family: 'Manrope', weight: '700', size: '18px' }) // P-25
-    await check(page.locator('.ops-billing-grid'), 'billing grid', { 'margin-bottom': '26px' }) // D-12 / D-35
+    for (const [i, k] of (await every(kpis, 'billing KPI figures', 3)).entries()) await font(k, `billing KPI ${i}`, { family: 'Manrope', weight: '700', size: '18px' })
+    await check(page.locator('.ops-billing-grid'), 'billing grid', { 'margin-bottom': '26px' })
     await corners(page.locator('.ops-invoice-table').nth(1).locator('> span').nth(3).locator('> span'), 'first status pill', R.sm)
     await titles({ page, measured, fg3, ink }, ['Itemized spend · July 2026', 'Invoices from ASComply'], '16px')
 
@@ -627,11 +627,11 @@ const SCREEN_TESTS: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
 
   async status({ page, measured, fg3, ink }) {
-    await font(pad(page).getByText('99.98%', { exact: true }), '99.98%', { family: 'Manrope', weight: '700', size: '22px' }) // P-25
+    await font(pad(page).getByText('99.98%', { exact: true }), '99.98%', { family: 'Manrope', weight: '700', size: '22px' })
     await check(pad(page).getByText('99.98%', { exact: true }), '99.98%', { 'font-variant-numeric': 'tabular-nums' })
     const overall = pad(page).locator('> div').nth(1)
     const card = pad(page).locator('> div').nth(2)
-    await check(card, 'components card', { 'margin-bottom': '26px' }) // D-12 / D-35
+    await check(card, 'components card', { 'margin-bottom': '26px' })
     const badge = card.locator('> div').first().locator('> div').first().locator('> span').last()
     await corners(badge, 'component badge', R.sm)
     await corners(badge.locator('> span').first(), 'component badge dot', R.circle)
@@ -656,7 +656,7 @@ for (const s of SCREENS) {
     await openScreen(page, s)
     const measured: Record<string, unknown> = {}
 
-    // h1: Manrope 28 / 700 / -0.04em (Q10); clearances: D-12 / D-35
+    // h1: Manrope 28 / 700 / -0.04em
     await font(h1Of(page, s), 'h1', { family: 'Manrope', weight: '700', size: '28px', spacing: '-1.12px' })
     await check(h1Of(page, s), 'h1', { color: C.ink })
     await check(pad(page), 'screen padding', { 'padding-top': '26px', 'padding-left': '28px', 'padding-right': '28px', 'padding-bottom': '56px' })
@@ -773,9 +773,9 @@ test('OPS-04 rotate modal: panel, scrim, heading', async ({ page }, testInfo) =>
   const s = await styles(scrim, ['background-color', 'backdrop-filter'])
   const c = parseColor(s['background-color'])
   SURFACE_RGB.forEach((v, i) => expect(Math.abs([c.r, c.g, c.b][i] - v), `modal scrim channel ${i}`).toBeLessThanOrEqual(1))
-  expect(Math.abs(c.a - 0.55), 'modal scrim alpha').toBeLessThanOrEqual(0.01) // P-26
-  expect(s['backdrop-filter'], 'modal scrim backdrop-filter').toBe('blur(6px)') // P-26
-  await font(h3, 'rotate heading', { family: 'Manrope', weight: '700', size: '18px' }) // P-26
+  expect(Math.abs(c.a - 0.55), 'modal scrim alpha').toBeLessThanOrEqual(0.01)
+  expect(s['backdrop-filter'], 'modal scrim backdrop-filter').toBe('blur(6px)')
+  await font(h3, 'rotate heading', { family: 'Manrope', weight: '700', size: '18px' })
 
   await attachJson(testInfo, 'ops-04-rotate-modal', { look, scrim: s })
   await attachShot(page, testInfo, 'rotate-modal')

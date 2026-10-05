@@ -372,6 +372,19 @@ describe('AC-3: a pushed URL never carries a query string', () => {
   })
 })
 
+describe('AUTH-15-11: the workspace carries no identity-switch props', () => {
+  // `in`, not `!== undefined`: a present-but-undefined key is still a prop the shell receives.
+  it('Workspace gets no switch props', async () => {
+    await bootAt('/')
+    const ctx = requireCtx()
+
+    expect(Object.keys(ctx), 'sanity: the captured ctx is the real workspace ctx').toEqual(expect.arrayContaining(['nav', 'signOut']))
+    expect('becomePersona' in ctx).toBe(false)
+    expect('returnToSeat' in ctx).toBe(false)
+    expect('seatSubject' in ctx).toBe(false)
+  })
+})
+
 describe('AC-5: a DEMO-06 persona switch corrects the URL and adds no entry', () => {
   it('personaSwitch_replacesTheUrlWithTheCarriedViewAndAddsNoEntry', async () => {
     await bootAt('/extraction', { demoMode: true })

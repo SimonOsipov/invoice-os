@@ -3963,6 +3963,32 @@ describe('InvoiceDetail demo-only blocked-by-role note (task-594, DEMO-06-06)', 
   })
 })
 
+describe('InvoiceDetail has no blocked-by-role note (AUTH-15-11)', () => {
+  // Red only where the note renders today (the build with the flag on), so this stubs
+  // the flag; drop the stub and the module reset with it.
+  it('no blocked-by-role note', async () => {
+    const ID = 'inv-no-blocked-note-1'
+    const PREPARER: Member = {
+      id: 'm-prep-001',
+      name: 'Folake Adesina',
+      initials: 'FA',
+      email: 'folake@example.ng',
+      role: 'preparer',
+      status: 'active',
+      isYou: true,
+    }
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_approve: false }))
+    vi.stubEnv('VITE_DEMO_MODE', 'true')
+    vi.resetModules()
+    const { InvoiceDetail: FlagInvoiceDetail } = await import('./InvoiceDetail')
+    render(<FlagInvoiceDetail ctx={{ ...detailCtx(ID), members: [PREPARER] } as unknown as PlatformCtx} />)
+
+    const approve = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
+    expect(approve.disabled, 'the viewer cannot approve').toBe(true)
+    expect(screen.queryByTestId('persona-blocked-note')).toBeNull()
+  })
+})
+
 // AUDIT-02-04 Stage-4. The no-source canvas is actorLabel's sixth reader and the only one
 // that puts the actor mid-prose ("... was typed into ASComply by X on ..."), so it must
 // name a PERSON or say nobody. It reads the genesis history row, which every seeded

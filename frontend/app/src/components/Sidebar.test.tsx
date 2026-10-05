@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
@@ -316,6 +316,83 @@ describe('Sidebar footer, flag-off card reads ctx.user (AUTH-09-02)', () => {
     cleanup()
     await renderSidebar(ROLLUP, sidebarCtx({ user: { name: '', initials: '', verified: false, tenantName: 'Acme' } }))
     expect(footer().querySelectorAll(BADGE)).toHaveLength(0)
+  })
+})
+
+describe('Sidebar identity card (AUTH-15-11)', () => {
+  const BADGE = '[title="Tenant verified via /v1/me"]'
+  const ROLLUP = rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 })
+
+  it('the identity card renders the session\'s person', async () => {
+    await renderSidebar(
+      ROLLUP,
+      sidebarCtx({ user: { name: 'Ada Nwosu', initials: 'AN', verified: true, tenantName: 'Acme Holdings' } }),
+    )
+
+    const card = screen.getByTestId('identity-card')
+    expect(within(card).getByTestId('persona-name').textContent).toBe('Ada Nwosu')
+    expect(within(card).getByTestId('persona-initials').textContent).toBe('AN')
+    expect(card.querySelectorAll(BADGE)).toHaveLength(1)
+    expect(card.textContent).toContain('ACME HOLDINGS')
+  })
+
+  // The unverified label is mode-derived: in-house `<SHORT> · FINANCE`, firm `OKAFOR & PARTNERS`.
+  it('the unverified card falls back to the org label', async () => {
+    const unverified = { name: 'Ada Nwosu', initials: 'AN', verified: false, tenantName: 'Acme Holdings' }
+    await renderSidebar(ROLLUP, sidebarCtx({ user: unverified }))
+    let card = screen.getByTestId('identity-card')
+    expect(card.querySelectorAll(BADGE)).toHaveLength(0)
+    expect(card.textContent).toContain('ACME · FINANCE')
+    expect(card.textContent).not.toContain('ACME HOLDINGS')
+
+    cleanup()
+    mockRollupFetch(ROLLUP)
+    render(<Sidebar ctx={firmCtx({ user: unverified })} />)
+    await within(navButton('Invoices')).findByText('1')
+    card = screen.getByTestId('identity-card')
+    expect(card.querySelectorAll(BADGE)).toHaveLength(0)
+    expect(card.textContent).toContain('OKAFOR & PARTNERS')
+  })
+
+  it('the card holds the Sign out control', async () => {
+    const ctx = sidebarCtx()
+    await renderSidebar(ROLLUP, ctx)
+
+    const signOut = within(screen.getByTestId('identity-card')).getByRole('button', { name: 'Sign out' })
+    fireEvent.click(signOut)
+    expect(ctx.signOut).toHaveBeenCalledTimes(1)
+  })
+
+  // Red only in the build that renders a trigger today, so this one stubs the demo flag;
+  // drop the stub and the module reset with the flag.
+  it('the card switches nobody', async () => {
+    vi.stubEnv('VITE_DEMO_MODE', 'true')
+    vi.resetModules()
+    const { Sidebar: FlagSidebar } = await import('./Sidebar')
+    mockRollupFetch(ROLLUP)
+    const ctx = sidebarCtx({
+      members: [
+        { id: 'm-seat', name: 'Ada Nwosu', initials: 'AN', email: null, role: 'admin', status: 'active', isYou: true },
+        { id: 'm-other', name: 'Tunde Bello', initials: 'TB', email: null, role: 'preparer', status: 'active', isYou: false },
+      ],
+      seatSubject: 'm-seat',
+    })
+    const { container } = render(<FlagSidebar ctx={ctx} />)
+    await within(navButton('Invoices')).findByText('1')
+
+    const noSwitcher = () => {
+      expect(screen.queryByTestId('persona-trigger')).toBeNull()
+      expect(screen.queryByTestId('persona-popover')).toBeNull()
+      expect(screen.queryAllByTestId(/^persona-row/)).toHaveLength(0)
+      expect(screen.queryByTestId('persona-toast')).toBeNull()
+    }
+    noSwitcher()
+
+    const card = screen.getByTestId('identity-card')
+    const before = container.innerHTML
+    fireEvent.click(card)
+    noSwitcher()
+    expect(container.innerHTML, 'clicking the card must change nothing').toBe(before)
   })
 })
 

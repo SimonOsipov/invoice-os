@@ -54,9 +54,9 @@ const NOTIFY_NOT_DELIVERED = 'The target and channel are saved with the policy, 
 // and a second copy of the sentence would put two matches under one `getAllByText`.
 const DELEGATION_BLOCKED_ID = 'delegation-blocked-reason-text'
 
-/** The read-only hint under a select — the typography MemberParts' Reviewer hint already uses. */
+/** The read-only hint under a select (prototype: 11px / 1.5). */
 function hintStyle(amber = false) {
-  return { marginTop: 6, fontSize: 11.5, lineHeight: 1.45, color: amber ? 'var(--status-amber-text)' : 'var(--fg-3)' } as const
+  return { marginTop: 6, fontSize: 11, lineHeight: 1.5, color: amber ? 'var(--status-amber-text)' : 'var(--fg-3)' } as const
 }
 
 export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates, notifyOptions, roleOptions, onManageRoles }: {
@@ -118,7 +118,7 @@ export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates,
         {node.type === 'approval' && res && (
           <>
             <WfSelect label="Who must approve" value={node.role} options={roleOptions} onChange={(v) => patch({ role: v as RoleKey })} />
-            <div style={{ ...hintStyle(res.warn), display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 14 }}>
+            <div style={{ ...hintStyle(res.warn), fontSize: 11.5, lineHeight: 1.45, display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 14 }}>
               <span>{res.text}</span>
               <button
                 type="button"

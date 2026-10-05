@@ -229,8 +229,26 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
                 )}
               </div>
               <div style={{ padding: '18px 20px' }}>
-                {rollState === 'loading' && <Loading label="Loading validation summary…" />}
-                {rollState === 'error' && roll.error && <ErrorState error={roll.error} onRetry={roll.run} />}
+                {rollState === 'loading' && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--fg-3)', fontSize: 13 }}>
+                    <span style={{ width: 16, height: 16, borderRadius: '50%', border: '2px solid var(--line-2)', borderTopColor: 'var(--action)', animation: 'spin 700ms linear infinite' }} />
+                    Loading validation summary…
+                  </div>
+                )}
+                {rollState === 'error' && roll.error && (
+                  <>
+                    <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>Something went wrong</div>
+                    <p style={{ fontSize: 13, color: 'var(--fg-2)', margin: '0 0 8px' }}>{roll.error.message}</p>
+                    {roll.error.status ? (
+                      <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginBottom: 14 }}>
+                        HTTP {roll.error.status}
+                      </div>
+                    ) : null}
+                    <button onClick={roll.run} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 34 }}>
+                      Retry
+                    </button>
+                  </>
+                )}
                 {rollState === 'ready' && (
                   <>
                     <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
@@ -260,7 +278,7 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                           {reportFailures.map((f) => (
                             <div key={f.ruleKey} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                              <span style={{ color: 'var(--status-red-text)', flex: 'none' }}>{crossGlyph}</span>
+                              <span style={{ color: 'var(--status-red-text)', flex: 'none', display: 'inline-flex' }}>{crossGlyph}</span>
                               <span style={{ flex: 1, fontSize: 12.5, color: 'var(--fg-2)' }}>{f.label}</span>
                               <span className="money mono" style={{ fontSize: 12, fontWeight: 600, color: 'var(--status-red-text)' }}>{f.count}</span>
                             </div>

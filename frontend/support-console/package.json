@@ -12,6 +12,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@invoice-os/api-client": "workspace:*",
+    "@invoice-os/console-session": "workspace:*",
     "@invoice-os/design-tokens": "workspace:*",
     "@invoice-os/monitoring": "workspace:*",
     "react": "^19.2.7",

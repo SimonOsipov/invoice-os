@@ -33,8 +33,10 @@ type App struct {
 	Logger *slog.Logger
 	Mux    *http.ServeMux
 
-	readiness readiness
-	bgWorkers []BackgroundWorker
+	gatewayToken string
+	openPatterns []string
+	readiness    readiness
+	bgWorkers    []BackgroundWorker
 }
 
 // New builds an App for the named service: it loads config from the
@@ -73,11 +75,12 @@ func (a *App) Ready(name string, check ReadyCheck) {
 // request-id, tenant-id and identity run before tracing and recovery so a recovered
 // panic is logged and reported with the request and tenant ids, and so tenant-scoped
 // handlers see the verified caller the gateway injected. Tracing runs before recovery
-// so a recovered 500 reaches the transaction status. serverError is innermost so it
+// so a recovered 500 reaches the transaction status. The gateway guard (RequireGateway) runs right after request-id. serverError is innermost so it
 // reads the mux's matched pattern.
 func (a *App) Handler() http.Handler {
 	return chain(a.Mux,
 		requestIDMiddleware,
+		a.gatewayGuard,
 		tenantIDMiddleware,
 		identityMiddleware,
 		tracingMiddleware(a.Mux),

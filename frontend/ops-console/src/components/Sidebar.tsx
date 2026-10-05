@@ -1,8 +1,7 @@
 import { useState, type CSSProperties } from 'react'
 import { BrandMark, Icon } from '../icons'
 import { CHEV_DOWN_ICON, DEV_ORGS, NAV_ITEMS, TICK_ICON } from '../data'
-import { landingBase } from '../auth'
-import { clearOpsSession } from '../session'
+import { signOut } from '../auth'
 import type { Screen } from '../types'
 
 type Props = {
@@ -183,15 +182,9 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
             OPS · ADMIN
           </div>
         </div>
-        {/* Clear the session before navigating, or the next visitor walks straight back in.
-            landingBase() is null in the standalone build; never navigate to "null". */}
+        {/* Sign out: clears the session, then leaves (signOutConsole). */}
         <button
-          onClick={() => {
-            clearOpsSession()
-            const dest = landingBase()
-            if (dest) window.location.href = dest
-            else window.location.reload()
-          }}
+          onClick={signOut}
           className="ops-btn ops-hide-narrow"
           aria-label="Sign out"
           title="Sign out"

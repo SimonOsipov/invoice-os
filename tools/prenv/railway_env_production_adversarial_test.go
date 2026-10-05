@@ -165,6 +165,22 @@ func TestRailwayEnvUsageListsSayProductionIsWrittenByHand(t *testing.T) {
 	if !regexp.MustCompile("`?set-production-environment`? is run " + regexp.QuoteMeta(productionUsageNote)).MatchString(flow) {
 		t.Errorf("the header never says set-production-environment is run %s", productionUsageNote)
 	}
+
+	// Both gateway-token commands are named at all three usage sites.
+	if want := productionGatewayTokenNeedle + " <environment-id> (" + productionUsageNote + ")"; !strings.Contains(generic, want) {
+		t.Errorf("the dispatcher's usage does not carry %q; output = %q", want, generic)
+	}
+	if !strings.Contains(generic, "set-fork-gateway-token <environment-id>") {
+		t.Errorf("the dispatcher's usage does not name set-fork-gateway-token <environment-id>; output = %q", generic)
+	}
+	for _, sub := range []string{"set-fork-gateway-token", productionGatewayTokenNeedle} {
+		if !regexp.MustCompile(regexp.QuoteMeta(sub) + ` <environment-id>[|>]`).MatchString(list) {
+			t.Errorf("the header usage list does not name %s <environment-id>:\n%s", sub, list)
+		}
+	}
+	if !regexp.MustCompile("`?" + productionGatewayTokenNeedle + "`? is run " + regexp.QuoteMeta(productionUsageNote)).MatchString(flow) {
+		t.Errorf("the header never says %s is run %s", productionGatewayTokenNeedle, productionUsageNote)
+	}
 }
 
 var (
@@ -174,7 +190,7 @@ var (
 )
 
 // railwayEnvSubcommandFaults reports each railway-env.sh call in comment-stripped
-// workflow text whose subcommand is not a literal, or is set-production-environment.
+// workflow text whose subcommand is not a literal, or is set-production-environment or set-production-gateway-token.
 func railwayEnvSubcommandFaults(workflow string) (calls int, faults []string) {
 	code := runKey.ReplaceAllString(shellCode(strings.Split(workflow, "\n")), "$1")
 	for _, inv := range invocations(code, "railway-env.sh") {
@@ -186,6 +202,8 @@ func railwayEnvSubcommandFaults(workflow string) (calls int, faults []string) {
 				faults = append(faults, "a subcommand that is not a literal: "+inv)
 			case sub == productionNeedle:
 				faults = append(faults, "runs "+productionNeedle+": "+inv)
+			case sub == productionGatewayTokenNeedle:
+				faults = append(faults, "runs "+productionGatewayTokenNeedle+": "+inv)
 			}
 		}
 	}
@@ -201,6 +219,7 @@ func TestNoWorkflowPicksTheRailwayEnvSubcommandAtRunTime(t *testing.T) {
 			`bash scripts/ci/railway-env.sh "$SUBCOMMAND" "$ENV_ID"`,
 			`bash scripts/ci/railway-env.sh set-production-environment "$ENV_ID"`,
 			`bash scripts/ci/railway-env.sh "set-production-$WHICH" "$ENV_ID"`,
+			`bash scripts/ci/railway-env.sh ` + productionGatewayTokenNeedle + ` "$ENV_ID"`,
 			`bash scripts/ci/railway-env.sh ${{ inputs.subcommand }} "$ENV_ID"`,
 			`bash scripts/ci/railway-env.sh`,
 		} {
@@ -307,16 +326,18 @@ func TestSetProductionAuthIsByHandOnly(t *testing.T) {
 	if control, read := workflowsNaming(t, dir, "set-fork-environment"); read < 3 || !slices.Contains(control, "dev-env.yml") {
 		t.Fatalf("control: read %d workflow file(s) and found set-fork-environment in %v; the scan is broken", read, control)
 	}
-	if hits, _ := workflowsNaming(t, dir, needle); len(hits) != 0 {
-		t.Errorf("%v run or name %s; production's auth configuration is written by hand", hits, needle)
-	}
-	hits, _ := executableNaming(t, root, needle)
-	if !slices.Contains(hits, "scripts/ci/railway-env.sh") {
-		t.Errorf("scripts/ci/railway-env.sh does not name %s in code; the command is not defined", needle)
-	}
-	for _, h := range hits {
-		if h != "scripts/ci/railway-env.sh" {
-			t.Errorf("%s names %s outside a comment; nothing CI executes may run it", h, needle)
+	for _, needle := range []string{needle, productionGatewayTokenNeedle} {
+		if hits, _ := workflowsNaming(t, dir, needle); len(hits) != 0 {
+			t.Errorf("%v run or name %s; production is written by hand", hits, needle)
+		}
+		hits, _ := executableNaming(t, root, needle)
+		if !slices.Contains(hits, "scripts/ci/railway-env.sh") {
+			t.Errorf("scripts/ci/railway-env.sh does not name %s in code; the command is not defined", needle)
+		}
+		for _, h := range hits {
+			if h != "scripts/ci/railway-env.sh" {
+				t.Errorf("%s names %s outside a comment; nothing CI executes may run it", h, needle)
+			}
 		}
 	}
 }

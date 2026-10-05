@@ -333,40 +333,30 @@ func TestDSNCheckFlagsMissingRequiredVariable(t *testing.T) {
 	assertNoSentinel(t, stdout, stderr)
 }
 
-// T1-6 / T1-7, as one table because they are two halves of ONE property:
-// notifications.DATABASE_URL is `if-present-must-be-valid`, not `required`.
-//
-// WHY. cmd/notifications/main.go opens no pool -- verified: the file contains
-// no db/pgxpool/sql reference at all. Marking it `required` would fail the
-// gate on a fleet that is completely healthy; marking it `never-check` would
-// let a broken DSN through the day someone adds a pool. Only the middle
-// severity is correct, and it takes BOTH directions to pin it: a test that
-// only asserts one half is satisfied by the wrong severity.
-//
-// KILLS: M-sev in both directions -- flipping to `required` breaks the absent
-// case, flipping to `never-check` breaks the present-but-broken case.
-func TestDSNCheckNotificationsIsIfPresentMustBeValid(t *testing.T) {
-	t.Run("absent is clean (T1-6)", func(t *testing.T) {
+// notifications.DATABASE_URL is required and must be valid: cmd/notifications/main.go exits at boot
+// without it, and the DSN check names the defect sooner than the fleet gate.
+func TestDSNCheckNotificationsDatabaseURLIsRequired(t *testing.T) {
+	t.Run("absent is an offender", func(t *testing.T) {
 		m := healthyMap()
 		delete(m["notifications"], "DATABASE_URL")
 
 		stdout, stderr, code := runDSNCheck(t, m)
-		if code != 0 {
-			t.Errorf("exit code = %d, want 0: cmd/notifications/main.go opens no pool, so an absent DATABASE_URL is not a defect; stdout = %q", code, stdout)
+		if code == 0 {
+			t.Errorf("exit code = 0, want non-zero: notifications exits at boot without DATABASE_URL; stdout = %q", stdout)
 		}
-		if strings.Contains(stdout, "notifications") {
-			t.Errorf("stdout flags notifications for an absent optional var; stdout = %q", stdout)
+		if !strings.Contains(stdout, "notifications") || !strings.Contains(stdout, "DATABASE_URL") {
+			t.Errorf("stdout does not name notifications DATABASE_URL; stdout = %q", stdout)
 		}
 		assertNoSentinel(t, stdout, stderr)
 	})
 
-	t.Run("present but broken is an offender (T1-7)", func(t *testing.T) {
+	t.Run("present but broken is an offender", func(t *testing.T) {
 		m := healthyMap()
 		m["notifications"]["DATABASE_URL"] = "postgresql://invoice_app:@" + railwayHost
 
 		stdout, stderr, code := runDSNCheck(t, m)
 		if code == 0 {
-			t.Errorf("exit code = 0, want non-zero: notifications.DATABASE_URL is present with an empty password -- optional means 'skip if absent', never 'never validate'")
+			t.Errorf("exit code = 0, want non-zero: notifications.DATABASE_URL is present with an empty password")
 		}
 		if !strings.Contains(stdout, "notifications") {
 			t.Errorf("stdout does not name %q; stdout = %q", "notifications", stdout)
@@ -473,7 +463,7 @@ func TestDSNCheckNeverEchoesACredential(t *testing.T) {
 		{"empty password", func(m dsnMap) { m["gateway"]["DATABASE_MIGRATION_URL"] = incidentDSN }},
 		{"unrendered reference", func(m dsnMap) { m["gateway"]["DATABASE_MIGRATION_URL"] = danglingDSN }},
 		{"missing required var", func(m dsnMap) { delete(m["invoice"], "DATABASE_URL") }},
-		{"broken optional var", func(m dsnMap) {
+		{"broken notifications var", func(m dsnMap) {
 			m["notifications"]["DATABASE_URL"] = "postgresql://invoice_app:@" + railwayHost
 		}},
 		{"three offenders", func(m dsnMap) {

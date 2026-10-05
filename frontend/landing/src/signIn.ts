@@ -1,17 +1,19 @@
 // Landing sign-in client.
 import { ApiError, apiFetch, gatewayBase } from '@invoice-os/api-client/client'
 
-import { appBase } from './auth'
+import { appBase, consoleBase } from './auth'
 
 const STATE_RE = /^[A-Za-z0-9_-]{43}$/
 
 const INCORRECT = 'Email or password is incorrect.'
 const UNVERIFIED = 'Verify your email address first. The link is in your inbox.'
 const THROTTLED = 'Too many attempts. Try again in a minute.'
-const UNAVAILABLE = 'Sign-in is unavailable right now. Try again shortly.'
+export const SIGN_IN_UNAVAILABLE = 'Sign-in is unavailable right now. Try again shortly.'
 
-export function handoffUrl(code: string): string | null {
-  const base = appBase()
+export type ConsoleTarget = 'ops' | 'support'
+
+export function handoffUrl(code: string, target?: ConsoleTarget): string | null {
+  const base = target ? consoleBase(target) : appBase()
   return base ? `${base}?handoff=${encodeURIComponent(code)}` : null
 }
 
@@ -19,7 +21,7 @@ export function signInConfigured(): boolean {
   return gatewayBase() !== null && appBase() !== null
 }
 
-// An unset gateway and a 200 without a code both throw 'malformed', which maps to UNAVAILABLE.
+// An unset gateway and a 200 without a code both throw 'malformed', which maps to SIGN_IN_UNAVAILABLE.
 export async function signInWithPassword(email: string, password: string, state: string): Promise<string> {
   const base = gatewayBase()
   if (!base) throw new ApiError('malformed', 'gateway not configured')
@@ -38,7 +40,7 @@ export function signInErrorMessage(err: unknown): string {
     if (err.status === 403) return UNVERIFIED
     if (err.status === 429) return THROTTLED
   }
-  return UNAVAILABLE
+  return SIGN_IN_UNAVAILABLE
 }
 
 export function readSignInState(search: string): string | null {
@@ -46,7 +48,12 @@ export function readSignInState(search: string): string | null {
   return all.length === 1 && STATE_RE.test(all[0]) ? all[0] : null
 }
 
-export function startUrl(): string | null {
-  const base = appBase()
+export function readSignInConsole(search: string): ConsoleTarget | null {
+  const all = new URLSearchParams(search).getAll('console')
+  return all.length === 1 && (all[0] === 'ops' || all[0] === 'support') ? all[0] : null
+}
+
+export function startUrl(target?: ConsoleTarget): string | null {
+  const base = target ? consoleBase(target) : appBase()
   return base ? `${base}?auth=start` : null
 }

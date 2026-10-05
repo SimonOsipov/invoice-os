@@ -28,7 +28,7 @@ import { freshTin, canonicalTin } from './fixtures'
 // Serial: every stage after Create depends on the entity id captured there, and each
 // stage mutates the SAME row in sequence (playwright.api.config.ts already runs the
 // whole suite workers:1/fullyParallel:false — this is belt-and-braces for this file's
-// internal ordering, matching validation.spec.ts's convention).
+// internal ordering).
 test.describe.configure({ mode: 'serial' })
 
 test.describe('portfolio CRUD lifecycle (API E2E, over the deployed gateway)', () => {

@@ -419,7 +419,7 @@ func gatewayMux(t *testing.T) (get func(path string) int, fleetNames func() map[
 		t.Fatalf("loadUpstreams: %v", err)
 	}
 
-	apiHandler, fleetHandler := gatewayHandlers(verifier, nilURLSessions(), routed, probed, nil, slog.Default())
+	apiHandler, fleetHandler := gatewayHandlers(verifier, nilURLSessions(), routed, probed, nil, slog.Default(), "gw-test-token")
 	mux := http.NewServeMux()
 	mux.Handle("/api/", apiHandler)
 	mux.HandleFunc("GET /healthz/fleet", fleetHandler)
@@ -715,7 +715,7 @@ func TestLoadUpstreamsRequiresReconciliationURL(t *testing.T) {
 		if err != nil {
 			t.Fatalf("loadUpstreams: %v", err)
 		}
-		_, fleet := gatewayHandlers(nil, nilURLSessions(), routed, probed, nil, slog.Default())
+		_, fleet := gatewayHandlers(nil, nilURLSessions(), routed, probed, nil, slog.Default(), "gw-test-token")
 		rollup := func() (int, string, map[string]string) {
 			rec := httptest.NewRecorder()
 			fleet(rec, httptest.NewRequest(http.MethodGet, "/healthz/fleet", nil))
@@ -970,6 +970,75 @@ func TestGatewayMainParsesIssuersBeforeProvision(t *testing.T) {
 	}
 }
 
+// A gateway that boots without its token signs nothing; the read must stop boot before Provision.
+func TestGatewayMainReadsGatewayTokenBeforeProvision(t *testing.T) {
+	f, body := parseMain(t)
+
+	readAt, provisionAt, reads := -1, -1, 0
+	tokenVar := ""
+	for i, st := range body.List {
+		ast.Inspect(st, func(n ast.Node) bool {
+			e, ok := n.(ast.Expr)
+			if !ok {
+				return true
+			}
+			if c, ok := isCallTo(e, "", "mustEnv"); ok && len(c.Args) == 1 && isStringLit(c.Args[0], "GATEWAY_TOKEN") {
+				reads++
+				if readAt < 0 {
+					readAt = i
+				}
+			}
+			if _, ok := isCallTo(e, "db", "Provision"); ok && provisionAt < 0 {
+				provisionAt = i
+			}
+			return true
+		})
+		if as, ok := st.(*ast.AssignStmt); ok && len(as.Lhs) == 1 && len(as.Rhs) == 1 {
+			if c, ok := isCallTo(as.Rhs[0], "", "mustEnv"); ok && len(c.Args) == 1 && isStringLit(c.Args[0], "GATEWAY_TOKEN") {
+				if id, ok := as.Lhs[0].(*ast.Ident); ok {
+					tokenVar = id.Name
+				}
+			}
+		}
+	}
+	if reads != 1 {
+		t.Fatalf("main reads mustEnv(\"GATEWAY_TOKEN\") %d time(s), want once", reads)
+	}
+	if provisionAt < 0 {
+		t.Fatal("main has no db.Provision call -- the ordering check has no anchor")
+	}
+	if readAt >= provisionAt {
+		t.Errorf("GATEWAY_TOKEN is read at statement %d, want it before db.Provision (%d)", readAt, provisionAt)
+	}
+	if tokenVar == "" {
+		t.Fatal("main does not assign mustEnv(\"GATEWAY_TOKEN\") to a variable")
+	}
+
+	var last ast.Expr
+	ast.Inspect(body, func(n ast.Node) bool {
+		if e, ok := n.(ast.Expr); ok {
+			if c, ok := isCallTo(e, "", "gatewayHandlers"); ok && len(c.Args) > 0 {
+				last = c.Args[len(c.Args)-1]
+			}
+		}
+		return true
+	})
+	if id, ok := last.(*ast.Ident); !ok || id.Name != tokenVar {
+		t.Errorf("gatewayHandlers' last argument is %v, want the GATEWAY_TOKEN variable %q", last, tokenVar)
+	}
+
+	guards := 0
+	ast.Inspect(f, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "RequireGateway" {
+			guards++
+		}
+		return true
+	})
+	if guards != 0 {
+		t.Errorf("main.go calls RequireGateway %d time(s), want none: the gateway signs, it does not guard", guards)
+	}
+}
+
 // TestGatewayMainProbesAuthAtItsJWKSPath: FleetHealthHandler's per-service path is
 // inert unless main passes it. The fleet tests cannot see this call.
 func TestGatewayMainProbesAuthAtItsJWKSPath(t *testing.T) {
@@ -981,7 +1050,7 @@ func TestGatewayMainProbesAuthAtItsJWKSPath(t *testing.T) {
 		if e, ok := n.(ast.Expr); ok {
 			if c, ok := isCallTo(e, "", "gatewayHandlers"); ok {
 				calls++
-				if len(c.Args) == 6 {
+				if len(c.Args) == 7 {
 					arg = c.Args[4]
 				}
 			}
@@ -1068,9 +1137,14 @@ func serveRegistration(h http.Handler, method, target, body string) *httptest.Re
 func TestRegistrationHandlers_WiresBothRoutes(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(authURL, site, slog.New(slog.DiscardHandler))
+	const floor = 100 * time.Millisecond
+	reg := registrationHandlers(authURL, site, floor, slog.New(slog.DiscardHandler), nil)
 
+	start := time.Now()
 	rec := serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`)
+	if elapsed := time.Since(start); elapsed < floor {
+		t.Errorf("Register answered after %v, want no earlier than the %v minimum", elapsed, floor)
+	}
 	if rec.Code != http.StatusAccepted {
 		t.Errorf("Register = %d, want 202: %s", rec.Code, rec.Body.String())
 	}
@@ -1086,7 +1160,7 @@ func TestRegistrationHandlers_WiresBothRoutes(t *testing.T) {
 // AUTH_SITE_URL unset: both routes refuse without calling GoTrue.
 func TestRegistrationHandlers_NotConfigured503(t *testing.T) {
 	authURL, calls := fakeAuth(t)
-	reg := registrationHandlers(authURL, nil, slog.New(slog.DiscardHandler))
+	reg := registrationHandlers(authURL, nil, 0, slog.New(slog.DiscardHandler), nil)
 
 	for name, rec := range map[string]*httptest.ResponseRecorder{
 		"Register": serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`),
@@ -1136,7 +1210,7 @@ func TestApiMountPreflightGrantsTraceHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadUpstreams: %v", err)
 	}
-	apiHandler, _ := gatewayHandlers(verifier, nilURLSessions(), routed, probed, nil, slog.Default())
+	apiHandler, _ := gatewayHandlers(verifier, nilURLSessions(), routed, probed, nil, slog.Default(), "gw-test-token")
 	mux := http.NewServeMux()
 	mux.Handle("/api/", gateway.CORS([]string{origin})(apiHandler))
 

@@ -9,11 +9,12 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"slices"
+	"path"
 	"strings"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform"
@@ -46,6 +47,8 @@ type Options struct {
 	Sessions  *SessionChecker     // refuses revoked sessions; required
 	Upstreams map[string]*url.URL // service name -> base URL; required
 	Logger    *slog.Logger        // defaults to slog.Default()
+
+	GatewayToken string // sent to every upstream as X-Gateway-Token; required
 }
 
 // Handler returns the handler to mount at "/api/". Request flow: verify (401) ->
@@ -57,13 +60,16 @@ func Handler(opts Options) http.Handler {
 	if opts.Sessions == nil {
 		panic("gateway: Options.Sessions is required")
 	}
+	if opts.GatewayToken == "" {
+		panic("gateway: Options.GatewayToken is required")
+	}
 	log := opts.Logger
 	if log == nil {
 		log = slog.Default()
 	}
 	proxies := make(map[string]http.Handler, len(opts.Upstreams))
 	for svc, target := range opts.Upstreams {
-		proxies[svc] = http.StripPrefix(routePrefix+svc, newReverseProxy(svc, target, log))
+		proxies[svc] = http.StripPrefix(routePrefix+svc, newReverseProxy(svc, target, opts.GatewayToken, log))
 	}
 	return opts.Verifier.Middleware(opts.Sessions.Middleware(&router{proxies: proxies, log: log}))
 }
@@ -77,9 +83,11 @@ type router struct {
 }
 
 func (rt *router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	service, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, routePrefix), "/")
+	service, rest, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, routePrefix), "/")
 	proxy, ok := rt.proxies[service]
-	if !ok {
+	// Refuse "internal" as the raw or the cleaned first segment: CONNECT is not cleaned by the mux, and the proxy forwards the raw path.
+	raw, _, _ := strings.Cut(rest, "/")
+	if cleaned, _, _ := strings.Cut(strings.TrimPrefix(path.Clean("/"+rest), "/"), "/"); !ok || raw == "internal" || cleaned == "internal" {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -112,10 +120,12 @@ func isProvisioning(r *http.Request) bool {
 	return r.Method == http.MethodPost && r.URL.EscapedPath() == tenantlessPath
 }
 
+var errGuardRefused = errors.New("upstream refused the gateway token")
+
 // newReverseProxy builds the per-service reverse proxy. The path prefix is
 // stripped by the caller (http.StripPrefix); here we point the request at the
 // upstream and overwrite the identity headers from the verified token.
-func newReverseProxy(service string, target *url.URL, log *slog.Logger) *httputil.ReverseProxy {
+func newReverseProxy(service string, target *url.URL, gatewayToken string, log *slog.Logger) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
 		Transport: platform.TraceTransport(nil),
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -124,17 +134,27 @@ func newReverseProxy(service string, target *url.URL, log *slog.Logger) *httputi
 			if pr.Out.URL.Path == "" {
 				pr.Out.URL.Path = "/"
 			}
-			injectIdentity(pr)
+			injectIdentity(pr, gatewayToken)
 			// The outbound round tripper sets its own sentry-trace; inbound ones are not trusted.
 			pr.Out.Header.Del("sentry-trace")
 			pr.Out.Header.Del("baggage")
 		},
-		// Every upstream is a platform service that reports its own 5xx.
 		ModifyResponse: func(resp *http.Response) error {
+			// A guard refusal is a gateway/service token mismatch, not the user's: answer 502, never 401.
+			if resp.Header.Get(platform.HeaderGatewayGuard) == platform.GatewayGuardRefused {
+				return errGuardRefused
+			}
+			// Every upstream is a platform service that reports its own 5xx.
 			platform.ReportedElsewhere(resp.Request.Context())
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			if errors.Is(err, errGuardRefused) {
+				log.ErrorContext(r.Context(), "gateway token refused by upstream",
+					slog.String("upstream", service))
+				writeError(w, http.StatusBadGateway, "bad gateway")
+				return
+			}
 			log.ErrorContext(r.Context(), "gateway upstream unreachable",
 				slog.String("upstream", service), slog.Any("err", err))
 			writeError(w, http.StatusBadGateway, "bad gateway")
@@ -142,27 +162,17 @@ func newReverseProxy(service string, target *url.URL, log *slog.Logger) *httputi
 	}
 }
 
-// injectIdentity overwrites the trusted identity headers on the outbound request
-// from the verified token, discarding any client-supplied X-Tenant-ID / X-User-*
-// (Header.Set replaces every prior value). The request id comes from the platform
-// kit's requestIDMiddleware, which always sets one upstream of this handler.
-//
-// X-S2S-Token is DELETED rather than set: it is a peer credential, not an
-// identity the gateway can vouch for. The gateway proxies /api/validation/*
-// to 04 (routedServices in cmd/gateway/main.go includes "validation"), whose
-// batch route is guarded by that token -- so without this Del, a caller could
-// smuggle a leaked peer token to 04 through the one public backend surface
-// and be taken for 03. The gateway mints peer credentials for nobody, so the
-// only correct outbound value is none ([s2s-gateway-strip], M4-04-03). This is
-// the same discipline already applied to X-Tenant-ID/X-User-* above, extended
-// to the peer credential -- not a new mechanism.
-func injectIdentity(pr *httputil.ProxyRequest) {
+// injectIdentity takes the identity headers from the verified token, never from
+// the client. X-S2S-Token is deleted and X-Gateway-Token is set to the gateway's
+// own credential.
+func injectIdentity(pr *httputil.ProxyRequest, gatewayToken string) {
 	id, _ := auth.IdentityFromContext(pr.In.Context())
 	pr.Out.Header.Set(headerTenantID, id.TenantID)
 	pr.Out.Header.Set(headerUserID, id.Subject)
 	pr.Out.Header.Set(headerUserRole, id.Role)
 	pr.Out.Header.Set(headerUserEmail, id.Email)
 	pr.Out.Header.Del(headerS2SToken)
+	pr.Out.Header.Set(platform.HeaderGatewayToken, gatewayToken)
 	if rid := platform.RequestIDFromContext(pr.In.Context()); rid != "" {
 		pr.Out.Header.Set(headerRequestID, rid)
 	} else {
@@ -180,36 +190,11 @@ func MockIssuerEnabled(environment, flag string) bool {
 	return flag == "true" && strings.ToLower(strings.TrimSpace(environment)) != "production"
 }
 
-// loginPersona is an identity the mock issuer will mint for under PostureHosted.
-type loginPersona struct{ subject, tenantID, role string }
-
-// Every seeded active membership (db/seed.dev.sql). role is the GoTrue JWT role every
-// client sends, NOT that seed's memberships.role — that substitution locks the persona
-// out of the hosted demo. Suspended members are excluded: every role-gated call refuses
-// them anyway. TestLoginPersonasMatchEverySeededActiveMembership holds the two in step.
-var loginPersonas = []loginPersona{
-	{"c0000000-0000-0000-0000-000000000001", "11111111-1111-1111-1111-111111111111", "authenticated"},
-	{"c0000000-0000-0000-0000-000000000002", "22222222-2222-2222-2222-222222222222", "authenticated"},
-	{"c0000000-0000-0000-0000-000000000003", "11111111-1111-1111-1111-111111111111", "authenticated"},
-	// The firm policy's two unconditional approval seats: fin_mgr and compliance.
-	// Without them nobody on the hosted demo can close a firm run.
-	{"c0000000-0000-0000-0000-000000000004", "11111111-1111-1111-1111-111111111111", "authenticated"},
-	{"c0000000-0000-0000-0000-000000000005", "11111111-1111-1111-1111-111111111111", "authenticated"},
-	// firm — second preparer
-	{"c0000000-0000-0000-0000-000000000006", "11111111-1111-1111-1111-111111111111", "authenticated"},
-	// in-house — four reviewers and the preparer
-	{"c0000000-0000-0000-0000-000000000008", "22222222-2222-2222-2222-222222222222", "authenticated"},
-	{"c0000000-0000-0000-0000-000000000009", "22222222-2222-2222-2222-222222222222", "authenticated"},
-	{"c0000000-0000-0000-0000-000000000010", "22222222-2222-2222-2222-222222222222", "authenticated"},
-	{"c0000000-0000-0000-0000-000000000011", "22222222-2222-2222-2222-222222222222", "authenticated"},
-	{"c0000000-0000-0000-0000-000000000013", "22222222-2222-2222-2222-222222222222", "authenticated"},
-}
-
 // MockLoginHandler mints a GoTrue-shaped token for the requested identity. It is
 // the mock stand-in for GoTrue's login; main wires it only when the mock issuer
-// is enabled (see MockIssuerEnabled). Under PostureHosted — the one public
-// deployment — it mints only for an exact seeded persona.
-func MockLoginHandler(issuer *auth.MockIssuer, posture platform.PostureKind) http.HandlerFunc {
+// is enabled (see MockIssuerEnabled). It mints for any identity, an empty body
+// included, wherever it is wired.
+func MockLoginHandler(issuer *auth.MockIssuer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Subject  string `json:"subject"`
@@ -219,16 +204,6 @@ func MockLoginHandler(issuer *auth.MockIssuer, posture platform.PostureKind) htt
 		// The body is optional; on any decode error the zero value yields
 		// GoTrue-shaped defaults (random subject, "authenticated" role).
 		_ = json.NewDecoder(r.Body).Decode(&req)
-
-		// Matched raw, before Mint fills its defaults, so an omitted role cannot
-		// default its way into a persona. Preview stays permissive: the tenancy
-		// contract specs mint deliberately mismatched identities — one against a
-		// per-run random tenant no allowlist could hold — to prove /me fails closed.
-		if posture == platform.PostureHosted &&
-			!slices.Contains(loginPersonas, loginPersona{req.Subject, req.TenantID, req.Role}) {
-			writeError(w, http.StatusForbidden, "forbidden")
-			return
-		}
 
 		token, err := issuer.Mint(auth.MintOptions{
 			Subject:  req.Subject,

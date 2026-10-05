@@ -18,9 +18,15 @@ const (
 	symSignedString = "github.com/golang-jwt/jwt/v4.(*Token).SignedString"
 	symECDSASign    = "github.com/golang-jwt/jwt/v4.(*SigningMethodECDSA).Sign"
 	symVerify       = "github.com/SimonOsipov/invoice-os/internal/platform/auth.(*Verifier).Verify"
+	// MockStaffHandler is //go:noinline, so nm names its closure under the gateway package.
+	symMockStaff  = "github.com/SimonOsipov/invoice-os/internal/gateway.MockStaffHandler.func1"
+	symGrantStaff = "github.com/SimonOsipov/invoice-os/internal/platform/db.GrantStaff"
+	// MockMemberHandler is //go:noinline like MockStaffHandler.
+	symMockMember      = "github.com/SimonOsipov/invoice-os/internal/gateway.MockMemberHandler.func1"
+	symGrantMembership = "github.com/SimonOsipov/invoice-os/internal/platform/db.GrantMembership"
 )
 
-var mintSymbols = []string{symMint, symNewIssuer, symSignedString, symECDSASign}
+var mintSymbols = []string{symMint, symNewIssuer, symSignedString, symECDSASign, symMockStaff, symGrantStaff, symMockMember, symGrantMembership}
 
 // gatewayBuilds counts local builds, so a test can prove an override never falls back to one.
 var gatewayBuilds atomic.Int32
@@ -119,8 +125,8 @@ func TestProductionGatewayBinaryCannotMint(t *testing.T) {
 	if !hasSymbol(lines, symVerify) {
 		t.Fatalf("%s lacks the control symbol %s; the absence checks below prove nothing", bin, symVerify)
 	}
-	if len(mintSymbols) != 4 {
-		t.Fatalf("mintSymbols has %d needle(s), want 4", len(mintSymbols))
+	if len(mintSymbols) != 8 {
+		t.Fatalf("mintSymbols has %d needle(s), want 8", len(mintSymbols))
 	}
 	for _, sym := range mintSymbols {
 		for _, l := range lines {
@@ -139,8 +145,8 @@ func TestMockIssuerGatewayBinaryCanMint(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := nmLines(t, bin)
-	if len(mintSymbols) != 4 {
-		t.Fatalf("mintSymbols has %d needle(s), want 4", len(mintSymbols))
+	if len(mintSymbols) != 8 {
+		t.Fatalf("mintSymbols has %d needle(s), want 8", len(mintSymbols))
 	}
 	for _, sym := range mintSymbols {
 		if !hasSymbol(lines, sym) {

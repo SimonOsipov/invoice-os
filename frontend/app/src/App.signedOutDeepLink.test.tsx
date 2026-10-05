@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // ROUTE-05-02: the capture call inside the front-door effect (App.tsx, the effect under the
-// "The single front door" comment), which must run under the same activeSession/autoPersona
+// "The single front door" comment), which must run under the same seat/authStart/handoffPending
 // guards as the bounce it precedes.
 
 import { readFileSync } from 'node:fs'
@@ -18,14 +18,13 @@ import {
   DEEP_LINK_SCHEMA_VERSION,
   DEEP_LINK_TTL_MS,
 } from './lib/deepLink'
-import type { Member } from './lib/members'
 import { SESSION_KEY, serializeSession } from './lib/session'
 import type { PlatformCtx } from './types'
 import App from './App'
 
 let originalLocation: PropertyDescriptor | undefined
 
-// Node v25's native localStorage collides with jsdom's (App.standIn.test.tsx:74-75).
+// Node v25's native localStorage collides with jsdom's.
 function createMemoryStorage() {
   const store = new Map<string, string>()
   return {
@@ -98,25 +97,14 @@ const REVIEW_ID = 'a1b2c3d4-e5f6-47a8-89ab-cdef01234567'
 const INVOICE_ID = 'd4c3b2a1-6f5e-4a78-9bcd-1234567890ab'
 const EXTRACTION_JOB_ID = 'e5f6a7b8-9012-4c3d-9e4f-0987654321ba'
 
-const MEMBER: Member = {
-  id: 'm-restore-001',
-  name: 'Tunde Bello',
-  initials: 'TB',
-  email: 'tunde@example.ng',
-  role: 'preparer',
-  status: 'active',
-  isYou: false,
-}
-
 // ROUTE-05-03's restore specs need REAL jsdom navigation -- stubLocation() above replaces
 // window.location with a static object that history.replaceState cannot update, so the
 // mount-alignment effect's URL write would be invisible. Mirrors App.routeBoot.test.tsx's
-// bootAt: a fresh module per boot (DEMO_MODE is read once at import time), a live session,
+// bootAt: a fresh module per boot, a live session,
 // dynamic import so the Sidebar mock above still applies.
-async function bootWorkspaceAt(path: string, opts: { demoMode?: boolean; strict?: boolean } = {}) {
+async function bootWorkspaceAt(path: string, opts: { strict?: boolean } = {}) {
   window.history.replaceState(null, '', path)
   localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
-  if (opts.demoMode) vi.stubEnv('VITE_DEMO_MODE', 'true')
   vi.resetModules()
   const { default: FreshApp } = await import('./App')
   return render(opts.strict ? (
@@ -232,21 +220,6 @@ describe('front door: capturing the destination before the bounce (ROUTE-05-02)'
     expect(workspaceIsRendered()).toBe(true)
   })
 
-  it('capture_aLivePersonaParamStoresNothing', () => {
-    const { hrefWrites } = stubLocation({ pathname: '/audit', search: '?persona=firm' })
-    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
-    // Deliberately un-awaited: with VITE_GATEWAY_URL unset the auto-sign-in resolves with
-    // no network (auth.ts:89) fast enough that awaiting act() here would settle straight
-    // through SignInLoading into Workspace, which is a different, unrelated assertion.
-    // The guard this row targets (`|| autoPersona`) fires synchronously on mount, so the
-    // capture check doesn't need the sign-in to finish.
-    render(<App />)
-    expect(readDestination()).toBeNull()
-    expect(hrefWrites).toEqual([])
-    expect(screen.getByText(/Signing in as/)).toBeTruthy()
-    expect(workspaceIsRendered()).toBe(false)
-  })
-
   it('capture_theShowcaseBuildStoresNothingAndStaysPut', () => {
     // VITE_LANDING_URL deliberately left unset -- landingBase() returns null (auth.ts:70-73).
     const { hrefWrites } = stubLocation({ pathname: '/audit' })
@@ -270,10 +243,7 @@ describe('front door: capturing the destination before the bounce (ROUTE-05-02)'
     expect(hrefWrites).toEqual([stateBounce()])
   })
 
-  // shouldAutoSignIn('bogus') is false, so autoPersona stays null and the front door DOES
-  // capture (unlike capture_aLivePersonaParamStoresNothing's valid ?persona=firm below). The
-  // reachable proof of AC-3: an unowned param survives the early return but is still
-  // discarded by the codec at capture time, not merely refused before it.
+  // The reachable proof of AC-3: an unowned param is discarded by the codec at capture time.
   it('capture_anUnownedPersonaParamIsDiscardedFromTheStoredQuery', () => {
     const { hrefWrites } = stubLocation({ pathname: '/audit', search: '?persona=bogus' })
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
@@ -286,8 +256,21 @@ describe('front door: capturing the destination before the bounce (ROUTE-05-02)'
   })
 })
 
+// A signed-out deep link carrying a once-openable persona is captured like any other.
+describe('front door: a persona param on a deep link', () => {
+  it('capture_aPersonaParamIsDiscardedFromTheStoredQuery', () => {
+    const { hrefWrites } = stubLocation({ pathname: '/audit', search: '?persona=firm' })
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    render(<App />)
+
+    expect(readDestination(), 'the path is captured and the param discarded').toEqual({ path: '/audit', query: '' })
+    expect(hrefWrites).toEqual([stateBounce()])
+    expect(storedSignInState()).toEqual(expect.stringMatching(STATE_RE))
+  })
+})
+
 // QA adversarial coverage (Stage 4). A path+?persona= combination is already exercised
-// by capture_aLivePersonaParamStoresNothing above -- not repeated here.
+// by capture_aPersonaParamIsDiscardedFromTheStoredQuery above -- not repeated here.
 describe('front door: adversarial coverage (QA)', () => {
   it('capture_aDeepPathWithAHashCapturesPathOnly', () => {
     // window.location.pathname structurally excludes the fragment, so a hash present at
@@ -355,29 +338,6 @@ describe('Workspace boot: restoring the captured destination (ROUTE-05-03)', () 
     expect(ctx.view, 'a second boot at / must land on dashboard -- the destination is single-use').toBe('dashboard')
     expect(window.location.pathname, "the second boot's URL must settle on the bare root").toBe('/')
     second.unmount()
-  })
-
-  it('restore_consumesEvenWhenItDoesNotWin', async () => {
-    // initialView (the DEMO-06 carry) can only exist from a SECOND, interactive mount --
-    // there is no way to seed it on a truly fresh import. So: boot once with nothing
-    // stored (pathname stays '/', since dashboard IS the root), THEN store a destination,
-    // THEN trigger the persona-switch remount. That remount's own bootPath initializer
-    // still runs (pathname is still '/'), so it still calls readDestination(), and the
-    // mount effect still calls clearDestination() -- even though initialView pre-empts
-    // the ternary entirely. This is AC-6: initialView wins, the destination is still
-    // cleared.
-    await bootWorkspaceAt('/', { demoMode: true })
-    let ctx = requireCtx()
-    expect(ctx.view, 'sanity: no destination stored yet, boot at / lands on dashboard').toBe('dashboard')
-
-    captureDestination('/audit')
-    expect(typeof ctx.becomePersona, 'DEMO_MODE must expose becomePersona on ctx').toBe('function')
-    await act(async () => {
-      await ctx.becomePersona!(MEMBER, 'clients')
-    })
-    ctx = requireCtx()
-    expect(ctx.view, 'the DEMO-06 carried view must win over the newly-stored destination').toBe('clients')
-    expect(readDestination(), 'the destination must be cleared by this mount even though it did not win').toBeNull()
   })
 
   it('restore_aLiveNonRootPathWins', async () => {
@@ -481,26 +441,6 @@ describe('Workspace boot: restoring the captured destination (ROUTE-05-03)', () 
     expect(readDestination(), 'the destination must be consumed exactly once, not left dangling').toBeNull()
   })
 
-  it('restore_aDemoPersonaSwitchDoesNotResurrectAConsumedDestinationForTheNewPersona', async () => {
-    // Distinct from restore_consumesEvenWhenItDoesNotWin above: here the FIRST mount (the
-    // original persona) is the one that consumes an already-live destination; the
-    // question is whether the SUBSEQUENT persona-switch remount (a genuinely different
-    // identity, sessionStorage being tab-scoped rather than persona-scoped) can ever see
-    // it again.
-    captureDestination('/audit')
-    await bootWorkspaceAt('/', { demoMode: true })
-    let ctx = requireCtx()
-    expect(ctx.view, 'sanity: the first mount (original persona) restores the destination').toBe('audit')
-    expect(readDestination(), 'sanity: the first mount consumes it').toBeNull()
-
-    await act(async () => {
-      await ctx.becomePersona!(MEMBER, 'invoices')
-    })
-    ctx = requireCtx()
-    expect(ctx.view, "the new persona's carried view must win, not a resurrected destination").toBe('invoices')
-    expect(readDestination(), 'no destination must resurface for the new persona').toBeNull()
-  })
-
   // QA adversarial coverage (Stage 4).
   it('restore_adversarial_aFreshCaptureBetweenTwoSeparateBootsIsRestoredByTheSecond', async () => {
     // Distinct from restore_isSingleUse (same destination gone by boot 2): proves restore
@@ -556,8 +496,8 @@ describe('Expiry and the abandoned attempt (ROUTE-05-04)', () => {
     // deepLink.test.ts's read_theBoundaryIsInclusive proves the boundary at the module
     // level; nothing exercises it through App.tsx's own call site (App.tsx:320-321), which
     // calls readDestination() with no `now` argument -- so proving the boundary here means
-    // controlling the real clock the app reads. Fake only Date: becomePersona's real
-    // BUSY_MS delay elsewhere in this file must not hang under a fully-faked clock.
+    // controlling the real clock the app reads. Fake only Date: a fully-faked
+    // clock would hang the real timers the boot relies on.
     vi.useFakeTimers({ toFake: ['Date'] })
     const at = 1_700_000_000_000
     vi.setSystemTime(at)
@@ -575,48 +515,6 @@ describe('Expiry and the abandoned attempt (ROUTE-05-04)', () => {
     expect(errSpy, 'the spy must catch a real call -- otherwise the assertion above is vacuous').toHaveBeenCalledTimes(1)
     errSpy.mockRestore()
     vi.useRealTimers()
-  })
-
-  it('expiry_aPersonaSwitchRemountIgnoresAStoredDestination', async () => {
-    // Distinct from restore_aDemoPersonaSwitchDoesNotResurrectAConsumedDestinationForTheNewPersona
-    // (:408) and restore_consumesEvenWhenItDoesNotWin (:301): both boot at '/', so bootPath's
-    // ternary (App.tsx:320-321) already calls readDestination() on the FIRST mount. Here the
-    // first mount boots at a live non-root path, so bootPath never reaches readDestination()
-    // at all on mount 1 -- the blob is then written straight to sessionStorage, bypassing
-    // captureDestination, so nothing in this test has EVER gone through the read call site.
-    // Proves the remount's unconditional clearDestination() sweep (App.tsx:526) and
-    // initialView's precedence (App.tsx:326-327) hold even so.
-    await bootWorkspaceAt('/clients', { demoMode: true })
-    let ctx = requireCtx()
-    expect(ctx.view, 'sanity: a live non-root boot lands on the path itself, not dashboard').toBe('clients')
-
-    sessionStorage.setItem(
-      DEEP_LINK_KEY,
-      JSON.stringify({ v: DEEP_LINK_SCHEMA_VERSION, path: '/audit', at: Date.now() }),
-    )
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    expect(typeof ctx.becomePersona, 'DEMO_MODE must expose becomePersona on ctx').toBe('function')
-    await act(async () => {
-      await ctx.becomePersona!(MEMBER, 'invoices')
-    })
-    ctx = requireCtx()
-    expect(
-      ctx.view,
-      "the new persona's carried view must win, not the destination stashed after mount 1",
-    ).toBe('invoices')
-    expect(
-      readDestination(),
-      'the remount must still sweep a destination its own first mount never read',
-    ).toBeNull()
-    expect(
-      errSpy,
-      'a persona-switch remount ignoring a stored destination is a normal outcome and must not error',
-    ).not.toHaveBeenCalled()
-    // Vacuity control (App.offlineFallback.test.tsx:118-120): proves the spy is live and
-    // would have caught a real console.error, so the absence above is not a spy nobody wired.
-    console.error('control: this deliberate call must be observed')
-    expect(errSpy, 'the spy must catch a real call -- otherwise the assertion above is vacuous').toHaveBeenCalledTimes(1)
-    errSpy.mockRestore()
   })
 })
 
@@ -648,8 +546,8 @@ function interceptHref() {
 }
 
 // ROUTE-05-05. signOut's own pathname rewrite (App.tsx:1589) already lands before the
-// front-door effect re-fires on the resulting activeSession->null transition (its deps are
-// [activeSession, autoPersona]) -- App.routeBoot.test.tsx's
+// front-door effect re-fires on the resulting seat->null transition (its deps are
+// [seat, authStart, handoffPending]) -- App.routeBoot.test.tsx's
 // signOut_thePathnameDoesNotSurviveIntoTheNextSignIn proves that ordering under real
 // navigation. So AC-2/AC-4 below hold today without any new production line; only AC-1's
 // OTHER scenario -- a destination stored BEFORE this signOut, left by an earlier, unrelated
@@ -676,7 +574,7 @@ describe('Sign-out clears the captured destination (ROUTE-05-05)', () => {
 
     expect(
       captureDestinationSpy,
-      "the front-door effect's dependency array is [activeSession, autoPersona] -- it must re-run on this transition and reach its capture call",
+      "the front-door effect's dependency array is [seat, authStart, handoffPending] -- it must re-run on this transition and reach its capture call",
     ).toHaveBeenCalledWith('/', '')
     expect(readDestination(), 'the rewritten root path is refused, so nothing is captured').toBeNull()
   })
@@ -756,7 +654,7 @@ describe('Sign-out clears the captured destination (ROUTE-05-05)', () => {
 
   it('signOut_redirectsToLandingBase', async () => {
     // AC-3 ("signing out still redirects to landingBase(), unchanged") has no assertion
-    // anywhere else in the suite: App.routeBoot.test.tsx and App.standIn.test.tsx exercise
+    // anywhere else in the suite: App.routeBoot.test.tsx exercises
     // signOut with VITE_LANDING_URL unset (the in-app picker path), never the redirect
     // itself. interceptHref() (above) is what makes this observable without breaking the
     // real pathname reset this describe block depends on.
@@ -771,7 +669,7 @@ describe('Sign-out clears the captured destination (ROUTE-05-05)', () => {
     })
 
     // Two writes: signOut's own tail goes to bare landing (unchanged), then the
-    // front-door effect re-fires on activeSession->null and bounces with the stored state.
+    // front-door effect re-fires on seat->null and bounces with the stored state.
     expect(hrefWrites, 'signOut writes href twice: its own tail, then the front-door re-fire').toEqual([
       'https://landing.example',
       stateBounce(),
@@ -952,7 +850,7 @@ describe('The destination never travels in a URL (ROUTE-05-06)', () => {
     // empty or truncated line. window.location.search no longer appears on any write site --
     // the mirror is now barred from reading it (routeWriterGuard's
     // guard_theSeamsWriterNeverReadsLocationSearch) -- so this pins window.location.pathname
-    // instead, carried by the persona strip's own write. Evaluated on the SITE line, never
+    // instead, carried by the one-shot strip's own write. Evaluated on the SITE line, never
     // the window -- the strip's `URLSearchParams(window.location.search)` READ sits on a
     // different line than its write, so the needle could never resolve there.
     expect(

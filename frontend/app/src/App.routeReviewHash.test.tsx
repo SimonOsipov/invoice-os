@@ -28,7 +28,7 @@ const BATCH_ID = 'bbbbbbbb-1111-4111-8111-111111111111'
 const SINGLE_BATCH_ID = 'cccccccc-2222-4222-8222-222222222222'
 const SINGLE_INVOICE_ID = 'aaaaaaaa-5555-4555-8555-555555555555'
 
-// Node v25's native localStorage collides with jsdom's (App.standIn.test.tsx:74-75).
+// Node v25's native localStorage collides with jsdom's.
 function createMemoryStorage() {
   const store = new Map<string, string>()
   return {
@@ -231,15 +231,15 @@ describe('AC-1: the two existing history writers are unchanged', () => {
     // Subtask 05 drops this writer's own fragment append -- re-pointed at the resulting
     // full statement, not a bare substring: `window.location.pathname` alone also occurs
     // at three other, unrelated call sites in this file.
-    const personaStripWrite = "window.history.replaceState(null, '', window.location.pathname)"
+    const stripWrite = "window.history.replaceState(null, '', window.location.pathname)"
 
     const reviewIdx = src.indexOf(reviewMirrorWrite)
-    const personaIdx = src.indexOf(personaStripWrite)
+    const stripIdx = src.indexOf(stripWrite)
     // Floor: both writers must actually be located, at two DISTINCT positions -- a scan
     // that finds neither (or the same text twice) must not read as "both unchanged".
     expect(reviewIdx, 'the review-hash mirror line was not found verbatim -- it may have changed').toBeGreaterThan(-1)
-    expect(personaIdx, 'the persona-strip mirror line was not found verbatim -- it may have changed').toBeGreaterThan(-1)
-    expect(reviewIdx, 'the two writers must not resolve to the same location').not.toBe(personaIdx)
+    expect(stripIdx, 'the one-shot strip line was not found verbatim -- it may have changed').toBeGreaterThan(-1)
+    expect(reviewIdx, 'the two writers must not resolve to the same location').not.toBe(stripIdx)
   })
 
   // Static, not behavioural: reviewBatchIds is a plain useState value, so its reference is

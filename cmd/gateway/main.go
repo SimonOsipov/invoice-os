@@ -50,6 +50,8 @@ func main() {
 	// Parsed before Provision so a malformed value stops boot before any bootstrap, reset or seed.
 	additional := mustParseIssuers(os.Getenv("AUTH_ADDITIONAL_ISSUERS"))
 	siteURL := mustParseSiteURL(os.Getenv("AUTH_SITE_URL"), app.Logger)
+	registerMinResponse := mustParseRegisterMinResponse(os.Getenv("AUTH_REGISTER_MIN_RESPONSE"), app.Logger)
+	gatewayToken := mustEnv("GATEWAY_TOKEN")
 
 	// Bootstrap (gated) -> migrate (unconditional) -> reset (gated, PR
 	// environments only, persona-handoff-fix Decision [pr-only-reset]) -> purge
@@ -146,22 +148,28 @@ func main() {
 	withCORS := gateway.CORS(strings.Split(os.Getenv("CORS_ALLOWED_ORIGINS"), ","))
 
 	sessions := gateway.NewSessionChecker(probed["auth"], &http.Client{Timeout: gateway.SessionCheckTimeout}, time.Now, app.Logger)
-	apiHandler, fleetHandler := gatewayHandlers(verifier, sessions, routed, probed, map[string]string{"auth": ".well-known/jwks.json"}, app.Logger)
+	apiHandler, fleetHandler := gatewayHandlers(verifier, sessions, routed, probed, map[string]string{"auth": ".well-known/jwks.json"}, app.Logger, gatewayToken)
 	app.Mux.Handle(routePrefix, withCORS(apiHandler))
 
 	// Public fleet-health roll-up, outside /api/ and outside the verifier —
 	// operational, not tenant data.
 	app.Mux.HandleFunc("GET /healthz/fleet", fleetHandler)
 
-	// Public registration, outside /api/ and the verifier, in every build. No CORS wrap:
-	// no browser client calls it yet.
-	reg := registrationHandlers(probed["auth"], siteURL, app.Logger)
-	app.Mux.Handle("POST /auth/register", reg.Register)
+	// One sink for both hand-off paths; the sink bounds each call and never follows a redirect.
+	sink := gateway.NewHTTPContactSink(routed["notifications"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
+
+	// Public registration, outside /api/ and the verifier, in every build. Register is
+	// CORS-wrapped for the landing page; the OPTIONS route stops the POST route 405ing the preflight.
+	reg := registrationHandlers(probed["auth"], siteURL, registerMinResponse, app.Logger, sink)
+	app.Mux.Handle("POST /auth/register", withCORS(reg.Register))
+	app.Mux.Handle("OPTIONS /auth/register", withCORS(reg.Register))
 	app.Mux.Handle("GET /auth/verify", reg.Verify)
+	app.Mux.Handle("POST /contacts/demo-request", withCORS(reg.DemoRequest))
+	app.Mux.Handle("OPTIONS /contacts/demo-request", withCORS(reg.DemoRequest))
 
 	// Public sign-in hand-off, session renewal and sign-out, outside the verifier, in every build.
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.
-	h := handoffHandlers(probed["auth"], sessions, app.Logger)
+	h := handoffHandlers(probed["auth"], sessions, app.Logger, sink)
 	app.Mux.Handle("POST /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("OPTIONS /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("POST /auth/exchange", withCORS(h.Exchange))
@@ -181,6 +189,8 @@ func main() {
 		// OPTIONS too: a POST-only route would 405 the CORS preflight.
 		app.Mux.Handle("POST /auth/login", login)
 		app.Mux.Handle("OPTIONS /auth/login", login)
+		app.Mux.Handle("POST /auth/mock/staff", mockStaffRoute(provisionCfg.MigrationDSN, app.Logger))
+		app.Mux.Handle("POST /auth/mock/member", mockMemberRoute(provisionCfg.MigrationDSN, app.Logger))
 		platform.MockIssuer = "on"
 	}
 
@@ -223,12 +233,15 @@ func gatewayHandlers(
 	routed, probed map[string]*url.URL,
 	healthPaths map[string]string,
 	log *slog.Logger,
+	gatewayToken string,
 ) (api http.Handler, fleet http.HandlerFunc) {
 	api = gateway.Handler(gateway.Options{
 		Verifier:  verifier,
 		Sessions:  sessions,
 		Upstreams: routed,
 		Logger:    log,
+
+		GatewayToken: gatewayToken,
 	})
 
 	all := make(map[string]*url.URL, len(routed)+len(probed))
@@ -239,7 +252,7 @@ func gatewayHandlers(
 
 // registration holds the public registration handlers main mounts outside /api/.
 type registration struct {
-	Register, Verify http.Handler
+	Register, Verify, DemoRequest http.Handler
 }
 
 // newJWKSClient builds the JWKS fetch client.
@@ -249,18 +262,20 @@ func newJWKSClient() *http.Client {
 
 // registrationHandlers builds the registration handlers against GoTrue at authURL.
 // A nil siteURL means AUTH_SITE_URL is unset: both routes answer 503.
-func registrationHandlers(authURL, siteURL *url.URL, log *slog.Logger) registration {
+func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, log *slog.Logger, sink gateway.ContactSink) registration {
 	if authURL == nil || siteURL == nil {
 		nc := gateway.RegistrationNotConfigured()
-		return registration{Register: nc, Verify: nc}
+		return registration{Register: nc, Verify: nc, DemoRequest: gateway.DemoRequestHandler(sink, log)}
 	}
 	client := &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	return registration{
-		Register: gateway.RegisterHandler(authURL, client, log),
-		Verify:   gateway.VerifyHandler(authURL, siteURL, client, log),
+		Register: gateway.RegisterHandler(authURL, client, minResponse, log),
+		Verify:   gateway.VerifyHandler(authURL, siteURL, client, log, sink),
+
+		DemoRequest: gateway.DemoRequestHandler(sink, log),
 	}
 }
 
@@ -272,7 +287,7 @@ type handoff struct {
 // handoffHandlers builds the sign-in, exchange, refresh and sign-out handlers against GoTrue at authURL.
 // Sign-out evicts from sessions, the API's own checker.
 // Sign-in and exchange share one code store: a code minted by sign-in is redeemable only through exchange.
-func handoffHandlers(authURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger) handoff {
+func handoffHandlers(authURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger, sink gateway.ContactSink) handoff {
 	store := gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
 	throttle := gateway.NewSignInThrottle(gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
 	// Same settings as registrationHandlers; TestRegistrationClientTimeoutAndNoFollow pins that literal in place.
@@ -281,7 +296,7 @@ func handoffHandlers(authURL *url.URL, sessions *gateway.SessionChecker, log *sl
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	return handoff{
-		SignIn:   gateway.SignInHandler(authURL, client, store, throttle, log),
+		SignIn:   gateway.SignInHandler(authURL, client, store, throttle, log, sink),
 		Exchange: gateway.ExchangeHandler(store),
 		Refresh:  gateway.RefreshHandler(authURL, client, log),
 		SignOut:  gateway.SignOutHandler(authURL, client, sessions, log),
@@ -304,6 +319,19 @@ func mustParseSiteURL(raw string, log *slog.Logger) *url.URL {
 		platform.Fatal(log, "gateway: AUTH_SITE_URL must not carry user info, a query or a fragment")
 	}
 	return u
+}
+
+// mustParseRegisterMinResponse parses AUTH_REGISTER_MIN_RESPONSE, a Go duration. Unset gives the
+// default; a value that does not parse or is not above zero stops boot without echoing it.
+func mustParseRegisterMinResponse(raw string, log *slog.Logger) time.Duration {
+	if raw == "" {
+		return gateway.DefaultRegisterMinResponse
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		platform.Fatal(log, "gateway: AUTH_REGISTER_MIN_RESPONSE is not a positive duration such as 2s")
+	}
+	return d
 }
 
 // loadUpstreams reads each service's base URL from <NAME>_URL, returning the

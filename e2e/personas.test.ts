@@ -1,4 +1,4 @@
-// e2e/personas.test.ts — the persona axis guards G1-G5 (PERSONA-01-01, Backlog task-270).
+// e2e/personas.test.ts — the persona axis guards G3-G5 (PERSONA-01-01, Backlog task-270).
 // RED-then-GREEN, Test-first: yes. At t0 the import of ./personas does not resolve (no
 // personas.ts exists yet), so every row below fails on the same uninformative collection
 // error (Phase A). Phase B (empty-stub personas.ts/personaSession.ts, no data filled in)
@@ -10,7 +10,7 @@
 // Path resolution follows e2e/api/no-db-access.test.ts:12 and e2e/package.test.ts:11:
 // import.meta.url, never process.cwd() -- CI invokes vitest via `pnpm --filter` (cwd `e2e/`)
 // but a developer may run from the repo root, and only import.meta.url is cwd-independent.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -20,8 +20,6 @@ import {
   PERSONA_IDS,
   SURFACES,
   BOUNDARY_MATRIX,
-  signInUrl,
-  accepts,
   type Grade,
   type PersonaId,
   type Destination,
@@ -74,7 +72,6 @@ const EXPECTED_DRIVES_MIN = new Set<string>([
 ])
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
-const LANDING_AUTH = join(REPO_ROOT, 'frontend/landing/src/auth.ts')
 const SIDEBAR = join(REPO_ROOT, 'frontend/app/src/components/Sidebar.tsx')
 const SIDEBAR_TEST = join(REPO_ROOT, 'frontend/app/src/components/Sidebar.test.tsx')
 const GLYPHS = join(REPO_ROOT, 'frontend/app/src/glyphs.tsx')
@@ -82,66 +79,6 @@ const APP_TSX = join(REPO_ROOT, 'frontend/app/src/App.tsx')
 const TYPES_TS = join(REPO_ROOT, 'frontend/app/src/types.ts')
 const PERSONAS_SRC = join(REPO_ROOT, 'e2e/personas.ts')
 const PERSONAS_TEST_SRC = join(REPO_ROOT, 'e2e/personas.test.ts')
-const APP_SESSION_SRC = join(REPO_ROOT, 'frontend/app/src/lib/session.ts')
-const OPS_SESSION_SRC = join(REPO_ROOT, 'frontend/ops-console/src/session.ts')
-const SUPPORT_SESSION_SRC = join(REPO_ROOT, 'frontend/support-console/src/session.ts')
-
-// process.env hygiene (targets.test.ts:9-11's idiom, extended to all three destination
-// vars): snapshot before each test and restore after, so row 1/2's mutations can never leak
-// into a sibling test regardless of run order within this file.
-const ENV_VARS = ['APP_URL', 'OPS_CONSOLE_URL', 'SUPPORT_CONSOLE_URL'] as const
-let envSnapshot: Record<string, string | undefined>
-
-beforeEach(() => {
-  envSnapshot = Object.fromEntries(ENV_VARS.map((v) => [v, process.env[v]]))
-})
-
-afterEach(() => {
-  for (const v of ENV_VARS) {
-    if (envSnapshot[v] === undefined) delete process.env[v]
-    else process.env[v] = envSnapshot[v]
-  }
-})
-
-// --- G1/G2 extraction helpers (frontend/landing/src/auth.ts) ---------------------------
-
-// G1: the LANDING_PERSONAS roster's `id:` values. Slice from the array's declaration to the
-// next column-0 `]` (the only one in the file) and extract every quoted `id:` value in that
-// slice.
-function extractLandingPersonaIds(src: string): string[] {
-  const startIdx = src.indexOf('export const LANDING_PERSONAS')
-  if (startIdx === -1) {
-    throw new Error('G1: `export const LANDING_PERSONAS` anchor not found in frontend/landing/src/auth.ts -- the anchors moved, update e2e/personas.test.ts')
-  }
-  const endIdx = src.indexOf('\n]', startIdx)
-  if (endIdx === -1) {
-    throw new Error('G1: closing column-0 `]` not found after LANDING_PERSONAS -- the anchors moved, update e2e/personas.test.ts')
-  }
-  const slice = src.slice(startIdx, endIdx)
-  return [...slice.matchAll(/\bid:\s*['"]([^'"]+)['"]/g)].map((m) => m[1])
-}
-
-// G2: the `LandingPersona` interface's `id` property union -- NOT `frontend/app/src/auth.ts`'s
-// unrelated 2-member `PersonaId` type (a wrong-file trap: [FIX-3] in task-270's plan). Slice
-// from the interface's declaration to its closing column-0 `}`, isolate the single `id:` line,
-// and extract only the quoted members on THAT line -- scoping to one line is what keeps the
-// `target: 'app' | 'ops' | 'support'` property out.
-function extractLandingPersonaIdUnion(src: string): string[] {
-  const startIdx = src.indexOf('export interface LandingPersona')
-  if (startIdx === -1) {
-    throw new Error('G2: `export interface LandingPersona` anchor not found in frontend/landing/src/auth.ts -- the anchors moved, update e2e/personas.test.ts')
-  }
-  const endIdx = src.indexOf('\n}', startIdx)
-  if (endIdx === -1) {
-    throw new Error('G2: closing column-0 `}` not found after LandingPersona -- the anchors moved, update e2e/personas.test.ts')
-  }
-  const slice = src.slice(startIdx, endIdx)
-  const idLine = slice.match(/^\s*id:\s*(.+)$/m)
-  if (!idLine) {
-    throw new Error('G2: no `id:` line found inside the LandingPersona interface -- the anchors moved, update e2e/personas.test.ts')
-  }
-  return [...idLine[1].matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1])
-}
 
 // --- G3 / G3-neg extraction helpers (frontend/app/src/components/Sidebar.tsx + glyphs.tsx) ---
 
@@ -215,61 +152,6 @@ function extractGlyphLabels(glyphsSrc: string): Map<string, string> {
   return map
 }
 
-// --- G13 extraction helpers (the three live product session gates) --------------------
-//
-// accepts() (personas.ts) reads PERSONAS[id].destination -- a field in THIS registry, hand
-// -maintained alongside BOUNDARY_MATRIX in the same file. Row 10 (G5) cross-checks
-// BOUNDARY_MATRIX against accepts(), and row 3 cross-checks accepts() against a hardcoded
-// ACCEPTED set -- but every one of those three things (BOUNDARY_MATRIX, PERSONAS, ACCEPTED)
-// lives in e2e/, typed by hand. None of them is read from the frontend session-gate source
-// the registry claims to mirror (personas.ts:144-149's own comment: "Mirrors the three live
-// product gates"). A registry that quietly drifted from shouldAutoSignIn / OPS_OPERATORS /
-// SUPPORT_OPERATORS -- say a future frontend change widens or narrows who a destination
-// accepts, with nobody remembering to update e2e/personas.ts -- would leave G5 and row 3
-// green throughout, because both sides of every existing check are e2e-side data. These
-// helpers read the actual frontend source, the same way G1-G3 read auth.ts/Sidebar.tsx.
-
-// frontend/app/src/lib/session.ts's shouldAutoSignIn: `personaParam === 'x' || ...`. Slice
-// the function body (declaration to the next column-0 `}`) and pull every string compared
-// with `===`, rather than hardcoding {'firm','inhouse'} here -- a hardcoded set would just be
-// a FOURTH hand-typed copy of the same claim.
-function extractShouldAutoSignInIds(src: string): string[] {
-  const startIdx = src.indexOf('function shouldAutoSignIn')
-  if (startIdx === -1) {
-    throw new Error('G13: `function shouldAutoSignIn` anchor not found in frontend/app/src/lib/session.ts -- the anchors moved, update e2e/personas.test.ts')
-  }
-  const endIdx = src.indexOf('\n}', startIdx)
-  if (endIdx === -1) {
-    throw new Error('G13: closing column-0 `}` not found after shouldAutoSignIn -- the anchors moved, update e2e/personas.test.ts')
-  }
-  const body = src.slice(startIdx, endIdx)
-  const ids = [...body.matchAll(/===\s*['"]([^'"]+)['"]/g)].map((m) => m[1])
-  if (ids.length === 0) {
-    throw new Error('G13: no `=== \'...\'` comparisons found inside shouldAutoSignIn -- the anchors moved, update e2e/personas.test.ts')
-  }
-  return ids
-}
-
-// frontend/{ops,support}-console/src/session.ts's OPS_OPERATORS / SUPPORT_OPERATORS: a
-// `{ id: { name: ..., org: ... } } as const` map. Slice the object body (declaration to the
-// next column-0 `}`) and pull every top-level (2-space-indented) key.
-function extractOperatorKeys(src: string, constName: string, srcLabel: string): string[] {
-  const startIdx = src.indexOf(`export const ${constName}`)
-  if (startIdx === -1) {
-    throw new Error(`G13: \`export const ${constName}\` anchor not found in ${srcLabel} -- the anchors moved, update e2e/personas.test.ts`)
-  }
-  const endIdx = src.indexOf('\n}', startIdx)
-  if (endIdx === -1) {
-    throw new Error(`G13: closing column-0 \`}\` not found after ${constName} -- the anchors moved, update e2e/personas.test.ts`)
-  }
-  const body = src.slice(startIdx, endIdx)
-  const keys = [...body.matchAll(/^ {2}(\w+):\s*\{/gm)].map((m) => m[1])
-  if (keys.length === 0) {
-    throw new Error(`G13: no top-level keys found inside ${constName} -- the anchors moved, update e2e/personas.test.ts`)
-  }
-  return keys
-}
-
 // --- G6c extraction helpers (e2e/personas.ts's own Grade union and Cell interface) -----
 //
 // A naive whole-file scan for "pending"/"planned"/"todo" goes RED on the UNMUTATED tree:
@@ -329,56 +211,6 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     const requireImport = /require\(\s*['"]@playwright\/test['"]\s*\)/
     expect(fromImport.test(src), "found `from '@playwright/test'` in e2e/personas.ts").toBe(false)
     expect(requireImport.test(src), "found `require('@playwright/test')` in e2e/personas.ts").toBe(false)
-  })
-
-  it('row 1 (AC-1) -- signInUrl builds the landing hand-off URL for each persona', () => {
-    process.env.APP_URL = 'https://app.example.test///'
-    process.env.OPS_CONSOLE_URL = 'https://ops.example.test/'
-    process.env.SUPPORT_CONSOLE_URL = 'https://support.example.test'
-
-    expect(signInUrl('firm')).toBe('https://app.example.test?persona=firm')
-    expect(signInUrl('inhouse')).toBe('https://app.example.test?persona=inhouse')
-    expect(signInUrl('developer')).toBe('https://ops.example.test?persona=developer')
-    expect(signInUrl('support')).toBe('https://support.example.test?persona=support')
-  })
-
-  it('row 2 (AC-1) -- signInUrl throws naming the missing variable', () => {
-    delete process.env.APP_URL
-    expect(() => signInUrl('firm')).toThrow(/APP_URL/)
-  })
-
-  it('row 3 (AC-1) -- accepts mirrors the three product gates', () => {
-    // Hardcoded, not read off PERSONA_IDS/DESTINATIONS -- those are registry exports and
-    // must not be trusted as the source of the very pairs being used to test the registry
-    // (an empty registry would otherwise make this loop run zero times and pass vacuously).
-    const ALL_PERSONA_IDS: PersonaId[] = ['developer', 'support', 'firm', 'inhouse']
-    const ALL_DESTINATIONS: Destination[] = ['app', 'ops', 'support']
-    const ACCEPTED = new Set(['app:firm', 'app:inhouse', 'ops:developer', 'support:support'])
-
-    expect(ACCEPTED.size, 'accepted pairs (vacuity guard)').toBe(4)
-
-    const wrong: string[] = []
-    for (const destination of ALL_DESTINATIONS) {
-      for (const id of ALL_PERSONA_IDS) {
-        const expected = ACCEPTED.has(`${destination}:${id}`)
-        if (accepts(destination, id) !== expected) {
-          wrong.push(`${destination}x${id}: expected ${expected}`)
-        }
-      }
-    }
-    expect(wrong, wrong.join('\n')).toEqual([])
-  })
-
-  it('row 4 (AC-4, G1) -- registry ids match LANDING_PERSONAS', () => {
-    const ids = extractLandingPersonaIds(readFileSync(LANDING_AUTH, 'utf8'))
-    expect(ids.length, 'landing persona ids extracted (vacuity guard)').toBeGreaterThanOrEqual(4)
-    expect(new Set(PERSONA_IDS)).toEqual(new Set(ids))
-  })
-
-  it('row 5 (AC-4, G2) -- registry ids match the LandingPersona id union', () => {
-    const members = extractLandingPersonaIdUnion(readFileSync(LANDING_AUTH, 'utf8'))
-    expect(members.length, 'LandingPersona id union members extracted (vacuity guard)').toBeGreaterThanOrEqual(4)
-    expect(new Set(PERSONA_IDS)).toEqual(new Set(members))
   })
 
   it('row 6 (AC-2, G3) -- every sidebar nav surface is catalogued', () => {
@@ -472,7 +304,9 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
       } else if (!specSrc.includes(surface.label)) {
         failures.push(`${cell.navConst}: ${cell.coveredBy} does not mention label "${surface.label}"`)
       }
-      if (!specSrc.includes(specToken)) {
+      if (!specToken) {
+        failures.push(`${cell.navConst}: its persona has no specToken`)
+      } else if (!specSrc.includes(specToken)) {
         failures.push(`${cell.navConst}: ${cell.coveredBy} does not mention specToken "${specToken}"`)
       }
     }
@@ -484,30 +318,23 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     expect(cells.length).toBeGreaterThanOrEqual(4)
   })
 
-  it('row 10 (AC-5, G5) -- the boundary matrix classifies every cell exactly once', () => {
+  it('row 10 (AC-5, G5) -- the boundary matrix names each of the 12 pairs once and refuses every one', () => {
+    // Hardcoded, not read off PERSONA_IDS or DESTINATION_ENV: registry exports must not supply the
+    // pairs used to test the registry (an empty registry would run the loop zero times and pass).
+    const ALL_PERSONA_IDS: PersonaId[] = ['developer', 'support', 'firm', 'inhouse']
+    const ALL_DESTINATIONS: Destination[] = ['app', 'ops', 'support']
+    const expected = ALL_DESTINATIONS.flatMap((destination) => ALL_PERSONA_IDS.map((id) => `${destination}:${id}`))
+    expect(expected.length, 'expected pairs (vacuity guard)').toBe(12)
+
     expect(BOUNDARY_MATRIX.length, 'boundary matrix rows (vacuity guard)').toBe(12)
-
-    const seen = new Set<string>()
-    const duplicates: string[] = []
-    const disagreements: string[] = []
-    const badVerdicts: string[] = []
-    for (const row of BOUNDARY_MATRIX) {
-      const key = `${row.destination}:${row.persona}`
-      if (seen.has(key)) duplicates.push(key)
-      seen.add(key)
-
-      if (row.verdict !== 'accepts' && row.verdict !== 'refuses') {
-        badVerdicts.push(`${key}: verdict "${row.verdict}"`)
-        continue
-      }
-      const expected = accepts(row.destination, row.persona)
-      if ((row.verdict === 'accepts') !== expected) {
-        disagreements.push(`${key}: matrix says ${row.verdict}, accepts() says ${expected}`)
-      }
-    }
+    const keys = BOUNDARY_MATRIX.map((row) => `${row.destination}:${row.persona}`)
+    const duplicates = keys.filter((key, i) => keys.indexOf(key) !== i)
     expect(duplicates, `duplicate (destination,persona) pairs: ${duplicates.join(', ')}`).toEqual([])
-    expect(badVerdicts, badVerdicts.join('\n')).toEqual([])
-    expect(disagreements, disagreements.join('\n')).toEqual([])
+    expect(new Set(keys).size, 'unique pairs').toBe(12)
+    expect([...keys].sort(), 'the matrix pairs are not the 4 personas x 3 destinations').toEqual([...expected].sort())
+
+    const notRefused = BOUNDARY_MATRIX.filter((row) => row.verdict !== 'refuses').map((row) => `${row.destination}:${row.persona}`)
+    expect(notRefused, `verdicts other than refuses: ${notRefused.join(', ')}`).toEqual([])
   })
 
   // --- QA-added coverage (task-270 Stage 4, Mode B): the one-way dependency rule --------
@@ -584,73 +411,6 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     expect(inhouseTokens, 'in-house branch should resolve the renamed approvals wrapper').toContain('NAV_APPROVALS')
   })
 
-  // --- QA-added coverage (task-271 Stage 4, Mode B): BOUNDARY_MATRIX vs the live gates ---
-  //
-  // G5 (row 10) proves BOUNDARY_MATRIX agrees with accepts(); accepts() just reads
-  // PERSONAS[id].destination, a field in this SAME hand-maintained registry. So G5 (and row
-  // 3's hardcoded ACCEPTED set) check the e2e-side data against itself, not against the
-  // frontend session gates the registry claims to mirror. This row reads the three actual
-  // gates -- shouldAutoSignIn, OPS_OPERATORS, SUPPORT_OPERATORS -- so a future change to any
-  // of them that nobody mirrors into e2e/personas.ts fails HERE, not silently.
-  it('row 13 (BOUNDARY_MATRIX vs the live product gates) -- the matrix cannot drift from shouldAutoSignIn/OPS_OPERATORS/SUPPORT_OPERATORS', () => {
-    const appAccepted = new Set(extractShouldAutoSignInIds(readFileSync(APP_SESSION_SRC, 'utf8')))
-    const opsAccepted = new Set(
-      extractOperatorKeys(readFileSync(OPS_SESSION_SRC, 'utf8'), 'OPS_OPERATORS', 'frontend/ops-console/src/session.ts'),
-    )
-    const supportAccepted = new Set(
-      extractOperatorKeys(readFileSync(SUPPORT_SESSION_SRC, 'utf8'), 'SUPPORT_OPERATORS', 'frontend/support-console/src/session.ts'),
-    )
-
-    expect(appAccepted.size, 'shouldAutoSignIn accepted ids (vacuity guard)').toBeGreaterThanOrEqual(2)
-    expect(opsAccepted.size, 'OPS_OPERATORS keys (vacuity guard)').toBeGreaterThanOrEqual(1)
-    expect(supportAccepted.size, 'SUPPORT_OPERATORS keys (vacuity guard)').toBeGreaterThanOrEqual(1)
-
-    const PRODUCT_GATE: Record<Destination, Set<string>> = {
-      app: appAccepted,
-      ops: opsAccepted,
-      support: supportAccepted,
-    }
-
-    expect(BOUNDARY_MATRIX.length, 'boundary matrix rows (vacuity guard)').toBe(12)
-    const disagreements: string[] = []
-    for (const row of BOUNDARY_MATRIX) {
-      const productAccepts = PRODUCT_GATE[row.destination].has(row.persona)
-      const matrixAccepts = row.verdict === 'accepts'
-      if (productAccepts !== matrixAccepts) {
-        disagreements.push(
-          `${row.destination}:${row.persona}: matrix says "${row.verdict}", live product gate says "${productAccepts ? 'accepts' : 'refuses'}"`,
-        )
-      }
-    }
-    expect(disagreements, disagreements.join('\n')).toEqual([])
-  })
-
-  // Negative control for G13's extractors: proves they can tell an accepted id apart from a
-  // rejected one, rather than (say) matching every quoted string in the file regardless of
-  // context. Exercises the SAME functions as row 13, over inline fixtures -- not a copy.
-  it('row 14 (G13-neg) -- the live-gate extractors distinguish an accepted id from a rejected one', () => {
-    // Column-0 braces, matching the real files' shape (both extractors slice to the next
-    // column-0 `}`) -- an indented fixture would silently miss its own closing brace.
-    const authFixture = [
-      'export function shouldAutoSignIn(personaParam: string | null): boolean {',
-      "  return personaParam === 'alpha' || personaParam === 'beta'",
-      '}',
-    ].join('\n')
-    const ids = extractShouldAutoSignInIds(authFixture)
-    expect(ids).toContain('alpha')
-    expect(ids).toContain('beta')
-    expect(ids).not.toContain('gamma')
-
-    const operatorsFixture = [
-      'export const FAKE_OPERATORS = {',
-      "  alpha: { name: 'Alpha', org: 'Test' },",
-      '} as const',
-    ].join('\n')
-    const keys = extractOperatorKeys(operatorsFixture, 'FAKE_OPERATORS', 'fixture')
-    expect(keys).toContain('alpha')
-    expect(keys).not.toContain('beta')
-  })
-
   // --- G6 (PERSONA-01-07, task-276): the guard that closes the door on Core AC 1 --------
   //
   // G6 guards data subtasks 01-06 already landed on this branch, so it is GREEN on the
@@ -664,9 +424,8 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     const sidebarSrc = readFileSync(SIDEBAR, 'utf8')
     const { firm, inhouse } = extractSidebarNavConsts(sidebarSrc)
 
-    // Persona<->mode mapping is a HARDCODED LITERAL, never read off PERSONA_IDS -- row 3's
-    // established reason: registry exports must not supply the pairs used to test the
-    // registry.
+    // Persona<->mode mapping is a HARDCODED LITERAL, never read off PERSONA_IDS -- row 10's
+    // reason: registry exports must not supply the pairs used to test the registry.
     const rendered = new Set<string>([
       ...firm.map((navConst) => `firm:${navConst}`),
       ...inhouse.map((navConst) => `inhouse:${navConst}`),
@@ -897,7 +656,7 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
   // G3/G6 above go red either way; this row states the claim rather than leaving it implied,
   // so a later story that quietly adds a Documents surface meets a named expectation.
   it('EXTR09-P-1 -- the document fork adds no nav surface and no coverage cell', () => {
-    // Hand-written literal, never SURFACES.map(...) -- row 3's rule: registry exports must
+    // Hand-written literal, never SURFACES.map(...) -- row 10's rule: registry exports must
     // not supply the expectation used to test the registry.
     expect(SURFACES.map((s) => s.navConst), 'the app SPA nav catalogue is unchanged by EXTR-09').toEqual([
       'NAV_DASHBOARD',

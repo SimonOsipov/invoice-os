@@ -2,10 +2,15 @@
 // Resolved values are read at 1440; layout claims assert a relationship at every wide width.
 // Screenshots are attached for the reviewer and never asserted.
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
-import { collectErrors, signInAs } from '../personaSession'
+import { provisionStaffAccount, type StaffAccount } from '../api/client'
+import { collectErrors } from '../personaSession'
+import { seedStaffSession } from '../staffSession'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 
 test.use({ viewport: { width: 1440, height: 900 } })
+
+let staff: Promise<StaffAccount> | undefined
+const staffAccount = (): Promise<StaffAccount> => (staff ??= provisionStaffAccount('reskin-support'))
 
 const SHADOW_CARD = 'rgba(40, 83, 52, 0.21) 0px 14px 22px -16px'
 
@@ -233,7 +238,7 @@ async function openScreen(page: Page, nav: string, h1: string): Promise<void> {
 
 async function startSupport(page: Page): Promise<string[]> {
   const errors = collectErrors(page)
-  await signInAs(page, 'support')
+  await seedStaffSession(page, 'support', await staffAccount())
   return errors
 }
 

@@ -28,6 +28,7 @@ beforeEach(() => {
   document.body.appendChild(container)
   root = createRoot(container)
   consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  vi.stubEnv('VITE_GATEWAY_URL', '')
 })
 
 afterEach(async () => {
@@ -74,6 +75,20 @@ async function fillValidForm(d: HTMLElement): Promise<void> {
   })
 }
 
+const GATEWAY_URL = 'https://gw.x/contacts/demo-request'
+
+// Routes by URL so the HubSpot Forms host and the gateway answer separately.
+function routeFetch(hs: () => Promise<Response> | Response, gw: () => Promise<Response> | Response) {
+  vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.x')
+  const fetchMock = vi.fn<typeof fetch>(async (url) => (String(url) === GATEWAY_URL ? gw() : hs()))
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+const hsOk = () => new Response('{}', { status: 200 })
+const gwAccepted = () => new Response(JSON.stringify({ status: 'accepted' }), { status: 202 })
+const gwError = (status: number, error: string) => () => new Response(JSON.stringify({ error }), { status })
+const urls = (fetchMock: { mock: { calls: Parameters<typeof fetch>[] } }) => fetchMock.mock.calls.map((c) => String(c[0]))
+
 // A real macrotask boundary drains the whole microtask queue first, so this settles
 // handleSubmit's multi-hop await chain (fetch -> submitDemoLead -> trackedHubSpotSubmit)
 // deterministically, unlike a single `await Promise.resolve()`.
@@ -95,8 +110,7 @@ describe('S11 (CHARACTERIZATION, regression oracle): mount focus', () => {
 describe('S12 (CHARACTERIZATION, regression oracle): double-submit guard', () => {
   it('a second submit while submitting does not reach the wire twice', async () => {
     openGate()
-    const fetchMock = vi.fn(() => new Promise(() => {})) // never settles
-    vi.stubGlobal('fetch', fetchMock)
+    const fetchMock = routeFetch(() => new Promise<Response>(() => {}), gwAccepted) // HubSpot never settles
     await mount()
     const d = dialog()
     await fillValidForm(d)
@@ -112,6 +126,31 @@ describe('S12 (CHARACTERIZATION, regression oracle): double-submit guard', () =>
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(submitButton.disabled).toBe(true)
     expect(consoleError).not.toHaveBeenCalled()
+  })
+})
+
+describe('AUTH-17-08: the double-submit guard covers the gateway call', () => {
+  it('a second submit while the gateway call is in flight does not post twice', async () => {
+    openGate()
+    const fetchMock = routeFetch(hsOk, () => new Promise<Response>(() => {}))
+    await mount()
+    const d = dialog()
+    await fillValidForm(d)
+    const submitButton = d.querySelector<HTMLButtonElement>('button[type="submit"]')!
+
+    await act(async () => {
+      submitButton.click()
+    })
+    await flushAsync()
+    expect(urls(fetchMock), 'control: HubSpot answered, the gateway call is pending').toHaveLength(2)
+
+    await act(async () => {
+      d.querySelector<HTMLFormElement>('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })
+    await flushAsync()
+
+    expect(urls(fetchMock)).toEqual([expect.stringContaining('hsforms.com'), GATEWAY_URL])
+    expect(submitButton.disabled).toBe(true)
   })
 })
 
@@ -148,11 +187,65 @@ describe('S14 (CHARACTERIZATION, regression oracle): failure state retries witho
   })
 })
 
-describe('S15 (CHARACTERIZATION, regression oracle): a valid submit reaches HubSpot exactly once', () => {
-  it('POSTs the seven mapped fields and focuses the success panel', async () => {
+describe('AUTH-17-08: a failure on either call shows the error panel and a retry resends both', () => {
+  it('a HubSpot failure shows the error panel and skips the gateway', async () => {
     openGate()
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 })
-    vi.stubGlobal('fetch', fetchMock)
+    let hs: () => Response = () => new Response('{}', { status: 500 })
+    const fetchMock = routeFetch(() => hs(), gwAccepted)
+    await mount()
+    const d = dialog()
+    await fillValidForm(d)
+    await act(async () => d.querySelector<HTMLButtonElement>('button[type="submit"]')!.click())
+    await flushAsync()
+
+    expect(d.textContent).toContain('Something went wrong')
+    expect(urls(fetchMock), 'only the Forms call was made').toEqual([expect.stringContaining('hsforms.com')])
+
+    hs = hsOk
+    await act(async () => document.getElementById('dm-error-retry')!.click())
+    await act(async () => d.querySelector<HTMLButtonElement>('button[type="submit"]')!.click())
+    await flushAsync()
+
+    expect(urls(fetchMock)).toEqual([expect.stringContaining('hsforms.com'), expect.stringContaining('hsforms.com'), GATEWAY_URL])
+    expect(d.textContent).toContain("You're booked")
+  })
+
+  const failures: [string, () => Promise<Response> | Response][] = [
+    ['a 400', gwError(400, 'email is invalid')],
+    ['a 502', gwError(502, 'demo request is unavailable')],
+    ['a network rejection', () => Promise.reject(new TypeError('Failed to fetch'))],
+  ]
+  for (const [label, failing] of failures) {
+    it(`a gateway failure shows the error panel (${label}) and a retry resends both`, async () => {
+      openGate()
+      let gw = failing
+      const fetchMock = routeFetch(hsOk, () => gw())
+      await mount()
+      const d = dialog()
+      await fillValidForm(d)
+      await act(async () => d.querySelector<HTMLButtonElement>('button[type="submit"]')!.click())
+      await flushAsync()
+
+      expect(d.textContent).toContain('Something went wrong')
+      expect(d.textContent).not.toContain("You're booked")
+      expect(urls(fetchMock)).toEqual([expect.stringContaining('hsforms.com'), GATEWAY_URL])
+
+      gw = gwAccepted
+      await act(async () => document.getElementById('dm-error-retry')!.click())
+      await act(async () => d.querySelector<HTMLButtonElement>('button[type="submit"]')!.click())
+      await flushAsync()
+
+      expect(urls(fetchMock).filter((u) => u.includes('hsforms.com'))).toHaveLength(2)
+      expect(urls(fetchMock).filter((u) => u === GATEWAY_URL)).toHaveLength(2)
+      expect(d.textContent).toContain("You're booked")
+    })
+  }
+})
+
+describe('S15 (CHARACTERIZATION, regression oracle): a valid submit reaches HubSpot exactly once', () => {
+  it('POSTs the seven mapped fields, then the gateway request, and focuses the success panel', async () => {
+    openGate()
+    const fetchMock = routeFetch(hsOk, gwAccepted)
     await mount()
     const d = dialog()
     await fillValidForm(d)
@@ -163,7 +256,8 @@ describe('S15 (CHARACTERIZATION, regression oracle): a valid submit reaches HubS
     })
     await flushAsync()
 
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(String(fetchMock.mock.calls[1]?.[0]), 'the gateway call follows the Forms call').toBe(GATEWAY_URL)
     const call = fetchMock.mock.calls[0]
     const url = call?.[0] as string | undefined
     const init = call?.[1] as RequestInit | undefined
@@ -180,6 +274,7 @@ describe('S15 (CHARACTERIZATION, regression oracle): a valid submit reaches HubS
       size: DEFAULT_TAXPAYER_SIZE,
       volume: '1k–10k',
       consent: true,
+      marketing: false,
     }
     expect(JSON.parse(init?.body as string)).toEqual(buildSubmission(lead, CONSENT_TEXT))
 

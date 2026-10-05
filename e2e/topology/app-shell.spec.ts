@@ -4,7 +4,6 @@
 // Screenshots are attached for the reviewer and never asserted.
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { collectErrors, signInAs } from '../personaSession'
-import { signInUrl } from '../personas'
 import { expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { APP_URL, GATEWAY_URL } from './targets'
@@ -14,7 +13,6 @@ test.use({ viewport: { width: 1440, height: 900 } })
 const SHADOW_CARD = 'rgba(40, 83, 52, 0.21) 0px 14px 22px -16px'
 const NOT_ACTIVE_BODY = JSON.stringify({ error: 'your membership in this workspace is not active' })
 const ME_URL = `${GATEWAY_URL}/api/tenancy/v1/me`
-const VERIFIED = '[title="Tenant verified via /v1/me"]'
 
 const firstFamily = (raw: string): string => raw.split(',')[0].replace(/["']/g, '').trim()
 
@@ -225,18 +223,19 @@ test('AS-01 firm shell at 1440: aside, header, switch, colour fixes', async ({ p
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('AS-02 in-house shell at 1440: aside, active row, ERP chip', async ({ page }, testInfo) => {
+test('AS-02 in-house shell at 1440: aside, active row, no ERP chip under hand-off', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
   await signInAs(page, 'inhouse')
   await settle(page, aside(page), page.locator('main.pf-main'))
   const measured = await readAside(page)
 
-  const chip = page.getByTestId('company-chip').getByText('ERP', { exact: true }).locator('xpath=..')
-  await expect(chip, 'the ?persona= sign-in is not a hand-off, so the company chip draws its ERP chip').toBeVisible()
-  const chipRadii = await radii(chip)
-  expect(chipRadii, 'ERP chip corners').toEqual(Array(4).fill('4px'))
+  const chip = page.getByTestId('company-chip')
+  await expect(chip, 'the in-house company chip drew').toBeVisible()
+  await expect(chip, 'the chip names the workspace').toContainText('WORKSPACE')
+  // Unit SB-05 (Sidebar.test.tsx) reads the ERP pill corner.
+  await expect(chip.getByText('ERP', { exact: true }), 'a hand-off session draws no ERP pill (AUTH-10-07)').toHaveCount(0)
 
-  await attachJson(testInfo, 'as-02-measurements', { ...measured, erpChip: chipRadii })
+  await attachJson(testInfo, 'as-02-measurements', measured)
   await attachShot(page, testInfo, 'shell-inhouse')
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
@@ -463,28 +462,39 @@ test('AS-07 the held sign-in card: radius, fill, border, no shadow', async ({ pa
   let held = false
   await page.route(ME_URL, async (route) => {
     const req = route.request()
-    if (req.method() !== 'GET' || held) return route.continue()
+    // Only the app's own /me is held; the landing and gateway calls of the sign-in pass through.
+    if (req.method() !== 'GET' || held || !req.frame().url().startsWith(APP_URL)) return route.continue()
     held = true
     await gate
-    await route.continue()
+    await route.continue().catch(() => {}) // the app aborts /me at 15s; a late continue then throws
   })
 
-  await page.goto(signInUrl('firm'), { waitUntil: 'commit' })
-  await expect.poll(() => held, { message: 'the first GET /me was never held, so the card is not the in-flight one' }).toBe(true)
-  const text = page.getByText(/^Signing in as .+…$/)
-  await expect(text, 'the loading card names the persona being signed in').toBeVisible()
-  const card = text.locator('xpath=../..')
-  await settle(page, card)
-  const reading = await styles(card, ['border-top-left-radius', 'background-color', 'border-top-color', 'box-shadow'])
+  const signing = signInAs(page, 'firm')
+  const signed = signing.then(() => null, (e: unknown) => e)
+  let shot: Buffer | undefined
+  let reading: Record<string, string> = {}
+  try {
+    // The app aborts /me after 15s (redeemHandoff): the held window is the poll, visibility, style reads and one screenshot.
+    let signInError: unknown = null
+    void signed.then((e) => (signInError = e))
+    await expect.poll(() => held || signInError !== null, { timeout: 30_000, message: 'the first app GET /me was never held, so the card is not the in-flight one' }).toBe(true)
+    if (signInError !== null) throw signInError
+    const text = page.getByText('Opening your workspace…', { exact: true })
+    await expect(text, 'the hand-off loading card is up while /me is held').toBeVisible({ timeout: 5_000 })
+    const card = text.locator('xpath=../..')
+    await settle(page, card)
+    reading = await styles(card, ['border-top-left-radius', 'background-color', 'border-top-color', 'box-shadow'])
+    shot = await page.screenshot({ timeout: 5_000 })
+  } finally {
+    release()
+  }
   expect(reading['border-top-left-radius'], 'card radius').toBe('10px')
   expect(reading['background-color'], 'card fill').toBe('rgb(255, 255, 255)')
   expect(reading['border-top-color'], 'card border').toBe('rgb(201, 217, 214)')
   expect(reading['box-shadow'], 'card shadow').toBe('none')
-
   await attachJson(testInfo, 'as-07-measurements', reading)
-  await attachShot(page, testInfo, 'loading')
-  release()
-  await expect(page.locator(VERIFIED), 'the held /me was released and the workspace drew').toBeAttached()
+  await testInfo.attach('loading.png', { body: shot!, contentType: 'image/png' })
+  expect(await signed, 'the sign-in after the held /me').toBeNull()
   await page.unroute(ME_URL)
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
@@ -513,67 +523,6 @@ test('AS-08 the suspended card: radius and Sign out corner', async ({ page }, te
   await attachShot(page, testInfo, 'suspended')
   await page.unroute(`${GATEWAY_URL}/api/**`)
   expect(errors, `console errors beyond the deliberate 403:\n${errors.join('\n')}`).toEqual([])
-})
-
-test('AS-09 persona popover and trigger', async ({ page }, testInfo) => {
-  const errors = collectErrors(page)
-  await signInAs(page, 'firm')
-  const trigger = page.getByTestId('persona-trigger')
-  await trigger.click()
-  const popover = page.getByTestId('persona-popover')
-  await expect(popover).toBeVisible()
-  await expect(page.getByTestId('persona-row-list'), 'the roster drew, so the popover is not its loading state').toBeVisible()
-  await settle(page, popover, trigger)
-
-  const p = await styles(popover, ['background-color', 'box-shadow', ...CORNERS])
-  expect(p['background-color'], 'popover background').toBe('rgb(255, 255, 255)')
-  expect(p['border-top-left-radius'], 'popover radius').toBe('6px')
-  expect(p['box-shadow'], 'popover shadow').toBe(SHADOW_CARD)
-  expect(await popover.getAttribute('class'), 'popover scope class').toContain('asc-light')
-
-  const t = await styles(trigger, ['color', 'background-color', 'border-top-left-radius'])
-  const fg1 = await resolveColor(aside(page), '--fg-1')
-  expect(t['border-top-left-radius'], 'trigger radius').toBe('7px')
-  expect(t.color, 'trigger text equals the aside --fg-1').toBe(fg1)
-  const ratio = contrast(t.color, t['background-color'])
-  expect(ratio, 'trigger text contrast against its own fill').toBeGreaterThanOrEqual(4.5)
-
-  await attachJson(testInfo, 'as-09-measurements', { popover: p, trigger: t, fg1, ratio })
-  await attachShot(page, testInfo, 'persona-popover')
-  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
-})
-
-test('AS-10 persona toast after a switch', async ({ page }, testInfo) => {
-  const errors = collectErrors(page)
-  await signInAs(page, 'firm')
-  const signedInAs = ((await page.getByTestId('persona-name').textContent()) ?? '').trim()
-  expect(signedInAs, 'the signed-in persona name drew').not.toBe('')
-
-  await page.getByTestId('persona-trigger').click()
-  await expect(page.getByTestId('persona-row-list')).toBeVisible()
-  // A blocked row is a div, so a suspended seeded member is never picked; the seeded names are not assumed.
-  const others = page.locator('button[data-testid="persona-row"]').filter({ hasNotText: signedInAs })
-  expect(await others.count(), 'at least one enabled member other than the signed-in one').toBeGreaterThanOrEqual(1)
-  await others.first().click()
-
-  const toast = page.getByTestId('persona-toast')
-  await expect(toast).toBeVisible()
-  await settle(page, toast)
-  const t = await styles(toast, ['background-color', 'box-shadow', 'border-left-width', 'border-left-color', 'border-top-left-radius'])
-  const title = await styles(page.getByTestId('persona-toast-title'), ['font-family'])
-  const meta = await styles(page.getByTestId('persona-toast-meta'), ['font-family'])
-  await attachShot(page, testInfo, 'persona-toast')
-
-  expect(t['background-color'], 'toast background').toBe('rgb(255, 255, 255)')
-  expect(t['box-shadow'], 'toast shadow').toBe(SHADOW_CARD)
-  expect(t['border-left-width'], 'toast left edge width').toBe('3px')
-  expect(t['border-left-color'], 'toast left edge colour').toBe('rgb(116, 84, 33)')
-  expect(t['border-top-left-radius'], 'toast radius').toBe('6px')
-  expect(firstFamily(title['font-family']), 'toast title family').toBe('Manrope')
-  expect(firstFamily(meta['font-family']), 'toast meta family').toBe('IBM Plex Mono')
-
-  await attachJson(testInfo, 'as-10-measurements', { switchedFrom: signedInAs, toast: t, title, meta })
-  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
 test('AS-11 entity modal, filter popover and pager', async ({ page }, testInfo) => {

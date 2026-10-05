@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
-// Adversarial coverage for landing's boot read and strip of `state` and `signin`.
+// Adversarial coverage for landing's boot read and strip of `state`, `console` and `signin`.
 /// <reference types="node" />
 import { StrictMode, act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -18,6 +18,7 @@ let container: HTMLDivElement
 let root: Root
 let consoleError: ReturnType<typeof vi.spyOn>
 let writes: unknown[]
+let restoreLocation: (() => void) | undefined
 
 function spyStore() {
   const map = new Map<string, string>()
@@ -50,6 +51,8 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  restoreLocation?.()
+  restoreLocation = undefined
   act(() => root.unmount())
   container.remove()
   window.history.replaceState(null, '', '/')
@@ -65,6 +68,38 @@ async function bootAt(path: string, strict = false): Promise<void> {
   await act(async () => {
     root.render(strict ? createElement(StrictMode, null, createElement(mod.default)) : createElement(mod.default))
   })
+}
+
+// Reads delegate to the real location so the strip still works; only `href` writes are captured.
+function captureNavigation(): string[] {
+  const assigned: string[] = []
+  const original = Object.getOwnPropertyDescriptor(window, 'location')
+  const real = window.location
+  const stub = {
+    get href() {
+      return real.href
+    },
+    set href(v: string) {
+      assigned.push(v)
+    },
+    get search() {
+      return real.search
+    },
+    get pathname() {
+      return real.pathname
+    },
+    get hash() {
+      return real.hash
+    },
+    get origin() {
+      return real.origin
+    },
+  }
+  Object.defineProperty(window, 'location', { value: stub, writable: true, configurable: true })
+  restoreLocation = () => {
+    if (original) Object.defineProperty(window, 'location', original)
+  }
+  return assigned
 }
 
 function dialogs(): HTMLElement[] {
@@ -96,11 +131,19 @@ async function openFromNav(): Promise<void> {
 
 describe('AUTH-05-07 adversarial: boot params', () => {
   it('a repeated state is ignored and every copy is stripped', async () => {
-    await bootAt(`/?state=${STATE}&signin=ready&state=${OTHER}`)
+    vi.stubEnv('VITE_OPS_URL', 'https://ops.x')
+    vi.stubEnv('VITE_SUPPORT_URL', 'https://support.x')
+    const assigned = captureNavigation()
+    await bootAt(`/?state=${STATE}&console=ops&signin=ready&state=${OTHER}&console=support`)
     const d = onlyDialog()
     expect(d.querySelectorAll('input').length).toBe(0)
     expect(d.textContent).toContain('Continue with email')
     expect(window.location.search).toBe('')
+    // Two console values hold no target: the bounce goes to the app.
+    const cont = Array.from(d.querySelectorAll('button')).filter((b) => b.textContent?.trim() === 'Continue with email')
+    expect(cont.length).toBe(1)
+    await act(async () => cont[0].click())
+    expect(assigned).toEqual(['https://app.x?auth=start'])
     expect(consoleError).not.toHaveBeenCalled()
   })
 
@@ -120,16 +163,32 @@ describe('AUTH-05-07 adversarial: boot params', () => {
   })
 
   it('the strip keeps the path and the hash', async () => {
-    await bootAt(`/?utm_source=x&state=${STATE}&signin=ready#faq`)
+    await bootAt(`/?utm_source=x&state=${STATE}&console=ops&signin=ready#faq`)
     onlyDialog()
     expect(window.location.pathname).toBe('/')
     expect(window.location.search).toBe('?utm_source=x')
+    expect(window.location.hash).toBe('#faq')
+
+    // A path that is not `/` tells a kept path from a rebuilt one.
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    vi.resetModules()
+    await bootAt(`/privacy?state=${STATE}&console=ops&keep=1#top`)
+    expect(window.location.pathname).toBe('/privacy')
+    expect(window.location.search).toBe('?keep=1')
+    expect(window.location.hash).toBe('#top')
+  })
+
+  it('verified and verify are stripped whole with the sign-in params; a sign-in outcome still opens', async () => {
+    await bootAt(`/?keep=1&state=${STATE}&signin=ready&verified=1&verify=failed&verified=0#faq`)
+    onlyDialog()
+    expect(window.location.search).toBe('?keep=1')
     expect(window.location.hash).toBe('#faq')
   })
 
   it('a boot with neither param does not touch history', async () => {
     const replace = vi.spyOn(window.history, 'replaceState')
-    await bootAt('/?verify=failed')
+    await bootAt('/?keep=1')
     replace.mockClear()
     const mod = (await import('./App')) as { default: () => ReturnType<typeof createElement> }
     await act(async () => root.unmount())
@@ -137,7 +196,7 @@ describe('AUTH-05-07 adversarial: boot params', () => {
     await act(async () => root.render(createElement(mod.default)))
     pageMounted()
     expect(replace).not.toHaveBeenCalled()
-    expect(window.location.search).toBe('?verify=failed')
+    expect(window.location.search).toBe('?keep=1')
   })
 
   it('a malformed state alone opens nothing and is stripped', async () => {
@@ -237,5 +296,193 @@ describe('AUTH-05-07 adversarial: unconfigured landing (D7: production unchanged
     pageMounted()
     expect(dialogs().length).toBe(0)
     expect(window.location.search).toBe('')
+  })
+})
+
+// Ends the current boot: restores `location`, then mounts a fresh root on re-imported modules.
+async function remountFresh(): Promise<void> {
+  restoreLocation?.()
+  restoreLocation = undefined
+  await act(async () => root.unmount())
+  root = createRoot(container)
+  vi.resetModules()
+}
+
+const NOT_STAFF = 'This account cannot open the ASComply consoles.'
+const CONTINUE = 'Continue with email'
+
+function continueButtons(d: HTMLElement): HTMLButtonElement[] {
+  return Array.from(d.querySelectorAll('button')).filter((b) => b.textContent?.trim() === CONTINUE)
+}
+
+async function clickContinue(): Promise<void> {
+  const b = continueButtons(onlyDialog())
+  expect(b.length).toBe(1)
+  await act(async () => b[0].click())
+}
+
+async function fillAndSubmit(d: HTMLElement): Promise<void> {
+  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+  const email = d.querySelectorAll<HTMLInputElement>('input[type="email"]')
+  const password = d.querySelectorAll<HTMLInputElement>('input[type="password"]')
+  expect(email.length).toBe(1)
+  expect(password.length).toBe(1)
+  await act(async () => {
+    setValue.call(email[0], 'ada@okafor.ng')
+    email[0].dispatchEvent(new Event('input', { bubbles: true }))
+    setValue.call(password[0], 'pw')
+    password[0].dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await act(async () => d.querySelector<HTMLButtonElement>('button[type="submit"]')!.click())
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 0))
+  })
+}
+
+function stubCode() {
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValue(new Response(JSON.stringify({ code: 'the-code' }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+describe('adversarial: the console target', () => {
+  beforeEach(() => {
+    vi.stubEnv('VITE_OPS_URL', 'https://ops.x')
+    vi.stubEnv('VITE_SUPPORT_URL', 'https://support.x')
+  })
+
+  it('a single console and no state reaches that console through App, modal and form', async () => {
+    const cases: [string, string][] = [
+      ['ops', 'https://ops.x?auth=start'],
+      ['support', 'https://support.x?auth=start'],
+    ]
+    expect(cases.length).toBeGreaterThan(0)
+    for (const [target, want] of cases) {
+      const assigned = captureNavigation()
+      await bootAt(`/?console=${target}`)
+      pageMounted()
+      expect(dialogs().length).toBe(0)
+      expect(window.location.search).toBe('')
+      await openFromNav()
+      await clickContinue()
+      expect(assigned, target).toEqual([want])
+      await remountFresh()
+    }
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('a console value that is not exactly ops or support holds no target and never reaches the URL', async () => {
+    const refused = ['OPS', 'Support', 'ops%20', '%20ops', '', 'ops,support', 'ops%00', 'https%3A%2F%2Fevil.example', '%2F%2Fevil.example', 'ops%40evil.example', 'app']
+    for (const v of refused) {
+      const assigned = captureNavigation()
+      await bootAt(`/?console=${v}&signin=ready`)
+      expect(window.location.search, v).toBe('')
+      await clickContinue()
+      expect(assigned, v).toEqual(['https://app.x?auth=start'])
+      await remountFresh()
+    }
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('a URL in console never receives the code', async () => {
+    stubCode()
+    const assigned = captureNavigation()
+    await bootAt(`/?state=${STATE}&console=${encodeURIComponent('https://evil.example/x')}&signin=ready`)
+    await fillAndSubmit(onlyDialog())
+    expect(assigned).toEqual(['https://app.x?handoff=the-code'])
+    for (const a of assigned) expect(a).not.toContain('evil')
+  })
+
+  it('a console with an unset base navigates nowhere and never falls back to the app', async () => {
+    const cases: [string, string, string][] = [
+      ['ops', 'VITE_OPS_URL', 'https://support.x'],
+      ['support', 'VITE_SUPPORT_URL', 'https://ops.x'],
+    ]
+    for (const [target, env] of cases) {
+      vi.stubEnv(env, '')
+      const fetchMock = stubCode()
+      const assigned = captureNavigation()
+      await bootAt(`/?state=${STATE}&console=${target}&signin=ready`)
+      await fillAndSubmit(onlyDialog())
+      expect(fetchMock, target).toHaveBeenCalledTimes(1)
+      expect(assigned, `${target} submit`).toEqual([])
+      await remountFresh()
+
+      const bounced = captureNavigation()
+      await bootAt(`/?console=${target}&signin=ready`)
+      await clickContinue()
+      expect(bounced, `${target} continue`).toEqual([])
+      await remountFresh()
+      vi.stubEnv('VITE_OPS_URL', 'https://ops.x')
+      vi.stubEnv('VITE_SUPPORT_URL', 'https://support.x')
+    }
+  })
+
+  it('not-staff with a held console keeps the target for the retry', async () => {
+    stubCode()
+    const assigned = captureNavigation()
+    await bootAt(`/?state=${STATE}&console=support&signin=not-staff`)
+    const d = onlyDialog()
+    expect(Array.from(d.querySelectorAll('[role="alert"]')).map((a) => a.textContent)).toEqual([expect.stringContaining(NOT_STAFF)])
+    await fillAndSubmit(d)
+    expect(assigned).toEqual(['https://support.x?handoff=the-code'])
+  })
+
+  it('not-staff with a held console and no state keeps the alert and bounces through that console', async () => {
+    const assigned = captureNavigation()
+    await bootAt('/?console=ops&signin=not-staff')
+    const alerts = Array.from(onlyDialog().querySelectorAll('[role="alert"]'))
+    expect(alerts.length).toBe(1)
+    expect(alerts[0].textContent).toContain(NOT_STAFF)
+    await clickContinue()
+    expect(assigned).toEqual(['https://ops.x?auth=start'])
+  })
+
+  it('a bare console param is stripped alone, and a repeated one in every copy', async () => {
+    await bootAt('/?console&keep=1')
+    pageMounted()
+    expect(window.location.search).toBe('?keep=1')
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    vi.resetModules()
+    await bootAt('/?console=ops&a=1&console=ops&console=support&b=2')
+    pageMounted()
+    expect(window.location.search).toBe('?a=1&b=2')
+    expect(dialogs().length).toBe(0)
+  })
+
+  it('no dialog control navigates to a persona URL', async () => {
+    const assigned = captureNavigation()
+    await bootAt('/?console=ops&signin=ready')
+    const d = onlyDialog()
+    const all = Array.from(d.querySelectorAll<HTMLButtonElement>('button'))
+    // Close last: it unmounts the dialog and would turn later clicks into no-ops.
+    const buttons = [...all.filter((b) => b.getAttribute('aria-label') !== 'Close'), ...all.filter((b) => b.getAttribute('aria-label') === 'Close')]
+    expect(buttons.length, 'control: the dialog has controls to click').toBeGreaterThanOrEqual(2)
+    for (const b of buttons) await act(async () => b.click())
+    expect(assigned.length, 'control: a real control still navigates').toBeGreaterThan(0)
+    expect(assigned.filter((h) => h.includes('persona=')), assigned.join('\n')).toEqual([])
+    expect(d.querySelectorAll('[data-persona]').length).toBe(0)
+  })
+
+  it('StrictMode: the held console survives the double effect and the strip', async () => {
+    stubCode()
+    const assigned = captureNavigation()
+    await bootAt(`/?state=${STATE}&console=ops&signin=ready`, true)
+    expect(window.location.search).toBe('')
+    await fillAndSubmit(onlyDialog())
+    expect(assigned).toEqual(['https://ops.x?handoff=the-code'])
+  })
+
+  it('the console target is held in memory only', async () => {
+    const assigned = captureNavigation()
+    await bootAt('/?console=ops&signin=ready')
+    await clickContinue()
+    expect(assigned).toEqual(['https://ops.x?auth=start'])
+    for (const w of writes) expect(JSON.stringify(w)).not.toContain('console')
+    expect(document.cookie).not.toContain('console')
+    expect(window.location.href).not.toContain('console')
   })
 })

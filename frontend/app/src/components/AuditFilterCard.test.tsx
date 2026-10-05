@@ -257,7 +257,7 @@ function openEventPopover() {
 }
 
 describe('AuditFilterCard: event type', () => {
-  it('auditEventFilter_tenGroupsCoverAllForty', () => {
+  it('auditEventFilter_tenGroupsCoverAllFortyOne', () => {
     renderCard()
     openEventPopover()
 
@@ -265,10 +265,25 @@ describe('AuditFilterCard: event type', () => {
     expect(groups.length, 'population floor: ten group headings').toBe(10)
 
     const rows = screen.getAllByTestId(/^audit-event-row-/)
-    expect(rows.length, 'population floor: 40 rows').toBe(40)
+    expect(rows.length, 'population floor: 41 rows').toBe(41)
 
     const flattenedIds = rows.map((r) => r.getAttribute('data-testid')!.replace('audit-event-row-', ''))
     expect(flattenedIds, 'the union of every group must equal the vocabulary exactly').toEqual(Object.keys(AUDIT_EVENTS))
+  })
+
+  it('auditEventFilter_workspaceCreatedIsAMembershipsRow', () => {
+    const { onChange } = renderCard()
+    openEventPopover()
+
+    const label = screen.getByTestId('audit-event-label-workspace.provisioned')
+    expect(label.textContent).toBe('Workspace created')
+
+    // The Memberships group's own All selects its ids; the new row must be one of them.
+    fireEvent.click(screen.getByTestId('audit-event-group-memberships-all'))
+    expect(onChange).toHaveBeenCalledTimes(1)
+    const next = onChange.mock.calls[0][0] as AuditFilterState
+    expect(next.events, 'control needle: a sibling membership event is selected').toContain('membership.suspended')
+    expect(next.events).toContain('workspace.provisioned')
   })
 
   it('auditEventFilter_groupOrderIsFixed', () => {
@@ -377,7 +392,7 @@ describe('AuditFilterCard: event type', () => {
     openEventPopover()
 
     const labels = screen.getAllByTestId(/^audit-event-label-/)
-    expect(labels.length, 'population floor: 40 labels').toBe(40)
+    expect(labels.length, 'population floor: 41 labels').toBe(41)
 
     const texts = labels.map((l) => l.textContent ?? '')
     expect(texts, 'control needle: a known human label must be present').toContain('Transmission failed')
@@ -426,7 +441,7 @@ describe('AuditFilterCard: event type', () => {
     openEventPopover()
 
     const rows = screen.getAllByTestId(/^audit-event-row-/)
-    expect(rows.length, 'the vocabulary drives rows, not the facet array -- still exactly 40').toBe(40)
+    expect(rows.length, 'the vocabulary drives rows, not the facet array -- still exactly 41').toBe(41)
     expect(
       screen.queryByTestId('audit-event-row-legacy.retired_event'),
       'an id outside the vocabulary gets no row',

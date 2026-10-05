@@ -7,7 +7,7 @@
 //
 // Coverage (see M3-04-01 Test Specs):
 //  1. TestSchema_AppCannotMutateContent      — app cannot UPDATE key/severity/type (42501).
-//  2. TestSchema_AppCanToggleEnabled         — app CAN UPDATE the enabled kill-switch column.
+//  2. TestSchema_AppCannotToggleEnabled      — app cannot UPDATE the enabled column (42501).
 //  3. TestSchema_AppCannotInsertVersionOrRule — app has no INSERT grant on either table (42501).
 //  4. TestSchema_AppCannotDeleteRule         — app has no DELETE grant on either table (42501).
 //  5. TestSchema_OneActiveVersionEnforced    — the partial unique index allows <=1 active version (23505).
@@ -330,11 +330,23 @@ func assertSQLState(t *testing.T, err error, want string) {
 	}
 }
 
+// assertAppRefused asserts err is a 42501 refusal.
+func assertAppRefused(t *testing.T, err error, what string) {
+	t.Helper()
+	if err == nil {
+		t.Errorf("%s as invoice_app: want SQLSTATE 42501, got no error", what)
+		return
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
+		t.Errorf("%s as invoice_app: want SQLSTATE 42501, got %v", what, err)
+	}
+}
+
 // TestSchema_AppCannotMutateContent (Test Spec #1): as invoice_app, an UPDATE naming any
 // content column (key, severity, type — anything other than enabled) must fail with
-// insufficient_privilege (42501). The column-level GRANT ("GRANT SELECT, UPDATE (enabled)
-// ON rules TO invoice_app") makes rule content immutable to the app; only the kill-switch
-// is app-writable (TestSchema_AppCanToggleEnabled below).
+// insufficient_privilege (42501). The app holds SELECT only on rules; the kill switch runs
+// as the owner (TestKillSwitch_OnlyTheOwnerCanRunIt).
 func TestSchema_AppCannotMutateContent(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -360,39 +372,170 @@ func TestSchema_AppCannotMutateContent(t *testing.T) {
 	}
 }
 
-// TestSchema_AppCanToggleEnabled (Test Spec #2): as invoice_app, `UPDATE rules SET
-// enabled=false` on a seeded rule must succeed (1 row affected, no error), and the new
-// value must be durable — the positive counterpart to
-// TestSchema_AppCannotMutateContent, proving the column-level grant is scoped exactly to
-// `enabled`, not accidentally denying everything or accidentally granting everything.
-func TestSchema_AppCanToggleEnabled(t *testing.T) {
+// TestSchema_AppCannotToggleEnabled: as invoice_app, UPDATE rules SET enabled fails with
+// 42501 and the row is unchanged. A fixture rule, not a seeded row.
+func TestSchema_AppCannotToggleEnabled(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
 	versionID, _ := seedVersion(t, super, false)
 	ruleID := seedRule(t, super, versionID, "enabled-toggle-probe")
 
-	tag, err := app.Exec(ctx, `UPDATE rules SET enabled = false WHERE id = $1`, ruleID)
-	if err != nil {
-		t.Fatalf("UPDATE rules SET enabled=false: want success (the kill-switch column is app-writable), got error: %v", err)
-	}
-	if got := tag.RowsAffected(); got != 1 {
-		t.Fatalf("RowsAffected = %d, want 1", got)
-	}
+	_, err := app.Exec(ctx, `UPDATE rules SET enabled = false WHERE id = $1`, ruleID)
+	assertAppRefused(t, err, "UPDATE rules SET enabled = false")
 
 	var enabled bool
 	if err := super.QueryRow(ctx, `SELECT enabled FROM rules WHERE id = $1`, ruleID).Scan(&enabled); err != nil {
 		t.Fatalf("read back enabled: %v", err)
 	}
-	if enabled {
-		t.Error("enabled = true after UPDATE ... SET enabled = false, want false -- the update did not persist")
+	if !enabled {
+		t.Error("enabled = false after the app's UPDATE, want true unchanged")
+	}
+}
+
+// TestSchema_AppCannotLockRuleRows: SELECT ... FOR UPDATE needs UPDATE on a column, so it is
+// refused with 42501 once the app holds no UPDATE grant on rules.
+func TestSchema_AppCannotLockRuleRows(t *testing.T) {
+	_, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tx, err := app.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin app tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var id string
+	err = tx.QueryRow(ctx, `SELECT id FROM rules WHERE key = 'vat-standard-rate' FOR UPDATE`).Scan(&id)
+	assertAppRefused(t, err, "SELECT ... FROM rules FOR UPDATE")
+}
+
+// TestSchema_AppHoldsNoWritePrivilegeOnRules: no column or table write privilege on rules.
+func TestSchema_AppHoldsNoWritePrivilegeOnRules(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+
+	var colUpdate bool
+	if err := super.QueryRow(ctx,
+		`SELECT has_column_privilege('invoice_app', 'public.rules', 'enabled', 'UPDATE')`,
+	).Scan(&colUpdate); err != nil {
+		t.Fatalf("has_column_privilege: %v", err)
+	}
+	if colUpdate {
+		t.Error("has_column_privilege(invoice_app, rules.enabled, UPDATE) = true, want false")
+	}
+	for _, p := range []string{"INSERT", "UPDATE", "DELETE", "TRUNCATE"} {
+		var has bool
+		if err := super.QueryRow(ctx,
+			`SELECT has_table_privilege('invoice_app', 'public.rules', $1)`, p,
+		).Scan(&has); err != nil {
+			t.Fatalf("has_table_privilege(%s): %v", p, err)
+		}
+		if has {
+			t.Errorf("has_table_privilege(invoice_app, rules, %s) = true, want false", p)
+		}
+	}
+}
+
+// TestSchema_OnlyTheOwnerCanWriteRules: no role but the owner and superusers can write rules,
+// directly, through PUBLIC, or by SET ROLE to the owner.
+func TestSchema_OnlyTheOwnerCanWriteRules(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+
+	rows, err := super.Query(ctx, `
+		SELECT rolname,
+		       has_column_privilege(oid, 'public.rules', 'enabled', 'UPDATE'),
+		       has_table_privilege(oid, 'public.rules', 'INSERT'),
+		       has_table_privilege(oid, 'public.rules', 'UPDATE'),
+		       has_table_privilege(oid, 'public.rules', 'DELETE'),
+		       has_table_privilege(oid, 'public.rules', 'TRUNCATE'),
+		       pg_has_role(oid, 'invoice_migrator', 'USAGE')
+		FROM pg_roles
+		WHERE NOT rolsuper AND rolname !~ '^pg_' AND rolname <> 'invoice_migrator'
+		ORDER BY rolname`)
+	if err != nil {
+		t.Fatalf("read non-owner roles: %v", err)
+	}
+	defer rows.Close()
+	seen := map[string]bool{}
+	for rows.Next() {
+		var name string
+		var col, ins, upd, del, trunc, asOwner bool
+		if err := rows.Scan(&name, &col, &ins, &upd, &del, &trunc, &asOwner); err != nil {
+			t.Fatalf("scan role: %v", err)
+		}
+		seen[name] = true
+		for what, held := range map[string]bool{
+			"UPDATE rules.enabled": col, "INSERT rules": ins, "UPDATE rules": upd, "DELETE rules": del,
+			"TRUNCATE rules": trunc, "SET ROLE invoice_migrator": asOwner,
+		} {
+			if held {
+				t.Errorf("role %s can %s, want only the owner to write rules", name, what)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate roles: %v", err)
+	}
+	for _, want := range []string{"invoice_app", "invoice_tenant_reader"} {
+		if !seen[want] {
+			t.Errorf("role %s missing from the audited set %v: the check would be vacuous", want, seen)
+		}
+	}
+
+	for _, p := range []string{"INSERT", "UPDATE", "DELETE", "TRUNCATE"} {
+		var has bool
+		if err := super.QueryRow(ctx,
+			`SELECT has_table_privilege('public', 'public.rules', $1)`, p,
+		).Scan(&has); err != nil {
+			t.Fatalf("has_table_privilege(PUBLIC, %s): %v", p, err)
+		}
+		if has {
+			t.Errorf("PUBLIC can %s rules, want false", p)
+		}
+	}
+	var publicCol bool
+	if err := super.QueryRow(ctx,
+		`SELECT has_column_privilege('public', 'public.rules', 'enabled', 'UPDATE')`,
+	).Scan(&publicCol); err != nil {
+		t.Fatalf("has_column_privilege(PUBLIC): %v", err)
+	}
+	if publicCol {
+		t.Error("PUBLIC can UPDATE rules.enabled, want false")
+	}
+}
+
+// TestSchema_AppKeepsReadOnRules: the revoke leaves SELECT on both tables and the global
+// loader working.
+func TestSchema_AppKeepsReadOnRules(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	for _, table := range []string{"rules", "rule_set_versions"} {
+		var has bool
+		if err := super.QueryRow(ctx,
+			`SELECT has_table_privilege('invoice_app', $1, 'SELECT')`, "public."+table,
+		).Scan(&has); err != nil {
+			t.Fatalf("has_table_privilege(%s): %v", table, err)
+		}
+		if !has {
+			t.Errorf("has_table_privilege(invoice_app, %s, SELECT) = false, want true", table)
+		}
+	}
+
+	rs, err := NewStore(app).LoadActiveRuleSetGlobal(ctx)
+	if err != nil {
+		t.Fatalf("LoadActiveRuleSetGlobal: %v", err)
+	}
+	if len(rs.Rules) == 0 {
+		t.Error("LoadActiveRuleSetGlobal returned no rules, want the seeded active set")
 	}
 }
 
 // TestSchema_AppCannotInsertVersionOrRule (Test Spec #3): as invoice_app, INSERT into
-// either table must fail with insufficient_privilege (42501) -- the app has SELECT-only
-// on rule_set_versions and SELECT + UPDATE(enabled)-only on rules, no INSERT grant on
-// either.
+// either table must fail with insufficient_privilege (42501) -- the app has SELECT only
+// on both, no INSERT grant.
 func TestSchema_AppCannotInsertVersionOrRule(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -422,7 +565,7 @@ func TestSchema_AppCannotInsertVersionOrRule(t *testing.T) {
 			versionID,
 		)
 		if err == nil {
-			t.Fatal("INSERT INTO rules: want SQLSTATE 42501 (insufficient_privilege), got no error -- app has SELECT + UPDATE(enabled) only, no INSERT")
+			t.Fatal("INSERT INTO rules: want SQLSTATE 42501 (insufficient_privilege), got no error -- app has SELECT only, no INSERT")
 		}
 		assertSQLState(t, err, "42501")
 	})
@@ -430,8 +573,7 @@ func TestSchema_AppCannotInsertVersionOrRule(t *testing.T) {
 
 // TestSchema_AppCannotDeleteRule (Test Spec #4): as invoice_app, DELETE from either table
 // must fail with insufficient_privilege (42501) -- rule content is immutable and
-// versions are permanent once published; only SELECT (+ UPDATE(enabled) on rules) is
-// granted.
+// versions are permanent once published; only SELECT is granted.
 func TestSchema_AppCannotDeleteRule(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -564,12 +706,10 @@ func TestSchema_NoRuleContentShipped(t *testing.T) {
 // 10. TestSchema_CheckConstraintsRejectInvalidEnums — the three CHECK constraints
 //     (type, severity, scope) reject out-of-list values with 23514.
 
-// TestSchema_AppCannotMutateRemainingContentColumns (QA addition): the column-level
-// grant `GRANT SELECT, UPDATE (enabled) ON rules TO invoice_app` must deny invoice_app
-// UPDATE on every content column other than `enabled` -- TestSchema_AppCannotMutateContent
-// above only exercises key/severity/type. Covers the remaining columns: target, params,
-// message, scope, "when", and the rule_set_version_id FK itself. Each case must fail
-// 42501 (insufficient_privilege), proving the grant scope is exactly {enabled}.
+// TestSchema_AppCannotMutateRemainingContentColumns (QA addition): invoice_app holds no
+// UPDATE grant on rules, so every content column other than key/severity/type (covered by
+// TestSchema_AppCannotMutateContent) fails 42501: target, params, message, scope, "when",
+// and the rule_set_version_id FK itself.
 func TestSchema_AppCannotMutateRemainingContentColumns(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()

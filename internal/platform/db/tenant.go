@@ -54,10 +54,10 @@ func WithinRequestTenantTxOpts(ctx context.Context, pool *pgxpool.Pool, opts pgx
 	if _, err := uuid.Parse(id.TenantID); err != nil {
 		return ErrNoTenant
 	}
-	// memberships.user_id is uuid: a non-uuid subject can match no row, and a
-	// failed statement would poison the batch's transaction. Not a hole: Verifier.validate
-	// already rejects any token whose subject is not a uuid before an Identity is ever
-	// built, so no caller reaches this arm with one.
+	// memberships.user_id is uuid, so a non-uuid subject skips the lookup. The arm admits
+	// in-process actors (extraction-worker, backfill-source-rows, revalidate-rule-set) and
+	// Subject "system" fixtures (TestBackfill_RunsAsANonUUIDActorAndIsNotGated); HTTP cannot
+	// reach it (TestIdentityMiddleware_NonUUIDSubjectBuildsNoIdentity).
 	if _, err := uuid.Parse(id.Subject); err != nil {
 		return WithinTenantTxOpts(ctx, pool, id.TenantID, opts, fn)
 	}

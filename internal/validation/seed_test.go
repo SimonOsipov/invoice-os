@@ -20,8 +20,7 @@
 // version directly (v2 since M4-04-01; see activeSeedVersion), so it never
 // contends for the partial-unique "one active version" slot other tests'
 // seedVersion(...,true) fixtures occupy transiently. Only TestSeed_KillSwitch mutates shared state (one rule's
-// `enabled` column, via the real app-role Store.ToggleRule path) and
-// restores it in t.Cleanup; every other test in this file is read-only.
+// `enabled` column) and restores it in t.Cleanup; every other test in this file is read-only.
 //
 // Coverage (story M3-05 Test Specs; see the story's System Design table +
 // .ralph/m3-05-exec-readiness.md for the exact signatures/harness):
@@ -48,7 +47,7 @@
 //     story's Decisions section). Every subtest here also doubles as the
 //     "CEL compiles + returns bool" proof (no engine error on any case).
 //  9. TestSeed_KillSwitch            -- Core AC 5: disabling
-//     vat-standard-rate via the app-grant Store.ToggleRule path drops its
+//     vat-standard-rate via runKillSwitch drops its
 //     violation from the next evaluate, leaving only supplier-tin-format;
 //     restored in cleanup.
 //  10. TestSeed_ReversibilityRollback (optional, per the story's Test Specs
@@ -90,7 +89,7 @@ import (
 
 // newTestIdentity builds a fresh authenticated identity context. rule_set_versions/
 // rules are GLOBAL, untenanted tables (no RLS -- see store.go's file header), so the
-// specific tenant chosen here is arbitrary; Store.LoadActiveRuleSet/ToggleRule only
+// specific tenant chosen here is arbitrary; Store.LoadActiveRuleSet only
 // require db.WithinRequestTenantTx to see a valid identity in ctx (store_test.go's
 // TestStore_LoadNoIdentityErrors proves the no-identity case separately).
 func newTestIdentity() context.Context {
@@ -582,23 +581,14 @@ func TestSeed_DuplicateLineItemsCEL(t *testing.T) {
 	})
 }
 
-// TestSeed_KillSwitch (Core AC 5 / Test Spec "Kill-switch"): disabling
-// vat-standard-rate via the real app-grant Store.ToggleRule path drops its
-// violation from the very next evaluate of the bad payload -- only
-// supplier-tin-format remains. The rule is restored to enabled=true in
-// cleanup (direct superuser UPDATE, independent of whether ToggleRule itself
-// succeeded) so this test never leaves the shared migrated v1 disabled for
-// any other test in this package.
+// TestSeed_KillSwitch: disabling vat-standard-rate through runKillSwitch drops
+// its violation from the very next evaluate of the bad payload -- only
+// supplier-tin-format remains. Restored in cleanup.
 func TestSeed_KillSwitch(t *testing.T) {
 	super, app := dbTestPools(t)
 
-	// Restore on the ACTIVE version -- matching ToggleRule's own predicate
-	// (`WHERE is_active`, store.go:137-139), which is what disabled the rule
-	// below. Hardcoding `v.version = 1` here would silently restore the WRONG
-	// row once the active version is not literally 1, leaving vat-standard-rate
-	// DISABLED on the live active rule-set for every subsequent test and on the
-	// shared dev DB (RS-V2-11). Mirroring ToggleRule's predicate is what stops
-	// the two from drifting apart again.
+	// Restore on the active version, the row the kill switch writes
+	// (TestRuleSetV2_KillSwitchCleanupTargetsActiveVersion).
 	t.Cleanup(func() {
 		if _, err := super.Exec(context.Background(),
 			`UPDATE rules r SET enabled = true
@@ -609,9 +599,8 @@ func TestSeed_KillSwitch(t *testing.T) {
 		}
 	})
 
-	store := NewStore(app)
-	if _, err := store.ToggleRule(newTestIdentity(), "vat-standard-rate", false); err != nil {
-		t.Fatalf("ToggleRule(vat-standard-rate, false): %v", err)
+	if n := runKillSwitch(t, super, "vat-standard-rate", false); n != 1 {
+		t.Fatalf("kill switch (vat-standard-rate, false) rows = %d, want 1", n)
 	}
 
 	rs := loadActive(t, app)
@@ -621,7 +610,7 @@ func TestSeed_KillSwitch(t *testing.T) {
 		t.Fatalf("Evaluate(bad payload) after kill-switch: %v", err)
 	}
 	if hasViolation(result, "vat-standard-rate") {
-		t.Error("vat-standard-rate still fired after being disabled via ToggleRule")
+		t.Error("vat-standard-rate still fired after the kill switch")
 	}
 	wantKeys := []string{"supplier-tin-format"}
 	if got := violationKeys(result); !reflect.DeepEqual(got, wantKeys) {

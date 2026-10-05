@@ -7,6 +7,7 @@ interface ImportMetaEnv {
   // unset means Sign out stays put rather than routing to the wrong environment
   // (see `landingBase()` in auth.ts). Mirrors frontend/app/src/vite-env.d.ts.
   readonly VITE_LANDING_URL?: string
+  readonly VITE_GATEWAY_URL?: string
   readonly VITE_SENTRY_DSN?: string
   readonly VITE_SENTRY_TEST_DIGEST?: string
   readonly VITE_RAILWAY_GIT_COMMIT_SHA?: string

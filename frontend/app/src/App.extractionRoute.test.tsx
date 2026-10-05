@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // Per-file opt-in: vitest.config.ts stays `environment: 'node'` for every other suite.
 //
-// EXTR-11-08, Mode A. The route, `carryView`, and the `openExtraction` hand-off, observed on
-// PlatformCtx. Harness is App.auditPrefilter.test.tsx's, which is itself App.standIn's: the
+// EXTR-11-08, Mode A. The route and the `openExtraction` hand-off, observed on
+// PlatformCtx. Harness is App.auditPrefilter.test.tsx's: the
 // real <App/>, a session in a stubbed localStorage, ctx captured through a mocked Sidebar.
 //
 // `tsc --noEmit` STAYS GREEN in this commit, deliberately. Every red below is a runtime
@@ -19,7 +19,6 @@ import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Session } from './auth'
-import type { Member } from './lib/members'
 import { SESSION_KEY, serializeSession } from './lib/session'
 import type { PlatformCtx, View } from './types'
 
@@ -67,28 +66,7 @@ vi.mock('./components/Sidebar', () => ({
 
 const SEAT_SESSION: Session = { persona: APP_PERSONAS.firm, token: null, me: null, verified: true }
 
-const MEMBER: Member = {
-  id: 'm-standin-001',
-  name: 'Tunde Bello',
-  initials: 'TB',
-  email: 'tunde@example.ng',
-  role: 'preparer',
-  status: 'active',
-  isYou: false,
-}
-
-// Same subject as the seat -- what `returnToSeat` is handed.
-const SEAT_AS_MEMBER: Member = {
-  id: SEAT_SESSION.persona.subject,
-  name: SEAT_SESSION.persona.name,
-  initials: SEAT_SESSION.persona.initials,
-  email: null,
-  role: 'admin',
-  status: 'active',
-  isYou: true,
-}
-
-// Node v25's native localStorage collides with jsdom's (App.standIn.test.tsx:74-75).
+// Node v25's native localStorage collides with jsdom's.
 function createMemoryStorage() {
   const store = new Map<string, string>()
   return {
@@ -120,11 +98,8 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-// `demoMode` gates becomePersona/returnToSeat onto the ctx (DEMO-06); the carryView row needs
-// them, the route rows do not, and passing the flag either way costs nothing.
-async function renderAppWithSeat(demoMode: boolean) {
+async function renderAppWithSeat() {
   localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
-  if (demoMode) vi.stubEnv('VITE_DEMO_MODE', 'true')
   vi.resetModules()
   const { default: App } = await import('./App')
   return render(<App />)
@@ -140,85 +115,9 @@ function requireCtx(): ExtractionCtx {
   return capturedCtx!
 }
 
-describe("AC-2: carryView collapses 'extraction' to 'invoices'", () => {
-  it('carryView_extractionCollapsesToInvoices', async () => {
-    await renderAppWithSeat(true)
-    expect(capturedCtx, 'Sidebar never rendered -- ctx was not captured').toBeDefined()
-
-    // Each call alternates the Workspace key (stand-in subject <-> seat subject), which is
-    // what makes a new `initialView` observable at all -- `view` is a useState initializer
-    // read once per mount (App.standIn.test.tsx:474-476).
-    await act(async () => {
-      await capturedCtx!.becomePersona!(MEMBER, EXTRACTION)
-    })
-    expect(
-      capturedCtx!.view,
-      `becomePersona must collapse extraction to invoices, got ${capturedCtx!.view}`,
-    ).toBe('invoices')
-
-    await act(async () => {
-      await capturedCtx!.returnToSeat!(EXTRACTION, SEAT_AS_MEMBER)
-    })
-    expect(
-      capturedCtx!.view,
-      `returnToSeat must collapse extraction to invoices, got ${capturedCtx!.view}`,
-    ).toBe('invoices')
-
-    // The control needle, on the same two handlers and the same read: without it a
-    // carryView that collapsed EVERY view would satisfy both assertions above.
-    await act(async () => {
-      await capturedCtx!.becomePersona!(MEMBER, 'approvals')
-    })
-    expect(capturedCtx!.view, 'a non-collapsed view must pass through unchanged').toBe('approvals')
-  })
-
-  // The sticky-state class `D-27` names, one screen over: a view that collapses while the id it
-  // was carrying survives leaves the NEXT openExtraction racing a stale job.
-  it('carryView_thePersonaSwitchDropsTheJobIdWithTheView', async () => {
-    await renderAppWithSeat(true)
-    expect(capturedCtx, 'Sidebar never rendered -- ctx was not captured').toBeDefined()
-
-    await act(async () => {
-      capturedCtx!.openExtraction(JOB_ID)
-    })
-    // Floor: the id really was set, so the null below is a reset and not an untouched atom.
-    expect(capturedCtx!.extractionJobId, 'the id was never written').toBe(JOB_ID)
-
-    await act(async () => {
-      await capturedCtx!.becomePersona!(MEMBER, EXTRACTION)
-    })
-    expect(capturedCtx!.view, 'the view must collapse').toBe('invoices')
-    expect(capturedCtx!.extractionJobId, 'the job id outlived the view it belonged to').toBeNull()
-  })
-
-  // route-02-06, V-2: same drop, through returnToSeat instead of becomePersona. Stands in
-  // first so the job is opened and dropped under the stand-in, isolating returnToSeat's own
-  // collapse from becomePersona's (which already clears the job on its own way in).
-  it('returnToSeat_fromExtractionCollapsesToInvoicesAndDropsTheJobId', async () => {
-    await renderAppWithSeat(true)
-
-    await act(async () => {
-      await capturedCtx!.becomePersona!(MEMBER, 'dashboard')
-    })
-    await act(async () => {
-      capturedCtx!.openExtraction(JOB_ID)
-    })
-    expect(window.location.pathname, 'sanity: openExtraction must push the job path').toBe(`/extraction/${JOB_ID}`)
-    expect(capturedCtx!.extractionJobId, 'sanity: the job id must be armed').toBe(JOB_ID)
-
-    await act(async () => {
-      await capturedCtx!.returnToSeat!(EXTRACTION, SEAT_AS_MEMBER)
-    })
-
-    expect(window.location.pathname, 'returnToSeat must land the URL on invoices').toBe('/invoices')
-    expect(capturedCtx!.view, 'the screen must agree with the address bar').toBe('invoices')
-    expect(capturedCtx!.extractionJobId, 'the job id must not survive the return').toBeNull()
-  })
-})
-
 describe('AC-3: openExtraction writes the job id and navigates in one commit', () => {
   it('platformCtx_openExtractionWritesJobIdAndNav', async () => {
-    await renderAppWithSeat(false)
+    await renderAppWithSeat()
     const ctx = requireCtx()
 
     await act(async () => {
@@ -241,7 +140,7 @@ describe('AC-3: openExtraction writes the job id and navigates in one commit', (
   })
 
   it('platformCtx_openExtractionReplacesTheIdOnASecondCall', async () => {
-    await renderAppWithSeat(false)
+    await renderAppWithSeat()
     const ctx = requireCtx()
 
     await act(async () => {
@@ -268,7 +167,7 @@ describe('openExtraction under the two calls nothing else covers', () => {
     // Both inside ONE act(), unlike platformCtx_openExtractionReplacesTheIdOnASecondCall: React
     // batches them into a single commit, so a handler that wrote the id through a stale closure
     // or an updater would land on the first.
-    await renderAppWithSeat(false)
+    await renderAppWithSeat()
     const ctx = requireCtx()
 
     await act(async () => {
@@ -292,7 +191,7 @@ describe('openExtraction under the two calls nothing else covers', () => {
     // own ErrorState off the 404 -- deliberate. The alternative (narrowing on truthiness) paints
     // the crumb over an empty column, which says less. Only a malformed wire can produce it:
     // the card's onClick forwards `newestJob(...).id` and guards on `!== null`.
-    await renderAppWithSeat(false)
+    await renderAppWithSeat()
     const ctx = requireCtx()
 
     await act(async () => {
@@ -308,7 +207,7 @@ describe('openExtraction under the two calls nothing else covers', () => {
 
 describe('AC-1: the route', () => {
   it('route_extractionViewMountsTheReviewWithTheJobId', async () => {
-    await renderAppWithSeat(false)
+    await renderAppWithSeat()
     const ctx = requireCtx()
 
     await act(async () => {
@@ -331,7 +230,7 @@ describe('AC-1: the route', () => {
   })
 
   it('route_noJobIdRendersNoReviewScreen', async () => {
-    await renderAppWithSeat(false)
+    await renderAppWithSeat()
     const ctx = requireCtx()
 
     await act(async () => {

@@ -169,6 +169,44 @@ func TestHealthzCarriesMockIssuerOnlyWhenSet(t *testing.T) {
 	}
 }
 
+// Contacts rides the same probe on the same terms: only notifications sets it, and every
+// other service's body must stay as it was.
+func TestHealthzCarriesContactsOnlyWhenSet(t *testing.T) {
+	t.Cleanup(func(original string) func() {
+		return func() { Contacts = original }
+	}(Contacts))
+
+	for _, c := range []struct {
+		set    string
+		wantOK bool
+	}{
+		{"", false},
+		{"off", true},
+		{"fake", true},
+		{"real", true},
+	} {
+		Contacts = c.set
+
+		rec := httptest.NewRecorder()
+		healthzHandler(rec, httptest.NewRequest("GET", "/healthz", nil))
+
+		var body map[string]string
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("Contacts=%q: decode %q: %v", c.set, rec.Body.String(), err)
+		}
+		got, ok := body["contacts"]
+		if ok != c.wantOK {
+			t.Errorf("Contacts=%q: contacts present = %v, want %v (body %q)", c.set, ok, c.wantOK, rec.Body.String())
+		}
+		if got != c.set {
+			t.Errorf("Contacts=%q: contacts = %q, want %q", c.set, got, c.set)
+		}
+		if body["build"] != BuildSHA {
+			t.Errorf("Contacts=%q: build field = %q, want %q", c.set, body["build"], BuildSHA)
+		}
+	}
+}
+
 // AuthIssuers is gateway-only, like MockIssuer.
 func TestHealthzCarriesAuthIssuersOnlyWhenSet(t *testing.T) {
 	t.Cleanup(func(original string) func() {

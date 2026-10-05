@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Nav } from './components/Nav'
+import { VerifyNotice } from './components/VerifyNotice'
 import { SignInModal } from './components/SignInModal'
 import { DemoModal } from './components/DemoModal'
+import { RegisterModal } from './components/RegisterModal'
 import { Hero } from './components/Hero'
 import { AudienceStrip } from './components/AudienceStrip'
 import { Problem } from './components/Problem'
@@ -21,23 +23,29 @@ import { isScrollable, scrollDepthPercent, trackDemoOpen, trackScrollDepth, type
 import { readConsent, type ConsentRecord } from './consent'
 import { applyChoice } from './consentActions'
 import { isPrivacyPath } from './route'
-import { readSignInState } from './signIn'
+import { registrationOpen } from './register'
+import { readSignInConsole, readSignInState } from './signIn'
+import { readVerifyOutcome, VERIFIED_PARAM, VERIFY_PARAM } from './verify'
 
-// Copy for the app's ?signin= outcome; `ready` opens the modal with no message.
+// Copy for the ?signin= outcome; `ready` opens the modal with no message.
 const SIGN_IN_OUTCOMES = new Map<string, string | undefined>([
   ['ready', undefined],
   ['no-workspace', 'This account has no workspace yet.'],
   ['failed', "We couldn't open your workspace. Sign in again."],
+  ['not-staff', 'This account cannot open the ASComply consoles.'],
 ])
 
-// Held a minute short of the app's 10-minute state TTL, so a posted state is still live there.
+// Params the boot reads once and removes from the address bar.
+const BOOT_PARAMS = ['state', 'console', 'signin', VERIFIED_PARAM, VERIFY_PARAM]
+
+// Held a minute short of the 10-minute state TTL, so a posted state is still live.
 const STATE_HOLD_MS = 9 * 60 * 1000
 
 // Pure read: the strip runs in an effect, so StrictMode's double init sees the same URL.
 function readSignInBoot(search: string) {
   const state = readSignInState(search)
   const outcome = new URLSearchParams(search).get('signin') ?? ''
-  return { state, bootAt: Date.now(), error: SIGN_IN_OUTCOMES.get(outcome), open: SIGN_IN_OUTCOMES.has(outcome) }
+  return { state, consoleTarget: readSignInConsole(search), bootAt: Date.now(), error: SIGN_IN_OUTCOMES.get(outcome), open: SIGN_IN_OUTCOMES.has(outcome) }
 }
 
 // Tokens and utility classes (.v2-btn, .label, .mono) are global: v2 plus bridge.css.
@@ -53,7 +61,10 @@ export default function App() {
   )
   const [signInOpen, setSignInOpen] = useState(signInBoot.open)
   const [signInError, setSignInError] = useState(signInBoot.error)
+  // Read once at mount; the strip below removes the params, so a re-read would lose the notice.
+  const [verifyOutcome, setVerifyOutcome] = useState(() => readVerifyOutcome(window.location.search))
   const [demoOpen, setDemoOpen] = useState(false)
+  const [registerOpen, setRegisterOpen] = useState(false)
   // Read once at mount: a stored choice keeps the notice down until `reopened` flips.
   const [consent, setConsent] = useState<ConsentRecord | null>(() => readConsent())
   // Once a choice is stored the footer control is the only route back to the notice.
@@ -64,6 +75,13 @@ export default function App() {
     setDemoOpen(true)
   }
   const onSignIn = () => setSignInOpen(true)
+  const onCreateAccount = registrationOpen()
+    ? () => {
+        setSignInOpen(false)
+        setSignInError(undefined)
+        setRegisterOpen(true)
+      }
+    : undefined
   const privacy = isPrivacyPath(window.location.pathname)
 
   useEffect(() => {
@@ -74,12 +92,11 @@ export default function App() {
     return () => window.removeEventListener('pageshow', onShow)
   }, [])
 
-  // Strip `state` and `signin` for any value; every other param stays.
+  // Strip the boot params for any value; every other param stays.
   useEffect(() => {
     const url = new URL(window.location.href)
-    if (!url.searchParams.has('state') && !url.searchParams.has('signin')) return
-    url.searchParams.delete('state')
-    url.searchParams.delete('signin')
+    if (!BOOT_PARAMS.some((k) => url.searchParams.has(k))) return
+    BOOT_PARAMS.forEach((k) => url.searchParams.delete(k))
     window.history.replaceState(null, '', url.pathname + url.search + url.hash)
   }, [])
 
@@ -123,7 +140,8 @@ export default function App() {
         overflowX: 'clip',
       }}
     >
-      <Nav onSignIn={onSignIn} onBookDemo={book('nav')} hrefPrefix={privacy ? '/' : ''} />
+      <Nav onSignIn={onSignIn} onBookDemo={book('nav')} onCreateAccount={onCreateAccount} hrefPrefix={privacy ? '/' : ''} />
+      {verifyOutcome && <VerifyNotice outcome={verifyOutcome} onDismiss={() => setVerifyOutcome(null)} />}
       {privacy ? (
         <Privacy />
       ) : (
@@ -148,7 +166,7 @@ export default function App() {
       {(consent === null || reopened) && (
         <CookieNotice
           current={consent}
-          suppressed={signInOpen || demoOpen}
+          suppressed={signInOpen || demoOpen || registerOpen}
           onChoose={(choice) => {
             setConsent(applyChoice(choice))
             // consent is already non-null on a reopen, so only this closes it again.
@@ -160,6 +178,8 @@ export default function App() {
         <SignInModal
           heldState={heldState}
           initialError={signInError}
+          consoleTarget={signInBoot.consoleTarget ?? undefined}
+          onCreateAccount={onCreateAccount}
           onClose={() => {
             setSignInOpen(false)
             setSignInError(undefined)
@@ -167,6 +187,7 @@ export default function App() {
         />
       )}
       {demoOpen && <DemoModal onClose={() => setDemoOpen(false)} />}
+      {registerOpen && <RegisterModal onClose={() => setRegisterOpen(false)} />}
     </div>
   )
 }

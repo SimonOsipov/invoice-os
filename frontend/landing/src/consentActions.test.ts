@@ -219,15 +219,16 @@ describe('AC-13: the mount and its suppression wiring in App.tsx', () => {
     expect(noticeIdx, 'the notice must mount before the modals').toBeLessThan(signInIdx)
   })
 
-  it('AC-13: suppressed derives from both modal flags, each with exactly one true-setter', () => {
+  it('AC-13: suppressed derives from the three modal flags, each with exactly one true-setter', () => {
     const tag = APP_SRC.match(/<CookieNotice\b[\s\S]*?\/>/)
     expect(tag, 'expected a self-closing <CookieNotice .../> element').not.toBeNull()
-    expect(tag![0]).toMatch(/suppressed=\{\s*signInOpen\s*\|\|\s*demoOpen\s*\}/)
+    expect(tag![0]).toMatch(/suppressed=\{\s*signInOpen\s*\|\|\s*demoOpen\s*\|\|\s*registerOpen\s*\}/)
 
-    // Because suppressed derives from the two state variables rather than from the
+    // Because suppressed derives from the state variables rather than from the
     // call sites, no opening path can bypass it — but only while each flag keeps
     // one setter. A second setter would reintroduce the bypass silently.
     expect(Array.from(APP_SRC.matchAll(/setSignInOpen\(true\)/g)).length, 'signInOpen true-setters').toBe(1)
     expect(Array.from(APP_SRC.matchAll(/setDemoOpen\(true\)/g)).length, 'demoOpen true-setters').toBe(1)
+    expect(Array.from(APP_SRC.matchAll(/setRegisterOpen\(true\)/g)).length, 'registerOpen true-setters').toBe(1)
   })
 })

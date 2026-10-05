@@ -11,9 +11,6 @@ interface ImportMetaEnv {
   // (M4-23), so there is no hardcoded default — unset means Sign out stays put rather
   // than routing to the wrong environment (see `landingBase()` in auth.ts).
   readonly VITE_LANDING_URL?: string
-  // Demo builds only. Exactly the string 'true' turns the persona switcher on; read at module
-  // scope in src/demo/flag.ts so `vite build` folds it and drops src/demo when it is unset.
-  readonly VITE_DEMO_MODE?: string
   readonly VITE_SENTRY_DSN?: string
   readonly VITE_SENTRY_TEST_DIGEST?: string
   readonly VITE_RAILWAY_GIT_COMMIT_SHA?: string

@@ -41,7 +41,7 @@ Throughout this doc:
 - `<svc>` — the service name, identical in: the `cmd/<svc>` directory, the Railway
   service name, and the private-networking hostname `<svc>.railway.internal`.
   Lowercase, no separators (matches existing `cmd/` dirs: `tenancy`, `portfolio`,
-  `invoice`, `validation`, `submission`, `dashboard`, `notifications`, `reconciliation`,
+  `invoice`, `validation`, `submission`, `dashboard`, `notifications` (contact sync: [contact-sync.md](./contact-sync.md)), `reconciliation`,
   `opsconsole`; plus `gateway`).
 - `<ctx>` — the service's domain context dir `internal/<ctx>`. For the eight context
   services `<ctx>` = `<svc>`. The gateway has no context dir — drop that line wherever
@@ -203,7 +203,16 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disa
   `railway.json`, never as a real value in `.env.example`.
 - **Public exposure:** only the four SPAs and the gateway get a public domain
   (runbook step 6). Context services, opsconsole, and Postgres are private-network
-  only — for a backend service, *skipping* step 6 is what keeps it private.
+  only. Private networking is the first control; the gateway token is the second: a
+  context service that did get a public domain still refuses any request without
+  `X-Gateway-Token`, except `GET /healthz`, `GET /readyz` and its declared peer routes.
+- **Gateway token (every context service):** read `GATEWAY_TOKEN` with `mustEnv` and call
+  `app.RequireGateway(token)` before `app.Run`
+  (`TestRLS_EveryContextServiceRefusesAForgedRequest`). Declare only peer
+  routes as open arguments. Add the service to `GATEWAY_TOKEN_SERVICES` in
+  `scripts/ci/railway-env.sh` (`TestGatewayTokenServicesMatchTheRoutedFleet`) and to
+  `e2e/api/service-auth.spec.ts`. Never seal `GATEWAY_TOKEN`: a sealed variable does
+  not fork.
 - **Sentry variables are production-only.** `SENTRY_DSN` (every Go service and
   `docling`), `VITE_SENTRY_DSN` and `SENTRY_AUTH_TOKEN` (each SPA): `set-sentry-off`
   in `prepare-env` writes them to `""` in every `pr-<N>` fork before anything deploys.
@@ -278,15 +287,21 @@ returned by step 1.
      name: "PORT", value: "8080" }) }
    ```
    Plus service-specific variables (e.g. `DATABASE_URL` = `${{Postgres.DATABASE_URL}}`)
-   — one `variableUpsert` each. This is the one-variable-at-a-time production path; fork
+   — one `variableUpsert` each. A context service also needs `GATEWAY_TOKEN`, unsealed
+   and equal to the gateway's value; without it the service exits at boot. The first
+   production write is `railway-env.sh set-production-gateway-token <environment-id>`,
+   run by hand: it writes one generated value to the gateway and the seven services only
+   when none holds it, and refuses a partly set state
+   (`TestSetProductionGatewayToken_RefusesAPartialOrMixedSet`). For a service added
+   after that write, upsert the gateway's current value with `variableUpsert`. This is the
+   one-variable-at-a-time production path; fork
    writes in CI go through `set_service_vars` and `variableCollectionUpsert`.
 5. **First deploy** from current `main`:
    ```graphql
    mutation { serviceInstanceDeployV2(serviceId: "$SVC", environmentId: "$ENV",
      commitSha: "<main HEAD sha>") }
    ```
-6. **Public domain — SPAs and gateway ONLY.** Backend context services skip this step;
-   that is the entire private-networking story:
+6. **Public domain — SPAs and gateway ONLY.** Backend context services skip this step:
    ```graphql
    mutation { serviceDomainCreate(input: {
      environmentId: "$ENV", serviceId: "$SVC", targetPort: 8080 }) { domain } }

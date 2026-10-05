@@ -578,6 +578,7 @@ func headerRequest() *http.Request {
 	r := httptest.NewRequest(http.MethodGet, "/v1/invoices", nil)
 	for k, v := range map[string]string{
 		"X-S2S-Token":      markerCred + "-s2s",
+		"X-Gateway-Token":  markerCred + "-gw",
 		"X-User-Id":        markerCred + "-user",
 		"X-User-Role":      markerCred + "-role",
 		"X-Tenant-Id":      markerCred + "-tenant",

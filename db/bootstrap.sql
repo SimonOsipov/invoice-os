@@ -11,8 +11,8 @@
 --     Still NOBYPASSRLS: its reach is exactly what its policies+grants allow, no more.
 --   supabase_auth_admin    — GoTrue's login role; owns schema `auth`, nothing in `public`.
 -- And one NOLOGIN role:
---   auth_hook_reader       — owns the SECURITY DEFINER access-token hook; invoice_migrator
---     may SET ROLE to it but does not inherit it, so the migrator's own reads stay scoped.
+--   auth_hook_reader       — invoice_migrator may SET ROLE to it but does not inherit it,
+--     so the migrator's own reads stay scoped.
 --
 -- Why non-superuser + NOBYPASSRLS matters: Row-Level Security is only *enforceable*
 -- if the roles it applies to cannot bypass it and do not own the tables (an owner
@@ -123,8 +123,7 @@ GRANT USAGE ON SCHEMA public TO supabase_auth_admin;
 
 --    ALTER FUNCTION ... OWNER TO auth_hook_reader needs the new owner to hold CREATE.
 GRANT USAGE, CREATE ON SCHEMA public TO auth_hook_reader;
---    SET without INHERIT: the migrator can hand the hook over and drop it, but never
---    inherits the role's cross-tenant read policy.
+--    SET without INHERIT: the migrator never inherits the role's cross-tenant read policy.
 GRANT auth_hook_reader TO invoice_migrator WITH INHERIT FALSE, SET TRUE;
 
 --    Lock down the public schema: revoke the ambient CREATE that PUBLIC has by

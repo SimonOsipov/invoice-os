@@ -1,15 +1,15 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 
-import { collectErrors, signInAs } from '../personaSession'
+import { collectErrors } from '../personaSession'
+import { seedStaffSession, test } from '../staffSession'
 
 // The Ops Console, driven as the integration developer it is for (PERSONA-01-05, Backlog
-// task-274). Persona `developer` -> destination `ops`.
+// task-274), on a seeded real staff session (staffSession.ts).
 //
-// MOCK-ONLY, AND THAT LIMITS WHAT A GREEN RUN MEANS. This console has no backend: a grep
-// for fetch/XMLHttpRequest/axios/WebSocket across frontend/ops-console/src returns nothing,
-// and its own session module says so in prose (frontend/ops-console/src/session.ts:8-12 —
-// "Deliberately NOT access control... a fabricated localStorage entry is enough to get
-// in"). Every assertion below pins this console's CLIENT-SIDE BEHAVIOUR over the fixtures
+// MOCK-ONLY, AND THAT LIMITS WHAT A GREEN RUN MEANS. This console's data has no backend: a
+// grep for fetch/XMLHttpRequest/axios/WebSocket across frontend/ops-console/src returns nothing,
+// and its only gateway calls are the session's renewal and sign-out (packages/console-session).
+// Every assertion below pins this console's CLIENT-SIDE BEHAVIOUR over the fixtures
 // in src/data.tsx. It is not a contract test and says nothing about any server. Counts are
 // read from the rendered UI rather than hardcoded, so a seed edit does not break these —
 // but the entities are fiction, and when real endpoints land (M7: operator identity + a
@@ -22,14 +22,14 @@ import { collectErrors, signInAs } from '../personaSession'
 // suite as smoke/landing-nav.spec.ts and smoke.spec.ts:48-60. docs/e2e-convention.md's
 // "Target surface" section is amended by [PERSONA-01-07] in this same PR.
 //
-// PARALLEL-SAFE. Zero network calls and zero database contact, so smoke's
-// `fullyParallel: true` needs no carve-out here: nothing this file does can be observed by
-// another worker. Every mutation below lives in React state inside one page.
+// PARALLEL-SAFE. Each test seeds its own gateway session for the worker's one staff account,
+// and none signs it out, so smoke's `fullyParallel: true` needs no carve-out here. Every
+// mutation below lives in React state inside one page.
 //
-// ALREADY COVERED ELSEWHERE, DELIBERATELY NOT REPEATED HERE: smoke/apps.ts:42-46 (the
-// ASComply mark and the default `Overview` h1), smoke.spec.ts:48-60 (the org switcher),
-// smoke.spec.ts:66-75 (a bare-URL visit redirects to the landing page),
-// smoke/persona-boundaries.spec.ts (this console refuses the support/firm/inhouse personas).
+// ALREADY COVERED ELSEWHERE, DELIBERATELY NOT REPEATED HERE: smoke/apps.ts (the ASComply
+// mark and the default `Overview` h1), smoke.spec.ts (the org switcher, and a bare-URL visit
+// redirecting to the landing page), smoke/persona-boundaries.spec.ts (this console refuses
+// every persona param).
 //
 // DELIBERATELY NOT ASSERTED, because a fixture assertion earns its place only if a
 // plausible CODE change can break it: the sidebar operator name (hardcoded in Sidebar.tsx,
@@ -48,7 +48,7 @@ import { collectErrors, signInAs } from '../personaSession'
 // The nav LABEL likewise differs from the h1 on two screens — Evidence -> "Compliance
 // evidence" and Status -> "API status" (data.tsx:81-92 vs the screen components). Click the
 // label, assert the heading. The sweep ends back on Overview so the return leg is covered
-// without restating what signInAs already waited for.
+// without restating what seedStaffSession already waited for.
 const SCREENS: { nav: string; h1: string }[] = [
   { nav: 'Submissions', h1: 'Submissions' },
   { nav: 'Evidence', h1: 'Compliance evidence' },
@@ -100,9 +100,9 @@ async function openSubmissions(page: Page): Promise<void> {
   await expect(heading(page)).toHaveText('Submissions')
 }
 
-test('ops-console: every screen is reachable from the sidebar and renders its own h1', async ({ page }) => {
+test('ops-console: every screen is reachable from the sidebar and renders its own h1', async ({ page, staffAccount }) => {
   const errors = collectErrors(page)
-  await signInAs(page, 'developer')
+  await seedStaffSession(page, 'ops', staffAccount)
 
   // A seventh screen must turn this red rather than being silently skipped by the loop.
   await expect(navButtons(page)).toHaveCount(SCREENS.length)
@@ -126,9 +126,9 @@ test('ops-console: every screen is reachable from the sidebar and renders its ow
 // into the search box. It also must not be merged into the chip test for that reason.
 // `dlCount` is React state with no persistence, so a page.reload() anywhere in here would
 // silently undo the mutation — there is deliberately none.
-test('ops-console: Re-drive all clears the dead-letter queue everywhere it is reported', async ({ page }) => {
+test('ops-console: Re-drive all clears the dead-letter queue everywhere it is reported', async ({ page, staffAccount }) => {
   const errors = collectErrors(page)
-  await signInAs(page, 'developer')
+  await seedStaffSession(page, 'ops', staffAccount)
   await openSubmissions(page)
 
   // The count is READ from the sub-stat tile rather than the badge, because the tile always
@@ -173,9 +173,9 @@ test('ops-console: Re-drive all clears the dead-letter queue everywhere it is re
   expect(errors, `console errors re-driving the ops dead-letter queue:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('ops-console: each filter chip re-filters the table, and its own count matches the rows it shows', async ({ page }) => {
+test('ops-console: each filter chip re-filters the table, and its own count matches the rows it shows', async ({ page, staffAccount }) => {
   const errors = collectErrors(page)
-  await signInAs(page, 'developer')
+  await seedStaffSession(page, 'ops', staffAccount)
   await openSubmissions(page)
 
   await expect(chips(page)).toHaveCount(CHIP_LABELS.length)
@@ -218,9 +218,9 @@ test('ops-console: each filter chip re-filters the table, and its own count matc
 // more than "a panel appeared": the idempotency key is built from the clicked row's id
 // (helpers.ts:149) and the response payload is selected by the clicked row's state
 // (helpers.ts:70-71). A drawer wired to the wrong job fails on both.
-test('ops-console: opening a job row opens that job\'s drawer, with the payload derived from that row', async ({ page }) => {
+test('ops-console: opening a job row opens that job\'s drawer, with the payload derived from that row', async ({ page, staffAccount }) => {
   const errors = collectErrors(page)
-  await signInAs(page, 'developer')
+  await seedStaffSession(page, 'ops', staffAccount)
   await openSubmissions(page)
 
   // The dead-letter row is chosen by its rendered state, not by a hardcoded seed id, so the

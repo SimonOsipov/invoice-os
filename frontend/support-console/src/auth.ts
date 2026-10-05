@@ -1,5 +1,8 @@
-// Sign-out target for the support console.
-//
+import { gatewayBase } from '@invoice-os/api-client'
+import { signOutConsole } from '@invoice-os/console-session'
+
+export const SESSION_KEY = 'invoice-os.support-session'
+
 // Mirrors the ops console's landingBase() (frontend/ops-console/src/auth.ts) deliberately,
 // including the null-when-unset contract: each PR deploys to its own ephemeral Railway
 // environment with an unpredictable domain suffix, so a hardcoded fallback would silently
@@ -13,3 +16,5 @@ export const landingBase = (): string | null => {
   const v = (import.meta.env.VITE_LANDING_URL ?? '').trim().replace(/\/+$/, '')
   return v || null
 }
+
+export const signOut = () => signOutConsole({ storageKey: SESSION_KEY, gateway: gatewayBase(), landing: landingBase() })

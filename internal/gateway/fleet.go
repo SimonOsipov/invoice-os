@@ -54,6 +54,8 @@ type ServiceHealth struct {
 	// Sentry is what the service reported, empty when its body has
 	// none or it is probed at a custom path. Never part of the up/down verdict.
 	Sentry string `json:"sentry,omitempty"`
+	// Contacts is notifications' delivery mode: real, fake or off.
+	Contacts string `json:"contacts,omitempty"`
 	// Ready is the service's /readyz verdict (its dependencies, e.g. the database); nil when
 	// it serves no /readyz or is probed at a custom path. Never part of the up/down verdict.
 	Ready *bool `json:"ready,omitempty"`
@@ -180,12 +182,13 @@ func probeService(parent context.Context, client *http.Client, name string, base
 	// up/down, and the deploy gate reports a missing build as a mismatch on its
 	// own terms.
 	var payload struct {
-		Build  string `json:"build"`
-		Sentry string `json:"sentry"`
+		Build    string `json:"build"`
+		Sentry   string `json:"sentry"`
+		Contacts string `json:"contacts"`
 	}
 	_ = json.NewDecoder(io.LimitReader(resp.Body, maxHealthzBody)).Decode(&payload)
 	ready, notReady := probeReady(parent, client, base)
-	return ServiceHealth{Name: name, Status: statusUp, Build: payload.Build, Sentry: payload.Sentry, Ready: ready, NotReady: notReady}
+	return ServiceHealth{Name: name, Status: statusUp, Build: payload.Build, Sentry: payload.Sentry, Contacts: payload.Contacts, Ready: ready, NotReady: notReady}
 }
 
 // probeReady issues GET <base>/readyz. A 404 means the service serves no /readyz (docling):

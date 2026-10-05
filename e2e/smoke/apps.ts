@@ -1,17 +1,19 @@
 import { expect, type Page } from '@playwright/test'
-import { signInUrl } from '../personas'
 import { resolveTarget } from '../targets'
+import type { ConsoleTarget } from '../staffSession'
 
-// The three pure SPAs under smoke test (landing, ops-console, support-console) — no
-// backend round trip, so a render check is sufficient. The app SPA is always gateway-wired
-// in the deployed env, so its (backend-verified) assertion lives in the topology suite
-// instead (see e2e/topology/).
+// The three SPAs under smoke test (landing, ops-console, support-console). The consoles'
+// data has no backend, so a render check is sufficient; they open only on a real staff session,
+// which `console` names (staffSession.ts). The app SPA is always gateway-wired in the deployed env,
+// so its (backend-verified) assertion lives in the topology suite instead (see e2e/topology/).
 // Each PR now deploys to its own ephemeral Railway environment (M4-23), so each URL is
 // REQUIRED — resolveTarget throws rather than falling back to a hardcoded dev deployment
 // (Decision [fail-loud-targets]).
 export interface AppTarget {
   name: string
   url: string
+  // Set for a console: the test opens it on a seeded staff session instead of a bare visit.
+  console?: ConsoleTarget
   // Asserts a signature element of the app's main mock view is rendered — proof
   // the SPA booted and mounted, not just that the shell HTML was served.
   assertMainView: (page: Page) => Promise<void>
@@ -29,16 +31,8 @@ export const APPS: AppTarget[] = [
   },
   {
     name: 'ops-console',
-    // The console now sits behind the landing page's sign-in hand-off: a bare URL is not a
-    // sign-in and redirects to the front door. Arrive the way the landing actually routes
-    // here (destUrl -> ?persona=developer) rather than through a test-only backdoor, so
-    // this smoke test still exercises the real entry path. The redirect itself is pinned by
-    // its own spec in smoke.spec.ts.
-    //
-    // The hand-off URL comes from the persona registry (../personas), which knows this
-    // persona's destination and therefore which env var carries its base — the id and the
-    // console it opens are stated once, there, rather than re-paired by hand here.
-    url: signInUrl('developer'),
+    url: resolveTarget('OPS_CONSOLE_URL'),
+    console: 'ops',
     assertMainView: async (page) => {
       // Sidebar brand + the default Overview screen heading.
       await expect(page.getByText('ASComply').first()).toBeVisible()
@@ -47,9 +41,8 @@ export const APPS: AppTarget[] = [
   },
   {
     name: 'support-console',
-    // Same sign-in hand-off shape as the ops console, with this console's own
-    // persona id — the two gates reject each other's links, which is the point.
-    url: signInUrl('support'),
+    url: resolveTarget('SUPPORT_CONSOLE_URL'),
+    console: 'support',
     assertMainView: async (page) => {
       // Sidebar brand + the default Submissions ops heading. The cross-tenant strip is
       // asserted too: it is the one piece of chrome that distinguishes this console from

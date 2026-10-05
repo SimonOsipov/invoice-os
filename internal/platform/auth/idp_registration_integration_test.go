@@ -1,12 +1,14 @@
 package auth_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"html"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +17,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -63,18 +66,19 @@ func mailEnv(t *testing.T, name string) string {
 	return strings.TrimRight(v, "/")
 }
 
-// startGateway serves the real register and verify handlers where the mailed link points.
-func startGateway(t *testing.T, authBase string) string {
+// startGateway serves the real register and verify handlers where the mailed link points, and returns its JSON log.
+func startGateway(t *testing.T, authBase string, minResponse time.Duration, sink gateway.ContactSink) (string, *bytes.Buffer) {
 	t.Helper()
 	authURL, err := url.Parse(authBase)
 	if err != nil {
 		t.Fatal(err)
 	}
 	site, _ := url.Parse(siteURL)
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logs := &bytes.Buffer{}
+	log := slog.New(slog.NewJSONHandler(&syncWriter{w: logs}, nil))
 	mux := http.NewServeMux()
-	mux.Handle("POST /auth/register", gateway.RegisterHandler(authURL, noRedirect, log))
-	mux.Handle("GET /auth/verify", gateway.VerifyHandler(authURL, site, noRedirect, log))
+	mux.Handle("POST /auth/register", gateway.RegisterHandler(authURL, noRedirect, minResponse, log))
+	mux.Handle("GET /auth/verify", gateway.VerifyHandler(authURL, site, noRedirect, log, sink))
 
 	l, err := net.Listen("tcp", gatewayAddr)
 	if err != nil {
@@ -84,11 +88,24 @@ func startGateway(t *testing.T, authBase string) string {
 	srv.Listener = l
 	srv.Start()
 	t.Cleanup(srv.Close)
-	return srv.URL
+	return srv.URL, logs
+}
+
+// syncWriter serialises the handler goroutines' log writes into one buffer.
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
 }
 
 // registrant signs up through the gateway handler; the superuser deletes the GoTrue user and any workspace afterwards.
-func registrant(t *testing.T, gw string) idpUser {
+// answers, when given, ride in the register body as the landing form sends them.
+func registrant(t *testing.T, gw string, answers ...map[string]string) idpUser {
 	t.Helper()
 	conn := superConn(t)
 	u := idpUser{email: "idp-mail-" + uuid.NewString() + "@example.test", password: "pw-" + uuid.NewString()}
@@ -99,8 +116,12 @@ func registrant(t *testing.T, gw string) idpUser {
 		_, _ = conn.Exec(ctx, `DELETE FROM auth.users WHERE email = $1`, u.email)
 	})
 
-	body := strings.NewReader(`{"email":"` + u.email + `","password":"` + u.password + `"}`)
-	resp, err := noRedirect.Post(gw+"/auth/register", "application/json", body)
+	fields := map[string]string{"email": u.email, "password": u.password}
+	for _, a := range answers {
+		maps.Copy(fields, a)
+	}
+	payload, _ := json.Marshal(fields)
+	resp, err := noRedirect.Post(gw+"/auth/register", "application/json", bytes.NewReader(payload))
 	if err != nil {
 		t.Fatalf("POST /auth/register: %v", err)
 	}
@@ -130,7 +151,7 @@ func postRegister(t *testing.T, gw, email string) (int, string) {
 
 // None may register. The gateway refuses the trailing-dot row; real GoTrue decides the rest.
 func TestIdP_FreeMailVariantsAreNotAccepted(t *testing.T) {
-	gw := startGateway(t, idpMailURL(t))
+	gw, _ := startGateway(t, idpMailURL(t), 0, nil)
 	conn := superConn(t)
 	ctx := context.Background()
 
@@ -258,7 +279,8 @@ func follow(t *testing.T, link string) string {
 
 func TestIdP_RegisterLeavesTheAccountUnverified(t *testing.T) {
 	base := idpMailURL(t)
-	u := registrant(t, startGateway(t, base))
+	gw, _ := startGateway(t, base, 0, nil)
+	u := registrant(t, gw)
 
 	var confirmed bool
 	if err := superConn(t).QueryRow(context.Background(),
@@ -276,7 +298,8 @@ func TestIdP_RegisterLeavesTheAccountUnverified(t *testing.T) {
 
 func TestIdP_ConfirmationLinkTargetsTheGateway(t *testing.T) {
 	base := idpMailURL(t)
-	u := registrant(t, startGateway(t, base))
+	gw, _ := startGateway(t, base, 0, nil)
+	u := registrant(t, gw)
 
 	link := confirmationLink(t, u.email)
 	parsed, err := url.Parse(link)
@@ -291,19 +314,86 @@ func TestIdP_ConfirmationLinkTargetsTheGateway(t *testing.T) {
 	}
 }
 
+// recordingSink keeps every registrant the gateway hands off and signals each on calls.
+type recordingSink struct {
+	mu    sync.Mutex
+	all   []gateway.RegistrantContact
+	calls chan gateway.RegistrantContact
+}
+
+func newRecordingSink() *recordingSink {
+	return &recordingSink{calls: make(chan gateway.RegistrantContact, 8)}
+}
+
+func (s *recordingSink) Registrant(_ context.Context, c gateway.RegistrantContact) error {
+	s.mu.Lock()
+	s.all = append(s.all, c)
+	s.mu.Unlock()
+	s.calls <- c
+	return nil
+}
+
+func (s *recordingSink) DemoRequest(context.Context, gateway.DemoRequest) error { return nil }
+
+func (s *recordingSink) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.all)
+}
+
+// next waits for a hand-off, which the gateway sends in the background.
+func (s *recordingSink) next(t *testing.T) gateway.RegistrantContact {
+	t.Helper()
+	select {
+	case c := <-s.calls:
+		return c
+	case <-time.After(10 * time.Second):
+		t.Fatal("no hand-off within 10s of following the mailed link")
+		return gateway.RegistrantContact{}
+	}
+}
+
 func TestIdP_EmailedLinkVerifiesThenSignInSucceeds(t *testing.T) {
 	base := idpMailURL(t)
-	u := registrant(t, startGateway(t, base))
+	sink := newRecordingSink()
+	gw, _ := startGateway(t, base, 0, sink)
+	const consentText = "I agree to receive product news from ASComply."
+	u := registrant(t, gw, map[string]string{
+		"workspace_name": "IdP Hand-off", "display_name": "Ada", "marketing_consent_text": consentText,
+	})
 
-	if got := follow(t, confirmationLink(t, u.email)); got != siteURL+"/?verified=1" {
+	link := confirmationLink(t, u.email)
+	if n := sink.count(); n != 0 {
+		t.Fatalf("%d registrants handed off before the link was followed, want 0", n)
+	}
+	if got := follow(t, link); got != siteURL+"/?verified=1" {
 		t.Fatalf("verify redirect = %q, want %s/?verified=1", got, siteURL)
+	}
+
+	got := sink.next(t)
+	var id string
+	if err := superConn(t).QueryRow(context.Background(), `SELECT id::text FROM auth.users WHERE email = $1`, u.email).Scan(&id); err != nil {
+		t.Fatalf("read the registered user: %v", err)
+	}
+	if got.UserID != id || got.Email != u.email || got.DisplayName != "Ada" || got.WorkspaceName != "IdP Hand-off" {
+		t.Errorf("hand-off = %+v, want user %s, email %s, Ada, IdP Hand-off", got, id, u.email)
+	}
+	if got.Consent == nil || got.Consent.Text != consentText {
+		t.Fatalf("hand-off consent = %+v, want the text given at register", got.Consent)
+	}
+	if at, err := time.Parse(time.RFC3339, got.Consent.At); err != nil || time.Since(at) > 2*time.Minute || time.Until(at) > time.Minute {
+		t.Errorf("hand-off consent time = %q (%v), want an RFC 3339 time from the register call", got.Consent.At, err)
+	}
+	if n := sink.count(); n != 1 {
+		t.Errorf("%d registrants handed off, want exactly 1", n)
 	}
 	accessToken(t, base, u)
 }
 
 func TestIdP_VerificationLinkIsSingleUse(t *testing.T) {
 	base := idpMailURL(t)
-	u := registrant(t, startGateway(t, base))
+	gw, _ := startGateway(t, base, 0, nil)
+	u := registrant(t, gw)
 
 	link := confirmationLink(t, u.email)
 	if got := follow(t, link); got != siteURL+"/?verified=1" {
@@ -316,7 +406,9 @@ func TestIdP_VerificationLinkIsSingleUse(t *testing.T) {
 
 func TestIdP_ProvisionedWorkspaceReachesTheNextToken(t *testing.T) {
 	base := idpMailURL(t)
-	u := registrant(t, startGateway(t, base))
+	gw, _ := startGateway(t, base, 0, nil)
+	answers := map[string]string{"workspace_name": "IdP Works", "display_name": "Ada", "kind": "in_house"}
+	u := registrant(t, gw, answers)
 	if got := follow(t, confirmationLink(t, u.email)); got != siteURL+"/?verified=1" {
 		t.Fatalf("verify redirect = %q, want %s/?verified=1", got, siteURL)
 	}
@@ -332,6 +424,17 @@ func TestIdP_ProvisionedWorkspaceReachesTheNextToken(t *testing.T) {
 	if am, _ := jwtPart(t, first, 1)["app_metadata"].(map[string]any); am["tenant_id"] != nil {
 		t.Fatalf("first token app_metadata.tenant_id = %v, want absent", am["tenant_id"])
 	}
+	// The answers survive register, the mailed link and sign-in, and are the only source of the provision body.
+	um, _ := jwtPart(t, first, 1)["user_metadata"].(map[string]any)
+	stored, _ := um["registration"].(map[string]any)
+	if len(stored) != len(answers) {
+		t.Fatalf("first token user_metadata.registration = %v, want exactly %v", um["registration"], answers)
+	}
+	for k, want := range answers {
+		if stored[k] != want {
+			t.Errorf("user_metadata.registration[%q] = %v, want %q", k, stored[k], want)
+		}
+	}
 	caller, err := v.Verify(ctx, first)
 	if err != nil || caller.TenantID != "" {
 		t.Fatalf("Verify the first token: identity %+v, err %v; want a tenant-less identity", caller, err)
@@ -345,8 +448,8 @@ func TestIdP_ProvisionedWorkspaceReachesTheNextToken(t *testing.T) {
 	store := tenancy.NewStore(pool)
 
 	// The caller goes on the context the way identityMiddleware places it.
-	req := httptest.NewRequest(http.MethodPost, "/v1/workspaces",
-		strings.NewReader(`{"workspace_name":"IdP Works","display_name":"Ada","kind":"in_house"}`))
+	provisionBody, _ := json.Marshal(stored)
+	req := httptest.NewRequest(http.MethodPost, "/v1/workspaces", bytes.NewReader(provisionBody))
 	rec := httptest.NewRecorder()
 	tenancy.ProvisionHandler(store.ProvisionWorkspace, nil).ServeHTTP(rec, req.WithContext(auth.WithTenantlessCaller(ctx, caller)))
 	if rec.Code != http.StatusCreated {
@@ -382,5 +485,43 @@ func TestIdP_ProvisionedWorkspaceReachesTheNextToken(t *testing.T) {
 	}
 	if tenant.ID != created.Tenant.ID || tenant.Name != "IdP Works" || tenant.Kind != "in_house" || role != "admin" {
 		t.Errorf("Store.Me = %+v role %q, want the new workspace IdP Works (in_house), role admin", tenant, role)
+	}
+}
+
+// docs/identity-provider.md, "First registrant's answers": a repeat signup changes neither the password nor the answers.
+func TestIdP_RepeatRegistrationKeepsTheFirstAnswers(t *testing.T) {
+	base := idpMailURL(t)
+	gw, _ := startGateway(t, base, 0, nil)
+	first := map[string]string{"workspace_name": "First Co", "display_name": "First", "kind": "firm"}
+	u := registrant(t, gw, first)
+
+	repeat, _ := json.Marshal(map[string]string{"email": u.email, "password": "other-" + uuid.NewString(),
+		"workspace_name": "Second Co", "display_name": "Second", "kind": "in_house"})
+	resp, err := noRedirect.Post(gw+"/auth/register", "application/json", bytes.NewReader(repeat))
+	if err != nil {
+		t.Fatalf("POST /auth/register (repeat): %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("repeat register status = %d, want 202", resp.StatusCode)
+	}
+
+	if got := follow(t, confirmationLink(t, u.email)); got != siteURL+"/?verified=1" {
+		t.Fatalf("verify redirect = %q, want %s/?verified=1", got, siteURL)
+	}
+	status, session := signIn(t, base, u)
+	tok, _ := session["access_token"].(string)
+	if status != http.StatusOK || tok == "" {
+		t.Fatalf("sign in with the first password: status %d, body %v", status, session)
+	}
+	um, _ := jwtPart(t, tok, 1)["user_metadata"].(map[string]any)
+	stored, _ := um["registration"].(map[string]any)
+	if len(stored) != len(first) {
+		t.Fatalf("user_metadata.registration = %v, want exactly the first registrant's %v", um["registration"], first)
+	}
+	for k, want := range first {
+		if stored[k] != want {
+			t.Errorf("user_metadata.registration[%q] = %v, want %q", k, stored[k], want)
+		}
 	}
 }

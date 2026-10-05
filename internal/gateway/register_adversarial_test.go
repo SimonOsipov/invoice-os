@@ -7,9 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A literal, not maxRegisterBodyBytes: a test that reads the constant moves with it.
@@ -34,6 +37,148 @@ func TestRegister_OversizedBody400NoUpstreamCall(t *testing.T) {
 	}
 	if n := len(fake.Calls()); n != 0 {
 		t.Errorf("over the cap: GoTrue saw %d calls, want 0", n)
+	}
+
+	// The same cap holds when the padding rides in an answer field.
+	answers := func(pad int) string {
+		return registerBodyWithAnswers(regEmail, map[string]any{"workspace_name": strings.Repeat("a", pad), "display_name": "Ada"})
+	}
+	if len(answers(150)) >= registerCap || len(answers(registerCap)) <= registerCap {
+		t.Fatalf("answer fixtures are %d and %d bytes, want under and over %d", len(answers(150)), len(answers(registerCap)), registerCap)
+	}
+	fake = newFakeGoTrue(t, http.StatusOK, gtNewUser)
+	requirePending202(t, doRegister(t, fake.URL, nil, answers(150)))
+	if n := len(fake.Calls()); n != 1 {
+		t.Fatalf("answers under the cap: GoTrue saw %d calls, want 1", n)
+	}
+	fake = newFakeGoTrue(t, http.StatusOK, gtNewUser)
+	rec = doRegister(t, fake.URL, nil, answers(registerCap))
+	if rec.Code != http.StatusBadRequest || errorBody(t, rec) != "invalid request body" {
+		t.Errorf("answers over the cap: %d %s, want 400 invalid request body", rec.Code, rec.Body.String())
+	}
+	if n := len(fake.Calls()); n != 0 {
+		t.Errorf("answers over the cap: GoTrue saw %d calls, want 0", n)
+	}
+}
+
+// Each case is the answer fields of a body; wantErr "" means 202 with wantData forwarded to GoTrue (nil: no data key).
+func TestRegister_AnswerEdges(t *testing.T) {
+	const (
+		wsMsg   = "workspace_name must be 1 to 200 characters"
+		dnMsg   = "display_name must be 1 to 200 characters"
+		nulMsg  = "workspace_name must not contain a NUL byte"
+		kindMsg = `kind must be "firm" or "in_house"`
+		badBody = "invalid request body"
+	)
+	reg := func(w, d string, kind ...string) map[string]any {
+		m := map[string]any{"workspace_name": w, "display_name": d}
+		if len(kind) > 0 {
+			m["kind"] = kind[0]
+		}
+		return m
+	}
+	wantReg := func(m map[string]any) map[string]any { return map[string]any{"registration": m} }
+	acme := strings.Repeat("é", 200)
+	cases := []struct {
+		name     string
+		fields   string
+		wantErr  string
+		wantData map[string]any
+	}{
+		{"number name", `"workspace_name":123,"display_name":"Ada"`, badBody, nil},
+		{"bool name", `"workspace_name":true,"display_name":"Ada"`, badBody, nil},
+		{"array name", `"workspace_name":["Acme"],"display_name":"Ada"`, badBody, nil},
+		{"object display_name", `"workspace_name":"Acme","display_name":{"a":1}`, badBody, nil},
+		{"number kind", `"workspace_name":"Acme","display_name":"Ada","kind":1`, badBody, nil},
+		{"null name beside a display_name", `"workspace_name":null,"display_name":"Ada"`, wsMsg, nil},
+		{"null display_name beside a name", `"workspace_name":"Acme","display_name":null`, dnMsg, nil},
+		{"all three null is no answers", `"workspace_name":null,"display_name":null,"kind":null`, "", nil},
+		{"null kind is an absent kind", `"workspace_name":"Acme","display_name":"Ada","kind":null`, "", wantReg(reg("Acme", "Ada"))},
+		{"kind Firm", `"workspace_name":"Acme","display_name":"Ada","kind":"Firm"`, kindMsg, nil},
+		{"kind FIRM", `"workspace_name":"Acme","display_name":"Ada","kind":"FIRM"`, kindMsg, nil},
+		{"kind padded", `"workspace_name":"Acme","display_name":"Ada","kind":" firm"`, kindMsg, nil},
+		{"kind in-house", `"workspace_name":"Acme","display_name":"Ada","kind":"in-house"`, kindMsg, nil},
+		{"kind carrying NUL", `"workspace_name":"Acme","display_name":"Ada","kind":"firm\u0000"`, kindMsg, nil},
+		{"201-rune display_name", `"workspace_name":"Acme","display_name":"` + strings.Repeat("a", 201) + `"`, dnMsg, nil},
+		{"201 multi-byte runes", `"workspace_name":"` + strings.Repeat("é", 201) + `","display_name":"Ada"`, wsMsg, nil},
+		{"NBSP-only name", `"workspace_name":"\u00a0\u2003","display_name":"Ada"`, wsMsg, nil},
+		{"NUL-only name", `"workspace_name":"\u0000","display_name":"Ada"`, nulMsg, nil},
+		{"NUL survives the trim", `"workspace_name":"  \u0000  ","display_name":"Ada"`, nulMsg, nil},
+		{"both names bad: workspace first", `"workspace_name":"","display_name":""`, wsMsg, nil},
+		{"unicode whitespace is trimmed", `"workspace_name":"\u00a0\u2003Acme\u3000","display_name":"\u0085Ada\u2009"`, "", wantReg(reg("Acme", "Ada"))},
+		{"padding is not counted", `"workspace_name":"  ` + acme + `  ","display_name":"\t` + acme + `\n"`, "", wantReg(reg(acme, acme))},
+	}
+	if len(cases) == 0 {
+		t.Fatal("no cases")
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+			body := `{"email":"` + regEmail + `","password":"` + regPassword + `",` + c.fields + `}`
+
+			rec := doRegister(t, fake.URL, nil, body)
+
+			if c.wantErr != "" {
+				if rec.Code != http.StatusBadRequest || errorBody(t, rec) != c.wantErr {
+					t.Errorf("got %d %s, want 400 %q", rec.Code, rec.Body.String(), c.wantErr)
+				}
+				if n := len(fake.Calls()); n != 0 {
+					t.Errorf("GoTrue saw %d calls, want 0", n)
+				}
+				return
+			}
+			requirePending202(t, rec)
+			got := signupData(t, fake)
+			if c.wantData == nil {
+				if got != nil {
+					t.Errorf("signup data = %v, want no data key", got)
+				}
+				return
+			}
+			if !reflect.DeepEqual(got, any(c.wantData)) {
+				t.Errorf("signup data = %v, want %v", got, c.wantData)
+			}
+		})
+	}
+}
+
+// The gateway rebuilds the signup body: nothing but email, password and the validated answers reaches GoTrue.
+func TestRegister_ClientSuppliedDataNeverReachesGoTrue(t *testing.T) {
+	const forged = `"data":{"registration":{"workspace_name":"Evil","display_name":"E","kind":"firm"},"role":"admin"},` +
+		`"app_metadata":{"role":"admin"},"phone":"+15550100","email_confirm":true,"channel":"sms"`
+	for _, c := range []struct {
+		name     string
+		extra    string
+		wantData any
+	}{
+		{"no answers", forged, nil},
+		{"with answers", forged + `,"workspace_name":"Acme","display_name":"Ada"`,
+			map[string]any{"registration": map[string]any{"workspace_name": "Acme", "display_name": "Ada"}}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+
+			requirePending202(t, doRegister(t, fake.URL, nil, `{"email":"`+regEmail+`","password":"`+regPassword+`",`+c.extra+`}`))
+
+			calls := fake.Calls()
+			if len(calls) != 1 {
+				t.Fatalf("GoTrue saw %d calls, want 1", len(calls))
+			}
+			var sent map[string]any
+			if err := json.Unmarshal(calls[0].Body, &sent); err != nil {
+				t.Fatalf("signup body %q is not JSON: %v", calls[0].Body, err)
+			}
+			wantKeys := []string{"email", "password"}
+			if c.wantData != nil {
+				wantKeys = []string{"data", "email", "password"}
+			}
+			if keys := slices.Sorted(maps.Keys(sent)); !slices.Equal(keys, wantKeys) {
+				t.Errorf("signup body keys = %v, want %v", keys, wantKeys)
+			}
+			if !reflect.DeepEqual(sent["data"], c.wantData) {
+				t.Errorf("signup data = %v, want %v", sent["data"], c.wantData)
+			}
+		})
 	}
 }
 
@@ -163,6 +308,18 @@ func TestRegister_LogsNeverCarryCredentials(t *testing.T) {
 					t.Errorf("log carries %q: %s", s, buf.String())
 				}
 			}
+
+			// With a minimum the timing line joins the log; a 400 logs none.
+			floorLog, floorBuf := captureLog()
+			serveFloor(t, authURL, 50*time.Millisecond, floorLog, registerBody(regEmail, regPassword))
+			if c.status != http.StatusBadRequest && len(timingLines(t, floorBuf)) != 1 {
+				t.Fatalf("no %q line at a 50 ms minimum: %s", timingMsg, floorBuf.String())
+			}
+			for _, s := range []string{regEmail, regPassword} {
+				if strings.Contains(floorBuf.String(), s) {
+					t.Errorf("log at a 50 ms minimum carries %q: %s", s, floorBuf.String())
+				}
+			}
 		})
 	}
 }
@@ -279,7 +436,7 @@ func TestVerify_NonGetIs405WithoutUpstreamCall(t *testing.T) {
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(method, "/auth/verify?token="+verifyToken+"&type=signup", nil)
 
-			VerifyHandler(fake.URL, siteURL(t), testClient(), slog.New(slog.DiscardHandler)).ServeHTTP(rec, req)
+			VerifyHandler(fake.URL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), nil).ServeHTTP(rec, req)
 
 			if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != http.MethodGet {
 				t.Errorf("%s = %d Allow %q, want 405 Allow GET", method, rec.Code, rec.Header().Get("Allow"))

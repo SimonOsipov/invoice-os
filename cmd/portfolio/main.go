@@ -62,6 +62,8 @@ func main() {
 			return store.SetStatus(ctx, id, "active")
 		}, app.Logger))
 
+	app.RequireGateway(mustEnv("GATEWAY_TOKEN"))
+
 	if err := app.Run(context.Background()); err != nil {
 		platform.Fatal(app.Logger, "portfolio: %v", err)
 	}

@@ -1,12 +1,19 @@
 package platform
 
 import (
+	"context"
+	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
+
+const testSubject = "c0000000-0000-0000-0000-000000000001"
 
 func TestIdentityMiddleware(t *testing.T) {
 	var got auth.Identity
@@ -16,7 +23,7 @@ func TestIdentityMiddleware(t *testing.T) {
 	}))
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("X-Tenant-ID", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
-	req.Header.Set("X-User-ID", "user-42")
+	req.Header.Set("X-User-ID", testSubject)
 	req.Header.Set("X-User-Role", "authenticated")
 	h.ServeHTTP(httptest.NewRecorder(), req)
 
@@ -24,7 +31,7 @@ func TestIdentityMiddleware(t *testing.T) {
 		t.Fatal("expected an identity in context when the gateway headers are present")
 	}
 	want := auth.Identity{
-		Subject:  "user-42",
+		Subject:  testSubject,
 		Role:     "authenticated",
 		TenantID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 	}
@@ -59,7 +66,7 @@ func contextKeys(req *http.Request) (id auth.Identity, idOK bool, caller auth.Id
 
 func TestIdentityMiddleware_TenantlessCaller(t *testing.T) {
 	req := httptest.NewRequest("POST", "/v1/workspaces", nil)
-	req.Header.Set("X-User-ID", "user-42")
+	req.Header.Set("X-User-ID", testSubject)
 	req.Header.Set("X-User-Role", "authenticated")
 	req.Header.Set("X-User-Email", "ada@example.test")
 
@@ -67,7 +74,7 @@ func TestIdentityMiddleware_TenantlessCaller(t *testing.T) {
 	if !callerOK {
 		t.Fatal("expected a tenant-less caller when X-User-ID is set and X-Tenant-ID is not")
 	}
-	want := auth.Identity{Subject: "user-42", Role: "authenticated", Email: "ada@example.test"}
+	want := auth.Identity{Subject: testSubject, Role: "authenticated", Email: "ada@example.test"}
 	if caller != want {
 		t.Errorf("tenant-less caller = %+v, want %+v", caller, want)
 	}
@@ -79,7 +86,7 @@ func TestIdentityMiddleware_TenantlessCaller(t *testing.T) {
 func TestIdentityMiddleware_TenantHeaderStillBuildsIdentity(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("X-Tenant-ID", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
-	req.Header.Set("X-User-ID", "user-42")
+	req.Header.Set("X-User-ID", testSubject)
 	req.Header.Set("X-User-Role", "authenticated")
 	req.Header.Set("X-User-Email", "ada@example.test")
 
@@ -88,7 +95,7 @@ func TestIdentityMiddleware_TenantHeaderStillBuildsIdentity(t *testing.T) {
 		t.Fatal("expected an identity when X-Tenant-ID is set")
 	}
 	want := auth.Identity{
-		Subject:  "user-42",
+		Subject:  testSubject,
 		Role:     "authenticated",
 		TenantID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:    "ada@example.test",
@@ -115,8 +122,254 @@ func TestIdentityMiddleware_NoUserNoIdentity(t *testing.T) {
 	}
 
 	// Control: the same request plus X-User-ID does build a caller.
-	req.Header.Set("X-User-ID", "user-42")
+	req.Header.Set("X-User-ID", testSubject)
 	if _, _, _, ok := contextKeys(req); !ok {
 		t.Error("control: adding X-User-ID built no tenant-less caller")
+	}
+}
+
+const testTenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+
+func TestIdentityMiddleware_NonUUIDSubjectBuildsNoIdentity(t *testing.T) {
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("X-Tenant-ID", testTenant)
+	req.Header.Set("X-User-ID", "user-42")
+	req.Header.Set("X-User-Role", "authenticated")
+	req.Header.Set("X-User-Email", "ada@example.test")
+
+	id, idOK, caller, callerOK := contextKeys(req)
+	if idOK {
+		t.Errorf("IdentityFromContext = %+v, want none for a non-uuid subject", id)
+	}
+	if callerOK {
+		t.Errorf("TenantlessCallerFromContext = %+v, want none when a tenant header is present", caller)
+	}
+}
+
+func TestIdentityMiddleware_EmptySubjectWithTenantBuildsNoIdentity(t *testing.T) {
+	cases := []struct {
+		name string
+		user []string // nil: header absent
+	}{
+		{"absent", nil},
+		{"present and empty", []string{""}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/", nil)
+			req.Header.Set("X-Tenant-ID", testTenant)
+			req.Header.Set("X-User-Role", "authenticated")
+			if tc.user != nil {
+				req.Header["X-User-Id"] = tc.user
+			}
+			id, idOK, caller, callerOK := contextKeys(req)
+			if idOK {
+				t.Errorf("IdentityFromContext = %+v, want none for an empty subject", id)
+			}
+			if callerOK {
+				t.Errorf("TenantlessCallerFromContext = %+v, want none", caller)
+			}
+		})
+	}
+}
+
+func TestIdentityMiddleware_NonUUIDTenantlessSubjectBuildsNoCaller(t *testing.T) {
+	req := httptest.NewRequest("POST", "/v1/workspaces", nil)
+	req.Header.Set("X-User-ID", "user-42")
+	req.Header.Set("X-User-Role", "authenticated")
+
+	id, idOK, caller, callerOK := contextKeys(req)
+	if callerOK {
+		t.Errorf("TenantlessCallerFromContext = %+v, want none for a non-uuid subject", caller)
+	}
+	if idOK {
+		t.Errorf("IdentityFromContext = %+v, want none", id)
+	}
+}
+
+func TestIdentityMiddleware_NonUUIDSubjectShapes(t *testing.T) {
+	subjects := []string{
+		"user-42",
+		"c0000000-0000-0000-0000-00000000000", // 35 chars
+		" ",
+		"c0000000-0000-0000-0000-00000000000g", // non-hex digit
+		" " + testSubject,                      // leading space, 37 chars
+		testSubject + " ",
+		testSubject + "\n",
+		"\t" + testSubject,
+		"c0000000-0000-0000-0000 000000000001", // space where a hyphen belongs
+		"c0000000-0000-0000-0000-0000000000011",
+		"urn:uuid:" + testSubject[:35],
+		"urn:uuid " + testSubject,
+		"c000000000000000000000000000000g", // 32 chars, non-hex
+	}
+	tenants := []struct {
+		name string
+		hdr  []string // nil: header absent
+	}{
+		{"tenant=absent", nil},
+		{"tenant=empty", []string{""}},
+		{"tenant=set", []string{testTenant}},
+	}
+	for _, subj := range subjects {
+		for _, tenant := range tenants {
+			t.Run(fmt.Sprintf("%q/%s", subj, tenant.name), func(t *testing.T) {
+				req := httptest.NewRequest("GET", "/", nil)
+				req.Header.Set("X-User-ID", subj)
+				req.Header.Set("X-User-Role", "authenticated")
+				if tenant.hdr != nil {
+					req.Header["X-Tenant-Id"] = tenant.hdr
+				}
+				id, idOK, caller, callerOK := contextKeys(req)
+				if idOK {
+					t.Errorf("IdentityFromContext = %+v, want none", id)
+				}
+				if callerOK {
+					t.Errorf("TenantlessCallerFromContext = %+v, want none", caller)
+				}
+			})
+		}
+	}
+}
+
+// First value wins (Header.Get), so a second X-User-ID line cannot launder or poison the first.
+func TestIdentityMiddleware_RepeatedUserHeaders(t *testing.T) {
+	other := "c0000000-0000-0000-0000-000000000002"
+	cases := []struct {
+		name string
+		user []string
+		want string // "" = no identity
+	}{
+		{"uuid then junk", []string{testSubject, "user-42"}, testSubject},
+		{"junk then uuid", []string{"user-42", testSubject}, ""},
+		{"empty then uuid", []string{"", testSubject}, ""},
+		{"uuid then uuid", []string{testSubject, other}, testSubject},
+	}
+	for _, tc := range cases {
+		for _, withTenant := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/tenant=%v", tc.name, withTenant), func(t *testing.T) {
+				req := httptest.NewRequest("GET", "/", nil)
+				req.Header["X-User-Id"] = tc.user
+				if withTenant {
+					req.Header.Set("X-Tenant-ID", testTenant)
+				}
+				id, idOK, caller, callerOK := contextKeys(req)
+				got, gotOK := caller, callerOK
+				if withTenant {
+					got, gotOK = id, idOK
+				}
+				if tc.want == "" {
+					if idOK || callerOK {
+						t.Errorf("identity %+v (%v) / caller %+v (%v), want neither", id, idOK, caller, callerOK)
+					}
+					return
+				}
+				if !gotOK || got.Subject != tc.want {
+					t.Errorf("got %+v (ok %v), want Subject %q", got, gotOK, tc.want)
+				}
+			})
+		}
+	}
+}
+
+// D5: the middleware accepts exactly the subjects the verifier accepts. Both sides use uuid.Parse,
+// so a stricter or looser middleware check diverges here.
+func TestIdentityMiddleware_AcceptsExactlyWhatTheVerifierAccepts(t *testing.T) {
+	iss, err := auth.NewMockIssuer("https://issuer.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(iss.JWKSHandler())
+	t.Cleanup(srv.Close)
+	v, err := auth.NewVerifier(auth.Config{
+		Issuer:   "https://issuer.test",
+		JWKSURL:  srv.URL,
+		CacheTTL: time.Hour,
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	subjects := []string{
+		testSubject,
+		"00000000-0000-0000-0000-000000000000",
+		"C0000000-0000-0000-0000-000000000001",
+		"{c0000000-0000-0000-0000-000000000001}",
+		"urn:uuid:c0000000-0000-0000-0000-000000000001",
+		"URN:UUID:c0000000-0000-0000-0000-000000000001",
+		"c0000000000000000000000000000001",
+		"(c0000000-0000-0000-0000-000000000001)", // uuid.Parse examines only the middle 36 of 38 bytes
+		" " + testSubject + " ",
+		"user-42",
+		"c0000000-0000-0000-0000-00000000000",
+		"c0000000-0000-0000-0000-00000000000g",
+		" " + testSubject,
+		"c000000000000000000000000000000g",
+	}
+	accepted, refused := 0, 0
+	for _, subj := range subjects {
+		tok, err := iss.Mint(auth.MintOptions{Subject: subj, Role: "authenticated"})
+		if err != nil {
+			t.Fatalf("Mint %q: %v", subj, err)
+		}
+		_, verr := v.Verify(context.Background(), tok)
+
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("X-Tenant-ID", testTenant)
+		req.Header.Set("X-User-ID", subj)
+		_, idOK, _, _ := contextKeys(req)
+		bare := httptest.NewRequest("GET", "/", nil)
+		bare.Header.Set("X-User-ID", subj)
+		_, _, _, callerOK := contextKeys(bare)
+
+		if (verr == nil) != idOK || (verr == nil) != callerOK {
+			t.Errorf("subject %q: verifier accepts = %v, middleware identity = %v, caller = %v", subj, verr == nil, idOK, callerOK)
+		}
+		if verr == nil {
+			accepted++
+		} else {
+			refused++
+		}
+	}
+	if accepted == 0 || refused == 0 {
+		t.Fatalf("corpus must split both ways, got %d accepted and %d refused", accepted, refused)
+	}
+}
+
+// uuid.Parse is the verifier's check (verify.go), so the middleware accepts the same forms.
+func TestIdentityMiddleware_VerifierSubjectFormsBuildIdentity(t *testing.T) {
+	forms := []struct{ name, subject string }{
+		{"canonical", "c0000000-0000-0000-0000-000000000001"},
+		{"upper-case", "C0000000-0000-0000-0000-000000000001"},
+		{"braced", "{c0000000-0000-0000-0000-000000000001}"},
+		{"urn", "urn:uuid:c0000000-0000-0000-0000-000000000001"},
+		{"32-hex", "c0000000000000000000000000000001"},
+		{"nil uuid", "00000000-0000-0000-0000-000000000000"},
+	}
+	for _, f := range forms {
+		t.Run(f.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/", nil)
+			req.Header.Set("X-Tenant-ID", testTenant)
+			req.Header.Set("X-User-ID", f.subject)
+			req.Header.Set("X-User-Role", "authenticated")
+
+			id, idOK, _, callerOK := contextKeys(req)
+			if !idOK {
+				t.Fatalf("no identity for subject form %q", f.subject)
+			}
+			if id.Subject != f.subject || id.TenantID != testTenant {
+				t.Errorf("identity = %+v, want Subject %q TenantID %q", id, f.subject, testTenant)
+			}
+			if callerOK {
+				t.Error("tenant-less caller set beside an identity")
+			}
+
+			bare := httptest.NewRequest("POST", "/v1/workspaces", nil)
+			bare.Header.Set("X-User-ID", f.subject)
+			if _, _, caller, ok := contextKeys(bare); !ok || caller.Subject != f.subject {
+				t.Errorf("tenant-less caller = %+v (ok %v), want Subject %q", caller, ok, f.subject)
+			}
+		})
 	}
 }

@@ -4,7 +4,7 @@
 // sign-in is throttled per address, and the session check's cost is measured.
 // Forks auto-confirm, so a fresh registration signs in at once.
 import { test, expect } from '@playwright/test'
-import { exchangeCode, mintSignInState, rawFetch, signInForCode } from './client'
+import { claimsOf, exchangeCode, mintSignInState, provisionRealAccount, rawFetch, registerFresh, signInForCode, signInSession, subjectOf } from './client'
 import { assertErrorEnvelope } from './contract-helpers'
 import { resolveTarget } from '../targets'
 
@@ -27,24 +27,8 @@ const THROTTLE_LIMIT = 10
 const CODE_RE = /^[A-Za-z0-9_-]{43}$/
 const JWT_RE = /^eyJ[\w-]+\.[\w-]+\.[\w-]+$/
 
-async function registerFresh(): Promise<{ email: string; password: string }> {
-  const id = crypto.randomUUID()
-  const account = { email: `handoff-${id}@example.com`, password: id.slice(0, 16) }
-  const res = await rawFetch('/auth/register', { method: 'POST', body: account })
-  expect(res.status, JSON.stringify(res.body)).toBe(202)
-  return account
-}
-
 function errorOf(res: { body: unknown }): string {
   return (res.body as { error: string }).error
-}
-
-// One sign-in, one GoTrue session.
-async function signInSession(email: string, password: string): Promise<{ access_token: string; refresh_token: string }> {
-  const state = mintSignInState()
-  const res = await rawFetch('/auth/exchange', { method: 'POST', body: { code: await signInForCode(email, password, state), state } })
-  expect(res.status, JSON.stringify(res.body)).toBe(200)
-  return res.body as { access_token: string; refresh_token: string }
 }
 
 function getMe(token: string) {
@@ -167,6 +151,26 @@ test.describe('sign-in hand-off (API E2E, over the deployed gateway)', () => {
     expect([empty.status(), await empty.json()], 'sign-out with no refresh token').toEqual([400, { error: REFRESH_REQUIRED }])
     const unknown = await post('/auth/sign-out', { refresh_token: 'aaaaaaaaaaaa' })
     expect([unknown.status(), await unknown.json()], 'sign-out with an unknown refresh token').toEqual([401, { error: INVALID_REFRESH }])
+  })
+
+  test('a provisioned account has no staff claim; the mock grant puts it on the next sign-in and the next refresh', async () => {
+    const { email, password } = await provisionRealAccount('staff-claim')
+    const before = await signInSession(email, password)
+    const beforeMeta = claimsOf(before.access_token).app_metadata as { tenant_id?: unknown; staff?: unknown } | undefined
+    // Positive control: this token carries the tenant claim, so an absent staff claim is not a failed read.
+    expect(beforeMeta?.tenant_id, 'the tenant claim on a provisioned account').toBeTruthy()
+    expect(beforeMeta?.staff, 'staff on a customer token').toBeUndefined()
+
+    const grant = await rawFetch('/auth/mock/staff', { method: 'POST', body: { user_id: subjectOf(before.access_token) } })
+    expect(grant.status, JSON.stringify(grant.body)).toBe(204)
+
+    const after = await signInSession(email, password)
+    expect((claimsOf(after.access_token).app_metadata as { staff?: unknown }).staff, 'staff on a sign-in after the grant').toBe(true)
+
+    const renewed = await rawFetch('/auth/refresh', { method: 'POST', body: { refresh_token: before.refresh_token } })
+    expect(renewed.status, JSON.stringify(renewed.body)).toBe(200)
+    const renewedToken = (renewed.body as { access_token: string }).access_token
+    expect((claimsOf(renewedToken).app_metadata as { staff?: unknown }).staff, 'staff on a refresh of the earlier session').toBe(true)
   })
 
   // The first call after sign-in misses the session cache, the second hits it. Timings are

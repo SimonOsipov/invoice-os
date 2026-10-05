@@ -185,6 +185,12 @@ button {
     display: inline-flex;
   }
 }
+/* The entry needs ~149px on Linux Chromium metrics; hidden 1121-1219px. */
+@media (max-width: 1219px) {
+  .a-create {
+    display: none;
+  }
+}
 @media (min-width: 1120.02px) {
   .a-menu {
     display: none;

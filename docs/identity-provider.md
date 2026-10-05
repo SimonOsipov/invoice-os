@@ -112,6 +112,8 @@ Nothing below is a secret value; secrets are named, never shown.
 | `GOTRUE_DISABLE_SIGNUP` | unset (image value `true`) until registration U3, then `false` | `false` |
 | `GOTRUE_MAILER_AUTOCONFIRM` | unset (image value `false`) | `true`: a fork sends no mail, so a registration is confirmed at once and can sign in |
 | `GOTRUE_MAILER_URLPATHS_CONFIRMATION` | `https://api.ascomply.com/auth/verify` after registration U2; unset before it | not written; after U2 a fork inherits production's value, inert because a fork sends no mail |
+| `GOTRUE_MAILER_TEMPLATES_CONFIRMATION` | `https://api.ascomply.com/emails/confirmation.html` after mail U1; unset before it | not written; after mail U1 a fork inherits production's value, inert because a fork sends no mail |
+| `GOTRUE_MAILER_SUBJECTS_CONFIRMATION` | `Confirm your ASComply account` after mail U1; unset before it | not written; inherited after mail U1, inert |
 | `GOTRUE_JWT_KEYS` | **secret, sealed** | freshly generated per fork |
 | `GOTRUE_JWT_SECRET` | **secret, sealed** | freshly generated per fork |
 | `GOTRUE_SMTP_PASS` | **secret, sealed**; the Resend API key, unset until U4 | empty |
@@ -315,6 +317,25 @@ scope, or `/token` with any other grant) is reachable from outside.
 2. The link targets `GOTRUE_MAILER_URLPATHS_CONFIRMATION`, which is the gateway's
    `GET /auth/verify`. A relative value would resolve against `API_EXTERNAL_URL`, a private
    host, so production sets an absolute URL.
+
+   The confirmation mail is the branded template (`internal/accountmail`) that GoTrue fetches
+   from `GOTRUE_MAILER_TEMPLATES_CONFIRMATION`, the gateway's public
+   `GET /emails/confirmation.html`; the subject is `GOTRUE_MAILER_SUBJECTS_CONFIRMATION`. The
+   gateway serves two `/emails/` routes: `GET /emails/confirmation.html` (the template) and
+   `GET /emails/mark.png` (the logo, `accountmail.LogoURL`). GoTrue fetches a template once
+   and caches it for 10 minutes (`TemplateMaxAge`). When that first fetch fails, GoTrue
+   silently sends its own unbranded mail for up to 10 minutes and logs only
+   `templatemailer_template_body_http_error`. So the template URL is checked before it
+   reaches `auth`: `prenv mail-template-check <url>` loads it, and `railway-env.sh
+   check-mail-templates <environment-id>` runs that check on every non-empty
+   `GOTRUE_MAILER_TEMPLATES_*` of an environment's `auth`. It also parses and executes every
+   non-empty `GOTRUE_MAILER_SUBJECTS_*` (`prenv mail-subject-check`), because a subject that
+   fails to parse makes GoTrue send its default subject and body. It runs in the `fleet-gate` job of
+   `dev-env.yml` (see [deploy-model.md](./deploy-model.md)) and by hand in mail U1. It reads
+   variables unrendered, so a Railway reference (`${{...}}`) in a template URL is fetched
+   literally and fails loudly. It also fails (`variables are unreadable`) when
+   `GOTRUE_SITE_URL` is absent from `auth`'s variables, which means the token cannot read
+   them.
 3. `GET /auth/verify?token=…&type=signup` posts `{"type":"signup","token_hash":<token>}` to
    GoTrue `/verify`, discards the session GoTrue returns, and redirects the browser to
    `AUTH_SITE_URL`. No token reaches a URL.
@@ -1297,6 +1318,46 @@ sign-in U3 below, with the real password), then post
 `{"workspace_name":"<name>","display_name":"<you>"}` to `POST /api/tenancy/v1/workspaces`
 with `Authorization: Bearer <access_token>`: it answers 201. The U4 account and its workspace
 stay in production; no route deletes them.
+
+## Branding the account mails in production (mail U1–U2)
+
+Production writes are the user's. Each write skips deploys, so it changes nothing until
+`auth` deploys, and is followed by a re-read that must print the expected value. `P` and `E`
+are the project and production environment ids named under "Opening registration in
+production". Until U1, GoTrue sends its default mail.
+
+| Step | When | Production write |
+|---|---|---|
+| U1 | after the epic reaches `main` and the push run has deployed the gateway | auth `GOTRUE_MAILER_TEMPLATES_CONFIRMATION`, `GOTRUE_MAILER_SUBJECTS_CONFIRMATION` |
+| U2 | after U1 | none: deploy `auth`, read the gate |
+
+**U1 — check the template, then set both variables on `auth`:**
+
+```
+go run ./tools/prenv mail-template-check https://api.ascomply.com/emails/confirmation.html
+# expected: ok https://api.ascomply.com/emails/confirmation.html
+railway variables --set 'GOTRUE_MAILER_TEMPLATES_CONFIRMATION=https://api.ascomply.com/emails/confirmation.html' -p "$P" -e "$E" -s auth --skip-deploys
+railway variables -p "$P" -e "$E" -s auth --json | jq -r '.GOTRUE_MAILER_TEMPLATES_CONFIRMATION'
+# expected: https://api.ascomply.com/emails/confirmation.html
+railway variables --set 'GOTRUE_MAILER_SUBJECTS_CONFIRMATION=Confirm your ASComply account' -p "$P" -e "$E" -s auth --skip-deploys
+railway variables -p "$P" -e "$E" -s auth --json | jq -r '.GOTRUE_MAILER_SUBJECTS_CONFIRMATION'
+# expected: Confirm your ASComply account
+```
+
+Do not run the `mail-template-check` line before the push run has deployed the gateway:
+production answers 404 for the route until then.
+
+**U2 — deploy `auth`.** Deploy as in "Deploy the writes" under "Opening registration in
+production". Then read the push run's `fleet-gate` step "Gate on the account-mail templates":
+
+```
+# expected: ok https://api.ascomply.com/emails/confirmation.html
+```
+
+The same job's push-only step "Gate on the account-mail logo" loads
+`https://api.ascomply.com/emails/mark.png` and expects 200 `image/*`.
+
+To go back to GoTrue's default mail, unset both variables and deploy `auth`.
 
 ## Opening sign-in in production (sign-in U1–U3)
 

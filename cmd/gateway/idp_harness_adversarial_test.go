@@ -29,6 +29,7 @@ case "$1" in
     printf 'RUN %s ARGV %s\n' "$name" "$*" >>"$STUB_LOG"
     printf 'ENV %s DATABASE_URL=%s\n' "$name" "${DATABASE_URL:-}" >>"$STUB_LOG"
     printf 'ENV %s GOTRUE_JWT_KEYS=%s\n' "$name" "${GOTRUE_JWT_KEYS:-}" >>"$STUB_LOG"
+    printf 'ENV %s GOTRUE_MAILER_SUBJECTS_CONFIRMATION=%s\n' "$name" "${GOTRUE_MAILER_SUBJECTS_CONFIRMATION:-}" >>"$STUB_LOG"
     echo "0123456789abcdef" ;;
   inspect) echo true ;;
   *) echo "docker $*" >>"$STUB_LOG" ;;
@@ -147,6 +148,53 @@ func argvEnv(argv, name string) string {
 		}
 	}
 	return ""
+}
+
+// argvByName counts `-e NAME` words in a recorded docker argv: the value passes by name, never in argv.
+func argvByName(argv, name string) int {
+	n := 0
+	fields := strings.Fields(argv)
+	for i, f := range fields {
+		if f == "-e" && i+1 < len(fields) && fields[i+1] == name {
+			n++
+		}
+	}
+	return n
+}
+
+const (
+	mailTemplateVar = "GOTRUE_MAILER_TEMPLATES_CONFIRMATION"
+	mailSubjectVar  = "GOTRUE_MAILER_SUBJECTS_CONFIRMATION"
+	mailSubject     = "Confirm your ASComply account"
+)
+
+// assertMailBranding pins idp-mail's template URL and subject: one of each, the subject by name, no other container sets either.
+func assertMailBranding(t *testing.T, log, container, osName string, verifyPort int) {
+	t.Helper()
+	runs := stubLines(log, "RUN", container)
+	if len(runs) != 1 {
+		t.Fatalf("%s started %d times, want 1", container, len(runs))
+	}
+	host := "localhost"
+	if osName != "Linux" {
+		host = "host.docker.internal"
+	}
+	want := fmt.Sprintf("http://%s:%d/emails/confirmation.html", host, verifyPort)
+	if got := argvEnv(runs[0], mailTemplateVar); got != want {
+		t.Errorf("%s %s = %q, want %q: %s", container, mailTemplateVar, got, want, runs[0])
+	}
+	if n := strings.Count(runs[0], "-e "+mailTemplateVar+"="); n != 1 {
+		t.Errorf("%s passes %s %d times, want 1", container, mailTemplateVar, n)
+	}
+	if n := argvByName(runs[0], mailSubjectVar); n != 1 {
+		t.Errorf("%s passes %s by name %d times, want 1: %s", container, mailSubjectVar, n, runs[0])
+	}
+	if strings.Contains(runs[0], mailSubjectVar+"=") || strings.Contains(runs[0], "ASComply") {
+		t.Errorf("%s carries the subject in argv; a value with spaces passes by name: %s", container, runs[0])
+	}
+	if got := stubEnv(t, log, container, mailSubjectVar); got != mailSubject {
+		t.Errorf("%s forwards %s = %q, want %q", container, mailSubjectVar, got, mailSubject)
+	}
 }
 
 func TestIdpUpStdoutIsTheURLsAndTheIssuer(t *testing.T) {
@@ -354,6 +402,17 @@ func TestIdpUpMailContainerConfiguration(t *testing.T) {
 				}
 			}
 
+			assertMailBranding(t, r.log, "idp-mail", osName, 9995)
+			for _, c := range idpContainers {
+				argv := stubLines(r.log, "RUN", c)
+				if len(argv) != 1 {
+					t.Fatalf("%s started %d times, want 1", c, len(argv))
+				}
+				if strings.Contains(argv[0], mailTemplateVar) || strings.Contains(argv[0], mailSubjectVar) {
+					t.Errorf("%s sets a mail template or subject; only idp-mail mails: %s", c, argv[0])
+				}
+			}
+
 			// docker keeps the last -e of a name, so a second AUTOCONFIRM would silently win.
 			for _, c := range append(slices.Clone(idpContainers), "idp-mail") {
 				if n := strings.Count(stubLines(r.log, "RUN", c)[0], "-e GOTRUE_MAILER_AUTOCONFIRM="); n != 1 {
@@ -428,7 +487,7 @@ func TestIdpUpRefusesANonAuthAdminDSN(t *testing.T) {
 // plannedIdPFilter is the idp paths filter the plan lists; the job must run when any of them changes.
 var plannedIdPFilter = []string{
 	"sidecar/auth/**", "internal/platform/auth/**", "migrations/**", "db/**", "tools/prenv/**",
-	"internal/gateway/**", "internal/tenancy/**", "internal/platform/*.go", "internal/platform/db/**",
+	"internal/gateway/**", "internal/accountmail/**", "packages/design-tokens/v2/assets/**", "internal/tenancy/**", "internal/platform/*.go", "internal/platform/db/**",
 	"internal/tools/idppin/**", "scripts/ci/idp-*.sh", "Makefile", ".github/workflows/ci.yml", "go.mod", "go.sum",
 }
 
@@ -447,6 +506,14 @@ func TestIdPFilterListsEveryPlannedPath(t *testing.T) {
 		if !slices.Contains(paths, want) {
 			t.Errorf("the idp paths filter %v does not list %q", paths, want)
 		}
+	}
+	// The gateway embeds the assets, so the go job (docker-canary) must run when they change.
+	goPaths := filterPaths(jobBlock(yamlCode(readCIYAML(t)), "changes"), "go")
+	if len(goPaths) == 0 {
+		t.Fatal("found no go paths filter in ci.yml; the scan is broken")
+	}
+	if !slices.Contains(goPaths, "packages/design-tokens/v2/assets/**") {
+		t.Errorf("the go paths filter %v does not list packages/design-tokens/v2/assets/**", goPaths)
 	}
 	if got := fmt.Sprint(filterPaths(jobBlock(yamlCode(readCIYAML(t)), "changes"), "sidecar")); !strings.Contains(got, "sidecar/**") {
 		t.Errorf("the docling sidecar filter %s lost sidecar/**", got)
@@ -484,6 +551,7 @@ func TestIdpSlotGivesAWorktreeItsOwnContainersAndPorts(t *testing.T) {
 			if argvEnv(im, "GOTRUE_SMTP_PORT") != "1045" || argvEnv(im, "GOTRUE_MAILER_URLPATHS_CONFIRMATION") != "http://localhost:10015/auth/verify" {
 				t.Errorf("idp-mail-s2 mails to the wrong ports: %s", im)
 			}
+			assertMailBranding(t, r.log, "idp-mail-s2", osName, 10015)
 			for _, l := range strings.Split(r.log, "\n") {
 				if f := strings.Fields(l); len(f) == 4 && f[1] == "rm" && !strings.HasSuffix(f[3], "-s2") {
 					t.Errorf("slot 2 removes another slot's container: %s", l)

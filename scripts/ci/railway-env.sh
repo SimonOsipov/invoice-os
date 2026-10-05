@@ -18,7 +18,7 @@
 #                            set-sentry-off <environment-id|--self-test>|
 #                            set-fork-reconciliation-url <environment-id>|
 #                            delete-environment <name>|list-environments|
-#                            query <context>|wait-deployment <label> <deployment-id>|report-api-calls>
+#                            query <context>|wait-deployment <label> <deployment-id>|check-mail-templates <environment-id>|report-api-calls>
 #
 # `set-production-environment` is run by hand, once, never from a workflow: it
 # sets the persistent environment's gateway ENVIRONMENT=production.
@@ -3483,6 +3483,68 @@ cmd_report_api_calls() {
     }' "$rl" "$log" || true
 }
 
+# check-mail-templates <environment-id>: every non-empty GOTRUE_MAILER_TEMPLATES_* on auth must serve a mail template,
+# and every non-empty GOTRUE_MAILER_SUBJECTS_* must parse and execute.
+cmd_check_mail_templates() {
+  local env_id="${1:-}"
+  if [ -z "$env_id" ]; then
+    echo "::error::usage: railway-env.sh check-mail-templates <environment-id>"
+    exit 2
+  fi
+
+  require_env
+
+  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+    "listing service instances in environment $env_id"
+  local auth_id
+  auth_id=$(service_id_by_name "$GQL_RESPONSE" auth "environment $env_id" GOTRUE_MAILER_TEMPLATES)
+
+  auth_read "$env_id" "$auth_id" auth
+  # Production auth always sets GOTRUE_SITE_URL, so a map without it is a token that cannot read variables.
+  if [ "$(auth_kind "$GQL_RESPONSE" GOTRUE_SITE_URL)" != present ]; then
+    echo "::error::auth's variables are unreadable in environment $env_id, so GOTRUE_MAILER_TEMPLATES_* and GOTRUE_MAILER_SUBJECTS_* could not be checked."
+    exit 1
+  fi
+
+  local pairs subjects name value rc=0 checked=0
+  pairs=$(printf '%s' "$GQL_RESPONSE" | jq -r '.data.variables | to_entries[]
+    | select((.key | startswith("GOTRUE_MAILER_TEMPLATES_")) and .value != "") | [.key, .value] | @tsv')
+  subjects=$(printf '%s' "$GQL_RESPONSE" | jq -r '.data.variables | to_entries[]
+    | select((.key | startswith("GOTRUE_MAILER_SUBJECTS_")) and .value != "") | .key')
+  if [ -z "$pairs" ] && [ -z "$subjects" ]; then
+    echo "No GOTRUE_MAILER_TEMPLATES_* or GOTRUE_MAILER_SUBJECTS_* is set on auth in environment $env_id; GoTrue sends its default mail."
+    return 0
+  fi
+
+  # A subject that fails to parse makes GoTrue send its default subject and body.
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    value=$(printf '%s' "$GQL_RESPONSE" | jq -r --arg k "$name" '.data.variables[$k]')
+    if [ "$checked" = 0 ]; then
+      auth_build_prenv "the account-mail template check"
+    fi
+    checked=1
+    "$AUTH_PRENV" mail-subject-check "$value" | sed "s/^::error::/::error::$name: /" || rc=1
+  done <<<"$subjects"
+
+  while IFS=$'\t' read -r name value; do
+    [ -n "$name" ] || continue
+    case "$value" in
+      http*) ;;
+      *)
+        echo "::error::$name is '$value', not an http(s) URL: GoTrue resolves it against GOTRUE_SITE_URL."
+        rc=1
+        continue ;;
+    esac
+    if [ "$checked" = 0 ]; then
+      auth_build_prenv "the account-mail template check"
+    fi
+    checked=1
+    "$AUTH_PRENV" mail-template-check "$value" | sed "s/^::error::/::error::$name: /" || rc=1
+  done <<<"$pairs"
+  return "$rc"
+}
+
 case "${1:-}" in
   assert-project-settings)   cmd_assert_project_settings ;;
   disable-pr-environments)   cmd_disable_pr_environments ;;
@@ -3508,9 +3570,10 @@ case "${1:-}" in
   list-environments)         cmd_list_environments ;;
   query)                     cmd_query "${2:-}" ;;
   wait-deployment)           shift; cmd_wait_deployment "$@" ;;
+  check-mail-templates)      cmd_check_mail_templates "${2:-}" ;;
   report-api-calls)          cmd_report_api_calls ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-fork-gateway-token <environment-id>|set-production-gateway-token <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments|query <context>|wait-deployment <label> <deployment-id>|report-api-calls>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-fork-gateway-token <environment-id>|set-production-gateway-token <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments|query <context>|wait-deployment <label> <deployment-id>|check-mail-templates <environment-id>|report-api-calls>"
     exit 2
     ;;
 esac

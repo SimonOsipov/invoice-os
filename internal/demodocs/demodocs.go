@@ -167,6 +167,9 @@ func seedTenant(ctx context.Context, pool *pgxpool.Pool, store StoreFunc, tenant
 	return res, nil
 }
 
+// personaPrefix marks the seeded persona subjects (db/seed.e2e-shards.sql).
+const personaPrefix = "c0000000-0000-0000-0000-"
+
 // tenantAdmin returns an active admin member's subject, or "" when the tenant
 // has none — an absent demo tenant is skipped, not an error, because
 // db/seed.dev.sql creates all four but only populates some.
@@ -174,13 +177,17 @@ func seedTenant(ctx context.Context, pool *pgxpool.Pool, store StoreFunc, tenant
 // status = 'active' is load-bearing, not tidiness: seedTenant runs as this
 // subject through the gated WithinRequestTenantTx, which refuses a suspended or
 // invited caller (TestRLS_DemoDocsPrefersAnActiveAdminOverASuspendedOne).
+//
+// The seeded persona admin sorts first, then the lowest user_id: accounts
+// granted admin later must not take the seeded documents
+// (TestRLS_DemoDocsPrefersTheSeededPersonaAdminOverAGrantedAccount).
 func tenantAdmin(ctx context.Context, pool *pgxpool.Pool, tenantID string) (string, error) {
 	var subject string
 	err := db.WithinTenantTx(ctx, pool, tenantID, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
 			`SELECT user_id::text FROM memberships
 			  WHERE tenant_id = $1 AND role = 'admin' AND status = 'active'
-			  ORDER BY user_id LIMIT 1`, tenantID,
+			  ORDER BY user_id::text LIKE $2 DESC, user_id LIMIT 1`, tenantID, personaPrefix+"%",
 		).Scan(&subject)
 	})
 	if err != nil {

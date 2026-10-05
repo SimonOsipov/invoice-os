@@ -267,6 +267,8 @@ predicates it would previously have hit inside the transaction.
 | `GET /healthz` | every service (`internal/platform/server.go`) | exempt | must answer while the database is down; a membership lookup would invert its meaning |
 | `GET /readyz` | every service (`internal/platform/server.go`) | exempt | same — readiness reports on the database, so it cannot depend on reaching it |
 | `GET /healthz/fleet` | gateway | exempt | fleet roll-up across services, deliberately outside the verifier |
+| `GET /emails/confirmation.html` | gateway | exempt | no database; static account-mail template |
+| `GET /emails/mark.png` | gateway | exempt | no database; static account-mail logo |
 | `POST /auth/login` | gateway | exempt | unauthenticated by definition; there is no caller yet to hold a membership |
 | `OPTIONS /auth/login` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `POST /auth/mock/staff` | gateway | exempt | mock builds only; grants staff on the owner DSN for the E2E fork, with no caller identity |
@@ -351,7 +353,7 @@ predicates it would previously have hit inside the transaction.
 | `POST /v1/extractions/{id}/fields/{name}/corrections` | submission | covered | |
 | `POST /v1/extractions/{id}/line-items` | submission | covered | |
 
-87 distinct routes, 93 registrations (`GET /v1/ping` is registered once per service).
+89 distinct routes, 95 registrations (`GET /v1/ping` is registered once per service).
 
 ### 8.1 The non-HTTP callers, so nobody looks for them above
 

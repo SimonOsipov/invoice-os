@@ -316,8 +316,6 @@ describe('extractionReview.ts composes the shipped helpers', () => {
 
 // -- the pixel-grid absence proof (AC-7) ------------------------------------------------
 
-// oklch() colour literals legitimately carry '72' (the artboard's highlight fill is
-// oklch(72% .15 65 / .32)). Everything outside them must not.
 function scrubColours(src: string): string {
   return src.replace(/oklch\([^)]*\)/g, 'oklch(COLOUR)')
 }

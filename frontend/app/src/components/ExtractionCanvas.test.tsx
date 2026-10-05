@@ -925,6 +925,49 @@ describe('the toolbar', () => {
   })
 })
 
+// A source scan of the token CSS: jsdom applies no stylesheet, so an undefined `var(--x)`
+// paints nothing in the browser while every style assertion above stays green.
+describe('every token the canvas paints is defined in the v2 token CSS', () => {
+  const V2 = path.join(process.cwd(), '../../packages/design-tokens/v2')
+  const CSS = ['tokens/colors.css', 'tokens/spacing.css', 'tokens/typography.css', 'app-layer.css']
+    .map((f) => readFileSync(path.join(V2, f), 'utf8').replace(/\/\*[\s\S]*?\*\//g, ''))
+    .join('\n')
+
+  it('names no var() the app does not load', () => {
+    const regionless = [mkField({ name: 'buyer_tin', value: null, region: null })]
+    const names = new Set<string>()
+    const collect = (root: HTMLElement) => {
+      for (const el of root.querySelectorAll('[style]')) {
+        for (const m of (el.getAttribute('style') ?? '').matchAll(/var\((--[a-z0-9-]+)/g)) names.add(m[1])
+      }
+    }
+
+    const armedUi = render(canvas({ selected: 'invoice_date', armed: 'buyer_tin' }))
+    const s = surface(2)
+    measureRect(s, SURFACE_RECT)
+    fireEvent.mouseDown(s, DRAG_FROM)
+    fireEvent.mouseMove(s, DRAG_TO)
+    expect(highlights(), 'no highlight rendered').toHaveLength(1)
+    expect(liveBoxes(), 'no live box rendered').toHaveLength(1)
+    collect(armedUi.container)
+    armedUi.unmount()
+
+    const noRegion = render(canvas({ fields: regionless, selected: 'buyer_tin' }))
+    expect(screen.getByTestId('extraction-no-region')).toBeTruthy()
+    collect(noRegion.container)
+    noRegion.unmount()
+
+    const noPages = render(canvas({ pages: [] }))
+    expect(screen.getByText(NO_PAGES)).toBeTruthy()
+    collect(noPages.container)
+
+    for (const floor of ['--accent-20', '--sage-panel', '--sage-card-border', '--primary-foreground', '--radius-md', '--radius-sm']) {
+      expect([...names], `the scan never saw ${floor}`).toContain(floor)
+    }
+    for (const name of names) expect(CSS, `${name} is not defined by the v2 tokens the app loads`).toContain(`${name}:`)
+  })
+})
+
 // ==========================================================================================
 // infoGlyph (AC-10)
 // ==========================================================================================

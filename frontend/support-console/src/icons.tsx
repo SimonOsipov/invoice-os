@@ -1,7 +1,7 @@
 // Icon primitives. The prototype built its SVGs imperatively via a `g(paths, size)`
-// helper (Support Console.dc.html:730); here they are a single declarative component,
-// identical to frontend/ops-console/src/icons.tsx. All icons are stroke-based, 24x24
-// viewBox, currentColor — the parent sets color/size to match the design.
+// helper (Support Console.dc.html:730); here they are a single declarative component.
+// All icons are stroke-based, 24x24 viewBox, currentColor — the parent sets color/size
+// to match the design.
 
 import markUrl from '@invoice-os/design-tokens/v2/assets/mark.png'
 

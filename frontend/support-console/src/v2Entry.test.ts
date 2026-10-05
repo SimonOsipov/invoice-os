@@ -21,6 +21,24 @@ const INDEX_HTML = read(join(HERE, '../index.html'))
 const SUPPORT_CSS = read(join(HERE, 'styles/support.css'))
 const DS = '@invoice-os/design-tokens'
 
+const SRC_FILES = readdirSync(HERE, { recursive: true, encoding: 'utf8' })
+  .filter((f) => /\.(ts|tsx|css)$/.test(f) && !/\.test\.tsx?$/.test(f) && !/\.d\.ts$/.test(f))
+  .sort()
+const stripSrc = (f: string) => (f.endsWith('.css') ? stripCss(read(join(HERE, f))) : stripComments(read(join(HERE, f))))
+
+const ruleBodies = (css: string, selector: string) =>
+  [...stripCss(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .filter((m) => m[1].split(',').some((sel) => sel.trim() === selector))
+    .map((m) => m[2])
+const declarations = (body: string) =>
+  new Map(
+    body
+      .split(';')
+      .map((d) => d.trim())
+      .filter(Boolean)
+      .map((d) => [d.slice(0, d.indexOf(':')).trim(), d.slice(d.indexOf(':') + 1).trim()] as const),
+  )
+
 describe('v2 entry', () => {
   it('VE-01 main.tsx loads the v2 entry, then the layer, then support.css', () => {
     const specifiers = [...stripComments(MAIN).matchAll(/^\s*import\s+['"]([^'"]+)['"]/gm)].map((m) => m[1])
@@ -34,6 +52,12 @@ describe('v2 entry', () => {
     const designTokens = specifiers.filter((s) => s.startsWith(`${DS}/`))
     expect(designTokens.length).toBeGreaterThan(0)
     for (const s of designTokens) expect(s, 'only v2 entries').toContain('/v2/')
+
+    const everywhere = SRC_FILES.flatMap((f) =>
+      [...stripSrc(f).matchAll(/['"]@invoice-os\/design-tokens\/([^'"]+)['"]/g)].map((m) => `${f}: ${m[1]}`),
+    )
+    expect(everywhere.length, 'design-tokens specifiers across src').toBeGreaterThanOrEqual(3)
+    expect(everywhere.filter((e) => !e.split(': ')[1].startsWith('v2/')), 'no v1 design-tokens specifier in any src file').toEqual([])
   })
 
   it('VE-02 every design-tokens specifier is exported (pin, green at write)', () => {
@@ -90,14 +114,15 @@ describe('v2 entry', () => {
     expect.soft(attr('style')).toContain('display:block')
     expect.soft(attr('style')).toContain('border-radius:var(--radius-md)')
 
-    expect.soft(imgOf(20)('width'), 'an explicit size still wins').toBe('20')
+    const small = imgOf(20)
+    expect.soft(small('width'), 'an explicit size still wins').toBe('20')
+    expect.soft(small('height'), 'an explicit size wins on height too').toBe('20')
+    expect.soft(small('style'), 'an explicit size keeps the corner').toContain('border-radius:var(--radius-md)')
   })
 
   it('VE-05 the dead .ops-input:focus rule names --ring (source pin)', () => {
     // The rule matches no element under the layer, so no runtime read can see it.
-    const blocks = [...stripCss(SUPPORT_CSS).matchAll(/([^{}]+)\{([^{}]*)\}/g)]
-      .filter((m) => m[1].split(',').some((sel) => sel.trim() === '.ops-input:focus'))
-      .map((m) => m[2])
+    const blocks = ruleBodies(SUPPORT_CSS, '.ops-input:focus')
     expect(blocks, 'support.css has a .ops-input:focus block').toHaveLength(1)
 
     const body = blocks[0]
@@ -113,21 +138,31 @@ describe('v2 entry', () => {
     expect(declared.size, 'declared custom properties').toBeGreaterThan(30)
     expect(declared.has('--ring')).toBe(true)
 
-    const files = readdirSync(HERE, { recursive: true, encoding: 'utf8' })
-      .filter((f) => /\.(ts|tsx|css)$/.test(f) && !/\.test\.tsx?$/.test(f) && !/\.d\.ts$/.test(f))
-      .sort()
-    expect(files).toContain('styles/support.css')
-    expect(files).toContain('icons.tsx')
+    expect(SRC_FILES).toContain('styles/support.css')
+    expect(SRC_FILES).toContain('icons.tsx')
 
     const used = new Map<string, string[]>()
-    for (const f of files) {
-      const raw = read(join(HERE, f))
-      const src = f.endsWith('.css') ? stripCss(raw) : stripComments(raw)
-      for (const m of src.matchAll(/var\(\s*(--[\w-]+)/g)) used.set(m[1], [...(used.get(m[1]) ?? []), f])
+    for (const f of SRC_FILES) {
+      for (const m of stripSrc(f).matchAll(/var\(\s*(--[\w-]+)/g)) used.set(m[1], [...(used.get(m[1]) ?? []), f])
     }
     expect(used.size, 'var() names collected').toBeGreaterThan(30)
 
     const undeclared = [...used].filter(([name]) => !declared.has(name)).map(([name, fs]) => `${name} in ${[...new Set(fs)].join(', ')}`)
     expect(undeclared, 'var() names no v2 file declares').toEqual([])
+  })
+
+  it('VE-10 support.css field rules, input border and corners (source pin: jsdom applies no CSS; resolved reads are SUP-03 and SUP-04)', () => {
+    const decl = (selector: string, prop: string) => {
+      const bodies = ruleBodies(SUPPORT_CSS, selector)
+      expect(bodies, `support.css has one ${selector} block`).toHaveLength(1)
+      return declarations(bodies[0]).get(prop)
+    }
+
+    expect(decl('.ops-input', 'border')).toBe('1px solid var(--input)')
+    expect(decl('.ops-input', 'border-radius')).toBe('var(--radius-btn)')
+    expect(decl('pre.ops-json', 'border-radius')).toBe('var(--radius-md)')
+    expect(decl('.ops-field:focus-within', 'border-color')).toBe('var(--ring) !important')
+    expect(decl('.ops-field:focus-within', 'box-shadow')).toBe('0 0 0 2px var(--ring) !important')
+    expect(decl('.asc-app .ops-field input:focus', 'box-shadow')).toBe('none !important')
   })
 })

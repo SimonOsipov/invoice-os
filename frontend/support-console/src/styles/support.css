@@ -100,9 +100,6 @@ body {
   outline: none;
   transition: border-color 120ms, box-shadow 120ms;
 }
-/* Amber focus at 2px — the design system's ring, not the prototype's 3px teal glow
-   (proto:33 used `--accent-glow` back when `--accent` was aliased to the action teal).
-   Same correction ops.css already carries. */
 .ops-input:focus {
   border-color: var(--ring); /* dead under the layer; source pin */
   box-shadow: 0 0 0 2px var(--ring);

@@ -670,6 +670,12 @@ describe('grantMembership', () => {
     expect(stub).toHaveBeenCalledTimes(1)
     expect(err.message).toContain('502')
     expect(err.message).toContain('membership grant unavailable')
+
+    for (const status of [200, 201, 400]) {
+      stubFetch(status, { error: 'not a 204' })
+      const refused = await captureRejection(grantMembership(GRANT))
+      expect(refused.message, String(status)).toContain(String(status))
+    }
   })
 
   it('grantMembership resolves on 204', async () => {

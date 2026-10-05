@@ -105,6 +105,13 @@ describe('e2eMember', () => {
     expect(firm).toBe('E2E Firm Admin')
     expect(inHouse).toBe('E2E In-house Admin')
     expect(firm).not.toBe(inHouse)
+
+    const shards = UNITS.filter((u) => u.tenants)
+    expect(shards.length).toBeGreaterThan(0)
+    for (const u of shards) {
+      expect(realm.e2eMember(u.tenants!.firm).displayName, u.name).toBe(firm)
+      expect(realm.e2eMember(u.tenants!.inHouse).displayName, u.name).toBe(inHouse)
+    }
   })
 })
 
@@ -125,6 +132,13 @@ describe('isSeededMember', () => {
     expect(realm.isSeededMember(crypto.randomUUID())).toBe(false)
     expect(realm.isSeededMember('c0000000-0000-0000-0000-00000000001')).toBe(false)
     expect(realm.isSeededMember('')).toBe(false)
+    expect(realm.isSeededMember('c0000000-0000-0000-0000-0000000000011')).toBe(false)
+    expect(realm.isSeededMember('xc0000000-0000-0000-0000-000000000001')).toBe(false)
+    expect(realm.isSeededMember('C0000000-0000-0000-0000-000000000001')).toBe(false)
+    expect(realm.isSeededMember('c0000000-0000-0000-0000-000000000001\n')).toBe(false)
+    for (const { tenants } of UNITS) {
+      if (tenants) expect([tenants.firm, tenants.inHouse].some(realm.isSeededMember)).toBe(false)
+    }
   })
 })
 
@@ -177,6 +191,7 @@ describe('ensureMember', () => {
       'POST /auth/mock/member',
     ])
     expect(fetched[0].body).toEqual({ email: member.email, password: member.password })
+    expect(fetched[1].body).toMatchObject({ email: member.email, password: member.password })
     expect(fetched[3].body).toEqual({
       user_id: SUBJECT,
       tenant_id: IN_HOUSE,
@@ -184,6 +199,40 @@ describe('ensureMember', () => {
       display_name: 'E2E In-house Admin',
       email: member.email,
     })
+  })
+
+  it.each([400, 429, 503])('ensureMember refuses a register that answers %i', async (status) => {
+    const { realm } = await load()
+    stubGateway({ register: { status, body: { error: 'no' } } })
+
+    const message = await rejection(realm.ensureMember(FIRM, 'firm'))
+
+    expect(message).toContain('register')
+    expect(message).toContain(String(status))
+    expect(fetched).toHaveLength(1)
+  })
+
+  it('ensureMember does not cache a failed provision', async () => {
+    const { realm } = await load()
+    stubGateway({ register: { status: 500, body: { error: 'boom' } } })
+    await rejection(realm.ensureMember(FIRM, 'firm'))
+    expect(fetched).toHaveLength(1)
+
+    stubGateway()
+    await realm.ensureMember(FIRM, 'firm')
+    expect(fetched).toHaveLength(4)
+
+    await realm.ensureMember(FIRM, 'firm')
+    expect(fetched).toHaveLength(4)
+  })
+
+  it('ensureMember shares one in-flight provision between concurrent callers', async () => {
+    const { realm } = await load()
+
+    const [a, b] = await Promise.all([realm.ensureMember(FIRM, 'firm'), realm.ensureMember(FIRM, 'firm')])
+
+    expect(a).toEqual(b)
+    expect(fetched).toHaveLength(4)
   })
 
   it('ensureMember caches per tenant', async () => {

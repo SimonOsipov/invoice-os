@@ -216,8 +216,13 @@ type mailpitSearch struct {
 
 var hrefRe = regexp.MustCompile(`href="([^"]+)"`)
 
-// confirmationLink waits for the address's mail and returns the one link in it. It fails unless exactly one mail arrived.
-func confirmationLink(t *testing.T, email string) string {
+type mailpitMessage struct {
+	Subject string `json:"Subject"`
+	HTML    string `json:"HTML"`
+}
+
+// mailFor waits for the address's mail and returns it. It fails unless exactly one mail arrived.
+func mailFor(t *testing.T, email string) mailpitMessage {
 	t.Helper()
 	mailpit := mailEnv(t, "MAILPIT_URL")
 	// Mailpit's search matches loosely, so the exact recipient is checked here.
@@ -236,16 +241,29 @@ func confirmationLink(t *testing.T, email string) string {
 	if len(ids) != 1 {
 		t.Fatalf("mailpit holds %d mails for %s, want exactly 1", len(ids), email)
 	}
-
-	var msg struct {
-		HTML string `json:"HTML"`
-	}
+	var msg mailpitMessage
 	getJSON(t, mailpit+"/api/v1/message/"+ids[0], &msg)
-	links := hrefRe.FindAllStringSubmatch(msg.HTML, -1)
+	return msg
+}
+
+// actionLink returns the mail's action link. Stub: the one-href rule, until D13 lands.
+func actionLink(body string) (string, error) {
+	links := hrefRe.FindAllStringSubmatch(body, -1)
 	if len(links) != 1 {
-		t.Fatalf("mail carries %d links, want 1: %s", len(links), msg.HTML)
+		return "", fmt.Errorf("mail carries %d links, want 1: %s", len(links), body)
 	}
-	return html.UnescapeString(links[0][1])
+	return html.UnescapeString(links[0][1]), nil
+}
+
+// confirmationLink waits for the address's mail and returns its action link. It fails unless exactly one mail arrived.
+func confirmationLink(t *testing.T, email string) string {
+	t.Helper()
+	msg := mailFor(t, email)
+	link, err := actionLink(msg.HTML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return link
 }
 
 func getJSON(t *testing.T, u string, out any) {

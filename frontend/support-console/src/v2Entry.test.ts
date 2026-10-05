@@ -39,6 +39,69 @@ const declarations = (body: string) =>
       .map((d) => [d.slice(0, d.indexOf(':')).trim(), d.slice(d.indexOf(':') + 1).trim()] as const),
   )
 
+// Source scans for v1 drift: v1 vocabulary renders the same under v2 (radius-input resolves to radius-btn),
+// so no runtime read sees it. Each scan is a pure function over a { path: source } map.
+const stripKeepLines = (src: string, re: RegExp) => src.replace(re, (m) => m.replace(/[^\n]/g, ''))
+const stripFile = (file: string, src: string) =>
+  file.endsWith('.css')
+    ? stripKeepLines(src, /\/\*[\s\S]*?\*\//g)
+    : file.endsWith('.html')
+      ? stripKeepLines(src, /<!--[\s\S]*?-->/g)
+      : stripComments(src)
+const lineOf = (src: string, index: number) => src.slice(0, index).split('\n').length
+
+const V1_NEEDLES = [/oklch\(/i, /fraunces/i, /\binter\b/i, /--gradient-/i, /radius-pill/i, /radius-input/i, /radius-xs/i, /shadow-soft/i, /shadow-elegant/i]
+const scanVocabulary = (files: Record<string, string>) =>
+  Object.entries(files).flatMap(([file, raw]) =>
+    stripFile(file, raw)
+      .split('\n')
+      .flatMap((text, i) => V1_NEEDLES.filter((re) => re.test(text)).map((re) => `${file}:${i + 1} ${re}`)),
+  )
+
+const CORNERS_ALLOWED = ["'var(--radius-sm)'", "'var(--radius-md)'", "'var(--radius-lg)'", "'var(--radius-btn)'", "'50%'", '2']
+const TOGGLE_FILE = 'components/Rules.tsx'
+const scanCorners = (files: Record<string, string>) => {
+  const values = Object.entries(files).flatMap(([file, raw]) => {
+    const src = stripFile(file, raw)
+    return [...src.matchAll(/borderRadius\s*:\s*([^,}]+)/g)].map((m) => ({ file, line: lineOf(src, m.index), value: m[1].trim() }))
+  })
+  const toggles = values.filter((v) => v.value === '99' && v.file === TOGGLE_FILE)
+  const bad = values.filter((v) => !CORNERS_ALLOWED.includes(v.value) && !(v.value === '99' && v === toggles[0]))
+  return {
+    values,
+    violations: [
+      ...bad.map((v) => `${v.file}:${v.line} borderRadius ${v.value}`),
+      ...(toggles.length === 0 ? [`${TOGGLE_FILE} has no 99 (the toggle track keeps it)`] : []),
+    ],
+  }
+}
+
+const FG4_STAYS: [file: string, needle: string][] = [
+  ['components/Submissions.tsx', '{CHEVRON_RIGHT_ICON}'],
+  ['components/Submissions.tsx', 'All tenants <span'],
+  ['components/Submissions.tsx', 'Last 24h <span'],
+  ['components/Submissions.tsx', "=== '—' ? 'var(--fg-4)'"],
+  ['components/Audit.tsx', '{CHEVRON_RIGHT_ICON}'],
+]
+const scanFg4 = (files: Record<string, string>, stays: [string, string][]) => {
+  const lines = Object.entries(files).flatMap(([file, raw]) =>
+    stripFile(file, raw)
+      .split('\n')
+      .flatMap((text, i) => (/fg-4/i.test(text) ? [{ file, at: `${file}:${i + 1}`, text }] : [])),
+  )
+  const hit = (l: { file: string; text: string }, [file, needle]: [string, string]) => l.file === file && l.text.includes(needle)
+  return {
+    lines,
+    unmatched: lines.filter((l) => !stays.some((s) => hit(l, s))).map((l) => `${l.at}: ${l.text.trim()}`),
+    stale: stays.filter((s) => !lines.some((l) => hit(l, s))).map(([f, n]) => `${f}: ${n}`),
+  }
+}
+
+const SCAN_FILES: Record<string, string> = Object.fromEntries(
+  SRC_FILES.map((f) => [f, read(join(HERE, f))]),
+)
+const TSX_FILES = Object.fromEntries(Object.entries(SCAN_FILES).filter(([f]) => f.endsWith('.tsx')))
+
 describe('v2 entry', () => {
   it('VE-01 main.tsx loads the v2 entry, then the layer, then support.css', () => {
     const specifiers = [...stripComments(MAIN).matchAll(/^\s*import\s+['"]([^'"]+)['"]/gm)].map((m) => m[1])
@@ -164,5 +227,64 @@ describe('v2 entry', () => {
     expect(decl('.ops-field:focus-within', 'border-color')).toBe('var(--ring) !important')
     expect(decl('.ops-field:focus-within', 'box-shadow')).toBe('0 0 0 2px var(--ring) !important')
     expect(decl('.asc-app .ops-field input:focus', 'box-shadow')).toBe('none !important')
+  })
+
+  it('VE-07 no owned file carries v1 vocabulary (source scan: v1 names render the same under v2, so no runtime test sees them)', () => {
+    const planted = {
+      'a.tsx': ['OKLCH(0.5 0 0)', 'Fraunces', 'Inter', '--Gradient-x', 'RADIUS-PILL', 'Radius-Input', 'Radius-XS', 'Shadow-Soft', 'Shadow-Elegant'].join('\n'),
+      'a2.tsx': '/* one\ntwo */\nconst x = "radius-input"',
+      'b.tsx': V1_NEEDLES.map((re) => `// ${re.source}`).join('\n') + '\n/* oklch( fraunces Inter radius-pill */',
+      'c.css': '/* oklch( fraunces Inter --gradient- radius-pill radius-input radius-xs shadow-soft shadow-elegant */',
+      'd.html': '<!-- Inter fraunces -->\n<p>ok</p>',
+      'e.tsx': 'interval internal',
+    }
+    const found = scanVocabulary(planted)
+    expect(found.filter((h) => h.startsWith('a.tsx')), 'each needle hits its planted line in mixed case').toEqual(
+      V1_NEEDLES.map((re, i) => `a.tsx:${i + 1} ${re}`),
+    )
+    expect(found, 'a hit after a multi-line comment keeps its line').toContain('a2.tsx:3 /radius-input/i')
+    expect(found.filter((h) => !/^a2?\.tsx/.test(h)), 'comments and interval/internal are no hit').toEqual([])
+
+    const scanned = { ...SCAN_FILES, '../index.html': INDEX_HTML }
+    const names = Object.keys(scanned)
+    expect(names.length, 'owned files scanned').toBeGreaterThanOrEqual(25)
+    for (const f of ['components/Submissions.tsx', 'components/Health.tsx', 'styles/support.css', 'icons.tsx', '../index.html']) {
+      expect(names, `${f} is scanned`).toContain(f)
+    }
+    expect(scanVocabulary(scanned), 'v1 vocabulary (file:line needle)').toEqual([])
+  })
+
+  it('VE-08 every TSX corner is a v2 corner (source scan: a pill renders as a pill under v2, so no runtime test sees the value)', () => {
+    const ok = "export const a = { borderRadius: 'var(--radius-md)' }\nexport const b = { borderRadius: 99 }\nexport const c = { borderRadius: 2 }\n"
+    expect(scanCorners({ [TOGGLE_FILE]: ok }).violations, 'control: one 99 in Rules.tsx and the allowed corners pass').toEqual([])
+    expect(scanCorners({ [TOGGLE_FILE]: ok + 'const d = { borderRadius: 999 }' }).violations, 'a planted 999 fails').toEqual([`${TOGGLE_FILE}:4 borderRadius 999`])
+    expect(scanCorners({ [TOGGLE_FILE]: ok + 'const d = { borderRadius: 99 }' }).violations, 'a second 99 in Rules.tsx fails').toEqual([`${TOGGLE_FILE}:4 borderRadius 99`])
+    expect(scanCorners({ [TOGGLE_FILE]: ok, 'components/Audit.tsx': 'const d = { borderRadius: 99 }' }).violations, 'a 99 in another file fails').toEqual([
+      'components/Audit.tsx:1 borderRadius 99',
+    ])
+    expect(scanCorners({ [TOGGLE_FILE]: ok + "const d = { borderRadius: 'var(--radius-input)' }" }).violations, 'a v1 token fails').toHaveLength(1)
+    expect(scanCorners({ [TOGGLE_FILE]: ok + '// borderRadius: 99\n/* borderRadius: 999 */' }).violations, 'a comment is no corner').toEqual([])
+    expect(scanCorners({ [TOGGLE_FILE]: 'const a = { borderRadius: 2 }' }).violations, 'Rules.tsx without its toggle 99 fails').toHaveLength(1)
+
+    const { values, violations } = scanCorners(TSX_FILES)
+    expect(Object.keys(TSX_FILES), 'Rules.tsx is scanned').toContain(TOGGLE_FILE)
+    expect(values.length, 'corner values collected').toBeGreaterThan(40)
+    expect(violations, 'corners outside the v2 set (file:line value)').toEqual([])
+  })
+
+  it('VE-09 --fg-4 stays only on icons and glyphs (source scan: the colour renders, so only the source names the use)', () => {
+    const stays: [string, string][] = [['a.tsx', '{ICON}']]
+    const planted = {
+      'a.tsx': "<span style={{ color: 'var(--fg-4)' }}>{ICON}</span>\n<span style={{ color: 'var(--fg-4)' }}>words</span>\n// var(--fg-4)",
+    }
+    const found = scanFg4(planted, stays)
+    expect(found.lines, 'control: both uses are read, the comment is not').toHaveLength(2)
+    expect(found.unmatched, 'a planted --fg-4 on a text span is reported').toEqual(["a.tsx:2: <span style={{ color: 'var(--fg-4)' }}>words</span>"])
+    expect(scanFg4(planted, [...stays, ['a.tsx', 'gone']]).stale, 'a needle that matches no line is reported').toEqual(['a.tsx: gone'])
+
+    const { lines, unmatched, stale } = scanFg4(SCAN_FILES, FG4_STAYS)
+    expect(lines.length, '--fg-4 lines found').toBeGreaterThanOrEqual(FG4_STAYS.length)
+    expect(unmatched, '--fg-4 on enabled text (move to --fg-3)').toEqual([])
+    expect(stale, 'stale allowlist needles').toEqual([])
   })
 })

@@ -34,7 +34,13 @@ func newEnv(t *testing.T) env {
 		t.Skip("notifications db-integration test skipped: set DATABASE_URL and DATABASE_SUPERUSER_URL (or run `make test-rls`)")
 	}
 	ctx := context.Background()
-	app, err := pgxpool.New(ctx, appURL)
+	appCfg, err := pgxpool.ParseConfig(appURL)
+	if err != nil {
+		t.Fatalf("app pool config: %v", err)
+	}
+	// Each held delivery attempt pins two connections (River's test tx and the worker's locked tx); the default is max(4, NumCPU).
+	appCfg.MaxConns = 16
+	app, err := pgxpool.NewWithConfig(ctx, appCfg)
 	if err != nil {
 		t.Fatalf("app pool: %v", err)
 	}

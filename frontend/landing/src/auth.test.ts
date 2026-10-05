@@ -37,8 +37,11 @@ describe('base resolvers', () => {
   })
 
   it('consoleBase is null when its target is unset', () => {
-    stubTargets({ VITE_OPS_URL: 'https://ops.x' })
+    // The app base is set so a fallback from an unset console to the app would show.
+    stubTargets({ VITE_APP_URL: 'https://a.x', VITE_OPS_URL: 'https://ops.x' })
     expect(consoleBase('ops'), 'control: the set target resolves').toBe('https://ops.x')
     expect(consoleBase('support')).toBeNull()
+    stubTargets({ VITE_APP_URL: 'https://a.x', VITE_SUPPORT_URL: 'https://support.x' })
+    expect(consoleBase('ops')).toBeNull()
   })
 })

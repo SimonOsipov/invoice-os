@@ -61,6 +61,7 @@ function stubTargets(env: Partial<Record<'VITE_APP_URL' | 'VITE_OPS_URL' | 'VITE
 }
 
 const ALL_TARGETS = { VITE_APP_URL: 'https://app.example.test', VITE_OPS_URL: 'https://ops.example.test', VITE_SUPPORT_URL: 'https://support.example.test' }
+
 describe('the real door only', () => {
   const h3s = (d: HTMLElement) => Array.from(d.querySelectorAll('h3'), (h) => h.textContent)
 
@@ -106,6 +107,7 @@ describe('the real door only', () => {
     expect(d.textContent, label).not.toContain('Create an account')
     expect(d.querySelectorAll('[data-persona]').length, label).toBe(0)
     expect(d.textContent, label).not.toContain('Choose an account')
+    expect(d.textContent, label).not.toContain('demo profile')
     expect(consoleError).not.toHaveBeenCalled()
   })
 })
@@ -261,5 +263,25 @@ describe('Escape', () => {
     })
     expect(onClose).toHaveBeenCalledTimes(1)
     expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('SM-14: a click inside the card keeps the dialog open and a scrim click closes it', async () => {
+    stubTargets(ALL_TARGETS)
+    configured()
+    const onClose = vi.fn()
+    await mount(onClose, STATE)
+    const d = dialog()
+    const inside = [d.querySelector('.t-eyebrow'), d.querySelector('h3'), d.querySelector('input')]
+    inside.forEach((el, i) => expect(el, `inside target ${i} missing`).not.toBeNull())
+    for (const el of inside) {
+      await act(async () => {
+        el!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      })
+    }
+    expect(onClose, 'a click in the card does not close').not.toHaveBeenCalled()
+    await act(async () => {
+      d.click()
+    })
+    expect(onClose).toHaveBeenCalledTimes(1)
   })
 })

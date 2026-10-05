@@ -27,6 +27,8 @@
 // `getComputedStyle` appears in no app unit spec and none is used below: every style oracle
 // reads `el.style.*`, the inline declaration the component wrote.
 
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import type { ReactNode } from 'react'
 
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
@@ -1967,6 +1969,8 @@ describe('Undo', () => {
     expect(undo, 'the corrected field offers no way back').toBeTruthy()
     expect(undo!.textContent, 'the Undo control is unlabelled').toBe(UNDO)
     expect(row('total').contains(undo), 'Undo rendered outside the cell it undoes').toBe(true)
+    // The changed row centres it; only Stop pointing starts at the cell's edge.
+    expect(undo!.style.alignSelf, 'Undo took the Stop pointing alignment').toBe('')
     expect(undoOf('subtotal'), 'an uncorrected field offers an Undo').toBeNull()
 
     fireEvent.click(undo as HTMLElement)
@@ -2403,5 +2407,71 @@ describe('the offered text, adversarial (AIR-03-04)', () => {
       }),
     )
     expect(valueOf('buyer_name')).toBe('')
+  })
+})
+
+// A source scan of the token CSS: jsdom applies no stylesheet, so an undefined `var(--x)` paints
+// nothing in the browser while every style assertion above stays green. Covers the pane and its
+// LineItemGrid; the canvas has the same scan in ExtractionCanvas.test.tsx.
+describe('every token the fields pane and the line grid paint is defined in the v2 token CSS', () => {
+  const V2 = path.join(process.cwd(), '../../packages/design-tokens/v2')
+  const CSS = ['tokens/colors.css', 'tokens/spacing.css', 'tokens/typography.css', 'app-layer.css']
+    .map((f) => readFileSync(path.join(V2, f), 'utf8').replace(/\/\*[\s\S]*?\*\//g, ''))
+    .join('\n')
+
+  it('names no var() the app does not load', () => {
+    const names = new Set<string>()
+    const collect = (root: HTMLElement) => {
+      for (const el of root.querySelectorAll('[style]')) {
+        for (const m of (el.getAttribute('style') ?? '').matchAll(/var\((--[a-z0-9-]+)/g)) names.add(m[1])
+      }
+    }
+    const lineCell = (index: number, role: LineRole, value: string, o: Partial<ExtractionFieldState> = {}) =>
+      mkField({ name: lineFieldName(index, role), value, ...o })
+    // Row 1 does not add up and carries an ambiguous description; row 2 is clean.
+    const lines = [
+      lineCell(1, 'description', 'Widget', {
+        reason: 'ambiguous',
+        alternatives: [mkCandidate('Gadget', 1)],
+      }),
+      lineCell(1, 'quantity', '9'),
+      lineCell(1, 'unit_price', '100.00'),
+      lineCell(1, 'line_total', '200.00'),
+      lineCell(2, 'description', 'Bolt'),
+      lineCell(2, 'quantity', '1'),
+      lineCell(2, 'unit_price', '10.00'),
+      lineCell(2, 'line_total', '10.00'),
+    ]
+
+    const full = render(
+      fieldsPane({
+        fields: [...EVERY_CELL_PART, ...lines],
+        selected: lineFieldName(2, 'description'),
+        armed: 'buyer_tin',
+        canPoint: true,
+        lineRows: null,
+      }),
+    )
+    expect(screen.getByTestId('line-item-flag-1'), 'no flagged line rendered').toBeTruthy()
+    expect(screen.getByTestId('line-item-chip-1-description-0'), 'no line chip rendered').toBeTruthy()
+    expect(screen.getByTestId('extraction-point-cancel-buyer_tin'), 'no Stop pointing rendered').toBeTruthy()
+    collect(full.container)
+    full.unmount()
+
+    const empty = render(fieldsPane({ fields: EVERY_CELL_PART, selected: 'issue_date' }))
+    expect(screen.getByTestId('line-item-empty'), 'no empty line panel rendered').toBeTruthy()
+    collect(empty.container)
+    empty.unmount()
+
+    const none = render(fieldsPane({ fields: [] }))
+    collect(none.container)
+
+    for (const floor of [
+      '--accent', '--accent-10', '--action', '--bg-0', '--bg-2', '--line-1', '--line-2', '--line-3',
+      '--radius-md', '--radius-sm', '--status-amber-bg', '--status-amber-border', '--status-amber-text',
+    ]) {
+      expect([...names], `the scan never saw ${floor}`).toContain(floor)
+    }
+    for (const name of names) expect(CSS, `${name} is not defined by the v2 tokens the app loads`).toContain(`${name}:`)
   })
 })

@@ -560,3 +560,152 @@ describe('ClientsView: the health pill is unchanged by the needs-attention widen
     await within(rowFor('Okafor & Partners')).findByText('9 NEED ATTENTION')
   })
 })
+
+// --- the v2 roster (CL rows) ------------------------------------------
+// Fixtures are typed by hand: ClientsView.test.ts shadows this file out of tsc.
+function filterButton(name: string): HTMLElement {
+  return screen.getByRole('button', { name })
+}
+
+describe('ClientsView: the v2 roster (RESKIN2-05-01)', () => {
+  it('CL-01 the h1 takes the heading rule\'s weight', async () => {
+    mockFetchArchiveAware(ACTIVE_ROWS)
+    render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS)} />)
+    await screen.findByText('Okafor & Partners')
+
+    const h1 = screen.getByRole('heading', { level: 1, name: 'Client portfolio' })
+    expect(h1.style.fontSize, 'control: the h1 keeps its size').toBe('26px')
+    expect(h1.style.fontWeight, 'the h1 must carry no inline font-weight').toBe('')
+  })
+
+  it('CL-02 the active filter is filled primary; no filter carries a radius', async () => {
+    mockFetchArchiveAware(ACTIVE_ROWS)
+    render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS)} />)
+    await screen.findByText('Okafor & Partners')
+
+    const all = filterButton('All').style
+    expect(all.background, 'control: the active filter is filled with --action').toBe('var(--action)')
+    expect(all.color, 'the active filter label is --primary-foreground').toBe('var(--primary-foreground)')
+    for (const name of ['Active', 'Archived']) {
+      const s = filterButton(name).style
+      expect(s.background, `${name} resting background`).toBe('var(--bg-2)')
+      expect(s.color, `${name} resting colour`).toBe('var(--fg-2)')
+    }
+    for (const name of ['All', 'Active', 'Archived']) {
+      expect(filterButton(name).style.borderRadius, `${name} must carry no inline radius (pf-chip owns it)`).toBe('')
+    }
+  })
+
+  it('CL-03 one cluster holds the filters and Add client', async () => {
+    mockFetchArchiveAware(ACTIVE_ROWS)
+    render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS)} />)
+    await screen.findByText('Okafor & Partners')
+
+    const cluster = screen.getByRole('button', { name: 'Add client' }).parentElement as HTMLElement
+    const kids = Array.from(cluster.children)
+    for (const name of ['All', 'Active', 'Archived']) {
+      expect(kids, `${name} must be a direct child of the Add client cluster`).toContain(filterButton(name))
+    }
+    expect(cluster.style.gap).toBe('10px')
+  })
+
+  it('CL-04 status and health are 4px mono chips with no dot, in a plain wrapper', async () => {
+    mockFetchWithRollup({ ...ZERO_ROLLUP, clients: [clientRow('a1', 1)] })
+    render(<ClientsView ctx={clientsCtx([entity({ id: 'a1', name: 'Okafor & Partners', status: 'active' })])} />)
+    await screen.findByText('Okafor & Partners')
+    const row = rowFor('Okafor & Partners')
+    const chips = [await within(row).findByText('ACTIVE', { exact: true }), await within(row).findByText('1 NEEDS ATTENTION', { exact: true })]
+
+    expect(chips).toHaveLength(2)
+    for (const chip of chips) {
+      const what = chip.textContent
+      expect(chip.classList.contains('mono'), `${what} is a mono span`).toBe(true)
+      expect(chip.style.borderRadius, `${what} corner`).toBe('var(--radius-sm)')
+      expect(chip.style.padding, `${what} padding`).toBe('3px 9px')
+      expect(chip.style.letterSpacing, `${what} tracking`).toBe('0.04em')
+      expect(chip.style.display, `${what} display`).toBe('inline-flex')
+      expect(chip.style.fontSize, `${what} size`).toBe('10px')
+      expect(chip.style.fontWeight, `${what} weight`).toBe('600')
+      expect(chip.childElementCount, `${what} holds no dot`).toBe(0)
+      const wrapper = chip.parentElement as HTMLElement
+      expect(wrapper.tagName, `${what} sits in a plain span`).toBe('SPAN')
+      expect(wrapper.getAttribute('style'), `${what} wrapper takes no style`).toBeNull()
+    }
+  })
+
+  it('CL-05 the avatar is a circle; Sector is 13px', async () => {
+    mockFetchArchiveAware([entity({ id: 'a1', name: 'Okafor & Partners', sector: 'Retail' })])
+    render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS)} />)
+    await screen.findByText('Okafor & Partners')
+
+    expect(screen.getByText('OP').style.borderRadius, 'the initials bubble is a circle').toBe('50%')
+    expect(screen.getByText('Retail').style.fontSize, 'Sector is 13px').toBe('13px')
+  })
+
+  it('CL-06 the armed action reads red, with its notice in the notice typography', async () => {
+    const rowA = entity({ id: 'a1', name: 'Okafor & Partners', status: 'active' })
+    const rowR = entity({ id: 'r1', name: 'Honeywell Group', status: 'archived' })
+    const rowB = entity({ id: 'b1', name: 'Beta Traders', status: 'active' })
+    mockFetchArchiveAware([rowA, rowR, rowB])
+    const ctx = clientsCtx([rowA, rowR, rowB])
+    ctx.activeEntity = rowA as unknown as PlatformCtx['activeEntity']
+    render(<ClientsView ctx={ctx} />)
+    await screen.findByText('Okafor & Partners')
+
+    const buttonOf = (name: string) => within(rowFor(name)).getByRole('button')
+    expect(buttonOf('Okafor & Partners').style.color, 'resting Archive is --fg-1').toBe('var(--fg-1)')
+    expect(buttonOf('Honeywell Group').style.color, 'resting Restore is --fg-1').toBe('var(--fg-1)')
+
+    fireEvent.click(buttonOf('Okafor & Partners'))
+    const a = buttonOf('Okafor & Partners')
+    expect(a.textContent).toBe('Confirm archive')
+    expect(a.style.color, 'armed Archive reads red').toBe('var(--status-red-text)')
+    expect(a.style.height).toBe('30px')
+    expect(a.style.padding).toBe('0px 12px')
+    expect(a.style.fontSize).toBe('12.5px')
+    const notice = within(rowFor('Okafor & Partners')).getByText("You'll stay in this workspace after this.")
+    expect(notice.style.fontSize, 'notice size').toBe('11.5px')
+    expect(notice.style.lineHeight, 'notice leading').toBe('1.4')
+    expect(buttonOf('Beta Traders').style.color, 'an unarmed sibling stays --fg-1').toBe('var(--fg-1)')
+
+    fireEvent.click(buttonOf('Honeywell Group'))
+    const r = buttonOf('Honeywell Group')
+    expect(r.textContent).toBe('Confirm restore')
+    expect(r.style.color, 'armed Restore reads red').toBe('var(--status-red-text)')
+  })
+
+  it('CL-07 the roster carries no v1 vocabulary (boundary)', async () => {
+    const rows = [entity({ id: 'a1', name: 'Okafor & Partners', status: 'active' }), entity({ id: 'r1', name: 'Honeywell Group', status: 'archived' })]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) =>
+        Promise.resolve(isRollupUrl(url) ? { ok: true, status: 200, json: () => Promise.resolve({ ...ZERO_ROLLUP, clients: [clientRow('a1', 1)] }) } : entitiesResponse(rows)),
+      ),
+    )
+    const { container } = render(<ClientsView ctx={clientsCtx(rows)} />)
+    await screen.findByText('Okafor & Partners')
+    await within(rowFor('Okafor & Partners')).findByText('1 NEEDS ATTENTION')
+
+    const html = container.innerHTML
+    const radii = Array.from(html.matchAll(/(?<![-\w])border-radius:\s*([^;"]+)/g), (m) => m[1].trim())
+    expect(radii.filter((r) => r === 'var(--radius-sm)').length, 'control: the chips carry --radius-sm').toBeGreaterThanOrEqual(2)
+    expect(radii.length).toBeGreaterThan(0)
+    for (const r of radii) expect(['var(--radius-sm)', 'var(--radius-md)', '50%'], `corner "${r}"`).toContain(r)
+    for (const needle of ['oklch', 'gradient', 'box-shadow']) expect(html, needle).not.toContain(needle)
+  })
+
+  it('CL-08 a refused archive reads in the notice typography (error)', async () => {
+    mockFetchArchiveAware(ACTIVE_ROWS, { ok: false, status: 409, body: { error: 'redundant transition' } })
+    render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS)} />)
+    await screen.findByText('Okafor & Partners')
+
+    const action = within(rowFor('Okafor & Partners')).getByRole('button')
+    fireEvent.click(action) // arm
+    fireEvent.click(action) // confirm -> 409
+    const message = await within(rowFor('Okafor & Partners')).findByText('redundant transition')
+
+    expect(message.style.color, 'control: the message stays red').toBe('var(--status-red-text)')
+    expect(message.style.fontSize).toBe('11.5px')
+    expect(message.style.lineHeight).toBe('1.4')
+  })
+})

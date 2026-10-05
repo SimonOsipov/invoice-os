@@ -434,32 +434,40 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
           gateway) is deliberately unqualified -- it keeps one copy in either filter state. */}
       {state === 'empty' && needsAttention && (
         <div data-testid="invoices-empty-filtered">
-          <EmptyState title="Nothing needs attention" message="No invoice in this register is waiting on you. Clear the filter to see the rest." />
-          <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
-            <button
-              onClick={() => {
-                setNeedsAttention(false)
-                setOffset(0)
-                setSelected([])
-                disarm()
-              }}
-              data-testid="clear-needs-attention"
-              className="v2-btn v2-btn-ghost pf-btn"
-            >
-              Show all invoices
-            </button>
-          </div>
+          <EmptyState
+            messageMaxWidth={360}
+            title="Nothing needs attention"
+            message="No invoice in this register is waiting on you. Clear the filter to see the rest."
+            action={
+              <button
+                onClick={() => {
+                  setNeedsAttention(false)
+                  setOffset(0)
+                  setSelected([])
+                  disarm()
+                }}
+                data-testid="clear-needs-attention"
+                className="v2-btn v2-btn-ghost pf-btn"
+              >
+                Show all invoices
+              </button>
+            }
+          />
         </div>
       )}
 
       {(state === 'idle' || (state === 'empty' && !needsAttention)) && (
         <div data-testid="invoices-empty">
-          <EmptyState title="No invoices yet" message="Create or import an invoice to start tracking compliance." />
-          <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
-            <button onClick={ctx.openCreate} className="v2-btn v2-btn-primary pf-btn">
-              <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> New invoice
-            </button>
-          </div>
+          <EmptyState
+            messageMaxWidth={320}
+            title="No invoices yet"
+            message="Create or import an invoice to start tracking compliance."
+            action={
+              <button onClick={ctx.openCreate} className="v2-btn v2-btn-primary pf-btn">
+                <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> New invoice
+              </button>
+            }
+          />
         </div>
       )}
 

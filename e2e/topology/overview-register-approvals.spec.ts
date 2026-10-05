@@ -1,6 +1,6 @@
 // The deployed v2 Overview, Invoices and Approvals: resolved values and layout relationships on the PR environment.
 // Every state is reached with page.route (D-12); no tenant data is written and no confirm button is clicked (D-13).
-// The api-client Loading / ErrorState / EmptyState look belongs to a later story: those states assert placement only (D-37).
+// The api-client Loading and ErrorState assert placement only; the in-card and dense empties assert resolved values (OV-04, IN-02).
 // Screenshots are attached for the reviewer and never asserted.
 import { test, expect, type Locator, type Page, type Route, type TestInfo } from '@playwright/test'
 import { collectErrors, signInAs } from '../personaSession'
@@ -542,8 +542,39 @@ test('OV-04 empty workspace: loading, task card, error, placement', async ({ pag
   const h1 = await expectH1(page, '28px', 'add-client')
   const add = task.getByRole('button', { name: /Add client/ })
   expect(await radii(add), 'Add client corners').toEqual(corners('7px'))
-  const t = await boxes(page, { task, card: task.locator('> :first-child'), add })
-  expect([...within(t.task, t.add, 'Add client in the task'), ...below(t.card, t.add, 'Add client vs card')], 'task card relations').toEqual([])
+  expect(await task.locator('> *').count(), 'the task holds one child, the card').toBe(1)
+  const cardLoc = task.locator('> :first-child')
+  const messageLoc = cardLoc.locator('> p')
+  const tileLoc = cardLoc.locator('> span')
+  const titleLoc = cardLoc.locator('> div')
+  const t = await boxes(page, { task, card: cardLoc, message: messageLoc, add })
+  expect(
+    [...within(t.task, t.add, 'Add client in the task'), ...within(t.card, t.add, 'Add client in the card'), ...below(t.message, t.add, 'Add client vs message')],
+    'task card relations',
+  ).toEqual([])
+  expect(Math.abs(t.add.y - (t.message.y + t.message.height) - 20), 'Add client sits 20px below the message').toBeLessThanOrEqual(1)
+  const cardRead = await styles(cardLoc, [
+    'padding-top',
+    'padding-right',
+    'padding-bottom',
+    'padding-left',
+    'background-color',
+    'border-top-width',
+    'border-top-style',
+    'border-top-color',
+    ...CORNERS,
+  ])
+  expect([cardRead['padding-top'], cardRead['padding-right'], cardRead['padding-bottom'], cardRead['padding-left']], 'task card paddings').toEqual(Array(4).fill('48px'))
+  expect(cardRead['background-color'], 'task card background').toBe('rgba(0, 0, 0, 0)')
+  expect(`${cardRead['border-top-width']} ${cardRead['border-top-style']} ${cardRead['border-top-color']}`, 'task card border-top').toBe('1px dashed rgb(170, 196, 189)')
+  expect(await radii(cardLoc), 'task card corners').toEqual(corners('6px'))
+  const tileRead = await styles(tileLoc, ['width', 'height'])
+  expect([tileRead.width, tileRead.height], 'task card tile size').toEqual(['40px', '40px'])
+  expect(await radii(tileLoc), 'task card tile corners').toEqual(corners('6px'))
+  const titleRead = await styles(titleLoc, ['font-size', 'font-weight'])
+  expect([titleRead['font-size'], titleRead['font-weight']], 'task card title').toEqual(['15px', '700'])
+  const messageRead = await styles(messageLoc, ['font-size', 'max-width', 'line-height'])
+  expect([messageRead['font-size'], messageRead['max-width'], messageRead['line-height']], 'task card message').toEqual(['13px', '460px', '20.15px'])
   await attachShot(page, testInfo, 'overview-empty-workspace')
 
   entities.mode = '503'
@@ -560,7 +591,7 @@ test('OV-04 empty workspace: loading, task card, error, placement', async ({ pag
   const h1Box = (await boxes(page, { h1: heading(page) })).h1
   expect([...sameLeft(loadingRoot, h1Box, 'loading root vs h1'), ...sameLeft(errorCard, h1Box, 'error card vs h1')], 'state placement').toEqual([])
 
-  await attachJson(testInfo, 'ov-04-measurements', { h1, task: t, loadingRoot, errorCard, h1Box })
+  await attachJson(testInfo, 'ov-04-measurements', { h1, task: t, cardRead, tileRead, titleRead, messageRead, loadingRoot, errorCard, h1Box })
   expect(errors, `console errors beyond the deliberate 503:\n${errors.join('\n')}`).toEqual([])
 })
 
@@ -636,9 +667,16 @@ test('IN-02 invoices states: loading, error, empty, filtered empty, empty page',
       await assertPageDoesNotScrollSideways(page, name)
       return { problems: [...within(b.column, c, `${name} in the column`), ...sameLeft(c, b.h1, `${name} vs h1`)], rects: { column: b.column, h1: b.h1, card: c } }
     })
-  const buttonBelowCard = async (wrapper: Locator, button: Locator, what: string) => {
-    const b = await boxes(page, { wrapper, card: wrapper.locator('> :first-child'), button })
-    expect([...within(b.wrapper, b.button, `${what} button in its wrapper`), ...below(b.card, b.button, `${what} button vs card`)], what).toEqual([])
+  const buttonInCard = async (wrapper: Locator, button: Locator, maxWidth: number, what: string) => {
+    expect(await wrapper.locator('> *').count(), `${what} holds one child, the card`).toBe(1)
+    const card = wrapper.locator('> :first-child')
+    const message = card.locator('> p')
+    const b = await boxes(page, { card, message, button })
+    expect([...within(b.card, b.button, `${what} button in its card`), ...below(b.message, b.button, `${what} button vs message`)], what).toEqual([])
+    const cardRead = await styles(card, ['background-color', 'padding-top'])
+    expect(cardRead['background-color'], `${what} card background`).toBe(WHITE)
+    expect(cardRead['padding-top'], `${what} card padding-top`).toBe('56px')
+    expect((await styles(message, ['max-width']))['max-width'], `${what} message max-width`).toBe(`${maxWidth}px`)
   }
 
   register.hold()
@@ -657,7 +695,7 @@ test('IN-02 invoices states: loading, error, empty, filtered empty, empty page',
   await main(page).getByRole('button', { name: 'Retry' }).click()
   const empty = page.getByTestId('invoices-empty')
   await expect(empty, 'an empty envelope shows the empty card').toBeVisible()
-  await buttonBelowCard(empty, empty.getByRole('button', { name: /New invoice/ }), 'invoices-empty')
+  await buttonInCard(empty, empty.getByRole('button', { name: /New invoice/ }), 320, 'invoices-empty')
   await attachShot(page, testInfo, 'invoices-empty')
   measured.empty = await placed('invoices empty card', async () => (await boxes(page, { card: empty.locator('> :first-child') })).card)
 
@@ -665,7 +703,7 @@ test('IN-02 invoices states: loading, error, empty, filtered empty, empty page',
   await toggle.click()
   const filtered = page.getByTestId('invoices-empty-filtered')
   await expect(filtered, 'the filter over an empty envelope shows the filtered-empty card').toBeVisible()
-  await buttonBelowCard(filtered, filtered.getByRole('button', { name: 'Show all invoices' }), 'invoices-empty-filtered')
+  await buttonInCard(filtered, filtered.getByRole('button', { name: 'Show all invoices' }), 360, 'invoices-empty-filtered')
   await attachShot(page, testInfo, 'invoices-empty-filtered')
   measured.filtered = await placed('invoices filtered-empty card', async () => (await boxes(page, { card: filtered.locator('> :first-child') })).card)
 

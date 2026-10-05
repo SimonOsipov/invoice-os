@@ -206,6 +206,22 @@ func TestTaggedMockIssuerRoutesKeepTheirWiring(t *testing.T) {
 	})
 }
 
+// The mint serves any identity wherever the flag enables it; RAILWAY_ENVIRONMENT_NAME no longer gates it.
+func TestTaggedMockLoginIgnoresRailwayEnvironmentName(t *testing.T) {
+	t.Setenv("AUTH_ISSUER", mountTestIssuer)
+	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	_, login := mockIssuerRoutes("preview", "true", gateway.CORS([]string{"https://app.ascomply.test"}), logger)
+	if login == nil {
+		t.Fatal(`mockIssuerRoutes("preview", "true") returned no login handler`)
+	}
+	rec := httptest.NewRecorder()
+	login.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST {} under RAILWAY_ENVIRONMENT_NAME=production = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
 // A DSN that cannot connect gives 502 for a valid body; a bad body is refused before any connection.
 func TestTaggedMockStaffRouteWiresTheGrant(t *testing.T) {
 	var logs strings.Builder

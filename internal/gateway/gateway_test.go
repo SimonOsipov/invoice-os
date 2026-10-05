@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	dbsql "github.com/SimonOsipov/invoice-os/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -940,6 +942,68 @@ func TestMockLoginLocalEmptyBody(t *testing.T) {
 	}
 	if resp.TokenType != "bearer" || resp.AccessToken == "" {
 		t.Fatalf("login response = %+v, want a bearer access_token", resp)
+	}
+}
+
+// The mock login is a mint for any identity: no seed holds this subject or tenant.
+// Hosted posture is passed so a surviving allowlist refuses on the status line.
+func TestMockLoginMintsAnyIdentity(t *testing.T) {
+	tg := setupGateway(t)
+	h := MockLoginHandler(tg.issuer, platform.PostureHosted)
+	subject, tenant := uuid.NewString(), uuid.NewString()
+
+	rec := httptest.NewRecorder()
+	body := fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, subject, tenant, personaRole)
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/auth/login", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil || resp.AccessToken == "" {
+		t.Fatalf("login body carries no access_token (decode err %v)", err)
+	}
+	id, err := tg.verifier.Verify(t.Context(), resp.AccessToken)
+	if err != nil {
+		t.Fatalf("minted token does not verify: %v", err)
+	}
+	if id.Subject != subject || id.TenantID != tenant {
+		t.Errorf("token identity = (sub %q, tenant %q), want (%q, %q)", id.Subject, id.TenantID, subject, tenant)
+	}
+}
+
+// A body that does not decode into the request shape mints GoTrue-shaped defaults, as an empty body does.
+func TestMockLoginMalformedBodyMintsDefaults(t *testing.T) {
+	tg := setupGateway(t)
+	h := MockLoginHandler(tg.issuer, platform.PostureHosted)
+
+	for _, body := range []string{`{`, `[]`, `{"subject":1}`} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("POST", "/auth/login", strings.NewReader(body)))
+		if rec.Code != http.StatusOK {
+			t.Errorf("body %q: status = %d, want 200 (body %s)", body, rec.Code, rec.Body.String())
+			continue
+		}
+		var resp struct {
+			AccessToken string `json:"access_token"`
+			TokenType   string `json:"token_type"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil || resp.TokenType != "bearer" || resp.AccessToken == "" {
+			t.Errorf("body %q: response = %+v (decode err %v), want a bearer access_token", body, resp, err)
+			continue
+		}
+		id, err := tg.verifier.Verify(t.Context(), resp.AccessToken)
+		if err != nil {
+			t.Errorf("body %q: minted token does not verify: %v", body, err)
+			continue
+		}
+		if _, err := uuid.Parse(id.Subject); err != nil {
+			t.Errorf("body %q: default subject %q is not a UUID: %v", body, id.Subject, err)
+		}
+		if id.Role != personaRole {
+			t.Errorf("body %q: default role = %q, want %q", body, id.Role, personaRole)
+		}
 	}
 }
 

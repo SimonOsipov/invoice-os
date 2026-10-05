@@ -2901,6 +2901,7 @@ test("invoice detail: the source-document card states the real range, and the mo
   // correction C2).
   await expect(page.getByTestId('source-document-range')).toHaveText('Row 4 of this file became this invoice.')
 
+  await page.setViewportSize({ width: 1440, height: 900 })
   await page.getByTestId('view-source-document').click()
   const modal = page.getByTestId('source-document-modal')
   await expect(modal).toBeVisible()
@@ -2914,8 +2915,15 @@ test("invoice detail: the source-document card states the real range, and the mo
   // A SHA-256 hex digest chunked 16 chars/line is always exactly 4 lines (64 / 16).
   await expect(page.getByTestId('hash-line')).toHaveCount(4)
 
+  expectWidth1440(page)
   const sheetRead = await dvModal(page, testInfo, 'source-modal-sheet')
   dvExpectModal(sheetRead, 'sheet')
+
+  const fit1440 = await fingerprintFit(page)
+  expectFingerprintFit(fit1440, 'at 1440')
+  const fitSweep = await dvSweepWide(page, () => fingerprintFit(page))
+  for (const f of fitSweep) expectFingerprintFit(f, `at ${f.width}`)
+  await testInfo.attach('fingerprint-fit.json', { body: JSON.stringify({ at1440: fit1440, sweep: fitSweep }, null, 2), contentType: 'application/json' })
 
   await page.getByTestId('source-modal-close').click()
   await expect(modal).toHaveCount(0)
@@ -2932,6 +2940,7 @@ test("invoice detail: the source-document card states the real range, and the mo
   await page.route(SHEET_URL, hold)
   await page.getByTestId('view-source-document').click()
   await expect(page.getByTestId('source-document-loading')).toBeVisible()
+  expectWidth1440(page)
   const loadingRead = await dvModal(page, testInfo, 'source-modal-loading', 'source-document-loading')
   expect(loadingRead.canvas, 'the loading canvas was read').toBeTruthy()
   expect(
@@ -2954,6 +2963,7 @@ test("invoice detail: the source-document card states the real range, and the mo
   await page.getByTestId('view-source-document').click()
   await failResp
   await expect(page.getByTestId('source-document-failed')).toBeVisible()
+  expectWidth1440(page)
   await dvModal(page, testInfo, 'source-modal-error', 'source-document-failed')
   await page.getByTestId('source-modal-close').click()
   await expect(modal).toHaveCount(0)
@@ -5153,11 +5163,10 @@ import { apiBase, getExtractions, listEntities, listInvoices, type ExtractionJob
 
 // --- EXTR09-E2E-06 (EXTR-09-09) · the previewer's newly-reachable branches --------------
 //
-// An OBSERVATION HARNESS, not an oracle. DOC-02 shipped `pdf`, `image` and `unrenderable`
+// DOC-02 shipped `pdf`, `image` and `unrenderable`
 // canvases that no real document could reach: before EXTR-09 the only route into `documents`
 // was POST /v1/imports/preview, which stores nothing that does not classify as a spreadsheet.
-// This records what each branch actually renders now, and asserts nothing about it — the only
-// product assertion is the file-wide `collectErrors` console gate.
+// This records what each branch actually renders now.
 //
 // What is real, and what is not, per leg:
 //
@@ -5344,6 +5353,7 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
 
   const { invoices } = await listInvoices(token, { entity_id: entity.id, limit: 50 })
   const invoiceNumber = invoices[0]?.invoice_number ?? ''
+  expect(invoiceNumber, 'AC 2, AC 3 and AC 7 need the PDF import to produce an invoice').not.toBe('')
 
   // The substitution. `null` leaves the response untouched, which is what the PDF leg runs
   // under; a record replaces ONLY the `document` object of the server's own response.
@@ -5388,13 +5398,17 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
   // openPreviewer() remounts InvoiceDetail every time: the source-document fetch is
   // `immediate` with `deps: [invoiceId]`, so leaving the surface and coming back is what makes
   // the next substitution take effect.
-  async function openPreviewer(shot?: string): Promise<string> {
+  async function openPreviewer(shot?: string, read?: () => Promise<void>): Promise<string> {
     await goToInvoices(page)
     await openInvoiceRow(page, invoiceNumber)
     await page.getByTestId('view-source-document').click()
     await expect(page.getByTestId('source-document-modal')).toBeVisible()
     const canvas = await extr09Canvas(page)
-    if (shot) await dvModal(page, testInfo, shot, undefined, { canvas })
+    if (shot) {
+      expectWidth1440(page)
+      await dvModal(page, testInfo, shot, undefined, { canvas })
+    }
+    await read?.()
     await page.getByTestId('source-modal-close').click()
     return canvas
   }
@@ -5402,32 +5416,42 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
   const observed: Record<string, string> = {}
   const pdfEmbed: Record<string, string> = {}
 
-  if (invoiceNumber === '') {
-    observed.pdf = 'not reached — the PDF import produced no invoice'
-  } else {
-    observed.pdf = await openPreviewer('source-modal-pdf')
-    // Re-opened for the embed read: the close above unmounted the canvas.
-    if (observed.pdf === 'source-document-pdf') {
-      await goToInvoices(page)
-      await openInvoiceRow(page, invoiceNumber)
-      await page.getByTestId('view-source-document').click()
-      pdfEmbed.src_scheme = (await page.getByTestId('pdf-embed').getAttribute('src'))?.split(':')[0] ?? 'no src'
-      pdfEmbed.type = (await page.getByTestId('pdf-embed').getAttribute('type')) ?? 'no type'
-      await page.getByTestId('source-modal-close').click()
-    }
-
-    for (const leg of SYNTHESIZED_LEGS) {
-      substitute = { pdf, docx }[leg]
-      observed[leg] = await openPreviewer('source-modal-bad')
-    }
+  await page.setViewportSize({ width: 1440, height: 900 })
+  observed.pdf = await openPreviewer('source-modal-pdf')
+  // Re-opened for the embed read: the close above unmounted the canvas.
+  if (observed.pdf === 'source-document-pdf') {
+    await goToInvoices(page)
+    await openInvoiceRow(page, invoiceNumber)
+    await page.getByTestId('view-source-document').click()
+    pdfEmbed.src_scheme = (await page.getByTestId('pdf-embed').getAttribute('src'))?.split(':')[0] ?? 'no src'
+    pdfEmbed.type = (await page.getByTestId('pdf-embed').getAttribute('type')) ?? 'no type'
+    await page.getByTestId('source-modal-close').click()
   }
+
+  const baselines: Record<string, unknown> = {}
+  for (const leg of SYNTHESIZED_LEGS) {
+    substitute = { pdf, docx }[leg]
+    observed[leg] = await openPreviewer('source-modal-bad', async () => {
+      if (leg !== 'docx') return
+      const at1440 = await factBaselines(page)
+      expectFactBaselines(at1440, 'at 1440')
+      const sweep = await dvSweepWide(page, async () => ({ rows: await factBaselines(page) }))
+      for (const m of sweep) expectFactBaselines(m.rows, `at ${m.width}`)
+      baselines[leg] = { at1440, sweep }
+    })
+  }
+  await testInfo.attach('pdf-render.json', {
+    body: JSON.stringify({ pdfViewerEnabled: await page.evaluate(() => navigator.pdfViewerEnabled), observed: observed.pdf }, null, 2),
+    contentType: 'application/json',
+  })
+  await testInfo.attach('fact-baselines.json', { body: JSON.stringify(baselines, null, 2), contentType: 'application/json' })
 
   await testInfo.attach('documentPreviewer.md', {
     contentType: 'text/markdown',
     body: [
       '# EXTR09-E2E-06 - what the shipped previewer renders',
       '',
-      `Invoice: \`${invoiceNumber || '(none — the PDF import produced no invoice)'}\`, entity \`${entity.id}\`.`,
+      `Invoice: \`${invoiceNumber}\`, entity \`${entity.id}\`.`,
       '',
       '| Leg | Upload | Extraction | `POST /v1/imports/document` | Canvas rendered | Link |',
       '|---|---|---|---|---|---|',
@@ -5460,13 +5484,11 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
   })
 
   // The instrument, not the product: without this a probe whose route never fired would record
-  // the PDF's canvas for every leg and read as evidence. Every other line above is observation.
-  if (invoiceNumber !== '') {
-    expect(
-      intercepted,
-      `each synthesized leg (${SYNTHESIZED_LEGS.join(', ')}) must have substituted exactly one meta response`,
-    ).toBe(SYNTHESIZED_LEGS.length)
-  }
+  // the PDF's canvas for every leg and read as evidence.
+  expect(
+    intercepted,
+    `each synthesized leg (${SYNTHESIZED_LEGS.join(', ')}) must have substituted exactly one meta response`,
+  ).toBe(SYNTHESIZED_LEGS.length)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -5516,6 +5538,8 @@ const DV_PROPS = [
   'font-weight',
   'font-size',
   'backdrop-filter',
+  'opacity',
+  'cursor',
 ]
 const DV_CORNERS = DV_PROPS.slice(0, 4)
 
@@ -5632,6 +5656,81 @@ async function dvModal(
   return { panel: read.targets.panel, scrim: read.targets.scrim, canvas: read.targets.canvas }
 }
 
+type FitRect = { x: number; y: number; width: number; height: number }
+
+// The fingerprint header of the open source modal, read after fonts and two frames settle.
+async function fingerprintFit(page: Page): Promise<{
+  labelRects: number
+  label: FitRect
+  copy: FitRect
+  header: FitRect
+  copyHasSvg: boolean
+}> {
+  return page.evaluate(async () => {
+    await document.fonts.ready
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+    const rail = document.querySelector('[data-testid="source-document-rail"]')!
+    const label = [...rail.querySelectorAll('.label')].find((e) => e.textContent === 'Content fingerprint \u00b7 SHA-256')!
+    const copy = rail.querySelector('[data-testid="copy-hash"]')!
+    const box = (e: Element) => {
+      const r = e.getBoundingClientRect()
+      return { x: r.x, y: r.y, width: r.width, height: r.height }
+    }
+    const range = document.createRange()
+    range.selectNodeContents(label)
+    return {
+      labelRects: range.getClientRects().length,
+      label: box(label),
+      copy: box(copy),
+      header: box(copy.parentElement!),
+      copyHasSvg: copy.querySelector('svg') !== null,
+    }
+  })
+}
+
+function expectFingerprintFit(fit: Awaited<ReturnType<typeof fingerprintFit>>, at: string): void {
+  expect(fit.labelRects, `AC 2 ${at}: the fingerprint label is one line`).toBe(1)
+  expect(fit.label.x + fit.label.width, `AC 2 ${at}: the label ends left of Copy`).toBeLessThanOrEqual(fit.copy.x)
+  expect(enclosesRect(fit.header, fit.copy, 1), `AC 2 ${at}: Copy lies inside the header`).toBe(true)
+  expect(fit.copyHasSvg, `AC 2 ${at}: Copy holds no glyph`).toBe(false)
+  expect(fit.copy.height, `AC 2 ${at}: Copy is 24px tall`).toBeCloseTo(24, 0)
+}
+
+// Label and value baseline y per fact row of the bad-state canvas; a zero-size inline-block's bottom is the baseline.
+async function factBaselines(page: Page): Promise<Array<{ key: string; label: number; value: number }>> {
+  return page.evaluate(async () => {
+    await document.fonts.ready
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+    const canvas = document.querySelector('[data-testid="source-document-unrenderable"]')!
+    const title = [...canvas.querySelectorAll('.label')].find((e) => e.textContent === 'What we know about this file')!
+    const rows = [...(title.parentElement!.parentElement!.children[1]?.children ?? [])]
+    const baseline = (span: Element) => {
+      const probe = document.createElement('span')
+      probe.style.cssText = 'display:inline-block;width:0;height:0'
+      span.insertBefore(probe, span.firstChild)
+      const y = probe.getBoundingClientRect().bottom
+      probe.remove()
+      return y
+    }
+    return rows.map((row) => ({
+      key: row.children[0].textContent ?? '',
+      label: baseline(row.children[0]),
+      value: baseline(row.children[1]),
+    }))
+  })
+}
+
+function expectFactBaselines(rows: Awaited<ReturnType<typeof factBaselines>>, at: string): void {
+  expect(rows.length, `AC 3 ${at}: at least one fact row was read`).toBeGreaterThan(0)
+  for (const r of rows) {
+    expect(Math.abs(r.label - r.value), `AC 3 ${at}: ${r.key} label sits on its value's baseline`).toBeLessThanOrEqual(0.5)
+  }
+}
+
+function expectWidth1440(page: Page): void {
+  expect(page.viewportSize()!.width, 'AC 7: the source-modal shot is taken at 1440').toBe(1440)
+}
+
 async function dvOpenDetail(page: Page, entityName: string, invoiceNumber: string): Promise<void> {
   await signInFirm(page)
   await selectEntity(page, entityName)
@@ -5695,6 +5794,8 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
         failedNode: failedNodes.first().locator('span[aria-hidden="true"]').first(),
         badge: detail.getByTestId('invoice-status-badge'),
         submit: page.getByTestId('detail-submit'),
+        approve: page.getByTestId('detail-approve'),
+        edit: page.getByTestId('edit-toggle'),
         resolve,
         readOnly: page.getByTestId('invoice-activity').getByText('READ ONLY', { exact: true }),
         h1: detail.locator('h1'),
@@ -5706,9 +5807,22 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
           railCards: { of: 'rail', sel: ':scope > *' },
           clusterButtons: { of: 'actions', sel: 'button' },
         },
+        tokens: ['--primary', '--primary-foreground'],
       },
     )
     const t = read.targets
+    const disabledButtons = {
+      approve: page.getByTestId('detail-approve'),
+      edit: page.getByTestId('edit-toggle'),
+      submit: page.getByTestId('detail-submit'),
+    }
+    for (const [name, loc] of Object.entries(disabledButtons) as [keyof typeof disabledButtons, Locator][]) {
+      await expect(loc, `AC 4: ${name} is disabled`).toBeDisabled()
+      expect(t[name].style.opacity, `AC 4: ${name} opacity`).toBe('0.45')
+      expect(t[name].style.cursor, `AC 4: ${name} cursor`).toBe('not-allowed')
+      expect(t[name].style['background-color'], `AC 4: ${name} background is --primary`).toBe(read.tokens['--primary'])
+      expect(t[name].style.color, `AC 4: ${name} colour is --primary-foreground`).toBe(read.tokens['--primary-foreground'])
+    }
     // Pins: these hold at head already and are read to keep them held.
     for (const name of ['compliance', 'deadEnd', 'activity'] as const) {
       dvExpectCorners(t[name], '6px', `pin: ${name}`)
@@ -5848,6 +5962,26 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
     expect(record.targets.plate.style['background-color'], 'QR plate background').toBe('rgb(255, 255, 255)')
     expect(record.targets.plate.style['border-top-width'], 'QR plate border-top-width').toBe('1px')
 
+    const uCard = await dvRead(page, {
+      card: page.getByTestId('ubl-document-card'),
+      name: page.getByTestId('ubl-card-filename'),
+    })
+    const uGeo = await page.evaluate(() => {
+      const body = document.querySelector('[data-testid="ubl-document-card"]') as HTMLElement
+      const name = document.querySelector('[data-testid="ubl-card-filename"]') as HTMLElement
+      return {
+        firstIsName: body.firstElementChild === name,
+        strays: [...body.querySelectorAll('svg')].filter((s) => !s.closest('button')).length,
+        paddingLeft: parseFloat(getComputedStyle(body).paddingLeft),
+      }
+    })
+    expect(uGeo.firstIsName, 'AC 1: the filename is the first element child of the UBL card').toBe(true)
+    expect(uGeo.strays, 'AC 1: no svg outside a button in the UBL card').toBe(0)
+    expect(
+      Math.abs(uCard.targets.name.rect.x - (uCard.targets.card.rect.x + uGeo.paddingLeft)),
+      'AC 1: the filename starts at the card content edge',
+    ).toBeLessThanOrEqual(1)
+
     await page.getByTestId('ubl-card-view').click()
     const dialog = page.getByRole('dialog', { name: 'UBL 2.1 document' })
     await expect(dialog).toBeVisible()
@@ -5862,6 +5996,11 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
     dvExpectCorners(m.dialog, '10px', 'UBL dialog')
     expect(m.dialog.style['box-shadow'], 'UBL dialog shadow').toBe(SHADOW_CARD)
     dvExpectScrim(m.scrim, 'UBL modal')
+    expect(Math.abs(m.dialog.rect.width - 760), 'AC 5: the XML panel is 760px wide at 1440').toBeLessThanOrEqual(0.5)
+    const vp = page.viewportSize()!
+    expect(enclosesRect({ x: 0, y: 0, width: vp.width, height: vp.height }, m.dialog.rect, 1), 'AC 5: the XML panel lies inside the viewport').toBe(true)
+    const gapRight = vp.width - (m.dialog.rect.x + m.dialog.rect.width)
+    expect(Math.abs(m.dialog.rect.x - gapRight), 'AC 5: the XML panel is centred').toBeLessThanOrEqual(1)
     expect(enclosesRect(m.dialog.rect, m.close.rect, 1), 'close lies inside the panel').toBe(true)
     expect(enclosesRect(m.dialog.rect, m.download.rect, 1), 'Download lies inside the panel').toBe(true)
     expect(rectsOverlap(m.close.rect, m.download.rect), 'close and Download do not overlap').toBe(false)

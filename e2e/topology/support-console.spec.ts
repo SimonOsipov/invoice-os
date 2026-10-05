@@ -630,7 +630,48 @@ for (const s of SCREENS) {
   })
 }
 
-test('SUP-03 Reconciliation: tables, meter and the clipped Reconcile buttons', async ({ page }, testInfo) => {
+// Seeded mismatches (RECON_ROWS in the console's data.tsx).
+const RECON_ROW_COUNT = 4
+
+// Every Reconcile whole inside its cell and the card. Empty array = fine.
+// scrolled: below 1440 the card must scroll, and the buttons are read at the scroll end.
+async function reconProblems(card: Locator, reconcile: Locator, scrolled = false): Promise<string[]> {
+  const problems: string[] = []
+  const m = await card.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+  if (scrolled) {
+    if (m.scrollWidth <= m.clientWidth) problems.push(`recon card does not scroll at ${card.page().viewportSize()!.width}`)
+  } else if (m.scrollWidth - m.clientWidth > 1) problems.push(`recon card overflows by ${m.scrollWidth - m.clientWidth}px`)
+  try {
+    if (scrolled) {
+      await card.evaluate((el) => {
+        el.scrollLeft = el.scrollWidth
+      })
+    }
+    const cardBox = await card.boundingBox()
+    const buttons = await reconcile.all()
+    if (!cardBox) return [...problems, 'recon card has no box']
+    if (buttons.length < RECON_ROW_COUNT) problems.push(`Reconcile buttons: ${buttons.length}, want ${RECON_ROW_COUNT}`)
+    const where = scrolled ? ' at the scroll end' : ''
+    for (const [i, btn] of buttons.entries()) {
+      const box = await btn.boundingBox()
+      const cell = await btn.evaluate((el) => {
+        const r = el.parentElement!.getBoundingClientRect()
+        return { x: r.x, y: r.y, width: r.width, height: r.height }
+      })
+      if (!box) problems.push(`Reconcile ${i} has no box`)
+      else problems.push(...within(cell, box, `Reconcile ${i} in its cell${where}`), ...within(cardBox, box, `Reconcile ${i} in the card${where}`))
+    }
+  } finally {
+    if (scrolled) {
+      await card.evaluate((el) => {
+        el.scrollLeft = 0
+      })
+    }
+  }
+  return problems
+}
+
+test('SUP-03 Reconciliation: tables, meter and whole Reconcile buttons at 1440', async ({ page }, testInfo) => {
   test.setTimeout(120_000)
   const errors = await startSupport(page)
   const mn = mainOf(page)
@@ -648,33 +689,19 @@ test('SUP-03 Reconciliation: tables, meter and the clipped Reconcile buttons', a
   await expectStyles(kid(track, 1), 'meter fill', { radius: '2px' })
   await expectStyles(mn.getByRole('button', { name: 'Run sweep now' }), 'Run sweep now', { radius: '7px', 'border-top-color': 'rgb(170, 196, 189)' })
 
-  // The table scrolls inside its own card, as in the prototype; the clipped buttons stay reachable.
+  // First paint at 1440: the card needs no scroll and each Reconcile sits whole in its cell and the card.
   const card = mn.locator('.ops-recon-grid > div').first()
-  const scroll = await card.evaluate((el) => ({ overflowX: getComputedStyle(el).overflowX, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
-  expect(scroll.overflowX, 'recon card overflow-x').toBe('auto')
-  expect(scroll.scrollWidth, 'recon card scrolls sideways').toBeGreaterThan(scroll.clientWidth)
-  await card.evaluate((el) => {
-    el.scrollLeft = el.scrollWidth
-  })
-  await settle(page, card)
-  const cardBox = await card.boundingBox()
-  expect(cardBox, 'recon card has a box').toBeTruthy()
-  for (const [i, btn] of (await reconcile.all()).entries()) {
-    const box = await btn.boundingBox()
-    expect(box, `Reconcile ${i} has a box`).toBeTruthy()
-    expect(enclosesRect(cardBox!, box!, 1), `Reconcile ${i} is reachable after the card scrolls to its end`).toBe(true)
-  }
-  await card.evaluate((el) => {
-    el.scrollLeft = 0
-  })
-  await settle(page, card)
+  const first = await reconProblems(card, reconcile)
+  expect(first, 'recon card and Reconcile buttons at first paint').toEqual([])
 
   await attachShot(page, testInfo, 'submissions-recon')
 
   await atWidths(page, 'SUP-03 Reconciliation layout', async () => {
     const kids = await gridKids(page, '.ops-recon-grid', 'recon grid')
     await noSidewaysScroll(page, 'Reconciliation')
-    return { problems: [...apart(kids[0], kids[1], 'recon grid columns'), ...sameTops(kids, 'recon grid')], rects: { kids } }
+    const width = page.viewportSize()!.width
+    const recon = width >= 1440 ? await reconProblems(card, reconcile) : await reconProblems(card, reconcile, true)
+    return { problems: [...apart(kids[0], kids[1], 'recon grid columns'), ...sameTops(kids, 'recon grid'), ...recon], rects: { kids } }
   })
 
   noErrors(errors, 'SUP-03 Reconciliation')

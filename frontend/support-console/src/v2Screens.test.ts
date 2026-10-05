@@ -381,4 +381,23 @@ describe('v2 screens', () => {
     expect(withClass(zeroTile, 'money'), 'zero: one .money in the tile').toHaveLength(1)
     expect(zeroTile[1].text, 'zero: the figure reads 0').toBe('0')
   })
+
+  it('SC-07 the recon title, header and every row hold the 800px floor; the jobs table keeps 1040px', () => {
+    const floor = (html: string, cols: string, at: string) => {
+      const rows = parsed(html, at).filter((t) => style(t)['grid-template-columns']?.startsWith(cols))
+      expect(rows.length, `${at}: rows found`).toBeGreaterThan(0)
+      return rows
+    }
+    const recon = floor(RECON, '140px minmax(120px,1fr)', 'recon')
+    expect(recon, 'recon: the header row and one row per mismatch').toHaveLength(RECON_ROWS.length + 1)
+    for (const r of recon) expect.soft(style(r)['min-width'], 'recon row floor').toBe('800px')
+
+    const ts = reconTags()
+    const titleRow = ts[ts.indexOf(withText(ts, 'State mismatches · internal vs APP')) - 1]
+    expect.soft(style(titleRow)['min-width'], 'recon title row floor').toBe('800px')
+
+    const jobs = floor(SCREENS.submissions, '150px minmax(220px,1.3fr)', 'jobs')
+    expect(jobs, 'jobs: the header row and one row per job').toHaveLength(SEED_JOBS.length + 1)
+    for (const r of jobs) expect.soft(style(r)['min-width'], 'jobs row floor').toBe('1040px')
+  })
 })

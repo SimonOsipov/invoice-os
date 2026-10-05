@@ -195,8 +195,8 @@ export function UnrenderableCanvas({ record }: { record: SourceDocumentRecord })
           </div>
           <div style={{ padding: '4px 0' }}>
             {facts.map(([label, value]) => (
-              <div key={label} style={{ display: 'grid', gridTemplateColumns: '96px 1fr', gap: 12, padding: '8px 14px' }}>
-                <span className="mono" style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.07em', color: 'var(--fg-3)', paddingTop: 2 }}>
+              <div key={label} style={{ display: 'grid', gridTemplateColumns: '96px 1fr', gap: 12, padding: '8px 14px', alignItems: 'baseline' }}>
+                <span className="mono" style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.07em', color: 'var(--fg-3)' }}>
                   {label}
                 </span>
                 <span style={{ fontSize: 12.5, color: 'var(--fg-2)', lineHeight: 1.45, wordBreak: 'break-all' }}>{value}</span>

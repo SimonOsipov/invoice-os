@@ -819,6 +819,32 @@ describe('the toolbar', () => {
     expect(toolbar.style.borderBottom).toBe('1px solid var(--line-1)')
   })
 
+  it('the zoom control is the sage segmented group', () => {
+    render(canvas())
+
+    const segments = ['50', '100', '150'].map((z) => screen.getByTestId(`extraction-zoom-${z}`))
+    expect(segments, 'no zoom segment rendered').toHaveLength(3)
+    const group = segments[0].parentElement as HTMLElement
+    expect(group.style.background).toBe('var(--sage-panel)')
+    expect(group.style.border).toBe('1px solid var(--sage-card-border)')
+    expect(group.style.borderRadius).toBe('var(--radius-md)')
+
+    for (const seg of segments) {
+      expect(seg.style.borderRadius, `${seg.dataset.testid} radius`).toBe('var(--radius-sm)')
+      expect(seg.style.fontWeight, `${seg.dataset.testid} weight`).toBe('600')
+      expect(['0px', 'none'], `${seg.dataset.testid} border`).toContain(seg.style.border)
+    }
+    const [idle50, pressed100, idle150] = segments
+    expect(pressed100.getAttribute('aria-pressed'), 'floor: 100% is the pressed segment').toBe('true')
+    expect(pressed100.style.background).toBe('var(--primary)')
+    expect(pressed100.style.color).toBe('var(--primary-foreground)')
+    for (const idle of [idle50, idle150]) {
+      expect(idle.getAttribute('aria-pressed')).toBe('false')
+      expect(idle.style.background).toBe('transparent')
+      expect(idle.style.color).toBe('var(--fg-2)')
+    }
+  })
+
   it("renders the artboard's four elements", () => {
     const doc = mkDocument()
     render(canvas({ doc }))
@@ -831,7 +857,7 @@ describe('the toolbar', () => {
     const tile = within(toolbar).getByText(formatLabel(doc.filename, doc.content_type))
     expect(tile.style.width).toBe('32px')
     expect(tile.style.height).toBe('32px')
-    expect(tile.style.borderRadius).toBe('8px')
+    expect(tile.style.borderRadius).toBe('var(--radius-md)')
     expect(tile.style.display).toBe('grid')
     expect(tile.style.placeItems).toBe('center')
     expect(tile.style.fontFamily).toBe('var(--font-mono)')

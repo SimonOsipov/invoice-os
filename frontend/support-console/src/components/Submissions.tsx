@@ -18,6 +18,8 @@ type Props = {
 // The jobs table and the reconciliation table share this column template, one each.
 const JOB_COLS = '150px minmax(220px,1.3fr) 130px 116px 56px minmax(200px,1.2fr) 64px 96px 22px'
 const RECON_COLS = '140px minmax(120px,1fr) 1fr 1fr minmax(160px,1.4fr) 120px'
+// Fits the 1440 card whole; narrower cards scroll.
+const RECON_MIN_WIDTH = 800
 
 export function Submissions({ jobs, filter, subTab, onFilterChange, onSubTabChange, onOpenJob, onReDriveAll, onReconcile, onRunSweep }: Props) {
   const deadLetter = jobs.filter((j) => j.state === 'dead-letter')
@@ -214,13 +216,13 @@ export function Submissions({ jobs, filter, subTab, onFilterChange, onSubTabChan
       {subTab === 'recon' && (
         <div className="ops-recon-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 300px', gap: 18 }}>
           <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflowX: 'auto', background: 'var(--bg-2)' }}>
-            <div style={{ padding: '13px 16px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', minWidth: 900 }}>
+            <div style={{ padding: '13px 16px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', minWidth: RECON_MIN_WIDTH }}>
               <span style={{ fontSize: 14, fontWeight: 700, letterSpacing: 'var(--tracking-card)', fontFamily: 'var(--font-display)' }}>State mismatches · internal vs APP</span>
               <span className="mono" style={{ fontSize: 11, color: 'var(--status-red-text)', fontWeight: 600 }}>
                 {RECON_ROWS.length} OPEN
               </span>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: RECON_COLS, padding: '9px 16px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)', minWidth: 900 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: RECON_COLS, padding: '9px 16px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)', minWidth: RECON_MIN_WIDTH }}>
               <span className="label">Job ID</span>
               <span className="label">Tenant</span>
               <span className="label">Internal</span>
@@ -229,7 +231,7 @@ export function Submissions({ jobs, filter, subTab, onFilterChange, onSubTabChan
               <span className="label" />
             </div>
             {RECON_ROWS.map((r) => (
-              <div key={r.id} style={{ display: 'grid', gridTemplateColumns: RECON_COLS, padding: '12px 16px', borderBottom: '1px solid var(--line-1)', alignItems: 'center', minWidth: 900 }}>
+              <div key={r.id} style={{ display: 'grid', gridTemplateColumns: RECON_COLS, padding: '12px 16px', borderBottom: '1px solid var(--line-1)', alignItems: 'center', minWidth: RECON_MIN_WIDTH }}>
                 <span className="mono" style={{ fontSize: 12, fontWeight: 600 }}>
                   {r.id}
                 </span>

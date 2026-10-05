@@ -58,6 +58,7 @@ describe('ConnectorDetail > env pill and DRIFT', () => {
     expect(sandbox().disabled).toBe(true)
     expect(sandbox().style.opacity).toBe('0.45')
     expect(sandbox().style.cursor).toBe('not-allowed')
+    expect(sandbox().style.filter).toBe('none')
   })
 
   it('the DRIFT pill is radius-sm in the amber triplet when drift is non-zero and green when zero', () => {

@@ -56,6 +56,7 @@ export function ActorCell({ actor, actor_name, actor_kind, variant = 'audit' }: 
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: variant === 'audit' ? 9 : 8, minWidth: 0 }}>
       <span
         aria-hidden
+        className="mono"
         style={{
           ...avatar,
           display: 'inline-flex',

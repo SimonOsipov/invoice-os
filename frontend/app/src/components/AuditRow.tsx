@@ -80,6 +80,8 @@ export function AuditRow({ event, expanded, onToggle, onFilterToInvoice, variant
   const showLink = inv != null && onFilterToInvoice != null
   const showEvidence = view.domain === 'submissions' && inv != null
 
+  const chevSpin = { transform: expanded ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 160ms' }
+
   return (
     <>
       <div
@@ -101,8 +103,9 @@ export function AuditRow({ event, expanded, onToggle, onFilterToInvoice, variant
           {event.company_scope === 'company' ? (event.company_name ?? '—') : event.company_scope === 'workspace' ? 'Workspace' : '—'}
         </span>
         <span className="mono" style={{ fontSize: 11, color: audit ? 'var(--fg-2)' : 'var(--fg-3)', whiteSpace: 'nowrap' }}>{fmtDateTime(event.created_at)}</span>
-        <span aria-hidden style={{ display: 'inline-flex', justifyContent: 'flex-end', color: 'var(--fg-3)', pointerEvents: 'none', transform: expanded ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 160ms' }}>
-          {chevDownGlyph}
+        {/* Audit rotates the glyph, not the 44px cell: turning the cell moves the chevron off the row centre. */}
+        <span aria-hidden style={{ display: 'inline-flex', justifyContent: 'flex-end', color: 'var(--fg-3)', pointerEvents: 'none', ...(audit ? null : chevSpin) }}>
+          {audit ? <span style={{ display: 'inline-flex', ...chevSpin }}>{chevDownGlyph}</span> : chevDownGlyph}
         </span>
       </div>
       {expanded && (
@@ -127,7 +130,7 @@ export function AuditRow({ event, expanded, onToggle, onFilterToInvoice, variant
                   data-testid="audit-invoice-affordance"
                   onClick={() => onFilterToInvoice(inv.id, inv.number)}
                   className="pf-btn"
-                  style={{ border: 0, padding: 0, background: 'transparent', color: 'var(--action)', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
+                  style={{ border: 0, padding: 0, background: 'transparent', color: 'var(--action)', fontFamily: 'var(--font-sans)', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
                 >
                   {inv.number != null ? `All events for ${inv.number} →` : 'All events for this invoice →'}
                 </button>

@@ -230,6 +230,7 @@ describe('Settings > connector list paint', () => {
   it('the monogram tile text is white, as the prototype #fff', () => {
     render(<SettingsView ctx={settingsCtx('connectors', false)} />)
     expect(screen.getByText('SAP', { exact: true }).style.color).toBe('var(--primary-foreground)')
+    expect(screen.getByText('SAP', { exact: true }).className, 'tracked by .mono').toBe('mono')
   })
 })
 
@@ -241,6 +242,7 @@ describe('Settings > API & webhooks paint', () => {
     copies.forEach((b) => expect(b.style.borderRadius).toBe('var(--radius-btn)'))
     expect((copies[0].previousElementSibling as HTMLElement).style.borderRadius).toBe('var(--radius-md)')
     expect(screen.getByRole('button', { name: /Add endpoint/ }).style.borderRadius).toBe('var(--radius-btn)')
+    for (const b of [...copies, screen.getByRole('button', { name: /Add endpoint/ })]) expect(b.style.fontFamily, 'bare buttons take the app face').toBe('var(--font-sans)')
   })
 
   it('key env pills and method pills are radius-md', () => {

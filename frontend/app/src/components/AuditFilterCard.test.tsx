@@ -332,6 +332,15 @@ describe('AuditFilterCard: event type', () => {
     expect([...next.events].sort(), "All must select exactly that group's ids").toEqual([...approvalIds].sort())
   })
 
+  it('auditCard_bareTextButtonsTakeTheAppFace', () => {
+    renderCard({ ...AUDIT_FILTER_DEFAULT, events: ['invoice.created'] })
+    expect(styleValue(screen.getByTestId('audit-clear-all'), 'font-family'), 'pills-row Clear all').toBe('var(--font-sans)')
+    openEventPopover()
+    const bare = [screen.getByTestId('audit-event-clear-all'), ...screen.getAllByTestId(/^audit-event-group-.*-(all|clear)$/)]
+    expect(bare.length, 'population floor: Clear all plus a pair per group').toBeGreaterThan(2)
+    for (const b of bare) expect(styleValue(b, 'font-family'), b.dataset.testid).toBe('var(--font-sans)')
+  })
+
   it('auditEventFilter_groupClearRemovesOnlyThatGroup', () => {
     const approvalIds = idsInDomain('approvals')
     const state: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, events: [...approvalIds, 'invoice.created'] }
@@ -1250,11 +1259,11 @@ describe('AuditFilterCard: pills row adversarial coverage (AUDIT-07-07)', () => 
 
 describe('AuditFilterCard: popover panels', () => {
   it.each([
-    ['search', '340px', null],
-    ['date', '250px', null],
-    ['event', '340px', '460px'],
-    ['actor', '280px', '420px'],
-    ['company', '310px', '420px'],
+    ['search', '338px', null],
+    ['date', '248px', null],
+    ['event', '338px', '460px'],
+    ['actor', '278px', '420px'],
+    ['company', '308px', '420px'],
   ])('audit-%s floats on shadow-card, not a v1 shadow, at its width', (name, width, maxHeight) => {
     renderCard()
     fireEvent.click(screen.getByTestId(`audit-${name}-trigger`))
@@ -1335,6 +1344,7 @@ describe('AuditFilterCard: v2 restyle (RESKIN2-06-02)', () => {
     const count = screen.getByTestId('audit-event-count-invoice.created')
     expect(count.textContent, 'control needle: the facet count renders').toBe('7')
     expect([count.style.fontFamily, count.style.fontSize, count.style.color]).toEqual(MONO_COUNT)
+    expect([count.style.fontWeight, count.className], 'facet count is weight 400 and tracked by .mono').toEqual(['400', 'mono'])
 
     const selected = screen.getByTestId('audit-event-row-invoice.created')
     expect([selected.style.fontSize, selected.style.fontWeight, selected.style.color, selected.style.background]).toEqual(['12.5px', '600', 'var(--action)', 'var(--bg-3)'])

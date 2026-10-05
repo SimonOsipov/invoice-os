@@ -341,6 +341,7 @@ test('AE-02 the five filter popovers carry the card shadow, 6px corners and stay
   await openAuditLoaded(page)
   const viewport = page.viewportSize()!
   const reads: Record<string, unknown>[] = []
+  const WIDTHS: Record<string, number> = { search: 340, date: 250, event: 340, actor: 280, company: 310 }
   for (const id of ['search', 'date', 'event', 'actor', 'company']) {
     await tid(page, `audit-${id}-trigger`).click()
     const panel = tid(page, `audit-${id}-panel`)
@@ -350,6 +351,7 @@ test('AE-02 the five filter popovers carry the card shadow, 6px corners and stay
     const corners = await expectCorners(panel, '6px', `${id} popover`)
     const box = await panel.boundingBox()
     expect(box, `the ${id} popover has no box`).not.toBeNull()
+    expect(Math.abs(box!.width - WIDTHS[id]), `the ${id} popover is ${box!.width}px wide, the prototype draws ${WIDTHS[id]}px`).toBeLessThanOrEqual(0.5)
     expect(enclosesRect({ x: 0, y: 0, width: viewport.width, height: viewport.height }, box!), `the ${id} popover leaves the viewport: ${JSON.stringify(box)}`).toBe(true)
     reads.push({ id, shadow, corners, box })
     if (id === 'event') await attachShot(page, testInfo, 'audit-event-popover')

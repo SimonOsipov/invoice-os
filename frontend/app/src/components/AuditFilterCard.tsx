@@ -30,7 +30,7 @@ export interface AuditFilterCardProps {
 }
 
 const LABEL_ELLIPSIS = { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as const
-const COUNT_STYLE = { fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--fg-3)' } as const
+const COUNT_STYLE = { fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 400, color: 'var(--fg-3)' } as const
 
 export const DATE_PRESETS: { id: AuditRangePreset; label: string }[] = [
   { id: '24h', label: 'Last 24 hours' },
@@ -225,7 +225,7 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
           onClose={closePopover}
           disabled={busy}
         >
-          <div style={{ padding: 12, width: 340, display: 'flex', flexDirection: 'column', gap: 9 }}>
+          <div style={{ padding: 12, width: 338, display: 'flex', flexDirection: 'column', gap: 9 }}>
             <input
               type="text"
               data-testid="audit-search-input"
@@ -255,7 +255,7 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
           onClose={closePopover}
           disabled={busy}
         >
-          <div style={{ padding: '4px 0', width: 250 }}>
+          <div style={{ padding: '4px 0', width: 248 }}>
             {DATE_PRESETS.map(({ id, label }) => {
               const pressed = id === 'custom' ? isCustomActive(state.range) : state.range.preset === id
               return (
@@ -341,7 +341,7 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
           onClose={closePopover}
           disabled={busy}
         >
-          <div style={{ width: 340, maxHeight: 460, overflowY: 'auto' }}>
+          <div style={{ width: 338, maxHeight: 460, overflowY: 'auto' }}>
             <div
               style={{
                 position: 'sticky',
@@ -361,7 +361,7 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
                 data-testid="audit-event-clear-all"
                 onClick={clearAllEvents}
                 className="pf-btn"
-                style={{ border: 0, background: 'transparent', color: 'var(--action)', fontSize: 11.5, fontWeight: 600, cursor: 'pointer' }}
+                style={{ border: 0, background: 'transparent', color: 'var(--action)', fontFamily: 'var(--font-sans)', fontSize: 11.5, fontWeight: 600, cursor: 'pointer' }}
               >
                 Clear all
               </button>
@@ -389,7 +389,7 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
                       data-testid={`audit-event-group-${group.domain}-all`}
                       onClick={() => selectGroupAll(group.ids)}
                       className="pf-btn"
-                      style={{ border: 0, background: 'transparent', color: 'var(--action)', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
+                      style={{ border: 0, background: 'transparent', color: 'var(--action)', fontFamily: 'var(--font-sans)', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
                     >
                       All
                     </button>
@@ -398,7 +398,7 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
                       data-testid={`audit-event-group-${group.domain}-clear`}
                       onClick={() => clearGroup(group.ids)}
                       className="pf-btn"
-                      style={{ border: 0, background: 'transparent', color: 'var(--fg-3)', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
+                      style={{ border: 0, background: 'transparent', color: 'var(--fg-3)', fontFamily: 'var(--font-sans)', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
                     >
                       Clear
                     </button>
@@ -434,7 +434,7 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
                       <span data-testid={`audit-event-label-${id}`} style={{ flex: 1, minWidth: 0 }}>
                         {auditEventView(id).label}
                       </span>
-                      <span data-testid={`audit-event-count-${id}`} style={COUNT_STYLE}>
+                      <span data-testid={`audit-event-count-${id}`} className="mono" style={COUNT_STYLE}>
                         {eventCount(facets, id)}
                       </span>
                     </button>
@@ -454,7 +454,7 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
           onClose={closePopover}
           disabled={busy}
         >
-          <div style={{ width: 280, maxHeight: 420, overflowY: 'auto', padding: '4px 0' }}>
+          <div style={{ width: 278, maxHeight: 420, overflowY: 'auto', padding: '4px 0' }}>
             <div>
               {(
                 [
@@ -549,7 +549,7 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
           onClose={closePopover}
           disabled={busy}
         >
-          <div style={{ width: 310, maxHeight: 420, overflowY: 'auto', padding: '4px 0' }}>
+          <div style={{ width: 308, maxHeight: 420, overflowY: 'auto', padding: '4px 0' }}>
             <div>
               <button
                 type="button"
@@ -704,7 +704,7 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
             data-testid="audit-clear-all"
             onClick={() => onChange(clearAllFilters())}
             className="pf-btn"
-            style={{ border: 0, background: 'transparent', color: 'var(--action)', fontSize: 12.5, fontWeight: 600, marginLeft: 4, cursor: 'pointer' }}
+            style={{ border: 0, background: 'transparent', color: 'var(--action)', fontFamily: 'var(--font-sans)', fontSize: 12.5, fontWeight: 600, marginLeft: 4, cursor: 'pointer' }}
           >
             Clear all
           </button>

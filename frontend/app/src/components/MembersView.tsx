@@ -113,6 +113,15 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
     <>
       <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: '-4px 0 16px', maxWidth: 680, lineHeight: 1.6 }}>{INTRO[mode]}</p>
 
+      {/* Above the toolbar, and only on a landed roster: over an errored one every role
+          resolves to zero holders and this would assert a coverage failure that is a fetch failure. */}
+      {surface === 'roster' && unassigned.length > 0 && (
+        <AmberNote testId="members-unassigned" style={{ marginBottom: 14 }}>
+          {unassignedNotice(unassigned.length)}{' '}
+          <span style={{ fontWeight: 700 }}>{unassigned.map((r) => r.title).join(' · ')}</span>
+        </AmberNote>
+      )}
+
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
         <SearchBox value={query} onChange={setQuery} placeholder="Search name or email" label="Search members" />
         <WfSelect
@@ -153,17 +162,6 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
 
       {surface === 'roster' && (
         <>
-          {/* Above the table, and above the two empty surfaces too: it is a statement about
-              the workspace's approval coverage, which a search box cannot change. Inside
-              this arm, though — over an errored roster every role resolves to zero holders
-              and this would assert a coverage failure that is really a fetch failure. */}
-          {unassigned.length > 0 && (
-            <AmberNote testId="members-unassigned" style={{ marginBottom: 14 }}>
-              {unassignedNotice(unassigned.length)}{' '}
-              <span style={{ fontWeight: 700 }}>{unassigned.map((r) => r.title).join(' · ')}</span>
-            </AmberNote>
-          )}
-
           {justYou ? (
             <EmptyState title={EMPTY_TITLE[mode]} message={EMPTY_MESSAGE} />
           ) : (

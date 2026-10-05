@@ -42,7 +42,11 @@ describe('AuditPager', () => {
       const b = screen.getByTestId(id)
       expect(sv(b, 'height')).toBe('30px')
       expect(sv(b, 'font-size')).toBe('12.5px')
+      expect(sv(b, 'padding'), 'the .v2-btn padding stands').toBeNull()
     }
+    expect(select.className).toBe('pf-select')
+    expect(sv(select, 'padding')).toBe('0px 30px 0px 10px')
+    expect(select.parentElement!.querySelector('svg'), 'the select draws a chevron').toBeTruthy()
   })
 
   it('auditPager_disabledEndsWearTheD3RecipeAndEnabledOnesDoNot', () => {

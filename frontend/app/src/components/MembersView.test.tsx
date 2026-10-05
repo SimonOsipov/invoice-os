@@ -677,4 +677,15 @@ describe('the Client users placeholder', () => {
     expect(screen.getByTestId('role-matrix-toggle'), 'the matrix is the population floor under the absence').toBeTruthy()
     expect(screen.queryByTestId('client-users-card')).toBeNull()
   })
+
+  it('members_unassignedNoticeSitsBetweenTheIntroAndTheToolbar', () => {
+    const unheld: Role = { key: 'r1', title: 'Finance Approver', desc: '', members: [] }
+    render(<Harness initial={[member({ id: 'u1' }), member({ id: 'u2', email: 'b@x.ng' }), member({ id: 'u3', email: 'c@x.ng' })]} roles={[unheld]} />)
+    const notice = screen.getByTestId('members-unassigned')
+    const toolbar = screen.getByLabelText('Search members').closest('div[style*="display: flex"]') as HTMLElement
+    const intro = notice.parentElement!.querySelector('p') as HTMLElement
+    const order = (a: Node, b: Node) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(order(intro, notice), 'intro, then notice').toBe(true)
+    expect(order(notice, toolbar), 'notice, then toolbar').toBe(true)
+  })
 })

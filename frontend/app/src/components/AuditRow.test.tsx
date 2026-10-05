@@ -223,12 +223,16 @@ describe('AuditRow density per variant (D-4)', () => {
       const company = screen.getByTestId('audit-company')
       expect(sv(company, 'font-size'), `${v} company size`).toBe(w.companySize)
       expect(sv(company, 'color'), `${v} company colour`).toBe(w.companyColor)
-      const when = row.querySelector('.mono') as HTMLElement
+      const when = Array.from(row.querySelectorAll('.mono')).find((e) => e.getAttribute('style')?.includes('font-size: 11px')) as HTMLElement
       expect(when, 'the when cell').toBeTruthy()
       expect(sv(when, 'font-size'), `${v} when size`).toBe('11px')
       expect(sv(when, 'color'), `${v} when colour`).toBe(w.whenColor)
       // chevron rail is the last cell
       expect(sv(row.lastElementChild as HTMLElement, 'color'), `${v} chevron`).toBe('var(--fg-3)')
+      // Audit turns the glyph inside the cell; activity turns the cell.
+      const cell = row.lastElementChild as HTMLElement
+      const inner = cell.firstElementChild as HTMLElement | null
+      expect([sv(cell, 'transform'), inner ? sv(inner, 'transform') : null], `${v} chevron rotation`).toEqual(v === 'activity' ? ['rotate(-90deg)', null] : [null, 'rotate(-90deg)'])
       cleanup()
     }
   })
@@ -377,4 +381,11 @@ describe('AuditRow expansion per variant (D-4, D-14)', () => {
     expect(sv(link, 'color')).toBe('var(--action)')
     expect(sv(link, 'font-weight')).toBe('600')
   })
+
+describe('AuditRow button faces', () => {
+  it('auditRow_invoiceLinkUsesTheAppFace', () => {
+    render(<AuditRow event={ev({ payload: { invoice_id: 'i-1', invoice_number: 'INV-1' } })} expanded onToggle={() => {}} onFilterToInvoice={() => {}} />)
+    expect(sv(screen.getByTestId('audit-invoice-affordance'), 'font-family')).toBe('var(--font-sans)')
+  })
+})
 })

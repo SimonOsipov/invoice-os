@@ -647,7 +647,7 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
               height: 28,
               padding: '0 12px',
               fontFamily: pill.mono ? 'var(--font-mono)' : 'var(--font-sans)',
-              fontSize: 12.5,
+              fontSize: 12,
               fontWeight: 500,
               border: '1px solid var(--line-2)',
               background: 'var(--bg-1)',

@@ -6079,7 +6079,8 @@ describe('InvoiceDetail cards, rail and inline edit take the v2 look (RESKIN2-03
     const header = inner.firstElementChild as HTMLElement
     expect(scrollBox.textContent, 'control: the scroll box holds the header').toContain('Description')
     expect.soft(scrollBox.style.overflowX, 'the box scrolls sideways').toBe('auto')
-    expect.soft(inner.style.minWidth, 'one shared inner wrapper keeps the content width').toBe('max-content')
+    expect.soft(inner.style.minWidth, 'one shared inner wrapper keeps the content floor').toBe('min-content')
+    expect.soft(header.style.gridTemplateColumns, 'the Description track has a 120px floor').toMatch(/^minmax\(120px, 1fr\) /)
     expect.soft(header.style.minWidth, 'the header takes its width from the wrapper').toBe('')
     const rows = screen.getAllByTestId('line-row')
     expect.soft(inner.children.length, 'the wrapper holds the header and every row').toBe(rows.length + 1)
@@ -6355,8 +6356,8 @@ describe('InvoiceDetail cards, rail and inline edit take the v2 look (RESKIN2-03
 
     const row = screen.getByTestId('line-row')
     const head = (row.parentElement as HTMLElement).firstElementChild as HTMLElement
-    expect.soft(row.style.gridTemplateColumns, 'line row columns').toBe('1fr 64px 110px 110px 100px 28px')
-    expect.soft(head.style.gridTemplateColumns, 'line header columns').toBe('1fr 64px 110px 110px 100px 28px')
+    expect.soft(row.style.gridTemplateColumns, 'line row columns').toBe('minmax(120px, 1fr) 64px 110px 110px 100px 28px')
+    expect.soft(head.style.gridTemplateColumns, 'line header columns').toBe('minmax(120px, 1fr) 64px 110px 110px 100px 28px')
     const lineInput = row.querySelector('input') as HTMLInputElement
     expect.soft(lineInput.style.height, 'line input height').toBe('30px')
 

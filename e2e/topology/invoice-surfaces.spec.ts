@@ -2921,6 +2921,8 @@ test("invoice detail: the source-document card states the real range, and the mo
   await expect(modal).toHaveCount(0)
 
   // Loading: the sheet request is held, so the modal reads its loading canvas.
+  // The hold is released while the modal is still open and its response is awaited, so the
+  // continued request always has a live consumer before the route is removed.
   let release!: () => void
   const held = new Promise<void>((r) => (release = r))
   const hold = async (route: Route) => {
@@ -2936,15 +2938,21 @@ test("invoice detail: the source-document card states the real range, and the mo
     loadingRead.canvas!.bgImages.filter((v) => v.includes('repeating-linear-gradient')),
     'the loading canvas draws no repeating-linear-gradient',
   ).toEqual([])
+  const heldResp = page.waitForResponse((r) => SHEET_URL.test(r.url()))
+  release()
+  await heldResp
+  await expect(page.getByTestId('sheet-scope-file')).toBeVisible()
+  await page.unroute(SHEET_URL, hold)
   await page.getByTestId('source-modal-close').click()
   await expect(modal).toHaveCount(0)
-  release()
-  await page.unroute(SHEET_URL, hold)
 
-  // Error: a 500 from the sheet route reads the error canvas.
+  // Error: a 500 from the sheet route reads the error canvas. Every open fetches the sheet
+  // afresh (no cache in SourceDocumentModal), so reopening is enough.
   const fail = (route: Route) => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'sheet unavailable' }) })
   await page.route(SHEET_URL, fail)
+  const failResp = page.waitForResponse((r) => SHEET_URL.test(r.url()) && r.status() === 500)
   await page.getByTestId('view-source-document').click()
+  await failResp
   await expect(page.getByTestId('source-document-failed')).toBeVisible()
   await dvModal(page, testInfo, 'source-modal-error', 'source-document-failed')
   await page.getByTestId('source-modal-close').click()

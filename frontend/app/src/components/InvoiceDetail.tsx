@@ -116,9 +116,9 @@ export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
 type LineRowState = Record<'description' | 'quantity' | 'unit_price' | 'line_total' | 'line_tax', string>
 
 // description / qty / unit / amount / tax / remove, declared once so header and rows cannot drift.
-// Tracks are the prototype's; the table box scrolls sideways when the rail is narrower than the rows.
+// Tracks are the prototype's, with a 120px Description floor; the box scrolls sideways only when the floor no longer fits.
 // The numeric inputs override .pf-input's side padding down to 8px to keep the mono digits legible.
-const LINE_EDIT_GRID = '1fr 64px 110px 110px 100px 28px'
+const LINE_EDIT_GRID = 'minmax(120px, 1fr) 64px 110px 110px 100px 28px'
 const EDIT_INPUT = { height: 34, fontSize: 13, padding: '0 10px' } as const
 const LINE_INPUT = { ...EDIT_INPUT, height: 30 } as const
 
@@ -1471,7 +1471,7 @@ function InvoiceEditBody({
             Line items
           </div>
           <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflowX: 'auto' }}>
-            <div style={{ minWidth: 'max-content' }}>
+            <div style={{ minWidth: 'min-content' }}>
             <div style={{ display: 'grid', gridTemplateColumns: LINE_EDIT_GRID, gap: 8, padding: '8px 12px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
               <span className="label">Description</span>
               <span className="label">Qty</span>

@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -79,6 +80,12 @@ func startGateway(t *testing.T, authBase string, minResponse time.Duration, sink
 	mux := http.NewServeMux()
 	mux.Handle("POST /auth/register", gateway.RegisterHandler(authURL, noRedirect, minResponse, log))
 	mux.Handle("GET /auth/verify", gateway.VerifyHandler(authURL, site, noRedirect, log, sink))
+	confirmationMail, err := gateway.MailTemplate("confirmation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux.Handle("GET /emails/confirmation.html", confirmationMail)
+	mux.Handle("GET /emails/mark.png", gateway.MailLogo())
 
 	l, err := net.Listen("tcp", gatewayAddr)
 	if err != nil {
@@ -214,7 +221,7 @@ type mailpitSearch struct {
 	} `json:"messages"`
 }
 
-var hrefRe = regexp.MustCompile(`href="([^"]+)"`)
+var anchorRe = regexp.MustCompile(`(?s)<a\b[^>]*?href="([^"]*)"[^>]*>(.*?)</a>`)
 
 type mailpitMessage struct {
 	Subject string `json:"Subject"`
@@ -246,13 +253,25 @@ func mailFor(t *testing.T, email string) mailpitMessage {
 	return msg
 }
 
-// actionLink returns the mail's action link. Stub: the one-href rule, until D13 lands.
+// actionLink returns the action link: the one URL an anchor shows as its own text (the fallback),
+// which a second anchor (the button) must also carry. Other anchors are ignored.
 func actionLink(body string) (string, error) {
-	links := hrefRe.FindAllStringSubmatch(body, -1)
-	if len(links) != 1 {
-		return "", fmt.Errorf("mail carries %d links, want 1: %s", len(links), body)
+	var urls []string
+	hrefs := map[string]int{}
+	for _, m := range anchorRe.FindAllStringSubmatch(body, -1) {
+		href := html.UnescapeString(m[1])
+		hrefs[href]++
+		if html.UnescapeString(strings.TrimSpace(m[2])) == href && !slices.Contains(urls, href) {
+			urls = append(urls, href)
+		}
 	}
-	return html.UnescapeString(links[0][1]), nil
+	if len(urls) != 1 {
+		return "", fmt.Errorf("mail has %d fallback anchors, want exactly 1: %s", len(urls), body)
+	}
+	if hrefs[urls[0]] < 2 {
+		return "", fmt.Errorf("no button anchor shares the fallback href %s: %s", urls[0], body)
+	}
+	return urls[0], nil
 }
 
 // confirmationLink waits for the address's mail and returns its action link. It fails unless exactly one mail arrived.

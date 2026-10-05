@@ -318,15 +318,24 @@ describe('CreateMapping v2 look', () => {
     expect.soft(more, 'the "+1 more" tail is its own span').not.toBeUndefined()
     expect.soft(more?.style.color).toBe('var(--fg-3)')
     expect.soft(more?.style.fontWeight).toBe('500')
+
+    // Control: a single-file group names the file with no "+N more" tail.
+    const single = render(createElement(CreateMapping, { ctx: badgeCtx(suggestedGroup()) }))
+    const soloName = el(single.container, 'span', 'CSV').nextElementSibling as HTMLElement
+    expect(soloName.textContent).toBe('a.csv')
+    expect(soloName.querySelector('span')).toBeNull()
   })
 
   it('the footer failures follow the prototype', () => {
     const { container } = render(
       createElement(CreateMapping, { ctx: badgeCtx(suggestedGroup(), { run: failedRun(), pickedFiles: TWO_FILES }) }),
     )
-    const names = ['a.csv', 'b.csv'].map((n) => el(container, 'span.mono', n))
-    const list = names[0].parentElement?.parentElement as HTMLElement
-    expect(list.contains(names[1]), 'control: both failures share one list').toBe(true)
+    // Scoped through each failure row ("name: message"): the header file name is also a mono span.
+    const rows = ['a.csv: first failure', 'b.csv: second failure'].map((t) => el(container, 'span', t))
+    const names = rows.map((r) => r.querySelector<HTMLElement>('span.mono') as HTMLElement)
+    for (const n of names) expect(n, 'control: each failure row has a mono name').not.toBeNull()
+    const list = rows[0].parentElement as HTMLElement
+    expect(list.contains(rows[1]), 'control: both failures share one list').toBe(true)
     expect.soft(list.style.gap).toBe('3px')
     for (const n of names) {
       expect.soft(n.style.fontSize, n.textContent ?? '').toBe('11.5px')
@@ -377,11 +386,14 @@ describe('CreateMapping v2 look', () => {
   })
 
   it('Continue dims while invoice_number is unmapped (#114)', () => {
-    const unmapped = render(createElement(CreateMapping, { ctx: badgeCtx(bareGroup()) }))
+    const arm = vi.fn()
+    const unmapped = render(createElement(CreateMapping, { ctx: badgeCtx(bareGroup(), { continueMapping: arm }) }))
     const dim = continueButton(unmapped.container)
     expect(dim.textContent).toBe('Map invoice number to continue')
     // Not `disabled`: the click arms invoice_number (INVCR-01-05).
     expect(dim.disabled).toBe(false)
+    dim.click()
+    expect(arm, 'the dimmed Continue still reaches continueMapping').toHaveBeenCalledTimes(1)
     expect.soft(dim.style.background).toBe('var(--action)')
     expect.soft(dim.style.color).toBe('var(--primary-foreground)')
     expect.soft(dim.style.opacity).toBe('0.45')
@@ -389,10 +401,15 @@ describe('CreateMapping v2 look', () => {
     expect.soft(dim.style.filter).toBe('none')
     unmapped.unmount()
 
-    const noEntity = render(createElement(CreateMapping, { ctx: badgeCtx(suggestedGroup(), { entityId: null }) }))
+    const swallowed = vi.fn()
+    const noEntity = render(
+      createElement(CreateMapping, { ctx: badgeCtx(suggestedGroup(), { entityId: null, continueMapping: swallowed }) }),
+    )
     const blocked = continueButton(noEntity.container)
     expect(blocked.textContent).toBe('Filing needs a linked entity')
     expect(blocked.disabled).toBe(true)
+    blocked.click()
+    expect(swallowed, 'a no-entity Continue is genuinely disabled').not.toHaveBeenCalled()
     expect.soft(blocked.style.background).toBe('var(--action)')
     expect.soft(blocked.style.opacity).toBe('0.45')
     expect.soft(blocked.style.cursor).toBe('not-allowed')

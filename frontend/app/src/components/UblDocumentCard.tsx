@@ -1,5 +1,4 @@
 // The rail's last card: names the UBL document from props and fetches it only on Download.
-// Same recipe as SourceDocumentCard, so what came in sits directly above what goes out.
 
 import { useRef, useState } from 'react'
 

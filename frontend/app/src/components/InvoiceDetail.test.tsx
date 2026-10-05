@@ -3071,7 +3071,7 @@ describe('InvoiceDetail View UBL/XML control -- QA adversarial coverage (task-40
 // RED specs (task-554, APPR-13-04, Mode A). Neither `detail-approve` nor `detail-reject`
 // exists yet, so every row below fails on a missing element, never an import/type error.
 // Arm/confirm and the reject-reason input row are APPR-13-05 -- this subtask (and these
-// specs) cover only the resting/idle pair and its disabled recipe (two layers since BUG-14-02).
+// specs) cover only the resting/idle pair and its disabled recipe.
 describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
   const ID = 'inv-decision-1'
   const editable = { status: 'validated' as InvoiceStatus, can_edit: true, can_revalidate: false, can_submit: true }
@@ -4967,7 +4967,7 @@ describe('InvoiceDetail action cluster: the control set is stable (BUG-14-01, AC
 
   // MUTATION ORACLE: an unconditional spread satisfies the parity row above while killing
   // the enabled button's legitimate .v2-btn-primary:hover.
-  it('an enabled Edit carries none of the four muted style properties', async () => {
+  it('an enabled Edit carries none of the muted style properties', async () => {
     mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true, can_revalidate: true, can_submit: true }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)

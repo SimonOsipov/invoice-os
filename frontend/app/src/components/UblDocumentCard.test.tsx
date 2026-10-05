@@ -251,7 +251,7 @@ describe('UblDocumentCard', () => {
 
   it('T02-9: a refused document with no reason prints nothing extra', () => {
     renderCard({ canView: false, blockedReason: null })
-    expect(body().textContent, 'floor: identity row').toBe(FILENAME + META)
+    expect(body().textContent, 'floor: name and meta').toBe(FILENAME + META)
     expect(screen.queryAllByTestId('ubl-card-blocked')).toHaveLength(0)
     expect(outer().querySelectorAll('button')).toHaveLength(0)
   })
@@ -265,7 +265,7 @@ describe('UblDocumentCard', () => {
 
   it('T02-11: while editing the card keeps its identity and offers no action', () => {
     renderCard({ editing: true, canView: true })
-    expect(screen.getByTestId('ubl-card-filename').textContent, 'floor: identity row').toBe(FILENAME)
+    expect(screen.getByTestId('ubl-card-filename').textContent, 'floor: name').toBe(FILENAME)
     expect(outer().querySelectorAll('button')).toHaveLength(0)
     expect(screen.queryAllByTestId('ubl-card-blocked')).toHaveLength(0)
     cleanup()
@@ -397,7 +397,7 @@ describe('UblDocumentCard', () => {
 
   it('T02-16: editing hides the actions even when the wire also sends a reason', () => {
     renderCard({ editing: true, canView: true, blockedReason: REASON })
-    expect(screen.getByTestId('ubl-card-filename').textContent, 'floor: identity row').toBe(FILENAME)
+    expect(screen.getByTestId('ubl-card-filename').textContent, 'floor: name').toBe(FILENAME)
     expect(outer().querySelectorAll('button')).toHaveLength(0)
     expect(screen.queryAllByTestId('ubl-card-blocked')).toHaveLength(0)
   })

@@ -655,6 +655,75 @@ describe('a kept record and a ?persona= link', () => {
   })
 })
 
+describe('?persona= is not a credential (AUTH-15-08)', () => {
+  it('a stored live session ignores ?persona=', async () => {
+    const { hrefWrites } = await bootWith(record(A0_FRESH, FRESH_AT), '/?persona=firm')
+    await waitForVerifiedWorkspace()
+    await settle()
+
+    expect(apiCalls().length, 'the workspace loaded on the stored session').toBeGreaterThan(0)
+    expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`), 'nothing is minted').toEqual([])
+    expect(refreshes(), 'a fresh session renews nothing').toEqual([])
+    expect(storedRecord()?.token).toBe(A0_FRESH)
+    expect(hrefWrites).toEqual([])
+  })
+
+  // The in-house seat differs from the param, so a mint would swap the identity.
+  it('a stored live persona session keeps its own seat under ?persona=firm', async () => {
+    const stored = JSON.stringify({ v: 1, personaId: 'inhouse', token: A0_FRESH, me: IN_HOUSE_ME, verified: true })
+    const { hrefWrites } = await bootWith(stored, '/?persona=firm')
+    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
+    await settle()
+
+    expect(capturedCtx?.mode, 'the stored in-house seat, not the param persona').toBe('inhouse')
+    expect(capturedCtx?.user.name).toBe(APP_PERSONAS.inhouse.name)
+    expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`), 'nothing is minted').toEqual([])
+    expect(storedRecord()?.personaId).toBe('inhouse')
+    expect(hrefWrites).toEqual([])
+  })
+
+  // One page load: what it fetched from /auth, where it navigated, what it left in storage.
+  async function observeBoot(raw: string, path: string) {
+    cleanup()
+    capturedCtx = undefined
+    calls = []
+    refreshesOut = 0
+    refreshReply = renewed()
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    vi.stubGlobal('localStorage', createMemoryStorage())
+    vi.stubGlobal('sessionStorage', createMemoryStorage())
+    const { hrefWrites } = await bootWith(raw, path)
+    await settle(60)
+    return {
+      auth: calls.filter((c) => c.url.startsWith(`${GATEWAY}/auth/`)).map((c) => `${c.url} ${JSON.stringify(c.body)}`),
+      navs: hrefWrites.map((h) => h.replace(new RegExp(STATE_RE), 'STATE')),
+      stored: localStorage.getItem(SESSION_KEY),
+      search: window.location.search,
+    }
+  }
+
+  it('expired renewable / bare sessions behave as without the param', async () => {
+    const bare = JSON.stringify({ v: 1, personaId: 'firm', token: A0_OLD, me: ME, verified: true, handoff: true })
+    const records = [
+      { name: 'expired renewable', raw: record(A0_OLD, OLD_AT) },
+      { name: 'expired bare', raw: bare },
+      { name: 'live renewable due', raw: record(A0_DUE, DUE_AT) },
+    ]
+    expect(records.length).toBe(3)
+    const diffs: string[] = []
+    for (const { name, raw } of records) {
+      const without = await observeBoot(raw, '/')
+      const withParam = await observeBoot(raw, '/?persona=firm')
+
+      expect(without.auth.length + without.navs.length, `${name}: the baseline boot did something`).toBeGreaterThan(0)
+      if (JSON.stringify(withParam) !== JSON.stringify(without)) {
+        diffs.push(`${name}: without ${JSON.stringify(without)} / with ${JSON.stringify(withParam)}`)
+      }
+    }
+    expect(diffs, 'a ?persona= link changed what a stored record does at boot').toEqual([])
+  })
+})
+
 describe('a request after the session ended sends nothing (D-1)', () => {
   it('a request after a refused renewal sends nothing', async () => {
     const { hrefWrites } = await mountFresh('/invoices')

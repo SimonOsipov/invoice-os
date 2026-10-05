@@ -286,6 +286,19 @@ describe('front door: capturing the destination before the bounce (ROUTE-05-02)'
   })
 })
 
+// A signed-out deep link carrying a once-openable persona is captured like any other.
+describe('front door: a persona param on a deep link (AUTH-15-08)', () => {
+  it('capture_aPersonaParamIsDiscardedFromTheStoredQuery', () => {
+    const { hrefWrites } = stubLocation({ pathname: '/audit', search: '?persona=firm' })
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    render(<App />)
+
+    expect(readDestination(), 'the path is captured and the param discarded').toEqual({ path: '/audit', query: '' })
+    expect(hrefWrites).toEqual([stateBounce()])
+    expect(storedSignInState()).toEqual(expect.stringMatching(STATE_RE))
+  })
+})
+
 // QA adversarial coverage (Stage 4). A path+?persona= combination is already exercised
 // by capture_aLivePersonaParamStoresNothing above -- not repeated here.
 describe('front door: adversarial coverage (QA)', () => {

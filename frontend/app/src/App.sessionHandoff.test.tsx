@@ -838,6 +838,26 @@ describe('precedence (AC-9..AC-13, D9, D18)', () => {
     expect(window.location.search).toBe('')
   })
 
+  it('a hand-off carrying persona= redeems and strips', async () => {
+    configure()
+    const S = ensureSignInState()
+    window.history.replaceState(null, '', `/?handoff=${CODE}&persona=firm`)
+    const replace = vi.spyOn(window.history, 'replaceState')
+    const push = vi.spyOn(window.history, 'pushState')
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    await settle()
+
+    expect(exchangeBodies, 'the code is redeemed once').toEqual([{ code: CODE, state: S }])
+    const urls = historyUrls([replace, push])
+    expect(urls.length, 'the strip wrote at least one history entry').toBeGreaterThan(0)
+    expect(urls.filter((u) => /handoff=|persona=/.test(u))).toEqual([])
+    expect(window.location.search).toBe('')
+    expect(loginCalls, 'no mint').toBe(0)
+    expect(hrefWrites).toEqual([])
+  })
+
   it('a malformed code is stripped and ignored', async () => {
     configure()
     window.history.replaceState(null, '', '/?handoff=short')

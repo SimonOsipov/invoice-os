@@ -206,3 +206,68 @@ describe('AC-1: an unrelated query string is dropped by a push, never carried', 
     expect(window.location.search, 'the live URL must carry no query string once the push has landed').toBe('')
   })
 })
+
+// AUTH-15-08: `?persona=` is not a credential, so a stored seat boots on the first commit.
+describe('AUTH-15-08: a stored seat ignores ?persona=', () => {
+  const INHOUSE_SEAT: Session = { persona: APP_PERSONAS.inhouse, token: null, me: null, verified: true }
+
+  // The unsuffixed name exists above for the pre-cut case; the suffix keeps them apart.
+  it('ordering_noHistoryWriteEverCarriesThePersonaParam_afterTwoNavigations', async () => {
+    window.history.replaceState(null, '', '/?persona=firm')
+    localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
+    const calls = installHistorySpies()
+
+    await mountApp()
+    const ctx = requireCtx()
+    await act(async () => {
+      ctx.nav('clients')
+    })
+    await act(async () => {
+      ctx.nav('audit')
+    })
+
+    expect(calls.length, 'no history write was ever recorded -- the spy or the mount is broken').toBeGreaterThan(0)
+    expect(calls.some((c) => /persona=/.test(c.url)), 'a history write carried the persona param').toBe(false)
+  })
+
+  it('ordering_aPersonaParamDoesNotDelayTheWorkspace', async () => {
+    window.history.replaceState(null, '', '/?persona=firm')
+    localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
+    vi.resetModules()
+    const { default: App } = await import('./App')
+
+    render(<App />)
+
+    expect(firstSidebarSearch, 'Workspace did not render on the first commit').toBeDefined()
+    expect(capturedCtx).toBeDefined()
+  })
+
+  it('ordering_theSeatInitialiserIgnoresThePersonaParam', async () => {
+    const modes: Record<string, string | undefined> = {}
+    for (const p of ['firm', 'bogus']) {
+      cleanup()
+      capturedCtx = undefined
+      localStorage.setItem(SESSION_KEY, serializeSession(INHOUSE_SEAT))
+      window.history.replaceState(null, '', `/?persona=${p}`)
+      await mountApp()
+      modes[p] = requireCtx().mode
+    }
+
+    expect(Object.keys(modes), 'both boots ran').toEqual(['firm', 'bogus'])
+    expect(modes, 'the stored in-house seat wins under either param').toEqual({ firm: 'inhouse', bogus: 'inhouse' })
+    expect(JSON.parse(localStorage.getItem(SESSION_KEY)!).personaId).toBe('inhouse')
+  })
+
+  it('ordering_thePersonaParamDoesNotSurviveTheFirstNavigation', async () => {
+    window.history.replaceState(null, '', '/?persona=firm')
+    localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
+    await mountApp()
+
+    await act(async () => {
+      requireCtx().nav('clients')
+    })
+
+    expect(window.location.pathname).toBe('/clients')
+    expect(window.location.search, 'the live URL carries no query once the push has landed').toBe('')
+  })
+})

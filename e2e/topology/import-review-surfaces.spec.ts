@@ -421,6 +421,7 @@ async function measureReviewChrome(page: Page): Promise<{
   group: Rect
   segments: Rect[]
   scroll: Rect
+  scrollExtent: number
   headerRow: Rect
   heads: number[]
   firstBody: number[]
@@ -453,6 +454,7 @@ async function measureReviewChrome(page: Page): Promise<{
           group: group ? rect(group) : { x: 0, y: 0, width: 0, height: 0 },
           segments: segments.map(rect),
           scroll: rect(scroll),
+          scrollExtent: scroll.scrollWidth,
           headerRow: rect(headerRow),
           heads: [...headerRow.children].map((c) => c.getBoundingClientRect().x),
           firstBody: body ? [...body.children].map((c) => c.getBoundingClientRect().x) : [],
@@ -1088,7 +1090,9 @@ test.describe('RESKIN2-04 v2 extraction review at 1440', () => {
       }
       expect(m.heads.length, `grid header cells at ${m.width}px`).toBeGreaterThan(0)
       expect(m.firstBody.length, `grid first body row cells at ${m.width}px`).toBe(m.heads.length)
-      expect(enclosesRect(m.scroll, m.headerRow, 1), `the header row lies inside the scroll box at ${m.width}px`).toBe(true)
+      // At 1280 the table overflows its box by design (EXTR13-LAYOUT-04), so the row is held to the scroll extent.
+      const extent: Rect = { ...m.scroll, width: Math.max(m.scroll.width, m.scrollExtent + 2) }
+      expect(enclosesRect(extent, m.headerRow, 1), `the header row lies inside the scroll extent at ${m.width}px`).toBe(true)
       for (const [c, x] of m.heads.entries()) {
         expect(Math.abs(x - m.firstBody[c]), `header cell ${c} left edge vs its first body cell at ${m.width}px`).toBeLessThanOrEqual(1)
       }

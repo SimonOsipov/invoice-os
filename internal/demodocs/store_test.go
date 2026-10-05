@@ -609,12 +609,24 @@ func TestRLS_DemoDocsPrefersTheSeededPersonaAdminOverAGrantedAccount(t *testing.
 		t.Fatalf("drop the helper's random admin: %v", err)
 	}
 
-	granted, persona := adminUUID(lowAdminPrefix), personaPrefix+uuid.NewString()[24:]
+	// literal on purpose: the test must fail if demodocs.personaPrefix drifts from the seeded subjects
+	const seeded = "c0000000-0000-0000-0000-"
+	granted, persona := adminUUID(lowAdminPrefix), seeded+uuid.NewString()[24:]
 	if !(granted < persona) {
 		t.Fatalf("granted %s does not sort before persona %s; the test would pass without the ordering", granted, persona)
 	}
+	high := adminUUID(highAdminPrefix)
+	addAdmin(t, super, tenantID, high, "active") // inserted first: only the user_id tiebreak puts granted ahead of it
 	addAdmin(t, super, tenantID, granted, "active")
 	addAdmin(t, super, tenantID, persona, "active")
+	// persona-prefixed rows that sort before the persona admin yet must lose:
+	// a suspended admin and an active non-admin
+	addAdmin(t, super, tenantID, seeded+"000000000001", "suspended")
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'reviewer', 'active')`,
+		tenantID, seeded+"000000000000"); err != nil {
+		t.Fatalf("seed persona reviewer: %v", err)
+	}
 
 	got, err := tenantAdmin(ctx, app, tenantID)
 	if err != nil {
@@ -629,7 +641,6 @@ func TestRLS_DemoDocsPrefersTheSeededPersonaAdminOverAGrantedAccount(t *testing.
 		`DELETE FROM memberships WHERE tenant_id = $1 AND user_id = $2`, tenantID, persona); err != nil {
 		t.Fatalf("drop the persona admin: %v", err)
 	}
-	addAdmin(t, super, tenantID, adminUUID(highAdminPrefix), "active")
 	if got, err := tenantAdmin(ctx, app, tenantID); err != nil || got != granted {
 		t.Errorf("tenantAdmin = %q, %v; want the lowest-user_id admin %s", got, err, granted)
 	}

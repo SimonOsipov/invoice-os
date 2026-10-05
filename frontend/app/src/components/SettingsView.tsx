@@ -36,6 +36,9 @@ import { MembersView } from './MembersView'
 import { RolesView } from './RolesView'
 import type { ConnectorId, PlatformCtx, SettingsTab } from '../types'
 
+// The repo has no :disabled rule; filter:none stops .v2-btn-primary:hover repainting a dead button.
+const DISABLED: React.CSSProperties = { opacity: 0.45, cursor: 'not-allowed', filter: 'none' }
+
 function methodColor(m: 'POST' | 'GET'): { bg: string; color: string } {
   if (m === 'POST') return { bg: 'var(--status-green-bg)', color: 'var(--status-green-text)' }
   if (m === 'GET') return { bg: 'var(--action-tint)', color: 'var(--action)' }
@@ -74,7 +77,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
         <div className="eyebrow" style={{ marginBottom: 10 }}>
           WORKSPACE CONFIGURATION
         </div>
-        <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Settings</h1>
+        <h1 style={{ fontSize: 26, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Settings</h1>
         <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>People, roles, integrations, developer access, and signing certificates.</p>
       </div>
       <div style={{ display: 'flex', gap: 26, borderBottom: '1px solid var(--line-1)', marginBottom: 24 }}>
@@ -104,16 +107,17 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
           {entitiesState === 'loading' && <Loading label="Loading your company…" />}
           {entitiesState === 'error' && ctx.entitiesError && <ErrorState error={ctx.entitiesError} onRetry={refetchEntities} />}
           {entitiesState !== 'loading' && entitiesState !== 'error' && (
-            <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-              <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span className="card-title">Your company</span>
+            <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden', maxWidth: 720 }}>
+              <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 15, fontWeight: 700 }}>Your company</span>
                 {/* Same button, two labels/modes: Add when there's nothing yet (AC-3's
                     bootstrap window), Edit once the one entity this workspace can ever
                     have (AC-1/AC-2) exists. */}
                 <button
                   onClick={() => setCompanyModal(activeEntity ? { mode: 'edit', entity: activeEntity } : { mode: 'create' })}
                   disabled={base == null}
-                  className="v2-btn v2-btn-primary pf-btn"
+                  className={activeEntity ? 'v2-btn v2-btn-ghost pf-btn' : 'v2-btn v2-btn-primary pf-btn'}
+                  style={{ ...(activeEntity ? { height: 32, fontSize: 13 } : null), ...(base == null ? DISABLED : null) }}
                 >
                   {activeEntity ? (
                     'Edit company'
@@ -124,34 +128,26 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
                   )}
                 </button>
               </div>
-              <div style={{ padding: 20 }}>
-                {activeEntity ? (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
-                    <div style={{ gridColumn: '1 / -1' }}>
-                      <div className="label" style={{ marginBottom: 4 }}>Name</div>
-                      <div style={{ fontSize: 14, fontWeight: 600 }}>{activeEntity.name}</div>
+              {activeEntity ? (
+                <div style={{ padding: '6px 20px 10px' }}>
+                  {[
+                    { label: 'Name', value: activeEntity.name, mono: false },
+                    { label: 'TIN', value: activeEntity.tin, mono: true },
+                    { label: 'Sector', value: activeEntity.sector, mono: false },
+                    { label: 'Registration', value: activeEntity.registration, mono: false },
+                    { label: 'Address', value: activeEntity.address, mono: false },
+                  ].map((r, k, all) => (
+                    <div key={r.label} style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: 12, padding: '10px 0', borderBottom: k === all.length - 1 ? 0 : '1px solid var(--line-1)' }}>
+                      <span className="label">{r.label}</span>
+                      <span className={r.mono ? 'mono' : undefined} style={{ fontSize: r.mono ? 12.5 : 13 }}>{r.value ?? '—'}</span>
                     </div>
-                    <div>
-                      <div className="label" style={{ marginBottom: 4 }}>TIN</div>
-                      <div className="mono" style={{ fontSize: 12.5, color: 'var(--fg-1)' }}>{activeEntity.tin ?? '—'}</div>
-                    </div>
-                    <div>
-                      <div className="label" style={{ marginBottom: 4 }}>Sector</div>
-                      <div style={{ fontSize: 12.5, color: 'var(--fg-1)' }}>{activeEntity.sector ?? '—'}</div>
-                    </div>
-                    <div>
-                      <div className="label" style={{ marginBottom: 4 }}>Registration</div>
-                      <div style={{ fontSize: 12.5, color: 'var(--fg-1)' }}>{activeEntity.registration ?? '—'}</div>
-                    </div>
-                    <div>
-                      <div className="label" style={{ marginBottom: 4 }}>Address</div>
-                      <div style={{ fontSize: 12.5, color: 'var(--fg-1)' }}>{activeEntity.address ?? '—'}</div>
-                    </div>
-                  </div>
-                ) : (
+                  ))}
+                </div>
+              ) : (
+                <div style={{ padding: 20 }}>
                   <EmptyState title="No company set up yet" message="Add your business entity so invoices have somewhere real to file against." />
-                )}
-              </div>
+                </div>
+              )}
             </div>
           )}
           {companyModal && base != null && (
@@ -210,21 +206,21 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
                       <span style={{ fontSize: 14.5, fontWeight: 600 }}>{c.name}</span>
-                      <span className="mono" style={{ fontSize: 9, fontWeight: 600, color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 5px', letterSpacing: '0.06em' }}>{c.cat}</span>
+                      <span className="mono" style={{ fontSize: 9, fontWeight: 600, color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', padding: '1px 5px', letterSpacing: '0.06em' }}>{c.cat}</span>
                     </div>
                     <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 3 }}>
                       {on ? 'Synced 2 min ago' : 'No sync yet'}
                     </div>
                   </div>
-                  <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 6, background: on ? 'var(--status-green-bg)' : 'var(--bg-3)', border: `1px solid ${on ? 'var(--status-green-border)' : 'var(--line-2)'}`, borderRadius: 999, padding: '4px 10px' }}>
-                    <span style={{ width: 5, height: 5, borderRadius: 99, background: on ? 'var(--status-green-text)' : 'var(--fg-3)' }} />
+                  <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 6, background: on ? 'var(--status-green-bg)' : 'var(--bg-3)', border: `1px solid ${on ? 'var(--status-green-border)' : 'var(--line-2)'}`, borderRadius: 'var(--radius-sm)', padding: '4px 10px' }}>
+                    <span style={{ width: 5, height: 5, borderRadius: '50%', background: on ? 'var(--status-green-text)' : 'var(--fg-3)' }} />
                     <span className="mono" style={{ fontSize: 9, fontWeight: 600, color: on ? 'var(--status-green-text)' : 'var(--fg-3)', letterSpacing: '0.04em' }}>{on ? 'CONNECTED' : 'NOT CONNECTED'}</span>
                   </span>
                   {on && (
                     <button
                       onClick={() => setOpenId(c.id)}
                       className="pf-btn"
-                      style={{ flex: 'none', height: 34, padding: '0 14px', borderRadius: 'var(--radius-md)', border: 0, background: 'transparent', color: 'var(--fg-2)', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 500 }}
+                      style={{ flex: 'none', height: 34, padding: '0 15px', borderRadius: 'var(--radius-btn)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-1)', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 500 }}
                     >
                       Manage
                     </button>
@@ -232,7 +228,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
                   <button
                     onClick={() => ctx.toggleConnector(c.id)}
                     className="pf-btn"
-                    style={{ flex: 'none', height: 34, padding: '0 16px', borderRadius: 'var(--radius-md)', border: `1px solid ${on ? 'var(--line-2)' : 'var(--action)'}`, background: on ? 'transparent' : 'var(--action)', color: on ? 'var(--fg-2)' : 'var(--text-on-dark)', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 500 }}
+                    style={{ flex: 'none', height: 34, padding: '0 16px', borderRadius: 'var(--radius-btn)', border: `1px solid ${on ? 'var(--line-2)' : 'var(--action)'}`, background: on ? 'transparent' : 'var(--action)', color: on ? 'var(--fg-2)' : 'var(--primary-foreground)', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 500 }}
                   >
                     {on ? 'Disconnect' : 'Connect'}
                   </button>
@@ -251,8 +247,8 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
               Base URL
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <code className="mono" style={{ flex: 1, fontSize: 13, color: 'var(--fg-1)', background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-input)', padding: '9px 12px' }}>{API_BASE}</code>
-              <button className="pf-btn" style={{ flex: 'none', height: 36, padding: '0 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+              <code className="mono" style={{ flex: 1, fontSize: 13, color: 'var(--fg-1)', background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '9px 12px' }}>{API_BASE}</code>
+              <button className="pf-btn" style={{ flex: 'none', height: 36, padding: '0 12px', borderRadius: 'var(--radius-btn)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
                 {copyGlyph} Copy
               </button>
             </div>
@@ -265,14 +261,14 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
               const dim = k.env === 'LIVE' ? (sandbox ? 0.45 : 1) : sandbox ? 1 : 0.45
               return (
                 <div key={k.env} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '15px 20px', borderBottom: '1px solid var(--line-1)', opacity: dim }}>
-                  <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', background: k.envBg, borderRadius: 'var(--radius-sm)', padding: '3px 8px' }}>
+                  <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', background: k.envBg, borderRadius: 'var(--radius-md)', padding: '3px 8px' }}>
                     <span className="mono" style={{ fontSize: 9, fontWeight: 700, color: k.envColor, letterSpacing: '0.06em' }}>{k.env}</span>
                   </span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <code className="mono" style={{ fontSize: 12.5, color: 'var(--fg-1)', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.key}</code>
                     <div style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 3 }}>{k.note}</div>
                   </div>
-                  <button className="pf-btn" style={{ flex: 'none', height: 32, padding: '0 11px', borderRadius: 'var(--radius-md)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
+                  <button className="pf-btn" style={{ flex: 'none', height: 32, padding: '0 11px', borderRadius: 'var(--radius-btn)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
                     {copyGlyph} Copy
                   </button>
                 </div>
@@ -287,7 +283,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
               const mc = methodColor(e.m)
               return (
                 <div key={e.path} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 20px', borderBottom: '1px solid var(--line-1)' }}>
-                  <span style={{ flex: 'none', width: 48, textAlign: 'center', background: mc.bg, borderRadius: 'var(--radius-sm)', padding: '3px 0' }}>
+                  <span style={{ flex: 'none', width: 48, textAlign: 'center', background: mc.bg, borderRadius: 'var(--radius-md)', padding: '3px 0' }}>
                     <span className="mono" style={{ fontSize: 10, fontWeight: 700, color: mc.color }}>{e.m}</span>
                   </span>
                   <code className="mono" style={{ flex: 'none', fontSize: 13, color: 'var(--fg-1)', fontWeight: 500 }}>{e.path}</code>
@@ -299,7 +295,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
           <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
             <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span className="card-title">Webhooks</span>
-              <button className="pf-btn" style={{ height: 30, padding: '0 11px', borderRadius: 'var(--radius-md)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5 }}>
+              <button className="pf-btn" style={{ height: 30, padding: '0 11px', borderRadius: 'var(--radius-btn)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5 }}>
                 {plusGlyph} Add endpoint
               </button>
             </div>
@@ -307,8 +303,8 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
               <div key={w.event} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 20px', borderBottom: '1px solid var(--line-1)' }}>
                 <code className="mono" style={{ flex: 'none', fontSize: 12.5, fontWeight: 600, color: 'var(--action)' }}>{w.event}</code>
                 <code className="mono" style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--fg-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.url}</code>
-                <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--status-green-bg)', border: '1px solid var(--status-green-border)', borderRadius: 999, padding: '3px 9px' }}>
-                  <span style={{ width: 5, height: 5, borderRadius: 99, background: 'var(--status-green-text)' }} />
+                <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--status-green-bg)', border: '1px solid var(--status-green-border)', borderRadius: 'var(--radius-sm)', padding: '3px 9px' }}>
+                  <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--status-green-text)' }} />
                   <span className="mono" style={{ fontSize: 9, fontWeight: 600, color: 'var(--status-green-text)' }}>{w.st}</span>
                 </span>
               </div>
@@ -330,8 +326,8 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
                     {c.cn}
                   </div>
                 </div>
-                <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--status-green-bg)', border: '1px solid var(--status-green-border)', borderRadius: 999, padding: '4px 10px' }}>
-                  <span style={{ width: 5, height: 5, borderRadius: 99, background: 'var(--status-green-text)' }} />
+                <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--status-green-bg)', border: '1px solid var(--status-green-border)', borderRadius: 'var(--radius-sm)', padding: '4px 10px' }}>
+                  <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--status-green-text)' }} />
                   <span className="mono" style={{ fontSize: 9, fontWeight: 600, color: 'var(--status-green-text)' }}>ACTIVE</span>
                 </span>
               </div>
@@ -360,8 +356,8 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
                   <span style={{ fontSize: 12, color: 'var(--fg-2)' }}>Expires {c.expires}</span>
                   <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>{c.daysLeft} left</span>
                 </div>
-                <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 'var(--radius-sm)', overflow: 'hidden', marginBottom: 16 }}>
-                  <div style={{ width: c.pct, height: '100%', background: c.barColor, borderRadius: 'var(--radius-sm)' }} />
+                <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 'var(--radius-md)', overflow: 'hidden', marginBottom: 16 }}>
+                  <div style={{ width: c.pct, height: '100%', background: c.barColor, borderRadius: 'var(--radius-md)' }} />
                 </div>
                 <button className="v2-btn v2-btn-ghost pf-btn" style={{ height: 34, fontSize: 13 }}>
                   Renew certificate

@@ -16,10 +16,10 @@ import { backGlyph, refreshGlyph, warnTriGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
 
 const CARD: React.CSSProperties = { background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)' }
-const CARD_HEAD: React.CSSProperties = { padding: '14px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }
+const CARD_HEAD: React.CSSProperties = { padding: '13px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }
 
 // Env-switch segment, at this card header's smaller scale.
-const SEG: React.CSSProperties = { border: 0, cursor: 'pointer', height: 22, padding: '0 10px', borderRadius: 999, fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: 600, letterSpacing: '0.06em', display: 'inline-flex', alignItems: 'center', gap: 6 }
+const SEG: React.CSSProperties = { border: 0, cursor: 'pointer', height: 24, padding: '0 9px', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 9.5, fontWeight: 700, letterSpacing: '0.06em', display: 'inline-flex', alignItems: 'center', gap: 6 }
 
 // Faint = the connector doing its own housekeeping (a scheduled pull, a poll); the
 // document outcomes are the ones that get colour.
@@ -37,7 +37,7 @@ function Stat({ label, value, color }: { label: string; value: string; color?: s
       <div className="label" style={{ marginBottom: 6 }}>
         {label}
       </div>
-      <div className="mono" style={{ fontSize: 15, fontWeight: 600, color: color ?? 'var(--fg-1)' }}>
+      <div className="money" style={{ fontSize: 15, fontWeight: 700, color: color ?? 'var(--fg-1)' }}>
         {value}
       </div>
     </div>
@@ -47,13 +47,11 @@ function Stat({ label, value, color }: { label: string; value: string; color?: s
 function FunnelStep({ n, label, sub }: { n: number; label: string; sub: string }) {
   return (
     <div style={{ minWidth: 0 }}>
-      <div className="mono" style={{ fontSize: 28, fontWeight: 600, letterSpacing: '-0.02em', color: 'var(--fg-1)' }}>
+      <div className="mono" style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--fg-1)' }}>
         {fmtPlain(n)}
       </div>
-      <div className="label" style={{ marginTop: 6 }}>
-        {label}
-      </div>
-      <div style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 4, lineHeight: 1.45 }}>{sub}</div>
+      <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--fg-1)', marginTop: 4 }}>{label}</div>
+      <div style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>{sub}</div>
     </div>
   )
 }
@@ -90,7 +88,7 @@ export function ConnectorDetail({
       <button
         onClick={onBack}
         className="pf-btn"
-        style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: 0, background: 'transparent', color: 'var(--fg-3)', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 13, padding: 0, marginBottom: 14 }}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: 0, background: 'transparent', color: 'var(--fg-3)', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 12.5, padding: 0, marginBottom: 14 }}
       >
         {backGlyph} All connectors
       </button>
@@ -100,14 +98,14 @@ export function ConnectorDetail({
         <span style={{ flex: 'none', width: 42, height: 42, borderRadius: 'var(--radius-md)', background: 'var(--slate-800)', color: 'var(--text-on-dark)', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.02em' }}>{def.mono}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-            <span className="card-title">{def.name}</span>
+            <span style={{ fontSize: 16, fontWeight: 700 }}>{def.name}</span>
             <span className="mono" style={{ fontSize: 9, fontWeight: 600, color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 5px', letterSpacing: '0.06em' }}>{def.cat}</span>
           </div>
           <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {def.host} · {def.module}
           </div>
         </div>
-        <div data-testid="connector-env-pill" style={{ flex: 'none', display: 'flex', alignItems: 'center', background: 'var(--bg-2)', border: `1px solid ${live ? 'var(--status-green-border)' : 'var(--status-amber-border)'}`, borderRadius: 999, padding: 2 }}>
+        <div data-testid="connector-env-pill" style={{ flex: 'none', display: 'flex', alignItems: 'center', background: 'var(--bg-2)', border: `1px solid ${live ? 'var(--status-green-border)' : 'var(--status-amber-border)'}`, borderRadius: 'var(--radius-md)', padding: 2 }}>
           {/* Both segments are disabled: this pill reports the connector's environment, it
               does not switch it (there is no setter on this screen). LIVE is disabled for the
               Header.tsx reason; SANDBOX because an enabled control that cannot act is a lie. */}
@@ -118,7 +116,7 @@ export function ConnectorDetail({
             className="pf-btn"
             style={{ ...SEG, cursor: 'default', background: live ? 'transparent' : 'var(--status-amber-text)', color: live ? 'var(--fg-3)' : 'var(--text-on-dark)' }}
           >
-            <span style={{ width: 5, height: 5, borderRadius: 99, background: live ? 'var(--status-amber-text)' : 'var(--text-on-dark)' }} />
+            <span style={{ width: 5, height: 5, borderRadius: '50%', background: live ? 'var(--status-amber-text)' : 'var(--text-on-dark)' }} />
             SANDBOX
           </button>
           <button
@@ -128,13 +126,13 @@ export function ConnectorDetail({
             aria-pressed={live}
             title="Live filing switches on at NRS accreditation."
             className="pf-btn"
-            style={{ ...SEG, background: 'transparent', color: 'var(--fg-4)', cursor: 'not-allowed' }}
+            style={{ ...SEG, background: 'transparent', color: 'var(--fg-4)', opacity: 0.45, cursor: 'not-allowed', filter: 'none' }}
           >
-            <span style={{ width: 5, height: 5, borderRadius: 99, background: 'var(--fg-4)' }} />
+            <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--fg-4)' }} />
             LIVE
           </button>
         </div>
-        <button className="v2-btn v2-btn-primary pf-btn" style={{ flex: 'none', height: 34, fontSize: 13, padding: '0 14px' }}>
+        <button className="v2-btn v2-btn-primary pf-btn" style={{ flex: 'none', height: 34, fontSize: 13, padding: '0 14px', gap: 6 }}>
           <span style={{ display: 'inline-flex' }}>{refreshGlyph}</span> Sync now
         </button>
       </div>
@@ -148,7 +146,7 @@ export function ConnectorDetail({
           { label: 'Token expires', value: d.tokenExpires },
           { label: 'Error rate · 24h', value: d.errorRate },
         ].map((t, i) => (
-          <div key={t.label} style={{ padding: '15px 18px', borderLeft: i === 0 ? 0 : '1px solid var(--line-1)' }}>
+          <div key={t.label} style={{ padding: '13px 15px', borderLeft: i === 0 ? 0 : '1px solid var(--line-1)' }}>
             <Stat label={t.label} value={t.value} />
           </div>
         ))}
@@ -157,10 +155,10 @@ export function ConnectorDetail({
       {/* Reconciliation funnel */}
       <div style={{ ...CARD, marginBottom: 16 }}>
         <div style={CARD_HEAD}>
-          <span className="card-title">Reconciliation · ERP ↔ clearance</span>
+          <span style={{ fontSize: 15, fontWeight: 700 }}>Reconciliation · ERP ↔ clearance</span>
           <span
             className="mono"
-            style={{ fontSize: 9, fontWeight: 600, letterSpacing: '0.06em', borderRadius: 999, padding: '4px 9px', background: driftClean ? 'var(--status-green-bg)' : 'var(--status-amber-bg)', border: `1px solid ${driftClean ? 'var(--status-green-border)' : 'var(--status-amber-border)'}`, color: driftClean ? 'var(--status-green-text)' : 'var(--status-amber-text)' }}
+            style={{ fontSize: 9, fontWeight: 600, letterSpacing: '0.06em', borderRadius: 'var(--radius-sm)', padding: '4px 9px', background: driftClean ? 'var(--status-green-bg)' : 'var(--status-amber-bg)', border: `1px solid ${driftClean ? 'var(--status-green-border)' : 'var(--status-amber-border)'}`, color: driftClean ? 'var(--status-green-text)' : 'var(--status-amber-text)' }}
           >
             DRIFT {d.funnel.drift}
           </span>
@@ -188,7 +186,7 @@ export function ConnectorDetail({
       {/* Volume */}
       <div style={{ ...CARD, marginBottom: 16 }}>
         <div style={CARD_HEAD}>
-          <span className="card-title">Documents pulled</span>
+          <span style={{ fontSize: 15, fontWeight: 700 }}>Documents pulled</span>
           <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
             {fmtPlain(d.volumeTotal)} PULLED · 30 DAYS
           </span>
@@ -196,7 +194,7 @@ export function ConnectorDetail({
         <div style={{ padding: '20px 20px 18px' }}>
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 76 }}>
             {d.volume.map((v, i) => (
-              <div key={i} title={`${v} documents`} style={{ flex: 1, height: `${Math.max(4, (v / volMax) * 100)}%`, background: 'var(--action)', opacity: 0.55, borderRadius: 'var(--radius-xs)' }} />
+              <div key={i} title={`${v} documents`} style={{ flex: 1, height: `${Math.max(4, (v / volMax) * 100)}%`, background: 'var(--action)', opacity: 0.55, borderRadius: 2 }} />
             ))}
           </div>
         </div>
@@ -242,7 +240,7 @@ export function ConnectorDetail({
             {d.activity.map((a, i) => (
               <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '10px 0', borderBottom: '1px solid var(--line-1)' }}>
                 <span className="mono" style={{ flex: 'none', fontSize: 11, color: 'var(--fg-3)', width: 36 }}>{a.time}</span>
-                <span style={{ flex: 'none', width: 5, height: 5, borderRadius: 99, background: DOT_COLOR[a.kind], transform: 'translateY(-2px)' }} />
+                <span style={{ flex: 'none', width: 5, height: 5, borderRadius: '50%', background: DOT_COLOR[a.kind], transform: 'translateY(-2px)' }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <code className="mono" style={{ fontSize: 11.5, fontWeight: 600, color: a.doc === '—' ? 'var(--fg-3)' : 'var(--fg-1)' }}>{a.doc}</code>
                   <div style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 2, lineHeight: 1.45 }}>{a.desc}</div>
@@ -262,30 +260,30 @@ export function ConnectorDetail({
               REFRESHED 2 MIN AGO
             </span>
           </div>
-          <div style={{ padding: '18px 20px' }}>
-            <div className="pf-grid-4" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 18 }}>
+          <div style={{ padding: '16px 20px' }}>
+            <div className="pf-grid-4" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
               {[
                 { label: 'Customers', value: fmtPlain(d.master.customers) },
                 { label: 'Tax codes', value: String(d.master.taxCodes) },
                 { label: 'Items / SKUs', value: fmtPlain(d.master.items) },
                 { label: 'Units of measure', value: String(d.master.uoms) },
               ].map((s) => (
-                <div key={s.label} style={{ background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '12px 13px' }}>
-                  <div className="mono" style={{ fontSize: 19, fontWeight: 600, letterSpacing: '-0.02em' }}>{s.value}</div>
-                  <div className="label" style={{ marginTop: 5 }}>
+                <div key={s.label}>
+                  <div className="mono" style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--fg-1)' }}>{s.value}</div>
+                  <div className="label" style={{ marginTop: 3 }}>
                     {s.label}
                   </div>
                 </div>
               ))}
             </div>
-            <div className="label" style={{ marginBottom: 4 }}>
+            <div className="label" style={{ marginBottom: 8 }}>
               Tax codes
             </div>
             {CONNECTOR_TAX_CODES.map((t) => (
-              <div key={t.code} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 0', borderBottom: '1px solid var(--line-1)' }}>
-                <code className="mono" style={{ flex: 'none', width: 46, fontSize: 11.5, fontWeight: 600, color: 'var(--fg-1)' }}>{t.code}</code>
+              <div key={t.code} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '7px 0', borderTop: '1px solid var(--line-1)' }}>
+                <code className="mono" style={{ flex: 'none', width: 48, fontSize: 12, fontWeight: 600, color: 'var(--fg-1)' }}>{t.code}</code>
                 <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--fg-2)' }}>{t.desc}</span>
-                <span className="mono" style={{ flex: 'none', fontSize: 11.5, color: 'var(--fg-3)' }}>{t.rate}</span>
+                <span className="mono" style={{ flex: 'none', fontSize: 12, color: 'var(--fg-3)' }}>{t.rate}</span>
               </div>
             ))}
           </div>
@@ -295,16 +293,16 @@ export function ConnectorDetail({
           <div style={CARD_HEAD}>
             <span style={{ fontSize: 14, fontWeight: 600 }}>Write-back to ERP</span>
           </div>
-          <div style={{ padding: '18px 20px' }}>
-            <div style={{ display: 'flex', gap: 10, marginBottom: 18 }}>
+          <div style={{ padding: '16px 20px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
               {[
                 { label: 'Stamped back', value: fmtPlain(d.writeBack.stamped), color: 'var(--status-green-text)' },
                 { label: 'Pending', value: String(d.writeBack.pending), color: 'var(--status-amber-text)' },
                 { label: 'Failed', value: String(d.writeBack.failed), color: 'var(--status-red-text)' },
               ].map((s) => (
-                <div key={s.label} style={{ flex: 1, minWidth: 0 }}>
-                  <div className="mono" style={{ fontSize: 19, fontWeight: 600, letterSpacing: '-0.02em', color: s.color }}>{s.value}</div>
-                  <div className="label" style={{ marginTop: 5 }}>
+                <div key={s.label} style={{ minWidth: 0 }}>
+                  <div className="mono" style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.02em', color: s.color }}>{s.value}</div>
+                  <div className="label" style={{ marginTop: 3 }}>
                     {s.label}
                   </div>
                 </div>
@@ -312,10 +310,10 @@ export function ConnectorDetail({
             </div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
               <span style={{ fontSize: 12, color: 'var(--fg-2)' }}>IRN + CSID stamped</span>
-              <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>{d.writeBack.pct}%</span>
+              <span className="mono" style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg-1)' }}>{d.writeBack.pct}%</span>
             </div>
-            <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 'var(--radius-sm)', overflow: 'hidden', marginBottom: 14 }}>
-              <div style={{ width: `${d.writeBack.pct}%`, height: '100%', background: 'var(--action)', borderRadius: 'var(--radius-sm)' }} />
+            <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 'var(--radius-sm)', overflow: 'hidden', marginBottom: 12 }}>
+              <div style={{ width: `${d.writeBack.pct}%`, height: '100%', background: 'var(--action)' }} />
             </div>
             <p style={{ fontSize: 11.5, color: 'var(--fg-3)', margin: 0, lineHeight: 1.5 }}>IRN + CSID synced back into {def.name} invoice records.</p>
           </div>
@@ -338,7 +336,7 @@ export function ConnectorDetail({
         </div>
         {d.held.map((h, i) => (
           <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 20px', borderBottom: '1px solid var(--line-1)' }}>
-            <span style={{ flex: 'none', width: 5, height: 5, borderRadius: 99, background: 'var(--status-red-text)' }} />
+            <span style={{ flex: 'none', width: 5, height: 5, borderRadius: '50%', background: 'var(--status-red-text)' }} />
             <code className="mono" style={{ flex: 'none', fontSize: 12.5, fontWeight: 600, color: 'var(--fg-1)' }}>{h.doc}</code>
             <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--fg-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.reason}</span>
             <span className="mono" style={{ flex: 'none', fontSize: 11, color: 'var(--fg-3)' }}>{h.age}</span>

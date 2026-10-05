@@ -75,7 +75,7 @@ reverse of `db/seed.dev.sql`'s parent-first inserts.
 | 11 | `business_entities` | the curated demo supplier portfolio, re-inserted by the seed |
 | 12 | `extraction_anchor_rules` | the anchor rules a demo tenant's corrections taught the extractor; nothing re-seeds them, so a survivor would keep steering reads of documents the seed has just replaced |
 | 13 | `extraction_field_results` | the per-field results of a demo document read, meaningless once their job is gone. Purged **before** `extraction_jobs`: the foreign key is `ON DELETE CASCADE`, so purging the parent first would take these rows silently and report a count of 0 |
-| 14 | `extraction_field_corrections` | the append-only record of every field a demo persona corrected by hand; the seed re-creates none of them, so a survivor would claim a correction on an invoice that no longer exists. Purged **before** `extraction_jobs` for the same reason as the row above |
+| 14 | `extraction_field_corrections` | the append-only record of every field a demo user corrected by hand; the seed re-creates none of them, so a survivor would claim a correction on an invoice that no longer exists. Purged **before** `extraction_jobs` for the same reason as the row above |
 | 15 | `extraction_jobs` | one row per demo document read; nothing re-links a survivor, and its RESTRICT foreign key would otherwise block the `documents` delete below |
 | 16 | `extraction_page_images` | the rendered-page inventory of a demo document, regenerable and meaningless once its document is gone. The rows go and the stored PNGs do not: the purge issues SQL only, exactly as for `documents` below |
 | 17 | `documents` | the source-document records; `internal/demodocs` rebuilds them on the next invoice-service boot (see the checklist below). The purge issues SQL only, so the stored object itself is left in the bucket — the row goes, the bytes do not |
@@ -219,14 +219,14 @@ A large `audit_log_rows` therefore means the demo environment was used a lot bet
 deploys. It does not indicate that anything went wrong, and it is not comparable to the
 counts beside it in `by_table`.
 
-## Demo mode flag
+## App build variables
 
-The app has no demo persona switcher and no demo-mode build flag. `frontend/app/Dockerfile`
+The app reads no demo-mode build variable. `frontend/app/Dockerfile`
 declares no such build arg, and `reconcile_url_variables` in `scripts/ci/railway-env.sh` writes only
 `VITE_GATEWAY_URL` and `VITE_LANDING_URL` on the `app` service. The purge above does not depend on
 either.
 
-**Production.** The `app` service may still carry a leftover demo-mode variable; nothing reads it.
+**Production.** Production's `app` service still carries a demo-mode variable; nothing reads it.
 The production gateway's `ENVIRONMENT` was set to `production` once, by hand, with `railway-env.sh
 set-production-environment`. CI still writes nothing to that environment —
 `reconcile_url_variables` exits 1 the moment `env_id` matches `$RAILWAY_DEV_ENVIRONMENT_ID`,

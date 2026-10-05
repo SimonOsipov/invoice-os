@@ -139,11 +139,11 @@ owned params from the same `params` object, then pushes `routeUrl(...)` — path
 query, never a hash. State and the address bar come from one object, so they cannot diverge.
 
 No path writer reads `window.location.search`. This is a security fence, not a style choice:
-`App.tsx` once left `?persona=` in the URL after sign-in, which turned it into a
-credential-free sign-in link — Back to that history entry walked back into the workspace
-with no sign-in. The app no longer reads `?persona=` at all (AUTH-15), so it is inert. R1 keeps
-the fence now that URLs carry a query: the writer never echoes the live search, it
-re-serialises only the params the codec owns, and `persona` is owned by no view.
+A URL param that signs a visitor in would become a credential-free sign-in link once it sat in a
+history entry: Back to that entry would walk into the workspace with no sign-in. The app reads
+no such param (the `persona` query parameter is inert), and R1 keeps the fence now that URLs carry a query: the
+writer never echoes the live search, it re-serialises only the params the codec owns, and
+`persona` is owned by no view.
 
 Two writers sit outside `navigate` and are pinned rather than folded in. The review-path
 mirror in `Workspace` (the `replaceState` keyed on `[view, createStep,
@@ -263,7 +263,7 @@ fails if a name, its `switchClient` reset, or its verdict disagrees with the mod
 a `?handoff=` code is being redeemed, `seat` is `null`, so `App` renders `<SignInLoading>` and
 never mounts `Workspace` — which owns every line of the router — on that commit. This is
 structural, not an effect-ordering guarantee to remember: there is no child to order against.
-`?persona=` has no such state: it signs no one in, so a stored seat mounts on the first commit
+The `persona` query parameter has no such state: it signs no one in, so a stored seat mounts on the first commit
 whatever the URL carries, and the writers never emit `persona` (no view owns it).
 `App.routePersonaOrdering.test.tsx` pins that.
 
@@ -278,10 +278,8 @@ query, never the ids — the same guarantee `/invoices/:id` gets, extended to `c
 
 ## Boot precedence
 
-`initialView` (DEMO-06 persona-switch carry) → path → `dashboard`. See the `view` lazy
-initializer in `Workspace`. Three tiers, not four: the review hash was its own tier only
-because it was a second carrier the path tier couldn't see, and now that review is a path,
-`seed.view` resolves it directly. The path tier reads the `{ path, search }` boot seed, not
+The boot view is the path's view, else `dashboard`. See the `view` lazy
+initializer in `Workspace`. The review route is a path, so `seed.view` resolves it directly. The path tier reads the `{ path, search }` boot seed, not
 `window.location.pathname` directly — ROUTE-05 substitutes a restored deep-link destination
 there when the live path is the bare root; it is not a new precedence tier. See the section
 below. A booted review path seeds `createStep`/`reviewBatchIds` the same way, off `bootPath`
@@ -289,8 +287,8 @@ rather than the live pathname, so a signed-out `/imports/<ids>/review` visit rou
 through the signed-out deep link below for free.
 
 All three drill-down ids — and the review batch ids — gate on the *winning* view, `bootView`,
-never `seed.view` directly (`[ids-gate-on-the-winning-view]`) — only `initialView` can
-outrank the path now, and a `create` boot must never inherit a review batch, an invoice id,
+never `seed.view` directly (`[ids-gate-on-the-winning-view]`): `availableView` can overrule the
+path (an in-house workspace has no `clients` view), and a `create` boot must never inherit a review batch, an invoice id,
 a job id or a policy id from a URL that lost. The mount-alignment effect then serialises that same boot
 state back into the URL
 (`[alignment-must-carry-the-id]`): without it, a correct deep link renders right and then
@@ -355,7 +353,7 @@ A sessionless visit to a real path is remembered across the landing round trip i
 - **Clear** — `Workspace`'s mount-alignment effect (consume-once, on every mount) and
   `signOut`.
 
-The restore cannot re-attach a `?persona=`: the capture stores only the query `routeQuery`
+The restore cannot re-attach a `persona` query parameter: the capture stores only the query `routeQuery`
 authored, and `persona` is owned by no view. `sessionStorage` is user-writable, so the restore re-validates through
 the same `parseLocation` a live URL gets rather than trusting the blob.
 
@@ -386,7 +384,7 @@ restored destination carries its drill-down id too (ROUTE-02 merge)` block.
 
 - **ROUTE-02** — **shipped.** Drill-down ids (`/invoices/:id`, `/extraction/:jobId`) and
   cold-boot seeding for both. `carryView` collapses `detail`/`extraction`
-  back to `invoices` on a persona switch, id included: a remounted identity cannot resume a
+  back to `invoices` on a company switch, id included: a switched company cannot resume a
   selection it may not be entitled to (`[carryview-drops-the-id]`).
 - **ROUTE-03** — **shipped.** Migrated the retired hash form into the path
   (`/imports/:batchIds/review`, epic Q7): one URL scheme, not two, with no back-compat for a
@@ -498,7 +496,7 @@ restored destination carries its drill-down id too (ROUTE-02 merge)` block.
   edit — but the *selection* is newly dropped. Back now restores it, which did not work at all
   before, because `/settings/roles` had no `/workflows/<id>` entry behind it to return to.
 
-  Finally, the id drop on a persona switch and on the identity clamp is **inherited, not
+  Finally, the id drop on a company switch and on the identity clamp is **inherited, not
   added**. Both sites call `routePath` with no id argument and `carryView('workflows')` is
   `workflows`, so a stale `/workflows/<id>` entry collapses to the bare list by construction;
   no code was written for it, only specs. `carryView` was deliberately *not* taught about

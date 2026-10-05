@@ -19,8 +19,8 @@ M2-14.4).
    to HubSpot or Resend) and `real` or `off` on the persistent environment.
    The context services are private-network-only, so this route is the only way CI sees
    their health through the one public backend surface.
-2. **Live browser login** — a Playwright test drives the persona mock-login on the deployed
-   app SPA and asserts the **verified** tenant identity renders: the sidebar marker
+2. **Live browser login** — a Playwright test signs the firm tenant's e2e member in through
+   the landing form on the deployed stack and asserts the **verified** tenant identity renders: the sidebar marker
    `title="Tenant verified via /v1/me"`. That marker is the discriminator — the static firm
    fallback shows the same "OKAFOR & PARTNERS" label, so only the marker proves the round
    trip (mint → `GET /api/tenancy/v1/me`) resolved a backend identity.

@@ -112,7 +112,7 @@ PR opened ──> dev-env.yml:
                 ──> verify, `e2e` job: smoke (landing + both consoles) + api
                 ──> verify, `topology` job: one parallel leg per unit (serial-lane,
                     import-wizard, invoice-surfaces; app login, cross-tenant
-                    isolation, demo persona)
+                    isolation)
               ──> PR stays open: environment stays up
 PR closed  ──> dev-env-teardown.yml (M4-23-05): prenv name ──> look the name up among
                ephemeral environments ──> environmentDelete ──> confirm by re-query.

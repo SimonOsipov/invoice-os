@@ -153,7 +153,7 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
     })
   })
 
-  // The persona switcher renders this list. A null display_name, an unseeded role, or a
+  // The Settings Members tab renders this list. A null display_name, an unseeded role, or a
   // suspended row filtered out server-side would each leave it nothing usable to draw.
   test.describe('roster identity, both tenants', () => {
     const SEEDED_ROLES = ['admin', 'preparer', 'reviewer']

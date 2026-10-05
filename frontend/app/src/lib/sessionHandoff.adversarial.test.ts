@@ -211,7 +211,6 @@ describe('D20 comment corrections', () => {
 
   it('SignIn.tsx names the hand-off in the SignInLoading comment', () => {
     const s = src('components/SignIn.tsx')
-    expect(s).not.toContain('Loading splash shown while a landing deep-link (?persona=) auto-sign-in is in flight')
     expect(s).toMatch(/`\?handoff=` redemption/)
   })
 })

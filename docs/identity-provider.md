@@ -512,11 +512,12 @@ hand-off is the app by default and a console when the visitor came from one (Con
 **Workspace mode.** A hand-off session takes its mode from `/me` `tenant.kind`: `firm` opens
 the firm workspace, `in_house` the in-house one. A `/me` answer, or a stored hand-off record,
 without a known `kind` fails the redemption (step 7, `signin=failed`) or drops the record. A
-persona session keeps its persona's mode until AUTH-15.
+session from the in-app picker of a build with no landing URL (forks and dev only) keeps the
+picked persona's mode.
 
 **Identity card.** A hand-off session's card shows `/me` `user.display_name`, else
-`user.email`, else nothing; its initials follow the same order. A persona session shows its
-persona until AUTH-15. A stored record without the name keeps a blank card: renewal does not re-read `/me`, so only a new sign-in fills it.
+`user.email`, else nothing; its initials follow the same order. A picker session shows the picked
+persona's name. A stored record without the name keeps a blank card: renewal does not re-read `/me`, so only a new sign-in fills it.
 
 The access token travels only in the exchange and refresh answers and the `Authorization`
 header; the refresh token travels only in the exchange answer, the refresh request and
@@ -609,8 +610,8 @@ renewable hand-off session".
 ## Renewal
 
 A hand-off session renews itself before its access token expires, so the user is not sent
-back to landing after `GOTRUE_JWT_EXP`. Persona sessions do not renew: `/auth/login` answers
-no refresh token, so a persona session still ends after one hour (forks and dev only).
+back to landing after `GOTRUE_JWT_EXP`. A picker session does not renew: `/auth/login` answers
+no refresh token, so it ends after one hour (forks and dev only).
 
 **`POST /auth/refresh`** `{"refresh_token"}`, 1 KiB body limit, outside `/api/`, no verifier
 (it must work with an expired access token), wrapped in CORS, POST and OPTIONS, in every
@@ -846,8 +847,8 @@ working until its entry is 30 s old. After that, and at once for every uncached 
 so an outage signs nobody out. An outage of GoTrue therefore stops sign-in, renewal and
 sign-out at once, and the API after 30 s.
 
-**Tokens without `session_id` skip the check.** Mock-issuer (persona) tokens carry none, so
-persona sessions on forks and in dev never call GoTrue. Production has no mock issuer. A
+**Tokens without `session_id` skip the check.** Mock-issuer tokens carry none, so
+a picker session on a fork or in dev never calls GoTrue. Production has no mock issuer. A
 GoTrue-signed token without `session_id` can be minted only with GoTrue's private key, which
 can forge any claim. `TestIdP_AccessTokenCarriesSessionID` fails if a GoTrue upgrade drops
 the claim. `ceiling:` the check keys on the claim, not the issuer; revisit if a second real
@@ -911,7 +912,7 @@ and `endRevokedSession`):
   the record belongs to the seat's user (another tab may have rotated it), else the seat's
   own. Only then does it clear state, the stored record and the destination, and navigate to
   landing: the navigation would cancel the request. The worst wait is 5 s.
-- A persona seat sends nothing: it has no server session.
+- A picker seat sends nothing: it has no server session.
 - **A failed revoke is silent** (user decision, AUTH-07 CF5). Any failure (gateway
   unreachable, the timeout, any non-2xx answer) still completes the local sign-out and logs
   `console.warn('[session] sign-out could not reach the server; other sessions stay signed in')`.
@@ -922,7 +923,7 @@ and `endRevokedSession`):
   before the 204, so a poll from the signing-out tab can meet a 401 while the revoke is in
   flight, and that 401 must not start a second navigation. The ref stays set once sign-out
   navigates to landing. A build with no landing URL (the showcase build) does not navigate
-  and shows the persona picker, so there the ref is cleared at the end of sign-out, and the
+  and shows the in-app picker, so there the ref is cleared at the end of sign-out, and the
   next sign-in can sign out again.
 - **A 401 ends a revoked session without revoking** (`endRevokedSession`, the
   `onUnauthorized` callback of every authed fetch and of the import client). It sends
@@ -931,12 +932,12 @@ and `endRevokedSession`):
   stored token and the ended session's token carry a readable `session_id` and the two
   differ: the record then belongs to a newer sign-in in another tab, and it stays
   byte-identical. In every other case (the same `session_id`, a missing or non-JWT token, a
-  JWT with no `session_id` such as a persona token) it clears the record. After revocation a
+  JWT with no `session_id` such as a mock-issuer token) it clears the record. After revocation a
   401 is the normal way another tab learns its session ended; without this rule that tab's
   401 would wipe the record the first tab just wrote on signing in again.
 - **Where the tab ends up.** Both handlers navigate to landing. For a hand-off seat the front
   door then redirects once more to `<landing>/?state=<43 characters>` and stores no
-  destination. A `?persona=`-booted seat ends on bare landing.
+  destination.
 - **Another tab that learns through a renewal** (user decision, AUTH-07 CF6). After tab 1
   signs out, tab 2 ends at whichever comes first: its next request (edge 401 →
   `endRevokedSession`, destination cleared) or its next due renewal, which finds the stored
@@ -1083,6 +1084,18 @@ answers `INSERT 0 0` for an unregistered one.
 
 An in-product staff screen is out of scope. On production no account can be created while
 signup is closed, so the first staff account waits for registration U3 or for console U3.
+
+## The mock issuer
+
+A gateway built with `-tags mockissuer` (`cmd/gateway/mockissuer.go`) can serve the mock issuer:
+`POST /auth/login`, the mock JWKS, `POST /auth/mock/staff` and `POST /auth/mock/member`. The
+production binary is built without the tag, so it carries none of that code and
+`cmd/gateway/nomockissuer.go` registers nothing. In a tagged build `gateway.MockIssuerEnabled`
+serves the routes only when `GATEWAY_MOCK_ISSUER=true` and `ENVIRONMENT` is not `production`
+(trimmed, any case). The build tag and `MockIssuerEnabled` are the whole control. `MockLoginHandler`
+keeps no identity allowlist and no posture check: wherever it is wired it mints for any identity,
+an empty body included. The in-app sign-in picker of a build with no landing URL calls it. The
+deployed apps carry no in-app identity switch.
 
 ## Granting a membership in a mock build
 
@@ -1289,7 +1302,7 @@ stay in production; no route deletes them.
 
 These steps are separate from the two U1–U4 lists above. Production writes are the user's.
 The sign-in routes answer from the first deploy after AUTH-05 merges. Until U1 and U2 deploy,
-production landing renders no sign-in form and the persona door is unchanged.
+production landing renders no sign-in form.
 
 Production's gateway allows the app origin alone, and production's landing has no
 `VITE_GATEWAY_URL`. `reconcile-urls` writes both on a PR fork only and refuses the persistent
@@ -1347,8 +1360,8 @@ code, a whole-run re-run of the latest push `dev-env` run, or an empty commit.
    curl -sS -X POST https://api.ascomply.com/auth/exchange -H 'Content-Type: application/json' -d "{\"code\":\"x\",\"state\":\"$S\"}"
    ```
    It answers 400 `{"error":"invalid or expired code"}`.
-4. On `https://www.ascomply.com`, "Platform login" shows "Continue with email" above
-   the persona list.
+4. On `https://www.ascomply.com`, "Platform login" shows the sign-in form:
+   Work email, Password and "Sign in →".
 5. An unknown refresh token is refused:
    ```
    curl -sS -X POST https://api.ascomply.com/auth/refresh -H 'Content-Type: application/json' -d '{"refresh_token":"aaaaaaaaaaaa"}'
@@ -1369,8 +1382,8 @@ registration". Console U2 extends the value that sign-in U1 left in the gateway'
 
 **Until the first staff account is granted (console U3), production's consoles open for
 nobody.** After the merge deploy, every visitor to either console is sent to landing's sign-in,
-and no production account can carry the staff claim. The persona door and a fabricated storage
-entry no longer open a console. The user accepted this (AUTH-11, CF1): the consoles hold mock
+and no production account can carry the staff claim. A fabricated storage
+entry does not open a console either. The user accepted this (AUTH-11, CF1): the consoles hold mock
 data only.
 
 | Step | When | Production write |

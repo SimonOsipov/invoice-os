@@ -54,7 +54,7 @@ Covers the three SPAs the landing page hands off to — `landing`, `ops-console`
   assertions pin fixture behaviour rather than a contract — `docs/e2e-convention.md` says
   when that is allowed.
 - **Boundary matrix** (`persona-boundaries.spec.ts`): every destination visited with
-  `?persona=<id>` and no session must bounce the visitor back to the landing page. This drives **all
+  a `persona` query parameter and no session must bounce the visitor back to the landing page. This drives **all
   three destinations including the app**, which is why smoke needs `APP_URL` too. Every
   cell is refused before any gateway contact — no database reads —
   so the suite stays safe under `fullyParallel: true` (`[boundaries-in-smoke]`).
@@ -93,7 +93,7 @@ config load.
 
 The M2 exit criterion: it drives the **app** SPA and the **live gateway** together, not
 just an SPA in isolation. In the unified dev env the app is always gateway-wired
-(`VITE_GATEWAY_URL` set), so this suite owns the app's assertion — the persona sign-in
+(`VITE_GATEWAY_URL` set), so this suite owns the app's assertion — the real sign-in
 hand-off must render the backend-verified tenant identity, not the mock-only shell render
 the smoke suite used to check. It also asserts cross-tenant isolation over the live edge,
 and drives the app's persona-scoped surfaces, the import wizard, invoices and Workflows.

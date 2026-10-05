@@ -58,8 +58,12 @@ tenants (1111 / 2222), plus one shard per big file
 `--project=<unit>` runs one. A new topology spec file must be added to a unit in `shards.ts`,
 or every topology run fails at config load.
 
-**A dedicated-shard spec signs in with `signInAs(page, id, { tenantId })`.** `signInAs` fails a
-sign-in whose stored session is not a hand-off session for that tenant.
+**Every browser spec signs in with `signInAs(page, id, { tenantId })`** (`e2e/personaSession.ts`).
+It drives the landing "Platform login" form as the tenant's e2e member (`e2e/realAccounts.ts`:
+`e2e-member-<tenantId>@example.com`, an admin that `ensureMember` registers and admits through
+`POST /auth/mock/member`, once per worker) and waits for the app to draw. It fails a sign-in whose
+stored session is not a hand-off session bound to that tenant. `tenantId` defaults to the seeded
+tenant of the kind (1111 firm, 2222 in-house); a shard passes its own.
 
 **Every run gets a database of its own, and shares it across all three suites.**
 
@@ -113,11 +117,13 @@ What a spec still cannot assume is an empty table:
     console specs (`staffSession.ts`), and one per console journey in `topology/auth.spec.ts`.
     `POST /auth/mock/staff`, which writes the row, exists only in the mock build that every PR
     fork runs.
-  - `POST /auth/mock/member` leaves a `memberships` row (the account's `auth.users` row and
-    tenant are its caller's). Only the mock build serves it.
+  - `signInAs` leaves one `auth.users` row and one admin `memberships` row per tenant: the
+    stable e2e member (`ensureMember`, `e2e/realAccounts.ts`) registers once and
+    `POST /auth/mock/member` (`internal/gateway/mockmember.go`) upserts its membership. A later
+    call or push adds none, and it provisions no tenant. Only the mock build serves the route.
 
-  This is harmless, because every run registers a fresh address and provisions for a fresh
-  subject.
+  This is harmless: every other run registers a fresh address and provisions for a fresh
+  subject, and the e2e member's rows are the same two rows on every run.
 
 So the rule is unchanged, and `workers: 1` per unit still holds: every spec creates per-run-unique
 data (fresh TINs, random UUIDs, high offsets for empty-state), acts on rows it created, and
@@ -221,12 +227,17 @@ enforces the ceiling; keeping the layer thin stays a review judgement.
 ## Persona is an axis, not a constant
 
 The suite treats the persona as a **parameter** rather than a constant baked into each spec.
-The two console personas (`developer`, `support`) take a staff session to open a console
-(Target surface), and `e2e/personas.ts` records the console pairs as refusals.
+The four ids are axis labels: workspace kind (`firm`, `inhouse`) and staff destination
+(`developer` opens the ops console, `support` the support console). An app session is a real
+account in a workspace of one kind, signed in through the landing form (`signInAs`). A console
+takes a staff session (Target surface). The `persona` query parameter is no credential at any
+destination: a visit that carries it and no session is sent back to the landing page, and a
+visit that carries it over a live session keeps that session and mints nothing.
 
 - **`e2e/personas.ts`** is the registry: four personas, the three destinations they route
-  to, the app SPA's 10 nav surfaces, and a **coverage map** naming which persona is proven
-  on which surface by which spec.
+  to, the app SPA's 10 nav surfaces, a **coverage map** naming which persona is proven
+  on which surface by which spec, and the **boundary matrix**, which records all 12
+  (persona, destination) pairs as refusals (`smoke/persona-boundaries.spec.ts`).
 - **`e2e/personas.test.ts`** makes it load-bearing. **G3** asserts the catalogue matches
   `Sidebar.tsx`'s live `navGroups`; **G6** asserts the rendered (surface, persona) pairs and
   the coverage cells are the same set — in both directions, so a stale cell fails too. A new

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // A real (hand-off) session's Rules screen shows its own empty lines, not the demo rules and suggestions.
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -198,5 +198,143 @@ describe('RulesView, reskin surface', () => {
     expect.soft(css(noSuggest).get('padding'), 'empty suggestions padding').toBe('12px 14px')
     expect.soft(css(box).get('padding'), 'empty custom padding').toBe('18px 16px')
     expect.soft(css(noCustom).get('line-height') ?? css(box).get('line-height'), 'empty custom line height').toBe('1.55')
+  })
+})
+
+describe('RulesView, rows and drawer wiring', () => {
+  function ctxWith(over: Record<string, unknown>): PlatformCtx {
+    return { ...(rulesCtx(false) as unknown as Record<string, unknown>), ...over } as unknown as PlatformCtx
+  }
+
+  it('golden rows lock, custom rows switch, and only custom rows carry a switch', () => {
+    render(<RulesView ctx={rulesCtx(false)} />)
+    const switches = screen.getAllByRole('switch')
+
+    expect(switches, 'control: one switch per custom rule').toHaveLength(SEED_CUSTOM_RULES.length)
+    expect(screen.getAllByText('LOCKED'), 'one lock per golden rule').toHaveLength(GOLDEN_RULES.length)
+    switches.forEach((sw, i) => {
+      const r = SEED_CUSTOM_RULES[i]
+      expect.soft(sw.getAttribute('aria-checked'), r.key).toBe(String(r.enabled))
+      expect.soft(sw.getAttribute('aria-label'), r.key).toBe(`${r.enabled ? 'Disable' : 'Enable'} ${r.key}`)
+      expect.soft(sw.style.background, `${r.key} track`).toBe(r.enabled ? 'var(--action)' : 'var(--line-3)')
+      expect.soft((sw.firstElementChild as HTMLElement).style.transform, `${r.key} knob`).toBe(r.enabled ? 'translateX(14px)' : 'translateX(0)')
+    })
+    GOLDEN_RULES.forEach((r) => {
+      const row = screen.getByText(r.key).closest('.pf-row') as HTMLElement
+      expect.soft(within(row).queryByRole('switch'), `${r.key} has no switch`).toBeNull()
+      expect.soft(within(row).getByText('GOLDEN'), `${r.key} source`).toBeTruthy()
+    })
+  })
+
+  it('a click on a row opens it, and a click on its switch toggles without opening', () => {
+    const ctx = rulesCtx(false)
+    render(<RulesView ctx={ctx} />)
+    const target = SEED_CUSTOM_RULES[0]
+
+    fireEvent.click(screen.getByRole('switch', { name: `Disable ${target.key}` }))
+    expect(ctx.toggleCustomRule).toHaveBeenCalledWith(target.key)
+    expect(ctx.openRule, 'the switch click stops at the switch').not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText(target.key))
+    expect(ctx.openRule).toHaveBeenCalledWith(target.key)
+    fireEvent.click(screen.getByText(GOLDEN_RULES[2].key))
+    expect(ctx.openRule).toHaveBeenLastCalledWith(GOLDEN_RULES[2].key)
+    expect(ctx.toggleCustomRule, 'opening never toggles').toHaveBeenCalledTimes(1)
+  })
+
+  it('a suggestion button adopts its own suggestion', () => {
+    const ctx = rulesCtx(false)
+    render(<RulesView ctx={ctx} />)
+    const buttons = screen.getAllByRole('button', { name: 'Add as custom rule' })
+
+    expect(buttons, 'control: one button per suggestion').toHaveLength(SUGGESTED_RULES.length)
+    fireEvent.click(buttons[1])
+    expect(ctx.addSuggestedRule).toHaveBeenCalledTimes(1)
+    expect(ctx.addSuggestedRule).toHaveBeenCalledWith(SUGGESTED_RULES[1])
+  })
+
+  it('an open golden key opens a read-only drawer; an open custom key opens one that removes that rule', () => {
+    const golden = render(<RulesView ctx={ctxWith({ openRuleKey: GOLDEN_RULES[1].key })} />)
+    const gDialog = screen.getByRole('dialog')
+    expect(gDialog.getAttribute('aria-label')).toBe(`Rule ${GOLDEN_RULES[1].key}`)
+    expect(within(gDialog).queryByText('Remove rule'), 'a golden drawer cannot remove').toBeNull()
+    expect(within(gDialog).getByText('ALWAYS ON')).toBeTruthy()
+    golden.unmount()
+
+    const remove = vi.fn()
+    const target = SEED_CUSTOM_RULES[3]
+    render(<RulesView ctx={ctxWith({ openRuleKey: target.key, removeCustomRule: remove })} />)
+    const cDialog = screen.getByRole('dialog')
+    expect(cDialog.getAttribute('aria-label')).toBe(`Rule ${target.key}`)
+    expect(screen.getAllByRole('dialog'), 'exactly one drawer').toHaveLength(1)
+    fireEvent.click(within(cDialog).getByText('Remove rule'))
+    expect(remove).toHaveBeenCalledTimes(1)
+    expect(remove).toHaveBeenCalledWith(target.key)
+  })
+
+  it('no drawer opens for no key or for a key that names no rule', () => {
+    const none = render(<RulesView ctx={rulesCtx(false)} />)
+    expect(screen.getAllByText('LOCKED'), 'control: the view rendered').not.toHaveLength(0)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    none.unmount()
+
+    render(<RulesView ctx={ctxWith({ openRuleKey: 'no.such.rule' })} />)
+    expect(screen.getAllByText('LOCKED'), 'control: the view rendered').not.toHaveLength(0)
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('the subtitle names the scope for a firm and for an in-house workspace', () => {
+    const firm = render(<RulesView ctx={rulesCtx(false)} />)
+    expect(screen.getByText("ASComply's golden ruleset plus the custom checks you run for Adaeze Ventures")).toBeTruthy()
+    firm.unmount()
+
+    render(<RulesView ctx={ctxWith({ mode: 'inhouse' })} />)
+    expect(screen.getByText("ASComply's golden ruleset plus the custom checks Adaeze Ventures runs internally")).toBeTruthy()
+  })
+})
+
+// Values are the Platform prototype's seed (goldenRules, seedCustomRules, ruleSuggestions), not read back from lib/rules.
+describe('RulesView, prototype seed', () => {
+  const GOLDEN = [
+    ['buyer.tin.required', 'required', 'buyer.tin', 'ERROR', 'Buyer TIN is mandatory'],
+    ['buyer.tin.format', 'regex', 'buyer.tin', 'ERROR', 'TIN must match 00000000-0000'],
+    ['vat.math', 'expression-CEL', 'totals.vat', 'ERROR', 'VAT must equal 7.5% of taxable base'],
+    ['line.description.required', 'required', 'lines[].description', 'ERROR', 'Every line needs a description'],
+    ['currency.enum', 'enum', 'header.currency', 'ERROR', 'Currency must be NGN, USD or EUR'],
+    ['invoice.no.unique', 'expression-CEL', 'header.invoice_no', 'ERROR', 'Invoice number must be unique per seller'],
+    ['issue.date.sequence', 'date_rule', 'header.issue_date', 'WARN', 'Issue date must not precede prior invoice'],
+  ]
+  const CUSTOM = [
+    ['po.number.required', 'required', 'header.po_number', 'ERROR', 'Purchase-order number is required on every invoice'],
+    ['buyer.approved.list', 'enum', 'buyer.tin', 'ERROR', 'Buyer must be on the approved customer list'],
+    ['cost.centre.required', 'required', 'lines[].cost_centre', 'WARN', 'Every line needs a cost centre'],
+    ['invoice.value.cap', 'range', 'totals.gross', 'WARN', 'Invoices above ₦500M need director approval'],
+    ['wht.required.services', 'cross_field', 'lines[].wht', 'WARN', 'WHT expected on service lines'],
+  ]
+
+  it('the table rows carry the prototype key, type, field, severity and message', () => {
+    const host = mountSsr(rulesCtx(false))
+    const rows = [...host.querySelectorAll('.pf-row')].map((r) => {
+      const c = [...r.children].map((e) => e.textContent)
+      return [c[0], c[1], c[2], c[3], c[5]]
+    })
+
+    expect(rows, 'control: every golden and custom row renders').toHaveLength(GOLDEN.length + CUSTOM.length)
+    expect(rows).toEqual([...GOLDEN, ...CUSTOM])
+  })
+
+  it('the rail carries the prototype versions and suggestions', () => {
+    const host = mountSsr(rulesCtx(false))
+    const text = host.textContent!
+
+    expect(text, 'control: the rail rendered').toContain('Golden ruleset · NG-MBS')
+    expect.soft(text).toContain('v8IN USEeff. 2026-06-01 · 7 rules')
+    expect.soft(text).toContain('v7SUPERSEDEDeff. 2026-04-15 · 40 rules')
+    expect.soft(text).toContain('buyer.email.formatDerived from 9 rejections on your invoicesAdd as custom rule')
+    expect.soft(text).toContain('lines[].hsn.requiredDerived from 6 rejections on your invoicesAdd as custom rule')
+    expect.soft(text).toContain('fx.rate.rangeDerived from 4 rejections on your USD invoicesAdd as custom rule')
+    expect.soft(text).toContain('Published and maintained by ASComply. New versions arrive automatically — you never edit these.')
+    expect.soft(text).toContain('Custom rules evaluate after the golden ruleset. A golden rule can never be disabled or edited.')
+    expect.soft(text).toContain('INHERITED · GOLDEN RULESET NG-MBS v8')
+    expect.soft(text).toContain('CUSTOM · Adaeze Ventures')
   })
 })

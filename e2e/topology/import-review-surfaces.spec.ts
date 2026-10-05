@@ -1144,7 +1144,9 @@ test.describe('RESKIN2-04 v2 extraction review at 1440', () => {
       const rendered = await cells.evaluateAll(
         (els) => els.filter((el) => { const pill = el.querySelector('span.mono'); return pill !== null && pill.textContent !== 'NO REGION' }).length,
       )
-      expect(rendered, `${fixture.name}: flagged fields rendered must equal the detail API's flagged count`).toBe(flagged)
+      // The line_items block and its cells render in LineItemGrid, not as header cells.
+      const headerFlagged = detail.fields.filter((f) => f.reason !== '' && !f.name.startsWith('line_items')).length
+      expect(rendered, `${fixture.name}: flagged header fields rendered must equal the detail API's flagged header count`).toBe(headerFlagged)
       tried.push({ fixture: fixture.name, flagged, rendered })
       await shootExtraction(page, testInfo, flagged === 0 ? 'extraction-confident.png' : `extraction-least-flagged-candidate-${flagged}-${fixture.name}.png`)
       if (flagged === 0) break

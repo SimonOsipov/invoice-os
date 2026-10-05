@@ -40,8 +40,8 @@ export function WorkflowSimulator({ policy, roles, sim, onSim, resolve }: {
   let approvalSeen = 0
 
   return (
-    <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 16, overflow: 'hidden' }}>
-      <div style={{ padding: '13px 15px', borderBottom: '1px solid var(--line-1)', fontSize: 13.5, fontWeight: 600 }}>Test a scenario</div>
+    <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+      <div style={{ padding: '13px 15px', borderBottom: '1px solid var(--line-1)', fontSize: 15, fontWeight: 700 }}>Test a scenario</div>
 
       <div style={{ padding: 15 }}>
         <div className="label" style={{ marginBottom: 6 }}>
@@ -77,14 +77,11 @@ export function WorkflowSimulator({ policy, roles, sim, onSim, resolve }: {
                 return (
                   <div key={n.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, position: 'relative', paddingBottom: 14 }}>
                     {notLast && (
-                      <>
-                        <span style={{ position: 'absolute', left: 11, top: 26, bottom: 2, width: 1.5, background: 'var(--line-2)', borderRadius: 2 }} />
-                        <span style={{ position: 'absolute', left: 8, bottom: 0, width: 0, height: 0, borderLeft: '4px solid transparent', borderRight: '4px solid transparent', borderTop: '5px solid var(--line-2)' }} />
-                      </>
+                      <span style={{ position: 'absolute', left: 11, top: 26, bottom: 2, width: 1.5, background: 'var(--line-2)' }} />
                     )}
                     <span
                       className="mono"
-                      style={{ flex: 'none', width: 24, height: 24, borderRadius: 99, display: 'grid', placeItems: 'center', background: tone.bg, color: tone.color, fontSize: 11, fontWeight: 700 }}
+                      style={{ flex: 'none', width: 24, height: 24, borderRadius: '50%', display: 'grid', placeItems: 'center', background: tone.bg, color: tone.color, fontSize: 11, fontWeight: 700 }}
                     >
                       {isApproval ? approvalSeen : n.type === 'autoapprove' ? '✓' : '·'}
                     </span>

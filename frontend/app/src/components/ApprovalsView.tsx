@@ -342,7 +342,7 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
 
       {(state === 'idle' || state === 'empty') && (
         <div data-testid="approvals-empty">
-          <EmptyState title={APPROVALS_COPY.emptyTitle} message={APPROVALS_COPY.emptyMessage} />
+          <EmptyState messageMaxWidth={360} title={APPROVALS_COPY.emptyTitle} message={APPROVALS_COPY.emptyMessage} />
         </div>
       )}
 

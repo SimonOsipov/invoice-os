@@ -7,13 +7,13 @@ import { Fragment, type ReactNode } from 'react'
 import { crossGlyph, tickGlyph11 } from '../glyphs'
 import type { StripNode, StripState } from '../lib/invoiceStrip'
 
-// Lifted verbatim from ApprovalStateCard's STATE_TONE -- no new hue.
-const TONE: Record<StripState, { bg: string; border: string; text: string }> = {
-  done: { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', text: 'var(--status-green-text)' },
-  failed: { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', text: 'var(--status-red-text)' },
-  current: { bg: 'var(--status-amber-bg)', border: 'var(--status-amber-border)', text: 'var(--status-amber-text)' },
-  unreached: { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)' },
-  'not-required': { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)' },
+// The prototype's strip map (Platform.dc.html); labels use --fg-3 where it draws --fg-4.
+const TONE: Record<StripState, { bg: string; border: string; fg: string; label: string }> = {
+  done: { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', fg: 'var(--status-green-text)', label: 'var(--fg-1)' },
+  failed: { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', fg: 'var(--status-red-text)', label: 'var(--fg-1)' },
+  current: { bg: 'var(--status-amber-bg)', border: 'var(--status-amber-text)', fg: 'var(--status-amber-text)', label: 'var(--status-amber-text)' },
+  unreached: { bg: 'var(--bg-2)', border: 'var(--line-3)', fg: 'var(--fg-4)', label: 'var(--fg-3)' },
+  'not-required': { bg: 'var(--bg-3)', border: 'var(--line-2)', fg: 'var(--fg-4)', label: 'var(--fg-3)' },
 }
 
 export function StatusStrip({ nodes }: { nodes: StripNode[] }): ReactNode {
@@ -30,36 +30,37 @@ export function StatusStrip({ nodes }: { nodes: StripNode[] }): ReactNode {
         display: 'flex',
         alignItems: 'flex-start',
         overflowX: 'auto',
-        marginBottom: 22,
+        marginBottom: 16,
         background: 'var(--bg-2)',
         border: '1px solid var(--line-1)',
         borderRadius: 'var(--radius-md)',
-        padding: '14px 18px',
+        padding: '13px 20px',
       }}
     >
       {nodes.map((n, i) => (
         <Fragment key={n.key}>
           {i > 0 && (
-            <span aria-hidden="true" style={{ flex: 1, minWidth: 8, height: 1, marginTop: 9, background: 'var(--line-2)' }} />
+            <span aria-hidden="true" style={{ flex: 1, minWidth: 10, height: 1, marginTop: 10, background: 'var(--line-2)' }} />
           )}
           <div
             data-testid="strip-node"
             data-key={n.key}
             data-state={n.state}
-            style={{ flex: 'none', minWidth: 'max-content', display: 'flex', alignItems: 'flex-start', gap: 8, padding: '0 10px' }}
+            style={{ flex: 'none', minWidth: 'max-content', display: 'flex', alignItems: 'flex-start', gap: 9, padding: '0 10px' }}
           >
             <span
               aria-hidden="true"
               style={{
                 flex: 'none',
-                width: 18,
-                height: 18,
-                borderRadius: 99,
+                width: 19,
+                height: 19,
+                marginTop: 1,
+                borderRadius: '50%',
                 display: 'grid',
                 placeItems: 'center',
                 background: TONE[n.state].bg,
                 border: `1px solid ${TONE[n.state].border}`,
-                color: TONE[n.state].text,
+                color: TONE[n.state].fg,
               }}
             >
               {n.state === 'done' ? (
@@ -67,11 +68,11 @@ export function StatusStrip({ nodes }: { nodes: StripNode[] }): ReactNode {
               ) : n.state === 'failed' ? (
                 crossGlyph
               ) : (
-                <span style={{ width: 8, height: 8, borderRadius: 99, background: 'currentColor' }} />
+                <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'currentColor' }} />
               )}
             </span>
             <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <span style={{ fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap', color: TONE[n.state].text }}>{n.label}</span>
+              <span style={{ fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap', color: TONE[n.state].label }}>{n.label}</span>
               {/* nowrap is the inverse of the retired card's overflowWrap:'anywhere': the strip
                   never wraps and never ellipsises, the container scrolls instead
                   (invoice-surfaces.spec.ts "no strip caption is ellipsised"). */}

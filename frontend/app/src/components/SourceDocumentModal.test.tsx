@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 // Per-file opt-in: vitest.config.ts stays `environment: 'node'` for every other suite.
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
@@ -110,17 +111,38 @@ function mockFetchByDoc(sheets: Record<string, DocumentSheet>) {
   )
 }
 
-function renderModal(meta: SourceDocumentAsync) {
-  return render(
+function modalEl(meta: SourceDocumentAsync, onClose: () => void = vi.fn()) {
+  return (
     <SourceDocumentModal
       ctx={modalCtx()}
       meta={meta}
       invoiceNumber="INV-2026-0037"
       invoiceCreatedAt="2026-06-12T09:15:00Z"
       createdBy="c0000000-0000-0000-0000-000000000001"
-      onClose={vi.fn()}
-    />,
+      onClose={onClose}
+    />
   )
+}
+
+function renderModal(meta: SourceDocumentAsync) {
+  return render(modalEl(meta))
+}
+
+// jsdom drops backdrop-filter from the style attribute, so the scrim is read from SSR markup.
+function ssrScrim(meta: SourceDocumentAsync): { html: string; decls: Map<string, string> } {
+  const html = renderToStaticMarkup(modalEl(meta))
+  const style = /^<div [^>]*style="([^"]*)"/.exec(html)?.[1]
+  expect(style, 'the outermost element is the scrim').toBeTruthy()
+  return { html, decls: new Map(style!.split(';').filter(Boolean).map((d) => [d.slice(0, d.indexOf(':')), d.slice(d.indexOf(':') + 1)])) }
+}
+
+function expectV2Scrim(decls: Map<string, string>) {
+  expect(decls.get('position'), 'control: the scrim declarations are read').toBe('fixed')
+  expect.soft(decls.get('background')).toBe('color-mix(in srgb, var(--surface) 55%, transparent)')
+  expect.soft(decls.get('backdrop-filter')).toBe('blur(6px)')
+  expect.soft(decls.get('-webkit-backdrop-filter')).toBe('blur(6px)')
+  expect.soft(decls.get('padding')).toBe('26px')
+  expect.soft(decls.get('z-index')).toBe('90')
 }
 
 beforeEach(() => {
@@ -158,6 +180,130 @@ describe('SourceDocumentModal shell', () => {
     expect(parseFloat(canvas.style.minHeight)).toBe(0)
     expect(parseFloat(canvas.style.minWidth)).toBe(0)
     expect(canvas.style.overflow).toBe('hidden')
+  })
+
+  it('the source modal scrim and panel are v2', async () => {
+    const { html, decls } = ssrScrim(metaAsync())
+    expectV2Scrim(decls)
+    expect.soft(html).not.toContain('oklch')
+
+    renderModal(metaAsync())
+    const panel = screen.getByRole('dialog')
+    expect(panel.style.maxWidth, 'control: the panel style is read').toBe('1340px')
+    expect.soft(panel.style.borderRadius).toBe('var(--radius-lg)')
+    expect.soft(panel.style.boxShadow).toBe('var(--shadow-card)')
+  })
+
+  it('the source modal header follows v2', async () => {
+    renderModal(metaAsync())
+
+    const panel = screen.getByRole('dialog')
+    const header = panel.firstElementChild as HTMLElement
+    const tile = header.firstElementChild as HTMLElement
+    const title = within(header).getByText('june-sales.xlsx') // the rail repeats the filename
+    const badge = within(header).getByText('IMMUTABLE RECORD')
+    expect(header.style.borderBottom, 'control: the header style is read').toBe('1px solid var(--line-1)')
+
+    expect.soft(header.style.padding).toBe('14px 18px')
+    expect.soft(header.style.gap).toBe('16px')
+    expect.soft(tile.style.borderRadius).toBe('var(--radius-md)')
+    expect.soft(title.parentElement!.style.gap).toBe('10px')
+    expect.soft(title.style.fontSize).toBe('15px')
+    expect.soft(title.style.fontWeight).toBe('700')
+    expect.soft(title.style.letterSpacing).toBe('-0.01em')
+    expect.soft(screen.getByTestId('source-document-meta').style.fontSize).toBe('10px')
+    expect.soft(badge.style.borderRadius).toBe('var(--radius-sm)')
+    expect.soft(badge.style.fontSize).toBe('9px')
+    expect.soft(badge.style.fontWeight).toBe('700')
+    expect.soft(badge.style.letterSpacing).toBe('0.08em')
+    expect.soft(badge.style.padding).toBe('3px 9px')
+    expect.soft(screen.getByTestId('source-modal-close').style.borderRadius).toBe('var(--radius-btn)')
+  })
+
+  // Pins: values the prototype draws that already hold at head.
+  it('the rest of the source modal header keeps the prototype geometry', async () => {
+    renderModal(metaAsync())
+
+    const panel = screen.getByRole('dialog')
+    const tile = (panel.firstElementChild as HTMLElement).firstElementChild as HTMLElement
+    const badge = screen.getByText('IMMUTABLE RECORD')
+    const meta = screen.getByTestId('source-document-meta')
+    const close = screen.getByTestId('source-modal-close')
+    expect(tile.style.width, 'control: the tile style is read').toBe('40px')
+
+    expect.soft(tile.style.height).toBe('40px')
+    expect.soft(panel.style.height).toBe('100%')
+    expect.soft(panel.style.border).toBe('1px solid var(--line-2)')
+    expect.soft(badge.style.background).toBe('var(--action-tint)')
+    expect.soft(badge.style.color).toBe('var(--action)')
+    expect.soft(meta.style.letterSpacing).toBe('0.05em')
+    expect.soft(meta.style.marginTop).toBe('3px')
+    expect.soft(close.style.width).toBe('34px')
+    expect.soft(close.style.height).toBe('34px')
+  })
+
+  it('no record, no badge', () => {
+    const loading = metaAsync({ status: 'loading', data: null })
+    renderModal(loading)
+    expect(screen.getByText('Source document'), 'control: the record-less header renders').toBeTruthy()
+    expect(screen.getByTestId('source-document-meta').textContent).toBe('NO FILE')
+    expect(screen.queryByText('IMMUTABLE RECORD'), 'pin: no record, no badge').toBeNull()
+    cleanup()
+
+    expectV2Scrim(ssrScrim(loading).decls)
+  })
+
+  // The shell does not depend on the state arm, and the badge is the one conditional piece.
+  it('the v2 shell holds on every state arm, and the badge follows the record', async () => {
+    const arms: Array<[string, SourceDocumentAsync, string, boolean]> = [
+      ['sheet', metaAsync(), 'june-sales.xlsx', true],
+      ['no-source', metaAsync({ data: response({ document: null, source_rows: null }) }), 'Source document', false],
+      ['loading', metaAsync({ status: 'loading', data: null }), 'Source document', false],
+      ['failed', metaAsync({ status: 'error', data: null, error: new ApiError('http', 'boom', 503) }), 'Source document', false],
+      [
+        'unrenderable',
+        metaAsync({ data: response({ document: record({ filename: 'ledger.dat', declared_content_type: null }) }) }),
+        'ledger.dat',
+        true,
+      ],
+    ]
+    expect(arms.length).toBeGreaterThan(0)
+
+    for (const [label, meta, titleText, hasBadge] of arms) {
+      const { html, decls } = ssrScrim(meta)
+      expectV2Scrim(decls)
+      expect(html, `${label}: oklch`).not.toContain('oklch')
+
+      renderModal(meta)
+      const panel = screen.getByRole('dialog')
+      const header = panel.firstElementChild as HTMLElement
+      const title = within(header).getByText(titleText)
+      expect(header.style.padding, `${label}: control: the header style is read`).toBe('14px 18px')
+      expect(panel.style.borderRadius, `${label}: panel radius`).toBe('var(--radius-lg)')
+      expect(panel.style.boxShadow, `${label}: panel shadow`).toBe('var(--shadow-card)')
+      expect(title.style.fontSize, `${label}: title size`).toBe('15px')
+      expect(title.style.fontWeight, `${label}: title weight`).toBe('700')
+      expect(screen.getByTestId('source-modal-close').style.borderRadius, `${label}: close radius`).toBe('var(--radius-btn)')
+      expect(within(header).queryByText('IMMUTABLE RECORD') !== null, `${label}: badge`).toBe(hasBadge)
+      cleanup()
+    }
+  })
+
+  it('the source modal closes from the backdrop, Escape and the close button, not from the panel', async () => {
+    const onClose = vi.fn()
+    render(modalEl(metaAsync(), onClose))
+
+    fireEvent.click(screen.getByRole('dialog'))
+    expect(onClose, 'a click inside the panel must not dismiss it').not.toHaveBeenCalled()
+    fireEvent.keyDown(window, { key: 'Enter' })
+    expect(onClose, 'only Escape dismisses').not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('dialog').parentElement!)
+    expect(onClose, 'the scrim closes').toHaveBeenCalledTimes(1)
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onClose, 'Escape closes').toHaveBeenCalledTimes(2)
+    fireEvent.click(screen.getByTestId('source-modal-close'))
+    expect(onClose, 'the close button closes').toHaveBeenCalledTimes(3)
   })
 
   it("renders each non-sheet state's own copy", async () => {

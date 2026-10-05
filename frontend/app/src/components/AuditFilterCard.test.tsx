@@ -1230,7 +1230,7 @@ describe('AuditFilterCard: pills row adversarial coverage (AUDIT-07-07)', () => 
         gap: '8px',
         height: '28px',
         padding: '0px 12px',
-        'font-size': '12.5px',
+        'font-size': '12px',
         'font-weight': '500',
         border: '1px solid var(--line-2)',
         background: 'var(--bg-1)',

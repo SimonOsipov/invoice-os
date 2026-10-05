@@ -105,15 +105,15 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
 
   return (
     <div style={{ padding: '30px 36px 56px' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 24, flexWrap: 'wrap', marginBottom: 22 }}>
-        <div>
-          <div className="eyebrow" style={{ marginBottom: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 20, flexWrap: 'wrap', marginBottom: 22 }}>
+        <div style={{ minWidth: 0 }}>
+          <div className="eyebrow" style={{ marginBottom: 7 }}>
             VALIDATION ENGINE
           </div>
-          <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Rules</h1>
+          <h1 style={{ fontSize: 26, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Rules</h1>
           <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>{subtitle}</p>
         </div>
-        <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
+        <span className="mono" style={{ flex: 'none', fontSize: 11, color: 'var(--fg-3)' }}>
           {total} RULES
         </span>
       </div>
@@ -136,10 +136,10 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
                   style={{ padding: '11px 14px', borderTop: '1px solid var(--line-1)', background: v.kind === 'active' ? 'var(--action-tint)' : 'var(--bg-2)' }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <span className="mono" style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, color: 'var(--fg-1)' }}>
+                    <span className="mono" style={{ fontSize: 13, fontWeight: 700, color: 'var(--fg-1)' }}>
                       {v.version}
                     </span>
-                    <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 999, padding: '2px 8px' }}>
+                    <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 'var(--radius-sm)', padding: '2px 8px' }}>
                       <span className="mono" style={{ fontSize: 9, fontWeight: 700, color: tone.text, letterSpacing: '0.04em' }}>
                         {v.tag}
                       </span>
@@ -159,13 +159,13 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
           <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', overflow: 'hidden' }}>
             <div style={{ padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid var(--line-1)' }}>
               <span style={{ color: 'var(--action)', display: 'inline-flex' }}>{sparkGlyph}</span>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>Suggested for you</span>
-              <span className="mono" style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 700, background: 'var(--action-tint)', color: 'var(--action)', borderRadius: 99, padding: '1px 7px' }}>
+              <span style={{ fontSize: 13, fontWeight: 700 }}>Suggested for you</span>
+              <span className="mono" style={{ fontSize: 10, fontWeight: 700, background: 'var(--action-tint)', color: 'var(--action)', borderRadius: 'var(--radius-sm)', padding: '1px 7px' }}>
                 {suggestions.length}
               </span>
             </div>
             {suggestions.length === 0 ? (
-              <div style={{ padding: '14px', fontSize: 12, lineHeight: 1.5, color: 'var(--fg-3)' }}>
+              <div style={{ padding: '12px 14px', fontSize: 12, lineHeight: 1.5, color: 'var(--fg-3)' }}>
                 {ctx.handoff
                   ? 'No suggestions to show.'
                   : 'Nothing to suggest right now — every rule we inferred from your rejections is already in your custom list.'}
@@ -183,7 +183,7 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
                     type="button"
                     onClick={() => ctx.addSuggestedRule(s)}
                     className="pf-btn"
-                    style={{ width: '100%', border: '1px solid var(--line-2)', background: 'var(--bg-2)', cursor: 'pointer', height: 28, borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-sans)', fontSize: 11.5, fontWeight: 600, color: 'var(--action)' }}
+                    style={{ width: '100%', border: '1px solid var(--line-2)', background: 'var(--bg-2)', cursor: 'pointer', height: 28, borderRadius: 'var(--radius-btn)', fontFamily: 'var(--font-sans)', fontSize: 11.5, fontWeight: 600, color: 'var(--action)' }}
                   >
                     Add as custom rule
                   </button>
@@ -197,8 +197,8 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
         <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflowX: 'auto', background: 'var(--bg-2)' }}>
           <div style={{ padding: '13px 16px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, minWidth: TABLE_MIN_WIDTH }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontSize: 14, fontWeight: 500, fontFamily: 'var(--font-display)' }}>Rules in force</span>
-              <span className="mono" style={{ fontSize: 10, fontWeight: 700, background: 'var(--action-tint)', color: 'var(--action)', border: '1px solid var(--teal-200)', borderRadius: 99, padding: '1px 8px' }}>
+              <span className="card-title">Rules in force</span>
+              <span className="mono" style={{ fontSize: 10, fontWeight: 700, background: 'var(--action-tint)', color: 'var(--action)', border: '1px solid var(--teal-200)', borderRadius: 'var(--radius-sm)', padding: '1px 8px' }}>
                 GOLDEN {GOLDEN_SET.version} + {customRules.length} CUSTOM
               </span>
             </div>
@@ -230,7 +230,7 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
               on={
                 // A lock, never a disabled toggle: a greyed-out switch says "you
                 // could flip this if you had permission", and no tenant ever can.
-                <span className="mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 9, fontWeight: 700, color: 'var(--fg-4)', letterSpacing: '0.04em' }}>
+                <span className="mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 9, fontWeight: 700, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
                   <span style={{ display: 'inline-flex' }}>{lockGlyph}</span>
                   LOCKED
                 </span>
@@ -240,7 +240,7 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
 
           <GroupHeader label={`CUSTOM · ${scope}`} accent />
           {customRules.length === 0 ? (
-            <div style={{ padding: '20px 16px', borderBottom: '1px solid var(--line-1)', fontSize: 13, lineHeight: 1.6, color: 'var(--fg-3)', minWidth: TABLE_MIN_WIDTH }}>
+            <div style={{ padding: '18px 16px', borderBottom: '1px solid var(--line-1)', fontSize: 13, lineHeight: 1.55, color: 'var(--fg-3)', minWidth: TABLE_MIN_WIDTH }}>
               {ctx.handoff
                 ? 'No custom rules yet — the golden ruleset alone is running.'
                 : 'No custom rules yet — the golden ruleset alone is running. Add one from the suggestions on the left.'}
@@ -266,7 +266,7 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
                       className="pf-toggle"
                       style={{ display: 'inline-flex', width: 34, height: 20, borderRadius: 99, background: r.enabled ? 'var(--action)' : 'var(--line-3)', padding: 2, border: 0, cursor: 'pointer' }}
                     >
-                      <span className="pf-knob" style={{ width: 16, height: 16, borderRadius: 99, background: 'var(--bg-2)', transform: r.enabled ? 'translateX(14px)' : 'translateX(0)', boxShadow: 'var(--shadow-soft)' }} />
+                      <span className="pf-knob" style={{ width: 16, height: 16, borderRadius: '50%', background: 'var(--bg-2)', transform: r.enabled ? 'translateX(14px)' : 'translateX(0)' }} />
                     </button>
                   </span>
                 }
@@ -274,7 +274,7 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
             ))
           )}
 
-          <div style={{ padding: '11px 16px', background: 'var(--bg-1)', fontSize: 11.5, color: 'var(--fg-3)', minWidth: TABLE_MIN_WIDTH }}>
+          <div style={{ padding: '12px 16px', lineHeight: 1.5, fontSize: 11.5, color: 'var(--fg-3)', minWidth: TABLE_MIN_WIDTH }}>
             Custom rules evaluate after the golden ruleset. A golden rule can never be disabled or edited.
           </div>
         </div>

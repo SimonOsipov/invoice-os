@@ -5,8 +5,8 @@
 // returns `blob:nodedata:…`), so the lifecycle specs spy and restore. Assigning and then
 // `delete`-ing would strip a working global for the rest of the worker.
 //
-// jsdom normalises `background`: `oklch(28% .015 210)` reads back `oklch(0.28 0.015 210)`.
-// `boxShadow`, `transform` and `width` round-trip raw.
+// jsdom round-trips `boxShadow`, `transform` and `width` raw and normalises `0` to `0px` in
+// shorthands (`padding: 0 11px` reads back `0px 11px`).
 
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -185,9 +185,52 @@ describe('SourceDocumentPdf', () => {
   })
 })
 
+describe('SourceDocumentPdf toolbar', () => {
+  it('the PDF toolbar follows the prototype', () => {
+    render(<SourceDocumentPdf url="blob:pdf-1" />)
+
+    const toolbar = screen.getByTestId('pdf-toolbar')
+    expect(toolbar.textContent, 'control: the toolbar is read').toContain(PDF_STAMP)
+    expect.soft(toolbar.style.padding).toBe('11px 16px')
+    expect.soft(toolbar.style.gap).toBe('12px')
+    expect(toolbar.style.background, 'pin').toBe('var(--bg-2)')
+    expect(toolbar.style.borderBottom, 'pin').toBe('1px solid var(--line-1)')
+
+    const note = Array.from(toolbar.children).find((c) => c.textContent === PDF_NOTE) as HTMLElement
+    expect(note, 'control: the note span').toBeDefined()
+    expect.soft(note.style.fontSize).toBe('12.5px')
+    expect.soft(note.style.color).toBe('var(--fg-2)')
+
+    const stamp = Array.from(toolbar.children).find((c) => c.textContent === PDF_STAMP) as HTMLElement
+    expect(stamp.className, 'pin').toContain('mono')
+    expect.soft(stamp.style.fontSize).toBe('10px')
+    expect.soft(stamp.style.letterSpacing).toBe('0.06em')
+    expect.soft(stamp.style.color).toBe('var(--fg-3)')
+
+    // pin: a blob: PDF cannot be zoomed from here, so the PDF toolbar offers no control
+    expect(toolbar.querySelectorAll('button').length).toBe(0)
+  })
+})
+
+describe('SourceDocumentPdf ground', () => {
+  it('the PDF ground is a padded --bg-3 wrapper around the embed', () => {
+    const { container } = render(<SourceDocumentPdf url="blob:pdf-1" />)
+
+    const embed = screen.getByTestId('pdf-embed')
+    const canvas = screen.getByTestId('source-document-pdf')
+    const ground = embed.parentElement as HTMLElement
+    expect(ground, 'control: the embed sits in its own wrapper').not.toBe(canvas)
+    expect(canvas.contains(ground), 'control: the wrapper is inside the canvas').toBe(true)
+    expect.soft(ground.style.padding).toBe('22px')
+    expect.soft(ground.style.background).toBe('var(--bg-3)')
+    expect.soft(ground.style.display).toBe('flex')
+    expect.soft(container.innerHTML, 'no oklch literal').not.toContain('oklch')
+  })
+})
+
 describe('SourceDocumentImage', () => {
-  it('the image canvas renders the photograph on the dark ground', () => {
-    render(<SourceDocumentImage url="blob:img-1" filename="receipt.jpg" />)
+  it('the image canvas renders the photograph on the surface ground', () => {
+    const { container } = render(<SourceDocumentImage url="blob:img-1" filename="receipt.jpg" />)
 
     const img = screen.getByTestId('source-image')
     expect(img.getAttribute('src')).toBe('blob:img-1')
@@ -195,9 +238,14 @@ describe('SourceDocumentImage', () => {
     expect(img.style.width).toBe('520px')
     expect(img.style.transform).toBe('rotate(-1.1deg)')
 
-    // jsdom rewrites the percentage and the leading dot: `oklch(28% .015 210)` reads back
-    // as `oklch(0.28 0.015 210)`. Asserting the authored literal fails.
-    expect(screen.getByTestId('image-ground').style.background).toBe('oklch(0.28 0.015 210)')
+    const ground = screen.getByTestId('image-ground')
+    expect.soft(ground.style.background).toBe('var(--surface-2)')
+    expect.soft(ground.style.padding).toBe('30px')
+    expect(ground.style.overflow, 'pin: live zoom scrolls the ground').toBe('auto')
+    expect.soft(ground.style.display, 'grid keeps a zoomed photo scrollable from its left edge').toBe('grid')
+    expect.soft(ground.style.placeItems).toBe('center')
+    expect.soft(img.style.boxShadow).toBe('var(--shadow-card)')
+    expect.soft(container.innerHTML, 'no oklch literal').not.toContain('oklch')
 
     expect(screen.getByTestId('image-toolbar').textContent).toContain(IMAGE_NOTE)
   })
@@ -232,6 +280,54 @@ describe('SourceDocumentImage', () => {
 
     // Zoom moves width, never the rotation.
     expect(img().style.transform).toBe('rotate(-1.1deg)')
+  })
+})
+
+describe('SourceDocumentImage toolbar', () => {
+  it('zoom buttons are separate 4px mono chips', () => {
+    render(<SourceDocumentImage url="blob:img-1" filename="receipt.jpg" />)
+    fireEvent.click(screen.getByTestId('zoom-150'))
+
+    const buttons = ['zoom-50', 'zoom-100', 'zoom-150'].map((id) => screen.getByTestId(id))
+    const toolbar = screen.getByTestId('image-toolbar')
+    expect(screen.getByTestId('zoom-150').getAttribute('aria-pressed'), 'control: the click landed').toBe('true')
+
+    for (const b of buttons) {
+      const id = b.getAttribute('data-testid')
+      expect.soft(b.parentElement, `${id}: no track around the buttons`).toBe(toolbar)
+      expect.soft(b.style.borderRadius, `${id}: radius`).toBe('var(--radius-sm)')
+      expect.soft(b.style.fontFamily, `${id}: font`).toBe('var(--font-mono)')
+      expect.soft(b.style.fontSize, `${id}: size`).toBe('11px')
+      expect.soft(b.style.fontWeight, `${id}: weight`).toBe('600')
+      expect.soft(b.style.height, `${id}: height`).toBe('26px')
+      expect.soft(b.style.padding, `${id}: padding`).toBe('0px 11px')
+    }
+
+    const active = screen.getByTestId('zoom-150')
+    expect.soft(active.style.background).toBe('var(--fg-1)')
+    expect.soft(active.style.color).toBe('var(--bg-2)')
+    expect.soft(active.style.border).toContain('--fg-1')
+    for (const id of ['zoom-50', 'zoom-100']) {
+      const b = screen.getByTestId(id)
+      expect.soft(b.style.background, `${id}: background`).toBe('transparent')
+      expect.soft(b.style.color, `${id}: colour`).toBe('var(--fg-3)')
+      expect.soft(b.style.border, `${id}: border`).toContain('--line-2')
+    }
+  })
+
+  it('the image toolbar and caption follow the prototype', () => {
+    render(<SourceDocumentImage url="blob:img-1" filename="receipt.jpg" />)
+
+    const toolbar = screen.getByTestId('image-toolbar')
+    expect.soft(toolbar.style.padding).toBe('11px 16px')
+    expect(toolbar.style.gap, 'pin').toBe('10px')
+    expect(toolbar.style.background, 'pin').toBe('var(--bg-2)')
+
+    const caption = Array.from(toolbar.children).find((c) => c.textContent === IMAGE_NOTE) as HTMLElement
+    expect(caption, 'control: the caption span').toBeDefined()
+    expect.soft(caption.style.marginLeft).toBe('6px')
+    expect.soft(caption.style.fontSize).toBe('12.5px')
+    expect.soft(caption.style.color).toBe('var(--fg-2)')
   })
 })
 
@@ -416,11 +512,11 @@ describe('QA adversarial coverage', () => {
     expect(img.getAttribute('onload')).toBeNull()
   })
 
-  it('the photograph shadow is the exact literal, not just non-empty', () => {
+  it('the photograph shadow is the card token and the tilt stays', () => {
     render(<SourceDocumentImage url="blob:img-1" filename="receipt.jpg" />)
-    // boxShadow round-trips raw under this jsdom (measured, unlike `background`), so the
-    // authored literal is assertable exactly rather than only checking length > 0.
-    expect(screen.getByTestId('source-image').style.boxShadow).toBe('0 18px 44px -14px oklch(20% .02 210 / 0.55)')
+    const img = screen.getByTestId('source-image')
+    expect.soft(img.style.boxShadow).toBe('var(--shadow-card)')
+    expect(img.style.transform, 'pin').toBe('rotate(-1.1deg)')
   })
 
   it('a zoom round trip returns exactly to 100%', () => {

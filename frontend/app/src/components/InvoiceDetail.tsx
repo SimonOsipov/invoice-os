@@ -115,25 +115,12 @@ export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
 // line ordering, and diffLineItems compares by position over the five content fields only.
 type LineRowState = Record<'description' | 'quantity' | 'unit_price' | 'line_total' | 'line_tax', string>
 
-// Six columns: description / qty / unit / amount / tax / remove. Declared once so the
-// header row and the body rows can never drift apart.
-//
-// Widths are budgeted against the row's REAL content box, which is narrow: this table
-// sits in the left cell of the page's `1fr 340px` split, so at a viewport V the row has
-// V - 772px to spend (V, less the 252px sidebar + scrollbar, the 36px page gutters, the
-// 340px right rail + 16px gap, and the card/table borders + 24px card and 14px row
-// padding). At V=1280 that is 508px. The five fixed tracks used to total 432px and the
-// five 10px gaps another 50, leaving the flexible description track 26px -- narrower than
-// its own input chrome, so the text was invisible. Trimming the numerics (qty holds 2-4
-// digits, not 5) hands description 164px at 1280.
-//
-// Deliberately NO `minmax()` floor on description: 508px is fully spent at 1280, so a
-// floor at the resolved width buys nothing there and below it would push the row past a
-// parent that clips (`overflow: hidden`), hiding the remove button rather than the
-// description. A bare `1fr` degrades by shrinking, which is the safer failure. The
-// numeric inputs override .pf-input's 12px side padding down to 8px so the trimmed tracks
-// still show ~6 mono characters instead of ~5.
-const LINE_EDIT_GRID = '1fr 52px 70px 70px 70px 32px'
+// description / qty / unit / amount / tax / remove, declared once so header and rows cannot drift.
+// Tracks are the prototype's, with a 120px Description floor; the box scrolls sideways only when the floor no longer fits.
+// The numeric inputs override .pf-input's side padding down to 8px to keep the mono digits legible.
+const LINE_EDIT_GRID = 'minmax(120px, 1fr) 64px 110px 110px 100px 28px'
+const EDIT_INPUT = { height: 34, fontSize: 13, padding: '0 10px' } as const
+const LINE_INPUT = { ...EDIT_INPUT, height: 30 } as const
 
 function rowsFromInvoice(inv: Pick<InvoiceRecord, 'line_items'>): LineRowState[] {
   return (inv.line_items ?? []).map((it) => ({
@@ -353,21 +340,24 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     // historical one stays below Approval state so it doesn't overstate a resolved event.
     const rejectionLeadsRail = rejectionProvenance(inv.status) === 'current'
     const rejectionCard = shouldShowRejectionCard(inv) ? (
-      <div data-testid="rejection-reasons" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-        <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
-          <span className="card-title">
-            {rejectionProvenance(inv.status) === 'current' ? 'This invoice was rejected' : 'Last APP rejection'}
+      <div
+        data-testid="rejection-reasons"
+        style={{ background: 'var(--bg-2)', border: `1px solid ${rejectionLeadsRail ? 'var(--status-red-border)' : 'var(--line-1)'}`, borderRadius: 'var(--radius-md)', overflow: 'hidden' }}
+      >
+        <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)', ...(rejectionLeadsRail ? { background: 'var(--status-red-bg)' } : null) }}>
+          <span className="card-title" style={rejectionLeadsRail ? { color: 'var(--status-red-text)' } : undefined}>
+            {rejectionLeadsRail ? 'This invoice was rejected' : 'Last APP rejection'}
           </span>
         </div>
-        <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div>
           {inv.rejection_reasons.map((reason, i) => (
             <div
               key={i}
               data-testid="rejection-reason-row"
-              style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)' }}
+              style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '12px 18px', ...(i > 0 ? { borderTop: '1px solid var(--line-1)' } : null) }}
             >
-              <div className="mono" style={{ fontSize: 11, fontWeight: 600, color: 'var(--status-red-text)' }}>{reason.code}</div>
-              <div style={{ fontSize: 12.5, color: 'var(--fg-2)', marginTop: 3 }}>{reason.message}</div>
+              <span className="mono" style={{ fontSize: 11, fontWeight: 600, color: 'var(--status-red-text)' }}>{reason.code}</span>
+              <span style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>{reason.message}</span>
             </div>
           ))}
         </div>
@@ -597,10 +587,10 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               INVOICE DETAIL
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>
-              <h1 className="mono" style={{ fontSize: 22, fontWeight: 600, letterSpacing: '-0.01em', margin: 0, whiteSpace: 'nowrap' }}>{inv.invoice_number}</h1>
-              <span data-testid="invoice-status-badge" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: st.bg, border: `1px solid ${st.border}`, borderRadius: 999, padding: '4px 10px' }}>
-                <span style={{ width: 6, height: 6, borderRadius: 99, background: st.text }} />
-                <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: st.text }}>{st.label}</span>
+              <h1 className="mono" style={{ fontSize: 22, letterSpacing: '-0.01em', margin: 0, whiteSpace: 'nowrap' }}>{inv.invoice_number}</h1>
+              <span data-testid="invoice-status-badge" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: st.bg, border: `1px solid ${st.border}`, borderRadius: 'var(--radius-sm)', padding: '3px 9px' }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: st.text }} />
+                <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: st.text, letterSpacing: '0.04em' }}>{st.label}</span>
               </span>
             </div>
             <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>{inv.buyer_name ?? '—'} · {fmtDate(inv.issue_date ?? inv.created_at)}</p>
@@ -615,7 +605,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               still render -- [never-report-success-on-a-skip] is not allowed to depend on
               the bar being mounted. */}
           {(!editing || submitSkipped != null || submitError != null) && (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, maxWidth: 320 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10, maxWidth: 320 }}>
               {/* The decision pair, gated on `!editing` alone -- NOT
                   `can_edit` (task-554, AC-1/AC-2): approve/reject must survive on statuses
                   where `can_edit` is false (queued, submitted, failed, ...), and a decision
@@ -629,7 +619,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   (ghost) does not. */}
               {!editing && (
                 <>
-                  <div data-testid="detail-decision-actions" style={{ display: 'flex', gap: 8 }}>
+                  <div data-testid="detail-decision-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                     {/* Arm -> confirm, same inline machine as Submit below ([no-modal]) --
                         swaps in place to detail-approve-cancel/-confirm while armed. Reject
                         stays independently clickable throughout (disabled only while its own
@@ -643,9 +633,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         title={!inv.can_approve ? (inv.approve_blocked_reason ?? undefined) : undefined}
                         className="v2-btn v2-btn-primary pf-btn"
                         style={{
-                          height: 32,
-                          padding: '0 14px',
-                          fontSize: 13,
+                          height: 34,
                           ...(!inv.can_approve
                             ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' }
                             : null),
@@ -662,9 +650,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                           disabled={approvePhase === 'submitting'}
                           className="v2-btn v2-btn-ghost pf-btn"
                           style={{
-                            height: 32,
-                            padding: '0 14px',
-                            fontSize: 13,
+                            height: 34,
                             ...(approvePhase === 'submitting' ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
                           }}
                         >
@@ -677,9 +663,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                           disabled={approvePhase === 'submitting'}
                           className="v2-btn v2-btn-primary pf-btn"
                           style={{
-                            height: 32,
-                            padding: '0 14px',
-                            fontSize: 13,
+                            height: 34,
                             ...(approvePhase === 'submitting' ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
                           }}
                         >
@@ -695,30 +679,26 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       title={!inv.can_reject ? (inv.reject_blocked_reason ?? undefined) : undefined}
                       className="v2-btn v2-btn-ghost pf-btn"
                       style={{
-                        height: 32,
-                        padding: '0 14px',
-                        fontSize: 13,
+                        height: 34,
                         ...(!inv.can_reject || rejectOpen ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
                       }}
                     >
                       {DETAIL_DECISION_COPY.reject}
                     </button>
                   </div>
-                  {demoBlockedMember != null && <BlockedByRoleNote member={demoBlockedMember} />}
                   {/* Founder-pinned copy, verbatim (DETAIL_DECISION_COPY) -- same placement
                       and styling as detail-submit-confirm-prompt below. */}
                   {approvePhase !== 'idle' && (
-                    <div data-testid="detail-approve-confirm-prompt" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
-                      <div>{DETAIL_DECISION_COPY.approvePrompt}</div>
-                      <div>{DETAIL_DECISION_COPY.approveDetail}</div>
+                    <div data-testid="detail-approve-confirm-prompt" style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)' }}>{DETAIL_DECISION_COPY.approvePrompt}</div>
+                      <div style={{ fontSize: 12, color: 'var(--fg-3)' }}>{DETAIL_DECISION_COPY.approveDetail}</div>
                     </div>
                   )}
                   {/* Inline reject row, never a modal ([no-modal]) -- a sibling OUTSIDE
-                      detail-decision-actions, resolve-outside's row shape verbatim
-                      (:944-991 below): flexWrap:'wrap' is mandatory, not cosmetic -- the
+                      detail-decision-actions: flexWrap:'wrap' is mandatory, not cosmetic -- the
                       input plus both button labels don't fit on one line at 320px. */}
                   {rejectOpen && (
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                       <input
                         type="text"
                         data-testid="detail-reject-reason"
@@ -728,7 +708,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         onChange={(e) => setRejectReason(e.target.value)}
                         disabled={rejecting}
                         className="pf-input"
-                        style={{ flex: '1 1 220px', minWidth: 160, height: 32, fontSize: 12.5 }}
+                        style={{ flex: '1 1 100%', height: 34, fontSize: 13, padding: '0 10px' }}
                       />
                       <button
                         type="button"
@@ -740,9 +720,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         disabled={rejecting}
                         className="v2-btn v2-btn-ghost pf-btn"
                         style={{
-                          height: 32,
-                          padding: '0 14px',
-                          fontSize: 13,
+                          height: 34,
                           flexShrink: 0,
                           whiteSpace: 'nowrap',
                           ...(rejecting ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
@@ -757,9 +735,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         disabled={rejecting || !canRejectReason(rejectReason)}
                         className="v2-btn v2-btn-primary pf-btn"
                         style={{
-                          height: 32,
-                          padding: '0 14px',
-                          fontSize: 13,
+                          height: 34,
                           flexShrink: 0,
                           whiteSpace: 'nowrap',
                           ...(rejecting || !canRejectReason(rejectReason)
@@ -771,11 +747,12 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       </button>
                     </div>
                   )}
+                  {demoBlockedMember != null && <BlockedByRoleNote member={demoBlockedMember} />}
                 </>
               )}
               {!editing && (
-                <div data-testid="invoice-actions" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
-                  <div style={{ display: 'flex', gap: 8 }}>
+                <div data-testid="invoice-actions" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10 }}>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                     <button
                       type="button"
                       data-testid="edit-toggle"
@@ -787,9 +764,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       disabled={!inv.can_edit}
                       className="v2-btn v2-btn-primary pf-btn"
                       style={{
-                        height: 32,
-                        padding: '0 14px',
-                        fontSize: 13,
+                        height: 34,
                         ...(!inv.can_edit ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' } : null),
                       }}
                     >
@@ -819,9 +794,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       title={!inv.can_revalidate ? (inv.revalidate_blocked_reason ?? undefined) : undefined}
                       className="v2-btn v2-btn-ghost pf-btn"
                       style={{
-                        height: 32,
-                        padding: '0 14px',
-                        fontSize: 13,
+                        height: 34,
                         // Spread ONLY when disabled: an inline `background` on the enabled
                         // button would also kill its legitimate :hover affordance.
                         ...(revalidateDisabled ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
@@ -848,9 +821,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                           title={!inv.can_submit ? (inv.submit_blocked_reason ?? undefined) : undefined}
                           className="v2-btn v2-btn-primary pf-btn"
                           style={{
-                            height: 32,
-                            padding: '0 14px',
-                            fontSize: 13,
+                            height: 34,
                             ...(!inv.can_submit ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' } : null),
                           }}
                         >
@@ -865,9 +836,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                             disabled={submitPhase === 'submitting'}
                             className="v2-btn v2-btn-ghost pf-btn"
                             style={{
-                              height: 32,
-                              padding: '0 14px',
-                              fontSize: 13,
+                              height: 34,
                               ...(submitPhase === 'submitting' ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
                             }}
                           >
@@ -880,9 +849,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                             disabled={submitPhase === 'submitting'}
                             className="v2-btn v2-btn-primary pf-btn"
                             style={{
-                              height: 32,
-                              padding: '0 14px',
-                              fontSize: 13,
+                              height: 34,
                               ...(submitPhase === 'submitting' ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
                             }}
                           >
@@ -893,7 +860,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   </div>
                   {/* Genuine-failure surface, moved here from the deleted fused card. Style
                       unchanged; only the card-relative `margin` is dropped, since the column's
-                      own `gap: 8` now does that spacing. */}
+                      own `gap` now does that spacing. */}
                   {revalidateError && (
                     <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)', textAlign: 'left' }}>
                       {revalidateError}
@@ -902,9 +869,9 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   {/* Founder-pinned copy, verbatim (DETAIL_SUBMIT_COPY) -- two sentences as two
                       lines, matching ReviewInvoicesTab's bulk-bar confirm stage. */}
                   {submitPhase !== 'idle' && (
-                    <div data-testid="detail-submit-confirm-prompt" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
-                      <div>{DETAIL_SUBMIT_COPY.prompt}</div>
-                      <div>{DETAIL_SUBMIT_COPY.detail}</div>
+                    <div data-testid="detail-submit-confirm-prompt" style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)' }}>{DETAIL_SUBMIT_COPY.prompt}</div>
+                      <div style={{ fontSize: 12, color: 'var(--fg-3)' }}>{DETAIL_SUBMIT_COPY.detail}</div>
                     </div>
                   )}
                 </div>
@@ -982,7 +949,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         <div data-testid="buyer-tin" className="mono" style={{ fontSize: 11, color: isBuyerTinMissing(inv.buyer_tin) ? 'var(--status-red-text)' : 'var(--fg-3)' }}>{isBuyerTinMissing(inv.buyer_tin) ? BUYER_TIN_MISSING : inv.buyer_tin}</div>
                       </div>
                     </div>
-                    <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-input)', overflow: 'hidden' }}>
+                    <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 60px 120px 120px', gap: 10, padding: '9px 14px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
                         <span className="label">Description</span>
                         <span className="label" style={{ textAlign: 'right' }}>Qty</span>
@@ -1020,24 +987,24 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
             </div>
 
             <div data-testid="compliance-card" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-              <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
                 <span className="card-title">Compliance</span>
                 {/* Gated on the same condition that chooses the table over not-validated:
                     an invoice never validated must not be told a version. */}
                 {inv.rule_set_version != null && (
-                  <span data-testid="compliance-ruleset-version" className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
+                  <span data-testid="compliance-ruleset-version" className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)' }}>
                     Rule-set v{inv.rule_set_version}
                   </span>
                 )}
               </div>
-              <div style={{ padding: 16 }}>
+              <div style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {/* The persisted reason, verbatim (BUG-03-03) -- amber, matching
                     ReviewRow.tsx's own kept-as-is banner rather than inventing a second
                     tone for the same fact. */}
                 {kept && (
                   <div
                     data-testid="detail-kept-banner"
-                    style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)', lineHeight: 1.5 }}
+                    style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)', lineHeight: 1.5 }}
                   >
                     <div>{ROW_EXPANSION_COPY.keptPrefix}{kept.reason}</div>
                     <div className="mono" style={{ marginTop: 4, opacity: 0.85 }}>{actorLabel(kept.by).text} · {fmtDateTime(kept.at)}</div>
@@ -1046,7 +1013,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                 {verdict === 'stale' && (
                   <div
                     data-testid="stale-verdict"
-                    style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)' }}
+                    style={{ padding: '9px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)' }}
                   >
                     Edited since the last validation — this verdict is stale. Run Re-validate to refresh it.
                   </div>
@@ -1056,10 +1023,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                     <ViolationsTable violations={inv.violations} ruleSetVersion={inv.rule_set_version} />
                   </div>
                 ) : (
-                  <div
-                    data-testid="not-validated"
-                    style={{ padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--bg-3)', border: '1px solid var(--line-2)', fontSize: 12.5, color: 'var(--fg-2)' }}
-                  >
+                  <div data-testid="not-validated" style={{ fontSize: 13, color: 'var(--fg-3)' }}>
                     {ROW_EXPANSION_COPY.notValidated}
                   </div>
                 )}
@@ -1069,22 +1033,19 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
             <InvoiceActivityCard ctx={ctx} invoiceId={invoiceId} invoiceNumber={inv.invoice_number} />
           </div>
 
-          <div data-testid="invoice-rail" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div data-testid="invoice-rail" style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
             {inv.status === 'failed' && (
-              <div data-testid="failed-dead-end" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-                <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
-                  <span className="card-title">Submission failed</span>
+              <div data-testid="failed-dead-end" style={{ background: 'var(--bg-2)', border: '1px solid var(--status-red-border)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+                <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--status-red-bg)' }}>
+                  <span className="card-title" style={{ color: 'var(--status-red-text)' }}>Submission failed</span>
                 </div>
-                <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  <div style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>
+                <div style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 9, fontSize: 12.5, lineHeight: 1.5 }}>
+                  <div style={{ color: 'var(--fg-2)' }}>
                     This submission failed and is terminal — it cannot be re-driven from this screen.
                   </div>
-                  <div data-testid="failure-headline" style={{ fontSize: 13, fontWeight: 600 }}>{failure.headline}</div>
-                  <div data-testid="failure-detail" style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>{failure.detail}</div>
-                  <div
-                    data-testid="failure-next-step"
-                    style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)' }}
-                  >
+                  <div data-testid="failure-headline" style={{ fontWeight: 600 }}>{failure.headline}</div>
+                  <div data-testid="failure-detail" style={{ color: 'var(--fg-2)' }}>{failure.detail}</div>
+                  <div data-testid="failure-next-step" style={{ color: 'var(--fg-2)' }}>
                     {failure.nextStep}
                   </div>
                   {/* Resolve-outside (Core AC #1/#4/#5/#6) -- inline, never a modal
@@ -1092,13 +1053,10 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       Resolved and unresolved are mutually exclusive renders: the banner +
                       Undo replace the reason input + mark-resolved button entirely. */}
                   {resolvedMark ? (
-                    <>
-                      <div
-                        data-testid="detail-resolved-banner"
-                        style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)', lineHeight: 1.5 }}
-                      >
-                        <div>{RESOLVE_OUTSIDE_COPY.resolvedPrefix}{resolvedMark.reason}</div>
-                        <div className="mono" style={{ marginTop: 4, opacity: 0.85 }}>{actorLabel(resolvedMark.by).text} · {fmtDateTime(resolvedMark.at)}</div>
+                    <div style={{ paddingTop: 10, borderTop: '1px solid var(--line-1)' }}>
+                      <div data-testid="detail-resolved-banner">
+                        <div style={{ fontWeight: 600, color: 'var(--fg-1)' }}>{RESOLVE_OUTSIDE_COPY.resolvedPrefix}{resolvedMark.reason}</div>
+                        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', margin: '3px 0 8px' }}>{actorLabel(resolvedMark.by).text} · {fmtDateTime(resolvedMark.at)}</div>
                       </div>
                       {/* Re-resolving is legal (the wire's can_resolve_outside does not go
                           false once resolved), so Undo reads the same flag as the mark
@@ -1112,18 +1070,16 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         title={!inv.can_resolve_outside ? (inv.resolve_outside_blocked_reason ?? undefined) : undefined}
                         className="v2-btn v2-btn-ghost pf-btn"
                         style={{
-                          height: 32,
-                          padding: '0 14px',
-                          fontSize: 13,
-                          alignSelf: 'flex-start',
+                          height: 30,
+                          fontSize: 12.5,
                           ...(!inv.can_resolve_outside || undoing ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
                         }}
                       >
                         {RESOLVE_OUTSIDE_COPY.undoLabel}
                       </button>
-                    </>
+                    </div>
                   ) : (
-                    <>
+                    <div style={{ paddingTop: 10, borderTop: '1px solid var(--line-1)' }}>
                       {/* The label is wider than the rail can hold beside the input, so the
                           row wraps to a second line instead of squeezing text inside the pill. */}
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -1136,32 +1092,30 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                           onChange={(e) => setResolveReason(e.target.value)}
                           disabled={resolving}
                           className="pf-input"
-                          style={{ flex: '1 1 220px', minWidth: 160, height: 32, fontSize: 12.5 }}
+                          style={{ flex: '1 1 220px', minWidth: 160, height: 34, fontSize: 13 }}
                         />
-                        {/* Same two-layer disabled recipe as Submit -- `filter: 'none'` is
-                            mandatory: this is `.v2-btn-primary`, whose unguarded `:hover`
-                            (app-layer.css) sets `filter: brightness(1.22)`. */}
+                        {/* Disabled recipe as Reject / Re-validate: inline fill, because the ghost
+                            `:hover` is not guarded by `:not(:disabled)`. */}
                         <button
                           type="button"
                           data-testid="resolve-outside"
                           onClick={() => void handleResolveOutside()}
                           disabled={resolveOutsideDisabled}
                           title={!inv.can_resolve_outside ? (inv.resolve_outside_blocked_reason ?? undefined) : undefined}
-                          className="v2-btn v2-btn-primary pf-btn"
+                          className="v2-btn v2-btn-ghost pf-btn"
                           style={{
                             height: 32,
-                            padding: '0 14px',
-                            fontSize: 13,
+                            fontSize: 12.5,
                             // Must not flex-shrink below its own text -- that's what wrapped the label.
                             flexShrink: 0,
                             whiteSpace: 'nowrap',
-                            ...(resolveOutsideDisabled ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' } : null),
+                            ...(resolveOutsideDisabled ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
                           }}
                         >
                           {RESOLVE_OUTSIDE_COPY.label}
                         </button>
                       </div>
-                    </>
+                    </div>
                   )}
                   {/* Outside the resolved/unresolved ternary on purpose: a failed
                       handleUndoResolveOutside sets this too, and it must not be stranded
@@ -1182,20 +1136,20 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                 <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
                   <span className="card-title">Fiscal record</span>
                 </div>
-                <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 11 }}>
                   <div>
                     <div className="label" style={{ marginBottom: 3 }}>IRN</div>
-                    <div data-testid="fiscal-irn" className="mono" style={{ fontSize: 12.5, wordBreak: 'break-all', lineHeight: 1.4 }}>{inv.irn}</div>
+                    <div data-testid="fiscal-irn" className="mono" style={{ fontSize: 11.5, fontWeight: 600, wordBreak: 'break-all', lineHeight: 1.4 }}>{inv.irn}</div>
                   </div>
                   <div>
                     <div className="label" style={{ marginBottom: 3 }}>CSID</div>
-                    <div data-testid="fiscal-csid" className="mono" style={{ fontSize: 12.5, wordBreak: 'break-all', lineHeight: 1.4 }}>{inv.csid ?? '—'}</div>
+                    <div data-testid="fiscal-csid" className="mono" style={{ fontSize: 11, color: 'var(--fg-2)', wordBreak: 'break-all', lineHeight: 1.4 }}>{inv.csid ?? '—'}</div>
                   </div>
                   {inv.qr_png_base64 != null && (
                     // Literal #fff, not var(--bg-2): a QR plate must keep scanner contrast
                     // regardless of theme, so this one swatch deliberately does not follow
                     // a design token (story §6 / task-251 Stage-1 correction K).
-                    <div style={{ background: '#fff', borderRadius: 'var(--radius-md)', padding: 12, display: 'flex', justifyContent: 'center' }}>
+                    <div style={{ background: '#fff', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: 7, display: 'flex', alignSelf: 'flex-start' }}>
                       <img
                         data-testid="fiscal-qr"
                         src={`data:image/png;base64,${inv.qr_png_base64}`}
@@ -1327,7 +1281,7 @@ function InvoiceEditBody({
           color: 'var(--status-red-text)',
           background: 'var(--status-red-bg)',
           border: '1px solid var(--status-red-border)',
-          borderRadius: 999,
+          borderRadius: 'var(--radius-sm)',
           padding: '1px 6px',
           marginBottom: 5,
         }}
@@ -1404,30 +1358,30 @@ function InvoiceEditBody({
 
   return (
     <form data-testid="edit-invoice" onSubmit={handleSubmit}>
-      <div style={{ padding: 24, borderBottom: '1px solid var(--line-1)' }}>
+      <div style={{ padding: '22px 24px', display: 'flex', flexDirection: 'column', gap: 16 }}>
         {formError && (
-          <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)' }}>
+          <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)' }}>
             {formError}
           </div>
         )}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
           <div>
-            <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Invoice number</div>
+            <div className="label" style={{ marginBottom: 5 }}>Invoice number</div>
             {inv.can_correct_invoice_number ? (
-              <input data-testid="edit-invoice-number" className="pf-input" type="text" value={number} onChange={(e) => setNumber(e.target.value)} style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
+              <input data-testid="edit-invoice-number" className="pf-input" type="text" value={number} onChange={(e) => setNumber(e.target.value)} style={{ ...EDIT_INPUT, fontFamily: 'var(--font-mono)' }} disabled={submitting} />
             ) : (
               <>
-                <input data-testid="edit-invoice-number" className="pf-input" type="text" value={number} readOnly aria-readonly="true" style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }} disabled={submitting} />
+                <input data-testid="edit-invoice-number" className="pf-input" type="text" value={number} readOnly aria-readonly="true" style={{ ...EDIT_INPUT, background: 'var(--bg-3)', fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }} disabled={submitting} />
                 {inv.invoice_number_blocked_reason != null && (
-                  <div style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 5, lineHeight: 1.4 }}>{inv.invoice_number_blocked_reason}</div>
+                  <div style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 5, lineHeight: 1.4 }}>{inv.invoice_number_blocked_reason}</div>
                 )}
               </>
             )}
           </div>
           <div>
-            <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Issue date</div>
+            <div className="label" style={{ marginBottom: 5 }}>Issue date</div>
             {fieldFlag('issue_date')}
-            <input className="pf-input" type="text" value={form.issue_date} onChange={(e) => updateField('issue_date', e.target.value)} placeholder="YYYY-MM-DD" style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
+            <input className="pf-input" type="text" value={form.issue_date} onChange={(e) => updateField('issue_date', e.target.value)} placeholder="YYYY-MM-DD" style={{ ...EDIT_INPUT, fontFamily: 'var(--font-mono)' }} disabled={submitting} />
           </div>
           {/* Supplier name/TIN are DISPLAY-ONLY (INVCR-01-18, C7 fix, edit path -- a narrowly
               authorized §14 exception, no other field or layout on this screen touched): the
@@ -1441,41 +1395,40 @@ function InvoiceEditBody({
               aria-readonly is redundant with the native `readonly` attribute for assistive tech
               (already implicit) but stated explicitly anyway. color: var(--fg-3) (an EXISTING
               token this file already uses for de-emphasized text, e.g. the computed-line-sum
-              hint below) is the one concession to ".pf-input has no :disabled/:read-only style
+              hint below) is a concession to ".pf-input has no :disabled/:read-only style
               at all today" (product-advisor review, 2026-07-31) -- without it this field is
               visually IDENTICAL to every editable one beside it, which is worse than "unstyled"
-              for a control that no longer does what it looks like it does; not a new visual
-              language, just this file's own existing muted-text color applied to two inputs. */}
+              for a control that no longer does what it looks like it does. */}
           <div>
-            <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Supplier name</div>
+            <div className="label" style={{ marginBottom: 5 }}>Supplier name</div>
             {fieldFlag('supplier_name')}
-            <input className="pf-input" type="text" value={form.supplier_name} readOnly aria-readonly="true" disabled={submitting} style={{ color: 'var(--fg-3)' }} />
+            <input className="pf-input" type="text" value={form.supplier_name} readOnly aria-readonly="true" disabled={submitting} style={{ ...EDIT_INPUT, background: 'var(--bg-3)', color: 'var(--fg-3)' }} />
           </div>
           <div>
-            <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Supplier TIN</div>
+            <div className="label" style={{ marginBottom: 5 }}>Supplier TIN</div>
             {fieldFlag('supplier_tin')}
-            <input className="pf-input" type="text" value={form.supplier_tin} readOnly aria-readonly="true" placeholder="########-####" style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }} disabled={submitting} />
+            <input className="pf-input" type="text" value={form.supplier_tin} readOnly aria-readonly="true" placeholder="########-####" style={{ ...EDIT_INPUT, background: 'var(--bg-3)', fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }} disabled={submitting} />
             {/* CreateMapping.tsx's existing vocabulary ("Supplier details come from <entity>,
                 not the file"), reused rather than inventing new copy -- adapted to this screen
                 (no file here to contrast against). */}
-            <div style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 5, lineHeight: 1.4 }}>
+            <div style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 5, lineHeight: 1.4 }}>
               Supplier details come from {form.supplier_name || 'the linked entity'}, not editable here.
             </div>
           </div>
           <div>
-            <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Buyer name</div>
+            <div className="label" style={{ marginBottom: 5 }}>Buyer name</div>
             {fieldFlag('buyer_name')}
-            <input className="pf-input" type="text" value={form.buyer_name} onChange={(e) => updateField('buyer_name', e.target.value)} disabled={submitting} />
+            <input className="pf-input" type="text" value={form.buyer_name} onChange={(e) => updateField('buyer_name', e.target.value)} style={{ ...EDIT_INPUT }} disabled={submitting} />
           </div>
           <div>
-            <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Buyer TIN</div>
+            <div className="label" style={{ marginBottom: 5 }}>Buyer TIN</div>
             {fieldFlag('buyer_tin')}
-            <input className="pf-input" type="text" value={form.buyer_tin} onChange={(e) => updateField('buyer_tin', e.target.value)} placeholder="########-####" style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
+            <input className="pf-input" type="text" value={form.buyer_tin} onChange={(e) => updateField('buyer_tin', e.target.value)} placeholder="########-####" style={{ ...EDIT_INPUT, fontFamily: 'var(--font-mono)' }} disabled={submitting} />
           </div>
           <div>
-            <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Subtotal</div>
+            <div className="label" style={{ marginBottom: 5 }}>Subtotal</div>
             {fieldFlag('subtotal')}
-            <input className="pf-input" type="text" value={form.subtotal} onChange={(e) => updateField('subtotal', e.target.value)} disabled={submitting} />
+            <input className="pf-input" type="text" value={form.subtotal} onChange={(e) => updateField('subtotal', e.target.value)} style={{ ...EDIT_INPUT }} disabled={submitting} />
             {/* The computed line-sum hint ([totals-ownership], Core AC #5). Rendered as a
                 sibling AFTER the input, never between the label and the input — that slot
                 belongs to field-flag, and the e2e label->input XPath must keep resolving.
@@ -1485,24 +1438,24 @@ function InvoiceEditBody({
                 fmt(), which rounds to whole naira (lib/format.ts:5-7) and would erase the
                 sub-naira disagreement this hint exists to expose. No subtotal-vs-hint
                 comparison is drawn here: deciding they disagree is the rule engine's job. */}
-            <div data-testid="computed-line-sum" style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 5, lineHeight: 1.5 }}>
+            <div data-testid="computed-line-sum" style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 4, lineHeight: 1.5 }}>
               Lines total <span className="money">{lineSum ?? '—'}</span>
             </div>
           </div>
           <div>
-            <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>VAT</div>
+            <div className="label" style={{ marginBottom: 5 }}>VAT</div>
             {fieldFlag('vat')}
-            <input className="pf-input" type="text" value={form.vat} onChange={(e) => updateField('vat', e.target.value)} disabled={submitting} />
+            <input className="pf-input" type="text" value={form.vat} onChange={(e) => updateField('vat', e.target.value)} style={{ ...EDIT_INPUT }} disabled={submitting} />
           </div>
           <div>
-            <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Total</div>
+            <div className="label" style={{ marginBottom: 5 }}>Total</div>
             {fieldFlag('total')}
-            <input className="pf-input" type="text" value={form.total} onChange={(e) => updateField('total', e.target.value)} disabled={submitting} />
+            <input className="pf-input" type="text" value={form.total} onChange={(e) => updateField('total', e.target.value)} style={{ ...EDIT_INPUT }} disabled={submitting} />
           </div>
           <div>
-            <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Currency</div>
+            <div className="label" style={{ marginBottom: 5 }}>Currency</div>
             {fieldFlag('currency')}
-            <input className="pf-input" type="text" value={form.currency} onChange={(e) => updateField('currency', e.target.value)} disabled={submitting} />
+            <input className="pf-input" type="text" value={form.currency} onChange={(e) => updateField('currency', e.target.value)} style={{ ...EDIT_INPUT }} disabled={submitting} />
           </div>
         </div>
 
@@ -1513,60 +1466,61 @@ function InvoiceEditBody({
             MBS path points at a line still render in full on the rejection card. `line_tax`
             gets a column here only; widening the READ-ONLY table is out of scope, so a
             stored line_tax stays invisible until Edit is clicked (noted as a follow-up). */}
-        <div className="label" style={{ margin: '18px 0 12px' }}>
-          Line items
-        </div>
-        <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-input)', overflow: 'hidden', marginBottom: 14 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: LINE_EDIT_GRID, gap: 10, padding: '9px 14px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
-            <span className="label">Description</span>
-            <span className="label">Qty</span>
-            <span className="label">Unit</span>
-            <span className="label">Amount</span>
-            <span className="label">Tax</span>
-            <span />
+        <div>
+          <div className="label" style={{ marginBottom: 5 }}>
+            Line items
           </div>
-          {rows.map((row, i) => (
-            <div key={i} data-testid="line-row" style={{ display: 'grid', gridTemplateColumns: LINE_EDIT_GRID, gap: 10, padding: '9px 14px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}>
-              <input className="pf-input" type="text" value={row.description} onChange={(e) => updateRow(i, 'description', e.target.value)} disabled={submitting} />
-              <input className="pf-input" type="text" value={row.quantity} onChange={(e) => updateRow(i, 'quantity', e.target.value)} style={{ fontFamily: 'var(--font-mono)', padding: '0 8px' }} disabled={submitting} />
-              <input className="pf-input" type="text" value={row.unit_price} onChange={(e) => updateRow(i, 'unit_price', e.target.value)} style={{ fontFamily: 'var(--font-mono)', padding: '0 8px' }} disabled={submitting} />
-              <input className="pf-input" type="text" value={row.line_total} onChange={(e) => updateRow(i, 'line_total', e.target.value)} style={{ fontFamily: 'var(--font-mono)', padding: '0 8px' }} disabled={submitting} />
-              <input className="pf-input" type="text" value={row.line_tax} onChange={(e) => updateRow(i, 'line_tax', e.target.value)} style={{ fontFamily: 'var(--font-mono)', padding: '0 8px' }} disabled={submitting} />
-              <button
-                type="button"
-                data-testid="line-remove"
-                onClick={() => removeRow(i)}
-                disabled={submitting}
-                className="pf-btn"
-                aria-label="Remove line item"
-                style={{ width: 30, height: 30, borderRadius: 'var(--radius-md)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: submitting ? 'not-allowed' : 'pointer', display: 'grid', placeItems: 'center' }}
-              >
-                {closeGlyph}
-              </button>
+          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflowX: 'auto' }}>
+            <div style={{ minWidth: 'min-content' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: LINE_EDIT_GRID, gap: 8, padding: '8px 12px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
+              <span className="label">Description</span>
+              <span className="label">Qty</span>
+              <span className="label">Unit</span>
+              <span className="label" style={{ textAlign: 'right' }}>Amount</span>
+              <span className="label" style={{ textAlign: 'right' }}>Tax</span>
+              <span />
             </div>
-          ))}
+            {rows.map((row, i) => (
+              <div key={i} data-testid="line-row" style={{ display: 'grid', gridTemplateColumns: LINE_EDIT_GRID, gap: 8, padding: '8px 12px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}>
+                <input className="pf-input" type="text" value={row.description} onChange={(e) => updateRow(i, 'description', e.target.value)} style={{ ...LINE_INPUT }} disabled={submitting} />
+                <input className="pf-input" type="text" value={row.quantity} onChange={(e) => updateRow(i, 'quantity', e.target.value)} style={{ ...LINE_INPUT, fontFamily: 'var(--font-mono)', padding: '0 8px' }} disabled={submitting} />
+                <input className="pf-input" type="text" value={row.unit_price} onChange={(e) => updateRow(i, 'unit_price', e.target.value)} style={{ ...LINE_INPUT, fontFamily: 'var(--font-mono)', padding: '0 8px' }} disabled={submitting} />
+                <input className="pf-input" type="text" value={row.line_total} onChange={(e) => updateRow(i, 'line_total', e.target.value)} style={{ ...LINE_INPUT, fontFamily: 'var(--font-mono)', padding: '0 8px' }} disabled={submitting} />
+                <input className="pf-input" type="text" value={row.line_tax} onChange={(e) => updateRow(i, 'line_tax', e.target.value)} style={{ ...LINE_INPUT, fontFamily: 'var(--font-mono)', padding: '0 8px' }} disabled={submitting} />
+                <button
+                  type="button"
+                  data-testid="line-remove"
+                  onClick={() => removeRow(i)}
+                  disabled={submitting}
+                  className="pf-btn"
+                  aria-label="Remove line item"
+                  style={{ width: 30, height: 30, borderRadius: 'var(--radius-md)', border: 0, background: 'transparent', color: 'var(--fg-3)', cursor: submitting ? 'not-allowed' : 'pointer', display: 'grid', placeItems: 'center' }}
+                >
+                  {closeGlyph}
+                </button>
+              </div>
+            ))}
+            </div>
+          </div>
+          <button
+            type="button"
+            data-testid="line-add"
+            onClick={addRow}
+            disabled={submitting}
+            className="v2-btn v2-btn-ghost pf-btn"
+            style={{ height: 30, fontSize: 12.5, marginTop: 10 }}
+          >
+            <span style={{ display: 'inline-flex' }}>{plusGlyph}</span> Add line item
+          </button>
         </div>
-        <button
-          type="button"
-          data-testid="line-add"
-          onClick={addRow}
-          disabled={submitting}
-          className="pf-chip"
-          style={{ height: 30, padding: '0 12px', borderRadius: 'var(--radius-md)', fontFamily: 'var(--font-sans)', fontSize: 12.5, fontWeight: 500, border: '1px dashed var(--line-3)', background: 'transparent', color: 'var(--fg-2)', display: 'inline-flex', alignItems: 'center', gap: 6 }}
-        >
-          <span style={{ display: 'inline-flex' }}>{plusGlyph}</span> Add line item
-        </button>
-      </div>
-      {/* Cancel + Save pairing, heights and button variants from EntityFormModal.tsx:190/193
-          — the repo's only shipped Cancel+Submit pair. There is no `.v2-btn-secondary` in
-          packages/design-tokens/v2/app-layer.css; ghost and primary are the two that exist. */}
-      <div style={{ padding: '16px 24px', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-        <button type="button" data-testid="edit-cancel" onClick={onCancel} disabled={submitting} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 36, fontSize: 13 }}>
-          Cancel
-        </button>
-        <button type="submit" disabled={submitting} className="v2-btn v2-btn-primary pf-btn" style={{ height: 36, fontSize: 13 }}>
-          {submitting ? 'Saving…' : 'Save changes'}
-        </button>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, paddingTop: 14, borderTop: '1px solid var(--line-1)' }}>
+          <button type="button" data-testid="edit-cancel" onClick={onCancel} disabled={submitting} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 34 }}>
+            Cancel
+          </button>
+          <button type="submit" disabled={submitting} className="v2-btn v2-btn-primary pf-btn" style={{ height: 34 }}>
+            {submitting ? 'Saving…' : 'Save changes'}
+          </button>
+        </div>
       </div>
     </form>
   )

@@ -250,7 +250,10 @@ describe('AC-8: the disabled control pins its own background and border', () => 
     expect(btn.style.width, 'full width, like its sibling').toBe('100%')
     expect(btn.style.height).toBe('34px')
     expect(btn.style.fontSize).toBe('13px')
-    expect(btn.style.marginTop).toBe('12px')
+    // The rail buttons sit in one gapped column now, so neither carries its own margin.
+    expect.soft(btn.style.marginTop).toBe('')
+    expect.soft(btn.parentElement, 'the control shares the sibling column').toBe(sibling.parentElement)
+    expect.soft(btn.parentElement?.style.gap).toBe('8px')
     // Order is the claim EXTR11-E2E-07 measures on the deployed build; here it is DOM order.
     expect(
       sibling.compareDocumentPosition(btn) & Node.DOCUMENT_POSITION_FOLLOWING,

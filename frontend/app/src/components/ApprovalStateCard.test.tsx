@@ -281,8 +281,13 @@ describe('ApprovalStateCard', () => {
     render(<ApprovalStateCard run={readyRun(runFixture({ steps: [step] }))} />)
 
     let el = card()
-    expect(within(el).getByTestId('approval-holder-warn').textContent).toBe(copyOf('unstaffedSeat'))
-    expect(within(el).getByTestId('approval-holder-name').style.color).toBe('var(--status-amber-text)')
+    const tag = within(el).getByTestId('approval-holder-warn')
+    expect(tag.textContent).toBe(copyOf('unstaffedSeat'))
+    // v2: only the tag is amber; the holder line stays --fg-2.
+    expect(tag.style.color).toBe('var(--status-amber-text)')
+    expect(tag.style.fontSize).toBe('10px')
+    expect(tag.style.letterSpacing).toBe('')
+    expect(within(el).getByTestId('approval-holder-name').style.color).toBe('var(--fg-2)')
     const due = within(el).getByTestId('approval-due')
     expect(due.textContent).toBe(copyOf('overdue'))
     expect(due.style.color).toBe('var(--status-red-text)')
@@ -295,8 +300,86 @@ describe('ApprovalStateCard', () => {
     render(<ApprovalStateCard run={readyRun(runFixture({ steps: [calm] }))} />)
     el = card()
     expect(within(el).queryAllByTestId('approval-holder-warn')).toHaveLength(0)
-    expect(within(el).getByTestId('approval-holder-name').style.color).toBe('var(--fg-3)')
+    expect(within(el).getByTestId('approval-holder-name').style.color).toBe('var(--fg-2)')
     expect(within(el).queryAllByTestId('approval-due')).toHaveLength(0)
+  })
+
+  // ---- the card takes the prototype's approvals-card look ----
+
+  it('the approvals pill is a 4px badge with no dot', () => {
+    render(<ApprovalStateCard run={readyRun(runFixture({ steps: [stepFixture()] }))} />)
+
+    const pill = within(card()).getByTestId('approval-state')
+    expect(pill.style.borderRadius).toBe('var(--radius-sm)')
+    expect(pill.children, 'the label is the only child').toHaveLength(1)
+    const label = pill.firstElementChild as HTMLElement
+    expect(label.textContent).toBe(copyOf('stateOpen'))
+    expect(label.style.fontSize).toBe('10px')
+    expect(label.style.letterSpacing).toBe('')
+  })
+
+  it('the approvals body is padded 14px 18px at 12.5px', () => {
+    render(<ApprovalStateCard run={readyRun(runFixture({ steps: [stepFixture()] }))} />)
+
+    const body = card().lastElementChild as HTMLElement
+    expect(within(body).getByTestId('approval-holder'), 'the body wraps the run').toBeTruthy()
+    expect(body.style.padding).toBe('14px 18px')
+    expect(body.style.fontSize).toBe('12.5px')
+    expect(body.style.lineHeight).toBe('1.5')
+  })
+
+  it('none and voided render as plain text', () => {
+    render(<ApprovalStateCard run={emptyRun()} />)
+    const none = within(card()).getByTestId('approval-empty')
+    const title = within(none).getByText(copyOf('emptyTitle'))
+    expect(title.style.fontWeight).toBe('600')
+    expect(title.style.marginBottom).toBe('3px')
+    expect(within(none).getByText(copyOf('emptyMessage')).style.color).toBe('var(--fg-3)')
+    expect(none.getAttribute('style') ?? '', 'no box on the none body').not.toMatch(/border|background/)
+    cleanup()
+
+    const steps = [stepFixture({ state: 'pending' })]
+    render(<ApprovalStateCard run={readyRun(runFixture({ state: 'cancelled', steps }))} />)
+    const voided = within(card()).getByTestId('approval-voided')
+    expect(voided.textContent).toBe(copyOf('voided'))
+    expect(voided.style.color).toBe('var(--fg-3)')
+    expect(voided.getAttribute('style') ?? '', 'no box on the voided body').not.toMatch(/border|background/)
+  })
+
+  it('an open run is a gap-6 column; the hint carries the divider', () => {
+    const step = stepFixture({ workflow_role_title: 'Finance lead', holder: { text: 'Ada Obi', warn: false }, due_at: '2026-07-01T00:00:00Z' })
+    render(<ApprovalStateCard run={readyRun(runFixture({ steps: [step] }))} />)
+
+    const el = card()
+    const hint = within(el).getByTestId('approval-decide-hint')
+    const column = hint.parentElement as HTMLElement
+    expect(within(column).getByText('Finance lead'), 'the hint shares a column with the role').toBeTruthy()
+    expect(column.style.display).toBe('flex')
+    expect(column.style.flexDirection).toBe('column')
+    expect(column.style.gap).toBe('6px')
+    expect(hint.style.borderTop).toBe('1px solid var(--line-1)')
+    expect(hint.style.paddingTop).toBe('8px')
+    expect(hint.style.marginTop).toBe('4px')
+    expect(within(el).getByTestId('approval-holder-name').style.fontSize, 'holder line').toBe('12.5px')
+    const role = within(el).getByText('Finance lead')
+    expect(role.style.fontSize).toBe('13.5px')
+    expect(role.style.fontWeight).toBe('600')
+    expect(within(el).getByTestId('approval-due').style.fontSize).toBe('11px')
+  })
+
+  it('the hint inherits the body size; role and holder are separate column items', () => {
+    const step = stepFixture({ workflow_role_title: 'Finance lead', holder: { text: 'Ada Obi', warn: false } })
+    render(<ApprovalStateCard run={readyRun(runFixture({ steps: [step] }))} />)
+
+    const el = card()
+    const column = within(el).getByTestId('approval-decide-hint').parentElement as HTMLElement
+    expect(within(el).getByTestId('approval-decide-hint').style.fontSize, 'hint inherits 12.5px').toBe('')
+    const role = within(el).getByText('Finance lead')
+    const holder = within(el).getByTestId('approval-holder-name')
+    expect(role.parentElement, 'role is a column item').toBe(column)
+    expect(holder.parentElement, 'holder is a column item').toBe(column)
+    expect(role.style.lineHeight, 'role inherits 1.5').toBe('')
+    expect(holder.style.marginTop, 'the column gap spaces the holder').toBe('')
   })
 
   it('approvalStateCard_overdueBeatsAFormattedDueDate', () => {
@@ -399,6 +482,9 @@ describe('ApprovalStateCard', () => {
     expect(within(el).getByTestId('approval-state').textContent).toBe(copyOf('stateApproved'))
     expect(within(el).queryAllByTestId('approval-holder')).toHaveLength(0)
     expect(within(el).queryAllByTestId('approval-voided')).toHaveLength(0)
+    const none = within(el).getByTestId('approval-no-pending')
+    expect(none.style.color, 'plain --fg-3 text').toBe('var(--fg-3)')
+    expect(none.getAttribute('style') ?? '', 'no box on the closed body').not.toMatch(/border|background/)
   })
 
   // ---- AUDIT-09-07 / AC-3: the one retired trail field no audit payload carries -------

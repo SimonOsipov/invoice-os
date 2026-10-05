@@ -90,8 +90,9 @@ describe('SourceDocumentSheet', () => {
     expect(screen.getAllByTestId('sheet-row').length).toBeGreaterThan(0)
 
     for (const row of marked) {
-      expect(row.style.background).toBe('var(--accent-10)')
-      expect(row.style.boxShadow).toBe('inset 2px 0 0 var(--accent)')
+      expect.soft(row.style.background).toBe('var(--action-tint)')
+      expect.soft(row.style.boxShadow).toBe('inset 2px 0 0 var(--action)')
+      expect.soft(row.querySelector<HTMLElement>('[data-testid="sheet-row-number"]')?.style.color).toBe('var(--action)')
     }
   })
 
@@ -466,14 +467,168 @@ describe('SourceDocumentSheet', () => {
     expect(sheetNumbers(allRows())).toEqual([1001, 1002, 1003])
   })
 
-  it('the sheet never names a property the design system lacks', () => {
-    // cwd, not import.meta.url: under jsdom the latter is an http: URL and fileURLToPath throws.
-    const src = readFileSync(path.join(process.cwd(), 'src/components/SourceDocumentSheet.tsx'), 'utf8')
-    expect(src.length).toBeGreaterThan(1000) // floor: the file really was read
+  it('scope buttons and track follow the rendered prototype', () => {
+    renderSheet(sheet(1479), INVOICE_ROWS)
 
-    expect(src).not.toContain('--accent-tint')
-    expect(src).toContain('var(--accent-10)')
-    expect(src).toContain('inset 2px 0 0 var(--accent)')
+    const file = screen.getByTestId('sheet-scope-file')
+    const invoice = screen.getByTestId('sheet-scope-invoice')
+    const track = file.parentElement as HTMLElement
+    expect(track.contains(invoice), 'control: both buttons share one track').toBe(true)
+
+    expect.soft(track.style.borderRadius).toBe('var(--radius-sm)')
+    expect.soft(track.style.border).toContain('--line-1')
+    expect.soft(track.style.gap).toBe('3px')
+    expect.soft(track.style.padding).toBe('3px')
+    expect.soft(track.style.background).toBe('var(--bg-1)')
+
+    for (const btn of [file, invoice]) {
+      expect.soft(btn.style.borderRadius).toBe('var(--radius-btn)')
+      expect.soft(btn.style.fontSize).toBe('12px')
+      expect.soft(btn.style.fontFamily).toBe('var(--font-sans)')
+      expect.soft(btn.style.fontWeight).toBe('500')
+      expect.soft(btn.style.height).toBe('26px')
+      expect.soft(btn.style.padding).toBe('0px 13px')
+      // pin: plain buttons, so the inline radius is the one that renders
+      expect(btn.className).not.toMatch(/pf-btn|pf-chip|v2-btn/)
+    }
+
+    // active: file; inactive: invoice
+    expect.soft(file.style.background).toBe('var(--bg-2)')
+    expect.soft(file.style.border).toBe('1px solid var(--line-2)')
+    expect.soft(file.style.color).toBe('var(--fg-1)')
+    expect.soft(invoice.style.background).toBe('transparent')
+    expect.soft(invoice.style.border).toBe('1px solid transparent')
+    expect.soft(invoice.style.color).toBe('var(--fg-3)')
+  })
+
+  it('the toolbar, jump button and status stamp follow the prototype', () => {
+    renderSheet(sheet(1479), INVOICE_ROWS)
+
+    const toolbar = screen.getByTestId('sheet-toolbar')
+    expect.soft(toolbar.style.padding).toBe('11px 16px')
+    expect.soft(toolbar.style.gap).toBe('12px')
+    expect.soft(toolbar.style.background, 'pin').toBe('var(--bg-2)')
+    expect.soft(toolbar.style.borderBottom, 'pin').toBe('1px solid var(--line-1)')
+
+    const jump = screen.getByTestId('sheet-jump')
+    expect(jump.textContent).toContain('Jump to')
+    expect.soft(jump.className).toBe('v2-btn v2-btn-ghost pf-btn')
+    expect.soft(jump.style.height).toBe('30px')
+    expect.soft(jump.style.fontSize).toBe('12px')
+    expect.soft(jump.style.padding).toBe('0px 12px')
+
+    const stamp = screen.getByTestId('sheet-status')
+    expect(stamp.className, 'pin').toContain('mono')
+    expect.soft(stamp.style.fontSize).toBe('10px')
+    expect.soft(stamp.style.letterSpacing).toBe('0.06em')
+    expect.soft(stamp.style.color, 'pin').toBe('var(--fg-3)')
+  })
+
+  it('the filtered banner follows the prototype', async () => {
+    renderSheet(sheet(1479), INVOICE_ROWS)
+    await userEvent.click(screen.getByTestId('sheet-scope-invoice'))
+
+    const bar = screen.getByTestId('sheet-filtered-bar')
+    expect(bar.style.background, 'control: the banner style is read').toBe('var(--status-amber-bg)')
+    expect.soft(bar.style.padding).toBe('10px 16px')
+    expect.soft(bar.style.borderBottom).toBe('1px solid var(--status-amber-border)')
+    expect.soft(bar.style.borderTop, 'bottom border only').toBe('')
+    expect.soft(bar.style.borderLeft, 'bottom border only').toBe('')
+    expect.soft(bar.style.fontSize).toBe('12px')
+    expect.soft(bar.style.color).toBe('var(--fg-1)')
+    expect.soft(bar.style.lineHeight).toBe('1.5')
+  })
+
+  it('the truncation banner takes the same v2 banner look as the filtered banner', () => {
+    renderSheet(sheet(5000, { rows_total: 5001, truncated: true }), [44, 5002])
+
+    const bar = screen.getByTestId('sheet-truncation')
+    expect(bar.textContent, 'control: the banner is read').toContain('5,001')
+    expect.soft(bar.style.background).toBe('var(--status-amber-bg)')
+    expect.soft(bar.style.padding).toBe('10px 16px')
+    expect.soft(bar.style.borderBottom).toBe('1px solid var(--status-amber-border)')
+    expect.soft(bar.style.borderTop, 'bottom border only').toBe('')
+    expect.soft(bar.style.fontSize).toBe('12px')
+    expect.soft(bar.style.color).toBe('var(--fg-1)')
+    expect.soft(bar.style.lineHeight).toBe('1.5')
+
+    const missing = screen.getByText(/OF THIS INVOICE IS NOT IN THE SHOWN WINDOW/)
+    expect(missing.className, 'pin').toContain('mono')
+    expect.soft(missing.style.marginTop).toBe('5px')
+  })
+
+  it('the marker track frame follows the prototype', () => {
+    renderSheet(sheet(1479), INVOICE_ROWS)
+
+    const track = screen.getByTestId('sheet-marker-track')
+    expect(track.querySelectorAll('[data-testid^="marker-"]').length, 'control: the track draws something').toBeGreaterThan(0)
+    expect.soft(track.style.width).toBe('16px')
+    expect.soft(track.style.background).toBe('var(--bg-1)')
+    expect.soft(track.style.borderLeft).toBe('1px solid var(--line-1)')
+  })
+
+  it('the viewport ground, header row and cells follow the prototype', () => {
+    renderSheet(sheet(1479), INVOICE_ROWS)
+
+    expect.soft(scrollBox().style.background).toBe('var(--bg-2)')
+
+    const header = screen.getByTestId('sheet-header')
+    const headCells = Array.from(header.children) as HTMLElement[]
+    expect(headCells).toHaveLength(COLUMNS.length + 1)
+    expect.soft(header.style.background).toBe('var(--bg-1)')
+    expect.soft(header.style.borderBottom, 'pin').toBe('1px solid var(--line-2)')
+    for (const cell of headCells) {
+      expect.soft(cell.className.split(/\s+/), `header cell ${cell.textContent}`).toContain('label')
+      expect.soft(cell.style.padding, `header cell ${cell.textContent}`).toBe('8px 10px')
+    }
+    expect.soft(headCells[0].style.textAlign, 'the # header cell').toBe('right')
+
+    const row = rowByCell('INV-43')
+    const num = row.querySelector<HTMLElement>('[data-testid="sheet-row-number"]') as HTMLElement
+    expect(num.textContent).toBe('43')
+    expect(row.getAttribute('data-testid'), 'control: an unmarked row').toBe('sheet-row')
+    expect(num.className, 'pin').toContain('mono')
+    expect.soft(num.style.fontSize).toBe('10.5px')
+    expect.soft(num.style.textAlign).toBe('right')
+    expect.soft(num.style.padding).toBe('0px 10px')
+    expect.soft(num.style.color).toBe('var(--fg-3)')
+    for (const cell of Array.from(row.children).slice(1) as HTMLElement[]) {
+      expect.soft(cell.style.padding, `data cell ${cell.textContent}`).toBe('0px 10px')
+    }
+  })
+
+  it('the marker track draws in teal', () => {
+    const others = Array.from({ length: 20 }, (_, i) => 100 + i * 11)
+    const { container } = renderSheet(sheet(1479), INVOICE_ROWS, others)
+
+    const block = screen.getByTestId('marker-invoice-block')
+    expect.soft(block.style.background).toBe('var(--action)')
+    expect.soft(block.style.left).toBe('2px')
+    expect.soft(block.style.right).toBe('2px')
+    expect.soft(block.style.borderRadius).toBe('2px')
+    expect.soft(block.style.minHeight, 'pin').toBe('4px')
+
+    const viewport = screen.getByTestId('marker-viewport')
+    expect.soft(viewport.style.left).toBe('2px')
+    expect.soft(viewport.style.right).toBe('2px')
+    expect.soft(viewport.style.background).toBe('rgba(83, 107, 109, 0.07)')
+    expect.soft(viewport.style.border).toBe('1px solid var(--line-3)')
+    expect.soft(viewport.style.borderRadius).toBe('3px')
+    expect.soft(viewport.style.minHeight).toBe('14px')
+
+    const ticks = screen.getAllByTestId('marker-tick')
+    expect(ticks).toHaveLength(3)
+    for (const tick of ticks) {
+      expect.soft(tick.style.left).toBe('4px')
+      expect.soft(tick.style.right).toBe('4px')
+      expect.soft(tick.style.background, 'pin').toBe('var(--line-3)')
+    }
+
+    const styled = Array.from(container.querySelectorAll('[style]'))
+    expect(styled.length).toBeGreaterThan(20) // floor: the whole tree was walked
+    expect(screen.getAllByTestId('sheet-row-marked').length).toBeGreaterThan(0) // floor: marked rows are in the tree
+    const accent = styled.filter((el) => (el.getAttribute('style') ?? '').includes('--accent'))
+    expect(accent.map((el) => el.getAttribute('data-testid') ?? el.tagName)).toEqual([])
   })
 
   it('the table scrolls horizontally like a spreadsheet', () => {

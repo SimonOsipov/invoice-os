@@ -154,6 +154,7 @@ describe('ensureMember', () => {
 
     expect(message).toContain('register')
     expect(message).toContain(realm.e2eMember(FIRM).email)
+    expect(message).toMatch(/^ensureMember: register /)
   })
 
   it('ensureMember names a refused sign-in', async () => {
@@ -165,6 +166,7 @@ describe('ensureMember', () => {
     expect(message).toContain('sign-in')
     expect(message).toContain(realm.e2eMember(FIRM).email)
     expect(message).toContain('e2e/realAccounts.ts')
+    expect(message).toMatch(/^ensureMember: sign-in /)
   })
 
   it('ensureMember names a refused grant', async () => {
@@ -176,6 +178,7 @@ describe('ensureMember', () => {
     expect(message).toContain('grant')
     expect(message).toContain('502')
     expect(message).toContain(realm.e2eMember(FIRM).email)
+    expect(message).toMatch(/^ensureMember: grant /)
   })
 
   it('ensureMember registers, signs in and grants the e2e member as admin', async () => {

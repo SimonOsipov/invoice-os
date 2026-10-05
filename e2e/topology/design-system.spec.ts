@@ -138,7 +138,6 @@ for (const path of ['/', '/privacy']) {
 }
 
 const V1_SURFACES: { id: PersonaId; name: string }[] = [
-  { id: 'developer', name: 'ops console' },
   { id: 'support', name: 'support console' },
 ]
 
@@ -180,6 +179,25 @@ test('app (firm) reads v2: Manrope h1 and ground, #f5bc88, no Fraunces or Inter,
   expect(p.appCount, 'at least one .asc-app element').toBeGreaterThanOrEqual(1)
 
   expect(errors, `console errors on app (firm):\n${errors.join('\n')}`).toEqual([])
+})
+
+test('ops console reads v2: Manrope h1 and ground, #f5bc88, no Fraunces or Inter, IBM Plex Mono loaded', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  await signInAs(page, 'developer')
+
+  const p = await probe(page)
+  await attachProbe(testInfo, 'developer', p)
+
+  expect(p.h1Family, 'h1 first family').toBe('Manrope')
+  expect(p.groundFamily, 'ground first family').toBe('Manrope')
+  expect(p.accent.toLowerCase(), '--accent').toBe('#f5bc88')
+  for (const banned of ['Inter', 'Fraunces']) {
+    expect(families(p), `no ${banned} face on the ops console`).not.toContain(banned)
+  }
+  expect(families(p, 'loaded'), 'a loaded IBM Plex Mono face').toContain('IBM Plex Mono')
+  expect(p.appCount, 'at least one .asc-app element').toBeGreaterThanOrEqual(1)
+
+  expect(errors, `console errors on ops console:\n${errors.join('\n')}`).toEqual([])
 })
 
 type Measured = { tag: string; text: string; left: number; right: number; top: number; bottom: number }

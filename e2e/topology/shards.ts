@@ -22,6 +22,7 @@ export const UNITS: Unit[] = [
       'design-system.spec.ts',
       'environment-posture.spec.ts',
       'isolation.spec.ts',
+      'ops-console.spec.ts',
       'overview-register-approvals.spec.ts',
       'persona-surfaces.spec.ts',
       'portfolio.spec.ts',
@@ -44,6 +45,8 @@ export const UNITS: Unit[] = [
         'Cost, not shared state ([fork-lane-by-cost]): reads and writes no tenant data. A shard costs ~1 min of runner setup for one 1.4 s test.',
       'isolation.spec.ts':
         'Asserts the exact seeded membership sets (firm: 6 members) and tenant identities of 1111 and 2222.',
+      'ops-console.spec.ts':
+        'Cost, not shared state ([fork-lane-by-cost]): signs in the developer persona to the mock-backed Ops Console; reads and writes no tenant data.',
       'overview-register-approvals.spec.ts':
         'Cost, not shared state ([fork-lane-by-cost]): signs in the seeded firm and in-house personas and reaches every state with page.route; writes no tenant data.',
       'persona-surfaces.spec.ts':

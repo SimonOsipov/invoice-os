@@ -220,6 +220,7 @@ func TestMailTemplateCheck_ImageSrcSpellings(t *testing.T) {
 		"spaces around the equals":     `<img src = "assets/mark.png">`,
 		"attributes before src":        `<img alt="x" width="36" src="assets/mark.png">`,
 		"a newline before src":         "<img\n  alt=\"x\"\n  src=\"assets/mark.png\">",
+		"a src= inside an alt value":   `<img alt="a src=https://x.test/z.png" src="assets/mark.png">`,
 	}
 	for name, img := range cases {
 		t.Run(name, func(t *testing.T) {

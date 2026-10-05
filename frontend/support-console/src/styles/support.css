@@ -117,6 +117,10 @@ body {
 .ops-screen-pad {
   padding: 24px 26px 56px;
 }
+/* The prototype's eyebrow is 10px tall; the v2 .eyebrow sets no line-height. Proven by SUP-03's eyebrow height read. */
+.ops-screen-pad .eyebrow {
+  line-height: 1;
+}
 pre.ops-json {
   margin: 0;
   font-family: var(--font-mono);

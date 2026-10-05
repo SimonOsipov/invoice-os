@@ -114,7 +114,9 @@ What a spec still cannot assume is an empty table:
     its `provisionRealAccount` call and one `staff_members` row.
   - Every `provisionStaffAccount` call (`api/client.ts`) leaves one `auth.users` row and one
     `staff_members` row, and no workspace: one per Playwright worker per run for the smoke
-    console specs (`staffSession.ts`), and one per console journey in `topology/auth.spec.ts`.
+    console specs (`staffSession.ts`) and for `topology/ops-console.spec.ts` and
+    `topology/support-console.spec.ts`, one per console test in `topology/design-system.spec.ts`,
+    and one per console journey in `topology/auth.spec.ts`.
     `POST /auth/mock/staff`, which writes the row, exists only in the mock build that every PR
     fork runs.
   - `signInAs` leaves one `auth.users` row and one admin `memberships` row per tenant: the
@@ -144,7 +146,7 @@ but **what backs the assertion**:
 
 The `app` SPA, and the landing sign-in form that hands off to it or to a console, remain the
 only places a browser test can prove the **stack** integrates end to end. A console is entered
-the way a staff member enters it: the smoke specs seed a real staff session
+the way a staff member enters it: the smoke and console topology specs seed a real staff session
 (`seedStaffSession`, `e2e/staffSession.ts`, a staff account from `provisionStaffAccount`),
 and the first topology journey in `auth.spec.ts` signs in through landing (its renewal and
 sign-out journeys seed a session). The consoles and the rest

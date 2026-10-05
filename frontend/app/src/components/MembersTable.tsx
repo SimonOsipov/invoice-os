@@ -46,10 +46,9 @@ const TABLE_MIN_WIDTH = 716
 // would spawn a vertical scrollbar, on any row without room below it. The scroller simply
 // makes room for whichever menu is open.
 //
-// Sized for the tallest reachable menu, an invited row: 3 items and 2 reasons wrapped at the 280px
-// panel (~235px), less the ~15px of row below the trigger, plus one spare wrapped line per reason.
-// ceiling: derived, not measured on a deployed build; re-measure if a menu reason grows.
-const MENU_CLEARANCE = 256
+// Sized for the tallest reachable menu, an invited row, measured on the PR environment.
+// ceiling: fits today's menu copy; re-measure if an item or reason is added.
+const MENU_CLEARANCE = 216
 
 // The INVED-01 regression class. A grid cell only ellipsises if it is allowed to be
 // narrower than its content, so `minWidth: 0` is as load-bearing as the other three.
@@ -123,7 +122,7 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
   return (
     // Two elements where RulesView.tsx:195 uses one, and the split is the whole point: the
     // clearance above has to sit OUTSIDE the card's border. Inside it, opening a menu would
-    // visibly grow the card by 168px of empty background; outside it, the menu simply
+    // visibly grow the card by empty background; outside it, the menu simply
     // overhangs the card's bottom edge the way a dropdown is supposed to.
     <div style={{ overflowX: 'auto', paddingBottom: menuOpen ? MENU_CLEARANCE : 0 }}>
       <div

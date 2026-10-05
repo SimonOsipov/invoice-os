@@ -13,7 +13,8 @@
 
 import { useId, useState, type CSSProperties } from 'react'
 
-import { chevDownGlyph, crossGlyph, tickGlyph11 } from '../glyphs'
+import { chevDownGlyph, tickGlyph11 } from '../glyphs'
+import { Icon } from '../icons'
 import { ACCESS_ROLES, CAPABILITY_FOOTNOTE, CAPABILITY_ROWS, CLIENT_USERS_COPY } from '../lib/members'
 
 // §6 names this in backticks as the affordance, not as prose, so AC#1's "capability rows
@@ -27,6 +28,9 @@ const MATRIX_HEADING = 'What can each role do?'
 // screen readers, its content always is. Declared locally — a shared `.sr-only` utility
 // would mean editing the design-system stylesheet, which is not a copy subtask's business.
 const SR_ONLY: CSSProperties = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' }
+
+// Not the shared `crossGlyph` (stroke 3): the matrix draws a lighter cross.
+const matrixCross = <Icon paths={['M18 6 6 18M6 6l12 12']} size={11} strokeWidth={2.4} />
 
 const MATRIX_COLS = 'minmax(0,1fr) 90px 90px 90px'
 
@@ -105,7 +109,7 @@ export function MemberRoleMatrix() {
                   return (
                     <span key={r.id} role="cell" style={{ display: 'grid', placeItems: 'center', color: allowed ? 'var(--action)' : 'var(--fg-4)' }}>
                       {/* Teal tick / muted cross, not a pass/fail pair: a Preparer who cannot approve is the role working as designed. */}
-                      <span style={{ display: 'inline-flex' }}>{allowed ? tickGlyph11 : crossGlyph}</span>
+                      <span style={{ display: 'inline-flex' }}>{allowed ? tickGlyph11 : matrixCross}</span>
                       <span style={SR_ONLY}>{allowed ? 'Yes' : 'No'}</span>
                     </span>
                   )

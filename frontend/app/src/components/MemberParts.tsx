@@ -31,6 +31,19 @@ import {
 import type { Role } from '../lib/roles'
 import { WfSelect, type WfOption } from './WorkflowParts'
 
+/** A native radio painted as the prototype's ring with a 7px dot when checked. */
+const radioPaint = (checked: boolean): CSSProperties => ({
+  appearance: 'none',
+  WebkitAppearance: 'none',
+  flex: 'none',
+  width: 15,
+  height: 15,
+  boxSizing: 'border-box',
+  borderRadius: '50%',
+  border: `1.5px solid ${checked ? 'var(--action)' : 'var(--line-3)'}`,
+  background: checked ? 'radial-gradient(circle, var(--action) 0 3.5px, transparent 4px)' : 'transparent',
+})
+
 // ---------------------------------------------------------------------------
 // Initials chip
 // ---------------------------------------------------------------------------
@@ -207,8 +220,6 @@ export function RoleCards({ value, onChange, disabledIds, note, noteId: noteIdPr
               // cannot emit `!important`, so unlike the unguarded
               // `.pf-menu-item:hover` this one cannot be outranked inline and a dead card
               // would still light up.
-              // Adding a `[aria-disabled]` rule to the shared stylesheet would fix it globally for a state only -07 reaches, which is the edit
-              // MemberRoleMatrix.tsx:32-33 already declines to make. Do not restore it.
               className={disabled ? undefined : 'pf-upcard'}
               style={{
                 display: 'flex',
@@ -231,7 +242,7 @@ export function RoleCards({ value, onChange, disabledIds, note, noteId: noteIdPr
                 onChange={() => onChange?.(r.id)}
                 title={disabled ? note : undefined}
                 aria-describedby={disabled && note ? noteId : undefined}
-                style={{ flex: 'none', margin: '2px 0 0' }}
+                style={{ ...radioPaint(sel), margin: '2px 0 0' }}
               />
               <span style={{ minWidth: 0 }}>
                 <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: 'var(--fg-1)' }}>{r.label}</span>
@@ -337,7 +348,7 @@ export function ClientAccessPicker({ value, onChange, idPrefix }: {
               // Toggling back to `All clients` KEEPS the ticked set — `ids` is carried
               // through untouched, so switching back re-emits exactly what was ticked.
               onChange={() => pick(s, ids)}
-              style={{ flex: 'none' }}
+              style={radioPaint(scope === s)}
             />
             {s === 'all' ? 'All clients' : 'Selected clients'}
           </label>
@@ -502,7 +513,7 @@ export type MenuAction = {
 /**
  * The per-row `⋯` menu. The app had no row menu before this, so the anatomy is taken from
  * the only popover it does have, the Sidebar company switcher (Sidebar.tsx:139-186): a
- * `position: relative` wrapper, an absolute panel at `calc(100% + 6px)` in --bg-2 with a
+ * `position: relative` wrapper, an absolute panel in --bg-2 with a
  * --line-2 hairline, --radius-md, the same long soft shadow and `popIn 140ms`
  * (platform.css), and `.pf-menu-item` rows.
  *
@@ -561,8 +572,8 @@ export function MoreMenu({ open, onOpen, onClose, label, items }: {
           padding: 0,
           border: 0,
           cursor: 'pointer',
-          background: open ? 'var(--bg-3)' : 'transparent',
-          color: open ? 'var(--action)' : 'var(--fg-3)',
+          background: 'transparent',
+          color: 'var(--fg-3)',
         }}
       >
         {moreGlyph}

@@ -9,7 +9,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { chevDownGlyph } from '../glyphs'
 import { useDismiss } from '../lib/useDismiss'
 
-// v2 card elevation; MemberParts keeps its own popover shadow.
+// v2 card elevation.
 const POPOVER_SHADOW = 'var(--shadow-card)'
 
 export interface FilterPopoverProps {

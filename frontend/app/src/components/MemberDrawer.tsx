@@ -58,13 +58,13 @@ const ACCESS_ROLE_IDS = ACCESS_ROLES.map((r) => r.id)
  * the same trade. `minInlineSize: 0` is mandatory: a fieldset defaults to `min-content` and
  * would refuse to shrink inside a 560px drawer.
  */
-function UnbackedField({ reason, noteId, children }: { reason: string; noteId: string; children: ReactNode }) {
+function UnbackedField({ reason, noteId, dim = false, children }: { reason: string; noteId: string; dim?: boolean; children: ReactNode }) {
   return (
     <>
       <fieldset
         disabled
         aria-describedby={noteId}
-        style={{ border: 0, padding: 0, margin: 0, minInlineSize: 0, pointerEvents: 'none' }}
+        style={{ border: 0, padding: 0, margin: 0, minInlineSize: 0, pointerEvents: 'none', ...(dim ? { opacity: 0.45, cursor: 'not-allowed', filter: 'none' } : null) }}
       >
         {children}
       </fieldset>
@@ -231,7 +231,7 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
               </div>
               {/* `'all'` is the honest value, not a fallback: nothing stores client access per
                   person, so everyone in the workspace does see the same clients. */}
-              <UnbackedField reason={MEMBER_UNBACKED.clientAccess} noteId={scopeNoteId}>
+              <UnbackedField reason={MEMBER_UNBACKED.clientAccess} noteId={scopeNoteId} dim>
                 <ClientAccessPicker idPrefix="drawer" value="all" />
               </UnbackedField>
             </>

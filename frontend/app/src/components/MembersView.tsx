@@ -133,7 +133,6 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
           value={roleFilter}
           options={ROLE_FILTER_OPTIONS}
           onChange={(v) => setRoleFilter(v as AccessRole | 'all')}
-          width={180}
           height={36}
           background="var(--bg-2)"
         />

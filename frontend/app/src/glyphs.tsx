@@ -56,7 +56,7 @@ export const sparkGlyph = <Icon paths={['M12 3 14.09 8.26 20 9.27l-4 3.64L17.18 
 // members story adds. There was no row menu anywhere in the app before it, so nothing
 // existing could be reused. Hand-authored like everything else here — the gripGlyph
 // idiom exactly (same 13 / 2.4 pair), one column of dots instead of two.
-export const moreGlyph = <Icon paths={['M12 5h.01', 'M12 12h.01', 'M12 19h.01']} size={13} strokeWidth={2.4} />
+export const moreGlyph = <Icon paths={['M12 5h.01', 'M12 12h.01', 'M12 19h.01']} size={15} strokeWidth={2.6} />
 
 export type NavDef = { id: 'dashboard' | 'invoices' | 'workflows' | 'rules' | 'clients' | 'approvals' | 'customers' | 'reports' | 'audit' | 'settings'; label: string; glyph: ReactNode }
 

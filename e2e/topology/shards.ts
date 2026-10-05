@@ -27,6 +27,7 @@ export const UNITS: Unit[] = [
       'portfolio.spec.ts',
       'portfolio-workflow-surfaces.spec.ts',
       'roles.spec.ts',
+      'support-console.spec.ts',
       'workflows.spec.ts',
     ],
     reasons: {
@@ -54,6 +55,8 @@ export const UNITS: Unit[] = [
         'Reads the `Standard approval policy` that `internal/demopolicy` seeds only on 1111 / 2222 (`planFor`), without saving it; creates its own entity and invoice in 1111.',
       'roles.spec.ts':
         'Asserts the exact seeded roles, staffing and rosters of both tenants, derived by hand from `db/seed.dev.sql`, and the demopolicy-sealed policies.',
+      'support-console.spec.ts':
+        'Cost, not shared state ([fork-lane-by-cost]): signs in the support persona to the mock-backed Support Console; reads and writes no tenant data.',
       'workflows.spec.ts':
         "Creates and deletes one firm policy in 1111 and asserts the list count as `baseline` / `baseline + 1`, where the baseline includes the demopolicy-seeded firm policy. The count holds only while no other spec writes 1111's policies at the same time, which the lane guarantees. It never publishes (`[topology-never-publishes]`).",
     },

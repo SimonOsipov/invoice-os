@@ -7,8 +7,8 @@ import { Health } from './components/Health'
 import { Rules } from './components/Rules'
 import { Submissions } from './components/Submissions'
 import { Tenants } from './components/Tenants'
-import { AUDIT_ENTRIES, AUDIT_FILTERS, JOB_FILTERS, LEARNED_RULES, RECON_ROWS, RULE_SET_VERSIONS, SEED_JOBS, SEED_RULES, TENANTS } from './data'
-import type { Job } from './types'
+import { AUDIT_ENTRIES, AUDIT_FILTERS, JOB_FILTERS, LEARNED_RULES, RECON_ROWS, RULE_SET_VERSIONS, SEED_JOBS, SEED_RULES, TENANTS, healthCards } from './data'
+import type { AuditFilter, Job } from './types'
 
 // SSR markup is the oracle for inline values; the resolved look is SUP-03 (deploy gate).
 const noop = () => {}
@@ -54,17 +54,22 @@ const submissions = (subTab: 'jobs' | 'recon', jobs: Job[] = SEED_JOBS) =>
   renderToStaticMarkup(
     createElement(Submissions, { jobs, filter: 'all', subTab, onFilterChange: noop, onSubTabChange: noop, onOpenJob: noop, onReDriveAll: noop, onReconcile: noop, onRunSweep: noop }),
   )
-const audit = (query = '') =>
-  renderToStaticMarkup(createElement(Audit, { query, filter: 'all', onQueryChange: noop, onFilterChange: noop, onOpen: noop }))
-const tenants = (query = '') =>
-  renderToStaticMarkup(createElement(Tenants, { query, tenantId: 't1', onQueryChange: noop, onSelect: noop, onViewJobs: noop, onViewAs: noop }))
+const audit = (query = '', filter: AuditFilter = 'all') =>
+  renderToStaticMarkup(createElement(Audit, { query, filter, onQueryChange: noop, onFilterChange: noop, onOpen: noop }))
+const tenants = (query = '', tenantId = 't1') =>
+  renderToStaticMarkup(createElement(Tenants, { query, tenantId, onQueryChange: noop, onSelect: noop, onViewJobs: noop, onViewAs: noop }))
+const healthHtml = (deadLetterCount: number) => renderToStaticMarkup(createElement(Health, { deadLetterCount }))
+const submissionsFiltered = (filter: Parameters<typeof Submissions>[0]['filter'], jobs: Job[] = SEED_JOBS) =>
+  renderToStaticMarkup(
+    createElement(Submissions, { jobs, filter, subTab: 'jobs', onFilterChange: noop, onSubTabChange: noop, onOpenJob: noop, onReDriveAll: noop, onReconcile: noop, onRunSweep: noop }),
+  )
 
 const SCREENS = {
   submissions: submissions('jobs'),
   rules: renderToStaticMarkup(createElement(Rules, { rules: SEED_RULES, onOpenRule: noop, onToggleRule: noop, onPublish: noop, onPromote: noop })),
   audit: audit(),
   tenants: tenants(),
-  health: renderToStaticMarkup(createElement(Health, { deadLetterCount: 2 })),
+  health: healthHtml(2),
 }
 const RECON = submissions('recon')
 type Screen = keyof typeof SCREENS
@@ -72,6 +77,11 @@ const SCREEN_KEYS = Object.keys(SCREENS) as Screen[]
 const tagsOf = (screen: Screen) => {
   const ts = parse(SCREENS[screen])
   expect(ts.length, `${screen}: markup parsed`).toBeGreaterThan(10)
+  return ts
+}
+const parsed = (html: string, at: string) => {
+  const ts = parse(html)
+  expect(ts.length, `${at}: markup parsed`).toBeGreaterThan(10)
   return ts
 }
 const reconTags = () => {
@@ -140,6 +150,22 @@ describe('v2 screens', () => {
     health.forEach((t, i) => expectFigure(t, '30px', `health figure #${i}`))
     expectFigure(withText(reconTags(), '82'), '30px', 'rate figure')
 
+    for (const t of TENANTS) {
+      const ts = parsed(tenants('', t.id), `tenant ${t.id}`)
+      expect(t.kpis, `${t.id}: KPIs`).toHaveLength(4)
+      for (const k of t.kpis) expectFigure(figureBefore(ts, k.label), '20px', `${t.id} KPI ${k.label}`)
+      const h2 = ts.filter((x) => x.name === 'h2')
+      expect(h2, `${t.id}: one h2`).toHaveLength(1)
+      expect.soft([h2[0].text, style(h2[0])['font-size']], `${t.id}: h2 name and size`).toEqual([t.name, '19px'])
+      expect.soft(Object.keys(style(h2[0])).filter((k) => k === 'font-weight' || k === 'letter-spacing'), `${t.id}: h2 inline weight and tracking`).toEqual([])
+    }
+    for (const n of [0, 1, 37]) {
+      const figs = parsed(healthHtml(n), `health ${n}`).filter((t) => style(t)['font-size'] === '30px')
+      expect(figs, `health ${n}: figures`).toHaveLength(6)
+      figs.forEach((t, i) => expectFigure(t, '30px', `health ${n} figure #${i}`))
+      expect(figs[healthCards(n).findIndex((c) => c.label === 'Dead-letter')].text, `health ${n}: the Dead-letter figure reads the count`).toBe(String(n))
+    }
+
     const tins = tagsOf('tenants').filter((t) => TENANTS.some((x) => x.tin === t.text))
     expect(tins.length, 'tenant TIN spans').toBeGreaterThanOrEqual(TENANTS.length)
     for (const t of tins) expect.soft(classes(t), `TIN ${t.text} keeps mono`).toContain('mono')
@@ -197,6 +223,46 @@ describe('v2 screens', () => {
       expect.soft(style(track)['border-radius'], 'meter track corner').toBe('2px')
       expect.soft([style(fill).width, style(fill)['border-radius']], 'meter fill (the next tag) width and corner').toEqual(['82%', '2px'])
     }
+    // The active chip is read too: every filter value, every chip.
+    for (const k of JOB_FILTERS) {
+      const cs = withClass(parsed(submissionsFiltered(k), `submissions ${k}`), 'ops-chip')
+      expect(cs, `${k}: chips`).toHaveLength(JOB_FILTERS.length)
+      expect(cs.filter((c) => attr(c, 'aria-pressed') === 'true'), `${k}: one active chip`).toHaveLength(1)
+      for (const c of cs) expect.soft(style(c)['border-radius'], `${k}: chip corner`).toBe('var(--radius-sm)')
+    }
+    for (const f of AUDIT_FILTERS) {
+      const cs = withClass(parsed(audit('', f.key), `audit ${f.key}`), 'ops-chip')
+      expect(cs, `${f.key}: audit chips`).toHaveLength(AUDIT_FILTERS.length)
+      expect(cs.filter((c) => attr(c, 'aria-pressed') === 'true'), `${f.key}: one active audit chip`).toHaveLength(1)
+      for (const c of cs) expect.soft(style(c)['border-radius'], `${f.key}: audit chip corner`).toBe('var(--radius-sm)')
+    }
+
+    // The remaining chips and badges of the Shared rules table.
+    const typeChips = rules.filter((t) => classes(t).includes('mono') && style(t)['justify-self'] === 'start')
+    expect(typeChips, 'rule type chips').toHaveLength(SEED_RULES.length)
+    for (const c of typeChips) expect.soft(style(c)['border-radius'], `type chip ${c.text} corner`).toBe('var(--radius-sm)')
+    const aud = tagsOf('audit')
+    const appendOnly = aud.filter((t) => style(t).background === 'var(--status-muted-bg)')
+    expect(appendOnly, 'APPEND-ONLY badge').toHaveLength(1)
+    expect.soft([style(appendOnly[0])['border-radius'], style(appendOnly[0]).color], 'APPEND-ONLY corner and colour (D-16)').toEqual(['var(--radius-sm)', 'var(--fg-2)'])
+    const glyphTiles = aud.filter((t) => style(t).width === '22px' && style(t).display === 'inline-flex')
+    expect(glyphTiles, 'audit glyph tiles').toHaveLength(AUDIT_ENTRIES.length)
+    for (const g of glyphTiles) expect.soft(style(g)['border-radius'], 'audit glyph tile corner').toBe('var(--radius-sm)')
+    for (const t of TENANTS) {
+      const roleTags = parsed(tenants('', t.id), `tenant ${t.id}`).filter((x) => classes(x).includes('mono') && x.attrs.includes('border-radius:var(--radius-sm)') && t.members.some((m) => m.role.toUpperCase() === x.text))
+      expect(roleTags, `${t.id}: role tags`).toHaveLength(t.members.length)
+    }
+
+    // Cards, tables and tiles: v2 corner, no shadow, on every screen and tab.
+    const surfaces: [string, string][] = [...SCREEN_KEYS.map((k) => [k, SCREENS[k]] as [string, string]), ['recon', RECON], ['tenant t3', tenants('', 't3')], ['health clear', healthHtml(0)]]
+    const floors: Record<string, number> = { submissions: 5, rules: 3, audit: 1, tenants: 2, health: 6, recon: 4 }
+    for (const [name, html] of surfaces) {
+      const ts = parsed(html, name)
+      const cards = ts.filter((t) => style(t).border === '1px solid var(--line-1)' && style(t).background === 'var(--bg-2)' && !classes(t).includes('ops-chip'))
+      expect(cards.length, `${name}: cards found`).toBeGreaterThanOrEqual(floors[name.split(' ')[0]] ?? 1)
+      for (const c of cards) expect.soft(style(c)['border-radius'], `${name}: card corner`).toBe('var(--radius-md)')
+      expect.soft(ts.filter((t) => 'box-shadow' in style(t)).map((t) => t.name), `${name}: no inline shadow`).toEqual([])
+    }
   })
 
   it('SC-04 screen buttons, rows and fields', () => {
@@ -236,6 +302,27 @@ describe('v2 screens', () => {
       expect(fields, `${screen}: one search wrapper`).toHaveLength(1)
       expect.soft(classes(fields[0]), `${screen}: search wrapper classes`).toEqual(['ops-input', 'ops-field'])
     }
+    const noDeadLetter = SEED_JOBS.filter((j) => j.state !== 'dead-letter')
+    expect(noDeadLetter.length, 'jobs without a dead-letter').toBeGreaterThan(0)
+    expect(buttonsOf(submissionsFiltered('all', noDeadLetter)).some((b) => b.text === 'Re-drive all'), 'no dead-letter, no Re-drive all').toBe(false)
+    expect(buttonsOf(SCREENS.submissions).some((b) => b.text === 'Re-drive all'), 'control: dead-letter jobs show Re-drive all').toBe(true)
+
+    // Icon wrappers draw inline-flex, as the prototype does (D-16).
+    for (const screen of ['audit', 'tenants'] as const) {
+      const ts = tagsOf(screen)
+      const at = ts.indexOf(withClass(ts, 'ops-input')[0])
+      expect.soft([ts[at + 1].name, style(ts[at + 1]).display, style(ts[at + 1]).color, ts[at + 2].name], `${screen}: search icon wrapper`).toEqual(['span', 'inline-flex', 'var(--fg-3)', 'svg'])
+    }
+    const rulesTs = tagsOf('rules')
+    const sparks = rulesTs.filter((t, i) => style(t).color === 'var(--action)' && rulesTs[i + 1]?.name === 'svg')
+    expect(sparks, 'learned-rules spark wrapper').toHaveLength(1)
+    expect.soft(style(sparks[0]).display, 'spark wrapper').toBe('inline-flex')
+    for (const [screen, count] of [['submissions', SEED_JOBS.length], ['audit', AUDIT_ENTRIES.length]] as const) {
+      const ts = tagsOf(screen)
+      const chevrons = ts.filter((t, i) => style(t).color === 'var(--fg-4)' && ts[i + 1]?.name === 'svg')
+      expect(chevrons, `${screen}: row chevrons`).toHaveLength(count)
+      for (const c of chevrons) expect.soft(style(c).display, `${screen}: chevron wrapper`).toBe('inline-flex')
+    }
   })
 
   it('SC-05 enabled text meets Q3', () => {
@@ -252,6 +339,14 @@ describe('v2 screens', () => {
     const counts = ts.flatMap((t, i) => (classes(t).includes('ops-chip') ? [ts[i + 1]] : []))
     expect(counts, 'one count span per chip').toHaveLength(JOB_FILTERS.length)
     for (const c of counts) expect.soft(Object.keys(style(c)), `chip count ${c.text}: opacity`).not.toContain('opacity')
+    const none = SEED_JOBS.filter((j) => j.state !== 'dead-letter')
+    const filtered: [string, string][] = [
+      [submissionsFiltered('dead-letter', none), 'No jobs in this state.'],
+      [audit('zz-no-match', 'rule'), 'No audit entries match this filter.'],
+    ]
+    for (const [html, text] of filtered) expect.soft(style(withText(parse(html), text)).color, `"${text}" under a filter`).toBe('var(--fg-3)')
+    expect(parse(SCREENS.submissions).some((t) => t.text === 'No jobs in this state.'), 'control: the seed jobs show no empty state').toBe(false)
+    expect(parse(SCREENS.tenants).some((t) => t.text === 'No tenant matches.'), 'control: the seed tenants show no empty state').toBe(false)
   })
 
   it('SC-06 the smoke locators keep their classes', () => {
@@ -272,5 +367,11 @@ describe('v2 screens', () => {
     expect(tile.map((t) => t.name), 'tile, figure, label').toEqual(['div', 'div', 'div'])
     expect(withClass(tile, 'money'), 'the Dead-letter tile holds exactly one .money').toHaveLength(1)
     expect(classes(tile[1]), 'the figure is the .money').toContain('money')
+    // Zero dead-letter jobs: the tile still holds exactly one .money, reading 0.
+    const zero = parsed(submissionsFiltered('all', SEED_JOBS.filter((j) => j.state !== 'dead-letter')), 'no dead-letter')
+    const zeroAt = zero.indexOf(withText(zero, 'Dead-letter'))
+    const zeroTile = zero.slice(zeroAt - 2, zeroAt + 1)
+    expect(withClass(zeroTile, 'money'), 'zero: one .money in the tile').toHaveLength(1)
+    expect(zeroTile[1].text, 'zero: the figure reads 0').toBe('0')
   })
 })

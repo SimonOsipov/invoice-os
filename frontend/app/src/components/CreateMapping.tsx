@@ -108,7 +108,7 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
       required: !!c.required,
       bg: armed ? 'var(--action)' : c.required ? 'var(--status-red-bg)' : 'var(--bg-2)',
       border: armed ? 'var(--action)' : c.required ? 'var(--status-red-border)' : 'var(--line-2)',
-      color: armed ? 'var(--text-on-dark)' : c.required ? 'var(--status-red-text)' : 'var(--fg-1)',
+      color: armed ? 'var(--primary-foreground)' : c.required ? 'var(--status-red-text)' : 'var(--fg-1)',
     }
   })
 
@@ -145,9 +145,9 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
   // there, so this state is unreachable in that workspace anyway.
   const invNumArmed = armedField === 'invoice_number' && !invNumMapped
   const mapNote = !canFile
-    ? { text: 'Columns read. Filing is unavailable in this workspace — it has no linked business entity to file the invoices against.', color: 'var(--status-muted-text)' }
+    ? { text: 'Columns read. Filing is unavailable in this workspace — it has no linked business entity to file the invoices against.', color: 'var(--status-amber-text)' }
     : invNumArmed
-      ? { text: 'invoice_number is armed — click the column that holds it. Nothing continues until you place it by hand.', color: 'var(--action)' }
+      ? { text: 'invoice_number is armed — click the column that holds it. Nothing continues until you place it by hand.', color: 'var(--status-red-text)' }
       : !invNumMapped
         ? { text: "Drag invoice_number onto a column to continue — the invoice number is never matched by name: only suggested from the file's own rows, or restored from this client's earlier import, and confirmed with Continue.", color: 'var(--status-red-text)' }
         : optionalUnmapped > 0
@@ -160,24 +160,21 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
   // sharing. Gated on `groups`/`groupIndex` (BULK-01-04) rather than a single-group
   // literal so a single-group run (the common case) still reads exactly as shipped.
   const isLastGroup = groupIndex >= groups.length - 1
-  const continueBtn = !canFile
-    ? { bg: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', label: 'Filing needs a linked entity' }
-    : {
-        bg: invNumMapped ? 'var(--action)' : 'var(--bg-3)',
-        color: invNumMapped ? 'var(--text-on-dark)' : 'var(--fg-4)',
-        cursor: invNumMapped ? 'pointer' : 'not-allowed',
-        label: invNumMapped
-          ? isLastGroup
-            ? `Import ${preview.rows_total} rows`
-            : 'Continue to next file'
-          : 'Map invoice number to continue',
-      }
+  // Dimmed by style, not `disabled`, while invoice_number is unmapped: the click arms it (INVCR-01-05).
+  const continueDim = !canFile || !invNumMapped
+  const continueLabel = !canFile
+    ? 'Filing needs a linked entity'
+    : invNumMapped
+      ? isLastGroup
+        ? `Import ${preview.rows_total} rows`
+        : 'Continue to next file'
+      : 'Map invoice number to continue'
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
         <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-          <span className="card-title">Map fields to columns · {active.short}</span>
+          <span className="card-title" style={{ fontSize: 15 }}>Map fields to columns · {active.short}</span>
           {allPlaced ? (
             <span className="mono" style={{ fontSize: 11, color: 'var(--status-green-text)' }}>ALL FIELDS PLACED</span>
           ) : (
@@ -185,7 +182,7 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
           )}
         </div>
         <div style={{ padding: '14px 20px 18px' }}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '11px 12px', background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-input)', marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '11px 12px', background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', marginBottom: 14 }}>
             <span style={{ flex: 'none', color: 'var(--fg-3)', marginTop: 1 }}>{shieldGlyph}</span>
             <p style={{ fontSize: 12, color: 'var(--fg-2)', margin: 0, lineHeight: 1.5 }}>
               Drag each field onto the column that holds its data — or click a field, then a column. One spreadsheet row is a single line item; rows group into invoices by the column mapped to{' '}
@@ -217,7 +214,7 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
                   onDragEnd={() => ctx.endDrag()}
                   onClick={() => ctx.armField(c.key)}
                   className="pf-btn"
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 7, cursor: 'grab', fontFamily: 'var(--font-mono)', fontSize: 11.5, fontWeight: 600, letterSpacing: '0.02em', textTransform: 'uppercase', padding: '8px 12px', borderRadius: 'var(--radius-input)', background: c.bg, border: `1px solid ${c.border}`, color: c.color }}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 7, cursor: 'grab', fontFamily: 'var(--font-mono)', fontSize: 11.5, fontWeight: 600, letterSpacing: '0.02em', textTransform: 'uppercase', height: 30, padding: '0 11px', background: c.bg, border: `1px solid ${c.border}`, color: c.color }}
                 >
                   <span style={{ display: 'inline-flex', opacity: 0.6 }}>{gripGlyph}</span>
                   {c.key}
@@ -241,23 +238,23 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
           import-wizard.spec.ts's E2E-02 asserts `page.locator('main div.mono')` resolves
           to exactly ONE element, the column header cell below (:210 in this file). */}
       {activeGroup && (
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '12px 20px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '14px 20px', display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-            <p style={{ fontSize: 12.5, color: 'var(--fg-2)', margin: 0, lineHeight: 1.5 }}>{sentence}</p>
+            <p style={{ fontSize: 13, color: 'var(--fg-2)', margin: 0, lineHeight: 1.5 }}>{sentence}</p>
             {groups.length > 1 && (
-              <span className="mono" style={{ flex: 'none', fontSize: 10.5, color: 'var(--fg-3)', letterSpacing: '0.03em', whiteSpace: 'nowrap' }}>
+              <span className="mono" style={{ flex: 'none', fontSize: 10.5, color: 'var(--fg-3)', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>
                 GROUP {groupIndex + 1} OF {groups.length}
               </span>
             )}
           </div>
           {notice && (
-            <div data-testid="map-restored-notice" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+            <div data-testid="map-restored-notice" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '9px 12px', background: 'var(--action-tint)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)' }}>
               <p style={{ fontSize: 12.5, color: 'var(--fg-2)', margin: 0, lineHeight: 1.5 }}>{notice}</p>
               <button
                 type="button"
                 onClick={() => ctx.resetGroupToAutomatic()}
-                className="pf-btn"
-                style={{ fontSize: 11.5, fontWeight: 600, padding: '5px 10px', borderRadius: 'var(--radius-input)', background: 'var(--bg-1)', border: '1px solid var(--line-2)', color: 'var(--fg-2)', cursor: 'pointer' }}
+                className="v2-btn v2-btn-ghost pf-btn"
+                style={{ flex: 'none', height: 30, padding: '0 12px', fontSize: 12.5 }}
               >
                 Use automatic suggestions
               </button>
@@ -272,8 +269,8 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
                   key={fid}
                   type="button"
                   onClick={() => ctx.splitOutFile(fid)}
-                  className="pf-btn"
-                  style={{ fontSize: 11.5, fontWeight: 600, padding: '5px 10px', borderRadius: 'var(--radius-input)', background: 'var(--bg-1)', border: '1px solid var(--line-2)', color: 'var(--fg-2)', cursor: 'pointer' }}
+                  className="v2-btn v2-btn-ghost pf-btn"
+                  style={{ flex: 'none', height: 30, padding: '0 12px', fontSize: 12.5 }}
                 >
                   Map {names[fid] ?? fid} separately
                 </button>
@@ -286,7 +283,7 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
       <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
         <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-            <span style={{ flex: 'none', width: 30, height: 30, borderRadius: 'var(--radius-md)', background: 'var(--bg-3)', color: 'var(--fg-3)', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 8.5, fontWeight: 700 }}>{fileExt}</span>
+            <span style={{ flex: 'none', width: 30, height: 30, borderRadius: 'var(--radius-md)', background: 'var(--status-green-bg)', color: 'var(--status-green-text)', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 8.5, fontWeight: 700 }}>{fileExt}</span>
             {/* A short, representative label — the full statement of which files this
                 mapping covers is the coverage sentence above, not this row. Reading off
                 `primaryFileName` (the active group's own first covered file) rather than
@@ -294,9 +291,11 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
                 picked file, so on any group past the first this row would otherwise keep
                 naming a file that already finished mapping — a visible contradiction
                 with the correct coverage sentence one line above it. */}
-            <span style={{ fontSize: 13.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <span className="mono" style={{ fontSize: 12.5, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {primaryFileName}
-              {activeGroup && activeGroup.fileIds.length > 1 ? ` +${activeGroup.fileIds.length - 1} more` : ''}
+              {activeGroup && activeGroup.fileIds.length > 1 && (
+                <span style={{ color: 'var(--fg-3)', fontWeight: 500 }}> +{activeGroup.fileIds.length - 1} more</span>
+              )}
             </span>
           </span>
           <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)', letterSpacing: '0.03em', whiteSpace: 'nowrap' }}>{mapFacts}</span>
@@ -367,7 +366,7 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
                     </span>
                   ) : (
                     <div style={{ display: 'grid', placeItems: 'center', height: 30, border: `1px dashed ${col.dropBorder}`, borderRadius: 'var(--radius-sm)', background: col.dropBg }}>
-                      <span style={{ fontSize: 10.5, color: 'var(--fg-4)' }}>drop field</span>
+                      <span style={{ fontSize: 10.5, color: 'var(--fg-3)' }}>drop field</span>
                     </div>
                   )}
                 </div>
@@ -396,10 +395,10 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
               import-wizard.spec.ts's E2E-02 asserts `main div.mono` resolves to
               exactly the one column-header cell further down this file. */}
           {failures.length > 0 ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               {failures.map((f, i) => (
                 <span key={i} style={{ fontSize: 12, color: 'var(--status-red-text)', lineHeight: 1.4 }}>
-                  <span className="mono" style={{ fontSize: 11 }}>{f.name}</span>: {f.message}
+                  <span className="mono" style={{ fontSize: 11.5 }}>{f.name}</span>: {f.message}
                 </span>
               ))}
             </div>
@@ -424,9 +423,17 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
             onClick={ctx.continueMapping}
             disabled={uploading || !canFile}
             className="v2-btn pf-btn"
-            style={{ height: 42, padding: '0 18px', justifyContent: 'center', background: continueBtn.bg, color: continueBtn.color, cursor: continueBtn.cursor }}
+            style={{
+              height: 42,
+              padding: '0 18px',
+              justifyContent: 'center',
+              background: 'var(--action)',
+              color: 'var(--primary-foreground)',
+              cursor: continueDim ? 'not-allowed' : 'pointer',
+              ...(continueDim ? { opacity: 0.45, filter: 'none' } : {}),
+            }}
           >
-            {continueBtn.label}
+            {continueLabel}
           </button>
         </div>
       </div>

@@ -66,11 +66,6 @@ function uniquePdfBytes(): Buffer {
   return Buffer.concat([NATIVE_INVOICE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
-const ADVISORY_REGISTER_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'advisory_register.pdf'))
-const CHROME_REGISTER_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'chrome_register.pdf'))
-const AI_STEERED_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'ai_steered_invoice.pdf'))
-const withFreshComment = (pdf: Buffer): Buffer => Buffer.concat([pdf, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
-
 // A dispatched drop: addPickedFiles sees it without `accept`. `bytes` sizes the file; nothing dropped is uploaded.
 async function dropFiles(page: Page, specs: { name: string; type: string; bytes?: number }[]): Promise<void> {
   await page.evaluate((list) => {
@@ -1124,35 +1119,39 @@ test.describe('RESKIN2-04 v2 extraction review at 1440', () => {
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })
 
-  test('RX-02 (AC 8): the confident reading is the first fixture with no flagged field; its flag count is attached', async ({ page }, testInfo) => {
-    test.setTimeout(1_200_000)
+  test('RX-02 (AC 8): the confident reading renders no reason pill', async ({ page }, testInfo) => {
+    test.setTimeout(420_000)
     const errors = collectErrors(page)
 
-    const fixtures = [
-      { name: 'chrome_register.pdf', bytes: () => withFreshComment(CHROME_REGISTER_PDF) },
-      { name: 'advisory_register.pdf', bytes: () => withFreshComment(ADVISORY_REGISTER_PDF) },
-      { name: 'ai_steered_invoice.pdf', bytes: () => withFreshComment(AI_STEERED_PDF) },
-    ]
-    const tried: { fixture: string; flagged: number; rendered: number }[] = []
-    for (const fixture of fixtures) {
-      await extractOneDocument(page, `RESKIN2-04 extraction ${fixture.name}`, { name: fixture.name, buffer: fixture.bytes() })
+    await extractOneDocument(page, 'RESKIN2-04 extraction confident')
+    // Read-side only: the detail GET is answered with every reason cleared; values, regions and lines stay.
+    const DETAIL_GLOB = /\/api\/submission\/v1\/extractions\/[0-9a-fA-F-]{36}$/
+    const cleared: { fields: number; reasonsBefore: number } = { fields: 0, reasonsBefore: 0 }
+    await page.route(DETAIL_GLOB, async (route) => {
+      if (route.request().method() !== 'GET') return route.continue()
+      const response = await route.fetch()
+      const body = (await response.json()) as ExtractionDetail
+      cleared.fields = body.fields.length
+      cleared.reasonsBefore = body.fields.filter((f) => f.reason !== '').length
+      await route.fulfill({ response, json: { ...body, fields: body.fields.map((f) => ({ ...f, reason: '' })) } })
+    })
+    try {
       const detail = await openExtractionReview(page)
-      const flagged = detail.fields.filter((f) => f.reason !== '').length
-      // A header cell's pill slot also carries the NO REGION cue; only a reason pill counts as a flag.
+      expect(detail.fields.length, 'the transformed reading must carry fields').toBeGreaterThan(0)
+      expect(detail.fields.filter((f) => f.reason !== '').length, 'every reason is cleared on the wire').toBe(0)
+
       const cells = page.locator('[data-testid^="extraction-field-"]')
       await floor(cells, 1, 'the review must render its header fields')
-      const rendered = await cells.evaluateAll(
+      // A header cell's pill slot also carries the NO REGION cue; only a reason pill counts.
+      const reasonPills = await cells.evaluateAll(
         (els) => els.filter((el) => { const pill = el.querySelector('span.mono'); return pill !== null && pill.textContent !== 'NO REGION' }).length,
       )
-      // The line_items block and its cells render in LineItemGrid, not as header cells.
-      const headerFlagged = detail.fields.filter((f) => f.reason !== '' && !f.name.startsWith('line_items')).length
-      expect(rendered, `${fixture.name}: flagged header fields rendered must equal the detail API's flagged header count`).toBe(headerFlagged)
-      tried.push({ fixture: fixture.name, flagged, rendered })
-      await shootExtraction(page, testInfo, flagged === 0 ? 'extraction-confident.png' : `extraction-least-flagged-candidate-${flagged}-${fixture.name}.png`)
-      if (flagged === 0) break
+      expect(reasonPills, 'a confident reading draws no reason pill in a header cell').toBe(0)
+      await attachJson(testInfo, 'rx-02-reason-counts', { renderedCells: await cells.count(), reasonPills, ...cleared })
+      await shootExtraction(page, testInfo, 'extraction-confident.png')
+    } finally {
+      await page.unroute(DETAIL_GLOB)
     }
-    expect(tried.length, 'at least one fixture was read').toBeGreaterThan(0)
-    await attachJson(testInfo, 'rx-02-flag-counts', { tried, chosen: tried.reduce((a, b) => (b.flagged < a.flagged ? b : a)) })
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })

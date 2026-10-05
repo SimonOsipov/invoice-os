@@ -278,8 +278,18 @@ func TestTemplate_EscapesTheAnswers(t *testing.T) {
 	if strings.Contains(out, "<img src=x") || strings.Contains(out, "onerror=alert(1)>") {
 		t.Error("payload survives unescaped in the mail")
 	}
-	if _, got := intro(t, out); !strings.Contains(got, payload) {
-		t.Errorf("intro does not show the payload as text: %q", got)
+	wantIntro := "Hi " + payload + ", your ASComply account for " + payload + " has been created. Confirm " + payload + "@obi.test to open your workspace."
+	if _, got := intro(t, out); got != wantIntro {
+		t.Errorf("intro = %q, want the payload shown as text in all three places: %q", got, wantIntro)
+	}
+	for _, label := range []string{"Organisation", "Email"} {
+		_, inner := mustRow(t, out, label)
+		if strings.ContainsAny(inner, `<>"`) {
+			t.Errorf("%s row holds unescaped markup: %q", label, inner)
+		}
+		if got := html.UnescapeString(inner); !strings.HasPrefix(got, payload) {
+			t.Errorf("%s row shows %q, want the payload as text", label, got)
+		}
 	}
 }
 
@@ -422,6 +432,15 @@ func TestLayout_ServesAnyMailThatDefinesItsSlots(t *testing.T) {
 	}
 	if strings.Contains(out, "What happens next") {
 		t.Error("shell renders the next section though the mail does not define it")
+	}
+	imgs := imgRe.FindAllStringSubmatch(out, -1)
+	if len(imgs) != 2 {
+		t.Fatalf("shell holds %d <img>, want 2 (header and footer)", len(imgs))
+	}
+	for _, m := range imgs {
+		if m[1] != LogoURL {
+			t.Errorf("shell img src = %q, want %q", m[1], LogoURL)
+		}
 	}
 	for _, leak := range []string{
 		"Confirm email address", "You are registered", "Registration", "24 hours", "If you did not register",

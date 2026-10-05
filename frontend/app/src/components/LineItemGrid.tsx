@@ -69,6 +69,7 @@ const CELL: CSSProperties = {
   background: 'transparent',
   verticalAlign: 'middle',
   cursor: 'pointer',
+  transition: 'background 110ms ease-out',
 }
 
 // SELECTED_CELL (`ExtractionFields.tsx:82`), unchanged: the document pane paints the region in
@@ -132,7 +133,7 @@ const CHIP_WHERE: CSSProperties = {
 
 // The role selector is the column heading. `.pf-input` for the box; no `.pf-btn`, which forces
 // its radius.
-const ROLE_SELECT: CSSProperties = { height: 32, padding: '0 8px', fontSize: 11.5 }
+const ROLE_SELECT: CSSProperties = { height: 32, padding: '0 8px', fontSize: 11.5, cursor: 'pointer' }
 
 // LABEL_STRIP (`:88`) and PILL (`:94-105`), so a flag wraps rather than spilling its column.
 const LABEL_STRIP: CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, minHeight: 18, flexWrap: 'wrap' }

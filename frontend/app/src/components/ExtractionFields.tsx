@@ -93,6 +93,7 @@ const CELL: CSSProperties = {
   fontFamily: 'var(--font-sans)',
   textAlign: 'left',
   cursor: 'pointer',
+  transition: 'background 110ms ease-out',
 }
 
 // SourceDocumentSheet.tsx:317's marked-row treatment, in the same amber the document pane

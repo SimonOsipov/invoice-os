@@ -929,10 +929,12 @@ describe('the pane and the sentence, pinned', () => {
     const selected = row('issue_date')
     expect(selected.style.background).toBe('var(--accent-10)')
     expect(selected.style.boxShadow).toBe('inset 2px 0 0 var(--accent)')
+    expect(selected.style.transition, 'selected row transition').toBe('background 110ms ease-out')
 
     const other = row('total')
     expect(other.style.background, 'an unselected row carries the marked treatment').toBe('transparent')
     expect(other.style.boxShadow, 'an unselected row carries the marked rail').toBe('')
+    expect(other.style.transition, 'unselected row transition').toBe('background 110ms ease-out')
   })
 
   it('sizes the pane the way the artboard’s right column does', () => {

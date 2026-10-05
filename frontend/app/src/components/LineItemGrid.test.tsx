@@ -447,10 +447,12 @@ describe('T14 the selected cell', () => {
     const selected = cellAt(2, 'quantity')
     expect(selected.style.background).toBe('var(--accent-10)')
     expect(selected.style.boxShadow).toBe('inset 2px 0 0 var(--accent)')
+    expect(selected.style.transition, 'selected cell transition').toBe('background 110ms ease-out')
 
     const other = cellAt(2, 'description')
     expect(other.style.background, 'an unselected cell wears the selected treatment').not.toBe('var(--accent-10)')
     expect(other.style.boxShadow, 'an unselected cell wears the selected rail').not.toBe('inset 2px 0 0 var(--accent)')
+    expect(other.style.transition, 'unselected cell transition').toBe('background 110ms ease-out')
   })
 })
 
@@ -966,6 +968,7 @@ describe('RESKIN2-04-06 the grid look', () => {
       const select = roleSelect(role)
       expect(select.style.height, `${role} select height`).toBe('32px')
       expect(select.style.padding, `${role} select padding`).toBe('0px 8px')
+      expect(select.style.cursor, `${role} select cursor`).toBe('pointer')
     }
 
     for (const n of [1, 2, 3]) {

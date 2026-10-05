@@ -208,6 +208,31 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 	}
 }
 
+// The account-mail routes are public GETs read by GoTrue and mail clients: top-level, once, no CORS wrap (D19).
+func TestAccountMailRoutesRegisteredUnconditionally(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	sites, _ := mainRoutes(t, src)
+	if len(sites) < 4 {
+		t.Fatalf("found %d literal-pattern routes in main, want at least 4; the scan went blind: %+v", len(sites), sites)
+	}
+	for _, pattern := range []string{"GET /emails/confirmation.html", "GET /emails/mark.png"} {
+		s := sitesFor(sites, pattern)
+		if len(s) != 1 {
+			t.Errorf("%s is registered %d times, want exactly once", pattern, len(s))
+			continue
+		}
+		if !s[0].topLevel {
+			t.Errorf("%s is registered under a condition; it must be a top-level statement of main", pattern)
+		}
+		if strings.Contains(s[0].handler, "withCORS") {
+			t.Errorf("%s handler = %s, want no CORS wrap", pattern, s[0].handler)
+		}
+	}
+}
+
 const registerAllowedOrigin = "https://landing.example"
 
 // registerMux mounts the real register handler behind the CORS allow-list on both patterns, as main does.

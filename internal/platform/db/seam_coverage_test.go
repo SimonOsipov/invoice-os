@@ -1240,6 +1240,20 @@ func TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute(t *testing.T) {
 		}
 	}
 
+	// RESEND-01-02: the static account-mail routes are registered and exempt, each with its own row.
+	for _, route := range []string{"GET /emails/confirmation.html", "GET /emails/mark.png"} {
+		found := false
+		for _, r := range routes {
+			found = found || r.route == route
+		}
+		if !found {
+			t.Errorf("cmd/gateway does not register %q", route)
+		}
+		if row, ok := declared[route]; !ok || row.verdict != "exempt" {
+			t.Errorf("%s: %q has row %+v (found %v), want a row with verdict exempt", scDocPath, route, row, ok)
+		}
+	}
+
 	registered := map[string]bool{}
 	for _, r := range routes {
 		if registered[r.route] {

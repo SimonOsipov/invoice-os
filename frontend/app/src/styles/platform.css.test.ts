@@ -70,3 +70,20 @@ describe('platform.css toggle', () => {
     }
   })
 })
+
+describe('platform.css code block', () => {
+  it('pre.pf-json is a light code block', () => {
+    const d = decls(platformCss(), 'pre.pf-json')
+
+    expect(d.get('font-family'), 'control: the block declarations are read').toBe('var(--font-mono)')
+    expect.soft(d.get('background')).toBe('var(--bg-2)')
+    expect.soft(d.get('color')).toBe('var(--fg-2)')
+    expect.soft(d.get('border')).toBe('1px solid var(--line-1)')
+    expect.soft(d.get('border-radius')).toBe('var(--radius-md)')
+    expect.soft(d.get('padding')).toBe('14px')
+    expect.soft(d.get('font-size')).toBe('11.5px')
+    expect.soft(d.get('line-height')).toBe('1.6')
+    expect.soft(d.get('overflow-x')).toBe('auto')
+    expect.soft(d.get('white-space')).toBe('pre')
+  })
+})

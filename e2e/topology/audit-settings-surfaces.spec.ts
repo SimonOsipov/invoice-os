@@ -287,7 +287,8 @@ test('AE-01 Audit at 1440: heading, strip, filter card, table card, avatar, rang
   const tableCorners = await expectCorners(tableCard, '6px', 'table card')
   expect(await border(tableCard), 'table card border').toBe(`1px solid ${LINE_1}`)
   expect((await styles(tableCard, ['box-shadow']))['box-shadow'], 'table card shadow').toBe('none')
-  expect((await styles(tid(page, 'audit-table'), ['border-top-width', 'border-left-width']))['border-top-width'], 'audit-table own border').toBe('0px')
+  const ownBorder = await styles(tid(page, 'audit-table'), ['border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width'])
+  expect(Object.values(ownBorder), 'audit-table own border').toEqual(['0px', '0px', '0px', '0px'])
 
   // A free-text actor draws a flat square, so the avatar is read off the first row that has a person or System.
   const avatarRow = tid(page, 'audit-row').filter({ has: page.locator('[data-testid="actor-initials"], [data-testid="actor-bolt"]') }).first()
@@ -372,6 +373,8 @@ test('AE-03 Audit header, pills, strip and pager hold their relationships at eve
     await settle(page, card)
     const { rects, problems } = await boxes({ card, strip, claim, count, tableCard, pager })
     inside(rects, 'strip', ['count'], problems)
+    const sideways = await main(page).locator('.pf-scroll').evaluate((el) => el.scrollWidth - el.clientWidth)
+    if (sideways > 1) problems.push(`the Audit page column scrolls sideways by ${sideways}px`)
     if (rects.claim && rects.count && rects.count.x < rects.claim.x + rects.claim.width - 1) problems.push('the strip count is not right of the claim text')
     noOverlap(rects, ['claim', 'count'], problems)
     if (rects.tableCard && rects.pager && rects.pager.y < rects.tableCard.y + rects.tableCard.height - 1) problems.push('the pager is not below the table card')
@@ -597,10 +600,11 @@ test('AE-07 bundle drawer Building: a childless pulsing fill inside its card, th
     await expect(building, 'a held bundle request never reached Building').toBeVisible()
     await settle(page, building)
     expect(await bar.locator(':scope > *').count(), 'the building bar has no child').toBe(0)
-    const paint = await styles(bar, ['animation-name', 'background-color', 'opacity'])
+    // Opacity is not read: the running pulse keyframe owns it.
+    const paint = await styles(bar, ['animation-name', 'animation-duration', 'background-color'])
     expect(paint['animation-name'], 'building fill animation').toBe('pulse')
+    expect(paint['animation-duration'], 'building fill pulse duration').toBe('1.2s')
     expect(paint['background-color'], 'building fill colour').toBe(ACTION)
-    expect(paint.opacity, 'building fill opacity').toBe('0.6')
     const { rects, problems } = await boxes({ building, bar })
     inside(rects, 'building', ['bar'], problems)
     expect(problems, 'building bar placement').toEqual([])
@@ -1129,7 +1133,8 @@ test('ST-09 the role matrix collapses inside its card and opens to three equal t
   const open = await boxes({ card, matrix })
   inside(open.rects, 'card', ['matrix'], open.problems)
   expect(open.problems, 'open matrix placement').toEqual([])
-  const heads = matrix.locator('[role="columnheader"]')
+  // Labelled headers only: an empty corner cell may or may not carry a header role.
+  const heads = matrix.locator('[role="columnheader"]').filter({ hasText: /\S/ })
   expect(await heads.count(), 'the matrix draws three role columns').toBe(3)
   const widths = await heads.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().width))
   expect(Math.max(...widths) - Math.min(...widths), `the three tracks differ: ${widths.join(', ')}`).toBeLessThanOrEqual(1)

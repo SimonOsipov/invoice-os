@@ -24,8 +24,8 @@ const (
 	mailSampleConfirmationURL = "https://x.test/verify?token=t&type=signup"
 )
 
-// Skips quoted values so a src inside one is not read, and needs a space before src so data-src is not.
-var imgSrcRE = regexp.MustCompile(`(?is)<img\b(?:[^>"']|"[^"]*"|'[^']*')*?[\s"']src\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']+))`)
+// Skips quoted values so a src inside one is not read; src needs a space, slash or quoted value before it, so data-src is not read.
+var imgSrcRE = regexp.MustCompile(`(?is)<img\b(?:[^>"']|"[^"]*"|'[^']*')*?(?:[\s/]|"[^"]*"|'[^']*')src\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']+))`)
 
 func isHTTPURL(u string) bool {
 	return strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")

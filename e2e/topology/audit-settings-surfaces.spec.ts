@@ -967,6 +967,8 @@ test('ST-05 ERP connectors: status pills, connector detail pill, field-mapping m
   const errors = gatedErrors(page, [])
   await openSettings(page, 'firm')
   await openTab(page, 'ERP connectors', 'connectors')
+  await page.getByRole('button', { name: 'Connect', exact: true }).first().click()
+  await expect(page.getByText('CONNECTED', { exact: true }).first(), 'Connect did not turn a connector on').toBeVisible()
   const connected = page.getByText('CONNECTED', { exact: true }).first()
   await expect(connected, 'no connector reads CONNECTED').toBeVisible()
   await settle(page, main(page))
@@ -1021,14 +1023,15 @@ test('ST-06 API & webhooks, Signing & certificates and the in-house Company tab'
   const errors = gatedErrors(page, [])
   await openSettings(page, 'firm')
   const reads: Record<string, unknown> = {}
-  for (const [label, id] of [['API & webhooks', 'api'], ['Signing & certificates', 'signing']] as const) {
+  for (const [label, id, empty] of [['API & webhooks', 'api', 'No webhooks yet'], ['Signing & certificates', 'signing', 'No signing certificate yet']] as const) {
     await openTab(page, label, id)
+    await expect(page.getByText(empty, { exact: true }), `${label} drew no empty state`).toBeVisible()
     const column = tabStrip(page).locator('xpath=following-sibling::div[1]')
     const cards = column.locator(':scope > div')
     await expect(cards.first(), `${label} drew no cards`).toBeVisible()
     await settle(page, main(page))
     const pills = await main(page).evaluate(STATUS_PILLS)
-    expect(pills.length, `${label} drew no status pills`).toBeGreaterThanOrEqual(1)
+    // A hand-off session draws no pills; unit SettingsView.test.tsx pins their corners.
     for (const p of pills) expect(p, `${label} status pill corners`).toBe('4px 4px')
     const n = await cards.count()
     for (let i = 0; i < n; i++) {
@@ -1231,6 +1234,8 @@ test('ST-12 connector detail: five cards, 6px, flat, inside main and clear of ea
   const errors = gatedErrors(page, [])
   await openSettings(page, 'firm')
   await openTab(page, 'ERP connectors', 'connectors')
+  await page.getByRole('button', { name: 'Connect', exact: true }).first().click()
+  await expect(page.getByText('CONNECTED', { exact: true }).first(), 'Connect did not turn a connector on').toBeVisible()
   await page.getByRole('button', { name: 'Manage', exact: true }).first().click()
   const envPill = tid(page, 'connector-env-pill')
   await expect(envPill, 'the connector detail never opened').toBeVisible()

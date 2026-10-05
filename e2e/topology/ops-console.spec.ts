@@ -2,10 +2,15 @@
 // The console is mock-backed: this spec pins fixture behaviour and the v2 look, not a contract.
 // Value reads copy a value from its source (token or prototype) and name it; screenshots are attached, never asserted.
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
-import { collectErrors, signInAs } from '../personaSession'
+import { provisionStaffAccount, type StaffAccount } from '../api/client'
+import { collectErrors } from '../personaSession'
+import { seedStaffSession } from '../staffSession'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 
 test.use({ viewport: { width: 1440, height: 900 } })
+
+let staff: Promise<StaffAccount> | undefined
+const signInOps = async (page: Page): Promise<unknown> => seedStaffSession(page, 'ops', await (staff ??= provisionStaffAccount('reskin-ops')))
 
 // Resolved colours, each named by its v2 token (packages/design-tokens/v2/tokens/colors.css) or its prototype read.
 const C = {
@@ -240,7 +245,7 @@ async function openScreen(page: Page, s: Screen): Promise<void> {
 async function open(page: Page, key: string): Promise<Screen> {
   const s = SCREENS.find((x) => x.key === key)
   if (!s) throw new Error(`no screen ${key}`)
-  await signInAs(page, 'developer')
+  await signInOps(page)
   await openScreen(page, s)
   return s
 }
@@ -279,7 +284,7 @@ const errorsOf = (errors: string[]) => `console errors:\n${errors.join('\n')}`
 test('OPS-01 shell at 1440: aside, header, env switch, banner', async ({ page }, testInfo) => {
   test.setTimeout(120_000)
   const errors = collectErrors(page)
-  await signInAs(page, 'developer')
+  await signInOps(page)
   await settle(page, aside(page), header(page))
   const measured: Record<string, unknown> = {}
 
@@ -393,7 +398,7 @@ test('OPS-01 shell at 1440: aside, header, env switch, banner', async ({ page },
 test('OPS-01 org switcher: menu look and placement', async ({ page }, testInfo) => {
   test.setTimeout(120_000)
   const errors = collectErrors(page)
-  await signInAs(page, 'developer')
+  await signInOps(page)
   const button = aside(page).locator('button[aria-haspopup="menu"]')
   await button.click()
   const menu = page.getByRole('menu')
@@ -423,7 +428,7 @@ test('OPS-01 org switcher: menu look and placement', async ({ page }, testInfo) 
 test('OPS-02 Live environment: switch, track and banner', async ({ page }, testInfo) => {
   test.setTimeout(120_000)
   const errors = collectErrors(page)
-  await signInAs(page, 'developer')
+  await signInOps(page)
   const live = header(page).getByRole('button', { name: 'LIVE', exact: true })
   const sandbox = header(page).getByRole('button', { name: 'SANDBOX', exact: true })
   await live.click()
@@ -666,7 +671,7 @@ for (const s of SCREENS) {
   test(`OPS-03 ${s.key}: v2 header, clearances and elements`, async ({ page }, testInfo) => {
     test.setTimeout(120_000)
     const errors = collectErrors(page)
-    await signInAs(page, 'developer')
+    await signInOps(page)
     await openScreen(page, s)
     const measured: Record<string, unknown> = {}
 

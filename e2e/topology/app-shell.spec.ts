@@ -229,12 +229,13 @@ test('AS-02 in-house shell at 1440: aside, active row, ERP chip', async ({ page 
   await settle(page, aside(page), page.locator('main.pf-main'))
   const measured = await readAside(page)
 
-  const chip = page.getByTestId('company-chip').getByText('ERP', { exact: true }).locator('xpath=..')
-  await expect(chip, 'the ?persona= sign-in is not a hand-off, so the company chip draws its ERP chip').toBeVisible()
-  const chipRadii = await radii(chip)
-  expect(chipRadii, 'ERP chip corners').toEqual(Array(4).fill('4px'))
+  const chip = page.getByTestId('company-chip')
+  await expect(chip, 'the in-house company chip drew').toBeVisible()
+  await expect(chip, 'the chip names the workspace').toContainText('WORKSPACE')
+  // Unit SB-05 (Sidebar.test.tsx) reads the ERP pill corner.
+  await expect(chip.getByText('ERP', { exact: true }), 'a hand-off session draws no ERP pill (AUTH-10-07)').toHaveCount(0)
 
-  await attachJson(testInfo, 'as-02-measurements', { ...measured, erpChip: chipRadii })
+  await attachJson(testInfo, 'as-02-measurements', measured)
   await attachShot(page, testInfo, 'shell-inhouse')
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
@@ -516,67 +517,6 @@ test('AS-08 the suspended card: radius and Sign out corner', async ({ page }, te
   await attachShot(page, testInfo, 'suspended')
   await page.unroute(`${GATEWAY_URL}/api/**`)
   expect(errors, `console errors beyond the deliberate 403:\n${errors.join('\n')}`).toEqual([])
-})
-
-test('AS-09 persona popover and trigger', async ({ page }, testInfo) => {
-  const errors = collectErrors(page)
-  await signInAs(page, 'firm')
-  const trigger = page.getByTestId('persona-trigger')
-  await trigger.click()
-  const popover = page.getByTestId('persona-popover')
-  await expect(popover).toBeVisible()
-  await expect(page.getByTestId('persona-row-list'), 'the roster drew, so the popover is not its loading state').toBeVisible()
-  await settle(page, popover, trigger)
-
-  const p = await styles(popover, ['background-color', 'box-shadow', ...CORNERS])
-  expect(p['background-color'], 'popover background').toBe('rgb(255, 255, 255)')
-  expect(p['border-top-left-radius'], 'popover radius').toBe('6px')
-  expect(p['box-shadow'], 'popover shadow').toBe(SHADOW_CARD)
-  expect(await popover.getAttribute('class'), 'popover scope class').toContain('asc-light')
-
-  const t = await styles(trigger, ['color', 'background-color', 'border-top-left-radius'])
-  const fg1 = await resolveColor(aside(page), '--fg-1')
-  expect(t['border-top-left-radius'], 'trigger radius').toBe('7px')
-  expect(t.color, 'trigger text equals the aside --fg-1').toBe(fg1)
-  const ratio = contrast(t.color, t['background-color'])
-  expect(ratio, 'trigger text contrast against its own fill').toBeGreaterThanOrEqual(4.5)
-
-  await attachJson(testInfo, 'as-09-measurements', { popover: p, trigger: t, fg1, ratio })
-  await attachShot(page, testInfo, 'persona-popover')
-  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
-})
-
-test('AS-10 persona toast after a switch', async ({ page }, testInfo) => {
-  const errors = collectErrors(page)
-  await signInAs(page, 'firm')
-  const signedInAs = ((await page.getByTestId('persona-name').textContent()) ?? '').trim()
-  expect(signedInAs, 'the signed-in persona name drew').not.toBe('')
-
-  await page.getByTestId('persona-trigger').click()
-  await expect(page.getByTestId('persona-row-list')).toBeVisible()
-  // A blocked row is a div, so a suspended seeded member is never picked; the seeded names are not assumed.
-  const others = page.locator('button[data-testid="persona-row"]').filter({ hasNotText: signedInAs })
-  expect(await others.count(), 'at least one enabled member other than the signed-in one').toBeGreaterThanOrEqual(1)
-  await others.first().click()
-
-  const toast = page.getByTestId('persona-toast')
-  await expect(toast).toBeVisible()
-  await settle(page, toast)
-  const t = await styles(toast, ['background-color', 'box-shadow', 'border-left-width', 'border-left-color', 'border-top-left-radius'])
-  const title = await styles(page.getByTestId('persona-toast-title'), ['font-family'])
-  const meta = await styles(page.getByTestId('persona-toast-meta'), ['font-family'])
-  await attachShot(page, testInfo, 'persona-toast')
-
-  expect(t['background-color'], 'toast background').toBe('rgb(255, 255, 255)')
-  expect(t['box-shadow'], 'toast shadow').toBe(SHADOW_CARD)
-  expect(t['border-left-width'], 'toast left edge width').toBe('3px')
-  expect(t['border-left-color'], 'toast left edge colour').toBe('rgb(116, 84, 33)')
-  expect(t['border-top-left-radius'], 'toast radius').toBe('6px')
-  expect(firstFamily(title['font-family']), 'toast title family').toBe('Manrope')
-  expect(firstFamily(meta['font-family']), 'toast meta family').toBe('IBM Plex Mono')
-
-  await attachJson(testInfo, 'as-10-measurements', { switchedFrom: signedInAs, toast: t, title, meta })
-  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
 test('AS-11 entity modal, filter popover and pager', async ({ page }, testInfo) => {

@@ -368,11 +368,12 @@ bounds the window to ten minutes. `lib/deepLink.test.ts` pins one version below 
 above current.
 
 The round trip crosses two origins, so nothing below the browser can observe it. Its three
-oracles are all in `e2e/topology/auth.spec.ts`: `deployed app: a signed-out deep link
+oracles are all in `e2e/topology/auth.spec.ts`. `deployed app: a signed-out deep link
 returns to its destination after sign-in` (the path) and `deployed app: a signed-out deep
 link returns to its FILTER after sign-in` (the query — the only spec anywhere that exercises
-a restored query end to end) were written against the persona door, which AUTH-15 removed from the app; `deployed app: a real sign-in from the
-front door returns to its destination with no token in any URL` drives the real sign-in (the
+a restored query end to end) sign in through `signInAs` with `path`, which drives the landing
+form as the stable e2e member. `deployed app: a real sign-in from the front door returns to
+its destination with no token in any URL` drives the same form with a fresh account (the
 path).
 
 **The merged shape (ROUTE-02 merge).** The `{ path, search }` seed resolves the destination

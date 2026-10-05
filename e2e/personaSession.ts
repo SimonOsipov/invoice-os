@@ -70,7 +70,7 @@ export async function signInAtFrontDoor(page: Page, account: { email: string; pa
 
 // Sign in as the e2e member of a tenant (realAccounts.ts) through the landing form, then wait for the app to draw.
 // `tenantId` defaults to the seeded 1111 (firm) / 2222 (inhouse); `path` is where the app lands.
-// Postcondition: no main-frame navigation carried `persona=`, and the stored session is a hand-off session for the tenant.
+// Postcondition: the stored session is a hand-off session for the tenant, and no main-frame navigation carried `persona=` (the app ignores it).
 // ceiling: about two extra SPA loads per test, revisit with per-worker storageState above +3 min per unit.
 export async function signInAs(page: Page, id: PersonaId, opts: { tenantId?: string; path?: string } = {}): Promise<void> {
   if (id !== 'firm' && id !== 'inhouse') throw new Error(`signInAs: persona "${id}" has no e2e member`)
@@ -91,7 +91,7 @@ export async function signInAs(page: Page, id: PersonaId, opts: { tenantId?: str
     page.off('request', onRequest)
   }
 
-  expect(personaNavs, 'signInAs navigated with ?persona=, the removed mock door').toEqual([])
+  expect(personaNavs, 'signInAs navigated with ?persona=, which the real door never carries').toEqual([])
   const raw = await page.evaluate((key) => localStorage.getItem(key), SESSION_KEY)
   expect(raw, 'no stored session after sign-in').not.toBeNull()
   const session = JSON.parse(raw!) as { handoff?: boolean; me?: { tenant?: { id?: string } } }
@@ -107,13 +107,10 @@ export async function browserToken(page: Page): Promise<string> {
   return token
 }
 
-// The refusal half of the axis: hand a destination a persona it does not admit and assert it
-// bounces back to the landing page. All three gates refuse the same way — no session, so the
-// SPA navigates to landingBase() (the console's StaffGate does it after an async boot) —
-// which is why one helper covers all of them.
-//
-// Builds the URL from DESTINATION_ENV rather than signInUrl(), because the whole point is to
-// pair a persona with a destination that is NOT its own.
+// The refusal half of the axis: visit a destination with `?persona=<id>` and assert it bounces
+// back to the landing page. The param is no credential at any of the three destinations: no
+// session, so the SPA navigates to landingBase() (the console's StaffGate does it after an
+// async boot), which is why one helper covers all of them.
 export async function expectRefused(page: Page, id: PersonaId, destination: Destination): Promise<void> {
   const url = `${resolveTarget(DESTINATION_ENV[destination])}?persona=${id}`
   const landingUrl = resolveTarget('LANDING_URL')

@@ -30,7 +30,7 @@ export const UNITS: Unit[] = [
       'audit.spec.ts':
         'Reads both persona tenants\' audit trails, which need rows the seed and the earlier suites wrote ("the seed alone writes audit rows"; the pager needs more than one page).',
       'auth.spec.ts':
-        'Tests the `?persona=` front door and stored-session rules, which the SPA binds to the seeded persona tenants 1111 / 2222.',
+        'Tests the real sign-in front door and stored-session rules, which the SPA binds to the seeded tenants 1111 / 2222 (the e2e members it signs in as).',
       'demo-persona.spec.ts':
         "Asserts the seeded firm roster (including the seeded suspended member and the longest seeded name) and the seat switch. Sets 1111's active policy slot through `ensureFirmPolicyActive`, which persona-surfaces also sets.",
       'design-system.spec.ts':

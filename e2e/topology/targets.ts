@@ -68,22 +68,13 @@ export function shardTenants(specFile: string): { a: ShardTenant; b: ShardTenant
 
 type ShardTenant = Omit<(typeof TENANTS)['a' | 'b'], 'id'> & { id: string }
 
-// The two app personas, DERIVED from the persona registry (../personas) rather than restated
-// here — that registry is the single source of truth for the axis (PERSONA-01), and these
-// constants used to be a second, hand-maintained copy of the same two ids and tenant names.
-//
-// `param` replaced the old `buttonName`: the app no longer ships its own persona picker
-// (the landing page is the single sign-in front door), so there is no button to click on a
-// deployed build.
-//
-// `tenantName` is optional on PersonaDef (the two console personas have no tenant), but every
-// consumer here calls .toUpperCase() on it, so narrow it once at the seam and fail loudly —
-// the same shape as resolveTarget above, and better than pushing a `!` out to five call sites
-// where a missing value would surface as an unexplained TypeError mid-spec.
-function appPersona(id: PersonaId): { param: PersonaId; tenantName: string } {
+// The two app personas, DERIVED from the persona registry (../personas), the single source of
+// truth for the axis. `tenantName` is optional on PersonaDef (the console personas have no
+// tenant), but every consumer calls .toUpperCase() on it, so narrow it once here and fail loudly.
+function appPersona(id: PersonaId): { tenantName: string } {
   const { tenantName } = PERSONAS[id]
   if (!tenantName) throw new Error(`e2e/personas.ts: persona "${id}" has no tenantName, but ${id.toUpperCase()}_PERSONA needs one`)
-  return { param: id, tenantName }
+  return { tenantName }
 }
 
 // The firm persona (frontend/app/src/auth.ts) resolves to seeded tenant 1111. Its

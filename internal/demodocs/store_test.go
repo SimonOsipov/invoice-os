@@ -598,6 +598,43 @@ func TestRLS_DemoDocsPrefersAnActiveAdminOverASuspendedOne(t *testing.T) {
 	}
 }
 
+// A real account granted admin on a demo tenant (the e2e suite does) can sort
+// below the seeded persona; the seeded documents must still be the persona's.
+func TestRLS_DemoDocsPrefersTheSeededPersonaAdminOverAGrantedAccount(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantID, autoAdmin := newTenant(t, super, "demodocs persona admin over granted account")
+	if _, err := super.Exec(ctx,
+		`DELETE FROM memberships WHERE tenant_id = $1 AND user_id = $2`, tenantID, autoAdmin); err != nil {
+		t.Fatalf("drop the helper's random admin: %v", err)
+	}
+
+	granted, persona := adminUUID(lowAdminPrefix), personaPrefix+uuid.NewString()[24:]
+	if !(granted < persona) {
+		t.Fatalf("granted %s does not sort before persona %s; the test would pass without the ordering", granted, persona)
+	}
+	addAdmin(t, super, tenantID, granted, "active")
+	addAdmin(t, super, tenantID, persona, "active")
+
+	got, err := tenantAdmin(ctx, app, tenantID)
+	if err != nil {
+		t.Fatalf("tenantAdmin: %v", err)
+	}
+	if got != persona {
+		t.Errorf("tenantAdmin = %s, want the seeded persona admin %s", got, persona)
+	}
+
+	// no persona admin: the lowest user_id wins, as before
+	if _, err := super.Exec(ctx,
+		`DELETE FROM memberships WHERE tenant_id = $1 AND user_id = $2`, tenantID, persona); err != nil {
+		t.Fatalf("drop the persona admin: %v", err)
+	}
+	addAdmin(t, super, tenantID, adminUUID(highAdminPrefix), "active")
+	if got, err := tenantAdmin(ctx, app, tenantID); err != nil || got != granted {
+		t.Errorf("tenantAdmin = %q, %v; want the lowest-user_id admin %s", got, err, granted)
+	}
+}
+
 // A suspended sole admin is no honest actor either, so the tenant takes the same
 // skip as one with no admin row at all -- not the gate's refusal surfacing as a
 // seeder error from deeper in seedTenant.

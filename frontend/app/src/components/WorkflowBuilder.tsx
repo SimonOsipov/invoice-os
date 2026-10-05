@@ -74,8 +74,7 @@ const SCOPE_NOT_ROUTED = 'Per-scope routing is not yet available — every polic
 const FIELDSET_RESET = { border: 0, padding: 0, margin: 0, minInlineSize: 0 } as const
 
 /**
- * The ghost variant's disabled paint (MemberDrawer.tsx:145's shape, kept local rather than
- * shared). Inline, so it outranks `.v2-btn-ghost:hover`, which would otherwise repaint a dead
+ * The ghost variant's disabled paint. Inline, so it outranks `.v2-btn-ghost:hover`, which would otherwise repaint a dead
  * control on hover.
  */
 const DISABLED_GHOST = { background: 'transparent', borderColor: 'var(--line-1)', color: 'var(--fg-4)', cursor: 'not-allowed' } as const

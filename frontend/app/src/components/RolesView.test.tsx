@@ -427,6 +427,14 @@ describe('Roles tab v2 paint', () => {
     expect(many.getByText('AP').parentElement!.getAttribute('title'), 'avatar names itself').toBe('Ada Person')
   })
 
+  it('a role with holders always draws the overflow slot, empty when there is no overflow', () => {
+    renderCrew()
+    const one = within(cardFor('One')).getByTestId('role-card-overflow')
+    expect(one.textContent).toBe('')
+    expect(within(cardFor('Many')).getByTestId('role-card-overflow').textContent).toBe('+2')
+    expect(within(cardFor('Nobody')).queryByTestId('role-card-overflow')).toBeNull()
+  })
+
   it('the holder line keeps var(--fg-2), and var(--status-red-text) when the seat cannot sign', () => {
     renderCrew()
     expect(screen.getByText('Ada Person', { exact: true }).style.color).toBe('var(--fg-2)')

@@ -468,7 +468,7 @@ describe('Role modal v2 paint', () => {
   const editSubject: RoleModalSubject = { mode: 'edit', role: role({ members: ['u1'] }) }
   const panel = () => screen.getByTestId('role-modal')
   const rowOf = (name: string) => screen.getAllByTestId('role-modal-member').find((r) => r.textContent?.includes(name)) as HTMLElement
-  const boxOf = (row: HTMLElement) => row.querySelector('input')!.previousElementSibling as HTMLElement
+  const boxOf = (row: HTMLElement) => row.querySelector('input')!.nextElementSibling as HTMLElement
   const footer = () => screen.getByTestId('role-modal-save').parentElement!.parentElement as HTMLElement
 
   it('the panel is bg-1 on a line-2 border, radius-lg, shadow-card, 560 wide', () => {

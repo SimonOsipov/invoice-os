@@ -82,6 +82,16 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
     <>
       <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: '-4px 0 16px', maxWidth: 680, lineHeight: 1.6 }}>{intro(roles)}</p>
 
+      {/* Above the toolbar, the grid and both empty surfaces: coverage is a statement about the
+          workspace, which a search box cannot change. Gated on the roster having landed,
+          though — over an errored fetch every role reads unheld. */}
+      {surface === 'roster' && unassigned.length > 0 && (
+        <AmberNote testId="roles-unassigned" style={{ marginBottom: 14 }}>
+          {unassignedNotice(unassigned.length)}
+          <div style={{ fontWeight: 700, marginTop: 3 }}>{unassigned.map((r) => r.title).join(' · ')}</div>
+        </AmberNote>
+      )}
+
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: 300, height: 36, padding: '0 12px', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)' }}>
           <span aria-hidden="true" style={{ flex: 'none', display: 'inline-flex', color: 'var(--fg-3)' }}>
@@ -114,16 +124,6 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
 
       {surface !== 'loading' && surface !== 'error' && (
         <>
-          {/* Above the grid AND above both empty surfaces: coverage is a statement about the
-              workspace, which a search box cannot change. Gated on the roster having landed,
-              though — over an errored fetch every role reads unheld. */}
-          {surface === 'roster' && unassigned.length > 0 && (
-            <AmberNote testId="roles-unassigned" style={{ marginBottom: 14 }}>
-              {unassignedNotice(unassigned.length)}
-              <div style={{ fontWeight: 700, marginTop: 3 }}>{unassigned.map((r) => r.title).join(' · ')}</div>
-            </AmberNote>
-          )}
-
           {noRoles ? (
             <div data-testid="roles-empty">
               <EmptyState
@@ -222,11 +222,9 @@ function RoleCard({ ctx, role, onEdit }: { ctx: PlatformCtx; role: Role; onEdit:
                 </span>
               ))}
             </span>
-            {overflow > 0 && (
-              <span className="mono" aria-hidden="true" style={{ flex: 'none', fontSize: 10, color: 'var(--fg-3)' }}>
-                +{overflow}
-              </span>
-            )}
+            <span className="mono" aria-hidden="true" data-testid="role-card-overflow" style={{ flex: 'none', fontSize: 10, color: 'var(--fg-3)' }}>
+              {overflow > 0 ? `+${overflow}` : ''}
+            </span>
           </>
         )}
         {/* Red carries the whole fact: `resolve` deliberately appends no "suspended". */}

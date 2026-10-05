@@ -264,19 +264,20 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
                     >
                       {/* A native input under a painted box: `.asc-app input` forces a 7px radius. */}
                       <span style={{ position: 'relative', flex: 'none', width: 16, height: 16 }}>
+                        <input
+                          type="checkbox"
+                          className="pf-check"
+                          checked={sel}
+                          onChange={() => toggle(m.id)}
+                          disabled={submitting}
+                          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', margin: 0, opacity: 0, zIndex: 1, cursor: 'inherit' }}
+                        />
                         <span
                           aria-hidden="true"
                           style={{ position: 'absolute', inset: 0, boxSizing: 'border-box', borderRadius: 4, border: `1px solid ${sel ? 'var(--action)' : 'var(--line-2)'}`, background: sel ? 'var(--action)' : 'var(--bg-2)', color: 'var(--primary-foreground)', display: 'grid', placeItems: 'center', ...(submitting ? DISABLED : null) }}
                         >
                           {sel ? tickGlyph11 : null}
                         </span>
-                        <input
-                          type="checkbox"
-                          checked={sel}
-                          onChange={() => toggle(m.id)}
-                          disabled={submitting}
-                          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', margin: 0, opacity: 0, cursor: 'inherit' }}
-                        />
                       </span>
                       <InitialsChip initials={m.initials} status="active" size={26} fontSize={9.5} />
                       <span style={{ flex: 1, minWidth: 0 }}>

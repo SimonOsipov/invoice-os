@@ -353,7 +353,7 @@ describe('ReportsView: export buttons are disabled-with-reason', () => {
       expect(btn.style.opacity, `${name} button opacity`).toBe('0.45')
       expect(btn.style.cursor, `${name} button cursor`).toBe('not-allowed')
       expect(btn.style.filter, `${name} button filter`).toBe('none')
-      expect(btn.style.background, `${name} button keeps the ghost fill`).toBe('')
+      expect(btn.style.background, `${name} button keeps the ghost fill`).toBe('transparent')
       expect(btn.style.color, `${name} button keeps the ghost colour`).toBe('')
     }
   })

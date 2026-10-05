@@ -585,7 +585,7 @@ describe('the region-less pill', () => {
     expect(pill.style.color).toBe('var(--status-amber-text)')
     expect(pill.style.background).toBe('var(--status-amber-bg)')
     expect(pill.style.border).toBe('1px solid var(--status-amber-border)')
-    expect(pill.style.borderRadius).toBe('999px')
+    expect(pill.style.borderRadius).toBe('var(--radius-sm)')
     expect(pill.style.padding).toBe('2px 8px')
     expect(pill.style.whiteSpace).toBe('nowrap')
 
@@ -1561,6 +1561,29 @@ describe('an ambiguous field', () => {
     expect(sub.style.textTransform, 'the chip sub-label was uppercased in JavaScript, not in CSS').toBe('uppercase')
   })
 
+  it('chips and the point button are 6px', () => {
+    // RR draws 6px (`--radius-md`) on both; the pill beside them is 4px. A copy of the pill's
+    // radius, or of the old 10px, reds here.
+    const { rerender } = render(
+      fieldsPane({ fields: EVERY_CELL_PART, selected: 'total', armed: 'buyer_tin', canPoint: true }),
+    )
+
+    const chips = chipsOf('issue_date')
+    expect(chips.length, 'the floor: the ambiguous field rendered its chips').toBeGreaterThan(1)
+    for (const chip of chips) expect(chip.style.borderRadius, chip.dataset.testid).toBe('var(--radius-md)')
+    const borders = chips.map((c) => c.style.border)
+    expect(borders, 'no chip is the picked one').toContain('1px solid var(--action)')
+    expect(borders, 'every chip is the picked one').toContain('1px solid var(--line-2)')
+
+    const armedPoint = pointOf('buyer_tin')
+    expect(armedPoint, 'the floor: the armed point button rendered').toBeTruthy()
+    expect(armedPoint!.style.borderRadius, 'the armed point button').toBe('var(--radius-md)')
+
+    rerender(fieldsPane({ fields: EVERY_CELL_PART, selected: 'total', armed: null, canPoint: true }))
+    expect(cancelOf('buyer_tin'), 'the cell is still armed').toBeNull()
+    expect(pointOf('buyer_tin')!.style.borderRadius, 'the idle point button').toBe('var(--radius-md)')
+  })
+
   it('renders no chip for a field carrying alternatives without the ambiguous reason', () => {
     // THE GATE. An implementation keyed on `alternatives.length > 0` passes the row above and
     // fails here — and would also red the AC-9 sweep, whose fixture is `unreadable` and carries
@@ -2049,6 +2072,16 @@ describe('a missing field', () => {
     expect(button, 'a missing field offers no way to point at it').toBeTruthy()
     expect(button!.textContent, 'the point button is unlabelled or paraphrased').toBe(POINT_IDLE)
     expect(row('buyer_tin').contains(button), 'the point button rendered outside the cell it arms').toBe(true)
+  })
+
+  it("Stop pointing sits at the cell's start", () => {
+    render(fieldsPane({ fields: TWO_MISSING, canPoint: true, armed: 'buyer_tin' }))
+
+    expect(pointOf('buyer_tin'), 'the floor: the armed cell kept its point button').toBeTruthy()
+    const cancel = cancelOf('buyer_tin')
+    expect(cancel, 'no Stop pointing button rendered').toBeTruthy()
+    expect(cancel!.textContent).toBe(POINT_CANCEL)
+    expect(cancel!.style.alignSelf).toBe('flex-start')
   })
 
   it('moves the border, the ground and the label together when it arms', () => {

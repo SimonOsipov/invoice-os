@@ -2,6 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
+import { AuditDrawer } from './components/AuditDrawer'
 import { Drawer } from './components/Drawer'
 import { JobDrawer } from './components/JobDrawer'
 import { KillConfirm } from './components/KillConfirm'
@@ -9,9 +10,10 @@ import { Modal } from './components/Modal'
 import { PublishModal } from './components/PublishModal'
 import { RuleDrawer } from './components/RuleDrawer'
 import { Sidebar } from './components/Sidebar'
+import { Badge } from './components/StatusBadge'
 import { Toast } from './components/Toast'
 import { TopBar } from './components/TopBar'
-import { NAV_ITEMS, SEED_JOBS, SEED_RULES } from './data'
+import { AUDIT_ENTRIES, DIFF_ROWS, NAV_ITEMS, SEED_JOBS, SEED_RULES } from './data'
 import type { Env, Screen } from './types'
 
 // SSR markup is the oracle: jsdom drops backdrop-filter and Chromium aliases the prefixed one.
@@ -104,7 +106,7 @@ describe('v2 shell', () => {
         expect.soft(classes(b), `${at}: class list`).not.toContain('ops-btn')
         expect.soft(s['border-radius'], `${at}: radius`).toBe('var(--radius-sm)')
         expect.soft(s.background, `${at}: background`).toBe(active ? 'var(--primary)' : 'transparent')
-        if (active) expect.soft(s.color, `${at}: active colour`).toBe('var(--primary-foreground)')
+        expect.soft(s.color, `${at}: colour`).toBe(active ? 'var(--primary-foreground)' : 'var(--fg-3)')
 
         const dot = first(parse(b.inner), `${at}: dot`)
         expect(style(dot).width, `${at}: first child is the 6px dot`).toBe('6px')
@@ -184,6 +186,10 @@ describe('v2 shell', () => {
       expect.soft(style(tag).color, `${tone}: tag colour`).toBe('var(--surface-body)')
       expect.soft(style(tag)['border-left'], `${tone}: tag left edge`).toBe('1px solid var(--surface-panel-border)')
       expect.soft(html, `${tone}: markup holds oklch`).not.toContain('oklch')
+
+      const bare = renderToStaticMarkup(createElement(Toast, { toast: { msg: 'm', tag: '', tone } }))
+      expect.soft(classes(first(parse(bare), `${tone}: bare toast`)), `${tone}: a tagless toast stays a dark scope`).toContain('asc-dark')
+      expect.soft(parse(bare).filter((t) => 'border-left' in style(t)), `${tone}: a tagless toast draws no tag`).toEqual([])
     }
   })
 
@@ -230,10 +236,36 @@ describe('v2 shell', () => {
       expect.soft(classes(b), `badge ${b.text} keeps .mono`).toContain('mono')
     }
 
+    const card = ts.filter((t) => style(t).border === '1px solid var(--line-2)' && style(t).padding === '8px 10px')
+    expect(card, 'one cross-tenant card').toHaveLength(1)
+    expect.soft(style(card[0])['border-radius'], 'cross-tenant card radius').toBe('var(--radius-md)')
+    const tile = ts.filter((t) => style(t).background === 'var(--action-tint)' && style(t).width === '28px')
+    expect(tile, 'one globe tile').toHaveLength(1)
+    expect.soft(style(tile[0])['border-radius'], 'globe tile radius').toBe('var(--radius-md)')
+    expect.soft(style(withText(ts, 'SUPPORT'))['border-radius'], 'SUPPORT tag radius').toBe('var(--radius-sm)')
+
+    const bp = ts.filter((t) => style(t).border === '1px solid var(--line-1)' && style(t).padding === '11px 12px')
+    expect(bp, 'one backpressure card').toHaveLength(1)
+    expect.soft(style(bp[0])['border-radius'], 'backpressure card radius').toBe('var(--radius-md)')
+    const track = ts.filter((t) => style(t).height === '5px' && style(t).overflow === 'hidden')
+    expect(track, 'one backpressure track').toHaveLength(1)
+    expect.soft(style(track[0])['border-radius'], 'backpressure track radius').toBe('2px')
+    const fill = ts.filter((t) => style(t).width === '82%' && style(t).height === '100%')
+    expect(fill, 'one backpressure fill').toHaveLength(1)
+    expect.soft(style(fill[0])['border-radius'], 'backpressure fill radius').toBe('2px')
+
+    const brand = ts.filter((t) => style(t).padding === '16px 16px 14px')
+    expect(brand, 'one brand block').toHaveLength(1)
+    expect.soft(style(brand[0])['border-bottom'], 'brand block edge draws --line-1 as the prototype does').toBe('1px solid var(--line-1)')
+    const foot = ts.filter((t) => style(t).padding === '12px' && 'border-top' in style(t))
+    expect(foot, 'one sidebar footer').toHaveLength(1)
+    expect.soft(style(foot[0])['border-top'], 'footer edge draws --line-1 as the prototype does').toBe('1px solid var(--line-1)')
+
     const imgs = ts.filter((t) => t.name === 'img')
     expect(imgs, 'one brand <img').toHaveLength(1)
     expect.soft(attr(imgs[0], 'width'), 'mark width').toBe('26')
     expect.soft(attr(imgs[0], 'height'), 'mark height').toBe('26')
+    expect.soft(style(imgs[0])['border-radius'], 'mark corner').toBe('var(--radius-md)')
 
     expect.soft(style(withText(ts, 'EI'))['border-radius'], 'avatar corner').toBe('50%')
     const out = buttonsOf(html).filter((b) => attr(b, 'aria-label') === 'Sign out')
@@ -338,10 +370,130 @@ describe('v2 shell', () => {
       expect.soft(tag['white-space'], `${env}: banner tag white-space`).toBe('nowrap')
       expect.soft(Object.keys(tag), `${env}: banner tag opacity`).not.toContain('opacity')
 
+      const bar = {
+        sandbox: { bg: 'var(--status-amber-bg)', edge: 'var(--status-amber-border)', text: 'var(--status-amber-text)' },
+        live: { bg: 'var(--status-red-bg)', edge: 'var(--status-red-border)', text: 'var(--status-red-text)' },
+      }[env]
+      const strip = ts.filter((t) => style(t).padding === '7px 22px')
+      expect(strip, `${env}: one environment banner`).toHaveLength(1)
+      expect.soft(style(strip[0]).background, `${env}: banner background`).toBe(bar.bg)
+      expect.soft(style(strip[0])['border-bottom'], `${env}: banner edge`).toBe(`1px solid ${bar.edge}`)
+      expect.soft(tag.color, `${env}: banner tag colour`).toBe(bar.text)
+
       const box = withClass(ts, 'ops-header-search')
       expect(box, `${env}: one search box`).toHaveLength(1)
       expect.soft(style(box[0]).border, `${env}: search box border`).toBe('1px solid var(--input)')
       expect.soft(style(box[0])['border-radius'], `${env}: search box radius`).toBe('var(--radius-btn)')
+    }
+  })
+
+  it('SH-09 every drawer and modal entry point wears the v2 scrim, panel and card corners', () => {
+    const SCRIM = 'color-mix(in srgb, var(--surface) 55%, transparent)'
+    const job = renderToStaticMarkup(
+      createElement(JobDrawer, {
+        job: SEED_JOBS[0], env: 'sandbox', reqOpen: true, resOpen: true,
+        onToggleReq: noop, onToggleRes: noop, onClose: noop, onReDrive: noop, onRePoll: noop, onCancel: noop,
+      }),
+    )
+    const rule = (testRan: boolean) =>
+      renderToStaticMarkup(createElement(RuleDrawer, { rule: SEED_RULES[0], testRan, onRunTest: noop, onKill: noop, onClose: noop }))
+    const audit = (env: Env) =>
+      renderToStaticMarkup(createElement(AuditDrawer, { entry: AUDIT_ENTRIES[0], env, onClose: noop, onCopy: noop, onExport: noop }))
+    const drawers = {
+      job,
+      'rule idle': rule(false),
+      'rule passed': rule(true),
+      'audit sandbox': audit('sandbox'),
+      'audit live': audit('live'),
+    }
+    const widths = { job: '560px', 'rule idle': '580px', 'rule passed': '580px', 'audit sandbox': '560px', 'audit live': '560px' } as const
+    for (const [name, html] of Object.entries(drawers)) {
+      const ts = parse(html)
+      expect(ts.length, `${name}: markup parsed`).toBeGreaterThan(4)
+      const [scrim, panel] = ts
+      expect(style(scrim).position, `${name}: first element is the scrim`).toBe('fixed')
+      expect.soft(style(scrim).background, `${name}: scrim background`).toBe(SCRIM)
+      expect.soft(style(scrim)['backdrop-filter'], `${name}: scrim backdrop-filter`).toBe('blur(6px)')
+      expect.soft(style(scrim)['-webkit-backdrop-filter'], `${name}: scrim -webkit-backdrop-filter`).toBe('blur(6px)')
+      expect(classes(panel), `${name}: second element is the panel`).toContain('ops-drawer')
+      expect.soft(style(panel).width, `${name}: panel width`).toBe(widths[name as keyof typeof widths])
+      expect.soft(Object.keys(style(panel)), `${name}: panel box-shadow`).not.toContain('box-shadow')
+      expect.soft(html, `${name}: markup holds oklch`).not.toContain('oklch')
+      expect.soft(style(buttonByText(html, ''))['border-radius'], `${name}: close radius`).toBe('var(--radius-btn)')
+      const cards = ts.filter((t) => style(t)['border-radius'] === 'var(--radius-md)')
+      expect(cards.length, `${name}: bodies carry md cards`).toBeGreaterThan(0)
+      expect.soft(
+        ts.map((t) => style(t)['border-radius']).filter((v): v is string => v !== undefined && V1_CORNER.test(v)),
+        `${name}: v1 corners`,
+      ).toEqual([])
+    }
+
+    const grids = (html: string) => parse(html).filter((t) => style(t).gap === '1px' && style(t).display === 'grid')
+    for (const name of ['job', 'audit sandbox', 'audit live'] as const) {
+      const html = drawers[name]
+      expect(grids(html), `${name}: one meta grid`).toHaveLength(1)
+      expect.soft(style(grids(html)[0])['border-radius'], `${name}: meta grid radius`).toBe('var(--radius-md)')
+    }
+    const retry = parse(job).filter((t) => style(t).padding === '13px 14px')
+    expect(retry, 'job: retry and poll cards').toHaveLength(2)
+    for (const c of retry) expect.soft(style(c)['border-radius'], 'job card radius').toBe('var(--radius-md)')
+    const testCard = parse(drawers['rule idle']).filter((t) => style(t).overflow === 'hidden' && style(t).background === 'var(--bg-2)')
+    expect(testCard, 'rule: the sample-test card').toHaveLength(1)
+    expect.soft(style(testCard[0])['border-radius'], 'rule test card radius').toBe('var(--radius-md)')
+    const chip = withText(parse(drawers['rule idle']), SEED_RULES[0].type)
+    expect.soft(style(chip)['border-radius'], 'rule type chip radius').toBe('var(--radius-sm)')
+    const hash = parse(drawers['audit sandbox']).filter((t) => style(t).padding === '12px 14px' && style(t).border === '1px solid var(--line-1)')
+    expect(hash, 'audit: the hash card').toHaveLength(1)
+    expect.soft(style(hash[0])['border-radius'], 'audit hash card radius').toBe('var(--radius-md)')
+    const banner = parse(drawers['audit live']).filter((t) => style(t).background === 'var(--status-muted-bg)')
+    expect(banner, 'audit: one simulated-entry banner').toHaveLength(1)
+    expect.soft(style(banner[0]).color, 'audit banner colour').toBe('var(--fg-2)')
+    for (const name of ['audit sandbox', 'audit live']) {
+      expect.soft(buttonByText(drawers[name as keyof typeof drawers], 'Copy JSON').attrs, `${name}: Copy JSON is v2-btn-ghost`).toContain('v2-btn-ghost')
+    }
+
+    const modals = {
+      kill: [renderToStaticMarkup(createElement(KillConfirm, { ruleKey: 'k', env: 'live', onClose: noop, onConfirm: noop })), '440px'],
+      publish: [renderToStaticMarkup(createElement(PublishModal, { onClose: noop, onConfirm: noop })), '560px'],
+    } as const
+    for (const [name, [html, width]] of Object.entries(modals)) {
+      const ts = parse(html)
+      expect(ts.length, `${name}: markup parsed`).toBeGreaterThan(4)
+      const [outer, panel] = ts
+      expect(style(outer).position, `${name}: outermost is the scrim`).toBe('fixed')
+      expect.soft(style(outer).background, `${name}: scrim background`).toBe(SCRIM)
+      expect.soft(style(outer)['backdrop-filter'], `${name}: scrim backdrop-filter`).toBe('blur(6px)')
+      expect.soft(style(outer)['-webkit-backdrop-filter'], `${name}: scrim -webkit-backdrop-filter`).toBe('blur(6px)')
+      expect(attr(panel, 'role'), `${name}: first child is the dialog`).toBe('dialog')
+      expect.soft(style(panel).width, `${name}: panel width`).toBe(width)
+      expect.soft(style(panel)['border-radius'], `${name}: panel radius`).toBe('var(--radius-lg)')
+      expect.soft(style(panel)['box-shadow'], `${name}: panel shadow`).toBe('var(--shadow-card)')
+      expect.soft(html, `${name}: markup holds oklch`).not.toContain('oklch')
+      expect.soft(
+        ts.map((t) => style(t)['border-radius']).filter((v): v is string => v !== undefined && V1_CORNER.test(v)),
+        `${name}: v1 corners`,
+      ).toEqual([])
+      expect.soft(classes({ attrs: buttonByText(html, 'Cancel').attrs }), `${name}: Cancel classes`).toEqual(expect.arrayContaining(['v2-btn', 'v2-btn-ghost']))
+    }
+    const signs = parse(modals.publish[0]).filter((t) => style(t).width === '22px' && style(t).height === '22px')
+    expect(signs, 'one sign tile per diff row').toHaveLength(DIFF_ROWS.length)
+    for (const t of signs) expect.soft(style(t)['border-radius'], 'sign tile radius').toBe('var(--radius-sm)')
+    expect.soft(classes({ attrs: buttonByText(modals.publish[0], 'Publish v9').attrs }), 'Publish v9 classes').toContain('v2-btn-primary')
+  })
+
+  it('SH-10 the badge keeps the sm corner and a round dot, with and without the dot', () => {
+    const st = { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', text: 'var(--status-red-text)', label: 'FAILED' }
+    for (const dot of [true, false]) {
+      const ts = parse(renderToStaticMarkup(createElement(Badge, { style: st, dot })))
+      const [badge] = ts
+      expect(style(badge).padding, `dot=${dot}: first element is the badge`).toBe('2px 8px')
+      expect.soft(style(badge)['border-radius'], `dot=${dot}: badge radius`).toBe('var(--radius-sm)')
+      const dots = ts.filter((t) => style(t).width === '6px')
+      expect(dots, `dot=${dot}: dot count`).toHaveLength(dot ? 1 : 0)
+      for (const d of dots) {
+        expect.soft(style(d)['border-radius'], 'dot corner').toBe('50%')
+        expect.soft(style(d).background, 'dot colour follows the state').toBe('var(--status-red-text)')
+      }
     }
   })
 })

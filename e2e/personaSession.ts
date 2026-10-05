@@ -47,7 +47,13 @@ export async function expectInWorkspace(page: Page, account: { workspaceName: st
 }
 
 // App path -> landing front door -> "Platform login" -> hand-off navigation back to the app.
+// A stored session is rehydrated at boot and suppresses the front-door bounce (App.tsx resolveBootSession,
+// the `activeSession` guard of the bounce effect), so a page already on the app drops it first.
+// ceiling: a page parked on another origin keeps its stored session, sign out there first.
 async function passFrontDoor(page: Page, account: { email: string; password: string }, path: string): Promise<void> {
+  if (new URL(page.url(), 'about:blank').origin === new URL(resolveTarget('APP_URL')).origin) {
+    await page.evaluate((key) => localStorage.removeItem(key), SESSION_KEY)
+  }
   await page.goto(`${resolveTarget('APP_URL')}${path}`)
   await page.waitForURL((u) => u.href.startsWith(resolveTarget('LANDING_URL')), { timeout: 20_000 })
   await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()

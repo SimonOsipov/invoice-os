@@ -27,6 +27,9 @@ const ensured = new Map<string, Promise<E2EMember>>()
 
 // Registers (idempotent), signs in and makes the account an admin of the tenant, once per worker.
 export function ensureMember(tenantId: string, kind: TenantKind): Promise<E2EMember> {
+  if ((tenantId.startsWith('1') ? 'firm' : 'in_house') !== kind) {
+    return Promise.reject(new Error(`ensureMember: tenant ${tenantId} is not a ${kind} tenant (its id prefix says otherwise)`))
+  }
   let done = ensured.get(tenantId)
   if (!done) {
     done = provision(tenantId, kind)

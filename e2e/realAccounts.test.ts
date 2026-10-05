@@ -146,6 +146,15 @@ describe('ensureMember', () => {
   const FIRM = '11111111-1111-1111-1111-111111111111'
   const IN_HOUSE = '22222222-2222-2222-2222-222222222222'
 
+  it('ensureMember refuses a kind that disagrees with the tenant id prefix', async () => {
+    const { realm } = await load()
+
+    const message = await rejection(realm.ensureMember(FIRM, 'in_house'))
+
+    expect(message).toContain(FIRM)
+    expect(fetched).toHaveLength(0)
+  })
+
   it('ensureMember names a refused register', async () => {
     const { realm } = await load()
     stubGateway({ register: { status: 500, body: { error: 'boom' } } })

@@ -18,9 +18,12 @@ const (
 
 var mailNoticeRE = regexp.MustCompile(`GOTRUE_MAILER_TEMPLATES`)
 
-// newMailTemplatesShim serves auth's variables from vars.
+// newMailTemplatesShim serves auth's variables from vars; production auth always sets GOTRUE_SITE_URL.
 func newMailTemplatesShim(t *testing.T, vars map[string]string) authShim {
 	t.Helper()
+	if _, ok := vars[mailSiteURLVar]; !ok {
+		vars[mailSiteURLVar] = "https://www.ascomply.com"
+	}
 	settle := forkSettle(`{"node":{"serviceId":"` + authForkAuthID + `","serviceName":"auth"}}`)
 	return newAuthShim(t, map[string]string{"settle": settle}, map[string]map[string]string{authForkAuthID: vars})
 }
@@ -132,7 +135,8 @@ func TestCheckMailTemplates_UnreadableVariablesFail(t *testing.T) {
 		"graphql error": func(t *testing.T, s authShim) {
 			writeFile(t, filepath.Join(s.dir, "faults-authVars"), strings.Repeat("gqlerr ", 6))
 		},
-		"null variables": func(t *testing.T, s authShim) { s.bendRead(t, authForkAuthID, "null") },
+		"null variables":  func(t *testing.T, s authShim) { s.bendRead(t, authForkAuthID, "null") },
+		"empty variables": func(t *testing.T, s authShim) { s.bendRead(t, authForkAuthID, "{}") },
 	}
 	for name, bend := range cases {
 		t.Run(name, func(t *testing.T) {

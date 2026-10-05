@@ -24,7 +24,8 @@ const (
 	mailSampleConfirmationURL = "https://x.test/verify?token=t&type=signup"
 )
 
-var imgSrcRE = regexp.MustCompile(`(?is)<img\b[^>]*?\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)')`)
+// Skips quoted values so a src inside one is not read, and needs a space before src so data-src is not.
+var imgSrcRE = regexp.MustCompile(`(?is)<img\b(?:[^>"']|"[^"]*"|'[^']*')*?[\s"']src\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']+))`)
 
 func isHTTPURL(u string) bool {
 	return strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")
@@ -131,8 +132,8 @@ func checkMailTemplate(client *http.Client, url string) error {
 		{"Data": map[string]any{}},
 		{},
 	}
-	var rendered string
-	for i, extra := range variants {
+	seen := map[string]bool{}
+	for _, extra := range variants {
 		data := map[string]any{
 			"SiteURL":         "https://x.test",
 			"ConfirmationURL": mailSampleConfirmationURL,
@@ -151,20 +152,15 @@ func checkMailTemplate(client *http.Client, url string) error {
 		if !strings.Contains(html.UnescapeString(buf.String()), mailSampleConfirmationURL) {
 			return fmt.Errorf("rendered mail does not contain the ConfirmationURL")
 		}
-		if i == 0 {
-			rendered = buf.String()
-		}
-	}
-
-	seen := map[string]bool{}
-	for _, m := range imgSrcRE.FindAllStringSubmatch(rendered, -1) {
-		src := html.UnescapeString(m[1] + m[2])
-		if seen[src] {
-			continue
-		}
-		seen[src] = true
-		if err := checkMailImage(client, src); err != nil {
-			return err
+		for _, m := range imgSrcRE.FindAllStringSubmatch(buf.String(), -1) {
+			src := html.UnescapeString(m[1] + m[2] + m[3])
+			if seen[src] {
+				continue
+			}
+			seen[src] = true
+			if err := checkMailImage(client, src); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

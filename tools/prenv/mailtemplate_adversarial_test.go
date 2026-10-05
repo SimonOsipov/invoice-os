@@ -338,3 +338,41 @@ func TestMailLogoCheck_CLIRejectsAnArgument(t *testing.T) {
 		t.Errorf("subcommand is not wired into main: %q", stderr)
 	}
 }
+
+func TestMailTemplateCheck_ImageInsideABranchIsChecked_NoAnswers(t *testing.T) {
+	imgs := newImageServer(t)
+	bad := `<img src="assets/mark.png">`
+	good := `<img src="` + imgs.logoURL() + `">`
+	cases := map[string]string{
+		"a bad image only when the answers are absent": `{{ if not .Data.registration }}` + bad + `{{ end }}`,
+		"a bad image in the else branch":               `{{ if .Data.registration }}` + good + `{{ else }}` + bad + `{{ end }}`,
+	}
+	for name, branch := range cases {
+		t.Run(name, func(t *testing.T) {
+			tpl := htmlServer(t, mailMinimalTemplate+branch)
+			code, out := runMailCheck(t, imgs.Client(), tpl.URL)
+			if code != 1 {
+				t.Errorf("exit %d, want 1; output = %q", code, out)
+			}
+			wantOneError(t, out, "assets/mark.png", regexp.MustCompile(`.`))
+		})
+	}
+}
+
+func TestMailTemplateCheck_ImageSrcSpellings_Unread(t *testing.T) {
+	imgs := newImageServer(t)
+	cases := map[string]string{
+		"a data-src before the real src": `<img data-src="` + imgs.logoURL() + `" src="assets/mark.png">`,
+		"an unquoted src":                `<img src=assets/mark.png>`,
+	}
+	for name, img := range cases {
+		t.Run(name, func(t *testing.T) {
+			tpl := htmlServer(t, mailMinimalTemplate+img)
+			code, out := runMailCheck(t, imgs.Client(), tpl.URL)
+			if code != 1 {
+				t.Errorf("exit %d, want 1; output = %q", code, out)
+			}
+			wantOneError(t, out, "assets/mark.png", regexp.MustCompile(`.`))
+		})
+	}
+}

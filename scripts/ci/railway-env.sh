@@ -3499,7 +3499,8 @@ cmd_check_mail_templates() {
   auth_id=$(service_id_by_name "$GQL_RESPONSE" auth "environment $env_id" GOTRUE_MAILER_TEMPLATES)
 
   auth_read "$env_id" "$auth_id" auth
-  if [ "$(auth_kind "$GQL_RESPONSE" GOTRUE_MAILER_TEMPLATES_CONFIRMATION)" = unreadable ]; then
+  # Production auth always sets GOTRUE_SITE_URL, so a map without it is a token that cannot read variables.
+  if [ "$(auth_kind "$GQL_RESPONSE" GOTRUE_SITE_URL)" != present ]; then
     echo "::error::auth's variables are unreadable in environment $env_id, so GOTRUE_MAILER_TEMPLATES_* could not be checked."
     exit 1
   fi

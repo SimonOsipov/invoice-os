@@ -239,6 +239,17 @@ export async function provisionStaffAccount(prefix: string): Promise<StaffAccoun
   return { ...account, userId }
 }
 
+export interface MemberGrant {
+  user_id: string
+  tenant_id: string
+  role: 'admin' | 'preparer' | 'reviewer'
+  display_name: string
+  email: string
+}
+
+// RED stub (AUTH-15-03 Mode A): POST /auth/mock/member, mock build only.
+export async function grantMembership(_grant: MemberGrant): Promise<void> {}
+
 // ---- Wire contract types, declared locally to the verified contract
 // (internal/tenancy, internal/portfolio/portfolio.go, internal/validation/
 // rule.go + handlers.go). Me mirrors e2e/topology/isolation.spec.ts's Me

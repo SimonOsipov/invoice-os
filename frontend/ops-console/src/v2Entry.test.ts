@@ -192,7 +192,7 @@ describe('v2 entry', () => {
     const sources = scanSources()
     const values = sources.flatMap(({ file, lines }) =>
       lines.flatMap((l, i) =>
-        [...l.matchAll(/border-?[Rr]adius\s*:\s*(?:'([^']*)'|"([^"]*)"|`([^`]*)`|([^,;}\s]+))/g)].map((m) => ({
+        [...l.matchAll(/border-?[Rr]adius\s*:\s*(?:'([^']*)'|"([^"]*)"|`([^`]*)`|([^,;}]+))/g)].map((m) => ({
           at: `${file}:${i + 1}`,
           quoted: m[4] === undefined,
           value: (m[1] ?? m[2] ?? m[3] ?? m[4]).trim(),
@@ -205,7 +205,8 @@ describe('v2 entry', () => {
 
     const bad = values.filter(({ quoted, value }) => {
       if (/^\d+(\.\d+)?$/.test(value)) return quoted ? value !== '0' : Number(value) >= 99
-      return [...value.matchAll(/(\d+(?:\.\d+)?)px/g)].some((m) => Number(m[1]) >= 99)
+      // An expression (`on ? 99 : 4`) is read for every number in it.
+      return [...value.matchAll(quoted ? /(\d+(?:\.\d+)?)px/g : /(\d+(?:\.\d+)?)(?![\d.%])/g)].some((m) => Number(m[1]) >= 99)
     })
     expect(bad.map((v) => `${v.at}: ${v.quoted ? `'${v.value}'` : v.value}`), 'pill corners and unitless string corners').toEqual([])
   })

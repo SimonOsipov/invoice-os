@@ -22,8 +22,8 @@ type Props = {
 // grep — no CSS rule resolves off them (nor off `.ops-evidence-table`/`.ops-jobs-table`),
 // so do NOT add one and do NOT reflow these tables at any breakpoint: wide tables
 // scroll, they do not stack. Because nothing resolves off the name, where it is applied
-// is free, and the two existing screens disagree — Evidence.tsx:76 puts it on the header
-// alone, Submissions.tsx:150/179 on the header and every row. Following Submissions: it
+// is free, and the two existing screens disagree — Evidence puts it on the header
+// alone, Submissions on the header and every row. Following Submissions: it
 // names every element that actually shares the grid.
 //
 // USAGE_MIN_WIDTH is driven by the total row, not the 180px first track: `Total ·

@@ -7,7 +7,6 @@
 // before this commit; 22 mutants of that build were each caught by the row that names them.
 //
 // MEASURED jsdom 27.4.0 serialization — every one of these bit a draft of this file:
-//   `background: 'oklch(72% .15 65 / .32)'`  reads back `oklch(0.72 0.15 65 / 0.32)`
 //   `margin: '0 auto 18px'`                  reads back `0px auto 18px`
 //   `padding: 0`                             reads back `0px`, but `minHeight: 0` reads `0`
 //   `flex: 1` reads `1 1 0%`; `flex: 'none'` reads `0 0 auto`

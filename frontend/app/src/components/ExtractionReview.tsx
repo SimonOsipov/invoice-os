@@ -46,7 +46,7 @@ const BODY: CSSProperties = { display: 'flex', flex: 1, minHeight: 0, overflow: 
 
 const PAD: CSSProperties = { padding: '30px 36px' }
 
-const SENTENCE: CSSProperties = { ...PAD, fontSize: 13, color: 'var(--fg-2)' }
+const SENTENCE: CSSProperties = { ...PAD, fontSize: 13, color: 'var(--fg-2)', lineHeight: 1.55 }
 
 // The artboard's right column is header / scrolling body / `flex: none` footer (`:406`). Outside
 // the panes, so Save takes the shipped button recipe verbatim and the pane stays at two children.

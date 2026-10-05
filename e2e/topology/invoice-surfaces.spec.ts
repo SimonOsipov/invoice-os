@@ -5163,11 +5163,10 @@ import { apiBase, getExtractions, listEntities, listInvoices, type ExtractionJob
 
 // --- EXTR09-E2E-06 (EXTR-09-09) · the previewer's newly-reachable branches --------------
 //
-// An OBSERVATION HARNESS, not an oracle. DOC-02 shipped `pdf`, `image` and `unrenderable`
+// An OBSERVATION HARNESS. DOC-02 shipped `pdf`, `image` and `unrenderable`
 // canvases that no real document could reach: before EXTR-09 the only route into `documents`
 // was POST /v1/imports/preview, which stores nothing that does not classify as a spreadsheet.
-// This records what each branch actually renders now, and asserts nothing about it — the only
-// product assertion is the file-wide `collectErrors` console gate.
+// This records what each branch actually renders now.
 //
 // What is real, and what is not, per leg:
 //
@@ -5448,7 +5447,7 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
     body: [
       '# EXTR09-E2E-06 - what the shipped previewer renders',
       '',
-      `Invoice: \`${invoiceNumber || '(none — the PDF import produced no invoice)'}\`, entity \`${entity.id}\`.`,
+      `Invoice: \`${invoiceNumber}\`, entity \`${entity.id}\`.`,
       '',
       '| Leg | Upload | Extraction | `POST /v1/imports/document` | Canvas rendered | Link |',
       '|---|---|---|---|---|---|',
@@ -5482,12 +5481,10 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
 
   // The instrument, not the product: without this a probe whose route never fired would record
   // the PDF's canvas for every leg and read as evidence. Every other line above is observation.
-  if (invoiceNumber !== '') {
-    expect(
-      intercepted,
-      `each synthesized leg (${SYNTHESIZED_LEGS.join(', ')}) must have substituted exactly one meta response`,
-    ).toBe(SYNTHESIZED_LEGS.length)
-  }
+  expect(
+    intercepted,
+    `each synthesized leg (${SYNTHESIZED_LEGS.join(', ')}) must have substituted exactly one meta response`,
+  ).toBe(SYNTHESIZED_LEGS.length)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

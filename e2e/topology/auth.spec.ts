@@ -491,7 +491,7 @@ test('deployed app: a signed-out deep link returns to its destination after sign
   await expect(page.getByRole('dialog', { name: 'Platform login' })).toBeVisible()
   await page.locator(`[data-persona="${FIRM_PERSONA.param}"]`).click()
 
-  // The hand-off lands on the app ROOT (destUrl carries no path), so arriving on /audit can
+  // The hand-off lands on the app ROOT (the hand-off carries no path), so arriving on /audit can
   // only have come from the restored destination.
   // 30s, not the file's 15s default: this assertion alone absorbs a cross-origin hard
   // navigation, a cold SPA boot and the /v1/me round trip that mints the marker.
@@ -582,17 +582,8 @@ const consoleFrontDoor = (page: Page, target: ConsoleTarget) =>
     { timeout: 20_000 },
   )
 
-// This walk drives the REAL SignInModal (open -> pick a persona), never
-// e2e/personas.ts#signInUrl's constructed URL. signInUrl cannot catch three ways the
-// two sides can silently diverge:
-//  (a) the persona->destination table is duplicated (frontend/landing/src/auth.ts's
-//      LandingPersona.target vs e2e/personas.ts#PERSONAS[id].destination) and nothing
-//      compares the two mappings;
-//  (b) the bases resolve from different variables at different times — landing bakes
-//      import.meta.env.VITE_*_URL into its build image, this suite reads process.env.*_URL
-//      at CI run time;
-//  (c) unset behaviour is opposite — an unset target makes destUrl() return null and the
-//      pick a silent no-op, while signInUrl() throws.
+// This walk drives the REAL SignInModal, never e2e/personas.ts#signInUrl's constructed URL.
+// The landing bases bake import.meta.env.VITE_*_URL into its build image; this suite reads process.env.*_URL at run time.
 // A console takes a staff session, not a persona: its pick ends at the front-door bounce to landing.
 for (const id of PERSONA_IDS) {
   const persona = PERSONAS[id]

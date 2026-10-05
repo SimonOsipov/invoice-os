@@ -104,7 +104,7 @@ describe('bridge.css maps the app-layer names onto v2', () => {
 
     expect(existsSync(BRIDGE_PATH), `expected ${BRIDGE_PATH} to exist ([RESKIN-01-02] adds the bridge)`).toBe(true)
     const { referenced, unresolved } = unresolvedVars(landingBuildInput({ withMonitoring: true }), Object.values(readV2Css()))
-    expect(referenced.length).toBeGreaterThanOrEqual(106)
+    expect(referenced.length).toBeGreaterThanOrEqual(102)
     expect(unresolved).toEqual([])
   })
 
@@ -112,11 +112,9 @@ describe('bridge.css maps the app-layer names onto v2', () => {
     const files = landingBuildInput({ withMonitoring: true })
     expect(Object.keys(files).length, 'population floor: the build input reaches the bridge').toBeGreaterThanOrEqual(25)
     expect(files).toHaveProperty([BRIDGE_KEY])
-    const { names, classes, readers, unread } = bridgeReads(files)
+    const { names, classes, unread } = bridgeReads(files)
     expect(names.length).toBeGreaterThanOrEqual(10)
     expect(classes.length).toBeGreaterThanOrEqual(5)
-    // e2e/personas.test.ts parses auth.ts, which reads these three.
-    for (const n of ['--action', '--action-tint', '--slate-900']) expect(readers.get(n) ?? [], `${n} is read by auth.ts`).toContain('auth.ts')
     expect(unread, `unread bridge names: ${unread.join(' ')}`).toEqual([])
   })
 

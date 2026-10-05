@@ -1,4 +1,4 @@
-/* Landing-local bridge: app-layer names still read by Privacy, the forms, CookieNotice, App, auth.ts
+/* Landing-local bridge: app-layer names still read by Privacy, the forms, CookieNotice, App
    and @invoice-os/monitoring. */
 :root {
   --bg-1: var(--background);
@@ -9,8 +9,6 @@
   --line-1: var(--border);
   --line-2: var(--input);
   --action: var(--primary);
-  --action-tint: var(--primary-10);
-  --slate-900: var(--ink);
   --status-red-bg: #fbeaea;
   --status-red-text: var(--destructive);
 }

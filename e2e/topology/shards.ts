@@ -17,6 +17,7 @@ export const UNITS: Unit[] = [
     specs: [
       'app-shell.spec.ts',
       'audit.spec.ts',
+      'audit-settings-surfaces.spec.ts',
       'auth.spec.ts',
       'demo-persona.spec.ts',
       'design-system.spec.ts',
@@ -36,6 +37,8 @@ export const UNITS: Unit[] = [
         'Cost, not shared state ([fork-lane-by-cost]): signs in the seeded firm and in-house personas and stands the firm seat in for a seeded member; writes no tenant data.',
       'audit.spec.ts':
         'Reads both persona tenants\' audit trails, which need rows the seed and the earlier suites wrote ("the seed alone writes audit rows"; the pager needs more than one page).',
+      'audit-settings-surfaces.spec.ts':
+        'Reads the seeded firm and in-house rosters and roles of 1111 / 2222 and both audit trails; creates one entity and one invoice in 1111 and prepares one evidence bundle, which appends audit rows.',
       'auth.spec.ts':
         'Tests the `?persona=` front door and stored-session rules, which the SPA binds to the seeded persona tenants 1111 / 2222.',
       'demo-persona.spec.ts':

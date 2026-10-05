@@ -1775,6 +1775,25 @@ describe('EvidenceBundleDrawer', () => {
       expect(active[0].style.background, 'the previous chip gives it up').toBe('transparent')
     })
 
+    // The prototype draws the chips as `.pf-btn` (7px via the cascade); `.pf-chip` resolves to 4px.
+    it('drawerChips_renderAtTheButtonRadius', async () => {
+      await renderDrawer()
+      const chips = DATE_PRESETS.map(({ id }) => screen.getByTestId(`evidence-period-${id}`))
+      expect(chips.length).toBeGreaterThan(1)
+      for (const c of chips) {
+        expect(c.classList.contains('pf-btn'), `${c.textContent} wears pf-btn`).toBe(true)
+        expect(c.classList.contains('pf-chip'), `${c.textContent} does not wear pf-chip`).toBe(false)
+      }
+    })
+
+    // The prototype's auXGlyph is 12px, stroke 2.
+    it('drawerClose_glyphIsTwelvePx', async () => {
+      await renderDrawer()
+      const svg = screen.getByTestId('evidence-bundle-close').querySelector('svg')
+      expect(svg, 'the close button draws an svg').toBeTruthy()
+      expect([svg?.getAttribute('width'), svg?.getAttribute('height'), svg?.getAttribute('stroke-width')]).toEqual(['12', '12', '2'])
+    })
+
     it('drawerCustomDates_sitSideBySideAndEachInputKeepsItsName', async () => {
       await renderDrawer()
       fireEvent.click(screen.getByTestId('evidence-period-custom'))

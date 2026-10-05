@@ -1471,7 +1471,8 @@ function InvoiceEditBody({
             Line items
           </div>
           <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflowX: 'auto' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: LINE_EDIT_GRID, gap: 8, padding: '8px 12px', minWidth: 'max-content', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
+            <div style={{ minWidth: 'max-content' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: LINE_EDIT_GRID, gap: 8, padding: '8px 12px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
               <span className="label">Description</span>
               <span className="label">Qty</span>
               <span className="label">Unit</span>
@@ -1480,7 +1481,7 @@ function InvoiceEditBody({
               <span />
             </div>
             {rows.map((row, i) => (
-              <div key={i} data-testid="line-row" style={{ display: 'grid', gridTemplateColumns: LINE_EDIT_GRID, gap: 8, padding: '8px 12px', minWidth: 'max-content', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}>
+              <div key={i} data-testid="line-row" style={{ display: 'grid', gridTemplateColumns: LINE_EDIT_GRID, gap: 8, padding: '8px 12px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}>
                 <input className="pf-input" type="text" value={row.description} onChange={(e) => updateRow(i, 'description', e.target.value)} style={{ ...LINE_INPUT }} disabled={submitting} />
                 <input className="pf-input" type="text" value={row.quantity} onChange={(e) => updateRow(i, 'quantity', e.target.value)} style={{ ...LINE_INPUT, fontFamily: 'var(--font-mono)', padding: '0 8px' }} disabled={submitting} />
                 <input className="pf-input" type="text" value={row.unit_price} onChange={(e) => updateRow(i, 'unit_price', e.target.value)} style={{ ...LINE_INPUT, fontFamily: 'var(--font-mono)', padding: '0 8px' }} disabled={submitting} />
@@ -1499,6 +1500,7 @@ function InvoiceEditBody({
                 </button>
               </div>
             ))}
+            </div>
           </div>
           <button
             type="button"

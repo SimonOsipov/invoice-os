@@ -6063,7 +6063,7 @@ describe('InvoiceDetail cards, rail and inline edit take the v2 look (RESKIN2-03
     expect.soft(readTable.style.borderRadius, 'read view').toBe('var(--radius-md)')
 
     fireEvent.click(screen.getByTestId('edit-toggle'))
-    const editTable = screen.getByTestId('line-row').parentElement as HTMLElement
+    const editTable = screen.getByTestId('line-row').parentElement!.parentElement as HTMLElement
     expect(editTable.textContent, 'control: the edit table holds the header').toContain('Description')
     expect.soft(editTable.style.borderRadius, 'edit view').toBe('var(--radius-md)')
   })
@@ -6074,13 +6074,21 @@ describe('InvoiceDetail cards, rail and inline edit take the v2 look (RESKIN2-03
     await screen.findByText('Description')
 
     fireEvent.click(screen.getByTestId('edit-toggle'))
-    const editTable = screen.getByTestId('line-row').parentElement as HTMLElement
-    expect(editTable.textContent, 'control: the edit table holds the header').toContain('Description')
-    expect.soft(editTable.style.overflowX, 'edit table scrolls sideways').toBe('auto')
-    expect.soft((editTable.firstElementChild as HTMLElement).style.minWidth, 'header keeps its content width').toBe('max-content')
-    for (const [i, row] of screen.getAllByTestId('line-row').entries()) {
-      expect.soft(row.style.minWidth, `line row ${i} keeps its content width`).toBe('max-content')
+    const inner = screen.getByTestId('line-row').parentElement as HTMLElement
+    const scrollBox = inner.parentElement as HTMLElement
+    const header = inner.firstElementChild as HTMLElement
+    expect(scrollBox.textContent, 'control: the scroll box holds the header').toContain('Description')
+    expect.soft(scrollBox.style.overflowX, 'the box scrolls sideways').toBe('auto')
+    expect.soft(inner.style.minWidth, 'one shared inner wrapper keeps the content width').toBe('max-content')
+    expect.soft(header.style.minWidth, 'the header takes its width from the wrapper').toBe('')
+    const rows = screen.getAllByTestId('line-row')
+    expect.soft(inner.children.length, 'the wrapper holds the header and every row').toBe(rows.length + 1)
+    for (const [i, row] of rows.entries()) {
+      expect.soft(row.parentElement, `line row ${i} sits in the shared wrapper`).toBe(inner)
+      expect.soft(row.style.minWidth, `line row ${i} takes its width from the wrapper`).toBe('')
+      expect.soft(row.style.gridTemplateColumns, `line row ${i} shares the header columns`).toBe(header.style.gridTemplateColumns)
     }
+    expect(header.style.gridTemplateColumns, 'control: the header has a grid').not.toBe('')
   })
 
   it('the rail may shrink below its content', async () => {

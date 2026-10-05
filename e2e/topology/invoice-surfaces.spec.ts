@@ -5968,18 +5968,17 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
     expect(enclosesRect(e.column.rect, e.form.rect, 1), 'the edit form lies inside the detail column').toBe(true)
     await dvAttach(page, testInfo, 'dv-06', { view, edit })
 
-    // No line row scrolls sideways and every remove button stays inside the form.
+    // The line table box does not scroll sideways at wide widths and every remove button stays inside the form.
+    const lineBox = form.getByTestId('line-row').first().locator('xpath=../..')
     const sweep = await dvSweepWide(page, async () => {
-      const r = await dvRead(page, { form }, { within: { lineRows: { of: 'form', sel: '[data-testid="line-row"]' }, lineRemoves: { of: 'form', sel: '[data-testid="line-remove"]' } } })
-      return { form: r.targets.form.rect, lineRows: r.within.lineRows, lineRemoves: r.within.lineRemoves }
+      const r = await dvRead(page, { form, lineBox }, { within: { lineRows: { of: 'form', sel: '[data-testid="line-row"]' }, lineRemoves: { of: 'form', sel: '[data-testid="line-remove"]' } } })
+      return { form: r.targets.form.rect, lineBox: r.targets.lineBox, lineRows: r.within.lineRows, lineRemoves: r.within.lineRemoves }
     })
     await testInfo.attach('dv-06-line-fit.json', { body: JSON.stringify(sweep, null, 2), contentType: 'application/json' })
     for (const s of sweep) {
       expect(s.lineRows.length, `the edit form holds line rows at ${s.width}px`).toBeGreaterThan(0)
       expect(s.lineRemoves.length, `every line row has a remove button at ${s.width}px`).toBe(s.lineRows.length)
-      for (const [i, row] of s.lineRows.entries()) {
-        expect(row.scrollWidth, `line-row ${i} does not scroll sideways at ${s.width}px`).toBeLessThanOrEqual(row.clientWidth)
-      }
+      expect(s.lineBox.scrollWidth, `the line table box does not scroll sideways at ${s.width}px`).toBeLessThanOrEqual(s.lineBox.clientWidth)
       for (const [i, remove] of s.lineRemoves.entries()) {
         expect(enclosesRect(s.form, remove.rect, 1), `line-remove ${i} lies inside the edit form at ${s.width}px`).toBe(true)
       }
@@ -5993,13 +5992,13 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
         const removes = form.getByTestId('line-remove')
         expect(await removes.count(), `the edit form holds line rows at ${width}px`).toBeGreaterThan(0)
         // scrollIntoView also scrolls an overflow:hidden box, so the box must scroll for a pointer too.
-        const table = await form.getByTestId('line-row').first().locator('xpath=..').evaluate((el) => ({ overflowX: getComputedStyle(el).overflowX, needsRoom: el.scrollWidth > el.clientWidth }))
+        const table = await form.getByTestId('line-row').first().locator('xpath=../..').evaluate((el) => ({ overflowX: getComputedStyle(el).overflowX, needsRoom: el.scrollWidth > el.clientWidth }))
         expect(table.needsRoom, `the line rows are wider than their box at ${width}px`).toBe(true)
         expect(['auto', 'scroll'], `the line table box scrolls sideways at ${width}px`).toContain(table.overflowX)
         for (let i = 0; i < (await removes.count()); i++) {
           const remove = removes.nth(i)
           await remove.scrollIntoViewIfNeeded()
-          const box = await remove.locator('xpath=ancestor::*[@data-testid="line-row"]/parent::*').boundingBox()
+          const box = await remove.locator('xpath=ancestor::*[@data-testid="line-row"]/parent::*/parent::*').boundingBox()
           const at = await remove.boundingBox()
           expect(box && at && enclosesRect(box, at, 1), `line-remove ${i} is reachable in the scroll box at ${width}px`).toBe(true)
         }

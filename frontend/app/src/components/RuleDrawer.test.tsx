@@ -91,6 +91,7 @@ describe('RuleDrawer', () => {
     expect.soft(box.classList.contains('pf-input')).toBe(false)
     expect.soft(d.get('min-height')).toBe('36px')
     expect.soft(d.has('height')).toBe(false)
+    expect.soft(d.get('overflow-wrap'), 'a long unbroken message wraps').toBe('anywhere')
     expect.soft(d.get('padding')).toBe('8px 11px')
     expect.soft(d.get('font-size')).toBe('12.5px')
     expect.soft(d.get('line-height')).toBe('1.45')

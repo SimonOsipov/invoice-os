@@ -270,6 +270,7 @@ predicates it would previously have hit inside the transaction.
 | `POST /auth/login` | gateway | exempt | unauthenticated by definition; there is no caller yet to hold a membership |
 | `OPTIONS /auth/login` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `POST /auth/mock/staff` | gateway | exempt | mock builds only; grants staff on the owner DSN for the E2E fork, with no caller identity |
+| `POST /auth/mock/member` | gateway | exempt | mock builds only; grants a tenant membership on the owner DSN for the E2E fork, with no caller identity |
 | `POST /auth/sign-in` | gateway | exempt | no database; calls GoTrue |
 | `OPTIONS /auth/sign-in` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `POST /auth/exchange` | gateway | exempt | no database; in-process code store |
@@ -350,7 +351,7 @@ predicates it would previously have hit inside the transaction.
 | `POST /v1/extractions/{id}/fields/{name}/corrections` | submission | covered | |
 | `POST /v1/extractions/{id}/line-items` | submission | covered | |
 
-86 distinct routes, 92 registrations (`GET /v1/ping` is registered once per service).
+87 distinct routes, 93 registrations (`GET /v1/ping` is registered once per service).
 
 ### 8.1 The non-HTTP callers, so nobody looks for them above
 
@@ -493,14 +494,12 @@ and is already recorded in `audit-log-read-contract.md` §10.7. Not AUDIT-10's, 
 here.
 
 **11.4 Whether an `e2e/api` spec can mint a token for a suspended subject in a PR
-environment. SETTLED — it can.** `platform.Posture()` maps a `pr-<N>` environment name to
-`PosturePreview`, and `MockLoginHandler` consults its persona allowlist only under
-`PostureHosted`, so the triple is never matched. That is not only a code reading:
-`contract-tenancy.spec.ts` already mints a random-UUID tenant and a tenant-A token for persona
-B's subject — neither triple is in `loginPersonas` — and both are green in this job.
-`e2e/api/suspension.spec.ts` is the deployed proof of §2 that rides on it, and it does not
-rely on minting alone: it also suspends and reactivates a live membership mid-spec, which
-holds under either posture.
+environment. SETTLED — it can.** `MockLoginHandler` keeps no allowlist and ignores the
+environment name, so it mints for any triple. That is not only a code reading:
+`contract-tenancy.spec.ts` already mints a random-UUID tenant and a tenant-A token for
+persona B's subject, and both are green in this job. `e2e/api/suspension.spec.ts` is the
+deployed proof of §2 that rides on it, and it does not rely on minting alone: it also
+suspends and reactivates a live membership mid-spec.
 
 **11.5 The demo seed un-suspends on every boot.** `docs/demo-reset.md` §103 records that the
 `memberships` seed converges identity and status at each boot. That was harmless when

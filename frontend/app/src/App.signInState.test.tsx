@@ -140,16 +140,21 @@ describe('?auth=start bounces to landing with signin=ready (AUTH-05-11)', () => 
     expect(readDestination()).toEqual({ path: '/audit', query: '' })
   })
 
-  it('persona wins over auth=start', async () => {
+  it('auth=start wins over an inert persona', async () => {
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     window.history.replaceState(null, '', '/?auth=start&persona=firm')
+    const replace = vi.spyOn(window.history, 'replaceState')
     const { hrefWrites } = interceptHref()
     await act(async () => {
       render(<App />)
     })
-    expect(signInSpy).toHaveBeenCalledWith(APP_PERSONAS.firm)
-    expect(hrefWrites).toEqual([])
-    expect(window.location.search, 'the start param is stripped unused').toBe('')
+    const s = storedState()
+    expect(hrefWrites, 'the start bounce, as without persona=').toEqual([`https://landing.example/?state=${s}&signin=ready`])
+    expect(s).toEqual(expect.stringMatching(STATE_RE))
+    expect(signInSpy, 'no mint').not.toHaveBeenCalled()
+    // The strip writes a null history state; Workspace's own URL writes carry `{ e }`.
+    expect(replace.mock.calls.filter((c) => c[0] === null)).toHaveLength(1)
+    expect(window.location.search).toBe('')
   })
 
   it('auth=start without a landing URL shows the picker', () => {
@@ -215,23 +220,6 @@ describe('signInState adversarial: App', () => {
     const { container } = render(<App />)
     expect(hrefWrites).toEqual([])
     expect(container.innerHTML).not.toBe('')
-  })
-
-  it('App adversarial: persona wins over auth=start with one strip', async () => {
-    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
-    window.history.replaceState(null, '', '/?auth=start&persona=firm')
-    const replace = vi.spyOn(window.history, 'replaceState')
-    const { hrefWrites } = interceptHref()
-    await act(async () => {
-      render(<App />)
-    })
-    expect(signInSpy).toHaveBeenCalledWith(APP_PERSONAS.firm)
-    expect(hrefWrites).toEqual([])
-    expect(storedState(), 'no state is minted').toBeNull()
-    // The strip writes a null history state; Workspace's own URL writes carry `{ e }`.
-    const strips = replace.mock.calls.filter((c) => c[0] === null)
-    expect(strips.length).toBe(1)
-    expect(window.location.search).toBe('')
   })
 
   it('App adversarial: StrictMode auth=start navigates once', () => {

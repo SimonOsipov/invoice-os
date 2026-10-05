@@ -19,8 +19,8 @@ M2-14.4).
    to HubSpot or Resend) and `real` or `off` on the persistent environment.
    The context services are private-network-only, so this route is the only way CI sees
    their health through the one public backend surface.
-2. **Live browser login** — a Playwright test drives the persona mock-login on the deployed
-   app SPA and asserts the **verified** tenant identity renders: the sidebar marker
+2. **Live browser login** — a Playwright test signs the firm tenant's e2e member in through
+   the landing form on the deployed stack and asserts the **verified** tenant identity renders: the sidebar marker
    `title="Tenant verified via /v1/me"`. That marker is the discriminator — the static firm
    fallback shows the same "OKAFOR & PARTNERS" label, so only the marker proves the round
    trip (mint → `GET /api/tenancy/v1/me`) resolved a backend identity.
@@ -111,11 +111,18 @@ already lets anyone mint any persona; the consoles hold mock data only. It answe
 body without a hyphenated UUID `user_id`), 405 and 502. The production statement it stands in
 for is in [identity-provider.md](./identity-provider.md) "Granting staff".
 
+**The fork member grant route.** The same branch mounts `POST /auth/mock/member`
+`{"user_id","tenant_id","role","display_name","email"}` beside it. It upserts an active
+`memberships` row with the migrator DSN and answers 204, 400, 405 or 502, so a spec can admit a
+registered fork account to a tenant (`mintsymbols_test.go` requires its handler and
+`db.GrantMembership` absent from a production binary). Unlike staff, a membership opens real
+tenant data on that fork: the control is the `mockissuer` build tag, which only PR forks stamp.
+
 **Written per run, not inherited:** the URL variables. On a PR, prepare-env's
 `reconcile-urls` step writes and re-reads the fork's own `gateway.CORS_ALLOWED_ORIGINS` (all
 four SPA origins), `VITE_GATEWAY_URL` on `app`, `landing` and each console, `app.VITE_LANDING_URL`,
 the landing's `VITE_APP_URL`, `VITE_OPS_URL` and `VITE_SUPPORT_URL`, each console's
-`VITE_LANDING_URL`, `app.VITE_DEMO_MODE=true` and `landing.VITE_REGISTRATION_OPEN=true`. It refuses the persistent environment.
+`VITE_LANDING_URL` and `landing.VITE_REGISTRATION_OPEN=true`. It refuses the persistent environment.
 
 **Written per fork, not inherited:** `gateway.RECONCILIATION_URL`. A fork is reused per PR, so
 it never picks up a production write made after its creation. `set-fork-reconciliation-url`

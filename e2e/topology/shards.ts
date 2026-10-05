@@ -17,7 +17,6 @@ export const UNITS: Unit[] = [
     specs: [
       'audit.spec.ts',
       'auth.spec.ts',
-      'demo-persona.spec.ts',
       'design-system.spec.ts',
       'environment-posture.spec.ts',
       'isolation.spec.ts',
@@ -30,21 +29,19 @@ export const UNITS: Unit[] = [
       'audit.spec.ts':
         'Reads both persona tenants\' audit trails, which need rows the seed and the earlier suites wrote ("the seed alone writes audit rows"; the pager needs more than one page).',
       'auth.spec.ts':
-        'Tests the `?persona=` front door and stored-session rules, which the SPA binds to the seeded persona tenants 1111 / 2222.',
-      'demo-persona.spec.ts':
-        "Asserts the seeded firm roster (including the seeded suspended member and the longest seeded name) and the seat switch. Sets 1111's active policy slot through `ensureFirmPolicyActive`, which persona-surfaces also sets.",
+        'Tests the real sign-in front door and stored-session rules, which the SPA binds to the seeded tenants 1111 / 2222 (the e2e members it signs in as).',
       'design-system.spec.ts':
         'Cost, not shared state ([fork-lane-by-cost]): reads no tenant data beyond the firm, developer and support sign-ins and writes none.',
       'environment-posture.spec.ts':
         'Cost, not shared state ([fork-lane-by-cost]): reads and writes no tenant data. A shard costs ~1 min of runner setup for one 1.4 s test.',
       'isolation.spec.ts':
-        'Asserts the exact seeded membership sets (firm: 6 members) and tenant identities of 1111 and 2222.',
+        'Asserts the exact seeded membership subsets (firm: 6 seeded members, plus at most its e2e member) and tenant identities of 1111 and 2222.',
       'persona-surfaces.spec.ts':
         "Builds the in-house approval queue and badge on the active policy `internal/demopolicy` seeds only on 1111 / 2222. Needs 2222's seeded `Honeywell Group` entity as its first client (the subtitle assertion).",
       'portfolio.spec.ts':
         'Cost, not shared state ([fork-lane-by-cost]): creates its own entities and scopes each assertion to their rows. A shard costs ~1 min of runner setup for ~37 s of tests.',
       'roles.spec.ts':
-        'Asserts the exact seeded roles, staffing and rosters of both tenants, derived by hand from `db/seed.dev.sql`, and the demopolicy-sealed policies.',
+        'Asserts the exact seeded roles, staffing and rosters of both tenants (the seeded rows plus exactly one e2e member row), derived by hand from `db/seed.dev.sql`, and the demopolicy-sealed policies.',
       'workflows.spec.ts':
         "Creates and deletes one firm policy in 1111 and asserts the list count as `baseline` / `baseline + 1`, where the baseline includes the demopolicy-seeded firm policy. The count holds only while no other spec writes 1111's policies at the same time, which the lane guarantees. It never publishes (`[topology-never-publishes]`).",
     },

@@ -392,7 +392,7 @@ environment is created from, and the target of live demo calls.
 > `db.PurgeDemoTenants` runs inside `db.Provision` on **every** gated boot and deletes the
 > four demo tenants' (`db.DemoTenants`) rows from every tenant-owned table before `db.Seed` restores their
 > curated state. Four tenant-owned tables are spared (`db.purgeExcludedTables`):
-> `memberships`, whose only runtime INSERT (`provision_workspace`, §1) creates a new
+> `memberships`, whose `provision_workspace` INSERT (§1) creates a new
 > tenant's first admin and never a demo tenant's row, and the three approval-policy tables,
 > which `internal/demopolicy` rebuilds for two of the four tenants only — purging them
 > would leave the other two with no policy and nothing to restore it. The purge is gated

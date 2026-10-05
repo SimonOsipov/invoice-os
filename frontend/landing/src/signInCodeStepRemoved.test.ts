@@ -18,16 +18,24 @@ const NEEDLES: readonly Needle[] = [
   /\bOTP\b/, /6-digit/i, /one-time code/i, /demo code/i,
 ]
 
+// The demo persona door: the chooser copy, its registry and its ?persona= URL builder. Case-sensitive.
+const PERSONA_NEEDLES: readonly Needle[] = [
+  'LANDING_PERSONAS', 'destUrl', '?persona=', 'Choose an account',
+  'Amara Okafor', 'Emeka Iroha', 'Chinedu Okafor', 'Ngozi Balogun',
+]
+
 // One scan for both the planted control and the real tree. No `g` flag: RegExp.test must stay stateless.
-function codeStepHits(files: Readonly<Record<string, string>>): string[] {
+// The source is read raw: a needle in a comment is a hit, because comments ship in the build input.
+function scan(files: Readonly<Record<string, string>>, needles: readonly Needle[]): string[] {
   const hits: string[] = []
   for (const [file, src] of Object.entries(files)) {
-    for (const n of NEEDLES) {
+    for (const n of needles) {
       if (typeof n === 'string' ? src.includes(n) : n.test(src)) hits.push(`${file}: ${String(n)}`)
     }
   }
   return hits
 }
+const codeStepHits = (files: Readonly<Record<string, string>>) => scan(files, NEEDLES)
 
 // Keys are paths relative to src/; index.html is the only build input outside it.
 function landingBuildInput(): Record<string, string> {
@@ -53,10 +61,10 @@ describe('the sign-in code step is gone from the landing build input', () => {
     expect(keys).not.toContain('components/SignInModal.dom.test.tsx')
   })
 
-  it('T01-11: control needles resolve real files', () => {
+  it('T01-11: the positive control resolves a real file', () => {
     const files = landingBuildInput()
-    expect(files['components/SignInModal.tsx']).toContain('data-persona')
-    expect(files['auth.ts']).toContain('export const LANDING_PERSONAS')
+    expect(files['components/Hero.tsx']).toContain('Africa moves.')
+    expect(files['../index.html']).toBeDefined()
   })
 
   it('T01-12: the scan reports a planted hit', () => {
@@ -67,6 +75,39 @@ describe('the sign-in code step is gone from the landing build input', () => {
 
   it('T01-13: no needle occurs in any non-test landing source file', () => {
     const hits = codeStepHits(landingBuildInput())
+    expect(hits, hits.join('\n')).toEqual([])
+  })
+
+  it('T15-1: the scan reports a planted persona hit', () => {
+    // Text order differs from needle order; one needle sits in a comment, which still counts.
+    const planted = [
+      "const a = 'Ngozi Balogun'",
+      "const b = 'Chinedu Okafor'",
+      "const c = 'Emeka Iroha'",
+      "const d = 'Amara Okafor'",
+      "const e = 'Choose an account'",
+      "const f = `${base}?persona=${id}`",
+      '// destUrl(p) builds it',
+      'export const LANDING_PERSONAS = []',
+    ].join('\n')
+    expect(scan({ 'planted.tsx': planted }, PERSONA_NEEDLES)).toEqual([
+      'planted.tsx: LANDING_PERSONAS',
+      'planted.tsx: destUrl',
+      'planted.tsx: ?persona=',
+      'planted.tsx: Choose an account',
+      'planted.tsx: Amara Okafor',
+      'planted.tsx: Emeka Iroha',
+      'planted.tsx: Chinedu Okafor',
+      'planted.tsx: Ngozi Balogun',
+    ])
+    // Case-sensitive: lowercase variants are not hits.
+    expect(scan({ 'lower.tsx': 'landing_personas desturl choose an account amara okafor' }, PERSONA_NEEDLES)).toEqual([])
+  })
+
+  it('T15-2: no persona needle in any non-test landing source file', () => {
+    const files = landingBuildInput()
+    expect(Object.keys(files).length, 'control: the walk found the build input').toBeGreaterThanOrEqual(25)
+    const hits = scan(files, PERSONA_NEEDLES)
     expect(hits, hits.join('\n')).toEqual([])
   })
 })

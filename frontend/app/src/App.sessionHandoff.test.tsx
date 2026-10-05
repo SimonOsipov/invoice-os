@@ -826,16 +826,24 @@ describe('a failed redemption bounces to landing (AC-7, D23)', () => {
 })
 
 describe('precedence (AC-9..AC-13, D9, D18)', () => {
-  it('the hand-off wins over ?persona=', async () => {
+  it('a hand-off carrying persona= redeems and strips', async () => {
     configure()
-    ensureSignInState()
+    const S = ensureSignInState()
     window.history.replaceState(null, '', `/?handoff=${CODE}&persona=firm`)
-    interceptHref()
+    const replace = vi.spyOn(window.history, 'replaceState')
+    const push = vi.spyOn(window.history, 'pushState')
+    const { hrefWrites } = interceptHref()
     await bootApp()
-    await waitFor(() => expect(exchangeBodies).toHaveLength(1))
     await waitForVerifiedWorkspace()
-    expect(loginCalls).toBe(0)
+    await settle()
+
+    expect(exchangeBodies, 'the code is redeemed once').toEqual([{ code: CODE, state: S }])
+    const urls = historyUrls([replace, push])
+    expect(urls.length, 'the strip wrote at least one history entry').toBeGreaterThan(0)
+    expect(urls.filter((u) => /handoff=|persona=/.test(u))).toEqual([])
     expect(window.location.search).toBe('')
+    expect(loginCalls, 'no mint').toBe(0)
+    expect(hrefWrites).toEqual([])
   })
 
   it('a malformed code is stripped and ignored', async () => {
@@ -1341,15 +1349,17 @@ describe('AUTH-05-08 adversarial', () => {
     expect(exchangeBodies).toHaveLength(0)
   })
 
-  it('pinned: a corrupt record on a ?persona= boot warns once and the persona signs in', async () => {
+  it('pinned: a corrupt record on a ?persona= boot warns once and leaves for landing without a mint', async () => {
     configure()
     localStorage.setItem(SESSION_KEY, '{not json')
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     window.history.replaceState(null, '', '/?persona=firm')
-    interceptHref()
+    const { hrefWrites } = interceptHref()
     await bootApp()
-    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
-    expect(loginCalls).toBe(1)
+    await settle()
+    expect(capturedCtx, 'no workspace opens').toBeUndefined()
+    expect(loginCalls).toBe(0)
+    expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}`])
     expect(warn.mock.calls.filter((c) => String(c[0]).startsWith('[session]'))).toHaveLength(1)
   })
 

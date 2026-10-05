@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { APP_PERSONAS, landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
+import { landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn, SignInLoading } from './components/SignIn'
-import { resolveBootSession, loadSession, saveSession, clearSession, shouldAutoSignIn, decodeJwtPayload, cardIdentity } from './lib/session'
+import { resolveBootSession, loadSession, saveSession, clearSession, decodeJwtPayload, cardIdentity } from './lib/session'
 import { revokeSessions } from './lib/revoke'
 import { createRenewer, isRenewalDue, SessionEndedError, type Renewer } from './lib/renewal'
 import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
@@ -105,10 +105,6 @@ import {
 import { removePolicy, replacePolicy, type Policy } from './lib/workflows'
 import { flaskGlyph, shieldGlyph15 } from './glyphs'
 import { BrandMark } from './icons'
-import { DEMO_MODE } from './demo/flag'
-import { personaFromMember } from './demo/identity'
-import { BUSY_MS } from './demo/timing'
-import { PersonaToast } from './demo/PersonaToast'
 import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
 import { DashboardActive } from './components/DashboardActive'
@@ -211,8 +207,8 @@ function SuspendedNotice({ onSignOut }: { onSignOut: () => void }) {
   )
 }
 
-// A remounted workspace cannot resume a half-built draft or a selected invoice, so both
-// collapse to the list they came from.
+// A half-built draft or a selected invoice cannot outlive its screen, so both collapse to
+// the list they came from.
 const carryView = (view: View): View => (view === 'create' || view === 'detail' || view === 'extraction' ? 'invoices' : view)
 
 // `company` is in the union but only in an in-house strip (SettingsView builds it). A firm
@@ -223,9 +219,6 @@ const availableSettingsTab = (tab: SettingsTab, mode: Mode): SettingsTab =>
 // An in-house workspace has no client portfolio; its /clients URL falls back to the dashboard.
 const availableView = (view: View, mode: Mode): View => (view === 'clients' && mode === 'inhouse' ? 'dashboard' : view)
 
-// The busy beat's floor: resolved after ms regardless of what else is happening.
-const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
-
 // One refusal copy. Matched by identity when a release clears it.
 const STILL_WORKING = new ApiError('network', 'An import or filing is still in progress. Try again when it finishes.')
 
@@ -233,13 +226,9 @@ const STILL_WORKING = new ApiError('network', 'An import or filing is still in p
 // (Platform.dc.html ~L980-1263): `this.state` becomes typed `useState` hooks below,
 // and every handler in the "actions" section is ported 1:1 as a plain function.
 // Rendered only once signed in (see App).
-function Workspace({ session, onSignOut, initialView, becomePersona, returnToSeat, seatSubject, freshToken, onUnauthorized }: {
+function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   session: Session
   onSignOut: () => void
-  initialView?: View
-  becomePersona?: (member: Member, view: View) => Promise<void>
-  returnToSeat?: (view: View, seat: Member) => Promise<void>
-  seatSubject?: string
   freshToken?: () => string | null | Promise<string | null>
   onUnauthorized: () => void
 }) {
@@ -366,7 +355,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   const [seed] = useState(() => parseLocation(bootPath, bootSearch))
   // Plain const, not a useState: read by the lazy initializers below (all run once at
   // mount) and by the mount-alignment effect further down, so no memoization is needed.
-  const bootView: View = availableView(initialView ?? seed.view, mode)
+  const bootView: View = availableView(seed.view, mode)
   // Gated on the winning view, like invoiceId/jobId: seed.reviewBatchIds only applies
   // when bootView actually settles on create.
   const bootBatchIds = bootView === 'create' ? seed.reviewBatchIds : []
@@ -576,15 +565,14 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
       setEntityId(active.entityId)
     }
   }, [createStep, entityId, active.entityId])
-  // Aligns a boot URL that named no path (a DEMO-06 carry, an unknown
+  // Aligns a boot URL that named no path (an unknown
   // path) with the view it produced. `replaceState`, mount-only: never a history entry.
   // It also normalises a URL that DID name a path: unowned params are dropped and the
   // owned ones re-emitted from state.
   // Reads bootView/seed rather than the live atoms -- at mount they agree, and seed is
   // what the URL actually carried. A restored deep link therefore lands in the address
   // bar addressed, not collapsed to /invoices.
-  // Also clears the stored destination unconditionally: a persona-switch remount must not
-  // inherit a stray one.
+  // Also clears the stored destination unconditionally.
   // Deps stay []: a mount alignment, not a mirror --
   // boot_theAlignmentDoesNotReRunWhenViewChangesAfterMount.
   useEffect(() => {
@@ -689,7 +677,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
 
   // One writer for a navigation: the view, the destination's owned params and the URL all
   // come from the same `params` object, so state and the address bar cannot diverge.
-  // Never reads location.search (AC-3): echoing it would re-attach a consumed ?persona=
+  // Never reads location.search (AC-3): echoing it would re-attach a consumed one-shot param
   // to every pushed entry.
   // `id` is a parameter, never a state read: openImportedInvoice/openExtraction call this
   // BEFORE their own setState commits, so reading detailInvoiceId/extractionJobId here
@@ -743,7 +731,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   function switchClient(id: string) {
     setActiveEntityId(id)
     // The entry being left names a drill-down of the company being left. Scrub its id
-    // through the same collapse a persona switch uses, so Back cannot return to it.
+    // through carryView, so Back cannot return to it.
     // `id`, never a state read: setActiveEntityId(id) above has not committed, so
     // active.entityId here still names the company being LEFT. Same discipline as
     // navigate's own `id` comment.
@@ -1765,9 +1753,6 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     staffRole,
     deleteRole,
     signOut: onSignOut,
-    becomePersona,
-    returnToSeat,
-    seatSubject,
   }
 
   // Below every hook, so latching does not change the hook order. The whole workspace goes,
@@ -1824,14 +1809,8 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
 // real round trip (mint → GET /v1/me) when a gateway is configured; on failure it enters
 // with the persona's static identity, marked unverified, so the showcase never hard-fails.
 export default function App() {
-  // Persona to auto-sign-in from a landing deep-link (?persona=), resolved ONCE at boot:
-  // non-null when the param names a persona this app can open. A non-null value means an
-  // auto-sign-in is in flight, so the render gate shows a loading splash instead of the
-  // "Choose an account" picker — the landing → app hand-off never flashes that redundant
-  // card before the mint → /me round trip resolves. Declared BEFORE `session` because the
-  // session initializer below reads it.
   const [bootSession] = useState(() => resolveBootSession())
-  // A live stored hand-off session wins over `?handoff=` and `?persona=`.
+  // A live stored hand-off session wins over `?handoff=`.
   const [liveHandoff] = useState(() => isLiveHandoffSession(bootSession))
   // An unconfigured gateway ignores the code (it is still stripped).
   const [handoffCode] = useState(() =>
@@ -1839,15 +1818,9 @@ export default function App() {
   )
   const [handoffPending, setHandoffPending] = useState(handoffCode !== null)
   const redeemStarted = useRef(false)
-  // An expired stored session, even a renewable one, loses to `?persona=`: a kept record must not bounce every link.
-  const [autoPersona] = useState<PersonaId | null>(() => {
-    if (liveHandoff || handoffCode) return null
-    const p = new URLSearchParams(window.location.search).get('persona')
-    return shouldAutoSignIn(p) ? (p as PersonaId) : null
-  })
-  // `?auth=start`: landing asks for a state. `?handoff=` and `?persona=` win over it.
+  // `?auth=start`: landing asks for a state. `?handoff=` wins over it.
   const [authStart] = useState(
-    () => !autoPersona && !handoffCode && new URLSearchParams(window.location.search).get('auth') === 'start',
+    () => !handoffCode && new URLSearchParams(window.location.search).get('auth') === 'start',
   )
   const startBounced = useRef(false)
   const frontDoorBounced = useRef(false)
@@ -1856,31 +1829,15 @@ export default function App() {
   // token past its `exp` resolves to NO session unless it carries a refresh token; then the
   // boot renewal below runs before the workspace mounts.
   //
-  // A deep-link hand-off (`?persona=` or `?handoff=`) boots with NO session even when one is
-  // stored, unless that stored session is a live hand-off session: the user just chose
-  // on the landing page and that choice wins (see shouldAutoSignIn). Rehydrating
-  // here would render the PREVIOUS persona's workspace for the duration of the mint → /me
-  // round trip — and re-persist it via the mirror effect below — before swapping identity
-  // under the user. Starting empty shows the loading splash for the persona actually being
-  // signed in, and the same mirror effect clears the superseded session on that first pass.
-  const [seat, setSeat] = useState<Session | null>(() => (autoPersona || handoffCode ? null : bootSession))
-  // Demo-only stand-in, never persisted: `standIn === null` iff the active identity IS the seat.
-  const [standIn, setStandIn] = useState<Session | null>(null)
-  const [carriedView, setCarriedView] = useState<View | null>(null)
-  const activeSession = standIn ?? seat
+  // A `?handoff=` boot starts with NO session
+  // unless the stored one is a live hand-off session: the fresh code wins over a stale identity.
+  const [seat, setSeat] = useState<Session | null>(() => (handoffCode ? null : bootSession))
   const [signingIn, setSigningIn] = useState<PersonaId | null>(null)
-  // Demo-only. Bumped by every identity-changing verb so a commit that lands after a
-  // newer one (sign-out, or a later switch) can detect it is stale and no-op instead of
-  // resurrecting a dead Workspace.
-  const identityGen = useRef(0)
-  const toastSeq = useRef(0)
-  const [toast, setToast] = useState<{ name: string; initials: string; role: Member['role']; seq: number } | null>(null)
 
   // Set when storage belongs to another tab's sign-in or sign-out.
   const keepStoredRecord = useRef(false)
 
   // Mirror the SEAT to storage: persist while signed in, wipe on sign out / cleared session.
-  // A stand-in is deliberately absent here, so a reload returns to the seat.
   useEffect(() => {
     if (seat) saveSession(seat)
     else if (keepStoredRecord.current) keepStoredRecord.current = false
@@ -1892,12 +1849,8 @@ export default function App() {
   const renewerRef = useRef<Renewer | null>(null)
   const expireSession = useCallback(({ keepStorage }: { keepStorage: boolean }) => {
     renewerRef.current?.track(null)
-    identityGen.current++
     keepStoredRecord.current = keepStorage
     setSeat(null)
-    setStandIn(null)
-    setCarriedView(null)
-    setToast(null)
     if (!keepStorage) clearSession()
   }, [])
   if (renewerRef.current === null) {
@@ -1914,10 +1867,9 @@ export default function App() {
   const renewer = renewerRef.current
   // Layout, not passive: the workspace's first loaders run in child passive effects.
   useLayoutEffect(() => {
-    renewer.track(activeSession)
-  }, [renewer, activeSession])
+    renewer.track(seat)
+  }, [renewer, seat])
   // Nothing tracked means the session ended: a request from a chain that outlived it sends nothing.
-  // ceiling: the gate is "some session tracked", not this Workspace's; a leftover chain after a DEMO_MODE stand-in switch gets the new identity's token. Revisit if a stand-in switch shows a cross-identity request.
   const freshToken = useCallback(
     () => (renewer.tracking() ? renewer.fresh() : Promise.reject(new SessionEndedError())),
     [renewer],
@@ -1938,10 +1890,7 @@ export default function App() {
 
   // Sign out returns the user to the marketing landing page (the real sign-in front
   // door). Nulling React state alone would only swap in the app's own minimal
-  // persona-picker, so wipe the persisted session and navigate away. The `?persona=`
-  // deep-link is no longer this function's problem — it is stripped from the URL when
-  // consumed at boot, so no history entry behind this navigation can auto-sign the same
-  // persona back in.
+  // persona-picker, so wipe the persisted session and navigate away.
   // A hand-off seat revokes every session of the account first; the navigation would cancel the request.
   const signOut = useCallback(async () => {
     if (signingOut.current) return
@@ -1958,19 +1907,14 @@ export default function App() {
     }
     // First: a renewal settling after this must not restore the session.
     renewerRef.current?.track(null)
-    identityGen.current++
     // Drop the in-memory session, not just the persisted copy. clearSession() only wipes
     // localStorage, so without this the invalidated session stayed in React state and
     // Workspace kept rendering — which is exactly how a 401'd reload left the user parked
     // on a dead dashboard behind an "unauthorized / HTTP 401" card instead of signed out.
     // The old comment below claimed this fallback already happened; it did not.
     setSeat(null)
-    setStandIn(null)
-    setCarriedView(null)
-    // Since the boot seed, the URL carries `view` too. Clear it where carriedView is
-    // cleared, or the next sign-in boots onto the signed-out session's screen.
+    // The URL carries `view` too; clear it or the next sign-in boots onto this screen.
     window.history.replaceState(null, '', '/')
-    setToast(null)
     clearSession()
     // Wipes a destination captured before this session — the pathname reset above only
     // stops a NEW one being captured on the way out.
@@ -1988,17 +1932,13 @@ export default function App() {
   // only when it holds another sign-in (both tokens carry session_ids that differ).
   const endRevokedSession = useCallback(() => {
     if (signingOut.current) return
-    const endedSid = decodeJwtPayload(activeSession?.token ?? null)?.session_id
+    const endedSid = decodeJwtPayload(seat?.token ?? null)?.session_id
     const storedSid = decodeJwtPayload(loadSession()?.token ?? null)?.session_id
     const keep = typeof endedSid === 'string' && typeof storedSid === 'string' && endedSid !== storedSid
     renewerRef.current?.track(null)
-    identityGen.current++
     keepStoredRecord.current = keep
     setSeat(null)
-    setStandIn(null)
-    setCarriedView(null)
     window.history.replaceState(null, '', '/')
-    setToast(null)
     if (!keep) clearSession()
     clearDestination()
     const dest = landingBase()
@@ -2006,7 +1946,7 @@ export default function App() {
       signingOut.current = true
       window.location.href = dest
     }
-  }, [activeSession])
+  }, [seat])
 
   const doSignIn = useCallback(async (persona: Persona) => {
     setSigningIn(persona.id)
@@ -2022,79 +1962,13 @@ export default function App() {
     }
   }, [])
 
-  // Demo-only. The same two beats as becomePersona: a floor (no round trip to wait on,
-  // so no failure branch) then the commit. Toasts only when a stand-in was actually in
-  // force -- becomePersona's seat-row short-circuit below delegates here too, and
-  // clicking your own row while already seated must not announce a switch nobody made.
-  const returnToSeat = useCallback(
-    async (view: View, seatMember: Member) => {
-      const gen = ++identityGen.current
-      const wasStandingIn = standIn !== null
-      await delay(BUSY_MS)
-      // Symmetric with becomePersona: a sign-out (or a newer switch) mid-floor
-      // invalidates this commit.
-      if (identityGen.current !== gen) return
-      const carried = carryView(view)
-      setCarriedView(carried)
-      setStandIn(null)
-      if (wasStandingIn) {
-        setToast({ name: seatMember.name, initials: seatMember.initials, role: seatMember.role, seq: ++toastSeq.current })
-      }
-    },
-    [standIn],
-  )
-
-  // Demo-only. Unlike doSignIn above this NEVER degrades: every setter sits after the
-  // await, so a rejected mint leaves seat, standIn and carriedView untouched and signIn's
-  // own ApiError reaches the caller unreshaped. Painting a new name over the old token
-  // would make the footer claim an identity the requests do not hold.
-  const becomePersona = useCallback(
-    async (member: Member, view: View) => {
-      if (!seat) return
-      // The seat's own row returns to the seat rather than minting a same-subject
-      // stand-in, which would leave isSeat true while the return row still rendered.
-      if (member.id === seat.persona.subject) {
-        return returnToSeat(view, member)
-      }
-      identityGen.current++
-      const gen = identityGen.current
-      const [next] = await Promise.all([signIn(personaFromMember(member, seat.persona)), delay(BUSY_MS)])
-      // A sign-out (or a newer switch) mid-mint invalidates this commit -- the Workspace
-      // it would resurrect is already gone.
-      if (identityGen.current !== gen) return
-      const carried = carryView(view)
-      setCarriedView(carried)
-      setStandIn(next)
-      setToast({ name: member.name, initials: member.initials, role: member.role, seq: ++toastSeq.current })
-    },
-    [seat, returnToSeat],
-  )
-
-  // task-21 hand-off: the landing routes here as ?persona=firm|inhouse; auto-sign-in that
-  // persona. autoPersona already encodes the shouldAutoSignIn guard (the param names a
-  // persona this app can open), resolved once at boot, so this fires at most once on mount.
-  useEffect(() => {
-    if (autoPersona) void doSignIn(APP_PERSONAS[autoPersona])
-  }, [autoPersona, doSignIn])
-
-  // Drop the consumed ?persona= from the URL. The param is a one-shot hand-off, and leaving
-  // it behind made it a credential-free sign-in link: after Sign out, Back to the
-  // `?persona=firm` history entry walked straight into the workspace again with no sign-in —
-  // which reads as "logging out doesn't work". Stripping it also removes the stale-leftover
-  // case that used to justify letting a stored session beat the param, so a plain reload now
-  // resolves through the stored session instead of re-minting.
-  //
-  // replaceState, not a navigation: it must not add a history entry the back button can
-  // bounce off. Reads the URL directly rather than depending on render state — this is the
-  // only writer, and it runs once.
-  // `auth` and `handoff` are one-shot too, and are stripped whether used or not. A `persona`
-  // suppressed by a live hand-off session is stripped as well.
+  // Drop the one-shot ?auth= and ?handoff= from the URL, used or not. replaceState: no history entry.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
-    if (((autoPersona || liveHandoff) && params.has('persona')) || params.has('auth') || params.has(HANDOFF_PARAM)) {
+    if (params.has('auth') || params.has(HANDOFF_PARAM)) {
       window.history.replaceState(null, '', window.location.pathname)
     }
-  }, [autoPersona, liveHandoff])
+  }, [])
 
   // Redeem the code once (the ref survives StrictMode's double effect). No stored
   // state means a code this tab never asked for: no exchange, failure arm.
@@ -2138,11 +2012,11 @@ export default function App() {
   // expired while the tab was closed, or token invalidated by a 401 — goes to the landing
   // page rather than being offered a second place to sign in here.
   //
-  // Suppressed while a ?persona= mint or a ?handoff= redemption is in flight (the failed
+  // Suppressed while a ?handoff= redemption is in flight (the failed
   // redemption navigates itself), so bouncing to landing would break landing → app. Also skipped when no
   // landing URL is configured (the standalone showcase build), which keeps its own picker.
   useEffect(() => {
-    if (activeSession || autoPersona || authStart || handoffPending || frontDoorBounced.current) return
+    if (seat || authStart || handoffPending || frontDoorBounced.current) return
     const dest = landingBase() ? landingSignInUrl(ensureSignInState()) : null
     if (dest) {
       // The ref keeps StrictMode to one navigation.
@@ -2154,16 +2028,12 @@ export default function App() {
       captureDestination(window.location.pathname, routeQuery(at.view, at))
       window.location.href = dest
     }
-  }, [activeSession, autoPersona, authStart, handoffPending])
+  }, [seat, authStart, handoffPending])
 
   // Mounting Workspace would clear the captured destination before the start bounce leaves.
   if (authStart && landingBase()) return null
-  if (bootRenewing && activeSession) return <SignInLoading />
-  if (!activeSession) {
-    // A deep-link auto-sign-in is in flight: show a loading splash, NOT the persona
-    // picker, so the landing → app hand-off doesn't flash "Choose an account" before the
-    // mint → /me round trip resolves.
-    if (autoPersona) return <SignInLoading persona={APP_PERSONAS[autoPersona]} />
+  if (bootRenewing && seat) return <SignInLoading />
+  if (!seat) {
     if (handoffPending) return <SignInLoading />
     // No session and no deep link. The landing page is the product's single sign-in front
     // door, so go there rather than offer a SECOND place to sign in — the effect above has
@@ -2176,23 +2046,11 @@ export default function App() {
     return <SignIn signingIn={signingIn} onPick={doSignIn} />
   }
   return (
-    <>
-      <Workspace
-        key={DEMO_MODE ? activeSession.persona.subject : undefined}
-        session={activeSession}
-        onSignOut={signOut}
-        initialView={DEMO_MODE ? (carriedView ?? undefined) : undefined}
-        becomePersona={DEMO_MODE ? becomePersona : undefined}
-        returnToSeat={DEMO_MODE ? returnToSeat : undefined}
-        seatSubject={DEMO_MODE ? seat?.persona.subject : undefined}
-        freshToken={freshToken}
-        onUnauthorized={endRevokedSession}
-      />
-      {/* Sibling of the keyed Workspace above, not inside it -- a successful switch
-          remounts Workspace, which would destroy a toast mounted underneath it. */}
-      {DEMO_MODE && toast && (
-        <PersonaToast key={toast.seq} name={toast.name} initials={toast.initials} role={toast.role} onDismiss={() => setToast(null)} />
-      )}
-    </>
+    <Workspace
+      session={seat}
+      onSignOut={signOut}
+      freshToken={freshToken}
+      onUnauthorized={endRevokedSession}
+    />
   )
 }

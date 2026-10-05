@@ -283,24 +283,19 @@ describe('the entries', () => {
     }
   })
 
-  it('the sign-in window link sits outside the persona list and before the divider', async () => {
+  it('the create link sits under the form', async () => {
     await mountApp()
     await clickByText(header(), LOGIN)
     const signIn = document.querySelector<HTMLElement>(DIALOG)!
-    const picker = signIn.querySelector('[data-testid="persona-picker"]')
-    expect(picker, 'control: the persona picker is in the window').not.toBeNull()
     const link = byText(signIn, CREATE)
     expect(link, 'expected the link in the sign-in window').toBeDefined()
-
-    expect(link!.closest('[data-testid="persona-picker"]')).toBeNull()
-    const walker = document.createTreeWalker(signIn, NodeFilter.SHOW_TEXT)
-    let divider: Node | null = null
-    for (let n = walker.nextNode(); n && !divider; n = walker.nextNode()) if (n.textContent?.includes(DIVIDER)) divider = n
-    expect(divider, 'control: the divider row is in the window').toBeDefined()
-    expect(link!.compareDocumentPosition(divider!) & Node.DOCUMENT_POSITION_FOLLOWING, 'the link precedes the divider').toBeTruthy()
     const form = signIn.querySelector('form') ?? byText(signIn, 'Continue with email')
+    expect(form, 'control: the sign-in form (or its bounce) is in the window').toBeTruthy()
     expect(form!.compareDocumentPosition(link!) & Node.DOCUMENT_POSITION_FOLLOWING, 'the link sits under the sign-in form').toBeTruthy()
     expect(link!.parentElement!.textContent).toContain('New to ASComply?')
+    expect(signIn.querySelector('[data-testid="persona-picker"]'), 'no persona picker in the window').toBeNull()
+    expect(signIn.textContent).not.toContain(DIVIDER)
+    expect(link!.parentElement!.nextElementSibling, 'the link row ends the window body').toBeNull()
   })
 })
 

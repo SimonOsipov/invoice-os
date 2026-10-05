@@ -121,8 +121,8 @@ test.describe('Audit screen', () => {
   test('audit_navItemPresentForBothPersonas', async ({ page }) => {
     test.setTimeout(120_000)
 
-    for (const p of [FIRM_PERSONA, INHOUSE_PERSONA]) {
-      await signInAs(page, p.param)
+    for (const [id, p] of [['firm', FIRM_PERSONA], ['inhouse', INHOUSE_PERSONA]] as const) {
+      await signInAs(page, id)
       await openAudit(page)
       // The SUBTITLE, not a bare name match: the tenant name also sits in the header and
       // the switcher, so `getByText(tenantName)` would pass without this screen drawing.

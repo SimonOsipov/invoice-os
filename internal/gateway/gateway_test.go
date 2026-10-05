@@ -3,6 +3,7 @@ package gateway
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -16,6 +17,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	dbsql "github.com/SimonOsipov/invoice-os/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
@@ -325,7 +328,7 @@ func TestHealthCoexistsUnauthenticated(t *testing.T) {
 func TestMockLoginRoundTrip(t *testing.T) {
 	tg := setupGateway(t)
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /auth/login", MockLoginHandler(tg.issuer, platform.PostureLocal))
+	mux.HandleFunc("POST /auth/login", MockLoginHandler(tg.issuer))
 	mux.Handle("/api/", tg.handler)
 
 	login := httptest.NewRecorder()
@@ -353,214 +356,14 @@ func TestMockLoginRoundTrip(t *testing.T) {
 	assertHeader(t, tg.caps["tenancy"].header, headerTenantID, "tenant-a")
 }
 
-// Hosted-allowlist personas mirror db/seed.dev.sql's tenants and memberships rows:
-// subject and tenant are seeded; role is the GoTrue JWT role every client sends,
-// not the seed's memberships.role (admin/preparer/reviewer).
+// Seeded subjects and tenant from db/seed.dev.sql; personaRole is the GoTrue JWT role.
 const (
-	firmSubject               = "c0000000-0000-0000-0000-000000000001"
 	firmTenant                = "11111111-1111-1111-1111-111111111111"
-	inhouseSubject            = "c0000000-0000-0000-0000-000000000002"
-	inhouseTenant             = "22222222-2222-2222-2222-222222222222"
-	preparerSubject           = "c0000000-0000-0000-0000-000000000003" // firm-tenant preparer; allowlisted so a blocked submit is demonstrable on the hosted build
+	preparerSubject           = "c0000000-0000-0000-0000-000000000003" // firm-tenant preparer
 	finApproverSubject        = "c0000000-0000-0000-0000-000000000004" // firm-tenant reviewer staffed fin_mgr + fin_dir
 	complianceApproverSubject = "c0000000-0000-0000-0000-000000000005" // firm-tenant reviewer staffed compliance
-	secondPreparerSubject     = "c0000000-0000-0000-0000-000000000006" // firm-tenant second preparer
-	inhouseReviewerSubject    = "c0000000-0000-0000-0000-000000000008" // in-house reviewer staffed fin_dir as the backup seat
-	inhouseLineMgrSubject     = "c0000000-0000-0000-0000-000000000009" // in-house reviewer staffed line_mgr
-	inhouseControllerSubject  = "c0000000-0000-0000-0000-000000000010" // in-house reviewer staffed controller
-	inhouseComplianceSubject  = "c0000000-0000-0000-0000-000000000011" // in-house reviewer staffed compliance
-	inhousePreparerSubject    = "c0000000-0000-0000-0000-000000000013" // in-house preparer
-	seededNotAllowlisted      = "c0000000-0000-0000-0000-000000000007" // firm reviewer, seeded suspended — the allowlist is not "any seeded membership"
-	inhouseSuspendedSubject   = "c0000000-0000-0000-0000-000000000012" // in-house reviewer, seeded suspended
-	unlistedTenant            = "99999999-9999-9999-9999-999999999999"
-	unlistedSubject           = "88888888-8888-8888-8888-888888888888"
 	personaRole               = "authenticated"
 )
-
-func TestMockLoginHostedAllowlist(t *testing.T) {
-	tg := setupGateway(t)
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /auth/login", MockLoginHandler(tg.issuer, platform.PostureHosted))
-
-	cases := []struct {
-		name       string
-		body       string
-		wantStatus int
-	}{
-		{"firm persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, firmSubject, firmTenant, personaRole), http.StatusOK},
-		{"in-house persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseSubject, inhouseTenant, personaRole), http.StatusOK},
-		{"in-house reviewer persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseReviewerSubject, inhouseTenant, personaRole), http.StatusOK},
-		{"preparer persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, preparerSubject, firmTenant, personaRole), http.StatusOK},
-		{"fin approver persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, finApproverSubject, firmTenant, personaRole), http.StatusOK},
-		{"compliance approver persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, complianceApproverSubject, firmTenant, personaRole), http.StatusOK},
-		{"firm second preparer persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, secondPreparerSubject, firmTenant, personaRole), http.StatusOK},
-		{"in-house line manager persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseLineMgrSubject, inhouseTenant, personaRole), http.StatusOK},
-		{"in-house controller persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseControllerSubject, inhouseTenant, personaRole), http.StatusOK},
-		{"in-house compliance persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseComplianceSubject, inhouseTenant, personaRole), http.StatusOK},
-		{"in-house preparer persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhousePreparerSubject, inhouseTenant, personaRole), http.StatusOK},
-		{"fin approver on the wrong tenant", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, finApproverSubject, inhouseTenant, personaRole), http.StatusForbidden},
-		{"compliance approver on the wrong tenant", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, complianceApproverSubject, inhouseTenant, personaRole), http.StatusForbidden},
-		// the seed's own memberships.role for both -- the substitution the persona table warns about.
-		{"fin approver with the seed's domain role", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":"reviewer"}`, finApproverSubject, firmTenant), http.StatusForbidden},
-		{"compliance approver with the seed's domain role", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":"reviewer"}`, complianceApproverSubject, firmTenant), http.StatusForbidden},
-		{"fin approver with tenant and role transposed", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, finApproverSubject, personaRole, firmTenant), http.StatusForbidden},
-		// the comparison is a plain Go struct == on strings: case and whitespace variants must not
-		// match. firmTenant/inhouseTenant are all-digit UUIDs (no hex letters), so the case
-		// variant has to hit the subject, which does carry one ("c0000000-...").
-		{"fin approver with uppercased subject", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, strings.ToUpper(finApproverSubject), firmTenant, personaRole), http.StatusForbidden},
-		{"fin approver with trailing-whitespace tenant", fmt.Sprintf(`{"subject":%q,"tenant_id":"%s ","role":%q}`, finApproverSubject, firmTenant, personaRole), http.StatusForbidden},
-		{"unknown tenant", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, firmSubject, unlistedTenant, personaRole), http.StatusForbidden},
-		{"mismatched pairing", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseSubject, firmTenant, personaRole), http.StatusForbidden},
-		{"unknown subject", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, unlistedSubject, firmTenant, personaRole), http.StatusForbidden},
-		// seeded but suspended, one per tenant: a session either could obtain could act
-		// on nothing, so the allowlist is not "any seeded membership".
-		{"seeded, not allowlisted subject", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, seededNotAllowlisted, firmTenant, personaRole), http.StatusForbidden},
-		{"in-house suspended reviewer", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseSuspendedSubject, inhouseTenant, personaRole), http.StatusForbidden},
-		// the widening added allowlist rows, not a per-tenant wildcard: the cross-tenant,
-		// domain-role and transposition shapes must still refuse a newly admitted persona.
-		{"in-house reviewer on the firm tenant", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseReviewerSubject, firmTenant, personaRole), http.StatusForbidden},
-		{"in-house preparer with the seed's domain role", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":"preparer"}`, inhousePreparerSubject, inhouseTenant), http.StatusForbidden},
-		{"in-house reviewer with tenant and role transposed", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseReviewerSubject, personaRole, inhouseTenant), http.StatusForbidden},
-		{"escalated role", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":"admin"}`, firmSubject, firmTenant), http.StatusForbidden},
-		{"preparer with an escalated role", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":"admin"}`, preparerSubject, firmTenant), http.StatusForbidden},
-		// the seed's own memberships.role — the substitution the persona table warns about.
-		{"preparer with the seed's domain role", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":"preparer"}`, preparerSubject, firmTenant), http.StatusForbidden},
-		{"preparer on the wrong tenant", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, preparerSubject, inhouseTenant, personaRole), http.StatusForbidden},
-		// tenant and role swapped: loginPersona's literals are unkeyed, so an entry
-		// written (subject, role, tenant) compiles and would match this body instead.
-		{"preparer with tenant and role transposed", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, preparerSubject, personaRole, firmTenant), http.StatusForbidden},
-		// role omitted: a defaults-then-match implementation would fill "authenticated" and pass this.
-		{"role omitted", fmt.Sprintf(`{"subject":%q,"tenant_id":%q}`, firmSubject, firmTenant), http.StatusForbidden},
-		{"empty body", `{}`, http.StatusForbidden},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			mux.ServeHTTP(rec, httptest.NewRequest("POST", "/auth/login", strings.NewReader(tc.body)))
-
-			if rec.Code != tc.wantStatus {
-				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.wantStatus, rec.Body.String())
-			}
-			var resp map[string]any
-			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-				t.Fatalf("decode response: %v", err)
-			}
-			if tc.wantStatus == http.StatusOK {
-				// resp is map[string]any: an absent access_token is a nil interface,
-				// and nil == "" is false — assert the type, not just the value.
-				token, minted := resp["access_token"].(string)
-				if resp["token_type"] != "bearer" || !minted || token == "" {
-					t.Fatalf("mint response = %+v, want bearer access_token", resp)
-				}
-				return
-			}
-			if _, minted := resp["access_token"]; minted {
-				t.Errorf("refusal minted a token: %+v", resp)
-			}
-			if resp["error"] != "forbidden" {
-				t.Errorf(`refusal body = %+v, want error:"forbidden"`, resp)
-			}
-		})
-	}
-}
-
-// TestMockLoginHostedApproverRoundTrip proves the two new firm-approver personas
-// mint tokens whose claims survive injectIdentity end to end — a 200 alone does
-// not show the token carries the right identity.
-func TestMockLoginHostedApproverRoundTrip(t *testing.T) {
-	cases := []struct {
-		name    string
-		subject string
-	}{
-		{"fin approver", finApproverSubject},
-		{"compliance approver", complianceApproverSubject},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			tg := setupGateway(t)
-			mux := http.NewServeMux()
-			mux.HandleFunc("POST /auth/login", MockLoginHandler(tg.issuer, platform.PostureHosted))
-			mux.Handle("/api/", tg.handler)
-
-			login := httptest.NewRecorder()
-			body := fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, tc.subject, firmTenant, personaRole)
-			mux.ServeHTTP(login, httptest.NewRequest("POST", "/auth/login", strings.NewReader(body)))
-			if login.Code != http.StatusOK {
-				t.Fatalf("login status = %d, want 200", login.Code)
-			}
-			var resp struct {
-				AccessToken string `json:"access_token"`
-				TokenType   string `json:"token_type"`
-			}
-			if err := json.NewDecoder(login.Body).Decode(&resp); err != nil {
-				t.Fatalf("decode login response: %v", err)
-			}
-			if resp.TokenType != "bearer" || resp.AccessToken == "" {
-				t.Fatalf("login response = %+v, want a bearer access_token", resp)
-			}
-
-			api := httptest.NewRecorder()
-			mux.ServeHTTP(api, request("GET", "/api/tenancy/v1/ping", resp.AccessToken))
-			if api.Code != http.StatusOK {
-				t.Fatalf("proxied request with minted token = %d, want 200", api.Code)
-			}
-			assertHeader(t, tg.caps["tenancy"].header, headerTenantID, firmTenant)
-			assertHeader(t, tg.caps["tenancy"].header, headerUserID, tc.subject)
-			assertHeader(t, tg.caps["tenancy"].header, headerUserRole, personaRole)
-		})
-	}
-}
-
-// TestMockLoginHostedInhouseRoundTrip proves an in-house addition's minted claims
-// survive injectIdentity — the approver round-trip covers only the firm tenant.
-func TestMockLoginHostedInhouseRoundTrip(t *testing.T) {
-	tg := setupGateway(t)
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /auth/login", MockLoginHandler(tg.issuer, platform.PostureHosted))
-	mux.Handle("/api/", tg.handler)
-
-	login := httptest.NewRecorder()
-	body := fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseReviewerSubject, inhouseTenant, personaRole)
-	mux.ServeHTTP(login, httptest.NewRequest("POST", "/auth/login", strings.NewReader(body)))
-	if login.Code != http.StatusOK {
-		t.Fatalf("login status = %d, want 200", login.Code)
-	}
-	var resp struct {
-		AccessToken string `json:"access_token"`
-		TokenType   string `json:"token_type"`
-	}
-	if err := json.NewDecoder(login.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode login response: %v", err)
-	}
-	if resp.TokenType != "bearer" || resp.AccessToken == "" {
-		t.Fatalf("login response = %+v, want a bearer access_token", resp)
-	}
-
-	api := httptest.NewRecorder()
-	mux.ServeHTTP(api, request("GET", "/api/tenancy/v1/ping", resp.AccessToken))
-	if api.Code != http.StatusOK {
-		t.Fatalf("proxied request with minted token = %d, want 200", api.Code)
-	}
-	assertHeader(t, tg.caps["tenancy"].header, headerTenantID, inhouseTenant)
-	assertHeader(t, tg.caps["tenancy"].header, headerUserID, inhouseReviewerSubject)
-	assertHeader(t, tg.caps["tenancy"].header, headerUserRole, personaRole)
-}
-
-// TestLoginPersonas_AllSeeded pins the table's size and its role column, not the wire.
-// loginPersona's literals are unkeyed, so an entry written (subject, role, tenant)
-// compiles — the role check catches it. Membership in the seed is the parity test's job.
-func TestLoginPersonas_AllSeeded(t *testing.T) {
-	if len(loginPersonas) != 11 {
-		t.Errorf("len(loginPersonas) = %d, want 11 (every seeded active membership across both demo tenants)", len(loginPersonas))
-	}
-
-	for _, p := range loginPersonas {
-		if p.role != personaRole {
-			t.Errorf("persona %s role = %q, want %q", p.subject, p.role, personaRole)
-		}
-	}
-}
 
 // seedMembershipRows returns the lines of seed.dev.sql's memberships INSERT, read
 // from the embedded copy the binary ships, never the on-disk file.
@@ -600,31 +403,6 @@ func seedRowFor(t *testing.T, rows []string, subject, tenant string) string {
 	return ""
 }
 
-// tenant, user, role, then display_name/email skipped, then status. The tail is
-// anchored so a column reorder fails to match instead of capturing the wrong field.
-var seedMembershipRowRe = regexp.MustCompile(
-	`'([0-9a-f-]{36})',\s*'([0-9a-f-]{36})',\s*'([a-z_]+)',.*'([a-z]+)'\),?$`)
-
-type seedMembership struct{ tenantID, userID, role, status string }
-
-// seedMemberships parses the memberships INSERT into fields. seedMembershipRows
-// hands back the block's comment lines too, so non-matching lines are skipped.
-func seedMemberships(t *testing.T) []seedMembership {
-	t.Helper()
-	var out []seedMembership
-	for _, row := range seedMembershipRows(t) {
-		m := seedMembershipRowRe.FindStringSubmatch(row)
-		if m == nil {
-			continue
-		}
-		out = append(out, seedMembership{tenantID: m[1], userID: m[2], role: m[3], status: m[4]})
-	}
-	if len(out) == 0 {
-		t.Fatal("extracted 0 memberships rows from db/seed.dev.sql — the extractor stopped matching, which reads exactly like an empty seed")
-	}
-	return out
-}
-
 // roleMemberSeedRowRe matches one role_member_seed VALUES tuple: tenant, role key, user.
 var roleMemberSeedRowRe = regexp.MustCompile(`'([0-9a-f-]{36})'::uuid,\s+'([a-z_]+)',\s+'([0-9a-f-]{36})'::uuid`)
 
@@ -655,9 +433,8 @@ func seedRoleMemberRows(t *testing.T) []string {
 	return rows
 }
 
-// TestApproverPersonasHoldTheirWorkflowRoles pins the workflow-role staffing that
-// justifies admitting the two new personas. If a seed edit moves a role off one of
-// them, the login tests above stay green while the justification evaporates.
+// TestApproverPersonasHoldTheirWorkflowRoles pins the seeded fin_mgr/fin_dir and
+// compliance staffing the demo's firm approval run needs.
 func TestApproverPersonasHoldTheirWorkflowRoles(t *testing.T) {
 	rows := seedRoleMemberRows(t)
 	rolesFor := func(subject string) []string {
@@ -690,232 +467,12 @@ func TestApproverPersonasHoldTheirWorkflowRoles(t *testing.T) {
 	}
 }
 
-// A suspended member resolves to no role at all (callerRoleTx filters
-// status = 'active', internal/invoice/store.go), so allowlisting one mints a token
-// whose every role-gated call then refuses. The seeded pairing alone cannot see it:
-// TestLoginPersonas_AllSeeded passes just as happily on a suspended row.
-func TestLoginPersonas_SeededActive(t *testing.T) {
-	rows := seedMemberships(t)
-	statusOf := map[string]string{}
-	var nonActive []string
-	for _, r := range rows {
-		key := r.tenantID + "/" + r.userID
-		statusOf[key] = r.status
-		if r.status != "active" {
-			nonActive = append(nonActive, key)
-		}
-	}
-
-	for _, p := range loginPersonas {
-		key := p.tenantID + "/" + p.subject
-		status, ok := statusOf[key]
-		if !ok {
-			t.Errorf("persona %s has no memberships row in db/seed.dev.sql", key)
-			continue
-		}
-		if status != "active" {
-			t.Errorf("persona %s is seeded %q, want \"active\"", key, status)
-		}
-	}
-
-	// Naming the excluded pair keeps the exclusion deliberate: reactivating one in
-	// the seed goes red here instead of silently widening the allowlist elsewhere.
-	wantNonActive := []string{
-		firmTenant + "/c0000000-0000-0000-0000-000000000007",
-		inhouseTenant + "/c0000000-0000-0000-0000-000000000012",
-	}
-	slices.Sort(nonActive)
-	slices.Sort(wantNonActive)
-	if !slices.Equal(nonActive, wantNonActive) {
-		t.Errorf("seed's non-active memberships = %v, want %v", nonActive, wantNonActive)
-	}
-}
-
-// TestSeedMembershipParserExtractsThirteenRows is the population floor under the
-// parity test: a regex that quietly stops matching rows would otherwise let a
-// shrinking seed read as agreement.
-func TestSeedMembershipParserExtractsThirteenRows(t *testing.T) {
-	rows := seedMemberships(t)
-	if len(rows) != 13 {
-		t.Fatalf("parsed %d memberships rows from db/seed.dev.sql, want 13", len(rows))
-	}
-	counts := map[string]int{}
-	for _, r := range rows {
-		counts[r.status]++
-	}
-	if counts["active"] != 11 || counts["suspended"] != 2 {
-		t.Errorf("parsed statuses = %v, want 11 active and 2 suspended", counts)
-	}
-	// Nothing else reads the parsed role, so only this pins group 3 to the role
-	// column: a column inserted ahead of it would slide the capture unnoticed.
-	for _, r := range rows {
-		if r.role != "admin" && r.role != "preparer" && r.role != "reviewer" {
-			t.Errorf("row %s/%s parsed role = %q, want one of roles(name): admin, preparer, reviewer", r.tenantID, r.userID, r.role)
-		}
-	}
-}
-
-// TestLoginPersonasMatchEverySeededActiveMembership: loginPersonas is a literal, so
-// nothing keeps it in step with db/seed.dev.sql except this test. It compares as
-// SETS, failing in both directions.
-func TestLoginPersonasMatchEverySeededActiveMembership(t *testing.T) {
-	var seeded []string
-	for _, r := range seedMemberships(t) {
-		if r.status == "active" {
-			seeded = append(seeded, r.tenantID+"/"+r.userID)
-		}
-	}
-	var allowed []string
-	for _, p := range loginPersonas {
-		allowed = append(allowed, p.tenantID+"/"+p.subject)
-	}
-	slices.Sort(seeded)
-	slices.Sort(allowed)
-	if !slices.Equal(seeded, allowed) {
-		t.Fatalf("loginPersonas and db/seed.dev.sql's active memberships disagree — a member the seed creates and the allowlist omits is an unexplained 403 during a demo, and an allowlist entry the seed never creates is a subject nothing seeds\nseeded but not allowlisted: %v\nallowlisted but not seeded: %v\nseed.dev.sql active: %v\nloginPersonas:       %v",
-			missingFrom(seeded, allowed), missingFrom(allowed, seeded), seeded, allowed)
-	}
-}
-
-// missingFrom returns the members of a that b does not hold.
-func missingFrom(a, b []string) []string {
-	out := []string{}
-	for _, s := range a {
-		if !slices.Contains(b, s) {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-// A duplicated entry fails the parity comparison above with BOTH of its difference
-// lists empty, which reads as no divergence at all. Name it here instead.
-func TestLoginPersonasHoldNoDuplicates(t *testing.T) {
-	seen := map[string]bool{}
-	for _, p := range loginPersonas {
-		key := p.tenantID + "/" + p.subject
-		if seen[key] {
-			t.Errorf("loginPersonas lists %s more than once", key)
-		}
-		seen[key] = true
-	}
-}
-
-// The preparer is allowlisted so a refused submit is demonstrable on the hosted
-// build, which holds only while the seed still makes them a preparer. A seed edit to
-// an approver role retires that demonstration with every login case above still
-// green; seed_test.go's pin skips whenever no database is configured.
+// A refused submit is demonstrable only while the seed makes this member a preparer;
+// seed_test.go's pin skips whenever no database is configured.
 func TestPreparerPersonaSeededAsPreparer(t *testing.T) {
 	row := seedRowFor(t, seedMembershipRows(t), preparerSubject, firmTenant)
 	if !strings.Contains(row, "'preparer'") {
 		t.Errorf("preparer persona is no longer seeded as a preparer:%s", row)
-	}
-}
-
-// TestMockLoginHostedRefusalOpaque pins AC-3: every refusal reason produces an
-// identical, byte-for-byte body that never names which field failed.
-func TestMockLoginHostedRefusalOpaque(t *testing.T) {
-	tg := setupGateway(t)
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /auth/login", MockLoginHandler(tg.issuer, platform.PostureHosted))
-
-	unknownTenant := httptest.NewRecorder()
-	mux.ServeHTTP(unknownTenant, httptest.NewRequest("POST", "/auth/login",
-		strings.NewReader(fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, firmSubject, unlistedTenant, personaRole))))
-
-	unknownSubject := httptest.NewRecorder()
-	mux.ServeHTTP(unknownSubject, httptest.NewRequest("POST", "/auth/login",
-		strings.NewReader(fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, unlistedSubject, firmTenant, personaRole))))
-
-	// A listed subject on the wrong tenant must be as opaque as a wholly unknown
-	// subject -- the two refusal reasons cannot be told apart from the body.
-	admittedWrongTenant := httptest.NewRecorder()
-	mux.ServeHTTP(admittedWrongTenant, httptest.NewRequest("POST", "/auth/login",
-		strings.NewReader(fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, finApproverSubject, inhouseTenant, personaRole))))
-
-	if unknownTenant.Code != http.StatusForbidden || unknownSubject.Code != http.StatusForbidden || admittedWrongTenant.Code != http.StatusForbidden {
-		t.Fatalf("status = %d/%d/%d, want 403/403/403", unknownTenant.Code, unknownSubject.Code, admittedWrongTenant.Code)
-	}
-	if unknownTenant.Body.String() != unknownSubject.Body.String() {
-		t.Fatalf("refusal bodies differ: %q vs %q", unknownTenant.Body.String(), unknownSubject.Body.String())
-	}
-	if unknownTenant.Body.String() != admittedWrongTenant.Body.String() {
-		t.Fatalf("admitted-subject-wrong-tenant refusal body differs: %q vs %q", admittedWrongTenant.Body.String(), unknownTenant.Body.String())
-	}
-	for _, leak := range []string{"subject", "tenant_id", `"role"`} {
-		if strings.Contains(unknownTenant.Body.String(), leak) {
-			t.Errorf("refusal body leaks %q: %s", leak, unknownTenant.Body.String())
-		}
-	}
-}
-
-// TestMockLoginPostureAsymmetry pins [login-allowlist-hosted-only]: the SAME
-// non-allowlisted triple is refused only under Hosted. Preview stays permissive
-// because two contract-tenancy.spec.ts negative-path tests need the mint to
-// succeed so /me can then reject it (subject B vs tenant A; subject A vs a
-// fresh crypto.randomUUID() tenant no allowlist could ever contain).
-func TestMockLoginPostureAsymmetry(t *testing.T) {
-	tg := setupGateway(t)
-	body := fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, firmSubject, unlistedTenant, personaRole)
-
-	cases := []struct {
-		posture    platform.PostureKind
-		wantStatus int
-	}{
-		{platform.PostureHosted, http.StatusForbidden},
-		{platform.PosturePreview, http.StatusOK},
-		{platform.PostureLocal, http.StatusOK},
-	}
-	for _, tc := range cases {
-		t.Run(string(tc.posture), func(t *testing.T) {
-			mux := http.NewServeMux()
-			mux.HandleFunc("POST /auth/login", MockLoginHandler(tg.issuer, tc.posture))
-
-			rec := httptest.NewRecorder()
-			mux.ServeHTTP(rec, httptest.NewRequest("POST", "/auth/login", strings.NewReader(body)))
-			if rec.Code != tc.wantStatus {
-				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.wantStatus, rec.Body.String())
-			}
-		})
-	}
-}
-
-// TestLoginAllowlistOnlyGatesHostedPosture proves the widened allowlist cannot
-// leak into a non-Hosted posture: the check at gateway.go's login handler is
-// gated by "posture == PostureHosted &&", so outside Hosted the two new
-// personas mint even for a pairing the allowlist would never contain.
-func TestLoginAllowlistOnlyGatesHostedPosture(t *testing.T) {
-	tg := setupGateway(t)
-	// finApproverSubject paired with unlistedTenant: no loginPersonas row can match this.
-	body := fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, finApproverSubject, unlistedTenant, personaRole)
-
-	for _, posture := range []platform.PostureKind{platform.PosturePreview, platform.PostureLocal} {
-		t.Run(string(posture), func(t *testing.T) {
-			mux := http.NewServeMux()
-			mux.HandleFunc("POST /auth/login", MockLoginHandler(tg.issuer, posture))
-
-			rec := httptest.NewRecorder()
-			mux.ServeHTTP(rec, httptest.NewRequest("POST", "/auth/login", strings.NewReader(body)))
-			if rec.Code != http.StatusOK {
-				t.Fatalf("status = %d, want 200 (body %s) -- the allowlist must not be consulted here", rec.Code, rec.Body.String())
-			}
-		})
-	}
-}
-
-// TestMockLoginPreviewNoMembershipCase mints for a triple /me later rejects
-// (contract-tenancy.spec.ts:104) -- Preview must still mint it.
-func TestMockLoginPreviewNoMembershipCase(t *testing.T) {
-	tg := setupGateway(t)
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /auth/login", MockLoginHandler(tg.issuer, platform.PosturePreview))
-
-	body := fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseSubject, firmTenant, personaRole)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest("POST", "/auth/login", strings.NewReader(body)))
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 }
 
@@ -924,7 +481,7 @@ func TestMockLoginPreviewNoMembershipCase(t *testing.T) {
 func TestMockLoginLocalEmptyBody(t *testing.T) {
 	tg := setupGateway(t)
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /auth/login", MockLoginHandler(tg.issuer, platform.PostureLocal))
+	mux.HandleFunc("POST /auth/login", MockLoginHandler(tg.issuer))
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("POST", "/auth/login", strings.NewReader(`{}`)))
@@ -943,77 +500,91 @@ func TestMockLoginLocalEmptyBody(t *testing.T) {
 	}
 }
 
-// TestMockLoginPreflightBypassesHostedRefusal pins the exact composition main.go
-// uses for /auth/login: a browser preflight (OPTIONS + Origin) must get CORS's 204
-// even though the same body would 403 if it reached the handler under Hosted.
-func TestMockLoginPreflightBypassesHostedRefusal(t *testing.T) {
+// The mock login is a mint for any identity: no seed holds this subject or tenant.
+func TestMockLoginMintsAnyIdentity(t *testing.T) {
 	tg := setupGateway(t)
-	login := CORS([]string{allowedOrigin})(MockLoginHandler(tg.issuer, platform.PostureHosted))
+	h := MockLoginHandler(tg.issuer)
+	subject, tenant := uuid.NewString(), uuid.NewString()
 
-	r := httptest.NewRequest("OPTIONS", "/auth/login",
-		strings.NewReader(fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, unlistedSubject, unlistedTenant, personaRole)))
-	r.Header.Set("Origin", allowedOrigin)
-	r.Header.Set("Access-Control-Request-Method", "POST")
 	rec := httptest.NewRecorder()
-	login.ServeHTTP(rec, r)
-
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("preflight status = %d, want 204 (body %s) -- a real browser preflight must never see the Hosted refusal", rec.Code, rec.Body.String())
+	body := fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, subject, tenant, personaRole)
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/auth/login", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil || resp.AccessToken == "" {
+		t.Fatalf("login body carries no access_token (decode err %v)", err)
+	}
+	id, err := tg.verifier.Verify(t.Context(), resp.AccessToken)
+	if err != nil {
+		t.Fatalf("minted token does not verify: %v", err)
+	}
+	if id.Subject != subject || id.TenantID != tenant {
+		t.Errorf("token identity = (sub %q, tenant %q), want (%q, %q)", id.Subject, id.TenantID, subject, tenant)
 	}
 }
 
-// TestMockLoginOptionsNoOriginFallsThroughUnderHosted pins the documented residual:
-// an OPTIONS with no Origin is not a browser preflight, so CORS lets it fall through
-// to MockLoginHandler. Nothing in the tree or any browser sends this, but under
-// Hosted it now 403s where the pre-allowlist handler minted unconditionally.
-func TestMockLoginOptionsNoOriginFallsThroughUnderHosted(t *testing.T) {
+// A body that does not decode into the request shape mints GoTrue-shaped defaults, as an empty body does.
+func TestMockLoginMalformedBodyMintsDefaults(t *testing.T) {
 	tg := setupGateway(t)
-	login := CORS([]string{allowedOrigin})(MockLoginHandler(tg.issuer, platform.PostureHosted))
+	h := MockLoginHandler(tg.issuer)
 
-	r := httptest.NewRequest("OPTIONS", "/auth/login", strings.NewReader(``))
-	rec := httptest.NewRecorder()
-	login.ServeHTTP(rec, r)
-
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403 (body %s) -- an Origin-less OPTIONS reaches the handler and the empty body is not an allowlisted triple", rec.Code, rec.Body.String())
+	for _, body := range []string{`{`, `[]`, `{"subject":1}`} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("POST", "/auth/login", strings.NewReader(body)))
+		if rec.Code != http.StatusOK {
+			t.Errorf("body %q: status = %d, want 200 (body %s)", body, rec.Code, rec.Body.String())
+			continue
+		}
+		var resp struct {
+			AccessToken string `json:"access_token"`
+			TokenType   string `json:"token_type"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil || resp.TokenType != "bearer" || resp.AccessToken == "" {
+			t.Errorf("body %q: response = %+v (decode err %v), want a bearer access_token", body, resp, err)
+			continue
+		}
+		id, err := tg.verifier.Verify(t.Context(), resp.AccessToken)
+		if err != nil {
+			t.Errorf("body %q: minted token does not verify: %v", body, err)
+			continue
+		}
+		if _, err := uuid.Parse(id.Subject); err != nil {
+			t.Errorf("body %q: default subject %q is not a UUID: %v", body, id.Subject, err)
+		}
+		if id.Role != personaRole {
+			t.Errorf("body %q: default role = %q, want %q", body, id.Role, personaRole)
+		}
 	}
 }
 
-// TestMockLoginHostedMalformedBodies exercises decode edge cases the allowlist must
-// survive without ever minting: whichever way the body fails to decode into a clean
-// seeded triple, the zero/partial struct must not match, and the response must not
-// carry an access_token key at all (not merely an empty one).
-func TestMockLoginHostedMalformedBodies(t *testing.T) {
+// The mint reflects whatever the body decodes into and validates nothing: role and tenant are
+// free strings, and a body the decoder half-reads keeps the fields it reached.
+func TestMockLoginMintsWhatTheBodyDecodesInto(t *testing.T) {
 	tg := setupGateway(t)
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /auth/login", MockLoginHandler(tg.issuer, platform.PostureHosted))
-
-	firmTriple := fmt.Sprintf(`"subject":%q,"tenant_id":%q,"role":%q`, firmSubject, firmTenant, personaRole)
+	h := MockLoginHandler(tg.issuer)
+	const s1, s2 = "c0000000-0000-0000-0000-0000000000a1", "c0000000-0000-0000-0000-0000000000a2"
+	pad := strings.Repeat("x", 1<<20)
 
 	cases := []struct {
-		name        string
-		body        string
-		contentType string
-		wantStatus  int
+		name, body, contentType string
+		wantSubject             string // empty: any UUID
+		wantTenant, wantRole    string
 	}{
-		{"top-level JSON array", `["not","an","object"]`, "", http.StatusForbidden},
-		{"top-level JSON null", `null`, "", http.StatusForbidden},
-		{"unknown extra field alongside a valid triple", fmt.Sprintf(`{%s,"admin_override":true}`, firmTriple), "", http.StatusOK},
-		{
-			"duplicate subject key, last value wins and is unlisted",
-			fmt.Sprintf(`{"subject":%q,"subject":%q,"tenant_id":%q,"role":%q}`, firmSubject, unlistedSubject, firmTenant, personaRole),
-			"", http.StatusForbidden,
-		},
-		{
-			"duplicate subject key, last value wins and is the seeded one",
-			fmt.Sprintf(`{"subject":%q,"subject":%q,"tenant_id":%q,"role":%q}`, unlistedSubject, firmSubject, firmTenant, personaRole),
-			"", http.StatusOK,
-		},
-		{"non-JSON Content-Type header, unlisted triple, JSON body", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, unlistedSubject, unlistedTenant, personaRole), "text/plain", http.StatusForbidden},
-		{"non-JSON Content-Type header, valid persona triple, JSON body", fmt.Sprintf(`{%s}`, firmTriple), "text/plain", http.StatusOK},
-		{"oversized body, unlisted triple padded past 1MB", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q,"pad":%q}`, unlistedSubject, unlistedTenant, personaRole, strings.Repeat("x", 1<<20)), "", http.StatusForbidden},
+		{"a role other than authenticated", `{"subject":"` + s1 + `","role":"service_role"}`, "", s1, "", "service_role"},
+		{"a tenant that is not a UUID", `{"tenant_id":"not a uuid/../"}`, "", "", "not a uuid/../", personaRole},
+		{"an empty role defaults", `{"subject":"` + s1 + `","role":""}`, "", s1, "", personaRole},
+		{"an unknown extra field is ignored", `{"subject":"` + s1 + `","tenant_id":"t-1","admin_override":true}`, "", s1, "t-1", personaRole},
+		{"a duplicate key keeps the last value", `{"subject":"` + s1 + `","subject":"` + s2 + `","tenant_id":"t-1"}`, "", s2, "t-1", personaRole},
+		{"a wrongly typed field keeps the fields decoded after it", `{"subject":1,"tenant_id":"t-1"}`, "", "", "t-1", personaRole},
+		{"a truncated body keeps nothing", `{"subject":"` + s1 + `","tenant_id":"t-1"`, "", "", "", personaRole},
+		{"null mints defaults", `null`, "", "", "", personaRole},
+		{"a non-JSON Content-Type is ignored", `{"subject":"` + s1 + `","tenant_id":"t-1"}`, "text/plain", s1, "t-1", personaRole},
+		{"a body padded past 1 MiB still mints", `{"subject":"` + s1 + `","tenant_id":"t-1","pad":"` + pad + `"}`, "", s1, "t-1", personaRole},
 	}
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest("POST", "/auth/login", strings.NewReader(tc.body))
@@ -1021,45 +592,50 @@ func TestMockLoginHostedMalformedBodies(t *testing.T) {
 				r.Header.Set("Content-Type", tc.contentType)
 			}
 			rec := httptest.NewRecorder()
-			mux.ServeHTTP(rec, r)
-
-			if rec.Code != tc.wantStatus {
-				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.wantStatus, rec.Body.String())
+			h.ServeHTTP(rec, r)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 			}
-			var resp map[string]any
-			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-				t.Fatalf("decode response: %v", err)
+			var resp struct {
+				AccessToken string `json:"access_token"`
 			}
-			if tc.wantStatus == http.StatusForbidden {
-				if _, minted := resp["access_token"]; minted {
-					t.Errorf("refusal minted a token: %+v", resp)
+			if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil || resp.AccessToken == "" {
+				t.Fatalf("login body carries no access_token (decode err %v)", err)
+			}
+			id, err := tg.verifier.Verify(t.Context(), resp.AccessToken)
+			if err != nil {
+				t.Fatalf("minted token does not verify: %v", err)
+			}
+			if tc.wantSubject == "" {
+				if _, err := uuid.Parse(id.Subject); err != nil {
+					t.Errorf("subject %q, want a default UUID", id.Subject)
 				}
+			} else if id.Subject != tc.wantSubject {
+				t.Errorf("subject = %q, want %q", id.Subject, tc.wantSubject)
+			}
+			if id.TenantID != tc.wantTenant || id.Role != tc.wantRole {
+				t.Errorf("(tenant, role) = (%q, %q), want (%q, %q)", id.TenantID, id.Role, tc.wantTenant, tc.wantRole)
 			}
 		})
 	}
 }
 
-// TestMockLoginHostedRefusalHasNoAccessTokenKey isolates AC-3's strongest form: the
-// key itself must be absent, not merely empty -- a caller checking `"access_token" in
-// resp` must see the same false a caller checking truthiness would.
-func TestMockLoginHostedRefusalHasNoAccessTokenKey(t *testing.T) {
+// The mint takes a subject that is not a UUID, but the verifier refuses the token downstream.
+func TestMockLoginNonUUIDSubjectMintsATokenTheVerifierRefuses(t *testing.T) {
 	tg := setupGateway(t)
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /auth/login", MockLoginHandler(tg.issuer, platform.PostureHosted))
-
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest("POST", "/auth/login",
-		strings.NewReader(fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, unlistedSubject, unlistedTenant, personaRole))))
-
-	var resp map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode response: %v", err)
+	MockLoginHandler(tg.issuer).ServeHTTP(rec, httptest.NewRequest("POST", "/auth/login", strings.NewReader(`{"subject":"../etc"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
-	if _, present := resp["access_token"]; present {
-		t.Fatalf("refusal body has an access_token key at all: %+v", resp)
+	var resp struct {
+		AccessToken string `json:"access_token"`
 	}
-	if len(resp) != 1 || resp["error"] != "forbidden" {
-		t.Fatalf("refusal body = %+v, want exactly {\"error\":\"forbidden\"}", resp)
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil || resp.AccessToken == "" {
+		t.Fatalf("login body carries no access_token (decode err %v)", err)
+	}
+	if _, err := tg.verifier.Verify(t.Context(), resp.AccessToken); !errors.Is(err, auth.ErrUnauthorized) {
+		t.Errorf("Verify = %v, want auth.ErrUnauthorized", err)
 	}
 }
 

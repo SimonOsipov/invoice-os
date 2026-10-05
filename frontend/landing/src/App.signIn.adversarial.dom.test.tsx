@@ -453,21 +453,18 @@ describe('adversarial: the console target', () => {
     expect(dialogs().length).toBe(0)
   })
 
-  it('the persona picker ignores a held console', async () => {
+  it('no dialog control navigates to a persona URL', async () => {
     const assigned = captureNavigation()
     await bootAt('/?console=ops&signin=ready')
-    const picks: [string, string][] = [
-      ['firm', 'https://app.x?persona=firm'],
-      ['support', 'https://support.x?persona=support'],
-      ['developer', 'https://ops.x?persona=developer'],
-    ]
-    for (const [id, want] of picks) {
-      const b = onlyDialog().querySelectorAll<HTMLButtonElement>(`[data-persona="${id}"]`)
-      expect(b.length, id).toBe(1)
-      await act(async () => b[0].click())
-      expect(assigned.at(-1), id).toBe(want)
-    }
-    expect(assigned.length).toBe(picks.length)
+    const d = onlyDialog()
+    const all = Array.from(d.querySelectorAll<HTMLButtonElement>('button'))
+    // Close last: it unmounts the dialog and would turn later clicks into no-ops.
+    const buttons = [...all.filter((b) => b.getAttribute('aria-label') !== 'Close'), ...all.filter((b) => b.getAttribute('aria-label') === 'Close')]
+    expect(buttons.length, 'control: the dialog has controls to click').toBeGreaterThanOrEqual(2)
+    for (const b of buttons) await act(async () => b.click())
+    expect(assigned.length, 'control: a real control still navigates').toBeGreaterThan(0)
+    expect(assigned.filter((h) => h.includes('persona=')), assigned.join('\n')).toEqual([])
+    expect(d.querySelectorAll('[data-persona]').length).toBe(0)
   })
 
   it('StrictMode: the held console survives the double effect and the strip', async () => {

@@ -239,6 +239,20 @@ export async function provisionStaffAccount(prefix: string): Promise<StaffAccoun
   return { ...account, userId }
 }
 
+export interface MemberGrant {
+  user_id: string
+  tenant_id: string
+  role: 'admin' | 'preparer' | 'reviewer'
+  display_name: string
+  email: string
+}
+
+// POST /auth/mock/member (internal/gateway/mockmember.go answers 204); mock build only.
+export async function grantMembership(grant: MemberGrant): Promise<void> {
+  const res = await rawFetch('/auth/mock/member', { method: 'POST', body: grant })
+  if (res.status !== 204) throw new Error(`member grant answered ${res.status}: ${JSON.stringify(res.body)}`)
+}
+
 // ---- Wire contract types, declared locally to the verified contract
 // (internal/tenancy, internal/portfolio/portfolio.go, internal/validation/
 // rule.go + handlers.go). Me mirrors e2e/topology/isolation.spec.ts's Me

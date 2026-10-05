@@ -1,9 +1,9 @@
 import { test, expect, type BrowserContext, type Frame, type Page, type Request, type Response } from '@playwright/test'
-import { APP_URL, FIRM_PERSONA, GATEWAY_URL, INHOUSE_PERSONA } from './targets'
+import { APP_URL, FIRM_PERSONA, GATEWAY_URL, INHOUSE_PERSONA, TENANTS } from './targets'
 import { resolveTarget } from '../targets'
-import { DESTINATION_READY, collectErrors, sidebarRoster } from '../personaSession'
+import { DESTINATION_READY, VERIFIED, browserToken, collectErrors, expectInWorkspace, isHandoffNavigation, sidebarRoster, signInAs, signInAtFrontDoor, submitSignIn } from '../personaSession'
 import { CONSOLE_SESSION_KEY, consoleUrl, seedStaffSession, type ConsoleTarget } from '../staffSession'
-import { PERSONAS, PERSONA_IDS, DESTINATION_ENV, type PersonaId } from '../personas'
+import { ensureMember } from '../realAccounts'
 import {
   contactsMe,
   login,
@@ -34,76 +34,25 @@ import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnim
 // LANDING_URL. Pattern mirrors e2e/smoke/apps.ts:21 (Decision [signout-asserts-landing-redirect]).
 const LANDING_URL = resolveTarget('LANDING_URL')
 
-// The expected arrival base per persona, computed once at module scope — same idiom as
-// LANDING_URL above. This is the ONLY use of resolveTarget/DESTINATION_ENV in the walk below:
-// to compute what the navigation SHOULD land on, never to navigate there directly (AC #2).
-const EXPECTED_BASE: Record<PersonaId, string> = Object.fromEntries(
-  PERSONA_IDS.map((id) => [id, resolveTarget(DESTINATION_ENV[PERSONAS[id].destination])]),
-) as Record<PersonaId, string>
+// The live browser round trip: a real sign-in through the landing form mints a session whose
+// /v1/me read resolves the tenant under RLS before the workspace renders.
+test('deployed app: a real sign-in into 1111 renders the backend-verified tenant identity', async ({ page }) => {
+  const errors = collectErrors(page)
 
-// M2-14 deliverable (1): the live browser round trip. On the gateway-wired dev build,
-// picking a persona mints a JWT via the gateway (/auth/login) and reads GET
-// /api/tenancy/v1/me before revealing the workspace — the first real authenticated fetch
-// resolving a tenant under RLS. This proves that whole path end to end, in a real browser.
-test('deployed app: persona mock-login renders the backend-verified tenant identity', async ({ page }) => {
-  const errors: string[] = []
-  page.on('console', (msg) => {
-    if (msg.type() === 'error') errors.push(msg.text())
-  })
-  page.on('pageerror', (err) => {
-    errors.push(`pageerror: ${err.message}`)
-  })
+  await signInAs(page, 'firm')
 
-  // Arrive the way the landing page hands off: ?persona=<id>. The app no longer offers a
-  // picker of its own — landing is the single sign-in front door — so this deep link IS
-  // the sign-in. With VITE_GATEWAY_URL baked into this build it triggers the real round
-  // trip (mint → /me) rather than the pure client-side mock.
-  const url = `${APP_URL}?persona=${FIRM_PERSONA.param}`
-  const res = await page.goto(url)
-  expect(res, `no response from ${url}`).toBeTruthy()
-  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
-
-  // The VERIFIED marker (a sidebar span titled "Tenant verified via /v1/me") renders ONLY
-  // in the verified branch — when /me resolved the tenant against the live backend. It is
-  // the discriminator this test hinges on: the static firm fallback shows the SAME
-  // "OKAFOR & PARTNERS" label, so the marker — not the text — is what proves the round
-  // trip resolved a backend identity and not the org-label fallback. Auto-waits for the
-  // async sign-in to complete.
-  const verifiedMarker = page.locator('[title="Tenant verified via /v1/me"]')
-  await expect(verifiedMarker).toBeAttached()
-
-  // Corroborate: the backend-resolved tenant name renders (uppercased) in the sidebar.
+  // The marker renders only once /v1/me resolved; the static label alone would pass on the fallback.
+  await expect(page.locator(VERIFIED)).toBeAttached()
   await expect(page.locator('aside.pf-sidebar')).toContainText(FIRM_PERSONA.tenantName.toUpperCase())
 
-  // The wired round trip must complete cleanly — a failed round trip degrades to an
-  // unverified session (a console.warn, not an error), which would already have failed the
-  // marker assertion above; this pins that no hard error fired during load.
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// M4-14-01 Gap 4 (sign-out redirect): Sidebar.tsx's Sign-out control (aria-label "Sign
-// out") calls ctx.signOut -> App.tsx's signOut(): clearSession() then
-// window.location.href = landingBase(). The deployed build bakes VITE_LANDING_URL
-// (scripts/ci/railway-env.sh:1049), so on dev this is a real cross-app navigation, not
-// just a state reset — asserted by waiting for the browser to land on LANDING_URL
-// (Decision [signout-asserts-landing-redirect]).
+// Sign-out clears the session and navigates to landingBase() (Decision [signout-asserts-landing-redirect]).
 test('deployed app: sign-out redirects to the landing page', async ({ page }) => {
-  const errors: string[] = []
-  page.on('console', (msg) => {
-    if (msg.type() === 'error') errors.push(msg.text())
-  })
-  page.on('pageerror', (err) => {
-    errors.push(`pageerror: ${err.message}`)
-  })
+  const errors = collectErrors(page)
 
-  // Sign in via the landing hand-off and wait for the /me round trip (same discriminator
-  // as the identity test above) — Sign out needs an authed session to exercise the real
-  // App.tsx signOut() path rather than an already-unauthenticated redirect.
-  const url = `${APP_URL}?persona=${FIRM_PERSONA.param}`
-  const res = await page.goto(url)
-  expect(res, `no response from ${url}`).toBeTruthy()
-  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
-  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  await signInAs(page, 'firm')
 
   await page.getByRole('button', { name: 'Sign out' }).click()
   await page.waitForURL((url) => url.href.startsWith(LANDING_URL))
@@ -111,48 +60,60 @@ test('deployed app: sign-out redirects to the landing page', async ({ page }) =>
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// Regression (persona-switch): the landing page is a DIFFERENT origin from the app, so
-// picking a profile there cannot clear this origin's stored session — the ?persona= hand-off
-// is the entire signal that identity changed. It used to LOSE to a stored session, so
-// reaching landing without the in-app Sign out (Back button, a second tab, a bookmark) and
-// choosing the other accountant silently reopened the PREVIOUS one's workspace, tenant label
-// and all. Asserted on a deployed build because the swap only shows up across a real page
-// load with real localStorage.
-test('deployed app: a persona hand-off switches identity over a live stored session', async ({ page }) => {
-  await page.goto(`${APP_URL}?persona=${FIRM_PERSONA.param}`)
-  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+// A live hand-off session wins over a later sign-in from landing (docs/identity-provider.md,
+// "Precedence in the app"): a second account only takes the tab once the first session is gone.
+test('deployed app: a second real sign-in replaces the session only after the first one is gone', async ({ page }) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+  const inhouse = await ensureMember(TENANTS.b.id, 'in_house')
+
+  await signInAs(page, 'firm')
   await expect(page.locator('aside.pf-sidebar')).toContainText(FIRM_PERSONA.tenantName.toUpperCase())
+  const firmToken = await browserToken(page)
 
-  // Arrive again exactly as landing hands off, WITHOUT signing out — the firm session is
-  // still stored on this origin, which is the whole point of the regression.
-  await page.goto(`${APP_URL}?persona=${INHOUSE_PERSONA.param}`)
-  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  // Sign in as 2222 from landing without signing out: ?auth=start bounces over the live session
+  // and keeps it, then the hand-off code is ignored.
+  await page.goto(`${APP_URL}/?auth=start`)
+  await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
+  const dialog = page.getByRole('dialog', { name: 'Platform login' })
+  await expect(dialog.getByLabel('Work email', { exact: true })).toBeVisible()
+  await Promise.all([
+    page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
+    submitSignIn(page, inhouse.email, inhouse.password),
+  ])
+  await expectInWorkspace(page, { workspaceName: FIRM_PERSONA.tenantName })
+  expect(await browserToken(page), 'a live session was replaced by a sign-in from landing').toBe(firmToken)
 
+  // Once the stored session is gone, a real sign-in as the 2222 member takes the tab.
+  await signInAs(page, 'inhouse')
   const sidebar = page.locator('aside.pf-sidebar')
   await expect(sidebar).toContainText(INHOUSE_PERSONA.tenantName.toUpperCase())
-  // The positive assertion alone would pass while BOTH identities render; the bug's
-  // signature was the firm tenant surviving the switch.
+  // The positive assertion alone would pass while both identities render.
   await expect(sidebar).not.toContainText(FIRM_PERSONA.tenantName.toUpperCase())
+  expect(await browserToken(page), 'the 2222 session carries the 1111 token').not.toBe(firmToken)
+
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })
 
-// Regression (one-shot hand-off): ?persona= is a sign-in hand-off, not a standing
-// credential. It used to survive in the address bar, so after Sign out the back button
-// returned to the `?persona=firm` entry and walked straight back into the workspace — a
-// logout that did not log out. It is now stripped (replaceState) the moment it is
-// consumed, leaving a bare, sessionless app URL behind the sign-out redirect.
-//
-// This pins the strip itself rather than driving the back button: a bfcache restore would
-// make the navigation assertion answer "did Chromium reuse the page?" instead of "is the
-// param gone?" — and the param is the actual defect.
-test('deployed app: the ?persona= hand-off is consumed and removed from the URL', async ({ page }) => {
-  await page.goto(`${APP_URL}?persona=${FIRM_PERSONA.param}`)
-  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+// The one case that proves the param is inert: with a live session it neither replaces it nor mints.
+test('deployed app: a ?persona=firm visit with a live session keeps that session and mints nothing', async ({ page }) => {
+  await signInAs(page, 'firm')
+  const before = await browserToken(page)
 
-  await expect
-    .poll(() => new URL(page.url()).searchParams.has('persona'), {
-      message: `?persona= survived the hand-off at ${page.url()} — the back button would re-sign-in`,
-    })
-    .toBe(false)
+  const seen: string[] = []
+  const logins: string[] = []
+  page.on('request', (r) => {
+    seen.push(r.url())
+    if (new URL(r.url()).pathname === '/auth/login') logins.push(r.method())
+  })
+  await page.goto(`${APP_URL}?persona=firm`)
+  await expect(page.locator(VERIFIED)).toBeAttached()
+  await expect(page.locator('aside.pf-sidebar')).toContainText(FIRM_PERSONA.tenantName.toUpperCase())
+
+  expect(await browserToken(page), 'the visit replaced the stored session token').toBe(before)
+  // Positive control: the listener saw the visit itself, so an empty `logins` is not blindness.
+  expect(seen.some((u) => u.includes('persona=firm')), 'the request listener missed the visit').toBe(true)
+  expect(logins, 'the visit minted a session through /auth/login').toEqual([])
 })
 
 // The single front door. The app used to answer a sessionless visit with a persona picker
@@ -174,16 +135,11 @@ test('deployed app: a visit with no session redirects to the landing page', asyn
 // file it depends on (docs/e2e-convention.md: organize by capability, not by date).
 //
 // goBack() alone would only prove Chromium reused a bfcached page, not that the router
-// restored the view -- the same trap the strip test above (:111-113) already records for
-// a query param. So every step asserts the URL AND the rendered panel, never one alone.
+// restored the view. So every step asserts the URL AND the rendered panel, never one alone.
 test("deployed app: Back walks the workspace's own history instead of leaving it", async ({ page }) => {
   const errors = collectErrors(page)
 
-  const url = `${APP_URL}?persona=${FIRM_PERSONA.param}`
-  const res = await page.goto(url)
-  expect(res, `no response from ${url}`).toBeTruthy()
-  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
-  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  await signInAs(page, 'firm')
   await expect(page.getByText('COMPLIANCE OVERVIEW', { exact: true })).toBeVisible()
 
   const nav = page.locator('aside.pf-sidebar nav.pf-nav-list')
@@ -219,9 +175,7 @@ test("deployed app: Back walks the workspace's own history instead of leaving it
 test('deployed app: Forward re-applies the view Back left', async ({ page }) => {
   const errors = collectErrors(page)
 
-  const url = `${APP_URL}?persona=${FIRM_PERSONA.param}`
-  await page.goto(url)
-  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  await signInAs(page, 'firm')
 
   const nav = page.locator('aside.pf-sidebar nav.pf-nav-list')
   await nav.getByRole('button', { name: 'Invoices' }).click()
@@ -244,26 +198,18 @@ test('deployed app: Forward re-applies the view Back left', async ({ page }) => 
 test("deployed app: Back from the session's first screen leaves for the landing page", async ({ page }) => {
   const errors = collectErrors(page)
 
-  const landingRes = await page.goto(LANDING_URL)
-  expect(landingRes, `no response from ${LANDING_URL}`).toBeTruthy()
-  expect(landingRes!.ok(), `${LANDING_URL} returned HTTP ${landingRes!.status()}`).toBeTruthy()
+  // The sign-in itself passes through landing, so landing is the only history entry before
+  // the workspace: a Back landing there proves boot replaced the hand-off entry, not pushed.
+  await signInAs(page, 'firm')
 
-  const url = `${APP_URL}?persona=${FIRM_PERSONA.param}`
-  await page.goto(url)
-  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
-
-  // Landing is the only history entry before the workspace, so a Back landing there
-  // proves boot replaced that entry rather than pushing a new one.
   await page.goBack()
   await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// ROUTE-02-08: a Back journey through a REAL invoice detail. The journey's first history
-// entry must be the landing page itself (Decision [back-lives-in-auth-spec]) -- a walk
-// starting at page.goto(APP_URL) would already BE entry one and prove nothing about Back
-// leaving the workspace, the exact trap ROUTE-01's own deploy-gate red hit on this AC shape.
+// ROUTE-02-08: a Back journey through a REAL invoice detail. The sign-in passes through
+// landing, so landing is the entry behind the workspace (Decision [back-lives-in-auth-spec]).
 //
 // Local console gate, not the shared collectErrors() above: opening a real invoice detail
 // fires getInvoiceApprovalRun on mount, which 404s for an invoice with no approval run yet
@@ -281,9 +227,8 @@ test("deployed app: Back from an invoice detail returns to the list, not the lan
     errors.push(`pageerror: ${err.message}`)
   })
 
-  // Fixtures FIRST, before any navigation: the workspace reads its portfolio once at
-  // mount, so an entity created after boot never reaches the company switcher. These are
-  // pure API calls that never touch `page`, so landing stays history entry one.
+  // Fixtures FIRST: the workspace reads its portfolio once at mount, so an entity created
+  // after boot never reaches the company switcher.
   const token = await login(API_PERSONAS.A)
   const entity = await createEntity(token, { name: `ROUTE-02 back journey ${Date.now()}`, tin: freshTin() })
   const invoiceNumber = `INV-ROUTE02-BACK-${Date.now()}`
@@ -302,13 +247,7 @@ test("deployed app: Back from an invoice detail returns to the list, not the lan
     line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
   })
 
-  const landingRes = await page.goto(LANDING_URL)
-  expect(landingRes, `no response from ${LANDING_URL}`).toBeTruthy()
-  expect(landingRes!.ok(), `${LANDING_URL} returned HTTP ${landingRes!.status()}`).toBeTruthy()
-
-  const url = `${APP_URL}?persona=${FIRM_PERSONA.param}`
-  await page.goto(url)
-  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  await signInAs(page, 'firm')
 
   // Invoices is a CLIENT-scoped surface: the list is filtered to ctx.active.entityId,
   // which signing in leaves at whatever clients[0] resolves to (portfolio's ORDER BY name
@@ -345,25 +284,18 @@ test("deployed app: Back from an invoice detail returns to the list, not the lan
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// The Caddyfile `try_files` fallback has served this; nothing in the
-// suite has ever cold-booted a top-level path until now.
+// The Caddyfile `try_files` fallback serves a top-level path; a stored session cold-boots it.
 test('deployed app: a top-level path is a working deep link', async ({ page }) => {
   const errors = collectErrors(page)
 
-  const url = `${APP_URL}/audit?persona=${FIRM_PERSONA.param}`
+  await signInAs(page, 'firm')
+  const url = `${APP_URL}/audit`
   const res = await page.goto(url)
   expect(res, `no response from ${url}`).toBeTruthy()
   expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
 
-  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
   await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
   await expect(page, 'the deep link did not settle on /audit').toHaveURL(/\/audit$/)
-
-  await expect
-    .poll(() => new URL(page.url()).searchParams.has('persona'), {
-      message: `?persona= survived the deep link at ${page.url()}`,
-    })
-    .toBe(false)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -402,11 +334,9 @@ function cleanInvoiceFields(invoiceNumber: string) {
   }
 }
 
-// ROUTE-02-07 (X-1/X-2): a top-level /invoices/<uuid> deep link cold-boots the detail
-// panel directly, no prior sign-in ([deep-link-uses-persona-handoff] -- copies
-// auth.spec.ts's own top-level-path test verbatim). res.ok() only proves Caddy's
-// try_files served the document; what actually renders is the real assertion.
-test('deployed app: /invoices/<uuid> is a working deep link, and the persona param strips', async ({ page }) => {
+// ROUTE-02-07 (X-1/X-2): a top-level /invoices/<uuid> deep link cold-boots the detail panel
+// directly on a stored session.
+test('deployed app: /invoices/<uuid> is a working deep link', async ({ page }) => {
   const errors = collectErrors(page)
 
   const token = await login(PERSONAS.A)
@@ -414,50 +344,37 @@ test('deployed app: /invoices/<uuid> is a working deep link, and the persona par
   const invoiceNumber = `INV-ROUTE02-CB-${Date.now()}`
   const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
 
-  const url = `${APP_URL}/invoices/${inv.id}?persona=${FIRM_PERSONA.param}`
+  await signInAs(page, 'firm')
+  const url = `${APP_URL}/invoices/${inv.id}`
   const res = await page.goto(url)
   expect(res, `no response from ${url}`).toBeTruthy()
   expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
 
-  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
   await expect(page.getByTestId('invoice-detail'), 'the cold boot must render this invoice, not the empty state').toContainText(
     invoiceNumber,
   )
 
   await expect(page, 'the deep link did not settle on /invoices/<uuid>').toHaveURL(new RegExp(`/invoices/${inv.id}$`))
-  await expect
-    .poll(() => new URL(page.url()).searchParams.has('persona'), {
-      message: `?persona= survived the deep link at ${page.url()}`,
-    })
-    .toBe(false)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 }
 
-// The tab is a PATH SEGMENT (lib/route.ts's routeUrl), so it can travel in the same URL as
-// ?persona=: the strip rewrites to `pathname + hash` (App.tsx's autoPersona effect), which
-// keeps the path and would drop any query the destination owned.
+// The tab is a PATH SEGMENT (lib/route.ts's routeUrl), so a cold boot on a stored session restores it.
 test('deployed app: a settings tab is a working deep link', async ({ page }) => {
   const errors = collectErrors(page)
 
-  const url = `${APP_URL}/settings/roles?persona=${FIRM_PERSONA.param}`
+  await signInAs(page, 'firm')
+  const url = `${APP_URL}/settings/roles`
   const res = await page.goto(url)
   expect(res, `no response from ${url}`).toBeTruthy()
   expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
 
-  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
   await expect(page.getByTestId('roles-grid'), 'the deep link must open the Roles tab').toBeVisible()
   // The discriminator: SettingsView renders one panel at a time, so a boot that fell back to
   // the default tab shows this instead of the grid above.
   await expect(page.getByTestId('members-table'), 'the boot fell back to the default Members tab').toHaveCount(0)
   await expect(page, 'the deep link did not settle on /settings/roles').toHaveURL(/\/settings\/roles$/)
-
-  await expect
-    .poll(() => new URL(page.url()).searchParams.has('persona'), {
-      message: `?persona= survived the settings deep link at ${page.url()}`,
-    })
-    .toBe(false)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -467,8 +384,7 @@ test('deployed app: a settings tab is a working deep link', async ({ page }) => 
 // keyed by (top-level browsing context, origin), so no unit test can observe it — jsdom never
 // leaves the origin. Decision [sessionstorage-survives-the-round-trip].
 //
-// Drives the REAL SignInModal rather than a constructed ?persona= URL: a constructed URL skips
-// the landing round trip, which IS the premise under test.
+// Signs in through the REAL landing form: skipping the landing round trip would skip the premise under test.
 //
 // No goBack()/goForward() here, deliberately. The journey makes three document navigations
 // (/audit -> landing -> the app hand-off) and two replaceState rewrites, so the entry behind
@@ -480,24 +396,12 @@ test('deployed app: a signed-out deep link returns to its destination after sign
   test.setTimeout(120_000)
   const errors = collectErrors(page)
 
-  // No response assertion: the front door navigates away during load. 'a visit with no session
-  // redirects to the landing page' above establishes that `goto` onto a bouncing app URL
-  // settles cleanly, and 'a top-level path is a working deep link' proves Caddy serves /audit.
-  await page.goto(`${APP_URL}/audit`)
-  await page.waitForURL((url) => url.href.startsWith(LANDING_URL), { timeout: 20_000 })
+  // signInAs bounces the signed-out /audit visit through landing and the form, and waits for the marker.
+  await signInAs(page, 'firm', { path: '/audit' })
 
-  // Same modal drive as the parametrised walk below.
-  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
-  await expect(page.getByRole('dialog', { name: 'Platform login' })).toBeVisible()
-  await page.locator(`[data-persona="${FIRM_PERSONA.param}"]`).click()
-
-  // The hand-off lands on the app ROOT (destUrl carries no path), so arriving on /audit can
-  // only have come from the restored destination.
-  // 30s, not the file's 15s default: this assertion alone absorbs a cross-origin hard
-  // navigation, a cold SPA boot and the /v1/me round trip that mints the marker.
-  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached({ timeout: 30_000 })
-  // The two below keep the default budget on purpose: the marker already gated on a mounted
-  // workspace, and AuditView is a static import (App.tsx), so no further fetch precedes the h1.
+  // The hand-off lands on the app ROOT (it carries no path), so arriving on /audit can only
+  // have come from the restored destination. AuditView is a static import (App.tsx), so no
+  // further fetch precedes the h1.
   await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
   await expect(page, 'the restored destination did not settle on /audit').toHaveURL(/\/audit$/)
 
@@ -506,12 +410,6 @@ test('deployed app: a signed-out deep link returns to its destination after sign
   // control ships in this same file and run — "Back walks the workspace's own history" asserts
   // this exact locator IS visible on the deployed dashboard.
   await expect(page.getByText('COMPLIANCE OVERVIEW', { exact: true })).not.toBeVisible()
-
-  await expect
-    .poll(() => new URL(page.url()).searchParams.has('persona'), {
-      message: `?persona= survived the restored deep link at ${page.url()}`,
-    })
-    .toBe(false)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -529,26 +427,9 @@ test('deployed app: a signed-out deep link returns to its FILTER after sign-in',
 
   const unknownInvoice = crypto.randomUUID()
 
-  // No response assertion, for the same reason as the journey above. This goto is also the
-  // tab's FIRST entry, which is why nothing below presses Back.
-  await page.goto(`${APP_URL}/audit?invoice=${unknownInvoice}`)
-  await page.waitForURL((url) => url.href.startsWith(LANDING_URL), { timeout: 20_000 })
+  // The destination's ?invoice= query rides through the front door and comes back with the restore.
+  await signInAs(page, 'firm', { path: `/audit?invoice=${unknownInvoice}` })
 
-  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
-  await expect(page.getByRole('dialog', { name: 'Platform login' })).toBeVisible()
-
-  // The only browser proof that a keyboard pick works: the persona is a native button.
-  const pick = page.locator(`[data-persona="${FIRM_PERSONA.param}"]`)
-  await pick.focus()
-  await expect(pick, 'the persona button did not take focus').toBeFocused()
-  // Armed before the press: the navigation can start before press() resolves.
-  await Promise.all([
-    page.waitForRequest((r) => r.isNavigationRequest() && r.url().startsWith(APP_URL)),
-    page.keyboard.press('Enter'),
-  ])
-
-  // 30s here for the same reason the journey above needs it.
-  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached({ timeout: 30_000 })
   await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
   await expect(page, 'the restored destination did not carry its ?invoice= filter back').toHaveURL(
     new RegExp(`/audit\\?invoice=${unknownInvoice}$`),
@@ -561,12 +442,6 @@ test('deployed app: a signed-out deep link returns to its FILTER after sign-in',
     page.getByTestId('audit-empty-by-filter'),
     'an unknown invoice id must land the filtered-empty state, not the new-workspace one',
   ).toBeVisible()
-
-  await expect
-    .poll(() => new URL(page.url()).searchParams.has('persona'), {
-      message: `?persona= survived the restored filter at ${page.url()}`,
-    })
-    .toBe(false)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -582,63 +457,28 @@ const consoleFrontDoor = (page: Page, target: ConsoleTarget) =>
     { timeout: 20_000 },
   )
 
-// This walk drives the REAL SignInModal (open -> pick a persona), never
-// e2e/personas.ts#signInUrl's constructed URL. signInUrl cannot catch three ways the
-// two sides can silently diverge:
-//  (a) the persona->destination table is duplicated (frontend/landing/src/auth.ts's
-//      LandingPersona.target vs e2e/personas.ts#PERSONAS[id].destination) and nothing
-//      compares the two mappings;
-//  (b) the bases resolve from different variables at different times — landing bakes
-//      import.meta.env.VITE_*_URL into its build image, this suite reads process.env.*_URL
-//      at CI run time;
-//  (c) unset behaviour is opposite — an unset target makes destUrl() return null and the
-//      pick a silent no-op, while signInUrl() throws.
-// A console takes a staff session, not a persona: its pick ends at the front-door bounce to landing.
-for (const id of PERSONA_IDS) {
-  const persona = PERSONAS[id]
-  const outcome = persona.destination === 'app' ? 'reaches its destination' : 'is sent back to the landing front door'
-  test(`deployed ${persona.destination}: the ${id} persona ${outcome} through the sign-in modal`, async ({ page }) => {
-    const errors: string[] = []
-    page.on('console', (msg) => {
-      if (msg.type() === 'error') errors.push(msg.text())
-    })
-    page.on('pageerror', (err) => {
-      errors.push(`pageerror: ${err.message}`)
-    })
+// The dialog offers no persona. A console takes a staff session, and that journey is covered by
+// 'deployed consoles: a staff session signs in through landing' below.
+test('deployed landing: the sign-in dialog offers the form and no persona', async ({ page }) => {
+  const errors = collectErrors(page)
 
-    await page.goto(LANDING_URL)
-    await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
-    const dialog = page.getByRole('dialog', { name: 'Platform login' })
-    await expect(dialog).toBeVisible()
+  // ?auth=start bounces to landing with a sign-in state, which opens the dialog on its form.
+  await page.goto(`${APP_URL}/?auth=start`)
+  await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
+  const dialog = page.getByRole('dialog', { name: 'Platform login' })
+  await expect(dialog).toBeVisible()
 
-    // Positive control first: an absence check on an unrendered picker passes vacuously.
-    await expect(dialog.locator('[data-persona]')).toHaveCount(PERSONA_IDS.length)
-    // One line each: stale-refs exempts a retired literal only when toHaveCount(0) shares its line.
-    await expect(dialog.getByTestId('persona-picker').locator('input')).toHaveCount(0)
-    await expect(dialog.getByText('Forgot password?')).toHaveCount(0)
-    await expect(dialog.getByText('SSO · OAUTH2')).toHaveCount(0)
+  // Positive control first: an absence check beside an unrendered form passes vacuously.
+  await expect(dialog.getByRole('heading', { name: 'Sign in to your workspace' })).toBeVisible()
+  await expect(dialog.getByLabel('Work email', { exact: true })).toBeVisible()
+  await expect(dialog.getByRole('button', { name: 'Sign in →', exact: true })).toBeVisible()
+  await expect(dialog.getByRole('button', { name: 'Create an account', exact: true })).toBeVisible()
+  await expect(dialog.locator('[data-persona]')).toHaveCount(0)
+  await expect(dialog.getByTestId('persona-picker')).toHaveCount(0)
+  await expect(dialog.getByText('Choose an account')).toHaveCount(0)
 
-    // Every destination strips ?persona= on arrival (each app's effect commented "Drop the
-    // consumed ?persona="), so the wire value is only observable on the outbound navigation
-    // request — armed BEFORE the click.
-    const base = EXPECTED_BASE[id]
-    const door = persona.destination === 'app' ? null : consoleFrontDoor(page, persona.destination)
-    const [navRequest] = await Promise.all([
-      page.waitForRequest((r) => r.isNavigationRequest() && r.url().startsWith(base)),
-      page.locator(`[data-persona="${id}"]`).click(),
-    ])
-    expect(new URL(navRequest.url()).searchParams.get('persona'), `navigation request did not carry ?persona=${id}`).toBe(id)
-
-    if (door === null) {
-      await expect(page.locator('aside.pf-sidebar')).toContainText(persona.tenantName!.toUpperCase())
-    } else {
-      expect((await door).status(), `the ${persona.destination} front door answer`).toBe(200)
-      await expect(page.getByRole('banner').getByRole('button', { name: 'Platform login' })).toBeVisible()
-    }
-
-    expect(errors, `console errors on the ${persona.destination} arrival:\n${errors.join('\n')}`).toEqual([])
-  })
-}
+  expect(errors, `console errors on the landing page:\n${errors.join('\n')}`).toEqual([])
+})
 
 // ROUTE-06-06 AC-1: the plain top-level views ROUTE-06-05's popstate sweep leaves with no
 // coverage (dashboard/audit/settings/extraction/detail already have their own deep-link
@@ -659,14 +499,17 @@ test('deployed app: every top-level path cold-boots to its own screen', async ({
     { path: '/create', heading: null }, // no h1/testid — the text check below stands in
   ]
 
+  // Each visit below is a cold boot on the stored session.
+  await signInAs(page, 'firm', { path: paths[0].path })
+
   for (const { path, heading } of paths) {
-    const url = `${APP_URL}${path}?persona=${FIRM_PERSONA.param}`
+    const url = `${APP_URL}${path}`
     const res = await page.goto(url)
     expect(res, `no response from ${url}`).toBeTruthy()
     expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
 
-    // URL alone would pass on a Chromium bfcache reuse -- the trap :155-157 already
-    // records -- so every path asserts both the URL AND a landmark from that screen's DOM.
+    // URL alone would pass on a Chromium bfcache reuse, so every path asserts both the URL
+    // AND a landmark from that screen's DOM.
     await expect(page, `${path} did not settle on its own path`).toHaveURL(new RegExp(`${path}$`))
 
     if (heading != null) {
@@ -698,10 +541,7 @@ test('deployed app: a review path cold-boots to the review surface', async ({ pa
   const entity = await createEntity(token, { name: `ROUTE-06 review cold-boot ${Date.now()}`, tin: freshTin() })
   const batchId = await createImportBatch(token, entity.id, `INV-ROUTE06-REVIEW-${Date.now()}`)
 
-  const url = `${APP_URL}/imports/${batchId}/review?persona=${FIRM_PERSONA.param}`
-  const res = await page.goto(url)
-  expect(res, `no response from ${url}`).toBeTruthy()
-  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
+  await signInAs(page, 'firm', { path: `/imports/${batchId}/review` })
 
   await expect(page, 'the review deep link did not keep its batch id').toHaveURL(new RegExp(`/imports/${batchId}/review$`))
   await expect(page.getByText(`BATCH ${batchId}`), 'the review surface did not render its batch header').toBeVisible()
@@ -761,13 +601,7 @@ test("deployed app: Back past a company switch cannot resume the previous compan
     line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
   })
 
-  const landingRes = await page.goto(LANDING_URL)
-  expect(landingRes, `no response from ${LANDING_URL}`).toBeTruthy()
-  expect(landingRes!.ok(), `${LANDING_URL} returned HTTP ${landingRes!.status()}`).toBeTruthy()
-
-  const url = `${APP_URL}?persona=${FIRM_PERSONA.param}`
-  await page.goto(url)
-  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  await signInAs(page, 'firm')
 
   const nav = page.locator('aside.pf-sidebar nav.pf-nav-list')
   await nav.getByRole('button', { name: 'Invoices' }).click()
@@ -834,7 +668,6 @@ test("deployed app: Back past a company switch cannot resume the previous compan
 
 // The real sign-in hand-off, driven through the landing form against a fresh GoTrue
 // account with its own workspace (forks auto-confirm).
-const VERIFIED = '[title="Tenant verified via /v1/me"]'
 const SESSION_KEY = 'invoice-os.session'
 const JWT_IN_URL = /eyJ[\w-]+\.[\w-]+\./
 // internal/gateway/handoff.go HandoffTTL.
@@ -864,13 +697,6 @@ function gatedErrors(page: Page, drops: Dropper[]): string[] {
   return errors
 }
 
-async function submitSignIn(page: Page, email: string, password: string): Promise<void> {
-  const dialog = page.getByRole('dialog', { name: 'Platform login' })
-  await dialog.getByLabel('Work email', { exact: true }).fill(email)
-  await dialog.getByLabel('Password', { exact: true }).fill(password)
-  await dialog.getByRole('button', { name: 'Sign in →', exact: true }).click()
-}
-
 // Origin and path only: a failure message must not print the leaked secret.
 function leakingUrls(urls: string[], ...secrets: string[]): string[] {
   return urls
@@ -879,15 +705,6 @@ function leakingUrls(urls: string[], ...secrets: string[]): string[] {
       const at = new URL(u)
       return at.origin + at.pathname.replace(/eyJ[\w.-]*/g, '<jwt>')
     })
-}
-
-function isHandoffNavigation(url: string): boolean {
-  return url.startsWith(APP_URL) && new URL(url).searchParams.has('handoff')
-}
-
-async function expectInWorkspace(page: Page, account: RealAccount): Promise<void> {
-  await expect(page.locator(VERIFIED)).toBeAttached({ timeout: 30_000 })
-  await expect(page.locator('aside.pf-sidebar')).toContainText(account.workspaceName.toUpperCase())
 }
 
 // The app origin's stored session in this context, or null.
@@ -1294,7 +1111,7 @@ test('deployed app: a 197-character name stays inside the identity card at every
   const aside = page.locator('aside.pf-sidebar')
   const main = page.locator('main.pf-main')
   const name = page.getByTestId('persona-name')
-  const trigger = page.getByTestId('persona-trigger')
+  const card = page.getByTestId('identity-card')
   const signOut = aside.getByRole('button', { name: 'Sign out' })
   await expect(page.getByTestId('add-company-task')).toBeVisible({ timeout: 30_000 })
   await expect(main.getByText(LONG_WORKSPACE, { exact: false })).toBeVisible()
@@ -1302,16 +1119,17 @@ test('deployed app: a 197-character name stays inside the identity card at every
   const readings: { width: number; scrollWidth: number; clientWidth: number }[] = []
   for (const width of WIDE_WIDTHS) {
     await page.setViewportSize({ width, height: 1080 })
-    await settleAnimations(aside, trigger, signOut)
-    const [asideBox, mainBox, triggerBox, signOutBox] = await Promise.all([aside.boundingBox(), main.boundingBox(), trigger.boundingBox(), signOut.boundingBox()])
-    if (!asideBox || !mainBox || !triggerBox || !signOutBox) throw new Error(`aside, main, trigger or Sign out rendered no box at ${width}px`)
+    await settleAnimations(aside, card, signOut)
+    const [asideBox, mainBox, cardBox, signOutBox, nameBox] = await Promise.all([aside.boundingBox(), main.boundingBox(), card.boundingBox(), signOut.boundingBox(), name.boundingBox()])
+    if (!asideBox || !mainBox || !cardBox || !signOutBox || !nameBox) throw new Error(`aside, main, card, name or Sign out rendered no box at ${width}px`)
 
     expect(await name.textContent(), `the card name at ${width}px`).toBe(LONG_NAME)
     const reading = await name.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
     expect(reading.scrollWidth, `the name is not clipped by its own box at ${width}px (${JSON.stringify(reading)})`).toBeGreaterThan(reading.clientWidth)
-    expect(enclosesRect(asideBox, triggerBox, 1), `the trigger leaves the aside at ${width}px (${JSON.stringify({ asideBox, triggerBox })})`).toBe(true)
-    expect(enclosesRect(asideBox, signOutBox, 1), `Sign out leaves the aside at ${width}px (${JSON.stringify({ asideBox, signOutBox })})`).toBe(true)
-    expect(rectsOverlap(signOutBox, triggerBox), `Sign out overlaps the trigger at ${width}px`).toBe(false)
+    expect(enclosesRect(asideBox, cardBox, 1), `the card leaves the aside at ${width}px (${JSON.stringify({ asideBox, cardBox })})`).toBe(true)
+    expect(enclosesRect(cardBox, signOutBox, 1), `Sign out leaves the card at ${width}px (${JSON.stringify({ cardBox, signOutBox })})`).toBe(true)
+    expect(enclosesRect(cardBox, nameBox, 1), `the name leaves the card at ${width}px (${JSON.stringify({ cardBox, nameBox })})`).toBe(true)
+    expect(rectsOverlap(signOutBox, nameBox), `Sign out overlaps the name at ${width}px`).toBe(false)
     expect(rectsOverlap(asideBox, mainBox), `the aside overlaps main at ${width}px`).toBe(false)
     await assertPageDoesNotScrollSideways(page, `long name at ${width}px`)
     readings.push({ width, ...reading })
@@ -1341,17 +1159,6 @@ async function ageStoredSession(page: Page, patch: Partial<StoredRenewal> = {}):
     },
     { key: SESSION_KEY, patch, ageMs: 61 * 60_000 },
   )
-}
-
-async function signInAtFrontDoor(page: Page, account: RealAccount, path: string): Promise<void> {
-  await page.goto(`${APP_URL}${path}`)
-  await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
-  await Promise.all([
-    page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
-    submitSignIn(page, account.email, account.password),
-  ])
-  await expectInWorkspace(page, account)
 }
 
 // Gateway requests in send order. The browser's CORS preflights are not application requests.

@@ -30,7 +30,7 @@ const INVOICE_ID = 'aaaaaaaa-0000-4000-8000-000000000001'
 const JOB_A = 'c3d4e5f6-a7b8-4c3d-9e4f-5a6b7c8d9e0f'
 const POLICY_ID = 'e9f01234-5678-4abc-9def-0123456789ab'
 
-// Node v25's native localStorage collides with jsdom's (App.standIn.test.tsx:74-75).
+// Node v25's native localStorage collides with jsdom's.
 function createMemoryStorage() {
   const store = new Map<string, string>()
   return {
@@ -88,8 +88,7 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-// vi.resetModules() + the dynamic import are load-bearing: VITE_DEMO_MODE is read at
-// import time, so a statically imported App would freeze it at the first boot.
+// vi.resetModules() + the dynamic import give every boot a fresh App module.
 async function bootAt(pathname: string) {
   window.history.replaceState(null, '', pathname)
   localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))

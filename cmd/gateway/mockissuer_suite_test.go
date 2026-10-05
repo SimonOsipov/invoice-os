@@ -3,10 +3,22 @@
 package main
 
 import (
+	"io"
+	"log/slog"
+	"net/http"
 	"os/exec"
 	"strings"
 	"testing"
 )
+
+// The production build serves no mint route even when the flag is on and the environment is not production.
+func TestUntaggedGatewayServesNoMintRoutes(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	jwks, login := mockIssuerRoutes("development", "true", func(h http.Handler) http.Handler { return h }, logger)
+	if jwks != nil || login != nil {
+		t.Errorf(`mockIssuerRoutes("development", "true") = (jwks %v, login %v), want (nil, nil) in a build without -tags mockissuer`, jwks, login)
+	}
+}
 
 // The untagged suite also runs the -tags mockissuer tests, so `go test ./...` and
 // mutationreplay (which passes no tags) both see a break in mockissuer.go.
@@ -20,6 +32,8 @@ func TestMockIssuerBuildPassesItsTaggedTests(t *testing.T) {
 		"TestTaggedMockIssuerRoutesValueDomain",
 		"TestTaggedMockIssuerRoutesKeepTheirWiring",
 		"TestTaggedMockStaffRouteWiresTheGrant",
+		"TestTaggedMockMemberRouteWiresTheGrant",
+		"TestTaggedMockLoginIgnoresRailwayEnvironmentName",
 	} {
 		if !strings.Contains(string(out), "--- PASS: "+name+" (") {
 			t.Errorf("go test -tags mockissuer: %s did not pass", name)

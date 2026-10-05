@@ -5,9 +5,6 @@
 // App.extractionRoute.test.tsx -- the real <App/>, a session in a stubbed localStorage, ctx
 // captured through a mocked Sidebar.
 
-import { readFileSync } from 'node:fs'
-import path from 'node:path'
-
 import { StrictMode } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -17,7 +14,6 @@ import { EMPTY_BUCKET } from './lib/dashboard'
 import { DEEP_LINK_KEY, DEEP_LINK_SCHEMA_VERSION } from './lib/deepLink'
 import { clampFilterText } from './lib/invoices'
 import { ROUTE_PATHS } from './lib/route'
-import type { Member } from './lib/members'
 import { SESSION_KEY, serializeSession } from './lib/session'
 import type { PlatformCtx, View } from './types'
 
@@ -29,17 +25,7 @@ const INVOICE_ID = 'b7c1d2e3-4f5a-4b6c-8d9e-0f1a2b3c4d5e'
 const DETAIL_ID = 'd1e2a3b4-c5d6-47e8-89fa-bc0123456789'
 const JOB_ID = 'f1e2a3b4-c5d6-47e8-89fa-bc0123456790'
 
-const MEMBER: Member = {
-  id: 'm-boot-001',
-  name: 'Tunde Bello',
-  initials: 'TB',
-  email: 'tunde@example.ng',
-  role: 'preparer',
-  status: 'active',
-  isYou: false,
-}
-
-// Node v25's native localStorage collides with jsdom's (App.standIn.test.tsx:74-75).
+// Node v25's native localStorage collides with jsdom's.
 function createMemoryStorage() {
   const store = new Map<string, string>()
   return {
@@ -92,12 +78,11 @@ afterEach(() => {
 // file to pass APP_PERSONAS.inhouse; every existing call site is unaffected.
 async function bootAt(
   path: string,
-  opts: { demoMode?: boolean; strict?: boolean; persona?: Session['persona']; storedSession?: string } = {},
+  opts: { strict?: boolean; persona?: Session['persona']; storedSession?: string } = {},
 ) {
   window.history.replaceState(null, '', path)
   const session: Session = { ...SEAT_SESSION, persona: opts.persona ?? SEAT_SESSION.persona }
   localStorage.setItem(SESSION_KEY, opts.storedSession ?? serializeSession(session))
-  if (opts.demoMode) vi.stubEnv('VITE_DEMO_MODE', 'true')
   vi.resetModules()
   const { default: App } = await import('./App')
   return render(opts.strict ? (
@@ -142,22 +127,6 @@ describe('AC-2: an unknown path falls back to dashboard', () => {
     const ctx = requireCtx()
     expect(ctx.view, `an unknown path should fall back to dashboard, got '${ctx.view}'`).toBe('dashboard')
     expect(window.location.pathname, 'the corrected URL must be the bare root').toBe('/')
-  })
-})
-
-describe('AC-3: initialView still beats the path', () => {
-  it('boot_initialViewStillBeatsThePath', async () => {
-    await bootAt('/audit', { demoMode: true })
-    const ctx = requireCtx()
-    expect(typeof ctx.becomePersona, 'DEMO_MODE must expose becomePersona on ctx').toBe('function')
-
-    await act(async () => {
-      await ctx.becomePersona!(MEMBER, 'approvals')
-    })
-    expect(
-      capturedCtx!.view,
-      `a DEMO-06 initialView carry must beat the path, got '${capturedCtx!.view}'`,
-    ).toBe('approvals')
   })
 })
 
@@ -291,7 +260,6 @@ describe('AC-7: signOut resets the pathname to /, and no longer carries a fragme
     expect(window.location.href.includes('#'), 'signOut must no longer preserve a live fragment').toBe(false)
     expect(window.location.pathname, 'signOut must still reset the pathname').toBe('/')
     expect(localStorage.getItem(SESSION_KEY), 'the persisted session must be cleared').toBeNull()
-    expect(screen.queryByTestId('persona-toast'), 'no toast must be mounted after sign-out').toBeNull()
   })
 })
 
@@ -311,18 +279,6 @@ describe('ROUTE-03-05: the alignment re-emits the owned query, and drops any liv
       window.location.href.includes('#'),
       'the alignment must no longer carry the boot fragment forward',
     ).toBe(false)
-  })
-})
-
-describe('AC-8: the pre-existing sign-out regression oracle is untouched', () => {
-  it('standIn_theExistingSignOutOracleIsUnmodified', () => {
-    const source = readFileSync(path.join(process.cwd(), 'src/App.standIn.test.tsx'), 'utf8')
-    expect(
-      source.includes(
-        "a return that commits after sign-out must not carry its view into the next sign-in').toBe('dashboard')",
-      ),
-      'the oracle\'s message and its .toBe(\'dashboard\') assertion must both survive verbatim',
-    ).toBe(true)
   })
 })
 
@@ -645,21 +601,6 @@ describe('ROUTE-02-02: cold-boot seeding reaches both ids', () => {
     )
   })
 
-  it('boot_initialViewBeatsThePathAndDropsItsId (B-6)', async () => {
-    await bootAt(`/invoices/${DETAIL_ID}`, { demoMode: true })
-    let ctx = requireCtx()
-    expect(ctx.view, 'sanity: the first mount seeds detail from the path').toBe('detail')
-    expect(typeof ctx.becomePersona, 'DEMO_MODE must expose becomePersona on ctx').toBe('function')
-
-    await act(async () => {
-      await ctx.becomePersona!(MEMBER, 'audit')
-    })
-    ctx = requireCtx()
-    expect(ctx.view, `a DEMO-06 initialView carry must beat the path, got '${ctx.view}'`).toBe('audit')
-    expect(ctx.importedInvoiceId, "the path's id must not survive when initialView wins").toBeNull()
-    expect(window.location.pathname, 'the alignment must land on /audit').toBe('/audit')
-  })
-
   it('boot_aMalformedIdSegmentFallsBackToDashboardWithNoUncaughtError (B-9)', async () => {
     const onError = vi.fn()
     window.addEventListener('error', onError)
@@ -690,47 +631,6 @@ describe('QA adversarial coverage (ROUTE-02-02)', () => {
       ctx.importedInvoiceId,
       'boot performs no existence check -- the id reaches ctx verbatim; a fallback for an unknown id is not this subtask\'s job',
     ).toBe(unknownId)
-  })
-
-  // ROUTE-03-03: bootAt has no `initialView` knob, so the winning-view case is reached
-  // the same way App.standIn.test.tsx:482 reaches it -- boot straight on the review path,
-  // then carry a DEMO-06 initialView via becomePersona(MEMBER, 'create'), whose
-  // carryView('create') collapses to 'invoices'. The review path's own bootView never
-  // wins the remount, so reviewBatchIds and createStep must fall back to their id-less
-  // seeds -- exactly `[alignment-must-carry-the-id]`/`[ids-gate-on-the-winning-view]`
-  // applied to the review ids.
-  it('boot_theIdsGateOnTheWinningView', async () => {
-    const path = `/imports/${REVIEW_ID}/review`
-    await bootAt(path, { demoMode: true })
-    let ctx = requireCtx()
-    expect(ctx.view, 'sanity: the review path wins the first mount').toBe('create')
-    expect(typeof ctx.becomePersona, 'DEMO_MODE must expose becomePersona on ctx').toBe('function')
-
-    await act(async () => {
-      await ctx.becomePersona!(MEMBER, 'create')
-    })
-    ctx = requireCtx()
-    expect(ctx.view, 'initialView must beat the review path on the remount').toBe('invoices')
-    expect(ctx.reviewBatchIds, 'the ids must not survive when initialView wins').toEqual([])
-    expect(ctx.createStep, 'createStep must fall back to form when initialView wins').toBe('form')
-  })
-
-  it('boot_anIdLessInitialViewOtherThanAuditAlsoDropsAJobId', async () => {
-    // B-6 only exercises 'audit'; this exercises a different id-less branch of bootHref's
-    // ternary (routePath('settings', null)) so the fallback arm isn't proven by one view alone.
-    await bootAt(`/extraction/${JOB_ID}`, { demoMode: true })
-    let ctx = requireCtx()
-    expect(ctx.view, 'sanity: the first mount seeds extraction from the path').toBe('extraction')
-
-    await act(async () => {
-      await ctx.becomePersona!(MEMBER, 'settings')
-    })
-    ctx = requireCtx()
-    expect(ctx.view, 'initialView must beat the path').toBe('settings')
-    expect(ctx.extractionJobId, "the path's job id must not survive when initialView wins").toBeNull()
-    expect(window.location.pathname, 'the alignment must land on the canonical settings path').toBe(
-      '/settings/members',
-    )
   })
 
   it('boot_theIdSurvivesRepeatedStrictModeRemounts', async () => {
@@ -1033,31 +933,6 @@ describe('an in-house workspace does not open the Clients UI by URL', () => {
     expect(window.location.pathname, 'control: firm lands on /clients').toBe('/clients')
   })
 
-  it('boot_inhouseDemoCarryOfClientsFallsBack', async () => {
-    await bootAt('/', { demoMode: true, persona: APP_PERSONAS.inhouse })
-    let ctx = requireCtx()
-    expect(ctx.mode, 'sanity: in-house mode').toBe('inhouse')
-    expect(typeof ctx.becomePersona, 'DEMO_MODE must expose becomePersona on ctx').toBe('function')
-
-    await act(async () => {
-      await ctx.becomePersona!(MEMBER, 'clients')
-    })
-    ctx = requireCtx()
-    expect(ctx.view, `an initialView carry of clients must fall back for in-house, got '${ctx.view}'`).toBe(
-      'dashboard',
-    )
-    expect(window.location.pathname, 'the alignment must land on the bare root').toBe('/')
-    expect(portfolioHeading(), 'no Client portfolio heading may render for in-house').toBeNull()
-
-    cleanup()
-    await bootAt('/', { demoMode: true })
-    ctx = requireCtx()
-    await act(async () => {
-      await ctx.becomePersona!(MEMBER, 'clients')
-    })
-    expect(requireCtx().view, 'control: the firm carry of clients still opens the portfolio').toBe('clients')
-  })
-
   it('popstate_anInHouseClientsEntryWithAQueryIsClampedAndLeavesTheSettingsTabAlone', async () => {
     await bootAt('/settings/company', { persona: APP_PERSONAS.inhouse })
     expect(requireCtx().settingsTab, 'sanity: the company tab is live for in-house').toBe('company')
@@ -1256,27 +1131,5 @@ describe('ROUTE-07-04 AC-6: an unknown policy id renders the list and keeps its 
       ).toBeTruthy(),
     )
     expect(window.location.pathname, 'the address must be unchanged across the swap').toBe(`/workflows/${POLICY_ID}`)
-  })
-})
-
-// The seed's OTHER guard. boot_anIdLessInitialViewOtherThanAuditAlsoDropsAJobId pins this
-// for jobId; nothing pinned it for policyId, and dropping `bootView === 'workflows'` from
-// the initializer survives the whole suite.
-describe('ROUTE-07-04 QA: the boot seed is gated on the WINNING view, not on seed.view', () => {
-  it('boot_thePolicyIdMustNotSurviveWhenInitialViewWins', async () => {
-    await bootAt(`/workflows/${POLICY_ID}`, { demoMode: true })
-    let ctx = requireCtx()
-    expect(ctx.view, 'sanity: the first mount seeds workflows from the path').toBe('workflows')
-    expect(ctx.editingPolicyId, 'sanity: the first mount opened the builder on the path id').toBe(POLICY_ID)
-
-    await act(async () => {
-      await ctx.becomePersona!(MEMBER, 'settings')
-    })
-    ctx = requireCtx()
-    expect(ctx.view, 'initialView must beat the path').toBe('settings')
-    expect(ctx.editingPolicyId, "the path's policy id must not survive when initialView wins").toBeNull()
-    expect(window.location.pathname, 'the alignment must land on the canonical settings path').toBe(
-      '/settings/members',
-    )
   })
 })

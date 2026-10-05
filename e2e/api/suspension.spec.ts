@@ -2,13 +2,10 @@
 // (internal/platform/db/request_gate_db_test.go); only this file proves the WIRE — which
 // status and which body a real suspended member gets from a real route through a real JWT.
 //
-// The sign-in question, settled. `login()` mints for any (subject, tenant_id, role) triple
-// here because the gate deploys a `pr-<N>` environment: platform.Posture() maps that name to
-// PosturePreview, and MockLoginHandler consults its persona allowlist only under
-// PostureHosted (internal/gateway/gateway.go). Two specs already depend on that and are green
-// in this job — contract-tenancy.spec.ts mints a random-UUID tenant, and a tenant-A token for
-// persona B's subject; neither triple can be in `loginPersonas`. So minting for …0007, tenant
-// A's seeded SUSPENDED reviewer, is the same mechanism, not a new assumption.
+// The sign-in question, settled. `login()` mints for any (subject, tenant_id, role) triple:
+// MockLoginHandler (internal/gateway/gateway.go) keeps no allowlist. contract-tenancy.spec.ts
+// already mints a random-UUID tenant, and a tenant-A token for persona B's subject. So
+// minting for …0007, tenant A's seeded SUSPENDED reviewer, is the same mechanism.
 //
 // NOT READ-ONLY, and `memberships` is excluded from both the per-deploy reset and the demo
 // purge (docs/e2e-convention.md), so a leaked status survives into the topology suite that
@@ -43,7 +40,7 @@ import { assertErrorEnvelope, type RawResult } from './contract-helpers'
 // deployed-wire assertion, not a duplicate of a guarded literal.
 const NOT_ACTIVE_MESSAGE = 'your membership in this workspace is not active'
 
-// Tenant A's seeded suspended reviewer (db/seed.dev.sql), and never a tenant's sole admin —
+// Tenant A's seeded suspended reviewer (db/seed.dev.sql), and never a tenant's seeded admin —
 // a tenant stranded at zero active admins needs a superuser to recover.
 const SUSPENDED_SUBJECT = 'c0000000-0000-0000-0000-000000000007'
 

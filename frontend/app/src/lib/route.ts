@@ -2,8 +2,7 @@ import type { CreateStep, SettingsTab, View } from '../types'
 
 import { clampFilterText } from './invoices'
 
-// `dashboard` is the bare root, not `/dashboard`: the landing hand-off and the persona
-// strip (App.tsx:1618) both land on pathname `/`.
+// `dashboard` is the bare root, not `/dashboard`: the landing hand-off lands on pathname `/`.
 export const ROUTE_PATHS: Record<View, string> = {
   dashboard: '/',
   invoices: '/invoices',

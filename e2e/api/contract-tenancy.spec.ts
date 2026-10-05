@@ -9,7 +9,7 @@
 // NO LONGER READ-ONLY. The PATCH matrix below writes to a shared environment, and
 // memberships is one of the tables the per-PR reset deliberately EXCLUDES (resetTables) --
 // a dirty status survives the run. So every write here obeys two rules:
-//   - the subject is never …0001/…0002, each tenant's sole admin — a tenant
+//   - the subject is never …0001/…0002, each tenant's seeded admin — a tenant
 //     stranded at zero active admins needs a superuser to recover;
 //   - the row is forced back to `active` on the way in AND on the way out, in a
 //     `finally`, so neither a mid-assertion failure nor a killed prior run can
@@ -48,7 +48,7 @@
 //     auth-failure envelope is already proven for the tenancy surface (and
 //     cross-surface) by auth-contract.spec.ts (M3-15-02).
 //   - 409 last-active-admin. UNREACHABLE from here without breaking the rule
-//     above: each seeded tenant has exactly ONE admin and it is the sign-in
+//     above: each seeded tenant has exactly ONE seeded admin and it is the sign-in
 //     persona, and PATCH writes `status` only — it can never mint a second
 //     admin, so no seed-only subject can trigger this branch. Covered instead
 //     by a PAIR in internal/tenancy/tenancy_test.go, each half over an isolated
@@ -66,8 +66,8 @@ import { assertErrorEnvelope } from './contract-helpers'
 // idiom the /me test below already uses, applied per row.
 const MEMBERSHIP_KEYS = ['display_name', 'email', 'role', 'status', 'user_id']
 
-// Seeded subjects (db/seed.dev.sql), never a tenant's sole admin. Every active
-// seeded member can sign in now, and the mint allowlist is static, so a leaked
+// Seeded subjects (db/seed.dev.sql), never a tenant's seeded admin. Every active
+// seeded member can sign in, and the mint takes any subject, so a leaked
 // suspension does not block the login — but since AUDIT-10 it hands that persona a
 // session whose every tenant-scoped call refuses with 403, GET /v1/me excepted, until
 // the next deploy re-seeds. A leak is that much more expensive than it used to be.
@@ -153,7 +153,7 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
     })
   })
 
-  // The persona switcher renders this list. A null display_name, an unseeded role, or a
+  // The Settings Members tab renders this list. A null display_name, an unseeded role, or a
   // suspended row filtered out server-side would each leave it nothing usable to draw.
   test.describe('roster identity, both tenants', () => {
     const SEEDED_ROLES = ['admin', 'preparer', 'reviewer']
@@ -171,14 +171,14 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
       for (const m of rows) {
         expect(
           typeof m.display_name === 'string' && m.display_name.length > 0,
-          `${label}: ${m.user_id} has no display_name — the switcher would render a bare uuid`,
+          `${label}: ${m.user_id} has no display_name — the Members tab would render a bare uuid`,
         ).toBe(true)
         expect(SEEDED_ROLES, `${label}: ${m.user_id} role`).toContain(m.role)
         expect(SEEDED_STATUSES, `${label}: ${m.user_id} status`).toContain(m.status)
       }
       expect(
         rows.some((m) => m.status === 'suspended'),
-        `${label}: no row reports status "suspended" — the switcher has nothing to render disabled`,
+        `${label}: no row reports status "suspended" — the Members tab has no suspended row to render`,
       ).toBe(true)
     }
 
@@ -199,15 +199,14 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
       for (const m of rows) {
         expect(
           Object.keys(m).sort(),
-          `${m.user_id}: a switcher takes the tenant from GET /v1/me, never from a roster row`,
+          `${m.user_id}: the app takes the tenant from GET /v1/me, never from a roster row`,
         ).toEqual(MEMBERSHIP_KEYS)
       }
     })
 
     test('a newly admitted in-house reviewer resolves its seeded access role', async () => {
-      // Proves ROLE RESOLUTION only, not the sign-in allowlist: the gate deploys a pr-<N>
-      // environment (PosturePreview), where the hosted allowlist is not consulted, so
-      // /auth/login is permissive here for any subject. The refusal proof is a Go test.
+      // Proves ROLE RESOLUTION only: /auth/login mints for any subject, so signing in
+      // proves nothing about membership.
       const reviewerToken = await login({ ...PERSONAS.B, subject: INHOUSE_REVIEWER })
       const res = await rawFetch('/api/tenancy/v1/me', {
         headers: { Authorization: `Bearer ${reviewerToken}` },

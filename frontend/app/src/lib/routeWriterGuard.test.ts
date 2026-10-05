@@ -5,7 +5,7 @@
 // setSettingsTab, switchClient and -- since ROUTE-03-03 scopes it to the create view --
 // the review-path mirror) must never read location.search -- that is what makes "never
 // echo the query string" structural rather than remembered.
-// App.tsx's `?persona=` strip is the deliberate, permanent counter-example: it DOES read
+// App.tsx's `?auth=`/`?handoff=` strip is the deliberate, permanent counter-example: it DOES read
 // location.search, and this file uses it as the control needle proving the scan can see a
 // match at all (a typo'd regex reports a clean zero exactly like a real zero).
 
@@ -76,7 +76,7 @@ describe('AC-3: the seam writers never read location.search', () => {
     // query" is naturally written as "take the current URL and strip q=". switchClient is
     // in the population because it is a writer (the leaving-view scrub) -- ROUTE-02. The
     // review mirror joins here too (ROUTE-03-03): scoped to `view === 'create'` only, it is
-    // no longer the deliberate counter-example -- the `?persona=` strip below takes over
+    // no longer the deliberate counter-example -- the `?auth=`/`?handoff=` strip below takes over
     // that role.
     const writerBodies = [
       { name: 'lib/route.ts (whole file)', body: routeSrc },
@@ -100,24 +100,24 @@ describe('AC-3: the seam writers never read location.search', () => {
       expect(containsLocationSearch(body), `${name} must never read location.search`).toBe(false)
     }
 
-    // Control needle: the `?persona=` strip is the deliberate, permanent counter-example
+    // Control needle: the `?auth=`/`?handoff=` strip is the deliberate, permanent counter-example
     // (decision [one-writer-rule]) that proves the scan is capable of seeing a match.
     // Anchored on its own comment, not on the `URLSearchParams(...)` call text itself --
     // that same call also appears at the seat-token strip (App.tsx:1619), so anchoring on
     // the call would risk extracting the wrong body if either effect moves.
-    const personaStripAnchorIdx = appSrc.indexOf('Drop the consumed ?persona= from the URL')
-    expect(personaStripAnchorIdx, 'persona-strip anchor comment not found -- App.tsx was restructured').toBeGreaterThan(-1)
-    const personaStripBody = findBody(appSrc, 'useEffect(() => {', personaStripAnchorIdx)
-    expect(personaStripBody.length, 'persona-strip control body is empty -- the anchor is broken').toBeGreaterThan(0)
+    const stripAnchorIdx = appSrc.indexOf('Drop the one-shot ?auth= and ?handoff= from the URL')
+    expect(stripAnchorIdx, 'one-shot-strip anchor comment not found -- App.tsx was restructured').toBeGreaterThan(-1)
+    const stripBody = findBody(appSrc, 'useEffect(() => {', stripAnchorIdx)
+    expect(stripBody.length, 'one-shot-strip control body is empty -- the anchor is broken').toBeGreaterThan(0)
     expect(
-      containsLocationSearch(personaStripBody),
-      'control needle: the persona strip must still read location.search, or the absence checks above prove nothing',
+      containsLocationSearch(stripBody),
+      'control needle: the one-shot strip must still read location.search, or the absence checks above prove nothing',
     ).toBe(true)
     // A second, narrower assertion on the same body: the fragment append this subtask
     // removes from the same effect body must not be mistaken for removing the read this
     // needle actually pins.
     expect(
-      personaStripBody.includes('URLSearchParams(window.location.search)'),
+      stripBody.includes('URLSearchParams(window.location.search)'),
       'the needle pins the query READ, not the fragment append -- it must survive 05\'s removal',
     ).toBe(true)
   })
@@ -150,7 +150,7 @@ describe('ROUTE-03-05 AC-3: no writer in the population appends the fragment', (
     const backfillBody = findBody(appSrc, 'useEffect(() => {', backfillAnchorIdx)
 
     // Same ten bodies guard_theSeamsWriterNeverReadsLocationSearch scans above. This
-    // population structurally EXCLUDES signOut and the persona strip -- neither is a
+    // population structurally EXCLUDES signOut and the one-shot strip -- neither is a
     // member -- so it is NOT the oracle for those two removal sites; the whole-file scan
     // (lib/route.test.ts's guard_noReviewHashSurvivesInTheApp) covers those.
     const writerBodies = [
@@ -174,22 +174,22 @@ describe('ROUTE-03-05 AC-3: no writer in the population appends the fragment', (
     }
   })
 
-  // AC-4's positive control: the persona strip is excluded from the population above, so
+  // AC-4's positive control: the one-shot strip is excluded from the population above, so
   // this is the only in-suite proof that removing ITS OWN fragment append leaves its
   // location.search read (routeWriterGuard's control needle) still matching.
   it('guard_theControlNeedleSurvivesTheFragmentRemoval', () => {
     const appSrc = readSrc('src/App.tsx')
-    const personaStripAnchorIdx = appSrc.indexOf('Drop the consumed ?persona= from the URL')
-    expect(personaStripAnchorIdx, 'persona-strip anchor comment not found -- App.tsx was restructured').toBeGreaterThan(-1)
-    const personaStripBody = findBody(appSrc, 'useEffect(() => {', personaStripAnchorIdx)
-    expect(personaStripBody.length, 'persona-strip control body is empty -- the anchor is broken').toBeGreaterThan(0)
+    const stripAnchorIdx = appSrc.indexOf('Drop the one-shot ?auth= and ?handoff= from the URL')
+    expect(stripAnchorIdx, 'one-shot-strip anchor comment not found -- App.tsx was restructured').toBeGreaterThan(-1)
+    const stripBody = findBody(appSrc, 'useEffect(() => {', stripAnchorIdx)
+    expect(stripBody.length, 'one-shot-strip control body is empty -- the anchor is broken').toBeGreaterThan(0)
     expect(
-      personaStripBody.includes('URLSearchParams(window.location.search)'),
-      'control needle: the persona strip must still read location.search after its fragment append is removed',
+      stripBody.includes('URLSearchParams(window.location.search)'),
+      'control needle: the one-shot strip must still read location.search after its fragment append is removed',
     ).toBe(true)
     expect(
-      containsLocationHash(personaStripBody),
-      'the persona strip must no longer append a location fragment',
+      containsLocationHash(stripBody),
+      'the one-shot strip must no longer append a location fragment',
     ).toBe(false)
   })
 })

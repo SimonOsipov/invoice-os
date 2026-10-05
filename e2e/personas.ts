@@ -1,35 +1,24 @@
-// e2e/personas.ts — the persona axis registry (PERSONA-01-01, Backlog task-270): persona
-// records, the sidebar surface catalogue, the coverage map, and the pure sign-in/refusal
-// functions.
+// e2e/personas.ts — the persona axis registry: persona records, the sidebar surface
+// catalogue, the coverage map and the refusal matrix.
 //
-// Deliberately imports NOTHING from @playwright/test: e2e/personas.test.ts runs this module
-// under vitest in `node` (e2e/vitest.config.ts), and CI's `test:unit` job sets no deploy URLs
-// (.github/workflows/ci.yml:471-483) — topology/targets.ts and smoke/apps.ts both resolve
-// their targets at MODULE SCOPE and throw on import when unset, so this file must not
-// transitively import either of them. ../targets.ts is safe: it exports resolveTarget and
-// resolves nothing itself. signInUrl calls it lazily, inside the function body, for the same
-// reason. See e2e/personaSession.ts for the Playwright-driving layer this registry
-// deliberately does not contain.
+// Imports nothing from @playwright/test or topology/targets.ts / smoke/apps.ts: personas.test.ts
+// runs this module under vitest in `node` with no deploy URLs, and those two resolve their
+// targets at module scope and throw on import (row 11). See e2e/personaSession.ts for the
+// Playwright-driving layer.
 //
-// This is the SINGLE source of truth for the persona axis: topology/targets.ts derives its
-// persona values from here. The dependency runs one way — that file imports this module,
-// never the reverse.
+// topology/targets.ts derives its persona values from here; the dependency runs one way.
 
-import { resolveTarget } from './targets'
-
-// The four landing personas (frontend/landing/src/auth.ts's LandingPersona.id). These ids are WIRE VALUES:
-// each one is the `?persona=` param the landing hands off with, and the app's session gate
-// checks it verbatim. Not to be conflated with frontend/app/src/auth.ts's unrelated,
-// two-member `PersonaId` (firm | inhouse) — different package, different job.
+// The four persona ids are axis labels: workspace kind (firm, inhouse) and staff destination
+// (developer -> ops console, support -> support console). Not the product's `PersonaId` in
+// frontend/app/src/auth.ts, which is a separate two-member union.
 export type PersonaId = 'developer' | 'support' | 'firm' | 'inhouse'
 
-// The three deployed SPAs a persona can be routed to. Mirrors LandingPersona.target
-// (frontend/landing/src/auth.ts) — `ops` is the ops-console service, and the `developer`
-// persona routing to it is the wire-value/display-name split documented there, not a mistake.
+// The three deployed SPAs a visitor can reach. `ops` is the ops-console service, which the
+// `developer` persona id labels.
 export type Destination = 'app' | 'ops' | 'support'
 
 // Which environment variable carries each destination's base URL on this run's ephemeral
-// Railway environment (M4-23). Resolved lazily — see the header note.
+// Railway environment (M4-23). Callers resolve it lazily.
 export const DESTINATION_ENV: Record<Destination, string> = {
   app: 'APP_URL',
   ops: 'OPS_CONSOLE_URL',
@@ -74,35 +63,21 @@ export interface Cell {
 
 export interface PersonaDef {
   id: PersonaId
-  destination: Destination
-  displayName: string // LANDING_PERSONAS[].name
   // The token a covering spec must literally contain to prove it drives THIS persona.
-  // Deliberately not the bare persona id: `firm` matches spec PROSE (portfolio.spec.ts's
-  // only lowercase `firm` is inside a comment), so an id match would both pass on a
-  // reformatted comment and let a spec that signs in as the wrong persona still qualify.
-  specToken: string
+  // Deliberately not the bare persona id: `firm` matches spec PROSE, so an id match would
+  // both pass on a reformatted comment and let a spec that signs in as the wrong persona
+  // still qualify. App personas only.
+  specToken?: string
   tenantName?: string // app personas only — the two console personas have no tenant
   coverage?: Cell[] // app personas only
 }
 
 export const PERSONAS: Record<PersonaId, PersonaDef> = {
-  developer: {
-    id: 'developer',
-    destination: 'ops',
-    displayName: 'Amara Okafor',
-    specToken: '?persona=developer',
-  },
-  support: {
-    id: 'support',
-    destination: 'support',
-    displayName: 'Emeka Iroha',
-    specToken: '?persona=support',
-  },
+  developer: { id: 'developer' },
+  support: { id: 'support' },
   firm: {
     id: 'firm',
-    destination: 'app',
-    displayName: 'Chinedu Okafor',
-    specToken: 'FIRM_PERSONA',
+    specToken: "signInAs(page, 'firm'",
     tenantName: 'Okafor & Partners',
     // Every surface here is DRIVEN as the firm persona except NAV_RULES, which is only
     // proven to EXIST for it (see its own note below). Each cell is added in the SAME
@@ -139,8 +114,6 @@ export const PERSONAS: Record<PersonaId, PersonaDef> = {
   },
   inhouse: {
     id: 'inhouse',
-    destination: 'app',
-    displayName: 'Ngozi Balogun',
     specToken: 'INHOUSE_PERSONA',
     tenantName: 'Honeywell Group',
     // ALL EIGHT of the in-house sidebar's surfaces, every one DRIVEN (rendered content
@@ -171,42 +144,22 @@ export const PERSONAS: Record<PersonaId, PersonaDef> = {
   },
 }
 
-// LANDING_PERSONAS' own order (frontend/landing/src/auth.ts).
 export const PERSONA_IDS: readonly PersonaId[] = ['developer', 'support', 'firm', 'inhouse']
 
-export const DESTINATIONS: readonly Destination[] = ['app', 'ops', 'support']
-
-// The landing hand-off URL for a persona: `<its destination's base>?persona=<id>`, exactly
-// what landing/src/auth.ts's destUrl() builds. resolveTarget is called HERE, not at module
-// scope, so importing this module never requires a deployed environment (see the header).
-// It throws naming the missing variable rather than defaulting ([fail-loud-targets]).
-export function signInUrl(id: PersonaId): string {
-  const base = resolveTarget(DESTINATION_ENV[PERSONAS[id].destination])
-  return `${base}?persona=${id}`
-}
-
-// Whether a destination's gate lets this persona in. Only the app does, via shouldAutoSignIn
-// (frontend/app/src/lib/session.ts); the consoles take a staff session, not a persona.
-export function accepts(destination: Destination, id: PersonaId): boolean {
-  return destination === 'app' && PERSONAS[id].destination === 'app'
-}
-
-// Every (persona, destination) pair and what the destination's gate does with it: 2 accepts,
-// 10 refuses. HAND-WRITTEN on purpose. Derived from accepts() it would be 12-long and
-// duplicate-free by construction, so G5 would assert a tautology; written out, adding a
-// fifth persona leaves the matrix at 12 rows and turns G5 red until all three of its new
-// pairs have been stated. G5 also cross-checks every row against accepts().
-export const BOUNDARY_MATRIX: readonly { persona: PersonaId; destination: Destination; verdict: 'accepts' | 'refuses' }[] = [
+// Every (persona, destination) pair, each refused when a visitor arrives with `?persona=<id>`
+// and no session: the param is no credential anywhere. HAND-WRITTEN so that adding a fifth
+// persona turns row 10 of personas.test.ts red until its three pairs are stated.
+export const BOUNDARY_MATRIX: readonly { persona: PersonaId; destination: Destination; verdict: 'refuses' }[] = [
   { persona: 'developer', destination: 'app', verdict: 'refuses' },
   { persona: 'developer', destination: 'ops', verdict: 'refuses' },
   { persona: 'developer', destination: 'support', verdict: 'refuses' },
   { persona: 'support', destination: 'app', verdict: 'refuses' },
   { persona: 'support', destination: 'ops', verdict: 'refuses' },
   { persona: 'support', destination: 'support', verdict: 'refuses' },
-  { persona: 'firm', destination: 'app', verdict: 'accepts' },
+  { persona: 'firm', destination: 'app', verdict: 'refuses' },
   { persona: 'firm', destination: 'ops', verdict: 'refuses' },
   { persona: 'firm', destination: 'support', verdict: 'refuses' },
-  { persona: 'inhouse', destination: 'app', verdict: 'accepts' },
+  { persona: 'inhouse', destination: 'app', verdict: 'refuses' },
   { persona: 'inhouse', destination: 'ops', verdict: 'refuses' },
   { persona: 'inhouse', destination: 'support', verdict: 'refuses' },
 ]

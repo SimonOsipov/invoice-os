@@ -16,7 +16,7 @@
 // are declared in contract-invoice.spec.ts instead. The mock below is now URL-aware (see
 // `calls`) so a default-transport call can be told apart from a listInvoices call without
 // touching the four pre-existing listInvoices assertions.
-import { beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { ApprovalRun } from './client'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -642,5 +642,52 @@ describe('rawFetch redirect', () => {
       expect(res.body).toEqual({ landed: true })
       expect(res.location).toBeNull()
     })
+  })
+})
+
+describe('grantMembership', () => {
+  const GRANT = {
+    user_id: 'a1b2c3d4-0000-4000-8000-000000000001',
+    tenant_id: '11111111-1111-1111-1111-111111111111',
+    role: 'admin',
+    display_name: 'E2E Firm Admin',
+    email: 'e2e-member-11111111-1111-1111-1111-111111111111@example.com',
+  } as const
+
+  function stubFetch(status: number, body?: unknown) {
+    const stub = vi.fn(async () => new Response(body === undefined ? null : JSON.stringify(body), { status }))
+    vi.stubGlobal('fetch', stub)
+    return stub
+  }
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('grantMembership throws on refusal', async () => {
+    const { grantMembership } = await import('./client')
+    const stub = stubFetch(502, { error: 'membership grant unavailable' })
+
+    const err = await captureRejection(grantMembership(GRANT))
+
+    expect(stub).toHaveBeenCalledTimes(1)
+    expect(err.message).toContain('502')
+    expect(err.message).toContain('membership grant unavailable')
+
+    for (const status of [200, 201, 400]) {
+      stubFetch(status, { error: 'not a 204' })
+      const refused = await captureRejection(grantMembership(GRANT))
+      expect(refused.message, String(status)).toContain(String(status))
+    }
+  })
+
+  it('grantMembership resolves on 204', async () => {
+    const { grantMembership } = await import('./client')
+    const stub = stubFetch(204)
+
+    await expect(grantMembership(GRANT)).resolves.toBeUndefined()
+
+    expect(stub).toHaveBeenCalledTimes(1)
+    const [url, init] = stub.mock.calls[0] as unknown as [string, { method: string; body: string }]
+    expect(url.endsWith('/auth/mock/member')).toBe(true)
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual(GRANT)
   })
 })

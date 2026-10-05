@@ -93,8 +93,8 @@ import { ensureFirmPolicyActive, ensureInhousePolicyActive } from '../api/contra
 import { freshTin } from '../api/fixtures'
 import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertFillsColumn, assertPageDoesNotScrollSideways, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
-import { assertShardSession, seedShardSession } from './shardSession'
-import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA, shardTenants } from './targets'
+import { signInAs } from '../personaSession'
+import { INHOUSE_PERSONA, shardTenants } from './targets'
 import {
   buildAir07TitleRowCsv,
   buildAir07UnsteeredCsv,
@@ -150,12 +150,7 @@ interface MixedImportResponse {
   }[]
 }
 
-// collectErrors()/signInFirm(): the console/pageerror collection + firm-persona
-// sign-in idiom topology.spec.ts uses verbatim (E2E-07's gate), extracted here
-// because this file needs it three times. The verified marker
-// (`[title="Tenant verified via /v1/me"]`) is the only proof the
-// /api/tenancy/v1/me round trip resolved against the live backend -- never proceed
-// before it, the classic cold-fleet flake.
+// collectErrors(): console/pageerror collection, with the approval-run 404 dropped.
 function collectErrors(page: Page, extra?: Dropper): string[] {
   const errors: string[] = []
   const droppers = [approvalRun404Dropper(page), ...(extra ? [extra] : [])]
@@ -183,42 +178,12 @@ test.beforeAll(async () => {
   await ensureInhousePolicyActive(await login(PERSONAS.B))
 })
 
-async function signInPersona(page: Page, param: string): Promise<void> {
-  const inhouse = param === INHOUSE_PERSONA.param
-  const tenant = inhouse ? SHARD.b : SHARD.a
-  await seedShardSession(page, inhouse ? 'inhouse' : 'firm', tenant)
-  // The landing page is the single sign-in front door, so the app has no picker to click
-  // on a deployed build.
-  const url = inhouse ? APP_URL : `${APP_URL}?persona=${param}`
-  const res = await page.goto(url)
-  expect(res, `no response from ${url}`).toBeTruthy()
-  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
-  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
-  await assertShardSession(page, tenant.id)
-}
-
-async function signInFirm(page: Page): Promise<void> {
-  await signInPersona(page, FIRM_PERSONA.param)
-}
-
-// The in-house counterpart, added by [inhouse-can-start]. Every functional spec in this
-// package drove the FIRM persona only -- in-house appeared in exactly one assertion in
-// the whole browser suite (auth.spec.ts's identity-switch regression, which reads the
-// sidebar tenant label and never navigates further). That is precisely why an in-house
-// accountant could reach the New-invoice wizard and find its first step replaced by a
-// dead end without a single test going red.
-async function signInInhouse(page: Page): Promise<void> {
-  await signInPersona(page, INHOUSE_PERSONA.param)
-}
-
 // selectEntity(): a second copy of invoice-surfaces.spec.ts's own helper of the same
-// name (this package's established convention for small Page-driving helpers -- see
-// this file's own collectErrors/signInFirm doc comment above: "no spec file in this
-// package exports its own helpers today, so this is a third copy, not a new seam").
+// name (this package's established convention for small Page-driving helpers).
 // Needed here by the persona-handoff-fix regression fix ([entity-id-restored]):
 // Invoices is a CLIENT-scoped surface now (listInvoices' own `entity_id` param,
 // server-side), so a test that drives it must make ITS OWN fixture entity the active
-// workspace switcher selection first -- signInFirm() alone leaves the switcher on
+// workspace switcher selection first -- signInAs() alone leaves the switcher on
 // whatever `clients[0]` resolves to (portfolio's List `ORDER BY name ASC, id ASC`),
 // never this test's own Date.now()-suffixed entity. Sidebar.tsx:
 // data-testid="company-switcher" (the toggle button) / "company-switcher-option"
@@ -295,7 +260,7 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `M4-08 UI ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   // [import-upload-unify] CreateUpload no longer renders its own entity <select> --
   // entityId now mirrors the active workspace switcher selection, so the fresh
   // entity must be made active there BEFORE "New invoice" opens (this is also now
@@ -499,7 +464,7 @@ test('AIRL-01: a placement chip stays inside its column at every swept width', a
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `AIR-07 layout ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
 
@@ -574,7 +539,7 @@ test('AIR07-E2E-01: a steered suggestion opens the Map step placed and badged, a
   const entity = await createEntity(token, { name: `AIR-07 steered ${Date.now()}`, tin: freshTin() })
   const num = `INV-AIR07E01-${Date.now()}`
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
 
@@ -630,7 +595,7 @@ test('AIR07-E2E-03: a title-row file maps and imports from row 3', async ({ page
   const entity = await createEntity(token, { name: `AIR-07 row3 ${Date.now()}`, tin: freshTin() })
   const num = `INV-AIR07E03-${Date.now()}`
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
 
@@ -696,7 +661,7 @@ test("AIR07-E2E-04: an unsteered file opens exactly today's Map step", async ({ 
   const entity = await createEntity(token, { name: `AIR-07 unsteered ${Date.now()}`, tin: freshTin() })
   const num = `INV-AIR07E04-${Date.now()}`
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
 
@@ -778,7 +743,7 @@ test("CHECK05-E2E-01 (AC-4, AC-5, AC-9): a doubted group opens unplaced and impo
     if (isPost(req, '/api/invoice/v1/imports')) createStatuses.push(res.status())
   })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
 
@@ -879,7 +844,7 @@ test('E2E-04/09 (INVCR-01-09): the mixed fixture separates the two channels by T
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `M4-08 UI Mixed ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   // Invoices is CLIENT-scoped now ([entity-id-restored]) -- make `entity` the active
   // workspace switcher selection BEFORE anything else, so E2E-09's "← All invoices"
   // step below actually shows ITS two imported rows, not whichever entity the
@@ -1078,7 +1043,7 @@ test('BUG08-E2E-1/2/3/4/5/7 (AC-1..6, task-408/409): a re-import splits genuine 
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `BUG08-05 UI Mixed ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   // Run 1: stores INV-UI-MIX-VIOLATE and INV-UI-MIX-CLEAN, quarantines
@@ -1270,7 +1235,7 @@ test('E2E-10 (FLOW-07, [wizard-steps-split]): the wizard header resolves the 3-s
 }) => {
   const errors = collectErrors(page)
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
 
   // Leg 1 -- createStep 'upload' is NOT in TYPED_ONLY_STEPS (EXTR-09-06), so IMPORT_STEPS
@@ -1328,7 +1293,7 @@ test('E2E-10 (FLOW-07, [wizard-steps-split]): the wizard header resolves the 3-s
 test('[import-upload-unify] LIVE: one real import surface, manual entry survives, dropzone accepts a drop', async ({ page }) => {
   const errors = collectErrors(page)
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
 
   // The unified card is the only import surface in LIVE. Entity is now static header
@@ -1399,7 +1364,7 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
 }) => {
   const errors = collectErrors(page)
 
-  await signInInhouse(page)
+  await signInAs(page, 'inhouse', { tenantId: SHARD.b.id })
   await expect(page.locator('aside.pf-sidebar')).toContainText(INHOUSE_PERSONA.tenantName.toUpperCase())
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
@@ -1475,20 +1440,19 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await page.getByRole('button', { name: 'Skip — enter manually' }).click()
 
+  // The hand-off form starts blank: its primary names the missing number, not the entity refusal.
   const fileBtn = page.getByRole('button', { name: 'File invoice' })
-  await expect(fileBtn, 'manual build step is armed for in-house now, not refused').toBeVisible()
+  await expect(page.getByRole('button', { name: 'Invoice number is required' }), 'the blank form refuses until a number is typed').toBeDisabled()
   await expect(
     page.getByRole('button', { name: 'Filing needs a linked entity' }),
     'the manual refusal is gone too',
   ).toHaveCount(0)
 
-  // A fresh number: the default draft seeds a FIXED literal (lib/clients.ts's
-  // defaultDraft), so a second create under it would 409 on
-  // (tenant_id, entity_id, invoice_number) -- which a Playwright retry of this very test
-  // does, against the invoice its own first attempt already filed.
+  // A fresh number per attempt: a retry would 409 on (tenant_id, entity_id, invoice_number)
+  // against the invoice its first attempt filed. The hand-off form starts blank, so one is required.
   const manualNumber = `INH-MAN-${Date.now()}`
   await page.getByPlaceholder('INV-0000-00000').fill(manualNumber)
-  await expect(fileBtn).toBeEnabled()
+  await expect(fileBtn, 'manual build step is armed for in-house now, not refused').toBeEnabled()
 
   const createResp = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices'),
@@ -1555,7 +1519,7 @@ test('INVCR-E2E-1 firm: mixed import -> filter by rule -> expand -> fix -> re-va
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `INVCR-01-16 loop ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
@@ -1697,7 +1661,7 @@ test('INVCR-E2E-2 firm: a single-invoice CSV lands on the real invoice detail, n
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `INVCR-01-16 single ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   const invoiceNumber = `INV-E2E-SINGLE-${Date.now()}`
@@ -1742,7 +1706,7 @@ test('INVCR-E2E-4 firm: a header-only file is refused honestly, with no Map-step
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `INVCR-01-16 rejected ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
@@ -1797,7 +1761,7 @@ test('INVCR-E2E-6 the review screen survives a reload -- the deep link re-derive
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `INVCR-01-16 deep-link ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
@@ -1870,7 +1834,7 @@ test('INVCR-E2E-7 kept-as-is drops out of Needs a fix and stays present-but-disa
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `INVCR-01-16 keep ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
@@ -1988,7 +1952,7 @@ test('BULK-E2E-01 (Core AC 1/2/3): shared-layout multi-file run -- select, cap-r
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `BULK-01 shared ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
@@ -2104,7 +2068,7 @@ test('BULK-E2E-02 (Core AC 4): different-layout files map SEPARATELY, one column
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `BULK-01 layouts ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
@@ -2186,7 +2150,7 @@ test('BULK-E2E-03 (Core AC 5, [sequential-not-parallel], spreadsheet path): a cr
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `BULK-01 partial ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
@@ -2290,7 +2254,7 @@ test('DOC-E2E-01 (Core AC 5): the deployed wizard imports by document_id and nev
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `DOC-01 wire ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
@@ -2665,7 +2629,7 @@ test('EXTR09-E2E-01 / EXTR32-E2E-01: a PDF forks to the document path, extracts,
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `EXTR-09-08 fork ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
@@ -2813,7 +2777,7 @@ test('EXTR09-E2E-02 (AC-2): the spreadsheet journey is unchanged end to end', as
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `EXTR-09-08 sheet ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   const invoiceNumber = `INV-E2E-EXTR0908-${Date.now()}`
@@ -2876,7 +2840,7 @@ test('EXTR09-E2E-03 (AC-3): a mixed selection is refused in the browser, picked 
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `EXTR-09-08 refusal ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await expect(page.locator('label[for="pf-import-file"]'), 'dropzone renders').toBeVisible({ timeout: 30_000 })
@@ -2946,7 +2910,7 @@ test('EXTR09-E2E-04 (AC-4): the picker card fits and stays centred at every widt
   test.setTimeout(120_000)
   const errors = collectErrors(page)
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await expect(page.locator('label[for="pf-import-file"]'), 'dropzone renders').toBeVisible({ timeout: 30_000 })
 
@@ -3076,7 +3040,7 @@ test('EXTR09-E2E-05 (AC-5): the step strip follows the picked kind, picked or dr
   test.setTimeout(120_000)
   const errors = collectErrors(page)
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await expect(page.locator('label[for="pf-import-file"]'), 'dropzone renders').toBeVisible({ timeout: 30_000 })
 
@@ -3134,7 +3098,7 @@ test('EXTR10-E2E-01: the document progress card samples a closed vocabulary and 
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `EXTR-10-06 samples ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   const fileNames = ['progress-a.pdf', 'progress-b.pdf']
@@ -3266,7 +3230,7 @@ test('EXTR10-E2E-02: a dead-lettered row wraps its long reason without inflating
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `EXTR-10-06 geometry ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   const goodName = 'geometry-good.pdf'
@@ -3455,7 +3419,7 @@ async function extractOneDocument(
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `${label} ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
@@ -3520,12 +3484,7 @@ test('deployed app: /extraction/<jobId> is a working deep link', async ({ page }
   await extractOneDocument(page, 'ROUTE-02 cold boot')
   const detail = await openExtractionReview(page)
 
-  const url = `${APP_URL}/extraction/${detail.id}?persona=${FIRM_PERSONA.param}`
-  const res = await page.goto(url)
-  expect(res, `no response from ${url}`).toBeTruthy()
-  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
-
-  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/extraction/${detail.id}` })
   await expect(page.getByTestId('extraction-review'), 'the cold boot must reopen the review screen').toBeVisible()
   await expect(page.getByTestId('extraction-save'), 'control: the settled footer rendered').toBeVisible({ timeout: 60_000 })
   await expect(page.getByTestId('extraction-open-invoice'), 'a cold boot holds no invoice id, so no exit').toHaveCount(0)
@@ -6737,7 +6696,7 @@ test('EXTR15-E2E-05 (AC-1): a spreadsheet run still reads ROWS READ, Rows stored
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `EXTR-15-13 spreadsheet ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   // --- import 1: the mixed fixture, whose rows quarantine structurally (E2E-04's own flow) --
@@ -6854,7 +6813,7 @@ test('EXTR37-E2E-01: the second import of a file for the same client opens mappe
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `Zz EXTR-37 restore ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   // One file for all three imports: the saved mapping keys on the decoded header.
@@ -7168,7 +7127,7 @@ test('EXTR15-E2E-01 (AC-10): the hand-off row sits inside its card, and its gutt
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `EXTR-15-07 handoff ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
@@ -7393,7 +7352,7 @@ async function runDocuments(
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `${label} ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   return { token, entityId: entity.id, ...(await runDocumentsIn(page, token, files)) }
@@ -8354,7 +8313,7 @@ async function settleOneDocument(
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `${label} ${Date.now()}`, tin: freshTin() })
 
-  await signInFirm(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()

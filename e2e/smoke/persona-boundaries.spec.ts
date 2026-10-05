@@ -2,69 +2,26 @@ import { test, expect } from '@playwright/test'
 import { BOUNDARY_MATRIX } from '../personas'
 import { collectErrors, expectRefused } from '../personaSession'
 
-// The cross-persona boundary matrix (PERSONA-01-02, Backlog task-271): every destination
-// handed a persona it does not admit, asserting the visitor is sent back to the landing
-// page. The cells are DERIVED from BOUNDARY_MATRIX in ../personas — never hand-listed — so
-// a fifth persona adds its three refusal rows here automatically, and G5 (personas.test.ts)
-// keeps the matrix itself complete.
+// The cross-persona boundary matrix: every destination visited with `?persona=<id>` and no
+// session is sent back to the landing page. A present-but-wrong param is refused exactly as an
+// absent one is. One case per BOUNDARY_MATRIX row; personas.test.ts row 10 keeps the matrix at
+// the 12 pairs.
 //
-// A GREEN MATRIX IS NOT AN ACCESS-CONTROL PROOF — it is a proof about where the browser
-// ends up.
+// A green matrix proves where the browser ends up, not that no console chrome painted first.
+// Each case asserts the landing h1 and eyebrow, so a blank page or a URL-prefix match fails.
+// smoke/apps.ts is the positive control: each destination draws for a visitor it admits.
 //
-// WHAT IS NEW HERE. Three specs already assert a redirect off a protected origin:
-// smoke.spec.ts:66-75 (ops-console and support-console) and topology/auth.spec.ts:133-138
-// (the app). All three visit a BARE url with no `?persona=` at all. This spec makes the
-// claim none of them makes: a FOREIGN PERSONA PARAM IS NOT A CREDENTIAL — a present-but-
-// wrong `?persona=` is refused exactly as an absent one is. Same outcome in the product
-// (no session either way), different precondition, and only one of the two was pinned before.
-//
-// THE POSITIVE CONTROL. A redirect assertion alone would pass against a destination that
-// renders for nobody, so this file does not stand on its own: smoke/apps.ts in THIS suite
-// proves each destination draws its own discriminator when it admits the visitor (landing's
-// h1, and the ops and support consoles' headings on a real staff session). If a
-// destination stopped admitting anyone, that spec goes red first. On top of that, each
-// refusal below asserts the landing page's own h1 actually rendered — upgrading "the URL
-// changed" to "the live landing application drew", which fails on a blank page, an error
-// page, or a URL-prefix match that is not the landing SPA. That is the same discriminator
-// smoke/apps.ts:24-28 uses, and landing has exactly one h1, so it is strict-mode safe.
-//
-// WHAT THIS SPEC DOES NOT PROVE. It does not prove that no frame of console chrome painted
-// before the redirect fired, and no post-redirect assertion can: by the time waitForURL
-// resolves the destination document is gone, so a `not.toBeVisible()` on a destination
-// discriminator would run against the LANDING dom and could only ever fail if landing grew
-// an h1 "Overview". Such an assertion is vacuous by construction and is deliberately absent
-// here. That property is held instead by the app's render gate, which returns null
-// before its effect matters.
-//
-// WHY ONLY THE 10 REFUSALS ([refusals-only-in-the-matrix]). The matrix's two accept cells
-// are covered where they belong and are not re-driven here: app-firm by
-// topology/auth.spec.ts, green today; app-inhouse is
-// PERSONA-01-03's, still to come. G5 (personas.test.ts) is what keeps the matrix itself
-// complete meanwhile — it pins all 12 rows whether or not a spec drives them.
-//
-// WHY SMOKE, NOT TOPOLOGY ([boundaries-in-smoke]). The app refuses its cells SYNCHRONOUSLY,
-// in a useState initializer over the URL and localStorage, and redirects from the first-commit
-// effect — before any fetch. It never mounts <Workspace>, so neither the sign-in mint nor
-// /v1/me nor the entities/rollup reads ever run. A console refuses its cells after an async
-// boot that finds no hand-off code and no stored record, so it sends no request either. Zero
-// gateway contact, zero database reads or writes, so topology's `workers: 1` rationale (one
-// deployed database shared by every spec in the run) does not apply and this file is safe
-// under smoke's `fullyParallel: true`.
+// Smoke, not topology: a refusal reaches no gateway and touches no database, so it is safe under
+// smoke's `fullyParallel: true`.
 
-for (const { persona, destination } of BOUNDARY_MATRIX.filter((c) => c.verdict === 'refuses')) {
+for (const { persona, destination } of BOUNDARY_MATRIX) {
   test(`${destination}: refuses the ${persona} persona and returns it to the landing page`, async ({ page }) => {
-    // Attached BEFORE the navigation inside expectRefused, so load-time errors are caught.
-    // Each test gets Playwright's default fresh context, which is the mechanism that keeps
-    // the app's boot session and both console records empty — no session from another cell
-    // can leak in and turn a refusal into an accept.
+    // Attached before the navigation inside expectRefused, so load-time errors are caught.
     const errors = collectErrors(page)
 
     await expectRefused(page, persona, destination)
 
-    // expectRefused asserts the URL and nothing else, by design. The landing render check
-    // belongs at the call site.
-    const h1 = page.getByRole('heading', { level: 1 })
-    await expect(h1).toBeVisible()
+    await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
     await expect(page.locator('#top .t-eyebrow')).toContainText(/e-invoicing/i)
 
     expect(errors, `console errors refusing ${persona} at ${destination}:\n${errors.join('\n')}`).toEqual([])

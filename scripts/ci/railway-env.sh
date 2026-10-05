@@ -1542,8 +1542,7 @@ reconcile_url_variables() {
   echo "Reconciling per-environment URL variables in $env_id ..."
   set_service_vars "$env_id" "$RAILWAY_SVC_GATEWAY_ID" gateway "" "CORS_ALLOWED_ORIGINS=$origins"
   auth_check gateway "${SET_VARS_PAIRS[@]}" || exit 1
-  # VITE_DEMO_MODE is baked into the same vite build, so it lands before the same deploy as the URLs.
-  set_service_vars "$env_id" "$RAILWAY_SVC_APP_ID" app "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url" VITE_DEMO_MODE=true
+  set_service_vars "$env_id" "$RAILWAY_SVC_APP_ID" app "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url"
   auth_check app "${SET_VARS_PAIRS[@]}" || exit 1
   set_service_vars "$env_id" "$RAILWAY_SVC_LANDING_ID" landing "" "VITE_GATEWAY_URL=$gateway_url" "VITE_APP_URL=$app_url" "VITE_OPS_URL=$ops_url" "VITE_SUPPORT_URL=$support_url" VITE_REGISTRATION_OPEN=true
   auth_check landing "${SET_VARS_PAIRS[@]}" || exit 1
@@ -1551,7 +1550,7 @@ reconcile_url_variables() {
   auth_check ops-console "${SET_VARS_PAIRS[@]}" || exit 1
   set_service_vars "$env_id" "$RAILWAY_SVC_SUPPORT_CONSOLE_ID" support-console "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url"
   auth_check support-console "${SET_VARS_PAIRS[@]}" || exit 1
-  echo "All 13 environment variables confirmed by independent re-query."
+  echo "All 12 environment variables confirmed by independent re-query."
 }
 
 # cmd_reconcile_urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url>

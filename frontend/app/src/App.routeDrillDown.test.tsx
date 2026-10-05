@@ -23,7 +23,7 @@ const MALFORMED_INVOICE_ID = 'not-a-uuid'
 const ABSENT_JOB_ID = 'c0000000-0000-4000-8000-000000000003'
 const TENANT_B_JOB_ID = 'd0000000-0000-4000-8000-000000000004'
 
-// Node v25's native localStorage collides with jsdom's (App.standIn.test.tsx:74-75).
+// Node v25's native localStorage collides with jsdom's.
 function createMemoryStorage() {
   const store = new Map<string, string>()
   return {

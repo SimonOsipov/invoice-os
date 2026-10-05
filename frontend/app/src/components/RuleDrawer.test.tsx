@@ -237,6 +237,11 @@ describe('RuleDrawer', () => {
       message: 'WHT expected on service lines',
     })
 
+    expect.soft(JSON.parse(mount(custom, true).dialog.querySelector('pre.pf-json')!.textContent!).params, 'a two-word label snake_cases').toEqual({
+      max: '₦500,000,000',
+      on_breach: 'warn + route to director approval',
+    })
+
     const re = JSON.parse(mount(golden, false).dialog.querySelector('pre.pf-json')!.textContent!)
     expect.soft(re.params, 'a regex with backslashes survives').toEqual({ pattern: '^\\d{8}-\\d{4}$', flags: 'none' })
   })

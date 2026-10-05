@@ -229,7 +229,7 @@ describe('RulesView, rows and drawer wiring', () => {
   it('a click on a row opens it, and a click on its switch toggles without opening', () => {
     const ctx = rulesCtx(false)
     render(<RulesView ctx={ctx} />)
-    const target = SEED_CUSTOM_RULES[0]
+    const target = SEED_CUSTOM_RULES[2]
 
     fireEvent.click(screen.getByRole('switch', { name: `Disable ${target.key}` }))
     expect(ctx.toggleCustomRule).toHaveBeenCalledWith(target.key)

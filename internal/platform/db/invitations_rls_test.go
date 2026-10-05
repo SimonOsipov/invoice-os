@@ -38,13 +38,44 @@ package db_test
 
 import (
 	"context"
+	"crypto/rand"
+	"errors"
+	"fmt"
+	"io/fs"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/migrations"
 )
+
+const invitationsTokenMigrationGlob = "*_invitations_token_expiry_inviter.sql"
+
+// tokenHash returns n random bytes, so every seeded pending row has its own hash.
+func tokenHash(t *testing.T, n int) []byte {
+	t.Helper()
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		t.Fatalf("read random bytes: %v", err)
+	}
+	return b
+}
+
+// pgViolation asserts err is a PgError with the given SQLSTATE and constraint name.
+func pgViolation(t *testing.T, what string, err error, code, constraint string) {
+	t.Helper()
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		t.Fatalf("%s: want %s on %s, got %v", what, code, constraint, err)
+	}
+	if pgErr.Code != code || pgErr.ConstraintName != constraint {
+		t.Fatalf("%s: want %s on %s, got %s on %q (%s)", what, code, constraint, pgErr.Code, pgErr.ConstraintName, pgErr.Message)
+	}
+}
 
 // seedInvitation inserts one invitations row for tenantID/role/invitee_email as the
 // superuser (BYPASSRLS, so seeding needs no tenant context) and returns its id plus a
@@ -52,11 +83,18 @@ import (
 // NOT move into the shared harness.seed().
 func seedInvitation(t *testing.T, tenantID, role, invitee string) (id string, cleanup func()) {
 	t.Helper()
+	return seedInvitationWithHash(t, tenantID, role, invitee, tokenHash(t, 32))
+}
+
+// seedInvitationWithHash is seedInvitation with a caller-chosen token hash.
+func seedInvitationWithHash(t *testing.T, tenantID, role, invitee string, hash []byte) (id string, cleanup func()) {
+	t.Helper()
 	ctx := context.Background()
 	id = uuid.NewString()
 	if _, err := h.super.Exec(ctx,
-		`INSERT INTO invitations (id, tenant_id, role, invitee_email) VALUES ($1, $2, $3, $4)`,
-		id, tenantID, role, invitee,
+		`INSERT INTO invitations (id, tenant_id, role, invitee_email, token_hash, expires_at, invited_by)
+		 VALUES ($1, $2, $3, $4, $5, now() + interval '7 days', $6)`,
+		id, tenantID, role, invitee, hash, uuid.NewString(),
 	); err != nil {
 		if code := pgCode(err); code == "42P01" {
 			t.Fatalf("seed invitations: undefined_table (42P01) — invitations migration not applied yet: %v", err)
@@ -101,8 +139,9 @@ func TestRLS_InvitationsCrossTenantInsertRefused(t *testing.T) {
 
 	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
 		_, e := tx.Exec(ctx,
-			`INSERT INTO invitations (tenant_id, role, invitee_email) VALUES ($1, 'preparer', 'x@e.io')`,
-			h.tenantB,
+			`INSERT INTO invitations (tenant_id, role, invitee_email, token_hash, expires_at, invited_by)
+			 VALUES ($1, 'preparer', 'x@e.io', $2, now() + interval '7 days', $3)`,
+			h.tenantB, tokenHash(t, 32), uuid.NewString(),
 		)
 		return e
 	})
@@ -156,8 +195,9 @@ func TestRLS_InvitationsPendingEmailUniquePartial(t *testing.T) {
 	var firstID string
 	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
-			`INSERT INTO invitations (tenant_id, role, invitee_email) VALUES ($1, 'preparer', 'alice@e.io') RETURNING id`,
-			h.tenantA,
+			`INSERT INTO invitations (tenant_id, role, invitee_email, token_hash, expires_at, invited_by)
+			 VALUES ($1, 'preparer', 'alice@e.io', $2, now() + interval '7 days', $3) RETURNING id`,
+			h.tenantA, tokenHash(t, 32), uuid.NewString(),
 		).Scan(&firstID)
 	})
 	if err != nil {
@@ -168,17 +208,16 @@ func TestRLS_InvitationsPendingEmailUniquePartial(t *testing.T) {
 	// A second pending invitation for the same (tenant, email) is refused.
 	err = db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
 		_, e := tx.Exec(ctx,
-			`INSERT INTO invitations (tenant_id, role, invitee_email) VALUES ($1, 'preparer', 'alice@e.io')`,
-			h.tenantA,
+			`INSERT INTO invitations (tenant_id, role, invitee_email, token_hash, expires_at, invited_by)
+			 VALUES ($1, 'preparer', 'alice@e.io', $2, now() + interval '7 days', $3)`,
+			h.tenantA, tokenHash(t, 32), uuid.NewString(),
 		)
 		return e
 	})
 	if err == nil {
 		t.Fatal("duplicate pending (tenant_id, invitee_email) succeeded, want unique_violation (SQLSTATE 23505)")
 	}
-	if code := pgCode(err); code != "23505" {
-		t.Fatalf("duplicate pending (tenant_id, invitee_email): SQLSTATE = %q, want 23505 (unique_violation): %v", code, err)
-	}
+	pgViolation(t, "duplicate pending (tenant_id, invitee_email)", err, "23505", "invitations_tenant_invitee_pending_uq")
 
 	// A THIRD row for the SAME email in the SAME tenant, explicitly status='revoked',
 	// succeeds — the partial index only covers status='pending'.
@@ -221,17 +260,16 @@ func TestRLS_InvitationsStatusAndEmailCheck(t *testing.T) {
 	// An empty invitee_email is rejected.
 	err = db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
 		_, e := tx.Exec(ctx,
-			`INSERT INTO invitations (tenant_id, role, invitee_email) VALUES ($1, 'preparer', '')`,
-			h.tenantA,
+			`INSERT INTO invitations (tenant_id, role, invitee_email, token_hash, expires_at, invited_by)
+			 VALUES ($1, 'preparer', '', $2, now() + interval '7 days', $3)`,
+			h.tenantA, tokenHash(t, 32), uuid.NewString(),
 		)
 		return e
 	})
 	if err == nil {
 		t.Fatal("insert with invitee_email = '' succeeded, want CHECK violation (SQLSTATE 23514)")
 	}
-	if code := pgCode(err); code != "23514" {
-		t.Fatalf("insert with invitee_email = '': SQLSTATE = %q, want 23514 (check_violation): %v", code, err)
-	}
+	pgViolation(t, "insert with invitee_email = ''", err, "23514", "invitations_invitee_email_check")
 }
 
 // INV-RLS-06: a positive own-tenant INSERT succeeds — proves RLS's WITH CHECK, the
@@ -248,8 +286,9 @@ func TestRLS_InvitationsOwnTenantInsertSucceeds(t *testing.T) {
 	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
 		before = mustCount(t, tx, `SELECT count(*) FROM invitations WHERE tenant_id = $1`, h.tenantA)
 		return tx.QueryRow(ctx,
-			`INSERT INTO invitations (tenant_id, role, invitee_email) VALUES ($1, 'preparer', 'bob@e.io') RETURNING id`,
-			h.tenantA,
+			`INSERT INTO invitations (tenant_id, role, invitee_email, token_hash, expires_at, invited_by)
+			 VALUES ($1, 'preparer', 'bob@e.io', $2, now() + interval '7 days', $3) RETURNING id`,
+			h.tenantA, tokenHash(t, 32), uuid.NewString(),
 		).Scan(&id)
 	})
 	if err != nil {
@@ -324,5 +363,307 @@ func TestRLS_InvitationsDeleteRefused(t *testing.T) {
 	// The row must still exist — a permission-denied DELETE has no effect.
 	if n := mustCount(t, h.super, `SELECT count(*) FROM invitations WHERE id = $1`, id); n != 1 {
 		t.Errorf("row count after refused DELETE = %d, want 1 (row must survive)", n)
+	}
+}
+
+// inTenantRollback runs fn as the app role scoped to tenant, then always rolls back, so a
+// case can insert freely without cleanup. A refused statement aborts the tx: one per attempt.
+func inTenantRollback(t *testing.T, tenant string, fn func(ctx context.Context, tx pgx.Tx) error) error {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := h.app.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true)`, tenant); err != nil {
+		t.Fatalf("set tenant: %v", err)
+	}
+	return fn(ctx, tx)
+}
+
+const insertPending = `INSERT INTO invitations (tenant_id, role, invitee_email, token_hash, expires_at, invited_by)
+	 VALUES ($1, 'preparer', $2, $3, $4, $5)`
+
+// RESEND-05-01 AC 1: the four columns, their types and nullability, and the send_status
+// default and CHECK.
+func TestRLS_InvitationsTokenColumnsExist(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	type col struct {
+		dataType, nullable string
+		deflt              *string
+	}
+	rows, err := h.super.Query(ctx, `
+		SELECT column_name, data_type, is_nullable, column_default
+		FROM information_schema.columns
+		WHERE table_name = 'invitations'
+		  AND column_name IN ('token_hash','expires_at','invited_by','send_status')`)
+	if err != nil {
+		t.Fatalf("read information_schema.columns: %v", err)
+	}
+	got := map[string]col{}
+	for rows.Next() {
+		var name string
+		var c col
+		if err := rows.Scan(&name, &c.dataType, &c.nullable, &c.deflt); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got[name] = c
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("invitations has %d of the 4 new columns (token_hash, expires_at, invited_by, send_status): %v", len(got), got)
+	}
+	for name, want := range map[string]col{
+		"token_hash":  {dataType: "bytea", nullable: "YES"},
+		"expires_at":  {dataType: "timestamp with time zone", nullable: "YES"},
+		"invited_by":  {dataType: "uuid", nullable: "YES"},
+		"send_status": {dataType: "text", nullable: "NO"},
+	} {
+		c := got[name]
+		if c.dataType != want.dataType || c.nullable != want.nullable {
+			t.Errorf("%s = %s nullable=%s, want %s nullable=%s", name, c.dataType, c.nullable, want.dataType, want.nullable)
+		}
+		if name != "send_status" && c.deflt != nil {
+			t.Errorf("%s has default %q, want none", name, *c.deflt)
+		}
+	}
+	if d := got["send_status"].deflt; d == nil || *d != "'sending'::text" {
+		t.Errorf("send_status default = %v, want 'sending'::text", d)
+	}
+
+	// Every accepted value stores; the default is 'sending'; anything else is refused.
+	for _, v := range []string{"sending", "sent", "failed"} {
+		err := inTenantRollback(t, h.tenantA, func(ctx context.Context, tx pgx.Tx) error {
+			_, e := tx.Exec(ctx, `INSERT INTO invitations (tenant_id, role, invitee_email, status, send_status)
+				VALUES ($1, 'preparer', 'send-status@e.io', 'revoked', $2)`, h.tenantA, v)
+			return e
+		})
+		if err != nil {
+			t.Errorf("send_status = %q refused: %v", v, err)
+		}
+	}
+	var dflt string
+	err = inTenantRollback(t, h.tenantA, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `INSERT INTO invitations (tenant_id, role, invitee_email, status)
+			VALUES ($1, 'preparer', 'send-default@e.io', 'revoked') RETURNING send_status`, h.tenantA).Scan(&dflt)
+	})
+	if err != nil || dflt != "sending" {
+		t.Errorf("send_status of a row that names none = %q (err %v), want sending", dflt, err)
+	}
+	err = inTenantRollback(t, h.tenantA, func(ctx context.Context, tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `INSERT INTO invitations (tenant_id, role, invitee_email, token_hash, expires_at, invited_by, send_status)
+			VALUES ($1, 'preparer', 'send-bogus@e.io', $2, now() + interval '7 days', $3, 'bogus')`,
+			h.tenantA, tokenHash(t, 32), uuid.NewString())
+		return e
+	})
+	pgViolation(t, "send_status = 'bogus'", err, "23514", "invitations_send_status_check")
+}
+
+// RESEND-05-01 AC 2: a pending row missing any of the three is refused; a complete one stores.
+func TestRLS_InvitationsPendingRowNeedsItsToken(t *testing.T) {
+	h := requireHarness(t)
+	exp, by := time.Now().Add(7*24*time.Hour), uuid.NewString()
+
+	if err := inTenantRollback(t, h.tenantA, func(ctx context.Context, tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, insertPending, h.tenantA, "complete@e.io", tokenHash(t, 32), exp, by)
+		return e
+	}); err != nil {
+		t.Fatalf("a pending row with all three of token_hash, expires_at, invited_by was refused: %v", err)
+	}
+
+	for _, c := range []struct {
+		missing string
+		hash    []byte
+		exp     *time.Time
+		by      *string
+	}{
+		{"token_hash", nil, &exp, &by},
+		{"expires_at", tokenHash(t, 32), nil, &by},
+		{"invited_by", tokenHash(t, 32), &exp, nil},
+	} {
+		err := inTenantRollback(t, h.tenantA, func(ctx context.Context, tx pgx.Tx) error {
+			_, e := tx.Exec(ctx, insertPending, h.tenantA, "missing-"+c.missing+"@e.io", c.hash, c.exp, c.by)
+			return e
+		})
+		pgViolation(t, "pending row missing "+c.missing, err, "23514", "invitations_pending_has_token")
+	}
+}
+
+// RESEND-05-01 AC 3: only a pending row needs the token fields.
+func TestRLS_InvitationsNonPendingRowNeedsNoToken(t *testing.T) {
+	h := requireHarness(t)
+
+	var n int
+	var hashIsNull bool
+	err := inTenantRollback(t, h.tenantA, func(ctx context.Context, tx pgx.Tx) error {
+		var id string
+		if e := tx.QueryRow(ctx, `INSERT INTO invitations (tenant_id, role, invitee_email, status)
+			VALUES ($1, 'preparer', 'revoked-bare@e.io', 'revoked') RETURNING id`, h.tenantA).Scan(&id); e != nil {
+			return e
+		}
+		return tx.QueryRow(ctx, `SELECT count(*), bool_and(token_hash IS NULL) FROM invitations WHERE id = $1`, id).Scan(&n, &hashIsNull)
+	})
+	if err != nil {
+		t.Fatalf("a revoked row with no token fields was refused: %v", err)
+	}
+	if n != 1 || !hashIsNull {
+		t.Errorf("stored revoked row: count=%d token_hash null=%v, want 1 and true", n, hashIsNull)
+	}
+}
+
+// RESEND-05-01 AC 4 (boundary): a token hash is exactly 32 bytes.
+func TestRLS_InvitationsTokenHashIsThirtyTwoBytes(t *testing.T) {
+	h := requireHarness(t)
+	exp, by := time.Now().Add(7*24*time.Hour), uuid.NewString()
+
+	for _, n := range []int{31, 33} {
+		err := inTenantRollback(t, h.tenantA, func(ctx context.Context, tx pgx.Tx) error {
+			_, e := tx.Exec(ctx, insertPending, h.tenantA, "len@e.io", tokenHash(t, n), exp, by)
+			return e
+		})
+		pgViolation(t, fmt.Sprintf("token_hash of %d bytes", n), err, "23514", "invitations_token_hash_len")
+	}
+	if err := inTenantRollback(t, h.tenantA, func(ctx context.Context, tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, insertPending, h.tenantA, "len@e.io", tokenHash(t, 32), exp, by)
+		return e
+	}); err != nil {
+		t.Fatalf("a 32-byte token_hash was refused: %v", err)
+	}
+}
+
+// RESEND-05-01 AC 5: one token identifies one invite, inside a tenant and across tenants.
+func TestRLS_InvitationsTokenHashIsUnique(t *testing.T) {
+	h := requireHarness(t)
+	exp, by := time.Now().Add(7*24*time.Hour), uuid.NewString()
+
+	hash := tokenHash(t, 32)
+	_, cleanup := seedInvitationWithHash(t, h.tenantA, "preparer", "uniq-first@example.com", hash)
+	defer cleanup()
+
+	// Control: a different hash for another address stores, so only the collision is refused.
+	if err := inTenantRollback(t, h.tenantA, func(ctx context.Context, tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, insertPending, h.tenantA, "uniq-other@example.com", tokenHash(t, 32), exp, by)
+		return e
+	}); err != nil {
+		t.Fatalf("a pending row with a fresh token_hash was refused: %v", err)
+	}
+
+	err := inTenantRollback(t, h.tenantA, func(ctx context.Context, tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, insertPending, h.tenantA, "uniq-second@example.com", hash, exp, by)
+		return e
+	})
+	pgViolation(t, "same token_hash, same tenant", err, "23505", "invitations_token_hash_uq")
+
+	// Superuser bypasses RLS, so the refusal can only come from the index.
+	_, err = h.super.Exec(context.Background(), insertPending, h.tenantB, "uniq-b@example.com", hash, exp, by)
+	pgViolation(t, "same token_hash, other tenant", err, "23505", "invitations_token_hash_uq")
+}
+
+// RESEND-05-01 AC 6: RLS covers the new columns, for reads and writes.
+func TestRLS_InvitationsTokenColumnsCrossTenantRefused(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	hash := tokenHash(t, 32)
+	idA, cleanup := seedInvitationWithHash(t, h.tenantA, "preparer", "cross-token@example.com", hash)
+	defer cleanup()
+	var wantExp time.Time
+	if err := h.super.QueryRow(ctx, `SELECT expires_at FROM invitations WHERE id = $1`, idA).Scan(&wantExp); err != nil {
+		t.Fatalf("read seeded expires_at: %v", err)
+	}
+
+	const byHash = `SELECT count(*) FROM invitations WHERE token_hash = $1`
+	// Control: the owner sees the row by hash, so the zeros below mean something.
+	if err := inTenantRollback(t, h.tenantA, func(ctx context.Context, tx pgx.Tx) error {
+		if n := mustCount(t, tx, byHash, hash); n != 1 {
+			t.Errorf("tenant A sees %d rows by its own token_hash, want 1", n)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var updated int64
+	if err := inTenantRollback(t, h.tenantB, func(ctx context.Context, tx pgx.Tx) error {
+		if n := mustCount(t, tx, byHash, hash); n != 0 {
+			t.Errorf("tenant B sees %d of A's rows by token_hash, want 0", n)
+		}
+		tag, e := tx.Exec(ctx, `UPDATE invitations SET token_hash = $1, expires_at = now() WHERE id = $2`, tokenHash(t, 32), idA)
+		updated = tag.RowsAffected()
+		return e
+	}); err != nil {
+		t.Fatalf("scoped to B: %v", err)
+	}
+	if updated != 0 {
+		t.Errorf("B's UPDATE of A's row affected %d rows, want 0", updated)
+	}
+
+	var gotHash []byte
+	var gotExp time.Time
+	if err := h.super.QueryRow(ctx, `SELECT token_hash, expires_at FROM invitations WHERE id = $1`, idA).Scan(&gotHash, &gotExp); err != nil {
+		t.Fatalf("re-read A's row: %v", err)
+	}
+	if string(gotHash) != string(hash) || !gotExp.Equal(wantExp) {
+		t.Errorf("A's row after B's UPDATE: token_hash changed=%v expires_at %v, want unchanged %v", string(gotHash) != string(hash), gotExp, wantExp)
+	}
+
+	tx, err := h.app.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if n := mustCount(t, tx, byHash, hash); n != 0 {
+		t.Errorf("with no tenant set the app role sees %d rows by token_hash, want 0", n)
+	}
+}
+
+// RESEND-05-01 AC 7: the Up body applies over a pending row that has no token and leaves it
+// as it was. The Down body strips the columns first, which recreates the legacy row shape.
+func TestRLS_InvitationsTokenMigrationKeepsALegacyPendingRow(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	matches, err := fs.Glob(migrations.FS, invitationsTokenMigrationGlob)
+	if err != nil {
+		t.Fatalf("glob %s in migrations.FS: %v", invitationsTokenMigrationGlob, err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("migrations.FS holds %d files matching %s (%v), want exactly 1 -- the migration is absent",
+			len(matches), invitationsTokenMigrationGlob, matches)
+	}
+	down := auditEntitySectionOf(t, matches[0], "Down")
+	up := auditEntitySectionOf(t, matches[0], "Up")
+
+	tx := migratorTx(t, ctx)
+	if _, err := tx.Exec(ctx, down); err != nil {
+		t.Fatalf("Down body: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true)`, h.tenantA); err != nil {
+		t.Fatalf("set tenant: %v", err)
+	}
+	var id string
+	if err := tx.QueryRow(ctx, `INSERT INTO invitations (tenant_id, role, invitee_email)
+		VALUES ($1, 'preparer', 'legacy@example.com') RETURNING id`, h.tenantA).Scan(&id); err != nil {
+		t.Fatalf("insert legacy pending row (columns should be gone after Down): %v", err)
+	}
+	if _, err := tx.Exec(ctx, up); err != nil {
+		t.Fatalf("Up body over a legacy pending row: %v", err)
+	}
+
+	var status, email string
+	var hashNull, expNull, byNull bool
+	if err := tx.QueryRow(ctx, `SELECT status, invitee_email, token_hash IS NULL, expires_at IS NULL, invited_by IS NULL
+		FROM invitations WHERE id = $1`, id).Scan(&status, &email, &hashNull, &expNull, &byNull); err != nil {
+		t.Fatalf("read legacy row after Up (it must still be visible to its tenant): %v", err)
+	}
+	if status != "pending" || email != "legacy@example.com" || !hashNull || !expNull || !byNull {
+		t.Errorf("legacy row after Up: status=%q email=%q token_hash null=%v expires_at null=%v invited_by null=%v, want it unchanged",
+			status, email, hashNull, expNull, byNull)
 	}
 }

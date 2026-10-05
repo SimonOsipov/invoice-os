@@ -966,8 +966,8 @@ test('firm Approvals: a row the seat cannot approve shows the reason icon, no se
 // their own aria-label.
 //
 // A blocked row's reason icon sits inside track 1, so every row keeps exactly 7 children.
-// This journey's rows stay approvable through the sweep; the firm test above and the Emeka
-// leg below cover blocked rows.
+// This journey's rows stay approvable through the sweep; the firm test above and the
+// unstaffed leg below cover blocked rows.
 //
 // Cannot be run locally, same as Test 5: every Playwright config in this package is
 // deliberately webServer-less and points at deployed URLs, so its first real run -- red or

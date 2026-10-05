@@ -63,10 +63,9 @@ func TestConfirmedVariableCountMatchesUpserts(t *testing.T) {
 	}
 }
 
-// T3 (AC-3) — GUARD, green at HEAD: the persistent-environment refusal
-// (railway-env.sh:1227-1230) must survive byte-identical. Matched as one exact
-// four-line block, not as scattered substrings, so a reflow that keeps the words but
-// drops the exit still fails.
+// T3 (AC-3) — GUARD: the persistent-environment refusal must survive byte-identical. Matched
+// as one exact four-line block, not as scattered substrings, so a reflow that keeps the
+// words but drops the exit still fails.
 //
 // KILLS: a restructure that drops (or reorders past) this guard, which would re-open
 // rewriting production's URL variables from a PR-environment run.
@@ -118,10 +117,9 @@ func TestEveryAppViteVariableHasADockerfileArg(t *testing.T) {
 	}
 }
 
-// T5 (AC-4) — RED at HEAD: scripts/** is in no ci.yml paths filter (F2). Mirrors
-// dev-env.yml, which already lists scripts/ci/**. Without this, T1-T4 above are
-// inert on exactly the edit they guard: a scripts-only commit matches no filter, the
-// Go job is skipped, and `go test ./...` never runs.
+// T5 (AC-4) — GUARD: the ci.yml go: paths filter lists scripts/ci/**, as dev-env.yml does.
+// Without it the guards above are inert on exactly the edit they guard: a scripts-only
+// commit matches no filter, the Go job is skipped, and `go test ./...` never runs.
 func TestCIYmlGoFilterReachesScriptsCI(t *testing.T) {
 	path := filepath.Join(repoRoot(t), ".github", "workflows", "ci.yml")
 	raw, err := os.ReadFile(path)

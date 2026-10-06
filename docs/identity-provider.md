@@ -5,7 +5,9 @@ signs ES256 access tokens, serves their public keys at `/.well-known/jwks.json`,
 projects the tenant into `app_metadata.tenant_id` through the Postgres access-token hook.
 It is private-network only (`http://auth.railway.internal:8080`); it has no public domain.
 The gateway reaches it for JWKS, for the fleet probe, for GoTrue's `/signup`, `/resend` and
-`/verify` on behalf of the public registration routes (see Registration), for
+`/verify` on behalf of the public registration routes (see Registration), for GoTrue's
+`/recover`, `/verify` and `PUT /user` on behalf of the public password-reset routes (see
+Password reset), for
 GoTrue's password grant on behalf of the public sign-in route (see Sign-in and hand-off),
 for its refresh-token grant on behalf of the public refresh and sign-out routes (see
 Renewal and Revocation), for GoTrue's `GET /user` on every checked `/api/` request, cached
@@ -442,7 +444,8 @@ address unmapped, an IPv6 address by its /64; an absent or unparseable header fa
 of `RemoteAddr`, normalised the same way. The client is reserved first, then the address, then GoTrue is called. Any GoTrue
 4xx answer refunds both counts (GoTrue mails nothing on a 4xx); a 2xx, a 5xx or a transport error keeps them. Over a limit the
 answer is the same 202 and GoTrue is not called. On a PR preview the limits log and do not refuse
-(see `POST /auth/register`).
+(see `POST /auth/register`). `POST /auth/request-password-reset` spends the same two budgets: both
+routes count toward the 3 per address and the 10 per client key (instances `resend-address` and `resend-ip`).
 
 Log lines, none with an email address or an IP: WARN `resend-verification: limit reached`
 (`limit=ip|address`, `key_source=header|remote_addr`, `enforced`), WARN `resend-verification: gotrue
@@ -456,7 +459,7 @@ and `TestResendVerificationOptionsWithoutOriginIsNotAResend`.
 
 **Password reset**, outside `/api/`, no verifier, in every build. Three routes: `POST /auth/request-password-reset` (CORS-wrapped, with an `OPTIONS` preflight route) asks GoTrue `/recover`; `GET /auth/reset-password` renders the set-new-password page; `POST /auth/reset-password` is that page's same-origin form POST (no CORS wrap, as `/auth/verify` has none). Code: `internal/gateway/password_reset.go` `RequestPasswordResetHandler`, `internal/gateway/reset_password.go` `ResetPasswordPageHandler` and `ResetPasswordHandler`. GoTrue mails the link to `GOTRUE_MAILER_URLPATHS_RECOVERY`, the page, with `token` and `type=recovery`; the mail is the branded recovery template (`GET /emails/recovery.html`).
 
-*The request* has the resend contract: body `{"email"}`; every outcome except a 400 answers 202 `{"status":"accepted"}` after the `AUTH_REGISTER_MIN_RESPONSE` floor, whatever the account's state; the 400 rows (malformed body or one over 1 KiB, an empty email, an email over 254 bytes or GoTrue `validation_failed`), the 405 for any method but POST and a preflight, and the 503 `registration is not configured` (`AUTH_URL` or `AUTH_SITE_URL` unset) are the same as resend's. Its limits are resend's two buckets, not new ones: a reset and a resend for one address spend one budget of 3 an hour, and from one client key one budget of 10 (instances `resend-address` and `resend-ip`, `gateway.ResendPerAddress`, `gateway.ResendPerIP`). Any GoTrue 4xx refunds both counts. On a PR preview the limits log and do not refuse. Log lines, none with an address or an IP: WARN `reset-request: limit reached` (`limit`, `key_source`, `enforced`), WARN `reset-request: gotrue email send rate limit`, WARN `reset-request: gotrue recover failed` (`upstream_status`, `error_code`), WARN `reset-request: gotrue unreachable`, and `reset-request: timing` (`upstream_ms`, `min_ms`).
+*The request* has the resend contract: body `{"email"}`; every outcome except a 400 answers 202 `{"status":"accepted"}` after the `AUTH_REGISTER_MIN_RESPONSE` floor, whatever the account's state; the 400 rows (malformed body or one over 1 KiB, an empty email, an email over 254 bytes or GoTrue `validation_failed`), the 405 for any method but POST and a preflight, and the 503 `registration is not configured` (`AUTH_URL` or `AUTH_SITE_URL` unset) are the same as resend's. Its limits are the ones in the Limits paragraph of `POST /auth/resend-verification`. Log lines, none with an address or an IP: WARN `reset-request: limit reached` (`limit`, `key_source`, `enforced`), WARN `reset-request: gotrue email send rate limit`, WARN `reset-request: gotrue recover failed` (`upstream_status`, `error_code`), WARN `reset-request: gotrue unreachable`, and `reset-request: timing` (`upstream_ms`, `min_ms`).
 
 *The page* holds no GoTrue client, so opening the link spends nothing: GET and HEAD answer the page (HEAD without a body); any other method answers 405 `Allow: GET, HEAD`. A missing or over-long `token` (256 bytes) or a `type` other than `recovery` answers 303 `<site>/?reset=failed`. `redirect_to` and every other parameter are ignored. Headers: `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, a CSP with the submit script's hash. The form has one password field (6 to 72 bytes).
 
@@ -473,6 +476,7 @@ and `TestResendVerificationOptionsWithoutOriginIsNotAResend`.
 | `/verify` fails (expired, spent, unreachable) | 303 `?reset=failed`; no `PUT`, no sign-out; WARN `reset-password: gotrue refused the link` or `gotrue unreachable` |
 | `PUT /user` 200, or 422 `same_password`, then the sign-out succeeds | 303 `?reset=1` |
 | `PUT /user` any other answer | 303 `?reset=failed`; the old password still works; WARN `reset-password: gotrue refused the password` |
+| `/verify` answers 200 without an access token, user id or email | 303 `?reset=failed`; no `PUT`, no sign-out; WARN `reset-password: gotrue verify answer incomplete` |
 | sign-out fails after a `PUT` 200 | 303 `?reset=1`; WARN `reset-password: global sign-out failed` |
 | sign-out fails after a 422 `same_password` | 303 `?reset=failed`; WARN `reset-password: global sign-out failed`; the throttle is not cleared |
 | `AUTH_URL` or `AUTH_SITE_URL` unset | 503 `registration is not configured`, page and form alike |

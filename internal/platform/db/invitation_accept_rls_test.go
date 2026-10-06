@@ -98,6 +98,27 @@ func inAppTx(ctx context.Context, guc string, fn func(pgx.Tx) error) error {
 	return fn(tx)
 }
 
+func rolesInDB(t *testing.T) []string {
+	t.Helper()
+	rows, err := h.super.Query(context.Background(), `SELECT name FROM roles ORDER BY name`)
+	if err != nil {
+		t.Fatalf("read roles: %v", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var r string
+		if err := rows.Scan(&r); err != nil {
+			t.Fatalf("scan role: %v", err)
+		}
+		out = append(out, r)
+	}
+	if len(out) < 2 {
+		t.Fatalf("roles = %v, want at least two so a hard-coded role cannot pass", out)
+	}
+	return out
+}
+
 func lookupAs(t *testing.T, guc, token string) []lookupRow {
 	t.Helper()
 	var out []lookupRow
@@ -160,6 +181,27 @@ func TestRLS_InvitationByTokenNamesThePendingInvite(t *testing.T) {
 			}
 			if got[0] != want {
 				t.Errorf("row = %+v, want %+v", got[0], want)
+			}
+		})
+	}
+}
+
+func TestRLS_InvitationByTokenReturnsTheInvitesOwnRoleAndWorkspace(t *testing.T) {
+	requireHarness(t)
+	roles := rolesInDB(t)
+
+	for _, role := range roles {
+		t.Run(role, func(t *testing.T) {
+			tenant := newNamedTenant(t, "Firm of "+role)
+			token := newToken(t)
+			email := role + "@obi.test"
+			id := seedAcceptInvite(t, tenant, role, email, token)
+
+			got := lookupAs(t, "", token)
+
+			want := lookupRow{id: id, tenantID: tenant, workspace: "Firm of " + role, role: role, email: email}
+			if len(got) != 1 || got[0] != want {
+				t.Errorf("rows = %+v, want exactly [%+v]", got, want)
 			}
 		})
 	}
@@ -364,18 +406,24 @@ func TestRLS_InvitationLookupPoliciesDoNotWidenTheApp(t *testing.T) {
 
 func TestRLS_AcceptInvitationWritesTheMembership(t *testing.T) {
 	requireHarness(t)
+	for _, inviteRole := range rolesInDB(t) {
+		t.Run(inviteRole, func(t *testing.T) { acceptWritesTheMembership(t, inviteRole) })
+	}
+}
+
+func acceptWritesTheMembership(t *testing.T, inviteRole string) {
 	ctx := context.Background()
 	a := newNamedTenant(t, "Obi Partners")
 	token := newToken(t)
-	inviteID := seedAcceptInvite(t, a, "reviewer", invitedAddress, token)
+	inviteID := seedAcceptInvite(t, a, inviteRole, invitedAddress, token)
 	user := uuid.NewString()
 
 	gotID, gotRole, err := acceptAs(ctx, a, a, token, user, " Tunde@Obi.test ")
 	if err != nil {
 		t.Fatalf("accept_invitation under GUC A: want success, got %v", err)
 	}
-	if gotID != inviteID || gotRole != "reviewer" {
-		t.Errorf("returned (invitation_id, role) = (%s, %s), want (%s, reviewer)", gotID, gotRole, inviteID)
+	if gotID != inviteID || gotRole != inviteRole {
+		t.Errorf("returned (invitation_id, role) = (%s, %s), want (%s, %s)", gotID, gotRole, inviteID, inviteRole)
 	}
 
 	if n := membershipCount(t, user); n != 1 {
@@ -389,8 +437,8 @@ func TestRLS_AcceptInvitationWritesTheMembership(t *testing.T) {
 	).Scan(&tenant, &role, &status, &display, &email); err != nil {
 		t.Fatalf("read membership: %v", err)
 	}
-	if tenant != a || role != "reviewer" || status != "active" {
-		t.Errorf("membership (tenant, role, status) = (%s, %s, %s), want (%s, reviewer, active)", tenant, role, status, a)
+	if tenant != a || role != inviteRole || status != "active" {
+		t.Errorf("membership (tenant, role, status) = (%s, %s, %s), want (%s, %s, active)", tenant, role, status, a, inviteRole)
 	}
 	if display != nil {
 		t.Errorf("display_name = %q, want NULL", *display)
@@ -401,6 +449,186 @@ func TestRLS_AcceptInvitationWritesTheMembership(t *testing.T) {
 	if s := inviteStatus(t, inviteID); s != "accepted" {
 		t.Errorf("invite status = %q, want accepted", s)
 	}
+}
+
+// The stored address keeps its case; only the comparison folds it.
+func TestRLS_AcceptInvitationComparesTheEmailIgnoringCase(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+
+	for _, c := range []struct{ name, stored, given string }{
+		{"stored mixed case, given lower", "Tunde@Obi.test", "tunde@obi.test"},
+		{"stored lower, given upper", "tunde@obi.test", "TUNDE@OBI.TEST"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			a := newNamedTenant(t, "Obi Partners")
+			token := newToken(t)
+			seedAcceptInvite(t, a, "reviewer", c.stored, token)
+			user := uuid.NewString()
+
+			if _, _, err := acceptAs(ctx, a, a, token, user, c.given); err != nil {
+				t.Fatalf("accept with %q against stored %q: want success, got %v", c.given, c.stored, err)
+			}
+
+			var email string
+			if err := h.super.QueryRow(ctx, `SELECT email FROM memberships WHERE user_id = $1`, user).Scan(&email); err != nil {
+				t.Fatalf("read membership email: %v", err)
+			}
+			if email != c.stored {
+				t.Errorf("membership email = %q, want the stored invite address %q", email, c.stored)
+			}
+		})
+	}
+}
+
+// pgx sends a nil as SQL NULL; the string-typed helper cannot.
+func TestRLS_AcceptInvitationRefusesNullArguments(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+
+	for _, c := range []struct {
+		name       string
+		args       func(a, token, user string) []any
+		code       string
+		constraint string
+	}{
+		{"null email", func(a, token, user string) []any { return []any{a, token, user, nil} }, "P0001", emailMismatchKey},
+		{"null token", func(a, _, user string) []any { return []any{a, nil, user, invitedAddress} }, "P0002", notValidName},
+		{"null user id", func(a, token, _ string) []any { return []any{a, token, nil, invitedAddress} }, "", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			a := newNamedTenant(t, "Obi Partners")
+			token := newToken(t)
+			inviteID := seedAcceptInvite(t, a, "reviewer", invitedAddress, token)
+			user := uuid.NewString()
+			args := c.args(a, token, user)
+
+			err := db.WithinTenantTx(ctx, h.app, a, func(tx pgx.Tx) error {
+				var id, role string
+				return tx.QueryRow(ctx, acceptCall, args...).Scan(&id, &role)
+			})
+
+			if c.code != "" {
+				assertAcceptRefusal(t, c.name, err, c.code, c.constraint)
+			} else if err == nil {
+				t.Fatalf("%s: want a refusal, got success", c.name)
+			}
+			if n := mustCount(t, h.super, `SELECT count(*) FROM memberships WHERE tenant_id = $1`, a); n != 0 {
+				t.Errorf("memberships in A = %d, want 0", n)
+			}
+			if s := inviteStatus(t, inviteID); s != "pending" {
+				t.Errorf("invite status = %q, want pending", s)
+			}
+		})
+	}
+}
+
+// holdInvite takes the invite's row lock in a superuser transaction, starts one accept per user,
+// waits until each is blocked behind that lock, then commits. It returns each accept's error.
+func holdInvite(t *testing.T, tenant, token string, hold func(ctx context.Context, tx pgx.Tx) error, users ...string) []error {
+	t.Helper()
+	ctx := context.Background()
+	su, err := h.super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin the holding transaction: %v", err)
+	}
+	finished := false
+	defer func() {
+		if !finished {
+			_ = su.Rollback(ctx)
+		}
+	}()
+	if err := hold(ctx, su); err != nil {
+		t.Fatalf("take the invite row lock: %v", err)
+	}
+
+	errs := make([]error, len(users))
+	var wg sync.WaitGroup
+	for i, u := range users {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _, errs[i] = acceptAs(ctx, tenant, tenant, token, u, invitedAddress)
+		}()
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		blocked := mustCount(t, h.super,
+			`SELECT count(*) FROM pg_stat_activity
+			  WHERE pid <> pg_backend_pid() AND wait_event_type = 'Lock' AND query LIKE '%public.accept_invitation(%'`)
+		if blocked == len(users) {
+			break
+		}
+		if time.Now().After(deadline) {
+			_ = su.Rollback(ctx)
+			finished = true
+			wg.Wait()
+			t.Fatalf("accepts blocked behind the invite row lock = %d, want %d", blocked, len(users))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := su.Commit(ctx); err != nil {
+		t.Fatalf("release the invite row lock: %v", err)
+	}
+	finished = true
+	wg.Wait()
+	return errs
+}
+
+func TestRLS_AcceptInvitationIsSingleUseUnderRace(t *testing.T) {
+	requireHarness(t)
+
+	t.Run("two identities accept one token", func(t *testing.T) {
+		a := newNamedTenant(t, "Obi Partners")
+		token := newToken(t)
+		inviteID := seedAcceptInvite(t, a, "reviewer", invitedAddress, token)
+		u1, u2 := uuid.NewString(), uuid.NewString()
+
+		errs := holdInvite(t, a, token, func(ctx context.Context, tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `SELECT 1 FROM invitations WHERE id = $1 FOR UPDATE`, inviteID)
+			return err
+		}, u1, u2)
+
+		wins := 0
+		for _, err := range errs {
+			if err == nil {
+				wins++
+				continue
+			}
+			assertAcceptRefusal(t, "the second accept of one token", err, "P0002", notValidName)
+		}
+		if wins != 1 {
+			t.Errorf("successes = %d (errs %v), want exactly 1", wins, errs)
+		}
+		if n := mustCount(t, h.super, `SELECT count(*) FROM memberships WHERE tenant_id = $1 AND user_id IN ($2, $3)`, a, u1, u2); n != 1 {
+			t.Errorf("memberships written for the two identities = %d, want 1", n)
+		}
+		if s := inviteStatus(t, inviteID); s != "accepted" {
+			t.Errorf("invite status = %q, want accepted", s)
+		}
+	})
+
+	t.Run("token replaced while the accept waits", func(t *testing.T) {
+		a := newNamedTenant(t, "Obi Partners")
+		token := newToken(t)
+		inviteID := seedAcceptInvite(t, a, "reviewer", invitedAddress, token)
+		user := uuid.NewString()
+		fresh := hashOf(newToken(t))
+
+		errs := holdInvite(t, a, token, func(ctx context.Context, tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE invitations SET token_hash = $2 WHERE id = $1`, inviteID, fresh)
+			return err
+		}, user)
+
+		assertAcceptRefusal(t, "an accept of a token replaced while it waited", errs[0], "P0002", notValidName)
+		if n := membershipCount(t, user); n != 0 {
+			t.Errorf("memberships for the user = %d, want 0", n)
+		}
+		if s := inviteStatus(t, inviteID); s != "pending" {
+			t.Errorf("invite status = %q, want pending", s)
+		}
+	})
 }
 
 func TestRLS_AcceptInvitationRefusals(t *testing.T) {

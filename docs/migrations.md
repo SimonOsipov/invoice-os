@@ -75,10 +75,11 @@ case adversarially; M2-06 adds `FORCE ROW LEVEL SECURITY`.)
   [identity-provider.md](./identity-provider.md).
 - `auth_hook_reader` (added AUTH-02) — `NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB
   NOCREATEROLE`, `USAGE, CREATE ON SCHEMA public`. It owns the SECURITY DEFINER
-  `public.custom_access_token_hook` and `public.identity_has_membership` (callable only by
-  `invoice_migrator`, §1), and holds the policy that lets it read
-  `(user_id, tenant_id, status)` on `memberships` for every tenant, and `user_id` on
-  `staff_members`. No DSN or password exists for it. See §8.
+  `public.custom_access_token_hook`, `public.identity_has_membership` (callable only by
+  `invoice_migrator`, §1) and `public.invitation_by_token` (callable only by `invoice_app`),
+  and holds the policies that let it read `(user_id, tenant_id, status)` on `memberships`
+  for every tenant, `user_id` on `staff_members`, seven columns of `invitations` and
+  `(id, name)` of `tenants`. No DSN or password exists for it. See §8.
 - Bootstrap also `REVOKE CREATE ON SCHEMA public FROM PUBLIC` (a no-op on PG15+, kept for
   PG13/14 + defense-in-depth).
 
@@ -98,14 +99,10 @@ only through this SECURITY DEFINER function, which `invoice_migrator` owns
 - After the GUC check, the function refuses an identity that holds any membership, in any
   tenant and any status: 23505, constraint `one_workspace_per_identity`, nothing written.
   It takes a per-identity transaction advisory lock first, so concurrent calls for one identity serialise.
-  `public.accept_invitation(p_tenant_id, p_token, p_user_id, p_email)` (RESEND-06) takes the
-  same GUC check, the same lock key (`hashtextextended(p_user_id::text, 0)`) and the same
-  guard, so an accept and a provision for one identity serialise and exactly one succeeds.
   `tenancy.Store.ProvisionWorkspace` maps it to `ErrAlreadyProvisioned`, the same 409 as a
   tenant-bearing caller. It asks `public.identity_has_membership(uuid)`: SECURITY DEFINER,
   `search_path=""`, owned by `auth_hook_reader`, `EXECUTE` to `invoice_migrator` only (so
   `invoice_app` gets 42501 calling it directly).
-  `accept_invitation` is its second caller.
 - The only caller is `tenancy.Store.ProvisionWorkspace`, through the ungated
   `db.WithinTenantTx` (§4); a source scan pins that. Nothing restricts which `invoice_app`
   connection may call it; that application guard is the limit. Under a matching GUC it can
@@ -116,6 +113,14 @@ only through this SECURITY DEFINER function, which `invoice_migrator` owns
   `SET LOCAL ROLE auth_hook_reader` to drop `identity_has_membership`.
 - Proven by `internal/platform/db/tenants_provision_rls_test.go` (AUTH-03 replay) and
   `internal/platform/db/provision_guard_rls_test.go` (guard) in the `rls` job.
+- `public.accept_invitation(p_tenant_id, p_token, p_user_id, p_email)` (RESEND-06,
+  `migrations/20261006162416_invitation_accept.sql`) takes the same GUC check, the same lock
+  key (`hashtextextended(p_user_id::text, 0)`) and the same guard (it is the second caller
+  of `identity_has_membership`), so an accept and a provision for one identity serialise and
+  exactly one succeeds. It is `invoice_migrator`-owned, SECURITY DEFINER, `EXECUTE` to
+  `invoice_app` only.
+  Proven by `TestRLS_AcceptInvitationSharesTheProvisionLock` and its siblings in
+  `internal/platform/db/invitation_accept_rls_test.go`.
 
 `bootstrap.sql` is idempotent (DO-block role creation + `ALTER ROLE` re-assertion), run
 as the superuser via psql. `make db-bootstrap` runs it with dev-default passwords; real
@@ -500,6 +505,9 @@ CREATE POLICY auth_hook_lookup ON public.memberships
   scope, tenant B still reads none of tenant A's invitations or tenants.
 - Token residual: `invoice_app` can name one invite, with its workspace name, per known
   token. A 32-byte random token is not enumerable.
+  With a live token and a matching GUC it can also learn whether any user id holds a
+  membership: `accept_invitation` answers 23505 before it checks the email
+  (`TestRLS_AcceptInvitationRefusalOrder`). Same trust as the provisioning residual below.
 - Residual: a leaked GoTrue DSN can call the hook once per GoTrue user and map each user
   with exactly one active membership to its tenant. It also learns whether that user is
   staff (`app_metadata.staff`). It cannot bulk-read statuses or multiple memberships.

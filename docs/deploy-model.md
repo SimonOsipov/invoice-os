@@ -483,9 +483,9 @@ through `railway-env.sh query`. The rules below are the shipped behaviour
 waiting 5 s then 10 s. A call that needed a retry prints a `::warning::`; an exhausted budget
 prints one `::error::`.
 
-**What fails fast, with no retry.** A GraphQL `errors` array, any 4xx, HTTP 429 (named as
-rate-limiting), and connection resets or any other curl failure. A mutation that is not
-idempotent, and every poll tick, is sent once (`once`).
+**What fails fast, with no retry.** A GraphQL `errors` array, any 4xx but 429, and
+connection resets or any other curl failure. A mutation that is not
+idempotent, and every poll tick, gets one transient attempt (`once`).
 
 **Poll budgets.**
 

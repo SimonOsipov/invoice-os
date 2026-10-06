@@ -682,3 +682,72 @@ func TestWaitDeployment_RateLimitedTickWaitsAndCounts(t *testing.T) {
 		t.Errorf("railway-api-429-waited = %q, want %q: a poll tick's wait counts toward the job total", got, "20")
 	}
 }
+
+func TestWaitDeployment_RateLimitedTickPastTheJobCapFails(t *testing.T) {
+	t.Run("the total is spent", func(t *testing.T) {
+		s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
+		setFaults(t, s, "dep", "429")
+		plantRateLimitHeaders(t, s, "retry-after: 20")
+		tmp := t.TempDir()
+		writeFile(t, filepath.Join(tmp, "railway-api-429-waited"), "590\n")
+		stdout, stderr, code := runWaitDeployment(t, s, waitDepExports()+runnerTempExport(tmp), upIDA)
+
+		if code != 1 {
+			t.Errorf("exit %d, want 1; stdout = %q, stderr = %q", code, stdout, stderr)
+		}
+		if n := opCount(t, s, "dep"); n != 1 {
+			t.Errorf("dep calls = %d, want 1: the tick is not resent and no later tick runs", n)
+		}
+		if got := s.sleeps(t); len(got) != 0 {
+			t.Errorf("sleeps = %v, want none", got)
+		}
+		e := errorLines(stdout + stderr)
+		for _, re := range []string{`429`, `\b20\b`, `\b590\b`, `\b600\b`} {
+			if !regexp.MustCompile(re).MatchString(e) {
+				t.Errorf("error lines do not match %s: %q", re, e)
+			}
+		}
+		if got := waitedTotal(t, tmp); got != "590" {
+			t.Errorf("railway-api-429-waited = %q, want 590", got)
+		}
+	})
+	t.Run("a second 429 on one tick", func(t *testing.T) {
+		s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
+		setFaults(t, s, "dep", "429", "429")
+		plantRateLimitHeaders(t, s, "retry-after: 20")
+		stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), upIDA)
+
+		if code != 1 {
+			t.Errorf("exit %d, want 1; stdout = %q, stderr = %q", code, stdout, stderr)
+		}
+		if n := opCount(t, s, "dep"); n != 2 {
+			t.Errorf("dep calls = %d, want 2", n)
+		}
+		if e := errorLines(stdout + stderr); !regexp.MustCompile(`(?i)second`).MatchString(e) {
+			t.Errorf("error lines do not name the second 429: %q", e)
+		}
+	})
+	t.Run("each tick waits for itself and adds to the total", func(t *testing.T) {
+		s := newDepShim(t, depStatus(upIDA, "SUCCESS"), depStatus(upIDA, "DEPLOYING"))
+		setFaults(t, s, "dep", "429", "ok", "429")
+		plantRateLimitHeaders(t, s, "retry-after: 20")
+		tmp := t.TempDir()
+		stdout, stderr, code := runWaitDeployment(t, s, waitDepExports()+runnerTempExport(tmp), upIDA)
+
+		if code != 0 {
+			t.Errorf("exit %d, want 0; stdout = %q, stderr = %q", code, stdout, stderr)
+		}
+		waits := 0
+		for _, sl := range s.sleeps(t) {
+			if sl == "20" {
+				waits++
+			}
+		}
+		if waits != 2 {
+			t.Errorf("sleeps = %v, want two 20 s waits", s.sleeps(t))
+		}
+		if got := waitedTotal(t, tmp); got != "40" {
+			t.Errorf("railway-api-429-waited = %q, want 40", got)
+		}
+	})
+}

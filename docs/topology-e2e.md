@@ -167,7 +167,7 @@ blank SMTP host selects GoTrue's no-op mailer, so no confirmation mail leaves a 
 it in. A repeat registration then answers GoTrue `user_already_exists`, which
 `/auth/register` maps to the same 202. `set-fork-auth-site` (after the
 `urls` step) writes the fork's landing URL as both `auth.GOTRUE_SITE_URL` and
-`gateway.AUTH_SITE_URL`; without the second, the fork's `/auth/register` and `/auth/verify`
+`gateway.AUTH_SITE_URL`; without the second, the fork's `/auth/register`, `/auth/resend-verification` and `/auth/verify`
 answer 503 `registration is not configured`. The emailed-link half, including the branded confirmation template that `idp-mail` fetches from the
 gateway's `GET /emails/confirmation.html`, is proven only by the
 CI `idp` job's `idp-mail` container and mailpit.

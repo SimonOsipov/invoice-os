@@ -175,6 +175,8 @@ func main() {
 	reg := registrationHandlers(probed["auth"], siteURL, registerMinResponse, app.Logger, sink)
 	app.Mux.Handle("POST /auth/register", withCORS(reg.Register))
 	app.Mux.Handle("OPTIONS /auth/register", withCORS(reg.Register))
+	app.Mux.Handle("POST /auth/resend-verification", withCORS(reg.ResendVerification))
+	app.Mux.Handle("OPTIONS /auth/resend-verification", withCORS(reg.ResendVerification))
 	app.Mux.Handle("GET /auth/verify", verifyPage)
 	app.Mux.Handle("POST /auth/verify", reg.Verify)
 	app.Mux.Handle("POST /contacts/demo-request", withCORS(reg.DemoRequest))
@@ -273,27 +275,27 @@ func newJWKSClient() *http.Client {
 	return &http.Client{Timeout: 10 * time.Second, Transport: platform.TraceTransport(nil)}
 }
 
-// resendStub is a placeholder until the resend handler is wired.
-var resendStub = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotImplemented) })
-
 // registrationHandlers builds the registration handlers against GoTrue at authURL.
-// A nil siteURL means AUTH_SITE_URL is unset: Register and Verify answer 503.
+// A nil siteURL means AUTH_SITE_URL is unset: Register, ResendVerification and Verify answer 503.
+// On a PR preview the per-client limits log but do not refuse: a preview sends no mail.
 func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, log *slog.Logger, sink gateway.ContactSink) registration {
 	if authURL == nil || siteURL == nil {
 		nc := gateway.RegistrationNotConfigured()
-		return registration{Register: nc, Verify: nc, ResendVerification: resendStub, DemoRequest: gateway.DemoRequestHandler(sink, log)}
+		return registration{Register: nc, Verify: nc, ResendVerification: nc, DemoRequest: gateway.DemoRequestHandler(sink, log)}
 	}
 	client := &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
+	enforce := platform.Posture(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != platform.PosturePreview
 	return registration{
 		Register: gateway.RegisterHandler(authURL, client, minResponse,
-			gateway.NewSignInThrottle(gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now), true, log),
+			gateway.NewSignInThrottle(gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now), enforce, log),
 		Verify: gateway.VerifyHandler(authURL, siteURL, client, log, sink),
-
-		ResendVerification: resendStub,
-		DemoRequest:        gateway.DemoRequestHandler(sink, log),
+		ResendVerification: gateway.ResendVerificationHandler(authURL, client, minResponse,
+			gateway.NewSignInThrottle(gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now),
+			gateway.NewSignInThrottle(gateway.ResendPerIP, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now), enforce, log),
+		DemoRequest: gateway.DemoRequestHandler(sink, log),
 	}
 }
 
@@ -325,7 +327,7 @@ func handoffHandlers(authURL *url.URL, sessions *gateway.SessionChecker, log *sl
 // an absolute http(s) URL, or carries user info, a query or a fragment, stops boot.
 func mustParseSiteURL(raw string, log *slog.Logger) *url.URL {
 	if raw == "" {
-		log.Warn("gateway: AUTH_SITE_URL is unset; /auth/register, GET and POST /auth/verify answer 503")
+		log.Warn("gateway: AUTH_SITE_URL is unset; /auth/register, /auth/resend-verification, GET and POST /auth/verify answer 503")
 		return nil
 	}
 	u, err := url.Parse(raw)

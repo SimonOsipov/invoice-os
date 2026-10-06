@@ -61,7 +61,7 @@ const FOOTER: CSSProperties = {
   background: 'var(--bg-2)',
 }
 
-// `.v2-btn-primary:hover` brightens with no `:disabled` guard (app-layer.css), so a disabled
+// `.v2-btn-primary:hover` brightens with no `:disabled` guard (v2/app-layer.css), so a disabled
 // Save would light up under the cursor and read pressable. EvidenceBundleDrawer.tsx's spread.
 const SAVE_DISABLED: CSSProperties = {
   background: 'var(--bg-3)',

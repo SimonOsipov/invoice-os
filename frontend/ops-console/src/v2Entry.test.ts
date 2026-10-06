@@ -134,7 +134,7 @@ describe('v2 entry', () => {
     expect(overview, 'Overview.tsx holds ops-bar').not.toMatch(/ops-bar/i)
   })
 
-  it('VE-05 (source pin) .ops-input:focus sets the ring border; app-layer.css forces it with !important', () => {
+  it('VE-05 (source pin) .ops-input:focus sets the ring border; v2/app-layer.css forces it with !important', () => {
     const focus = cssBlock(OPS_CSS, '.ops-input:focus')
     expect(focus).toMatch(/(?:^|;)\s*border-color:\s*var\(--ring\)\s*(?:;|$)/)
     expect(focus).not.toContain('var(--accent)')

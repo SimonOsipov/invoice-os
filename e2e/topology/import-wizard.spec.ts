@@ -4786,7 +4786,7 @@ test('EXTR12-E2E-05 (AC-2/AC-3/AC-6): a box drawn on page 2 is the box the scree
   // -- CLAIM 1 (AC-6) -- the armed state is visible on the DEPLOYED build.
   //
   // The RESOLVED value, not the declaration: the jsdom row reads `el.style.*` and would pass
-  // under an app-layer.css rule overriding the inline colour. This is the row that catches it.
+  // under a v2/app-layer.css rule overriding the inline colour. This is the row that catches it.
   const paint = async () =>
     button.evaluate((el) => {
       const cs = getComputedStyle(el)

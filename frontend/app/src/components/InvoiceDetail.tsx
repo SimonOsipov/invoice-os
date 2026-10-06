@@ -1152,7 +1152,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
         </div>
 
         {/* Rendered inline, never portalled: `--bg-*`/`--fg-*` are declared on `.asc-app`
-            (app-layer.css), and this tree is inside it. Modal open state is local
+            (v2/app-layer.css), and this tree is inside it. Modal open state is local
             to this component -- nothing about it belongs on PlatformCtx. */}
         {previewOpen && (
           <SourceDocumentModal

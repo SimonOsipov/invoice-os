@@ -2,7 +2,7 @@
 // full height), its header, the canvas/rail body grid, and the state dispatch.
 //
 // Rendered inline by LiveInvoiceDetail, never portalled to document.body: `--bg-*` /
-// `--fg-*` / `--status-*` are declared on `.asc-app` (app-layer.css), so markup
+// `--fg-*` / `--status-*` are declared on `.asc-app` (v2/app-layer.css), so markup
 // outside that tree resolves none of them.
 //
 // The shell owns all three load channels because `sourceDocumentState` needs all three

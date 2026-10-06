@@ -23,7 +23,7 @@ test.beforeAll(async () => {
   await ensureFirmPolicyActive(await login(PERSONAS.A))
 })
 
-// Copied from import-wizard.spec.ts: spec files do not import each other.
+// Copy of importWizardShared.ts's collectErrors: spec files do not import each other.
 function collectErrors(page: Page, extra?: Dropper): string[] {
   const errors: string[] = []
   const droppers = [approvalRun404Dropper(page), ...(extra ? [extra] : [])]
@@ -330,7 +330,7 @@ async function assertGridAligned(page: Page, headerLabel: string, label: string)
   return { rows: m.rows.length }
 }
 
-// Copied from import-wizard.spec.ts: the document journey to the invoice detail, then the review screen.
+// Copy of importWizardShared.ts's extractOneDocument: the document journey to the invoice detail, then the review screen.
 async function extractOneDocument(
   page: Page,
   label: string,

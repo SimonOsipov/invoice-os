@@ -45,7 +45,7 @@ Neither path licenses a silent feature cut.
 gh pr checks [PR_NUMBER]
 # CI (ci.yml) rolls up: go, frontend, clean-clone, migrations, docker-canary, rls, queue, audit.
 # dev-env.yml (on a ready PR): prepare-env (ci-watch alongside; red CI stops the run) → deploy-gateway (migrator) → health-gate →
-#   deploy-context ×7 + deploy-spas ×3 → fleet-gate → e2e (smoke + api) → topology ×3 (serial-lane, import-wizard, invoice-surfaces).
+#   deploy-context ×7 + deploy-spas ×3 → fleet-gate → e2e (smoke + api) → topology ×4 (serial-lane, import-wizard, import-wizard-2, invoice-surfaces).
 ```
 
 Not part of the gate: `dev-env-teardown.yml` (deletes the PR environment on close), `dev-env-sweeper.yml` (daily reaper of orphaned PR environments), `railway-invariants.yml` (asserts Railway PR Environments stay OFF). CI tears environments down; never use destructive Railway MCP calls.

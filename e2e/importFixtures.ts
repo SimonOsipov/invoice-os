@@ -18,7 +18,7 @@
 // INVCR-01-09 deleted `statValue()` from this file. It located a CreateReport.tsx `Stat`
 // tile's value by an xpath sibling step off a `.label` div -- a two-child shape that
 // stopped existing when the review shell replaced that component. Its three call sites
-// (all in import-wizard.spec.ts, its only consumer) were rewritten against the new
+// (all in import-wizard.spec.ts) were rewritten against the new
 // header/tile copy rather than re-pointed, because the facts moved sources too: the
 // invoice count is now a LIVE pagination.total, not the 201 body's frozen counter.
 

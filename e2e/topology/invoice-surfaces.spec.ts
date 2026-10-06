@@ -5185,7 +5185,7 @@ const EXTR09_PNG_BYTES = new Uint8Array(
 //
 // NO LONGER INERT. EXTR-15-02 made DOCX boxless, so the worker skips page rendering and hands
 // these bytes to the reader, which refuses them: the job dead-letters at text_not_read. This
-// recipe is therefore also EXTR-15-12's T3 fixture — import-wizard.spec.ts rebuilds it as
+// recipe is therefore also EXTR-15-12's T3 fixture — import-wizard-2.spec.ts rebuilds it as
 // uniqueEmptyDocxBytes() for EXTR15-E2E-04, which asserts exactly that kind. On the previewer
 // path observed HERE it still reaches the `unrenderable` canvas, which fetches no bytes at all.
 function extr09Docx(): Uint8Array<ArrayBuffer> {
@@ -5451,7 +5451,7 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
       '   `Store.SettledExtraction` selects `state = \'succeeded\'`, and the empty zip above never gets',
       '   there: EXTR-15-02 made DOCX boxless, so the worker skips page rendering, the reader refuses',
       '   the bytes and the job dead-letters at `text_not_read`. A REAL DOCX does reach an invoice now —',
-      '   import-wizard.spec.ts\'s EXTR15-E2E-03 (EXTR-15-12) reads one through the deployed sidecar and',
+      '   import-wizard-2.spec.ts\'s EXTR15-E2E-03 (EXTR-15-12) reads one through the deployed sidecar and',
       '   asserts its printed number, date and total. The import attempt above is the evidence for this',
       '   fixture only.',
       '3. **One attempt each.** The enqueue key `extract:<document_id>` is permanent, so a dead-lettered',

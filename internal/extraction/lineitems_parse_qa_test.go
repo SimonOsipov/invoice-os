@@ -93,11 +93,11 @@ func TestParseLineFieldName_RefusesAnIndexThatOverflows(t *testing.T) {
 // ParseLineFieldName's doc comment claims it mirrors the SPA's own regex. The SPA parses the
 // same names off the same wire, so a change on either side that the other does not follow shows
 // up as a grid row the server settled and the browser ignores. Pinned by reading the source.
-// A third mirror lives in e2e/topology/import-wizard.spec.ts (LINE_CELL_RE, deliberately
+// A third mirror lives in e2e/topology/import-wizard-2.spec.ts (LINE_CELL_RE, deliberately
 // restated because e2e compiles against no frontend module) -- both must move together.
 func TestParseLineFieldName_MirrorsTheSPARegex(t *testing.T) {
 	const spaPath = "../../frontend/app/src/lib/lineItems.ts"
-	const e2ePath = "../../e2e/topology/import-wizard.spec.ts"
+	const e2ePath = "../../e2e/topology/import-wizard-2.spec.ts"
 
 	// The index half: 1-based, no leading zero, no sign.
 	const want = `/^line_items\[([1-9][0-9]*)\]\.(description|quantity|unit_price|line_total|line_tax)$/`

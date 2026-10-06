@@ -324,9 +324,9 @@ describe('the declarations this control depends on', () => {
   // before this control existed; if the executor picks a synonym, that mismatch would
   // otherwise surface only at EXTR-11-09's deploy gate.
   it('card_theTestidMatchesTheDeployedLocator', () => {
-    const spec = readFileSync(join(REPO_ROOT, 'e2e', 'topology', 'import-wizard.spec.ts'), 'utf8')
+    const spec = readFileSync(join(REPO_ROOT, 'e2e', 'topology', 'importWizardShared.ts'), 'utf8')
     const start = spec.indexOf('async function openExtractionReview(')
-    expect(start, 'openExtractionReview not found -- EXTR-11-05\'s helper moved or was renamed').toBeGreaterThan(-1)
+    expect(start, 'openExtractionReview not found in importWizardShared.ts -- EXTR-11-05\'s helper moved or was renamed').toBeGreaterThan(-1)
     const body = spec.slice(start, spec.indexOf('\n}\n', start))
     const match = body.match(/getByTestId\('([^']+)'\)\s*\.click\(\)/)
     expect(match, 'the helper no longer clicks a testid -- this pin is reading the wrong thing').not.toBeNull()

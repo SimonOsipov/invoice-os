@@ -266,11 +266,12 @@ gql_attempt() {
 # An HTTP 429 is not a transient attempt: it waits Railway's wait and resends once, any call.
 # The waits of a job total 600 s ($RUNNER_TEMP/railway-api-429-waited; per process without it).
 # Only an exhausted budget prints, as ::error::.
+# GQL_ERROR_SAFE=1 marks a GQL_ERROR the script built itself (a fatal 429): callers may print it.
 graphql_try() {
   local body="$1" ctx="$2" max=3 t=0 h=0 rl=0 earlier="" waited_file="" waited=0 last_wait=""
   [ "${3:-}" = once ] && max=1
   [ -z "${RUNNER_TEMP:-}" ] || waited_file="$RUNNER_TEMP/railway-api-429-waited"
-  GQL_REPORTED=0
+  GQL_REPORTED=0 GQL_ERROR_SAFE=0
 
   while :; do
     h=$((h + 1))
@@ -289,14 +290,17 @@ graphql_try() {
       GQL_FAULT=fatal
       if [ "$rl" -gt 1 ]; then
         GQL_ERROR="Railway rate-limited this call (HTTP 429) a second time while $ctx, after a wait of ${last_wait} s; not retried."
+        GQL_ERROR_SAFE=1
         return 1
       fi
       if [ -z "$GQL_WAIT" ]; then
         GQL_ERROR="Railway rate-limited this call (HTTP 429) while $ctx and gave no wait (no usable Retry-After or X-RateLimit-Reset); not retried."
+        GQL_ERROR_SAFE=1
         return 1
       fi
       if [ "${#GQL_WAIT}" -gt 3 ] || [ "$GQL_WAIT" -gt 600 ]; then
         GQL_ERROR="Railway rate-limited this call (HTTP 429) while $ctx and asked for a wait of ${GQL_WAIT} s, over the 600 s limit; not retried."
+        GQL_ERROR_SAFE=1
         return 1
       fi
       if [ -n "$waited_file" ]; then
@@ -308,6 +312,7 @@ graphql_try() {
       waited=$((10#$waited))
       if [ $((waited + GQL_WAIT)) -gt 600 ]; then
         GQL_ERROR="Railway rate-limited this call (HTTP 429) while $ctx and asked for a wait of ${GQL_WAIT} s with ${waited} s already waited in this job; the total limit is 600 s; not retried."
+        GQL_ERROR_SAFE=1
         return 1
       fi
       echo "::warning::Railway rate-limited this call (HTTP 429) while $ctx; waiting ${GQL_WAIT} s, then sending it once more." >&2
@@ -1038,6 +1043,7 @@ read_vars_batch() {
       READ_FAIL_WHY="Railway answered a GraphQL error"
     else
       READ_FAIL_WHY="$GQL_LAST"
+      [ "${GQL_ERROR_SAFE:-0}" != 1 ] || READ_FAIL_WHY="$GQL_ERROR"
     fi
     return 1
   fi
@@ -2995,6 +3001,7 @@ pass_write_detail() {
   d=$(printf '%s' "$GQL_RESPONSE" | jq -r --arg a "$1" '
     [.errors[]? | select($a == "" or .path[0]? == $a)] | first // empty
     | "Railway \(.extensions.code // "error"), trace \(.extensions.traceId // "unknown")"' 2>/dev/null) || d=""
+  if [ "${GQL_ERROR_SAFE:-0}" = 1 ]; then d="$GQL_ERROR"; fi
   printf '%s' "${d:-$GQL_LAST}"
 }
 
@@ -3763,7 +3770,7 @@ cmd_discover_urls() {
       done
       echo "::error::Could not read the public URLs of environment $env_id${who:+ ($who unreadable)}: Railway answered a GraphQL error." >&2
     elif [ "$GQL_REPORTED" != 1 ]; then
-      echo "::error::Could not read the public URLs of environment $env_id: $GQL_LAST" >&2
+      echo "::error::Could not read the public URLs of environment $env_id: $([ "${GQL_ERROR_SAFE:-0}" = 1 ] && printf '%s' "$GQL_ERROR" || printf '%s' "$GQL_LAST")" >&2
     fi
     exit 1
   fi

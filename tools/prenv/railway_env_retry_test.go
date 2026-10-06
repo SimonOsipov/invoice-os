@@ -1896,6 +1896,36 @@ func transportScript(t *testing.T, dir string) string {
 		"graphql_try \"$(cat '" + filepath.Join(dir, "body") + "')\" 'sending the test body'\nprintf '%s' \"$GQL_RESPONSE\"\n"
 }
 
+// GQL_ERROR_SAFE marks only the fatal-429 errors the script builds itself; a later call never inherits it.
+func TestRailwayAPI_ErrorSafeFlagIsPerCall(t *testing.T) {
+	const needle = "PLANTED-RAILWAY-MESSAGE"
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "body"), `{"query":"query q { x }"}`)
+	stub := "#!/bin/sh\nn=$(cat '" + dir + "/n' 2>/dev/null || echo 0); n=$((n + 1)); echo $n > '" + dir + "/n'\n" +
+		"hdr=''; while [ $# -gt 0 ]; do [ \"$1\" = -D ] && hdr=\"$2\"; shift; done\ncat > /dev/null\n" +
+		"if [ $n = 1 ]; then printf 'HTTP/2 429\\r\\nretry-after: 601\\r\\n\\r\\n' > \"$hdr\"; echo 'curl: (22) The requested URL returned error: 429' >&2; exit 22; fi\n" +
+		"printf '{\"errors\":[{\"message\":\"" + needle + "\"}]}'; echo 'curl: (22) The requested URL returned error: 400' >&2; exit 22\n"
+	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := strings.Replace(transportScript(t, dir), "graphql_try \"$(cat '"+filepath.Join(dir, "body")+"')\" 'sending the test body'\nprintf '%s' \"$GQL_RESPONSE\"\n", "", 1) +
+		"graphql_try \"$(cat '" + filepath.Join(dir, "body") + "')\" 'first' || true\nprintf 'first safe=%s\\n' \"$GQL_ERROR_SAFE\"\n" +
+		"graphql_try \"$(cat '" + filepath.Join(dir, "body") + "')\" 'second' || true\nprintf 'second safe=%s\\n%s\\n' \"$GQL_ERROR_SAFE\" \"$GQL_ERROR\"\n"
+	stdout, stderr, code := runBashScript(t, script)
+	if code != 0 {
+		t.Fatalf("exit %d; stdout %q, stderr %q", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "first safe=1") {
+		t.Errorf("a fatal 429 did not set GQL_ERROR_SAFE; stdout = %q", stdout)
+	}
+	if !strings.Contains(stdout, "second safe=0") {
+		t.Errorf("a later HTTP 400 inherited or set GQL_ERROR_SAFE; stdout = %q", stdout)
+	}
+	if !strings.Contains(stdout, needle) {
+		t.Errorf("control: the 400's GQL_ERROR does not carry the planted message, so the flag guards nothing; stdout = %q", stdout)
+	}
+}
+
 // A body over the pipe buffer: bash 5 moves a large here-string to a temp file, bash 3.2 any.
 func largeSecretBody() string {
 	return `{"query":"mutation varUpsert { x }","variables":{"v":"` + strings.Repeat("s3cr3t-", 20000) + `"}}`

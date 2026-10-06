@@ -470,6 +470,11 @@ func TestForkPass_FailedReadsFailBeforeAnyWrite(t *testing.T) {
 			writeFile(t, filepath.Join(s.dir, "hdr.txt"), "HTTP/2 429\r\nretry-after: 30\r\n\r\n")
 			writeFile(t, filepath.Join(s.dir, "faultbody-varsRead"), `{"errors":[{"message":"`+passEchoNeedle+`"}]}`)
 		}, "429", "second|30"},
+		{"a 429 with no wait given on the first read names it", func(t *testing.T, s authShim) {
+			setFaults(t, s, "varsRead", "429")
+			plantRateLimitHeaders(t, s)
+			writeFile(t, filepath.Join(s.dir, "faultbody-varsRead"), `{"errors":[{"message":"`+passEchoNeedle+`"}]}`)
+		}, "429", "gave no wait"},
 		{"a settle with two auth instances", func(t *testing.T, s authShim) {
 			dup := `{"node":{"serviceId":"svc-auth-dup","serviceName":"auth"}}`
 			writeFile(t, filepath.Join(s.dir, "settle.json"), strings.Replace(gtSettle(t), `"edges":[`, `"edges":[`+dup+`,`, 1))
@@ -507,6 +512,20 @@ func TestForkPass_FailedReadsFailBeforeAnyWrite(t *testing.T) {
 			}
 		})
 	}
+	t.Run("a 429 over the job's 600 s total on the first read names the total", func(t *testing.T) {
+		s := newPassShim(t, nil, nil)
+		setFaults(t, s, "varsRead", "429")
+		plantRateLimitHeaders(t, s, "retry-after: 30")
+		writeFile(t, filepath.Join(s.dir, "faultbody-varsRead"), `{"errors":[{"message":"`+passEchoNeedle+`"}]}`)
+		tmp := t.TempDir()
+		writeFile(t, filepath.Join(tmp, "railway-api-429-waited"), "590\n")
+		stdout, stderr, code := s.run(t, forkAuthExports()+runnerTempExport(tmp), passSub, authForkEnvID)
+		out := stdout + stderr
+		if code != 1 || opCount(t, s, "varsWrite") != 0 {
+			t.Errorf("exit %d with %d varsWrite call(s), want exit 1 and none; output = %q", code, opCount(t, s, "varsWrite"), clip(out))
+		}
+		requireWaitNamed(t, out, `429`, `\b590\b`, `\b600\b`)
+	})
 	t.Run("control: no fault writes once", func(t *testing.T) {
 		s := newPassShim(t, nil, nil)
 		if out, code := runPass(t, s); code != 0 || opCount(t, s, "varsWrite") != 1 {

@@ -18,6 +18,9 @@ const (
 
 	// Resend's batch endpoint rejects more than 100 emails.
 	maxBatch = 100
+
+	// ceiling: keeps the last 100 messages in memory; raise it if a preview needs more history
+	captureKeep = 100
 )
 
 type Message struct{ To, Subject, HTML string }
@@ -102,7 +105,7 @@ func (c *Capture) Send(_ context.Context, msgs []Message) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.msgs = append(c.msgs, msgs...)
-	if n := len(c.msgs) - maxBatch; n > 0 {
+	if n := len(c.msgs) - captureKeep; n > 0 {
 		c.msgs = append([]Message(nil), c.msgs[n:]...)
 	}
 	return nil

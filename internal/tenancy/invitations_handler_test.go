@@ -575,8 +575,8 @@ func TestInvitationsAPI_FailedSendIsVisible(t *testing.T) {
 			t.Errorf("log holds %q:\n%s", secret, logs)
 		}
 	}
-	if !strings.Contains(logs, "count=1") || !strings.Contains(logs, "status 500") {
-		t.Errorf("failure line lacks count=1 or the status text %q:\n%s", "status 500", logs)
+	if !strings.Contains(logs, "count=1") || !strings.Contains(logs, "status=500") || !strings.Contains(logs, "status 500") {
+		t.Errorf("failure line lacks count=1, status=500 or the status text %q:\n%s", "status 500", logs)
 	}
 
 	events := sentry.Events()
@@ -611,6 +611,9 @@ func TestInvitationsAPI_UnconfiguredSenderFails(t *testing.T) {
 	}
 	if row := pendingRow(t, a.super, a.tenant, "b@x.test"); row.SendStatus != "failed" {
 		t.Errorf("send_status = %q, want failed", row.SendStatus)
+	}
+	if logs := a.logs.String(); !strings.Contains(logs, "status=0") {
+		t.Errorf("failure line lacks status=0:\n%s", logs)
 	}
 }
 

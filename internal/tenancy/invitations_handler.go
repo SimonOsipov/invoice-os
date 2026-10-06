@@ -3,6 +3,7 @@ package tenancy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -98,7 +99,12 @@ func (i *Inviter) deliver(ctx context.Context, issued []IssuedInvite) []InviteRe
 		}
 	}
 	if firstErr != nil {
-		i.Logger.ErrorContext(ctx2, "tenancy: invite mail failed", slog.Int("count", failed), slog.Any("err", firstErr))
+		var status int
+		var se *accountmail.SendError
+		if errors.As(firstErr, &se) {
+			status = se.Status
+		}
+		i.Logger.ErrorContext(ctx2, "tenancy: invite mail failed", slog.Int("count", failed), slog.Int("status", status), slog.Any("err", firstErr))
 		platform.CaptureError(ctx2, firstErr)
 	}
 
@@ -193,7 +199,7 @@ func InvitationsCreateHandler(invite InviteFunc, log *slog.Logger) http.HandlerF
 			return
 		}
 		if len(emails) < 1 || len(emails) > maxInviteEmails {
-			writeError(w, http.StatusBadRequest, "emails must hold 1 to 20 addresses")
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("emails must hold 1 to %d addresses", maxInviteEmails))
 			return
 		}
 		items, err := invite(r.Context(), emails, req.Role)

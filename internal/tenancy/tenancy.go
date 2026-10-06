@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -403,7 +404,7 @@ func statusForErr(err error) (status int, msg string) {
 	case errors.Is(err, ErrInvitationNotPending):
 		return http.StatusConflict, "this invite is no longer pending"
 	case errors.Is(err, ErrDailyInviteLimit):
-		return http.StatusTooManyRequests, "daily invite limit reached: 20 invite mails per workspace per 24 hours"
+		return http.StatusTooManyRequests, fmt.Sprintf("daily invite limit reached: %d invite mails per workspace per 24 hours", maxInviteMailsPerDay)
 	case errors.Is(err, ErrAlreadyProvisioned):
 		return http.StatusConflict, "this account already has a workspace"
 	default:

@@ -89,9 +89,13 @@ export function resendSentNotice(email: string): string {
   return `If ${email} still needs verifying, a new link is on its way. Use the newest one.`
 }
 
-export async function resendVerification(email: string): Promise<void> {
+async function postEmail(path: string, email: string): Promise<void> {
   const base = gatewayBase()
   if (!base) throw new ApiError('malformed', 'gateway not configured')
   // The 202 body is never read, so a non-JSON one must not fail.
-  await apiFetch<string>(`${base}/auth/resend-verification`, { method: 'POST', body: { email: email.trim() }, responseType: 'text' })
+  await apiFetch<string>(`${base}${path}`, { method: 'POST', body: { email: email.trim() }, responseType: 'text' })
 }
+
+export const resendVerification = (email: string) => postEmail('/auth/resend-verification', email)
+
+export const requestPasswordReset = (email: string) => postEmail('/auth/request-password-reset', email)

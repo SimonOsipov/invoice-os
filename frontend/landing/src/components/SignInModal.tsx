@@ -1,7 +1,8 @@
 // Landing sign-in: the email/password form, or the unavailable copy when the gateway is unset.
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { SIGN_IN_UNAVAILABLE, signInConfigured, type ConsoleTarget } from '../signIn'
+import { ForgotPasswordForm } from './ForgotPasswordForm'
 import { SignInForm } from './SignInForm'
 import { Eyebrow } from './ds/Eyebrow'
 import { MODAL_CHROME_CSS, MODAL_SCRIM_STYLE, ModalHeader, modalCardStyle } from './modalChrome'
@@ -10,7 +11,15 @@ export const HEADING_STYLE = { fontSize: 22, letterSpacing: '-0.03em', fontWeigh
 
 const NO_STATE = () => null
 
-export function SignInModal({ onClose, heldState = NO_STATE, initialError, consoleTarget, onCreateAccount }: { onClose: () => void; heldState?: () => string | null; initialError?: string; consoleTarget?: ConsoleTarget; onCreateAccount?: () => void; initialView?: 'sign-in' | 'forgot' }) {
+export function SignInModal({ onClose, heldState = NO_STATE, initialError, consoleTarget, onCreateAccount, initialView = 'sign-in' }: { onClose: () => void; heldState?: () => string | null; initialError?: string; consoleTarget?: ConsoleTarget; onCreateAccount?: () => void; initialView?: 'sign-in' | 'forgot' }) {
+  const [view, setView] = useState(initialView)
+  // Leaving the sign-in view drops the boot error for good.
+  const [shownError, setShownError] = useState(initialError)
+  const show = (next: typeof view) => {
+    if (next !== 'sign-in') setShownError(undefined)
+    setView(next)
+  }
+
   // Close on Escape (never a native dialog).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -42,10 +51,14 @@ export function SignInModal({ onClose, heldState = NO_STATE, initialError, conso
           <div style={{ marginBottom: 14 }}>
             <Eyebrow>PLATFORM LOGIN</Eyebrow>
           </div>
-          <h3 style={{ ...HEADING_STYLE, margin: '0 0 16px' }}>Sign in to your workspace</h3>
+          <h3 style={{ ...HEADING_STYLE, margin: '0 0 16px' }}>{view === 'forgot' ? 'Reset your password' : 'Sign in to your workspace'}</h3>
           {signInConfigured() ? (
             <>
-              <SignInForm heldState={heldState} initialError={initialError} consoleTarget={consoleTarget} />
+              {view === 'forgot' ? (
+                <ForgotPasswordForm onBack={() => show('sign-in')} />
+              ) : (
+                <SignInForm heldState={heldState} initialError={shownError} consoleTarget={consoleTarget} onForgot={() => show('forgot')} />
+              )}
               {onCreateAccount && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--border)', fontSize: 13, color: 'var(--muted-foreground)' }}>
                   New to ASComply?

@@ -289,6 +289,25 @@ describe('provisionAll', () => {
     expect(accounts.support.email.startsWith('ctl-support-')).toBe(true)
   })
 
+  it('a staff password is independent of the email login prints', async () => {
+    const L = await load()
+    const gw = stubGateway()
+    process.env.GATEWAY_URL = urls.GATEWAY_URL
+    process.env.APP_URL = urls.APP_URL
+
+    const accounts = await L.provisionAll()
+
+    for (const k of ['developer', 'support'] as const) {
+      const { email, password } = accounts[k]
+      expect(password.length, k).toBeGreaterThanOrEqual(16)
+      expect(email.includes(password), `${k} email contains its password`).toBe(false)
+      expect(email.includes(password.slice(0, 8)), `${k} email carries a password fragment`).toBe(false)
+      const sent = gw.requests.find((r) => r.path === '/auth/register' && r.body.email === email)
+      expect(sent?.body.password, `${k} register carries the stored password`).toBe(password)
+    }
+    expect(accounts.developer.password).not.toBe(accounts.support.password)
+  })
+
   it('a failure partway through provisionAll writes nothing', async () => {
     const L = await load()
     const root = mkdtempSync(path.join(tmpdir(), 'ctl-login-'))

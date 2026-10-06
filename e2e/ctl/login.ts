@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
@@ -166,7 +167,7 @@ export async function provisionAll(): Promise<Accounts> {
     }
   }
   for (const key of ['developer', 'support'] as const) {
-    const { email, password, userId } = await provisionStaffAccount(`ctl-${key}`)
+    const { email, password, userId } = await provisionStaffAccount(`ctl-${key}`, randomBytes(16).toString('hex'))
     accounts[key] = { email, password, userId }
   }
   return accounts

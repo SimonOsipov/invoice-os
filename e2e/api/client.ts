@@ -147,9 +147,10 @@ export async function provisionRealAccount(prefix: string, kind: TenantKind = 'f
 }
 
 // A fresh GoTrue account with no workspace. Forks auto-confirm, so it signs in at once.
-export async function registerFresh(prefix = 'handoff'): Promise<{ email: string; password: string }> {
+// `password` defaults to a slice of the email's id; pass one when the email is shown to a human.
+export async function registerFresh(prefix = 'handoff', password?: string): Promise<{ email: string; password: string }> {
   const id = crypto.randomUUID()
-  const account = { email: `${prefix}-${id}@example.com`, password: id.slice(0, 16) }
+  const account = { email: `${prefix}-${id}@example.com`, password: password ?? id.slice(0, 16) }
   const res = await rawFetch('/auth/register', { method: 'POST', body: account })
   if (res.status !== 202) throw new Error(`register answered ${res.status}: ${JSON.stringify(res.body)}`)
   return account
@@ -231,8 +232,8 @@ export interface StaffAccount {
 }
 
 // POST /auth/mock/staff exists only in the mock build, which every PR fork runs.
-export async function provisionStaffAccount(prefix: string): Promise<StaffAccount> {
-  const account = await registerFresh(prefix)
+export async function provisionStaffAccount(prefix: string, password?: string): Promise<StaffAccount> {
+  const account = await registerFresh(prefix, password)
   const userId = subjectOf((await signInSession(account.email, account.password)).access_token)
   const grant = await rawFetch('/auth/mock/staff', { method: 'POST', body: { user_id: userId } })
   if (grant.status !== 204) throw new Error(`staff grant answered ${grant.status}: ${JSON.stringify(grant.body)}`)

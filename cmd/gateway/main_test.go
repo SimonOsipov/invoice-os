@@ -1221,7 +1221,7 @@ func TestRegistrationHandlers_WiresBothRoutes(t *testing.T) {
 	}
 }
 
-// AUTH_SITE_URL unset: both routes refuse without calling GoTrue.
+// AUTH_SITE_URL unset: every GoTrue route refuses without calling GoTrue.
 func TestRegistrationHandlers_NotConfigured503(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	reg := registrationHandlers(authURL, nil, 0, slog.New(slog.DiscardHandler), nil)
@@ -1229,6 +1229,8 @@ func TestRegistrationHandlers_NotConfigured503(t *testing.T) {
 	for name, rec := range map[string]*httptest.ResponseRecorder{
 		"Register": serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`),
 		"Verify":   serveForm(reg.Verify, "/auth/verify", "token=T&type=signup"),
+
+		"ResendVerification": serveRegistration(reg.ResendVerification, http.MethodPost, "/auth/resend-verification", `{"email":"new@corp.example"}`),
 	} {
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Errorf("%s = %d, want 503: %s", name, rec.Code, rec.Body.String())
@@ -1241,6 +1243,143 @@ func TestRegistrationHandlers_NotConfigured503(t *testing.T) {
 	}
 	if got := calls(); len(got) != 0 {
 		t.Errorf("GoTrue saw %v, want no calls", got)
+	}
+}
+
+// resendFrom posts one resend for email as the client behind remote.
+func resendFrom(h http.Handler, email, remote string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/auth/resend-verification", strings.NewReader(`{"email":"`+email+`"}`))
+	req.RemoteAddr = remote
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// registerFrom posts one register for email as the client behind remote.
+func registerFrom(h http.Handler, email, remote string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(`{"email":"`+email+`","password":"Corr3ct-Horse"}`))
+	req.RemoteAddr = remote
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// countCalls counts the recorded GoTrue calls equal to want.
+func countCalls(calls []string, want string) int {
+	n := 0
+	for _, c := range calls {
+		if c == want {
+			n++
+		}
+	}
+	return n
+}
+
+func TestRegistrationHandlers_ResendWaitsAndLimits(t *testing.T) {
+	const remote = "203.0.113.7:4000"
+	for _, c := range []struct {
+		name      string
+		floor     time.Duration
+		addresses []string
+		wantCalls int
+	}{
+		{"waits", 300 * time.Millisecond, []string{"ada@corp.example"}, 1},
+		{"three", 0, []string{"ada@corp.example", "ada@corp.example", "ada@corp.example"}, 3},
+		{"four", 0, []string{"ada@corp.example", "ada@corp.example", "ada@corp.example", "ada@corp.example"}, 3},
+		{"per key", 0, distinctAddresses(11), 10},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			authURL, calls := fakeAuth(t)
+			site, _ := url.Parse("https://site.example")
+			reg := registrationHandlers(authURL, site, c.floor, slog.New(slog.DiscardHandler), nil)
+
+			start := time.Now()
+			for _, email := range c.addresses {
+				rec := resendFrom(reg.ResendVerification, email, remote)
+				if rec.Code != http.StatusAccepted {
+					t.Errorf("resend = %d, want 202 whether or not it was sent: %s", rec.Code, rec.Body.String())
+				}
+			}
+			if elapsed := time.Since(start); elapsed < time.Duration(len(c.addresses))*c.floor {
+				t.Errorf("%d resends took %v, want no less than %v each", len(c.addresses), elapsed, c.floor)
+			}
+			if got := countCalls(calls(), "POST /resend"); got != c.wantCalls {
+				t.Errorf("GoTrue /resend calls = %d, want %d", got, c.wantCalls)
+			}
+		})
+	}
+}
+
+func distinctAddresses(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = "user" + strconv.Itoa(i) + "@corp.example"
+	}
+	return out
+}
+
+// Register's per-key bucket is its own: not removed, not shared with resend, not resend's per-address one.
+func TestRegistrationHandlers_RegisterHasItsOwnLimit(t *testing.T) {
+	const remote = "203.0.113.7:4000"
+	authURL, calls := fakeAuth(t)
+	site, _ := url.Parse("https://site.example")
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
+
+	for _, email := range distinctAddresses(11) {
+		if rec := registerFrom(reg.Register, email, remote); rec.Code != http.StatusAccepted {
+			t.Errorf("register = %d, want 202 over the limit too: %s", rec.Code, rec.Body.String())
+		}
+	}
+	if got := countCalls(calls(), "POST /signup"); got != 10 {
+		t.Errorf("GoTrue /signup calls = %d, want 10", got)
+	}
+
+	if rec := resendFrom(reg.ResendVerification, "ada@corp.example", remote); rec.Code != http.StatusAccepted {
+		t.Errorf("resend = %d, want 202: %s", rec.Code, rec.Body.String())
+	}
+	if got := countCalls(calls(), "POST /resend"); got != 1 {
+		t.Errorf("GoTrue /resend calls after a spent register bucket = %d, want 1", got)
+	}
+}
+
+// A PR fork counts and logs register's limit but does not refuse; production refuses the eleventh.
+func TestRegistrationHandlers_PreviewOnlyLogs(t *testing.T) {
+	for _, c := range []struct {
+		env          string
+		wantSignups  int
+		wantEnforced bool
+	}{
+		{"pr-7", 11, false},
+		{"production", 10, true},
+	} {
+		t.Run(c.env, func(t *testing.T) {
+			t.Setenv("RAILWAY_ENVIRONMENT_NAME", c.env)
+			authURL, calls := fakeAuth(t)
+			site, _ := url.Parse("https://site.example")
+			var logs bytes.Buffer
+			reg := registrationHandlers(authURL, site, 0, slog.New(slog.NewJSONHandler(&logs, nil)), nil)
+
+			for _, email := range distinctAddresses(11) {
+				registerFrom(reg.Register, email, "203.0.113.7:4000")
+			}
+			if got := countCalls(calls(), "POST /signup"); got != c.wantSignups {
+				t.Errorf("GoTrue /signup calls = %d, want %d", got, c.wantSignups)
+			}
+			var limited int
+			for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+				var rec map[string]any
+				if json.Unmarshal([]byte(line), &rec) != nil || rec["msg"] != "registration: limit reached" {
+					continue
+				}
+				limited++
+				if rec["enforced"] != c.wantEnforced {
+					t.Errorf("limit line enforced = %v, want %v: %s", rec["enforced"], c.wantEnforced, line)
+				}
+			}
+			if limited != 1 {
+				t.Errorf("%d limit lines, want exactly 1 for the eleventh register", limited)
+			}
+		})
 	}
 }
 

@@ -265,7 +265,7 @@ func gatewayHandlers(
 
 // registration holds the public registration handlers main mounts outside /api/.
 type registration struct {
-	Register, Verify, DemoRequest http.Handler
+	Register, Verify, DemoRequest, ResendVerification http.Handler
 }
 
 // newJWKSClient builds the JWKS fetch client.
@@ -273,12 +273,15 @@ func newJWKSClient() *http.Client {
 	return &http.Client{Timeout: 10 * time.Second, Transport: platform.TraceTransport(nil)}
 }
 
+// resendStub is a placeholder until the resend handler is wired.
+var resendStub = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotImplemented) })
+
 // registrationHandlers builds the registration handlers against GoTrue at authURL.
 // A nil siteURL means AUTH_SITE_URL is unset: Register and Verify answer 503.
 func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, log *slog.Logger, sink gateway.ContactSink) registration {
 	if authURL == nil || siteURL == nil {
 		nc := gateway.RegistrationNotConfigured()
-		return registration{Register: nc, Verify: nc, DemoRequest: gateway.DemoRequestHandler(sink, log)}
+		return registration{Register: nc, Verify: nc, ResendVerification: resendStub, DemoRequest: gateway.DemoRequestHandler(sink, log)}
 	}
 	client := &http.Client{
 		Timeout:       10 * time.Second,
@@ -289,7 +292,8 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 			gateway.NewSignInThrottle(gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now), true, log),
 		Verify: gateway.VerifyHandler(authURL, siteURL, client, log, sink),
 
-		DemoRequest: gateway.DemoRequestHandler(sink, log),
+		ResendVerification: resendStub,
+		DemoRequest:        gateway.DemoRequestHandler(sink, log),
 	}
 }
 

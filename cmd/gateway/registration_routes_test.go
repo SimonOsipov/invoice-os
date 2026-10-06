@@ -16,6 +16,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -226,6 +227,9 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 		"GET /auth/verify":       page,
 		"POST /auth/verify":      recv + ".Verify",
 
+		"POST /auth/resend-verification":    "withCORS(" + recv + ".ResendVerification)",
+		"OPTIONS /auth/resend-verification": "withCORS(" + recv + ".ResendVerification)",
+
 		"POST /contacts/demo-request":    "withCORS(" + recv + ".DemoRequest)",
 		"OPTIONS /contacts/demo-request": "withCORS(" + recv + ".DemoRequest)",
 	} {
@@ -411,6 +415,83 @@ func TestRegisterOptionsWithoutOriginIsNotARegistration(t *testing.T) {
 
 	// Positive pair: the same body as a POST does register.
 	if rec := postJSON(mux, "/auth/register", registerAllowedOrigin, body); rec.Code != http.StatusAccepted {
+		t.Fatalf("POST = %d, want 202: %s", rec.Code, rec.Body.String())
+	}
+	if got := calls(); len(got) != 1 {
+		t.Errorf("GoTrue saw %v after one POST, want one call", got)
+	}
+}
+
+// resendMux mounts the real resend handler behind the CORS allow-list on both patterns, as main does.
+func resendMux(t *testing.T) (*http.ServeMux, func() []string) {
+	t.Helper()
+	authURL, calls := fakeAuth(t)
+	site, _ := url.Parse("https://site.example")
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
+	withCORS := gateway.CORS([]string{registerAllowedOrigin})
+	mux := http.NewServeMux()
+	mux.Handle("POST /auth/resend-verification", withCORS(reg.ResendVerification))
+	mux.Handle("OPTIONS /auth/resend-verification", withCORS(reg.ResendVerification))
+	return mux, calls
+}
+
+func TestResendVerificationPreflightGrantsTheAllowedOrigin(t *testing.T) {
+	mux, calls := resendMux(t)
+	const path = "/auth/resend-verification"
+
+	rec := preflight(mux, path, registerAllowedOrigin)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("preflight from the allowed origin = %d, want 204", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != registerAllowedOrigin {
+		t.Errorf("preflight Access-Control-Allow-Origin = %q, want %q", got, registerAllowedOrigin)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(got, http.MethodPost) {
+		t.Errorf("preflight Access-Control-Allow-Methods = %q, want POST granted", got)
+	}
+
+	rec = preflight(mux, path, "https://evil.example")
+	for _, h := range []string{"Access-Control-Allow-Origin", "Access-Control-Allow-Methods", "Access-Control-Allow-Headers"} {
+		if got := rec.Header().Get(h); got != "" {
+			t.Errorf("preflight from a disallowed origin carries %s = %q, want none", h, got)
+		}
+	}
+	if got := calls(); len(got) != 0 {
+		t.Errorf("a preflight reached GoTrue: %v", got)
+	}
+
+	// Positive pair: the POST itself is answered, with the grant, and reaches GoTrue once.
+	rec = postJSON(mux, path, registerAllowedOrigin, `{"email":"new@corp.example"}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("POST from the allowed origin = %d, want 202: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != registerAllowedOrigin {
+		t.Errorf("POST Access-Control-Allow-Origin = %q, want %q", got, registerAllowedOrigin)
+	}
+	if got := calls(); !slices.Equal(got, []string{"POST /resend"}) {
+		t.Errorf("GoTrue saw %v after one POST, want one /resend", got)
+	}
+}
+
+// An OPTIONS without Origin is no preflight: it reaches the handler, which refuses it.
+func TestResendVerificationOptionsWithoutOriginIsNotAResend(t *testing.T) {
+	mux, calls := resendMux(t)
+	const body = `{"email":"new@corp.example"}`
+
+	req := httptest.NewRequest(http.MethodOptions, "/auth/resend-verification", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != http.MethodPost {
+		t.Errorf("OPTIONS with no Origin = %d Allow %q, want 405 Allow POST: %s", rec.Code, rec.Header().Get("Allow"), rec.Body.String())
+	}
+	if got := calls(); len(got) != 0 {
+		t.Errorf("an OPTIONS request reached GoTrue: %v", got)
+	}
+
+	// Positive pair: the same body as a POST does reach GoTrue.
+	if rec := postJSON(mux, "/auth/resend-verification", registerAllowedOrigin, body); rec.Code != http.StatusAccepted {
 		t.Fatalf("POST = %d, want 202: %s", rec.Code, rec.Body.String())
 	}
 	if got := calls(); len(got) != 1 {

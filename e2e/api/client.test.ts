@@ -691,3 +691,65 @@ describe('grantMembership', () => {
     expect(JSON.parse(init.body)).toEqual(GRANT)
   })
 })
+
+describe('setInvitationToken and inviteWithToken', () => {
+  const TENANT = '11111111-1111-1111-1111-111111111111'
+  const INVITATION = '22222222-2222-2222-2222-222222222222'
+  const TOKEN = 'A'.repeat(43)
+
+  function stubFetchSequence(...answers: { status: number; body?: unknown }[]) {
+    const stub = vi.fn(async () => {
+      const { status, body } = answers.shift()!
+      return new Response(body === undefined ? null : JSON.stringify(body), { status })
+    })
+    vi.stubGlobal('fetch', stub)
+    return stub
+  }
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('setInvitationToken posts the three fields and resolves on 204', async () => {
+    const { setInvitationToken } = await import('./client')
+    const stub = stubFetchSequence({ status: 204 })
+
+    await expect(setInvitationToken(TENANT, INVITATION, TOKEN)).resolves.toBeUndefined()
+
+    const [url, init] = stub.mock.calls[0] as unknown as [string, { method: string; body: string }]
+    expect(url.endsWith('/auth/mock/invitation-token')).toBe(true)
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({ tenant_id: TENANT, invitation_id: INVITATION, token: TOKEN })
+  })
+
+  it('setInvitationToken throws on every answer but 204', async () => {
+    const { setInvitationToken } = await import('./client')
+    for (const status of [200, 400, 404, 502]) {
+      stubFetchSequence({ status, body: { error: 'refused' } })
+      const err = await captureRejection(setInvitationToken(TENANT, INVITATION, TOKEN))
+      expect(err.message, String(status)).toContain(String(status))
+    }
+  })
+
+  it('inviteWithToken invites, seeds a 43-character token on the invite it created and returns it', async () => {
+    const { inviteWithToken } = await import('./client')
+    const stub = stubFetchSequence({ status: 200, body: { invitations: [{ id: INVITATION }] } }, { status: 204 })
+
+    const token = await inviteWithToken('admin-token', TENANT, 'who@example.com', 'preparer')
+
+    expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    const [inviteUrl, inviteInit] = stub.mock.calls[0] as unknown as [string, { body: string; headers: Record<string, string> }]
+    expect(inviteUrl.endsWith('/api/tenancy/v1/invitations')).toBe(true)
+    expect(inviteInit.headers.Authorization).toBe('Bearer admin-token')
+    expect(JSON.parse(inviteInit.body)).toEqual({ emails: ['who@example.com'], role: 'preparer' })
+    const [, seedInit] = stub.mock.calls[1] as unknown as [string, { body: string }]
+    expect(JSON.parse(seedInit.body)).toEqual({ tenant_id: TENANT, invitation_id: INVITATION, token })
+  })
+
+  it('inviteWithToken throws when the invite is refused and seeds nothing', async () => {
+    const { inviteWithToken } = await import('./client')
+    const stub = stubFetchSequence({ status: 400, body: { error: 'bad' } })
+
+    const err = await captureRejection(inviteWithToken('admin-token', TENANT, 'who@example.com'))
+
+    expect(err.message).toContain('400')
+    expect(stub).toHaveBeenCalledTimes(1)
+  })
+})

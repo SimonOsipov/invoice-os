@@ -102,24 +102,53 @@ type collectionWrite struct {
 	Input        map[string]any
 }
 
+// collectionWritesIn lists one collectionWrite per service input: the single write's input,
+// or each iK input of a batched varsWrite, in alias order. A batched call shares one At.
 func collectionWritesIn(calls []railwayCall) []collectionWrite {
 	var out []collectionWrite
 	for i, c := range calls {
 		if !strings.Contains(c.Query, "variableCollectionUpsert(") {
 			continue
 		}
-		in, _ := c.Variables["input"].(map[string]any)
-		w := collectionWrite{At: i, Input: in, Vars: map[string]string{}, SkipDeploys: in["skipDeploys"]}
-		w.Env, _ = in["environmentId"].(string)
-		w.Service, _ = in["serviceId"].(string)
-		_, w.HasReplace = in["replace"]
-		vars, _ := in["variables"].(map[string]any)
-		for n, v := range vars {
-			w.Vars[n], _ = v.(string)
+		inputs := []map[string]any{}
+		if in, ok := c.Variables["input"].(map[string]any); ok {
+			inputs = append(inputs, in)
 		}
-		out = append(out, w)
+		for _, k := range numberedKeys(c.Variables, "i") {
+			in, _ := c.Variables[k].(map[string]any)
+			inputs = append(inputs, in)
+		}
+		for _, in := range inputs {
+			w := collectionWrite{At: i, Input: in, Vars: map[string]string{}, SkipDeploys: in["skipDeploys"]}
+			w.Env, _ = in["environmentId"].(string)
+			w.Service, _ = in["serviceId"].(string)
+			_, w.HasReplace = in["replace"]
+			vars, _ := in["variables"].(map[string]any)
+			for n, v := range vars {
+				w.Vars[n], _ = v.(string)
+			}
+			out = append(out, w)
+		}
 	}
 	return out
+}
+
+// numberedKeys lists the keys of vars named prefix+<digits> in numeric order (s0, s1, ... s10).
+func numberedKeys(vars map[string]any, prefix string) []string {
+	var keys []string
+	for k := range vars {
+		if n, ok := strings.CutPrefix(k, prefix); ok {
+			if _, err := strconv.Atoi(n); err == nil {
+				keys = append(keys, k)
+			}
+		}
+	}
+	slices.SortFunc(keys, func(a, b string) int {
+		x, _ := strconv.Atoi(a[len(prefix):])
+		y, _ := strconv.Atoi(b[len(prefix):])
+		return x - y
+	})
+	return keys
 }
 
 func collectionWrites(t *testing.T, s authShim) []collectionWrite {
@@ -161,24 +190,40 @@ func readService(c railwayCall) string {
 	return s
 }
 
-// lastWriteOf is the call index of the last write of svc.name in either mutation, or -1.
+// readServices lists the service ids one read asks for: the single read's, or each sK of a batched varsRead.
+func readServices(c railwayCall) []string {
+	if id := readService(c); id != "" {
+		return []string{id}
+	}
+	var ids []string
+	for _, k := range numberedKeys(c.Variables, "s") {
+		id, _ := c.Variables[k].(string)
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// lastWriteOf is the call index of the last write of svc.name in any variable mutation, or -1.
 func lastWriteOf(calls []railwayCall, svc, name string) int {
 	at := -1
 	for i, c := range calls {
 		if !isVariableWrite(c) {
 			continue
 		}
-		in, _ := c.Variables["input"].(map[string]any)
-		if in["serviceId"] != svc {
-			continue
-		}
-		vars, _ := in["variables"].(map[string]any)
-		if _, ok := vars[name]; ok || in["name"] == name {
+		if in, ok := c.Variables["input"].(map[string]any); ok && in["name"] == name && in["serviceId"] == svc {
 			at = i
+		}
+		for _, w := range collectionWritesIn([]railwayCall{c}) {
+			if _, ok := w.Vars[name]; ok && w.Service == svc {
+				at = i
+			}
 		}
 	}
 	return at
 }
+
+// must drops the ok of a lookup; an absent value is "" and the scan reports the empty needle.
+func must(v string, _ bool) string { return v }
 
 func readStore(t *testing.T, s authShim, svc string) map[string]any {
 	t.Helper()
@@ -214,7 +259,9 @@ func readsPerService(calls []railwayCall) map[string]int {
 	got := map[string]int{}
 	for _, c := range calls {
 		if isVariableRead(c) {
-			got[readService(c)]++
+			for _, id := range readServices(c) {
+				got[id]++
+			}
 		}
 	}
 	return got
@@ -652,6 +699,10 @@ func TestSetServiceVars_EveryWriteTargetsTheForkOnly(t *testing.T) {
 			func(t *testing.T, s authShim) (string, string, int) {
 				return s.run(t, forkAuthExports(), "set-fork-auth", authForkEnvID)
 			}},
+		{passSub, authForkEnvID, func(t *testing.T) authShim { return newPassShim(t, nil, nil) },
+			func(t *testing.T, s authShim) (string, string, int) {
+				return s.run(t, forkAuthExports(), passSub, authForkEnvID)
+			}},
 		{"set-fork-auth-site", authForkEnvID, newForkSiteShim,
 			func(t *testing.T, s authShim) (string, string, int) {
 				return s.run(t, forkAuthExports(), "set-fork-auth-site", authForkEnvID, forkSiteURL)
@@ -687,8 +738,11 @@ func TestSetServiceVars_EveryWriteTargetsTheForkOnly(t *testing.T) {
 				t.Fatalf("exit %d, want 0; output = %q", code, stdout+stderr)
 			}
 			var targets []string
+			for _, w := range collectionWrites(t, s) {
+				targets = append(targets, w.Env)
+			}
 			for _, call := range s.calls(t) {
-				if isVariableWrite(call) {
+				if strings.Contains(call.Query, "variableUpsert(") {
 					in, _ := call.Variables["input"].(map[string]any)
 					e, _ := in["environmentId"].(string)
 					targets = append(targets, e)
@@ -878,6 +932,39 @@ func TestSetForkAuth_FreshSecretsAlwaysWritten(t *testing.T) {
 			t.Errorf("the second run wrote %v.%v with variableUpsert; want only the collection writes", in["serviceId"], in["name"])
 		}
 	}
+
+	t.Run(passSub, func(t *testing.T) {
+		src := passAuthInherited(t)
+		s := newPassShim(t, maps.Clone(src), nil)
+		secrets := map[string][]string{"auth": {"GOTRUE_JWT_KEYS", "GOTRUE_JWT_SECRET"}, "gateway": {"AUTH_ADMIN_PASSWORD"}}
+		sources := map[string]string{"GOTRUE_JWT_KEYS": src["GOTRUE_JWT_KEYS"], "GOTRUE_JWT_SECRET": authSourceJWTSecret, "AUTH_ADMIN_PASSWORD": authSourcePassword}
+		var runs [2]map[string]string
+		for i := range runs {
+			before := len(s.calls(t))
+			if out, code := runPass(t, s); code != 0 {
+				t.Fatalf("run %d: exit %d, want 0; output = %q", i+1, code, clip(out))
+			}
+			ws := collectionWritesIn(s.calls(t)[before:])
+			runs[i] = map[string]string{}
+			for label, ns := range secrets {
+				for _, name := range ns {
+					v, ok := passWritten(ws, gtSvcID(label), name)
+					if !ok || v == "" {
+						t.Fatalf("run %d never wrote %s.%s", i+1, label, name)
+					}
+					runs[i][name] = v
+				}
+			}
+		}
+		for name, source := range sources {
+			if runs[0][name] == source || runs[1][name] == source {
+				t.Errorf("%s equals the source value on a run; it must be generated", name)
+			}
+			if runs[0][name] == runs[1][name] {
+				t.Errorf("%s is the same on both runs; it must be fresh every run", name)
+			}
+		}
+	})
 }
 
 // guard, passes at HEAD
@@ -946,6 +1033,41 @@ func TestSetServiceVars_SecretsNeverOnArgvOrInOutput(t *testing.T) {
 			for _, n := range ns {
 				redacted(t, out, label, n)
 			}
+		}
+	})
+
+	t.Run(passSub, func(t *testing.T) {
+		auth := passAuthInherited(t)
+		s := newPassShim(t, maps.Clone(auth), nil)
+		jqLog := jqArgvLog(t, s)
+		out, code := runPass(t, s)
+		if code != 0 {
+			t.Fatalf("exit %d, want 0; output = %q", code, clip(out))
+		}
+		ws := passWrites(t, s)
+		key, _ := passWritten(ws, gtSvcID("auth"), "GOTRUE_JWT_KEYS")
+		token, _ := passWritten(ws, gtSvcID("gateway"), "GATEWAY_TOKEN")
+		needles := map[string]string{
+			"the source key's private scalar":    jwkPrivateScalar(t, auth["GOTRUE_JWT_KEYS"]),
+			"the source JWT secret":              authSourceJWTSecret,
+			"the source admin password":          authSourcePassword,
+			"the source Resend key":              authSourceResendKey,
+			"the source GATEWAY_TOKEN":           gtSourceToken,
+			"the gateway's migration DSN secret": forkEnvSecret,
+			"the generated key":                  key,
+			"the generated JWT secret":           must(passWritten(ws, gtSvcID("auth"), "GOTRUE_JWT_SECRET")),
+			"the generated admin password":       must(passWritten(ws, gtSvcID("gateway"), "AUTH_ADMIN_PASSWORD")),
+			"the generated GATEWAY_TOKEN":        token,
+		}
+		if key != "" {
+			needles["the generated key's private scalar"] = jwkPrivateScalar(t, key)
+		}
+		scan(t, s, jqLog, out, needles)
+		redacted(t, out, "auth", "GOTRUE_JWT_KEYS")
+		redacted(t, out, "auth", "GOTRUE_JWT_SECRET")
+		redacted(t, out, "gateway", "AUTH_ADMIN_PASSWORD")
+		for _, n := range gatewayTokenTargets(t) {
+			redacted(t, out, n, "GATEWAY_TOKEN")
 		}
 	})
 

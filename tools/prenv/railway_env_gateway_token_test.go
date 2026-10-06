@@ -151,7 +151,7 @@ func requireWroteTheEight(t *testing.T, s authShim) string {
 	return value
 }
 
-// requireSkipDeploys fails unless every mutation carries skipDeploys: true.
+// requireSkipDeploys fails unless every mutation, and every input of a batched write, carries skipDeploys: true.
 func requireSkipDeploys(t *testing.T, s authShim) {
 	t.Helper()
 	n := 0
@@ -159,10 +159,16 @@ func requireSkipDeploys(t *testing.T, s authShim) {
 		if !strings.HasPrefix(strings.TrimSpace(c.Query), "mutation") {
 			continue
 		}
-		n++
-		in, _ := c.Variables["input"].(map[string]any)
-		if in["skipDeploys"] != true {
-			t.Errorf("a write omitted skipDeploys: true, so it would redeploy the service: %v", operations([]railwayCall{c}))
+		inputs := collectionWritesIn([]railwayCall{c})
+		if len(inputs) == 0 {
+			in, _ := c.Variables["input"].(map[string]any)
+			inputs = []collectionWrite{{SkipDeploys: in["skipDeploys"]}}
+		}
+		for _, w := range inputs {
+			n++
+			if w.SkipDeploys != true {
+				t.Errorf("a write omitted skipDeploys: true, so it would redeploy the service: %v", operations([]railwayCall{c}))
+			}
 		}
 	}
 	if n == 0 {
@@ -270,6 +276,32 @@ func TestSetForkGatewayToken_WritesOneFreshValueToTheEight(t *testing.T) {
 			t.Error("two runs wrote the same GATEWAY_TOKEN; it is not generated per run")
 		}
 	})
+
+	t.Run(passSub+" writes one value per run, fresh every run", func(t *testing.T) {
+		s := newPassShim(t, nil, nil)
+		var tokens [2]string
+		for i := range tokens {
+			before := len(s.calls(t))
+			if out, code := runPass(t, s); code != 0 {
+				t.Fatalf("run %d: exit %d, want 0; output = %q", i+1, code, clip(out))
+			}
+			ws := collectionWritesIn(s.calls(t)[before:])
+			for _, n := range gatewayTokenTargets(t) {
+				v, ok := passWritten(ws, gtSvcID(n), "GATEWAY_TOKEN")
+				if !ok || !hex64.MatchString(v) {
+					t.Fatalf("run %d: %s.GATEWAY_TOKEN written as %q (present %t), want 64 lowercase hex characters", i+1, n, v, ok)
+				}
+				if tokens[i] == "" {
+					tokens[i] = v
+				} else if v != tokens[i] {
+					t.Errorf("run %d: %s.GATEWAY_TOKEN differs from the first target's; one value goes to all eight", i+1, n)
+				}
+			}
+		}
+		if tokens[0] == gtSourceToken || tokens[1] == tokens[0] {
+			t.Errorf("run 1 token equals the source or run 2's token; each run generates its own")
+		}
+	})
 }
 
 func TestSetForkGatewayToken_NeverPrintsTheValue(t *testing.T) {
@@ -288,25 +320,47 @@ func TestSetForkGatewayToken_NeverPrintsTheValue(t *testing.T) {
 }
 
 func TestSetForkGatewayToken_MissingServiceFails(t *testing.T) {
-	for _, missing := range gatewayTokenTargets(t) {
-		t.Run(missing, func(t *testing.T) {
-			s := newGTForkShim(t, map[string]string{"settle": gtSettle(t, missing)})
-			out, code := runForkGT(t, s)
-			if code != 1 {
-				t.Errorf("exit %d, want 1; output = %q", code, out)
-			}
-			if !strings.Contains(errorLines(out), missing) {
-				t.Errorf("error lines %q do not name the missing service %s", errorLines(out), missing)
-			}
-			if ups := s.upserts(t); len(ups) != 0 {
-				t.Errorf("upserts = %v, want none: every service id resolves before the first write", names(ups))
-			}
-			if m := s.mutations(t); len(m) != 0 {
-				t.Errorf("mutations = %v, want none", m)
-			}
-			if ops := operations(s.calls(t)); !slices.Contains(ops, "settle") {
-				t.Errorf("Railway calls = %v; the services were never listed", ops)
-			}
+	runners := []struct {
+		sub string
+		mk  func(t *testing.T, settle string) authShim
+	}{
+		{"set-fork-gateway-token", func(t *testing.T, settle string) authShim {
+			return newGTForkShim(t, map[string]string{"settle": settle})
+		}},
+		{passSub, func(t *testing.T, settle string) authShim {
+			return newPassShim(t, nil, map[string]string{"settle": settle})
+		}},
+	}
+	check := func(t *testing.T, s authShim, sub, service string) {
+		t.Helper()
+		stdout, stderr, code := s.run(t, forkExports(true, true, true), sub, authForkEnvID)
+		out := stdout + stderr
+		if code != 1 {
+			t.Errorf("exit %d, want 1; output = %q", code, clip(out))
+		}
+		if !strings.Contains(errorLines(out), service) {
+			t.Errorf("error lines %q do not name the service %s", errorLines(out), service)
+		}
+		if ups := s.upserts(t); len(ups) != 0 {
+			t.Errorf("upserts = %v, want none: every service id resolves before the first write", names(ups))
+		}
+		if m := s.mutations(t); len(m) != 0 {
+			t.Errorf("mutations = %v, want none", m)
+		}
+		if ops := operations(s.calls(t)); !slices.Contains(ops, "settle") {
+			t.Errorf("Railway calls = %v; the services were never listed", ops)
+		}
+	}
+	for _, r := range runners {
+		for _, missing := range gatewayTokenTargets(t) {
+			t.Run(r.sub+"/"+missing, func(t *testing.T) {
+				check(t, r.mk(t, gtSettle(t, missing)), r.sub, missing)
+			})
+		}
+		t.Run(r.sub+"/two gateway instances", func(t *testing.T) {
+			dup := `{"node":{"serviceId":"svc-gateway-dup","serviceName":"gateway"}}`
+			settle := strings.Replace(gtSettle(t), `"edges":[`, `"edges":[`+dup+`,`, 1)
+			check(t, r.mk(t, settle), r.sub, "gateway")
 		})
 	}
 }

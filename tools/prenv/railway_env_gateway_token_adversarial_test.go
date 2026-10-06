@@ -126,36 +126,46 @@ func TestSetGatewayToken_TheValueIsOnNoProcessArgv(t *testing.T) {
 	}
 }
 
+// One alias of the batched write fails: the aliases before it landed, it and the later ones did not.
 func TestSetForkGatewayToken_PartialWriteFailure(t *testing.T) {
 	s := newGTForkShim(t, nil)
-	// Three writes pass; the fourth gets a GraphQL error.
-	writeFile(t, filepath.Join(s.dir, "faults-varCollectionUpsert"), "ok ok ok gqlerr")
+	s.failAlias(t, gtSvcID("invoice"), "abort")
 	out, code := runForkGT(t, s)
 	if code == 0 {
-		t.Fatalf("exit 0 after a failed write, want non-zero; output = %q", out)
+		t.Fatalf("exit 0 after a failed write, want non-zero; output = %q", clip(out))
 	}
-	targets := gatewayTokenTargets(t)
+	ws := collectionWrites(t, s)
+	if len(ws) != 8 {
+		t.Fatalf("control: the batched write carried %d service input(s), want the eight targets", len(ws))
+	}
+	failAt := slices.IndexFunc(ws, func(w collectionWrite) bool { return w.Service == gtSvcID("invoice") })
+	if failAt < 1 {
+		t.Fatalf("control: invoice is alias %d of the write, want a later one so an earlier alias landed", failAt)
+	}
 	var fresh string
-	for i, svc := range targets {
-		v, ok := gtStored(t, s, svc)
+	for i, w := range ws {
+		v, ok := gtStored(t, s, passLabel(w.Service))
 		switch {
-		case i < 3:
+		case i < failAt:
 			if !ok || !hex64.MatchString(v) || v == gtSourceToken {
-				t.Errorf("%s holds %q before the failure point, want the fresh value", svc, v)
+				t.Errorf("%s holds %q before the failure point, want the fresh value", passLabel(w.Service), v)
 			}
 			if i == 0 {
 				fresh = v
 			} else if v != fresh {
-				t.Errorf("%s holds a different value from %s", svc, targets[0])
+				t.Errorf("%s holds a different value from %s", passLabel(w.Service), passLabel(ws[0].Service))
 			}
 		default:
 			if v != gtSourceToken {
-				t.Errorf("%s was written after the failed write; the run must stop at the first failure", svc)
+				t.Errorf("%s was applied at or after the failed alias; Railway applies none of them", passLabel(w.Service))
 			}
 		}
 	}
-	if m := s.mutations(t); len(m) != 4 {
-		t.Errorf("mutations = %v, want exactly 4: three that landed and the one that failed", m)
+	if m := s.mutations(t); len(m) != 1 {
+		t.Errorf("mutations = %v, want exactly 1: the one batched write", m)
+	}
+	if ops := operations(s.calls(t)); lastOp(ops) != "varsWrite" {
+		t.Errorf("Railway calls = %v, want varsWrite last: a partial write is never re-read as confirmed", ops)
 	}
 	if fresh == "" {
 		t.Fatal("control: no fresh value found on the first target")

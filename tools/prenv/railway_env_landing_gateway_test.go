@@ -158,27 +158,47 @@ func authVarsEntries(t *testing.T, fn string, body []string) []string {
 	return nil
 }
 
+// forkAuthVarsHolder names the one function, other than set-production-auth's, that declares
+// `local auth_vars=(`: the fork's auth plan, wherever the pass keeps it.
+func forkAuthVarsHolder(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile(railwayEnvScript(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	def := regexp.MustCompile(`^([a-z_0-9]+)\(\) \{$`)
+	var holders []string
+	cur := ""
+	for _, line := range strings.Split(string(raw), "\n") {
+		if m := def.FindStringSubmatch(line); m != nil {
+			cur = m[1]
+		}
+		if strings.TrimSpace(line) == "local auth_vars=(" && cur != "cmd_set_production_auth" {
+			holders = append(holders, cur)
+		}
+	}
+	if len(holders) != 1 {
+		t.Fatalf("functions declaring `local auth_vars=(` besides cmd_set_production_auth = %v, want exactly 1", holders)
+	}
+	return holders[0]
+}
+
+// Runtime oracles for the write and the read-back: TestSetForkAuth_AutoconfirmsOnAuthOnly and
+// TestSetForkAuth_AutoconfirmReReadMismatchFails.
 func TestSetForkAuthAutoconfirms(t *testing.T) {
 	const entry = "GOTRUE_MAILER_AUTOCONFIRM=true"
 	const needle = "GOTRUE_MAILER_AUTOCONFIRM"
 
-	fork := stripHashComments(shellFunctionBody(t, "cmd_set_fork_auth"))
+	holder := forkAuthVarsHolder(t)
+	fork := stripHashComments(shellFunctionBody(t, holder))
 	forkJoined := strings.Join(fork, "\n")
-	forkVars := authVarsEntries(t, "cmd_set_fork_auth", fork)
+	forkVars := authVarsEntries(t, holder, fork)
 	if len(forkVars) < 5 || !slices.Contains(forkVars, "GOTRUE_DISABLE_SIGNUP=false") {
 		t.Fatalf("control: fork auth_vars %v lacks GOTRUE_DISABLE_SIGNUP=false or has < 5 entries", forkVars)
 	}
 	// GoTrue reads the env var name case-sensitively; the value is pinned to lowercase `true`.
 	if !slices.Contains(forkVars, entry) {
-		t.Errorf("cmd_set_fork_auth auth_vars %v lacks %q (AC-2)", forkVars, entry)
-	}
-	// Written and re-read through the array, so the entry cannot skip the read-back.
-	write := regexp.MustCompile(`(?m)^\s*set_service_vars "\$env_id" "\$auth_id" auth .*"\$\{auth_vars\[@\]\}"\s*$`)
-	if !write.MatchString(forkJoined) {
-		t.Errorf(`cmd_set_fork_auth no longer calls set_service_vars "$env_id" "$auth_id" auth ... "${auth_vars[@]}"`)
-	}
-	if call := `auth_check auth "${auth_vars[@]}"`; !strings.Contains(forkJoined, call) {
-		t.Errorf("cmd_set_fork_auth no longer calls %s", call)
+		t.Errorf("%s auth_vars %v lacks %q (AC-2)", holder, forkVars, entry)
 	}
 
 	prod := stripHashComments(shellFunctionBody(t, "cmd_set_production_auth"))
@@ -198,7 +218,7 @@ func TestSetForkAuthAutoconfirms(t *testing.T) {
 	all := strings.Count(strings.Join(stripHashComments(strings.Split(string(raw), "\n")), "\n"), needle)
 	inFork := strings.Count(forkJoined, needle)
 	if all != inFork {
-		t.Errorf("railway-env.sh names %s %d times in code, %d inside cmd_set_fork_auth; only the fork may write it", needle, all, inFork)
+		t.Errorf("railway-env.sh names %s %d times in code, %d inside %s; only the fork may write it", needle, all, inFork, holder)
 	}
 
 	// The image default is what keeps production closed.

@@ -160,8 +160,8 @@ func TestSetForkAuth_ReReadIsUnrenderedAndNeverPrintsARenderedDSN(t *testing.T) 
 				t.Errorf("a variables read omits unrendered: true, so DATABASE_URL would read back rendered: %q", c.Query)
 			}
 		}
-		if reads != 4 {
-			t.Errorf("%d variables reads, want 4 (auth and gateway, each read before its write and re-read after)", reads)
+		if reads != 2 {
+			t.Errorf("%d variables reads, want 2 (one batched read of auth and gateway before the write, one after)", reads)
 		}
 	})
 
@@ -244,19 +244,35 @@ func TestSetForkAuth_AnInvalidGeneratedKeyFails(t *testing.T) {
 }
 
 func TestSetForkAuth_RefusesANamelessEnvironment(t *testing.T) {
-	resp := forkAuthRailway()
-	resp["envList"] = strings.Replace(authEnvList(true), `"name":"`+authForkName+`",`, "", 1)
-	if resp["envList"] == authEnvList(true) {
+	nameless := strings.Replace(authEnvList(true), `"name":"`+authForkName+`",`, "", 1)
+	if nameless == authEnvList(true) {
 		t.Fatal("control: the fork's name was not removed")
 	}
-	s := newAuthShim(t, resp, forkAuthStores(freshJWK(t)))
-	stdout, stderr, code := s.run(t, forkAuthExports(), "set-fork-auth", authForkEnvID)
-	out := stdout + stderr
-	if code != 1 || !strings.Contains(errorLines(out), "no name") {
-		t.Errorf("exit %d and error lines %q, want exit 1 saying the environment has no name", code, errorLines(out))
-	}
-	if m := s.mutations(t); len(m) != 0 {
-		t.Errorf("a nameless environment received mutations %v; its issuer would be urn:ascomply:auth:", m)
+	for _, c := range []struct {
+		sub string
+		mk  func(t *testing.T) authShim
+	}{
+		{"set-fork-auth", func(t *testing.T) authShim {
+			resp := forkAuthRailway()
+			resp["envList"] = nameless
+			return newAuthShim(t, resp, forkAuthStores(freshJWK(t)))
+		}},
+		{passSub, func(t *testing.T) authShim { return newPassShim(t, nil, map[string]string{"envList": nameless}) }},
+	} {
+		t.Run(c.sub, func(t *testing.T) {
+			s := c.mk(t)
+			stdout, stderr, code := s.run(t, forkAuthExports(), c.sub, authForkEnvID)
+			out := stdout + stderr
+			if code != 1 || !strings.Contains(errorLines(out), "no name") {
+				t.Errorf("exit %d and error lines %q, want exit 1 saying the environment has no name", code, errorLines(out))
+			}
+			if len(s.calls(t)) == 0 {
+				t.Error("control: no Railway call was made, so the refusal did not follow envList")
+			}
+			if m := s.mutations(t); len(m) != 0 {
+				t.Errorf("a nameless environment received mutations %v; its issuer would be urn:ascomply:auth:", m)
+			}
+		})
 	}
 }
 
@@ -294,6 +310,24 @@ func TestSetForkAuth_AdminPasswordIsFreshPerRun(t *testing.T) {
 	if p1 == p2 {
 		t.Error("two runs wrote the same AUTH_ADMIN_PASSWORD; it is not generated per run")
 	}
+
+	t.Run(passSub, func(t *testing.T) {
+		gw := gtSvcID("gateway")
+		var got [2]string
+		for i := range got {
+			s := newPassShim(t, nil, nil)
+			if out, code := runPass(t, s); code != 0 {
+				t.Fatalf("run %d: exit %d, want 0; output = %q", i+1, code, clip(out))
+			}
+			got[i] = oneUpsert(t, s.upserts(t), gw, "AUTH_ADMIN_PASSWORD")
+		}
+		if !hex64.MatchString(got[0]) || got[0] == authSourcePassword {
+			t.Errorf("run 1 wrote %q, want 64 lowercase hex characters that differ from the source password", got[0])
+		}
+		if got[0] == got[1] {
+			t.Error("two runs wrote the same AUTH_ADMIN_PASSWORD; it is not generated per run")
+		}
+	})
 }
 
 func TestSetProductionAuth_SealedReadEdges(t *testing.T) {

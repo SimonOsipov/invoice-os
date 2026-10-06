@@ -55,17 +55,11 @@ Prints { selector, viewport, layoutWidth, count, matches }.
 Example: ${CTL} measure '[data-testid="evidence-bundle-drawer"]' --props width,padding-left --viewport 1440`,
 }
 
-const notBuilt =
-  (name: string): Command =>
-  async () => {
-    throw new CtlError(`${name} is not built yet`, `Run ${CTL} --help for the commands that work.`, 1)
-  }
-
 // Lazy so --help loads no command module.
 const DEFAULTS: Commands = {
   env: async (p, f) => (await import('./railway')).envCommand(p, f),
   login: async (p, f) => (await import('./login')).loginCommand(p, f),
-  measure: notBuilt('measure'),
+  measure: async (p, f) => (await import('./measure')).measureCommand(p, f),
 }
 
 const json = (value: unknown) => JSON.stringify(value) + '\n'

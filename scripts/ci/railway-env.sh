@@ -2995,7 +2995,7 @@ pass_names() {
   printf '%s' "$PASS_DIFFS" | jq -r --argjson i "$1" '.[$i] | keys | join(" ")'
 }
 
-# pass_write_detail <alias|"">: Railway's code and trace id for that alias, else curl's last line.
+# pass_write_detail <alias|"">: Railway's code and trace id for that alias.
 pass_write_detail() {
   local d
   d=$(printf '%s' "$GQL_RESPONSE" | jq -r --arg a "$1" '
@@ -3006,7 +3006,7 @@ pass_write_detail() {
 }
 
 # pass_write_failed <plan-index>...: the AC-5 report for a failed varsWrite; alias sK is the Kth argument.
-# Names a service only from errors[].path[0]; never prints GQL_ERROR or Railway's message.
+# Names a service only from errors[].path[0]; never prints Railway's message.
 pass_write_failed() {
   local widx=("$@") a k i failed="" others="" all=""
   for a in $(gql_error_aliases); do

@@ -86,6 +86,22 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 			body["data"] = data
 		}
 
+		key, source := clientKey(r)
+		held := perIP.Reserve(key)
+		refused := false
+		if !held {
+			log.WarnContext(r.Context(), "registration: limit reached",
+				slog.String("limit", "ip"), slog.String("key_source", source), slog.Bool("enforced", enforce))
+			refused = enforce
+		}
+
+		if refused {
+			if holdMinimum(r.Context(), log, "registration: signup timing", start, 0, minResponse) {
+				writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"})
+			}
+			return
+		}
+
 		status, gt, err := postGoTrue(r, client, signup, body, nil)
 		upstream := time.Since(start)
 		pending := func() { writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"}) }
@@ -105,6 +121,9 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 		case gt.ErrorCode == "over_email_send_rate_limit":
 			// ceiling: GoTrue's instance-wide mail cap (30/h) answers the same code, so this WARN is its only signal; raise GOTRUE_RATE_LIMIT_EMAIL_SENT when signups near it.
 			log.WarnContext(r.Context(), "registration: gotrue email send rate limit", slog.Int("upstream_status", status))
+			if held {
+				perIP.Refund(key)
+			}
 			send = pending
 		case status >= http.StatusInternalServerError && gt.Code == "23505":
 			// The loser of two concurrent signups for one address gets GoTrue's unique-violation 500.
@@ -174,7 +193,7 @@ func holdMinimum(ctx context.Context, log *slog.Logger, msg string, start time.T
 		level = slog.LevelInfo
 	}
 	// ceiling: a GoTrue answer slower than the minimum still leaks timing; revisit when this line logs WARN.
-	// ceiling: each waiting request holds a connection for up to the minimum and register has no per-client limit; revisit with the per-client-IP limit owed before U3.
+	// ceiling: each waiting request holds a connection for up to the minimum; the per-client limits bound that for register and resend, not for the other routes.
 	log.Log(ctx, level, msg,
 		slog.Int64("upstream_ms", upstream.Milliseconds()), slog.Int64("min_ms", minResponse.Milliseconds()))
 	timer := time.NewTimer(max(0, minResponse-time.Since(start)))

@@ -239,12 +239,16 @@ type mailpitMessage struct {
 }
 
 // mailFor waits for the address's mail and returns it. It fails unless exactly one mail arrived.
-func mailFor(t *testing.T, email string) mailpitMessage {
+func mailFor(t *testing.T, email string) mailpitMessage { return mailsFor(t, email, 1)[0] }
+
+// mailsFor polls up to 10 s for want mails to exactly this address and fails on more or on a timeout.
+func mailsFor(t *testing.T, email string, want int) []mailpitMessage {
 	t.Helper()
 	mailpit := mailEnv(t, "MAILPIT_URL")
 	// Mailpit's search matches loosely, so the exact recipient is checked here.
 	var ids []string
-	for deadline := time.Now().Add(10 * time.Second); len(ids) == 0 && time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
+	for deadline := time.Now().Add(10 * time.Second); len(ids) < want && time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
+		ids = ids[:0]
 		var found mailpitSearch
 		getJSON(t, mailpit+"/api/v1/search?query="+url.QueryEscape(`to:"`+email+`"`), &found)
 		for _, m := range found.Messages {
@@ -255,12 +259,14 @@ func mailFor(t *testing.T, email string) mailpitMessage {
 			}
 		}
 	}
-	if len(ids) != 1 {
-		t.Fatalf("mailpit holds %d mails for %s, want exactly 1", len(ids), email)
+	if len(ids) != want {
+		t.Fatalf("mailpit holds %d mails for %s, want exactly %d", len(ids), email, want)
 	}
-	var msg mailpitMessage
-	getJSON(t, mailpit+"/api/v1/message/"+ids[0], &msg)
-	return msg
+	msgs := make([]mailpitMessage, len(ids))
+	for i, id := range ids {
+		getJSON(t, mailpit+"/api/v1/message/"+id, &msgs[i])
+	}
+	return msgs
 }
 
 // actionLink returns the action link: the one URL an anchor shows as its own text (the fallback),
@@ -285,21 +291,21 @@ func actionLink(body string) (string, error) {
 }
 
 // confirmationLink waits for the address's mail and returns its action link. It fails unless exactly one mail arrived.
-func confirmationLink(t *testing.T, email string) string {
+func confirmationLink(t *testing.T, email string) string { return confirmationLinks(t, email, 1)[0] }
+
+// confirmationLinks returns the action link of each of the address's want mails.
+func confirmationLinks(t *testing.T, email string, want int) []string {
 	t.Helper()
-	msg := mailFor(t, email)
-	link, err := actionLink(msg.HTML)
-	if err != nil {
-		t.Fatal(err)
+	var links []string
+	for _, msg := range mailsFor(t, email, want) {
+		link, err := actionLink(msg.HTML)
+		if err != nil {
+			t.Fatal(err)
+		}
+		links = append(links, link)
 	}
-	return link
+	return links
 }
-
-// mailsFor is a stub until the helper polls mailpit for want mails.
-func mailsFor(t *testing.T, email string, want int) []mailpitMessage { return nil }
-
-// confirmationLinks is a stub until the helper applies actionLink to mailsFor.
-func confirmationLinks(t *testing.T, email string, want int) []string { return nil }
 
 func getJSON(t *testing.T, u string, out any) {
 	t.Helper()

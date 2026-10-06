@@ -596,6 +596,9 @@ otherwise. The tenant id is a UUIDv5 of the caller's subject; the membership gua
   The attacker then owns a verified account at the victim's address. The victim takes it back
   with a password reset (see Password reset): a recovery verify confirms the account, sets the
   victim's password and ends every session, including the attacker's.
+  ceiling: a reset whose password update fails after the link is spent leaves the account
+  confirmed with the first registrant's password until a later reset succeeds
+  (`TestResetPassword_RefusedLinkOrPasswordIsTheFailedNotice`).
 - *Link scanners.* A mail scanner that prefetches the link with GET or HEAD gets the confirm
   page and spends nothing, as the reset page does for a reset link. The hijack
   half above is closed by a password reset; a delete-and-re-create of an

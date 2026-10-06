@@ -1,6 +1,6 @@
 import { test, expect, type APIRequestContext } from '@playwright/test'
 import { GATEWAY_URL, TENANTS } from './targets'
-import { e2eMember, isSeededMember } from '../realAccounts'
+import { isE2eMemberEmail, isSeededMember } from '../realAccounts'
 
 // M2-14 deliverable (3): live cross-tenant isolation over the full edge path. For a
 // seeded tenant, mint a token via the gateway's mock issuer and read GET
@@ -97,11 +97,11 @@ test('cross-tenant isolation: each tenant token lists exactly its own members th
   const bUserIds = b.memberships.map((m) => m.user_id).sort()
 
   // Positive: the seeded subset is exactly the 6 firm / 7 in-house seeded members; any other
-  // member is the tenant's e2e member (realAccounts.ts), which a signInAs may have added.
+  // member must be one of the tenant's e2e role accounts (realAccounts.ts).
   expect(aUserIds.filter(isSeededMember)).toEqual([...TENANTS.a.members].sort())
   expect(bUserIds.filter(isSeededMember)).toEqual([...TENANTS.b.members].sort())
-  for (const m of a.memberships.filter((m) => !isSeededMember(m.user_id))) expect(m.email, 'a non-seeded member of A').toBe(e2eMember(TENANTS.a.id).email)
-  for (const m of b.memberships.filter((m) => !isSeededMember(m.user_id))) expect(m.email, 'a non-seeded member of B').toBe(e2eMember(TENANTS.b.id).email)
+  for (const m of a.memberships.filter((m) => !isSeededMember(m.user_id))) expect(isE2eMemberEmail(TENANTS.a.id, m.email ?? ''), `a non-seeded member of A: ${m.email}`).toBe(true)
+  for (const m of b.memberships.filter((m) => !isSeededMember(m.user_id))) expect(isE2eMemberEmail(TENANTS.b.id, m.email ?? ''), `a non-seeded member of B: ${m.email}`).toBe(true)
 
   // Negative: neither list leaks the other tenant's subject — the in-house persona
   // never appears in the firm list, and vice versa, even though both are real,

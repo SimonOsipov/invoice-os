@@ -39,9 +39,9 @@ export interface SeededMember {
 // claim.
 //
 // The seeded list cannot grow: no endpoint mints a membership (there is no invite), and PATCH
-// writes `status` only. The live roster is this list plus the tenant's e2e member
+// writes `status` only. The live roster is this list plus the tenant's e2e role accounts
 // (realAccounts.ts, granted through /auth/mock/member), so a spec compares the seeded subset
-// (`isSeededMember`) exactly and counts one extra row. api/isolation.spec.ts pins the user_id set.
+// (`isSeededMember`) exactly and counts the allowed extra rows. api/isolation.spec.ts pins the user_id set.
 export const SEED_FIRM_MEMBERS: readonly SeededMember[] = [
   { name: 'Chinedu Okafor', email: 'c.okafor@okafor.ng', accessRole: 'Admin', pill: 'ACTIVE' },
   { name: 'Folake Adesina', email: 'f.adesina@okafor.ng', accessRole: 'Preparer', pill: 'ACTIVE' },

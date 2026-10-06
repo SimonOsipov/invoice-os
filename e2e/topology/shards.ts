@@ -45,7 +45,7 @@ export const UNITS: Unit[] = [
       'environment-posture.spec.ts':
         'Cost, not shared state ([fork-lane-by-cost]): reads and writes no tenant data. A shard costs ~1 min of runner setup for one 1.4 s test.',
       'isolation.spec.ts':
-        'Asserts the exact seeded membership subsets (firm: 6 seeded members, plus at most its e2e member) and tenant identities of 1111 and 2222.',
+        'Asserts the exact seeded membership subsets (firm: 6 seeded members, plus the e2e member of each role that exists) and tenant identities of 1111 and 2222.',
       'ops-console.spec.ts':
         'Cost, not shared state ([fork-lane-by-cost]): signs a provisioned staff account in to the mock-backed Ops Console; reads and writes no tenant data.',
       'overview-register-approvals.spec.ts':
@@ -57,7 +57,7 @@ export const UNITS: Unit[] = [
       'portfolio-workflow-surfaces.spec.ts':
         'Reads the `Standard approval policy` that `internal/demopolicy` seeds only on 1111 / 2222 (`planFor`), without saving it; creates its own entity and invoice in 1111.',
       'roles.spec.ts':
-        'Asserts the exact seeded roles, staffing and rosters of both tenants (the seeded rows plus exactly one e2e member row), derived by hand from `db/seed.dev.sql`, and the demopolicy-sealed policies.',
+        'Asserts the exact seeded roles, staffing and rosters of both tenants (the seeded rows plus the e2e member of each role that exists), derived by hand from `db/seed.dev.sql`, and the demopolicy-sealed policies.',
       'support-console.spec.ts':
         'Cost, not shared state ([fork-lane-by-cost]): signs a provisioned staff account in to the mock-backed Support Console; reads and writes no tenant data.',
       'workflows.spec.ts':

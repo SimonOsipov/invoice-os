@@ -141,6 +141,12 @@ describe('ctl run', () => {
     })
   })
 
+  it('measure runs the real command by default: a missing --props is a usage error', async () => {
+    const r = await run(['measure', '.x'])
+    expect(r.code).toBe(2)
+    expect(JSON.parse(r.stderr).hint).toContain('Example:')
+  })
+
   it('no arguments is a usage error', async () => {
     const r = await run([])
     expect(r.code).toBe(2)

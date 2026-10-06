@@ -1,2 +1,13 @@
-// Stub: the real hook retries a relative extensionless specifier with `.ts` (FLOWUPD-01 D8).
-export {}
+import { registerHooks } from 'node:module'
+
+// Node does not append .ts to relative specifiers; the e2e helpers import each other extensionless.
+registerHooks({
+  resolve(spec, ctx, next) {
+    try {
+      return next(spec, ctx)
+    } catch (err) {
+      if (err?.code === 'ERR_MODULE_NOT_FOUND' && /^\.\.?\//.test(spec)) return next(spec + '.ts', ctx)
+      throw err
+    }
+  },
+})

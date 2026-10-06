@@ -2108,3 +2108,160 @@ function freshRegistration(kind: TenantKind): RealAccount {
     workspaceName: `Reg ${kind} ${id.slice(0, 8)}`,
   }
 }
+
+// frontend/landing/src/passwordReset.ts RESET_SENT and RESET_FAILED.
+const RESET_SENT = 'If this address has an account, a reset link is on its way.'
+const RESET_LINK_FAILED = 'That reset link did not work. It may have expired or already been used.'
+const RESET_REQUEST_PATH = '/auth/request-password-reset'
+const RESET_PAGE_PATH = '/auth/reset-password'
+
+function recordPosts(page: Page, path: string): string[] {
+  const posts: string[] = []
+  page.on('request', (req) => {
+    if (req.method() === 'POST' && new URL(req.url()).pathname === path) posts.push(req.url())
+  })
+  return posts
+}
+
+const boxOf = async (name: string, el: Locator, width: number) => {
+  const box = await el.boundingBox()
+  if (!box) throw new Error(`${name} rendered no box at ${width}px`)
+  return box
+}
+
+const noSidewaysScroll = async (page: Page, label: string, width: number) => {
+  const doc = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }))
+  expect(doc.clientWidth, `the document has no width at ${width}px`).toBeGreaterThan(0)
+  expect(doc.scrollWidth - doc.clientWidth, `${label} scrolls sideways at ${width}px (${JSON.stringify(doc)})`).toBeLessThanOrEqual(1)
+}
+
+// "Forgot password?" sits between the password input and the submit, left-aligned with the input, inside the card.
+async function expectForgotControl(page: Page, dialog: Locator, width: number): Promise<void> {
+  const card = dialog.locator(':scope > div')
+  await settleAnimations(card)
+  const [cardBox, input, forgot, submit] = await Promise.all([
+    boxOf('the card', card, width),
+    boxOf('the password input', dialog.getByLabel('Password', { exact: true }), width),
+    boxOf('Forgot password?', dialog.getByRole('button', { name: 'Forgot password?', exact: true }), width),
+    boxOf('the submit', dialog.getByRole('button', { name: 'Sign in →', exact: true }), width),
+  ])
+  expect(forgot.y, `Forgot password? starts above the bottom of the password input at ${width}px`).toBeGreaterThanOrEqual(input.y + input.height - 1)
+  expect(forgot.y + forgot.height, `Forgot password? ends below the top of the submit at ${width}px`).toBeLessThanOrEqual(submit.y + 1)
+  expect(rectsOverlap(forgot, input), `Forgot password? overlaps the input at ${width}px`).toBe(false)
+  expect(rectsOverlap(forgot, submit), `Forgot password? overlaps the submit at ${width}px`).toBe(false)
+  expect(Math.abs(forgot.x - input.x), `Forgot password? and the input left edges at ${width}px`).toBeLessThanOrEqual(1)
+  expect(enclosesRect(cardBox, forgot, 1), `Forgot password? leaves the card at ${width}px (${JSON.stringify({ cardBox, forgot })})`).toBe(true)
+  await noSidewaysScroll(page, 'the sign-in window', width)
+}
+
+// The gateway's reset page has no app shell, so layout.ts's `.pf-scroll` helper would never resolve.
+async function expectResetPage(page: Page, width: number, height: number): Promise<void> {
+  const [card, input, button] = await Promise.all([
+    boxOf('the card', page.locator('main'), width),
+    boxOf('the password input', page.getByLabel('New password', { exact: true }), width),
+    boxOf('the button', page.getByRole('button', { name: 'Set new password', exact: true }), width),
+  ])
+  expect(enclosesRect({ x: 0, y: 0, width, height }, card, 1), `the card leaves the viewport at ${width}px (${JSON.stringify(card)})`).toBe(true)
+  expect(enclosesRect(card, input, 1), `the input leaves the card at ${width}px (${JSON.stringify({ card, input })})`).toBe(true)
+  expect(enclosesRect(card, button, 1), `the button leaves the card at ${width}px (${JSON.stringify({ card, button })})`).toBe(true)
+  expect(Math.abs(input.x - button.x), `the input and button left edges at ${width}px`).toBeLessThanOrEqual(1)
+  expect(Math.abs(input.x + input.width - (button.x + button.width)), `the input and button right edges at ${width}px`).toBeLessThanOrEqual(1)
+  await noSidewaysScroll(page, 'the reset page', width)
+}
+
+// The notice encloses its text and both buttons, and none of the three overlaps another.
+async function expectFailedNotice(page: Page, width: number): Promise<void> {
+  const notice = page.getByRole('status').filter({ hasText: RESET_LINK_FAILED })
+  const parts: [string, Locator][] = [
+    ['text', notice.getByText(RESET_LINK_FAILED)],
+    ['request', notice.getByRole('button', { name: 'Request a new link', exact: true })],
+    ['dismiss', notice.getByRole('button', { name: 'Dismiss', exact: true })],
+  ]
+  const noticeBox = await boxOf('the notice', notice, width)
+  const boxes: [string, Awaited<ReturnType<typeof boxOf>>][] = []
+  for (const [name, el] of parts) boxes.push([name, await boxOf(name, el, width)])
+  for (const [i, [name, box]] of boxes.entries()) {
+    expect(enclosesRect(noticeBox, box, 1), `${name} leaves the notice at ${width}px (${JSON.stringify({ noticeBox, box })})`).toBe(true)
+    for (const [other, otherBox] of boxes.slice(0, i)) {
+      expect(rectsOverlap(otherBox, box), `${other} overlaps ${name} at ${width}px`).toBe(false)
+    }
+  }
+  await noSidewaysScroll(page, 'the landing', width)
+}
+
+test('deployed landing: "Forgot password?" sends a reset request, and a bogus reset link lands on the failed notice that offers a new request', async ({ page, context }) => {
+  test.setTimeout(120_000)
+  const errors = gatedErrors(page, [])
+  const requests = recordPosts(page, RESET_REQUEST_PATH)
+
+  await test.step('A: the sign-in window offers Forgot password?, and one click of Send reset link sends one request', async () => {
+    await seedConsent(page, false)
+    await page.setViewportSize({ width: 1280, height: TALL })
+    await page.goto(`${APP_URL}/?auth=start`)
+    await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
+    const dialog = page.getByRole('dialog', { name: 'Platform login' })
+    await expect(dialog.getByRole('heading', { name: 'Sign in to your workspace' })).toBeVisible()
+    const forgot = dialog.getByRole('button', { name: 'Forgot password?', exact: true })
+    await expect(forgot).toBeVisible()
+    for (const width of [...WIDE_WIDTHS, 375]) {
+      await page.setViewportSize({ width, height: TALL })
+      await expectForgotControl(page, dialog, width)
+    }
+
+    expect(requests, 'reset requests before the click').toHaveLength(0)
+    await forgot.click()
+    await expect(dialog.getByRole('heading', { name: 'Reset your password' })).toBeVisible()
+    const email = dialog.getByLabel('Work email', { exact: true })
+    const submit = dialog.getByRole('button', { name: 'Send reset link', exact: true })
+    const notice = dialog.getByRole('status')
+    await expect(notice, 'the live region is mounted and empty before the click').toBeEmpty()
+    // Short: the input keeps the address, and expectStack counts text wider than the input as overflow.
+    await email.fill(`reset-${crypto.randomUUID().slice(0, 8)}@example.com`)
+    const answer = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === RESET_REQUEST_PATH)
+    await submit.click()
+    expect((await answer).status(), 'the fork gateway answers the reset request').toBe(202)
+    await expect(notice).toHaveText(RESET_SENT)
+    await expect(dialog.getByRole('alert')).toHaveCount(0)
+    expect(requests, 'reset requests after one click').toHaveLength(1)
+    const back = dialog.getByRole('button', { name: 'Back to sign in', exact: true })
+    await expectStackAtEveryWidth(page, dialog.locator(':scope > div'), [['email', email], ['submit', submit], ['notice', notice], ['back', back]], ['email', 'submit'])
+
+    await back.click()
+    await expect(dialog.getByRole('heading', { name: 'Sign in to your workspace' })).toBeVisible()
+  })
+
+  await test.step('B: a bogus reset link submits once and lands on the failed notice, which offers a new request', async () => {
+    const reset = await context.newPage()
+    const resetErrors = gatedErrors(reset, [])
+    const posts = recordPosts(reset, RESET_PAGE_PATH)
+    await seedConsent(reset, false)
+    const height = 1080
+    for (const width of [...WIDE_WIDTHS, 375]) {
+      await reset.setViewportSize({ width, height })
+      await reset.goto(`${GATEWAY_URL}${RESET_PAGE_PATH}?token=bogus-${crypto.randomUUID()}&type=recovery`)
+      await expect(reset.getByRole('button', { name: 'Set new password', exact: true }), `one submit at ${width}px`).toHaveCount(1)
+      await expectResetPage(reset, width, height)
+    }
+
+    // Copied before the click: the landing navigation may log its own errors.
+    const beforeClick = [...resetErrors]
+    expect(beforeClick, `console errors on the reset page:\n${beforeClick.join('\n')}`).toEqual([])
+
+    await reset.getByLabel('New password', { exact: true }).fill(crypto.randomUUID())
+    await reset.getByRole('button', { name: 'Set new password', exact: true }).dblclick()
+    await reset.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
+    await expect(reset.getByRole('status').filter({ hasText: RESET_LINK_FAILED })).toBeVisible()
+    await expect.poll(() => new URL(reset.url()).searchParams.has('reset'), { message: 'the landing strips ?reset' }).toBe(false)
+    expect(posts, 'POST /auth/reset-password requests sent by the double-click').toHaveLength(1)
+    for (const width of [1280, 375]) {
+      await reset.setViewportSize({ width, height })
+      await expectFailedNotice(reset, width)
+    }
+
+    await reset.getByRole('button', { name: 'Request a new link', exact: true }).click()
+    await expect(reset.getByRole('dialog').getByRole('heading', { name: 'Reset your password' })).toBeVisible()
+    expect(resetErrors, `console errors on the reset journey:\n${resetErrors.join('\n')}`).toEqual([])
+  })
+
+  expect(errors, `console errors on the sign-in window:\n${errors.join('\n')}`).toEqual([])
+})

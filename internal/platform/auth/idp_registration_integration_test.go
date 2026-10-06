@@ -68,7 +68,7 @@ func mailEnv(t *testing.T, name string) string {
 	return strings.TrimRight(v, "/")
 }
 
-// startGateway serves the real register, resend, confirm-page and verify handlers where the mailed link points, and returns its JSON log.
+// startGateway serves the real register, resend, reset-request, confirm and reset pages, and verify handlers where the mailed links point, and returns its JSON log.
 func startGateway(t *testing.T, authBase string, minResponse time.Duration, sink gateway.ContactSink) (string, *bytes.Buffer) {
 	t.Helper()
 	authURL, err := url.Parse(authBase)
@@ -84,6 +84,7 @@ func startGateway(t *testing.T, authBase string, minResponse time.Duration, sink
 	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	perIP := gateway.NewSignInThrottle("resend-ip", gateway.ResendPerIP, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	mux.Handle("POST /auth/resend-verification", gateway.ResendVerificationHandler(authURL, noRedirect, minResponse, perAddress, perIP, true, log))
+	mux.Handle("POST /auth/request-password-reset", gateway.RequestPasswordResetHandler(authURL, noRedirect, minResponse, perAddress, perIP, true, log))
 	verifyPage, err := gateway.VerifyPageHandler(site)
 	if err != nil {
 		t.Fatal(err)
@@ -95,6 +96,14 @@ func startGateway(t *testing.T, authBase string, minResponse time.Duration, sink
 		t.Fatal(err)
 	}
 	mux.Handle("GET /emails/confirmation.html", confirmationMail)
+	mux.Handle("GET /auth/reset-password", gateway.ResetPasswordPageHandler(site))
+	resetSignIn := gateway.NewSignInThrottle("sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
+	mux.Handle("POST /auth/reset-password", gateway.ResetPasswordHandler(authURL, site, noRedirect, gateway.NewSessionChecker(authURL, noRedirect, time.Now, log), resetSignIn, log))
+	recoveryMail, err := gateway.MailTemplate("recovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux.Handle("GET /emails/recovery.html", recoveryMail)
 	mux.Handle("GET /emails/mark.png", gateway.MailLogo())
 
 	l, err := net.Listen("tcp", gatewayAddr)

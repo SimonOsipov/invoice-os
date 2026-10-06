@@ -268,6 +268,7 @@ predicates it would previously have hit inside the transaction.
 | `GET /readyz` | every service (`internal/platform/server.go`) | exempt | same — readiness reports on the database, so it cannot depend on reaching it |
 | `GET /healthz/fleet` | gateway | exempt | fleet roll-up across services, deliberately outside the verifier |
 | `GET /emails/confirmation.html` | gateway | exempt | no database; static account-mail template |
+| `GET /emails/recovery.html` | gateway | exempt | no database; static account-mail template |
 | `GET /emails/mark.png` | gateway | exempt | no database; static account-mail logo |
 | `POST /auth/login` | gateway | exempt | unauthenticated by definition; there is no caller yet to hold a membership |
 | `OPTIONS /auth/login` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
@@ -285,8 +286,12 @@ predicates it would previously have hit inside the transaction.
 | `OPTIONS /auth/register` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `POST /auth/resend-verification` | gateway | exempt | no database; calls GoTrue |
 | `OPTIONS /auth/resend-verification` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
+| `POST /auth/request-password-reset` | gateway | exempt | no database; calls GoTrue |
+| `OPTIONS /auth/request-password-reset` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `GET /auth/verify` | gateway | exempt | no database; renders the confirm page |
 | `POST /auth/verify` | gateway | exempt | no database; calls GoTrue |
+| `GET /auth/reset-password` | gateway | exempt | no database; renders the reset page |
+| `POST /auth/reset-password` | gateway | exempt | no database; calls GoTrue |
 | `POST /contacts/demo-request` | gateway | exempt | no database; hands the form to notifications |
 | `OPTIONS /contacts/demo-request` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `GET /.well-known/jwks.json` | gateway | exempt | serves the public verification keys; unauthenticated by design |
@@ -359,7 +364,7 @@ predicates it would previously have hit inside the transaction.
 | `POST /v1/extractions/{id}/fields/{name}/corrections` | submission | covered | |
 | `POST /v1/extractions/{id}/line-items` | submission | covered | |
 
-95 distinct routes, 101 registrations (`GET /v1/ping` is registered once per service).
+100 distinct routes, 106 registrations (`GET /v1/ping` is registered once per service).
 
 ### 8.1 The non-HTTP callers, so nobody looks for them above
 

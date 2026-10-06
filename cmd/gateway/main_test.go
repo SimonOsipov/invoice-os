@@ -1239,7 +1239,8 @@ func TestRegistrationHandlers_NotConfigured503(t *testing.T) {
 				"Register": serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`),
 				"Verify":   serveForm(reg.Verify, "/auth/verify", "token=T&type=signup"),
 
-				"ResendVerification": serveRegistration(reg.ResendVerification, http.MethodPost, "/auth/resend-verification", `{"email":"new@corp.example"}`),
+				"ResendVerification":   serveRegistration(reg.ResendVerification, http.MethodPost, "/auth/resend-verification", `{"email":"new@corp.example"}`),
+				"RequestPasswordReset": serveRegistration(reg.RequestPasswordReset, http.MethodPost, "/auth/request-password-reset", `{"email":"new@corp.example"}`),
 			} {
 				if rec.Code != http.StatusServiceUnavailable {
 					t.Errorf("%s = %d, want 503: %s", name, rec.Code, rec.Body.String())
@@ -1284,6 +1285,122 @@ func countCalls(calls []string, want string) int {
 		}
 	}
 	return n
+}
+
+// resetFrom posts one reset request for email as the client behind remote.
+func resetFrom(h http.Handler, email, remote string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/auth/request-password-reset", strings.NewReader(`{"email":"`+email+`"}`))
+	req.RemoteAddr = remote
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// The reset page and its form need AUTH_SITE_URL, the form also AUTH_URL: unset, they answer 503 and call nothing.
+func TestResetPasswordHandler_NotConfigured503(t *testing.T) {
+	site, _ := url.Parse("https://site.example")
+	log := slog.New(slog.DiscardHandler)
+	signIn := gateway.NewSignInThrottle("sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
+	for _, unset := range []string{"AUTH_SITE_URL", "AUTH_URL"} {
+		t.Run(unset, func(t *testing.T) {
+			authURL, calls := fakeAuth(t)
+			sessions := gateway.NewSessionChecker(nil, nil, time.Now, log)
+			got := map[string]*httptest.ResponseRecorder{}
+			if unset == "AUTH_SITE_URL" {
+				got["page"] = serveRegistration(gateway.ResetPasswordPageHandler(nil), http.MethodGet, "/auth/reset-password?token=t&type=recovery", "")
+				got["form"] = serveForm(resetPasswordHandler(authURL, nil, sessions, signIn, log), "/auth/reset-password", "token=t&type=recovery&password=new-password-1")
+			} else {
+				got["form"] = serveForm(resetPasswordHandler(nil, site, sessions, signIn, log), "/auth/reset-password", "token=t&type=recovery&password=new-password-1")
+			}
+			for name, rec := range got {
+				if rec.Code != http.StatusServiceUnavailable {
+					t.Errorf("%s = %d, want 503: %s", name, rec.Code, rec.Body.String())
+					continue
+				}
+				var body map[string]string
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body) != 1 || body["error"] != "registration is not configured" {
+					t.Errorf("%s body = %s, want {\"error\":\"registration is not configured\"}", name, rec.Body.String())
+				}
+			}
+			if c := calls(); len(c) != 0 {
+				t.Errorf("GoTrue saw %v, want no calls", c)
+			}
+		})
+	}
+}
+
+// Resend and reset spend one budget: 3 per address and 10 per client (D4). Separate throttles would double both.
+func TestRegistrationHandlers_ResetSharesTheResendLimits(t *testing.T) {
+	const remote = "203.0.113.7:4000"
+	mailCalls := func(calls []string) int {
+		return countCalls(calls, "POST /resend") + countCalls(calls, "POST /recover")
+	}
+
+	t.Run("per address", func(t *testing.T) {
+		authURL, calls := fakeAuth(t)
+		site, _ := url.Parse("https://site.example")
+		reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
+		for range 2 {
+			resendFrom(reg.ResendVerification, "ada@corp.example", remote)
+			resetFrom(reg.RequestPasswordReset, "ada@corp.example", remote)
+		}
+		if got := mailCalls(calls()); got != 3 {
+			t.Errorf("GoTrue /resend + /recover calls for one address = %d, want 3", got)
+		}
+	})
+	t.Run("per client", func(t *testing.T) {
+		authURL, calls := fakeAuth(t)
+		site, _ := url.Parse("https://site.example")
+		reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
+		for i, email := range distinctAddresses(11) {
+			if i%2 == 0 {
+				resendFrom(reg.ResendVerification, email, remote)
+			} else {
+				resetFrom(reg.RequestPasswordReset, email, remote)
+			}
+		}
+		if got := mailCalls(calls()); got != 10 {
+			t.Errorf("GoTrue /resend + /recover calls from one client = %d, want 10", got)
+		}
+	})
+}
+
+// On a PR preview the per-address limit of the reset request logs but does not refuse.
+func TestRegistrationHandlers_ResetPreviewOnlyLogsPerAddress(t *testing.T) {
+	for _, c := range []struct {
+		env          string
+		wantCalls    int
+		wantEnforced bool
+	}{{"pr-7", 4, false}, {"production", 3, true}} {
+		t.Run(c.env, func(t *testing.T) {
+			t.Setenv("RAILWAY_ENVIRONMENT_NAME", c.env)
+			authURL, calls := fakeAuth(t)
+			site, _ := url.Parse("https://site.example")
+			var logs bytes.Buffer
+			reg := registrationHandlers(authURL, site, 0, slog.New(slog.NewJSONHandler(&logs, nil)), nil)
+
+			for range 4 {
+				resetFrom(reg.RequestPasswordReset, "ada@corp.example", "203.0.113.7:4000")
+			}
+			if got := countCalls(calls(), "POST /recover"); got != c.wantCalls {
+				t.Errorf("GoTrue /recover calls = %d, want %d", got, c.wantCalls)
+			}
+			var limited int
+			for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+				var rec map[string]any
+				if json.Unmarshal([]byte(line), &rec) != nil || rec["msg"] != "reset-request: limit reached" {
+					continue
+				}
+				limited++
+				if rec["enforced"] != c.wantEnforced || rec["limit"] != "address" {
+					t.Errorf("limit line = %s, want limit address enforced=%v", line, c.wantEnforced)
+				}
+			}
+			if limited != 1 {
+				t.Errorf("%d limit lines, want exactly 1 for the fourth request", limited)
+			}
+		})
+	}
 }
 
 func TestRegistrationHandlers_ResendWaitsAndLimits(t *testing.T) {
@@ -1353,7 +1470,7 @@ func TestRegistrationHandlers_RegisterHasItsOwnLimit(t *testing.T) {
 	}
 }
 
-// A PR fork counts and logs both limited routes' limits but does not refuse; every other posture refuses the eleventh.
+// A PR fork counts and logs each limited route's limits but does not refuse; every other posture refuses the eleventh.
 func TestRegistrationHandlers_PreviewOnlyLogs(t *testing.T) {
 	routes := []struct {
 		name, path, limitMsg string
@@ -1362,6 +1479,7 @@ func TestRegistrationHandlers_PreviewOnlyLogs(t *testing.T) {
 	}{
 		{"register", "POST /signup", "registration: limit reached", registerFrom, func(r registration) http.Handler { return r.Register }},
 		{"resend", "POST /resend", "resend-verification: limit reached", resendFrom, func(r registration) http.Handler { return r.ResendVerification }},
+		{"reset", "POST /recover", "reset-request: limit reached", resetFrom, func(r registration) http.Handler { return r.RequestPasswordReset }},
 	}
 	for _, c := range []struct {
 		name, env    string

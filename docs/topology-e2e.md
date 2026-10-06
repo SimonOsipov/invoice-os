@@ -32,7 +32,7 @@ M2-14.4).
    lands on the add-company task, and adding its company opens the import step it gated, the
    identity card shows the account's own name, a long name stays inside the card, and a stranger
    registers through the landing window as a firm and as an in-house account, then signs in and
-   lands in the workspace it named (the verify step is a stand-in: only the bogus link's confirm-page click is real), and the emailed link opens a confirm page whose button is laid out inside its card at every wide width and 375 px, logs no console error, and sends one verify POST on a double-click, and the check-your-email view and the unverified sign-in error (its 403 faked, the resend real) each send the link again once per click, with the sent notice naming the address, laid out inside the card at every wide width and 375 px, a 254-byte address included
+   lands in the workspace it named (the verify step is a stand-in: only the bogus link's confirm-page click is real), and the emailed link opens a confirm page whose button is laid out inside its card at every wide width and 375 px, logs no console error, and sends one verify POST on a double-click, and the check-your-email view and the unverified sign-in error (its 403 faked, the resend real) each send the link again once per click, with the sent notice naming the address, laid out inside the card at every wide width and 375 px, a 254-byte address included, and "Forgot password?" sits between the password field and the submit at every wide width and 375 px, one click of "Send reset link" sends one request and shows the sent notice inside the card, and a bogus reset link's page (laid out inside its card at every width) submits once on a double-click and lands on the failed notice, which offers a new request
    ([identity-provider.md](./identity-provider.md) "Sign-in and hand-off",
    "Renewal"). The same file's "deployed consoles:" journeys sign a staff account in through
    landing and open both consoles, refuse a customer's session and a forged record, renew the
@@ -168,9 +168,9 @@ blank SMTP host selects GoTrue's no-op mailer, so no confirmation mail leaves a 
 it in. A repeat registration then answers GoTrue `user_already_exists`, which
 `/auth/register` maps to the same 202. `set-fork-auth-site` (after the
 `urls` step) writes the fork's landing URL as both `auth.GOTRUE_SITE_URL` and
-`gateway.AUTH_SITE_URL`; without the second, the fork's `/auth/register`, `/auth/resend-verification` and `/auth/verify`
-answer 503 `registration is not configured`. The emailed-link half, including the branded confirmation template that `idp-mail` fetches from the
-gateway's `GET /emails/confirmation.html`, is proven only by the
+`gateway.AUTH_SITE_URL`; without the second, the fork's `/auth/register`, `/auth/resend-verification`, `/auth/request-password-reset`, `/auth/verify` and `/auth/reset-password`
+answer 503 `registration is not configured`. The emailed-link half, including the branded confirmation and recovery templates that `idp-mail` fetches from the
+gateway's `GET /emails/confirmation.html` and `GET /emails/recovery.html`, is proven only by the
 CI `idp` job's `idp-mail` container and mailpit.
 
 ### GitHub secrets

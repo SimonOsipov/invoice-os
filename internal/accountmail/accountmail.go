@@ -9,7 +9,7 @@ import (
 	"net/url"
 )
 
-//go:embed layout.html confirmation.html invite.html
+//go:embed layout.html confirmation.html invite.html recovery.html
 var files embed.FS
 
 // LogoURL is the absolute public URL of the mark in every mail.
@@ -17,7 +17,7 @@ const LogoURL = "https://api.ascomply.com/emails/mark.png"
 
 // Template returns layout.html plus <name>.html as one html/template source.
 func Template(name string) ([]byte, error) {
-	if name != "confirmation" && name != "invite" {
+	if name != "confirmation" && name != "invite" && name != "recovery" {
 		return nil, fmt.Errorf("accountmail: unknown mail %q", name)
 	}
 	layout, err := files.ReadFile("layout.html")

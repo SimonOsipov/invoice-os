@@ -30,6 +30,7 @@ case "$1" in
     printf 'ENV %s DATABASE_URL=%s\n' "$name" "${DATABASE_URL:-}" >>"$STUB_LOG"
     printf 'ENV %s GOTRUE_JWT_KEYS=%s\n' "$name" "${GOTRUE_JWT_KEYS:-}" >>"$STUB_LOG"
     printf 'ENV %s GOTRUE_MAILER_SUBJECTS_CONFIRMATION=%s\n' "$name" "${GOTRUE_MAILER_SUBJECTS_CONFIRMATION:-}" >>"$STUB_LOG"
+    printf 'ENV %s GOTRUE_MAILER_SUBJECTS_RECOVERY=%s\n' "$name" "${GOTRUE_MAILER_SUBJECTS_RECOVERY:-}" >>"$STUB_LOG"
     echo "0123456789abcdef" ;;
   inspect) echo true ;;
   *) echo "docker $*" >>"$STUB_LOG" ;;
@@ -162,13 +163,15 @@ func argvByName(argv, name string) int {
 	return n
 }
 
-const (
-	mailTemplateVar = "GOTRUE_MAILER_TEMPLATES_CONFIRMATION"
-	mailSubjectVar  = "GOTRUE_MAILER_SUBJECTS_CONFIRMATION"
-	mailSubject     = "Confirm your ASComply account"
-)
+// mailKinds are idp-mail's two branded mails: template page, subject and mailed-link path.
+var mailKinds = []struct{ templateVar, subjectVar, urlpathVar, page, subject, path string }{
+	{"GOTRUE_MAILER_TEMPLATES_CONFIRMATION", "GOTRUE_MAILER_SUBJECTS_CONFIRMATION", "GOTRUE_MAILER_URLPATHS_CONFIRMATION", "confirmation", "Confirm your ASComply account", "/auth/verify"},
+	{"GOTRUE_MAILER_TEMPLATES_RECOVERY", "GOTRUE_MAILER_SUBJECTS_RECOVERY", "GOTRUE_MAILER_URLPATHS_RECOVERY", "recovery", "Reset your ASComply password", "/auth/reset-password"},
+}
 
-// assertMailBranding pins idp-mail's template URL and subject: one of each, the subject by name, no other container sets either.
+const rateLimitVar = "GOTRUE_RATE_LIMIT_EMAIL_SENT"
+
+// assertMailBranding pins idp-mail's template URL, subject and link path for each mail: one of each, the subject by name, the mail cap at 100.
 func assertMailBranding(t *testing.T, log, container, osName string, verifyPort int) {
 	t.Helper()
 	runs := stubLines(log, "RUN", container)
@@ -179,21 +182,36 @@ func assertMailBranding(t *testing.T, log, container, osName string, verifyPort 
 	if osName != "Linux" {
 		host = "host.docker.internal"
 	}
-	want := fmt.Sprintf("http://%s:%d/emails/confirmation.html", host, verifyPort)
-	if got := argvEnv(runs[0], mailTemplateVar); got != want {
-		t.Errorf("%s %s = %q, want %q: %s", container, mailTemplateVar, got, want, runs[0])
+	for _, k := range mailKinds {
+		want := fmt.Sprintf("http://%s:%d/emails/%s.html", host, verifyPort, k.page)
+		if got := argvEnv(runs[0], k.templateVar); got != want {
+			t.Errorf("%s %s = %q, want %q: %s", container, k.templateVar, got, want, runs[0])
+		}
+		if n := strings.Count(runs[0], "-e "+k.templateVar+"="); n != 1 {
+			t.Errorf("%s passes %s %d times, want 1", container, k.templateVar, n)
+		}
+		wantPath := fmt.Sprintf("http://localhost:%d%s", verifyPort, k.path)
+		if got := argvEnv(runs[0], k.urlpathVar); got != wantPath {
+			t.Errorf("%s %s = %q, want %q: %s", container, k.urlpathVar, got, wantPath, runs[0])
+		}
+		if n := strings.Count(runs[0], "-e "+k.urlpathVar+"="); n != 1 {
+			t.Errorf("%s passes %s %d times, want 1", container, k.urlpathVar, n)
+		}
+		if n := argvByName(runs[0], k.subjectVar); n != 1 {
+			t.Errorf("%s passes %s by name %d times, want 1: %s", container, k.subjectVar, n, runs[0])
+		}
+		if strings.Contains(runs[0], k.subjectVar+"=") {
+			t.Errorf("%s carries %s in argv; a value with spaces passes by name: %s", container, k.subjectVar, runs[0])
+		}
+		if got := stubEnv(t, log, container, k.subjectVar); got != k.subject {
+			t.Errorf("%s forwards %s = %q, want %q", container, k.subjectVar, got, k.subject)
+		}
 	}
-	if n := strings.Count(runs[0], "-e "+mailTemplateVar+"="); n != 1 {
-		t.Errorf("%s passes %s %d times, want 1", container, mailTemplateVar, n)
+	if strings.Contains(runs[0], "ASComply") {
+		t.Errorf("%s carries a subject in argv; a value with spaces passes by name: %s", container, runs[0])
 	}
-	if n := argvByName(runs[0], mailSubjectVar); n != 1 {
-		t.Errorf("%s passes %s by name %d times, want 1: %s", container, mailSubjectVar, n, runs[0])
-	}
-	if strings.Contains(runs[0], mailSubjectVar+"=") || strings.Contains(runs[0], "ASComply") {
-		t.Errorf("%s carries the subject in argv; a value with spaces passes by name: %s", container, runs[0])
-	}
-	if got := stubEnv(t, log, container, mailSubjectVar); got != mailSubject {
-		t.Errorf("%s forwards %s = %q, want %q", container, mailSubjectVar, got, mailSubject)
+	if n := strings.Count(runs[0], "-e "+rateLimitVar+"="); n != 1 || argvEnv(runs[0], rateLimitVar) != "100" {
+		t.Errorf("%s passes %s %d times as %q, want once as 100: %s", container, rateLimitVar, n, argvEnv(runs[0], rateLimitVar), runs[0])
 	}
 }
 
@@ -365,6 +383,7 @@ func TestIdpUpMailContainerConfiguration(t *testing.T) {
 				"GOTRUE_SMTP_HOST":                    smtpHost,
 				"GOTRUE_SMTP_PORT":                    "1025",
 				"GOTRUE_MAILER_URLPATHS_CONFIRMATION": "http://localhost:9995/auth/verify",
+				"GOTRUE_MAILER_URLPATHS_RECOVERY":     "http://localhost:9995/auth/reset-password",
 				"GOTRUE_DISABLE_SIGNUP":               "false",
 				"PORT":                                "9994",
 				"GOTRUE_JWT_ISSUER":                   idpIssuer,
@@ -408,8 +427,15 @@ func TestIdpUpMailContainerConfiguration(t *testing.T) {
 				if len(argv) != 1 {
 					t.Fatalf("%s started %d times, want 1", c, len(argv))
 				}
-				if strings.Contains(argv[0], mailTemplateVar) || strings.Contains(argv[0], mailSubjectVar) {
-					t.Errorf("%s sets a mail template or subject; only idp-mail mails: %s", c, argv[0])
+				for _, k := range mailKinds {
+					for _, v := range []string{k.templateVar, k.subjectVar, k.urlpathVar} {
+						if strings.Contains(argv[0], v) {
+							t.Errorf("%s sets %s; only idp-mail mails: %s", c, v, argv[0])
+						}
+					}
+				}
+				if strings.Contains(argv[0], rateLimitVar) {
+					t.Errorf("%s sets %s; only idp-mail mails: %s", c, rateLimitVar, argv[0])
 				}
 			}
 

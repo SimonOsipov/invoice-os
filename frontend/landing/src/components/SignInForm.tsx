@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import type { CSSProperties, FormEvent } from 'react'
 import { DEMO_FORM_CSS, Glyph, WARN_PATHS } from './DemoLeadForm'
+import { Button } from './ds/Button'
 import { RESEND_FAILED, resendSentNotice } from '../register'
 import { useResend } from './useResend'
 import { handoffUrl, isUnverified, signInErrorMessage, signInWithPassword, startUrl, type ConsoleTarget } from '../signIn'
@@ -12,6 +13,7 @@ const ID = 'si-form'
 export const FIELD_STYLE: CSSProperties = { width: '100%', height: 42, background: 'var(--card)', border: '1px solid var(--input)', borderRadius: 'var(--radius)', padding: '0 13px', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-sans)' }
 const ALERT_STYLE: CSSProperties = { display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--destructive)' }
 const BUTTON_STYLE: CSSProperties = { width: '100%' }
+export const SPINNER_STYLE: CSSProperties = { width: 15, height: 15, border: '2px solid color-mix(in srgb, var(--primary-foreground) 40%, transparent)', borderTopColor: 'var(--primary-foreground)', borderRadius: 'var(--radius-pill)', animation: 'dmSpin 0.7s linear infinite' }
 
 export function Alert({ id, text }: { id?: string; text: string }) {
   return (
@@ -22,11 +24,11 @@ export function Alert({ id, text }: { id?: string; text: string }) {
 }
 
 // The status region stays mounted while the resend control shows, so screen readers announce the text put into it.
-export function ResendNotice({ note, email }: { note?: { ok: boolean }; email: string }) {
+export function ResendNotice({ note, email, text }: { note?: { ok: boolean }; email: string; text?: string }) {
   return (
     <>
       <div role="status">
-        {note?.ok && <p className="t-body-sm" style={{ marginTop: 8, marginBottom: 0, overflowWrap: 'anywhere' }}>{resendSentNotice(email)}</p>}
+        {note?.ok && <p className="t-body-sm" style={{ marginTop: 8, marginBottom: 0, overflowWrap: 'anywhere' }}>{text ?? resendSentNotice(email)}</p>}
       </div>
       {note?.ok === false && <Alert text={RESEND_FAILED} />}
     </>
@@ -34,7 +36,7 @@ export function ResendNotice({ note, email }: { note?: { ok: boolean }; email: s
 }
 
 // heldState is read at open and again at submit: an expired or dropped state is never posted.
-export function SignInForm({ heldState, initialError, consoleTarget }: { heldState: () => string | null; initialError?: string; consoleTarget?: ConsoleTarget }) {
+export function SignInForm({ heldState, initialError, consoleTarget, onForgot }: { heldState: () => string | null; initialError?: string; consoleTarget?: ConsoleTarget; onForgot?: () => void }) {
   const [state, setState] = useState(heldState)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -160,10 +162,17 @@ export function SignInForm({ heldState, initialError, consoleTarget }: { heldSta
           {errors.password && <Alert id={`${ID}-password-error`} text={errors.password} />}
         </div>
       </div>
+      {onForgot && (
+        <div style={{ marginTop: 8 }}>
+          <Button variant="text" type="button" onClick={onForgot} disabled={submitting} style={{ fontSize: 13 }}>
+            Forgot password?
+          </Button>
+        </div>
+      )}
       <button type="submit" disabled={submitting} className="ds-btn ds-btn--primary ds-btn--md" style={{ ...BUTTON_STYLE, marginTop: 18 }}>
         {submitting ? (
           <>
-            <span style={{ width: 15, height: 15, border: '2px solid color-mix(in srgb, var(--primary-foreground) 40%, transparent)', borderTopColor: 'var(--primary-foreground)', borderRadius: 'var(--radius-pill)', animation: 'dmSpin 0.7s linear infinite' }} />
+            <span style={SPINNER_STYLE} />
             Checking…
           </>
         ) : (
@@ -173,7 +182,7 @@ export function SignInForm({ heldState, initialError, consoleTarget }: { heldSta
       {formError && <Alert text={formError} />}
       {unverified !== undefined && (
         <>
-          <button type="button" onClick={resend} disabled={resending} className="ds-btn ds-btn--outline ds-btn--md" style={{ ...BUTTON_STYLE, marginTop: 12 }}>
+          <button type="button" onClick={() => resend()} disabled={resending} className="ds-btn ds-btn--outline ds-btn--md" style={{ ...BUTTON_STYLE, marginTop: 12 }}>
             {resending ? 'Sending…' : 'Send the link again'}
           </button>
           <ResendNotice note={note} email={unverified} />

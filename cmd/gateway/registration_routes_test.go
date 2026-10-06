@@ -159,7 +159,7 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 	}
 
 	// The seam: reg := registrationHandlers(probed["auth"], ...) and withCORS := gateway.CORS(...), both top-level.
-	recv, corsLocal := "", false
+	recv, hand, corsLocal := "", "", false
 	for _, s := range stmts {
 		as, ok := s.(*ast.AssignStmt)
 		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
@@ -177,7 +177,12 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 				t.Errorf("registrationHandlers base = %v, want probed[\"auth\"]", call.Args)
 			}
 			recv = types.ExprString(as.Lhs[0])
+		case "handoffHandlers":
+			hand = types.ExprString(as.Lhs[0])
 		}
+	}
+	if hand == "" {
+		t.Fatal("main has no top-level `x := handoffHandlers(...)`; the reset form has no sign-in throttle to clear")
 	}
 	if recv == "" {
 		t.Fatal("main has no top-level `x := registrationHandlers(probed[\"auth\"], ...)`")
@@ -232,6 +237,12 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 
 		"POST /contacts/demo-request":    "withCORS(" + recv + ".DemoRequest)",
 		"OPTIONS /contacts/demo-request": "withCORS(" + recv + ".DemoRequest)",
+
+		// The request is landing-page JavaScript; the page and its same-origin form POST take no CORS wrap.
+		"POST /auth/request-password-reset":    "withCORS(" + recv + ".RequestPasswordReset)",
+		"OPTIONS /auth/request-password-reset": "withCORS(" + recv + ".RequestPasswordReset)",
+		"GET /auth/reset-password":             "gateway.ResetPasswordPageHandler(siteURL)",
+		"POST /auth/reset-password":            `resetPasswordHandler(probed["auth"], siteURL, sessions, ` + hand + `.SignInThrottle, app.Logger)`,
 	} {
 		s := sitesFor(sites, pattern)
 		if len(s) != 1 {
@@ -258,9 +269,9 @@ func TestAccountMailRoutesRegisteredUnconditionally(t *testing.T) {
 		t.Fatalf("found %d literal-pattern routes in main, want at least 4; the scan went blind: %+v", len(sites), sites)
 	}
 
-	// The template handler is the first result of the top-level `x, err := gateway.MailTemplate("confirmation")`,
+	// Each template handler is the first result of a top-level `x, err := gateway.MailTemplate("<name>")`,
 	// and the statement after it must stop boot through platform.Fatal.
-	tpl, fatalOnErr := "", false
+	tpl, fatalOnErr := map[string]string{}, map[string]bool{}
 	for i, s := range stmts {
 		as, ok := s.(*ast.AssignStmt)
 		if !ok || len(as.Lhs) != 2 || len(as.Rhs) != 1 {
@@ -270,30 +281,38 @@ func TestAccountMailRoutesRegisteredUnconditionally(t *testing.T) {
 		if !ok || types.ExprString(call.Fun) != "gateway.MailTemplate" {
 			continue
 		}
-		if len(call.Args) != 1 || types.ExprString(call.Args[0]) != `"confirmation"` {
-			t.Errorf("gateway.MailTemplate args = %v, want \"confirmation\" (the name in /emails/confirmation.html)", call.Args)
+		if len(call.Args) != 1 {
+			t.Errorf("gateway.MailTemplate args = %v, want one template name", call.Args)
+			continue
 		}
-		tpl = types.ExprString(as.Lhs[0])
+		name, _ := strconv.Unquote(types.ExprString(call.Args[0]))
+		tpl[name] = types.ExprString(as.Lhs[0])
 		if i+1 < len(stmts) {
 			if is, ok := stmts[i+1].(*ast.IfStmt); ok && types.ExprString(is.Cond) == "err != nil" {
 				ast.Inspect(is.Body, func(n ast.Node) bool {
 					if c, ok := n.(*ast.CallExpr); ok && types.ExprString(c.Fun) == "platform.Fatal" {
-						fatalOnErr = true
+						fatalOnErr[name] = true
 					}
 					return true
 				})
 			}
 		}
 	}
-	if tpl == "" {
-		t.Fatal("main has no top-level `x, err := gateway.MailTemplate(...)`")
+	for _, name := range []string{"confirmation", "recovery"} {
+		if tpl[name] == "" {
+			t.Fatalf("main has no top-level `x, err := gateway.MailTemplate(%q)` (found %v)", name, tpl)
+		}
+		if !fatalOnErr[name] {
+			t.Errorf("a MailTemplate(%q) error does not reach platform.Fatal in the statement after it; the gateway would boot without its template", name)
+		}
 	}
-	if !fatalOnErr {
-		t.Error("a MailTemplate error does not reach platform.Fatal in the statement after it; the gateway would boot without its template")
+	if len(tpl) != 2 {
+		t.Errorf("main loads templates %v, want exactly confirmation and recovery", tpl)
 	}
 
 	for pattern, want := range map[string]string{
-		"GET /emails/confirmation.html": tpl,
+		"GET /emails/confirmation.html": tpl["confirmation"],
+		"GET /emails/recovery.html":     tpl["recovery"],
 		"GET /emails/mark.png":          "gateway.MailLogo()",
 	} {
 		s := sitesFor(sites, pattern)
@@ -317,8 +336,8 @@ func TestAccountMailRoutesRegisteredUnconditionally(t *testing.T) {
 			n++
 		}
 	}
-	if n != 2 {
-		t.Errorf("main registers %d routes under /emails, want exactly the 2 account-mail routes", n)
+	if n != 3 {
+		t.Errorf("main registers %d routes under /emails, want exactly the 3 account-mail routes", n)
 	}
 }
 
@@ -422,22 +441,22 @@ func TestRegisterOptionsWithoutOriginIsNotARegistration(t *testing.T) {
 	}
 }
 
-// resendMux mounts the real resend handler behind the CORS allow-list on both patterns, as main does.
-func resendMux(t *testing.T) (*http.ServeMux, func() []string) {
+// mailLinkMux mounts one real mail-link handler behind the CORS allow-list on both patterns, as main does.
+func mailLinkMux(t *testing.T, path string, pick func(registration) http.Handler) (*http.ServeMux, func() []string) {
 	t.Helper()
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
 	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
 	withCORS := gateway.CORS([]string{registerAllowedOrigin})
 	mux := http.NewServeMux()
-	mux.Handle("POST /auth/resend-verification", withCORS(reg.ResendVerification))
-	mux.Handle("OPTIONS /auth/resend-verification", withCORS(reg.ResendVerification))
+	mux.Handle("POST "+path, withCORS(pick(reg)))
+	mux.Handle("OPTIONS "+path, withCORS(pick(reg)))
 	return mux, calls
 }
 
 func TestResendVerificationPreflightGrantsTheAllowedOrigin(t *testing.T) {
-	mux, calls := resendMux(t)
 	const path = "/auth/resend-verification"
+	mux, calls := mailLinkMux(t, path, func(r registration) http.Handler { return r.ResendVerification })
 
 	rec := preflight(mux, path, registerAllowedOrigin)
 	if rec.Code != http.StatusNoContent {
@@ -477,7 +496,7 @@ func TestResendVerificationPreflightGrantsTheAllowedOrigin(t *testing.T) {
 
 // An OPTIONS without Origin is no preflight: it reaches the handler, which refuses it.
 func TestResendVerificationOptionsWithoutOriginIsNotAResend(t *testing.T) {
-	mux, calls := resendMux(t)
+	mux, calls := mailLinkMux(t, "/auth/resend-verification", func(r registration) http.Handler { return r.ResendVerification })
 	const body = `{"email":"new@corp.example"}`
 
 	req := httptest.NewRequest(http.MethodOptions, "/auth/resend-verification", strings.NewReader(body))
@@ -498,6 +517,73 @@ func TestResendVerificationOptionsWithoutOriginIsNotAResend(t *testing.T) {
 	}
 	if got := calls(); len(got) != 1 {
 		t.Errorf("GoTrue saw %v after one POST, want one call", got)
+	}
+}
+
+func TestRequestPasswordResetPreflightGrantsTheAllowedOrigin(t *testing.T) {
+	const path = "/auth/request-password-reset"
+	mux, calls := mailLinkMux(t, path, func(r registration) http.Handler { return r.RequestPasswordReset })
+
+	rec := preflight(mux, path, registerAllowedOrigin)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("preflight from the allowed origin = %d, want 204", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != registerAllowedOrigin {
+		t.Errorf("preflight Access-Control-Allow-Origin = %q, want %q", got, registerAllowedOrigin)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(got, http.MethodPost) {
+		t.Errorf("preflight Access-Control-Allow-Methods = %q, want POST granted", got)
+	}
+
+	for _, origin := range []string{"https://evil.example", "http://landing.example", registerAllowedOrigin + ".evil.example", "null"} {
+		rec = preflight(mux, path, origin)
+		for _, h := range []string{"Access-Control-Allow-Origin", "Access-Control-Allow-Methods", "Access-Control-Allow-Headers"} {
+			if got := rec.Header().Get(h); got != "" {
+				t.Errorf("preflight from %q carries %s = %q, want none", origin, h, got)
+			}
+		}
+	}
+	if got := calls(); len(got) != 0 {
+		t.Errorf("a preflight reached GoTrue: %v", got)
+	}
+
+	// Positive pair: the POST itself is answered, with the grant, and reaches GoTrue once.
+	rec = postJSON(mux, path, registerAllowedOrigin, `{"email":"ada@corp.example"}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("POST from the allowed origin = %d, want 202: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != registerAllowedOrigin {
+		t.Errorf("POST Access-Control-Allow-Origin = %q, want %q", got, registerAllowedOrigin)
+	}
+	if got := calls(); !slices.Equal(got, []string{"POST /recover"}) {
+		t.Errorf("GoTrue saw %v after one POST, want one /recover", got)
+	}
+}
+
+// An OPTIONS without Origin is no preflight: it reaches the handler, which refuses it.
+func TestRequestPasswordResetOptionsWithoutOriginIsNotARequest(t *testing.T) {
+	const path = "/auth/request-password-reset"
+	mux, calls := mailLinkMux(t, path, func(r registration) http.Handler { return r.RequestPasswordReset })
+	const body = `{"email":"ada@corp.example"}`
+
+	req := httptest.NewRequest(http.MethodOptions, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != http.MethodPost {
+		t.Errorf("OPTIONS with no Origin = %d Allow %q, want 405 Allow POST: %s", rec.Code, rec.Header().Get("Allow"), rec.Body.String())
+	}
+	if got := calls(); len(got) != 0 {
+		t.Errorf("an OPTIONS request reached GoTrue: %v", got)
+	}
+
+	// Positive pair: the same body as a POST does reach GoTrue.
+	if rec := postJSON(mux, path, registerAllowedOrigin, body); rec.Code != http.StatusAccepted {
+		t.Fatalf("POST = %d, want 202: %s", rec.Code, rec.Body.String())
+	}
+	if got := calls(); !slices.Equal(got, []string{"POST /recover"}) {
+		t.Errorf("GoTrue saw %v after one POST, want one /recover", got)
 	}
 }
 

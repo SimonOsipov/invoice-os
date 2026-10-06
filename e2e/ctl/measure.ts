@@ -112,7 +112,7 @@ export async function measure(req: MeasureRequest, exec: Exec = defaultExec): Pr
   const r = await exec([`-s=${req.session}`, '--raw', 'run-code', measureSnippet(req)])
   const text = (r.stdout.trim() || (r.stderr ?? '').trim()) || `playwright-cli exited ${r.code}`
   if (r.code !== 0) {
-    if (/The browser '[^']*' is not open/.test(text)) {
+    if (/(?:The b|B)rowser '[^']*' is not open/.test(text)) {
       throw new CtlError(
         text,
         `Open the session first: playwright-cli -s=${req.session} open <url>, then state-load <file> (ctl login prints it). Or run ctl login.`,

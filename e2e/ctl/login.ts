@@ -217,14 +217,6 @@ export async function regrant(_key: AccountKey, account: Account): Promise<void>
   })
 }
 
-// 'ready' only if the ready promise wins; both promises get a rejection handler.
-export function raceReady(ready: Promise<unknown>, bounced: Promise<unknown>): Promise<'ready' | 'stale'> {
-  return Promise.race([
-    ready.then(() => 'ready' as const, () => 'stale' as const),
-    bounced.then(() => 'stale' as const, () => 'stale' as const),
-  ])
-}
-
 const NEEDED: Record<Persona, ServiceLabel[]> = {
   firm: ['landing', 'app', 'gateway'],
   inhouse: ['landing', 'app', 'gateway'],

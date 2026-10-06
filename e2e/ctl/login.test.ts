@@ -48,8 +48,6 @@ afterEach(() => {
   roots = []
 })
 
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
-
 type Refusal = Error & { code: number; hint: string }
 
 function asRefusal(e: unknown): Refusal {
@@ -724,48 +722,6 @@ describe('credentialsValid', () => {
   })
 })
 
-describe('raceReady', () => {
-  // Fails if a rejection of either promise is left without a handler.
-  async function noUnhandledRejection(run: () => Promise<void>): Promise<void> {
-    const seen = vi.fn()
-    process.on('unhandledRejection', seen)
-    try {
-      await run()
-      await sleep(100)
-    } finally {
-      process.off('unhandledRejection', seen)
-    }
-    expect(seen).not.toHaveBeenCalled()
-  }
-
-  it('raceReady: ready first is ready', async () => {
-    const L = await load()
-    await noUnhandledRejection(async () => {
-      const ready = sleep(10)
-      const bounced = new Promise<never>(() => {})
-      expect(await L.raceReady(ready, bounced)).toBe('ready')
-    })
-  })
-
-  it('raceReady: a bounce first is stale', async () => {
-    const L = await load()
-    await noUnhandledRejection(async () => {
-      const bounced = sleep(10)
-      const ready = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 50))
-      expect(await L.raceReady(ready, bounced)).toBe('stale')
-    })
-  })
-
-  it('raceReady: both reject is stale', async () => {
-    const L = await load()
-    await noUnhandledRejection(async () => {
-      const ready = Promise.reject(new Error('timeout'))
-      const bounced = Promise.reject(new Error('timeout'))
-      expect(await L.raceReady(ready, bounced)).toBe('stale')
-    })
-  })
-})
-
 const WRITE_PATHS = ['/auth/register', '/auth/mock/member', '/auth/mock/staff']
 const writes = (gw: Gateway) => gw.requests.filter((r) => r.method === 'POST' && WRITE_PATHS.includes(r.path))
 
@@ -1063,22 +1019,6 @@ describe('apiRole against a stubbed gateway (D47)', () => {
       expect(err.code, String(status)).toBe(1)
       expect(err.message, String(status)).toContain(String(status))
     }
-  })
-})
-
-describe('raceReady, adversarial', () => {
-  it('a ready timeout that lands before a bounce is stale, not a throw', async () => {
-    const L = await load()
-    const ready = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 10))
-
-    expect(await L.raceReady(ready, sleep(50))).toBe('stale')
-  })
-
-  it('a bounce wait that times out while ready is pending is stale, not a throw', async () => {
-    const L = await load()
-    const bounced = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 10))
-
-    expect(await L.raceReady(new Promise<never>(() => {}), bounced)).toBe('stale')
   })
 })
 

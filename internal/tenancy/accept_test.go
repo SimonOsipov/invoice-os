@@ -3,6 +3,7 @@ package tenancy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -521,11 +522,11 @@ func TestAccept_AMismatchedAddressIsRefusedAlikeWithOrWithoutAnAccount(t *testin
 	type answer struct {
 		status int
 		body   string
-		ctype  string
+		header string
 	}
 	ask := func(store *Store, token, email string) answer {
 		rec := apiDo(AcceptInvitationHandler(store.AcceptInvitation, nil), tenantless(uuid.NewString(), email), http.MethodPost, "/v1/invitations/accept", `{"token":"`+token+`"}`)
-		return answer{rec.Code, rec.Body.String(), rec.Header().Get("Content-Type")}
+		return answer{rec.Code, rec.Body.String(), fmt.Sprint(rec.Header())}
 	}
 
 	var first answer
@@ -552,5 +553,75 @@ func TestAccept_AMismatchedAddressIsRefusedAlikeWithOrWithoutAnAccount(t *testin
 		if strings.Contains(got.body, knownAddr) || strings.Contains(got.body, inviteeAddr) {
 			t.Errorf("%s: body %s names an address", c.name, got.body)
 		}
+	}
+}
+
+func TestAccept_ATokenJoinsOnlyItsOwnTenant(t *testing.T) {
+	a := newAcceptWorld(t, "reviewer")
+	b := newInvWorld(t, "Other Firm", "Bola Eze")
+	invB := mustIssue(t, b.adminCtx(), b.store, []string{inviteeAddr}, "preparer")[0]
+	user := uuid.NewString()
+
+	// A stale tenant claim for A does not steer the accept: the token names B.
+	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: user, Role: "authenticated", TenantID: a.tenant, Email: inviteeAddr})
+	tenant, _, role, err := b.store.AcceptInvitation(ctx, invB.Token)
+	if err != nil {
+		t.Fatalf("AcceptInvitation: %v", err)
+	}
+	if tenant.ID != b.tenant || tenant.Name != "Other Firm" || role != "preparer" {
+		t.Errorf("result = tenant %+v role %q, want Other Firm (%s) preparer", tenant, role, b.tenant)
+	}
+	rows := membersOf(t, a.super, user)
+	if len(rows) != 1 || rows[0].Tenant != b.tenant || rows[0].Role != "preparer" {
+		t.Errorf("memberships = %+v, want exactly one in tenant B as preparer", rows)
+	}
+	requireStatus(t, a, "pending")
+	if got := invRows(t, b.super, b.tenant, "id = $2", invB.ID); len(got) != 1 || got[0].Status != "accepted" {
+		t.Errorf("tenant B invite rows = %+v, want one accepted", got)
+	}
+	if n := len(acceptedAudits(t, a.super, a.tenant)); n != 0 {
+		t.Errorf("tenant A invitation.accepted rows = %d, want 0", n)
+	}
+	if n := len(acceptedAudits(t, a.super, b.tenant)); n != 1 {
+		t.Errorf("tenant B invitation.accepted rows = %d, want 1", n)
+	}
+}
+
+func TestAccept_AMalformedTokenOrSubjectSendsNoStatement(t *testing.T) {
+	w := newAcceptWorld(t, "reviewer")
+	store, tr := tracedStore(t)
+	valid := tenantless(uuid.NewString(), inviteeAddr)
+
+	// Control: a well-formed call reaches the pool, so a zero count below is not a dead tracer.
+	before := tr.count()
+	if _, _, _, err := store.AcceptInvitation(valid, w.invite.Token); err != nil {
+		t.Fatalf("control accept: %v", err)
+	}
+	if tr.count() == before {
+		t.Fatal("the traced pool saw no statement for a live accept, so a zero count proves nothing")
+	}
+
+	for _, c := range []struct {
+		name  string
+		ctx   context.Context
+		token string
+		want  error
+	}{
+		{"42 characters", valid, w.invite.Token[:42], ErrInvitationNotValid},
+		{"44 characters", valid, w.invite.Token + "A", ErrInvitationNotValid},
+		{"plus sign", valid, w.invite.Token[:42] + "+", ErrInvitationNotValid},
+		{"empty", valid, "", ErrInvitationNotValid},
+		{"subject is not a uuid", tenantless("not-a-uuid", inviteeAddr), w.invite.Token, db.ErrNoTenant},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			before := tr.count()
+			_, _, _, err := store.AcceptInvitation(c.ctx, c.token)
+			if !errors.Is(err, c.want) {
+				t.Errorf("err = %v, want %v", err, c.want)
+			}
+			if n := tr.count() - before; n != 0 {
+				t.Errorf("sent %d statements, want none", n)
+			}
+		})
 	}
 }

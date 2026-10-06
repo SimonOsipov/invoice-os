@@ -90,10 +90,10 @@ func TestAcceptHandler_Contract(t *testing.T) {
 		{"malformed JSON", `{`, granted, http.StatusBadRequest, "invalid request body", 0},
 		{"empty body", ``, granted, http.StatusBadRequest, "invalid request body", 0},
 		{"over 1 KiB", bodyOf(1025), granted, http.StatusBadRequest, "invalid request body", 0},
-		{"invite not valid", okBody, failing(ErrInvitationNotValid), http.StatusNotFound, msgInviteNotValid, 1},
-		{"invite not valid, wrapped", okBody, failing(fmt.Errorf("accept: %w", ErrInvitationNotValid)), http.StatusNotFound, msgInviteNotValid, 1},
-		{"already a member", okBody, failing(ErrAlreadyMember), http.StatusConflict, msgAlreadyMember, 1},
-		{"another address", okBody, failing(ErrInvitationEmailMismatch), http.StatusForbidden, msgWrongAddress, 1},
+		{"invite not valid", okBody, failing(ErrInvitationNotValid), http.StatusNotFound, "this invite is no longer valid", 1},
+		{"invite not valid, wrapped", okBody, failing(fmt.Errorf("accept: %w", ErrInvitationNotValid)), http.StatusNotFound, "this invite is no longer valid", 1},
+		{"already a member", okBody, failing(ErrAlreadyMember), http.StatusConflict, "you already belong to a workspace", 1},
+		{"another address", okBody, failing(ErrInvitationEmailMismatch), http.StatusForbidden, "this invite was sent to a different email address", 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			calls := 0
@@ -143,6 +143,9 @@ func TestPreviewHandler_Contract(t *testing.T) {
 			return granted(ctx, tok)
 		}
 		rec := apiDo(InvitationPreviewHandler(fn, nil), context.Background(), http.MethodPost, "/internal/invitations/preview", okBody)
+		if full := apiDo(InvitationPreviewHandler(granted, nil), context.Background(), http.MethodPost, "/internal/invitations/preview", bodyOf(1024)); full.Code != http.StatusOK {
+			t.Errorf("a body of exactly 1 KiB: status = %d, want 200: %s", full.Code, full.Body)
+		}
 		if len(calls) != 1 || calls[0] != token {
 			t.Errorf("preview calls = %v, want one with the body's token", calls)
 		}
@@ -165,7 +168,7 @@ func TestPreviewHandler_Contract(t *testing.T) {
 		msg        string
 		called     int
 	}{
-		{"not valid", okBody, failing(ErrInvitationNotValid), http.StatusNotFound, msgInviteNotValid, 1},
+		{"not valid", okBody, failing(ErrInvitationNotValid), http.StatusNotFound, "this invite is no longer valid", 1},
 		{"malformed JSON", `{`, granted, http.StatusBadRequest, "invalid request body", 0},
 		{"over 1 KiB", bodyOf(1025), granted, http.StatusBadRequest, "invalid request body", 0},
 		{"other error", okBody, failing(errors.New("boom")), http.StatusInternalServerError, "internal server error", 1},
@@ -184,6 +187,15 @@ func TestPreviewHandler_Contract(t *testing.T) {
 		})
 	}
 
+	t.Run("any other error is a logged 500", func(t *testing.T) {
+		var logs syncBuf
+		rec := apiDo(InvitationPreviewHandler(failing(errors.New("boom")), slog.New(slog.NewTextHandler(&logs, nil))), context.Background(), http.MethodPost, "/internal/invitations/preview", okBody)
+		assertErrorBody(t, rec, http.StatusInternalServerError, "internal server error")
+		if n := strings.Count(logs.String(), "level=ERROR"); n != 1 {
+			t.Errorf("ERROR log lines = %d, want 1:\n%s", n, logs.String())
+		}
+	})
+
 	t.Run("identity changes nothing", func(t *testing.T) {
 		id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString(), Email: "x@y.test"}
 		for name, ctx := range map[string]context.Context{
@@ -199,7 +211,7 @@ func TestPreviewHandler_Contract(t *testing.T) {
 					t.Errorf("live invite: %d %s, want 200 with the workspace", rec.Code, rec.Body)
 				}
 				assertErrorBody(t, apiDo(InvitationPreviewHandler(failing(ErrInvitationNotValid), nil), ctx, http.MethodPost, "/internal/invitations/preview", okBody),
-					http.StatusNotFound, msgInviteNotValid)
+					http.StatusNotFound, "this invite is no longer valid")
 			})
 		}
 	})

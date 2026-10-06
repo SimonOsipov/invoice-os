@@ -14,8 +14,8 @@
 // "no database HANDLE is acquired outside the allowlist" — a pool method, a bare
 // connection, a constructed pool and a database/sql handle all count, because a
 // monopoly with one named DSN hole left open is not a monopoly. Scan 2 says the
-// only HTTP-path callers of the identity-free core are the two deliberate
-// exemptions, Store.Me and Store.ProvisionWorkspace. Together they make the
+// only HTTP-path callers of the identity-free core are the four deliberate
+// exemptions, Store.Me, Store.ProvisionWorkspace, Store.AcceptInvitation and Store.PreviewInvitation. Together they make the
 // gated seam a monopoly, so every route that touches the database is gated BY
 // CONSTRUCTION. Scan 3 keeps the written
 // enumeration complete. Core AC 6 = 1 + 2 + 3.
@@ -3159,6 +3159,8 @@ var scSweepSubjectAllowlist = []scSweepSubjectExemption{
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AFailedAuditRollsTheAcceptBack"},                                 // the invitee holds no membership in the invite's tenant before accepting
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_ConcurrentAcceptsOfOneTokenJoinOnce"},                            // the invitee holds no membership in the invite's tenant before accepting
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AMismatchedAddressIsRefusedAlikeWithOrWithoutAnAccount"},         // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_ATokenJoinsOnlyItsOwnTenant"},                                    // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AMalformedTokenOrSubjectSendsNoStatement"},                       // the invitee holds no membership in the invite's tenant before accepting
 }
 
 // scSweepTestFiles returns every _test.go file under internal/ (repo-relative,

@@ -23,7 +23,7 @@ test.beforeAll(async () => {
   await ensureFirmPolicyActive(await login(PERSONAS.A))
 })
 
-// Copy of importWizardShared.ts's collectErrors: spec files do not import each other.
+// Copy of importWizardShared.ts's collectErrors.
 function collectErrors(page: Page, extra?: Dropper): string[] {
   const errors: string[] = []
   const droppers = [approvalRun404Dropper(page), ...(extra ? [extra] : [])]

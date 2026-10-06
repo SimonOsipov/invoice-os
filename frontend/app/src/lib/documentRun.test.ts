@@ -1534,7 +1534,10 @@ describe('the deployed dead-letter assertion tracks the shipped sentence (TS15-1
     ]) {
       const spec = readRepoFile(`../../e2e/topology/${file}`, `test('${id}`)
       const from = spec.indexOf(`test('${id}`)
-      const row = spec.slice(from, spec.indexOf('\ntest(', from + 1))
+      const end = spec.indexOf('\ntest(', from + 1)
+      expect(end, `${id} in ${file}: no following test( to bound its body`).toBeGreaterThan(from)
+      const row = spec.slice(from, end)
+      expect(row.length, `${id} in ${file}: empty body slice`).toBeGreaterThan(0)
       expect(row, `${id} in ${file} no longer asserts DEAD_LETTER_NEEDLE`).toMatch(/\bDEAD_LETTER_NEEDLE\b/)
     }
     const needle = (m as RegExpExecArray)[1]

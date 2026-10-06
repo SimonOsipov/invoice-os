@@ -1,15 +1,18 @@
-import { basename } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
 
 type Shard = { id: string; name: string; kind: string; subject: string }
 let shardTenants: (specFile: string) => { a: Shard; b: Shard }
+let shardPersonasForFile: (file: string) => ReturnType<typeof shardPersonas>
 let shardPersonas: (specFile: string) => { SHARD: { a: Shard; b: Shard }; PERSONAS: { A: Shard & { tenantId: string }; B: Shard & { tenantId: string } } }
 
 beforeAll(async () => {
   process.env.GATEWAY_URL = 'https://gateway.test'
   process.env.APP_URL = 'https://app.test'
   ;({ shardTenants } = (await import('./targets')) as unknown as { shardTenants: typeof shardTenants })
-  ;({ shardPersonas } = (await import('./importWizardShared')) as unknown as { shardPersonas: typeof shardPersonas })
+  ;({ shardPersonas, shardPersonasForFile } = (await import('./importWizardShared')) as unknown as {
+    shardPersonas: typeof shardPersonas
+    shardPersonasForFile: typeof shardPersonasForFile
+  })
 })
 
 describe('shardTenants', () => {
@@ -38,7 +41,7 @@ describe('shardTenants', () => {
 
 describe('shardPersonas', () => {
   it("pairs each persona with its own shard tenant, resolved from a spec file's absolute path", () => {
-    const { SHARD, PERSONAS } = shardPersonas(basename('/runner/e2e/topology/import-wizard.spec.ts'))
+    const { SHARD, PERSONAS } = shardPersonasForFile('/runner/e2e/topology/import-wizard.spec.ts')
 
     expect(PERSONAS.A.tenantId).toBe('11111111-1111-1111-1111-00000000e2e1')
     expect(PERSONAS.B.tenantId).toBe('22222222-2222-2222-2222-00000000e2e1')

@@ -498,55 +498,69 @@ func TestShardSeedConvergesAfterPublishSuspendAndRoleDelete(t *testing.T) {
 	e := newShardEnv(t)
 	ctx := context.Background()
 	e.provisionReset(t)
-	shard := firmShards[0]
 
-	draft := queryTexts(t, e.super, `SELECT id::text FROM approval_policy_versions WHERE tenant_id = $1 AND NOT sealed`, shard.id)
-	if len(draft) != 1 {
-		t.Fatalf("firm shard %s has %d draft versions after Provision, want 1", shard.id, len(draft))
+	// Every shard, not one: a row of shard_map that misses a statement fails only for its own shard.
+	type shardState struct {
+		shardTenant
+		user, roleKey string
+		stepsBefore   int
 	}
-	stepsBefore := mustCount(t, e.super, `SELECT count(*) FROM approval_policy_steps WHERE tenant_id = $1`, shard.id)
-	if stepsBefore == 0 {
-		t.Fatalf("firm shard %s draft has no steps, the unchanged-step assertion below is vacuous", shard.id)
-	}
-	users := queryTexts(t, e.super, `SELECT user_id::text FROM memberships WHERE tenant_id = $1 AND status = 'active'`, shard.id)
-	if len(users) == 0 {
-		t.Fatalf("firm shard %s has no active membership to suspend", shard.id)
-	}
+	var states []shardState
+	for _, s := range allShards {
+		draft := queryTexts(t, e.super, `SELECT id::text FROM approval_policy_versions WHERE tenant_id = $1 AND NOT sealed`, s.id)
+		if len(draft) != 1 {
+			t.Fatalf("shard %s has %d draft versions after Provision, want 1", s.id, len(draft))
+		}
+		st := shardState{shardTenant: s}
+		st.stepsBefore = mustCount(t, e.super, `SELECT count(*) FROM approval_policy_steps WHERE tenant_id = $1`, s.id)
+		if st.stepsBefore == 0 {
+			t.Fatalf("shard %s draft has no steps, the unchanged-step assertion below is vacuous", s.id)
+		}
+		users := queryTexts(t, e.super, `SELECT user_id::text FROM memberships WHERE tenant_id = $1 AND status = 'active'`, s.id)
+		keys := queryTexts(t, e.super, `SELECT key FROM workflow_roles WHERE tenant_id = $1 AND deleted_at IS NULL`, s.id)
+		if len(users) == 0 || len(keys) == 0 {
+			t.Fatalf("shard %s has %d active members and %d live roles, nothing to suspend or delete", s.id, len(users), len(keys))
+		}
+		st.user, st.roleKey = users[0], keys[0]
+		states = append(states, st)
 
-	mutate := func(label, sql string, args ...any) {
-		t.Helper()
-		tag, err := e.super.Exec(ctx, sql, args...)
-		if err != nil {
-			t.Fatalf("%s: %v", label, err)
+		mutate := func(label, sql string, args ...any) {
+			t.Helper()
+			tag, err := e.super.Exec(ctx, sql, args...)
+			if err != nil {
+				t.Fatalf("%s %s: %v", s.id, label, err)
+			}
+			if tag.RowsAffected() != 1 {
+				t.Fatalf("%s %s: affected %d rows, want 1", s.id, label, tag.RowsAffected())
+			}
 		}
-		if tag.RowsAffected() != 1 {
-			t.Fatalf("%s: affected %d rows, want 1", label, tag.RowsAffected())
-		}
+		mutate("publish v1", `UPDATE approval_policy_versions SET sealed = true, is_active = true, published_at = now(), published_by = 'qa' WHERE id::text = $1`, draft[0])
+		mutate("supersede v1", `UPDATE approval_policy_versions SET is_active = false WHERE id::text = $1`, draft[0])
+		mutate("add v2", `INSERT INTO approval_policy_versions (tenant_id, policy_id, version, sealed, is_active, published_at, published_by)
+		                  SELECT tenant_id, policy_id, version + 1, true, true, now(), 'qa' FROM approval_policy_versions WHERE id::text = $1`, draft[0])
+		mutate("suspend a membership", `UPDATE memberships SET status = 'suspended' WHERE tenant_id = $1 AND user_id::text = $2`, s.id, st.user)
+		mutate("soft-delete a role", `UPDATE workflow_roles SET deleted_at = now() WHERE tenant_id = $1 AND key = $2`, s.id, st.roleKey)
 	}
-	mutate("publish v1", `UPDATE approval_policy_versions SET sealed = true, is_active = true, published_at = now(), published_by = 'qa' WHERE id::text = $1`, draft[0])
-	mutate("supersede v1", `UPDATE approval_policy_versions SET is_active = false WHERE id::text = $1`, draft[0])
-	mutate("add v2", `INSERT INTO approval_policy_versions (tenant_id, policy_id, version, sealed, is_active, published_at, published_by)
-	                  SELECT tenant_id, policy_id, version + 1, true, true, now(), 'qa' FROM approval_policy_versions WHERE id::text = $1`, draft[0])
-	mutate("suspend a membership", `UPDATE memberships SET status = 'suspended' WHERE tenant_id = $1 AND user_id::text = $2`, shard.id, users[0])
-	mutate("soft-delete a role", `UPDATE workflow_roles SET deleted_at = now() WHERE tenant_id = $1 AND key = 'fin_mgr'`, shard.id)
 
 	if err := db.Provision(ctx, e.prConfig()); err != nil {
 		t.Fatalf("second reset-on Provision: %v", err)
 	}
 
-	gotStatus := queryTexts(t, e.super, `SELECT status FROM memberships WHERE tenant_id = $1 AND user_id::text = $2`, shard.id, users[0])
-	wantStatus := queryTexts(t, e.super, `SELECT status FROM memberships WHERE tenant_id = $1 AND user_id::text = $2`, shard.source, users[0])
-	if len(wantStatus) != 1 || !slices.Equal(gotStatus, wantStatus) {
-		t.Errorf("membership %s status = %q, want the source's %q", users[0], gotStatus, wantStatus)
-	}
-	if n := mustCount(t, e.super, `SELECT count(*) FROM workflow_roles WHERE tenant_id = $1 AND key = 'fin_mgr' AND deleted_at IS NULL`, shard.id); n != 1 {
-		t.Errorf("fin_mgr role not restored: %d live rows, want 1", n)
-	}
-	if got, want := versionsOfPolicy(t, e.super, shard.id), []versionRow{{firstVersion, true}, {secondVersion, true}}; !slices.Equal(got, want) {
-		t.Errorf("policy versions = %+v, want %+v", got, want)
-	}
-	if n := mustCount(t, e.super, `SELECT count(*) FROM approval_policy_steps WHERE tenant_id = $1`, shard.id); n != stepsBefore {
-		t.Errorf("shard steps = %d after re-seed, want %d (no step added)", n, stepsBefore)
+	for _, st := range states {
+		gotStatus := queryTexts(t, e.super, `SELECT status FROM memberships WHERE tenant_id = $1 AND user_id::text = $2`, st.id, st.user)
+		wantStatus := queryTexts(t, e.super, `SELECT status FROM memberships WHERE tenant_id = $1 AND user_id::text = $2`, st.source, st.user)
+		if len(wantStatus) != 1 || !slices.Equal(gotStatus, wantStatus) {
+			t.Errorf("shard %s membership %s status = %q, want the source's %q", st.id, st.user, gotStatus, wantStatus)
+		}
+		if n := mustCount(t, e.super, `SELECT count(*) FROM workflow_roles WHERE tenant_id = $1 AND key = $2 AND deleted_at IS NULL`, st.id, st.roleKey); n != 1 {
+			t.Errorf("shard %s role %s not restored: %d live rows, want 1", st.id, st.roleKey, n)
+		}
+		if got, want := versionsOfPolicy(t, e.super, st.id), []versionRow{{firstVersion, true}, {secondVersion, true}}; !slices.Equal(got, want) {
+			t.Errorf("shard %s policy versions = %+v, want %+v", st.id, got, want)
+		}
+		if n := mustCount(t, e.super, `SELECT count(*) FROM approval_policy_steps WHERE tenant_id = $1`, st.id); n != st.stepsBefore {
+			t.Errorf("shard %s steps = %d after re-seed, want %d (no step added)", st.id, n, st.stepsBefore)
+		}
 	}
 }
 

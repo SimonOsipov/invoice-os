@@ -1045,12 +1045,14 @@ const (
 	afterBadVal = "PLANTED-BENT-REREAD-VALUE"
 )
 
+// "in environment" tells a contributor's line from the "  svc.NAME confirmed." that value_verdict prints per name.
 var afterConfirmations = []string{
-	"auth.GOTRUE_SITE_URL confirmed",
+	"auth.GOTRUE_SITE_URL confirmed in environment",
+	"gateway.AUTH_SITE_URL confirmed in environment",
 	batchAllConfirmed,
 	"AI and Jev fake mode confirmed",
 	"Sentry off confirmed",
-	"gateway.RECONCILIATION_URL confirmed",
+	"gateway.RECONCILIATION_URL confirmed in environment",
 	"gateway ENVIRONMENT=development confirmed",
 }
 
@@ -1186,6 +1188,9 @@ func TestForkVarsAfterURLs_SettledForkMakesThreeCalls(t *testing.T) {
 	}
 	// The verdicts read the first read when nothing is written.
 	requireConfirmed(t, out, afterConfirmations...)
+	if e := upsertEcho.FindAllString(out, -1); len(e) != 0 {
+		t.Errorf("a settled fork printed write lines %q", e)
+	}
 }
 
 func TestForkVarsAfterURLs_ReadCoversTheFifteenServicesOnce(t *testing.T) {
@@ -1425,25 +1430,35 @@ func TestForkVarsAfterURLs_ASettledServiceHasNoAlias(t *testing.T) {
 	}
 }
 
+// auth heads the write, gateway carries every contributor's names in one alias, landing is mid-list, docling ends it.
 func TestForkVarsAfterURLs_OneAliasFailingNamesItsService(t *testing.T) {
-	landing := sentrySvcID("landing")
-	for _, mode := range []string{"abort", "null"} {
-		t.Run(mode, func(t *testing.T) {
-			s := newAfterShim(t, afterProdStores())
-			s.failAlias(t, landing, mode)
-			out, code := runAfter(t, s)
-			requireAliasFailureReportFor(t, s, out, code, landing)
-			errs := errorLines(out)
-			if n := strings.Count(errs, "The batched variable write"); n != 1 {
-				t.Errorf("%d failure line(s) name a service, want 1; error lines = %q", n, errs)
-			}
-			for _, v := range append(afterArgs()[1:], reconciliationURL, afterAIKey, sentryDSNSentinel, sentryTokenSentinel) {
-				if strings.Contains(errs, v) {
-					t.Errorf("the failure lines carry the value %q", v)
+	for _, svc := range []string{"auth", "gateway", "landing", "docling"} {
+		for _, mode := range []string{"abort", "null"} {
+			t.Run(svc+"/"+mode, func(t *testing.T) {
+				id := sentrySvcID(svc)
+				s := newAfterShim(t, afterProdStores())
+				s.failAlias(t, id, mode)
+				out, code := runAfter(t, s)
+				requireAliasFailureReportFor(t, s, out, code, id)
+				errs := errorLines(out)
+				if n := strings.Count(errs, "The batched variable write"); n != 1 {
+					t.Errorf("%d failure line(s) name a service, want 1; error lines = %q", n, errs)
 				}
-			}
-			requireNamedIn(t, errs, "landing", "VITE_GATEWAY_URL", "VITE_APP_URL", "VITE_OPS_URL", "VITE_SUPPORT_URL", "VITE_REGISTRATION_OPEN")
-		})
+				for _, v := range append(afterArgs()[1:], reconciliationURL, afterAIKey, sentryDSNSentinel, sentryTokenSentinel) {
+					if strings.Contains(errs, v) {
+						t.Errorf("the failure lines carry the value %q", v)
+					}
+				}
+				var names []string
+				for _, w := range writesTo(passWrites(t, s), id) {
+					names = append(names, slices.Sorted(maps.Keys(w.Vars))...)
+				}
+				if len(names) == 0 {
+					t.Fatalf("control: %s has no name in the write", svc)
+				}
+				requireNamedIn(t, errs, append([]string{svc}, names...)...)
+			})
+		}
 	}
 }
 
@@ -1477,6 +1492,7 @@ func TestForkVarsAfterURLs_UsageAndLandingURLRefuseBeforeAnyCall(t *testing.T) {
 		{"an empty support URL", append([]string{forkEnvID}, append(slices.Clone(urls[:4]), "")...), 2, "usage: railway-env.sh " + afterSub},
 		{"an empty environment id", append([]string{""}, urls...), 2, "usage: railway-env.sh " + afterSub},
 		{"a seventh argument", append(append([]string{forkEnvID}, urls...), "https://extra"), 2, "usage: railway-env.sh " + afterSub},
+		{"an uppercase HTTPS landing URL", append([]string{forkEnvID, urls[0], urls[1], "HTTPS://LANDING.example"}, urls[3:]...), 1, "https://"},
 		{"an http landing URL", append([]string{forkEnvID, urls[0], urls[1], "http://x"}, urls[3:]...), 1, "https://"},
 		{"a bare https:// landing URL", append([]string{forkEnvID, urls[0], urls[1], "https://"}, urls[3:]...), 1, "https://"},
 	} {
@@ -1494,6 +1510,307 @@ func TestForkVarsAfterURLs_UsageAndLandingURLRefuseBeforeAnyCall(t *testing.T) {
 				t.Errorf("the refusal called Railway %v; it must refuse before any call", operations(calls))
 			}
 			s.requireLogs(t)
+		})
+	}
+}
+
+// Each row bends one name on the re-read only. Every row writes first, so the bend is seen by the
+// verdict alone; drops are the contributor lines the failed verdict must not print.
+func TestForkVarsAfterURLs_EveryVerdictReadsTheReRead(t *testing.T) {
+	const (
+		siteLines  = "auth.GOTRUE_SITE_URL confirmed in environment|gateway.AUTH_SITE_URL confirmed in environment"
+		urlLine    = batchAllConfirmed
+		aiLine     = "AI and Jev fake mode confirmed"
+		sentryLine = "Sentry off confirmed"
+		reconLine  = "gateway.RECONCILIATION_URL confirmed in environment"
+		envLine    = "gateway ENVIRONMENT=development confirmed"
+	)
+	type row struct{ svc, name, bad, drops, says string }
+	rows := []row{
+		{"auth", "GOTRUE_SITE_URL", afterBadVal, siteLines, ""},
+		{"gateway", "AUTH_SITE_URL", afterBadVal, siteLines, ""},
+		{"gateway", "CORS_ALLOWED_ORIGINS", afterBadVal, urlLine, ""},
+		{"app", "VITE_GATEWAY_URL", afterBadVal, urlLine, ""},
+		{"app", "VITE_LANDING_URL", afterBadVal, urlLine, ""},
+		{"landing", "VITE_GATEWAY_URL", afterBadVal, urlLine, ""},
+		{"landing", "VITE_APP_URL", afterBadVal, urlLine, ""},
+		{"landing", "VITE_OPS_URL", afterBadVal, urlLine, ""},
+		{"landing", "VITE_SUPPORT_URL", afterBadVal, urlLine, ""},
+		{"landing", "VITE_REGISTRATION_OPEN", "false", urlLine, ""},
+		{"ops-console", "VITE_GATEWAY_URL", afterBadVal, urlLine, ""},
+		{"ops-console", "VITE_LANDING_URL", afterBadVal, urlLine, ""},
+		{"support-console", "VITE_GATEWAY_URL", afterBadVal, urlLine, ""},
+		{"support-console", "VITE_LANDING_URL", afterBadVal, urlLine, ""},
+		{"gateway", "RECONCILIATION_URL", afterBadVal, reconLine, ""},
+		{"gateway", "ENVIRONMENT", "production", envLine, "reads 'production'"},
+	}
+	for _, svc := range []string{"submission", "invoice"} {
+		rows = append(rows,
+			row{svc, "AI_FAKE", "false", aiLine, ""},
+			row{svc, "JEV_FAKE", "false", aiLine, ""},
+			row{svc, "OPENROUTER_API_KEY", afterBadVal, aiLine, "is SET"})
+	}
+	for _, b := range sentryBackends {
+		rows = append(rows, row{b, "SENTRY_DSN", afterBadVal, sentryLine, "is SET"})
+	}
+	for _, sp := range sentrySPAs {
+		rows = append(rows,
+			row{sp, "VITE_SENTRY_DSN", afterBadVal, sentryLine, "is SET"},
+			row{sp, "SENTRY_AUTH_TOKEN", afterBadVal, sentryLine, "is SET"})
+	}
+	if len(rows) != 16+6+10+8 {
+		t.Fatalf("control: %d rows, want one per verdict", len(rows))
+	}
+	for _, r := range rows {
+		t.Run(r.svc+"."+r.name, func(t *testing.T) {
+			s := newAfterShim(t, afterProdStores())
+			s.bendReRead(t, sentrySvcID(r.svc), `.`+r.name+` = "`+r.bad+`"`)
+			out, code := runAfter(t, s)
+			if want := []string{"envList", "settle", "varsRead", "varsWrite", "varsRead"}; !slices.Equal(operations(s.calls(t)), want) {
+				t.Fatalf("Railway calls = %v, want %v: the bend is on the re-read", operations(s.calls(t)), want)
+			}
+			if code != 1 {
+				t.Errorf("exit %d, want 1; output = %q", code, clip(out))
+			}
+			says := r.says
+			if says == "" {
+				says = "reads a different value"
+			}
+			if l := requireNamedIn(t, errorLines(out), says); l != "" && !strings.Contains(l, r.svc) {
+				t.Errorf("the failure line %q does not name %s", l, r.svc)
+			}
+			if r.bad == afterBadVal && strings.Contains(out, afterBadVal) {
+				t.Errorf("the output carries the value the re-read returned; output = %q", clip(out))
+			}
+			drops := strings.Split(r.drops, "|")
+			for _, l := range drops {
+				if strings.Contains(out, l) {
+					t.Errorf("a failed verdict printed %q", l)
+				}
+			}
+			var keep []string
+			for _, l := range afterConfirmations {
+				if !slices.Contains(drops, l) {
+					keep = append(keep, l)
+				}
+			}
+			requireConfirmed(t, out, keep...)
+		})
+	}
+}
+
+// Values are written as given: no trailing slash is trimmed and no case folded, and the CORS list joins them as given.
+func TestForkVarsAfterURLs_URLsAreWrittenVerbatim(t *testing.T) {
+	urls := []string{
+		"https://Gateway-PR-9.UP.Railway.App/",
+		"https://app-pr-9.up.railway.app/",
+		"https://LANDING-pr-9.up.railway.app/",
+		"https://ops-console-pr-9.up.railway.app:8443/",
+		"https://support-console-pr-9.up.railway.app/x?y=1&z=%7E",
+	}
+	s := newAfterShim(t, afterProdStores())
+	stdout, stderr, code := s.run(t, forkExports(true, true, true), afterSub, append([]string{forkEnvID}, urls...)...)
+	out := stdout + stderr
+	if code != 0 {
+		t.Fatalf("exit %d, want 0; output = %q", code, clip(out))
+	}
+	requireConfirmed(t, out, afterConfirmations...)
+	ws := passWrites(t, s)
+	if len(ws) == 0 {
+		t.Fatal("control: nothing was written")
+	}
+	for _, c := range []struct{ svc, name, want string }{
+		{"auth", "GOTRUE_SITE_URL", urls[2]},
+		{"gateway", "AUTH_SITE_URL", urls[2]},
+		{"gateway", "CORS_ALLOWED_ORIGINS", strings.Join(urls[1:], ",")},
+		{"app", "VITE_GATEWAY_URL", urls[0]},
+		{"landing", "VITE_SUPPORT_URL", urls[4]},
+		{"landing", "VITE_OPS_URL", urls[3]},
+		{"ops-console", "VITE_LANDING_URL", urls[2]},
+	} {
+		if got, ok := passWritten(ws, sentrySvcID(c.svc), c.name); !ok || got != c.want {
+			t.Errorf("%s.%s written as %q (present %t), want %q", c.svc, c.name, got, ok, c.want)
+		}
+	}
+}
+
+// The first read passes for every service but one, so only the write-failure or re-read-failure path can fail.
+func TestForkVarsAfterURLs_FatalRateLimitNamesItsWait(t *testing.T) {
+	hdr := func(t *testing.T, s authShim, after string) {
+		writeFile(t, filepath.Join(s.dir, "hdr.txt"), "HTTP/2 429\r\nretry-after: "+after+"\r\n\r\n")
+		for _, op := range []string{"varsRead", "varsWrite"} {
+			writeFile(t, filepath.Join(s.dir, "faultbody-"+op), `{"errors":[{"message":"`+passEchoNeedle+`"}]}`)
+		}
+	}
+	t.Run("a write over 600 s names the wait and every service of the write", func(t *testing.T) {
+		s := newAfterShim(t, afterProdStores())
+		setFaults(t, s, "varsWrite", "429")
+		hdr(t, s, "601")
+		out, code := runAfter(t, s)
+		if code != 1 {
+			t.Errorf("exit %d, want 1; output = %q", code, clip(out))
+		}
+		requireWaitNamed(t, out, `429`, `\b601\b`, `\b600\b`)
+		ws := passWrites(t, s)
+		if len(ws) < 15 {
+			t.Fatalf("control: the write carries %d service(s), want 15", len(ws))
+		}
+		line := requireNamedIn(t, errorLines(out), "The batched variable write", "failed for")
+		for _, w := range ws {
+			if !wordIn(line, passLabel(w.Service)) {
+				t.Errorf("the failure line %q does not name %s", line, passLabel(w.Service))
+			}
+		}
+		if ops := operations(s.calls(t)); lastOp(ops) != "varsWrite" {
+			t.Errorf("Railway calls = %v, want varsWrite last: no re-read", ops)
+		}
+		if got := confirmedLines(out); len(got) != 0 {
+			t.Errorf("a failed write printed confirmation lines %q", got)
+		}
+	})
+	t.Run("a second 429 on the write names the wait", func(t *testing.T) {
+		s := newAfterShim(t, afterProdStores())
+		setFaults(t, s, "varsWrite", "429", "429")
+		hdr(t, s, "30")
+		out, code := runAfter(t, s)
+		if code != 1 {
+			t.Errorf("exit %d, want 1; output = %q", code, clip(out))
+		}
+		requireWaitNamed(t, out, `429`, `(?i)second`, `\b30\b`)
+		if n := opCount(t, s, "varsWrite"); n != 2 {
+			t.Errorf("%d varsWrite call(s), want 2", n)
+		}
+	})
+	t.Run("a first read over 600 s writes nothing", func(t *testing.T) {
+		s := newAfterShim(t, afterProdStores())
+		setFaults(t, s, "varsRead", "429")
+		hdr(t, s, "601")
+		out, code := runAfter(t, s)
+		if code != 1 {
+			t.Errorf("exit %d, want 1; output = %q", code, clip(out))
+		}
+		requireWaitNamed(t, out, `429`, `\b601\b`, `\b600\b`)
+		if n := opCount(t, s, "varsWrite"); n != 0 {
+			t.Errorf("%d varsWrite call(s), want 0", n)
+		}
+	})
+	t.Run("a re-read over 600 s is written but not confirmed", func(t *testing.T) {
+		s := newAfterShim(t, afterProdStores())
+		setFaults(t, s, "varsRead", "ok", "429")
+		hdr(t, s, "601")
+		out, code := runAfter(t, s)
+		if code != 1 {
+			t.Errorf("exit %d, want 1; output = %q", code, clip(out))
+		}
+		requireWaitNamed(t, out, `429`, `\b601\b`, `\b600\b`)
+		if n := opCount(t, s, "varsWrite"); n != 1 {
+			t.Fatalf("%d varsWrite call(s), want 1: the write landed", n)
+		}
+		if !strings.Contains(errorLines(out), "written but not confirmed") {
+			t.Errorf("error lines %q do not say the write is not confirmed", errorLines(out))
+		}
+		if got := confirmedLines(out); len(got) != 0 {
+			t.Errorf("a failed re-read printed confirmation lines %q", got)
+		}
+	})
+}
+
+// passVariantScript is railway-env.sh with extra contributors defined before its dispatcher and one
+// arm, pass-variant <env-id> <contributor>..., that runs them as a pass.
+func passVariantScript(t *testing.T, contributors string) string {
+	t.Helper()
+	raw, err := os.ReadFile(railwayEnvScript(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(raw)
+	at := strings.LastIndex(src, "\ncase \"${1:-}\" in\n")
+	if at < 0 {
+		t.Fatal("control: no dispatcher in railway-env.sh")
+	}
+	src = src[:at+1] + contributors + src[at+1:]
+	const arm = "  fork-vars-after-urls)      shift; cmd_fork_vars_after_urls \"$@\" ;;\n"
+	if !strings.Contains(src, arm) {
+		t.Fatal("control: the fork-vars-after-urls arm moved")
+	}
+	src = strings.Replace(src, arm, arm+"  pass-variant)              shift; fork_pass \"$@\" ;;\n", 1)
+	path := filepath.Join(t.TempDir(), "railway-env-variant.sh")
+	writeFile(t, path, src)
+	return path
+}
+
+// dupContributors are two contributors that plan DUP_NAME on the gateway with their own values.
+const dupContributors = `
+dup_a_check() { PASS_NOT_SET="${PASS_NOT_SET:+$PASS_NOT_SET/}DUP"; }
+dup_a() { local id; id=$(service_id_by_name "$PASS_SETTLE" gateway "environment $1" DUP) || exit 1; pass_plan_add "$id" gateway "" "$DUP_NAME=$DUP_A"; }
+dup_a_verdict() { pass_owned_verdict dup_a || return 1; echo "dup_a confirmed in environment $PASS_ENV."; }
+dup_b_check() { PASS_NOT_SET="${PASS_NOT_SET:+$PASS_NOT_SET/}DUP"; }
+dup_b() { local id; id=$(service_id_by_name "$PASS_SETTLE" gateway "environment $1" DUP) || exit 1; pass_plan_add "$id" gateway "" "$DUP_NAME=$DUP_B"; }
+dup_b_verdict() { pass_owned_verdict dup_b || return 1; echo "dup_b confirmed in environment $PASS_ENV."; }
+`
+
+func runVariant(t *testing.T, s authShim, script, a, b string, contributors ...string) (out string, code int) {
+	t.Helper()
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "a"), a)
+	writeFile(t, filepath.Join(dir, "b"), b)
+	load := func(v, f string) string {
+		return v + `="$(cat '` + filepath.Join(dir, f) + `'; printf x)"; ` + v + `=${` + v + `%x}; export ` + v + "\n"
+	}
+	exports := forkExports(true, true, true) + "export DUP_NAME=GATEWAY_DUP_NAME\n" + load("DUP_A", "a") + load("DUP_B", "b")
+	stdout, stderr, code := runBashScript(t, s.prelude+exports+"bash '"+script+"' pass-variant \"$@\"\n", append([]string{forkEnvID}, contributors...)...)
+	return stdout + stderr, code
+}
+
+// The design says a pass merges contributors into a service's entry and does not say what a name planned
+// twice means. Two values for one name must fail the step, not let the last writer win unnoticed.
+func TestForkPass_TwoContributorsPlanningOneNameDiffer(t *testing.T) {
+	script := passVariantScript(t, dupContributors)
+	gw := sentrySvcID("gateway")
+	t.Run("the same value is written once and both confirm", func(t *testing.T) {
+		s := newAfterShim(t, afterProdStores())
+		out, code := runVariant(t, s, script, "same", "same", "dup_a", "dup_b")
+		if code != 0 {
+			t.Fatalf("exit %d, want 0; output = %q", code, clip(out))
+		}
+		requireConfirmed(t, out, "dup_a confirmed in environment", "dup_b confirmed in environment")
+		got := writesTo(passWrites(t, s), gw)
+		if len(got) != 1 || got[0].Vars["GATEWAY_DUP_NAME"] != "same" {
+			t.Errorf("the gateway's write = %v, want one alias with GATEWAY_DUP_NAME = same", got)
+		}
+	})
+	t.Run("two values fail the step and name the name", func(t *testing.T) {
+		s := newAfterShim(t, afterProdStores())
+		out, code := runVariant(t, s, script, "first", "second", "dup_a", "dup_b")
+		if len(passWrites(t, s)) == 0 {
+			t.Fatal("control: nothing was written")
+		}
+		if code != 1 {
+			t.Errorf("exit %d, want 1: one of the two values cannot hold; output = %q", code, clip(out))
+		}
+		requireNamedIn(t, errorLines(out), "gateway.GATEWAY_DUP_NAME")
+		if strings.Contains(out, "dup_a confirmed") && strings.Contains(out, "dup_b confirmed") {
+			t.Errorf("both contributors confirmed one name with two values; output = %q", clip(out))
+		}
+	})
+}
+
+// pass_owned_verdict feeds a contributor's names through a tab-separated list: spaces and "=" must survive it.
+func TestForkPass_OwnedVerdictComparesTheValueAsWritten(t *testing.T) {
+	script := passVariantScript(t, dupContributors)
+	for _, c := range []struct{ name, value string }{
+		{"leading and trailing spaces", "  https://a  "},
+		{"an equals sign", "https://a?x=1&y=2"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newAfterShim(t, afterProdStores())
+			out, code := runVariant(t, s, script, c.value, c.value, "dup_a")
+			if got, ok := passWritten(passWrites(t, s), sentrySvcID("gateway"), "GATEWAY_DUP_NAME"); !ok || got != c.value {
+				t.Fatalf("control: written %q (present %t), want %q", got, ok, c.value)
+			}
+			if code != 0 {
+				t.Errorf("exit %d, want 0: the value was written and re-read as given; output = %q", code, clip(out))
+			}
 		})
 	}
 }

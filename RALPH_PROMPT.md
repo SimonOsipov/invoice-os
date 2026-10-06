@@ -331,7 +331,7 @@ Runs once per story, after `CI` is green. It verifies the assembled feature agai
    - `gh workflow run dev-env.yml` is for diagnosis only. It targets `development`, not the PR environment, so it proves nothing about this PR.
    - Re-run a red gate whole: `gh run rerun <run id>`, never `--failed`. The database resets only when the gateway deploys.
    - A spec this PR changed that passed only on retry fails the `e2e` job or the `E2E topology (<shard>)` leg that ran it. Fix the spec or the race; do not re-run for luck.
-   - After `gh pr ready`, push only a fix for a red gate or a base merge that `hm` demands.
+   - After `gh pr ready`, push only a gate fix (Protocol item 1 or step 5) or a base merge that `hm` demands.
    Green means: fleet deployed, gateway migrated, DB bootstrapped + demo-purged + seeded, all 8 backends up, smoke + topology E2E passed, including cross-tenant isolation.
 4. **Spawn `product-qa-spec`** to verify **each** original AC against the green run:
    - Quote each AC beside its evidence. Evidence of different behaviour than the quoted text fails that AC.

@@ -1,13 +1,13 @@
-{{- define "title"}}{{end}}
-{{- define "preheader"}}{{end}}
-{{- define "eyebrow"}}{{end}}
-{{- define "heading"}}{{end}}
-{{- define "heading_accent"}}{{end}}
-{{- define "intro"}}{{end}}
-{{- define "action_url"}}{{end}}
-{{- define "action_label"}}{{end}}
-{{- define "expiry"}}{{end}}
-{{- define "details"}}{{end}}
-{{- define "ignore_note"}}{{end}}
-{{- define "reason"}}{{end}}
+{{- define "title"}}Reset your ASComply password{{end}}
+{{- define "preheader"}}Use this link to choose a new password for your ASComply account.{{end}}
+{{- define "eyebrow"}}Password reset{{end}}
+{{- define "heading"}}Reset your password.{{end}}
+{{- define "heading_accent"}}Choose a new one to sign in.{{end}}
+{{- define "intro"}}A password reset was requested for the ASComply account {{.Email}}. Use the button to choose a new password.{{end}}
+{{- define "action_url"}}{{ .ConfirmationURL }}{{end}}
+{{- define "action_label"}}Choose a new password{{end}}
+{{- define "expiry"}}This link expires in 24 hours.{{end}}
+{{- define "details"}}<tr><td width="120" style="{{template "row_label_style_last"}}">Email</td><td style="{{template "row_value_style_last"}}">{{.Email}}</td></tr>{{end}}
+{{- define "ignore_note"}}If you did not ask for this, ignore this email. Your password stays the same.{{end}}
+{{- define "reason"}}You received this email because a password reset was requested for this address.{{end}}
 {{- template "layout" .}}

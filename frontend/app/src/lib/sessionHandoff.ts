@@ -39,7 +39,7 @@ export function readHandoffCode(search: string): string | null {
 
 export type InviteOutcome = 'invalid' | 'already-member' | 'other-address'
 
-// Red-phase stub: never thrown yet.
+// Tenancy's three exact accept refusals; the landing shows a notice for each.
 export class InviteRefusedError extends Error {
   readonly outcome: InviteOutcome
   constructor(outcome: InviteOutcome) {
@@ -50,13 +50,16 @@ export class InviteRefusedError extends Error {
 }
 
 // No degraded fallback: any failure, a 15 s timeout included, rejects.
-export async function redeemHandoff(base: string, code: string, state: string, now: number = Date.now(), _invite: string | null = null): Promise<Session> {
+export async function redeemHandoff(base: string, code: string, state: string, now: number = Date.now(), invite: string | null = null): Promise<Session> {
   const signal = AbortSignal.timeout(15000)
   const { access_token: token, refresh_token: refreshToken } = await apiFetch<{ access_token: string; refresh_token?: unknown }>(`${base}/auth/exchange`, {
     method: 'POST',
     body: { code, state },
     signal,
   })
+  if (invite !== null) {
+    return acceptInviteAndRead(base, token, refreshToken, invite, now, signal)
+  }
   let me: Me
   try {
     me = await apiFetch<Me>(`${base}/api/tenancy/v1/me`, { token, signal })
@@ -76,6 +79,28 @@ export async function redeemHandoff(base: string, code: string, state: string, n
   return { persona: handoffPersona(me), token, me, verified: true, handoff: true, ...(renewal ? { renewal } : {}) }
 }
 
+// Mirrors msgInviteNotValid, msgAlreadyMember and msgWrongAddress in internal/tenancy.
+const INVITE_REFUSALS: Record<string, [number, InviteOutcome]> = {
+  'this invite is no longer valid': [404, 'invalid'],
+  'you already belong to a workspace': [409, 'already-member'],
+  'this invite was sent to a different email address': [403, 'other-address'],
+}
+
+// The invitee's first token has no tenant, so /me waits for the refresh that carries the new membership.
+async function acceptInviteAndRead(base: string, token: string, refreshToken: unknown, invite: string, now: number, signal: AbortSignal): Promise<Session> {
+  try {
+    await apiFetch(`${base}/api/tenancy/v1/invitations/accept`, { method: 'POST', token, body: { token: invite }, signal })
+  } catch (err) {
+    const message = err instanceof ApiError ? (err.body as { error?: unknown } | null | undefined)?.error : undefined
+    const refusal = typeof message === 'string' && Object.hasOwn(INVITE_REFUSALS, message) ? INVITE_REFUSALS[message] : undefined
+    if (err instanceof ApiError && refusal && err.status === refusal[0]) {
+      throw new InviteRefusedError(refusal[1])
+    }
+    throw err
+  }
+  return renewAndRead(base, refreshToken, now, signal, 'no refresh token after accepting the invite')
+}
+
 // ceiling: an account whose workspace an operator deleted re-provisions at its next sign-in; revisit when workspace deletion ships.
 async function provisionAndRead(base: string, token: string, refreshToken: unknown, answers: ProvisionBody, now: number, signal: AbortSignal): Promise<Session> {
   try {
@@ -86,8 +111,12 @@ async function provisionAndRead(base: string, token: string, refreshToken: unkno
       throw err
     }
   }
+  return renewAndRead(base, refreshToken, now, signal, 'no refresh token after provisioning')
+}
+
+async function renewAndRead(base: string, refreshToken: unknown, now: number, signal: AbortSignal, missing: string): Promise<Session> {
   if (typeof refreshToken !== 'string' || refreshToken === '') {
-    throw new Error('no refresh token after provisioning')
+    throw new Error(missing)
   }
   const { access, refresh } = await refreshTokens(base, refreshToken, signal)
   const me = await apiFetch<Me>(`${base}/api/tenancy/v1/me`, { token: access, signal })

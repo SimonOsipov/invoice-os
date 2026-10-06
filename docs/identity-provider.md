@@ -699,7 +699,10 @@ hand-off is the app by default and a console when the visitor came from one (Con
 3. A visitor who opened landing directly has no state. The modal then shows "Continue with
    email", which goes to `<app>?auth=start`, or to the held console's `?auth=start`. The app
    or console ensures a state and returns to landing with `signin=ready`, which opens the
-   modal with the form.
+   modal with the form. An invite link opens `<app>?auth=start#invite=<token>` (43 base64url
+   characters, exactly once). The app holds the token at `sessionStorage['invoice-os.pendingInvite']`
+   (`{v:1, t, at}`, 10 minutes, `lib/pendingInvite.ts`) and strips the hash. A start with no
+   invite removes a held one.
 4. Landing posts `{"email","password","state"}` to `POST /auth/sign-in`. The gateway posts
    `{"email","password"}` to GoTrue `/token?grant_type=password`. On a 200 it keeps the access
    token and the refresh token with `sha256(state)` and answers a code.
@@ -721,8 +724,17 @@ hand-off is the app by default and a console when the visitor came from one (Con
    whole chain. Without answers the 403 stands. A provisioning 400 or 5xx, a failed refresh or an
    exchange without a refresh token ends in step 7 as `signin=failed`. An account whose
    workspace an operator deleted re-provisions at its next sign-in (accepted; revisit when
-   workspace deletion ships).
-7. On any failure the app returns to landing with `signin=no-workspace` (the `/me` call
+   workspace deletion ships). With a held invite (`consumePendingInvite`, one-shot) the app
+   instead posts `{"token"}` to `POST /api/tenancy/v1/invitations/accept` right after the
+   exchange, then refreshes, then calls `/me` with the refreshed token. It never calls `/me`
+   before the accept and never posts `/v1/workspaces`; the session's `received_at` is the
+   local time of the refresh.
+7. Tenancy's three accept refusals, 404 `this invite is no longer valid`, 409 `you already
+   belong to a workspace` and 403 `this invite was sent to a different email address`, send
+   the app to `<landing>/?invite=invalid`, `already-member` or `other-address`, with no
+   session and no state. With a held invite every other failure, a gateway 403 included, is
+   `signin=failed`. Without one, on any failure the app returns to landing with
+   `signin=no-workspace` (the `/me` call
    answered 403) or `signin=failed` (anything else), carrying the state `ensureSignInState`
    returns: a newly minted one, because step 6 removed the old. Landing opens
    the modal with "This account has no workspace yet. If you were invited, open the invite link in your email." or "We couldn't open your workspace.

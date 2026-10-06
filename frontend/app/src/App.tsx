@@ -5,8 +5,9 @@ import { resolveBootSession, loadSession, saveSession, clearSession, decodeJwtPa
 import { revokeSessions } from './lib/revoke'
 import { createRenewer, isRenewalDue, SessionEndedError, type Renewer } from './lib/renewal'
 import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
-import { consumeSignInState, ensureSignInState, landingSignInUrl, mintSignInState } from './lib/signInState'
-import { HANDOFF_PARAM, isLiveHandoffSession, readHandoffCode, redeemHandoff } from './lib/sessionHandoff'
+import { consumeSignInState, ensureSignInState, landingInviteUrl, landingSignInUrl, mintSignInState } from './lib/signInState'
+import { consumePendingInvite, holdPendingInvite, readInviteFragment } from './lib/pendingInvite'
+import { HANDOFF_PARAM, InviteRefusedError, isLiveHandoffSession, readHandoffCode, redeemHandoff } from './lib/sessionHandoff'
 import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import { isPromiseLike, makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, resolveActiveClient, startingDraft } from './lib/clients'
@@ -1823,6 +1824,11 @@ export default function App() {
   const [authStart] = useState(
     () => !handoffCode && new URLSearchParams(window.location.search).get('auth') === 'start',
   )
+  // Read before the strip effect drops the hash; null when `?auth=start` carries no invite.
+  const [startInvite] = useState(() => {
+    const { hash } = window.location
+    return authStart ? readInviteFragment(hash) : null
+  })
   const startBounced = useRef(false)
   const frontDoorBounced = useRef(false)
   // Lazy initializer: synchronously rehydrate a persisted session at boot (no network,
@@ -1978,8 +1984,9 @@ export default function App() {
     if (!handoffCode || !base || redeemStarted.current) return
     redeemStarted.current = true
     const state = consumeSignInState()
+    const invite = consumePendingInvite()
     const redemption = state
-      ? redeemHandoff(base, handoffCode, state)
+      ? redeemHandoff(base, handoffCode, state, Date.now(), invite)
       : Promise.reject(new Error('no sign-in state in this tab'))
     redemption.then(
       (session) => {
@@ -1988,9 +1995,12 @@ export default function App() {
       },
       (err: unknown) => {
         console.warn('[app] hand-off redemption failed:', err)
-        // Exchange never answers 403, so a 403 is /me's: no workspace.
-        const outcome = err instanceof ApiError && err.status === 403 ? 'no-workspace' : 'failed'
-        const dest = landingSignInUrl(ensureSignInState(), outcome)
+        // Exchange never answers 403. Without an invite a 403 is /me's: no workspace.
+        // With one, only tenancy's three refusals carry a notice; every other failure is 'failed'.
+        const dest =
+          err instanceof InviteRefusedError
+            ? landingInviteUrl(err.outcome)
+            : landingSignInUrl(ensureSignInState(), invite === null && err instanceof ApiError && err.status === 403 ? 'no-workspace' : 'failed')
         // Stays pending while leaving, so the front door adds no second navigation.
         if (dest) window.location.href = dest
         else setHandoffPending(false)
@@ -2005,9 +2015,10 @@ export default function App() {
     const dest = landingBase() ? landingSignInUrl(mintSignInState(), 'ready') : null
     if (dest) {
       startBounced.current = true
+      holdPendingInvite(startInvite)
       window.location.href = dest
     }
-  }, [authStart])
+  }, [authStart, startInvite])
 
   // The single front door. Any sessionless visit — never signed in, signed out, session
   // expired while the tab was closed, or token invalidated by a 401 — goes to the landing

@@ -1,2 +1,0 @@
-{"ac": "AC-2 / mutation A", "file": "internal/tenancy/invitations.go", "find": "status = 'pending' AND token_hash IS NOT NULL", "replace": "status <> 'revoked' AND token_hash IS NOT NULL", "test_file": "internal/tenancy/invitations_test.go", "test": "TestInvitations_ListOmitsAcceptedInvites"}
-{"ac": "AC-2 / mutation B", "file": "internal/tenancy/invitations.go", "find": "status = 'pending' AND token_hash IS NOT NULL", "replace": "token_hash IS NOT NULL", "test_file": "internal/tenancy/invitations_test.go", "test": "TestInvitations_ListOmitsAcceptedInvites"}

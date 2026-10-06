@@ -187,6 +187,11 @@ gql_errors() {
   printf '%s' "$GQL_RESPONSE" | jq -c '[.errors[]? | {message, code: .extensions.code?}]' 2>/dev/null || true
 }
 
+# gql_error_aliases: each distinct alias (sK) in an error's path[0], never a message.
+gql_error_aliases() {
+  printf '%s' "$GQL_RESPONSE" | jq -r '[.errors[]?.path[0]? | strings | select(test("^s[0-9]+$"))] | unique[]' 2>/dev/null || true
+}
+
 # gql_attempt <json-body> <context-label>
 # One HTTP attempt; only curl 28 and HTTP 5xx are transient. An HTTP 429 is fault `ratelimit`,
 # with GQL_WAIT set to Railway's wait in whole seconds, empty when it gave none.
@@ -1002,6 +1007,41 @@ cmd_audit_sealed_variables() {
   echo "Sealed-variable audit clean: $sealed of $total variables in the source environment are sealed, all allowlisted on auth: $allowed."
 }
 
+# read_vars_batch <env-id> <rendered|unrendered> <context> <svc-id>...
+# One varsRead request; alias sK is the Kth service id. On success GQL_RESPONSE holds it.
+# On failure returns 1 and sets READ_FAILED_IDX (the K of each unreadable alias, empty when none
+# is known) and READ_FAIL_WHY. Never prints, and never keeps Railway's message.
+read_vars_batch() {
+  local env_id="$1" mode="$2" ctx="$3" q decl="" fields="" arg="" i=0 id n
+  shift 3
+  n=$#
+  READ_FAILED_IDX="" READ_FAIL_WHY=""
+  [ "$mode" != unrendered ] || arg=", unrendered: true"
+  for id in "$@"; do
+    decl="$decl, \$s$i: String!"
+    fields="$fields
+  s$i: variables(projectId: \$p, environmentId: \$e, serviceId: \$s$i${arg})"
+    i=$((i + 1))
+  done
+  q="query varsRead(\$p: String!, \$e: String!$decl) {$fields
+}"
+  if ! graphql_try "$(gql_body "$q" "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" \
+      '{p: $p, e: $e} + ([$ARGS.positional | to_entries[] | {("s\(.key)"): .value}] | add)' --args "$@")")" "$ctx"; then
+    if [ "$GQL_CURL_RC" = 0 ]; then
+      READ_FAILED_IDX=$(gql_error_aliases | sed 's/^s//' | tr '\n' ' ')
+      READ_FAIL_WHY="Railway answered a GraphQL error"
+    else
+      READ_FAIL_WHY="$GQL_LAST"
+    fi
+    return 1
+  fi
+  READ_FAILED_IDX=$(printf '%s' "$GQL_RESPONSE" | jq -r --argjson n "$n" \
+    '[range(0; $n) as $i | select(((try .data["s\($i)"] catch null) | type) != "object") | $i] | join(" ")')
+  [ -z "$READ_FAILED_IDX" ] && return 0
+  READ_FAIL_WHY="no variable map came back"
+  return 1
+}
+
 # --- DB DSN invariant (M4-22-FU) ---------------------------------------------
 #
 # M4-22: a variable RENAME left the DSNs interpolating the deleted names, so
@@ -1075,7 +1115,7 @@ cmd_assert_db_dsns() {
   graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
     "listing service instances in environment $env_id"
 
-  local instances map='{}' sid sname vars prefixes
+  local instances map prefixes sid sname k names=() ids=()
   prefixes=$(printf '%s' "$DSN_VAR_PREFIXES" | jq -R 'split(" ")')
   instances=$(echo "$GQL_RESPONSE" | jq -r \
     '.data.environment.serviceInstances.edges[]?.node | "\(.serviceId)\t\(.serviceName)"')
@@ -1083,17 +1123,24 @@ cmd_assert_db_dsns() {
     echo "::error::Railway returned no service instances for environment $env_id, so the DB DSN check could not run. This is NOT evidence that the DSNs are healthy."
     exit 1
   fi
-
-  # A here-string, not a pipe: the loop must run in THIS shell or $map is lost.
   while IFS=$'\t' read -r sid sname; do
     [ -n "$sid" ] || continue
-    graphql_post "$(gql_body "$SERVICE_VARIABLES_QUERY" \
-      "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$sid" '{p: $p, e: $e, s: $s}')")" \
-      "reading the $sname variables in environment $env_id"
-    vars=$(echo "$GQL_RESPONSE" | jq -c --argjson pre "$prefixes" \
-      '(.data.variables // {}) | with_entries(.key as $k | select(any($pre[]; . as $p | $k | startswith($p))))')
-    map=$(jq -cn --argjson m "$map" --arg n "$sname" --argjson v "$vars" '$m + {($n): $v}')
+    ids+=("$sid")
+    names+=("$sname")
   done <<< "$instances"
+
+  if ! read_vars_batch "$env_id" rendered "reading the variables of every service in environment $env_id" "${ids[@]}"; then
+    local who=""
+    for k in $READ_FAILED_IDX; do who="$who ${names[$k]}"; done
+    [ -n "$who" ] || who=" every service"
+    echo "::error::The DB DSN check could not read the variables of${who} in environment $env_id ($READ_FAIL_WHY), so it did NOT run. This is NOT evidence that the DSNs are healthy."
+    exit 1
+  fi
+
+  # Values reach jq on stdin; only the service names are argv.
+  map=$(printf '%s' "$GQL_RESPONSE" | jq -c --argjson pre "$prefixes" \
+    '. as $r | reduce ($ARGS.positional | to_entries[]) as $x ({}; . + {($x.value): ($r.data["s\($x.key)"] | with_entries(.key as $k | select(any($pre[]; . as $p | $k | startswith($p)))))})' \
+    --args "${names[@]}")
 
   run_dsn_check "$map" "environment $env_id"
 }

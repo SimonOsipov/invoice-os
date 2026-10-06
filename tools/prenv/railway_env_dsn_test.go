@@ -10,8 +10,7 @@
 // reason -- `go test ./...` is the one gate that always runs, so a guard
 // living anywhere else is a guard that can be skipped.
 //
-// TOKEN-FREE AND NETWORK-FREE, BY CONSTRUCTION. Every test here drives
-// `--self-test`, which must short-circuit BEFORE require_env (the
+// TOKEN-FREE AND NETWORK-FREE, BY CONSTRUCTION. `--self-test` must short-circuit BEFORE require_env (the
 // `--self-test` branch at the top of cmd_assert_db_dsns in
 // scripts/ci/railway-env.sh). Nothing below calls Railway, and T2-4
 // asserts the short-circuit ordering directly by unsetting the token. No test

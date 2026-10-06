@@ -1,4 +1,4 @@
-import { test, expect, type BrowserContext, type Frame, type Page, type Request, type Response } from '@playwright/test'
+import { test, expect, type BrowserContext, type Frame, type Locator, type Page, type Request, type Response } from '@playwright/test'
 import { APP_URL, FIRM_PERSONA, GATEWAY_URL, INHOUSE_PERSONA, TENANTS } from './targets'
 import { resolveTarget } from '../targets'
 import { DESTINATION_READY, VERIFIED, browserToken, collectErrors, expectInWorkspace, isHandoffNavigation, sidebarRoster, signInAs, signInAtFrontDoor, submitSignIn } from '../personaSession'
@@ -1904,6 +1904,192 @@ test('deployed journey: a stranger registers through the landing and lands in a 
   expect(meForbidden, 'one /me 403 per kind before provisioning').toBe(2)
   expect(workspacesCreated, 'one workspace created per kind').toBe(2)
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+// frontend/landing/src/signIn.ts UNVERIFIED and register.ts RESEND_FAILED.
+const UNVERIFIED = 'Verify your email address first. The link is in your inbox.'
+const RESEND_FAILED = 'The link could not be sent right now. Try again shortly.'
+const RESEND = 'Send the link again'
+// Tall enough that the card never scrolls inside itself: its children's boxes stay comparable.
+const TALL = 1600
+const RESEND_PATH = '/auth/resend-verification'
+
+// 242-byte local part + '@example.com' = 254 bytes, internal/gateway/signin.go maxEmailBytes; GoTrue accepts it.
+function longAddress(): string {
+  const address = `${crypto.randomUUID().replaceAll('-', '')}${'a'.repeat(210)}@example.com`
+  expect(Buffer.byteLength(address), 'the long address').toBe(254)
+  return address
+}
+
+function recordResends(page: Page): string[] {
+  const posts: string[] = []
+  page.on('request', (req) => {
+    if (req.method() === 'POST' && new URL(req.url()).pathname === RESEND_PATH) posts.push(req.url())
+  })
+  return posts
+}
+
+// Parts run top to bottom: each starts below the one above and none overlaps another.
+async function expectStack(page: Page, width: number, card: Locator, parts: [string, Locator][], sameEdges: [string, string]): Promise<void> {
+  await settleAnimations(card)
+  const cardBox = await card.boundingBox()
+  const boxes = new Map<string, { x: number; y: number; width: number; height: number }>()
+  for (const [name, part] of parts) {
+    const box = await part.boundingBox()
+    if (!box) throw new Error(`${name} rendered no box at ${width}px`)
+    boxes.set(name, box)
+  }
+  if (!cardBox) throw new Error(`the card rendered no box at ${width}px`)
+  const names = parts.map(([name]) => name)
+  for (const [i, name] of names.entries()) {
+    const box = boxes.get(name)!
+    expect(enclosesRect(cardBox, box, 1), `${name} leaves the card at ${width}px (${JSON.stringify({ cardBox, box })})`).toBe(true)
+    if (i === 0) continue
+    const above = boxes.get(names[i - 1])!
+    expect(box.y, `${name} starts above the bottom of ${names[i - 1]} at ${width}px`).toBeGreaterThanOrEqual(above.y + above.height - 1)
+    for (const earlier of names.slice(0, i)) {
+      expect(rectsOverlap(boxes.get(earlier)!, box), `${earlier} overlaps ${name} at ${width}px`).toBe(false)
+    }
+  }
+  const [a, b] = sameEdges.map((name) => boxes.get(name)!)
+  expect(Math.abs(a.x - b.x), `${sameEdges.join(' and ')} left edges at ${width}px`).toBeLessThanOrEqual(1)
+  expect(Math.abs(a.x + a.width - (b.x + b.width)), `${sameEdges.join(' and ')} right edges at ${width}px`).toBeLessThanOrEqual(1)
+  const doc = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }))
+  expect(doc.scrollWidth - doc.clientWidth, `the document scrolls sideways at ${width}px (${JSON.stringify(doc)})`).toBeLessThanOrEqual(1)
+}
+
+async function expectStackAtEveryWidth(page: Page, card: Locator, parts: [string, Locator][], sameEdges: [string, string]): Promise<void> {
+  for (const width of [...WIDE_WIDTHS, 375]) {
+    await page.setViewportSize({ width, height: TALL })
+    await expectStack(page, width, card, parts, sameEdges)
+  }
+}
+
+const resendAnswer = (page: Page) => page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === RESEND_PATH)
+
+// The fork autoconfirms every address, so its gateway never answers 403: the sign-in answer is faked, the resend is real.
+async function fakeUnverifiedSignIn(page: Page): Promise<void> {
+  await page.route(`${GATEWAY_URL}/auth/sign-in`, (route) => {
+    if (route.request().method() === 'OPTIONS') return route.continue()
+    return route.fulfill({
+      status: 403,
+      contentType: 'application/json',
+      headers: { 'access-control-allow-origin': new URL(LANDING_URL).origin },
+      body: JSON.stringify({ error: 'email address not verified' }),
+    })
+  })
+}
+
+// Front door -> "Platform login" -> the form signs in `email`; the faked 403 shows the alert.
+async function signInUnverified(page: Page, email: string): Promise<Locator> {
+  await seedConsent(page, false)
+  await page.goto(`${resolveTarget('APP_URL')}/`)
+  await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
+  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Platform login' })
+  await expect(dialog).toBeVisible()
+  await submitSignIn(page, email, crypto.randomUUID().slice(0, 16))
+  await expect(dialog.getByRole('alert').filter({ hasText: UNVERIFIED })).toBeVisible()
+  return dialog
+}
+
+async function resendFromSignIn(page: Page, dialog: Locator, email: string, posts: string[]): Promise<void> {
+  const card = dialog.locator(':scope > div')
+  const submit = dialog.getByRole('button', { name: 'Sign in →', exact: true })
+  const alert = dialog.getByRole('alert').filter({ hasText: UNVERIFIED })
+  const resend = dialog.getByRole('button', { name: RESEND, exact: true })
+  const notice = dialog.getByRole('status')
+  await expect(notice).toHaveCount(0)
+  expect(posts, 'resends before the click').toHaveLength(0)
+
+  const answer = resendAnswer(page)
+  await resend.click()
+  expect((await answer).status(), 'the fork gateway answers the resend').toBe(202)
+  await expect(notice).toContainText(email)
+  await expect(resend).toBeEnabled()
+  await expect(dialog.getByRole('alert').filter({ hasText: RESEND_FAILED })).toHaveCount(0)
+  expect(posts, 'resends after one click').toHaveLength(1)
+  await expectStackAtEveryWidth(page, card, [['submit', submit], ['alert', alert], ['resend', resend], ['notice', notice]], ['submit', 'resend'])
+}
+
+async function resendFromView(page: Page, dialog: Locator, email: string, posts: string[]): Promise<void> {
+  const card = dialog.locator(':scope > div')
+  const sentTo = dialog.getByText('a confirmation link is on its way to')
+  const resend = dialog.getByRole('button', { name: RESEND, exact: true })
+  const close = dialog.getByRole('button', { name: 'Close', exact: true }).filter({ hasText: 'Close' })
+  const notice = dialog.getByRole('status')
+  await expect(notice).toHaveCount(0)
+  expect(posts, 'resends before the click').toHaveLength(0)
+
+  const answer = resendAnswer(page)
+  await resend.click()
+  expect((await answer).status(), 'the fork gateway answers the resend').toBe(202)
+  await expect(notice).toContainText(email)
+  await expect(resend).toBeEnabled()
+  await expect(dialog.getByRole('alert')).toHaveCount(0)
+  expect(posts, 'resends after one click').toHaveLength(1)
+  await expectStackAtEveryWidth(page, card, [['paragraph', sentTo], ['resend', resend], ['notice', notice], ['close', close]], ['resend', 'close'])
+}
+
+test('deployed landing: the check-your-email view and the unverified sign-in error each send the link again', async ({ page, browser }) => {
+  // Two registrations at 30 s, four resends at the 2 s floor, two front-door bounces.
+  test.setTimeout(240_000)
+  const errors = gatedErrors(page, [])
+  const viewPosts = recordResends(page)
+  const account = freshRegistration('firm')
+
+  await test.step('A: the check-your-email view sends the link again once per click', async () => {
+    await page.setViewportSize({ width: 1280, height: TALL })
+    await registerThroughLanding(page, account, 'firm')
+    await resendFromView(page, page.getByRole('dialog', { name: CREATE }), account.email, viewPosts)
+  })
+
+  const context = await browser.newContext()
+  try {
+    await test.step('B: the unverified sign-in error offers the link, and its click reaches the fork gateway', async () => {
+      const signIn = await context.newPage()
+      await signIn.setViewportSize({ width: 1280, height: TALL })
+      const signInErrors = gatedErrors(signIn, [expectedStatusDropper(signIn, 403, /\/auth\/sign-in$/)])
+      const signInPosts = recordResends(signIn)
+      await fakeUnverifiedSignIn(signIn)
+      const email = `reg-signin-${crypto.randomUUID()}@example.com`
+      await resendFromSignIn(signIn, await signInUnverified(signIn, email), email, signInPosts)
+      expect(signInErrors, `console errors on the sign-in window:\n${signInErrors.join('\n')}`).toEqual([])
+    })
+
+    await test.step('C: a 254-byte address stays inside the card on both surfaces at 375 px', async () => {
+      const address = longAddress()
+      const viewPage = await context.newPage()
+      const viewErrors = gatedErrors(viewPage, [])
+      const viewLongPosts = recordResends(viewPage)
+      await viewPage.setViewportSize({ width: 1280, height: TALL })
+      await registerThroughLanding(viewPage, { ...freshRegistration('firm'), email: address }, 'firm')
+      await viewPage.setViewportSize({ width: 375, height: TALL })
+      const dialog = viewPage.getByRole('dialog', { name: CREATE })
+      const sentTo = dialog.getByText('a confirmation link is on its way to')
+      await expect(sentTo).toContainText(address)
+      await expectStack(
+        viewPage,
+        375,
+        dialog.locator(':scope > div'),
+        [['paragraph', sentTo], ['resend', dialog.getByRole('button', { name: RESEND, exact: true })], ['close', dialog.getByRole('button', { name: 'Close', exact: true }).filter({ hasText: 'Close' })]],
+        ['resend', 'close'],
+      )
+      await resendFromView(viewPage, dialog, address, viewLongPosts)
+      expect(viewErrors, `console errors on the long-address view:\n${viewErrors.join('\n')}`).toEqual([])
+
+      const signIn = await context.newPage()
+      await signIn.setViewportSize({ width: 1280, height: TALL })
+      const signInErrors = gatedErrors(signIn, [expectedStatusDropper(signIn, 403, /\/auth\/sign-in$/)])
+      const signInPosts = recordResends(signIn)
+      await fakeUnverifiedSignIn(signIn)
+      await resendFromSignIn(signIn, await signInUnverified(signIn, address), address, signInPosts)
+      expect(signInErrors, `console errors on the long-address sign-in:\n${signInErrors.join('\n')}`).toEqual([])
+    })
+  } finally {
+    await context.close()
+  }
+  expect(errors, `console errors on the check-your-email view:\n${errors.join('\n')}`).toEqual([])
 })
 
 function freshRegistration(kind: TenantKind): RealAccount {

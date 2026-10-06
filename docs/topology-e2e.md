@@ -32,7 +32,7 @@ M2-14.4).
    lands on the add-company task, and adding its company opens the import step it gated, the
    identity card shows the account's own name, a long name stays inside the card, and a stranger
    registers through the landing window as a firm and as an in-house account, then signs in and
-   lands in the workspace it named (the verify step is a stand-in: only the bogus link's confirm-page click is real), and the emailed link opens a confirm page whose button is laid out inside its card at every wide width and 375 px, logs no console error, and sends one verify POST on a double-click
+   lands in the workspace it named (the verify step is a stand-in: only the bogus link's confirm-page click is real), and the emailed link opens a confirm page whose button is laid out inside its card at every wide width and 375 px, logs no console error, and sends one verify POST on a double-click, and the check-your-email view and the unverified sign-in error (its 403 faked, the resend real) each send the link again once per click, with the sent notice naming the address, laid out inside the card at every wide width and 375 px, a 254-byte address included
    ([identity-provider.md](./identity-provider.md) "Sign-in and hand-off",
    "Renewal"). The same file's "deployed consoles:" journeys sign a staff account in through
    landing and open both consoles, refuse a customer's session and a forged record, renew the

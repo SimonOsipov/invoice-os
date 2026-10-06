@@ -278,9 +278,9 @@ func TestAuditScopeOf_UnknownEventFallsBackToUnattributedNotWorkspace(t *testing
 
 // AC #4 drift guard: reuses audit_trigger_test.go's own triggerRuleDPayloads (already
 // DB-pinned at 21 rows by TestAudit_InsertTriggerLeavesWorkspaceEventsNull) instead of
-// a fifth hand-written copy of the list. If rule-D ever grows a 21st event that is
-// neither firm-wide nor already listed below, ScopeOf's fallback makes this fail rather
-// than silently pass, forcing a human to classify it (D-28's fail-safe intent).
+// a fifth hand-written copy of the list. A rule-D event that is neither firm-wide nor
+// already listed below fails here through ScopeOf's fallback, forcing a human to classify
+// it (D-28's fail-safe intent).
 //
 // For the five unattributed names this is a DRIFT GUARD, not evidence of their scope:
 // rule 3 answers identically for extraction.succeeded and for an event nobody ever named
@@ -480,10 +480,14 @@ func TestAuditScopeOf_PrefixCasingAndEmptyEventDoNotMatchFirmWide(t *testing.T) 
 		{"invitation name with trailing space", "invitation.sent ", audit.ScopeUnattributed},
 		{"invitation name with leading space", " invitation.resent", audit.ScopeUnattributed},
 		{"invitation near miss resend", "invitation.resend", audit.ScopeUnattributed},
+		{"invitation accepted with capital", "invitation.Accepted", audit.ScopeUnattributed},
+		{"invitation accepted with trailing space", "invitation.accepted ", audit.ScopeUnattributed},
+		{"invitation near miss accept", "invitation.accept", audit.ScopeUnattributed},
 		{"invitation near miss plural", "invitations.sent", audit.ScopeUnattributed},
 		{"unregistered invitation event", "invitation.revoked", audit.ScopeUnattributed},
 		{"control needle: the real firm-wide name matches", "approval_policy.created", audit.ScopeWorkspace},
 		{"control needle: the real invitation name matches", "invitation.sent", audit.ScopeWorkspace},
+		{"control needle: the real accepted name matches", "invitation.accepted", audit.ScopeWorkspace},
 	}
 	if len(cases) == 0 {
 		t.Fatal("test table is empty")

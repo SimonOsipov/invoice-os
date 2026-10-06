@@ -210,16 +210,16 @@ func TestReportAPICalls_CountsCallsAttemptsAndRetries(t *testing.T) {
 		stores["svc-"+svc] = vars
 	}
 	dsns := newAuthShim(t, map[string]string{"settle": `{"data":{"environment":{"serviceInstances":{"edges":[` + strings.Join(edges, ",") + `]}}}}`}, stores)
-	setFaults(t, dsns, "svcVars", "503")
+	setFaults(t, dsns, "varsRead", "503")
 	if stdout, stderr, code := dsns.run(t, exports, "assert-db-dsns", retryForkEnv); code != 0 {
 		t.Fatalf("assert-db-dsns exit %d; output = %q", code, stdout+stderr)
 	}
 
 	auditCalls := len(audit.calls(t))
 	dsnAttempts := len(dsns.calls(t))
-	// assert-db-dsns: the settle read plus one variables read per service; the 503 adds an attempt.
-	if auditCalls != 1 || dsnAttempts != 1+len(m)+1 {
-		t.Fatalf("fixture: audit calls %d (want 1), assert-db-dsns attempts %d (want %d)", auditCalls, dsnAttempts, 1+len(m)+1)
+	// assert-db-dsns: settle plus one batched varsRead; the 503 adds an attempt.
+	if auditCalls != 1 || dsnAttempts != 3 {
+		t.Fatalf("fixture: audit calls %d (want 1), assert-db-dsns attempts %d (want 3: settle, varsRead, varsRead)", auditCalls, dsnAttempts)
 	}
 	attempts := auditCalls + dsnAttempts
 	calls := attempts - 1
@@ -245,7 +245,7 @@ func TestReportAPICalls_CountsCallsAttemptsAndRetries(t *testing.T) {
 	if len(by) == 0 {
 		t.Fatalf("the by-command breakdown is empty: %q", seg[1])
 	}
-	want := map[string]int{"audit-sealed-variables": 1, "assert-db-dsns": 1 + len(m)}
+	want := map[string]int{"audit-sealed-variables": 1, "assert-db-dsns": 2}
 	if !reflect.DeepEqual(by, want) {
 		t.Errorf("by command = %v, want %v", by, want)
 	}

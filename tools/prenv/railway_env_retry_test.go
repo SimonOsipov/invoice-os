@@ -186,7 +186,7 @@ func TestRailwayAPI_HTTP5xxThenSuccess(t *testing.T) {
 				stores["svc-"+svc] = vars
 			}
 			s := newAuthShim(t, map[string]string{"settle": `{"data":{"environment":{"serviceInstances":{"edges":[` + strings.Join(edges, ",") + `]}}}}`}, stores)
-			setFaults(t, s, "svcVars", status)
+			setFaults(t, s, "varsRead", status)
 			stdout, stderr, code := s.run(t, forkExports(true, true, true), "assert-db-dsns", retryForkEnv)
 
 			if code != 0 {
@@ -195,8 +195,8 @@ func TestRailwayAPI_HTTP5xxThenSuccess(t *testing.T) {
 			if !strings.Contains(stdout, "DSN check clean") {
 				t.Errorf("stdout lacks the DSN report; stdout = %q", stdout)
 			}
-			if n := opCount(t, s, "svcVars"); n != len(m)+1 {
-				t.Errorf("svcVars calls = %d, want %d (one per service plus the retry)", n, len(m)+1)
+			if n := opCount(t, s, "varsRead"); n != 2 {
+				t.Errorf("varsRead calls = %d, want 2 (the one batched read plus the retry)", n)
 			}
 		})
 	}

@@ -146,6 +146,26 @@ case "$q" in
     echo '{"data":{"variableCollectionUpsert":true}}' ;;
   *isSealed*)
     cat "$dir/sealed.json" ;;
+  *"query varsRead("*)
+    # One alias sK per $sK variable, served like a single read (rendered-, store-, read-<svc>.jq).
+    # A planted varsRead.json answers verbatim. jq gets file paths, never a value.
+    if [ -f "$dir/varsRead.json" ]; then cat "$dir/varsRead.json"; exit 0; fi
+    e=$(printf '%s' "$data" | jq -r '.variables.e // empty')
+    unr=""; printf '%s' "$q" | grep -q unrendered && unr=1
+    out='{}'
+    for k in $(printf '%s' "$data" | jq -r '.variables | keys_unsorted[] | select(test("^s[0-9]+$"))'); do
+      s=$(printf '%s' "$data" | jq -r --arg k "$k" '.variables[$k]')
+      if [ -z "$unr" ] && [ -f "$dir/rendered-$s-$e.json" ]; then
+        cat "$dir/rendered-$s-$e.json" > "$dir/alias.tmp"
+      else
+        st="$dir/store-$s.json"; flt="$dir/read-$s.jq"
+        if [ -n "$e" ] && [ -f "$dir/store-$s-$e.json" ]; then st="$dir/store-$s-$e.json"; flt="$dir/read-$s-$e.jq"; fi
+        [ -f "$st" ] || echo '{}' > "$st"
+        if [ -f "$flt" ]; then jq -c -f "$flt" "$st" > "$dir/alias.tmp"; else cat "$st" > "$dir/alias.tmp"; fi
+      fi
+      out=$(printf '%s' "$out" | jq -c --arg k "$k" --slurpfile v "$dir/alias.tmp" '. + {($k): $v[0]}')
+    done
+    printf '{"data":%s}' "$out" ;;
   *"variables(projectId"*)
     s=$(printf '%s' "$data" | jq -r '.variables | (.s // .serviceId // empty)')
     e=$(printf '%s' "$data" | jq -r '.variables.e // empty')

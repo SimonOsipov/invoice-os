@@ -50,7 +50,7 @@ func (i *Inviter) Invite(ctx context.Context, emails []string, role string) ([]I
 	if err != nil {
 		return nil, err
 	}
-	return i.deliver(ctx, issued)
+	return i.deliver(ctx, issued), nil
 }
 
 // Resend issues a new token for one pending invite and mails it.
@@ -59,15 +59,12 @@ func (i *Inviter) Resend(ctx context.Context, id string) (InviteResult, error) {
 	if err != nil {
 		return InviteResult{}, err
 	}
-	out, err := i.deliver(ctx, []IssuedInvite{inv})
-	if err != nil {
-		return InviteResult{}, err
-	}
-	return out[0], nil
+	return i.deliver(ctx, []IssuedInvite{inv})[0], nil
 }
 
 // deliver runs on a context that outlives the client, so a send after the commit is always recorded.
-func (i *Inviter) deliver(ctx context.Context, issued []IssuedInvite) ([]InviteResult, error) {
+// A failed outcome write is logged and the answer still reports the send, so the admin is not told to retry a sent mail.
+func (i *Inviter) deliver(ctx context.Context, issued []IssuedInvite) []InviteResult {
 	ctx2 := context.WithoutCancel(ctx)
 	sent := make([]bool, len(issued))
 	var msgs []accountmail.Message
@@ -108,7 +105,7 @@ func (i *Inviter) deliver(ctx context.Context, issued []IssuedInvite) ([]InviteR
 	out := make([]InviteResult, len(issued))
 	for n, inv := range issued {
 		if err := i.Store.RecordInviteDelivery(ctx2, inv.ID, inv.TokenHash, sent[n]); err != nil {
-			return nil, err
+			i.Logger.ErrorContext(ctx2, "tenancy: invite delivery not recorded", slog.Any("err", err))
 		}
 		delivery := "failed"
 		if sent[n] {
@@ -116,7 +113,7 @@ func (i *Inviter) deliver(ctx context.Context, issued []IssuedInvite) ([]InviteR
 		}
 		out[n] = InviteResult{ID: inv.ID, Email: inv.Email, Role: inv.Role, Status: "pending", ExpiresAt: inv.ExpiresAt, Delivery: delivery}
 	}
-	return out, nil
+	return out
 }
 
 // InviteFunc is Inviter.Invite; the handler takes the function so its contract tests without a database.

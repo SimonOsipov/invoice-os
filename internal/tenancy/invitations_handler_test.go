@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -19,8 +20,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/accountmail"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/sentrytest"
 )
@@ -313,6 +316,7 @@ func TestInvitationsAPI_ValidationRefusals(t *testing.T) {
 		{"no addresses", `{"emails":[],"role":"preparer"}`, badCount},
 		{"21 distinct addresses", invitePost(addrs("v", 21), "preparer"), badCount},
 		{"malformed addresses", `{"emails":["ok@x.test","nope","a@b"],"role":"preparer"}`, `invalid email address: "nope", "a@b"`},
+		{"a refused address is named as sent, not normalised", `{"emails":["ok@x.test"," Nope@X "],"role":"preparer"}`, `invalid email address: " Nope@X "`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -351,6 +355,13 @@ func TestInvitationsAPI_AddressRuleRefusals(t *testing.T) {
 		{"display name", "name<a@b.co>"},
 		{"quoted local part", `"x"@b.co`},
 		{"trailing angle bracket", "a@b.co>"},
+		{"trailing dot", "a@b.co."},
+		{"empty domain label", "a@b..co"},
+		{"leading dot in the local part", ".a@b.co"},
+		{"two at signs", "a@@b.co"},
+		{"space inside", "a b@x.test"},
+		{"comma", "a@x.test,"},
+		{"angle brackets", "<a@x.test>"},
 	}
 	if got := len(bad[5].addr); got != 255 {
 		t.Fatalf("long address is %d bytes, want 255", got)
@@ -827,4 +838,371 @@ func TestInvitationsAPI_CaptureHoldsWhatWouldBeSent(t *testing.T) {
 		}
 	}
 	requireHashMatchesRow(t, a.invWorld, "b@x.test", mailToken(t, msgs[0]))
+}
+
+func TestInvitationsAPI_UnicodeAddressIsAcceptedAndLowerCased(t *testing.T) {
+	a := newAPIWorld(t, "Unicode API Tenant", "Ada Obi")
+	s := &apiSender{}
+
+	items := apiItems(t, apiDo(a.handler(s), a.adminCtx(), http.MethodPost, "/v1/invitations", invitePost([]string{"  É@Ünï.TEST "}, "preparer")))
+
+	if len(items) != 1 || items[0]["email"] != "é@ünï.test" {
+		t.Fatalf("items = %v, want one item for é@ünï.test", items)
+	}
+	if msgs := s.messages(); len(msgs) != 1 || msgs[0].To != "é@ünï.test" {
+		t.Errorf("messages = %+v, want one mail to é@ünï.test", msgs)
+	}
+	pendingRow(t, a.super, a.tenant, "é@ünï.test")
+}
+
+func TestInvitationsAPI_BodyShapes(t *testing.T) {
+	a := newAPIWorld(t, "Body Shape API Tenant", "Ada Obi")
+	s := &apiSender{}
+	h := a.handler(s)
+	const (
+		badBody = "invalid request body"
+		badRole = `role must be "admin", "preparer" or "reviewer"`
+	)
+
+	refused := []struct{ name, body, want string }{
+		{"empty body", ``, badBody},
+		{"JSON array", `[]`, badBody},
+		{"emails is a string", `{"emails":"ok@x.test","role":"preparer"}`, badBody},
+		{"emails holds a number", `{"emails":["ok@x.test",5],"role":"preparer"}`, badBody},
+		{"role is a number", `{"emails":["ok@x.test"],"role":5}`, badBody},
+		{"role is null", `{"emails":["ok@x.test"],"role":null}`, badRole},
+		{"JSON null", `null`, badRole},
+		{"role in another case", `{"emails":["ok@x.test"],"role":"Admin"}`, badRole},
+		{"role with a space", `{"emails":["ok@x.test"],"role":" admin"}`, badRole},
+		{"emails is null", `{"emails":null,"role":"preparer"}`, "emails must hold 1 to 20 addresses"},
+		{"a null address", `{"emails":["ok@x.test",null],"role":"preparer"}`, `invalid email address: ""`},
+	}
+	for _, c := range refused {
+		t.Run(c.name, func(t *testing.T) {
+			var rd io.Reader
+			if c.body != "" {
+				rd = strings.NewReader(c.body)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequestWithContext(a.adminCtx(), http.MethodPost, "/v1/invitations", rd))
+			assertErrorBody(t, rec, http.StatusBadRequest, c.want)
+		})
+	}
+	if n := countInvitations(t, a.super, a.tenant); n != 0 {
+		t.Errorf("invitations rows after the refusals = %d, want 0", n)
+	}
+	if n := inviteAudit(t, a.super, a.tenant); n != 0 {
+		t.Errorf("invitation audit rows after the refusals = %d, want 0", n)
+	}
+	if n := len(s.sent()); n != 0 {
+		t.Errorf("sender calls after the refusals = %d, want 0", n)
+	}
+
+	t.Run("a body of exactly 16 KiB is accepted", func(t *testing.T) {
+		base := `{"emails":["ok@x.test"],"role":"preparer","pad":""}`
+		body := strings.Replace(base, `"pad":""`, `"pad":"`+strings.Repeat("a", 16*1024-len(base))+`"`, 1)
+		if len(body) != 16*1024 {
+			t.Fatalf("body is %d bytes, want %d", len(body), 16*1024)
+		}
+		if items := apiItems(t, apiDo(h, a.adminCtx(), http.MethodPost, "/v1/invitations", body)); len(items) != 1 {
+			t.Errorf("items = %d, want 1", len(items))
+		}
+	})
+
+	t.Run("every role is accepted", func(t *testing.T) {
+		for _, role := range []string{"admin", "preparer", "reviewer"} {
+			items := apiItems(t, apiDo(h, a.adminCtx(), http.MethodPost, "/v1/invitations", invitePost([]string{role + "@x.test"}, role)))
+			if len(items) != 1 || items[0]["role"] != role {
+				t.Errorf("role %s: items = %v, want one item with that role", role, items)
+			}
+		}
+	})
+
+	t.Run("unknown fields are ignored", func(t *testing.T) {
+		items := apiItems(t, apiDo(h, a.adminCtx(), http.MethodPost, "/v1/invitations", `{"emails":["ok@x.test"],"role":"preparer","extra":{"x":1}}`))
+		if len(items) != 1 || items[0]["email"] != "ok@x.test" {
+			t.Errorf("items = %v, want one item for ok@x.test", items)
+		}
+	})
+}
+
+func TestInvitationsAPI_OutcomeWriteFailureStillReportsTheSend(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		sendErr error
+		want    string
+	}{
+		{"mail sent", nil, "sent"},
+		{"mail failed", &accountmail.SendError{Status: 500}, "failed"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			a := newAPIWorld(t, "Outcome Write API Tenant", "Ada Obi")
+			pool, err := pgxpool.New(context.Background(), os.Getenv("DATABASE_URL"))
+			if err != nil {
+				t.Fatalf("connect app: %v", err)
+			}
+			t.Cleanup(pool.Close)
+			a.store = NewStore(pool)
+			emails := []string{"b@x.test", "c@x.test"}
+			// Closing the pool after the commit makes every outcome write fail.
+			s := &apiSender{fn: func(context.Context, []accountmail.Message) error {
+				pool.Close()
+				return c.sendErr
+			}}
+
+			items := apiItems(t, apiDo(a.handler(s), a.adminCtx(), http.MethodPost, "/v1/invitations", invitePost(emails, "preparer")))
+
+			if len(items) != 2 {
+				t.Fatalf("items = %d, want 2", len(items))
+			}
+			for i, it := range items {
+				if it["delivery"] != c.want {
+					t.Errorf("item %d delivery = %v, want %s", i, it["delivery"], c.want)
+				}
+			}
+			logs := a.logs.String()
+			if n := strings.Count(logs, "tenancy: invite delivery not recorded"); n != 2 {
+				t.Errorf("outcome-write log lines = %d, want 2 (one per invite):\n%s", n, logs)
+			}
+			for _, e := range emails {
+				if strings.Contains(logs, e) {
+					t.Errorf("log holds %q:\n%s", e, logs)
+				}
+				if row := pendingRow(t, a.super, a.tenant, e); row.SendStatus != "sending" {
+					t.Errorf("row %s send_status = %q, want sending (the write failed)", e, row.SendStatus)
+				}
+			}
+		})
+	}
+}
+
+func TestInvitationsAPI_RenderFailureFailsOnlyThatInvite(t *testing.T) {
+	_, sentry, _ := sentrytest.Boot(t, "tenancy")
+	a := newAPIWorld(t, "Render Failure API Tenant", "Ada Obi")
+	s := &apiSender{}
+	log := slog.New(slog.NewTextHandler(a.logs, nil))
+	inv := &Inviter{Store: a.store, Sender: s, Logger: log}
+	issued := mustIssue(t, a.adminCtx(), a.store, []string{"b@x.test", "c@x.test"}, "preparer")
+	// The roles table allows only the three rendered roles, so the store cannot hand deliver an unrenderable one.
+	issued[0].Role = "qa-unknown-role"
+
+	got := inv.deliver(a.adminCtx(), issued)
+
+	if len(got) != 2 || got[0].Delivery != "failed" || got[1].Delivery != "sent" {
+		t.Fatalf("results = %+v, want the first failed and the second sent", got)
+	}
+	msgs := s.messages()
+	if calls := s.sent(); len(calls) != 1 || len(msgs) != 1 || msgs[0].To != "c@x.test" {
+		t.Errorf("sender calls = %+v, want one call holding only the mail to c@x.test", calls)
+	}
+	for e, want := range map[string]string{"b@x.test": "failed", "c@x.test": "sent"} {
+		if row := pendingRow(t, a.super, a.tenant, e); row.SendStatus != want {
+			t.Errorf("row %s send_status = %q, want %s", e, row.SendStatus, want)
+		}
+	}
+	logs := a.logs.String()
+	if n := strings.Count(logs, "tenancy: invite mail failed"); n != 1 || !strings.Contains(logs, "count=1") || !strings.Contains(logs, "level=ERROR") {
+		t.Errorf("want one ERROR line %q with count=1:\n%s", "tenancy: invite mail failed", logs)
+	}
+	if strings.Contains(logs, "b@x.test") {
+		t.Errorf("log holds the address:\n%s", logs)
+	}
+	if events := sentry.Events(); len(events) != 1 {
+		t.Errorf("recorded %d Sentry events, want exactly 1", len(events))
+	}
+
+	// Nothing renders: the sender is not called with an empty batch.
+	allBad := mustIssue(t, a.adminCtx(), a.store, []string{"d@x.test", "e@x.test"}, "preparer")
+	allBad[0].Role, allBad[1].Role = "qa-unknown-role", "qa-unknown-role"
+	got = inv.deliver(a.adminCtx(), allBad)
+	if len(got) != 2 || got[0].Delivery != "failed" || got[1].Delivery != "failed" {
+		t.Errorf("all-bad results = %+v, want both failed", got)
+	}
+	if n := len(s.sent()); n != 1 {
+		t.Errorf("sender calls after the all-bad batch = %d, want still 1", n)
+	}
+	if !strings.Contains(a.logs.String(), "count=2") {
+		t.Errorf("no failure line with count=2 for the all-bad batch:\n%s", a.logs.String())
+	}
+}
+
+func TestInvitationsAPI_ResponsesNeverCarryTheTokenOrItsHash(t *testing.T) {
+	a := newAPIWorld(t, "No Token API Tenant", "Ada Obi")
+	s := &apiSender{}
+	h := a.handler(s)
+
+	created := apiDo(h, a.adminCtx(), http.MethodPost, "/v1/invitations", invitePost([]string{"b@x.test"}, "preparer"))
+	items := apiItems(t, created)
+	id := itemID(t, items[0])
+	resent := apiDo(h, a.adminCtx(), http.MethodPost, resendTarget(id), "")
+	listed := apiDo(h, a.adminCtx(), http.MethodGet, "/v1/invitations", "")
+
+	msgs := s.messages()
+	if len(msgs) != 2 {
+		t.Fatalf("mails = %d, want 2", len(msgs))
+	}
+	if n := len(apiItems(t, listed)); n != 1 {
+		t.Fatalf("listed items = %d, want 1", n)
+	}
+	var secrets []string
+	for _, m := range msgs {
+		tok := mailToken(t, m)
+		secrets = append(secrets, tok, fmt.Sprintf("%x", sha(tok)), fmt.Sprintf("%X", sha(tok)), `\\x`+fmt.Sprintf("%x", sha(tok)))
+	}
+	for name, rec := range map[string]*httptest.ResponseRecorder{"create": created, "resend": resent, "list": listed} {
+		body := rec.Body.String()
+		if body == "" {
+			t.Errorf("%s body is empty", name)
+		}
+		for _, secret := range secrets {
+			if strings.Contains(body, secret) {
+				t.Errorf("%s body holds %q: %s", name, secret, body)
+			}
+		}
+		for _, key := range []string{"token", "token_hash", "send_status"} {
+			if strings.Contains(body, `"`+key+`"`) {
+				t.Errorf("%s body holds the key %q: %s", name, key, body)
+			}
+		}
+	}
+}
+
+func TestInvitationsAPI_RateLimitedRequestWritesAndSendsNothing(t *testing.T) {
+	a := newAPIWorld(t, "Rate Limit API Tenant", "Ada Obi")
+	seedAuditEvents(t, a.super, a.tenant, "invitation.sent", sentPayload, "1 hour", 20)
+	existing := seedInvitation(t, a.super, seedInv{tenant: a.tenant, email: "s@x.test", invitedBy: a.admin, sendStatus: "sent"})
+	s := &apiSender{}
+	h := a.handler(s)
+	const limitMsg = "daily invite limit reached: 20 invite mails per workspace per 24 hours"
+
+	assertErrorBody(t, apiDo(h, a.adminCtx(), http.MethodPost, "/v1/invitations", invitePost([]string{"b@x.test"}, "preparer")), http.StatusTooManyRequests, limitMsg)
+	assertErrorBody(t, apiDo(h, a.adminCtx(), http.MethodPost, resendTarget(existing.ID), ""), http.StatusTooManyRequests, limitMsg)
+
+	if n := len(s.sent()); n != 0 {
+		t.Errorf("sender calls = %d, want 0", n)
+	}
+	if n := countInvitations(t, a.super, a.tenant); n != 1 {
+		t.Errorf("invitations rows = %d, want only the seeded one", n)
+	}
+	if n := inviteAudit(t, a.super, a.tenant); n != 20 {
+		t.Errorf("invitation audit rows = %d, want the 20 seeded (no new one)", n)
+	}
+	row := pendingRow(t, a.super, a.tenant, "s@x.test")
+	if !bytes.Equal(row.Hash, existing.Hash) || row.SendStatus != "sent" {
+		t.Errorf("the refused resend changed the row: hash equal %v, send_status %q", bytes.Equal(row.Hash, existing.Hash), row.SendStatus)
+	}
+}
+
+func TestInvitationsAPI_AnotherTenantsInviteIsNotFoundAndNotListed(t *testing.T) {
+	a := newAPIWorld(t, "Cross Tenant API A", "Ada Obi")
+	b := newInvWorld(t, "Cross Tenant API B", "Bo Okafor")
+	theirs := seedInvitation(t, b.super, seedInv{tenant: b.tenant, email: "theirs@x.test", invitedBy: b.admin, sendStatus: "sent"})
+	s := &apiSender{}
+	h := a.handler(s)
+
+	assertErrorBody(t, apiDo(h, a.adminCtx(), http.MethodPost, resendTarget(theirs.ID), ""), http.StatusNotFound, "invitation not found")
+
+	if n := len(s.sent()); n != 0 {
+		t.Errorf("sender calls = %d, want 0", n)
+	}
+	row := pendingRow(t, b.super, b.tenant, "theirs@x.test")
+	if !bytes.Equal(row.Hash, theirs.Hash) || row.SendStatus != "sent" {
+		t.Errorf("the other tenant's row changed: hash equal %v, send_status %q", bytes.Equal(row.Hash, theirs.Hash), row.SendStatus)
+	}
+	if n := inviteAudit(t, b.super, b.tenant); n != 0 {
+		t.Errorf("the other tenant gained %d audit rows", n)
+	}
+	rec := apiDo(h, a.adminCtx(), http.MethodGet, "/v1/invitations", "")
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"invitations":[]}` {
+		t.Errorf("list = %d %s, want 200 with no items: the other tenant's invite must not show", rec.Code, rec.Body)
+	}
+	// Control: the other tenant's own admin resends the same id.
+	apiItem(t, apiDo(b.handlerFor(s), b.adminCtx(), http.MethodPost, resendTarget(theirs.ID), ""))
+	if n := len(s.sent()); n != 1 {
+		t.Errorf("sender calls after the owner's resend = %d, want 1", n)
+	}
+}
+
+func (w invWorld) handlerFor(s accountmail.Sender) http.Handler {
+	return apiWorld{invWorld: w, logs: &syncBuf{}}.handler(s)
+}
+
+func TestInvitationsAPI_StoreFailureIsAnOpaque500(t *testing.T) {
+	var logs syncBuf
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	boom := errors.New("pq: connection to 10.0.0.9 refused for b@x.test")
+	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()})
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/invitations", InvitationsCreateHandler(func(context.Context, []string, string) ([]InviteResult, error) { return nil, boom }, log))
+	mux.HandleFunc("GET /v1/invitations", InvitationsListHandler(func(context.Context) ([]Invitation, error) { return nil, boom }, log))
+	mux.HandleFunc("POST /v1/invitations/{id}/resend", InvitationResendHandler(func(context.Context, string) (InviteResult, error) { return InviteResult{}, boom }, log))
+
+	for _, c := range []struct{ name, method, target, body string }{
+		{"create", http.MethodPost, "/v1/invitations", invitePost([]string{"b@x.test"}, "preparer")},
+		{"list", http.MethodGet, "/v1/invitations", ""},
+		{"resend", http.MethodPost, resendTarget(uuid.NewString()), ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			assertErrorBody(t, apiDo(mux, ctx, c.method, c.target, c.body), http.StatusInternalServerError, "internal server error")
+		})
+	}
+	if n := strings.Count(logs.String(), "level=ERROR"); n != 3 {
+		t.Errorf("ERROR log lines = %d, want 3 (one per failed request):\n%s", n, logs.String())
+	}
+}
+
+func TestInvitationsAPI_NoSecretReachesLogsOrSentryAcrossFailureAndResend(t *testing.T) {
+	_, sentry, _ := sentrytest.Boot(t, "tenancy")
+	a := newAPIWorld(t, "No Secret API Tenant", "Ada Obi")
+	const key = "k_secret_sending_key"
+	// The real sender over a transport that fails like a dropped connection: its *url.Error would carry the URL.
+	down := apiRoundTrip(func(r *http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("dial tcp 10.1.2.3:443 for %s with %s: refused", r.URL, r.Header.Get("Authorization"))
+	})
+	real := accountmail.NewResend(accountmail.ResendBaseURL, key, down)
+	rec := &apiSender{}
+	tee := &apiSender{fn: func(ctx context.Context, msgs []accountmail.Message) error {
+		_ = rec.Send(ctx, msgs)
+		return real.Send(ctx, msgs)
+	}}
+	h := a.handler(tee)
+
+	items := apiItems(t, apiDo(h, a.adminCtx(), http.MethodPost, "/v1/invitations", invitePost([]string{"b@x.test", "c@x.test"}, "preparer")))
+	if len(items) != 2 || items[0]["delivery"] != "failed" || items[1]["delivery"] != "failed" {
+		t.Fatalf("items = %v, want two failed items", items)
+	}
+	for _, it := range items {
+		apiItem(t, apiDo(h, a.adminCtx(), http.MethodPost, resendTarget(itemID(t, it)), ""))
+	}
+
+	msgs := rec.messages()
+	if len(msgs) != 4 {
+		t.Fatalf("recorded mails = %d, want 4 (batch of 2, then 2 resends)", len(msgs))
+	}
+	secrets := []string{key, "b@x.test", "c@x.test", accountmail.InviteAcceptURL, accountmail.ResendBaseURL, "10.1.2.3"}
+	for _, m := range msgs {
+		secrets = append(secrets, mailToken(t, m))
+	}
+	logs := a.logs.String()
+	if n := strings.Count(logs, "tenancy: invite mail failed"); n != 3 || strings.Count(logs, "count=2") != 1 || strings.Count(logs, "count=1") != 2 {
+		t.Errorf("want 3 failure lines, counts 2 (the batch) then 1 and 1 (the resends):\n%s", logs)
+	}
+	events := sentry.Events()
+	if len(events) != 3 {
+		t.Fatalf("recorded %d Sentry events, want 3", len(events))
+	}
+	for _, secret := range secrets {
+		if strings.Contains(logs, secret) {
+			t.Errorf("log holds %q:\n%s", secret, logs)
+		}
+		for i, ev := range events {
+			raw, err := json.Marshal(ev)
+			if err != nil {
+				t.Fatalf("marshal event %d: %v", i, err)
+			}
+			if strings.Contains(string(raw), secret) {
+				t.Errorf("Sentry event %d holds %q: %s", i, secret, raw)
+			}
+		}
+	}
 }

@@ -105,6 +105,23 @@ describe('InviteModal', () => {
     expect(input().value).toBe('')
   })
 
+  it('InviteModal: a paste replaces the selected part of the draft', async () => {
+    const { user } = renderModal()
+    await user.type(input(), 'junk')
+    input().setSelectionRange(0, 4)
+    await user.paste('a@x.ng')
+    expect(addresses()).toEqual(['a@x.ng'])
+    expect(input().value).toBe('')
+  })
+
+  it('InviteModal: a paste lands at the caret, not at the end of the draft', async () => {
+    const { user } = renderModal()
+    await user.type(input(), 'c@x.ng')
+    input().setSelectionRange(0, 0)
+    await user.paste('a@x.ng ')
+    expect(addresses()).toEqual(['a@x.ng', 'c@x.ng'])
+  })
+
   it('InviteModal: a case variant does not chip twice', async () => {
     const { user } = renderModal()
     await addChips(user, 'a@x.ng')

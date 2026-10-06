@@ -49,7 +49,8 @@ const TABLE_MIN_WIDTH = 716
 // makes room for whichever menu is open.
 //
 // Sized for the tallest reachable menu, the pending row's (Resend plus two reason notes). 216 was
-// measured on the old invited menu of the same shape; RESEND-07-05's L2 sweep gates it on the deployed build.
+// measured on the old invited menu of the same shape; roles.spec.ts › "firm Settings: an admin
+// invites from the Members screen, sees the pending row, and resends" (L2) gates it.
 // ceiling: fits today's menu copy; re-measure if an item or reason is added.
 const MENU_CLEARANCE = 216
 
@@ -239,10 +240,10 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
                   {roleCell.text}
                 </span>
 
-                <span style={{ minWidth: 0, display: 'flex' }}>
+                <span style={{ minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
                   <MemberStatusPill status={m.status} />
                   {invite && (
-                    <span style={{ display: 'block', marginTop: 3, ...ELLIPSIS, fontSize: 11, color: 'var(--fg-3)' }}>
+                    <span style={{ marginTop: 3, maxWidth: '100%', ...ELLIPSIS, fontSize: 11, color: 'var(--fg-3)' }}>
                       {inviteStatusLine(invite, Date.now())}
                     </span>
                   )}

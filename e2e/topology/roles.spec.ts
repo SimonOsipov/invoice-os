@@ -1172,6 +1172,7 @@ test('firm Settings: an admin invites from the Members screen, sees the pending 
   await expect(page.getByTestId('invite-role-preparer').getByRole('radio')).toBeChecked()
   for (const address of [valid, refused, malformed]) await addChip(address)
   await page.getByTestId('invite-modal-send').click()
+  await expect(flash).toContainText(`Invite sent to ${valid}`)
 
   await expect(chip(valid), 'the sent address leaves the chip box').toHaveCount(0)
   await expect(chip(refused).getByTestId('invite-chip-error')).toHaveText('Not a valid email')
@@ -1182,7 +1183,6 @@ test('firm Settings: an admin invites from the Members screen, sees the pending 
   await page.getByRole('button', { name: `Remove ${malformed}` }).click()
   await page.getByTestId('invite-modal-cancel').click()
   await expect(modal).toBeHidden()
-  await expect(flash).toContainText(`Invite sent to ${valid}`)
 
   // --- the pending row, and what the server says ---------------------------------------------
   const row = rowFor(valid)
@@ -1282,16 +1282,21 @@ test('firm Settings: an admin invites from the Members screen, sees the pending 
     await settleAnimations(longRow)
     const person = await boxOf(cells.nth(0), `the Person cell at ${width}px`)
     const status = await boxOf(cells.nth(3), `the Status cell at ${width}px`)
-    const statusLine = await boxOf(cells.nth(3).getByText(/^Expires in/), `the status line at ${width}px`)
+    const pill = await boxOf(cells.nth(3).getByText('INVITED'), `the INVITED pill at ${width}px`)
+    const statusLineLoc = cells.nth(3).getByText(/^Expires in/)
+    const statusLine = await boxOf(statusLineLoc, `the status line at ${width}px`)
+    const clip = await statusLineLoc.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
     const trigger = await boxOf(longRow.getByTestId('member-menu-trigger'), `the trigger at ${width}px`)
     const emailLine = cells.nth(0).locator('.mono')
     const email = await boxOf(emailLine, `the email line at ${width}px`)
     const name = await boxOf(emailLine.locator('xpath=../span[1]'), `the name line at ${width}px`)
     expect(enclosesRect(status, statusLine, 1), `the status line must sit inside the Status cell at ${width}px`).toBe(true)
+    expect(statusLine.y, `the status line must sit below the INVITED pill at ${width}px`).toBeGreaterThanOrEqual(pill.y + pill.height - 1)
+    expect(clip.scrollWidth, `the status line must not be clipped at ${width}px`).toBeLessThanOrEqual(clip.clientWidth)
     expect(rectsOverlap(statusLine, trigger), `the status line must not overlap the trigger at ${width}px`).toBe(false)
     expect(enclosesRect(person, name, 1), `the name line must sit inside the Person cell at ${width}px`).toBe(true)
     expect(enclosesRect(person, email, 1), `the email line must sit inside the Person cell at ${width}px`).toBe(true)
-    return { width, person, status, statusLine, trigger, name, email }
+    return { width, person, status, pill, statusLine, trigger, name, email }
   })
   expect(l3.map((m) => m.width)).toEqual([...WIDE_WIDTHS])
   await testInfo.attach('invite-row-fit.json', { body: JSON.stringify(l3, null, 2), contentType: 'application/json' })

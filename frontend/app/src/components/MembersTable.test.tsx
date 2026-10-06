@@ -473,6 +473,17 @@ function openMenuOf(row: HTMLElement): HTMLElement {
   return screen.getByTestId('member-menu')
 }
 
+describe('RESEND-07-04: the pending row status cell', () => {
+  it('the expiry line sits under the INVITED pill, in a column', () => {
+    renderPending()
+    const cell = screen.getByTestId('invite-row').children[3] as HTMLElement
+    expect(getComputedStyle(cell).flexDirection, 'pill and line stack, they do not sit side by side').toBe('column')
+    const pill = within(cell).getByText('INVITED')
+    const line = within(cell).getByText(/^Expires in/)
+    expect(pill.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+})
+
 describe('RESEND-07-04: the pending row menu', () => {
   it("MembersTable: a pending row's menu offers Resend and two disabled items with their reasons", () => {
     renderPending()

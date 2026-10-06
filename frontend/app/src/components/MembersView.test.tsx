@@ -941,6 +941,44 @@ describe('RESEND-07-04', () => {
       await stale(404, ERR_NOT_FOUND)
     })
 
+    // App.tsx's refetchMembers: status goes `loading` while the members mirror holds its rows.
+    it.each([409, 404] as const)('MembersView: a %i resend keeps every row mounted through a members refetch, with one list GET', async (status) => {
+      const gw = gateway({
+        list: [answer(listOf(wire({ id: 'i1', email: 'zed@x.ng' }))), answer(listOf())],
+        resend: [refuse(status, status === 409 ? ERR_NOT_PENDING : ERR_NOT_FOUND)],
+      })
+      const controls: { current: HarnessControls | null } = { current: null }
+      let setState!: (s: AsyncStatus) => void
+      function AppLike() {
+        const [state, set] = useState<AsyncStatus>('ready')
+        setState = set
+        return (
+          <Harness
+            initial={adminRoster()}
+            authedFetch={gw.authedFetch}
+            controls={controls}
+            membersState={state}
+            refetchMembers={() => set('loading')}
+          />
+        )
+      }
+      render(<AppLike />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(1))
+
+      clickResendOn(inviteRows()[0])
+      await waitFor(() => expect(gw.lists()).toHaveLength(2))
+      await act(async () => {})
+
+      expect(screen.queryByText('Loading members…'), 'N1: a members refetch never blanks the roster').toBeNull()
+      expect(memberRows()).toHaveLength(2)
+      expect(gw.lists(), 'the list fetch just started survives; no second GET follows').toHaveLength(2)
+
+      await act(async () => setState('ready'))
+      await waitFor(() => expect(inviteRows()).toHaveLength(0))
+      expect(memberRows()).toHaveLength(2)
+      expect(gw.lists()).toHaveLength(2)
+    })
+
     it('MembersView: the stale-resend reason clears at the next invite action', async () => {
       // After a 409 on i1 the refetched list holds i2 only.
       async function reachReason(list3?: Responder) {

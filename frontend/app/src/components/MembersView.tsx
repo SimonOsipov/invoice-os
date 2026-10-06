@@ -175,7 +175,9 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
   // rolesSurface's 'empty' branch is RolesView's own "no roles yet" card — wrong here, since
   // this roster doesn't care how many roles exist, only whether the fetch landed.
   const rolesStatusForRoster = ctx.rolesState === 'empty' ? 'ready' : ctx.rolesState
-  const surface = rolesSurface(rolesStatusForRoster, ctx.membersState)
+  // A members refetch over a landed roster keeps the rows; only a first load shows the spinner.
+  const membersStateForRoster = ctx.membersState === 'loading' && members.length > 0 ? 'ready' : ctx.membersState
+  const surface = rolesSurface(rolesStatusForRoster, membersStateForRoster)
   const showLoading = surface === 'loading' || (surface === 'roster' && listFirstLoad)
   const inviteReady = admin && invitesLanded && list.status !== 'error' && list.status !== 'loading'
   const listFailed = admin && list.status === 'error'
@@ -318,6 +320,8 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
           renders no node at all, not a hidden one. */}
       {mode === 'firm' && <ClientUsersCard />}
 
+      {inviting && <InviteModal existing={roster} onSend={sendInvites} onClose={closeInvite} />}
+
       {/* Rendered conditionally rather than mounted-and-hidden, the ClientsView/EntityFormModal
           form — which is also what lets the drawer call `useDismiss(true, …)` and register no
           listener at all while closed. It raises no confirmation of its own: a status write is
@@ -327,8 +331,6 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
           `key={drawerId}` re-seeds `ClientAccessPicker`, whose ticked set is own state seeded
           once from `value`. Opening another member without closing first is unreachable behind
           the scrim today, which is exactly why a key is the right guard rather than an effect. */}
-      {inviting && <InviteModal existing={roster} onSend={sendInvites} onClose={closeInvite} />}
-
       {drawerId != null && (
         <MemberDrawer key={drawerId} ctx={ctx} memberId={drawerId} onClose={closeDrawer} onStatus={changeStatus} statusError={statusError} />
       )}

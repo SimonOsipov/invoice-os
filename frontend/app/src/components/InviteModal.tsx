@@ -152,7 +152,8 @@ export function InviteModal({ existing, onSend, onClose }: InviteModalProps) {
               onChange={(e) => setDraft(e.target.value)}
               onPaste={(e) => {
                 e.preventDefault()
-                commit(draft + e.clipboardData.getData('text'))
+                const { selectionStart: from, selectionEnd: to } = e.currentTarget
+                commit(draft.slice(0, from ?? draft.length) + e.clipboardData.getData('text') + draft.slice(to ?? draft.length))
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ',' || e.key === ';') {

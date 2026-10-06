@@ -460,8 +460,9 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   // overwrites it wholesale, so the fetch stays authoritative.
   const [members, setMembers] = useState<Member[]>([])
   useEffect(() => {
+    if (membersAsync.status === 'loading') return
     setMembers(membersAsync.data ?? [])
-  }, [membersAsync.data])
+  }, [membersAsync.status, membersAsync.data])
   // The approval seats a policy's steps point at — the `membersAsync` idiom immediately
   // above, verbatim: ONE fetch, shared by the Roles tab and the Workflows builder.
   const rolesAsync = useAsync<Role[]>(

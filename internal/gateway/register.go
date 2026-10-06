@@ -182,7 +182,7 @@ func registrationAnswers(workspace, display, kind *string) (map[string]string, s
 	return out, ""
 }
 
-// holdMinimum logs the signup timing and waits out what is left of minResponse since start.
+// holdMinimum logs the timing line msg and waits out what is left of minResponse since start.
 // It reports false when the client went away first. A minResponse of 0 neither logs nor waits.
 func holdMinimum(ctx context.Context, log *slog.Logger, msg string, start time.Time, upstream, minResponse time.Duration) bool {
 	if minResponse <= 0 {
@@ -193,7 +193,7 @@ func holdMinimum(ctx context.Context, log *slog.Logger, msg string, start time.T
 		level = slog.LevelInfo
 	}
 	// ceiling: a GoTrue answer slower than the minimum still leaks timing; revisit when this line logs WARN.
-	// ceiling: each waiting request holds a connection for up to the minimum; the per-client limits bound that for register and resend, not for the other routes.
+	// ceiling: each waiting request holds a connection for up to the minimum.
 	log.Log(ctx, level, msg,
 		slog.Int64("upstream_ms", upstream.Milliseconds()), slog.Int64("min_ms", minResponse.Milliseconds()))
 	timer := time.NewTimer(max(0, minResponse-time.Since(start)))

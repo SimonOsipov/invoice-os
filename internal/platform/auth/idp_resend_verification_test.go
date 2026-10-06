@@ -78,11 +78,13 @@ func TestIdP_ResendAnswersAlikeForEveryAccountState(t *testing.T) {
 	}
 	record("unconfirmed address inside the cooldown", unconfirmed.email)
 	record("unconfirmed address inside the cooldown, again", unconfirmed.email)
-	if n := strings.Count(logs.String(), "resend-verification: gotrue email send rate limit"); n != 2 {
-		t.Errorf("%d email-send-rate-limit lines in the gateway log, want 2, so the repeats did not take the 429 path: %s", n, logs.String())
+	record("unconfirmed address inside the cooldown, a third time", unconfirmed.email)
+	// Three counted sends would have spent the address's limit: the third repeat must still reach GoTrue.
+	if n := strings.Count(logs.String(), "resend-verification: gotrue email send rate limit"); n != 3 {
+		t.Errorf("%d email-send-rate-limit lines in the gateway log, want 3, so the repeats did not all take the 429 path (refund missing?): %s", n, logs.String())
 	}
 	if n := mailCount(t, unconfirmed.email); n != 2 {
-		t.Errorf("mailpit holds %d mails after two resends inside the cooldown, want still 2", n)
+		t.Errorf("mailpit holds %d mails after three resends inside the cooldown, want still 2", n)
 	}
 
 	overLimit := unknownAddress()

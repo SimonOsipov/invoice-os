@@ -957,6 +957,9 @@ func TestRegister_InvalidMarketingTextIs400(t *testing.T) {
 
 const registerLimitMsg = "registration: limit reached"
 
+// registerPerIPLimit is the limit the acceptance criteria state, not RegisterPerIP: a changed limit must fail these tests.
+const registerPerIPLimit = 10
+
 // serveRegisterFrom posts body (with X-Real-IP when realIP is set) and times ServeHTTP.
 func serveRegisterFrom(ctx context.Context, h http.Handler, body, realIP string) (*httptest.ResponseRecorder, time.Duration) {
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body)).WithContext(ctx)
@@ -986,7 +989,7 @@ func TestRegister_PerIPLimit(t *testing.T) {
 	log, buf := captureLog()
 	h := RegisterHandler(fake.URL, testClient(), floor, freshRegisterLimit(), true, log)
 
-	recs := make([]*httptest.ResponseRecorder, RegisterPerIP)
+	recs := make([]*httptest.ResponseRecorder, registerPerIPLimit)
 	var wg sync.WaitGroup
 	for i := range recs {
 		wg.Go(func() {
@@ -994,18 +997,18 @@ func TestRegister_PerIPLimit(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	over, elapsed := serveRegisterFrom(t.Context(), h, registerBody(businessAddress(RegisterPerIP), regPassword), ip)
+	over, elapsed := serveRegisterFrom(t.Context(), h, registerBody(businessAddress(registerPerIPLimit), regPassword), ip)
 
 	requirePending202(t, recs[0])
 	requireSameAnswer(t, "eleventh register", over, recs[0])
 	if elapsed < floor {
 		t.Errorf("eleventh register answered after %v, want no earlier than %v", elapsed, floor)
 	}
-	if n := signupCalls(fake); n != RegisterPerIP {
-		t.Errorf("GoTrue /signup saw %d calls, want %d", n, RegisterPerIP)
+	if n := signupCalls(fake); n != registerPerIPLimit {
+		t.Errorf("GoTrue /signup saw %d calls, want %d", n, registerPerIPLimit)
 	}
 	requireLimitLine(t, buf, registerLimitMsg, "ip", "header", true)
-	for i := 0; i <= RegisterPerIP; i++ {
+	for i := 0; i <= registerPerIPLimit; i++ {
 		if strings.Contains(buf.String(), businessAddress(i)) {
 			t.Errorf("log carries the address %q: %s", businessAddress(i), buf.String())
 		}
@@ -1014,9 +1017,9 @@ func TestRegister_PerIPLimit(t *testing.T) {
 		t.Errorf("log carries the client IP: %s", buf.String())
 	}
 
-	serveRegisterFrom(t.Context(), h, registerBody(businessAddress(RegisterPerIP+1), regPassword), "203.0.113.8")
-	if n := signupCalls(fake); n != RegisterPerIP+1 {
-		t.Errorf("GoTrue /signup saw %d calls after a request from another key, want %d", n, RegisterPerIP+1)
+	serveRegisterFrom(t.Context(), h, registerBody(businessAddress(registerPerIPLimit+1), regPassword), "203.0.113.8")
+	if n := signupCalls(fake); n != registerPerIPLimit+1 {
+		t.Errorf("GoTrue /signup saw %d calls after a request from another key, want %d", n, registerPerIPLimit+1)
 	}
 }
 
@@ -1037,7 +1040,8 @@ func TestRegister_ValidationRefusalsDoNotCount(t *testing.T) {
 		refusals = append(refusals, registerBody(fmt.Sprintf("free-%d@gmail.com", i), regPassword))
 	}
 	for range 5 {
-		refusals = append(refusals, registerBody(regEmail, ""), `{`, withAnswers(""))
+		refusals = append(refusals, registerBody(regEmail, ""), `{`, withAnswers(""),
+			registerBodyWithAnswers(regEmail, map[string]any{"marketing_consent_text": "   "}))
 	}
 	for i, body := range refusals {
 		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
@@ -1051,16 +1055,16 @@ func TestRegister_ValidationRefusalsDoNotCount(t *testing.T) {
 		t.Fatalf("GoTrue /signup saw %d calls for 400 rows, want 0", n)
 	}
 
-	for i := range RegisterPerIP {
+	for i := range registerPerIPLimit {
 		rec, _ := serveRegisterFrom(t.Context(), fast, registerBody(businessAddress(i), regPassword), ip)
 		requirePending202(t, rec)
 	}
-	if n := signupCalls(fake); n != RegisterPerIP {
-		t.Errorf("GoTrue /signup saw %d calls for %d valid registers after 25 refusals, want %d", n, RegisterPerIP, RegisterPerIP)
+	if n := signupCalls(fake); n != registerPerIPLimit {
+		t.Errorf("GoTrue /signup saw %d calls for %d valid registers after 30 refusals, want %d", n, registerPerIPLimit, registerPerIPLimit)
 	}
-	serveRegisterFrom(t.Context(), fast, registerBody(businessAddress(RegisterPerIP), regPassword), ip)
-	if n := signupCalls(fake); n != RegisterPerIP {
-		t.Errorf("GoTrue /signup saw %d calls after an eleventh valid register, want %d", n, RegisterPerIP)
+	serveRegisterFrom(t.Context(), fast, registerBody(businessAddress(registerPerIPLimit), regPassword), ip)
+	if n := signupCalls(fake); n != registerPerIPLimit {
+		t.Errorf("GoTrue /signup saw %d calls after an eleventh valid register, want %d", n, registerPerIPLimit)
 	}
 	requireLimitLine(t, buf, registerLimitMsg, "ip", "header", true)
 }
@@ -1082,15 +1086,15 @@ func TestRegister_CooldownRefusalIsRefunded(t *testing.T) {
 	t.Run("five cooldown answers are refunded", func(t *testing.T) {
 		cooldown := gtAnswer{http.StatusTooManyRequests, gtOverEmailSendRateLimit}
 		fake, buf := run(t, 16, cooldown, cooldown, cooldown, cooldown, cooldown, gtAnswer{http.StatusOK, gtNewUser})
-		if n := signupCalls(fake); n != RegisterPerIP+5 {
-			t.Errorf("GoTrue /signup saw %d calls, want %d (5 refunded + %d counted)", n, RegisterPerIP+5, RegisterPerIP)
+		if n := signupCalls(fake); n != registerPerIPLimit+5 {
+			t.Errorf("GoTrue /signup saw %d calls, want %d (5 refunded + %d counted)", n, registerPerIPLimit+5, registerPerIPLimit)
 		}
 		requireLimitLine(t, buf, registerLimitMsg, "ip", "header", true)
 	})
 	t.Run("control: 200 throughout", func(t *testing.T) {
 		fake, _ := run(t, 11, gtAnswer{http.StatusOK, gtNewUser})
-		if n := signupCalls(fake); n != RegisterPerIP {
-			t.Errorf("GoTrue /signup saw %d calls, want %d", n, RegisterPerIP)
+		if n := signupCalls(fake); n != registerPerIPLimit {
+			t.Errorf("GoTrue /signup saw %d calls, want %d", n, registerPerIPLimit)
 		}
 	})
 }
@@ -1099,12 +1103,63 @@ func TestRegister_UnenforcedLimitOnlyLogs(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 	log, buf := captureLog()
 	h := RegisterHandler(fake.URL, testClient(), 0, freshRegisterLimit(), false, log)
-	for i := range RegisterPerIP + 1 {
+	for i := range registerPerIPLimit + 1 {
 		rec, _ := serveRegisterFrom(t.Context(), h, registerBody(businessAddress(i), regPassword), "203.0.113.7")
 		requirePending202(t, rec)
 	}
-	if n := signupCalls(fake); n != RegisterPerIP+1 {
-		t.Errorf("GoTrue /signup saw %d calls, want %d", n, RegisterPerIP+1)
+	if n := signupCalls(fake); n != registerPerIPLimit+1 {
+		t.Errorf("GoTrue /signup saw %d calls, want %d", n, registerPerIPLimit+1)
 	}
 	requireLimitLine(t, buf, registerLimitMsg, "ip", "header", false)
+
+	t.Run("a cooldown answer over the limit is not refunded", func(t *testing.T) {
+		ok, cooldown := gtAnswer{http.StatusOK, gtNewUser}, gtAnswer{http.StatusTooManyRequests, gtOverEmailSendRateLimit}
+		answers := slices.Repeat([]gtAnswer{ok}, registerPerIPLimit)
+		fake := sequenceGoTrue(t, append(answers, cooldown, ok)...)
+		log, buf := captureLog()
+		h := RegisterHandler(fake.URL, testClient(), 0, freshRegisterLimit(), false, log)
+		for i := range registerPerIPLimit + 2 {
+			rec, _ := serveRegisterFrom(t.Context(), h, registerBody(businessAddress(i), regPassword), "203.0.113.7")
+			requirePending202(t, rec)
+		}
+		if n := len(recordsNamed(t, buf, registerLimitMsg)); n != 2 {
+			t.Errorf("%d limit lines, want 2 (requests 11 and 12): the cooldown answer to request 11 must not make room: %s", n, buf.String())
+		}
+	})
+}
+
+// A cap of two and three registers: the third logs a limit line only when no earlier answer returned its count.
+func TestRegister_OnlyTheCooldownAnswerIsRefunded(t *testing.T) {
+	const ip = "203.0.113.7"
+	viaFake := func(status int, body string) func(*testing.T) (*url.URL, *http.Client) {
+		return func(t *testing.T) (*url.URL, *http.Client) { return newFakeGoTrue(t, status, body).URL, testClient() }
+	}
+	rows := []struct {
+		name      string
+		build     func(*testing.T) (*url.URL, *http.Client)
+		wantLimit int
+	}{
+		{"429 cooldown (control)", viaFake(http.StatusTooManyRequests, gtOverEmailSendRateLimit), 0},
+		{"200 new user", viaFake(http.StatusOK, gtNewUser), 1},
+		{"422 user_already_exists", viaFake(http.StatusUnprocessableEntity, `{"code":422,"error_code":"user_already_exists","msg":"exists"}`), 1},
+		{"429 over_request_rate_limit", viaFake(http.StatusTooManyRequests, gtOverRequestRateLimit), 1},
+		{"500", viaFake(http.StatusInternalServerError, gtInternal), 1},
+		{"400 weak_password", viaFake(http.StatusUnprocessableEntity, `{"code":422,"error_code":"weak_password","msg":"weak"}`), 1},
+		{"refused connection", func(t *testing.T) (*url.URL, *http.Client) { return closedURL(t), testClient() }, 1},
+	}
+	for _, c := range rows {
+		t.Run(c.name, func(t *testing.T) {
+			auth, client := c.build(t)
+			log, buf := captureLog()
+			h := RegisterHandler(auth, client, 0, NewSignInThrottle(2, RegisterMaxKeys, RegisterWindow, time.Now), true, log)
+
+			for i := range 3 {
+				serveRegisterFrom(t.Context(), h, registerBody(businessAddress(i), regPassword), ip)
+			}
+
+			if n := len(recordsNamed(t, buf, registerLimitMsg)); n != c.wantLimit {
+				t.Errorf("%d limit lines after 3 registers against a cap of 2, want %d: %s", n, c.wantLimit, buf.String())
+			}
+		})
+	}
 }

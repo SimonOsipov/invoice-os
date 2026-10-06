@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -236,6 +238,11 @@ func TestResendVerification_BadRequestsAre400AtOnce(t *testing.T) {
 		{"empty email", `{"email":""}`, "email is required"},
 		{"whitespace email", `{"email":"  "}`, "email is required"},
 		{"255-byte email", resendBody(email255), "invalid email address"},
+		{"255 bytes in 128 runes", resendBody(strings.Repeat("é", 127) + "x"), "invalid email address"},
+		{"non-string email", `{"email":5}`, "invalid request body"},
+		{"array body", `[]`, "invalid request body"},
+		{"null body", `null`, "email is required"},
+		{"unicode whitespace email", `{"email":"\u00a0\u3000"}`, "email is required"},
 	}
 	if len(rows[1].body) != 1025 || len(email255) != 255 {
 		t.Fatal("fixture sizes are off")
@@ -265,14 +272,23 @@ func TestResendVerification_BadRequestsAre400AtOnce(t *testing.T) {
 }
 
 func TestResendVerification_EmailAtTheByteCapIsSent(t *testing.T) {
-	email := strings.Repeat("a", 254-len("@corp.example")) + "@corp.example"
-	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
+	for name, email := range map[string]string{
+		"254 ASCII bytes":        strings.Repeat("a", 254-len("@corp.example")) + "@corp.example",
+		"254 bytes in 127 runes": strings.Repeat("é", 127),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if len(email) != 254 {
+				t.Fatalf("fixture is %d bytes, want 254", len(email))
+			}
+			fake := newFakeGoTrue(t, http.StatusOK, `{}`)
 
-	rec, _ := serveResend(t.Context(), newResend(fake.URL, testClient(), 0, nil), resendBody(email), "")
+			rec, _ := serveResend(t.Context(), newResend(fake.URL, testClient(), 0, nil), resendBody(email), "")
 
-	requireAccepted(t, rec, "254-byte email")
-	if n := len(fake.Calls()); n != 1 {
-		t.Errorf("GoTrue saw %d calls, want 1", n)
+			requireAccepted(t, rec, name)
+			if n := len(fake.Calls()); n != 1 {
+				t.Errorf("GoTrue saw %d calls, want 1", n)
+			}
+		})
 	}
 }
 
@@ -393,6 +409,14 @@ func TestResendVerification_EveryNon400AnswerWaitsTheFloor(t *testing.T) {
 			_, perIP := resendThrottles(time.Now)
 			return ResendVerificationHandler(f.URL, testClient(), floor, spentAddress(), perIP, true, slog.New(slog.DiscardHandler)), f
 		}, 0},
+		{"over the IP limit", func(t *testing.T) (http.Handler, *fakeGoTrue) {
+			f := newFakeGoTrue(t, http.StatusOK, `{}`)
+			perAddress, perIP := resendThrottles(time.Now)
+			for range ResendPerIP {
+				perIP.Reserve("192.0.2.1")
+			}
+			return ResendVerificationHandler(f.URL, testClient(), floor, perAddress, perIP, true, slog.New(slog.DiscardHandler)), f
+		}, 0},
 		{"refused connection", func(t *testing.T) (http.Handler, *fakeGoTrue) {
 			return newResend(closedURL(t), testClient(), floor, nil), nil
 		}, 0},
@@ -419,7 +443,7 @@ func TestResendVerification_EveryNon400AnswerWaitsTheFloor(t *testing.T) {
 }
 
 func TestResendVerification_SlowUpstreamIsNotDelayedFurther(t *testing.T) {
-	const floor, upstream = 100 * time.Millisecond, 500 * time.Millisecond
+	const floor, upstream = 300 * time.Millisecond, 500 * time.Millisecond
 	auth := slowGoTrue(t, upstream, http.StatusOK, `{}`)
 	log, buf := captureLog()
 
@@ -611,6 +635,7 @@ func TestClientKey(t *testing.T) {
 	rows := []struct {
 		name, header string
 		absent       bool
+		remote       string // RemoteAddr; the default when empty
 		key, source  string
 	}{
 		{name: "plain IPv4", header: "203.0.113.7", key: "203.0.113.7", source: "header"},
@@ -629,11 +654,19 @@ func TestClientKey(t *testing.T) {
 		{name: "IPv4 with a port", header: "203.0.113.7:4444", key: "192.0.2.1", source: "remote_addr"},
 		{name: "bracketed IPv6", header: "[2001:db8::1]", key: "192.0.2.1", source: "remote_addr"},
 		{name: "list", header: "203.0.113.7, 10.0.0.1", key: "192.0.2.1", source: "remote_addr"},
+		{name: "IPv4-mapped IPv6 with a zone", header: "::ffff:203.0.113.7%eth0", key: "203.0.113.7", source: "header"},
+		{name: "unspecified IPv6", header: "::", key: "::/64", source: "header"},
+		{name: "tab-padded IPv4", header: "\t203.0.113.7\t", key: "203.0.113.7", source: "header"},
+		{name: "IPv4 with a leading zero", header: "203.0.113.07", key: "192.0.2.1", source: "remote_addr"},
+		{name: "RemoteAddr without a port", absent: true, remote: "192.0.2.9", key: "192.0.2.9", source: "remote_addr"},
 	}
 	for _, c := range rows {
 		t.Run(c.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/auth/resend-verification", nil)
 			req.RemoteAddr = remote
+			if c.remote != "" {
+				req.RemoteAddr = c.remote
+			}
 			if !c.absent {
 				req.Header.Set("X-Real-IP", c.header)
 			}
@@ -726,4 +759,191 @@ func TestResendVerification_UnenforcedLimitOnlyLogs(t *testing.T) {
 		}
 		requireLimitLine(t, buf, resendLimitMsg, "address", "remote_addr", false)
 	})
+	t.Run("a cooldown answer over a limit is not refunded", func(t *testing.T) {
+		ok, cooldown := gtAnswer{http.StatusOK, `{}`}, gtAnswer{http.StatusTooManyRequests, gtOverEmailSendRateLimit}
+		for _, limit := range []string{"address", "ip"} {
+			t.Run(limit, func(t *testing.T) {
+				fake := sequenceGoTrue(t, ok, ok, cooldown, ok)
+				log, buf := captureLog()
+				perAddress := NewSignInThrottle(2, ResendMaxKeys, ResendWindow, time.Now)
+				perIP := NewSignInThrottle(100, ResendMaxKeys, ResendWindow, time.Now)
+				if limit == "ip" {
+					perAddress, perIP = perIP, perAddress
+				}
+				h := ResendVerificationHandler(fake.URL, testClient(), 0, perAddress, perIP, false, log)
+				for i := range 4 {
+					email := "ada@corp.example"
+					if limit == "ip" {
+						email = businessAddress(i)
+					}
+					rec, _ := serveResend(t.Context(), h, resendBody(email), "203.0.113.7")
+					requireAccepted(t, rec, "resend")
+				}
+				if n := len(fake.Calls()); n != 4 {
+					t.Errorf("GoTrue saw %d calls, want 4", n)
+				}
+				if n := len(recordsNamed(t, buf, resendLimitMsg)); n != 2 {
+					t.Errorf("%d limit lines, want 2 (requests 3 and 4): the cooldown answer to request 3 must not make room: %s", n, buf.String())
+				}
+			})
+		}
+	})
+}
+
+// A cap of two and three requests: the third logs a limit line only when no earlier answer returned its count.
+func TestResendVerification_OnlyTheCooldownAnswerIsRefunded(t *testing.T) {
+	viaFake := func(status int, body string) func(*testing.T) (*url.URL, *http.Client) {
+		return func(t *testing.T) (*url.URL, *http.Client) { return newFakeGoTrue(t, status, body).URL, testClient() }
+	}
+	rows := []struct {
+		name      string
+		build     func(*testing.T) (*url.URL, *http.Client)
+		wantLimit int
+	}{
+		{"429 cooldown (control)", viaFake(http.StatusTooManyRequests, gtOverEmailSendRateLimit), 0},
+		{"200", viaFake(http.StatusOK, `{}`), 1},
+		{"429 over_request_rate_limit", viaFake(http.StatusTooManyRequests, gtOverRequestRateLimit), 1},
+		{"500", viaFake(http.StatusInternalServerError, gtInternal), 1},
+		{"403", viaFake(http.StatusForbidden, `{"code":403,"error_code":"not_admin","msg":"forbidden"}`), 1},
+		{"400 email_address_not_authorized", viaFake(http.StatusBadRequest, `{"code":400,"error_code":"email_address_not_authorized","msg":"no"}`), 1},
+		{"400 validation_failed", viaFake(http.StatusBadRequest, gtValidationFailed), 1},
+		{"refused connection", func(t *testing.T) (*url.URL, *http.Client) { return closedURL(t), testClient() }, 1},
+		{"client timeout", func(t *testing.T) (*url.URL, *http.Client) {
+			return slowGoTrue(t, 300*time.Millisecond, http.StatusOK, `{}`), &http.Client{Timeout: 50 * time.Millisecond}
+		}, 1},
+	}
+	for _, limit := range []string{"address", "ip"} {
+		for _, c := range rows {
+			t.Run(limit+"/"+c.name, func(t *testing.T) {
+				auth, client := c.build(t)
+				log, buf := captureLog()
+				perAddress := NewSignInThrottle(2, ResendMaxKeys, ResendWindow, time.Now)
+				perIP := NewSignInThrottle(100, ResendMaxKeys, ResendWindow, time.Now)
+				if limit == "ip" {
+					perAddress, perIP = perIP, perAddress
+				}
+				h := ResendVerificationHandler(auth, client, 0, perAddress, perIP, true, log)
+
+				for range 3 {
+					serveResend(t.Context(), h, resendBody("ada@corp.example"), "")
+				}
+
+				lines := recordsNamed(t, buf, resendLimitMsg)
+				if len(lines) != c.wantLimit {
+					t.Fatalf("%d limit lines after 3 requests against a cap of 2, want %d: %s", len(lines), c.wantLimit, buf.String())
+				}
+				if c.wantLimit == 1 && lines[0]["limit"] != limit {
+					t.Errorf("limit = %v, want %s", lines[0]["limit"], limit)
+				}
+			})
+		}
+	}
+}
+
+// toggleGoTrue answers 429 over_email_send_rate_limit while cooldown is set and 200 after.
+func toggleGoTrue(t *testing.T, cooldown *atomic.Bool) *fakeGoTrue {
+	t.Helper()
+	f := &fakeGoTrue{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		f.mu.Lock()
+		f.calls = append(f.calls, gotrueCall{Method: r.Method, Path: r.URL.Path})
+		f.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if cooldown.Load() {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, gtOverEmailSendRateLimit)
+			return
+		}
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parse url: %v", err)
+	}
+	f.URL = u
+	return f
+}
+
+func TestResendVerification_ConcurrentRequestsRaceTheReservations(t *testing.T) {
+	const n = 40
+	byAddress := func(int) string { return "ada@corp.example" }
+	byIP := func(int) string { return "203.0.113.7" }
+	distinctAddress := func(i int) string { return businessAddress(i) }
+	distinctIP := func(i int) string { return fmt.Sprintf("198.51.100.%d", i+1) }
+	race := func(h http.Handler, email, ip func(int) string) []*httptest.ResponseRecorder {
+		recs := make([]*httptest.ResponseRecorder, n)
+		var wg sync.WaitGroup
+		for i := range n {
+			wg.Go(func() { recs[i], _ = serveResend(t.Context(), h, resendBody(email(i)), ip(i)) })
+		}
+		wg.Wait()
+		return recs
+	}
+	rows := []struct {
+		name      string
+		email, ip func(int) string
+		cap       int
+	}{
+		{"one address", byAddress, distinctIP, ResendPerAddress},
+		{"one client key", distinctAddress, byIP, ResendPerIP},
+	}
+	for _, c := range rows {
+		t.Run(c.name+" admits exactly its cap", func(t *testing.T) {
+			fake := newFakeGoTrue(t, http.StatusOK, `{}`)
+
+			recs := race(newResend(fake.URL, testClient(), 0, nil), c.email, c.ip)
+
+			if got := len(fake.Calls()); got != c.cap {
+				t.Errorf("GoTrue saw %d calls from %d concurrent requests, want exactly %d", got, n, c.cap)
+			}
+			for i, rec := range recs {
+				requireSameAnswer(t, fmt.Sprintf("request %d", i), rec, recs[0])
+			}
+		})
+		t.Run(c.name+" refunds leave exactly its cap", func(t *testing.T) {
+			var cooldown atomic.Bool
+			cooldown.Store(true)
+			fake := toggleGoTrue(t, &cooldown)
+			h := newResend(fake.URL, testClient(), 0, nil)
+
+			race(h, c.email, c.ip)
+			refused := len(fake.Calls())
+			if refused == 0 {
+				t.Fatal("no request reached GoTrue, so nothing was refunded")
+			}
+			cooldown.Store(false)
+			for i := range c.cap + 3 {
+				serveResend(t.Context(), h, resendBody(c.email(i)), c.ip(i))
+			}
+
+			if got := len(fake.Calls()) - refused; got != c.cap {
+				t.Errorf("GoTrue saw %d calls after the refunds, want exactly %d: a refund left the count off", got, c.cap)
+			}
+		})
+	}
+}
+
+func TestResendVerification_FullMapsFailClosed(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
+	log, buf := captureLog()
+	perAddress := NewSignInThrottle(ResendPerAddress, 1, ResendWindow, time.Now)
+	perIP := NewSignInThrottle(ResendPerIP, 1, ResendWindow, time.Now)
+	h := ResendVerificationHandler(fake.URL, testClient(), 0, perAddress, perIP, true, log)
+
+	first, _ := serveResend(t.Context(), h, resendBody("ada@corp.example"), "203.0.113.7")
+	newAddress, _ := serveResend(t.Context(), h, resendBody("bob@corp.example"), "203.0.113.7")
+	newKey, _ := serveResend(t.Context(), h, resendBody("ada@corp.example"), "203.0.113.8")
+
+	requireAccepted(t, first, "first request")
+	requireSameAnswer(t, "new address on a full map", newAddress, first)
+	requireSameAnswer(t, "new key on a full map", newKey, first)
+	if n := len(fake.Calls()); n != 1 {
+		t.Errorf("GoTrue saw %d calls, want 1: a full map must refuse new keys", n)
+	}
+	lines := recordsNamed(t, buf, resendLimitMsg)
+	if len(lines) != 2 || lines[0]["limit"] != "address" || lines[1]["limit"] != "ip" {
+		t.Errorf("limit lines = %v, want one limit=address then one limit=ip", lines)
+	}
 }

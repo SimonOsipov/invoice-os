@@ -82,11 +82,15 @@ export function registerOutcome(err: unknown): RegisterOutcome {
   return { form: UNAVAILABLE }
 }
 
-// Mode A stubs: inert until the executor writes them.
-export const RESEND_FAILED = ''
+export const RESEND_FAILED = 'The link could not be sent right now. Try again shortly.'
 
-export function resendSentNotice(_email: string): string {
-  return ''
+// The gateway answers 202 the same for every address, so the notice never claims a mail went out.
+export function resendSentNotice(email: string): string {
+  return `If ${email} still needs verifying, a new link is on its way. Use the newest one.`
 }
 
-export async function resendVerification(_email: string): Promise<void> {}
+export async function resendVerification(email: string): Promise<void> {
+  const base = gatewayBase()
+  if (!base) throw new ApiError('malformed', 'gateway not configured')
+  await apiFetch<unknown>(`${base}/auth/resend-verification`, { method: 'POST', body: { email: email.trim() } })
+}

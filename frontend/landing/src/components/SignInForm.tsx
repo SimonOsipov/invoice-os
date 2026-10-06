@@ -2,7 +2,8 @@
 import { useEffect, useState } from 'react'
 import type { CSSProperties, FormEvent } from 'react'
 import { DEMO_FORM_CSS, Glyph, WARN_PATHS } from './DemoLeadForm'
-import { handoffUrl, signInErrorMessage, signInWithPassword, startUrl, type ConsoleTarget } from '../signIn'
+import { RESEND_FAILED, resendSentNotice, resendVerification } from '../register'
+import { handoffUrl, isUnverified, signInErrorMessage, signInWithPassword, startUrl, type ConsoleTarget } from '../signIn'
 import { validateSignInForm, type SignInFormErrors } from '../signInForm'
 
 const ID = 'si-form'
@@ -27,6 +28,9 @@ export function SignInForm({ heldState, initialError, consoleTarget }: { heldSta
   const [errors, setErrors] = useState<SignInFormErrors>({})
   const [formError, setFormError] = useState(initialError)
   const [submitting, setSubmitting] = useState(false)
+  const [unverified, setUnverified] = useState<string>()
+  const [resending, setResending] = useState(false)
+  const [resendNote, setResendNote] = useState<{ ok: boolean }>()
 
   // A new getter means App dropped the state while the form is open.
   useEffect(() => {
@@ -40,6 +44,9 @@ export function SignInForm({ heldState, initialError, consoleTarget }: { heldSta
       setSubmitting(false)
       setPassword('')
       setFormError(undefined)
+      setUnverified(undefined)
+      setResending(false)
+      setResendNote(undefined)
     }
     window.addEventListener('pageshow', onShow)
     return () => window.removeEventListener('pageshow', onShow)
@@ -81,6 +88,9 @@ export function SignInForm({ heldState, initialError, consoleTarget }: { heldSta
       return
     }
     setFormError(undefined)
+    setUnverified(undefined)
+    setResending(false)
+    setResendNote(undefined)
     setSubmitting(true)
     try {
       const url = handoffUrl(await signInWithPassword(email.trim(), password, live), consoleTarget)
@@ -90,8 +100,23 @@ export function SignInForm({ heldState, initialError, consoleTarget }: { heldSta
       }
     } catch (err) {
       setFormError(signInErrorMessage(err))
+      if (isUnverified(err)) setUnverified(email.trim())
     }
     setSubmitting(false)
+  }
+
+  async function handleResend() {
+    if (resending || unverified === undefined) return
+    setResendNote(undefined)
+    setResending(true)
+    let ok = true
+    try {
+      await resendVerification(unverified)
+    } catch {
+      ok = false
+    }
+    setResendNote({ ok })
+    setResending(false)
   }
 
   return (
@@ -151,6 +176,15 @@ export function SignInForm({ heldState, initialError, consoleTarget }: { heldSta
         )}
       </button>
       {formError && <Alert text={formError} />}
+      {unverified !== undefined && (
+        <>
+          <button type="button" onClick={handleResend} disabled={resending} className="ds-btn ds-btn--outline ds-btn--md" style={{ ...BUTTON_STYLE, marginTop: 10 }}>
+            {resending ? 'Sending…' : 'Send the link again'}
+          </button>
+          {resendNote?.ok && <p role="status" className="t-body-sm" style={{ margin: '10px 0 0', overflowWrap: 'anywhere' }}>{resendSentNotice(unverified)}</p>}
+          {resendNote?.ok === false && <Alert text={RESEND_FAILED} />}
+        </>
+      )}
     </form>
   )
 }

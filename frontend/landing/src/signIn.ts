@@ -43,9 +43,8 @@ export function signInErrorMessage(err: unknown): string {
   return SIGN_IN_UNAVAILABLE
 }
 
-// Mode A stub: inert until the executor writes it.
-export function isUnverified(_err: unknown): boolean {
-  return false
+export function isUnverified(err: unknown): boolean {
+  return err instanceof ApiError && err.kind === 'http' && err.status === 403
 }
 
 export function readSignInState(search: string): string | null {

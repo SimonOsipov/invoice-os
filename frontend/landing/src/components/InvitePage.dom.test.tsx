@@ -253,6 +253,9 @@ describe('the ready view', () => {
     await mount()
 
     expect(buttonTexts()).toEqual(['Sign in'])
+    expect(text(), 'the invite is still named').toContain(READY_TEXT)
+    // Copy choice for the PM: with signup closed the "New to ASComply?" sentence is hidden with its button.
+    expect(text()).not.toContain('New to ASComply?')
   })
 })
 
@@ -337,8 +340,12 @@ describe('the register view', () => {
 
     await click(submitBtn)
     await click(submitBtn)
+    // A submit that skips the disabled button (a script, a stale handler) is refused by the handler itself.
+    await act(async () => {
+      container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })
 
-    expect(callsTo(fetchMock, REGISTER_URL), 'one POST for two clicks').toHaveLength(1)
+    expect(callsTo(fetchMock, REGISTER_URL), 'one POST for two clicks and a direct submit').toHaveLength(1)
     expect(submitBtn.disabled).toBe(true)
     expect(submitBtn.textContent?.trim()).toBe('Creating…')
     expect(labelled('Password').disabled, 'RegisterModal disables its fields while submitting').toBe(true)
@@ -479,9 +486,62 @@ describe('the unusable invite', () => {
       expect(text()).toContain(UNAVAILABLE)
       expect(text()).not.toContain(INVALID_HEADING)
       expect(text()).not.toContain('Join')
-      expect(buttonTexts(), 'no Create account without the invite details').not.toContain('Create account')
+      expect(allButtons().length, 'the unavailable view is text only').toBe(0)
+      expect(container.querySelectorAll('input, a').length, 'the unavailable view has no field or link').toBe(0)
     }
     expect(consoleError).not.toHaveBeenCalled()
+  })
+})
+
+describe('the loading view', () => {
+  it('invitePage_loadingViewIsOneStatusLineWithNoControls', async () => {
+    let finish!: () => void
+    const pending = new Promise<Response>((res) => {
+      finish = () => res(json(200, { workspace: WORKSPACE, role: 'reviewer', email: ADDRESS }))
+    })
+    const fetchMock = stubFetch({ preview: () => pending })
+    await mount()
+
+    expect(fetchMock, 'control: the preview is in flight').toHaveBeenCalledTimes(1)
+    const status = Array.from(container.querySelectorAll('[role="status"]'), (e) => e.textContent?.trim())
+    expect(status).toEqual(['Checking your invite…'])
+    expect(allButtons().length, 'no control while loading').toBe(0)
+    expect(container.querySelectorAll('input, a').length).toBe(0)
+    expect(headings(), 'no heading while loading').toEqual([])
+    expect(text()).not.toContain(INVALID_HEADING)
+
+    await act(async () => finish())
+    await settle()
+    expect(headings(), 'control: the loading view gives way to the ready view').toEqual([`Join ${WORKSPACE}`])
+    expect(container.querySelectorAll('[role="status"]').length).toBe(0)
+  })
+})
+
+describe('the token stays out of everything but the two bodies', () => {
+  it('invitePage_tokenAndPasswordStayOutOfUrlsHeadersLogsAndPage', async () => {
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) => vi.spyOn(console, m).mockImplementation(() => undefined))
+    const fetchMock = stubFetch({
+      register: () => json(400, { error: 'Password should be at least 6 characters.' }),
+      resend: () => json(202, {}),
+    })
+    await mount()
+    expect(text(), 'the ready view does not print the token').not.toContain(T)
+    await toRegisterView()
+    await submit(PASSWORD)
+    expect(alerts(), 'control: the refusal ran').toEqual(['Password should be at least 6 characters.'])
+    await submit(PASSWORD)
+
+    expect(fetchMock.mock.calls.length, 'control: preview and two register posts').toBe(3)
+    for (const [url, init] of fetchMock.mock.calls) {
+      expect(url, 'no token in a URL').not.toContain(T)
+      expect(JSON.stringify(Array.from(new Headers(init.headers).entries())), `no token in the headers of ${url}`).not.toContain(T)
+      expect(String(init.credentials ?? ''), 'no credentials sent').not.toBe('include')
+    }
+    expect(bodyOf(fetchMock.mock.calls[0] as [string, RequestInit])).toStrictEqual({ token: T })
+    expect(text()).not.toContain(T)
+    expect(text()).not.toContain(PASSWORD)
+    expect(JSON.stringify(Array.from(container.querySelectorAll('[value], [href], [title]'), (e) => [e.getAttribute('href'), e.getAttribute('title')]))).not.toContain(T)
+    for (const spy of spies) for (const args of spy.mock.calls) expect(args.map(String).join(' ')).not.toMatch(new RegExp(`${T}|${PASSWORD}`))
   })
 })
 

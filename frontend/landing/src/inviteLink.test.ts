@@ -42,6 +42,22 @@ describe('captureInviteToken_readsStoresAndStrips', () => {
     ['a hash without a token is stripped', '/invite', '', '#other=1', undefined, null, undefined, '/invite'],
     ['no hash reads the stored token and strips nothing', '/invite', '', '', STORED, STORED, STORED, null],
     ['a new hash replaces the stored token', '/invite', '', `#token=${NEW}`, STORED, NEW, NEW, '/invite'],
+    // One `token` key and nothing else: a second pair, a repeated key or a different key first is no token.
+    ['a second pair beside the token is no token', '/invite', '', `#token=${T}&x=1`, undefined, null, undefined, '/invite'],
+    ['a different key before the token is no token', '/invite', '', `#x=1&token=${T}`, undefined, null, undefined, '/invite'],
+    ['a repeated token key is no token', '/invite', '', `#token=${T}&token=${T}`, undefined, null, undefined, '/invite'],
+    ['another key holding a token-shaped value is no token', '/invite', '', `#other=${T}`, undefined, null, undefined, '/invite'],
+    ['a slash is outside the base64url alphabet', '/invite', '', `#token=${T.slice(0, 20)}/${T.slice(21)}`, undefined, null, undefined, '/invite'],
+    ['a plus is outside the base64url alphabet', '/invite', '', `#token=${T.slice(0, 20)}%2B${T.slice(21)}`, undefined, null, undefined, '/invite'],
+    ['an empty token is no token', '/invite', '', '#token=', undefined, null, undefined, '/invite'],
+    ['a second pair leaves the stored token and stores nothing new', '/invite', '', `#token=${NEW}&x=1`, STORED, STORED, STORED, '/invite'],
+    // A malformed fragment is stripped and the stored token stays.
+    ['a malformed token strips and keeps the stored token', '/invite', '', '#token=bad', STORED, STORED, STORED, '/invite'],
+    ['a hash without a token strips and keeps the stored token', '/invite', '?x=1', '#other=1', STORED, STORED, STORED, '/invite?x=1'],
+    ['a stored value that is not a token reads null', '/invite', '', '', 'bad', null, 'bad', null],
+    // The strip keeps the pathname as typed; the route rule is case-blind.
+    ['an upper-case path captures and keeps its case in the strip', '/INVITE', '', `#token=${T}`, undefined, T, T, '/INVITE'],
+    ['a trailing slash is kept in the strip', '/invite/', '?x=1', `#token=${T}`, undefined, T, T, '/invite/?x=1'],
   ]
 
   it.each(rows)('%s', async (_name, pathname, search, hash, stored, returned, storedAfter, url) => {
@@ -57,6 +73,69 @@ describe('captureInviteToken_readsStoresAndStrips', () => {
     else expect(hist.replaceState.mock.calls).toEqual([[null, '', url]])
     // The hash is always read from `loc`, never written: only replaceState changes the address bar.
     expect(loc.hash).toBe(hash)
+  })
+})
+
+describe('captureInviteToken_failuresWarnNeverThrowAndNeverLogTheToken', () => {
+  async function run(storage: Parameters<Awaited<ReturnType<typeof load>>['captureInviteToken']>[2], hist: { replaceState: (data: unknown, unused: string, url?: string | null) => void }, hash: string) {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const { captureInviteToken } = await load()
+    const result = captureInviteToken({ pathname: '/invite', search: '', hash }, hist, storage)
+    const lines = [...warn.mock.calls, ...log.mock.calls, ...error.mock.calls].map((args) => args.map(String).join(' '))
+    vi.restoreAllMocks()
+    return { result, lines }
+  }
+  const boom = () => {
+    throw new Error(`storage refused ${T}`)
+  }
+
+  it('a storage that refuses the write still returns the token, strips the hash and warns without it', async () => {
+    const hist = { replaceState: vi.fn() }
+    const { result, lines } = await run({ getItem: vi.fn(), setItem: boom }, hist, `#token=${T}`)
+    expect(result).toBe(T)
+    expect(hist.replaceState.mock.calls).toEqual([[null, '', '/invite']])
+    expect(lines.length, 'control: a failure is reported').toBeGreaterThan(0)
+    for (const l of lines) expect(l).not.toContain(T)
+  })
+
+  it('a storage that refuses the read returns null and warns without throwing', async () => {
+    const { result, lines } = await run({ getItem: boom, setItem: vi.fn() }, { replaceState: vi.fn() }, '')
+    expect(result).toBeNull()
+    expect(lines.length, 'control: a failure is reported').toBeGreaterThan(0)
+  })
+
+  it('a history that refuses the strip still returns and stores the token and warns without it', async () => {
+    const storage = fakeStorage()
+    const { result, lines } = await run(storage, { replaceState: vi.fn(boom) }, `#token=${T}`)
+    expect(result).toBe(T)
+    expect(storage.map.get(KEY)).toBe(T)
+    expect(lines.length, 'control: a failure is reported').toBeGreaterThan(0)
+    for (const l of lines) expect(l).not.toContain(T)
+  })
+
+  it('a sessionStorage that throws when the module reads it still strips the fragment', async () => {
+    const loc = { pathname: '/invite', search: '', hash: `#token=${T}` }
+    const hist = { replaceState: vi.fn() }
+    vi.resetModules()
+    vi.stubGlobal('location', loc)
+    vi.stubGlobal('history', hist)
+    // Safari with all cookies blocked throws a SecurityError on the property read itself.
+    Object.defineProperty(globalThis, 'sessionStorage', {
+      configurable: true,
+      get() {
+        throw new Error('SecurityError')
+      },
+    })
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const mod = await import('./inviteLink')
+      expect(mod.inviteToken()).toBe(T)
+      expect(hist.replaceState.mock.calls, 'the token must leave the address bar before ./instrument runs').toEqual([[null, '', '/invite']])
+    } finally {
+      delete (globalThis as { sessionStorage?: unknown }).sessionStorage
+    }
   })
 })
 

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/tenancy"
@@ -62,11 +63,28 @@ func main() {
 	// the gateway lets a token without a tenant reach this route only.
 	app.Mux.HandleFunc("POST /v1/workspaces", tenancy.ProvisionHandler(store.ProvisionWorkspace, app.Logger))
 
+	// Invite routes: the sender is chosen once at boot from the environment.
+	inviter := &tenancy.Inviter{
+		Store:  store,
+		Sender: inviteSender(os.Getenv, http.DefaultTransport.(*http.Transport).Clone(), app.Logger),
+		Logger: app.Logger,
+	}
+	app.Mux.HandleFunc("POST /v1/invitations", tenancy.InvitationsCreateHandler(inviter.Invite, app.Logger))
+	app.Mux.HandleFunc("GET /v1/invitations", tenancy.InvitationsListHandler(store.ListInvitations, app.Logger))
+	app.Mux.HandleFunc("POST /v1/invitations/{id}/resend", tenancy.InvitationResendHandler(inviter.Resend, app.Logger))
+
 	app.RequireGateway(mustEnv("GATEWAY_TOKEN"))
 
 	if err := app.Run(context.Background()); err != nil {
 		platform.Fatal(app.Logger, "tenancy: %v", err)
 	}
+}
+
+// inviteSender picks the invite mail sender: capture in a preview, Resend with a key, else off.
+func inviteSender(getenv func(string) string, rt http.RoundTripper, logger *slog.Logger) accountmail.Sender {
+	mode, key := accountmail.ModeFromEnv(getenv, platform.Posture(getenv("RAILWAY_ENVIRONMENT_NAME")) == platform.PosturePreview)
+	logger.Info("tenancy: invite mail mode", slog.String("mode", string(mode)))
+	return accountmail.NewSender(mode, key, rt)
 }
 
 func mustEnv(key string) string {

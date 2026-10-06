@@ -296,6 +296,9 @@ predicates it would previously have hit inside the transaction.
 | `GET /v1/contacts/me` | notifications | exempt | reads the caller's own contact by the token's email; contacts carry no tenant |
 | `GET /v1/memberships` | tenancy | covered | |
 | `PATCH /v1/memberships/{user_id}` | tenancy | covered | |
+| `POST /v1/invitations` | tenancy | covered | |
+| `GET /v1/invitations` | tenancy | covered | |
+| `POST /v1/invitations/{id}/resend` | tenancy | covered | |
 | `GET /v1/entities` | portfolio | covered | |
 | `POST /v1/entities` | portfolio | covered | |
 | `GET /v1/entities/{id}` | portfolio | covered | |
@@ -353,7 +356,7 @@ predicates it would previously have hit inside the transaction.
 | `POST /v1/extractions/{id}/fields/{name}/corrections` | submission | covered | |
 | `POST /v1/extractions/{id}/line-items` | submission | covered | |
 
-89 distinct routes, 95 registrations (`GET /v1/ping` is registered once per service).
+92 distinct routes, 98 registrations (`GET /v1/ping` is registered once per service).
 
 ### 8.1 The non-HTTP callers, so nobody looks for them above
 

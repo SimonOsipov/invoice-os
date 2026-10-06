@@ -416,7 +416,7 @@ The `/api/` router answers 404 for any path whose first segment after the servic
 | a `token` of 1 to 256 bytes and `type=signup` | 200 `text/html`: one form with the token and type as hidden fields and a "Confirm my email" button; GoTrue is not called |
 | an empty or over-long `token`, or a `type` other than `signup` | 303 to `<AUTH_SITE_URL>/?verify=failed`; no page |
 | HEAD | as GET, without the body |
-| any method other than GET or HEAD | 405 from the router, `Allow: GET, HEAD` |
+| any method but GET, HEAD and POST | 405 from the router, `Allow: GET, HEAD, POST` |
 | `AUTH_SITE_URL` unset | 503 `registration is not configured` |
 
 The page handler holds no GoTrue client. It sets `Cache-Control: no-store`,
@@ -432,7 +432,8 @@ is fixed for the signup link; whether other links can reuse it is unmeasured.
 | GoTrue `/verify` 200 | 303 to `<AUTH_SITE_URL>/?verified=1`; one contact hand-off |
 | a form that does not parse, is over 1 KiB, is not `application/x-www-form-urlencoded`, or carries an empty or over-256-byte `token` or a `type` other than `signup` | 303 to `<AUTH_SITE_URL>/?verify=failed`; GoTrue is not called |
 | a GoTrue refusal, or GoTrue unreachable | 303 to `<AUTH_SITE_URL>/?verify=failed`, logged at WARN (the upstream status, or the error) |
-| any method other than POST | 405 `{"error":"method not allowed"}`, `Allow: POST`; GoTrue is not called |
+| any method but GET, HEAD and POST | 405 from the router, `Allow: GET, HEAD, POST`; GoTrue is not called |
+| any method but POST, sent to the handler | 405 `{"error":"method not allowed"}`, `Allow: POST`; GoTrue is not called |
 | `AUTH_SITE_URL` unset | 503 `registration is not configured` |
 
 The handler reads the token from the form body only, never from the URL, and sets

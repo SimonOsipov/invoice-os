@@ -320,6 +320,47 @@ func TestVerifyPage_TokenIsEscaped(t *testing.T) {
 	}
 }
 
+// The token lands in the one hidden input and nowhere else; the script is rendered once, even from a token that names it.
+func TestVerifyPage_TokenAndScriptFillOnlyTheirPlaceholders(t *testing.T) {
+	for name, token := range map[string]string{
+		"plain":                 "MARKERtoken123",
+		"names the script slot": "MARKER{{.Script}}",
+		"names the token slot":  "MARKER{{.Token}}",
+		"escapable":             `MARKER"'<>&`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec, doc := vpPage(t, token)
+			body := rec.Body.String()
+			if strings.Contains(body, "{{.Script}}") != strings.Contains(token, "{{.Script}}") ||
+				strings.Contains(body, "{{.Token}}") != strings.Contains(token, "{{.Token}}") {
+				t.Errorf("a placeholder is left unfilled in the page or leaked from the token")
+			}
+			if n := strings.Count(body, verifyScript); n != 1 {
+				t.Errorf("the submit-once script occurs %d times in the page, want 1", n)
+			}
+			var hits []string
+			var walk func(*html.Node)
+			walk = func(n *html.Node) {
+				if strings.Contains(n.Data, "MARKER") && n.Type != html.ElementNode {
+					hits = append(hits, "node:"+n.Data)
+				}
+				for _, a := range n.Attr {
+					if strings.Contains(a.Val, "MARKER") {
+						hits = append(hits, n.Data+"["+a.Key+"]")
+					}
+				}
+				for c := n.FirstChild; c != nil; c = c.NextSibling {
+					walk(c)
+				}
+			}
+			walk(doc)
+			if want := []string{"input[value]"}; !slices.Equal(hits, want) {
+				t.Errorf("the token appears at %v, want only %v", hits, want)
+			}
+		})
+	}
+}
+
 func TestVerifyPage_SecurityHeaders(t *testing.T) {
 	h := vpHandler(t)
 	_, doc := vpPage(t, vpToken)

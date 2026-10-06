@@ -224,7 +224,7 @@ func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Log
 	})
 }
 
-// RegistrationNotConfigured answers both registration routes while AUTH_SITE_URL is unset.
+// RegistrationNotConfigured answers 503 while AUTH_SITE_URL is unset.
 func RegistrationNotConfigured() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "registration is not configured")

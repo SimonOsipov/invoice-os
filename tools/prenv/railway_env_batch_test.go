@@ -1,5 +1,5 @@
-// railway_env_batch_test.go drives the fork variable writers through set_service_vars:
-// read once, write only the names that differ in one variableCollectionUpsert, re-read.
+// railway_env_batch_test.go drives the fork variable writers:
+// read once, write only the names that differ, re-read.
 package main
 
 import (

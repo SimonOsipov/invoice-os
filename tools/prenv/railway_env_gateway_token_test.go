@@ -186,8 +186,6 @@ func requireEachReRead(t *testing.T, s authShim) {
 }
 
 func TestSetForkGatewayToken_Guards(t *testing.T) {
-	const usage = "usage: railway-env.sh set-fork-gateway-token <environment-id>"
-
 	t.Run("control: a pr fork is written", func(t *testing.T) {
 		s := newGTForkShim(t, nil)
 		if out, code := runForkGT(t, s); code != 0 || len(s.mutations(t)) == 0 {
@@ -195,24 +193,26 @@ func TestSetForkGatewayToken_Guards(t *testing.T) {
 		}
 	})
 
-	t.Run("no id", func(t *testing.T) {
-		s := newGTForkShim(t, nil)
-		stdout, stderr, code := s.run(t, "", "set-fork-gateway-token")
-		out := stdout + stderr
-		if code != 2 {
-			t.Errorf("exit %d, want 2; output = %q", code, out)
-		}
-		if !strings.Contains(out, usage) {
-			t.Errorf("output lacks %q (the generic usage also exits 2, so only this phrase shows the subcommand ran); output = %q", usage, out)
-		}
-		if strings.Contains(out, "is not set") {
-			t.Errorf("the usage guard did not precede require_source_env and require_env; output = %q", out)
-		}
-		if calls := s.calls(t); len(calls) != 0 {
-			t.Errorf("the usage guard called Railway %v", operations(calls))
-		}
-		s.requireLogs(t)
-	})
+	for _, sub := range []string{"set-fork-gateway-token", "set-fork-auth", passSub} {
+		t.Run("no id: "+sub, func(t *testing.T) {
+			s := newGTForkShim(t, nil)
+			stdout, stderr, code := s.run(t, "", sub)
+			out := stdout + stderr
+			if code != 2 {
+				t.Errorf("exit %d, want 2; output = %q", code, out)
+			}
+			if want := "usage: railway-env.sh " + sub + " <environment-id>"; !strings.Contains(out, want) {
+				t.Errorf("output lacks %q (the generic usage also exits 2, so only this phrase shows the subcommand ran); output = %q", want, out)
+			}
+			if strings.Contains(out, "is not set") {
+				t.Errorf("the usage guard did not precede require_source_env and require_env; output = %q", out)
+			}
+			if calls := s.calls(t); len(calls) != 0 {
+				t.Errorf("the usage guard called Railway %v", operations(calls))
+			}
+			s.requireLogs(t)
+		})
+	}
 
 	t.Run("the persistent id", func(t *testing.T) {
 		for _, token := range []bool{true, false} {

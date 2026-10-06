@@ -491,17 +491,19 @@ idempotent, and every poll tick, gets one transient attempt (`once`).
 (else `X-RateLimit-Reset`, ISO-8601) and sends once more, at most 600 s per call and 600 s per job
 in total (`$RUNNER_TEMP/railway-api-429-waited`). A `::warning::` names the wait. A longer wait, a
 second 429, no usable wait or a full job total fails and names the wait, batched calls included
-(`tools/prenv/railway_env_retry_test.go`).
+(`tools/prenv/railway_env_retry_test.go`; poll ticks: `tools/prenv/railway_env_wait_deployment_test.go`;
+batched calls: `tools/prenv/railway_env_pass_test.go`).
 
 **Batched variable passes.** `fork-vars-before-urls` (auth config, secrets, `GATEWAY_TOKEN`) and
 `fork-vars-after-urls` (URLs, auth site, AI/Jev fakes, Sentry blanks, reconciliation URL,
 `ENVIRONMENT`) each run one env-list read, one service-list read, one batched read of the
-unrendered values, one batched write of only the names that differ (`skipDeploys`) and one batched
-re-read; every verdict reads the re-read. A failed alias names its service and variable names,
+unrendered values; when any name differs, one batched write of only those names (`skipDeploys`)
+and one batched re-read, otherwise neither; every verdict reads the last read. A failed alias names its service and variable names,
 never a value or Railway's message. `discover-urls` reads the 5 domains in one request and
-`assert-db-dsns` reads an environment in one request
-(`tools/prenv/railway_env_pass_test.go`). The per-variable subcommands (`set-fork-auth`,
-`set-ai-fake`, `set-sentry-off` and the rest) stay as entry points to the same passes.
+`assert-db-dsns` reads an environment's variables in one request, after one service-list read
+(`tools/prenv/railway_env_pass_test.go`, `TestForkVarsAfterURLs_SettledForkMakesThreeCalls`;
+`tools/prenv/railway_env_dsn_test.go`, `TestAssertDBDSNs_ReadsAnEnvironmentInTwoCalls`). The per-variable subcommands (`set-fork-auth`,
+`set-ai-fake`, `set-sentry-off` and the rest) stay as entry points: each runs one pass for its own variables.
 
 **Poll budgets.**
 

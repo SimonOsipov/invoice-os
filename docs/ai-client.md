@@ -220,8 +220,8 @@ the source environment holds a sealed variable, because `prepare-env` forks the 
 environment's variables into every `pr-<N>`. Its only exception is `GOTRUE_JWT_KEYS`,
 `GOTRUE_JWT_SECRET` and `GOTRUE_SMTP_PASS` on `auth` (see `docs/identity-provider.md`).
 So the production key has to stay unsealed,
-which means every fork inherits it — which is exactly why `set-ai-fake` runs and blanks
-it before any forked service deploys.
+which means every fork inherits it — which is exactly why `set-ai-fake`'s checks run in every PR `prepare-env`, through `fork-vars-after-urls`,
+and blank it before any forked service deploys.
 
 ## Known limitations
 

@@ -231,7 +231,31 @@ const NEEDED: Record<Persona, ServiceLabel[]> = {
   support: ['gateway', 'support-console'],
 }
 
+const REDACTED = '<redacted>'
+
+// Playwright call logs echo filled values, so no saved password leaves login in an error.
+function scrub(e: unknown, secrets: Set<string>): unknown {
+  if (!(e instanceof Error) || secrets.size === 0) return e
+  const clean = (text: string) => [...secrets].reduce((t, s) => t.split(s).join(REDACTED), text)
+  e.message = clean(e.message)
+  if (e.stack) e.stack = clean(e.stack)
+  if (e instanceof CtlError) {
+    e.hint = clean(e.hint)
+    if (e.extra) e.extra = JSON.parse(clean(JSON.stringify(e.extra)))
+  }
+  return e
+}
+
 export async function login(req: LoginRequest, deps: LoginDeps): Promise<LoginResult> {
+  const secrets = new Set<string>()
+  try {
+    return await runLogin(req, deps, secrets)
+  } catch (e) {
+    throw scrub(e, secrets)
+  }
+}
+
+async function runLogin(req: LoginRequest, deps: LoginDeps, secrets: Set<string>): Promise<LoginResult> {
   const { persona, env, role } = req
   if (env === 'production') throw productionRefusal()
   const staff = isStaff(persona)
@@ -246,11 +270,16 @@ export async function login(req: LoginRequest, deps: LoginDeps): Promise<LoginRe
   for (const [name, value] of Object.entries(resolved.urls)) if (value) process.env[name] = value
 
   let saved = deps.store.read(env)
+  const remember = () => {
+    for (const a of Object.values(saved?.accounts ?? {})) if (a.password) secrets.add(a.password)
+  }
+  remember()
   let created = false
   let gatewayWrites = 0
   // ceiling: no lock, two concurrent first logins on one environment each create the staff accounts; add a lock file if QA sessions share a worktree.
   const recreate = async () => {
     saved = { environmentId: resolved.environmentId, createdAt: new Date().toISOString(), accounts: await deps.provisionAll() }
+    remember()
     deps.store.write(env, saved)
     created = true
     gatewayWrites += PROVISION_WRITES

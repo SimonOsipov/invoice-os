@@ -50,7 +50,14 @@ func normalizeIP(ip netip.Addr) string {
 // ResendVerificationHandler answers POST /auth/resend-verification with one answer for every account state.
 // Every answer except a 400 arrives no earlier than minResponse after the request; 0 means no wait.
 func ResendVerificationHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, perAddress, perIP *SignInThrottle, enforce bool, log *slog.Logger) http.Handler {
-	resend := authURL.JoinPath("resend").String()
+	return mailLinkHandler("resend-verification", "resend", authURL.JoinPath("resend").String(),
+		func(email string) map[string]string { return map[string]string{"type": "signup", "email": email} },
+		client, minResponse, perAddress, perIP, enforce, log)
+}
+
+// mailLinkHandler serves the mail-link routes (resend, reset); both share one pair of throttles.
+// name prefixes every log line; verb names the GoTrue call in the failure line.
+func mailLinkHandler(name, verb, endpoint string, payload func(email string) map[string]string, client *http.Client, minResponse time.Duration, perAddress, perIP *SignInThrottle, enforce bool, log *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Not postOnly: it sets headers on a POST, and a gone client must see no write.
 		if r.Method != http.MethodPost {
@@ -81,7 +88,7 @@ func ResendVerificationHandler(authURL *url.URL, client *http.Client, minRespons
 		ipHeld := perIP.Reserve(key)
 		addrHeld := false
 		limited := func(limit string) bool {
-			log.WarnContext(r.Context(), "resend-verification: limit reached",
+			log.WarnContext(r.Context(), name+": limit reached",
 				slog.String("limit", limit), slog.String("key_source", source), slog.Bool("enforced", enforce))
 			return enforce
 		}
@@ -94,7 +101,7 @@ func ResendVerificationHandler(authURL *url.URL, client *http.Client, minRespons
 
 		var upstream time.Duration
 		if !refused {
-			status, gt, err := postGoTrue(r, client, resend, map[string]string{"type": "signup", "email": email}, nil)
+			status, gt, err := postGoTrue(r, client, endpoint, payload(email), nil)
 			upstream = time.Since(start)
 			// GoTrue mails nothing when it answers 4xx; 2xx, 5xx and transport errors may have mailed.
 			if err == nil && status >= http.StatusBadRequest && status < http.StatusInternalServerError {
@@ -107,20 +114,20 @@ func ResendVerificationHandler(authURL *url.URL, client *http.Client, minRespons
 			}
 			switch {
 			case err != nil:
-				log.WarnContext(r.Context(), "resend-verification: gotrue unreachable", slog.String("error", err.Error()))
+				log.WarnContext(r.Context(), name+": gotrue unreachable", slog.String("error", err.Error()))
 			case status == http.StatusOK:
 			case gt.ErrorCode == "validation_failed":
 				writeError(w, http.StatusBadRequest, "invalid email address")
 				return
 			case gt.ErrorCode == "over_email_send_rate_limit":
-				log.WarnContext(r.Context(), "resend-verification: gotrue email send rate limit", slog.Int("upstream_status", status))
+				log.WarnContext(r.Context(), name+": gotrue email send rate limit", slog.Int("upstream_status", status))
 			default:
-				log.WarnContext(r.Context(), "resend-verification: gotrue resend failed",
+				log.WarnContext(r.Context(), name+": gotrue "+verb+" failed",
 					slog.Int("upstream_status", status), slog.String("error_code", gt.ErrorCode))
 			}
 		}
 
-		if holdMinimum(r.Context(), log, "resend-verification: timing", start, upstream, minResponse) {
+		if holdMinimum(r.Context(), log, name+": timing", start, upstream, minResponse) {
 			writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
 		}
 	})

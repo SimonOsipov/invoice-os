@@ -322,9 +322,9 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 		 ON CONFLICT (tenant_id) DO UPDATE SET max_per_minute = EXCLUDED.max_per_minute`,
 		tenantID)
 	plant("invitations", "id", inviteID,
-		`INSERT INTO invitations (id, tenant_id, role, invitee_email, status)
-		 VALUES ($1,$2,'admin','purge-witness@example.test','pending')`,
-		inviteID, tenantID)
+		`INSERT INTO invitations (id, tenant_id, role, invitee_email, status, token_hash, expires_at, invited_by)
+		 VALUES ($1,$2,'admin','purge-witness@example.test','pending',$3,now() + interval '7 days',$4)`,
+		inviteID, tenantID, tokenHash(t, 32), uuid.NewString())
 	plant("workflow_roles", "id", roleID,
 		`INSERT INTO workflow_roles (id, tenant_id, key, title) VALUES ($1,$2,$3,'Purge Witness Role')`,
 		roleID, tenantID, "purge_witness_"+roleID[:8])
@@ -1206,9 +1206,9 @@ func TestPurgeResultCountsMatchRowsDeleted(t *testing.T) {
 		ON CONFLICT (tenant_id) DO UPDATE SET max_per_minute = EXCLUDED.max_per_minute`, tenantA)
 	for i := 0; i < 3; i++ {
 		execSetup(t, pool,
-			`INSERT INTO invitations (tenant_id, role, invitee_email, status)
-			 VALUES ($1,'admin',$2,'pending')`,
-			tenantA, "purge-count-"+strconv.Itoa(i)+"@example.test")
+			`INSERT INTO invitations (tenant_id, role, invitee_email, status, token_hash, expires_at, invited_by)
+			 VALUES ($1,'admin',$2,'pending',$3,now() + interval '7 days',$4)`,
+			tenantA, "purge-count-"+strconv.Itoa(i)+"@example.test", tokenHash(t, 32), uuid.NewString())
 	}
 
 	res, err := db.PurgeDemoTenants(ctx, superDSN)

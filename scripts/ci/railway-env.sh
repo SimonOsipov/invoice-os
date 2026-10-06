@@ -80,7 +80,7 @@
 # `audit-sealed-variables` and `reconcile-fork <environment-id>` (M4-23-04) close the
 # fork-fidelity gaps. See the M4-23-04 banner further down: two checks the design asked
 # for are deliberately absent because a live probe proved they would fail every run.
-# The audit allows only SEALED_ALLOWLIST, and only on the `auth` service.
+# The audit allows only the service-qualified SEALED_ALLOWLIST entries.
 #
 # Auth: account-scoped RAILWAY_API_TOKEN, `Authorization: Bearer`. A Railway *project*
 # token is pinned to one environment and cannot perform projectUpdate, nor reach an
@@ -739,8 +739,9 @@ SEALED_AUDIT_QUERY='query sealedAudit($e: String!) {
   }
 }'
 
-# The only names that may be sealed, and only on `auth`: its PR fork writes its own values.
-SEALED_ALLOWLIST=(GOTRUE_JWT_KEYS GOTRUE_JWT_SECRET GOTRUE_SMTP_PASS)
+# The only service:NAME pairs that may be sealed. auth: its PR fork writes its own values.
+# tenancy: a PR fork has no key and runs in `capture` mode.
+SEALED_ALLOWLIST=(auth:GOTRUE_JWT_KEYS auth:GOTRUE_JWT_SECRET auth:GOTRUE_SMTP_PASS tenancy:RESEND_SENDING_KEY)
 
 # shellcheck disable=SC2016  # $e is a GraphQL variable — not a shell expansion.
 SETTLE_QUERY='query settle($e: String!) {
@@ -889,12 +890,12 @@ require_fork_ids() {
 # missing, surfacing much later as an unexplained boot or auth error in a PR
 # environment that looks correctly configured. Assert, never repair — a sealed
 # value is unreadable by definition, so there is nothing to copy. Every variable
-# must be unsealed or allowlisted (SEALED_ALLOWLIST on `auth`).
+# must be unsealed or listed in SEALED_ALLOWLIST.
 cmd_audit_sealed_variables() {
   require_env
   require_source_env
 
-  local body total sealed auth_id allow count offenders allowed
+  local body total sealed allow count offenders allowed entry svc svc_id
   body=$(gql_body "$SEALED_AUDIT_QUERY" "$(jq -n --arg e "$RAILWAY_DEV_ENVIRONMENT_ID" '{e: $e}')")
   graphql_post "$body" "auditing sealed variables in the source environment $RAILWAY_DEV_ENVIRONMENT_ID"
 
@@ -913,28 +914,33 @@ cmd_audit_sealed_variables() {
     return
   fi
 
-  # "Cannot resolve the allowlist" is never "allowed".
-  if ! auth_id=$(service_id_by_name "$GQL_RESPONSE" auth "the source environment $RAILWAY_DEV_ENVIRONMENT_ID" "The sealed-variable allowlist"); then
-    echo "::error::$sealed sealed variable(s) found in the source environment $RAILWAY_DEV_ENVIRONMENT_ID, and the audit cannot resolve the allowlist without the \`auth\` service. Nothing was allowed."
-    exit 1
-  fi
+  # "Cannot resolve the allowlist" is never "allowed". Resolve in allowlist order.
+  local -a allow_pairs=()
+  for entry in "${SEALED_ALLOWLIST[@]}"; do
+    svc=${entry%%:*}
+    if ! svc_id=$(service_id_by_name "$GQL_RESPONSE" "$svc" "the source environment $RAILWAY_DEV_ENVIRONMENT_ID" "The sealed-variable allowlist"); then
+      echo "::error::$sealed sealed variable(s) found in the source environment $RAILWAY_DEV_ENVIRONMENT_ID, and the audit cannot resolve the allowlist without the \`$svc\` service. Nothing was allowed."
+      exit 1
+    fi
+    allow_pairs+=("$svc_id:${entry#*:}")
+  done
 
-  allow=$(printf '%s\n' "${SEALED_ALLOWLIST[@]}" | jq -R . | jq -sc .)
-  offenders=$(echo "$GQL_RESPONSE" | jq -r --arg a "$auth_id" --argjson allow "$allow" '
+  allow=$(printf '%s\n' "${allow_pairs[@]}" | jq -R . | jq -sc .)
+  offenders=$(echo "$GQL_RESPONSE" | jq -r --argjson allow "$allow" '
     .data.environment.variables.edges[]?.node
     | select(.isSealed == true)
-    | select((.serviceId == $a and (.name | IN($allow[]))) | not)
+    | select((.serviceId != null and ("\(.serviceId):\(.name)" | IN($allow[]))) | not)
     | "  \(.name) (serviceId=\(.serviceId // "environment-scoped"))"')
 
   if [ -n "$offenders" ]; then
     count=$(printf '%s\n' "$offenders" | wc -l | tr -d ' ')
-    echo "::error::$count sealed variable(s) found in the source environment $RAILWAY_DEV_ENVIRONMENT_ID. Sealed variables do NOT fork: every pr-<N> environment would be created with these SILENTLY MISSING, surfacing much later as an unexplained boot or auth failure. Every variable must be unsealed or allowlisted (${SEALED_ALLOWLIST[*]} on \`auth\`). Offenders:"
+    echo "::error::$count sealed variable(s) found in the source environment $RAILWAY_DEV_ENVIRONMENT_ID. Sealed variables do NOT fork: every pr-<N> environment would be created with these SILENTLY MISSING, surfacing much later as an unexplained boot or auth failure. Every variable must be unsealed or allowlisted (${SEALED_ALLOWLIST[*]}). Offenders:"
     echo "$offenders"
     exit 1
   fi
 
   allowed=$(echo "$GQL_RESPONSE" | jq -r '[.data.environment.variables.edges[]?.node | select(.isSealed == true) | .name] | join(" ")')
-  echo "Sealed-variable audit clean: $sealed of $total variables in the source environment are sealed, all allowlisted on auth: $allowed."
+  echo "Sealed-variable audit clean: $sealed of $total variables in the source environment are sealed, all allowlisted: $allowed."
 }
 
 # --- DB DSN invariant (M4-22-FU) ---------------------------------------------
@@ -3004,6 +3010,7 @@ cmd_set_production_auth() {
   fi
   local name sealed=0
   for name in "${SEALED_ALLOWLIST[@]}"; do
+    case "$name" in auth:*) name=${name#auth:} ;; *) continue ;; esac
     if echo "$GQL_RESPONSE" | jq -e --arg n "$name" --arg s "$auth_id" \
         'any(.data.environment.variables.edges[]?.node; .name == $n and .serviceId == $s and .isSealed == true)' >/dev/null; then
       echo "::error::auth.$name is already sealed in environment $env_id. Change it in the dashboard; this command does not write over a sealed variable."

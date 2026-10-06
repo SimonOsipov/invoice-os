@@ -847,9 +847,11 @@ func TestForkPass_WriteErrorWithNoPathNamesEveryService(t *testing.T) {
 			if len(ws) != 9 {
 				t.Fatalf("the failed write carried %d service input(s), want all 9", len(ws))
 			}
+			// One failure line names every service; a "not confirmed" list would also name them.
+			line := requireNamedIn(t, errorLines(out), "The batched variable write", "failed for")
 			for _, w := range ws {
-				if !wordIn(errorLines(out), passLabel(w.Service)) {
-					t.Errorf("error lines %q do not name %s, which was in the write", errorLines(out), passLabel(w.Service))
+				if !wordIn(line, passLabel(w.Service)) {
+					t.Errorf("the failure line %q does not name %s, which was in the write", line, passLabel(w.Service))
 				}
 			}
 			for _, needle := range []string{passEchoNeedle, "invalid value", passRailwayMessage} {
@@ -887,9 +889,10 @@ func TestForkPass_WriteExhaustedBudgetExitsWithoutReRead(t *testing.T) {
 	if !strings.Contains(errs, "after 3 attempts") {
 		t.Errorf("error lines %q do not say \"after 3 attempts\"", errs)
 	}
+	line := requireNamedIn(t, errs, "The batched variable write", "failed for")
 	for _, w := range passWrites(t, s) {
-		if !wordIn(errs, passLabel(w.Service)) {
-			t.Errorf("error lines %q do not name %s, which was in the write", errs, passLabel(w.Service))
+		if !wordIn(line, passLabel(w.Service)) {
+			t.Errorf("the failure line %q does not name %s, which was in the write", line, passLabel(w.Service))
 		}
 	}
 	if got := confirmedLines(out); len(got) != 0 {

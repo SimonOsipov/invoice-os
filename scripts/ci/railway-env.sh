@@ -14,6 +14,7 @@
 #                            set-fork-auth-site <environment-id> <landing-url>|
 #                            set-production-auth <--pre-merge|--post-merge> <environment-id>|
 #                            set-fork-gateway-token <environment-id>|
+#                            fork-vars-before-urls <environment-id>|
 #                            set-production-gateway-token <environment-id>|
 #                            set-sentry-off <environment-id|--self-test>|
 #                            set-fork-reconciliation-url <environment-id>|
@@ -2938,51 +2939,190 @@ auth_refuse_persistent() {
   fi
 }
 
-# cmd_set_fork_auth <environment-id|--self-test>
-# Same guard order as cmd_set_ai_fake. Runs before the `urls` step, so it
-# writes everything except the site URLs (set-fork-auth-site).
-cmd_set_fork_auth() {
-  local env_id="${1:-}"
+# --- Fork pass ---------------------------------------------------------------
+#
+# A pass writes its contributors' variables in one batched write. Contributor NAME is three
+# functions: NAME_check <env-id> (pure refusals; adds its label to PASS_NOT_SET), NAME <env-id>
+# (resolves services, calls pass_plan_add) and NAME_verdict (runs on the final maps).
 
-  if [ "$env_id" = "--self-test" ]; then
-    auth_self_test
+PASS_ENV="" PASS_NOT_SET="" PASS_ENVS="" PASS_SETTLE="" PASS_PLAN='[]' PASS_DIFFS='[]' PASS_FINAL=""
+PASS_IDS=() PASS_LABELS=()
+
+# pass_plan_add <svc-id> <label> "<secret names>" NAME=VALUE...: merges into the service's entry.
+# Values reach jq on stdin only (TestSetServiceVars_SecretsNeverOnArgvOrInOutput).
+pass_plan_add() {
+  local id="$1" label="$2" secrets="$3" intended
+  shift 3
+  intended=$(printf '%s\0' "$@" | jq -Rsc 'split("\u0000")[:-1] | map(split("=") | {key: .[0], value: (.[1:] | join("="))}) | from_entries')
+  PASS_PLAN=$(printf '%s\n%s' "$PASS_PLAN" "$intended" | jq -sc --arg id "$id" --arg l "$label" --arg sec "$secrets" '
+    .[0] as $p | .[1] as $v | ($sec | split(" ") | map(select(length > 0))) as $s |
+    if ($p | map(.id) | index($id)) != null
+    then $p | map(if .id == $id then (.vars += $v | .secrets += $s) else . end)
+    else $p + [{id: $id, label: $l, vars: $v, secrets: $s}] end')
+}
+
+# pass_map <svc-id>: the service's map in the final read, shaped as a variables response.
+pass_map() {
+  local i
+  for i in "${!PASS_IDS[@]}"; do
+    [ "${PASS_IDS[$i]}" = "$1" ] || continue
+    printf '%s' "$PASS_FINAL" | jq -c --argjson i "$i" '{data: {variables: .data["s\($i)"]}}'
     return
+  done
+}
+
+# pass_read_failed <suffix>: names each unreadable service of the last batched read, else the environment.
+# Never prints Railway's message.
+pass_read_failed() {
+  local i
+  if [ -n "$READ_FAILED_IDX" ]; then
+    for i in $READ_FAILED_IDX; do
+      echo "::error::${PASS_LABELS[$i]}'s variables in environment $PASS_ENV are unreadable ($READ_FAIL_WHY).$1"
+    done
+  else
+    echo "::error::The batched variable read in environment $PASS_ENV failed ($READ_FAIL_WHY) and named no service.$1"
   fi
-  if [ -z "$env_id" ]; then
-    echo "::error::usage: railway-env.sh set-fork-auth <environment-id>"
-    exit 2
+}
+
+# pass_names <plan-index>: the names that index's alias writes.
+pass_names() {
+  printf '%s' "$PASS_DIFFS" | jq -r --argjson i "$1" '.[$i] | keys | join(" ")'
+}
+
+# pass_write_detail <alias|"">: Railway's code and trace id for that alias, else curl's last line.
+pass_write_detail() {
+  local d
+  d=$(printf '%s' "$GQL_RESPONSE" | jq -r --arg a "$1" '
+    [.errors[]? | select($a == "" or .path[0]? == $a)] | first // empty
+    | "Railway \(.extensions.code // "error"), trace \(.extensions.traceId // "unknown")"' 2>/dev/null) || d=""
+  printf '%s' "${d:-$GQL_LAST}"
+}
+
+# pass_write_failed <plan-index>...: the AC-5 report for a failed varsWrite; alias sK is the Kth argument.
+# Names a service only from errors[].path[0]; never prints GQL_ERROR or Railway's message.
+pass_write_failed() {
+  local widx=("$@") a k i failed="" others="" all=""
+  for a in $(gql_error_aliases); do
+    k="${a#s}"
+    if [[ "$k" =~ ^(0|[1-9][0-9]{0,8})$ ]] && [ "$k" -lt "$#" ]; then
+      i="${widx[$k]}"
+      failed="$failed $i "
+      echo "::error::The batched variable write in environment $PASS_ENV failed for ${PASS_LABELS[$i]}: $(pass_names "$i") ($(pass_write_detail "$a")). Value not printed."
+    fi
+  done
+  if [ -z "$failed" ]; then
+    for i in "${widx[@]}"; do all="$all${all:+; }${PASS_LABELS[$i]}: $(pass_names "$i")"; done
+    echo "::error::The batched variable write in environment $PASS_ENV failed for $all ($(pass_write_detail "")). Value not printed."
   fi
+  for i in "${widx[@]}"; do
+    case "$failed" in *" $i "*) ;; *) others="$others ${PASS_LABELS[$i]}" ;; esac
+  done
+  if [ -n "$others" ]; then
+    echo "::error::These services of the write are not confirmed:$others."
+  fi
+}
+
+# fork_pass <env-id> <contributor>...
+# envList and settle once, one batched read, one batched write of the names that differ (absent
+# differs from ""), one batched re-read, then every contributor's verdicts on the final maps.
+fork_pass() {
+  local env_id="$1" c i j n total held q decl fields idx body names bad=0 widx=()
+  shift
+  PASS_ENV="$env_id" PASS_NOT_SET="" PASS_PLAN='[]'
 
   require_source_env
-  auth_refuse_persistent "$env_id"
+  for c in "$@"; do "${c}_check" "$env_id"; done
   require_env
-  assert_environment_is_ephemeral "$env_id" AUTH
+  assert_environment_is_ephemeral "$env_id" "$PASS_NOT_SET"
+  PASS_ENVS="$GQL_RESPONSE"
 
-  local name
-  name=$(echo "$GQL_RESPONSE" | jq -r --arg id "$env_id" \
+  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+    "listing service instances in environment $env_id"
+  PASS_SETTLE="$GQL_RESPONSE"
+  for c in "$@"; do "$c" "$env_id"; done
+
+  PASS_IDS=() PASS_LABELS=()
+  while IFS= read -r i; do PASS_IDS+=("$i"); done < <(printf '%s' "$PASS_PLAN" | jq -r '.[].id')
+  while IFS= read -r i; do PASS_LABELS+=("$i"); done < <(printf '%s' "$PASS_PLAN" | jq -r '.[].label')
+  n=${#PASS_IDS[@]}
+
+  if ! read_vars_batch "$env_id" unrendered "reading the variables of $n services in environment $env_id" "${PASS_IDS[@]}"; then
+    pass_read_failed " Nothing was written."
+    exit 1
+  fi
+  PASS_FINAL="$GQL_RESPONSE"
+
+  PASS_DIFFS=$(printf '%s\n%s' "$PASS_FINAL" "$PASS_PLAN" | jq -sc '
+    .[0].data as $d | .[1] | to_entries | map(.key as $i | .value.vars | with_entries(
+      select(.key as $k | ($d["s\($i)"] | has($k) | not) or $d["s\($i)"][$k] != .value)))')
+  while IFS=$'\t' read -r i total j; do
+    held=$((total - j))
+    [ "$held" = 0 ] || echo "  ${PASS_LABELS[$i]}: $held of $total already hold the intended value — not written."
+    [ "$j" = 0 ] || widx+=("$i")
+  done < <(printf '%s\n%s' "$PASS_DIFFS" "$PASS_PLAN" | jq -sr '.[0] as $d | .[1] | to_entries[] | "\(.key)\t\(.value.vars | length)\t\($d[.key] | length)"')
+
+  if [ "${#widx[@]}" -gt 0 ]; then
+    decl="" fields="" names="" j=0
+    for i in "${widx[@]}"; do
+      decl="$decl${decl:+, }\$i$j: VariableCollectionUpsertInput!"
+      fields="$fields
+  s$j: variableCollectionUpsert(input: \$i$j)"
+      names="$names${names:+ }${PASS_LABELS[$i]}"
+      j=$((j + 1))
+    done
+    q="mutation varsWrite($decl) {$fields
+}"
+    idx=$(printf '%s\n' "${widx[@]}" | jq -sc .)
+    body=$(printf '%s\n%s' "$PASS_DIFFS" "$PASS_PLAN" | jq -sc --arg q "$q" --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --argjson idx "$idx" '
+      .[0] as $d | .[1] as $plan |
+      {query: $q, variables: ([$idx | to_entries[] | {("i\(.key)"): {projectId: $p, environmentId: $e, serviceId: $plan[.value].id, variables: $d[.value], skipDeploys: true}}] | add)}')
+    if ! graphql_try "$body" "setting the variables of $names in environment $env_id"; then
+      pass_write_failed "${widx[@]}"
+      exit 1
+    fi
+    for i in "${widx[@]}"; do
+      printf '%s\n%s' "$PASS_DIFFS" "$PASS_PLAN" | jq -rs --argjson i "$i" \
+        '.[1][$i] as $e | .[0][$i] | to_entries[] | "  \($e.label).\(.key) = \(if (.key | IN($e.secrets[])) then "<redacted>" else .value end)"'
+    done
+    if ! read_vars_batch "$env_id" unrendered "re-reading the variables of $n services in environment $env_id" "${PASS_IDS[@]}"; then
+      pass_read_failed " The variables were written but not confirmed."
+      exit 1
+    fi
+    PASS_FINAL="$GQL_RESPONSE"
+  fi
+
+  for c in "$@"; do "${c}_verdict" || bad=1; done
+  [ "$bad" = 0 ] || exit 1
+}
+
+fork_auth_check() {
+  auth_refuse_persistent "$1"
+  PASS_NOT_SET="${PASS_NOT_SET:+$PASS_NOT_SET/}AUTH"
+}
+
+# fork_auth: runs before the `urls` step, so it writes everything except the site URLs (set-fork-auth-site).
+fork_auth() {
+  local env_id="$1" name auth_id gw_id additional
+  name=$(printf '%s' "$PASS_ENVS" | jq -r --arg id "$env_id" \
     '[.data.environments.edges[]?.node | select(.id == $id) | .name] | first // ""')
   if [ -z "$name" ]; then
     echo "::error::Environment $env_id has no name, so its issuer cannot be formed. AUTH was NOT set."
     exit 1
   fi
-
-  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
-    "listing service instances in environment $env_id"
-  local settle="$GQL_RESPONSE" gw_id auth_id
-  gw_id=$(service_id_by_name "$settle" gateway "environment $env_id" AUTH)
-  auth_id=$(service_id_by_name "$settle" auth "environment $env_id" AUTH)
+  gw_id=$(service_id_by_name "$PASS_SETTLE" gateway "environment $env_id" AUTH) || exit 1
+  auth_id=$(service_id_by_name "$PASS_SETTLE" auth "environment $env_id" AUTH) || exit 1
 
   auth_build_prenv "the fork auth configuration"
   # Generated, never read from the source: a fork must not sign with production's key.
-  local jwk jwt_secret admin_pw issuer additional
-  jwk=$("$AUTH_PRENV" jwk-es256)
-  jwt_secret=$(openssl rand -hex 32)
-  admin_pw=$(openssl rand -hex 32)
-  issuer=$(auth_issuer "$name")
-  additional=$(auth_additional_issuers "$issuer")
+  FA_JWK=$("$AUTH_PRENV" jwk-es256)
+  FA_JWT_SECRET=$(openssl rand -hex 32)
+  FA_ADMIN_PW=$(openssl rand -hex 32)
+  FA_ISSUER=$(auth_issuer "$name")
+  FA_AUTH_ID="$auth_id" FA_GW_ID="$gw_id"
+  additional=$(auth_additional_issuers "$FA_ISSUER")
 
   local auth_vars=(
-    "GOTRUE_JWT_ISSUER=$issuer"
+    "GOTRUE_JWT_ISSUER=$FA_ISSUER"
     "DATABASE_URL=$AUTH_DSN_REFERENCE"
     "API_EXTERNAL_URL=$AUTH_INTERNAL_URL"
     "PORT=8080"
@@ -3001,20 +3141,41 @@ cmd_set_fork_auth() {
     "AUTH_ADDITIONAL_ISSUERS=$additional"
     "AUTH_URL=$AUTH_INTERNAL_URL"
   )
+  FA_AUTH_VARS=("${auth_vars[@]}") FA_GW_VARS=("${gateway_vars[@]}")
 
+  pass_plan_add "$auth_id" auth "GOTRUE_JWT_KEYS GOTRUE_JWT_SECRET" "GOTRUE_JWT_KEYS=$FA_JWK" "GOTRUE_JWT_SECRET=$FA_JWT_SECRET" "${auth_vars[@]}"
+  pass_plan_add "$gw_id" gateway AUTH_ADMIN_PASSWORD "AUTH_ADMIN_PASSWORD=$FA_ADMIN_PW" "${gateway_vars[@]}"
+}
+
+fork_auth_verdict() {
   local bad=0
-  set_service_vars "$env_id" "$auth_id" auth "GOTRUE_JWT_KEYS GOTRUE_JWT_SECRET" "GOTRUE_JWT_KEYS=$jwk" "GOTRUE_JWT_SECRET=$jwt_secret" "${auth_vars[@]}"
-  secret_verdict "$GQL_RESPONSE" auth GOTRUE_JWT_KEYS "$jwk" "$AUTH_PRENV" || bad=1
-  secret_verdict "$GQL_RESPONSE" auth GOTRUE_JWT_SECRET "$jwt_secret" || bad=1
-  auth_check auth "${auth_vars[@]}" || bad=1
-  set_service_vars "$env_id" "$gw_id" gateway AUTH_ADMIN_PASSWORD "AUTH_ADMIN_PASSWORD=$admin_pw" "${gateway_vars[@]}"
-  secret_verdict "$GQL_RESPONSE" gateway AUTH_ADMIN_PASSWORD "$admin_pw" || bad=1
-  auth_check gateway "${gateway_vars[@]}" || bad=1
+  GQL_RESPONSE=$(pass_map "$FA_AUTH_ID")
+  secret_verdict "$GQL_RESPONSE" auth GOTRUE_JWT_KEYS "$FA_JWK" "$AUTH_PRENV" || bad=1
+  secret_verdict "$GQL_RESPONSE" auth GOTRUE_JWT_SECRET "$FA_JWT_SECRET" || bad=1
+  auth_check auth "${FA_AUTH_VARS[@]}" || bad=1
+  GQL_RESPONSE=$(pass_map "$FA_GW_ID")
+  secret_verdict "$GQL_RESPONSE" gateway AUTH_ADMIN_PASSWORD "$FA_ADMIN_PW" || bad=1
+  auth_check gateway "${FA_GW_VARS[@]}" || bad=1
   if [ "$bad" != "0" ]; then
-    echo "::error::The fork auth configuration in environment $env_id did not read back as written."
-    exit 1
+    echo "::error::The fork auth configuration in environment $PASS_ENV did not read back as written."
+    return 1
   fi
-  echo "Fork auth configuration confirmed in environment $env_id: issuer $issuer, with a fresh key, JWT secret and admin password."
+  echo "Fork auth configuration confirmed in environment $PASS_ENV: issuer $FA_ISSUER, with a fresh key, JWT secret and admin password."
+}
+
+# cmd_set_fork_auth <environment-id|--self-test>
+cmd_set_fork_auth() {
+  local env_id="${1:-}"
+
+  if [ "$env_id" = "--self-test" ]; then
+    auth_self_test
+    return
+  fi
+  if [ -z "$env_id" ]; then
+    echo "::error::usage: railway-env.sh set-fork-auth <environment-id>"
+    exit 2
+  fi
+  fork_pass "$env_id" fork_auth
 }
 
 # cmd_set_fork_auth_site <environment-id> <landing-url>
@@ -3213,19 +3374,52 @@ gateway_token_write() {
   echo "GATEWAY_TOKEN confirmed on ${#GATEWAY_TOKEN_SERVICES[@]} services in environment $env_id."
 }
 
-# gateway_token_write_generated <env-id>: refuses unless openssl yields 64 lowercase hex; then writes.
-gateway_token_write_generated() {
-  local env_id="$1" token
-  token=$(openssl rand -hex 32)
-  if ! [[ "$token" =~ ^[0-9a-f]{64}$ ]]; then
+# gateway_token_generate: sets GT_TOKEN; refuses unless openssl yields 64 lowercase hex.
+gateway_token_generate() {
+  GT_TOKEN=$(openssl rand -hex 32)
+  if ! [[ "$GT_TOKEN" =~ ^[0-9a-f]{64}$ ]]; then
     echo "::error::The generated GATEWAY_TOKEN is not 64 lowercase hex characters (openssl rand -hex 32). Value not printed. Nothing was written."
     exit 1
   fi
-  gateway_token_write "$env_id" "$token"
+}
+
+# gateway_token_write_generated <env-id>: generates, then writes.
+gateway_token_write_generated() {
+  gateway_token_generate
+  gateway_token_write "$1" "$GT_TOKEN"
+}
+
+gateway_token_check() {
+  if [ "$1" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to write GATEWAY_TOKEN in the persistent environment ($1). This command only writes a pr-<N> fork."
+    exit 1
+  fi
+  PASS_NOT_SET="${PASS_NOT_SET:+$PASS_NOT_SET/}GATEWAY_TOKEN"
+}
+
+# gateway_token: generated, never read from the source: a fork must not trust production's token.
+gateway_token() {
+  local i
+  gateway_token_ids "$1" "$PASS_SETTLE"
+  gateway_token_generate
+  for i in "${!GATEWAY_TOKEN_SERVICES[@]}"; do
+    pass_plan_add "${GT_IDS[$i]}" "${GATEWAY_TOKEN_SERVICES[$i]}" GATEWAY_TOKEN "GATEWAY_TOKEN=$GT_TOKEN"
+  done
+}
+
+gateway_token_verdict() {
+  local i bad=0
+  for i in "${!GATEWAY_TOKEN_SERVICES[@]}"; do
+    secret_verdict "$(pass_map "${GT_IDS[$i]}")" "${GATEWAY_TOKEN_SERVICES[$i]}" GATEWAY_TOKEN "$GT_TOKEN" || bad=1
+  done
+  if [ "$bad" != "0" ]; then
+    echo "::error::GATEWAY_TOKEN in environment $PASS_ENV did not read back as written."
+    return 1
+  fi
+  echo "GATEWAY_TOKEN confirmed on ${#GATEWAY_TOKEN_SERVICES[@]} services in environment $PASS_ENV."
 }
 
 # cmd_set_fork_gateway_token <environment-id>
-# Generated, never read from the source: a fork must not trust production's token.
 cmd_set_fork_gateway_token() {
   local env_id="${1:-}"
 
@@ -3233,20 +3427,18 @@ cmd_set_fork_gateway_token() {
     echo "::error::usage: railway-env.sh set-fork-gateway-token <environment-id>"
     exit 2
   fi
+  fork_pass "$env_id" gateway_token
+}
 
-  require_source_env
-  if [ "$env_id" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
-    echo "::error::Refusing to write GATEWAY_TOKEN in the persistent environment ($env_id). This command only writes a pr-<N> fork."
-    exit 1
+# cmd_fork_vars_before_urls <environment-id>
+cmd_fork_vars_before_urls() {
+  local env_id="${1:-}"
+
+  if [ -z "$env_id" ]; then
+    echo "::error::usage: railway-env.sh fork-vars-before-urls <environment-id>"
+    exit 2
   fi
-  require_env
-  assert_environment_is_ephemeral "$env_id" GATEWAY_TOKEN
-
-  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
-    "listing service instances in environment $env_id"
-  gateway_token_ids "$env_id" "$GQL_RESPONSE"
-
-  gateway_token_write_generated "$env_id"
+  fork_pass "$env_id" fork_auth gateway_token
 }
 
 # cmd_set_production_gateway_token <environment-id>
@@ -3682,6 +3874,7 @@ case "${1:-}" in
   set-fork-auth-site)        shift; cmd_set_fork_auth_site "$@" ;;
   set-production-auth)       shift; cmd_set_production_auth "$@" ;;
   set-fork-gateway-token)    cmd_set_fork_gateway_token "${2:-}" ;;
+  fork-vars-before-urls)     cmd_fork_vars_before_urls "${2:-}" ;;
   set-production-gateway-token) cmd_set_production_gateway_token "${2:-}" ;;
   set-sentry-off)            cmd_set_sentry_off "${2:-}" ;;
   set-fork-reconciliation-url) cmd_set_fork_reconciliation_url "${2:-}" ;;
@@ -3692,7 +3885,7 @@ case "${1:-}" in
   wait-deployment)           shift; cmd_wait_deployment "$@" ;;
   report-api-calls)          cmd_report_api_calls ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-fork-gateway-token <environment-id>|set-production-gateway-token <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments|discover-urls <environment-id>|query <context>|wait-deployment <label> <deployment-id>|report-api-calls>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-fork-gateway-token <environment-id>|fork-vars-before-urls <environment-id>|set-production-gateway-token <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments|discover-urls <environment-id>|query <context>|wait-deployment <label> <deployment-id>|report-api-calls>"
     exit 2
     ;;
 esac

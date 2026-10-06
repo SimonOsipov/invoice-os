@@ -137,6 +137,8 @@ describe('audit vocabulary', () => {
       'extraction.field_corrected',
       'extraction.anchor.learned',
       'workspace.provisioned',
+      'invitation.sent',
+      'invitation.resent',
     ]) {
       expect(literals, `${id} must be emitted by a Go writer`).toContain(id)
     }

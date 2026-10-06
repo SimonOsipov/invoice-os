@@ -113,10 +113,10 @@ every row of the wire (`internal/audit/reader.go`). It is a three-value closed s
 | `company_scope` | When |
 |---|---|
 | `company` | `entity_id` is non-NULL |
-| `workspace` | `entity_id` is NULL **and** the event is one of the thirteen genuinely firm-wide names |
+| `workspace` | `entity_id` is NULL **and** the event is one of the fifteen genuinely firm-wide names |
 | `unattributed` | everything else — the fallback |
 
-The thirteen firm-wide names are the whole of the Policies (4), Roles (4), Memberships (3) and
+The fifteen firm-wide names are the whole of the Policies (4), Roles (4), Memberships (5) and
 Validation-rule (2) domains. They are **hand-maintained in Go** (`firmWideEvents`); nothing
 derives them from the SQL resolver, so adding a firm-wide event means editing that map too.
 
@@ -612,7 +612,7 @@ larger set since EXTR-08-06 (§11).
 the 17-event set from the migration itself, walks every `audit.Record` call site under `cmd/`
 and `internal/`, and fails if a literal-event writer inside that set is missing the key.
 
-## 11. The invoice-scoped read reaches 17 of the 39 event types
+## 11. The invoice-scoped read reaches 17 of the 41 event types
 
 `Filter.InvoiceID` emits exactly one predicate — `a.invoice_id = $n::uuid`
 (`internal/audit/filter.go`) — against the `STORED` generated column AUDIT-04-11 added in
@@ -624,8 +624,8 @@ the bare `id` key.
 So the set of rows an invoice's own page can ever show is not "every event that mentions this
 invoice". It is exactly the two `event IN (…)` lists inside that generation expression: **ten
 events whose id is read from `payload->>'id'`, seven from `payload->>'invoice_id'` —
-seventeen of the thirty-nine event types the log carries.**
-`TestAuditScopeOf_RuleSetsAreDisjointAndSumToThirtyNine` pins the 39.
+seventeen of the forty-one event types the log carries.**
+`TestAuditScopeOf_RuleSetsAreDisjointAndSumToFortyOne` pins the 41.
 **Derive this list from the migration, never from prose — this page included.**
 
 | Domain | Count | Events | Payload key |

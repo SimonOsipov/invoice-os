@@ -185,11 +185,46 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 		t.Fatal("main has no top-level `withCORS := gateway.CORS(...)`; the register wrap names nothing")
 	}
 
-	// Register is browser-called (landing form): CORS-wrapped with a preflight. Verify is a mailed GET link.
+	// The confirm page comes from the top-level `x, err := gateway.VerifyPageHandler(siteURL)`; an error stops boot.
+	page, fatalOnErr := "", false
+	for i, s := range stmts {
+		as, ok := s.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 2 || len(as.Rhs) != 1 {
+			continue
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok || types.ExprString(call.Fun) != "gateway.VerifyPageHandler" {
+			continue
+		}
+		if len(call.Args) != 1 || types.ExprString(call.Args[0]) != "siteURL" {
+			t.Errorf("gateway.VerifyPageHandler args = %v, want siteURL", call.Args)
+		}
+		page = types.ExprString(as.Lhs[0])
+		if i+1 < len(stmts) {
+			if is, ok := stmts[i+1].(*ast.IfStmt); ok && types.ExprString(is.Cond) == "err != nil" {
+				ast.Inspect(is.Body, func(n ast.Node) bool {
+					if c, ok := n.(*ast.CallExpr); ok && types.ExprString(c.Fun) == "platform.Fatal" {
+						fatalOnErr = true
+					}
+					return true
+				})
+			}
+		}
+	}
+	if page != "verifyPage" {
+		t.Fatalf("main has no top-level `verifyPage, err := gateway.VerifyPageHandler(siteURL)` (found %q)", page)
+	}
+	if !fatalOnErr {
+		t.Error("a VerifyPageHandler error does not reach platform.Fatal in the statement after it")
+	}
+
+	// Register is browser-called (landing form): CORS-wrapped with a preflight. Verify is a mailed link
+	// whose page and same-origin form POST take no CORS wrap.
 	for pattern, want := range map[string]string{
 		"POST /auth/register":    "withCORS(" + recv + ".Register)",
 		"OPTIONS /auth/register": "withCORS(" + recv + ".Register)",
-		"GET /auth/verify":       recv + ".Verify",
+		"GET /auth/verify":       page,
+		"POST /auth/verify":      recv + ".Verify",
 
 		"POST /contacts/demo-request":    "withCORS(" + recv + ".DemoRequest)",
 		"OPTIONS /contacts/demo-request": "withCORS(" + recv + ".DemoRequest)",

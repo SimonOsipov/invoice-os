@@ -162,6 +162,10 @@ func main() {
 	}
 	app.Mux.Handle("GET /emails/confirmation.html", confirmationMail)
 	app.Mux.Handle("GET /emails/mark.png", gateway.MailLogo())
+	verifyPage, err := gateway.VerifyPageHandler(siteURL)
+	if err != nil {
+		platform.Fatal(app.Logger, "gateway: verify page: %v", err)
+	}
 
 	// One sink for both hand-off paths; the sink bounds each call and never follows a redirect.
 	sink := gateway.NewHTTPContactSink(routed["notifications"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
@@ -171,7 +175,8 @@ func main() {
 	reg := registrationHandlers(probed["auth"], siteURL, registerMinResponse, app.Logger, sink)
 	app.Mux.Handle("POST /auth/register", withCORS(reg.Register))
 	app.Mux.Handle("OPTIONS /auth/register", withCORS(reg.Register))
-	app.Mux.Handle("GET /auth/verify", reg.Verify)
+	app.Mux.Handle("GET /auth/verify", verifyPage)
+	app.Mux.Handle("POST /auth/verify", reg.Verify)
 	app.Mux.Handle("POST /contacts/demo-request", withCORS(reg.DemoRequest))
 	app.Mux.Handle("OPTIONS /contacts/demo-request", withCORS(reg.DemoRequest))
 
@@ -269,7 +274,7 @@ func newJWKSClient() *http.Client {
 }
 
 // registrationHandlers builds the registration handlers against GoTrue at authURL.
-// A nil siteURL means AUTH_SITE_URL is unset: both routes answer 503.
+// A nil siteURL means AUTH_SITE_URL is unset: Register and Verify answer 503.
 func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, log *slog.Logger, sink gateway.ContactSink) registration {
 	if authURL == nil || siteURL == nil {
 		nc := gateway.RegistrationNotConfigured()
@@ -315,14 +320,14 @@ func handoffHandlers(authURL *url.URL, sessions *gateway.SessionChecker, log *sl
 // an absolute http(s) URL, or carries user info, a query or a fragment, stops boot.
 func mustParseSiteURL(raw string, log *slog.Logger) *url.URL {
 	if raw == "" {
-		log.Warn("gateway: AUTH_SITE_URL is unset; /auth/register and /auth/verify answer 503")
+		log.Warn("gateway: AUTH_SITE_URL is unset; /auth/register, GET and POST /auth/verify answer 503")
 		return nil
 	}
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		platform.Fatal(log, "gateway: AUTH_SITE_URL is not an absolute http(s) URL")
 	}
-	// VerifyHandler appends "/?verified=1" to this value.
+	// The verify routes append "/?verified=1" and "/?verify=failed" to this value.
 	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
 		platform.Fatal(log, "gateway: AUTH_SITE_URL must not carry user info, a query or a fragment")
 	}

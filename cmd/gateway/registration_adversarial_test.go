@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/SimonOsipov/invoice-os/internal/gateway"
 )
 
 func TestMustParseSiteURL_AcceptsAbsoluteHTTP(t *testing.T) {
@@ -217,7 +219,7 @@ func TestRegistrationHandlers_DoNotFollowGoTrueRedirects(t *testing.T) {
 	if rec := serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`); rec.Code != http.StatusBadGateway {
 		t.Errorf("Register = %d, want 502: %s", rec.Code, rec.Body.String())
 	}
-	rec := serveRegistration(reg.Verify, http.MethodGet, "/auth/verify?token=T&type=signup", "")
+	rec := serveForm(reg.Verify, "/auth/verify", "token=T&type=signup")
 	if loc := rec.Header().Get("Location"); loc != "https://site.example/?verify=failed" {
 		t.Errorf("Verify Location = %q, want https://site.example/?verify=failed", loc)
 	}
@@ -228,22 +230,37 @@ func TestRegistrationHandlers_DoNotFollowGoTrueRedirects(t *testing.T) {
 	}
 }
 
+// verifyMux mounts main's two /auth/verify patterns over the real handlers.
+func verifyMux(t *testing.T, reg registration, site *url.URL) *http.ServeMux {
+	t.Helper()
+	page, err := gateway.VerifyPageHandler(site)
+	if err != nil {
+		t.Fatalf("VerifyPageHandler: %v", err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("GET /auth/verify", page)
+	mux.Handle("POST /auth/verify", reg.Verify)
+	return mux
+}
+
 // The mux answers a wrong method with 405 before either handler runs. main's patterns are
 // pinned by TestRegistrationRoutesRegisteredUnconditionally.
 func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
 	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
-	mux := http.NewServeMux()
+	mux := verifyMux(t, reg, site)
 	mux.Handle("POST /auth/register", reg.Register)
-	mux.Handle("GET /auth/verify", reg.Verify)
 
 	// Positive pair: the right methods reach the handlers.
 	if rec := serveRegistration(mux, http.MethodPost, "/auth/register", `{"email":"a@corp.example","password":"p"}`); rec.Code != http.StatusAccepted {
 		t.Fatalf("POST /auth/register = %d, want 202", rec.Code)
 	}
-	if rec := serveRegistration(mux, http.MethodGet, "/auth/verify?token=T&type=signup", ""); rec.Code != http.StatusSeeOther {
-		t.Fatalf("GET /auth/verify = %d, want 303", rec.Code)
+	if rec := serveRegistration(mux, http.MethodGet, "/auth/verify?token=T&type=signup", ""); rec.Code != http.StatusOK {
+		t.Fatalf("GET /auth/verify = %d, want 200", rec.Code)
+	}
+	if rec := serveForm(mux, "/auth/verify", "token=T&type=signup"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST /auth/verify = %d, want 303", rec.Code)
 	}
 	before := len(calls())
 
@@ -251,9 +268,9 @@ func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 		{http.MethodGet, "/auth/register"},
 		{http.MethodHead, "/auth/register"},
 		{http.MethodPut, "/auth/register"},
-		{http.MethodPost, "/auth/verify?token=T&type=signup"},
 		{http.MethodPut, "/auth/verify?token=T&type=signup"},
 		{http.MethodOptions, "/auth/verify?token=T&type=signup"},
+		{http.MethodDelete, "/auth/verify?token=T&type=signup"},
 	} {
 		if rec := serveRegistration(mux, c.method, c.target, ""); rec.Code != http.StatusMethodNotAllowed {
 			t.Errorf("%s %s = %d, want 405", c.method, c.target, rec.Code)
@@ -264,20 +281,37 @@ func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 	}
 }
 
-// ServeMux lets "GET /auth/verify" serve HEAD, so the handler itself must refuse a link-scanner prefetch.
-func TestVerify_HeadIsRefusedWithoutConsumingTheToken(t *testing.T) {
+// Opening the link, by GET or HEAD, spends nothing; only the POST of the page's own form reaches GoTrue.
+func TestVerifyRoute_OpeningNeverReachesGoTrue(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
-	mux := http.NewServeMux()
-	mux.Handle("GET /auth/verify", reg.Verify)
+	mux := verifyMux(t, registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil), site)
+	const link = "http://gateway.test/auth/verify?token=T&type=signup"
 
-	rec := serveRegistration(mux, http.MethodHead, "/auth/verify?token=T&type=signup", "")
-
-	if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != http.MethodGet {
-		t.Errorf("HEAD /auth/verify = %d Allow %q, want 405 Allow GET", rec.Code, rec.Header().Get("Allow"))
+	var page string
+	for _, method := range []string{http.MethodGet, http.MethodGet, http.MethodHead} {
+		rec := serveRegistration(mux, method, link, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s %s = %d, want 200", method, link, rec.Code)
+		}
+		if method == http.MethodGet {
+			page = rec.Body.String()
+		}
 	}
 	if got := calls(); len(got) != 0 {
-		t.Errorf("HEAD /auth/verify reached GoTrue %v; a prefetch consumed the token", got)
+		t.Fatalf("opening the link reached GoTrue: %v", got)
+	}
+
+	action, values := pageForm(t, link, page)
+	if values.Get("token") != "T" || values.Get("type") != "signup" {
+		t.Fatalf("form values = %v, want token=T and type=signup", values)
+	}
+	rec := serveForm(mux, action, values.Encode())
+
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "https://site.example/?verified=1" {
+		t.Errorf("click = %d Location %q, want 303 https://site.example/?verified=1", rec.Code, rec.Header().Get("Location"))
+	}
+	if got, want := calls(), []string{"POST /verify"}; !slices.Equal(got, want) {
+		t.Errorf("GoTrue saw %v, want %v", got, want)
 	}
 }

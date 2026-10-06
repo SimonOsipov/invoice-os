@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -160,8 +161,7 @@ func doVerify(t *testing.T, authURL, site *url.URL, log *slog.Logger, query stri
 		log = slog.New(slog.DiscardHandler)
 	}
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/auth/verify?"+query, nil)
-	VerifyHandler(authURL, site, testClient(), log, nil).ServeHTTP(rec, req)
+	VerifyHandler(authURL, site, testClient(), log, nil).ServeHTTP(rec, verifyRequest(context.Background(), query))
 	return rec
 }
 

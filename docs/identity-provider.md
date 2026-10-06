@@ -315,7 +315,7 @@ scope, or `/token` with any other grant) is reachable from outside.
    than `AUTH_REGISTER_MIN_RESPONSE` after the request reached the handler, so a new address
    and a known one take the same time while GoTrue answers faster than that (see Ceilings).
 2. The link targets `GOTRUE_MAILER_URLPATHS_CONFIRMATION`, which is the gateway's
-   `GET /auth/verify`. A relative value would resolve against `API_EXTERNAL_URL`, a private
+   `GET /auth/verify`, a page with one confirm button. A relative value would resolve against `API_EXTERNAL_URL`, a private
    host, so production sets an absolute URL.
 
    The confirmation mail is the branded template (`internal/accountmail`) that GoTrue fetches
@@ -336,9 +336,10 @@ scope, or `/token` with any other grant) is reachable from outside.
    literally and fails loudly. It also fails (`variables are unreadable`) when
    `GOTRUE_SITE_URL` is absent from `auth`'s variables, which means the token cannot read
    them.
-3. `GET /auth/verify?token=…&type=signup` posts `{"type":"signup","token_hash":<token>}` to
-   GoTrue `/verify`, discards the session GoTrue returns, and redirects the browser to
-   `AUTH_SITE_URL`. No token reaches a URL.
+3. The registrant opens the link and clicks "Confirm my email". The button submits a form to
+   `POST /auth/verify`, which posts `{"type":"signup","token_hash":<token>}` to GoTrue
+   `/verify`, discards the session GoTrue returns, and redirects the browser to
+   `AUTH_SITE_URL`. Opening the link verifies nothing. No token reaches a landing URL.
 4. The verified user signs in through `POST /auth/sign-in` and redeems the code at
    `POST /auth/exchange` (see Sign-in and hand-off). The first token carries no tenant: the
    access-token hook projects a tenant only for exactly one active membership.
@@ -408,20 +409,37 @@ The handler sets `Cache-Control: no-store` on every answer it writes. Any method
 
 The `/api/` router answers 404 for any path whose first segment after the service is `internal`, before authorization, on the decoded path, both raw and after `path.Clean`, so a dot-dot or empty segment that resolves to `internal`, or a raw `internal/..` prefix, is refused for every method, CONNECT included. Guarded by `internal/gateway/gateway_test.go` `TestRouter_InternalPathNeverReachesUpstream`.
 
-**`GET /auth/verify?token=…&type=signup`**, outside `/api/`:
+**`GET /auth/verify?token=…&type=signup`** (the page), outside `/api/`:
 
 | Outcome | Answer |
 |---|---|
-| GoTrue `/verify` 200 | 303 to `<AUTH_SITE_URL>/?verified=1` |
-| an empty `token` or a `type` other than `signup` | 303 to `<AUTH_SITE_URL>/?verify=failed`; GoTrue is not called |
-| a GoTrue refusal, or GoTrue unreachable | 303 to `<AUTH_SITE_URL>/?verify=failed`, logged at WARN (the upstream status, or the error) |
-| HEAD | 405 `{"error":"method not allowed"}`, `Allow: GET`; GoTrue is not called |
-| any method other than GET or HEAD | 405 from the router, `Allow: GET, HEAD`; GoTrue is not called |
-| GET or HEAD while `AUTH_SITE_URL` is unset | 503 `registration is not configured` |
+| a `token` of 1 to 256 bytes and `type=signup` | 200 `text/html`: one form with the token and type as hidden fields and a "Confirm my email" button; GoTrue is not called |
+| an empty or over-long `token`, or a `type` other than `signup` | 303 to `<AUTH_SITE_URL>/?verify=failed`; no page |
+| HEAD | as GET, without the body |
+| any method but GET, HEAD and POST | 405 from the router, `Allow: GET, HEAD, POST` |
+| `AUTH_SITE_URL` unset | 503 `registration is not configured` |
 
-The link's `redirect_to` is ignored. The redirect target is always the gateway's own
-`AUTH_SITE_URL`, never a query value. HEAD is refused because a link scanner's HEAD prefetch
-would otherwise consume the single-use token.
+The page handler holds no GoTrue client. It sets `Cache-Control: no-store`,
+`Referrer-Policy: no-referrer` and a `Content-Security-Policy` that allows one inline script by
+its hash. The script blocks a second submit of the form. The page reveals nothing beyond the
+token. `redirect_to` and every other query value are ignored and never rendered. The page shape
+is fixed for the signup link; whether other links can reuse it is unmeasured.
+
+**`POST /auth/verify`** (the act), form `token=…&type=signup`, outside `/api/`:
+
+| Outcome | Answer |
+|---|---|
+| GoTrue `/verify` 200 | 303 to `<AUTH_SITE_URL>/?verified=1`; one contact hand-off |
+| a form that does not parse, is over 1 KiB, is not `application/x-www-form-urlencoded`, or carries an empty or over-256-byte `token` or a `type` other than `signup` | 303 to `<AUTH_SITE_URL>/?verify=failed`; GoTrue is not called |
+| a GoTrue refusal, or GoTrue unreachable | 303 to `<AUTH_SITE_URL>/?verify=failed`, logged at WARN (the upstream status, or the error) |
+| any method but GET, HEAD and POST | 405 from the router, `Allow: GET, HEAD, POST`; GoTrue is not called |
+| any method but POST, sent to the handler | 405 `{"error":"method not allowed"}`, `Allow: POST`; GoTrue is not called |
+| `AUTH_SITE_URL` unset | 503 `registration is not configured` |
+
+The handler reads the token from the form body only, never from the URL, and sets
+`Cache-Control: no-store`. The route sets no CORS headers and carries no CSRF token: it uses no
+cookie, and whoever holds the token can already post it. The redirect target is always the
+gateway's own `AUTH_SITE_URL`.
 
 **`POST /api/tenancy/v1/workspaces`:** 201 with `{tenant:{id,name,kind}, user:{id,role}}`;
 400 for a malformed body, a name outside 1–200 characters, or a `kind` other than `firm` or
@@ -455,7 +473,7 @@ otherwise. The tenant id is a UUIDv5 of the caller's subject; the membership gua
   sign-out or a staff cut-off of the account deletes it with the account's other sessions
   (see Revocation and Cutting an account off). Its tokens never reach anyone.
 
-**Accepted risks of a link that verifies on GET:**
+**Accepted risks of the emailed link:**
 - *First registrant's answers.* GoTrue does not update an unconfirmed user on a repeat signup,
   so the answers (`user_metadata.registration`) of the **first** registrant stay, whoever
   confirms. A victim who registers after an attacker provisions the attacker's workspace
@@ -467,12 +485,10 @@ otherwise. The tenant id is a UUIDv5 of the caller's subject; the membership gua
   registers, their 202 is identical, and their click confirms the **attacker's** password.
   The attacker then owns a verified account at the victim's address. No password-recovery
   path exists yet, so the victim cannot take it back.
-- *Link scanners.* A mail scanner that prefetches links with GET consumes the single-use
-  token, and the victim's own click lands on `?verify=failed`. A scanner can also confirm an
-  attacker's pre-registration with no human click.
-- The smallest change that closes the scanner half: `GET /auth/verify` renders a page with
-  one form button, and `POST /auth/verify` verifies. The hijack half also needs password
-  recovery, or a delete-and-re-create of an unconfirmed user on a repeat signup.
+- *Link scanners.* A mail scanner that prefetches the link with GET or HEAD gets the confirm
+  page and spends nothing. The hijack
+  half above stays: closing it needs password recovery, or a delete-and-re-create of an
+  unconfirmed user on a repeat signup.
 
 **Accepted risks of user-editable metadata:**
 - *Self-asserted consent.* A user can edit their own GoTrue `user_metadata`, so
@@ -1237,7 +1253,7 @@ E=6c864094-6a06-452f-8495-be77d8a94fe7
 | U3 | when registration opens: after AUTH-04 and AUTH-16 merge | auth `GOTRUE_DISABLE_SIGNUP=false`, landing `VITE_REGISTRATION_OPEN=true` |
 | U4 | after U1–U3 have deployed | none: an end-to-end check by hand; step 5 may raise `AUTH_REGISTER_MIN_RESPONSE` |
 
-Until U1 deploys, production's `POST /auth/register` and `GET /auth/verify` answer 503
+Until U1 deploys, production's `POST /auth/register`, `GET /auth/verify` and `POST /auth/verify` answer 503
 `registration is not configured`. Between U1 and U3, register answers 503
 `registration is closed`. Neither affects any other route. From U1 on, a free-mail address
 answers 400 with the policy message, also while signup is closed.
@@ -1293,8 +1309,9 @@ empty commit instead.
    answers 202 `{"status":"verification_pending"}`, after at least the minimum (`2s` by default).
 2. The mail arrives from `no-reply@ascomply.com`. Its link starts
    `https://api.ascomply.com/auth/verify?token=`.
-3. Opening the link lands on `https://www.ascomply.com/?verified=1`. Opening it a second
-   time lands on `?verify=failed`.
+3. Opening the link shows the confirm page. Clicking "Confirm my email" lands on
+   `https://www.ascomply.com/?verified=1`. Opening the link again and clicking lands on
+   `?verify=failed`.
 4. `curl -sS -X POST https://api.ascomply.com/auth/register -H 'Content-Type: application/json' -d '{"email":"someone@gmail.com","password":"<12+ characters>"}'`
    answers 400 `{"error":"a business email address is required; personal email providers are not accepted"}`.
 5. Time a real signup. A client-side `curl` time cannot separate GoTrue's time from the minimum, so read the gateway's

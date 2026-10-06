@@ -807,25 +807,25 @@ test('EXTR12-E2E-07 (AC-4, W-6): the fields pane keeps its floor and its two col
 //
 // THE NINE PINNED SPECS this story's sweep named, and where each stands. All nine were moved by
 // the earlier subtasks; this row is the ledger, not a second edit:
-//   EXTR11-E2E-02a (:3155)  UPDATED in 13-07 -- its `extraction-field-` sweep is bounded to the
+//   EXTR11-E2E-02a  UPDATED in 13-07 -- its `extraction-field-` sweep is bounded to the
 //                           header vocabulary (`headerNamesA`), so a line cell cannot join it.
-//   EXTR12-E2E-07 (:5307)   UPDATED in 13-07 -- same bound at the pane's 470px floor
+//   EXTR12-E2E-07   UPDATED in 13-07 -- same bound at the pane's 470px floor
 //                           (`headerNamesB`); the grid sits BELOW the two-column grid and is not
 //                           a third column, which EXTR13-LAYOUT-03 below asserts from the front.
-//   EXTR12-E2E-01 (:3569)   UPDATED in 13-02/07 -- the per-field pill loop excludes line names.
-//   EXTR11-E2E-04/04b (:2858) UPDATED in 13-02 -- the wire body's field SET is the widened
+//   EXTR12-E2E-01   UPDATED in 13-02/07 -- the per-field pill loop excludes line names.
+//   EXTR11-E2E-04/04b UPDATED in 13-02 -- the wire body's field SET is the widened
 //                           twenty-three, listed literally as the only deployed oracle for it.
-//   EXTR11-E2E-11 (:4611)   UPDATED in 13-02/07 per D-13; the artboard table is since deleted.
-//   EXTR12-E2E-06 (:4998)   UPDATED in 13-02 -- the `extraction-marker-` sweep resolves BY NAME
+//   EXTR11-E2E-11   UPDATED in 13-02/07 per D-13; the artboard table is since deleted.
+//   EXTR12-E2E-06   UPDATED in 13-02 -- the `extraction-marker-` sweep resolves BY NAME
 //                           to the three settled fields, so a line marker cannot stand in.
-//   EXTR11-E2E-02 (:3257)   DELIBERATELY UNCHANGED -- it measures the shell's two flex siblings
+//   EXTR11-E2E-02   DELIBERATELY UNCHANGED -- it measures the shell's two flex siblings
 //                           tiling the body. The grid is a child of the fields pane's scrolling
 //                           body and adds no pane, so the tiling claim is untouched.
-//   EXTR11-E2E-10 (:3328)   DELIBERATELY UNCHANGED -- the pane's 470px floor is declared on
+//   EXTR11-E2E-10   DELIBERATELY UNCHANGED -- the pane's 470px floor is declared on
 //                           PANE, not derived from its content, and the grid absorbs its own
 //                           overflow in `line-item-scroll` (EXTR13-LAYOUT-01), so it cannot
 //                           raise that floor.
-//   EXTR11-E2E-02b (:3395)  DELIBERATELY UNCHANGED -- it asserts the pane body is the scroller
+//   EXTR11-E2E-02b  DELIBERATELY UNCHANGED -- it asserts the pane body is the scroller
 //                           and the header does not move. The grid adds rows INSIDE that body,
 //                           which strengthens its own precondition rather than changing it.
 //

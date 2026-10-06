@@ -20,11 +20,17 @@ const resendAccepted = `{"status":"accepted"}`
 // resend posts one resend through the gateway handler and times the answer.
 func resend(t *testing.T, gw, email string) (int, string, time.Duration) {
 	t.Helper()
+	return postMailRequest(t, gw+"/auth/resend-verification", email)
+}
+
+// postMailRequest posts {"email"} to a mail-link handler and times the answer.
+func postMailRequest(t *testing.T, endpoint, email string) (int, string, time.Duration) {
+	t.Helper()
 	payload, _ := json.Marshal(map[string]string{"email": email})
 	start := time.Now()
-	resp, err := noRedirect.Post(gw+"/auth/resend-verification", "application/json", bytes.NewReader(payload))
+	resp, err := noRedirect.Post(endpoint, "application/json", bytes.NewReader(payload))
 	if err != nil {
-		t.Fatalf("POST /auth/resend-verification: %v", err)
+		t.Fatalf("POST %s: %v", endpoint, err)
 	}
 	defer resp.Body.Close()
 	elapsed := time.Since(start)

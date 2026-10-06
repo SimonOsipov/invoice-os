@@ -48,3 +48,10 @@ func mockMemberRoute(dsn string, logger *slog.Logger) http.Handler {
 		return db.GrantMembership(ctx, dsn, db.MemberGrant(g))
 	}, logger)
 }
+
+// mockInvitationTokenRoute is a stub: the implementation binds the token setter to the owner DSN.
+func mockInvitationTokenRoute(dsn string, logger *slog.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not implemented", http.StatusNotImplemented)
+	})
+}

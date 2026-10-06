@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"go/ast"
 	"go/parser"
@@ -425,5 +426,132 @@ func TestResetPasswordRoute_OpeningNeverReachesGoTrue(t *testing.T) {
 	}
 	if got, want := seen(), []string{"POST /verify", "PUT /user", "POST /logout"}; !slices.Equal(got, want) {
 		t.Errorf("GoTrue saw %v, want %v", got, want)
+	}
+}
+
+// Invitee registration and /auth/register spend one per-IP budget: main hands the register throttle on.
+func TestGatewayMainSharesTheRegisterBudgetWithInvitations(t *testing.T) {
+	_, body := parseMain(t)
+
+	regVar, previewerVar, regAt, invAt := "", "", -1, -1
+	var invCalls []*ast.CallExpr
+	var previewerCall *ast.CallExpr
+	for i, st := range body.List {
+		if as, ok := st.(*ast.AssignStmt); ok && len(as.Rhs) == 1 {
+			if call, ok := isCallTo(as.Rhs[0], "", "registrationHandlers"); ok && len(call.Args) == 5 && len(as.Lhs) == 1 {
+				regVar, regAt = types.ExprString(as.Lhs[0]), i
+			}
+			if call, ok := isCallTo(as.Rhs[0], "gateway", "NewHTTPInvitationPreviewer"); ok && len(as.Lhs) == 1 {
+				previewerVar, previewerCall = types.ExprString(as.Lhs[0]), call
+			}
+		}
+		ast.Inspect(st, func(n ast.Node) bool {
+			if call, ok := n.(*ast.CallExpr); ok {
+				if _, ok := isCallTo(call, "", "invitationHandlers"); ok {
+					invCalls = append(invCalls, call)
+					invAt = i
+				}
+			}
+			return true
+		})
+	}
+	if regVar == "" {
+		t.Fatal("main has no top-level `x := registrationHandlers(...)` with 5 arguments")
+	}
+	if len(invCalls) != 1 {
+		t.Fatalf("main calls invitationHandlers %d times, want exactly once", len(invCalls))
+	}
+	call := invCalls[0]
+	if len(call.Args) != 6 {
+		t.Fatalf("invitationHandlers call has %d arguments, want 6", len(call.Args))
+	}
+	if invAt <= regAt {
+		t.Errorf("invitationHandlers is statement %d, registrationHandlers %d; the throttle is read before it exists", invAt, regAt)
+	}
+	for i, want := range map[int]string{
+		0: `probed["auth"]`,
+		1: "siteURL",
+		2: "registerMinResponse",
+		3: regVar + ".RegisterPerIP",
+		5: "app.Logger",
+	} {
+		if got := types.ExprString(call.Args[i]); got != want {
+			t.Errorf("invitationHandlers argument %d = %s, want %s", i+1, got, want)
+		}
+	}
+	if previewerCall == nil {
+		t.Fatal("main has no top-level `x := gateway.NewHTTPInvitationPreviewer(...)`")
+	}
+	if got := types.ExprString(call.Args[4]); got != previewerVar {
+		t.Errorf("invitationHandlers previewer argument = %s, want %s", got, previewerVar)
+	}
+	if len(previewerCall.Args) != 3 || types.ExprString(previewerCall.Args[0]) != `routed["tenancy"]` || types.ExprString(previewerCall.Args[2]) != "gatewayToken" {
+		t.Errorf("NewHTTPInvitationPreviewer args = %v, want routed[\"tenancy\"], a client and gatewayToken", previewerCall.Args)
+	}
+}
+
+// main's patterns for the two invitation routes, mounted on a mux behind the gateway's CORS layer.
+func TestInvitationRoutes_PreflightAnswersCORS(t *testing.T) {
+	const origin = "https://app.example.test"
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	sites, _ := mainRoutes(t, src)
+	var patterns []string
+	for _, s := range sites {
+		if strings.Contains(s.pattern, " /auth/invitation") {
+			patterns = append(patterns, s.pattern)
+		}
+	}
+	if len(patterns) != 4 {
+		t.Fatalf("main registers %d invitation routes %v, want 4 (POST and OPTIONS of /auth/invitation and /auth/invitation/register)", len(patterns), patterns)
+	}
+
+	authURL, calls := fakeAuth(t)
+	site, _ := url.Parse("https://site.example")
+	perIP := gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now)
+	preview := func(context.Context, string) (gateway.InvitationPreview, error) {
+		return gateway.InvitationPreview{Workspace: "Obi Partners", Role: "reviewer", Email: "tunde@obi.test"}, nil
+	}
+	invitation, register := invitationHandlers(authURL, site, 0, perIP, preview, slog.New(slog.DiscardHandler))
+	withCORS := gateway.CORS([]string{origin})
+	mux := http.NewServeMux()
+	for _, p := range patterns {
+		if strings.HasSuffix(p, "/register") {
+			mux.Handle(p, withCORS(register))
+		} else {
+			mux.Handle(p, withCORS(invitation))
+		}
+	}
+
+	for _, path := range []string{"/auth/invitation", "/auth/invitation/register"} {
+		req := httptest.NewRequest(http.MethodOptions, path, nil)
+		req.Header.Set("Origin", origin)
+		req.Header.Set("Access-Control-Request-Method", "POST")
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNoContent {
+			t.Errorf("OPTIONS %s = %d, want 204", path, rec.Code)
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != origin {
+			t.Errorf("OPTIONS %s Access-Control-Allow-Origin = %q, want %q", path, got, origin)
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(got, "POST") {
+			t.Errorf("OPTIONS %s Access-Control-Allow-Methods = %q, want POST granted", path, got)
+		}
+	}
+
+	// Positive pair: the POST behind the same wrap answers with the grant and reaches its handler.
+	req := httptest.NewRequest(http.MethodPost, "/auth/invitation", strings.NewReader(`{"token":"T"}`))
+	req.Header.Set("Origin", origin)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Header().Get("Access-Control-Allow-Origin") != origin {
+		t.Errorf("POST /auth/invitation = %d with Access-Control-Allow-Origin %q, want 200 and %q: %s",
+			rec.Code, rec.Header().Get("Access-Control-Allow-Origin"), origin, rec.Body.String())
+	}
+	if got := calls(); len(got) != 0 {
+		t.Errorf("a preflight or preview reached GoTrue: %v", got)
 	}
 }

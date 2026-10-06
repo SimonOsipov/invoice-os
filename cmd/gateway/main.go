@@ -277,6 +277,16 @@ func gatewayHandlers(
 // registration holds the public registration handlers main mounts outside /api/.
 type registration struct {
 	Register, Verify, DemoRequest, ResendVerification, RequestPasswordReset http.Handler
+	// RegisterPerIP is stubbed: the implementation stores the register throttle here, nil when unconfigured.
+	RegisterPerIP *gateway.SignInThrottle
+}
+
+// invitationHandlers is a stub: the implementation builds the preview and invitee-registration handlers.
+func invitationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, perIP *gateway.SignInThrottle, preview gateway.InvitationPreviewer, log *slog.Logger) (invitation, register http.Handler) {
+	stub := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not implemented", http.StatusNotImplemented)
+	})
+	return stub, stub
 }
 
 // newJWKSClient builds the JWKS fetch client.

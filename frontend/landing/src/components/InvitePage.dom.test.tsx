@@ -327,6 +327,52 @@ describe('the register view', () => {
     expect(fetchMock, 'the preview is not repeated').toHaveBeenCalledTimes(1)
   })
 
+  it('invitePage_registerBackClearsThePasswordAndItsError: a typed password is gone after Back', async () => {
+    stubFetch()
+    await mount()
+    await toRegisterView()
+    await type(labelled('Password'), PASSWORD)
+    expect(labelled('Password').value, 'control: the password was typed').toBe(PASSWORD)
+
+    await click(button('Back'))
+    await click(button('Create account'))
+
+    expect(headings(), 'the register view reopened').toEqual(['Create your account'])
+    expect(labelled('Password').value).toBe('')
+  })
+
+  it('invitePage_registerBackClearsThePasswordAndItsError: the empty-password error is gone after Back', async () => {
+    stubFetch()
+    await mount()
+    await toRegisterView()
+    await submit()
+    expect(alerts(), 'control: the error is showing before Back').toEqual(['Choose a password.'])
+
+    await click(button('Back'))
+    await click(button('Create account'))
+
+    expect(headings(), 'the register view reopened').toEqual(['Create your account'])
+    expect(alerts()).toEqual([])
+    const password = labelled('Password')
+    expect(password.getAttribute('aria-invalid')).toBe('false')
+    expect(password.classList.contains('dm-err')).toBe(false)
+  })
+
+  it('invitePage_registerBackClearsThePasswordAndItsError: a refused submit leaves no error behind after Back', async () => {
+    stubFetch({ register: () => json(400, { error: 'Password should be at least 6 characters.' }) })
+    await mount()
+    await toRegisterView()
+    await submit(PASSWORD)
+    expect(alerts(), 'control: the refusal is showing before Back').toEqual(['Password should be at least 6 characters.'])
+
+    await click(button('Back'))
+    await click(button('Create account'))
+
+    expect(headings(), 'the register view reopened').toEqual(['Create your account'])
+    expect(alerts(), 'a stale server error must not greet the reopened form').toEqual([])
+    expect(labelled('Password').value).toBe('')
+  })
+
   it('invitePage_registerSubmitDisablesWhilePending', async () => {
     let finish!: () => void
     const pending = new Promise<Response>((res) => {

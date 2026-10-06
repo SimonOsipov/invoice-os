@@ -1787,6 +1787,38 @@ describe('RESEND-07-02 — serverRefusedAddresses (D5 layer 2)', () => {
     expect(serverRefusedAddresses(msg, [tag, ctl, 'a\u00ffb@x.com', 'ok@x.com'])).toEqual([tag, ctl])
   })
 
+  it('serverRefusedAddresses decodes newline, return, tab and ASCII hex escapes', () => {
+    // Go: fmt.Sprintf("%q", "a\n\r\tb\x00\x1f\x7f@x.com")
+    const ctl = 'a\n\r\tb\x00\x1f\x7f@x.com'
+
+    expect(serverRefusedAddresses(`${PREFIX}"a\\n\\r\\tb\\x00\\x1f\\x7f@x.com"`, [ctl])).toEqual([ctl])
+  })
+
+  it('serverRefusedAddresses decodes code points at the surrogate gap edges', () => {
+    // Go prints each of these unprintable BMP code points as \uXXXX.
+    const d7ff = 'a퟿b@x.com'
+    const e000 = 'ab@x.com'
+    const msg = `${PREFIX}"a\\ud7ffb@x.com", "a\\ue000b@x.com", "a\\U0010ffffb@x.com"`
+
+    expect(serverRefusedAddresses(msg, [d7ff, e000, 'a\u{10ffff}b@x.com'])).toEqual([d7ff, e000, 'a\u{10ffff}b@x.com'])
+  })
+
+  it('serverRefusedAddresses drops tokens Go never prints and bytes JS cannot hold', () => {
+    const chips = ['a\\qb@x.com', 'aqb@x.com', 'a\u0000b@x.com', 'a\ud800b@x.com', 'a\udfffb@x.com', 'a\u0080b@x.com', 'aÿb@x.com']
+    const tokens = [
+      '"a\\qb@x.com"', // unknown escape
+      '"a\\u12b@x.com"', // short \u
+      '"a\\U00110000b@x.com"', // past U+10FFFF
+      '"a\\ud800b@x.com"', // surrogate
+      '"a\\udfffb@x.com"',
+      '"a\\x80b@x.com"', // Go's form of the raw byte 0x80
+      '"a\\xffb@x.com"',
+    ]
+
+    expect(serverRefusedAddresses(`${PREFIX}${tokens.join(', ')}`, chips)).toEqual([])
+    expect(serverRefusedAddresses(`${PREFIX}${tokens.join(', ')}, "ok@x.com"`, [...chips, 'ok@x.com'])).toEqual(['ok@x.com'])
+  })
+
   it('serverRefusedAddresses ignores every other message', () => {
     expect(serverRefusedAddresses(`bad request: ${PREFIX}"a@x.ng"`, ['a@x.ng'])).toEqual([])
     expect(serverRefusedAddresses('invalid email address:"a@x.ng"', ['a@x.ng'])).toEqual([])

@@ -22,6 +22,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError, type AsyncStatus } from '@invoice-os/api-client'
 import {
+  ACCESS_ROLES,
+  CAPABILITY_FOOTNOTE,
+  CAPABILITY_ROWS,
+  CLIENT_USERS_COPY,
+  INVITE_ADMIN_ONLY,
   PROTECTED_ADMIN_NOTE,
   replaceMember,
   setMembershipStatus,
@@ -109,12 +114,14 @@ function Harness({
   rolesState,
   rolesError,
   refetchRoles,
+  mode,
 }: {
   initial: Member[]
   /** The spy `listInvitations` / `sendInvitations` / `resendInvitation` call through. */
   authedFetch?: AuthedFetch
   /** Filled on render: lets a test replace the roster after it landed. */
   controls?: { current: HarnessControls | null }
+  mode?: 'firm' | 'inhouse'
   membersState?: AsyncStatus
   membersError?: ApiError | null
   refetchMembers?: () => void
@@ -133,7 +140,7 @@ function Harness({
 
   const ctx = {
     members,
-    mode: 'firm',
+    mode: mode ?? 'firm',
     policies: [],
     policiesState: 'ready',
     policiesError: null,
@@ -492,7 +499,7 @@ describe('APPR-10-04 QA AC-1: the Access role filter is untouched by WfSelect\'s
 
     // The resting paint, not merely "not the disabled paint" — an unconditional spread is caught
     // by the first two, a defaulted-away resting style only by these.
-    expect(select.style.backgroundColor, 'the filter lost its resting background').toBe('var(--bg-1)')
+    expect(select.style.backgroundColor, 'the filter lost its resting background').toBe('var(--bg-2)')
     expect(select.style.color, 'the filter lost its resting foreground').toBe('var(--fg-1)')
     expect(select.style.cursor, 'the filter paints itself dead').toBe('pointer')
 
@@ -885,8 +892,8 @@ describe('RESEND-07-04', () => {
       const errors = await screen.findAllByTestId('member-status-error')
       expect(errors, 'one error, on one row').toHaveLength(1)
       expect(errors[0].textContent, 'verbatim').toBe(ERR_DAILY_LIMIT)
-      expect(inviteRowFor('zed@x.ng').nextElementSibling, "under that row").toBe(errors[0].parentElement)
-      expect(inviteRowFor('yan@x.ng').nextElementSibling?.querySelector('[data-testid="member-status-error"]') ?? null).toBeNull()
+      expect(inviteRowFor('zed@x.ng').nextElementSibling, "under that row").toBe(errors[0])
+      expect(inviteRowFor('yan@x.ng').nextElementSibling?.getAttribute('data-testid')).not.toBe('member-status-error')
       expect(screen.queryByTestId('members-invites-error'), 'a 429 belongs to the row, not the list').toBeNull()
 
       clickResendOn(inviteRowFor('zed@x.ng'))
@@ -1312,5 +1319,207 @@ describe('RESEND-07-04', () => {
       expect(within(inviteRowFor('b@x.ng')).getByText('Email not sent')).toBeTruthy()
       expect(screen.queryByTestId('invite-modal')).toBeNull()
     })
+  })
+})
+
+describe('the search box', () => {
+  it('the wrapper carries pf-chipbox so the box rings once', () => {
+    render(<Harness initial={[member(), otherMember()]} />)
+    expect(screen.getByLabelText('Search members').parentElement!.className).toBe('pf-chipbox')
+  })
+})
+
+describe('the roster table chrome', () => {
+  it('a search that matches nobody renders members-no-match inside members-table, under the head', () => {
+    render(<Harness initial={[member(), otherMember()]} />)
+
+    fireEvent.change(screen.getByLabelText('Search members'), { target: { value: 'zzz-nobody' } })
+
+    const table = screen.getByTestId('members-table')
+    const noMatch = within(table).getByTestId('members-no-match')
+    expect(noMatch.textContent).toBe('No members match this search.')
+    expect(within(table).queryAllByTestId('member-row')).toHaveLength(0)
+    expect(within(table).getByText('Person'), 'the head must stay over the no-match row').toBeTruthy()
+    const head = table.firstElementChild as HTMLElement
+    expect(head.contains(noMatch)).toBe(false)
+    expect(head.nextElementSibling).toBe(noMatch)
+  })
+
+  it('a failed suspend renders member-status-error as a full-width red strip under the row', async () => {
+    const m = member()
+    mockedSetMembershipStatus.mockRejectedValue(new ApiError('http', REASON, 409))
+
+    render(<Harness initial={[m, otherMember()]} />)
+    const row = rowFor('Ada Person')
+    suspendFromRowMenu(row)
+
+    const strip = await screen.findByTestId('member-status-error')
+    expect(strip.textContent).toBe(REASON)
+    expect(strip.style.background).toBe('var(--status-red-bg)')
+    expect(strip.style.borderTop).toBe('1px solid var(--status-red-border)')
+    expect(strip.style.color).toBe('var(--status-red-text)')
+    expect(strip.style.padding).toBe('7px 16px')
+  })
+
+  it('a roleless workflow-roles cell renders --fg-3, never --fg-4', () => {
+    render(<Harness initial={[member(), otherMember()]} />)
+
+    const cell = rowFor('Ada Person').children[2] as HTMLElement
+    expect(cell.style.color).toBe('var(--fg-3)')
+  })
+})
+
+describe('the toolbar and the invite control', () => {
+  it('for a non-admin viewer Invite people is a disabled 36px primary that states its reason, right-aligned', () => {
+    render(<Harness initial={[member(), otherMember()]} />)
+
+    const invite = screen.getByTestId('members-invite') as HTMLButtonElement
+    const reason = screen.getByTestId('members-invite-reason')
+    expect(invite.disabled).toBe(true)
+    expect(invite.className).toContain('v2-btn-primary')
+    expect(invite.style.height).toBe('36px')
+    expect(invite.style.opacity).toBe('0.45')
+    expect(invite.style.cursor).toBe('not-allowed')
+    expect(invite.style.filter, 'the hover lift must stay neutralised').toBe('none')
+    expect(invite.getAttribute('aria-describedby')).toBe(reason.id)
+    expect(reason.textContent).toBe(INVITE_ADMIN_ONLY)
+    expect(reason.style.fontSize).toBe('11.5px')
+    expect(reason.style.color).toBe('var(--fg-3)')
+    expect(reason.style.textAlign).toBe('right')
+  })
+
+  it('the Access role filter is auto-width, as the prototype draws it', () => {
+    render(<Harness initial={[member(), otherMember()]} />)
+
+    const wrapper = screen.getByLabelText('Access role') as HTMLElement
+    expect(wrapper.tagName).toBe('LABEL')
+    expect(wrapper.style.width).toBe('')
+  })
+})
+
+describe('the roster table chrome, head to rows', () => {
+  it('the head has no fill and every row repeats the head tracks under a top border', () => {
+    render(<Harness initial={[member(), otherMember()]} />)
+
+    const table = screen.getByTestId('members-table')
+    const head = table.firstElementChild as HTMLElement
+    const rows = within(table).getAllByTestId(/^(member|invite)-row$/)
+    expect(rows.length).toBeGreaterThan(1)
+    expect(head.style.background, 'the head must not carry a fill').toBe('')
+    expect(head.style.gridTemplateColumns).toBe('minmax(220px,1.4fr) 110px minmax(150px,1fr) 120px 36px')
+    expect(head.style.gap).toBe('12px')
+    expect(head.style.padding).toBe('11px 16px')
+    for (const row of rows) {
+      expect(row.style.gridTemplateColumns).toBe(head.style.gridTemplateColumns)
+      expect(row.style.gap).toBe('12px')
+      expect(row.style.padding).toBe('12px 16px')
+      expect(row.style.borderTop).toBe('1px solid var(--line-1)')
+    }
+  })
+
+  it('a role filter that matches nobody renders members-no-match under the head and keeps the matrix', () => {
+    render(<Harness initial={[member(), otherMember()]} />)
+    expect(within(screen.getByTestId('members-table')).getAllByTestId(/^(member|invite)-row$/)).toHaveLength(2)
+
+    fireEvent.change(screen.getByLabelText('Access role').querySelector('select')!, { target: { value: 'reviewer' } })
+
+    const table = screen.getByTestId('members-table')
+    expect(within(table).queryAllByTestId(/^(member|invite)-row$/)).toHaveLength(0)
+    expect((table.firstElementChild as HTMLElement).nextElementSibling).toBe(within(table).getByTestId('members-no-match'))
+    expect(screen.getByTestId('role-matrix-toggle'), 'a filter must not hide the capability matrix').toBeTruthy()
+  })
+
+  it('a search on a roster of one keeps the table and its no-match row, never the "just you" card', () => {
+    render(<Harness initial={[member()]} />)
+    expect(screen.getByText('Just you at the firm'), 'the roster-of-one floor').toBeTruthy()
+
+    fireEvent.change(screen.getByLabelText('Search members'), { target: { value: 'zzz-nobody' } })
+
+    expect(screen.queryByText('Just you at the firm')).toBeNull()
+    expect(within(screen.getByTestId('members-table')).getByTestId('members-no-match')).toBeTruthy()
+  })
+})
+
+describe('the capability matrix card', () => {
+  it('the toggle sits in the card; the body opens inside it as a table with named rows, columns and cells', () => {
+    render(<Harness initial={[member(), otherMember()]} />)
+
+    const toggle = screen.getByTestId('role-matrix-toggle')
+    const card = toggle.parentElement as HTMLElement
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByTestId('role-matrix')).toBeNull()
+    expect(card.style.background).toBe('var(--bg-2)')
+    expect(card.style.border).toBe('1px solid var(--line-1)')
+    expect(card.style.borderRadius).toBe('var(--radius-md)')
+    expect(toggle.style.width).toBe('100%')
+
+    fireEvent.click(toggle)
+
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    const body = screen.getByTestId('role-matrix')
+    expect(card.contains(body)).toBe(true)
+    expect(toggle.getAttribute('aria-controls')).toBe(body.id)
+
+    const table = within(body).getByRole('table', { name: 'What can each role do?' })
+    expect(within(table).getAllByRole('columnheader').map((c) => c.textContent)).toEqual(['', ...ACCESS_ROLES.map((r) => r.label)])
+    const rows = within(table).getAllByRole('row')
+    expect(rows[0].children.length, 'the header row has as many cells as a body row').toBe(rows[1].children.length)
+    expect(rows).toHaveLength(CAPABILITY_ROWS.length + 1)
+    rows.forEach((row) => expect(row.style.gridTemplateColumns).toBe('minmax(0,1fr) 90px 90px 90px'))
+    CAPABILITY_ROWS.forEach((cap, i) => {
+      const row = rows[i + 1]
+      expect(within(row).getByRole('rowheader').textContent).toBe(cap.label)
+      const cells = within(row).getAllByRole('cell')
+      expect(cells.map((c) => c.textContent)).toEqual(ACCESS_ROLES.map((r) => (cap[r.id] ? 'Yes' : 'No')))
+    })
+    expect(body.textContent).toContain(CAPABILITY_FOOTNOTE)
+
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByTestId('role-matrix')).toBeNull()
+  })
+
+  it('every "No" cell draws the prototype cross: 11px, 2.4 stroke', () => {
+    render(<Harness initial={[member(), otherMember()]} />)
+    fireEvent.click(screen.getByTestId('role-matrix-toggle'))
+
+    const nos = within(screen.getByTestId('role-matrix')).getAllByRole('cell').filter((c) => c.textContent === 'No')
+    expect(nos.length).toBeGreaterThan(0)
+    for (const cell of nos) {
+      const svg = cell.querySelector('svg')!
+      expect(svg.getAttribute('width')).toBe('11')
+      expect(svg.getAttribute('stroke-width')).toBe('2.4')
+    }
+  })
+})
+
+describe('the Client users placeholder', () => {
+  it('firm gets the dashed NOT BUILT card with the stored copy', () => {
+    render(<Harness initial={[member(), otherMember()]} />)
+
+    const card = screen.getByTestId('client-users-card')
+    expect(card.textContent).toContain(CLIENT_USERS_COPY)
+    expect(within(card).getByText('NOT BUILT')).toBeTruthy()
+    expect(card.style.border).toBe('1px dashed var(--line-2)')
+    expect(card.style.background).toBe('var(--bg-1)')
+    expect(card.style.padding).toBe('14px 16px')
+  })
+
+  it('in-house renders no node for it', () => {
+    render(<Harness mode="inhouse" initial={[member(), otherMember()]} />)
+
+    expect(screen.getByTestId('role-matrix-toggle'), 'the matrix is the population floor under the absence').toBeTruthy()
+    expect(screen.queryByTestId('client-users-card')).toBeNull()
+  })
+
+  it('members_unassignedNoticeSitsBetweenTheIntroAndTheToolbar', () => {
+    const unheld: Role = { key: 'r1', title: 'Finance Approver', desc: '', members: [] }
+    render(<Harness initial={[member({ id: 'u1' }), member({ id: 'u2', email: 'b@x.ng' }), member({ id: 'u3', email: 'c@x.ng' })]} roles={[unheld]} />)
+    const notice = screen.getByTestId('members-unassigned')
+    const toolbar = screen.getByLabelText('Search members').closest('div[style*="display: flex"]') as HTMLElement
+    const intro = notice.parentElement!.querySelector('p') as HTMLElement
+    const order = (a: Node, b: Node) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(order(intro, notice), 'intro, then notice').toBe(true)
+    expect(order(notice, toolbar), 'notice, then toolbar').toBe(true)
   })
 })

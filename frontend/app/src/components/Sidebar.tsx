@@ -1,7 +1,7 @@
 // Sidebar — brand, company switcher (firm) / single-company card (in-house), nav list
 // with badges, user footer. The workspace type is fixed by the signed-in persona (no
 // firm/in-house toggle — see App.tsx), so this renders one workspace, not a switch.
-// Ported from Platform.dc.html ~L40-117 (markup) + slices of `renderVals()` (~L1284-1310).
+// Ported from Platform.dc.html (sidebar markup and `renderVals()`).
 //
 // [dashboard-scope-per-client] (persona-handoff-fix step 2): the Invoices/Approvals nav
 // badges used to read active.failing/active.pending — a SAMPLE overlay (lib/clients.ts)
@@ -134,22 +134,22 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
 
   // Sign out (M3-07-03). Replaces the old decorative gear: the gear read as
   // "settings" (already a nav item) and had no handler — this footer slot now holds
-  // one real action. Default/hover color live in `.pf-signout` (platform.css) so the
-  // :hover token can win (an inline color would beat the hover rule).
+  // one real action. Default/hover color and fill live in `.pf-signout` (platform.css); an
+  // inline color or background would beat the :hover rule.
   const signOutButton = (
     <button
       onClick={ctx.signOut}
-      className="pf-btn pf-signout"
+      className="pf-signout"
       aria-label="Sign out"
       title="Sign out"
-      style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, padding: 0, border: 0, borderRadius: 'var(--radius-sm)', background: 'transparent', cursor: 'pointer' }}
+      style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, padding: 0, border: 0, borderRadius: 'var(--radius-sm)', cursor: 'pointer' }}
     >
       <Icon paths={['M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4', 'M16 17l5-5-5-5', 'M21 12H9']} size={16} />
     </button>
   )
 
   return (
-    <aside className="pf-sidebar" style={{ width: 252, flex: 'none', background: 'var(--bg-2)', borderRight: '1px solid var(--line-1)', display: 'flex', flexDirection: 'column' }}>
+    <aside className="pf-sidebar asc-dark" style={{ width: 252, flex: 'none', background: 'var(--surface)', borderRight: '1px solid var(--surface-panel-border)', display: 'flex', flexDirection: 'column' }}>
       <div style={{ padding: '16px 16px 14px', borderBottom: '1px solid var(--line-1)' }}>
         <a href="#" style={{ display: 'flex', alignItems: 'center', gap: 9, color: 'var(--fg-1)', marginBottom: 14 }}>
           <BrandMark size={20} />
@@ -162,11 +162,11 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
         {/* company switcher (firm mode) */}
         {isFirm && (
           <div style={{ position: 'relative' }}>
-            {/* no pf-btn: its !important pill radius beats radius-input (switcher_carriesNoPillButtonClass) */}
+            {/* no pf-btn: its !important radius beats radius-input (switcher_carriesNoPillButtonClass) */}
             <button
               onClick={ctx.toggleSwitcher}
               data-testid="company-switcher"
-              style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-1)', border: `1px solid ${switcherOpen ? 'var(--action)' : 'var(--line-2)'}`, borderRadius: 'var(--radius-input)', padding: '8px 10px', cursor: 'pointer', textAlign: 'left', transition: 'background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out)' }}
+              style={{ color: 'var(--fg-1)', width: '100%', display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-1)', border: `1px solid ${switcherOpen ? 'var(--action)' : 'var(--line-2)'}`, borderRadius: 'var(--radius-input)', padding: '8px 10px', cursor: 'pointer', textAlign: 'left', transition: 'background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out)' }}
             >
               <span style={{ flex: 'none', width: 28, height: 28, borderRadius: 'var(--radius-sm)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700 }}>{active.initials}</span>
               <span style={{ flex: 1, minWidth: 0 }}>
@@ -176,7 +176,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
               <span style={{ flex: 'none', color: 'var(--fg-3)', transform: switcherOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 160ms' }}>{chevDownGlyph}</span>
             </button>
             {switcherOpen && (
-              <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 60, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', boxShadow: '0 16px 40px -16px oklch(20% .02 210 / 0.28)', overflow: 'hidden', animation: 'popIn 140ms ease-out' }}>
+              <div className="asc-light" style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 60, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-card)', overflow: 'hidden', animation: 'popIn 140ms ease-out' }}>
                 <div className="label" style={{ padding: '10px 12px 6px' }}>
                   Switch company
                 </div>
@@ -221,8 +221,8 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
               </span>
             </span>
             {!ctx.handoff && (
-              <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 5, background: 'var(--status-green-bg)', border: '1px solid var(--status-green-border)', borderRadius: 999, padding: '2px 7px' }}>
-                <span style={{ width: 5, height: 5, borderRadius: 99, background: 'var(--status-green-text)' }} />
+              <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 5, background: 'var(--status-green-bg)', border: '1px solid var(--status-green-border)', borderRadius: 'var(--radius-sm)', padding: '2px 7px' }}>
+                <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--status-green-text)' }} />
                 <span className="mono" style={{ fontSize: 9, fontWeight: 600, color: 'var(--status-green-text)', letterSpacing: '0.04em' }}>
                   ERP
                 </span>
@@ -240,10 +240,10 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
           <Fragment key={g.key}>
             <div
               className="label"
-              style={{ display: 'flex', alignItems: 'baseline', gap: 6, padding: '6px 8px 8px', marginTop: gi > 0 ? 10 : 0, borderTop: gi > 0 ? '1px solid var(--line-1)' : undefined, paddingTop: gi > 0 ? 14 : 6, minWidth: 0 }}
+              style={{ color: 'var(--eyebrow-on-dark)', display: 'flex', alignItems: 'baseline', gap: 6, padding: '6px 8px 8px', marginTop: gi > 0 ? 10 : 0, borderTop: gi > 0 ? '1px solid var(--line-1)' : undefined, paddingTop: gi > 0 ? 14 : 6, minWidth: 0 }}
             >
               <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.label}</span>
-              <span className="mono" style={{ flex: 'none', fontSize: 8.5, color: 'var(--fg-4)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+              <span className="mono" style={{ flex: 'none', fontSize: 8.5, color: 'var(--fg-3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
                 · {g.scope}
               </span>
             </div>
@@ -260,7 +260,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
                   <span style={{ ...navIconColStyle, color: a ? 'var(--action)' : 'var(--fg-3)' }}>{n.glyph}</span>
                   <span style={{ flex: 1 }}>{n.label}</span>
                   {n.badge && (
-                    <span className="mono" style={{ fontSize: 10, fontWeight: 600, background: 'var(--status-red-bg)', color: 'var(--status-red-text)', borderRadius: 99, padding: '1px 6px' }}>
+                    <span className="mono" style={{ fontSize: 10, fontWeight: 600, background: 'var(--status-red-bg)', color: 'var(--status-red-text)', borderRadius: 'var(--radius-sm)', padding: '1px 6px' }}>
                       {n.badge}
                     </span>
                   )}
@@ -274,7 +274,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
       {/* `flex: 0 0 auto` — the user card is the one thing that must stay pinned when the
           nav above it scrolls. */}
       <div data-testid="identity-card" style={{ flex: '0 0 auto', padding: 12, borderTop: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ flex: 'none', width: 30, height: 30, borderRadius: 99, background: 'var(--slate-800)', color: 'var(--text-on-dark)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 600 }} data-testid="persona-initials">{user.initials}</span>
+        <span style={{ flex: 'none', width: 30, height: 30, borderRadius: '50%', background: 'var(--slate-800)', color: 'var(--text-on-dark)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 600 }} data-testid="persona-initials">{user.initials}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} data-testid="persona-name">{user.name}</div>
           <div className="mono" style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: 'var(--fg-3)', whiteSpace: 'nowrap', overflow: 'hidden' }}>
@@ -282,7 +282,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
                 green dot; otherwise fall back to the mode-derived workspace label. */}
             {user.verified && user.tenantName ? (
               <>
-                <span style={{ flex: 'none', width: 5, height: 5, borderRadius: 99, background: 'var(--status-green-text)' }} title="Tenant verified via /v1/me" />
+                <span style={{ flex: 'none', width: 5, height: 5, borderRadius: '50%', background: 'var(--status-green-text)' }} title="Tenant verified via /v1/me" />
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.tenantName.toUpperCase()}</span>
               </>
             ) : (

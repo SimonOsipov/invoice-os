@@ -6,6 +6,7 @@ import type { CSSProperties, ReactNode } from 'react'
 import { Icon } from './icons'
 
 export const chevDownGlyph = <Icon paths={['m6 9 6 6 6-6']} size={16} />
+export const chevDownGlyph14 = <Icon paths={['m6 9 6 6 6-6']} size={14} />
 export const tickGlyph11 = <Icon paths={['M20 6 9 17l-5-5']} size={11} strokeWidth={3} />
 export const tickGlyph13 = <Icon paths={['M20 6 9 17l-5-5']} size={13} strokeWidth={3} />
 export const crossGlyph = <Icon paths={['M18 6 6 18M6 6l12 12']} size={11} strokeWidth={3} />
@@ -33,7 +34,10 @@ export const copyGlyph = (
 )
 export const docGlyph = <Icon paths={['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M14 2v6h6']} size={20} />
 export const closeGlyph = <Icon paths={['M18 6 6 18M6 6l12 12']} size={16} strokeWidth={2} />
-export const backGlyph = <Icon paths={['M19 12H5', 'm12 19-7-7 7-7']} size={14} />
+export const dismissGlyph = <Icon paths={['M18 6 6 18', 'm6 6 12 12']} size={12} strokeWidth={2} />
+export const matrixCross = <Icon paths={['M18 6 6 18M6 6l12 12']} size={11} strokeWidth={2.4} />
+export const backGlyph = <Icon paths={['M15 18l-6-6 6-6']} size={15} strokeWidth={1.7} />
+export const arrowGlyph = <Icon paths={['M5 12h14M13 6l6 6-6 6']} size={14} strokeWidth={1.7} />
 export const refreshGlyph = <Icon paths={['M21 4v6h-6', 'M3 20v-6h6', 'M3.5 9a9 9 0 0 1 14.9-3.4L21 8', 'M20.5 15a9 9 0 0 1-14.9 3.4L3 16']} size={14} />
 export const warnTriGlyph = <Icon paths={['m21.7 18-8-14a2 2 0 0 0-3.5 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3Z', 'M12 9v4', 'M12 17h.01']} size={16} />
 export const infoGlyph = <Icon paths={['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z', 'M12 11v5', 'M12 8h.01']} size={15} />
@@ -55,7 +59,7 @@ export const sparkGlyph = <Icon paths={['M12 3 14.09 8.26 20 9.27l-4 3.64L17.18 
 // members story adds. There was no row menu anywhere in the app before it, so nothing
 // existing could be reused. Hand-authored like everything else here — the gripGlyph
 // idiom exactly (same 13 / 2.4 pair), one column of dots instead of two.
-export const moreGlyph = <Icon paths={['M12 5h.01', 'M12 12h.01', 'M12 19h.01']} size={13} strokeWidth={2.4} />
+export const moreGlyph = <Icon paths={['M12 5h.01', 'M12 12h.01', 'M12 19h.01']} size={15} strokeWidth={2.6} />
 
 export type NavDef = { id: 'dashboard' | 'invoices' | 'workflows' | 'rules' | 'clients' | 'approvals' | 'customers' | 'reports' | 'audit' | 'settings'; label: string; glyph: ReactNode }
 

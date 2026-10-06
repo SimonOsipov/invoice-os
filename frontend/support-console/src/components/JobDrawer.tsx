@@ -101,7 +101,7 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
             type="button"
             onClick={onCancel}
             className="ops-btn"
-            style={{ border: '1px solid var(--status-red-border)', background: 'var(--status-red-bg)', cursor: 'pointer', height: 40, padding: '0 16px', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-sans)', fontSize: 14, fontWeight: 500, color: 'var(--status-red-text)' }}
+            style={{ border: '1px solid var(--status-red-border)', background: 'var(--status-red-bg)', cursor: 'pointer', height: 40, padding: '0 16px', borderRadius: 'var(--radius-btn)', fontFamily: 'var(--font-sans)', fontSize: 14, fontWeight: 600, color: 'var(--status-red-text)' }}
           >
             Cancel
           </button>
@@ -124,7 +124,7 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
         {timeline.map((t, i) => (
           <div key={t.label} style={{ display: 'grid', gridTemplateColumns: '18px 1fr', gap: 12 }}>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-              <span style={{ width: 11, height: 11, borderRadius: 99, background: t.dot, border: `2px solid ${t.dot}` }} />
+              <span style={{ width: 11, height: 11, borderRadius: '50%', background: t.dot, border: `2px solid ${t.dot}` }} />
               {/* No connector below the last step — the prototype drew one into empty space. */}
               {i < timeline.length - 1 && <span style={{ flex: 1, width: 2, background: t.line }} />}
             </div>

@@ -111,8 +111,8 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span className="card-title">Import invoices · {active.short}</span>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <span className="card-title" style={{ fontSize: 15 }}>Import invoices · {active.short}</span>
           <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
             TIN {active.tin}
           </span>
@@ -205,7 +205,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
               in human terms, not a second source of truth; PICKER-2 pins it to the accept
               attribute. Neither is the gate: a DROPPED file never meets accept (onDrop
               above hands it straight to addPickedFiles), so classifyPickedFile is. */}
-          <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-4)', letterSpacing: '0.06em' }}>
+          <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)', letterSpacing: '0.06em' }}>
             ACCEPTED · CSV · XLSX · PDF · DOCX
           </span>
 
@@ -269,7 +269,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
           )}
 
           {/* ⚠️ PLACEMENT IS LOAD-BEARING: everything here renders AFTER </label>, never
-              between the <input class="pf-file"> and it. app-layer.css's dropzone focus
+              between the <input class="pf-file"> and it. v2/app-layer.css's dropzone focus
               ring is `.asc-app .pf-file:focus-visible + label` — an ADJACENT-sibling
               selector — so a single element inserted between the two silently kills the
               keyboard focus ring on the only control this step has. No test covers that;
@@ -310,7 +310,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
               onClick={documentRun ? ctx.startDocumentRun : ctx.readAllColumns}
               disabled={base == null || !readReady}
               className="v2-btn v2-btn-primary pf-btn"
-              style={{ height: 42, padding: '0 18px', justifyContent: 'center', background: readReady ? 'var(--action)' : 'var(--bg-3)', color: readReady ? 'var(--text-on-dark)' : 'var(--fg-4)', cursor: readReady ? 'pointer' : 'not-allowed' }}
+              style={{ height: 42, padding: '0 18px', justifyContent: 'center', background: 'var(--action)', color: 'var(--primary-foreground)', cursor: 'pointer', ...(base == null || !readReady ? { opacity: 0.45, cursor: 'not-allowed', filter: 'none' } : null) }}
             >
               <span style={{ display: 'inline-flex' }}>{importGlyph}</span> {documentRun ? 'Extract invoices' : 'Read columns'}
             </button>

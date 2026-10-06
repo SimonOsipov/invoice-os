@@ -411,7 +411,7 @@ describe('APPR-10-04 QA AC-1/AC-10: the Department field keeps the fieldset trad
     // Unrepainted: the fieldset's own `pointerEvents: none` is the visual layer here, and the
     // select must keep its resting colours. An unconditional paint inside the primitive would
     // mute it and no Members spec would have noticed.
-    expect(select.style.backgroundColor, 'the Department select lost its resting background').toBe('var(--bg-1)')
+    expect(select.style.backgroundColor, 'the Department select lost its resting background').toBe('var(--bg-2)')
     expect(select.style.color, 'the Department select lost its resting foreground').toBe('var(--fg-1)')
     expect(select.style.cursor, 'the Department select paints itself dead').toBe('pointer')
 
@@ -420,5 +420,192 @@ describe('APPR-10-04 QA AC-1/AC-10: the Department field keeps the fieldset trad
     const note = document.getElementById(lock!.getAttribute('aria-describedby')!)
     expect(note, 'the fieldset points at a reason node that does not exist').toBeTruthy()
     expect((note!.textContent ?? '').trim(), 'the reason note rendered empty').not.toBe('')
+  })
+})
+
+describe('the drawer status-error strip', () => {
+  it('renders the server sentence in the red status triplet, as a top-bordered strip', () => {
+    render(
+      <MemberDrawer
+        ctx={drawerCtx()}
+        memberId="u1"
+        onClose={vi.fn()}
+        onStatus={vi.fn()}
+        statusError={{ id: 'u1', message: 'the last active admin cannot be suspended' }}
+      />,
+    )
+
+    const strip = screen.getByTestId('member-drawer-status-error')
+    expect(strip.textContent).toBe('the last active admin cannot be suspended')
+    expect(strip.style.background).toBe('var(--status-red-bg)')
+    expect(strip.style.borderTop).toBe('1px solid var(--status-red-border)')
+    expect(strip.style.color).toBe('var(--status-red-text)')
+    expect(strip.style.fontSize).toBe('11.5px')
+  })
+})
+
+describe('the drawer shell and bands', () => {
+  function open(over: Record<string, unknown> = {}, id = 'u2', onClose = vi.fn()) {
+    render(<MemberDrawer ctx={drawerCtx(over)} memberId={id} onClose={onClose} onStatus={vi.fn()} statusError={null} />)
+    return onClose
+  }
+
+  it('the panel is 560px with a border and no shadow, behind a closing scrim', () => {
+    const onClose = open()
+
+    const panel = screen.getByTestId('member-drawer')
+    expect(panel.getAttribute('role')).toBe('dialog')
+    expect(panel.getAttribute('aria-modal')).toBe('true')
+    expect(panel.style.width).toBe('560px')
+    expect(panel.style.background).toBe('var(--bg-1)')
+    expect(panel.style.borderLeft).toBe('1px solid var(--line-2)')
+    expect(panel.style.boxShadow, 'the drawer carries a border, not a shadow').toBe('')
+
+    const scrim = panel.previousElementSibling as HTMLElement
+    expect(scrim.style.background).toContain('var(--surface)')
+    expect(scrim.style.background).toContain('55%')
+    fireEvent.click(scrim)
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('the bands pad 18/24, the avatar is a 40px circle and Close is a 30px grey square', () => {
+    open()
+
+    const panel = screen.getByTestId('member-drawer')
+    const [header, body] = Array.from(panel.children) as HTMLElement[]
+    expect(header.style.padding).toBe('18px 24px 16px')
+    expect(header.style.borderBottom).toBe('1px solid var(--line-1)')
+    const avatar = header.querySelector('[aria-hidden="true"]') as HTMLElement
+    expect(avatar.style.width).toBe('40px')
+    expect(avatar.style.borderRadius).toBe('50%')
+    expect(avatar.style.fontSize).toBe('13px')
+    const close = screen.getByTestId('member-drawer-close')
+    expect(close.style.width).toBe('30px')
+    expect(close.style.height).toBe('30px')
+    expect(close.style.background).toBe('var(--bg-3)')
+    expect(body.style.padding).toBe('18px 24px 26px')
+    const footer = screen.getByTestId('member-danger-zone')
+    expect(footer.style.padding).toBe('14px 24px 16px')
+    expect(footer.style.borderTop).toBe('1px solid var(--line-1)')
+  })
+
+  it('the three access-role cards show the real role, are all disabled, and dim to .45', () => {
+    open()
+
+    const cards = ['admin', 'preparer', 'reviewer'].map((id) => screen.getByTestId(`drawer-role-${id}`))
+    expect(cards).toHaveLength(3)
+    const radios = cards.map((c) => c.querySelector('input') as HTMLInputElement)
+    expect(radios.map((r) => r.checked)).toEqual([false, true, false])
+    for (const [i, card] of cards.entries()) {
+      expect(radios[i].disabled).toBe(true)
+      expect(card.style.opacity).toBe('0.45')
+      expect(card.style.cursor).toBe('not-allowed')
+    }
+    expect(cards[1].style.border).toBe('1px solid var(--action)')
+    expect(cards[0].style.border).toBe('1px solid var(--line-2)')
+  })
+
+  it('the access-role radios are painted by the design, not by the browser default', () => {
+    open()
+
+    const radios = ['admin', 'preparer', 'reviewer'].map((id) => screen.getByTestId(`drawer-role-${id}`).querySelector('input') as HTMLInputElement)
+    expect(radios.map((r) => r.checked)).toEqual([false, true, false])
+    for (const radio of radios) {
+      expect(radio.style.appearance).toBe('none')
+      expect(radio.style.width).toBe('15px')
+      expect(radio.style.height).toBe('15px')
+    }
+    expect(radios[1].style.border).toBe('1.5px solid var(--action)')
+    expect(radios[1].style.background).toContain('radial-gradient(circle, var(--action)')
+    expect(radios[0].style.border).toBe('1.5px solid var(--line-3)')
+    expect(radios[0].style.background).toBe('transparent')
+  })
+
+  it('the Client access scope radios share that paint and sit flush in their cards', () => {
+    open({ mode: 'firm' })
+
+    const all = screen.getByTestId('drawer-scope-all').querySelector('input') as HTMLInputElement
+    const selected = screen.getByTestId('drawer-scope-selected').querySelector('input') as HTMLInputElement
+    expect([all.checked, selected.checked]).toEqual([true, false])
+    for (const radio of [all, selected]) {
+      expect(radio.style.appearance).toBe('none')
+      expect(radio.style.width).toBe('15px')
+      expect(radio.style.marginLeft, 'the browser default 5px margin pushes the ring off the card padding').toBe('0px')
+      expect(radio.style.marginRight).toBe('0px')
+      expect(radio.style.marginTop).toBe('0px')
+    }
+    expect(all.style.border).toBe('1.5px solid var(--action)')
+    expect(selected.style.border).toBe('1.5px solid var(--line-3)')
+  })
+
+  it('the workflow pills are 32px with the held one tinted', () => {
+    open({ roles: [role({ key: 'cfo', title: 'CFO', members: ['u2'] }), role({ key: 'tax', title: 'Tax', members: [] })] })
+
+    const held = screen.getByTestId('drawer-wfrole-cfo')
+    const idle = screen.getByTestId('drawer-wfrole-tax')
+    expect(held.getAttribute('aria-pressed')).toBe('true')
+    expect(idle.getAttribute('aria-pressed')).toBe('false')
+    for (const pill of [held, idle]) {
+      expect(pill.className).toBe('pf-btn')
+      expect(pill.style.height).toBe('32px')
+      expect(pill.style.padding).toBe('0px 13px')
+      expect(pill.style.fontSize).toBe('12.5px')
+      expect(pill.style.fontWeight).toBe('500')
+    }
+    expect(held.style.background).toBe('var(--action-tint)')
+    expect(held.style.color).toBe('var(--action)')
+    expect(idle.style.background).toBe('var(--bg-2)')
+  })
+
+  it('firm dims the Client access pair', () => {
+    open({ mode: 'firm' })
+
+    const drawer = screen.getByTestId('member-drawer')
+    const dims: number[] = []
+    for (let el: HTMLElement | null = screen.getByTestId('drawer-scope-all'); el && el !== drawer; el = el.parentElement) {
+      if (el.style.opacity) dims.push(Number(el.style.opacity))
+    }
+    expect(dims.length, 'nothing above the Client access pair dims it').toBeGreaterThan(0)
+    expect(Math.min(...dims)).toBeGreaterThanOrEqual(0.45)
+    expect(Math.max(...dims)).toBeLessThanOrEqual(0.7)
+    const dimmed = screen.getByTestId('drawer-scope-all').closest('fieldset') as HTMLElement
+    expect(dimmed.style.opacity).toBe('0.45')
+    expect(dimmed.style.cursor).toBe('not-allowed')
+    expect(dimmed.style.filter).toBe('none')
+  })
+
+  it('in-house leaves the Department select to its own disabled paint', () => {
+    open({ mode: 'inhouse' })
+
+    const select = screen.getByRole('combobox', { name: 'Department' }) as HTMLSelectElement
+    const fieldset = select.closest('fieldset') as HTMLFieldSetElement
+    expect(fieldset, 'the Department select left its disabled fieldset').toBeTruthy()
+    expect(fieldset.disabled).toBe(true)
+    expect(fieldset.style.opacity, 'a dimmed fieldset would stack on the select disabled paint').toBe('')
+  })
+
+  it('a status error for another member renders no strip here', () => {
+    render(
+      <MemberDrawer ctx={drawerCtx()} memberId="u1" onClose={vi.fn()} onStatus={vi.fn()} statusError={{ id: 'u2', message: 'refused' }} />,
+    )
+
+    expect(screen.getByTestId('member-danger-zone'), 'the footer is the floor under the absence').toBeTruthy()
+    expect(screen.queryByTestId('member-drawer-status-error')).toBeNull()
+  })
+
+  it('Remove is a disabled red ghost with the disabled paint, and your own drawer has none', () => {
+    open()
+
+    const remove = screen.getByTestId('member-remove') as HTMLButtonElement
+    expect(remove.disabled).toBe(true)
+    expect(remove.style.opacity).toBe('0.45')
+    expect(remove.style.cursor).toBe('not-allowed')
+    expect(remove.style.filter).toBe('none')
+    expect(remove.style.color).toBe('var(--status-red-text)')
+
+    cleanup()
+    open({ members: [member({ id: 'u1', isYou: true }), member({ id: 'u2' })] }, 'u1')
+    expect(screen.getByTestId('member-danger-zone')).toBeTruthy()
+    expect(screen.queryByTestId('member-remove')).toBeNull()
   })
 })

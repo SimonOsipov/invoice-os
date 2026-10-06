@@ -180,14 +180,12 @@ describe('highlightStyle', () => {
     }
   })
 
-  // The five appearance values are System Design §3's, read off the artboard
-  // (Recognition Review.dc.html:597-598 for the fill and the ring, :76 for the radius and
-  // the transition). They live here rather than in the component, so this is their only
-  // non-circular oracle: EXTR-11-05 reads them back off highlightStyle.
-  it("carries the artboard's amber fill, ring and radius", () => {
+  // The appearance values live here, not in the component: this is their only non-circular
+  // oracle (EXTR-11-05 reads them back off highlightStyle).
+  it('carries the accent fill, ring and radius', () => {
     expect(highlightStyle(mkRegion())).toMatchObject({
-      background: 'oklch(72% .15 65 / .32)',
-      boxShadow: '0 0 0 3px oklch(72% .15 65 / .32)',
+      background: 'var(--accent-20)',
+      boxShadow: '0 0 0 3px var(--accent-20)',
       borderRadius: 3,
     })
   })
@@ -253,15 +251,14 @@ describe('pageFrameStyle', () => {
     expect(pageFrameStyle(LETTER, 0.5)).toMatchObject({ width: '50%', minWidth: '280px', maxWidth: '320px' })
   })
 
-  it("carries the artboard's page card, background included", () => {
-    // Recognition Review.dc.html:72. System Design §3 tabulates the same card and omits
-    // only `background`; EXTR-11-05's AC names it, so it is pinned at its source here.
-    expect(pageFrameStyle(LETTER, 1)).toMatchObject({
+  it("carries the artboard's page card, background included, and no shadow", () => {
+    const style = pageFrameStyle(LETTER, 1)
+    expect(style).toMatchObject({
       margin: '0 auto 18px',
       background: '#fff',
       border: '1px solid var(--line-2)',
-      boxShadow: '0 1px 3px oklch(20% .02 210 / .08)',
     })
+    expect('boxShadow' in style, 'the page card still draws a shadow').toBe(false)
   })
 
   it('padding is zero, so the padding box and the content box coincide', () => {
@@ -319,8 +316,6 @@ describe('extractionReview.ts composes the shipped helpers', () => {
 
 // -- the pixel-grid absence proof (AC-7) ------------------------------------------------
 
-// oklch() colour literals legitimately carry '72' (the artboard's highlight fill is
-// oklch(72% .15 65 / .32)). Everything outside them must not.
 function scrubColours(src: string): string {
   return src.replace(/oklch\([^)]*\)/g, 'oklch(COLOUR)')
 }
@@ -1338,8 +1333,8 @@ describe('pointBoxStyle', () => {
     expect(box.position).toBe('absolute')
     expect(box.pointerEvents, 'the live box swallows the drag it is drawn by').toBe('none')
     expect(box.border, "the artboard's drag box is a 2px amber outline").toBe('2px solid var(--accent)')
-    expect(box.background).toBe('oklch(72% .15 65 / .18)')
-    expect(box.borderRadius).toBe(2)
+    expect(box.background).toBe('var(--accent-20)')
+    expect(box.borderRadius).toBe(3)
 
     // The likely mutant is a SPREAD of highlightStyle, which passes every clause above while
     // inheriting the settled highlight's 3px ring and its transition — a treatment the
@@ -1352,6 +1347,21 @@ describe('pointBoxStyle', () => {
 
 const POINTED_BOX = mkRegion({ page: 4, x0: 0.11, y0: 0.22, x1: 0.33, y1: 0.44 })
 const CHOSEN_BOX = mkRegion({ page: 3 })
+
+describe('the highlight helpers resolve colours through tokens', () => {
+  it('no oklch is left in the helpers', () => {
+    const region = mkRegion()
+    const page: ExtractionPage = { page: 1, width_px: 1275, height_px: 1651 }
+    const results = [highlightStyle(region), pageFrameStyle(page, 1), pointBoxStyle(region)]
+    for (const style of results) {
+      const json = JSON.stringify(style)
+      expect(json.length, 'a helper returned an empty style').toBeGreaterThan(2)
+      expect(json, 'a helper still returns an oklch literal').not.toContain('oklch')
+    }
+    // Floor: the highlight's fill is a token, so the absence above is over a real colour.
+    expect(JSON.stringify(results[0])).toContain('var(--accent-20)')
+  })
+})
 
 describe('typedEntry', () => {
   it('keeps a pointed entry pointed and its box', () => {

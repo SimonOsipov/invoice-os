@@ -1298,7 +1298,7 @@ test('firm Settings: an admin invites from the Members screen, sees the pending 
 
   // L4: with the flash showing the long address, the top bar keeps its alignment. Each width
   // resends (the flash lasts 3 s) and reads the four boxes while it is up.
-  const roleFilter = wfSelect(page, 'Access role')
+  const roleFilter = page.locator('label[aria-label="Access role"]')
   const table = page.getByTestId('members-table')
   const l4 = await atEachWidth(page, async (width) => {
     await settleAnimations(invite, table)

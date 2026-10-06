@@ -37,7 +37,7 @@ import {
 import { rolesSurface, unassignedNotice, unassignedRoles } from '../lib/roles'
 import { InviteModal } from './InviteModal'
 import { MemberDrawer } from './MemberDrawer'
-import { AmberNote } from './MemberParts'
+import { AmberNote, SearchBox } from './MemberParts'
 import { ClientUsersCard, MemberRoleMatrix } from './MemberRoleMatrix'
 import { MembersTable } from './MembersTable'
 import { WfSelect, type WfOption } from './WorkflowParts'
@@ -202,26 +202,27 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
 
   return (
     <>
-      <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: '0 0 16px', maxWidth: 560, lineHeight: 1.55 }}>{INTRO[mode]}</p>
+      <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: '-4px 0 16px', maxWidth: 680, lineHeight: 1.6 }}>{INTRO[mode]}</p>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-        <input
-          type="text"
-          className="pf-input"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search name or email"
-          aria-label="Search members"
-          // .pf-input is width: 100%, so a box in a toolbar row needs its own width.
-          style={{ flex: 'none', width: 260 }}
-        />
+      {/* Above the toolbar, and only on a landed roster: over an errored one every role
+          resolves to zero holders and this would assert a coverage failure that is a fetch failure. */}
+      {surface === 'roster' && unassigned.length > 0 && (
+        <AmberNote testId="members-unassigned" style={{ marginBottom: 14 }}>
+          {unassignedNotice(unassigned.length)}{' '}
+          <span style={{ fontWeight: 700 }}>{unassigned.map((r) => r.title).join(' · ')}</span>
+        </AmberNote>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+        <SearchBox value={query} onChange={setQuery} placeholder="Search name or email" label="Search members" />
         <WfSelect
           label="Access role"
           hideLabel
           value={roleFilter}
           options={ROLE_FILTER_OPTIONS}
           onChange={(v) => setRoleFilter(v as AccessRole | 'all')}
-          width={180}
+          height={36}
+          background="var(--bg-2)"
         />
         <div style={{ flex: 1 }} />
         {flash && (
@@ -232,8 +233,8 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
             {flash.text}
           </span>
         )}
-        {/* Disabled recipe: InvoiceDetail.tsx's four layers (attribute, inline swap over
-            `.v2-btn:hover`, visible note below, title/aria-describedby). */}
+        {/* The real `disabled` attribute plus the inline recipe: `filter: 'none'` outranks
+            `.v2-btn:hover`'s brightness lift, which nothing in design-tokens guards with `:disabled`. */}
         <button
           type="button"
           disabled={!inviteReady}
@@ -241,17 +242,8 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
           title={showAdminOnly ? INVITE_ADMIN_ONLY : undefined}
           aria-describedby={showAdminOnly ? inviteNoteId : listFailed ? invitesErrorId : undefined}
           data-testid="members-invite"
-          className="v2-btn pf-btn"
-          style={{
-            flex: 'none',
-            height: 38,
-            padding: '0 16px',
-            fontSize: 13,
-            gap: 7,
-            ...(inviteReady
-              ? { background: 'var(--action)', color: 'var(--text-on-dark)' }
-              : { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' }),
-          }}
+          className="v2-btn v2-btn-primary pf-btn"
+          style={{ flex: 'none', height: 36, gap: 7, ...(inviteReady ? null : { opacity: 0.45, cursor: 'not-allowed', filter: 'none' }) }}
         >
           <span style={{ display: 'inline-flex' }}>{plusGlyph}</span> Invite people
         </button>
@@ -261,7 +253,7 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
         <div
           id={inviteNoteId}
           data-testid="members-invite-reason"
-          style={{ marginBottom: 16, fontSize: 11.5, lineHeight: 1.45, color: 'var(--fg-3)' }}
+          style={{ margin: '0 0 14px', fontSize: 11.5, color: 'var(--fg-3)', textAlign: 'right' }}
         >
           {INVITE_ADMIN_ONLY}
         </div>
@@ -295,28 +287,8 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
 
       {surface === 'roster' && !listFirstLoad && (
         <>
-          {/* Above the table, and above the two empty surfaces too: it is a statement about
-              the workspace's approval coverage, which a search box cannot change. Inside
-              this arm, though — over an errored roster every role resolves to zero holders
-              and this would assert a coverage failure that is really a fetch failure. */}
-          {unassigned.length > 0 && (
-            <AmberNote testId="members-unassigned" style={{ marginBottom: 16 }}>
-              {unassignedNotice(unassigned.length)}{' '}
-              <span style={{ fontWeight: 600 }}>{unassigned.map((r) => r.title).join(' · ')}</span>
-            </AmberNote>
-          )}
-
           {justYou ? (
             <EmptyState title={EMPTY_TITLE[mode]} message={EMPTY_MESSAGE} />
-          ) : shown.length === 0 ? (
-            // Inside the table's chrome, not a card — RulesView's empty-row-slot idiom
-            // (RulesView.tsx:167-170 / :240-243). No borderBottom: this is the container's
-            // last child, which already draws that edge.
-            <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', overflow: 'hidden' }}>
-              <div data-testid="members-no-match" style={{ padding: '20px 16px', fontSize: 13, lineHeight: 1.6, color: 'var(--fg-3)' }}>
-                No members match this search.
-              </div>
-            </div>
           ) : (
             <MembersTable
               ctx={ctx}

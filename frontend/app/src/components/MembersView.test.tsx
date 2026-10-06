@@ -649,7 +649,7 @@ describe('RESEND-07-04', () => {
       expect(gw.invitationCalls()).toEqual([])
     })
 
-    it('MembersView: Invite is disabled with no reason while the roster loads', () => {
+    it('MembersView: Invite is disabled with no reason while the roster loads', async () => {
       for (const state of ['loading', 'idle', 'error'] as const) {
         const gw = gateway({ list: [answer(listOf())] })
         render(
@@ -663,6 +663,8 @@ describe('RESEND-07-04', () => {
 
         expect(inviteButton().disabled, `${state}: the button is disabled`).toBe(true)
         expect(screen.queryByTestId('members-invite-reason'), `${state}: "only an admin" would be false to an admin`).toBeNull()
+        await act(async () => {})
+        expect(gw.invitationCalls(), `${state}: no roster, no viewer, no /invitations call`).toEqual([])
         cleanup()
       }
     })
@@ -1020,6 +1022,264 @@ describe('RESEND-07-04', () => {
       await act(async () => retried.resolve(listOf()))
       await landed()
       expect(screen.queryByTestId('members-invites-error')).toBeNull()
+    })
+
+    it('MembersView: a refetch that fails after the list landed keeps the rows, shows both reasons and disables Invite until Retry lands', async () => {
+      const retried = hold()
+      const gw = gateway({
+        list: [answer(listOf(wire({ id: 'i1', email: 'zed@x.ng' }))), refuse(500, ERR_INTERNAL), retried.responder],
+        resend: [refuse(409, ERR_NOT_PENDING)],
+      })
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} />)
+      await landed()
+      expect(inviteRows()).toHaveLength(1)
+
+      clickResendOn(inviteRows()[0])
+      await screen.findByTestId('members-invites-retry')
+
+      const error = screen.getByTestId('members-invites-error')
+      expect(error.textContent, 'the stale reason and the list error both show').toContain(ERR_NOT_PENDING)
+      expect(error.textContent).toContain(ERR_INTERNAL)
+      expect(inviteRows(), 'a failed refetch leaves the mirror alone').toHaveLength(1)
+      expect(memberRows()).toHaveLength(2)
+      expect(inviteButton().disabled, 'Invite waits for a list it can check "Already invited" against').toBe(true)
+
+      fireEvent.click(screen.getByTestId('members-invites-retry'))
+      await act(async () => retried.resolve(listOf()))
+      await waitFor(() => expect(inviteRows()).toHaveLength(0))
+      expect(screen.queryByTestId('members-invites-error')).toBeNull()
+      expect(inviteButton().disabled).toBe(false)
+    })
+  })
+
+  describe('adversarial: the viewer, the gateway and the wiring', () => {
+    it('MembersView: an admin who stops being an admin loses the pending rows and Invite, with no new fetch', async () => {
+      const gw = gateway({ list: [answer(listOf(wire()))] })
+      const controls: { current: HarnessControls | null } = { current: null }
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} controls={controls} />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(1))
+      expect(inviteButton().disabled).toBe(false)
+
+      act(() => controls.current!.setMembers([selfRow({ role: 'reviewer' }), member()]))
+
+      expect(inviteRows(), 'a non-admin sees no pending invite').toHaveLength(0)
+      expect(memberRows().length, 'the memberships still render').toBeGreaterThan(0)
+      expect(inviteButton().disabled).toBe(true)
+      expect(screen.getByTestId('members-invite-reason').textContent).toBe(ADMIN_ONLY)
+      await act(async () => {})
+      expect(gw.lists(), 'losing admin never refetches').toHaveLength(1)
+    })
+
+    it("MembersView: another member's admin row does not make the viewer an admin", async () => {
+      const gw = gateway({ list: [answer(listOf())] })
+      const boss = member({ id: 'boss', name: 'Boss Admin', initials: 'BA', email: 'boss@x.ng', role: 'admin', status: 'active', isYou: false })
+      render(<Harness initial={[selfRow({ role: 'preparer' }), boss]} authedFetch={gw.authedFetch} />)
+
+      expect(inviteButton().disabled).toBe(true)
+      expect(screen.getByTestId('members-invite-reason').textContent).toBe(ADMIN_ONLY)
+      await act(async () => {})
+      expect(gw.invitationCalls()).toEqual([])
+    })
+
+    it('MembersView: with no gateway configured the roster renders and Invite stays disabled without a call', async () => {
+      vi.stubEnv('VITE_GATEWAY_URL', '')
+      const gw = gateway({ list: [answer(listOf(wire()))] })
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} />)
+
+      await act(async () => {})
+      expect(memberRows(), 'the roster is not held behind a list that will never load').toHaveLength(2)
+      expect(screen.queryByText('Loading members…')).toBeNull()
+      expect(inviteButton().disabled).toBe(true)
+      expect(gw.invitationCalls()).toEqual([])
+    })
+
+    it('MembersView: the Invite modal checks addresses against the memberships and the pending invites', async () => {
+      const gw = gateway({ list: [answer(listOf(wire({ id: 'i1', email: 'zed@x.ng' })))] })
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(1))
+      await landed()
+      fireEvent.click(inviteButton())
+
+      const input = screen.getByTestId('invite-modal-input')
+      for (const address of ['ada@x.ng', 'zed@x.ng', 'fresh@x.ng']) {
+        fireEvent.change(input, { target: { value: address } })
+        fireEvent.keyDown(input, { key: 'Enter' })
+      }
+      const chips = screen.getAllByTestId('invite-chip')
+      expect(chips.map((c) => c.getAttribute('data-verdict'))).toEqual(['member', 'invited', 'ok'])
+      expect(within(chips[0]).getByTestId('invite-chip-error').textContent).toBe('Already a member')
+      expect(within(chips[1]).getByTestId('invite-chip-error').textContent).toBe('Already invited')
+    })
+
+    it('MembersView: a click on a pending row opens no drawer, and the same click on a member row does', async () => {
+      // The invited membership has a drawer row to open, so a live click handler would show one.
+      const gw = gateway({ list: [answer(listOf())] })
+      render(<Harness initial={[...adminRoster(), otherMember()]} authedFetch={gw.authedFetch} />)
+      await landed()
+      expect(inviteRows()).toHaveLength(1)
+
+      fireEvent.click(inviteRows()[0])
+      expect(screen.queryByTestId('member-drawer'), 'an invitation has no membership to edit').toBeNull()
+
+      fireEvent.click(memberRows()[1])
+      expect(screen.getByTestId('member-drawer')).toBeTruthy()
+    })
+
+    it('MembersView: the flash clears after three seconds', async () => {
+      const timeouts = vi.spyOn(window, 'setTimeout')
+      const gw = gateway({
+        list: [answer(listOf(wire({ id: 'i1', email: 'zed@x.ng' })))],
+        resend: [answer(wire({ id: 'i1', email: 'zed@x.ng' }))],
+      })
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(1))
+      clickResendOn(inviteRows()[0])
+      await screen.findByTestId('members-flash')
+
+      const timer = timeouts.mock.calls.find((c) => c[1] === 3000)
+      expect(timer, 'the flash arms a 3000 ms timer').toBeTruthy()
+      act(() => (timer![0] as () => void)())
+      expect(screen.queryByTestId('members-flash')).toBeNull()
+      timeouts.mockRestore()
+    })
+  })
+
+  describe('adversarial: resend outcomes', () => {
+    it('MembersView: a resend whose mail fails again reads Email not sent and flashes red', async () => {
+      const gw = gateway({
+        list: [answer(listOf(wire({ id: 'i1', email: 'zed@x.ng', expires_at: inDays(1) })))],
+        resend: [answer(wire({ id: 'i1', email: 'zed@x.ng', expires_at: inDays(7), delivery: 'failed' }))],
+      })
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(1))
+
+      clickResendOn(inviteRows()[0])
+
+      await waitFor(() => expect(within(inviteRows()[0]).getByText('Email not sent')).toBeTruthy())
+      expect(inviteRows(), 'still one row').toHaveLength(1)
+      expect(flash().textContent).toBe("The invite email to zed@x.ng did not go out. Resend it from the row's ⋯ menu.")
+      expect(flash().style.color).toBe('var(--status-red-text)')
+    })
+
+    it('MembersView: a successful resend repairs a row that said Email not sent', async () => {
+      const gw = gateway({
+        list: [answer(listOf(wire({ id: 'i1', email: 'zed@x.ng', delivery: 'failed' })))],
+        resend: [answer(wire({ id: 'i1', email: 'zed@x.ng', delivery: 'sent' }))],
+      })
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} />)
+      await waitFor(() => expect(within(inviteRows()[0]).getByText('Email not sent')).toBeTruthy())
+
+      clickResendOn(inviteRows()[0])
+
+      await waitFor(() => expect(within(inviteRows()[0]).getByText('Expires in 7 days')).toBeTruthy())
+      expect(within(inviteRows()[0]).queryByText('Email not sent')).toBeNull()
+      expect(inviteRows()).toHaveLength(1)
+      expect(flash().style.color).toBe('var(--status-green-text)')
+    })
+
+    it('MembersView: a 500 resend is a row error, not a stale-invite refetch', async () => {
+      const refetchMembers = vi.fn()
+      const gw = gateway({
+        list: [answer(listOf(wire({ id: 'i1', email: 'zed@x.ng' })))],
+        resend: [refuse(500, ERR_INTERNAL)],
+      })
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} refetchMembers={refetchMembers} />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(1))
+
+      clickResendOn(inviteRows()[0])
+
+      expect((await screen.findByTestId('member-status-error')).textContent).toBe(ERR_INTERNAL)
+      expect(screen.queryByTestId('members-invites-error')).toBeNull()
+      expect(inviteRows(), 'the row stays').toHaveLength(1)
+      expect(gw.lists(), 'no list refetch').toHaveLength(1)
+      expect(refetchMembers).not.toHaveBeenCalled()
+    })
+
+    it("MembersView: resending one invite leaves another invite's Resend enabled", async () => {
+      const first = hold()
+      const gw = gateway({
+        list: [answer(listOf(wire({ id: 'i1', email: 'zed@x.ng' }), wire({ id: 'i2', email: 'yan@x.ng' })))],
+        resend: [first.responder, answer(wire({ id: 'i2', email: 'yan@x.ng' }))],
+      })
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(2))
+
+      clickResendOn(inviteRowFor('zed@x.ng'))
+      expect(gw.resends()).toHaveLength(1)
+
+      fireEvent.click(within(inviteRowFor('yan@x.ng')).getByTestId('member-menu-trigger'))
+      const other = within(screen.getByTestId('member-menu')).getByRole('button', { name: 'Resend invite' }) as HTMLButtonElement
+      expect(other.disabled, "i1's flight does not lock i2").toBe(false)
+      fireEvent.click(other)
+      expect(gw.resends().map((c) => c.url)).toEqual([
+        `${GW_BASE}/api/tenancy/v1/invitations/i1/resend`,
+        `${GW_BASE}/api/tenancy/v1/invitations/i2/resend`,
+      ])
+
+      await act(async () => first.resolve(wire({ id: 'i1', email: 'zed@x.ng' })))
+    })
+
+    it("MembersView: a resend does not clear another row's failed-suspend reason", async () => {
+      mockedSetMembershipStatus.mockRejectedValue(new ApiError('http', REASON, 409))
+      const gw = gateway({
+        list: [answer(listOf(wire({ id: 'i1', email: 'zed@x.ng' })))],
+        resend: [answer(wire({ id: 'i1', email: 'zed@x.ng' }))],
+      })
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(1))
+
+      suspendFromRowMenu(rowFor('Ada Person'))
+      expect((await screen.findByTestId('member-status-error')).textContent).toBe(REASON)
+
+      clickResendOn(inviteRows()[0])
+      await waitFor(() => expect(flash().textContent).toBe('Invite sent to zed@x.ng.'))
+      expect(screen.getByTestId('member-status-error').textContent, "the resend touched only its own row's slot").toBe(REASON)
+    })
+
+    it('MembersView: an invited membership with no invitation answers Resend with the 404 path and throws nothing', async () => {
+      const refetchMembers = vi.fn()
+      const gw = gateway({ list: [answer(listOf()), answer(listOf())], resend: [refuse(404, ERR_NOT_FOUND)] })
+      render(<Harness initial={[...adminRoster(), otherMember()]} authedFetch={gw.authedFetch} refetchMembers={refetchMembers} />)
+      await landed()
+      expect(inviteRows(), 'the invited membership renders as an invite row').toHaveLength(1)
+      expect(within(inviteRows()[0]).getByText('INVITED')).toBeTruthy()
+
+      clickResendOn(inviteRows()[0])
+
+      await waitFor(() => expect(screen.getByTestId('members-invites-error').textContent).toBe(ERR_NOT_FOUND))
+      expect(gw.resends()[0].url).toBe(`${GW_BASE}/api/tenancy/v1/invitations/other1/resend`)
+      expect(refetchMembers).toHaveBeenCalledTimes(1)
+      await waitFor(() => expect(gw.lists()).toHaveLength(2))
+    })
+  })
+
+  describe('adversarial: a mixed batch', () => {
+    it('MembersView: one failed mail in a batch flashes the count in red and marks only that row', async () => {
+      const gw = gateway({
+        list: [answer(listOf())],
+        send: [
+          answer(
+            listOf(
+              wire({ id: 'n1', email: 'a@x.ng', role: 'preparer' }),
+              wire({ id: 'n2', email: 'b@x.ng', role: 'preparer', delivery: 'failed' }),
+            ),
+          ),
+        ],
+      })
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} />)
+      await landed()
+      fireEvent.click(inviteButton())
+      fireEvent.change(screen.getByTestId('invite-modal-input'), { target: { value: 'a@x.ng, b@x.ng' } })
+      fireEvent.click(screen.getByTestId('invite-modal-send'))
+
+      await waitFor(() => expect(inviteRows()).toHaveLength(2))
+      expect(gw.sends()[0].body).toEqual({ emails: ['a@x.ng', 'b@x.ng'], role: 'preparer' })
+      expect(flash().textContent).toBe("1 of 2 invite emails did not go out. Resend it from the row's ⋯ menu.")
+      expect(flash().style.color).toBe('var(--status-red-text)')
+      expect(within(inviteRowFor('a@x.ng')).getByText('Expires in 7 days')).toBeTruthy()
+      expect(within(inviteRowFor('a@x.ng')).queryByText('Email not sent')).toBeNull()
+      expect(within(inviteRowFor('b@x.ng')).getByText('Email not sent')).toBeTruthy()
+      expect(screen.queryByTestId('invite-modal')).toBeNull()
     })
   })
 })

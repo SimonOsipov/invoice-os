@@ -672,7 +672,7 @@ Read either as a statement of fact, never as "presumably enforced somewhere".
 | manage ERP connectors | ✓ | — | — | **no server surface** — no endpoint exists |
 | manage signing certificates | ✓ | — | — | **no server surface** — no endpoint exists |
 
-**Three rows are server-enforced today**, and one of those only in half. Any wider claim
+**Three rows are server-enforced today.** Any wider claim
 — that the matrix as a whole is backed — remains aspirational. Arming shipped (APPR-06):
 the runs exist. Approve/reject shipped (APPR-07): `internal/approval/decision.go` is the
 enforcement point. The transmit gate shipped (APPR-08): an open approval run

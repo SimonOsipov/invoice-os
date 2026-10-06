@@ -295,6 +295,16 @@ describe('RESEND-07-04: the pending row menu', () => {
     expect(onOpen).toHaveBeenCalledTimes(1)
   })
 
+  it('MembersTable: the scroll container holds the table and pads only while a menu is open', () => {
+    renderPending()
+    const scroll = screen.getByTestId('members-table-scroll')
+    expect(scroll.contains(screen.getByTestId('members-table')), 'L2 reads the menu against this container').toBe(true)
+    const closed = scroll.style.paddingBottom
+
+    openMenuOf(screen.getByTestId('invite-row'))
+    expect(scroll.style.paddingBottom, 'an open menu gets clearance the closed table does not').not.toBe(closed)
+  })
+
   it('MembersTable: an invited membership without an invitation shows the pill only', () => {
     const lone = member({ id: 'u9', name: 'Lone Invitee', email: 'lone@x.ng', status: 'invited' })
     render(

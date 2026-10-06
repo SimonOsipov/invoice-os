@@ -247,7 +247,6 @@ export function drawerRoleHelper(role: AccessRole): string {
     : 'Roles decide which approval steps this person can act on.'
 }
 
-/** Beneath the invite modal's `Workflow role` select, in both modes. */
 export const INVITE_ROLE_HELPER =
   'The workflow role decides which approval steps they can sign. You can change it later in Settings › Roles.'
 

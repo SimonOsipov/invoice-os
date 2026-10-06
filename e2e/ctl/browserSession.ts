@@ -1,10 +1,10 @@
-// The browser half of ctl login. Every e2e helper loads inside a function, after login set the URL variables (D30).
-import { chmodSync } from 'node:fs'
+// The browser half of ctl login. Every e2e helper loads inside a function, after login set the URL variables.
+import { chmodSync, readFileSync } from 'node:fs'
 
 import { chromium, type Browser, type BrowserContext, type Page } from '@playwright/test'
 
 import { CtlError } from './main'
-import { raceReady, type Account, type AccountKey } from './login'
+import type { Account, AccountKey } from './login'
 import type { EnvResult } from './railway'
 
 type Urls = EnvResult['urls']
@@ -68,21 +68,44 @@ export async function signInFresh(key: AccountKey, account: Account, _urls: Urls
   })
 }
 
-// Any failure of the saved state, including a failed check after it drew, reads as stale: the caller signs in again.
+const APP_SESSION_KEY = 'invoice-os.session'
+const MIN_LIFE_S = 60
+
+// The access token a saved state holds for one origin, or undefined for any unreadable shape.
+function savedToken(statePath: string, origin: string, key: string): string | undefined {
+  try {
+    const state = JSON.parse(readFileSync(statePath, 'utf8')) as { origins?: { origin: string; localStorage: { name: string; value: string }[] }[] }
+    const raw = state.origins?.find((o) => o.origin === origin)?.localStorage.find((i) => i.name === key)?.value
+    const token = raw === undefined ? undefined : (JSON.parse(raw) as { token?: unknown }).token
+    return typeof token === 'string' ? token : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// A saved state is reused only on a live access token. Booting the page would present the saved refresh token to GoTrue
+// (a console always renews at boot), and a token the agent's live session already rotated revokes that session.
+// Any failure reads as stale: the caller signs in again, which mints a new session.
 export async function checkSavedState(key: AccountKey, account: Account, urls: Urls, statePath: string): Promise<{ ok: boolean; role?: string }> {
   const dest = destinationOf(key)
-  const { DESTINATION_READY } = await import('../personaSession')
-  const landing = new URL(urls.LANDING_URL as string).origin
-  return withContext(statePath, async (context, page) => {
-    await page.goto(rootUrl(dest, urls))
-    const verdict = await raceReady(DESTINATION_READY[dest](page, READY_TIMEOUT), page.waitForURL((u) => u.origin === landing, { timeout: READY_TIMEOUT }))
-    if (verdict === 'stale') return { ok: false }
-    try {
-      const role = dest === 'app' ? await browserRole(page, account.tenantId as string) : undefined
-      await save(context, statePath)
-      return { ok: true, role }
-    } catch {
-      return { ok: false }
-    }
-  })
+  const storageKey = dest === 'app' ? APP_SESSION_KEY : (await import('../staffSession')).CONSOLE_SESSION_KEY[dest]
+  const token = savedToken(statePath, new URL(rootUrl(dest, urls)).origin, storageKey)
+  const claims = token === undefined ? undefined : claimsOf(token)
+  if (!claims || typeof claims.exp !== 'number' || claims.exp - Date.now() / 1000 < MIN_LIFE_S) return { ok: false }
+  if (dest !== 'app') return (claims.app_metadata as { staff?: unknown } | undefined)?.staff === true ? { ok: true } : { ok: false }
+  try {
+    const { me } = await import('../api/client')
+    const read = await me(token as string)
+    return read.tenant.id === account.tenantId ? { ok: true, role: read.user.role } : { ok: false }
+  } catch {
+    return { ok: false }
+  }
+}
+
+function claimsOf(token: string): Record<string, unknown> | undefined {
+  try {
+    return JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8')) as Record<string, unknown>
+  } catch {
+    return undefined
+  }
 }

@@ -241,7 +241,7 @@ describe('ctl entry under node', () => {
     expect(r.status, r.stderr).toBe(0)
     const out = JSON.parse(r.stdout.trim().split('\n').pop() as string)
     expect(Object.keys(out.exportsOf)).toEqual(expect.arrayContaining(['login.ts', 'railway.ts', 'browserSession.ts', 'personaSession.ts']))
-    // login.ts loads no URL-resolving helper at import time (D30).
+    // login.ts loads no URL-resolving helper at import time.
     expect(out.early).toEqual([])
     // browserSession drives the front door and the handoff check that personaSession must export.
     expect(out.exportsOf['personaSession.ts']).toEqual(expect.arrayContaining(['passFrontDoor', 'expectHandoffSession']))

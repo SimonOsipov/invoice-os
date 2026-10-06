@@ -121,7 +121,7 @@ describe('e2eMember', () => {
     expect(realm.e2eMember(id, 'admin')).toEqual(realm.e2eMember(id))
     expect(realm.e2eMember(id, 'admin').email).toBe(`e2e-member-${id}@example.com`)
 
-    // Literals from origin/main's e2eMember: a changed value locks the accounts a PR environment already holds (D10).
+    // Literals from origin/main's e2eMember: a changed value locks the accounts a PR environment already holds.
     expect(realm.e2eMember('11111111-1111-1111-1111-111111111111')).toEqual({
       email: 'e2e-member-11111111-1111-1111-1111-111111111111@example.com',
       password: 'e2e-member-pw-11111111-1111-1111-1111-111111111111',

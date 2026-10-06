@@ -91,7 +91,7 @@ const LOGIN_HELP = 'Run "pnpm -s --filter @invoice-os/e2e ctl login --help".'
 const usage = (message: string) => new CtlError(message, LOGIN_HELP, 2)
 const PLAYWRIGHT_CLI = 'pnpm -s --filter @invoice-os/e2e exec playwright-cli'
 
-// Requests the gateway sees: register + grant per account (provisionAll), one grant (regrant). D31.
+// Requests the gateway sees: register + grant per account (provisionAll), one grant (regrant).
 const PROVISION_WRITES = 2 * ACCOUNT_KEYS.length
 
 const productionRefusal = () =>
@@ -149,7 +149,7 @@ export function createStore(root: string): Store {
   }
 }
 
-// Returns only when all 8 succeed; the caller writes the store after, so a failure leaves nothing (D36).
+// Returns only when all 8 succeed; the caller writes the store after, so a failure leaves nothing.
 // ceiling: a retry after a staff failure adds two more staff rows; clean them with the PR environment.
 export async function provisionAll(): Promise<Accounts> {
   const { ensureMember, e2eMember } = await import('../realAccounts')
@@ -175,7 +175,7 @@ export async function provisionAll(): Promise<Accounts> {
 
 const throttleHint = (status: number) => (status === 429 || status === 503 ? 'Throttled or hand-off store full; retry later.' : 'Unexpected gateway answer.')
 
-// The sign-in side effects (one stored hand-off code, one throttle slot) are accepted, D28.
+// The sign-in side effects (one stored hand-off code, one throttle slot) are accepted.
 export async function credentialsValid(account: Account): Promise<boolean> {
   const { rawFetch, mintSignInState } = await import('../api/client')
   const res = await rawFetch('/auth/sign-in', { method: 'POST', body: { email: account.email, password: account.password, state: mintSignInState() } })
@@ -204,7 +204,7 @@ export async function apiRole(account: Account): Promise<ApiRole> {
   }
 }
 
-// Not through ensureMember: its per-process cache would skip the grant after provisionAll (D32).
+// Not through ensureMember: its per-process cache would skip the grant after provisionAll.
 export async function regrant(_key: AccountKey, account: Account): Promise<void> {
   const { signInSession, subjectOf, grantMembership } = await import('../api/client')
   const token = (await signInSession(account.email, account.password)).access_token
@@ -217,7 +217,7 @@ export async function regrant(_key: AccountKey, account: Account): Promise<void>
   })
 }
 
-// 'ready' only if the ready promise wins; both promises get a rejection handler (D37).
+// 'ready' only if the ready promise wins; both promises get a rejection handler.
 export function raceReady(ready: Promise<unknown>, bounced: Promise<unknown>): Promise<'ready' | 'stale'> {
   return Promise.race([
     ready.then(() => 'ready' as const, () => 'stale' as const),
@@ -274,7 +274,7 @@ async function runLogin(req: LoginRequest, deps: LoginDeps, secrets: Set<string>
   if (dark.length > 0) {
     throw new CtlError(`${dark.join(', ')} is dark for ${persona}`, "Not an app bug. The deploy gate's verify-spa-domains step recreates the domain; re-run the gate or report it.", 1)
   }
-  // The e2e helpers read these at module scope, so they load only after this (D30).
+  // The e2e helpers read these at module scope, so they load only after this.
   for (const [name, value] of Object.entries(resolved.urls)) if (value) process.env[name] = value
 
   let saved = deps.store.read(env)

@@ -1144,6 +1144,7 @@ func TestSetProductionAuth_PostMergeIgnoresSealedVariablesOnTenancy(t *testing.T
 	for _, c := range []struct{ name, sealed string }{
 		{"RESEND_SENDING_KEY sealed on tenancy", prodSealedOn(authProdTenancyID, "RESEND_SENDING_KEY")},
 		{"an auth name sealed on tenancy", prodSealedOn(authProdTenancyID, "GOTRUE_JWT_KEYS")},
+		{"RESEND_SENDING_KEY sealed on auth", prodSealedOn(authProdAuthID, "RESEND_SENDING_KEY")},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := run(t, c.sealed)

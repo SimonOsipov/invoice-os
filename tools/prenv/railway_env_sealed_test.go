@@ -179,6 +179,18 @@ func TestAuditSealed_SendingKeyOnTenancyPasses(t *testing.T) {
 		stdout, out, code := runAudit(t, newSealedShim(t, sourceInstances(), nodes...))
 		requireAllowed(t, stdout, out, code, append(slices.Clone(sealedAllowlist), tenancyAllowlist...)...)
 	})
+	t.Run("auth names sealed, tenancy key unsealed", func(t *testing.T) {
+		var nodes []string
+		for _, n := range sealedAllowlist {
+			nodes = append(nodes, sealedOn(n, sealedAuthID))
+		}
+		nodes = append(nodes, plainOn("RESEND_SENDING_KEY", sealedTenancyID))
+		stdout, out, code := runAudit(t, newSealedShim(t, sourceInstances(), nodes...))
+		requireAllowed(t, stdout, out, code, sealedAllowlist...)
+		if strings.Contains(stdout, "RESEND_SENDING_KEY") {
+			t.Errorf("stdout names RESEND_SENDING_KEY, which is not sealed; stdout = %q", stdout)
+		}
+	})
 	t.Run("unsealed on tenancy is not listed as sealed", func(t *testing.T) {
 		stdout, out, code := runAudit(t, newSealedShim(t, sourceInstances(), plainOn("RESEND_SENDING_KEY", sealedTenancyID)))
 		requireAllowed(t, stdout, out, code)

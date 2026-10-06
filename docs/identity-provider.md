@@ -1386,7 +1386,7 @@ To go back to GoTrue's default mail, unset both variables and deploy `auth`.
 
 Production writes are the user's, after the epic reaches `main`. `P` and `E` are the project
 and production environment ids named under "Opening registration in production". Until U1,
-`tenancy` has no key and boots in `capture` mode: an invite is stored and no mail is sent.
+`tenancy` has no key and boots in `off` mode: an invite is stored and no mail is sent.
 
 | Step | When | Production write |
 |---|---|---|
@@ -1425,10 +1425,10 @@ variables"; push to the PR, or re-run from a fresh event, instead of `gh run rer
 production". Then read `tenancy`'s boot line:
 
 ```
-msg="tenancy: invite mail mode" mode=real
+{"time":"...","level":"INFO","msg":"tenancy: invite mail mode","service":"tenancy","environment":"...","mode":"real"}
 ```
 
-`mode=capture` means the key was not read: check U1's write and the deploy. Invite one real
+`"mode":"off"` means the key was not read: check U1's write and the deploy. Invite one real
 address to prove the send end to end.
 
 ## Opening sign-in in production (sign-in U1–U3)

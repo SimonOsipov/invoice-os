@@ -102,3 +102,14 @@ func TestAuditSealed_MissingTenancyServiceFailsClosed(t *testing.T) {
 		requireAllowed(t, stdout, out, code)
 	})
 }
+
+// Beside the allowed key, a prefix or case match on the name would also hide the offender.
+func TestAuditSealed_TenancyNameLookalikesFail(t *testing.T) {
+	for _, name := range []string{"RESEND_SENDING_KEY_2", "resend_sending_key", "RESEND_API_KEY"} {
+		t.Run(name, func(t *testing.T) {
+			_, out, code := runAudit(t, newSealedShim(t, sourceInstances(),
+				sealedOn("RESEND_SENDING_KEY", sealedTenancyID), sealedOn(name, sealedTenancyID)))
+			requireRefused(t, out, code, name+"@"+sealedTenancyID)
+		})
+	}
+}

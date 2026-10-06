@@ -9,10 +9,9 @@ import (
 )
 
 const (
-	reconciliationURL       = "http://reconciliation.railway.internal:8080"
-	reconciliationURLUsage  = "usage: railway-env.sh set-fork-reconciliation-url <environment-id>"
-	reconciliationURLRunCmd = `bash scripts/ci/railway-env.sh set-fork-reconciliation-url "$ENV_ID"`
-	reconciliationDBNeedle  = "postgresql://invoice_app:planted-recon-db-password@h:5432/railway"
+	reconciliationURL      = "http://reconciliation.railway.internal:8080"
+	reconciliationURLUsage = "usage: railway-env.sh set-fork-reconciliation-url <environment-id>"
+	reconciliationDBNeedle = "postgresql://invoice_app:planted-recon-db-password@h:5432/railway"
 )
 
 var reconciliationGatewayID = sentrySvcID("gateway")

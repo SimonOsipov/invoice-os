@@ -12,8 +12,6 @@ import (
 
 const (
 	gtBentToken = "PLANTED-BENT-REREAD-VALUE"
-
-	forkGatewayTokenRunCmd = `bash scripts/ci/railway-env.sh set-fork-gateway-token "$ENV_ID"`
 )
 
 // Built at runtime so no secret-shaped literal sits in source.

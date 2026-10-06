@@ -11,8 +11,7 @@ import (
 )
 
 const (
-	sentryUsage     = "usage: railway-env.sh set-sentry-off <environment-id>"
-	sentryOffRunCmd = `bash scripts/ci/railway-env.sh set-sentry-off "$ENV_ID"`
+	sentryUsage = "usage: railway-env.sh set-sentry-off <environment-id>"
 
 	// Planted values a fork inherits. None may be printed.
 	sentryDSNSentinel   = "https://5eedpublickey@o4500000.ingest.de.sentry.io/4500000000000001"

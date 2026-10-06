@@ -408,7 +408,7 @@ func TestInvitations_ReinvitingAPendingAddressReissues(t *testing.T) {
 	}
 }
 
-// Normalising is the handler's job (RESEND-05-06); the store must match the stored lower-case address exactly.
+// Normalising is the handler's job; the store must match the stored lower-case address exactly.
 func TestInvitations_AddressIsMatchedAfterNormalising(t *testing.T) {
 	w := newInvWorld(t, "Normalise Tenant", "Ada Obi")
 	mustIssue(t, w.adminCtx(), w.store, []string{"b@x.test"}, "reviewer")
@@ -882,6 +882,9 @@ func TestInvitations_ResendNamesTheOriginalInviterOrFallsBack(t *testing.T) {
 		}, "Ada Obi"},
 		{"display name null falls back to email", func(t *testing.T, w invWorld, id string) {
 			seedIdentityMembership(t, w.super, w.tenant, id, "admin", "active", nil, strp("ada@obi.test"))
+		}, "ada@obi.test"},
+		{"display name empty falls back to email", func(t *testing.T, w invWorld, id string) {
+			seedIdentityMembership(t, w.super, w.tenant, id, "admin", "active", strp(""), strp("ada@obi.test"))
 		}, "ada@obi.test"},
 		{"suspended inviter is still named", func(t *testing.T, w invWorld, id string) {
 			seedIdentityMembership(t, w.super, w.tenant, id, "admin", "suspended", strp("Ada Obi"), strp("ada@obi.test"))

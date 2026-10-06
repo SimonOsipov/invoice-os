@@ -56,7 +56,7 @@ var (
 	ErrLastActiveAdmin          = errors.New("tenancy: last active admin")
 )
 
-// Sentinels for the invitations store (RESEND-05).
+// Sentinels for the invitations store.
 var (
 	ErrInviteNotPermitted   = errors.New("tenancy: invite not permitted")
 	ErrInvitationNotFound   = errors.New("tenancy: invitation not found")

@@ -191,7 +191,7 @@ func (s *Store) ResendInvitation(ctx context.Context, id string) (IssuedInvite, 
 		// No status filter: a suspended inviter is still the one who invited.
 		var inviter *string
 		if err := tx.QueryRow(ctx,
-			`SELECT COALESCE(display_name, email) FROM memberships WHERE user_id = $1`, invitedBy,
+			`SELECT COALESCE(NULLIF(display_name, ''), email) FROM memberships WHERE user_id = $1`, invitedBy,
 		).Scan(&inviter); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}

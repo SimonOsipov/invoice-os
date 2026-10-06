@@ -385,7 +385,7 @@ func inTenantRollback(t *testing.T, tenant string, fn func(ctx context.Context, 
 const insertPending = `INSERT INTO invitations (tenant_id, role, invitee_email, token_hash, expires_at, invited_by)
 	 VALUES ($1, 'preparer', $2, $3, $4, $5)`
 
-// RESEND-05-01 AC 1: the four columns, their types and nullability, and the send_status
+// AC 1: the four columns, their types and nullability, and the send_status
 // default and CHECK.
 func TestRLS_InvitationsTokenColumnsExist(t *testing.T) {
 	h := requireHarness(t)
@@ -480,7 +480,7 @@ func TestRLS_InvitationsTokenColumnsExist(t *testing.T) {
 	pgViolation(t, "send_status = NULL", err, "23502", "")
 }
 
-// RESEND-05-01 AC 2: a pending row missing any of the three is refused; a complete one stores.
+// AC 2: a pending row missing any of the three is refused; a complete one stores.
 func TestRLS_InvitationsPendingRowNeedsItsToken(t *testing.T) {
 	h := requireHarness(t)
 	exp, by := time.Now().Add(7*24*time.Hour), uuid.NewString()
@@ -521,7 +521,7 @@ func TestRLS_InvitationsPendingRowNeedsItsToken(t *testing.T) {
 	}
 }
 
-// RESEND-05-01 AC 3: only a pending row needs the token fields.
+// AC 3: only a pending row needs the token fields.
 func TestRLS_InvitationsNonPendingRowNeedsNoToken(t *testing.T) {
 	h := requireHarness(t)
 
@@ -562,7 +562,7 @@ func TestRLS_InvitationsNonPendingRowNeedsNoToken(t *testing.T) {
 	}
 }
 
-// RESEND-05-01 AC 4 (boundary): a token hash is exactly 32 bytes.
+// AC 4 (boundary): a token hash is exactly 32 bytes.
 func TestRLS_InvitationsTokenHashIsThirtyTwoBytes(t *testing.T) {
 	h := requireHarness(t)
 	exp, by := time.Now().Add(7*24*time.Hour), uuid.NewString()
@@ -592,7 +592,7 @@ func TestRLS_InvitationsTokenHashIsThirtyTwoBytes(t *testing.T) {
 	}
 }
 
-// RESEND-05-01 AC 5: one token identifies one invite, inside a tenant and across tenants.
+// AC 5: one token identifies one invite, inside a tenant and across tenants.
 func TestRLS_InvitationsTokenHashIsUnique(t *testing.T) {
 	h := requireHarness(t)
 	exp, by := time.Now().Add(7*24*time.Hour), uuid.NewString()
@@ -620,7 +620,7 @@ func TestRLS_InvitationsTokenHashIsUnique(t *testing.T) {
 	pgViolation(t, "same token_hash, other tenant", err, "23505", "invitations_token_hash_uq")
 }
 
-// RESEND-05-01 AC 6: RLS covers the new columns, for reads and writes.
+// AC 6: RLS covers the new columns, for reads and writes.
 func TestRLS_InvitationsTokenColumnsCrossTenantRefused(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
@@ -697,7 +697,7 @@ func TestRLS_InvitationsTokenColumnsCrossTenantRefused(t *testing.T) {
 	}
 }
 
-// RESEND-05-01 AC 7: the Up body applies over a pending row that has no token and leaves it
+// AC 7: the Up body applies over a pending row that has no token and leaves it
 // as it was. The Down body strips the columns first, which recreates the legacy row shape.
 func TestRLS_InvitationsTokenMigrationKeepsALegacyPendingRow(t *testing.T) {
 	h := requireHarness(t)
@@ -777,7 +777,7 @@ func savepointTry(ctx context.Context, tx pgx.Tx, fn func(sp pgx.Tx) error) erro
 	return fn(sp)
 }
 
-// RESEND-05-01 AC 1-6, read from the migration file: Down then Up run in a rolled-back migrator
+// AC 1-6, read from the migration file: Down then Up run in a rolled-back migrator
 // tx, so an edit to the file changes what the cases below see. The live-schema tests above read
 // the already-migrated database, which a file edit does not touch.
 func TestRLS_InvitationsTokenMigrationFileEnforcesItsConstraints(t *testing.T) {

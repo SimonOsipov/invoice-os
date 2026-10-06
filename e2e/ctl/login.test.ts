@@ -1132,6 +1132,25 @@ describe('login scrubs saved passwords from every escaping error', () => {
     expect(err.message, 'a lookalike that is not the password is untouched').toContain('axb*c(d)[e]+$^|\\q?{1} stay apart')
   })
 
+  it('a plain string thrown by a dependency is scrubbed', async () => {
+    const secret = accountFor('firm-admin').password
+    const { L, root, deps } = await setup({
+      signInFresh: vi.fn(async () => {
+        throw `fill("${secret}") timed out`
+      }),
+    })
+    seed(root)
+
+    const thrown = await L.login(req('firm', 'admin'), deps).then(
+      () => undefined,
+      (e: unknown) => e,
+    )
+
+    expect(typeof thrown, 'the string was rethrown as a string').toBe('string')
+    expect(thrown).toContain('timed out')
+    expect((thrown as string).includes(secret)).toBe(false)
+  })
+
   it('a password that is a prefix of another is removed from both whole', async () => {
     const admin = 'e2e-member-pw-1111'
     const reviewer = `${admin}-reviewer`

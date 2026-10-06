@@ -86,10 +86,13 @@ describe('InviteModal', () => {
   it('InviteModal: Enter, comma and semicolon commit chips', async () => {
     const { user } = renderModal()
     await user.type(input(), 'a@x.ng{Enter}')
+    expect(addresses()).toEqual(['a@x.ng'])
     await user.type(input(), 'b@x.ng,')
+    expect(addresses()).toEqual(['a@x.ng', 'b@x.ng'])
     await user.type(input(), 'c@x.ng;')
     expect(chips()).toHaveLength(3)
     expect(addresses()).toEqual(['a@x.ng', 'b@x.ng', 'c@x.ng'])
+    expect(chips().map((c) => c.getAttribute('title'))).toEqual(['a@x.ng', 'b@x.ng', 'c@x.ng'])
     expect(input().value).toBe('')
   })
 
@@ -311,6 +314,12 @@ describe('InviteModal', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
     await user.click(screen.getByTestId('invite-modal-cancel'))
     expect(onClose).toHaveBeenCalledTimes(2)
+    await user.click(screen.getByTestId('invite-modal-close'))
+    expect(onClose).toHaveBeenCalledTimes(3)
+    await user.click(screen.getByTestId('invite-modal'))
+    expect(onClose).toHaveBeenCalledTimes(4)
+    await user.click(screen.getByRole('dialog'))
+    expect(onClose).toHaveBeenCalledTimes(4)
   })
 
   it('InviteModal: Escape does not close while sending', async () => {
@@ -321,9 +330,175 @@ describe('InviteModal', () => {
     expect(onSend).toHaveBeenCalledTimes(1)
     await user.keyboard('{Escape}')
     await user.click(screen.getByTestId('invite-modal-cancel'))
+    await user.click(screen.getByTestId('invite-modal-close'))
+    await user.click(screen.getByTestId('invite-modal'))
     expect(onClose).not.toHaveBeenCalled()
     pending.resolve()
-    await settle()
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+  })
+
+  describe('adversarial', () => {
+    const R = 'a..b@x.com'
+    const rejectNaming = (...named: string[]) =>
+      new ApiError('http', `invalid email address: ${named.map((n) => JSON.stringify(n)).join(', ')}`, 400)
+
+    it('InviteModal: a control character or an over-254-byte address is red, 254 bytes and a cased member are judged by the rules', async () => {
+      const bytes255 = `${'é'.repeat(125)}@x.ng`
+      const bytes254 = `${'a'.repeat(249)}@x.ng`
+      expect(new TextEncoder().encode(bytes255).length).toBe(255)
+      expect(bytes255.length).toBeLessThan(254)
+      expect(new TextEncoder().encode(bytes254).length).toBe(254)
+      const { user } = renderModal({ existing: [member()] })
+      await user.click(input())
+      await user.paste(`a\u0001b@x.ng a\u0085b@x.ng ${bytes255} ${bytes254} ADA@X.NG`)
+      expect(chips()).toHaveLength(5)
+      expect(chips().map((c) => c.getAttribute('data-verdict'))).toEqual(['malformed', 'malformed', 'malformed', 'ok', 'member'])
+      expect(reasons()).toEqual([NOT_VALID, NOT_VALID, NOT_VALID, null, 'Already a member'])
+    })
+
+    it('InviteModal: a paste appends to the draft and merges across separators, whitespace and case', async () => {
+      const { user } = renderModal()
+      await addChips(user, 'b@x.ng')
+      await user.type(input(), 'a@x')
+      await user.paste('.ng, B@x.ng;;\n\t c@x.ng  ,A@X.NG ,, ')
+      expect(addresses()).toEqual(['b@x.ng', 'a@x.ng', 'c@x.ng'])
+      expect(input().value).toBe('')
+    })
+
+    it('InviteModal: Enter and separators on an empty or separator-only draft chip nothing', async () => {
+      const { user, onSend } = renderModal()
+      await user.type(input(), '{Enter}')
+      await user.type(input(), ',')
+      await user.type(input(), ';')
+      await user.type(input(), '  {Enter}')
+      expect(chips()).toHaveLength(0)
+      expect(send().disabled).toBe(true)
+      expect(onSend).not.toHaveBeenCalled()
+    })
+
+    it('InviteModal: a valid draft alone enables Send and sends it', async () => {
+      const { user, onSend, onClose } = renderModal()
+      await user.type(input(), 'a@x.ng')
+      expect(chips()).toHaveLength(0)
+      expect(send().disabled).toBe(false)
+      await user.click(send())
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+      expect(onSend).toHaveBeenCalledTimes(1)
+      expect(onSend).toHaveBeenCalledWith(['a@x.ng'], 'preparer')
+    })
+
+    it.each(['nope', 'm@x.ng'])('InviteModal: Send with only the unsendable draft %j calls onSend with nothing', async (draft) => {
+      const { user, onSend } = renderModal({ existing: [member({ id: 'm', email: 'm@x.ng' })] })
+      await user.type(input(), draft)
+      expect(chips()).toHaveLength(0)
+      await user.click(send())
+      await settle()
+      expect(onSend).not.toHaveBeenCalled()
+      expect(screen.queryByTestId('invite-modal-error')).toBeNull()
+    })
+
+    it.each(['admin', 'preparer', 'reviewer'] as const)('InviteModal: the %s role is sent verbatim, on the re-send too', async (role) => {
+      const onSend = sendMock().mockRejectedValueOnce(rejectNaming(R)).mockResolvedValueOnce(undefined)
+      const { user } = renderModal({ onSend })
+      await user.click(within(screen.getByTestId(`invite-role-${role}`)).getByRole('radio'))
+      for (const r of ACCESS_ROLES) {
+        expect((within(screen.getByTestId(`invite-role-${r.id}`)).getByRole('radio') as HTMLInputElement).checked).toBe(r.id === role)
+      }
+      await addChips(user, 'ok@x.com', R)
+      await user.click(send())
+      await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2))
+      expect(onSend.mock.calls.map((c) => c[1])).toEqual([role, role])
+    })
+
+    it('InviteModal: a chip removed while red leaves the ok chips to send and close', async () => {
+      const { user, onSend, onClose } = renderModal()
+      await addChips(user, 'nope', 'ok@x.ng')
+      expect(reasons()).toEqual([NOT_VALID, null])
+      await user.click(screen.getByRole('button', { name: 'Remove nope' }))
+      expect(addresses()).toEqual(['ok@x.ng'])
+      await user.click(send())
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+      expect(onSend).toHaveBeenCalledTimes(1)
+      expect(onSend).toHaveBeenCalledWith(['ok@x.ng'], 'preparer')
+    })
+
+    it('InviteModal: a server-named chip stays refused on the next Send and is not mailed again', async () => {
+      const onSend = sendMock().mockRejectedValueOnce(rejectNaming(R)).mockResolvedValue(undefined)
+      const { user, onClose } = renderModal({ onSend })
+      await addChips(user, 'ok@x.com', R)
+      await user.click(send())
+      await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2))
+      await waitFor(() => expect(addresses()).toEqual([R]))
+      await addChips(user, 'new@x.com')
+      await user.click(send())
+      await waitFor(() => expect(onSend).toHaveBeenCalledTimes(3))
+      expect(onSend.mock.calls[2]).toEqual([['new@x.com'], 'preparer'])
+      await waitFor(() => expect(addresses()).toEqual([R]))
+      expect(reasons()).toEqual([NOT_VALID])
+      expect(onClose).not.toHaveBeenCalled()
+    })
+
+    it('InviteModal: a 400 naming several chips and a stranger turns exactly the named chips red', async () => {
+      const onSend = sendMock()
+        .mockRejectedValueOnce(rejectNaming('a..b@x.com', 'other@x.com', 'c..d@x.com'))
+        .mockResolvedValueOnce(undefined)
+      const { user } = renderModal({ onSend })
+      await addChips(user, 'ok@x.com', 'a..b@x.com', 'c..d@x.com', 'fine@x.com')
+      await user.click(send())
+      await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2))
+      await waitFor(() => expect(addresses()).toEqual(['a..b@x.com', 'c..d@x.com']))
+      expect(onSend.mock.calls[1]).toEqual([['ok@x.com', 'fine@x.com'], 'preparer'])
+      expect(reasons()).toEqual([NOT_VALID, NOT_VALID])
+    })
+
+    it('InviteModal: a retry after a rejected re-send clears the error and sends only the ok chips', async () => {
+      const onSend = sendMock()
+        .mockRejectedValueOnce(rejectNaming(R))
+        .mockRejectedValueOnce(new ApiError('http', DAILY_LIMIT, 429))
+        .mockResolvedValue(undefined)
+      const { user, onClose } = renderModal({ onSend })
+      await addChips(user, 'ok@x.com', R)
+      await user.click(send())
+      await waitFor(() => expect(screen.getByTestId('invite-modal-error').textContent).toBe(DAILY_LIMIT))
+      await user.click(send())
+      await waitFor(() => expect(onSend).toHaveBeenCalledTimes(3))
+      expect(onSend.mock.calls[2]).toEqual([['ok@x.com'], 'preparer'])
+      await waitFor(() => expect(addresses()).toEqual([R]))
+      expect(screen.queryByTestId('invite-modal-error')).toBeNull()
+      expect(onClose).not.toHaveBeenCalled()
+    })
+
+    it('InviteModal: a retry after a rejection unlocks the controls and closes once everything sent', async () => {
+      const onSend = sendMock().mockRejectedValueOnce(new ApiError('http', DAILY_LIMIT, 429)).mockResolvedValue(undefined)
+      const { user, onClose } = renderModal({ onSend })
+      await addChips(user, 'a@x.ng')
+      await user.click(send())
+      await waitFor(() => expect(screen.getByTestId('invite-modal-error').textContent).toBe(DAILY_LIMIT))
+      expect(send().textContent).toBe('Send invites')
+      expect(send().disabled).toBe(false)
+      expect(input().disabled).toBe(false)
+      await user.click(send())
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+      expect(onSend).toHaveBeenCalledTimes(2)
+      expect(screen.queryByTestId('invite-modal-error')).toBeNull()
+    })
+
+    it('InviteModal: a send in flight locks the label, the input, Cancel and every remove button', async () => {
+      const pending = deferred()
+      const { user } = renderModal({ onSend: vi.fn<InviteModalProps['onSend']>().mockReturnValue(pending.promise) })
+      await addChips(user, 'a@x.ng', 'nope')
+      expect(send().textContent).toBe('Send invites')
+      await user.click(send())
+      expect(send().textContent).toBe('Sending…')
+      expect(send().disabled).toBe(true)
+      expect(input().disabled).toBe(true)
+      expect((screen.getByTestId('invite-modal-cancel') as HTMLButtonElement).disabled).toBe(true)
+      const removes = screen.getAllByRole('button', { name: /^Remove / }) as HTMLButtonElement[]
+      expect(removes).toHaveLength(2)
+      expect(removes.every((b) => b.disabled)).toBe(true)
+      pending.resolve()
+      await settle()
+    })
   })
 
   it('InviteModal: the chip box is the pf-chipbox field', () => {

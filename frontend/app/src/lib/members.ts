@@ -328,8 +328,7 @@ export function isProtectedAdmin(list: readonly Member[], member: Member): boole
 // ---------------------------------------------------------------------------
 // The invite modal's copy and its client-picker derivations
 // ---------------------------------------------------------------------------
-// The modal that rendered these is gone with the unbacked invite flow; `ClientAccessPicker`
-// still reads the picker half. Living here rather than in a component for §15.8's reason:
+// `ClientAccessPicker` reads the picker half. Living here rather than in a component for §15.8's reason:
 // vitest is `environment: node`, so a string authored inside a component is a string no
 // spec can hold.
 //

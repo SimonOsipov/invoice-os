@@ -134,7 +134,7 @@ func TestAuthIssuersFailureNamesItsLikelyCause(t *testing.T) {
 		isPR          string
 		issuers, want string
 	}{
-		{"true", "1", "set-fork-auth did not write AUTH_ADDITIONAL_ISSUERS"},
+		{"true", "1", "fork-vars-before-urls did not write AUTH_ADDITIONAL_ISSUERS"},
 		{"false", "2", "AUTH_ADDITIONAL_ISSUERS is set there"},
 		{"true", "", "predates the field"},
 		{"false", "", "predates the field"},
@@ -152,6 +152,27 @@ func TestAuthIssuersFailureNamesItsLikelyCause(t *testing.T) {
 		}
 		if !slices.ContainsFunc(errs, func(l string) bool { return strings.Contains(l, seen) && strings.Contains(l, c.want) }) {
 			t.Errorf("IS_PR=%s auth_issuers=%q: no ::error:: line names %q and %q: %q", c.isPR, c.issuers, seen, c.want, errs)
+		}
+	}
+}
+
+// The demo_purge failure points an operator at the step that runs; set-fork-environment no longer does.
+func TestPurgeFailureNamesTheForkPassThatSetsEnvironment(t *testing.T) {
+	run := healthGateWaitRun(t)
+	body := healthzBody(true, "2")
+	body["demo_purge"] = "false"
+	code, out, _ := runWithGateShim(t, run, "healthz", body, "IS_PR=true")
+	errs := errorLines(out)
+	if code == 0 || len(errs) == 0 {
+		t.Fatalf("a fork reporting demo_purge=false: health-gate exits %d with no ::error:: line", code)
+	}
+	joined := strings.Join(errs, "\n")
+	if !strings.Contains(joined, "demo_purge='false'") || !strings.Contains(joined, "fork-vars-after-urls set ENVIRONMENT=development") {
+		t.Errorf("no ::error:: line names demo_purge='false' and the fork-vars-after-urls write: %q", errs)
+	}
+	for _, removed := range []string{"set-fork-environment", "set-fork-auth", "set-sentry-off", "set-ai-fake", "reconcile-urls"} {
+		if strings.Contains(joined, removed) {
+			t.Errorf("an ::error:: line sends the operator to %s, a step prepare-env no longer runs: %q", removed, errs)
 		}
 	}
 }

@@ -539,6 +539,21 @@ describe('login chain', () => {
   })
 })
 
+describe('next commands are POSIX-shell safe', () => {
+  it('a storage path and a session with spaces and quotes are single-quoted', async () => {
+    const L = await load()
+    const root = mkdtempSync(path.join(tmpdir(), "ctl login it's "))
+    roots.push(root)
+    const deps = makeDeps(L, root, [])
+
+    const r = await L.login(req('firm', 'admin', 'pr-1', "my ses'sion"), deps)
+
+    const q = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`
+    expect(r.next.some((l) => l.includes(`state-load ${q(r.storageState)}`)), r.next.join('\n')).toBe(true)
+    expect(r.next.filter((l) => l.includes('-s=')).every((l) => l.includes(`-s=${q("my ses'sion")} `)), r.next.join('\n')).toBe(true)
+  })
+})
+
 describe('the API role read (D47)', () => {
   it('the API role read runs before any browser wait', async () => {
     const { L, root, calls, deps } = await setup((c) => ({
@@ -622,6 +637,19 @@ describe('the API role read (D47)', () => {
     expect(count(deps.provisionAll)).toBe(1)
     expect(calls.slice(0, 3)).toEqual(['apiRole', 'provisionAll', 'apiRole'])
     expect(r.created).toBe(true)
+  })
+
+  it('a second gone read after a re-creation does not re-create again', async () => {
+    const { L, root, deps } = await setup({
+      resolveEnv: vi.fn(async (env: string): Promise<EnvResult> => ({ env, environmentId: 'new', urls: { ...urls }, dark: [] })),
+      apiRole: vi.fn(async () => 'gone' as const),
+    })
+    seed(root, { environmentId: 'old' })
+
+    const err = await refused(L.login(req('firm', 'admin'), deps))
+
+    expect(count(deps.provisionAll), 'recreate ran twice in one login').toBe(1)
+    expect(err.message).toMatch(/right after it was created/)
   })
 
   it('staff personas skip the API role read', async () => {

@@ -232,6 +232,9 @@ const NEEDED: Record<Persona, ServiceLabel[]> = {
   support: ['gateway', 'support-console'],
 }
 
+// POSIX single-quote; plain words stay bare.
+const shq = (v: string) => (/^[\w@%+=:,./-]+$/.test(v) ? v : `'${v.replace(/'/g, `'\\''`)}'`)
+
 const REDACTED = '<redacted>'
 
 // Playwright call logs echo filled values, so no saved password leaves login in an error.
@@ -294,7 +297,7 @@ async function runLogin(req: LoginRequest, deps: LoginDeps, secrets: Set<string>
 
   if (!staff) {
     let read = await deps.apiRole(account())
-    if (read === 'gone') {
+    if (read === 'gone' && !created) {
       await recreate()
       read = await deps.apiRole(account())
     }
@@ -331,7 +334,7 @@ async function runLogin(req: LoginRequest, deps: LoginDeps, secrets: Set<string>
 
   const url = (persona === 'developer' ? resolved.urls.OPS_CONSOLE_URL : persona === 'support' ? resolved.urls.SUPPORT_CONSOLE_URL : resolved.urls.APP_URL) as string
   const storageState = path.resolve(statePath)
-  const cli = `${PLAYWRIGHT_CLI} -s=${req.session}`
+  const cli = `${PLAYWRIGHT_CLI} -s=${shq(req.session)}`
   return {
     env,
     persona,
@@ -346,8 +349,8 @@ async function runLogin(req: LoginRequest, deps: LoginDeps, secrets: Set<string>
     next: [
       `${PLAYWRIGHT_CLI} list --json   # run open only if session ${req.session} is absent: open restarts an open session`,
       `${cli} open`,
-      `${cli} state-load ${storageState}`,
-      `${cli} goto ${url}`,
+      `${cli} state-load ${shq(storageState)}`,
+      `${cli} goto ${shq(url)}`,
     ],
   }
 }

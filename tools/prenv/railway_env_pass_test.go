@@ -899,6 +899,42 @@ func TestForkPass_WriteExhaustedBudgetExitsWithoutReRead(t *testing.T) {
 		t.Errorf("a failed write printed confirmation lines %q", got)
 	}
 
+	t.Run("a 429 waits Retry-After, resends the write once and confirms", func(t *testing.T) {
+		s := newPassShim(t, nil, nil)
+		setFaults(t, s, "varsWrite", "429")
+		writeFile(t, filepath.Join(s.dir, "hdr.txt"), "HTTP/2 429\r\nretry-after: 30\r\n\r\n")
+		out, code := runPass(t, s)
+		if code != 0 {
+			t.Fatalf("exit %d, want 0; output = %q", code, clip(out))
+		}
+		if got := s.sleeps(t); !slices.Equal(got, []string{"30"}) {
+			t.Errorf("sleeps = %v, want [30]", got)
+		}
+		if n := opCount(t, s, "varsWrite"); n != 2 {
+			t.Errorf("varsWrite calls = %d, want 2", n)
+		}
+	})
+	t.Run("a 429 that asks for more than 600 s fails the step and names the services", func(t *testing.T) {
+		s := newPassShim(t, nil, nil)
+		setFaults(t, s, "varsWrite", "429")
+		writeFile(t, filepath.Join(s.dir, "hdr.txt"), "HTTP/2 429\r\nretry-after: 601\r\n\r\n")
+		out, code := runPass(t, s)
+		if code != 1 {
+			t.Errorf("exit %d, want 1; output = %q", code, clip(out))
+		}
+		if got := s.sleeps(t); len(got) != 0 {
+			t.Errorf("sleeps = %v, want none: the wait is over the limit", got)
+		}
+		if n, ops := opCount(t, s, "varsWrite"), operations(s.calls(t)); n != 1 || lastOp(ops) != "varsWrite" {
+			t.Errorf("Railway calls = %v, want one varsWrite and no re-read", ops)
+		}
+		line := requireNamedIn(t, errorLines(out), "The batched variable write", "failed for")
+		for _, w := range passWrites(t, s) {
+			if !wordIn(line, passLabel(w.Service)) {
+				t.Errorf("the failure line %q does not name %s, which was in the write", line, passLabel(w.Service))
+			}
+		}
+	})
 	for _, fault := range []string{"503", "timeout"} {
 		t.Run(fault+" then success resends the same write once and confirms", func(t *testing.T) {
 			s := newPassShim(t, nil, nil)

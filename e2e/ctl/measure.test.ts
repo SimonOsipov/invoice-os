@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -13,6 +14,8 @@ import {
   type ExecResult,
   type MeasureRequest,
 } from './measure'
+
+vi.mock('node:child_process', async (orig) => ({ ...(await orig<typeof import('node:child_process')>()), execFile: vi.fn() }))
 
 const E2E_DIR = path.resolve(fileURLToPath(new URL('..', import.meta.url)))
 const req = (over: Partial<MeasureRequest> = {}): MeasureRequest => ({ selector: '.x', props: ['width'], session: 'default', ...over })
@@ -474,5 +477,44 @@ describe('measure output edge cases', () => {
     expect(f.viewports).toEqual([{ width: 1440, height: 800 }])
     expect(f.selectors).toEqual([selector])
     expect(result.matches[0].styles).toEqual({ width: '1px', '--k': 'v' })
+  })
+})
+
+describe('measure spawn and hints', () => {
+  it('the default spawn runs in e2e/ with the update notifier off and the parent env kept', async () => {
+    vi.stubEnv('PW_QA_MARK', 'kept')
+    let seen: { cwd?: string; env?: NodeJS.ProcessEnv } | undefined
+    vi.mocked(execFile).mockImplementation(((_f: string, _a: string[], opts: typeof seen, cb: (e: null, o: string, s: string) => void) => {
+      seen = opts
+      cb(null, '{"selector":".x","count":0,"matches":[]}', '')
+    }) as never)
+
+    await measure(req())
+    expect(seen, 'execFile was called').toBeDefined()
+    expect(seen!.env!.NO_UPDATE_NOTIFIER).toBe('1')
+    expect(seen!.env!.PW_QA_MARK, 'the parent env is kept').toBe('kept')
+    expect(seen!.cwd).toBe(E2E_DIR)
+  })
+
+  it('a successful result that contains "### Error" is still a success', async () => {
+    const measured = {
+      selector: 'text=### Error',
+      viewport: { width: 1440, height: 900 },
+      layoutWidth: 1440,
+      count: 1,
+      matches: [{ index: 0, box: { x: 0, y: 0, width: 1, height: 1 }, styles: { content: '"### Error"' } }],
+    }
+    await expect(measure(req({ selector: 'text=### Error' }), fakeExec({ code: 0, stdout: JSON.stringify(measured) }).exec)).resolves.toEqual(measured)
+  })
+
+  it('the zero-match hint tells an agent to retry while the page draws', async () => {
+    const err = await rejection(measure(req(), fakeExec({ code: 0, stdout: '{"error":"zero-match","selector":".x"}' }).exec))
+    expect(err.hint).toContain('still drawing')
+    expect(err.hint).toContain('retry')
+  })
+
+  it('the unknown-property hint shows the working custom-property form', async () => {
+    const err = await rejection(measure(req(), fakeExec({ code: 0, stdout: '{"error":"unknown-prop","props":["widht"]}' }).exec))
+    expect(err.hint).toContain('--props=--x')
   })
 })

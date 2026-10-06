@@ -92,5 +92,6 @@ export function resendSentNotice(email: string): string {
 export async function resendVerification(email: string): Promise<void> {
   const base = gatewayBase()
   if (!base) throw new ApiError('malformed', 'gateway not configured')
-  await apiFetch<unknown>(`${base}/auth/resend-verification`, { method: 'POST', body: { email: email.trim() } })
+  // The 202 body is never read, so a non-JSON one must not fail.
+  await apiFetch<string>(`${base}/auth/resend-verification`, { method: 'POST', body: { email: email.trim() }, responseType: 'text' })
 }

@@ -137,7 +137,7 @@ export function RegisterModal({ onClose }: { onClose: () => void }) {
               <button type="button" onClick={handleResend} disabled={resending} className="ds-btn ds-btn--outline ds-btn--md" style={{ width: '100%', marginTop: 18 }}>
                 {resending ? 'Sending…' : 'Send the link again'}
               </button>
-              {resendNote?.ok && <p role="status" className="t-body-sm" style={{ margin: '10px 0 0', overflowWrap: 'anywhere' }}>{resendSentNotice(sentTo)}</p>}
+              {resendNote?.ok && <p role="status" className="t-body-sm" style={{ marginTop: 8, marginBottom: 0, overflowWrap: 'anywhere' }}>{resendSentNotice(sentTo)}</p>}
               {resendNote?.ok === false && <Alert text={RESEND_FAILED} />}
               <button type="button" onClick={onClose} className="ds-btn ds-btn--outline ds-btn--md" style={{ width: '100%', marginTop: 10 }}>
                 Close

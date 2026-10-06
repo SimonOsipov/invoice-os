@@ -1008,3 +1008,37 @@ describe('apiRole against a stubbed gateway (D47)', () => {
     }
   })
 })
+
+describe('raceReady, adversarial', () => {
+  it('a ready timeout that lands before a bounce is stale, not a throw', async () => {
+    const L = await load()
+    const ready = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 10))
+
+    expect(await L.raceReady(ready, sleep(50))).toBe('stale')
+  })
+
+  it('a bounce wait that times out while ready is pending is stale, not a throw', async () => {
+    const L = await load()
+    const bounced = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 10))
+
+    expect(await L.raceReady(new Promise<never>(() => {}), bounced)).toBe('stale')
+  })
+})
+
+describe('the re-grant failure message', () => {
+  it('names the expected role apart from the account key, then the actual outcome', async () => {
+    const cases: { me: Answer[]; outcome: string }[] = [
+      { me: [meOk('preparer'), meOk('preparer')], outcome: 'preparer' },
+      { me: [FORBIDDEN, FORBIDDEN], outcome: '403' },
+    ]
+    for (const c of cases) {
+      const { L, root, deps } = await setup()
+      stubGateway({ me: c.me })
+      seed(root, { states: ['firm-reviewer'] })
+
+      const err = await refused(L.login(req('firm', 'reviewer'), { ...deps, apiRole: L.apiRole, regrant: L.regrant }))
+
+      expect(err.message, c.outcome).toMatch(new RegExp(`expected role reviewer for firm-reviewer, got ${c.outcome}`))
+    }
+  })
+})

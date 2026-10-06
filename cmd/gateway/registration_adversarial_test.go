@@ -543,7 +543,7 @@ func TestInvitationRoutes_PreflightAnswersCORS(t *testing.T) {
 	}
 
 	// Positive pair: the POST behind the same wrap answers with the grant and reaches its handler.
-	req := httptest.NewRequest(http.MethodPost, "/auth/invitation", strings.NewReader(`{"token":"T"}`))
+	req := httptest.NewRequest(http.MethodPost, "/auth/invitation", strings.NewReader(`{"token":"Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T"}`))
 	req.Header.Set("Origin", origin)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)

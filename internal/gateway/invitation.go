@@ -82,9 +82,9 @@ func NewHTTPInvitationPreviewer(base *url.URL, client *http.Client, gatewayToken
 }
 
 // previewToken looks up token, answering 404 or 502 itself and reporting false when it did.
-// An empty or over-long token is refused without a lookup.
+// A token that is not 43 base64url characters is refused without a lookup.
 func previewToken(w http.ResponseWriter, r *http.Request, preview InvitationPreviewer, log *slog.Logger, token string) (InvitationPreview, bool) {
-	if token == "" || len(token) > maxVerifyTokenBytes {
+	if !stateShape.MatchString(token) {
 		writeError(w, http.StatusNotFound, msgInviteNotValid)
 		return InvitationPreview{}, false
 	}

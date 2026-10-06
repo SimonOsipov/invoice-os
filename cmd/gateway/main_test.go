@@ -1281,7 +1281,7 @@ func TestInvitationHandlers_NotConfigured503(t *testing.T) {
 	perIP := func() *gateway.SignInThrottle {
 		return gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now)
 	}
-	const registerBody = `{"token":"T","password":"Corr3ct-Horse"}`
+	const registerBody = `{"token":"Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T","password":"Corr3ct-Horse"}`
 
 	// Control: configured, the same call signs the invited address up, so the 503s below are the unset input.
 	t.Run("configured", func(t *testing.T) {
@@ -1327,7 +1327,7 @@ func TestInvitationHandlers_NotConfigured503(t *testing.T) {
 				t.Errorf("GoTrue saw %v and the previewer %d call(s), want none", got, previewed())
 			}
 
-			rec = serveRegistration(invitation, http.MethodPost, "/auth/invitation", `{"token":"T"}`)
+			rec = serveRegistration(invitation, http.MethodPost, "/auth/invitation", `{"token":"Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T"}`)
 			if rec.Code != http.StatusOK || previewed() != 1 {
 				t.Errorf("preview = %d with %d previewer call(s), want 200 and 1: %s", rec.Code, previewed(), rec.Body.String())
 			}
@@ -1361,7 +1361,7 @@ func TestInvitationHandlers_EnforcementFollowsThePosture(t *testing.T) {
 			_, register := invitationHandlers(authURL, site, 0, reg.RegisterPerIP, preview, log)
 
 			for range 11 {
-				req := httptest.NewRequest(http.MethodPost, "/auth/invitation/register", strings.NewReader(`{"token":"T","password":"Corr3ct-Horse"}`))
+				req := httptest.NewRequest(http.MethodPost, "/auth/invitation/register", strings.NewReader(`{"token":"Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T","password":"Corr3ct-Horse"}`))
 				req.RemoteAddr = "203.0.113.7:4000"
 				rec := httptest.NewRecorder()
 				register.ServeHTTP(rec, req)

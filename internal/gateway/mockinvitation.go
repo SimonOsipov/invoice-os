@@ -5,13 +5,9 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"regexp"
 
 	"github.com/google/uuid"
 )
-
-// inviteTokenShape is the 43 base64url characters tenancy mints.
-var inviteTokenShape = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 
 // MockInvitationTokenHandler answers POST /auth/mock/invitation-token by calling set with the parsed body.
 // set reports whether a pending invite matched.
@@ -33,7 +29,7 @@ func MockInvitationTokenHandler(set func(ctx context.Context, tenantID, invitati
 		}
 		tenantID, okTenant := parseHyphenatedUUID(in.TenantID)
 		invitationID, okInvitation := parseHyphenatedUUID(in.InvitationID)
-		if !okTenant || !okInvitation || !inviteTokenShape.MatchString(in.Token) {
+		if !okTenant || !okInvitation || !stateShape.MatchString(in.Token) {
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}

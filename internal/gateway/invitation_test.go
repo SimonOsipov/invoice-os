@@ -24,7 +24,7 @@ const wantLookupUnavailable = "invitation lookup is unavailable"
 
 const (
 	// 43 base64url characters, the shape tenancy mints; "Qz9" appears in no log or error text.
-	inviteToken        = "Qz9Qz9Qz9Qz9Qz9Qz9Qz9Qz9Qz9Qz9Qz9Qz9Qz9Q"
+	inviteToken        = "Qz9Qz9Qz9Qz9Qz9Qz9Qz9Qz9Qz9Qz9Qz9Qz9Qz9Qz9Q"
 	inviteGatewayToken = "gw-token-for-the-invitation-tests"
 	inviteWorkspace    = "Obi Partners"
 	inviteRole         = "reviewer"
@@ -149,7 +149,8 @@ func TestInvitationHandler_TokenLengthCap(t *testing.T) {
 	}{
 		{"empty token", tokenBody(""), 404, 0},
 		{"no token key", `{}`, 404, 0},
-		{"256 bytes", tokenBody(strings.Repeat("a", maxVerifyTokenBytes)), 200, 1},
+		{"43-char token", tokenBody(inviteToken), 200, 1},
+		{"256 bytes, not a token", tokenBody(strings.Repeat("a", maxVerifyTokenBytes)), 404, 0},
 		{"257 bytes", tokenBody(strings.Repeat("a", maxVerifyTokenBytes+1)), 404, 0},
 	}
 	for _, c := range cases {
@@ -541,8 +542,8 @@ func TestInvitationRegister_SharesTheRegisterBudget(t *testing.T) {
 func TestInvitationRegister_FreeMailRule(t *testing.T) {
 	const (
 		freeMail     = "ada@gmail.com"
-		expiredToken = "Ex9Ex9Ex9Ex9Ex9Ex9Ex9Ex9Ex9Ex9Ex9Ex9Ex9E"
-		spentToken   = "Sp9Sp9Sp9Sp9Sp9Sp9Sp9Sp9Sp9Sp9Sp9Sp9Sp9S"
+		expiredToken = "Ex9Ex9Ex9Ex9Ex9Ex9Ex9Ex9Ex9Ex9Ex9Ex9Ex9Ex9E"
+		spentToken   = "Sp9Sp9Sp9Sp9Sp9Sp9Sp9Sp9Sp9Sp9Sp9Sp9Sp9Sp9S"
 	)
 	p := &recordingPreviewer{result: func(token string) (InvitationPreview, error) {
 		if token == inviteToken {
@@ -631,6 +632,53 @@ func TestInvitationRegister_LogsCarryNoTokenOrPassword(t *testing.T) {
 				if strings.Contains(buf.String(), secret) || strings.Contains(rec.Body.String(), secret) {
 					t.Errorf("a log line or the answer carries %q: %s %s", secret, buf.String(), rec.Body.String())
 				}
+			}
+		})
+	}
+}
+
+func TestInvitation_MalformedTokenMakesNoTenancyCall(t *testing.T) {
+	malformed := map[string]string{
+		"short":        "abc",
+		"44 chars":     inviteToken + "A",
+		"42 chars":     inviteToken[:42],
+		"bad alphabet": inviteToken[:42] + "+",
+		"padded":       inviteToken[:42] + "=",
+	}
+	for name, token := range malformed {
+		t.Run("preview "+name, func(t *testing.T) {
+			p := previewing(liveInvite, nil)
+			log, _ := captureLog()
+
+			rec := serveInvitation(InvitationHandler(p.preview, log), "POST", tokenBody(token))
+
+			if rec.Code != 404 {
+				t.Fatalf("status = %d, want 404: %s", rec.Code, rec.Body.String())
+			}
+			requireStringMap(t, rec, map[string]string{"error": wantInviteNotValid})
+			if n := len(p.calls()); n != 0 {
+				t.Errorf("previewer calls = %d, want 0", n)
+			}
+		})
+		t.Run("register "+name, func(t *testing.T) {
+			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+			p := previewing(liveInvite, nil)
+			log, _ := captureLog()
+			h := InvitationRegisterHandler(fake.URL, testClient(), 0, freshRegisterLimit(), true, log, p.preview)
+
+			rec, _ := postInvitee(h, inviteeBody(token, "pw-123456", nil))
+
+			if rec.Code != 404 {
+				t.Fatalf("status = %d, want 404: %s", rec.Code, rec.Body.String())
+			}
+			if got := errorBody(t, rec); got != wantInviteNotValid {
+				t.Errorf("error = %q, want %q", got, wantInviteNotValid)
+			}
+			if n := len(p.calls()); n != 0 {
+				t.Errorf("previewer calls = %d, want 0", n)
+			}
+			if n := len(fake.Calls()); n != 0 {
+				t.Errorf("GoTrue saw %d calls, want 0", n)
 			}
 		})
 	}

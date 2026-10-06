@@ -197,7 +197,7 @@ func assertErrorBody(t *testing.T, rec *httptest.ResponseRecorder, status int, m
 	}
 }
 
-var inviteTokenRe = regexp.MustCompile(regexp.QuoteMeta(accountmail.InviteAcceptURL) + `#token=([A-Za-z0-9_-]{43})`)
+var inviteTokenRe = regexp.MustCompile(regexp.QuoteMeta(accountmail.InviteAcceptURL) + `#token=([A-Za-z0-9_-]{43})(?:[^A-Za-z0-9_-]|$)`)
 
 func mailToken(t *testing.T, m accountmail.Message) string {
 	t.Helper()
@@ -477,6 +477,9 @@ func TestInvitationsAPI_StatusMapping(t *testing.T) {
 		build  func(t *testing.T, a apiWorld) req
 	}{
 		{"no identity, create", 401, "unauthorized", func(t *testing.T, a apiWorld) req { return create(context.Background()) }},
+		{"no identity, create with a malformed body", 401, "unauthorized", func(t *testing.T, a apiWorld) req {
+			return req{context.Background(), http.MethodPost, "/v1/invitations", `{`}
+		}},
 		{"no identity, list", 401, "unauthorized", func(t *testing.T, a apiWorld) req { return list(context.Background()) }},
 		{"no identity, resend", 401, "unauthorized", func(t *testing.T, a apiWorld) req { return resend(context.Background(), someID) }},
 		{"preparer, create", 403, notAdmin, func(t *testing.T, a apiWorld) req {
@@ -571,6 +574,9 @@ func TestInvitationsAPI_FailedSendIsVisible(t *testing.T) {
 		if strings.Contains(logs, secret) {
 			t.Errorf("log holds %q:\n%s", secret, logs)
 		}
+	}
+	if !strings.Contains(logs, "count=1") || !strings.Contains(logs, "status 500") {
+		t.Errorf("failure line lacks count=1 or the status text %q:\n%s", "status 500", logs)
 	}
 
 	events := sentry.Events()

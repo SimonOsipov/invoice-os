@@ -163,6 +163,9 @@ GQL_CURL_RC=0
 GQL_REPORTED=0
 # Auth header override; empty means `Authorization: Bearer $RAILWAY_API_TOKEN`.
 GQL_AUTH_HEADER=""
+# Railway's wait for the 429 just seen (seconds, may be huge), and the per-process total of 429 waits.
+GQL_WAIT=""
+GQL_429_WAITED=0
 # Subcommand name for the call log.
 API_COMMAND="${1:-}"
 # Environment id found by the most recent successful lookup_environment.
@@ -185,10 +188,13 @@ gql_errors() {
 }
 
 # gql_attempt <json-body> <context-label>
-# One HTTP attempt; only curl 28 and HTTP 5xx are transient. The body goes through a pipe:
+# One HTTP attempt; only curl 28 and HTTP 5xx are transient. An HTTP 429 is fault `ratelimit`,
+# with GQL_WAIT set to Railway's wait in whole seconds, empty when it gave none.
+# The body goes through a pipe:
 # argv is visible in `ps`, and a here-string can land in a temp file (TestRailwayAPI_BodyReachesCurlThroughAPipe).
 gql_attempt() {
-  local body="$1" ctx="$2" tmp rc=0 code
+  local body="$1" ctx="$2" tmp rc=0 code ra reset ts at
+  GQL_WAIT=""
   tmp=$(mktemp -d)
   GQL_RESPONSE=$(curl -sS --fail-with-body --connect-timeout 5 --max-time 30 -D "$tmp/hdr" \
         --request POST \
@@ -201,7 +207,6 @@ gql_attempt() {
   if [ -n "${RUNNER_TEMP:-}" ] && grep -qiE '^(ratelimit-policy|x-ratelimit-(limit|remaining)):' "$tmp/hdr" 2>/dev/null; then
     grep -iE '^(ratelimit-policy|x-ratelimit-(limit|remaining)):' "$tmp/hdr" | tr -d '\r' > "$RUNNER_TEMP/railway-api-ratelimit"
   fi
-  rm -rf "$tmp"
 
   GQL_FAULT="" GQL_ERROR="" GQL_CURL_RC=$rc
   case "$rc" in
@@ -218,7 +223,25 @@ gql_attempt() {
       code=$(printf '%s' "$GQL_LAST" | sed -n 's/.*returned error: \([0-9][0-9]*\).*/\1/p')
       case "$code" in
         5??) GQL_FAULT=transient GQL_ERROR="Railway API call failed while $ctx: $GQL_LAST" ;;
-        429) GQL_FAULT=fatal GQL_ERROR="Railway rate-limited this token (HTTP 429) while $ctx; not retried." ;;
+        429)
+          GQL_FAULT=ratelimit GQL_ERROR="Railway rate-limited this call (HTTP 429) while $ctx."
+          ra=$(tr -d '\r' < "$tmp/hdr" | awk -F: 'tolower($1) == "retry-after" { sub(/^[^:]*:[ \t]*/, ""); sub(/[ \t]+$/, ""); print; exit }' || true)
+          reset=$(tr -d '\r' < "$tmp/hdr" | awk -F: 'tolower($1) == "x-ratelimit-reset" { sub(/^[^:]*:[ \t]*/, ""); sub(/[ \t]+$/, ""); print; exit }' || true)
+          if [[ "$ra" =~ ^[0-9]+$ ]]; then
+            # Base 10: bash reads a leading 0 as octal. Anything over 3 digits is over the cap, not a number to add.
+            GQL_WAIT="${ra#"${ra%%[!0]*}"}"
+            GQL_WAIT="${GQL_WAIT:-0}"
+          elif [[ "$reset" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]]; then
+            ts="${reset%%.*}"
+            ts="${ts%Z}"
+            # GNU date (CI), then BSD date (macOS).
+            at=$(date -u -d "${ts}Z" +%s 2>/dev/null || date -u -j -f '%Y-%m-%dT%H:%M:%S' "$ts" +%s 2>/dev/null) || at=""
+            if [ -n "$at" ]; then
+              GQL_WAIT=$((at - $(date +%s)))
+              [ "$GQL_WAIT" -ge 0 ] || GQL_WAIT=0
+            fi
+          fi
+          ;;
         *) GQL_FAULT=fatal GQL_ERROR="Railway API answered HTTP ${code:-unknown} (not retried) while $ctx: $GQL_LAST $(gql_errors)" ;;
       esac
       ;;
@@ -226,32 +249,74 @@ gql_attempt() {
       GQL_FAULT=fatal GQL_ERROR="Railway API request failed (not retried) while $ctx: $GQL_LAST"
       ;;
   esac
+  rm -rf "$tmp"
   [ -z "$GQL_FAULT" ]
 }
 
 # graphql_try <json-body> <context-label> [once]
 # Returns 1 silently on failure (GQL_ERROR, GQL_FAULT). Retries a transient failure up to
 # 3 attempts; `once` sends a non-idempotent mutation or a poll tick a single time.
+# An HTTP 429 is not a transient attempt: it waits Railway's wait and resends once, any call.
+# The waits of a job total 600 s ($RUNNER_TEMP/railway-api-429-waited; per process without it).
 # Only an exhausted budget prints, as ::error::.
 graphql_try() {
-  local body="$1" ctx="$2" max=3 n earlier=""
+  local body="$1" ctx="$2" max=3 t=0 h=0 rl=0 earlier="" waited_file="" waited=0 last_wait=""
   [ "${3:-}" = once ] && max=1
+  [ -z "${RUNNER_TEMP:-}" ] || waited_file="$RUNNER_TEMP/railway-api-429-waited"
   GQL_REPORTED=0
 
-  for n in 1 2 3; do
+  while :; do
+    h=$((h + 1))
     if gql_attempt "$body" "$ctx"; then
-      [ -z "${RUNNER_TEMP:-}" ] || printf '%s\t%s\tok\n' "$API_COMMAND" "$n" >> "$RUNNER_TEMP/railway-api-calls.tsv"
-      if [ "$n" != 1 ]; then
-        echo "::warning::Railway API call succeeded on attempt $n/3 while $ctx; earlier: $earlier." >&2
+      t=$((t + 1))
+      [ -z "${RUNNER_TEMP:-}" ] || printf '%s\t%s\tok\n' "$API_COMMAND" "$h" >> "$RUNNER_TEMP/railway-api-calls.tsv"
+      if [ "$t" != 1 ]; then
+        echo "::warning::Railway API call succeeded on attempt $t/3 while $ctx; earlier: $earlier." >&2
       fi
       return 0
     fi
-    [ -z "${RUNNER_TEMP:-}" ] || printf '%s\t%s\t%s\n' "$API_COMMAND" "$n" "$GQL_FAULT" >> "$RUNNER_TEMP/railway-api-calls.tsv"
-    if [ "$GQL_FAULT" != transient ] || [ "$n" -ge "$max" ]; then
+    [ -z "${RUNNER_TEMP:-}" ] || printf '%s\t%s\t%s\n' "$API_COMMAND" "$h" "$GQL_FAULT" >> "$RUNNER_TEMP/railway-api-calls.tsv"
+
+    if [ "$GQL_FAULT" = ratelimit ]; then
+      rl=$((rl + 1))
+      GQL_FAULT=fatal
+      if [ "$rl" -gt 1 ]; then
+        GQL_ERROR="Railway rate-limited this call (HTTP 429) a second time while $ctx, after a wait of ${last_wait} s; not retried."
+        return 1
+      fi
+      if [ -z "$GQL_WAIT" ]; then
+        GQL_ERROR="Railway rate-limited this call (HTTP 429) while $ctx and gave no wait (no usable Retry-After or X-RateLimit-Reset); not retried."
+        return 1
+      fi
+      if [ "${#GQL_WAIT}" -gt 3 ] || [ "$GQL_WAIT" -gt 600 ]; then
+        GQL_ERROR="Railway rate-limited this call (HTTP 429) while $ctx and asked for a wait of ${GQL_WAIT} s, over the 600 s limit; not retried."
+        return 1
+      fi
+      if [ -n "$waited_file" ]; then
+        waited=$(cat "$waited_file" 2>/dev/null || true)
+      else
+        waited="${GQL_429_WAITED:-0}"
+      fi
+      [[ "$waited" =~ ^[0-9]+$ ]] || waited=0
+      waited=$((10#$waited))
+      if [ $((waited + GQL_WAIT)) -gt 600 ]; then
+        GQL_ERROR="Railway rate-limited this call (HTTP 429) while $ctx and asked for a wait of ${GQL_WAIT} s with ${waited} s already waited in this job; the total limit is 600 s; not retried."
+        return 1
+      fi
+      echo "::warning::Railway rate-limited this call (HTTP 429) while $ctx; waiting ${GQL_WAIT} s, then sending it once more." >&2
+      sleep "$GQL_WAIT"
+      last_wait="$GQL_WAIT"
+      waited=$((waited + GQL_WAIT))
+      if [ -n "$waited_file" ]; then printf '%s\n' "$waited" > "$waited_file"; else GQL_429_WAITED=$waited; fi
+      continue
+    fi
+
+    t=$((t + 1))
+    if [ "$GQL_FAULT" != transient ] || [ "$t" -ge "$max" ]; then
       break
     fi
     earlier="$GQL_LAST"
-    sleep $((n * 5))
+    sleep $((t * 5))
   done
 
   if [ "$GQL_FAULT" = transient ] && [ "$max" = 3 ]; then

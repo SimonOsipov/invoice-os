@@ -495,6 +495,7 @@ idempotent, and every poll tick, is sent once (`once`).
 | `fleet-gate` fleet poll | 600 s |
 | SPA `/health` + `/build.txt` (`wait-spa-builds.sh`) | 600 s (120 x 5 s) |
 | `wait-deployment` | 60 ticks x 10 s = 600 s; 3 failed ticks in all end it |
+| 429 waits (any call, poll ticks included) | 600 s per job in total |
 
 **`railway up` upload re-run.** `scripts/ci/railway-up-ci.sh` re-runs an upload once, after 10 s,
 when the CLI failed on a transport error before Railway printed a `Build Logs:` URL. It never

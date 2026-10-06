@@ -164,11 +164,8 @@ export async function resolveEnv(name: string, deps: { token: string; ids: Railw
   return { env: name, environmentId, urls, dark: LABELS.filter((_, i) => verdicts[i]) }
 }
 
-export async function envCommand(positionals: string[], _flags: Record<string, string | undefined>): Promise<unknown> {
-  const name = positionals[0]
-  if (positionals.length !== 1 || !/^(pr-[0-9]+|production)$/.test(name)) {
-    throw new CtlError(`invalid environment name: ${positionals.join(' ') || '(none)'}`, 'Use pr-<N> or production, for example "ctl env pr-348".', 2)
-  }
+// Reads the Railway token and service ids from disk, then resolves; shared by env and login.
+export async function resolveEnvByName(name: string): Promise<EnvResult> {
   let configText: string | undefined
   try {
     configText = readFileSync(path.join(homedir(), '.railway', 'config.json'), 'utf8')
@@ -178,7 +175,15 @@ export async function envCommand(positionals: string[], _flags: Record<string, s
   const token = readRailwayToken(configText, Date.now() / 1000)
   const root = path.resolve(import.meta.dirname, '../..')
   const ids = readRailwayIds(readFileSync(path.join(root, '.github/workflows/dev-env.yml'), 'utf8'))
-  const result = await resolveEnv(name, { token, ids })
+  return resolveEnv(name, { token, ids })
+}
+
+export async function envCommand(positionals: string[], _flags: Record<string, string | undefined>): Promise<unknown> {
+  const name = positionals[0]
+  if (positionals.length !== 1 || !/^(pr-[0-9]+|production)$/.test(name)) {
+    throw new CtlError(`invalid environment name: ${positionals.join(' ') || '(none)'}`, 'Use pr-<N> or production, for example "ctl env pr-348".', 2)
+  }
+  const result = await resolveEnvByName(name)
   if (result.dark.length > 0) {
     throw new CtlError(
       result.dark.map((l) => `${l} is dark: Railway's edge has no route for ${new URL(result.urls[URL_VAR[l]] as string).host}`).join('; '),

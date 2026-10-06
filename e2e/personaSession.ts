@@ -15,15 +15,16 @@ import { resolveTarget } from './targets'
 //              backend round trip completed, not just a mount.
 //   ops     -> the default Overview screen's h1 (ops-console/src/components/Overview.tsx:154)
 //   support -> the default Submissions ops h1 (support-console/src/components/Submissions.tsx:48)
-export const DESTINATION_READY: Record<Destination, (page: Page) => Promise<void>> = {
-  app: async (page) => {
-    await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+// `timeout` undefined keeps the runner's configured timeout.
+export const DESTINATION_READY: Record<Destination, (page: Page, timeout?: number) => Promise<void>> = {
+  app: async (page, timeout) => {
+    await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached({ timeout })
   },
-  ops: async (page) => {
-    await expect(page.getByRole('heading', { level: 1, name: 'Overview' })).toBeVisible()
+  ops: async (page, timeout) => {
+    await expect(page.getByRole('heading', { level: 1, name: 'Overview' })).toBeVisible({ timeout })
   },
-  support: async (page) => {
-    await expect(page.getByRole('heading', { level: 1, name: 'Submissions ops' })).toBeVisible()
+  support: async (page, timeout) => {
+    await expect(page.getByRole('heading', { level: 1, name: 'Submissions ops' })).toBeVisible({ timeout })
   },
 }
 
@@ -50,7 +51,7 @@ export async function expectInWorkspace(page: Page, account: { workspaceName: st
 // A stored session is rehydrated at boot and suppresses the front-door bounce (App.tsx resolveBootSession,
 // the `activeSession` guard of the bounce effect), so a page already on the app drops it first.
 // ceiling: a page parked on another origin keeps its stored session, sign out there first.
-async function passFrontDoor(page: Page, account: { email: string; password: string }, path: string): Promise<void> {
+export async function passFrontDoor(page: Page, account: { email: string; password: string }, path: string): Promise<void> {
   if (new URL(page.url(), 'about:blank').origin === new URL(resolveTarget('APP_URL')).origin) {
     await page.evaluate((key) => localStorage.removeItem(key), SESSION_KEY)
   }
@@ -92,6 +93,11 @@ export async function signInAs(page: Page, id: PersonaId, opts: { tenantId?: str
   }
 
   expect(personaNavs, 'signInAs navigated with ?persona=, which the real door never carries').toEqual([])
+  await expectHandoffSession(page, tenantId)
+}
+
+// The stored session is a hand-off session bound to `tenantId`.
+export async function expectHandoffSession(page: Page, tenantId: string): Promise<void> {
   const raw = await page.evaluate((key) => localStorage.getItem(key), SESSION_KEY)
   expect(raw, 'no stored session after sign-in').not.toBeNull()
   const session = JSON.parse(raw!) as { handoff?: boolean; me?: { tenant?: { id?: string } } }

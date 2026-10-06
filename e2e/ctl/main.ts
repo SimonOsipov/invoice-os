@@ -64,7 +64,7 @@ const notBuilt =
 // Lazy so --help loads no command module.
 const DEFAULTS: Commands = {
   env: async (p, f) => (await import('./railway')).envCommand(p, f),
-  login: notBuilt('login'),
+  login: async (p, f) => (await import('./login')).loginCommand(p, f),
   measure: notBuilt('measure'),
 }
 

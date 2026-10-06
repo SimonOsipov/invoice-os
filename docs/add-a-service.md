@@ -215,7 +215,7 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disa
   not fork.
 - **Sentry variables are production-only.** `SENTRY_DSN` (every Go service and
   `docling`), `VITE_SENTRY_DSN` and `SENTRY_AUTH_TOKEN` (each SPA): `set-sentry-off`
-  in `prepare-env` writes them to `""` in every `pr-<N>` fork before anything deploys.
+  (run by `fork-vars-after-urls`) writes them to `""` in every `pr-<N>` fork before anything deploys.
   Never seal them: a sealed variable does not fork, and `audit-sealed-variables` fails
   every PR run. A new service joins `set-sentry-off`'s lists in the same change
   (`TestSentryOffListsMatchTheDeployedFleet`). A new service probed through the
@@ -295,7 +295,7 @@ returned by step 1.
    (`TestSetProductionGatewayToken_RefusesAPartialOrMixedSet`). For a service added
    after that write, upsert the gateway's current value with `variableUpsert`. This is the
    one-variable-at-a-time production path; fork
-   writes in CI go through `set_service_vars` and `variableCollectionUpsert`.
+   writes in CI are batched (`docs/deploy-model.md`, "Batched variable passes").
 5. **First deploy** from current `main`:
    ```graphql
    mutation { serviceInstanceDeployV2(serviceId: "$SVC", environmentId: "$ENV",
@@ -310,9 +310,9 @@ returned by step 1.
    on the production environment, so a new public service needs a **custom** domain
    there. The `serviceDomainCreate` above stays correct for **PR environments**, which
    keep their generated URLs — now the only place generated domains live.
-   CI's discovery (`railway-env.sh select-domain`) accepts **either** kind — custom
-   preferred, generated as fallback — so both refusals that cite this step
-   (`dev-env.yml`'s `urls` step and `reconcile_domain` in `railway-env.sh`) mean the
+   CI's discovery (`railway-env.sh discover-urls`, which applies `select-domain`'s rule)
+   accepts **either** kind — custom preferred, generated as fallback — so both refusals
+   that cite this step (`discover-urls` and `reconcile_domain` in `railway-env.sh`) mean the
    same thing: the service has no domain of either kind in the environment named in the
    message. Give it one — a custom domain if that environment is production.
 

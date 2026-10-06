@@ -93,7 +93,7 @@ client fake and Jev real.
 | Environment | `OPENROUTER_API_KEY` | `JEV_FAKE` | Client | Set by |
 |---|---|---|---|---|
 | production (persistent) | set, shared with the AI client | unset | real, through OpenRouter | The user. `set-ai-fake` refuses this environment's id. |
-| `pr-<N>` (ephemeral fork) | `""` on `submission` and `invoice` | `true` on `submission` and `invoice` | fake | `set-ai-fake <env-id>` in `dev-env.yml`'s `prepare-env` job, PR-only, no `continue-on-error`. |
+| `pr-<N>` (ephemeral fork) | `""` on `submission` and `invoice` | `true` on `submission` and `invoice` | fake | `set-ai-fake <env-id>`, run by `fork-vars-after-urls` in `dev-env.yml`'s `prepare-env` job, PR-only, no `continue-on-error`. |
 | local compose / developer shell | unset | unset | off | Nobody. |
 
 The key goes on `submission` and `invoice` only. Both services call the client.

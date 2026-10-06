@@ -81,7 +81,7 @@ therefore starts from the seed, never from another run's leftovers, and the heal
 fails the run outright if that reset did not happen — it is armed by a hand-set Railway
 variable that otherwise fails closed and silent. The purge needs no such variable: it is
 gated like the seed, by `GATEWAY_DB_BOOTSTRAP` and the `ENVIRONMENT` that CI's
-`set-fork-environment` sets in every PR fork.
+`fork-vars-after-urls` sets in every PR fork.
 
 What a spec still cannot assume is an empty table:
 

@@ -24,7 +24,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// The 21 attributable events, by rule, plus the 18 workspace-level ones.
+// The 21 attributable events, by rule, plus the 20 workspace-level ones.
 var (
 	triggerRuleAEvents = []string{ // bare `id`, looked up through invoices
 		"invoice.created",
@@ -61,7 +61,7 @@ var (
 // would wrongly attribute them. extraction.field_corrected is NOT here — it resolves
 // through its invoice (TestExtraction_FieldCorrectedIsNotInTheWorkspaceVocabulary).
 func triggerRuleDPayloads(invoiceID string) map[string]map[string]any {
-	policyID, userID, docID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	policyID, userID, docID, invitationID := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
 	return map[string]map[string]any{
 		"approval_policy.created":   {"policy_id": policyID},
 		"approval_policy.updated":   {"policy_id": policyID},
@@ -81,6 +81,8 @@ func triggerRuleDPayloads(invoiceID string) map[string]map[string]any {
 		"workspace.provisioned":     {"tenant_id": uuid.NewString(), "user_id": userID},
 		"validation.rule.enabled":   {"key": "buyer-tin-present"},
 		"validation.rule.disabled":  {"key": "buyer-tin-present"},
+		"invitation.sent":           {"invitation_id": invitationID, "role": "preparer"},
+		"invitation.resent":         {"invitation_id": invitationID, "role": "preparer", "counted": true},
 	}
 }
 
@@ -150,7 +152,7 @@ func TestAudit_InsertTriggerResolvesPortfolioEventsFromTheirOwnPayload(t *testin
 	}
 }
 
-// AC-13: the 18 workspace-level events stay NULL even when their payload holds a real
+// AC-13: the 20 workspace-level events stay NULL even when their payload holds a real
 // invoice id. The rule-A row in the same test is the positive control.
 //
 // For the two extraction.* names this is a DRIFT GUARD, not proof of their scope: the
@@ -162,8 +164,8 @@ func TestAudit_InsertTriggerLeavesWorkspaceEventsNull(t *testing.T) {
 	fx := seedTriggerFixture(t, f)
 
 	ruleD := triggerRuleDPayloads(fx.invoice)
-	if len(ruleD) != 18 {
-		t.Fatalf("rule-D payload map holds %d events, want 18", len(ruleD))
+	if len(ruleD) != 20 {
+		t.Fatalf("rule-D payload map holds %d events, want 20", len(ruleD))
 	}
 	for event, payload := range ruleD {
 		recordAudit(t, f, fx.tenant, event, payload)

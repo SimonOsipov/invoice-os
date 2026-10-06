@@ -14,7 +14,7 @@ const STATUS = '[role="status"]'
 const OUTCOMES = [
   ['already-member', 'You already belong to a workspace. An account can belong to only one.'],
   ['invalid', 'This invite is no longer valid. Ask your workspace admin for a new one.'],
-  ['other-address', 'This invite was sent to a different email address. Sign in with that address.'],
+  ['other-address', 'This invite was sent to a different email address. Open the invite link from that email and sign in with the invited address.'],
 ] as const
 const VERIFIED = 'Your email address is verified. Please sign in.'
 const VERIFY_FAILED = 'That link did not work. It may have expired or already been used.'

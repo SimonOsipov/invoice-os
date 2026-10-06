@@ -732,7 +732,8 @@ hand-off is the app by default and a console when the visitor came from one (Con
 7. Tenancy's three accept refusals, 404 `this invite is no longer valid`, 409 `you already
    belong to a workspace` and 403 `this invite was sent to a different email address`, send
    the app to `<landing>/?invite=invalid`, `already-member` or `other-address`, with no
-   session and no state. With a held invite every other failure, a gateway 403 included, is
+   session and no state. The `other-address` notice sends the user back to the mailed link: the pending
+   invite is spent, so a plain sign-in finds none. With a held invite every other failure, a gateway 403 included, is
    `signin=failed`. Without one, on any failure the app returns to landing with
    `signin=no-workspace` (the `/me` call
    answered 403) or `signin=failed` (anything else), carrying the state `ensureSignInState`

@@ -12,7 +12,7 @@ const OUTCOMES: readonly string[] = ['already-member', 'invalid', 'other-address
 export const INVITE_NOTICES: Record<InviteOutcome, string> = {
   'already-member': 'You already belong to a workspace. An account can belong to only one.',
   invalid: 'This invite is no longer valid. Ask your workspace admin for a new one.',
-  'other-address': 'This invite was sent to a different email address. Sign in with that address.',
+  'other-address': 'This invite was sent to a different email address. Open the invite link from that email and sign in with the invited address.',
 }
 
 export const ROLE_LABELS: Record<string, string> = { admin: 'Admin', preparer: 'Preparer', reviewer: 'Reviewer' }

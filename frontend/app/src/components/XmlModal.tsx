@@ -1,6 +1,5 @@
 // UBL viewer: fetches the server's canonical UBL 2.1 document for one invoice and shows it
-// verbatim. Shell ported from Platform.dc.html ~L957-976 — backdrop click closes, inner
-// click is stopped.
+// verbatim. Shell ported from Platform.dc.html — backdrop click closes, inner click is stopped.
 
 import type { ReactNode } from 'react'
 
@@ -79,13 +78,13 @@ export function XmlModal({
   }
 
   return (
-    <div data-testid="ubl-modal" onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'oklch(20% .02 210 / 0.42)', backdropFilter: 'blur(2px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40, animation: 'popIn 140ms ease-out' }}>
-      <div onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="UBL 2.1 document" style={{ width: 760, maxWidth: '100%', maxHeight: '100%', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', boxShadow: '0 24px 60px -20px oklch(20% .02 210 / 0.4)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <div data-testid="ubl-modal" onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'color-mix(in srgb, var(--surface) 55%, transparent)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40, animation: 'popIn 140ms ease-out' }}>
+      <div onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="UBL 2.1 document" style={{ width: 760, maxWidth: '100%', maxHeight: '100%', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-card)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ flex: 'none', padding: '16px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ color: 'var(--action)', display: 'inline-flex' }}>{docGlyph2}</span>
             <div>
-              <div className="card-title">UBL 2.1 document</div>
+              <div className="card-title" style={{ fontSize: 15 }}>UBL 2.1 document</div>
               <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
                 PEPPOL BIS 3.0 · {invoiceNumber}
               </div>
@@ -97,12 +96,12 @@ export function XmlModal({
                 <span style={{ display: 'inline-flex' }}>{downloadGlyph}</span> Download .xml
               </button>
             )}
-            <button data-testid="ubl-modal-close" onClick={onClose} className="pf-btn" style={{ width: 34, height: 34, borderRadius: 'var(--radius-md)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}>
+            <button data-testid="ubl-modal-close" onClick={onClose} className="pf-btn" style={{ width: 34, height: 34, borderRadius: 'var(--radius-btn)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}>
               {closeGlyph}
             </button>
           </div>
         </div>
-        <div data-testid="ubl-provenance" style={{ flex: 'none', padding: '10px 20px', borderBottom: '1px solid var(--line-1)', fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
+        <div data-testid="ubl-provenance" style={{ flex: 'none', padding: '9px 20px', borderBottom: '1px solid var(--line-1)', fontSize: 12, color: 'var(--fg-3)' }}>
           {PROVENANCE}
         </div>
         <div style={{ flex: 1, overflow: 'auto', background: 'var(--bg-1)', padding: '18px 20px' }}>{content}</div>

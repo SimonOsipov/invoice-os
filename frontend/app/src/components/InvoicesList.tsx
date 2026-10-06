@@ -70,10 +70,12 @@ import { SEVERITY_TONE } from './RulePills'
 
 const INVOICE_GRID_COLUMNS = '24px 150px 1fr 140px 120px 200px'
 
+const CHECKBOX_STYLE = { width: 15, height: 15, accentColor: 'var(--action)', margin: 0 } as const
+
 // Same box as the status pill beside it, minus the dot.
 function MarkerPill({ testId, tone, label }: { testId: string; tone: { bg: string; border: string; text: string }; label: string }) {
   return (
-    <span data-testid={testId} style={{ display: 'inline-flex', alignItems: 'center', background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 999, padding: '3px 9px' }}>
+    <span data-testid={testId} style={{ display: 'inline-flex', alignItems: 'center', background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 'var(--radius-sm)', padding: '3px 9px' }}>
       <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: tone.text, letterSpacing: '0.04em' }}>
         {label}
       </span>
@@ -360,12 +362,12 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
           offers a way out of the filter instead. The "Needs attention" toggle sits
           in the header row (not gated by async state) so it stays reachable even when the
           filtered result set is itself empty. */}
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 22 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 20, marginBottom: 22 }}>
         <div style={{ minWidth: 0 }}>
           <div className="eyebrow" style={{ marginBottom: 10 }}>
             INVOICE REGISTER
           </div>
-          <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Invoices</h1>
+          <h1 style={{ fontSize: 26, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Invoices</h1>
           <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0, overflowWrap: 'anywhere' }}>{ctx.user.tenantName ?? 'Your workspace'} · create, validate, and transmit.</p>
         </div>
         <button
@@ -378,15 +380,16 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
           data-testid="needs-attention-toggle"
           className="pf-chip"
           style={{
+            flex: 'none',
             height: 30,
             padding: '0 12px',
-            borderRadius: 'var(--radius-md)',
+            borderRadius: 'var(--radius-sm)',
             fontFamily: 'var(--font-sans)',
             fontSize: 12.5,
-            fontWeight: 500,
+            fontWeight: 600,
             border: `1px solid ${needsAttention ? 'var(--action)' : 'var(--line-2)'}`,
             background: needsAttention ? 'var(--action)' : 'var(--bg-2)',
-            color: needsAttention ? 'var(--text-on-dark)' : 'var(--fg-2)',
+            color: needsAttention ? 'var(--primary-foreground)' : 'var(--fg-2)',
           }}
         >
           Needs attention
@@ -431,32 +434,40 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
           gateway) is deliberately unqualified -- it keeps one copy in either filter state. */}
       {state === 'empty' && needsAttention && (
         <div data-testid="invoices-empty-filtered">
-          <EmptyState title="Nothing needs attention" message="No invoice in this register is waiting on you. Clear the filter to see the rest." />
-          <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
-            <button
-              onClick={() => {
-                setNeedsAttention(false)
-                setOffset(0)
-                setSelected([])
-                disarm()
-              }}
-              data-testid="clear-needs-attention"
-              className="v2-btn v2-btn-ghost pf-btn"
-            >
-              Show all invoices
-            </button>
-          </div>
+          <EmptyState
+            messageMaxWidth={360}
+            title="Nothing needs attention"
+            message="No invoice in this register is waiting on you. Clear the filter to see the rest."
+            action={
+              <button
+                onClick={() => {
+                  setNeedsAttention(false)
+                  setOffset(0)
+                  setSelected([])
+                  disarm()
+                }}
+                data-testid="clear-needs-attention"
+                className="v2-btn v2-btn-ghost pf-btn"
+              >
+                Show all invoices
+              </button>
+            }
+          />
         </div>
       )}
 
       {(state === 'idle' || (state === 'empty' && !needsAttention)) && (
         <div data-testid="invoices-empty">
-          <EmptyState title="No invoices yet" message="Create or import an invoice to start tracking compliance." />
-          <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
-            <button onClick={ctx.openCreate} className="v2-btn v2-btn-primary pf-btn">
-              <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> New invoice
-            </button>
-          </div>
+          <EmptyState
+            messageMaxWidth={320}
+            title="No invoices yet"
+            message="Create or import an invoice to start tracking compliance."
+            action={
+              <button onClick={ctx.openCreate} className="v2-btn v2-btn-primary pf-btn">
+                <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> New invoice
+              </button>
+            }
+          />
         </div>
       )}
 
@@ -502,10 +513,10 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
           {bar.visible && (
             <div
               data-testid="batch-submit-summary"
-              style={{ display: 'flex', flexDirection: 'column', gap: 9, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '11px 18px', marginBottom: 14 }}
+              style={{ background: 'var(--action-tint)', border: '1px solid var(--teal-200)', borderRadius: 'var(--radius-md)', padding: '11px 16px', marginBottom: 12 }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-1)' }}>{bar.countLabel}</span>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                <span className="mono" style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-1)', letterSpacing: '0.03em' }}>{bar.countLabel}</span>
                 {phase === 'idle' ? (
                   <button
                     data-testid="batch-submit"
@@ -543,9 +554,9 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
               </div>
 
               {phase !== 'idle' && (
-                <div style={{ borderTop: '1px solid var(--line-1)', paddingTop: 9 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)' }}>{bar.confirmPrompt}</div>
-                  <p style={{ fontSize: 11.5, color: 'var(--fg-2)', margin: '4px 0 0', lineHeight: 1.55 }}>{bar.confirmDetail}</p>
+                <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--teal-200)' }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)', marginBottom: 2 }}>{bar.confirmPrompt}</div>
+                  <p style={{ fontSize: 12.5, color: 'var(--fg-2)', margin: 0, lineHeight: 1.55 }}>{bar.confirmDetail}</p>
                 </div>
               )}
             </div>
@@ -574,6 +585,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
                 ref={(el) => { if (el) el.indeterminate = allState === 'some' }}
                 checked={allState === 'all'}
                 onChange={toggleAll}
+                style={CHECKBOX_STYLE}
               />
               <span className="label">Invoice #</span>
               <span className="label">Buyer</span>
@@ -606,7 +618,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
                     title={blockedReason ?? undefined}
                     // Disabled-only: on an enabled control this would kill the legitimate
                     // hover affordance platform.css leaves unguarded.
-                    style={blockedReason == null ? undefined : { cursor: 'not-allowed', opacity: 0.5 }}
+                    style={blockedReason == null ? CHECKBOX_STYLE : { ...CHECKBOX_STYLE, cursor: 'not-allowed', opacity: 0.5 }}
                     // Both handlers stop propagation — the row's own onClick (whole-row
                     // navigation) must never fire from a checkbox interaction.
                     onClick={(e) => e.stopPropagation()}
@@ -627,9 +639,9 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
                   <span style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 6px', minWidth: 0 }}>
                     <span
                       data-testid="invoice-status-badge"
-                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: st.bg, border: `1px solid ${st.border}`, borderRadius: 999, padding: '3px 9px' }}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: st.bg, border: `1px solid ${st.border}`, borderRadius: 'var(--radius-sm)', padding: '3px 9px' }}
                     >
-                      <span style={{ width: 6, height: 6, borderRadius: 99, background: st.text }} />
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: st.text }} />
                       <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: st.text, letterSpacing: '0.04em' }}>{st.label}</span>
                     </span>
                     {hasBlockingViolation(r) && (
@@ -642,22 +654,20 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
                 </div>
               )
             })}
-          </div>
-
-          {/* Fed the response's own echoed pagination, never REGISTER_PAGE_SIZE -- the
-              server clamps `limit`, and a client constant here would hide that clamp. */}
-          <div style={{ marginTop: 16 }}>
-            <Pager
-              pagination={view.pagination}
-              busy={loading || phase === 'submitting'}
-              onGo={(o) => {
-                setOffset(o)
-                setSelected([])
-                disarm()
-              }}
-              testId="invoices-pager"
-              reason={phase === 'submitting' ? BULK_COPY.pagerReason : undefined}
-            />
+            <div style={{ padding: '12px 18px' }}>
+              {/* Echoed pagination, never REGISTER_PAGE_SIZE: the server clamps `limit`. */}
+              <Pager
+                pagination={view.pagination}
+                busy={loading || phase === 'submitting'}
+                onGo={(o) => {
+                  setOffset(o)
+                  setSelected([])
+                  disarm()
+                }}
+                testId="invoices-pager"
+                reason={phase === 'submitting' ? BULK_COPY.pagerReason : undefined}
+              />
+            </div>
           </div>
         </>
       )}

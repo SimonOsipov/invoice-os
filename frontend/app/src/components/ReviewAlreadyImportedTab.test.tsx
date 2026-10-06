@@ -383,12 +383,12 @@ describe('EXTR-15-09 SW-6 (AC-6): the branch changes copy, never layout', () => 
     expect(document_.shape).toEqual([3, 4])
   })
 
-  it('SW-6 constants (GREEN on landing): the two grid literals and their use sites are untouched', () => {
+  it('SW-6 constants: the two grid literals are the prototype tracks, two use sites each', () => {
     const already = readFileSync(path.join(process.cwd(), 'src/components/ReviewAlreadyImportedTab.tsx'), 'utf8')
     const unreadable = readFileSync(path.join(process.cwd(), 'src/components/ReviewUnreadableTab.tsx'), 'utf8')
 
-    expect(already).toContain("const ALREADY_IMPORTED_GRID = '150px 90px 1fr'")
-    expect(unreadable).toContain("const UNREADABLE_GRID = '150px 90px 170px 1fr'")
+    expect(already).toContain("const ALREADY_IMPORTED_GRID = '200px 60px 1fr'")
+    expect(unreadable).toContain("const UNREADABLE_GRID = '200px 60px 140px 1fr'")
 
     // Exactly two use sites each -- the header row and the data row. A third, or a
     // unit-keyed second constant, is a layout branch and AC-6 forbids it.
@@ -432,5 +432,62 @@ describe('EXTR-15-09 SW-7 (AC-1): a duplicate is "already in the register" for a
     expect(spreadsheetText.split('already in your ledger').length - 1, 'A3/A6/A7 must still read "already in your ledger"').toBeGreaterThanOrEqual(3)
     expect(spreadsheetText).toContain('These rows match invoices this workspace already holds')
     expect(spreadsheetText).not.toContain('already in the register')
+  })
+})
+
+describe('RESKIN2-04-03 D-17 / D-4: the Already imported tab wears the prototype values', () => {
+  afterEach(cleanup)
+
+  const TWO_ROWS: AlreadyImportedRowAll[] = [
+    { file: 'june.csv', row: 5, invoiceId: 'inv-1' },
+    { file: 'july.csv', row: 8, invoiceId: 'inv-2' },
+  ]
+
+  function gridRows(container: HTMLElement): HTMLElement[] {
+    return Array.from(container.querySelectorAll<HTMLElement>('div')).filter(
+      (d) => (d.getAttribute('style') ?? '').includes('grid-template-columns:') && !d.classList.contains('label'),
+    )
+  }
+
+  it('already-imported rows use the prototype tracks', () => {
+    const { container } = render(
+      <ReviewAlreadyImportedTab rows={TWO_ROWS} rowsTotal={2} batchIds={['b1']} onOpenInvoice={vi.fn()} unit="spreadsheet" />,
+    )
+    const rows = gridRows(container)
+    expect(rows, 'both already-imported rows must render').toHaveLength(2)
+
+    const header = container.querySelector<HTMLElement>('.label')
+    expect(header, 'the header row did not render').not.toBeNull()
+    expect(header!.getAttribute('style')).toContain('grid-template-columns: 200px 60px 1fr')
+    for (const [i, r] of rows.entries()) {
+      expect(r.getAttribute('style'), `row ${i}: tracks`).toContain('grid-template-columns: 200px 60px 1fr')
+    }
+
+    // First row keeps no top border (P would draw a double rule under the header); the next does.
+    expect(rows[0].style.borderTop, 'the first row must draw no top border').not.toContain('solid')
+    expect(rows[1].style.borderTop, 'the second row must draw its rule').toContain('1px solid var(--line-1)')
+  })
+
+  it('a blocked hand-off dims (#114)', () => {
+    const rows: AlreadyImportedRowAll[] = [
+      { file: 'june.csv', row: 5, invoiceId: null },
+      { file: 'july.csv', row: 8, invoiceId: 'inv-2' },
+    ]
+    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={2} batchIds={['b1']} onOpenInvoice={vi.fn()} unit="spreadsheet" />)
+
+    const buttons = screen.getAllByRole('button', { name: 'View invoice' }) as HTMLButtonElement[]
+    expect(buttons).toHaveLength(2)
+    const [off, on] = buttons
+    expect(off.disabled).toBe(true)
+    expect(off.style.opacity).toBe('0.45')
+    expect(off.style.cursor).toBe('not-allowed')
+    expect(off.style.background, 'inline rest fill so .v2-btn-ghost:hover cannot repaint').toBe('transparent')
+    expect(off.style.color, 'the dim replaces the grey text').toBe('')
+
+    // The resolved sibling keeps its hover affordance.
+    expect(on.disabled).toBe(false)
+    expect(on.style.opacity).toBe('')
+    expect(on.style.cursor).toBe('')
+    expect(on.style.background, 'hover stays live').toBe('')
   })
 })

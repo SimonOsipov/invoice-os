@@ -69,14 +69,12 @@ const SCOPE_NOT_ROUTED = 'Per-scope routing is not yet available — every polic
 /**
  * The in-flight lock's wrapper. The canvas's drop and click-to-place handlers hang off divs,
  * which no `disabled` prop reaches — so this stays a fieldset even though `WfSelect` now takes
- * a `disabled` of its own (WorkflowParts.tsx:199) for the PERSISTENT recipe. A transient lock
- * keeps the fieldset, per the split at :411-416; `MemberDrawer.tsx:64-71` records the same trade.
+ * a `disabled` of its own for the PERSISTENT recipe. A transient lock keeps the fieldset.
  */
 const FIELDSET_RESET = { border: 0, padding: 0, margin: 0, minInlineSize: 0 } as const
 
 /**
- * The ghost variant's disabled paint (MemberDrawer.tsx:145's shape, kept local rather than
- * shared). Inline, so it outranks `.v2-btn-ghost:hover`, which would otherwise repaint a dead
+ * The ghost variant's disabled paint. Inline, so it outranks `.v2-btn-ghost:hover`, which would otherwise repaint a dead
  * control on hover.
  */
 const DISABLED_GHOST = { background: 'transparent', borderColor: 'var(--line-1)', color: 'var(--fg-4)', cursor: 'not-allowed' } as const
@@ -117,7 +115,7 @@ function WriteError({ testId, children }: { testId: string; children: ReactNode 
   return (
     <div
       data-testid={testId}
-      style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12.5, lineHeight: 1.5, color: 'var(--status-red-text)' }}
+      style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, lineHeight: 1.5, color: 'var(--status-red-text)' }}
     >
       {children}
     </div>
@@ -356,27 +354,24 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
 
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 20, flexWrap: 'wrap', marginBottom: 18 }}>
-        <div style={{ minWidth: 0 }}>
-          <button
-            type="button"
-            onClick={ctx.closePolicy}
-            className="pf-btn"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginBottom: 12, padding: 0, border: 0, background: 'transparent', color: 'var(--fg-3)', fontSize: 12.5, fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
-          >
-            <span style={{ display: 'inline-flex' }}>{wfBackGlyph}</span> All policies
-          </button>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {/* No pf-input: this is a borderless title, not a boxed field. The
-                app-layer's `.asc-app input:focus` still paints the standard focus
-                ring, which is the app's convention and deliberately amber. */}
+      <button
+        type="button"
+        onClick={ctx.closePolicy}
+        className="pf-btn"
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginBottom: 12, padding: 0, border: 0, background: 'transparent', color: 'var(--fg-3)', fontSize: 12.5, fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
+      >
+        <span style={{ display: 'inline-flex' }}>{wfBackGlyph}</span> All policies
+      </button>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 20, flexWrap: 'wrap', marginBottom: 18 }}>
+        <div style={{ flex: '1 1 320px', minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', rowGap: 8 }}>
+            {/* No pf-input: borderless title; the app's `.asc-app input:focus` ring still applies. */}
             <input
               aria-label="Policy name"
               value={working.name}
               disabled={submitting}
               onChange={(e) => applyEdit(renamePolicy(working, e.target.value))}
-              style={{ flex: '0 0 auto', width: nameWidth(working.name), minWidth: 120, maxWidth: '100%', border: 0, borderBottom: '1.5px solid transparent', backgroundColor: 'transparent', color: 'var(--fg-1)', fontSize: 24, fontWeight: 600, letterSpacing: '-0.02em', padding: '2px 0' }}
+              style={{ flex: '0 0 auto', width: nameWidth(working.name), minWidth: 120, maxWidth: '100%', border: 0, borderBottom: '1.5px solid transparent', backgroundColor: 'transparent', color: 'var(--fg-1)', fontSize: 24, fontWeight: 700, letterSpacing: '-0.02em', padding: '2px 0' }}
             />
             <PolicyStatusPill status={working.status} padding="3px 9px" />
           </div>
@@ -387,7 +382,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
                 free as a direct flex item — a block container would give it a baseline and a
                 line-box descender, nudging the select off centre in this row. */}
             <fieldset disabled={submitting} style={{ ...FIELDSET_RESET, display: 'flex' }}>
-              <WfSelect label="Applies" hideLabel value={working.scope} options={SCOPE_OPTIONS} onChange={(v) => applyEdit(rescopePolicy(working, v))} height={34} width={240} />
+              <WfSelect label="Applies" hideLabel value={working.scope} options={SCOPE_OPTIONS} onChange={(v) => applyEdit(rescopePolicy(working, v))} height={34} width={200} background="var(--bg-2)" />
             </fieldset>
           </div>
           {/* A block sibling of the row, not a child of it: the row has no `flexWrap`, so
@@ -398,9 +393,8 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
           </div>
         </div>
 
-        {/* A column, not a row: each control's reason follows it down when the header wraps
-            (WorkflowsView.tsx:86-99). */}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, flex: 'none', maxWidth: 360 }}>
+        {/* A column, not a row: each control's reason follows it down when the header wraps. */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, flex: 'none', maxWidth: 420 }}>
           <div style={{ display: 'flex', gap: 10 }}>
             <button type="button" onClick={clear} disabled={submitting} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 36, padding: '0 14px', fontSize: 13, ...(submitting ? DISABLED_GHOST : null) }}>
               Clear steps
@@ -409,11 +403,9 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
               {pendingVerb === 'save' ? 'Saving…' : saved ? 'Saved' : 'Save draft'}
             </button>
             {/* Disabled-with-a-reason, never hidden: the visible sibling below is the only layer
-                a keyboard user and a text assertion can both reach. No `filter: 'none'` — that
-                neutralises .v2-btn-primary's :hover, and this carries neither.
-                The paint tracks BOTH causes and the reason only ONE: a dead button must not stay
-                painted as the action (RoleModal.tsx:370-383), but a transient lock has no reason
-                to state, and 'Save your changes first' is untrue mid-publish. */}
+                a keyboard user and a text assertion can both reach.
+                The dimming tracks BOTH causes and the reason only ONE: a transient lock has no
+                reason to state, and 'Save your changes first' is untrue mid-publish. */}
             <button
               type="button"
               onClick={() => void publish()}
@@ -426,8 +418,8 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
                 padding: '0 16px',
                 fontSize: 13,
                 background: 'var(--action)',
-                color: 'var(--text-on-dark)',
-                ...(blockedReason !== null || submitting ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                color: 'var(--primary-foreground)',
+                ...(blockedReason !== null || submitting ? { opacity: 0.45, cursor: 'not-allowed', filter: 'none' } : null),
               }}
             >
               {pendingVerb === 'publish' ? 'Publishing…' : 'Publish'}
@@ -442,7 +434,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
               the save that arms it — but not once the version is sealed, where the only honest
               answer is that there is nothing to publish, which the reason above already gives. */}
           {consequence && (
-            <div data-testid="publish-consequence" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
+            <div data-testid="publish-consequence" style={{ fontSize: 11.5, color: 'var(--fg-2)', lineHeight: 1.5, textAlign: 'right' }}>
               {consequence}
             </div>
           )}
@@ -451,7 +443,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
         </div>
       </div>
 
-      <div style={{ marginBottom: 16, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 16, padding: '12px 14px 14px' }}>
+      <div style={{ marginBottom: 16, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '12px 14px 14px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 10 }}>
           <div className="label">Building blocks</div>
           <div style={{ fontSize: 11, color: 'var(--fg-3)' }}>Drag a block into the flow, or click to append. Drag any step to reorder.</div>
@@ -468,13 +460,13 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
                 onDragEnd={endDrag}
                 onClick={() => append(b.type)}
                 disabled={submitting}
-                // pf-upcard, not pf-btn: pf-btn would force a pill radius on a tile,
+                // pf-upcard, not pf-btn: pf-btn would force its radius on a tile,
                 // and pf-upcard already carries exactly the hover this needs
                 // (border-color -> var(--action)).
                 className="pf-upcard"
-                style={{ display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left', padding: '10px 12px', border: '1px solid var(--line-2)', borderRadius: 9, background: 'var(--bg-1)', cursor: 'grab' }}
+                style={{ display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left', padding: '10px 12px', border: '1px solid var(--line-2)', background: 'var(--bg-1)', cursor: 'grab' }}
               >
-                <span style={{ flex: 'none', width: 30, height: 30, borderRadius: 7, background: tone.bg, color: tone.color, display: 'grid', placeItems: 'center' }}>
+                <span style={{ flex: 'none', width: 30, height: 30, borderRadius: 'var(--radius-md)', background: tone.bg, color: tone.color, display: 'grid', placeItems: 'center' }}>
                   <NodeGlyph type={b.type} size={16} />
                 </span>
                 <span style={{ minWidth: 0 }}>

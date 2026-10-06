@@ -11,14 +11,13 @@
 // caption ellipsised, the rail absorbing the slack -- are provable only in
 // a browser and belong to the sweep in e2e/topology/invoice-surfaces.spec.ts (arch §7 A-D).
 //
-// Two specs render nothing and are GREEN in the red commit by design -- the token
-// existence guard and the interactive-selector control needle. Both exist to stop the
-// specs above them passing vacuously.
+// One spec renders nothing and is GREEN in the red commit by design -- the
+// interactive-selector control needle. It exists to stop the specs above it passing vacuously.
 //
 // TIMEZONE: timestamps are offset-less, which ECMA-262 parses as LOCAL time, so fmtTime's
 // local getHours()/getMinutes() round-trip them in every timezone (invoiceStrip.test.ts).
 
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -130,18 +129,19 @@ const SENTINEL_NODES: StripNode[] = KEYS.map((key, i) => ({
   caption: `Sentinel caption ${i}`,
 }))
 
-const TONE: Record<StripState, { bg: string; border: string; text: string }> = {
-  done: { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', text: 'var(--status-green-text)' },
-  failed: { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', text: 'var(--status-red-text)' },
-  current: { bg: 'var(--status-amber-bg)', border: 'var(--status-amber-border)', text: 'var(--status-amber-text)' },
-  unreached: { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)' },
-  'not-required': { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)' },
+// The prototype's status-strip look map, with the label colours applied.
+const PROTOTYPE_MAP: Record<StripState, { bg: string; border: string; fg: string; label: string }> = {
+  done: { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', fg: 'var(--status-green-text)', label: 'var(--fg-1)' },
+  failed: { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', fg: 'var(--status-red-text)', label: 'var(--fg-1)' },
+  current: { bg: 'var(--status-amber-bg)', border: 'var(--status-amber-text)', fg: 'var(--status-amber-text)', label: 'var(--status-amber-text)' },
+  unreached: { bg: 'var(--bg-2)', border: 'var(--line-3)', fg: 'var(--fg-4)', label: 'var(--fg-3)' },
+  'not-required': { bg: 'var(--bg-3)', border: 'var(--line-2)', fg: 'var(--fg-4)', label: 'var(--fg-3)' },
 }
 
-const TOKENS_CSS = readFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), '../../../../packages/design-tokens/app-layer.css'),
-  'utf8',
-)
+const TOKEN_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../../../packages/design-tokens/v2')
+const TOKENS_CSS = [join(TOKEN_DIR, 'app-layer.css'), ...readdirSync(join(TOKEN_DIR, 'tokens')).map((f) => join(TOKEN_DIR, 'tokens', f))]
+  .map((f) => readFileSync(f, 'utf8'))
+  .join('\n')
 
 // ---------------------------------------------------------------------------
 // Render helpers
@@ -307,33 +307,84 @@ describe('StatusStrip: the rail and the step blocks (inline style props, not geo
 })
 
 describe('StatusStrip: tone', () => {
-  it('every --status-* token the tone map names is defined in app-layer.css', () => {
-    // Non-vacuity guard for the tone assertions: a typo'd custom property renders as
-    // nothing in a browser and still matches a string comparison.
-    const names = Object.values(TONE).flatMap((t) => [t.bg, t.border, t.text])
-    expect(names).toHaveLength(15)
-    for (const v of names) {
-      expect(v).toMatch(/^var\(--status-[a-z-]+\)$/)
-      expect(TOKENS_CSS, `${v} is a real token`).toContain(`${v.slice(4, -1)}:`)
+  // The names come from the rendered strip, so a typo in the shipped map is what fails.
+  it('every token the strip map names is defined in the v2 app layer', () => {
+    const byState = new Map<StripState, string[]>()
+    for (const [, nodes] of SCENARIOS) {
+      cleanup()
+      const els = nodesOf(renderStrip(nodes))
+      nodes.forEach((n, i) => {
+        if (byState.has(n.state)) return
+        const icon = iconOf(els[i])
+        byState.set(n.state, [icon.style.background, icon.style.border, icon.style.color, labelOf(els[i]).style.color])
+      })
+    }
+    expect([...byState.keys()].sort(), 'all five states are read').toEqual([...ALL_STATES].sort())
+    const names = [...byState.values()].flat().map((v) => v.match(/var\((--[a-z0-9-]+)\)/)?.[1] ?? v)
+    expect(names, 'five states x bg, border, fg, label').toHaveLength(20)
+    const css = TOKENS_CSS.replace(/\/\*[\s\S]*?\*\//g, '')
+    for (const name of names) {
+      expect(name, 'every painted value is a var() reference').toMatch(/^--[a-z0-9-]+$/)
+      expect(css, `${name} is a real token`).toContain(`${name}:`)
     }
   })
 
-  it('each state paints its --status-* triplet, and all five states are exercised', () => {
+  it('each state paints the prototype map, and all five states are exercised', () => {
     const seen = new Set<StripState>()
     for (const [name, nodes] of SCENARIOS) {
       cleanup()
       const els = nodesOf(renderStrip(nodes))
       nodes.forEach((n, i) => {
-        const tone = TONE[n.state]
+        const m = PROTOTYPE_MAP[n.state]
         const icon = iconOf(els[i])
-        expect(icon.style.background, `${name}/${n.key} bg`).toBe(tone.bg)
-        expect(icon.style.border, `${name}/${n.key} border`).toContain(tone.border)
-        expect(icon.style.color, `${name}/${n.key} glyph colour`).toBe(tone.text)
-        expect(labelOf(els[i]).style.color, `${name}/${n.key} label colour`).toBe(tone.text)
+        expect(icon.style.background, `${name}/${n.key} bg`).toBe(m.bg)
+        expect(icon.style.border, `${name}/${n.key} border`).toBe(`1px solid ${m.border}`)
+        expect(icon.style.color, `${name}/${n.key} node colour`).toBe(m.fg)
+        expect(labelOf(els[i]).style.color, `${name}/${n.key} label colour`).toBe(m.label)
         seen.add(n.state)
       })
     }
     expect([...seen].sort(), 'no state went unasserted').toEqual([...ALL_STATES].sort())
+  })
+
+  it('no strip label is --fg-4', () => {
+    const labels: string[] = []
+    const glyphs: string[] = []
+    for (const [, nodes] of SCENARIOS) {
+      cleanup()
+      const els = nodesOf(renderStrip(nodes))
+      els.forEach((el) => {
+        labels.push(labelOf(el).style.color)
+        glyphs.push(iconOf(el).style.color)
+      })
+    }
+    expect(labels.length, 'labels were read').toBeGreaterThan(0)
+    expect(labels).not.toContain('var(--fg-4)')
+    // Control: --fg-4 stays on the unreached node glyph (an icon use), so the absence above is about labels.
+    expect(glyphs).toContain('var(--fg-4)')
+  })
+
+  it('nodes are 19px circles; the dot is 5px', () => {
+    const strip = renderStrip(stripNodes(HISTORY_TO_QUEUED, null, 'draft'))
+    expect(strip.style.padding).toBe('13px 20px')
+    expect(strip.style.marginBottom).toBe('16px')
+    const [first] = nodesOf(strip)
+    expect(first.style.gap, 'node gap').toBe('9px')
+    const icon = iconOf(first)
+    expect(icon.style.width).toBe('19px')
+    expect(icon.style.height).toBe('19px')
+    expect(icon.style.borderRadius).toBe('50%')
+    expect(icon.style.marginTop).toBe('1px')
+    const dot = icon.firstElementChild as HTMLElement
+    expect(dot.querySelector('svg'), 'an open step draws the dot, not a glyph').toBeNull()
+    expect(dot.style.width).toBe('5px')
+    expect(dot.style.height).toBe('5px')
+    expect(dot.style.borderRadius).toBe('50%')
+    expect(dot.style.background.toLowerCase()).toBe('currentcolor')
+    const rail = strip.children[1] as HTMLElement
+    expect(rail.getAttribute('aria-hidden'), 'children[1] is the rail').toBe('true')
+    expect(rail.style.marginTop).toBe('10px')
+    expect(rail.style.minWidth).toBe('10px')
   })
 })
 
@@ -358,8 +409,8 @@ describe('StatusStrip: glyphs', () => {
           expect(svg, `${name}/${n.key} carries no glyph`).toBeNull()
           const dot = icon.firstElementChild as HTMLElement | null
           expect(dot, `${name}/${n.key} renders a dot`).not.toBeNull()
-          expect(dot!.style.width).toBe('8px')
-          expect(dot!.style.height).toBe('8px')
+          expect(dot!.style.width).toBe('5px')
+          expect(dot!.style.height).toBe('5px')
           // jsdom lowercases the keyword.
           expect(dot!.style.background.toLowerCase(), 'the dot inherits the tone').toBe('currentcolor')
         }
@@ -378,18 +429,18 @@ describe('StatusStrip: glyphs', () => {
     expect(validated.style.background).toBe(draft.style.background)
     expect(validated.style.border).toBe(draft.style.border)
     expect(validated.style.color).toBe(draft.style.color)
-    expect(draft.style.background, 'both green, not both amber').toBe(TONE.done.bg)
+    expect(draft.style.background, 'both green, not both amber').toBe(PROTOTYPE_MAP.done.bg)
     for (const icon of [draft, validated]) {
       expect(icon.querySelector('svg path[d="M20 6 9 17l-5-5"]')).not.toBeNull()
       expect(icon.querySelector('svg')?.outerHTML).toBe(tick)
-      expect(icon.firstElementChild?.tagName.toLowerCase(), 'no 8px dot').toBe('svg')
+      expect(icon.firstElementChild?.tagName.toLowerCase(), 'no dot').toBe('svg')
     }
 
     // Control: an open step still draws the dot and no tick.
     cleanup()
     const open = iconOf(nodesOf(renderStrip(stripNodes(HISTORY_TO_QUEUED, null, 'draft')))[0])
     expect(open.querySelector('svg')).toBeNull()
-    expect((open.firstElementChild as HTMLElement).style.width).toBe('8px')
+    expect((open.firstElementChild as HTMLElement).style.width).toBe('5px')
   })
 })
 

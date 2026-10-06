@@ -25,10 +25,13 @@ describe('ActorCell', () => {
   it('actorCell_personAndSystemShareTheRoundAvatar', () => {
     const person = actorAvatar('person')
     const system = actorAvatar('system')
-    // Round for both now -- background and glyph tell person and System apart, not shape.
+    // Round and same fill for both -- the glyph colour tells person and System apart.
     expect(person.borderRadius).toBe('50%')
     expect(system.borderRadius).toBe('50%')
-    expect(person.background).not.toBe(system.background)
+    expect(person.background).toBe('var(--bg-3)')
+    expect(system.background).toBe('var(--bg-3)')
+    expect(person.color).toBe('var(--fg-2)')
+    expect(system.color).toBe('var(--fg-3)')
     // The design pins both at 26px.
     expect(person.width).toBe(26)
     expect(person.height).toBe(26)
@@ -40,13 +43,13 @@ describe('ActorCell', () => {
     const { unmount } = render(<ActorCell {...SYSTEM} />)
     const systemAvatar = screen.getByTestId('actor-bolt').parentElement as HTMLElement
     expect(screen.queryByTestId('actor-initials')).toBeNull()
-    expect(styleValue(systemAvatar, 'background')).toBe('var(--status-muted-bg)')
+    expect(styleValue(systemAvatar, 'background')).toBe('var(--bg-3)')
     unmount()
 
     render(<ActorCell {...PERSON} />)
     expect(screen.getByTestId('actor-initials').textContent).toBe('CO')
     const personAvatar = screen.getByTestId('actor-initials').parentElement as HTMLElement
-    expect(styleValue(personAvatar, 'background')).toBe('var(--bg-4)')
+    expect(styleValue(personAvatar, 'background')).toBe('var(--bg-3)')
   })
 
   it('actorCell_freeTextAvatarIsUnchanged', () => {
@@ -71,8 +74,35 @@ describe('ActorCell', () => {
     const person = props.map((p) => styleValue(personAvatar, p))
 
     // Reads the rendered span: an inline key after the actorAvatar spread would override it.
-    expect(system).toEqual(['50%', '26px', '26px', 'var(--fg-2)'])
-    expect(person).toEqual(['50%', '26px', '26px', 'var(--fg-1)'])
+    expect(system).toEqual(['50%', '26px', '26px', 'var(--fg-3)'])
+    expect(person).toEqual(['50%', '26px', '26px', 'var(--fg-2)'])
+  })
+
+  it('actorCell_variantSetsGapNameSizeAndWeight', () => {
+    const want = { audit: { gap: '9px', size: '13px', weight: '500' }, activity: { gap: '8px', size: '12.5px', weight: '600' } } as const
+    // Default (no prop) is the audit density.
+    const { container, unmount } = render(<ActorCell {...PERSON} />)
+    const def = container.firstElementChild as HTMLElement
+    expect(styleValue(def, 'gap')).toBe(want.audit.gap)
+    unmount()
+    for (const v of ['audit', 'activity'] as const) {
+      const { container: c, unmount: u } = render(<ActorCell {...PERSON} variant={v} />)
+      const root = c.firstElementChild as HTMLElement
+      const name = root.lastElementChild as HTMLElement
+      expect(name.textContent).toBe('Chinedu Okafor')
+      expect(styleValue(root, 'gap'), v).toBe(want[v].gap)
+      expect(styleValue(name, 'font-size'), v).toBe(want[v].size)
+      expect(styleValue(name, 'font-weight'), v).toBe(want[v].weight)
+      u()
+    }
+  })
+
+  it('actorCell_initialsAreMono95Bold', () => {
+    render(<ActorCell {...PERSON} />)
+    const avatar = screen.getByTestId('actor-initials').parentElement as HTMLElement
+    expect(styleValue(avatar, 'font-family')).toContain('--font-mono')
+    expect(styleValue(avatar, 'font-size')).toBe('9.5px')
+    expect(styleValue(avatar, 'font-weight')).toBe('700')
   })
 
   it('actorCell_freeTextActorIsNotAPerson', () => {
@@ -105,5 +135,10 @@ describe('ActorCell', () => {
     render(<ActorCell actor={PERSON.actor} actor_name="Someone Else" actor_kind="person" />)
     expect(screen.getByText('Someone Else')).toBeTruthy()
     expect(screen.queryByText(/Okafor/)).toBeNull()
+  })
+
+  it('actorCell_initialsCarryTheMonoClass', () => {
+    render(<ActorCell {...PERSON} />)
+    expect(screen.getByTestId('actor-initials').parentElement!.className).toBe('mono')
   })
 })

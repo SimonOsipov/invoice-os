@@ -832,10 +832,10 @@ describe('APPR-10-04 AC-4: one reason node, two aria-describedby pointers', () =
 describe('APPR-10-04 AC-5: both shut controls carry the muted paint', () => {
   // P5 — no `:disabled` rule exists anywhere in this repo, so the inline paint is mandatory
   // rather than stylistic. The PROPERTY NAME differs per control and one shared assertion would
-  // pin the wrong name on one of them: app-layer.css:224-232 forbids the `background` shorthand
-  // on `.pf-select`, whose own resting style sets `backgroundColor` (WorkflowParts.tsx:235),
+  // pin the wrong name on one of them: `.pf-select`'s own resting style sets
+  // `backgroundColor` (WorkflowParts.tsx),
   // while `WfToggle`'s resting style sets the shorthand (:305). Both are INLINE — the
-  // `.pf-toggle` class sets only a transition (platform.css:169-171). Measured in jsdom: a
+  // `.pf-toggle` class sets only a transition (platform.css). Measured in jsdom: a
   // select's `style.background` reads '' and a toggle's `style.backgroundColor` reads ''.
   it('the select paints backgroundColor, the toggle paints background, and both mute the rest', () => {
     render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
@@ -849,8 +849,8 @@ describe('APPR-10-04 AC-5: both shut controls carry the muted paint', () => {
     for (const [what, el] of delegationControls()) {
       expect(el.style.color, `${what} keeps its live foreground`).toBe('var(--fg-4)')
       expect(el.style.cursor, `${what} still invites a click`).toBe('not-allowed')
-      // NO `filter: 'none'` (R13). The unguarded `filter: brightness(1.22)` at
-      // app-layer.css:213 targets `.v2-btn-primary` alone; `.pf-toggle` and `.pf-select` carry
+      // NO `filter: 'none'` (R13). The unguarded `filter: brightness(1.22)` in
+      // v2/app-layer.css targets `.v2-btn-primary` alone; `.pf-toggle` and `.pf-select` carry
       // no `:hover` rule at all, so neutralising a filter here would state a hazard that does
       // not exist. Pinned rather than left silent — InvoiceDetail.test.tsx:2071-2084's shape.
       expect(el.style.filter, `${what} neutralises a filter no rule applies to it`).toBe('')
@@ -949,6 +949,9 @@ describe('APPR-10-04 QA (R15): the disabled paint is CONDITIONAL', () => {
     expect(sel.style.color, 'an enabled WfSelect lost its resting foreground').toBe('var(--fg-1)')
     expect(tog.style.background, 'an enabled WfToggle lost its resting background').toBe('var(--line-3)')
     expect(tog.style.color, 'an enabled WfToggle grew a foreground it never had').toBe('')
+    // The track stays a pill (D3); the knob is a circle.
+    expect((tog.querySelector('.pf-knob') as HTMLElement).style.borderRadius, 'the knob is no longer a circle').toBe('50%')
+    expect(tog.style.borderRadius, 'the track is no longer a pill').toBe('99px')
     for (const [what, el] of [['WfSelect', sel], ['WfToggle', tog]] as [string, HTMLElement][]) {
       expect(el.style.cursor, `an enabled ${what} paints the not-allowed cursor`).toBe('pointer')
     }
@@ -1492,8 +1495,8 @@ describe('APPR-09-06 AC-5: the form is inert while a write is in flight', () => 
 // APPR-09-06 follow-up — the in-flight lock states that it is in flight
 // ----------------------------------------------------------------------------
 // AC-5's `disabled` lands with no pending affordance: no `:disabled` rule exists in
-// frontend/app/src/styles/platform.css or packages/design-tokens/app-layer.css, and
-// `.asc-app .v2-btn-ghost` sets an explicit `color` (app-layer.css:214), so the UA grey never
+// frontend/app/src/styles/platform.css or packages/design-tokens/v2/app-layer.css, and
+// `.asc-app .v2-btn-ghost` sets an explicit `color` (v2/app-layer.css), so the UA grey never
 // paints. The form silently froze. Both precedents AC-5 cites flip their label instead
 // (RoleModal.tsx:382, EntityFormModal.tsx:208), which is what these pin.
 
@@ -1570,7 +1573,7 @@ describe('APPR-09-06 follow-up: each write control names the verb in flight', ()
 //
 // These read the INLINE style, not `getComputedStyle`: jsdom applies no stylesheet, which is
 // exactly why a green 2137-spec suite never saw this. The inline layer is also where the fix
-// belongs — it is what outranks `.v2-btn-ghost:hover` (app-layer.css:215).
+// belongs — it is what outranks `.v2-btn-ghost:hover` (v2/app-layer.css).
 
 describe('APPR-09-06 follow-up: a control shut by a write in flight is PAINTED shut', () => {
   it('Publish takes the muted paint on the same condition as its `disabled`', () => {
@@ -1584,14 +1587,16 @@ describe('APPR-09-06 follow-up: a control shut by a write in flight is PAINTED s
     // colour to begin with — `blockedReason` is null here, so nothing else has muted it.
     expect(publish.disabled, 'Publish is already shut, so the click starts no write').toBe(false)
     expect(publish.style.background, 'Publish is not painted as the action, so the mute below proves nothing').toBe('var(--action)')
-    expect(publish.style.color).toBe('var(--text-on-dark)')
+    expect(publish.style.color).toBe('var(--primary-foreground)')
     expect(publish.style.cursor, 'a live control carries no inline cursor — `.asc-app .v2-btn` supplies `pointer`').toBe('')
 
     fireEvent.click(publish)
 
     expect(publish.disabled, 'the lock never closed, so the paint assertions below are vacuous').toBe(true)
-    expect(publish.style.background, 'a dead Publish is still painted as the action').toBe('var(--bg-3)')
-    expect(publish.style.color, 'a dead Publish still carries the on-dark label colour').toBe('var(--fg-4)')
+    expect(publish.style.background, 'a dead Publish lost the action fill').toBe('var(--action)')
+    expect(publish.style.color, 'a dead Publish lost the on-dark label colour').toBe('var(--primary-foreground)')
+    expect(publish.style.opacity, 'a dead Publish is not dimmed').toBe('0.45')
+    expect(publish.style.filter).toBe('none')
     expect(publish.style.cursor, 'a dead Publish still invites the click').toBe('not-allowed')
     // The other half of the split, re-pinned HERE so the fix above cannot drag the reason
     // layers along with the paint: the paint tracks BOTH causes, the reason tracks only
@@ -2324,5 +2329,541 @@ describe('APPR-10-05 QA AC-2: the simulator claim is held to the inspector claim
     expect(STORAGE_AFFIRMED.test(text), `the claim never says the target and channel are kept: ${text}`).toBe(true)
     expect(STORAGE_DENIED.test(text), `the claim says the value is not kept, which is false — it is persisted, sealed and materialised: ${text}`).toBe(false)
     expect(/not available yet/i.test(text), `the claim borrows DELEGATE_NOTE's own clause: ${text}`).toBe(false)
+  })
+})
+
+describe('RESKIN2-05-03 WB: the shared workflow atoms', () => {
+  it('WB-01 the builder status pill is a 4px chip', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+
+    const pills = screen.getAllByText('DRAFT')
+    expect(pills, 'exactly one DRAFT pill must render').toHaveLength(1)
+    const pill = pills[0]
+    expect(pill.className, 'the pill is not a mono span').toContain('mono')
+    expect(pill.style.borderRadius, 'the pill corner is not the 4px token').toBe('var(--radius-sm)')
+    expect(pill.style.padding, 'the builder passes its own padding').toBe('3px 9px')
+    expect(pill.children, 'the pill still nests a dot or an inner label').toHaveLength(0)
+  })
+
+  it('WB-02 the knob is a circle without a shadow; the track stays a pill', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+    fireEvent.click(screen.getByText('Engagement Manager must approve'))
+
+    const switches = screen.getAllByRole('switch')
+    expect(switches.length, 'selecting an approval step rendered no switch').toBeGreaterThan(0)
+    for (const tog of switches as HTMLElement[]) {
+      const knob = tog.querySelector('.pf-knob') as HTMLElement
+      expect(knob, 'the switch has no knob').toBeTruthy()
+      expect(tog.style.borderRadius, 'the track is no longer a pill').toBe('99px')
+      expect(knob.style.borderRadius, 'the knob is not a circle').toBe('50%')
+      expect(knob.style.boxShadow, 'the knob still carries a shadow').toBe('')
+    }
+  })
+})
+
+/** The row both the name input and Publish sit in: the nearest ancestor of the input that holds Publish. */
+function headerRow(): HTMLElement {
+  let el: HTMLElement | null = nameInput().parentElement
+  while (el && !el.contains(publishButton())) el = el.parentElement
+  expect(el, 'no ancestor of the name input holds Publish').toBeTruthy()
+  return el as HTMLElement
+}
+
+function builderCanvas(): HTMLElement {
+  return canvasPanel().firstElementChild as HTMLElement
+}
+
+/** A root approval, a condition, and an approval in the condition's `then` lane. */
+function cardsPolicy(): Policy {
+  return {
+    ...conditionPolicy(),
+    nodes: [
+      { id: 'n1', type: 'approval', role: 'fin_mgr', sla: '24', delegate: false },
+      { id: 'c1', type: 'condition', field: 'amount', op: '>', value: 250_000_000, then: [{ id: 'm1', type: 'approval', role: 'cfo', sla: '24', delegate: false }], else: [] },
+    ],
+  }
+}
+
+const SIMPLE_TITLE = 'Engagement Manager must approve'
+const MINI_TITLE = 'Engagement Partner must approve'
+const RULE_TITLE = 'Amount greater than ₦250,000,000'
+
+const simpleCard = () => within(canvasPanel()).getByText(SIMPLE_TITLE).closest('[draggable]') as HTMLElement
+const miniCard = () => within(canvasPanel()).getByText(MINI_TITLE).closest('[draggable]') as HTMLElement
+const conditionHead = () => within(canvasPanel()).getByText(RULE_TITLE).closest('[draggable]') as HTMLElement
+const conditionBlock = () => conditionHead().parentElement as HTMLElement
+
+describe('RESKIN2-05-04 WB: the builder header, palette and canvas', () => {
+  it('WB-03 the back link sits above the header row', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+
+    const back = screen.getByRole('button', { name: /All policies/ })
+    const row = headerRow()
+    expect(row.contains(back), 'the All policies button is still inside the header row').toBe(false)
+    expect(row.style.alignItems, 'the header row does not align to the top').toBe('flex-start')
+    expect(row.style.flexWrap, 'the header row lost its wrap').toBe('wrap')
+  })
+
+  it('WB-04 the columns and the name row follow the prototype', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+
+    const input = nameInput()
+    const nameRow = input.parentElement as HTMLElement
+    const left = nameRow.parentElement as HTMLElement
+    const right = publishButton().parentElement!.parentElement as HTMLElement
+    expect(left.style.flex, 'the left column has no 320px basis').toBe('1 1 320px')
+    expect(left.style.minWidth, 'the left column cannot shrink').toMatch(/^0(px)?$/)
+    expect(nameRow.style.flexWrap, 'a long name cannot wrap the status pill').toBe('wrap')
+    expect(nameRow.style.rowGap).toBe('8px')
+    expect(nameRow.style.gap, 'the name-row gap stays 10').toBe('10px')
+    expect(right.style.maxWidth, 'the right column is not 420px wide').toBe('420px')
+    expect(input.style.fontWeight, 'the name input is not bold').toBe('700')
+  })
+
+  it('WB-05 the enabled Publish labels in primary-foreground', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+
+    const publish = publishButton()
+    expect(publish.disabled, 'Publish is already blocked, so its enabled paint is not under test').toBe(false)
+    expect(publish.style.background).toBe('var(--action)')
+    expect(publish.style.color, 'the enabled Publish label is not primary-foreground').toBe('var(--primary-foreground)')
+    expect([publish.style.opacity, publish.style.cursor, publish.style.filter], 'an enabled Publish is dimmed').toEqual(['', '', ''])
+
+    fireEvent.change(nameInput(), { target: { value: 'Renamed' } })
+
+    expect(publishButton().disabled, 'an edit did not block Publish').toBe(true)
+    expect(publishButton().style.background).toBe('var(--action)')
+    expect(publishButton().style.color).toBe('var(--primary-foreground)')
+    expect(publishButton().style.opacity).toBe('0.45')
+    expect(publishButton().style.cursor).toBe('not-allowed')
+    expect(publishButton().style.filter).toBe('none')
+  })
+
+  it('WB-06 the consequence reads --fg-2', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+
+    const consequence = screen.getByTestId('publish-consequence')
+    expect(consequence.textContent, 'the consequence is not the no-policy-in-force line').toBe(NO_POLICY_IN_FORCE)
+    expect(consequence.style.color, 'the consequence is not --fg-2').toBe('var(--fg-2)')
+
+    fireEvent.change(nameInput(), { target: { value: 'Renamed' } })
+
+    expect(screen.getByTestId('publish-blocked-reason').style.color, 'the blocked reason left --fg-3').toBe('var(--fg-3)')
+  })
+
+  it('WB-07 the palette wrapper and tile icons are 6px; tiles defer to pf-upcard', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+
+    const wrapper = screen.getByText('Building blocks').parentElement!.parentElement as HTMLElement
+    expect(wrapper.style.borderRadius, 'the palette wrapper is not 6px').toBe('var(--radius-md)')
+
+    const tiles = Array.from(document.querySelectorAll('button.pf-upcard')) as HTMLElement[]
+    expect(tiles, 'the palette renders four tiles').toHaveLength(4)
+    for (const tile of tiles) {
+      expect(tile.style.borderRadius, 'a tile carries an inline radius; pf-upcard owns it').toBe('')
+      const icon = tile.firstElementChild as HTMLElement
+      expect(icon.style.borderRadius, 'a tile icon is not 6px').toBe('var(--radius-md)')
+    }
+  })
+
+  it('WB-08 the canvas, trigger and terminal are flat 6px panels', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+
+    const canvas = builderCanvas()
+    expect(canvas.style.backgroundColor, 'the canvas lost its fill').toBe('var(--bg-0)')
+    expect(canvas.style.borderRadius, 'the canvas is not 6px').toBe('var(--radius-md)')
+    expect(canvas.style.backgroundImage, 'the canvas still draws the dot texture').toBe('')
+
+    const trigger = screen.getByText('Invoice submitted').parentElement!.parentElement as HTMLElement
+    const terminal = screen.getByText('Transmit to NRS / MBS').parentElement!.parentElement as HTMLElement
+    for (const [name, panel] of [['trigger', trigger], ['terminal', terminal]] as const) {
+      expect(panel.style.borderRadius, `the ${name} is not 6px`).toBe('var(--radius-md)')
+      expect(panel.style.boxShadow, `the ${name} still carries a resting shadow`).toBe('')
+      expect((panel.firstElementChild as HTMLElement).style.borderRadius, `the ${name} icon tile is not 6px`).toBe('var(--radius-md)')
+    }
+  })
+
+  it('WB-09 nodes are 6px, bordered, shadowless', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={cardsPolicy()} />)
+
+    const cards = [['simple', simpleCard()], ['condition', conditionBlock()], ['mini', miniCard()]] as const
+    for (const [name, card] of cards) {
+      expect(card.style.borderRadius, `the ${name} card is not 6px`).toBe('var(--radius-md)')
+      expect(card.style.border, `the ${name} card border is not the rest border`).toBe('1.5px solid var(--line-2)')
+      expect(card.style.boxShadow, `the ${name} card still carries a shadow`).toBe('')
+    }
+    expect(conditionHead().style.background, 'the condition head does not rest on --bg-1').toBe('var(--bg-1)')
+
+    const badges = Array.from(canvasPanel().querySelectorAll('span.mono')) as HTMLElement[]
+    expect(badges.length, 'no badge rendered on the simple card').toBeGreaterThan(0)
+    for (const badge of badges) expect(badge.style.borderRadius, 'a badge is not 4px').toBe('var(--radius-sm)')
+
+    const icons = [simpleCard(), miniCard(), conditionHead()].map((c) => c.firstElementChild as HTMLElement)
+    for (const icon of icons) expect(icon.style.borderRadius, 'a node icon tile is not 6px').toBe('var(--radius-md)')
+  })
+
+  it('WB-10 selection and arming light the border on every card kind', () => {
+    const action = '1.5px solid var(--action)'
+    const rest = '1.5px solid var(--line-2)'
+    const borders = () => [simpleCard().style.border, miniCard().style.border, conditionBlock().style.border]
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={cardsPolicy()} />)
+
+    fireEvent.click(within(canvasPanel()).getByText(SIMPLE_TITLE))
+    expect(borders(), 'selecting the simple card lit another card or none').toEqual([action, rest, rest])
+
+    fireEvent.click(within(canvasPanel()).getByText(MINI_TITLE))
+    expect(borders(), 'selecting the mini card lit another card or none').toEqual([rest, action, rest])
+
+    fireEvent.click(within(canvasPanel()).getByText(RULE_TITLE))
+    expect(conditionBlock().style.border, 'a selected condition block has no action border').toBe(action)
+    expect(conditionHead().style.background, 'a selected condition head is not tinted').toBe('var(--action-tint)')
+
+    cleanup()
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={cardsPolicy()} />)
+    const armCases: [string, () => HTMLElement][] = [
+      [`Move ${SIMPLE_TITLE}`, simpleCard],
+      [`Move ${MINI_TITLE}`, miniCard],
+      [`Move ${RULE_TITLE}`, conditionBlock],
+    ]
+    for (const [name, card] of armCases) {
+      const move = screen.getByRole('button', { name })
+      fireEvent.click(move)
+      expect(screen.getByRole('button', { name }).getAttribute('aria-pressed'), `${name} did not arm`).toBe('true')
+      expect(card().style.border, `${name}: an armed card has no action border`).toBe(action)
+    }
+
+    cleanup()
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={cardsPolicy()} />)
+    fireEvent.click(within(canvasPanel()).getByText(SIMPLE_TITLE))
+    fireEvent.click(screen.getByRole('button', { name: `Move ${MINI_TITLE}` }))
+    expect(borders(), 'a selected card and an armed card in another lane are both lit').toEqual([action, action, rest])
+
+    fireEvent.click(screen.getByRole('button', { name: `Move ${MINI_TITLE}` }))
+    expect(borders(), 'disarming dims the armed card and leaves the selected one lit').toEqual([action, rest, rest])
+
+    fireEvent.click(screen.getByRole('button', { name: `Move ${SIMPLE_TITLE}` }))
+    fireEvent.click(screen.getByRole('button', { name: `Move ${SIMPLE_TITLE}` }))
+    expect(borders(), 'a card both selected and armed stays lit once disarmed').toEqual([action, rest, rest])
+  })
+
+  it('WB-11 hints read --fg-3 in 6px boxes (boundary)', () => {
+    const empty = { ...policyWith('fin_mgr'), nodes: [] }
+    const { unmount } = render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={empty} />)
+    const hint = screen.getByText(/^No approval steps/)
+    expect(hint.style.color, 'the empty-canvas hint is not --fg-3').toBe('var(--fg-3)')
+    expect(hint.style.borderRadius, 'the empty-canvas hint is not 6px').toBe('var(--radius-md)')
+
+    fireEvent.dragStart(paletteTile())
+    const drop = screen.getByText('Drop step here')
+    expect(drop.style.borderRadius, 'the root drop box is not 6px').toBe('var(--radius-md)')
+    expect(drop.style.color, 'the idle drop label is not --fg-3').toBe('var(--fg-3)')
+    unmount()
+
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={conditionPolicy()} />)
+    const lanes = [screen.getByText('Drop steps here'), screen.getByText('Continue (no extra step)')]
+    for (const lane of lanes) {
+      expect(lane.style.color, 'a lane hint is not --fg-3').toBe('var(--fg-3)')
+      expect(lane.style.borderRadius, 'a lane hint is not 6px').toBe('var(--radius-md)')
+    }
+
+    fireEvent.dragStart(paletteTile())
+    const branchSlots = Array.from(document.querySelectorAll('[data-wf-slot]')).filter((s) => !(s.getAttribute('data-wf-slot') ?? '').startsWith('root#'))
+    expect(branchSlots, 'arming an approval opened no branch drop box').toHaveLength(2)
+    for (const slot of branchSlots) {
+      const box = slot.firstElementChild as HTMLElement
+      expect(box.style.borderRadius, 'a branch drop box is not 6px').toBe('var(--radius-md)')
+    }
+  })
+
+  it('WB-16 a refused save reads 12px in its 6px box (error)', async () => {
+    const refusal = 'only an admin can change approval policies'
+    const savePolicy = vi.fn(() => {
+      const p = Promise.reject(new ApiError('http', refusal, 403))
+      p.catch(() => {})
+      return p
+    })
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES, savePolicy })} policy={policyWith('fin_mgr')} />)
+
+    fireEvent.click(saveButton())
+
+    const err = await screen.findByTestId('policy-save-error')
+    expect(err.textContent, 'the refusal is not the server sentence').toBe(refusal)
+    expect(err.style.fontSize, 'a refused save is not 12px').toBe('12px')
+    expect(err.style.borderRadius).toBe('var(--radius-md)')
+  })
+
+  it('WB-17 only the Applies select is a 200px --bg-2 select', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+    fireEvent.click(screen.getByText(SIMPLE_TITLE))
+
+    const applies = scopeSelect()
+    expect(applies.style.backgroundColor, 'the Applies select is not on --bg-2').toBe('var(--bg-2)')
+    expect(applies.closest('label')!.style.width, 'the Applies select is not 200px').toBe('200px')
+    for (const name of ['Who must approve', 'Deadline']) {
+      const select = control(screen.getByLabelText(name))
+      expect(select.tagName, `${name} is not a select`).toBe('SELECT')
+      expect(select.style.backgroundColor, `${name} left --bg-1`).toBe('var(--bg-1)')
+    }
+  })
+
+  it('WB-17b a disabled WfSelect keeps --bg-3 whatever background it is given', () => {
+    render(<WfSelect label="Probe" value="a" options={[{ value: 'a', label: 'A' }]} onChange={() => {}} background="var(--bg-2)" disabled />)
+
+    const select = control(screen.getByLabelText('Probe'))
+    expect(select.style.backgroundColor, 'the disabled paint did not outrank the background prop').toBe('var(--bg-3)')
+  })
+
+  it('WB-18 the Move glyph rests on --fg-4', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+
+    const move = screen.getByRole('button', { name: /^Move / })
+    const del = screen.getByRole('button', { name: /^Delete / })
+    expect(move.style.color, 'the resting Move glyph is not --fg-4').toBe('var(--fg-4)')
+    expect(del.style.color, 'the Delete glyph left --fg-4').toBe('var(--fg-4)')
+
+    fireEvent.click(move)
+
+    expect(screen.getByRole('button', { name: /^Move / }).style.color, 'the armed Move glyph is not --action').toBe('var(--action)')
+  })
+})
+
+/** The inspector card of a nothing-selected builder, scoped off its own header. */
+const emptyInspector = () => screen.getByText('Step details').parentElement as HTMLElement
+
+function thresholdPolicy(value: number): Policy {
+  return { ...conditionPolicy(), nodes: [{ id: 'c1', type: 'condition', field: 'amount', op: '>', value, then: [], else: [] }] }
+}
+
+/** Selects the one condition from the canvas by its rule title. */
+function selectThreshold(title: string): void {
+  fireEvent.click(within(canvasPanel()).getByText(title))
+}
+
+const preset = (label: string) => within(inspectorPanel()).getByRole('button', { name: label })
+
+const PRESET_REST = { background: 'var(--bg-1)', color: 'var(--fg-2)', border: '1px solid var(--line-2)' }
+const PRESET_LIT = { background: 'var(--action-tint)', color: 'var(--action)', border: '1px solid var(--action)' }
+
+function presetPaint(label: string) {
+  const s = preset(label).style
+  return { background: s.background, color: s.color, border: s.border }
+}
+
+describe('RESKIN2-05-05 WB: the builder inspector and simulator', () => {
+  it('WB-12 the inspector is a 6px panel with 15px titles', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+
+    const empty = emptyInspector()
+    expect(empty.style.borderRadius, 'the empty inspector is not 6px').toBe('var(--radius-md)')
+    const heading = within(empty).getByText('Step details')
+    expect(heading.style.fontSize, 'the Step details title is not 15px').toBe('15px')
+    expect(heading.style.fontWeight, 'the Step details title is not bold').toBe('700')
+
+    fireEvent.click(within(canvasPanel()).getByText(SIMPLE_TITLE))
+
+    const panel = inspectorPanel()
+    expect(panel.style.borderRadius, 'the selected inspector is not 6px').toBe('var(--radius-md)')
+    const title = within(panel).getByText('Approval step')
+    expect(title.style.fontSize, 'the selected title is not 15px').toBe('15px')
+    expect(title.style.fontWeight, 'the selected title is not bold').toBe('700')
+    const remove = within(panel).getByRole('button', { name: 'Remove' })
+    expect(remove.style.fontSize, 'Remove is not 12.5px').toBe('12.5px')
+    expect(remove.style.fontWeight, 'Remove is not 600').toBe('600')
+    const roles = within(panel).getByRole('button', { name: 'Manage roles' })
+    expect(roles.style.fontWeight, 'Manage roles is not 500').toBe('500')
+  })
+
+  it('WB-13 the RULE box is 6px', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={conditionPolicy()} />)
+    selectThreshold(RULE_TITLE)
+
+    const label = within(inspectorPanel()).getByText('RULE')
+    const box = label.parentElement as HTMLElement
+    expect(box.contains(within(inspectorPanel()).getAllByText(RULE_TITLE)[0]), 'the box holding RULE does not hold the rule sentence').toBe(true)
+    expect(box.style.borderRadius, 'the RULE box is not 6px').toBe('var(--radius-md)')
+  })
+
+  it('WB-14 the builder carries no v1 vocabulary (boundary)', () => {
+    const policy: Policy = {
+      ...conditionPolicy(),
+      nodes: [
+        { id: 'n1', type: 'approval', role: 'fin_mgr', sla: '24', delegate: false },
+        { id: 'c1', type: 'condition', field: 'amount', op: '>', value: 250_000_000, then: [{ id: 'm1', type: 'approval', role: 'cfo', sla: '24', delegate: false }], else: [] },
+        { id: 'n2', type: 'notify', target: 'Tax Team', channel: 'In-app' },
+        { id: 'a1', type: 'autoapprove' },
+      ],
+    }
+    const { container } = render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policy} />)
+    fireEvent.click(within(canvasPanel()).getByText(SIMPLE_TITLE))
+
+    const switches = container.querySelectorAll('button[role="switch"]')
+    expect(switches.length, 'no switch rendered, so the 99px exemption is unobserved').toBeGreaterThan(0)
+
+    const styled = Array.from(container.querySelectorAll('[style]')) as HTMLElement[]
+    expect(styled.length, 'the builder rendered no inline-styled element').toBeGreaterThan(0)
+
+    const allowed = new Set(['var(--radius-sm)', 'var(--radius-md)', '50%', '99px'])
+    const seen = new Set<string>()
+    for (const el of styled) {
+      const css = el.getAttribute('style') ?? ''
+      for (const m of css.matchAll(/border[a-z-]*radius:\s*([^;]+)/g)) {
+        const v = m[1].trim()
+        seen.add(v)
+        expect(allowed.has(v), `an off-vocabulary corner: ${v} on <${el.tagName.toLowerCase()}> ${(el.textContent ?? '').slice(0, 30)}`).toBe(true)
+        if (v === '99px') {
+          expect(el.matches('button[role="switch"]'), `99px outside the toggle track: <${el.tagName.toLowerCase()}> ${(el.textContent ?? '').slice(0, 30)}`).toBe(true)
+        }
+      }
+      expect(css, 'a box-shadow is still painted').not.toMatch(/box-shadow/i)
+      expect(css, 'an oklch colour is still painted').not.toMatch(/oklch/i)
+      expect(css, 'a gradient is still painted').not.toMatch(/gradient/i)
+    }
+    expect(seen.has('var(--radius-md)'), 'no 6px corner observed, so the scan is not reading corners').toBe(true)
+    expect(seen.has('99px'), 'the toggle track pill was not observed').toBe(true)
+  })
+
+  it('WB-15 the simulator\'s dots are circles and its connector a plain line', () => {
+    const policy: Policy = {
+      ...policyWith('fin_mgr'),
+      nodes: [
+        { id: 'n1', type: 'approval', role: 'fin_mgr', sla: '24', delegate: false },
+        { id: 'n2', type: 'approval', role: 'cfo', sla: '24', delegate: false },
+      ],
+    }
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policy} />)
+
+    const panel = simulatorPanel()
+    expect(panel.style.borderRadius, 'the simulator panel is not 6px').toBe('var(--radius-md)')
+    const title = within(panel).getByText('Test a scenario')
+    expect(title.style.fontSize, 'the simulator title is not 15px').toBe('15px')
+    expect(title.style.fontWeight, 'the simulator title is not bold').toBe('700')
+
+    const all = Array.from(panel.querySelectorAll('*')) as HTMLElement[]
+    const dots = all.filter((el) => el.tagName === 'SPAN' && el.style.width === '24px' && el.style.height === '24px')
+    expect(dots, 'two approvals render two step dots').toHaveLength(2)
+    for (const dot of dots) expect(dot.style.borderRadius, 'a step dot is not a circle').toBe('50%')
+
+    // The amount input's ₦ prefix is also an absolute span; it is aria-hidden, the connector parts are not.
+    const lines = all.filter((el) => el.tagName === 'SPAN' && el.style.position === 'absolute' && !el.hasAttribute('aria-hidden'))
+    expect(lines, 'two steps leave one connector line and no arrowhead').toHaveLength(1)
+    expect(lines[0].style.borderRadius, 'the connector still carries a corner').toBe('')
+
+    const arrowheads = all.filter((el) => /border-top:\s*5px solid/.test(el.getAttribute('style') ?? ''))
+    expect(arrowheads, 'the connector arrowhead remains').toHaveLength(0)
+  })
+
+  it('WB-19 the preset matching the threshold is highlighted', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={thresholdPolicy(500_000_000)} />)
+    selectThreshold('Amount greater than ₦500,000,000')
+
+    expect(presetPaint('₦500M'), 'the preset equal to the threshold is not lit').toEqual(PRESET_LIT)
+    expect(presetPaint('₦100M'), '₦100M is not at rest').toEqual(PRESET_REST)
+    expect(presetPaint('₦1B'), '₦1B is not at rest').toEqual(PRESET_REST)
+
+    fireEvent.click(preset('₦1B'))
+
+    expect(presetPaint('₦1B'), 'the clicked preset is not lit').toEqual(PRESET_LIT)
+    expect(presetPaint('₦500M'), 'the previous preset did not return to rest').toEqual(PRESET_REST)
+    expect(presetPaint('₦100M')).toEqual(PRESET_REST)
+  })
+
+  it('WB-20 a threshold matching no preset highlights none (boundary)', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={thresholdPolicy(250_000_000)} />)
+    selectThreshold(RULE_TITLE)
+
+    const labels = ['₦100M', '₦500M', '₦1B']
+    for (const label of labels) expect(presetPaint(label), `${label} is lit though no preset equals the threshold`).toEqual(PRESET_REST)
+
+    const input = within(inspectorPanel()).getByLabelText('Threshold amount in naira') as HTMLInputElement
+    expect(input.value.replace(/\D/g, ''), 'the threshold input no longer reads 250000000').toBe('250000000')
+  })
+
+  it('WB-21 the disabled delegation row is muted at 0.55 with a not-allowed cursor', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+    fireEvent.click(within(canvasPanel()).getByText(SIMPLE_TITLE))
+
+    const tog = within(inspectorPanel()).getByRole('switch', { name: 'Allow delegation' })
+    expect((tog as HTMLButtonElement).disabled, 'the delegation switch is not shut').toBe(true)
+    const row = tog.parentElement as HTMLElement
+    expect(within(row).getByText('Allow delegation'), 'the switch parent is not the delegation row').toBeTruthy()
+    expect(row.style.opacity, 'the delegation row is not muted').toBe('0.55')
+    expect(row.style.cursor, 'the delegation row cursor is not not-allowed').toBe('not-allowed')
+  })
+
+  it('WB-19 the lit preset follows the typed threshold, not the last click (boundary)', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={thresholdPolicy(250_000_000)} />)
+    selectThreshold(RULE_TITLE)
+    const input = within(inspectorPanel()).getByLabelText('Threshold amount in naira') as HTMLInputElement
+
+    fireEvent.change(input, { target: { value: '1000000000' } })
+    expect(input.value.replace(/\D/g, ''), 'the typed threshold did not land').toBe('1000000000')
+    expect(presetPaint('₦1B'), 'a typed value equal to a preset does not light it').toEqual(PRESET_LIT)
+    expect(presetPaint('₦100M')).toEqual(PRESET_REST)
+    expect(presetPaint('₦500M')).toEqual(PRESET_REST)
+
+    fireEvent.change(input, { target: { value: '1000000001' } })
+    expect(input.value.replace(/\D/g, ''), 'the edited threshold did not land').toBe('1000000001')
+    for (const label of ['₦100M', '₦500M', '₦1B']) expect(presetPaint(label), `${label} stays lit one naira off its value`).toEqual(PRESET_REST)
+
+    fireEvent.change(input, { target: { value: '' } })
+    for (const label of ['₦100M', '₦500M', '₦1B']) expect(presetPaint(label), `${label} is lit on a cleared threshold`).toEqual(PRESET_REST)
+  })
+
+  it('WB-15 one step draws no connector; a three-kind path draws two between its circles (boundary)', () => {
+    const connectors = (panel: HTMLElement) =>
+      (Array.from(panel.querySelectorAll('*')) as HTMLElement[]).filter((el) => el.tagName === 'SPAN' && el.style.position === 'absolute' && !el.hasAttribute('aria-hidden'))
+    const dots = (panel: HTMLElement) =>
+      (Array.from(panel.querySelectorAll('*')) as HTMLElement[]).filter((el) => el.tagName === 'SPAN' && el.style.width === '24px' && el.style.height === '24px')
+
+    const one: Policy = { ...policyWith('fin_mgr'), nodes: [{ id: 'n1', type: 'approval', role: 'fin_mgr', sla: '24', delegate: false }] }
+    const first = render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={one} />)
+    expect(dots(simulatorPanel()), 'one step renders one dot').toHaveLength(1)
+    expect(connectors(simulatorPanel()), 'the last step draws a connector below it').toHaveLength(0)
+    first.unmount()
+
+    const mixed: Policy = {
+      ...policyWith('fin_mgr'),
+      nodes: [
+        { id: 'n1', type: 'approval', role: 'fin_mgr', sla: '24', delegate: false },
+        { id: 'n2', type: 'notify', target: 'Tax Team', channel: 'In-app' },
+        { id: 'a1', type: 'autoapprove' },
+      ],
+    }
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={mixed} />)
+    const panel = simulatorPanel()
+    const circles = dots(panel)
+    expect(circles, 'approval, notify and auto-approve render three dots').toHaveLength(3)
+    for (const dot of circles) expect(dot.style.borderRadius, 'a non-approval step dot is not a circle').toBe('50%')
+    const lines = connectors(panel)
+    expect(lines, 'three steps draw two connectors').toHaveLength(2)
+    for (const line of lines) expect(line.style.borderRadius, 'a connector carries a corner').toBe('')
+  })
+
+  it('WB-22 the select hints read 11px / 1.5; the resolved-role line keeps 11.5px / 1.45', () => {
+    const { unmount } = render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
+    fireEvent.click(within(canvasPanel()).getByText(SIMPLE_TITLE))
+    const panel = inspectorPanel()
+
+    const reason = within(panel).getByTestId('delegation-blocked-reason')
+    expect(reason.style.fontSize, 'the delegation reason is not 11px').toBe('11px')
+    expect(reason.style.lineHeight, 'the delegation reason is not 1.5').toBe('1.5')
+    const note = control(within(panel).getByLabelText('Delegate to')).closest('div')?.lastElementChild as HTMLElement
+    expect(note, 'the delegate picker has a sibling hint').toBeTruthy()
+    expect(note.textContent, 'the located hint is the note, not the picker').toMatch(/Admins and Reviewers/)
+    expect(note.style.fontSize, 'the delegate note is not 11px').toBe('11px')
+    expect(note.style.lineHeight, 'the delegate note is not 1.5').toBe('1.5')
+
+    const resolved = within(panel).getByRole('button', { name: 'Manage roles' }).parentElement as HTMLElement
+    expect(resolved.firstElementChild?.textContent, 'control: the row leads with the resolved-role sentence').toBeTruthy()
+    expect(resolved.style.display, 'control: the resolved line is the flex row holding Manage roles').toBe('flex')
+    expect(resolved.style.fontSize, 'the resolved line is not 11.5px').toBe('11.5px')
+    expect(resolved.style.lineHeight, 'the resolved line is not 1.45').toBe('1.45')
+    unmount()
+
+    render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={notifyPolicy()} />)
+    selectNotify()
+    const notify = within(inspectorPanel()).getByTestId('notify-not-delivered')
+    expect(notify.style.fontSize, 'the notify note is not 11px').toBe('11px')
+    expect(notify.style.lineHeight, 'the notify note is not 1.5').toBe('1.5')
   })
 })

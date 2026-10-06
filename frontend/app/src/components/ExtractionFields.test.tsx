@@ -27,6 +27,8 @@
 // `getComputedStyle` appears in no app unit spec and none is used below: every style oracle
 // reads `el.style.*`, the inline declaration the component wrote.
 
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import type { ReactNode } from 'react'
 
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
@@ -113,7 +115,7 @@ const HEADER_FIELDS = [
 ]
 
 // SourceDocumentPages.test.tsx:31's list, verbatim: every class here forces `border-radius`
-// with `!important`, from app-layer.css:193-197 and :275.
+// with `!important`.
 const RADIUS_FORCING = ['pf-btn', 'pf-chip', 'v2-btn', 'ops-btn', 'dev-btn', 'ops-chip', 'dev-chip']
 
 // RulePills.tsx:7-22 is the near-miss: the amber triple is identical, the two font metrics
@@ -585,7 +587,7 @@ describe('the region-less pill', () => {
     expect(pill.style.color).toBe('var(--status-amber-text)')
     expect(pill.style.background).toBe('var(--status-amber-bg)')
     expect(pill.style.border).toBe('1px solid var(--status-amber-border)')
-    expect(pill.style.borderRadius).toBe('999px')
+    expect(pill.style.borderRadius).toBe('var(--radius-sm)')
     expect(pill.style.padding).toBe('2px 8px')
     expect(pill.style.whiteSpace).toBe('nowrap')
 
@@ -622,8 +624,7 @@ describe('an empty fields array', () => {
     expect(panel.style.background).toBe('transparent')
 
     // CreateForm.tsx:132 carries `pf-chip`, whose
-    // `border-radius: var(--radius-pill) !important` (app-layer.css:275) overrides its own
-    // inline radius. Copying it brings the override with it.
+    // `border-radius` is `!important` and overrides its own inline radius. Copying it brings the override with it.
     for (const forced of RADIUS_FORCING) {
       expect(classesOf(panel), `the empty panel carries ${forced}`).not.toContain(forced)
     }
@@ -922,19 +923,18 @@ describe('the pane and the sentence, pinned', () => {
   })
 
   it('paints the selected row in the app’s marked-row amber', () => {
-    // `SourceDocumentSheet.tsx:317`, in the hue the document pane paints the region with —
-    // `--accent` is `oklch(72% .15 65)` (colors.css:18), `highlightStyle` the same triple at
-    // .32 alpha. The style-inequality row above passes on ANY difference, `opacity: 0.99`
-    // included, so it pins the fact of a treatment and this row pins which one.
+    // The marked-row style of `SourceDocumentSheet` (`sheet-row-marked`); the row above only pins that a treatment exists.
     render(fieldsPane({ selected: 'issue_date' }))
 
     const selected = row('issue_date')
     expect(selected.style.background).toBe('var(--accent-10)')
     expect(selected.style.boxShadow).toBe('inset 2px 0 0 var(--accent)')
+    expect(selected.style.transition, 'selected row transition').toBe('background 110ms ease-out')
 
     const other = row('total')
     expect(other.style.background, 'an unselected row carries the marked treatment').toBe('transparent')
     expect(other.style.boxShadow, 'an unselected row carries the marked rail').toBe('')
+    expect(other.style.transition, 'unselected row transition').toBe('background 110ms ease-out')
   })
 
   it('sizes the pane the way the artboard’s right column does', () => {
@@ -1279,7 +1279,7 @@ describe('a corrected field', () => {
     expect(label, `the corrected field does not say "${MARKER_TYPED}"`).toBeTruthy()
 
     // The positive equality FIRST: a bare not.toBe('var(--accent)') is green on 'red', on ''
-    // and on an element that never rendered. app-layer.css:38-43 states the translation the
+    // and on an element that never rendered. v2/app-layer.css states the translation the
     // artboard's `var(--accent)` at :307 and :335 takes here.
     expect(marker!.style.background).toBe('var(--action)')
     expect(label!.style.color).toBe('var(--action)')
@@ -1562,6 +1562,29 @@ describe('an ambiguous field', () => {
     }
     const sub = within(chips[0]).getByText('page 1')
     expect(sub.style.textTransform, 'the chip sub-label was uppercased in JavaScript, not in CSS').toBe('uppercase')
+  })
+
+  it('chips and the point button are 6px', () => {
+    // RR draws 6px (`--radius-md`) on both; the pill beside them is 4px. A copy of the pill's
+    // radius, or of the old 10px, reds here.
+    const { rerender } = render(
+      fieldsPane({ fields: EVERY_CELL_PART, selected: 'total', armed: 'buyer_tin', canPoint: true }),
+    )
+
+    const chips = chipsOf('issue_date')
+    expect(chips.length, 'the floor: the ambiguous field rendered its chips').toBeGreaterThan(1)
+    for (const chip of chips) expect(chip.style.borderRadius, chip.dataset.testid).toBe('var(--radius-md)')
+    const borders = chips.map((c) => c.style.border)
+    expect(borders, 'no chip is the picked one').toContain('1px solid var(--action)')
+    expect(borders, 'every chip is the picked one').toContain('1px solid var(--line-2)')
+
+    const armedPoint = pointOf('buyer_tin')
+    expect(armedPoint, 'the floor: the armed point button rendered').toBeTruthy()
+    expect(armedPoint!.style.borderRadius, 'the armed point button').toBe('var(--radius-md)')
+
+    rerender(fieldsPane({ fields: EVERY_CELL_PART, selected: 'total', armed: null, canPoint: true }))
+    expect(cancelOf('buyer_tin'), 'the cell is still armed').toBeNull()
+    expect(pointOf('buyer_tin')!.style.borderRadius, 'the idle point button').toBe('var(--radius-md)')
   })
 
   it('renders no chip for a field carrying alternatives without the ambiguous reason', () => {
@@ -1948,6 +1971,8 @@ describe('Undo', () => {
     expect(undo, 'the corrected field offers no way back').toBeTruthy()
     expect(undo!.textContent, 'the Undo control is unlabelled').toBe(UNDO)
     expect(row('total').contains(undo), 'Undo rendered outside the cell it undoes').toBe(true)
+    // The changed row centres it; only Stop pointing starts at the cell's edge.
+    expect(undo!.style.alignSelf, 'Undo took the Stop pointing alignment').toBe('')
     expect(undoOf('subtotal'), 'an uncorrected field offers an Undo').toBeNull()
 
     fireEvent.click(undo as HTMLElement)
@@ -2052,6 +2077,16 @@ describe('a missing field', () => {
     expect(button, 'a missing field offers no way to point at it').toBeTruthy()
     expect(button!.textContent, 'the point button is unlabelled or paraphrased').toBe(POINT_IDLE)
     expect(row('buyer_tin').contains(button), 'the point button rendered outside the cell it arms').toBe(true)
+  })
+
+  it("Stop pointing sits at the cell's start", () => {
+    render(fieldsPane({ fields: TWO_MISSING, canPoint: true, armed: 'buyer_tin' }))
+
+    expect(pointOf('buyer_tin'), 'the floor: the armed cell kept its point button').toBeTruthy()
+    const cancel = cancelOf('buyer_tin')
+    expect(cancel, 'no Stop pointing button rendered').toBeTruthy()
+    expect(cancel!.textContent).toBe(POINT_CANCEL)
+    expect(cancel!.style.alignSelf).toBe('flex-start')
   })
 
   it('moves the border, the ground and the label together when it arms', () => {
@@ -2374,5 +2409,71 @@ describe('the offered text, adversarial (AIR-03-04)', () => {
       }),
     )
     expect(valueOf('buyer_name')).toBe('')
+  })
+})
+
+// A source scan of the token CSS: jsdom applies no stylesheet, so an undefined `var(--x)` paints
+// nothing in the browser while every style assertion above stays green. Covers the pane and its
+// LineItemGrid; the canvas has the same scan in ExtractionCanvas.test.tsx.
+describe('every token the fields pane and the line grid paint is defined in the v2 token CSS', () => {
+  const V2 = path.join(process.cwd(), '../../packages/design-tokens/v2')
+  const CSS = ['tokens/colors.css', 'tokens/spacing.css', 'tokens/typography.css', 'app-layer.css']
+    .map((f) => readFileSync(path.join(V2, f), 'utf8').replace(/\/\*[\s\S]*?\*\//g, ''))
+    .join('\n')
+
+  it('names no var() the app does not load', () => {
+    const names = new Set<string>()
+    const collect = (root: HTMLElement) => {
+      for (const el of root.querySelectorAll('[style]')) {
+        for (const m of (el.getAttribute('style') ?? '').matchAll(/var\((--[a-z0-9-]+)/g)) names.add(m[1])
+      }
+    }
+    const lineCell = (index: number, role: LineRole, value: string, o: Partial<ExtractionFieldState> = {}) =>
+      mkField({ name: lineFieldName(index, role), value, ...o })
+    // Row 1 does not add up and carries an ambiguous description; row 2 is clean.
+    const lines = [
+      lineCell(1, 'description', 'Widget', {
+        reason: 'ambiguous',
+        alternatives: [mkCandidate('Gadget', 1)],
+      }),
+      lineCell(1, 'quantity', '9'),
+      lineCell(1, 'unit_price', '100.00'),
+      lineCell(1, 'line_total', '200.00'),
+      lineCell(2, 'description', 'Bolt'),
+      lineCell(2, 'quantity', '1'),
+      lineCell(2, 'unit_price', '10.00'),
+      lineCell(2, 'line_total', '10.00'),
+    ]
+
+    const full = render(
+      fieldsPane({
+        fields: [...EVERY_CELL_PART, ...lines],
+        selected: lineFieldName(2, 'description'),
+        armed: 'buyer_tin',
+        canPoint: true,
+        lineRows: null,
+      }),
+    )
+    expect(screen.getByTestId('line-item-flag-1'), 'no flagged line rendered').toBeTruthy()
+    expect(screen.getByTestId('line-item-chip-1-description-0'), 'no line chip rendered').toBeTruthy()
+    expect(screen.getByTestId('extraction-point-cancel-buyer_tin'), 'no Stop pointing rendered').toBeTruthy()
+    collect(full.container)
+    full.unmount()
+
+    const empty = render(fieldsPane({ fields: EVERY_CELL_PART, selected: 'issue_date' }))
+    expect(screen.getByTestId('line-item-empty'), 'no empty line panel rendered').toBeTruthy()
+    collect(empty.container)
+    empty.unmount()
+
+    const none = render(fieldsPane({ fields: [] }))
+    collect(none.container)
+
+    for (const floor of [
+      '--accent', '--accent-10', '--action', '--bg-0', '--bg-2', '--line-1', '--line-2', '--line-3',
+      '--radius-md', '--radius-sm', '--status-amber-bg', '--status-amber-border', '--status-amber-text',
+    ]) {
+      expect([...names], `the scan never saw ${floor}`).toContain(floor)
+    }
+    for (const name of names) expect(CSS, `${name} is not defined by the v2 tokens the app loads`).toContain(`${name}:`)
   })
 })

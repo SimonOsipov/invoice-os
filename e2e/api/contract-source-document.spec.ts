@@ -173,9 +173,9 @@ test.describe('invoice source-document contract (API E2E, over the deployed gate
       expect(record.size_bytes as number, `${invoice.invoice_number} size_bytes`).toBeGreaterThan(0)
       // demodocs.filenameFor slugifies the supplier entity's name.
       expect(record.filename as string, `${invoice.invoice_number} filename`).toMatch(/^[a-z0-9-]+-invoices\.csv$/)
-      // The seeded document is attributed to a real admin of the tenant, not to
-      // a synthetic seeder subject -- this is what the rail renders as
-      // "Uploaded by", so a fabricated uuid there would be a lying surface.
+      // Attributed to the tenant's seeded persona admin (demodocs prefers it over
+      // admins granted later), not a synthetic seeder subject: the rail renders
+      // this as "Uploaded by".
       expect(record.uploaded_by, `${invoice.invoice_number} uploaded_by`).toBe(PERSONAS.A.subject)
       // A linked invoice always carries the rows it occupies; these fixtures
       // import with the header on row 1, so the floor is 2.

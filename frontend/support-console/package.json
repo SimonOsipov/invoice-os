@@ -20,7 +20,9 @@
     "react-dom": "^19.2.7"
   },
   "devDependencies": {
+    "@invoice-os/api-client": "workspace:*",
     "@sentry/vite-plugin": "5.4.0",
+    "@types/node": "^22.10.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",

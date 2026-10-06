@@ -4,11 +4,8 @@
 // exists: the canvas, the inspector and the simulator all need the node tone/title
 // vocabulary, and none of them should have to import a sibling screen to get it.
 //
-// Token note: the prototype's teal is `--accent`; in this repo `--accent` is the design
-// system's AMBER and is deliberately not aliased (app-layer.css). Every teal below is
-// `--action` / `--action-tint`. `--shadow-xs`/`--shadow-sm` map to `--shadow-card`/
-// `--shadow-soft`, and the prototype's `--shadow-accent` has no repo equivalent, so the
-// primary CTA carries no shadow — same as every other primary button in the app.
+// Token note: the prototype's teal `--accent` is the repo's AMBER; every teal here is `--action` / `--action-tint`.
+// No shadows: the v2 look is flat, so the toggle knob and the primary CTA carry none.
 
 import type { ReactNode } from 'react'
 
@@ -181,11 +178,11 @@ export const POLICY_TONE: Record<PolicyStatus, { bg: string; border: string; tex
 export function PolicyStatusPill({ status, padding = '2px 8px' }: { status: PolicyStatus; padding?: string }) {
   const tone = POLICY_TONE[status]
   return (
-    <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 5, background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 999, padding }}>
-      <span style={{ width: 5, height: 5, borderRadius: 99, background: tone.text }} />
-      <span className="mono" style={{ fontSize: 8.5, fontWeight: 600, color: tone.text, letterSpacing: '0.05em' }}>
-        {tone.label}
-      </span>
+    <span
+      className="mono"
+      style={{ flex: 'none', display: 'inline-flex', fontSize: 8.5, fontWeight: 600, letterSpacing: '0.05em', color: tone.text, background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 'var(--radius-sm)', padding }}
+    >
+      {tone.label}
     </span>
   )
 }
@@ -196,7 +193,7 @@ export function PolicyStatusPill({ status, padding = '2px 8px' }: { status: Poli
  * the `.asc-app` rule outranks any component background — so the caller draws one
  * beside it. This is the first styled <select> in the app; every other screen dodged it.
  */
-export function WfSelect({ label, value, options, onChange, height = 38, marginBottom = 0, hideLabel = false, width, disabled, title, ariaDescribedBy }: {
+export function WfSelect({ label, value, options, onChange, height = 38, marginBottom = 0, hideLabel = false, width, background = 'var(--bg-1)', disabled, title, ariaDescribedBy }: {
   label: string
   value: string
   options: WfOption[]
@@ -206,6 +203,7 @@ export function WfSelect({ label, value, options, onChange, height = 38, marginB
   /** For the scope row, where a sibling `.label` already names the control on screen. */
   hideLabel?: boolean
   width?: number | string
+  background?: string
   /**
    * The persistent-disable recipe, all three landing on the `<select>` itself — never on the
    * `<label>` wrapper, which `hideLabel` aria-labels and `getByLabelText` hands back. Optional
@@ -231,8 +229,8 @@ export function WfSelect({ label, value, options, onChange, height = 38, marginB
           disabled={disabled}
           title={title}
           aria-describedby={ariaDescribedBy}
-          // `backgroundColor`, never the `background` shorthand — app-layer.css:224-232.
-          style={{ width: '100%', height, padding: '0 32px 0 12px', border: '1px solid var(--line-2)', backgroundColor: 'var(--bg-1)', color: 'var(--fg-1)', fontSize: 13, cursor: 'pointer', boxSizing: 'border-box', ...(disabled ? { backgroundColor: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null) }}
+          // `backgroundColor`, never the `background` shorthand.
+          style={{ width: '100%', height, padding: '0 32px 0 12px', border: '1px solid var(--line-2)', backgroundColor: background, color: 'var(--fg-1)', fontSize: 13, cursor: 'pointer', boxSizing: 'border-box', ...(disabled ? { backgroundColor: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null) }}
         >
           {options.map((o) => (
             <option key={o.value} value={o.value}>
@@ -281,7 +279,7 @@ export function WfAmountInput({ value, onChange, ariaLabel, marginBottom = 0 }: 
  * `backgroundColor` — nothing forbids the shorthand here, and overriding a shorthand with a
  * longhand would leave the resting value half-standing. And there is no `aria-disabled`: native
  * `disabled` on a `<button>` already covers focus, the keyboard and the a11y tree. No
- * `filter: 'none'`: `.pf-toggle` sets only a transition, no `:hover` (platform.css:167-171).
+ * `filter: 'none'`: `.pf-toggle` sets only a transition, no `:hover` (platform.css).
  */
 export function WfToggle({ on, onToggle, label, disabled, title, ariaDescribedBy }: {
   on: boolean
@@ -304,18 +302,17 @@ export function WfToggle({ on, onToggle, label, disabled, title, ariaDescribedBy
       className="pf-toggle"
       style={{ flex: 'none', position: 'relative', display: 'inline-block', width: 34, height: 18, padding: 0, border: 0, borderRadius: 99, cursor: 'pointer', background: on ? 'var(--action)' : 'var(--line-3)', ...(disabled ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null) }}
     >
-      <span className="pf-knob" style={{ position: 'absolute', top: 2, left: 2, width: 14, height: 14, borderRadius: 99, background: 'var(--bg-2)', transform: on ? 'translateX(16px)' : 'translateX(0)', boxShadow: 'var(--shadow-card)' }} />
+      <span className="pf-knob" style={{ position: 'absolute', top: 2, left: 2, width: 14, height: 14, borderRadius: '50%', background: 'var(--bg-2)', transform: on ? 'translateX(16px)' : 'translateX(0)' }} />
     </button>
   )
 }
 
 /** The small square action buttons that ride inside a card: delete, and arm-to-place. */
-export function WfIconButton({ label, glyph, onClick, size = 24, tone = 'plain', pressed }: {
+export function WfIconButton({ label, glyph, onClick, size = 24, pressed }: {
   label: string
   glyph: ReactNode
   onClick: () => void
   size?: number
-  tone?: 'plain' | 'danger'
   pressed?: boolean
 }) {
   return (
@@ -340,7 +337,7 @@ export function WfIconButton({ label, glyph, onClick, size = 24, tone = 'plain',
         padding: 0,
         cursor: 'pointer',
         background: pressed ? 'var(--action-tint)' : 'transparent',
-        color: pressed ? 'var(--action)' : tone === 'danger' ? 'var(--fg-4)' : 'var(--fg-3)',
+        color: pressed ? 'var(--action)' : 'var(--fg-4)',
       }}
     >
       {glyph}

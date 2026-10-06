@@ -27,7 +27,7 @@ import { draftTotals, fileDraftGate } from '../lib/invoiceDraft'
 import { plusGlyph, xSmallGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
 
-const ROW_COLS = '1fr 70px 120px 120px 28px'
+const ROW_COLS = '1fr 70px 120px 130px 24px'
 
 // A carried null stays value='' and shows the Amount cell's '—' only as a placeholder (EXTR27-C4, EXTR27-C6).
 const dash = (v: string | null) => (v === null ? '—' : undefined)
@@ -44,10 +44,11 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
   // Never an armed control that swallows the click: when the gate fails the button is
   // genuinely disabled AND its label names the reason.
   const primary = filing
-    ? { label: 'Filing…', bg: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'progress' }
+    ? { label: 'Filing…', cursor: 'progress' }
     : gate.canFile
-      ? { label: 'File invoice', bg: 'var(--action)', color: 'var(--text-on-dark)', cursor: 'pointer' }
-      : { label: gate.reason, bg: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' }
+      ? { label: 'File invoice', cursor: 'pointer' }
+      : { label: gate.reason, cursor: 'not-allowed' }
+  const primaryDim = filing || !gate.canFile
   // One line remaining is the floor: draftToCreateRequest maps an empty item list to
   // `line_items: []` with every declared total null, which the server would accept — a
   // lineless invoice is not something this form should be able to file.
@@ -60,11 +61,11 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
           {/* No mono echo of the invoice number here any more: it became an editable field
               below, and a second read-only copy of the same value drifts from it visually
               the moment the operator types. */}
-          <span className="card-title">New invoice · {active.short}</span>
+          <span className="card-title" style={{ fontSize: 15 }}>New invoice · {active.short}</span>
         </div>
         <div style={{ padding: 20 }}>
           {reading !== null && (
-            <p style={{ fontSize: 12, color: 'var(--fg-3)', margin: '0 0 14px', lineHeight: 1.5 }}>
+            <p style={{ fontSize: 12.5, color: 'var(--fg-2)', margin: '0 0 16px', lineHeight: 1.5 }}>
               Read from the document. Enter the invoice number to file it.
             </p>
           )}
@@ -122,7 +123,7 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
           <div className="label" style={{ marginBottom: 12 }}>
             Line items
           </div>
-          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-input)', overflow: 'hidden', marginBottom: 14 }}>
+          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden', marginBottom: 14 }}>
             <div style={{ display: 'grid', gridTemplateColumns: ROW_COLS, gap: 10, padding: '9px 12px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
               <span className="label">Description</span>
               <span className="label" style={{ textAlign: 'right' }}>Qty</span>
@@ -143,14 +144,14 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
                     <span className="money" style={{ fontSize: 13, textAlign: 'right', fontWeight: 600 }}>{fmt(it.qty * it.price)}</span>
                     {/* No visible text, so it carries an aria-label — otherwise the row's only
                         destructive control is nameless to a screen reader and to Playwright.
-                        Rendered round by .pf-btn's own `border-radius: var(--radius-pill)
-                        !important`, so no radius is set here; an inline one would never apply. */}
+                        `.pf-btn` forces `border-radius` with `!important`, so no radius is set
+                        here; an inline one would never apply. */}
                     <button
                       onClick={() => ctx.removeItem(i)}
                       disabled={!canRemoveLine}
                       aria-label={`Remove line ${i + 1}`}
                       className="pf-btn"
-                      style={{ width: 24, height: 24, display: 'grid', placeItems: 'center', border: '1px solid var(--line-2)', background: 'transparent', color: canRemoveLine ? 'var(--fg-3)' : 'var(--fg-4)', cursor: canRemoveLine ? 'pointer' : 'not-allowed' }}
+                      style={{ width: 24, height: 24, display: 'grid', placeItems: 'center', border: '1px solid var(--line-2)', background: 'transparent', color: 'var(--fg-3)', cursor: canRemoveLine ? 'pointer' : 'not-allowed', ...(canRemoveLine ? {} : { opacity: 0.45 }) }}
                     >
                       {xSmallGlyph}
                     </button>
@@ -172,7 +173,7 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
                   ))}
           </div>
           {reading === null && (
-            <button onClick={ctx.addItem} className="pf-chip" style={{ height: 30, padding: '0 12px', borderRadius: 'var(--radius-input)', fontFamily: 'var(--font-sans)', fontSize: 12.5, fontWeight: 500, border: '1px dashed var(--line-3)', background: 'transparent', color: 'var(--fg-2)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <button onClick={ctx.addItem} className="pf-chip" style={{ height: 30, padding: '0 12px', fontFamily: 'var(--font-sans)', fontSize: 12.5, fontWeight: 500, border: '1px dashed var(--line-3)', background: 'transparent', color: 'var(--fg-2)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               <span style={{ display: 'inline-flex' }}>{plusGlyph}</span> Add line
             </button>
           )}
@@ -212,14 +213,12 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
           onClick={ctx.fileDraft}
           disabled={filing || !gate.canFile}
           className="v2-btn pf-btn"
-          style={{ width: '100%', justifyContent: 'center', height: 42, gap: 8, background: primary.bg, color: primary.color, cursor: primary.cursor }}
+          style={{ width: '100%', justifyContent: 'center', height: 42, gap: 8, background: 'var(--action)', color: 'var(--primary-foreground)', cursor: primary.cursor, ...(primaryDim ? { opacity: 0.45, filter: 'none' } : {}) }}
         >
           {/* Indeterminate only, borrowed from the map step's own in-flight idiom:
               everything after the request leaves (server insert, the row coming back) is
-              unobservable, so there is no progress to report and no stage list to fake.
-              Track is --line-2, not the map step's --bg-3: the in-flight button's own fill
-              IS --bg-3, so that ring would be invisible against it. */}
-          {filing && <span style={{ width: 13, height: 13, borderRadius: 99, border: '2px solid var(--line-2)', borderTopColor: 'var(--fg-4)', display: 'block', animation: 'spin 0.7s linear infinite' }} />}
+              unobservable, so there is no progress to report and no stage list to fake. */}
+          {filing && <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid var(--line-2)', borderTopColor: 'var(--fg-4)', display: 'block', animation: 'spin 0.7s linear infinite' }} />}
           {primary.label}
         </button>
         {/* verbatim — including 409 `duplicate invoice number`,

@@ -52,7 +52,7 @@ export function ImportProgress({ ctx }: { ctx: PlatformCtx }) {
   return (
     <div data-testid="import-progress" style={{ maxWidth: 520, margin: '0 auto', background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
       <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--line-1)' }}>
-        <span className="card-title">{rows.length === 1 ? 'Importing 1 file' : `Importing ${rows.length} files`}</span>
+        <span className="card-title" style={{ fontSize: 16 }}>{rows.length === 1 ? 'Importing 1 file' : `Importing ${rows.length} files`}</span>
       </div>
       <div>
         {rows.map((row, i) => {
@@ -78,23 +78,18 @@ export function ImportProgress({ ctx }: { ctx: PlatformCtx }) {
               )}
               {inFlight !== null && (
                 <span style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
-                  {/* Indeterminate by construction: a repeating gradient twice the width of
-                      its box, slid end to end forever. It encodes no position, so there is
-                      no number it could be wrong about. --action / --action-tint (teal),
-                      NOT --accent: --accent-tint does not exist in the rebuilt design
-                      system, and an undefined custom property resolves to nothing with no
-                      build error. The `shimmer` keyframe is global (styles/platform.css);
-                      this row reuses it, same idiom as the single-file card it replaces. */}
+                  {/* Indeterminate: a repeating gradient slid end to end, so it encodes no position.
+                      Teal --action tokens; the `shimmer` keyframe is global (styles/platform.css). */}
                   <span
                     style={{
                       display: 'inline-block',
                       width: 28,
                       height: 6,
-                      borderRadius: 99,
+                      borderRadius: 3,
                       overflow: 'hidden',
                       background: 'repeating-linear-gradient(115deg, var(--action) 0 6px, var(--action-tint) 6px 13px)',
                       backgroundSize: '200% 100%',
-                      animation: 'shimmer 1.15s linear infinite',
+                      animation: 'shimmer 2.3s linear infinite',
                     }}
                   />
                   <span className="mono" style={{ fontSize: 10.5, color: inFlight.color, letterSpacing: '0.06em' }}>

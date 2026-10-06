@@ -159,6 +159,31 @@ describe('AC-4: the suspended card replaces the workspace', () => {
     expect(workspaceIsRendered(), 'no partial workspace: the shell must be gone, not merely covered').toBe(false)
   })
 
+  it('appSuspended_theCardCarriesThe20pxMark', async () => {
+    await renderApp()
+    const ctx = requireCtx()
+    await act(async () => {
+      await ctx.authedFetch('/x').catch(() => {})
+    })
+
+    const mark = screen.getByTestId('suspended-notice').querySelector('img[aria-hidden="true"]')
+    expect(mark?.getAttribute('width')).toBe('20')
+    expect(mark?.getAttribute('height')).toBe('20')
+  })
+
+  it('GT-05 the suspended card is 10px with no shadow', async () => {
+    await renderApp()
+    const ctx = requireCtx()
+    await act(async () => {
+      await ctx.authedFetch('/x').catch(() => {})
+    })
+
+    const card = screen.getByTestId('suspended-notice')
+    expect(card.style.maxWidth, 'control: the card style is read').toBe('452px')
+    expect(card.style.borderRadius).toBe('var(--radius-lg)')
+    expect(card.style.boxShadow, 'the card carries no shadow').toBe('')
+  })
+
   it('appSuspended_theCardNamesTheReasonAndWhoToAsk', async () => {
     await renderApp()
     const ctx = requireCtx()

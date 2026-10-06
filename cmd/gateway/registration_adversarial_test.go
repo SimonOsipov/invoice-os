@@ -243,15 +243,16 @@ func verifyMux(t *testing.T, reg registration, site *url.URL) *http.ServeMux {
 	return mux
 }
 
-// The mux answers a wrong method with 405 before either handler runs. main's patterns are
-// pinned by TestRegistrationRoutesRegisteredUnconditionally.
+// The mux answers a wrong method on register and verify with 405 before the handler runs; resend's
+// handler answers its own. main's patterns are pinned by TestRegistrationRoutesRegisteredUnconditionally.
 func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
 	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
 	mux := verifyMux(t, reg, site)
 	mux.Handle("POST /auth/register", reg.Register)
-	mux.Handle("POST /auth/resend-verification", reg.ResendVerification)
+	// No method in the pattern, so the handler's own method check answers.
+	mux.Handle("/auth/resend-verification", reg.ResendVerification)
 
 	// Positive pair: the right methods reach the handlers.
 	if rec := serveRegistration(mux, http.MethodPost, "/auth/register", `{"email":"a@corp.example","password":"p"}`); rec.Code != http.StatusAccepted {

@@ -4,8 +4,8 @@ The `auth` Railway service runs a pinned, unmodified `supabase/auth` (GoTrue) im
 signs ES256 access tokens, serves their public keys at `/.well-known/jwks.json`, and
 projects the tenant into `app_metadata.tenant_id` through the Postgres access-token hook.
 It is private-network only (`http://auth.railway.internal:8080`); it has no public domain.
-The gateway reaches it for JWKS, for the fleet probe, for GoTrue's `/signup` and
-`/verify` on behalf of the two public registration routes (see Registration), for
+The gateway reaches it for JWKS, for the fleet probe, for GoTrue's `/signup`, `/resend` and
+`/verify` on behalf of the public registration routes (see Registration), for
 GoTrue's password grant on behalf of the public sign-in route (see Sign-in and hand-off),
 for its refresh-token grant on behalf of the public refresh and sign-out routes (see
 Renewal and Revocation), for GoTrue's `GET /user` on every checked `/api/` request, cached
@@ -134,7 +134,7 @@ Nothing below is a secret value; secrets are named, never shown.
 every fork overwrites it with its own.
 
 `AUTH_SITE_URL` is optional at boot. Unset, the gateway logs one warning and both
-registration routes (register, resend-verification and verify) answer 503 `registration is not configured`. A value that is not an
+the registration routes (register, resend-verification and verify) answer 503 `registration is not configured`. A value that is not an
 absolute `http(s)` URL, or that carries user info, a query or a fragment, stops the
 gateway at boot.
 
@@ -371,7 +371,7 @@ scope, or `/token` with any other grant) is reachable from outside.
 | GoTrue `signup_disabled` | 503 `registration is closed` |
 | any other GoTrue 429 | 429 `too many requests` |
 | GoTrue unreachable, or any other answer | 502 `registration is unavailable`, logged |
-| the client key is over its limit (10 non-400 registers an hour, `gateway.RegisterPerIP`); GoTrue is not called | the same 202 `{"status":"verification_pending"}` after the minimum, logged at WARN `registration: limit reached` (`limit=ip`, `key_source`, `enforced`) |
+| the client key is over its limit (10 registers an hour that pass the gateway's own 400 checks, `gateway.RegisterPerIP`); GoTrue is not called | the same 202 `{"status":"verification_pending"}` after the minimum, logged at WARN `registration: limit reached` (`limit=ip`, `key_source`, `enforced`) |
 | `AUTH_SITE_URL` unset | 503 `registration is not configured` |
 
 A preflight (an OPTIONS with an `Origin`) is answered by CORS; any other non-POST, including an
@@ -388,11 +388,11 @@ preview sends no mail, and one deployed-E2E job registers more than 10 times fro
 Local, CI and production enforce. Guarded by `cmd/gateway/main_test.go`
 `TestRegistrationHandlers_RegisterHasItsOwnLimit` and `TestRegistrationHandlers_PreviewOnlyLogs`.
 
-The four 202 rows answer identically, so the response never tells whether an address
+The five 202 rows answer identically, so the response never tells whether an address
 already has an account. The answer never carries the user id or any GoTrue field except
 `msg`.
 
-The four 202 rows and the 503 `registration is closed`, 429 and 502 rows wait for
+The five 202 rows and the 503 `registration is closed`, 429 and 502 rows wait for
 `AUTH_REGISTER_MIN_RESPONSE` (default `2s`), counted from when the request reached the handler. The 400 rows
 answer at once. The 503 `registration is not configured` answers at once too, because the
 route is not wired. If the client disconnects during the wait, no answer is written. Each
@@ -426,7 +426,7 @@ timeout answers at the 10 s client timeout, not at the floor.
 
 Limits, in process, one hour window: 3 resends per address (`gateway.ResendPerAddress`, keyed by the
 lower-cased email) and 10 per client key (`gateway.ResendPerIP`); each map holds at most 10,000 keys
-(`gateway.ResendMaxKeys`). The client key is `X-Real-IP` (Railway's edge sets it), an IPv4-mapped
+(`gateway.ResendMaxKeys`). The client key is `X-Real-IP` (Railway documents it as the client's address; not yet measured, see Registration Ceilings), an IPv4-mapped
 address unmapped, an IPv6 address by its /64; an absent or unparseable header falls back to the host
 of `RemoteAddr`. The client is reserved first, then the address, then GoTrue is called. A GoTrue 429
 `over_email_send_rate_limit` refunds both counts; every other outcome keeps them. Over a limit the
@@ -507,8 +507,8 @@ otherwise. The tenant id is a UUIDv5 of the caller's subject; the membership gua
   Sign-in and hand-off); the gateway throttles verify not at all, and register and
   resend-verification by client key (10 an hour each) and resend-verification by address (3 an
   hour). The client key is `X-Real-IP`, which Railway's edge documents as the client's address;
-  whether the edge replaces a client-sent value is measured on a PR fork (RESEND-03 D23) and
-  recorded here when known.
+  whether the edge replaces a client-sent value is not yet measured; RESEND-03 D23 measures it
+  on a PR fork and records it here.
 - `ceiling:` `RATE_LIMIT_EMAIL_SENT` (30 per hour) is instance-wide, so production sends
   about 30 confirmation mails per hour. A registrant during the cap gets 202 and no mail; the
   WARN log line `registration: gotrue email send rate limit` is the only signal. Set
@@ -531,7 +531,7 @@ otherwise. The tenant id is a UUIDv5 of the caller's subject; the membership gua
 - `ceiling:` the client key is trusted only while `api.ascomply.com` is served straight from Railway's
   edge. A proxy in front makes every key the proxy's IP, and every client then shares one bucket of 10;
   resend then fails toward fewer mails for everyone, never more. `key_source=remote_addr` in the
-  limit WARN shows the fallback. Measured on a PR fork in RESEND-03 D23.
+  limit WARN shows the fallback. Not yet measured; RESEND-03 D23 measures it on a PR fork.
 - `ceiling:` the session GoTrue issues on verify is discarded but stays live in
   `auth.sessions` and `auth.refresh_tokens`. No route revokes it by itself; a global
   sign-out or a staff cut-off of the account deletes it with the account's other sessions

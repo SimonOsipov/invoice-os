@@ -1198,7 +1198,7 @@ func pageForm(t *testing.T, pageURL, body string) (string, url.Values) {
 	return page.ResolveReference(action).String(), values
 }
 
-func TestRegistrationHandlers_WiresBothRoutes(t *testing.T) {
+func TestRegistrationHandlers_WiresRegisterAndVerify(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
 	const floor = 100 * time.Millisecond
@@ -1221,28 +1221,38 @@ func TestRegistrationHandlers_WiresBothRoutes(t *testing.T) {
 	}
 }
 
-// AUTH_SITE_URL unset: every GoTrue route refuses without calling GoTrue.
+// AUTH_SITE_URL or AUTH_URL unset: every GoTrue route refuses without calling GoTrue.
 func TestRegistrationHandlers_NotConfigured503(t *testing.T) {
-	authURL, calls := fakeAuth(t)
-	reg := registrationHandlers(authURL, nil, 0, slog.New(slog.DiscardHandler), nil)
+	site, _ := url.Parse("https://site.example")
+	for _, unset := range []string{"AUTH_SITE_URL", "AUTH_URL"} {
+		t.Run(unset, func(t *testing.T) {
+			authURL, calls := fakeAuth(t)
+			var reg registration
+			if unset == "AUTH_SITE_URL" {
+				reg = registrationHandlers(authURL, nil, 0, slog.New(slog.DiscardHandler), nil)
+			} else {
+				reg = registrationHandlers(nil, site, 0, slog.New(slog.DiscardHandler), nil)
+			}
 
-	for name, rec := range map[string]*httptest.ResponseRecorder{
-		"Register": serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`),
-		"Verify":   serveForm(reg.Verify, "/auth/verify", "token=T&type=signup"),
+			for name, rec := range map[string]*httptest.ResponseRecorder{
+				"Register": serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`),
+				"Verify":   serveForm(reg.Verify, "/auth/verify", "token=T&type=signup"),
 
-		"ResendVerification": serveRegistration(reg.ResendVerification, http.MethodPost, "/auth/resend-verification", `{"email":"new@corp.example"}`),
-	} {
-		if rec.Code != http.StatusServiceUnavailable {
-			t.Errorf("%s = %d, want 503: %s", name, rec.Code, rec.Body.String())
-			continue
-		}
-		var body map[string]string
-		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body) != 1 || body["error"] != "registration is not configured" {
-			t.Errorf("%s body = %s, want {\"error\":\"registration is not configured\"}", name, rec.Body.String())
-		}
-	}
-	if got := calls(); len(got) != 0 {
-		t.Errorf("GoTrue saw %v, want no calls", got)
+				"ResendVerification": serveRegistration(reg.ResendVerification, http.MethodPost, "/auth/resend-verification", `{"email":"new@corp.example"}`),
+			} {
+				if rec.Code != http.StatusServiceUnavailable {
+					t.Errorf("%s = %d, want 503: %s", name, rec.Code, rec.Body.String())
+					continue
+				}
+				var body map[string]string
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body) != 1 || body["error"] != "registration is not configured" {
+					t.Errorf("%s body = %s, want {\"error\":\"registration is not configured\"}", name, rec.Body.String())
+				}
+			}
+			if got := calls(); len(got) != 0 {
+				t.Errorf("GoTrue saw %v, want no calls", got)
+			}
+		})
 	}
 }
 
@@ -1342,44 +1352,60 @@ func TestRegistrationHandlers_RegisterHasItsOwnLimit(t *testing.T) {
 	}
 }
 
-// A PR fork counts and logs register's limit but does not refuse; production refuses the eleventh.
+// A PR fork counts and logs both limited routes' limits but does not refuse; every other posture refuses the eleventh.
 func TestRegistrationHandlers_PreviewOnlyLogs(t *testing.T) {
+	routes := []struct {
+		name, path, limitMsg string
+		send                 func(h http.Handler, email, remote string) *httptest.ResponseRecorder
+		handler              func(reg registration) http.Handler
+	}{
+		{"register", "POST /signup", "registration: limit reached", registerFrom, func(r registration) http.Handler { return r.Register }},
+		{"resend", "POST /resend", "resend-verification: limit reached", resendFrom, func(r registration) http.Handler { return r.ResendVerification }},
+	}
 	for _, c := range []struct {
-		env          string
-		wantSignups  int
+		name, env    string
+		wantCalls    int
 		wantEnforced bool
 	}{
-		{"pr-7", 11, false},
-		{"production", 10, true},
+		{"pr-7", "pr-7", 11, false},
+		{"production", "production", 10, true},
+		{"development", "development", 10, true},
+		{"empty", "", 10, true},
+		{"bare pr-", "pr-", 10, true},
+		{"lookalike prod-7", "prod-7", 10, true},
+		{"upper-case PR-7", "PR-7", 10, true},
+		{"trailing text pr-7x", "pr-7x", 10, true},
 	} {
-		t.Run(c.env, func(t *testing.T) {
-			t.Setenv("RAILWAY_ENVIRONMENT_NAME", c.env)
-			authURL, calls := fakeAuth(t)
-			site, _ := url.Parse("https://site.example")
-			var logs bytes.Buffer
-			reg := registrationHandlers(authURL, site, 0, slog.New(slog.NewJSONHandler(&logs, nil)), nil)
+		for _, rt := range routes {
+			t.Run(c.name+"/"+rt.name, func(t *testing.T) {
+				t.Setenv("RAILWAY_ENVIRONMENT_NAME", c.env)
+				authURL, calls := fakeAuth(t)
+				site, _ := url.Parse("https://site.example")
+				var logs bytes.Buffer
+				reg := registrationHandlers(authURL, site, 0, slog.New(slog.NewJSONHandler(&logs, nil)), nil)
 
-			for _, email := range distinctAddresses(11) {
-				registerFrom(reg.Register, email, "203.0.113.7:4000")
-			}
-			if got := countCalls(calls(), "POST /signup"); got != c.wantSignups {
-				t.Errorf("GoTrue /signup calls = %d, want %d", got, c.wantSignups)
-			}
-			var limited int
-			for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
-				var rec map[string]any
-				if json.Unmarshal([]byte(line), &rec) != nil || rec["msg"] != "registration: limit reached" {
-					continue
+				for _, email := range distinctAddresses(11) {
+					rt.send(rt.handler(reg), email, "203.0.113.7:4000")
 				}
-				limited++
-				if rec["enforced"] != c.wantEnforced {
-					t.Errorf("limit line enforced = %v, want %v: %s", rec["enforced"], c.wantEnforced, line)
+				if got := countCalls(calls(), rt.path); got != c.wantCalls {
+					t.Errorf("GoTrue %s calls = %d, want %d", rt.path, got, c.wantCalls)
 				}
-			}
-			if limited != 1 {
-				t.Errorf("%d limit lines, want exactly 1 for the eleventh register", limited)
-			}
-		})
+				var limited int
+				for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+					var rec map[string]any
+					if json.Unmarshal([]byte(line), &rec) != nil || rec["msg"] != rt.limitMsg {
+						continue
+					}
+					limited++
+					if rec["enforced"] != c.wantEnforced {
+						t.Errorf("limit line enforced = %v, want %v: %s", rec["enforced"], c.wantEnforced, line)
+					}
+				}
+				if limited != 1 {
+					t.Errorf("%d limit lines, want exactly 1 for the eleventh request", limited)
+				}
+			})
+		}
 	}
 }
 

@@ -450,10 +450,12 @@ func TestResendVerificationPreflightGrantsTheAllowedOrigin(t *testing.T) {
 		t.Errorf("preflight Access-Control-Allow-Methods = %q, want POST granted", got)
 	}
 
-	rec = preflight(mux, path, "https://evil.example")
-	for _, h := range []string{"Access-Control-Allow-Origin", "Access-Control-Allow-Methods", "Access-Control-Allow-Headers"} {
-		if got := rec.Header().Get(h); got != "" {
-			t.Errorf("preflight from a disallowed origin carries %s = %q, want none", h, got)
+	for _, origin := range []string{"https://evil.example", "http://landing.example", registerAllowedOrigin + ".evil.example", "null"} {
+		rec = preflight(mux, path, origin)
+		for _, h := range []string{"Access-Control-Allow-Origin", "Access-Control-Allow-Methods", "Access-Control-Allow-Headers"} {
+			if got := rec.Header().Get(h); got != "" {
+				t.Errorf("preflight from %q carries %s = %q, want none", origin, h, got)
+			}
 		}
 	}
 	if got := calls(); len(got) != 0 {

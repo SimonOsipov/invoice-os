@@ -276,8 +276,8 @@ func newJWKSClient() *http.Client {
 }
 
 // registrationHandlers builds the registration handlers against GoTrue at authURL.
-// A nil siteURL means AUTH_SITE_URL is unset: Register, ResendVerification and Verify answer 503.
-// On a PR preview the per-client limits log but do not refuse: a preview sends no mail.
+// A nil authURL or siteURL (AUTH_SITE_URL unset) makes Register, ResendVerification and Verify answer 503 (TestRegistrationHandlers_NotConfigured503).
+// On a PR preview the per-client limits log but do not refuse: a preview sends no mail (TestRegistrationHandlers_PreviewOnlyLogs).
 func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, log *slog.Logger, sink gateway.ContactSink) registration {
 	if authURL == nil || siteURL == nil {
 		nc := gateway.RegistrationNotConfigured()

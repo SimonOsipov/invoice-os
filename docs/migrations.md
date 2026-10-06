@@ -98,10 +98,14 @@ only through this SECURITY DEFINER function, which `invoice_migrator` owns
 - After the GUC check, the function refuses an identity that holds any membership, in any
   tenant and any status: 23505, constraint `one_workspace_per_identity`, nothing written.
   It takes a per-identity transaction advisory lock first, so concurrent calls for one identity serialise.
+  `public.accept_invitation(p_tenant_id, p_token, p_user_id, p_email)` (RESEND-06) takes the
+  same GUC check, the same lock key (`hashtextextended(p_user_id::text, 0)`) and the same
+  guard, so an accept and a provision for one identity serialise and exactly one succeeds.
   `tenancy.Store.ProvisionWorkspace` maps it to `ErrAlreadyProvisioned`, the same 409 as a
   tenant-bearing caller. It asks `public.identity_has_membership(uuid)`: SECURITY DEFINER,
   `search_path=""`, owned by `auth_hook_reader`, `EXECUTE` to `invoice_migrator` only (so
   `invoice_app` gets 42501 calling it directly).
+  `accept_invitation` is its second caller.
 - The only caller is `tenancy.Store.ProvisionWorkspace`, through the ungated
   `db.WithinTenantTx` (§4); a source scan pins that. Nothing restricts which `invoice_app`
   connection may call it; that application guard is the limit. Under a matching GUC it can
@@ -462,9 +466,10 @@ store-on-`Postgres`-service pattern as the app/migrator URLs — see the Appendi
 ### The second, bounded cross-tenant reader — `auth_hook_reader` (AUTH-02)
 
 `auth_hook_reader` is a second cross-tenant reader, but not an enumeration identity: it
-cannot log in, and it is reachable only as a per-user lookup. It owns two SECURITY DEFINER
+cannot log in, and it is reachable only per user id or per token. It owns three SECURITY DEFINER
 functions, `public.custom_access_token_hook(event jsonb)` and (AUTH-16)
-`public.identity_has_membership(p_user_id uuid) RETURNS boolean`, and a policy lets it read
+`public.identity_has_membership(p_user_id uuid) RETURNS boolean`, and (RESEND-06)
+`public.invitation_by_token(p_token text)`, and a policy lets it read
 `(user_id, tenant_id, status)` for every tenant:
 
 ```sql
@@ -483,7 +488,18 @@ CREATE POLICY auth_hook_lookup ON public.memberships
   PUBLIC`).
 - `identity_has_membership` returns whether one user id holds any membership. Its only
   grantee besides the owner is `invoice_migrator`, so only `provision_workspace` (which the
-  migrator owns) calls it. No table privilege was added to the role.
+  migrator owns) calls it. `accept_invitation`, also migrator-owned, is its second caller.
+  No table privilege was added to the role.
+- `invitation_by_token(p_token)` returns `(invitation_id, tenant_id, workspace, role, email)`
+  for the one pending, unexpired invite whose `token_hash` is `sha256(p_token)`, whatever
+  `app.current_tenant` holds. SECURITY DEFINER, `search_path=""`, STABLE; `EXECUTE` to
+  `invoice_app` only. It reads seven `invitations` columns (`id, tenant_id, role,
+  invitee_email, status, expires_at, token_hash`) and tenant `(id, name)` through two
+  `FOR SELECT TO auth_hook_reader USING (true)` policies, `invitation_token_lookup` and
+  `invitation_workspace_lookup`. Still no table-level privilege. Under `invoice_app`'s own
+  scope, tenant B still reads none of tenant A's invitations or tenants.
+- Token residual: `invoice_app` can name one invite, with its workspace name, per known
+  token. A 32-byte random token is not enumerable.
 - Residual: a leaked GoTrue DSN can call the hook once per GoTrue user and map each user
   with exactly one active membership to its tenant. It also learns whether that user is
   staff (`app_metadata.staff`). It cannot bulk-read statuses or multiple memberships.

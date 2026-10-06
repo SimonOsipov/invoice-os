@@ -425,7 +425,7 @@ describe('the outcomes', () => {
       expect(d.querySelector('button[type="submit"]')).toBeNull()
       const heading = Array.from(d.querySelectorAll('h1, h2, h3')).find((h) => h.textContent?.trim() === 'Check your email')
       expect(heading, 'expected the Check your email heading').toBeDefined()
-      expect(d.textContent).toContain(`If this address can be registered, a confirmation link is on its way to ${address}. Open it, then sign in.`)
+      expect(d.textContent).toContain(`If this address can be registered, a confirmation link is on its way to ${address}. Open it, confirm your email, then sign in.`)
       expect(byText(d, 'Close'), 'expected a Close button').toBeDefined()
       views.push([address, d.textContent ?? ''])
     }

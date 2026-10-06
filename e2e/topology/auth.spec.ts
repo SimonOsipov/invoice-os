@@ -1096,6 +1096,48 @@ test('deployed app: a real sign-in names the account holder on the identity card
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })
 
+test('the emailed link opens a confirm page, and a bogus token\'s click lands on the failed notice', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  const posts: string[] = []
+  page.on('request', (req) => {
+    if (req.method() === 'POST' && new URL(req.url()).pathname === '/auth/verify') posts.push(req.url())
+  })
+  const url = `${GATEWAY_URL}/auth/verify?token=bogus-${crypto.randomUUID()}&type=signup`
+  const button = page.getByRole('button')
+
+  const readings: { width: number; fontSize: string; fontWeight: string }[] = []
+  for (const width of [...WIDE_WIDTHS, 375]) {
+    const height = 1080
+    await page.setViewportSize({ width, height })
+    await page.goto(url)
+    await expect(button, `one button at ${width}px`).toHaveCount(1)
+    await expect(button).toHaveText('Confirm my email')
+    const card = page.locator('main')
+    const [cardBox, buttonBox] = await Promise.all([card.boundingBox(), button.boundingBox()])
+    if (!cardBox || !buttonBox) throw new Error(`card or button rendered no box at ${width}px`)
+
+    expect(enclosesRect({ x: 0, y: 0, width, height }, cardBox, 1), `the card leaves the viewport at ${width}px (${JSON.stringify(cardBox)})`).toBe(true)
+    expect(enclosesRect(cardBox, buttonBox, 1), `the button leaves the card at ${width}px (${JSON.stringify({ cardBox, buttonBox })})`).toBe(true)
+    await assertPageDoesNotScrollSideways(page, `confirm page at ${width}px`)
+    // D10: a dropped `font` shorthand computes the browser default (13.333px / 400).
+    const reading = await button.evaluate((el) => ({ fontSize: getComputedStyle(el).fontSize, fontWeight: getComputedStyle(el).fontWeight }))
+    expect(reading, `the button font at ${width}px`).toEqual({ fontSize: '14px', fontWeight: '700' })
+    readings.push({ width, ...reading })
+  }
+  expect(readings.map((r) => r.width), 'widths measured').toEqual([...WIDE_WIDTHS, 375])
+  await testInfo.attach('button-readings', { body: JSON.stringify(readings, null, 2), contentType: 'application/json' })
+
+  // Copied before the click: the landing navigation may log its own errors.
+  const beforeClick = [...errors]
+  expect(beforeClick, `console errors on the confirm page:\n${beforeClick.join('\n')}`).toEqual([])
+
+  await button.dblclick()
+  await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
+  await expect(page.getByRole('status').filter({ hasText: 'That link did not work' })).toBeVisible()
+  await expect.poll(() => new URL(page.url()).searchParams.has('verify'), { message: 'the landing strips ?verify' }).toBe(false)
+  expect(posts.length, 'POST /auth/verify requests sent by the double-click').toBe(1)
+})
+
 // internal/tenancy/tenancy.go maxNameChars is 200; 6 x 32 + 5 spaces = 197.
 const LONG_NAME = 'Oluwaseyifunmi Adebanjo-Ogunleye '.repeat(6).trim()
 // One unbroken 200-char word: the add-company subtitle must wrap it, not scroll the page.
@@ -1789,12 +1831,13 @@ test('deployed journey: a stranger registers through the landing and lands in a 
     })
 
     await test.step(`${kind}: the emailed link's landing shows the failed and the verified notice`, async () => {
-      // Step 2 of the verify half is a stand-in, and the failed-link half is the only real one:
-      // a bogus token makes the deployed gateway answer 303 to ?verify=failed (real).
+      // Step 2 of the verify half is a stand-in; the failed half is real: a bogus token opens the
+      // confirm page, and its click makes the deployed gateway answer 303 to ?verify=failed.
       // `?verified=1` below is COPY-ONLY: the test types the query itself, so it proves the notice
       // text and that no dialog opens, not that the gateway verified anything. The verified redirect
       // is proven in CI by TestIdP_EmailedLinkVerifiesThenSignInSucceeds.
       await page.goto(`${GATEWAY_URL}/auth/verify?token=bogus-${crypto.randomUUID()}&type=signup`)
+      await page.getByRole('button', { name: 'Confirm my email' }).click()
       await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
       await expect(page.getByRole('status').filter({ hasText: 'That link did not work' })).toBeVisible()
       await expect.poll(() => new URL(page.url()).searchParams.has('verify'), { message: 'the landing strips ?verify' }).toBe(false)

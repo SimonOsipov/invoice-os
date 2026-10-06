@@ -107,7 +107,7 @@ export function RegisterModal({ onClose }: { onClose: () => void }) {
             <>
               <h3 style={{ ...HEADING_STYLE, margin: '0 0 10px' }}>Check your email</h3>
               <p className="t-body-sm" style={{ margin: 0, lineHeight: 1.55 }}>
-                If this address can be registered, a confirmation link is on its way to {sentTo}. Open it, then sign in.
+                If this address can be registered, a confirmation link is on its way to {sentTo}. Open it, confirm your email, then sign in.
               </p>
               <button type="button" onClick={onClose} className="ds-btn ds-btn--outline ds-btn--md" style={{ width: '100%', marginTop: 18 }}>
                 Close

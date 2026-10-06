@@ -5,7 +5,7 @@
 // Every run uses a fresh address and subject: the auth.users, tenants and memberships rows
 // it creates survive the per-deploy reset.
 import { test, expect } from '@playwright/test'
-import { getAuditLog, login, memberships, rawFetch, PERSONAS, type Me, type Persona } from './client'
+import { apiBase, getAuditLog, login, memberships, rawFetch, PERSONAS, type Me, type Persona } from './client'
 import { assertErrorEnvelope } from './contract-helpers'
 import { resolveTarget } from '../targets'
 
@@ -110,11 +110,24 @@ test.describe('registration (API E2E, over the deployed gateway)', () => {
     expect((res.body as { error: string }).error).toBe(FREE_MAIL_REFUSED)
   })
 
-  test('a bogus verification link redirects 303 to the landing failure page', async () => {
-    const res = await rawFetch('/auth/verify?token=bogus&type=signup', { redirect: 'manual' })
+  test('opening a bogus verification link answers the confirm page', async () => {
+    const res = await fetch(`${apiBase()}/auth/verify?token=bogus-${crypto.randomUUID()}&type=signup`, { redirect: 'manual' })
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type'), 'the content type').toMatch(/^text\/html/)
+    expect(res.headers.get('location'), 'a Location header').toBeNull()
+    expect(await res.text()).toContain('Confirm my email')
+  })
+
+  test('a bogus confirm click redirects 303 to the landing failure page', async () => {
+    const res = await fetch(`${apiBase()}/auth/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ token: `bogus-${crypto.randomUUID()}`, type: 'signup' }),
+      redirect: 'manual',
+    })
     expect(res.status).toBe(303)
     // Exact, so a lookalike host (landing.example.evil) cannot pass a prefix match.
-    expect(res.location, 'the Location header').toBe(`${resolveTarget('LANDING_URL')}/${VERIFY_FAILED}`)
+    expect(res.headers.get('location'), 'the Location header').toBe(`${resolveTarget('LANDING_URL')}/${VERIFY_FAILED}`)
   })
 })
 

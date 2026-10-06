@@ -1,6 +1,6 @@
 import { useId, type ReactNode } from 'react'
 
-// Card chrome from app SignInLoading, title from api-client ErrorState. A div, not h1: `.asc-app h1` forces the display font.
+// Card chrome from app SignInLoading. A div, not h1: `.asc-app h1` forces the display font.
 export function RecoveryScreen({ brand }: { brand: ReactNode }): ReactNode {
   const headingId = useId()
   return (

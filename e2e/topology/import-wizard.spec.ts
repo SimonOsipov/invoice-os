@@ -4786,7 +4786,7 @@ test('EXTR12-E2E-05 (AC-2/AC-3/AC-6): a box drawn on page 2 is the box the scree
   // -- CLAIM 1 (AC-6) -- the armed state is visible on the DEPLOYED build.
   //
   // The RESOLVED value, not the declaration: the jsdom row reads `el.style.*` and would pass
-  // under an app-layer.css rule overriding the inline colour. This is the row that catches it.
+  // under a v2/app-layer.css rule overriding the inline colour. This is the row that catches it.
   const paint = async () =>
     button.evaluate((el) => {
       const cs = getComputedStyle(el)
@@ -5657,7 +5657,7 @@ test('EXTR12-E2E-07 (AC-4, W-6): the fields pane keeps its floor and its two col
   // -- W-6: the label strip AT the pane's floor ---------------------------------------------
   //
   // NO LOCAL ORACLE. The overflow is a text-measurement fact, so it needs the deployed build's
-  // real IBM Plex Mono and Inter; this row first executes on the deploy gate. The declaration
+  // real IBM Plex Mono and Manrope; this row first executes on the deploy gate. The declaration
   // half is ExtractionFields.test.tsx, "wraps the label strip".
   //
   // Measured before the fix, in Chromium at the floor's own geometry (470 - 40 body padding -

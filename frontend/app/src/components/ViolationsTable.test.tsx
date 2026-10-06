@@ -155,7 +155,7 @@ describe('ViolationsTable', () => {
 
   // QA Mode B (BUG-13-01). severityStyle falls back to MUTED_STYLE on an unmapped value.
   // Every prior case used a mapped severity, so the fallback row's shape was unpinned:
-  // a row that lost its pill would still have four cells, but not four RENDERED ones.
+  // a row that lost its badge would still have four cells, but not four RENDERED ones.
   it('violationsTable_unknownSeverityStillRendersAFullRow', () => {
     render(
       <ViolationsTable
@@ -188,12 +188,66 @@ describe('ViolationsTable', () => {
     for (const row of rows) {
       const cells = within(row).getAllByRole('cell') as HTMLElement[]
       expect(cells).toHaveLength(4)
-      // Severity (index 0) is a pill, not free text -- it is deliberately not in this set.
+      // Severity (index 0) is a badge, not free text -- it is deliberately not in this set.
       for (const cell of cells.slice(1)) expect(cell.style.overflowWrap).toBe('anywhere')
     }
     // The em-dash placeholder rides the same wrapping cell as a real path.
     const placeholderCells = rows.map((r) => within(r).getAllByRole('cell')[3]).filter((c) => c.textContent === '—')
     expect(placeholderCells.length).toBeGreaterThan(0)
     for (const cell of placeholderCells) expect((cell as HTMLElement).style.overflowWrap).toBe('anywhere')
+  })
+
+  // Table B. Soft assertions: every new value shows red on its own line.
+  it('compliance pass and not-validated are plain text', () => {
+    render(<ViolationsTable violations={[]} ruleSetVersion={4} />)
+
+    const verdict = screen.getByText(/Passes all rules/)
+    expect.soft(verdict.style.background, 'no green fill').toBe('')
+    expect.soft(verdict.style.border, 'no green border').toBe('')
+    expect.soft(verdict.style.borderRadius, 'no corner').toBe('')
+    expect.soft(verdict.style.fontSize).toBe('13px')
+    expect.soft(verdict.style.color).toBe('var(--fg-2)')
+  })
+
+  it('a severity badge is a 4px badge with no dot; rows follow v2', () => {
+    render(
+      <ViolationsTable
+        violations={[
+          violation(),
+          violation({ severity: 'warning', rule_key: 'vat-standard-rate', message: 'second violation', path: '$.vat' }),
+          violation({ severity: 'critical' as unknown as Violation['severity'], rule_key: 'unmapped.rule', message: 'third violation', path: '$.unmapped' }),
+        ]}
+        ruleSetVersion={3}
+      />,
+    )
+
+    const headers = screen.getAllByRole('columnheader') as HTMLElement[]
+    expect(headers).toHaveLength(4)
+    for (const th of headers) {
+      expect.soft(th.className.split(' '), `${th.textContent} header is a .label`).toContain('label')
+      expect.soft(th.style.padding, `${th.textContent} header padding`).toBe('8px 12px')
+    }
+
+    const rows = within(screen.getByRole('table')).getAllByRole('row').slice(1)
+    expect(rows).toHaveLength(3)
+    for (const row of rows) {
+      const cells = within(row).getAllByRole('cell') as HTMLElement[]
+      expect(cells).toHaveLength(4)
+      const badge = cells[0].firstElementChild as HTMLElement
+      expect(badge, 'the severity cell holds a badge').not.toBeNull()
+      const label = badge.textContent
+      expect(['Error', 'Warning', 'Info'], `badge reads its severity, got ${label}`).toContain(label)
+      expect.soft(badge.style.borderRadius, `${label} badge radius`).toBe('var(--radius-sm)')
+      expect.soft(badge.style.padding, `${label} badge padding`).toBe('2px 7px')
+      expect.soft(
+        Array.from(badge.children).filter((c) => (c.textContent ?? '') === ''),
+        `${label} badge has no empty dot element`,
+      ).toHaveLength(0)
+      for (const cell of cells) expect.soft(cell.style.padding, `${label} row cell padding`).toBe('10px 12px')
+      expect.soft(cells[1].style.color, `${label} message colour`).toBe('var(--fg-1)')
+      expect.soft(cells[1].style.fontSize, `${label} message size`).toBe('12.5px')
+      const key = cells[2].firstElementChild as HTMLElement
+      expect.soft(key.style.color, `${label} rule key colour`).toBe('var(--fg-2)')
+    }
   })
 })

@@ -840,3 +840,318 @@ describe('DashboardActive Recent activity (AUTH-10-07, Core AC-7)', () => {
     expect(screen.queryByText('No activity to show')).toBeNull()
   })
 })
+
+// inline-token reads only; jsdom has no cascade, so resolved values are OV-01..OV-04's.
+const cardOf = (title: string) => screen.getByText(title).parentElement!.parentElement as HTMLElement
+const headOf = (title: string) => screen.getByText(title).parentElement as HTMLElement
+const settle = () => screen.findByText('Readiness score')
+const TILE_TITLES = [
+  'Readiness score',
+  'Invoices',
+  'VAT tracked',
+  'Exceptions',
+  'Not yet submitted',
+  'Needs attention',
+  'Invoice status',
+  'Readiness trend',
+  'Top validation failures',
+  'Recent activity',
+]
+const PILL_GONE = /radius-pill|border-radius:\s*(99|999)px/
+
+describe('DashboardActive DA-LOOK (D-29)', () => {
+  it('each of the 7 legend swatches is a 2px square at 10x10', async () => {
+    mockRollupFetch(rollup(0, { draft: 1, validated: 2 }))
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
+
+    const rows = ['Draft', 'Validated', 'Queued', 'Submitted', 'Accepted', 'Rejected', 'Failed'].map((l) => screen.getByText(l).parentElement!)
+    expect(rows).toHaveLength(7)
+    for (const row of rows) {
+      const swatch = row.firstElementChild as HTMLElement
+      expect(swatch.style.borderRadius).toBe('2px')
+      expect(swatch.style.width).toBe('10px')
+      expect(swatch.style.height).toBe('10px')
+    }
+  })
+
+  it('the all-clear tick is a 40px circle, and drafts-only draws none', async () => {
+    mockRollupFetch(rollup(0, { validated: 3 }))
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
+
+    const tick = screen.getByText('No open failures').previousElementSibling as HTMLElement
+    expect(tick.querySelector('svg')).not.toBeNull()
+    expect(tick.style.borderRadius).toBe('50%')
+    expect(tick.style.width).toBe('40px')
+    expect(tick.style.height).toBe('40px')
+  })
+
+  it('every Recent activity dot is a 50% circle at 8x8', async () => {
+    mockRollupFetch(rollup(0))
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
+
+    const tile = cardOf('Recent activity')
+    const dots = [...tile.querySelectorAll<HTMLElement>('span')].filter((s) => s.style.width === '8px' && s.style.height === '8px')
+    expect(dots).toHaveLength(5)
+    for (const dot of dots) expect(dot.style.borderRadius).toBe('50%')
+  })
+
+  it('all ten TileHeads hold padding 14px 20px and gap 10px', async () => {
+    mockRollupFetch(rollup(0))
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
+
+    expect(TILE_TITLES).toHaveLength(10)
+    for (const title of TILE_TITLES) {
+      const head = headOf(title)
+      expect(head.style.padding, title).toBe('14px 20px')
+      expect(head.style.gap, title).toBe('10px')
+      expect(head.style.justifyContent, title).toBe('space-between')
+    }
+  })
+
+  it('no rendered element carries a pill radius, and the circles that replaced it are present', async () => {
+    for (const data of [rollup(0, { validated: 3 }), rollup(2, { rejected: 1, draft: 2 })]) {
+      mockRollupFetch(data)
+      const { container, unmount } = render(<DashboardActive ctx={dashCtx()} />)
+      await settle()
+
+      const styled = [...container.querySelectorAll<HTMLElement>('[style*="border-radius"]')]
+      expect(styled.length).toBeGreaterThan(20)
+      expect(styled.some((el) => el.style.borderRadius === '50%')).toBe(true)
+      for (const el of styled) expect(el.getAttribute('style')).not.toMatch(PILL_GONE)
+      unmount()
+    }
+  })
+})
+
+describe('DashboardActive Overview header (D-24)', () => {
+  it('the h1 is 28px / -0.03em and sets no inline weight, in loading and ready alike', async () => {
+    mockRollupFetch(rollup(0))
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    const loadingH1 = screen.getByRole('heading', { level: 1 })
+    expect(loadingH1.textContent).toBe('Acme Co')
+    await settle()
+    const h1 = screen.getByRole('heading', { level: 1 })
+    for (const el of [loadingH1, h1]) {
+      expect(el.style.fontSize).toBe('28px')
+      expect(el.style.letterSpacing).toBe('-0.03em')
+      expect(el.style.margin).toBe('0px 0px 5px')
+      expect(el.style.fontWeight).toBe('')
+    }
+  })
+})
+
+describe('DashboardActive Needs-attention block flow (D-8)', () => {
+  const NA = (title = 'Needs attention') => {
+    const head = headOf(title)
+    return { card: head.parentElement!, body: head.nextElementSibling as HTMLElement }
+  }
+
+  it('the body holds the figure row, the sentence and the button, with no inner wrapper', async () => {
+    mockRollupFetch(rollup(3, { rejected: 1, failed: 1 }))
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
+
+    const { card, body } = NA()
+    expect([...card.children].map((c) => c.tagName)).toEqual(['DIV', 'DIV'])
+    expect([...body.children].map((c) => c.tagName)).toEqual(['DIV', 'P', 'BUTTON'])
+    const row = body.children[0] as HTMLElement
+    expect([...row.children].map((c) => c.tagName)).toEqual(['SPAN', 'SPAN'])
+    expect(row.children[0].textContent).toBe('3')
+    expect(row.children[1].textContent).toBe('REJECTED / FAILED / BLOCKED / SENT BACK')
+    expect(body.children[1].textContent).toMatch(/^Invoices rejected, failed, blocked/)
+    expect(body.style.display).toBe('')
+    expect(body.style.flexDirection).toBe('')
+  })
+
+  it('the figure row, figure and sentence hold the prototype spacing', async () => {
+    mockRollupFetch(rollup(3, { rejected: 1, failed: 1 }))
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
+
+    const { body } = NA()
+    const row = body.children[0] as HTMLElement
+    expect(row.style.display).toBe('flex')
+    expect(row.style.alignItems).toBe('center')
+    expect(row.style.gap).toBe('16px')
+    expect(row.style.marginBottom).toBe('14px')
+    expect(row.style.flexWrap).toBe('wrap')
+    const figure = row.children[0] as HTMLElement
+    expect(figure.className).toContain('money')
+    expect(figure.style.fontSize).toBe('56px')
+    expect(figure.style.fontWeight).toBe('700')
+    expect(figure.style.lineHeight).toBe('1')
+    const sentence = body.children[1] as HTMLElement
+    expect(sentence.style.fontSize).toBe('13px')
+    expect(sentence.style.lineHeight).toBe('1.55')
+    expect(sentence.style.margin).toBe('0px 0px 20px')
+    expect(sentence.style.maxWidth).toBe('520px')
+  })
+
+  it('the button is a 38px ghost sized by its label: no stretch, no extra top margin', async () => {
+    mockRollupFetch(rollup(1, { rejected: 1 }))
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
+
+    const btn = NA().body.children[2] as HTMLElement
+    expect(btn.textContent).toBe('Resolve 1 issue →')
+    expect([...btn.classList]).toEqual(['v2-btn', 'v2-btn-ghost', 'pf-btn'])
+    expect(btn.style.height).toBe('38px')
+    expect(btn.style.fontSize).toBe('13px')
+    expect(btn.style.width).toBe('')
+    expect(btn.style.justifyContent).toBe('')
+    expect(btn.style.marginTop).toBe('')
+    expect(btn.style.alignSelf).toBe('')
+  })
+
+  it('the pill is 4px (radius-sm) and 0.04em in both states, with its colour branches', async () => {
+    for (const [data, label] of [
+      [rollup(2, { rejected: 2 }), 'REJECTED / FAILED / BLOCKED / SENT BACK'],
+      [rollup(0), 'ALL CLEAR'],
+    ] as [Rollup, string][]) {
+      mockRollupFetch(data)
+      const { unmount } = render(<DashboardActive ctx={dashCtx()} />)
+      await settle()
+
+      const pill = screen.getByText(label)
+      expect(pill.getAttribute('style')).toContain('border-radius: var(--radius-sm)')
+      expect(pill.style.letterSpacing).toBe('0.04em')
+      expect(pill.style.padding).toBe('3px 9px')
+      expect(pill.style.fontSize).toBe('10px')
+      unmount()
+    }
+  })
+})
+
+describe('DashboardActive small clearances (D-24)', () => {
+  it('the donut legend is a 9px column and every count reserves 18px', async () => {
+    mockRollupFetch(rollup(0, { draft: 1, validated: 2 }))
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
+
+    const legend = screen.getByText('Draft').parentElement!.parentElement as HTMLElement
+    expect(legend.children).toHaveLength(7)
+    expect(legend.style.display).toBe('flex')
+    expect(legend.style.flexDirection).toBe('column')
+    expect(legend.style.gap).toBe('9px')
+    for (const row of legend.children) {
+      const count = row.lastElementChild as HTMLElement
+      expect(count.style.minWidth).toBe('18px')
+      expect(count.style.fontWeight).toBe('600')
+      expect((row as HTMLElement).style.gridTemplateColumns).toBe('10px minmax(0, 1fr) auto auto')
+    }
+  })
+
+  it('the trend body pads 20px 20px 22px with a live score, and with none', async () => {
+    mockRollupFetch(rollup(0, { validated: 1 }, { readiness: { num: 85, den: 100 } }))
+    const { unmount } = render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
+    const live = headOf('Readiness trend').nextElementSibling as HTMLElement
+    expect(live.querySelector('svg[viewBox="0 0 680 176"]')).not.toBeNull()
+    expect(live.style.padding).toBe('20px 20px 22px')
+    unmount()
+
+    mockRollupFetch(rollup(0))
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
+    const none = headOf('Readiness trend').nextElementSibling as HTMLElement
+    expect(none.querySelector('svg')).toBeNull()
+    expect(none.style.padding).toBe('20px 20px 22px')
+    expect((none.firstElementChild as HTMLElement).style.gap).toBe('10px')
+    expect(none.textContent).toBe('—No invoices yet')
+  })
+
+  it('each failure row gives the rule key 150px on one line and the count a 40px minimum, and keeps four cells', async () => {
+    const data = rollup(0, { rejected: 6 })
+    data.totals.top_violations = [
+      { rule_key: 'buyer-tin-format', invoices: 4 },
+      { rule_key: 'tin-checksum', invoices: 2 },
+    ]
+    mockRollupFetch(data)
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
+
+    for (const key of ['buyer-tin-format', 'tin-checksum']) {
+      const row = screen.getByText(key).parentElement as HTMLElement
+      expect(row.children).toHaveLength(4)
+      const keyCell = row.children[2] as HTMLElement
+      expect(keyCell.textContent).toBe(key)
+      expect(keyCell.style.width).toBe('150px')
+      expect(keyCell.style.flex).toBe('0 0 auto')
+      expect(keyCell.style.whiteSpace).toBe('nowrap')
+      expect(keyCell.style.overflow).toBe('hidden')
+      expect(keyCell.style.textOverflow).toBe('ellipsis')
+      expect(keyCell.title).toBe(key)
+      const count = row.children[3] as HTMLElement
+      expect(count.style.width).toBe('')
+      expect(count.style.minWidth).toBe('40px')
+      expect(count.style.whiteSpace).toBe('nowrap')
+      expect(count.style.flex).toBe('0 0 auto')
+      expect(count.style.textAlign).toBe('right')
+    }
+  })
+
+  it('the four KPI tiles keep their 138px floor and padded body (D-7)', async () => {
+    mockRollupFetch(rollup(0))
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
+
+    for (const label of ['Invoices', 'VAT tracked', 'Exceptions', 'Not yet submitted']) {
+      const tile = kpiTile(label)
+      expect(tile.style.minHeight, label).toBe('138px')
+      expect((tile.lastElementChild as HTMLElement).style.padding, label).toBe('18px 20px 20px')
+      expect((tile.lastElementChild!.firstElementChild as HTMLElement).style.fontWeight, label).toBe('700')
+    }
+  })
+})
+
+describe('DashboardActive states sit inside the page wrapper (D-37)', () => {
+  const wrapperOf = () => screen.getByRole('heading', { level: 1 }).parentElement!.parentElement as HTMLElement
+
+  it('loading renders under the header, inside the padded wrapper', () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+    const { container } = render(<DashboardActive ctx={dashCtx()} />)
+
+    const wrapper = wrapperOf()
+    expect(container.firstElementChild).toBe(wrapper)
+    expect(wrapper.style.padding).toBe('30px 36px 56px')
+    const loading = screen.getByText('Loading dashboard…')
+    expect(wrapper.contains(loading)).toBe(true)
+    expect(screen.getByRole('heading', { level: 1 }).compareDocumentPosition(loading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('error renders its message and Retry inside the wrapper', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve<MockResponse>({ ok: false, status: 503, json: () => Promise.resolve({}) })))
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    const retry = await screen.findByRole('button', { name: 'Retry' })
+    expect(wrapperOf().contains(retry)).toBe(true)
+    expect(wrapperOf().style.padding).toBe('30px 36px 56px')
+  })
+
+  it('idle (no gateway) renders the zero-state inside the wrapper', () => {
+    vi.stubEnv('VITE_GATEWAY_URL', '')
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    const title = screen.getByText('No invoice activity yet')
+    expect(wrapperOf().contains(title)).toBe(true)
+    expect(screen.getByText('Counts appear once invoices are created.')).toBeDefined()
+    expect(wrapperOf().style.padding).toBe('30px 36px 56px')
+  })
+
+  it('ES-02 the dashboard idle card is dense', () => {
+    vi.stubEnv('VITE_GATEWAY_URL', '')
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    const title = screen.getByText('No invoice activity yet')
+    const card = title.parentElement as HTMLElement
+    expect(card.style.padding).toBe('48px')
+    expect(card.style.background).toBe('transparent')
+    expect(title.style.fontSize).toBe('15px')
+    expect(card.querySelector('button'), 'control: the idle card has no action').toBeNull()
+  })
+})

@@ -307,9 +307,9 @@ A defect escaped QA when a later finder finds it in a subtask that reached `QA_V
 `product-executor` manages PR state from the subtask `Order` field. Put `Base branch: <BASE>` in every executor brief:
 - `1 of N (FIRST)` → push and create the **draft** PR (drafts skip `dev-env.yml`).
 - `K of N` → push only.
-- `N of N (FINAL)` → `git fetch origin`, merge `origin/<BASE>` if behind, and also `origin/main` when `BASE` is not `main`. Push, `gh pr ready`.
+- `N of N (FINAL)` → `git fetch origin`, merge `origin/<BASE>` if behind, and also `origin/main` when `BASE` is not `main`. Push. The PR stays draft.
 
-The orchestrator never runs `git checkout -b`, `gh pr create` or `gh pr ready`.
+The orchestrator never runs `git checkout -b` or `gh pr create`. Phase 3.5 step 3 marks the PR ready.
 
 ### Phase 3: CI
 
@@ -322,12 +322,16 @@ While it runs, review the whole diff: run `/code-review high <PR_NUMBER>`, never
 Runs once per story, after `CI` is green. It verifies the assembled feature against the original objective.
 
 1. **Read the original acceptance criteria**, not the possibly-edited subtask ACs. `STORY_SOURCE=sysmap`: the feature's acceptance criteria (standing invariants). `STORY_SOURCE=obsidian`: the story's Objective and Core ACs.
-2. **Freshness:** `git -C "$WORKTREE_PATH" fetch origin`. If `origin/$BASE` or `origin/main` has commits the branch lacks, merge them, push, and let `CI` and the gate re-run. A base missing main's migrations crash-loops the gateway.
-3. **Wait for the gate:** `hm ci wait <PR> --gate` (CI Monitoring Protocol).
+2. **Freshness:** `git -C "$WORKTREE_PATH" fetch origin`. If `origin/$BASE` or `origin/main` has commits the branch lacks, merge them and push. A base missing main's migrations crash-loops the gateway.
+3. **Ready flip and gate:**
+   - First, wait for `CI` on the PR head: `hm ci wait <PR>`.
+   - Then, if `gh pr view <PR> --json isDraft -q .isDraft` prints `true`, run `gh pr ready <PR>`.
+   - Then wait for the gate: `hm ci wait <PR> --gate` (CI Monitoring Protocol).
    - A `no-run` verdict on a docs-only PR is expected: `dev-env.yml` is paths-filtered. Escalate to the user rather than faking it green.
    - `gh workflow run dev-env.yml` is for diagnosis only. It targets `development`, not the PR environment, so it proves nothing about this PR.
    - Re-run a red gate whole: `gh run rerun <run id>`, never `--failed`. The database resets only when the gateway deploys.
    - A spec this PR changed that passed only on retry fails the `e2e` job or the `E2E topology (<shard>)` leg that ran it. Fix the spec or the race; do not re-run for luck.
+   - After `gh pr ready`, push only a gate fix (Protocol item 1 or step 5) or a base merge that `hm` demands.
    Green means: fleet deployed, gateway migrated, DB bootstrapped + demo-purged + seeded, all 8 backends up, smoke + topology E2E passed, including cross-tenant isolation.
 4. **Spawn `product-qa-spec`** to verify **each** original AC against the green run:
    - Quote each AC beside its evidence. Evidence of different behaviour than the quoted text fails that AC.
@@ -353,10 +357,12 @@ Teardown of the PR environment is repo-side: `dev-env-teardown.yml` on PR close 
 
 Wait with `hm ci wait <PR>` for `CI` and `hm ci wait <PR> --gate` for the deploy gate. Run it through Bash with `run_in_background: true`. Its exit wakes you. Your Harbourmaster role file ("Waiting for CI and the deploy gate") names each verdict and what to do.
 
+The verdict line names a short SHA after `at`. If it is not the start of `git rev-parse HEAD`, push HEAD, then run the wait again.
+
 Foreground `sleep` is blocked. Never end a turn on a wait you did not start.
 
 1. **`failed`?** Read the failed jobs and the log tail it prints. Fix in the worktree, commit, push, and wait again.
-2. **`CI` passed?** → Phase 3.5.
+2. **`CI` passed?** → In Phase 3, go to Phase 3.5 once every blocking review fix is pushed. In any other phase, continue the step that waited.
 3. **The gate passed?** → Phase 3.5 step 4.
 
 ---

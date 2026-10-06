@@ -148,14 +148,14 @@ function topCustomerNames(container: HTMLElement): string[] {
 
 // The queued responses fetchAllInvoices' own paging produces for a given total: page 1
 // (caller-supplied rows) + one filler row per remaining page up to the cap.
-function pagedFetchMock(total: number, firstPageRows: InvoiceRecord[]) {
+function pagedFetchMock(total: number, firstPageRows: InvoiceRecord[], rollup: Rollup = ZERO_ROLLUP) {
   const limit = AGGREGATE_PAGE_SIZE
   const pages = Math.min(Math.ceil(total / limit), AGGREGATE_MAX_PAGES)
   const responses = [listResponse(firstPageRows, { limit, offset: 0, total })]
   for (let page = 2; page <= pages; page++) {
     responses.push(listResponse([row({ id: `filler-${page}`, buyer_tin: tinFor(9000 + page), buyer_name: `Filler Buyer ${page}` })], { limit, offset: (page - 1) * limit, total }))
   }
-  return mockFetch(responses)
+  return mockFetch(responses, rollup)
 }
 
 beforeEach(() => {
@@ -344,16 +344,17 @@ describe('ReportsView: export buttons are disabled-with-reason', () => {
     }
   })
 
-  // QA adversarial (mutation survivor): the disabled-attribute test above passes even if
-  // the inline mute is stripped entirely -- AC #1 also requires background/color/cursor,
-  // and nothing else in this file checks them.
-  it('all four export buttons carry the inline mute style (AC #1)', async () => {
+  // The disabled-attribute test above passes with the inline dimming stripped; this one pins
+  // the recipe (opacity, cursor, filter) and the absence of a fill or colour override.
+  it('all four export buttons carry the inline dimming recipe (AC #1)', async () => {
     await renderReady()
     for (const { name } of EXPORT_BUTTONS) {
       const btn = screen.getByRole('button', { name: new RegExp(name) }) as HTMLButtonElement
-      expect(btn.style.background, `${name} button background`).toBe('var(--bg-3)')
-      expect(btn.style.color, `${name} button color`).toBe('var(--fg-4)')
+      expect(btn.style.opacity, `${name} button opacity`).toBe('0.45')
       expect(btn.style.cursor, `${name} button cursor`).toBe('not-allowed')
+      expect(btn.style.filter, `${name} button filter`).toBe('none')
+      expect(btn.style.background, `${name} button keeps the ghost fill`).toBe('transparent')
+      expect(btn.style.color, `${name} button keeps the ghost colour`).toBe('')
     }
   })
 
@@ -569,5 +570,297 @@ describe('ReportsView: the Validation summary — QA adversarial', () => {
     const summary = await renderSummary({ totals, clients: [], top_violations: [] }, reportsCtx('ent-absent'))
 
     expect(summary).toEqual({ passed: '0', failing: '0', pct: '0% PASS' })
+  })
+})
+
+// --- the v2 tax report (RP rows) --------------------------------------
+const RULE_ROLLUP: Rollup = { ...summaryRollup(0, { blocked_by_rules: { num: 2, den: 13 } }), top_violations: [{ rule_key: 'vat_standard_rate', invoices: 2 }] }
+
+function labelDiv(container: HTMLElement, text: string): HTMLElement {
+  const el = Array.from(container.querySelectorAll('div.label')).find((d) => d.textContent === text)
+  if (!el) throw new Error(`no div.label "${text}"`)
+  return el as HTMLElement
+}
+
+describe('ReportsView: the v2 tax report (RESKIN2-05-02)', () => {
+  async function renderReady(rollup: Rollup = RULE_ROLLUP) {
+    mockFetch([listResponse([row({ id: 'inv-r', buyer_tin: tinFor(1), buyer_name: 'Ready Buyer' })], { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 1 })], rollup)
+    const utils = render(<ReportsView ctx={reportsCtx()} />)
+    await screen.findByText('Ready Buyer')
+    await screen.findByText('Passed')
+    return utils
+  }
+
+  it("RP-01 the h1 takes the heading rule's weight", async () => {
+    await renderReady()
+
+    const h1 = screen.getByRole('heading', { level: 1, name: 'Reports & analytics' })
+    expect(h1.style.fontSize, 'control: the h1 keeps its size').toBe('26px')
+    expect(h1.style.fontWeight, 'the h1 must carry no inline font-weight').toBe('')
+  })
+
+  it('RP-02 SAMPLE sits beside its label as a 4px chip', async () => {
+    const { container } = await renderReady()
+
+    const head = labelDiv(container, 'WHT withheld · 5%').parentElement as HTMLElement
+    expect(head.style.display, 'the tile head is a flex row').toBe('flex')
+    expect(head.style.gap).toBe('7px')
+    expect(head.style.justifyContent, 'the chip sits beside the label, not pushed to the far edge').toBe('')
+    const chip = labelDiv(container, 'WHT withheld · 5%').nextElementSibling as HTMLElement
+    expect(chip, 'the label has a sibling chip').not.toBeNull()
+    expect(chip.textContent).toBe('SAMPLE')
+    expect(chip.classList.contains('mono'), 'SAMPLE is a mono span').toBe(true)
+    expect(chip.style.fontSize).toBe('9px')
+    expect(chip.style.fontWeight).toBe('700')
+    expect(chip.style.border).toBe('1px solid var(--line-2)')
+    expect(chip.style.borderRadius).toBe('var(--radius-sm)')
+    expect(chip.style.padding).toBe('1px 5px')
+  })
+
+  it('RP-03 all five KPI values are .money beside a div.label (pin, green at write)', async () => {
+    const { container } = await renderReady()
+
+    const labels = ['Taxable value', 'Output VAT', 'Total invoiced', 'WHT withheld · 5%', 'Invoices in period']
+    const found = labels.map((l) => Array.from(container.querySelectorAll('div')).find((d) => d.className === 'label' && d.textContent === l))
+    expect(found.filter(Boolean), 'all five labels render as div.label').toHaveLength(5)
+    for (const labelEl of found as HTMLElement[]) {
+      const value = (labelEl.parentElement as HTMLElement).nextElementSibling
+      expect(value?.tagName, `${labelEl.textContent} value is a span`).toBe('SPAN')
+      expect(value?.classList.contains('money'), `${labelEl.textContent} value is .money`).toBe(true)
+    }
+  })
+
+  it('RP-04 card titles are 15px card titles', async () => {
+    const { container } = await renderReady()
+
+    const titles = Array.from(container.querySelectorAll('span.card-title'))
+    expect(titles.map((t) => t.textContent)).toEqual(['Top customers by value', 'Validation summary', 'Export & filings'])
+    for (const t of titles) expect((t as HTMLElement).style.fontSize, `${t.textContent} size`).toBe('15px')
+  })
+
+  it('RP-05 Passed and Failing boxes are 6px', async () => {
+    const { container } = await renderReady()
+
+    for (const name of ['Passed', 'Failing']) {
+      const box = labelDiv(container, name).parentElement as HTMLElement
+      expect(box.style.borderRadius, `${name} box corner`).toBe('var(--radius-md)')
+    }
+  })
+
+  it('RP-06 FIRM-WIDE is the 4px chip beside Top failures', async () => {
+    const { container } = await renderReady()
+
+    const label = await screen.findByText('Top failures')
+    const head = label.parentElement as HTMLElement
+    expect(head.style.display).toBe('flex')
+    expect(head.style.gap).toBe('8px')
+    expect(head.style.justifyContent, 'the chip sits beside the label').toBe('')
+    const chip = label.nextElementSibling as HTMLElement
+    expect(chip, 'Top failures has a sibling chip').not.toBeNull()
+    expect(chip.textContent).toBe('FIRM-WIDE')
+    expect(chip.classList.contains('mono')).toBe(true)
+    expect(chip.style.borderRadius).toBe('var(--radius-sm)')
+    expect(chip.style.border).toBe('1px solid var(--line-2)')
+    expect(chip.style.fontSize).toBe('9px')
+    expect(chip.style.fontWeight).toBe('700')
+    expect(chip.style.padding).toBe('1px 5px')
+    expect(container.contains(chip)).toBe(true)
+  })
+
+  it('RP-07 disabled exports read --fg-4 throughout', async () => {
+    await renderReady()
+
+    expect(EXPORT_BUTTONS.length).toBeGreaterThan(0)
+    for (const { name, fmt } of EXPORT_BUTTONS) {
+      const btn = screen.getByRole('button', { name: new RegExp(name) })
+      const chip = btn.querySelector('span.mono') as HTMLElement
+      expect(chip?.textContent, `${name} format chip`).toBe(fmt)
+      expect(chip.style.color, `${name} format chip colour`).toBe('var(--fg-4)')
+      expect(chip.style.borderRadius, `${name} format chip corner`).toBe('var(--radius-sm)')
+    }
+    expect(screen.getByTestId('exports-blocked-reason').style.fontSize, 'the reason is 12px').toBe('12px')
+  })
+
+  it('RP-08 the empty title is 700', async () => {
+    mockFetch([listResponse([], { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 0 })])
+    render(<ReportsView ctx={reportsCtx()} />)
+
+    const title = await screen.findByText('No data to report yet')
+    expect(title.style.fontSize, 'control: the title keeps its size').toBe('16px')
+    expect(title.style.fontWeight).toBe('700')
+  })
+
+  it('RP-09 the report carries no v1 vocabulary (boundary)', async () => {
+    pagedFetchMock(2500, [row({ id: 'inv-a', buyer_tin: tinFor(1), buyer_name: 'Alpha Traders' })], RULE_ROLLUP)
+    const { container } = render(<ReportsView ctx={reportsCtx()} />)
+    await screen.findByText('Alpha Traders')
+    await screen.findByTestId('reports-truncated-notice')
+    await screen.findByText('Top failures')
+
+    const html = container.innerHTML
+    const radii = Array.from(html.matchAll(/(?<![-\w])border-radius:\s*([^;"]+)/g), (m) => m[1].trim())
+    expect(radii.length).toBeGreaterThan(0)
+    expect(radii.filter((r) => r === 'var(--radius-sm)').length, 'control: the chips and bars carry --radius-sm').toBeGreaterThanOrEqual(3)
+    for (const r of radii) expect(['var(--radius-sm)', 'var(--radius-md)'], `corner "${r}"`).toContain(r)
+    for (const needle of ['999px', '99px', 'oklch', 'gradient', 'box-shadow']) expect(html, needle).not.toContain(needle)
+  })
+
+  it('RP-11 KPI figures keep their size, weight and tone; only the WHT tile carries a chip', async () => {
+    const { container } = await renderReady()
+
+    const value = (label: string) => (labelDiv(container, label).parentElement?.nextElementSibling as HTMLElement)
+    for (const l of ['Taxable value', 'Output VAT', 'Total invoiced', 'WHT withheld · 5%', 'Invoices in period']) {
+      expect(value(l).style.fontSize, `${l} size`).toBe('25px')
+      expect(value(l).style.fontWeight, `${l} weight`).toBe('700')
+    }
+    expect(value('Output VAT').style.color).toBe('var(--action)')
+    expect(value('Taxable value').style.color).toBe('var(--fg-1)')
+    expect(value('WHT withheld · 5%').style.color, 'the sample figure reads subordinate').toBe('var(--fg-3)')
+    expect(value('WHT withheld · 5%').textContent, 'the sample figure carries the ~').toMatch(/^~/)
+    const chips = Array.from(container.querySelectorAll('span.mono')).filter((s) => s.textContent === 'SAMPLE')
+    expect(chips, 'exactly one SAMPLE chip').toHaveLength(1)
+    expect(labelDiv(container, 'Taxable value').nextElementSibling, 'a real tile has no chip').toBeNull()
+  })
+
+  it('RP-12 the PASS chip and the Passed / Failing figures keep their tone', async () => {
+    const { container } = await renderReady()
+
+    const chip = Array.from(container.querySelectorAll('span.mono')).find((s) => /% PASS$/.test(s.textContent ?? '')) as HTMLElement
+    expect(chip, 'the PASS chip renders on a ready rollup').toBeDefined()
+    expect(chip.style.color).toBe('var(--status-green-text)')
+    expect(chip.style.fontSize).toBe('11px')
+    const pass = labelDiv(container, 'Passed').previousElementSibling as HTMLElement
+    const fail = labelDiv(container, 'Failing').previousElementSibling as HTMLElement
+    expect(pass.style.color).toBe('var(--status-green-text)')
+    expect(fail.style.color).toBe('var(--status-red-text)')
+    expect(labelDiv(container, 'Passed').parentElement?.style.background).toBe('var(--status-green-bg)')
+    expect(labelDiv(container, 'Failing').parentElement?.style.background).toBe('var(--status-red-bg)')
+  })
+
+  it('RP-13 no violations: Passed renders and there is no Top failures head or FIRM-WIDE chip', async () => {
+    const { container } = await renderReady(ZERO_ROLLUP)
+
+    expect(screen.getByText('Passed')).toBeTruthy()
+    expect(screen.queryByText('Top failures')).toBeNull()
+    expect(screen.queryByText('FIRM-WIDE')).toBeNull()
+    expect(container.querySelectorAll('div.label').length, 'control: the report still renders its labels').toBeGreaterThan(5)
+  })
+
+  it('RP-14 loading and error render the shared state, never the KPI row', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+    const loading = render(<ReportsView ctx={reportsCtx()} />)
+    expect(await screen.findByText('Loading reports…')).toBeTruthy()
+    expect(screen.queryByText('Taxable value')).toBeNull()
+    expect(screen.queryByText('No data to report yet')).toBeNull()
+    expect(screen.getByRole('heading', { level: 1, name: 'Reports & analytics' }), 'control: the header still renders').toBeTruthy()
+    loading.unmount()
+
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: false, status: 503, json: () => Promise.resolve({ error: 'down' }) })))
+    render(<ReportsView ctx={reportsCtx()} />)
+    expect(await screen.findByText('Something went wrong')).toBeTruthy()
+    expect(screen.getAllByRole('button', { name: /retry/i }).length).toBeGreaterThan(0)
+    expect(screen.queryByText('Taxable value')).toBeNull()
+  })
+
+  it('RP-10 a rollup error renders no PASS chip (error; pin, green at write)', async () => {
+    mockFetchRollupError([listResponse([row({ id: 'inv-e', buyer_tin: tinFor(2), buyer_name: 'Ladder Buyer' })], { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 1 })])
+    const { container } = render(<ReportsView ctx={reportsCtx()} />)
+
+    await screen.findByText('Validation summary')
+    await screen.findByRole('button', { name: /retry/i })
+    const title = Array.from(container.querySelectorAll('span.card-title')).find((s) => s.textContent === 'Validation summary')
+    const card = title?.parentElement?.parentElement as HTMLElement
+    expect(card.textContent, 'the Validation summary card holds the rollup error').toContain('Something went wrong')
+    expect(passPct(container), 'no PASS chip beside a failed rollup').toBeUndefined()
+  })
+
+  // The invoices half lands; the rollup half never settles or fails, so only the card body differs.
+  function summaryBody(container: HTMLElement): HTMLElement {
+    const title = Array.from(container.querySelectorAll('span.card-title')).find((s) => s.textContent === 'Validation summary')
+    const card = title?.parentElement?.parentElement as HTMLElement
+    expect(card, 'the Validation summary card renders').toBeTruthy()
+    expect(card.children.length, 'the card is a header and a body').toBe(2)
+    return card.children[1] as HTMLElement
+  }
+
+  it('RP-15 a loading rollup draws an inline spinner row, not the shared Loading block', async () => {
+    const invoices = [listResponse([row({ id: 'inv-l', buyer_tin: tinFor(3), buyer_name: 'Loading Buyer' })], { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 1 })]
+    const queue = [...invoices]
+    vi.stubGlobal('fetch', vi.fn((url: string) => (isRollupUrl(url) ? new Promise(() => {}) : Promise.resolve(queue.shift()))))
+    const { container } = render(<ReportsView ctx={reportsCtx()} />)
+
+    await screen.findByText('Loading validation summary…')
+    const body = summaryBody(container)
+    expect(body.style.padding, 'the card body keeps the prototype padding').toBe('18px 20px')
+    const rowEl = body.firstElementChild as HTMLElement
+    expect(rowEl.textContent, 'the first child of the body is the loading row').toBe('Loading validation summary…')
+    expect(rowEl.style.display).toBe('flex')
+    expect(rowEl.style.alignItems).toBe('center')
+    expect(rowEl.style.gap).toBe('10px')
+    expect(rowEl.style.color).toBe('var(--fg-3)')
+    expect(rowEl.style.fontSize).toBe('13px')
+    expect(rowEl.style.padding, 'no 40px block padding: the row sits at the card padding').toBe('')
+
+    const spinner = rowEl.firstElementChild as HTMLElement
+    expect(spinner.tagName).toBe('SPAN')
+    expect(spinner.style.width).toBe('16px')
+    expect(spinner.style.height).toBe('16px')
+    expect(spinner.style.borderRadius).toBe('50%')
+    expect(spinner.style.borderTopColor).toBe('var(--action)')
+    expect(spinner.style.animation).toBe('spin 700ms linear infinite')
+    expect(body.querySelector('.apic-loading-spin'), 'the shared Loading component is not used here').toBeNull()
+    expect(screen.getByText('Loading Buyer'), 'control: the invoices half rendered').toBeTruthy()
+  })
+
+  it('RP-16 a failed rollup draws the error inline with the message, the HTTP line and a wired Retry', async () => {
+    const fetchMock = mockFetchRollupError([listResponse([row({ id: 'inv-i', buyer_tin: tinFor(4), buyer_name: 'Inline Buyer' })], { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 1 })])
+    const { container } = render(<ReportsView ctx={reportsCtx()} />)
+
+    const retry = await screen.findByRole('button', { name: 'Retry' })
+    const body = summaryBody(container)
+    expect(body.style.padding).toBe('18px 20px')
+    const title = body.firstElementChild as HTMLElement
+    expect(title.textContent).toBe('Something went wrong')
+    expect(title.style.fontSize).toBe('15px')
+    expect(title.style.fontWeight).toBe('700')
+    expect(title.style.marginBottom).toBe('6px')
+    const message = title.nextElementSibling as HTMLElement
+    expect(message.tagName).toBe('P')
+    expect(message.textContent, 'the server message').toBe('rollup unavailable')
+    expect(message.style.fontSize).toBe('13px')
+    expect(message.style.color).toBe('var(--fg-2)')
+    const http = message.nextElementSibling as HTMLElement
+    expect(http.textContent).toBe('HTTP 500')
+    expect(http.classList.contains('mono')).toBe(true)
+    expect(http.style.fontSize).toBe('11px')
+    expect(http.style.color).toBe('var(--fg-3)')
+    expect(http.style.marginBottom, 'the prototype gap is 14px, not the shared card 16px').toBe('14px')
+    expect(http.nextElementSibling, 'the Retry follows the HTTP line').toBe(retry)
+    expect(retry.className).toBe('v2-btn v2-btn-ghost pf-btn')
+    expect(retry.style.height).toBe('34px')
+
+    const nested = (Array.from(body.querySelectorAll('div')) as HTMLElement[]).filter((d) => d.style.border !== '' || d.style.maxWidth !== '' || d.style.padding === '28px' || d.style.background !== '')
+    expect(nested, 'no nested bordered card inside the summary card').toHaveLength(0)
+
+    const rollupCalls = () => fetchMock.mock.calls.filter((c) => isRollupUrl(c[0] as string)).length
+    const before = rollupCalls()
+    expect(before, 'control: the rollup was requested').toBeGreaterThan(0)
+    fireEvent.click(retry)
+    await vi.waitFor(() => expect(rollupCalls(), 'Retry re-requests the rollup').toBeGreaterThan(before))
+  })
+
+  it('RP-17 each top-failure glyph span is inline-flex so the row stays one label tall', async () => {
+    const { container } = await renderReady()
+
+    const topLabel = Array.from(container.querySelectorAll('span.label')).find((l) => l.textContent === 'Top failures')
+    expect(topLabel, 'the Top failures head renders').toBeTruthy()
+    const head = topLabel!.parentElement as HTMLElement
+    const list = head.nextElementSibling as HTMLElement
+    expect(list.children.length, 'the rollup carries one failing rule').toBeGreaterThan(0)
+    for (const rowEl of Array.from(list.children) as HTMLElement[]) {
+      const glyph = rowEl.firstElementChild as HTMLElement
+      expect(glyph.querySelector('svg'), 'the first cell holds the cross glyph').not.toBeNull()
+      expect(glyph.style.display).toBe('inline-flex')
+    }
   })
 })

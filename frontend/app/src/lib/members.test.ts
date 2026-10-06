@@ -1778,6 +1778,15 @@ describe('RESEND-07-02 — serverRefusedAddresses (D5 layer 2)', () => {
     expect(serverRefusedAddresses(msg, chips)).toEqual([backslash, comma, control, 'é@x.com', '😀@x.com'])
   })
 
+  it('serverRefusedAddresses decodes the escapes JSON lacks', () => {
+    // Go: fmt.Sprintf("%q", ...) of "a..b\U000e0001@x.com", "a\ab\vc\fd\be@x.com", "a\xffb@x.com"
+    const tag = 'a..b\u{E0001}@x.com'
+    const ctl = 'a\x07b\x0bc\x0cd\x08e@x.com'
+    const msg = `${PREFIX}"a..b\\U000e0001@x.com", "a\\ab\\vc\\fd\\be@x.com", "a\\xffb@x.com"`
+
+    expect(serverRefusedAddresses(msg, [tag, ctl, 'a\u00ffb@x.com', 'ok@x.com'])).toEqual([tag, ctl])
+  })
+
   it('serverRefusedAddresses ignores every other message', () => {
     expect(serverRefusedAddresses(`bad request: ${PREFIX}"a@x.ng"`, ['a@x.ng'])).toEqual([])
     expect(serverRefusedAddresses('invalid email address:"a@x.ng"', ['a@x.ng'])).toEqual([])

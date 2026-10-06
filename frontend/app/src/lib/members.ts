@@ -167,7 +167,7 @@ export function activeAdmins(list: readonly Member[]): Member[] {
 // ---------------------------------------------------------------------------
 // The invite pipeline, the reducers, the filter and the last-admin guard
 // ---------------------------------------------------------------------------
-// The address rules below back the invite modal; `chipVerdicts` (end of file) adds the server's limits.
+// The address rules below back the invite modal; `chipVerdicts` adds the server's limits.
 
 /** One verdict per pasted address, in input order. */
 export type InviteVerdict = 'ok' | 'member' | 'invited' | 'malformed'
@@ -688,6 +688,34 @@ export function chipVerdicts(
   })
 }
 
+const GO_SIMPLE_ESCAPES: Record<string, string> = {
+  a: '\x07',
+  b: '\b',
+  f: '\f',
+  n: '\n',
+  r: '\r',
+  t: '\t',
+  v: '\v',
+  '\\': '\\',
+  '"': '"',
+}
+const GO_ESCAPE = /\\(?:([abfnrtv\\"])|x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8})|.)/gs
+
+/** strconv.Unquote of a double-quoted token; null when it is invalid or holds a raw byte (\x80+) no JS string equals. */
+function unquoteGo(token: string): string | null {
+  let bad = false
+  const out = token.slice(1, -1).replace(GO_ESCAPE, (m, simple, x, u, U) => {
+    if (simple) return GO_SIMPLE_ESCAPES[simple]
+    const code = x ? parseInt(x, 16) : u ? parseInt(u, 16) : U ? parseInt(U, 16) : -1
+    if (code < 0 || (x && code >= 0x80) || code > 0x10ffff || (code >= 0xd800 && code < 0xe000)) {
+      bad = true
+      return m
+    }
+    return String.fromCodePoint(code)
+  })
+  return bad ? null : out
+}
+
 const REFUSED_PREFIX = 'invalid email address: '
 
 /** The quoted tokens of the 400 (invitations_handler.go, `%q` list) that equal a chip; [] for any other message. */
@@ -695,12 +723,8 @@ export function serverRefusedAddresses(message: string, chips: readonly string[]
   if (!message.startsWith(REFUSED_PREFIX)) return []
   const out: string[] = []
   for (const [token] of message.slice(REFUSED_PREFIX.length).matchAll(/"(?:[^"\\]|\\.)*"/g)) {
-    try {
-      const address: unknown = JSON.parse(token)
-      if (typeof address === 'string' && chips.includes(address)) out.push(address)
-    } catch {
-      // a Go-only escape (\x..) names no chip the client let through
-    }
+    const address = unquoteGo(token)
+    if (address !== null && chips.includes(address)) out.push(address)
   }
   return out
 }

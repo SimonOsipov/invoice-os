@@ -1,4 +1,4 @@
-// Settings › Members and Settings › Roles, driven as BOTH personas, plus the one journey that
+// Settings › Members and Settings › Roles, driven as BOTH personas, plus the journey that
 // creates a seat, builds a policy whose step names it, proves both stuck, and deletes both.
 //
 // LIVE, end to end. Settings › Roles is a real screen over five routes: GET/POST
@@ -1095,6 +1095,8 @@ test.afterAll(async () => {
 // Test 4 -- an admin invites from the Members screen (RESEND-07), on the firm tenant
 // ---------------------------------------------------------------------------------------
 // A live row of GET /api/tenancy/v1/invitations (internal/tenancy/invitations.go).
+// accountmail.InviteValidDays.
+const INVITE_VALID_DAYS = 7
 type LiveInvite = { id: string; email: string; role: string; status: string; expires_at: string; delivery: string }
 
 /** Runs `fn` at each WIDE_WIDTHS entry, widest first, and restores the entry viewport. */
@@ -1189,8 +1191,9 @@ test('firm Settings: an admin invites from the Members screen, sees the pending 
   await expect(row, 'one pending row for the sent address').toHaveCount(1)
   await expect(row).toContainText('Preparer')
   await expect(row).toContainText('INVITED')
-  await expect(row).toContainText('Expires in 7 days')
+  await expect(row).toContainText(`Expires in ${INVITE_VALID_DAYS} days`)
 
+  // `pending` is InviteResult.Status and `sent` its Delivery (invitations_handler.go); `preparer` is the modal's default role.
   const sent = (await liveInvites()).find((i) => i.email === valid)
   expect(sent, 'the server lists the sent address').toMatchObject({ role: 'preparer', status: 'pending', delivery: 'sent' })
   const listed = (await liveInvites()).map((i) => i.email)
@@ -1260,6 +1263,7 @@ test('firm Settings: an admin invites from the Members screen, sees the pending 
       expect(enclosesRect(dialogBox, await boxOf(page.getByTestId(id), id), 1), `${id} must sit inside the modal at ${width}px`).toBe(true)
     }
     const chips = await page.getByTestId('invite-chip').all()
+    expect(chips, `the modal must hold its three chips at ${width}px`).toHaveLength(3)
     for (const [i, c] of chips.entries()) {
       expect(enclosesRect(chipboxBox, await boxOf(c, `chip ${i}`), 1), `chip ${i} must sit inside the chip box at ${width}px`).toBe(true)
     }

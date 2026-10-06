@@ -979,6 +979,13 @@ describe('RESEND-07-04', () => {
       expect(gw.lists()).toHaveLength(2)
     })
 
+    it('MembersView: a first members load with no roster shows Loading, not the roster', () => {
+      render(<Harness initial={[]} membersState="loading" />)
+
+      expect(screen.getByText('Loading members…')).toBeTruthy()
+      expect(screen.queryByTestId('members-table'), 'a roster that has not landed draws no table').toBeNull()
+    })
+
     it('MembersView: the stale-resend reason clears at the next invite action', async () => {
       // After a 409 on i1 the refetched list holds i2 only.
       async function reachReason(list3?: Responder) {

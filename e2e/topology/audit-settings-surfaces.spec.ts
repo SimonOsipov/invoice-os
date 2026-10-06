@@ -838,8 +838,7 @@ test('ST-01 Settings › Members at 1440: heading, table card, status pill, avat
   const invite = tid(page, 'members-invite')
   await expect(invite, 'Invite people is enabled for the e2e admin').toBeEnabled()
   const inviteEnabled = await styles(invite, ['opacity', 'cursor'])
-  expect(inviteEnabled.opacity, 'the enabled Invite carries no disabled dim').not.toBe('0.45')
-  expect(inviteEnabled.cursor, 'the enabled Invite is not not-allowed').not.toBe('not-allowed')
+  expect(inviteEnabled, 'Invite people, enabled').toEqual({ opacity: '1', cursor: 'pointer' })
   const scroll = await assertPageDoesNotScrollSideways(page, 'Members')
 
   await attachJson(testInfo, 'st-01-measurements', { h1, tableCorners, pillCorners, avatar, inviteEnabled, scroll })

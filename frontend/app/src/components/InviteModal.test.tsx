@@ -122,6 +122,15 @@ describe('InviteModal', () => {
     expect(addresses()).toEqual(['a@x.ng', 'c@x.ng'])
   })
 
+  it('InviteModal: a paste over a selected separator keeps the text on both sides in order', async () => {
+    const { user } = renderModal()
+    await user.type(input(), 'a@x.ng b@x.ng')
+    input().setSelectionRange(6, 7)
+    await user.paste(' c@x.ng ')
+    expect(addresses()).toEqual(['a@x.ng', 'c@x.ng', 'b@x.ng'])
+    expect(input().value).toBe('')
+  })
+
   it('InviteModal: a case variant does not chip twice', async () => {
     const { user } = renderModal()
     await addChips(user, 'a@x.ng')

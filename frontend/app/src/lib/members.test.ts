@@ -1986,11 +1986,12 @@ describe('AC-5 — filterMembers and classifyInvites tolerate a null email', () 
 
 describe('AC-7 — MEMBER_UNBACKED', () => {
   it('supplies one distinct, non-empty sentence per unbacked control', () => {
-    const keys = ['invite', 'remove', 'role', 'department', 'clientAccess', 'inviteLink', 'revokeInvite'] as const
+    const keys = ['remove', 'role', 'department', 'clientAccess', 'inviteLink', 'revokeInvite'] as const
     for (const k of keys) expect(MEMBER_UNBACKED[k]).toBeTruthy()
     const values = keys.map((k) => MEMBER_UNBACKED[k])
     expect(new Set(values).size).toBe(keys.length)
     expect(Object.keys(MEMBER_UNBACKED).sort()).toEqual([...keys].sort())
+    expect('invite' in MEMBER_UNBACKED, 'the invite endpoint exists; its "not yet" sentence is retired').toBe(false)
     expect(MEMBER_UNBACKED.inviteLink).toBe('The invite link exists only in the email. The server keeps only a hash of it.')
     expect(MEMBER_UNBACKED.revokeInvite).toBe(
       'There is no way to revoke an invite yet. An unused invite expires 7 days after it was sent.',

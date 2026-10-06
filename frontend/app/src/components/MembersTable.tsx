@@ -23,6 +23,7 @@ import {
   PROTECTED_ADMIN_NOTE,
   type Member,
   type MemberStatus,
+  type PendingInvite,
 } from '../lib/members'
 import { rosterRoleCell, stepsForMember, stepsWarning, type Role } from '../lib/roles'
 import type { Policy } from '../lib/workflows'
@@ -95,6 +96,10 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
   onStatus: (id: string, status: Exclude<MemberStatus, 'invited'>) => void
   /** The last failed write's server reason, and the row it happened on. */
   statusError: { id: string; message: string } | null
+  /** Pending invitations, keyed by `Member.id` of an `invited` row. Not read yet (RESEND-07-04). */
+  invites?: readonly PendingInvite[]
+  onResend?: (id: string) => void
+  resending?: ReadonlySet<string>
 }) {
   const { members } = ctx
   // One id, so only one menu can be open — the app's house pattern for dismissible

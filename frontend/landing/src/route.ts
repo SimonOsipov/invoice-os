@@ -8,3 +8,8 @@ export function isPrivacyPath(pathname: string): boolean {
 // Collapses to the two real pages so a visitor-typed path never becomes a transaction name.
 export const landingRouteName = (pathname: string): string =>
   pathname === '/' ? '/' : isPrivacyPath(pathname) ? '/privacy' : '<unmatched>'
+
+// STUB (Mode A): the executor replaces this body.
+export function isInvitePath(_pathname: string): boolean {
+  return false
+}

@@ -539,13 +539,11 @@ test('firm Settings: the live member directory, the live role grid, and every co
   // are gone with the fields no membership row carries.
   await expect(tableHeads(page)).toHaveText(MEMBERS_TABLE_HEADS)
 
-  // --- invite: rendered, dead, and saying so ------------------------------------------------
-  await expectDisabledWithReason(
-    page.getByTestId('members-invite'),
-    page.getByTestId('members-invite-reason'),
-    UNBACKED.invite,
-    'Invite people',
-  )
+  // --- invite: an admin viewer sees it enabled, with no reason beside it -------------------
+  await expect(page.getByTestId('members-invite')).toBeVisible()
+  await expect(page.getByTestId('members-invite')).toHaveText('Invite people')
+  await expect(page.getByTestId('members-invite')).toBeEnabled()
+  await expect(page.getByTestId('members-invite-reason')).toHaveCount(0)
 
   // --- the `⋯` menu on someone else's row ---------------------------------------------------
   await toggleRowMenu(page, 'Chiamaka Nwosu')
@@ -703,12 +701,10 @@ test('in-house Settings: its own live roster, three unsignable seats, and the su
   // and Approval position went with the fields; the drawer says why, below.
   await expect(tableHeads(page)).toHaveText(MEMBERS_TABLE_HEADS)
 
-  await expectDisabledWithReason(
-    page.getByTestId('members-invite'),
-    page.getByTestId('members-invite-reason'),
-    UNBACKED.invite,
-    'Invite people',
-  )
+  await expect(page.getByTestId('members-invite')).toBeVisible()
+  await expect(page.getByTestId('members-invite')).toHaveText('Invite people')
+  await expect(page.getByTestId('members-invite')).toBeEnabled()
+  await expect(page.getByTestId('members-invite-reason')).toHaveCount(0)
 
   for (const cell of INHOUSE_ROSTER_CELLS) {
     await expectRosterCell(page, cell)

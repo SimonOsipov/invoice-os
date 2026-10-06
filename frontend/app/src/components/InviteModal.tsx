@@ -48,9 +48,10 @@ export function InviteModal({ existing, onSend, onClose }: InviteModalProps) {
     const all = mergeChips(chips, parseEmailInput(draft))
     setChips(all)
     setDraft('')
+    let sent = okOf(all, refused)
+    if (sent.length === 0) return // unsendable chips stay red for correction
     setSending(true)
     setError(null)
-    let sent = okOf(all, refused)
     try {
       try {
         await onSend(sent, role)

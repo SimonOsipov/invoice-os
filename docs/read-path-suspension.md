@@ -285,6 +285,7 @@ predicates it would previously have hit inside the transaction.
 | `OPTIONS /auth/login` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `POST /auth/mock/staff` | gateway | exempt | mock builds only; grants staff on the owner DSN for the E2E fork, with no caller identity |
 | `POST /auth/mock/member` | gateway | exempt | mock builds only; grants a tenant membership on the owner DSN for the E2E fork, with no caller identity |
+| `POST /auth/mock/invitation-token` | gateway | exempt | mock builds only; replaces a pending invite's token hash on the owner DSN for the E2E fork, with no caller identity |
 | `POST /auth/sign-in` | gateway | exempt | no database; calls GoTrue |
 | `OPTIONS /auth/sign-in` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `POST /auth/exchange` | gateway | exempt | no database; in-process code store |
@@ -295,6 +296,10 @@ predicates it would previously have hit inside the transaction.
 | `OPTIONS /auth/sign-out` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `POST /auth/register` | gateway | exempt | no database; calls GoTrue |
 | `OPTIONS /auth/register` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
+| `POST /auth/invitation` | gateway | exempt | no database; asks tenancy |
+| `OPTIONS /auth/invitation` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
+| `POST /auth/invitation/register` | gateway | exempt | no database; asks tenancy, calls GoTrue |
+| `OPTIONS /auth/invitation/register` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `POST /auth/resend-verification` | gateway | exempt | no database; calls GoTrue |
 | `OPTIONS /auth/resend-verification` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `POST /auth/request-password-reset` | gateway | exempt | no database; calls GoTrue |
@@ -377,7 +382,7 @@ predicates it would previously have hit inside the transaction.
 | `POST /v1/extractions/{id}/fields/{name}/corrections` | submission | covered | |
 | `POST /v1/extractions/{id}/line-items` | submission | covered | |
 
-102 distinct routes, 108 registrations (`GET /v1/ping` is registered once per service).
+107 distinct routes, 113 registrations (`GET /v1/ping` is registered once per service).
 
 ### 8.1 The non-HTTP callers, so nobody looks for them above
 

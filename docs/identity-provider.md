@@ -358,7 +358,8 @@ scope, or `/token` with any other grant) is reachable from outside.
    access-token hook projects a tenant only for exactly one active membership.
 5. With that tenant-less token the client calls `POST /api/tenancy/v1/workspaces`
    `{"workspace_name","display_name","kind"?}`. The gateway lets a tenant-less token through
-   on this one method and path only. Tenancy creates the tenant and its first active admin
+   on this method and path and on `POST /api/tenancy/v1/invitations/accept` only (see
+   Accepting an invite). Tenancy creates the tenant and its first active admin
    in one transaction through `public.provision_workspace`
    ([migrations.md](./migrations.md) §1) and answers 201 `{tenant:{id,name,kind}, user:{id,role}}`. An absent
    `kind` stores `in_house`. `provision_workspace` refuses an identity that
@@ -541,6 +542,75 @@ otherwise. The tenant id is a UUIDv5 of the caller's subject; the membership gua
 `provision_workspace` is what holds one identity to one workspace. Every 201 writes one
 `workspace.provisioned` audit event in the same transaction.
 
+## Accepting an invite
+
+An invitee joins an existing workspace instead of provisioning one. The invite mail links to
+`<landing>/invite#token=<T>`; the token is in the fragment, so no request carries it as a URL.
+
+1. The landing page posts the token to `POST /auth/invitation` and shows the workspace name and role.
+2. A new person registers through `POST /auth/invitation/register` `{"token","password"}`.
+   The gateway previews the token and signs up the invited address, not an address from the
+   body, with no `data` key: no registration answers, so the app never provisions a workspace
+   for this account. Confirmation, sign-in and hand-off are the steps above.
+3. The tenant-less token calls `POST /api/tenancy/v1/invitations/accept` `{"token"}`. Tenancy
+   adds the membership with the invited role and marks the invite accepted in one transaction.
+4. The next token (a refresh grant or a new sign-in) carries `app_metadata.tenant_id`.
+
+The gateway lets a tenant-less token through on exactly two routes, both `POST`, matched on
+the escaped path (`v1%2Finvitations%2Faccept` and `%61ccept` are not exempt):
+`/api/tenancy/v1/workspaces` and `/api/tenancy/v1/invitations/accept`. A tenant-bearing token
+reaches the accept route like any tenancy route; tenancy then answers 409.
+
+**`POST /auth/invitation`**, outside `/api/`, no verifier, CORS-wrapped, with an `OPTIONS` route.
+Body `{"token"}`, at most 1 KiB. Every answer sets `Cache-Control: no-store`.
+
+| Case | Answer |
+|---|---|
+| live invite | 200 `{"workspace","role","email"}` |
+| unknown, spent, expired or revoked; empty or over 256 bytes (no tenancy call) | 404 `{"error":"this invite is no longer valid"}` |
+| malformed JSON or over 1 KiB | 400 `invalid request body` |
+| tenancy unreachable, over 5 s, or any other answer | 502 `invitation lookup is unavailable`, WARN with the status only |
+| any method but POST, sent to the handler | 405 `Allow: POST` |
+
+The preview needs no GoTrue, so `AUTH_URL` and `AUTH_SITE_URL` do not gate it. The gateway
+asks tenancy `POST /internal/invitations/preview` with the gateway token and no identity
+headers; the public proxy refuses `/internal/`. It never follows a redirect, and no error
+text holds the token or the URL.
+
+**`POST /auth/invitation/register`**, CORS-wrapped, with an `OPTIONS` route. Body
+`{"token","password"}`, at most 4 KiB; any other key, `email` included, is ignored.
+
+| Case | Answer |
+|---|---|
+| live invite; GoTrue answers as `/auth/register` maps to 202 (including the shared per-IP budget spent, with no GoTrue call) | 202 `{"status":"verification_pending"}` after `AUTH_REGISTER_MIN_RESPONSE` |
+| token names no usable invite | 404 `this invite is no longer valid` at once, GoTrue not called |
+| tenancy unreachable | 502 `invitation lookup is unavailable` at once, GoTrue not called |
+| empty token or password, malformed body | 400 |
+| other GoTrue answers | as `/auth/register` (400 with GoTrue's message, 503 `registration is closed`, 429, 502 `registration is unavailable`) |
+| `AUTH_URL` or `AUTH_SITE_URL` unset | 503 `registration is not configured` |
+
+It shares `/auth/register`'s per-IP throttle and floor, and one unexported helper maps GoTrue's answers for both.
+
+**`POST /api/tenancy/v1/invitations/accept`** `{"token"}`, at most 1 KiB: 200 `{tenant:{id,name,kind}, user:{id,role}}`;
+400 malformed body; 401 no caller; 404 `this invite is no longer valid` (not 43 base64url characters, unknown, spent, expired or revoked);
+409 `you already belong to a workspace` (any membership, any tenant, any status);
+403 `this invite was sent to a different email address`; 500 otherwise.
+
+**The email rule.** Only the account whose verified email equals the invited address, compared
+case-insensitively, may accept. The token alone admits nobody, so a forwarded link does not admit another account.
+
+**Free-mail addresses.** `/auth/register` refuses a personal email provider; `/auth/invitation/register`
+does not, because an admin chose the address. An expired or spent invite to such an address answers 404.
+
+**Accepted risks of invite registration:**
+- *First registrant keeps the password.* GoTrue keeps the first unconfirmed signup's password.
+  A person who holds the token and is not the invitee can register the invited address first;
+  when the invitee confirms, the account carries that person's password, and that person can sign in
+  and accept, gaining one seat. Preconditions: the token, which only the invited mailbox
+  receives, and the invitee's click on the confirmation mail. `/auth/register` has the same
+  exposure for any business address, without a token. Recovery is a password reset (see
+  Password reset) plus an admin suspending the membership.
+
 **Ceilings:**
 - `ceiling:` GoTrue's per-request rate limiters, `/verify` and `/token` included, are off in
   this fleet. On v2.197.0 they key on the header named by `GOTRUE_RATE_LIMIT_HEADER` and do
@@ -655,7 +725,7 @@ hand-off is the app by default and a console when the visitor came from one (Con
 7. On any failure the app returns to landing with `signin=no-workspace` (the `/me` call
    answered 403) or `signin=failed` (anything else), carrying the state `ensureSignInState`
    returns: a newly minted one, because step 6 removed the old. Landing opens
-   the modal with "This account has no workspace yet." or "We couldn't open your workspace.
+   the modal with "This account has no workspace yet. If you were invited, open the invite link in your email." or "We couldn't open your workspace.
    Sign in again." A console redeems the same way, but instead of `/me` it reads the token:
    one without the staff claim returns `signin=not-staff` ("This account cannot open the
    ASComply consoles."). An unknown `signin` value is stripped and ignored.
@@ -1241,7 +1311,7 @@ signup is closed, so the first staff account waits for registration U3 or for co
 ## The mock issuer
 
 A gateway built with `-tags mockissuer` (`cmd/gateway/mockissuer.go`) can serve the mock issuer:
-`POST /auth/login`, the mock JWKS, `POST /auth/mock/staff` and `POST /auth/mock/member`. The
+`POST /auth/login`, the mock JWKS, `POST /auth/mock/staff`, `POST /auth/mock/member` and `POST /auth/mock/invitation-token`. The
 production binary is built without the tag, so it carries none of that code and
 `cmd/gateway/nomockissuer.go` registers nothing. In a tagged build `gateway.MockIssuerEnabled`
 serves the routes only when `GATEWAY_MOCK_ISSUER=true` and `ENVIRONMENT` is not `production`
@@ -1256,7 +1326,18 @@ A PR fork's mock gateway serves `POST /auth/mock/member`
 `{"user_id","tenant_id","role","display_name","email"}`. It upserts an active `memberships`
 row with the migrator DSN, so an e2e spec can admit a registered account to a tenant. It
 answers 204, 400, 405 or 502. Production has no such route: `TestProductionGatewayBinaryCannotMint`
-requires `MockMemberHandler` and `db.GrantMembership` absent from that binary. The control is
+requires `MockMemberHandler`, `db.GrantMembership`, `MockInvitationTokenHandler` and
+`db.SetInvitationToken` absent from that binary. The control is the `mockissuer` build tag, not
+an environment variable.
+
+## Setting an invite token in a mock build
+
+A PR fork's mock gateway serves `POST /auth/mock/invitation-token`
+`{"tenant_id","invitation_id","token"}` (hyphenated uuids, a 43-character base64url token). It
+replaces the token hash of that tenant's pending invite with the migrator DSN, so an e2e spec
+can know the token of an invite it sent. It answers 204, 400, 404 `invitation not found` (no pending row matches), 405 or
+502. Production has no such route (404): `TestProductionGatewayBinaryCannotMint` requires
+`MockInvitationTokenHandler` and `db.SetInvitationToken` absent from that binary. The control is
 the `mockissuer` build tag, not an environment variable.
 
 ## Console sessions

@@ -187,6 +187,12 @@ func main() {
 	app.Mux.Handle("GET /auth/reset-password", gateway.ResetPasswordPageHandler(siteURL))
 	app.Mux.Handle("GET /auth/verify", verifyPage)
 	app.Mux.Handle("POST /auth/verify", reg.Verify)
+	previewer := gateway.NewHTTPInvitationPreviewer(routed["tenancy"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
+	invitation, inviteeRegister := invitationHandlers(probed["auth"], siteURL, registerMinResponse, reg.RegisterPerIP, previewer, app.Logger)
+	app.Mux.Handle("POST /auth/invitation", withCORS(invitation))
+	app.Mux.Handle("OPTIONS /auth/invitation", withCORS(invitation))
+	app.Mux.Handle("POST /auth/invitation/register", withCORS(inviteeRegister))
+	app.Mux.Handle("OPTIONS /auth/invitation/register", withCORS(inviteeRegister))
 	app.Mux.Handle("POST /contacts/demo-request", withCORS(reg.DemoRequest))
 	app.Mux.Handle("OPTIONS /contacts/demo-request", withCORS(reg.DemoRequest))
 
@@ -215,6 +221,7 @@ func main() {
 		app.Mux.Handle("OPTIONS /auth/login", login)
 		app.Mux.Handle("POST /auth/mock/staff", mockStaffRoute(provisionCfg.MigrationDSN, app.Logger))
 		app.Mux.Handle("POST /auth/mock/member", mockMemberRoute(provisionCfg.MigrationDSN, app.Logger))
+		app.Mux.Handle("POST /auth/mock/invitation-token", mockInvitationTokenRoute(provisionCfg.MigrationDSN, app.Logger))
 		platform.MockIssuer = "on"
 	}
 
@@ -277,16 +284,23 @@ func gatewayHandlers(
 // registration holds the public registration handlers main mounts outside /api/.
 type registration struct {
 	Register, Verify, DemoRequest, ResendVerification, RequestPasswordReset http.Handler
-	// RegisterPerIP is stubbed: the implementation stores the register throttle here, nil when unconfigured.
+	// RegisterPerIP is the register throttle, nil when unconfigured; invitee registration shares it.
 	RegisterPerIP *gateway.SignInThrottle
 }
 
-// invitationHandlers is a stub: the implementation builds the preview and invitee-registration handlers.
+// invitationHandlers builds the accept-page preview handler and the invitee-registration handler.
+// Registration shares perIP with /auth/register and answers 503 while any of authURL, siteURL or perIP is nil; the preview needs none of them.
 func invitationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, perIP *gateway.SignInThrottle, preview gateway.InvitationPreviewer, log *slog.Logger) (invitation, register http.Handler) {
-	stub := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "not implemented", http.StatusNotImplemented)
-	})
-	return stub, stub
+	invitation = gateway.InvitationHandler(preview, log)
+	if authURL == nil || siteURL == nil || perIP == nil {
+		return invitation, gateway.RegistrationNotConfigured()
+	}
+	client := &http.Client{
+		Timeout:       10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	enforce := platform.Posture(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != platform.PosturePreview
+	return invitation, gateway.InvitationRegisterHandler(authURL, client, minResponse, perIP, enforce, log, preview)
 }
 
 // newJWKSClient builds the JWKS fetch client.
@@ -310,9 +324,10 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 	// Resend and reset share both throttles: one budget per address and per client.
 	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	perIP := gateway.NewSignInThrottle("resend-ip", gateway.ResendPerIP, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
+	registerPerIP := gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now)
 	return registration{
-		Register: gateway.RegisterHandler(authURL, client, minResponse,
-			gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now), enforce, log),
+		Register:             gateway.RegisterHandler(authURL, client, minResponse, registerPerIP, enforce, log),
+		RegisterPerIP:        registerPerIP,
 		Verify:               gateway.VerifyHandler(authURL, siteURL, client, log, sink),
 		ResendVerification:   gateway.ResendVerificationHandler(authURL, client, minResponse, perAddress, perIP, enforce, log),
 		RequestPasswordReset: gateway.RequestPasswordResetHandler(authURL, client, minResponse, perAddress, perIP, enforce, log),

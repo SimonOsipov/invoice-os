@@ -285,8 +285,9 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	return registration{
-		Register: gateway.RegisterHandler(authURL, client, minResponse, log),
-		Verify:   gateway.VerifyHandler(authURL, siteURL, client, log, sink),
+		Register: gateway.RegisterHandler(authURL, client, minResponse,
+			gateway.NewSignInThrottle(gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now), true, log),
+		Verify: gateway.VerifyHandler(authURL, siteURL, client, log, sink),
 
 		DemoRequest: gateway.DemoRequestHandler(sink, log),
 	}

@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
 )
 
@@ -187,5 +189,47 @@ func TestIdP_SignInWrongPassword401(t *testing.T) {
 	}
 	if strings.Contains(body, "eyJ") {
 		t.Errorf("sign-in with a wrong password: body carries a JWT")
+	}
+}
+
+// GoTrue checks the password before email_not_confirmed, so a guesser learns nothing from the 403.
+// Green against the current code by design: the right-password row is the control.
+func TestIdP_UnconfirmedAccountWithAWrongPasswordLooksUnknown(t *testing.T) {
+	base := idpMailURL(t)
+	gw, _ := startGateway(t, base, 0, nil)
+	r := registrant(t, gw)
+	wrong := idpUser{email: r.email, password: r.password + "-wrong"}
+	unknown := idpUser{email: "idp-mail-" + uuid.NewString() + "@example.test", password: "pw-" + uuid.NewString()}
+
+	wrongStatus, wrongBody := signIn(t, base, wrong)
+	unknownStatus, unknownBody := signIn(t, base, unknown)
+	for name, got := range map[string]struct {
+		status int
+		body   map[string]any
+	}{"unconfirmed account, wrong password": {wrongStatus, wrongBody}, "unknown address": {unknownStatus, unknownBody}} {
+		if got.status != http.StatusBadRequest || got.body["error_code"] != "invalid_credentials" {
+			t.Errorf("GoTrue %s: status %d, body %v; want 400 invalid_credentials", name, got.status, got.body)
+		}
+	}
+	if msg := wrongBody["msg"]; msg == nil || msg != unknownBody["msg"] {
+		t.Errorf("GoTrue msg for a wrong password = %v, for an unknown address = %v; want equal and non-empty", msg, unknownBody["msg"])
+	}
+	if status, body := signIn(t, base, r); status != http.StatusBadRequest || body["error_code"] != "email_not_confirmed" {
+		t.Errorf("GoTrue right password on an unconfirmed account: status %d, body %v; want 400 email_not_confirmed", status, body)
+	}
+
+	h := newHandoff(t, base)
+	post := func(u idpUser) (int, string) {
+		t.Helper()
+		return serveJSON(t, h.signIn, "/auth/sign-in", map[string]string{"email": u.email, "password": u.password, "state": newState(t)})
+	}
+	gwWrongStatus, gwWrongBody := post(wrong)
+	gwUnknownStatus, gwUnknownBody := post(unknown)
+	if gwWrongStatus != http.StatusUnauthorized || gwUnknownStatus != http.StatusUnauthorized || gwWrongBody != gwUnknownBody {
+		t.Errorf("gateway sign-in: wrong password %d %q, unknown address %d %q; want 401 and equal bodies",
+			gwWrongStatus, gwWrongBody, gwUnknownStatus, gwUnknownBody)
+	}
+	if status, body := post(r); status != http.StatusForbidden || field(t, body, "error") != "email address not verified" {
+		t.Errorf("gateway sign-in with the right password: status %d, body %q; want 403 email address not verified", status, body)
 	}
 }

@@ -68,7 +68,7 @@ func mailEnv(t *testing.T, name string) string {
 	return strings.TrimRight(v, "/")
 }
 
-// startGateway serves the real register, confirm-page and verify handlers where the mailed link points, and returns its JSON log.
+// startGateway serves the real register, resend, confirm-page and verify handlers where the mailed link points, and returns its JSON log.
 func startGateway(t *testing.T, authBase string, minResponse time.Duration, sink gateway.ContactSink) (string, *bytes.Buffer) {
 	t.Helper()
 	authURL, err := url.Parse(authBase)
@@ -79,7 +79,11 @@ func startGateway(t *testing.T, authBase string, minResponse time.Duration, sink
 	logs := &bytes.Buffer{}
 	log := slog.New(slog.NewJSONHandler(&syncWriter{w: logs}, nil))
 	mux := http.NewServeMux()
-	mux.Handle("POST /auth/register", gateway.RegisterHandler(authURL, noRedirect, minResponse, log))
+	registerLimit := gateway.NewSignInThrottle(gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now)
+	mux.Handle("POST /auth/register", gateway.RegisterHandler(authURL, noRedirect, minResponse, registerLimit, true, log))
+	perAddress := gateway.NewSignInThrottle(gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
+	perIP := gateway.NewSignInThrottle(gateway.ResendPerIP, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
+	mux.Handle("POST /auth/resend-verification", gateway.ResendVerificationHandler(authURL, noRedirect, minResponse, perAddress, perIP, true, log))
 	verifyPage, err := gateway.VerifyPageHandler(site)
 	if err != nil {
 		t.Fatal(err)
@@ -290,6 +294,12 @@ func confirmationLink(t *testing.T, email string) string {
 	}
 	return link
 }
+
+// mailsFor is a stub until the helper polls mailpit for want mails.
+func mailsFor(t *testing.T, email string, want int) []mailpitMessage { return nil }
+
+// confirmationLinks is a stub until the helper applies actionLink to mailsFor.
+func confirmationLinks(t *testing.T, email string, want int) []string { return nil }
 
 func getJSON(t *testing.T, u string, out any) {
 	t.Helper()

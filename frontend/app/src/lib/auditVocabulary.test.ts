@@ -140,6 +140,7 @@ describe('audit vocabulary', () => {
       'workspace.provisioned',
       'invitation.sent',
       'invitation.resent',
+      'invitation.accepted',
     ]) {
       expect(literals, `${id} must be emitted by a Go writer`).toContain(id)
     }

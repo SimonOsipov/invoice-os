@@ -17,13 +17,6 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// Messages are the Design -> API contracts texts; statusForErr holds the literals once the sentinels map.
-const (
-	msgInviteNotValid = "this invite is no longer valid"
-	msgAlreadyMember  = "you already belong to a workspace"
-	msgWrongAddress   = "this invite was sent to a different email address"
-)
-
 // bodyOf is a valid {"token": ...} body of exactly n bytes.
 func bodyOf(n int) string {
 	return `{"token":"` + strings.Repeat("A", n-len(`{"token":""}`)) + `"}`

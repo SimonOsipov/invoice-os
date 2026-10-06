@@ -665,7 +665,7 @@ func TestRLS_NoDirectPoolUseOutsideTheSeam(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Scan 2 — the identity-free core is worker, CLI and two exemptions only
+// Scan 2 — the identity-free core is worker, CLI and four exemptions only
 // ---------------------------------------------------------------------------
 
 // scCoreExemption is one exemption from the ungated core. Exactly one of pkg,
@@ -712,6 +712,8 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/invoice/revalidate.go"},                      // operator CLI only, and internal/invoice is the largest HTTP-serving package in the tree
 	{file: "internal/tenancy/store.go", fn: "Me"},                 // a deliberate HTTP-path exemption, as is ProvisionWorkspace; func-scoped because ListMemberships and SetMembershipStatus share this file and ARE gated
 	{file: "internal/tenancy/store.go", fn: "ProvisionWorkspace"}, // the caller has no membership yet; the seam would refuse before the closure
+	{file: "internal/tenancy/store.go", fn: "PreviewInvitation"},  // the token is the only credential and names the invite; there is no caller to gate
+	{file: "internal/tenancy/store.go", fn: "AcceptInvitation"},   // the invitee has no membership in the invite's tenant yet; the seam would refuse before the closure
 }
 
 // scCoreSite is one call of the ungated core, attributed to the INNERMOST
@@ -3150,6 +3152,13 @@ var scSweepSubjectAllowlist = []scSweepSubjectExemption{
 	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreMe_UnknownTenant"},                                                // the tenant id has no `tenants` row at all -- a membership row would violate its FK, and Store.Me's own tenant lookup fails first anyway
 	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreListMemberships_EmptyTenantRefusesTheUnmemberedCaller"},           // AUDIT-12-07's own test: the claim IS the no-row refusal, not a fixture to seed
 	{file: "internal/tenancy/provision_test.go", fn: "newRegistrant"},                                                          // provisioning's caller is unmembered by definition
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_PreviewNamesWorkspaceRoleAndAddress"},                            // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_TheJoinedWorkspaceAnswersMe"},                                    // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AnAccountWithAWorkspaceGainsNothing"},                            // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AnotherAddressIsRefused"},                                        // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AFailedAuditRollsTheAcceptBack"},                                 // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_ConcurrentAcceptsOfOneTokenJoinOnce"},                            // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AMismatchedAddressIsRefusedAlikeWithOrWithoutAnAccount"},         // the invitee holds no membership in the invite's tenant before accepting
 }
 
 // scSweepTestFiles returns every _test.go file under internal/ (repo-relative,

@@ -290,7 +290,7 @@ What it guarantees:
   input returns `ErrNoTenant` and issues **no** statement — the helper can never run an
   unscoped query.
 - **Explicit tenant, not context-derived.** The core helper takes the tenant as an
-  argument, so it serves the worker (§8), the `tools/*` CLIs, `GET /v1/me` and `POST /v1/workspaces`.
+  argument, so it serves the worker (§8), the `tools/*` CLIs, `GET /v1/me`, `POST /v1/workspaces` and the two invite routes.
   `WithinRequestTenantTx` pulls the tenant from the request `auth.Identity` for handlers.
 
 `WithinRequestTenantTx` is **not** a thin wrapper over the core. It opens its own
@@ -304,7 +304,7 @@ visible to a plain `pgx.QueryTracer`** — pgx routes `SendBatch` through `pgx.B
 A subject that is not a UUID skips the lookup and delegates to the core unchanged: only in-process
 actors (the extraction worker, `backfill-source-rows`, `revalidate-rule-set`) reach that arm,
 because over HTTP `identityMiddleware` builds no identity for one
-(`TestIdentityMiddleware_NonUUIDSubjectBuildsNoIdentity`). `GET /v1/me` and `POST /v1/workspaces` are the two deliberate exemptions (they call `WithinTenantTx` directly).
+(`TestIdentityMiddleware_NonUUIDSubjectBuildsNoIdentity`). `GET /v1/me`, `POST /v1/workspaces`, `POST /v1/invitations/accept` and `POST /internal/invitations/preview` are the four deliberate exemptions (they call `WithinTenantTx` directly).
 
 ---
 

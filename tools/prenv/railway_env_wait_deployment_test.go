@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -658,5 +659,26 @@ func TestWaitDeployment_WindowEndNamesLastRealStatusAfterFinalTransientTick(t *t
 	e := errorLines(stdout + stderr)
 	if !strings.Contains(e, "DEPLOYING") || strings.Contains(strings.ToUpper(e), "UNREADABLE") {
 		t.Errorf("error lines must name DEPLOYING and not UNREADABLE: %q", e)
+	}
+}
+
+func TestWaitDeployment_RateLimitedTickWaitsAndCounts(t *testing.T) {
+	s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
+	setFaults(t, s, "dep", "429")
+	plantRateLimitHeaders(t, s, "retry-after: 20")
+	tmp := t.TempDir()
+	stdout, stderr, code := runWaitDeployment(t, s, waitDepExports()+runnerTempExport(tmp), upIDA)
+
+	if code != 0 {
+		t.Errorf("exit %d, want 0: a poll tick's 429 waits and retries; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if got := s.sleeps(t); !slices.Equal(got, []string{"20"}) {
+		t.Errorf("sleeps = %v, want [20]", got)
+	}
+	if n := opCount(t, s, "dep"); n != 2 {
+		t.Errorf("dep calls = %d, want 2 (the 429, then the retry of the same tick)", n)
+	}
+	if got := waitedTotal(t, tmp); got != "20" {
+		t.Errorf("railway-api-429-waited = %q, want %q: a poll tick's wait counts toward the job total", got, "20")
 	}
 }

@@ -3,13 +3,16 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -392,9 +395,11 @@ func TestRailwayAPI_GraphQLErrorIsNotRetried(t *testing.T) {
 }
 
 // guard, passes at HEAD: "Not Authorized" is a GraphQL error, fatal on the first call.
+// A Retry-After on a 200 is not a wait: only an HTTP 429 sends a call again.
 func TestRailwayAPI_NotAuthorizedIsNotRetried(t *testing.T) {
 	s := newSealedShim(t, sourceInstances(), plainOn("PORT", sealedGatewayID))
 	setFaults(t, s, "sealedAudit", "gqlerr")
+	writeFile(t, filepath.Join(s.dir, "hdr.txt"), "HTTP/2 200\r\nretry-after: 5\r\n\r\n")
 	stdout, stderr, code := s.run(t, forkExports(true, true, true), "audit-sealed-variables")
 
 	if code != 1 {
@@ -443,11 +448,506 @@ func TestRailwayAPI_HTTP4xxIsNotRetried(t *testing.T) {
 	}
 }
 
-func TestRailwayAPI_RateLimitIsNotRetried(t *testing.T) {
-	_, e := ensureEnvironmentFailsOnce(t, "429")
-	if !strings.Contains(e, "429") || !regexp.MustCompile(`(?i)rate.?limit`).MatchString(e) {
-		t.Errorf("error lines do not name the rate limit (HTTP 429): %q", e)
+var noWaitMsg = regexp.MustCompile(`(?i)no wait`)
+
+// envListWithPR lists pr-900 as ephemeral, so ensure-environment reuses it after one read.
+func envListWithPR() string {
+	return `{"data":{"environments":{"edges":[{"node":{"id":"` + persistentEnvironmentID + `","name":"production","isEphemeral":false}},` +
+		`{"node":{"id":"env-pr-900","name":"pr-900","isEphemeral":true}}]}}}`
+}
+
+// plantRateLimitHeaders makes every response of the shim carry a CRLF header dump, as curl -D writes it.
+func plantRateLimitHeaders(t *testing.T, s authShim, lines ...string) {
+	t.Helper()
+	writeFile(t, filepath.Join(s.dir, "hdr.txt"), "HTTP/2 429\r\n"+strings.Join(lines, "\r\n")+"\r\n\r\n")
+}
+
+// resetAt is an ISO-8601 UTC time d from now, in whole seconds.
+func resetAt(d time.Duration) string {
+	return time.Now().UTC().Add(d).Format("2006-01-02T15:04:05Z")
+}
+
+// rateLimitedEnvList is a shim whose envList answers faults, then lists pr-900.
+func rateLimitedEnvList(t *testing.T, headers []string, faults ...string) authShim {
+	t.Helper()
+	s := newAuthShim(t, map[string]string{"envList": envListWithPR()}, nil)
+	setFaults(t, s, "envList", faults...)
+	if len(headers) > 0 {
+		plantRateLimitHeaders(t, s, headers...)
 	}
+	return s
+}
+
+func ensurePR(t *testing.T, s authShim, extraExports string) (stdout, stderr string, code int) {
+	t.Helper()
+	return s.run(t, forkExports(true, true, true)+extraExports, "ensure-environment", "pr-900")
+}
+
+func runnerTempExport(dir string) string { return "export RUNNER_TEMP='" + dir + "'\n" }
+
+func callLogRows(t *testing.T, dir string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dir, "railway-api-calls.tsv"))
+	if err != nil {
+		t.Fatalf("the call log was not written: %v", err)
+	}
+	return strings.Split(strings.TrimSpace(string(raw)), "\n")
+}
+
+func waitedTotal(t *testing.T, dir string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dir, "railway-api-429-waited"))
+	if err != nil {
+		t.Fatalf("the 429 total was not written: %v", err)
+	}
+	return strings.TrimSpace(string(raw))
+}
+
+// sleepsWithin asserts exactly one sleep, with an integer argument in [lo, hi].
+func sleepsWithin(t *testing.T, got []string, lo, hi int) {
+	t.Helper()
+	if len(got) != 1 {
+		t.Errorf("sleeps = %v, want exactly one in [%d, %d]", got, lo, hi)
+		return
+	}
+	if n, err := strconv.Atoi(got[0]); err != nil || n < lo || n > hi {
+		t.Errorf("sleeps = %v, want one in [%d, %d]", got, lo, hi)
+	}
+}
+
+// sentTwiceIdentically asserts op was sent twice with the same body.
+func sentTwiceIdentically(t *testing.T, s authShim, op string) {
+	t.Helper()
+	var sent []railwayCall
+	for _, c := range s.calls(t) {
+		if m := gqlOperation.FindStringSubmatch(c.Query); m != nil && m[1] == op {
+			sent = append(sent, c)
+		}
+	}
+	if len(sent) != 2 {
+		t.Errorf("%s calls = %d, want 2", op, len(sent))
+		return
+	}
+	if !reflect.DeepEqual(sent[0], sent[1]) {
+		t.Errorf("the retry of %s sent a different body: %v then %v", op, sent[0], sent[1])
+	}
+}
+
+func TestRailwayAPI_RateLimitWaitsRetryAfterThenRetriesOnce(t *testing.T) {
+	s := rateLimitedEnvList(t, []string{"retry-after: 30"}, "429")
+	stdout, stderr, code := ensurePR(t, s, "")
+
+	if code != 0 {
+		t.Errorf("exit %d, want 0: a 429 waits Retry-After and retries; output = %q", code, stdout+stderr)
+	}
+	if got := s.sleeps(t); !slices.Equal(got, []string{"30"}) {
+		t.Errorf("sleeps = %v, want [30]", got)
+	}
+	sentTwiceIdentically(t, s, "envList")
+	w := warningLines(stderr)
+	if len(w) != 1 {
+		t.Fatalf("stderr warnings = %q, want exactly one", w)
+	}
+	for _, needle := range []string{"429", "30"} {
+		if !strings.Contains(w[0], needle) {
+			t.Errorf("the warning lacks %q: %q", needle, w[0])
+		}
+	}
+}
+
+func TestRailwayAPI_RateLimitWaitOfZeroRetriesAtOnce(t *testing.T) {
+	s := rateLimitedEnvList(t, []string{"retry-after: 0"}, "429")
+	stdout, stderr, code := ensurePR(t, s, "")
+
+	if code != 0 {
+		t.Errorf("exit %d, want 0; output = %q", code, stdout+stderr)
+	}
+	if got := s.sleeps(t); !slices.Equal(got, []string{"0"}) {
+		t.Errorf("sleeps = %v, want [0]", got)
+	}
+	if n := opCount(t, s, "envList"); n != 2 {
+		t.Errorf("envList calls = %d, want 2", n)
+	}
+}
+
+func TestRailwayAPI_SecondRateLimitFailsNamingTheWait(t *testing.T) {
+	s := rateLimitedEnvList(t, []string{"retry-after: 30"}, "429", "429")
+	stdout, stderr, code := ensurePR(t, s, "")
+
+	if code != 1 {
+		t.Errorf("exit %d, want 1; output = %q", code, stdout+stderr)
+	}
+	if n := opCount(t, s, "envList"); n != 2 {
+		t.Errorf("envList calls = %d, want 2: one retry, no more", n)
+	}
+	if got := s.sleeps(t); !slices.Equal(got, []string{"30"}) {
+		t.Errorf("sleeps = %v, want [30]", got)
+	}
+	e := errorLines(stdout + stderr)
+	for _, re := range []string{`429`, `(?i)second`, `\b30\b`} {
+		if !regexp.MustCompile(re).MatchString(e) {
+			t.Errorf("error lines do not match %s: %q", re, e)
+		}
+	}
+}
+
+func TestRailwayAPI_RateLimitWaitOfSixHundredIsHonoured(t *testing.T) {
+	s := rateLimitedEnvList(t, []string{"retry-after: 600"}, "429")
+	stdout, stderr, code := ensurePR(t, s, "")
+
+	if code != 0 {
+		t.Errorf("exit %d, want 0: 600 s is the limit, not over it; output = %q", code, stdout+stderr)
+	}
+	if got := s.sleeps(t); !slices.Equal(got, []string{"600"}) {
+		t.Errorf("sleeps = %v, want [600]", got)
+	}
+}
+
+func TestRailwayAPI_RateLimitOverSixHundredFailsAtOnce(t *testing.T) {
+	s := rateLimitedEnvList(t, []string{"retry-after: 601"}, "429")
+	stdout, stderr, code := ensurePR(t, s, "")
+
+	if code != 1 {
+		t.Errorf("exit %d, want 1; output = %q", code, stdout+stderr)
+	}
+	if n := opCount(t, s, "envList"); n != 1 {
+		t.Errorf("envList calls = %d, want 1", n)
+	}
+	e := errorLines(stdout + stderr)
+	for _, re := range []string{`429`, `\b601\b`, `\b600\b`} {
+		if !regexp.MustCompile(re).MatchString(e) {
+			t.Errorf("error lines do not match %s: %q", re, e)
+		}
+	}
+	if got := s.sleeps(t); len(got) != 0 {
+		t.Errorf("sleeps = %v, want none: a wait over the limit is not slept", got)
+	}
+}
+
+func TestRailwayAPI_RateLimitFallsBackToXRateLimitReset(t *testing.T) {
+	for name, reset := range map[string]string{
+		"whole second":      resetAt(120 * time.Second),
+		"fractional second": strings.TrimSuffix(resetAt(120*time.Second), "Z") + ".123Z",
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := rateLimitedEnvList(t, []string{"x-ratelimit-reset: " + reset}, "429")
+			stdout, stderr, code := ensurePR(t, s, "")
+
+			if code != 0 {
+				t.Errorf("exit %d, want 0; output = %q", code, stdout+stderr)
+			}
+			sleepsWithin(t, s.sleeps(t), 118, 121)
+		})
+	}
+}
+
+func TestRailwayAPI_RateLimitResetInThePastRetriesAtOnce(t *testing.T) {
+	s := rateLimitedEnvList(t, []string{"x-ratelimit-reset: " + resetAt(-60*time.Second)}, "429")
+	stdout, stderr, code := ensurePR(t, s, "")
+
+	if code != 0 {
+		t.Errorf("exit %d, want 0; output = %q", code, stdout+stderr)
+	}
+	if got := s.sleeps(t); !slices.Equal(got, []string{"0"}) {
+		t.Errorf("sleeps = %v, want [0]: a wait floors at 0", got)
+	}
+}
+
+func TestRailwayAPI_RateLimitResetOverSixHundredFailsAtOnce(t *testing.T) {
+	s := rateLimitedEnvList(t, []string{"x-ratelimit-reset: " + resetAt(900*time.Second)}, "429")
+	stdout, stderr, code := ensurePR(t, s, "")
+
+	if code != 1 {
+		t.Errorf("exit %d, want 1; output = %q", code, stdout+stderr)
+	}
+	if n := opCount(t, s, "envList"); n != 1 {
+		t.Errorf("envList calls = %d, want 1", n)
+	}
+	e := errorLines(stdout + stderr)
+	for _, re := range []string{`429`, `\b(898|899|900|901)\b`, `\b600\b`} {
+		if !regexp.MustCompile(re).MatchString(e) {
+			t.Errorf("error lines do not match %s: %q", re, e)
+		}
+	}
+	if got := s.sleeps(t); len(got) != 0 {
+		t.Errorf("sleeps = %v, want none", got)
+	}
+}
+
+func TestRailwayAPI_RateLimitWithNoUsableWaitFailsAtOnce(t *testing.T) {
+	cases := []struct {
+		name    string
+		headers []string
+	}{
+		{"no headers", nil},
+		{"retry-after as an HTTP date", []string{"retry-after: Wed, 21 Oct 2026 07:28:00 GMT"}},
+		{"unparseable reset", []string{"x-ratelimit-reset: garbage"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := rateLimitedEnvList(t, c.headers, "429")
+			stdout, stderr, code := ensurePR(t, s, "")
+
+			if code != 1 {
+				t.Errorf("exit %d, want 1; output = %q", code, stdout+stderr)
+			}
+			if n := opCount(t, s, "envList"); n != 1 {
+				t.Errorf("envList calls = %d, want 1", n)
+			}
+			e := errorLines(stdout + stderr)
+			if !strings.Contains(e, "429") || !noWaitMsg.MatchString(e) {
+				t.Errorf("error lines do not name HTTP 429 and say Railway gave no wait: %q", e)
+			}
+			if got := s.sleeps(t); len(got) != 0 {
+				t.Errorf("sleeps = %v, want none", got)
+			}
+		})
+	}
+}
+
+func TestRailwayAPI_RateLimitResendsAOnceMutationAfterTheWait(t *testing.T) {
+	s := newAuthShim(t, map[string]string{
+		"createPrEnvironment": `{"data":{"environmentCreate":{"id":"env-pr-900","name":"pr-900","isEphemeral":true}}}`,
+	}, nil)
+	// The lookup sees no pr-900; the re-query after the create sees it.
+	writeFile(t, filepath.Join(s.dir, "envList.seq"), compactJSON(t, envListWithout())+"\n"+compactJSON(t, envListWithPR())+"\n")
+	setFaults(t, s, "createPrEnvironment", "429")
+	plantRateLimitHeaders(t, s, "retry-after: 5")
+	stdout, stderr, code := ensurePR(t, s, "")
+
+	if code != 0 {
+		t.Errorf("exit %d, want 0: Railway did not run a call it answered with 429; output = %q", code, stdout+stderr)
+	}
+	sentTwiceIdentically(t, s, "createPrEnvironment")
+	if got := s.sleeps(t); len(got) == 0 || got[0] != "5" {
+		t.Errorf("sleeps = %v, want the first to be 5", got)
+	}
+}
+
+func compactJSON(t *testing.T, s string) string {
+	t.Helper()
+	var v any
+	if err := json.Unmarshal([]byte(s), &v); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func TestRailwayAPI_RateLimitWaitKeepsTheTransientBudget(t *testing.T) {
+	const cmd = "ensure-environment"
+	s := rateLimitedEnvList(t, []string{"retry-after: 5"}, "429", "timeout", "timeout")
+	tmp := t.TempDir()
+	stdout, stderr, code := ensurePR(t, s, runnerTempExport(tmp))
+
+	if code != 0 {
+		t.Errorf("exit %d, want 0: the wait spends no transient attempt; output = %q", code, stdout+stderr)
+	}
+	if n := opCount(t, s, "envList"); n != 4 {
+		t.Errorf("envList calls = %d, want 4", n)
+	}
+	if got := s.sleeps(t); !slices.Equal(got, []string{"5", "5", "10"}) {
+		t.Errorf("sleeps = %v, want [5 5 10]", got)
+	}
+	want := []string{cmd + "\t1\tratelimit", cmd + "\t2\ttransient", cmd + "\t3\ttransient", cmd + "\t4\tok"}
+	if got := callLogRows(t, tmp); !slices.Equal(got, want) {
+		t.Errorf("call log = %q, want %q", got, want)
+	}
+	var succeeded []string
+	for _, w := range warningLines(stderr) {
+		if strings.Contains(w, "succeeded on attempt") {
+			succeeded = append(succeeded, w)
+		}
+	}
+	if len(succeeded) != 1 || !strings.Contains(succeeded[0], "attempt 3/3") {
+		t.Errorf("success warnings = %q, want one naming attempt 3/3", succeeded)
+	}
+}
+
+func TestRailwayAPI_RateLimitAfterATransientFault(t *testing.T) {
+	const cmd = "ensure-environment"
+	t.Run("then success", func(t *testing.T) {
+		s := rateLimitedEnvList(t, []string{"retry-after: 5"}, "timeout", "429")
+		tmp := t.TempDir()
+		stdout, stderr, code := ensurePR(t, s, runnerTempExport(tmp))
+
+		if code != 0 {
+			t.Errorf("exit %d, want 0; output = %q", code, stdout+stderr)
+		}
+		if got := s.sleeps(t); !slices.Equal(got, []string{"5", "5"}) {
+			t.Errorf("sleeps = %v, want [5 5]", got)
+		}
+		want := []string{cmd + "\t1\ttransient", cmd + "\t2\tratelimit", cmd + "\t3\tok"}
+		if got := callLogRows(t, tmp); !slices.Equal(got, want) {
+			t.Errorf("call log = %q, want %q", got, want)
+		}
+		var succeeded []string
+		for _, w := range warningLines(stderr) {
+			if strings.Contains(w, "succeeded on attempt") {
+				succeeded = append(succeeded, w)
+			}
+		}
+		if len(succeeded) != 1 || !strings.Contains(succeeded[0], "attempt 2/3") {
+			t.Errorf("success warnings = %q, want one naming attempt 2/3", succeeded)
+		}
+	})
+	t.Run("a second 429 fails", func(t *testing.T) {
+		s := rateLimitedEnvList(t, []string{"retry-after: 5"}, "429", "timeout", "429")
+		stdout, stderr, code := ensurePR(t, s, "")
+
+		if code != 1 {
+			t.Errorf("exit %d, want 1; output = %q", code, stdout+stderr)
+		}
+		if n := opCount(t, s, "envList"); n != 3 {
+			t.Errorf("envList calls = %d, want 3", n)
+		}
+		if got := s.sleeps(t); !slices.Equal(got, []string{"5", "5"}) {
+			t.Errorf("sleeps = %v, want [5 5]", got)
+		}
+		if e := errorLines(stdout + stderr); !strings.Contains(e, "429") || !regexp.MustCompile(`(?i)second`).MatchString(e) {
+			t.Errorf("error lines do not name the second 429: %q", e)
+		}
+	})
+}
+
+func TestRailwayAPI_RateLimitHeadersAreReadInAnyCaseWithCRLF(t *testing.T) {
+	t.Run("Retry-After", func(t *testing.T) {
+		s := rateLimitedEnvList(t, nil, "429")
+		writeFile(t, filepath.Join(s.dir, "hdr.txt"), "HTTP/2 429\r\nRetry-After: 30\r\n\r\n")
+		stdout, stderr, code := ensurePR(t, s, "")
+
+		if code != 0 {
+			t.Errorf("exit %d, want 0: a CRLF line end does not spoil the value; output = %q", code, stdout+stderr)
+		}
+		if got := s.sleeps(t); !slices.Equal(got, []string{"30"}) {
+			t.Errorf("sleeps = %v, want [30]", got)
+		}
+	})
+	t.Run("X-RATELIMIT-RESET alone", func(t *testing.T) {
+		s := rateLimitedEnvList(t, nil, "429")
+		writeFile(t, filepath.Join(s.dir, "hdr.txt"), "HTTP/2 429\r\nX-RATELIMIT-RESET: "+resetAt(120*time.Second)+"\r\n\r\n")
+		stdout, stderr, code := ensurePR(t, s, "")
+
+		if code != 0 {
+			t.Errorf("exit %d, want 0; output = %q", code, stdout+stderr)
+		}
+		sleepsWithin(t, s.sleeps(t), 118, 121)
+	})
+}
+
+func TestRailwayAPI_UnusableRetryAfterFallsBackToTheReset(t *testing.T) {
+	for _, bad := range []string{"retry-after: -5", "retry-after: 1.5"} {
+		t.Run(bad+" with a reset", func(t *testing.T) {
+			s := rateLimitedEnvList(t, []string{bad, "x-ratelimit-reset: " + resetAt(60*time.Second)}, "429")
+			stdout, stderr, code := ensurePR(t, s, "")
+
+			if code != 0 {
+				t.Errorf("exit %d, want 0; output = %q", code, stdout+stderr)
+			}
+			sleepsWithin(t, s.sleeps(t), 58, 61)
+		})
+		t.Run(bad+" without a reset", func(t *testing.T) {
+			s := rateLimitedEnvList(t, []string{bad}, "429")
+			stdout, stderr, code := ensurePR(t, s, "")
+
+			if code != 1 {
+				t.Errorf("exit %d, want 1; output = %q", code, stdout+stderr)
+			}
+			if n := opCount(t, s, "envList"); n != 1 {
+				t.Errorf("envList calls = %d, want 1", n)
+			}
+			if e := errorLines(stdout + stderr); !strings.Contains(e, "429") || !noWaitMsg.MatchString(e) {
+				t.Errorf("error lines do not name HTTP 429 and say Railway gave no wait: %q", e)
+			}
+			if got := s.sleeps(t); len(got) != 0 {
+				t.Errorf("sleeps = %v, want none", got)
+			}
+		})
+	}
+}
+
+func TestRailwayAPI_RetryAfterWinsOverTheReset(t *testing.T) {
+	s := rateLimitedEnvList(t, []string{"retry-after: 7", "x-ratelimit-reset: " + resetAt(300*time.Second)}, "429")
+	stdout, stderr, code := ensurePR(t, s, "")
+
+	if code != 0 {
+		t.Errorf("exit %d, want 0; output = %q", code, stdout+stderr)
+	}
+	if got := s.sleeps(t); !slices.Equal(got, []string{"7"}) {
+		t.Errorf("sleeps = %v, want [7]", got)
+	}
+}
+
+func TestRailwayAPI_RateLimitWaitsAreCappedPerJob(t *testing.T) {
+	for _, c := range []struct {
+		name, waited string
+		code         int
+		sleeps       []string
+		file         string
+	}{
+		{"590 s waited, 30 s asked", "590", 1, nil, "590"},
+		{"570 s waited, 30 s asked", "570", 0, []string{"30"}, "600"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := rateLimitedEnvList(t, []string{"retry-after: 30"}, "429")
+			tmp := t.TempDir()
+			writeFile(t, filepath.Join(tmp, "railway-api-429-waited"), c.waited+"\n")
+			stdout, stderr, code := ensurePR(t, s, runnerTempExport(tmp))
+
+			if code != c.code {
+				t.Errorf("exit %d, want %d; output = %q", code, c.code, stdout+stderr)
+			}
+			if got := s.sleeps(t); !slices.Equal(got, c.sleeps) {
+				t.Errorf("sleeps = %v, want %v", got, c.sleeps)
+			}
+			if got := waitedTotal(t, tmp); got != c.file {
+				t.Errorf("railway-api-429-waited = %q, want %q", got, c.file)
+			}
+			if c.code == 1 {
+				e := errorLines(stdout + stderr)
+				for _, re := range []string{`429`, `\b30\b`, `\b590\b`, `\b600\b`} {
+					if !regexp.MustCompile(re).MatchString(e) {
+						t.Errorf("error lines do not match %s: %q", re, e)
+					}
+				}
+			}
+		})
+	}
+
+	// RUNNER_TEMP is unset (runBashScript strips it), so the total is per process.
+	t.Run("per process without RUNNER_TEMP", func(t *testing.T) {
+		s := newAuthShim(t, map[string]string{"envList": envListWithout()}, nil)
+		setFaults(t, s, "envList", "429")
+		setFaults(t, s, "createPrEnvironment", "429")
+		plantRateLimitHeaders(t, s, "retry-after: 400")
+		stdout, stderr, code := ensurePR(t, s, "")
+
+		if code != 1 {
+			t.Errorf("exit %d, want 1; output = %q", code, stdout+stderr)
+		}
+		if n := opCount(t, s, "createPrEnvironment"); n != 1 {
+			t.Errorf("createPrEnvironment calls = %d, want 1: the second wait would pass the total", n)
+		}
+		got := 0
+		for _, sl := range s.sleeps(t) {
+			if sl == "400" {
+				got++
+			}
+		}
+		if got != 1 {
+			t.Errorf("sleeps = %v, want exactly one 400", s.sleeps(t))
+		}
+		e := errorLines(stdout + stderr)
+		if n := strings.Count(e, "400"); n < 2 {
+			t.Errorf("error lines name 400 %d time(s), want the wait and the seconds already waited: %q", n, e)
+		}
+		if !regexp.MustCompile(`\b600\b`).MatchString(e) {
+			t.Errorf("error lines do not name the 600 s total: %q", e)
+		}
+	})
 }
 
 func TestRailwayAPI_ConnectionResetIsNotRetried(t *testing.T) {
@@ -716,14 +1216,19 @@ func TestRailwayAPI_CallLogOneLinePerAttempt(t *testing.T) {
 		faults []string
 		code   int
 		want   []string
+		hdr    []string
 	}{
-		{"transient then ok", []string{"timeout"}, 0, []string{cmd + "\t1\ttransient", cmd + "\t2\tok"}},
-		{"exhausted", []string{"503", "timeout", "503"}, 1, []string{cmd + "\t1\ttransient", cmd + "\t2\ttransient", cmd + "\t3\ttransient"}},
-		{"fatal", []string{"gqlerr"}, 1, []string{cmd + "\t1\tfatal"}},
+		{"transient then ok", []string{"timeout"}, 0, []string{cmd + "\t1\ttransient", cmd + "\t2\tok"}, nil},
+		{"exhausted", []string{"503", "timeout", "503"}, 1, []string{cmd + "\t1\ttransient", cmd + "\t2\ttransient", cmd + "\t3\ttransient"}, nil},
+		{"fatal", []string{"gqlerr"}, 1, []string{cmd + "\t1\tfatal"}, nil},
+		{"429 then ok", []string{"429"}, 0, []string{cmd + "\t1\tratelimit", cmd + "\t2\tok"}, []string{"retry-after: 1"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newSealedShim(t, sourceInstances(), plainOn("PORT", sealedGatewayID))
 			setFaults(t, s, "sealedAudit", c.faults...)
+			if len(c.hdr) > 0 {
+				plantRateLimitHeaders(t, s, c.hdr...)
+			}
 			tmp := t.TempDir()
 			stdout, stderr, code := s.run(t, forkExports(true, true, true)+"export RUNNER_TEMP='"+tmp+"'\n", cmd)
 

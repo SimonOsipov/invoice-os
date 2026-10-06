@@ -474,3 +474,22 @@ func TestReportAPICalls_MalformedLogStillExitsZero(t *testing.T) {
 		}
 	})
 }
+
+func TestReportAPICalls_CountsARateLimitRetryAsOneCall(t *testing.T) {
+	tmp := t.TempDir()
+	s := newSealedShim(t, sourceInstances(), plainOn("PORT", sealedGatewayID))
+	setFaults(t, s, "sealedAudit", "429")
+	plantRateLimitHeaders(t, s, "retry-after: 1")
+	if stdout, stderr, code := s.run(t, forkExports(true, true, true)+"export RUNNER_TEMP='"+tmp+"'\n", "audit-sealed-variables"); code != 0 {
+		t.Errorf("audit-sealed-variables exit %d, want 0 after the 429 wait; output = %q", code, stdout+stderr)
+	}
+
+	line := reportLine(t, tmp)
+	c := reportCounts.FindStringSubmatch(line)
+	if c == nil {
+		t.Fatalf("report line does not start \"Railway API: <n> calls, <n> attempts, <n> retried;\": %q", line)
+	}
+	if got := []string{c[1], c[2], c[3]}; !slices.Equal(got, []string{"1", "2", "1"}) {
+		t.Errorf("calls, attempts, retried = %v, want [1 2 1]; line = %q", got, line)
+	}
+}

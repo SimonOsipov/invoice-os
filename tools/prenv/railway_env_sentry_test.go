@@ -638,34 +638,3 @@ func TestSentryVerdictTruthTableIncludingShapesNoFixtureCovers(t *testing.T) {
 		})
 	}
 }
-
-func TestDevEnvYmlRunsSetSentryOffOnceInPrepareEnvOnPullRequestsOnly(t *testing.T) {
-	devEnv := readWorkflow(t, "dev-env.yml")
-	for _, f := range prOnlyPrepareEnvStepFaults(devEnv, "set-sentry-off", sentryOffRunCmd) {
-		t.Errorf(".github/workflows/dev-env.yml: %s", f)
-	}
-
-	aiFake, sentryOff := -1, -1
-	for _, job := range workflowJobsOf(devEnv) {
-		if job.name != "prepare-env" {
-			continue
-		}
-		for _, s := range job.steps() {
-			if len(invocations(s.keys["run"], "set-ai-fake")) > 0 {
-				aiFake = s.index
-			}
-			if len(invocations(s.keys["run"], "set-sentry-off")) > 0 {
-				sentryOff = s.index
-			}
-		}
-	}
-	if aiFake < 0 {
-		t.Fatal("control: no set-ai-fake step found in prepare-env; the scan is broken")
-	}
-	switch {
-	case sentryOff < 0:
-		t.Errorf("no set-sentry-off step in prepare-env, want one after the set-ai-fake step (step %d)", aiFake)
-	case sentryOff <= aiFake:
-		t.Errorf("the set-sentry-off step is prepare-env step %d, want after the set-ai-fake step (step %d)", sentryOff, aiFake)
-	}
-}

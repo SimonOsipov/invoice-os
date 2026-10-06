@@ -413,38 +413,6 @@ func TestGatewayTokenServicesMatchTheRoutedFleet(t *testing.T) {
 	}
 }
 
-func TestDevEnvYmlRunsSetForkGatewayTokenAfterForkAuth(t *testing.T) {
-	devEnv := readWorkflow(t, "dev-env.yml")
-	for _, f := range prOnlyPrepareEnvStepFaults(devEnv, "set-fork-gateway-token", forkGatewayTokenRunCmd) {
-		t.Errorf(".github/workflows/dev-env.yml: %s", f)
-	}
-
-	const forkAuthCmd = `bash scripts/ci/railway-env.sh set-fork-auth "$ENV_ID"`
-	auth, token := -1, -1
-	for _, job := range workflowJobsOf(devEnv) {
-		if job.name != "prepare-env" {
-			continue
-		}
-		for _, s := range job.steps() {
-			if slices.Contains(invocations(s.keys["run"], "set-fork-auth"), forkAuthCmd) {
-				auth = s.index
-			}
-			if len(invocations(s.keys["run"], "set-fork-gateway-token")) > 0 {
-				token = s.index
-			}
-		}
-	}
-	if auth < 0 {
-		t.Fatal("control: no set-fork-auth step found in prepare-env; the scan is broken")
-	}
-	switch {
-	case token < 0:
-		t.Errorf("no set-fork-gateway-token step in prepare-env, want the step directly after the set-fork-auth step (step %d)", auth)
-	case token != auth+1:
-		t.Errorf("the set-fork-gateway-token step is prepare-env step %d, want %d: directly after the set-fork-auth step", token, auth+1)
-	}
-}
-
 func TestSetProductionGatewayToken_RefusesAForkID(t *testing.T) {
 	const usage = "usage: railway-env.sh set-production-gateway-token <environment-id>"
 

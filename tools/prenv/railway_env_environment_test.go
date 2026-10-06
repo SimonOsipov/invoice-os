@@ -18,12 +18,13 @@ import (
 )
 
 const (
-	forkEnvironmentUsage  = "usage: railway-env.sh set-fork-environment <environment-id>"
-	forkEnvSecret         = "sentinel-secret-dsn"
-	forkEnvSecretSibling  = `"DATABASE_URL":"sentinel-secret-dsn"`
-	prOnlyCondition       = "github.event_name == 'pull_request'"
-	forkEnvironmentRunCmd = `bash scripts/ci/railway-env.sh set-fork-environment "$ENV_ID"`
-	forkSelfTestRunCmd    = "bash scripts/ci/railway-env.sh set-fork-environment --self-test"
+	forkEnvironmentUsage = "usage: railway-env.sh set-fork-environment <environment-id>"
+	forkEnvSecret        = "sentinel-secret-dsn"
+	forkEnvSecretSibling = `"DATABASE_URL":"sentinel-secret-dsn"`
+	prOnlyCondition      = "github.event_name == 'pull_request'"
+	forkVarsBeforeRunCmd = `bash scripts/ci/railway-env.sh fork-vars-before-urls "$ENV_ID"`
+	forkVarsAfterRunCmd  = `bash scripts/ci/railway-env.sh fork-vars-after-urls "$ENV_ID" "$GATEWAY_URL" "$APP_URL" "$LANDING_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL"`
+	forkSelfTestRunCmd   = "bash scripts/ci/railway-env.sh set-fork-environment --self-test"
 )
 
 // curlShim prepends a curl to PATH that logs each call instead of reaching the network.
@@ -600,11 +601,6 @@ func invocations(run, needle string) []string {
 	return out
 }
 
-// forkEnvironmentStepFaults reports each way dev-env.yml departs from one PR-only prepare-env step running set-fork-environment.
-func forkEnvironmentStepFaults(devEnv string) []string {
-	return prOnlyPrepareEnvStepFaults(devEnv, "set-fork-environment", forkEnvironmentRunCmd)
-}
-
 // prOnlyPrepareEnvStepFaults reports each way dev-env.yml departs from one PR-only prepare-env step
 // whose one command naming subcommand is runCmd.
 func prOnlyPrepareEnvStepFaults(devEnv, subcommand, runCmd string) []string {
@@ -729,43 +725,67 @@ func readWorkflow(t *testing.T, name string) string {
 	return string(raw)
 }
 
-func TestDevEnvYmlWiresSetForkEnvironmentIntoPrepareEnv(t *testing.T) {
-	for _, c := range []struct {
-		name, yaml string
-		bad        bool
-	}{
-		{"the planned step", fxDevEnv, false},
-		{"no if:", strings.Replace(fxDevEnv, fxForkStep, strings.Replace(fxForkStep, fxForkIf, "", 1), 1), true},
-		{"a push-and-PR if:", strings.Replace(fxDevEnv, fxForkStep, strings.Replace(fxForkStep, fxForkIf, "        if: github.event_name != 'workflow_dispatch'\n", 1), 1), true},
-		{"no RAILWAY_API_TOKEN", strings.Replace(fxDevEnv, fxForkStep, strings.Replace(fxForkStep, fxForkToken, "", 1), 1), true},
-		{"continue-on-error", strings.Replace(fxDevEnv, fxForkStep, fxForkStep+"        continue-on-error: true\n", 1), true},
-		{"the step in deploy-gateway", strings.Replace(strings.Replace(fxDevEnv, fxForkStep, "", 1), fxStampStep, fxForkStep+fxStampStep, 1), true},
-		{"a second run in health-gate", strings.Replace(fxDevEnv, "            exit 1\n", "            bash scripts/ci/railway-env.sh set-fork-environment \"$ENV_ID\"\n            exit 1\n", 1), true},
-		{"the step commented out", strings.Replace(fxDevEnv, fxForkStep, commentOut(fxForkStep), 1), true},
-	} {
-		if c.bad && c.yaml == fxDevEnv {
-			t.Fatalf("fixture %q: the edit did not apply", c.name)
-		}
-		if faults := forkEnvironmentStepFaults(c.yaml); (len(faults) > 0) != c.bad {
-			t.Errorf("fixture %q: faults %v, want faults = %v", c.name, faults, c.bad)
-		}
-	}
-
-	devEnv := readWorkflow(t, "dev-env.yml")
-	// Control: the parser reads the set-ai-fake step's if: and env in the real prepare-env job.
-	var control []workflowStep
-	for _, job := range workflowJobsOf(devEnv) {
+// devEnvJobsRunning returns the dev-env.yml jobs with a run step that invokes sub; an echo of the name does not count.
+func devEnvJobsRunning(t *testing.T, sub string) []string {
+	t.Helper()
+	var jobs []string
+	for _, job := range workflowJobsOf(readWorkflow(t, "dev-env.yml")) {
 		for _, s := range job.steps() {
-			if len(invocations(s.keys["run"], "set-ai-fake")) > 0 && job.name == "prepare-env" {
-				control = append(control, s)
+			for range invocations(s.keys["run"], sub) {
+				jobs = append(jobs, job.name)
 			}
 		}
 	}
-	if len(control) != 1 || control[0].keys["if"] != prOnlyCondition || control[0].env["RAILWAY_API_TOKEN"] == "" {
-		t.Fatalf("control: the parser does not read the set-ai-fake step in prepare-env (%d found); the scan is broken", len(control))
+	return jobs
+}
+
+// requireForkPassControl fails unless the workflow scans can see both fork passes as run steps in dev-env.yml.
+func requireForkPassControl(t *testing.T) {
+	t.Helper()
+	dir := filepath.Join(repoRoot(t), ".github", "workflows")
+	for _, sub := range []string{passSub, afterSub} {
+		hits, read := workflowsNaming(t, dir, sub)
+		if read < 3 || !slices.Contains(hits, "dev-env.yml") {
+			t.Fatalf("control: read %d workflow file(s) and found %s in %v; the scan is broken", read, sub, hits)
+		}
+		if jobs := devEnvJobsRunning(t, sub); !slices.Equal(jobs, []string{"prepare-env"}) {
+			t.Fatalf("control: %s runs as a step in dev-env.yml jobs %v, want [prepare-env]; a name inside an echo does not count", sub, jobs)
+		}
 	}
-	for _, f := range forkEnvironmentStepFaults(devEnv) {
-		t.Errorf(".github/workflows/dev-env.yml: %s", f)
+}
+
+func TestDevEnvYmlWiresTheForkPassesIntoPrepareEnv(t *testing.T) {
+	devEnv := readWorkflow(t, "dev-env.yml")
+	var prep *workflowJob
+	for _, job := range workflowJobsOf(devEnv) {
+		if job.name == "prepare-env" {
+			prep = &job
+		}
+	}
+	if prep == nil {
+		t.Fatal("control: workflowJobsOf finds no prepare-env job in dev-env.yml")
+	}
+	hasResolve := false
+	steps := prep.steps()
+	for _, s := range steps {
+		hasResolve = hasResolve || s.keys["id"] == "resolve"
+	}
+	if len(steps) < 10 || !hasResolve {
+		t.Fatalf("control: prepare-env parsed to %d steps (resolve found: %v), want >= 10 and a resolve step", len(steps), hasResolve)
+	}
+	for _, l := range prep.lines {
+		if strings.HasPrefix(l, "    continue-on-error") {
+			t.Errorf("the prepare-env job carries a job-level %q", strings.TrimSpace(l))
+		}
+	}
+
+	for _, c := range []struct{ sub, cmd string }{{passSub, forkVarsBeforeRunCmd}, {afterSub, forkVarsAfterRunCmd}} {
+		if n := len(devEnvJobsRunning(t, c.sub)); n != 1 {
+			t.Errorf("control: %d commands in dev-env.yml run %s, want exactly 1", n, c.sub)
+		}
+		for _, f := range prOnlyPrepareEnvStepFaults(devEnv, c.sub, c.cmd) {
+			t.Errorf(".github/workflows/dev-env.yml: %s", f)
+		}
 	}
 }
 
@@ -1273,11 +1293,8 @@ func TestNoWorkflowRunsSetProductionEnvironment(t *testing.T) {
 	})
 
 	dir := filepath.Join(repoRoot(t), ".github", "workflows")
-	// Floor and control: every workflow is read, and a sibling subcommand two of them run is found.
-	control, read := workflowsNaming(t, dir, "set-fork-environment")
-	if read < 3 || !slices.Contains(control, "dev-env.yml") || !slices.Contains(control, "railway-invariants.yml") {
-		t.Fatalf("control: read %d workflow file(s) and found set-fork-environment in %v; the scan is broken", read, control)
-	}
+	// Floor and control: every workflow is read, and dev-env.yml runs both fork passes.
+	requireForkPassControl(t)
 	if hits, _ := workflowsNaming(t, dir, productionNeedle); len(hits) != 0 {
 		t.Errorf("%v run or name %s; production's ENVIRONMENT is written by hand, once, and no workflow writes it", hits, productionNeedle)
 	}

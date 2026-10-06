@@ -60,17 +60,28 @@ func subcommandArgs(step []string, sub string) ([]string, bool) {
 	return nil, false
 }
 
-// forkAuthArgFaults reports each argument or token of the two fork auth steps that
-// does not come from the output it must come from.
-func forkAuthArgFaults(steps [][]string) []string {
+// forkPassArgFaults reports each argument, env entry or token of the two fork pass
+// steps that does not come from the output it must come from.
+func forkPassArgFaults(steps [][]string) []string {
 	const envID = "${{ steps.resolve.outputs.environment_id }}"
 	const token = "${{ secrets.RAILWAY_API_TOKEN }}"
+	urlEnv := []struct{ env, key string }{
+		{"GATEWAY_URL", "gateway_url"},
+		{"APP_URL", "app_url"},
+		{"LANDING_URL", "landing_url"},
+		{"OPS_CONSOLE_URL", "ops_console_url"},
+		{"SUPPORT_CONSOLE_URL", "support_console_url"},
+	}
+	wantAfter := []string{envID}
+	for _, u := range urlEnv {
+		wantAfter = append(wantAfter, "${{ steps.urls.outputs."+u.key+" }}")
+	}
 	want := map[string][]string{
-		"set-fork-auth":      {envID},
-		"set-fork-auth-site": {envID, "${{ steps.urls.outputs.landing_url }}"},
+		"fork-vars-before-urls": {envID},
+		"fork-vars-after-urls":  wantAfter,
 	}
 	var faults []string
-	for _, sub := range []string{"set-fork-auth", "set-fork-auth-site"} {
+	for _, sub := range []string{"fork-vars-before-urls", "fork-vars-after-urls"} {
 		found := 0
 		for _, s := range steps {
 			args, ok := subcommandArgs(s, sub)
@@ -81,8 +92,19 @@ func forkAuthArgFaults(steps [][]string) []string {
 			if !slices.Equal(args, want[sub]) {
 				faults = append(faults, sub+" arguments resolve to "+strings.Join(args, " ")+", want "+strings.Join(want[sub], " "))
 			}
-			if got := stepEnv(s)["RAILWAY_API_TOKEN"]; got != token {
+			env := stepEnv(s)
+			if got := env["RAILWAY_API_TOKEN"]; got != token {
 				faults = append(faults, sub+" RAILWAY_API_TOKEN is "+got+", want "+token)
+			}
+			if got := env["ENV_ID"]; got != envID {
+				faults = append(faults, sub+" ENV_ID is "+got+", want "+envID)
+			}
+			if sub == "fork-vars-after-urls" {
+				for _, u := range urlEnv {
+					if got, w := env[u.env], "${{ steps.urls.outputs."+u.key+" }}"; got != w {
+						faults = append(faults, sub+" env "+u.env+" is "+got+", want "+w)
+					}
+				}
 			}
 		}
 		if found != 1 {
@@ -92,36 +114,15 @@ func forkAuthArgFaults(steps [][]string) []string {
 	return faults
 }
 
-func TestForkAuthStepsPassTheResolvedEnvironmentAndLandingURL(t *testing.T) {
-	const good = "jobs:\n  prepare-env:\n    steps:\n" +
-		"      - name: a\n        env:\n          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}\n" +
-		"          ENV_ID: ${{ steps.resolve.outputs.environment_id }}\n" +
-		"        run: bash scripts/ci/railway-env.sh set-fork-auth \"$ENV_ID\"\n" +
-		"      - name: b\n        env:\n          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}\n" +
-		"          ENV_ID: ${{ steps.resolve.outputs.environment_id }}\n" +
-		"          LANDING_URL: ${{ steps.urls.outputs.landing_url }}\n" +
-		"        run: bash scripts/ci/railway-env.sh set-fork-auth-site \"$ENV_ID\" \"$LANDING_URL\"\n"
-	parse := func(src string) [][]string { return jobSteps(jobBlock(yamlCode(src), "prepare-env")) }
-	if f := forkAuthArgFaults(parse(good)); len(f) != 0 {
-		t.Fatalf("the good fixture reports %v; the scan is broken", f)
+func TestForkPassStepsPassTheResolvedEnvironmentAndTheURLs(t *testing.T) {
+	steps := prepareEnvSteps(t)
+	if len(steps) < 10 {
+		t.Fatalf("control: prepare-env parsed to %d step(s), want at least 10; the scan is broken", len(steps))
 	}
-	for _, c := range []struct{ name, src, want string }{
-		{"site gets the environment twice", strings.Replace(good, `"$ENV_ID" "$LANDING_URL"`, `"$ENV_ID" "$ENV_ID"`, 1), "set-fork-auth-site arguments"},
-		{"site gets no URL", strings.Replace(good, ` "$LANDING_URL"`, "", 1), "set-fork-auth-site arguments"},
-		{"site env reads the app URL", strings.Replace(good, "outputs.landing_url", "outputs.app_url", 1), "set-fork-auth-site arguments"},
-		{"auth gets a landing URL", strings.Replace(good, `set-fork-auth "$ENV_ID"`, `set-fork-auth "$ENV_ID" "$LANDING_URL"`, 1), "set-fork-auth arguments"},
-		{"auth gets no id", strings.Replace(good, `set-fork-auth "$ENV_ID"`, `set-fork-auth`, 1), "set-fork-auth arguments"},
-		{"project token", strings.Replace(good, "secrets.RAILWAY_API_TOKEN", "secrets.RAILWAY_API_DEV_TOKEN", 1), "RAILWAY_API_TOKEN is"},
-	} {
-		if c.src == good {
-			t.Fatalf("fixture %q: the edit did not apply", c.name)
-		}
-		if f := forkAuthArgFaults(parse(c.src)); !slices.ContainsFunc(f, func(s string) bool { return strings.Contains(s, c.want) }) {
-			t.Errorf("fixture %q: faults %v, want one naming %q", c.name, f, c.want)
-		}
+	if len(stepsRunning(steps, forkVarsAfterRE)) == 0 {
+		t.Fatal("control: no prepare-env step runs fork-vars-after-urls; there are no URL arguments to read")
 	}
-
-	for _, f := range forkAuthArgFaults(prepareEnvSteps(t)) {
+	for _, f := range forkPassArgFaults(steps) {
 		t.Errorf(".github/workflows/dev-env.yml prepare-env: %s", f)
 	}
 }

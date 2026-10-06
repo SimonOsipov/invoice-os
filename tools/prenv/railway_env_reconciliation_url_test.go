@@ -200,34 +200,3 @@ func TestSetForkReconciliationURLUsageAndPersistentRefusal(t *testing.T) {
 		shim.requireOnPath(t)
 	})
 }
-
-func TestDevEnvYmlRunsSetForkReconciliationURLOnceInPrepareEnvOnPullRequestsOnly(t *testing.T) {
-	devEnv := readWorkflow(t, "dev-env.yml")
-	for _, f := range prOnlyPrepareEnvStepFaults(devEnv, "set-fork-reconciliation-url", reconciliationURLRunCmd) {
-		t.Errorf(".github/workflows/dev-env.yml: %s", f)
-	}
-
-	sentryOff, reconURL := -1, -1
-	for _, job := range workflowJobsOf(devEnv) {
-		if job.name != "prepare-env" {
-			continue
-		}
-		for _, s := range job.steps() {
-			if len(invocations(s.keys["run"], "set-sentry-off")) > 0 {
-				sentryOff = s.index
-			}
-			if len(invocations(s.keys["run"], "set-fork-reconciliation-url")) > 0 {
-				reconURL = s.index
-			}
-		}
-	}
-	if sentryOff < 0 {
-		t.Fatal("control: no set-sentry-off step found in prepare-env; the scan is broken")
-	}
-	switch {
-	case reconURL < 0:
-		t.Errorf("no set-fork-reconciliation-url step in prepare-env, want one after the set-sentry-off step (step %d)", sentryOff)
-	case reconURL <= sentryOff:
-		t.Errorf("the set-fork-reconciliation-url step is prepare-env step %d, want after the set-sentry-off step (step %d)", reconURL, sentryOff)
-	}
-}

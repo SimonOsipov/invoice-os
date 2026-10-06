@@ -327,8 +327,8 @@ func TestIdPHarnessNeverUsesTheSuperuserDSN(t *testing.T) {
 const prOnlyIf = "github.event_name == 'pull_request'"
 
 var (
-	setForkAuthRE     = regexp.MustCompile(`railway-env\.sh set-fork-auth(\s|$)`)
-	setForkAuthSiteRE = regexp.MustCompile(`railway-env\.sh set-fork-auth-site(\s|$)`)
+	forkVarsBeforeRE  = regexp.MustCompile(`railway-env\.sh fork-vars-before-urls(\s|$)`)
+	forkVarsAfterRE   = regexp.MustCompile(`railway-env\.sh fork-vars-after-urls(\s|$)`)
 	auditSealedRE     = regexp.MustCompile(`railway-env\.sh audit-sealed-variables`)
 	assertDSNsRE      = regexp.MustCompile(`railway-env\.sh assert-db-dsns`)
 	expectedJSONLitRE = regexp.MustCompile(`expected_json='\[([^\]]*)\]'`)
@@ -381,36 +381,63 @@ func prepareEnvSteps(t *testing.T) [][]string {
 	return steps
 }
 
-func TestSetForkAuthRunsFirstAfterResolveOnPullRequestOnly(t *testing.T) {
+// stepsRunningInOtherJobs counts the steps outside prepare-env that run re, and the steps it scanned.
+func stepsRunningInOtherJobs(lines []string, re *regexp.Regexp) (hits []string, scanned int) {
+	for _, j := range devEnvJobNames(lines) {
+		if j == "prepare-env" {
+			continue
+		}
+		for _, s := range jobSteps(jobBlock(lines, j)) {
+			scanned++
+			if re.MatchString(runText(s)) {
+				hits = append(hits, j)
+			}
+		}
+	}
+	return hits, scanned
+}
+
+func TestForkVarsBeforeURLsRunsFirstAfterResolveOnPullRequestOnly(t *testing.T) {
+	lines := devEnvCode(t)
 	steps := prepareEnvSteps(t)
 	resolve := stepWithID(steps, "resolve")
+	if len(steps) < 10 {
+		t.Fatalf("control: prepare-env parsed to %d step(s), want at least 10; the scan is broken", len(steps))
+	}
 	later := append(stepsRunning(steps, auditSealedRE), stepsRunning(steps, assertDSNsRE)...)
 	if len(later) == 0 {
 		t.Fatal("prepare-env runs neither audit-sealed-variables nor assert-db-dsns; the ordering has nothing to compare")
 	}
 
-	got := stepsRunning(steps, setForkAuthRE)
+	got := stepsRunning(steps, forkVarsBeforeRE)
 	if len(got) != 1 {
-		t.Fatalf("dev-env.yml prepare-env has %d step(s) running `railway-env.sh set-fork-auth`, want 1", len(got))
+		t.Fatalf("dev-env.yml prepare-env has %d step(s) running `railway-env.sh fork-vars-before-urls`, want 1", len(got))
 	}
 	i := got[0]
 	if g := stepIf(steps[i]); g != prOnlyIf {
-		t.Errorf("the set-fork-auth step's if: reads %q, want %q; push and dispatch target the persistent environment", g, prOnlyIf)
+		t.Errorf("the fork-vars-before-urls step's if: reads %q, want %q; push and dispatch target the persistent environment", g, prOnlyIf)
 	}
 	if i != resolve+1 {
-		t.Errorf("set-fork-auth is prepare-env step %d, want %d (the first step after `resolve`)", i, resolve+1)
+		t.Errorf("fork-vars-before-urls is prepare-env step %d, want %d (the first step after `resolve`)", i, resolve+1)
 	}
 	for _, j := range later {
 		if i > j {
-			t.Errorf("set-fork-auth (step %d) runs after %q (step %d); it must precede the audit and every DSN assert", i, runText(steps[j]), j)
+			t.Errorf("fork-vars-before-urls (step %d) runs after %q (step %d); it must precede the audit and every DSN assert", i, runText(steps[j]), j)
 		}
 	}
 	text := strings.Join(steps[i], "\n")
 	if strings.Contains(strings.ToLower(text), "landing") {
-		t.Errorf("the set-fork-auth step references a landing URL; it runs before `urls` and set-fork-auth-site owns GOTRUE_SITE_URL:\n%s", text)
+		t.Errorf("the fork-vars-before-urls step references a landing URL; it runs before `urls`:\n%s", text)
 	}
 	if !strings.Contains(text, "steps.resolve.outputs.environment_id") {
-		t.Errorf("the set-fork-auth step does not read steps.resolve.outputs.environment_id; it would write to no fork:\n%s", text)
+		t.Errorf("the fork-vars-before-urls step does not read steps.resolve.outputs.environment_id; it would write to no fork:\n%s", text)
+	}
+	hits, scanned := stepsRunningInOtherJobs(lines, forkVarsBeforeRE)
+	if scanned == 0 {
+		t.Fatal("control: no step outside prepare-env was scanned; the one-job check is vacuous")
+	}
+	if len(hits) != 0 {
+		t.Errorf("fork-vars-before-urls also runs in job(s) %v; it belongs to prepare-env only", hits)
 	}
 }
 
@@ -429,27 +456,46 @@ func TestDevEnvAuditStepNamesTheAllowlist(t *testing.T) {
 	}
 }
 
-func TestSetForkAuthSiteRunsRightAfterURLs(t *testing.T) {
+func TestForkVarsAfterURLsRunsRightAfterURLs(t *testing.T) {
 	lines := devEnvCode(t)
 	if needs := jobNeeds(jobBlock(lines, "deploy-gateway")); !slices.Contains(needs, "prepare-env") {
 		t.Fatalf("deploy-gateway needs %v, not prepare-env; no prepare-env step is guaranteed to precede it", needs)
 	}
 	steps := prepareEnvSteps(t)
 	urls := stepWithID(steps, "urls")
+	if urls < 0 {
+		t.Fatal("control: the `urls` step is not found in prepare-env")
+	}
 
-	got := stepsRunning(steps, setForkAuthSiteRE)
+	got := stepsRunning(steps, forkVarsAfterRE)
 	if len(got) != 1 {
-		t.Fatalf("dev-env.yml prepare-env has %d step(s) running `railway-env.sh set-fork-auth-site`, want 1", len(got))
+		t.Fatalf("dev-env.yml prepare-env has %d step(s) running `railway-env.sh fork-vars-after-urls`, want 1", len(got))
 	}
 	i := got[0]
 	if g := stepIf(steps[i]); g != prOnlyIf {
-		t.Errorf("the set-fork-auth-site step's if: reads %q, want %q", g, prOnlyIf)
+		t.Errorf("the fork-vars-after-urls step's if: reads %q, want %q", g, prOnlyIf)
 	}
 	if i != urls+1 {
-		t.Errorf("set-fork-auth-site is prepare-env step %d, want %d (immediately after `urls`)", i, urls+1)
+		t.Errorf("fork-vars-after-urls is prepare-env step %d, want %d (immediately after `urls`)", i, urls+1)
 	}
-	if text := strings.Join(steps[i], "\n"); !strings.Contains(text, "steps.urls.outputs.landing_url") {
-		t.Errorf("the set-fork-auth-site step does not read steps.urls.outputs.landing_url:\n%s", text)
+	report := -1
+	for j, s := range steps {
+		if name, _ := stepKey(s, "name"); name == "Report Railway API calls" {
+			report = j
+		}
+	}
+	if report < 0 {
+		t.Fatal("control: the `Report Railway API calls` step is not found in prepare-env")
+	}
+	if i > report {
+		t.Errorf("fork-vars-after-urls (step %d) runs after `Report Railway API calls` (step %d)", i, report)
+	}
+	hits, scanned := stepsRunningInOtherJobs(lines, forkVarsAfterRE)
+	if scanned == 0 {
+		t.Fatal("control: no step outside prepare-env was scanned; the one-job check is vacuous")
+	}
+	if len(hits) != 0 {
+		t.Errorf("fork-vars-after-urls also runs in job(s) %v; it belongs to prepare-env only", hits)
 	}
 }
 

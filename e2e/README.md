@@ -162,8 +162,8 @@ ctl measure '[data-testid="evidence-bundle-drawer"]' --props width,padding-left 
 - **`login <firm|inhouse|developer|support> --env <pr-N> [--role admin|preparer|reviewer]`** creates the 8 demo accounts once per environment (admin, preparer and reviewer on tenants 1111 and 2222, plus a developer and a support staff account), signs in and saves a storage state. `--role` applies to `firm` and `inhouse` only. A repeat call reuses the account and the state (`reused: true`, `gatewayWrites: 0`). `--env production` exits 1: production has no demo account, so use read-only probes there.
 - **`measure <selector> --props <p1,p2> [--viewport <width>]`** prints the box and computed styles of every match in the open `playwright-cli` session, after animations settle. Write a custom property as `--props=--x`. A selector with no match exits 1.
 - **Session:** `--session`, else `$PLAYWRIGHT_CLI_SESSION`, else `default`.
-- **Store:** `<worktree>/.ralph/ctl/<env>/`, gitignored. `accounts.json` (mode 0600) holds the passwords; `<persona>-<role>.json` are the storage states. Output never prints a password. Delete the directory to re-create the accounts.
-- **Browser:** `ctl` never drives your `playwright-cli` session. `login` prints the `next` commands. Run `pwc list --json` first, and `open` only when the session is absent (`open` restarts an open one), then `state-load` the saved file, then `goto` the URL. `playwright-cli` blocks `file:` URLs.
+- **Store:** `<worktree>/.ralph/ctl/<env>/`, gitignored. `accounts.json` (mode 0600) holds the passwords; `<persona>-<role>.json` (`developer.json`, `support.json` for staff) are the storage states. Output never prints a password. Delete the directory to re-create the accounts.
+- **Browser:** `login` signs in in its own browser and never drives your `playwright-cli` session. It prints the `next` commands. Run `pwc list --json` first, and `open` only when the session is absent (`open` restarts an open one), then `state-load` the saved file, then `goto` the URL. `playwright-cli` blocks `file:` URLs.
 - **Read-only:** apart from `login`'s account creation and grants, click nothing that writes tenant data.
 
 ```bash

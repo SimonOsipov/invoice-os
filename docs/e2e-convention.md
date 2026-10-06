@@ -127,7 +127,7 @@ What a spec still cannot assume is an empty table:
   - `ctl login` (`e2e/ctl/login.ts`, agents only): per PR environment, the first call registers 8 accounts. Two are
     the e2e admins that `signInAs` already uses (1111 and 2222) and add no rows. The other six leave 4 `auth.users` and 4 `memberships` rows
     (preparer and reviewer on 1111 and 2222) and 2 `auth.users` and 2 `staff_members` rows (developer, support). A rebuilt environment or a retry of a failed
-    `provisionAll` re-creates the two staff accounts and adds 2 more `staff_members` rows.
+    `provisionAll` re-creates the two staff accounts and adds 2 more `auth.users` and 2 more `staff_members` rows.
 
   This is harmless: every other run registers a fresh address and provisions for a fresh
   subject, and the e2e member rows are at most three per tenant (admin, preparer, reviewer), all

@@ -68,6 +68,13 @@ var (
 // ErrAlreadyProvisioned means the caller already has a workspace.
 var ErrAlreadyProvisioned = errors.New("tenancy: already provisioned")
 
+// Sentinels for previewing and accepting an invitation.
+var (
+	ErrInvitationNotValid      = errors.New("tenancy: invitation not valid")
+	ErrAlreadyMember           = errors.New("tenancy: already a member")
+	ErrInvitationEmailMismatch = errors.New("tenancy: invitation email mismatch")
+)
+
 // MeLoader resolves the caller's tenant and their own membership (role, display
 // name, email). The handler takes this function type rather than a pool so its
 // HTTP contract is unit-testable without a database; Store.Me is the real loader.

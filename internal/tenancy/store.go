@@ -295,3 +295,13 @@ func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) 
 	}
 	return updated, nil
 }
+
+// PreviewInvitation is a red-phase stub.
+func (s *Store) PreviewInvitation(ctx context.Context, token string) (InvitationPreview, error) {
+	return InvitationPreview{}, nil
+}
+
+// AcceptInvitation is a red-phase stub.
+func (s *Store) AcceptInvitation(ctx context.Context, token string) (Tenant, string, string, error) {
+	return Tenant{}, "", "", nil
+}

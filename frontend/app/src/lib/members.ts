@@ -600,7 +600,7 @@ export const MEMBER_UNBACKED: Record<
 }
 
 // ---------------------------------------------------------------------------
-// The invitations wire and the invite rules (RESEND-07-02)
+// The invitations wire and the invite rules
 // ---------------------------------------------------------------------------
 
 /** One item of the invitations endpoints (internal/tenancy `InviteResult`; the list adds fields this module ignores). */
@@ -730,7 +730,7 @@ export function serverRefusedAddresses(message: string, chips: readonly string[]
 const HOUR_MS = 3_600_000
 const DAY_MS = 24 * HOUR_MS
 
-/** D7: whole days with an hour of slack, so a browser clock a little behind still reads 7 days. */
+/** Whole days with an hour of slack, so a browser clock a little behind still reads 7 days. */
 export function inviteStatusLine(i: PendingInvite, nowMs: number): string {
   if (i.delivery === 'failed') return 'Email not sent'
   const expires = Date.parse(i.expiresAt)
@@ -741,7 +741,7 @@ export function inviteStatusLine(i: PendingInvite, nowMs: number): string {
   return `Expires in ${days} ${days === 1 ? 'day' : 'days'}`
 }
 
-/** D8: the flash after a send or a resend; `null` when nothing was sent. */
+/** The flash after a send or a resend; `null` when nothing was sent. */
 export function inviteSentNotice(items: readonly PendingInvite[]): { tone: 'ok' | 'failed'; text: string } | null {
   const n = items.length
   if (n === 0) return null

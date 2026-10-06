@@ -1024,6 +1024,37 @@ describe('RESEND-07-04', () => {
       expect(screen.queryByTestId('members-invites-error')).toBeNull()
     })
 
+    it('MembersView: a failed invitations fetch links the disabled Invite to its reason', async () => {
+      const gw = gateway({ list: [refuse(500, ERR_INTERNAL)] })
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} />)
+
+      const error = await screen.findByTestId('members-invites-error')
+      expect(error.id).not.toBe('')
+      expect(inviteButton().disabled).toBe(true)
+      expect(inviteButton().getAttribute('aria-describedby')).toBe(error.id)
+    })
+
+    it('MembersView: Invite is disabled while any invitations refetch is in flight, rows stay mounted', async () => {
+      const refetch = hold()
+      const gw = gateway({
+        list: [answer(listOf(wire({ id: 'i1', email: 'zed@x.ng' }))), refetch.responder],
+        resend: [refuse(409, ERR_NOT_PENDING)],
+      })
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} />)
+      await landed()
+      expect(inviteButton().disabled).toBe(false)
+
+      clickResendOn(inviteRows()[0])
+      await waitFor(() => expect(gw.lists()).toHaveLength(2))
+      expect(inviteButton().disabled, 'a POST now could race the held GET').toBe(true)
+      expect(memberRows()).toHaveLength(2)
+      expect(screen.queryByText('Loading members…')).toBeNull()
+
+      await act(async () => refetch.resolve(listOf(wire({ id: 'i1', email: 'zed@x.ng' }))))
+      await landed()
+      expect(inviteButton().disabled).toBe(false)
+    })
+
     it('MembersView: a refetch that fails after the list landed keeps the rows, shows both reasons and disables Invite until Retry lands', async () => {
       const retried = hold()
       const gw = gateway({

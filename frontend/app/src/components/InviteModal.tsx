@@ -56,7 +56,7 @@ export function InviteModal({ existing, onSend, onClose }: InviteModalProps) {
       try {
         await onSend(sent, role)
       } catch (err) {
-        // D5 layer 2: the server named addresses the client accepted. Mark them, re-send once.
+        // Layer 2: the server named addresses the client accepted. Mark them, re-send once.
         const bad = serverRefusedAddresses(toApiError(err).message, all)
         if (bad.length === 0) throw err
         const nextRefused = [...refused, ...bad]

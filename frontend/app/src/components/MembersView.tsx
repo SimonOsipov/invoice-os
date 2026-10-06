@@ -81,10 +81,11 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
   // tear down and re-register the Escape listener on every keystroke in the search box.
   const closeDrawer = useCallback(() => setDrawerId(null), [])
   const inviteNoteId = useId()
+  const invitesErrorId = useId()
 
   const base = gatewayBase()
   const admin = viewerIsAdmin(members)
-  // Armed for an admin only (D4); re-armed when the viewer's own row becomes an active admin.
+  // Armed for an admin only; re-armed when the viewer's own row becomes an active admin.
   const list = useAsync<InvitationWire[]>(
     () => (base ? listInvitations(ctx.authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
     { immediate: base != null && admin, deps: [admin] },
@@ -105,7 +106,7 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
   const listFirstLoad = base != null && admin && !invitesLanded && (list.status === 'idle' || list.status === 'loading')
   const pendingInvites = admin ? invites : []
 
-  // The 404/409 reason of a resend; it outlives the refetch it triggers (N4).
+  // The 404/409 reason of a resend; it outlives the refetch it triggers.
   const [staleReason, setStaleReason] = useState<string | null>(null)
   const [resending, setResending] = useState<ReadonlySet<string>>(new Set())
   const [flash, setFlash] = useState<{ tone: 'ok' | 'failed'; text: string } | null>(null)
@@ -176,7 +177,8 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
   const rolesStatusForRoster = ctx.rolesState === 'empty' ? 'ready' : ctx.rolesState
   const surface = rolesSurface(rolesStatusForRoster, ctx.membersState)
   const showLoading = surface === 'loading' || (surface === 'roster' && listFirstLoad)
-  const inviteReady = admin && invitesLanded && list.status !== 'error'
+  const inviteReady = admin && invitesLanded && list.status !== 'error' && list.status !== 'loading'
+  const listFailed = admin && list.status === 'error'
   const showAdminOnly = surface === 'roster' && !admin
   // RolesView.tsx:68-71's own shape: only the fetch(es) that actually failed get retried.
   const retryRoster = useCallback(() => {
@@ -237,7 +239,7 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
           disabled={!inviteReady}
           onClick={openInvite}
           title={showAdminOnly ? INVITE_ADMIN_ONLY : undefined}
-          aria-describedby={showAdminOnly ? inviteNoteId : undefined}
+          aria-describedby={showAdminOnly ? inviteNoteId : listFailed ? invitesErrorId : undefined}
           data-testid="members-invite"
           className="v2-btn pf-btn"
           style={{
@@ -268,6 +270,7 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
       {(staleReason || list.status === 'error') && (
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 16 }}>
           <div
+            id={invitesErrorId}
             data-testid="members-invites-error"
             style={{ flex: 1, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12.5, lineHeight: 1.5, color: 'var(--status-red-text)' }}
           >

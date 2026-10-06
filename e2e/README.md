@@ -145,6 +145,35 @@ pnpm --filter @invoice-os/e2e test:unit
 pnpm --filter @invoice-os/e2e test:hooks
 ```
 
+## Agent control CLI (`ctl`)
+
+`ctl` is for agents, not CI. It replaces hand-driven browser sessions on a PR environment with three commands that print one JSON object each: stdout and exit 0, or stderr and exit 1 (failure) or 2 (usage). It needs Node >= 22.18, which runs the TypeScript directly (`node --import ./ctl/tsResolve.mjs ./ctl/main.ts`), so `e2e/ctl` uses erasable syntax only (`erasableSyntaxOnly`, checked by `typecheck`).
+
+```bash
+ctl() { pnpm -s --filter @invoice-os/e2e ctl "$@"; }
+pwc() { pnpm -s --filter @invoice-os/e2e exec playwright-cli "$@"; }
+
+ctl env pr-348                                  # { env, environmentId, urls, dark }
+ctl login firm --env pr-348 --role reviewer     # sign in, save a storage state, print "next"
+ctl measure '[data-testid="evidence-bundle-drawer"]' --props width,padding-left --viewport 1440
+```
+
+- **`env <pr-N|production>`** resolves the five service URLs from Railway and lists dark domains in `dark` (exit 1). It reads `~/.railway/config.json`, whose token expires after about an hour: run `railway whoami`, else `railway login`.
+- **`login <firm|inhouse|developer|support> --env <pr-N> [--role admin|preparer|reviewer]`** creates the 8 demo accounts once per environment (admin, preparer and reviewer on tenants 1111 and 2222, plus a developer and a support staff account), signs in and saves a storage state. `--role` applies to `firm` and `inhouse` only. A repeat call reuses the account and the state (`reused: true`, `gatewayWrites: 0`). `--env production` exits 1: production has no demo account, so use read-only probes there.
+- **`measure <selector> --props <p1,p2> [--viewport <width>]`** prints the box and computed styles of every match in the open `playwright-cli` session, after animations settle. Write a custom property as `--props=--x`. A selector with no match exits 1.
+- **Session:** `--session`, else `$PLAYWRIGHT_CLI_SESSION`, else `default`.
+- **Store:** `<worktree>/.ralph/ctl/<env>/`, gitignored. `accounts.json` (mode 0600) holds the passwords; `<persona>-<role>.json` are the storage states. Output never prints a password. Delete the directory to re-create the accounts.
+- **Browser:** `ctl` never drives your `playwright-cli` session. `login` prints the `next` commands. Run `pwc list --json` first, and `open` only when the session is absent (`open` restarts an open one), then `state-load` the saved file, then `goto` the URL. `playwright-cli` blocks `file:` URLs.
+- **Read-only:** apart from `login`'s account creation and grants, click nothing that writes tenant data.
+
+```bash
+pwc list --json
+pwc -s=s1 open
+pwc -s=s1 state-load "$PWD/.ralph/ctl/pr-348/firm-reviewer.json"
+pwc -s=s1 goto https://app-pr-348.up.railway.app
+ctl measure 'h1' --props font-size --session s1
+```
+
 ## How CI runs them
 
 `dev-env.yml`'s `e2e` job runs **smoke → api**, in that order, on pull requests only. The

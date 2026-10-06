@@ -28,7 +28,7 @@ name: Dev Env (deploy full fleet + verify)
 # (internal/platform/db/demopurge.go), between the reset and the seed. It is gated
 # like the seed, by ENVIRONMENT and GATEWAY_DB_BOOTSTRAP (db.BootstrapEnabled),
 # and reaches only the four seeded demo tenants (db.DemoTenants). A fork's gateway
-# gets ENVIRONMENT=development from set-fork-environment, so it purges.
+# gets ENVIRONMENT=development from fork-vars-after-urls, so it purges.
 # Production's gateway reads ENVIRONMENT=production, set once by hand with
 # railway-env.sh set-production-environment, so it does not.
 #
@@ -36,7 +36,7 @@ name: Dev Env (deploy full fleet + verify)
 # `!= 'workflow_dispatch'`. Only a PR targets an ephemeral fork; push and
 # dispatch both target the persistent environment, whose variables and domains
 # are the SOURCE OF TRUTH and must never be reconciled/overwritten. Guarding on
-# `!= workflow_dispatch` would let a push run `reconcile-urls` against the live
+# `!= workflow_dispatch` would let a push run `fork-vars-after-urls` against the live
 # environment, overwriting VITE_GATEWAY_URL / CORS_ALLOWED_ORIGINS with hosts
 # that `urls` merely discovered. `urls` below now PREFERS the custom domain, so
 # today that write would land the same api./app./www.ascomply.com values back.
@@ -330,27 +330,19 @@ jobs:
       # and workflow_dispatch. Load-bearing, not cosmetic, for two independent
       # reasons: (1) on those paths the target is the PERSISTENT environment,
       # which is not a fork and is the thing forks are reconciled *against*, so
-      # reconciling it would rewrite live infrastructure (see the reconcile-urls
-      # step below for the concrete damage); (2) railway-env.sh authenticates
+      # reconciling it would rewrite live infrastructure (see the header for the
+      # concrete damage); (2) railway-env.sh authenticates
       # with `Authorization: Bearer`, which the dispatch path's Railway PROJECT
       # token cannot satisfy. Drop the guard and every dispatch run breaks.
       # ----------------------------------------------------------------------
 
       # First after `resolve`: GoTrue must never boot a fork without its own key.
-      # GOTRUE_SITE_URL waits for `urls` (set-fork-auth-site).
-      - name: Write the fork's auth configuration (never in the persistent env)
+      - name: Write the fork's secrets and auth configuration (never in the persistent env)
         if: github.event_name == 'pull_request'
         env:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
-        run: bash scripts/ci/railway-env.sh set-fork-auth "$ENV_ID"
-
-      - name: Write the fork's gateway token (never in the persistent env)
-        if: github.event_name == 'pull_request'
-        env:
-          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
-        run: bash scripts/ci/railway-env.sh set-fork-gateway-token "$ENV_ID"
+        run: bash scripts/ci/railway-env.sh fork-vars-before-urls "$ENV_ID"
 
       - name: Audit sealed variables in the source environment (only the auth allowlist may be sealed)
         if: github.event_name == 'pull_request'
@@ -456,28 +448,8 @@ jobs:
           echo "$out" >> "$GITHUB_OUTPUT"
           echo "$out" | tr '\n' ' '
 
-      - name: Write the fork's auth site URL
-        if: github.event_name == 'pull_request'
-        env:
-          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
-          LANDING_URL: ${{ steps.urls.outputs.landing_url }}
-        run: bash scripts/ci/railway-env.sh set-fork-auth-site "$ENV_ID" "$LANDING_URL"
-
-      # Must run after `urls` (consumes the discovered values) and before any
-      # service that bakes or reads them deploys.
-      #
-      # PR ONLY, and this is the sharpest edge in the file. The persistent
-      # environment's URL variables are the SOURCE OF TRUTH; this step overwrites
-      # them with whatever `urls` discovered. `urls` now PREFERS the custom
-      # domain, so that write would currently land the same
-      # api./app./www.ascomply.com values back — coincidence, not protection: one
-      # service lacking a custom domain restores the *.up.railway.app rewrite, and
-      # because Vite bakes VITE_* at BUILD time, the very next SPA deploy would
-      # ship a bundle pointing at the wrong origin, with CORS reset to match.
-      # Guarding on `!= workflow_dispatch` instead of `== pull_request` is exactly
-      # how a push trigger would have done that silently on the first merge.
-      - name: Point the fork's URL variables at the fork (never at the source env)
+      # PR only: the persistent environment's variables are the source of truth.
+      - name: Write the fork's URLs, fake modes, Sentry blanks and ENVIRONMENT (never in the persistent env)
         if: github.event_name == 'pull_request'
         env:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
@@ -487,46 +459,7 @@ jobs:
           LANDING_URL: ${{ steps.urls.outputs.landing_url }}
           OPS_CONSOLE_URL: ${{ steps.urls.outputs.ops_console_url }}
           SUPPORT_CONSOLE_URL: ${{ steps.urls.outputs.support_console_url }}
-        run: |
-          bash scripts/ci/railway-env.sh reconcile-urls \
-            "$ENV_ID" "$GATEWAY_URL" "$APP_URL" "$LANDING_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL"
-
-      # PR ONLY: on push/dispatch the target
-      # is the persistent environment, whose AI keys are an operator's
-      # and must never be blanked by CI. No continue-on-error: a silent
-      # failure would leave a PR environment holding a usable key.
-      - name: Force AI and Jev fake mode and blank both AI keys in the fork (never in the persistent env)
-        if: github.event_name == 'pull_request'
-        env:
-          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
-        run: bash scripts/ci/railway-env.sh set-ai-fake "$ENV_ID"
-
-      # PR ONLY: forks copy production's Sentry DSNs and token, and Vite bakes
-      # VITE_* at build, so this must precede every deploy.
-      - name: Blank every Sentry variable in the fork (never in the persistent env)
-        if: github.event_name == 'pull_request'
-        env:
-          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
-        run: bash scripts/ci/railway-env.sh set-sentry-off "$ENV_ID"
-
-      # PR ONLY: a fork is reused per PR, so it never inherits a production write made after it was created.
-      - name: Point the fork gateway at the reconciliation service (never in the persistent env)
-        if: github.event_name == 'pull_request'
-        env:
-          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
-        run: bash scripts/ci/railway-env.sh set-fork-reconciliation-url "$ENV_ID"
-
-      # PR ONLY: a fork inherits production's ENVIRONMENT, and the gateway needs
-      # `development` there to serve the mock issuer and seed.
-      - name: Set the fork gateway's ENVIRONMENT to development (never in the persistent env)
-        if: github.event_name == 'pull_request'
-        env:
-          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
-        run: bash scripts/ci/railway-env.sh set-fork-environment "$ENV_ID"
+        run: bash scripts/ci/railway-env.sh fork-vars-after-urls "$ENV_ID" "$GATEWAY_URL" "$APP_URL" "$LANDING_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL"
 
       # The call log lives in $RUNNER_TEMP, which the runner sets for every step.
       - name: Report Railway API calls
@@ -539,7 +472,7 @@ jobs:
   #    GATEWAY_MOCK_ISSUER is an enable flag, not a URL, and forks fine; only
   #    a `-tags mockissuer` (PR) build honours it.
   #    CORS_ALLOWED_ORIGINS is set per-environment by prepare-env's
-  #    `reconcile-urls`: measured in pr-67, a fork inherits development's list.
+  #    `fork-vars-after-urls`: measured in pr-67, a fork inherits development's list.
   deploy-gateway:
     name: Deploy gateway → ${{ needs.prepare-env.outputs.environment_label || needs.prepare-env.outputs.environment }}
     needs: [await-ci, prepare-env]
@@ -786,7 +719,7 @@ jobs:
   # 4. Deploy the four SPAs in parallel, only after the gateway is healthy.
   #    Vite bakes VITE_* at BUILD time (frontend/*/Dockerfile), so these images
   #    ship whatever the service variables hold now — pointed at THIS environment
-  #    by prepare-env's `reconcile-urls`.
+  #    by prepare-env's `fork-vars-after-urls`.
   deploy-spas:
     name: Deploy ${{ matrix.service }} → ${{ needs.prepare-env.outputs.environment_label || needs.prepare-env.outputs.environment }}
     needs: [health-gate, prepare-env]

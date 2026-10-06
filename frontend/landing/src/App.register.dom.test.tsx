@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
+/// <reference types="node" />
 // The registration window, driven through App: entries, form, outcomes. Setup mirrors App.signIn.dom.test.tsx.
 import { act, createElement, type CSSProperties } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -1045,5 +1046,170 @@ describe('adversarial: the window among its neighbours', () => {
     const again = document.querySelector<HTMLElement>(`${DIALOG}[aria-label="${LOGIN}"]`)
     expect(again, 'control: the sign-in window reopens').not.toBeNull()
     expect(again!.textContent).not.toContain("We couldn't open your workspace.")
+  })
+})
+
+describe('the resend control on the check-your-email view', () => {
+  const ADA = 'ada@corp.example'
+  const RESEND = 'Send the link again'
+  const SENDING = 'Sending…'
+  // D10 copy, pinned here and not imported: a wording change is a deliberate edit here and in the story.
+  const SENT = `If ${ADA} still needs verifying, a new link is on its way. Use the newest one.`
+  const FAILED = 'The link could not be sent right now. Try again shortly.'
+  const RESEND_URL = 'https://gw.x/auth/resend-verification'
+
+  // Registration answers 202; every resend call goes to `resend`.
+  function routedFetch(resend: () => Response | Promise<Response>) {
+    const fetchMock = vi.fn().mockImplementation(async (url: unknown) => (String(url).endsWith('/auth/register') ? json(202, { status: 'verification_pending' }) : resend()))
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  function resendCalls(fetchMock: { mock: { calls: unknown[][] } }): [string, RequestInit][] {
+    return (fetchMock.mock.calls as [string, RequestInit][]).filter(([url]) => String(url).endsWith('/auth/resend-verification'))
+  }
+
+  async function checkView(): Promise<HTMLElement> {
+    const d = await openRegistration()
+    await fillForm(d, { email: ADA })
+    await submit(d)
+    expect(d.textContent, 'control: the check-your-email view shows').toContain('Check your email')
+    return d
+  }
+
+  function resendButton(d: ParentNode): HTMLButtonElement {
+    const b = Array.from(d.querySelectorAll<HTMLButtonElement>('button.ds-btn')).find((x) => x.textContent?.trim() === RESEND || x.textContent?.trim() === SENDING)
+    expect(b, `expected a "${RESEND}" button`).toBeDefined()
+    return b as HTMLButtonElement
+  }
+
+  async function click(el: HTMLElement): Promise<void> {
+    await act(async () => {
+      el.click()
+    })
+    await settle()
+  }
+
+  function statusNotes(d: ParentNode): string[] {
+    return Array.from(d.querySelectorAll('[role="status"]')).map((n) => n.textContent?.trim() ?? '')
+  }
+
+  it('the check-your-email view offers Send the link again above Close', async () => {
+    routedFetch(() => json(202, { status: 'accepted' }))
+    await mountApp()
+    const d = await checkView()
+
+    const buttons = Array.from(d.querySelectorAll<HTMLButtonElement>('button.ds-btn'))
+    expect(buttons.map((b) => b.textContent?.trim())).toEqual([RESEND, 'Close'])
+    for (const b of buttons) {
+      expect(b.className).toBe('ds-btn ds-btn--outline ds-btn--md')
+      expect(b.style.width).toBe('100%')
+    }
+    const headerClose = d.querySelector<HTMLButtonElement>('button[aria-label="Close"]')
+    expect(headerClose, 'the header Close control stays').not.toBeNull()
+    expect(headerClose!.classList.contains('ds-btn')).toBe(false)
+  })
+
+  it('Send the link again posts sentTo once and disables only itself while sending', async () => {
+    const fetchMock = routedFetch(() => new Promise<Response>(() => undefined))
+    await mountApp()
+    const d = await checkView()
+    const btn = resendButton(d)
+    const close = byText(d, 'Close') as HTMLButtonElement
+
+    await click(btn)
+    await click(btn)
+
+    const calls = resendCalls(fetchMock)
+    expect(calls, 'one POST for two clicks').toHaveLength(1)
+    expect(calls[0][0]).toBe(RESEND_URL)
+    expect(calls[0][1].method).toBe('POST')
+    expect(JSON.parse(calls[0][1].body as string)).toStrictEqual({ email: ADA })
+    expect(btn.disabled).toBe(true)
+    expect(btn.textContent?.trim()).toBe(SENDING)
+    expect(close.disabled, 'Close stays enabled').toBe(false)
+  })
+
+  it('every 202 shows the same sent notice', async () => {
+    const answers = [() => json(202, { status: 'accepted' }), () => json(202, {})]
+    let n = 0
+    routedFetch(() => answers[n++]())
+    await mountApp()
+    const d = await checkView()
+    const btn = resendButton(d)
+
+    for (const [i] of answers.entries()) {
+      await click(btn)
+      expect(n, `click ${i + 1} sent a request`).toBe(i + 1)
+      expect(statusNotes(d), `answer ${i + 1}`).toEqual([SENT])
+      expect(alerts(d), `answer ${i + 1}: no alert`).toEqual([])
+      expect(btn.disabled).toBe(false)
+      expect(btn.textContent?.trim()).toBe(RESEND)
+    }
+  })
+
+  it('a failed resend shows the failure alert and re-enables the button', async () => {
+    const cases: [string, () => Response | Promise<Response>][] = [
+      ['400', () => json(400, { error: 'invalid email address' })],
+      ['502', () => json(502, { error: 'bad gateway' })],
+      ['503', () => json(503, { error: 'registration is not configured' })],
+      ['network', () => Promise.reject(new TypeError('Failed to fetch'))],
+      ['gateway unset', () => json(202, { status: 'accepted' })],
+    ]
+    for (const [name, make] of cases) {
+      let held = false
+      routedFetch(() => (held ? new Promise<Response>(() => undefined) : make()))
+      await remountApp()
+      const d = await checkView()
+      const btn = resendButton(d)
+      if (name === 'gateway unset') vi.stubEnv('VITE_GATEWAY_URL', '')
+
+      await click(btn)
+
+      expect(alerts(d), name).toEqual([FAILED])
+      expect(statusNotes(d), `${name}: no sent notice`).toEqual([])
+      expect(btn.disabled, `${name}: re-enabled`).toBe(false)
+      expect(btn.textContent?.trim(), name).toBe(RESEND)
+
+      held = true
+      vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.x')
+      await click(btn)
+      expect(alerts(d), `${name}: the old alert is gone before the answer`).toEqual([])
+      expect(btn.disabled, `${name}: sending`).toBe(true)
+    }
+  })
+
+  it('closing the window during a resend leaves no late update', async () => {
+    const late: [string, (settleFetch: (r: Response | Error) => void) => void][] = [
+      ['202', (f) => f(json(202, { status: 'accepted' }))],
+      ['network failure', (f) => f(new TypeError('Failed to fetch'))],
+    ]
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => unhandled.push(reason)
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      for (const [name, answer] of late) {
+        let settleFetch!: (r: Response | Error) => void
+        const pending = new Promise<Response>((resolve, reject) => {
+          settleFetch = (r) => (r instanceof Error ? reject(r) : resolve(r))
+        })
+        const fetchMock = routedFetch(() => pending)
+        await remountApp()
+        const d = await checkView()
+        await click(resendButton(d))
+        expect(resendCalls(fetchMock), `${name}: the resend is in flight`).toHaveLength(1)
+
+        await click(byText(d, 'Close')!)
+        expect(document.querySelectorAll(DIALOG).length, `${name}: the window closed`).toBe(0)
+
+        answer(settleFetch)
+        await settle()
+        expect(consoleError, name).not.toHaveBeenCalled()
+        expect(unhandled, name).toEqual([])
+      }
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
   })
 })

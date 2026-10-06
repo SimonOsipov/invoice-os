@@ -81,3 +81,12 @@ export function registerOutcome(err: unknown): RegisterOutcome {
   }
   return { form: UNAVAILABLE }
 }
+
+// Mode A stubs: inert until the executor writes them.
+export const RESEND_FAILED = ''
+
+export function resendSentNotice(_email: string): string {
+  return ''
+}
+
+export async function resendVerification(_email: string): Promise<void> {}

@@ -9,6 +9,7 @@ import {
   registerAccount,
   registerOutcome,
   registrationOpen,
+  resendVerification,
   validateRegisterForm,
   type RegisterValues,
 } from './register'
@@ -256,5 +257,41 @@ describe('registerAccount through the wire', () => {
     for (const res of [json(400, {}), json(400, { error: '' }), json(400, { error: '  ' }), new Response('<html>Bad Request</html>', { status: 400 }), new Response('', { status: 400 })]) {
       expect(await outcomeFor(res)).toEqual({ form: UNAVAILABLE })
     }
+  })
+})
+
+describe('resendVerification', () => {
+  it('resendVerification posts the trimmed address to the resend route', async () => {
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.x/')
+    // internal/gateway/resend_verification.go: the 202 body of every resend.
+    const ACCEPTED = { status: 'accepted' }
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(ACCEPTED), { status: 202 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await resendVerification('  a@corp.example ')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw.x/auth/resend-verification')
+    expect(init.method).toBe('POST')
+    const headers = new Headers(init.headers)
+    expect(headers.get('Content-Type')).toBe('application/json')
+    expect(headers.has('Authorization')).toBe(false)
+    expect(init.body).toBe('{"email":"a@corp.example"}')
+  })
+
+  it('resendVerification throws when the gateway is unset', async () => {
+    vi.stubEnv('VITE_GATEWAY_URL', '')
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    const err = await resendVerification('a@corp.example').then(
+      () => undefined,
+      (e: unknown) => e,
+    )
+
+    expect(err, 'expected the call to reject').toBeInstanceOf(ApiError)
+    expect((err as ApiError).kind).toBe('malformed')
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

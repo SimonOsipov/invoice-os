@@ -43,6 +43,11 @@ export function signInErrorMessage(err: unknown): string {
   return SIGN_IN_UNAVAILABLE
 }
 
+// Mode A stub: inert until the executor writes it.
+export function isUnverified(_err: unknown): boolean {
+  return false
+}
+
 export function readSignInState(search: string): string | null {
   const all = new URLSearchParams(search).getAll('state')
   return all.length === 1 && STATE_RE.test(all[0]) ? all[0] : null

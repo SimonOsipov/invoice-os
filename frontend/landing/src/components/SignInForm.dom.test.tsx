@@ -338,3 +338,182 @@ describe('AC-7: back/forward cache', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 })
+
+describe('the resend control on the unverified sign-in error', () => {
+  const ADA = 'ada@corp.example'
+  const RESEND = 'Send the link again'
+  const SENDING = 'Sending…'
+  const UNVERIFIED = 'Verify your email address first. The link is in your inbox.'
+  // D10 copy, pinned here and not imported: a wording change is a deliberate edit here and in the story.
+  const sent = (address: string) => `If ${address} still needs verifying, a new link is on its way. Use the newest one.`
+  const RESEND_URL = 'https://gw.x/auth/resend-verification'
+
+  type Answer = () => Response | Promise<Response>
+
+  // Each route takes its answers in order; the last one repeats.
+  function routedFetch(routes: { signIn: Answer[]; resend?: Answer[] }) {
+    const used = { signIn: 0, resend: 0 }
+    const next = (key: 'signIn' | 'resend') => {
+      const list = routes[key] ?? [() => jsonResponse(202, { status: 'accepted' })]
+      return list[Math.min(used[key]++, list.length - 1)]()
+    }
+    const fetchMock = vi.fn().mockImplementation(async (url: unknown) => (String(url).endsWith('/auth/sign-in') ? next('signIn') : next('resend')))
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  function callsTo(fetchMock: ReturnType<typeof vi.fn>, suffix: string): [string, RequestInit][] {
+    return (fetchMock.mock.calls as [string, RequestInit][]).filter(([url]) => String(url).endsWith(suffix))
+  }
+
+  const refuse = (status: number): Answer => () => jsonResponse(status, { error: 'refused' })
+  const never: Answer = () => new Promise<Response>(() => undefined)
+
+  function resendButtons(): HTMLButtonElement[] {
+    return Array.from(container.querySelectorAll<HTMLButtonElement>('button')).filter((b) => [RESEND, SENDING].includes(b.textContent?.trim() ?? ''))
+  }
+
+  const resendButton = () => {
+    const all = resendButtons()
+    expect(all.length, `expected exactly one "${RESEND}" button`).toBe(1)
+    return all[0]
+  }
+
+  const statusNotes = () => Array.from(container.querySelectorAll('[role="status"]')).map((n) => n.textContent?.trim() ?? '')
+
+  async function signInAs(email: string): Promise<void> {
+    await fill(email, 'pw')
+    await submit()
+    await flush()
+  }
+
+  async function click(el: HTMLElement): Promise<void> {
+    await act(async () => {
+      el.click()
+    })
+    await flush()
+  }
+
+  it('the unverified sign-in error offers Send the link again', async () => {
+    configure()
+    routedFetch({ signIn: [refuse(403)] })
+    await mountForm(STATE)
+
+    await signInAs(ADA)
+
+    const got = alerts()
+    expect(got.map((a) => a.textContent?.trim())).toEqual([UNVERIFIED])
+    const btn = resendButton()
+    expect(btn.type, 'a plain button, so it never submits the form').toBe('button')
+    expect(got[0].compareDocumentPosition(btn) & Node.DOCUMENT_POSITION_FOLLOWING, 'the button follows the alert').toBeTruthy()
+    expect(btn.disabled).toBe(false)
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('no resend control before a submit or after another refusal', async () => {
+    configure()
+    routedFetch({ signIn: [refuse(401)] })
+    await mountForm(STATE)
+    expect(container.querySelectorAll('button').length, 'control: only the submit button shows').toBe(1)
+    expect(resendButtons()).toHaveLength(0)
+    await act(async () => root.unmount())
+
+    const cases: [string, Answer][] = [
+      ['401', refuse(401)],
+      ['429', refuse(429)],
+      ['502', refuse(502)],
+    ]
+    for (const [name, answer] of cases) {
+      root = createRoot(container)
+      routedFetch({ signIn: [answer] })
+      await mountForm(STATE)
+      await signInAs(ADA)
+      expect(alerts().length, `${name}: control: the refusal shows`).toBe(1)
+      expect(resendButtons(), name).toHaveLength(0)
+      await act(async () => root.unmount())
+    }
+    root = createRoot(container)
+  })
+
+  it('the resend posts the address that got the 403', async () => {
+    configure()
+    const fetchMock = routedFetch({ signIn: [refuse(403)] })
+    await mountForm(STATE)
+    await signInAs(` ${ADA} `)
+    await act(async () => {
+      typeInto(emailInput(), 'bob@corp.example')
+    })
+
+    await click(resendButton())
+
+    const calls = callsTo(fetchMock, '/auth/resend-verification')
+    expect(calls, 'one resend').toHaveLength(1)
+    expect(calls[0][0]).toBe(RESEND_URL)
+    expect(JSON.parse(calls[0][1].body as string)).toStrictEqual({ email: ADA })
+    expect(statusNotes()).toEqual([sent(ADA)])
+    expect(callsTo(fetchMock, '/auth/sign-in'), 'the resend is not a sign-in').toHaveLength(1)
+  })
+
+  it('the resend button is disabled while sending', async () => {
+    configure()
+    let release!: (r: Response) => void
+    const held = new Promise<Response>((resolve) => {
+      release = resolve
+    })
+    const fetchMock = routedFetch({ signIn: [refuse(403)], resend: [() => held] })
+    await mountForm(STATE)
+    await signInAs(ADA)
+    const btn = resendButton()
+
+    await click(btn)
+    await click(btn)
+
+    expect(callsTo(fetchMock, '/auth/resend-verification'), 'one POST for two clicks').toHaveLength(1)
+    expect(btn.disabled).toBe(true)
+    expect(btn.textContent?.trim()).toBe(SENDING)
+
+    await act(async () => {
+      release(jsonResponse(202, { status: 'accepted' }))
+    })
+    await flush()
+    expect(btn.disabled).toBe(false)
+    expect(btn.textContent?.trim()).toBe(RESEND)
+    expect(statusNotes()).toEqual([sent(ADA)])
+  })
+
+  it('a new submit and a bfcache restore clear the resend control', async () => {
+    configure()
+    routedFetch({ signIn: [refuse(403), never] })
+    await mountForm(STATE)
+    await signInAs(ADA)
+    await click(resendButton())
+    expect(statusNotes(), 'control: the notice shows').toEqual([sent(ADA)])
+
+    await fill(ADA, 'pw')
+    await submit()
+
+    expect(resendButtons(), 'a new submit removes the button').toHaveLength(0)
+    expect(statusNotes(), 'a new submit removes the notice').toEqual([])
+    await act(async () => root.unmount())
+
+    root = createRoot(container)
+    routedFetch({ signIn: [refuse(403)] })
+    await mountForm(STATE)
+    await signInAs(ADA)
+    await click(resendButton())
+    expect(statusNotes(), 'control: the notice shows again').toEqual([sent(ADA)])
+
+    await act(async () => {
+      window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: false }))
+    })
+    expect(resendButtons(), 'a fresh pageshow changes nothing').toHaveLength(1)
+    expect(statusNotes()).toEqual([sent(ADA)])
+
+    await act(async () => {
+      window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))
+    })
+    expect(resendButtons(), 'a restore removes the button').toHaveLength(0)
+    expect(statusNotes(), 'a restore removes the notice').toEqual([])
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+})

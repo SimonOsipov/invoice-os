@@ -33,6 +33,21 @@ func clip(s string) string {
 	return s
 }
 
+// requireWaitNamed fails unless the error lines match every pattern (`429`, the wait, `600`, `second`): the
+// wording TestRailwayAPI_RateLimitOverSixHundredFailsAtOnce pins for graphql_post callers.
+func requireWaitNamed(t *testing.T, out string, patterns ...string) {
+	t.Helper()
+	e := errorLines(out)
+	for _, re := range patterns {
+		if !regexp.MustCompile(re).MatchString(e) {
+			t.Errorf("error lines do not match %s: %q", re, e)
+		}
+	}
+	if strings.Contains(out, passEchoNeedle) {
+		t.Errorf("the output carries Railway's message; output = %q", clip(out))
+	}
+}
+
 func lastOp(ops []string) string {
 	if len(ops) == 0 {
 		return ""
@@ -445,6 +460,16 @@ func TestForkPass_FailedReadsFailBeforeAnyWrite(t *testing.T) {
 			setFaults(t, s, "varsRead", "400")
 			writeFile(t, filepath.Join(s.dir, "faultbody-varsRead"), `{"errors":[{"message":"`+passEchoNeedle+`","extensions":{"code":"BAD_USER_INPUT"}}]}`)
 		}, authForkEnvID, "named no service"},
+		{"a 429 over 600 s on the first read names the wait", func(t *testing.T, s authShim) {
+			setFaults(t, s, "varsRead", "429")
+			writeFile(t, filepath.Join(s.dir, "hdr.txt"), "HTTP/2 429\r\nretry-after: 601\r\n\r\n")
+			writeFile(t, filepath.Join(s.dir, "faultbody-varsRead"), `{"errors":[{"message":"`+passEchoNeedle+`"}]}`)
+		}, "429", "601|600"},
+		{"a second 429 on the first read names the wait", func(t *testing.T, s authShim) {
+			setFaults(t, s, "varsRead", "429", "429")
+			writeFile(t, filepath.Join(s.dir, "hdr.txt"), "HTTP/2 429\r\nretry-after: 30\r\n\r\n")
+			writeFile(t, filepath.Join(s.dir, "faultbody-varsRead"), `{"errors":[{"message":"`+passEchoNeedle+`"}]}`)
+		}, "429", "second|30"},
 		{"a settle with two auth instances", func(t *testing.T, s authShim) {
 			dup := `{"node":{"serviceId":"svc-auth-dup","serviceName":"auth"}}`
 			writeFile(t, filepath.Join(s.dir, "settle.json"), strings.Replace(gtSettle(t), `"edges":[`, `"edges":[`+dup+`,`, 1))
@@ -469,8 +494,10 @@ func TestForkPass_FailedReadsFailBeforeAnyWrite(t *testing.T) {
 			if !strings.Contains(errorLines(out), c.names) {
 				t.Errorf("error lines %q do not name %q", errorLines(out), c.names)
 			}
-			if c.says != "" && !strings.Contains(errorLines(out), c.says) {
-				t.Errorf("error lines %q do not say %q", errorLines(out), c.says)
+			for _, w := range strings.Split(c.says, "|") {
+				if w != "" && !strings.Contains(errorLines(out), w) {
+					t.Errorf("error lines %q do not say %q", errorLines(out), w)
+				}
 			}
 			if got := confirmedLines(out); len(got) != 0 {
 				t.Errorf("a failed read printed confirmation lines %q", got)
@@ -918,6 +945,7 @@ func TestForkPass_WriteExhaustedBudgetExitsWithoutReRead(t *testing.T) {
 		s := newPassShim(t, nil, nil)
 		setFaults(t, s, "varsWrite", "429")
 		writeFile(t, filepath.Join(s.dir, "hdr.txt"), "HTTP/2 429\r\nretry-after: 601\r\n\r\n")
+		writeFile(t, filepath.Join(s.dir, "faultbody-varsWrite"), `{"errors":[{"message":"`+passEchoNeedle+`"}]}`)
 		out, code := runPass(t, s)
 		if code != 1 {
 			t.Errorf("exit %d, want 1; output = %q", code, clip(out))
@@ -934,6 +962,24 @@ func TestForkPass_WriteExhaustedBudgetExitsWithoutReRead(t *testing.T) {
 				t.Errorf("the failure line %q does not name %s, which was in the write", line, passLabel(w.Service))
 			}
 		}
+		requireWaitNamed(t, out, `429`, `\b601\b`, `\b600\b`)
+	})
+	t.Run("a second 429 fails the step and names the wait", func(t *testing.T) {
+		s := newPassShim(t, nil, nil)
+		setFaults(t, s, "varsWrite", "429", "429")
+		writeFile(t, filepath.Join(s.dir, "hdr.txt"), "HTTP/2 429\r\nretry-after: 30\r\n\r\n")
+		writeFile(t, filepath.Join(s.dir, "faultbody-varsWrite"), `{"errors":[{"message":"`+passEchoNeedle+`"}]}`)
+		out, code := runPass(t, s)
+		if code != 1 {
+			t.Errorf("exit %d, want 1; output = %q", code, clip(out))
+		}
+		if got := s.sleeps(t); !slices.Equal(got, []string{"30"}) {
+			t.Errorf("sleeps = %v, want [30]", got)
+		}
+		if n, ops := opCount(t, s, "varsWrite"), operations(s.calls(t)); n != 2 || lastOp(ops) != "varsWrite" {
+			t.Errorf("Railway calls = %v, want two varsWrite and no re-read", ops)
+		}
+		requireWaitNamed(t, out, `429`, `(?i)second`, `\b30\b`)
 	})
 	for _, fault := range []string{"503", "timeout"} {
 		t.Run(fault+" then success resends the same write once and confirms", func(t *testing.T) {

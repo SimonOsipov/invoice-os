@@ -874,16 +874,28 @@ func TestAssertDBDSNs_BatchedReadTransportFailureNamesTheEnvironment(t *testing.
 		name   string
 		faults []string
 		reads  int
+		hdr    string   // a rate-limit header line, for the 429 rows
+		says   []string // patterns the output must match: the wording of TestRailwayAPI_RateLimitOverSixHundredFailsAtOnce
 	}{
-		{"three timeouts", []string{"timeout", "timeout", "timeout"}, 3},
-		{"three 503s", []string{"503", "503", "503"}, 3},
-		{"a 401 is not retried", []string{"401"}, 1},
+		{"three timeouts", []string{"timeout", "timeout", "timeout"}, 3, "", nil},
+		{"three 503s", []string{"503", "503", "503"}, 3, "", nil},
+		{"a 401 is not retried", []string{"401"}, 1, "", nil},
+		{"a 429 over 600 s names the wait", []string{"429"}, 1, "retry-after: 601", []string{`429`, `\b601\b`, `\b600\b`}},
+		{"a second 429 names the wait", []string{"429", "429"}, 2, "retry-after: 30", []string{`429`, `(?i)second`, `\b30\b`}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			f := newDSNFleet(t, healthyMap())
 			setFaults(t, f.authShim, "varsRead", c.faults...)
+			if c.hdr != "" {
+				plantRateLimitHeaders(t, f.authShim, c.hdr)
+			}
 			out, code := f.run(t, dsnForkEnv)
+			for _, re := range c.says {
+				if !regexp.MustCompile(re).MatchString(errorLines(out)) {
+					t.Errorf("error lines do not match %s: %q", re, errorLines(out))
+				}
+			}
 
 			if n := len(f.varsReads(t)); n != c.reads {
 				t.Errorf("varsRead calls = %d, want %d", n, c.reads)

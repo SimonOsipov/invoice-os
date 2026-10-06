@@ -589,14 +589,17 @@ func TestDiscoverURLs_TransportFailuresKeepQueryRetryRules(t *testing.T) {
 		calls   int
 		code    int
 		logRows []string
+		says    []string // patterns the one error line must match: the wording of TestRailwayAPI_RateLimitOverSixHundredFailsAtOnce
 	}{
-		{"a 503 then success is one counted success", []string{"503"}, nil, 2, 0, []string{cmd + "\t1\ttransient", cmd + "\t2\tok"}},
-		{"a timeout then success", []string{"timeout"}, nil, 2, 0, []string{cmd + "\t1\ttransient", cmd + "\t2\tok"}},
-		{"a 429 then success", []string{"429"}, []string{"retry-after: 1"}, 2, 0, []string{cmd + "\t1\tratelimit", cmd + "\t2\tok"}},
-		{"three 503s exhaust the budget", []string{"503", "503", "503"}, nil, 3, 1, []string{cmd + "\t1\ttransient", cmd + "\t2\ttransient", cmd + "\t3\ttransient"}},
-		{"a 401 is not retried", []string{"401"}, nil, 1, 1, []string{cmd + "\t1\tfatal"}},
-		{"a 400 is not retried", []string{"400"}, nil, 1, 1, []string{cmd + "\t1\tfatal"}},
-		{"a second 429 is not retried", []string{"429", "429"}, []string{"retry-after: 1"}, 2, 1, []string{cmd + "\t1\tratelimit", cmd + "\t2\tratelimit"}},
+		{"a 503 then success is one counted success", []string{"503"}, nil, 2, 0, []string{cmd + "\t1\ttransient", cmd + "\t2\tok"}, nil},
+		{"a timeout then success", []string{"timeout"}, nil, 2, 0, []string{cmd + "\t1\ttransient", cmd + "\t2\tok"}, nil},
+		{"a 429 then success", []string{"429"}, []string{"retry-after: 1"}, 2, 0, []string{cmd + "\t1\tratelimit", cmd + "\t2\tok"}, nil},
+		{"three 503s exhaust the budget", []string{"503", "503", "503"}, nil, 3, 1, []string{cmd + "\t1\ttransient", cmd + "\t2\ttransient", cmd + "\t3\ttransient"}, nil},
+		{"a 401 is not retried", []string{"401"}, nil, 1, 1, []string{cmd + "\t1\tfatal"}, nil},
+		{"a 400 is not retried", []string{"400"}, nil, 1, 1, []string{cmd + "\t1\tfatal"}, nil},
+		{"a second 429 is not retried", []string{"429", "429"}, []string{"retry-after: 1"}, 2, 1, []string{cmd + "\t1\tratelimit", cmd + "\t2\tratelimit"}, nil},
+		{"a second 429 names the wait", []string{"429", "429"}, []string{"retry-after: 30"}, 2, 1, []string{cmd + "\t1\tratelimit", cmd + "\t2\tratelimit"}, []string{`429`, `(?i)second`, `\b30\b`}},
+		{"a 429 over 600 s names the wait", []string{"429"}, []string{"retry-after: 601"}, 1, 1, []string{cmd + "\t1\tratelimit"}, []string{`429`, `\b601\b`, `\b600\b`}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -623,6 +626,11 @@ func TestDiscoverURLs_TransportFailuresKeepQueryRetryRules(t *testing.T) {
 					t.Errorf("stderr does not name the environment %s: %q", forkEnvID, stderr)
 				}
 				requireOneDiscoveryError(t, stderr)
+				for _, re := range c.says {
+					if !regexp.MustCompile(re).MatchString(errorLines(stderr)) {
+						t.Errorf("the error line does not match %s: %q", re, errorLines(stderr))
+					}
+				}
 			}
 			if rows := callLogRows(t, tmp); !slices.Equal(rows, c.logRows) {
 				t.Errorf("call log = %q, want %q", rows, c.logRows)

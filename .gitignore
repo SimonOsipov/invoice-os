@@ -64,5 +64,5 @@ CLAUDE.md
 .vscode/
 *.swp
 
-# playwright-cli session/trace scratch (FLOWUPD-01)
+# playwright-cli session and trace scratch
 .playwright-cli/

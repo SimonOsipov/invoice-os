@@ -113,6 +113,62 @@ describe('e2eMember', () => {
       expect(realm.e2eMember(u.tenants!.inHouse).displayName, u.name).toBe(inHouse)
     }
   })
+
+  it("e2eMember admin is today's record", async () => {
+    const { realm, targets } = await load()
+    const id = targets.TENANTS.a.id
+
+    expect(realm.e2eMember(id, 'admin')).toEqual(realm.e2eMember(id))
+    expect(realm.e2eMember(id, 'admin').email).toBe(`e2e-member-${id}@example.com`)
+  })
+
+  it('e2eMember names each role', async () => {
+    const { realm, targets } = await load()
+    const firm = targets.TENANTS.a.id
+    const inHouse = targets.TENANTS.b.id
+
+    const preparer = realm.e2eMember(firm, 'preparer')
+    const reviewer = realm.e2eMember(firm, 'reviewer')
+
+    expect(preparer.email).toBe(`e2e-member-${firm}-preparer@example.com`)
+    expect(reviewer.email).toBe(`e2e-member-${firm}-reviewer@example.com`)
+    expect(preparer.displayName).toBe('E2E Firm Preparer')
+    expect(reviewer.displayName).toBe('E2E Firm Reviewer')
+    expect(realm.e2eMember(inHouse, 'reviewer').displayName).toBe('E2E In-house Reviewer')
+    expect(realm.e2eMember(firm, 'reviewer')).toEqual(reviewer)
+  })
+
+  it('role passwords are distinct and keep the floor', async () => {
+    const { realm, targets } = await load()
+    const id = targets.TENANTS.a.id
+    expect(realm.E2E_MEMBER_ROLES.length).toBe(3)
+
+    const passwords = realm.E2E_MEMBER_ROLES.map((r) => realm.e2eMember(id, r).password)
+
+    expect(new Set(passwords).size).toBe(3)
+    for (const p of passwords) expect(p.length).toBeGreaterThanOrEqual(16)
+  })
+})
+
+describe('isE2eMemberEmail', () => {
+  it('isE2eMemberEmail accepts the three role emails of the tenant', async () => {
+    const { realm, targets } = await load()
+    const id = targets.TENANTS.a.id
+    expect(realm.E2E_MEMBER_ROLES.length).toBe(3)
+
+    for (const r of realm.E2E_MEMBER_ROLES) expect(realm.isE2eMemberEmail(id, realm.e2eMember(id, r).email), r).toBe(true)
+  })
+
+  it("isE2eMemberEmail rejects a stranger and another tenant's member", async () => {
+    const { realm, targets } = await load()
+    const id = targets.TENANTS.a.id
+    expect(realm.isE2eMemberEmail(id, realm.e2eMember(id).email)).toBe(true)
+
+    expect(realm.isE2eMemberEmail(id, 'c.okafor@okafor.ng')).toBe(false)
+    expect(realm.isE2eMemberEmail(id, realm.e2eMember(targets.TENANTS.b.id, 'reviewer').email)).toBe(false)
+    expect(realm.isE2eMemberEmail(id, `e2e-member-${id}-owner@example.com`)).toBe(false)
+    expect(realm.isE2eMemberEmail(id, '')).toBe(false)
+  })
 })
 
 describe('isSeededMember', () => {
@@ -213,6 +269,21 @@ describe('ensureMember', () => {
       display_name: 'E2E In-house Admin',
       email: member.email,
     })
+
+    stubGateway()
+    const reviewer = realm.e2eMember(IN_HOUSE, 'reviewer')
+
+    await realm.ensureMember(IN_HOUSE, 'in_house', 'reviewer')
+
+    expect(fetched).toHaveLength(4)
+    expect(fetched[0].body).toEqual({ email: reviewer.email, password: reviewer.password })
+    expect(fetched[3].body).toEqual({
+      user_id: SUBJECT,
+      tenant_id: IN_HOUSE,
+      role: 'reviewer',
+      display_name: 'E2E In-house Reviewer',
+      email: reviewer.email,
+    })
   })
 
   it.each([400, 429, 503])('ensureMember refuses a register that answers %i', async (status) => {
@@ -257,5 +328,14 @@ describe('ensureMember', () => {
     await realm.ensureMember(IN_HOUSE, 'in_house')
 
     expect(fetched).toHaveLength(8)
+
+    await realm.ensureMember(FIRM, 'firm', 'reviewer')
+    expect(fetched).toHaveLength(12)
+    await realm.ensureMember(FIRM, 'firm', 'reviewer')
+    await realm.ensureMember(FIRM, 'firm')
+    expect(fetched).toHaveLength(12)
+
+    const firmRegisters = fetched.filter((c) => c.url.endsWith('/auth/register') && c.body.email.startsWith(`e2e-member-${FIRM}`))
+    expect(firmRegisters.map((c) => c.body.email)).toEqual([realm.e2eMember(FIRM).email, realm.e2eMember(FIRM, 'reviewer').email])
   })
 })

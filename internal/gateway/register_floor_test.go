@@ -28,7 +28,7 @@ func serveFloor(t *testing.T, authURL *url.URL, floor time.Duration, log *slog.L
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	start := time.Now()
-	RegisterHandler(authURL, testClient(), floor, log).ServeHTTP(rec, req)
+	RegisterHandler(authURL, testClient(), floor, freshRegisterLimit(), true, log).ServeHTTP(rec, req)
 	return rec, time.Since(start)
 }
 
@@ -234,7 +234,7 @@ func TestRegister_ClientGoneEndsTheWaitWithoutWriting(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword))).WithContext(ctx)
 
 	start := time.Now()
-	RegisterHandler(authURL, testClient(), 3*time.Second, slog.New(slog.DiscardHandler)).ServeHTTP(rec, req)
+	RegisterHandler(authURL, testClient(), 3*time.Second, freshRegisterLimit(), true, slog.New(slog.DiscardHandler)).ServeHTTP(rec, req)
 	elapsed := time.Since(start)
 
 	if elapsed >= time.Second {
@@ -336,7 +336,7 @@ func TestRegister_FreeMailVariantsStayPromptUnderALargeMinimum(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(email, regPassword))).WithContext(ctx)
 
 			start := time.Now()
-			RegisterHandler(fake.URL, testClient(), time.Hour, slog.New(slog.DiscardHandler)).ServeHTTP(rec, req)
+			RegisterHandler(fake.URL, testClient(), time.Hour, freshRegisterLimit(), true, slog.New(slog.DiscardHandler)).ServeHTTP(rec, req)
 			elapsed := time.Since(start)
 
 			if rec.Code != http.StatusBadRequest {
@@ -357,7 +357,7 @@ func TestRegister_ConcurrentRequestsWaitIndependently(t *testing.T) {
 	const floor = 300 * time.Millisecond
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 	log, buf := captureLog()
-	h := RegisterHandler(fake.URL, testClient(), floor, log)
+	h := RegisterHandler(fake.URL, testClient(), floor, freshRegisterLimit(), true, log)
 	serve := func(rec *httptest.ResponseRecorder) time.Duration {
 		req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
 		start := time.Now()
@@ -454,7 +454,7 @@ func TestRegister_UpstreamTimeoutWaitsOutTheRestOfTheMinimum(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
 
 	start := time.Now()
-	RegisterHandler(authURL, client, floor, log).ServeHTTP(rec, req)
+	RegisterHandler(authURL, client, floor, freshRegisterLimit(), true, log).ServeHTTP(rec, req)
 	elapsed := time.Since(start)
 
 	if rec.Code != http.StatusBadGateway {
@@ -488,7 +488,7 @@ func TestRegister_ClientGoneDuringTheUpstreamCallWritesNothing(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword))).WithContext(ctx)
 
 	start := time.Now()
-	RegisterHandler(authURL, testClient(), 3*time.Second, slog.New(slog.DiscardHandler)).ServeHTTP(rec, req)
+	RegisterHandler(authURL, testClient(), 3*time.Second, freshRegisterLimit(), true, slog.New(slog.DiscardHandler)).ServeHTTP(rec, req)
 	elapsed := time.Since(start)
 
 	if elapsed >= time.Second {
@@ -546,7 +546,7 @@ func TestHoldMinimum_Boundaries(t *testing.T) {
 	level := func(t *testing.T, upstream time.Duration) string {
 		t.Helper()
 		log, buf := captureLog()
-		if !holdMinimum(t.Context(), log, time.Now().Add(-time.Hour), upstream, floor) {
+		if !holdMinimum(t.Context(), log, timingMsg, time.Now().Add(-time.Hour), upstream, floor) {
 			t.Fatal("holdMinimum = false for a live context")
 		}
 		lines := timingLines(t, buf)
@@ -568,7 +568,7 @@ func TestHoldMinimum_Boundaries(t *testing.T) {
 
 	t.Run("a minimum already spent adds no wait", func(t *testing.T) {
 		start := time.Now()
-		holdMinimum(t.Context(), slog.New(slog.DiscardHandler), time.Now().Add(-time.Hour), time.Hour, floor)
+		holdMinimum(t.Context(), slog.New(slog.DiscardHandler), timingMsg, time.Now().Add(-time.Hour), time.Hour, floor)
 		if elapsed := time.Since(start); elapsed >= floor {
 			t.Errorf("waited %v with the minimum long past", elapsed)
 		}
@@ -576,7 +576,7 @@ func TestHoldMinimum_Boundaries(t *testing.T) {
 	t.Run("a cancelled context reports false", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		if holdMinimum(ctx, slog.New(slog.DiscardHandler), time.Now(), 0, time.Hour) {
+		if holdMinimum(ctx, slog.New(slog.DiscardHandler), timingMsg, time.Now(), 0, time.Hour) {
 			t.Error("holdMinimum = true for a cancelled context")
 		}
 	})
@@ -584,7 +584,7 @@ func TestHoldMinimum_Boundaries(t *testing.T) {
 		for _, m := range []time.Duration{0, -time.Second} {
 			log, buf := captureLog()
 			start := time.Now()
-			ok := holdMinimum(t.Context(), log, time.Now(), 0, m)
+			ok := holdMinimum(t.Context(), log, timingMsg, time.Now(), 0, m)
 			if !ok || time.Since(start) >= floor || buf.Len() != 0 {
 				t.Errorf("minimum %v: ok=%v after %v, log %q; want true at once with no line", m, ok, time.Since(start), buf.String())
 			}

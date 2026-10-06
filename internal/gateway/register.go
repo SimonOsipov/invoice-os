@@ -25,9 +25,15 @@ const (
 // DefaultRegisterMinResponse is the shortest time any non-400 register answer takes.
 const DefaultRegisterMinResponse = 2 * time.Second
 
+const (
+	RegisterPerIP   = 10
+	RegisterWindow  = time.Hour
+	RegisterMaxKeys = 10_000
+)
+
 // RegisterHandler answers POST /auth/register by calling GoTrue's /signup under authURL.
 // Every answer except a 400 arrives no earlier than minResponse after the request; 0 means no wait.
-func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, log *slog.Logger) http.Handler {
+func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, perIP *SignInThrottle, enforce bool, log *slog.Logger) http.Handler {
 	signup := authURL.JoinPath("signup").String()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Not postOnly: it sets headers on a POST, and a gone client must see no write.
@@ -80,8 +86,28 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 			body["data"] = data
 		}
 
+		key, source := clientKey(r)
+		held := perIP.Reserve(key)
+		refused := false
+		if !held {
+			log.WarnContext(r.Context(), "registration: limit reached",
+				slog.String("limit", "ip"), slog.String("key_source", source), slog.Bool("enforced", enforce))
+			refused = enforce
+		}
+
+		if refused {
+			if holdMinimum(r.Context(), log, "registration: signup timing", start, 0, minResponse) {
+				writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"})
+			}
+			return
+		}
+
 		status, gt, err := postGoTrue(r, client, signup, body, nil)
 		upstream := time.Since(start)
+		// GoTrue mails nothing when it answers 4xx; 2xx, 5xx and transport errors may have mailed.
+		if held && err == nil && status >= http.StatusBadRequest && status < http.StatusInternalServerError {
+			perIP.Refund(key)
+		}
 		pending := func() { writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"}) }
 		var send func()
 		if err != nil {
@@ -119,7 +145,7 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 			send = func() { writeError(w, http.StatusBadGateway, "registration is unavailable") }
 		}
 
-		if holdMinimum(r.Context(), log, start, upstream, minResponse) {
+		if holdMinimum(r.Context(), log, "registration: signup timing", start, upstream, minResponse) {
 			send()
 		}
 	})
@@ -157,9 +183,9 @@ func registrationAnswers(workspace, display, kind *string) (map[string]string, s
 	return out, ""
 }
 
-// holdMinimum logs the signup timing and waits out what is left of minResponse since start.
+// holdMinimum logs the timing line msg and waits out what is left of minResponse since start.
 // It reports false when the client went away first. A minResponse of 0 neither logs nor waits.
-func holdMinimum(ctx context.Context, log *slog.Logger, start time.Time, upstream, minResponse time.Duration) bool {
+func holdMinimum(ctx context.Context, log *slog.Logger, msg string, start time.Time, upstream, minResponse time.Duration) bool {
 	if minResponse <= 0 {
 		return true
 	}
@@ -168,8 +194,8 @@ func holdMinimum(ctx context.Context, log *slog.Logger, start time.Time, upstrea
 		level = slog.LevelInfo
 	}
 	// ceiling: a GoTrue answer slower than the minimum still leaks timing; revisit when this line logs WARN.
-	// ceiling: each waiting request holds a connection for up to the minimum and register has no per-client limit; revisit with the per-client-IP limit owed before U3.
-	log.Log(ctx, level, "registration: signup timing",
+	// ceiling: each waiting request holds a connection for up to the minimum.
+	log.Log(ctx, level, msg,
 		slog.Int64("upstream_ms", upstream.Milliseconds()), slog.Int64("min_ms", minResponse.Milliseconds()))
 	timer := time.NewTimer(max(0, minResponse-time.Since(start)))
 	defer timer.Stop()

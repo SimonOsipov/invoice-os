@@ -4,8 +4,8 @@ The `auth` Railway service runs a pinned, unmodified `supabase/auth` (GoTrue) im
 signs ES256 access tokens, serves their public keys at `/.well-known/jwks.json`, and
 projects the tenant into `app_metadata.tenant_id` through the Postgres access-token hook.
 It is private-network only (`http://auth.railway.internal:8080`); it has no public domain.
-The gateway reaches it for JWKS, for the fleet probe, for GoTrue's `/signup` and
-`/verify` on behalf of the two public registration routes (see Registration), for
+The gateway reaches it for JWKS, for the fleet probe, for GoTrue's `/signup`, `/resend` and
+`/verify` on behalf of the public registration routes (see Registration), for
 GoTrue's password grant on behalf of the public sign-in route (see Sign-in and hand-off),
 for its refresh-token grant on behalf of the public refresh and sign-out routes (see
 Renewal and Revocation), for GoTrue's `GET /user` on every checked `/api/` request, cached
@@ -134,12 +134,12 @@ Nothing below is a secret value; secrets are named, never shown.
 every fork overwrites it with its own.
 
 `AUTH_SITE_URL` is optional at boot. Unset, the gateway logs one warning and both
-registration routes answer 503 `registration is not configured`. A value that is not an
+the registration routes (register, resend-verification and verify) answer 503 `registration is not configured`. A value that is not an
 absolute `http(s)` URL, or that carries user info, a query or a fragment, stops the
 gateway at boot.
 
 `AUTH_REGISTER_MIN_RESPONSE` is a Go duration (`2s`, `3500ms`): the shortest time any
-`POST /auth/register` answer except a 400 takes. Unset means `2s`. A value that does not parse
+`POST /auth/register` and `POST /auth/resend-verification` answer except a 400 takes. Unset means `2s`. A value that does not parse
 or is not above zero stops the gateway at boot with an ERROR that names the variable and does
 not echo the value. There is no upper bound.
 
@@ -377,6 +377,7 @@ scope, or `/token` with any other grant) is reachable from outside.
 | GoTrue `signup_disabled` | 503 `registration is closed` |
 | any other GoTrue 429 | 429 `too many requests` |
 | GoTrue unreachable, or any other answer | 502 `registration is unavailable`, logged |
+| the client key is over its limit (10 registers an hour that pass the gateway's own 400 checks, `gateway.RegisterPerIP`); GoTrue is not called | the same 202 `{"status":"verification_pending"}` after the minimum, logged at WARN `registration: limit reached` (`limit=ip`, `key_source`, `enforced`) |
 | `AUTH_SITE_URL` unset | 503 `registration is not configured` |
 
 A preflight (an OPTIONS with an `Origin`) is answered by CORS; any other non-POST, including an
@@ -384,11 +385,20 @@ OPTIONS without an `Origin`, answers 405 `method not allowed` with `Allow: POST`
 wait and without a GoTrue call. Guarded by `cmd/gateway/registration_routes_test.go`
 `TestRegisterOptionsWithoutOriginIsNotARegistration`.
 
-The four 202 rows answer identically, so the response never tells whether an address
+The limit counts a request when it reaches GoTrue's call, after every 400 check; any GoTrue 4xx
+answer refunds the count (GoTrue mails nothing on a 4xx); a 2xx, a 5xx or a transport error keeps it. The client key is the one
+`POST /auth/resend-verification` uses (see its section), but register keeps its own bucket, so a
+registrant who then resends spends no register count. On a PR preview (`RAILWAY_ENVIRONMENT_NAME`
+of the form `pr-<n>`) the limit counts and logs with `enforced=false` and does not refuse: a
+preview sends no mail, and one deployed-E2E job registers more than 10 times from one runner.
+Local, CI and production enforce. Guarded by `cmd/gateway/main_test.go`
+`TestRegistrationHandlers_RegisterHasItsOwnLimit` and `TestRegistrationHandlers_PreviewOnlyLogs`.
+
+The five 202 rows answer identically, so the response never tells whether an address
 already has an account. The answer never carries the user id or any GoTrue field except
 `msg`.
 
-The four 202 rows and the 503 `registration is closed`, 429 and 502 rows wait for
+The five 202 rows and the 503 `registration is closed`, 429 and 502 rows wait for
 `AUTH_REGISTER_MIN_RESPONSE` (default `2s`), counted from when the request reached the handler. The 400 rows
 answer at once. The 503 `registration is not configured` answers at once too, because the
 route is not wired. If the client disconnects during the wait, no answer is written. Each
@@ -399,6 +409,45 @@ The free-mail list lives in `internal/gateway/freemail.go` `freeMailDomains`. To
 add one lower-case domain; its subdomains are refused too. Fullwidth, ideographic-dot and
 inner-whitespace forms of a listed domain are refused by GoTrue's own format check (400),
 guarded by `TestIdP_FreeMailVariantsAreNotAccepted`.
+
+**`POST /auth/resend-verification`**, outside `/api/`, no verifier, in every build. It is CORS-wrapped, with an `OPTIONS /auth/resend-verification` preflight route. Body `{"email"}`; the gateway always sends GoTrue `{"type":"signup","email":…}`. Code: `internal/gateway/resend_verification.go` `ResendVerificationHandler`.
+
+| Request / upstream | Answer | Waits the minimum |
+|---|---|---|
+| GoTrue 200 (an unknown, confirmed or mailed address) | 202 `{"status":"accepted"}` | yes |
+| GoTrue 429 `over_email_send_rate_limit` (cooldown or instance cap) | the same 202, logged at WARN | yes |
+| over the per-IP or per-address limit (GoTrue not called) | the same 202, logged at WARN | yes |
+| GoTrue 5xx or any other non-200 except 400 `validation_failed` | the same 202, logged at WARN | yes |
+| GoTrue unreachable, client timeout or any other transport error | the same 202, logged at WARN | yes |
+| a malformed body, or a body over 1 KiB | 400 `{"error":"invalid request body"}` | no |
+| an email empty after trimming | 400 `{"error":"email is required"}` | no |
+| an email over 254 bytes, or GoTrue 400 `validation_failed` | 400 `{"error":"invalid email address"}` | no |
+| any method but POST and a CORS preflight (an OPTIONS without an `Origin` included) | 405 `Allow: POST` | no |
+| `AUTH_URL` or `AUTH_SITE_URL` unset | 503 `registration is not configured` | no |
+
+Every outcome except a 400 answers the same 202, so the response never tells an unknown, an
+unconfirmed, a confirmed or a cooled-down address apart. The floor is `AUTH_REGISTER_MIN_RESPONSE`
+(see Registration Ceilings); a client that leaves during the wait gets no answer. A GoTrue
+timeout answers at the 10 s client timeout, not at the floor.
+
+Limits, in process, one hour window: 3 resends per address (`gateway.ResendPerAddress`, keyed by the
+lower-cased email) and 10 per client key (`gateway.ResendPerIP`); each map holds at most 10,000 keys
+(`gateway.ResendMaxKeys`). The client key is `X-Real-IP` (Railway's edge replaces a client-sent value; measured, see Registration Ceilings), an IPv4-mapped
+address unmapped, an IPv6 address by its /64; an absent or unparseable header falls back to the host
+of `RemoteAddr`, normalised the same way. The client is reserved first, then the address, then GoTrue is called. Any GoTrue
+4xx answer refunds both counts (GoTrue mails nothing on a 4xx); a 2xx, a 5xx or a transport error keeps them. Over a limit the
+answer is the same 202 and GoTrue is not called. On a PR preview the limits log and do not refuse
+(see `POST /auth/register`).
+
+Log lines, none with an email address or an IP: WARN `resend-verification: limit reached`
+(`limit=ip|address`, `key_source=header|remote_addr`, `enforced`), WARN `resend-verification: gotrue
+email send rate limit`, WARN `resend-verification: gotrue resend failed` (`upstream_status`,
+`error_code`), WARN `resend-verification: gotrue unreachable`, and `resend-verification: timing` with
+`upstream_ms` and `min_ms` as register's timing line.
+
+Guarded by `internal/gateway/resend_verification_test.go`, and in `cmd/gateway` by
+`TestRegistrationHandlers_ResendWaitsAndLimits`, `TestResendVerificationPreflightGrantsTheAllowedOrigin`
+and `TestResendVerificationOptionsWithoutOriginIsNotAResend`.
 
 **`POST /contacts/demo-request`**, outside `/api/`, no verifier, in every build. CORS-wrapped, with an `OPTIONS` preflight route. Body `{"email","name","company","marketing_consent_text"?}`; other keys are ignored and not forwarded. The body limit is 4096 bytes. Fields are trimmed; `marketing_consent_text` is forwarded as sent.
 
@@ -461,19 +510,36 @@ otherwise. The tenant id is a UUIDv5 of the caller's subject; the membership gua
   this fleet. On v2.197.0 they key on the header named by `GOTRUE_RATE_LIMIT_HEADER` and do
   nothing while it is unset (`middleware.go` `performRateLimitingWithHeader`); no image,
   script or runbook sets it. Sign-in has the gateway's own per-address throttle instead (see
-  Sign-in and hand-off); the gateway throttles neither registration nor verify. A
-  per-client-IP limit needs a client-IP header the gateway can trust, and Railway's
-  `X-Forwarded-For` handling is unmeasured. Revisit before registration U3.
+  Sign-in and hand-off); the gateway throttles verify not at all, and register and
+  resend-verification by client key (10 an hour each) and resend-verification by address (3 an
+  hour). The client key is `X-Real-IP`, which Railway's edge sets to the client's address and
+  replaces when the client sends one. Measured 2026-10-06 on PR environment pr-342: 11 POSTs to
+  `/auth/resend-verification` from one client with `X-Real-IP` spoofed to 11 different values
+  shared one key and logged one `limit=ip key_source=header` limit line, on the 11th.
 - `ceiling:` `RATE_LIMIT_EMAIL_SENT` (30 per hour) is instance-wide, so production sends
   about 30 confirmation mails per hour. A registrant during the cap gets 202 and no mail; the
   WARN log line `registration: gotrue email send rate limit` is the only signal. Set
   `GOTRUE_RATE_LIMIT_EMAIL_SENT` when signup traffic approaches it.
 - `ceiling:` the registration minimum hides GoTrue's timing only while GoTrue answers faster
-  than `AUTH_REGISTER_MIN_RESPONSE`. A slower answer still leaks timing. Revisit when
-  `registration: signup timing` logs WARN, and raise the minimum (registration U4 step 5).
-- `ceiling:` each waiting register request holds a connection for up to the minimum, and
-  register has no per-client limit. Revisit with the per-client-IP limit owed before
-  registration U3.
+  than `AUTH_REGISTER_MIN_RESPONSE`; resend-verification shares it. A slower answer still leaks
+  timing. Revisit when `registration: signup timing` or `resend-verification: timing` logs WARN, and raise the minimum (registration U4 step 5).
+- `ceiling:` each waiting register or resend request holds a connection for up to the minimum;
+  each route is limited per client key, so one key holds at most 10 of each an hour.
+- `ceiling:` the register and resend-verification limits are in process: a restart clears the counts
+  and replicas do not share them. An attacker can spend a victim address's 3 resends an hour and hold
+  back its resends. A full map (10,000 keys) refuses every new key for up to an hour; the answer stays
+  the 202, with nothing sent, so a flood of distinct addresses or client keys switches resend off for
+  everyone new (WARN `resend-address throttle full; refusing new addresses`, `resend-ip throttle full; …` or
+  `register throttle full; …`, by map). Clients behind one NAT share 10
+  resends and 10 registers an hour. A GoTrue 4xx answer (a cooldown 429, a validation 400) is refunded, so
+  neither limit counts it and one client can repeat it without bound; it sends no mail, and mails stay
+  capped by the counted sends. An outage spends the counts of people who retry during it, because only
+  a 4xx is refunded. Mails stay capped by `RATE_LIMIT_EMAIL_SENT`; one key can still trigger up to
+  20 mails an hour (10 registers, 10 resends).
+- `ceiling:` the client key is trusted only while `api.ascomply.com` is served straight from Railway's
+  edge. A proxy in front makes every key the proxy's IP, and every client then shares one bucket of 10;
+  resend then fails toward fewer mails for everyone, never more. `key_source=remote_addr` in the
+  limit WARN shows the fallback.
 - `ceiling:` the session GoTrue issues on verify is discarded but stays live in
   `auth.sessions` and `auth.refresh_tokens`. No route revokes it by itself; a global
   sign-out or a staff cut-off of the account deletes it with the account's other sessions
@@ -1227,7 +1293,7 @@ redirects to the landing page". **The first console that reads real data must ma
 fail closed when `VITE_LANDING_URL` is unset**, and must check the staff claim on the server.
 
 **CORS.** The gateway's one origin list wraps `/api/`, `/auth/sign-in`, `/auth/exchange`,
-`/auth/refresh`, `/auth/sign-out`, `/auth/register` and `/contacts/demo-request`, so console U2 lets browser JavaScript on the two console
+`/auth/refresh`, `/auth/sign-out`, `/auth/register`, `/auth/resend-verification` and `/contacts/demo-request`, so console U2 lets browser JavaScript on the two console
 origins call all of them, not only exchange, refresh and sign-out. `/auth/verify` is not wrapped. Every `/api/` call still needs a verified bearer, the session check and RLS; the
 console origins serve only our own bundle, and the same token works from `curl`.
 
@@ -1259,7 +1325,7 @@ E=6c864094-6a06-452f-8495-be77d8a94fe7
 | U3 | when registration opens: after AUTH-04 and AUTH-16 merge | auth `GOTRUE_DISABLE_SIGNUP=false`, landing `VITE_REGISTRATION_OPEN=true` |
 | U4 | after U1–U3 have deployed | none: an end-to-end check by hand; step 5 may raise `AUTH_REGISTER_MIN_RESPONSE` |
 
-Until U1 deploys, production's `POST /auth/register`, `GET /auth/verify` and `POST /auth/verify` answer 503
+Until U1 deploys, production's `POST /auth/register`, `POST /auth/resend-verification`, `GET /auth/verify` and `POST /auth/verify` answer 503
 `registration is not configured`. Between U1 and U3, register answers 503
 `registration is closed`. Neither affects any other route. From U1 on, a free-mail address
 answers 400 with the policy message, also while signup is closed.

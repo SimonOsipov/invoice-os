@@ -11,6 +11,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -1198,7 +1199,7 @@ func pageForm(t *testing.T, pageURL, body string) (string, url.Values) {
 	return page.ResolveReference(action).String(), values
 }
 
-func TestRegistrationHandlers_WiresBothRoutes(t *testing.T) {
+func TestRegistrationHandlers_WiresRegisterAndVerify(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
 	const floor = 100 * time.Millisecond
@@ -1221,26 +1222,221 @@ func TestRegistrationHandlers_WiresBothRoutes(t *testing.T) {
 	}
 }
 
-// AUTH_SITE_URL unset: both routes refuse without calling GoTrue.
+// AUTH_SITE_URL or AUTH_URL unset: every GoTrue route refuses without calling GoTrue.
 func TestRegistrationHandlers_NotConfigured503(t *testing.T) {
-	authURL, calls := fakeAuth(t)
-	reg := registrationHandlers(authURL, nil, 0, slog.New(slog.DiscardHandler), nil)
+	site, _ := url.Parse("https://site.example")
+	for _, unset := range []string{"AUTH_SITE_URL", "AUTH_URL"} {
+		t.Run(unset, func(t *testing.T) {
+			authURL, calls := fakeAuth(t)
+			var reg registration
+			if unset == "AUTH_SITE_URL" {
+				reg = registrationHandlers(authURL, nil, 0, slog.New(slog.DiscardHandler), nil)
+			} else {
+				reg = registrationHandlers(nil, site, 0, slog.New(slog.DiscardHandler), nil)
+			}
 
-	for name, rec := range map[string]*httptest.ResponseRecorder{
-		"Register": serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`),
-		"Verify":   serveForm(reg.Verify, "/auth/verify", "token=T&type=signup"),
-	} {
-		if rec.Code != http.StatusServiceUnavailable {
-			t.Errorf("%s = %d, want 503: %s", name, rec.Code, rec.Body.String())
-			continue
-		}
-		var body map[string]string
-		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body) != 1 || body["error"] != "registration is not configured" {
-			t.Errorf("%s body = %s, want {\"error\":\"registration is not configured\"}", name, rec.Body.String())
+			for name, rec := range map[string]*httptest.ResponseRecorder{
+				"Register": serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`),
+				"Verify":   serveForm(reg.Verify, "/auth/verify", "token=T&type=signup"),
+
+				"ResendVerification": serveRegistration(reg.ResendVerification, http.MethodPost, "/auth/resend-verification", `{"email":"new@corp.example"}`),
+			} {
+				if rec.Code != http.StatusServiceUnavailable {
+					t.Errorf("%s = %d, want 503: %s", name, rec.Code, rec.Body.String())
+					continue
+				}
+				var body map[string]string
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body) != 1 || body["error"] != "registration is not configured" {
+					t.Errorf("%s body = %s, want {\"error\":\"registration is not configured\"}", name, rec.Body.String())
+				}
+			}
+			if got := calls(); len(got) != 0 {
+				t.Errorf("GoTrue saw %v, want no calls", got)
+			}
+		})
+	}
+}
+
+// resendFrom posts one resend for email as the client behind remote.
+func resendFrom(h http.Handler, email, remote string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/auth/resend-verification", strings.NewReader(`{"email":"`+email+`"}`))
+	req.RemoteAddr = remote
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// registerFrom posts one register for email as the client behind remote.
+func registerFrom(h http.Handler, email, remote string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(`{"email":"`+email+`","password":"Corr3ct-Horse"}`))
+	req.RemoteAddr = remote
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// countCalls counts the recorded GoTrue calls equal to want.
+func countCalls(calls []string, want string) int {
+	n := 0
+	for _, c := range calls {
+		if c == want {
+			n++
 		}
 	}
-	if got := calls(); len(got) != 0 {
-		t.Errorf("GoTrue saw %v, want no calls", got)
+	return n
+}
+
+func TestRegistrationHandlers_ResendWaitsAndLimits(t *testing.T) {
+	const remote = "203.0.113.7:4000"
+	for _, c := range []struct {
+		name      string
+		floor     time.Duration
+		addresses []string
+		wantCalls int
+	}{
+		{"waits", 300 * time.Millisecond, []string{"ada@corp.example"}, 1},
+		{"three", 0, []string{"ada@corp.example", "ada@corp.example", "ada@corp.example"}, 3},
+		{"four", 0, []string{"ada@corp.example", "ada@corp.example", "ada@corp.example", "ada@corp.example"}, 3},
+		{"per key", 0, distinctAddresses(11), 10},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			authURL, calls := fakeAuth(t)
+			site, _ := url.Parse("https://site.example")
+			reg := registrationHandlers(authURL, site, c.floor, slog.New(slog.DiscardHandler), nil)
+
+			start := time.Now()
+			for _, email := range c.addresses {
+				rec := resendFrom(reg.ResendVerification, email, remote)
+				if rec.Code != http.StatusAccepted {
+					t.Errorf("resend = %d, want 202 whether or not it was sent: %s", rec.Code, rec.Body.String())
+				}
+			}
+			if elapsed := time.Since(start); elapsed < time.Duration(len(c.addresses))*c.floor {
+				t.Errorf("%d resends took %v, want no less than %v each", len(c.addresses), elapsed, c.floor)
+			}
+			if got := countCalls(calls(), "POST /resend"); got != c.wantCalls {
+				t.Errorf("GoTrue /resend calls = %d, want %d", got, c.wantCalls)
+			}
+		})
+	}
+}
+
+func distinctAddresses(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = "user" + strconv.Itoa(i) + "@corp.example"
+	}
+	return out
+}
+
+// Register's per-key bucket is its own: not removed, not shared with resend, not resend's per-address one.
+func TestRegistrationHandlers_RegisterHasItsOwnLimit(t *testing.T) {
+	const remote = "203.0.113.7:4000"
+	authURL, calls := fakeAuth(t)
+	site, _ := url.Parse("https://site.example")
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
+
+	for _, email := range distinctAddresses(11) {
+		if rec := registerFrom(reg.Register, email, remote); rec.Code != http.StatusAccepted {
+			t.Errorf("register = %d, want 202 over the limit too: %s", rec.Code, rec.Body.String())
+		}
+	}
+	if got := countCalls(calls(), "POST /signup"); got != 10 {
+		t.Errorf("GoTrue /signup calls = %d, want 10", got)
+	}
+
+	if rec := resendFrom(reg.ResendVerification, "ada@corp.example", remote); rec.Code != http.StatusAccepted {
+		t.Errorf("resend = %d, want 202: %s", rec.Code, rec.Body.String())
+	}
+	if got := countCalls(calls(), "POST /resend"); got != 1 {
+		t.Errorf("GoTrue /resend calls after a spent register bucket = %d, want 1", got)
+	}
+}
+
+// A PR fork counts and logs both limited routes' limits but does not refuse; every other posture refuses the eleventh.
+func TestRegistrationHandlers_PreviewOnlyLogs(t *testing.T) {
+	routes := []struct {
+		name, path, limitMsg string
+		send                 func(h http.Handler, email, remote string) *httptest.ResponseRecorder
+		handler              func(reg registration) http.Handler
+	}{
+		{"register", "POST /signup", "registration: limit reached", registerFrom, func(r registration) http.Handler { return r.Register }},
+		{"resend", "POST /resend", "resend-verification: limit reached", resendFrom, func(r registration) http.Handler { return r.ResendVerification }},
+	}
+	for _, c := range []struct {
+		name, env    string
+		wantCalls    int
+		wantEnforced bool
+	}{
+		{"pr-7", "pr-7", 11, false},
+		{"production", "production", 10, true},
+		{"development", "development", 10, true},
+		{"empty", "", 10, true},
+		{"bare pr-", "pr-", 10, true},
+		{"lookalike prod-7", "prod-7", 10, true},
+		{"upper-case PR-7", "PR-7", 10, true},
+		{"trailing text pr-7x", "pr-7x", 10, true},
+	} {
+		for _, rt := range routes {
+			t.Run(c.name+"/"+rt.name, func(t *testing.T) {
+				t.Setenv("RAILWAY_ENVIRONMENT_NAME", c.env)
+				authURL, calls := fakeAuth(t)
+				site, _ := url.Parse("https://site.example")
+				var logs bytes.Buffer
+				reg := registrationHandlers(authURL, site, 0, slog.New(slog.NewJSONHandler(&logs, nil)), nil)
+
+				for _, email := range distinctAddresses(11) {
+					rt.send(rt.handler(reg), email, "203.0.113.7:4000")
+				}
+				if got := countCalls(calls(), rt.path); got != c.wantCalls {
+					t.Errorf("GoTrue %s calls = %d, want %d", rt.path, got, c.wantCalls)
+				}
+				var limited int
+				for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+					var rec map[string]any
+					if json.Unmarshal([]byte(line), &rec) != nil || rec["msg"] != rt.limitMsg {
+						continue
+					}
+					limited++
+					if rec["enforced"] != c.wantEnforced {
+						t.Errorf("limit line enforced = %v, want %v: %s", rec["enforced"], c.wantEnforced, line)
+					}
+				}
+				if limited != 1 {
+					t.Errorf("%d limit lines, want exactly 1 for the eleventh request", limited)
+				}
+			})
+		}
+	}
+}
+
+// A full map warns under the name of its own throttle: register's, resend's per-address and resend's per-key.
+func TestRegistrationHandlers_FullMapWarningNamesTheMap(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	authURL, _ := fakeAuth(t)
+	site, _ := url.Parse("https://site.example")
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
+
+	remote := func(i int) string { return fmt.Sprintf("10.%d.%d.%d:4000", i>>16&255, i>>8&255, i&255) }
+	for i := range gateway.RegisterMaxKeys {
+		registerFrom(reg.Register, "user"+strconv.Itoa(i)+"@corp.example", remote(i))
+	}
+	registerFrom(reg.Register, "one-more@corp.example", remote(gateway.RegisterMaxKeys))
+	for i := range gateway.ResendMaxKeys {
+		resendFrom(reg.ResendVerification, "user"+strconv.Itoa(i)+"@corp.example", remote(i))
+	}
+	// A known client with a new address fills the per-address map; a new client fills the per-key map.
+	resendFrom(reg.ResendVerification, "one-more@corp.example", remote(0))
+	resendFrom(reg.ResendVerification, "another@corp.example", remote(gateway.ResendMaxKeys))
+
+	for _, name := range []string{"register", "resend-address", "resend-ip"} {
+		if want := name + " throttle full; refusing new addresses"; strings.Count(logs.String(), want) != 1 {
+			t.Errorf("WARN %q appears %d times, want once: %s", want, strings.Count(logs.String(), want), logs.String())
+		}
 	}
 }
 

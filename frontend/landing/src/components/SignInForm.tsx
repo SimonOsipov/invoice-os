@@ -2,7 +2,9 @@
 import { useEffect, useState } from 'react'
 import type { CSSProperties, FormEvent } from 'react'
 import { DEMO_FORM_CSS, Glyph, WARN_PATHS } from './DemoLeadForm'
-import { handoffUrl, signInErrorMessage, signInWithPassword, startUrl, type ConsoleTarget } from '../signIn'
+import { RESEND_FAILED, resendSentNotice } from '../register'
+import { useResend } from './useResend'
+import { handoffUrl, isUnverified, signInErrorMessage, signInWithPassword, startUrl, type ConsoleTarget } from '../signIn'
 import { validateSignInForm, type SignInFormErrors } from '../signInForm'
 
 const ID = 'si-form'
@@ -19,6 +21,18 @@ export function Alert({ id, text }: { id?: string; text: string }) {
   )
 }
 
+// The status region stays mounted while the resend control shows, so screen readers announce the text put into it.
+export function ResendNotice({ note, email }: { note?: { ok: boolean }; email: string }) {
+  return (
+    <>
+      <div role="status">
+        {note?.ok && <p className="t-body-sm" style={{ marginTop: 8, marginBottom: 0, overflowWrap: 'anywhere' }}>{resendSentNotice(email)}</p>}
+      </div>
+      {note?.ok === false && <Alert text={RESEND_FAILED} />}
+    </>
+  )
+}
+
 // heldState is read at open and again at submit: an expired or dropped state is never posted.
 export function SignInForm({ heldState, initialError, consoleTarget }: { heldState: () => string | null; initialError?: string; consoleTarget?: ConsoleTarget }) {
   const [state, setState] = useState(heldState)
@@ -27,6 +41,8 @@ export function SignInForm({ heldState, initialError, consoleTarget }: { heldSta
   const [errors, setErrors] = useState<SignInFormErrors>({})
   const [formError, setFormError] = useState(initialError)
   const [submitting, setSubmitting] = useState(false)
+  const [unverified, setUnverified] = useState<string>()
+  const { resending, note, resend, reset: resetResend } = useResend(unverified)
 
   // A new getter means App dropped the state while the form is open.
   useEffect(() => {
@@ -40,6 +56,7 @@ export function SignInForm({ heldState, initialError, consoleTarget }: { heldSta
       setSubmitting(false)
       setPassword('')
       setFormError(undefined)
+      setUnverified(undefined)
     }
     window.addEventListener('pageshow', onShow)
     return () => window.removeEventListener('pageshow', onShow)
@@ -81,6 +98,8 @@ export function SignInForm({ heldState, initialError, consoleTarget }: { heldSta
       return
     }
     setFormError(undefined)
+    setUnverified(undefined)
+    resetResend()
     setSubmitting(true)
     try {
       const url = handoffUrl(await signInWithPassword(email.trim(), password, live), consoleTarget)
@@ -90,6 +109,7 @@ export function SignInForm({ heldState, initialError, consoleTarget }: { heldSta
       }
     } catch (err) {
       setFormError(signInErrorMessage(err))
+      if (isUnverified(err)) setUnverified(email.trim())
     }
     setSubmitting(false)
   }
@@ -151,6 +171,14 @@ export function SignInForm({ heldState, initialError, consoleTarget }: { heldSta
         )}
       </button>
       {formError && <Alert text={formError} />}
+      {unverified !== undefined && (
+        <>
+          <button type="button" onClick={resend} disabled={resending} className="ds-btn ds-btn--outline ds-btn--md" style={{ ...BUTTON_STYLE, marginTop: 12 }}>
+            {resending ? 'Sending…' : 'Send the link again'}
+          </button>
+          <ResendNotice note={note} email={unverified} />
+        </>
+      )}
     </form>
   )
 }

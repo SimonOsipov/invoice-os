@@ -158,6 +158,7 @@ describe('signIn module surface', () => {
     expect(Object.keys(signIn).sort()).toEqual([
       'SIGN_IN_UNAVAILABLE',
       'handoffUrl',
+      'isUnverified',
       'readSignInConsole',
       'readSignInState',
       'signInConfigured',

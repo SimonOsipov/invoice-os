@@ -19,6 +19,7 @@ const signInSweepEvery = time.Minute
 // ceiling: 10 wrong attempts per window lock a victim out indefinitely, even with the right password; revisit with a per-client-IP limit.
 // ceiling: in-process counts; a restart clears them and replicas do not share them.
 type SignInThrottle struct {
+	name      string // names the instance in the full-map WARN
 	mu        sync.Mutex
 	max       int
 	maxKeys   int
@@ -37,8 +38,8 @@ type signInCount struct {
 	start time.Time // first counted attempt of the window
 }
 
-func NewSignInThrottle(max, maxKeys int, window time.Duration, now func() time.Time) *SignInThrottle {
-	return &SignInThrottle{max: max, maxKeys: maxKeys, window: window, now: now, counts: make(map[string]signInCount)}
+func NewSignInThrottle(name string, max, maxKeys int, window time.Duration, now func() time.Time) *SignInThrottle {
+	return &SignInThrottle{name: name, max: max, maxKeys: maxKeys, window: window, now: now, counts: make(map[string]signInCount)}
 }
 
 func signInKey(email string) string { return strings.ToLower(strings.TrimSpace(email)) }
@@ -62,7 +63,7 @@ func (t *SignInThrottle) Reserve(email string) bool {
 		if len(t.counts) >= t.maxKeys {
 			if now.Sub(t.lastWarn) >= time.Minute {
 				t.lastWarn = now
-				slog.Default().Warn("sign-in throttle full; refusing new addresses", slog.Int("keys", len(t.counts)))
+				slog.Default().Warn(t.name+" throttle full; refusing new addresses", slog.Int("keys", len(t.counts)))
 			}
 			return false
 		}

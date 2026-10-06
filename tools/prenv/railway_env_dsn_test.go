@@ -834,6 +834,9 @@ func TestAssertDBDSNs_UnusableBatchedResponseFailsBeforeTheCheck(t *testing.T) {
 			if !strings.Contains(out, dsnForkEnv) {
 				t.Errorf("output does not name the environment %s; output = %q", dsnForkEnv, out)
 			}
+			if !strings.Contains(out, "not a JSON object with data") {
+				t.Errorf("output does not give the unusable response as the reason; output = %q", out)
+			}
 		})
 	}
 }

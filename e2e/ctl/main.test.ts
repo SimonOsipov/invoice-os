@@ -207,7 +207,38 @@ describe('ctl entry under node', () => {
     const r = entry('login', 'firm', '--env', 'production')
     expect(r.status).toBe(1)
     expect(r.stdout).toBe('')
-    expect(r.stderrJson).toMatchObject({ error: expect.any(String), hint: expect.any(String) })
+    expect(r.stderrJson).toMatchObject({ error: expect.stringContaining('production'), hint: expect.stringContaining('--env pr-') })
+  })
+
+  it('login argument rules reach the real entry before any network call', () => {
+    const r = entry('login', 'developer', '--env', 'pr-1', '--role', 'admin')
+    expect(r.status).toBe(2)
+    expect(r.stdout).toBe('')
+    expect(r.stderrJson).toMatchObject({ error: expect.stringContaining('--role applies to firm and inhouse') })
+  })
+
+  it('every ctl module and the helpers it loads import under the Node runner', () => {
+    const script = `
+      import { readdirSync } from 'node:fs'
+      import { registerHooks } from 'node:module'
+      const loaded = []
+      registerHooks({ load(url, ctx, next) { loaded.push(url); return next(url, ctx) } })
+      const has = (name) => loaded.some((u) => u.endsWith('/' + name + '.ts'))
+      const exportsOf = {}
+      const modules = readdirSync('./ctl').filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts') && f !== 'browserSession.ts')
+      for (const f of modules) exportsOf[f] = Object.keys(await import('./ctl/' + f))
+      const early = ['realAccounts', 'api/client', 'topology/targets', 'personaSession', 'staffSession'].filter(has)
+      for (const name of ${JSON.stringify(URL_VARS)}) process.env[name] = 'https://dummy.invalid'
+      for (const f of ['ctl/browserSession', 'personaSession', 'staffSession', 'realAccounts']) exportsOf[f.split('/').pop() + '.ts'] = Object.keys(await import('./' + f + '.ts'))
+      console.log(JSON.stringify({ early, exportsOf }))`
+    const r = spawnSync(process.execPath, ['--import', './ctl/tsResolve.mjs', '--input-type=module', '-e', script], { cwd: E2E_DIR, env, encoding: 'utf8' })
+    expect(r.status, r.stderr).toBe(0)
+    const out = JSON.parse(r.stdout.trim().split('\n').pop() as string)
+    expect(Object.keys(out.exportsOf)).toEqual(expect.arrayContaining(['login.ts', 'railway.ts', 'browserSession.ts', 'personaSession.ts']))
+    // login.ts loads no URL-resolving helper at import time (D30).
+    expect(out.early).toEqual([])
+    // browserSession drives the front door and the handoff check that personaSession must export.
+    expect(out.exportsOf['personaSession.ts']).toEqual(expect.arrayContaining(['passFrontDoor', 'expectHandoffSession']))
   })
 
   it('main loads a command module only when that command runs', () => {

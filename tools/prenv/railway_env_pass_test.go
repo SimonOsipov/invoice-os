@@ -1627,6 +1627,8 @@ func TestForkVarsAfterURLs_URLsAreWrittenVerbatim(t *testing.T) {
 		{"landing", "VITE_SUPPORT_URL", urls[4]},
 		{"landing", "VITE_OPS_URL", urls[3]},
 		{"ops-console", "VITE_LANDING_URL", urls[2]},
+		{"ops-console", "VITE_GATEWAY_URL", urls[0]},
+		{"gateway", "RECONCILIATION_URL", reconciliationURL},
 	} {
 		if got, ok := passWritten(ws, sentrySvcID(c.svc), c.name); !ok || got != c.want {
 			t.Errorf("%s.%s written as %q (present %t), want %q", c.svc, c.name, got, ok, c.want)

@@ -1225,7 +1225,8 @@ test('firm Settings: an admin invites from the Members screen, sees the pending 
     const { scrollHeight, clientHeight } = await scroll.evaluate((el) => ({ scrollHeight: el.scrollHeight, clientHeight: el.clientHeight }))
     expect(enclosesRect(scrollBox, menuBox, 1), `the menu must sit inside members-table-scroll at ${width}px`).toBe(true)
     expect(scrollHeight - clientHeight, `members-table-scroll must not scroll for the open menu at ${width}px`).toBeLessThanOrEqual(1)
-    return { width, menuBottom: menuBox.y + menuBox.height, scrollBottom: scrollBox.y + scrollBox.height, scrollHeight, clientHeight }
+    const menuClearance = await scroll.evaluate((el) => parseFloat(getComputedStyle(el).paddingBottom))
+    return { width, menuHeight: menuBox.height, menuClearance, menuBottom: menuBox.y + menuBox.height, scrollBottom: scrollBox.y + scrollBox.height, scrollHeight, clientHeight }
   })
   expect(l2.map((m) => m.width)).toEqual([...WIDE_WIDTHS])
   await testInfo.attach('members-invite-menu-fit.json', { body: JSON.stringify(l2, null, 2), contentType: 'application/json' })

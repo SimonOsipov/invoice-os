@@ -1208,6 +1208,24 @@ describe('RESEND-07-04', () => {
       expect(screen.getByTestId('member-drawer')).toBeTruthy()
     })
 
+    it('MembersView: a long flash shrinks with an ellipsis and keeps the full text in title', async () => {
+      const long = `${'a'.repeat(200)}@x.ng`
+      const gw = gateway({
+        list: [answer(listOf(wire({ id: 'i1', email: long })))],
+        resend: [answer(wire({ id: 'i1', email: long }))],
+      })
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(1))
+      clickResendOn(inviteRows()[0])
+      const el = await screen.findByTestId('members-flash')
+
+      expect(parseFloat(el.style.minWidth)).toBe(0)
+      expect(el.style.overflow).toBe('hidden')
+      expect(el.style.textOverflow).toBe('ellipsis')
+      expect(el.style.whiteSpace).toBe('nowrap')
+      expect(el.getAttribute('title')).toBe(el.textContent)
+    })
+
     it('MembersView: the flash clears after three seconds', async () => {
       const timeouts = vi.spyOn(window, 'setTimeout')
       const gw = gateway({

@@ -227,10 +227,12 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
           background="var(--bg-2)"
         />
         <div style={{ flex: 1 }} />
+        {/* Shrinks (ellipsis) so a long address cannot push Invite past the table's right edge. */}
         {flash && (
           <span
             data-testid="members-flash"
-            style={{ flex: 'none', fontSize: 12.5, color: flash.tone === 'failed' ? 'var(--status-red-text)' : 'var(--status-green-text)' }}
+            title={flash.text}
+            style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12.5, color: flash.tone === 'failed' ? 'var(--status-red-text)' : 'var(--status-green-text)' }}
           >
             {flash.text}
           </span>

@@ -44,12 +44,12 @@ func startInviteGateway(t *testing.T, authBase string, preview gateway.Invitatio
 	return serveGateway(t, mux)
 }
 
-// resendStandIn records each POST /emails/batch body.
 type resendMessage struct {
 	To   []string `json:"to"`
 	HTML string   `json:"html"`
 }
 
+// resendStandIn records each POST /emails/batch body.
 type resendStandIn struct {
 	mu      sync.Mutex
 	batches [][]resendMessage
@@ -185,7 +185,7 @@ func TestIdP_InviteeRegistersVerifiesSignsInAndJoins(t *testing.T) {
 
 	w.register(t, u.password)
 	link := confirmationLink(t, u.email)
-	t.Log("mailpit message count for the invitee after one registration: 1")
+	t.Logf("mailpit message count for the invitee after one registration: %d", mailCount(t, u.email))
 	if status, body := signIn(t, w.base, u); status != http.StatusBadRequest || body["error_code"] != "email_not_confirmed" {
 		t.Fatalf("password grant before the click: status %d, body %v; want 400 email_not_confirmed", status, body)
 	}

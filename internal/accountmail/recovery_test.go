@@ -52,6 +52,8 @@ func TestRecoveryTemplate_CarriesItsCopy(t *testing.T) {
 	got := text(renderRecovery(t, adaEmail, jsonMap{}, true))
 	for _, want := range []string{
 		"Reset your ASComply password", "Password reset", "Reset your password.", "Choose a new password",
+		"Use this link to choose a new password for your ASComply account.", "Choose a new one to sign in.",
+		"Use the button to choose a new password.",
 		"This link expires in 24 hours.", "If you did not ask for this, ignore this email.",
 		"You received this email because a password reset was requested for this address.",
 	} {
@@ -147,5 +149,43 @@ func TestRecoveryTemplate_KeepsTheLayoutRules(t *testing.T) {
 	style, _ := mustRow(t, out, "Email")
 	if !strings.Contains(style, "overflow-wrap:anywhere") {
 		t.Errorf("Email value cell style %q lacks overflow-wrap:anywhere", style)
+	}
+}
+
+func TestRecoveryTemplate_DetailsHoldOnlyTheEmailRow(t *testing.T) {
+	answers := reg("display_name", "Zelda Quill", "workspace_name", "Quill Holdings")
+	for _, tc := range []struct {
+		name string
+		data jsonMap
+		keep bool
+	}{{"with Data", answers, true}, {"without Data", nil, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := renderRecovery(t, adaEmail, tc.data, tc.keep)
+			if _, v := mustRow(t, out, "Email"); v != adaEmail {
+				t.Errorf("Email row = %q, want %q", v, adaEmail)
+			}
+			if n := len(regexp.MustCompile(`<td\b[^>]*\bwidth="120"`).FindAllString(out, -1)); n != 1 {
+				t.Errorf("details hold %d label cells, want only Email", n)
+			}
+			for _, row := range []string{"Organisation", "Role", "Admin"} {
+				if strings.Contains(text(out), row) {
+					t.Errorf("mail holds the confirmation row %q", row)
+				}
+			}
+		})
+	}
+}
+
+func TestRecoveryTemplate_EscapesAHostileAddress(t *testing.T) {
+	const email = `x"><script>alert(1)</script>'@obi.test`
+	out := renderRecovery(t, email, jsonMap{}, true)
+	if strings.Contains(out, "<script") || strings.Contains(out, `</script>`) {
+		t.Errorf("mail carries markup from the address:\n%s", out)
+	}
+	if n := strings.Count(out, "&lt;script&gt;"); n < 2 {
+		t.Errorf("escaped script tag appears %d times, want in the intro and the Email row", n)
+	}
+	if _, v := mustRow(t, out, "Email"); strings.ContainsAny(v, "<>\"") {
+		t.Errorf("Email row %q holds unescaped markup", v)
 	}
 }

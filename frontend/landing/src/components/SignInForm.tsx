@@ -57,11 +57,10 @@ export function SignInForm({ heldState, initialError, consoleTarget }: { heldSta
       setPassword('')
       setFormError(undefined)
       setUnverified(undefined)
-      resetResend()
     }
     window.addEventListener('pageshow', onShow)
     return () => window.removeEventListener('pageshow', onShow)
-  }, [resetResend])
+  }, [])
 
   // No state in memory: the bounce mints one and returns with ?state=.
   if (!state) {

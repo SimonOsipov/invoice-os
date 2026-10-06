@@ -664,6 +664,7 @@ func TestClientKey(t *testing.T) {
 		{name: "RemoteAddr IPv4-mapped IPv6", absent: true, remote: "[::ffff:192.0.2.9]:5555", key: "192.0.2.9", source: "remote_addr"},
 		{name: "RemoteAddr IPv6 with a zone", absent: true, remote: "[fe80::1%eth0]:5555", key: "fe80::/64", source: "remote_addr"},
 		{name: "RemoteAddr IPv6 without a port", absent: true, remote: "2001:db8:1:2::1", key: "2001:db8:1:2::/64", source: "remote_addr"},
+		{name: "unparseable RemoteAddr", absent: true, remote: "@", key: "@", source: "remote_addr"},
 		{name: "garbage header, IPv6 RemoteAddr", header: "garbage", remote: "[2001:db8:1:2::1]:5555", key: "2001:db8:1:2::/64", source: "remote_addr"},
 	}
 	for _, c := range rows {
@@ -811,6 +812,9 @@ func TestResendVerification_OnlyA4xxAnswerIsRefunded(t *testing.T) {
 		{"200", viaFake(http.StatusOK, `{}`), 1},
 		{"429 over_request_rate_limit", viaFake(http.StatusTooManyRequests, gtOverRequestRateLimit), 0},
 		{"500", viaFake(http.StatusInternalServerError, gtInternal), 1},
+		{"302 redirect", viaFake(http.StatusFound, `{}`), 1},
+		{"399 below the 4xx range", viaFake(399, `{}`), 1},
+		{"499 top of the 4xx range", viaFake(499, `{}`), 0},
 		{"403", viaFake(http.StatusForbidden, `{"code":403,"error_code":"not_admin","msg":"forbidden"}`), 0},
 		{"400 email_address_not_authorized", viaFake(http.StatusBadRequest, `{"code":400,"error_code":"email_address_not_authorized","msg":"no"}`), 0},
 		{"400 validation_failed", viaFake(http.StatusBadRequest, gtValidationFailed), 0},

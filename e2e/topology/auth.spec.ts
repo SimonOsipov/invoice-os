@@ -1954,6 +1954,13 @@ async function expectStack(page: Page, width: number, card: Locator, parts: [str
   const [a, b] = sameEdges.map((name) => boxes.get(name)!)
   expect(Math.abs(a.x - b.x), `${sameEdges.join(' and ')} left edges at ${width}px`).toBeLessThanOrEqual(1)
   expect(Math.abs(a.x + a.width - (b.x + b.width)), `${sameEdges.join(' and ')} right edges at ${width}px`).toBeLessThanOrEqual(1)
+  // The card scrolls on overflow, so an unwrapped address would pass the box checks above and the document check below.
+  const overflowed: string[] = []
+  for (const [name, el] of [['card', card] as [string, Locator], ...parts]) {
+    const over = await el.evaluate((node) => node.scrollWidth - node.clientWidth)
+    if (over > 1) overflowed.push(`${name} by ${over}px`)
+  }
+  expect(overflowed, `content overflows its box at ${width}px`).toEqual([])
   const doc = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }))
   expect(doc.scrollWidth - doc.clientWidth, `the document scrolls sideways at ${width}px (${JSON.stringify(doc)})`).toBeLessThanOrEqual(1)
 }
@@ -1999,7 +2006,7 @@ async function resendFromSignIn(page: Page, dialog: Locator, email: string, post
   const alert = dialog.getByRole('alert').filter({ hasText: UNVERIFIED })
   const resend = dialog.getByRole('button', { name: RESEND, exact: true })
   const notice = dialog.getByRole('status')
-  await expect(notice).toHaveCount(0)
+  await expect(notice, 'the live region is mounted and empty before the click').toBeEmpty()
   expect(posts, 'resends before the click').toHaveLength(0)
 
   const answer = resendAnswer(page)
@@ -2018,7 +2025,7 @@ async function resendFromView(page: Page, dialog: Locator, email: string, posts:
   const resend = dialog.getByRole('button', { name: RESEND, exact: true })
   const close = dialog.getByRole('button', { name: 'Close', exact: true }).filter({ hasText: 'Close' })
   const notice = dialog.getByRole('status')
-  await expect(notice).toHaveCount(0)
+  await expect(notice, 'the live region is mounted and empty before the click').toBeEmpty()
   expect(posts, 'resends before the click').toHaveLength(0)
 
   const answer = resendAnswer(page)

@@ -11,6 +11,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -1405,6 +1406,36 @@ func TestRegistrationHandlers_PreviewOnlyLogs(t *testing.T) {
 					t.Errorf("%d limit lines, want exactly 1 for the eleventh request", limited)
 				}
 			})
+		}
+	}
+}
+
+// A full map warns under the name of its own throttle: register's, resend's per-address and resend's per-key.
+func TestRegistrationHandlers_FullMapWarningNamesTheMap(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	authURL, _ := fakeAuth(t)
+	site, _ := url.Parse("https://site.example")
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
+
+	remote := func(i int) string { return fmt.Sprintf("10.%d.%d.%d:4000", i>>16&255, i>>8&255, i&255) }
+	for i := range gateway.RegisterMaxKeys {
+		registerFrom(reg.Register, "user"+strconv.Itoa(i)+"@corp.example", remote(i))
+	}
+	registerFrom(reg.Register, "one-more@corp.example", remote(gateway.RegisterMaxKeys))
+	for i := range gateway.ResendMaxKeys {
+		resendFrom(reg.ResendVerification, "user"+strconv.Itoa(i)+"@corp.example", remote(i))
+	}
+	// A known client with a new address fills the per-address map; a new client fills the per-key map.
+	resendFrom(reg.ResendVerification, "one-more@corp.example", remote(0))
+	resendFrom(reg.ResendVerification, "another@corp.example", remote(gateway.ResendMaxKeys))
+
+	for _, name := range []string{"register", "resend-address", "resend-ip"} {
+		if want := name + " throttle full; refusing new addresses"; strings.Count(logs.String(), want) != 1 {
+			t.Errorf("WARN %q appears %d times, want once: %s", want, strings.Count(logs.String(), want), logs.String())
 		}
 	}
 }

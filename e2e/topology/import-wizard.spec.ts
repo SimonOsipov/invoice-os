@@ -57,7 +57,7 @@
 // package already used. STALE as of the persona-handoff-fix regression fix
 // ([entity-id-restored]): that story's own steps 1-2 added data-testid="company-switcher"
 // / "company-switcher-option" / "invoices-list" to the app (Sidebar.tsx/
-// InvoicesList.tsx), and this file's own selectEntity() helper (a copy of
+// InvoicesList.tsx), and importWizardShared.ts's selectEntity() helper (a copy of
 // invoice-surfaces.spec.ts's, see its doc comment) now uses them -- role/exact-text is
 // no longer the exclusive idiom in this file, just the original one.
 import { readFileSync } from 'node:fs'
@@ -87,14 +87,33 @@ import {
   type ExtractionJobsResponse,
   type ExtractionReason,
   type ExtractionRegion,
-  type Persona,
 } from '../api/client'
 import { ensureFirmPolicyActive, ensureInhousePolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
-import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
+import { expectedStatusDropper } from './consoleGate'
 import { assertFillsColumn, assertPageDoesNotScrollSideways, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
 import { signInAs } from '../personaSession'
-import { INHOUSE_PERSONA, shardTenants } from './targets'
+import { INHOUSE_PERSONA } from './targets'
+import {
+  boxOf,
+  collectErrors,
+  DEAD_LETTER_NEEDLE,
+  DOCUMENT_FIXTURES,
+  edgesOf,
+  extractOneDocument,
+  openExtractionReview,
+  POINT_ARMED,
+  RATIO_TOL_PX,
+  REASON_PILL,
+  requestBody,
+  sameRect,
+  selectEntity,
+  settledRead,
+  shardPersonas,
+  uniqueGarbageBytes,
+  uniquePdfBytes,
+  VOCABULARY,
+} from './importWizardShared'
 import {
   buildAir07TitleRowCsv,
   buildAir07UnsteeredCsv,
@@ -150,56 +169,14 @@ interface MixedImportResponse {
   }[]
 }
 
-// collectErrors(): console/pageerror collection, with the approval-run 404 dropped.
-function collectErrors(page: Page, extra?: Dropper): string[] {
-  const errors: string[] = []
-  const droppers = [approvalRun404Dropper(page), ...(extra ? [extra] : [])]
-  page.on('console', (msg) => {
-    if (msg.type() !== 'error') return
-    if (droppers.some((drop) => drop(msg.text(), msg.location().url))) return
-    errors.push(msg.text())
-  })
-  page.on('pageerror', (err) => {
-    errors.push(`pageerror: ${err.message}`)
-  })
-  return errors
-}
-
 // This file runs in its own shard, on its own tenants: PERSONAS shadows the api client's 1111 / 2222 pair.
-const SHARD = shardTenants('import-wizard.spec.ts')
-const PERSONAS: { A: Persona; B: Persona } = {
-  A: { ...SHARD.a, tenantId: SHARD.a.id },
-  B: { ...SHARD.b, tenantId: SHARD.b.id },
-}
+const { SHARD, PERSONAS } = shardPersonas('import-wizard.spec.ts')
 
 test.beforeAll(async () => {
   expect(test.info().project.name, 'import-wizard.spec.ts belongs to the import-wizard shard').toBe('import-wizard')
   await ensureFirmPolicyActive(await login(PERSONAS.A))
   await ensureInhousePolicyActive(await login(PERSONAS.B))
 })
-
-// selectEntity(): a second copy of invoice-surfaces.spec.ts's own helper of the same
-// name (this package's established convention for small Page-driving helpers).
-// Needed here by the persona-handoff-fix regression fix ([entity-id-restored]):
-// Invoices is a CLIENT-scoped surface now (listInvoices' own `entity_id` param,
-// server-side), so a test that drives it must make ITS OWN fixture entity the active
-// workspace switcher selection first -- signInAs() alone leaves the switcher on
-// whatever `clients[0]` resolves to (portfolio's List `ORDER BY name ASC, id ASC`),
-// never this test's own Date.now()-suffixed entity. Sidebar.tsx:
-// data-testid="company-switcher" (the toggle button) / "company-switcher-option"
-// (each row in the open dropdown).
-async function selectEntity(page: Page, entityName: string): Promise<void> {
-  await page.getByTestId('company-switcher').click()
-  await page.getByTestId('company-switcher-option').filter({ hasText: entityName }).click()
-}
-
-// requestBody(): the multipart body Chromium recorded, for the ONE spec below that
-// inspects a request rather than a response. postDataBuffer first (postData() decodes
-// as text and is null for some bodies); '' when nothing was recorded, so an assertion
-// over it fails loudly instead of passing vacuously.
-function requestBody(req: Request): string {
-  return req.postDataBuffer()?.toString('utf8') ?? req.postData() ?? ''
-}
 
 // approveOpenRunsForEntity(): both submitting tests below hold only invoice NUMBERS
 // (review-row locator text filters), never ids -- this recovers them via the entity_id
@@ -2328,20 +2305,6 @@ test('DOC-E2E-01 (Core AC 5): the deployed wizard imports by document_id and nev
 // on its own extraction review instead; a single-invoice CSV still lands on the real detail,
 // the route INVCR-E2E-2 proves.
 
-const DOCUMENT_FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '../fixtures/documents')
-// Committed by EXTR-09-03, re-pointed at the rich fixture by EXTR-18-05 so the wire-derived
-// specs below read real field content instead of the mock's fixed shape.
-const NATIVE_INVOICE_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'rich_invoice.pdf'))
-
-// Fresh bytes per pick, contract-document-upload.spec.ts's own recipe: a trailing PDF
-// comment moves the content hash without moving a byte offset, so `startxref` still
-// resolves. Without it, per-tenant dedupe reuses an earlier row and the PERMANENT
-// per-document enqueue key skips the enqueue — the poll would then settle on a PREVIOUS
-// run's job and stay green while extraction is broken.
-function uniquePdfBytes(): Buffer {
-  return Buffer.concat([NATIVE_INVOICE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
-}
-
 // Committed by EXTR-11-09. Hand-written on internal/extraction/fixtures_test.go's own recipe
 // (fxAssemble :96-118 lays the objects down and computes every xref offset from their real byte
 // positions; fxPage / fxStream / fxText) -- two US-Letter text pages sharing one font:
@@ -2468,15 +2431,6 @@ async function settledInvoiceFor(token: string, entityId: string): Promise<void>
     .toBeGreaterThan(0)
 }
 
-// A file named *.pdf whose bytes are NOT a PDF: classification is extension-only and
-// upload only hashes+PUTs bytes (classify.go / service.go), so this sails through
-// selection and upload, then fails pdfium.OpenDocument on every one of River's 3
-// attempts (worker.go) and dead-letters deterministically. Fresh bytes per call, same
-// permanent-enqueue-key reason as uniquePdfBytes().
-function uniqueGarbageBytes(): Buffer {
-  return Buffer.concat([Buffer.from('not a pdf at all'), Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
-}
-
 // The canonical DOCX type, on both sides of the wire: ACCEPTED_PICKED_TYPES (lib/importFlow.ts)
 // and acceptedDocumentTypes (internal/extraction/classify.go) carry this exact spelling.
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
@@ -2536,45 +2490,6 @@ async function dropFiles(page: Page, specs: { name: string; type: string; bytes?
     }
     label.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }))
   }, specs)
-}
-
-// The CONTENT box, never the bounding box: children sit inside the card's own gutter, so
-// a border-box comparison passes a row that overflows it. scrollWidth/clientWidth ride
-// along because a stretched flex item keeps its box while its TEXT overflows — and this
-// story grew the accepted-types line from three tokens to eight.
-function edgesOf(el: HTMLElement) {
-  const r = el.getBoundingClientRect()
-  const cs = getComputedStyle(el)
-  return {
-    left: r.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft),
-    right: r.right - parseFloat(cs.borderRightWidth) - parseFloat(cs.paddingRight),
-    outerLeft: r.left,
-    outerRight: r.right,
-    scrollWidth: el.scrollWidth,
-    clientWidth: el.clientWidth,
-  }
-}
-
-// Two consecutive AGREEING reads, never one: a boundingBox taken as a panel opens measures
-// the transform mid-flight, and two different values on two reads is the tell.
-// Returns the agreed read itself: a fresh read after the poll can land on a later relayout.
-async function settledRead<T>(read: () => Promise<T>, label: string): Promise<T> {
-  let previous = ''
-  let previousValue!: T
-  await expect
-    .poll(
-      async () => {
-        const value = await read()
-        const key = JSON.stringify(value)
-        const stable = key === previous
-        previous = key
-        previousValue = value
-        return stable
-      },
-      { message: `${label}: geometry never settled across two consecutive reads`, timeout: 15_000 },
-    )
-    .toBe(true)
-  return previousValue
 }
 
 // Steps the viewport down until the pane stops shrinking and returns that viewport width.
@@ -3203,11 +3118,6 @@ test('EXTR10-E2E-01: the document progress card samples a closed vocabulary and 
 // review-routing render, so the text this spec measures might never actually paint.
 // Holding the good pipeline open removes that race structurally: Promise.all cannot
 // resolve, so the card cannot unmount, until this spec explicitly releases it.
-// This upload is *.pdf bytes that are not a PDF, so pdfium fails to open it and the worker
-// dead-letters at pages_not_rendered (worker.go). EXTR-15-04 gives that kind its own sentence,
-// so the needle must be a fragment of THAT sentence and of no other kind's --
-// documentRun.test.ts's TS15-10b is this literal's only local oracle.
-const DEAD_LETTER_NEEDLE = 'it may be damaged, or protected by a password'
 
 // EXTR-15-12 (T1). The WHOLE pages_not_rendered sentence, copied from its sole owner,
 // documentRun.ts's deadLetterRefusal. deployedProofGuards.test.ts reads that function's
@@ -3407,68 +3317,6 @@ test('EXTR10-E2E-02: a dead-lettered row wraps its long reason without inflating
 // Invented-copy table fixes all three strings ("Check the extraction", "This document has no
 // extraction to check.", "Extraction review"); an earlier draft of this comment said otherwise.
 
-/**
- * The document journey EXTR09-E2E-01 proves: lands on the document's own extraction review,
- * then takes its exit to the real invoice detail. `file` defaults to the one-page fixture.
- */
-async function extractOneDocument(
-  page: Page,
-  label: string,
-  file: { name: string; buffer: Buffer } = { name: 'native_invoice.pdf', buffer: uniquePdfBytes() },
-): Promise<void> {
-  const token = await login(PERSONAS.A)
-  const entity = await createEntity(token, { name: `${label} ${Date.now()}`, tin: freshTin() })
-
-  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
-  await selectEntity(page, entity.name)
-
-  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
-  await page
-    .locator('input[type="file"]#pf-import-file')
-    .setInputFiles({ name: file.name, mimeType: 'application/pdf', buffer: file.buffer })
-  await page.getByRole('button', { name: 'Extract invoices' }).click()
-
-  await expect(page.getByTestId('extraction-review'), 'the document run must land on its extraction review').toBeVisible({
-    timeout: 240_000,
-  })
-  await expect
-    .poll(() => new URL(page.url()).pathname, { message: 'the landing must be addressed at its own job path' })
-    .toMatch(/^\/extraction\/[0-9a-fA-F-]{36}$/)
-  await expect(page.getByTestId('extraction-open-invoice'), 'the review must offer its exit').toBeVisible({ timeout: 60_000 })
-  await page.getByTestId('extraction-open-invoice').click()
-  await expect(page.getByTestId('invoice-detail'), 'the exit must reach the real invoice detail').toBeVisible({ timeout: 60_000 })
-}
-
-// Opens the review screen and RETURNS the 200 the SPA itself consumed. Every wire fact these
-// specs assert comes off this one response -- never a literal copied out of mock.go, which
-// would assert the fixture against itself.
-async function openExtractionReview(page: Page): Promise<ExtractionDetail> {
-  // Promise.all, not a bare waiter awaited after the click (EXTR-11-09 correction). The waiter
-  // is created first either way -- an array literal evaluates left to right, so the response
-  // listener is registered before the click starts -- but a click that fails its 30s
-  // actionability check used to leave the 120s waiter unhandled, and its rejection surfaced as
-  // worker noise ~90s AFTER the test had already reported. Promise.all attaches a handler to
-  // both, so the click's failure is the one that propagates and nothing is left dangling.
-  //
-  // `$`-anchored: the LIST route has no id segment and the page route ends in /pages/{n}.
-  const [res] = await Promise.all([
-    page.waitForResponse(
-      (r) =>
-        r.request().method() === 'GET' &&
-        /\/api\/submission\/v1\/extractions\/[0-9a-fA-F-]{36}$/.test(new URL(r.url()).pathname),
-      { timeout: 120_000 },
-    ),
-    page.getByTestId('open-extraction-review').click(),
-  ])
-
-  expect(res.status(), 'the review screen must read its detail over a 200').toBe(200)
-  await expect(page.getByTestId('extraction-review'), 'the review screen must open').toBeVisible({ timeout: 60_000 })
-  await expect(page.getByTestId('extraction-page-1'), 'the canvas must render at least one frame').toBeVisible({
-    timeout: 60_000,
-  })
-  return (await res.json()) as ExtractionDetail
-}
-
 // ROUTE-02-07 (X-4): the extraction cold boot. No API creates a job (nothing seeds
 // extraction_jobs), so the only route to a real jobId is driving the real pipeline, then a
 // FRESH page.goto -- a real browser navigation, not an SPA route push -- that discards all
@@ -3498,25 +3346,6 @@ function firstLocatedField(detail: ExtractionDetail) {
   expect(field, 'no field on this document carries a region -- every ratio below would be vacuous').toBeTruthy()
   return { name: field!.name, region: field!.region! }
 }
-
-async function boxOf(page: Page, testid: string): Promise<Rect> {
-  const box = await page.getByTestId(testid).boundingBox()
-  expect(box, `${testid} did not render`).not.toBeNull()
-  return box as Rect
-}
-
-// AC-4's ONLY real oracle. `overlapOf(highlight, image) === highlight` is true for a box
-// anywhere inside the page and VACUOUSLY true for a 0x0 box entirely off it -- overlapOf
-// clamps per axis with Math.max(0, …), so the intersection collapses to the highlight's own
-// rect (layout.ts:68). Containment therefore rides along below as a cheap extra, never as the
-// assertion.
-//
-// Per-axis pixel tolerance, not a strict float compare: the browser resolves `left: 62%` and
-// `width: 28%` against the frame independently, so an edge can carry two roundings, and a
-// strict toEqual on boundingBox() floats flakes. 1.5px on a 560-960px frame is under 0.3% --
-// three orders coarser than the defect this catches (a wrong axis, an inverted origin, or a
-// transform, all of which land tens of percent out).
-const RATIO_TOL_PX = 1.5
 
 test('EXTR11-E2E-03 (AC-4): the highlight lands where the region says, at every zoom', async ({ page }, testInfo) => {
   test.setTimeout(300_000)
@@ -4288,16 +4117,6 @@ test('EXTR11-E2E-07 (AC-6): the entry control and its sibling clear each other o
 // E2E on `pull_request.draft == false`. The local oracle is `pnpm -r typecheck` plus
 // `playwright test --list`, exactly as the EXTR-11 block above was authored under.
 
-// The story's Invented-copy table. A transcription, deliberately not an import: the SPA is a
-// different package, and reading the mapping out of the module under test would assert it
-// against itself. `ambiguous` is not a fixed key here -- its pill's word depends on a live
-// chip count, which COUNT_WORD below transcribes instead.
-const REASON_PILL: Record<Exclude<ExtractionReason, '' | 'ambiguous'>, string> = {
-  unreadable: "COULDN'T READ THIS CLEARLY",
-  inconsistent: "DOESN'T ADD UP",
-  missing: 'NOT FOUND',
-}
-
 // A transcription with NO numeral fallback: resolve.go:47 caps a field at 8 candidates, so a
 // chip count with no word here is a real defect on the deployed build.
 const COUNT_WORD: Record<number, string> = {
@@ -4309,30 +4128,6 @@ const COUNT_WORD: Record<number, string> = {
   7: 'SEVEN',
   8: 'EIGHT',
 }
-
-// internal/extraction/vocabulary.go, HeaderFields -- and the order one Save writes in. The
-// file's ONE copy: EXTR-12-09's block below cites this declaration rather than repeating it,
-// because two transcriptions of one list drift apart silently. A transcription, deliberately
-// not an import: the SPA is a different package, and reading the order out of the module under
-// test would assert it against itself. EXTR-13-06's headerFields guard in
-// frontend/app/src/lib/wireMirrors.test.ts now compares this copy to the Go slice in order, so
-// a drift here reds that file rather than passing quietly.
-//
-// EXTR-13-02 widened the mock's default result with 16 line-item names; EXTR-13-07 gives them
-// their own grid, LineItemGrid, and the header pane renders none of them -- so the per-field
-// loop below is bounded to this vocabulary.
-const VOCABULARY = [
-  'invoice_number',
-  'issue_date',
-  'supplier_tin',
-  'supplier_name',
-  'buyer_tin',
-  'buyer_name',
-  'currency',
-  'subtotal',
-  'vat',
-  'total',
-]
 
 test('EXTR12-E2E-01 (AC-2): every reason the extractor reported renders its pill', async ({ page }, testInfo) => {
   test.setTimeout(300_000)
@@ -4741,11 +4536,9 @@ test('EXTR12-E2E-04 (AC-8): the chip row shares its column evenly at every WIDE_
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// EXTR-12's Invented-copy table, with the lead's Stage-1 corrections. `POINT_ARMED` replaces
-// the artboard's click-arm string: this build's gesture is a DRAG, and under the 24x12 floor a
-// user who obeys "click the words" gets nothing. Both are clear of the reason-code sweep above.
+// EXTR-12's Invented-copy table, with the lead's Stage-1 corrections. `POINT_ARMED` is in
+// importWizardShared.ts. Both are clear of the reason-code sweep above.
 const POINT_IDLE = 'Not found — point at it on the document'
-const POINT_ARMED = 'Waiting — drag a box around it on the document'
 
 type Ratio = { x: number; y: number; width: number; height: number }
 
@@ -5239,7 +5032,7 @@ test('EXTR11-E2E-11 (AC-8): the page frame centres in its column and the point b
 // `playwright test --list`.
 
 // The header vocabulary this block reads -- HeaderFields, in the order one Save writes in --
-// is `VOCABULARY`, declared once above beside EXTR12-E2E-01. It used to be transcribed twice in
+// is `VOCABULARY`, declared once in importWizardShared.ts. It used to be transcribed twice in
 // this file, byte for byte; one list, one copy.
 
 // internal/extraction/handlers_correction.go, lockedFields: a correction on any of the three is
@@ -7107,14 +6900,6 @@ test('EXTR37-E2E-01: the second import of a file for the same client opens mappe
 // NO ASSERTION STATES A PIXEL WIDTH. A width assertion passes on the very bug it should
 // catch (a row that fits at 2560 and overflows at 1280 has the same width at both). What
 // is asserted instead is a RELATIONSHIP that must hold at every width.
-function sameRect(a: Rect, b: Rect, slackPx = 1): boolean {
-  return (
-    Math.abs(a.x - b.x) <= slackPx &&
-    Math.abs(a.y - b.y) <= slackPx &&
-    Math.abs(a.width - b.width) <= slackPx &&
-    Math.abs(a.height - b.height) <= slackPx
-  )
-}
 
 test('EXTR15-E2E-01 (AC-10): the hand-off row sits inside its card, and its gutter holds at every width', async ({
   page,

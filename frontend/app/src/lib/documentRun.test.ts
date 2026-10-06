@@ -1524,9 +1524,14 @@ describe('the deployed dead-letter assertion tracks the shipped sentence (TS15-1
   // EXTR10-E2E-02 pins must be a fragment of the pages_not_rendered sentence and of no other,
   // or that spec stays green on a substring the code no longer emits.
   it('TS15-10b: the e2e needle is a discriminating fragment of the pages_not_rendered sentence', () => {
-    const spec = readRepoFile('../../e2e/topology/import-wizard.spec.ts', 'EXTR10-E2E-02')
-    const m = /const DEAD_LETTER_NEEDLE = '([^']+)'/.exec(spec)
-    expect(m, 'EXTR10-E2E-02 no longer pins its dead-letter reason through DEAD_LETTER_NEEDLE').not.toBeNull()
+    const shared = readRepoFile('../../e2e/topology/importWizardShared.ts', 'export const DEAD_LETTER_NEEDLE')
+    const m = /export const DEAD_LETTER_NEEDLE = '([^']+)'/.exec(shared)
+    expect(m, 'importWizardShared.ts no longer declares DEAD_LETTER_NEEDLE as a string literal').not.toBeNull()
+    // Consumer control: EXTR10-E2E-02 passes the constant to toContainText.
+    const spec = readRepoFile('../../e2e/topology/import-wizard.spec.ts', "test('EXTR10-E2E-02")
+    const from = spec.indexOf("test('EXTR10-E2E-02")
+    const row = spec.slice(from, spec.indexOf('\ntest(', from + 1))
+    expect(row, 'EXTR10-E2E-02 no longer asserts DEAD_LETTER_NEEDLE').toMatch(/\bDEAD_LETTER_NEEDLE\b/)
     const needle = (m as RegExpExecArray)[1]
     expect(needle.length, 'the needle is too short to identify a sentence').toBeGreaterThan(20)
 

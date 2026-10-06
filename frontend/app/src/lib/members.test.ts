@@ -27,11 +27,16 @@ import {
   hasDerivableName,
   inhouseNotifyTargets,
   initialsFrom,
+  chipVerdicts,
+  INVITE_ADMIN_ONLY,
   INVITE_ERROR,
-  invitedNotice,
+  invitedMember,
+  inviteSentNotice,
+  inviteStatusLine,
   isFiltering,
   isProtectedAdmin,
   isValidEmail,
+  listInvitations,
   listMembers,
   memberInitials,
   MEMBER_UNBACKED,
@@ -48,12 +53,21 @@ import {
   removeMember,
   REMOVE_EXPLANATION,
   replaceMember,
+  resendInvitation,
+  rosterWithInvites,
+  sendInvitations,
+  serverRefusedAddresses,
   setMembershipStatus,
   SUSPEND_EXPLANATION,
   toMember,
+  toPendingInvite,
+  upsertInvites,
+  viewerIsAdmin,
+  type InvitationWire,
   type Member,
   type MemberStatus,
   type MembershipWire,
+  type PendingInvite,
 } from './members'
 // Legal in a spec: roles.ts imports members.ts, and the test graph has no cycle. The
 // approver pair is transcribed inline in members.ts; T3-6 below pins the two agree.
@@ -289,6 +303,16 @@ const seedMembers = () => ({ firm: SEED_FIRM_MEMBERS.map((m) => ({ ...m })), inh
 const firm = () => seedMembers().firm
 const inhouse = () => seedMembers().inhouse
 const names = (list: readonly Member[]) => list.map((m) => m.name)
+
+/** A pending invite; override only what the spec reads. */
+const invite = (over: Partial<PendingInvite> = {}): PendingInvite => ({
+  id: 'i-1',
+  email: 'a@x.ng',
+  role: 'reviewer',
+  expiresAt: '2026-10-13T10:00:00.000Z',
+  delivery: 'sent',
+  ...over,
+})
 
 /** A hand-built in-house row, for the frames the shipped seed deliberately cannot reach. */
 const inhouseRow = (name: string, status: MemberStatus): Member => ({
@@ -1199,20 +1223,37 @@ describe('the client picker\'s two invented sentences (T6.12, §7)', () => {
   })
 })
 
-describe('invitedNotice — the send confirmation (T6.8)', () => {
-  it('pluralises the person it invited, one and many (T6.8)', () => {
-    // INVENTED COPY, both halves. §7 says the modal closes when everything sends; it says
-    // nothing about what confirms it, so the sentence is a reconstruction and belongs where a
-    // spec holds it — same argument as `unassignedNotice`/`stepsWarning`'s singulars.
-    expect(invitedNotice(1)).toBe('Invited 1 person.')
-    expect(invitedNotice(3)).toBe('Invited 3 people.')
+describe('inviteSentNotice — the send confirmation (D8)', () => {
+  it('inviteSentNotice — sent', () => {
+    expect(inviteSentNotice([])).toBeNull()
+    expect(inviteSentNotice([invite({ email: 'a@x.ng' })])).toEqual({ tone: 'ok', text: 'Invite sent to a@x.ng.' })
+    expect(inviteSentNotice([invite({ email: 'a@x.ng', delivery: 'sending' })])).toEqual({
+      tone: 'ok',
+      text: 'Invite sent to a@x.ng.',
+    })
+    const three = [invite({ id: 'i-1' }), invite({ id: 'i-2' }), invite({ id: 'i-3' })]
+    expect(inviteSentNotice(three)).toEqual({ tone: 'ok', text: 'Invite sent to 3 people.' })
+  })
 
-    // Reachable: a partial send flashes the count that ACTUALLY landed while the failed chips
-    // stay in the modal, so this string is rendered for counts below the chip total too.
-    expect(invitedNotice(2)).toBe('Invited 2 people.')
-    // 0 is never rendered — the modal raises no flash when nothing sent — but the branch must
-    // not read "Invited 0 person." if that gate is ever loosened.
-    expect(invitedNotice(0)).toBe('Invited 0 people.')
+  it('inviteSentNotice — failed deliveries', () => {
+    const ok = (id: string) => invite({ id, delivery: 'sent' })
+    const bad = (id: string) => invite({ id, delivery: 'failed' })
+    expect(inviteSentNotice([invite({ email: 'a@x.ng', delivery: 'failed' })])).toEqual({
+      tone: 'failed',
+      text: "The invite email to a@x.ng did not go out. Resend it from the row's ⋯ menu.",
+    })
+    expect(inviteSentNotice([bad('i-1'), ok('i-2'), ok('i-3')])).toEqual({
+      tone: 'failed',
+      text: "1 of 3 invite emails did not go out. Resend it from the row's ⋯ menu.",
+    })
+    expect(inviteSentNotice([bad('i-1'), bad('i-2'), ok('i-3')])).toEqual({
+      tone: 'failed',
+      text: "2 of 3 invite emails did not go out. Resend them from the rows' ⋯ menus.",
+    })
+    expect(inviteSentNotice([bad('i-1'), bad('i-2'), bad('i-3')])).toEqual({
+      tone: 'failed',
+      text: "3 of 3 invite emails did not go out. Resend them from the rows' ⋯ menus.",
+    })
   })
 })
 
@@ -1450,6 +1491,270 @@ describe('AC-1 — setMembershipStatus PATCHes memberships/<id>', () => {
   })
 })
 
+describe('RESEND-07-02 — the invitations wire', () => {
+  const base = 'https://gw'
+  const w: InvitationWire = {
+    id: 'i-1',
+    email: 'a@x.ng',
+    role: 'reviewer',
+    status: 'pending',
+    expires_at: '2026-10-13T10:00:00Z',
+    delivery: 'sending',
+  }
+
+  it('listInvitations GETs the invitations path and unwraps the envelope', async () => {
+    const af = vi.fn().mockResolvedValue({ invitations: [w] }) as unknown as AuthedFetch
+
+    const got = await listInvitations(af, base)
+
+    expect(af).toHaveBeenCalledTimes(1)
+    expect(af).toHaveBeenCalledWith('https://gw/api/tenancy/v1/invitations')
+    expect(got).toEqual([w])
+  })
+
+  it('sendInvitations POSTs emails and role', async () => {
+    const af = vi.fn().mockResolvedValue({ invitations: [w] }) as unknown as AuthedFetch
+
+    const got = await sendInvitations(af, base, ['a@x.ng', 'b@x.ng'], 'reviewer')
+
+    expect(af).toHaveBeenCalledTimes(1)
+    expect(af).toHaveBeenCalledWith('https://gw/api/tenancy/v1/invitations', {
+      method: 'POST',
+      body: { emails: ['a@x.ng', 'b@x.ng'], role: 'reviewer' },
+    })
+    expect(got).toEqual([w])
+  })
+
+  it("resendInvitation POSTs to the id's resend path with no body", async () => {
+    const af = vi.fn().mockResolvedValue(w) as unknown as AuthedFetch
+
+    const got = await resendInvitation(af, base, 'i-1')
+
+    expect(af).toHaveBeenCalledTimes(1)
+    const [url, opts] = (af as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(url).toBe('https://gw/api/tenancy/v1/invitations/i-1/resend')
+    expect(opts).toEqual({ method: 'POST' })
+    expect(opts).not.toHaveProperty('body')
+    expect(got).toEqual(w)
+  })
+
+  it('the invitation calls propagate the ApiError unreshaped', async () => {
+    const boom = new ApiError('http', 'daily invite limit reached: try again tomorrow', 429, {
+      error: 'daily invite limit reached: try again tomorrow',
+    })
+    const af = vi.fn().mockRejectedValue(boom) as unknown as AuthedFetch
+
+    expect(await captureRejection(() => listInvitations(af, base))).toBe(boom)
+    expect(await captureRejection(() => sendInvitations(af, base, ['a@x.ng'], 'preparer'))).toBe(boom)
+    expect(await captureRejection(() => resendInvitation(af, base, 'i-1'))).toBe(boom)
+    expect(af).toHaveBeenCalledTimes(3)
+  })
+})
+
+describe('RESEND-07-02 — the pending-invite projection and reducers', () => {
+  it('toPendingInvite maps the wire verbatim', () => {
+    const w: InvitationWire = {
+      id: 'i-9',
+      email: 'z@x.ng',
+      role: 'reviewer',
+      status: 'pending',
+      expires_at: '2026-10-13T10:00:00Z',
+      delivery: 'sending',
+    }
+    expect(toPendingInvite(w)).toEqual({
+      id: 'i-9',
+      email: 'z@x.ng',
+      role: 'reviewer',
+      expiresAt: '2026-10-13T10:00:00Z',
+      delivery: 'sending',
+    })
+  })
+
+  it('upsertInvites replaces by id and appends new ids', () => {
+    const A = invite({ id: 'A', email: 'a@x.ng' })
+    const B = invite({ id: 'B', email: 'b@x.ng' })
+    const B2 = invite({ id: 'B', email: 'b@x.ng', delivery: 'failed' })
+    const C = invite({ id: 'C', email: 'c@x.ng' })
+    const list = [A, B]
+
+    const got = upsertInvites(list, [B2, C])
+
+    expect(got).toEqual([A, B2, C])
+    expect(list).toEqual([A, B])
+  })
+
+  it('upsertInvites allocates on a miss and on empty input', () => {
+    const A = invite({ id: 'A' })
+    const list = [A]
+
+    const got = upsertInvites(list, [])
+
+    expect(got).toEqual([A])
+    expect(got).not.toBe(list)
+  })
+
+  it('invitedMember derives name and initials from the local part', () => {
+    const m = invitedMember(invite({ id: 'i-7', email: 'ada.obi@x.ng', role: 'preparer' }))
+
+    expect(m).toEqual({
+      id: 'i-7',
+      name: 'Ada Obi',
+      initials: 'AO',
+      email: 'ada.obi@x.ng',
+      role: 'preparer',
+      status: 'invited',
+      isYou: false,
+    })
+  })
+
+  it('invitedMember falls back to the address when the local part has no word', () => {
+    const m = invitedMember(invite({ email: '-@x.ng' }))
+
+    expect(m.name).toBe('-@x.ng')
+    expect(m.initials).toBe('-@')
+    expect(m.status).toBe('invited')
+  })
+
+  it('rosterWithInvites lists members first, invites after, in order', () => {
+    const M1 = { ...inhouseRow('Ada Self', 'active'), id: 'M1' }
+    const M2 = { ...inhouseRow('Bola Two', 'active'), id: 'M2' }
+    const I2 = invite({ id: 'I2', email: 'i2@x.ng' })
+    const I1 = invite({ id: 'I1', email: 'i1@x.ng' })
+    const members = [M1, M2]
+    const invites = [I2, I1]
+
+    const got = rosterWithInvites(members, invites)
+
+    expect(got.map((m) => m.id)).toEqual(['M1', 'M2', 'I2', 'I1'])
+    expect(got.slice(2).every((m) => m.status === 'invited')).toBe(true)
+    expect(members).toEqual([M1, M2])
+    expect(invites).toEqual([I2, I1])
+  })
+})
+
+describe('RESEND-07-02 — viewerIsAdmin (D3)', () => {
+  it('viewerIsAdmin is true only for an active admin self row', () => {
+    const self = (role: Member['role'], status: MemberStatus): Member => ({
+      ...inhouseRow('Ada Self', status),
+      role,
+      isYou: true,
+    })
+    const other = { ...inhouseRow('Bola Other', 'active'), role: 'admin' as const }
+
+    expect(viewerIsAdmin([other, self('admin', 'active')])).toBe(true)
+    expect(viewerIsAdmin([self('admin', 'suspended')])).toBe(false)
+    expect(viewerIsAdmin([self('preparer', 'active')])).toBe(false)
+    expect(viewerIsAdmin([other])).toBe(false)
+    expect(viewerIsAdmin([other, self('reviewer', 'active')])).toBe(false)
+  })
+})
+
+describe('RESEND-07-02 — chipVerdicts (D5 layer 1)', () => {
+  const roster = (): Member[] => [
+    { ...inhouseRow('Aaa Member', 'active'), email: 'A@x.ng' },
+    { ...inhouseRow('Bbb Invited', 'invited'), email: 'b@x.ng' },
+  ]
+  const bytes = (s: string) => new TextEncoder().encode(s).length
+
+  it('chipVerdicts flags member, invited and malformed, case-insensitive', () => {
+    expect(chipVerdicts(roster(), ['a@X.ng', 'B@x.ng', 'nope', '-@x.ng', 'c@x.ng'])).toEqual([
+      'member',
+      'invited',
+      'malformed',
+      'malformed',
+      'ok',
+    ])
+  })
+
+  // 254 = maxEmailBytes, internal/tenancy/invitations_handler.go.
+  it('chipVerdicts caps an address at 254 bytes', () => {
+    const at254 = `${'a'.repeat(249)}@x.ng`
+    const at255 = `${'a'.repeat(250)}@x.ng`
+    const twoByte = `${'a'.repeat(248)}é@x.ng`
+    expect([bytes(at254), bytes(at255), bytes(twoByte), twoByte.length]).toEqual([254, 255, 255, 254])
+
+    expect(chipVerdicts([], [at254, at255, twoByte])).toEqual(['ok', 'malformed', 'malformed'])
+  })
+
+  it('chipVerdicts refuses control characters and server-refused chips', () => {
+    expect(chipVerdicts([], ['a\u0085b@x.ng', 'a\u0000b@x.ng', 'ab@x.ng'])).toEqual(['malformed', 'malformed', 'ok'])
+
+    expect(chipVerdicts([], ['a..b@x.com'], ['a..b@x.com'])).toEqual(['malformed'])
+    expect(chipVerdicts([], ['a..b@x.com'])).toEqual(['ok'])
+    expect(chipVerdicts([], ['a..b@x.com', 'fine@x.com'], ['a..b@x.com'])).toEqual(['malformed', 'ok'])
+  })
+})
+
+describe('RESEND-07-02 — serverRefusedAddresses (D5 layer 2)', () => {
+  // The prefix is the 400 text at invitations_handler.go ("invalid email address: " + %q list).
+  const PREFIX = 'invalid email address: '
+
+  it("serverRefusedAddresses reads the server's quoted list", () => {
+    const msg = `${PREFIX}"a..b@x.com", "x\\"y@z.com"`
+    const chips = ['ok@x.com', 'a..b@x.com', 'x"y@z.com']
+
+    expect(serverRefusedAddresses(msg, chips)).toEqual(['a..b@x.com', 'x"y@z.com'])
+    expect(serverRefusedAddresses(msg, ['x"y@z.com', 'a..b@x.com'])).toEqual(['a..b@x.com', 'x"y@z.com'])
+  })
+
+  it('serverRefusedAddresses keeps only tokens that match a chip', () => {
+    const msg = `${PREFIX}"A..b@x.com", "zz@x"`
+
+    expect(serverRefusedAddresses(msg, ['a..b@x.com'])).toEqual([])
+    expect(serverRefusedAddresses(msg, ['A..b@x.com'])).toEqual(['A..b@x.com'])
+  })
+
+  it('serverRefusedAddresses ignores every other message', () => {
+    expect(serverRefusedAddresses('emails must hold 1 to 20 addresses', ['a@x.ng'])).toEqual([])
+    expect(serverRefusedAddresses(PREFIX, ['a@x.ng'])).toEqual([])
+    expect(serverRefusedAddresses(`${PREFIX}"a@x.ng"`, ['a@x.ng'])).toEqual(['a@x.ng'])
+  })
+})
+
+describe('RESEND-07-02 — inviteStatusLine (D7)', () => {
+  const NOW = Date.UTC(2026, 9, 6, 12, 0, 0)
+  const SEC = 1000
+  const HOUR = 3_600_000
+  const DAY = 24 * HOUR
+  const at = (offsetMs: number, over: Partial<PendingInvite> = {}) =>
+    invite({ expiresAt: new Date(NOW + offsetMs).toISOString(), ...over })
+
+  it('inviteStatusLine counts whole days with an hour of slack', () => {
+    expect(inviteStatusLine(at(7 * DAY - SEC), NOW)).toBe('Expires in 7 days')
+    expect(inviteStatusLine(at(DAY), NOW)).toBe('Expires in 1 day')
+    expect(inviteStatusLine(at(30 * 60 * SEC), NOW)).toBe('Expires in 1 day')
+  })
+
+  it('inviteStatusLine absorbs a browser clock behind the server', () => {
+    expect(inviteStatusLine(at(7 * DAY + 30 * SEC), NOW)).toBe('Expires in 7 days')
+    expect(inviteStatusLine(at(7 * DAY + 59 * 60 * SEC), NOW)).toBe('Expires in 7 days')
+    expect(inviteStatusLine(at(7 * DAY + HOUR), NOW)).toBe('Expires in 7 days')
+    expect(inviteStatusLine(at(7 * DAY + HOUR + 60 * SEC), NOW)).toBe('Expires in 8 days')
+  })
+
+  it('inviteStatusLine reads Expired at and after the instant', () => {
+    expect(inviteStatusLine(at(0), NOW)).toBe('Expired')
+    expect(inviteStatusLine(at(-DAY), NOW)).toBe('Expired')
+    expect(inviteStatusLine(at(1), NOW)).toBe('Expires in 1 day')
+  })
+
+  it('inviteStatusLine — failed delivery and an unparseable expiry', () => {
+    expect(inviteStatusLine(at(7 * DAY, { delivery: 'failed' }), NOW)).toBe('Email not sent')
+    expect(inviteStatusLine(at(7 * DAY, { delivery: 'sending' }), NOW)).toBe('Expires in 7 days')
+    expect(inviteStatusLine(at(7 * DAY, { delivery: 'sent' }), NOW)).toBe('Expires in 7 days')
+    expect(inviteStatusLine(invite({ expiresAt: '' }), NOW)).toBe('—')
+    expect(inviteStatusLine(invite({ expiresAt: 'nope' }), NOW)).toBe('—')
+    expect(inviteStatusLine(invite({ expiresAt: '', delivery: 'failed' }), NOW)).toBe('Email not sent')
+    expect(inviteStatusLine(at(-DAY, { delivery: 'failed' }), NOW)).toBe('Email not sent')
+  })
+})
+
+describe('RESEND-07-02 — INVITE_ADMIN_ONLY', () => {
+  it('INVITE_ADMIN_ONLY is the admin-only sentence', () => {
+    expect(INVITE_ADMIN_ONLY).toBe('Only an admin can invite people.')
+  })
+})
+
 describe('AC-2 — toMember maps the wire row to a Member', () => {
   it('maps the five wire fields to {id, name, email, role, status}', () => {
     const w = wire({
@@ -1545,10 +1850,14 @@ describe('AC-5 — filterMembers and classifyInvites tolerate a null email', () 
 
 describe('AC-7 — MEMBER_UNBACKED', () => {
   it('supplies one distinct, non-empty sentence per unbacked control', () => {
-    const keys = ['invite', 'remove', 'role', 'department', 'clientAccess'] as const
+    const keys = ['invite', 'remove', 'role', 'department', 'clientAccess', 'inviteLink', 'revokeInvite'] as const
     for (const k of keys) expect(MEMBER_UNBACKED[k]).toBeTruthy()
     const values = keys.map((k) => MEMBER_UNBACKED[k])
     expect(new Set(values).size).toBe(keys.length)
+    expect(MEMBER_UNBACKED.inviteLink).toBe('The invite link exists only in the email. The server keeps only a hash of it.')
+    expect(MEMBER_UNBACKED.revokeInvite).toBe(
+      'There is no way to revoke an invite yet. An unused invite expires 7 days after it was sent.',
+    )
   })
 })
 

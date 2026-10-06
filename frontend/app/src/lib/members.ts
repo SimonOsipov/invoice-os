@@ -603,10 +603,82 @@ export const ABSENT_LABEL = '—'
  * One sentence per control the roster still offers but no endpoint backs. Plain and
  * server-stated: what is missing, not an apology or a promise.
  */
-export const MEMBER_UNBACKED: Record<'invite' | 'remove' | 'role' | 'department' | 'clientAccess', string> = {
+export const MEMBER_UNBACKED: Record<
+  'invite' | 'remove' | 'role' | 'department' | 'clientAccess' | 'inviteLink' | 'revokeInvite',
+  string
+> = {
   invite: 'There is no invite endpoint yet — nothing mints a token, tracks an expiry, or sends the email.',
   remove: 'Deleting a membership locks that person out on their next request, and nothing undoes it. That decision has not been taken.',
   role: 'The membership endpoint writes status only. Changing someone\'s access role has no server call behind it.',
   department: 'A membership stores a name, an email, an access role and a status. There is no department column.',
   clientAccess: 'Client access is not stored per person — everyone in this workspace sees the same clients.',
+  inviteLink: '',
+  revokeInvite: '',
+}
+
+// ---------------------------------------------------------------------------
+// The invitations wire and the invite rules (RESEND-07-02)
+// ---------------------------------------------------------------------------
+// Red stubs: typed, wrong on purpose, until the executor writes the bodies.
+
+export type InvitationWire = { id: string; email: string; role: string; status: string; expires_at: string; delivery: string }
+export type PendingInvite = { id: string; email: string; role: AccessRole; expiresAt: string; delivery: string }
+
+export const INVITE_ADMIN_ONLY = ''
+
+export async function listInvitations(_f: AuthedFetch, _base: string): Promise<InvitationWire[]> {
+  return []
+}
+
+export async function sendInvitations(
+  _f: AuthedFetch,
+  _base: string,
+  _emails: readonly string[],
+  _role: AccessRole,
+): Promise<InvitationWire[]> {
+  return []
+}
+
+export async function resendInvitation(_f: AuthedFetch, _base: string, _id: string): Promise<InvitationWire> {
+  return { id: '', email: '', role: '', status: '', expires_at: '', delivery: '' }
+}
+
+export function toPendingInvite(w: InvitationWire): PendingInvite {
+  return { id: w.id, email: w.email, role: 'preparer', expiresAt: '', delivery: '' }
+}
+
+export function upsertInvites(list: readonly PendingInvite[], _items: readonly PendingInvite[]): PendingInvite[] {
+  return list as PendingInvite[]
+}
+
+export function invitedMember(i: PendingInvite): Member {
+  return { id: i.id, name: '', initials: '', email: i.email, role: i.role, status: 'active', isYou: true }
+}
+
+export function rosterWithInvites(members: readonly Member[], _invites: readonly PendingInvite[]): Member[] {
+  return members as Member[]
+}
+
+export function viewerIsAdmin(_members: readonly Member[]): boolean {
+  return false
+}
+
+export function chipVerdicts(
+  _existing: readonly Member[],
+  chips: readonly string[],
+  _serverRefused: readonly string[] = [],
+): InviteVerdict[] {
+  return chips.map(() => 'ok')
+}
+
+export function serverRefusedAddresses(_message: string, _chips: readonly string[]): string[] {
+  return ['not implemented']
+}
+
+export function inviteStatusLine(_i: PendingInvite, _nowMs: number): string {
+  return ''
+}
+
+export function inviteSentNotice(_items: readonly PendingInvite[]): { tone: 'ok' | 'failed'; text: string } | null {
+  return { tone: 'failed', text: '' }
 }

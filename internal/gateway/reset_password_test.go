@@ -584,6 +584,8 @@ func TestResetPassword_IncompleteVerifyAnswerIsTheFailedNotice(t *testing.T) {
 		"empty access_token": `{"access_token":"","user":{"id":"` + subjectS1 + `","email":"` + rpEmail + `"}}`,
 		"no user.id":         `{"access_token":"at1","user":{"email":"` + rpEmail + `"}}`,
 		"no user.email":      `{"access_token":"at1","user":{"id":"` + subjectS1 + `"}}`,
+		"null user":          `{"access_token":"at1","user":null}`,
+		"not JSON":           `<html>bad gateway</html>`,
 	}
 	for name, body := range rows {
 		t.Run(name, func(t *testing.T) {
@@ -679,7 +681,12 @@ func TestResetPassword_RefusedLinkOrPasswordIsTheFailedNotice(t *testing.T) {
 }
 
 func TestResetPassword_PasswordOutsideTheBoundsRerendersThePage(t *testing.T) {
-	rows := map[string]string{"5 bytes": "abcde", "73 bytes": strings.Repeat("a", 73), "empty": ""}
+	rows := map[string]string{
+		"5 bytes": "abcde", "73 bytes": strings.Repeat("a", 73), "empty": "",
+		"5 bytes in 3 runes":   "éé" + "a",
+		"75 bytes in 25 runes": strings.Repeat("€", 25),
+	}
+	pageCSP := rpGet(rpPageHandler(t), http.MethodGet, rpQuery(rpToken)).Header().Get("Content-Security-Policy")
 	for name, pw := range rows {
 		t.Run(name, func(t *testing.T) {
 			f := newResetGoTrue(t)
@@ -698,12 +705,48 @@ func TestResetPassword_PasswordOutsideTheBoundsRerendersThePage(t *testing.T) {
 			if got := f.names(); len(got) != 0 {
 				t.Errorf("GoTrue calls = %v, want none", got)
 			}
+			doc := vpParse(t, rec.Body.String())
+			if n := len(vpFind(doc, vpTag("form"))); n != 1 {
+				t.Errorf("re-rendered forms = %d, want 1", n)
+			}
+			if _, ok := rpInputs(doc)["password"]; !ok {
+				t.Error("the re-rendered page holds no password input")
+			}
+			if n := len(vpFind(doc, func(n *html.Node) bool { r, _ := vpAttr(n, "role"); return r == "alert" })); n != 1 {
+				t.Errorf("alert elements = %d, want 1", n)
+			}
+			for header, want := range map[string]string{"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "Content-Security-Policy": pageCSP} {
+				if got := rec.Header().Get(header); got != want {
+					t.Errorf("%s = %q, want %q", header, got, want)
+				}
+			}
+			if want := strings.Replace(vpWantCSP, "%s", vpHash(vpScript(t, doc)), 1); rec.Header().Get("Content-Security-Policy") != want {
+				t.Errorf("CSP does not hash the re-rendered page's script: %q", rec.Header().Get("Content-Security-Policy"))
+			}
 		})
 	}
+	t.Run("hostile token is escaped in the re-render", func(t *testing.T) {
+		raw := `"><script>alert(1)</script>`
+		rec := rpPost(t, newResetHandler(t, newResetGoTrue(t), nil), rpValues(raw, "recovery", "abcde"))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", rec.Code)
+		}
+		if got := rpTokenInput(t, rec.Body.String()); got != raw {
+			t.Errorf("hidden token = %q, want %q", got, raw)
+		}
+		if n := len(vpFind(vpParse(t, rec.Body.String()), vpTag("script"))); n != 1 {
+			t.Errorf("script elements = %d, want 1", n)
+		}
+	})
 }
 
 func TestResetPassword_PasswordAtTheBoundsIsSent(t *testing.T) {
-	for name, pw := range map[string]string{"6 bytes": "abcdef", "72 bytes": strings.Repeat("a", 72)} {
+	for name, pw := range map[string]string{
+		"6 bytes": "abcdef", "72 bytes": strings.Repeat("a", 72),
+		"6 bytes in 3 runes":       "ééé",
+		"72 bytes in 24 runes":     strings.Repeat("€", 24),
+		"quotes, spaces and signs": ` p"a\ss&w+o%rd=` + "\t ",
+	} {
 		t.Run(name, func(t *testing.T) {
 			f := newResetGoTrue(t)
 
@@ -742,6 +785,8 @@ func TestResetPassword_BadFormsAreTheFailedNoticeWithoutACall(t *testing.T) {
 		{"257-byte token", rpPath, rpFormType, rpValues(strings.Repeat("a", 257), "recovery", "newpass1").Encode()},
 		{"type signup", rpPath, rpFormType, rpValues(rpToken, "signup", "newpass1").Encode()},
 		{"token only in the query", rpPath + "?token=" + rpToken, rpFormType, "type=recovery&password=newpass1"},
+		{"type only in the query", rpPath + "?type=recovery", rpFormType, "token=" + rpToken + "&password=newpass1"},
+		{"no body", rpPath + "?token=" + rpToken + "&type=recovery", rpFormType, ""},
 	}
 	if len(big) != 2049 {
 		t.Fatalf("test body is %d bytes, want 2049", len(big))
@@ -857,6 +902,90 @@ func TestResetPassword_LogsCarryNoTokenPasswordOrAddress(t *testing.T) {
 				if strings.Contains(buf.String(), secret) {
 					t.Errorf("the log holds %q: %s", secret, buf.String())
 				}
+			}
+		})
+	}
+}
+
+func TestResetPassword_SignOutAnswersThatMeanTheSessionIsGone(t *testing.T) {
+	gone := answer(http.StatusUnauthorized, `{"code":401,"error_code":"session_not_found","msg":"gone"}`)
+	goneForbidden := answer(http.StatusForbidden, `{"code":403,"error_code":"user_banned","msg":"gone"}`)
+	notGone := answer(http.StatusUnauthorized, `{"code":401,"error_code":"bad_jwt","msg":"bad"}`)
+	same := answer(http.StatusUnprocessableEntity, rpSamePassword)
+	rows := []struct {
+		name         string
+		user, logout http.HandlerFunc
+		want         string
+		warn         bool
+	}{
+		{"PUT 200, logout 401 session_not_found", nil, gone, rpOK, false},
+		{"PUT 200, logout 403 user_banned", nil, goneForbidden, rpOK, false},
+		{"same_password, logout 401 session_not_found", same, gone, rpOK, false},
+		{"PUT 200, logout 401 bad_jwt", nil, notGone, rpOK, true},
+		{"same_password, logout 401 bad_jwt", same, notGone, rpFailed, true},
+		{"same_password, logout 302", same, redirectTo("/user"), rpFailed, true},
+	}
+	for _, c := range rows {
+		t.Run(c.name, func(t *testing.T) {
+			rg := newResetRig(t)
+			if c.user != nil {
+				rg.gotrue.user = c.user
+			}
+			rg.gotrue.logout = c.logout
+
+			rpRequireRedirect(t, rpPost(t, rg.handler, rpValues(rpToken, "recovery", rpPass)), c.want)
+
+			if !rg.evicted() {
+				t.Error("the subject was not evicted")
+			}
+			if cleared := rg.throttleReset(); cleared != (c.want == rpOK) {
+				t.Errorf("throttle cleared = %v, want %v", cleared, c.want == rpOK)
+			}
+			if c.warn {
+				rpRequireWarn(t, rg.log, rpMsgSignOutFailed, nil)
+			} else if n := warnCount(t, rg.log); n != 0 {
+				t.Errorf("a gone session logged %d WARNs: %s", n, rg.log.String())
+			}
+		})
+	}
+}
+
+func TestResetPassword_RefusedPasswordLeavesTheSignInFailuresAlone(t *testing.T) {
+	rows := map[string]http.HandlerFunc{
+		"PUT 422 weak_password": answer(http.StatusUnprocessableEntity, rpWeakPassword),
+		"PUT 500":               answer(http.StatusInternalServerError, gtInternal),
+		"PUT unreachable":       dropped,
+		"PUT 302":               redirectTo("/logout"),
+	}
+	for name, user := range rows {
+		t.Run(name, func(t *testing.T) {
+			rg := newResetRig(t)
+			rg.gotrue.user = user
+
+			rpRequireRedirect(t, rpPost(t, rg.handler, rpValues(rpToken, "recovery", rpPass)), rpFailed)
+
+			if n := rg.gotrue.count(http.MethodPut, "/user"); n != 1 {
+				t.Fatalf("PUT /user calls = %d, want 1", n)
+			}
+			if rg.throttleReset() {
+				t.Error("a refused password cleared the address's sign-in failures")
+			}
+		})
+	}
+}
+
+func TestResetPasswordPage_TokenHoldingAPlaceholderIsNotExpanded(t *testing.T) {
+	for _, tok := range []string{"{{.Script}}", "{{.Alert}}", "{{.Token}}"} {
+		t.Run(tok, func(t *testing.T) {
+			rec, doc := rpPage(t, tok)
+			if got := rpTokenInput(t, rec.Body.String()); got != tok {
+				t.Errorf("token input = %q, want the literal %q", got, tok)
+			}
+			if n := len(vpFind(doc, vpTag("script"))); n != 1 {
+				t.Errorf("script elements = %d, want 1", n)
+			}
+			if n := strings.Count(rec.Body.String(), "addEventListener('submit'"); n != 1 {
+				t.Errorf("the submit-once script appears %d times, want 1", n)
 			}
 		})
 	}

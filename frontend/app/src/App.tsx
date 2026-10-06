@@ -6,7 +6,7 @@ import { revokeSessions } from './lib/revoke'
 import { createRenewer, isRenewalDue, SessionEndedError, type Renewer } from './lib/renewal'
 import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
 import { consumeSignInState, ensureSignInState, landingInviteUrl, landingSignInUrl, mintSignInState } from './lib/signInState'
-import { consumePendingInvite, holdPendingInvite, readInviteFragment } from './lib/pendingInvite'
+import { consumePendingInvite, holdPendingInvite, peekPendingInvite, readInviteFragment } from './lib/pendingInvite'
 import { HANDOFF_PARAM, InviteRefusedError, isLiveHandoffSession, readHandoffCode, redeemHandoff } from './lib/sessionHandoff'
 import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import { isPromiseLike, makeAuthedFetch } from './lib/authedFetch'
@@ -1812,8 +1812,10 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
 // with the persona's static identity, marked unverified, so the showcase never hard-fails.
 export default function App() {
   const [bootSession] = useState(() => resolveBootSession())
-  // A live stored hand-off session wins over `?handoff=`.
-  const [liveHandoff] = useState(() => isLiveHandoffSession(bootSession))
+  // A live stored hand-off session wins over `?handoff=`, unless an invite is held: the user signed in again to accept it.
+  const [liveHandoff] = useState(() => isLiveHandoffSession(bootSession) && peekPendingInvite() === null)
+  // Set while a held invite's code overrides a live stored session: a refusal leaves that session stored.
+  const [overridesLive] = useState(() => !liveHandoff && isLiveHandoffSession(bootSession))
   // An unconfigured gateway ignores the code (it is still stripped).
   const [handoffCode] = useState(() =>
     liveHandoff || !gatewayBase() ? null : readHandoffCode(window.location.search),
@@ -1845,6 +1847,7 @@ export default function App() {
   useEffect(() => {
     if (seat) saveSession(seat)
     else if (keepStoredRecord.current) keepStoredRecord.current = false
+    else if (overridesLive && handoffPending) return
     else clearSession()
   }, [seat])
 

@@ -24,26 +24,40 @@ export function holdPendingInvite(token: string | null, now: number = Date.now()
   }
 }
 
+// The held token when live, else null; leaves the key alone.
+export function peekPendingInvite(now: number = Date.now()): string | null {
+  try {
+    return liveToken(sessionStorage.getItem(PENDING_INVITE_KEY), now)
+  } catch (e) {
+    console.warn(`[pendingInvite] failed to read invite at "${PENDING_INVITE_KEY}":`, e)
+    return null
+  }
+}
+
 // One-shot: removes the key whatever it held, returns the token only when live.
 export function consumePendingInvite(now: number = Date.now()): string | null {
   try {
     const raw = sessionStorage.getItem(PENDING_INVITE_KEY)
     sessionStorage.removeItem(PENDING_INVITE_KEY)
-    if (raw == null) return null
-    const p = JSON.parse(raw) as { v?: unknown; t?: unknown; at?: unknown } | null
-    if (
-      p == null ||
-      p.v !== PENDING_INVITE_SCHEMA_VERSION ||
-      typeof p.t !== 'string' ||
-      !BASE64URL_43.test(p.t) ||
-      typeof p.at !== 'number' ||
-      Number.isNaN(p.at)
-    ) {
-      return null
-    }
-    return p.at <= now && now - p.at < SIGN_IN_STATE_TTL_MS ? p.t : null
+    return liveToken(raw, now)
   } catch (e) {
     console.warn(`[pendingInvite] failed to consume invite at "${PENDING_INVITE_KEY}":`, e)
     return null
   }
+}
+
+function liveToken(raw: string | null, now: number): string | null {
+  if (raw == null) return null
+  const p = JSON.parse(raw) as { v?: unknown; t?: unknown; at?: unknown } | null
+  if (
+    p == null ||
+    p.v !== PENDING_INVITE_SCHEMA_VERSION ||
+    typeof p.t !== 'string' ||
+    !BASE64URL_43.test(p.t) ||
+    typeof p.at !== 'number' ||
+    Number.isNaN(p.at)
+  ) {
+    return null
+  }
+  return p.at <= now && now - p.at < SIGN_IN_STATE_TTL_MS ? p.t : null
 }

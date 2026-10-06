@@ -297,6 +297,57 @@ describe('a hand-off with a held invite accepts it and renews the session (D11, 
   })
 })
 
+describe('a held invite redeems a hand-off over a live stored session', () => {
+  const OLD_ME: Me = {
+    tenant: { id: '44444444-4444-4444-4444-444444444444', name: 'Old Workspace', kind: 'firm' },
+    user: { id: 'd0000000-0000-0000-0000-000000000001', role: 'authenticated', display_name: 'Account A', email: 'a@example.com' },
+  }
+  const OLD_RECORD = JSON.stringify({ v: 1, personaId: 'firm', token: jwt(OLD_ME.user.id, nowSec() + 3600), me: OLD_ME, verified: true, handoff: true })
+
+  it('app_heldInviteBeatsALiveSession', async () => {
+    configure()
+    ensureSignInState()
+    holdRaw()
+    localStorage.setItem(SESSION_KEY, OLD_RECORD)
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user, 'the invitee workspace must mount').toBeDefined())
+    expect(hits(ACCEPT_PATH)).toHaveLength(1)
+    expect(JSON.parse(localStorage.getItem(SESSION_KEY) ?? 'null')).toMatchObject({ token: T_RENEWED, handoff: true })
+    expect(sessionStorage.getItem(INVITE_KEY), 'the invite is one-shot').toBeNull()
+  })
+
+  it('app_refusedInviteKeepsTheOldStoredSession', async () => {
+    configure()
+    ensureSignInState()
+    holdRaw()
+    acceptReply = fail(403, MSG_OTHER_ADDRESS)
+    localStorage.setItem(SESSION_KEY, OLD_RECORD)
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?invite=other-address`]))
+    await settle()
+    expect(localStorage.getItem(SESSION_KEY), 'the old session stays as it was').toBe(OLD_RECORD)
+    expect(capturedCtx, 'no workspace mounts').toBeUndefined()
+  })
+
+  it('app_expiredHeldInviteLeavesTheLiveSessionWinning', async () => {
+    configure()
+    ensureSignInState()
+    sessionStorage.setItem(INVITE_KEY, JSON.stringify({ v: 1, t: INVITE, at: Date.now() - 24 * 3600 * 1000 }))
+    localStorage.setItem(SESSION_KEY, OLD_RECORD)
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    await settle()
+    expect(hits('/auth/exchange')).toEqual([])
+    expect(localStorage.getItem(SESSION_KEY)).toBe(OLD_RECORD)
+  })
+})
+
 describe('refusals without a landing base (D35)', () => {
   it('app_refusedInviteWithoutALandingBaseStaysOnThePicker', async () => {
     configure({ landing: false })

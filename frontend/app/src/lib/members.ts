@@ -588,10 +588,9 @@ export const ABSENT_LABEL = '—'
  * server-stated: what is missing, not an apology or a promise.
  */
 export const MEMBER_UNBACKED: Record<
-  'invite' | 'remove' | 'role' | 'department' | 'clientAccess' | 'inviteLink' | 'revokeInvite',
+  'remove' | 'role' | 'department' | 'clientAccess' | 'inviteLink' | 'revokeInvite',
   string
 > = {
-  invite: 'There is no invite endpoint yet — nothing mints a token, tracks an expiry, or sends the email.',
   remove: 'Deleting a membership locks that person out on their next request, and nothing undoes it. That decision has not been taken.',
   role: 'The membership endpoint writes status only. Changing someone\'s access role has no server call behind it.',
   department: 'A membership stores a name, an email, an access role and a status. There is no department column.',

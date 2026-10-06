@@ -18,6 +18,7 @@ import { Fragment, useCallback, useState } from 'react'
 import {
   accessRoleLabel,
   emailLabel,
+  inviteStatusLine,
   isProtectedAdmin,
   MEMBER_UNBACKED,
   PROTECTED_ADMIN_NOTE,
@@ -63,22 +64,22 @@ const TABLE_MIN_WIDTH = 744
 // would spawn a vertical scrollbar, on any row without room below it. The scroller simply
 // makes room for whichever menu is open.
 //
-// Sized for the tallest REACHABLE menu — the active non-self row (Edit + Suspend + Remove,
-// one reason note) — measured on the deployed build at 189.73px required clearance;
-// viewport-independent, since the panel is a fixed 196px wide at 11px/1.45.
+// Sized for the tallest REACHABLE menu: the pending row's (three items, two reason notes).
+// Provisional until RESEND-07-05 measures it on the deployed build. The panel is a fixed
+// 196px wide at 11px/1.45, so the need does not vary with the viewport.
 //
 // The obvious alternative — flip the menu upward for the last few rows — was measured and
 // rejected: a row is ~58px, so opening downward needs three rows below and upward needs
 // two above, and ANY filtered list under about four rows then clips in both directions.
 // Searching one person's name produces exactly that list. The app has no portal and no
 // fixed-position popover to borrow instead.
-const MENU_CLEARANCE = 192
+const MENU_CLEARANCE = 264
 
 // The INVED-01 regression class. A grid cell only ellipsises if it is allowed to be
 // narrower than its content, so `minWidth: 0` is as load-bearing as the other three.
 const ELLIPSIS = { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as const
 
-export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, statusError }: {
+export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, statusError, invites = [], onResend, resending }: {
   ctx: PlatformCtx
   /** Already filtered by MembersView — this component never filters. */
   rows: Member[]
@@ -96,9 +97,10 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
   onStatus: (id: string, status: Exclude<MemberStatus, 'invited'>) => void
   /** The last failed write's server reason, and the row it happened on. */
   statusError: { id: string; message: string } | null
-  /** Pending invitations, keyed by `Member.id` of an `invited` row. Not read yet (RESEND-07-04). */
+  /** Pending invitations, matched to an `invited` row by `Member.id`. */
   invites?: readonly PendingInvite[]
   onResend?: (id: string) => void
+  /** Invitation ids with a resend in flight. */
   resending?: ReadonlySet<string>
 }) {
   const { members } = ctx
@@ -115,13 +117,11 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
 
   function menuItems(m: Member, protectedAdmin: boolean): MenuAction[] {
     if (m.status === 'invited') {
-      // All three disabled with the server's own reason: nothing mints a token, nothing
-      // sends an email, and nothing deletes a membership. Rendered rather than hidden — a
-      // control that vanishes says the product never had it.
+      // Copy and Revoke have no endpoint: rendered disabled with the reason, not hidden.
       return [
-        { label: 'Resend invite', disabled: true, reason: MEMBER_UNBACKED.invite },
-        { label: 'Copy invite link', disabled: true, reason: MEMBER_UNBACKED.invite },
-        { label: 'Revoke invite', danger: true, disabled: true, reason: MEMBER_UNBACKED.remove },
+        { label: 'Resend invite', disabled: resending?.has(m.id), onSelect: () => onResend?.(m.id) },
+        { label: 'Copy invite link', disabled: true, reason: MEMBER_UNBACKED.inviteLink },
+        { label: 'Revoke invite', danger: true, disabled: true, reason: MEMBER_UNBACKED.revokeInvite },
       ]
     }
     const items: MenuAction[] = [
@@ -152,7 +152,7 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
     // clearance above has to sit OUTSIDE the card's border. Inside it, opening a menu would
     // visibly grow the card by 168px of empty background; outside it, the menu simply
     // overhangs the card's bottom edge the way a dropdown is supposed to.
-    <div style={{ overflowX: 'auto', paddingBottom: menuOpen ? MENU_CLEARANCE : 0 }}>
+    <div data-testid="members-table-scroll" style={{ overflowX: 'auto', paddingBottom: menuOpen ? MENU_CLEARANCE : 0 }}>
       <div
         data-testid="members-table"
         // No `overflow: 'hidden'` here, unlike InvoicesList.tsx:360 — it would clip the
@@ -200,11 +200,13 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
           // never ABSENT_LABEL's '—', which claims "holds no roles".
           const rolesLanded = ctx.rolesState === 'ready' || ctx.rolesState === 'empty'
           const roleCell = rolesLanded ? rosterRoleCell(roles, m.id) : { text: '', tooltip: '' }
+          const pending = m.status === 'invited'
+          const invite = pending ? invites.find((i) => i.id === m.id) : undefined
           return (
             <Fragment key={m.id}>
               <div
                 className="pf-row"
-                data-testid="member-row"
+                data-testid={pending ? 'invite-row' : 'member-row'}
                 // What makes `.pf-row`'s `cursor: pointer` (platform.css:69) honest — until
                 // now this was the app's only row that claimed to be clickable and was not.
                 // The InvoicesList.tsx:388-389 / RulesView.tsx:251 shape: `onClick` straight
@@ -216,8 +218,9 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
                 // the drawer exists, and InvoicesList.tsx:385-386 records row-level keyboard
                 // access as an app-wide follow-up. Inventing a `role="button"`/`tabIndex`
                 // shape on this one table would be this screen deciding it alone.
-                onClick={() => onOpen(m.id)}
+                onClick={pending ? undefined : () => onOpen(m.id)}
                 style={{
+                  cursor: pending ? 'default' : undefined,
                   display: 'grid',
                   gridTemplateColumns: COLS,
                   gap: 16,
@@ -261,6 +264,11 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
 
                 <span style={{ minWidth: 0 }}>
                   <MemberStatusPill status={m.status} />
+                  {invite && (
+                    <span style={{ display: 'block', marginTop: 3, ...ELLIPSIS, fontSize: 11, color: 'var(--fg-3)' }}>
+                      {inviteStatusLine(invite, Date.now())}
+                    </span>
+                  )}
                 </span>
 
                 <MoreMenu

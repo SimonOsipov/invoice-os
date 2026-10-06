@@ -175,6 +175,22 @@ describe('reset notice: the landing after the emailed reset link', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
+  it('Create an account from the forgot view still reopens on the sign-in view (D34)', async () => {
+    vi.stubEnv('VITE_REGISTRATION_OPEN', 'true')
+    await bootAt('/?reset=failed')
+    await press(onlyNotice(RESET_FAILED), REQUEST_NEW)
+    expect(headings(), 'control: the forgot view is open').toEqual([RESET_HEADING])
+
+    await press(document.querySelector(DIALOG)!, 'Create an account')
+    expect(document.querySelector(DIALOG)!.getAttribute('aria-label'), 'control: the register window replaced it').not.toBe('Platform login')
+    await escape()
+    expect(dialogs().length).toBe(0)
+
+    const navLogin = Array.from(document.querySelectorAll('header button')).find((b) => b.textContent?.trim() === 'Platform login')
+    await act(async () => (navLogin as HTMLButtonElement).click())
+    expect(headings()).toEqual([SIGN_IN_HEADING])
+  })
+
   it('the Close button also resets the view', async () => {
     await bootAt('/?reset=failed')
     await press(onlyNotice(RESET_FAILED), REQUEST_NEW)

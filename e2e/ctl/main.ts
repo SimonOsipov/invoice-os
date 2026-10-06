@@ -1,4 +1,5 @@
 import { parseArgs } from 'node:util'
+import { envCommand } from './railway'
 
 export class CtlError extends Error {
   hint: string
@@ -61,7 +62,7 @@ const notBuilt =
     throw new CtlError(`${name} is not built yet`, `Run ${CTL} --help for the commands that work.`, 1)
   }
 
-const DEFAULTS: Commands = { env: notBuilt('env'), login: notBuilt('login'), measure: notBuilt('measure') }
+const DEFAULTS: Commands = { env: envCommand, login: notBuilt('login'), measure: notBuilt('measure') }
 
 const json = (value: unknown) => JSON.stringify(value) + '\n'
 

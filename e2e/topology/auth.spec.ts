@@ -2215,7 +2215,8 @@ test('deployed landing: "Forgot password?" sends a reset request, and a bogus re
     const submit = dialog.getByRole('button', { name: 'Send reset link', exact: true })
     const notice = dialog.getByRole('status')
     await expect(notice, 'the live region is mounted and empty before the click').toBeEmpty()
-    await email.fill(`reset-${crypto.randomUUID()}@example.com`)
+    // Short: the input keeps the address, and expectStack counts text wider than the input as overflow.
+    await email.fill(`reset-${crypto.randomUUID().slice(0, 8)}@example.com`)
     const answer = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === RESET_REQUEST_PATH)
     await submit.click()
     expect((await answer).status(), 'the fork gateway answers the reset request').toBe(202)

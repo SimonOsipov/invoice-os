@@ -1091,7 +1091,7 @@ describe('the resend control on the check-your-email view', () => {
   }
 
   function statusNotes(d: ParentNode): string[] {
-    return Array.from(d.querySelectorAll('[role="status"]')).map((n) => n.textContent?.trim() ?? '')
+    return Array.from(d.querySelectorAll('[role="status"]')).map((n) => n.textContent?.trim() ?? '').filter(Boolean)
   }
 
   it('the check-your-email view offers Send the link again above Close', async () => {
@@ -1128,6 +1128,21 @@ describe('the resend control on the check-your-email view', () => {
     expect(btn.disabled).toBe(true)
     expect(btn.textContent?.trim()).toBe(SENDING)
     expect(close.disabled, 'Close stays enabled').toBe(false)
+  })
+
+  it('the live region exists before the click and receives the notice after it', async () => {
+    routedFetch(() => json(202, { status: 'accepted' }))
+    await mountApp()
+    const d = await checkView()
+
+    const region = d.querySelector('[role="status"]')
+    expect(region, 'the region is in the DOM before the click').not.toBeNull()
+    expect(region!.textContent).toBe('')
+
+    await click(resendButton(d))
+
+    expect(d.querySelector('[role="status"]'), 'the same node receives the text').toBe(region)
+    expect(region!.textContent?.trim()).toBe(SENT)
   })
 
   it('every 202 shows the same sent notice', async () => {

@@ -28,7 +28,7 @@ func TestIdP_AutoconfirmedRegistrationSignsInAndARepeatAnswers202(t *testing.T) 
 		t.Fatal(err)
 	}
 	register := gateway.RegisterHandler(authURL, idpHTTP, 0,
-		gateway.NewSignInThrottle(gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now), true,
+		gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now), true,
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	creds := map[string]string{"email": u.email, "password": u.password}
 

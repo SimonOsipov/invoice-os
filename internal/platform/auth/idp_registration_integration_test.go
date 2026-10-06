@@ -79,10 +79,10 @@ func startGateway(t *testing.T, authBase string, minResponse time.Duration, sink
 	logs := &bytes.Buffer{}
 	log := slog.New(slog.NewJSONHandler(&syncWriter{w: logs}, nil))
 	mux := http.NewServeMux()
-	registerLimit := gateway.NewSignInThrottle(gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now)
+	registerLimit := gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now)
 	mux.Handle("POST /auth/register", gateway.RegisterHandler(authURL, noRedirect, minResponse, registerLimit, true, log))
-	perAddress := gateway.NewSignInThrottle(gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
-	perIP := gateway.NewSignInThrottle(gateway.ResendPerIP, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
+	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
+	perIP := gateway.NewSignInThrottle("resend-ip", gateway.ResendPerIP, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	mux.Handle("POST /auth/resend-verification", gateway.ResendVerificationHandler(authURL, noRedirect, minResponse, perAddress, perIP, true, log))
 	verifyPage, err := gateway.VerifyPageHandler(site)
 	if err != nil {

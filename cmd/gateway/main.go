@@ -290,11 +290,11 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 	enforce := platform.Posture(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != platform.PosturePreview
 	return registration{
 		Register: gateway.RegisterHandler(authURL, client, minResponse,
-			gateway.NewSignInThrottle(gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now), enforce, log),
+			gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now), enforce, log),
 		Verify: gateway.VerifyHandler(authURL, siteURL, client, log, sink),
 		ResendVerification: gateway.ResendVerificationHandler(authURL, client, minResponse,
-			gateway.NewSignInThrottle(gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now),
-			gateway.NewSignInThrottle(gateway.ResendPerIP, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now), enforce, log),
+			gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now),
+			gateway.NewSignInThrottle("resend-ip", gateway.ResendPerIP, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now), enforce, log),
 		DemoRequest: gateway.DemoRequestHandler(sink, log),
 	}
 }
@@ -309,7 +309,7 @@ type handoff struct {
 // Sign-in and exchange share one code store: a code minted by sign-in is redeemable only through exchange.
 func handoffHandlers(authURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger, sink gateway.ContactSink) handoff {
 	store := gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
-	throttle := gateway.NewSignInThrottle(gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
+	throttle := gateway.NewSignInThrottle("sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
 	// Same settings as registrationHandlers; TestRegistrationClientTimeoutAndNoFollow pins that literal in place.
 	client := &http.Client{
 		Timeout:       10 * time.Second,

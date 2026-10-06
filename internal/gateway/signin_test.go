@@ -114,7 +114,7 @@ func newSignInRigSink(t *testing.T, authURL *url.URL, log *slog.Logger, sink Con
 	}
 	clk := newTestClock()
 	store := NewHandoffStore(HandoffTTL, clk.Now)
-	th := NewSignInThrottle(SignInMaxFailures, SignInMaxKeys, SignInWindow, clk.Now)
+	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, clk.Now)
 	return &signInRig{
 		store:    store,
 		throttle: th,
@@ -292,7 +292,7 @@ func TestSignIn_MissingRefreshToken502(t *testing.T) {
 			fake := newTokenFake(t, http.StatusOK, c.body)
 			clk := newTestClock()
 			store := NewHandoffStore(HandoffTTL, clk.Now)
-			th := NewSignInThrottle(1, SignInMaxKeys, SignInWindow, clk.Now)
+			th := NewSignInThrottle("sign-in", 1, SignInMaxKeys, SignInWindow, clk.Now)
 			h := SignInHandler(fake.URL, testClient(), store, th, slog.New(slog.DiscardHandler), nil)
 			s := randomState(t)
 

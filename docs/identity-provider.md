@@ -379,8 +379,8 @@ OPTIONS without an `Origin`, answers 405 `method not allowed` with `Allow: POST`
 wait and without a GoTrue call. Guarded by `cmd/gateway/registration_routes_test.go`
 `TestRegisterOptionsWithoutOriginIsNotARegistration`.
 
-The limit counts a request when it reaches GoTrue's call, after every 400 check; a GoTrue 429
-`over_email_send_rate_limit` refunds the count (nothing was mailed). The client key is the one
+The limit counts a request when it reaches GoTrue's call, after every 400 check; any GoTrue 4xx
+answer refunds the count (GoTrue mails nothing on a 4xx); a 2xx, a 5xx or a transport error keeps it. The client key is the one
 `POST /auth/resend-verification` uses (see its section), but register keeps its own bucket, so a
 registrant who then resends spends no register count. On a PR preview (`RAILWAY_ENVIRONMENT_NAME`
 of the form `pr-<n>`) the limit counts and logs with `enforced=false` and does not refuse: a
@@ -428,8 +428,8 @@ Limits, in process, one hour window: 3 resends per address (`gateway.ResendPerAd
 lower-cased email) and 10 per client key (`gateway.ResendPerIP`); each map holds at most 10,000 keys
 (`gateway.ResendMaxKeys`). The client key is `X-Real-IP` (Railway documents it as the client's address; not yet measured, see Registration Ceilings), an IPv4-mapped
 address unmapped, an IPv6 address by its /64; an absent or unparseable header falls back to the host
-of `RemoteAddr`. The client is reserved first, then the address, then GoTrue is called. A GoTrue 429
-`over_email_send_rate_limit` refunds both counts; every other outcome keeps them. Over a limit the
+of `RemoteAddr`, normalised the same way. The client is reserved first, then the address, then GoTrue is called. Any GoTrue
+4xx answer refunds both counts (GoTrue mails nothing on a 4xx); a 2xx, a 5xx or a transport error keeps them. Over a limit the
 answer is the same 202 and GoTrue is not called. On a PR preview the limits log and do not refuse
 (see `POST /auth/register`).
 
@@ -522,11 +522,12 @@ otherwise. The tenant id is a UUIDv5 of the caller's subject; the membership gua
   and replicas do not share them. An attacker can spend a victim address's 3 resends an hour and hold
   back its resends. A full map (10,000 keys) refuses every new key for up to an hour; the answer stays
   the 202, with nothing sent, so a flood of distinct addresses or client keys switches resend off for
-  everyone new (WARN `sign-in throttle full; refusing new addresses`). Clients behind one NAT share 10
-  resends and 10 registers an hour. A GoTrue 429 inside a known address's cooldown is refunded, so
+  everyone new (WARN `resend-address throttle full; refusing new addresses`, `resend-ip throttle full; …` or
+  `register throttle full; …`, by map). Clients behind one NAT share 10
+  resends and 10 registers an hour. A GoTrue 4xx answer (a cooldown 429, a validation 400) is refunded, so
   neither limit counts it and one client can repeat it without bound; it sends no mail, and mails stay
   capped by the counted sends. An outage spends the counts of people who retry during it, because only
-  that 429 is refunded. Mails stay capped by `RATE_LIMIT_EMAIL_SENT`; one key can still trigger up to
+  a 4xx is refunded. Mails stay capped by `RATE_LIMIT_EMAIL_SENT`; one key can still trigger up to
   20 mails an hour (10 registers, 10 resends).
 - `ceiling:` the client key is trusted only while `api.ascomply.com` is served straight from Railway's
   edge. A proxy in front makes every key the proxy's IP, and every client then shares one bucket of 10;

@@ -31,7 +31,7 @@ func newHandoff(t *testing.T, base string) handoff {
 		t.Fatal(err)
 	}
 	store := gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
-	throttle := gateway.NewSignInThrottle(gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
+	throttle := gateway.NewSignInThrottle("sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return handoff{
 		signIn:   gateway.SignInHandler(authURL, idpHTTP, store, throttle, log, nil),

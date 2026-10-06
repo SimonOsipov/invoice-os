@@ -176,3 +176,22 @@ func TestSignInThrottle_FullWarnsOncePerMinute(t *testing.T) {
 		t.Fatalf("WARN lines after one more minute = %d, want 2", n)
 	}
 }
+
+func TestSignInThrottle_FullWarningNamesTheInstance(t *testing.T) {
+	for _, name := range []string{"sign-in", "register", "resend-address", "resend-ip"} {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+
+			th := NewSignInThrottle(name, 1, 1, SignInWindow, newTestClock().Now)
+			th.Reserve("a")
+			th.Reserve("b")
+
+			if want := name + " throttle full; refusing new addresses"; !strings.Contains(buf.String(), want) {
+				t.Errorf("WARN = %q, want it to contain %q", buf.String(), want)
+			}
+		})
+	}
+}

@@ -104,6 +104,10 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 
 		status, gt, err := postGoTrue(r, client, signup, body, nil)
 		upstream := time.Since(start)
+		// GoTrue mails nothing when it answers 4xx; 2xx, 5xx and transport errors may have mailed.
+		if held && err == nil && status >= http.StatusBadRequest && status < http.StatusInternalServerError {
+			perIP.Refund(key)
+		}
 		pending := func() { writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"}) }
 		var send func()
 		if err != nil {
@@ -121,9 +125,6 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 		case gt.ErrorCode == "over_email_send_rate_limit":
 			// ceiling: GoTrue's instance-wide mail cap (30/h) answers the same code, so this WARN is its only signal; raise GOTRUE_RATE_LIMIT_EMAIL_SENT when signups near it.
 			log.WarnContext(r.Context(), "registration: gotrue email send rate limit", slog.Int("upstream_status", status))
-			if held {
-				perIP.Refund(key)
-			}
 			send = pending
 		case status >= http.StatusInternalServerError && gt.Code == "23505":
 			// The loser of two concurrent signups for one address gets GoTrue's unique-violation 500.

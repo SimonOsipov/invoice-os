@@ -146,7 +146,7 @@ func registerBody(email, password string) string {
 
 // freshRegisterLimit is a per-handler register throttle with the production limit.
 func freshRegisterLimit() *SignInThrottle {
-	return NewSignInThrottle(RegisterPerIP, RegisterMaxKeys, RegisterWindow, time.Now)
+	return NewSignInThrottle("register", RegisterPerIP, RegisterMaxKeys, RegisterWindow, time.Now)
 }
 
 func doRegister(t *testing.T, authURL *url.URL, log *slog.Logger, body string) *httptest.ResponseRecorder {
@@ -1129,7 +1129,8 @@ func TestRegister_UnenforcedLimitOnlyLogs(t *testing.T) {
 }
 
 // A cap of two and three registers: the third logs a limit line only when no earlier answer returned its count.
-func TestRegister_OnlyTheCooldownAnswerIsRefunded(t *testing.T) {
+// Every GoTrue 4xx is refunded (no mail goes out); 2xx, 5xx and transport errors keep the count.
+func TestRegister_OnlyA4xxAnswerIsRefunded(t *testing.T) {
 	const ip = "203.0.113.7"
 	viaFake := func(status int, body string) func(*testing.T) (*url.URL, *http.Client) {
 		return func(t *testing.T) (*url.URL, *http.Client) { return newFakeGoTrue(t, status, body).URL, testClient() }
@@ -1141,17 +1142,20 @@ func TestRegister_OnlyTheCooldownAnswerIsRefunded(t *testing.T) {
 	}{
 		{"429 cooldown (control)", viaFake(http.StatusTooManyRequests, gtOverEmailSendRateLimit), 0},
 		{"200 new user", viaFake(http.StatusOK, gtNewUser), 1},
-		{"422 user_already_exists", viaFake(http.StatusUnprocessableEntity, `{"code":422,"error_code":"user_already_exists","msg":"exists"}`), 1},
-		{"429 over_request_rate_limit", viaFake(http.StatusTooManyRequests, gtOverRequestRateLimit), 1},
+		{"422 user_already_exists", viaFake(http.StatusUnprocessableEntity, `{"code":422,"error_code":"user_already_exists","msg":"exists"}`), 0},
+		{"429 over_request_rate_limit", viaFake(http.StatusTooManyRequests, gtOverRequestRateLimit), 0},
 		{"500", viaFake(http.StatusInternalServerError, gtInternal), 1},
-		{"400 weak_password", viaFake(http.StatusUnprocessableEntity, `{"code":422,"error_code":"weak_password","msg":"weak"}`), 1},
+		{"422 weak_password", viaFake(http.StatusUnprocessableEntity, `{"code":422,"error_code":"weak_password","msg":"weak"}`), 0},
+		{"400 validation_failed", viaFake(http.StatusBadRequest, gtValidationFailed), 0},
+		{"400 email_address_invalid", viaFake(http.StatusBadRequest, `{"code":400,"error_code":"email_address_invalid","msg":"bad"}`), 0},
+		{"422 signup_disabled", viaFake(http.StatusUnprocessableEntity, `{"code":422,"error_code":"signup_disabled","msg":"closed"}`), 0},
 		{"refused connection", func(t *testing.T) (*url.URL, *http.Client) { return closedURL(t), testClient() }, 1},
 	}
 	for _, c := range rows {
 		t.Run(c.name, func(t *testing.T) {
 			auth, client := c.build(t)
 			log, buf := captureLog()
-			h := RegisterHandler(auth, client, 0, NewSignInThrottle(2, RegisterMaxKeys, RegisterWindow, time.Now), true, log)
+			h := RegisterHandler(auth, client, 0, NewSignInThrottle("register", 2, RegisterMaxKeys, RegisterWindow, time.Now), true, log)
 
 			for i := range 3 {
 				serveRegisterFrom(t.Context(), h, registerBody(businessAddress(i), regPassword), ip)

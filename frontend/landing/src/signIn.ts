@@ -35,9 +35,9 @@ export async function signInWithPassword(email: string, password: string, state:
 }
 
 export function signInErrorMessage(err: unknown): string {
+  if (isUnverified(err)) return UNVERIFIED
   if (err instanceof ApiError && err.kind === 'http') {
     if (err.status === 401) return INCORRECT
-    if (err.status === 403) return UNVERIFIED
     if (err.status === 429) return THROTTLED
   }
   return SIGN_IN_UNAVAILABLE

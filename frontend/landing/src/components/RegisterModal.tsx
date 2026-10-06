@@ -1,10 +1,11 @@
 // Landing registration window: the sign-in window's chrome around a form that posts to the gateway.
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
-import { RESEND_FAILED, registerAccount, registerOutcome, resendSentNotice, resendVerification, validateRegisterForm, type RegisterErrors, type RegisterKind, type RegisterValues } from '../register'
+import { registerAccount, registerOutcome, validateRegisterForm, type RegisterErrors, type RegisterKind, type RegisterValues } from '../register'
 import { DEMO_FORM_CSS } from './DemoLeadForm'
-import { Alert, FIELD_STYLE } from './SignInForm'
+import { Alert, FIELD_STYLE, ResendNotice } from './SignInForm'
+import { useResend } from './useResend'
 import { HEADING_STYLE } from './SignInModal'
 import { MarketingConsent } from './MarketingConsent'
 import { Eyebrow } from './ds/Eyebrow'
@@ -26,16 +27,7 @@ export function RegisterModal({ onClose }: { onClose: () => void }) {
   const [formError, setFormError] = useState<string>()
   const [submitting, setSubmitting] = useState(false)
   const [sentTo, setSentTo] = useState<string>()
-  const [resending, setResending] = useState(false)
-  const [resendNote, setResendNote] = useState<{ ok: boolean }>()
-  const mounted = useRef(true)
-
-  useEffect(() => {
-    mounted.current = true
-    return () => {
-      mounted.current = false
-    }
-  }, [])
+  const { resending, note, resend } = useResend(sentTo)
 
   // Close on Escape (never a native dialog).
   useEffect(() => {
@@ -79,21 +71,6 @@ export function RegisterModal({ onClose }: { onClose: () => void }) {
     setSubmitting(false)
   }
 
-  async function handleResend() {
-    if (resending || sentTo === undefined) return
-    setResendNote(undefined)
-    setResending(true)
-    let ok = true
-    try {
-      await resendVerification(sentTo)
-    } catch {
-      ok = false
-    }
-    if (!mounted.current) return
-    setResendNote({ ok })
-    setResending(false)
-  }
-
   function field(key: (typeof FIELD_ORDER)[number], label: string, type: string, autoComplete: string, placeholder?: string) {
     const id = FIELD_IDS[key]
     const error = errors[key]
@@ -134,11 +111,10 @@ export function RegisterModal({ onClose }: { onClose: () => void }) {
               <p className="t-body-sm" style={{ margin: 0, lineHeight: 1.55, overflowWrap: 'anywhere' }}>
                 If this address can be registered, a confirmation link is on its way to {sentTo}. Open it, confirm your email, then sign in.
               </p>
-              <button type="button" onClick={handleResend} disabled={resending} className="ds-btn ds-btn--outline ds-btn--md" style={{ width: '100%', marginTop: 18 }}>
+              <button type="button" onClick={resend} disabled={resending} className="ds-btn ds-btn--outline ds-btn--md" style={{ width: '100%', marginTop: 18 }}>
                 {resending ? 'Sending…' : 'Send the link again'}
               </button>
-              {resendNote?.ok && <p role="status" className="t-body-sm" style={{ marginTop: 8, marginBottom: 0, overflowWrap: 'anywhere' }}>{resendSentNotice(sentTo)}</p>}
-              {resendNote?.ok === false && <Alert text={RESEND_FAILED} />}
+              <ResendNotice note={note} email={sentTo} />
               <button type="button" onClick={onClose} className="ds-btn ds-btn--outline ds-btn--md" style={{ width: '100%', marginTop: 10 }}>
                 Close
               </button>

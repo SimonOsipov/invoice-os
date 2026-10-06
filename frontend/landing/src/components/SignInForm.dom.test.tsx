@@ -379,7 +379,7 @@ describe('the resend control on the unverified sign-in error', () => {
     return all[0]
   }
 
-  const statusNotes = () => Array.from(container.querySelectorAll('[role="status"]')).map((n) => n.textContent?.trim() ?? '')
+  const statusNotes = () => Array.from(container.querySelectorAll('[role="status"]')).map((n) => n.textContent?.trim() ?? '').filter(Boolean)
 
   async function signInAs(email: string): Promise<void> {
     await fill(email, 'pw')
@@ -433,6 +433,23 @@ describe('the resend control on the unverified sign-in error', () => {
       await act(async () => root.unmount())
     }
     root = createRoot(container)
+  })
+
+  it('the live region exists before the click and receives the notice after it', async () => {
+    configure()
+    routedFetch({ signIn: [refuse(403)] })
+    await mountForm(STATE)
+    expect(container.querySelector('[role="status"]'), 'control: no region without the resend control').toBeNull()
+    await signInAs(ADA)
+
+    const region = container.querySelector('[role="status"]')
+    expect(region, 'the region is in the DOM before the click').not.toBeNull()
+    expect(region!.textContent).toBe('')
+
+    await click(resendButton())
+
+    expect(container.querySelector('[role="status"]'), 'the same node receives the text').toBe(region)
+    expect(region!.textContent?.trim()).toBe(sent(ADA))
   })
 
   it('the resend posts the address that got the 403', async () => {

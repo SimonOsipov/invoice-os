@@ -13,7 +13,7 @@ import (
 
 // ceiling: counts are in-process; a restart clears them and replicas do not share them.
 // ceiling: an attacker can spend a victim address's 3 per hour; a full map (10,000 keys) refuses every new key, so a flood switches resend off for new addresses.
-// ceiling: clients behind one NAT share 10 resends an hour; GoTrue cooldown refusals are refunded, so one client can repeat them without bound (no mail goes out).
+// ceiling: clients behind one NAT share 10 resends an hour; GoTrue 4xx answers are refunded, so one client can repeat them without bound (no mail goes out).
 const (
 	ResendPerAddress = 3
 	ResendPerIP      = 10
@@ -22,21 +22,29 @@ const (
 )
 
 // clientKey keys the per-IP limit and names its source: Railway's edge sets X-Real-IP; IPv6 is keyed by its /64.
+// RemoteAddr, the fallback, is normalised the same way.
 // ceiling: the header is trusted only while the gateway is served straight from Railway's edge; a proxy in front makes every key the proxy's IP.
 func clientKey(r *http.Request) (key, source string) {
 	if ip, err := netip.ParseAddr(strings.TrimSpace(r.Header.Get("X-Real-IP"))); err == nil {
-		ip = ip.Unmap()
-		if ip.Is6() {
-			// A /64 is one subscriber; per-address keys would give an attacker 2^64 of them.
-			return netip.PrefixFrom(ip.WithZone(""), 64).Masked().String(), "header"
-		}
-		return ip.String(), "header"
+		return normalizeIP(ip), "header"
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
 	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return normalizeIP(ip), "remote_addr"
+	}
 	return host, "remote_addr"
+}
+
+func normalizeIP(ip netip.Addr) string {
+	ip = ip.Unmap()
+	if ip.Is6() {
+		// A /64 is one subscriber; per-address keys would give an attacker 2^64 of them.
+		return netip.PrefixFrom(ip.WithZone(""), 64).Masked().String()
+	}
+	return ip.String()
 }
 
 // ResendVerificationHandler answers POST /auth/resend-verification with one answer for every account state.
@@ -88,6 +96,15 @@ func ResendVerificationHandler(authURL *url.URL, client *http.Client, minRespons
 		if !refused {
 			status, gt, err := postGoTrue(r, client, resend, map[string]string{"type": "signup", "email": email}, nil)
 			upstream = time.Since(start)
+			// GoTrue mails nothing when it answers 4xx; 2xx, 5xx and transport errors may have mailed.
+			if err == nil && status >= http.StatusBadRequest && status < http.StatusInternalServerError {
+				if ipHeld {
+					perIP.Refund(key)
+				}
+				if addrHeld {
+					perAddress.Refund(email)
+				}
+			}
 			switch {
 			case err != nil:
 				log.WarnContext(r.Context(), "resend-verification: gotrue unreachable", slog.String("error", err.Error()))
@@ -96,14 +113,7 @@ func ResendVerificationHandler(authURL *url.URL, client *http.Client, minRespons
 				writeError(w, http.StatusBadRequest, "invalid email address")
 				return
 			case gt.ErrorCode == "over_email_send_rate_limit":
-				// Nothing was mailed (cooldown or instance cap), so the attempt is not spent.
 				log.WarnContext(r.Context(), "resend-verification: gotrue email send rate limit", slog.Int("upstream_status", status))
-				if ipHeld {
-					perIP.Refund(key)
-				}
-				if addrHeld {
-					perAddress.Refund(email)
-				}
 			default:
 				log.WarnContext(r.Context(), "resend-verification: gotrue resend failed",
 					slog.Int("upstream_status", status), slog.String("error_code", gt.ErrorCode))

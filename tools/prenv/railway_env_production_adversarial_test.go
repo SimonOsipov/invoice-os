@@ -181,6 +181,13 @@ func TestRailwayEnvUsageListsSayProductionIsWrittenByHand(t *testing.T) {
 	if !regexp.MustCompile("`?" + productionGatewayTokenNeedle + "`? is run " + regexp.QuoteMeta(productionUsageNote)).MatchString(flow) {
 		t.Errorf("the header never says %s is run %s", productionGatewayTokenNeedle, productionUsageNote)
 	}
+
+	if !regexp.MustCompile(`[<|]discover-urls <environment-id>[|>]`).MatchString(generic) {
+		t.Errorf("the dispatcher's usage does not name discover-urls <environment-id>; output = %q", generic)
+	}
+	if !regexp.MustCompile(`discover-urls <environment-id>[|>]`).MatchString(list) {
+		t.Errorf("the header usage list does not name discover-urls <environment-id>:\n%s", list)
+	}
 }
 
 var (

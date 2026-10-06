@@ -146,6 +146,24 @@ case "$q" in
     echo '{"data":{"variableCollectionUpsert":true}}' ;;
   *isSealed*)
     cat "$dir/sealed.json" ;;
+  *"query discoverUrls("*)
+    # One aliased domains field per service: alias -> $var -> service id -> domains-<svc>[-<e>].json.
+    # errors-discoverUrls.json is added beside the data; a planted discoverUrls.json answers verbatim.
+    if [ -f "$dir/discoverUrls.json" ]; then cat "$dir/discoverUrls.json"; exit 0; fi
+    e=$(printf '%s' "$data" | jq -r '.variables.e // empty')
+    out='{}'
+    for pair in $(printf '%s' "$q" | jq -Rrs 'scan("(\\w+)\\s*:\\s*domains\\([^)]*serviceId:\\s*\\$(\\w+)") | "\(.[0]):\(.[1])"'); do
+      k="${pair%%:*}"; v="${pair#*:}"
+      s=$(printf '%s' "$data" | jq -r --arg v "$v" '.variables[$v]')
+      f="$dir/domains-$s-$e.json"; [ -f "$f" ] || f="$dir/domains-$s.json"
+      if [ ! -f "$f" ]; then echo '{"errors":[{"message":"no domains planted"}]}'; exit 0; fi
+      out=$(printf '%s' "$out" | jq -c --arg k "$k" --slurpfile v "$f" '. + {($k): $v[0]}')
+    done
+    resp=$(printf '{"data":%s}' "$out")
+    if [ -f "$dir/errors-discoverUrls.json" ]; then
+      resp=$(printf '%s' "$resp" | jq -c --slurpfile er "$dir/errors-discoverUrls.json" '. + {errors: $er[0]}')
+    fi
+    printf '%s' "$resp" ;;
   *"query varsRead("*)
     # One alias sK per $sK variable, served like a single read (rendered-, store-, read-<svc>.jq).
     # A planted varsRead.json answers verbatim. jq gets file paths, never a value.

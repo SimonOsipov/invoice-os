@@ -12,7 +12,7 @@
 //
 // TOKEN-FREE AND NETWORK-FREE, BY CONSTRUCTION. `--self-test` must short-circuit BEFORE require_env (the
 // `--self-test` branch at the top of cmd_assert_db_dsns in
-// scripts/ci/railway-env.sh). Nothing below calls Railway, and T2-4
+// scripts/ci/railway-env.sh). T2-4
 // asserts the short-circuit ordering directly by unsetting the token. No test
 // in this file skips: a test that silently skips in CI is a decorative test.
 //
@@ -462,7 +462,7 @@ func (f dsnFleet) sentMap(t *testing.T) dsnMap {
 }
 
 var (
-	dsnAliasField = regexp.MustCompile(`(?m)\bs[0-9]+\s*:\s*variables\(`)
+	dsnAliasField = regexp.MustCompile(`(?m)\b(s[0-9]+)\s*:\s*variables\([^)]*serviceId:\s*\$(s[0-9]+)`)
 	dsnReportLine = regexp.MustCompile(`DSN check (clean|FAILED)`)
 )
 
@@ -500,8 +500,19 @@ func requireTwoCalls(t *testing.T, f dsnFleet, env string) {
 	if len(got) != 16 {
 		t.Errorf("varsRead carries %d sK variables, want 16 (one per instance)", len(got))
 	}
-	if n := len(dsnAliasField.FindAllString(reads[0].Query, -1)); n != 16 {
-		t.Errorf("the varsRead query has %d aliased variables(...) fields, want 16", n)
+	fields := dsnAliasField.FindAllStringSubmatch(reads[0].Query, -1)
+	if len(fields) != 16 {
+		t.Errorf("the varsRead query has %d aliased variables(...) fields, want 16", len(fields))
+	}
+	seen := map[string]bool{}
+	for _, m := range fields {
+		if m[1] != m[2] {
+			t.Errorf("alias %s reads serviceId $%s: the alias and its variable must share one index", m[1], m[2])
+		}
+		if seen[m[1]] {
+			t.Errorf("alias %s appears twice in the varsRead query; GraphQL rejects duplicate response keys", m[1])
+		}
+		seen[m[1]] = true
 	}
 	if strings.Contains(reads[0].Query, "unrendered") {
 		t.Errorf("the varsRead query asks for unrendered variables; the DSN check needs the rendered map:\n%s", reads[0].Query)
@@ -635,6 +646,18 @@ func TestAssertDBDSNs_BatchedReadGraphQLErrorFailsBeforeTheCheck(t *testing.T) {
 		{"a path that is no alias names the environment", func(t *testing.T, f dsnFleet) {
 			writeFile(t, filepath.Join(f.dir, "varsRead.json"), errBody(`"variables"`))
 		}, nil, []int{0, 3, 9}, true, []string{needle}},
+		{"an alias past the request names the environment", func(t *testing.T, f dsnFleet) {
+			writeFile(t, filepath.Join(f.dir, "varsRead.json"), errBody(`"s99"`))
+		}, nil, []int{0, 3, 9}, true, []string{needle}},
+		{"a zero-padded alias past the base-8 digits names the environment", func(t *testing.T, f dsnFleet) {
+			writeFile(t, filepath.Join(f.dir, "varsRead.json"), errBody(`"s08"`))
+		}, nil, []int{0, 3, 9}, true, []string{needle}},
+		{"a numeric path head names the environment", func(t *testing.T, f dsnFleet) {
+			writeFile(t, filepath.Join(f.dir, "varsRead.json"), errBody(`3`))
+		}, nil, []int{0, 3, 9}, true, []string{needle}},
+		{"an in-range and an out-of-range alias name only the real service", func(t *testing.T, f dsnFleet) {
+			writeFile(t, filepath.Join(f.dir, "varsRead.json"), errBody(`"s3"`, `"s99"`))
+		}, []int{3}, []int{0, 9}, false, []string{needle}},
 		{"a gqlerr fault names the environment", func(t *testing.T, f dsnFleet) {
 			setFaults(t, f.authShim, "varsRead", "gqlerr")
 		}, nil, []int{0, 3, 9}, true, []string{"Not Authorized"}},
@@ -789,5 +812,104 @@ func TestAssertDBDSNs_NoValueOnArgvOrInOutput(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAssertDBDSNs_UnusableBatchedResponseFailsBeforeTheCheck(t *testing.T) {
+	cases := []struct{ name, body string }{
+		{"a 200 that is not JSON", "<html>bad gateway</html>"},
+		{"an empty 200", ""},
+		{"no data and no errors", `{}`},
+		{"data null", `{"data":null}`},
+		{"data a string", `{"data":"oops"}`},
+		{"a top-level array", `[]`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newDSNFleet(t, healthyMap())
+			writeFile(t, filepath.Join(f.dir, "varsRead.json"), c.body)
+			out, code := f.run(t, dsnForkEnv)
+
+			failsBeforeTheCheck(t, f, out, code)
+			if !strings.Contains(out, dsnForkEnv) {
+				t.Errorf("output does not name the environment %s; output = %q", dsnForkEnv, out)
+			}
+		})
+	}
+}
+
+func TestAssertDBDSNs_ExtraAliasInDataIsIgnored(t *testing.T) {
+	const needle = "n33dle-extra-alias"
+	f := newDSNFleet(t, healthyMap())
+	data := map[string]any{}
+	for i, svc := range f.order {
+		data[fmt.Sprintf("s%d", i)] = f.m[svc]
+	}
+	data["s99"] = map[string]string{"DATABASE_URL": "postgresql://x:" + needle + "@" + railwayHost}
+	data["extra"] = map[string]string{"DATABASE_URL": needle}
+	raw, err := json.Marshal(map[string]any{"data": data})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(f.dir, "varsRead.json"), string(raw))
+	out, code := f.run(t, dsnForkEnv)
+
+	if code != 0 || !strings.Contains(out, "DSN check clean") {
+		t.Fatalf("exit %d, want 0 with the pass report: an alias this request never sent is not a service; output = %q", code, out)
+	}
+	got := f.sentMap(t)
+	if len(got) != len(f.order) {
+		t.Errorf("dsn-check received %d services, want %d: %v", len(got), len(f.order), slices.Sorted(maps.Keys(got)))
+	}
+	if b, _ := json.Marshal(got); strings.Contains(string(b), needle) {
+		t.Errorf("the map sent to dsn-check carries a value from an alias the request never sent")
+	}
+}
+
+func TestAssertDBDSNs_BatchedReadTransportFailureNamesTheEnvironment(t *testing.T) {
+	cases := []struct {
+		name   string
+		faults []string
+		reads  int
+	}{
+		{"three timeouts", []string{"timeout", "timeout", "timeout"}, 3},
+		{"three 503s", []string{"503", "503", "503"}, 3},
+		{"a 401 is not retried", []string{"401"}, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newDSNFleet(t, healthyMap())
+			setFaults(t, f.authShim, "varsRead", c.faults...)
+			out, code := f.run(t, dsnForkEnv)
+
+			if n := len(f.varsReads(t)); n != c.reads {
+				t.Errorf("varsRead calls = %d, want %d", n, c.reads)
+			}
+			if code != 1 {
+				t.Errorf("exit %d, want 1; output = %q", code, out)
+			}
+			if dsnReportLine.MatchString(out) || strings.Contains(out, "DB DSN check FAILED") {
+				t.Errorf("dsn-check ran: the step must fail before it; output = %q", out)
+			}
+			if !strings.Contains(out, "NOT evidence") || !strings.Contains(out, dsnForkEnv) {
+				t.Errorf("output lacks \"NOT evidence\" or the environment %s; output = %q", dsnForkEnv, out)
+			}
+		})
+	}
+}
+
+func TestAssertDBDSNs_NoInstanceFailsBeforeAnyRead(t *testing.T) {
+	f := newDSNFleet(t, healthyMap())
+	writeFile(t, filepath.Join(f.dir, "settle.json"), forkSettleOf(nil))
+	out, code := f.run(t, dsnForkEnv)
+
+	if got := operations(f.calls(t)); !slices.Equal(got, []string{"settle"}) {
+		t.Errorf("Railway calls = %v, want only the settle read", got)
+	}
+	if code != 1 || !strings.Contains(out, "NOT evidence") {
+		t.Errorf("exit %d, want 1 with \"NOT evidence\"; output = %q", code, out)
+	}
+	if strings.Contains(out, "unbound variable") {
+		t.Errorf("a shell error reached the output; output = %q", out)
 	}
 }

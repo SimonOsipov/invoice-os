@@ -625,4 +625,33 @@ describe('the resend control on the unverified sign-in error', () => {
     expect(statusNotes(), 'the answer was for ada').toEqual([])
     expect(consoleError).not.toHaveBeenCalled()
   })
+
+  it("an older resend answer leaves the next address's resend sending, and only its own answer ends it", async () => {
+    configure()
+    const releases: ((r: Response) => void)[] = []
+    const held = () =>
+      new Promise<Response>((resolve) => {
+        releases.push(resolve)
+      })
+    routedFetch({ signIn: [refuse(403)], resend: [held, held] })
+    await mountForm(STATE)
+    await signInAs(ADA)
+    await click(resendButton())
+    await fill('bob@corp.example', 'pw')
+    await submit()
+    await flush()
+    await click(resendButton())
+    expect(releases, 'control: both resends are in flight').toHaveLength(2)
+
+    await act(async () => releases[0](jsonResponse(202, { status: 'accepted' })))
+    await flush()
+    expect(resendButton().textContent?.trim(), "ada's answer does not end bob's resend").toBe(SENDING)
+    expect(resendButton().disabled).toBe(true)
+    expect(statusNotes()).toEqual([])
+
+    await act(async () => releases[1](jsonResponse(202, { status: 'accepted' })))
+    await flush()
+    expect(resendButton().disabled).toBe(false)
+    expect(statusNotes()).toEqual([sent('bob@corp.example')])
+  })
 })

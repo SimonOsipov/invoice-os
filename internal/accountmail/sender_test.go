@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os/exec"
 	"reflect"
 	"strings"
 	"sync"
@@ -140,6 +141,8 @@ func refusedURL(t *testing.T) string {
 func hangingServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The server notices a dropped client only after the body is read.
+		_, _ = io.Copy(io.Discard, r.Body)
 		select {
 		case <-r.Context().Done():
 		case <-time.After(5 * time.Second):
@@ -341,6 +344,83 @@ func TestCapture_RecordsWithoutNetwork(t *testing.T) {
 	}
 }
 
+func TestCapture_KeepsTheLastHundredAcrossBatches(t *testing.T) {
+	all := msgs(150)
+	for name, batches := range map[string][][]Message{
+		"two batches of 60":      {all[:60], all[60:120]},
+		"one batch of 150":       {all},
+		"under the cap, ordered": {all[:30], all[30:60]},
+	} {
+		c := &Capture{}
+		sent := 0
+		for _, b := range batches {
+			if err := c.Send(t.Context(), b); err != nil {
+				t.Fatalf("%s: Send = %v, want nil", name, err)
+			}
+			sent += len(b)
+		}
+		got := c.Messages()
+		want := all[:sent]
+		if len(want) > 100 {
+			want = want[len(want)-100:]
+		}
+		if len(got) == 0 || !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: Messages() holds %d, first %+v; want the last %d in order (first %+v)", name, len(got), first(got), len(want), want[0])
+		}
+	}
+}
+
+func first(m []Message) Message {
+	if len(m) == 0 {
+		return Message{}
+	}
+	return m[0]
+}
+
+func TestCapture_MessagesReturnsACopy(t *testing.T) {
+	c := &Capture{}
+	in := msgs(3)
+	if err := c.Send(t.Context(), in); err != nil {
+		t.Fatalf("Send = %v", err)
+	}
+	got := c.Messages()
+	if len(got) != 3 {
+		t.Fatalf("Messages() holds %d, want 3", len(got))
+	}
+	got[0].Subject = "mutated by the caller"
+	in[1].Subject = "mutated by the sender"
+	again := c.Messages()
+	if again[0].Subject != "s1" || again[1].Subject != "s2" {
+		t.Errorf("the store changed through a returned or sent slice: %+v", again)
+	}
+}
+
+func TestCapture_ConcurrentSendsLoseNothing(t *testing.T) {
+	const n = 100
+	c := &Capture{}
+	all := msgs(n)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for _, m := range all {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = c.Send(t.Context(), []Message{m})
+			_ = c.Messages()
+		}()
+	}
+	close(start)
+	wg.Wait()
+	seen := map[string]bool{}
+	for _, m := range c.Messages() {
+		seen[m.To] = true
+	}
+	if len(seen) != n {
+		t.Errorf("Messages() holds %d distinct of %d concurrent sends", len(seen), n)
+	}
+}
+
 func TestOff_IsNotConfigured(t *testing.T) {
 	err := Off{}.Send(t.Context(), msgs(1))
 	if !errors.Is(err, ErrNotConfigured) {
@@ -361,6 +441,44 @@ func TestNewSender_PicksTheImplementation(t *testing.T) {
 		got := NewSender(tc.mode, "k", nil)
 		if reflect.TypeOf(got) != reflect.TypeOf(tc.want) {
 			t.Errorf("NewSender(%q) = %T, want %T", tc.mode, got, tc.want)
+		}
+	}
+}
+
+func TestNewSender_RealUsesTheKeyBaseAndTransport(t *testing.T) {
+	var got []*http.Request
+	spy := rtFunc(func(r *http.Request) (*http.Response, error) {
+		got = append(got, r)
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{}`)), Request: r}, nil
+	})
+	if err := NewSender("real", testKey, spy).Send(t.Context(), msgs(1)); err != nil {
+		t.Fatalf("Send = %v, want nil", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("the injected transport saw %d requests, want 1", len(got))
+	}
+	r := got[0]
+	if r.URL.String() != ResendBaseURL+"/emails/batch" {
+		t.Errorf("url = %s, want %s/emails/batch", r.URL, ResendBaseURL)
+	}
+	if h := r.Header.Get("Authorization"); h != "Bearer "+testKey {
+		t.Errorf("Authorization = %q, want the key passed to NewSender", h)
+	}
+}
+
+// No runtime test observes an import. This keeps tools/prenv from gaining Sentry through internal/platform.
+func TestAccountmail_DoesNotImportPlatform(t *testing.T) {
+	out, err := exec.Command("go", "list", "-deps", "-f", "{{.ImportPath}}", ".").Output()
+	if err != nil {
+		t.Fatalf("go list -deps: %v", err)
+	}
+	pkgs := strings.Fields(string(out))
+	if len(pkgs) == 0 || !strings.HasSuffix(pkgs[len(pkgs)-1], "/internal/accountmail") {
+		t.Fatalf("go list -deps did not end with accountmail itself: %v", pkgs)
+	}
+	for _, p := range pkgs {
+		if strings.HasSuffix(p, "/internal/platform") || strings.Contains(p, "/internal/platform/") {
+			t.Errorf("accountmail depends on %s", p)
 		}
 	}
 }

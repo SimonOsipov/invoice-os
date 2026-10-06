@@ -4,7 +4,8 @@ import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { registerAccount, registerOutcome, validateRegisterForm, type RegisterErrors, type RegisterKind, type RegisterValues } from '../register'
 import { DEMO_FORM_CSS } from './DemoLeadForm'
-import { Alert, FIELD_STYLE } from './SignInForm'
+import { Alert, FIELD_STYLE, ResendNotice } from './SignInForm'
+import { useResend } from './useResend'
 import { HEADING_STYLE } from './SignInModal'
 import { MarketingConsent } from './MarketingConsent'
 import { Eyebrow } from './ds/Eyebrow'
@@ -26,6 +27,7 @@ export function RegisterModal({ onClose }: { onClose: () => void }) {
   const [formError, setFormError] = useState<string>()
   const [submitting, setSubmitting] = useState(false)
   const [sentTo, setSentTo] = useState<string>()
+  const { resending, note, resend } = useResend(sentTo)
 
   // Close on Escape (never a native dialog).
   useEffect(() => {
@@ -106,10 +108,14 @@ export function RegisterModal({ onClose }: { onClose: () => void }) {
           {sentTo !== undefined ? (
             <>
               <h3 style={{ ...HEADING_STYLE, margin: '0 0 10px' }}>Check your email</h3>
-              <p className="t-body-sm" style={{ margin: 0, lineHeight: 1.55 }}>
+              <p className="t-body-sm" style={{ margin: 0, lineHeight: 1.55, overflowWrap: 'anywhere' }}>
                 If this address can be registered, a confirmation link is on its way to {sentTo}. Open it, confirm your email, then sign in.
               </p>
-              <button type="button" onClick={onClose} className="ds-btn ds-btn--outline ds-btn--md" style={{ width: '100%', marginTop: 18 }}>
+              <button type="button" onClick={resend} disabled={resending} className="ds-btn ds-btn--outline ds-btn--md" style={{ width: '100%', marginTop: 18 }}>
+                {resending ? 'Sending…' : 'Send the link again'}
+              </button>
+              <ResendNotice note={note} email={sentTo} />
+              <button type="button" onClick={onClose} className="ds-btn ds-btn--outline ds-btn--md" style={{ width: '100%', marginTop: 10 }}>
                 Close
               </button>
             </>

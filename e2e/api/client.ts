@@ -207,6 +207,11 @@ export function demoRequest(body: unknown): Promise<{ status: number; body: unkn
   return rawFetch('/contacts/demo-request', { method: 'POST', body })
 }
 
+// POST /auth/resend-verification, raw so a spec can assert the status.
+export function resendVerification(body: unknown): Promise<{ status: number; body: unknown }> {
+  return rawFetch('/auth/resend-verification', { method: 'POST', body })
+}
+
 // One sign-in, one GoTrue session.
 export async function signInSession(email: string, password: string): Promise<{ access_token: string; refresh_token: string }> {
   const state = mintSignInState()

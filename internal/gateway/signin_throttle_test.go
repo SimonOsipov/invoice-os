@@ -9,7 +9,7 @@ import (
 
 func newTestThrottle(maxKeys int, window time.Duration) (*SignInThrottle, *testClock) {
 	clk := newTestClock()
-	return NewSignInThrottle(SignInMaxFailures, maxKeys, window, clk.Now), clk
+	return NewSignInThrottle("sign-in", SignInMaxFailures, maxKeys, window, clk.Now), clk
 }
 
 // reserveN calls Reserve n times and fails on the first refusal.

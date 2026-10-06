@@ -5,6 +5,7 @@ import { ApiError } from '@invoice-os/api-client/client'
 
 import {
   handoffUrl,
+  isUnverified,
   readSignInConsole,
   readSignInState,
   signInConfigured,
@@ -205,5 +206,22 @@ describe('signInErrorMessage', () => {
     for (const [name, err, want] of cases) {
       expect(signInErrorMessage(err), name).toBe(want)
     }
+  })
+})
+
+describe('isUnverified', () => {
+  it('isUnverified is true only for an http 403', () => {
+    expect(isUnverified(new ApiError('http', 'email address not verified', 403))).toBe(true)
+    const others: [string, unknown][] = [
+      ['401', new ApiError('http', 'invalid email or password', 401)],
+      ['429', new ApiError('http', 'too many requests', 429)],
+      ['502', new ApiError('http', 'sign-in is unavailable', 502)],
+      ['malformed 403', new ApiError('malformed', 'malformed response body', 403)],
+      ['network', new ApiError('network', 'Failed to fetch')],
+      ['plain Error', new Error('403')],
+      ['null', null],
+    ]
+    expect(others.length).toBeGreaterThan(0)
+    for (const [name, err] of others) expect(isUnverified(err), name).toBe(false)
   })
 })

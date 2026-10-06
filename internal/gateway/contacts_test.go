@@ -839,7 +839,7 @@ func signInOffline(t *testing.T, client *http.Client, store *HandoffStore, sink 
 
 func signInOfflineLog(t *testing.T, client *http.Client, store *HandoffStore, sink ContactSink, log *slog.Logger) *httptest.ResponseRecorder {
 	t.Helper()
-	th := NewSignInThrottle(SignInMaxFailures, SignInMaxKeys, SignInWindow, time.Now)
+	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, time.Now)
 	rec := serve(SignInHandler(offlineAuth, client, store, th, log, sink), http.MethodPost, "/auth/sign-in", signInBody(regEmail, regPassword, randomState(t)))
 	synctest.Wait()
 	return rec

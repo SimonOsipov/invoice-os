@@ -21,6 +21,13 @@ test.describe('account mail (API E2E, over the deployed gateway)', () => {
     expect(body).toContain('.ConfirmationURL')
   })
 
+  test('account mail: the gateway serves the recovery template', async () => {
+    const res = await fetch(`${apiBase()}/emails/recovery.html`)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe(HTML_CONTENT_TYPE)
+    expect(await res.text()).toContain('{{ .ConfirmationURL }}')
+  })
+
   test('account mail: the gateway serves the logo', async () => {
     const res = await fetch(`${apiBase()}/emails/mark.png`)
     expect(res.status).toBe(200)

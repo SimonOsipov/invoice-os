@@ -212,6 +212,11 @@ export function resendVerification(body: unknown): Promise<{ status: number; bod
   return rawFetch('/auth/resend-verification', { method: 'POST', body })
 }
 
+// POST /auth/request-password-reset, raw so a spec can assert the status.
+export function requestPasswordReset(body: unknown): Promise<{ status: number; body: unknown }> {
+  return rawFetch('/auth/request-password-reset', { method: 'POST', body })
+}
+
 // One sign-in, one GoTrue session.
 export async function signInSession(email: string, password: string): Promise<{ access_token: string; refresh_token: string }> {
   const state = mintSignInState()

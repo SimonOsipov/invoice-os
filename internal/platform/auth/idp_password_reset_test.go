@@ -308,6 +308,22 @@ func TestIdP_SpentTamperedAndExpiredResetLinksFail(t *testing.T) {
 		}
 		requireSignIn(t, base, e, e.password, http.StatusOK, "")
 	})
+
+	t.Run("tampered_leaves_the_real_link_usable", func(t *testing.T) {
+		u := confirmedRegistrant(t, gw)
+		requestResetAccepted(t, gw, u.email)
+		action, values := confirmForm(t, recoveryLink(t, u.email, 2))
+
+		tampered := url.Values{"token": {values.Get("token") + "x"}, "type": values["type"]}
+		if got := submitReset(t, action, tampered, "pw-new-tampered-first"); got != siteURL+"/?reset=failed" {
+			t.Fatalf("tampered submit = %q, want %s/?reset=failed", got, siteURL)
+		}
+		const newPassword = "pw-new-after-tamper"
+		if got := submitReset(t, action, values, newPassword); got != siteURL+"/?reset=1" {
+			t.Fatalf("real submit after a tampered one = %q, want %s/?reset=1", got, siteURL)
+		}
+		requireSignIn(t, base, u, newPassword, http.StatusOK, "")
+	})
 }
 
 // D28: a reset from the mailbox of an address registered and never confirmed takes the account back.
@@ -333,4 +349,47 @@ func TestIdP_ResetTakesBackAnUnconfirmedAccount(t *testing.T) {
 	}
 	requireSignIn(t, base, h, victimPassword, http.StatusOK, "")
 	requireSignIn(t, base, h, attackerPassword, http.StatusBadRequest, "invalid_credentials")
+}
+
+// GoTrue answers a repeated password 422 same_password and ends no session; the form must still end them all and touch nobody else's.
+func TestIdP_ResetToTheSamePasswordEndsEverySessionOfOnlyThatUser(t *testing.T) {
+	base := idpMailURL(t)
+	gw, _ := startGateway(t, base, 0, nil)
+	r := confirmedRegistrant(t, gw)
+	bystander := confirmedRegistrant(t, gw)
+
+	status, session := signIn(t, base, r)
+	rt0, _ := session["refresh_token"].(string)
+	if status != http.StatusOK || rt0 == "" {
+		t.Fatalf("sign in before the reset: status %d, body %v", status, session)
+	}
+	status, bsession := signIn(t, base, bystander)
+	bystanderRT, _ := bsession["refresh_token"].(string)
+	if status != http.StatusOK || bystanderRT == "" {
+		t.Fatalf("bystander sign in: status %d, body %v", status, bsession)
+	}
+	bystanderSessions := sessionRows(t, bystander.email)
+	if bystanderSessions == 0 {
+		t.Fatal("bystander holds no session before the reset")
+	}
+
+	requestResetAccepted(t, gw, r.email)
+	action, values := confirmForm(t, recoveryLink(t, r.email, 2))
+	if got := submitReset(t, action, values, r.password); got != siteURL+"/?reset=1" {
+		t.Fatalf("reset to the same password = %q, want %s/?reset=1", got, siteURL)
+	}
+
+	if n := sessionRows(t, r.email); n != 0 {
+		t.Errorf("auth.sessions holds %d rows for the user after the reset, want 0", n)
+	}
+	if status, body := postJSON(t, base+"/token?grant_type=refresh_token", map[string]string{"refresh_token": rt0}); status < 400 || status >= 500 {
+		t.Errorf("refresh grant with a token from before the reset: status %d, body %v; want 4xx", status, body)
+	}
+	requireSignIn(t, base, r, r.password, http.StatusOK, "")
+	if n := sessionRows(t, bystander.email); n != bystanderSessions {
+		t.Errorf("bystander holds %d sessions after another user's reset, want %d", n, bystanderSessions)
+	}
+	if status, body := postJSON(t, base+"/token?grant_type=refresh_token", map[string]string{"refresh_token": bystanderRT}); status != http.StatusOK {
+		t.Errorf("bystander refresh after another user's reset: status %d, body %v; want 200", status, body)
+	}
 }

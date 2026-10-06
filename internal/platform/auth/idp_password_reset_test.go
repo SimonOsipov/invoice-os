@@ -2,6 +2,7 @@ package auth_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -114,6 +115,25 @@ func requireSignIn(t *testing.T, base string, u idpUser, password string, wantSt
 	}
 }
 
+// timingUpstreamMs lists upstream_ms of each reset-request timing line in log order.
+func timingUpstreamMs(t *testing.T, logs string) []float64 {
+	t.Helper()
+	var out []float64
+	for _, line := range strings.Split(logs, "\n") {
+		if !strings.Contains(line, "reset-request: timing") {
+			continue
+		}
+		var rec struct {
+			UpstreamMs float64 `json:"upstream_ms"`
+		}
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("timing line %q: %v", line, err)
+		}
+		out = append(out, rec.UpstreamMs)
+	}
+	return out
+}
+
 // Five account states answer the same bytes, none earlier than the floor; it pins the request handler through real GoTrue.
 func TestIdP_ResetRequestAnswersAlikeForEveryAccountState(t *testing.T) {
 	base := idpMailURL(t)
@@ -163,6 +183,12 @@ func TestIdP_ResetRequestAnswersAlikeForEveryAccountState(t *testing.T) {
 	}
 	if n := strings.Count(logs.String(), "reset-request: limit reached"); n != 1 || !strings.Contains(logs.String(), `"limit":"address"`) {
 		t.Errorf("want exactly one limit=address line for the fourth request, got %d: %s", n, logs.String())
+	}
+
+	// A refused request reaches no GoTrue, so its timing line reports no upstream time; the request before it did.
+	ms := timingUpstreamMs(t, logs.String())
+	if len(ms) < 2 || ms[len(ms)-1] != 0 || ms[len(ms)-2] <= 0 {
+		t.Errorf("upstream_ms of the last two requests = %v, want [>0 0]: the fourth must make no GoTrue call", ms)
 	}
 
 	for _, a := range answers {

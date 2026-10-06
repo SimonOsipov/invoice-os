@@ -76,6 +76,7 @@ test.describe.serial('invitations (API E2E, over the deployed gateway)', () => {
 
   test('invitations: a malformed address is refused and nothing is created', async () => {
     const before = await listInvitations(adminToken)
+    expect(before).toHaveLength(2)
     const res = await invite(adminToken, [`invitations-ok-${crypto.randomUUID()}@example.com`, 'not-an-email'])
     assertErrorEnvelope(res, 400, 'malformed address')
     // internal/tenancy/invitations_handler.go: "invalid email address: " + each address quoted.

@@ -470,6 +470,7 @@ func TestRequestPasswordReset_LogsCarryNoAddressOrIP(t *testing.T) {
 }
 
 func TestRequestPasswordReset_NonPostIs405AtOnce(t *testing.T) {
+	// Each method carries a valid body, so a handler that fell through after the 405 would call GoTrue.
 	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
 	h := newReset(fake.URL, testClient(), time.Hour, nil)
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodOptions} {
@@ -477,7 +478,7 @@ func TestRequestPasswordReset_NonPostIs405AtOnce(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 			defer cancel()
 			rec := httptest.NewRecorder()
-			req := httptest.NewRequest(method, "/auth/request-password-reset", nil).WithContext(ctx)
+			req := httptest.NewRequest(method, "/auth/request-password-reset", strings.NewReader(resendBody("ada@corp.example"))).WithContext(ctx)
 
 			start := time.Now()
 			h.ServeHTTP(rec, req)

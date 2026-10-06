@@ -346,6 +346,82 @@ describe('a held invite redeems a hand-off over a live stored session', () => {
     expect(hits('/auth/exchange')).toEqual([])
     expect(localStorage.getItem(SESSION_KEY)).toBe(OLD_RECORD)
   })
+
+  it.each([
+    ['not json', 'not json'],
+    ['a wrong version', JSON.stringify({ v: 2, t: INVITE, at: Date.now() })],
+    ['a 42-character token', JSON.stringify({ v: 1, t: INVITE.slice(1), at: Date.now() })],
+    ['a future at', JSON.stringify({ v: 1, t: INVITE, at: Date.now() + 3600 * 1000 })],
+  ] as const)('app_unusableHeldInviteLeavesTheLiveSessionWinning: %s', async (_name, blob) => {
+    configure()
+    ensureSignInState()
+    sessionStorage.setItem(INVITE_KEY, blob)
+    localStorage.setItem(SESSION_KEY, OLD_RECORD)
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user, 'the old workspace must mount').toBeDefined())
+    await settle()
+    expect(hits('/auth/exchange'), 'the code is never redeemed').toEqual([])
+    expect(hits(ACCEPT_PATH)).toEqual([])
+    expect(localStorage.getItem(SESSION_KEY)).toBe(OLD_RECORD)
+  })
+
+  it.each([
+    ['accept 500', () => (acceptReply = fail(500, 'internal error'))],
+    ['accept network error', () => (acceptReply = networkDown)],
+    ['accept 403 forbidden', () => (acceptReply = fail(403, 'forbidden'))],
+    ['accept 200 then refresh 401', () => (refreshReply = fail(401, 'invalid refresh token'))],
+    ['accept 200 then /me 403', () => (renewedMeReply = fail(403, 'forbidden'))],
+  ] as const)('app_failedHeldInviteKeepsTheOldStoredSession: %s', async (_name, arrange) => {
+    configure()
+    ensureSignInState()
+    holdRaw()
+    arrange()
+    localStorage.setItem(SESSION_KEY, OLD_RECORD)
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await bootApp()
+    await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=failed`]))
+    await settle()
+    expect(hits(ACCEPT_PATH), 'control: the accept was tried').toHaveLength(1)
+    expect(localStorage.getItem(SESSION_KEY), 'the old session stays as it was').toBe(OLD_RECORD)
+    expect(capturedCtx, 'no workspace mounts').toBeUndefined()
+  })
+
+  it('app_heldInviteWithoutAStateKeepsTheOldStoredSession', async () => {
+    configure()
+    holdRaw()
+    localStorage.setItem(SESSION_KEY, OLD_RECORD)
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await bootApp()
+    await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=failed`]))
+    await settle()
+    expect(hits('/auth/exchange'), 'a tab without a state never redeems').toEqual([])
+    expect(localStorage.getItem(SESSION_KEY)).toBe(OLD_RECORD)
+  })
+
+  it('app_refusedInviteWithoutALandingBaseKeepsTheOldStoredSession', async () => {
+    configure({ landing: false })
+    ensureSignInState()
+    holdRaw()
+    acceptReply = fail(409, MSG_ALREADY_MEMBER)
+    localStorage.setItem(SESSION_KEY, OLD_RECORD)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(hits(ACCEPT_PATH), 'control: the accept was tried').toHaveLength(1))
+    await waitFor(() => expect(screen.getByText('Choose an account')).toBeTruthy())
+    await settle()
+    expect(hrefWrites, 'no navigation').toEqual([])
+    expect(localStorage.getItem(SESSION_KEY), 'the old session stays as it was').toBe(OLD_RECORD)
+    expect(capturedCtx, 'no workspace mounts').toBeUndefined()
+  })
 })
 
 describe('refusals without a landing base (D35)', () => {

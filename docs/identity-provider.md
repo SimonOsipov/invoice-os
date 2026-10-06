@@ -567,7 +567,7 @@ Body `{"token"}`, at most 1 KiB. Every answer sets `Cache-Control: no-store`.
 | Case | Answer |
 |---|---|
 | live invite | 200 `{"workspace","role","email"}` |
-| unknown, spent, expired or revoked; empty or over 256 bytes (no tenancy call) | 404 `{"error":"this invite is no longer valid"}` |
+| unknown, spent, expired or revoked; not 43 base64url characters (no tenancy call) | 404 `{"error":"this invite is no longer valid"}` |
 | malformed JSON or over 1 KiB | 400 `invalid request body` |
 | tenancy unreachable, over 5 s, or any other answer | 502 `invitation lookup is unavailable`, WARN with the status only |
 | any method but POST, sent to the handler | 405 `Allow: POST` |
@@ -810,7 +810,10 @@ first attempt (`SignInMaxFailures`, `SignInWindow`).
 **Precedence in the app.** A live stored hand-off session wins over `?handoff=`: the code is
 stripped and not acted on, so a URL never replaces a real session. A
 user signed in as A who signs in on landing as B arrives back in A's workspace with no
-message; B's code expires unused. Sign out first to switch accounts. A stored hand-off
+message; B's code expires unused. Sign out first to switch accounts. With an invite held
+(D11) the code is redeemed over a live stored session: success replaces it, a refusal or
+any failure leaves it stored. Guarded by `App.inviteAccept.test.tsx` "a held invite redeems
+a hand-off over a live stored session". A stored hand-off
 session whose access token has expired loses to `?handoff=`, even when it carries a refresh
 token. Guarded by `App.sessionRenewal.test.tsx` "a ?handoff= code wins over an expired
 renewable hand-off session".

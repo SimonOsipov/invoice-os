@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as pendingInvite from './pendingInvite'
-import { consumePendingInvite, holdPendingInvite, readInviteFragment } from './pendingInvite'
+import { consumePendingInvite, holdPendingInvite, peekPendingInvite, readInviteFragment } from './pendingInvite'
 
 // Read off the namespace so a missing export fails the assertion, not the import.
 const KEY = (pendingInvite as Record<string, unknown>).PENDING_INVITE_KEY
@@ -71,6 +71,10 @@ describe('holdPendingInvite and consumePendingInvite (D11)', () => {
     expect(KEY).toBe(RAW_KEY)
     holdPendingInvite(T, NOW)
     expect(JSON.parse(storage.store.get(RAW_KEY) ?? 'null')).toEqual({ v: 1, t: T, at: NOW })
+    expect(peekPendingInvite(NOW + TTL - 1), 'peek reads a live token').toBe(T)
+    expect(storage.store.has(RAW_KEY), 'peek leaves the key').toBe(true)
+    expect(peekPendingInvite(NOW + TTL), 'peek at exactly ten minutes').toBeNull()
+    expect(storage.store.has(RAW_KEY), 'peek leaves an expired key too').toBe(true)
     expect(consumePendingInvite(NOW + TTL - 1000)).toBe(T)
     expect(storage.store.has(RAW_KEY), 'consuming removes the key').toBe(false)
     expect(consumePendingInvite(NOW + TTL - 1000), 'the second consume').toBeNull()
@@ -104,6 +108,7 @@ describe('holdPendingInvite and consumePendingInvite (D11)', () => {
     ]
     for (const [name, raw] of rows) {
       storage.store.set(RAW_KEY, raw)
+      expect(peekPendingInvite(NOW), `peek: ${name}`).toBeNull()
       expect(consumePendingInvite(NOW), name).toBeNull()
     }
 
@@ -116,13 +121,15 @@ describe('holdPendingInvite and consumePendingInvite (D11)', () => {
     storage.getItem.mockImplementation(() => {
       throw new Error('SecurityError')
     })
-    expect(consumePendingInvite(NOW), 'getItem throws').toBeNull()
+    expect(peekPendingInvite(NOW), 'peek: getItem throws').toBeNull()
     expect(warn).toHaveBeenCalledTimes(1)
+    expect(consumePendingInvite(NOW), 'getItem throws').toBeNull()
+    expect(warn).toHaveBeenCalledTimes(2)
 
     storage.setItem.mockImplementation(() => {
       throw new Error('QuotaExceededError')
     })
     expect(() => holdPendingInvite(T, NOW), 'setItem throws').not.toThrow()
-    expect(warn).toHaveBeenCalledTimes(2)
+    expect(warn).toHaveBeenCalledTimes(3)
   })
 })

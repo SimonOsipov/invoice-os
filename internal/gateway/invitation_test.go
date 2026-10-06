@@ -644,7 +644,19 @@ func TestInvitation_MalformedTokenMakesNoTenancyCall(t *testing.T) {
 		"42 chars":     inviteToken[:42],
 		"bad alphabet": inviteToken[:42] + "+",
 		"padded":       inviteToken[:42] + "=",
+		"newline":      inviteToken + "\n",
+		"non-ASCII":    inviteToken[:42] + "é",
 	}
+	t.Run("control: a well-formed token reaches the previewer", func(t *testing.T) {
+		p := previewing(liveInvite, nil)
+		log, _ := captureLog()
+
+		rec := serveInvitation(InvitationHandler(p.preview, log), "POST", tokenBody(inviteToken))
+
+		if n := len(p.calls()); rec.Code != 200 || n != 1 {
+			t.Fatalf("status = %d with %d previewer call(s), want 200 and 1: %s", rec.Code, n, rec.Body.String())
+		}
+	})
 	for name, token := range malformed {
 		t.Run("preview "+name, func(t *testing.T) {
 			p := previewing(liveInvite, nil)

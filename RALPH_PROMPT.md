@@ -185,6 +185,7 @@ Test every `## Decisions` entry (conservative defaults and `premise —` entries
 - After it, does the **outcome that a Core AC promises** (or a subtask AC taken from one) no longer happen for the user? A narrower or a wider reading after which the outcome still happens is not a fork.
 
 Any "yes" makes the fork **critical**. Expect zero or one per story.
+A plan-review finding tagged `escalated→critical fork` is critical: it names a defect, and its fix changes the scope.
 
 **First check whether it is already answered.** A source answers a fork when it decides the same question. Match on the question, not on shared nouns. Read these sources:
 - the epic's decision log: frontmatter `type: decision-log` in the story's epic folder (fallback: filename `*Decision Log*.md`);
@@ -286,6 +287,7 @@ Spawn `product-qa-spec` (Mode B) with the acceptance criteria, the plan, the cha
 When QA returns, **replay the mutation rows yourself**, with no other agent running: `go run ./internal/tools/mutationreplay .ralph/mutations-<SUBTASK-ID>.jsonl`. It edits source in place and restores the exact bytes. Any `NOT-PROVEN` or `INVALID` row fails QA; send it back. Before you send it back, record each `NOT-PROVEN` row: `hm signal B6 <STORY> --subtask <SUBTASK-ID> "<ac>"`. A row is a claim; the replay is the evidence.
 
 If issues are found, spawn `product-executor` to fix, then re-verify. Record each QA finding with `hm subtask note`. Record each return to the executor with `hm signal B5 <STORY> --subtask <SUBTASK-ID> "<one line>"`.
+When QA passes, tick each acceptance criterion that QA proved: `hm subtask check <SUBTASK-ID> <n>`. Leave a criterion that QA did not prove unticked. hm records it at merge.
 - **Checkpoint:** `QA_VERIFIED`
 
 After each subtask, wait for `CI` on the pushed commit: `hm ci wait <PR>` (CI Monitoring Protocol).
@@ -293,7 +295,11 @@ A red run stops the next subtask until it is green. Then take the next subtask.
 A red run caused by a defect is recorded per "A defect in a verified subtask".
 
 #### A defect in a verified subtask
-A defect is wrong behaviour in product code or its tests. A flaky run or an infrastructure failure is not a defect.
+A defect is wrong behaviour in product code or its tests. These are not defects:
+- a flaky run or an infrastructure failure;
+- the wording of a comment or a doc;
+- a lint finding on a comment, for example the line-number citation check;
+- code that the story did not add or change.
 
 A defect escaped QA when a later finder finds it in a subtask that reached `QA_VERIFIED`. The finders are CI, a later subtask's QA Verify, the Phase 3 review and the Phase 3.5 gate.
 
@@ -301,11 +307,13 @@ A defect escaped QA when a later finder finds it in a subtask that reached `QA_V
 2. Before the fix starts, record `hm signal V1 <STORY> --subtask <SUBTASK-ID> "<finder>: <one line>"`.
 3. `<finder>` is `ci`, `qa <SUBTASK-ID>`, `review` or `gate`.
 4. When no single subtask added the faulty code, use the subtask that found it. Write `source unknown` in the line.
+5. Record one V1 per defect. A defect that several finders or subtasks show is still one V1.
+6. When the Phase 0.6b plan review found the defect and closed it by a conservative default, add `--defaulted <F-id>`. The signal then blames the plan.
 
 ### Phase 2: PR lifecycle
 
 `product-executor` manages PR state from the subtask `Order` field. Put `Base branch: <BASE>` in every executor brief:
-- `1 of N (FIRST)` → push and create the **draft** PR (drafts skip `dev-env.yml`).
+- `1 of N (FIRST)` → push and create the **draft** PR. `dev-env.yml` runs on a draft, and its `E2E gate` fails by design until the PR is ready. hm does not count those runs.
 - `K of N` → push only.
 - `N of N (FINAL)` → `git fetch origin`, merge `origin/<BASE>` if behind, and also `origin/main` when `BASE` is not `main`. Push. The PR stays draft.
 

@@ -1,5 +1,6 @@
-// railway_env_sealed_test.go pins railway-env.sh audit-sealed-variables: exactly three
-// names, sealed on `auth`, are allowed; every other sealed variable fails the audit.
+// railway_env_sealed_test.go pins railway-env.sh audit-sealed-variables: exactly four
+// service-qualified names (three on `auth`, one on `tenancy`) are allowed; every other sealed
+// variable fails the audit.
 package main
 
 import (
@@ -16,13 +17,15 @@ const (
 	sealedAuthID    = "svc-auth-source"
 	sealedGatewayID = "svc-gw-source"
 	sealedAdminID   = "svc-auth-admin-source"
+	sealedTenancyID = "svc-tenancy-source"
 	envScoped       = "environment-scoped"
 )
 
 var (
-	sealedAllowlist = []string{"GOTRUE_JWT_KEYS", "GOTRUE_JWT_SECRET", "GOTRUE_SMTP_PASS"}
-	offenderLine    = regexp.MustCompile(`^  (\S+) \(serviceId=([^)]*)\)$`)
-	unresolvedRE    = regexp.MustCompile(`(?i)cannot resolve the allowlist`)
+	sealedAllowlist  = []string{"GOTRUE_JWT_KEYS", "GOTRUE_JWT_SECRET", "GOTRUE_SMTP_PASS"}
+	tenancyAllowlist = []string{"RESEND_SENDING_KEY"}
+	offenderLine     = regexp.MustCompile(`^  (\S+) \(serviceId=([^)]*)\)$`)
+	unresolvedRE     = regexp.MustCompile(`(?i)cannot resolve the allowlist`)
 )
 
 func instance(id, name string) string {
@@ -30,7 +33,7 @@ func instance(id, name string) string {
 }
 
 func sourceInstances() []string {
-	return []string{instance(sealedGatewayID, "gateway"), instance(sealedAuthID, "auth"), instance(sealedAdminID, "auth-admin")}
+	return []string{instance(sealedGatewayID, "gateway"), instance(sealedAuthID, "auth"), instance(sealedAdminID, "auth-admin"), instance(sealedTenancyID, "tenancy")}
 }
 
 // sealedOn builds a sealed node with no value; svc "" is environment-scoped (null).
@@ -154,6 +157,66 @@ func TestAuditSealed_AllowlistOnAuthPasses(t *testing.T) {
 					t.Errorf("stdout names %s, which is not sealed; stdout = %q", n, stdout)
 				}
 			}
+		})
+	}
+}
+
+func TestAuditSealed_SendingKeyOnTenancyPasses(t *testing.T) {
+	plain := []string{plainOn("PORT", sealedAuthID), plainOn("ENVIRONMENT", sealedGatewayID), plainOn("PORT", sealedTenancyID)}
+	t.Run("alone", func(t *testing.T) {
+		nodes := append([]string{sealedOn("RESEND_SENDING_KEY", sealedTenancyID)}, plain...)
+		stdout, out, code := runAudit(t, newSealedShim(t, sourceInstances(), nodes...))
+		requireAllowed(t, stdout, out, code, tenancyAllowlist...)
+		if !strings.Contains(stdout, "clean") {
+			t.Errorf("stdout %q has no clean line", stdout)
+		}
+	})
+	t.Run("with the three auth names on auth", func(t *testing.T) {
+		nodes := append([]string{sealedOn("RESEND_SENDING_KEY", sealedTenancyID)}, plain...)
+		for _, n := range sealedAllowlist {
+			nodes = append(nodes, sealedOn(n, sealedAuthID))
+		}
+		stdout, out, code := runAudit(t, newSealedShim(t, sourceInstances(), nodes...))
+		requireAllowed(t, stdout, out, code, append(slices.Clone(sealedAllowlist), tenancyAllowlist...)...)
+	})
+	t.Run("unsealed on tenancy is not listed as sealed", func(t *testing.T) {
+		stdout, out, code := runAudit(t, newSealedShim(t, sourceInstances(), plainOn("RESEND_SENDING_KEY", sealedTenancyID)))
+		requireAllowed(t, stdout, out, code)
+		if strings.Contains(stdout, "RESEND_SENDING_KEY") {
+			t.Errorf("stdout names RESEND_SENDING_KEY, which is not sealed; stdout = %q", stdout)
+		}
+	})
+}
+
+// Each case runs alone and beside the allowed tenancy key: beside it, a name-only or
+// tenancy-wide allow would also hide the offender.
+func TestAuditSealed_SendingKeyElsewhereFails(t *testing.T) {
+	const notificationsID = "svc-notifications-source"
+	cases := []struct {
+		name string
+		node string
+		want string
+	}{
+		{"on gateway", sealedOn("RESEND_SENDING_KEY", sealedGatewayID), "RESEND_SENDING_KEY@" + sealedGatewayID},
+		{"on notifications", sealedOn("RESEND_SENDING_KEY", notificationsID), "RESEND_SENDING_KEY@" + notificationsID},
+		{"environment-scoped", sealedOn("RESEND_SENDING_KEY", ""), "RESEND_SENDING_KEY@" + envScoped},
+		{"on auth", sealedOn("RESEND_SENDING_KEY", sealedAuthID), "RESEND_SENDING_KEY@" + sealedAuthID},
+		{"an auth name on tenancy", sealedOn("GOTRUE_JWT_KEYS", sealedTenancyID), "GOTRUE_JWT_KEYS@" + sealedTenancyID},
+		{"a fifth name on tenancy", sealedOn("GOTRUE_SITE_URL", sealedTenancyID), "GOTRUE_SITE_URL@" + sealedTenancyID},
+	}
+	instances := append(sourceInstances(), instance(notificationsID, "notifications"))
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			stdout, out, code := runAudit(t, newSealedShim(t, instances, c.node))
+			requireRefused(t, out, code, c.want)
+			if strings.Contains(stdout, "clean") {
+				t.Errorf("a refused audit printed a clean line: %q", stdout)
+			}
+		})
+		t.Run(c.name+", beside the allowed tenancy key", func(t *testing.T) {
+			_, out, code := runAudit(t, newSealedShim(t, instances, c.node,
+				sealedOn("RESEND_SENDING_KEY", sealedTenancyID), sealedOn("GOTRUE_JWT_KEYS", sealedAuthID)))
+			requireRefused(t, out, code, c.want)
 		})
 	}
 }
@@ -339,14 +402,14 @@ func TestSealedFixturesCarryNoValue(t *testing.T) {
 	}
 }
 
-// docs/identity-provider.md claims the audit allows exactly three names on auth; the audit must agree.
+// docs/identity-provider.md claims the audit allows exactly four `service:NAME` pairs; the audit must agree.
 func TestAuditSealed_DocAllowlistMatchesTheAudit(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "docs", "identity-provider.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	doc := string(raw)
-	const head = "**The audit allows exactly these three on `auth`.**"
+	const head = "**The audit allows exactly these four.**"
 	i := strings.Index(doc, head)
 	if i < 0 {
 		t.Fatalf("docs/identity-provider.md lacks %q", head)
@@ -355,18 +418,29 @@ func TestAuditSealed_DocAllowlistMatchesTheAudit(t *testing.T) {
 	if j := strings.Index(para, "\n\n"); j >= 0 {
 		para = para[:j]
 	}
-	var named []string
-	for _, m := range regexp.MustCompile("`(GOTRUE_[A-Z_]+)`").FindAllStringSubmatch(para, -1) {
-		named = append(named, m[1])
+	ids := map[string]string{"auth": sealedAuthID, "tenancy": sealedTenancyID}
+	var want []string
+	for _, n := range sealedAllowlist {
+		want = append(want, "auth:"+n)
+	}
+	for _, n := range tenancyAllowlist {
+		want = append(want, "tenancy:"+n)
+	}
+	slices.Sort(want)
+	var named, nodes, names []string
+	for _, m := range regexp.MustCompile("`([a-z][a-z-]*):([A-Z][A-Z_]+)`").FindAllStringSubmatch(para, -1) {
+		named = append(named, m[1]+":"+m[2])
+		id, ok := ids[m[1]]
+		if !ok {
+			t.Fatalf("the doc's audit paragraph names the service %q, which the test cannot place", m[1])
+		}
+		nodes = append(nodes, sealedOn(m[2], id))
+		names = append(names, m[2])
 	}
 	slices.Sort(named)
-	if !slices.Equal(named, sealedAllowlist) {
-		t.Fatalf("the doc's audit paragraph names %v, want %v", named, sealedAllowlist)
-	}
-	var nodes []string
-	for _, n := range named {
-		nodes = append(nodes, sealedOn(n, sealedAuthID))
+	if !slices.Equal(named, want) {
+		t.Fatalf("the doc's audit paragraph names %v, want %v", named, want)
 	}
 	stdout, out, code := runAudit(t, newSealedShim(t, sourceInstances(), nodes...))
-	requireAllowed(t, stdout, out, code, named...)
+	requireAllowed(t, stdout, out, code, names...)
 }

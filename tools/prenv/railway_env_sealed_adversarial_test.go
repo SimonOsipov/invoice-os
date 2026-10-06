@@ -2,6 +2,7 @@ package main
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -54,4 +55,50 @@ func TestAuditSealed_QuerySelectsTheServiceInstances(t *testing.T) {
 	if !re.MatchString(q) {
 		t.Errorf("SEALED_AUDIT_QUERY does not select serviceInstances { edges { node { serviceId serviceName } } }: %q", q)
 	}
+}
+
+// With any variable sealed, every service the allowlist names must resolve to exactly one
+// instance, whichever sealed variable it is.
+func TestAuditSealed_MissingTenancyServiceFailsClosed(t *testing.T) {
+	base := []string{instance(sealedGatewayID, "gateway"), instance(sealedAuthID, "auth"), instance(sealedAdminID, "auth-admin")}
+	withTenancy := func(extra ...string) []string { return append(slices.Clone(base), extra...) }
+	cases := []struct {
+		name      string
+		instances []string
+		sealed    string
+	}{
+		{"tenancy absent", base, sealedOn("RESEND_SENDING_KEY", sealedTenancyID)},
+		{"tenancy twice", withTenancy(instance(sealedTenancyID, "tenancy"), instance("svc-tenancy-twin", "tenancy")), sealedOn("RESEND_SENDING_KEY", sealedTenancyID)},
+		{"only a case variant", withTenancy(instance(sealedTenancyID, "Tenancy")), sealedOn("RESEND_SENDING_KEY", sealedTenancyID)},
+		{"only tenancy-admin", withTenancy(instance(sealedTenancyID, "tenancy-admin")), sealedOn("RESEND_SENDING_KEY", sealedTenancyID)},
+		{"tenancy absent, only an auth name sealed", base, sealedOn("GOTRUE_JWT_KEYS", sealedAuthID)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			stdout, out, code := runAudit(t, newSealedShim(t, c.instances, c.sealed))
+			if code != 1 {
+				t.Errorf("exit %d, want 1; output = %q", code, out)
+			}
+			if e := errorLines(out); !unresolvedRE.MatchString(e) || !strings.Contains(e, "without the `tenancy` service") {
+				t.Errorf("error lines %q lack the clause \"cannot resolve the allowlist without the `tenancy` service\"", e)
+			}
+			if strings.Contains(stdout, "clean") {
+				t.Errorf("an unresolved allowlist printed a clean line: %q", stdout)
+			}
+		})
+	}
+	t.Run("auth is named first when both are missing", func(t *testing.T) {
+		stdout, out, code := runAudit(t, newSealedShim(t, []string{instance(sealedGatewayID, "gateway")}, sealedOn("RESEND_SENDING_KEY", sealedTenancyID)))
+		e := errorLines(out)
+		if code != 1 || !strings.Contains(e, "without the `auth` service") || strings.Contains(e, "`tenancy`") {
+			t.Errorf("exit %d, error lines %q; want exit 1 naming only the `auth` service", code, e)
+		}
+		if strings.Contains(stdout, "clean") {
+			t.Errorf("an unresolved allowlist printed a clean line: %q", stdout)
+		}
+	})
+	t.Run("no sealed variables still pass", func(t *testing.T) {
+		stdout, out, code := runAudit(t, newSealedShim(t, base, plainOn("RESEND_SENDING_KEY", sealedGatewayID)))
+		requireAllowed(t, stdout, out, code)
+	})
 }

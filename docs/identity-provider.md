@@ -432,7 +432,7 @@ timeout answers at the 10 s client timeout, not at the floor.
 
 Limits, in process, one hour window: 3 resends per address (`gateway.ResendPerAddress`, keyed by the
 lower-cased email) and 10 per client key (`gateway.ResendPerIP`); each map holds at most 10,000 keys
-(`gateway.ResendMaxKeys`). The client key is `X-Real-IP` (Railway documents it as the client's address; not yet measured, see Registration Ceilings), an IPv4-mapped
+(`gateway.ResendMaxKeys`). The client key is `X-Real-IP` (Railway's edge replaces a client-sent value; measured, see Registration Ceilings), an IPv4-mapped
 address unmapped, an IPv6 address by its /64; an absent or unparseable header falls back to the host
 of `RemoteAddr`, normalised the same way. The client is reserved first, then the address, then GoTrue is called. Any GoTrue
 4xx answer refunds both counts (GoTrue mails nothing on a 4xx); a 2xx, a 5xx or a transport error keeps them. Over a limit the
@@ -512,9 +512,10 @@ otherwise. The tenant id is a UUIDv5 of the caller's subject; the membership gua
   script or runbook sets it. Sign-in has the gateway's own per-address throttle instead (see
   Sign-in and hand-off); the gateway throttles verify not at all, and register and
   resend-verification by client key (10 an hour each) and resend-verification by address (3 an
-  hour). The client key is `X-Real-IP`, which Railway's edge documents as the client's address;
-  whether the edge replaces a client-sent value is not yet measured; RESEND-03 D23 measures it
-  on a PR fork and records it here.
+  hour). The client key is `X-Real-IP`, which Railway's edge sets to the client's address and
+  replaces when the client sends one. Measured 2026-10-06 on PR environment pr-342: 11 POSTs to
+  `/auth/resend-verification` from one client with `X-Real-IP` spoofed to 11 different values
+  shared one key and logged one `limit=ip key_source=header` limit line, on the 11th.
 - `ceiling:` `RATE_LIMIT_EMAIL_SENT` (30 per hour) is instance-wide, so production sends
   about 30 confirmation mails per hour. A registrant during the cap gets 202 and no mail; the
   WARN log line `registration: gotrue email send rate limit` is the only signal. Set
@@ -538,7 +539,7 @@ otherwise. The tenant id is a UUIDv5 of the caller's subject; the membership gua
 - `ceiling:` the client key is trusted only while `api.ascomply.com` is served straight from Railway's
   edge. A proxy in front makes every key the proxy's IP, and every client then shares one bucket of 10;
   resend then fails toward fewer mails for everyone, never more. `key_source=remote_addr` in the
-  limit WARN shows the fallback. Not yet measured; RESEND-03 D23 measures it on a PR fork.
+  limit WARN shows the fallback.
 - `ceiling:` the session GoTrue issues on verify is discarded but stays live in
   `auth.sessions` and `auth.refresh_tokens`. No route revokes it by itself; a global
   sign-out or a staff cut-off of the account deletes it with the account's other sessions

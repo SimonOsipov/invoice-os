@@ -4,10 +4,12 @@ package main
 
 import (
 	"encoding/json"
+	"maps"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -261,16 +263,35 @@ func TestDiscoverURLs_NoDomainFailsNamingTheService(t *testing.T) {
 
 func TestDiscoverURLs_GraphQLErrorEmptyStdout(t *testing.T) {
 	const message = "sentinel-railway-message-7f3a"
+	// beside plants errors next to a complete data; paths are errors[].path[0] values, one error each.
+	beside := func(paths ...string) func(t *testing.T, s authShim) {
+		return func(t *testing.T, s authShim) {
+			var es []string
+			for _, p := range paths {
+				path := ""
+				if p != "" {
+					path = `"path":[` + p + `],`
+				}
+				es = append(es, `{"message":"`+message+`",`+path+`"extensions":{"code":"INTERNAL_SERVER_ERROR"}}`)
+			}
+			writeFile(t, filepath.Join(s.dir, "errors-discoverUrls.json"), "["+strings.Join(es, ",")+"]")
+		}
+	}
 	for _, c := range []struct {
-		name  string
-		plant func(t *testing.T, s authShim)
+		name    string
+		plant   func(t *testing.T, s authShim)
+		named   []int // services (urlsServices index) the failure line must name
+		wantEnv bool
 	}{
 		{"errors and no data", func(t *testing.T, s authShim) {
 			writeFile(t, filepath.Join(s.dir, "faults-discoverUrls"), "gqlerr")
-		}},
-		{"errors beside a complete data", func(t *testing.T, s authShim) {
-			writeFile(t, filepath.Join(s.dir, "errors-discoverUrls.json"), `[{"message":"`+message+`","extensions":{"code":"INTERNAL_SERVER_ERROR"}}]`)
-		}},
+		}, nil, true},
+		{"errors beside a complete data", beside(""), nil, true},
+		{"a path names the service of the alias", beside(`"s2"`), []int{2}, false},
+		{"two aliased errors name both services", beside(`"s0"`, `"s4"`), []int{0, 4}, false},
+		{"an alias past the request names the environment", beside(`"s5"`), nil, true},
+		{"a path that is no alias names the environment", beside(`"domains"`), nil, true},
+		{"an in-range and an out-of-range alias name only the real service", beside(`"s1"`, `"s9"`), []int{1}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newURLsShim(t, nil)
@@ -278,8 +299,16 @@ func TestDiscoverURLs_GraphQLErrorEmptyStdout(t *testing.T) {
 			stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID)
 			requireOneDiscoverCall(t, s)
 			requireURLsRefused(t, stdout, stderr, code)
-			if !strings.Contains(stderr, forkEnvID) {
+			if c.wantEnv && !strings.Contains(stderr, forkEnvID) {
 				t.Errorf("a failure with no alias path names the environment %s; stderr = %q", forkEnvID, stderr)
+			}
+			if len(c.named) == 0 && !c.wantEnv {
+				t.Fatal("control: a case must name a service or the environment")
+			}
+			for i, svc := range urlsServices {
+				if got, want := namesService(stderr, svc.label), slices.Contains(c.named, i); got != want {
+					t.Errorf("stderr names %s = %v, want %v; stderr = %q", svc.label, got, want, stderr)
+				}
 			}
 			// [read-error-naming]: Railway's message never reaches a failure line.
 			for _, leaked := range []string{message, "Not Authorized"} {
@@ -369,6 +398,249 @@ func TestDiscoverURLs_ReadsThePersistentEnvironment(t *testing.T) {
 	}
 }
 
+// wrapData is a response body whose data is the given aliases, in key order or reversed.
+func wrapData(d map[string]string, backwards bool) string {
+	keys := slices.Sorted(maps.Keys(d))
+	if backwards {
+		slices.Reverse(keys)
+	}
+	var parts []string
+	for _, k := range keys {
+		parts = append(parts, `"`+k+`":`+d[k])
+	}
+	return `{"data":{` + strings.Join(parts, ",") + `}}`
+}
+
+// goodAliases is the five aliases s0..s4 in urlsServices order; override[i] replaces alias i.
+func goodAliases(t *testing.T, override map[int]string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for i, svc := range urlsServices {
+		body, ok := override[i]
+		if !ok {
+			body = domainsJSON(t, svc.custom, svc.generated)
+		}
+		out["s"+strconv.Itoa(i)] = body
+	}
+	return out
+}
+
+func TestDiscoverURLs_VerbatimResponses(t *testing.T) {
+	gen := func(i int) []string { return urlsServices[i].generated }
+	extra := goodAliases(t, nil)
+	extra["s5"] = domainsJSON(t, []string{"stray.ascomply.test"}, nil)
+	extra["s99"] = `null`
+	extra["gateway"] = domainsJSON(t, []string{"named-alias.ascomply.test"}, nil)
+	cases := []struct {
+		name    string
+		data    map[string]string
+		reverse bool
+		want    map[string]string // key -> host, applied over wantURLLines
+	}{
+		{"an alias the request never sent is ignored", extra, false, nil},
+		{"aliases in reverse key order still map by alias", goodAliases(t, nil), true, nil},
+		{"a duplicated custom domain takes the first", goodAliases(t, map[int]string{
+			0: domainsJSON(t, []string{"dup.ascomply.test", "dup.ascomply.test"}, gen(0)),
+		}), false, map[string]string{"gateway_url": "dup.ascomply.test"}},
+		{"the same host custom and generated prints once", goodAliases(t, map[int]string{
+			1: domainsJSON(t, []string{"app-pr-7.up.railway.app"}, gen(1)),
+		}), false, nil},
+		{"a generated list of two takes the first", goodAliases(t, map[int]string{
+			3: domainsJSON(t, nil, []string{"ops-first.up.railway.app", "ops-second.up.railway.app"}),
+		}), false, map[string]string{"ops_console_url": "ops-first.up.railway.app"}},
+		{"a domain object with an extra field and a port", goodAliases(t, map[int]string{
+			4: `{"customDomains":[],"serviceDomains":[{"domain":"support-x.up.railway.app","targetPort":8080,"id":"d-1","__typename":"ServiceDomain"}],"__typename":"AllDomains"}`,
+		}), false, map[string]string{"support_console_url": "support-x.up.railway.app"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := newURLsShim(t, nil)
+			if len(c.data) < 5 {
+				t.Fatalf("control: %d aliases planted, want at least 5", len(c.data))
+			}
+			writeFile(t, filepath.Join(s.dir, "discoverUrls.json"), wrapData(c.data, c.reverse))
+			stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID)
+			if code != 0 {
+				t.Fatalf("exit = %d, want 0; stdout = %q, stderr = %q", code, stdout, stderr)
+			}
+			requireOneDiscoverCall(t, s)
+			want := wantURLLines()
+			for i, svc := range urlsServices {
+				if h, ok := c.want[svc.key]; ok {
+					want[i] = svc.key + "=https://" + h
+				}
+			}
+			if lines := strings.Split(strings.TrimSuffix(stdout, "\n"), "\n"); !slices.Equal(lines, want) {
+				t.Errorf("stdout lines = %q, want %q", lines, want)
+			}
+		})
+	}
+}
+
+func TestDiscoverURLs_UnusableResponseRefuses(t *testing.T) {
+	good := func(t *testing.T) map[string]string { return goodAliases(t, nil) }
+	without := func(t *testing.T, k string) map[string]string {
+		d := good(t)
+		delete(d, k)
+		return d
+	}
+	cases := []struct {
+		name string
+		body func(t *testing.T) string // the whole response; data cases go through plantDiscover
+	}{
+		{"a 200 that is not JSON", func(*testing.T) string { return "<html>bad gateway</html>" }},
+		{"an empty 200", func(*testing.T) string { return "" }},
+		{"no data and no errors", func(*testing.T) string { return `{}` }},
+		{"data null", func(*testing.T) string { return `{"data":null}` }},
+		{"data a string", func(*testing.T) string { return `{"data":"oops"}` }},
+		{"a top-level array", func(*testing.T) string { return `[]` }},
+		{"the first alias is missing", func(t *testing.T) string { return wrapData(without(t, "s0"), false) }},
+		{"the last alias is missing", func(t *testing.T) string { return wrapData(without(t, "s4"), false) }},
+		{"an alias is an empty object", func(t *testing.T) string {
+			d := good(t)
+			d["s3"] = `{}`
+			return wrapData(d, false)
+		}},
+		{"an alias is a string", func(t *testing.T) string {
+			d := good(t)
+			d["s1"] = `"app-pr-7.up.railway.app"`
+			return wrapData(d, false)
+		}},
+		{"customDomains is a string", func(t *testing.T) string {
+			d := good(t)
+			d["s2"] = `{"customDomains":"www.ascomply.test","serviceDomains":[]}`
+			return wrapData(d, false)
+		}},
+		{"serviceDomains is null and customDomains empty", func(t *testing.T) string {
+			d := good(t)
+			d["s4"] = `{"customDomains":[],"serviceDomains":null}`
+			return wrapData(d, false)
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := newURLsShim(t, nil)
+			writeFile(t, filepath.Join(s.dir, "discoverUrls.json"), c.body(t))
+			stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID)
+			requireOneDiscoverCall(t, s)
+			requireURLsRefused(t, stdout, stderr, code)
+		})
+	}
+}
+
+func TestDiscoverURLs_TransportFailuresKeepQueryRetryRules(t *testing.T) {
+	const cmd = "discover-urls"
+	cases := []struct {
+		name    string
+		faults  []string
+		hdr     []string
+		calls   int
+		code    int
+		logRows []string
+	}{
+		{"a 503 then success is one counted success", []string{"503"}, nil, 2, 0, []string{cmd + "\t1\ttransient", cmd + "\t2\tok"}},
+		{"a timeout then success", []string{"timeout"}, nil, 2, 0, []string{cmd + "\t1\ttransient", cmd + "\t2\tok"}},
+		{"a 429 then success", []string{"429"}, []string{"retry-after: 1"}, 2, 0, []string{cmd + "\t1\tratelimit", cmd + "\t2\tok"}},
+		{"three 503s exhaust the budget", []string{"503", "503", "503"}, nil, 3, 1, []string{cmd + "\t1\ttransient", cmd + "\t2\ttransient", cmd + "\t3\ttransient"}},
+		{"a 401 is not retried", []string{"401"}, nil, 1, 1, []string{cmd + "\t1\tfatal"}},
+		{"a 400 is not retried", []string{"400"}, nil, 1, 1, []string{cmd + "\t1\tfatal"}},
+		{"a second 429 is not retried", []string{"429", "429"}, []string{"retry-after: 1"}, 2, 1, []string{cmd + "\t1\tratelimit", cmd + "\t2\tratelimit"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := newURLsShim(t, nil)
+			setFaults(t, s, "discoverUrls", c.faults...)
+			if len(c.hdr) > 0 {
+				plantRateLimitHeaders(t, s, c.hdr...)
+			}
+			tmp := t.TempDir()
+			stdout, stderr, code := runURLs(t, s, urlsExports(true, false)+runnerTempExport(tmp), forkEnvID)
+			if got := opCount(t, s, "discoverUrls"); got != c.calls || len(s.calls(t)) != c.calls {
+				t.Errorf("discoverUrls requests = %d of %d, want %d", got, len(s.calls(t)), c.calls)
+			}
+			if code != c.code {
+				t.Errorf("exit = %d, want %d; stdout = %q, stderr = %q", code, c.code, stdout, stderr)
+			}
+			if c.code == 0 {
+				if lines := strings.Split(strings.TrimSuffix(stdout, "\n"), "\n"); !slices.Equal(lines, wantURLLines()) {
+					t.Errorf("stdout lines = %q, want %q", lines, wantURLLines())
+				}
+			} else {
+				requireURLsRefused(t, stdout, stderr, code)
+				if !strings.Contains(stderr, forkEnvID) {
+					t.Errorf("stderr does not name the environment %s: %q", forkEnvID, stderr)
+				}
+			}
+			if rows := callLogRows(t, tmp); !slices.Equal(rows, c.logRows) {
+				t.Errorf("call log = %q, want %q", rows, c.logRows)
+			}
+			for _, leaked := range []string{"Problem processing request", "Not Authorized"} {
+				if strings.Contains(stdout+stderr, leaked) {
+					t.Errorf("output carries Railway's message %q: %q", leaked, stdout+stderr)
+				}
+			}
+		})
+	}
+}
+
+func TestDiscoverURLs_NoTokenOrBodyInOutputOrArgv(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		plant func(t *testing.T, s authShim)
+		code  int
+	}{
+		{"success", func(*testing.T, authShim) {}, 0},
+		{"a graphql error", func(t *testing.T, s authShim) { writeFile(t, filepath.Join(s.dir, "faults-discoverUrls"), "gqlerr") }, 1},
+		{"a 401", func(t *testing.T, s authShim) { setFaults(t, s, "discoverUrls", "401") }, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newURLsShim(t, nil)
+			c.plant(t, s)
+			stdout, stderr, code := runURLs(t, s, urlsExports(true, true), forkEnvID)
+			if code != c.code {
+				t.Fatalf("control: exit = %d, want %d; stderr = %q", code, c.code, stderr)
+			}
+			argv := s.argv(t)
+			if !strings.Contains(argv, "--data @-") || strings.Contains(argv, "--data {") || strings.Contains(argv, "discoverUrls") {
+				t.Errorf("the request body reached curl's argv, or was not sent on stdin: %s", argv)
+			}
+			for label, n := range map[string]string{"the account token": forkToken, "the project token": urlsProjectToken} {
+				if strings.Contains(stdout+stderr, n) {
+					t.Errorf("stdout or stderr carries %s: %q", label, stdout+stderr)
+				}
+			}
+		})
+	}
+}
+
+func TestDiscoverURLs_UsageAndProjectGuards(t *testing.T) {
+	t.Run("no environment id is a usage error with no call", func(t *testing.T) {
+		s := newURLsShim(t, nil)
+		s.requireLogs(t)
+		before := len(s.calls(t))
+		stdout, stderr, code := s.run(t, urlsExports(true, false), "discover-urls")
+		if code != 2 || stdout != "" || !strings.Contains(stderr, "usage: railway-env.sh discover-urls <environment-id>") {
+			t.Errorf("exit = %d, stdout = %q, stderr = %q; want 2, empty, the usage line", code, stdout, stderr)
+		}
+		if got := len(s.calls(t)); got != before {
+			t.Errorf("%d Railway call(s) with no environment id", got-before)
+		}
+	})
+	t.Run("an unset project id refuses before any call", func(t *testing.T) {
+		s := newURLsShim(t, nil)
+		s.requireLogs(t)
+		before := len(s.calls(t))
+		stdout, stderr, code := runURLs(t, s, strings.Replace(urlsExports(true, false), "export RAILWAY_PROJECT_ID="+forkProjectID+"\n", "unset RAILWAY_PROJECT_ID\n", 1), forkEnvID)
+		requireURLsRefused(t, stdout, stderr, code)
+		if got := len(s.calls(t)); got != before {
+			t.Errorf("%d Railway call(s) with no project id", got-before)
+		}
+		if !strings.Contains(stderr, "RAILWAY_PROJECT_ID") {
+			t.Errorf("stderr does not name RAILWAY_PROJECT_ID: %q", stderr)
+		}
+	})
+}
+
 // jobOutputs returns a job's outputs: map, key to expression.
 func jobOutputs(j workflowJob) map[string]string {
 	out := map[string]string{}
@@ -445,8 +717,11 @@ func TestDevEnvYmlURLsStepWritesTheFiveOutputs(t *testing.T) {
 		// Quoted: an unquoted expansion folds the 5 lines into one.
 		name := regexp.QuoteMeta(call[1])
 		appended := regexp.MustCompile(`(?m)^(echo|printf)\b.*"\$\{?` + name + `\}?".*>> "\$GITHUB_OUTPUT"$`)
-		if !appended.MatchString(run) {
+		loc := appended.FindStringIndex(run)
+		if loc == nil {
 			t.Errorf(`the urls run does not append "$%s" to "$GITHUB_OUTPUT":`+"\n%s", call[1], run)
+		} else if at := strings.Index(run, "discover-urls"); at < 0 || at > loc[0] {
+			t.Errorf("the urls run appends %s to $GITHUB_OUTPUT before it is assigned:\n%s", call[1], run)
 		}
 	}
 	if n := strings.Count(run, "discover-urls"); n != 1 {

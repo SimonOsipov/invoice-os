@@ -86,7 +86,7 @@
 # Auth: account-scoped RAILWAY_API_TOKEN, `Authorization: Bearer`. A Railway *project*
 # token is pinned to one environment and cannot perform projectUpdate, nor reach an
 # ephemeral PR environment.
-# Only `query` and `wait-deployment` also accept RAILWAY_PROJECT_TOKEN (`Project-Access-Token`), for dispatch runs.
+# `query` and `wait-deployment` also accept RAILWAY_PROJECT_TOKEN (`Project-Access-Token`), for dispatch runs.
 #
 # bash, not POSIX sh: unlike scripts/ci/railway-up-ci.sh this does NOT run inside the
 # minimal ghcr.io/railwayapp/cli container.
@@ -1319,7 +1319,7 @@ settle_fork() {
 # --- Reconcile C: domains ----------------------------------------------------
 #
 # F7 is absolute: this NEVER emits a URL. It only makes domains EXIST. The
-# untouched `urls` step remains the sole discoverer and still fails if any is
+# `urls` step remains the sole discoverer and still fails if any is
 # missing, so no URL is ever constructed from a pattern.
 reconcile_domain() {
   local env_id="$1" svc_id="$2" label="$3" existing target src_count input body sel count

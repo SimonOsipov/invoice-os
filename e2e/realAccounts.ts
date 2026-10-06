@@ -1,5 +1,8 @@
 import { grantMembership, rawFetch, signInSession, subjectOf, type TenantKind } from './api/client'
 
+export const E2E_MEMBER_ROLES = ['admin', 'preparer', 'reviewer'] as const
+export type MemberRole = (typeof E2E_MEMBER_ROLES)[number]
+
 export interface E2EMember {
   email: string
   password: string
@@ -10,12 +13,19 @@ export interface E2EMember {
 const PASSWORD_PREFIX = 'e2e-member-pw-'
 
 // Tenant ids lead with 1 (firm) or 2 (in-house), as in db/seed.e2e-shards.sql.
-export function e2eMember(tenantId: string): E2EMember {
+export function e2eMember(tenantId: string, role?: MemberRole): E2EMember {
+  // stub: an explicit role returns a wrong record until FLOWUPD-01-03 lands
+  if (role !== undefined) return { email: '', password: '', displayName: '' }
   return {
     email: `e2e-member-${tenantId}@example.com`,
     password: PASSWORD_PREFIX + tenantId,
     displayName: tenantId.startsWith('1') ? 'E2E Firm Admin' : 'E2E In-house Admin',
   }
+}
+
+// stub: accepts nothing until FLOWUPD-01-03 lands
+export function isE2eMemberEmail(_tenantId: string, _email: string): boolean {
+  return false
 }
 
 // The seed's user block (db/seed.dev.sql); a GoTrue subject is a random UUID.
@@ -26,7 +36,7 @@ export function isSeededMember(userId: string): boolean {
 const ensured = new Map<string, Promise<E2EMember>>()
 
 // Registers (idempotent), signs in and makes the account an admin of the tenant, once per worker.
-export function ensureMember(tenantId: string, kind: TenantKind): Promise<E2EMember> {
+export function ensureMember(tenantId: string, kind: TenantKind, _role?: MemberRole): Promise<E2EMember> {
   if ((tenantId.startsWith('1') ? 'firm' : 'in_house') !== kind) {
     return Promise.reject(new Error(`ensureMember: tenant ${tenantId} is not a ${kind} tenant (its id prefix says otherwise)`))
   }

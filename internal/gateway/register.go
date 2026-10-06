@@ -181,7 +181,8 @@ func holdMinimum(ctx context.Context, log *slog.Logger, start time.Time, upstrea
 	}
 }
 
-// VerifyHandler answers the emailed link by calling GoTrue's /verify, then redirects to siteURL.
+// VerifyHandler answers the confirm page's form POST by calling GoTrue's /verify, then redirects to siteURL.
+// The token is read from the form body only; any bad form redirects to the failure notice with no GoTrue call.
 func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Logger, sink ContactSink) http.Handler {
 	if siteURL == nil {
 		return RegistrationNotConfigured()
@@ -191,16 +192,16 @@ func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Log
 	verified, failed := site+"/?verified=1", site+"/?verify=failed"
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// A HEAD prefetch by a link scanner would consume the single-use token.
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		if !postOnly(w, r) {
 			return
 		}
-		// redirect_to is ignored: the target is server configuration, never a query value.
-		q := r.URL.Query()
-		token := q.Get("token")
-		if token == "" || q.Get("type") != "signup" {
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<10)
+		if err := r.ParseForm(); err != nil {
+			http.Redirect(w, r, failed, http.StatusSeeOther)
+			return
+		}
+		token := r.PostForm.Get("token")
+		if token == "" || len(token) > maxVerifyTokenBytes || r.PostForm.Get("type") != "signup" {
 			http.Redirect(w, r, failed, http.StatusSeeOther)
 			return
 		}
@@ -223,7 +224,7 @@ func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Log
 	})
 }
 
-// RegistrationNotConfigured answers both registration routes while AUTH_SITE_URL is unset.
+// RegistrationNotConfigured answers 503 while AUTH_SITE_URL is unset.
 func RegistrationNotConfigured() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "registration is not configured")

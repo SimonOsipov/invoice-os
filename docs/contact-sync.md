@@ -6,7 +6,7 @@ Signup and the demo form never wait on either vendor.
 ## Flow
 
 ```
-GET  /auth/verify  → GoTrue /verify 200 ─┬─ 303 to the landing (never waits)
+POST /auth/verify  → GoTrue /verify 200 ─┬─ 303 to the landing (never waits)
                                          └─ background hand-off
 POST /auth/sign-in → GoTrue /token 200 ──┬─ {code} (never waits)
                                          └─ background hand-off, only when user_metadata.registration is set
@@ -75,7 +75,7 @@ A registrant's `display_name` splits on the first run of whitespace into first a
 
 | Rule | Value |
 |---|---|
-| Triggers | every `GET /auth/verify` that GoTrue answers 200; every `POST /auth/sign-in` 200 whose user has `user_metadata.registration` |
+| Triggers | every `POST /auth/verify` that GoTrue answers 200; every `POST /auth/sign-in` 200 whose user has `user_metadata.registration` |
 | Attempts | 3: at once, after 5 s, after 30 s (`handOffDelays` in `contacts.go`) |
 | Call timeout | 5 s per attempt |
 | After the third failure | one WARN `contacts: registrant hand-off failed` with `user_id`, `attempts`, `status`; nothing retries it |

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	xhtml "golang.org/x/net/html"
 
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -67,7 +68,7 @@ func mailEnv(t *testing.T, name string) string {
 	return strings.TrimRight(v, "/")
 }
 
-// startGateway serves the real register and verify handlers where the mailed link points, and returns its JSON log.
+// startGateway serves the real register, confirm-page and verify handlers where the mailed link points, and returns its JSON log.
 func startGateway(t *testing.T, authBase string, minResponse time.Duration, sink gateway.ContactSink) (string, *bytes.Buffer) {
 	t.Helper()
 	authURL, err := url.Parse(authBase)
@@ -79,7 +80,12 @@ func startGateway(t *testing.T, authBase string, minResponse time.Duration, sink
 	log := slog.New(slog.NewJSONHandler(&syncWriter{w: logs}, nil))
 	mux := http.NewServeMux()
 	mux.Handle("POST /auth/register", gateway.RegisterHandler(authURL, noRedirect, minResponse, log))
-	mux.Handle("GET /auth/verify", gateway.VerifyHandler(authURL, site, noRedirect, log, sink))
+	verifyPage, err := gateway.VerifyPageHandler(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux.Handle("GET /auth/verify", verifyPage)
+	mux.Handle("POST /auth/verify", gateway.VerifyHandler(authURL, site, noRedirect, log, sink))
 	confirmationMail, err := gateway.MailTemplate("confirmation")
 	if err != nil {
 		t.Fatal(err)
@@ -300,18 +306,101 @@ func getJSON(t *testing.T, u string, out any) {
 	}
 }
 
-// follow opens the mailed link as a mail client would and returns the redirect target.
-func follow(t *testing.T, link string) string {
+// open fetches the mailed link once, as a mail scanner would (GET or HEAD), requires 200 and returns the body.
+func open(t *testing.T, link, method string) string {
 	t.Helper()
-	resp, err := noRedirect.Get(link)
+	req, err := http.NewRequest(method, link, nil)
 	if err != nil {
-		t.Fatalf("GET %s: %v", link, err)
+		t.Fatal(err)
+	}
+	resp, err := noRedirect.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, link, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("GET the mailed link: status %d, want 303", resp.StatusCode)
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%s the mailed link: status %d, want 200: %s", method, resp.StatusCode, b)
 	}
-	return resp.Header.Get("Location")
+	return string(b)
+}
+
+// confirmForm opens the link's page and returns its one form's action, resolved against the link, and its input values.
+func confirmForm(t *testing.T, link string) (string, url.Values) {
+	t.Helper()
+	doc, err := xhtml.Parse(strings.NewReader(open(t, link, http.MethodGet)))
+	if err != nil {
+		t.Fatalf("parse the confirm page: %v", err)
+	}
+	attr := func(n *xhtml.Node, key string) string {
+		for _, a := range n.Attr {
+			if a.Key == key {
+				return a.Val
+			}
+		}
+		return ""
+	}
+	var forms []*xhtml.Node
+	var find func(*xhtml.Node)
+	find = func(n *xhtml.Node) {
+		if n.Type == xhtml.ElementNode && n.Data == "form" {
+			forms = append(forms, n)
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			find(c)
+		}
+	}
+	find(doc)
+	if len(forms) != 1 {
+		t.Fatalf("the confirm page holds %d forms, want exactly 1", len(forms))
+	}
+	if m := attr(forms[0], "method"); !strings.EqualFold(m, "post") {
+		t.Fatalf("confirm form method = %q, want post", m)
+	}
+	values := url.Values{}
+	var collect func(*xhtml.Node)
+	collect = func(n *xhtml.Node) {
+		if n.Type == xhtml.ElementNode && n.Data == "input" && attr(n, "name") != "" {
+			values.Add(attr(n, "name"), attr(n, "value"))
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			collect(c)
+		}
+	}
+	collect(forms[0])
+	base, err := url.Parse(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	action, err := url.Parse(attr(forms[0], "action"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base.ResolveReference(action).String(), values
+}
+
+// postForm posts values as the confirm button does and returns the status and Location.
+func postForm(action string, values url.Values) (int, string, error) {
+	resp, err := noRedirect.PostForm(action, values)
+	if err != nil {
+		return 0, "", err
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode, resp.Header.Get("Location"), nil
+}
+
+// follow opens the mailed link's page and clicks its button, and returns the redirect target.
+func follow(t *testing.T, link string) string {
+	t.Helper()
+	action, values := confirmForm(t, link)
+	status, location, err := postForm(action, values)
+	if err != nil {
+		t.Fatalf("POST %s: %v", action, err)
+	}
+	if status != http.StatusSeeOther {
+		t.Fatalf("clicking the confirm button: status %d, want 303", status)
+	}
+	return location
 }
 
 func TestIdP_RegisterLeavesTheAccountUnverified(t *testing.T) {
@@ -403,6 +492,18 @@ func TestIdP_EmailedLinkVerifiesThenSignInSucceeds(t *testing.T) {
 	if n := sink.count(); n != 0 {
 		t.Fatalf("%d registrants handed off before the link was followed, want 0", n)
 	}
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodGet} {
+		open(t, link, method)
+	}
+	if emailConfirmed(t, u.email) {
+		t.Fatal("opening the link confirmed the account")
+	}
+	if status, body := signIn(t, base, u); status != http.StatusBadRequest || body["error_code"] != "email_not_confirmed" {
+		t.Fatalf("password grant after opening the link: status %d, body %v; want 400 email_not_confirmed", status, body)
+	}
+	if n := sink.count(); n != 0 {
+		t.Fatalf("opening the link handed off %d registrants, want 0", n)
+	}
 	if got := follow(t, link); got != siteURL+"/?verified=1" {
 		t.Fatalf("verify redirect = %q, want %s/?verified=1", got, siteURL)
 	}
@@ -425,6 +526,60 @@ func TestIdP_EmailedLinkVerifiesThenSignInSucceeds(t *testing.T) {
 		t.Errorf("%d registrants handed off, want exactly 1", n)
 	}
 	accessToken(t, base, u)
+}
+
+// Two clicks race for one token: GoTrue spends it once, and the gateway hands off once per verified answer.
+func TestIdP_TwoConcurrentClicksConfirmOnce(t *testing.T) {
+	base := idpMailURL(t)
+	sink := newRecordingSink()
+	gw, _ := startGateway(t, base, 0, sink)
+	u := registrant(t, gw, map[string]string{"workspace_name": "IdP Race", "display_name": "Ada"})
+	action, values := confirmForm(t, confirmationLink(t, u.email))
+
+	type answer struct {
+		status   int
+		location string
+		err      error
+	}
+	answers := make(chan answer, 2)
+	start := make(chan struct{})
+	for range 2 {
+		go func() {
+			<-start
+			status, location, err := postForm(action, values)
+			answers <- answer{status, location, err}
+		}()
+	}
+	close(start)
+
+	verified := 0
+	for range 2 {
+		a := <-answers
+		if a.err != nil || a.status != http.StatusSeeOther {
+			t.Fatalf("click: status %d, err %v; want 303", a.status, a.err)
+		}
+		switch a.location {
+		case siteURL + "/?verified=1":
+			verified++
+		case siteURL + "/?verify=failed":
+		default:
+			t.Errorf("click redirected to %q, want %s/?verified=1 or %s/?verify=failed", a.location, siteURL, siteURL)
+		}
+	}
+	if verified < 1 {
+		t.Fatal("no click landed on ?verified=1")
+	}
+	if !emailConfirmed(t, u.email) {
+		t.Error("the account is not confirmed after the clicks")
+	}
+	for range verified {
+		sink.next(t)
+	}
+	// A hand-off the gateway sent late would arrive after the wait above.
+	time.Sleep(500 * time.Millisecond)
+	if n := sink.count(); n != verified {
+		t.Errorf("%d hand-offs, want %d (one per ?verified=1 answer)", n, verified)
+	}
 }
 
 func TestIdP_VerificationLinkIsSingleUse(t *testing.T) {

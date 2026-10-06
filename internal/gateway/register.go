@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -308,4 +309,9 @@ func postGoTrueBearer(ctx context.Context, client *http.Client, target, bearer s
 	gone = sessionGone(resp.StatusCode, resp.Body)
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxGoTrueBodyBytes))
 	return resp.StatusCode, gone, nil
+}
+
+// putGoTrueBearerJSON puts body as JSON with bearer as the Authorization and returns the status and any error fields.
+func putGoTrueBearerJSON(ctx context.Context, client *http.Client, target, bearer string, body any) (int, gotrueError, error) {
+	return 0, gotrueError{}, errors.New("stub")
 }

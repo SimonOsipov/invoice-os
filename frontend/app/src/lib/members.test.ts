@@ -1235,6 +1235,24 @@ describe('inviteSentNotice — the send confirmation (D8)', () => {
     expect(inviteSentNotice(three)).toEqual({ tone: 'ok', text: 'Invite sent to 3 people.' })
   })
 
+  it('inviteSentNotice — two items split the one-person and many-people copy', () => {
+    const ok = (id: string) => invite({ id, delivery: 'sent' })
+    const bad = (id: string) => invite({ id, delivery: 'failed' })
+
+    expect(inviteSentNotice([ok('i-1'), invite({ id: 'i-2', delivery: 'sending' })])).toEqual({
+      tone: 'ok',
+      text: 'Invite sent to 2 people.',
+    })
+    expect(inviteSentNotice([bad('i-1'), ok('i-2')])).toEqual({
+      tone: 'failed',
+      text: "1 of 2 invite emails did not go out. Resend it from the row's ⋯ menu.",
+    })
+    expect(inviteSentNotice([ok('i-1'), bad('i-2'), bad('i-3'), ok('i-4')])).toEqual({
+      tone: 'failed',
+      text: "2 of 4 invite emails did not go out. Resend them from the rows' ⋯ menus.",
+    })
+  })
+
   it('inviteSentNotice — failed deliveries', () => {
     const ok = (id: string) => invite({ id, delivery: 'sent' })
     const bad = (id: string) => invite({ id, delivery: 'failed' })
@@ -1568,6 +1586,9 @@ describe('RESEND-07-02 — the pending-invite projection and reducers', () => {
       expiresAt: '2026-10-13T10:00:00Z',
       delivery: 'sending',
     })
+    expect(
+      toPendingInvite({ id: 'i-8', email: 'y@x.ng', role: 'admin', status: 'pending', expires_at: '', delivery: 'failed' }),
+    ).toEqual({ id: 'i-8', email: 'y@x.ng', role: 'admin', expiresAt: '', delivery: 'failed' })
   })
 
   it('upsertInvites replaces by id and appends new ids', () => {
@@ -1583,6 +1604,20 @@ describe('RESEND-07-02 — the pending-invite projection and reducers', () => {
     expect(list).toEqual([A, B])
   })
 
+  it('upsertInvites keys on id, not email, and keeps list position', () => {
+    const A = invite({ id: 'A', email: 'same@x.ng' })
+    const B = invite({ id: 'B', email: 'b@x.ng' })
+    const C = invite({ id: 'C', email: 'c@x.ng' })
+
+    expect(upsertInvites([A], [invite({ id: 'Z', email: 'same@x.ng' })]).map((i) => i.id)).toEqual(['A', 'Z'])
+    expect(upsertInvites([A], [invite({ id: 'A', email: 'other@x.ng' })]).map((i) => i.email)).toEqual(['other@x.ng'])
+
+    const A2 = invite({ id: 'A', delivery: 'failed' })
+    const C2 = invite({ id: 'C', delivery: 'failed' })
+    expect(upsertInvites([A, B, C], [C2, A2])).toEqual([A2, B, C2])
+    expect(upsertInvites([A], [invite({ id: 'D' }), invite({ id: 'E' })]).map((i) => i.id)).toEqual(['A', 'D', 'E'])
+  })
+
   it('upsertInvites allocates on a miss and on empty input', () => {
     const A = invite({ id: 'A' })
     const list = [A]
@@ -1594,14 +1629,14 @@ describe('RESEND-07-02 — the pending-invite projection and reducers', () => {
   })
 
   it('invitedMember derives name and initials from the local part', () => {
-    const m = invitedMember(invite({ id: 'i-7', email: 'ada.obi@x.ng', role: 'preparer' }))
+    const m = invitedMember(invite({ id: 'i-7', email: 'ada.obi@x.ng', role: 'admin' }))
 
     expect(m).toEqual({
       id: 'i-7',
       name: 'Ada Obi',
       initials: 'AO',
       email: 'ada.obi@x.ng',
-      role: 'preparer',
+      role: 'admin',
       status: 'invited',
       isYou: false,
     })
@@ -1615,13 +1650,19 @@ describe('RESEND-07-02 — the pending-invite projection and reducers', () => {
     expect(m.status).toBe('invited')
   })
 
+  it('invitedMember takes initials from the address when the local part has no word', () => {
+    expect(invitedMember(invite({ email: '@x.ng' })).initials).toBe('@X')
+    expect(invitedMember(invite({ email: '._@x.ng' })).name).toBe('._@x.ng')
+    expect(invitedMember(invite({ email: 'zainab@x.ng' }))).toMatchObject({ name: 'Zainab', initials: 'ZA' })
+  })
+
   it('rosterWithInvites lists members first, invites after, in order', () => {
     const M1 = { ...inhouseRow('Ada Self', 'active'), id: 'M1' }
     const M2 = { ...inhouseRow('Bola Two', 'active'), id: 'M2' }
     const I2 = invite({ id: 'I2', email: 'i2@x.ng' })
     const I1 = invite({ id: 'I1', email: 'i1@x.ng' })
-    const members = [M1, M2]
-    const invites = [I2, I1]
+    const members = Object.freeze([M1, M2]) as Member[]
+    const invites = Object.freeze([I2, I1]) as PendingInvite[]
 
     const got = rosterWithInvites(members, invites)
 
@@ -1646,6 +1687,8 @@ describe('RESEND-07-02 — viewerIsAdmin (D3)', () => {
     expect(viewerIsAdmin([self('preparer', 'active')])).toBe(false)
     expect(viewerIsAdmin([other])).toBe(false)
     expect(viewerIsAdmin([other, self('reviewer', 'active')])).toBe(false)
+    expect(viewerIsAdmin([self('admin', 'invited')])).toBe(false)
+    expect(viewerIsAdmin([])).toBe(false)
   })
 })
 
@@ -1676,6 +1719,26 @@ describe('RESEND-07-02 — chipVerdicts (D5 layer 1)', () => {
     expect(chipVerdicts([], [at254, at255, twoByte])).toEqual(['ok', 'malformed', 'malformed'])
   })
 
+  it('chipVerdicts bounds the control-character class at the Cc edges', () => {
+    const at = (c: string) => chipVerdicts([], [`a${c}b@x.ng`])[0]
+
+    expect(['\u0000', '\u001f', '\u007f', '\u0085', '\u009f'].map(at)).toEqual(Array(5).fill('malformed'))
+    expect(['~', '\u00a1', 'é', '😀'].map(at)).toEqual(Array(4).fill('ok'))
+  })
+
+  it('chipVerdicts counts bytes, not UTF-16 units, for astral characters', () => {
+    const ok = `${'😀'.repeat(62)}@x.ng`
+    const over = `${'😀'.repeat(63)}@x.ng`
+    expect([bytes(ok), bytes(over), over.length]).toEqual([253, 257, 131])
+
+    expect(chipVerdicts([], [ok, over])).toEqual(['ok', 'malformed'])
+  })
+
+  it('chipVerdicts matches serverRefused on the chip text exactly', () => {
+    expect(chipVerdicts([], ['A..b@x.com'], ['a..b@x.com'])).toEqual(['ok'])
+    expect(chipVerdicts([], [], ['a..b@x.com'])).toEqual([])
+  })
+
   it('chipVerdicts refuses control characters and server-refused chips', () => {
     expect(chipVerdicts([], ['a\u0085b@x.ng', 'a\u0000b@x.ng', 'ab@x.ng'])).toEqual(['malformed', 'malformed', 'ok'])
 
@@ -1704,7 +1767,22 @@ describe('RESEND-07-02 — serverRefusedAddresses (D5 layer 2)', () => {
     expect(serverRefusedAddresses(msg, ['A..b@x.com'])).toEqual(['A..b@x.com'])
   })
 
+  // Each message below is Go's `%q` + ", " join, as printed by invitations_handler.go.
+  it("serverRefusedAddresses unescapes what Go's %q escapes", () => {
+    const backslash = 'a\\b@x.com'
+    const comma = 'a", "b@x.com'
+    const control = 'a\u0085b@x.com'
+    const chips = [backslash, comma, control, 'é@x.com', '😀@x.com', 'plain@x.com']
+    const msg = `${PREFIX}"a\\\\b@x.com", "a\\", \\"b@x.com", "a\\u0085b@x.com", "é@x.com", "😀@x.com"`
+
+    expect(serverRefusedAddresses(msg, chips)).toEqual([backslash, comma, control, 'é@x.com', '😀@x.com'])
+  })
+
   it('serverRefusedAddresses ignores every other message', () => {
+    expect(serverRefusedAddresses(`bad request: ${PREFIX}"a@x.ng"`, ['a@x.ng'])).toEqual([])
+    expect(serverRefusedAddresses('invalid email address:"a@x.ng"', ['a@x.ng'])).toEqual([])
+    expect(serverRefusedAddresses(`Invalid email address: "a@x.ng"`, ['a@x.ng'])).toEqual([])
+    expect(serverRefusedAddresses('', ['a@x.ng'])).toEqual([])
     expect(serverRefusedAddresses('emails must hold 1 to 20 addresses', ['a@x.ng'])).toEqual([])
     expect(serverRefusedAddresses(PREFIX, ['a@x.ng'])).toEqual([])
     expect(serverRefusedAddresses(`${PREFIX}"a@x.ng"`, ['a@x.ng'])).toEqual(['a@x.ng'])
@@ -1730,6 +1808,23 @@ describe('RESEND-07-02 — inviteStatusLine (D7)', () => {
     expect(inviteStatusLine(at(7 * DAY + 59 * 60 * SEC), NOW)).toBe('Expires in 7 days')
     expect(inviteStatusLine(at(7 * DAY + HOUR), NOW)).toBe('Expires in 7 days')
     expect(inviteStatusLine(at(7 * DAY + HOUR + 60 * SEC), NOW)).toBe('Expires in 8 days')
+  })
+
+  it('inviteStatusLine steps one day at each hour-of-slack boundary', () => {
+    expect(inviteStatusLine(at(DAY + HOUR), NOW)).toBe('Expires in 1 day')
+    expect(inviteStatusLine(at(DAY + HOUR + 1), NOW)).toBe('Expires in 2 days')
+    expect(inviteStatusLine(at(3 * DAY + 5 * HOUR), NOW)).toBe('Expires in 4 days')
+    expect(inviteStatusLine(at(30 * DAY), NOW)).toBe('Expires in 30 days')
+  })
+
+  it("inviteStatusLine reads the server's RFC 3339 timestamps", () => {
+    const expiresAt = (s: string) => invite({ expiresAt: s })
+    const now = Date.parse('2026-10-06T10:00:00Z')
+
+    expect(inviteStatusLine(expiresAt('2026-10-13T10:00:00.123456789Z'), now)).toBe('Expires in 7 days')
+    expect(inviteStatusLine(expiresAt('2026-10-13T11:00:00+01:00'), now)).toBe('Expires in 7 days')
+    expect(inviteStatusLine(expiresAt('2026-10-06T10:59:59.999999Z'), now)).toBe('Expires in 1 day')
+    expect(inviteStatusLine(expiresAt('2026-10-06T10:00:00.001Z'), now)).toBe('Expires in 1 day')
   })
 
   it('inviteStatusLine reads Expired at and after the instant', () => {
@@ -1854,6 +1949,7 @@ describe('AC-7 — MEMBER_UNBACKED', () => {
     for (const k of keys) expect(MEMBER_UNBACKED[k]).toBeTruthy()
     const values = keys.map((k) => MEMBER_UNBACKED[k])
     expect(new Set(values).size).toBe(keys.length)
+    expect(Object.keys(MEMBER_UNBACKED).sort()).toEqual([...keys].sort())
     expect(MEMBER_UNBACKED.inviteLink).toBe('The invite link exists only in the email. The server keeps only a hash of it.')
     expect(MEMBER_UNBACKED.revokeInvite).toBe(
       'There is no way to revoke an invite yet. An unused invite expires 7 days after it was sent.',

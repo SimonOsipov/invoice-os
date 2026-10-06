@@ -86,8 +86,8 @@ export const DEPARTMENTS: readonly Department[] = ['Finance', 'Tax & Compliance'
  *
  * Three rows are server-enforced: 'transmit to NRS/MBS' (both transmit handlers reject a
  * non-approver), 'approve in approval steps' (internal/approval/decision.go's two-axis
- * check), and the manage half of 'invite and manage members' (admin-only memberships
- * PATCH). The rest remain descriptive only.
+ * check), and 'invite and manage members' (admin-only memberships PATCH and invitations).
+ * The rest remain descriptive only.
  */
 export const CAPABILITY_ROWS: readonly { label: string; admin: boolean; preparer: boolean; reviewer: boolean }[] = [
   { label: 'create and edit invoices', admin: true, preparer: true, reviewer: true },

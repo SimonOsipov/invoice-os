@@ -27,7 +27,7 @@ export function Rules({ rules, onOpenRule, onToggleRule, onPublish, onPromote }:
           <div className="eyebrow" style={{ marginBottom: 8 }}>
             VALIDATION ENGINE
           </div>
-          <h1 style={{ fontSize: 24, fontWeight: 500, letterSpacing: '-0.03em', margin: 0 }}>Rules admin</h1>
+          <h1 style={{ fontSize: 24, margin: 0 }}>Rules admin</h1>
         </div>
         <button type="button" onClick={onPublish} className="ops-btn v2-btn v2-btn-primary" style={{ height: 36, padding: '0 14px' }}>
           {PUBLISH_ICON} Publish draft
@@ -53,7 +53,7 @@ export function Rules({ rules, onOpenRule, onToggleRule, onPublish, onPromote }:
                       {v.meta}
                     </span>
                   </span>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 999, padding: '2px 8px' }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 'var(--radius-sm)', padding: '2px 8px' }}>
                     <span className="mono" style={{ fontSize: 9, fontWeight: 700, color: tone.text, letterSpacing: '0.04em' }}>
                       {v.tag}
                     </span>
@@ -65,9 +65,9 @@ export function Rules({ rules, onOpenRule, onToggleRule, onPublish, onPromote }:
 
           <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', overflow: 'hidden' }}>
             <div style={{ padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid var(--line-1)' }}>
-              <span style={{ color: 'var(--action)' }}>{SPARK_ICON}</span>
+              <span style={{ display: 'inline-flex', color: 'var(--action)' }}>{SPARK_ICON}</span>
               <span style={{ fontSize: 13, fontWeight: 600 }}>Learned rules</span>
-              <span className="mono" style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 700, background: 'var(--action-tint)', color: 'var(--action)', borderRadius: 99, padding: '1px 7px' }}>
+              <span className="mono" style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 700, background: 'var(--action-tint)', color: 'var(--action)', borderRadius: 'var(--radius-sm)', padding: '1px 7px' }}>
                 {LEARNED_RULES.length}
               </span>
             </div>
@@ -83,7 +83,7 @@ export function Rules({ rules, onOpenRule, onToggleRule, onPublish, onPromote }:
                   type="button"
                   onClick={() => onPromote(l.key)}
                   className="ops-btn"
-                  style={{ width: '100%', border: '1px solid var(--line-2)', background: 'var(--bg-2)', cursor: 'pointer', height: 28, borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-sans)', fontSize: 11.5, fontWeight: 600, color: 'var(--action)' }}
+                  style={{ width: '100%', border: '1px solid var(--button-outline-border)', background: 'var(--bg-2)', cursor: 'pointer', height: 28, borderRadius: 'var(--radius-btn)', fontFamily: 'var(--font-sans)', fontSize: 11.5, fontWeight: 600, color: 'var(--action)' }}
                 >
                   Promote to draft
                 </button>
@@ -96,8 +96,8 @@ export function Rules({ rules, onOpenRule, onToggleRule, onPublish, onPromote }:
         <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflowX: 'auto', background: 'var(--bg-2)' }}>
           <div style={{ padding: '13px 16px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', minWidth: 880 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontSize: 14, fontWeight: 500, fontFamily: 'var(--font-display)' }}>Rules</span>
-              <span className="mono" style={{ fontSize: 10, fontWeight: 700, background: 'var(--status-amber-bg)', color: 'var(--status-amber-text)', border: '1px solid var(--status-amber-border)', borderRadius: 99, padding: '1px 8px' }}>
+              <span style={{ fontSize: 14, fontWeight: 700, letterSpacing: 'var(--tracking-card)', fontFamily: 'var(--font-display)' }}>Rules</span>
+              <span className="mono" style={{ fontSize: 10, fontWeight: 700, background: 'var(--status-amber-bg)', color: 'var(--status-amber-text)', border: '1px solid var(--status-amber-border)', borderRadius: 'var(--radius-sm)', padding: '1px 8px' }}>
                 EDITING DRAFT v9
               </span>
             </div>
@@ -151,7 +151,7 @@ export function Rules({ rules, onOpenRule, onToggleRule, onPublish, onPromote }:
                   className="ops-toggle"
                   style={{ display: 'inline-flex', width: 34, height: 20, borderRadius: 99, background: r.enabled ? 'var(--action)' : 'var(--line-3)', padding: 2, border: 0, cursor: 'pointer' }}
                 >
-                  <span className="ops-knob" style={{ width: 16, height: 16, borderRadius: 99, background: 'var(--bg-2)', transform: r.enabled ? 'translateX(14px)' : 'translateX(0)', boxShadow: 'var(--shadow-soft)' }} />
+                  <span className="ops-knob" style={{ width: 16, height: 16, borderRadius: '50%', background: 'var(--bg-2)', transform: r.enabled ? 'translateX(14px)' : 'translateX(0)' }} />
                 </button>
               </span>
             </div>

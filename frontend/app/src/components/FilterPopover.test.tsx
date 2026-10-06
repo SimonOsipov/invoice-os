@@ -50,6 +50,130 @@ describe('FilterPopover', () => {
     expect(src, 'no background-image chevron').not.toMatch(/background-image/)
   })
 
+  it('PR-02 the filter panel floats on shadow-card', () => {
+    const { container } = renderPopover(true)
+    const panel = screen.getByTestId('fp-panel')
+
+    expect(panel.style.minWidth, 'control: the panel style is read').toBe('240px')
+    expect(panel.style.boxShadow).toBe('var(--shadow-card)')
+    expect(panel.style.borderRadius).toBe('var(--radius-md)')
+    expect(screen.getByTestId('fp-trigger').classList.contains('pf-btn')).toBe(true)
+    expect(container.innerHTML).not.toContain('oklch')
+  })
+
+  it('filterPopover_blockTriggerIsFullWidthAndForty', () => {
+    render(
+      <FilterPopover testId="fp" label="Company" open={false} onOpen={vi.fn()} onClose={vi.fn()} block>
+        <div>body</div>
+      </FilterPopover>,
+    )
+    const trigger = screen.getByTestId('fp-trigger')
+    expect([trigger.style.width, trigger.style.height, trigger.style.justifyContent]).toEqual(['100%', '40px', ''])
+    cleanup()
+
+    renderPopover(false)
+    const plain = screen.getByTestId('fp-trigger')
+    expect([plain.style.width, plain.style.height, plain.style.padding]).toEqual(['', '34px', '0px 11px'])
+  })
+
+  it('filterPopover_triggerValuesFollowD9WithAndWithoutBlock', () => {
+    render(
+      <FilterPopover testId="fp" label="Company" summary="Acme" open={false} onOpen={vi.fn()} onClose={vi.fn()}>
+        <div>body</div>
+      </FilterPopover>,
+    )
+    const trigger = screen.getByTestId('fp-trigger')
+    expect([trigger.style.gap, trigger.style.padding, trigger.style.fontSize, trigger.style.fontWeight]).toEqual(['8px', '0px 11px', '13px', '500'])
+    const summary = screen.getByText('Acme')
+    expect([summary.style.fontWeight, summary.style.color]).toEqual(['400', 'var(--fg-3)'])
+    expect(screen.getByTestId('fp-chevron').style.color).toBe('var(--fg-3)')
+    expect(trigger.style.justifyContent, 'without block the trigger packs left').toBe('')
+    cleanup()
+
+    render(
+      <FilterPopover testId="fp" label="Company" summary="Acme" open={false} onOpen={vi.fn()} onClose={vi.fn()} block>
+        <div>body</div>
+      </FilterPopover>,
+    )
+    const block = screen.getByTestId('fp-trigger')
+    expect([block.style.gap, block.style.padding, block.style.fontSize, block.style.fontWeight]).toEqual(['10px', '0px 12px', '13.5px', '400'])
+    const blockSummary = screen.getByText('Acme')
+    expect([blockSummary.style.flex, blockSummary.style.textOverflow]).toEqual(['1 1 0%', 'ellipsis'])
+    const label = screen.getByText('Company')
+    expect(block.contains(label), 'block draws the label above the trigger, not inside it').toBe(false)
+    expect(block.getAttribute('aria-labelledby')).toBe('fp-label fp-summary')
+  })
+
+  it('filterPopover_blockNameIsLabelPlusSummaryAndNonBlockIsUnchanged', () => {
+    const { rerender } = render(
+      <FilterPopover testId="fp" label="Company" summary="Acme" open={false} onOpen={vi.fn()} onClose={vi.fn()} block>
+        <div>body</div>
+      </FilterPopover>,
+    )
+    const trigger = screen.getByTestId('fp-trigger')
+    expect(screen.getByRole('button', { name: 'Company Acme' })).toBe(trigger)
+    expect(screen.getByTestId('fp-label').className).toBe('label')
+    expect(screen.getByTestId('fp-label').style.marginBottom).toBe('7px')
+    rerender(
+      <FilterPopover testId="fp" label="Company" open={false} onOpen={vi.fn()} onClose={vi.fn()} block>
+        <div>body</div>
+      </FilterPopover>,
+    )
+    expect(screen.getByRole('button', { name: 'Company' }), 'no summary: the label alone names it').toBe(trigger)
+    cleanup()
+
+    renderPopover(true)
+    const plain = screen.getByTestId('fp-trigger')
+    expect(plain.getAttribute('aria-labelledby')).toBeNull()
+    expect(screen.queryByTestId('fp-label'), 'non-block draws no outside label').toBeNull()
+    expect(plain.textContent, 'non-block keeps the label inside the trigger').toContain('Test filter')
+    const panel = screen.getByTestId('fp-panel')
+    expect([panel.style.left, panel.style.right]).toEqual(['0px', ''])
+    expect(panel.parentElement?.style.position).toBe('relative')
+    expect(panel.parentElement).toBe(plain.parentElement)
+  })
+
+  it('filterPopover_blockPanelAnchorsToTheTriggerAndOpenKeepsThePlainPaint', () => {
+    render(
+      <FilterPopover testId="fp" label="Company" summary="Acme" open onOpen={vi.fn()} onClose={vi.fn()} block>
+        <div>body</div>
+      </FilterPopover>,
+    )
+    const trigger = screen.getByTestId('fp-trigger')
+    const panel = screen.getByTestId('fp-panel')
+    expect([panel.style.left, panel.style.right, panel.style.top]).toEqual(['0px', '0px', 'calc(100% + 6px)'])
+    expect(panel.parentElement, 'the panel anchors to the trigger box, not the label above it').toBe(trigger.parentElement)
+    expect(panel.parentElement?.style.position).toBe('relative')
+    expect(panel.parentElement?.contains(screen.getByTestId('fp-label')), 'the label sits outside the anchor').toBe(false)
+    expect([trigger.style.background, trigger.style.color], 'a block trigger takes no open tint').toEqual(['var(--bg-2)', 'var(--fg-1)'])
+    expect(screen.getByTestId('fp-chevron').style.transform).toBe('rotate(180deg)')
+    cleanup()
+
+    render(
+      <FilterPopover testId="fp" label="Company" summary="Acme" open onOpen={vi.fn()} onClose={vi.fn()}>
+        <div>body</div>
+      </FilterPopover>,
+    )
+    expect([screen.getByTestId('fp-trigger').style.background, screen.getByTestId('fp-trigger').style.color], 'non-block keeps the open tint').toEqual(['var(--bg-3)', 'var(--action)'])
+  })
+
+  it('filterPopover_enabledTriggerCarriesNoDisabledPaint', () => {
+    renderPopover(false)
+    const trigger = screen.getByTestId('fp-trigger')
+    expect(trigger.style.cursor, 'control needle: an enabled trigger is a pointer').toBe('pointer')
+    expect([trigger.style.opacity, trigger.style.filter]).toEqual(['', ''])
+  })
+
+  it('filterPopover_disabledKeepsPaintAndDims', () => {
+    render(
+      <FilterPopover testId="fp" label="Company" open={false} onOpen={vi.fn()} onClose={vi.fn()} disabled>
+        <div>body</div>
+      </FilterPopover>,
+    )
+    const trigger = screen.getByTestId('fp-trigger')
+    expect([trigger.style.opacity, trigger.style.cursor, trigger.style.filter]).toEqual(['0.45', 'not-allowed', 'none'])
+  })
+
   it('filterPopover_escapeCloses', () => {
     const { onClose } = renderPopover(true)
     fireEvent.keyDown(window, { key: 'Escape' })

@@ -540,8 +540,8 @@ export type PlatformCtx = {
   // Settings › Members. The ONE membership write the server backs. It resolves once the
   // server's own row has replaced the old one, and REJECTS with the gateway's ApiError
   // unreshaped — the caller renders that message at the control, so nothing here may
-  // swallow it. Invite, remove and access-role writes have no endpoint; their controls
-  // ship disabled with `MEMBER_UNBACKED`'s reason rather than calling a verb that lies.
+  // swallow it. Remove and access-role writes have no endpoint; their controls ship
+  // disabled with `MEMBER_UNBACKED`'s reason rather than calling a verb that lies.
   setMemberStatus: (id: string, status: Exclude<MemberStatus, 'invited'>) => Promise<void>
   // Settings › Roles. Rename (PATCH) and staffing (PUT /members) are separate server
   // writes, so they are separate verbs rather than one funnel over a whole Role — a

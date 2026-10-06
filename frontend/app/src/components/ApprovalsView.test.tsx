@@ -198,6 +198,18 @@ describe('A03-3: empty vs mid-set-empty are different rungs', () => {
     expect(screen.queryByTestId('approvals-pager')).toBeNull()
   })
 
+  it('ES-05 the approvals empty message is 360 wide', async () => {
+    mockFetchSequence([listResponse([], { limit: 50, offset: 0, total: 0 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+
+    const empty = await screen.findByTestId('approvals-empty')
+    const message = within(empty).getByText(APPROVALS_COPY.emptyMessage)
+    expect(message.style.maxWidth).toBe('360px')
+    expect(message.style.margin).toBe('0px')
+    expect(within(empty).queryByRole('button'), 'control: the card has no action').toBeNull()
+  })
+
   it('a mid-set empty page (total>0, this page []) still renders the Pager', async () => {
     const page1 = Array.from({ length: 50 }, (_, i) => approvalRow({ id: `inv-${i}`, invoice_number: `INV-${i}` }))
     mockFetchSequence([
@@ -1550,5 +1562,218 @@ describe('B17-D7: the checkbox cell fills the row height', () => {
     expect(cells, 'one select cell per row').toHaveLength(2)
     // jsdom has no layout; the rendered extent is a deployed concern.
     for (const cell of cells) expect(cell.style.alignSelf).toBe('stretch')
+  })
+})
+
+describe('AP-TIP: the blocked-reason tip carries the card shadow', () => {
+  it('declares box-shadow: var(--shadow-card) and no oklch', async () => {
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: 'Blocked.', approval: null })
+    mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    fireEvent.mouseEnter(screen.getByTestId('approval-blocked-icon').parentElement as HTMLElement)
+    const card = screen.getByTestId('approval-blocked-tip').firstElementChild as HTMLElement
+    const style = card.getAttribute('style') ?? ''
+    expect(style).toContain('box-shadow: var(--shadow-card)')
+    expect(style).not.toContain('oklch')
+  })
+})
+
+describe('AP-LOOK: the v2 table, bar and icon values', () => {
+  it('step, unstaffed warning, blocked icon, checkbox and bar read the prototype values', async () => {
+    const warned = approvalRow({
+      id: 'inv-warn',
+      invoice_number: 'INV-WARN',
+      approval: { run_state: 'open', pending_ord: 0, pending_role_title: 'Compliance Officer', pending_holder_warn: true, due_at: null, overdue: false },
+    })
+    const blocked = approvalRow({ id: 'inv-bl', invoice_number: 'INV-BL', can_approve: false, approve_blocked_reason: 'Blocked.', approval: null })
+    mockBulkFetch([listResponse([warned, blocked], { limit: 50, offset: 0, total: 2 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-WARN')
+
+    const warnedRow = screen.getByText('INV-WARN').closest('[data-testid="approval-row"]') as HTMLElement
+    const styleOf = (el: Element | null | undefined) => el?.getAttribute('style') ?? ''
+    expect(styleOf(warnedRow.children[4]), 'step cell').toContain('color: var(--fg-2)')
+    const warning = styleOf(within(warnedRow).getByTestId('approval-unstaffed-warning'))
+    expect(warning).toContain('color: var(--status-amber-text)')
+    expect(warning).toContain('font-size: 9.5px')
+    expect(styleOf(screen.getByTestId('approval-blocked-icon')), 'blocked icon').toContain('color: var(--status-amber-text)')
+    const [warnedBox, blockedBox] = screen.getAllByTestId('approval-select-row').map(styleOf)
+    expect(warnedBox).toContain('width: 15px')
+    expect(warnedBox).toContain('accent-color: var(--action)')
+    expect(blockedBox).toContain('accent-color: var(--action)')
+
+    fireEvent.click(screen.getAllByTestId('approval-select-row')[0])
+    const bar = screen.getByTestId('approvals-bulk-bar')
+    // control: the style read sees the action row's flex and gap, so the absences below mean something.
+    expect(styleOf(bar.firstElementChild)).toContain('gap: 10px')
+    expect(styleOf(bar.firstElementChild)).toContain('display: flex')
+    expect(styleOf(bar)).not.toContain('flex-direction: column')
+    expect(styleOf(bar)).not.toContain('gap: 9')
+  })
+})
+
+describe('AP-LOOK: header, checkboxes, bar and pager follow § Design > Approvals (D-3, D-11, D-25)', () => {
+  const styleOf = (el: Element | null | undefined) => el?.getAttribute('style') ?? ''
+  const mixedPage = () => {
+    const ok = approvalRow({
+      id: 'inv-ok',
+      invoice_number: 'INV-OK',
+      approval: { run_state: 'open', pending_ord: 0, pending_role_title: 'Reviewer', pending_holder_warn: true, due_at: null, overdue: false },
+    })
+    const blocked = approvalRow({ id: 'inv-bl', invoice_number: 'INV-BL', can_approve: false, approve_blocked_reason: 'Blocked.', approval: null })
+    mockBulkFetch([listResponse([ok, blocked], { limit: 50, offset: 0, total: 2 })])
+  }
+
+  it('the h1 drops its weight', async () => {
+    mixedPage()
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-OK')
+
+    const h1 = styleOf(screen.getByRole('heading', { level: 1 }))
+    expect(h1, 'the h1 must carry its own style, or the absence below is vacuous').toContain('font-size: 26px')
+    expect(h1).not.toContain('font-weight')
+  })
+
+  it('head and row checkboxes share the 15px action-accent box; only a blocked row adds cursor and dim', async () => {
+    mixedPage()
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-OK')
+
+    const [ok, blocked] = screen.getAllByTestId('approval-select-row').map(styleOf)
+    for (const [name, style] of [['head', styleOf(screen.getByTestId('approval-select-all'))], ['row', ok], ['blocked row', blocked]]) {
+      expect(style, `${name} width`).toContain('width: 15px')
+      expect(style, `${name} height`).toContain('height: 15px')
+      expect(style, `${name} accent`).toContain('accent-color: var(--action)')
+      expect(style, `${name} margin`).toContain('margin: 0px')
+    }
+    expect(ok, 'a selectable row carries no cursor override').not.toContain('cursor')
+    expect(ok).not.toContain('opacity')
+    expect(blocked).toContain('cursor: not-allowed')
+    expect(blocked).toContain('opacity: 0.5')
+  })
+
+  it('the unstaffed warning drops its weight and letter-spacing', async () => {
+    mixedPage()
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-OK')
+
+    const warning = styleOf(screen.getByTestId('approval-unstaffed-warning'))
+    expect(warning, 'control: the warning carries its own style').toContain('font-size: 9.5px')
+    expect(warning).not.toContain('font-weight')
+    expect(warning).not.toContain('letter-spacing')
+  })
+
+  it('the idle bar carries the prototype block, action row, label, buttons and note', async () => {
+    mixedPage()
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-OK')
+    fireEvent.click(screen.getAllByTestId('approval-select-row')[0])
+
+    const bar = screen.getByTestId('approvals-bulk-bar')
+    const barStyle = styleOf(bar)
+    expect(barStyle).toContain('background: var(--action-tint)')
+    expect(barStyle).toContain('border: 1px solid var(--teal-200)')
+    expect(barStyle).toContain('border-radius: var(--radius-md)')
+    expect(barStyle).toContain('padding: 11px 16px')
+    expect(barStyle).toContain('margin-bottom: 12px')
+
+    const actionRow = bar.children[0] as HTMLElement
+    const rowStyle = styleOf(actionRow)
+    expect(rowStyle).toContain('display: flex')
+    expect(rowStyle).toContain('align-items: center')
+    expect(rowStyle).toContain('gap: 10px')
+    expect(rowStyle).toContain('flex-wrap: wrap')
+    const label = actionRow.children[0] as HTMLElement
+    expect(label.textContent).toBe('1 selected on this page')
+    expect(label.className).toContain('mono')
+    const labelStyle = styleOf(label)
+    expect(labelStyle).toContain('font-size: 11px')
+    expect(labelStyle).toContain('font-weight: 600')
+    expect(labelStyle).toContain('color: var(--fg-1)')
+    expect(labelStyle).toContain('letter-spacing: 0.03em')
+
+    const group = actionRow.children[1] as HTMLElement
+    expect(styleOf(group)).toContain('margin-left: auto')
+    expect(styleOf(group)).toContain('gap: 8px')
+    const buttons = [screen.getByTestId('approvals-bulk-clear'), screen.getByTestId('approvals-bulk-submit')]
+    expect(Array.from(group.children), 'the group holds exactly Clear and Approve').toEqual(buttons)
+    for (const button of buttons) {
+      const s = styleOf(button)
+      expect(s, `${button.textContent} height`).toContain('height: 34px')
+      expect(s, `${button.textContent} size`).toContain('font-size: 13px')
+      expect(s, `${button.textContent} takes the layer's padding`).not.toContain('padding')
+    }
+
+    expect(bar.children, 'idle: the action row, then the note').toHaveLength(2)
+    const note = screen.getByTestId('approvals-bulk-note')
+    expect(note.parentElement).toBe(bar)
+    const noteStyle = styleOf(note)
+    expect(noteStyle).toContain('font-size: 12px')
+    expect(noteStyle).toContain('color: var(--fg-2)')
+    expect(noteStyle).toContain('margin: 8px 0px 0px')
+    expect(noteStyle).toContain('line-height: 1.55')
+  })
+
+  it('the armed bar carries the prototype confirm block, prompt and detail', async () => {
+    mixedPage()
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-OK')
+    fireEvent.click(screen.getAllByTestId('approval-select-row')[0])
+    fireEvent.click(screen.getByTestId('approvals-bulk-submit'))
+
+    const bar = screen.getByTestId('approvals-bulk-bar')
+    expect(bar.children, 'armed: action row, note, confirm block').toHaveLength(3)
+    const confirm = bar.children[2] as HTMLElement
+    const confirmStyle = styleOf(confirm)
+    expect(confirmStyle).toContain('margin-top: 10px')
+    expect(confirmStyle).toContain('padding-top: 10px')
+    expect(confirmStyle).toContain('border-top: 1px solid var(--teal-200)')
+    const prompt = confirm.children[0] as HTMLElement
+    expect(prompt.textContent).toBe('Approve 1 invoice?')
+    const promptStyle = styleOf(prompt)
+    expect(promptStyle).toContain('font-size: 13px')
+    expect(promptStyle).toContain('font-weight: 600')
+    expect(promptStyle).toContain('color: var(--fg-1)')
+    expect(promptStyle).toContain('margin-bottom: 2px')
+    const detailStyle = styleOf(confirm.children[1])
+    expect(detailStyle).toContain('font-size: 12.5px')
+    expect(detailStyle).toContain('color: var(--fg-2)')
+    expect(detailStyle).toContain('margin: 0px')
+    expect(detailStyle).toContain('line-height: 1.55')
+    const group = bar.children[0].children[1] as HTMLElement
+    expect(styleOf(group)).toContain('gap: 8px')
+    for (const id of ['approvals-bulk-cancel', 'approvals-bulk-confirm']) {
+      expect(group.contains(screen.getByTestId(id)), `${id} sits in the group`).toBe(true)
+      expect(styleOf(screen.getByTestId(id))).toContain('height: 34px')
+      expect(styleOf(screen.getByTestId(id))).toContain('font-size: 13px')
+    }
+  })
+
+  it('the populated pager is the list card footer; the empty-page pager stays below its card (D-3, AC 4)', async () => {
+    const page1 = Array.from({ length: 50 }, (_, i) => approvalRow({ id: `inv-${i}`, invoice_number: `INV-${i}` }))
+    mockBulkFetch([listResponse(page1, { limit: 50, offset: 0, total: 110 }), listResponse([], { limit: 50, offset: 50, total: 110 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    const pager = await screen.findByTestId('approvals-pager')
+    const list = screen.getByTestId('approvals-list')
+    const footer = pager.parentElement as HTMLElement
+    expect(footer.parentElement, 'the footer row is a direct child of the card').toBe(list)
+    expect(styleOf(footer)).toContain('padding: 12px 18px')
+    expect(list.lastElementChild, 'the footer row follows the rows').toBe(footer)
+    expect(within(list).getAllByTestId('approval-row').length).toBeGreaterThan(0)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next →' }))
+    const empty = await screen.findByTestId('approvals-empty-page')
+    expect(screen.queryByTestId('approvals-list'), 'no list card on an empty page').toBeNull()
+    const emptyPager = within(empty).getByTestId('approvals-pager')
+    const wrapper = emptyPager.parentElement as HTMLElement
+    expect(wrapper.parentElement, 'the empty-page pager wrapper is a direct child of its wrapper').toBe(empty)
+    expect(empty.lastElementChild, 'the pager follows the empty card').toBe(wrapper)
+    expect(wrapper.previousElementSibling, 'the empty card precedes the pager').not.toBeNull()
+    expect(styleOf(wrapper)).toContain('margin-top: 16px')
   })
 })

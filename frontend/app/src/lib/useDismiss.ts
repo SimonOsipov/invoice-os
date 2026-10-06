@@ -11,7 +11,7 @@
 // Two house postures disagreed and one was picked rather than blended (Surface Conflicts):
 // `landing/src` closes its modals on Escape through a window `keydown` listener with
 // cleanup (SignInModal.tsx, DemoModal.tsx), while
-// `ops-console/src/components/RotateConfirm.tsx:12` records a deliberate no-Escape
+// `ops-console/src/components/RotateConfirm.tsx` records a deliberate no-Escape
 // decision for a confirm step. AC#7 requires Escape, so the landing idiom wins.
 //
 // Shared rather than written per surface on purpose. Three dismissible surfaces land in

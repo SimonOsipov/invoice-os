@@ -603,8 +603,27 @@ describe('InvoiceActivityCard scroll containment (AC-7, unit half)', () => {
     const scroller = table.parentElement
     expect(scroller, 'the table must sit inside a scroll container').toBeTruthy()
     expect(scroller!.style.overflowX).toBe('auto')
+    expect(scroller!.parentElement!.style.padding).toBe('0px')
     // ...and the card clips at its own rounded border rather than letting the row escape.
     expect(screen.getByTestId('invoice-activity').style.overflow).toBe('hidden')
+  })
+
+  it('invoiceActivity_passesTheActivityVariantToTableAndEveryRow', async () => {
+    mockFetch(logResponse({ events: eventsOf([{ event: INVOICES_EVENT, n: 3 }]) }))
+    renderCard()
+    await loaded()
+
+    const sv = (el: Element, prop: string) => (el.getAttribute('style') ?? '').match(new RegExp(`(?:^|;\\s*)${prop}:\\s*([^;]+)`))?.[1].trim() ?? null
+    const scroller = screen.getByTestId('audit-table').parentElement!
+    // The card draws its own border: the flat variant carries none on the scroller.
+    expect(sv(scroller, 'border')).toBeNull()
+    expect(sv(scroller, 'background')).toBeNull()
+    expect(sv(screen.getByTestId('audit-table-head'), 'padding')).toBe('9px 18px')
+    const rows = screen.getAllByTestId('audit-row')
+    expect(rows.length).toBeGreaterThan(0)
+    for (const r of rows) expect(sv(r, 'padding')).toBe('10px 18px')
+    fireEvent.click(rows[0]!)
+    expect(sv(screen.getByTestId('audit-expansion'), 'padding')).toBe('14px 18px 14px 52px')
   })
 })
 
@@ -1122,3 +1141,144 @@ describe('InvoiceActivityCard nothing-dropped ledger (AUDIT-09-07)', () => {
     expect(payloadFieldLabels(expansion).map(keyOfLabel)).not.toEqual(keys)
   })
 })
+
+describe('InvoiceActivityCard takes the v2 look (RESKIN2-03-02)', () => {
+  // First ancestor-or-self below the card that satisfies `match`, so the specs do not bind
+  // to how many wrappers the band or footer uses.
+  function bandOf(el: HTMLElement, match: (e: HTMLElement) => boolean): HTMLElement | null {
+    const card = screen.getByTestId('invoice-activity')
+    for (let cur: HTMLElement | null = el; cur && cur !== card; cur = cur.parentElement) if (match(cur)) return cur
+    return null
+  }
+
+  it('filter chips follow the prototype', async () => {
+    mockFetch(logResponse({ events: eventsOf([{ event: INVOICES_EVENT, n: 3 }, { event: APPROVALS_EVENT, n: 2 }]) }))
+    renderCard()
+    await loaded()
+    fireEvent.click(screen.getByTestId('activity-chip-approvals'))
+
+    const active = screen.getByTestId('activity-chip-approvals')
+    expect(active.getAttribute('aria-pressed')).toBe('true')
+    expect.soft(active.style.color, 'active text').toBe('var(--primary-foreground)')
+    const inactive = screen.getByTestId('activity-chip-all')
+    expect(inactive.getAttribute('aria-pressed')).toBe('false')
+    expect.soft(inactive.style.background, 'inactive fill').toBe('transparent')
+    for (const key of ACTIVITY_CHIP_ORDER) {
+      const chip = screen.getByTestId(`activity-chip-${key}`)
+      expect.soft(chip.style.fontSize, `${key} size`).toBe('12px')
+      expect.soft(chip.style.fontWeight, `${key} weight`).toBe('600')
+      expect.soft(chip.style.padding, `${key} padding`).toBe('0px 11px')
+      expect.soft(chip.style.gap, `${key} gap`).toBe('6px')
+      expect.soft((chip.lastElementChild as HTMLElement).style.fontSize, `${key} count size`).toBe('10px')
+    }
+    const inert = screen.getByTestId('activity-chip-documents')
+    expect(inert).toHaveProperty('disabled', true)
+    expect.soft(inert.style.opacity, 'inert chip opacity').toBe('0.4')
+  })
+
+  it('the chips band is a ruled strip', async () => {
+    mockFetch(logResponse({ events: eventsOf([{ event: INVOICES_EVENT, n: 3 }]) }))
+    renderCard()
+    await loaded()
+
+    const band = bandOf(screen.getByTestId('invoice-activity-chips'), (e) => e.style.borderBottom.includes('--line-1'))
+    expect.soft(band, 'the chips sit in a band with a --line-1 bottom rule').not.toBeNull()
+    expect.soft(band?.style.padding, 'band padding').toBe('11px 18px')
+  })
+
+  it('the two chip notes take the prototype spacing', async () => {
+    mockFetch(logResponse({ events: eventsOf([{ event: INVOICES_EVENT, n: 3 }]) }))
+    renderCard()
+    await loaded()
+
+    const first = screen.getByTestId('activity-chip-documents-reason')
+    const second = screen.getByTestId('activity-chip-empty-reason')
+    expect.soft(first.style.marginTop, 'first note').toBe('9px')
+    expect.soft(second.style.marginTop, 'second note').toBe('3px')
+  })
+
+  it('the activity footer pushes Open in Audit right', async () => {
+    mockFetch(logResponse({ events: eventsOf([{ event: INVOICES_EVENT, n: ACTIVITY_REST_ROWS + 1 }]) }))
+    renderCard()
+    await loaded()
+
+    const audit = screen.getByTestId('activity-open-in-audit')
+    const toggle = screen.getByTestId('activity-toggle')
+    expect(audit.parentElement, 'control: both footer buttons share a row').toBe(toggle.parentElement)
+    expect.soft(audit.style.marginLeft, 'Open in Audit pushes right').toBe('auto')
+    expect.soft(toggle.style.marginLeft, 'Show all stays left').toBe('')
+    expect.soft(audit.style.height, 'Open in Audit height').toBe('30px')
+    expect.soft(toggle.style.height, 'Show all height').toBe('30px')
+    expect.soft(audit.style.padding, 'Open in Audit padding').toBe('0px 13px')
+    expect.soft(toggle.style.padding, 'Show all padding').toBe('0px 13px')
+    expect.soft(audit.parentElement!.style.gap, 'footer gap').toBe('12px')
+    expect.soft(audit.parentElement!.style.padding, 'footer padding').toBe('11px 18px')
+  })
+
+  it('a short feed has no Show-all, and Open in Audit still sits right at 30px', async () => {
+    mockFetch(logResponse({ events: eventsOf([{ event: INVOICES_EVENT, n: ACTIVITY_REST_ROWS }]) }))
+    renderCard()
+    await loaded()
+
+    expect(screen.getAllByTestId('audit-row'), 'control: the feed has rows').toHaveLength(ACTIVITY_REST_ROWS)
+    expect(screen.queryByTestId('activity-toggle'), 'control: no toggle at the cap').toBeNull()
+    const audit = screen.getByTestId('activity-open-in-audit')
+    expect.soft(audit.style.marginLeft, 'Open in Audit pushes right').toBe('auto')
+    expect.soft(audit.style.height, 'Open in Audit height').toBe('30px')
+    expect.soft(audit.style.padding, 'Open in Audit padding').toBe('0px 13px')
+  })
+
+  it('the card body is flush once the feed has loaded and padded while it has not', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+    const pending = renderCard()
+    const waiting = await screen.findByText(copyOf('loading'))
+    expect(waiting, 'control: the loading line shows').toBeTruthy()
+    expect.soft(screen.getByTestId('invoice-activity-body').style.padding, 'loading').toBe('16px 18px')
+    pending.unmount()
+
+    mockFetch({ ok: false, status: 500, json: () => Promise.resolve({}) })
+    const failed = renderCard()
+    await screen.findByText('Retry')
+    expect.soft(screen.getByTestId('invoice-activity-body').style.padding, 'error').toBe('16px 18px')
+    failed.unmount()
+
+    mockFetch(logResponse({ events: [], total: 0 }))
+    const empty = renderCard()
+    await screen.findByTestId('invoice-activity-empty')
+    expect.soft(screen.getByTestId('invoice-activity-body').style.padding, 'empty').toBe('0px')
+    empty.unmount()
+
+    mockFetch(logResponse({ events: eventsOf([{ event: INVOICES_EVENT, n: 2 }]) }))
+    renderCard()
+    await loaded()
+    expect.soft(screen.getByTestId('invoice-activity-body').style.padding, 'loaded').toBe('0px')
+    expect.soft(within(screen.getByTestId('invoice-activity')).getByText('READ ONLY'), 'READ ONLY stays in the header').toBeTruthy()
+  })
+
+  it('the empty state is centred plain text', async () => {
+    mockFetch(logResponse({ events: [], total: 0 }))
+    renderCard()
+
+    const empty = await screen.findByTestId('invoice-activity-empty')
+    expect.soft(empty.style.padding).toBe('28px 18px')
+    expect.soft(empty.style.textAlign).toBe('center')
+    expect.soft(empty.style.border, 'no dashed box').not.toContain('dashed')
+    const title = empty.firstElementChild as HTMLElement
+    expect(title.textContent).toBe(copyOf('emptyScopedTitle'))
+    expect.soft(title.style.fontSize, 'title size').toBe('13.5px')
+    expect.soft(title.style.fontWeight, 'title weight').toBe('600')
+  })
+
+  it('READ ONLY is 9/700/0.09em on --fg-3', async () => {
+    mockFetch(logResponse())
+    const { container } = renderCard()
+    await loaded()
+
+    const el = within(container).getByText('READ ONLY')
+    expect.soft(el.style.fontSize, 'size').toBe('9px')
+    expect.soft(el.style.fontWeight, 'weight').toBe('700')
+    expect.soft(el.style.letterSpacing, 'tracking').toBe('0.09em')
+    expect.soft(el.style.color, 'colour').toBe('var(--fg-3)')
+  })
+})
+

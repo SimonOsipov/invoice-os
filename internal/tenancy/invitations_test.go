@@ -1091,6 +1091,45 @@ func TestInvitations_ListShowsThisTenantsPendingInvites(t *testing.T) {
 	}
 }
 
+func TestInvitations_ListOmitsAcceptedInvites(t *testing.T) {
+	list := func(t *testing.T, w invWorld) []Invitation {
+		t.Helper()
+		got, err := w.store.ListInvitations(w.adminCtx())
+		if err != nil {
+			t.Fatalf("ListInvitations: %v", err)
+		}
+		if len(got) == 0 {
+			t.Fatal("ListInvitations returned no rows, want the pending invite")
+		}
+		return got
+	}
+
+	t.Run("accepted rows are not listed", func(t *testing.T) {
+		w := newInvWorld(t, "Accepted Omit Tenant", "Ada Obi")
+		now := time.Now().Truncate(time.Second)
+		seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "p@x.test", status: "accepted", invitedBy: w.admin, createdAt: now.Add(-3 * time.Hour)})
+		seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "a@x.test", status: "accepted", invitedBy: w.admin, createdAt: now.Add(-2 * time.Hour), expires: now.Add(24 * time.Hour)})
+		pending := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "p@x.test", invitedBy: w.admin, createdAt: now.Add(-1 * time.Hour)})
+
+		got := list(t, w)
+		if len(got) != 1 || got[0].ID != pending.ID || got[0].Status != "pending" {
+			t.Fatalf("listed %+v, want only the pending p@x.test row %s", got, pending.ID)
+		}
+	})
+
+	t.Run("same address accepted then re-invited", func(t *testing.T) {
+		w := newInvWorld(t, "Reinvite Omit Tenant", "Ada Obi")
+		now := time.Now().Truncate(time.Second)
+		accepted := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "p@x.test", status: "accepted", invitedBy: w.admin, createdAt: now.Add(-48 * time.Hour)})
+		pending := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "p@x.test", invitedBy: w.admin, createdAt: now.Add(-1 * time.Hour)})
+
+		got := list(t, w)
+		if len(got) != 1 || got[0].ID != pending.ID {
+			t.Fatalf("listed %+v, want only the re-invite %s (not the accepted %s)", got, pending.ID, accepted.ID)
+		}
+	})
+}
+
 func TestInvitations_DeliveryIsRecordedForTheCurrentToken(t *testing.T) {
 	w := newInvWorld(t, "Delivery Tenant", "Ada Obi")
 	first := mustIssue(t, w.adminCtx(), w.store, []string{"b@x.test"}, "preparer")[0]

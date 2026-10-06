@@ -254,6 +254,12 @@ const TOPOLOGY_MANIFEST: ManifestEntry[] = [
   // real IRN, and a raw transitionInvoice never creates a submission job -- so pinning the
   // rail's three cards needs a real browser submit.
   [INVOICE_SURFACES, 'test:detail surface: the untouched rail order is unchanged', 'click:batch-submit-confirm', 1],
+  // DV-01 and DV-02: raw transitions create no submission job, so nothing
+  // reaches an adapter. DV-02 ends `accepted` in a finally.
+  [INVOICE_SURFACES, 'test:DV-01 failed invoice detail, the none state and the resolve-outside fit', 'transitionInvoice:queued', 1],
+  [INVOICE_SURFACES, 'test:DV-02 submitted invoice detail', 'transitionInvoice:queued', 1],
+  // DV-03 submits from the register with MOCK_TIN_ACCEPT, so the mock APP adapter answers.
+  [INVOICE_SURFACES, 'test:DV-03 accepted invoice detail and the XML modal', 'click:batch-submit-confirm', 1],
 ]
 
 // AC-14: can_submit / awaiting_approval needle matches are deliberately OUT of scope here --

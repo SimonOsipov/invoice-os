@@ -5,7 +5,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 
-import { copyGlyph, shieldGlyph } from '../glyphs'
+import { shieldGlyph } from '../glyphs'
 import { actorLabel } from '../lib/actor'
 import { fmtDateTime, fmtPlain } from '../lib/format'
 import { formatBytes, type SourceDocumentRecord } from '../lib/sourceDocument'
@@ -22,11 +22,9 @@ function scopeOwner(ctx: Pick<PlatformCtx, 'mode' | 'active' | 'user'>): string 
 
 function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div style={{ display: 'flex', gap: 10, alignItems: 'baseline' }}>
-      <span className="label" style={{ flex: 'none', width: 112 }}>
-        {label}
-      </span>
-      <span className={mono ? 'mono' : undefined} style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--fg-2)', wordBreak: 'break-all' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '110px minmax(0, 1fr)', gap: 10 }}>
+      <span style={{ fontSize: 12, color: 'var(--fg-3)' }}>{label}</span>
+      <span className={mono ? 'mono' : undefined} style={{ fontSize: 12.5, color: 'var(--fg-1)', lineHeight: 1.45, wordBreak: 'break-word' }}>
         {value}
       </span>
     </div>
@@ -52,15 +50,19 @@ export function SourceDocumentRail({
   }, [])
 
   const frame = { display: 'flex', flexDirection: 'column' as const, height: '100%', minHeight: 0, background: 'var(--bg-2)' }
-  const scroll = { flex: 1, overflow: 'auto', minHeight: 0, padding: '16px 18px', display: 'flex', flexDirection: 'column' as const, gap: 20 }
+  const scroll = { flex: 1, overflow: 'auto', minHeight: 0, display: 'flex', flexDirection: 'column' as const }
 
   if (record === null) {
     return (
       <div data-testid="source-document-rail" style={frame}>
         <div style={scroll}>
-          <div style={{ padding: '14px 16px', border: '1px dashed var(--line-3)', borderRadius: 'var(--radius-md)', background: 'transparent', fontSize: 12.5, lineHeight: 1.6, color: 'var(--fg-3)' }}>
-            No file, no size, no fingerprint. Manually entered invoices carry their state strip instead — the five
-            stages {invoiceNumber} passes through, with each stage it reached showing who moved it and when.
+          <div style={{ padding: '18px 20px' }}>
+            <div style={{ padding: 14, border: '1px dashed var(--line-3)', borderRadius: 'var(--radius-md)', background: 'var(--bg-1)' }}>
+              <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.55, color: 'var(--fg-2)' }}>
+                No file, no size, no fingerprint. Manually entered invoices carry their state strip instead — the five
+                stages {invoiceNumber} passes through, with each stage it reached showing who moved it and when.
+              </p>
+            </div>
           </div>
         </div>
       </div>
@@ -82,59 +84,64 @@ export function SourceDocumentRail({
   return (
     <div data-testid="source-document-rail" style={frame}>
       <div style={scroll}>
-        <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-          <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-            <span className="card-title">Content fingerprint · SHA-256</span>
-            <button
-              type="button"
-              data-testid="copy-hash"
-              onClick={copyHash}
-              // A plain button, not `.pf-btn` — that class forces a pill radius with
-              // `!important` (app-layer.css:192-201).
-              style={{ flex: 'none', whiteSpace: 'nowrap', height: 26, padding: '0 9px', borderRadius: 'var(--radius-xs)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 11.5, fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: 5 }}
-            >
-              <span style={{ display: 'inline-flex' }}>{copyGlyph}</span> {copied ? 'Copied' : 'Copy'}
-            </button>
-          </div>
-          <div style={{ padding: '12px 14px', background: 'var(--bg-1)' }}>
-            {hashLines.map((line) => (
-              <div key={line} className="mono" data-testid="hash-line" style={{ fontSize: 12, letterSpacing: '0.04em', lineHeight: 1.7, color: 'var(--fg-2)' }}>
-                {line}
-              </div>
-            ))}
+        <div style={{ padding: '18px 20px 22px' }}>
+          <div style={{ border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+            <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span className="label">Content fingerprint · SHA-256</span>
+              <button
+                type="button"
+                data-testid="copy-hash"
+                onClick={copyHash}
+                className="v2-btn v2-btn-ghost pf-btn"
+                style={{ flex: 'none', height: 24, padding: '0 9px', fontSize: 11.5 }}
+              >
+                {copied ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+            <div className="mono" style={{ padding: '10px 12px', fontSize: 11, lineHeight: 1.65, color: 'var(--fg-1)', wordBreak: 'break-all' }}>
+              {hashLines.map((line) => (
+                <div key={line} data-testid="hash-line">
+                  {line}
+                </div>
+              ))}
+            </div>
           </div>
           {/* Nothing recomputes SHA-256 in the browser — and a spreadsheet fetches decoded
               JSON rather than bytes — so the design's green MATCHES line would be a claim
               this build cannot make. Only the muted line ships. */}
-          <div style={{ padding: '9px 14px', borderTop: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', gap: 7 }}>
-            <span style={{ flex: 'none', width: 6, height: 6, borderRadius: 99, background: 'var(--fg-4)' }} />
-            <span className="mono" style={{ fontSize: 10, letterSpacing: '0.06em', color: 'var(--fg-3)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
+            <span style={{ flex: 'none', width: 6, height: 6, borderRadius: '50%', background: 'var(--line-3)' }} />
+            <span className="mono" style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--fg-3)' }}>
               NOT VERIFIED THIS SESSION
             </span>
           </div>
+          <p style={{ margin: '12px 0 0', fontSize: 12, lineHeight: 1.55, color: 'var(--fg-3)' }}>
+            Recompute this hash on the original file and it will match, or the file is not the one we were given.
+          </p>
         </div>
-        <p style={{ margin: 0, fontSize: 11.5, lineHeight: 1.55, color: 'var(--fg-3)' }}>
-          Recompute this hash on the original file and it will match, or the file is not the one we were given.
-        </p>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div className="card-title">Document record</div>
-          <Row label="Original filename" value={record.filename ?? 'Not recorded'} mono />
-          <Row label="File size" value={formatBytes(record.size_bytes)} />
-          <Row label="Uploaded" value={fmtDateTime(record.uploaded_at)} />
-          <Row label="Uploaded by" value={uploader.text} mono={uploader.mono} />
-          <Row label="Invoices created" value={`${fmtPlain(record.invoices_created)} from this one file`} />
-          {/* `Rows in file` only once the sheet lands. `Pages`, `Dimensions` and `Rows read`
-              are omitted rather than placeholdered — none is derivable in this build. */}
-          {sheetRowsTotal != null && <Row label="Rows in file" value={fmtPlain(sheetRowsTotal)} />}
+        <div style={{ borderTop: '1px solid var(--line-1)', padding: '16px 20px 20px' }}>
+          <div className="label" style={{ marginBottom: 12 }}>
+            Document record
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <Row label="Original filename" value={record.filename ?? 'Not recorded'} />
+            <Row label="File size" value={formatBytes(record.size_bytes)} />
+            <Row label="Uploaded" value={fmtDateTime(record.uploaded_at)} />
+            <Row label="Uploaded by" value={uploader.text} mono={uploader.mono} />
+            <Row label="Invoices created" value={`${fmtPlain(record.invoices_created)} from this one file`} />
+            {/* `Rows in file` only once the sheet lands. `Pages`, `Dimensions` and `Rows read`
+                are omitted rather than placeholdered — none is derivable in this build. */}
+            {sheetRowsTotal != null && <Row label="Rows in file" value={fmtPlain(sheetRowsTotal)} />}
+          </div>
         </div>
-      </div>
 
-      <div style={{ flex: 'none', padding: '13px 18px', borderTop: '1px solid var(--line-1)', display: 'flex', gap: 10, background: 'var(--bg-1)' }}>
-        <span style={{ flex: 'none', color: 'var(--action)', display: 'inline-flex' }}>{shieldGlyph}</span>
-        <p style={{ margin: 0, fontSize: 11.5, lineHeight: 1.55, color: 'var(--fg-2)' }}>
-          {NOTE} — for {scopeOwner(ctx)} and for us.
-        </p>
+        <div style={{ borderTop: '1px solid var(--line-1)', padding: '16px 20px 24px', marginTop: 'auto', display: 'flex', alignItems: 'flex-start', gap: 9 }}>
+          <span style={{ flex: 'none', color: 'var(--fg-3)', marginTop: 1, display: 'inline-flex' }}>{shieldGlyph}</span>
+          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.55, color: 'var(--fg-2)' }}>
+            {NOTE} — for {scopeOwner(ctx)} and for us.
+          </p>
+        </div>
       </div>
     </div>
   )

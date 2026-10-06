@@ -182,3 +182,96 @@ describe('AddCompanyTask (AUTH-10-03)', () => {
     expect(screen.getByText(/^Your workspace ·/)).toBeTruthy()
   })
 })
+
+// inline-token reads; geometry (left edges equal) is OV-04's, deployed.
+describe('AddCompanyTask Overview look (D-28, D-37)', () => {
+  const PAD = '30px 36px 56px'
+
+  beforeEach(() => {
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gateway.test')
+  })
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllEnvs()
+  })
+
+  it('the header is a plain 26px block with a 28px / -0.03em h1 and no inline weight', () => {
+    for (const mode of ['inhouse', 'firm'] as const) {
+      const { container, unmount } = render(<AddCompanyTask ctx={mkCtx({ mode }).ctx} />)
+      const wrapper = container.firstElementChild as HTMLElement
+      const h1 = screen.getByRole('heading', { level: 1 })
+      const header = h1.parentElement as HTMLElement
+
+      expect(wrapper.style.padding).toBe(PAD)
+      expect(header.parentElement).toBe(wrapper)
+      expect(header.style.marginBottom).toBe('26px')
+      expect(header.style.display).toBe('')
+      expect([...header.children].map((c) => c.tagName)).toEqual(['DIV', 'H1', 'P'])
+      expect((header.children[0] as HTMLElement).style.marginBottom).toBe('10px')
+      expect(h1.style.fontSize).toBe('28px')
+      expect(h1.style.letterSpacing).toBe('-0.03em')
+      expect(h1.style.margin).toBe('0px 0px 5px')
+      expect(h1.style.fontWeight).toBe('')
+      const sub = header.children[2] as HTMLElement
+      expect(sub.style.fontSize).toBe('14px')
+      expect(sub.style.overflowWrap).toBe('anywhere')
+      unmount()
+    }
+  })
+
+  it('the task card holds the Add button (dense, in-card)', () => {
+    render(<AddCompanyTask ctx={mkCtx().ctx} />)
+
+    const task = screen.getByTestId('add-company-task')
+    const header = screen.getByRole('heading', { level: 1 }).parentElement
+    expect(header!.nextElementSibling).toBe(task)
+    expect(task.children, 'one card, no button row beside it').toHaveLength(1)
+    const card = task.firstElementChild as HTMLElement
+    const buttons = within(card).getAllByRole('button')
+    expect(buttons).toHaveLength(1)
+    expect(card.lastElementChild).toBe(buttons[0])
+    expect(card.style.padding).toBe('48px')
+    expect(card.style.background).toBe('transparent')
+    const message = within(card).getByText(ADD_COMPANY_COPY.inhouse.emptyMessage)
+    expect(message.style.maxWidth).toBe('460px')
+    expect(message.style.margin).toBe('0px 0px 20px')
+  })
+
+  it('QA: both modes draw one dense card at width 460, the Add button its last child, also with no gateway', () => {
+    for (const [mode, gateway] of [['inhouse', 'https://gateway.test'], ['firm', 'https://gateway.test'], ['firm', '']] as const) {
+      vi.stubEnv('VITE_GATEWAY_URL', gateway)
+      const { unmount } = render(<AddCompanyTask ctx={mkCtx({ mode }).ctx} />)
+      const task = screen.getByTestId('add-company-task')
+      expect(task.children, `${mode}/${gateway}: one card`).toHaveLength(1)
+      const card = task.firstElementChild as HTMLElement
+      const button = within(card).getByRole('button')
+      expect(card.lastElementChild, `${mode}/${gateway}: the button is the card's last child`).toBe(button)
+      expect(card.style.padding).toBe('48px')
+      expect(within(card).getByText(ADD_COMPANY_COPY[mode].emptyMessage).style.maxWidth).toBe('460px')
+      expect((button as HTMLButtonElement).disabled, `${mode}/${gateway}: disabled only without a gateway`).toBe(gateway === '')
+      unmount()
+    }
+  })
+
+  it('loading renders inside the same padded wrapper as the task', () => {
+    for (const opts of [{ entitiesState: 'loading' }, { mode: 'firm', entitiesState: 'ready', entities: [ENTITY], clientsCount: 0 }] as CtxOpts[]) {
+      const { container, unmount } = render(<AddCompanyTask ctx={mkCtx(opts).ctx} />)
+      const wrapper = container.firstElementChild as HTMLElement
+      expect(wrapper.style.padding).toBe(PAD)
+      expect(wrapper.contains(screen.getByText('Loading your workspace…'))).toBe(true)
+      expect(screen.queryByRole('heading', { level: 1 })).toBeNull()
+      unmount()
+    }
+  })
+
+  it('error renders its message and Retry inside the same padded wrapper', () => {
+    const { ctx } = mkCtx({ entitiesState: 'error', entitiesError: new ApiError('http', 'boom', 500) })
+    const { container } = render(<AddCompanyTask ctx={ctx} />)
+
+    const wrapper = container.firstElementChild as HTMLElement
+    expect(wrapper.style.padding).toBe(PAD)
+    expect(wrapper.contains(screen.getByText('boom'))).toBe(true)
+    expect(wrapper.contains(screen.getByRole('button', { name: 'Retry' }))).toBe(true)
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull()
+  })
+})

@@ -286,6 +286,22 @@ describe('InvoicesList pagination (task-329, BUG-01-03)', () => {
     expect((screen.getByRole('button', { name: '← Previous' }) as HTMLButtonElement).disabled, 'Previous must stay usable so the user can get back').toBe(false)
   })
 
+  it('ES-07 the empty-page card takes no new prop (pin; boundary)', async () => {
+    const p1 = Array.from({ length: 50 }, (_, i) => row({ id: `inv-${i}`, invoice_number: `INV-${i}` }))
+    mockFetchSequence([listResponse(p1, { limit: 50, offset: 0, total: 110 }), listResponse([], { limit: 50, offset: 50, total: 45 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByTestId('invoices-pager')
+    fireEvent.click(screen.getByRole('button', { name: 'Next →' }))
+
+    const pageEmpty = await screen.findByTestId('invoices-empty-page')
+    const card = pageEmpty.firstElementChild as HTMLElement
+    expect(card.style.padding).toBe('56px')
+    expect(card.style.background).toBe('var(--bg-2)')
+    expect(within(card).getByText('Go back to see the rest of the register.').style.maxWidth).toBe('340px')
+    expect(card.contains(screen.getByTestId('invoices-pager')), 'the pager stays below the card').toBe(false)
+  })
+
   it('AC-6: the live-refresh tick re-sends the CURRENT offset, not page 1 ([poll-tick-follows-the-page])', async () => {
     // status:'queued' keeps shouldPollList active so useLiveRefresh actually installs
     // an interval; a real 2s wait avoids fake-timer/act() interaction pitfalls with
@@ -2173,8 +2189,7 @@ describe('QA BUG-10-01: the held envelope at its edges', () => {
 // source in the same commit.
 function aboveTable(container: HTMLElement): string[] {
   const root = container.firstElementChild as HTMLElement
-  // The three ready-state children are the header block, the table and the pager wrapper.
-  // Only the table is identified: the other two both fingerprint as the bare `DIV||`.
+  // The two ready-state children are the header block and the table (the pager sits inside it).
   return Array.from(root.children).map((el) => `${el.tagName}|${el.className}|${el.getAttribute('data-testid') ?? ''}`)
 }
 
@@ -2302,6 +2317,47 @@ describe('InvoicesList: an empty register says which kind of empty it is', () =>
     expect(screen.queryByTestId('invoices-empty-filtered'), 'the filtered empty state must not survive its own exit').toBeNull()
   })
 
+  it('ES-03 New invoice lies inside the empty card', async () => {
+    mockFetchSequence([listResponse([], { limit: 50, offset: 0, total: 0 })])
+    const openCreate = vi.fn()
+
+    render(<InvoicesList ctx={{ ...listCtx(), openCreate } as PlatformCtx} />)
+
+    const empty = await screen.findByTestId('invoices-empty')
+    expect(empty.children, 'one card, no button row beside it').toHaveLength(1)
+    const card = empty.firstElementChild as HTMLElement
+    const button = within(card).getByRole('button', { name: /New invoice/ })
+    expect(card.lastElementChild).toBe(button)
+    const message = within(card).getByText('Create or import an invoice to start tracking compliance.')
+    expect(message.style.maxWidth).toBe('320px')
+    expect(message.style.margin).toBe('0px 0px 20px')
+
+    fireEvent.click(button)
+    expect(openCreate).toHaveBeenCalledTimes(1)
+  })
+
+  it('ES-04 Show all invoices lies inside the filtered empty card', async () => {
+    mockFetchSequence([
+      listResponse([row({ id: 'a1', invoice_number: 'INV-A1' })], { limit: 50, offset: 0, total: 1 }),
+      listResponse([], { limit: 50, offset: 0, total: 0 }),
+      listResponse([row({ id: 'a1', invoice_number: 'INV-A1' })], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A1')
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+
+    const filtered = await screen.findByTestId('invoices-empty-filtered')
+    expect(filtered.children, 'one card, no button row beside it').toHaveLength(1)
+    const card = filtered.firstElementChild as HTMLElement
+    expect(card.lastElementChild).toBe(within(card).getByTestId('clear-needs-attention'))
+    const message = within(card).getByText('No invoice in this register is waiting on you. Clear the filter to see the rest.')
+    expect(message.style.maxWidth).toBe('360px')
+
+    fireEvent.click(within(card).getByTestId('clear-needs-attention'))
+    await waitFor(() => expect(screen.queryByTestId('invoices-empty-filtered')).toBeNull())
+  })
+
   it('a genuinely invoice-less workspace still reads No invoices yet with New invoice', async () => {
     mockFetchSequence([listResponse([], { limit: 50, offset: 0, total: 0 })])
 
@@ -2424,7 +2480,7 @@ describe('BUG-17-02 register status markers', () => {
     const style = marker!.getAttribute('style') ?? ''
     expect(style).toContain('background: var(--status-red-bg)')
     expect(style).toContain('border: 1px solid var(--status-red-border)')
-    expect(style).toContain('border-radius: 999px')
+    expect(style).toContain('border-radius: var(--radius-sm)')
     expect(style).toContain('padding: 3px 9px')
     const inner = marker!.querySelector('span')
     expect(inner?.getAttribute('style') ?? '').toContain('color: var(--status-red-text)')
@@ -2469,7 +2525,7 @@ describe('BUG-17-02 register status markers', () => {
     const style = marker!.getAttribute('style') ?? ''
     expect(style).toContain('background: var(--status-amber-bg)')
     expect(style).toContain('border: 1px solid var(--status-amber-border)')
-    expect(style).toContain('border-radius: 999px')
+    expect(style).toContain('border-radius: var(--radius-sm)')
     expect(style).toContain('padding: 3px 9px')
     const inner = marker!.querySelector('span')
     expect(inner?.getAttribute('style') ?? '').toContain('color: var(--status-amber-text)')
@@ -2498,7 +2554,7 @@ describe('BUG-17-02 register status markers', () => {
 
     const badge = screen.getByTestId('invoice-status-badge')
     expect(badge.getAttribute('style')).toBe(
-      'display: inline-flex; align-items: center; gap: 6px; background: var(--status-muted-bg); border: 1px solid var(--status-muted-border); border-radius: 999px; padding: 3px 9px;',
+      'display: inline-flex; align-items: center; gap: 6px; background: var(--status-muted-bg); border: 1px solid var(--status-muted-border); border-radius: var(--radius-sm); padding: 3px 9px;',
     )
   })
 
@@ -2620,5 +2676,144 @@ describe('BUG-17-02 register status markers', () => {
       expect(pill.firstElementChild!.className, `${id} text is mono`).toBe(badgeText.className)
       expect(withoutColor(pill.firstElementChild!), `${id} text size, weight and tracking`).toBe(withoutColor(badgeText))
     }
+  })
+})
+
+describe('IL-LOOK: register checkboxes and the bulk bar take the v2 look (D-11, D-25)', () => {
+  it('row checkboxes are 15px with the action accent; a blocked one keeps its cursor and dim', async () => {
+    const blocked = gateRow({ id: 'inv-no', invoice_number: 'INV-NO', status: 'validated', can_submit: false, submit_blocked_reason: 'Not ready' })
+    const ok = gateRow({ id: 'inv-ok', invoice_number: 'INV-OK', status: 'validated', can_submit: true, submit_blocked_reason: null })
+    mockFetchSequence([listResponse([ok, blocked], { limit: 50, offset: 0, total: 2 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-OK')
+
+    const [first, second] = screen.getAllByTestId('invoice-select')
+    const style = first.getAttribute('style') ?? ''
+    expect(style).toContain('width: 15px')
+    expect(style).toContain('height: 15px')
+    expect(style).toContain('accent-color: var(--action)')
+    expect(style, 'a selectable row carries no cursor or dim override').not.toContain('cursor')
+    expect(style).not.toContain('opacity')
+    const headStyle = screen.getByTestId('invoice-select-all').getAttribute('style') ?? ''
+    expect(headStyle).toContain('width: 15px')
+    expect(headStyle).toContain('height: 15px')
+    expect(headStyle).toContain('accent-color: var(--action)')
+    const blockedStyle = second.getAttribute('style') ?? ''
+    expect(blockedStyle).toContain('width: 15px')
+    expect(blockedStyle).toContain('cursor: not-allowed')
+    expect(blockedStyle).toContain('opacity: 0.5')
+  })
+
+  it('the bulk bar outer element is a block: no flex-direction, no gap', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    mockFetchSequence([listResponse([a], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+    fireEvent.click(screen.getByTestId('invoice-select-all'))
+
+    const style = screen.getByTestId('batch-submit-summary').getAttribute('style') ?? ''
+    expect(style, 'the bar must carry its own style, or the absences below are vacuous').toContain('background: var(--action-tint)')
+    expect(style).not.toContain('flex-direction')
+    expect(style).not.toContain('gap')
+  })
+
+  it('the bulk bar idle and armed carry the prototype tokens (§ Bulk bars)', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    mockFetchSequence([listResponse([a], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+    fireEvent.click(screen.getByTestId('invoice-select-all'))
+
+    const bar = screen.getByTestId('batch-submit-summary')
+    const barStyle = bar.getAttribute('style') ?? ''
+    expect(barStyle).toContain('background: var(--action-tint)')
+    expect(barStyle).toContain('border: 1px solid var(--teal-200)')
+    expect(barStyle).toContain('border-radius: var(--radius-md)')
+    expect(barStyle).toContain('padding: 11px 16px')
+    expect(barStyle).toContain('margin-bottom: 12px')
+    const actionRow = bar.firstElementChild as HTMLElement
+    expect(actionRow.getAttribute('style') ?? '').toContain('gap: 10px')
+    const label = actionRow.firstElementChild as HTMLElement
+    expect(label.className).toContain('mono')
+    const labelStyle = label.getAttribute('style') ?? ''
+    expect(labelStyle).toContain('font-size: 11px')
+    expect(labelStyle).toContain('font-weight: 600')
+    expect(labelStyle).toContain('letter-spacing: 0.03em')
+    expect(bar.children, 'idle: the action row only').toHaveLength(1)
+
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    expect(bar.children, 'armed: the confirm block follows the action row').toHaveLength(2)
+    const confirm = bar.children[1] as HTMLElement
+    const confirmStyle = confirm.getAttribute('style') ?? ''
+    expect(confirmStyle).toContain('margin-top: 10px')
+    expect(confirmStyle).toContain('padding-top: 10px')
+    expect(confirmStyle).toContain('border-top: 1px solid var(--teal-200)')
+    expect((confirm.children[0] as HTMLElement).getAttribute('style') ?? '').toContain('margin-bottom: 2px')
+    const detailStyle = (confirm.children[1] as HTMLElement).getAttribute('style') ?? ''
+    expect(detailStyle).toContain('font-size: 12.5px')
+    expect(detailStyle).toContain('margin: 0px')
+  })
+
+  it('the header row gap, the h1 weight and the Needs-attention toggle follow D-1 and D-24', async () => {
+    mockFetchSequence([
+      listResponse([row({ id: 'o1', invoice_number: 'INV-OFF' })], { limit: 50, offset: 0, total: 1 }),
+      listResponse([row({ id: 'n1', invoice_number: 'INV-ON' })], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-OFF')
+
+    const toggle = screen.getByTestId('needs-attention-toggle')
+    expect((toggle.parentElement as HTMLElement).getAttribute('style') ?? '').toContain('gap: 20px')
+    const h1Style = screen.getByRole('heading', { level: 1 }).getAttribute('style') ?? ''
+    expect(h1Style, 'the h1 must carry its own style, or the absence below is vacuous').toContain('font-size: 26px')
+    expect(h1Style).not.toContain('font-weight')
+
+    expect(toggle.className).toContain('pf-chip')
+    const off = toggle.getAttribute('style') ?? ''
+    expect(off).toContain('flex: 0 0 auto')
+    expect(off).toContain('border-radius: var(--radius-sm)')
+    expect(off).toContain('font-weight: 600')
+    expect(off).toContain('color: var(--fg-2)')
+
+    fireEvent.click(toggle)
+    await screen.findByText('INV-ON')
+    const on = screen.getByTestId('needs-attention-toggle').getAttribute('style') ?? ''
+    expect(on).toContain('background: var(--action)')
+    expect(on).toContain('color: var(--primary-foreground)')
+  })
+
+  it('the status dot is a circle', async () => {
+    mockFetchSequence([listResponse([row({ id: 'inv-a', invoice_number: 'INV-A' })], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    const dot = screen.getByTestId('invoice-status-badge').firstElementChild as HTMLElement
+    const dotStyle = dot.getAttribute('style') ?? ''
+    expect(dotStyle, 'the dot must be the 6px swatch, or the corner below reads another element').toContain('width: 6px')
+    expect(dotStyle).toContain('border-radius: 50%')
+  })
+
+  it('the populated pager is the list card footer; the empty-page pager stays below its card (D-3)', async () => {
+    const p1 = Array.from({ length: 50 }, (_, i) => row({ id: `inv-${i}`, invoice_number: `INV-${i}` }))
+    mockFetchSequence([listResponse(p1, { limit: 50, offset: 0, total: 110 }), listResponse([], { limit: 50, offset: 50, total: 45 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    const pager = await screen.findByTestId('invoices-pager')
+    const list = screen.getByTestId('invoices-list')
+    const footer = pager.parentElement as HTMLElement
+    expect(footer.parentElement, 'the footer row is a direct child of the card').toBe(list)
+    expect(footer.getAttribute('style') ?? '').toContain('padding: 12px 18px')
+    expect(list.lastElementChild, 'the footer row follows the rows').toBe(footer)
+    expect(within(list).getAllByTestId('invoice-row').length).toBeGreaterThan(0)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next →' }))
+    const empty = await screen.findByTestId('invoices-empty-page')
+    expect(screen.queryByTestId('invoices-list'), 'no list card on an empty page').toBeNull()
+    expect(within(empty).getByTestId('invoices-pager'), 'the empty-page pager sits inside its own wrapper').toBeTruthy()
   })
 })

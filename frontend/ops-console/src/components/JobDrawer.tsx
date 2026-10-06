@@ -20,7 +20,7 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
   const d = buildSubmissionDrawer(job, env, naira(job.raw), CHECK_ICON, CLOSE_ICON)
   return (
     <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'oklch(20% .02 210 / 0.32)', animation: 'opsFade 160ms ease-out' }} />
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'color-mix(in srgb, var(--surface) 32%, transparent)', animation: 'opsFade 160ms ease-out' }} />
       <div
         className="ops-drawer"
         style={{
@@ -33,7 +33,6 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
           maxWidth: '94vw',
           background: 'var(--bg-1)',
           borderLeft: '1px solid var(--line-2)',
-          boxShadow: '-24px 0 48px -24px oklch(20% .02 210 / 0.3)',
           display: 'flex',
           flexDirection: 'column',
           animation: 'opsDrawer 200ms ease-out',
@@ -42,11 +41,11 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
         <div style={{ flex: 'none', padding: '18px 22px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-2)', display: 'flex', alignItems: 'flex-start', gap: 12 }}>
           <div style={{ flex: 1 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 5 }}>
-              <span className="mono" style={{ fontSize: 15, fontWeight: 700 }}>
+              <span className="mono" style={{ fontSize: 15, fontWeight: 700, color: 'var(--ink)' }}>
                 {d.id}
               </span>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: d.stBg, border: `1px solid ${d.stBorder}`, borderRadius: 999, padding: '2px 9px' }}>
-                <span style={{ width: 6, height: 6, borderRadius: 99, background: d.stDot }} />
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: d.stBg, border: `1px solid ${d.stBorder}`, borderRadius: 'var(--radius-sm)', padding: '2px 7px' }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: d.stDot }} />
                 <span className="mono" style={{ fontSize: 9.5, fontWeight: 700, color: d.stText }}>
                   {d.stLabel}
                 </span>
@@ -63,7 +62,7 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
             type="button"
             onClick={onClose}
             className="ops-btn"
-            style={{ border: 0, background: 'var(--bg-3)', cursor: 'pointer', width: 30, height: 30, borderRadius: 'var(--radius-input)', color: 'var(--fg-2)', display: 'grid', placeItems: 'center' }}
+            style={{ border: 0, background: 'var(--bg-3)', cursor: 'pointer', width: 30, height: 30, borderRadius: 'var(--radius-btn)', color: 'var(--fg-2)', display: 'grid', placeItems: 'center' }}
           >
             {CLOSE_ICON}
           </button>
@@ -122,7 +121,7 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
             {d.timeline.map((t, i) => (
               <div key={i} style={{ display: 'grid', gridTemplateColumns: '18px 1fr', gap: 12 }}>
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                  <span style={{ width: 11, height: 11, borderRadius: 99, background: t.dotBg, border: `2px solid ${t.dotBorder}` }} />
+                  <span style={{ width: 11, height: 11, borderRadius: '50%', background: t.dotBg, border: `2px solid ${t.dotBorder}` }} />
                   <span style={{ flex: 1, width: 2, background: t.line }} />
                 </div>
                 <div style={{ paddingBottom: 16 }}>
@@ -143,7 +142,7 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
           {/* payloads */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
             <span className="label">Request payload</span>
-            <button type="button" onClick={onToggleReq} className="ops-btn" style={{ border: 0, background: 'transparent', cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: 10.5, fontWeight: 600, color: 'var(--action)' }}>
+            <button type="button" onClick={onToggleReq} className="ops-btn" style={{ border: 0, background: 'transparent', cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: 10.5, fontWeight: 600, color: 'var(--link)' }}>
               {reqOpen ? 'COLLAPSE' : 'EXPAND'}
             </button>
           </div>
@@ -154,7 +153,7 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
           )}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
             <span className="label">Tax-authority exchange</span>
-            <button type="button" onClick={onToggleRes} className="ops-btn" style={{ border: 0, background: 'transparent', cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: 10.5, fontWeight: 600, color: 'var(--action)' }}>
+            <button type="button" onClick={onToggleRes} className="ops-btn" style={{ border: 0, background: 'transparent', cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: 10.5, fontWeight: 600, color: 'var(--link)' }}>
               {resOpen ? 'COLLAPSE' : 'EXPAND'}
             </button>
           </div>
@@ -173,7 +172,7 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
             type="button"
             onClick={onCancel}
             className="ops-btn"
-            style={{ border: '1px solid var(--status-red-border)', background: 'var(--status-red-bg)', cursor: 'pointer', height: 40, padding: '0 16px', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-sans)', fontSize: 14, fontWeight: 500, color: 'var(--status-red-text)' }}
+            style={{ border: '1px solid var(--status-red-border)', background: 'var(--status-red-bg)', cursor: 'pointer', height: 40, padding: '0 16px', borderRadius: 'var(--radius-btn)', fontFamily: 'var(--font-sans)', fontSize: 14, fontWeight: 600, color: 'var(--status-red-text)' }}
           >
             Cancel
           </button>

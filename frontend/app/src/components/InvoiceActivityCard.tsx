@@ -65,10 +65,10 @@ export function InvoiceActivityCard({
     body = (
       <div
         data-testid="invoice-activity-empty"
-        style={{ padding: '14px 16px', border: '1px dashed var(--line-3)', borderRadius: 'var(--radius-md)', background: 'transparent' }}
+        style={{ padding: '28px 18px', textAlign: 'center' }}
       >
-        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-2)' }}>{ACTIVITY_COPY.emptyScopedTitle}</div>
-        <div style={{ marginTop: 4, fontSize: 12.5, lineHeight: 1.55, color: 'var(--fg-3)' }}>{ACTIVITY_COPY.emptyScopedBody}</div>
+        <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 3 }}>{ACTIVITY_COPY.emptyScopedTitle}</div>
+        <div style={{ fontSize: 12.5, lineHeight: 1.55, color: 'var(--fg-3)' }}>{ACTIVITY_COPY.emptyScopedBody}</div>
         {res.log_is_empty && (
           <div data-testid="invoice-activity-empty-workspace" style={{ marginTop: 6, fontSize: 12.5, lineHeight: 1.55, color: 'var(--fg-3)' }}>
             {ACTIVITY_COPY.emptyWorkspaceAlso}
@@ -87,68 +87,71 @@ export function InvoiceActivityCard({
 
     body = (
       <>
-        <div data-testid="invoice-activity-chips" style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
-          {chips.map((c) => {
-            const on = chip === c.key
-            return (
-              <button
-                key={c.key}
-                type="button"
-                data-testid={`activity-chip-${c.key}`}
-                aria-pressed={on}
-                aria-describedby={c.inert ? (c.reason != null ? DOCUMENTS_REASON_ID : EMPTY_CHIP_REASON_ID) : undefined}
-                disabled={c.inert}
-                onClick={() => {
-                  setChip(c.key)
-                  // A filter change is a new population: a held-over id would re-open a row
-                  // the user never opened on this chip.
-                  setExpandedId(null)
-                }}
-                className="pf-chip"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 7,
-                  height: 28,
-                  padding: '0 12px',
-                  fontFamily: 'var(--font-sans)',
-                  fontSize: 12.5,
-                  fontWeight: 500,
-                  border: `1px solid ${on ? 'var(--action)' : 'var(--line-2)'}`,
-                  background: on ? 'var(--action)' : 'var(--bg-1)',
-                  color: on ? 'var(--text-on-dark)' : 'var(--fg-2)',
-                  // Inline, matching the repo: there is no `:disabled` rule anywhere.
-                  ...(c.inert ? { opacity: 0.4, cursor: 'not-allowed' } : {}),
-                }}
-              >
-                {c.label}
-                <span className="mono" style={{ fontSize: 11, opacity: 0.75 }}>
-                  {c.count}
-                </span>
-              </button>
-            )
-          })}
-        </div>
-
-        {/* Siblings of the chip row, never flex items beside a chip. The Documents line is
-            unconditional: D-AC-6 makes that zero permanent. */}
-        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <div id={DOCUMENTS_REASON_ID} data-testid="activity-chip-documents-reason" style={{ fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
-            {ACTIVITY_COPY.documentsInert}
+        <div style={{ padding: '11px 18px', borderBottom: '1px solid var(--line-1)' }}>
+          <div data-testid="invoice-activity-chips" style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+            {chips.map((c) => {
+              const on = chip === c.key
+              return (
+                <button
+                  key={c.key}
+                  type="button"
+                  data-testid={`activity-chip-${c.key}`}
+                  aria-pressed={on}
+                  aria-describedby={c.inert ? (c.reason != null ? DOCUMENTS_REASON_ID : EMPTY_CHIP_REASON_ID) : undefined}
+                  disabled={c.inert}
+                  onClick={() => {
+                    setChip(c.key)
+                    // A filter change is a new population: a held-over id would re-open a row
+                    // the user never opened on this chip.
+                    setExpandedId(null)
+                  }}
+                  className="pf-chip"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    height: 28,
+                    padding: '0 11px',
+                    fontFamily: 'var(--font-sans)',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    border: `1px solid ${on ? 'var(--action)' : 'var(--line-2)'}`,
+                    background: on ? 'var(--action)' : 'transparent',
+                    color: on ? 'var(--primary-foreground)' : 'var(--fg-2)',
+                    // Inline, matching the repo: there is no `:disabled` rule anywhere.
+                    ...(c.inert ? { opacity: 0.4, cursor: 'not-allowed' } : {}),
+                  }}
+                >
+                  {c.label}
+                  <span className="mono" style={{ fontSize: 10, opacity: 0.8 }}>
+                    {c.count}
+                  </span>
+                </button>
+              )
+            })}
           </div>
-          {incidentalInert && (
-            <div id={EMPTY_CHIP_REASON_ID} data-testid="activity-chip-empty-reason" style={{ fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
-              {ACTIVITY_COPY.chipZeroInert}
+
+          {/* Siblings of the chip row, never flex items beside a chip. The Documents line is
+              unconditional: D-AC-6 makes that zero permanent. */}
+          <div>
+            <div id={DOCUMENTS_REASON_ID} data-testid="activity-chip-documents-reason" style={{ marginTop: 9, fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
+              {ACTIVITY_COPY.documentsInert}
             </div>
-          )}
+            {incidentalInert && (
+              <div id={EMPTY_CHIP_REASON_ID} data-testid="activity-chip-empty-reason" style={{ marginTop: 3, fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
+                {ACTIVITY_COPY.chipZeroInert}
+              </div>
+            )}
+          </div>
         </div>
 
-        <div style={{ marginTop: 14 }}>
-          <AuditTable>
+        <div style={{ padding: 0 }}>
+          <AuditTable variant="activity">
             {rows.map((e) => (
               <AuditRow
                 key={e.id}
                 event={e}
+                variant="activity"
                 expanded={expandedId === e.id}
                 onToggle={() => setExpandedId(expandedId === e.id ? null : e.id)}
               />
@@ -157,16 +160,15 @@ export function InvoiceActivityCard({
         </div>
 
         {/* The toggle and the hand-off share one row: the cap note directly below points the
-            reader at ACTIVITY_COPY.auditLink, so pointer and target must be adjacent. marginTop
-            moves to the wrapper so spacing is the same whether or not the toggle renders. */}
-        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            reader at ACTIVITY_COPY.auditLink, so pointer and target must be adjacent. */}
+        <div style={{ padding: '11px 18px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           {toggle.label != null && (
             <button
               type="button"
               data-testid="activity-toggle"
               onClick={() => setShowAll(!showAll)}
               className="v2-btn v2-btn-ghost pf-btn"
-              style={{ height: 32, padding: '0 12px', fontSize: 12.5 }}
+              style={{ height: 30, padding: '0 13px', fontSize: 12.5 }}
             >
               {toggle.label}
             </button>
@@ -177,13 +179,13 @@ export function InvoiceActivityCard({
             data-testid="activity-open-in-audit"
             onClick={() => ctx.openAuditForInvoice(invoiceId, invoiceNumber)}
             className="v2-btn v2-btn-ghost pf-btn"
-            style={{ height: 32, padding: '0 12px', fontSize: 12.5 }}
+            style={{ height: 30, padding: '0 13px', fontSize: 12.5, marginLeft: 'auto' }}
           >
             {ACTIVITY_COPY.auditLink}
           </button>
         </div>
         {toggle.note != null && (
-          <div data-testid="activity-cap-note" style={{ marginTop: 10, fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
+          <div data-testid="activity-cap-note" style={{ padding: '0 18px 14px', fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
             {toggle.note}
           </div>
         )}
@@ -198,11 +200,11 @@ export function InvoiceActivityCard({
     >
       <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
         <span className="card-title">{ACTIVITY_COPY.cardTitle}</span>
-        <span className="mono" style={{ flex: 'none', fontSize: 9.5, letterSpacing: '0.06em', color: 'var(--fg-3)' }}>
+        <span className="mono" style={{ flex: 'none', fontSize: 9, fontWeight: 700, letterSpacing: '0.09em', color: 'var(--fg-3)' }}>
           READ ONLY
         </span>
       </div>
-      <div data-testid="invoice-activity-body" style={{ padding: '16px 18px' }}>
+      <div data-testid="invoice-activity-body" style={{ padding: res != null && log.status !== 'error' ? 0 : '16px 18px' }}>
         {body}
       </div>
     </div>

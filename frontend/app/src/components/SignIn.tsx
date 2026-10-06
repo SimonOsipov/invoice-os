@@ -19,7 +19,7 @@ function Spinner() {
   return (
     <span
       className="si-spin"
-      style={{ width: 15, height: 15, border: '2px solid var(--line-2)', borderTopColor: 'var(--action)', borderRadius: 99, display: 'inline-block' }}
+      style={{ width: 15, height: 15, border: '2px solid var(--line-2)', borderTopColor: 'var(--action)', borderRadius: '50%', display: 'inline-block' }}
     />
   )
 }
@@ -34,13 +34,12 @@ export function SignIn({ signingIn, onPick }: { signingIn: PersonaId | null; onP
       <style>{`
         @keyframes siSpin { to { transform: rotate(360deg); } }
         .si-spin { animation: siSpin 0.7s linear infinite; }
-        .si-persona { transition: border-color 120ms ease-out, background 120ms ease-out, transform 90ms; }
+        .si-persona { transition: border-color 120ms ease-out, background 120ms ease-out; }
         .si-persona:not(:disabled):hover { border-color: var(--action); background: var(--bg-1); }
-        .si-persona:not(:disabled):active { transform: translateY(1px); }
         .si-persona:disabled { cursor: default; opacity: 0.6; }
       `}</style>
 
-      <div style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', boxShadow: '0 32px 64px -24px oklch(16% .03 210 / .42)', overflow: 'hidden' }}>
+      <div style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '16px 18px', borderBottom: '1px solid var(--line-1)' }}>
           <BrandMark size={20} />
           <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: '-0.02em' }}>ASComply</span>
@@ -51,7 +50,7 @@ export function SignIn({ signingIn, onPick }: { signingIn: PersonaId | null; onP
 
         <div style={{ padding: '22px 20px 20px' }}>
           <div className="label" style={{ marginBottom: 8 }}>/ SIGN IN</div>
-          <h1 style={{ fontSize: 20, letterSpacing: '-0.02em', fontWeight: 600, margin: '0 0 6px' }}>Choose an account</h1>
+          <h1 style={{ fontSize: 20, letterSpacing: '-0.02em', margin: '0 0 6px' }}>Choose an account</h1>
           <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--fg-2)', margin: 0 }}>
             Pick a demo profile to open its workspace. Signing in resolves the tenant against the live backend when one is configured.
           </p>
@@ -109,7 +108,7 @@ export function SignInLoading() {
         .si-spin { animation: siSpin 0.7s linear infinite; }
       `}</style>
 
-      <div style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', boxShadow: '0 32px 64px -24px oklch(16% .03 210 / .42)', overflow: 'hidden' }}>
+      <div style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '16px 18px', borderBottom: '1px solid var(--line-1)' }}>
           <BrandMark size={20} />
           <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: '-0.02em' }}>ASComply</span>

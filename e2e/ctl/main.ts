@@ -50,7 +50,7 @@ Example: ${CTL} login firm --env pr-348 --role reviewer`,
   measure: `Usage: ctl measure <selector> --props <p1,p2,...> [--viewport <width>] [--session S]
 
 Prints the layout box and the listed computed styles of every match in the open playwright-cli session.
---viewport resizes the page to that width first.
+--viewport resizes the open page to that width first and leaves it resized.
 Prints { selector, viewport, layoutWidth, count, matches }.
 Example: ${CTL} measure '[data-testid="evidence-bundle-drawer"]' --props width,padding-left --viewport 1440`,
 }

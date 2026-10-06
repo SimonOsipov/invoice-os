@@ -64,25 +64,29 @@ export function measureSnippet(req: MeasureRequest): string {
   if (width !== null) await page.setViewportSize({ width, height: page.viewportSize()?.height ?? 900 })
   const unknown = await page.evaluate((ps) => ps.filter((p) => !p.startsWith('--') && !CSS.supports(p, 'initial')), props)
   if (unknown.length) return { error: 'unknown-prop', props: unknown }
-  await page.addStyleTag({ content: '*,*::before,*::after{scroll-behavior:auto!important}' })
-  const loc = page.locator(selector)
-  const count = await loc.count()
-  if (count === 0) return { error: 'zero-match', selector }
-  const matches = []
-  for (let index = 0; index < count; index++) {
-    const el = loc.nth(index)
-    await settleAnimations(el)
-    const read = await el.evaluate((e, ps) => {
-      const r = e.getBoundingClientRect()
-      const cs = getComputedStyle(e)
-      const styles = {}
-      for (const p of ps) styles[p] = cs.getPropertyValue(p)
-      return { box: { x: r.x, y: r.y, width: r.width, height: r.height }, styles }
-    }, props)
-    matches.push({ index, box: read.box, styles: read.styles })
+  const tag = await page.addStyleTag({ content: '*,*::before,*::after{scroll-behavior:auto!important}' })
+  try {
+    const loc = page.locator(selector)
+    const count = await loc.count()
+    if (count === 0) return { error: 'zero-match', selector }
+    const matches = []
+    for (let index = 0; index < count; index++) {
+      const el = loc.nth(index)
+      await settleAnimations(el)
+      const read = await el.evaluate((e, ps) => {
+        const r = e.getBoundingClientRect()
+        const cs = getComputedStyle(e)
+        const styles = {}
+        for (const p of ps) styles[p] = cs.getPropertyValue(p)
+        return { box: { x: r.x, y: r.y, width: r.width, height: r.height }, styles }
+      }, props)
+      matches.push({ index, box: read.box, styles: read.styles })
+    }
+    const layoutWidth = await page.evaluate(() => document.documentElement.clientWidth)
+    return { selector, viewport: page.viewportSize(), layoutWidth, count, matches }
+  } finally {
+    await tag.evaluate((t) => t.remove())
   }
-  const layoutWidth = await page.evaluate(() => document.documentElement.clientWidth)
-  return { selector, viewport: page.viewportSize(), layoutWidth, count, matches }
 }`
 }
 
@@ -107,14 +111,14 @@ const defaultExec: Exec = (args) => {
 export async function measure(req: MeasureRequest, exec: Exec = defaultExec): Promise<MeasureResult> {
   const r = await exec([`-s=${req.session}`, '--raw', 'run-code', measureSnippet(req)])
   const text = (r.stdout.trim() || (r.stderr ?? '').trim()) || `playwright-cli exited ${r.code}`
-  if (/is not open/.test(text)) {
-    throw new CtlError(
-      text,
-      `Open the session first: playwright-cli -s=${req.session} open <url>, then state-load <file> (ctl login prints it). Or run ctl login.`,
-      1,
-    )
-  }
   if (r.code !== 0) {
+    if (/The browser '[^']*' is not open/.test(text)) {
+      throw new CtlError(
+        text,
+        `Open the session first: playwright-cli -s=${req.session} open <url>, then state-load <file> (ctl login prints it). Or run ctl login.`,
+        1,
+      )
+    }
     throw new CtlError(text, `The snippet failed in session ${req.session}. Check the page is loaded: playwright-cli -s=${req.session} snapshot`, 1)
   }
   let out: { error?: string; selector?: string; props?: string[] }

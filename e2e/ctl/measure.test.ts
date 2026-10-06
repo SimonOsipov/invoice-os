@@ -130,6 +130,7 @@ function fakePage(elements: FakeEl[], opts: { viewport?: { width: number; height
   const calls: string[] = []
   const selectors: string[] = []
   const styleTags: { content?: string }[] = []
+  const removedTags: { content?: string }[] = []
   const viewports: { width: number; height: number }[] = []
   const locatorFor = (list: FakeEl[]) => ({
     count: async () => (calls.push('count'), list.length),
@@ -146,11 +147,15 @@ function fakePage(elements: FakeEl[], opts: { viewport?: { width: number; height
       viewports.push(v)
       viewport = v
     },
-    addStyleTag: async (o: { content?: string }) => (calls.push('addStyleTag'), styleTags.push(o)),
+    addStyleTag: async (o: { content?: string }) => {
+      calls.push('addStyleTag')
+      styleTags.push(o)
+      return { evaluate: async (fn: (el: { remove: () => void }) => unknown) => fn({ remove: () => removedTags.push(o) }) }
+    },
     locator: (selector: string) => (selectors.push(selector), locatorFor(elements)),
     evaluate: async (fn: (arg?: unknown) => unknown, arg?: unknown) => fn(arg),
   }
-  return { page, calls, selectors, styleTags, viewports }
+  return { page, calls, selectors, styleTags, removedTags, viewports }
 }
 
 // The snippet is `async page => { ... }`.
@@ -176,6 +181,17 @@ describe('measureSnippet', () => {
     expect(styleTags[0]!.content).toContain('scroll-behavior:auto')
     expect(calls.indexOf('addStyleTag')).toBeGreaterThanOrEqual(0)
     expect(calls.indexOf('addStyleTag')).toBeLessThan(calls.indexOf('count'))
+  })
+
+  it('the scroll-behavior tag is removed after a read and after a zero-match', async () => {
+    const { doc } = fakeDoc()
+    const read = fakePage([fakeElement(doc, () => ({ x: 0, y: 0, width: 1, height: 1 }))])
+    await compile(req())(read.page)
+    expect(read.removedTags, 'the tag stayed on the live page after a read').toEqual(read.styleTags)
+
+    const none = fakePage([])
+    await compile(req())(none.page)
+    expect(none.removedTags, 'the tag stayed on the live page after a zero-match').toEqual(none.styleTags)
   })
 
   it('the viewport is set first, keeping the height', async () => {
@@ -429,6 +445,20 @@ describe('measure', () => {
     expect(err.hint).toContain('open')
     expect(err.hint).toContain('state-load')
     expect(err.hint).toContain('ctl login')
+  })
+
+  it('a selector that reads "is not open" is not a closed session', async () => {
+    const sel = '[title="is not open"]'
+    const zero = fakeExec({ code: 0, stdout: JSON.stringify({ error: 'zero-match', selector: sel }) })
+    const err = await rejection(measure(req({ selector: sel }), zero.exec))
+    expect(err.message).toContain('no element matches')
+
+    const ok = fakeExec({ code: 0, stdout: JSON.stringify({ selector: sel, viewport: { width: 1, height: 1 }, layoutWidth: 1, count: 0, matches: [] }) })
+    await expect(measure(req({ selector: sel }), ok.exec)).resolves.toMatchObject({ selector: sel })
+
+    const broken = fakeExec({ code: 1, stdout: `### Error\nTimeoutError: locator.count: ${sel} is not open` })
+    const failed = await rejection(measure(req({ selector: sel }), broken.exec))
+    expect(failed.hint, 'a failed snippet is not a closed session').not.toContain('state-load')
   })
 
   it("a snippet error carries playwright-cli's message", async () => {

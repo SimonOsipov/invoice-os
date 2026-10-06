@@ -71,6 +71,13 @@ func mailEnv(t *testing.T, name string) string {
 // startGateway serves the real register, resend, reset-request, confirm and reset pages, and verify handlers where the mailed links point, and returns its JSON log.
 func startGateway(t *testing.T, authBase string, minResponse time.Duration, sink gateway.ContactSink) (string, *bytes.Buffer) {
 	t.Helper()
+	mux, logs := gatewayMux(t, authBase, minResponse, sink)
+	return serveGateway(t, mux), logs
+}
+
+// gatewayMux builds startGateway's routes and the JSON log they write.
+func gatewayMux(t *testing.T, authBase string, minResponse time.Duration, sink gateway.ContactSink) (*http.ServeMux, *bytes.Buffer) {
+	t.Helper()
 	authURL, err := url.Parse(authBase)
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +112,12 @@ func startGateway(t *testing.T, authBase string, minResponse time.Duration, sink
 	}
 	mux.Handle("GET /emails/recovery.html", recoveryMail)
 	mux.Handle("GET /emails/mark.png", gateway.MailLogo())
+	return mux, logs
+}
 
+// serveGateway serves mux on the address the mailed links point at.
+func serveGateway(t *testing.T, mux *http.ServeMux) string {
+	t.Helper()
 	l, err := net.Listen("tcp", gatewayAddr)
 	if err != nil {
 		t.Fatalf("listen on %s (the mailed link's host): %v", gatewayAddr, err)
@@ -114,7 +126,7 @@ func startGateway(t *testing.T, authBase string, minResponse time.Duration, sink
 	srv.Listener = l
 	srv.Start()
 	t.Cleanup(srv.Close)
-	return srv.URL, logs
+	return srv.URL
 }
 
 // syncWriter serialises the handler goroutines' log writes into one buffer.

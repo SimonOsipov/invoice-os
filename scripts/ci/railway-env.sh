@@ -18,6 +18,7 @@
 #                            set-sentry-off <environment-id|--self-test>|
 #                            set-fork-reconciliation-url <environment-id>|
 #                            delete-environment <name>|list-environments|
+#                            discover-urls <environment-id>|
 #                            query <context>|wait-deployment <label> <deployment-id>|report-api-calls>
 #
 # `set-production-environment` is run by hand, once, never from a workflow: it
@@ -3533,6 +3534,62 @@ cmd_query() {
   printf '%s' "$GQL_RESPONSE"
 }
 
+# discover-urls <environment-id>: one request reads the 5 public services' domains.
+# Prints the five <key>=https://<domain> lines only once all five resolve. A failure names the
+# environment (and the services whose alias errored), never Railway's message.
+cmd_discover_urls() {
+  local env_id="${1:-}" i v missing="" decl="" fields="" who="" ids=() out="" sel wrapped count d ctx
+  local labels=(gateway app landing ops-console support-console)
+  local idvars=(RAILWAY_SVC_GATEWAY_ID RAILWAY_SVC_APP_ID RAILWAY_SVC_LANDING_ID RAILWAY_SVC_OPS_CONSOLE_ID RAILWAY_SVC_SUPPORT_CONSOLE_ID)
+  local keys=(gateway_url app_url landing_url ops_console_url support_console_url)
+  if [ -z "$env_id" ]; then
+    echo "::error::usage: railway-env.sh discover-urls <environment-id>" >&2
+    exit 2
+  fi
+  for v in "${idvars[@]}"; do
+    [ -n "${!v:-}" ] || missing="$missing $v"
+    ids+=("${!v:-}")
+  done
+  if [ -n "$missing" ]; then
+    echo "::error::Missing Railway service id(s):$missing — expected the workflow-level constants in dev-env.yml's env: block." >&2
+    exit 1
+  fi
+  ctx="discovering the public URLs of environment $env_id"
+  use_query_auth "$ctx"
+  for i in 0 1 2 3 4; do
+    decl="$decl, \$s$i: String!"
+    fields="$fields
+  s$i: domains(projectId: \$p, environmentId: \$e, serviceId: \$s$i) { customDomains { domain targetPort } serviceDomains { domain targetPort } }"
+  done
+  if ! graphql_try "$(gql_body "query discoverUrls(\$p: String!, \$e: String!$decl) {$fields
+}" "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" \
+      '{p: $p, e: $e} + ([$ARGS.positional | to_entries[] | {("s\(.key)"): .value}] | add)' --args "${ids[@]}")")" "$ctx"; then
+    if [ "$GQL_CURL_RC" = 0 ]; then
+      for i in $(gql_error_aliases); do
+        i="${i#s}"
+        [[ "$i" =~ ^[0-4]$ ]] && who="$who ${labels[$i]}"
+      done
+      echo "::error::Could not $ctx${who:+ ($who unreadable)}: Railway answered a GraphQL error." >&2
+    else
+      echo "::error::Could not $ctx: $GQL_LAST" >&2
+    fi
+    exit 1
+  fi
+  for i in 0 1 2 3 4; do
+    wrapped=$(printf '%s' "$GQL_RESPONSE" | jq -c --arg k "s$i" '{data: {domains: .data[$k]?}}') || wrapped=""
+    sel=$(select_domain "$wrapped") || exit 1
+    count=$(printf '%s' "$sel" | jq -r '.count')
+    if [ "$count" = "0" ]; then
+      echo "::error::No domain found for ${labels[$i]} (service ${ids[$i]}) in environment $env_id — neither a custom domain nor a Railway-generated one. Every public service must have at least one (docs/add-a-service.md step 6)." >&2
+      exit 1
+    fi
+    d=$(printf '%s' "$sel" | jq -r '.domain')
+    out="$out${keys[$i]}=https://$d
+"
+  done
+  printf '%s' "$out"
+}
+
 # wait-deployment <label> <deployment-id>: polls one deployment's status, every 10 s, 60 ticks.
 # The id comes from `railway up` output, so it is checked before any call and never echoed raw.
 cmd_wait_deployment() {
@@ -3626,11 +3683,12 @@ case "${1:-}" in
   set-fork-reconciliation-url) cmd_set_fork_reconciliation_url "${2:-}" ;;
   delete-environment)        cmd_delete_environment "${2:-}" ;;
   list-environments)         cmd_list_environments ;;
+  discover-urls)             cmd_discover_urls "${2:-}" ;;
   query)                     cmd_query "${2:-}" ;;
   wait-deployment)           shift; cmd_wait_deployment "$@" ;;
   report-api-calls)          cmd_report_api_calls ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-fork-gateway-token <environment-id>|set-production-gateway-token <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments|query <context>|wait-deployment <label> <deployment-id>|report-api-calls>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-fork-gateway-token <environment-id>|set-production-gateway-token <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments|discover-urls <environment-id>|query <context>|wait-deployment <label> <deployment-id>|report-api-calls>"
     exit 2
     ;;
 esac

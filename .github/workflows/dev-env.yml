@@ -452,47 +452,9 @@ jobs:
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
         run: |
           set -euo pipefail
-
-          fetch_domain() {
-            svc_id="$1"
-            svc_label="$2"
-            body=$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$ENV_ID" --arg s "$svc_id" \
-              '{query: "query($p:String!,$e:String!,$s:String!){domains(projectId:$p,environmentId:$e,serviceId:$s){customDomains{domain targetPort} serviceDomains{domain targetPort}}}", variables: {p: $p, e: $e, s: $s}}')
-
-            if ! r=$(printf '%s' "$body" | bash scripts/ci/railway-env.sh query "discovering the $svc_label domain"); then
-              return 1
-            fi
-
-            # select-domain owns the custom-first rule; guarded by its --self-test
-            # fixtures. errexit is SUSPENDED in this function (called in a `|| exit 1`
-            # list), so the refusal must be caught here or it emits `https://` hostless.
-            if ! sel=$(echo "$r" | bash scripts/ci/railway-env.sh select-domain); then
-              return 1
-            fi
-            count=$(echo "$sel" | jq -r '.count')
-            if [ "$count" = "0" ]; then
-              echo "::error::No domain found for $svc_label (service $svc_id) in environment $ENV_ID — neither a custom domain nor a Railway-generated one. Every public service must have at least one (docs/add-a-service.md step 6)." >&2
-              return 1
-            fi
-            d=$(echo "$sel" | jq -r '.domain')
-            echo "https://$d"
-          }
-
-          gateway_url=$(fetch_domain "$RAILWAY_SVC_GATEWAY_ID" gateway) || exit 1
-          app_url=$(fetch_domain "$RAILWAY_SVC_APP_ID" app) || exit 1
-          landing_url=$(fetch_domain "$RAILWAY_SVC_LANDING_ID" landing) || exit 1
-          ops_console_url=$(fetch_domain "$RAILWAY_SVC_OPS_CONSOLE_ID" ops-console) || exit 1
-          support_console_url=$(fetch_domain "$RAILWAY_SVC_SUPPORT_CONSOLE_ID" support-console) || exit 1
-
-          {
-            echo "gateway_url=$gateway_url"
-            echo "app_url=$app_url"
-            echo "landing_url=$landing_url"
-            echo "ops_console_url=$ops_console_url"
-            echo "support_console_url=$support_console_url"
-          } >> "$GITHUB_OUTPUT"
-
-          echo "gateway=$gateway_url app=$app_url landing=$landing_url ops-console=$ops_console_url support-console=$support_console_url"
+          out=$(bash scripts/ci/railway-env.sh discover-urls "$ENV_ID")
+          echo "$out" >> "$GITHUB_OUTPUT"
+          echo "$out" | tr '\n' ' '
 
       - name: Write the fork's auth site URL
         if: github.event_name == 'pull_request'

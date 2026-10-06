@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	"html/template"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -149,6 +150,40 @@ func TestRenderInvite_ButtonAndFallbackOpenTheAcceptPage(t *testing.T) {
 	}
 }
 
+func TestRenderInvite_TokenIsEscapedInBothLinks(t *testing.T) {
+	cases := []struct{ token, frag string }{
+		{"a+b", "a%2Bb"}, {"a/b", "a%2Fb"}, {"a=b", "a%3Db"}, {"a b", "a+b"}, {"a#b", "a%23b"}, {"a&b", "a%26b"},
+		{`a"b<c>`, "a%22b%3Cc%3E"}, {"a%b", "a%25b"}, {"abc-_XYZ.~", "abc-_XYZ.~"},
+	}
+	for _, c := range cases {
+		m := obiInvite
+		m.Token = c.token
+		_, out := renderInvite(t, m)
+		want := "https://www.ascomply.com/invite#token=" + c.frag
+		as := anchors(out)
+		if len(as) != 3 {
+			t.Fatalf("token %q: anchors = %+v, want 3", c.token, as)
+		}
+		if as[0].text != "Accept invite" || as[0].href != want {
+			t.Errorf("token %q: button = %+v, want href %s", c.token, as[0], want)
+		}
+		if as[1].href != want || as[1].text != want {
+			t.Errorf("token %q: fallback = %+v, want href and text %s", c.token, as[1], want)
+		}
+		u, err := url.Parse(as[0].href)
+		if err != nil {
+			t.Fatalf("token %q: button href does not parse: %v", c.token, err)
+		}
+		if u.RawQuery != "" || strings.Count(as[0].href, "#") != 1 {
+			t.Errorf("token %q: href %s holds a query or a second #", c.token, as[0].href)
+		}
+		q, err := url.ParseQuery(u.EscapedFragment())
+		if err != nil || q.Get("token") != c.token || len(q) != 1 {
+			t.Errorf("token %q: fragment decodes to %v, %v", c.token, q, err)
+		}
+	}
+}
+
 func TestRenderInvite_StatesSevenDays(t *testing.T) {
 	_, out := renderInvite(t, obiInvite)
 	got := text(out)
@@ -196,6 +231,49 @@ func TestRenderInvite_EscapesWorkspaceAndInviter(t *testing.T) {
 	if strings.Contains(out, "<script") {
 		t.Error("output holds a live <script> tag")
 	}
+
+	// Hostile address, quotes and markup in every field stay inert text.
+	h := InviteMail{
+		Workspace: `" onmouseover="x`, Inviter: `<i>"Ada"</i>`, Email: `"><b>x</b>@obi.test`, Role: "admin", Token: "t0k",
+	}
+	_, out = renderInvite(t, h)
+	for _, bad := range []string{"<b>", "<i>", `onmouseover="`} {
+		if strings.Contains(out, bad) {
+			t.Errorf("hostile input leaves %q live in the output", bad)
+		}
+	}
+	for label, want := range map[string]string{"Organisation": h.Workspace, "Invited by": h.Inviter, "Email": h.Email} {
+		_, inner := mustRow(t, out, label)
+		if strings.ContainsAny(inner, `<>"`) || html.UnescapeString(inner) != want {
+			t.Errorf("%s cell = %q, want the escaped text of %q", label, inner, want)
+		}
+	}
+	if got := inviteIntro(t, out); !strings.Contains(got, h.Inviter+" invited you to join "+h.Workspace+" on ASComply as Admin.") ||
+		!strings.Contains(got, h.Email) {
+		t.Errorf("intro = %q, want the hostile values as plain text", got)
+	}
+	as := anchors(out)
+	if len(as) != 3 {
+		t.Fatalf("anchors = %+v, want button, fallback and Privacy only", as)
+	}
+	const accept = "https://www.ascomply.com/invite#token=t0k"
+	if as[0].href != accept || as[1].href != accept || as[1].text != accept || as[2].href != "https://www.ascomply.com/privacy" {
+		t.Errorf("hostile input moved an anchor: %+v", as)
+	}
+	// Title and preheader are fixed copy; no input reaches them.
+	if got := regexp.MustCompile(`<title>(.*?)</title>`).FindStringSubmatch(out); got == nil || got[1] != InviteSubject {
+		t.Errorf("title = %q, want %q", got, InviteSubject)
+	}
+	pre := regexp.MustCompile(`mso-hide:all">(.*?)&#847;`).FindStringSubmatch(out)
+	if pre == nil || pre[1] != "Accept your invite to join your team's ASComply workspace." {
+		t.Errorf("preheader = %q, want the fixed copy", pre)
+	}
+	for _, tag := range []string{"table", "tr", "td", "div"} {
+		open, shut := len(regexp.MustCompile(`<`+tag+`[\s>]`).FindAllString(out, -1)), strings.Count(out, "</"+tag+">")
+		if open == 0 || open != shut {
+			t.Errorf("<%s> opens %d, closes %d under hostile input", tag, open, shut)
+		}
+	}
 }
 
 func TestRenderInvite_KeepsTheLayoutRules(t *testing.T) {
@@ -230,17 +308,19 @@ func TestRenderInvite_RoleLabels(t *testing.T) {
 			}
 		})
 	}
-	m := obiInvite
-	m.Role = "owner"
-	subject, out, err := RenderInvite(m)
-	if err == nil {
-		t.Error(`RenderInvite accepts the role "owner"`)
-	}
-	if out != "" {
-		t.Errorf("RenderInvite returned %d bytes of html with its error, want none", len(out))
-	}
-	if err != nil && subject != "" {
-		t.Errorf("RenderInvite returned subject %q with its error, want none", subject)
+	for _, role := range []string{"owner", "Admin", " admin", "admin ", "ADMIN", "Reviewer", ""} {
+		m := obiInvite
+		m.Role = role
+		subject, out, err := RenderInvite(m)
+		if err == nil {
+			t.Errorf("RenderInvite accepts the role %q", role)
+		}
+		if out != "" {
+			t.Errorf("role %q: RenderInvite returned %d bytes of html with its error, want none", role, len(out))
+		}
+		if err != nil && subject != "" {
+			t.Errorf("role %q: RenderInvite returned subject %q with its error, want none", role, subject)
+		}
 	}
 }
 

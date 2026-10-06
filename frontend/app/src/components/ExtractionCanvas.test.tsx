@@ -7,7 +7,6 @@
 // before this commit; 22 mutants of that build were each caught by the row that names them.
 //
 // MEASURED jsdom 27.4.0 serialization — every one of these bit a draft of this file:
-//   `background: 'oklch(72% .15 65 / .32)'`  reads back `oklch(0.72 0.15 65 / 0.32)`
 //   `margin: '0 auto 18px'`                  reads back `0px auto 18px`
 //   `padding: 0`                             reads back `0px`, but `minHeight: 0` reads `0`
 //   `flex: 1` reads `1 1 0%`; `flex: 'none'` reads `0 0 auto`
@@ -59,7 +58,7 @@ const PAGE_FAILED = 'This page could not be loaded.'
 const ERROR_STATE_HEADING = 'Something went wrong'
 
 // SourceDocumentPages.test.tsx:31's list, verbatim: both classes force `border-radius`
-// with `!important`, from two different rules (app-layer.css:193-197 and :275).
+// with `!important`, from two different rules.
 const RADIUS_FORCING = ['pf-btn', 'pf-chip', 'v2-btn', 'ops-btn', 'dev-btn', 'ops-chip', 'dev-chip']
 
 const LETTER: ExtractionPage = { page: 1, width_px: 1275, height_px: 1651 } // US-Letter @150
@@ -819,6 +818,33 @@ describe('the toolbar', () => {
     expect(toolbar.style.borderBottom).toBe('1px solid var(--line-1)')
   })
 
+  it('the zoom control is the sage segmented group', () => {
+    render(canvas())
+
+    const segments = ['50', '100', '150'].map((z) => screen.getByTestId(`extraction-zoom-${z}`))
+    expect(segments, 'no zoom segment rendered').toHaveLength(3)
+    const group = segments[0].parentElement as HTMLElement
+    expect(group.style.background).toBe('var(--sage-panel)')
+    expect(group.style.border).toBe('1px solid var(--sage-card-border)')
+    expect(group.style.borderRadius).toBe('var(--radius-md)')
+
+    for (const seg of segments) {
+      expect(seg.style.borderRadius, `${seg.dataset.testid} radius`).toBe('var(--radius-sm)')
+      expect(seg.style.fontWeight, `${seg.dataset.testid} weight`).toBe('600')
+      expect(seg.style.transition, `${seg.dataset.testid} transition`).toBe('background 120ms, color 120ms')
+      expect(['0px', 'none'], `${seg.dataset.testid} border`).toContain(seg.style.border)
+    }
+    const [idle50, pressed100, idle150] = segments
+    expect(pressed100.getAttribute('aria-pressed'), 'floor: 100% is the pressed segment').toBe('true')
+    expect(pressed100.style.background).toBe('var(--primary)')
+    expect(pressed100.style.color).toBe('var(--primary-foreground)')
+    for (const idle of [idle50, idle150]) {
+      expect(idle.getAttribute('aria-pressed')).toBe('false')
+      expect(idle.style.background).toBe('transparent')
+      expect(idle.style.color).toBe('var(--fg-2)')
+    }
+  })
+
   it("renders the artboard's four elements", () => {
     const doc = mkDocument()
     render(canvas({ doc }))
@@ -831,7 +857,7 @@ describe('the toolbar', () => {
     const tile = within(toolbar).getByText(formatLabel(doc.filename, doc.content_type))
     expect(tile.style.width).toBe('32px')
     expect(tile.style.height).toBe('32px')
-    expect(tile.style.borderRadius).toBe('8px')
+    expect(tile.style.borderRadius).toBe('var(--radius-md)')
     expect(tile.style.display).toBe('grid')
     expect(tile.style.placeItems).toBe('center')
     expect(tile.style.fontFamily).toBe('var(--font-mono)')
@@ -897,6 +923,49 @@ describe('the toolbar', () => {
     // Singular, from the shipped helper's own branch.
     expect(screen.getByTestId('extraction-doc-meta').textContent).toBe(docMetaLine(doc, 1))
     expect(screen.getByTestId('extraction-doc-meta').textContent).toContain('1 PAGE ·')
+  })
+})
+
+// A source scan of the token CSS: jsdom applies no stylesheet, so an undefined `var(--x)`
+// paints nothing in the browser while every style assertion above stays green.
+describe('every token the canvas paints is defined in the v2 token CSS', () => {
+  const V2 = path.join(process.cwd(), '../../packages/design-tokens/v2')
+  const CSS = ['tokens/colors.css', 'tokens/spacing.css', 'tokens/typography.css', 'app-layer.css']
+    .map((f) => readFileSync(path.join(V2, f), 'utf8').replace(/\/\*[\s\S]*?\*\//g, ''))
+    .join('\n')
+
+  it('names no var() the app does not load', () => {
+    const regionless = [mkField({ name: 'buyer_tin', value: null, region: null })]
+    const names = new Set<string>()
+    const collect = (root: HTMLElement) => {
+      for (const el of root.querySelectorAll('[style]')) {
+        for (const m of (el.getAttribute('style') ?? '').matchAll(/var\((--[a-z0-9-]+)/g)) names.add(m[1])
+      }
+    }
+
+    const armedUi = render(canvas({ selected: 'invoice_date', armed: 'buyer_tin' }))
+    const s = surface(2)
+    measureRect(s, SURFACE_RECT)
+    fireEvent.mouseDown(s, DRAG_FROM)
+    fireEvent.mouseMove(s, DRAG_TO)
+    expect(highlights(), 'no highlight rendered').toHaveLength(1)
+    expect(liveBoxes(), 'no live box rendered').toHaveLength(1)
+    collect(armedUi.container)
+    armedUi.unmount()
+
+    const noRegion = render(canvas({ fields: regionless, selected: 'buyer_tin' }))
+    expect(screen.getByTestId('extraction-no-region')).toBeTruthy()
+    collect(noRegion.container)
+    noRegion.unmount()
+
+    const noPages = render(canvas({ pages: [] }))
+    expect(screen.getByText(NO_PAGES)).toBeTruthy()
+    collect(noPages.container)
+
+    for (const floor of ['--accent-20', '--sage-panel', '--sage-card-border', '--primary-foreground', '--radius-md', '--radius-sm']) {
+      expect([...names], `the scan never saw ${floor}`).toContain(floor)
+    }
+    for (const name of names) expect(CSS, `${name} is not defined by the v2 tokens the app loads`).toContain(`${name}:`)
   })
 })
 

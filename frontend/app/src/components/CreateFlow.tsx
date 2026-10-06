@@ -78,10 +78,9 @@ export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
             return (
               <div key={n} style={{ display: 'flex', alignItems: 'center' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ width: 22, height: 22, borderRadius: 99, display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600, background: a ? 'var(--action)' : done ? 'var(--action-tint)' : 'var(--bg-2)', color: a ? 'var(--text-on-dark)' : done ? 'var(--action)' : 'var(--fg-3)', border: `1px solid ${a || done ? 'var(--action)' : 'var(--line-2)'}` }}>{n}</span>
-                  <span style={{ fontSize: 13, fontWeight: 500, color: a ? 'var(--fg-1)' : 'var(--fg-3)' }}>{label}</span>
+                  <span style={{ width: 22, height: 22, borderRadius: '50%', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600, background: a ? 'var(--action)' : done ? 'var(--action-tint)' : 'var(--bg-2)', color: a ? 'var(--primary-foreground)' : done ? 'var(--action)' : 'var(--fg-3)', border: `1px solid ${a || done ? 'var(--action)' : 'var(--line-2)'}` }}>{n}</span>
+                  <span style={{ fontSize: 13, fontWeight: 500, color: a ? 'var(--fg-1)' : done ? 'var(--fg-2)' : 'var(--fg-3)' }}>{label}</span>
                 </div>
-                {/* [connector-omitted-not-transparent]: no trailing separator; prototype's sepBg is dynamic and its source is unavailable */}
                 {idx < steps.length - 1 && (
                   <span style={{ width: 36, height: 1, background: 'var(--line-2)', margin: '0 14px' }} />
                 )}
@@ -167,8 +166,7 @@ function DocumentFailureRow({
         {documentId !== undefined && (
           <>
             {/* Disabled-with-reason, never hidden — ReviewAlreadyImportedTab.tsx:77-94's
-                four layers. The inline spread is disabled-only: on an enabled button it
-                would kill the legitimate :hover affordance. */}
+                four layers. The inline spread is disabled-only. */}
             <button
               onClick={blocked ? undefined : () => ctx.enterByHand(documentId)}
               disabled={blocked}
@@ -180,7 +178,7 @@ function DocumentFailureRow({
                 padding: '0 12px',
                 fontSize: 12.5,
                 flex: 'none',
-                ...(blocked ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                ...(blocked ? { background: 'transparent', opacity: 0.45, cursor: 'not-allowed' } : null),
               }}
             >
               Enter it by hand

@@ -120,7 +120,11 @@ const SEARCH_DEBOUNCE_MS = 300
 // it visible, matching the Pager's own `btn` idiom 400 lines below (deliberately NOT
 // hoisted out of it — that component holds a second, unrelated height).
 function btnStyle(enabled: boolean) {
-  return { height: 34, padding: '0 14px', fontSize: 12.5, opacity: enabled ? 1 : 0.45, cursor: enabled ? 'pointer' : 'not-allowed' }
+  return { height: 32, padding: '0 12px', fontSize: 12.5, opacity: enabled ? 1 : 0.45, cursor: enabled ? 'pointer' : 'not-allowed' }
+}
+
+function submitAllStyle(enabled: boolean) {
+  return { ...btnStyle(enabled), height: 36, padding: '0 14px', fontSize: 13 }
 }
 
 export function ReviewInvoicesTab({
@@ -373,13 +377,12 @@ export function ReviewInvoicesTab({
                 gap: 7,
                 height: 30,
                 padding: '0 12px',
-                borderRadius: 'var(--radius-md)',
                 fontFamily: 'var(--font-sans)',
                 fontSize: 12.5,
                 fontWeight: 500,
                 border: `1px solid ${p.active ? 'var(--action)' : 'var(--line-2)'}`,
                 background: p.active ? 'var(--action)' : 'var(--bg-2)',
-                color: p.active ? 'var(--text-on-dark)' : 'var(--fg-2)',
+                color: p.active ? 'var(--primary-foreground)' : 'var(--fg-2)',
               }}
             >
               {p.label}
@@ -402,7 +405,7 @@ export function ReviewInvoicesTab({
               padding: '0 12px',
               marginLeft: 'auto',
               border: '1px solid var(--line-2)',
-              borderRadius: 'var(--radius-input)',
+              borderRadius: 'var(--radius-btn)',
               background: 'var(--bg-2)',
               width: 240,
             }}
@@ -492,12 +495,11 @@ export function ReviewInvoicesTab({
                   gap: 7,
                   height: 26,
                   padding: '0 10px',
-                  borderRadius: 'var(--radius-md)',
                   fontSize: 11,
                   fontWeight: 500,
                   border: `1px solid ${r.active ? 'var(--action)' : 'var(--line-2)'}`,
                   background: r.active ? 'var(--action)' : 'var(--bg-3)',
-                  color: r.active ? 'var(--text-on-dark)' : 'var(--fg-2)',
+                  color: r.active ? 'var(--primary-foreground)' : 'var(--fg-2)',
                 }}
               >
                 {r.ruleKey}
@@ -551,11 +553,11 @@ export function ReviewInvoicesTab({
         </div>
       )}
 
-      {/* §7.3's bulk bar. Accent-tinted per AC-1, using the ENV_BANNER.live token pair. */}
+      {/* §7.3's bulk bar: `--action-tint` fill, `--line-2` border and divider. */}
       {bar.visible && (
         <div
           data-testid="review-bulk-bar"
-          style={{ background: 'var(--action-tint)', border: '1px solid var(--teal-200)', borderRadius: 'var(--radius-md)', padding: '11px 14px', display: 'flex', flexDirection: 'column', gap: 9 }}
+          style={{ background: 'var(--action-tint)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', padding: '11px 14px', display: 'flex', flexDirection: 'column', gap: 9 }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-1)' }}>{bar.countLabel}</span>
@@ -623,7 +625,7 @@ export function ReviewInvoicesTab({
           {/* The second stage. Inside the bar, beside the count it qualifies — not a
               modal (file header, point 5c). */}
           {phase !== 'idle' && (
-            <div style={{ borderTop: '1px solid var(--teal-200)', paddingTop: 9 }}>
+            <div style={{ borderTop: '1px solid var(--line-2)', paddingTop: 9 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)' }}>{bar.confirmPrompt}</div>
               <p style={{ fontSize: 11.5, color: 'var(--fg-2)', margin: '4px 0 0', lineHeight: 1.55 }}>{bar.confirmDetail}</p>
             </div>
@@ -666,6 +668,7 @@ export function ReviewInvoicesTab({
                 ref={(el) => { if (el) el.indeterminate = allState === 'some' }}
                 checked={allState === 'all'}
                 onChange={toggleAll}
+                style={{ width: 15, height: 15, accentColor: 'var(--action)', margin: 0 }}
               />
               <span className="label">Invoice #</span>
               <span className="label">Buyer</span>
@@ -736,7 +739,7 @@ export function ReviewInvoicesTab({
               onClick={submitAll}
               disabled={!bar.canSubmitAll}
               className="v2-btn v2-btn-ghost pf-btn"
-              style={btnStyle(bar.canSubmitAll)}
+              style={submitAllStyle(bar.canSubmitAll)}
             >
               {bar.submitAllLabel}
             </button>

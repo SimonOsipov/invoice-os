@@ -2,7 +2,7 @@
 // full height), its header, the canvas/rail body grid, and the state dispatch.
 //
 // Rendered inline by LiveInvoiceDetail, never portalled to document.body: `--bg-*` /
-// `--fg-*` / `--status-*` are declared on `.asc-app` (app-layer.css:25-27), so markup
+// `--fg-*` / `--status-*` are declared on `.asc-app` (v2/app-layer.css), so markup
 // outside that tree resolves none of them.
 //
 // The shell owns all three load channels because `sourceDocumentState` needs all three
@@ -175,7 +175,7 @@ export function SourceDocumentModal({
   return (
     <div
       onClick={onClose}
-      style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'oklch(20% .02 210 / 0.42)', backdropFilter: 'blur(2px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40, animation: 'popIn 140ms ease-out' }}
+      style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'color-mix(in srgb, var(--surface) 55%, transparent)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 26, animation: 'popIn 140ms ease-out' }}
     >
       <div
         onClick={(e) => e.stopPropagation()}
@@ -183,24 +183,24 @@ export function SourceDocumentModal({
         aria-modal="true"
         aria-label="Source document"
         data-testid="source-document-modal"
-        style={{ width: '100%', maxWidth: 1340, height: '100%', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', boxShadow: '0 24px 60px -20px oklch(20% .02 210 / 0.4)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+        style={{ width: '100%', maxWidth: 1340, height: '100%', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-card)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
       >
-        <div style={{ flex: 'none', padding: '14px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', gap: 14 }}>
-          <span style={{ flex: 'none', width: 40, height: 40, borderRadius: 'var(--radius-sm)', background: tone.bg, color: tone.fg, display: 'grid', placeItems: 'center' }}>
+        <div style={{ flex: 'none', padding: '14px 18px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', gap: 16 }}>
+          <span style={{ flex: 'none', width: 40, height: 40, borderRadius: 'var(--radius-md)', background: tone.bg, color: tone.fg, display: 'grid', placeItems: 'center' }}>
             {docGlyph}
           </span>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-              <span style={{ fontSize: 14.5, fontWeight: 600, color: 'var(--fg-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em', color: 'var(--fg-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {record ? (record.filename ?? 'Filename not recorded') : 'Source document'}
               </span>
               {record && (
-                <span className="mono" style={{ flex: 'none', whiteSpace: 'nowrap', fontSize: 9.5, fontWeight: 600, letterSpacing: '0.06em', borderRadius: 999, padding: '2px 8px', background: 'var(--action-tint)', color: 'var(--action)' }}>
+                <span className="mono" style={{ flex: 'none', whiteSpace: 'nowrap', fontSize: 9, fontWeight: 700, letterSpacing: '0.08em', borderRadius: 'var(--radius-sm)', padding: '3px 9px', background: 'var(--action-tint)', color: 'var(--action)' }}>
                   IMMUTABLE RECORD
                 </span>
               )}
             </div>
-            <div className="mono" data-testid="source-document-meta" style={{ marginTop: 3, fontSize: 10.5, letterSpacing: '0.05em', color: 'var(--fg-3)' }}>
+            <div className="mono" data-testid="source-document-meta" style={{ marginTop: 3, fontSize: 10, letterSpacing: '0.05em', color: 'var(--fg-3)' }}>
               {record ? metaParts.join(' · ') : 'NO FILE'}
             </div>
           </div>
@@ -212,7 +212,7 @@ export function SourceDocumentModal({
             className="pf-btn"
             aria-label="Close"
             data-testid="source-modal-close"
-            style={{ flex: 'none', width: 34, height: 34, border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}
+            style={{ flex: 'none', width: 34, height: 34, borderRadius: 'var(--radius-btn)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}
           >
             {closeGlyph}
           </button>

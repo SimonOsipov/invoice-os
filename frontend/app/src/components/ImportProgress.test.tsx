@@ -459,3 +459,54 @@ describe('EXTR-15-09 SW-9 (AC-8): the footer does not tell a document run the se
     expect(count('the server reads, extracts and validates each document in one request')).toBe(1)
   })
 })
+
+describe('ImportProgress — RESKIN2-04-03 D-2 / D-12: frame 02 card', () => {
+  afterEach(() => cleanup())
+
+  function bar(row: Element): HTMLElement | undefined {
+    return Array.from(row.querySelectorAll<HTMLElement>('span')).find((s) => s.style.width === '28px' && s.style.height === '6px')
+  }
+
+  function renderOne(kind: 'reading' | 'retrying') {
+    const run: ImportRun = { files: [runFile('f1', 'a.pdf')], cursor: 0, status: 'running' }
+    return render(<ImportProgress ctx={progressCtx('document', run, { f1: { kind } })} />)
+  }
+
+  it("the in-flight bar is frame 02's striped bar at frame 02's speed", () => {
+    const { container } = renderOne('reading')
+    const r = rows(container)
+    expect(r, 'the in-flight row must render').toHaveLength(1)
+    const b = bar(r[0])
+    expect(b, 'the 28x6 bar must render').toBeDefined()
+    expect(b!.style.borderRadius).toBe('3px')
+    expect(b!.getAttribute('style')).toContain('repeating-linear-gradient(115deg, var(--action) 0 6px, var(--action-tint) 6px 13px)')
+    expect(b!.style.animation).toBe('shimmer 2.3s linear infinite')
+  })
+
+  it('the progress card title is 16px', () => {
+    const run: ImportRun = {
+      files: [runFile('f1', 'a.pdf'), runFile('f2', 'b.pdf'), runFile('f3', 'c.pdf')],
+      cursor: 0,
+      status: 'running',
+    }
+    const stages: Record<string, DocumentRowState> = { f1: { kind: 'reading' }, f2: { kind: 'reading' }, f3: { kind: 'reading' } }
+    const { container } = render(<ImportProgress ctx={progressCtx('document', run, stages)} />)
+
+    expect(rows(container), 'all three rows must render').toHaveLength(3)
+    const title = container.querySelector<HTMLElement>('.card-title')
+    expect(title, 'the card title did not render').not.toBeNull()
+    expect(title!.textContent).toBe('Importing 3 files')
+    expect(title!.style.fontSize).toBe('16px')
+  })
+
+  it('RETRYING keeps a teal bar beside its amber word (pin, green today)', () => {
+    const { container } = renderOne('retrying')
+    const r = rows(container)
+    expect(r).toHaveLength(1)
+    const b = bar(r[0])
+    expect(b, 'the retrying row keeps its bar').toBeDefined()
+    expect(b!.getAttribute('style')).toContain('var(--action)')
+    expect(statusText(r[0])).toBe('RETRYING')
+    expect(statusColor(r[0])).toBe('var(--status-amber-text)')
+  })
+})

@@ -726,7 +726,7 @@ test('EXTR12-E2E-07 (AC-4, W-6): the fields pane keeps its floor and its two col
   // -- W-6: the label strip AT the pane's floor ---------------------------------------------
   //
   // NO LOCAL ORACLE. The overflow is a text-measurement fact, so it needs the deployed build's
-  // real IBM Plex Mono and Inter; this row first executes on the deploy gate. The declaration
+  // real IBM Plex Mono and Manrope; this row first executes on the deploy gate. The declaration
   // half is ExtractionFields.test.tsx, "wraps the label strip".
   //
   // Measured before the fix, in Chromium at the floor's own geometry (470 - 40 body padding -

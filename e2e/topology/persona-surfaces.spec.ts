@@ -502,9 +502,8 @@ async function cornerRadii(loc: Locator): Promise<{ tl: string; tr: string; bl: 
 // ---------------------------------------------------------------------------------------
 // Test -- the company card: firm switcher vs in-house chip (Core AC A-1, A-3, A-4; A-2's open border)
 // ---------------------------------------------------------------------------------------
-// Sign out is the control: it declares --radius-sm inline and still renders a pill, so the
-// global .pf-btn rule is intact while the switcher renders the chip's corner.
-test("company card: the firm switcher renders the in-house chip's corner, and the button rule still makes pills", async ({ page }, testInfo) => {
+// New invoice is the control: the v2 button rule is intact while the switcher renders the chip's corner.
+test("company card: the firm switcher renders the in-house chip's corner and the button corner; Sign out is not a pill", async ({ page }, testInfo) => {
   const errors = collectErrors(page)
 
   await signInAs(page, 'firm')
@@ -530,10 +529,17 @@ test("company card: the firm switcher renders the in-house chip's corner, and th
   expect(signOutBox, 'the Sign out button never rendered').toBeTruthy()
   const signOutRadii = await cornerRadii(signOut)
   const signOutRadiusPx = parseFloat(signOutRadii.tl)
+  expect(signOutRadiusPx, 'Sign out radius did not parse to a finite px value').toBeGreaterThanOrEqual(0)
   expect(
     signOutRadiusPx,
-    `Sign out's corner (${signOutRadiusPx}px) must be at least half its height (${signOutBox!.height}px) -- the global .pf-btn rule still renders a pill over its own inline --radius-sm`,
-  ).toBeGreaterThanOrEqual(signOutBox!.height / 2)
+    `Sign out's corner (${signOutRadiusPx}px) must be less than half its height (${signOutBox!.height}px) -- it must not render as a pill`,
+  ).toBeLessThan(signOutBox!.height / 2)
+
+  const newInvoice = page.locator('header').getByRole('button', { name: 'New invoice' })
+  await expect(newInvoice, 'the header New invoice button never rendered').toBeVisible()
+  const newInvoiceRadii = await cornerRadii(newInvoice)
+  expect(parseFloat(newInvoiceRadii.tl), 'New invoice radius is a positive px value').toBeGreaterThan(0)
+  expect(newInvoiceRadii, "New invoice's four corners must equal the switcher's (both resolve --radius-btn)").toEqual(switcherRadii)
 
   const closedBorder = await switcher.evaluate((el) => getComputedStyle(el).borderTopColor)
   await switcher.click()

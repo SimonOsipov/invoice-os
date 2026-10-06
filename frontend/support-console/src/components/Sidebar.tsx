@@ -17,7 +17,7 @@ const navBtnStyle = (active: boolean): CSSProperties => ({
   width: '100%',
   border: 0,
   cursor: 'pointer',
-  borderRadius: 'var(--radius-sm)',
+  borderRadius: 'var(--radius-md)',
   padding: '9px 10px',
   textAlign: 'left',
   fontFamily: 'var(--font-sans)',
@@ -31,12 +31,12 @@ const navBtnStyle = (active: boolean): CSSProperties => ({
 export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
   return (
     <aside
-      className="ops-sidebar"
-      style={{ width: 244, flex: 'none', background: 'var(--bg-2)', borderRight: '1px solid var(--line-1)', display: 'flex', flexDirection: 'column' }}
+      className="ops-sidebar asc-dark"
+      style={{ width: 244, flex: 'none', background: 'var(--surface)', borderRight: '1px solid var(--surface-panel-border)', display: 'flex', flexDirection: 'column' }}
     >
       <div style={{ padding: '16px 16px 14px', borderBottom: '1px solid var(--line-1)' }}>
         <a href="#" style={{ display: 'flex', alignItems: 'center', gap: 9, color: 'var(--fg-1)', marginBottom: 14 }}>
-          <BrandMark size={20} />
+          <BrandMark />
           <span className="ops-nav-label" style={{ fontWeight: 600, fontSize: 15, letterSpacing: '-0.02em' }}>
             ASComply
           </span>
@@ -59,10 +59,10 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
             in sandbox and RED in live — the sidebar does not need to shout it too. */}
         <div
           className="ops-hide-narrow"
-          style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', padding: '8px 10px' }}
+          style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', padding: '8px 10px' }}
         >
           <span
-            style={{ flex: 'none', width: 28, height: 28, borderRadius: 'var(--radius-sm)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center' }}
+            style={{ flex: 'none', width: 28, height: 28, borderRadius: 'var(--radius-md)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center' }}
           >
             {GLOBE_ICON}
           </span>
@@ -76,7 +76,7 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
       </div>
 
       <nav style={{ flex: 1, padding: '12px 10px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <div className="label ops-nav-label" style={{ padding: '6px 8px 8px' }}>
+        <div className="label ops-nav-label" style={{ padding: '6px 8px 8px', color: 'var(--eyebrow-on-dark)' }}>
           Operations
         </div>
         {NAV_ITEMS.map((n) => {
@@ -87,7 +87,7 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
           const badgeRed = n.key === 'submissions'
           return (
             <button key={n.key} type="button" onClick={() => onNavigate(n.key)} className="ops-nav" style={navBtnStyle(active)}>
-              <span style={{ position: 'absolute', left: 0, top: 7, bottom: 7, width: 2, borderRadius: 'var(--radius-xs)', background: active ? 'var(--action)' : 'transparent' }} />
+              <span style={{ position: 'absolute', left: 0, top: 7, bottom: 7, width: 2, borderRadius: 2, background: active ? 'var(--action)' : 'transparent' }} />
               <span style={{ color: active ? 'var(--action)' : 'var(--fg-3)', display: 'inline-flex' }}>{n.glyph}</span>
               <span className="ops-nav-label" style={{ flex: 1 }}>
                 {n.label}
@@ -100,7 +100,7 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
                     fontWeight: 700,
                     background: badgeRed ? 'var(--status-red-bg)' : 'var(--action-tint)',
                     color: badgeRed ? 'var(--status-red-text)' : 'var(--action)',
-                    borderRadius: 99,
+                    borderRadius: 'var(--radius-sm)',
                     padding: '1px 6px',
                   }}
                 >
@@ -114,15 +114,15 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
             holds a request quota; here it is the shared Access Point rate budget, which is
             a cross-tenant fact by construction. */}
         <div className="ops-hide-narrow" style={{ marginTop: 'auto', padding: '12px 8px 4px' }}>
-          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-input)', padding: '11px 12px', background: 'var(--bg-1)' }}>
+          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '11px 12px', background: 'var(--bg-1)' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-              <span className="label">APP backpressure</span>
+              <span className="label" style={{ color: 'var(--eyebrow-on-dark)' }}>APP backpressure</span>
               <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: 'var(--status-amber-text)' }}>
                 82%
               </span>
             </div>
-            <div style={{ height: 5, background: 'var(--bg-3)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
-              <div style={{ width: '82%', height: '100%', background: 'var(--status-amber-text)', borderRadius: 'var(--radius-sm)' }} />
+            <div style={{ height: 5, background: 'var(--bg-3)', borderRadius: 2, overflow: 'hidden' }}>
+              <div style={{ width: '82%', height: '100%', background: 'var(--status-amber-text)', borderRadius: 2 }} />
             </div>
             <div className="mono" style={{ fontSize: 9.5, color: 'var(--fg-3)', marginTop: 7, letterSpacing: '0.03em' }}>
               82 / 100 req·s · backoff on
@@ -133,7 +133,7 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
 
       <div style={{ padding: 12, borderTop: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', gap: 10 }}>
         <span
-          style={{ flex: 'none', width: 30, height: 30, borderRadius: 99, background: 'var(--slate-800)', color: 'var(--text-on-dark)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 600 }}
+          style={{ flex: 'none', width: 30, height: 30, borderRadius: '50%', background: 'var(--slate-800)', color: 'var(--text-on-dark)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 600 }}
         >
           EI
         </span>
@@ -150,7 +150,7 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
           className="ops-btn ops-hide-narrow"
           aria-label="Sign out"
           title="Sign out"
-          style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, padding: 0, border: 0, borderRadius: 'var(--radius-sm)', background: 'transparent', color: 'var(--fg-3)', cursor: 'pointer' }}
+          style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, padding: 0, border: 0, borderRadius: 'var(--radius-btn)', background: 'transparent', color: 'var(--fg-3)', cursor: 'pointer' }}
         >
           {SIGN_OUT_ICON}
         </button>

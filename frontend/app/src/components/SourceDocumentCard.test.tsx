@@ -243,3 +243,79 @@ describe('SourceDocumentCard on the invoice detail', () => {
     expect(range.textContent).toBe('The rows of this file that became this invoice were not recorded.')
   })
 })
+
+describe('SourceDocumentCard takes the v2 look (RESKIN2-03-02)', () => {
+  it('rail card buttons centre their labels', async () => {
+    mockFetch(withDocument())
+    const { unmount } = render(<InvoiceDetail ctx={detailCtx()} />)
+    const view = await screen.findByTestId('view-source-document')
+    const check = screen.getByTestId('open-extraction-review')
+    for (const [name, btn] of [['view-source-document', view], ['open-extraction-review', check]] as const) {
+      expect.soft(btn.style.justifyContent, `${name} centres its label`).toBe('center')
+      expect.soft(btn.style.marginTop, `${name} has no own top margin`).toBe('')
+    }
+    const column = view.parentElement as HTMLElement
+    expect(column, 'the two buttons share one column').toBe(check.parentElement)
+    expect.soft(column.style.display).toBe('flex')
+    expect.soft(column.style.flexDirection).toBe('column')
+    expect.soft(column.style.gap).toBe('8px')
+    unmount()
+
+    mockFetch(withoutDocument())
+    render(<InvoiceDetail ctx={detailCtx()} />)
+    const why = await screen.findByTestId('why-no-source-document')
+    expect.soft(why.style.justifyContent, 'why-no-source-document centres its label').toBe('center')
+  })
+
+  it('the record card body follows table B', async () => {
+    mockFetch(withDocument())
+    render(<InvoiceDetail ctx={detailCtx()} />)
+
+    const body = await screen.findByTestId('source-document-card')
+    expect.soft(body.style.padding).toBe('15px 18px 16px')
+    const row = body.firstElementChild as HTMLElement
+    expect.soft((row.firstElementChild as HTMLElement).style.borderRadius, 'tile corner').toBe('var(--radius-md)')
+    expect.soft(row.style.marginBottom, 'identity row bottom margin').toBe('13px')
+    const name = screen.getByText('june-sales.xlsx')
+    expect.soft(name.style.fontSize, 'name size').toBe('13px')
+    expect.soft(name.style.fontWeight, 'name weight').toBe('600')
+    expect.soft(name.style.color, 'name inherits its colour').toBe('')
+    expect.soft(name.style.lineHeight, 'name line height').toBe('1.35')
+    const meta = screen.getByTestId('source-document-card-meta')
+    expect.soft(meta.style.fontSize, 'meta size').toBe('9.5px')
+    expect.soft(meta.style.marginTop, 'meta top margin').toBe('3px')
+    expect.soft(meta.style.marginBottom, 'meta has no bottom margin').toBe('')
+    const rows = screen.getByTestId('source-document-range')
+    expect.soft(rows.style.fontSize, 'rows text size').toBe('12px')
+    expect.soft(rows.style.lineHeight, 'rows text line height').toBe('1.5')
+    expect.soft(rows.style.marginTop, 'rows text top margin').toBe('0px')
+    expect.soft(rows.style.marginBottom, 'rows text bottom margin').toBe('13px')
+    const sha = screen.getByText(/^SHA-256 /)
+    expect.soft(sha.style.marginTop, 'SHA marginTop').toBe('12px')
+    expect.soft(sha.style.paddingTop, 'SHA paddingTop').toBe('11px')
+    expect.soft(sha.style.letterSpacing, 'SHA has no tracking').toBe('')
+    expect.soft(sha.style.whiteSpace, 'SHA stays on one line').toBe('nowrap')
+    expect.soft(sha.style.textOverflow, 'SHA ends in an ellipsis').toBe('ellipsis')
+  })
+
+  it('the no-source box follows table B', async () => {
+    mockFetch(withoutDocument())
+    render(<InvoiceDetail ctx={detailCtx()} />)
+
+    const body = await screen.findByTestId('source-document-card')
+    expect.soft(body.style.padding).toBe('15px 18px 16px')
+    const box = screen.getByText('No source document').parentElement as HTMLElement
+    expect.soft(box.style.padding, 'box padding').toBe('13px 14px')
+    expect.soft(box.style.marginBottom, 'box marginBottom').toBe('12px')
+    const title = screen.getByText('No source document')
+    expect.soft(title.style.fontSize, 'title size').toBe('12.5px')
+    expect.soft(title.style.fontWeight, 'title weight').toBe('600')
+    expect.soft(title.style.color, 'title inherits its colour').toBe('')
+    expect.soft(title.style.marginBottom, 'title marginBottom').toBe('4px')
+    const text = screen.getByText(/There is no uploaded file behind it/)
+    expect.soft(text.style.fontSize, 'body size').toBe('12px')
+    expect.soft(text.style.color, 'body colour').toBe('var(--fg-2)')
+    expect.soft(text.style.lineHeight, 'body line height').toBe('1.5')
+  })
+})
+

@@ -23,7 +23,7 @@ export function Pager({
   // PREVIOUS response during that window, so a second click would recompute the same
   // offset off stale numbers.
   const btn = (enabled: boolean) => ({
-    height: 32,
+    height: 30,
     padding: '0 12px',
     fontSize: 12.5,
     opacity: enabled ? 1 : 0.4,
@@ -39,8 +39,8 @@ export function Pager({
   return (
     <div data-testid={testId} style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
       <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)', letterSpacing: '0.05em' }}>{labels.showing}</span>
-      <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)', letterSpacing: '0.05em' }}>{labels.page}</span>
-      <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+      <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)', letterSpacing: '0.05em', marginLeft: 'auto' }}>{labels.page}</span>
+      <div style={{ display: 'flex', gap: 8 }}>
         <button onClick={() => onGo(nav.prevOffset)} disabled={!canPrev} title={reason} aria-describedby={reason != null ? reasonId : undefined} className="v2-btn v2-btn-ghost pf-btn" style={btn(canPrev)}>
           ← Previous
         </button>

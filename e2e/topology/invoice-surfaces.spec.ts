@@ -18,7 +18,7 @@
 // internal/invoice/payload.go's MBSPayload nests it again before the engine
 // evaluates, so a flat createInvoice + POST .../validate round-trips the verdict
 // fixtures.ts's BAD_INVOICE_KEYS pins.
-import { test, expect, type Locator, type Page, type Request, type Response } from '@playwright/test'
+import { test, expect, type Locator, type Page, type Request, type Response, type Route, type TestInfo } from '@playwright/test'
 import {
   login,
   createEntity,
@@ -37,7 +37,18 @@ import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { buildMixedCsv, buildPerfCsv } from '../importFixtures'
 import { approvalRun404Dropper, type Dropper, expectedStatusDropper, notFoundIdDropper } from './consoleGate'
-import { assertFillsColumn, assertSameHeight, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS } from './layout'
+import {
+  assertFillsColumn,
+  assertPageDoesNotScrollSideways,
+  assertSameHeight,
+  enclosesRect,
+  gaps,
+  overlapOf,
+  rectsOverlap,
+  settleAnimations,
+  WIDE_WIDTHS,
+  type Rect,
+} from './layout'
 import { browserToken, signInAs } from '../personaSession'
 import { e2eMember } from '../realAccounts'
 import { APP_URL, shardTenants, VALIDATION_EXPECTED } from './targets'
@@ -378,7 +389,7 @@ async function assertMarkerBesideStatus(page: Page, row: Locator, markerTestId: 
     // every WIDE_WIDTHS entry, in order.
     expect(wide.map((m) => m.width), `${label}: the wide sweep measured nothing`).toEqual([...WIDE_WIDTHS])
 
-    // The 390px collapse pass -- the 480px !important block (platform.css:307-327) is
+    // The 390px collapse pass -- the 480px !important block (platform.css) is
     // narrow-only, so the WIDE_WIDTHS sweep above cannot see a regression it introduces.
     await page.setViewportSize({ width: 390, height: 844 })
     await expect
@@ -2824,9 +2835,9 @@ test('reports-whole-set: top customers ranks over the whole set', async ({ page 
 // card renders the SINGULAR "Row 4 of this file became this invoice." (lib/sourceDocument.ts).
 test("invoice detail: the source-document card states the real range, and the modal opens on the whole file with this invoice's row marked", async ({
   page,
-}) => {
-  test.setTimeout(120_000)
-  const errors = collectErrors(page)
+}, testInfo) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page, expectedStatusDropper(page, 500, SHEET_URL))
 
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `DOC-02 preview ${Date.now()}`, tin: freshTin() })
@@ -2869,6 +2880,7 @@ test("invoice detail: the source-document card states the real range, and the mo
   // correction C2).
   await expect(page.getByTestId('source-document-range')).toHaveText('Row 4 of this file became this invoice.')
 
+  await page.setViewportSize({ width: 1440, height: 900 })
   await page.getByTestId('view-source-document').click()
   const modal = page.getByTestId('source-document-modal')
   await expect(modal).toBeVisible()
@@ -2882,8 +2894,59 @@ test("invoice detail: the source-document card states the real range, and the mo
   // A SHA-256 hex digest chunked 16 chars/line is always exactly 4 lines (64 / 16).
   await expect(page.getByTestId('hash-line')).toHaveCount(4)
 
+  expectWidth1440(page)
+  const sheetRead = await dvModal(page, testInfo, 'source-modal-sheet')
+  dvExpectModal(sheetRead, 'sheet')
+
+  const fit1440 = await fingerprintFit(page)
+  expectFingerprintFit(fit1440, 'at 1440')
+  const fitSweep = await dvSweepWide(page, () => fingerprintFit(page))
+  for (const f of fitSweep) expectFingerprintFit(f, `at ${f.width}`)
+  await testInfo.attach('fingerprint-fit.json', { body: JSON.stringify({ at1440: fit1440, sweep: fitSweep }, null, 2), contentType: 'application/json' })
+
   await page.getByTestId('source-modal-close').click()
   await expect(modal).toHaveCount(0)
+
+  // Loading: the sheet request is held, so the modal reads its loading canvas.
+  // The hold is released while the modal is still open and its response is awaited, so the
+  // continued request always has a live consumer before the route is removed.
+  let release!: () => void
+  const held = new Promise<void>((r) => (release = r))
+  const hold = async (route: Route) => {
+    await held
+    await route.continue()
+  }
+  await page.route(SHEET_URL, hold)
+  await page.getByTestId('view-source-document').click()
+  await expect(page.getByTestId('source-document-loading')).toBeVisible()
+  expectWidth1440(page)
+  const loadingRead = await dvModal(page, testInfo, 'source-modal-loading', 'source-document-loading')
+  expect(loadingRead.canvas, 'the loading canvas was read').toBeTruthy()
+  expect(
+    loadingRead.canvas!.bgImages.filter((v) => v.includes('repeating-linear-gradient')),
+    'the loading canvas draws no repeating-linear-gradient',
+  ).toEqual([])
+  const heldResp = page.waitForResponse((r) => SHEET_URL.test(r.url()))
+  release()
+  await heldResp
+  await expect(page.getByTestId('sheet-scope-file')).toBeVisible()
+  await page.unroute(SHEET_URL, hold)
+  await page.getByTestId('source-modal-close').click()
+  await expect(modal).toHaveCount(0)
+
+  // Error: a 500 from the sheet route reads the error canvas. Every open fetches the sheet
+  // afresh (no cache in SourceDocumentModal), so reopening is enough.
+  const fail = (route: Route) => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'sheet unavailable' }) })
+  await page.route(SHEET_URL, fail)
+  const failResp = page.waitForResponse((r) => SHEET_URL.test(r.url()) && r.status() === 500)
+  await page.getByTestId('view-source-document').click()
+  await failResp
+  await expect(page.getByTestId('source-document-failed')).toBeVisible()
+  expectWidth1440(page)
+  await dvModal(page, testInfo, 'source-modal-error', 'source-document-failed')
+  await page.getByTestId('source-modal-close').click()
+  await expect(modal).toHaveCount(0)
+  await page.unroute(SHEET_URL, fail)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -3401,7 +3464,7 @@ test('detail surface: the armed decision block and approval card, plus their lay
   const spread = (ns: number[]) => Math.max(...ns) - Math.min(...ns)
 
   // G2a: the rail is a constant FRACTION of the grid, not a constant width. The inline
-  // `1fr 340px` (InvoiceDetail.tsx:1045) is overridden above 1180 by platform.css:233-236,
+  // `1fr 340px` (InvoiceDetail.tsx) is overridden above 1180 by platform.css,
   // `1fr minmax(220px, 25%) !important`, so the rail grows with the viewport (239/279/399/559
   // across WIDE_WIDTHS) and only its SHARE is invariant. Share of (rail + main), read from the
   // two boxes themselves, so a scrollbar gutter or a sidebar change cannot move it.
@@ -5076,11 +5139,10 @@ import { apiBase, getExtractions, listEntities, listInvoices, type ExtractionJob
 
 // --- EXTR09-E2E-06 (EXTR-09-09) · the previewer's newly-reachable branches --------------
 //
-// An OBSERVATION HARNESS, not an oracle. DOC-02 shipped `pdf`, `image` and `unrenderable`
+// DOC-02 shipped `pdf`, `image` and `unrenderable`
 // canvases that no real document could reach: before EXTR-09 the only route into `documents`
 // was POST /v1/imports/preview, which stores nothing that does not classify as a spreadsheet.
-// This records what each branch actually renders now, and asserts nothing about it — the only
-// product assertion is the file-wide `collectErrors` console gate.
+// This records what each branch actually renders now.
 //
 // What is real, and what is not, per leg:
 //
@@ -5123,7 +5185,7 @@ const EXTR09_PNG_BYTES = new Uint8Array(
 //
 // NO LONGER INERT. EXTR-15-02 made DOCX boxless, so the worker skips page rendering and hands
 // these bytes to the reader, which refuses them: the job dead-letters at text_not_read. This
-// recipe is therefore also EXTR-15-12's T3 fixture — import-wizard.spec.ts rebuilds it as
+// recipe is therefore also EXTR-15-12's T3 fixture — import-wizard-2.spec.ts rebuilds it as
 // uniqueEmptyDocxBytes() for EXTR15-E2E-04, which asserts exactly that kind. On the previewer
 // path observed HERE it still reaches the `unrenderable` canvas, which fetches no bytes at all.
 function extr09Docx(): Uint8Array<ArrayBuffer> {
@@ -5267,6 +5329,7 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
 
   const { invoices } = await listInvoices(token, { entity_id: entity.id, limit: 50 })
   const invoiceNumber = invoices[0]?.invoice_number ?? ''
+  expect(invoiceNumber, 'AC 2, AC 3 and AC 7 need the PDF import to produce an invoice').not.toBe('')
 
   // The substitution. `null` leaves the response untouched, which is what the PDF leg runs
   // under; a record replaces ONLY the `document` object of the server's own response.
@@ -5311,12 +5374,17 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
   // openPreviewer() remounts InvoiceDetail every time: the source-document fetch is
   // `immediate` with `deps: [invoiceId]`, so leaving the surface and coming back is what makes
   // the next substitution take effect.
-  async function openPreviewer(): Promise<string> {
+  async function openPreviewer(shot?: string, read?: () => Promise<void>): Promise<string> {
     await goToInvoices(page)
     await openInvoiceRow(page, invoiceNumber)
     await page.getByTestId('view-source-document').click()
     await expect(page.getByTestId('source-document-modal')).toBeVisible()
     const canvas = await extr09Canvas(page)
+    if (shot) {
+      expectWidth1440(page)
+      await dvModal(page, testInfo, shot, undefined, { canvas })
+    }
+    await read?.()
     await page.getByTestId('source-modal-close').click()
     return canvas
   }
@@ -5324,32 +5392,42 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
   const observed: Record<string, string> = {}
   const pdfEmbed: Record<string, string> = {}
 
-  if (invoiceNumber === '') {
-    observed.pdf = 'not reached — the PDF import produced no invoice'
-  } else {
-    observed.pdf = await openPreviewer()
-    // Re-opened for the embed read: the close above unmounted the canvas.
-    if (observed.pdf === 'source-document-pdf') {
-      await goToInvoices(page)
-      await openInvoiceRow(page, invoiceNumber)
-      await page.getByTestId('view-source-document').click()
-      pdfEmbed.src_scheme = (await page.getByTestId('pdf-embed').getAttribute('src'))?.split(':')[0] ?? 'no src'
-      pdfEmbed.type = (await page.getByTestId('pdf-embed').getAttribute('type')) ?? 'no type'
-      await page.getByTestId('source-modal-close').click()
-    }
-
-    for (const leg of SYNTHESIZED_LEGS) {
-      substitute = { pdf, docx }[leg]
-      observed[leg] = await openPreviewer()
-    }
+  await page.setViewportSize({ width: 1440, height: 900 })
+  observed.pdf = await openPreviewer('source-modal-pdf')
+  // Re-opened for the embed read: the close above unmounted the canvas.
+  if (observed.pdf === 'source-document-pdf') {
+    await goToInvoices(page)
+    await openInvoiceRow(page, invoiceNumber)
+    await page.getByTestId('view-source-document').click()
+    pdfEmbed.src_scheme = (await page.getByTestId('pdf-embed').getAttribute('src'))?.split(':')[0] ?? 'no src'
+    pdfEmbed.type = (await page.getByTestId('pdf-embed').getAttribute('type')) ?? 'no type'
+    await page.getByTestId('source-modal-close').click()
   }
+
+  const baselines: Record<string, unknown> = {}
+  for (const leg of SYNTHESIZED_LEGS) {
+    substitute = { pdf, docx }[leg]
+    observed[leg] = await openPreviewer('source-modal-bad', async () => {
+      if (leg !== 'docx') return
+      const at1440 = await factBaselines(page)
+      expectFactBaselines(at1440, 'at 1440')
+      const sweep = await dvSweepWide(page, async () => ({ rows: await factBaselines(page) }))
+      for (const m of sweep) expectFactBaselines(m.rows, `at ${m.width}`)
+      baselines[leg] = { at1440, sweep }
+    })
+  }
+  await testInfo.attach('pdf-render.json', {
+    body: JSON.stringify({ pdfViewerEnabled: await page.evaluate(() => navigator.pdfViewerEnabled), observed: observed.pdf }, null, 2),
+    contentType: 'application/json',
+  })
+  await testInfo.attach('fact-baselines.json', { body: JSON.stringify(baselines, null, 2), contentType: 'application/json' })
 
   await testInfo.attach('documentPreviewer.md', {
     contentType: 'text/markdown',
     body: [
       '# EXTR09-E2E-06 - what the shipped previewer renders',
       '',
-      `Invoice: \`${invoiceNumber || '(none — the PDF import produced no invoice)'}\`, entity \`${entity.id}\`.`,
+      `Invoice: \`${invoiceNumber}\`, entity \`${entity.id}\`.`,
       '',
       '| Leg | Upload | Extraction | `POST /v1/imports/document` | Canvas rendered | Link |',
       '|---|---|---|---|---|---|',
@@ -5373,7 +5451,7 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
       '   `Store.SettledExtraction` selects `state = \'succeeded\'`, and the empty zip above never gets',
       '   there: EXTR-15-02 made DOCX boxless, so the worker skips page rendering, the reader refuses',
       '   the bytes and the job dead-letters at `text_not_read`. A REAL DOCX does reach an invoice now —',
-      '   import-wizard.spec.ts\'s EXTR15-E2E-03 (EXTR-15-12) reads one through the deployed sidecar and',
+      '   import-wizard-2.spec.ts\'s EXTR15-E2E-03 (EXTR-15-12) reads one through the deployed sidecar and',
       '   asserts its printed number, date and total. The import attempt above is the evidence for this',
       '   fixture only.',
       '3. **One attempt each.** The enqueue key `extract:<document_id>` is permanent, so a dead-lettered',
@@ -5382,13 +5460,676 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
   })
 
   // The instrument, not the product: without this a probe whose route never fired would record
-  // the PDF's canvas for every leg and read as evidence. Every other line above is observation.
-  if (invoiceNumber !== '') {
-    expect(
-      intercepted,
-      `each synthesized leg (${SYNTHESIZED_LEGS.join(', ')}) must have substituted exactly one meta response`,
-    ).toBe(SYNTHESIZED_LEGS.length)
-  }
+  // the PDF's canvas for every leg and read as evidence.
+  expect(
+    intercepted,
+    `each synthesized leg (${SYNTHESIZED_LEGS.join(', ')}) must have substituted exactly one meta response`,
+  ).toBe(SYNTHESIZED_LEGS.length)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// The v2 look of the invoice detail, the source modal and the rules view, as the
+// cascade resolves it on the PR environment. Value reads, never a pixel diff; layout claims
+// assert a relationship. Screenshots are attached for the reviewer and never asserted.
+const SHEET_URL = /\/api\/invoice\/v1\/documents\/[^/]+\/sheet(\?|$)/
+const SHADOW_CARD = 'rgba(40, 83, 52, 0.21) 0px 14px 22px -16px'
+const firstFamily = (raw: string): string => raw.split(',')[0].replace(/["']/g, '').trim()
+
+type Rgb = { r: number; g: number; b: number; a: number }
+
+// Chrome serialises a resolved colour as rgb()/rgba(), or as color(srgb ...) for a colour mix.
+function parseColor(raw: string): Rgb {
+  const alpha = (a: string | undefined): number => (a === undefined ? 1 : a.endsWith('%') ? parseFloat(a) / 100 : parseFloat(a))
+  const rgb = raw.match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/)
+  if (rgb) return { r: +rgb[1], g: +rgb[2], b: +rgb[3], a: alpha(rgb[4]) }
+  const srgb = raw.match(/^color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+%?))?\s*\)$/)
+  if (srgb) return { r: +srgb[1] * 255, g: +srgb[2] * 255, b: +srgb[3] * 255, a: alpha(srgb[4]) }
+  throw new Error(`cannot parse the resolved colour ${JSON.stringify(raw)}`)
+}
+
+function expectColor(raw: string, want: [number, number, number], alpha: number, label: string): void {
+  const c = parseColor(raw)
+  for (const [i, channel] of (['r', 'g', 'b'] as const).entries()) {
+    expect(Math.abs(c[channel] - want[i]), `${label}: ${channel} channel ${c[channel]} vs ${want[i]}`).toBeLessThanOrEqual(1)
+  }
+  expect(Math.abs(c.a - alpha), `${label}: alpha ${c.a} vs ${alpha}`).toBeLessThanOrEqual(0.01)
+}
+
+const DV_PROPS = [
+  'border-top-left-radius',
+  'border-top-right-radius',
+  'border-bottom-right-radius',
+  'border-bottom-left-radius',
+  'border-top-width',
+  'border-left-width',
+  'border-top-style',
+  'border-top-color',
+  'border-left-color',
+  'box-shadow',
+  'background-color',
+  'color',
+  'height',
+  'font-family',
+  'font-weight',
+  'font-size',
+  'backdrop-filter',
+  'opacity',
+  'cursor',
+]
+const DV_CORNERS = DV_PROPS.slice(0, 4)
+
+type DvBox = { rect: Rect; scrollWidth: number; clientWidth: number }
+type DvTarget = DvBox & {
+  style: Record<string, string>
+  className: string
+  text: string
+  childCount: number
+  dotChildren: number
+  bgImages: string[]
+}
+type DvRead = { targets: Record<string, DvTarget>; within: Record<string, DvBox[]>; tokens: Record<string, string> }
+
+// Fonts settled, two frames painted and the targets' animations finished, then every value in one evaluate.
+// `within` lists the elements matching `sel` inside a target; `tokens` resolves a colour token through a probe span
+// placed in the first target's `.asc-app`.
+async function dvRead(
+  page: Page,
+  locs: Record<string, Locator>,
+  opts: { within?: Record<string, { of: string; sel: string }>; tokens?: string[] } = {},
+): Promise<DvRead> {
+  await page.evaluate(async () => {
+    await document.fonts.ready
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+  })
+  await settleAnimations(...Object.values(locs))
+  const names = Object.keys(locs)
+  const handles = await Promise.all(names.map((n) => locs[n].elementHandle()))
+  try {
+    return await page.evaluate(
+      ({ names, handles, within, tokens, props }) => {
+        const box = (el: Element): DvBox => {
+          const r = el.getBoundingClientRect()
+          return { rect: { x: r.x, y: r.y, width: r.width, height: r.height }, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }
+        }
+        const targets: Record<string, DvTarget> = {}
+        names.forEach((name, i) => {
+          const el = handles[i] as Element
+          const cs = getComputedStyle(el)
+          const kids = [...el.children]
+          targets[name] = {
+            ...box(el),
+            style: Object.fromEntries(props.map((p) => [p, cs.getPropertyValue(p)])),
+            className: el.getAttribute('class') ?? '',
+            text: el.textContent ?? '',
+            childCount: kids.length,
+            dotChildren: kids.filter((k) => getComputedStyle(k).borderTopLeftRadius === '50%').length,
+            bgImages: [el, ...el.querySelectorAll('*')].map((e) => getComputedStyle(e).backgroundImage).filter((v) => v !== 'none'),
+          }
+        })
+        const inside: Record<string, DvBox[]> = {}
+        for (const [key, { of, sel }] of Object.entries(within)) {
+          inside[key] = [...(handles[names.indexOf(of)] as Element).querySelectorAll(sel)].map(box)
+        }
+        const resolved: Record<string, string> = {}
+        // The tokens are declared on `.asc-app`, so a probe on <body> would resolve none of them.
+        const host = (handles[0] as Element).closest('.asc-app')
+        for (const token of tokens) {
+          if (!host || getComputedStyle(host).getPropertyValue(token).trim() === '') {
+            throw new Error(`token ${token} is not declared on the .asc-app that holds the first target`)
+          }
+          const probe = document.createElement('span')
+          probe.style.color = `var(${token})`
+          host.appendChild(probe)
+          resolved[token] = getComputedStyle(probe).color
+          probe.remove()
+        }
+        return { targets, within: inside, tokens: resolved }
+      },
+      { names, handles, within: opts.within ?? {}, tokens: opts.tokens ?? [], props: DV_PROPS },
+    )
+  } finally {
+    await Promise.all(handles.map((h) => h?.dispose()))
+  }
+}
+
+async function dvAttach(page: Page, testInfo: TestInfo, name: string, body: unknown): Promise<void> {
+  await testInfo.attach(`${name}.json`, { body: JSON.stringify(body, null, 2), contentType: 'application/json' })
+  await testInfo.attach(`${name}.png`, { body: await page.screenshot(), contentType: 'image/png' })
+}
+
+const dvCorners = (t: DvTarget): string[] => DV_CORNERS.map((p) => t.style[p])
+
+function dvExpectCorners(t: DvTarget, want: string, label: string): void {
+  expect(dvCorners(t), `${label} corners`).toEqual(Array(4).fill(want))
+}
+
+function dvExpectScrim(t: DvTarget, label: string): void {
+  expectColor(t.style['background-color'], [8, 47, 49], 0.55, `${label} scrim (--surface at 55%)`)
+  expect(t.style['backdrop-filter'], `${label} scrim backdrop-filter`).toBe('blur(6px)')
+}
+
+function dvExpectModal(read: { panel: DvTarget; scrim: DvTarget }, label: string): void {
+  dvExpectCorners(read.panel, '10px', `${label} modal panel`)
+  dvExpectScrim(read.scrim, `${label} modal`)
+}
+
+// The source modal: panel, its scrim (the panel's parent) and optionally one canvas.
+async function dvModal(
+  page: Page,
+  testInfo: TestInfo,
+  name: string,
+  canvasTestId?: string,
+  note: Record<string, unknown> = {},
+): Promise<{ panel: DvTarget; scrim: DvTarget; canvas?: DvTarget }> {
+  const panel = page.getByTestId('source-document-modal')
+  const read = await dvRead(page, {
+    panel,
+    scrim: panel.locator('xpath=..'),
+    ...(canvasTestId ? { canvas: page.getByTestId(canvasTestId) } : {}),
+  })
+  await dvAttach(page, testInfo, name, { ...note, ...read.targets })
+  return { panel: read.targets.panel, scrim: read.targets.scrim, canvas: read.targets.canvas }
+}
+
+type FitRect = { x: number; y: number; width: number; height: number }
+
+// The fingerprint header of the open source modal, read after fonts and two frames settle.
+async function fingerprintFit(page: Page): Promise<{
+  labelRects: number
+  label: FitRect
+  copy: FitRect
+  header: FitRect
+  copyHasSvg: boolean
+}> {
+  return page.evaluate(async () => {
+    await document.fonts.ready
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+    const rail = document.querySelector('[data-testid="source-document-rail"]')!
+    const label = [...rail.querySelectorAll('.label')].find((e) => e.textContent === 'Content fingerprint \u00b7 SHA-256')!
+    const copy = rail.querySelector('[data-testid="copy-hash"]')!
+    const box = (e: Element) => {
+      const r = e.getBoundingClientRect()
+      return { x: r.x, y: r.y, width: r.width, height: r.height }
+    }
+    const range = document.createRange()
+    range.selectNodeContents(label)
+    return {
+      labelRects: range.getClientRects().length,
+      label: box(label),
+      copy: box(copy),
+      header: box(copy.parentElement!),
+      copyHasSvg: copy.querySelector('svg') !== null,
+    }
+  })
+}
+
+function expectFingerprintFit(fit: Awaited<ReturnType<typeof fingerprintFit>>, at: string): void {
+  expect(fit.labelRects, `AC 2 ${at}: the fingerprint label is one line`).toBe(1)
+  expect(fit.label.x + fit.label.width, `AC 2 ${at}: the label ends left of Copy`).toBeLessThanOrEqual(fit.copy.x)
+  expect(enclosesRect(fit.header, fit.copy, 1), `AC 2 ${at}: Copy lies inside the header`).toBe(true)
+  expect(fit.copyHasSvg, `AC 2 ${at}: Copy holds no glyph`).toBe(false)
+  expect(fit.copy.height, `AC 2 ${at}: Copy is 24px tall`).toBeCloseTo(24, 0)
+}
+
+// Label and value baseline y per fact row of the bad-state canvas; a zero-size inline-block's bottom is the baseline.
+async function factBaselines(page: Page): Promise<Array<{ key: string; label: number; value: number }>> {
+  return page.evaluate(async () => {
+    await document.fonts.ready
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+    const canvas = document.querySelector('[data-testid="source-document-unrenderable"]')!
+    const title = [...canvas.querySelectorAll('.label')].find((e) => e.textContent === 'What we know about this file')!
+    const rows = [...(title.parentElement!.parentElement!.children[1]?.children ?? [])]
+    const baseline = (span: Element) => {
+      const probe = document.createElement('span')
+      probe.style.cssText = 'display:inline-block;width:0;height:0'
+      span.insertBefore(probe, span.firstChild)
+      const y = probe.getBoundingClientRect().bottom
+      probe.remove()
+      return y
+    }
+    return rows.map((row) => ({
+      key: row.children[0].textContent ?? '',
+      label: baseline(row.children[0]),
+      value: baseline(row.children[1]),
+    }))
+  })
+}
+
+function expectFactBaselines(rows: Awaited<ReturnType<typeof factBaselines>>, at: string): void {
+  expect(rows.length, `AC 3 ${at}: at least one fact row was read`).toBeGreaterThan(0)
+  for (const r of rows) {
+    expect(Math.abs(r.label - r.value), `AC 3 ${at}: ${r.key} label sits on its value's baseline`).toBeLessThanOrEqual(0.5)
+  }
+}
+
+function expectWidth1440(page: Page): void {
+  expect(page.viewportSize()!.width, 'AC 7: the source-modal shot is taken at 1440').toBe(1440)
+}
+
+async function dvOpenDetail(page: Page, entityName: string, invoiceNumber: string): Promise<void> {
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await selectEntity(page, entityName)
+  await goToInvoices(page)
+  await openInvoiceRow(page, invoiceNumber)
+}
+
+async function dvOpenRules(page: Page, entityName: string): Promise<void> {
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await selectEntity(page, entityName)
+  await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: /^Rules/ }).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Rules', exact: true })).toBeVisible()
+}
+
+// One reading per WIDE_WIDTHS entry; the entry viewport is restored.
+async function dvSweepWide<T>(page: Page, read: () => Promise<T>): Promise<Array<{ width: number } & T>> {
+  const entry = page.viewportSize()
+  const out: Array<{ width: number } & T> = []
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 900 })
+      out.push({ width, ...(await read()) })
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+  return out
+}
+
+test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
+  test.use({ viewport: { width: 1440, height: 900 } })
+
+  test('DV-01 failed invoice detail, the none state and the resolve-outside fit', async ({ page }, testInfo) => {
+    test.setTimeout(120_000)
+    const errors = collectErrors(page)
+
+    const token = await login(PERSONAS.A)
+    const entity = await createEntity(token, { name: `RESKIN2-03 DV-01 ${Date.now()}`, tin: freshTin() })
+    const invoiceNumber = `INV-DV01-${Date.now()}`
+    const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+    await validateInvoice(token, inv.id)
+    await approveUntilClosed(inv.id, await firmApproverTokens(SHARD.a.id))
+    await transitionInvoice(token, inv.id, 'queued')
+    await transitionInvoice(token, inv.id, 'failed')
+
+    await dvOpenDetail(page, entity.name, invoiceNumber)
+    const detail = page.getByTestId('invoice-detail')
+    const deadEnd = page.getByTestId('failed-dead-end')
+    const resolve = page.getByTestId('resolve-outside')
+    await expect(deadEnd).toBeVisible()
+    await expect(resolve).toBeDisabled()
+    const failedNodes = page.getByTestId('status-strip').locator('[data-state="failed"]')
+    await expect(failedNodes, 'a failed invoice reddens a strip node').not.toHaveCount(0)
+
+    const read = await dvRead(
+      page,
+      {
+        compliance: page.getByTestId('compliance-card'),
+        deadEnd,
+        activity: page.getByTestId('invoice-activity'),
+        failedNode: failedNodes.first().locator('span[aria-hidden="true"]').first(),
+        badge: detail.getByTestId('invoice-status-badge'),
+        submit: page.getByTestId('detail-submit'),
+        approve: page.getByTestId('detail-approve'),
+        edit: page.getByTestId('edit-toggle'),
+        resolve,
+        readOnly: page.getByTestId('invoice-activity').getByText('READ ONLY', { exact: true }),
+        h1: detail.locator('h1'),
+        rail: page.getByTestId('invoice-rail'),
+        actions: actionCluster(page),
+      },
+      {
+        within: {
+          railCards: { of: 'rail', sel: ':scope > *' },
+          clusterButtons: { of: 'actions', sel: 'button' },
+        },
+        tokens: ['--primary', '--primary-foreground'],
+      },
+    )
+    const t = read.targets
+    const disabledButtons = {
+      approve: page.getByTestId('detail-approve'),
+      edit: page.getByTestId('edit-toggle'),
+      submit: page.getByTestId('detail-submit'),
+    }
+    for (const [name, loc] of Object.entries(disabledButtons) as [keyof typeof disabledButtons, Locator][]) {
+      await expect(loc, `AC 4: ${name} is disabled`).toBeDisabled()
+      expect(t[name].style.opacity, `AC 4: ${name} opacity`).toBe('0.45')
+      expect(t[name].style.cursor, `AC 4: ${name} cursor`).toBe('not-allowed')
+      expect(t[name].style['background-color'], `AC 4: ${name} background is --primary`).toBe(read.tokens['--primary'])
+      expect(t[name].style.color, `AC 4: ${name} colour is --primary-foreground`).toBe(read.tokens['--primary-foreground'])
+    }
+    // Pins: these hold at head already and are read to keep them held.
+    for (const name of ['compliance', 'deadEnd', 'activity'] as const) {
+      dvExpectCorners(t[name], '6px', `pin: ${name}`)
+      expect(t[name].style['border-top-width'], `pin: ${name} border-top-width`).toBe('1px')
+      expect(t[name].style['box-shadow'], `pin: ${name} box-shadow`).toBe('none')
+    }
+    expectColor(t.deadEnd.style['border-top-color'], [181, 59, 59], 0.28, 'failed-dead-end border')
+    expectColor(t.failedNode.style['background-color'], [181, 59, 59], 0.08, 'failed strip node')
+    dvExpectCorners(t.badge, '4px', 'status badge')
+    dvExpectCorners(t.submit, '7px', 'detail-submit')
+    expect(t.submit.style.height, 'detail-submit height').toBe('34px')
+    dvExpectCorners(t.resolve, '7px', 'resolve-outside')
+    expect(t.resolve.style.height, 'resolve-outside height').toBe('32px')
+    expect(t.resolve.className.split(/\s+/), 'resolve-outside class').toContain('v2-btn-ghost')
+    expect(t.readOnly.style['font-size'], 'READ ONLY size').toBe('9px')
+    expect(t.readOnly.style['font-weight'], 'READ ONLY weight').toBe('700')
+    expect(firstFamily(t.h1.style['font-family']), 'detail h1 family').toBe('IBM Plex Mono')
+    expect(t.h1.style['font-weight'], 'detail h1 weight').toBe('700')
+    const scroll = await assertPageDoesNotScrollSideways(page, 'DV-01 failed detail')
+
+    const cards = read.within.railCards
+    expect(cards.length, 'the rail holds at least the dead-end card and one more').toBeGreaterThan(1)
+    for (const [i, card] of cards.entries()) {
+      expect(enclosesRect(t.rail.rect, card.rect, 1), `rail card ${i} lies inside the rail`).toBe(true)
+      for (const [j, other] of cards.entries()) {
+        if (j > i) expect(rectsOverlap(card.rect, other.rect), `rail cards ${i} and ${j} do not overlap`).toBe(false)
+      }
+    }
+    const buttons = read.within.clusterButtons
+    expect(buttons.length, 'the action cluster holds buttons').toBeGreaterThan(0)
+    for (const [i, button] of buttons.entries()) {
+      expect(enclosesRect(t.actions.rect, button.rect, 1), `cluster button ${i} lies inside the action column`).toBe(true)
+    }
+    await dvAttach(page, testInfo, 'dv-01', { ...read, scroll })
+
+    // The resolve button stays inside its card at every wide width.
+    const sweep = await dvSweepWide(page, async () => {
+      const r = await dvRead(page, { deadEnd, resolve })
+      return { deadEnd: r.targets.deadEnd.rect, resolve: r.targets.resolve.rect }
+    })
+    await testInfo.attach('dv-01-resolve-fit.json', { body: JSON.stringify(sweep, null, 2), contentType: 'application/json' })
+    for (const s of sweep) {
+      expect(enclosesRect(s.deadEnd, s.resolve, 1), `resolve-outside lies inside failed-dead-end at ${s.width}px`).toBe(true)
+    }
+
+    // The none state, opened from the card.
+    await page.getByTestId('why-no-source-document').click()
+    const none = page.getByTestId('source-document-no-source')
+    await expect(none).toBeVisible()
+    const noneRead = await dvRead(page, { none })
+    const dashed = await none.evaluate((el) => [...el.querySelectorAll('div')].map((d) => getComputedStyle(d).borderTopStyle).filter((v) => v === 'dashed'))
+    expect(dashed.length, 'the none state draws a dashed block').toBeGreaterThan(0)
+    await dvAttach(page, testInfo, 'source-modal-none', { ...noneRead.targets, dashedBlocks: dashed.length })
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('DV-02 submitted invoice detail', async ({ page }, testInfo) => {
+    test.setTimeout(120_000)
+    const errors = collectErrors(page)
+
+    const token = await login(PERSONAS.A)
+    const entity = await createEntity(token, { name: `RESKIN2-03 DV-02 ${Date.now()}`, tin: freshTin() })
+    const invoiceNumber = `INV-DV02-${Date.now()}`
+    const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+    await validateInvoice(token, inv.id)
+    await approveUntilClosed(inv.id, await firmApproverTokens(SHARD.a.id))
+    await transitionInvoice(token, inv.id, 'queued')
+    await transitionInvoice(token, inv.id, 'submitted')
+
+    // No submission job exists for a hand-driven `submitted`; the finally leaves no in-flight row behind.
+    // A failed cleanup must not replace the body's own error.
+    let bodyFailed = false
+    try {
+      await dvOpenDetail(page, entity.name, invoiceNumber)
+      await expect(page.getByTestId('invoice-detail').getByTestId('invoice-status-badge')).toContainText('SUBMITTED')
+      await expectStripStates(page, { queued: 'current', accepted: 'unreached' })
+
+      const read = await dvRead(
+        page,
+        {
+          badge: page.getByTestId('invoice-detail').getByTestId('invoice-status-badge'),
+          queued: stripNode(page, 'queued').locator('span[aria-hidden="true"]').first(),
+          final: stripNode(page, 'accepted').locator('span[aria-hidden="true"]').first(),
+        },
+        { tokens: ['--status-amber-bg', '--bg-2'] },
+      )
+      const t = read.targets
+      dvExpectCorners(t.badge, '4px', 'status badge')
+      expect(t.badge.text.trim(), 'badge text').toBe('SUBMITTED')
+      expect(read.tokens['--status-amber-bg'], 'the two looks differ, so the equalities below discriminate').not.toBe(read.tokens['--bg-2'])
+      expect(t.queued.style['background-color'], 'queued node is the current look').toBe(read.tokens['--status-amber-bg'])
+      expect(t.final.style['background-color'], 'final node is the unreached look').toBe(read.tokens['--bg-2'])
+      await dvAttach(page, testInfo, 'dv-02', read)
+
+      expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+    } catch (err) {
+      bodyFailed = true
+      throw err
+    } finally {
+      try {
+        await transitionInvoice(token, inv.id, 'accepted')
+      } catch (err) {
+        if (!bodyFailed) throw err
+      }
+    }
+  })
+
+  test('DV-03 accepted invoice detail and the XML modal', async ({ page }, testInfo) => {
+    test.setTimeout(120_000)
+    const errors = collectErrors(page)
+
+    const token = await login(PERSONAS.A)
+    const entity = await createEntity(token, { name: `RESKIN2-03 DV-03 ${Date.now()}`, tin: freshTin() })
+    const invoiceNumber = `INV-DV03-${Date.now()}`
+    const inv = await createInvoice(token, { entity_id: entity.id, ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_ACCEPT) })
+    await validateInvoice(token, inv.id)
+    await approveUntilClosed(inv.id, await firmApproverTokens(SHARD.a.id))
+
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+    await selectEntity(page, entity.name)
+    await goToInvoices(page)
+    const row = invoiceRowByNumber(page, invoiceNumber)
+    await row.getByTestId('invoice-select').check()
+    await submitSelected(page)
+    await expect(row.getByTestId('invoice-status-badge')).toContainText('ACCEPTED')
+    await openInvoiceRow(page, invoiceNumber)
+    await assertFiscalRecord(page, invoiceNumber)
+
+    const record = await dvRead(page, {
+      card: page.getByTestId('fiscal-record-card'),
+      plate: page.getByTestId('fiscal-qr').locator('xpath=..'),
+    })
+    dvExpectCorners(record.targets.card, '6px', 'fiscal-record-card')
+    expect(record.targets.card.style['border-top-width'], 'fiscal-record-card border-top-width').toBe('1px')
+    expect(record.targets.card.style['box-shadow'], 'fiscal-record-card box-shadow').toBe('none')
+    expect(record.targets.plate.style['background-color'], 'QR plate background').toBe('rgb(255, 255, 255)')
+    expect(record.targets.plate.style['border-top-width'], 'QR plate border-top-width').toBe('1px')
+
+    const uCard = await dvRead(page, {
+      card: page.getByTestId('ubl-document-card'),
+      name: page.getByTestId('ubl-card-filename'),
+    })
+    const uGeo = await page.evaluate(() => {
+      const body = document.querySelector('[data-testid="ubl-document-card"]') as HTMLElement
+      const name = document.querySelector('[data-testid="ubl-card-filename"]') as HTMLElement
+      return {
+        firstIsName: body.firstElementChild === name,
+        strays: [...body.querySelectorAll('svg')].filter((s) => !s.closest('button')).length,
+        paddingLeft: parseFloat(getComputedStyle(body).paddingLeft),
+      }
+    })
+    expect(uGeo.firstIsName, 'AC 1: the filename is the first element child of the UBL card').toBe(true)
+    expect(uGeo.strays, 'AC 1: no svg outside a button in the UBL card').toBe(0)
+    expect(
+      Math.abs(uCard.targets.name.rect.x - (uCard.targets.card.rect.x + uGeo.paddingLeft)),
+      'AC 1: the filename starts at the card content edge',
+    ).toBeLessThanOrEqual(1)
+
+    await page.getByTestId('ubl-card-view').click()
+    const dialog = page.getByRole('dialog', { name: 'UBL 2.1 document' })
+    await expect(dialog).toBeVisible()
+    await expect(page.getByTestId('download-ubl')).toBeVisible()
+    const modal = await dvRead(page, {
+      dialog,
+      scrim: page.getByTestId('ubl-modal'),
+      close: page.getByTestId('ubl-modal-close'),
+      download: page.getByTestId('download-ubl'),
+    })
+    const m = modal.targets
+    dvExpectCorners(m.dialog, '10px', 'UBL dialog')
+    expect(m.dialog.style['box-shadow'], 'UBL dialog shadow').toBe(SHADOW_CARD)
+    dvExpectScrim(m.scrim, 'UBL modal')
+    expect(Math.abs(m.dialog.rect.width - 760), 'AC 5: the XML panel is 760px wide at 1440').toBeLessThanOrEqual(0.5)
+    const vp = page.viewportSize()!
+    expect(enclosesRect({ x: 0, y: 0, width: vp.width, height: vp.height }, m.dialog.rect, 1), 'AC 5: the XML panel lies inside the viewport').toBe(true)
+    const gapRight = vp.width - (m.dialog.rect.x + m.dialog.rect.width)
+    expect(Math.abs(m.dialog.rect.x - gapRight), 'AC 5: the XML panel is centred').toBeLessThanOrEqual(1)
+    expect(enclosesRect(m.dialog.rect, m.close.rect, 1), 'close lies inside the panel').toBe(true)
+    expect(enclosesRect(m.dialog.rect, m.download.rect, 1), 'Download lies inside the panel').toBe(true)
+    expect(rectsOverlap(m.close.rect, m.download.rect), 'close and Download do not overlap').toBe(false)
+    await dvAttach(page, testInfo, 'dv-03', { record: record.targets, modal: modal.targets })
+
+    await page.getByTestId('ubl-modal-close').click()
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('DV-04 rules list', async ({ page }, testInfo) => {
+    const errors = collectErrors(page)
+
+    const token = await login(PERSONAS.A)
+    const entity = await createEntity(token, { name: `RESKIN2-03 DV-04 ${Date.now()}`, tin: freshTin() })
+
+    await dvOpenRules(page, entity.name)
+    await expect(page.locator('.pf-row').filter({ hasText: 'buyer.tin.required' }).first()).toBeVisible()
+    const read = await dvRead(page, { h1: page.getByRole('heading', { level: 1, name: 'Rules', exact: true }) })
+    expect(firstFamily(read.targets.h1.style['font-family']), 'Rules h1 family').toBe('Manrope')
+    expect(read.targets.h1.style['font-weight'], 'Rules h1 weight').toBe('700')
+    const scroll = await assertPageDoesNotScrollSideways(page, 'DV-04 rules list')
+    await dvAttach(page, testInfo, 'dv-04', { ...read, scroll })
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('DV-05 rule drawer', async ({ page }, testInfo) => {
+    const errors = collectErrors(page)
+
+    const token = await login(PERSONAS.A)
+    const entity = await createEntity(token, { name: `RESKIN2-03 DV-05 ${Date.now()}`, tin: freshTin() })
+
+    await dvOpenRules(page, entity.name)
+    await page.locator('.pf-row').filter({ hasText: 'buyer.tin.required' }).first().click()
+    const dialog = page.getByRole('dialog', { name: 'Rule buyer.tin.required' })
+    await expect(dialog).toBeVisible()
+    const read = await dvRead(
+      page,
+      {
+        dialog,
+        scrim: dialog.locator('xpath=preceding-sibling::div[1]'),
+        paramBox: dialog.locator('div.label', { hasText: /^Parameters$/ }).locator('xpath=following-sibling::div[1]/div[1]/div[2]'),
+        json: dialog.locator('pre.pf-json'),
+        close: dialog.getByRole('button', { name: 'Close' }),
+        key: dialog.getByText('buyer.tin.required', { exact: true }).first(),
+      },
+      { tokens: ['--bg-2', '--fg-2'] },
+    )
+    const t = read.targets
+    expect(t.dialog.style['border-left-width'], 'drawer border-left-width').toBe('1px')
+    expect(t.dialog.style['border-left-color'], 'drawer border-left-color').toBe('rgb(201, 217, 214)')
+    expect(t.dialog.style['box-shadow'], 'drawer box-shadow').toBe('none')
+    dvExpectScrim(t.scrim, 'drawer')
+    dvExpectCorners(t.paramBox, '6px', 'parameter box')
+    expect(t.json.style['background-color'], 'pre.pf-json background').toBe(read.tokens['--bg-2'])
+    expect(t.json.style.color, 'pre.pf-json colour').toBe(read.tokens['--fg-2'])
+    expect(t.json.style['border-top-width'], 'pre.pf-json border-top-width').toBe('1px')
+    dvExpectCorners(t.json, '6px', 'pre.pf-json')
+    expect(enclosesRect(t.dialog.rect, t.close.rect, 1), 'close lies inside the drawer').toBe(true)
+    expect(rectsOverlap(t.close.rect, t.key.rect), 'close does not overlap the rule key').toBe(false)
+    await dvAttach(page, testInfo, 'dv-05', read)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('DV-06 bad invoice detail, the edit form and the line row fit', async ({ page }, testInfo) => {
+    test.setTimeout(120_000)
+    const errors = collectErrors(page)
+
+    const token = await login(PERSONAS.A)
+    const entity = await createEntity(token, { name: `RESKIN2-03 DV-06 ${Date.now()}`, tin: freshTin() })
+    const invoiceNumber = `INV-DV06-${Date.now()}`
+    const inv = await createInvoice(token, { entity_id: entity.id, ...badInvoiceFields(invoiceNumber) })
+    await validateInvoice(token, inv.id)
+
+    await dvOpenDetail(page, entity.name, invoiceNumber)
+    const violations = page.getByTestId('violations-table')
+    await expect(violations).toBeVisible()
+    const severity = violations.locator('tbody tr').first().locator('td').first().locator('span').first()
+    const chip = page.getByTestId('invoice-activity-chips').locator('[aria-pressed="true"]')
+    await expect(chip, 'exactly one activity chip is active').toHaveCount(1)
+
+    const view = await dvRead(page, { severity, chip })
+    dvExpectCorners(view.targets.severity, '4px', 'severity badge')
+    expect(view.targets.severity.dotChildren, 'the severity badge has no dot child').toBe(0)
+    expect(view.targets.severity.childCount, 'the severity badge holds its label').toBeGreaterThan(0)
+    expect(view.targets.chip.style['background-color'], 'active chip background').toBe('rgb(7, 60, 61)')
+    expect(view.targets.chip.style.color, 'active chip colour').toBe('rgb(255, 255, 255)')
+
+    await page.getByTestId('edit-toggle').click()
+    const form = page.getByTestId('edit-invoice')
+    await expect(form).toBeVisible()
+    const edit = await dvRead(
+      page,
+      {
+        form,
+        column: page.getByTestId('invoice-main-column'),
+        add: page.getByTestId('line-add'),
+        input: form.locator('xpath=.//div[normalize-space(text())="Issue date"]/following-sibling::input'),
+      },
+      {
+        within: {
+          lineRows: { of: 'form', sel: '[data-testid="line-row"]' },
+          lineRemoves: { of: 'form', sel: '[data-testid="line-remove"]' },
+        },
+      },
+    )
+    const e = edit.targets
+    dvExpectCorners(e.add, '7px', 'line-add')
+    expect(e.add.style.height, 'line-add height').toBe('30px')
+    expect(e.input.style.height, 'editable input height').toBe('34px')
+    expect(enclosesRect(e.column.rect, e.form.rect, 1), 'the edit form lies inside the detail column').toBe(true)
+    await dvAttach(page, testInfo, 'dv-06', { view, edit })
+
+    // The line table box does not scroll sideways at wide widths and every remove button stays inside the form.
+    const lineBox = form.getByTestId('line-row').first().locator('xpath=../..')
+    const sweep = await dvSweepWide(page, async () => {
+      const r = await dvRead(page, { form, lineBox }, { within: { lineRows: { of: 'form', sel: '[data-testid="line-row"]' }, lineRemoves: { of: 'form', sel: '[data-testid="line-remove"]' } } })
+      return { form: r.targets.form.rect, lineBox: r.targets.lineBox, lineRows: r.within.lineRows, lineRemoves: r.within.lineRemoves }
+    })
+    await testInfo.attach('dv-06-line-fit.json', { body: JSON.stringify(sweep, null, 2), contentType: 'application/json' })
+    for (const s of sweep) {
+      expect(s.lineRows.length, `the edit form holds line rows at ${s.width}px`).toBeGreaterThan(0)
+      expect(s.lineRemoves.length, `every line row has a remove button at ${s.width}px`).toBe(s.lineRows.length)
+      expect(s.lineBox.scrollWidth, `the line table box does not scroll sideways at ${s.width}px`).toBeLessThanOrEqual(s.lineBox.clientWidth)
+      for (const [i, remove] of s.lineRemoves.entries()) {
+        expect(enclosesRect(s.form, remove.rect, 1), `line-remove ${i} lies inside the edit form at ${s.width}px`).toBe(true)
+      }
+    }
+
+    // Below 1180px the rail is a fixed 340px: the rows scroll inside their own box and stay reachable.
+    const entry = page.viewportSize()
+    try {
+      for (const width of [1180, 1120]) {
+        await page.setViewportSize({ width, height: 900 })
+        const removes = form.getByTestId('line-remove')
+        expect(await removes.count(), `the edit form holds line rows at ${width}px`).toBeGreaterThan(0)
+        // scrollIntoView also scrolls an overflow:hidden box, so the box must scroll for a pointer too.
+        const table = await form.getByTestId('line-row').first().locator('xpath=../..').evaluate((el) => ({ overflowX: getComputedStyle(el).overflowX, needsRoom: el.scrollWidth > el.clientWidth }))
+        expect(table.needsRoom, `the line rows are wider than their box at ${width}px`).toBe(true)
+        expect(['auto', 'scroll'], `the line table box scrolls sideways at ${width}px`).toContain(table.overflowX)
+        for (let i = 0; i < (await removes.count()); i++) {
+          const remove = removes.nth(i)
+          await remove.scrollIntoViewIfNeeded()
+          const box = await remove.locator('xpath=ancestor::*[@data-testid="line-row"]/parent::*/parent::*').boundingBox()
+          const at = await remove.boundingBox()
+          expect(box && at && enclosesRect(box, at, 1), `line-remove ${i} is reachable in the scroll box at ${width}px`).toBe(true)
+        }
+      }
+    } finally {
+      if (entry) await page.setViewportSize(entry)
+    }
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
 })

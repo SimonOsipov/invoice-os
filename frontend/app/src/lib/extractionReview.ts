@@ -449,10 +449,10 @@ export function highlightStyle(region: ExtractionRegion): CSSProperties {
     top: `${round4(region.y0 * 100)}%`,
     width: `${round4((region.x1 - region.x0) * 100)}%`,
     height: `${round4((region.y1 - region.y0) * 100)}%`,
-    background: 'oklch(72% .15 65 / .32)',
+    background: 'var(--accent-20)',
     // The ring paints outside the border box, so a zero-area region stays visible while
     // boundingBox() still measures exactly the region.
-    boxShadow: '0 0 0 3px oklch(72% .15 65 / .32)',
+    boxShadow: '0 0 0 3px var(--accent-20)',
     borderRadius: 3,
     transition: 'background 150ms ease-out, box-shadow 150ms ease-out',
   }
@@ -473,7 +473,6 @@ export function pageFrameStyle(page: ExtractionPage, zoom: number): CSSPropertie
     // the rest of this card and omits only the background.
     background: '#fff',
     border: '1px solid var(--line-2)',
-    boxShadow: '0 1px 3px oklch(20% .02 210 / .08)',
   }
 }
 
@@ -531,8 +530,8 @@ export function pointBoxStyle(region: ExtractionRegion): CSSProperties {
     width: `${round4((region.x1 - region.x0) * 100)}%`,
     height: `${round4((region.y1 - region.y0) * 100)}%`,
     border: '2px solid var(--accent)',
-    background: 'oklch(72% .15 65 / .18)',
-    borderRadius: 2,
+    background: 'var(--accent-20)',
+    borderRadius: 3,
   }
 }
 

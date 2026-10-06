@@ -61,7 +61,7 @@ const TILE: CSSProperties = {
   flex: 'none',
   width: 32,
   height: 32,
-  borderRadius: 8,
+  borderRadius: 'var(--radius-md)',
   display: 'grid',
   placeItems: 'center',
   fontFamily: 'var(--font-mono)',
@@ -95,9 +95,9 @@ const ZOOM_GROUP: CSSProperties = {
   alignItems: 'center',
   gap: 2,
   padding: 2,
-  background: 'var(--bg-1)',
-  border: '1px solid var(--line-2)',
-  borderRadius: 999,
+  background: 'var(--sage-panel)',
+  border: '1px solid var(--sage-card-border)',
+  borderRadius: 'var(--radius-md)',
 }
 
 const SEGMENT: CSSProperties = {
@@ -105,14 +105,14 @@ const SEGMENT: CSSProperties = {
   flex: 'none',
   height: 26,
   padding: '0 12px',
-  // A plain button, never `.pf-btn`/`.pf-chip`: both force `border-radius` with `!important`,
-  // from app-layer.css:193-197 and :275 respectively.
-  borderRadius: 999,
-  border: '1px solid transparent',
+  // A plain button, never `.pf-btn`/`.pf-chip`: both force `border-radius` with `!important`.
+  borderRadius: 'var(--radius-sm)',
+  border: 0,
   fontFamily: 'var(--font-sans)',
   fontSize: 12.5,
-  fontWeight: 500,
+  fontWeight: 600,
   cursor: 'pointer',
+  transition: 'background 120ms, color 120ms',
 }
 
 const BANNER: CSSProperties = {
@@ -361,7 +361,7 @@ export function ExtractionCanvas({
               data-testid={`extraction-zoom-${z * 100}`}
               aria-pressed={zoom === z}
               onClick={() => setZoom(z)}
-              style={{ ...SEGMENT, background: zoom === z ? 'var(--action)' : 'transparent', color: zoom === z ? 'var(--text-on-dark)' : 'var(--fg-2)' }}
+              style={{ ...SEGMENT, background: zoom === z ? 'var(--primary)' : 'transparent', color: zoom === z ? 'var(--primary-foreground)' : 'var(--fg-2)' }}
             >
               {`${z * 100}%`}
             </button>

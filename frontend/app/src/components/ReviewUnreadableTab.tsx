@@ -34,7 +34,7 @@ import type { PlatformCtx } from '../types'
 
 // Widened by one column, File, at the front (BULK-01-07, AC #5) -- UNREADABLE_GRID had
 // no such column when this tab could only ever show one batch's rows.
-const UNREADABLE_GRID = '150px 90px 170px 1fr'
+const UNREADABLE_GRID = '200px 60px 140px 1fr'
 
 // The one DOM-only step: turn the pure CSV string into a file the browser saves. Kept as
 // small as possible precisely because it has no unit oracle — everything decidable
@@ -121,7 +121,7 @@ export function ReviewUnreadableTab({
               // The row is the only handle a deployed spec has on WHICH document a hand-off
               // belongs to: the file label and the button are siblings inside it, and the
               // same filename also renders in the files strip above the tabs
-              // (import-wizard.spec.ts's EXTR15-E2E-02).
+              // (import-wizard-2.spec.ts's EXTR15-E2E-02).
               data-testid="unreadable-row"
               style={{ display: 'grid', gridTemplateColumns: UNREADABLE_GRID, gap: 14, alignItems: 'baseline', padding: '11px 18px', borderTop: i === 0 ? 'none' : '1px solid var(--line-1)' }}
             >
@@ -132,9 +132,9 @@ export function ReviewUnreadableTab({
               {/* `row: null` is an em dash, never "ROW null" — the server told us it could
                   not attribute the failure to a line, and that is a fact worth stating. */}
               <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>{r.row == null ? '—' : r.row}</span>
-              <span className="mono" style={{ fontSize: 12, color: 'var(--fg-2)', wordBreak: 'break-word' }}>{r.column}</span>
+              <span className="mono" style={{ fontSize: 12, color: 'var(--fg-1)', wordBreak: 'break-word' }}>{r.column}</span>
               {/* VERBATIM. No client-authored reason string, ever. */}
-              <span style={{ fontSize: 13, color: 'var(--fg-1)' }}>
+              <span style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>
                 {r.message}
                 {/* Inside the "why" cell, so no new grid track (UT-5). A spreadsheet row
                     has no document to hand off, and neither has a document row whose
@@ -143,9 +143,7 @@ export function ReviewUnreadableTab({
                   <span style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', marginTop: 8 }}>
                     {/* Disabled-with-reason, never hidden — ReviewAlreadyImportedTab.tsx's
                         four layers, and CreateFlow.tsx's DocumentFailureRow offers the
-                        same hand-off on the import run's failure list. The inline spread
-                        is disabled-only: on an enabled button it would kill the legitimate
-                        :hover affordance. */}
+                        same hand-off on the import run's failure list. */}
                     <button
                       onClick={blocked ? undefined : () => ctx.enterByHand(documentId)}
                       disabled={blocked}
@@ -157,7 +155,7 @@ export function ReviewUnreadableTab({
                         padding: '0 12px',
                         fontSize: 12.5,
                         flex: 'none',
-                        ...(blocked ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                        ...(blocked ? { background: 'transparent', opacity: 0.45, cursor: 'not-allowed' } : null),
                       }}
                     >
                       Enter it by hand
@@ -171,7 +169,7 @@ export function ReviewUnreadableTab({
             </div>
           )
         })}
-        <div style={{ padding: '11px 18px', borderTop: '1px solid var(--line-1)', fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.55 }}>
+        <div style={{ padding: '11px 18px', borderTop: '1px solid var(--line-1)', fontSize: 12, color: 'var(--fg-3)', lineHeight: 1.55 }}>
           Field names are the importer&rsquo;s own, not your spreadsheet&rsquo;s headings, and are a best guess on numeric errors.
         </div>
       </div>

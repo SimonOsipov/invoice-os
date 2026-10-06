@@ -24,10 +24,10 @@ export interface ActorAvatarStyle {
 export function actorAvatar(kind: ActorKind): ActorAvatarStyle {
   const base = { width: SIZE, height: SIZE }
   if (kind === 'person') {
-    return { ...base, borderRadius: '50%', background: 'var(--bg-4)', color: 'var(--fg-1)' }
+    return { ...base, borderRadius: '50%', background: 'var(--bg-3)', color: 'var(--fg-2)' }
   }
   if (kind === 'system') {
-    return { ...base, borderRadius: '50%', background: 'var(--status-muted-bg)', color: 'var(--fg-2)' }
+    return { ...base, borderRadius: '50%', background: 'var(--bg-3)', color: 'var(--fg-3)' }
   }
   // Free text and absent: a flat square with no fill or glyph -- neither a person nor System.
   return { ...base, borderRadius: 'var(--radius-xs)', background: 'transparent', color: 'var(--fg-3)' }
@@ -45,24 +45,27 @@ export interface ActorCellProps {
   actor: string
   actor_name: string
   actor_kind: string
+  variant?: 'audit' | 'activity'
 }
 
-export function ActorCell({ actor, actor_name, actor_kind }: ActorCellProps) {
+export function ActorCell({ actor, actor_name, actor_kind, variant = 'audit' }: ActorCellProps) {
   const label = actorLabel(actor, { name: actor_name, kind: actor_kind })
   const avatar = actorAvatar(label.kind)
 
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: variant === 'audit' ? 9 : 8, minWidth: 0 }}>
       <span
         aria-hidden
+        className="mono"
         style={{
           ...avatar,
           display: 'inline-flex',
           alignItems: 'center',
           justifyContent: 'center',
           flex: '0 0 auto',
-          fontSize: 11,
-          fontWeight: 600,
+          fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+          fontSize: 9.5,
+          fontWeight: 700,
         }}
       >
         {label.kind === 'person' ? (
@@ -76,7 +79,8 @@ export function ActorCell({ actor, actor_name, actor_kind }: ActorCellProps) {
       <span
         style={{
           fontFamily: label.mono ? 'var(--font-mono, ui-monospace, monospace)' : undefined,
-          fontSize: label.mono ? 12 : 13,
+          fontSize: label.mono ? 12 : variant === 'audit' ? 13 : 12.5,
+          fontWeight: variant === 'audit' ? 500 : 600,
           color: label.kind === 'raw' ? 'var(--fg-2)' : 'var(--fg-1)',
           overflow: 'hidden',
           textOverflow: 'ellipsis',

@@ -73,7 +73,10 @@ import type { PlatformCtx } from '../types'
 // table's own head row must never disagree about the grid — a single export is what
 // makes that structural rather than remembered.
 export const REVIEW_GRID_COLUMNS = '26px 122px minmax(120px,1fr) 92px 114px 124px 22px'
-export const REVIEW_GRID_GAP = 9
+export const REVIEW_GRID_GAP = 10
+
+// Aligns the panel content with the invoice-number column.
+const PANEL_PADDING = '4px 18px 16px 54px'
 
 // `aria-describedby` target for the disabled Re-validate button's reason text. A module
 // const (InvoiceDetail's own copy was retired with the reason nodes in BUG-14-02) — safe because
@@ -143,7 +146,7 @@ export function Row({
         data-testid="review-row"
         aria-expanded={expanded}
         className="pf-row pf-list-row"
-        style={{ display: 'grid', gridTemplateColumns: REVIEW_GRID_COLUMNS, gap: REVIEW_GRID_GAP, padding: '14px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}
+        style={{ display: 'grid', gridTemplateColumns: REVIEW_GRID_COLUMNS, gap: REVIEW_GRID_GAP, padding: '14px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center', background: expanded ? 'var(--bg-1)' : undefined }}
       >
         <input
           type="checkbox"
@@ -152,9 +155,7 @@ export function Row({
           checked={checked}
           disabled={!isRowSelectable(r)}
           title={blockedReason ?? undefined}
-          // Disabled-only: matches InvoicesList.tsx's own guard against killing an
-          // enabled control's hover affordance.
-          style={blockedReason == null ? undefined : { cursor: 'not-allowed', opacity: 0.5 }}
+          style={{ width: 15, height: 15, accentColor: 'var(--action)', margin: 0, ...(blockedReason == null ? null : { cursor: 'not-allowed', opacity: 0.5 }) }}
           // BOTH handlers stop propagation — the row's own onClick toggles expansion and
           // must never fire from a checkbox interaction.
           onClick={(e) => e.stopPropagation()}
@@ -165,10 +166,9 @@ export function Row({
         />
         {/* Invoice # + (AC #4, multi-file runs only) its source file, in the SAME
             two-lines-in-one-cell idiom the Buyer column already uses below (name +
-            TIN) -- REVIEW_GRID_COLUMNS/REVIEW_GRID_GAP are unchanged, this is an extra
-            line inside the existing cell, never a new grid column. */}
+            TIN) -- an extra line inside the existing cell, never a new grid column. */}
         <span style={{ minWidth: 0 }}>
-          <span className="mono" style={{ display: 'block', fontSize: 12.5, fontWeight: 500, color: 'var(--fg-1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <span className="mono" style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg-1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {r.invoice_number}
           </span>
           {sourceLabel != null && (
@@ -179,16 +179,15 @@ export function Row({
         </span>
         {/* Missing-TIN colour/text: shared isBuyerTinMissing/BUYER_TIN_MISSING (lib/invoices.ts). */}
         <span style={{ minWidth: 0 }}>
-          <span style={{ display: 'block', fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.buyer_name ?? '—'}</span>
-          <span data-testid="buyer-tin" className="mono" style={{ fontSize: 11, color: isBuyerTinMissing(r.buyer_tin) ? 'var(--status-red-text)' : 'var(--fg-3)' }}>{isBuyerTinMissing(r.buyer_tin) ? BUYER_TIN_MISSING : r.buyer_tin}</span>
+          <span style={{ display: 'block', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.buyer_name ?? '—'}</span>
+          <span data-testid="buyer-tin" className="mono" style={{ display: 'block', marginTop: 2, fontSize: 10.5, color: isBuyerTinMissing(r.buyer_tin) ? 'var(--status-red-text)' : 'var(--fg-3)' }}>{isBuyerTinMissing(r.buyer_tin) ? BUYER_TIN_MISSING : r.buyer_tin}</span>
         </span>
         {/* NO `?? created_at` fallback, unlike InvoicesList.tsx:424 — that column is
             labelled "Date"; this one says "Issue date", and labelling a creation timestamp
             as the issue date is a small lie on a compliance screen. */}
-        <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>{r.issue_date != null ? fmtDate(r.issue_date) : '—'}</span>
-        <span className="money" style={{ fontSize: 13.5, fontWeight: 600, textAlign: 'right' }}>{r.total != null ? fmt(Number(r.total)) : '—'}</span>
-        {/* The status badge is InvoicesList.tsx:425-433's markup verbatim, driven entirely
-            by verdictPill(...).status — no colour and no label is authored here. The
+        <span className="mono" style={{ fontSize: 11.5, color: 'var(--fg-2)' }}>{r.issue_date != null ? fmtDate(r.issue_date) : '—'}</span>
+        <span className="money" style={{ fontSize: 13, fontWeight: 600, textAlign: 'right' }}>{r.total != null ? fmt(Number(r.total)) : '—'}</span>
+        {/* Driven entirely by verdictPill(...).status — no colour and no label is authored here. The
             derived badge stacks BENEATH rather than beside it: 124px cannot hold both. */}
         {/* `data-testid="review-verdict"` sits on this OUTER span, not the inner status
             pill alone -- "the verdict pill" (this file's own doc comments, and the e2e
@@ -201,25 +200,24 @@ export function Row({
             already correct). */}
         <span data-testid="review-verdict" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4, minWidth: 0 }}>
           <span
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: verdict.status.bg, border: `1px solid ${verdict.status.border}`, borderRadius: 999, padding: '3px 9px' }}
+            className="mono"
+            style={{ background: verdict.status.bg, border: `1px solid ${verdict.status.border}`, borderRadius: 'var(--radius-sm)', padding: '2px 7px', fontSize: 9, fontWeight: 700, color: verdict.status.text, letterSpacing: '0.04em' }}
           >
-            <span style={{ width: 6, height: 6, borderRadius: 99, background: verdict.status.text }} />
-            <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: verdict.status.text, letterSpacing: '0.04em' }}>{verdict.status.label}</span>
+            {verdict.status.label}
           </span>
           {badge != null && (
             <span
               className="mono"
-              style={{ display: 'inline-flex', alignItems: 'center', background: badge.tone.bg, border: `1px solid ${badge.tone.border}`, borderRadius: 999, padding: '2px 8px', fontSize: 9.5, fontWeight: 600, color: badge.tone.text, letterSpacing: '0.04em' }}
+              style={{ fontSize: 8.5, fontWeight: 700, color: badge.tone.text, letterSpacing: '0.04em' }}
             >
               {badge.label}
             </span>
           )}
         </span>
         {/* The row-disclosure indicator (INVCR-01-14) — the row itself is the click
-            target (onClick above); this glyph is purely presentational, matching
-            Sidebar.tsx's own switcher-chevron rotation idiom. Collapsed points right
-            (task-286's original static orientation, unchanged), expanded points down. */}
-        <span aria-hidden style={{ display: 'inline-flex', color: 'var(--fg-4)', pointerEvents: 'none', transform: expanded ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 160ms' }}>
+            target (onClick above); this glyph is purely presentational. Collapsed
+            points down, expanded points up (the review prototype's orientation). */}
+        <span aria-hidden style={{ display: 'inline-flex', color: 'var(--fg-3)', pointerEvents: 'none', transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 160ms' }}>
           {chevDownGlyph}
         </span>
       </div>
@@ -246,30 +244,33 @@ function FixCardView({
 }) {
   const st = severityStyle(card.severity)
   return (
-    <div data-testid="review-fix-card" style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: 14, background: 'var(--bg-2)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: st.bg, border: `1px solid ${st.border}`, borderRadius: 999, padding: '3px 9px' }}>
-          <span style={{ width: 6, height: 6, borderRadius: 99, background: st.text }} />
-          <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: st.text }}>{st.label}</span>
-        </span>
-        <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>{card.ruleKey}</span>
+    <div data-testid="review-fix-card" style={{ border: `1px solid ${st.border}`, borderRadius: 'var(--radius-md)', padding: '12px 14px', background: 'var(--bg-2)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 7, flexWrap: 'wrap' }}>
+        <span className="mono" style={{ background: st.bg, border: `1px solid ${st.border}`, borderRadius: 'var(--radius-sm)', padding: '2px 7px', fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', color: st.text }}>{st.label}</span>
+        <span className="mono" style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--fg-1)' }}>{card.ruleKey}</span>
       </div>
-      <p style={{ fontSize: 13, color: 'var(--fg-2)', margin: '0 0 10px', lineHeight: 1.5 }}>{card.message}</p>
+      <p style={{ fontSize: 12.5, color: 'var(--fg-2)', margin: '0 0 10px', lineHeight: 1.5 }}>{card.message}</p>
       {card.field != null && (
-        <div style={{ marginBottom: card.hint != null ? 8 : 0 }}>
-          <div className="label" style={{ marginBottom: 6 }}>{EDIT_FIELD_LABELS[card.field]}</div>
-          <input
-            className="pf-input"
-            type="text"
-            data-testid="review-fix-input"
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            disabled={disabled}
-          />
+        <div>
+          <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>{EDIT_FIELD_LABELS[card.field]}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 11, flexWrap: 'wrap' }}>
+            <input
+              className="pf-input"
+              type="text"
+              data-testid="review-fix-input"
+              value={value}
+              onChange={(e) => onChange(e.target.value)}
+              disabled={disabled}
+              style={{ maxWidth: 240, height: 34, fontSize: 13, fontFamily: 'var(--font-mono)' }}
+            />
+            {card.hint != null && (
+              <span className="mono" data-testid="review-fix-hint" style={{ fontSize: 10.5, color: 'var(--fg-3)' }}>{card.hint}</span>
+            )}
+          </div>
         </div>
       )}
-      {card.hint != null && (
-        <div className="mono" data-testid="review-fix-hint" style={{ fontSize: 11, color: 'var(--fg-3)' }}>{card.hint}</div>
+      {card.field == null && card.hint != null && (
+        <div className="mono" data-testid="review-fix-hint" style={{ fontSize: 10.5, color: 'var(--fg-3)' }}>{card.hint}</div>
       )}
     </div>
   )
@@ -390,7 +391,7 @@ function ExpandedFixPanel({
 
   if (detail.status === 'loading') {
     return (
-      <div data-testid="review-row-expansion" style={{ padding: '16px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)' }}>
+      <div data-testid="review-row-expansion" style={{ padding: PANEL_PADDING, borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)' }}>
         <Loading label="Loading this invoice…" />
       </div>
     )
@@ -398,7 +399,7 @@ function ExpandedFixPanel({
 
   if (detail.status === 'error') {
     return (
-      <div data-testid="review-row-expansion" style={{ padding: '16px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)' }}>
+      <div data-testid="review-row-expansion" style={{ padding: PANEL_PADDING, borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)' }}>
         {detail.error && <ErrorState error={detail.error} onRetry={detail.run} />}
       </div>
     )
@@ -419,18 +420,19 @@ function ExpandedFixPanel({
   const hasUnsavedEdit = Object.keys(fixEditPatch(inv, draft)).length > 0
 
   return (
-    <div data-testid="review-row-expansion" style={{ padding: '16px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)', display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <div data-testid="review-row-expansion" style={{ padding: PANEL_PADDING, borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)', display: 'flex', flexDirection: 'column', gap: 14 }}>
       {view.passing ? (
         <div
           data-testid="review-row-passing"
-          style={{ padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--status-green-bg)', border: '1px solid var(--status-green-border)', fontSize: 13, color: 'var(--status-green-text)' }}
+          style={{ display: 'flex', gap: 10, padding: '12px 14px', margin: '12px 0 -4px', borderRadius: 'var(--radius-md)', background: 'var(--status-green-bg)', border: '1px solid var(--status-green-border)' }}
         >
-          {view.summary}
+          <span aria-hidden style={{ color: 'var(--status-green-text)' }}>✓</span>
+          <span style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>{view.summary}</span>
         </div>
       ) : view.notValidated ? (
         <div
           data-testid="review-row-not-validated"
-          style={{ padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--bg-3)', border: '1px solid var(--line-2)', fontSize: 12.5, color: 'var(--fg-2)' }}
+          style={{ display: 'flex', gap: 10, padding: '12px 14px', margin: '12px 0 -4px', borderRadius: 'var(--radius-md)', background: 'var(--bg-3)', border: '1px solid var(--line-2)', fontSize: 12.5, color: 'var(--fg-2)' }}
         >
           {ROW_EXPANSION_COPY.notValidated}
         </div>
@@ -439,7 +441,7 @@ function ExpandedFixPanel({
           {/* AC-8/§10.12's trap: a warning-only invoice renders the ADVISORY label here,
               never "Failed rules" -- rowExpansionView already resolved which one, this
               never re-derives `blocking` itself. */}
-          <div className="eyebrow">{view.sectionLabel}</div>
+          <div className="label" style={{ margin: '12px 0 0' }}>{view.sectionLabel}</div>
           {view.cards.map((card, i) => (
             <FixCardView
               key={`${card.ruleKey}-${card.field ?? 'unmapped'}-${i}`}
@@ -450,7 +452,7 @@ function ExpandedFixPanel({
             />
           ))}
           {saveError != null && (
-            <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)' }}>
+            <div style={{ padding: '9px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12.5, color: 'var(--status-red-text)' }}>
               {saveError}
             </div>
           )}
@@ -462,7 +464,7 @@ function ExpandedFixPanel({
                 onClick={() => void handleSave()}
                 disabled={saving}
                 className="v2-btn v2-btn-primary pf-btn"
-                style={{ height: 32, padding: '0 14px', fontSize: 13 }}
+                style={{ height: 34, padding: '0 14px', fontSize: 13 }}
               >
                 {saving ? ROW_EXPANSION_COPY.saving : ROW_EXPANSION_COPY.saveLabel}
               </button>
@@ -481,7 +483,7 @@ function ExpandedFixPanel({
         {inv.status === 'draft' && view.keptReason != null && (
           <div
             data-testid="review-kept-banner"
-            style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)', lineHeight: 1.5 }}
+            style={{ padding: '9px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)', lineHeight: 1.5 }}
           >
             {ROW_EXPANSION_COPY.keptPrefix}
             {view.keptReason}
@@ -502,10 +504,10 @@ function ExpandedFixPanel({
             aria-describedby={view.revalidateReason != null ? REVALIDATE_REASON_ID : undefined}
             className="v2-btn v2-btn-ghost pf-btn"
             style={{
-              height: 32,
+              height: 34,
               padding: '0 14px',
               fontSize: 13,
-              ...(revalidateDisabled ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+              ...(revalidateDisabled ? { background: 'transparent', opacity: 0.45, cursor: 'not-allowed', filter: 'none' } : null),
             }}
           >
             {revalidating ? ROW_EXPANSION_COPY.revalidating : ROW_EXPANSION_COPY.revalidateLabel}
@@ -525,7 +527,7 @@ function ExpandedFixPanel({
                 onChange={(e) => setKeepReason(e.target.value)}
                 disabled={keeping}
                 className="pf-input"
-                style={{ flex: '1 1 220px', minWidth: 160, height: 32, fontSize: 12.5 }}
+                style={{ flex: 1, minWidth: 260, maxWidth: 460, height: 34, fontSize: 13 }}
               />
               <button
                 type="button"
@@ -533,7 +535,7 @@ function ExpandedFixPanel({
                 onClick={() => void handleKeep()}
                 disabled={keeping || !canKeepAsIs(keepReason)}
                 className="v2-btn v2-btn-ghost pf-btn"
-                style={{ height: 32, padding: '0 14px', fontSize: 13 }}
+                style={{ height: 34, padding: '0 14px', fontSize: 13 }}
               >
                 {keeping ? ROW_EXPANSION_COPY.keeping : ROW_EXPANSION_COPY.keepLabel}
               </button>
@@ -547,7 +549,7 @@ function ExpandedFixPanel({
           </div>
         )}
         {keepError != null && (
-          <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)' }}>
+          <div style={{ padding: '9px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12.5, color: 'var(--status-red-text)' }}>
             {keepError}
           </div>
         )}
@@ -564,12 +566,12 @@ function ExpandedFixPanel({
           </div>
         )}
         {revalidateError != null && (
-          <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)' }}>
+          <div style={{ padding: '9px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12.5, color: 'var(--status-red-text)' }}>
             {revalidateError}
           </div>
         )}
         {/* §7.3's provenance/scope note (AC-7) — always rendered while expanded. */}
-        <p data-testid="review-row-note" style={{ fontSize: 11.5, color: 'var(--fg-3)', margin: 0, lineHeight: 1.55 }}>
+        <p data-testid="review-row-note" style={{ fontSize: 11.5, color: 'var(--fg-3)', margin: 0, lineHeight: 1.5 }}>
           {view.note}
         </p>
       </div>

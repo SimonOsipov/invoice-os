@@ -28,30 +28,45 @@ export function AddCompanyTask({ ctx }: { ctx: PlatformCtx }) {
   const base = gatewayBase()
   const surface = firstRunSurface(activeEntity, entitiesState, entities.length, clients.length)
 
-  if (surface === 'error' && ctx.entitiesError) return <ErrorState error={ctx.entitiesError} onRetry={refetchEntities} />
-  if (surface !== 'task') return <Loading label="Loading your workspace…" />
+  if (surface === 'error' && ctx.entitiesError) {
+    return (
+      <div style={{ padding: '30px 36px 56px' }}>
+        <ErrorState error={ctx.entitiesError} onRetry={refetchEntities} />
+      </div>
+    )
+  }
+  if (surface !== 'task') {
+    return (
+      <div style={{ padding: '30px 36px 56px' }}>
+        <Loading label="Loading your workspace…" />
+      </div>
+    )
+  }
 
   const copy = ADD_COMPANY_COPY[mode]
   return (
     <div style={{ padding: '30px 36px 56px' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 22 }}>
-        <div style={{ minWidth: 0 }}>
-          <div className="eyebrow" style={{ marginBottom: 10 }}>
-            OVERVIEW
-          </div>
-          <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>{copy.h1}</h1>
-          <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0, overflowWrap: 'anywhere' }}>
-            {ctx.user.tenantName ?? 'Your workspace'} · invoices are filed for a registered company.
-          </p>
+      <div style={{ marginBottom: 26 }}>
+        <div className="eyebrow" style={{ marginBottom: 10 }}>
+          OVERVIEW
         </div>
+        <h1 style={{ fontSize: 28, letterSpacing: '-0.03em', margin: '0 0 5px' }}>{copy.h1}</h1>
+        <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0, overflowWrap: 'anywhere' }}>
+          {ctx.user.tenantName ?? 'Your workspace'} · invoices are filed for a registered company.
+        </p>
       </div>
       <div data-testid="add-company-task">
-        <EmptyState title={copy.emptyTitle} message={copy.emptyMessage} />
-        <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
-          <button onClick={() => setOpen(true)} disabled={base == null} className="v2-btn v2-btn-primary pf-btn">
-            <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> {copy.button}
-          </button>
-        </div>
+        <EmptyState
+          dense
+          messageMaxWidth={460}
+          title={copy.emptyTitle}
+          message={copy.emptyMessage}
+          action={
+            <button onClick={() => setOpen(true)} disabled={base == null} className="v2-btn v2-btn-primary pf-btn">
+              <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> {copy.button}
+            </button>
+          }
+        />
       </div>
       {open && base != null && (
         <EntityFormModal

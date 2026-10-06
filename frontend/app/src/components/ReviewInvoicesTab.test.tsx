@@ -334,3 +334,129 @@ describe('ReviewInvoicesTab bulk submit: drives the real component', () => {
     await waitFor(() => expect(screen.queryByTestId('review-bulk-bar')).toBeNull())
   })
 })
+
+// RESKIN2-04-04: the review prototype's pills, rail, bulk bar, checkboxes and Submit all (D-14, D-15, D-44).
+describe('ReviewInvoicesTab: the review prototype look (RESKIN2-04-04)', () => {
+  const RAIL = [
+    { rule_key: 'buyer-tin-required', invoices: 2 },
+    { rule_key: 'vat-standard-rate', invoices: 1 },
+  ]
+
+  // Held POSTs keep the bar in its submitting phase.
+  function stubLook(submit?: Promise<MockResponse>) {
+    const rows = [row({ id: 'inv-a', invoice_number: 'INV-A' }), row({ id: 'inv-b', invoice_number: 'INV-B' })]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: { method?: string }) => {
+        if (url.includes('/violation-summary')) {
+          return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve({ rules: RAIL }) })
+        }
+        if ((init?.method ?? 'GET') === 'POST' && url.endsWith('/invoices/submissions')) return submit ?? Promise.resolve(rulesResponse())
+        return Promise.resolve(listResponse(rows, { limit: 50, offset: 0, total: 2 }))
+      }),
+    )
+  }
+
+  const styleOf = (el: Element) => (el as HTMLElement).style
+
+  it('pills and rail chips are pf-chips with white active text', async () => {
+    stubLook()
+    renderTab()
+    await screen.findByText('INV-A')
+    const railPills = await screen.findAllByTestId('review-rail-pill')
+    const filterPills = screen.getAllByTestId('review-filter-pill')
+    expect(filterPills.length, 'the four filter pills').toBe(4)
+    expect(railPills).toHaveLength(RAIL.length)
+
+    fireEvent.click(filterPills[1])
+    fireEvent.click(railPills[0])
+    await waitFor(() => expect(screen.getAllByTestId('review-filter-pill')[1].getAttribute('aria-pressed')).toBe('true'))
+    await waitFor(() => expect(screen.getAllByTestId('review-rail-pill')[0].getAttribute('aria-pressed')).toBe('true'))
+
+    for (const chip of [...screen.getAllByTestId('review-filter-pill'), ...screen.getAllByTestId('review-rail-pill')]) {
+      const label = chip.textContent
+      expect(chip.className, label).toContain('pf-chip')
+      expect(styleOf(chip).borderRadius, `${label}: the dead inline radius is gone`).toBe('')
+      const active = chip.getAttribute('aria-pressed') === 'true'
+      expect(styleOf(chip).color, label).toBe(active ? 'var(--primary-foreground)' : 'var(--fg-2)')
+    }
+    expect(screen.getAllByTestId('review-filter-pill').filter((c) => c.getAttribute('aria-pressed') === 'true')).toHaveLength(1)
+
+    const searchBox = screen.getByTestId('review-search').parentElement as HTMLElement
+    expect(searchBox.style.borderRadius).toBe('var(--radius-btn)')
+  })
+
+  it('the bulk bar follows the review prototype', async () => {
+    stubLook()
+    renderTab()
+    await screen.findByText('INV-A')
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    const bar = screen.getByTestId('review-bulk-bar')
+
+    expect(bar.style.border).toBe('1px solid var(--line-2)')
+    for (const id of ['review-bulk-clear', 'review-bulk-submit']) {
+      expect(styleOf(screen.getByTestId(id)).height, id).toBe('32px')
+      expect(styleOf(screen.getByTestId(id)).padding, id).toBe('0px 12px')
+    }
+
+    fireEvent.click(screen.getByTestId('review-bulk-submit'))
+    for (const id of ['review-bulk-cancel', 'review-bulk-confirm']) {
+      expect(styleOf(screen.getByTestId(id)).height, id).toBe('32px')
+      expect(styleOf(screen.getByTestId(id)).padding, id).toBe('0px 12px')
+    }
+    const block = bar.lastElementChild as HTMLElement
+    expect(block, 'the confirmation block is the last child, below the count row').not.toBe(bar.firstElementChild)
+    expect(block.textContent).not.toBe('')
+    expect(block.style.borderTop).toBe('1px solid var(--line-2)')
+  })
+
+  it('a disabled bulk button keeps its 0.45 dim at the new height', async () => {
+    const pending = deferred<MockResponse>()
+    stubLook(pending.promise)
+    renderTab()
+    await screen.findByText('INV-A')
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    fireEvent.click(screen.getByTestId('review-bulk-submit'))
+    expect(styleOf(screen.getByTestId('review-bulk-cancel')).opacity, 'enabled Cancel is not dimmed').not.toBe('0.45')
+    fireEvent.click(screen.getByTestId('review-bulk-confirm'))
+
+    const cancel = screen.getByTestId('review-bulk-cancel') as HTMLButtonElement
+    expect(cancel.disabled).toBe(true)
+    expect(cancel.style.opacity).toBe('0.45')
+    expect(cancel.style.cursor).toBe('not-allowed')
+    expect(cancel.style.height).toBe('32px')
+    pending.resolve(rulesResponse())
+    await waitFor(() => expect(screen.queryByTestId('review-bulk-confirm')).toBeNull())
+  })
+
+  it('Submit all has its own 36px style', async () => {
+    stubLook()
+    renderTab()
+    await screen.findByText('INV-A')
+    const submitAll = screen.getByTestId('review-submit-all')
+
+    expect(submitAll.style.height).toBe('36px')
+    expect(submitAll.style.padding).toBe('0px 14px')
+    expect(submitAll.style.fontSize).toBe('13px')
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    expect(screen.getByTestId('review-bulk-clear').style.height, 'the bar buttons keep their own 32px').toBe('32px')
+  })
+
+  it('checkboxes are 15px teal', async () => {
+    stubLook()
+    renderTab()
+    await screen.findByText('INV-A')
+    const boxes = [screen.getByTestId('review-select-all'), ...screen.getAllByTestId('review-select')]
+
+    expect(boxes.length, 'select-all plus two rows').toBe(3)
+    for (const box of boxes) {
+      expect(styleOf(box).width, box.getAttribute('aria-label') ?? '').toBe('15px')
+      expect(styleOf(box).height).toBe('15px')
+      expect(styleOf(box).accentColor).toBe('var(--action)')
+    }
+    const head = screen.getByTestId('review-select-all').parentElement as HTMLElement
+    const firstRow = screen.getAllByTestId('review-row')[0]
+    expect(head.style.gap, 'the head and the rows share one gap').toBe('10px')
+    expect(firstRow.style.gap).toBe('10px')
+  })
+})

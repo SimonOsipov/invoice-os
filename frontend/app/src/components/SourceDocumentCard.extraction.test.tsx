@@ -250,7 +250,10 @@ describe('AC-8: the disabled control pins its own background and border', () => 
     expect(btn.style.width, 'full width, like its sibling').toBe('100%')
     expect(btn.style.height).toBe('34px')
     expect(btn.style.fontSize).toBe('13px')
-    expect(btn.style.marginTop).toBe('12px')
+    // The rail buttons sit in one gapped column now, so neither carries its own margin.
+    expect.soft(btn.style.marginTop).toBe('')
+    expect.soft(btn.parentElement, 'the control shares the sibling column').toBe(sibling.parentElement)
+    expect.soft(btn.parentElement?.style.gap).toBe('8px')
     // Order is the claim EXTR11-E2E-07 measures on the deployed build; here it is DOM order.
     expect(
       sibling.compareDocumentPosition(btn) & Node.DOCUMENT_POSITION_FOLLOWING,
@@ -321,9 +324,9 @@ describe('the declarations this control depends on', () => {
   // before this control existed; if the executor picks a synonym, that mismatch would
   // otherwise surface only at EXTR-11-09's deploy gate.
   it('card_theTestidMatchesTheDeployedLocator', () => {
-    const spec = readFileSync(join(REPO_ROOT, 'e2e', 'topology', 'import-wizard.spec.ts'), 'utf8')
+    const spec = readFileSync(join(REPO_ROOT, 'e2e', 'topology', 'importWizardShared.ts'), 'utf8')
     const start = spec.indexOf('async function openExtractionReview(')
-    expect(start, 'openExtractionReview not found -- EXTR-11-05\'s helper moved or was renamed').toBeGreaterThan(-1)
+    expect(start, 'openExtractionReview not found in importWizardShared.ts -- EXTR-11-05\'s helper moved or was renamed').toBeGreaterThan(-1)
     const body = spec.slice(start, spec.indexOf('\n}\n', start))
     const match = body.match(/getByTestId\('([^']+)'\)\s*\.click\(\)/)
     expect(match, 'the helper no longer clicks a testid -- this pin is reading the wrong thing').not.toBeNull()

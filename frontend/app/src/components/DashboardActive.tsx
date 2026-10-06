@@ -70,7 +70,7 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
         <div className="eyebrow" style={{ marginBottom: 10 }}>
           COMPLIANCE OVERVIEW
         </div>
-        <h1 style={{ fontSize: 28, fontWeight: 600, letterSpacing: '-0.03em', margin: '0 0 5px', overflowWrap: 'anywhere' }}>
+        <h1 style={{ fontSize: 28, letterSpacing: '-0.03em', margin: '0 0 5px', overflowWrap: 'anywhere' }}>
           {ctx.mode === 'inhouse' ? ctx.user.tenantName ?? 'Your firm' : ctx.active.name}
         </h1>
         <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>
@@ -84,7 +84,7 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
 
       {/* 'idle' is the no-gateway build: nothing live to draw, so keep the zero-state. */}
       {state === 'idle' && (
-        <EmptyState title="No invoice activity yet" message="Counts appear once invoices are created." />
+        <EmptyState dense title="No invoice activity yet" message="Counts appear once invoices are created." />
       )}
 
       {state === 'ready' && roll.data && (
@@ -109,7 +109,7 @@ function kpiValues(counts: Counts, needsAttention: number, vatLabel: string, awa
 }
 
 // Every tile on this page — the four KPI tiles included — wears the same head: a
-// Fraunces .card-title on the left, optional mono meta on the right, cut off from
+// .card-title on the left, optional mono meta on the right, cut off from
 // the body by a full-bleed hairline. The hairline only reaches both edges if the
 // CARD carries no padding — the head strip and the body each own theirs — hence
 // padding:0 + overflow:hidden here and an explicit padded body inside every tile.
@@ -131,7 +131,8 @@ function TileHead({ title, meta }: { title: string; meta?: string }) {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        padding: '15px 20px',
+        gap: 10,
+        padding: '14px 20px',
         borderBottom: '1px solid var(--line-1)',
       }}
     >
@@ -239,37 +240,31 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
       >
         <div style={{ ...TILE_CARD, display: 'flex', flexDirection: 'column' }}>
           <TileHead title="Needs attention" meta="EXCEPTIONS FIRST" />
-          <div style={{ ...TILE_BODY, flex: 1, display: 'flex', flexDirection: 'column' }}>
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <span className="money" style={{ fontSize: 56, fontWeight: 500, lineHeight: 1, color: 'var(--ink)' }}>
-                  {needsAttention}
-                </span>
-                <span
-                  className="mono"
-                  style={{
-                    fontSize: 10,
-                    fontWeight: 600,
-                    letterSpacing: '0.06em',
-                    padding: '3px 9px',
-                    borderRadius: 'var(--radius-pill)',
-                    background: needsAttention > 0 ? 'var(--status-red-bg)' : 'var(--status-green-bg)',
-                    border: `1px solid ${needsAttention > 0 ? 'var(--status-red-border)' : 'var(--status-green-border)'}`,
-                    color: needsAttention > 0 ? 'var(--status-red-text)' : 'var(--status-green-text)',
-                  }}
-                >
-                  {needsAttention > 0 ? 'REJECTED / FAILED / BLOCKED / SENT BACK' : 'ALL CLEAR'}
-                </span>
-              </div>
-              <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--fg-2)', margin: '14px 0 0' }}>
-                Invoices rejected, failed, blocked by an error-severity validation issue, or sent back by an approver.
-              </p>
+          <div style={{ ...TILE_BODY, flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 14, flexWrap: 'wrap' }}>
+              <span className="money" style={{ fontSize: 56, fontWeight: 700, lineHeight: 1, color: 'var(--ink)' }}>
+                {needsAttention}
+              </span>
+              <span
+                className="mono"
+                style={{
+                  fontSize: 10,
+                  fontWeight: 600,
+                  letterSpacing: '0.04em',
+                  padding: '3px 9px',
+                  borderRadius: 'var(--radius-sm)',
+                  background: needsAttention > 0 ? 'var(--status-red-bg)' : 'var(--status-green-bg)',
+                  border: `1px solid ${needsAttention > 0 ? 'var(--status-red-border)' : 'var(--status-green-border)'}`,
+                  color: needsAttention > 0 ? 'var(--status-red-text)' : 'var(--status-green-text)',
+                }}
+              >
+                {needsAttention > 0 ? 'REJECTED / FAILED / BLOCKED / SENT BACK' : 'ALL CLEAR'}
+              </span>
             </div>
-            <button
-              onClick={() => ctx.nav('invoices')}
-              className="v2-btn v2-btn-ghost pf-btn"
-              style={{ height: 38, fontSize: 13, marginTop: 22, justifyContent: 'center' }}
-            >
+            <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--fg-2)', margin: '0 0 20px', maxWidth: 520 }}>
+              Invoices rejected, failed, blocked by an error-severity validation issue, or sent back by an approver.
+            </p>
+            <button onClick={() => ctx.nav('invoices')} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 38, fontSize: 13 }}>
               {resolveCtaLabel(needsAttention)}
             </button>
           </div>
@@ -297,15 +292,15 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
                   </span>
                 </div>
               </div>
-              <div style={{ width: '100%', marginTop: 22, display: 'flex', flexDirection: 'column', gap: 11 }}>
+              <div style={{ width: '100%', marginTop: 22, display: 'flex', flexDirection: 'column', gap: 9 }}>
                 {segments.map((d) => (
                   <div key={d.label} style={{ display: 'grid', gridTemplateColumns: '10px minmax(0, 1fr) auto auto', alignItems: 'center', gap: 8 }}>
-                    <span style={{ width: 10, height: 10, borderRadius: 'var(--radius-xs)', background: d.color }} />
+                    <span style={{ width: 10, height: 10, borderRadius: 2, background: d.color }} />
                     <span style={{ fontSize: 13, color: 'var(--fg-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.label}</span>
                     <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', textAlign: 'right' }}>
                       {d.pct}
                     </span>
-                    <span className="money" style={{ fontSize: 13, fontWeight: 600, textAlign: 'right' }}>
+                    <span className="money" style={{ fontSize: 13, fontWeight: 600, textAlign: 'right', minWidth: 18 }}>
                       {d.count}
                     </span>
                   </div>
@@ -321,7 +316,7 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
           head is a single title/meta line, so it moved down into the body. */}
       <div style={{ ...TILE_CARD, marginBottom: 18 }}>
         <TileHead title="Readiness trend" meta="12 WEEKS · SAMPLE" />
-        <div style={TILE_BODY}>
+        <div style={{ padding: '20px 20px 22px' }}>
           {mock.chart ? (
             <>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 14 }}>
@@ -347,7 +342,7 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
             </>
           ) : (
             // No live score to anchor on -- an em-dash headline, not a curve ending at a fabricated 0.
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
               <span className="money" style={{ fontSize: 26, fontWeight: 700 }}>
                 —
               </span>
@@ -373,10 +368,10 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
                     <div style={{ width: f.bar, height: '100%', background: 'var(--action)', borderRadius: 'var(--radius-sm)' }} />
                   </div>
                 </div>
-                <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', flex: 'none', width: 96 }}>
+                <span className="mono" title={f.ruleKey} style={{ fontSize: 11, color: 'var(--fg-3)', flex: 'none', width: 150, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {f.ruleKey}
                 </span>
-                <div style={{ textAlign: 'right', flex: 'none', width: 54 }}>
+                <div style={{ textAlign: 'right', flex: 'none', minWidth: 40, whiteSpace: 'nowrap' }}>
                   <span className="money" style={{ fontSize: 16, fontWeight: 700, color: 'var(--status-red-text)' }}>
                     {f.count}
                   </span>
@@ -387,7 +382,7 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
         ) : (
           <div style={{ padding: '40px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
             {anyValidated && (
-              <span style={{ width: 40, height: 40, borderRadius: 99, background: 'var(--status-green-bg)', color: 'var(--status-green-text)', display: 'grid', placeItems: 'center', marginBottom: 12 }}>{tickGlyph13}</span>
+              <span style={{ width: 40, height: 40, borderRadius: '50%', background: 'var(--status-green-bg)', color: 'var(--status-green-text)', display: 'grid', placeItems: 'center', marginBottom: 12 }}>{tickGlyph13}</span>
             )}
             <div className="card-title" style={{ marginBottom: 3 }}>{anyValidated ? 'No open failures' : 'No invoices validated yet'}</div>
             <div style={{ fontSize: 13, color: 'var(--fg-3)' }}>{anyValidated ? 'Every invoice passed validation.' : 'Failures appear here once invoices are validated.'}</div>
@@ -406,7 +401,7 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
             {mock.activity.map((a, i) => (
               <div key={i} style={{ display: 'flex', gap: 12 }}>
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 'none' }}>
-                  <span style={{ width: 8, height: 8, borderRadius: 99, background: a.dot, marginTop: 4 }} />
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: a.dot, marginTop: 4 }} />
                   <span style={{ width: 1, flex: 1, background: 'var(--line-2)', minHeight: a.line }} />
                 </div>
                 <div style={{ paddingBottom: 16, flex: 1, minWidth: 0 }}>

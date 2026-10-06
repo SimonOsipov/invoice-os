@@ -51,7 +51,7 @@ post-deploy verification steps of `.github/workflows/dev-env.yml`, on every read
 environment (M4-23) and its Postgres is bootstrapped + seeded fresh at gateway boot
 (M4-21-04), alongside the smoke and api suites. The `e2e` job runs smoke then api; the
 `topology` job then runs the topology suite as parallel units, one matrix leg each
-(`serial-lane`, `import-wizard`, `invoice-surfaces`, from `e2e/topology/shards.ts`). `dev-env.yml` flow:
+(`serial-lane`, `import-wizard`, `import-wizard-2`, `invoice-surfaces`, from `e2e/topology/shards.ts`). `dev-env.yml` flow:
 
 ```
 prepare-env ──> create-or-reuse this PR's `pr-<N>` fork of `development` (on
@@ -202,7 +202,7 @@ neither purges nor seeds.
 
 **Shard seed (INFRA-04).** After the seed, `db.SeedShards` applies `db/seed.e2e-shards.sql`,
 only when `ResetWillRun` holds, so on PR forks only. It gives each dedicated topology shard
-(`import-wizard`, `invoice-surfaces`) a tenant pair that copies 1111 (firm) and 2222
+(`import-wizard`, `import-wizard-2`, `invoice-surfaces`) a tenant pair that copies 1111 (firm) and 2222
 (in-house), and the file lists what it copies. It writes nothing for the four
 `db/seed.dev.sql` tenants, and the purge allowlist (`db.DemoTenants`) does not include the
 shard tenants.

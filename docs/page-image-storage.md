@@ -186,7 +186,7 @@ import that produced one invoice also lands there, at `/extraction/<jobId>`, and
 reopens the screen on a reload. There is no sidebar item.
 
 Reachable *in code* is not the same as *proven on the deployed build*. Twelve `EXTR11-E2E-*` rows
-in `e2e/topology/import-wizard.spec.ts` walk this path; eleven enter through the card's control, and
+in `e2e/topology/import-wizard.spec.ts` and `import-wizard-2.spec.ts` walk this path; eleven enter through the card's control, and
 `EXTR11-E2E-07` is the exception — it measures the control's geometry on the invoice detail and
 never clicks it. `dev-env.yml` gates its E2E job on `pull_request.draft == false`, so a
 draft PR proves none of them. EXTR-11-09 is what settles it.

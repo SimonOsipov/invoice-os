@@ -806,6 +806,24 @@ describe('the AI-unavailable marker', () => {
     expect(root().textContent ?? '', 'the marker state promises a second read').not.toMatch(/\bagain\b/i)
   })
 
+  it('the one-sentence states keep the drawn line height', async () => {
+    const states: [string, ExtractionDetail, string][] = [
+      ['reading', mkDetail({ state: 'extracting' }), STILL_READING],
+      ['dead-lettered', mkDetail({ state: 'dead_lettered', failure_kind: null }), sentenceFor(null)],
+      ['AI-unavailable', mkDetail({ state: 'succeeded', fields: [marker()] }), AI_UNAVAILABLE_REFUSAL],
+    ]
+    for (const [label, detail, text] of states) {
+      cleanup()
+      render(review({ ctx: serving(detail).ctx }))
+      await flush()
+
+      const el = screen.getByText(text)
+      expect(el.style.fontSize, `${label} fontSize`).toBe('13px')
+      expect(el.style.color, `${label} colour`).toBe('var(--fg-2)')
+      expect(el.style.lineHeight, `${label} lineHeight`).toBe('1.55')
+    }
+  })
+
   it('AIR04-S6: the sentence takes the dead-letter rung’s exact treatment: same markup, same style', async () => {
     render(review({ ctx: serving(mkDetail({ state: 'dead_lettered', failure_kind: null })).ctx }))
     await flush()
@@ -1099,7 +1117,7 @@ describe('the screen renders inside its own tree', () => {
     expect(within(container).getByTestId('extraction-review')).toBeTruthy()
 
     // Every `--bg-*` / `--fg-*` / `--status-*` token is declared on `.asc-app`
-    // (packages/design-tokens/app-layer.css:18). Markup outside that tree resolves none of
+    // (packages/design-tokens/v2/app-layer.css). Markup outside that tree resolves none of
     // them, so a portalled node renders unstyled on the deployed build and jsdom, which
     // applies no CSS at all, would never say so.
     expect(outside(container), 'the screen rendered outside its own root').toEqual([])
@@ -1233,7 +1251,7 @@ describe('one shared draft, one Save', () => {
 
   it('disables Save while nothing is drafted, and neutralises its filter', async () => {
     // `.v2-btn-primary:hover` sets `filter: brightness(1.22)` with no `:disabled` guard
-    // (app-layer.css:213), so a disabled Save brightens under the cursor and reads enabled.
+    // (v2/app-layer.css), so a disabled Save brightens under the cursor and reads enabled.
     // There is NO disabled reason: the only condition is "nothing settled yet", which is
     // self-evident, and both shipped precedents disable without one.
     const w = writing(AMBIGUOUS_JOB)
@@ -1245,6 +1263,8 @@ describe('one shared draft, one Save', () => {
     expect(save!.textContent, 'the Save control is unlabelled').toBe(SAVE)
     expect(save!.disabled, 'Save is pressable with an empty draft').toBe(true)
     expect(save!.style.filter, 'a disabled Save still brightens on hover and reads enabled').toBe('none')
+    expect(save!.style.background, "a disabled Save lost RR's grey").toBe('var(--bg-3)')
+    expect(save!.style.color, "a disabled Save lost RR's grey text").toBe('var(--fg-4)')
     expect(save!.hasAttribute('title'), 'the Save control hides something in a tooltip').toBe(false)
   })
 

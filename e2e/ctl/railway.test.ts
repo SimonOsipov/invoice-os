@@ -10,7 +10,6 @@ import {
   readRailwayIds,
   readRailwayToken,
   resolveEnv,
-  RAILWAY_ID_KEYS,
   URL_VAR,
   type RailwayIds,
   type ServiceLabel,
@@ -178,8 +177,9 @@ describe('readRailwayIds', () => {
   })
 
   it('every one of the six keys is required and named when absent', () => {
-    expect(RAILWAY_ID_KEYS).toHaveLength(6)
-    for (const key of RAILWAY_ID_KEYS) {
+    const keys = YAML_KEYS.map((l) => l.trim().split(':')[0]).filter((k) => !/DEV_ENVIRONMENT|POSTGRES/.test(k))
+    expect(keys).toHaveLength(6)
+    for (const key of keys) {
       const without = YAML_KEYS.filter((l) => !l.includes(`${key}:`))
       expect(without, key).toHaveLength(YAML_KEYS.length - 1)
       expect(thrown(() => readRailwayIds(yamlOf(without))).message, key).toContain(key)

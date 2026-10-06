@@ -397,6 +397,18 @@ func TestVerifyPage_SecurityHeaders(t *testing.T) {
 	}
 }
 
+// The flag set by the first submit is cleared on pageshow, so a bfcache restore or an aborted
+// submit leaves a live button. No JS runtime here; the script text is pinned.
+func TestVerifyPage_ScriptRearmsOnPageshow(t *testing.T) {
+	_, doc := vpPage(t, vpToken)
+	script := vpScript(t, doc)
+	for _, want := range []string{"addEventListener('pageshow'", "delete f.dataset.sent"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("the inline script lacks %q", want)
+		}
+	}
+}
+
 func TestVerifyPage_ScriptHashMatchesCSP(t *testing.T) {
 	rec, doc := vpPage(t, vpToken)
 	script := vpScript(t, doc)

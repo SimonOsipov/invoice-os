@@ -1122,7 +1122,7 @@ test('the emailed link opens a confirm page, and a bogus token\'s click lands on
     const doc = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }))
     expect(doc.clientWidth, `the document has no width at ${width}px`).toBeGreaterThan(0)
     expect(doc.scrollWidth - doc.clientWidth, `the confirm page scrolls sideways at ${width}px (${JSON.stringify(doc)})`).toBeLessThanOrEqual(1)
-    // D10: a dropped `font` shorthand computes the browser default (13.333px / 400).
+    // A dropped `font` shorthand computes the browser default (13.333px / 400).
     const reading = await button.evaluate((el) => ({ fontSize: getComputedStyle(el).fontSize, fontWeight: getComputedStyle(el).fontWeight }))
     expect(reading, `the button font at ${width}px`).toEqual({ fontSize: '14px', fontWeight: '700' })
     readings.push({ width, ...reading })

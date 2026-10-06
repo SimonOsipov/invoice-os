@@ -17,7 +17,10 @@ const maxVerifyTokenBytes = 256
 
 // verifyScript blocks a second submit; its hash goes into the CSP.
 const verifyScript = `// A second submit would show the spent token's failure to a verified registrant.
-document.querySelector('form').addEventListener('submit', function (e) { if (this.dataset.sent) e.preventDefault(); else this.dataset.sent = '1' })`
+var f = document.querySelector('form')
+f.addEventListener('submit', function (e) { if (this.dataset.sent) e.preventDefault(); else this.dataset.sent = '1' })
+// A back/forward-cache restore or an aborted submit must not leave the button dead.
+addEventListener('pageshow', function () { delete f.dataset.sent })`
 
 // Filled by strings.NewReplacer, not html/template: its reflection keeps every exported method
 // in the binary, which TestProductionGatewayBinaryCannotMint rejects.

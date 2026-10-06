@@ -600,7 +600,7 @@ func TestVerify_FormWinsOverQuery(t *testing.T) {
 	}
 }
 
-// Every answer of a POST that reaches the handler, redirect or refusal, is uncacheable (D5).
+// Every answer of a POST that reaches the handler, redirect or refusal, is uncacheable.
 func TestVerify_EveryAnswerIsUncacheable(t *testing.T) {
 	const good = "token=" + verifyToken + "&type=signup"
 	for _, c := range []struct {

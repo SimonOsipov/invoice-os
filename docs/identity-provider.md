@@ -486,7 +486,7 @@ otherwise. The tenant id is a UUIDv5 of the caller's subject; the membership gua
   The attacker then owns a verified account at the victim's address. No password-recovery
   path exists yet, so the victim cannot take it back.
 - *Link scanners.* A mail scanner that prefetches the link with GET or HEAD gets the confirm
-  page and spends nothing, and it confirms no pre-registration without a click. The hijack
+  page and spends nothing. The hijack
   half above stays: closing it needs password recovery, or a delete-and-re-create of an
   unconfirmed user on a repeat signup.
 

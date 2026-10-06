@@ -294,4 +294,23 @@ describe('resendVerification', () => {
     expect((err as ApiError).kind).toBe('malformed')
     expect(fetchMock).not.toHaveBeenCalled()
   })
+
+  it('resendVerification resolves for a 202 whatever its body holds, and rejects any refusal', async () => {
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.x')
+    const settleWith = (res: Response | Error) => {
+      vi.stubGlobal('fetch', vi.fn().mockImplementation(() => (res instanceof Error ? Promise.reject(res) : Promise.resolve(res))))
+      return resendVerification('a@corp.example').then(
+        () => 'resolved',
+        (e: unknown) => (e instanceof ApiError ? `${e.kind} ${e.status}` : String(e)),
+      )
+    }
+    const bodies = ['{"status":"accepted"}', '{}', 'null', '[]', '', 'ok', '<html>accepted</html>']
+    expect(bodies.length).toBeGreaterThan(0)
+    for (const body of bodies) expect(await settleWith(new Response(body, { status: 202 })), `202 body ${JSON.stringify(body)}`).toBe('resolved')
+
+    expect(await settleWith(new Response('{"error":"invalid email address"}', { status: 400 }))).toBe('http 400')
+    expect(await settleWith(new Response('bad gateway', { status: 502 }))).toBe('http 502')
+    expect(await settleWith(new Response('{"error":"registration is not configured"}', { status: 503 }))).toBe('http 503')
+    expect(await settleWith(new TypeError('Failed to fetch'))).toBe('network null')
+  })
 })

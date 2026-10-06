@@ -1053,7 +1053,7 @@ describe('the resend control on the check-your-email view', () => {
   const ADA = 'ada@corp.example'
   const RESEND = 'Send the link again'
   const SENDING = 'Sending…'
-  // D10 copy, pinned here and not imported: a wording change is a deliberate edit here and in the story.
+  // Pinned here, not imported: a wording change is a deliberate edit.
   const SENT = `If ${ADA} still needs verifying, a new link is on its way. Use the newest one.`
   const FAILED = 'The link could not be sent right now. Try again shortly.'
   const RESEND_URL = 'https://gw.x/auth/resend-verification'
@@ -1211,5 +1211,39 @@ describe('the resend control on the check-your-email view', () => {
     } finally {
       process.off('unhandledRejection', onUnhandled)
     }
+  })
+
+  it('a later resend clears the earlier outcome, and a notice and an alert replace each other', async () => {
+    let next: () => Response | Promise<Response> = () => json(202, { status: 'accepted' })
+    routedFetch(() => next())
+    await mountApp()
+    const d = await checkView()
+    const btn = resendButton(d)
+    expect(btn.type, 'a plain button, so it never submits anything').toBe('button')
+
+    await click(btn)
+    expect(statusNotes(d), 'control: the first notice shows').toEqual([SENT])
+
+    let release!: (r: Response) => void
+    next = () =>
+      new Promise<Response>((resolve) => {
+        release = resolve
+      })
+    await click(btn)
+    expect(statusNotes(d), 'the old notice is gone while the next resend runs').toEqual([])
+    expect(alerts(d)).toEqual([])
+    expect(btn.disabled).toBe(true)
+
+    await act(async () => release(json(503, { error: 'registration is not configured' })))
+    await settle()
+    expect(alerts(d), 'a refusal after a notice').toEqual([FAILED])
+    expect(statusNotes(d), 'the notice does not stay beside the alert').toEqual([])
+
+    next = () => json(202, { status: 'accepted' })
+    await click(btn)
+    expect(alerts(d), 'a notice after a refusal').toEqual([])
+    expect(statusNotes(d)).toEqual([SENT])
+    expect(d.textContent, 'the view stays').toContain('Check your email')
+    expect(document.querySelectorAll(REGISTER_DIALOG).length).toBe(1)
   })
 })

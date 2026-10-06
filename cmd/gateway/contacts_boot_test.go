@@ -73,8 +73,18 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 	}
 	var verifyMu sync.Mutex
 	var verifyBodies []string
+	var callsMu sync.Mutex
+	var calls []string
+	goTrueCalls := func() []string {
+		callsMu.Lock()
+		defer callsMu.Unlock()
+		return slices.Clone(calls)
+	}
 	goTrue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
+		callsMu.Lock()
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		callsMu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/verify":
@@ -262,6 +272,43 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 			t.Errorf("GoTrue /verify got %s, want {\"type\":\"signup\",\"token_hash\":\"tok\"}", got[0])
 		}
 		requireIntake(t, next(t), verifyID)
+	})
+	t.Run("reset password", func(t *testing.T) {
+		link := base + "/auth/reset-password?token=t&type=recovery"
+		before := len(goTrueCalls())
+		var page string
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			req, _ := http.NewRequest(method, link, nil)
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("%s of the reset link answered %d, want 200\n%s", method, resp.StatusCode, out)
+			}
+			if method == http.MethodGet {
+				page = string(b)
+			}
+		}
+		if got := goTrueCalls(); len(got) != before {
+			t.Fatalf("opening the reset link reached GoTrue: %v", got[before:])
+		}
+
+		action, values := pageForm(t, link, page)
+		values.Set("password", "new-password-1")
+		resp, err := client.PostForm(action, values)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "http://site.invalid/?reset=1" {
+			t.Fatalf("the reset answered %d Location %q, want 303 ?reset=1\n%s", resp.StatusCode, resp.Header.Get("Location"), out)
+		}
+		if got, want := goTrueCalls()[before:], []string{"POST /verify", "PUT /user", "POST /logout"}; !slices.Equal(got, want) {
+			t.Errorf("GoTrue saw %v, want %v", got, want)
+		}
 	})
 	t.Run("sign-in", func(t *testing.T) {
 		raw := make([]byte, 32)

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
 )
@@ -141,59 +142,63 @@ func TestGatewayMainWiresAuthSiteURLIntoRegistration(t *testing.T) {
 	}
 }
 
-// The client is 10 s and never follows a redirect. No seam exposes it, so its literal is read.
+// Each GoTrue client is 10 s and never follows a redirect. No seam exposes it, so its literal is read.
 func TestRegistrationClientTimeoutAndNoFollow(t *testing.T) {
 	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	var fn *ast.FuncDecl
-	for _, d := range f.Decls {
-		if d, ok := d.(*ast.FuncDecl); ok && d.Name.Name == "registrationHandlers" {
-			fn = d
-		}
-	}
-	if fn == nil {
-		t.Fatal("main.go declares no registrationHandlers")
-	}
-	var clients []map[string]string
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		cl, ok := n.(*ast.CompositeLit)
-		if !ok || types.ExprString(cl.Type) != "http.Client" {
-			return true
-		}
-		fields := map[string]string{}
-		for _, e := range cl.Elts {
-			kv, ok := e.(*ast.KeyValueExpr)
-			if !ok {
-				continue
+	for _, name := range []string{"registrationHandlers", "resetPasswordHandler"} {
+		var fn *ast.FuncDecl
+		for _, d := range f.Decls {
+			if d, ok := d.(*ast.FuncDecl); ok && d.Name.Name == name {
+				fn = d
 			}
-			fields[types.ExprString(kv.Key)] = types.ExprString(kv.Value)
-			// ExprString elides a func literal's body; record what it returns instead.
-			if lit, ok := kv.Value.(*ast.FuncLit); ok {
-				var rets []string
-				ast.Inspect(lit.Body, func(n ast.Node) bool {
-					if r, ok := n.(*ast.ReturnStmt); ok {
-						for _, x := range r.Results {
-							rets = append(rets, "return "+types.ExprString(x))
+		}
+		if fn == nil {
+			t.Errorf("main.go declares no %s", name)
+			continue
+		}
+		var clients []map[string]string
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			cl, ok := n.(*ast.CompositeLit)
+			if !ok || types.ExprString(cl.Type) != "http.Client" {
+				return true
+			}
+			fields := map[string]string{}
+			for _, e := range cl.Elts {
+				kv, ok := e.(*ast.KeyValueExpr)
+				if !ok {
+					continue
+				}
+				fields[types.ExprString(kv.Key)] = types.ExprString(kv.Value)
+				// ExprString elides a func literal's body; record what it returns instead.
+				if lit, ok := kv.Value.(*ast.FuncLit); ok {
+					var rets []string
+					ast.Inspect(lit.Body, func(n ast.Node) bool {
+						if r, ok := n.(*ast.ReturnStmt); ok {
+							for _, x := range r.Results {
+								rets = append(rets, "return "+types.ExprString(x))
+							}
 						}
-					}
-					return true
-				})
-				fields[types.ExprString(kv.Key)] = strings.Join(rets, "; ")
+						return true
+					})
+					fields[types.ExprString(kv.Key)] = strings.Join(rets, "; ")
+				}
 			}
+			clients = append(clients, fields)
+			return true
+		})
+		if len(clients) != 1 {
+			t.Errorf("%s builds %d http.Client literals, want 1", name, len(clients))
+			continue
 		}
-		clients = append(clients, fields)
-		return true
-	})
-	if len(clients) != 1 {
-		t.Fatalf("registrationHandlers builds %d http.Client literals, want 1", len(clients))
-	}
-	if got := clients[0]["Timeout"]; got != "10 * time.Second" {
-		t.Errorf("Timeout = %q, want 10 * time.Second", got)
-	}
-	if got := clients[0]["CheckRedirect"]; got != "return http.ErrUseLastResponse" {
-		t.Errorf("CheckRedirect returns %q, want only http.ErrUseLastResponse", got)
+		if got := clients[0]["Timeout"]; got != "10 * time.Second" {
+			t.Errorf("%s Timeout = %q, want 10 * time.Second", name, got)
+		}
+		if got := clients[0]["CheckRedirect"]; got != "return http.ErrUseLastResponse" {
+			t.Errorf("%s CheckRedirect returns %q, want only http.ErrUseLastResponse", name, got)
+		}
 	}
 }
 
@@ -224,9 +229,23 @@ func TestRegistrationHandlers_DoNotFollowGoTrueRedirects(t *testing.T) {
 		t.Errorf("Verify Location = %q, want https://site.example/?verify=failed", loc)
 	}
 	mu.Lock()
-	defer mu.Unlock()
 	if want := []string{"POST /signup", "POST /verify"}; !slices.Equal(calls, want) {
 		t.Errorf("GoTrue saw %v, want %v", calls, want)
+	}
+	before := len(calls)
+	mu.Unlock()
+
+	log := slog.New(slog.DiscardHandler)
+	signIn := gateway.NewSignInThrottle("sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
+	reset := resetPasswordHandler(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), signIn, log)
+	rec = serveForm(reset, "/auth/reset-password", "token=T&type=recovery&password=new-password-1")
+	if loc := rec.Header().Get("Location"); loc != "https://site.example/?reset=failed" {
+		t.Errorf("reset form Location = %q, want https://site.example/?reset=failed", loc)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{"POST /verify"}; !slices.Equal(calls[before:], want) {
+		t.Errorf("the reset form made GoTrue calls %v, want only %v", calls[before:], want)
 	}
 }
 
@@ -253,6 +272,7 @@ func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 	mux.Handle("POST /auth/register", reg.Register)
 	// No method in the pattern, so the handler's own method check answers.
 	mux.Handle("/auth/resend-verification", reg.ResendVerification)
+	mountResetRoutes(t, mux, reg, authURL, site)
 
 	// Positive pair: the right methods reach the handlers.
 	if rec := serveRegistration(mux, http.MethodPost, "/auth/register", `{"email":"a@corp.example","password":"p"}`); rec.Code != http.StatusAccepted {
@@ -267,6 +287,18 @@ func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 	if rec := serveForm(mux, "/auth/verify", "token=T&type=signup"); rec.Code != http.StatusSeeOther {
 		t.Fatalf("POST /auth/verify = %d, want 303", rec.Code)
 	}
+	if rec := serveRegistration(mux, http.MethodPost, "/auth/request-password-reset", `{"email":"a@corp.example"}`); rec.Code != http.StatusAccepted {
+		t.Fatalf("POST /auth/request-password-reset = %d, want 202", rec.Code)
+	}
+	if rec := serveRegistration(mux, http.MethodGet, "/auth/reset-password?token=T&type=recovery", ""); rec.Code != http.StatusOK {
+		t.Fatalf("GET /auth/reset-password = %d, want 200", rec.Code)
+	}
+	if rec := serveForm(mux, "/auth/reset-password", "token=T&type=recovery&password=new-password-1"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST /auth/reset-password = %d, want 303", rec.Code)
+	}
+	if got := countCalls(calls(), "POST /verify"); got != 2 {
+		t.Fatalf("the verify and reset forms made %d GoTrue /verify calls, want 2", got)
+	}
 	before := len(calls())
 
 	for _, c := range []struct{ method, target string }{
@@ -279,6 +311,11 @@ func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 		{http.MethodPut, "/auth/verify?token=T&type=signup"},
 		{http.MethodOptions, "/auth/verify?token=T&type=signup"},
 		{http.MethodDelete, "/auth/verify?token=T&type=signup"},
+		{http.MethodGet, "/auth/request-password-reset"},
+		{http.MethodPut, "/auth/request-password-reset"},
+		{http.MethodDelete, "/auth/request-password-reset"},
+		{http.MethodPut, "/auth/reset-password?token=T&type=recovery"},
+		{http.MethodDelete, "/auth/reset-password?token=T&type=recovery"},
 	} {
 		if rec := serveRegistration(mux, c.method, c.target, ""); rec.Code != http.StatusMethodNotAllowed {
 			t.Errorf("%s %s = %d, want 405", c.method, c.target, rec.Code)
@@ -320,6 +357,73 @@ func TestVerifyRoute_OpeningNeverReachesGoTrue(t *testing.T) {
 		t.Errorf("click = %d Location %q, want 303 https://site.example/?verified=1", rec.Code, rec.Header().Get("Location"))
 	}
 	if got, want := calls(), []string{"POST /verify"}; !slices.Equal(got, want) {
+		t.Errorf("GoTrue saw %v, want %v", got, want)
+	}
+}
+
+// mountResetRoutes adds main's reset patterns, over the real handlers, to mux.
+func mountResetRoutes(t *testing.T, mux *http.ServeMux, reg registration, authURL, site *url.URL) {
+	t.Helper()
+	log := slog.New(slog.DiscardHandler)
+	signIn := gateway.NewSignInThrottle("sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
+	mux.Handle("POST /auth/request-password-reset", reg.RequestPasswordReset)
+	mux.Handle("OPTIONS /auth/request-password-reset", reg.RequestPasswordReset)
+	mux.Handle("GET /auth/reset-password", gateway.ResetPasswordPageHandler(site))
+	mux.Handle("POST /auth/reset-password", resetPasswordHandler(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), signIn, log))
+}
+
+// Opening the reset link, by GET or HEAD, spends nothing; only the POST of the page's own form reaches GoTrue.
+func TestResetPasswordRoute_OpeningNeverReachesGoTrue(t *testing.T) {
+	var mu sync.Mutex
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/verify" {
+			_, _ = w.Write([]byte(`{"access_token":"at","user":{"id":"7f3c2a1e-0b7d-4f51-9a0e-5d1c2b3a4e5f","email":"ada@corp.example"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+	seen := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(calls)
+	}
+	authURL, _ := url.Parse(srv.URL)
+	site, _ := url.Parse("https://site.example")
+	mux := http.NewServeMux()
+	mountResetRoutes(t, mux, registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil), authURL, site)
+	const link = "http://gateway.test/auth/reset-password?token=T&type=recovery"
+
+	var page string
+	for _, method := range []string{http.MethodGet, http.MethodGet, http.MethodHead} {
+		rec := serveRegistration(mux, method, link, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s %s = %d, want 200", method, link, rec.Code)
+		}
+		if method == http.MethodGet {
+			page = rec.Body.String()
+		}
+	}
+	if got := seen(); len(got) != 0 {
+		t.Fatalf("opening the link reached GoTrue: %v", got)
+	}
+
+	action, values := pageForm(t, link, page)
+	if values.Get("token") != "T" || values.Get("type") != "recovery" {
+		t.Fatalf("form values = %v, want token=T and type=recovery", values)
+	}
+	values.Set("password", "new-password-1")
+	rec := serveForm(mux, action, values.Encode())
+
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "https://site.example/?reset=1" {
+		t.Errorf("submit = %d Location %q, want 303 https://site.example/?reset=1", rec.Code, rec.Header().Get("Location"))
+	}
+	if got, want := seen(), []string{"POST /verify", "PUT /user", "POST /logout"}; !slices.Equal(got, want) {
 		t.Errorf("GoTrue saw %v, want %v", got, want)
 	}
 }

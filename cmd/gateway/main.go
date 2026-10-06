@@ -267,7 +267,7 @@ func gatewayHandlers(
 
 // registration holds the public registration handlers main mounts outside /api/.
 type registration struct {
-	Register, Verify, DemoRequest, ResendVerification http.Handler
+	Register, Verify, DemoRequest, ResendVerification, RequestPasswordReset http.Handler
 }
 
 // newJWKSClient builds the JWKS fetch client.
@@ -281,7 +281,7 @@ func newJWKSClient() *http.Client {
 func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, log *slog.Logger, sink gateway.ContactSink) registration {
 	if authURL == nil || siteURL == nil {
 		nc := gateway.RegistrationNotConfigured()
-		return registration{Register: nc, Verify: nc, ResendVerification: nc, DemoRequest: gateway.DemoRequestHandler(sink, log)}
+		return registration{Register: nc, Verify: nc, ResendVerification: nc, RequestPasswordReset: notImplemented(), DemoRequest: gateway.DemoRequestHandler(sink, log)}
 	}
 	client := &http.Client{
 		Timeout:       10 * time.Second,
@@ -295,13 +295,27 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 		ResendVerification: gateway.ResendVerificationHandler(authURL, client, minResponse,
 			gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now),
 			gateway.NewSignInThrottle("resend-ip", gateway.ResendPerIP, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now), enforce, log),
-		DemoRequest: gateway.DemoRequestHandler(sink, log),
+		RequestPasswordReset: notImplemented(),
+		DemoRequest:          gateway.DemoRequestHandler(sink, log),
 	}
+}
+
+// notImplemented is the Mode A stub for the reset handlers.
+func notImplemented() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not implemented", http.StatusNotImplemented)
+	})
+}
+
+// resetPasswordHandler is a Mode A stub.
+func resetPasswordHandler(_, _ *url.URL, _ *gateway.SessionChecker, _ *gateway.SignInThrottle, _ *slog.Logger) http.Handler {
+	return notImplemented()
 }
 
 // handoff holds the public sign-in hand-off, renewal and sign-out handlers main mounts outside /api/.
 type handoff struct {
 	SignIn, Exchange, Refresh, SignOut http.Handler
+	SignInThrottle                     *gateway.SignInThrottle
 }
 
 // handoffHandlers builds the sign-in, exchange, refresh and sign-out handlers against GoTrue at authURL.
@@ -320,6 +334,8 @@ func handoffHandlers(authURL *url.URL, sessions *gateway.SessionChecker, log *sl
 		Exchange: gateway.ExchangeHandler(store),
 		Refresh:  gateway.RefreshHandler(authURL, client, log),
 		SignOut:  gateway.SignOutHandler(authURL, client, sessions, log),
+
+		SignInThrottle: throttle,
 	}
 }
 

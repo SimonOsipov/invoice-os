@@ -1,6 +1,7 @@
 // ctl login: argument rules, the reuse / re-sign-in / re-create chain, the API role read and the re-grant.
 // The helpers that resolve a URL at load are imported by login.ts lazily, so every test imports a fresh ./login
 // after vi.resetModules() (the realAccounts.test.ts pattern). Credentials never reach an assertion message.
+import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -540,17 +541,26 @@ describe('login chain', () => {
 })
 
 describe('next commands are POSIX-shell safe', () => {
-  it('a storage path and a session with spaces and quotes are single-quoted', async () => {
+  // The words a POSIX shell parses out of a `next` line, after the playwright-cli prefix.
+  const wordsOf = (line: string) =>
+    spawnSync('sh', ['-c', `printf '%s\\n' ${line.slice(line.indexOf('playwright-cli ') + 'playwright-cli '.length)}`], { encoding: 'utf8' }).stdout.split('\n').slice(0, -1)
+
+  it('a storage path, a session and a URL with quotes, spaces, $ and backticks reach the shell as one word each', async () => {
     const L = await load()
-    const root = mkdtempSync(path.join(tmpdir(), "ctl login it's "))
+    const root = mkdtempSync(path.join(tmpdir(), "ctl $HOME `id` it's "))
     roots.push(root)
-    const deps = makeDeps(L, root, [])
+    const session = 'my ses\'sion $HOME `id` "q" \\z'
+    const appUrl = 'https://app.test/?a=1&b=$x'
+    const deps = makeDeps(L, root, [], { resolveEnv: vi.fn(async (env: string): Promise<EnvResult> => ({ env, environmentId: ENV_ID, urls: { ...urls, APP_URL: appUrl }, dark: [] })) })
 
-    const r = await L.login(req('firm', 'admin', 'pr-1', "my ses'sion"), deps)
+    const r = await L.login(req('firm', 'admin', 'pr-1', session), deps)
 
-    const q = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`
-    expect(r.next.some((l) => l.includes(`state-load ${q(r.storageState)}`)), r.next.join('\n')).toBe(true)
-    expect(r.next.filter((l) => l.includes('-s=')).every((l) => l.includes(`-s=${q("my ses'sion")} `)), r.next.join('\n')).toBe(true)
+    const loads = r.next.filter((l) => l.includes(' state-load '))
+    const gotos = r.next.filter((l) => l.includes(' goto '))
+    expect(loads, r.next.join('\n')).toHaveLength(1)
+    expect(gotos, r.next.join('\n')).toHaveLength(1)
+    expect(wordsOf(loads[0]!)).toEqual([`-s=${session}`, 'state-load', r.storageState])
+    expect(wordsOf(gotos[0]!)).toEqual([`-s=${session}`, 'goto', appUrl])
   })
 })
 

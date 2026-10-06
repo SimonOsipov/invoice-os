@@ -61,7 +61,8 @@ describe('checkSavedState reads the saved access token and never boots the app',
     expect(await checkSavedState('firm-admin', account, urls, appState(jwt({ exp: inAnHour() })))).toEqual({ ok: false })
 
     expect(await checkSavedState('firm-admin', account, urls, path.join(dir, 'missing.json'))).toEqual({ ok: false })
-    expect(await checkSavedState('firm-admin', account, urls, state('https://other.test', 'invoice-os.session', {}))).toEqual({ ok: false })
+    me.mockResolvedValue({ tenant: { id: TENANT }, user: { role: 'admin' } })
+    expect(await checkSavedState('firm-admin', account, urls, state('https://other.test', 'invoice-os.session', { token: jwt({ exp: inAnHour() }) }))).toEqual({ ok: false })
     expect(await checkSavedState('firm-admin', account, urls, state(urls.APP_URL, 'invoice-os.session', 'not json'))).toEqual({ ok: false })
     expect(launch).not.toHaveBeenCalled()
   })

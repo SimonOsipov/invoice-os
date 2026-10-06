@@ -14,15 +14,6 @@ export const URL_VAR: Record<ServiceLabel, UrlVar> = {
   'support-console': 'SUPPORT_CONSOLE_URL',
 }
 
-export const RAILWAY_ID_KEYS = [
-  'RAILWAY_PROJECT_ID',
-  'RAILWAY_SVC_GATEWAY_ID',
-  'RAILWAY_SVC_APP_ID',
-  'RAILWAY_SVC_LANDING_ID',
-  'RAILWAY_SVC_OPS_CONSOLE_ID',
-  'RAILWAY_SVC_SUPPORT_CONSOLE_ID',
-] as const
-
 export interface RailwayIds {
   projectId: string
   services: Record<ServiceLabel, string>
@@ -46,6 +37,7 @@ const ID_KEY: Record<ServiceLabel, string> = {
   'ops-console': 'RAILWAY_SVC_OPS_CONSOLE_ID',
   'support-console': 'RAILWAY_SVC_SUPPORT_CONSOLE_ID',
 }
+export const RAILWAY_ID_KEYS = ['RAILWAY_PROJECT_ID', ...Object.values(ID_KEY)]
 
 const ENV_LIST_QUERY =
   'query($p:String!){environments(projectId:$p){edges{node{id name isEphemeral}} pageInfo{hasNextPage}}}'
@@ -139,14 +131,14 @@ async function findEnvironment(name: string, token: string, projectId: string) {
 
 async function serviceDomain(label: ServiceLabel, token: string, projectId: string, envId: string, serviceId: string) {
   const data = await gql(token, DOMAINS_QUERY, { p: projectId, e: envId, s: serviceId }, `discovering the ${label} domain`)
-  // Null customDomains is a drifted query or a failed read, not an empty list (D34).
+  // Null customDomains is a drifted query or a failed read, not an empty list.
   if (!Array.isArray(data?.domains?.customDomains)) {
-    throw new CtlError(`the ${label} domains reply carries no customDomains list`, 'Refusing to pick the generated domain over a possible custom one.', 1)
+    throw new CtlError(`the ${label} domains reply carries no customDomains list`, 'Refusing to pick the generated domain over a possible custom one. See docs/add-a-service.md step 6.', 1)
   }
   const all: { domain: string }[] = [...data.domains.customDomains, ...(data.domains.serviceDomains ?? [])]
   const domain = all[0]?.domain
   if (!domain) {
-    throw new CtlError(`no domain found for ${label} in environment ${envId}`, 'Every public service needs a custom or Railway-generated domain.', 1)
+    throw new CtlError(`no domain found for ${label} in environment ${envId}`, 'Every public service needs a custom or Railway-generated domain. See docs/add-a-service.md step 6.', 1)
   }
   return `https://${domain}`
 }
@@ -189,8 +181,8 @@ export async function envCommand(positionals: string[], _flags: Record<string, s
   const result = await resolveEnv(name, { token, ids })
   if (result.dark.length > 0) {
     throw new CtlError(
-      `dark domain: ${result.dark.join(', ')}`,
-      'Railway answers "Application not found" for it. Delete and recreate the domain, or rerun the deploy gate.',
+      result.dark.map((l) => `${l} is dark: Railway's edge has no route for ${new URL(result.urls[URL_VAR[l]] as string).host}`).join('; '),
+      "Not an app bug. The deploy gate's verify-spa-domains step recreates the domain; re-run the gate or report it.",
       1,
       { urls: result.urls, dark: result.dark },
     )

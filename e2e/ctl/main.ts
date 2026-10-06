@@ -1,5 +1,4 @@
 import { parseArgs } from 'node:util'
-import { envCommand } from './railway'
 
 export class CtlError extends Error {
   hint: string
@@ -62,7 +61,12 @@ const notBuilt =
     throw new CtlError(`${name} is not built yet`, `Run ${CTL} --help for the commands that work.`, 1)
   }
 
-const DEFAULTS: Commands = { env: envCommand, login: notBuilt('login'), measure: notBuilt('measure') }
+// Lazy so --help loads no command module.
+const DEFAULTS: Commands = {
+  env: async (p, f) => (await import('./railway')).envCommand(p, f),
+  login: notBuilt('login'),
+  measure: notBuilt('measure'),
+}
 
 const json = (value: unknown) => JSON.stringify(value) + '\n'
 
@@ -114,8 +118,10 @@ export async function run(
 }
 
 if (import.meta.main) {
-  const r = await run(process.argv.slice(2))
-  process.stdout.write(r.stdout)
-  process.stderr.write(r.stderr)
-  process.exitCode = r.code
+  // No top-level await: railway.ts imports CtlError from this module and would deadlock on it.
+  void run(process.argv.slice(2)).then((r) => {
+    process.stdout.write(r.stdout)
+    process.stderr.write(r.stderr)
+    process.exitCode = r.code
+  })
 }

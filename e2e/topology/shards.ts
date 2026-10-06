@@ -41,7 +41,7 @@ export const UNITS: Unit[] = [
       'portfolio.spec.ts':
         'Cost, not shared state ([fork-lane-by-cost]): creates its own entities and scopes each assertion to their rows. A shard costs ~1 min of runner setup for ~37 s of tests.',
       'roles.spec.ts':
-        'Asserts the exact seeded roles, staffing and rosters of both tenants (the seeded rows plus exactly one e2e member row), derived by hand from `db/seed.dev.sql`, and the demopolicy-sealed policies.',
+        'Asserts the exact seeded roles, staffing and rosters of both tenants (the seeded rows plus exactly one e2e member row), derived by hand from `db/seed.dev.sql`, and the demopolicy-sealed policies. Its last test invites on 1111, whose invitations every deploy purges; no other spec in the lane reads them.',
       'workflows.spec.ts':
         "Creates and deletes one firm policy in 1111 and asserts the list count as `baseline` / `baseline + 1`, where the baseline includes the demopolicy-seeded firm policy. The count holds only while no other spec writes 1111's policies at the same time, which the lane guarantees. It never publishes (`[topology-never-publishes]`).",
     },

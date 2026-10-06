@@ -28,11 +28,15 @@
 // through the UI, against the real store — is exactly what this file exists to prove, and its
 // own cleanup (below) is what keeps the environment honest afterward.
 //
+// The last test invites on 1111 from the screen. Invitations are purged on every deploy
+// (`invitations` in demopurge.go's purgeTables), and no other serial-lane spec reads them.
+//
 // COUNT ASSERTIONS: persona-surfaces.spec.ts bans literal counts over LIVE, tenant-wide lists
 // on the deployment every suite in the run shares, and permits exactly two shapes — (1) compared against a live API
 // read taken in the same test, (2) containment of rows this test itself created. The member
-// roster is exempt from the ban and stays a literal count: the seeded list cannot grow (no
-// invite, PATCH writes `status` only), and signInAs adds exactly one e2e member (realAccounts.ts).
+// roster is exempt from the ban and stays a literal count: the seeded list cannot grow (PATCH
+// writes `status` only; a pending invite renders as `invite-row`, never `member-row`), and signInAs adds
+// exactly one e2e member (realAccounts.ts).
 // workflow_roles is NOT exempt — Test 3 creates one from this very screen — so every
 // role-grid count below uses shape (1) (Test 1, Test 2, via e2e/api/client.ts's
 // listWorkflowRoles) or shape (2) (Test 3, via the created/deleted role's own locator).
@@ -57,6 +61,8 @@
 // `test.afterAll` below sweeps both halves of its mutation, the role by title prefix and the
 // policy by id first, name second. Modelled on contract-approvals.spec.ts's sweep and on
 // topology/workflows.spec.ts, which mints its own policy exactly this way.
+import { randomUUID } from 'node:crypto'
+
 import { test, expect, type Locator, type Page } from '@playwright/test'
 
 import {
@@ -66,8 +72,11 @@ import {
   listWorkflowRoles,
   login,
   PERSONAS,
+  rawFetch,
 } from '../api/client'
-import { collectErrors, signInAs } from '../personaSession'
+import { browserToken, collectErrors, signInAs } from '../personaSession'
+import { expectedStatusDropper } from './consoleGate'
+import { enclosesRect, gaps, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import {
   MEMBERS_TABLE_HEADS,
   SEED_FIRM_MEMBERS,
@@ -1080,4 +1089,240 @@ test.afterAll(async () => {
       // already deleted by the line above
     }
   }
+})
+
+// ---------------------------------------------------------------------------------------
+// Test 4 -- an admin invites from the Members screen (RESEND-07), on the firm tenant
+// ---------------------------------------------------------------------------------------
+// A live row of GET /api/tenancy/v1/invitations (internal/tenancy/invitations.go).
+type LiveInvite = { id: string; email: string; role: string; status: string; expires_at: string; delivery: string }
+
+/** Runs `fn` at each WIDE_WIDTHS entry, widest first, and restores the entry viewport. */
+async function atEachWidth<T>(page: Page, fn: (width: number) => Promise<T>): Promise<T[]> {
+  const entry = page.viewportSize()
+  const out: T[] = []
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width)
+      out.push(await fn(width))
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+  expect(out.length, 'the sweep measured fewer widths than it swept').toBe(WIDE_WIDTHS.length)
+  return out
+}
+
+/** A rendered element's box; fails by name when it never rendered. */
+async function boxOf(target: Locator, name: string): Promise<Rect> {
+  const box = await target.boundingBox()
+  expect(box, `${name} must render`).toBeTruthy()
+  return box!
+}
+
+test('firm Settings: an admin invites from the Members screen, sees the pending row, and resends', async ({ page }, testInfo) => {
+  test.setTimeout(180_000)
+  // The refused-address send is a deliberate 400, which Chromium logs as a console error.
+  const errors: string[] = []
+  const dropRefusal = expectedStatusDropper(page, 400, /\/api\/tenancy\/v1\/invitations$/)
+  page.on('console', (msg) => {
+    if (msg.type() !== 'error' || dropRefusal(msg.text(), msg.location().url)) return
+    errors.push(msg.text())
+  })
+  page.on('pageerror', (err) => errors.push(`pageerror: ${err.message}`))
+
+  // Fresh addresses per attempt: a retry meets the first attempt's invites, never a duplicate.
+  const run = randomUUID()
+  const valid = `invite-ui-${run}@example.com`
+  // Client-valid, refused by the server's address parser (D5 layer 2).
+  const refused = `invite-ui-${run}..x@example.com`
+  const malformed = 'not-an-email'
+  const sibling = `invite-ui-${run}-b@example.com`
+  const long = `${`invite-ui-${run}-`.padEnd(200, 'x')}@example.com`
+
+  await signInAs(page, 'firm')
+  await goTo(page, 'Settings')
+  await expect(page.getByTestId('members-table')).toBeVisible()
+
+  const token = await browserToken(page)
+  const liveInvites = async (): Promise<LiveInvite[]> => {
+    const res = await rawFetch('/api/tenancy/v1/invitations', { headers: { Authorization: `Bearer ${token}` } })
+    expect(res.status, JSON.stringify(res.body)).toBe(200)
+    return (res.body as { invitations: LiveInvite[] }).invitations
+  }
+
+  const invite = page.getByTestId('members-invite')
+  const flash = page.getByTestId('members-flash')
+  const modal = page.getByTestId('invite-modal')
+  const dialog = page.getByRole('dialog', { name: 'Invite people' })
+  const input = page.getByTestId('invite-modal-input')
+  const chip = (address: string) => page.getByTestId('invite-chip').filter({ hasText: address })
+  const addChip = async (address: string) => {
+    await input.fill(address)
+    await input.press('Enter')
+  }
+  const rowFor = (address: string) => page.getByTestId('invite-row').filter({ hasText: address })
+  const menu = page.getByTestId('member-menu')
+  const scroll = page.getByTestId('members-table-scroll')
+
+  // --- invite one valid, one server-refused and one malformed address ------------------------
+  await invite.click()
+  await expect(modal).toBeVisible()
+  await expect(page.getByTestId('invite-role-preparer').getByRole('radio')).toBeChecked()
+  for (const address of [valid, refused, malformed]) await addChip(address)
+  await page.getByTestId('invite-modal-send').click()
+
+  await expect(chip(valid), 'the sent address leaves the chip box').toHaveCount(0)
+  await expect(chip(refused).getByTestId('invite-chip-error')).toHaveText('Not a valid email')
+  await expect(chip(malformed).getByTestId('invite-chip-error')).toHaveText('Not a valid email')
+  await expect(modal, 'red chips keep the modal open').toBeVisible()
+
+  await page.getByRole('button', { name: `Remove ${refused}` }).click()
+  await page.getByRole('button', { name: `Remove ${malformed}` }).click()
+  await page.getByTestId('invite-modal-cancel').click()
+  await expect(modal).toBeHidden()
+  await expect(flash).toContainText(`Invite sent to ${valid}`)
+
+  // --- the pending row, and what the server says ---------------------------------------------
+  const row = rowFor(valid)
+  await expect(row, 'one pending row for the sent address').toHaveCount(1)
+  await expect(row).toContainText('Preparer')
+  await expect(row).toContainText('INVITED')
+  await expect(row).toContainText('Expires in 7 days')
+
+  const sent = (await liveInvites()).find((i) => i.email === valid)
+  expect(sent, 'the server lists the sent address').toMatchObject({ role: 'preparer', status: 'pending', delivery: 'sent' })
+  const listed = (await liveInvites()).map((i) => i.email)
+  expect(listed, 'the server-refused address is not listed').not.toContain(refused)
+  expect(listed, 'the malformed address is not listed').not.toContain(malformed)
+
+  // --- the row's menu: Resend is live, the other two say why they are not --------------------
+  await row.getByTestId('member-menu-trigger').click()
+  await expect(menu).toBeVisible()
+  await expect(menu.getByRole('button', { name: 'Resend invite', exact: true })).toBeEnabled()
+  await expectDisabledWithReason(
+    menu.getByRole('button', { name: 'Copy invite link', exact: true }),
+    menu.getByTestId('member-menu-reason').filter({ hasText: UNBACKED.inviteLink }),
+    UNBACKED.inviteLink,
+    'Copy invite link',
+  )
+  await expectDisabledWithReason(
+    menu.getByRole('button', { name: 'Revoke invite', exact: true }),
+    menu.getByTestId('member-menu-reason').filter({ hasText: UNBACKED.revokeInvite }),
+    UNBACKED.revokeInvite,
+    'Revoke invite',
+  )
+
+  // L2: the open pending-row menu fits inside the table's scroller and makes it scroll no further.
+  const l2 = await atEachWidth(page, async (width) => {
+    await settleAnimations(menu, scroll)
+    const menuBox = await boxOf(menu, `the menu at ${width}px`)
+    const scrollBox = await boxOf(scroll, `the scroller at ${width}px`)
+    const { scrollHeight, clientHeight } = await scroll.evaluate((el) => ({ scrollHeight: el.scrollHeight, clientHeight: el.clientHeight }))
+    expect(enclosesRect(scrollBox, menuBox, 1), `the menu must sit inside members-table-scroll at ${width}px`).toBe(true)
+    expect(scrollHeight - clientHeight, `members-table-scroll must not scroll for the open menu at ${width}px`).toBeLessThanOrEqual(1)
+    return { width, menuBottom: menuBox.y + menuBox.height, scrollBottom: scrollBox.y + scrollBox.height, scrollHeight, clientHeight }
+  })
+  expect(l2.map((m) => m.width)).toEqual([...WIDE_WIDTHS])
+  await testInfo.attach('members-invite-menu-fit.json', { body: JSON.stringify(l2, null, 2), contentType: 'application/json' })
+
+  // --- resend: 200, one row, an expiry that does not move back ------------------------------
+  await expect(flash, 'the first flash has timed out, so the next one is the resend\'s').toHaveCount(0)
+  const resent = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && /\/api\/tenancy\/v1\/invitations\/[^/]+\/resend$/.test(r.url()),
+  )
+  await menu.getByRole('button', { name: 'Resend invite', exact: true }).click()
+  expect((await resent).status(), 'the resend answers 200').toBe(200)
+  await expect(flash).toContainText('Invite sent')
+  await expect(rowFor(valid), 'a resend keeps one row').toHaveCount(1)
+  const resentLive = (await liveInvites()).find((i) => i.email === valid)
+  expect(resentLive?.id, 'the resend keeps the invitation').toBe(sent!.id)
+  expect(Date.parse(resentLive!.expires_at), 'the expiry never moves back').toBeGreaterThanOrEqual(Date.parse(sent!.expires_at))
+
+  // --- a second address with a 200-character local part --------------------------------------
+  await invite.click()
+  await expect(modal).toBeVisible()
+  for (const address of [long, sibling, malformed]) await addChip(address)
+  await expect(page.getByTestId('invite-chip')).toHaveCount(3)
+
+  // L1: the modal fits the viewport and is centred, its footer and all three chips stay inside.
+  const chipbox = page.getByTestId('invite-chipbox')
+  const l1 = await atEachWidth(page, async (width) => {
+    await settleAnimations(dialog, chipbox)
+    const viewport: Rect = { x: 0, y: 0, width, height: 1080 }
+    const dialogBox = await boxOf(dialog, `the modal at ${width}px`)
+    const chipboxBox = await boxOf(chipbox, `the chip box at ${width}px`)
+    expect(enclosesRect(viewport, dialogBox), `the modal must sit inside the viewport at ${width}px`).toBe(true)
+    const g = gaps(dialogBox, viewport)
+    expect(Math.abs(g.left - g.right), `the modal must be centred at ${width}px`).toBeLessThanOrEqual(2)
+    for (const id of ['invite-modal-send', 'invite-modal-cancel']) {
+      expect(enclosesRect(dialogBox, await boxOf(page.getByTestId(id), id), 1), `${id} must sit inside the modal at ${width}px`).toBe(true)
+    }
+    const chips = await page.getByTestId('invite-chip').all()
+    for (const [i, c] of chips.entries()) {
+      expect(enclosesRect(chipboxBox, await boxOf(c, `chip ${i}`), 1), `chip ${i} must sit inside the chip box at ${width}px`).toBe(true)
+    }
+    return { width, modalLeft: g.left, modalRight: g.right, chips: chips.length }
+  })
+  expect(l1.map((m) => m.width)).toEqual([...WIDE_WIDTHS])
+  await testInfo.attach('invite-modal-fit.json', { body: JSON.stringify(l1, null, 2), contentType: 'application/json' })
+
+  await page.getByRole('button', { name: `Remove ${sibling}` }).click()
+  await page.getByRole('button', { name: `Remove ${malformed}` }).click()
+  await page.getByTestId('invite-modal-send').click()
+  await expect(modal).toBeHidden()
+  const longRow = rowFor(long)
+  await expect(longRow).toHaveCount(1)
+  expect((await liveInvites()).map((i) => i.email), 'the long address is listed by the server').toContain(long)
+
+  // L3: the long row's text stays in its cells and clear of the `⋯` trigger.
+  const cells = longRow.locator('xpath=./span')
+  const l3 = await atEachWidth(page, async (width) => {
+    await settleAnimations(longRow)
+    const person = await boxOf(cells.nth(0), `the Person cell at ${width}px`)
+    const status = await boxOf(cells.nth(3), `the Status cell at ${width}px`)
+    const statusLine = await boxOf(cells.nth(3).getByText(/^Expires in/), `the status line at ${width}px`)
+    const trigger = await boxOf(longRow.getByTestId('member-menu-trigger'), `the trigger at ${width}px`)
+    const emailLine = cells.nth(0).locator('.mono')
+    const email = await boxOf(emailLine, `the email line at ${width}px`)
+    const name = await boxOf(emailLine.locator('xpath=../span[1]'), `the name line at ${width}px`)
+    expect(enclosesRect(status, statusLine, 1), `the status line must sit inside the Status cell at ${width}px`).toBe(true)
+    expect(rectsOverlap(statusLine, trigger), `the status line must not overlap the trigger at ${width}px`).toBe(false)
+    expect(enclosesRect(person, name, 1), `the name line must sit inside the Person cell at ${width}px`).toBe(true)
+    expect(enclosesRect(person, email, 1), `the email line must sit inside the Person cell at ${width}px`).toBe(true)
+    return { width, person, status, statusLine, trigger, name, email }
+  })
+  expect(l3.map((m) => m.width)).toEqual([...WIDE_WIDTHS])
+  await testInfo.attach('invite-row-fit.json', { body: JSON.stringify(l3, null, 2), contentType: 'application/json' })
+
+  // L4: with the flash showing the long address, the top bar keeps its alignment. Each width
+  // resends (the flash lasts 3 s) and reads the four boxes while it is up.
+  const roleFilter = wfSelect(page, 'Access role')
+  const table = page.getByTestId('members-table')
+  const l4 = await atEachWidth(page, async (width) => {
+    await settleAnimations(invite, table)
+    const resend = page.waitForResponse(
+      (r) => r.request().method() === 'POST' && /\/api\/tenancy\/v1\/invitations\/[^/]+\/resend$/.test(r.url()),
+    )
+    await longRow.getByTestId('member-menu-trigger').click()
+    await menu.getByRole('button', { name: 'Resend invite', exact: true }).click()
+    expect((await resend).status(), `the resend answers 200 at ${width}px`).toBe(200)
+    await expect(flash).toContainText(long)
+    const [flashBox, filterBox, inviteBox, tableBox] = [
+      await boxOf(flash, `the flash at ${width}px`),
+      await boxOf(roleFilter, `the role filter at ${width}px`),
+      await boxOf(invite, `the Invite button at ${width}px`),
+      await boxOf(table, `the table at ${width}px`),
+    ]
+    expect(rectsOverlap(flashBox, filterBox), `the flash must not overlap the role filter at ${width}px`).toBe(false)
+    expect(rectsOverlap(flashBox, inviteBox), `the flash must not overlap the Invite button at ${width}px`).toBe(false)
+    const rightDelta = Math.abs(inviteBox.x + inviteBox.width - (tableBox.x + tableBox.width))
+    expect(rightDelta, `the Invite button must end where the table ends at ${width}px`).toBeLessThanOrEqual(1)
+    return { width, flashBox, filterBox, inviteBox, rightDelta }
+  })
+  expect(l4.map((m) => m.width)).toEqual([...WIDE_WIDTHS])
+  await testInfo.attach('members-top-bar-fit.json', { body: JSON.stringify(l4, null, 2), contentType: 'application/json' })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

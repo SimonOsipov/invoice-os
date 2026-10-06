@@ -1360,6 +1360,16 @@ describe("§8's danger-zone copy — the most important text in the story (T7.1�
     expect(src, 'the e2e transcription drifted from lib/members.ts').toContain(SUSPEND_EXPLANATION)
   })
 
+  it('the e2e transcription carries the two invite reasons', () => {
+    const src = readFileSync(
+      fileURLToPath(new URL('../../../../e2e/topology/settingsFixtures.ts', import.meta.url)),
+      'utf8',
+    )
+    expect(src, 'the scan read the wrong file').toContain('export const UNBACKED')
+    expect(src, 'the e2e inviteLink drifted from lib/members.ts').toContain(MEMBER_UNBACKED.inviteLink)
+    expect(src, 'the e2e revokeInvite drifted from lib/members.ts').toContain(MEMBER_UNBACKED.revokeInvite)
+  })
+
   it('AC8: the shared audit-trail clause survives the rewrite in both explanations', () => {
     // SUSPEND_EXPLANATION's clause ends the sentence with a full stop, both before and
     // after the rewrite -- this guards the rewrite from dropping it.

@@ -1042,3 +1042,108 @@ describe('the re-grant failure message', () => {
     }
   })
 })
+
+describe('login scrubs saved passwords from every escaping error', () => {
+  function seedWith(root: string, passwords: Partial<Record<AccountKey, string>>): void {
+    seed(root)
+    const stored = JSON.parse(readFileSync(accountsFile(root), 'utf8')) as StoredAccounts
+    for (const [k, pw] of Object.entries(passwords)) stored.accounts[k as AccountKey].password = pw as string
+    writeFileSync(accountsFile(root), JSON.stringify(stored))
+  }
+
+  it('message, stack, hint and a nested extra of a thrown CtlError are scrubbed', async () => {
+    const secret = accountFor('firm-admin').password
+    const { L, root, deps } = await setup({
+      signInFresh: vi.fn(async () => {
+        const { CtlError: Ctl } = await import('./main')
+        throw new Ctl(`fill("${secret}") timed out`, `retry, the password was ${secret}`, 1, { call: { args: [secret, { deep: `x${secret}y` }] } })
+      }),
+    })
+    seed(root)
+
+    const err = (await refused(L.login(req('firm', 'admin'), deps))) as Refusal & { extra?: unknown; stack: string }
+
+    expect(err.message, 'the failure itself still shows').toContain('timed out')
+    expect(err.hint).toContain('retry')
+    expect(JSON.stringify(err.extra)).toContain('deep')
+    for (const [where, text] of Object.entries({ message: err.message, stack: err.stack, hint: err.hint, extra: JSON.stringify(err.extra) })) {
+      expect(text.includes(secret), `${where} carries the password`).toBe(false)
+    }
+  })
+
+  it('an error from a dependency that runs before the browser is scrubbed too', async () => {
+    const { L, root, deps } = await setup({
+      apiRole: vi.fn(async () => {
+        throw new Error(`sign-in echoed ${accountFor('firm-admin').password}`)
+      }),
+    })
+    seed(root)
+
+    const err = await refused(L.login(req('firm', 'admin'), deps))
+
+    expect(err.message).toContain('sign-in echoed')
+    expect(err.message.includes(accountFor('firm-admin').password)).toBe(false)
+  })
+
+  it('the passwords of a first login are known by the time the browser runs', async () => {
+    const secret = accountFor('firm-reviewer').password
+    const { L, deps } = await setup({
+      signInFresh: vi.fn(async () => {
+        throw new Error(`fill("${secret}") timed out`)
+      }),
+    })
+
+    const err = await refused(L.login(req('firm', 'reviewer'), deps))
+
+    expect(err.message).toContain('timed out')
+    expect(err.message.includes(secret)).toBe(false)
+  })
+
+  it('the old passwords of a rebuilt environment are scrubbed from a failing provisionAll', async () => {
+    const old = accountFor('support').password
+    const { L, root, deps } = await setup({
+      resolveEnv: vi.fn(async (env: string): Promise<EnvResult> => ({ env, environmentId: 'new', urls: { ...urls }, dark: [] })),
+      provisionAll: vi.fn(async () => {
+        throw new Error(`register refused, body echoed ${old}`)
+      }),
+    })
+    seed(root, { environmentId: 'old' })
+
+    const err = await refused(L.login(req('firm', 'admin'), deps))
+
+    expect(err.message).toContain('register refused')
+    expect(err.message.includes(old)).toBe(false)
+  })
+
+  it('a password with regex metacharacters is removed literally, and a lookalike stays', async () => {
+    const secret = 'a.b*c(d)[e]+$^|\\q?{1}'
+    const { L, root, deps } = await setup({
+      signInFresh: vi.fn(async () => {
+        throw new Error(`fill("${secret}") and axb*c(d)[e]+$^|\\q?{1} stay apart`)
+      }),
+    })
+    seedWith(root, { 'firm-admin': secret })
+
+    const err = await refused(L.login(req('firm', 'admin'), deps))
+
+    expect(err.message.includes(secret), 'the password survived').toBe(false)
+    expect(err.message, 'a lookalike that is not the password is untouched').toContain('axb*c(d)[e]+$^|\\q?{1} stay apart')
+  })
+
+  it('a password that is a prefix of another is removed from both whole', async () => {
+    const admin = 'e2e-member-pw-1111'
+    const reviewer = `${admin}-reviewer`
+    const { L, root, deps } = await setup({
+      signInFresh: vi.fn(async () => {
+        throw new Error(`fill("${reviewer}") then fill("${admin}")`)
+      }),
+    })
+    seedWith(root, { 'firm-admin': admin, 'firm-reviewer': reviewer })
+
+    const err = await refused(L.login(req('firm', 'reviewer'), deps))
+
+    expect(err.message).toContain('then fill(')
+    expect(err.message.includes(admin), `a password fragment survived: ${err.message}`).toBe(false)
+    expect(err.message.includes('-reviewer'), `the reviewer suffix survived: ${err.message}`).toBe(false)
+  })
+})

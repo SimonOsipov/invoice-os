@@ -210,6 +210,24 @@ describe('ctl entry under node', () => {
     expect(r.stderrJson).toMatchObject({ error: expect.any(String), hint: expect.any(String) })
   })
 
+  it('main loads a command module only when that command runs', () => {
+    const script = `
+      import { registerHooks } from 'node:module'
+      const loaded = []
+      registerHooks({ load(url, ctx, next) { loaded.push(url); return next(url, ctx) } })
+      const has = (name) => loaded.some((u) => u.endsWith('/ctl/' + name + '.ts'))
+      const main = await import('./ctl/main')
+      const afterImport = has('railway')
+      await main.run(['--help'])
+      await main.run(['env', '--help'])
+      const afterHelp = has('railway')
+      await main.run(['env', 'staging'])
+      console.log(JSON.stringify({ main: has('main'), afterImport, afterHelp, afterRun: has('railway') }))`
+    const r = spawnSync(process.execPath, ['--import', './ctl/tsResolve.mjs', '--input-type=module', '-e', script], { cwd: E2E_DIR, env, encoding: 'utf8' })
+    expect(r.status, r.stderr).toBe(0)
+    expect(JSON.parse(r.stdout.trim().split('\n').pop() as string)).toEqual({ main: true, afterImport: false, afterHelp: false, afterRun: true })
+  })
+
   it('the resolve hook rewrites only relative specifiers', () => {
     const script = `
       const t = async (s) => { try { await import(s); return 'ok' } catch (e) { return e.code } }

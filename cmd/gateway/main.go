@@ -161,6 +161,11 @@ func main() {
 		platform.Fatal(app.Logger, "gateway: account mail: %v", err)
 	}
 	app.Mux.Handle("GET /emails/confirmation.html", confirmationMail)
+	recoveryMail, err := gateway.MailTemplate("recovery")
+	if err != nil {
+		platform.Fatal(app.Logger, "gateway: account mail: %v", err)
+	}
+	app.Mux.Handle("GET /emails/recovery.html", recoveryMail)
 	app.Mux.Handle("GET /emails/mark.png", gateway.MailLogo())
 	verifyPage, err := gateway.VerifyPageHandler(siteURL)
 	if err != nil {
@@ -177,6 +182,9 @@ func main() {
 	app.Mux.Handle("OPTIONS /auth/register", withCORS(reg.Register))
 	app.Mux.Handle("POST /auth/resend-verification", withCORS(reg.ResendVerification))
 	app.Mux.Handle("OPTIONS /auth/resend-verification", withCORS(reg.ResendVerification))
+	app.Mux.Handle("POST /auth/request-password-reset", withCORS(reg.RequestPasswordReset))
+	app.Mux.Handle("OPTIONS /auth/request-password-reset", withCORS(reg.RequestPasswordReset))
+	app.Mux.Handle("GET /auth/reset-password", gateway.ResetPasswordPageHandler(siteURL))
 	app.Mux.Handle("GET /auth/verify", verifyPage)
 	app.Mux.Handle("POST /auth/verify", reg.Verify)
 	app.Mux.Handle("POST /contacts/demo-request", withCORS(reg.DemoRequest))
@@ -193,6 +201,7 @@ func main() {
 	app.Mux.Handle("OPTIONS /auth/refresh", withCORS(h.Refresh))
 	app.Mux.Handle("POST /auth/sign-out", withCORS(h.SignOut))
 	app.Mux.Handle("OPTIONS /auth/sign-out", withCORS(h.SignOut))
+	app.Mux.Handle("POST /auth/reset-password", resetPasswordHandler(probed["auth"], siteURL, sessions, h.SignInThrottle, app.Logger))
 
 	// Mint routes exist only in a -tags mockissuer build; ENVIRONMENT is read raw, as for provisioning.
 	platform.MockIssuer = "absent"
@@ -276,40 +285,38 @@ func newJWKSClient() *http.Client {
 }
 
 // registrationHandlers builds the registration handlers against GoTrue at authURL.
-// A nil authURL or siteURL (AUTH_SITE_URL unset) makes Register, ResendVerification and Verify answer 503 (TestRegistrationHandlers_NotConfigured503).
+// A nil authURL or siteURL (AUTH_SITE_URL unset) makes Register, ResendVerification, RequestPasswordReset and Verify answer 503 (TestRegistrationHandlers_NotConfigured503).
 // On a PR preview the per-client limits log but do not refuse: a preview sends no mail (TestRegistrationHandlers_PreviewOnlyLogs).
 func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, log *slog.Logger, sink gateway.ContactSink) registration {
 	if authURL == nil || siteURL == nil {
 		nc := gateway.RegistrationNotConfigured()
-		return registration{Register: nc, Verify: nc, ResendVerification: nc, RequestPasswordReset: notImplemented(), DemoRequest: gateway.DemoRequestHandler(sink, log)}
+		return registration{Register: nc, Verify: nc, ResendVerification: nc, RequestPasswordReset: nc, DemoRequest: gateway.DemoRequestHandler(sink, log)}
 	}
 	client := &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	enforce := platform.Posture(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != platform.PosturePreview
+	// Resend and reset share both throttles: one budget per address and per client.
+	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
+	perIP := gateway.NewSignInThrottle("resend-ip", gateway.ResendPerIP, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	return registration{
 		Register: gateway.RegisterHandler(authURL, client, minResponse,
 			gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now), enforce, log),
-		Verify: gateway.VerifyHandler(authURL, siteURL, client, log, sink),
-		ResendVerification: gateway.ResendVerificationHandler(authURL, client, minResponse,
-			gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now),
-			gateway.NewSignInThrottle("resend-ip", gateway.ResendPerIP, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now), enforce, log),
-		RequestPasswordReset: notImplemented(),
+		Verify:               gateway.VerifyHandler(authURL, siteURL, client, log, sink),
+		ResendVerification:   gateway.ResendVerificationHandler(authURL, client, minResponse, perAddress, perIP, enforce, log),
+		RequestPasswordReset: gateway.RequestPasswordResetHandler(authURL, client, minResponse, perAddress, perIP, enforce, log),
 		DemoRequest:          gateway.DemoRequestHandler(sink, log),
 	}
 }
 
-// notImplemented is the Mode A stub for the reset handlers.
-func notImplemented() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "not implemented", http.StatusNotImplemented)
-	})
-}
-
-// resetPasswordHandler is a Mode A stub.
-func resetPasswordHandler(_, _ *url.URL, _ *gateway.SessionChecker, _ *gateway.SignInThrottle, _ *slog.Logger) http.Handler {
-	return notImplemented()
+// resetPasswordHandler builds the reset-form handler; a nil authURL or siteURL makes it answer 503.
+func resetPasswordHandler(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, signIn *gateway.SignInThrottle, log *slog.Logger) http.Handler {
+	client := &http.Client{
+		Timeout:       10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	return gateway.ResetPasswordHandler(authURL, siteURL, client, sessions, signIn, log)
 }
 
 // handoff holds the public sign-in hand-off, renewal and sign-out handlers main mounts outside /api/.
@@ -343,7 +350,7 @@ func handoffHandlers(authURL *url.URL, sessions *gateway.SessionChecker, log *sl
 // an absolute http(s) URL, or carries user info, a query or a fragment, stops boot.
 func mustParseSiteURL(raw string, log *slog.Logger) *url.URL {
 	if raw == "" {
-		log.Warn("gateway: AUTH_SITE_URL is unset; /auth/register, /auth/resend-verification, GET and POST /auth/verify answer 503")
+		log.Warn("gateway: AUTH_SITE_URL is unset; /auth/register, /auth/resend-verification, /auth/request-password-reset, GET and POST /auth/verify and /auth/reset-password answer 503")
 		return nil
 	}
 	u, err := url.Parse(raw)

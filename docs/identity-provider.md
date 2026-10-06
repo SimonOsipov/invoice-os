@@ -114,6 +114,9 @@ Nothing below is a secret value; secrets are named, never shown.
 | `GOTRUE_MAILER_URLPATHS_CONFIRMATION` | `https://api.ascomply.com/auth/verify` after registration U2; unset before it | not written; after U2 a fork inherits production's value, inert because a fork sends no mail |
 | `GOTRUE_MAILER_TEMPLATES_CONFIRMATION` | `https://api.ascomply.com/emails/confirmation.html` after mail U1; unset before it | not written; after mail U1 a fork inherits production's value, inert because a fork sends no mail |
 | `GOTRUE_MAILER_SUBJECTS_CONFIRMATION` | `Confirm your ASComply account` after mail U1; unset before it | not written; inherited after mail U1, inert |
+| `GOTRUE_MAILER_URLPATHS_RECOVERY` | `https://api.ascomply.com/auth/reset-password` after reset U1; unset before it | not written; inherited after reset U1, inert because a fork sends no mail |
+| `GOTRUE_MAILER_TEMPLATES_RECOVERY` | `https://api.ascomply.com/emails/recovery.html` after reset U1; unset before it | not written; inherited after reset U1, inert |
+| `GOTRUE_MAILER_SUBJECTS_RECOVERY` | `Reset your ASComply password` after reset U1; unset before it | not written; inherited after reset U1, inert |
 | `GOTRUE_JWT_KEYS` | **secret, sealed** | freshly generated per fork |
 | `GOTRUE_JWT_SECRET` | **secret, sealed** | freshly generated per fork |
 | `GOTRUE_SMTP_PASS` | **secret, sealed**; the Resend API key, unset until U4 | empty |
@@ -134,12 +137,12 @@ Nothing below is a secret value; secrets are named, never shown.
 every fork overwrites it with its own.
 
 `AUTH_SITE_URL` is optional at boot. Unset, the gateway logs one warning and both
-the registration routes (register, resend-verification and verify) answer 503 `registration is not configured`. A value that is not an
+the registration routes (register, resend-verification, request-password-reset, verify and reset-password) answer 503 `registration is not configured`. A value that is not an
 absolute `http(s)` URL, or that carries user info, a query or a fragment, stops the
 gateway at boot.
 
 `AUTH_REGISTER_MIN_RESPONSE` is a Go duration (`2s`, `3500ms`): the shortest time any
-`POST /auth/register` and `POST /auth/resend-verification` answer except a 400 takes. Unset means `2s`. A value that does not parse
+`POST /auth/register`, `POST /auth/resend-verification` and `POST /auth/request-password-reset` answer except a 400 takes. Unset means `2s`. A value that does not parse
 or is not above zero stops the gateway at boot with an ERROR that names the variable and does
 not echo the value. There is no upper bound.
 
@@ -303,8 +306,9 @@ GoTrue stays private. The gateway is the only public surface, and it calls GoTru
 sign-in (see Sign-in and hand-off), `/token?grant_type=refresh_token` for renewal and
 sign-out (see Renewal and Revocation), `GET /user` for the session check on every checked
 `/api/` request (cached 30 s; only `error_code` is read from the answer), and
-`POST /logout?scope=global` for sign-out (see Revocation). It forwards no client path or
-query, so no other GoTrue route (`/recover`, `/otp`, `/admin/*`, `/logout` with any other
+`POST /logout?scope=global` for sign-out (see Revocation), `/recover` for a reset request and
+`/verify` (type `recovery`) with `PUT /user` for a reset (see Password reset). It forwards no client path or
+query, so no other GoTrue route (`/otp`, `/admin/*`, `/logout` with any other
 scope, or `/token` with any other grant) is reachable from outside.
 
 **The flow:**
@@ -327,7 +331,8 @@ scope, or `/token` with any other grant) is reachable from outside.
    The confirmation mail is the branded template (`internal/accountmail`) that GoTrue fetches
    from `GOTRUE_MAILER_TEMPLATES_CONFIRMATION`, the gateway's public
    `GET /emails/confirmation.html`; the subject is `GOTRUE_MAILER_SUBJECTS_CONFIRMATION`. The
-   gateway serves two `/emails/` routes: `GET /emails/confirmation.html` (the template) and
+   gateway serves three `/emails/` routes: `GET /emails/confirmation.html` (the template),
+   `GET /emails/recovery.html` (the reset mail's template, `GOTRUE_MAILER_TEMPLATES_RECOVERY`) and
    `GET /emails/mark.png` (the logo, `accountmail.LogoURL`). GoTrue fetches a template once
    and caches it for 10 minutes (`TemplateMaxAge`). When that first fetch fails, GoTrue
    silently sends its own unbranded mail for up to 10 minutes and logs only
@@ -449,6 +454,33 @@ Guarded by `internal/gateway/resend_verification_test.go`, and in `cmd/gateway` 
 `TestRegistrationHandlers_ResendWaitsAndLimits`, `TestResendVerificationPreflightGrantsTheAllowedOrigin`
 and `TestResendVerificationOptionsWithoutOriginIsNotAResend`.
 
+**Password reset**, outside `/api/`, no verifier, in every build. Three routes: `POST /auth/request-password-reset` (CORS-wrapped, with an `OPTIONS` preflight route) asks GoTrue `/recover`; `GET /auth/reset-password` renders the set-new-password page; `POST /auth/reset-password` is that page's same-origin form POST (no CORS wrap, as `/auth/verify` has none). Code: `internal/gateway/password_reset.go` `RequestPasswordResetHandler`, `internal/gateway/reset_password.go` `ResetPasswordPageHandler` and `ResetPasswordHandler`. GoTrue mails the link to `GOTRUE_MAILER_URLPATHS_RECOVERY`, the page, with `token` and `type=recovery`; the mail is the branded recovery template (`GET /emails/recovery.html`).
+
+*The request* has the resend contract: body `{"email"}`; every outcome except a 400 answers 202 `{"status":"accepted"}` after the `AUTH_REGISTER_MIN_RESPONSE` floor, whatever the account's state; the 400 rows (malformed body or one over 1 KiB, an empty email, an email over 254 bytes or GoTrue `validation_failed`), the 405 for any method but POST and a preflight, and the 503 `registration is not configured` (`AUTH_URL` or `AUTH_SITE_URL` unset) are the same as resend's. Its limits are resend's two buckets, not new ones: a reset and a resend for one address spend one budget of 3 an hour, and from one client key one budget of 10 (instances `resend-address` and `resend-ip`, `gateway.ResendPerAddress`, `gateway.ResendPerIP`). Any GoTrue 4xx refunds both counts. On a PR preview the limits log and do not refuse. Log lines, none with an address or an IP: WARN `reset-request: limit reached` (`limit`, `key_source`, `enforced`), WARN `reset-request: gotrue email send rate limit`, WARN `reset-request: gotrue recover failed` (`upstream_status`, `error_code`), WARN `reset-request: gotrue unreachable`, and `reset-request: timing` (`upstream_ms`, `min_ms`).
+
+*The page* holds no GoTrue client, so opening the link spends nothing: GET and HEAD answer the page (HEAD without a body); any other method answers 405 `Allow: GET, HEAD`. A missing or over-long `token` (256 bytes) or a `type` other than `recovery` answers 303 `<site>/?reset=failed`. `redirect_to` and every other parameter are ignored. Headers: `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, a CSP with the submit script's hash. The form has one password field (6 to 72 bytes).
+
+*The form POST* (body capped at 2 KiB; `token`, `type` and `password` from the form only), on a context the client cannot cancel:
+1. a bad form answers 303 `?reset=failed` with no GoTrue call; a password outside 6 to 72 bytes re-renders the page with status 400 and the same token, with no GoTrue call;
+2. `POST /verify {"type":"recovery","token_hash":…}`;
+3. `PUT /user {"password":…}` with the returned access token;
+4. `POST /logout?scope=global` with the same token;
+5. the API session cache drops the subject, and the sign-in throttle forgets the address's failures (see Sign-in and hand-off);
+6. 303 `<site>/?reset=1`.
+
+| Outcome | Answer |
+|---|---|
+| `/verify` fails (expired, spent, unreachable) | 303 `?reset=failed`; no `PUT`, no sign-out; WARN `reset-password: gotrue refused the link` or `gotrue unreachable` |
+| `PUT /user` 200, or 422 `same_password`, then the sign-out succeeds | 303 `?reset=1` |
+| `PUT /user` any other answer | 303 `?reset=failed`; the old password still works; WARN `reset-password: gotrue refused the password` |
+| sign-out fails after a `PUT` 200 | 303 `?reset=1`; WARN `reset-password: global sign-out failed` |
+| sign-out fails after a 422 `same_password` | 303 `?reset=failed`; WARN `reset-password: global sign-out failed`; the throttle is not cleared |
+| `AUTH_URL` or `AUTH_SITE_URL` unset | 503 `registration is not configured`, page and form alike |
+
+A reset takes the account back: a recovery verify confirms an unconfirmed account, and the new password replaces the registrant's. Every other session ends. The attacker's registration answers stay (see Accepted risks). No line logs the token, the password or an address.
+
+Guarded by `internal/gateway/password_reset_test.go` and `reset_password_test.go`, in `cmd/gateway` by `TestRegistrationHandlers_ResetSharesTheResendLimits`, `TestResetPasswordRoute_OpeningNeverReachesGoTrue` and `TestGatewayBinary_HandsOffThroughTheMainWiring`, and by the `TestIdP_` reset tests.
+
 **`POST /contacts/demo-request`**, outside `/api/`, no verifier, in every build. CORS-wrapped, with an `OPTIONS` preflight route. Body `{"email","name","company","marketing_consent_text"?}`; other keys are ignored and not forwarded. The body limit is 4096 bytes. Fields are trimmed; `marketing_consent_text` is forwarded as sent.
 
 | Outcome | Answer |
@@ -511,23 +543,24 @@ otherwise. The tenant id is a UUIDv5 of the caller's subject; the membership gua
   nothing while it is unset (`middleware.go` `performRateLimitingWithHeader`); no image,
   script or runbook sets it. Sign-in has the gateway's own per-address throttle instead (see
   Sign-in and hand-off); the gateway throttles verify not at all, and register and
-  resend-verification by client key (10 an hour each) and resend-verification by address (3 an
-  hour). The client key is `X-Real-IP`, which Railway's edge sets to the client's address and
+  resend-verification and request-password-reset by client key (10 an hour each) and by address (3 an
+  hour), one budget for the two routes. The client key is `X-Real-IP`, which Railway's edge sets to the client's address and
   replaces when the client sends one. Measured 2026-10-06 on PR environment pr-342: 11 POSTs to
   `/auth/resend-verification` from one client with `X-Real-IP` spoofed to 11 different values
   shared one key and logged one `limit=ip key_source=header` limit line, on the 11th.
 - `ceiling:` `RATE_LIMIT_EMAIL_SENT` (30 per hour) is instance-wide, so production sends
-  about 30 confirmation mails per hour. A registrant during the cap gets 202 and no mail; the
+  about 30 confirmation and reset mails per hour. A registrant during the cap gets 202 and no mail; the
   WARN log line `registration: gotrue email send rate limit` is the only signal. Set
   `GOTRUE_RATE_LIMIT_EMAIL_SENT` when signup traffic approaches it.
 - `ceiling:` the registration minimum hides GoTrue's timing only while GoTrue answers faster
-  than `AUTH_REGISTER_MIN_RESPONSE`; resend-verification shares it. A slower answer still leaks
-  timing. Revisit when `registration: signup timing` or `resend-verification: timing` logs WARN, and raise the minimum (registration U4 step 5).
-- `ceiling:` each waiting register or resend request holds a connection for up to the minimum;
-  each route is limited per client key, so one key holds at most 10 of each an hour.
-- `ceiling:` the register and resend-verification limits are in process: a restart clears the counts
-  and replicas do not share them. An attacker can spend a victim address's 3 resends an hour and hold
-  back its resends. A full map (10,000 keys) refuses every new key for up to an hour; the answer stays
+  than `AUTH_REGISTER_MIN_RESPONSE`; resend-verification and request-password-reset share it. A slower answer still leaks
+  timing. Revisit when `registration: signup timing`, `resend-verification: timing` or `reset-request: timing` logs WARN, and raise the minimum (registration U4 step 5).
+- `ceiling:` each waiting register, resend or reset request holds a connection for up to the minimum;
+  register is limited per client key, and resend and reset share one limit, so one key holds at most 10 of each kind an hour.
+- `ceiling:` the register, resend-verification and request-password-reset limits are in process: a restart clears the counts
+  and replicas do not share them. An attacker can spend a victim address's 3 resends an hour, through
+  either route, and hold back the victim's resend and reset mails for up to an hour; separate buckets
+  would not remove this, because the reset route alone gives the same 3. A full map (10,000 keys) refuses every new key for up to an hour; the answer stays
   the 202, with nothing sent, so a flood of distinct addresses or client keys switches resend off for
   everyone new (WARN `resend-address throttle full; refusing new addresses`, `resend-ip throttle full; …` or
   `register throttle full; …`, by map). Clients behind one NAT share 10
@@ -535,7 +568,7 @@ otherwise. The tenant id is a UUIDv5 of the caller's subject; the membership gua
   neither limit counts it and one client can repeat it without bound; it sends no mail, and mails stay
   capped by the counted sends. An outage spends the counts of people who retry during it, because only
   a 4xx is refunded. Mails stay capped by `RATE_LIMIT_EMAIL_SENT`; one key can still trigger up to
-  20 mails an hour (10 registers, 10 resends).
+  20 mails an hour (10 registers, 10 resends or resets).
 - `ceiling:` the client key is trusted only while `api.ascomply.com` is served straight from Railway's
   edge. A proxy in front makes every key the proxy's IP, and every client then shares one bucket of 10;
   resend then fails toward fewer mails for everyone, never more. `key_source=remote_addr` in the
@@ -550,17 +583,19 @@ otherwise. The tenant id is a UUIDv5 of the caller's subject; the membership gua
   so the answers (`user_metadata.registration`) of the **first** registrant stay, whoever
   confirms. A victim who registers after an attacker provisions the attacker's workspace
   name and kind. This adds no exposure beyond the hijack below, which already hands over the
-  account.
+  account. A password reset takes back the account and its password, not these answers: they
+  stay after a reset (a recorded residual; the gateway holds no admin credential to clear them).
 - *Pre-account hijack.* GoTrue does not update an existing unconfirmed user on a repeat
   signup; it re-sends the confirmation mail for the **first** registrant's password. An
   attacker who registers `victim@corp` first causes a mail to the victim. If the victim then
   registers, their 202 is identical, and their click confirms the **attacker's** password.
-  The attacker then owns a verified account at the victim's address. No password-recovery
-  path exists yet, so the victim cannot take it back.
+  The attacker then owns a verified account at the victim's address. The victim takes it back
+  with a password reset (see Password reset): a recovery verify confirms the account, sets the
+  victim's password and ends every session, including the attacker's.
 - *Link scanners.* A mail scanner that prefetches the link with GET or HEAD gets the confirm
-  page and spends nothing. The hijack
-  half above stays: closing it needs password recovery, or a delete-and-re-create of an
-  unconfirmed user on a repeat signup.
+  page and spends nothing, as the reset page does for a reset link. The hijack
+  half above is closed by a password reset; a delete-and-re-create of an
+  unconfirmed user on a repeat signup would close it without one.
 
 **Accepted risks of user-editable metadata:**
 - *Self-asserted consent.* A user can edit their own GoTrue `user_metadata`, so
@@ -697,6 +732,8 @@ renewable hand-off session".
   more than one replica.
 - `ceiling:` 10 wrong attempts every 15 minutes, about 960 requests a day, keep an address
   locked out indefinitely, correct password included, because the 429 comes before GoTrue.
+  A successful password reset clears the address's count, so a member who forgot the password is not
+  refused after resetting it.
 - `ceiling:` there is no per-client-IP limit, so credential stuffing across many addresses is
   not slowed, and about 111 new addresses per second fill the throttle map and block sign-in
   for new addresses. GoTrue applies no limit of its own (Registration, Ceilings). Revisit
@@ -1293,8 +1330,8 @@ redirects to the landing page". **The first console that reads real data must ma
 fail closed when `VITE_LANDING_URL` is unset**, and must check the staff claim on the server.
 
 **CORS.** The gateway's one origin list wraps `/api/`, `/auth/sign-in`, `/auth/exchange`,
-`/auth/refresh`, `/auth/sign-out`, `/auth/register`, `/auth/resend-verification` and `/contacts/demo-request`, so console U2 lets browser JavaScript on the two console
-origins call all of them, not only exchange, refresh and sign-out. `/auth/verify` is not wrapped. Every `/api/` call still needs a verified bearer, the session check and RLS; the
+`/auth/refresh`, `/auth/sign-out`, `/auth/register`, `/auth/resend-verification`, `/auth/request-password-reset` and `/contacts/demo-request`, so console U2 lets browser JavaScript on the two console
+origins call all of them, not only exchange, refresh and sign-out. `/auth/verify` and `/auth/reset-password` are not wrapped. Every `/api/` call still needs a verified bearer, the session check and RLS; the
 console origins serve only our own bundle, and the same token works from `curl`.
 
 Guarded by the package's `boot.test.ts`, `StaffGate.dom.test.tsx`, `signOut.test.ts`,
@@ -1325,7 +1362,7 @@ E=6c864094-6a06-452f-8495-be77d8a94fe7
 | U3 | when registration opens: after AUTH-04 and AUTH-16 merge | auth `GOTRUE_DISABLE_SIGNUP=false`, landing `VITE_REGISTRATION_OPEN=true` |
 | U4 | after U1–U3 have deployed | none: an end-to-end check by hand; step 5 may raise `AUTH_REGISTER_MIN_RESPONSE` |
 
-Until U1 deploys, production's `POST /auth/register`, `POST /auth/resend-verification`, `GET /auth/verify` and `POST /auth/verify` answer 503
+Until U1 deploys, production's `POST /auth/register`, `POST /auth/resend-verification`, `POST /auth/request-password-reset`, `GET /auth/verify`, `POST /auth/verify`, `GET /auth/reset-password` and `POST /auth/reset-password` answer 503
 `registration is not configured`. Between U1 and U3, register answers 503
 `registration is closed`. Neither affects any other route. From U1 on, a free-mail address
 answers 400 with the policy message, also while signup is closed.
@@ -1447,6 +1484,45 @@ The same job's push-only step "Gate on the account-mail logo" loads
 `https://api.ascomply.com/emails/mark.png` and expects 200 `image/*`.
 
 To go back to GoTrue's default mail, unset both variables and deploy `auth`.
+
+## Opening password reset in production (reset U1–U2)
+
+Production writes are the user's. Each write skips deploys, so it changes nothing until
+`auth` deploys, and is followed by a re-read that must print the expected value. `P` and `E`
+are the project and production environment ids named under "Opening registration in
+production". Do reset U1 after the epic reaches `main`, the push run has deployed the gateway, and mail U1 is done.
+Until reset U1, a production reset mail is GoTrue's default, with a link to the private
+`API_EXTERNAL_URL`: the link does not work and reveals nothing.
+
+| Step | When | Production write |
+|---|---|---|
+| U1 | after the gateway deploy and mail U1 | auth `GOTRUE_MAILER_URLPATHS_RECOVERY`, `GOTRUE_MAILER_TEMPLATES_RECOVERY`, `GOTRUE_MAILER_SUBJECTS_RECOVERY` |
+| U2 | after U1 | none: deploy `auth`, read the gate, check by hand |
+
+**U1 — set the link path, check the template, then set the template and subject on `auth`:**
+
+```
+railway variables --set 'GOTRUE_MAILER_URLPATHS_RECOVERY=https://api.ascomply.com/auth/reset-password' -p "$P" -e "$E" -s auth --skip-deploys
+railway variables -p "$P" -e "$E" -s auth --json | jq -r '.GOTRUE_MAILER_URLPATHS_RECOVERY'
+# expected: https://api.ascomply.com/auth/reset-password
+go run ./tools/prenv mail-template-check https://api.ascomply.com/emails/recovery.html
+# expected: ok https://api.ascomply.com/emails/recovery.html
+railway variables --set 'GOTRUE_MAILER_TEMPLATES_RECOVERY=https://api.ascomply.com/emails/recovery.html' -p "$P" -e "$E" -s auth --skip-deploys
+railway variables -p "$P" -e "$E" -s auth --json | jq -r '.GOTRUE_MAILER_TEMPLATES_RECOVERY'
+# expected: https://api.ascomply.com/emails/recovery.html
+railway variables --set 'GOTRUE_MAILER_SUBJECTS_RECOVERY=Reset your ASComply password' -p "$P" -e "$E" -s auth --skip-deploys
+railway variables -p "$P" -e "$E" -s auth --json | jq -r '.GOTRUE_MAILER_SUBJECTS_RECOVERY'
+# expected: Reset your ASComply password
+```
+
+**U2 — deploy `auth`, read the gate, check by hand.** Deploy as in "Deploy the writes" under
+"Opening registration in production". Read the push run's `fleet-gate` step "Gate on the
+account-mail templates": it prints one `ok` line for the recovery template as well as the confirmation one.
+Then request a reset for your own address on the landing's sign-in window ("Forgot password?"):
+the mail arrives branded with the subject above, the link opens the page, the form sets a new password,
+you sign in with it, and the old one fails.
+
+To go back to GoTrue's default reset mail, unset the three variables and deploy `auth`.
 
 ## Sending invite mail in production (invite U1–U3)
 

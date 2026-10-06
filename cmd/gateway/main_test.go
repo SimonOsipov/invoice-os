@@ -1339,6 +1339,43 @@ func TestInvitationHandlers_NotConfigured503(t *testing.T) {
 	}
 }
 
+// Invitee registration enforces its per-client limit exactly where /auth/register does: not on a PR preview.
+func TestInvitationHandlers_EnforcementFollowsThePosture(t *testing.T) {
+	for _, c := range []struct {
+		name, env string
+		wantCalls int
+	}{
+		{"pr-7", "pr-7", 11},
+		{"production", "production", gateway.RegisterPerIP},
+		{"development", "development", gateway.RegisterPerIP},
+		{"empty", "", gateway.RegisterPerIP},
+		{"upper-case PR-7", "PR-7", gateway.RegisterPerIP},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("RAILWAY_ENVIRONMENT_NAME", c.env)
+			authURL, calls := fakeAuth(t)
+			site, _ := url.Parse("https://site.example")
+			log := slog.New(slog.DiscardHandler)
+			reg := registrationHandlers(authURL, site, 0, log, nil)
+			preview, _ := invitationPreviewerStub("tunde@obi.test")
+			_, register := invitationHandlers(authURL, site, 0, reg.RegisterPerIP, preview, log)
+
+			for range 11 {
+				req := httptest.NewRequest(http.MethodPost, "/auth/invitation/register", strings.NewReader(`{"token":"T","password":"Corr3ct-Horse"}`))
+				req.RemoteAddr = "203.0.113.7:4000"
+				rec := httptest.NewRecorder()
+				register.ServeHTTP(rec, req)
+				if rec.Code != http.StatusAccepted {
+					t.Fatalf("invitee register = %d, want 202: %s", rec.Code, rec.Body.String())
+				}
+			}
+			if got := countCalls(calls(), "POST /signup"); got != c.wantCalls {
+				t.Errorf("GoTrue /signup calls = %d, want %d", got, c.wantCalls)
+			}
+		})
+	}
+}
+
 // The throttle invitee registration shares is the one /auth/register spends.
 func TestRegistrationHandlers_ExposesTheRegisterThrottle(t *testing.T) {
 	const remote = "203.0.113.7:4000"

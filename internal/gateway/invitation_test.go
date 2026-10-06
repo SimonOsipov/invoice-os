@@ -586,3 +586,52 @@ func TestInvitationRegister_FreeMailRule(t *testing.T) {
 		t.Errorf("previewer saw %v, want one call for each of the three invitee posts", seen)
 	}
 }
+
+// No outcome of the signup writes the token or the password to a log line.
+func TestInvitationRegister_LogsCarryNoTokenOrPassword(t *testing.T) {
+	const password = "Zq-pw-7788-marker"
+	cases := []struct {
+		name        string
+		status      int
+		body        string
+		unreachable bool
+		spent       bool
+		wantLogged  bool // the case must log something, or the secret check proves nothing
+	}{
+		{"unreachable GoTrue", 0, ``, true, false, true},
+		{"500 unexpected_failure", http.StatusInternalServerError, gtInternal, false, false, true},
+		{"over_email_send_rate_limit", http.StatusTooManyRequests, gtOverEmailSendRateLimit, false, false, true},
+		{"500 SQLSTATE 23505", http.StatusInternalServerError, gtDuplicateKey, false, false, true},
+		{"budget spent", http.StatusOK, gtNewUser, false, true, true},
+		{"200 new account", http.StatusOK, gtNewUser, false, false, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			authURL := closedURL(t)
+			if !c.unreachable {
+				authURL = newFakeGoTrue(t, c.status, c.body).URL
+			}
+			perIP := freshRegisterLimit()
+			if c.spent {
+				perIP = NewSignInThrottle("register", 1, RegisterMaxKeys, RegisterWindow, time.Now)
+				perIP.Reserve("192.0.2.1")
+			}
+			log, buf := captureLog()
+			h := InvitationRegisterHandler(authURL, testClient(), 0, perIP, true, log, previewing(liveInvite, nil).preview)
+			req := httptest.NewRequest(http.MethodPost, "/auth/invitation/register", strings.NewReader(inviteeBody(inviteToken, password, nil)))
+			req.RemoteAddr = "192.0.2.1:5555"
+			rec := httptest.NewRecorder()
+
+			h.ServeHTTP(rec, req)
+
+			if c.wantLogged && buf.Len() == 0 {
+				t.Fatal("no log line: the secret check below proves nothing")
+			}
+			for _, secret := range []string{inviteToken, password} {
+				if strings.Contains(buf.String(), secret) || strings.Contains(rec.Body.String(), secret) {
+					t.Errorf("a log line or the answer carries %q: %s %s", secret, buf.String(), rec.Body.String())
+				}
+			}
+		})
+	}
+}

@@ -171,6 +171,16 @@ func TestTenantlessAcceptNearMissesForbidden(t *testing.T) {
 		{"encoded slash", "POST", "/api/tenancy/v1%2Finvitations%2Faccept", "tenancy"},
 		{"encoded letter", "POST", "/api/tenancy/v1/invitations/%61ccept", "tenancy"},
 		{"other service", "POST", "/api/portfolio/v1/invitations/accept", "portfolio"},
+		{"DELETE accept", "DELETE", acceptPath, "tenancy"},
+		{"PATCH accept", "PATCH", acceptPath, "tenancy"},
+		{"OPTIONS accept", "OPTIONS", acceptPath, "tenancy"},
+		{"case of the resource", "POST", "/api/tenancy/v1/Invitations/accept", "tenancy"},
+		{"case of the verb segment", "POST", "/api/tenancy/v1/invitations/Accept", "tenancy"},
+		{"double slash", "POST", "/api/tenancy/v1//invitations/accept", "tenancy"},
+		{"dot segment", "POST", "/api/tenancy/v1/./invitations/accept", "tenancy"},
+		{"path parameter", "POST", acceptPath + ";x=1", "tenancy"},
+		{"encoded trailing slash", "POST", acceptPath + "%2F", "tenancy"},
+		{"encoded dot before the verb", "POST", "/api/tenancy/v1/invitations/%2e/accept", "tenancy"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -199,4 +209,54 @@ func TestTenantlessAcceptNearMissesForbidden(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The accept route keeps provisioning's guarantees: a query string stays exempt, a client cannot choose the identity, a tenant is never stripped.
+func TestTenantlessAcceptRouteKeepsTheIdentityContract(t *testing.T) {
+	t.Run("query string still exempt", func(t *testing.T) {
+		tg := setupGateway(t)
+		tok := tg.mint(t, auth.MintOptions{Subject: testSubject, Role: testRole, Email: testEmail})
+
+		rec := httptest.NewRecorder()
+		tg.handler.ServeHTTP(rec, request("POST", acceptPath+"?x=1", tok))
+
+		if rec.Code != http.StatusOK || tg.caps["tenancy"].hits != 1 {
+			t.Fatalf("status = %d, tenancy hits = %d, want 200 and 1", rec.Code, tg.caps["tenancy"].hits)
+		}
+	})
+
+	t.Run("client identity headers are replaced by the token's", func(t *testing.T) {
+		tg := setupGateway(t)
+		tok := tg.mint(t, auth.MintOptions{Subject: testSubject, Role: testRole, Email: testEmail})
+		r := request("POST", acceptPath, tok)
+		r.Header.Set("X-Tenant-ID", "tenant-evil")
+		r.Header.Set("X-User-ID", "attacker")
+		r.Header.Set("X-User-Role", "operator")
+		r.Header.Set("X-User-Email", "evil@x")
+
+		rec := httptest.NewRecorder()
+		tg.handler.ServeHTTP(rec, r)
+
+		if rec.Code != http.StatusOK || tg.caps["tenancy"].hits != 1 {
+			t.Fatalf("status = %d, tenancy hits = %d, want 200 and 1", rec.Code, tg.caps["tenancy"].hits)
+		}
+		for key, want := range map[string]string{"X-Tenant-ID": "", "X-User-ID": testSubject, "X-User-Role": testRole, "X-User-Email": testEmail} {
+			if got := tg.caps["tenancy"].header.Values(key); !slices.Equal(got, []string{want}) {
+				t.Errorf("upstream %s = %q, want [%q]", key, got, want)
+			}
+		}
+	})
+
+	t.Run("a tenant-bearing token is proxied with its tenant", func(t *testing.T) {
+		tg := setupGateway(t)
+		tok := tg.mint(t, auth.MintOptions{Subject: testSubject, Role: testRole, TenantID: testTenant, Email: testEmail})
+
+		rec := httptest.NewRecorder()
+		tg.handler.ServeHTTP(rec, request("POST", acceptPath, tok))
+
+		if rec.Code != http.StatusOK || tg.caps["tenancy"].hits != 1 {
+			t.Fatalf("status = %d, tenancy hits = %d, want 200 and 1", rec.Code, tg.caps["tenancy"].hits)
+		}
+		assertHeader(t, tg.caps["tenancy"].header, "X-Tenant-ID", testTenant)
+	})
 }

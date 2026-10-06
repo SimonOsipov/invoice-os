@@ -72,3 +72,43 @@ func TestRLS_SetInvitationTokenReplacesThePendingHash(t *testing.T) {
 		t.Errorf("SetInvitationToken(unknown id) = (%v, %v), want (false, nil)", replaced, err)
 	}
 }
+
+// A pending invite is reachable only under its own tenant id: another tenant's id changes nothing.
+func TestRLS_SetInvitationTokenRefusesAnotherTenant(t *testing.T) {
+	requireHarness(t)
+	owner := newNamedTenant(t, "Obi Partners")
+	other := newNamedTenant(t, "Ade Holdings")
+	ownerToken := newToken(t)
+	ownerInvite := seedAcceptInvite(t, owner, "reviewer", invitedAddress, ownerToken)
+	otherInvite := seedAcceptInvite(t, other, "preparer", "bola@ade.test", newToken(t))
+	otherBefore := tokenHashOf(t, otherInvite)
+	ownerBefore := tokenHashOf(t, ownerInvite)
+
+	// Control: the owner's own tenant id does replace the hash, so the refusals below are the tenant id.
+	if replaced, err := setToken(t, owner, ownerInvite, newToken(t)); err != nil || !replaced {
+		t.Fatalf("control: SetInvitationToken(own tenant) = (%v, %v), want (true, nil)", replaced, err)
+	}
+	if bytes.Equal(tokenHashOf(t, ownerInvite), ownerBefore) {
+		t.Fatal("control: the owner's hash did not change")
+	}
+
+	intruder := newToken(t)
+	replaced, err := setToken(t, other, ownerInvite, intruder)
+	if err != nil || replaced {
+		t.Errorf("SetInvitationToken(other tenant, owner's invite) = (%v, %v), want (false, nil)", replaced, err)
+	}
+	if bytes.Equal(tokenHashOf(t, ownerInvite), hashOf(intruder)) {
+		t.Error("the owner's invite took the token another tenant's id supplied")
+	}
+	if got := lookupAs(t, "", intruder); len(got) != 0 {
+		t.Errorf("invitation_by_token(intruder token) = %+v, want no row", got)
+	}
+
+	replaced, err = setToken(t, owner, otherInvite, newToken(t))
+	if err != nil || replaced {
+		t.Errorf("SetInvitationToken(owner tenant, other's invite) = (%v, %v), want (false, nil)", replaced, err)
+	}
+	if !bytes.Equal(tokenHashOf(t, otherInvite), otherBefore) {
+		t.Error("another tenant's invite hash changed")
+	}
+}

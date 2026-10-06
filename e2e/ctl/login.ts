@@ -248,6 +248,7 @@ export async function login(req: LoginRequest, deps: LoginDeps): Promise<LoginRe
   let saved = deps.store.read(env)
   let created = false
   let gatewayWrites = 0
+  // ceiling: no lock, two concurrent first logins on one environment each create the staff accounts; add a lock file if QA sessions share a worktree.
   const recreate = async () => {
     saved = { environmentId: resolved.environmentId, createdAt: new Date().toISOString(), accounts: await deps.provisionAll() }
     deps.store.write(env, saved)

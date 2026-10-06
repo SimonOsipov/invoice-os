@@ -708,3 +708,303 @@ describe('raceReady', () => {
     })
   })
 })
+
+const WRITE_PATHS = ['/auth/register', '/auth/mock/member', '/auth/mock/staff']
+const writes = (gw: Gateway) => gw.requests.filter((r) => r.method === 'POST' && WRITE_PATHS.includes(r.path))
+
+describe('gatewayWrites against the requests the gateway saw (D31)', () => {
+  it('a first login reports every register and grant request it sent', async () => {
+    const { L, root, deps } = await setup()
+    const gw = stubGateway()
+
+    const r = await L.login(req('firm', 'admin'), { ...deps, provisionAll: L.provisionAll, apiRole: L.apiRole })
+
+    expect(writes(gw).length, 'the stub saw the register and grant requests').toBeGreaterThan(0)
+    expect(r.created).toBe(true)
+    expect(r.gatewayWrites).toBe(writes(gw).length)
+    expect(readStored(root).environmentId).toBe(ENV_ID)
+  })
+
+  it('a re-grant reports exactly its one grant request', async () => {
+    const { L, root, deps } = await setup()
+    const gw = stubGateway({ me: [FORBIDDEN, meOk('admin')] })
+    seed(root, { states: ['firm-admin'] })
+
+    const r = await L.login(req('firm', 'admin'), { ...deps, apiRole: L.apiRole, regrant: L.regrant })
+
+    expect(writes(gw)).toHaveLength(1)
+    expect(r.gatewayWrites).toBe(1)
+    expect(r.created).toBe(false)
+  })
+
+  it('a reuse sends no register and no grant, on the real API read', async () => {
+    const { L, root, deps } = await setup()
+    const gw = stubGateway({ me: [meOk('admin')] })
+    seed(root, { states: ['firm-admin'] })
+
+    const r = await L.login(req('firm', 'admin'), { ...deps, apiRole: L.apiRole })
+
+    expect(gw.requests.some((q) => q.path === '/api/tenancy/v1/me'), 'the API role read ran').toBe(true)
+    expect(writes(gw)).toHaveLength(0)
+    expect(r).toMatchObject({ reused: true, gatewayWrites: 0 })
+  })
+})
+
+describe('login chain, adversarial', () => {
+  it('a rebuilt environment never checks the old state file', async () => {
+    const { L, root, deps } = await setup({
+      resolveEnv: vi.fn(async (env: string): Promise<EnvResult> => ({ env, environmentId: 'new', urls: { ...urls }, dark: [] })),
+    })
+    seed(root, { environmentId: 'old', states: ['firm-admin'] })
+
+    const r = await L.login(req('firm', 'admin'), deps)
+
+    expect(count(deps.signInFresh), 'the browser signed in again').toBe(1)
+    expect(count(deps.checkSavedState)).toBe(0)
+    expect(r).toMatchObject({ created: true, reused: false })
+  })
+
+  it('a firm account with no state file signs in fresh and never preflights', async () => {
+    const { L, root, deps } = await setup()
+    seed(root)
+
+    const r = await L.login(req('firm', 'preparer'), deps)
+
+    expect(count(deps.signInFresh)).toBe(1)
+    expect(count(deps.checkSavedState)).toBe(0)
+    expect(count(deps.credentialsValid)).toBe(0)
+    expect(count(deps.provisionAll)).toBe(0)
+    expect(r).toMatchObject({ created: false, reused: false })
+  })
+
+  it('a staff account with no state file preflights its credentials, then signs in', async () => {
+    const { L, root, calls, deps } = await setup()
+    seed(root)
+
+    await L.login(req('support'), deps)
+
+    expect(calls.filter((c) => c !== 'apiRole')).toEqual(['credentialsValid', 'signInFresh'])
+    expect(vi.mocked(deps.signInFresh).mock.calls[0][0]).toBe('support')
+  })
+
+  it('an in-house login uses the in-house tenant account and state file', async () => {
+    const { L, root, deps } = await setup({ apiRole: vi.fn(async () => ({ role: 'preparer', tenantId: TENANT.inhouse })) })
+    seed(root)
+
+    const r = await L.login(req('inhouse', 'preparer'), deps)
+
+    const [key, account, , statePath] = vi.mocked(deps.signInFresh).mock.calls[0]
+    expect(key).toBe('inhouse-preparer')
+    expect(account.tenantId).toBe(TENANT.inhouse)
+    expect(statePath).toBe(path.join(storeDir(root), 'inhouse-preparer.json'))
+    expect(r).toMatchObject({ persona: 'inhouse', role: 'preparer', tenantId: TENANT.inhouse, url: urls.APP_URL })
+  })
+
+  it('staff results point at their console and carry no role', async () => {
+    for (const [persona, url] of [['developer', urls.OPS_CONSOLE_URL], ['support', urls.SUPPORT_CONSOLE_URL]] as const) {
+      const { L, root, deps } = await setup()
+      seed(root)
+
+      const r = await L.login(req(persona), deps)
+
+      expect(r.url, persona).toBe(url)
+      expect(r.persona, persona).toBe(persona)
+      expect('role' in r, `${persona} result has a role key`).toBe(false)
+      expect(r.tenantId, persona).toBeUndefined()
+      expect(r.storageState.endsWith(`${persona}.json`), persona).toBe(true)
+    }
+  })
+
+  it('a dark domain stops exactly the personas that use it', async () => {
+    const cases: { persona: Persona; dark: EnvResult['dark']; stops: boolean }[] = [
+      { persona: 'firm', dark: ['landing'], stops: true },
+      { persona: 'firm', dark: ['gateway'], stops: true },
+      { persona: 'inhouse', dark: ['app'], stops: true },
+      { persona: 'developer', dark: ['ops-console'], stops: true },
+      { persona: 'developer', dark: ['gateway'], stops: true },
+      { persona: 'support', dark: ['support-console'], stops: true },
+      { persona: 'developer', dark: ['support-console', 'landing', 'app'], stops: false },
+      { persona: 'support', dark: ['ops-console', 'landing', 'app'], stops: false },
+    ]
+    expect(cases.length).toBeGreaterThan(0)
+    for (const c of cases) {
+      const { L, root, deps } = await setup({
+        resolveEnv: vi.fn(async (env: string): Promise<EnvResult> => ({ env, environmentId: ENV_ID, urls: { ...urls }, dark: c.dark })),
+      })
+      seed(root)
+      const label = `${c.persona} with ${c.dark.join(',')} dark`
+
+      if (c.stops) {
+        const err = await refused(L.login(req(c.persona), deps))
+        expect(err.code, label).toBe(1)
+        expect(err.message, label).toContain(c.dark[0])
+        expect(count(deps.signInFresh) + count(deps.checkSavedState), label).toBe(0)
+      } else {
+        expect((await L.login(req(c.persona), deps)).persona, label).toBe(c.persona)
+      }
+    }
+  })
+
+  it('a role found for another tenant stops before any grant or browser', async () => {
+    const { L, root, deps } = await setup({ apiRole: vi.fn(async () => ({ role: 'admin', tenantId: TENANT.inhouse })) })
+    seed(root, { states: ['firm-admin'] })
+
+    const err = await refused(L.login(req('firm', 'admin'), deps))
+
+    expect(err.code).toBe(1)
+    expect(err.message).toContain(TENANT.inhouse)
+    expect(err.message).toContain(TENANT.firm)
+    expect(count(deps.regrant)).toBe(0)
+    expect(count(deps.signInFresh) + count(deps.checkSavedState)).toBe(0)
+  })
+
+  it('a saved state whose browser role differs fails without a second grant', async () => {
+    const { L, root, deps } = await setup({
+      apiRole: vi.fn(async () => ({ role: 'reviewer', tenantId: TENANT.firm })),
+      checkSavedState: vi.fn(async () => ({ ok: true, role: 'preparer' })),
+    })
+    seed(root, { states: ['firm-reviewer'] })
+
+    const err = await refused(L.login(req('firm', 'reviewer'), deps))
+
+    expect(err.code).toBe(1)
+    expect(err.message).toContain('reviewer')
+    expect(err.message).toContain('preparer')
+    expect(count(deps.checkSavedState)).toBe(1)
+    expect(count(deps.regrant)).toBe(0)
+  })
+
+  it('a role that matches in the browser is not an error', async () => {
+    const { L, root, deps } = await setup({
+      apiRole: vi.fn(async () => ({ role: 'reviewer', tenantId: TENANT.firm })),
+      signInFresh: vi.fn(async () => ({ role: 'reviewer' })),
+    })
+    seed(root)
+
+    const r = await L.login(req('firm', 'reviewer'), deps)
+
+    expect(count(deps.signInFresh)).toBe(1)
+    expect(r.role).toBe('reviewer')
+  })
+
+  it('accounts.json that is valid JSON but not an account store is corrupt', async () => {
+    const bodies: Record<string, unknown> = {
+      null: null,
+      array: [],
+      'no environment id': { createdAt: 'x', accounts: allAccounts() },
+      'numeric environment id': { environmentId: 7, createdAt: 'x', accounts: allAccounts() },
+      'no accounts': { environmentId: ENV_ID, createdAt: 'x' },
+      'an account that is null': { environmentId: ENV_ID, createdAt: 'x', accounts: { ...allAccounts(), developer: null } },
+    }
+    expect(Object.keys(bodies).length).toBeGreaterThan(0)
+    for (const [name, body] of Object.entries(bodies)) {
+      const { L, root, deps } = await setup()
+      mkdirSync(storeDir(root), { recursive: true })
+      writeFileSync(accountsFile(root), JSON.stringify(body))
+
+      const err = await refused(L.login(req('firm', 'admin'), deps))
+
+      expect(err.code, name).toBe(1)
+      expect(err.hint, name).toContain(accountsFile(root))
+      expect(count(deps.provisionAll), name).toBe(0)
+    }
+  })
+
+  it('a browser failure that echoes a credential does not carry it out of login', async () => {
+    const secret = accountFor('firm-admin').password
+    const { L, root, deps } = await setup({
+      signInFresh: vi.fn(async () => {
+        throw new Error(`locator.fill: Timeout 30000ms exceeded.\nCall log:\n  - waiting for getByLabel('Password')\n  - fill("${secret}")`)
+      }),
+    })
+    seed(root)
+
+    const err = await refused(L.login(req('firm', 'admin'), deps))
+
+    expect(err.message, 'the failure itself still shows').toContain('Timeout')
+    expect(`${err.message}\n${err.hint}`, 'a Playwright call log echoes the filled value').not.toContain(secret)
+  })
+
+  it('no failure message of the login chain carries a saved password', async () => {
+    const scenarios: { name: string; run: () => Promise<Refusal> }[] = [
+      {
+        name: 'second wrong role',
+        run: async () => {
+          const { L, root, deps } = await setup()
+          stubGateway({ me: [meOk('preparer'), meOk('preparer')] })
+          seed(root, { states: ['firm-reviewer'] })
+          return refused(L.login(req('firm', 'reviewer'), { ...deps, apiRole: L.apiRole, regrant: L.regrant }))
+        },
+      },
+      {
+        name: 'browser role differs',
+        run: async () => {
+          const { L, root, deps } = await setup({ apiRole: vi.fn(async () => ({ role: 'reviewer', tenantId: TENANT.firm })), signInFresh: vi.fn(async () => ({ role: 'preparer' })) })
+          seed(root)
+          return refused(L.login(req('firm', 'reviewer'), deps))
+        },
+      },
+      {
+        name: 'preflight throttled',
+        run: async () => {
+          const { L, root, deps } = await setup({ checkSavedState: vi.fn(async () => ({ ok: false })) })
+          stubGateway({ signIn: { status: 429, body: { error: 'slow down' } } })
+          seed(root, { states: ['developer'] })
+          return refused(L.login(req('developer'), { ...deps, credentialsValid: L.credentialsValid }))
+        },
+      },
+    ]
+    for (const s of scenarios) {
+      const err = await s.run()
+      expect(err.message.length, s.name).toBeGreaterThan(0)
+      for (const k of KEYS) expect(`${err.message}\n${err.hint}`.includes(accountFor(k).password), `${s.name} prints the password of ${k}`).toBe(false)
+    }
+  })
+})
+
+describe('apiRole against a stubbed gateway (D47)', () => {
+  const first = (L: Login, key: AccountKey = 'firm-admin') => L.apiRole(accountFor(key))
+  const env = () => {
+    process.env.GATEWAY_URL = urls.GATEWAY_URL
+    process.env.APP_URL = urls.APP_URL
+  }
+
+  it('reads the role and tenant of the signed-in account', async () => {
+    const L = await load()
+    env()
+    const gw = stubGateway({ me: [meOk('reviewer')] })
+
+    expect(await first(L)).toEqual({ role: 'reviewer', tenantId: TENANT.firm })
+    expect(gw.requests.filter((r) => r.path === '/api/tenancy/v1/me')).toHaveLength(1)
+  })
+
+  it('a 403 is no membership, not an error', async () => {
+    const L = await load()
+    env()
+    stubGateway({ me: [FORBIDDEN] })
+
+    expect(await first(L)).toEqual({ role: null })
+  })
+
+  it('a 500 on the role read is an error, never a re-grant trigger', async () => {
+    const L = await load()
+    env()
+    stubGateway({ me: [{ status: 500, body: { error: 'boom' } }] })
+
+    await expect(first(L)).rejects.toThrow()
+  })
+
+  it('a refused sign-in is gone; a throttled or full one is an error naming the status', async () => {
+    const L = await load()
+    env()
+    stubGateway({ signIn: { status: 401, body: { error: 'invalid email or password' } } })
+    expect(await first(L)).toBe('gone')
+
+    for (const status of [429, 503]) {
+      stubGateway({ signIn: { status, body: { error: 'nope' } } })
+      const err = await refused(first(L))
+      expect(err.code, String(status)).toBe(1)
+      expect(err.message, String(status)).toContain(String(status))
+    }
+  })
+})

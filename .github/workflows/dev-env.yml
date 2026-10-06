@@ -337,6 +337,7 @@ jobs:
       # ----------------------------------------------------------------------
 
       # First after `resolve`: GoTrue must never boot a fork without its own key.
+      # A fork gets its own GATEWAY_TOKEN, never the one it inherited.
       - name: Write the fork's secrets and auth configuration (never in the persistent env)
         if: github.event_name == 'pull_request'
         env:
@@ -449,6 +450,9 @@ jobs:
           echo "$out" | tr '\n' ' '
 
       # PR only: the persistent environment's variables are the source of truth.
+      # Must run after `urls` and before any deploy that bakes `VITE_*`.
+      # Forks copy production's Sentry DSNs; a silent failure would leave a PR env with a usable AI key.
+      # A fork is reused per PR and never inherits a later production write.
       - name: Write the fork's URLs, fake modes, Sentry blanks and ENVIRONMENT (never in the persistent env)
         if: github.event_name == 'pull_request'
         env:
@@ -628,7 +632,7 @@ jobs:
           fi
 
           # The purge and mock-issuer barriers, directional like db_reset.
-          # set-fork-environment sets a fork gateway's ENVIRONMENT to development,
+          # fork-vars-after-urls sets a fork gateway's ENVIRONMENT to development,
           # so its purge runs and its tagged binary serves the mock issuer.
           # Production's gateway reads ENVIRONMENT=production, which
           # db.provisionableEnvironment refuses, and its binary is untagged.
@@ -639,7 +643,7 @@ jobs:
             want_purge=false; want_mock=absent
           fi
           if [ "$purge" != "$want_purge" ]; then
-            echo "::error::gateway is serving $EXPECTED_BUILD but reports demo_purge='${purge:-none}', want '$want_purge'. 'error' means PurgeDemoTenants failed and Provision swallowed it (look for 'demo-tenant purge failed'). 'none' means the gateway predates the field. On a PR, 'false' means a guard said no: check GATEWAY_DB_BOOTSTRAP=true on the gateway and that set-fork-environment set ENVIRONMENT=development. On the persistent environment, 'true' means a purge ran against live data: its gateway ENVIRONMENT no longer reads 'production' (docs/deploy-model.md)."
+            echo "::error::gateway is serving $EXPECTED_BUILD but reports demo_purge='${purge:-none}', want '$want_purge'. 'error' means PurgeDemoTenants failed and Provision swallowed it (look for 'demo-tenant purge failed'). 'none' means the gateway predates the field. On a PR, 'false' means a guard said no: check GATEWAY_DB_BOOTSTRAP=true on the gateway and that fork-vars-after-urls set ENVIRONMENT=development. On the persistent environment, 'true' means a purge ran against live data: its gateway ENVIRONMENT no longer reads 'production' (docs/deploy-model.md)."
             exit 1
           fi
           if [ "$mock" != "$want_mock" ]; then
@@ -649,7 +653,7 @@ jobs:
           # A fork trusts its mock and its own GoTrue; production trusts only its GoTrue.
           if [ "$IS_PR" = "true" ]; then want_issuers=2; else want_issuers=1; fi
           if [ "$issuers" != "$want_issuers" ]; then
-            echo "::error::gateway is serving $EXPECTED_BUILD but reports auth_issuers='${issuers:-none}', want '$want_issuers'. On a PR, '1' means set-fork-auth did not write AUTH_ADDITIONAL_ISSUERS on the gateway. On the persistent environment, '2' means AUTH_ADDITIONAL_ISSUERS is set there and a second issuer is trusted. 'none' means the gateway predates the field."
+            echo "::error::gateway is serving $EXPECTED_BUILD but reports auth_issuers='${issuers:-none}', want '$want_issuers'. On a PR, '1' means fork-vars-before-urls did not write AUTH_ADDITIONAL_ISSUERS on the gateway. On the persistent environment, '2' means AUTH_ADDITIONAL_ISSUERS is set there and a second issuer is trusted. 'none' means the gateway predates the field."
             exit 1
           fi
 
@@ -864,7 +868,7 @@ jobs:
           }
           if [ -n "$offenders" ]; then
             echo "::error::want Sentry $direction on $EXPECTED_BUILD; offenders: $offenders"
-            echo "::error::'none' means the service predates the sentry field, or is down (none@none): check it is up first. On a PR, 'on' means a DSN reached the fork: check set-sentry-off in prepare-env. Any other build means its new container never replaced the old one."
+            echo "::error::'none' means the service predates the sentry field, or is down (none@none): check it is up first. On a PR, 'on' means a DSN reached the fork: check fork-vars-after-urls in prepare-env. Any other build means its new container never replaced the old one."
             exit 1
           fi
           echo "Sentry $direction on $EXPECTED_BUILD for: $names (auth exempt)."

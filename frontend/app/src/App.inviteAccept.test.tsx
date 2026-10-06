@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // An invitee's sign-in: the app holds the invite across the bounce, accepts it on hand-off and renews the session.
 
-import { act, cleanup, render, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Me } from './auth'
@@ -110,6 +110,7 @@ type Call = { url: string; method: string; auth: string | null; body: unknown }
 let calls: Call[] = []
 let acceptReply: Reply = ok({ tenant: ME.tenant, user: { id: ME.user.id, role: 'admin' } })
 let refreshReply: Reply = ok({ access_token: T_RENEWED, refresh_token: 'R1' })
+let renewedMeReply: Reply = ok(ME)
 
 const path = (c: Call) => c.url.replace(GATEWAY, '')
 const hits = (p: string) => calls.filter((c) => path(c) === p)
@@ -123,7 +124,7 @@ function routeFetch() {
       if (url === `${GATEWAY}/auth/exchange`) return ok({ access_token: T_FIRST, refresh_token: 'R0' })()
       if (url === ACCEPT_URL) return acceptReply()
       if (url === `${GATEWAY}/auth/refresh`) return refreshReply()
-      if (url === `${GATEWAY}/api/tenancy/v1/me`) return (auth === `Bearer ${T_FIRST}` ? fail(403, 'forbidden') : ok(ME))()
+      if (url === `${GATEWAY}/api/tenancy/v1/me`) return (auth === `Bearer ${T_FIRST}` ? fail(403, 'forbidden') : renewedMeReply)()
       if (url === `${GATEWAY}/api/tenancy/v1/workspaces`) return ok({ tenant: ME.tenant })()
       if (url === `${GATEWAY}/auth/login`) return ok({ access_token: jwt(APP_PERSONAS.firm.subject, nowSec() + 3600) })()
       return ok({
@@ -157,9 +158,9 @@ async function bootApp() {
   })
 }
 
-function configure() {
+function configure({ landing = true } = {}) {
   vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
-  vi.stubEnv('VITE_LANDING_URL', LANDING)
+  vi.stubEnv('VITE_LANDING_URL', landing ? LANDING : '')
 }
 
 let originalLocation: PropertyDescriptor | undefined
@@ -173,6 +174,7 @@ beforeEach(() => {
   calls = []
   acceptReply = ok({ tenant: ME.tenant, user: { id: ME.user.id, role: 'admin' } })
   refreshReply = ok({ access_token: T_RENEWED, refresh_token: 'R1' })
+  renewedMeReply = ok(ME)
   routeFetch()
 })
 
@@ -275,6 +277,11 @@ describe('a hand-off with a held invite accepts it and renews the session (D11, 
     ['accept 500', () => (acceptReply = fail(500, 'internal error'))],
     ['accept network error', () => (acceptReply = networkDown)],
     ['accept 200 then refresh 401', () => (refreshReply = fail(401, 'invalid refresh token'))],
+    // D35: only tenancy's own three refusals are notices; a gateway 403 is not "no workspace".
+    ['accept 403 forbidden', () => (acceptReply = fail(403, 'forbidden'))],
+    ['accept 404 another message', () => (acceptReply = fail(404, 'not found'))],
+    ['accept 409 another message', () => (acceptReply = fail(409, 'already has a workspace'))],
+    ['accept 200 then /me 403', () => (renewedMeReply = fail(403, 'forbidden'))],
   ] as const)('app_acceptFailureTakesTheFailedPath: %s', async (_name, arrange) => {
     configure()
     ensureSignInState()
@@ -285,6 +292,28 @@ describe('a hand-off with a held invite accepts it and renews the session (D11, 
     await bootApp()
     await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=failed`]))
     expect(hits(ACCEPT_PATH), 'control: the accept was tried').toHaveLength(1)
+    expect(localStorage.getItem(SESSION_KEY), 'no session is stored').toBeNull()
+    expect(capturedCtx, 'no workspace mounts').toBeUndefined()
+  })
+})
+
+describe('refusals without a landing base (D35)', () => {
+  it('app_refusedInviteWithoutALandingBaseStaysOnThePicker', async () => {
+    configure({ landing: false })
+    ensureSignInState()
+    holdRaw()
+    acceptReply = fail(409, MSG_ALREADY_MEMBER)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(hits(ACCEPT_PATH), 'control: the accept was tried').toHaveLength(1))
+    await waitFor(() => expect(screen.getByText('Choose an account')).toBeTruthy())
+    await settle()
+    expect(hrefWrites, 'no navigation').toEqual([])
+    expect(window.location.href).not.toContain('null')
+    expect(hits('/api/tenancy/v1/me'), 'no /me').toEqual([])
+    expect(hits('/auth/refresh'), 'no refresh').toEqual([])
     expect(localStorage.getItem(SESSION_KEY), 'no session is stored').toBeNull()
     expect(capturedCtx, 'no workspace mounts').toBeUndefined()
   })

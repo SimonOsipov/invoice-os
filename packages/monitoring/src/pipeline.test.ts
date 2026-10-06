@@ -50,7 +50,8 @@ function boot(service: Service = 'app', over: Partial<MonitoringConfig> = {}) {
 }
 
 beforeEach(() => {
-  window.history.replaceState(null, '', `/invoices?q=${N}#frag`)
+  // The fragment carries an invite-link token, as the app's `?auth=start#invite=<token>` does.
+  window.history.replaceState(null, '', `/invoices?q=${N}#invite=${N}`)
   Object.defineProperty(document, 'referrer', { value: `https://www.test/?persona=${N}`, configurable: true })
 })
 

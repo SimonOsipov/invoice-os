@@ -1825,10 +1825,7 @@ export default function App() {
     () => !handoffCode && new URLSearchParams(window.location.search).get('auth') === 'start',
   )
   // Read before the strip effect drops the hash; null when `?auth=start` carries no invite.
-  const [startInvite] = useState(() => {
-    const { hash } = window.location
-    return authStart ? readInviteFragment(hash) : null
-  })
+  const [startInvite] = useState(() => (authStart ? readInviteFragment(window.location.hash) : null))
   const startBounced = useRef(false)
   const frontDoorBounced = useRef(false)
   // Lazy initializer: synchronously rehydrate a persisted session at boot (no network,

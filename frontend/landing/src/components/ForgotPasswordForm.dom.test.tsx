@@ -137,6 +137,24 @@ describe('the forgot form', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
+  it('a blank or padded-invalid address is the empty or malformed error and sends nothing', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await mountForm()
+
+    await fillEmail('   ')
+    await submit()
+    expect(alerts(), 'whitespace only reads as empty').toEqual([EMAIL_REQUIRED])
+
+    await fillEmail('  a@b  ')
+    await submit()
+    expect(alerts(), 'padded and malformed').toEqual([EMAIL_INVALID])
+
+    await fillEmail('a@corp.example')
+    expect(alerts(), 'typing clears the error').toEqual([])
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('one submit posts once and disables the form while sending', async () => {
     let release!: (r: Response) => void
     const fetchMock = vi.fn().mockReturnValue(

@@ -356,6 +356,29 @@ describe('the forgot view', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
+  it('a typed sign-in email is not carried into the forgot view or back', async () => {
+    stubTargets(ALL_TARGETS)
+    configured()
+    await mount(vi.fn(), STATE, undefined, vi.fn())
+    const typed = async (v: string) =>
+      act(async () => {
+        const input = dialog().querySelector<HTMLInputElement>('input[type="email"]')!
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, v)
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+    const emailValue = () => dialog().querySelector<HTMLInputElement>('input[type="email"]')!.value
+
+    await typed('ada@okafor.ng')
+    expect(emailValue(), 'control: the typing took').toBe('ada@okafor.ng')
+    await press('Forgot password?')
+    expect(emailValue(), 'D25: the forgot field starts empty').toBe('')
+    await typed('other@corp.example')
+    await press('Back to sign in')
+    expect(dialog().querySelectorAll('input[type="password"]').length, 'control: back on sign-in').toBe(1)
+    expect(emailValue(), 'D34: the sign-in form is remounted').toBe('')
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
   it('the forgot view is unavailable without a gateway', async () => {
     stubTargets(ALL_TARGETS)
     unconfigured()

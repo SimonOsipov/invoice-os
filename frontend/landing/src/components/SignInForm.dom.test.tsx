@@ -718,6 +718,26 @@ describe('the Forgot password? control', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
+  it('Forgot password? follows the password error and stays enabled beside the form errors', async () => {
+    configure()
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const onForgot = vi.fn()
+    await mountForm(STATE, undefined, undefined, onForgot)
+
+    await submit()
+    const errs = alerts()
+    expect(errs.map((a) => a.textContent?.trim()), 'control: both field errors show').toEqual([EMAIL_REQUIRED, PASSWORD_REQUIRED])
+    const btn = forgotButton()
+    expect(errs[1].compareDocumentPosition(btn) & Node.DOCUMENT_POSITION_FOLLOWING, 'after the password alert').toBeTruthy()
+    expect(btn.disabled).toBe(false)
+    await act(async () => {
+      btn.click()
+    })
+    expect(onForgot).toHaveBeenCalledTimes(1)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('no Forgot password? when onForgot is not given', async () => {
     configure()
     await mountForm(STATE)

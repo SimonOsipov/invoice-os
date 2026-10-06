@@ -1028,11 +1028,19 @@ read_vars_batch() {
   if ! graphql_try "$(gql_body "$q" "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" \
       '{p: $p, e: $e} + ([$ARGS.positional | to_entries[] | {("s\(.key)"): .value}] | add)' --args "$@")")" "$ctx"; then
     if [ "$GQL_CURL_RC" = 0 ]; then
-      READ_FAILED_IDX=$(gql_error_aliases | sed 's/^s//' | tr '\n' ' ')
+      for id in $(gql_error_aliases); do
+        id="${id#s}"
+        # Canonical index below n only: a bare s99 or s08 names no service.
+        if [[ "$id" =~ ^(0|[1-9][0-9]{0,8})$ ]] && [ "$id" -lt "$n" ]; then READ_FAILED_IDX="$READ_FAILED_IDX$id "; fi
+      done
       READ_FAIL_WHY="Railway answered a GraphQL error"
     else
       READ_FAIL_WHY="$GQL_LAST"
     fi
+    return 1
+  fi
+  if ! printf '%s' "$GQL_RESPONSE" | jq -e '(type == "object") and (.data | type == "object")' >/dev/null 2>&1; then
+    READ_FAIL_WHY="the response was not a JSON object with data"
     return 1
   fi
   READ_FAILED_IDX=$(printf '%s' "$GQL_RESPONSE" | jq -r --argjson n "$n" \

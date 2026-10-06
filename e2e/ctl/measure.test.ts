@@ -183,7 +183,7 @@ describe('measureSnippet', () => {
     expect(calls.indexOf('addStyleTag')).toBeLessThan(calls.indexOf('count'))
   })
 
-  it('the scroll-behavior tag is removed after a read and after a zero-match', async () => {
+  it('the scroll-behavior tag is removed after a read, a zero-match and a throw', async () => {
     const { doc } = fakeDoc()
     const read = fakePage([fakeElement(doc, () => ({ x: 0, y: 0, width: 1, height: 1 }))])
     await compile(req())(read.page)
@@ -192,6 +192,14 @@ describe('measureSnippet', () => {
     const none = fakePage([])
     await compile(req())(none.page)
     expect(none.removedTags, 'the tag stayed on the live page after a zero-match').toEqual(none.styleTags)
+
+    const boom = fakePage([
+      fakeElement(doc, () => {
+        throw new Error('detached')
+      }),
+    ])
+    await expect(compile(req())(boom.page)).rejects.toThrow('detached')
+    expect(boom.removedTags, 'the tag stayed on the live page after a throw').toEqual(boom.styleTags)
   })
 
   it('the viewport is set first, keeping the height', async () => {
@@ -445,6 +453,9 @@ describe('measure', () => {
     expect(err.hint).toContain('open')
     expect(err.hint).toContain('state-load')
     expect(err.hint).toContain('ctl login')
+
+    const dead = await rejection(measure(req({ session: 'qa' }), fakeExec({ code: 1, stdout: '', stderr: "Error: Browser 'qa' is not open. Run\n\n  playwright-cli -s=qa open\n\nto start the browser session." }).exec))
+    expect(dead.hint, 'a session whose daemon is gone reads "Browser \'qa\' is not open" (playwright-core cli-client/session.js)').toContain('state-load')
   })
 
   it('a selector that reads "is not open" is not a closed session', async () => {

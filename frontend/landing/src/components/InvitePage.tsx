@@ -165,7 +165,7 @@ export function InvitePage({ token }: { token: string | null }) {
           {formError && <Alert text={formError} />}
           <p className="t-caption" style={{ textAlign: 'center', margin: '14px 0 0' }}>{PRODUCT_EMAIL_NOTICE}</p>
           <div style={{ marginTop: 14 }}>
-            <Button variant="text" type="button" onClick={() => setView('ready')} disabled={submitting} style={{ fontSize: 13 }}>
+            <Button variant="text" type="button" onClick={() => { setPassword(''); setPasswordError(undefined); setView('ready') }} disabled={submitting} style={{ fontSize: 13 }}>
               Back
             </Button>
           </div>

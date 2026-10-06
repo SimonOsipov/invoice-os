@@ -37,7 +37,11 @@ export function captureInviteToken(
 
 let captured: string | null = null
 try {
-  captured = captureInviteToken(location, history, sessionStorage)
+  // Storage is read lazily so a throwing getter (Safari, storage blocked) cannot skip the strip.
+  captured = captureInviteToken(location, history, {
+    getItem: (k) => sessionStorage.getItem(k),
+    setItem: (k, v) => sessionStorage.setItem(k, v),
+  })
 } catch {
   console.warn('invite link capture failed')
 }

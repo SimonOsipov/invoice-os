@@ -143,6 +143,12 @@ gateway at boot.
 or is not above zero stops the gateway at boot with an ERROR that names the variable and does
 not echo the value. There is no upper bound.
 
+### Per environment, on the `tenancy` service
+
+| Variable | Production | PR fork |
+|---|---|---|
+| `RESEND_SENDING_KEY` | **secret, sealed**: the Resend sending-only key; unset until invite U1 | absent (a sealed variable does not fork); posture `preview` → `capture` |
+
 ## Script behaviour on writes
 
 - `set-fork-auth`, `set-fork-auth-site` and `set-production-auth` write with
@@ -1376,6 +1382,55 @@ The same job's push-only step "Gate on the account-mail logo" loads
 
 To go back to GoTrue's default mail, unset both variables and deploy `auth`.
 
+## Sending invite mail in production (invite U1–U3)
+
+Production writes are the user's, after the epic reaches `main`. `P` and `E` are the project
+and production environment ids named under "Opening registration in production". Until U1,
+`tenancy` has no key and boots in `capture` mode: an invite is stored and no mail is sent.
+
+| Step | When | Production write |
+|---|---|---|
+| U1 | after the epic reaches `main` and the push run has deployed | `tenancy` `RESEND_SENDING_KEY` |
+| U2 | straight after U1 | none: seal in the dashboard, run the audit |
+| U3 | after U2's audit exits 0 | none: deploy `tenancy`, read its boot line |
+
+**The key.** In the Resend dashboard create an API key with permission "Sending access",
+restricted to the `ascomply.com` domain. It can send mail and nothing else.
+
+**U1 — pause PR pushes, then write the key on `tenancy`.** Pause PR pushes from here until U2's
+audit exits 0: until the seal, the key is plain, and a PR run in that window forks it. A fork
+made inside the window still discards it, because its posture `preview` stays `capture`. Run U1 and U2 back to
+back. Pipe the key through stdin so it never reaches argv or shell history:
+
+```
+printf '%s' "$KEY" | railway variable set RESEND_SENDING_KEY --stdin --skip-deploys -p "$P" -e "$E" -s tenancy
+railway variables -p "$P" -e "$E" -s tenancy --json | jq -r '.RESEND_SENDING_KEY | length'
+# expected: the key's length; print the length, never the value
+```
+
+**U2 — seal, then audit.** In the dashboard, on production's `tenancy` service, seal
+`RESEND_SENDING_KEY`. Seal nothing else: a seal cannot be undone. Then run the audit by hand
+(read-only):
+
+```
+bash scripts/ci/railway-env.sh audit-sealed-variables
+# expected: Sealed-variable audit clean: <n> of <m> variables in the source environment are sealed, all allowlisted: ... RESEND_SENDING_KEY ....
+```
+
+It must exit 0 and name `RESEND_SENDING_KEY` among the sealed names it allowed. Resume PR pushes
+now. A PR run created before the qualified allowlist reached `main` fails at "Audit sealed
+variables"; push to the PR, or re-run from a fresh event, instead of `gh run rerun`.
+
+**U3 — deploy `tenancy`.** Deploy as in "Deploy the writes" under "Opening registration in
+production". Then read `tenancy`'s boot line:
+
+```
+msg="tenancy: invite mail mode" mode=real
+```
+
+`mode=capture` means the key was not read: check U1's write and the deploy. Invite one real
+address to prove the send end to end.
+
 ## Opening sign-in in production (sign-in U1–U3)
 
 These steps are separate from the two U1–U4 lists above. Production writes are the user's.
@@ -1512,11 +1567,12 @@ opens. A console holds its own session, so the second console asks for its own s
 
 ## Sealed secrets
 
-**Which three are sealed, and why.** On production's `auth` service only:
-`GOTRUE_JWT_KEYS` (the signing key), `GOTRUE_JWT_SECRET` and `GOTRUE_SMTP_PASS` (the Resend
-key).
+**Which are sealed, and why.** On production's `auth` service: `GOTRUE_JWT_KEYS` (the signing
+key), `GOTRUE_JWT_SECRET` and `GOTRUE_SMTP_PASS` (the Resend key). On production's `tenancy`
+service: `RESEND_SENDING_KEY` (the sending-only invite key), sealed after invite U2.
 - A sealed variable is not copied into a fork, so a PR environment never receives
-  production's signing key, JWT secret or Resend key. `set-fork-auth` writes the fork's own.
+  production's signing key, JWT secret or Resend keys. `set-fork-auth` writes the fork's own
+  `auth` values; a fork's `tenancy` has no key and runs in `capture` mode.
 - The account-scoped `RAILWAY_API_TOKEN` that PR workflows hold cannot read them back.
 - `AUTH_ADMIN_PASSWORD` is not sealed (see Variables).
 
@@ -1532,12 +1588,12 @@ script and no test in this repo reads a sealed value.
 Raw Editor. Whether a variable write (`variableUpsert` or `variableCollectionUpsert`) over a sealed variable succeeds, fails or unseals it is
 unmeasured, so no script writes one.
 
-**The audit allows exactly these three on `auth`.** `audit-sealed-variables` (run by
-prepare-env on every PR, and by hand after U3b) passes when the only sealed variables in the
-source environment are `GOTRUE_JWT_KEYS`, `GOTRUE_JWT_SECRET` and `GOTRUE_SMTP_PASS` on the
-`auth` service. Any other sealed name, one of the three on another service, one of the three
-environment-scoped, or any sealed variable in a source environment where `auth` cannot be
-resolved fails every PR.
+**The audit allows exactly these four.** `audit-sealed-variables` (run by
+prepare-env on every PR, and by hand after U3b and invite U2) passes when the only sealed variables in the
+source environment are `auth:GOTRUE_JWT_KEYS`, `auth:GOTRUE_JWT_SECRET`, `auth:GOTRUE_SMTP_PASS` and
+`tenancy:RESEND_SENDING_KEY`, each on the service before the colon. Any other sealed name, one of the four
+on another service, one of the four environment-scoped, or any sealed variable in a source
+environment where `auth` or `tenancy` cannot be resolved fails every PR.
 
 **Still exposed, stated plainly:**
 - Between U3b's write and the seal, production's values are plain, and a PR run in that

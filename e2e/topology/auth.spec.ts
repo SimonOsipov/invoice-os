@@ -1118,7 +1118,10 @@ test('the emailed link opens a confirm page, and a bogus token\'s click lands on
 
     expect(enclosesRect({ x: 0, y: 0, width, height }, cardBox, 1), `the card leaves the viewport at ${width}px (${JSON.stringify(cardBox)})`).toBe(true)
     expect(enclosesRect(cardBox, buttonBox, 1), `the button leaves the card at ${width}px (${JSON.stringify({ cardBox, buttonBox })})`).toBe(true)
-    await assertPageDoesNotScrollSideways(page, `confirm page at ${width}px`)
+    // The gateway page has no app shell, so layout.ts's `.pf-scroll` helper would never resolve.
+    const doc = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }))
+    expect(doc.clientWidth, `the document has no width at ${width}px`).toBeGreaterThan(0)
+    expect(doc.scrollWidth - doc.clientWidth, `the confirm page scrolls sideways at ${width}px (${JSON.stringify(doc)})`).toBeLessThanOrEqual(1)
     // D10: a dropped `font` shorthand computes the browser default (13.333px / 400).
     const reading = await button.evaluate((el) => ({ fontSize: getComputedStyle(el).fontSize, fontWeight: getComputedStyle(el).fontWeight }))
     expect(reading, `the button font at ${width}px`).toEqual({ fontSize: '14px', fontWeight: '700' })

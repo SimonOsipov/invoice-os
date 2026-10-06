@@ -1279,7 +1279,7 @@ describe('a corrected field', () => {
     expect(label, `the corrected field does not say "${MARKER_TYPED}"`).toBeTruthy()
 
     // The positive equality FIRST: a bare not.toBe('var(--accent)') is green on 'red', on ''
-    // and on an element that never rendered. app-layer.css states the translation the
+    // and on an element that never rendered. v2/app-layer.css states the translation the
     // artboard's `var(--accent)` at :307 and :335 takes here.
     expect(marker!.style.background).toBe('var(--action)')
     expect(label!.style.color).toBe('var(--action)')

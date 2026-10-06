@@ -65,7 +65,7 @@ describe('v2 app layer', () => {
   it('AL-01 the package exports the v2 app layer', () => {
     const pkg = JSON.parse(readFileSync(join(DS, 'package.json'), 'utf8')) as { exports: Record<string, string> }
     expect(Object.keys(pkg.exports).sort()).toEqual(
-      ['./styles.css', './assets/logo-mark.png', './v2/styles.css', './v2/assets/mark.png', './v2/app-layer.css'].sort(),
+      ['./v2/styles.css', './v2/assets/mark.png', './v2/app-layer.css'].sort(),
     )
     expect(pkg.exports['./v2/app-layer.css']).toBe('./v2/app-layer.css')
   })

@@ -193,7 +193,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
         </div>
 
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 20px 20px' }}>
-          {/* `.label` is `text-transform: uppercase` (app-layer.css), so these render
+          {/* `.label` is `text-transform: uppercase` (v2/app-layer.css), so these render
               ROLE NAME / WHAT THIS ROLE SIGNS OFF / WHO HOLDS THIS ROLE — the invite modal's
               and the drawer's own field labels. */}
           <div className="label" style={{ marginBottom: 6 }}>
@@ -259,7 +259,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
                   const sel = selected.includes(m.id)
                   return (
                     // A `<label>`, so the whole row is the toggle without a second handler.
-                    // The inline tint outranks `.pf-row:hover` (app-layer.css, no
+                    // The inline tint outranks `.pf-row:hover` (v2/app-layer.css, no
                     // `!important`), so a selected row stays tinted under the pointer.
                     <label
                       key={m.id}

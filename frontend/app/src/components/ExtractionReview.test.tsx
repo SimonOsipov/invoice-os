@@ -1251,7 +1251,7 @@ describe('one shared draft, one Save', () => {
 
   it('disables Save while nothing is drafted, and neutralises its filter', async () => {
     // `.v2-btn-primary:hover` sets `filter: brightness(1.22)` with no `:disabled` guard
-    // (app-layer.css), so a disabled Save brightens under the cursor and reads enabled.
+    // (v2/app-layer.css), so a disabled Save brightens under the cursor and reads enabled.
     // There is NO disabled reason: the only condition is "nothing settled yet", which is
     // self-evident, and both shipped precedents disable without one.
     const w = writing(AMBIGUOUS_JOB)

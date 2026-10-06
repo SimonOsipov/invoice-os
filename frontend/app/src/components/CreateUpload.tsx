@@ -269,7 +269,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
           )}
 
           {/* ⚠️ PLACEMENT IS LOAD-BEARING: everything here renders AFTER </label>, never
-              between the <input class="pf-file"> and it. app-layer.css's dropzone focus
+              between the <input class="pf-file"> and it. v2/app-layer.css's dropzone focus
               ring is `.asc-app .pf-file:focus-visible + label` — an ADJACENT-sibling
               selector — so a single element inserted between the two silently kills the
               keyboard focus ring on the only control this step has. No test covers that;

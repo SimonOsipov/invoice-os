@@ -118,7 +118,7 @@ body {
   box-shadow: 0 0 0 2px var(--ring);
 }
 /* The invite modal's email chip box is a bordered <div> wrapping a bare <input>,
-   so app-layer.css's `.asc-app input:focus` rang the INNER input — a second
+   so v2/app-layer.css's `.asc-app input:focus` rang the INNER input — a second
    rounded rectangle 9px inside the box. Moved onto the box, which makes it ring
    as one field, like `WfAmountInput`. `.asc-app`-scoped unlike the rest of this
    file because the specificity IS the mechanism: the suppressor's (0,3,1) beats

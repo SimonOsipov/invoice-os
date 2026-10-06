@@ -97,7 +97,7 @@ export function playwrightCliCommand(args: string[]): { file: string; args: stri
 const defaultExec: Exec = (args) => {
   const { file, args: argv, cwd } = playwrightCliCommand(args)
   return new Promise((resolve) => {
-    execFile(file, argv, { cwd, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(file, argv, { cwd, env: { ...process.env, NO_UPDATE_NOTIFIER: '1' }, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
       const code = err ? (typeof err.code === 'number' ? err.code : 1) : 0
       resolve({ code, stdout, stderr })
     })
@@ -114,7 +114,7 @@ export async function measure(req: MeasureRequest, exec: Exec = defaultExec): Pr
       1,
     )
   }
-  if (r.code !== 0 || text.includes('### Error')) {
+  if (r.code !== 0) {
     throw new CtlError(text, `The snippet failed in session ${req.session}. Check the page is loaded: playwright-cli -s=${req.session} snapshot`, 1)
   }
   let out: { error?: string; selector?: string; props?: string[] }
@@ -124,10 +124,10 @@ export async function measure(req: MeasureRequest, exec: Exec = defaultExec): Pr
     throw new CtlError(`unreadable playwright-cli output: ${text.slice(0, 300)}`, `Run playwright-cli -s=${req.session} snapshot`, 1)
   }
   if (out.error === 'zero-match') {
-    throw new CtlError(`no element matches ${out.selector}`, `Run playwright-cli -s=${req.session} snapshot to see the page, and fix the selector.`, 1)
+    throw new CtlError(`no element matches ${out.selector}`, `Run playwright-cli -s=${req.session} snapshot to see the page, and fix the selector. If the page is still drawing, wait for it and retry.`, 1)
   }
   if (out.error === 'unknown-prop') {
-    throw new CtlError(`unknown CSS property: ${(out.props ?? []).join(', ')}`, 'Use a real property name (width, padding-left) or a --custom-property.', 2)
+    throw new CtlError(`unknown CSS property: ${(out.props ?? []).join(', ')}`, 'Use a real property name (width, padding-left) or a custom property written as --props=--x.', 2)
   }
   return out as MeasureResult
 }

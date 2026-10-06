@@ -8,7 +8,7 @@
 // REVIEW_GRID_COLUMNS precedent: the row owns the geometry and the header imports it, so
 // the two can never drift apart.
 
-import { chevDownGlyph } from '../glyphs'
+import { chevDownGlyph14 } from '../glyphs'
 import type { AuditEvent } from '../lib/audit'
 import { auditEventView } from '../lib/auditVocabulary'
 import { fmtDateTime } from '../lib/format'
@@ -68,13 +68,19 @@ export interface AuditRowProps {
   // Absent on an invoice-scoped mount (AUDIT-09): there is nothing to narrow to when the
   // caller already filtered to one invoice, so the affordance simply does not render.
   onFilterToInvoice?: (invoiceId: string, invoiceNumber: string | null) => void
+  variant?: 'audit' | 'activity'
 }
 
-export function AuditRow({ event, expanded, onToggle, onFilterToInvoice }: AuditRowProps) {
+export function AuditRow({ event, expanded, onToggle, onFilterToInvoice, variant = 'audit' }: AuditRowProps) {
+  const audit = variant === 'audit'
   const view = auditEventView(event.event)
   const inv = invoiceRef(event.payload)
   const payload = asRecord(event.payload)
   const keys = payload ? Object.keys(payload) : []
+  const showLink = inv != null && onFilterToInvoice != null
+  const showEvidence = view.domain === 'submissions' && inv != null
+
+  const chevSpin = { transform: expanded ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 160ms' }
 
   return (
     <>
@@ -83,72 +89,77 @@ export function AuditRow({ event, expanded, onToggle, onFilterToInvoice }: Audit
         data-testid="audit-row"
         aria-expanded={expanded}
         className="pf-row"
-        style={{ display: 'grid', gridTemplateColumns: AUDIT_COLS, gap: AUDIT_GRID_GAP, minWidth: AUDIT_TABLE_MIN_WIDTH, padding: '12px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}
+        style={{ display: 'grid', gridTemplateColumns: AUDIT_COLS, gap: AUDIT_GRID_GAP, minWidth: AUDIT_TABLE_MIN_WIDTH, padding: audit ? '11px 18px' : '10px 18px', borderBottom: expanded ? 0 : '1px solid var(--line-1)', alignItems: 'center' }}
       >
-        <ActorCell actor={event.actor} actor_name={event.actor_name} actor_kind={event.actor_kind} />
+        <ActorCell actor={event.actor} actor_name={event.actor_name} actor_kind={event.actor_kind} variant={variant} />
         {/* Colour is reserved for outcome (auditVocabulary.ts) -- an event with no outcome
             takes the ordinary text colour, so a domain can never tint the row. */}
-        <span data-testid="audit-what" style={{ fontSize: 13, fontWeight: 500, color: view.tone ? TONE_TEXT[view.tone] : 'var(--fg-1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        <span data-testid="audit-what" style={{ fontSize: audit ? 13 : 12.5, fontWeight: 500, color: view.tone ? TONE_TEXT[view.tone] : 'var(--fg-1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {view.label}
         </span>
         {/* company_scope, not a null check: 'workspace' means the event belongs to the firm
             itself, which is not the same absence as an unattributed row. */}
-        <span data-testid="audit-company" style={{ fontSize: 12.5, color: event.company_scope === 'company' ? 'var(--fg-1)' : 'var(--fg-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        <span data-testid="audit-company" style={{ fontSize: audit ? 12.5 : 12, color: event.company_scope === 'company' ? (audit ? 'var(--fg-1)' : 'var(--fg-2)') : 'var(--fg-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {event.company_scope === 'company' ? (event.company_name ?? '—') : event.company_scope === 'workspace' ? 'Workspace' : '—'}
         </span>
-        <span className="mono" style={{ fontSize: 11.5, color: 'var(--fg-3)', whiteSpace: 'nowrap' }}>{fmtDateTime(event.created_at)}</span>
-        <span aria-hidden style={{ display: 'inline-flex', justifyContent: 'flex-end', color: 'var(--fg-4)', pointerEvents: 'none', transform: expanded ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 160ms' }}>
-          {chevDownGlyph}
+        <span className="mono" style={{ fontSize: 11, color: audit ? 'var(--fg-2)' : 'var(--fg-3)', whiteSpace: 'nowrap' }}>{fmtDateTime(event.created_at)}</span>
+        {/* Audit rotates the glyph, not the 44px cell: turning the cell moves the chevron off the row centre. */}
+        <span aria-hidden style={{ display: 'inline-flex', justifyContent: 'flex-end', color: 'var(--fg-3)', pointerEvents: 'none', ...(audit ? null : chevSpin) }}>
+          {audit ? <span style={{ display: 'inline-flex', ...chevSpin }}>{chevDownGlyph14}</span> : chevDownGlyph14}
         </span>
       </div>
       {expanded && (
-        <div data-testid="audit-expansion" style={{ minWidth: AUDIT_TABLE_MIN_WIDTH, padding: '14px 18px 16px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-2)' }}>
+        <div data-testid="audit-expansion" style={{ minWidth: AUDIT_TABLE_MIN_WIDTH, padding: audit ? '16px 18px 15px 53px' : '14px 18px 14px 52px', borderTop: '1px solid var(--line-1)', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)' }}>
           {keys.length === 0 ? (
             <span style={{ fontSize: 12.5, color: 'var(--fg-3)' }}>This event carries no detail.</span>
           ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))', gap: '10px 24px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: audit ? '12px 28px' : '11px 26px' }}>
               {keys.map((k) => (
-                <span key={k} data-testid="audit-payload-field" style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-                  <span style={{ fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--fg-3)' }}>{fieldLabel(k)}</span>
-                  <span className="mono" style={{ fontSize: 12, color: 'var(--fg-1)', overflowWrap: 'anywhere' }}>{fieldValue(payload?.[k])}</span>
+                <span key={k} data-testid="audit-payload-field" style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                  <span className="label" style={{ marginBottom: 3 }}>{fieldLabel(k)}</span>
+                  <span className="mono" style={{ fontSize: 11.5, color: 'var(--fg-1)', overflowWrap: 'anywhere' }}>{fieldValue(payload?.[k])}</span>
                 </span>
               ))}
             </div>
           )}
-          {inv != null && onFilterToInvoice != null && (
-            <button
-              type="button"
-              data-testid="audit-invoice-affordance"
-              onClick={() => onFilterToInvoice(inv.id, inv.number)}
-              className="pf-btn"
-              style={{ marginTop: 14, border: 0, padding: 0, background: 'transparent', color: 'var(--accent-text, var(--fg-1))', fontSize: 12.5, fontWeight: 500, cursor: 'pointer' }}
-            >
-              {inv.number != null ? `All events for ${inv.number} →` : 'All events for this invoice →'}
-            </button>
-          )}
-          {/* AUDIT-08 owns the evidence drawer. Disabled with a VISIBLE reason rather than
-              hidden (InvoiceDetail.tsx's idiom) -- a title= on a disabled button never
-              fires in Chromium, so the reason has to be text. */}
-          {view.domain === 'submissions' && inv != null && (
-            <div style={{ marginTop: 10 }}>
-              <button
-                type="button"
-                data-testid="audit-evidence-affordance"
-                disabled
-                aria-describedby={EVIDENCE_REASON_ID}
-                className="pf-btn"
-                style={{ border: 0, padding: 0, background: 'transparent', color: 'var(--fg-4)', fontSize: 12.5, fontWeight: 500, cursor: 'not-allowed' }}
-              >
-                View transmission evidence →
-              </button>
-              <div id={EVIDENCE_REASON_ID} data-testid="audit-evidence-blocked-reason" style={{ marginTop: 2, fontSize: 11.5, color: 'var(--fg-3)' }}>
-                {EVIDENCE_REASON}
-              </div>
+          {(showLink || showEvidence) && (
+            <div style={{ marginTop: audit ? 14 : 12, display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+              {showLink && (
+                <button
+                  type="button"
+                  data-testid="audit-invoice-affordance"
+                  onClick={() => onFilterToInvoice(inv.id, inv.number)}
+                  className="pf-btn"
+                  style={{ border: 0, padding: 0, background: 'transparent', color: 'var(--action)', fontFamily: 'var(--font-sans)', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
+                >
+                  {inv.number != null ? `All events for ${inv.number} →` : 'All events for this invoice →'}
+                </button>
+              )}
+              {/* AUDIT-08 owns the evidence drawer. Disabled with a VISIBLE reason rather than
+                  hidden (InvoiceDetail.tsx's idiom) -- a title= on a disabled button never
+                  fires in Chromium, so the reason has to be text. */}
+              {showEvidence && (
+                <div style={audit ? { display: 'inline-flex', alignItems: 'center', gap: 10 } : undefined}>
+                  <button
+                    type="button"
+                    data-testid="audit-evidence-affordance"
+                    disabled
+                    aria-describedby={EVIDENCE_REASON_ID}
+                    className="v2-btn v2-btn-ghost pf-btn"
+                    style={{ height: 30, fontSize: audit ? 12 : 12.5, background: 'transparent', opacity: 0.45, cursor: 'not-allowed', filter: 'none' }}
+                  >
+                    View transmission evidence →
+                  </button>
+                  <div id={EVIDENCE_REASON_ID} data-testid="audit-evidence-blocked-reason" style={{ marginTop: audit ? 0 : 5, fontSize: 11.5, color: 'var(--fg-3)' }}>
+                    {EVIDENCE_REASON}
+                  </div>
+                </div>
+              )}
             </div>
           )}
           {/* The row shows the human label; the footer keeps the identifier that label was
               derived from, so a support conversation can name the exact event. */}
-          <div className="mono" style={{ marginTop: 14, display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 10.5, color: 'var(--fg-4)' }}>
+          <div className="mono" style={{ marginTop: audit ? 14 : 12, paddingTop: audit ? 11 : 10, borderTop: '1px solid var(--line-1)', display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 10, color: 'var(--fg-3)' }}>
             <span data-testid="audit-event-identifier">{event.event}</span>
             <span data-testid="audit-event-id">{event.id}</span>
           </div>

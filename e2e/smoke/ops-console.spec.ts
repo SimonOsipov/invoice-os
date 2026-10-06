@@ -39,7 +39,7 @@ import { seedStaffSession, test } from '../staffSession'
 // in charts.test.ts / helpers.test.ts — re-asserting them in a browser would duplicate the
 // base of the pyramid, which docs/e2e-convention.md forbids).
 
-// ASSERT THE <h1>, NOT THE CRUMB. TopBar renders CRUMB_BY_SCREEN inside <main> (TopBar.tsx:64)
+// ASSERT THE <h1>, NOT THE CRUMB. TopBar renders CRUMB_BY_SCREEN inside <main> (TopBar.tsx)
 // and the crumb differs from BOTH the nav label and the h1 on some screens by design
 // (data.tsx:94-95), so a getByText sweep would be ambiguous where they agree and wrong where
 // they do not. `getByRole('heading', { level: 1 })` is the screen's own claim about itself,
@@ -74,15 +74,15 @@ const rows = (page: Page) => page.getByRole('main').locator('.ops-row')
 
 // The sidebar's dead-letter badge. It is the only `.mono` inside that nav button (the label
 // span carries `ops-nav-label`), and it is not rendered at all when the count is zero
-// (Sidebar.tsx:141) — which is what makes `toHaveCount(0)` a real post-condition rather
+// (Sidebar.tsx) — which is what makes `toHaveCount(0)` a real post-condition rather
 // than a text comparison. `{ name: 'Submissions' }` matches by substring, so it still finds
 // the button when the badge has widened its accessible name to "Submissions 1".
 const deadLetterBadge = (page: Page) => sidebar(page).getByRole('button', { name: 'Submissions' }).locator('.mono')
 
 // The Submissions "Dead-letter" sub-stat tile — a second consumer of the same count,
-// computed independently of the sidebar's (Submissions.tsx:17,30).
+// computed independently of the sidebar's (`dlCount` in Submissions.tsx). Its figure is `.money`.
 const deadLetterTile = (page: Page) =>
-  page.getByRole('main').locator('.ops-sub-stats > div').filter({ hasText: 'Dead-letter' }).locator('.mono')
+  page.getByRole('main').locator('.ops-sub-stats > div').filter({ hasText: 'Dead-letter' }).locator('.money')
 
 // A chip renders `LABEL` immediately followed by its count with no separator ("CLEARED3").
 // No label contains a digit, so trimming a trailing run of digits splits it unambiguously —

@@ -15,9 +15,9 @@ type Props = {
 export function Badge({ style, dot = false, fontSize = 9.5 }: Props) {
   return (
     <span
-      style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: style.bg, border: `1px solid ${style.border}`, borderRadius: 999, padding: '2px 8px' }}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: style.bg, border: `1px solid ${style.border}`, borderRadius: 'var(--radius-sm)', padding: '2px 8px' }}
     >
-      {dot && <span style={{ width: 6, height: 6, borderRadius: 99, background: style.text }} />}
+      {dot && <span style={{ width: 6, height: 6, borderRadius: '50%', background: style.text }} />}
       <span className="mono" style={{ fontSize, fontWeight: 700, color: style.text, letterSpacing: '0.03em' }}>
         {style.label}
       </span>

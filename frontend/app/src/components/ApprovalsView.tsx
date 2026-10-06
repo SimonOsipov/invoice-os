@@ -49,7 +49,6 @@ import {
 import { bulkPhaseReducer } from '../lib/reviewBatch'
 import { useDismiss } from '../lib/useDismiss'
 import type { PlatformCtx } from '../types'
-import { POPOVER_SHADOW } from './MemberParts'
 import { Pager } from './Pager'
 
 // Owed topology assertion: A07-5/A07-6 (APPR-12-07, assertFillsColumn over WIDE_WIDTHS)
@@ -58,10 +57,12 @@ import { Pager } from './Pager'
 // this grid's own shape, not ReviewRow's 26px.
 const APPROVALS_GRID_COLUMNS = '24px 140px 1fr 130px 90px 180px 110px'
 
+const CHECKBOX_STYLE = { width: 15, height: 15, accentColor: 'var(--action)', margin: 0 } as const
+
 // The bar's shared disabled treatment. `disabled` is the real gate; this only makes it
 // visible (ReviewInvoicesTab.tsx:122's idiom).
 function btnStyle(enabled: boolean) {
-  return { height: 34, padding: '0 14px', fontSize: 12.5, opacity: enabled ? 1 : 0.45, cursor: enabled ? 'pointer' : 'not-allowed' }
+  return { height: 34, fontSize: 13, opacity: enabled ? 1 : 0.45, cursor: enabled ? 'pointer' : 'not-allowed' }
 }
 
 // Tags the envelope with the entity it was fetched for -- same [dashboard-scope-per-client]
@@ -212,7 +213,7 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
         <div className="eyebrow" style={{ marginBottom: 10 }}>
           {APPROVALS_COPY.eyebrow}
         </div>
-        <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>{APPROVALS_COPY.h1}</h1>
+        <h1 style={{ fontSize: 26, letterSpacing: '-0.025em', margin: '0 0 4px' }}>{APPROVALS_COPY.h1}</h1>
         <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>
           {ctx.user.tenantName ?? APPROVALS_COPY.tenantFallback} · {APPROVALS_COPY.subtitle}
         </p>
@@ -255,10 +256,10 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
       {bar.visible && (
         <div
           data-testid="approvals-bulk-bar"
-          style={{ background: 'var(--action-tint)', border: '1px solid var(--teal-200)', borderRadius: 'var(--radius-md)', padding: '11px 14px', display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 16 }}
+          style={{ background: 'var(--action-tint)', border: '1px solid var(--teal-200)', borderRadius: 'var(--radius-md)', padding: '11px 16px', marginBottom: 12 }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-1)' }}>{bar.countLabel}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span className="mono" style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-1)', letterSpacing: '0.03em' }}>{bar.countLabel}</span>
             <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
               {phase === 'idle' ? (
                 <>
@@ -314,15 +315,15 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
           {/* Page-scoped and cause-free: the count of rows select-all could not pick. The
               ROW states the cause, in the server's own words. */}
           {bar.note != null && (
-            <p data-testid="approvals-bulk-note" style={{ fontSize: 11.5, color: 'var(--fg-2)', margin: 0, lineHeight: 1.55 }}>
+            <p data-testid="approvals-bulk-note" style={{ fontSize: 12, color: 'var(--fg-2)', margin: '8px 0 0', lineHeight: 1.55 }}>
               {bar.note}
             </p>
           )}
 
           {phase !== 'idle' && (
-            <div style={{ borderTop: '1px solid var(--teal-200)', paddingTop: 9 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)' }}>{bar.confirmPrompt}</div>
-              <p style={{ fontSize: 11.5, color: 'var(--fg-2)', margin: '4px 0 0', lineHeight: 1.55 }}>{bar.confirmDetail}</p>
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--teal-200)' }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)', marginBottom: 2 }}>{bar.confirmPrompt}</div>
+              <p style={{ fontSize: 12.5, color: 'var(--fg-2)', margin: 0, lineHeight: 1.55 }}>{bar.confirmDetail}</p>
               {/* N sequential requests: the static "Approving…" on the button shows
                   activity, this shows how far along it is (D-b4). */}
               {progress != null && (
@@ -341,7 +342,7 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
 
       {(state === 'idle' || state === 'empty') && (
         <div data-testid="approvals-empty">
-          <EmptyState title={APPROVALS_COPY.emptyTitle} message={APPROVALS_COPY.emptyMessage} />
+          <EmptyState messageMaxWidth={360} title={APPROVALS_COPY.emptyTitle} message={APPROVALS_COPY.emptyMessage} />
         </div>
       )}
 
@@ -376,6 +377,7 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
                 ref={(el) => { if (el) el.indeterminate = allState === 'some' }}
                 checked={allState === 'all'}
                 onChange={toggleAll}
+                style={CHECKBOX_STYLE}
               />
               <span className="label">{APPROVALS_COPY.colInvoice}</span>
               <span className="label">{APPROVALS_COPY.colBuyer}</span>
@@ -411,7 +413,7 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
                       aria-describedby={reason != null ? reasonId : undefined}
                       // Disabled-only: on an enabled control this would kill the legitimate
                       // hover affordance platform.css leaves unguarded.
-                      style={av.approvable ? undefined : { cursor: 'not-allowed', opacity: 0.5 }}
+                      style={av.approvable ? CHECKBOX_STYLE : { ...CHECKBOX_STYLE, cursor: 'not-allowed', opacity: 0.5 }}
                       onChange={() => {
                         setSelected((sel) => toggleSelection(sel, r.id))
                         disarm()
@@ -429,7 +431,7 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
                   </span>
                   <span style={{ fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.buyer_name}</span>
                   <span className="money" style={{ fontSize: 13.5, fontWeight: 600, textAlign: 'right' }}>{r.total != null ? fmt(Number(r.total)) : '—'}</span>
-                  <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>{av.stepLabel}</span>
+                  <span className="mono" style={{ fontSize: 12, color: 'var(--fg-2)' }}>{av.stepLabel}</span>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
                     <span style={{ fontSize: 13, color: 'var(--fg-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{av.roleLabel}</span>
                     {av.pendingHolderWarn && (
@@ -437,7 +439,7 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
                         data-testid="approval-unstaffed-warning"
                         title={APPROVALS_COPY.unstaffedSeat}
                         className="mono"
-                        style={{ fontSize: 10, fontWeight: 600, color: 'var(--status-amber-text)', letterSpacing: '0.04em' }}
+                        style={{ fontSize: 9.5, color: 'var(--status-amber-text)' }}
                       >
                         {APPROVALS_COPY.unstaffedSeat}
                       </span>
@@ -449,16 +451,15 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
                 </div>
               )
             })}
-          </div>
-
-          <div style={{ marginTop: 16 }}>
-            <Pager
-              pagination={list.data.pagination}
-              busy={loading || phase === 'submitting'}
-              onGo={setOffset}
-              testId="approvals-pager"
-              reason={phase === 'submitting' ? APPROVALS_COPY.pagerReason : undefined}
-            />
+            <div style={{ padding: '12px 18px' }}>
+              <Pager
+                pagination={list.data.pagination}
+                busy={loading || phase === 'submitting'}
+                onGo={setOffset}
+                testId="approvals-pager"
+                reason={phase === 'submitting' ? APPROVALS_COPY.pagerReason : undefined}
+              />
+            </div>
           </div>
         </>
       )}
@@ -518,7 +519,7 @@ function BlockedReason({ id, reason }: { id: string; reason: string }) {
         aria-describedby={id}
         onFocus={() => setOpen(true)}
         onBlur={() => setOpen(false)}
-        style={{ display: 'inline-flex', padding: 0, border: 0, background: 'transparent', color: 'var(--fg-3)', borderRadius: '50%', cursor: 'help' }}
+        style={{ display: 'inline-flex', padding: 0, border: 0, background: 'transparent', color: 'var(--status-amber-text)', borderRadius: '50%', cursor: 'help' }}
       >
         {alertCircleGlyph}
       </button>
@@ -544,7 +545,7 @@ function BlockedReason({ id, reason }: { id: string; reason: string }) {
             background: 'var(--bg-2)',
             border: '1px solid var(--line-2)',
             borderRadius: 'var(--radius-md)',
-            boxShadow: POPOVER_SHADOW,
+            boxShadow: 'var(--shadow-card)',
             padding: '8px 10px',
             maxWidth: 300,
             fontSize: 12,

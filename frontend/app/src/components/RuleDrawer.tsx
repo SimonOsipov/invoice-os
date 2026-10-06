@@ -3,7 +3,7 @@
 // destructive action by accident — there is no prop to pass one through.
 
 import { GOLDEN_SET, GOLDEN_SOURCE_REF, ruleJSON, tenantSlug, type CustomRule, type Rule } from '../lib/rules'
-import { closeGlyph } from '../glyphs'
+import { xSmallGlyph } from '../glyphs'
 import { SeverityPill, TypePill } from './RulePills'
 
 type Props = {
@@ -22,7 +22,7 @@ export function RuleDrawer({ rule, scope, onClose, onRemove }: Props) {
 
   return (
     <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'oklch(20% .02 210 / 0.32)', animation: 'pfFade 160ms ease-out' }} />
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'color-mix(in srgb, var(--surface) 55%, transparent)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', animation: 'pfFade 160ms ease-out' }} />
       <div
         className="pf-drawer"
         role="dialog"
@@ -38,15 +38,14 @@ export function RuleDrawer({ rule, scope, onClose, onRemove }: Props) {
           maxWidth: '94vw',
           background: 'var(--bg-1)',
           borderLeft: '1px solid var(--line-2)',
-          boxShadow: '-24px 0 48px -24px oklch(20% .02 210 / 0.3)',
           display: 'flex',
           flexDirection: 'column',
           animation: 'pfDrawer 200ms ease-out',
         }}
       >
-        <div style={{ flex: 'none', padding: '18px 22px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-2)', display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        <div style={{ flex: 'none', padding: '20px 24px 16px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-2)', display: 'flex', alignItems: 'flex-start', gap: 14 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 5, flexWrap: 'wrap' }}>
               <span className="mono" style={{ fontSize: 14, fontWeight: 700, wordBreak: 'break-all' }}>
                 {rule.key}
               </span>
@@ -60,9 +59,9 @@ export function RuleDrawer({ rule, scope, onClose, onRemove }: Props) {
             onClick={onClose}
             className="pf-btn"
             aria-label="Close"
-            style={{ border: 0, background: 'var(--bg-3)', cursor: 'pointer', width: 30, height: 30, borderRadius: 'var(--radius-input)', color: 'var(--fg-2)', display: 'grid', placeItems: 'center', flex: 'none' }}
+            style={{ border: 0, background: 'transparent', cursor: 'pointer', width: 30, height: 30, borderRadius: 'var(--radius-btn)', color: 'var(--fg-2)', display: 'grid', placeItems: 'center', flex: 'none' }}
           >
-            {closeGlyph}
+            {xSmallGlyph}
           </button>
         </div>
 
@@ -72,11 +71,11 @@ export function RuleDrawer({ rule, scope, onClose, onRemove }: Props) {
         <div
           style={{
             flex: 'none',
-            padding: '11px 22px',
+            padding: '10px 24px',
             borderBottom: '1px solid var(--line-1)',
             background: isCustom ? 'var(--action-tint)' : 'var(--bg-3)',
-            fontSize: 12.5,
-            lineHeight: 1.5,
+            fontSize: 12,
+            lineHeight: 1.45,
             color: isCustom ? 'var(--action)' : 'var(--fg-3)',
           }}
         >
@@ -85,7 +84,7 @@ export function RuleDrawer({ rule, scope, onClose, onRemove }: Props) {
             : `Managed by ASComply · inherited from golden ruleset ${GOLDEN_SET.id} ${GOLDEN_SET.version} · read-only`}
         </div>
 
-        <div style={{ flex: 1, overflowY: 'auto', padding: '20px 22px' }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '18px 24px 28px' }}>
           <div className="label" style={{ marginBottom: 12 }}>
             Parameters
           </div>
@@ -95,10 +94,8 @@ export function RuleDrawer({ rule, scope, onClose, onRemove }: Props) {
                 <div className="label" style={{ marginBottom: 5, textTransform: 'none', letterSpacing: 0 }}>
                   {p.label}
                 </div>
-                <div className="pf-input" style={{ display: 'flex', alignItems: 'center', height: 36 }}>
-                  <span className="mono" style={{ fontSize: 12.5, color: 'var(--fg-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {p.value}
-                  </span>
+                <div className="mono" style={{ display: 'flex', alignItems: 'center', minHeight: 36, padding: '8px 11px', overflowWrap: 'anywhere', fontSize: 12, color: 'var(--fg-1)', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)' }}>
+                  {p.value}
                 </div>
               </div>
             ))}
@@ -106,7 +103,7 @@ export function RuleDrawer({ rule, scope, onClose, onRemove }: Props) {
               <div className="label" style={{ marginBottom: 5, textTransform: 'none', letterSpacing: 0 }}>
                 Failure message
               </div>
-              <div className="pf-input" style={{ display: 'flex', alignItems: 'center', height: 36, fontSize: 12.5, color: 'var(--fg-1)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', minHeight: 36, padding: '8px 11px', overflowWrap: 'anywhere', fontSize: 12.5, lineHeight: 1.45, color: 'var(--fg-1)', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)' }}>
                 {rule.message}
               </div>
             </div>
@@ -118,7 +115,7 @@ export function RuleDrawer({ rule, scope, onClose, onRemove }: Props) {
           <pre className="pf-json">{ruleJSON(rule, sourceRef, enabled)}</pre>
         </div>
 
-        <div style={{ flex: 'none', padding: '14px 22px', borderTop: '1px solid var(--line-1)', background: 'var(--bg-2)', display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ flex: 'none', padding: '14px 24px', borderTop: '1px solid var(--line-1)', background: 'var(--bg-2)', display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 9 }}>
             <span style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>Live status</span>
             {/* An inherited rule has no off state to report, so it says ALWAYS ON
@@ -135,7 +132,7 @@ export function RuleDrawer({ rule, scope, onClose, onRemove }: Props) {
               type="button"
               onClick={onRemove}
               className="pf-btn"
-              style={{ border: '1px solid var(--status-red-border)', background: 'var(--status-red-bg)', cursor: 'pointer', height: 36, padding: '0 14px', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 600, color: 'var(--status-red-text)' }}
+              style={{ border: '1px solid var(--status-red-border)', background: 'var(--status-red-bg)', cursor: 'pointer', height: 36, padding: '0 14px', borderRadius: 'var(--radius-btn)', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 600, color: 'var(--status-red-text)' }}
             >
               Remove rule
             </button>

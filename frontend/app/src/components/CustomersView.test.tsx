@@ -301,3 +301,136 @@ describe('CustomersView: isEmpty is the shared allInvoicesIsEmpty predicate (tas
     expect(src).toMatch(/isEmpty:\s*allInvoicesIsEmpty\b/)
   })
 })
+
+// --- the v2 register (CU rows) ----------------------------------------
+describe('CustomersView: the v2 register (RESKIN2-05-02)', () => {
+  function readyRows() {
+    return [
+      row({ id: 'a', buyer_tin: '20000000-0001', buyer_name: 'Alpha Traders' }),
+      row({ id: 'b', buyer_tin: '123', buyer_name: 'Beta Traders' }),
+    ]
+  }
+
+  async function renderReady() {
+    mockFetchSequence([listResponse(readyRows(), { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 2 })])
+    const utils = render(<CustomersView ctx={custCtx()} />)
+    await screen.findByText('Alpha Traders')
+    return utils
+  }
+
+  it("CU-01 the h1 takes the heading rule's weight", async () => {
+    await renderReady()
+
+    const h1 = screen.getByRole('heading', { level: 1, name: 'Customers & vendors' })
+    expect(h1.style.fontSize, 'control: the h1 keeps its size').toBe('26px')
+    expect(h1.style.fontWeight, 'the h1 must carry no inline font-weight').toBe('')
+  })
+
+  it('CU-02 the tax-status chip is a 4px mono chip with no dot', async () => {
+    await renderReady()
+
+    const chips = [screen.getByText('VALID', { exact: true }), screen.getByText('NEEDS TIN', { exact: true })]
+    expect(chips).toHaveLength(2)
+    for (const chip of chips) {
+      const what = chip.textContent
+      expect(chip.classList.contains('mono'), `${what} is a mono span`).toBe(true)
+      expect(chip.style.borderRadius, `${what} corner`).toBe('var(--radius-sm)')
+      expect(chip.style.padding, `${what} padding`).toBe('3px 9px')
+      expect(chip.style.letterSpacing, `${what} tracking`).toBe('0.04em')
+      expect(chip.childElementCount, `${what} holds no dot`).toBe(0)
+      const wrapper = chip.parentElement as HTMLElement
+      expect(wrapper.tagName, `${what} sits in a plain span`).toBe('SPAN')
+      expect(wrapper.getAttribute('style'), `${what} wrapper takes no style`).toBeNull()
+    }
+  })
+
+  it('CU-03 avatars are circles', async () => {
+    await renderReady()
+
+    const avatars = ['AT', 'BT'].map((i) => screen.getByText(i, { exact: true }))
+    expect(avatars).toHaveLength(2)
+    for (const a of avatars) expect(a.style.borderRadius, `${a.textContent} avatar`).toBe('50%')
+  })
+
+  it('CU-04 the empty title is 700', async () => {
+    mockFetchSequence([listResponse([], { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 0 })])
+    render(<CustomersView ctx={custCtx()} />)
+
+    const title = await screen.findByText('No customers yet')
+    expect(title.style.fontSize, 'control: the title keeps its size').toBe('16px')
+    expect(title.style.fontWeight).toBe('700')
+  })
+
+  it('CU-06 each row is keyed by TIN and its chip, TIN colour and copy follow validity', async () => {
+    const rows = [
+      row({ id: 'g1', buyer_tin: '30000000-0001', buyer_name: 'Gamma Ltd', total: '3000.00' }),
+      row({ id: 'g2', buyer_tin: '30000000-0002', buyer_name: 'Gamma Ltd', total: '2000.00' }),
+      row({ id: 'm1', buyer_tin: '', buyer_name: 'Missing Tin Co', total: '1000.00' }),
+    ]
+    mockFetchSequence([listResponse(rows, { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 3 })])
+    render(<CustomersView ctx={custCtx()} />)
+    await screen.findByText('Missing Tin Co')
+
+    expect(screen.getAllByText('Gamma Ltd'), 'same name, two TINs: two rows').toHaveLength(2)
+    const valid = screen.getAllByText('VALID', { exact: true })
+    expect(valid).toHaveLength(2)
+    for (const chip of valid) {
+      expect(chip.style.color).toBe('var(--status-green-text)')
+      expect(chip.style.background).toBe('var(--status-green-bg)')
+      expect(chip.style.border).toBe('1px solid var(--status-green-border)')
+      expect(chip.style.display).toBe('inline-flex')
+      expect(chip.style.fontSize).toBe('10px')
+      expect(chip.style.fontWeight).toBe('600')
+    }
+    const bad = screen.getByText('NEEDS TIN', { exact: true })
+    expect(bad.style.color).toBe('var(--status-red-text)')
+    expect(bad.style.background).toBe('var(--status-red-bg)')
+    expect(bad.style.border).toBe('1px solid var(--status-red-border)')
+    expect(screen.getByText('TIN MISSING').style.color, 'a missing TIN reads red').toBe('var(--status-red-text)')
+    expect(screen.getByText('30000000-0001').style.color, 'a valid TIN reads muted').toBe('var(--fg-3)')
+  })
+
+  it('CU-07 the truncation notice keeps its spacing and 6px corner (D-4) and the grid is untouched', async () => {
+    pagedFetchMock(2500, readyRows())
+    render(<CustomersView ctx={custCtx()} />)
+    const notice = await screen.findByTestId('customers-truncated-notice')
+
+    expect(notice.style.padding).toBe('12px 14px')
+    expect(notice.style.marginBottom).toBe('16px')
+    expect(notice.style.borderRadius).toBe('var(--radius-md)')
+    const head = screen.getByText('Tax status').parentElement as HTMLElement
+    expect(head.style.gridTemplateColumns).toBe('minmax(120px, 1.6fr) 140px 70px 140px 104px')
+    expect(head.style.padding).toBe('11px 18px')
+  })
+
+  it('CU-08 loading and error render the shared state, never the register', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+    const loading = render(<CustomersView ctx={custCtx()} />)
+    expect(await screen.findByText('Loading customers…')).toBeTruthy()
+    expect(screen.queryByText('Customer')).toBeNull()
+    expect(screen.queryByText('No customers yet')).toBeNull()
+    expect(screen.getByRole('heading', { level: 1, name: 'Customers & vendors' }), 'control: the header still renders').toBeTruthy()
+    loading.unmount()
+
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: false, status: 503, json: () => Promise.resolve({ error: 'down' }) })))
+    render(<CustomersView ctx={custCtx()} />)
+    expect(await screen.findByText('Something went wrong')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /retry/i })).toBeTruthy()
+    expect(screen.queryByText('Customer')).toBeNull()
+    expect(screen.queryByText('No customers yet')).toBeNull()
+  })
+
+  it('CU-05 the register carries no v1 vocabulary (boundary)', async () => {
+    pagedFetchMock(2500, readyRows())
+    const { container } = render(<CustomersView ctx={custCtx()} />)
+    await screen.findByText('Alpha Traders')
+    await screen.findByTestId('customers-truncated-notice')
+
+    const html = container.innerHTML
+    const radii = Array.from(html.matchAll(/(?<![-\w])border-radius:\s*([^;"]+)/g), (m) => m[1].trim())
+    expect(radii.length).toBeGreaterThan(0)
+    expect(radii.filter((r) => r === 'var(--radius-sm)').length, 'control: the chips carry --radius-sm').toBeGreaterThanOrEqual(2)
+    for (const r of radii) expect(['var(--radius-sm)', 'var(--radius-md)', '50%'], `corner "${r}"`).toContain(r)
+    for (const needle of ['999px', '99px', 'oklch', 'gradient', 'box-shadow']) expect(html, needle).not.toContain(needle)
+  })
+})

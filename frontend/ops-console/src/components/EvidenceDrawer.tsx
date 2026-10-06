@@ -1,5 +1,4 @@
-// Evidence bundle drawer (prototype lines 657-704). Overlay geometry is the
-// same shell as JobDrawer — same 580px width, same scrim/panel z-order and animations.
+// Evidence bundle drawer; same shell as JobDrawer.
 
 import { CLOSE_ICON, COPY_ICON, EVIDENCE_QR, EXPORT_ICON, SHIELD_ICON } from '../data'
 import { reqJSON } from '../helpers'
@@ -26,7 +25,7 @@ export function EvidenceDrawer({ evidence, env, onClose, onCopy, onDownload }: P
 
   return (
     <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'oklch(20% .02 210 / 0.32)', animation: 'opsFade 160ms ease-out' }} />
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'color-mix(in srgb, var(--surface) 32%, transparent)', animation: 'opsFade 160ms ease-out' }} />
       <div
         className="ops-drawer"
         style={{
@@ -39,7 +38,6 @@ export function EvidenceDrawer({ evidence, env, onClose, onCopy, onDownload }: P
           maxWidth: '94vw',
           background: 'var(--bg-1)',
           borderLeft: '1px solid var(--line-2)',
-          boxShadow: '-24px 0 48px -24px oklch(20% .02 210 / 0.3)',
           display: 'flex',
           flexDirection: 'column',
           animation: 'opsDrawer 200ms ease-out',
@@ -47,7 +45,7 @@ export function EvidenceDrawer({ evidence, env, onClose, onCopy, onDownload }: P
       >
         <div style={{ flex: 'none', padding: '18px 22px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-2)', display: 'flex', alignItems: 'flex-start', gap: 12 }}>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Evidence bundle · {evidence.invoice}</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--ink)', marginBottom: 4 }}>Evidence bundle · {evidence.invoice}</div>
             <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
               {evidence.irn} · {evidence.cleared}
             </div>
@@ -56,7 +54,7 @@ export function EvidenceDrawer({ evidence, env, onClose, onCopy, onDownload }: P
             type="button"
             onClick={onClose}
             className="ops-btn"
-            style={{ border: 0, background: 'var(--bg-3)', cursor: 'pointer', width: 30, height: 30, borderRadius: 'var(--radius-input)', color: 'var(--fg-2)', display: 'grid', placeItems: 'center' }}
+            style={{ border: 0, background: 'var(--bg-3)', cursor: 'pointer', width: 30, height: 30, borderRadius: 'var(--radius-btn)', color: 'var(--fg-2)', display: 'grid', placeItems: 'center' }}
           >
             {CLOSE_ICON}
           </button>
@@ -73,7 +71,7 @@ export function EvidenceDrawer({ evidence, env, onClose, onCopy, onDownload }: P
             gap: 9,
           }}
         >
-          {SHIELD_ICON}
+          <span style={{ color: 'var(--status-green-text)', display: 'inline-flex' }}>{SHIELD_ICON}</span>
           <span className="mono" style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--status-green-text)', letterSpacing: '0.03em' }}>
             SIMULATED CLEARANCE · UNSIGNED · PENDING ACCREDITATION
           </span>
@@ -94,7 +92,7 @@ export function EvidenceDrawer({ evidence, env, onClose, onCopy, onDownload }: P
           >
             <div style={{ background: 'var(--bg-2)', padding: '12px 14px' }}>
               <div className="label">IRN</div>
-              <div className="mono" style={{ fontSize: 12, fontWeight: 600, marginTop: 4, color: 'var(--action)' }}>
+              <div className="mono" style={{ fontSize: 12, fontWeight: 600, marginTop: 4, color: 'var(--link)' }}>
                 {evidence.irn}
               </div>
             </div>
@@ -129,7 +127,7 @@ export function EvidenceDrawer({ evidence, env, onClose, onCopy, onDownload }: P
               marginBottom: 20,
             }}
           >
-            <div style={{ width: 92, height: 92, background: 'var(--surface)', borderRadius: 'var(--radius-input)', display: 'grid', placeItems: 'center' }}>{EVIDENCE_QR}</div>
+            <div style={{ width: 92, height: 92, background: 'var(--surface)', borderRadius: 'var(--radius-md)', display: 'grid', placeItems: 'center' }}>{EVIDENCE_QR}</div>
             <div>
               <div className="label" style={{ marginBottom: 6 }}>
                 CSID signature · simulated

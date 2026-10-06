@@ -1,4 +1,4 @@
-// The four E2E shard tenants db/seed.e2e-shards.sql creates in a
+// The E2E shard tenants db/seed.e2e-shards.sql creates in a
 // PR environment's reset-and-seed. Env-gated like reset_test.go.
 package db_test
 
@@ -37,10 +37,12 @@ var (
 	firmShards = []shardTenant{
 		{"11111111-1111-1111-1111-00000000e2e1", firmSource, "Okafor & Partners", "firm"},
 		{"11111111-1111-1111-1111-00000000e2e2", firmSource, "Okafor & Partners", "firm"},
+		{"11111111-1111-1111-1111-00000000e2e3", firmSource, "Okafor & Partners", "firm"},
 	}
 	inhouseShards = []shardTenant{
 		{"22222222-2222-2222-2222-00000000e2e1", inhouseSource, "Honeywell Group", "in_house"},
 		{"22222222-2222-2222-2222-00000000e2e2", inhouseSource, "Honeywell Group", "in_house"},
+		{"22222222-2222-2222-2222-00000000e2e3", inhouseSource, "Honeywell Group", "in_house"},
 	}
 	allShards = slices.Concat(firmShards, inhouseShards)
 )
@@ -53,7 +55,7 @@ func shardIDs() []string {
 	return ids
 }
 
-// deleteShardTenants removes the four shard tenants bottom-up. Reset spares
+// deleteShardTenants removes the shard tenants bottom-up. Reset spares
 // tenants and policy tables, and a sealed version blocks a plain delete, so the
 // triggers are bypassed with session_replication_role. Runs first in every test
 // and again at cleanup.

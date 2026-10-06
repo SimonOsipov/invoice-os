@@ -446,6 +446,13 @@ func TestDiscoverURLs_VerbatimResponses(t *testing.T) {
 		{"the same host custom and generated prints once", goodAliases(t, map[int]string{
 			1: domainsJSON(t, []string{"app-pr-7.up.railway.app"}, gen(1)),
 		}), false, nil},
+		{"uppercase, punycode, trailing-dot and numeric hostnames pass unchanged", goodAliases(t, map[int]string{
+			0: domainsJSON(t, []string{"API-Prod.Example.COM"}, gen(0)),
+			1: domainsJSON(t, []string{"xn--bcher-kva.example.com."}, gen(1)),
+			2: domainsJSON(t, nil, []string{"3m-9.up.railway.app"}),
+		}), false, map[string]string{
+			"gateway_url": "API-Prod.Example.COM", "app_url": "xn--bcher-kva.example.com.", "landing_url": "3m-9.up.railway.app",
+		}},
 		{"a generated list of two takes the first", goodAliases(t, map[int]string{
 			3: domainsJSON(t, nil, []string{"ops-first.up.railway.app", "ops-second.up.railway.app"}),
 		}), false, map[string]string{"ops_console_url": "ops-first.up.railway.app"}},
@@ -525,6 +532,10 @@ func TestDiscoverURLs_UnusableResponseRefuses(t *testing.T) {
 		"a null custom domain":                    `{"customDomains":[{"domain":null}],"serviceDomains":[]}`,
 		"an empty generated domain":               `{"customDomains":[],"serviceDomains":[{"domain":""}]}`,
 		"a generated domain with no domain field": `{"customDomains":[],"serviceDomains":[{"targetPort":1}]}`,
+		"a numeric domain":                        `{"customDomains":[{"domain":123}],"serviceDomains":[]}`,
+		"a boolean domain":                        `{"customDomains":[{"domain":true}],"serviceDomains":[]}`,
+		"a domain with an inner space":            `{"customDomains":[{"domain":"app .test"}],"serviceDomains":[]}`,
+		"a newline between hostname characters":   `{"customDomains":[{"domain":"a.test\nb.test"}],"serviceDomains":[]}`,
 		"a domain with an embedded newline":       `{"customDomains":[{"domain":"a.test\nevil_url=https://x"}],"serviceDomains":[]}`,
 	}
 	for _, name := range slices.Sorted(maps.Keys(hostless)) {

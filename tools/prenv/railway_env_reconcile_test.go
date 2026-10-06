@@ -39,27 +39,30 @@ func reconcileURLVariablesBody(t *testing.T) string {
 }
 
 // T2 (AC-2) — GUARD: the closing line's count equals the NAME=VALUE pairs on the
-// set_service_vars lines. Wording-agnostic; only the COUNT is this test's claim.
+// pass_plan_add lines. Wording-agnostic; only the COUNT is this test's claim.
 //
 // KILLS: a variable added while the closing line's literal count is left unchanged.
 func TestConfirmedVariableCountMatchesUpserts(t *testing.T) {
-	body := reconcileURLVariablesBody(t)
-
 	// reconcileCalls is fatal below 9 pairs (vacuity guard).
 	upsertCount := len(reconcileCalls(t))
 
-	countPattern := regexp.MustCompile(`All (\d+) [a-zA-Z ]*variables confirmed by independent re-query\.`)
-	m := countPattern.FindStringSubmatch(body)
-	if m == nil {
-		t.Fatalf("reconcile_url_variables's closing log line does not match \"All N ... variables confirmed by independent re-query.\"")
-	}
-	loggedCount, err := strconv.Atoi(m[1])
+	raw, err := os.ReadFile(railwayEnvScript(t))
 	if err != nil {
-		t.Fatalf("could not parse logged count %q: %v", m[1], err)
+		t.Fatal(err)
+	}
+	code := strings.Join(stripHashComments(strings.Split(string(raw), "\n")), "\n")
+	countPattern := regexp.MustCompile(`All (\d+) [a-zA-Z ]*variables confirmed by independent re-query\.`)
+	m := countPattern.FindAllStringSubmatch(code, -1)
+	if len(m) != 1 {
+		t.Fatalf("railway-env.sh code has %d closing log line(s) matching \"All N ... variables confirmed by independent re-query.\", want 1", len(m))
+	}
+	loggedCount, err := strconv.Atoi(m[0][1])
+	if err != nil {
+		t.Fatalf("could not parse logged count %q: %v", m[0][1], err)
 	}
 
 	if loggedCount != upsertCount {
-		t.Errorf("closing log line claims %d variables confirmed, but the function's set_service_vars lines carry %d names", loggedCount, upsertCount)
+		t.Errorf("closing log line claims %d variables confirmed, but reconcile_url_variables's pass_plan_add lines carry %d names", loggedCount, upsertCount)
 	}
 }
 
@@ -89,7 +92,7 @@ func TestEveryAppViteVariableHasADockerfileArg(t *testing.T) {
 	names := make(map[string]bool)
 	matches := 0
 	for _, c := range reconcileCalls(t) {
-		if c.idVar == "RAILWAY_SVC_APP_ID" && c.label == "app" && strings.HasPrefix(c.name, "VITE_") {
+		if c.label == "app" && strings.HasPrefix(c.name, "VITE_") {
 			names[c.name] = true
 			matches++
 		}
@@ -143,7 +146,7 @@ func TestEveryLandingViteVariableHasADockerfileArg(t *testing.T) {
 	// Bash names are case-sensitive, so the match is too.
 	names := make(map[string]bool)
 	for _, c := range reconcileCalls(t) {
-		if c.idVar == "RAILWAY_SVC_LANDING_ID" && c.label == "landing" && strings.HasPrefix(c.name, "VITE_") {
+		if c.label == "landing" && strings.HasPrefix(c.name, "VITE_") {
 			names[c.name] = true
 		}
 	}

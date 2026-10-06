@@ -35,6 +35,10 @@ func TestSetForkAuthSite_MissingInstanceRefusesBeforeAnyWrite(t *testing.T) {
 	dup := func(name string) string {
 		return `{"node":{"serviceId":"svc-` + name + `-dup","serviceName":"` + name + `"}}`
 	}
+	afterShim := func(skip string, extra ...string) func(t *testing.T) authShim {
+		return func(t *testing.T) authShim { return afterShimIn(t, skip, extra...) }
+	}
+	urls := afterArgs()[1:]
 	for _, c := range []struct {
 		name, sub, service, says string
 		args                     []string
@@ -46,6 +50,14 @@ func TestSetForkAuthSite_MissingInstanceRefusesBeforeAnyWrite(t *testing.T) {
 		{"fork-vars-before-urls without gateway", passSub, "gateway", "", nil, passShim("gateway")},
 		{"fork-vars-before-urls with two auth", passSub, "auth", "", nil, passShim("", dup("auth"))},
 		{"fork-vars-before-urls with two gateway", passSub, "gateway", "", nil, passShim("", dup("gateway"))},
+		{"fork-vars-after-urls without auth", afterSub, "auth", "", urls, afterShim("auth")},
+		{"fork-vars-after-urls without gateway", afterSub, "gateway", "", urls, afterShim("gateway")},
+		{"fork-vars-after-urls without app", afterSub, "app", "", urls, afterShim("app")},
+		{"fork-vars-after-urls without ops-console", afterSub, "ops-console", "", urls, afterShim("ops-console")},
+		{"fork-vars-after-urls without submission", afterSub, "submission", "", urls, afterShim("submission")},
+		{"fork-vars-after-urls without docling", afterSub, "docling", "", urls, afterShim("docling")},
+		{"fork-vars-after-urls with two landing", afterSub, "landing", "", urls, afterShim("", dup("landing"))},
+		{"reconcile-urls without support-console", "reconcile-urls", "support-console", "", urls, afterShim("support-console")},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := c.mk(t)
@@ -126,6 +138,7 @@ func TestForkAuthWritesSkipDeploys(t *testing.T) {
 		{"set-fork-auth", []string{authForkEnvID}, newForkSiteShim},
 		{"set-fork-auth-site", []string{authForkEnvID, forkSiteURL}, newForkSiteShim},
 		{passSub, []string{authForkEnvID}, func(t *testing.T) authShim { return newPassShim(t, nil, nil) }},
+		{afterSub, append([]string{authForkEnvID}, afterArgs()[1:]...), func(t *testing.T) authShim { return afterShimIn(t, "") }},
 	} {
 		t.Run(c.sub, func(t *testing.T) {
 			s := c.mk(t)
@@ -153,6 +166,8 @@ func TestForkAuthRefusalsPrecedeServiceResolution(t *testing.T) {
 	}{
 		{"set-fork-auth", nil},
 		{"set-fork-auth-site", []string{forkSiteURL}},
+		{"reconcile-urls", afterArgs()[1:]},
+		{afterSub, afterArgs()[1:]},
 	} {
 		t.Run(c.sub, func(t *testing.T) {
 			resp := forkAuthRailway()

@@ -10,21 +10,21 @@ import (
 	"testing"
 )
 
-// reconcileCall is one NAME=VALUE pair of a set_service_vars line in reconcile_url_variables.
-// verified: the next statement is that label's auth_check on the pairs.
+// reconcileCall is one NAME=VALUE pair of a pass_plan_add line in reconcile_url_variables.
 type reconcileCall struct {
 	idVar, label, name, value string
-	verified                  bool
 }
 
 // Bash variable names are case-sensitive, so every pattern here is too.
 var (
-	reconcileCallPattern = regexp.MustCompile(`^\s*set_service_vars\s+"\$env_id"\s+"\$(RAILWAY_SVC_\w+)"\s+(\S+)\s+""((?:\s+\S+)+)\s*$`)
+	reconcileCallPattern = regexp.MustCompile(`^\s*pass_plan_add\s+"\$(\w+)"\s+(\S+)\s+""((?:\s+\S+)+)\s*$`)
 	reconcilePairToken   = regexp.MustCompile(`"[^"]*"|\S+`)
 	reconcilePairName    = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
+	// <id>=$(service_id_by_name <settle> <service> ...): which service a variable's id names.
+	serviceIDByName = regexp.MustCompile(`\b(\w+)=\$\(\s*service_id_by_name\s+\S+\s+"?([a-z-]+)"?\s`)
 )
 
-// reconcileCalls parses every set_service_vars line in the comment-stripped body; an unparsable line is fatal.
+// reconcileCalls parses every pass_plan_add line in the comment-stripped body; an unparsable line is fatal.
 func reconcileCalls(t *testing.T) []reconcileCall {
 	t.Helper()
 	var calls []reconcileCall
@@ -34,26 +34,25 @@ func reconcileCalls(t *testing.T) []reconcileCall {
 			lines = append(lines, l)
 		}
 	}
-	for i, line := range lines {
-		if !strings.HasPrefix(strings.TrimSpace(line), "set_service_vars") {
+	for _, line := range lines {
+		if !strings.HasPrefix(strings.TrimSpace(line), "pass_plan_add") {
 			continue
 		}
 		m := reconcileCallPattern.FindStringSubmatch(line)
 		if m == nil {
-			t.Fatalf("reconcile_url_variables call does not parse as `set_service_vars \"$env_id\" \"$RAILWAY_SVC_*\" <label> \"\" NAME=VALUE...`: %q", strings.TrimSpace(line))
+			t.Fatalf("reconcile_url_variables call does not parse as `pass_plan_add \"$<id>\" <label> \"\" NAME=VALUE...`: %q", strings.TrimSpace(line))
 		}
-		verified := i+1 < len(lines) && strings.TrimSpace(lines[i+1]) == `auth_check `+m[2]+` "${SET_VARS_PAIRS[@]}" || exit 1`
 		for _, tok := range reconcilePairToken.FindAllString(m[3], -1) {
 			name, value, ok := strings.Cut(strings.Trim(tok, `"`), "=")
 			if !ok || !reconcilePairName.MatchString(name) {
-				t.Fatalf("set_service_vars argument %s is not NAME=VALUE: %q", tok, strings.TrimSpace(line))
+				t.Fatalf("pass_plan_add argument %s is not NAME=VALUE: %q", tok, strings.TrimSpace(line))
 			}
-			calls = append(calls, reconcileCall{m[1], m[2], name, value, verified})
+			calls = append(calls, reconcileCall{m[1], m[2], name, value})
 		}
 	}
 	// A floor: the 9 variables that predate the landing gateway variable.
 	if len(calls) < 9 {
-		t.Fatalf("parsed %d set_service_vars pairs in reconcile_url_variables, want >= 9 (extraction is broken)", len(calls))
+		t.Fatalf("parsed %d pass_plan_add pairs in reconcile_url_variables, want >= 9 (extraction is broken)", len(calls))
 	}
 	return calls
 }
@@ -72,37 +71,29 @@ func TestReconcileURLVariablesSetsAndVerifiesLandingGateway(t *testing.T) {
 		}
 	}
 	// Control: the app's pair must still match the same shape.
-	if app == nil || app.idVar != "RAILWAY_SVC_APP_ID" || app.value != "$gateway_url" || !app.verified {
-		t.Fatalf("control: no verified `set_service_vars ... app ... VITE_GATEWAY_URL=$gateway_url` line; the pattern shape is stale (%+v)", app)
+	if app == nil || app.value != "$gateway_url" {
+		t.Fatalf("control: no `pass_plan_add ... app ... VITE_GATEWAY_URL=$gateway_url` line; the pattern shape is stale (%+v)", app)
 	}
-	if landing == nil || landing.idVar != "RAILWAY_SVC_LANDING_ID" || landing.value != "$gateway_url" {
-		t.Errorf("reconcile_url_variables has no `set_service_vars \"$env_id\" \"$RAILWAY_SVC_LANDING_ID\" landing \"\" ... VITE_GATEWAY_URL=$gateway_url` (AC-1)")
-	} else if !landing.verified {
-		t.Errorf("landing's set_service_vars line is not followed by `auth_check landing \"${SET_VARS_PAIRS[@]}\" || exit 1` (AC-1)")
+	if landing == nil || landing.value != "$gateway_url" {
+		t.Errorf("reconcile_url_variables has no `pass_plan_add \"$<id>\" landing \"\" ... VITE_GATEWAY_URL=$gateway_url` (AC-1)")
 	}
 }
 
-// Every label names its own service id.
+// Every label's plan line names the id of the service of that name.
 func TestReconcileURLVariablesGatewayURLNotOnOtherServices(t *testing.T) {
-	idForLabel := map[string]string{
-		"gateway":         "RAILWAY_SVC_GATEWAY_ID",
-		"app":             "RAILWAY_SVC_APP_ID",
-		"landing":         "RAILWAY_SVC_LANDING_ID",
-		"ops-console":     "RAILWAY_SVC_OPS_CONSOLE_ID",
-		"support-console": "RAILWAY_SVC_SUPPORT_CONSOLE_ID",
+	known := map[string]bool{"gateway": true, "app": true, "landing": true, "ops-console": true, "support-console": true}
+	resolved := map[string]string{}
+	for _, m := range serviceIDByName.FindAllStringSubmatch(strings.Join(stripHashComments(strings.Split(reconcileURLVariablesBody(t), "\n")), "\n"), -1) {
+		resolved[m[1]] = m[2]
 	}
 
 	gatewayLabels := map[string]bool{}
 	landingLines := 0
 	for _, c := range reconcileCalls(t) {
-		want, ok := idForLabel[c.label]
-		if !ok {
-			t.Errorf("set_service_vars uses unknown label %q; add it to idForLabel deliberately", c.label)
-		} else if c.idVar != want {
-			t.Errorf("set_service_vars labelled %q writes $%s, want $%s", c.label, c.idVar, want)
-		}
-		if !c.verified {
-			t.Errorf("%s.%s is written without the auth_check that follows its set_service_vars line", c.label, c.name)
+		if !known[c.label] {
+			t.Errorf("pass_plan_add uses unknown label %q; add it to known deliberately", c.label)
+		} else if resolved[c.idVar] != c.label {
+			t.Errorf("pass_plan_add labelled %q writes $%s, which resolves the service %q by name", c.label, c.idVar, resolved[c.idVar])
 		}
 		if c.label == "landing" {
 			landingLines++
@@ -117,6 +108,9 @@ func TestReconcileURLVariablesGatewayURLNotOnOtherServices(t *testing.T) {
 	if landingLines == 0 {
 		t.Fatalf("control: no landing-labelled call parsed")
 	}
+	if len(resolved) < 5 {
+		t.Fatalf("control: %d service ids resolved by name in reconcile_url_variables (%v), want one per service", len(resolved), resolved)
+	}
 
 	var got []string
 	for l := range gatewayLabels {
@@ -124,7 +118,7 @@ func TestReconcileURLVariablesGatewayURLNotOnOtherServices(t *testing.T) {
 	}
 	sort.Strings(got)
 	if strings.Join(got, ",") != "app,landing,ops-console,support-console" {
-		t.Errorf("set_service_vars writes VITE_GATEWAY_URL on %v, want exactly [app landing ops-console support-console]", got)
+		t.Errorf("pass_plan_add writes VITE_GATEWAY_URL on %v, want exactly [app landing ops-console support-console]", got)
 	}
 }
 

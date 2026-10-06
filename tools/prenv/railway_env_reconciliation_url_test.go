@@ -57,13 +57,22 @@ func TestSetForkReconciliationURLAgainstAScriptedRailway(t *testing.T) {
 		}
 	}
 
-	// set_service_vars reads before it writes, so an unreadable map refuses with no write.
+	// The batched read precedes the write, so an unreadable map refuses with no write.
 	unreadableRefused := func(t *testing.T, s authShim, out string) {
-		if !strings.Contains(errorLines(out), "gateway.RECONCILIATION_URL") {
-			t.Errorf("no ::error:: line names gateway.RECONCILIATION_URL; output = %q", out)
+		if errs := errorLines(out); !strings.Contains(errs, "gateway") || !strings.Contains(errs, "unreadable") {
+			t.Errorf("no ::error:: line names the gateway and says it is unreadable; output = %q", out)
 		}
 		if ups := s.upserts(t); len(ups) != 0 {
 			t.Errorf("an unreadable map was followed by writes %v", names(ups))
+		}
+	}
+	// The write landed and only its re-read is unreadable.
+	rereadUnreadable := func(t *testing.T, s authShim, out string) {
+		if errs := errorLines(out); !strings.Contains(errs, "gateway") || !strings.Contains(errs, "written but not confirmed") {
+			t.Errorf("no ::error:: line names the gateway as written but not confirmed; output = %q", out)
+		}
+		if at := s.lastCallIndex(t, reconciliationGatewayID, "RECONCILIATION_URL"); at < 0 || !s.readAfter(t, reconciliationGatewayID, at) {
+			t.Errorf("the refusal did not come from a re-read after the write (write at call %d)", at)
 		}
 	}
 
@@ -87,7 +96,7 @@ func TestSetForkReconciliationURLAgainstAScriptedRailway(t *testing.T) {
 		{name: "reread_different", bend: `.RECONCILIATION_URL = "http://reconciliation.railway.internal:8081"`, code: 1, check: rereadRefused},
 		{name: "read_unreadable", bend: `"not-a-map"`, code: 1, check: unreadableRefused},
 		// Only the re-read after the write is unreadable.
-		{name: "reread_unreadable", bend: `if .RECONCILIATION_URL == "` + reconciliationURL + `" then "not-a-map" else . end`, code: 1, check: rereadRefused},
+		{name: "reread_unreadable", bend: `if .RECONCILIATION_URL == "` + reconciliationURL + `" then "not-a-map" else . end`, code: 1, check: rereadUnreadable},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

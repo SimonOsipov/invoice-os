@@ -1,5 +1,6 @@
-// railway_env_pass_test.go drives fork-vars-before-urls, and the one-contributor subcommands, as passes:
-// one environment list, one service list, one batched read, one batched write, one batched re-read.
+// railway_env_pass_test.go drives fork-vars-before-urls, fork-vars-after-urls and the one-contributor
+// subcommands as passes: one environment list, one service list, one batched read, one batched write,
+// one batched re-read.
 package main
 
 import (
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -691,6 +693,13 @@ func TestForkPass_AServiceWithNothingToWriteHasNoAlias(t *testing.T) {
 // requireAliasFailureReport checks AC-5 for one failed alias, whichever shape Railway answered.
 func requireAliasFailureReport(t *testing.T, s authShim, out string, code int, failing string) {
 	t.Helper()
+	requireAliasFailureReportFor(t, s, out, code, gtSvcID(failing))
+}
+
+// requireAliasFailureReportFor is requireAliasFailureReport for a service id that gtSvcID did not build.
+func requireAliasFailureReportFor(t *testing.T, s authShim, out string, code int, failingID string) {
+	t.Helper()
+	failing := passLabel(failingID)
 	if code != 1 {
 		t.Errorf("exit %d, want 1; output = %q", code, clip(out))
 	}
@@ -701,7 +710,7 @@ func requireAliasFailureReport(t *testing.T, s authShim, out string, code int, f
 		t.Errorf("Railway calls = %v, want varsWrite last: a failed write is never re-read", ops)
 	}
 	ws := passWrites(t, s)
-	bad := writesTo(ws, gtSvcID(failing))
+	bad := writesTo(ws, failingID)
 	if len(bad) != 1 {
 		t.Fatalf("%s has %d write input(s), want 1", failing, len(bad))
 	}
@@ -712,7 +721,7 @@ func requireAliasFailureReport(t *testing.T, s authShim, out string, code int, f
 	}
 	var others []string
 	for _, w := range ws {
-		if w.Service != gtSvcID(failing) {
+		if w.Service != failingID {
 			others = append(others, passLabel(w.Service))
 		}
 	}
@@ -1026,6 +1035,465 @@ func TestForkPass_WriteExhaustedBudgetExitsWithoutReRead(t *testing.T) {
 					t.Errorf("no %q line; output = %q", l, clip(out))
 				}
 			}
+		})
+	}
+}
+
+const (
+	afterSub    = "fork-vars-after-urls"
+	afterAIKey  = "sk-or-v1-planted-after-pass-key"
+	afterBadVal = "PLANTED-BENT-REREAD-VALUE"
+)
+
+var afterConfirmations = []string{
+	"auth.GOTRUE_SITE_URL confirmed",
+	batchAllConfirmed,
+	"AI and Jev fake mode confirmed",
+	"Sentry off confirmed",
+	"gateway.RECONCILIATION_URL confirmed",
+	"gateway ENVIRONMENT=development confirmed",
+}
+
+// afterFleet is the 15 services fork-vars-after-urls reads: auth and the 14 Sentry services.
+func afterFleet() []string { return slices.Concat([]string{"auth"}, sentryBackends, sentrySPAs) }
+
+func afterIDs() []string {
+	var ids []string
+	for _, n := range afterFleet() {
+		ids = append(ids, sentrySvcID(n))
+	}
+	return ids
+}
+
+// mergeStores copies each part into one set of per-service stores; later parts win per name.
+func mergeStores(parts ...map[string]map[string]string) map[string]map[string]string {
+	out := map[string]map[string]string{}
+	for _, p := range parts {
+		for svc, vars := range p {
+			if out[svc] == nil {
+				out[svc] = map[string]string{}
+			}
+			maps.Copy(out[svc], vars)
+		}
+	}
+	return out
+}
+
+// afterIntended holds every name the pass writes at its intended value.
+func afterIntended() map[string]map[string]string {
+	gw := sentrySvcID("gateway")
+	stores := mergeStores(reconcileIntended(), map[string]map[string]string{
+		sentrySvcID("auth"): {"GOTRUE_SITE_URL": batchLandingURL},
+		gw:                  {"AUTH_SITE_URL": batchLandingURL, "RECONCILIATION_URL": reconciliationURL, "ENVIRONMENT": "development"},
+	})
+	for _, n := range []string{"submission", "invoice"} {
+		stores[sentrySvcID(n)] = map[string]string{"AI_FAKE": "true", "JEV_FAKE": "true", "OPENROUTER_API_KEY": ""}
+	}
+	for _, n := range sentryBackends {
+		if stores[sentrySvcID(n)] == nil {
+			stores[sentrySvcID(n)] = map[string]string{}
+		}
+		stores[sentrySvcID(n)]["SENTRY_DSN"] = ""
+	}
+	for _, n := range sentrySPAs {
+		stores[sentrySvcID(n)]["VITE_SENTRY_DSN"], stores[sentrySvcID(n)]["SENTRY_AUTH_TOKEN"] = "", ""
+	}
+	return stores
+}
+
+// afterProdStores is a fork that inherited production's value for every name the pass writes.
+func afterProdStores() map[string]map[string]string {
+	prodAI := map[string]string{"AI_FAKE": "false", "JEV_FAKE": "false", "OPENROUTER_API_KEY": afterAIKey}
+	return mergeStores(sentryStores(), reconcileStale(), map[string]map[string]string{
+		sentrySvcID("auth"):       {"GOTRUE_SITE_URL": batchProdLandingURL},
+		sentrySvcID("gateway"):    {"AUTH_SITE_URL": batchProdLandingURL, "RECONCILIATION_URL": "http://reconciliation.railway.internal:8081", "ENVIRONMENT": "production"},
+		sentrySvcID("submission"): prodAI,
+		sentrySvcID("invoice"):    prodAI,
+	})
+}
+
+func newAfterShim(t *testing.T, stores map[string]map[string]string) authShim {
+	t.Helper()
+	return newAuthShim(t, map[string]string{
+		"envList": sentryEnvList(true, true),
+		"settle":  sentrySettle("", sentryEdge(sentrySvcID("auth"), "auth")),
+	}, stores)
+}
+
+// afterShimIn is the fork of the auth tests (authForkEnvID) with every fork-vars-after-urls service
+// except skip; extra adds settle edges, such as a duplicate name.
+func afterShimIn(t *testing.T, skip string, extra ...string) authShim {
+	t.Helper()
+	if skip != "auth" {
+		extra = append([]string{sentryEdge(sentrySvcID("auth"), "auth")}, extra...)
+	}
+	return newAuthShim(t, map[string]string{"envList": authEnvList(true), "settle": sentrySettle(skip, extra...)}, afterProdStores())
+}
+
+func afterArgs() []string {
+	return append([]string{forkEnvID}, batchGatewayURL, batchAppURL, batchLandingURL, batchOpsURL, batchSupportURL)
+}
+
+func runAfter(t *testing.T, s authShim) (out string, code int) {
+	t.Helper()
+	stdout, stderr, code := s.run(t, forkExports(true, true, true), afterSub, afterArgs()...)
+	return stdout + stderr, code
+}
+
+func requireConfirmed(t *testing.T, out string, lines ...string) {
+	t.Helper()
+	for _, l := range lines {
+		if !strings.Contains(out, l) {
+			t.Errorf("no %q line; output = %q", l, clip(out))
+		}
+	}
+}
+
+func TestForkVarsAfterURLs_FreshForkMakesFiveCalls(t *testing.T) {
+	s := newAfterShim(t, afterProdStores())
+	out, code := runAfter(t, s)
+	if code != 0 {
+		t.Errorf("exit %d, want 0; output = %q", code, clip(out))
+	}
+	want := []string{"envList", "settle", "varsRead", "varsWrite", "varsRead"}
+	if got := operations(s.calls(t)); !slices.Equal(got, want) {
+		t.Errorf("Railway calls = %v, want %v", got, want)
+	}
+}
+
+func TestForkVarsAfterURLs_SettledForkMakesThreeCalls(t *testing.T) {
+	intended := afterIntended()
+	if len(intended) != 15 {
+		t.Fatalf("control: the settled fork has %d services, want 15", len(intended))
+	}
+	s := newAfterShim(t, intended)
+	out, code := runAfter(t, s)
+	if code != 0 {
+		t.Errorf("exit %d, want 0; output = %q", code, clip(out))
+	}
+	if want, got := []string{"envList", "settle", "varsRead"}, operations(s.calls(t)); !slices.Equal(got, want) {
+		t.Errorf("Railway calls = %v, want %v: nothing differs, so no write and no re-read", got, want)
+	}
+	held := heldLines(out)
+	if len(held) != 15 {
+		t.Errorf("%d held lines, want 15 (one per service); held = %v", len(held), held)
+	}
+	for _, n := range afterFleet() {
+		want := strconv.Itoa(len(intended[sentrySvcID(n)]))
+		if got := held[n]; got != want+" of "+want {
+			t.Errorf("%s held line = %q, want %q: every name already holds", n, got, want+" of "+want)
+		}
+	}
+	// The verdicts read the first read when nothing is written.
+	requireConfirmed(t, out, afterConfirmations...)
+}
+
+func TestForkVarsAfterURLs_ReadCoversTheFifteenServicesOnce(t *testing.T) {
+	s := newAfterShim(t, afterProdStores())
+	if out, code := runAfter(t, s); code != 0 {
+		t.Fatalf("exit %d, want 0; output = %q", code, clip(out))
+	}
+	reads := callsOf(s, t, "varsRead")
+	if len(reads) != 2 {
+		t.Fatalf("%d varsRead calls, want 2: the read and the re-read", len(reads))
+	}
+	want := afterIDs()
+	if len(want) != 15 {
+		t.Fatalf("control: the expected service set has %d ids, want 15", len(want))
+	}
+	for i, c := range reads {
+		got := readServices(c)
+		if len(got) != 15 || !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
+			t.Errorf("varsRead %d asks for %v, want each of %v exactly once (gateway once)", i+1, got, want)
+		}
+		if !regexp.MustCompile(`unrendered:\s*true`).MatchString(c.Query) {
+			t.Errorf("varsRead %d omits unrendered: true: %q", i+1, c.Query)
+		}
+	}
+}
+
+func TestForkVarsAfterURLs_GatewayGetsEveryContributorsNamesInOneAlias(t *testing.T) {
+	gw := sentrySvcID("gateway")
+	for _, c := range []struct {
+		name  string
+		recon string
+		want  []string
+	}{
+		{"every name differs", "http://reconciliation.railway.internal:8081", []string{"AUTH_SITE_URL", "CORS_ALLOWED_ORIGINS", "ENVIRONMENT", "RECONCILIATION_URL", "SENTRY_DSN"}},
+		{"RECONCILIATION_URL already holds", reconciliationURL, []string{"AUTH_SITE_URL", "CORS_ALLOWED_ORIGINS", "ENVIRONMENT", "SENTRY_DSN"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			stores := afterProdStores()
+			stores[gw]["RECONCILIATION_URL"] = c.recon
+			s := newAfterShim(t, stores)
+			if out, code := runAfter(t, s); code != 0 {
+				t.Fatalf("exit %d, want 0; output = %q", code, clip(out))
+			}
+			ws := passWrites(t, s)
+			if len(ws) == 0 {
+				t.Fatal("control: nothing was written")
+			}
+			got := writesTo(ws, gw)
+			if len(got) != 1 {
+				t.Fatalf("the gateway has %d alias(es) in the write, want 1; writes = %v", len(got), writeNames(ws))
+			}
+			if names := slices.Sorted(maps.Keys(got[0].Vars)); !slices.Equal(names, c.want) {
+				t.Errorf("the gateway alias carries %v, want %v", names, c.want)
+			}
+		})
+	}
+}
+
+func TestForkVarsAfterURLs_PrintsEveryConfirmationLine(t *testing.T) {
+	s := newAfterShim(t, afterProdStores())
+	out, code := runAfter(t, s)
+	if code != 0 {
+		t.Fatalf("exit %d, want 0; output = %q", code, clip(out))
+	}
+	requireConfirmed(t, out, afterConfirmations...)
+	for _, n := range []string{sentryDSNSentinel, sentryTokenSentinel, sentryDBSentinel, afterAIKey, forkToken} {
+		if strings.Contains(out, n) {
+			t.Errorf("the output carries a planted value %q", n)
+		}
+	}
+}
+
+// docling already holds a blank DSN, so the first read passes and nothing is written for it:
+// only a verdict fed the re-read sees the bend.
+func TestForkVarsAfterURLs_OneVerdictFailingFailsTheStep(t *testing.T) {
+	doc := sentrySvcID("docling")
+	build := func(t *testing.T) authShim {
+		stores := afterProdStores()
+		stores[doc]["SENTRY_DSN"] = ""
+		return newAfterShim(t, stores)
+	}
+	t.Run("control: no bend confirms every line", func(t *testing.T) {
+		s := build(t)
+		out, code := runAfter(t, s)
+		if code != 0 {
+			t.Fatalf("exit %d, want 0; output = %q", code, clip(out))
+		}
+		requireConfirmed(t, out, afterConfirmations...)
+	})
+	t.Run("a re-read DSN on docling", func(t *testing.T) {
+		s := build(t)
+		s.bendReRead(t, doc, `.SENTRY_DSN = "`+afterBadVal+`"`)
+		out, code := runAfter(t, s)
+		ws := passWrites(t, s)
+		if len(ws) == 0 || len(writesTo(ws, doc)) != 0 {
+			t.Fatalf("control: want a write that skips docling, so the first read passes; writes = %v", writeNames(ws))
+		}
+		if code != 1 {
+			t.Errorf("exit %d, want 1; output = %q", code, clip(out))
+		}
+		if strings.Contains(out, afterBadVal) {
+			t.Errorf("the output carries the value the re-read returned; output = %q", clip(out))
+		}
+		requireNamedIn(t, errorLines(out), "docling.SENTRY_DSN", "Value not printed")
+		if strings.Contains(out, "Sentry off confirmed") {
+			t.Errorf("a failed Sentry verdict printed its confirmation line; output = %q", clip(out))
+		}
+		// The other contributors' verdicts still run and print.
+		var others []string
+		for _, l := range afterConfirmations {
+			if l != "Sentry off confirmed" {
+				others = append(others, l)
+			}
+		}
+		requireConfirmed(t, out, others...)
+	})
+}
+
+// submission holds the fake values and a blank key, so the first read passes and nothing is written for it.
+func TestForkVarsAfterURLs_AIKeyVerdictReadsTheReRead(t *testing.T) {
+	sub := sentrySvcID("submission")
+	build := func(t *testing.T) authShim {
+		stores := afterProdStores()
+		stores[sub]["AI_FAKE"], stores[sub]["JEV_FAKE"], stores[sub]["OPENROUTER_API_KEY"] = "true", "true", ""
+		return newAfterShim(t, stores)
+	}
+	t.Run("control: no bend exits 0", func(t *testing.T) {
+		out, code := runAfter(t, build(t))
+		if code != 0 {
+			t.Fatalf("exit %d, want 0; output = %q", code, clip(out))
+		}
+		requireConfirmed(t, out, "AI and Jev fake mode confirmed")
+	})
+	t.Run("a re-read key on submission", func(t *testing.T) {
+		s := build(t)
+		s.bendReRead(t, sub, `.OPENROUTER_API_KEY = "`+afterBadVal+`"`)
+		out, code := runAfter(t, s)
+		if _, ok := passWritten(passWrites(t, s), sub, "OPENROUTER_API_KEY"); ok {
+			t.Fatal("control: OPENROUTER_API_KEY was written for submission, so the first read did not pass")
+		}
+		if len(passWrites(t, s)) == 0 {
+			t.Fatal("control: nothing was written, so no re-read ran")
+		}
+		if code != 1 {
+			t.Errorf("exit %d, want 1; output = %q", code, clip(out))
+		}
+		requireNamedIn(t, errorLines(out), "submission.OPENROUTER_API_KEY", "Value not printed")
+		if strings.Contains(out, afterBadVal) {
+			t.Errorf("the output carries the key the re-read returned; output = %q", clip(out))
+		}
+		if strings.Contains(out, "AI and Jev fake mode confirmed") {
+			t.Errorf("a failed key verdict printed its confirmation line; output = %q", clip(out))
+		}
+	})
+}
+
+func TestForkVarsAfterURLs_AIFakeWritesItsThreeNames(t *testing.T) {
+	s := newAfterShim(t, afterProdStores())
+	if out, code := runAfter(t, s); code != 0 {
+		t.Fatalf("exit %d, want 0; output = %q", code, clip(out))
+	}
+	ws := passWrites(t, s)
+	if len(ws) == 0 {
+		t.Fatal("control: nothing was written")
+	}
+	for _, n := range []string{"submission", "invoice"} {
+		got := writesTo(ws, sentrySvcID(n))
+		if len(got) != 1 {
+			t.Fatalf("%s has %d alias(es) in the write, want 1", n, len(got))
+		}
+		for name, want := range map[string]string{"AI_FAKE": "true", "JEV_FAKE": "true", "OPENROUTER_API_KEY": ""} {
+			if v, ok := got[0].Vars[name]; !ok || v != want {
+				t.Errorf("%s writes %s = %q (present %t), want %q", n, name, v, ok, want)
+			}
+		}
+	}
+	for _, w := range ws {
+		if _, ok := w.Vars["TYPESAFE_API_KEY"]; ok {
+			t.Errorf("%s's alias names TYPESAFE_API_KEY, the retired key", passLabel(w.Service))
+		}
+	}
+}
+
+func TestForkVarsAfterURLs_SetForkEnvironmentWritesOnlyENVIRONMENT(t *testing.T) {
+	gw := sentrySvcID("gateway")
+	s := fleetShim(t, map[string]map[string]string{gw: {"ENVIRONMENT": "production", "DATABASE_URL": sentryDBSentinel}})
+	stdout, stderr, code := s.run(t, forkExports(true, true, true), "set-fork-environment", forkEnvID)
+	out := stdout + stderr
+	if code != 0 {
+		t.Fatalf("exit %d, want 0; output = %q", code, clip(out))
+	}
+	if want, got := []string{"envList", "settle", "varsRead", "varsWrite", "varsRead"}, operations(s.calls(t)); !slices.Equal(got, want) {
+		t.Fatalf("Railway calls = %v, want %v", got, want)
+	}
+	for i, c := range callsOf(s, t, "varsRead") {
+		if got := readServices(c); !slices.Equal(got, []string{gw}) {
+			t.Errorf("varsRead %d asks for %v, want the gateway alone", i+1, got)
+		}
+	}
+	ws := passWrites(t, s)
+	if len(ws) != 1 || ws[0].Service != gw || !maps.Equal(ws[0].Vars, map[string]string{"ENVIRONMENT": "development"}) {
+		t.Errorf("varsWrite inputs = %v, want one for the gateway carrying exactly {ENVIRONMENT: development}", writeNames(ws))
+	}
+	requireConfirmed(t, out, "gateway ENVIRONMENT=development confirmed")
+}
+
+// Under /bin/bash (3.2 on macOS) an empty array expansion is unbound under set -u.
+func TestForkVarsAfterURLs_ASettledServiceHasNoAlias(t *testing.T) {
+	const bash = "/bin/bash"
+	if _, err := os.Stat(bash); err != nil {
+		t.Skip("no /bin/bash")
+	}
+	stores := afterProdStores()
+	for _, n := range []string{"submission", "invoice"} {
+		maps.Copy(stores[sentrySvcID(n)], map[string]string{"AI_FAKE": "true", "JEV_FAKE": "true", "OPENROUTER_API_KEY": "", "SENTRY_DSN": ""})
+	}
+	s := newAfterShim(t, stores)
+	stdout, stderr, code := runBashScript(t, s.prelude+forkExports(true, true, true)+bash+" '"+railwayEnvScript(t)+"' "+afterSub+" "+strings.Join(afterArgs(), " ")+"\n")
+	out := stdout + stderr
+	if strings.Contains(out, "unbound variable") {
+		t.Errorf("the pass hit an unbound variable under %s; output = %q", bash, clip(out))
+	}
+	if code != 0 {
+		t.Fatalf("exit %d, want 0; output = %q", code, clip(out))
+	}
+	ws := passWrites(t, s)
+	if len(ws) == 0 {
+		t.Fatal("control: nothing was written")
+	}
+	for _, n := range []string{"submission", "invoice"} {
+		if got := writesTo(ws, sentrySvcID(n)); len(got) != 0 {
+			t.Errorf("%s already holds every name and has %d write input(s), want none", n, len(got))
+		}
+	}
+	if got := writesTo(ws, sentrySvcID("gateway")); len(got) != 1 {
+		t.Errorf("control: the gateway has %d write input(s), want 1", len(got))
+	}
+}
+
+func TestForkVarsAfterURLs_OneAliasFailingNamesItsService(t *testing.T) {
+	landing := sentrySvcID("landing")
+	for _, mode := range []string{"abort", "null"} {
+		t.Run(mode, func(t *testing.T) {
+			s := newAfterShim(t, afterProdStores())
+			s.failAlias(t, landing, mode)
+			out, code := runAfter(t, s)
+			requireAliasFailureReportFor(t, s, out, code, landing)
+			errs := errorLines(out)
+			if n := strings.Count(errs, "The batched variable write"); n != 1 {
+				t.Errorf("%d failure line(s) name a service, want 1; error lines = %q", n, errs)
+			}
+			for _, v := range append(afterArgs()[1:], reconciliationURL, afterAIKey, sentryDSNSentinel, sentryTokenSentinel) {
+				if strings.Contains(errs, v) {
+					t.Errorf("the failure lines carry the value %q", v)
+				}
+			}
+			requireNamedIn(t, errs, "landing", "VITE_GATEWAY_URL", "VITE_APP_URL", "VITE_OPS_URL", "VITE_SUPPORT_URL", "VITE_REGISTRATION_OPEN")
+		})
+	}
+}
+
+func TestForkVarsAfterURLs_RefusesThePersistentEnvironment(t *testing.T) {
+	s := newAfterShim(t, afterProdStores())
+	stdout, stderr, code := s.run(t, forkExports(true, true, true), afterSub, append([]string{persistentEnvironmentID}, afterArgs()[1:]...)...)
+	out := stdout + stderr
+	if code != 1 {
+		t.Errorf("exit %d, want 1; output = %q", code, clip(out))
+	}
+	if !strings.Contains(errorLines(out), persistentEnvironmentID) {
+		t.Errorf("no ::error:: line names the persistent environment %s; output = %q", persistentEnvironmentID, clip(out))
+	}
+	if calls := s.calls(t); len(calls) != 0 {
+		t.Errorf("the refusal called Railway %v; it must refuse before any call", operations(calls))
+	}
+	s.requireLogs(t)
+}
+
+func TestForkVarsAfterURLs_UsageAndLandingURLRefuseBeforeAnyCall(t *testing.T) {
+	urls := afterArgs()[1:]
+	for _, c := range []struct {
+		name string
+		args []string
+		code int
+		says string
+	}{
+		{"four URLs", append([]string{forkEnvID}, urls[:4]...), 2, "usage: railway-env.sh " + afterSub},
+		{"no arguments", nil, 2, "usage: railway-env.sh " + afterSub},
+		{"an empty gateway URL", append([]string{forkEnvID, ""}, urls[1:]...), 2, "usage: railway-env.sh " + afterSub},
+		{"an empty support URL", append([]string{forkEnvID}, append(slices.Clone(urls[:4]), "")...), 2, "usage: railway-env.sh " + afterSub},
+		{"an empty environment id", append([]string{""}, urls...), 2, "usage: railway-env.sh " + afterSub},
+		{"a seventh argument", append(append([]string{forkEnvID}, urls...), "https://extra"), 2, "usage: railway-env.sh " + afterSub},
+		{"an http landing URL", append([]string{forkEnvID, urls[0], urls[1], "http://x"}, urls[3:]...), 1, "https://"},
+		{"a bare https:// landing URL", append([]string{forkEnvID, urls[0], urls[1], "https://"}, urls[3:]...), 1, "https://"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newAfterShim(t, afterProdStores())
+			stdout, stderr, code := s.run(t, forkExports(true, true, true), afterSub, c.args...)
+			out := stdout + stderr
+			if code != c.code {
+				t.Errorf("exit %d, want %d; output = %q", code, c.code, clip(out))
+			}
+			if !strings.Contains(errorLines(out), c.says) {
+				t.Errorf("error lines %q do not carry %q", errorLines(out), c.says)
+			}
+			if calls := s.calls(t); len(calls) != 0 {
+				t.Errorf("the refusal called Railway %v; it must refuse before any call", operations(calls))
+			}
+			s.requireLogs(t)
 		})
 	}
 }

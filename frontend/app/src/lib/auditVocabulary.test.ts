@@ -190,6 +190,14 @@ describe('audit vocabulary', () => {
     }
     // Control: the same view function answers a tone for an outcome-bearing event.
     expect(auditEventView('submission.failed').tone).not.toBeNull()
+    // The lookup is exact: a near miss is unknown (null domain), never the invite label.
+    for (const id of ['invitation.Sent', 'invitation.sent ', 'invitation.resend', 'invitation.revoked']) {
+      const near = auditEventView(id)
+      expect(near.domain, `${id} must not resolve to a labelled event`).toBeNull()
+      expect(near.label).not.toBe(id)
+      expect(near.label).not.toMatch(/^Invite (sent|resent)$/)
+      expect(near.tone).toBeNull()
+    }
   })
 
   it('auditVocabulary_unknownTypeIsNeverRawPrimary', () => {

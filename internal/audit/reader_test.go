@@ -462,7 +462,14 @@ func TestAuditScopeOf_PrefixCasingAndEmptyEventDoNotMatchFirmWide(t *testing.T) 
 		{"empty event string", "", audit.ScopeUnattributed},
 		{"superstring of a firm-wide name", "approval_policy.createdX", audit.ScopeUnattributed},
 		{"different casing of a firm-wide name", "Approval_Policy.Created", audit.ScopeUnattributed},
+		{"invitation name with capital", "invitation.Sent", audit.ScopeUnattributed},
+		{"invitation name with trailing space", "invitation.sent ", audit.ScopeUnattributed},
+		{"invitation name with leading space", " invitation.resent", audit.ScopeUnattributed},
+		{"invitation near miss resend", "invitation.resend", audit.ScopeUnattributed},
+		{"invitation near miss plural", "invitations.sent", audit.ScopeUnattributed},
+		{"unregistered invitation event", "invitation.revoked", audit.ScopeUnattributed},
 		{"control needle: the real firm-wide name matches", "approval_policy.created", audit.ScopeWorkspace},
+		{"control needle: the real invitation name matches", "invitation.sent", audit.ScopeWorkspace},
 	}
 	if len(cases) == 0 {
 		t.Fatal("test table is empty")

@@ -1056,7 +1056,9 @@ describe('login scrubs saved passwords from every escaping error', () => {
     const { L, root, deps } = await setup({
       signInFresh: vi.fn(async () => {
         const { CtlError: Ctl } = await import('./main')
-        throw new Ctl(`fill("${secret}") timed out`, `retry, the password was ${secret}`, 1, { call: { args: [secret, { deep: `x${secret}y` }] } })
+        const thrown = new Ctl(`fill("${secret}") timed out`, `retry, the password was ${secret}`, 1, { call: { args: [secret, { deep: `x${secret}y` }] } })
+        void thrown.stack // V8 formats the stack header on first read, so read it before login can edit the message
+        throw thrown
       }),
     })
     seed(root)

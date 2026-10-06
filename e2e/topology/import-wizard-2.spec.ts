@@ -309,8 +309,7 @@ test('EXTR11-E2E-11 (AC-8): the page frame centres in its column and the point b
 // `playwright test --list`.
 
 // The header vocabulary this block reads -- HeaderFields, in the order one Save writes in --
-// is `VOCABULARY`, declared once in importWizardShared.ts. It used to be transcribed twice in
-// this file, byte for byte; one list, one copy.
+// is `VOCABULARY`, declared once in importWizardShared.ts.
 
 // internal/extraction/handlers_correction.go, lockedFields: a correction on any of the three is
 // a 422 while it is unflagged, which the steered fixture never lifts (AIR-03-06), so none of
@@ -360,7 +359,7 @@ test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and
   expect(missing!.value, 'the missing field already carries a value').toBeNull()
   expect(missing!.region, 'the missing field already carries a region, so a drawn box proves nothing').toBeNull()
 
-  // By NAME, the way EXTR12-E2E-02 picks `total` above --
+  // By NAME, the way EXTR12-E2E-02 picks `total` --
   // never by position. The wire is ordered by field_name (created_at defaults to now() and
   // writeFieldResultsTx writes a job's rows on ONE transaction, so reader.go's ORDER BY
   // degenerates to the name), and EXTR-13-02's line cells sort ahead of `subtotal`: "the first
@@ -445,7 +444,7 @@ test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and
 
   // -- 4. FILL THE POINT --------------------------------------------------------------------
   // Required, not decorative: savableCorrections drops a blank pointed entry
-  // (extractionReview.ts:267), so without this the box never reaches the wire.
+  // (extractionReview.ts), so without this the box never reaches the wire.
   const POINTED_VALUE = '31775208-0003'
   await page.getByTestId(`extraction-input-${missing!.name}`).fill(POINTED_VALUE)
 
@@ -1177,7 +1176,7 @@ test('EXTR13-E2E-01 (Core AC 1-7): the deployed grid reads, flags, sums, selects
   ).toContain(settledTotal)
 
   // The server's own values, read back. The line set lands on the `line_items` BLOCK row as one
-  // canonical-JSON correction (handlers_lineitems.go:169-181), and the reader projects that row
+  // canonical-JSON correction (writeLineItems, handlers_lineitems.go), and the reader projects that row
   // onto the per-cell `line_items[N].role` readings, which no correction ever names directly
   // (expandLineCorrection, internal/extraction/reader.go). The block row is where the write's
   // own record is checked, below; the cells it projects onto are what the reopen reads.
@@ -2169,9 +2168,9 @@ test('EXTR37-E2E-01: the second import of a file for the same client opens mappe
 // A single-file run removes EXTR10-E2E-02's race entirely -- 'failed' is terminal, so the
 // card cannot be routed out from under the sweep and nothing needs holding open.
 //
-// Containment is measured with overlapOf (layout.ts:68-77), which returns a Rect. The
+// Containment is measured with overlapOf (layout.ts), which returns a Rect. The
 // identity `overlapOf(inner, outer) === inner` is the only expression of "inner is wholly
-// inside outer"; rectsOverlap (layout.ts:55-58) returns a boolean and is true for a row
+// inside outer"; rectsOverlap (layout.ts) returns a boolean and is true for a row
 // hanging half out of its card, so it cannot state this at all.
 //
 // NO ASSERTION STATES A PIXEL WIDTH. A width assertion passes on the very bug it should
@@ -2229,7 +2228,7 @@ test('EXTR15-E2E-01 (AC-10): the hand-off row sits inside its card, and its gutt
   const entryViewport = page.viewportSize()
 
   try {
-    // Widest first — WIDE_WIDTHS' own order (layout.ts:22): a cap strands only what the
+    // Widest first — WIDE_WIDTHS' own order (layout.ts): a cap strands only what the
     // window gives it room to strand.
     for (const width of WIDE_WIDTHS) {
       await page.setViewportSize({ width, height: 1080 })
@@ -3058,7 +3057,7 @@ test('EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and r
   const entryViewport = page.viewportSize()
 
   try {
-    // Widest first -- WIDE_WIDTHS' own order (layout.ts:22): a cap strands only what the window
+    // Widest first -- WIDE_WIDTHS' own order (layout.ts): a cap strands only what the window
     // gives it room to strand.
     for (const width of WIDE_WIDTHS) {
       await page.setViewportSize({ width, height: 1080 })
@@ -3081,7 +3080,7 @@ test('EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and r
       expect(m.cardBox && m.rowBox && m.handOffBox, `card, row and control must all render at ${width}px`).toBeTruthy()
 
       // (a) the row is CONTAINED by its card -- the intersection is the row's own rect.
-      // rectsOverlap (layout.ts:55-58) is a boolean and is true for a row hanging half out, so
+      // rectsOverlap (layout.ts) is a boolean and is true for a row hanging half out, so
       // it cannot state this at all; overlapOf returns the Rect that can.
       expect(
         sameRect(overlapOf(m.rowBox!, m.cardBox!), m.rowBox!),
@@ -3246,7 +3245,7 @@ test('EXTR30-E2E-01 (AC-2/AC-4): a document run counts its unvalidated invoices 
   const entryViewport = page.viewportSize()
 
   try {
-    // Widest first -- WIDE_WIDTHS' own order (layout.ts:22).
+    // Widest first -- WIDE_WIDTHS' own order (layout.ts).
     for (const width of WIDE_WIDTHS) {
       await page.setViewportSize({ width, height: 1080 })
 
@@ -3359,7 +3358,7 @@ test("EXTR18-E2E-01 (AC-5): the deployed reading is the document's own number", 
 })
 
 // A document whose invoice_number never resolves mints a QUARANTINED batch, not an invoice
-// (internal/importer/document.go:161) -- so routeAfterRun's 'single' arm is unreachable and
+// (documentCreateInput, internal/importer/document.go) -- so routeAfterRun's 'single' arm is unreachable and
 // extractOneDocument's landing wait can never settle. Both fixtures below are that
 // case by construction: the scan has no recoverable text at all, and the dense page's label
 // OCRs as "INV0ICE NO:" (D-33). The verdict is therefore read off the deployed wire, which is
@@ -3574,7 +3573,7 @@ test('EXTR36-E2E-02 (AC-3): a typed correction on a Chrome print teaches its twi
   await settledInvoiceFor(token, entityId)
 
   // Typed, no anchor_label, no region -- a pointed payload with no region 400s
-  // (handlers_correction.go:201-203).
+  // (CorrectionHandler, handlers_correction.go).
   const typed = await postFieldCorrection(token, job.id, 'buyer_name', { value: 'Honeywell Group Nigeria Plc', method: 'typed' })
 
   // A SEPARATE runDocuments call: no-duplicate-invoice-number is scoped per entity

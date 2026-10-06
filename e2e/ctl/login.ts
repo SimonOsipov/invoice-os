@@ -235,8 +235,12 @@ const REDACTED = '<redacted>'
 
 // Playwright call logs echo filled values, so no saved password leaves login in an error.
 function scrub(e: unknown, secrets: Set<string>): unknown {
-  if (!(e instanceof Error) || secrets.size === 0) return e
-  const clean = (text: string) => [...secrets].reduce((t, s) => t.split(s).join(REDACTED), text)
+  if (secrets.size === 0) return e
+  // Longest first: one password can be a prefix of another.
+  const ordered = [...secrets].sort((a, b) => b.length - a.length)
+  const clean = (text: string) => ordered.reduce((t, s) => t.split(s).join(REDACTED), text)
+  if (typeof e === 'string') return clean(e)
+  if (!(e instanceof Error)) return e
   e.message = clean(e.message)
   if (e.stack) e.stack = clean(e.stack)
   if (e instanceof CtlError) {

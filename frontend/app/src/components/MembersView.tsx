@@ -12,21 +12,32 @@
 // The consequence, accepted rather than worked around: switching to another Settings tab
 // unmounts this one, so the search text and role filter reset.
 
-import { useCallback, useId, useState } from 'react'
+import { useCallback, useEffect, useId, useState } from 'react'
 
-import { EmptyState, ErrorState, Loading, toApiError } from '@invoice-os/api-client'
+import { EmptyState, ErrorState, gatewayBase, Loading, toApiError, useAsync } from '@invoice-os/api-client'
 import { plusGlyph } from '../glyphs'
 import {
   ACCESS_ROLES,
   filterMembers,
+  INVITE_ADMIN_ONLY,
+  inviteSentNotice,
   isFiltering,
-  MEMBER_UNBACKED,
+  listInvitations,
+  resendInvitation,
+  rosterWithInvites,
+  sendInvitations,
+  toPendingInvite,
+  upsertInvites,
+  viewerIsAdmin,
   type AccessRole,
+  type InvitationWire,
   type MemberStatus,
+  type PendingInvite,
 } from '../lib/members'
 import { rolesSurface, unassignedNotice, unassignedRoles } from '../lib/roles'
+import { InviteModal } from './InviteModal'
 import { MemberDrawer } from './MemberDrawer'
-import { AmberNote } from './MemberParts'
+import { AmberNote, SearchBox } from './MemberParts'
 import { ClientUsersCard, MemberRoleMatrix } from './MemberRoleMatrix'
 import { MembersTable } from './MembersTable'
 import { WfSelect, type WfOption } from './WorkflowParts'
@@ -55,8 +66,7 @@ const EMPTY_TITLE: Record<PlatformCtx['mode'], string> = {
   inhouse: 'Just you on the team',
 }
 
-// The invite clause is DELETED, not reworded: invite is disabled-with-a-reason on this
-// tab, and an empty state that promises it is the defect this story exists to fix.
+// No invite clause: the empty state stays about pricing; the Invite button sits above it.
 const EMPTY_MESSAGE = "You're priced by compliance need, not per seat."
 
 export function MembersView({ ctx }: { ctx: PlatformCtx }) {
@@ -71,6 +81,56 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
   // tear down and re-register the Escape listener on every keystroke in the search box.
   const closeDrawer = useCallback(() => setDrawerId(null), [])
   const inviteNoteId = useId()
+  const invitesErrorId = useId()
+
+  const base = gatewayBase()
+  const admin = viewerIsAdmin(members)
+  // Armed for an admin only; re-armed when the viewer's own row becomes an active admin.
+  const list = useAsync<InvitationWire[]>(
+    () => (base ? listInvitations(ctx.authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
+    { immediate: base != null && admin, deps: [admin] },
+  )
+  // The mirror the writes patch. A refetch overwrites it wholesale; a failed one leaves it.
+  // Synced during render, not in an effect, so no frame paints between "landed" and "mirrored".
+  const [invites, setInvites] = useState<PendingInvite[]>([])
+  const [syncedFrom, setSyncedFrom] = useState<unknown>(undefined)
+  const [invitesLanded, setInvitesLanded] = useState(false)
+  const listLanded = list.status === 'ready' || list.status === 'empty'
+  // A fetch in flight clears the marker, so an empty answer (data stays null) still re-syncs.
+  if (!listLanded && syncedFrom !== undefined) setSyncedFrom(undefined)
+  if (listLanded && list.data !== syncedFrom) {
+    setSyncedFrom(list.data)
+    setInvites((list.data ?? []).map(toPendingInvite))
+  }
+  if ((listLanded || list.status === 'error') && !invitesLanded) setInvitesLanded(true)
+  const listFirstLoad = base != null && admin && !invitesLanded && (list.status === 'idle' || list.status === 'loading')
+  const pendingInvites = admin ? invites : []
+
+  // The 404/409 reason of a resend; it outlives the refetch it triggers.
+  const [staleReason, setStaleReason] = useState<string | null>(null)
+  const [resending, setResending] = useState<ReadonlySet<string>>(new Set())
+  const [flash, setFlash] = useState<{ tone: 'ok' | 'failed'; text: string } | null>(null)
+  useEffect(() => {
+    if (!flash) return
+    const t = window.setTimeout(() => setFlash(null), 3000)
+    return () => window.clearTimeout(t)
+  }, [flash])
+  const [inviting, setInviting] = useState(false)
+  const openInvite = () => {
+    setStaleReason(null)
+    setInviting(true)
+  }
+  const closeInvite = useCallback(() => setInviting(false), [])
+  const retryInvites = () => {
+    setStaleReason(null)
+    list.run()
+  }
+  async function sendInvites(emails: readonly string[], role: AccessRole) {
+    if (!base) throw new Error('no gateway configured')
+    const items = (await sendInvitations(ctx.authedFetch, base, emails, role)).map(toPendingInvite)
+    setInvites((cur) => upsertInvites(cur, items))
+    setFlash(inviteSentNotice(items))
+  }
   // The failed status write's SERVER reason, scoped to the row it happened on. Transient view
   // state, so it lives here rather than on ctx — and here rather than in either child, because
   // the table's `⋯` menu closes on select and the drawer can be shut before the promise
@@ -86,16 +146,49 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
     },
     [setMemberStatus],
   )
+  const resend = async (id: string) => {
+    if (!base || resending.has(id)) return
+    setStaleReason(null)
+    setStatusError((cur) => (cur?.id === id ? null : cur))
+    setResending((cur) => new Set(cur).add(id))
+    try {
+      const item = toPendingInvite(await resendInvitation(ctx.authedFetch, base, id))
+      setInvites((cur) => upsertInvites(cur, [item]))
+      setFlash(inviteSentNotice([item]))
+    } catch (err) {
+      const e = toApiError(err)
+      if (e.status === 404 || e.status === 409) {
+        setStaleReason(e.message)
+        list.run()
+        ctx.refetchMembers()
+      } else {
+        setStatusError({ id, message: e.message })
+      }
+    } finally {
+      setResending((cur) => {
+        const next = new Set(cur)
+        next.delete(id)
+        return next
+      })
+    }
+  }
   // rolesSurface's 'empty' branch is RolesView's own "no roles yet" card — wrong here, since
   // this roster doesn't care how many roles exist, only whether the fetch landed.
   const rolesStatusForRoster = ctx.rolesState === 'empty' ? 'ready' : ctx.rolesState
-  const surface = rolesSurface(rolesStatusForRoster, ctx.membersState)
+  // A members refetch over a landed roster keeps the rows; only a first load shows the spinner.
+  const membersStateForRoster = ctx.membersState === 'loading' && members.length > 0 ? 'ready' : ctx.membersState
+  const surface = rolesSurface(rolesStatusForRoster, membersStateForRoster)
+  const showLoading = surface === 'loading' || (surface === 'roster' && listFirstLoad)
+  const inviteReady = admin && invitesLanded && list.status !== 'error' && list.status !== 'loading'
+  const listFailed = admin && list.status === 'error'
+  const showAdminOnly = surface === 'roster' && !admin
   // RolesView.tsx:68-71's own shape: only the fetch(es) that actually failed get retried.
   const retryRoster = useCallback(() => {
     if (ctx.rolesState === 'error') ctx.refetchRoles()
     if (ctx.membersState === 'error') ctx.refetchMembers()
   }, [ctx.rolesState, ctx.membersState, ctx.refetchRoles, ctx.refetchMembers])
-  const shown = filterMembers(members, query, roleFilter)
+  const roster = rosterWithInvites(members, pendingInvites)
+  const shown = filterMembers(roster, query, roleFilter)
   // No mode gate, and the same `unassignedNotice` the Roles tab renders, so the two cannot
   // drift. Both resolve against the live roster.
   const unassigned = unassignedRoles(ctx.roles, members)
@@ -107,68 +200,88 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
   // here — `isFiltering` is the same one `filterMembers` short-circuits on, so `shown` and
   // this flag always answer to one definition of an empty query.
   const filtering = isFiltering(query, roleFilter)
-  const justYou = members.length === 1 && !filtering
+  const justYou = roster.length === 1 && !filtering
 
   return (
     <>
-      <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: '0 0 16px', maxWidth: 560, lineHeight: 1.55 }}>{INTRO[mode]}</p>
+      <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: '-4px 0 16px', maxWidth: 680, lineHeight: 1.6 }}>{INTRO[mode]}</p>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-        <input
-          type="text"
-          className="pf-input"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search name or email"
-          aria-label="Search members"
-          // .pf-input is width: 100%, so a box in a toolbar row needs its own width.
-          style={{ flex: 'none', width: 260 }}
-        />
+      {/* Above the toolbar, and only on a landed roster: over an errored one every role
+          resolves to zero holders and this would assert a coverage failure that is a fetch failure. */}
+      {surface === 'roster' && unassigned.length > 0 && (
+        <AmberNote testId="members-unassigned" style={{ marginBottom: 14 }}>
+          {unassignedNotice(unassigned.length)}{' '}
+          <span style={{ fontWeight: 700 }}>{unassigned.map((r) => r.title).join(' · ')}</span>
+        </AmberNote>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+        <SearchBox value={query} onChange={setQuery} placeholder="Search name or email" label="Search members" />
         <WfSelect
           label="Access role"
           hideLabel
           value={roleFilter}
           options={ROLE_FILTER_OPTIONS}
           onChange={(v) => setRoleFilter(v as AccessRole | 'all')}
-          width={180}
+          height={36}
+          background="var(--bg-2)"
         />
-        {/* Four layers, InvoiceDetail.tsx's primary-button recipe: the real attribute, an
-            inline swap that outranks `.v2-btn:hover`'s `filter: brightness(1.22)` (nothing
-            in design-tokens styles `:disabled`), the visible sibling below, and
-            title/aria-describedby as additions to it. */}
+        <div style={{ flex: 1 }} />
+        {/* Shrinks (ellipsis) so a long address cannot push Invite past the table's right edge. */}
+        {flash && (
+          <span
+            data-testid="members-flash"
+            title={flash.text}
+            style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12.5, color: flash.tone === 'failed' ? 'var(--status-red-text)' : 'var(--status-green-text)' }}
+          >
+            {flash.text}
+          </span>
+        )}
+        {/* The real `disabled` attribute plus the inline recipe: `filter: 'none'` outranks
+            `.v2-btn:hover`'s brightness lift, which nothing in design-tokens guards with `:disabled`. */}
         <button
           type="button"
-          disabled
-          title={MEMBER_UNBACKED.invite}
-          aria-describedby={inviteNoteId}
+          disabled={!inviteReady}
+          onClick={openInvite}
+          title={showAdminOnly ? INVITE_ADMIN_ONLY : undefined}
+          aria-describedby={showAdminOnly ? inviteNoteId : listFailed ? invitesErrorId : undefined}
           data-testid="members-invite"
-          className="v2-btn pf-btn"
-          style={{
-            marginLeft: 'auto',
-            flex: 'none',
-            height: 38,
-            padding: '0 16px',
-            fontSize: 13,
-            background: 'var(--bg-3)',
-            color: 'var(--fg-4)',
-            cursor: 'not-allowed',
-            filter: 'none',
-            gap: 7,
-          }}
+          className="v2-btn v2-btn-primary pf-btn"
+          style={{ flex: 'none', height: 36, gap: 7, ...(inviteReady ? null : { opacity: 0.45, cursor: 'not-allowed', filter: 'none' }) }}
         >
           <span style={{ display: 'inline-flex' }}>{plusGlyph}</span> Invite people
         </button>
       </div>
 
-      <div
-        id={inviteNoteId}
-        data-testid="members-invite-reason"
-        style={{ marginBottom: 16, fontSize: 11.5, lineHeight: 1.45, color: 'var(--fg-3)' }}
-      >
-        {MEMBER_UNBACKED.invite}
-      </div>
+      {showAdminOnly && (
+        <div
+          id={inviteNoteId}
+          data-testid="members-invite-reason"
+          style={{ margin: '0 0 14px', fontSize: 11.5, color: 'var(--fg-3)', textAlign: 'right' }}
+        >
+          {INVITE_ADMIN_ONLY}
+        </div>
+      )}
 
-      {surface === 'loading' && <Loading label="Loading members…" />}
+      {(staleReason || list.status === 'error') && (
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 16 }}>
+          <div
+            id={invitesErrorId}
+            data-testid="members-invites-error"
+            style={{ flex: 1, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12.5, lineHeight: 1.5, color: 'var(--status-red-text)' }}
+          >
+            {staleReason && <div>{staleReason}</div>}
+            {list.status === 'error' && list.error && <div>{list.error.message}</div>}
+          </div>
+          {list.status === 'error' && (
+            <button type="button" onClick={retryInvites} data-testid="members-invites-retry" className="v2-btn pf-btn" style={{ flex: 'none', height: 38, padding: '0 16px', fontSize: 13 }}>
+              Retry
+            </button>
+          )}
+        </div>
+      )}
+
+      {showLoading && <Loading label="Loading members…" />}
 
       {surface === 'error' && (ctx.rolesError ?? ctx.membersError) && (
         <ErrorState error={(ctx.rolesError ?? ctx.membersError)!} onRetry={retryRoster} />
@@ -176,30 +289,10 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
 
       {surface === 'empty' && <EmptyState title={EMPTY_TITLE[mode]} message={EMPTY_MESSAGE} />}
 
-      {surface === 'roster' && (
+      {surface === 'roster' && !listFirstLoad && (
         <>
-          {/* Above the table, and above the two empty surfaces too: it is a statement about
-              the workspace's approval coverage, which a search box cannot change. Inside
-              this arm, though — over an errored roster every role resolves to zero holders
-              and this would assert a coverage failure that is really a fetch failure. */}
-          {unassigned.length > 0 && (
-            <AmberNote testId="members-unassigned" style={{ marginBottom: 16 }}>
-              {unassignedNotice(unassigned.length)}{' '}
-              <span style={{ fontWeight: 600 }}>{unassigned.map((r) => r.title).join(' · ')}</span>
-            </AmberNote>
-          )}
-
           {justYou ? (
             <EmptyState title={EMPTY_TITLE[mode]} message={EMPTY_MESSAGE} />
-          ) : shown.length === 0 ? (
-            // Inside the table's chrome, not a card — RulesView's empty-row-slot idiom
-            // (RulesView.tsx:167-170 / :240-243). No borderBottom: this is the container's
-            // last child, which already draws that edge.
-            <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', overflow: 'hidden' }}>
-              <div data-testid="members-no-match" style={{ padding: '20px 16px', fontSize: 13, lineHeight: 1.6, color: 'var(--fg-3)' }}>
-                No members match this search.
-              </div>
-            </div>
           ) : (
             <MembersTable
               ctx={ctx}
@@ -209,6 +302,9 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
               onOpen={setDrawerId}
               onStatus={changeStatus}
               statusError={statusError}
+              invites={pendingInvites}
+              onResend={resend}
+              resending={resending}
             />
           )}
         </>
@@ -225,6 +321,8 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
       {/* Firm only, and gated here beside this tab's other two mode forks: in-house
           renders no node at all, not a hidden one. */}
       {mode === 'firm' && <ClientUsersCard />}
+
+      {inviting && <InviteModal existing={roster} onSend={sendInvites} onClose={closeInvite} />}
 
       {/* Rendered conditionally rather than mounted-and-hidden, the ClientsView/EntityFormModal
           form — which is also what lets the drawer call `useDismiss(true, …)` and register no

@@ -44,6 +44,35 @@ describe('AuditSkeleton', () => {
     expect(src).not.toContain('minmax(190px')
   })
 
+  it('auditSkeleton_drawsTheV2PulseRowsWithAnActorCircle', () => {
+    render(<AuditSkeleton />)
+    const rows = screen.getAllByTestId('audit-skeleton-row')
+    expect(rows.length).toBeGreaterThan(0)
+    const sv = (el: Element, prop: string) => (el.getAttribute('style') ?? '').match(new RegExp(`(?:^|;\\s*)${prop}:\\s*([^;]+)`))?.[1].trim() ?? null
+    for (const r of rows) {
+      expect(sv(r, 'padding')).toBe('14px 18px')
+      const bars = Array.from(r.querySelectorAll('span')).filter((el) => sv(el, 'animation') != null)
+      // 5 cells; the first carries a circle plus a bar, so 6 animated shapes.
+      expect(bars.length).toBe(6)
+      const circles = bars.filter((b) => sv(b, 'border-radius') === '50%')
+      expect(circles).toHaveLength(1)
+      expect(sv(circles[0], 'width')).toBe('26px')
+      expect(sv(circles[0], 'height')).toBe('26px')
+      // the circle sits before the first bar, inside the first cell
+      expect(r.firstElementChild!.firstElementChild).toBe(circles[0])
+      for (const b of bars) {
+        expect(sv(b, 'background')).toBe('var(--bg-3)')
+        expect(sv(b, 'animation')).toBe('pulse 1.4s linear infinite')
+        expect(sv(b, 'background-image')).toBeNull()
+        expect(sv(b, 'border-radius')).not.toBe('99px')
+      }
+      expect(bars.filter((b) => sv(b, 'border-radius') === '4px')).toHaveLength(5)
+      // Company and When bars run the full cell, as the prototype draws them.
+      const widths = bars.filter((b) => sv(b, 'height') === '10px').map((b) => sv(b, 'width'))
+      expect(widths.slice(2, 4)).toEqual(['100%', '100%'])
+    }
+  })
+
   it('auditSkeleton_isNotASpinner', async () => {
     // A fetch that never settles holds the screen in its loading rung.
     vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))

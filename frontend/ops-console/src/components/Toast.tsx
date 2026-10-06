@@ -9,6 +9,7 @@ export function Toast({ toast }: Props) {
   const isRed = toast.tone === 'red'
   return (
     <div
+      className="asc-dark"
       style={{
         position: 'fixed',
         bottom: 24,
@@ -18,18 +19,18 @@ export function Toast({ toast }: Props) {
         display: 'flex',
         alignItems: 'center',
         gap: 11,
-        background: 'var(--slate-900)',
-        color: 'var(--text-on-dark)',
+        background: 'var(--surface)',
+        color: 'var(--surface-foreground)',
         borderRadius: 'var(--radius-md)',
         padding: '12px 18px',
-        boxShadow: '0 16px 40px -12px oklch(20% .02 210 / 0.5)',
+        boxShadow: 'var(--shadow-card)',
         animation: 'opsToast 200ms ease-out',
       }}
     >
       <span style={{ flex: 'none', color: isRed ? 'var(--status-red-text)' : 'var(--teal-300)', display: 'inline-flex' }}>{isRed ? ALERT_ICON : CHECK_ICON}</span>
       <span style={{ fontSize: 13.5, fontWeight: 500 }}>{toast.msg}</span>
       {toast.tag && (
-        <span className="mono" style={{ fontSize: 10, color: 'var(--slate-400)', letterSpacing: '0.05em', borderLeft: '1px solid var(--slate-700)', paddingLeft: 11, marginLeft: 4 }}>
+        <span className="mono" style={{ fontSize: 10, color: 'var(--surface-body)', letterSpacing: '0.05em', borderLeft: '1px solid var(--surface-panel-border)', paddingLeft: 11, marginLeft: 4 }}>
           {toast.tag}
         </span>
       )}

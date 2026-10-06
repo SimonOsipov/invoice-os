@@ -35,9 +35,7 @@ import { seedStaffSession, test } from '../staffSession'
 // DELIBERATELY NOT ASSERTED, because a fixture assertion earns its place only if a
 // plausible CODE change can break it: the sidebar operator name (hardcoded in Sidebar.tsx,
 // not read from the session, so it proves nothing about who signed in), the APP
-// backpressure meter (literals), and the health cards' numeric values — their three `.mono`
-// spans (status / value / unit) have no stable discriminator, an nth() index is exactly the
-// brittle locator this repo avoids, and the status WORD asserted below is derived from the
+// backpressure meter (literals), and the health cards' numeric values — the status WORD asserted below is derived from the
 // same live count, so nothing is lost.
 
 // ASSERT THE <h1>, NOT THE CRUMB. TopBar renders CRUMB_BY_SCREEN inside <main>
@@ -86,7 +84,7 @@ const deadLetterBadge = (page: Page) => sidebar(page).getByRole('button', { name
 // Two more consumers of the same count: the Submissions sub-stat tile
 // (Submissions.tsx:33) and the System health card (data.tsx healthCards()).
 const deadLetterTile = (page: Page) =>
-  page.getByRole('main').locator('.ops-sub-stats > div').filter({ hasText: 'Dead-letter' }).locator('.mono')
+  page.getByRole('main').locator('.ops-sub-stats > div').filter({ hasText: 'Dead-letter' }).locator('.money')
 const deadLetterCard = (page: Page) => page.getByRole('main').locator('.ops-health-grid > div').filter({ hasText: 'Dead-letter' })
 
 // A chip renders `LABEL` immediately followed by its count with no separator ("ACCEPTED2").

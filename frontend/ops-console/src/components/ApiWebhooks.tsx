@@ -53,16 +53,16 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
 
   return (
     <div className="ops-screen-pad">
-      <div style={{ marginBottom: 20 }}>
-        <div className="eyebrow" style={{ marginBottom: 8 }}>
+      <div style={{ marginBottom: 22 }}>
+        <div className="eyebrow" style={{ marginBottom: 10 }}>
           04 — INTEGRATION
         </div>
-        <h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-0.03em', margin: 0 }}>API &amp; webhooks</h1>
+        <h1 style={{ fontSize: 28, letterSpacing: '-0.04em', margin: 0 }}>API &amp; webhooks</h1>
       </div>
 
       {/* API keys (proto:362-385) */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-        <span style={{ fontSize: 15, fontWeight: 600 }}>API keys</span>
+        <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--ink)' }}>API keys</span>
         <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
           SECRET KEYS · SERVER-SIDE ONLY
         </span>
@@ -81,25 +81,25 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
                     background: k.tagBg,
                     border: '1px solid ' + k.tagBorder,
                     borderRadius: 'var(--radius-sm)',
-                    padding: '2px 8px',
+                    padding: '2px 7px',
                   }}
                 >
-                  <span style={{ width: 6, height: 6, borderRadius: 99, background: k.tagText }} />
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: k.tagText }} />
                   <span className="mono" style={{ fontSize: 9.5, fontWeight: 700, color: k.tagText, letterSpacing: '0.05em' }}>
                     {k.tag}
                   </span>
                 </span>
-                <span style={{ fontSize: 13, fontWeight: 600 }}>{k.name}</span>
+                <span style={{ fontSize: 13.5, fontWeight: 600 }}>{k.name}</span>
               </div>
 
               <div
                 style={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 8,
+                  gap: 10,
                   background: 'var(--bg-1)',
                   border: '1px solid var(--line-1)',
-                  borderRadius: 'var(--radius-input)',
+                  borderRadius: 'var(--radius-md)',
                   padding: '9px 12px',
                   marginBottom: 12,
                 }}
@@ -135,23 +135,8 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
                 <button
                   type="button"
                   onClick={() => onRotate(k.tag)}
-                  className="ops-btn"
-                  style={{
-                    flex: 'none',
-                    border: '1px solid var(--line-2)',
-                    background: 'var(--bg-2)',
-                    cursor: 'pointer',
-                    height: 28,
-                    padding: '0 10px',
-                    borderRadius: 'var(--radius-sm)',
-                    fontFamily: 'var(--font-sans)',
-                    fontSize: 11.5,
-                    fontWeight: 600,
-                    color: 'var(--fg-1)',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 6,
-                  }}
+                  className="ops-btn v2-btn v2-btn-ghost"
+                  style={{ flex: 'none', height: 30, padding: '0 11px', fontSize: 12, gap: 6 }}
                 >
                   {REDRIVE_ICON} Rotate
                 </button>
@@ -164,8 +149,8 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
       {/* Webhook endpoints (proto:387-407) — a flex card stack, deliberately carrying no
           grid classname. */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-        <span style={{ fontSize: 15, fontWeight: 600 }}>Webhook endpoints</span>
-        <button type="button" onClick={onAddWebhook} className="ops-btn v2-btn v2-btn-ghost" style={{ height: 32 }}>
+        <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--ink)' }}>Webhook endpoints</span>
+        <button type="button" onClick={onAddWebhook} className="ops-btn v2-btn v2-btn-ghost" style={{ height: 32, padding: '0 12px', fontSize: 13 }}>
           {PLUS_ICON} Add endpoint
         </button>
       </div>
@@ -206,11 +191,11 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
                   gap: 5,
                   background: 'var(--status-green-bg)',
                   border: '1px solid var(--status-green-border)',
-                  borderRadius: 999,
-                  padding: '2px 9px',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '2px 7px',
                 }}
               >
-                <span style={{ width: 6, height: 6, borderRadius: 99, background: 'var(--status-green-text)' }} />
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--status-green-text)' }} />
                 <span className="mono" style={{ fontSize: 9, fontWeight: 700, color: 'var(--status-green-text)' }}>
                   ACTIVE
                 </span>
@@ -249,7 +234,7 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
               justifyContent: 'space-between',
             }}
           >
-            <span style={{ fontSize: 13.5, fontWeight: 600 }}>Recent deliveries</span>
+            <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--ink)' }}>Recent deliveries</span>
             <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>
               LAST 24H
             </span>
@@ -263,7 +248,7 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
                 display: 'grid',
                 gridTemplateColumns: DELIVERY_GRID,
                 padding: '8px 16px',
-                background: 'var(--bg-1)',
+                background: 'var(--bg-3)',
                 borderBottom: '1px solid var(--line-1)',
                 minWidth: TABLE_MIN_WIDTH,
               }}
@@ -313,15 +298,15 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
               Rate limit · {envWord}
             </div>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 10 }}>
-              <span className="mono" style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em' }}>
+              <span className="money" style={{ fontSize: 26, fontWeight: 700, color: 'var(--ink)' }}>
                 {rate.current}
               </span>
               <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>
                 / {rate.limit} req·s
               </span>
             </div>
-            <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
-              <div style={{ width: rate.width, height: '100%', background: rate.color, borderRadius: 'var(--radius-sm)' }} />
+            <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 2, overflow: 'hidden' }}>
+              <div style={{ width: rate.width, height: '100%', background: rate.color }} />
             </div>
             <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', marginTop: 8 }}>
               {rate.detail}
@@ -334,12 +319,9 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
               style={{
                 padding: '12px 16px',
                 borderBottom: '1px solid var(--line-1)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
               }}
             >
-              <span style={{ fontSize: 13.5, fontWeight: 600 }}>Recent API requests</span>
+              <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--ink)' }}>Recent API requests</span>
             </div>
             <div style={{ overflowX: 'auto' }}>
               {REQ_LOG.map((r) => (

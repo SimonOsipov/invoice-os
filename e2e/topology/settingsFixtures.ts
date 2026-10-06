@@ -38,8 +38,7 @@ export interface SeededMember {
 // inserted later would sort after these however it was named. The SET and its size are the
 // claim.
 //
-// The seeded list cannot grow: no endpoint mints a membership (there is no invite), and PATCH
-// writes `status` only. The live roster is this list plus the tenant's e2e member
+// The seeded list cannot grow under a spec: PATCH writes `status` only. The live roster is this list plus the tenant's e2e member
 // (realAccounts.ts, granted through /auth/mock/member), so a spec compares the seeded subset
 // (`isSeededMember`) exactly and counts one extra row. api/isolation.spec.ts pins the user_id set.
 export const SEED_FIRM_MEMBERS: readonly SeededMember[] = [
@@ -90,11 +89,12 @@ export const MEMBERS_TABLE_HEADS: readonly string[] = ['Person', 'Access role', 
  * sibling is the only layer a screenshot, a keyboard user and an assertion can all reach.
  */
 export const UNBACKED = {
-  invite: 'There is no invite endpoint yet — nothing mints a token, tracks an expiry, or sends the email.',
   remove: 'Deleting a membership locks that person out on their next request, and nothing undoes it. That decision has not been taken.',
   role: "The membership endpoint writes status only. Changing someone's access role has no server call behind it.",
   department: 'A membership stores a name, an email, an access role and a status. There is no department column.',
   clientAccess: 'Client access is not stored per person — everyone in this workspace sees the same clients.',
+  inviteLink: 'The invite link exists only in the email. The server keeps only a hash of it.',
+  revokeInvite: 'There is no way to revoke an invite yet. An unused invite expires 7 days after it was sent.',
 } as const
 
 /**

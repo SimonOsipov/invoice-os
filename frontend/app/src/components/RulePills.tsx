@@ -13,7 +13,7 @@ export const SEVERITY_TONE: Record<RuleSeverity, { bg: string; border: string; t
 export function SeverityPill({ severity }: { severity: RuleSeverity }) {
   const tone = SEVERITY_TONE[severity]
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 999, padding: '2px 8px' }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 'var(--radius-sm)', padding: '2px 8px' }}>
       <span className="mono" style={{ fontSize: 9, fontWeight: 700, color: tone.text, letterSpacing: '0.04em' }}>
         {tone.label}
       </span>
@@ -25,7 +25,7 @@ export function TypePill({ type }: { type: string }) {
   return (
     <span
       className="mono"
-      style={{ fontSize: 10.5, color: 'var(--fg-2)', background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-sm)', padding: '2px 6px', justifySelf: 'start' }}
+      style={{ fontSize: 10.5, color: 'var(--fg-2)', background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '2px 6px', justifySelf: 'start' }}
     >
       {type}
     </span>

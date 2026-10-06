@@ -20,8 +20,7 @@ import type { PlatformCtx } from '../types'
 const INTRO =
   'Each policy decides who signs off before an invoice is stamped and transmitted. Steps run top to bottom; conditions split the flow. Publishing a policy opens an approval on every matching invoice.'
 
-// Two nodes, not one: `EmptyState` takes {title, message}, so the shipped sentence splits
-// at its em dash. Module scope, the RolesView.tsx:34-37 shape.
+// Two nodes, not one: the shipped sentence splits at its em dash.
 const EMPTY_TITLE = 'No approval policies yet'
 const EMPTY_MESSAGE = 'Every invoice transmits as soon as it validates. Create one to require sign-off first.'
 
@@ -77,7 +76,7 @@ function PolicyList({ ctx }: { ctx: PlatformCtx }) {
           <div className="eyebrow" style={{ marginBottom: 10 }}>
             APPROVAL WORKFLOW
           </div>
-          <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Approval policies</h1>
+          <h1 style={{ fontSize: 26, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Approval policies</h1>
           <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>{subtitle}</p>
         </div>
         {/* The message rides WITH the button rather than under the header row: that row
@@ -90,15 +89,15 @@ function PolicyList({ ctx }: { ctx: PlatformCtx }) {
               ctx.createPolicy().catch((err: unknown) => setCreateError(toApiError(err).message))
             }}
             className="v2-btn pf-btn"
-            style={{ height: 36, padding: '0 16px', fontSize: 13, background: 'var(--action)', color: 'var(--text-on-dark)', gap: 7 }}
+            style={{ height: 36, padding: '0 16px', fontSize: 13, background: 'var(--action)', color: 'var(--primary-foreground)', gap: 7 }}
           >
             <span style={{ display: 'inline-flex' }}>{wfPlusGlyph}</span> New policy
           </button>
-          {createError && <PolicyError testId="policy-create-error">{createError}</PolicyError>}
+          {createError && <PolicyError testId="policy-create-error" maxWidth={320}>{createError}</PolicyError>}
         </div>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 20, marginBottom: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 20, marginBottom: 14 }}>
         <p style={{ fontSize: 13.5, color: 'var(--fg-2)', maxWidth: 620, lineHeight: 1.55, margin: 0 }}>{INTRO}</p>
         {/* Roster arm only: `0 POLICIES` beside a spinner or beside ErrorState is the same
             "an errored fetch reads as an empty workspace" claim the ladder exists to kill. */}
@@ -115,7 +114,7 @@ function PolicyList({ ctx }: { ctx: PlatformCtx }) {
 
       {surface === 'empty' && (
         <div data-testid="policies-empty">
-          <EmptyState title={EMPTY_TITLE} message={EMPTY_MESSAGE} />
+          <EmptyState messageMaxWidth={360} title={EMPTY_TITLE} message={EMPTY_MESSAGE} />
         </div>
       )}
 
@@ -145,13 +144,12 @@ function PolicyList({ ctx }: { ctx: PlatformCtx }) {
 }
 
 // The gateway's own sentence for a write it refused, verbatim. Inline rather than shared:
-// MembersTable.tsx:274-289, MemberDrawer.tsx:365-379 and RoleModal.tsx:298-305 each carry
-// their own copy, so a local one is the convention, not a fourth divergence.
-function PolicyError({ testId, children }: { testId: string; children: ReactNode }) {
+// MembersTable, MemberDrawer and RoleModal each carry their own copy.
+function PolicyError({ testId, maxWidth, children }: { testId: string; maxWidth?: number; children: ReactNode }) {
   return (
     <div
       data-testid={testId}
-      style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12.5, lineHeight: 1.5, color: 'var(--status-red-text)' }}
+      style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, lineHeight: 1.5, color: 'var(--status-red-text)', maxWidth }}
     >
       {children}
     </div>
@@ -161,14 +159,13 @@ function PolicyError({ testId, children }: { testId: string; children: ReactNode
 function PolicyRow({ policy, onEdit, onDelete }: { policy: Policy; onEdit: () => void; onDelete: () => void }) {
   return (
     // pf-ROW, not pf-btn: the prototype markup says pf-btn, but in this repo that
-    // class forces `border-radius: var(--radius-pill) !important`, which would round
-    // a 72px-tall row into a stadium. pf-row is the repo's clickable-row hover.
+    // class forces `border-radius` with `!important`. pf-row is the repo's clickable-row hover.
     <div
       className="pf-row"
       onClick={onEdit}
-      style={{ display: 'flex', alignItems: 'center', gap: 15, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 14, padding: '15px 18px', cursor: 'pointer' }}
+      style={{ display: 'flex', alignItems: 'center', gap: 15, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '15px 18px', cursor: 'pointer' }}
     >
-      <span style={{ flex: 'none', width: 40, height: 40, borderRadius: 9, background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center' }}>{wfBranchGlyph}</span>
+      <span style={{ flex: 'none', width: 40, height: 40, borderRadius: 'var(--radius-md)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center' }}>{wfBranchGlyph}</span>
 
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
@@ -180,7 +177,7 @@ function PolicyRow({ policy, onEdit, onDelete }: { policy: Policy; onEdit: () =>
         </div>
       </div>
 
-      <div className="mono" style={{ flex: 'none', fontSize: 10, color: 'var(--fg-4)' }}>{policyStanding(policy)}</div>
+      <div className="mono" style={{ flex: 'none', fontSize: 10.5, color: 'var(--fg-3)' }}>{policyStanding(policy)}</div>
 
       <button
         type="button"
@@ -189,8 +186,8 @@ function PolicyRow({ policy, onEdit, onDelete }: { policy: Policy; onEdit: () =>
           e.stopPropagation()
           onEdit()
         }}
-        className="pf-btn"
-        style={{ flex: 'none', height: 34, padding: '0 15px', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-1)', fontSize: 13, fontWeight: 500, fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
+        className="v2-btn v2-btn-ghost pf-btn"
+        style={{ flex: 'none', height: 34, padding: '0 15px', fontSize: 13 }}
       >
         Edit
       </button>
@@ -206,8 +203,8 @@ function PolicyRow({ policy, onEdit, onDelete }: { policy: Policy; onEdit: () =>
           e.stopPropagation()
           onDelete()
         }}
-        className="pf-btn"
-        style={{ flex: 'none', display: 'grid', placeItems: 'center', width: 32, height: 34, border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-4)', cursor: 'pointer' }}
+        className="v2-btn v2-btn-ghost pf-btn"
+        style={{ flex: 'none', width: 34, height: 34, padding: 0, justifyContent: 'center', color: 'var(--fg-4)' }}
       >
         {wfCrossGlyph}
       </button>

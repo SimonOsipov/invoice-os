@@ -45,13 +45,13 @@ export function Tenants({ query, tenantId, onQueryChange, onSelect, onViewJobs, 
         <div className="eyebrow" style={{ marginBottom: 8 }}>
           SUPPORT LOOKUP
         </div>
-        <h1 style={{ fontSize: 24, fontWeight: 500, letterSpacing: '-0.03em', margin: 0 }}>Tenants &amp; entities</h1>
+        <h1 style={{ fontSize: 24, margin: 0 }}>Tenants &amp; entities</h1>
       </div>
 
       <div className="ops-tenants-grid" style={{ display: 'grid', gridTemplateColumns: '320px minmax(0,1fr)', gap: 18 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div className="ops-input" style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-            <span style={{ color: 'var(--fg-3)' }}>{SEARCH_ICON}</span>
+          <div className="ops-input ops-field" style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+            <span style={{ display: 'inline-flex', color: 'var(--fg-3)' }}>{SEARCH_ICON}</span>
             <input
               style={{ border: 0, outline: 'none', background: 'transparent', fontFamily: 'var(--font-sans)', fontSize: 13, color: 'var(--fg-1)', height: 30, flex: 1, padding: 0 }}
               placeholder="TIN or tenant name…"
@@ -68,9 +68,9 @@ export function Tenants({ query, tenantId, onQueryChange, onSelect, onViewJobs, 
                 onClick={() => onSelect(t.id)}
                 className="ops-nav"
                 aria-pressed={t.id === selected.id}
-                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 11, border: 0, borderBottom: '1px solid var(--line-1)', cursor: 'pointer', textAlign: 'left', padding: '12px 14px', background: t.id === selected.id ? 'var(--bg-3)' : 'var(--bg-2)' }}
+                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 11, border: 0, borderBottom: '1px solid var(--line-1)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-sans)', color: 'var(--fg-1)', padding: '12px 14px', background: t.id === selected.id ? 'var(--bg-3)' : 'var(--bg-2)' }}
               >
-                <span style={{ flex: 'none', width: 30, height: 30, borderRadius: 'var(--radius-input)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700 }}>
+                <span style={{ flex: 'none', width: 30, height: 30, borderRadius: 'var(--radius-md)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700 }}>
                   {t.initials}
                 </span>
                 <span style={{ flex: 1, minWidth: 0 }}>
@@ -79,11 +79,11 @@ export function Tenants({ query, tenantId, onQueryChange, onSelect, onViewJobs, 
                     {t.tin}
                   </span>
                 </span>
-                <span style={{ flex: 'none', width: 7, height: 7, borderRadius: 99, background: STATUS_DOT[t.status] }} />
+                <span style={{ flex: 'none', width: 7, height: 7, borderRadius: '50%', background: STATUS_DOT[t.status] }} />
               </button>
             ))}
             {rows.length === 0 && (
-              <div className="mono" style={{ padding: '24px 14px', textAlign: 'center', fontSize: 12, color: 'var(--fg-4)' }}>
+              <div className="mono" style={{ padding: '24px 14px', textAlign: 'center', fontSize: 12, color: 'var(--fg-3)' }}>
                 No tenant matches.
               </div>
             )}
@@ -97,7 +97,7 @@ export function Tenants({ query, tenantId, onQueryChange, onSelect, onViewJobs, 
               {selected.initials}
             </span>
             <div style={{ flex: 1, minWidth: 180 }}>
-              <h2 style={{ fontSize: 19, fontWeight: 500, letterSpacing: '-0.02em', margin: '0 0 3px' }}>{selected.name}</h2>
+              <h2 style={{ fontSize: 19, margin: '0 0 3px' }}>{selected.name}</h2>
               <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
                 TIN {selected.tin} · {selected.entityCount}
               </div>
@@ -106,16 +106,16 @@ export function Tenants({ query, tenantId, onQueryChange, onSelect, onViewJobs, 
               <button
                 type="button"
                 onClick={onViewJobs}
-                className="ops-btn"
-                style={{ border: '1px solid var(--line-2)', background: 'var(--bg-2)', cursor: 'pointer', height: 32, padding: '0 12px', borderRadius: 'var(--radius-input)', fontFamily: 'var(--font-sans)', fontSize: 12, fontWeight: 600, color: 'var(--fg-1)' }}
+                className="ops-btn v2-btn v2-btn-ghost"
+                style={{ height: 32, padding: '0 12px', fontSize: 12 }}
               >
                 View jobs
               </button>
               <button
                 type="button"
                 onClick={() => onViewAs(selected.name)}
-                className="ops-btn"
-                style={{ border: '1px solid var(--action)', background: 'var(--action)', cursor: 'pointer', height: 32, padding: '0 12px', borderRadius: 'var(--radius-input)', fontFamily: 'var(--font-sans)', fontSize: 12, fontWeight: 600, color: 'var(--text-on-dark)' }}
+                className="ops-btn v2-btn v2-btn-primary"
+                style={{ height: 32, padding: '0 12px', fontSize: 12 }}
               >
                 View-as (read-only)
               </button>
@@ -125,7 +125,7 @@ export function Tenants({ query, tenantId, onQueryChange, onSelect, onViewJobs, 
           <div className="ops-tenant-kpis" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', borderBottom: '1px solid var(--line-1)' }}>
             {selected.kpis.map((k) => (
               <div key={k.label} style={{ padding: '16px 18px', borderRight: '1px solid var(--line-1)' }}>
-                <div className="mono" style={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.02em', color: kpiColor(k) }}>
+                <div className="money" style={{ fontSize: 20, fontWeight: 700, color: kpiColor(k) }}>
                   {k.value}
                 </div>
                 <div className="label" style={{ marginTop: 3 }}>
@@ -145,7 +145,7 @@ export function Tenants({ query, tenantId, onQueryChange, onSelect, onViewJobs, 
                   const tone = roleTone(m)
                   return (
                     <div key={m.name} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <span style={{ flex: 'none', width: 26, height: 26, borderRadius: 99, background: 'var(--slate-800)', color: 'var(--text-on-dark)', display: 'grid', placeItems: 'center', fontSize: 9, fontWeight: 700 }}>
+                      <span style={{ flex: 'none', width: 26, height: 26, borderRadius: '50%', background: 'var(--slate-800)', color: 'var(--text-on-dark)', display: 'grid', placeItems: 'center', fontSize: 9, fontWeight: 700 }}>
                         {m.initials}
                       </span>
                       <span style={{ flex: 1, fontSize: 13, fontWeight: 500 }}>{m.name}</span>

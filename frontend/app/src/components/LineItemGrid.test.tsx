@@ -447,10 +447,12 @@ describe('T14 the selected cell', () => {
     const selected = cellAt(2, 'quantity')
     expect(selected.style.background).toBe('var(--accent-10)')
     expect(selected.style.boxShadow).toBe('inset 2px 0 0 var(--accent)')
+    expect(selected.style.transition, 'selected cell transition').toBe('background 110ms ease-out')
 
     const other = cellAt(2, 'description')
     expect(other.style.background, 'an unselected cell wears the selected treatment').not.toBe('var(--accent-10)')
     expect(other.style.boxShadow, 'an unselected cell wears the selected rail').not.toBe('inset 2px 0 0 var(--accent)')
+    expect(other.style.transition, 'unselected cell transition').toBe('background 110ms ease-out')
   })
 })
 
@@ -915,5 +917,95 @@ describe('AC-9 a chip click is an ordinary cell edit', () => {
     expect(sink.rows[0].cells.quantity.reason, 'the chip click cleared the reason as a side effect').toBe(
       'ambiguous',
     )
+  })
+})
+
+// ==========================================================================================
+// RESKIN2-04-06 (D-21, D-22). The grid's resolved look, read off the inline declarations.
+// jsdom reads a `var()` border-bottom only through getPropertyValue('border-bottom'): the
+// camelCase `style.borderBottom` reads back '' for it.
+// ==========================================================================================
+
+const THREE_LINES = [
+  mkRow(1),
+  mkRow(2, { quantity: '3', unit_price: '50.00', line_total: '150.00' }),
+  mkRow(3, { quantity: '1', unit_price: '10.00', line_total: '10.00' }),
+]
+
+function borderBottomOf(el: HTMLElement): string {
+  return el.style.getPropertyValue('border-bottom')
+}
+
+describe('RESKIN2-04-06 the grid look', () => {
+  it('the grid wears its chrome', () => {
+    render(itemGrid({ rows: THREE_LINES, wireRows: THREE_LINES }))
+
+    expect(rowsOf().length, 'the floor: three lines rendered').toBe(3)
+    const scroll = scrollEl()
+    expect(scroll.style.border).toBe('1px solid var(--line-1)')
+    expect(scroll.style.borderRadius).toBe('var(--radius-md)')
+    expect(scroll.style.background).toBe('var(--bg-2)')
+
+    const headRow = scroll.querySelector<HTMLElement>('thead tr')
+    expect(headRow, 'the header row rendered').toBeTruthy()
+    expect(headRow!.style.background).toBe('var(--bg-0)')
+    expect(borderBottomOf(headRow!)).toBe('1px solid var(--line-1)')
+
+    const heads = Array.from(headRow!.querySelectorAll<HTMLElement>('th'))
+    expect(heads.length, 'the floor: the header cells rendered').toBeGreaterThan(0)
+    for (const th of heads) expect(th.style.padding).toBe('8px 6px 6px')
+
+    for (const n of [1, 2, 3]) {
+      expect(borderBottomOf(rowAt(n)), `line-item-row-${n}`).toBe('1px solid var(--line-1)')
+    }
+  })
+
+  it('selects and inputs follow the prototype', () => {
+    render(itemGrid({ rows: THREE_LINES, wireRows: THREE_LINES }))
+
+    expect(rowsOf().length, 'the floor: three lines rendered').toBe(3)
+    for (const role of LINE_ROLES) {
+      const select = roleSelect(role)
+      expect(select.style.height, `${role} select height`).toBe('32px')
+      expect(select.style.padding, `${role} select padding`).toBe('0px 8px')
+      expect(select.style.cursor, `${role} select cursor`).toBe('pointer')
+    }
+
+    for (const n of [1, 2, 3]) {
+      for (const role of LINE_ROLES) {
+        expect(inputAt(n, role).style.fontSize, `line ${n} ${role} input font`).toBe('12.5px')
+      }
+      for (const role of ['quantity', 'unit_price', 'line_total'] as const) {
+        expect(inputAt(n, role).style.textAlign, `line ${n} ${role} input alignment`).toBe('right')
+      }
+      expect(inputAt(n, 'description').style.textAlign, `line ${n} description input alignment`).not.toBe('right')
+    }
+  })
+
+  it('a flagged and an ambiguous row take the 4px pill and 6px chips', () => {
+    const row = withAmbiguous(mkRow(1, { quantity: '9' }), 'description', [{ value: 'Gadget', region: null }])
+    render(itemGrid({ rows: [row], wireRows: [row] }))
+
+    const flag = flagAt(1)
+    expect(flag, 'the floor: the row does not add up, so it is flagged').toBeTruthy()
+    expect(flag!.style.borderRadius).toBe('var(--radius-sm)')
+    const ambiguous = ambiguousFlagAt(1)
+    expect(ambiguous, 'the floor: the ambiguous cell raised its pill').toBeTruthy()
+    expect(ambiguous!.style.borderRadius).toBe('var(--radius-sm)')
+
+    const chips = chipsAt(1, 'description')
+    expect(chips.length, 'the floor: the ambiguous cell rendered its chips').toBe(2)
+    for (const chip of chips) expect(chip.style.borderRadius, chip.dataset.testid).toBe('var(--radius-md)')
+    const borders = chips.map((c) => c.style.border)
+    expect(borders, 'no chip is the picked one').toContain('1px solid var(--action)')
+    expect(borders, 'every chip is the picked one').toContain('1px solid var(--line-2)')
+  })
+
+  it('the sum sentence has no margin', () => {
+    render(itemGrid({ rows: THREE_LINES, wireRows: THREE_LINES, subtotal: '400.00' }))
+
+    const sum = screen.queryByTestId('line-item-sum')
+    expect(sum, 'the floor: the lines disagree with the subtotal, so the sentence renders').toBeTruthy()
+    expect(sum!.style.margin).toBe('0px')
   })
 })

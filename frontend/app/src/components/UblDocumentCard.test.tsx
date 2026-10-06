@@ -251,7 +251,7 @@ describe('UblDocumentCard', () => {
 
   it('T02-9: a refused document with no reason prints nothing extra', () => {
     renderCard({ canView: false, blockedReason: null })
-    expect(body().textContent, 'floor: identity row').toBe(FILENAME + META)
+    expect(body().textContent, 'floor: name and meta').toBe(FILENAME + META)
     expect(screen.queryAllByTestId('ubl-card-blocked')).toHaveLength(0)
     expect(outer().querySelectorAll('button')).toHaveLength(0)
   })
@@ -265,7 +265,7 @@ describe('UblDocumentCard', () => {
 
   it('T02-11: while editing the card keeps its identity and offers no action', () => {
     renderCard({ editing: true, canView: true })
-    expect(screen.getByTestId('ubl-card-filename').textContent, 'floor: identity row').toBe(FILENAME)
+    expect(screen.getByTestId('ubl-card-filename').textContent, 'floor: name').toBe(FILENAME)
     expect(outer().querySelectorAll('button')).toHaveLength(0)
     expect(screen.queryAllByTestId('ubl-card-blocked')).toHaveLength(0)
     cleanup()
@@ -301,10 +301,8 @@ describe('UblDocumentCard', () => {
     expect(mock).toHaveBeenCalledTimes(1)
   })
 
-  it('T02-13: the identity row, refusal block, disabled Download and error copy the Source card', async () => {
+  it('T02-13: the refusal block, disabled Download and error copy the Source card', async () => {
     const withDoc = render(<SourceDocumentCard meta={sourceMeta()} onOpen={vi.fn()} extraction={{ jobId: null, loading: false, failed: true }} onOpenExtraction={vi.fn()} />)
-    const srcBody = within(withDoc.container).getByTestId('source-document-card')
-    const srcRow = srcBody.firstElementChild as HTMLElement
     const srcDisabled = within(withDoc.container).getByTestId('open-extraction-review') as HTMLButtonElement
     const srcReason = srcDisabled.nextElementSibling as HTMLElement
     expect(srcDisabled.disabled, 'floor: the Source control is disabled').toBe(true)
@@ -327,20 +325,7 @@ describe('UblDocumentCard', () => {
     const mock = vi.fn(() => new Promise(() => {}))
     vi.stubGlobal('fetch', mock)
     renderCard()
-    const row = body().firstElementChild as HTMLElement
-    expect(row.getAttribute('style')).toBe(srcRow.getAttribute('style'))
-    const tile = row.firstElementChild as HTMLElement
-    const srcTile = srcRow.firstElementChild as HTMLElement
-    for (const prop of ['flex', 'width', 'height', 'border-radius', 'display', 'place-items']) {
-      expect(tile.style.getPropertyValue(prop), prop).toBe(srcTile.style.getPropertyValue(prop))
-    }
-    expect(tile.style.width).toBe('38px')
-    expect(tile.style.background).toBe('var(--bg-3)')
-    expect(tile.style.color).toBe('var(--action)')
-    expect(tile.querySelector('svg'), 'the tile holds the document glyph').not.toBeNull()
-    expect(screen.getByTestId('ubl-card-filename').getAttribute('style')).toBe((srcRow.children[1].firstElementChild as HTMLElement).getAttribute('style'))
     expect(screen.getByTestId('ubl-card-filename').style.wordBreak).toBe('break-all')
-    expect(screen.getByTestId('ubl-card-meta').getAttribute('style')).toBe(within(withDoc.container).getByTestId('source-document-card-meta').getAttribute('style'))
 
     const btn = screen.getByTestId('ubl-card-download') as HTMLButtonElement
     const idle = btn.getAttribute('style')
@@ -412,7 +397,7 @@ describe('UblDocumentCard', () => {
 
   it('T02-16: editing hides the actions even when the wire also sends a reason', () => {
     renderCard({ editing: true, canView: true, blockedReason: REASON })
-    expect(screen.getByTestId('ubl-card-filename').textContent, 'floor: identity row').toBe(FILENAME)
+    expect(screen.getByTestId('ubl-card-filename').textContent, 'floor: name').toBe(FILENAME)
     expect(outer().querySelectorAll('button')).toHaveLength(0)
     expect(screen.queryAllByTestId('ubl-card-blocked')).toHaveLength(0)
   })
@@ -421,5 +406,53 @@ describe('UblDocumentCard', () => {
     renderCard()
     expect(screen.getByRole('button', { name: 'View UBL/XML' }).getAttribute('data-testid')).toBe('ubl-card-view')
     expect(screen.getByRole('button', { name: 'Download .xml' }).getAttribute('data-testid')).toBe('ubl-card-download')
+  })
+
+  // Table B. Soft assertions: every new value shows red on its own line.
+  it('READ ONLY is 9/700/0.09em on --fg-3', () => {
+    const source = render(<SourceDocumentCard meta={sourceMeta()} onOpen={vi.fn()} extraction={{ jobId: 'job-1', loading: false, failed: false }} onOpenExtraction={vi.fn()} />)
+    const ubl = renderCard()
+
+    for (const [card, utils] of [['Source', source], ['UBL', ubl]] as const) {
+      const el = within(utils.container).getByText('READ ONLY')
+      expect.soft(el.style.fontSize, `${card} size`).toBe('9px')
+      expect.soft(el.style.fontWeight, `${card} weight`).toBe('700')
+      expect.soft(el.style.letterSpacing, `${card} tracking`).toBe('0.09em')
+      expect.soft(el.style.color, `${card} colour`).toBe('var(--fg-3)')
+    }
+  })
+
+  it('rail card buttons centre their labels', () => {
+    renderCard()
+
+    const view = screen.getByTestId('ubl-card-view')
+    const download = screen.getByTestId('ubl-card-download')
+    for (const [name, btn] of [['View', view], ['Download', download]] as const) {
+      expect.soft(btn.style.justifyContent, `${name} centres its label`).toBe('center')
+      expect.soft(btn.style.marginTop, `${name} has no own top margin`).toBe('')
+      expect.soft(btn.querySelector('svg'), `${name} leads with an icon`).not.toBeNull()
+    }
+    const column = view.parentElement as HTMLElement
+    expect(column, 'the buttons share one column').toBe(download.parentElement)
+    expect.soft(column.style.display).toBe('flex')
+    expect.soft(column.style.flexDirection).toBe('column')
+    expect.soft(column.style.gap).toBe('8px')
+  })
+
+  it('the UBL card body follows table B', () => {
+    renderCard()
+
+    expect.soft(body().style.padding).toBe('15px 18px 16px')
+    const name = screen.getByTestId('ubl-card-filename')
+    expect.soft(name.className.split(' '), 'file name is mono').toContain('mono')
+    expect.soft(name.style.fontSize).toBe('12px')
+    expect.soft(name.style.fontWeight).toBe('600')
+    const meta = screen.getByTestId('ubl-card-meta')
+    expect.soft(meta.style.fontSize).toBe('10px')
+    expect.soft(meta.style.margin).toBe('3px 0px 13px')
+    expect.soft(meta.style.color).toBe('var(--fg-3)')
+    expect.soft(name.style.lineHeight).toBe('')
+    expect.soft(body().firstElementChild, 'the name leads the body').toBe(name)
+    expect.soft(Array.from(body().querySelectorAll('svg')).filter((s) => s.closest('button') == null), 'no glyph outside a button').toHaveLength(0)
   })
 })

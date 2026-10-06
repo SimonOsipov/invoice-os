@@ -2,12 +2,14 @@
 // AUTH-10-02: the TIN field explains itself before the server enforces it.
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { ApiError } from '@invoice-os/api-client'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { TIN_HINT } from '../lib/entityForm'
 import { createAuthedFetch } from '../lib/authedFetch'
 import { createEntity, updateEntity, type Entity } from '../lib/portfolio'
 import type { PlatformCtx } from '../types'
+import { AddCompanyTask } from './AddCompanyTask'
 import { ClientsView } from './ClientsView'
 import { EntityFormModal } from './EntityFormModal'
 import { SettingsView } from './SettingsView'
@@ -243,5 +245,131 @@ describe('EntityFormModal TIN hint (AUTH-10-02)', () => {
     const edit = within(await screen.findByRole('dialog'))
     expect(edit.getByText('Edit client')).toBeTruthy()
     expect(edit.getByText(TIN_HINT)).toBeTruthy()
+  })
+})
+
+// jsdom drops backdrop-filter from the style attribute, so the scrim is read from SSR markup.
+function ssrBackdropDecls(): { html: string; decls: Map<string, string> } {
+  const html = renderToStaticMarkup(
+    <EntityFormModal mode="create" ctx={ctxFor('firm')} base="https://gateway.test" onClose={() => {}} onSuccess={() => {}} />,
+  )
+  const style = /^<div style="([^"]*)"/.exec(html)?.[1]
+  expect(style, 'the outermost element is the backdrop').toBeTruthy()
+  return { html, decls: new Map(style!.split(';').filter(Boolean).map((d) => [d.slice(0, d.indexOf(':')), d.slice(d.indexOf(':') + 1)])) }
+}
+
+describe('PR-01 the entity modal sits 10px over the v2 scrim', () => {
+  afterEach(cleanup)
+
+  it('the panel is radius-lg on shadow-card', () => {
+    mount('create', 'firm')
+    const panel = screen.getByRole('dialog')
+
+    expect(panel.style.width, 'control: the panel style is read').toBe('480px')
+    expect(panel.style.borderRadius).toBe('var(--radius-lg)')
+    expect(panel.style.boxShadow).toBe('var(--shadow-card)')
+  })
+
+  it('the scrim is a token mix with both blur properties, and no oklch anywhere', () => {
+    const { html, decls } = ssrBackdropDecls()
+
+    expect(decls.get('position'), 'control: the backdrop declarations are read').toBe('fixed')
+    expect(decls.get('background')).toBe('color-mix(in srgb, var(--surface) 55%, transparent)')
+    expect(decls.get('backdrop-filter')).toBe('blur(6px)')
+    expect(decls.get('-webkit-backdrop-filter')).toBe('blur(6px)')
+    expect(html).not.toContain('oklch')
+  })
+
+  describe('every caller opens the v2 panel', () => {
+    beforeEach(() => vi.stubEnv('VITE_GATEWAY_URL', 'https://gateway.test'))
+    afterEach(() => {
+      vi.unstubAllEnvs()
+      vi.unstubAllGlobals()
+    })
+
+    function expectV2Panel() {
+      const panel = screen.getByRole('dialog')
+      expect(panel.style.width, 'control: the panel style is read').toBe('480px')
+      expect(panel.style.borderRadius).toBe('var(--radius-lg)')
+      expect(panel.style.boxShadow).toBe('var(--shadow-card)')
+      expect(panel.parentElement?.style.position, 'the panel sits in the fixed backdrop').toBe('fixed')
+    }
+
+    it('ClientsView Add client', async () => {
+      const rows = [ENTITY]
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string) => {
+          const body = new URL(url).pathname.endsWith('/rollup')
+            ? { totals: { counts: {}, needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] }, clients: [], top_violations: [] }
+            : { entities: rows, pagination: { limit: 200, offset: 0, total: rows.length } }
+          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) })
+        }),
+      )
+      const ctx = {
+        mode: 'firm',
+        authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
+        user: { name: 'F', initials: 'F', tenantName: 'Acme', verified: true },
+        entities: rows,
+        entitiesState: 'ready',
+        entitiesError: null,
+        refetchEntities: vi.fn(),
+      } as unknown as PlatformCtx
+      render(<ClientsView ctx={ctx} />)
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Add client' }))
+      expectV2Panel()
+    })
+
+    it('AddCompanyTask Add company', () => {
+      const ctx = {
+        mode: 'inhouse',
+        entitiesState: 'empty',
+        entities: [],
+        clients: [],
+        activeEntity: null,
+        entitiesError: null,
+        refetchEntities: vi.fn(),
+        authedFetch: vi.fn(),
+        user: { name: 'Ada', initials: 'A', tenantName: 'Acme Ltd', verified: true },
+      } as unknown as PlatformCtx
+      render(<AddCompanyTask ctx={ctx} />)
+
+      fireEvent.click(within(screen.getByTestId('add-company-task')).getByRole('button', { name: 'Add company' }))
+      expectV2Panel()
+    })
+
+    it('SettingsView Company tab', () => {
+      const ctx = {
+        mode: 'inhouse',
+        settingsTab: 'company',
+        sandbox: false,
+        connectors: {},
+        connectorMappings: {},
+        activeEntity: null,
+        entitiesState: 'ready',
+        entitiesError: null,
+        refetchEntities: vi.fn(),
+        setSettingsTab: vi.fn(),
+        authedFetch: vi.fn(),
+      } as unknown as PlatformCtx
+      render(<SettingsView ctx={ctx} />)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Add company' }))
+      expectV2Panel()
+    })
+  })
+
+  // An inline border-color or box-shadow on the input would beat the class :focus ring.
+  it('the inputs leave the focus ring to the class (pin, green at write)', () => {
+    const { container } = mount('create', 'firm')
+    const inputs = Array.from(container.querySelectorAll<HTMLInputElement>('input.pf-input'))
+
+    expect(inputs, 'the five fields render').toHaveLength(5)
+    for (const input of inputs) {
+      expect(input.style.borderColor, 'inline border-color').toBe('')
+      expect(input.style.boxShadow, 'inline box-shadow').toBe('')
+      expect(input.style.border, 'inline border').toBe('')
+    }
   })
 })

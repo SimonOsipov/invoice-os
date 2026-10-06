@@ -1,0 +1,150 @@
+/* ASComply — product/app layer, v2 brand. Link after the DS token stylesheets.
+   Scope: .asc-app. --accent is the DS peach; action teal is --action (= --primary). */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+.asc-app, .asc-light {
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --bg-0: #f3f1e9; --bg-1: var(--background); --bg-2: var(--card); --bg-3: var(--muted); --bg-4: #e3ede9; --bg-card: var(--card);
+  --fg-1: var(--ink); --fg-2: var(--foreground); --fg-3: var(--muted-foreground); --fg-4: #7d9291;
+  --action: var(--primary); --action-soft: var(--surface-2); --action-deep: var(--surface);
+  --action-glow: var(--primary-20); --action-tint: var(--primary-10); --action-border: var(--primary-20);
+  --teal-200: var(--mint); --teal-300: #9fc8bf; --teal-400: var(--ring); --teal-500: var(--teal);
+  --teal-600: var(--primary); --teal-700: var(--surface-2); --teal-900: var(--surface);
+  --slate-100: var(--muted); --slate-200: rgba(255,255,255,.82); --slate-300: var(--on-dark-70); --slate-400: var(--surface-body);
+  --slate-500: var(--muted-foreground); --slate-700: var(--foreground); --slate-800: var(--surface); --slate-900: var(--ink);
+  --pop-mint: var(--teal); --pop-yellow: var(--status-progress-fg); --pop-red: var(--destructive);
+  --status-green-bg: var(--status-success-bg); --status-green-border: rgba(29,115,67,.25); --status-green-text: var(--status-success-fg);
+  --status-amber-bg: var(--status-progress-bg); --status-amber-border: var(--status-progress-border); --status-amber-text: var(--status-progress-fg);
+  --status-red-bg: rgba(181,59,59,.08); --status-red-border: rgba(181,59,59,.28); --status-red-text: #a23232;
+  --status-muted-bg: var(--muted); --status-muted-border: var(--border); --status-muted-text: var(--muted-foreground);
+  --line-1: var(--border); --line-2: var(--input); --line-3: var(--button-outline-border); --line-bright: var(--primary);
+  --on-dark-teal: var(--eyebrow-on-dark);
+  --shadow-xs: none; --shadow-sm: none; --shadow-accent: none;
+  color: var(--fg-2);
+}
+.asc-app {
+  background: var(--background);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Dark scope (sidebar): re-points the same tokens at the dark band. */
+.asc-dark {
+  --bg-0: var(--surface); --bg-1: var(--surface-2); --bg-2: var(--surface-panel); --bg-3: var(--surface-panel); --bg-4: var(--surface-panel-border);
+  --fg-1: var(--surface-foreground); --fg-2: var(--surface-foreground); --fg-3: var(--surface-body); --fg-4: #8fa8a1;
+  --action: var(--accent); --action-tint: var(--accent-20); --action-glow: var(--accent-20);
+  --line-1: var(--surface-panel-border); --line-2: #1f5750; --line-3: #2a6a62;
+  --slate-800: rgba(255,255,255,.14);
+  --status-green-bg: rgba(143,220,170,.1); --status-green-border: rgba(143,220,170,.3); --status-green-text: #8fdcaa;
+  --status-amber-bg: rgba(245,196,148,.08); --status-amber-border: var(--status-dev-border); --status-amber-text: var(--status-dev-fg);
+  --status-red-bg: rgba(244,176,176,.1); --status-red-border: rgba(244,176,176,.3); --status-red-text: #f4b0b0;
+  background: var(--surface); color: var(--fg-1);
+}
+.asc-dark .label { color: var(--eyebrow-on-dark); }
+.asc-dark ::-webkit-scrollbar-track { background: transparent; }
+.asc-dark ::-webkit-scrollbar-thumb { background: var(--surface-panel-border); }
+
+/* Type */
+.asc-app h1:not(.mono), .asc-app h2:not(.mono), .asc-app h3:not(.mono) {
+  font-family: var(--font-display); font-weight: 700; letter-spacing: var(--tracking-h3); color: var(--ink);
+}
+.asc-app h1.mono, .asc-app h2.mono { font-family: var(--font-mono); }
+.asc-app em, .asc-app .emph { font-style: normal; font-weight: inherit; color: inherit; }
+.asc-app .mono { font-family: var(--font-mono); letter-spacing: -0.015em; }
+.asc-app .money { font-family: var(--font-sans); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.asc-app .upper { text-transform: uppercase; letter-spacing: var(--tracking-step); }
+.asc-app .label {
+  font-family: var(--font-sans); font-size: 10px; font-weight: 700; color: var(--muted-foreground);
+  text-transform: uppercase; letter-spacing: 0.1em;
+}
+.asc-app .eyebrow {
+  display: inline-flex; align-items: center; gap: 10px; font-size: var(--fs-eyebrow); font-weight: 700;
+  text-transform: uppercase; letter-spacing: var(--tracking-eyebrow); white-space: nowrap; color: var(--primary);
+}
+.asc-app .eyebrow::before { content: ""; width: 24px; height: 1px; background: currentColor; flex: none; }
+.asc-app .eyebrow-dark { color: var(--eyebrow-on-dark); }
+.asc-app .ops-tab, .asc-app .dev-tab, .asc-app .pf-tab { transition: color var(--dur-fast) var(--ease-out); }
+.asc-app a { color: inherit; text-decoration: none; }
+.asc-app a.lnk { color: var(--link); transition: color var(--dur-fast) var(--ease-out); }
+.asc-app a.lnk:hover { color: var(--teal); }
+
+/* Buttons: 7px, brightness lift, no movement */
+.asc-app .v2-btn, .asc-app .pf-btn, .asc-app .ops-btn, .asc-app .dev-btn {
+  border-radius: var(--radius-btn) !important;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), filter var(--dur-fast) var(--ease-out) !important;
+}
+.asc-app .v2-btn:active, .asc-app .pf-btn:active, .asc-app .ops-btn:active, .asc-app .dev-btn:active, .asc-app .pf-upcard:active { transform: none !important; }
+.asc-app .v2-btn {
+  display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 20px;
+  font-family: var(--font-sans); font-size: 14px; font-weight: 600; border: 0; cursor: pointer;
+}
+.asc-app .v2-btn-primary { background: var(--primary); color: var(--primary-foreground); }
+.asc-app .v2-btn-primary:hover { filter: brightness(1.22); }
+.asc-app .v2-btn-ghost { background: transparent; color: var(--ink); border: 1px solid var(--button-outline-border); }
+.asc-app .v2-btn-ghost:hover { background: var(--muted); }
+
+/* Inputs */
+.asc-app .pf-input, .asc-app .pf-select, .asc-app .pf-num, .asc-app .ops-input, .asc-app .dev-input,
+.asc-app input, .asc-app textarea, .asc-app select { border-radius: var(--radius-btn) !important; font-family: var(--font-sans); }
+.asc-app .pf-input, .asc-app .pf-select, .asc-app .pf-num, .asc-app .ops-input, .asc-app .dev-input {
+  border-color: var(--input); background-color: var(--card); color: var(--ink);
+}
+.asc-app .pf-input:focus, .asc-app .pf-select:focus, .asc-app .pf-num:focus, .asc-app .ops-input:focus, .asc-app .dev-input:focus,
+.asc-app input:focus, .asc-app textarea:focus {
+  border-color: var(--ring) !important; box-shadow: 0 0 0 2px var(--ring) !important; outline: none;
+}
+.asc-app ::placeholder { color: var(--muted-foreground); opacity: .8; }
+
+/* Rows, nav, chips */
+.asc-app .pf-row:hover, .asc-app .ops-row:hover, .asc-app .dev-row:hover,
+.asc-app .pf-nav:hover, .asc-app .ops-nav:hover, .asc-app .dev-nav:hover, .asc-app .pf-menu-item:hover { background: var(--bg-3); }
+.asc-app .pf-nav { border-radius: var(--radius-md) !important; }
+.asc-app .pf-upcard { border-radius: var(--radius-md) !important; }
+.asc-app .pf-upcard:hover { border-color: var(--ring) !important; }
+.asc-app .pf-chip, .asc-app .ops-chip, .asc-app .dev-chip { border-radius: var(--radius-sm) !important; }
+
+.asc-app ::selection { background: var(--accent); color: var(--accent-foreground); }
+.asc-app ::-webkit-scrollbar { width: 10px; height: 10px; }
+.asc-app ::-webkit-scrollbar-track { background: var(--background); }
+.asc-app ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
+.asc-app ::-webkit-scrollbar-thumb:hover { background: var(--button-outline-border); }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+
+/* App rules the prototype layer drops: the two corner aliases, the card
+   title, the file input and the select chrome. */
+.asc-app, .asc-light {
+  --radius-input: var(--radius-btn);
+  --radius-xs: var(--radius-sm);
+}
+.asc-app .card-title {
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-snug);
+  letter-spacing: var(--tracking-card);
+  color: var(--fg-1);
+}
+.asc-app .pf-file {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+.asc-app .pf-file:focus-visible + label {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 2px var(--ring);
+}
+.asc-app select, .asc-app .pf-select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 32px;
+}
+
+/* Dark scopes keep their own scrollbar colours over the .asc-app ones. */
+.asc-app .asc-dark ::-webkit-scrollbar-track { background: transparent; }
+.asc-app .asc-dark ::-webkit-scrollbar-thumb { background: var(--surface-panel-border); }

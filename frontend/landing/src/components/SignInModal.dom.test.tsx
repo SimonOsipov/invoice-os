@@ -32,9 +32,9 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-async function mount(onClose: () => void = vi.fn(), state: string | null = null, initialError?: string, onCreateAccount?: () => void): Promise<void> {
+async function mount(onClose: () => void = vi.fn(), state: string | null = null, initialError?: string, onCreateAccount?: () => void, initialView?: 'sign-in' | 'forgot'): Promise<void> {
   await act(async () => {
-    root.render(createElement(SignInModal, { onClose, heldState: () => state, initialError, onCreateAccount }))
+    root.render(createElement(SignInModal, { onClose, heldState: () => state, initialError, onCreateAccount, initialView }))
   })
 }
 
@@ -283,5 +283,88 @@ describe('Escape', () => {
       d.click()
     })
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('the forgot view', () => {
+  const BOOT_ERROR = 'Sign-in failed. Try again.'
+  const SIGN_IN_HEADING = 'Sign in to your workspace'
+  const RESET_HEADING = 'Reset your password'
+
+  const headings = () => Array.from(dialog().querySelectorAll('h3'), (h) => h.textContent)
+  const buttonTexts = () => Array.from(dialog().querySelectorAll('button'), (b) => b.textContent?.trim())
+
+  async function press(label: string): Promise<void> {
+    const btn = Array.from(dialog().querySelectorAll('button')).find((b) => b.textContent?.trim() === label)
+    expect(btn, `expected a "${label}" button`).toBeDefined()
+    await act(async () => {
+      btn!.click()
+    })
+  }
+
+  it('Forgot password? opens the forgot view and Back returns', async () => {
+    stubTargets(ALL_TARGETS)
+    configured()
+    await mount(vi.fn(), STATE, undefined, vi.fn())
+    expect(headings()).toEqual([SIGN_IN_HEADING])
+    expect(dialog().querySelectorAll('input[type="password"]').length, 'control: the sign-in form shows').toBe(1)
+
+    await press('Forgot password?')
+    const d = dialog()
+    expect(headings()).toEqual([RESET_HEADING])
+    expect(Array.from(d.querySelectorAll('label'), (l) => l.textContent)).toEqual(['Work email'])
+    expect(d.querySelectorAll('input[type="email"]').length).toBe(1)
+    expect(d.querySelectorAll('input[type="password"]').length, 'the sign-in form is gone').toBe(0)
+    expect(buttonTexts()).toEqual(expect.arrayContaining(['Send reset link', 'Back to sign in']))
+    expect(buttonTexts(), 'the sign-in submit is gone').not.toContain('Sign in →')
+    expect(Array.from(d.querySelectorAll('.t-eyebrow'), (e) => e.textContent), 'the eyebrow stays').toEqual(['PLATFORM LOGIN'])
+    expect(buttonTexts(), 'the create link stays').toContain('Create an account')
+
+    await press('Back to sign in')
+    expect(headings()).toEqual([SIGN_IN_HEADING])
+    expect(dialog().querySelectorAll('input[type="password"]').length).toBe(1)
+    expect(buttonTexts()).not.toContain('Send reset link')
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('initialView forgot opens on the forgot view, with or without a held state', async () => {
+    stubTargets(ALL_TARGETS)
+    configured()
+    for (const state of [STATE, null]) {
+      await mount(vi.fn(), state, undefined, undefined, 'forgot')
+      expect(headings(), `state ${state}`).toEqual([RESET_HEADING])
+      expect(buttonTexts(), `state ${state}`).toEqual(expect.arrayContaining(['Send reset link', 'Back to sign in']))
+      await act(async () => root.render(null))
+    }
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('the boot error does not return after Back', async () => {
+    stubTargets(ALL_TARGETS)
+    configured()
+    await mount(vi.fn(), STATE, BOOT_ERROR)
+    expect(Array.from(dialog().querySelectorAll('[role="alert"]'), (a) => a.textContent?.trim()), 'control: the boot error shows').toEqual([BOOT_ERROR])
+
+    await press('Forgot password?')
+    expect(headings()).toEqual([RESET_HEADING])
+    expect(dialog().textContent, 'hidden in the forgot view').not.toContain(BOOT_ERROR)
+
+    await press('Back to sign in')
+    expect(headings()).toEqual([SIGN_IN_HEADING])
+    expect(dialog().querySelectorAll('input[type="password"]').length, 'control: the sign-in form is back').toBe(1)
+    expect(dialog().textContent, 'not shown again').not.toContain(BOOT_ERROR)
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('the forgot view is unavailable without a gateway', async () => {
+    stubTargets(ALL_TARGETS)
+    unconfigured()
+    await mount(vi.fn(), STATE, undefined, undefined, 'forgot')
+    const d = dialog()
+    expect(d.textContent).toContain(UNAVAILABLE)
+    expect(d.querySelectorAll('form').length).toBe(0)
+    expect(d.querySelectorAll('input').length).toBe(0)
+    expect(buttonTexts()).not.toContain('Send reset link')
+    expect(consoleError).not.toHaveBeenCalled()
   })
 })

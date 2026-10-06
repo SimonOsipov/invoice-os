@@ -11,7 +11,7 @@ const TONE = {
   failed: { background: 'var(--status-red-bg)', color: 'var(--status-red-text)' },
 } as const
 
-export function VerifyNotice({ outcome, onDismiss }: { outcome: NonNullable<VerifyOutcome>; onDismiss: () => void }) {
+export function VerifyNotice({ outcome, onDismiss }: { outcome: NonNullable<VerifyOutcome>; onDismiss: () => void; onRequestReset?: () => void }) {
   return (
     <div className="container" style={{ paddingTop: 16 }}>
       <div

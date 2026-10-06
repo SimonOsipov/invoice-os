@@ -2,7 +2,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { resendVerification } from '../register'
 
-export function useResend(email: string | undefined) {
+export function useResend(email: string | undefined, _send: (email: string) => Promise<void> = resendVerification) {
   const [resending, setResending] = useState(false)
   const [note, setNote] = useState<{ ok: boolean }>()
   // Bumped by reset, so an older answer is dropped.
@@ -14,7 +14,8 @@ export function useResend(email: string | undefined) {
     setNote(undefined)
   }, [])
 
-  async function resend() {
+  // Stub: `unknown` because callers pass resend as an onClick handler.
+  async function resend(_to?: unknown) {
     if (resending || email === undefined) return
     setNote(undefined)
     setResending(true)

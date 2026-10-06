@@ -57,9 +57,9 @@ function unconfigure(): void {
   vi.stubEnv('VITE_APP_URL', 'https://app.x/')
 }
 
-async function mountForm(state: string | null, initialError?: string, consoleTarget?: ConsoleTarget): Promise<void> {
+async function mountForm(state: string | null, initialError?: string, consoleTarget?: ConsoleTarget, onForgot?: () => void): Promise<void> {
   await act(async () => {
-    root.render(createElement(SignInForm, { heldState: () => state, initialError, consoleTarget }))
+    root.render(createElement(SignInForm, { heldState: () => state, initialError, consoleTarget, onForgot }))
   })
 }
 
@@ -670,5 +670,59 @@ describe('the resend control on the unverified sign-in error', () => {
     await flush()
     expect(resendButton().disabled).toBe(false)
     expect(statusNotes()).toEqual([sent('bob@corp.example')])
+  })
+})
+
+describe('the Forgot password? control', () => {
+  const FORGOT = 'Forgot password?'
+  const forgotButtons = () => Array.from(container.querySelectorAll<HTMLButtonElement>('button')).filter((b) => b.textContent?.trim() === FORGOT)
+  const forgotButton = () => {
+    const all = forgotButtons()
+    expect(all.length, `expected exactly one "${FORGOT}" button`).toBe(1)
+    return all[0]
+  }
+
+  it('the form offers Forgot password? under the password field', async () => {
+    configure()
+    const fetchMock = vi.fn().mockReturnValue(new Promise(() => undefined))
+    vi.stubGlobal('fetch', fetchMock)
+    const onForgot = vi.fn()
+    await mountForm(STATE, undefined, undefined, onForgot)
+
+    const btn = forgotButton()
+    expect(btn.type, 'a plain button, so it never submits the form').toBe('button')
+    expect(btn.classList.contains('ds-btn--text')).toBe(true)
+    expect(btn.disabled).toBe(false)
+    expect(passwordInput().compareDocumentPosition(btn) & Node.DOCUMENT_POSITION_FOLLOWING, 'after the password field').toBeTruthy()
+    expect(btn.compareDocumentPosition(submitButton()) & Node.DOCUMENT_POSITION_FOLLOWING, 'before Sign in').toBeTruthy()
+    expect(submitButton().textContent).toContain('Sign in →')
+
+    await act(async () => {
+      btn.click()
+    })
+    expect(onForgot).toHaveBeenCalledTimes(1)
+    expect(fetchMock, 'the control is not a sign-in').not.toHaveBeenCalled()
+
+    await fill('ada@okafor.ng', 'pw')
+    await submit()
+    expectBusy()
+    expect(forgotButton().disabled, 'disabled while a sign-in runs').toBe(true)
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('no Forgot password? without a held state', async () => {
+    configure()
+    await mountForm(null, undefined, undefined, vi.fn())
+    expect(Array.from(container.querySelectorAll('button'), (b) => b.textContent?.trim()), 'control: only the bounce shows').toEqual(['Continue with email'])
+    expect(forgotButtons()).toHaveLength(0)
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('no Forgot password? when onForgot is not given', async () => {
+    configure()
+    await mountForm(STATE)
+    expect(submitButton().textContent, 'control: the credentials form shows').toContain('Sign in →')
+    expect(forgotButtons()).toHaveLength(0)
+    expect(consoleError).not.toHaveBeenCalled()
   })
 })

@@ -22,7 +22,7 @@ export function Alert({ id, text }: { id?: string; text: string }) {
 }
 
 // The status region stays mounted while the resend control shows, so screen readers announce the text put into it.
-export function ResendNotice({ note, email }: { note?: { ok: boolean }; email: string }) {
+export function ResendNotice({ note, email }: { note?: { ok: boolean }; email: string; text?: string }) {
   return (
     <>
       <div role="status">
@@ -34,7 +34,7 @@ export function ResendNotice({ note, email }: { note?: { ok: boolean }; email: s
 }
 
 // heldState is read at open and again at submit: an expired or dropped state is never posted.
-export function SignInForm({ heldState, initialError, consoleTarget }: { heldState: () => string | null; initialError?: string; consoleTarget?: ConsoleTarget }) {
+export function SignInForm({ heldState, initialError, consoleTarget }: { heldState: () => string | null; initialError?: string; consoleTarget?: ConsoleTarget; onForgot?: () => void }) {
   const [state, setState] = useState(heldState)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')

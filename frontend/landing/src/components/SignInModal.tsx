@@ -10,7 +10,7 @@ export const HEADING_STYLE = { fontSize: 22, letterSpacing: '-0.03em', fontWeigh
 
 const NO_STATE = () => null
 
-export function SignInModal({ onClose, heldState = NO_STATE, initialError, consoleTarget, onCreateAccount }: { onClose: () => void; heldState?: () => string | null; initialError?: string; consoleTarget?: ConsoleTarget; onCreateAccount?: () => void }) {
+export function SignInModal({ onClose, heldState = NO_STATE, initialError, consoleTarget, onCreateAccount }: { onClose: () => void; heldState?: () => string | null; initialError?: string; consoleTarget?: ConsoleTarget; onCreateAccount?: () => void; initialView?: 'sign-in' | 'forgot' }) {
   // Close on Escape (never a native dialog).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

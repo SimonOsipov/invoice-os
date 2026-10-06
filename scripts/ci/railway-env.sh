@@ -3567,11 +3567,11 @@ cmd_discover_urls() {
     if [ "$GQL_CURL_RC" = 0 ]; then
       for i in $(gql_error_aliases); do
         i="${i#s}"
-        [[ "$i" =~ ^[0-4]$ ]] && who="$who ${labels[$i]}"
+        [[ "$i" =~ ^[0-4]$ ]] && who="$who${who:+ }${labels[$i]}"
       done
-      echo "::error::Could not $ctx${who:+ ($who unreadable)}: Railway answered a GraphQL error." >&2
-    else
-      echo "::error::Could not $ctx: $GQL_LAST" >&2
+      echo "::error::Could not read the public URLs of environment $env_id${who:+ ($who unreadable)}: Railway answered a GraphQL error." >&2
+    elif [ "$GQL_REPORTED" != 1 ]; then
+      echo "::error::Could not read the public URLs of environment $env_id: $GQL_LAST" >&2
     fi
     exit 1
   fi
@@ -3583,7 +3583,11 @@ cmd_discover_urls() {
       echo "::error::No domain found for ${labels[$i]} (service ${ids[$i]}) in environment $env_id — neither a custom domain nor a Railway-generated one. Every public service must have at least one (docs/add-a-service.md step 6)." >&2
       exit 1
     fi
-    d=$(printf '%s' "$sel" | jq -r '.domain')
+    d=$(printf '%s' "$sel" | jq -r 'if (.domain | type) == "string" then .domain else "" end')
+    if ! [[ "$d" =~ ^[A-Za-z0-9.-]+$ ]]; then
+      echo "::error::The domain of ${labels[$i]} (service ${ids[$i]}) in environment $env_id is empty or not a hostname." >&2
+      exit 1
+    fi
     out="$out${keys[$i]}=https://$d
 "
   done

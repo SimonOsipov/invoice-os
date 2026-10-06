@@ -66,6 +66,13 @@ describe('parseMeasureArgs', () => {
       expect(usageError(() => parseMeasureArgs(['.x'], { props: 'width', viewport })).code, `viewport ${viewport}`).toBe(2)
     }
     expect(parseMeasureArgs(['.x'], { props: 'width', viewport: '1280' }).viewport, 'a valid width passes').toBe(1280)
+
+    expect(usageError(() => parseMeasureArgs([''], { props: 'width' })).code, 'an empty selector').toBe(2)
+    for (const props of [',', ' , ,', '']) {
+      expect(usageError(() => parseMeasureArgs(['.x'], { props })).code, `props "${props}"`).toBe(2)
+    }
+    expect(usageError(() => parseMeasureArgs(['.x'], { props: 'width', viewport: '' })).code, 'an empty --viewport').toBe(2)
+    expect(parseMeasureArgs(['.x'], { props: 'width,, padding-left ,' }).props, 'empty entries are dropped').toEqual(['width', 'padding-left'])
   })
 })
 
@@ -267,11 +274,90 @@ describe('measureSnippet', () => {
 
   it('a selector with quotes survives', async () => {
     const { doc } = fakeDoc()
-    for (const selector of [`[data-x="a'b"]`, 'a\\b"c', 'x y`${1}`']) {
+    for (const selector of [`[data-x="a'b"]`, 'a\\b"c', 'x y`${1}`', 'a\u2028b\u2029c', 'a\nb', '</script>', "'; throw 1; '"]) {
       const { page, selectors } = fakePage([fakeElement(doc, () => ({ x: 0, y: 0, width: 1, height: 1 }))])
       await compile(req({ selector }))(page)
       expect(selectors, selector).toEqual([selector])
     }
+  })
+})
+
+describe('measureSnippet edge cases', () => {
+  const box = () => ({ x: 0, y: 0, width: 1, height: 1 })
+
+  it('the viewport height falls back to 900 when the page reports none', async () => {
+    const { doc } = fakeDoc()
+    const f = fakePage([fakeElement(doc, box)])
+    f.page.viewportSize = (() => null) as never
+    await compile(req({ viewport: 1440 }))(f.page)
+    expect(f.viewports).toEqual([{ width: 1440, height: 900 }])
+  })
+
+  it('an unknown property is refused before counting or settling', async () => {
+    const { doc } = fakeDoc()
+    const f = fakePage([fakeElement(doc, box)])
+    const result = await compile(req({ props: ['widht'] }))(f.page)
+    expect(result).toEqual({ error: 'unknown-prop', props: ['widht'] })
+    expect(f.calls, 'nothing was counted or read').toEqual([])
+
+    const none = fakePage([])
+    expect(await compile(req({ props: ['widht'] }))(none.page), 'refused even with zero matches').toEqual({ error: 'unknown-prop', props: ['widht'] })
+  })
+
+  it('every match is settled, not only the first', async () => {
+    const { doc, animations } = fakeDoc()
+    const slide = deferred()
+    const first = fakeElement(doc, box)
+    let settled = false
+    const second = fakeElement(doc, () => ({ x: settled ? 5 : 99, y: 0, width: 1, height: 1 }))
+    animations.push(animation(second, 200, slide.promise))
+    const { page } = fakePage([first, second])
+
+    const run = compile(req())(page)
+    await sleep(50)
+    expect(first.reads.rect, 'the first match was read').toBe(1)
+    expect(second.reads.rect, 'the second match waits for its own animation').toBe(0)
+
+    settled = true
+    slide.resolve()
+    const result = await run
+    expect(result.matches.map((m: { box: { x: number } }) => m.box.x)).toEqual([0, 5])
+  })
+
+  it('an animation on an unrelated element does not block the read', async () => {
+    const { doc, animations } = fakeDoc()
+    const el = fakeElement(doc, box)
+    animations.push(animation({ contains: () => false }, 5_000, new Promise(() => {})))
+    const { page } = fakePage([el])
+
+    const result = await Promise.race([compile(req())(page), sleep(100).then(() => 'blocked')])
+    expect(result).not.toBe('blocked')
+    expect(result.matches).toHaveLength(1)
+  })
+
+  it('a cancelled animation does not hang or fail the read', async () => {
+    const { doc, animations } = fakeDoc()
+    const el = fakeElement(doc, box)
+    animations.push({
+      effect: { target: el, getComputedTiming: () => ({ endTime: 200 }) },
+      get finished() {
+        return Promise.reject(new Error('AbortError'))
+      },
+    })
+    const { page } = fakePage([el])
+
+    const result = await Promise.race([compile(req())(page), sleep(100).then(() => 'blocked')])
+    expect(result).not.toBe('blocked')
+    expect(result.matches).toHaveLength(1)
+  })
+
+  it('property names with quotes survive into the read', async () => {
+    const { doc } = fakeDoc()
+    const prop = `--a'b"c\`d `
+    const { page } = fakePage([fakeElement(doc, box, { [prop]: 'v' })])
+    const result = await compile(req({ props: [prop] }))(page)
+    expect(result.matches).toHaveLength(1)
+    expect(result.matches[0].styles).toEqual({ [prop]: 'v' })
   })
 })
 
@@ -347,5 +433,46 @@ describe('measure', () => {
     const err = await rejection(measure(req(), exec))
     expect(err.code).toBe(1)
     expect(err.message).toContain('TimeoutError')
+  })
+})
+
+describe('measure output edge cases', () => {
+  it('output that is not JSON exits 1 and points at a snapshot', async () => {
+    for (const stdout of ['', 'garbage', '<html>']) {
+      const err = await rejection(measure(req({ session: 'qa' }), fakeExec({ code: 0, stdout }).exec))
+      expect(err.code, `stdout "${stdout}"`).toBe(1)
+      expect(err.hint, `stdout "${stdout}"`).toContain('snapshot')
+    }
+  })
+
+  it('a failed spawn reports stderr when stdout is empty', async () => {
+    const err = await rejection(measure(req(), fakeExec({ code: 1, stdout: '', stderr: 'spawn ENOENT' }).exec))
+    expect(err.code).toBe(1)
+    expect(err.message).toContain('ENOENT')
+
+    const closed = await rejection(measure(req({ session: 'qa' }), fakeExec({ code: 1, stdout: '', stderr: "The browser 'qa' is not open" }).exec))
+    expect(closed.hint, 'a closed session on stderr gets the open hint').toContain('state-load')
+  })
+
+  it('an unknown property error names every property and the fix', async () => {
+    const err = await rejection(measure(req({ props: ['widht'] }), fakeExec({ code: 0, stdout: '{"error":"unknown-prop","props":["widht","heigth"]}' }).exec))
+    expect(err.code).toBe(2)
+    expect(err.message).toContain('widht')
+    expect(err.message).toContain('heigth')
+    expect(err.hint).toContain('padding-left')
+  })
+
+  it('the snippet the call sends runs with the request viewport, selector and props', async () => {
+    const selector = `[a="b'c"]`
+    const { exec, calls } = fakeExec({ code: 0, stdout: '{"selector":".x","count":0,"matches":[]}' })
+    await measure(req({ selector, props: ['width', '--k'], viewport: 1440 }), exec)
+
+    const { doc } = fakeDoc()
+    const f = fakePage([fakeElement(doc, () => ({ x: 0, y: 0, width: 1, height: 1 }), { width: '1px', '--k': 'v' })])
+    const sent = new Function('return (' + calls[0]![3] + ')')() as (page: unknown) => Promise<any>
+    const result = await sent(f.page)
+    expect(f.viewports).toEqual([{ width: 1440, height: 800 }])
+    expect(f.selectors).toEqual([selector])
+    expect(result.matches[0].styles).toEqual({ width: '1px', '--k': 'v' })
   })
 })

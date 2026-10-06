@@ -56,6 +56,14 @@ var (
 	ErrLastActiveAdmin          = errors.New("tenancy: last active admin")
 )
 
+// Sentinels for the invitations store (RESEND-05).
+var (
+	ErrInviteNotPermitted   = errors.New("tenancy: invite not permitted")
+	ErrInvitationNotFound   = errors.New("tenancy: invitation not found")
+	ErrInvitationNotPending = errors.New("tenancy: invitation not pending")
+	ErrDailyInviteLimit     = errors.New("tenancy: daily invite limit")
+)
+
 // ErrAlreadyProvisioned means the caller already has a workspace.
 var ErrAlreadyProvisioned = errors.New("tenancy: already provisioned")
 

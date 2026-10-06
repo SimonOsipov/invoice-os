@@ -299,6 +299,7 @@ func TestDiscoverURLs_GraphQLErrorEmptyStdout(t *testing.T) {
 			stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID)
 			requireOneDiscoverCall(t, s)
 			requireURLsRefused(t, stdout, stderr, code)
+			requireOneDiscoveryError(t, stderr)
 			if c.wantEnv && !strings.Contains(stderr, forkEnvID) {
 				t.Errorf("a failure with no alias path names the environment %s; stderr = %q", forkEnvID, stderr)
 			}
@@ -517,6 +518,26 @@ func TestDiscoverURLs_UnusableResponseRefuses(t *testing.T) {
 			return wrapData(d, false)
 		}},
 	}
+	// A chosen domain with no host: refused, naming the service (urlsServices index 1, app).
+	hostless := map[string]string{
+		"an empty custom domain":                  `{"customDomains":[{"domain":""}],"serviceDomains":[]}`,
+		"a custom domain with no domain field":    `{"customDomains":[{"targetPort":1}],"serviceDomains":[]}`,
+		"a null custom domain":                    `{"customDomains":[{"domain":null}],"serviceDomains":[]}`,
+		"an empty generated domain":               `{"customDomains":[],"serviceDomains":[{"domain":""}]}`,
+		"a generated domain with no domain field": `{"customDomains":[],"serviceDomains":[{"targetPort":1}]}`,
+		"a domain with an embedded newline":       `{"customDomains":[{"domain":"a.test\nevil_url=https://x"}],"serviceDomains":[]}`,
+	}
+	for _, name := range slices.Sorted(maps.Keys(hostless)) {
+		app := hostless[name]
+		cases = append(cases, struct {
+			name string
+			body func(t *testing.T) string
+		}{name, func(t *testing.T) string {
+			d := good(t)
+			d["s1"] = app
+			return wrapData(d, false)
+		}})
+	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			s := newURLsShim(t, nil)
@@ -524,7 +545,27 @@ func TestDiscoverURLs_UnusableResponseRefuses(t *testing.T) {
 			stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID)
 			requireOneDiscoverCall(t, s)
 			requireURLsRefused(t, stdout, stderr, code)
+			if _, ok := hostless[c.name]; ok && !namesService(stderr, urlsServices[1].label) {
+				t.Errorf("stderr does not name %s, the service whose domain has no host: %q", urlsServices[1].label, stderr)
+			}
 		})
+	}
+}
+
+// requireOneDiscoveryError fails unless stderr holds exactly one ::error:: line and it reads as English.
+func requireOneDiscoveryError(t *testing.T, stderr string) {
+	t.Helper()
+	var errs []string
+	for _, l := range strings.Split(stderr, "\n") {
+		if strings.HasPrefix(l, "::error::") {
+			errs = append(errs, l)
+		}
+	}
+	if len(errs) != 1 {
+		t.Errorf("stderr has %d ::error:: lines, want exactly 1: %q", len(errs), errs)
+	}
+	if strings.Contains(stderr, "Could not discovering") {
+		t.Errorf("stderr reads \"Could not discovering\": %q", stderr)
 	}
 }
 
@@ -570,6 +611,7 @@ func TestDiscoverURLs_TransportFailuresKeepQueryRetryRules(t *testing.T) {
 				if !strings.Contains(stderr, forkEnvID) {
 					t.Errorf("stderr does not name the environment %s: %q", forkEnvID, stderr)
 				}
+				requireOneDiscoveryError(t, stderr)
 			}
 			if rows := callLogRows(t, tmp); !slices.Equal(rows, c.logRows) {
 				t.Errorf("call log = %q, want %q", rows, c.logRows)

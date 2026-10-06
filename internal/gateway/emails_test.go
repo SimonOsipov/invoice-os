@@ -23,6 +23,11 @@ func emailsMux(t *testing.T) *http.ServeMux {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("GET /emails/confirmation.html", tpl)
+	recovery, err := MailTemplate("recovery")
+	if err != nil {
+		t.Fatalf("MailTemplate(recovery): %v", err)
+	}
+	mux.Handle("GET /emails/recovery.html", recovery)
 	mux.Handle("GET /emails/mark.png", MailLogo())
 	return mux
 }
@@ -51,6 +56,36 @@ func TestMailTemplate_ServesTheComposedTemplate(t *testing.T) {
 	}
 	if !bytes.Equal(rec.Body.Bytes(), want) {
 		t.Errorf("body = %d bytes, want accountmail.Template(confirmation) (%d bytes)", rec.Body.Len(), len(want))
+	}
+}
+
+func TestMailTemplate_ServesTheRecoveryTemplate(t *testing.T) {
+	want, err := accountmail.Template("recovery")
+	if err != nil || len(want) == 0 {
+		t.Fatalf("accountmail.Template(recovery) = %d bytes, %v; the comparison below would pass vacuously", len(want), err)
+	}
+	mux := emailsMux(t)
+
+	rec := serveMail(mux, http.MethodGet, "/emails/recovery.html")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Errorf("GET Content-Type = %q, want text/html; charset=utf-8", got)
+	}
+	if !bytes.Equal(rec.Body.Bytes(), want) {
+		t.Errorf("GET body = %d bytes, want accountmail.Template(recovery) (%d bytes)", rec.Body.Len(), len(want))
+	}
+
+	head := serveMail(mux, http.MethodHead, "/emails/recovery.html")
+	if head.Code != http.StatusOK {
+		t.Fatalf("HEAD status = %d, want 200", head.Code)
+	}
+	if got := head.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Errorf("HEAD Content-Type = %q, want text/html; charset=utf-8", got)
+	}
+	if head.Body.Len() != 0 {
+		t.Errorf("HEAD body = %d bytes, want 0", head.Body.Len())
 	}
 }
 

@@ -743,6 +743,16 @@ describe('setInvitationToken and inviteWithToken', () => {
     expect(JSON.parse(seedInit.body)).toEqual({ tenant_id: TENANT, invitation_id: INVITATION, token })
   })
 
+  it('inviteWithToken defaults the role to reviewer', async () => {
+    const { inviteWithToken } = await import('./client')
+    const stub = stubFetchSequence({ status: 200, body: { invitations: [{ id: INVITATION }] } }, { status: 204 })
+
+    await inviteWithToken('admin-token', TENANT, 'who@example.com')
+
+    const [, inviteInit] = stub.mock.calls[0] as unknown as [string, { body: string }]
+    expect(JSON.parse(inviteInit.body).role).toBe('reviewer')
+  })
+
   it('inviteWithToken throws when the invite is refused and seeds nothing', async () => {
     const { inviteWithToken } = await import('./client')
     const stub = stubFetchSequence({ status: 400, body: { error: 'bad' } })

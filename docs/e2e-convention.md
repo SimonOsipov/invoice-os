@@ -130,8 +130,8 @@ What a spec still cannot assume is an empty table:
     call or push adds none, and it provisions no tenant. Only the mock build serves the route.
   - `api/invitation-accept.spec.ts` and the accept-page tests of `topology/auth.spec.ts`: each admin
     workspace leaves an `auth.users` row, a tenant and a membership, each invite an `invitations`
-    row (the reset excludes `invitations`; the purge covers the demo tenants only), and each
-    accepted invite an `auth.users` row and an active `reviewer` membership. A suspended-member
+    row (the reset excludes `invitations`; the purge covers the demo tenants only), each invitee
+    or stranger account an `auth.users` row, and each accepted invite an active `reviewer` membership. A suspended-member
     test also leaves a `suspended` membership in a second fork workspace. `POST /auth/mock/invitation-token`
     (`internal/gateway/mockinvitation.go`) writes only the invite's token hash. Only the mock build serves it.
 

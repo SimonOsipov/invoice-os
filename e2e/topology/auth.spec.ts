@@ -1933,8 +1933,9 @@ function recordResends(page: Page): string[] {
 }
 
 // Parts run top to bottom: each starts below the one above and none overlaps another.
-// `scrollsItself` names parts whose own text may overflow their box, such as a read-only input.
-async function expectStack(page: Page, width: number, card: Locator, parts: [string, Locator][], sameEdges: [string, string], scrollsItself: string[] = []): Promise<void> {
+// `longValueInputs` names <input> parts that may hold a value wider than their box: an input scrolls its own text,
+// so only its box is judged (inside the card, sameEdges, and its wrapper), never its scrollWidth.
+async function expectStack(page: Page, width: number, card: Locator, parts: [string, Locator][], sameEdges: [string, string], longValueInputs: string[] = []): Promise<void> {
   await settleAnimations(card)
   const cardBox = await card.boundingBox()
   const boxes = new Map<string, { x: number; y: number; width: number; height: number }>()
@@ -1961,7 +1962,16 @@ async function expectStack(page: Page, width: number, card: Locator, parts: [str
   // The card scrolls on overflow, so an unwrapped address would pass the box checks above and the document check below.
   const overflowed: string[] = []
   for (const [name, el] of [['card', card] as [string, Locator], ...parts]) {
-    if (scrollsItself.includes(name)) continue
+    if (longValueInputs.includes(name)) {
+      const wrapper = await el.evaluate((node) => {
+        if (!(node instanceof HTMLInputElement)) return null
+        const parent = node.parentElement!
+        return parent.scrollWidth - parent.clientWidth
+      })
+      if (wrapper === null) throw new Error(`${name} is not an <input>, so it cannot be exempt from the overflow check`)
+      if (wrapper > 1) overflowed.push(`${name} pushes its wrapper by ${wrapper}px`)
+      continue
+    }
     const over = await el.evaluate((node) => node.scrollWidth - node.clientWidth)
     if (over > 1) overflowed.push(`${name} by ${over}px`)
   }
@@ -2277,14 +2287,14 @@ const INVITE_INVALID = 'This invite is no longer valid'
 const NO_WORKSPACE = 'This account has no workspace yet. If you were invited, open the invite link in your email.'
 const inviteUrl = (token: string) => `${LANDING_URL}/invite#token=${token}`
 
-// A fresh admin with a workspace of `workspaceName` (default: a short one).
+// A fresh admin with a workspace of `workspaceName` (default: a short one; maxNameChars, internal/tenancy/tenancy.go, is 200).
 async function inviteWorkspace(workspaceName?: string): Promise<{ adminToken: string; tenantId: string; name: string }> {
   const admin = await provisionRealAccount('invite-admin', 'firm', 'Invite E2E', workspaceName)
   const adminToken = (await signInSession(admin.email, admin.password)).access_token
   return { adminToken, tenantId: (await me(adminToken)).tenant.id, name: admin.workspaceName }
 }
 
-// 250 bytes: a 64-byte local part and a 185-byte domain of 63, 63 and 57-byte labels (the invite API allows 254).
+// 250 bytes: a 64-byte local part and a 185-byte domain of 63, 63 and 57-byte labels (maxEmailBytes, internal/tenancy/invitations_handler.go, is 254).
 function longInviteAddress(): string {
   const local = `${crypto.randomUUID().replaceAll('-', '')}${'a'.repeat(32)}`
   const address = `${local}@${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(57)}`
@@ -2292,22 +2302,35 @@ function longInviteAddress(): string {
   return address
 }
 
-// The card is the heading's grandparent: heading -> padded body -> card.
-const acceptCard = (heading: Locator) => heading.locator('xpath=../..')
+// The accept card is the heading's grandparent (heading -> padded body -> card): stacked as `expectStack` asks, and inside the viewport.
+async function expectAcceptStack(page: Page, width: number, heading: Locator, parts: [string, Locator][], sameEdges: [string, string], longValueInputs: string[] = []): Promise<void> {
+  const card = heading.locator('xpath=../..')
+  await expectStack(page, width, card, parts, sameEdges, longValueInputs)
+  const box = await card.boundingBox()
+  if (!box) throw new Error(`the accept card rendered no box at ${width}px`)
+  expect(box.x, `the card starts left of the viewport at ${width}px`).toBeGreaterThanOrEqual(-1)
+  expect(box.x + box.width, `the card ends right of the viewport at ${width}px`).toBeLessThanOrEqual(width + 1)
+}
+
+// A fragment-only goto is a same-document navigation: the page would keep its view and its address-bar fragment. Load afresh.
+async function openInvite(page: Page, token: string): Promise<void> {
+  await page.goto('about:blank')
+  await page.goto(inviteUrl(token))
+}
 
 // Opens the link at `width`, then asserts the ready view stacks and the address bar holds no fragment.
 async function expectReadyView(page: Page, width: number, token: string, workspace: string, address: string): Promise<void> {
   await page.setViewportSize({ width, height: TALL })
-  await page.goto(inviteUrl(token))
+  await openInvite(page, token)
   const heading = page.getByRole('heading', { name: `Join ${workspace}`, exact: true })
   await expect(heading).toBeVisible({ timeout: 30_000 })
   const text = page.getByText(`${address} is invited to join ${workspace} on ASComply as Reviewer.`, { exact: true })
   await expect(text).toBeVisible()
   await expect.poll(() => new URL(page.url()).hash, { message: `the address bar still holds the fragment at ${width}px` }).toBe('')
-  await expectStack(
+  await expectAcceptStack(
     page,
     width,
-    acceptCard(heading),
+    heading,
     [['heading', heading], ['text', text], ['create', page.getByRole('button', { name: 'Create account', exact: true })], ['sign in', page.getByRole('button', { name: 'Sign in', exact: true })]],
     ['create', 'sign in'],
   )
@@ -2316,14 +2339,14 @@ async function expectReadyView(page: Page, width: number, token: string, workspa
 // Opens the link at `width` and the register view, then asserts its fields and submit stack.
 async function expectRegisterView(page: Page, width: number, token: string): Promise<void> {
   await page.setViewportSize({ width, height: TALL })
-  await page.goto(inviteUrl(token))
+  await openInvite(page, token)
   await page.getByRole('button', { name: 'Create account', exact: true }).click()
   const heading = page.getByRole('heading', { name: 'Create your account', exact: true })
   await expect(heading).toBeVisible()
-  await expectStack(
+  await expectAcceptStack(
     page,
     width,
-    acceptCard(heading),
+    heading,
     [
       ['email', page.getByLabel('Work email', { exact: true })],
       ['password', page.getByLabel('Password', { exact: true })],
@@ -2377,7 +2400,7 @@ test('deployed landing: the accept page names the workspace and role at every wi
     const bogus = await context.newPage()
     const bogusErrors = gatedErrors(bogus, [expectedStatusDropper(bogus, 404, /\/auth\/invitation$/)])
     for (const token of [`bogus-${crypto.randomUUID()}`, mintSignInState()]) {
-      await bogus.goto(inviteUrl(token))
+      await openInvite(bogus, token)
       await expect(bogus.getByRole('heading', { name: INVITE_INVALID, exact: true })).toBeVisible({ timeout: 30_000 })
     }
     expect(bogusErrors, `console errors on the bogus link:\n${bogusErrors.join('\n')}`).toEqual([])
@@ -2389,7 +2412,7 @@ test('deployed landing: the accept page names the workspace and role at every wi
 // Registers the invitee on the accept page and ends on "Check your email".
 async function registerOnAcceptPage(page: Page, token: string, password: string): Promise<void> {
   await seedConsent(page, false)
-  await page.goto(inviteUrl(token))
+  await openInvite(page, token)
   await page.getByRole('button', { name: 'Create account', exact: true }).click()
   await page.getByLabel('Password', { exact: true }).fill(password)
   await page.getByRole('button', { name: 'Create account →', exact: true }).click()
@@ -2429,10 +2452,10 @@ test('deployed journey: an invitee creates an account on the accept page, signs 
     const heading = page.getByRole('heading', { name: 'Check your email', exact: true })
     const text = page.getByText('a confirmation link is on its way to')
     await expect(text).toContainText(account.email)
-    await expectStack(
+    await expectAcceptStack(
       page,
       375,
-      acceptCard(heading),
+      heading,
       [['heading', heading], ['text', text], ['resend', page.getByRole('button', { name: RESEND, exact: true })], ['sign in', page.getByRole('button', { name: 'Sign in', exact: true })]],
       ['resend', 'sign in'],
     )
@@ -2476,7 +2499,7 @@ test('deployed journey: an invitee who signs in from another tab without the inv
     await expect(page.getByRole('dialog', { name: 'Platform login' })).toContainText(NO_WORKSPACE, { timeout: 30_000 })
     expect(urls.filter((u) => u.includes('signin=no-workspace')).length, 'the landing was reached at ?signin=no-workspace').toBeGreaterThan(0)
 
-    await page.goto(inviteUrl(token))
+    await openInvite(page, token)
     await page.getByRole('button', { name: 'Sign in', exact: true }).click()
     await signInInOpenWindow(page, account)
     const identity = await readSessionIdentity(page)

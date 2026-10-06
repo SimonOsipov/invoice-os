@@ -59,6 +59,8 @@ test.describe.serial('invitation accept (API E2E, over the deployed gateway)', (
   test('invitation accept: a fresh invitee registers with the token, signs in tenant-less, accepts and the next token carries the workspace', async () => {
     const email = inviteAddress('accept-fresh')
     const token = await inviteWithToken(adminToken, tenantId, email)
+    const stillPending = inviteAddress('accept-pending')
+    await inviteWithToken(adminToken, tenantId, stillPending)
     const password = crypto.randomUUID().slice(0, 16)
 
     const registered = await rawFetch('/auth/invitation/register', { method: 'POST', body: { token, password } })
@@ -81,6 +83,7 @@ test.describe.serial('invitation accept (API E2E, over the deployed gateway)', (
     const listed = await rawFetch('/api/tenancy/v1/invitations', { headers: auth(adminToken) })
     expect(listed.status, JSON.stringify(listed.body)).toBe(200)
     const pending = (listed.body as { invitations: { email: string }[] }).invitations.map((i) => i.email)
+    expect(pending, 'an invite nobody accepted stays listed').toContain(stillPending)
     expect(pending, 'the accepted invite leaves the pending list').not.toContain(email)
 
     // A spent token is no invite at all, not a conflict.

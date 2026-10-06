@@ -276,7 +276,7 @@ export async function inviteWithToken(adminToken: string, tenantId: string, emai
   const res = await rawFetch('/api/tenancy/v1/invitations', { method: 'POST', headers: { Authorization: `Bearer ${adminToken}` }, body: { emails: [email], role } })
   if (res.status !== 200) throw new Error(`invite answered ${res.status}: ${JSON.stringify(res.body)}`)
   const [invitation] = (res.body as { invitations: { id: string }[] }).invitations
-  // 43 random base64url characters, the shape of a minted token.
+  // 43 random base64url characters: inviteTokenShape, internal/tenancy/store.go.
   const token = mintSignInState()
   await setInvitationToken(tenantId, invitation.id, token)
   return token

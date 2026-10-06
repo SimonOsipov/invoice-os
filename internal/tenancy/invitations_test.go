@@ -6,14 +6,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/accountmail"
@@ -281,7 +284,7 @@ func TestInvitations_TokenIsRandomAndNeverStored(t *testing.T) {
 	ctx := w.adminCtx()
 
 	issued := mustIssue(t, ctx, w.store, []string{"a@x.test", "b@x.test"}, "reviewer")
-	issued = append(issued, mustIssue(t, ctx, w.store, []string{"c@x.test"}, "reviewer")...)
+	issued = append(issued, mustIssue(t, ctx, w.store, append([]string{"c@x.test"}, addrs("m", 17)...), "reviewer")...)
 
 	re := regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 	seen := map[string]bool{}
@@ -486,6 +489,8 @@ func TestInvitations_FailureRollsBackEveryAddress(t *testing.T) {
 		role   string
 	}{
 		{"unknown role on every address", []string{"b@x.test", "c@x.test"}, "owner"},
+		{"capitalised role", []string{"b@x.test"}, "Admin"},
+		{"empty role", []string{"b@x.test"}, ""},
 		// The first address inserts and audits before the second fails: only a rollback leaves zero rows.
 		{"a later address fails after an earlier one was written", []string{"ok@x.test", ""}, "preparer"},
 	}
@@ -574,6 +579,15 @@ func TestInvitations_DailyLimitWindowEdges(t *testing.T) {
 			seedAuditEvents(t, w.super, w.tenant, "invitation.sent", sentPayload, "1 hour", 19)
 			seedAuditEvents(t, w.super, w.tenant, "invitation.resent", `{"role":"preparer"}`, "1 hour", 1)
 		}, true},
+		{"10 sent and 10 counted resends", func(t *testing.T, w invWorld) {
+			seedAuditEvents(t, w.super, w.tenant, "invitation.sent", sentPayload, "1 hour", 10)
+			seedAuditEvents(t, w.super, w.tenant, "invitation.resent", resentCounted, "2 hours", 10)
+		}, true},
+		{"10 sent, 9 counted resends and 5 uncounted resends", func(t *testing.T, w invWorld) {
+			seedAuditEvents(t, w.super, w.tenant, "invitation.sent", sentPayload, "1 hour", 10)
+			seedAuditEvents(t, w.super, w.tenant, "invitation.resent", resentCounted, "2 hours", 9)
+			seedAuditEvents(t, w.super, w.tenant, "invitation.resent", resentNotCounted, "2 hours", 5)
+		}, false},
 		{"20 other membership events do not count", func(t *testing.T, w invWorld) {
 			seedAuditEvents(t, w.super, w.tenant, "membership.suspended", `{}`, "1 hour", 20)
 		}, false},
@@ -1101,6 +1115,21 @@ func TestInvitations_DeliveryIsRecordedForTheCurrentToken(t *testing.T) {
 	if got := status(); got != "failed" {
 		t.Errorf("send_status after a failed outcome = %q, want failed", got)
 	}
+
+	// Another tenant's admin holding the right id and hash changes nothing; the owner's call still does.
+	other := newInvWorld(t, "Delivery Other Tenant", "Olu Bee")
+	if err := other.store.RecordInviteDelivery(other.adminCtx(), second.ID, second.TokenHash, true); err != nil {
+		t.Fatalf("cross-tenant record: %v", err)
+	}
+	if got := status(); got != "failed" {
+		t.Errorf("send_status after another tenant's record = %q, want failed (unchanged)", got)
+	}
+	if err := w.store.RecordInviteDelivery(w.adminCtx(), second.ID, second.TokenHash, true); err != nil {
+		t.Fatalf("owner record: %v", err)
+	}
+	if got := status(); got != "sent" {
+		t.Errorf("send_status after the owner's record = %q, want sent (the cross-tenant call must not be a dead path)", got)
+	}
 }
 
 func TestInvitations_RegisteredElsewhereReadsTheSame(t *testing.T) {
@@ -1128,5 +1157,359 @@ func TestInvitations_RegisteredElsewhereReadsTheSame(t *testing.T) {
 	}
 	if n := countInvitations(t, w.super, other.tenant); n != 0 {
 		t.Errorf("the other tenant gained %d invitations rows", n)
+	}
+}
+
+type tracedStmt struct {
+	sql  string
+	args []any
+}
+
+// sqlTrace records every statement a pool sends.
+type sqlTrace struct {
+	mu    sync.Mutex
+	stmts []tracedStmt
+}
+
+func (s *sqlTrace) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d pgx.TraceQueryStartData) context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stmts = append(s.stmts, tracedStmt{d.SQL, slices.Clone(d.Args)})
+	return ctx
+}
+
+func (s *sqlTrace) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+func TestInvitations_NoQueryReadsAccountsByInviteeAddress(t *testing.T) {
+	w := newInvWorld(t, "Trace Tenant", "Ada Obi")
+	other := newInvWorld(t, "Trace Elsewhere Tenant", "Olu Bee")
+	seedIdentityMembership(t, other.super, other.tenant, uuid.NewString(), "admin", "active", strp("Taken Person"), strp("taken@x.test"))
+	seedIdentityMembership(t, w.super, w.tenant, uuid.NewString(), "reviewer", "active", strp("Same Workspace"), strp("member@x.test"))
+
+	cfg, err := pgxpool.ParseConfig(os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := &sqlTrace{}
+	cfg.ConnConfig.Tracer = tr
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	store := NewStore(pool)
+
+	emails := []string{"taken@x.test", "member@x.test", "fresh@x.test"}
+	issued := mustIssue(t, w.adminCtx(), store, emails, "preparer")
+	if _, err := store.ResendInvitation(w.adminCtx(), issued[0].ID); err != nil {
+		t.Fatalf("resend: %v", err)
+	}
+	if _, err := store.ListInvitations(w.adminCtx()); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if err := store.RecordInviteDelivery(w.adminCtx(), issued[0].ID, issued[0].TokenHash, true); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if len(tr.stmts) < 10 {
+		t.Fatalf("traced %d statements, want at least 10 (the pool is not being observed)", len(tr.stmts))
+	}
+	sawAddress := 0
+	for _, st := range tr.stmts {
+		low := strings.ToLower(st.sql)
+		if strings.Contains(low, "auth.") {
+			t.Errorf("a statement touches the auth schema: %s", st.sql)
+		}
+		byAddress := false
+		for _, a := range st.args {
+			if s, ok := a.(string); ok && slices.Contains(emails, s) {
+				byAddress = true
+			}
+		}
+		if !byAddress {
+			continue
+		}
+		sawAddress++
+		if strings.Contains(low, "memberships") || !strings.Contains(low, "invitations") {
+			t.Errorf("a statement keyed by an invitee address reads beyond the invitations table: %s", st.sql)
+		}
+	}
+	if sawAddress < len(emails) {
+		t.Errorf("statements carrying an invitee address = %d, want at least %d (the insert per address)", sawAddress, len(emails))
+	}
+}
+
+func TestInvitations_AnotherTenantNeitherSeesNorSharesRows(t *testing.T) {
+	a := newInvWorld(t, "Tenant A", "Ada Obi")
+	b := newInvWorld(t, "Tenant B", "Olu Bee")
+	aInv := mustIssue(t, a.adminCtx(), a.store, []string{"shared@x.test", "a-only@x.test"}, "reviewer")
+	aRow := pendingRow(t, a.super, a.tenant, "shared@x.test")
+
+	bOwn := mustIssue(t, b.adminCtx(), b.store, []string{"b-only@x.test"}, "preparer")[0]
+	got, err := b.store.ListInvitations(b.adminCtx())
+	if err != nil {
+		t.Fatalf("B list: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != bOwn.ID {
+		t.Fatalf("B lists %d invitations %+v, want only its own %s", len(got), got, bOwn.ID)
+	}
+
+	if _, err := b.store.ResendInvitation(b.adminCtx(), aInv[0].ID); !errors.Is(err, ErrInvitationNotFound) {
+		t.Errorf("B resend of A's invite: err = %v, want ErrInvitationNotFound", err)
+	}
+
+	// The same address invited from B is B's own row; A's row is untouched.
+	bShared := mustIssue(t, b.adminCtx(), b.store, []string{"shared@x.test"}, "admin")[0]
+	if bShared.ID == aInv[0].ID {
+		t.Fatal("B's invite reused A's row id")
+	}
+	after := pendingRow(t, a.super, a.tenant, "shared@x.test")
+	if after.ID != aRow.ID || !slices.Equal(after.Hash, aRow.Hash) || after.Role != "reviewer" || after.InvitedBy != a.admin || !after.Expires.Equal(aRow.Expires) {
+		t.Errorf("A's row changed after B invited the same address: %+v -> %+v", aRow, after)
+	}
+	if n := inviteAudit(t, a.super, a.tenant); n != 2 {
+		t.Errorf("A's invitation audit rows = %d, want 2 (B's invite must not land in A's log)", n)
+	}
+	if n := inviteAudit(t, b.super, b.tenant); n != 2 {
+		t.Errorf("B's invitation audit rows = %d, want 2", n)
+	}
+
+	// A full window in A does not limit B.
+	seedAuditEvents(t, a.super, a.tenant, "invitation.sent", sentPayload, "1 hour", 20)
+	if _, err := a.store.CreateInvitations(a.adminCtx(), []string{"c@x.test"}, "preparer"); !errors.Is(err, ErrDailyInviteLimit) {
+		t.Fatalf("A at the limit: err = %v, want ErrDailyInviteLimit", err)
+	}
+	mustIssue(t, b.adminCtx(), b.store, []string{"c@x.test"}, "preparer")
+}
+
+func TestInvitations_EveryKnownRoleIsStored(t *testing.T) {
+	w := newInvWorld(t, "Role Tenant", "Ada Obi")
+	for _, role := range []string{"admin", "preparer", "reviewer"} {
+		email := role + "@x.test"
+		got := mustIssue(t, w.adminCtx(), w.store, []string{email}, role)[0]
+		if got.Role != role {
+			t.Errorf("result role = %q, want %q", got.Role, role)
+		}
+		if row := pendingRow(t, w.super, w.tenant, email); row.Role != role {
+			t.Errorf("stored role = %q, want %q", row.Role, role)
+		}
+	}
+}
+
+func TestInvitations_EmptyAddressListWritesNothing(t *testing.T) {
+	w := newInvWorld(t, "Empty Tenant", "Ada Obi")
+	preparer := w.addMember(t, "preparer", "active", "Pat Preparer")
+
+	for name, emails := range map[string][]string{"nil": nil, "empty": {}} {
+		t.Run(name, func(t *testing.T) {
+			got, _ := w.store.CreateInvitations(w.adminCtx(), emails, "preparer")
+			if len(got) != 0 {
+				t.Errorf("returned %d invites for no addresses", len(got))
+			}
+			if n := countInvitations(t, w.super, w.tenant); n != 0 {
+				t.Errorf("invitations rows = %d, want 0", n)
+			}
+			if n := inviteAudit(t, w.super, w.tenant); n != 0 {
+				t.Errorf("invitation audit rows = %d, want 0", n)
+			}
+			if _, err := w.store.CreateInvitations(w.as(preparer), emails, "preparer"); !errors.Is(err, ErrInviteNotPermitted) {
+				t.Errorf("preparer with no addresses: err = %v, want ErrInviteNotPermitted", err)
+			}
+		})
+	}
+	mustIssue(t, w.adminCtx(), w.store, []string{"b@x.test"}, "preparer")
+}
+
+func TestInvitations_TwentyAddressesFitAnEmptyWindow(t *testing.T) {
+	w := newInvWorld(t, "Twenty Tenant", "Ada Obi")
+
+	if _, err := w.store.CreateInvitations(w.adminCtx(), addrs("over", 21), "preparer"); !errors.Is(err, ErrDailyInviteLimit) {
+		t.Fatalf("21 addresses on an empty window: err = %v, want ErrDailyInviteLimit", err)
+	}
+	if n := countInvitations(t, w.super, w.tenant); n != 0 {
+		t.Fatalf("invitations rows after the refusal = %d, want 0", n)
+	}
+	mustIssue(t, w.adminCtx(), w.store, addrs("fit", 20), "preparer")
+	if n := countInvitations(t, w.super, w.tenant); n != 20 {
+		t.Errorf("invitations rows = %d, want 20", n)
+	}
+	if _, err := w.store.CreateInvitations(w.adminCtx(), []string{"one-more@x.test"}, "preparer"); !errors.Is(err, ErrDailyInviteLimit) {
+		t.Errorf("21st mail: err = %v, want ErrDailyInviteLimit", err)
+	}
+}
+
+// The handler dedupes (D9); a duplicate that reaches the store leaves one row and one live token.
+func TestInvitations_DuplicateAddressInOneCallLeavesOneLiveToken(t *testing.T) {
+	w := newInvWorld(t, "Duplicate Tenant", "Ada Obi")
+
+	got := mustIssue(t, w.adminCtx(), w.store, []string{"d@x.test", "d@x.test"}, "preparer")
+
+	if got[0].ID != got[1].ID {
+		t.Errorf("duplicate results carry ids %s and %s, want one row", got[0].ID, got[1].ID)
+	}
+	row := pendingRow(t, w.super, w.tenant, "d@x.test")
+	live := 0
+	for _, inv := range got {
+		if slices.Equal(row.Hash, sha(inv.Token)) {
+			live++
+		}
+	}
+	if live != 1 {
+		t.Errorf("live tokens among the two returned = %d, want exactly 1", live)
+	}
+	if n := countInvitations(t, w.super, w.tenant); n != 1 {
+		t.Errorf("invitations rows = %d, want 1", n)
+	}
+	if n := len(auditPayloads(t, w.super, w.tenant, "invitation.sent")); n != 2 {
+		t.Errorf("invitation.sent rows = %d, want 2 (each mail counts)", n)
+	}
+}
+
+func TestInvitations_CreateNamesTheCallerOrFallsBack(t *testing.T) {
+	cases := []struct {
+		name          string
+		display, mail *string
+		want          string
+	}{
+		{"display name", strp("Ada Obi"), strp("ada@obi.test"), "Ada Obi"},
+		{"display name null falls back to email", nil, strp("ada@obi.test"), "ada@obi.test"},
+		{"both null", nil, nil, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := newInvWorld(t, "Caller Name Tenant", "Seed Admin")
+			caller := uuid.NewString()
+			seedIdentityMembership(t, w.super, w.tenant, caller, "admin", "active", c.display, c.mail)
+
+			got := mustIssue(t, w.as(caller), w.store, []string{"b@x.test"}, "preparer")[0]
+			if got.Inviter != c.want {
+				t.Errorf("Inviter = %q, want %q", got.Inviter, c.want)
+			}
+		})
+	}
+}
+
+func TestInvitations_InvitingALegacyTokenlessAddressReissuesIt(t *testing.T) {
+	w := newInvWorld(t, "Legacy Reissue Tenant", "Ada Obi")
+	seedLegacyPending(t, w.super, w.tenant, "legacy@x.test")
+	var legacyID string
+	if err := w.super.QueryRow(context.Background(),
+		`SELECT id::text FROM invitations WHERE tenant_id = $1 AND invitee_email = 'legacy@x.test'`, w.tenant).Scan(&legacyID); err != nil {
+		t.Fatal(err)
+	}
+
+	got := mustIssue(t, w.adminCtx(), w.store, []string{"legacy@x.test"}, "reviewer")[0]
+
+	if got.ID != legacyID {
+		t.Errorf("reissue id = %s, want the legacy row %s", got.ID, legacyID)
+	}
+	row := pendingRow(t, w.super, w.tenant, "legacy@x.test")
+	if !slices.Equal(row.Hash, sha(got.Token)) || row.InvitedBy != w.admin || row.Expires.IsZero() {
+		t.Errorf("legacy row not completed: %+v", row)
+	}
+}
+
+// A tokenless legacy row is never listed, so a resend of its id is not a path the UI offers.
+func TestInvitations_ResendOfALegacyTokenlessInviteChangesNothing(t *testing.T) {
+	w := newInvWorld(t, "Legacy Resend Tenant", "Ada Obi")
+	seedLegacyPending(t, w.super, w.tenant, "legacy@x.test")
+	var id string
+	if err := w.super.QueryRow(context.Background(),
+		`SELECT id::text FROM invitations WHERE tenant_id = $1`, w.tenant).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := w.store.ResendInvitation(w.adminCtx(), id)
+
+	if err == nil {
+		t.Fatalf("resend of a tokenless pending row succeeded: %+v", got)
+	}
+	if got.Token != "" {
+		t.Error("a failed resend returned a token")
+	}
+	if rows := invRows(t, w.super, w.tenant, ""); len(rows) != 1 || len(rows[0].Hash) != 0 {
+		t.Errorf("legacy row changed: %+v", rows)
+	}
+	if n := inviteAudit(t, w.super, w.tenant); n != 0 {
+		t.Errorf("invitation audit rows = %d, want 0", n)
+	}
+}
+
+// holdInviteLock takes the tenant's invitation_send advisory lock on a superuser connection.
+func holdInviteLock(t *testing.T, w invWorld) (release func()) {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := w.super.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(hashtextextended('invitation_send:' || $1::text, 0))`, w.tenant); err != nil {
+		t.Fatal(err)
+	}
+	released := false
+	release = func() {
+		if released {
+			return
+		}
+		released = true
+		if _, err := conn.Exec(ctx, `SELECT pg_advisory_unlock(hashtextextended('invitation_send:' || $1::text, 0))`, w.tenant); err != nil {
+			t.Errorf("unlock: %v", err)
+		}
+		conn.Release()
+	}
+	t.Cleanup(release)
+	return release
+}
+
+func TestInvitations_ConcurrentResendsShareTheLimit(t *testing.T) {
+	w := newInvWorld(t, "Concurrent Resend Tenant", "Ada Obi")
+	a := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "a@x.test", invitedBy: w.admin, sendStatus: "sent"})
+	b := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "b@x.test", invitedBy: w.admin, sendStatus: "sent"})
+	seedAuditEvents(t, w.super, w.tenant, "invitation.sent", sentPayload, "1 hour", 19)
+	release := holdInviteLock(t, w)
+
+	chA, chB := make(chan error, 1), make(chan error, 1)
+	go func() { _, err := w.store.ResendInvitation(w.adminCtx(), a.ID); chA <- err }()
+	go func() { _, err := w.store.ResendInvitation(w.adminCtx(), b.ID); chB <- err }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for advisoryLocks(t, w.super, w.tenant, false) < 2 {
+		select {
+		case err := <-chA:
+			t.Fatalf("a resend returned while the invitation_send lock was held (err %v)", err)
+		case err := <-chB:
+			t.Fatalf("a resend returned while the invitation_send lock was held (err %v)", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pg_locks shows %d ungranted requests on the invitation_send key after 5 s, want 2", advisoryLocks(t, w.super, w.tenant, false))
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	release()
+
+	ok, limited := 0, 0
+	for _, ch := range []chan error{chA, chB} {
+		select {
+		case err := <-ch:
+			switch {
+			case err == nil:
+				ok++
+			case errors.Is(err, ErrDailyInviteLimit):
+				limited++
+			default:
+				t.Errorf("unexpected resend error: %v", err)
+			}
+		case <-time.After(15 * time.Second):
+			t.Fatal("a resend did not return after the lock was released")
+		}
+	}
+	if ok != 1 || limited != 1 {
+		t.Errorf("successes/limit refusals = %d/%d, want 1/1", ok, limited)
+	}
+	if n := len(auditPayloads(t, w.super, w.tenant, "invitation.resent")); n != 1 {
+		t.Errorf("invitation.resent rows = %d, want 1", n)
 	}
 }

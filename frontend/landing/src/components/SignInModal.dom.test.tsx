@@ -198,19 +198,18 @@ describe('v2 content', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('SM-09: held state and initialError reach the form under the new body', async () => {
+  it('SM-09: modal_noHeldState_rendersTheForm; held state and initialError reach the form', async () => {
     stubTargets(ALL_TARGETS)
     configured()
-    // No held state: the form offers the start bounce.
+    // No held state: the form still renders; Submit bounces.
     await mount(vi.fn(), null, 'Sign-in failed. Try again.')
     let d = dialog()
-    const bounce = Array.from(d.querySelectorAll('button')).find((b) => b.textContent === 'Continue with email')
-    expect(bounce, 'expected the start-bounce button').toBeDefined()
-    expect(d.querySelectorAll('input[type="password"]').length).toBe(0)
+    expect(d.querySelectorAll('input[type="password"]').length).toBe(1)
+    expect(d.textContent).not.toContain('Continue with email')
     expect(Array.from(d.querySelectorAll('[role="alert"]'), (a) => a.textContent?.trim())).toEqual(['Sign-in failed. Try again.'])
     expect(d.querySelectorAll('.t-eyebrow').length).toBe(1)
 
-    // A held state: the credentials form replaces the bounce, and the error still shows.
+    // A held state renders the same form, and the error still shows.
     await act(async () => root.render(null))
     await mount(vi.fn(), STATE, 'Sign-in failed. Try again.')
     d = dialog()

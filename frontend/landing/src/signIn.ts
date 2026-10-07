@@ -61,3 +61,23 @@ export function startUrl(target?: ConsoleTarget): string | null {
   const base = target ? consoleBase(target) : appBase()
   return base ? `${base}?auth=start` : null
 }
+
+export const PREFLIGHT_MS = 3000
+
+// Preflight so a dead app origin shows SIGN_IN_UNAVAILABLE instead of a browser error page.
+export async function bounceToStart(target?: ConsoleTarget): Promise<boolean> {
+  const base = target ? consoleBase(target) : appBase()
+  const url = startUrl(target)
+  if (!base || !url) return false
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), PREFLIGHT_MS)
+  try {
+    await fetch(base, { mode: 'no-cors', cache: 'no-store', signal: ctrl.signal })
+  } catch {
+    return false
+  } finally {
+    clearTimeout(timer)
+  }
+  window.location.href = url
+  return true
+}

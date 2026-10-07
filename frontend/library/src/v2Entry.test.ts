@@ -42,6 +42,23 @@ const specificity = (sel: string): [number, number, number] => [
 const outranks = (a: [number, number, number], b: [number, number, number]) =>
   a[0] !== b[0] ? a[0] > b[0] : a[1] !== b[1] ? a[1] > b[1] : a[2] > b[2]
 
+// rules() cannot read nested blocks; this maps each @keyframes name to its from/to declarations.
+const decls = (body: string) =>
+  Object.fromEntries(
+    body
+      .split(';')
+      .map((d) => d.trim())
+      .filter(Boolean)
+      .map((d) => [d.slice(0, d.indexOf(':')).trim(), d.slice(d.indexOf(':') + 1).trim()]),
+  )
+const keyframes = (css: string) =>
+  Object.fromEntries(
+    [...stripComments(css).matchAll(/@keyframes\s+([\w-]+)\s*\{\s*from\s*\{([^{}]*)\}\s*to\s*\{([^{}]*)\}\s*\}/g)].map((m) => [
+      m[1],
+      { from: decls(m[2]), to: decls(m[3]) },
+    ]),
+  )
+
 describe('library entry', () => {
   it('VE-01 the glyph set is the 21 glyphs the prototype draws', () => {
     expect(Object.keys(GLYPHS).sort()).toEqual(
@@ -138,5 +155,14 @@ describe('library entry', () => {
       './styles/library.css',
     ])
     expect(src).toMatch(/\.render\(\s*<StrictMode>\s*<App\s*\/>\s*<\/StrictMode>/)
+  })
+
+  it('VE-08 library.css holds the scene keyframes', () => {
+    const css = read(join(HERE, 'styles/library.css'))
+    expect(stripComments(css).match(/@keyframes/g)).toHaveLength(2)
+    const kf = keyframes(css)
+    expect(Object.keys(kf).sort()).toEqual(['libFade', 'libPop'])
+    expect(kf.libPop).toEqual({ from: { opacity: '0', transform: 'translateY(6px)' }, to: { opacity: '1', transform: 'none' } })
+    expect(kf.libFade).toEqual({ from: { opacity: '0' }, to: { opacity: '1' } })
   })
 })

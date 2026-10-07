@@ -313,8 +313,10 @@ func wantExit(t *testing.T, code, want int, out string) {
 }
 
 func TestDeploySlot_NonPREventPassesWithoutCalls(t *testing.T) {
+	t.Parallel()
 	for _, event := range []string{"push", "workflow_dispatch"} {
 		t.Run(event, func(t *testing.T) {
+			t.Parallel()
 			s := newSlotShim(t)
 			out, code := s.runEnv(t, slotEnv(slotSelfID, event))
 
@@ -327,6 +329,7 @@ func TestDeploySlot_NonPREventPassesWithoutCalls(t *testing.T) {
 }
 
 func TestDeploySlot_NoOtherRunsPassesOnFirstPoll(t *testing.T) {
+	t.Parallel()
 	s := newSlotShim(t)
 	s.runs(t, slotList())
 	out, code := s.run(t)
@@ -338,6 +341,7 @@ func TestDeploySlot_NoOtherRunsPassesOnFirstPoll(t *testing.T) {
 }
 
 func TestDeploySlot_OneHolderPasses(t *testing.T) {
+	t.Parallel()
 	s := newSlotShim(t)
 	s.runs(t, slotList(slotRun{id: 101, pr: 7}))
 	holdersOf(t, s, 101)
@@ -358,6 +362,7 @@ func TestDeploySlot_OneHolderPasses(t *testing.T) {
 }
 
 func TestDeploySlot_TwoHoldersWaitThenPass(t *testing.T) {
+	t.Parallel()
 	s := newSlotShim(t)
 	two := slotList(slotRun{id: 101, pr: 11}, slotRun{id: 102, pr: 12})
 	s.runs(t, two, two)
@@ -375,6 +380,7 @@ func TestDeploySlot_TwoHoldersWaitThenPass(t *testing.T) {
 
 // Other run 150 (older) or 250 (newer) is tested against a fixed holder 151: 2 of 2 blocks, 1 of 2 passes.
 func TestDeploySlot_HolderRule(t *testing.T) {
+	t.Parallel()
 	slotDone := func(c string) string { return jobsBody(jobDone(jobChanges, "success", 400), jobDone(jobSlot, c, 300)) }
 	withRelease := func(rel string) string {
 		return jobsBody(jobDone(jobChanges, "success", 400), jobDone(jobSlot, "success", 300), rel)
@@ -398,6 +404,7 @@ func TestDeploySlot_HolderRule(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newSlotShim(t)
 			s.runs(t, slotList(slotRun{id: c.id, pr: 5}, slotRun{id: 151, pr: 6}), slotList())
 			s.jobsAlways(t, c.id, c.jobs)
@@ -425,8 +432,10 @@ func TestDeploySlot_HolderRule(t *testing.T) {
 }
 
 func TestDeploySlot_OlderWaiterCountsNewerDoesNot(t *testing.T) {
+	t.Parallel()
 	waiting := jobsBody(jobDone(jobChanges, "success", 40), jobOpen(jobSlot, "in_progress"))
 	t.Run("older run 199 counts", func(t *testing.T) {
+		t.Parallel()
 		s := newSlotShim(t)
 		s.runs(t, slotList(slotRun{id: 150, pr: 5}, slotRun{id: 199, pr: 6}), slotList())
 		holdersOf(t, s, 150)
@@ -438,6 +447,7 @@ func TestDeploySlot_OlderWaiterCountsNewerDoesNot(t *testing.T) {
 		s.wantSleeps(t, 1)
 	})
 	t.Run("newer run 201 does not", func(t *testing.T) {
+		t.Parallel()
 		s := newSlotShim(t)
 		s.runs(t, slotList(slotRun{id: 150, pr: 5}, slotRun{id: 201, pr: 6}), slotList())
 		holdersOf(t, s, 150)
@@ -453,6 +463,7 @@ func TestDeploySlot_OlderWaiterCountsNewerDoesNot(t *testing.T) {
 }
 
 func TestDeploySlot_TwoOlderWaitersBlock(t *testing.T) {
+	t.Parallel()
 	s := newSlotShim(t)
 	s.runs(t, slotListFor(300, slotRun{id: 298}, slotRun{id: 299}), slotListFor(300))
 	s.jobsAlways(t, 298, jobsBody(jobDone(jobChanges, "success", 40), jobOpen(jobSlot, "queued")))
@@ -465,6 +476,7 @@ func TestDeploySlot_TwoOlderWaitersBlock(t *testing.T) {
 }
 
 func TestDeploySlot_PushRunCountsAsHolder(t *testing.T) {
+	t.Parallel()
 	s := newSlotShim(t)
 	s.runs(t, slotList(slotRun{id: 150, pr: 11}, slotRun{id: 250, event: "push", branch: "main"}), slotList())
 	holdersOf(t, s, 150, 250)
@@ -476,6 +488,7 @@ func TestDeploySlot_PushRunCountsAsHolder(t *testing.T) {
 }
 
 func TestDeploySlot_ListsRunsWithoutStatusFilter(t *testing.T) {
+	t.Parallel()
 	s := newSlotShim(t)
 	s.runs(t, slotList())
 	out, code := s.run(t)
@@ -494,9 +507,11 @@ func TestDeploySlot_ListsRunsWithoutStatusFilter(t *testing.T) {
 }
 
 func TestDeploySlot_CountsEveryNotCompletedRunStatus(t *testing.T) {
+	t.Parallel()
 	waiting := jobsBody(jobDone(jobChanges, "success", 40), jobOpen(jobSlot, "in_progress"))
 	for _, status := range []string{"queued", "waiting", "pending", "requested", "in_progress"} {
 		t.Run(status, func(t *testing.T) {
+			t.Parallel()
 			s := newSlotShim(t)
 			s.runs(t, slotList(slotRun{id: 99, status: status}, slotRun{id: 150, pr: 5}), slotList())
 			holdersOf(t, s, 150)
@@ -509,6 +524,7 @@ func TestDeploySlot_CountsEveryNotCompletedRunStatus(t *testing.T) {
 		})
 	}
 	t.Run("completed", func(t *testing.T) {
+		t.Parallel()
 		s := newSlotShim(t)
 		s.runs(t, slotList(slotRun{id: 99, status: "completed"}, slotRun{id: 150, pr: 5}))
 		holdersOf(t, s, 150)
@@ -525,6 +541,7 @@ func TestDeploySlot_CountsEveryNotCompletedRunStatus(t *testing.T) {
 }
 
 func TestDeploySlot_SkipsOwnRunAndStaleRuns(t *testing.T) {
+	t.Parallel()
 	s := newSlotShim(t)
 	s.runs(t, slotList(slotRun{id: 55, startedAgo: 4 * 3600}))
 	s.jobsAlways(t, slotSelfID, jobsBody(jobDone(jobChanges, "success", 40), jobOpen(jobSlot, "in_progress")))
@@ -540,11 +557,12 @@ func TestDeploySlot_SkipsOwnRunAndStaleRuns(t *testing.T) {
 }
 
 func TestDeploySlot_StaleCutoffBoundary(t *testing.T) {
+	t.Parallel()
 	s := newSlotShim(t)
 	s.runs(t, slotList(
-		slotRun{id: 150, pr: 5, startedAgo: slotMaxAge - 60}, // 2 h 59 min: inside MAX_AGE_SECONDS
-		slotRun{id: 151, pr: 6, startedAgo: slotMaxAge + 60}, // 3 h 01 min: outside
-		slotRun{id: 152, pr: 7}), slotList())
+		slotRun{id: 150, pr: 5, startedAgo: slotMaxAge - 60},         // 2 h 59 min: inside MAX_AGE_SECONDS
+		slotRun{id: 151, pr: 6, startedAgo: slotMaxAge + 60},         // 3 h 01 min: outside
+		slotRun{id: 152, pr: 7, startedAgo: slotMaxAge}), slotList()) // exactly 3 h: still inside
 	holdersOf(t, s, 150, 151, 152)
 	out, code := s.run(t)
 
@@ -560,6 +578,7 @@ func TestDeploySlot_StaleCutoffBoundary(t *testing.T) {
 }
 
 func TestDeploySlot_OneLinePerPollAndSixtySecondSleeps(t *testing.T) {
+	t.Parallel()
 	s := newSlotShim(t)
 	two := slotList(slotRun{id: 101, pr: 11}, slotRun{id: 102, pr: 12})
 	s.runs(t, two, two, two, slotList())
@@ -586,6 +605,7 @@ func TestDeploySlot_OneLinePerPollAndSixtySecondSleeps(t *testing.T) {
 }
 
 func TestDeploySlot_LabelFallsBackToEventAndBranch(t *testing.T) {
+	t.Parallel()
 	s := newSlotShim(t)
 	s.runs(t, slotList(slotRun{id: 150, branch: "feature/x"}))
 	holdersOf(t, s, 150)
@@ -596,6 +616,7 @@ func TestDeploySlot_LabelFallsBackToEventAndBranch(t *testing.T) {
 }
 
 func TestDeploySlot_NeverCallsRailway(t *testing.T) {
+	t.Parallel()
 	s := newSlotShim(t)
 	for _, name := range []string{"railway", "curl"} {
 		stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + filepath.Join(s.dir, name+".log") + "'\n"
@@ -618,6 +639,7 @@ func TestDeploySlot_NeverCallsRailway(t *testing.T) {
 }
 
 func TestDeploySlot_TimesOutNamingHolders(t *testing.T) {
+	t.Parallel()
 	s := newSlotShim(t)
 	s.runsAlways(t, slotList(slotRun{id: 101, pr: 11}, slotRun{id: 102, pr: 12}))
 	holdersOf(t, s, 101, 102)
@@ -636,6 +658,7 @@ func TestDeploySlot_TimesOutNamingHolders(t *testing.T) {
 }
 
 func TestDeploySlot_SlowCallsEndTheWaitByWallClock(t *testing.T) {
+	t.Parallel()
 	s := newSlotShim(t)
 	s.runsAlways(t, slotList(slotRun{id: 101, pr: 11}, slotRun{id: 102, pr: 12}))
 	s.jobsAlways(t, 101, pinnedHolderJobs())
@@ -663,6 +686,7 @@ func TestDeploySlot_SlowCallsEndTheWaitByWallClock(t *testing.T) {
 }
 
 func TestDeploySlot_ListReadFailureKeepsWaiting(t *testing.T) {
+	t.Parallel()
 	s := newSlotShim(t)
 	s.runs(t, "EXIT1", slotList())
 	out, code := s.run(t)
@@ -677,6 +701,7 @@ func TestDeploySlot_ListReadFailureKeepsWaiting(t *testing.T) {
 }
 
 func TestDeploySlot_RateLimitIsNamed(t *testing.T) {
+	t.Parallel()
 	s := newSlotShim(t)
 	s.runs(t, "FAIL:gh: API rate limit exceeded (HTTP 403)", slotList())
 	out, code := s.run(t)
@@ -687,6 +712,7 @@ func TestDeploySlot_RateLimitIsNamed(t *testing.T) {
 }
 
 func TestDeploySlot_JobsReadFailureKeepsWaiting(t *testing.T) {
+	t.Parallel()
 	s := newSlotShim(t)
 	one := slotList(slotRun{id: 101, pr: 11})
 	s.runs(t, one, one)
@@ -703,6 +729,7 @@ func TestDeploySlot_JobsReadFailureKeepsWaiting(t *testing.T) {
 }
 
 func TestDeploySlot_PersistentJobsFailureBlocksToTheDeadline(t *testing.T) {
+	t.Parallel()
 	s := newSlotShim(t)
 	s.runsAlways(t, slotList(slotRun{id: 77}))
 	s.jobsAlways(t, 77, "EXIT1")
@@ -720,8 +747,10 @@ func TestDeploySlot_PersistentJobsFailureBlocksToTheDeadline(t *testing.T) {
 }
 
 func TestDeploySlot_NonJSONBodyKeepsWaiting(t *testing.T) {
-	for _, body := range []string{"<html>", "[]"} {
+	t.Parallel()
+	for _, body := range []string{"<html>", "[]", `{"message":"Bad credentials"}`} {
 		t.Run("runs list "+body, func(t *testing.T) {
+			t.Parallel()
 			s := newSlotShim(t)
 			s.runs(t, body, slotList())
 			out, code := s.run(t)
@@ -731,23 +760,28 @@ func TestDeploySlot_NonJSONBodyKeepsWaiting(t *testing.T) {
 			s.wantSleeps(t, 1)
 		})
 	}
-	t.Run("jobs read <html>", func(t *testing.T) {
-		s := newSlotShim(t)
-		one := slotList(slotRun{id: 101, pr: 11})
-		s.runs(t, one, one)
-		s.jobs(t, 101, "<html>", holderJobs())
-		out, code := s.run(t)
+	for _, body := range []string{"<html>", "[]", `{"message":"Not Found"}`} {
+		t.Run("jobs read "+body, func(t *testing.T) {
+			t.Parallel()
+			s := newSlotShim(t)
+			one := slotList(slotRun{id: 101, pr: 11})
+			s.runs(t, one, one)
+			s.jobs(t, 101, body, holderJobs())
+			out, code := s.run(t)
 
-		wantExit(t, code, 0, out)
-		wantContains(t, "poll 1", pollLine(t, out, 1), "could not read run 101")
-		s.wantSleeps(t, 1)
-	})
+			wantExit(t, code, 0, out)
+			wantContains(t, "poll 1", pollLine(t, out, 1), "could not read run 101")
+			s.wantSleeps(t, 1)
+		})
+	}
 }
 
 func TestDeploySlot_UsageErrors(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"REPO", "RUN_ID", "EVENT_NAME"} {
 		for _, how := range []string{"empty", "unset"} {
 			t.Run(name+" "+how, func(t *testing.T) {
+				t.Parallel()
 				s := newSlotShim(t)
 				s.runs(t, slotList())
 				env := "unset REPO RUN_ID EVENT_NAME\n" + slotEnv(slotSelfID, "pull_request")
@@ -770,6 +804,7 @@ func TestDeploySlot_UsageErrors(t *testing.T) {
 }
 
 func TestDeploySlot_SettledRunNotRefetched(t *testing.T) {
+	t.Parallel()
 	s := newSlotShim(t)
 	p1 := slotList(slotRun{id: 50}, slotRun{id: 51}, slotRun{id: 101, pr: 11}, slotRun{id: 102, pr: 12})
 	p2 := slotList(slotRun{id: 50}, slotRun{id: 51}, slotRun{id: 101, pr: 11})
@@ -793,16 +828,19 @@ func TestDeploySlot_SettledRunNotRefetched(t *testing.T) {
 }
 
 func TestDeploySlot_RunWithoutSlotJobSettlesAfterGrace(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name         string
 		changesAgo   int
 		wantFetchesN int
 	}{
 		{"changes completed 61 s ago settles at poll 1", slotGrace + 1, 1},
+		{"changes completed exactly 60 s ago settles at poll 1", slotGrace, 1},
 		{"changes completed 30 s ago settles at poll 2", slotGrace / 2, 2},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newSlotShim(t)
 			both := slotList(slotRun{id: 40}, slotRun{id: 101, pr: 11}, slotRun{id: 102, pr: 12})
 			s.runs(t, both, both, slotList(slotRun{id: 40}, slotRun{id: 101, pr: 11}))
@@ -821,6 +859,7 @@ func TestDeploySlot_RunWithoutSlotJobSettlesAfterGrace(t *testing.T) {
 }
 
 func TestDeploySlot_NewAttemptIsNotSettled(t *testing.T) {
+	t.Parallel()
 	s := newSlotShim(t)
 	s.runs(t,
 		slotList(slotRun{id: 60, attempt: 1}, slotRun{id: 101, pr: 11}, slotRun{id: 102, pr: 12}),
@@ -843,21 +882,26 @@ func TestDeploySlot_NewAttemptIsNotSettled(t *testing.T) {
 }
 
 func TestDeploySlot_StuckHolderExpires(t *testing.T) {
+	t.Parallel()
 	stuck := func(agoSeconds int) string {
 		return jobsBody(jobDone(jobChanges, "success", agoSeconds+100), jobDone(jobSlot, "success", agoSeconds))
 	}
-	t.Run("60 min 1 s ago expires", func(t *testing.T) {
-		s := newSlotShim(t)
-		s.runs(t, slotList(slotRun{id: 150, pr: 5}, slotRun{id: 151, pr: 6}))
-		s.jobsAlways(t, 150, stuck(slotMaxHold+1))
-		holdersOf(t, s, 151)
-		out, code := s.run(t)
+	for _, ago := range []int{slotMaxHold, slotMaxHold + 1} {
+		t.Run(fmt.Sprintf("%d s ago expires", ago), func(t *testing.T) {
+			t.Parallel()
+			s := newSlotShim(t)
+			s.runs(t, slotList(slotRun{id: 150, pr: 5}, slotRun{id: 151, pr: 6}))
+			s.jobsAlways(t, 150, stuck(ago))
+			holdersOf(t, s, 151)
+			out, code := s.run(t)
 
-		wantExit(t, code, 0, out)
-		wantContains(t, "poll 1", pollLine(t, out, 1), "1 of 2 held", "expired: run 150 (PR #5)")
-		s.wantSleeps(t, 0)
-	})
+			wantExit(t, code, 0, out)
+			wantContains(t, "poll 1", pollLine(t, out, 1), "1 of 2 held", "expired: run 150 (PR #5)")
+			s.wantSleeps(t, 0)
+		})
+	}
 	t.Run("59 min 59 s ago still holds", func(t *testing.T) {
+		t.Parallel()
 		s := newSlotShim(t)
 		s.runs(t, slotList(slotRun{id: 150, pr: 5}, slotRun{id: 151, pr: 6}), slotList())
 		s.jobsAlways(t, 150, stuck(slotMaxHold-1))
@@ -872,4 +916,41 @@ func TestDeploySlot_StuckHolderExpires(t *testing.T) {
 		}
 		s.wantSleeps(t, 1)
 	})
+}
+
+// Settled keys are matched whole: settled run 150 must not hide run 50.
+func TestDeploySlot_SettledKeyDoesNotMatchAnIDSuffix(t *testing.T) {
+	t.Parallel()
+	s := newSlotShim(t)
+	all := slotList(slotRun{id: 50, pr: 5}, slotRun{id: 150}, slotRun{id: 151, pr: 6})
+	s.runs(t, all, all, slotList())
+	s.jobsAlways(t, 150, jobsBody(jobDone(jobChanges, "success", 400), jobDone(jobSlot, "success", 300), jobDone(jobRelease, "success", 5)))
+	holdersOf(t, s, 50, 151)
+	out, code := s.run(t)
+
+	wantExit(t, code, 0, out)
+	wantContains(t, "poll 1", pollLine(t, out, 1), "2 of 2 held", "run 50 (PR #5)")
+	wantContains(t, "poll 2", pollLine(t, out, 2), "2 of 2 held", "run 50 (PR #5)")
+	if n := s.jobsCalls(t)[150]; n != 1 {
+		t.Errorf("settled run 150 fetched %d times, want 1", n)
+	}
+	s.wantSleeps(t, 2)
+}
+
+// The deadline names the holders of the last poll that had a verdict, not "none" after a read failure.
+func TestDeploySlot_DeadlineNamesHoldersOfTheLastVerdictPoll(t *testing.T) {
+	t.Parallel()
+	s := newSlotShim(t)
+	s.runs(t, slotList(slotRun{id: 101, pr: 11}, slotRun{id: 102, pr: 12}))
+	s.runsAlways(t, "EXIT1")
+	holdersOf(t, s, 101, 102)
+	out, code := s.run(t)
+
+	wantExit(t, code, 1, out)
+	errs := slotErrorLines(out)
+	if len(errs) != 1 {
+		t.Fatalf("::error:: lines = %d, want 1: %q", len(errs), out)
+	}
+	wantContains(t, "::error:: line", errs[0], "run 101 (PR #11)", "run 102 (PR #12)")
+	wantContains(t, "poll 2", pollLine(t, out, 2), "could not read the runs")
 }

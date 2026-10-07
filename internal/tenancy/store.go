@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -385,4 +386,26 @@ func (s *Store) AcceptInvitation(ctx context.Context, token string) (Tenant, str
 		return Tenant{}, "", "", err
 	}
 	return t, subject, role, nil
+}
+
+var errNotImplemented = errors.New("tenancy: not implemented")
+
+// PendingInvite is one live invite addressed to the caller's verified email.
+type PendingInvite struct {
+	ID        string    `json:"id"`
+	Workspace string    `json:"workspace"`
+	Role      string    `json:"role"`
+	Inviter   *string   `json:"inviter"`
+	ExpiresAt time.Time `json:"expires_at"`
+	tenantID  string
+}
+
+// MyPendingInvitations lists the live invites for the caller's email.
+func (s *Store) MyPendingInvitations(ctx context.Context) ([]PendingInvite, error) {
+	return nil, errNotImplemented
+}
+
+// AcceptInvitationByID joins the caller to the tenant of invite id.
+func (s *Store) AcceptInvitationByID(ctx context.Context, id string) (Tenant, string, string, error) {
+	return Tenant{}, "", "", errNotImplemented
 }

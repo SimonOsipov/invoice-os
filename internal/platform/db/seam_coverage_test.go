@@ -3162,6 +3162,18 @@ var scSweepSubjectAllowlist = []scSweepSubjectExemption{
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AMismatchedAddressIsRefusedAlikeWithOrWithoutAnAccount"},         // the invitee holds no membership in the invite's tenant before accepting
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_ATokenJoinsOnlyItsOwnTenant"},                                    // the invitee holds no membership in the invite's tenant before accepting
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AMalformedTokenOrSubjectSendsNoStatement"},                       // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AcceptByIdJoinsWithTheInvitedRole"},                                  // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_ListNamesEveryWorkspaceThatInvitedTheAddress"},                       // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_ListUsesTheNormalisedHeaderEmail"},                                   // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AnotherAddressInAnyTenantIsNeitherListedNorAccepted"},                // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_ExpiredInviteIsNotListedAndNotAccepted"},                             // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TenantBearingCallerSendsNoStatement"},                                // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_NoCallerOrANonUuidSubjectSendsNoStatement"},                          // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AFailedAuditRollsTheJoinBack"},                                       // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TwoInvitesJoinOnceUnderRace"},                                        // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_SameInviteTwoConcurrentAcceptsJoinOnce"},                             // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TokenLinkAfterJoinByIdIsNoLongerValid"},                              // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_JoinByIdAfterTokenLinkIsNoLongerValid"},                              // the invitee holds no membership before joining
 }
 
 // scSweepTestFiles returns every _test.go file under internal/ (repo-relative,

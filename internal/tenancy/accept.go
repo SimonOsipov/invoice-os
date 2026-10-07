@@ -102,3 +102,23 @@ func AcceptInvitationHandler(accept AcceptInvitationFunc, log *slog.Logger) http
 		writeJSON(w, http.StatusOK, resp)
 	}
 }
+
+// MyPendingInvitationsFunc lists the live invites for the caller's email.
+type MyPendingInvitationsFunc func(context.Context) ([]PendingInvite, error)
+
+// AcceptInvitationByIDFunc accepts invite id for the caller: tenant, subject, role.
+type AcceptInvitationByIDFunc func(context.Context, string) (Tenant, string, string, error)
+
+// InvitationsMineHandler returns GET /v1/invitations/mine.
+func InvitationsMineHandler(list MyPendingInvitationsFunc, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented")
+	}
+}
+
+// AcceptInvitationByIDHandler returns POST /v1/invitations/{id}/accept.
+func AcceptInvitationByIDHandler(accept AcceptInvitationByIDFunc, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented")
+	}
+}

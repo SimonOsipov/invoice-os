@@ -463,7 +463,7 @@ describe('stripNodes: node 3 follows the approval run, arch §3c', () => {
 
   it('S-13: a cancelled run on a demoted draft still reads Approval voided, not Not reached', () => {
     // The production-dominant cancelled case: CancelLiveRunTx voids the run on every path
-    // back to draft (engine.go:261-271). Node 3 follows the run, not the cursor.
+    // back to draft (engine.go). Node 3 follows the run, not the cursor.
     const nodes = strip([h('draft', T_DRAFT)], mkRun('cancelled', { closed_at: T_CLOSED }), 'draft')
     expect(nodes[2].state).toBe('not-required')
     expect(nodes[2].caption).toBe('Approval voided')

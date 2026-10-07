@@ -161,7 +161,7 @@ describe('verify notice: the emailed-link landing', () => {
 
     // A re-render after the strip must not re-read the URL.
     await rebootAt('/?verify=failed')
-    const login = Array.from(document.querySelectorAll('header button')).find((b) => b.textContent?.trim() === 'Platform login')
+    const login = Array.from(document.querySelectorAll('header button')).find((b) => b.textContent?.trim() === 'Sign in')
     expect(login).toBeDefined()
     await act(async () => (login as HTMLButtonElement).click())
     expect(dialogs().length).toBe(1)
@@ -184,7 +184,7 @@ describe('verify notice: the emailed-link landing', () => {
       pageMounted()
 
       // A later re-render does not bring it back.
-      const login = Array.from(document.querySelectorAll('header button')).find((b) => b.textContent?.trim() === 'Platform login')
+      const login = Array.from(document.querySelectorAll('header button')).find((b) => b.textContent?.trim() === 'Sign in')
       expect(login, search).toBeDefined()
       await act(async () => (login as HTMLButtonElement).click())
       expect(dialogs().length, search).toBe(1)

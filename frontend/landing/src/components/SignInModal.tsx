@@ -36,7 +36,7 @@ export function SignInModal({ onClose, heldState = NO_STATE, initialError, conso
       onClick={onClose}
       role="dialog"
       aria-modal="true"
-      aria-label="Platform login"
+      aria-label="Sign in"
       style={MODAL_SCRIM_STYLE}
     >
       <style>{MODAL_CHROME_CSS}</style>
@@ -49,7 +49,7 @@ export function SignInModal({ onClose, heldState = NO_STATE, initialError, conso
 
         <div style={{ padding: '22px 20px 20px' }}>
           <div style={{ marginBottom: 14 }}>
-            <Eyebrow>PLATFORM LOGIN</Eyebrow>
+            <Eyebrow>SIGN IN</Eyebrow>
           </div>
           <h3 style={{ ...HEADING_STYLE, margin: '0 0 16px' }}>{view === 'forgot' ? 'Reset your password' : 'Sign in to your workspace'}</h3>
           {signInConfigured() ? (

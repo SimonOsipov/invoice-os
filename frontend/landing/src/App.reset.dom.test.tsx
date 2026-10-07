@@ -153,13 +153,13 @@ describe('reset notice: the landing after the emailed reset link', () => {
     await press(onlyNotice(RESET_FAILED), REQUEST_NEW)
 
     expect(dialogs().length).toBe(1)
-    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Platform login')
+    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Sign in')
     expect(headings()).toEqual([RESET_HEADING])
 
     // D34: closing and opening from the Nav shows the sign-in view.
     await escape()
     expect(dialogs().length).toBe(0)
-    const navLogin = Array.from(document.querySelectorAll('header button')).find((b) => b.textContent?.trim() === 'Platform login')
+    const navLogin = Array.from(document.querySelectorAll('header button')).find((b) => b.textContent?.trim() === 'Sign in')
     expect(navLogin, 'the Nav control').toBeDefined()
     await act(async () => (navLogin as HTMLButtonElement).click())
     expect(headings()).toEqual([SIGN_IN_HEADING])
@@ -182,11 +182,11 @@ describe('reset notice: the landing after the emailed reset link', () => {
     expect(headings(), 'control: the forgot view is open').toEqual([RESET_HEADING])
 
     await press(document.querySelector(DIALOG)!, 'Create an account')
-    expect(document.querySelector(DIALOG)!.getAttribute('aria-label'), 'control: the register window replaced it').not.toBe('Platform login')
+    expect(document.querySelector(DIALOG)!.getAttribute('aria-label'), 'control: the register window replaced it').not.toBe('Sign in')
     await escape()
     expect(dialogs().length).toBe(0)
 
-    const navLogin = Array.from(document.querySelectorAll('header button')).find((b) => b.textContent?.trim() === 'Platform login')
+    const navLogin = Array.from(document.querySelectorAll('header button')).find((b) => b.textContent?.trim() === 'Sign in')
     await act(async () => (navLogin as HTMLButtonElement).click())
     expect(headings()).toEqual([SIGN_IN_HEADING])
   })
@@ -200,7 +200,7 @@ describe('reset notice: the landing after the emailed reset link', () => {
     await act(async () => close!.click())
     expect(dialogs().length).toBe(0)
 
-    const navLogin = Array.from(document.querySelectorAll('header button')).find((b) => b.textContent?.trim() === 'Platform login')
+    const navLogin = Array.from(document.querySelectorAll('header button')).find((b) => b.textContent?.trim() === 'Sign in')
     await act(async () => (navLogin as HTMLButtonElement).click())
     expect(headings()).toEqual([SIGN_IN_HEADING])
   })

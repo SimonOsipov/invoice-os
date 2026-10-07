@@ -151,7 +151,7 @@ export default function App() {
         overflowX: 'clip',
       }}
     >
-      <Nav onSignIn={onSignIn} onBookDemo={book('nav')} onCreateAccount={onCreateAccount} hrefPrefix={privacy ? '/' : ''} />
+      <Nav onSignIn={onSignIn} onBookDemo={book('nav')} hrefPrefix={privacy ? '/' : ''} />
       {notice && (
         <VerifyNotice
           outcome={notice}

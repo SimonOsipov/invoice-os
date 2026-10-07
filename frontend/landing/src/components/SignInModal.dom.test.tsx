@@ -51,7 +51,7 @@ const STATE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN-_0'
 
 function dialog(): HTMLElement {
   const d = document.querySelector<HTMLElement>('[role="dialog"]')
-  expect(d, 'expected the Platform login dialog').not.toBeNull()
+  expect(d, 'expected the Sign in dialog').not.toBeNull()
   return d!
 }
 
@@ -128,14 +128,14 @@ describe('v2 content', () => {
   it.each([
     ['unconfigured', unconfigured, 0],
     ['configured', () => { stubTargets(ALL_TARGETS); configured() }, 1],
-  ])('SM-02 %s: the eyebrow is PLATFORM LOGIN', async (_label, setup, forms) => {
+  ])('SM-02 %s: the eyebrow is SIGN IN', async (_label, setup, forms) => {
     setup()
     await mount(vi.fn(), STATE)
     const d = dialog()
     expect(d.querySelectorAll('input[type="password"]').length, 'control: the form shows only when configured').toBe(forms)
     const eyebrows = Array.from(d.querySelectorAll('.t-eyebrow'))
-    expect(eyebrows.map((e) => e.textContent)).toEqual(['PLATFORM LOGIN'])
-    expect(d.textContent).not.toContain('SIGN IN')
+    expect(eyebrows.map((e) => e.textContent)).toEqual(['SIGN IN'])
+    expect(d.textContent!.split('SIGN IN').length - 1, 'the eyebrow is the only SIGN IN').toBe(1)
     expect(consoleError).not.toHaveBeenCalled()
   })
 
@@ -220,14 +220,14 @@ describe('v2 content', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('SM-11: nothing defeats the focus ring, and the dialog is modal and named Platform login', async () => {
+  it('SM-11: nothing defeats the focus ring, and the dialog is modal and named Sign in', async () => {
     stubTargets(ALL_TARGETS)
     configured()
     await mount(vi.fn(), STATE)
     const d = dialog()
     expect(d.getAttribute('role')).toBe('dialog')
     expect(d.getAttribute('aria-modal')).toBe('true')
-    expect(d.getAttribute('aria-label')).toBe('Platform login')
+    expect(d.getAttribute('aria-label')).toBe('Sign in')
     expect(d.querySelectorAll('[aria-label="Sign in"]').length).toBe(0)
     expect(declsOf('.si-close:focus-visible'), 'control: the parser finds the ring rule').toContain('outline: 2px solid var(--ring)')
     const css = Array.from(d.querySelectorAll('style'), (s) => s.textContent ?? '').join('\n')
@@ -317,7 +317,7 @@ describe('the forgot view', () => {
     expect(d.querySelectorAll('input[type="password"]').length, 'the sign-in form is gone').toBe(0)
     expect(buttonTexts()).toEqual(expect.arrayContaining(['Send reset link', 'Back to sign in']))
     expect(buttonTexts(), 'the sign-in submit is gone').not.toContain('Sign in →')
-    expect(Array.from(d.querySelectorAll('.t-eyebrow'), (e) => e.textContent), 'the eyebrow stays').toEqual(['PLATFORM LOGIN'])
+    expect(Array.from(d.querySelectorAll('.t-eyebrow'), (e) => e.textContent), 'the eyebrow stays').toEqual(['SIGN IN'])
     expect(buttonTexts(), 'the create link stays').toContain('Create an account')
 
     await press('Back to sign in')

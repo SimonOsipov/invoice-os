@@ -72,7 +72,7 @@ function onlyDialog(): HTMLElement {
 }
 
 async function openFromNav(): Promise<void> {
-  const b = Array.from(document.querySelectorAll('header button')).find((x) => x.textContent?.trim() === 'Platform login')
+  const b = Array.from(document.querySelectorAll('header button')).find((x) => x.textContent?.trim() === 'Sign in')
   expect(b).toBeDefined()
   await act(async () => (b as HTMLButtonElement).click())
 }

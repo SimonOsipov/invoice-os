@@ -92,7 +92,7 @@ describe('a choice made while a modal is open', () => {
     // the state machine must not depend on that: if a choice arrives anyway, it must
     // land cleanly rather than desync the two.
     await mountApp()
-    await clickByText('Platform login')
+    await clickByText('Sign in')
     expect(document.querySelectorAll('[role="dialog"]').length, 'the sign-in modal did not open').toBe(1)
 
     const accept = consentButton('accept')

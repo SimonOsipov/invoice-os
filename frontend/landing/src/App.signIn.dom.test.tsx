@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
-// F-2: the nav's "Platform login" control opens the sign-in modal specifically (the hero has no sign-in control),
+// F-2: the nav's "Sign in" control opens the sign-in modal specifically (the hero has no sign-in control),
 // without navigating away, and dismissing it restores the page. Same setup contract as
 // consentActions.mount.dom.test.tsx: production URL, an installed memory localStorage,
 // a console.error spy asserted empty. The control is reached scoped to `header`.
@@ -12,7 +12,7 @@ import type { ConsentStore } from './consent'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const SIGN_IN_CTA = 'Platform login'
+const SIGN_IN_CTA = 'Sign in'
 const DIALOG = '[role="dialog"]'
 
 function memoryStorage(): ConsentStore {
@@ -76,7 +76,17 @@ describe('F-2: the sign-in control opens the sign-in modal', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('F2-b / HD-16: exactly one "Platform login" in header and on the page, and no retired trigger label', async () => {
+  it('landing_hasNoPlatformLoginText', async () => {
+    window.history.replaceState(null, '', `/?state=${'A'.repeat(43)}&signin=ready`)
+    await mountApp()
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('header button.a-burger')!.click()
+    })
+    expect(document.querySelector('.a-menu'), 'control: menu open').not.toBeNull()
+    expect(document.body.textContent).not.toMatch(/platform login/i)
+  })
+
+  it('F2-b / HD-16: exactly one "Sign in" in header and on the page, and no retired trigger label', async () => {
     await mountApp()
     const header = document.querySelector('header')!
     const inHeader = Array.from(header.querySelectorAll('button')).filter((b) => b.textContent?.trim() === SIGN_IN_CTA)
@@ -90,7 +100,7 @@ describe('F-2: the sign-in control opens the sign-in modal', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('F2-c/d/e: clicking opens the Platform login dialog, does not navigate, and Close restores the page', async () => {
+  it('F2-c/d/e: clicking opens the Sign in dialog, does not navigate, and Close restores the page', async () => {
     await mountApp()
     const header = document.querySelector('header')!
     const sectionsBefore = document.querySelectorAll('section[id]').length
@@ -99,10 +109,10 @@ describe('F-2: the sign-in control opens the sign-in modal', () => {
 
     await clickByText(header, SIGN_IN_CTA)
 
-    // F2-c: exactly one dialog, and it is the Platform login one -- not Book a demo.
+    // F2-c: exactly one dialog, and it is the Sign in one -- not Book a demo.
     expect(document.querySelectorAll(DIALOG).length).toBe(1)
     const dialog = document.querySelector(DIALOG)!
-    expect(dialog.getAttribute('aria-label')).toBe('Platform login')
+    expect(dialog.getAttribute('aria-label')).toBe('Sign in')
 
     // F2-d: no navigation.
     expect(window.location.pathname).toBe(pathBefore)
@@ -136,7 +146,7 @@ describe('F-2: the sign-in control opens the sign-in modal', () => {
 
     await clickByText(header, SIGN_IN_CTA)
     expect(document.querySelectorAll(DIALOG).length).toBe(1)
-    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Platform login')
+    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Sign in')
     expect(consoleError).not.toHaveBeenCalled()
   })
 })
@@ -151,7 +161,7 @@ describe('F-2 footer: Open the cockpit', () => {
 
     expect(document.querySelectorAll(DIALOG).length).toBe(1)
     const dialog = document.querySelector(DIALOG)!
-    expect(dialog.getAttribute('aria-label')).toBe('Platform login')
+    expect(dialog.getAttribute('aria-label')).toBe('Sign in')
     await act(async () => {
       dialog.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click()
     })
@@ -161,7 +171,7 @@ describe('F-2 footer: Open the cockpit', () => {
 })
 
 describe('F-2 menu: sign-in from the burger menu', () => {
-  it('F2-g: the menu Platform login opens the Sign-in dialog and the menu is gone behind it', async () => {
+  it('F2-g: the menu Sign in opens the Sign-in dialog and the menu is gone behind it', async () => {
     await mountApp()
     const burger = document.querySelector<HTMLButtonElement>('header button.a-burger')
     expect(burger, 'expected the header burger').not.toBeNull()
@@ -175,7 +185,7 @@ describe('F-2 menu: sign-in from the burger menu', () => {
     await clickByText(menu!, SIGN_IN_CTA)
 
     expect(document.querySelectorAll(DIALOG).length).toBe(1)
-    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Platform login')
+    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Sign in')
     expect(document.querySelector('.a-menu'), 'the menu closes before the modal opens').toBeNull()
     expect(burger!.getAttribute('aria-expanded')).toBe('false')
     expect(consoleError).not.toHaveBeenCalled()
@@ -215,7 +225,7 @@ describe('AUTH-05-07: the boot sign-in params', () => {
   it('a no-workspace outcome opens the modal with its message', async () => {
     await bootAt('/?signin=no-workspace')
     expect(document.querySelectorAll(DIALOG).length).toBe(1)
-    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Platform login')
+    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Sign in')
     const got = dialogAlerts()
     expect(got.length).toBe(1)
     expect(got[0].textContent).toContain(NO_WORKSPACE)
@@ -401,7 +411,7 @@ describe('the console hand-back', () => {
   it('boot_notStaffShowsItsMessage', async () => {
     await bootAt('/?signin=not-staff')
     expect(document.querySelectorAll(DIALOG).length).toBe(1)
-    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Platform login')
+    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Sign in')
     const alerts = Array.from(document.querySelector(DIALOG)!.querySelectorAll<HTMLElement>('[role="alert"]'))
     expect(alerts.length).toBe(1)
     expect(alerts[0].textContent).toContain(NOT_STAFF)

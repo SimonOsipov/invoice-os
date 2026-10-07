@@ -91,7 +91,7 @@ func TestGatewayOwnRoutesSendNoGatewayToken(t *testing.T) {
 	hand := handoffMux(t, probed["auth"], true)
 
 	serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`)
-	serveRegistration(reg.Verify, http.MethodGet, "/auth/verify?type=signup&token=abc", "")
+	serveForm(reg.Verify, "/auth/verify", "type=signup&token=abc")
 	postJSON(hand, "/auth/sign-in", handoffAllowedOrigin, signInJSON("a@corp.example"))
 	postJSON(hand, "/auth/refresh", handoffAllowedOrigin, `{"refresh_token":"ref-presented"}`)
 	postJSON(hand, "/auth/sign-out", handoffAllowedOrigin, `{"refresh_token":"ref-presented"}`)

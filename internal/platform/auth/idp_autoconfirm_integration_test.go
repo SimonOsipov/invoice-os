@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -26,7 +27,9 @@ func TestIdP_AutoconfirmedRegistrationSignsInAndARepeatAnswers202(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	register := gateway.RegisterHandler(authURL, idpHTTP, 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	register := gateway.RegisterHandler(authURL, idpHTTP, 0,
+		gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now), true,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	creds := map[string]string{"email": u.email, "password": u.password}
 
 	if status, body := serveJSON(t, register, "/auth/register", creds); status != http.StatusAccepted {

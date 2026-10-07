@@ -46,6 +46,7 @@ jobs:
               - 'migrations/**'
               - 'docs/**'
               - 'scripts/ci/**'
+              - 'packages/design-tokens/v2/assets/**'
               - 'go.mod'
               - 'go.sum'
               - 'Dockerfile'
@@ -88,6 +89,8 @@ jobs:
               - 'internal/platform/*.go'
               - 'internal/platform/db/**'
               - 'internal/gateway/**'
+              - 'internal/accountmail/**'
+              - 'packages/design-tokens/v2/assets/**'
               - 'internal/tenancy/**'
               - 'migrations/**'
               - 'db/**'
@@ -235,7 +238,7 @@ jobs:
   # time. gateway is built separately (task-128, M4-21-04): it is the ONE service
   # that imports package db (dbsql.FS, for db.Provision's bootstrap/seed steps),
   # so it is the only build that actually exercises Dockerfile.dockerignore's
-  # `!db/...` carve-out — tenancy
+  # `!db/...` and `!packages/design-tokens/v2/assets/...` carve-outs — tenancy
   # alone would never catch a regression there (confirmed empirically: removing
   # the carve-out still builds tenancy fine but fails gateway's compile). No
   # image is pushed.

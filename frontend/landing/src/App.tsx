@@ -22,7 +22,9 @@ import { CookieNotice } from './components/CookieNotice'
 import { isScrollable, scrollDepthPercent, trackDemoOpen, trackScrollDepth, type DemoCtaSource } from './analytics'
 import { readConsent, type ConsentRecord } from './consent'
 import { applyChoice } from './consentActions'
+import { INVITE_PARAM, readInviteOutcome } from './invite'
 import { isPrivacyPath } from './route'
+import { readResetOutcome, RESET_PARAM } from './passwordReset'
 import { registrationOpen } from './register'
 import { readSignInConsole, readSignInState } from './signIn'
 import { readVerifyOutcome, VERIFIED_PARAM, VERIFY_PARAM } from './verify'
@@ -30,13 +32,13 @@ import { readVerifyOutcome, VERIFIED_PARAM, VERIFY_PARAM } from './verify'
 // Copy for the ?signin= outcome; `ready` opens the modal with no message.
 const SIGN_IN_OUTCOMES = new Map<string, string | undefined>([
   ['ready', undefined],
-  ['no-workspace', 'This account has no workspace yet.'],
+  ['no-workspace', 'This account has no workspace yet. If you were invited, open the invite link in your email.'],
   ['failed', "We couldn't open your workspace. Sign in again."],
   ['not-staff', 'This account cannot open the ASComply consoles.'],
 ])
 
 // Params the boot reads once and removes from the address bar.
-const BOOT_PARAMS = ['state', 'console', 'signin', VERIFIED_PARAM, VERIFY_PARAM]
+const BOOT_PARAMS = ['state', 'console', 'signin', VERIFIED_PARAM, VERIFY_PARAM, RESET_PARAM, INVITE_PARAM]
 
 // Held a minute short of the 10-minute state TTL, so a posted state is still live.
 const STATE_HOLD_MS = 9 * 60 * 1000
@@ -62,7 +64,11 @@ export default function App() {
   const [signInOpen, setSignInOpen] = useState(signInBoot.open)
   const [signInError, setSignInError] = useState(signInBoot.error)
   // Read once at mount; the strip below removes the params, so a re-read would lose the notice.
-  const [verifyOutcome, setVerifyOutcome] = useState(() => readVerifyOutcome(window.location.search))
+  // Precedence: verify, then reset, then invite.
+  const [notice, setNotice] = useState(
+    () => readVerifyOutcome(window.location.search) ?? readResetOutcome(window.location.search) ?? readInviteOutcome(window.location.search),
+  )
+  const [signInView, setSignInView] = useState<'sign-in' | 'forgot'>('sign-in')
   const [demoOpen, setDemoOpen] = useState(false)
   const [registerOpen, setRegisterOpen] = useState(false)
   // Read once at mount: a stored choice keeps the notice down until `reopened` flips.
@@ -74,7 +80,12 @@ export default function App() {
     trackDemoOpen(source)
     setDemoOpen(true)
   }
-  const onSignIn = () => setSignInOpen(true)
+  // The one opener (consentActions.test.ts AC-13).
+  const openSignIn = (view: 'sign-in' | 'forgot') => {
+    setSignInView(view)
+    setSignInOpen(true)
+  }
+  const onSignIn = () => openSignIn('sign-in')
   const onCreateAccount = registrationOpen()
     ? () => {
         setSignInOpen(false)
@@ -141,7 +152,13 @@ export default function App() {
       }}
     >
       <Nav onSignIn={onSignIn} onBookDemo={book('nav')} onCreateAccount={onCreateAccount} hrefPrefix={privacy ? '/' : ''} />
-      {verifyOutcome && <VerifyNotice outcome={verifyOutcome} onDismiss={() => setVerifyOutcome(null)} />}
+      {notice && (
+        <VerifyNotice
+          outcome={notice}
+          onDismiss={() => setNotice(null)}
+          onRequestReset={() => openSignIn('forgot')}
+        />
+      )}
       {privacy ? (
         <Privacy />
       ) : (
@@ -178,11 +195,13 @@ export default function App() {
         <SignInModal
           heldState={heldState}
           initialError={signInError}
+          initialView={signInView}
           consoleTarget={signInBoot.consoleTarget ?? undefined}
           onCreateAccount={onCreateAccount}
           onClose={() => {
             setSignInOpen(false)
             setSignInError(undefined)
+            setSignInView('sign-in')
           }}
         />
       )}

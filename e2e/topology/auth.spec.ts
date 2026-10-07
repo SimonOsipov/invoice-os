@@ -1,4 +1,4 @@
-import { test, expect, type BrowserContext, type Frame, type Page, type Request, type Response } from '@playwright/test'
+import { test, expect, type BrowserContext, type Frame, type Locator, type Page, type Request, type Response } from '@playwright/test'
 import { APP_URL, FIRM_PERSONA, GATEWAY_URL, INHOUSE_PERSONA, TENANTS } from './targets'
 import { resolveTarget } from '../targets'
 import { DESTINATION_READY, VERIFIED, browserToken, collectErrors, expectInWorkspace, isHandoffNavigation, sidebarRoster, signInAs, signInAtFrontDoor, submitSignIn } from '../personaSession'
@@ -12,12 +12,15 @@ import {
   createImportBatch,
   claimsOf,
   exchangeCode,
+  inviteWithToken,
   listEntities,
+  me,
   mintSignInState,
   provisionRealAccount,
   provisionStaffAccount,
   rawFetch,
   signInForCode,
+  signInSession,
   PERSONAS as API_PERSONAS,
   type Me,
   type RealAccount,
@@ -1096,6 +1099,51 @@ test('deployed app: a real sign-in names the account holder on the identity card
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })
 
+test('the emailed link opens a confirm page, and a bogus token\'s click lands on the failed notice', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  const posts: string[] = []
+  page.on('request', (req) => {
+    if (req.method() === 'POST' && new URL(req.url()).pathname === '/auth/verify') posts.push(req.url())
+  })
+  const url = `${GATEWAY_URL}/auth/verify?token=bogus-${crypto.randomUUID()}&type=signup`
+  const button = page.getByRole('button')
+
+  const readings: { width: number; fontSize: string; fontWeight: string }[] = []
+  for (const width of [...WIDE_WIDTHS, 375]) {
+    const height = 1080
+    await page.setViewportSize({ width, height })
+    await page.goto(url)
+    await expect(button, `one button at ${width}px`).toHaveCount(1)
+    await expect(button).toHaveText('Confirm my email')
+    const card = page.locator('main')
+    const [cardBox, buttonBox] = await Promise.all([card.boundingBox(), button.boundingBox()])
+    if (!cardBox || !buttonBox) throw new Error(`card or button rendered no box at ${width}px`)
+
+    expect(enclosesRect({ x: 0, y: 0, width, height }, cardBox, 1), `the card leaves the viewport at ${width}px (${JSON.stringify(cardBox)})`).toBe(true)
+    expect(enclosesRect(cardBox, buttonBox, 1), `the button leaves the card at ${width}px (${JSON.stringify({ cardBox, buttonBox })})`).toBe(true)
+    // The gateway page has no app shell, so layout.ts's `.pf-scroll` helper would never resolve.
+    const doc = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }))
+    expect(doc.clientWidth, `the document has no width at ${width}px`).toBeGreaterThan(0)
+    expect(doc.scrollWidth - doc.clientWidth, `the confirm page scrolls sideways at ${width}px (${JSON.stringify(doc)})`).toBeLessThanOrEqual(1)
+    // A dropped `font` shorthand computes the browser default (13.333px / 400).
+    const reading = await button.evaluate((el) => ({ fontSize: getComputedStyle(el).fontSize, fontWeight: getComputedStyle(el).fontWeight }))
+    expect(reading, `the button font at ${width}px`).toEqual({ fontSize: '14px', fontWeight: '700' })
+    readings.push({ width, ...reading })
+  }
+  expect(readings.map((r) => r.width), 'widths measured').toEqual([...WIDE_WIDTHS, 375])
+  await testInfo.attach('button-readings', { body: JSON.stringify(readings, null, 2), contentType: 'application/json' })
+
+  // Copied before the click: the landing navigation may log its own errors.
+  const beforeClick = [...errors]
+  expect(beforeClick, `console errors on the confirm page:\n${beforeClick.join('\n')}`).toEqual([])
+
+  await button.dblclick()
+  await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
+  await expect(page.getByRole('status').filter({ hasText: 'That link did not work' })).toBeVisible()
+  await expect.poll(() => new URL(page.url()).searchParams.has('verify'), { message: 'the landing strips ?verify' }).toBe(false)
+  expect(posts.length, 'POST /auth/verify requests sent by the double-click').toBe(1)
+})
+
 // internal/tenancy/tenancy.go maxNameChars is 200; 6 x 32 + 5 spaces = 197.
 const LONG_NAME = 'Oluwaseyifunmi Adebanjo-Ogunleye '.repeat(6).trim()
 // One unbroken 200-char word: the add-company subtitle must wrap it, not scroll the page.
@@ -1789,12 +1837,13 @@ test('deployed journey: a stranger registers through the landing and lands in a 
     })
 
     await test.step(`${kind}: the emailed link's landing shows the failed and the verified notice`, async () => {
-      // Step 2 of the verify half is a stand-in, and the failed-link half is the only real one:
-      // a bogus token makes the deployed gateway answer 303 to ?verify=failed (real).
+      // Step 2 of the verify half is a stand-in; the failed half is real: a bogus token opens the
+      // confirm page, and its click makes the deployed gateway answer 303 to ?verify=failed.
       // `?verified=1` below is COPY-ONLY: the test types the query itself, so it proves the notice
       // text and that no dialog opens, not that the gateway verified anything. The verified redirect
       // is proven in CI by TestIdP_EmailedLinkVerifiesThenSignInSucceeds.
       await page.goto(`${GATEWAY_URL}/auth/verify?token=bogus-${crypto.randomUUID()}&type=signup`)
+      await page.getByRole('button', { name: 'Confirm my email' }).click()
       await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
       await expect(page.getByRole('status').filter({ hasText: 'That link did not work' })).toBeVisible()
       await expect.poll(() => new URL(page.url()).searchParams.has('verify'), { message: 'the landing strips ?verify' }).toBe(false)
@@ -1860,6 +1909,211 @@ test('deployed journey: a stranger registers through the landing and lands in a 
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })
 
+// frontend/landing/src/signIn.ts UNVERIFIED and register.ts RESEND_FAILED.
+const UNVERIFIED = 'Verify your email address first. The link is in your inbox.'
+const RESEND_FAILED = 'The link could not be sent right now. Try again shortly.'
+const RESEND = 'Send the link again'
+// Tall enough that the card never scrolls inside itself: its children's boxes stay comparable.
+const TALL = 1600
+const RESEND_PATH = '/auth/resend-verification'
+
+// 242-byte local part + '@example.com' = 254 bytes, internal/gateway/signin.go maxEmailBytes; GoTrue accepts it.
+function longAddress(): string {
+  const address = `${crypto.randomUUID().replaceAll('-', '')}${'a'.repeat(210)}@example.com`
+  expect(Buffer.byteLength(address), 'the long address').toBe(254)
+  return address
+}
+
+function recordResends(page: Page): string[] {
+  const posts: string[] = []
+  page.on('request', (req) => {
+    if (req.method() === 'POST' && new URL(req.url()).pathname === RESEND_PATH) posts.push(req.url())
+  })
+  return posts
+}
+
+// Parts run top to bottom: each starts below the one above and none overlaps another.
+// `longValueInputs` names <input> parts that may hold a value wider than their box: an input scrolls its own text,
+// so only its box is judged (inside the card, sameEdges, and its wrapper), never its scrollWidth.
+async function expectStack(page: Page, width: number, card: Locator, parts: [string, Locator][], sameEdges: [string, string], longValueInputs: string[] = []): Promise<void> {
+  await settleAnimations(card)
+  const cardBox = await card.boundingBox()
+  const boxes = new Map<string, { x: number; y: number; width: number; height: number }>()
+  for (const [name, part] of parts) {
+    const box = await part.boundingBox()
+    if (!box) throw new Error(`${name} rendered no box at ${width}px`)
+    boxes.set(name, box)
+  }
+  if (!cardBox) throw new Error(`the card rendered no box at ${width}px`)
+  const names = parts.map(([name]) => name)
+  for (const [i, name] of names.entries()) {
+    const box = boxes.get(name)!
+    expect(enclosesRect(cardBox, box, 1), `${name} leaves the card at ${width}px (${JSON.stringify({ cardBox, box })})`).toBe(true)
+    if (i === 0) continue
+    const above = boxes.get(names[i - 1])!
+    expect(box.y, `${name} starts above the bottom of ${names[i - 1]} at ${width}px`).toBeGreaterThanOrEqual(above.y + above.height - 1)
+    for (const earlier of names.slice(0, i)) {
+      expect(rectsOverlap(boxes.get(earlier)!, box), `${earlier} overlaps ${name} at ${width}px`).toBe(false)
+    }
+  }
+  const [a, b] = sameEdges.map((name) => boxes.get(name)!)
+  expect(Math.abs(a.x - b.x), `${sameEdges.join(' and ')} left edges at ${width}px`).toBeLessThanOrEqual(1)
+  expect(Math.abs(a.x + a.width - (b.x + b.width)), `${sameEdges.join(' and ')} right edges at ${width}px`).toBeLessThanOrEqual(1)
+  // The card scrolls on overflow, so an unwrapped address would pass the box checks above and the document check below.
+  const overflowed: string[] = []
+  for (const [name, el] of [['card', card] as [string, Locator], ...parts]) {
+    if (longValueInputs.includes(name)) {
+      const wrapper = await el.evaluate((node) => {
+        if (!(node instanceof HTMLInputElement)) return null
+        const parent = node.parentElement!
+        return parent.scrollWidth - parent.clientWidth
+      })
+      if (wrapper === null) throw new Error(`${name} is not an <input>, so it cannot be exempt from the overflow check`)
+      if (wrapper > 1) overflowed.push(`${name} pushes its wrapper by ${wrapper}px`)
+      continue
+    }
+    const over = await el.evaluate((node) => node.scrollWidth - node.clientWidth)
+    if (over > 1) overflowed.push(`${name} by ${over}px`)
+  }
+  expect(overflowed, `content overflows its box at ${width}px`).toEqual([])
+  const doc = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }))
+  expect(doc.scrollWidth - doc.clientWidth, `the document scrolls sideways at ${width}px (${JSON.stringify(doc)})`).toBeLessThanOrEqual(1)
+}
+
+async function expectStackAtEveryWidth(page: Page, card: Locator, parts: [string, Locator][], sameEdges: [string, string]): Promise<void> {
+  for (const width of [...WIDE_WIDTHS, 375]) {
+    await page.setViewportSize({ width, height: TALL })
+    await expectStack(page, width, card, parts, sameEdges)
+  }
+}
+
+const resendAnswer = (page: Page) => page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === RESEND_PATH)
+
+// The fork autoconfirms every address, so its gateway never answers 403: the sign-in answer is faked, the resend is real.
+async function fakeUnverifiedSignIn(page: Page): Promise<void> {
+  await page.route(`${GATEWAY_URL}/auth/sign-in`, (route) => {
+    if (route.request().method() === 'OPTIONS') return route.continue()
+    return route.fulfill({
+      status: 403,
+      contentType: 'application/json',
+      headers: { 'access-control-allow-origin': new URL(LANDING_URL).origin },
+      body: JSON.stringify({ error: 'email address not verified' }),
+    })
+  })
+}
+
+// Front door -> "Platform login" -> the form signs in `email`; the faked 403 shows the alert.
+async function signInUnverified(page: Page, email: string): Promise<Locator> {
+  await seedConsent(page, false)
+  await page.goto(`${resolveTarget('APP_URL')}/`)
+  await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
+  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Platform login' })
+  await expect(dialog).toBeVisible()
+  await submitSignIn(page, email, crypto.randomUUID().slice(0, 16))
+  await expect(dialog.getByRole('alert').filter({ hasText: UNVERIFIED })).toBeVisible()
+  return dialog
+}
+
+async function resendFromSignIn(page: Page, dialog: Locator, email: string, posts: string[]): Promise<void> {
+  const card = dialog.locator(':scope > div')
+  const submit = dialog.getByRole('button', { name: 'Sign in →', exact: true })
+  const alert = dialog.getByRole('alert').filter({ hasText: UNVERIFIED })
+  const resend = dialog.getByRole('button', { name: RESEND, exact: true })
+  const notice = dialog.getByRole('status')
+  await expect(notice, 'the live region is mounted and empty before the click').toBeEmpty()
+  expect(posts, 'resends before the click').toHaveLength(0)
+
+  const answer = resendAnswer(page)
+  await resend.click()
+  expect((await answer).status(), 'the fork gateway answers the resend').toBe(202)
+  await expect(notice).toContainText(email)
+  await expect(resend).toBeEnabled()
+  await expect(dialog.getByRole('alert').filter({ hasText: RESEND_FAILED })).toHaveCount(0)
+  expect(posts, 'resends after one click').toHaveLength(1)
+  await expectStackAtEveryWidth(page, card, [['submit', submit], ['alert', alert], ['resend', resend], ['notice', notice]], ['submit', 'resend'])
+}
+
+async function resendFromView(page: Page, dialog: Locator, email: string, posts: string[]): Promise<void> {
+  const card = dialog.locator(':scope > div')
+  const sentTo = dialog.getByText('a confirmation link is on its way to')
+  const resend = dialog.getByRole('button', { name: RESEND, exact: true })
+  const close = dialog.getByRole('button', { name: 'Close', exact: true }).filter({ hasText: 'Close' })
+  const notice = dialog.getByRole('status')
+  await expect(notice, 'the live region is mounted and empty before the click').toBeEmpty()
+  expect(posts, 'resends before the click').toHaveLength(0)
+
+  const answer = resendAnswer(page)
+  await resend.click()
+  expect((await answer).status(), 'the fork gateway answers the resend').toBe(202)
+  await expect(notice).toContainText(email)
+  await expect(resend).toBeEnabled()
+  await expect(dialog.getByRole('alert')).toHaveCount(0)
+  expect(posts, 'resends after one click').toHaveLength(1)
+  await expectStackAtEveryWidth(page, card, [['paragraph', sentTo], ['resend', resend], ['notice', notice], ['close', close]], ['resend', 'close'])
+}
+
+test('deployed landing: the check-your-email view and the unverified sign-in error each send the link again', async ({ page, browser }) => {
+  // Two registrations at 30 s, four resends at the 2 s floor, two front-door bounces.
+  test.setTimeout(240_000)
+  const errors = gatedErrors(page, [])
+  const viewPosts = recordResends(page)
+  const account = freshRegistration('firm')
+
+  await test.step('A: the check-your-email view sends the link again once per click', async () => {
+    await page.setViewportSize({ width: 1280, height: TALL })
+    await registerThroughLanding(page, account, 'firm')
+    await resendFromView(page, page.getByRole('dialog', { name: CREATE }), account.email, viewPosts)
+  })
+
+  const context = await browser.newContext()
+  try {
+    await test.step('B: the unverified sign-in error offers the link, and its click reaches the fork gateway', async () => {
+      const signIn = await context.newPage()
+      await signIn.setViewportSize({ width: 1280, height: TALL })
+      const signInErrors = gatedErrors(signIn, [expectedStatusDropper(signIn, 403, /\/auth\/sign-in$/)])
+      const signInPosts = recordResends(signIn)
+      await fakeUnverifiedSignIn(signIn)
+      const email = `reg-signin-${crypto.randomUUID()}@example.com`
+      await resendFromSignIn(signIn, await signInUnverified(signIn, email), email, signInPosts)
+      expect(signInErrors, `console errors on the sign-in window:\n${signInErrors.join('\n')}`).toEqual([])
+    })
+
+    await test.step('C: a 254-byte address stays inside the card on both surfaces at 375 px', async () => {
+      const address = longAddress()
+      const viewPage = await context.newPage()
+      const viewErrors = gatedErrors(viewPage, [])
+      const viewLongPosts = recordResends(viewPage)
+      await viewPage.setViewportSize({ width: 1280, height: TALL })
+      await registerThroughLanding(viewPage, { ...freshRegistration('firm'), email: address }, 'firm')
+      await viewPage.setViewportSize({ width: 375, height: TALL })
+      const dialog = viewPage.getByRole('dialog', { name: CREATE })
+      const sentTo = dialog.getByText('a confirmation link is on its way to')
+      await expect(sentTo).toContainText(address)
+      await expectStack(
+        viewPage,
+        375,
+        dialog.locator(':scope > div'),
+        [['paragraph', sentTo], ['resend', dialog.getByRole('button', { name: RESEND, exact: true })], ['close', dialog.getByRole('button', { name: 'Close', exact: true }).filter({ hasText: 'Close' })]],
+        ['resend', 'close'],
+      )
+      await resendFromView(viewPage, dialog, address, viewLongPosts)
+      expect(viewErrors, `console errors on the long-address view:\n${viewErrors.join('\n')}`).toEqual([])
+
+      const signIn = await context.newPage()
+      await signIn.setViewportSize({ width: 1280, height: TALL })
+      const signInErrors = gatedErrors(signIn, [expectedStatusDropper(signIn, 403, /\/auth\/sign-in$/)])
+      const signInPosts = recordResends(signIn)
+      await fakeUnverifiedSignIn(signIn)
+      await resendFromSignIn(signIn, await signInUnverified(signIn, address), address, signInPosts)
+      expect(signInErrors, `console errors on the long-address sign-in:\n${signInErrors.join('\n')}`).toEqual([])
+    })
+  } finally {
+    await context.close()
+  }
+  expect(errors, `console errors on the check-your-email view:\n${errors.join('\n')}`).toEqual([])
+})
+
 function freshRegistration(kind: TenantKind): RealAccount {
   const id = crypto.randomUUID()
   return {
@@ -1869,3 +2123,389 @@ function freshRegistration(kind: TenantKind): RealAccount {
     workspaceName: `Reg ${kind} ${id.slice(0, 8)}`,
   }
 }
+
+// frontend/landing/src/passwordReset.ts RESET_SENT and RESET_FAILED.
+const RESET_SENT = 'If this address has an account, a reset link is on its way.'
+const RESET_LINK_FAILED = 'That reset link did not work. It may have expired or already been used.'
+const RESET_REQUEST_PATH = '/auth/request-password-reset'
+const RESET_PAGE_PATH = '/auth/reset-password'
+
+function recordPosts(page: Page, path: string): string[] {
+  const posts: string[] = []
+  page.on('request', (req) => {
+    if (req.method() === 'POST' && new URL(req.url()).pathname === path) posts.push(req.url())
+  })
+  return posts
+}
+
+const boxOf = async (name: string, el: Locator, width: number) => {
+  const box = await el.boundingBox()
+  if (!box) throw new Error(`${name} rendered no box at ${width}px`)
+  return box
+}
+
+const noSidewaysScroll = async (page: Page, label: string, width: number) => {
+  const doc = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }))
+  expect(doc.clientWidth, `the document has no width at ${width}px`).toBeGreaterThan(0)
+  expect(doc.scrollWidth - doc.clientWidth, `${label} scrolls sideways at ${width}px (${JSON.stringify(doc)})`).toBeLessThanOrEqual(1)
+}
+
+// "Forgot password?" sits between the password input and the submit, left-aligned with the input, inside the card.
+async function expectForgotControl(page: Page, dialog: Locator, width: number): Promise<void> {
+  const card = dialog.locator(':scope > div')
+  await settleAnimations(card)
+  const [cardBox, input, forgot, submit] = await Promise.all([
+    boxOf('the card', card, width),
+    boxOf('the password input', dialog.getByLabel('Password', { exact: true }), width),
+    boxOf('Forgot password?', dialog.getByRole('button', { name: 'Forgot password?', exact: true }), width),
+    boxOf('the submit', dialog.getByRole('button', { name: 'Sign in →', exact: true }), width),
+  ])
+  expect(forgot.y, `Forgot password? starts above the bottom of the password input at ${width}px`).toBeGreaterThanOrEqual(input.y + input.height - 1)
+  expect(forgot.y + forgot.height, `Forgot password? ends below the top of the submit at ${width}px`).toBeLessThanOrEqual(submit.y + 1)
+  expect(rectsOverlap(forgot, input), `Forgot password? overlaps the input at ${width}px`).toBe(false)
+  expect(rectsOverlap(forgot, submit), `Forgot password? overlaps the submit at ${width}px`).toBe(false)
+  expect(Math.abs(forgot.x - input.x), `Forgot password? and the input left edges at ${width}px`).toBeLessThanOrEqual(1)
+  expect(enclosesRect(cardBox, forgot, 1), `Forgot password? leaves the card at ${width}px (${JSON.stringify({ cardBox, forgot })})`).toBe(true)
+  await noSidewaysScroll(page, 'the sign-in window', width)
+}
+
+// The gateway's reset page has no app shell, so layout.ts's `.pf-scroll` helper would never resolve.
+async function expectResetPage(page: Page, width: number, height: number): Promise<void> {
+  const [card, input, button] = await Promise.all([
+    boxOf('the card', page.locator('main'), width),
+    boxOf('the password input', page.getByLabel('New password', { exact: true }), width),
+    boxOf('the button', page.getByRole('button', { name: 'Set new password', exact: true }), width),
+  ])
+  expect(enclosesRect({ x: 0, y: 0, width, height }, card, 1), `the card leaves the viewport at ${width}px (${JSON.stringify(card)})`).toBe(true)
+  expect(enclosesRect(card, input, 1), `the input leaves the card at ${width}px (${JSON.stringify({ card, input })})`).toBe(true)
+  expect(enclosesRect(card, button, 1), `the button leaves the card at ${width}px (${JSON.stringify({ card, button })})`).toBe(true)
+  expect(Math.abs(input.x - button.x), `the input and button left edges at ${width}px`).toBeLessThanOrEqual(1)
+  expect(Math.abs(input.x + input.width - (button.x + button.width)), `the input and button right edges at ${width}px`).toBeLessThanOrEqual(1)
+  await noSidewaysScroll(page, 'the reset page', width)
+}
+
+// The notice encloses its text and both buttons, and none of the three overlaps another.
+async function expectFailedNotice(page: Page, width: number): Promise<void> {
+  const notice = page.getByRole('status').filter({ hasText: RESET_LINK_FAILED })
+  const parts: [string, Locator][] = [
+    ['text', notice.getByText(RESET_LINK_FAILED)],
+    ['request', notice.getByRole('button', { name: 'Request a new link', exact: true })],
+    ['dismiss', notice.getByRole('button', { name: 'Dismiss', exact: true })],
+  ]
+  const noticeBox = await boxOf('the notice', notice, width)
+  const boxes: [string, Awaited<ReturnType<typeof boxOf>>][] = []
+  for (const [name, el] of parts) boxes.push([name, await boxOf(name, el, width)])
+  for (const [i, [name, box]] of boxes.entries()) {
+    expect(enclosesRect(noticeBox, box, 1), `${name} leaves the notice at ${width}px (${JSON.stringify({ noticeBox, box })})`).toBe(true)
+    for (const [other, otherBox] of boxes.slice(0, i)) {
+      expect(rectsOverlap(otherBox, box), `${other} overlaps ${name} at ${width}px`).toBe(false)
+    }
+  }
+  await noSidewaysScroll(page, 'the landing', width)
+}
+
+test('deployed landing: "Forgot password?" sends a reset request, and a bogus reset link lands on the failed notice that offers a new request', async ({ page, context }) => {
+  test.setTimeout(120_000)
+  const errors = gatedErrors(page, [])
+  const requests = recordPosts(page, RESET_REQUEST_PATH)
+
+  await test.step('A: the sign-in window offers Forgot password?, and one click of Send reset link sends one request', async () => {
+    await seedConsent(page, false)
+    await page.setViewportSize({ width: 1280, height: TALL })
+    await page.goto(`${APP_URL}/?auth=start`)
+    await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
+    const dialog = page.getByRole('dialog', { name: 'Platform login' })
+    await expect(dialog.getByRole('heading', { name: 'Sign in to your workspace' })).toBeVisible()
+    const forgot = dialog.getByRole('button', { name: 'Forgot password?', exact: true })
+    await expect(forgot).toBeVisible()
+    for (const width of [...WIDE_WIDTHS, 375]) {
+      await page.setViewportSize({ width, height: TALL })
+      await expectForgotControl(page, dialog, width)
+    }
+
+    expect(requests, 'reset requests before the click').toHaveLength(0)
+    await forgot.click()
+    await expect(dialog.getByRole('heading', { name: 'Reset your password' })).toBeVisible()
+    const email = dialog.getByLabel('Work email', { exact: true })
+    const submit = dialog.getByRole('button', { name: 'Send reset link', exact: true })
+    const notice = dialog.getByRole('status')
+    await expect(notice, 'the live region is mounted and empty before the click').toBeEmpty()
+    // Short: the input keeps the address, and expectStack counts text wider than the input as overflow.
+    await email.fill(`reset-${crypto.randomUUID().slice(0, 8)}@example.com`)
+    const answer = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === RESET_REQUEST_PATH)
+    await submit.click()
+    expect((await answer).status(), 'the fork gateway answers the reset request').toBe(202)
+    await expect(notice).toHaveText(RESET_SENT)
+    await expect(dialog.getByRole('alert')).toHaveCount(0)
+    expect(requests, 'reset requests after one click').toHaveLength(1)
+    const back = dialog.getByRole('button', { name: 'Back to sign in', exact: true })
+    await expectStackAtEveryWidth(page, dialog.locator(':scope > div'), [['email', email], ['submit', submit], ['notice', notice], ['back', back]], ['email', 'submit'])
+
+    await back.click()
+    await expect(dialog.getByRole('heading', { name: 'Sign in to your workspace' })).toBeVisible()
+  })
+
+  await test.step('B: a bogus reset link submits once and lands on the failed notice, which offers a new request', async () => {
+    const reset = await context.newPage()
+    const resetErrors = gatedErrors(reset, [])
+    const posts = recordPosts(reset, RESET_PAGE_PATH)
+    await seedConsent(reset, false)
+    const height = 1080
+    for (const width of [...WIDE_WIDTHS, 375]) {
+      await reset.setViewportSize({ width, height })
+      await reset.goto(`${GATEWAY_URL}${RESET_PAGE_PATH}?token=bogus-${crypto.randomUUID()}&type=recovery`)
+      await expect(reset.getByRole('button', { name: 'Set new password', exact: true }), `one submit at ${width}px`).toHaveCount(1)
+      await expectResetPage(reset, width, height)
+    }
+
+    // Copied before the click: the landing navigation may log its own errors.
+    const beforeClick = [...resetErrors]
+    expect(beforeClick, `console errors on the reset page:\n${beforeClick.join('\n')}`).toEqual([])
+
+    await reset.getByLabel('New password', { exact: true }).fill(crypto.randomUUID())
+    await reset.getByRole('button', { name: 'Set new password', exact: true }).dblclick()
+    await reset.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
+    await expect(reset.getByRole('status').filter({ hasText: RESET_LINK_FAILED })).toBeVisible()
+    await expect.poll(() => new URL(reset.url()).searchParams.has('reset'), { message: 'the landing strips ?reset' }).toBe(false)
+    expect(posts, 'POST /auth/reset-password requests sent by the double-click').toHaveLength(1)
+    for (const width of [1280, 375]) {
+      await reset.setViewportSize({ width, height })
+      await expectFailedNotice(reset, width)
+    }
+
+    await reset.getByRole('button', { name: 'Request a new link', exact: true }).click()
+    await expect(reset.getByRole('dialog').getByRole('heading', { name: 'Reset your password' })).toBeVisible()
+    expect(resetErrors, `console errors on the reset journey:\n${resetErrors.join('\n')}`).toEqual([])
+  })
+
+  expect(errors, `console errors on the sign-in window:\n${errors.join('\n')}`).toEqual([])
+})
+
+// The accept page of an invite link (frontend/landing/src/components/InvitePage.tsx).
+const INVITE_INVALID = 'This invite is no longer valid'
+// frontend/landing/src/App.tsx SIGN_IN_OUTCOMES, no-workspace.
+const NO_WORKSPACE = 'This account has no workspace yet. If you were invited, open the invite link in your email.'
+const inviteUrl = (token: string) => `${LANDING_URL}/invite#token=${token}`
+
+// A fresh admin with a workspace of `workspaceName` (default: a short one; maxNameChars, internal/tenancy/tenancy.go, is 200).
+async function inviteWorkspace(workspaceName?: string): Promise<{ adminToken: string; tenantId: string; name: string }> {
+  const admin = await provisionRealAccount('invite-admin', 'firm', 'Invite E2E', workspaceName)
+  const adminToken = (await signInSession(admin.email, admin.password)).access_token
+  return { adminToken, tenantId: (await me(adminToken)).tenant.id, name: admin.workspaceName }
+}
+
+// 250 bytes: a 64-byte local part and a 185-byte domain of 63, 63 and 57-byte labels (maxEmailBytes, internal/tenancy/invitations_handler.go, is 254).
+function longInviteAddress(): string {
+  const local = `${crypto.randomUUID().replaceAll('-', '')}${'a'.repeat(32)}`
+  const address = `${local}@${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(57)}`
+  expect(Buffer.byteLength(address), 'the long invited address').toBe(250)
+  return address
+}
+
+// The accept card is the heading's grandparent (heading -> padded body -> card): stacked as `expectStack` asks, and inside the viewport.
+async function expectAcceptStack(page: Page, width: number, heading: Locator, parts: [string, Locator][], sameEdges: [string, string], longValueInputs: string[] = []): Promise<void> {
+  const card = heading.locator('xpath=../..')
+  await expectStack(page, width, card, parts, sameEdges, longValueInputs)
+  const box = await card.boundingBox()
+  if (!box) throw new Error(`the accept card rendered no box at ${width}px`)
+  expect(box.x, `the card starts left of the viewport at ${width}px`).toBeGreaterThanOrEqual(-1)
+  expect(box.x + box.width, `the card ends right of the viewport at ${width}px`).toBeLessThanOrEqual(width + 1)
+}
+
+// A fragment-only goto is a same-document navigation: the page would keep its view and its address-bar fragment. Load afresh.
+async function openInvite(page: Page, token: string): Promise<void> {
+  await page.goto('about:blank')
+  await page.goto(inviteUrl(token))
+}
+
+// Opens the link at `width`, then asserts the ready view stacks and the address bar holds no fragment.
+async function expectReadyView(page: Page, width: number, token: string, workspace: string, address: string): Promise<void> {
+  await page.setViewportSize({ width, height: TALL })
+  await openInvite(page, token)
+  const heading = page.getByRole('heading', { name: `Join ${workspace}`, exact: true })
+  await expect(heading).toBeVisible({ timeout: 30_000 })
+  const text = page.getByText(`${address} is invited to join ${workspace} on ASComply as Reviewer.`, { exact: true })
+  await expect(text).toBeVisible()
+  await expect.poll(() => new URL(page.url()).hash, { message: `the address bar still holds the fragment at ${width}px` }).toBe('')
+  await expectAcceptStack(
+    page,
+    width,
+    heading,
+    [['heading', heading], ['text', text], ['create', page.getByRole('button', { name: 'Create account', exact: true })], ['sign in', page.getByRole('button', { name: 'Sign in', exact: true })]],
+    ['create', 'sign in'],
+  )
+}
+
+// Opens the link at `width` and the register view, then asserts its fields and submit stack.
+async function expectRegisterView(page: Page, width: number, token: string): Promise<void> {
+  await page.setViewportSize({ width, height: TALL })
+  await openInvite(page, token)
+  await page.getByRole('button', { name: 'Create account', exact: true }).click()
+  const heading = page.getByRole('heading', { name: 'Create your account', exact: true })
+  await expect(heading).toBeVisible()
+  await expectAcceptStack(
+    page,
+    width,
+    heading,
+    [
+      ['email', page.getByLabel('Work email', { exact: true })],
+      ['password', page.getByLabel('Password', { exact: true })],
+      ['submit', page.getByRole('button', { name: 'Create account →', exact: true })],
+    ],
+    ['email', 'submit'],
+    ['email'],
+  )
+}
+
+test('deployed landing: the accept page names the workspace and role at every width, and a bogus invite is no longer valid', async ({ page, browser }) => {
+  // Three sweeps over five widths, each reloading the link, plus two bogus views.
+  test.setTimeout(300_000)
+  const workspace = await inviteWorkspace(`W${crypto.randomUUID().replaceAll('-', '')}`.padEnd(200, 'w'))
+  expect(workspace.name, 'the workspace name').toHaveLength(200)
+  const ordinary = `invite-sweep-${crypto.randomUUID()}@example.com`
+  const long = longInviteAddress()
+  const ordinaryToken = await inviteWithToken(workspace.adminToken, workspace.tenantId, ordinary)
+  const longToken = await inviteWithToken(workspace.adminToken, workspace.tenantId, long)
+  const widths = [...WIDE_WIDTHS, 375]
+  const errors = collectErrors(page)
+  await seedConsent(page, false)
+
+  const read: number[] = []
+  for (const width of widths) {
+    await expectReadyView(page, width, ordinaryToken, workspace.name, ordinary)
+    read.push(width)
+  }
+  expect(read, 'the widths the ordinary-address sweep read').toEqual(widths)
+  // Copied before any click: the page has only loaded and previewed.
+  const beforeClick = [...errors]
+  expect(beforeClick, `console errors on the accept page:\n${beforeClick.join('\n')}`).toEqual([])
+
+  const readLong: number[] = []
+  for (const width of widths) {
+    await expectReadyView(page, width, longToken, workspace.name, long)
+    readLong.push(width)
+  }
+  expect(readLong, 'the widths the long-address ready sweep read').toEqual(widths)
+
+  const registerWidths: number[] = []
+  for (const width of widths) {
+    await expectRegisterView(page, width, longToken)
+    registerWidths.push(width)
+  }
+  expect(registerWidths, 'the widths the long-address register sweep read').toEqual(widths)
+
+  // A link that is not a token shows the invalid view without a request; an unknown token is the gateway's 404.
+  const context = await browser.newContext()
+  try {
+    const bogus = await context.newPage()
+    const bogusErrors = gatedErrors(bogus, [expectedStatusDropper(bogus, 404, /\/auth\/invitation$/)])
+    for (const token of [`bogus-${crypto.randomUUID()}`, mintSignInState()]) {
+      await openInvite(bogus, token)
+      await expect(bogus.getByRole('heading', { name: INVITE_INVALID, exact: true })).toBeVisible({ timeout: 30_000 })
+    }
+    expect(bogusErrors, `console errors on the bogus link:\n${bogusErrors.join('\n')}`).toEqual([])
+  } finally {
+    await context.close()
+  }
+})
+
+// Registers the invitee on the accept page and ends on "Check your email".
+async function registerOnAcceptPage(page: Page, token: string, password: string): Promise<void> {
+  await seedConsent(page, false)
+  await openInvite(page, token)
+  await page.getByRole('button', { name: 'Create account', exact: true }).click()
+  await page.getByLabel('Password', { exact: true }).fill(password)
+  await page.getByRole('button', { name: 'Create account →', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Check your email', exact: true })).toBeVisible({ timeout: 30_000 })
+}
+
+// Waits for the app to draw, then returns the browser session's /v1/me.
+async function readSessionIdentity(page: Page): Promise<Me> {
+  await expect(page.locator(VERIFIED)).toBeAttached({ timeout: 30_000 })
+  return me(await browserToken(page))
+}
+
+// The landing "Platform login" window, as `signInAtFrontDoor` completes it, once the invite page's "Sign in" opened it.
+async function signInInOpenWindow(page: Page, account: { email: string; password: string }): Promise<void> {
+  await expect(page.getByRole('dialog', { name: 'Platform login' }).getByLabel('Work email', { exact: true })).toBeVisible({ timeout: 30_000 })
+  await Promise.all([
+    page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
+    submitSignIn(page, account.email, account.password),
+  ])
+}
+
+test('deployed journey: an invitee creates an account on the accept page, signs in and lands in the workspace with the invited role', async ({ page }) => {
+  test.setTimeout(240_000)
+  const workspace = await inviteWorkspace()
+  const account = { email: `invitee-${crypto.randomUUID()}@example.com`, password: crypto.randomUUID().slice(0, 16) }
+  const token = await inviteWithToken(workspace.adminToken, workspace.tenantId, account.email)
+  const urls = recordUrls(page)
+  let workspacesCreated = 0
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/tenancy/v1/workspaces')) workspacesCreated += 1
+  })
+
+  await registerOnAcceptPage(page, token, account.password)
+
+  await test.step('the sent view stacks at 375 px', async () => {
+    await page.setViewportSize({ width: 375, height: TALL })
+    const heading = page.getByRole('heading', { name: 'Check your email', exact: true })
+    const text = page.getByText('a confirmation link is on its way to')
+    await expect(text).toContainText(account.email)
+    await expectAcceptStack(
+      page,
+      375,
+      heading,
+      [['heading', heading], ['text', text], ['resend', page.getByRole('button', { name: RESEND, exact: true })], ['sign in', page.getByRole('button', { name: 'Sign in', exact: true })]],
+      ['resend', 'sign in'],
+    )
+    await page.setViewportSize({ width: 1280, height: 800 })
+  })
+
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await signInInOpenWindow(page, account)
+  const identity = await readSessionIdentity(page)
+
+  expect(identity.tenant.id, 'the session is bound to the inviting workspace').toBe(workspace.tenantId)
+  expect(identity.user.role, 'the invited role').toBe('reviewer')
+  expect(urls.filter((u) => u.includes('signin=no-workspace')), 'a navigation carried signin=no-workspace').toEqual([])
+  expect(workspacesCreated, 'workspaces created on the way').toBe(0)
+})
+
+test('deployed journey: an invitee who signs in from another tab without the invite is pointed back to the invite link and joins through it', async ({ browser }) => {
+  test.setTimeout(300_000)
+  const workspace = await inviteWorkspace()
+  const account = { email: `invitee-${crypto.randomUUID()}@example.com`, password: crypto.randomUUID().slice(0, 16) }
+  const token = await inviteWithToken(workspace.adminToken, workspace.tenantId, account.email)
+
+  const contextA = await browser.newContext()
+  try {
+    await registerOnAcceptPage(await contextA.newPage(), token, account.password)
+  } finally {
+    await contextA.close()
+  }
+
+  // A new context holds no invite: it stands for the tab the verification mail opens.
+  const contextB = await browser.newContext()
+  try {
+    const page = await contextB.newPage()
+    const urls = recordUrls(page)
+    await seedConsent(page, false)
+    await page.goto(LANDING_URL)
+    await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Platform login' })
+    await dialog.getByRole('button', { name: 'Continue with email', exact: true }).click()
+    await signInInOpenWindow(page, account)
+    await expect(page.getByRole('dialog', { name: 'Platform login' })).toContainText(NO_WORKSPACE, { timeout: 30_000 })
+    expect(urls.filter((u) => u.includes('signin=no-workspace')).length, 'the landing was reached at ?signin=no-workspace').toBeGreaterThan(0)
+
+    await openInvite(page, token)
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+    await signInInOpenWindow(page, account)
+    const identity = await readSessionIdentity(page)
+    expect(identity.tenant.id, 'the session is bound to the inviting workspace').toBe(workspace.tenantId)
+    expect(identity.user.role, 'the invited role').toBe('reviewer')
+  } finally {
+    await contextB.close()
+  }
+})

@@ -13,7 +13,7 @@ type Needle = string | RegExp
 // Literals are case-sensitive: the landing ships "OAuth2" copy that must stay legal.
 const NEEDLES: readonly Needle[] = [
   '481920', 'DEMO_CODE', 'si-otp', "Verify it's you", 'Verify & continue', 'Back to accounts',
-  'Resend code', 'Signing in', 'Forgot password', 'Password reset is disabled', 'OAUTH2',
+  'Resend code', 'Signing in', 'Password reset is disabled', 'OAUTH2',
   'redirectTimer', 'maskedEmail',
   /\bOTP\b/, /6-digit/i, /one-time code/i, /demo code/i,
 ]

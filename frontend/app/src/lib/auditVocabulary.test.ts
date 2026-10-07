@@ -7,7 +7,7 @@ import { AUDIT_EVENTS, auditEventView, type AuditDomain } from './auditVocabular
 
 const REPO_ROOT = resolve(__dirname, '../../../..')
 
-// The 41 identifiers this app claims to label. Four families
+// The 44 identifiers this app claims to label. Four families
 // are built from a variable rather than a literal, so a grep for quoted strings undercounts:
 // tenancy/store.go, portfolio/store.go, document/document.go and
 // submission/verdict_audit.go ("submission."+outcome).
@@ -53,7 +53,14 @@ const EXPECTED: Record<AuditDomain, string[]> = {
     'extraction.field_corrected',
     'extraction.anchor.learned',
   ],
-  memberships: ['membership.suspended', 'membership.reactivated', 'workspace.provisioned'],
+  memberships: [
+    'membership.suspended',
+    'membership.reactivated',
+    'workspace.provisioned',
+    'invitation.sent',
+    'invitation.resent',
+    'invitation.accepted',
+  ],
   validation: ['validation.rule.enabled', 'validation.rule.disabled'],
   submissions: ['submission.accepted', 'submission.rejected', 'submission.failed'],
   reconciliation: ['reconciliation.drift_detected', 'reconciliation.auto_fixed'],
@@ -62,12 +69,12 @@ const EXPECTED: Record<AuditDomain, string[]> = {
 const ALL = Object.values(EXPECTED).flat()
 
 describe('audit vocabulary', () => {
-  it('auditVocabulary_hasAllFortyOneTypes', () => {
+  it('auditVocabulary_hasAllFortyFourTypes', () => {
     const shipped = Object.keys(AUDIT_EVENTS)
     // An empty collection satisfies every assertion inside a loop, so pin the size first.
     expect(shipped.length).toBeGreaterThan(0)
-    expect(shipped.length).toBe(41)
-    expect(ALL.length).toBe(41)
+    expect(shipped.length).toBe(44)
+    expect(ALL.length).toBe(44)
     expect(new Set(shipped)).toEqual(new Set(ALL))
   })
 
@@ -131,6 +138,9 @@ describe('audit vocabulary', () => {
       'extraction.field_corrected',
       'extraction.anchor.learned',
       'workspace.provisioned',
+      'invitation.sent',
+      'invitation.resent',
+      'invitation.accepted',
     ]) {
       expect(literals, `${id} must be emitted by a Go writer`).toContain(id)
     }
@@ -169,6 +179,47 @@ describe('audit vocabulary', () => {
     expect(view.tone).toBeNull()
     // Control: the same view function answers a tone for an outcome-bearing event.
     expect(auditEventView('submission.failed').tone).not.toBeNull()
+  })
+
+  it('auditVocabulary_invitationAcceptedIsLabelledInMemberships', () => {
+    const view = auditEventView('invitation.accepted')
+    // humanise() answers a null domain for an unknown id, so the domain tells labelled from unknown.
+    expect(view.domain).toBe('memberships')
+    expect(view.label).toBe('Invite accepted')
+    expect(view.tone).toBeNull()
+    // Control: the same view function answers a tone for an outcome-bearing event.
+    expect(auditEventView('submission.failed').tone).not.toBeNull()
+  })
+
+  it('auditVocabulary_invitationEventsAreLabelledInMemberships', () => {
+    for (const [id, label] of [
+      ['invitation.sent', 'Invite sent'],
+      ['invitation.resent', 'Invite resent'],
+    ]) {
+      const view = auditEventView(id)
+      // humanise() answers a null domain for an unknown id, so the domain tells labelled from unknown.
+      expect(view.domain, `${id} must be a labelled memberships event`).toBe('memberships')
+      expect(view.label).toBe(label)
+      expect(view.tone).toBeNull()
+    }
+    // Control: the same view function answers a tone for an outcome-bearing event.
+    expect(auditEventView('submission.failed').tone).not.toBeNull()
+    // The lookup is exact: a near miss is unknown (null domain), never the invite label.
+    for (const id of [
+      'invitation.Sent',
+      'invitation.sent ',
+      'invitation.resend',
+      'invitation.revoked',
+      'invitation.Accepted',
+      'invitation.accepted ',
+      'invitation.accept',
+    ]) {
+      const near = auditEventView(id)
+      expect(near.domain, `${id} must not resolve to a labelled event`).toBeNull()
+      expect(near.label).not.toBe(id)
+      expect(near.label).not.toMatch(/^Invite (sent|resent|accepted)$/)
+      expect(near.tone).toBeNull()
+    }
   })
 
   it('auditVocabulary_unknownTypeIsNeverRawPrimary', () => {

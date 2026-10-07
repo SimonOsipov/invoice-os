@@ -342,6 +342,19 @@ describe('T4-12 (AC-12): asc_consent is disclosed, and E3 is not softened to buy
     expect(para, 'the disclosure drops what Reject writes').toMatch(/only thing our own code writes/i)
     expect(para, 'the Reject clause does not name Reject').toContain('Reject')
   })
+
+  // The one exception to "the only thing our own code writes": inviteLink.ts, pinned by its own tests.
+  const INVITE_CLAUSE = 'session storage on the invite page only and cleared when the tab closes'
+
+  it('the page and the ledger row E6 both name the invite token as the one exception', () => {
+    const para = paragraphBody(privacyParagraphs('asc_consent')[0]).replace(/\s+/g, ' ')
+    expect(para, 'the page does not disclose the invite token').toContain(INVITE_CLAUSE)
+    expect(para, 'the exception must sit before the only-thing clause').toMatch(/invite link(?:&#x27;|')s token[^.]*only thing our own code writes/)
+    const e6 = (readFileSync(join(DOCS, 'privacy-policy-claims.md'), 'utf8').split('\n').find((l) => l.startsWith('| E6 |')) ?? '').replace(/\s+/g, ' ')
+    expect(e6, 'control: E6 row missing').not.toBe('')
+    expect(e6, 'E6 does not carry the invite exception').toContain(INVITE_CLAUSE)
+    expect(e6, 'E6 says the invite token is the one exception').toMatch(/one thing our own code writes apart from the cookie expiries and the invite link's token/)
+  })
 })
 
 describe('T4-13 (AC-13): the page says WHY a reload matters after a Reject that follows an Accept', () => {

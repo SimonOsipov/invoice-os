@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const DIALOG = '[role="dialog"]'
 const STATE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN-_0'
 const OTHER = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmn_-9'
-const NO_WORKSPACE = 'This account has no workspace yet.'
+const NO_WORKSPACE = 'This account has no workspace yet. If you were invited, open the invite link in your email.'
 const FAILED = "We couldn't open your workspace. Sign in again."
 
 let container: HTMLDivElement

@@ -1078,6 +1078,7 @@ func TestRouter_InternalPathNeverReachesUpstream(t *testing.T) {
 		{"bare", "/api/{svc}/internal", false},
 		{"trailing slash", "/api/{svc}/internal/", false},
 		{"registrants", "/api/{svc}/internal/contacts/registrants", false},
+		{"invitation preview", "/api/{svc}/internal/invitations/preview", false},
 		{"demo-requests", "/api/{svc}/internal/contacts/demo-requests", false},
 		{"dot segment", "/api/{svc}/./internal/contacts/registrants", true},
 		{"double slash", "/api/{svc}//internal/contacts/registrants", true},
@@ -1086,6 +1087,8 @@ func TestRouter_InternalPathNeverReachesUpstream(t *testing.T) {
 		{"dot segment before the service", "/api/./{svc}/internal/contacts/registrants", true},
 		{"dot-dot into the service", "/api/x/../{svc}/internal/contacts/registrants", true},
 		{"percent-encoded letter", "/api/{svc}/%69nternal/contacts/registrants", false},
+		{"invitation preview, percent-encoded letter", "/api/{svc}/%69nternal/invitations/preview", false},
+		{"invitation preview, dot-dot segment", "/api/{svc}/v1/../internal/invitations/preview", true},
 	}
 	// Go's mux does not clean an encoded dot segment and matches case-sensitively, and the upstream mux does the same,
 	// so these may be proxied or refused but must reach no /internal route.

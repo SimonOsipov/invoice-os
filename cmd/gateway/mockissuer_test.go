@@ -310,3 +310,38 @@ func TestTaggedMockMemberRouteWiresTheGrant(t *testing.T) {
 		t.Errorf("log %q does not name the DSN host %q", logs.String(), dsnHost)
 	}
 }
+
+// Same shape as TestTaggedMockMemberRouteWiresTheGrant: an unreachable DSN gives 502 for a valid body.
+func TestTaggedMockInvitationTokenRouteWiresTheSetter(t *testing.T) {
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	const dsnHost = "invitation-dsn-marker.invalid"
+	h := mockInvitationTokenRoute("postgres://u@"+dsnHost+":5432/db", logger)
+	post := func(body string) *httptest.ResponseRecorder {
+		ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+		defer cancel()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequestWithContext(ctx, http.MethodPost, "/auth/mock/invitation-token", strings.NewReader(body)))
+		return rec
+	}
+	// 43 base64url characters; msgInvalidBody's text is gateway.MockInvitationTokenHandler's 400 (Design § API contracts).
+	valid := `{"tenant_id":"` + uuid.NewString() + `","invitation_id":"` + uuid.NewString() +
+		`","token":"abcdefghijklmnopqrstuvwxyz-_ABCDEFGHIJKLMNO"}`
+	const invalid = `{"error":"invalid request body"}`
+
+	rec := post(`{`)
+	if rec.Code != http.StatusBadRequest || strings.TrimSpace(rec.Body.String()) != invalid {
+		t.Errorf("malformed body: POST = %d (body %s), want 400 %s", rec.Code, rec.Body.String(), invalid)
+	}
+	rec = post(valid)
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("valid body, unreachable database: POST = %d (body %s), want 502", rec.Code, rec.Body.String())
+	}
+	// The failed connection names the DSN host, so the route is bound to the DSN it was given.
+	if !strings.Contains(logs.String(), dsnHost) {
+		t.Errorf("log %q does not name the DSN host %q", logs.String(), dsnHost)
+	}
+	if strings.Contains(logs.String()+rec.Body.String(), "abcdefghijklmnopqrstuvwxyz-_") {
+		t.Errorf("the log or the answer carries the token: %s %s", logs.String(), rec.Body.String())
+	}
+}

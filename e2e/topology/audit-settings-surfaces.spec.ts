@@ -836,11 +836,12 @@ test('ST-01 Settings › Members at 1440: heading, table card, status pill, avat
   expect(avatar, 'member avatar corner').toBe('50%')
 
   const invite = tid(page, 'members-invite')
-  const inviteDisabled = await styles(invite, ['opacity', 'cursor'])
-  expect(inviteDisabled, 'Invite people').toEqual({ opacity: '0.45', cursor: 'not-allowed' })
+  await expect(invite, 'Invite people is enabled for the e2e admin').toBeEnabled()
+  const inviteEnabled = await styles(invite, ['opacity', 'cursor'])
+  expect(inviteEnabled, 'Invite people, enabled').toEqual({ opacity: '1', cursor: 'pointer' })
   const scroll = await assertPageDoesNotScrollSideways(page, 'Members')
 
-  await attachJson(testInfo, 'st-01-measurements', { h1, tableCorners, pillCorners, avatar, inviteDisabled, scroll })
+  await attachJson(testInfo, 'st-01-measurements', { h1, tableCorners, pillCorners, avatar, inviteEnabled, scroll })
   await attachShot(page, testInfo, 'settings-members')
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
@@ -851,11 +852,10 @@ test('ST-02 the Members toolbar shares one row inside the tab column at every wi
   const search = page.getByLabel('Search members')
   const roleFilter = page.locator('label[aria-label="Access role"] select')
   const invite = tid(page, 'members-invite')
-  const reason = tid(page, 'members-invite-reason')
   const strip = tabStrip(page)
   const measured = await sweep(page, 'Members toolbar', async () => {
     await settle(page, main(page))
-    const { rects, problems } = await boxes({ strip, search, roleFilter, invite, reason })
+    const { rects, problems } = await boxes({ strip, search, roleFilter, invite })
     insideX(rects, 'strip', ['search', 'roleFilter', 'invite'], problems)
     noOverlap(rects, ['search', 'roleFilter', 'invite'], problems)
     for (const n of ['search', 'roleFilter', 'invite']) {
@@ -864,9 +864,6 @@ test('ST-02 the Members toolbar shares one row inside the tab column at every wi
     const names = ['search', 'roleFilter', 'invite']
     const centres = names.filter((n) => rects[n]).map((n) => rects[n].y + rects[n].height / 2)
     if (centres.length && Math.max(...centres) - Math.min(...centres) > 2) problems.push(`the toolbar spans more than one row: ${centres.join(', ')}`)
-    if (rects.reason && rects.invite && Math.abs(rects.reason.x + rects.reason.width - (rects.invite.x + rects.invite.width)) > 2) {
-      problems.push('the invite reason does not end at the Invite right edge')
-    }
     return { problems, rects }
   })
   await attachJson(testInfo, 'st-02-measurements', measured)

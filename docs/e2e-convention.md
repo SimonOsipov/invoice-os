@@ -66,6 +66,11 @@ or every topology run fails at config load.
 stored session is not a hand-off session bound to that tenant. `tenantId` defaults to the seeded
 tenant of the kind (1111 firm, 2222 in-house); a shard passes its own.
 
+**A spec that needs the token of an invite sets it through `setInvitationToken` (`e2e/api/client.ts`).**
+It calls `POST /auth/mock/invitation-token`, beside `POST /auth/mock/member`, which replaces a pending
+invite's token with one the spec chose; `inviteWithToken` invites through the tenancy API, sets a fresh
+token and returns it. A fork's sender captures mail, so no spec can read a real token. Only the mock build serves the route.
+
 **Every run gets a database of its own, and shares it across all three suites.**
 
 The suites run only on a pull request (`dev-env.yml`'s `e2e` and `topology` jobs), against that PR's own
@@ -128,6 +133,12 @@ What a spec still cannot assume is an empty table:
     the e2e admins that `signInAs` already uses (1111 and 2222) and add no rows. The other six leave 4 `auth.users` and 4 `memberships` rows
     (preparer and reviewer on 1111 and 2222) and 2 `auth.users` and 2 `staff_members` rows (developer, support). A rebuilt environment or a retry of a failed
     `provisionAll` re-creates the two staff accounts and adds 2 more `auth.users` and 2 more `staff_members` rows.
+  - `api/invitation-accept.spec.ts` and the accept-page tests of `topology/auth.spec.ts`: each admin
+    workspace leaves an `auth.users` row, a tenant and a membership, each invite an `invitations`
+    row (the reset excludes `invitations`; the purge covers the demo tenants only), each invitee
+    or stranger account an `auth.users` row, and each accepted invite an active `reviewer` membership. A suspended-member
+    test also leaves a `suspended` membership in a second fork workspace. `POST /auth/mock/invitation-token`
+    (`internal/gateway/mockinvitation.go`) writes only the invite's token hash. Only the mock build serves it.
 
   This is harmless: every other run registers a fresh address and provisions for a fresh
   subject, and the e2e member rows are at most three per tenant (admin, preparer, reviewer), all

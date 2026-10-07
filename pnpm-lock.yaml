@@ -138,6 +138,9 @@ importers:
       '@invoice-os/design-tokens':
         specifier: workspace:*
         version: link:../../packages/design-tokens
+      '@invoice-os/monitoring':
+        specifier: workspace:*
+        version: link:../../packages/monitoring
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -145,6 +148,9 @@ importers:
         specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
     devDependencies:
+      '@sentry/vite-plugin':
+        specifier: 5.4.0
+        version: 5.4.0
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.0

@@ -7,16 +7,20 @@ import { FRONTEND, monitoredSpas } from './monitoredSpas.testutil'
 const codeLines = (dockerfile: string) =>
   dockerfile.split('\n').map((l) => l.trim()).filter((l) => l !== '' && !l.startsWith('#'))
 
+// Monitored SPAs that never call the gateway, so their image bakes no VITE_GATEWAY_URL.
+const NO_GATEWAY = ['library']
+
 describe('dockerfiles', () => {
   it('dockerfiles_everyMonitoredSpaBakesTheDsnAndReleaseFallback', () => {
     const monitored = monitoredSpas()
-    expect(monitored).toEqual(['app', 'landing', 'ops-console', 'support-console'])
+    expect(monitored).toEqual(['app', 'landing', 'library', 'ops-console', 'support-console'])
 
     // Control: the line finder sees a pre-existing app ARG, so a miss below is a real miss.
     const appLines = codeLines(readFileSync(join(FRONTEND, 'app/Dockerfile'), 'utf8'))
     expect(appLines.indexOf('ARG VITE_GATEWAY_URL')).toBeGreaterThan(-1)
 
     for (const name of monitored) {
+      const gateway = !NO_GATEWAY.includes(name)
       const lines = codeLines(readFileSync(join(FRONTEND, name, 'Dockerfile'), 'utf8'))
       const build = lines.findIndex((l) => /^RUN pnpm --filter/.test(l))
       expect(build, `${name}: no build RUN`).toBeGreaterThan(-1)
@@ -27,7 +31,7 @@ describe('dockerfiles', () => {
         'VITE_SENTRY_DSN=$VITE_SENTRY_DSN',
         'VITE_SENTRY_TEST_DIGEST=$VITE_SENTRY_TEST_DIGEST',
         'VITE_RAILWAY_GIT_COMMIT_SHA=$RAILWAY_GIT_COMMIT_SHA',
-        'VITE_GATEWAY_URL=$VITE_GATEWAY_URL',
+        ...(gateway ? ['VITE_GATEWAY_URL=$VITE_GATEWAY_URL'] : []),
       ]) {
         const arg = lines.indexOf(`ARG ${key.split('=$')[1]}`)
         const env = lines.indexOf(`ENV ${key}`)
@@ -41,8 +45,7 @@ describe('dockerfiles', () => {
         'ENV VITE_SENTRY_TEST_DIGEST=$VITE_SENTRY_TEST_DIGEST',
         'ARG RAILWAY_GIT_COMMIT_SHA',
         'ENV VITE_RAILWAY_GIT_COMMIT_SHA=$RAILWAY_GIT_COMMIT_SHA',
-        'ARG VITE_GATEWAY_URL',
-        'ENV VITE_GATEWAY_URL=$VITE_GATEWAY_URL',
+        ...(gateway ? ['ARG VITE_GATEWAY_URL', 'ENV VITE_GATEWAY_URL=$VITE_GATEWAY_URL'] : []),
       ]) {
         const at = lines.indexOf(want)
         expect(at, `${name}/Dockerfile lacks "${want}" before its build RUN`).toBeGreaterThan(-1)
@@ -51,9 +54,23 @@ describe('dockerfiles', () => {
     }
   })
 
+  it('dockerfiles_theLibraryBakesNoGatewayUrl', () => {
+    const monitored = monitoredSpas()
+    for (const name of NO_GATEWAY) expect(monitored, `${name} is not a monitored SPA`).toContain(name)
+
+    // Control: the line finder sees a pre-existing app ARG.
+    const appLines = codeLines(readFileSync(join(FRONTEND, 'app/Dockerfile'), 'utf8'))
+    expect(appLines).toContain('ARG VITE_GATEWAY_URL')
+
+    for (const name of NO_GATEWAY) {
+      const lines = codeLines(readFileSync(join(FRONTEND, name, 'Dockerfile'), 'utf8'))
+      expect(lines.filter((l) => l.includes('VITE_GATEWAY_URL')), `${name} names VITE_GATEWAY_URL`).toEqual([])
+    }
+  })
+
   it('dockerfiles_theAuthTokenReachesOnlyTheBuildStage', () => {
     const monitored = monitoredSpas()
-    expect(monitored).toEqual(['app', 'landing', 'ops-console', 'support-console'])
+    expect(monitored).toEqual(['app', 'landing', 'library', 'ops-console', 'support-console'])
 
     for (const name of monitored) {
       const lines = codeLines(readFileSync(join(FRONTEND, name, 'Dockerfile'), 'utf8'))

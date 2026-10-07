@@ -12,12 +12,15 @@ import {
   createImportBatch,
   claimsOf,
   exchangeCode,
+  inviteWithToken,
   listEntities,
+  me,
   mintSignInState,
   provisionRealAccount,
   provisionStaffAccount,
   rawFetch,
   signInForCode,
+  signInSession,
   PERSONAS as API_PERSONAS,
   type Me,
   type RealAccount,
@@ -1930,7 +1933,9 @@ function recordResends(page: Page): string[] {
 }
 
 // Parts run top to bottom: each starts below the one above and none overlaps another.
-async function expectStack(page: Page, width: number, card: Locator, parts: [string, Locator][], sameEdges: [string, string]): Promise<void> {
+// `longValueInputs` names <input> parts that may hold a value wider than their box: an input scrolls its own text,
+// so only its box is judged (inside the card, sameEdges, and its wrapper), never its scrollWidth.
+async function expectStack(page: Page, width: number, card: Locator, parts: [string, Locator][], sameEdges: [string, string], longValueInputs: string[] = []): Promise<void> {
   await settleAnimations(card)
   const cardBox = await card.boundingBox()
   const boxes = new Map<string, { x: number; y: number; width: number; height: number }>()
@@ -1957,6 +1962,16 @@ async function expectStack(page: Page, width: number, card: Locator, parts: [str
   // The card scrolls on overflow, so an unwrapped address would pass the box checks above and the document check below.
   const overflowed: string[] = []
   for (const [name, el] of [['card', card] as [string, Locator], ...parts]) {
+    if (longValueInputs.includes(name)) {
+      const wrapper = await el.evaluate((node) => {
+        if (!(node instanceof HTMLInputElement)) return null
+        const parent = node.parentElement!
+        return parent.scrollWidth - parent.clientWidth
+      })
+      if (wrapper === null) throw new Error(`${name} is not an <input>, so it cannot be exempt from the overflow check`)
+      if (wrapper > 1) overflowed.push(`${name} pushes its wrapper by ${wrapper}px`)
+      continue
+    }
     const over = await el.evaluate((node) => node.scrollWidth - node.clientWidth)
     if (over > 1) overflowed.push(`${name} by ${over}px`)
   }
@@ -2264,4 +2279,233 @@ test('deployed landing: "Forgot password?" sends a reset request, and a bogus re
   })
 
   expect(errors, `console errors on the sign-in window:\n${errors.join('\n')}`).toEqual([])
+})
+
+// The accept page of an invite link (frontend/landing/src/components/InvitePage.tsx).
+const INVITE_INVALID = 'This invite is no longer valid'
+// frontend/landing/src/App.tsx SIGN_IN_OUTCOMES, no-workspace.
+const NO_WORKSPACE = 'This account has no workspace yet. If you were invited, open the invite link in your email.'
+const inviteUrl = (token: string) => `${LANDING_URL}/invite#token=${token}`
+
+// A fresh admin with a workspace of `workspaceName` (default: a short one; maxNameChars, internal/tenancy/tenancy.go, is 200).
+async function inviteWorkspace(workspaceName?: string): Promise<{ adminToken: string; tenantId: string; name: string }> {
+  const admin = await provisionRealAccount('invite-admin', 'firm', 'Invite E2E', workspaceName)
+  const adminToken = (await signInSession(admin.email, admin.password)).access_token
+  return { adminToken, tenantId: (await me(adminToken)).tenant.id, name: admin.workspaceName }
+}
+
+// 250 bytes: a 64-byte local part and a 185-byte domain of 63, 63 and 57-byte labels (maxEmailBytes, internal/tenancy/invitations_handler.go, is 254).
+function longInviteAddress(): string {
+  const local = `${crypto.randomUUID().replaceAll('-', '')}${'a'.repeat(32)}`
+  const address = `${local}@${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(57)}`
+  expect(Buffer.byteLength(address), 'the long invited address').toBe(250)
+  return address
+}
+
+// The accept card is the heading's grandparent (heading -> padded body -> card): stacked as `expectStack` asks, and inside the viewport.
+async function expectAcceptStack(page: Page, width: number, heading: Locator, parts: [string, Locator][], sameEdges: [string, string], longValueInputs: string[] = []): Promise<void> {
+  const card = heading.locator('xpath=../..')
+  await expectStack(page, width, card, parts, sameEdges, longValueInputs)
+  const box = await card.boundingBox()
+  if (!box) throw new Error(`the accept card rendered no box at ${width}px`)
+  expect(box.x, `the card starts left of the viewport at ${width}px`).toBeGreaterThanOrEqual(-1)
+  expect(box.x + box.width, `the card ends right of the viewport at ${width}px`).toBeLessThanOrEqual(width + 1)
+}
+
+// A fragment-only goto is a same-document navigation: the page would keep its view and its address-bar fragment. Load afresh.
+async function openInvite(page: Page, token: string): Promise<void> {
+  await page.goto('about:blank')
+  await page.goto(inviteUrl(token))
+}
+
+// Opens the link at `width`, then asserts the ready view stacks and the address bar holds no fragment.
+async function expectReadyView(page: Page, width: number, token: string, workspace: string, address: string): Promise<void> {
+  await page.setViewportSize({ width, height: TALL })
+  await openInvite(page, token)
+  const heading = page.getByRole('heading', { name: `Join ${workspace}`, exact: true })
+  await expect(heading).toBeVisible({ timeout: 30_000 })
+  const text = page.getByText(`${address} is invited to join ${workspace} on ASComply as Reviewer.`, { exact: true })
+  await expect(text).toBeVisible()
+  await expect.poll(() => new URL(page.url()).hash, { message: `the address bar still holds the fragment at ${width}px` }).toBe('')
+  await expectAcceptStack(
+    page,
+    width,
+    heading,
+    [['heading', heading], ['text', text], ['create', page.getByRole('button', { name: 'Create account', exact: true })], ['sign in', page.getByRole('button', { name: 'Sign in', exact: true })]],
+    ['create', 'sign in'],
+  )
+}
+
+// Opens the link at `width` and the register view, then asserts its fields and submit stack.
+async function expectRegisterView(page: Page, width: number, token: string): Promise<void> {
+  await page.setViewportSize({ width, height: TALL })
+  await openInvite(page, token)
+  await page.getByRole('button', { name: 'Create account', exact: true }).click()
+  const heading = page.getByRole('heading', { name: 'Create your account', exact: true })
+  await expect(heading).toBeVisible()
+  await expectAcceptStack(
+    page,
+    width,
+    heading,
+    [
+      ['email', page.getByLabel('Work email', { exact: true })],
+      ['password', page.getByLabel('Password', { exact: true })],
+      ['submit', page.getByRole('button', { name: 'Create account →', exact: true })],
+    ],
+    ['email', 'submit'],
+    ['email'],
+  )
+}
+
+test('deployed landing: the accept page names the workspace and role at every width, and a bogus invite is no longer valid', async ({ page, browser }) => {
+  // Three sweeps over five widths, each reloading the link, plus two bogus views.
+  test.setTimeout(300_000)
+  const workspace = await inviteWorkspace(`W${crypto.randomUUID().replaceAll('-', '')}`.padEnd(200, 'w'))
+  expect(workspace.name, 'the workspace name').toHaveLength(200)
+  const ordinary = `invite-sweep-${crypto.randomUUID()}@example.com`
+  const long = longInviteAddress()
+  const ordinaryToken = await inviteWithToken(workspace.adminToken, workspace.tenantId, ordinary)
+  const longToken = await inviteWithToken(workspace.adminToken, workspace.tenantId, long)
+  const widths = [...WIDE_WIDTHS, 375]
+  const errors = collectErrors(page)
+  await seedConsent(page, false)
+
+  const read: number[] = []
+  for (const width of widths) {
+    await expectReadyView(page, width, ordinaryToken, workspace.name, ordinary)
+    read.push(width)
+  }
+  expect(read, 'the widths the ordinary-address sweep read').toEqual(widths)
+  // Copied before any click: the page has only loaded and previewed.
+  const beforeClick = [...errors]
+  expect(beforeClick, `console errors on the accept page:\n${beforeClick.join('\n')}`).toEqual([])
+
+  const readLong: number[] = []
+  for (const width of widths) {
+    await expectReadyView(page, width, longToken, workspace.name, long)
+    readLong.push(width)
+  }
+  expect(readLong, 'the widths the long-address ready sweep read').toEqual(widths)
+
+  const registerWidths: number[] = []
+  for (const width of widths) {
+    await expectRegisterView(page, width, longToken)
+    registerWidths.push(width)
+  }
+  expect(registerWidths, 'the widths the long-address register sweep read').toEqual(widths)
+
+  // A link that is not a token shows the invalid view without a request; an unknown token is the gateway's 404.
+  const context = await browser.newContext()
+  try {
+    const bogus = await context.newPage()
+    const bogusErrors = gatedErrors(bogus, [expectedStatusDropper(bogus, 404, /\/auth\/invitation$/)])
+    for (const token of [`bogus-${crypto.randomUUID()}`, mintSignInState()]) {
+      await openInvite(bogus, token)
+      await expect(bogus.getByRole('heading', { name: INVITE_INVALID, exact: true })).toBeVisible({ timeout: 30_000 })
+    }
+    expect(bogusErrors, `console errors on the bogus link:\n${bogusErrors.join('\n')}`).toEqual([])
+  } finally {
+    await context.close()
+  }
+})
+
+// Registers the invitee on the accept page and ends on "Check your email".
+async function registerOnAcceptPage(page: Page, token: string, password: string): Promise<void> {
+  await seedConsent(page, false)
+  await openInvite(page, token)
+  await page.getByRole('button', { name: 'Create account', exact: true }).click()
+  await page.getByLabel('Password', { exact: true }).fill(password)
+  await page.getByRole('button', { name: 'Create account →', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Check your email', exact: true })).toBeVisible({ timeout: 30_000 })
+}
+
+// Waits for the app to draw, then returns the browser session's /v1/me.
+async function readSessionIdentity(page: Page): Promise<Me> {
+  await expect(page.locator(VERIFIED)).toBeAttached({ timeout: 30_000 })
+  return me(await browserToken(page))
+}
+
+// The landing "Platform login" window, as `signInAtFrontDoor` completes it, once the invite page's "Sign in" opened it.
+async function signInInOpenWindow(page: Page, account: { email: string; password: string }): Promise<void> {
+  await expect(page.getByRole('dialog', { name: 'Platform login' }).getByLabel('Work email', { exact: true })).toBeVisible({ timeout: 30_000 })
+  await Promise.all([
+    page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
+    submitSignIn(page, account.email, account.password),
+  ])
+}
+
+test('deployed journey: an invitee creates an account on the accept page, signs in and lands in the workspace with the invited role', async ({ page }) => {
+  test.setTimeout(240_000)
+  const workspace = await inviteWorkspace()
+  const account = { email: `invitee-${crypto.randomUUID()}@example.com`, password: crypto.randomUUID().slice(0, 16) }
+  const token = await inviteWithToken(workspace.adminToken, workspace.tenantId, account.email)
+  const urls = recordUrls(page)
+  let workspacesCreated = 0
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/tenancy/v1/workspaces')) workspacesCreated += 1
+  })
+
+  await registerOnAcceptPage(page, token, account.password)
+
+  await test.step('the sent view stacks at 375 px', async () => {
+    await page.setViewportSize({ width: 375, height: TALL })
+    const heading = page.getByRole('heading', { name: 'Check your email', exact: true })
+    const text = page.getByText('a confirmation link is on its way to')
+    await expect(text).toContainText(account.email)
+    await expectAcceptStack(
+      page,
+      375,
+      heading,
+      [['heading', heading], ['text', text], ['resend', page.getByRole('button', { name: RESEND, exact: true })], ['sign in', page.getByRole('button', { name: 'Sign in', exact: true })]],
+      ['resend', 'sign in'],
+    )
+    await page.setViewportSize({ width: 1280, height: 800 })
+  })
+
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await signInInOpenWindow(page, account)
+  const identity = await readSessionIdentity(page)
+
+  expect(identity.tenant.id, 'the session is bound to the inviting workspace').toBe(workspace.tenantId)
+  expect(identity.user.role, 'the invited role').toBe('reviewer')
+  expect(urls.filter((u) => u.includes('signin=no-workspace')), 'a navigation carried signin=no-workspace').toEqual([])
+  expect(workspacesCreated, 'workspaces created on the way').toBe(0)
+})
+
+test('deployed journey: an invitee who signs in from another tab without the invite is pointed back to the invite link and joins through it', async ({ browser }) => {
+  test.setTimeout(300_000)
+  const workspace = await inviteWorkspace()
+  const account = { email: `invitee-${crypto.randomUUID()}@example.com`, password: crypto.randomUUID().slice(0, 16) }
+  const token = await inviteWithToken(workspace.adminToken, workspace.tenantId, account.email)
+
+  const contextA = await browser.newContext()
+  try {
+    await registerOnAcceptPage(await contextA.newPage(), token, account.password)
+  } finally {
+    await contextA.close()
+  }
+
+  // A new context holds no invite: it stands for the tab the verification mail opens.
+  const contextB = await browser.newContext()
+  try {
+    const page = await contextB.newPage()
+    const urls = recordUrls(page)
+    await seedConsent(page, false)
+    await page.goto(LANDING_URL)
+    await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Platform login' })
+    await dialog.getByRole('button', { name: 'Continue with email', exact: true }).click()
+    await signInInOpenWindow(page, account)
+    await expect(page.getByRole('dialog', { name: 'Platform login' })).toContainText(NO_WORKSPACE, { timeout: 30_000 })
+    expect(urls.filter((u) => u.includes('signin=no-workspace')).length, 'the landing was reached at ?signin=no-workspace').toBeGreaterThan(0)
+
+    await openInvite(page, token)
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+    await signInInOpenWindow(page, account)
+    const identity = await readSessionIdentity(page)
+    expect(identity.tenant.id, 'the session is bound to the inviting workspace').toBe(workspace.tenantId)
+    expect(identity.user.role, 'the invited role').toBe('reviewer')
+  } finally {
+    await contextB.close()
+  }
 })

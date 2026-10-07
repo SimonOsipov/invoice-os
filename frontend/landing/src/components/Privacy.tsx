@@ -98,8 +98,9 @@ export function Privacy() {
             Your answer itself is stored on your device too, though not as a cookie. It is a small record named
             asc_consent, which our own code writes to your browser's own storage and never sends anywhere: it holds
             whether you allowed analytics, when you chose, and which version of the record it is. It is what stops the
-            cookie notice asking you again on every visit, and, apart from the deletions described above, it is the
-            only thing our own code writes when you choose Reject.
+            cookie notice asking you again on every visit, and, apart from the deletions described above and the
+            invite link's token, which is kept in this tab's session storage on the invite page only and cleared when
+            the tab closes, it is the only thing our own code writes when you choose Reject.
           </p>
 
           <h2 style={H2}>Where the data goes</h2>

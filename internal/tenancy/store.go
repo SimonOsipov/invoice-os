@@ -3,6 +3,7 @@ package tenancy
 import (
 	"context"
 	"errors"
+	"regexp"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -294,4 +295,94 @@ func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) 
 		return Membership{}, err
 	}
 	return updated, nil
+}
+
+// inviteTokenShape is a 32-byte token in unpadded base64url.
+var inviteTokenShape = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+
+// PreviewInvitation names the workspace, role and address of a live invite. A
+// malformed token is refused without a query; every unusable token answers
+// ErrInvitationNotValid alike.
+func (s *Store) PreviewInvitation(ctx context.Context, token string) (InvitationPreview, error) {
+	if !inviteTokenShape.MatchString(token) {
+		return InvitationPreview{}, ErrInvitationNotValid
+	}
+	var p InvitationPreview
+	// The token names the tenant; the nil uuid scopes every other table to none.
+	err := db.WithinTenantTx(ctx, s.pool, uuid.Nil.String(), func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `SELECT workspace, role, email FROM public.invitation_by_token($1)`, token).
+			Scan(&p.Workspace, &p.Role, &p.Email)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrInvitationNotValid
+		}
+		return err
+	})
+	if err != nil {
+		return InvitationPreview{}, err
+	}
+	return p, nil
+}
+
+// AcceptInvitation joins the caller to the invite's workspace with the invited
+// role and audits it in one transaction. It returns the tenant, the canonical
+// subject and the role. The caller may be tenant-bearing or tenant-less.
+func (s *Store) AcceptInvitation(ctx context.Context, token string) (Tenant, string, string, error) {
+	caller, ok := auth.IdentityFromContext(ctx)
+	if !ok {
+		caller, ok = auth.TenantlessCallerFromContext(ctx)
+	}
+	if !ok {
+		return Tenant{}, "", "", db.ErrNoTenant
+	}
+	parsed, err := uuid.Parse(caller.Subject)
+	if err != nil {
+		return Tenant{}, "", "", db.ErrNoTenant
+	}
+	subject := parsed.String()
+	if !inviteTokenShape.MatchString(token) {
+		return Tenant{}, "", "", ErrInvitationNotValid
+	}
+
+	var tenantID string
+	err = db.WithinTenantTx(ctx, s.pool, uuid.Nil.String(), func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `SELECT tenant_id FROM public.invitation_by_token($1)`, token).Scan(&tenantID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrInvitationNotValid
+		}
+		return err
+	})
+	if err != nil {
+		return Tenant{}, "", "", err
+	}
+
+	var t Tenant
+	var role string
+	// The caller has no membership in this tenant yet, so the gated seam would refuse.
+	err = db.WithinTenantTx(ctx, s.pool, tenantID, func(tx pgx.Tx) error {
+		var id string
+		if err := tx.QueryRow(ctx, `SELECT invitation_id, role FROM public.accept_invitation($1, $2, $3, $4)`,
+			tenantID, token, subject, caller.Email,
+		).Scan(&id, &role); err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) {
+				switch pgErr.ConstraintName {
+				case "invitation_not_valid":
+					return ErrInvitationNotValid
+				case "one_workspace_per_identity":
+					return ErrAlreadyMember
+				case "invitation_email_mismatch":
+					return ErrInvitationEmailMismatch
+				}
+			}
+			return err
+		}
+		if err := tx.QueryRow(ctx, `SELECT id, name, kind FROM tenants`).Scan(&t.ID, &t.Name, &t.Kind); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, subject, "invitation.accepted", map[string]any{"invitation_id": id, "role": role})
+	})
+	if err != nil {
+		return Tenant{}, "", "", err
+	}
+	return t, subject, role, nil
 }

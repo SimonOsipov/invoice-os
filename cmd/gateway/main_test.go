@@ -10,6 +10,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"go/ast"
@@ -1255,6 +1256,154 @@ func TestRegistrationHandlers_NotConfigured503(t *testing.T) {
 				t.Errorf("GoTrue saw %v, want no calls", got)
 			}
 		})
+	}
+}
+
+// invitationPreviewerStub answers every token with one live invite and counts the calls.
+func invitationPreviewerStub(address string) (gateway.InvitationPreviewer, func() int) {
+	var mu sync.Mutex
+	n := 0
+	return func(context.Context, string) (gateway.InvitationPreview, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			n++
+			return gateway.InvitationPreview{Workspace: "Obi Partners", Role: "reviewer", Email: address}, nil
+		}, func() int {
+			mu.Lock()
+			defer mu.Unlock()
+			return n
+		}
+}
+
+// AUTH_URL, AUTH_SITE_URL or the register throttle missing: invitee registration refuses, and the preview still answers.
+func TestInvitationHandlers_NotConfigured503(t *testing.T) {
+	site, _ := url.Parse("https://site.example")
+	perIP := func() *gateway.SignInThrottle {
+		return gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now)
+	}
+	const registerBody = `{"token":"Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T","password":"Corr3ct-Horse"}`
+
+	// Control: configured, the same call signs the invited address up, so the 503s below are the unset input.
+	t.Run("configured", func(t *testing.T) {
+		authURL, calls := fakeAuth(t)
+		preview, previewed := invitationPreviewerStub("tunde@obi.test")
+		_, register := invitationHandlers(authURL, site, 0, perIP(), preview, slog.New(slog.DiscardHandler))
+
+		rec := serveRegistration(register, http.MethodPost, "/auth/invitation/register", registerBody)
+
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("register = %d, want 202: %s", rec.Code, rec.Body.String())
+		}
+		if got := calls(); !slices.Equal(got, []string{"POST /signup"}) || previewed() != 1 {
+			t.Errorf("GoTrue saw %v and the previewer %d call(s), want one signup and one preview", got, previewed())
+		}
+	})
+
+	for _, unset := range []string{"AUTH_URL", "AUTH_SITE_URL", "register throttle"} {
+		t.Run(unset, func(t *testing.T) {
+			authURL, calls := fakeAuth(t)
+			preview, previewed := invitationPreviewerStub("tunde@obi.test")
+			log := slog.New(slog.DiscardHandler)
+			var invitation, register http.Handler
+			switch unset {
+			case "AUTH_URL":
+				invitation, register = invitationHandlers(nil, site, 0, perIP(), preview, log)
+			case "AUTH_SITE_URL":
+				invitation, register = invitationHandlers(authURL, nil, 0, perIP(), preview, log)
+			default:
+				invitation, register = invitationHandlers(authURL, site, 0, nil, preview, log)
+			}
+
+			rec := serveRegistration(register, http.MethodPost, "/auth/invitation/register", registerBody)
+
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("register = %d, want 503: %s", rec.Code, rec.Body.String())
+			}
+			var body map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body) != 1 || body["error"] != "registration is not configured" {
+				t.Errorf("register body = %s, want {\"error\":\"registration is not configured\"}", rec.Body.String())
+			}
+			if got := calls(); len(got) != 0 || previewed() != 0 {
+				t.Errorf("GoTrue saw %v and the previewer %d call(s), want none", got, previewed())
+			}
+
+			rec = serveRegistration(invitation, http.MethodPost, "/auth/invitation", `{"token":"Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T"}`)
+			if rec.Code != http.StatusOK || previewed() != 1 {
+				t.Errorf("preview = %d with %d previewer call(s), want 200 and 1: %s", rec.Code, previewed(), rec.Body.String())
+			}
+			var preview200 map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &preview200); err != nil || preview200["email"] != "tunde@obi.test" {
+				t.Errorf("preview body = %s, want the invite's workspace, role and email", rec.Body.String())
+			}
+		})
+	}
+}
+
+// Invitee registration enforces its per-client limit exactly where /auth/register does: not on a PR preview.
+func TestInvitationHandlers_EnforcementFollowsThePosture(t *testing.T) {
+	for _, c := range []struct {
+		name, env string
+		wantCalls int
+	}{
+		{"pr-7", "pr-7", 11},
+		{"production", "production", gateway.RegisterPerIP},
+		{"development", "development", gateway.RegisterPerIP},
+		{"empty", "", gateway.RegisterPerIP},
+		{"upper-case PR-7", "PR-7", gateway.RegisterPerIP},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("RAILWAY_ENVIRONMENT_NAME", c.env)
+			authURL, calls := fakeAuth(t)
+			site, _ := url.Parse("https://site.example")
+			log := slog.New(slog.DiscardHandler)
+			reg := registrationHandlers(authURL, site, 0, log, nil)
+			preview, _ := invitationPreviewerStub("tunde@obi.test")
+			_, register := invitationHandlers(authURL, site, 0, reg.RegisterPerIP, preview, log)
+
+			for range 11 {
+				req := httptest.NewRequest(http.MethodPost, "/auth/invitation/register", strings.NewReader(`{"token":"Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T","password":"Corr3ct-Horse"}`))
+				req.RemoteAddr = "203.0.113.7:4000"
+				rec := httptest.NewRecorder()
+				register.ServeHTTP(rec, req)
+				if rec.Code != http.StatusAccepted {
+					t.Fatalf("invitee register = %d, want 202: %s", rec.Code, rec.Body.String())
+				}
+			}
+			if got := countCalls(calls(), "POST /signup"); got != c.wantCalls {
+				t.Errorf("GoTrue /signup calls = %d, want %d", got, c.wantCalls)
+			}
+		})
+	}
+}
+
+// The throttle invitee registration shares is the one /auth/register spends.
+func TestRegistrationHandlers_ExposesTheRegisterThrottle(t *testing.T) {
+	const remote = "203.0.113.7:4000"
+	authURL, _ := fakeAuth(t)
+	site, _ := url.Parse("https://site.example")
+	log := slog.New(slog.DiscardHandler)
+
+	reg := registrationHandlers(authURL, site, 0, log, nil)
+	if reg.RegisterPerIP == nil {
+		t.Fatal("RegisterPerIP is nil with AUTH_URL and AUTH_SITE_URL configured")
+	}
+	if !reg.RegisterPerIP.Reserve("198.51.100.1") {
+		t.Fatal("a fresh throttle refused its first reservation")
+	}
+	for _, email := range distinctAddresses(gateway.RegisterPerIP) {
+		if rec := registerFrom(reg.Register, email, remote); rec.Code != http.StatusAccepted {
+			t.Fatalf("register = %d, want 202: %s", rec.Code, rec.Body.String())
+		}
+	}
+	if reg.RegisterPerIP.Reserve("203.0.113.7") {
+		t.Errorf("RegisterPerIP still has budget for a client that spent all %d register attempts: it is not the throttle Register uses", gateway.RegisterPerIP)
+	}
+
+	if got := registrationHandlers(nil, site, 0, log, nil).RegisterPerIP; got != nil {
+		t.Error("RegisterPerIP is non-nil with AUTH_URL unset")
+	}
+	if got := registrationHandlers(authURL, nil, 0, log, nil).RegisterPerIP; got != nil {
+		t.Error("RegisterPerIP is non-nil with AUTH_SITE_URL unset")
 	}
 }
 

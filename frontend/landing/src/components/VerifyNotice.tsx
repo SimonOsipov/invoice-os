@@ -1,3 +1,4 @@
+import { INVITE_NOTICES, type InviteOutcome } from '../invite'
 import { RESET_DONE, RESET_FAILED, type ResetOutcome } from '../passwordReset'
 import type { VerifyOutcome } from '../verify'
 import { Button } from './ds/Button'
@@ -7,6 +8,7 @@ const COPY = {
   failed: 'That link did not work. It may have expired or already been used.',
   reset: RESET_DONE,
   'reset-failed': RESET_FAILED,
+  ...INVITE_NOTICES,
 } as const
 
 const TONE = {
@@ -14,9 +16,12 @@ const TONE = {
   failed: { background: 'var(--status-red-bg)', color: 'var(--status-red-text)' },
   reset: { background: 'var(--status-success-bg)', color: 'var(--status-success-fg)' },
   'reset-failed': { background: 'var(--status-red-bg)', color: 'var(--status-red-text)' },
+  'already-member': { background: 'var(--status-red-bg)', color: 'var(--status-red-text)' },
+  invalid: { background: 'var(--status-red-bg)', color: 'var(--status-red-text)' },
+  'other-address': { background: 'var(--status-red-bg)', color: 'var(--status-red-text)' },
 } as const
 
-export function VerifyNotice({ outcome, onDismiss, onRequestReset }: { outcome: NonNullable<VerifyOutcome | ResetOutcome>; onDismiss: () => void; onRequestReset?: () => void }) {
+export function VerifyNotice({ outcome, onDismiss, onRequestReset }: { outcome: NonNullable<VerifyOutcome | ResetOutcome | InviteOutcome>; onDismiss: () => void; onRequestReset?: () => void }) {
   return (
     <div className="container" style={{ paddingTop: 16 }}>
       <div

@@ -263,6 +263,25 @@ export async function grantMembership(grant: MemberGrant): Promise<void> {
   if (res.status !== 204) throw new Error(`member grant answered ${res.status}: ${JSON.stringify(res.body)}`)
 }
 
+// POST /auth/mock/invitation-token (internal/gateway/mockinvitation.go answers 204); mock build only.
+// Replaces a pending invite's token, so a spec knows the value the mail would carry.
+export async function setInvitationToken(tenantId: string, invitationId: string, token: string): Promise<void> {
+  const res = await rawFetch('/auth/mock/invitation-token', { method: 'POST', body: { tenant_id: tenantId, invitation_id: invitationId, token } })
+  if (res.status !== 204) throw new Error(`invitation token seed answered ${res.status}: ${JSON.stringify(res.body)}`)
+}
+
+// Invites `email` as `role` through the tenancy API, gives the invite a token of the spec's own and returns it.
+// `tenantId` is the admin's workspace.
+export async function inviteWithToken(adminToken: string, tenantId: string, email: string, role: 'admin' | 'preparer' | 'reviewer' = 'reviewer'): Promise<string> {
+  const res = await rawFetch('/api/tenancy/v1/invitations', { method: 'POST', headers: { Authorization: `Bearer ${adminToken}` }, body: { emails: [email], role } })
+  if (res.status !== 200) throw new Error(`invite answered ${res.status}: ${JSON.stringify(res.body)}`)
+  const [invitation] = (res.body as { invitations: { id: string }[] }).invitations
+  // 43 random base64url characters: inviteTokenShape, internal/tenancy/store.go.
+  const token = mintSignInState()
+  await setInvitationToken(tenantId, invitation.id, token)
+  return token
+}
+
 // ---- Wire contract types, declared locally to the verified contract
 // (internal/tenancy, internal/portfolio/portfolio.go, internal/validation/
 // rule.go + handlers.go). Me mirrors e2e/topology/isolation.spec.ts's Me

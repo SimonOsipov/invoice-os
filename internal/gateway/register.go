@@ -86,69 +86,75 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 			body["data"] = data
 		}
 
-		key, source := clientKey(r)
-		held := perIP.Reserve(key)
-		refused := false
-		if !held {
-			log.WarnContext(r.Context(), "registration: limit reached",
-				slog.String("limit", "ip"), slog.String("key_source", source), slog.Bool("enforced", enforce))
-			refused = enforce
-		}
-
-		if refused {
-			if holdMinimum(r.Context(), log, "registration: signup timing", start, 0, minResponse) {
-				writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"})
-			}
-			return
-		}
-
-		status, gt, err := postGoTrue(r, client, signup, body, nil)
-		upstream := time.Since(start)
-		// GoTrue mails nothing when it answers 4xx; 2xx, 5xx and transport errors may have mailed.
-		if held && err == nil && status >= http.StatusBadRequest && status < http.StatusInternalServerError {
-			perIP.Refund(key)
-		}
-		pending := func() { writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"}) }
-		var send func()
-		if err != nil {
-			log.WarnContext(r.Context(), "registration: gotrue unreachable", slog.String("error", err.Error()))
-			send = func() { writeError(w, http.StatusBadGateway, "registration is unavailable") }
-		}
-
-		// A repeat or confirmed address answers exactly like a new one.
-		switch {
-		case err != nil:
-		case status == http.StatusOK,
-			gt.ErrorCode == "user_already_exists",
-			gt.ErrorCode == "email_exists":
-			send = pending
-		case gt.ErrorCode == "over_email_send_rate_limit":
-			// ceiling: GoTrue's instance-wide mail cap (30/h) answers the same code, so this WARN is its only signal; raise GOTRUE_RATE_LIMIT_EMAIL_SENT when signups near it.
-			log.WarnContext(r.Context(), "registration: gotrue email send rate limit", slog.Int("upstream_status", status))
-			send = pending
-		case status >= http.StatusInternalServerError && gt.Code == "23505":
-			// The loser of two concurrent signups for one address gets GoTrue's unique-violation 500.
-			log.WarnContext(r.Context(), "registration: gotrue concurrent duplicate signup")
-			send = pending
-		case gt.ErrorCode == "validation_failed",
-			gt.ErrorCode == "weak_password",
-			gt.ErrorCode == "email_address_invalid":
-			writeError(w, http.StatusBadRequest, gt.Msg)
-			return
-		case gt.ErrorCode == "signup_disabled":
-			send = func() { writeError(w, http.StatusServiceUnavailable, "registration is closed") }
-		case status == http.StatusTooManyRequests:
-			send = func() { writeError(w, http.StatusTooManyRequests, "too many requests") }
-		default:
-			log.WarnContext(r.Context(), "registration: gotrue signup failed",
-				slog.Int("upstream_status", status), slog.String("error_code", gt.ErrorCode))
-			send = func() { writeError(w, http.StatusBadGateway, "registration is unavailable") }
-		}
-
-		if holdMinimum(r.Context(), log, "registration: signup timing", start, upstream, minResponse) {
-			send()
-		}
+		signUp(w, r, client, signup, body, start, minResponse, perIP, enforce, log)
 	})
+}
+
+// signUp spends the per-IP budget, posts body to GoTrue's /signup and answers with the floor held.
+// RegisterHandler and InvitationRegisterHandler share it, so both map GoTrue's answers alike.
+func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup string, body map[string]any, start time.Time, minResponse time.Duration, perIP *SignInThrottle, enforce bool, log *slog.Logger) {
+	key, source := clientKey(r)
+	held := perIP.Reserve(key)
+	refused := false
+	if !held {
+		log.WarnContext(r.Context(), "registration: limit reached",
+			slog.String("limit", "ip"), slog.String("key_source", source), slog.Bool("enforced", enforce))
+		refused = enforce
+	}
+
+	if refused {
+		if holdMinimum(r.Context(), log, "registration: signup timing", start, 0, minResponse) {
+			writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"})
+		}
+		return
+	}
+
+	status, gt, err := postGoTrue(r, client, signup, body, nil)
+	upstream := time.Since(start)
+	// GoTrue mails nothing when it answers 4xx; 2xx, 5xx and transport errors may have mailed.
+	if held && err == nil && status >= http.StatusBadRequest && status < http.StatusInternalServerError {
+		perIP.Refund(key)
+	}
+	pending := func() { writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"}) }
+	var send func()
+	if err != nil {
+		log.WarnContext(r.Context(), "registration: gotrue unreachable", slog.String("error", err.Error()))
+		send = func() { writeError(w, http.StatusBadGateway, "registration is unavailable") }
+	}
+
+	// A repeat or confirmed address answers exactly like a new one.
+	switch {
+	case err != nil:
+	case status == http.StatusOK,
+		gt.ErrorCode == "user_already_exists",
+		gt.ErrorCode == "email_exists":
+		send = pending
+	case gt.ErrorCode == "over_email_send_rate_limit":
+		// ceiling: GoTrue's instance-wide mail cap (30/h) answers the same code, so this WARN is its only signal; raise GOTRUE_RATE_LIMIT_EMAIL_SENT when signups near it.
+		log.WarnContext(r.Context(), "registration: gotrue email send rate limit", slog.Int("upstream_status", status))
+		send = pending
+	case status >= http.StatusInternalServerError && gt.Code == "23505":
+		// The loser of two concurrent signups for one address gets GoTrue's unique-violation 500.
+		log.WarnContext(r.Context(), "registration: gotrue concurrent duplicate signup")
+		send = pending
+	case gt.ErrorCode == "validation_failed",
+		gt.ErrorCode == "weak_password",
+		gt.ErrorCode == "email_address_invalid":
+		writeError(w, http.StatusBadRequest, gt.Msg)
+		return
+	case gt.ErrorCode == "signup_disabled":
+		send = func() { writeError(w, http.StatusServiceUnavailable, "registration is closed") }
+	case status == http.StatusTooManyRequests:
+		send = func() { writeError(w, http.StatusTooManyRequests, "too many requests") }
+	default:
+		log.WarnContext(r.Context(), "registration: gotrue signup failed",
+			slog.Int("upstream_status", status), slog.String("error_code", gt.ErrorCode))
+		send = func() { writeError(w, http.StatusBadGateway, "registration is unavailable") }
+	}
+
+	if holdMinimum(r.Context(), log, "registration: signup timing", start, upstream, minResponse) {
+		send()
+	}
 }
 
 // registrationAnswers trims and validates the answers with tenancy.ProvisionHandler's rules and

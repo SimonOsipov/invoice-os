@@ -14,8 +14,8 @@
 // "no database HANDLE is acquired outside the allowlist" — a pool method, a bare
 // connection, a constructed pool and a database/sql handle all count, because a
 // monopoly with one named DSN hole left open is not a monopoly. Scan 2 says the
-// only HTTP-path callers of the identity-free core are the two deliberate
-// exemptions, Store.Me and Store.ProvisionWorkspace. Together they make the
+// only HTTP-path callers of the identity-free core are the four deliberate
+// exemptions, Store.Me, Store.ProvisionWorkspace, Store.AcceptInvitation and Store.PreviewInvitation. Together they make the
 // gated seam a monopoly, so every route that touches the database is gated BY
 // CONSTRUCTION. Scan 3 keeps the written
 // enumeration complete. Core AC 6 = 1 + 2 + 3.
@@ -192,19 +192,20 @@ func (e scPoolExemption) covers(s scPoolSite) bool {
 
 // scPoolAllowlist is every caller allowed to reach the database without the seam.
 var scPoolAllowlist = []scPoolExemption{
-	{file: "internal/platform/db/db.go"},                                      // declares the identity-free core; its pool.BeginTx IS what every other caller wraps
-	{file: "internal/platform/db/tenant.go"},                                  // declares the gated seam; its pool.BeginTx IS the gate this story shipped
-	{file: "internal/platform/db/migrate.go"},                                 // goose needs a database/sql handle, which no pgx pool can supply; it runs at boot on the migrator role
-	{file: "internal/platform/db/bootstrap.go"},                               // boot-time role and password provisioning on a superuser connection, before any request or tenant exists
-	{file: "internal/platform/db/provision.go"},                               // boot-time readiness probe on the same pre-request phase; it waits for Postgres to speak the wire
-	{file: "internal/validation/store.go", fn: "LoadActiveRuleSetGlobal"},     // the S2S peer path, which has no caller identity at all to gate on; func-scoped because internal/validation serves HTTP and its file-mates are gated
-	{file: "internal/importer/backfill.go"},                                   // operator CLI tools/backfill-source-rows; it carries a job tenant and never a request identity
-	{file: "internal/invoice/revalidate.go"},                                  // operator CLI tools/revalidate-invoices; same shape, same absence of a caller
-	{file: "internal/reconciliation/sweep.go"},                                // enumerateTenants reads tenants as invoice_tenant_reader with no GUC set, which a tenant-scoped tx cannot express
-	{file: "internal/platform/db/staff.go", fn: "GrantStaff"},                 // mock builds only: the E2E fork grants staff on the owner DSN; no caller identity exists
-	{file: "internal/platform/db/membership_grant.go", fn: "GrantMembership"}, // mock builds only: the E2E fork grants a membership on the owner DSN; no caller identity exists
-	{file: "internal/notifications/store.go"},                                 // contacts carry no tenant, so no tenant seam can scope them; the store opens its transactions on the pool
-	{file: "internal/notifications/worker.go"},                                // a River job carries no caller identity and no tenant, and contacts are not tenant data; the worker reads and updates them on the pool
+	{file: "internal/platform/db/db.go"},                                         // declares the identity-free core; its pool.BeginTx IS what every other caller wraps
+	{file: "internal/platform/db/tenant.go"},                                     // declares the gated seam; its pool.BeginTx IS the gate this story shipped
+	{file: "internal/platform/db/migrate.go"},                                    // goose needs a database/sql handle, which no pgx pool can supply; it runs at boot on the migrator role
+	{file: "internal/platform/db/bootstrap.go"},                                  // boot-time role and password provisioning on a superuser connection, before any request or tenant exists
+	{file: "internal/platform/db/provision.go"},                                  // boot-time readiness probe on the same pre-request phase; it waits for Postgres to speak the wire
+	{file: "internal/validation/store.go", fn: "LoadActiveRuleSetGlobal"},        // the S2S peer path, which has no caller identity at all to gate on; func-scoped because internal/validation serves HTTP and its file-mates are gated
+	{file: "internal/importer/backfill.go"},                                      // operator CLI tools/backfill-source-rows; it carries a job tenant and never a request identity
+	{file: "internal/invoice/revalidate.go"},                                     // operator CLI tools/revalidate-invoices; same shape, same absence of a caller
+	{file: "internal/reconciliation/sweep.go"},                                   // enumerateTenants reads tenants as invoice_tenant_reader with no GUC set, which a tenant-scoped tx cannot express
+	{file: "internal/platform/db/staff.go", fn: "GrantStaff"},                    // mock builds only: the E2E fork grants staff on the owner DSN; no caller identity exists
+	{file: "internal/platform/db/membership_grant.go", fn: "GrantMembership"},    // mock builds only: the E2E fork grants a membership on the owner DSN; no caller identity exists
+	{file: "internal/platform/db/invitation_token.go", fn: "SetInvitationToken"}, // mock builds only: the E2E fork replaces a pending invite's token hash on the owner DSN; no caller identity exists
+	{file: "internal/notifications/store.go"},                                    // contacts carry no tenant, so no tenant seam can scope them; the store opens its transactions on the pool
+	{file: "internal/notifications/worker.go"},                                   // a River job carries no caller identity and no tenant, and contacts are not tenant data; the worker reads and updates them on the pool
 }
 
 // scPoolSite is one direct pool call: recv is the pool-typed name it was made on,
@@ -665,7 +666,7 @@ func TestRLS_NoDirectPoolUseOutsideTheSeam(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Scan 2 — the identity-free core is worker, CLI and two exemptions only
+// Scan 2 — the identity-free core is worker, CLI and four exemptions only
 // ---------------------------------------------------------------------------
 
 // scCoreExemption is one exemption from the ungated core. Exactly one of pkg,
@@ -712,6 +713,8 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/invoice/revalidate.go"},                      // operator CLI only, and internal/invoice is the largest HTTP-serving package in the tree
 	{file: "internal/tenancy/store.go", fn: "Me"},                 // a deliberate HTTP-path exemption, as is ProvisionWorkspace; func-scoped because ListMemberships and SetMembershipStatus share this file and ARE gated
 	{file: "internal/tenancy/store.go", fn: "ProvisionWorkspace"}, // the caller has no membership yet; the seam would refuse before the closure
+	{file: "internal/tenancy/store.go", fn: "PreviewInvitation"},  // the token is the only credential and names the invite; there is no caller to gate
+	{file: "internal/tenancy/store.go", fn: "AcceptInvitation"},   // the invitee has no membership in the invite's tenant yet; the seam would refuse before the closure
 }
 
 // scCoreSite is one call of the ungated core, attributed to the INNERMOST
@@ -3150,6 +3153,15 @@ var scSweepSubjectAllowlist = []scSweepSubjectExemption{
 	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreMe_UnknownTenant"},                                                // the tenant id has no `tenants` row at all -- a membership row would violate its FK, and Store.Me's own tenant lookup fails first anyway
 	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreListMemberships_EmptyTenantRefusesTheUnmemberedCaller"},           // AUDIT-12-07's own test: the claim IS the no-row refusal, not a fixture to seed
 	{file: "internal/tenancy/provision_test.go", fn: "newRegistrant"},                                                          // provisioning's caller is unmembered by definition
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_PreviewNamesWorkspaceRoleAndAddress"},                            // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_TheJoinedWorkspaceAnswersMe"},                                    // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AnAccountWithAWorkspaceGainsNothing"},                            // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AnotherAddressIsRefused"},                                        // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AFailedAuditRollsTheAcceptBack"},                                 // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_ConcurrentAcceptsOfOneTokenJoinOnce"},                            // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AMismatchedAddressIsRefusedAlikeWithOrWithoutAnAccount"},         // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_ATokenJoinsOnlyItsOwnTenant"},                                    // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AMalformedTokenOrSubjectSendsNoStatement"},                       // the invitee holds no membership in the invite's tenant before accepting
 }
 
 // scSweepTestFiles returns every _test.go file under internal/ (repo-relative,

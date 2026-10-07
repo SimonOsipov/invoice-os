@@ -1,3 +1,4 @@
+import './inviteLink'
 import './instrument'
 
 import { StrictMode } from 'react'
@@ -16,11 +17,14 @@ import './styles/landing.css'
 import App from './App'
 import { bootAnalytics } from './analytics'
 import { BrandMark } from './icons'
+import { InvitePage } from './components/InvitePage'
+import { inviteToken } from './inviteLink'
+import { isInvitePath } from './route'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <CrashBoundary brand={<BrandMark size={20} />}>
-      <App />
+      {isInvitePath(location.pathname) ? <InvitePage token={inviteToken()} /> : <App />}
     </CrashBoundary>
   </StrictMode>,
 )

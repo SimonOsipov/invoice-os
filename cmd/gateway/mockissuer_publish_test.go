@@ -220,6 +220,7 @@ func mockIssuerStateFaults(filename string, src any) []string {
 		`app.Mux.Handle("OPTIONS /auth/login", login)`,
 		`app.Mux.Handle("POST /auth/mock/staff", mockStaffRoute(provisionCfg.MigrationDSN, app.Logger))`,
 		`app.Mux.Handle("POST /auth/mock/member", mockMemberRoute(provisionCfg.MigrationDSN, app.Logger))`,
+		`app.Mux.Handle("POST /auth/mock/invitation-token", mockInvitationTokenRoute(provisionCfg.MigrationDSN, app.Logger))`,
 	} {
 		if !slices.Contains(handled, want) {
 			faults = append(faults, fmt.Sprintf("the \"on\" branch does not run %s", want))
@@ -251,6 +252,7 @@ func main() {
 		app.Mux.Handle("OPTIONS /auth/login", login)
 		app.Mux.Handle("POST /auth/mock/staff", mockStaffRoute(provisionCfg.MigrationDSN, app.Logger))
 		app.Mux.Handle("POST /auth/mock/member", mockMemberRoute(provisionCfg.MigrationDSN, app.Logger))
+		app.Mux.Handle("POST /auth/mock/invitation-token", mockInvitationTokenRoute(provisionCfg.MigrationDSN, app.Logger))
 		platform.MockIssuer = "on"
 	}
 }
@@ -264,6 +266,7 @@ func main() {
 		{"a mint route missing from the branch", "\t\tapp.Mux.Handle(\"POST /auth/login\", login)\n", ""},
 		{"the staff route missing from the branch", "\t\tapp.Mux.Handle(\"POST /auth/mock/staff\", mockStaffRoute(provisionCfg.MigrationDSN, app.Logger))\n", ""},
 		{"the member route missing from the branch", "\t\tapp.Mux.Handle(\"POST /auth/mock/member\", mockMemberRoute(provisionCfg.MigrationDSN, app.Logger))\n", ""},
+		{"the invitation-token route missing from the branch", "\t\tapp.Mux.Handle(\"POST /auth/mock/invitation-token\", mockInvitationTokenRoute(provisionCfg.MigrationDSN, app.Logger))\n", ""},
 		{"a fourth value", "platform.MockIssuer = \"on\"", "platform.MockIssuer = \"on\"\n\t\tplatform.MockIssuer = \"yes\""},
 	} {
 		if !strings.Contains(good, c.find) {

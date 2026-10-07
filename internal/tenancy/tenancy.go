@@ -68,6 +68,13 @@ var (
 // ErrAlreadyProvisioned means the caller already has a workspace.
 var ErrAlreadyProvisioned = errors.New("tenancy: already provisioned")
 
+// Sentinels for previewing and accepting an invitation.
+var (
+	ErrInvitationNotValid      = errors.New("tenancy: invitation not valid")
+	ErrAlreadyMember           = errors.New("tenancy: already a member")
+	ErrInvitationEmailMismatch = errors.New("tenancy: invitation email mismatch")
+)
+
 // MeLoader resolves the caller's tenant and their own membership (role, display
 // name, email). The handler takes this function type rather than a pool so its
 // HTTP contract is unit-testable without a database; Store.Me is the real loader.
@@ -405,6 +412,12 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "this invite is no longer pending"
 	case errors.Is(err, ErrDailyInviteLimit):
 		return http.StatusTooManyRequests, fmt.Sprintf("daily invite limit reached: %d invite mails per workspace per 24 hours", maxInviteMailsPerDay)
+	case errors.Is(err, ErrInvitationNotValid):
+		return http.StatusNotFound, msgInviteNotValid
+	case errors.Is(err, ErrAlreadyMember):
+		return http.StatusConflict, msgAlreadyMember
+	case errors.Is(err, ErrInvitationEmailMismatch):
+		return http.StatusForbidden, msgWrongAddress
 	case errors.Is(err, ErrAlreadyProvisioned):
 		return http.StatusConflict, "this account already has a workspace"
 	default:

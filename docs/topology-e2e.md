@@ -32,7 +32,7 @@ M2-14.4).
    lands on the add-company task, and adding its company opens the import step it gated, the
    identity card shows the account's own name, a long name stays inside the card, and a stranger
    registers through the landing window as a firm and as an in-house account, then signs in and
-   lands in the workspace it named (the verify step is a stand-in: only the bogus link's confirm-page click is real), and the emailed link opens a confirm page whose button is laid out inside its card at every wide width and 375 px, logs no console error, and sends one verify POST on a double-click, and the check-your-email view and the unverified sign-in error (its 403 faked, the resend real) each send the link again once per click, with the sent notice naming the address, laid out inside the card at every wide width and 375 px, a 254-byte address included, and "Forgot password?" sits between the password field and the submit at every wide width and 375 px, one click of "Send reset link" sends one request and shows the sent notice inside the card, and a bogus reset link's page (laid out inside its card at every width) submits once on a double-click and lands on the failed notice, which offers a new request
+   lands in the workspace it named (the verify step is a stand-in: only the bogus link's confirm-page click is real), and the emailed link opens a confirm page whose button is laid out inside its card at every wide width and 375 px, logs no console error, and sends one verify POST on a double-click, and the check-your-email view and the unverified sign-in error (its 403 faked, the resend real) each send the link again once per click, with the sent notice naming the address, laid out inside the card at every wide width and 375 px, a 254-byte address included, and "Forgot password?" sits between the password field and the submit at every wide width and 375 px, one click of "Send reset link" sends one request and shows the sent notice inside the card, and a bogus reset link's page (laid out inside its card at every width) submits once on a double-click and lands on the failed notice, which offers a new request, and an invite link's accept page names the workspace and role, drops the fragment from the address bar, and stacks inside its card at every wide width and 375 px for a 200-character workspace name and a 250-byte invited address, on the ready view and the register view alike (`deployed landing: the accept page names the workspace and role at every width, and a bogus invite is no longer valid`, which also shows the invalid view for a malformed and an unknown token), an invitee creates an account on that page, sees the sent view stacked at 375 px, signs in through the landing window and lands in the inviting workspace as `reviewer` with no `signin=no-workspace` and no workspace created (`deployed journey: an invitee creates an account on the accept page, signs in and lands in the workspace with the invited role`), and an invitee who signs in from a fresh browser context without the invite sees the "open the invite link" text, then joins through the link (`deployed journey: an invitee who signs in from another tab without the invite is pointed back to the invite link and joins through it`). `e2e/api/invitation-accept.spec.ts` drives the accept API over the fork: the preview, the invitee registration, the accept and the next token's workspace, and the 409, 403 and tenant-less refusals
    ([identity-provider.md](./identity-provider.md) "Sign-in and hand-off",
    "Renewal"). The same file's "deployed consoles:" journeys sign a staff account in through
    landing and open both consoles, refuse a customer's session and a forged record, renew the
@@ -117,6 +117,16 @@ for is in [identity-provider.md](./identity-provider.md) "Granting staff".
 registered fork account to a tenant (`mintsymbols_test.go` requires its handler and
 `db.GrantMembership` absent from a production binary). Unlike staff, a membership opens real
 tenant data on that fork: the control is the `mockissuer` build tag, which only PR forks stamp.
+
+**The fork invite token route.** The same branch mounts `POST /auth/mock/invitation-token`
+`{"tenant_id","invitation_id","token"}` beside it. It replaces a pending invite's `token_hash`
+with the hash of a 43-character base64url `token` on the migrator DSN and answers 204, 400, 404
+(no pending row matches), 405 or 502. A fork's sender captures mail, so a spec cannot read the
+token a real invite carries; it invites through `POST /api/tenancy/v1/invitations` and sets the
+token itself (`setInvitationToken` and `inviteWithToken`, `e2e/api/client.ts`).
+`mintsymbols_test.go` requires its handler and `db.SetInvitationToken` absent from a production
+binary. The route reaches only a pending invite by id and tenant, and opens no tenant data by
+itself.
 
 **Written per run, not inherited:** the URL variables. On a PR, prepare-env's
 `reconcile-urls` step writes and re-reads the fork's own `gateway.CORS_ALLOWED_ORIGINS` (all

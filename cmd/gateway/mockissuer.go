@@ -48,3 +48,10 @@ func mockMemberRoute(dsn string, logger *slog.Logger) http.Handler {
 		return db.GrantMembership(ctx, dsn, db.MemberGrant(g))
 	}, logger)
 }
+
+// mockInvitationTokenRoute binds the invite token setter to the owner DSN.
+func mockInvitationTokenRoute(dsn string, logger *slog.Logger) http.Handler {
+	return gateway.MockInvitationTokenHandler(func(ctx context.Context, tenantID, invitationID uuid.UUID, token string) (bool, error) {
+		return db.SetInvitationToken(ctx, dsn, tenantID, invitationID, token)
+	}, logger)
+}

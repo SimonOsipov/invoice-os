@@ -160,13 +160,21 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 
 	// The seam: reg := registrationHandlers(probed["auth"], ...) and withCORS := gateway.CORS(...), both top-level.
 	recv, hand, corsLocal := "", "", false
+	invPreview, invRegister := "", ""
 	for _, s := range stmts {
 		as, ok := s.(*ast.AssignStmt)
-		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+		if !ok || len(as.Rhs) != 1 {
 			continue
 		}
 		call, ok := as.Rhs[0].(*ast.CallExpr)
 		if !ok {
+			continue
+		}
+		if types.ExprString(call.Fun) == "invitationHandlers" && len(as.Lhs) == 2 {
+			invPreview, invRegister = types.ExprString(as.Lhs[0]), types.ExprString(as.Lhs[1])
+			continue
+		}
+		if len(as.Lhs) != 1 {
 			continue
 		}
 		switch types.ExprString(call.Fun) {
@@ -189,6 +197,9 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 	}
 	if !corsLocal {
 		t.Fatal("main has no top-level `withCORS := gateway.CORS(...)`; the register wrap names nothing")
+	}
+	if invPreview == "" || invRegister == "" {
+		t.Fatal("main has no top-level `preview, register := invitationHandlers(...)`; the invitation routes name nothing")
 	}
 
 	// The confirm page comes from the top-level `x, err := gateway.VerifyPageHandler(siteURL)`; an error stops boot.
@@ -243,6 +254,12 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 		"OPTIONS /auth/request-password-reset": "withCORS(" + recv + ".RequestPasswordReset)",
 		"GET /auth/reset-password":             "gateway.ResetPasswordPageHandler(siteURL)",
 		"POST /auth/reset-password":            `resetPasswordHandler(probed["auth"], siteURL, sessions, ` + hand + `.SignInThrottle, app.Logger)`,
+
+		// Browser-called from the landing accept page, like register: CORS-wrapped with a preflight.
+		"POST /auth/invitation":             "withCORS(" + invPreview + ")",
+		"OPTIONS /auth/invitation":          "withCORS(" + invPreview + ")",
+		"POST /auth/invitation/register":    "withCORS(" + invRegister + ")",
+		"OPTIONS /auth/invitation/register": "withCORS(" + invRegister + ")",
 	} {
 		s := sitesFor(sites, pattern)
 		if len(s) != 1 {

@@ -1,4 +1,5 @@
 // Landing sign-in client.
+import { reportApiFailure } from '@invoice-os/api-client'
 import { ApiError, apiFetch, gatewayBase } from '@invoice-os/api-client/client'
 
 import { appBase, consoleBase } from './auth'
@@ -73,7 +74,8 @@ export async function bounceToStart(target?: ConsoleTarget): Promise<boolean> {
   const timer = setTimeout(() => ctrl.abort(), PREFLIGHT_MS)
   try {
     await fetch(base, { mode: 'no-cors', cache: 'no-store', signal: ctrl.signal })
-  } catch {
+  } catch (e) {
+    reportApiFailure(e, { method: 'GET', url: base, signal: ctrl.signal })
     return false
   } finally {
     clearTimeout(timer)

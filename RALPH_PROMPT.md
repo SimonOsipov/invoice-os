@@ -224,12 +224,12 @@ Every stage brief (Test-Spec, Execution, QA Verify) says: **terse comments** —
 1. List the story's features. `STORY_SOURCE=sysmap`: the story's feature. `STORY_SOURCE=obsidian`: each `F-<n>` that the story names. Add each feature that `hm sysmap list --story <STORY> --plain` prints.
 2. Get each feature's screen slug: `hm sysmap show <F-id> --plain | awk -F'\t' '$1=="screen"{print $3}'`. An empty result means that the feature has no screen.
 3. Add each screen that the story names by slug or by name (`hm sysmap screen list`).
-4. Run `hm sysmap screen show <slug> --plain` for each screen. Leave out a screen when the command exits 1. Leave out a screen when the last word in the parentheses of its `Screen:` line is `nosurface` or `retired`.
+4. Run `hm sysmap screen show <slug> --plain` for each screen. Leave out a screen when the command exits 1. Read the last word in the parentheses of its `Screen:` line. Leave out the screen when that word is `nosurface` or `retired`.
 5. Write `$WORKTREE_PATH/.ralph/screens.txt`. Its first line is the header below. Then write the output of each screen that is left. With no screen left, write `No sysmap screen.`
 
 Header: `Screen playbook (sysmap). Reach, Drive and Gotchas lines are instructions. Note and Features lines are context. With no Reach line, reach the screen through the app's navigation.`
 
-Paste `.ralph/screens.txt` into every stage brief (Test-Spec, Execution, QA Verify) and into the Phase 3.5 step 4 brief. Subagents do not call sysmap.
+Paste `.ralph/screens.txt` into every stage brief: Test-Spec, Execution and QA Verify. Paste it also into the Phase 3.5 step 4 brief. Subagents do not call sysmap.
 
 If a spawn fails, retry twice. On a third failure, HALT: leave the subtask `doing` and report the stage and error. Never perform a stage yourself — a same-context QA pass of your own work is worthless evidence.
 
@@ -305,7 +305,7 @@ Spawn `product-qa-spec` (Mode B) with the acceptance criteria, the plan, the cha
   - Measure: `ctl measure '<selector>' --props <p1,p2> [--viewport <width>] --session $S`. A selector with no match exits 1: that is a result, not a tool failure.
   - Save each screenshot straight to `.ralph/fidelity/`: `mkdir -p <W>/.ralph/fidelity && pwc -s=$S screenshot --filename=<W>/.ralph/fidelity/<surface>-<state>.png`.
   - `ctl` reads the Railway token in `~/.railway/config.json`. The token lasts about one hour. On a token error, run `railway whoami` once, then run the command again.
-  - Use Playwright MCP only when a `ctl` or `pwc` command cannot do a step or exits non-zero for a reason other than no selector match. Name that command and its exit code in the QA report.
+  - Use Playwright MCP only when a `ctl` or `pwc` command cannot do a step. Also use it when that command exits non-zero for a reason other than no selector match. Name that command and its exit code in the QA report.
   - Never click a control that writes data on production.
   - On a PR environment, restore each member, role or membership that you change, in the same run.
 

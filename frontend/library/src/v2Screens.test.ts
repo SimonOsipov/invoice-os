@@ -2,7 +2,8 @@ import { createElement, type ReactElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { Home } from './components/Home'
-import { GROUPS } from './content'
+import { GroupPage } from './components/GroupPage'
+import { COMING_SOON_IDS, GROUPS } from './content'
 import { Icon } from './icons'
 
 type Tag = { name: string; attrs: string; text: string }
@@ -189,5 +190,126 @@ describe('library home', () => {
     expect(tour).toHaveLength(1)
     tour[0].props.onClick!()
     expect(calls.at(-1)).toBe('tour')
+  })
+})
+
+const groupPage = (gid: string, openHref: string | null = null) => {
+  const g = GROUPS.find((x) => x.id === gid)!
+  return { g, ts: parse(renderToStaticMarkup(createElement(GroupPage, { group: g, openHref, onFeature: noop }))) }
+}
+const cardSlices = (ts: Tag[]) => {
+  const cards = named(ts, 'button')
+  return cards.map((c, k) => ({ card: c, inside: ts.slice(ts.indexOf(c), k + 1 < cards.length ? ts.indexOf(cards[k + 1]) : ts.length) }))
+}
+
+describe('library group page', () => {
+  it('SC-05 the group header names the group and its number', () => {
+    const { g, ts } = groupPage('recognition')
+    expect(g.name).toBe('Document recognition')
+    const [section] = named(ts, 'section')
+    expect(style(section)).toMatchObject({ padding: '56px 40px 80px', 'max-width': '1180px', gap: '40px' })
+    expect(style(ts[ts.indexOf(section) + 1])).toMatchObject({ 'max-width': '700px', gap: '18px' })
+    eyebrow(ts, 'Group 02 of 11')
+    const h2 = only(ts, 'h2')
+    expect(attr(h2, 'class')).toBe('t-h2')
+    expect(style(h2)['font-size']).toBe('44px')
+    expect(h2.text).toBe('Document recognition')
+    const lead = ts.filter((t) => attr(t, 'class') === 't-lead')
+    expect(lead).toHaveLength(1)
+    expect(lead[0].name).toBe('p')
+    expect(lead[0].text).toBe(esc(g.intro))
+  })
+
+  it('SC-06 Open in Platform is an outline arrow link, or absent', () => {
+    const href = 'https://app.example/invoices?via=library'
+    const ts = groupPage('recognition', href).ts
+    const a = only(ts, 'a')
+    expect(a.text).toBe('Open in Platform')
+    expect(attr(a, 'class')).toBe('ds-btn ds-btn--outline ds-btn--sm')
+    expect(attr(a, 'href')).toBe(href)
+    expect(ts[ts.indexOf(a) + 1].name).toBe('svg')
+    const none = groupPage('recognition', null).ts
+    expect(none.some((t) => t.text === 'Open in Platform')).toBe(false)
+    expect(named(none, 'a')).toHaveLength(0)
+  })
+
+  it('SC-07 one card per feature with window title, title, short and duration', () => {
+    GROUPS.forEach((gr) => {
+      const { g, ts } = groupPage(gr.id)
+      const grid = ts.find((t) => style(t)['grid-template-columns'] !== undefined)!
+      expect(style(grid)).toMatchObject({ 'grid-template-columns': 'repeat(auto-fill, minmax(320px, 1fr))', gap: '20px' })
+      const cards = cardSlices(ts)
+      expect(cards.map((c) => attr(c.card, 'id'))).toEqual(g.feats.map((f) => `fc-${f.id}`))
+      cards.forEach(({ card, inside }, k) => {
+        const f = g.feats[k]
+        expect(attr(card, 'type')).toBe('button')
+        expect(style(card)).toMatchObject({
+          background: 'var(--card)',
+          border: '1px solid var(--border)',
+          'border-radius': '6px',
+          overflow: 'hidden',
+          padding: '0',
+        })
+        const win = inside.find((t) => t.text === esc(f.sc.win))!
+        expect(attr(win, 'class')).toBe('mono')
+        expect(style(win)['font-size']).toBe('9px')
+        const title = inside.find((t) => t.text === esc(f.title) && style(t)['font-size'] === '18px')!
+        expect(title, `title of ${f.id}`).toBeDefined()
+        expect(style(title)).toMatchObject({ 'font-size': '18px', 'line-height': '1.3', 'letter-spacing': '-0.01em' })
+        const block = inside.find((t) => style(t).padding === '22px 24px 24px')!
+        expect(style(block)).toMatchObject({ gap: '8px' })
+        expect(inside.indexOf(block)).toBeLessThan(inside.indexOf(title))
+        expect(attr(inside.find((t) => t.text === esc(f.short))!, 'class')).toBe('t-body-sm')
+        const dur = f.sc.steps.length === 4 ? '0:13' : '0:10'
+        expect(f.sc.steps.length === 4 || f.sc.steps.length === 3).toBe(true)
+        expect(attr(inside.find((t) => t.text === dur)!, 'class')).toBe('mono')
+        f.who.forEach((w) => expect(inside.some((t) => t.text.includes(esc(w)))).toBe(false))
+      })
+    })
+  })
+
+  it('SC-08 the card thumbnail is the window frame with no scene', () => {
+    const { ts } = groupPage('recognition')
+    const { inside } = cardSlices(ts)[0]
+    const frame = inside[1]
+    expect(style(frame)).toMatchObject({ height: '192px', background: 'var(--surface)' })
+    const win = inside[2]
+    expect(style(win)).toMatchObject({
+      left: '20px',
+      right: '20px',
+      top: '16px',
+      bottom: '44px',
+      background: '#fff',
+      'box-shadow': 'var(--shadow-soft)',
+    })
+    const bar = inside[3]
+    expect(style(bar)).toMatchObject({ height: '22px', background: 'var(--muted)' })
+    inside.slice(4, 7).forEach((d) => expect(style(d)).toMatchObject({ width: '6px', height: '6px' }))
+    const sceneIdx = inside.findIndex((t, i) => i > 6 && style(t).flex === '1 1 0')
+    expect(sceneIdx).toBeGreaterThan(0)
+    const html = renderToStaticMarkup(createElement(GroupPage, { group: GROUPS[1], openHref: null, onFeature: noop }))
+    expect(html).toMatch(/<div style="[^"]*flex:1 1 0[^"]*"><\/div>/)
+    const disc = inside.find((t) => style(t).width === '30px')!
+    expect(style(disc).background).toBe('var(--accent)')
+    const svg = inside[inside.indexOf(disc) + 1]
+    expect([svg.name, attr(svg, 'width'), attr(svg, 'height')]).toEqual(['svg', '13', '13'])
+    const chip = inside.find((t) => style(t).background === 'rgba(8,47,49,0.82)')!
+    expect(style(chip)).toMatchObject({ right: '20px', bottom: '13px' })
+  })
+
+  it('SC-09 a Coming soon card carries the pill, a shipped card does not', () => {
+    const { ts } = groupPage('clients')
+    const byId: Record<string, Tag[]> = Object.fromEntries(cardSlices(ts).map((c) => [attr(c.card, 'id'), c.inside]))
+    const pill = byId['fc-contacts'].find((t) => t.text === 'Coming soon')!
+    expect(style(pill).background).toBe('var(--status-progress-bg)')
+    expect(byId['fc-portfolio'].some((t) => t.text === 'Coming soon')).toBe(false)
+    expect(byId['fc-onboard-client'].some((t) => t.text === 'Coming soon')).toBe(false)
+    const ids = GROUPS.flatMap((g) =>
+      cardSlices(groupPage(g.id).ts)
+        .filter((c) => c.inside.some((t) => t.text === 'Coming soon'))
+        .map((c) => attr(c.card, 'id')!.slice(3)),
+    )
+    expect(ids).toHaveLength(11)
+    expect([...ids].sort()).toEqual([...COMING_SOON_IDS].sort())
   })
 })

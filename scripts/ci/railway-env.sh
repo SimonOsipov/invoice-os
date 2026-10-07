@@ -3584,7 +3584,7 @@ cmd_set_production_gateway_token() {
 # Sentry quota from every PR (TestSentryOffListsMatchTheDeployedFleet pins the lists).
 
 SENTRY_BACKENDS=(gateway tenancy portfolio invoice validation submission dashboard notifications reconciliation docling)
-SENTRY_SPAS=(landing app ops-console support-console)
+SENTRY_SPAS=(landing app ops-console support-console library)
 
 # sentry_verdict <variables-response-json> <service> <NAME>...
 # Pure. Passes only when every name is absent or exactly "". Prints no value.

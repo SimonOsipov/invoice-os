@@ -293,7 +293,7 @@ func TestSetSentryOff_SteadyStateWritesNothing(t *testing.T) {
 	}
 	slices.Sort(read)
 	slices.Sort(all)
-	if len(all) != 14 || !slices.Equal(read, all) {
+	if len(all) != 15 || !slices.Equal(read, all) {
 		t.Errorf("variable reads = %v, want exactly one per service %v", read, all)
 	}
 	if e := upsertEcho.FindAllString(out, -1); len(e) != 0 {
@@ -459,8 +459,8 @@ func TestSetSentryOff_InheritedValuesOneWritePerService(t *testing.T) {
 		t.Fatalf("exit %d, want 0; output = %q", code, out)
 	}
 	ws := collectionWrites(t, s)
-	if len(ws) != 14 {
-		t.Errorf("%d write input(s) %v, want 14: one per Sentry service", len(ws), writeNames(ws))
+	if len(ws) != 15 {
+		t.Errorf("%d write input(s) %v, want 15: one per Sentry service", len(ws), writeNames(ws))
 	}
 	if n := opCount(t, s, "varsWrite"); n != 1 {
 		t.Errorf("%d varsWrite call(s), want 1: every Sentry service in one request", n)

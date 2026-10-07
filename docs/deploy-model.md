@@ -280,7 +280,7 @@ environment, and `railway-invariants.yml` re-asserts that on every PR — any tr
 reappearing fails the build. The procedure below is retained for the case where a service
 is recreated and arrives with a trigger attached.
 
-For each of the 15 services (gateway, the 8 context services, the `docling` sidecar, `auth`, and
+For each of the 16 services (gateway, the 8 context services, the `docling` sidecar, `auth`, and
 `landing`, `app`, `ops-console`, `support-console`) **on the `development` environment**:
 
 1. Railway dashboard → the service → **Settings**.
@@ -319,7 +319,7 @@ setting (a monorepo build filter, configured in the dashboard) that suppresses
 watched paths — printing `no changes detected in watch paths, build will
 skip` and creating no deployment. Since every environment (a fresh PR fork, or a
 `workflow_dispatch` run against `development`) is now potentially a cold, from-scratch
-15-service build, a service whose Watch Paths aren't empty would silently skip and never
+16-service build, a service whose Watch Paths aren't empty would silently skip and never
 come up — and since `dev-env.yml` gates on the gateway's `/healthz` before deploying the
 rest of the fleet, one such skip fails the whole run. This is distinct from
 `railway.json`'s `build.watchPatterns` field, which Railway silently **ignores** — it never

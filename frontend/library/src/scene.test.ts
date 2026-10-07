@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { FEATURES } from './content.ts'
 import { CHIP, sceneState, THUMB_STEP, thumbStep } from './scene.ts'
 import type { SceneState } from './scene.ts'
+import type { Feature, Scene } from './types.ts'
 
 const feat = (id: string) => {
   const f = FEATURES.find((x) => x.id === id)
@@ -79,6 +80,7 @@ describe('scene', () => {
     const s0 = at('submit-clear', 0, 'flow')
     expect(s0.nodes.map((x) => x.state)).toEqual(['done', 'active', 'todo', 'todo', 'todo'])
     expect(s0.out).toBe('Invoice converted and signed')
+    expect(at('submit-clear', 3, 'flow').out).toBe('Cleared · reference stored on the invoice')
     expect(at('submit-clear', 3, 'flow').nodes.map((x) => x.state)).toEqual(['done', 'done', 'done', 'done', 'active'])
   })
 
@@ -155,5 +157,46 @@ describe('scene', () => {
       progress: ['In progress', 'amber'], none: ['Not started', 'muted'],
     })
     expect(Object.keys(CHIP)).toHaveLength(13)
+  })
+
+  it('sceneState_omittedFocusCarriesOverAndOmittedToneIsInfo', () => {
+    const list: Scene = { kind: 'list', win: 'w', grid: 'g', cols: ['a', 'b', 'c', 'd'], rows: [['1', '1', '1', 'new'], ['2', '2', '2', 'new']],
+      steps: [{ cap: 'x', focus: 1 }, { cap: 'y' }] }
+    expect(sceneState(list, 1).kind === 'list' && sceneState(list, 1).rows.map((r) => r.focused)).toEqual([false, true])
+    const form: Scene = { kind: 'form', win: 'w', fields: [{ l: 'a', v: 'A' }, { l: 'b', v: 'B' }],
+      steps: [{ cap: 'x', reveal: 2, focus: 1, msg: 'hello' }, { cap: 'y' }] }
+    const f0 = sceneState(form, 0)
+    const f1 = sceneState(form, 1)
+    if (f0.kind !== 'form' || f1.kind !== 'form') throw new Error('kind')
+    expect(f0.msg).toEqual({ text: 'hello', tone: 'info' })
+    expect(f1.msg).toBeNull()
+    expect(f1.fields.map((x) => x.focused)).toEqual([false, true])
+    expect(f1.fields.map((x) => x.shown)).toEqual([true, true])
+    const tg: Scene = { kind: 'toggles', win: 'w', rows: [['a', 'a', true], ['b', 'b', true]], steps: [{ cap: 'x', focus: 1, flip: { 0: false } }, { cap: 'y', focus: 1 }] }
+    const t1 = sceneState(tg, 1)
+    if (t1.kind !== 'toggles') throw new Error('kind')
+    expect(t1.rows.map((r) => r.on)).toEqual([false, true])
+  })
+
+  it('sceneState_boundsAtFirstAndLastStepAndZeroGrow', () => {
+    const m: Scene = { kind: 'metrics', win: 'w', tiles: [['t', 100, '%']], bars: [0.01, 1], steps: [{ cap: 'x', grow: 0 }, { cap: 'y', grow: 1 }] }
+    const m0 = sceneState(m, 0)
+    if (m0.kind !== 'metrics') throw new Error('kind')
+    expect(m0.bars.map((b) => b.h)).toEqual([4, 4])
+    expect(m0.tiles[0].val).toBe('0%')
+    const feed: Scene = { kind: 'feed', win: 'w', items: [['1', 'a', 'a', 'g']], steps: [{ cap: 'x', show: 0 }, { cap: 'y', show: 1 }] }
+    const e = sceneState(feed, 0)
+    if (e.kind !== 'feed') throw new Error('kind')
+    expect(e.items).toHaveLength(0)
+    expect(e.stepNum).toBe('01 / 02')
+    expect(sceneState(feed, 1).stepNum).toBe('02 / 02')
+    const one: Scene = { kind: 'flow', win: 'w', nodes: [['a', 'a'], ['b', 'b']], steps: [{ cap: 'only', at: 0, out: 'o' }] }
+    expect(sceneState(one, 0).stepNum).toBe('01 / 01')
+  })
+
+  it('thumbStep_fallsBackToTheLastStepForAnIdOutsideTheTable', () => {
+    const f = { id: 'not-in-table', sc: { kind: 'feed', win: 'w', items: [], steps: [{ cap: 'a', show: 0 }, { cap: 'b', show: 0 }, { cap: 'c', show: 0 }, { cap: 'd', show: 0 }, { cap: 'e', show: 0 }] } } as unknown as Feature
+    expect(thumbStep(f)).toBe(4)
+    expect(Object.keys(THUMB_STEP)).not.toContain('not-in-table')
   })
 })

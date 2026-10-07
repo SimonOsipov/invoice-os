@@ -647,8 +647,7 @@ the limitation on screen (epic Q5), so this section is its only statement.
 ## 8. Capability matrix
 
 What each access role can do. This is the reference copy: the repo ships no release-notes
-artefact, so this page is the matrix's only home. The row labels are the ones rendered in
-the product, lowercase as authored (`members.ts`'s `CAPABILITY_ROWS`).
+artefact, so this page is the matrix's only home.
 
 The **Enforced where** column is the load-bearing one, and it distinguishes two different
 kinds of "no":

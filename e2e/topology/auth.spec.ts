@@ -1129,12 +1129,10 @@ test('deployed app: a firm Preparer of a workspace with no company sees no add c
   expect([refused.status, refused.body], 'the Preparer POST').toEqual([403, { error: ONLY_ADMIN_ADDS }])
 
   // The wrong turn last: an open tab learns of the company with no navigation (D17).
-  let navigations = 0
-  page.on('framenavigated', (frame) => {
-    if (frame === page.mainFrame()) navigations += 1
-  })
   await sidebarNav(page).getByRole('button', { name: 'Overview' }).click()
   await expect(page.getByTestId('company-setup-waiting')).toBeVisible()
+  // framenavigated also fires on the SPA's pushState, so a window marker proves no document reload.
+  await page.evaluate(() => { (window as unknown as { __noReload: boolean }).__noReload = true })
   await createEntity(ownerToken, { name: `Role E2E ${owner.workspaceName}`, tin: freshTin() })
   // Headless Chromium fires no visibilitychange on a tab switch.
   for (const state of ['hidden', 'visible']) {
@@ -1145,7 +1143,7 @@ test('deployed app: a firm Preparer of a workspace with no company sees no add c
   }
   await expect(page.getByText('COMPLIANCE OVERVIEW', { exact: true })).toBeVisible()
   await expect(page.getByTestId('company-setup-waiting')).toHaveCount(0)
-  expect(navigations, 'main-frame navigations after the owner added the company').toBe(0)
+  expect(await page.evaluate(() => (window as unknown as { __noReload?: boolean }).__noReload), 'the document survived: no reload').toBe(true)
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })
 

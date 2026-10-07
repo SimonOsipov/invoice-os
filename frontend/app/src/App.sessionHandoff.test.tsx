@@ -1411,6 +1411,7 @@ describe('the first sign-in provisions the registered workspace', () => {
   const CHAIN = (base: string) => [
     `${base}/auth/exchange`,
     `${base}/api/tenancy/v1/me`,
+    `${base}/api/tenancy/v1/invitations/mine`,
     `${base}/api/tenancy/v1/workspaces`,
     `${base}/auth/refresh`,
     `${base}/api/tenancy/v1/me`,
@@ -1448,7 +1449,7 @@ describe('the first sign-in provisions the registered workspace', () => {
     expect(screens, 'one screen before the workspace: the splash').toHaveLength(1)
     expect(screens[0]).toContain('Opening your workspace…')
     expect(Math.max(...preWorkspace.map((f) => f.prompts)), 'no button, field, link or dialog before the workspace').toBe(0)
-    expect(fetchUrls.slice(0, 5)).toEqual(CHAIN(GATEWAY))
+    expect(fetchUrls.slice(0, 6)).toEqual(CHAIN(GATEWAY))
     expect(workspacesCalls).toEqual([{ auth: `Bearer ${T_ANSWERS}`, body: ANSWERS }])
     expect(refreshBodies).toEqual([{ refresh_token: 'R0' }])
     expect(meAuth).toEqual([`Bearer ${T_ANSWERS}`, `Bearer ${T2}`])
@@ -1469,7 +1470,7 @@ describe('the first sign-in provisions the registered workspace', () => {
     const { hrefWrites } = registered()
     await bootApp()
     await waitForVerifiedWorkspace()
-    expect(fetchUrls.slice(0, 5)).toEqual(CHAIN(GATEWAY))
+    expect(fetchUrls.slice(0, 6)).toEqual(CHAIN(GATEWAY))
     expect(hrefWrites).toEqual([])
     expect(storedRecord()?.token).toBe(T2)
   })
@@ -1488,15 +1489,15 @@ describe('the first sign-in provisions the registered workspace', () => {
     const { hrefWrites } = registered({ me: [fail(403, 'forbidden'), fail(403, 'forbidden')] })
     await bootApp()
     await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=no-workspace`]))
-    expect(fetchUrls.slice(0, 5)).toEqual(CHAIN(GATEWAY))
+    expect(fetchUrls.slice(0, 6)).toEqual(CHAIN(GATEWAY))
     expect(localStorage.getItem(SESSION_KEY)).toBeNull()
   })
 
   const failures: [string, () => void, Reply | undefined, number][] = [
-    ['provisioning 400', () => (workspacesReply = fail(400, 'bad request')), undefined, 3],
-    ['provisioning 500', () => (workspacesReply = fail(500, 'boom')), undefined, 3],
-    ['refresh 401', () => (refreshReply = fail(401, 'invalid refresh token')), undefined, 4],
-    ['an exchange without a refresh token', () => {}, ok({ access_token: T_ANSWERS }), 3],
+    ['provisioning 400', () => (workspacesReply = fail(400, 'bad request')), undefined, 4],
+    ['provisioning 500', () => (workspacesReply = fail(500, 'boom')), undefined, 4],
+    ['refresh 401', () => (refreshReply = fail(401, 'invalid refresh token')), undefined, 5],
+    ['an exchange without a refresh token', () => {}, ok({ access_token: T_ANSWERS }), 4],
   ]
   for (const [name, arrange, exchange, calls] of failures) {
     it(`a registered account with ${name} reports failed and stores nothing`, async () => {
@@ -1547,6 +1548,9 @@ describe('a hung redemption times out', () => {
           meCalls++
           return registered && meCalls === 1 ? fail(403, 'forbidden')() : hang(init?.signal)
         }
+        if (url === `${GATEWAY}/api/tenancy/v1/invitations/mine`) {
+          return ok({ invitations: [] })()
+        }
         if (url === `${GATEWAY}/api/tenancy/v1/workspaces`) {
           return hangAt === 'workspaces' ? hang(init?.signal) : ok({ tenant: ME.tenant })()
         }
@@ -1584,9 +1588,9 @@ describe('a hung redemption times out', () => {
   const LEGS: [Leg, string[], number][] = [
     ['exchange', ['/auth/exchange'], 0],
     ['me', ['/auth/exchange', '/api/tenancy/v1/me'], 1],
-    ['workspaces', ['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/workspaces'], 1],
-    ['refresh', ['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/workspaces', '/auth/refresh'], 1],
-    ['second /me', ['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/workspaces', '/auth/refresh', '/api/tenancy/v1/me'], 2],
+    ['workspaces', ['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/invitations/mine', '/api/tenancy/v1/workspaces'], 1],
+    ['refresh', ['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/invitations/mine', '/api/tenancy/v1/workspaces', '/auth/refresh'], 1],
+    ['second /me', ['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/invitations/mine', '/api/tenancy/v1/workspaces', '/auth/refresh', '/api/tenancy/v1/me'], 2],
   ]
   for (const [leg, path, meCalls] of LEGS) {
     it(`a hung ${leg} fails once at 15 s, not before`, async () => {

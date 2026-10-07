@@ -378,6 +378,7 @@ func TestRLS_AcceptByIdLeavesTheOtherInvitesPending(t *testing.T) {
 	first := seedJoinInvite(t, t1, "reviewer", addr, `now() + interval '1 day'`, "")
 	second := seedJoinInvite(t, t2, "reviewer", addr, `now() + interval '2 days'`, "")
 	third := seedJoinInvite(t, t3, "reviewer", addr, `now() + interval '3 days'`, "")
+	sibling := seedJoinInvite(t, t1, "reviewer", uniqueAddr("bola"), `now() + interval '1 day'`, "")
 	user := uuid.NewString()
 
 	if _, _, err := acceptByIDAs(ctx, t1, t1, first, user, addr); err != nil {
@@ -387,7 +388,7 @@ func TestRLS_AcceptByIdLeavesTheOtherInvitesPending(t *testing.T) {
 	if s := inviteStatus(t, first); s != "accepted" {
 		t.Errorf("accepted invite status = %q, want accepted", s)
 	}
-	for name, id := range map[string]string{"second": second, "third": third} {
+	for name, id := range map[string]string{"second": second, "third": third, "same tenant, another address": sibling} {
 		if s := inviteStatus(t, id); s != "pending" {
 			t.Errorf("%s invite status = %q, want pending", name, s)
 		}
@@ -424,6 +425,7 @@ func TestRLS_AcceptByIdRefusals(t *testing.T) {
 		{name: "empty email", email: func(*fixture) any { return "" }},
 		{name: "spaces-only email", email: func(*fixture) any { return "   " }},
 		{name: "the address with a suffix", email: func(f *fixture) any { return f.addr + "x" }},
+		{name: "a prefix of the address", email: func(f *fixture) any { return strings.TrimSuffix(f.addr, "@obi.test") }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := &fixture{user: uuid.NewString(), addr: uniqueAddr("tunde")}

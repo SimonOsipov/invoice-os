@@ -168,7 +168,7 @@ describe('library home', () => {
     expect(named(ts, 'a')).toHaveLength(0)
   })
 
-  it('SC-05 a card calls onGroup with its group id and the tour button calls onTour', () => {
+  it('SC-10 a card calls onGroup with its group id and the tour button calls onTour', () => {
     const calls: string[] = []
     type El = ReactElement<{ onClick?: () => void; children?: ReactNode }>
     const walk = (n: ReactNode, out: El[] = []): El[] => {
@@ -311,5 +311,25 @@ describe('library group page', () => {
     )
     expect(ids).toHaveLength(11)
     expect([...ids].sort()).toEqual([...COMING_SOON_IDS].sort())
+  })
+
+  it('SC-11 a feature card calls onFeature with its feature id', () => {
+    const calls: string[] = []
+    type El = ReactElement<{ onClick?: () => void; children?: ReactNode }>
+    const walk = (n: ReactNode, out: El[] = []): El[] => {
+      if (Array.isArray(n)) n.forEach((c) => walk(c, out))
+      else if (n && typeof n === 'object' && 'props' in n) {
+        out.push(n as El)
+        walk((n as El).props.children, out)
+      }
+      return out
+    }
+    GROUPS.forEach((g) => {
+      calls.length = 0
+      const cards = walk(GroupPage({ group: g, openHref: null, onFeature: (id) => calls.push(id) })).filter((e) => e.type === 'button')
+      expect(cards).toHaveLength(g.feats.length)
+      cards.forEach((c) => c.props.onClick!())
+      expect(calls).toEqual(g.feats.map((f) => f.id))
+    })
   })
 })

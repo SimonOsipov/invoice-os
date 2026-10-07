@@ -55,7 +55,7 @@ function mkRun(state: string, over: Partial<ApprovalRun> = {}): ApprovalRun {
   }
 }
 
-// Every case goes through this, so §6.11's fixed key order and the always-five arity are
+// Every case goes through this, so the fixed key order and the always-five arity are
 // asserted for free on every input in the file.
 function strip(history: StatusChange[], run: ApprovalRun | null, status: InvoiceStatus): StripNode[] {
   const nodes = stripNodes(history, run, status)
@@ -129,7 +129,7 @@ describe('stripNodes: shape and totality', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Nodes 1/2/4/5: driven by `status` alone (arch §3e)
+// Nodes 1/2/4/5: driven by `status` alone
 // ---------------------------------------------------------------------------
 
 interface StatusRow {
@@ -142,7 +142,7 @@ interface StatusRow {
 }
 
 // A Record<InvoiceStatus, _> so TypeScript fails the build if a status is ever added and
-// no row is written for it. Transcribed from arch §3e's table.
+// no row is written for it.
 const STATUS_TABLE: Record<InvoiceStatus, StatusRow> = {
   draft: { cursor: 1, n1: 'current', n2: 'unreached', n4: 'unreached', n5: 'unreached', n5label: 'Accepted by FIRS' },
   validated: { cursor: 2, n1: 'done', n2: 'done', n4: 'unreached', n5: 'unreached', n5label: 'Accepted by FIRS' },
@@ -176,7 +176,7 @@ describe('stripNodes: nodes 1/2/4/5 follow status, arch §3e', () => {
         expect(n[4].state, `${where} n5`).toBe(row.n5)
         expect(n[0].label, `${where} n1`).toBe('Draft')
         expect(n[1].label, `${where} n2`).toBe('Validated')
-        expect(n[2].label, `${where} n3`).toBe('Approved') // node 3 never relabels, §3b
+        expect(n[2].label, `${where} n3`).toBe('Approved') // node 3 never relabels
         expect(n[3].label, `${where} n4`).toBe('Queued')
         expect(n[4].label, `${where} n5`).toBe(row.n5label)
       }
@@ -184,7 +184,7 @@ describe('stripNodes: nodes 1/2/4/5 follow status, arch §3e', () => {
   })
 
   it('S-3 (invoiceStrip_totalOverEveryStatus): progress over nodes 1/2/4/5 is monotone with at most one current', () => {
-    // AMENDED from the story (arch §7 row 4): "exactly one node is current" is FALSE
+    // AMENDED from the story: "exactly one node is current" is FALSE
     // across all five nodes: an open run on a queued invoice leaves node 3 AND node 4
     // current (see S-16). The invariant is scoped to nodes {1,2,4,5}; node 3 is exempt by
     // construction.
@@ -298,7 +298,7 @@ describe('stripNodes: nodes 1/2/4/5 follow status, arch §3e', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Node 3: driven by `run` alone (arch §3c)
+// Node 3: driven by `run` alone
 // ---------------------------------------------------------------------------
 
 interface RunRow {
@@ -307,7 +307,7 @@ interface RunRow {
   status: InvoiceStatus
   state: StripState
   at: string | null
-  // §3c's actor column: 'system' resolves through actorLabel('system'), every other
+  // Actor column: 'system' resolves through actorLabel('system'), every other
   // closer resolves to null. Never a name -- see S-10.
   actorText: string | null
   caption: string
@@ -325,7 +325,7 @@ const RUN_TABLE: RunRow[] = [
     status: 'queued',
     state: 'done',
     at: T_CLOSED,
-    actorText: null, // §3c: a non-'system' closer resolves to null, never a name
+    actorText: null, // a non-'system' closer resolves to null, never a name
     caption: '13:05',
   },
   {
@@ -351,7 +351,7 @@ const RUN_TABLE: RunRow[] = [
     run: mkRun('cancelled', { closed_at: T_CLOSED, closed_by: OTHER_TENANT_SUBJECT }),
     status: 'draft',
     state: 'not-required',
-    at: null, // §3c: closed_at's meaning flips on a cancelled run, so it is not rendered
+    at: null, // closed_at's meaning flips on a cancelled run, so it is not rendered
     actorText: null,
     caption: 'Approval voided',
   },
@@ -401,7 +401,7 @@ describe('stripNodes: node 3 follows the approval run, arch §3c', () => {
     expect(nodes[4].state).toBe('unreached')
     expect(nodes[4].label).toBe('Accepted by FIRS')
 
-    // Both red at once is legal and honest when the two causes are unrelated (arch §3f).
+    // Both red at once is legal and honest when the two causes are unrelated.
     const both = strip(
       [...HISTORY_TO_QUEUED, h('rejected', T_TERMINAL, { from_status: 'queued' })],
       mkRun('rejected', { closed_at: T_CLOSED }),
@@ -463,7 +463,7 @@ describe('stripNodes: node 3 follows the approval run, arch §3c', () => {
 
   it('S-13: a cancelled run on a demoted draft still reads Approval voided, not Not reached', () => {
     // The production-dominant cancelled case: CancelLiveRunTx voids the run on every path
-    // back to draft (engine.go:261-271). Node 3 follows the run, not the cursor (§3e).
+    // back to draft (engine.go:261-271). Node 3 follows the run, not the cursor.
     const nodes = strip([h('draft', T_DRAFT)], mkRun('cancelled', { closed_at: T_CLOSED }), 'draft')
     expect(nodes[2].state).toBe('not-required')
     expect(nodes[2].caption).toBe('Approval voided')
@@ -481,8 +481,7 @@ describe('stripNodes: node 3 follows the approval run, arch §3c', () => {
   })
 
   it('S-15: an approved run with no close time captions the em-dash rather than a bogus time', () => {
-    // Derived from arch §3d (`attribution ?? "—"`) plus ApprovalRun.closed_at being
-    // `string | null`; not one of §6's enumerated cases.
+    // Follows from `attribution ?? "—"` plus ApprovalRun.closed_at being `string | null`.
     const nodes = strip(HISTORY_TO_QUEUED, mkRun('approved', { closed_at: null, closed_by: 'system' }), 'queued')
     expect(nodes[2].state).toBe('done')
     expect(nodes[2].at).toBeNull()
@@ -491,7 +490,7 @@ describe('stripNodes: node 3 follows the approval run, arch §3c', () => {
 })
 
 // ---------------------------------------------------------------------------
-// History supplies `at` and `actor` only (arch §4)
+// History supplies `at` and `actor` only
 // ---------------------------------------------------------------------------
 
 describe('stripNodes: history supplies at and actor only, arch §4', () => {
@@ -507,7 +506,7 @@ describe('stripNodes: history supplies at and actor only, arch §4', () => {
   ]
 
   it('S-16 (invoiceStrip_loopKeepsFiveNodesAndLatestActor): the loop keeps five nodes and takes the latest row per node', () => {
-    // AMENDED from the story (arch §7 row 5): assert the `at`/`actor` FIELDS. Node 2 is
+    // AMENDED from the story: assert the `at`/`actor` FIELDS. Node 2 is
     // `done` at the end of this journey (the validation passed) and renders the row it holds.
     const nodes = strip(LOOP, mkRun('cancelled', { closed_at: '2026-07-01T10:30:00' }), 'validated')
 
@@ -522,7 +521,7 @@ describe('stripNodes: history supplies at and actor only, arch §4', () => {
     expect(nodes[1].caption).toBe('11:45 · Chidi') // the latest row, not the first
 
     // Node 4 saw a queueing at 10:00 and node 5 a rejection at 10:30, but the cursor is
-    // back at 2, so both are demoted with no residue (arch §6.8).
+    // back at 2, so both are demoted with no residue.
     expect(nodes[3].state).toBe('unreached')
     expect(nodes[3].at).toBeNull()
     expect(nodes[3].actor).toBeNull()
@@ -550,7 +549,7 @@ describe('stripNodes: history supplies at and actor only, arch §4', () => {
   })
 
   it('S-18: nodes 1, 2 and 4 all take the LATEST matching row, not the first', () => {
-    // AMENDED from the story's System Design table (arch §7 row 2 / §4): "first
+    // AMENDED from the story's System Design table: "first
     // transition in" is wrong for node 4 on a re-queue.
     const history: StatusChange[] = [
       h('draft', '2026-07-01T08:00:00', { actor_name: 'First Draft' }),
@@ -835,7 +834,7 @@ describe('stripNodes: a reached node captions its attribution', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Actor rendering (arch §3d, display())
+// Actor rendering (display())
 // ---------------------------------------------------------------------------
 
 describe('stripNodes: actor rendering, arch §3d', () => {
@@ -843,7 +842,7 @@ describe('stripNodes: actor rendering, arch §3d', () => {
     strip([h('draft', T_TERMINAL, over), h('validated', T_TERMINAL, over)], null, 'queued')
 
   it('S-22 (invoiceStrip_rawSubjectIsNotFirstNamed): a raw subject renders byte-for-byte and mono', () => {
-    // AMENDED from the story (arch §7 row 6): actor_name is set to the SUBJECT, because
+    // AMENDED from the story: actor_name is set to the SUBJECT, because
     // that is the branch production takes (resolve.go:60 -> actor.ts:26). Note this
     // subject is deliberately hyphen-free, so it matches no APP_PERSONAS entry.
     const subject = 'c0000000000000000000000000000002'
@@ -871,7 +870,7 @@ describe('stripNodes: actor rendering, arch §3d', () => {
 
   it('S-25 (arch §6.6): an empty actor_name degrades to the raw subject even when actor_kind says person', () => {
     // The case that breaks if the mapper reads row.actor_kind instead of the RESOLVED
-    // ActorLabel.kind (arch §0.3 / §7 row 3): a first-name reduction here would print
+    // ActorLabel.kind: a first-name reduction here would print
     // 'c0000000-0000-0000-0000-000000000001' split on nothing, or worse, guess a name.
     const subject = APP_PERSONAS.firm.subject
     const nodes = withActor({ actor: subject, actor_name: '', actor_kind: 'person' })
@@ -925,7 +924,7 @@ describe('stripNodes: the invariants subtask 02 relies on (arch §12)', () => {
     // no time is a chip floating next to an em-dash. The regression that motivated C-2 lived
     // on ONE run shape (approved with closed_at null), which is why this sweeps.
     //
-    // ONE-DIRECTIONAL, and arch §12 C-2's "populated together or not at all" over-claims it.
+    // ONE-DIRECTIONAL: "populated together or not at all" would over-claim it.
     // The converse is false BY DESIGN: a human-approved run gives node 3 `at` with a null
     // `actor`, because resolving closed_by would re-open the cross-tenant leak (S-10, S-29).
     // A renderer must handle a time with no actor; it never sees an actor with no time.
@@ -957,7 +956,7 @@ describe('stripNodes: the invariants subtask 02 relies on (arch §12)', () => {
   })
 
   it('S-28 (arch §12 C-2): an approved run with no close time carries no actor either', () => {
-    // The regression: §3c gave node 3 its actor with no closed_at condition, so this input
+    // The regression: node 3 got its actor with no closed_at condition, so this input
     // produced caption '—' next to a populated System chip.
     const node = strip(HISTORY_TO_QUEUED, mkRun('approved', { closed_at: null, closed_by: 'system' }), 'queued')[2]
     expect(node.state).toBe('done')
@@ -1055,7 +1054,7 @@ describe('stripNodes: totality over malformed input', () => {
   })
 
   it('S-32: a to_status outside InvoiceStatus is ignored, never mapped onto a node', () => {
-    // 'approved' is an approval-run state, not an invoice status (arch §3a). A history row
+    // 'approved' is an approval-run state, not an invoice status. A history row
     // carrying it must not become node 3's source, nor displace node 2's row.
     const history: StatusChange[] = [
       h('draft', T_DRAFT),

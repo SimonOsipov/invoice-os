@@ -130,7 +130,7 @@ func intervalsOverlap(aStart, aEnd, bStart, bEnd time.Time) bool {
 // :209-210 temporarily changed from
 //
 //	if errors.Is(createErr, invoice.ErrDuplicateNumber) {
-//	    quarantineErr = storeDuplicateRowError(nil, existing[in.InvoiceNumber])
+//	    quarantineErr = storeDuplicateRowError(1, nil, existing[in.InvoiceNumber])
 //	} else {
 //	    quarantineErr = RowError{Message: msg}
 //	}
@@ -275,12 +275,11 @@ func TestServiceImportDocument_ConcurrentDuplicateRaceWinnerWritesLosersEnriched
 
 // DUP-D5: a sequential (non-racing) second import of the same number on the same entity
 // reports the same enriched shape AND resolves InvoiceID to the first import's invoice id via
-// the fast path (ExistingNumbers's upfront precheck resolves it before Create even runs, D-12
-// in .ralph/EXTR-06-finalized.md).
+// the fast path (ExistingNumbers's upfront precheck resolves it before Create even runs).
 //
-// GREEN ON ARRIVAL. Non-vacuity proven by mutation: internal/importer/document.go:210
-// temporarily changed from `storeDuplicateRowError(nil, existing[in.InvoiceNumber])` to
-// `storeDuplicateRowError(nil, "")` (dropping the resolved id) -> re-ran this test -> FAILED
+// GREEN ON ARRIVAL. Non-vacuity proven by mutation: the `storeDuplicateRowError` call in
+// document.go temporarily changed from `storeDuplicateRowError(1, nil, existing[in.InvoiceNumber])` to
+// `storeDuplicateRowError(1, nil, "")` (dropping the resolved id) -> re-ran this test -> FAILED
 // on the InvoiceID assertion (got "" want the winner's id) -> reverted.
 func TestServiceImportDocument_SequentialReimportResolvesInvoiceIDToWinner(t *testing.T) {
 	super, app := dbTestPools(t)

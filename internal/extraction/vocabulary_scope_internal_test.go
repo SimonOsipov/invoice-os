@@ -45,7 +45,7 @@ func TestAnchorLexicon_ATwoWordPartyLabelTakesAnEnumeratedSuffix(t *testing.T) {
 //
 // Not `loc == nil`: total's bare "total" arm and issue_date's bare "date" arm already match the
 // trailing noun of half these spellings at a non-zero offset, for a reason unrelated to
-// alSuffix (.ralph/arch-26-01.md). Only "no match starts at offset 0" isolates the two-word arm.
+// alSuffix. Only "no match starts at offset 0" isolates the two-word arm.
 func TestAnchorLexicon_TheSuffixDoesNotReachTheUninflectedEntries(t *testing.T) {
 	tails := []string{"ed", "ing", "s", "d"}
 	cases := []struct{ id, first, second string }{
@@ -305,7 +305,7 @@ func TestAnchorLexicon_TheWithholdingPhraseIsBoundedAtBothEnds(t *testing.T) {
 // this pattern; this story adds an entry above it and writes nothing inside it.
 const vsVATPatternAtEXTR22 = `(?i)\b(vat|v\.a\.t\.?|tax)\b`
 
-// T-04.5: a guard, not a driver -- passes on arrival. Measured (.ralph/arch-26-04.md 9a): an
+// T-04.5: a guard, not a driver -- passes on arrival. Measured: an
 // ADDITIVE widening of vat (adding a |levy arm) passes the entire extraction and endtoend
 // suites, so this is the only mechanical guard on that pattern. The reference literal is retyped
 // above, never read back from anchorLexicon (a tautology) and never fetched via git at test time

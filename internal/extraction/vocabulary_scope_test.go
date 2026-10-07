@@ -256,7 +256,7 @@ func TestResolve_ATaxableAmountColumnHeaderMintsASecondSubtotal(t *testing.T) {
 }
 
 // vsWithholdingCore is vsRefereeCore's page (Taxable amount, no taxable column) with one
-// "Withholding tax 10%" / "318,742.00" line inserted above VAT -- P-4 in .ralph/arch-26-04.md.
+// "Withholding tax 10%" / "318,742.00" line inserted above VAT.
 // Before withholding_tax lands, the withholding value outranks the real VAT on distance and
 // decides the vat field, which blocks corroborateTotal's decidedMoney(decided, "vat") guard.
 func vsWithholdingCore() []extraction.TokenPage {
@@ -297,8 +297,8 @@ func TestResolve_AWithholdingLineIsNotTheVAT(t *testing.T) {
 		t.Errorf("vat alternatives = %v, want none", vat.Alternatives)
 	}
 
-	// Mandatory clause (story .ralph/story-final.md T-04.1): without it, this subtask has no
-	// test before EXTR-26-06 proving it is a precondition for Core AC-3 rather than a tidy-up.
+	// Mandatory clause: without it, nothing before EXTR-26-06 proves this is a precondition
+	// for Core AC-3 rather than a tidy-up.
 	total, ok := rcFind(out, "total")
 	if !ok || total.Reason != extraction.ReasonNone || total.Value == nil || *total.Value != "3426476.50" {
 		t.Errorf("total = %+v (ok=%v), want ReasonNone / %q", total, ok, "3426476.50")

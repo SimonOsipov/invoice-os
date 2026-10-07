@@ -22,8 +22,7 @@
 // seedVersion(...,true) fixtures occupy transiently. Only TestSeed_KillSwitch mutates shared state (one rule's
 // `enabled` column) and restores it in t.Cleanup; every other test in this file is read-only.
 //
-// Coverage (story M3-05 Test Specs; see the story's System Design table +
-// .ralph/m3-05-exec-readiness.md for the exact signatures/harness):
+// Coverage (story M3-05 Test Specs):
 //  1. TestSeed_ActiveVersionLoads    -- Core AC 1: exactly one active
 //     version, and it is activeSeedVersion (v2 since M4-04-01) with 19 rules,
 //     keys matching the pinned rule table. This is the ONE place the package

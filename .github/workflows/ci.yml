@@ -1057,6 +1057,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # ubuntu is case-sensitive; macOS wrongly lists Coverage.tsx (`coverage.*`).
+      - name: No tracked file matches .gitignore
+        run: |
+          bad=$(git ls-files -ci --exclude-standard)
+          if [ -n "$bad" ]; then
+            echo "::error::Tracked files match .gitignore (git rm --cached each):"
+            echo "$bad"
+            exit 1
+          fi
       # Go from scratch — no module/build cache.
       - uses: actions/setup-go@v5
         with:

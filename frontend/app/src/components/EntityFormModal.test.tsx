@@ -330,6 +330,10 @@ describe('PR-01 the entity modal sits 10px over the v2 scrim', () => {
         activeEntity: null,
         entitiesError: null,
         refetchEntities: vi.fn(),
+        members: [{ id: 'u1', name: 'Ada', initials: 'A', email: null, role: 'admin', status: 'active', isYou: true }],
+        membersState: 'ready',
+        membersError: null,
+        refetchMembers: vi.fn(),
         authedFetch: vi.fn(),
         user: { name: 'Ada', initials: 'A', tenantName: 'Acme Ltd', verified: true },
       } as unknown as PlatformCtx

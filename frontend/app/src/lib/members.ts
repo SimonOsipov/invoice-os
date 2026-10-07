@@ -663,6 +663,17 @@ export function viewerIsAdmin(members: readonly Member[]): boolean {
   return members.some((m) => m.isYou && m.role === 'admin' && m.status === 'active')
 }
 
+export type CompanySetupAccess = 'add' | 'wait' | 'loading' | 'error'
+
+// An unloaded or failed roster is not a non-admin.
+export function companySetupAccess(membersState: AsyncStatus, members: readonly Member[]): CompanySetupAccess {
+  if (membersState === 'error') return 'error'
+  if (membersState === 'idle') return 'add' // no gateway: every write is already disabled
+  // `ready` with no rows is the render before App's mirror effect lands.
+  if ((membersState === 'loading' || membersState === 'ready') && members.length === 0) return 'loading'
+  return viewerIsAdmin(members) ? 'add' : 'wait'
+}
+
 // maxEmailBytes (internal/tenancy/invitations_handler.go).
 const MAX_EMAIL_BYTES = 254
 

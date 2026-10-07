@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { APP_PERSONAS, type Session } from './auth'
 import { EMPTY_BUCKET } from './lib/dashboard'
 import { DEEP_LINK_KEY, DEEP_LINK_SCHEMA_VERSION } from './lib/deepLink'
+import type { MembershipWire } from './lib/members'
 import type { Entity } from './lib/portfolio'
 import { SESSION_KEY, serializeSession } from './lib/session'
 import type { PlatformCtx } from './types'
@@ -49,6 +50,10 @@ function createMemoryStorage() {
 }
 
 let entityReply: () => Promise<Entity[]>
+let memberReply: () => Promise<MembershipWire[]>
+let persona: Session['persona'] = APP_PERSONAS.firm
+
+const selfWire = (role: string): MembershipWire => ({ user_id: persona.subject, role, status: 'active', display_name: null, email: null })
 
 function stubGateway() {
   vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
@@ -57,6 +62,8 @@ function stubGateway() {
     vi.fn((url: string) => {
       const body = url.includes('/api/portfolio/v1/entities')
         ? entityReply().then((entities) => ({ entities, pagination: { limit: 200, offset: 0, total: entities.length } }))
+        : url.includes('/api/tenancy/v1/memberships')
+        ? memberReply().then((memberships) => ({ memberships }))
         : Promise.resolve({
             policies: [],
             members: [],
@@ -75,7 +82,8 @@ function stubGateway() {
 
 async function boot(path: string, opts: { gateway: boolean; persona?: Session['persona'] }) {
   window.history.replaceState(null, '', path)
-  const session: Session = { persona: opts.persona ?? APP_PERSONAS.firm, token: opts.gateway ? 'tok' : null, me: null, verified: true }
+  persona = opts.persona ?? APP_PERSONAS.firm
+  const session: Session = { persona, token: opts.gateway ? 'tok' : null, me: null, verified: true }
   localStorage.setItem(SESSION_KEY, serializeSession(session))
   if (opts.gateway) stubGateway()
   vi.resetModules()
@@ -99,13 +107,43 @@ function watchForTask() {
 
 beforeEach(() => {
   capturedCtx = undefined
+  visibility = 'visible'
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility })
   entityReply = () => Promise.resolve([])
+  memberReply = () => Promise.resolve([selfWire('admin')])
   sessionStorage.clear()
   vi.stubGlobal('localStorage', createMemoryStorage())
   window.history.replaceState(null, '', '/')
 })
 
+let visibility: DocumentVisibilityState = 'visible'
+const fireVisibility = (state: DocumentVisibilityState) => {
+  visibility = state
+  return act(async () => {
+    document.dispatchEvent(new Event('visibilitychange'))
+  })
+}
+const entityGets = () => vi.mocked(fetch).mock.calls.filter((c) => String(c[0]).includes('/api/portfolio/v1/entities')).length
+
+// Records every added node that is or contains the needle (the node can be gone before a query runs).
+function recordMounts(match: (n: Element) => boolean): { count: () => number } {
+  let n = 0
+  const obs = new MutationObserver((muts) => {
+    for (const m of muts)
+      m.addedNodes.forEach((node) => {
+        if (node instanceof Element && (match(node) || [...node.querySelectorAll('*')].some(match))) n++
+      })
+  })
+  obs.observe(document.body, { childList: true, subtree: true })
+  recorders.push(obs)
+  return { count: () => n }
+}
+let recorders: MutationObserver[] = []
+
 afterEach(() => {
+  recorders.forEach((o) => o.disconnect())
+  recorders = []
+  visibility = 'visible'
   observer?.disconnect()
   observer = null
   cleanup()
@@ -223,3 +261,58 @@ describe('AUTH-10-03: the dashboard branch in App', () => {
     expect(onSettings.innerHTML).toBe(onTask.innerHTML)
   })
 })
+
+describe('LOGFIX-06-02: the dashboard branch follows the role', () => {
+  const waitingMatch = (e: Element) => e.getAttribute('data-testid') === 'company-setup-waiting'
+  const loadingMatch = (e: Element) => e.children.length === 0 && (e.textContent ?? '').includes('Loading your workspace…')
+  const waiting = () => screen.queryByTestId('company-setup-waiting')
+
+  it('a preparer who boots the app lands on No company created', async () => {
+    memberReply = () => Promise.resolve([selfWire('preparer')])
+    await boot('/', { gateway: true, persona: APP_PERSONAS.inhouse })
+    await waitFor(() => expect(waiting()).not.toBeNull())
+    expect(task()).toBeNull()
+  })
+
+  it('an admin who boots the app never sees the waiting view', async () => {
+    let release!: (m: MembershipWire[]) => void
+    memberReply = () => new Promise((r) => (release = r))
+    const mounts = recordMounts(waitingMatch)
+    await boot('/', { gateway: true, persona: APP_PERSONAS.inhouse })
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30))
+    })
+    expect(task()).toBeNull()
+    await act(async () => release([selfWire('admin')]))
+    await waitFor(() => expect(task()).not.toBeNull())
+    expect(mounts.count()).toBe(0)
+  })
+
+  it("a Preparer's open tab shows the company once the tab is visible again", async () => {
+    memberReply = () => Promise.resolve([selfWire('preparer')])
+    await boot('/', { gateway: true, persona: APP_PERSONAS.inhouse })
+    await waitFor(() => expect(waiting()).not.toBeNull())
+    entityReply = () => Promise.resolve([ENTITY])
+    const loads = recordMounts(loadingMatch)
+    await fireVisibility('hidden')
+    await fireVisibility('visible')
+    await waitFor(() => expect(screen.getByText('COMPLIANCE OVERVIEW')).toBeTruthy())
+    expect(waiting()).toBeNull()
+    expect(loads.count()).toBe(0)
+  })
+
+  it('a waiting tab with still no company stays put', async () => {
+    memberReply = () => Promise.resolve([selfWire('preparer')])
+    await boot('/', { gateway: true, persona: APP_PERSONAS.inhouse })
+    await waitFor(() => expect(waiting()).not.toBeNull())
+    const loads = recordMounts(loadingMatch)
+    const before = entityGets()
+    await fireVisibility('hidden')
+    expect(entityGets()).toBe(before)
+    await fireVisibility('visible')
+    await waitFor(() => expect(entityGets()).toBe(before + 1))
+    expect(waiting()).not.toBeNull()
+    expect(loads.count()).toBe(0)
+  })
+})
+

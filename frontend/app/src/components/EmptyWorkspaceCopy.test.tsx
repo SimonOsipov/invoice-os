@@ -37,6 +37,10 @@ function baseCtx(mode: Mode, over: Record<string, unknown> = {}): PlatformCtx {
     toggleSwitcher: vi.fn(),
     switchClient: vi.fn(),
     signOut: vi.fn(),
+    members: [{ id: 'u1', name: 'Ada', initials: 'A', email: null, role: 'admin', status: 'active', isYou: true }],
+    membersState: 'ready',
+    membersError: null,
+    refetchMembers: vi.fn(),
     ...over,
   } as unknown as PlatformCtx
 }

@@ -40,13 +40,20 @@ fetch() {
 }
 
 # classify <now> <run id> <attempt start>: reads a jobs body; prints one verdict word.
+# The deploy chain has ended once the fleet gate is listed and every chain job is completed; the gate is
+# listed only after deploy-context ends, and the SPA legs are listed by then.
+# Chain jobs: prepare-env, health-gate, the fleet gate and every "Deploy <x> → <env>" job (gateway and matrix legs).
 classify() {
   jq -r --argjson now "$1" --argjson id "$2" --argjson began "$3" --argjson self "$RUN_ID" \
-    --argjson hold "$MAX_HOLD_SECONDS" --argjson grace "$NO_SLOT_GRACE_SECONDS" '
+    --argjson hold "$MAX_HOLD_SECONDS" --argjson grace "$NO_SLOT_GRACE_SECONDS" \
+    --arg prep "Prepare Railway environment (create-or-reuse + assert Watch Paths + discover URLs)" \
+    --arg health "Gate on gateway /healthz (schema migrated)" --arg fleet "Fleet /healthz gate (all 10 backends green)" '
     def job($n): [.jobs[] | select(.name == $n)][0];
+    def chain: .name == $prep or .name == $health or (.name | startswith("Deploy ") and contains(" → "));
+    def chain_ended: job($fleet) as $f | $f != null and $f.status == "completed" and ([.jobs[] | select(chain)] | all(.status == "completed"));
     def age($j): $now - ($j.completed_at | fromdateiso8601);
     job("Deploy slot") as $slot | job("Release deploy slot") as $rel | job("Detect E2E-relevant changes") as $chg
-    | if $rel != null and $rel.status == "completed" then "settled"
+    | if ($rel != null and $rel.status == "completed") or chain_ended then "settled"
       elif $slot == null then
         (if $chg != null and $chg.completed_at != null and age($chg) >= $grace then "settled" else "none" end)
       elif $slot.status != "completed" then (if $id < $self then "waiter" else "none" end)

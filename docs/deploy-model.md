@@ -117,7 +117,7 @@ PR opened ──> dev-env.yml:
                     and an `actions/setup-go` step; reads auth's variables unrendered
                     + "Gate on the account-mail logo" (push only):
                     `go run ./tools/prenv mail-logo-check`
-                ──> `deploy-slot-release` job: a marker; the run's slot is free once it ends
+                ──> `deploy-slot-release` job: a marker; its end frees the slot if the chain end was not seen earlier
                 ──> verify, `e2e` job: smoke (landing + both consoles) + api
                 ──> verify, `topology` job: one parallel leg per unit (serial-lane,
                     import-wizard, import-wizard-2, invoice-surfaces; app login, cross-tenant
@@ -129,7 +129,7 @@ PR closed  ──> dev-env-teardown.yml (M4-23-05): prenv name ──> look the 
 
 merge to main ──> dev-env.yml (push): await green CI on the merge commit
                   ──> `deploy-slot` job passes at once (a push run never waits; it counts
-                      as a holder until its `deploy-slot-release`)
+                      as a holder until its deploy chain ends)
                   ──> targets the PERSISTENT environment BY ID (never a fork; the
                       fork-reconciliation steps are all `== 'pull_request'`)
                   ──> gateway ──> /healthz gate (demo_purge == "false", mock_issuer ==
@@ -138,7 +138,7 @@ merge to main ──> dev-env.yml (push): await green CI on the merge commit
                       4 SPAs ──> fleet gate + Sentry state check (every Go service and
                       docling reports sentry "on" or "off", never absent; notifications
                       reports `contacts` "real" or "off", never "fake")
-                  ──> `deploy-slot-release` job (frees the slot)
+                  ──> `deploy-slot-release` job (backstop; the slot frees when the chain ends)
                   ──> no E2E (ephemeral environments only)
 
 workflow_dispatch ──> targets the persistent environment directly (never torn down),
@@ -582,11 +582,12 @@ succeed. The job holds `actions: read` and `contents: read` only, and never call
 `tools/prenv/deploy_slot_test.go` covers the decision; `tools/prenv/deploy_slot_workflow_test.go` covers
 the wiring. A draft PR, or a run whose `changes` says no E2E-relevant files, skips the job and never holds a slot.
 
-**What holds a slot.** A run holds one from the moment its `Deploy slot` job passes until its
-`Release deploy slot` job completes. That marker job needs `prepare-env`, `deploy-gateway`, `health-gate`,
-`deploy-context`, `deploy-spas` and `fleet-gate`, and runs `always()`, so a failed or cancelled chain frees
-the slot too. `e2e` and `topology` hold no slot. A chain that never ends stops counting 60 min after its
-slot passed (`MAX_HOLD_SECONDS=3600`).
+**What holds a slot.** A run holds one from the moment its `Deploy slot` job passes until its deploy chain
+ends: the `Fleet /healthz gate` is listed and `prepare-env`, `health-gate` and every `Deploy <x> → <env>`
+job (gateway and matrix legs) are completed, with any conclusion. A failed or cancelled chain frees the
+slot at once, because GitHub lists the skipped downstream jobs as completed. A completed
+`Release deploy slot` job also frees it. `e2e` and `topology` hold no slot. A chain that never ends
+stops counting 60 min after its slot passed (`MAX_HOLD_SECONDS=3600`).
 
 **Order.** A run counts older waiters (lower run id, `Deploy slot` job not completed) against itself, and
 never a newer one, so no run waits forever behind a newer run. Gap: a run whose `changes` job still runs
@@ -615,7 +616,7 @@ slot ahead of this run. `expired: run <id>` is a holder past 60 min, not counted
 `unreadable: run <id>` names a run whose last read failed.
 
 **GITHUB_TOKEN budget.** The token allows 1,000 API requests per hour per repository. One poll makes one
-runs-list call plus one jobs call per candidate run. A run found settled (release completed, slot not
+runs-list call plus one jobs call per candidate run. A run found settled (chain ended, release completed, slot not
 successful, or no slot job 60 s after `changes` ended) is not read again in that wait. Runs started more than
 3 h ago are ignored (`MAX_AGE_SECONDS=10800`). Polling every 60 s limits one waiter to 60 runs-list calls an hour,
 plus the jobs calls for runs not yet settled.

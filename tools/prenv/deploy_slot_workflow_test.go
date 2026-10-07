@@ -19,6 +19,11 @@ const (
 	releaseJobID   = "deploy-slot-release"
 	releaseJobName = "Release deploy slot"
 	changesJobName = "Detect E2E-relevant changes" // the script's no-slot-job grace reads it
+
+	// the script's chain-ended rule reads these names
+	prepareJobName = "Prepare Railway environment (create-or-reuse + assert Watch Paths + discover URLs)"
+	healthJobName  = "Gate on gateway /healthz (schema migrated)"
+	fleetJobName   = "Fleet /healthz gate (all 10 backends green)"
 )
 
 // releaseNeeds is the seven-job set the release job waits on.
@@ -123,6 +128,16 @@ func TestDevEnvDeploySlotJobRunsTheScript(t *testing.T) {
 	}
 	if v, _ := jobKey(devEnvJob(t, "changes"), "name"); v != changesJobName {
 		t.Errorf("changes name = %q, want %q", v, changesJobName)
+	}
+	for id, want := range map[string]string{"prepare-env": prepareJobName, "health-gate": healthJobName, "fleet-gate": fleetJobName} {
+		if v, _ := jobKey(devEnvJob(t, id), "name"); v != want {
+			t.Errorf("%s name = %q, want %q", id, v, want)
+		}
+	}
+	for _, id := range []string{"deploy-gateway", "deploy-context", "deploy-spas"} {
+		if v, _ := jobKey(devEnvJob(t, id), "name"); !strings.HasPrefix(v, "Deploy ") || !strings.Contains(v, " → ") {
+			t.Errorf("%s name = %q, want \"Deploy <x> → <env>\"", id, v)
+		}
 	}
 }
 

@@ -7,6 +7,7 @@ import { SceneView } from './components/SceneView'
 import { COMING_SOON_IDS, FEATURES, GROUPS } from './content'
 import { Icon } from './icons'
 import { sceneState, thumbStep } from './scene'
+import type { Scene } from './types'
 
 type Tag = { name: string; attrs: string; text: string }
 const attr = (t: { attrs: string }, name: string) => t.attrs.match(new RegExp(`\\s${name}="([^"]*)"`))?.[1]
@@ -533,5 +534,147 @@ describe('library scenes', () => {
     })
     expect(FEATURES).toHaveLength(26)
     expect([...kinds].sort()).toEqual(['feed', 'flow', 'form', 'list', 'metrics', 'toggles'])
+  })
+
+  const LONG = 'Extraordinarily Long Customer Name '.repeat(8).trim()
+  const listSc = (rows: number): Scene => ({
+    kind: 'list', win: 'w', cols: ['A', 'B', 'C', 'D'], grid: '1fr 1fr 1fr 1fr',
+    rows: Array.from({ length: rows }, (_, i) => [`r${i}`, `${LONG} ${i}`, `${i}`, 'new'] as [string, string, string, 'new']),
+    steps: [{ cap: 'plain' }, { cap: 'with banner', banner: 'Banner text' }],
+  })
+  const thumbRows = (ts: Tag[]) => where(ts, (s) => s['grid-template-columns'] === 'minmax(0, 1fr) auto')
+  const draw = (sc: Scene, idx: number, size: 'thumb' | 'player') => parse(renderToStaticMarkup(createElement(SceneView, { sc, idx, size })))
+
+  it('SN-10 the thumbnail list keeps three rows beside a banner and four without, and clips long text', () => {
+    const plain = draw(listSc(6), 0, 'thumb')
+    expect(thumbRows(plain)).toHaveLength(4)
+    expect(plain.some((t) => t.text === 'Banner text')).toBe(false)
+    const banner = draw(listSc(6), 1, 'thumb')
+    expect(thumbRows(banner)).toHaveLength(3)
+    expect(banner.filter((t) => t.text === 'Banner text')).toHaveLength(1)
+    const cust = where(banner, (s) => s['font-size'] === '10px' && s['font-weight'] === '600')
+    expect(cust).toHaveLength(3)
+    expect(cust.every((t) => style(t)['text-overflow'] === 'ellipsis' && style(t)['white-space'] === 'nowrap')).toBe(true)
+    expect(cust[0].text).toContain(LONG)
+    expect(thumbRows(draw(listSc(2), 1, 'thumb'))).toHaveLength(2)
+    const player = draw(listSc(6), 0, 'player')
+    expect(where(player, (s) => s.animation === 'libPop 320ms ease-out')).toHaveLength(6)
+    expect(where(player, (s) => s.animation === 'libFade 300ms ease-out')).toHaveLength(0)
+  })
+
+  const formSc = (doc: boolean): Scene => ({
+    kind: 'form', win: 'w', ...(doc ? { doc: true as const } : {}),
+    fields: ['A', 'B', 'C', 'D', 'E'].map((l) => ({ l, v: `${l}-value` })),
+    steps: [
+      { cap: 's0', reveal: 5, focus: 0, mark: { 0: 'ok', 1: 'err', 2: 'low', 3: 'fix' } },
+      { cap: 's1', reveal: 5, focus: -1, msg: 'M', tone: 'ok' },
+      { cap: 's2', msg: 'M', tone: 'err' },
+      { cap: 's3', msg: 'M' },
+    ],
+  })
+  const MARKS = [
+    ['var(--status-green-border)', 'var(--status-green-bg)'],
+    ['var(--status-red-border)', 'var(--status-red-bg)'],
+    ['var(--status-amber-border)', 'var(--status-amber-bg)'],
+    ['var(--ring)', '#fff'],
+    ['var(--input)', '#fff'],
+  ]
+
+  it('SN-11 the thumbnail form colours each mark, slices fields per layout and colours the message by tone', () => {
+    const boxes = (ts: Tag[]) => where(ts, (s) => s.height === '18px')
+    const flat = draw(formSc(false), 0, 'thumb')
+    expect(boxes(flat)).toHaveLength(4)
+    boxes(flat).forEach((b, i) => expect([style(b).border, style(b).background]).toEqual([`1px solid ${MARKS[i][0]}`, MARKS[i][1]]))
+    const doc = draw(formSc(true), 0, 'thumb')
+    expect(boxes(doc)).toHaveLength(3)
+    expect(where(doc, (s) => s.padding === '2px 4px')).toHaveLength(4)
+    const msg = (step: number) => where(draw(formSc(false), step, 'thumb'), (s) => s['font-size'] === '9.5px')
+    expect(msg(0)).toHaveLength(0)
+    expect(style(msg(1)[0])).toMatchObject({ background: 'var(--status-green-bg)', color: 'var(--status-green-text)', border: '1px solid var(--status-green-border)' })
+    expect(style(msg(2)[0])).toMatchObject({ background: 'var(--status-red-bg)', color: 'var(--status-red-text)', border: '1px solid var(--status-red-border)' })
+    expect(style(msg(3)[0])).toMatchObject({ background: 'var(--mint-soft)', color: 'var(--tab-active-text)', border: '1px solid var(--border)' })
+  })
+
+  it('SN-12 the doc panel outlines the focused field solid, a low field dashed and the rest clear, in both sizes', () => {
+    const expected = ['1.5px solid var(--accent)', '1.5px solid transparent', '1.5px dashed var(--status-amber-text)', '1.5px solid transparent']
+    const rows = (ts: Tag[], pad: string) => where(ts, (s) => s.padding === pad)
+    const t = rows(draw(formSc(true), 0, 'thumb'), '2px 4px')
+    const p = rows(draw(formSc(true), 0, 'player'), '5px 7px')
+    expect(t).toHaveLength(4)
+    expect(p).toHaveLength(5)
+    expect(t.map((r) => style(r).outline)).toEqual(expected)
+    expect(p.slice(0, 4).map((r) => style(r).outline)).toEqual(expected)
+    expect(p.map((r) => style(r).background)).toEqual(['var(--peach-tint)', 'transparent', 'transparent', 'transparent', 'transparent'])
+    const hidden = { ...(formSc(true) as Extract<Scene, { kind: 'form' }>), steps: [{ cap: 'c', reveal: 2, mark: { 2: 'low' as const } }] }
+    expect(rows(draw(hidden, 0, 'player'), '5px 7px').map((r) => style(r).outline)).toEqual(Array(5).fill('1.5px solid transparent'))
+  })
+
+  it('SN-13 the player form draws each mark glyph and colour and the thumbnail drops them', () => {
+    const player = draw(formSc(false), 0, 'player')
+    const boxes = where(player, (s) => s.height === '38px')
+    expect(boxes).toHaveLength(5)
+    boxes.forEach((b, i) => expect([style(b).border, style(b).background]).toEqual([`1px solid ${MARKS[i][0]}`, MARKS[i][1]]))
+    expect(where(player, (s) => s['box-shadow'] === '0 0 0 2px var(--ring)')).toHaveLength(1)
+    const icons = where(player, (s) => s.animation === 'libFade 300ms')
+    expect(icons.map((t) => style(t).color)).toEqual(['var(--status-green-text)', 'var(--status-red-text)', 'var(--status-amber-text)', 'var(--teal)'])
+    const html = renderToStaticMarkup(createElement(SceneView, { sc: formSc(false), idx: 0, size: 'player' }))
+    expect(html).toContain(glyph('circle-check'))
+    expect(html).toContain(glyph('pen-tool'))
+    expect(html.match(new RegExp(glyph('triangle-alert').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))).toHaveLength(2)
+    const msgP = (step: number) => where(draw(formSc(false), step, 'player'), (s) => s.animation === 'libPop 300ms ease-out')
+    expect(msgP(0)).toHaveLength(0)
+    expect(style(msgP(1)[0]).background).toBe('var(--status-green-bg)')
+    expect(style(msgP(2)[0]).color).toBe('var(--status-red-text)')
+    expect(style(msgP(3)[0]).background).toBe('var(--mint-soft)')
+  })
+
+  it('SN-14 flow todo nodes are white with muted text and a clear connector; the thumbnail has no transitions', () => {
+    const f = feat('submit-clear')
+    const ts = draw(f.sc, 0, 'player')
+    const nodes = where(ts, (s) => s.width === '40px' && s.height === '40px')
+    expect(nodes).toHaveLength(5)
+    expect(style(nodes[0]).background).toBe('var(--primary)')
+    expect(style(nodes[1])).toMatchObject({ background: 'var(--accent)', color: 'var(--accent-foreground)', border: '2px solid var(--accent)' })
+    expect(style(nodes[4])).toMatchObject({ background: '#fff', color: 'var(--muted-foreground)', border: '2px solid var(--input)' })
+    const lines = where(ts, (s) => s.height === '2px' && s.position === 'absolute')
+    expect(lines.map((l) => style(l).background)).toEqual(['var(--primary)', 'var(--primary)', 'var(--border)', 'var(--border)', 'var(--border)'])
+    const labels = where(ts, (s) => s['font-size'] === '13px' && s['font-weight'] === '700' && s['line-height'] === '1.3')
+    expect(labels.map((l) => style(l).color)).toEqual(['var(--ink)', 'var(--ink)', ...Array(3).fill('var(--muted-foreground)')])
+    const html = renderToStaticMarkup(createElement(SceneView, { sc: f.sc, idx: 1, size: 'thumb' }))
+    expect(html).not.toContain('transition')
+    expect(html).not.toContain('animation')
+  })
+
+  it('SN-15 the metrics thumbnail floors a bar at 3px and the player floors it at 4px', () => {
+    const sc: Scene = { kind: 'metrics', win: 'w', tiles: [['A', 10, '']], bars: [0.5, 1], steps: [{ cap: 'c', grow: 0 }, { cap: 'c', grow: 1 }] }
+    const th = (i: number) => where(draw(sc, i, 'thumb'), (s) => s.flex === '1' && s['border-radius'] === '2px 2px 0 0').map((b) => style(b).height)
+    expect(th(0)).toEqual(['3px', '3px'])
+    expect(th(1)).toEqual(['23px', '45px'])
+    const pl = (i: number) => where(draw(sc, i, 'player'), (s) => (s.transition ?? '').startsWith('height 700ms')).map((b) => style(b).height)
+    expect(pl(0)).toEqual(['4px', '4px'])
+    expect(pl(1)).toEqual(['75px', '150px'])
+  })
+
+  it('SN-16 absent optional fields and empty collections render in both sizes', () => {
+    const scenes: Scene[] = [
+      listSc(0),
+      formSc(false),
+      { kind: 'flow', win: 'w', nodes: [['One', 's']], steps: [{ cap: 'c', at: 0, out: '' }] },
+      { kind: 'metrics', win: 'w', tiles: [], bars: [], steps: [{ cap: 'c', grow: 1 }] },
+      { kind: 'toggles', win: 'w', rows: [['T', 'd', false]], steps: [{ cap: 'c', focus: -1 }] },
+      { kind: 'feed', win: 'w', items: [], steps: [{ cap: 'c', show: 0 }] },
+    ]
+    expect(scenes.map((s) => s.kind).sort()).toEqual(['feed', 'flow', 'form', 'list', 'metrics', 'toggles'])
+    scenes.forEach((sc) =>
+      (['thumb', 'player'] as const).forEach((size) => {
+        const html = renderToStaticMarkup(createElement(SceneView, { sc, idx: 0, size }))
+        expect(html.length, `${sc.kind} ${size}`).toBeGreaterThan(0)
+      }),
+    )
+    const t = draw(scenes[4], 0, 'thumb')
+    expect(where(t, (s) => s.transform === 'translateX(0px)')).toHaveLength(1)
+    const toggled = draw({ ...(scenes[4] as Extract<Scene, { kind: 'toggles' }>), rows: [['T', 'd', true]] }, 0, 'thumb')
+    expect(where(toggled, (s) => s.transform === 'translateX(12px)')).toHaveLength(1)
+    expect(where(toggled, (s) => s.background === 'var(--primary)' && s.width === '26px')).toHaveLength(1)
   })
 })

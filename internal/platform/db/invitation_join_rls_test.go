@@ -261,6 +261,11 @@ func TestRLS_PendingInvitesForEmailNamesTheInviter(t *testing.T) {
 	seedNamedMember(t, tUnnamed, unnamed, nil, "bola@obi.test")
 	seedNamedMember(t, tBlank, blank, "   ", "chidi@obi.test")
 	seedNamedMember(t, tOther, elsewhere, "Named Elsewhere", "dayo@obi.test")
+	crowded, tCrowded := uuid.NewString(), newNamedTenant(t, "Crowded Firm")
+	seedNamedMember(t, tCrowded, uuid.NewString(), "Not The Inviter", "other@obi.test")
+	seedNamedMember(t, tCrowded, crowded, "Emeka Obi", "emeka@obi.test")
+	tStranger := newNamedTenant(t, "Stranger Firm")
+	seedNamedMember(t, tStranger, uuid.NewString(), "Someone Else", "else@obi.test")
 
 	cases := []struct {
 		invite string
@@ -271,6 +276,8 @@ func TestRLS_PendingInvitesForEmailNamesTheInviter(t *testing.T) {
 		{seedJoinInvite(t, tBlank, "reviewer", addr, `now() + interval '3 days'`, blank), ptr("chidi@obi.test")},
 		{seedJoinInvite(t, tNobody, "reviewer", addr, `now() + interval '4 days'`, nobody), nil},
 		{seedJoinInvite(t, tElsewhere, "reviewer", addr, `now() + interval '5 days'`, elsewhere), nil},
+		{seedJoinInvite(t, tCrowded, "reviewer", addr, `now() + interval '6 days'`, crowded), ptr("Emeka Obi")},
+		{seedJoinInvite(t, tStranger, "reviewer", addr, `now() + interval '7 days'`, uuid.NewString()), nil},
 	}
 
 	got := map[string]*string{}
@@ -339,6 +346,27 @@ func TestRLS_AcceptByIdWritesTheMembership(t *testing.T) {
 				t.Errorf("invite status = %q, want accepted", s)
 			}
 		})
+	}
+}
+
+func TestRLS_AcceptByIdMatchesTheAddressInEitherCase(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	local := strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+	stored := "Tunde-" + local + "@Obi.test"
+	a := newNamedTenant(t, "Obi Partners")
+	inviteID := seedJoinInvite(t, a, "reviewer", stored, `now() + interval '1 day'`, "")
+	user := uuid.NewString()
+
+	if _, _, err := acceptByIDAs(ctx, a, a, inviteID, user, "  tunde-"+local+"@obi.test "); err != nil {
+		t.Fatalf("accept a mixed-case invite with the lower-case address: want success, got %v", err)
+	}
+
+	if s := inviteStatus(t, inviteID); s != "accepted" {
+		t.Errorf("invite status = %q, want accepted", s)
+	}
+	if n := membershipCount(t, user); n != 1 {
+		t.Errorf("memberships for the user = %d, want 1", n)
 	}
 }
 

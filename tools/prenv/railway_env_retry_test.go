@@ -2017,6 +2017,112 @@ func TestRailwayAPI_RateLimitResetWaitIsRoundedUp(t *testing.T) {
 	}
 }
 
+// resetWaits runs one 429 whose X-RateLimit-Reset is offset seconds (with a millisecond fraction) from a fixed now.
+func resetWaits(t *testing.T, offset int64, fraction string, waited string) (s authShim, tmp, out string, code int) {
+	t.Helper()
+	const now = int64(1_790_000_000)
+	reset := time.Unix(now+offset, 0).UTC().Format("2006-01-02T15:04:05") + fraction + "Z"
+	s = rateLimitedEnvList(t, []string{"x-ratelimit-reset: " + reset}, "429")
+	fixNow(t, s, now)
+	tmp = t.TempDir()
+	if waited != "" {
+		writeFile(t, filepath.Join(tmp, "railway-api-429-waited"), waited+"\n")
+	}
+	stdout, stderr, code := ensurePR(t, s, runnerTempExport(tmp))
+	return s, tmp, stdout + stderr, code
+}
+
+func TestRailwayAPI_RateLimitResetWaitBoundaries(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		offset   int64
+		fraction string
+		sleeps   []string // nil: the call fails at once
+		named    string   // the wait the error names
+	}{
+		{"a reset one second ago", -1, ".000", []string{"1"}, ""},
+		{"a reset in this second", 0, ".500", []string{"1"}, ""},
+		{"a reset a tenth of a second ahead", 120, ".100", []string{"121"}, ""},
+		{"599.9 s ahead is 600 s, the cap", 599, ".900", []string{"600"}, ""},
+		{"600.9 s ahead is over the cap", 600, ".900", nil, "601"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, _, out, code := resetWaits(t, c.offset, c.fraction, "")
+			if c.sleeps == nil {
+				if code != 1 || len(s.sleeps(t)) != 0 {
+					t.Errorf("exit %d with sleeps %v, want 1 with none; output = %q", code, s.sleeps(t), clip(out))
+				}
+				requireWaitNamed(t, out, `429`, `\b`+c.named+`\b`, `\b600\b`)
+				return
+			}
+			if code != 0 {
+				t.Errorf("exit %d, want 0; output = %q", code, clip(out))
+			}
+			if got := s.sleeps(t); !slices.Equal(got, c.sleeps) {
+				t.Errorf("sleeps = %v, want %v", got, c.sleeps)
+			}
+		})
+	}
+	t.Run("a whole-second reset is never waited for early and at most one second late", func(t *testing.T) {
+		s, _, out, code := resetWaits(t, 120, "", "")
+		if code != 0 {
+			t.Errorf("exit %d, want 0; output = %q", code, clip(out))
+		}
+		sleepsWithin(t, s.sleeps(t), 120, 121)
+	})
+}
+
+func TestRailwayAPI_RateLimitFlooredAndRoundedWaitsCountInTheJobTotal(t *testing.T) {
+	for _, c := range []struct {
+		name, waited string
+		run          func(t *testing.T, waited string) (authShim, string, string, int)
+		wait         string // the wait a refusal names
+		sleeps       []string
+		file         string
+	}{
+		{"a rounded reset that fills the total", "480", func(t *testing.T, w string) (authShim, string, string, int) {
+			return resetWaits(t, 119, ".500", w)
+		}, "", []string{"120"}, "600"},
+		{"a rounded reset one second over the total", "480", func(t *testing.T, w string) (authShim, string, string, int) {
+			return resetWaits(t, 120, ".500", w)
+		}, "121", nil, "480"},
+		{"a floored reset in the past with the total full", "600", func(t *testing.T, w string) (authShim, string, string, int) {
+			return resetWaits(t, -60, ".000", w)
+		}, "1", nil, "600"},
+		{"a zero Retry-After fills the total", "599", retryAfterZero, "", []string{"1"}, "600"},
+		{"a zero Retry-After with the total full", "600", retryAfterZero, "1", nil, "600"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, tmp, out, code := c.run(t, c.waited)
+			if got := waitedTotal(t, tmp); got != c.file {
+				t.Errorf("railway-api-429-waited = %q, want %q", got, c.file)
+			}
+			if c.sleeps == nil {
+				if code != 1 || len(s.sleeps(t)) != 0 {
+					t.Errorf("exit %d with sleeps %v, want 1 with none; output = %q", code, s.sleeps(t), clip(out))
+				}
+				requireWaitNamed(t, out, `429`, `\b`+c.wait+`\b`, `\b`+c.waited+`\b`, `\b600\b`)
+				return
+			}
+			if code != 0 {
+				t.Errorf("exit %d, want 0; output = %q", code, clip(out))
+			}
+			if got := s.sleeps(t); !slices.Equal(got, c.sleeps) {
+				t.Errorf("sleeps = %v, want %v", got, c.sleeps)
+			}
+		})
+	}
+}
+
+func retryAfterZero(t *testing.T, waited string) (authShim, string, string, int) {
+	t.Helper()
+	s := rateLimitedEnvList(t, []string{"retry-after: 0"}, "429")
+	tmp := t.TempDir()
+	writeFile(t, filepath.Join(tmp, "railway-api-429-waited"), waited+"\n")
+	stdout, stderr, code := ensurePR(t, s, runnerTempExport(tmp))
+	return s, tmp, stdout + stderr, code
+}
+
 // batchedOps are the requests that carry what many calls carried.
 var batchedOps = []string{"varsRead", "varsWrite", "discoverUrls"}
 
@@ -2080,6 +2186,74 @@ func TestRailwayAPI_BatchedRequestsGetALargerCurlBudget(t *testing.T) {
 		}
 		requireMaxTimes(t, got)
 	})
+	t.Run("assert-db-dsns: the batched read gets 90 s, the service list 30 s", func(t *testing.T) {
+		f := newDSNFleet(t, healthyMap())
+		if out, code := f.run(t, dsnForkEnv); code != 0 {
+			t.Fatalf("control: exit %d; output = %q", code, clip(out))
+		}
+		got := maxTimes(t, f.authShim)
+		for _, op := range []string{"settle", "varsRead"} {
+			if len(got[op]) == 0 {
+				t.Fatalf("control: no %s call", op)
+			}
+		}
+		requireMaxTimes(t, got)
+	})
+	t.Run("every attempt of a batched request keeps 90 s: two timeouts, then success", func(t *testing.T) {
+		s := newPassShim(t, nil, nil)
+		setFaults(t, s, "varsRead", "timeout", "timeout")
+		setFaults(t, s, "varsWrite", "timeout")
+		if out, code := runPass(t, s); code != 0 {
+			t.Fatalf("control: exit %d; output = %q", code, clip(out))
+		}
+		got := maxTimes(t, s)
+		if len(got["varsRead"]) != 4 || len(got["varsWrite"]) != 2 {
+			t.Fatalf("control: varsRead sent %d times (want 4), varsWrite %d (want 2)", len(got["varsRead"]), len(got["varsWrite"]))
+		}
+		requireMaxTimes(t, got)
+	})
+	t.Run("a 429 resend of a batched request keeps 90 s", func(t *testing.T) {
+		s := newPassShim(t, nil, nil)
+		setFaults(t, s, "varsWrite", "429")
+		plantRateLimitHeaders(t, s, "retry-after: 1")
+		if out, code := runPass(t, s); code != 0 {
+			t.Fatalf("control: exit %d; output = %q", code, clip(out))
+		}
+		got := maxTimes(t, s)
+		if len(got["varsWrite"]) != 2 {
+			t.Fatalf("control: varsWrite sent %d times, want 2", len(got["varsWrite"]))
+		}
+		requireMaxTimes(t, got)
+	})
+	t.Run("a discover-urls request retried after a timeout keeps 90 s", func(t *testing.T) {
+		s := newURLsShim(t, nil)
+		setFaults(t, s, "discoverUrls", "timeout", "timeout")
+		if stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID); code != 0 {
+			t.Fatalf("control: exit %d; output = %q", code, stdout+stderr)
+		}
+		got := maxTimes(t, s)
+		if len(got["discoverUrls"]) != 3 {
+			t.Fatalf("control: discoverUrls sent %d times, want 3", len(got["discoverUrls"]))
+		}
+		requireMaxTimes(t, got)
+	})
+	t.Run("a single call after a batched one is back to 30 s", func(t *testing.T) {
+		script := passVariantScript(t, `
+leak_check() { PASS_NOT_SET="${PASS_NOT_SET:+$PASS_NOT_SET/}LEAK"; }
+leak() { local id; id=$(service_id_by_name "$PASS_SETTLE" gateway "environment $1" LEAK) || exit 1; pass_plan_add "$id" gateway "" "LEAK_NAME=1"; }
+leak_verdict() { graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$PASS_ENV" '{e: $e}')")" "probing after the batch"; pass_owned_verdict leak; }
+`)
+		s := newAfterShim(t, afterProdStores())
+		out, code := runVariant(t, s, script, "x", "x", "leak")
+		if code != 0 {
+			t.Fatalf("control: exit %d; output = %q", code, clip(out))
+		}
+		got := maxTimes(t, s)
+		if want := []string{"envList", "settle", "varsRead", "varsWrite", "varsRead", "settle"}; !slices.Equal(operations(s.calls(t)), want) {
+			t.Fatalf("control: calls = %v, want %v", operations(s.calls(t)), want)
+		}
+		requireMaxTimes(t, got)
+	})
 }
 
 // A timeout test of the 429 cap: each job that runs railway-env.sh must outlast its old budget plus the 600 s of waits.
@@ -2093,7 +2267,12 @@ func TestWorkflowTimeoutsCoverTheRateLimitWaits(t *testing.T) {
 	}
 	timeoutRE := regexp.MustCompile(`^    timeout-minutes:\s*(\d+)\s*$`)
 	seen := map[string]bool{}
-	for _, file := range []string{"dev-env.yml", "dev-env-teardown.yml", "dev-env-sweeper.yml", "railway-invariants.yml"} {
+	files, err := filepath.Glob(filepath.Join(repoRoot(t), ".github", "workflows", "*.y*ml"))
+	if err != nil || len(files) < 4 {
+		t.Fatalf("control: %d workflow files (%v)", len(files), err)
+	}
+	for _, path := range files {
+		file := filepath.Base(path)
 		for _, job := range workflowJobsOf(readWorkflow(t, file)) {
 			key := file + "/" + job.name
 			if !jobCallsRailway(job.lines) {

@@ -4,6 +4,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
@@ -1797,7 +1798,8 @@ func TestForkPass_TwoContributorsPlanningOneNameDiffer(t *testing.T) {
 	})
 }
 
-// pass_owned_verdict feeds a contributor's names through a tab-separated list: spaces and "=" must survive it.
+// pass_owned_verdict feeds a contributor's names through a tab-separated list: spaces, "=", backslashes,
+// tabs and newlines must survive it.
 func TestForkPass_OwnedVerdictComparesTheValueAsWritten(t *testing.T) {
 	script := passVariantScript(t, dupContributors)
 	for _, c := range []struct{ name, value string }{
@@ -1807,6 +1809,14 @@ func TestForkPass_OwnedVerdictComparesTheValueAsWritten(t *testing.T) {
 		{"a tab", "a\tb"},
 		{"a carriage return", "a\rb"},
 		{"a newline", "a\nb"},
+		{"a trailing newline", "a\n"},
+		{"an empty string", ""},
+		{"only whitespace", " \t "},
+		{"unicode", "caf\u00e9 \u65e5\u672c \U0001F642"},
+		{"a trailing backslash", `a\`},
+		{"a backslash and an n", `a\nb`},
+		{"a trailing x, the sentinel's own letter", "ax"},
+		{"a leading dash", "-n"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newAfterShim(t, afterProdStores())
@@ -1817,15 +1827,48 @@ func TestForkPass_OwnedVerdictComparesTheValueAsWritten(t *testing.T) {
 			if code != 0 {
 				t.Errorf("exit %d, want 0: the value was written and re-read as given; output = %q", code, clip(out))
 			}
+			if !strings.Contains(out, "gateway.GATEWAY_DUP_NAME confirmed") {
+				t.Errorf("no confirmation line for the name; output = %q", clip(out))
+			}
 		})
 	}
 }
 
-func TestForkPass_OwnedVerdictStillFailsOnADifferentBackslashValue(t *testing.T) {
+// The re-read bent to a value that is nearly the written one must fail: the comparison stays exact
+// where it now carries backslashes, newlines and empty values.
+func TestForkPass_OwnedVerdictFailsWhenTheReReadDiffers(t *testing.T) {
 	script := passVariantScript(t, dupContributors)
-	s := newAfterShim(t, afterProdStores())
-	out, code := runVariant(t, s, script, `x\y`, `x\z`, "dup_a", "dup_b")
-	if code != 1 || !strings.Contains(errorLines(out), "reads a different value after the write") {
-		t.Errorf("exit %d, want 1 with a different-value verdict; output = %q", code, clip(out))
+	const different, empty = "reads a different value after the write", "is empty after the write"
+	for _, c := range []struct{ name, written, reRead, verdict string }{
+		{"another backslash value", `x\y`, `x\z`, different},
+		{"a doubled backslash, the @tsv form", `x\y`, `x\\y`, different},
+		{"a dropped backslash", `x\y`, "xy", different},
+		{"a lost trailing newline", "a\n", "a", different},
+		{"an added trailing newline", "a", "a\n", different},
+		{"a tab read as a space", "a\tb", "a b", different},
+		{"a shortened whitespace value", "  ", " ", different},
+		{"unicode read as ASCII", "caf\u00e9", "cafe", different},
+		{"a value read as empty", "x", "", empty},
+		{"an empty value read as non-empty", "", "x", different},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newAfterShim(t, afterProdStores())
+			reRead, err := json.Marshal(c.reRead)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.bendReRead(t, sentrySvcID("gateway"), `.GATEWAY_DUP_NAME = `+string(reRead))
+			out, code := runVariant(t, s, script, c.written, c.written, "dup_a")
+			if got, ok := passWritten(passWrites(t, s), sentrySvcID("gateway"), "GATEWAY_DUP_NAME"); !ok || got != c.written {
+				t.Fatalf("control: written %q (present %t), want %q", got, ok, c.written)
+			}
+			if code != 1 {
+				t.Errorf("exit %d, want 1: the re-read differs; output = %q", code, clip(out))
+			}
+			requireNamedIn(t, errorLines(out), "gateway.GATEWAY_DUP_NAME", c.verdict)
+			if strings.Contains(out, "gateway.GATEWAY_DUP_NAME confirmed") {
+				t.Errorf("the name was confirmed against a different re-read; output = %q", clip(out))
+			}
+		})
 	}
 }

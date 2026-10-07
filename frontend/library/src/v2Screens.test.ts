@@ -3,9 +3,11 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { Home } from './components/Home'
 import { GroupPage } from './components/GroupPage'
+import { Player } from './components/Player'
 import { SceneView } from './components/SceneView'
 import { COMING_SOON_IDS, FEATURES, GROUPS } from './content'
 import { Icon } from './icons'
+import { START, type Clock } from './player'
 import { sceneState, thumbStep } from './scene'
 import type { Scene } from './types'
 
@@ -676,5 +678,93 @@ describe('library scenes', () => {
     const toggled = draw({ ...(scenes[4] as Extract<Scene, { kind: 'toggles' }>), rows: [['T', 'd', true]] }, 0, 'thumb')
     expect(where(toggled, (s) => s.transform === 'translateX(12px)')).toHaveLength(1)
     expect(where(toggled, (s) => s.background === 'var(--primary)' && s.width === '26px')).toHaveLength(1)
+  })
+})
+
+const FEATURE = (id: string) => FEATURES.find((f) => f.id === id)!
+const playerEl = (id: string, clock: Clock, onToggle = noop, onSeek: (f: number) => void = noop) =>
+  Player({ feature: FEATURE(id), clock, onToggle, onSeek }) as ReactElement
+const playerView = (id: string, clock: Clock) => parse(renderToStaticMarkup(playerEl(id, clock)))
+const walk = (n: ReactNode, out: ReactElement<Record<string, unknown>>[] = []) => {
+  if (Array.isArray(n)) n.forEach((c) => walk(c, out))
+  else if (n && typeof n === 'object' && 'props' in n) {
+    out.push(n as ReactElement<Record<string, unknown>>)
+    walk((n as ReactElement<{ children?: ReactNode }>).props.children, out)
+  }
+  return out
+}
+const inButton = (ts: Tag[]) => ts.slice(ts.indexOf(only(ts, 'button')) + 1).filter((t) => t.name === 'svg')
+const PAUSED: Clock = { tenths: 34, playing: false, ended: false }
+
+describe('library player', () => {
+  it('PL-01 the player frame, window and scene box', () => {
+    const ts = playerView('import-files', START)
+    expect(style(ts[0])).toMatchObject({ 'border-radius': '10px', background: 'var(--surface)', 'box-shadow': 'var(--shadow-elegant)' })
+    expect(style(ts[1])).toMatchObject({ padding: '28px 28px 0' })
+    expect(style(ts[2])).toMatchObject({ 'border-radius': '8px', background: 'var(--card)' })
+    const bar = where(ts, (s) => s.height === '36px')
+    expect(bar).toHaveLength(1)
+    const dots = where(ts, (s) => s.width === '9px' && s.height === '9px')
+    expect(dots).toHaveLength(3)
+    dots.forEach((d) => expect(style(d).background).toBe('var(--input)'))
+    const win = withText(ts, 'Import · sahara-foods-june.csv')
+    expect(attr(win, 'class')).toBe('mono')
+    expect(style(win)['font-size']).toBe('11px')
+    const box = where(ts, (s) => s.height === '350px')
+    expect(box).toHaveLength(1)
+    expect(style(box[0])).toMatchObject({ padding: '20px 22px', overflow: 'hidden' })
+  })
+
+  it('PL-02 the caption shows the step number and caption under the window', () => {
+    const ts = playerView('import-files', PAUSED)
+    const num = withText(ts, '02 / 04')
+    expect(attr(num, 'class')).toBe('mono')
+    expect(style(num)).toMatchObject({ 'font-size': '12px', color: 'var(--accent)' })
+    const cap = withText(ts, 'Columns are matched to invoice fields')
+    expect(style(cap)).toMatchObject({ 'font-size': '16px', 'font-weight': '600', color: 'var(--surface-foreground)' })
+    const row = where(ts, (s) => s['min-height'] === '66px')
+    expect(row).toHaveLength(1)
+    expect(ts.indexOf(row[0])).toBeGreaterThan(ts.indexOf(where(ts, (s) => s.height === '350px')[0]))
+  })
+
+  it('PL-03 the controls show state, time, progress and ticks', () => {
+    const playing = playerView('import-files', { tenths: 34, playing: true, ended: false })
+    const btn = only(playing, 'button')
+    expect(attr(btn, 'aria-label')).toBe('Play or pause')
+    expect(style(btn)).toMatchObject({ width: '40px', height: '40px', background: 'var(--accent)' })
+    expect(where(playing, (s) => s.width === '4px' && s.height === '14px')).toHaveLength(2)
+    expect(inButton(playing)).toHaveLength(0)
+    const time = withText(playing, '0:03 / 0:13')
+    expect(style(time)).toMatchObject({ width: '82px', color: 'var(--surface-body)' })
+    expect(where(playing, (s) => s.background === 'var(--accent)' && s.transition === 'width 100ms linear').map((t) => style(t).width)).toEqual(['25%'])
+    const ticks = where(playing, (s) => s.width === '2px' && s.background === 'var(--surface)')
+    expect(ticks.map((t) => style(t).left)).toEqual(['25%', '50%', '75%'])
+
+    const paused = playerView('import-files', PAUSED)
+    expect(inButton(paused).map((t) => attr(t, 'width'))).toEqual(['16'])
+    expect(renderToStaticMarkup(playerEl('import-files', PAUSED))).toContain(renderToStaticMarkup(createElement(Icon, { name: 'play', size: 16 })))
+
+    const ended = { tenths: 136, playing: false, ended: true }
+    const done = playerView('import-files', ended)
+    expect(inButton(done).map((t) => attr(t, 'width'))).toEqual(['16'])
+    expect(renderToStaticMarkup(playerEl('import-files', ended))).toContain(renderToStaticMarkup(createElement(Icon, { name: 'rotate-cw', size: 16 })))
+    expect(where(done, (s) => s.transition === 'width 100ms linear').map((t) => style(t).width)).toEqual(['100%'])
+
+    const three = playerView('create-invoice', START)
+    expect(where(three, (s) => s.width === '2px' && s.background === 'var(--surface)')).toHaveLength(2)
+  })
+
+  it('PL-04 the play button toggles and the scrub seeks to the click fraction', () => {
+    let toggled = 0
+    let sought: number | null = null
+    const els = walk(playerEl('import-files', START, () => { toggled++ }, (f) => { sought = f }))
+    const play = els.filter((e) => e.type === 'button')
+    expect(play).toHaveLength(1)
+    ;(play[0].props.onClick as () => void)()
+    expect(toggled).toBe(1)
+    const scrub = els.filter((e) => e.props.id === 'lib-scrub')
+    expect(scrub).toHaveLength(1)
+    ;(scrub[0].props.onClick as (e: unknown) => void)({ currentTarget: { getBoundingClientRect: () => ({ left: 100, width: 400 }) }, clientX: 300 })
+    expect(sought).toBe(0.5)
   })
 })

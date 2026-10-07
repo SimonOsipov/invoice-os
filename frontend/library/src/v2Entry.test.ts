@@ -5,11 +5,13 @@ import { fileURLToPath } from 'node:url'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { GROUPS } from './content'
+import { FEATURES, GROUPS } from './content'
 import { Home } from './components/Home'
 import { JourneyStepper } from './components/JourneyStepper'
+import { Player } from './components/Player'
 import { Sidebar } from './components/Sidebar'
 import { GLYPHS } from './icons'
+import { START } from './player'
 import { parseLibraryPath } from './route'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -164,5 +166,14 @@ describe('library entry', () => {
     expect(Object.keys(kf).sort()).toEqual(['libFade', 'libPop'])
     expect(kf.libPop).toEqual({ from: { opacity: '0', transform: 'translateY(6px)' }, to: { opacity: '1', transform: 'none' } })
     expect(kf.libFade).toEqual({ from: { opacity: '0' }, to: { opacity: '1' } })
+  })
+
+  it('VE-09 the play button hover is a rule in library.css', () => {
+    const rs = rules(read(join(HERE, 'styles/library.css')))
+    expect(ruleFor(rs, '.lib-play:hover').filter).toBe('brightness(1.06)')
+    const feature = FEATURES.find((f) => f.id === 'import-files')!
+    const html = renderToStaticMarkup(createElement(Player, { feature, clock: START, onToggle: () => {}, onSeek: () => {} }))
+    const buttons = [...html.matchAll(/<button\b([^>]*)>/g)].map((m) => m[1].match(/class="([^"]*)"/)?.[1])
+    expect(buttons).toEqual(['lib-play'])
   })
 })

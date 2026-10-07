@@ -4,7 +4,11 @@ import { describe, expect, it } from 'vitest'
 import { Button } from './components/Button'
 import { ComingSoonPill } from './components/ComingSoonPill'
 import { Logo } from './components/Logo'
+import { JourneyStepper } from './components/JourneyStepper'
+import { Sidebar } from './components/Sidebar'
+import { GROUPS, STAGES } from './content'
 import { GLYPHS, Icon } from './icons'
+import { parseLibraryPath, type Route } from './route'
 
 type Tag = { name: string; attrs: string; text: string }
 const attr = (t: { attrs: string }, name: string) => t.attrs.match(new RegExp(`\\s${name}="([^"]*)"`))?.[1]
@@ -125,6 +129,228 @@ describe('library shell primitives', () => {
       background: 'var(--on-dark-10)',
       color: 'var(--surface-foreground)',
       border: '1px solid var(--on-dark-20)',
+    })
+  })
+
+  const noop = () => {}
+  const sidebar = (route: Route, demoHref: string | null = null) =>
+    render(createElement(Sidebar, { route, demoHref, onHome: noop, onGroup: noop, onFeature: noop, onTour: noop }))
+  const stepper = (route: Route) => render(createElement(JourneyStepper, { route, onGroup: noop }))
+  const home: Route = { view: 'home' }
+  const esc = (t: string) => t.replace(/&/g, '&amp;')
+  const byId = (ts: Tag[], id: string) => {
+    const hit = ts.filter((t) => attr(t, 'id') === id)
+    expect(hit, `exactly one #${id}`).toHaveLength(1)
+    return hit[0]
+  }
+  const after = (ts: Tag[], t: Tag, name: string, n = 1) => ts.slice(ts.indexOf(t) + 1).filter((x) => x.name === name)[n - 1]
+  // The feature button holding `title`, for a shipped (text in button) or Coming soon (text in span) row.
+  const featBtn = (ts: Tag[], title: string) => {
+    const t = withText(ts, esc(title))
+    return t.name === 'button' ? t : ts.slice(0, ts.indexOf(t)).reverse().find((x) => x.name === 'button')!
+  }
+  const buttons = (ts: Tag[]) => ts.filter((t) => t.name === 'button')
+
+  it('SH-07 the sidebar head holds the logo, the LIBRARY tag and the tour button', () => {
+    const ts = sidebar(home, 'https://l.example/?demo')
+    const aside = only(ts, 'aside')
+    expect(attr(aside, 'class')).toBe('asc-dark')
+    expect(style(aside)).toMatchObject({ width: '288px', background: 'var(--surface)' })
+    expect(style(withText(ts, 'LIBRARY'))).toMatchObject({ 'font-size': '9px', border: '1px solid var(--action)' })
+    const tour = withText(ts, 'Take the tour')
+    expect(tour.name).toBe('span')
+    const tourBtn = ts.slice(0, ts.indexOf(tour)).reverse().find((t) => t.name === 'button')!
+    expect(style(tourBtn)).toMatchObject({ height: '42px', background: 'var(--accent)', color: 'var(--accent-foreground)' })
+    const svg = after(ts, tourBtn, 'svg')
+    expect([attr(svg, 'width'), attr(svg, 'height')]).toEqual(['15', '15'])
+    expect(ts.filter((t) => t.text === 'Take the tour')).toHaveLength(1)
+    const head = ts[ts.indexOf(aside) + 1]
+    expect(style(head)).toMatchObject({
+      padding: '18px 16px 16px',
+      gap: '16px',
+      'border-bottom': '1px solid var(--line-1)',
+    })
+    const foot = ts.filter((t) => t.name === 'div' && style(t)['border-top'] === '1px solid var(--line-1)')
+    expect(foot).toHaveLength(1)
+    expect(style(foot[0]).padding).toBe('14px 16px 16px')
+  })
+
+  it('SH-08 the nav lists the 11 groups in order with their counts', () => {
+    const ts = sidebar(home)
+    expect(style(withText(ts, 'FEATURE GROUPS'))).toMatchObject({
+      padding: '16px 10px 8px',
+      'font-size': '10px',
+      'letter-spacing': '0.1em',
+      color: 'var(--fg-4)',
+    })
+    expect(style(only(ts, 'nav'))).toMatchObject({ padding: '12px 10px', gap: '2px', 'overflow-y': 'auto' })
+    const ids = ts.filter((t) => attr(t, 'id')?.startsWith('nav-')).map((t) => attr(t, 'id'))
+    expect(ids).toEqual(GROUPS.map((g) => `nav-${g.id}`))
+    expect(GROUPS.map((g) => g.feats.length)).toEqual([3, 3, 3, 2, 2, 2, 2, 3, 2, 2, 2])
+    const rowStyle = { padding: '9px 10px', 'border-radius': '6px', 'font-size': '13.5px', gap: '11px' }
+    const overview = ts.slice(0, ts.indexOf(withText(ts, 'Overview'))).reverse().find((t) => t.name === 'button')!
+    expect(style(overview)).toMatchObject({ ...rowStyle, background: 'var(--surface-panel)' })
+    expect(attr(after(ts, overview, 'svg'), 'width')).toBe('17')
+    for (const g of GROUPS) {
+      const b = byId(ts, `nav-${g.id}`)
+      expect(style(b), g.id).toMatchObject(rowStyle)
+      expect(attr(after(ts, b, 'svg'), 'width')).toBe('17')
+      expect(after(ts, b, 'span').text).toBe(esc(g.name))
+      const count = after(ts, b, 'span', 2)
+      expect(count.text).toBe(String(g.feats.length))
+      expect(attr(count, 'class')).toBe('mono')
+      expect(style(count)).toMatchObject({ 'font-size': '11px', color: 'var(--fg-4)' })
+    }
+    for (const g of GROUPS) for (const f of g.feats) expect(ts.some((t) => t.text === esc(f.title)), f.title).toBe(false)
+  })
+
+  it("SH-09 the route's group is active and expanded, the others are not", () => {
+    const g = GROUPS.find((x) => x.id === 'recognition')!
+    const ts = sidebar(parseLibraryPath('/recognition'))
+    expect(style(byId(ts, 'nav-recognition'))).toMatchObject({
+      background: 'var(--surface-panel)',
+      color: 'var(--fg-1)',
+      'font-weight': '700',
+    })
+    expect(style(byId(ts, 'nav-invoices'))).toMatchObject({
+      background: 'transparent',
+      color: 'var(--fg-3)',
+      'font-weight': '600',
+    })
+    const list = ts.filter((t) => t.name === 'div' && style(t)['border-left'] === '1px solid var(--line-2)')
+    expect(list).toHaveLength(1)
+    expect(style(list[0])).toMatchObject({ margin: '2px 0 6px 20px', 'padding-left': '12px', gap: '1px' })
+    for (const f of g.feats) {
+      const b = featBtn(ts, f.title)
+      expect(style(b), f.title).toMatchObject({
+        padding: '6px 9px',
+        'font-size': '12.5px',
+        'line-height': '1.35',
+        'border-radius': '5px',
+      })
+    }
+    for (const other of GROUPS.filter((x) => x.id !== 'recognition'))
+      for (const f of other.feats) expect(ts.some((t) => t.text === esc(f.title)), f.title).toBe(false)
+    const overview = ts.slice(0, ts.indexOf(withText(ts, 'Overview'))).reverse().find((t) => t.name === 'button')!
+    expect(style(overview).background).toBe('transparent')
+  })
+
+  it("SH-10 the route's feature is marked inside its group", () => {
+    const ts = sidebar(parseLibraryPath('/recognition/review-fields'))
+    expect(style(featBtn(ts, 'Review low-confidence fields'))).toMatchObject({
+      background: 'var(--on-dark-10)',
+      color: 'var(--accent)',
+      'font-weight': '700',
+    })
+    expect(style(featBtn(ts, 'Read PDFs and scans'))).toMatchObject({
+      background: 'transparent',
+      color: 'var(--fg-3)',
+      'font-weight': '500',
+    })
+    expect(style(byId(ts, 'nav-recognition'))).toMatchObject({ background: 'var(--surface-panel)', 'font-weight': '700' })
+  })
+
+  it('SH-11 a Coming soon feature carries the pill in the sidebar', () => {
+    const pills = (path: string) => sidebar(parseLibraryPath(path)).filter((t) => t.text === 'Coming soon')
+    const notif = sidebar(parseLibraryPath('/notifications'))
+    const soon = GROUPS.find((g) => g.id === 'notifications')!.feats
+    expect(soon.every((f) => f.status === 'soon')).toBe(true)
+    expect(notif.filter((t) => t.text === 'Coming soon')).toHaveLength(2)
+    expect(pills('/invoices')).toHaveLength(0)
+
+    const rec = sidebar(parseLibraryPath('/recognition'))
+    expect(rec.filter((t) => t.text === 'Coming soon')).toHaveLength(1)
+    const title = withText(rec, 'Corrections teach the reader')
+    const pill = rec[rec.indexOf(title) + 1]
+    expect(pill.text).toBe('Coming soon')
+    expect(style(pill)).toMatchObject({ background: 'var(--on-dark-10)', flex: 'none' })
+    expect(style(title)).toMatchObject({ flex: '1 1 auto', 'min-width': '0' })
+    expect(style(featBtn(rec, 'Corrections teach the reader'))).toMatchObject({
+      display: 'flex',
+      'align-items': 'center',
+      'justify-content': 'space-between',
+      gap: '8px',
+    })
+    expect(style(featBtn(rec, 'Read PDFs and scans'))).not.toHaveProperty('display')
+  })
+
+  it('SH-12 Book the Demo is the outlineDark link, or absent', () => {
+    const ts = sidebar(home, 'https://l.example/?demo')
+    const a = withText(ts, 'Book the Demo')
+    expect(a.name).toBe('a')
+    expect(attr(a, 'class')).toContain('ds-btn--outlineDark')
+    expect(attr(a, 'class')).toContain('ds-btn--sm')
+    expect(attr(a, 'href')).toBe('https://l.example/?demo')
+    expect(style(a).width).toBe('100%')
+    expect(ts.filter((t) => style(t)['border-top'] === '1px solid var(--line-1)')).toHaveLength(1)
+
+    const none = sidebar(home, null)
+    expect(none.some((t) => t.text === 'Book the Demo')).toBe(false)
+    expect(none.some((t) => t.name === 'a')).toBe(false)
+    expect(none.some((t) => style(t)['border-top'] !== undefined)).toBe(false)
+  })
+
+  it('SH-13 the stepper shows the 6 stages with a chevron between each', () => {
+    const ts = stepper(home)
+    withText(ts, 'INVOICE JOURNEY')
+    const stages = buttons(ts)
+    expect(stages).toHaveLength(6)
+    const label = (b: Tag) => `${after(ts, b, 'span').text} ${after(ts, b, 'span', 2).text}`
+    expect(stages.map(label)).toEqual(STAGES.map(([l], i) => `0${i + 1} ${l}`))
+    expect(stages.map(label)).toEqual(['01 Import', '02 Extract', '03 Validate', '04 Approve', '05 Clear', '06 Archive'])
+    for (const b of stages) {
+      expect(style(b)).toMatchObject({
+        border: '1px solid transparent',
+        color: 'var(--muted-foreground)',
+        gap: '7px',
+        padding: '6px 10px',
+        'font-size': '12.5px',
+        'font-weight': '700',
+        'border-radius': '6px',
+      })
+      expect(style(after(ts, b, 'span'))).toMatchObject({ 'font-size': '10px', opacity: '0.7' })
+      expect(attr(after(ts, b, 'span'), 'class')).toBe('mono')
+    }
+    const svgs = ts.filter((t) => t.name === 'svg')
+    expect(svgs).toHaveLength(5)
+    for (const s of svgs) expect(attr(s, 'width')).toBe('14')
+    expect(ts.filter((t) => t.name === 'path' && attr(t, 'd') === 'm9 18 6-6-6-6')).toHaveLength(5)
+    const wrappers = ts.filter((t) => t.name === 'span' && style(t).color === 'var(--input)')
+    expect(wrappers).toHaveLength(5)
+    expect(style(withText(ts, 'INVOICE JOURNEY'))).toMatchObject({ 'margin-right': '10px', 'font-size': '10px' })
+  })
+
+  it("SH-14 the active stage follows the route's group", () => {
+    const active = (route: Route) =>
+      buttons(stepper(route)).map((b) => style(b).background === 'var(--sage-panel)')
+    STAGES.forEach(([, gid], i) => {
+      const ts = stepper(parseLibraryPath(`/${gid}`))
+      const bs = buttons(ts)
+      expect(active(parseLibraryPath(`/${gid}`)), gid).toEqual(STAGES.map((_, j) => j === i))
+      expect(style(bs[i])).toMatchObject({
+        border: '1px solid var(--tab-active-border)',
+        color: 'var(--tab-active-text)',
+      })
+      for (const [j, b] of bs.entries())
+        if (j !== i) expect(style(b)).toMatchObject({ border: '1px solid transparent', color: 'var(--muted-foreground)' })
+    })
+    expect(active(parseLibraryPath('/clearance/submit-clear'))).toEqual([false, false, false, false, true, false])
+    expect(active(parseLibraryPath('/reports'))).toEqual(Array(6).fill(false))
+    expect(active(home)).toEqual(Array(6).fill(false))
+  })
+
+  it('SH-15 the stepper bar is sticky over a blurred header', () => {
+    const bar = stepper(home)[0]
+    expect(style(bar)).toMatchObject({
+      position: 'sticky',
+      top: '0',
+      'z-index': '20',
+      'min-height': '64px',
+      padding: '8px 40px',
+      background: 'var(--header-bg)',
+      'backdrop-filter': 'blur(18px)',
+      '-webkit-backdrop-filter': 'blur(18px)',
+      'border-bottom': '1px solid var(--header-border)',
     })
   })
 })

@@ -2,9 +2,14 @@
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { GROUPS } from './content'
+import { JourneyStepper } from './components/JourneyStepper'
+import { Sidebar } from './components/Sidebar'
 import { GLYPHS } from './icons'
+import { parseLibraryPath } from './route'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const read = (p: string) => readFileSync(p, 'utf8')
@@ -89,5 +94,29 @@ describe('library entry', () => {
     )
     expect(colored.length).toBeGreaterThanOrEqual(6)
     for (const r of colored) for (const sel of r.selector.split(',')) expect(outranks(specificity(sel.trim()), base), sel).toBe(true)
+  })
+
+  it('VE-05 the prototype hover states are rules in library.css', () => {
+    const rs = rules(read(join(HERE, 'styles/library.css')))
+    expect(ruleFor(rs, '.lib-nav:hover').background).toBe('var(--surface-panel) !important')
+    expect(ruleFor(rs, '.lib-tour:hover').filter).toBe('brightness(1.06)')
+    expect(ruleFor(rs, '.lib-stage:hover').background).toBe('var(--sage-panel) !important')
+
+    const noop = () => {}
+    const classes = (html: string, tag: string) =>
+      [...html.matchAll(new RegExp(`<${tag}\\b([^>]*)>`, 'g'))].map((m) => m[1].match(/class="([^"]*)"/)?.[1] ?? '')
+    const side = (path: string) =>
+      renderToStaticMarkup(
+        createElement(Sidebar, { route: parseLibraryPath(path), demoHref: null, onHome: noop, onGroup: noop, onFeature: noop, onTour: noop }),
+      )
+    const buttons = (html: string) => classes(html, 'button')
+    const homeHtml = side('/')
+    expect(buttons(homeHtml).filter((c) => c === 'lib-tour')).toHaveLength(1)
+    expect(buttons(homeHtml).filter((c) => c === 'lib-nav')).toHaveLength(12)
+    const groupHtml = side('/invoices')
+    expect(buttons(groupHtml).filter((c) => c === 'lib-nav')).toHaveLength(12 + 3)
+    expect(buttons(side('/invoices/import-files')).filter((c) => c === 'lib-nav')).toHaveLength(12 + 3)
+    const stages = buttons(renderToStaticMarkup(createElement(JourneyStepper, { route: parseLibraryPath('/'), onGroup: noop })))
+    expect(stages).toEqual(Array(6).fill('lib-stage'))
   })
 })

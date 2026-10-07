@@ -19,3 +19,8 @@ a:hover { color: var(--teal); }
 .asc-app .ds-btn--outline:hover { background: var(--muted); color: var(--ink); }
 .asc-app .ds-btn--outlineDark { background: transparent; color: var(--surface-foreground); border: 1px solid var(--on-dark-20); }
 .asc-app .ds-btn--outlineDark:hover { background: var(--on-dark-10); color: var(--surface-foreground); }
+
+/* Prototype style-hover states. !important where the resting value is inline. */
+.lib-nav:hover { background: var(--surface-panel) !important; }
+.lib-tour:hover { filter: brightness(1.06); }
+.lib-stage:hover { background: var(--sage-panel) !important; }

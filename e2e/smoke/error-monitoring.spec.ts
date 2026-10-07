@@ -38,6 +38,7 @@ const TARGETS: {
   },
   { name: 'ops-console', url: () => resolveTarget('OPS_CONSOLE_URL'), console: 'ops', mainView: mainViewOf('ops-console') },
   { name: 'support-console', url: () => resolveTarget('SUPPORT_CONSOLE_URL'), console: 'support', mainView: mainViewOf('support-console') },
+  { name: 'library', url: () => resolveTarget('LIBRARY_URL'), mainView: mainViewOf('library') },
 ]
 
 for (const target of TARGETS) {

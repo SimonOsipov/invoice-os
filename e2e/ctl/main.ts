@@ -27,7 +27,7 @@ export const HELP: Record<'ctl' | 'env' | 'login' | 'measure', string> = {
   ctl: `Usage: ctl <command> [options]
 
 Commands:
-  env      Resolve the five service URLs of a Railway environment and report dark domains
+  env      Resolve the six service URLs of a Railway environment and report dark domains
   login    Sign in as a demo persona on a PR environment and save a browser storage state
   measure  Report the box and computed styles of every element matching a selector
 
@@ -37,7 +37,7 @@ Example: ${CTL} env pr-348`,
   env: `Usage: ctl env <pr-N|production>
 
 Prints { env, environmentId, urls, dark }. urls holds GATEWAY_URL, APP_URL, LANDING_URL,
-OPS_CONSOLE_URL and SUPPORT_CONSOLE_URL. A dark domain exits 1 and is listed in dark.
+OPS_CONSOLE_URL, SUPPORT_CONSOLE_URL and LIBRARY_URL. A dark domain exits 1 and is listed in dark.
 Needs a Railway CLI login (~/.railway/config.json).
 Example: ${CTL} env pr-348`,
   login: `Usage: ctl login <firm|inhouse|developer|support> --env <pr-N> [--role admin|preparer|reviewer] [--session S]

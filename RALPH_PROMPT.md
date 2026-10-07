@@ -300,7 +300,7 @@ Spawn `product-qa-spec` (Mode B) with the acceptance criteria, the plan, the Def
   An AC item with no row is a QA failure. A Playwright spec cannot replay locally: cite its assertion for Phase 3.5 and write no row.
 - **Assert a collection is non-empty** before asserting over its items.
 - **Source scans:** the QA agent's rules "A source scan is the last resort" and "Never test a test" apply. A source scan also needs a `## Decisions` entry that names the failure no runtime test can observe.
-- **Pinned surprise:** report each test that asserts behaviour a user would call wrong. Give its name, what the user does, what the user sees, and why the behaviour stays.
+- **Pinned surprise:** report each test that asserts behaviour a user would call wrong. Give its name, what the user does, what the user sees, and why the behaviour stays, in plain words.
 - **Every source scan** (a grep, a source walk, a forbidden-string guard, a site count):
   1. strips comments before it matches (TypeScript: `stripComments` from `@invoice-os/api-client/strip-comments`; Go: `go/ast` or strip first);
   2. reads only the function or block it guards, not the whole file;
@@ -434,7 +434,7 @@ An agent parses these instructions with no one to ask. Write for that reader.
 1. Both gates green on the PR head (Core Rule 3). Local tests green ≠ done.
 2. Subtask status: todo → doing (its first stage starts) → done (its QA Verify passes).
 3. Output `<promise>ALL_TASKS_COMPLETE</promise>` only after Phase 3.5 passes and every subtask is `done`.
-4. A story that changes a sign-up, invite, verify or reset flow owes one walk-through. It runs on the deployed build with a real mail client. It lists the exact steps. Phase 3.5 step 7 lists it. Global `CLAUDE.md` rule 5, "Audit the Surface", defines done for surface work.
+4. A story that changes a sign-up, invite, verify or reset flow owes one walk-through. It runs on the deployed build with a real mail client. The story lists its exact steps. Global `CLAUDE.md` rule 5, "Audit the Surface", defines done for surface work.
 
 ## Anti-Patterns
 

@@ -75,29 +75,35 @@ export default function App() {
   const [consent, setConsent] = useState<ConsentRecord | null>(() => readConsent())
   // Once a choice is stored the footer control is the only route back to the notice.
   const [reopened, setReopened] = useState(false)
+  // Counts window opens, so a sign-in preflight that settles after one can tell it is stale.
+  const windowsOpened = useRef(0)
   // Source-bound per call site: the components keep `onBookDemo: () => void`, so this file carries the attribution.
   const book = (source: DemoCtaSource) => () => {
     trackDemoOpen(source)
+    windowsOpened.current++
     setDemoOpen(true)
   }
   // The one opener (consentActions.test.ts AC-13).
   const openSignIn = (view: 'sign-in' | 'forgot') => {
+    windowsOpened.current++
     setSignInView(view)
     setSignInOpen(true)
   }
   const bouncing = useRef(false)
-  // The click decides: a live state opens the form, otherwise the app issues one. A second click mid-preflight is ignored.
+  // The click decides: a live state opens the form, otherwise the app issues one.
+  // The flag holds after a successful bounce until unload (or a bfcache restore); a stale or failed one clears it.
   const onSignIn = async () => {
     if (heldState() || !signInConfigured()) return openSignIn('sign-in')
     if (bouncing.current) return
     bouncing.current = true
-    try {
-      if (await bounceToStart(signInBoot.consoleTarget ?? undefined)) return
-      setSignInError(SIGN_IN_UNAVAILABLE)
-      openSignIn('sign-in')
-    } finally {
-      bouncing.current = false
-    }
+    const seen = windowsOpened.current
+    const stale = () => windowsOpened.current !== seen
+    const bounced = await bounceToStart(signInBoot.consoleTarget ?? undefined, stale)
+    if (bounced) return
+    bouncing.current = false
+    if (stale()) return
+    setSignInError(SIGN_IN_UNAVAILABLE)
+    openSignIn('sign-in')
   }
   const onCreateAccount = registrationOpen()
     ? () => {
@@ -110,7 +116,9 @@ export default function App() {
 
   useEffect(() => {
     const onShow = (e: PageTransitionEvent) => {
-      if (e.persisted) setStateDropped(true)
+      if (!e.persisted) return
+      setStateDropped(true)
+      bouncing.current = false
     }
     window.addEventListener('pageshow', onShow)
     return () => window.removeEventListener('pageshow', onShow)

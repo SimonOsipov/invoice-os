@@ -261,8 +261,8 @@ describe('the entries', () => {
     const signIn = document.querySelector<HTMLElement>(DIALOG)!
     const link = byText(signIn, CREATE)
     expect(link, 'expected the link in the sign-in window').toBeDefined()
-    const form = signIn.querySelector('form') ?? byText(signIn, 'Continue with email')
-    expect(form, 'control: the sign-in form (or its bounce) is in the window').toBeTruthy()
+    const form = signIn.querySelector('form')
+    expect(form, 'control: the sign-in form is in the window').toBeTruthy()
     expect(form!.compareDocumentPosition(link!) & Node.DOCUMENT_POSITION_FOLLOWING, 'the link sits under the sign-in form').toBeTruthy()
     expect(link!.parentElement!.textContent).toContain('New to ASComply?')
     expect(signIn.querySelector('[data-testid="persona-picker"]'), 'no persona picker in the window').toBeNull()

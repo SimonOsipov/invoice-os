@@ -172,6 +172,10 @@ describe('F1a: the held state expires 9 minutes after boot', () => {
     expect(nav.assigned).toEqual([START])
     expect(document.querySelectorAll(DIALOG).length).toBe(0)
     await advance(60 * 1000)
+    // The first bounce left the page; a Back restore lets the next click bounce again.
+    await act(async () => {
+      window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))
+    })
     await openFromNav()
     expect(nav.assigned).toEqual([START, START])
     expect(posts()).toEqual([])

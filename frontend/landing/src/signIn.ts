@@ -65,8 +65,9 @@ export function startUrl(target?: ConsoleTarget): string | null {
 
 export const PREFLIGHT_MS = 3000
 
+// `stale` drops the result after the preflight: no navigation, returns false.
 // Preflight so a dead app origin shows SIGN_IN_UNAVAILABLE instead of a browser error page.
-export async function bounceToStart(target?: ConsoleTarget): Promise<boolean> {
+export async function bounceToStart(target?: ConsoleTarget, stale?: () => boolean): Promise<boolean> {
   const base = target ? consoleBase(target) : appBase()
   const url = startUrl(target)
   if (!base || !url) return false
@@ -80,6 +81,7 @@ export async function bounceToStart(target?: ConsoleTarget): Promise<boolean> {
   } finally {
     clearTimeout(timer)
   }
+  if (stale?.()) return false
   window.location.href = url
   return true
 }

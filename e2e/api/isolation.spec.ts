@@ -6,7 +6,7 @@
 //   AC1 identity    — each token's /me resolves EXACTLY its own seeded tenant + domain
 //                      role, never the other's.
 //   AC2 membership  — each token's /memberships lists EXACTLY its own tenant's seeded members
-//                      (plus at most its e2e member), never the other tenant's subject.
+//                      (plus its e2e role accounts), never the other tenant's subject.
 //   AC3 mutation    — firm A cannot read/update/offboard an entity firm B owns (and
 //                      symmetrically), and the failure mode is 404 (RLS row-invisibility),
 //                      NOT 403 (auth/authz) — Decision A9.
@@ -37,7 +37,7 @@ import {
 import { freshTin } from './fixtures'
 import { assertErrorEnvelope, ensureFirmPolicyActive } from './contract-helpers'
 import { TENANTS } from '../topology/targets'
-import { e2eMember, isSeededMember } from '../realAccounts'
+import { isE2eMemberEmail, isSeededMember } from '../realAccounts'
 
 // captureRejection(): mirrors packages/api-client/src/client.test.ts's helper — wraps a
 // thunk so a call that resolves (the wrong outcome here) fails loudly with a clear
@@ -96,11 +96,11 @@ test.describe('cross-tenant isolation (API E2E, over the deployed gateway)', () 
     const userIdsB = membersB.map((m) => m.user_id).sort()
 
     // Positive: the seeded subset is exactly the tenant's seeded members (A: 6, B: 7); any other
-    // member is the tenant's e2e member (realAccounts.ts), which a signInAs elsewhere may have added.
+    // member must be one of the tenant's e2e role accounts (realAccounts.ts).
     expect(userIdsA.filter(isSeededMember)).toEqual([...TENANTS.a.members].sort())
     expect(userIdsB.filter(isSeededMember)).toEqual([...TENANTS.b.members].sort())
-    for (const m of membersA.filter((m) => !isSeededMember(m.user_id))) expect(m.email, 'a non-seeded member of A').toBe(e2eMember(TENANTS.a.id).email)
-    for (const m of membersB.filter((m) => !isSeededMember(m.user_id))) expect(m.email, 'a non-seeded member of B').toBe(e2eMember(TENANTS.b.id).email)
+    for (const m of membersA.filter((m) => !isSeededMember(m.user_id))) expect(isE2eMemberEmail(TENANTS.a.id, m.email ?? ''), `a non-seeded member of A: ${m.email}`).toBe(true)
+    for (const m of membersB.filter((m) => !isSeededMember(m.user_id))) expect(isE2eMemberEmail(TENANTS.b.id, m.email ?? ''), `a non-seeded member of B: ${m.email}`).toBe(true)
 
     // Negative: neither list leaks the other tenant's subject.
     expect(userIdsA).not.toContain(PERSONAS.B.subject)

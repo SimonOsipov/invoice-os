@@ -34,9 +34,9 @@
 // COUNT ASSERTIONS: persona-surfaces.spec.ts bans literal counts over LIVE, tenant-wide lists
 // on the deployment every suite in the run shares, and permits exactly two shapes — (1) compared against a live API
 // read taken in the same test, (2) containment of rows this test itself created. The member
-// roster is exempt from the ban and stays a literal count: the seeded list cannot grow (PATCH
-// writes `status` only; a pending invite renders as `invite-row`, never `member-row`), and signInAs adds
-// exactly one e2e member (realAccounts.ts).
+// roster is exempt from the ban: the seeded list cannot grow (PATCH writes `status` only; a pending
+// invite renders as `invite-row`, never `member-row`), so its count is the seeded count plus the
+// e2e role accounts present (rosterSize).
 // workflow_roles is NOT exempt — Test 3 creates one from this very screen — so every
 // role-grid count below uses shape (1) (Test 1, Test 2, via e2e/api/client.ts's
 // listWorkflowRoles) or shape (2) (Test 3, via the created/deleted role's own locator).
@@ -71,10 +71,12 @@ import {
   listApprovalPolicies,
   listWorkflowRoles,
   login,
+  memberships,
   PERSONAS,
   rawFetch,
 } from '../api/client'
 import { browserToken, collectErrors, signInAs } from '../personaSession'
+import { E2E_MEMBER_ROLES, e2eMember } from '../realAccounts'
 import { expectedStatusDropper } from './consoleGate'
 import { enclosesRect, gaps, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import {
@@ -85,7 +87,7 @@ import {
   UNBACKED,
   type SeededMember,
 } from './settingsFixtures'
-import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
+import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA, TENANTS } from './targets'
 
 // ---------------------------------------------------------------------------------------
 // SEED role cards — derived BY HAND against db/seed.dev.sql's workflow_roles +
@@ -293,9 +295,12 @@ const FIRM_ROSTER_CELLS: readonly SeedRosterCell[] = [
 // em-dash example — the firm carries that case above.
 const INHOUSE_ROSTER_CELLS: readonly SeedRosterCell[] = [{ member: 'Ngozi Balogun', text: 'Finance Director', tooltip: 'Finance Director' }]
 
-// `pickerMembers().length` — every seeded member plus the e2e member, since none is `invited`.
-const FIRM_PICKER_SELECTABLE = SEED_FIRM_MEMBERS.length + 1
-const INHOUSE_PICKER_SELECTABLE = SEED_INHOUSE_MEMBERS.length + 1
+// Seeded rows plus the allowed e2e role accounts (E2E_MEMBER_ROLES) in the live roster; any other row breaks the count.
+async function rosterSize(page: Page, seeded: readonly SeededMember[], tenantId: string): Promise<number> {
+  const { memberships: rows } = await memberships(await browserToken(page))
+  const present = E2E_MEMBER_ROLES.filter((r) => rows.some((m) => m.email === e2eMember(tenantId, r).email))
+  return seeded.length + present.length
+}
 
 // …0004 Musa Danjuma holds TWO seats, which is what makes his drawer's pill loop a real check
 // rather than an all-false one. The drawer's step count and its policy list used to be
@@ -536,9 +541,9 @@ test('firm Settings: the live member directory, the live role grid, and every co
   // --- the roster is the SERVER's ----------------------------------------------------------
   // Members is the default tab, so this renders without a click. Six rows, each carrying an
   // email no fixture in this repo ever held — that is what makes this a live read and not a
-  // renamed mock. Plus one row: the e2e member signInAs made an admin.
+  // renamed mock.
   await expect(page.getByTestId('members-table')).toBeVisible()
-  await expect(page.getByTestId('member-row')).toHaveCount(SEED_FIRM_MEMBERS.length + 1)
+  await expect(page.getByTestId('member-row')).toHaveCount(await rosterSize(page, SEED_FIRM_MEMBERS, TENANTS.a.id))
   await expect(memberRow(page, 'E2E Firm Admin')).toHaveCount(1)
   for (const m of SEED_FIRM_MEMBERS) {
     await expectRosterRow(page, m)
@@ -671,7 +676,7 @@ test('firm Settings: the live member directory, the live role grid, and every co
   // has no row to tick, and no seeded row is invited, so the footnote that names them never
   // renders.
   await page.getByTestId('roles-new').click()
-  await expect(page.getByTestId('role-modal-count')).toHaveText(`0 of ${FIRM_PICKER_SELECTABLE} selected`)
+  await expect(page.getByTestId('role-modal-count')).toHaveText(`0 of ${await rosterSize(page, SEED_FIRM_MEMBERS, TENANTS.a.id)} selected`)
   await expect(page.getByTestId('role-modal-hidden')).toHaveCount(0)
   // Save is inert on an empty name and nothing else gates it.
   await expect(page.getByTestId('role-modal-save')).toBeDisabled()
@@ -698,7 +703,7 @@ test('in-house Settings: its own live roster, three unsignable seats, and the su
   // each token reads only its own is RLS's claim, proven at the wire in api/isolation.spec.ts
   // and rendered here.
   await expect(page.getByTestId('members-table')).toBeVisible()
-  await expect(page.getByTestId('member-row')).toHaveCount(SEED_INHOUSE_MEMBERS.length + 1)
+  await expect(page.getByTestId('member-row')).toHaveCount(await rosterSize(page, SEED_INHOUSE_MEMBERS, TENANTS.b.id))
   await expect(memberRow(page, 'E2E In-house Admin')).toHaveCount(1)
   for (const m of SEED_INHOUSE_MEMBERS) {
     await expectRosterRow(page, m)
@@ -862,7 +867,7 @@ test('in-house: a created role survives a reload, is selectable on a step this t
   await pickerRows.locator('input[type="checkbox"]').check()
   // The denominator is the SELECTABLE roster — a live search narrows the rows below it and
   // changes neither the count nor the (absent) invited footnote.
-  await expect(page.getByTestId('role-modal-count')).toHaveText(`1 of ${INHOUSE_PICKER_SELECTABLE} selected`)
+  await expect(page.getByTestId('role-modal-count')).toHaveText(`1 of ${await rosterSize(page, SEED_INHOUSE_MEMBERS, TENANTS.b.id)} selected`)
   await expect(page.getByTestId('role-modal-hidden')).toHaveCount(0)
   await page.getByTestId('role-modal-save').click()
 

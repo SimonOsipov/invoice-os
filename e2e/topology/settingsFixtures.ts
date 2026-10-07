@@ -38,9 +38,9 @@ export interface SeededMember {
 // inserted later would sort after these however it was named. The SET and its size are the
 // claim.
 //
-// The seeded list cannot grow under a spec: PATCH writes `status` only. The live roster is this list plus the tenant's e2e member
+// The seeded list cannot grow under a spec: PATCH writes `status` only. The live roster is this list plus the tenant's e2e role accounts
 // (realAccounts.ts, granted through /auth/mock/member), so a spec compares the seeded subset
-// (`isSeededMember`) exactly and counts one extra row. api/isolation.spec.ts pins the user_id set.
+// (`isSeededMember`) exactly and counts the allowed extra rows. api/isolation.spec.ts pins the user_id set.
 export const SEED_FIRM_MEMBERS: readonly SeededMember[] = [
   { name: 'Chinedu Okafor', email: 'c.okafor@okafor.ng', accessRole: 'Admin', pill: 'ACTIVE' },
   { name: 'Folake Adesina', email: 'f.adesina@okafor.ng', accessRole: 'Preparer', pill: 'ACTIVE' },

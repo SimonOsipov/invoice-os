@@ -61,7 +61,8 @@ or every topology run fails at config load.
 **A browser spec that needs an app session on a seeded tenant signs in with `signInAs(page, id, { tenantId })`**
 (`e2e/personaSession.ts`). It drives the landing "Platform login" form as the tenant's e2e member (`e2e/realAccounts.ts`:
 `e2e-member-<tenantId>@example.com`, an admin that `ensureMember` registers and admits through
-`POST /auth/mock/member`, once per worker) and waits for the app to draw. It fails a sign-in whose
+`POST /auth/mock/member`, once per worker) and waits for the app to draw. `ensureMember` also takes a role:
+`e2e-member-<tenantId>-<role>@example.com` for `preparer` and `reviewer`, which `ctl login` uses (`e2e/README.md`). It fails a sign-in whose
 stored session is not a hand-off session bound to that tenant. `tenantId` defaults to the seeded
 tenant of the kind (1111 firm, 2222 in-house); a shard passes its own.
 
@@ -128,6 +129,10 @@ What a spec still cannot assume is an empty table:
     stable e2e member (`ensureMember`, `e2e/realAccounts.ts`) registers once and
     `POST /auth/mock/member` (`internal/gateway/mockmember.go`) upserts its membership. A later
     call or push adds none, and it provisions no tenant. Only the mock build serves the route.
+  - `ctl login` (`e2e/ctl/login.ts`, agents only): per PR environment, the first call registers 8 accounts. Two are
+    the e2e admins that `signInAs` already uses (1111 and 2222) and add no rows. The other six leave 4 `auth.users` and 4 `memberships` rows
+    (preparer and reviewer on 1111 and 2222) and 2 `auth.users` and 2 `staff_members` rows (developer, support). A rebuilt environment or a retry of a failed
+    `provisionAll` re-creates the two staff accounts and adds 2 more `auth.users` and 2 more `staff_members` rows.
   - `api/invitation-accept.spec.ts` and the accept-page tests of `topology/auth.spec.ts`: each admin
     workspace leaves an `auth.users` row, a tenant and a membership, each invite an `invitations`
     row (the reset excludes `invitations`; the purge covers the demo tenants only), each invitee
@@ -136,7 +141,8 @@ What a spec still cannot assume is an empty table:
     (`internal/gateway/mockinvitation.go`) writes only the invite's token hash. Only the mock build serves it.
 
   This is harmless: every other run registers a fresh address and provisions for a fresh
-  subject, and the e2e member's rows are the same two rows on every run.
+  subject, and the e2e member rows are at most three per tenant (admin, preparer, reviewer), all
+  accepted by `isE2eMemberEmail`.
 
 So the rule is unchanged, and `workers: 1` per unit still holds: every spec creates per-run-unique
 data (fresh TINs, random UUIDs, high offsets for empty-state), acts on rows it created, and

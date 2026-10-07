@@ -1329,3 +1329,36 @@ func TestSessionCheck_ConfirmationDoesNotLeakAcrossSessions(t *testing.T) {
 		t.Errorf("GoTrue /user calls = %d, want 2 (the rest are cache hits)", n)
 	}
 }
+
+// The 16 KiB limit is for a /user 200 only; a refusal is still read and drained at 1 KiB.
+func TestSessionCheck_RefusalBodiesStayAtOneKiB(t *testing.T) {
+	pad := strings.Repeat(" ", 20<<10)
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		revoke bool
+	}{
+		{"gone code", http.StatusForbidden, gtError(403, "session_not_found") + pad, true},
+		{"server error", http.StatusInternalServerError, pad, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newUserFake(t, tc.status, tc.body)
+			var read atomic.Int64
+			client := &http.Client{Transport: countingTransport{http.DefaultTransport, &read}}
+			rg := newSessionRig(t, fake.URL, client, nil)
+			refusal := rg.refusal(t)
+
+			rec := rg.get(rg.signer.token(t, subjectS1, sid1))
+			if tc.revoke {
+				assertRevoked(t, rec, refusal)
+			} else {
+				assertUnavailable(t, rec)
+			}
+			if got := read.Load(); got != maxSessionCheckBody {
+				t.Errorf("session check read %d bytes of a %d-byte refusal, want %d", got, len(tc.body), maxSessionCheckBody)
+			}
+		})
+	}
+}

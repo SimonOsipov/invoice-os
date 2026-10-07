@@ -1,5 +1,5 @@
 // deploy_slot_test.go runs scripts/ci/deploy-slot.sh under a fake gh, sleep and date.
-// Rules: INFRA-08 story, Design "The slot rule"; decisions D-03..D-21.
+// Constants and rules mirror scripts/ci/deploy-slot.sh.
 package main
 
 import (
@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-// Constants copied from the story's "The slot rule"; each is a script constant of the same name.
+// Constants copied from the script; each is a script constant of the same name.
 const (
 	slotBase     = 1790000000 // fake `date +%s` before any sleep
 	slotSelfID   = 200        // RUN_ID of every run under test, unless a test says otherwise
@@ -25,9 +25,9 @@ const (
 	slotMaxHold  = 3600       // MAX_HOLD_SECONDS (60 min)
 	slotGrace    = 60         // NO_SLOT_GRACE_SECONDS
 
-	jobSlot    = "Deploy slot"                 // Design 2.3: exact job names the script matches
-	jobRelease = "Release deploy slot"         // Design 2.3
-	jobChanges = "Detect E2E-relevant changes" // Design 2.3, D-05
+	jobSlot    = "Deploy slot" // exact job names the script matches
+	jobRelease = "Release deploy slot"
+	jobChanges = "Detect E2E-relevant changes" // the no-slot-job grace reads it
 )
 
 // slotShim is gh, date and sleep on PATH. gh answers by URL: the runs list from runs.seq (one
@@ -350,7 +350,7 @@ func TestDeploySlot_OneHolderPasses(t *testing.T) {
 	wantExit(t, code, 0, out)
 	wantContains(t, "poll 1", pollLine(t, out, 1), "1 of 2 held by run 101 (PR #7)")
 	s.wantSleeps(t, 0)
-	// Design 2.3: the jobs read asks for the latest attempt only.
+	// the jobs read asks for the latest attempt only.
 	for _, l := range s.argv(t) {
 		if strings.Contains(l, "actions/runs/101/jobs") {
 			wantContains(t, "jobs call", l, "filter=latest")
@@ -502,7 +502,7 @@ func TestDeploySlot_ListsRunsWithoutStatusFilter(t *testing.T) {
 		if strings.Contains(c, "status=") {
 			t.Errorf("the runs request filters by status: %q", c)
 		}
-		wantContains(t, "list call", c, "per_page=100") // D-06: the 100 newest runs cover the 3 h window
+		wantContains(t, "list call", c, "per_page=100") // the 100 newest runs cover the 3 h window
 	}
 }
 
@@ -890,7 +890,7 @@ func TestDeploySlot_StuckHolderExpires(t *testing.T) {
 		t.Run(fmt.Sprintf("%d s ago expires", ago), func(t *testing.T) {
 			t.Parallel()
 			s := newSlotShim(t)
-			s.runs(t, slotList(slotRun{id: 150, pr: 5}, slotRun{id: 151, pr: 6}))
+			s.runs(t, slotList(slotRun{id: 150, pr: 5, startedAgo: ago + 200}, slotRun{id: 151, pr: 6}))
 			s.jobsAlways(t, 150, stuck(ago))
 			holdersOf(t, s, 151)
 			out, code := s.run(t)

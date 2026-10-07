@@ -39,9 +39,9 @@ fetch() {
   fi
 }
 
-# classify: reads a jobs body; prints one verdict word.
+# classify <now> <run id> <attempt start>: reads a jobs body; prints one verdict word.
 classify() {
-  jq -r --argjson now "$1" --argjson id "$2" --argjson self "$RUN_ID" \
+  jq -r --argjson now "$1" --argjson id "$2" --argjson began "$3" --argjson self "$RUN_ID" \
     --argjson hold "$MAX_HOLD_SECONDS" --argjson grace "$NO_SLOT_GRACE_SECONDS" '
     def job($n): [.jobs[] | select(.name == $n)][0];
     def age($j): $now - ($j.completed_at | fromdateiso8601);
@@ -51,7 +51,7 @@ classify() {
         (if $chg != null and $chg.completed_at != null and age($chg) >= $grace then "settled" else "none" end)
       elif $slot.status != "completed" then (if $id < $self then "waiter" else "none" end)
       elif $slot.conclusion != "success" then "settled"
-      elif age($slot) >= $hold then "expired"
+      elif ([age($slot), ($now - $began)] | min) >= $hold then "expired"
       else "holder" end' 2>/dev/null || echo unreadable
 }
 
@@ -66,13 +66,14 @@ while :; do
   held="" held_n=0 waiting="" waiting_n=0 expired="" unreadable="" problems=""
 
   # a jq error on the body (e.g. a null timestamp) is an unreadable body, not a crash
+  # ceiling: only the 100 newest runs are candidates (max 58 in 3 h); page the call above ~80 runs per 3 h
   if fetch "repos/$REPO/actions/workflows/dev-env.yml/runs?per_page=100" '.workflow_runs | type == "array"' &&
     { candidates=$(printf '%s' "$body" | jq -r --argjson now "$now" --argjson self "$RUN_ID" --argjson maxage "$MAX_AGE_SECONDS" '
       [.workflow_runs[] | select(.status != "completed" and .id != $self and ($now - (.run_started_at | fromdateiso8601)) <= $maxage)]
       | sort_by(.id)[]
-      | [.id, .run_attempt, (if (.pull_requests | length) > 0 then "PR #\(.pull_requests[0].number)" else "\(.event) \(.head_branch)" end)]
+      | [.id, .run_attempt, (.run_started_at | fromdateiso8601), (if (.pull_requests | length) > 0 then "PR #\(.pull_requests[0].number)" else "\(.event) \(.head_branch)" end)]
       | @tsv' 2>"$errf") || { err=$(head -n 1 "$errf"); false; }; }; then
-    while IFS=$'\t' read -r id attempt label; do
+    while IFS=$'\t' read -r id attempt began label; do
       [ -n "$id" ] || continue
       case "$settled" in *" $id:$attempt "*) continue ;; esac
       if ! fetch "repos/$REPO/actions/runs/$id/jobs?filter=latest&per_page=100" '.jobs | type == "array"'; then
@@ -80,7 +81,7 @@ while :; do
         unreadable="${unreadable:+$unreadable, }run $id"
         continue
       fi
-      case "$(printf '%s' "$body" | classify "$now" "$id")" in
+      case "$(printf '%s' "$body" | classify "$now" "$id" "$began")" in
         holder) held="${held:+$held, }run $id ($label)"; held_n=$((held_n + 1)) ;;
         waiter) waiting="${waiting:+$waiting, }run $id ($label)"; waiting_n=$((waiting_n + 1)) ;;
         expired) expired="${expired:+$expired, }run $id ($label)" ;;

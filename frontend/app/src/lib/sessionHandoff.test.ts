@@ -663,6 +663,102 @@ describe('join offers (D7, D10, D11)', () => {
       expect(paths(calls), name).toEqual(['/api/tenancy/v1/invitations/a/accept'])
     }
   })
+
+  it('redeemHandoff_offerKeepsWireOrderNotIdOrder', async () => {
+    const wire = [item('c'), item('a'), item('b')]
+    stub({ mine: { status: 200, body: { invitations: wire } } })
+    const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000)
+    expect((s as JoinOffer).invites.map((i) => i.id)).toEqual(['c', 'a', 'b'])
+  })
+
+  it('redeemHandoff_malformedInvitesAreNotAnOffer', async () => {
+    const bad: [string, unknown][] = [
+      ['null item', [item('a'), null]],
+      ['numeric role', [{ ...item('a'), role: 1 }]],
+      ['missing workspace', [{ ...item('a'), workspace: undefined }]],
+      ['undefined inviter', [{ ...item('a'), inviter: undefined }]],
+      ['numeric inviter', [{ ...item('a'), inviter: 7 }]],
+      ['missing expiry', [{ ...item('a'), expires_at: undefined }]],
+      ['empty id', [{ ...item('a'), id: '' }]],
+    ]
+    for (const [name, invitations] of bad) {
+      stub({ mine: { status: 200, body: { invitations } } })
+      const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
+      expect(err, name).toMatchObject({ status: 403 })
+    }
+    for (const body of [null, [], 'x', { invitations: {} }]) {
+      stub({ mine: { status: 200, body } })
+      const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
+      expect(err, JSON.stringify(body)).toMatchObject({ status: 403 })
+    }
+    stub({ mine: { status: 200, body: { invitations: [item('a'), item('b')] } } })
+    expect(await redeemHandoff(GATEWAY, CODE, STATE, 5000), 'control: a well-formed list is an offer').toMatchObject({ kind: 'join' })
+  })
+
+  it('redeemHandoff_nonForbiddenMeNeverAsksTheList', async () => {
+    const calls = stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, refresh_token: 'R0' } }, me: [{ status: 500 }] })
+    const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
+    expect(err).toMatchObject({ status: 500 })
+    expect(paths(calls)).toEqual(['/auth/exchange', '/api/tenancy/v1/me'])
+  })
+
+  it('redeemHandoff_answersWithAnUnreachableListProvision', async () => {
+    const calls = stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, refresh_token: 'R0' } }, me: [FORBIDDEN, { status: 200, body: ME }] })
+    const inner = globalThis.fetch as unknown as (u: string, i: unknown) => Promise<unknown>
+    vi.stubGlobal('fetch', (u: string, i: unknown) => (u.endsWith('/invitations/mine') ? Promise.reject(new TypeError('Failed to fetch')) : inner(u, i)))
+    const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000)
+    expect(paths(calls)).toContain('/api/tenancy/v1/workspaces')
+    expect(s).toMatchObject({ handoff: true })
+  })
+
+  it('createOwnWorkspace_withoutAnswersThrowsBeforeAnyCall', async () => {
+    const calls = stub()
+    await expect(createOwnWorkspace(GATEWAY, offer({ answers: null }), 5000)).rejects.toThrow('no registration answers')
+    expect(calls).toEqual([])
+  })
+
+  it('joinInvite_sharesOneSignalAcrossTheChain', async () => {
+    const calls = stub({ me: [{ status: 200, body: ME }] })
+    await joinInvite(GATEWAY, offer(), 'a', 5000)
+    expect(calls).toHaveLength(3)
+    expect(calls[1].signal).toBe(calls[0].signal)
+    expect(calls[2].signal).toBe(calls[0].signal)
+  })
+
+  it('joinInvite_refusalNeedsTheMatchingStatusAndMessage', async () => {
+    const rows: [string, Reply][] = [
+      ['409 with the invalid message', { status: 409, body: { error: MSG_INVALID } }],
+      ['404 with the already-member message', { status: 404, body: { error: MSG_ALREADY_MEMBER } }],
+      ['403 other-address message', { status: 403, body: { error: 'this invite was sent to a different email address' } }],
+    ]
+    for (const [name, accept] of rows) {
+      const calls = stub({ accept })
+      const err = await joinInvite(GATEWAY, offer(), 'a', 5000).catch((e: unknown) => e)
+      expect(err, name).toBeInstanceOf(ApiError)
+      expect(err, name).not.toBeInstanceOf(InviteRefusedError)
+      expect(paths(calls), name).toEqual(['/api/tenancy/v1/invitations/a/accept'])
+    }
+  })
+
+  it('joinInvite_refusalWithAFailedReReadStillReportsTheOutcome', async () => {
+    const rows: [string, Parameters<typeof stub>[0]][] = [
+      ['refresh 401', { refresh: { status: 401, body: { error: 'invalid refresh token' } } }],
+      ['/me 500', { me: [{ status: 500 }] }],
+      ['/me malformed', { me: [{ status: 200, body: { tenant: {} } }] }],
+    ]
+    for (const [name, over] of rows) {
+      stub({ accept: { status: 409, body: { error: MSG_ALREADY_MEMBER } }, ...over })
+      const err = await joinInvite(GATEWAY, offer(), 'a', 5000).catch((e: unknown) => e)
+      expect(err, name).toBeInstanceOf(InviteRefusedError)
+      expect((err as InviteRefusedError).outcome, name).toBe('already-member')
+    }
+  })
+
+  it('joinInvite_successWithoutARefreshTokenRejects', async () => {
+    const calls = stub()
+    await expect(joinInvite(GATEWAY, offer({ refreshToken: undefined }), 'a', 5000)).rejects.toThrow('no refresh token after joining the invite')
+    expect(paths(calls)).toEqual(['/api/tenancy/v1/invitations/a/accept'])
+  })
 })
 
 describe('registrationAnswers', () => {

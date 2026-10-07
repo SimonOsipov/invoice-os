@@ -119,6 +119,7 @@ let workspacesReply: Reply = ok({ tenant: ME.tenant })
 let refreshReply: Reply = ok({ access_token: T2, refresh_token: 'R1' })
 let workspacesCalls: { auth: string | null; body: unknown }[] = []
 let refreshBodies: unknown[] = []
+let mineReply: Reply | null = null
 
 function routeFetch() {
   vi.stubGlobal(
@@ -134,6 +135,7 @@ function routeFetch() {
         meAuth.push(init?.headers?.get('Authorization') ?? null)
         return (meQueue.shift() ?? meReply)()
       }
+      if (mineReply && url === `${GATEWAY}/api/tenancy/v1/invitations/mine`) return mineReply()
       if (url === `${GATEWAY}/api/tenancy/v1/workspaces`) {
         workspacesCalls.push({ auth: init?.headers?.get('Authorization') ?? null, body: JSON.parse(init?.body ?? 'null') })
         return workspacesReply()
@@ -222,6 +224,7 @@ beforeEach(() => {
   refreshReply = ok({ access_token: T2, refresh_token: 'R1' })
   workspacesCalls = []
   refreshBodies = []
+  mineReply = null
   routeFetch()
 })
 
@@ -790,6 +793,21 @@ describe('a failed redemption bounces to landing (AC-7, D23)', () => {
     expect(meAuth).toEqual([`Bearer ${T}`])
     expect(workspacesCalls, 'a token without answers provisions nothing').toEqual([])
     expect(refreshBodies).toEqual([])
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+  })
+
+  it('a join offer takes the no-workspace path until the Join screen lands', async () => {
+    configure()
+    ensureSignInState()
+    meReply = fail(403, 'forbidden')
+    mineReply = ok({ invitations: [{ id: 'a', workspace: 'WS', role: 'admin', inviter: null, expires_at: '2026-10-20T00:00:00Z' }] })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=no-workspace`]))
+    expect(fetchUrls).toContain(`${GATEWAY}/api/tenancy/v1/invitations/mine`)
+    expect(workspacesCalls).toEqual([])
     expect(localStorage.getItem(SESSION_KEY)).toBeNull()
   })
 

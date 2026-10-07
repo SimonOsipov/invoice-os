@@ -970,3 +970,73 @@ func TestDeploySlot_NullStartedAtDoesNotCrashThePoll(t *testing.T) {
 	wantContains(t, "poll 1", pollLine(t, out, 1), "Deploy slot: poll 1: ")
 	s.wantSleeps(t, 1)
 }
+
+// A jobs body jq cannot classify gives no verdict: the run is named, never counted as free.
+func TestDeploySlot_UnclassifiableJobsBodyIsUnreadable(t *testing.T) {
+	t.Parallel()
+	slotNoStamp := `{"name":"` + jobSlot + `","status":"completed","conclusion":"success"}`
+	cases := []struct{ name, jobs string }{
+		{"slot success with null completed_at", jobsBody(jobDone(jobChanges, "success", 400),
+			`{"name":"`+jobSlot+`","status":"completed","conclusion":"success","completed_at":null}`)},
+		{"slot success without completed_at", jobsBody(jobDone(jobChanges, "success", 400), slotNoStamp)},
+		{"slot success with a malformed completed_at", jobsBody(jobDone(jobChanges, "success", 400),
+			`{"name":"`+jobSlot+`","status":"completed","conclusion":"success","completed_at":"yesterday"}`)},
+		{"jobs entries are not objects", `{"total_count":1,"jobs":["x"]}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			s := newSlotShim(t)
+			one := slotList(slotRun{id: 101, pr: 11})
+			s.runs(t, one, one)
+			s.jobs(t, 101, c.jobs, jobsBody(jobDone(jobChanges, "success", 400), jobDone(jobSlot, "success", 300), jobDone(jobRelease, "success", 5)))
+			out, code := s.run(t)
+
+			wantExit(t, code, 0, out)
+			line := pollLine(t, out, 1)
+			wantContains(t, "poll 1", line, "could not read run 101: unreadable jobs body")
+			if strings.Contains(out, "taken after 0 s") || strings.Contains(out, "jq: error") {
+				t.Errorf("poll 1 passed on an unreadable run or leaked jq's stderr: %q", out)
+			}
+			wantContains(t, "poll 2", pollLine(t, out, 2), "0 of 2 held")
+			s.wantSleeps(t, 1)
+		})
+	}
+	t.Run("an unreadable run blocks to the deadline and is named", func(t *testing.T) {
+		t.Parallel()
+		s := newSlotShim(t)
+		s.runsAlways(t, slotList(slotRun{id: 101, pr: 11}))
+		s.jobsAlways(t, 101, cases[0].jobs)
+		out, code := s.run(t)
+
+		wantExit(t, code, 1, out)
+		errs := slotErrorLines(out)
+		if len(errs) != 1 {
+			t.Fatalf("::error:: lines = %d, want 1: %q", len(errs), out)
+		}
+		wantContains(t, "::error:: line", errs[0], "unreadable: run 101")
+	})
+}
+
+// A timestamp jq cannot parse in the runs list is a read failure with jq's first stderr line, not a crash.
+func TestDeploySlot_UnparsableRunStartIsAReadFailure(t *testing.T) {
+	t.Parallel()
+	for _, field := range []string{`"run_started_at":null`, `"run_started_at":"yesterday"`, `"x":1`} {
+		t.Run(field, func(t *testing.T) {
+			t.Parallel()
+			s := newSlotShim(t)
+			body := slotList(slotRun{id: 101, pr: 11})
+			needle := `"run_started_at":"` + slotTS(600) + `"`
+			at := strings.LastIndex(body, needle) // the last run listed is run 101
+			s.runs(t, body[:at]+field+body[at+len(needle):], slotList())
+			out, code := s.run(t)
+
+			wantExit(t, code, 0, out)
+			wantContains(t, "poll 1", pollLine(t, out, 1), "could not read the runs: jq: error")
+			if strings.Contains(out, "taken after 0 s") {
+				t.Errorf("poll 1 passed: %q", out)
+			}
+			s.wantSleeps(t, 1)
+		})
+	}
+}

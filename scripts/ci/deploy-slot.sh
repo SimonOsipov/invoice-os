@@ -39,7 +39,7 @@ fetch() {
   fi
 }
 
-# classify: reads a jobs body; prints holder, expired, waiter, settled or none.
+# classify: reads a jobs body; prints one verdict word.
 classify() {
   jq -r --argjson now "$1" --argjson id "$2" --argjson self "$RUN_ID" \
     --argjson hold "$MAX_HOLD_SECONDS" --argjson grace "$NO_SLOT_GRACE_SECONDS" '

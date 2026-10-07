@@ -164,7 +164,7 @@ ctl measure '[data-testid="evidence-bundle-drawer"]' --props width,padding-left 
 - **Session:** `--session`, else `$PLAYWRIGHT_CLI_SESSION`, else `default`.
 - **Store:** `<worktree>/.ralph/ctl/<env>/`, gitignored. `accounts.json` (mode 0600) holds the passwords; `<persona>-<role>.json` (`developer.json`, `support.json` for staff) are the storage states. Output never prints a password. Delete the directory to re-create the accounts.
 - **Browser:** `login` signs in in its own browser and never drives your `playwright-cli` session. It prints the `next` commands. Run `pwc list --json` first, and `open` only when the session is absent (`open` restarts an open one), then `state-load` the saved file, then `goto` the URL. `playwright-cli` blocks `file:` URLs. A console renews its session on every load, so `state-load` a developer or support state into one `playwright-cli` session only. To open another console session, delete that persona's `<key>.json` and run `ctl login` again. App personas renew only at 80 % of token life.
-- **Read-only:** apart from `login`'s account creation and grants, click nothing that writes tenant data.
+- **Writes:** on a PR environment, click any control, including one that writes tenant data. Production stays read-only: `login --env production` exits 1, so use read-only probes there.
 
 ```bash
 pwc list --json

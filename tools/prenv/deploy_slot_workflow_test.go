@@ -1,5 +1,5 @@
 // deploy_slot_workflow_test.go pins the deploy-slot wiring of .github/workflows/dev-env.yml.
-// Source of every constant: INFRA-08 story, Design "Workflow wiring"; subtask INFRA-08-02 ACs.
+// Constants mirror the workflow wiring of dev-env.yml.
 package main
 
 import (
@@ -14,14 +14,14 @@ import (
 )
 
 const (
-	slotJobID      = "deploy-slot"                 // story Design "Workflow wiring"
-	slotJobName    = "Deploy slot"                 // story Design; the script matches this name
-	releaseJobID   = "deploy-slot-release"         // story Design
-	releaseJobName = "Release deploy slot"         // story Design
-	changesJobName = "Detect E2E-relevant changes" // 02-1; the script's no-slot-job grace reads it (D-05)
+	slotJobID      = "deploy-slot"
+	slotJobName    = "Deploy slot" // the script matches this name
+	releaseJobID   = "deploy-slot-release"
+	releaseJobName = "Release deploy slot"
+	changesJobName = "Detect E2E-relevant changes" // the script's no-slot-job grace reads it
 )
 
-// releaseNeeds is the seven-job set of 02-3.
+// releaseNeeds is the seven-job set the release job waits on.
 var releaseNeeds = []string{"deploy-slot", "prepare-env", "deploy-gateway", "health-gate", "deploy-context", "deploy-spas", "fleet-gate"}
 
 func devEnvJob(t *testing.T, id string) workflowJob {

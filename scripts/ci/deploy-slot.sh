@@ -52,7 +52,7 @@ classify() {
       elif $slot.status != "completed" then (if $id < $self then "waiter" else "none" end)
       elif $slot.conclusion != "success" then "settled"
       elif age($slot) >= $hold then "expired"
-      else "holder" end'
+      else "holder" end' 2>/dev/null || echo unreadable
 }
 
 start=$(date +%s)
@@ -65,12 +65,13 @@ while :; do
   elapsed=$((now - start))
   held="" held_n=0 waiting="" waiting_n=0 expired="" unreadable="" problems=""
 
-  if fetch "repos/$REPO/actions/workflows/dev-env.yml/runs?per_page=100" '.workflow_runs | type == "array"'; then
-    candidates=$(printf '%s' "$body" | jq -r --argjson now "$now" --argjson self "$RUN_ID" --argjson maxage "$MAX_AGE_SECONDS" '
+  # a jq error on the body (e.g. a null timestamp) is an unreadable body, not a crash
+  if fetch "repos/$REPO/actions/workflows/dev-env.yml/runs?per_page=100" '.workflow_runs | type == "array"' &&
+    { candidates=$(printf '%s' "$body" | jq -r --argjson now "$now" --argjson self "$RUN_ID" --argjson maxage "$MAX_AGE_SECONDS" '
       [.workflow_runs[] | select(.status != "completed" and .id != $self and ($now - (.run_started_at | fromdateiso8601)) <= $maxage)]
       | sort_by(.id)[]
       | [.id, .run_attempt, (if (.pull_requests | length) > 0 then "PR #\(.pull_requests[0].number)" else "\(.event) \(.head_branch)" end)]
-      | @tsv')
+      | @tsv' 2>"$errf") || { err=$(head -n 1 "$errf"); false; }; }; then
     while IFS=$'\t' read -r id attempt label; do
       [ -n "$id" ] || continue
       case "$settled" in *" $id:$attempt "*) continue ;; esac
@@ -84,6 +85,9 @@ while :; do
         waiter) waiting="${waiting:+$waiting, }run $id ($label)"; waiting_n=$((waiting_n + 1)) ;;
         expired) expired="${expired:+$expired, }run $id ($label)" ;;
         settled) settled="$settled$id:$attempt " ;;
+        unreadable)
+          problems="${problems:+$problems; }could not read run $id: unreadable jobs body"
+          unreadable="${unreadable:+$unreadable, }run $id" ;;
       esac
     done <<< "$candidates"
   else

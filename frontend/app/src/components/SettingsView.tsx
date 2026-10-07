@@ -28,6 +28,8 @@ import { EmptyState, ErrorState, gatewayBase, Loading } from '@invoice-os/api-cl
 
 import { API_BASE, API_KEYS, CERTS, CONNECTOR_DEFS, ENDPOINTS, SETTINGS_TABS, WEBHOOKS } from '../data'
 import { copyGlyph, plusGlyph, shieldGlyph } from '../glyphs'
+import { companySetupAccess } from '../lib/members'
+import { NO_COMPANY_COPY } from './AddCompanyTask'
 import { ConnectorDetail } from './ConnectorDetail'
 import { EntityFormModal } from './EntityFormModal'
 import { FieldMappingModal } from './FieldMappingModal'
@@ -113,6 +115,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
                 {/* Same button, two labels/modes: Add when there's nothing yet (AC-3's
                     bootstrap window), Edit once the one entity this workspace can ever
                     have (AC-1/AC-2) exists. */}
+                {(activeEntity || companySetupAccess(ctx.membersState, ctx.members) === 'add') && (
                 <button
                   onClick={() => setCompanyModal(activeEntity ? { mode: 'edit', entity: activeEntity } : { mode: 'create' })}
                   disabled={base == null}
@@ -127,6 +130,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
                     </>
                   )}
                 </button>
+                )}
               </div>
               {activeEntity ? (
                 <div style={{ padding: '6px 20px 10px' }}>
@@ -145,7 +149,11 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
                 </div>
               ) : (
                 <div style={{ padding: 20 }}>
-                  <EmptyState title="No company set up yet" message="Add your business entity so invoices have somewhere real to file against." />
+                  {companySetupAccess(ctx.membersState, ctx.members) === 'wait' ? (
+                    <EmptyState title={NO_COMPANY_COPY.title} message={NO_COMPANY_COPY.message} />
+                  ) : (
+                    <EmptyState title="No company set up yet" message="Add your business entity so invoices have somewhere real to file against." />
+                  )}
                 </div>
               )}
             </div>

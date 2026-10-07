@@ -204,6 +204,8 @@ describe('EntityFormModal TIN hint (AUTH-10-02)', () => {
         entitiesState: 'ready',
         entitiesError: null,
         refetchEntities: vi.fn(),
+        members: [{ id: 'u1', name: 'Ada', initials: 'A', email: null, role: 'admin', status: 'active', isYou: true }],
+        membersState: 'ready',
         setSettingsTab: vi.fn(),
         authedFetch: vi.fn(),
       } as unknown as PlatformCtx
@@ -233,6 +235,8 @@ describe('EntityFormModal TIN hint (AUTH-10-02)', () => {
       entitiesState: 'ready',
       entitiesError: null,
       refetchEntities: vi.fn(),
+      members: [{ id: 'u1', name: 'Ada', initials: 'A', email: null, role: 'admin', status: 'active', isYou: true }],
+      membersState: 'ready',
     } as unknown as PlatformCtx
     render(<ClientsView ctx={ctx} />)
 
@@ -314,6 +318,8 @@ describe('PR-01 the entity modal sits 10px over the v2 scrim', () => {
         entitiesState: 'ready',
         entitiesError: null,
         refetchEntities: vi.fn(),
+        members: [{ id: 'u1', name: 'Ada', initials: 'A', email: null, role: 'admin', status: 'active', isYou: true }],
+        membersState: 'ready',
       } as unknown as PlatformCtx
       render(<ClientsView ctx={ctx} />)
 
@@ -354,6 +360,8 @@ describe('PR-01 the entity modal sits 10px over the v2 scrim', () => {
         entitiesState: 'ready',
         entitiesError: null,
         refetchEntities: vi.fn(),
+        members: [{ id: 'u1', name: 'Ada', initials: 'A', email: null, role: 'admin', status: 'active', isYou: true }],
+        membersState: 'ready',
         setSettingsTab: vi.fn(),
         authedFetch: vi.fn(),
       } as unknown as PlatformCtx

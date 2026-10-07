@@ -68,6 +68,17 @@ describe('dockerfiles', () => {
     }
   })
 
+  it('dockerfiles_theLibraryRailwayJsonIsLandingsButForTheDockerfilePath', () => {
+    const read = (n: string) => JSON.parse(readFileSync(join(FRONTEND, n, 'railway.json'), 'utf8'))
+    const landing = read('landing')
+    // Control: landing's file names its own Dockerfile, so a copy that kept the path would show.
+    expect(landing.build.dockerfilePath).toBe('frontend/landing/Dockerfile')
+    const library = read('library')
+    expect(library.build.dockerfilePath).toBe('frontend/library/Dockerfile')
+    const swap = (j: { build: object }, dockerfilePath: string) => ({ ...j, build: { ...j.build, dockerfilePath } })
+    expect(swap(library, 'x')).toEqual(swap(landing, 'x'))
+  })
+
   it('dockerfiles_theAuthTokenReachesOnlyTheBuildStage', () => {
     const monitored = monitoredSpas()
     expect(monitored).toEqual(['app', 'landing', 'library', 'ops-console', 'support-console'])

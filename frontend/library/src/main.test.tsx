@@ -5,7 +5,7 @@ import { CrashBoundary } from '@invoice-os/monitoring'
 
 const h = vi.hoisted(() => {
   const render = vi.fn()
-  return { render, initMonitoring: vi.fn(), createRoot: vi.fn(() => ({ render })) }
+  return { render, initMonitoring: vi.fn(), createRoot: vi.fn(() => ({ render })), initsBeforeMark: -1 }
 })
 
 vi.mock('@invoice-os/monitoring', () => ({
@@ -13,6 +13,11 @@ vi.mock('@invoice-os/monitoring', () => ({
   CrashBoundary: () => null,
 }))
 vi.mock('react-dom/client', () => ({ createRoot: h.createRoot }))
+// Evaluated when main.tsx's own import runs: counts inits that ran before it.
+vi.mock('@invoice-os/design-tokens/v2/assets/mark.png', () => {
+  h.initsBeforeMark = h.initMonitoring.mock.calls.length
+  return { default: 'mark-stub.png' }
+})
 
 describe('main', () => {
   it('main_startsMonitoringBeforeRenderAndWrapsTheRoot', async () => {
@@ -31,5 +36,8 @@ describe('main', () => {
     const boundary = root.props.children
     expect(boundary.type).toBe(CrashBoundary)
     expect(boundary.props.brand.type).toBe('img')
+    expect(boundary.props.brand.props.src).toBe('mark-stub.png')
+    // Imports evaluate in order: init must already have run when main.tsx's later imports load.
+    expect(h.initsBeforeMark).toBe(1)
   })
 })

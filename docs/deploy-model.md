@@ -89,6 +89,8 @@ across PRs the way `development`'s own four URLs (still constant, still hardcode
 
 ```
 PR opened ──> dev-env.yml:
+                deploy-slot: waits until fewer than 2 other runs hold a deploy slot
+                             (scripts/ci/deploy-slot.sh; `Deploy slot` below)
                 prepare-env: derive `pr-<N>` (prenv.Name) ──> environmentCreate, forked
                              from `development` (skipInitialDeploys, create-or-reuse)
                              ──> pass 1: auth config, secrets and a fresh gateway token
@@ -109,6 +111,7 @@ PR opened ──> dev-env.yml:
                 ──> `fleet-gate` job: fleet /healthz/fleet gate + its Sentry
                     state check: every Go service and docling report sentry "off"
                     + notifications reports `contacts: fake`
+                ──> `deploy-slot-release` job: a marker; the run's slot is free once it ends
                 ──> verify, `e2e` job: smoke (landing + both consoles) + api
                 ──> verify, `topology` job: one parallel leg per unit (serial-lane,
                     import-wizard, import-wizard-2, invoice-surfaces; app login, cross-tenant
@@ -119,6 +122,8 @@ PR closed  ──> dev-env-teardown.yml (M4-23-05): prenv name ──> look the 
                Best-effort; the daily sweeper (M4-23-07) is the authority.
 
 merge to main ──> dev-env.yml (push): await green CI on the merge commit
+                  ──> `deploy-slot` job passes at once (a push run never waits; it counts
+                      as a holder until its `deploy-slot-release`)
                   ──> targets the PERSISTENT environment BY ID (never a fork; the
                       fork-reconciliation steps are all `== 'pull_request'`)
                   ──> gateway ──> /healthz gate (demo_purge == "false", mock_issuer ==
@@ -127,6 +132,7 @@ merge to main ──> dev-env.yml (push): await green CI on the merge commit
                       4 SPAs ──> fleet gate + Sentry state check (every Go service and
                       docling reports sentry "on" or "off", never absent; notifications
                       reports `contacts` "real" or "off", never "fake")
+                  ──> `deploy-slot-release` job (frees the slot)
                   ──> no E2E (ephemeral environments only)
 
 workflow_dispatch ──> targets the persistent environment directly (never torn down),
@@ -145,7 +151,7 @@ every PR queued behind `dev-env.yml`'s single shared concurrency lock, serializi
 deploys. M4-21 designed the constraint away and M4-23 delivered it: each PR forks its own
 environment, so `dev-env.yml`'s concurrency group is now keyed **per-PR**
 (`dev-preview-${{ github.event.pull_request.number || github.ref }}`) — two different PRs'
-groups never collide, so their deploys run **fully in parallel**. A `workflow_dispatch` or
+groups never collide. A `workflow_dispatch` or
 `push` run has no PR number and falls back to `github.ref` — `refs/heads/main` for both —
 so **every run targeting the persistent environment lands in one shared group** and
 serializes. That is deliberate: concurrent runs would otherwise `railway up` the same
@@ -548,6 +554,56 @@ domain; domain repair stays in `e2e`. On a PR the same script runs inside `e2e`.
 (`if: always()`), prints one line: `Railway API: N calls, M attempts, K retried; by command:
 ...; ratelimit-policy=... x-ratelimit-limit=... x-ratelimit-remaining=...`. Each rate-limit
 value reads `n/a` when Railway sent no such header. The step never fails the job.
+
+## Deploy slot (INFRA-08)
+
+At most **2** PR runs of `dev-env.yml` are in Prepare-and-deploy at the same time. The job `Deploy slot`
+(`scripts/ci/deploy-slot.sh`) runs after `changes` and before `prepare-env`; `prepare-env` needs it to
+succeed. The job holds `actions: read` and `contents: read` only, and never calls Railway.
+`tools/prenv/deploy_slot_test.go` covers the decision; `tools/prenv/deploy_slot_workflow_test.go` covers
+the wiring. A draft PR, or a run whose `changes` says no E2E-relevant files, skips the job and never holds a slot.
+
+**What holds a slot.** A run holds one from the moment its `Deploy slot` job passes until its
+`Release deploy slot` job completes. That marker job needs `prepare-env`, `deploy-gateway`, `health-gate`,
+`deploy-context`, `deploy-spas` and `fleet-gate`, and runs `always()`, so a failed or cancelled chain frees
+the slot too. `e2e` and `topology` hold no slot. A chain that never ends stops counting 60 min after its
+slot passed (`MAX_HOLD_SECONDS=3600`).
+
+**Order.** A run counts older waiters (lower run id, `Deploy slot` job not completed) against itself, and
+never a newer one, so no run waits forever behind a newer run. Gap: a run whose `changes` job still runs
+(about 6-15 s) has no `Deploy slot` job yet and is invisible, so a newer run can pass first in that window.
+Every holder counts, newer or older.
+
+**Push and dispatch runs.** They never wait: the script prints `a <event> run takes a slot without waiting`
+and exits 0 with no API call. They count as holders until their release job completes.
+
+**The bound.** Polls come every 60 s. The wait ends at 2400 s of wall clock: at most 40 polls, then exit 1 with
+`::error::Deploy slot: no free slot after <k> polls (<s> s); held by ...`. The job has `timeout-minutes: 50`,
+which stays inside `hm ci wait --gate`'s 2 h. A timeout skips `prepare-env` and `e2e`, so `E2E gate` fails.
+Re-run the whole run (`gh run rerun <run id>`), with no code change.
+
+**Reading the wait lines.**
+
+```
+Deploy slot: poll 3: 2 of 2 held by run 101 (PR #11), run 102 (PR #12); 1 older waiting: run 99 (PR #9); expired: run 80 (PR #4)
+Deploy slot: taken after 180 s.
+```
+
+`<H> of 2 held` counts holders. `<W> older waiting` lists older runs still in their own wait; each takes a
+slot ahead of this run. `expired: run <id>` is a holder past 60 min, not counted. A run without a PR shows as
+`<event> <branch>`, for example `push main`. `could not read the runs: <gh error>` or `could not read run <id>:
+...` means the poll has no verdict; the run waits and never passes on a read it could not make. At the deadline,
+`unreadable: run <id>` names a run whose last read failed.
+
+**GITHUB_TOKEN budget.** The token allows 1,000 API requests per hour per repository. One poll makes one
+runs-list call plus one jobs call per candidate run. A run found settled (release completed, slot not
+successful, or no slot job 60 s after `changes` ended) is not read again in that wait. Runs started more than
+3 h ago are ignored (`MAX_AGE_SECONDS=10800`). Polling every 60 s limits one waiter to 60 runs-list calls an hour,
+plus the jobs calls for runs not yet settled.
+
+**Which runs count.** Only runs whose workflow file carries the `Deploy slot` job. A PR branch cut before
+`epic/infra` landed on `main` runs the old workflow and is not counted (D-11). Other epics' PRs join the cap
+when their branch merges `main`.
 
 ## Related
 

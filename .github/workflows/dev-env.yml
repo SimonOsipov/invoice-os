@@ -91,10 +91,9 @@ on:
   workflow_dispatch:
 
 # M4-21-09: each PR now deploys to its OWN ephemeral Railway environment, so
-# two different PRs must run FULLY IN PARALLEL rather than queueing behind
-# each other — the whole point of per-PR environments (Core AC 4/5). The
+# two different PRs never queue behind each other here (Core AC 4/5). The
 # group is keyed by PR number, so it is UNIQUE per PR: two different PRs'
-# numbers never collide (their groups differ → both run at once), and a
+# numbers never collide (their groups differ), and a
 # second push to the SAME PR queues behind (never cancels) an in-flight
 # deploy of that SAME PR. A workflow_dispatch or push run has no PR number and
 # falls back to `github.ref` — `refs/heads/main` for both — so every run that

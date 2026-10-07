@@ -44,7 +44,7 @@ Neither path licenses a silent feature cut.
 ```bash
 gh pr checks [PR_NUMBER]
 # CI (ci.yml) rolls up: go, frontend, clean-clone, migrations, docker-canary, rls, queue, audit.
-# dev-env.yml (on a ready PR): prepare-env (ci-watch alongside; red CI stops the run) → deploy-gateway (migrator) → health-gate →
+# dev-env.yml (on a ready PR): deploy-slot (at most 2 PRs deploy at once) → prepare-env (ci-watch alongside; red CI stops the run) → deploy-gateway (migrator) → health-gate →
 #   deploy-context ×7 + deploy-spas ×3 → fleet-gate → e2e (smoke + api) → topology ×4 (serial-lane, import-wizard, import-wizard-2, invoice-surfaces).
 ```
 
@@ -370,6 +370,7 @@ The verdict line names a short SHA after `at`. If it is not the start of `git re
 Foreground `sleep` is blocked. Never end a turn on a wait you did not start.
 
 1. **`failed`?** Read the failed jobs and the log tail it prints. Fix in the worktree, commit, push, and wait again.
+   - **`failed` on `Deploy slot` alone?** The cap stayed full until the deadline. Re-run the whole run: `gh run rerun <run id>`. Change no code.
 2. **`CI` passed?** → In Phase 3, go to Phase 3.5 once every blocking review fix is pushed. In any other phase, continue the step that waited.
 3. **The gate passed?** → Phase 3.5 step 4.
 

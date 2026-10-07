@@ -54,6 +54,8 @@ environment (M4-23) and its Postgres is bootstrapped + seeded fresh at gateway b
 (`serial-lane`, `import-wizard`, `import-wizard-2`, `invoice-surfaces`, from `e2e/topology/shards.ts`). `dev-env.yml` flow:
 
 ```
+deploy-slot ──> wait until fewer than 2 other PR runs hold a Railway deploy slot (a
+                push or dispatch run passes at once)
 prepare-env ──> create-or-reuse this PR's `pr-<N>` fork of `development` (on
                 workflow_dispatch: target `development` itself) ──> assert Watch Paths
                 empty (M3-16 invariant) ──> discover the 5 public URLs fresh

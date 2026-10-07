@@ -120,8 +120,8 @@ export function Sidebar({ route, demoHref, onHome, onGroup, onFeature, onTour }:
         <button
           type="button"
           className="lib-nav"
-          aria-current={home ? 'true' : undefined}
           onClick={onHome}
+          aria-current={home ? 'true' : undefined}
           style={{
             ...navButton,
             fontWeight: 600,

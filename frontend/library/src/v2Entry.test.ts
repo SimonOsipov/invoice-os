@@ -128,4 +128,15 @@ describe('library entry', () => {
     const cards = [...html.matchAll(/<button\b([^>]*)>/g)].map((m) => m[1].match(/class="([^"]*)"/)?.[1] ?? '').filter((c) => c !== 'ds-btn ds-btn--primary ds-btn--md')
     expect(cards).toEqual(Array(11).fill('lib-card'))
   })
+
+  it('VE-07 main.tsx mounts App after the tokens, the layer and library.css', () => {
+    const src = stripComments(read(join(HERE, 'main.tsx'))).replace(/^\s*\/\/.*$/gm, '')
+    const side = [...src.matchAll(/^import\s+'([^']+)'/gm)].map((m) => m[1])
+    expect(side).toEqual([
+      '@invoice-os/design-tokens/v2/styles.css',
+      '@invoice-os/design-tokens/v2/app-layer.css',
+      './styles/library.css',
+    ])
+    expect(src).toMatch(/\.render\(\s*<StrictMode>\s*<App\s*\/>\s*<\/StrictMode>/)
+  })
 })

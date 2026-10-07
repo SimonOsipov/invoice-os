@@ -24,3 +24,4 @@ a:hover { color: var(--teal); }
 .lib-nav:hover { background: var(--surface-panel) !important; }
 .lib-tour:hover { filter: brightness(1.06); }
 .lib-stage:hover { background: var(--sage-panel) !important; }
+.lib-card:hover { border-color: var(--primary) !important; }

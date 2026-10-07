@@ -6,6 +6,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { GROUPS } from './content'
+import { Home } from './components/Home'
 import { JourneyStepper } from './components/JourneyStepper'
 import { Sidebar } from './components/Sidebar'
 import { GLYPHS } from './icons'
@@ -118,5 +119,13 @@ describe('library entry', () => {
     expect(buttons(side('/invoices/import-files')).filter((c) => c === 'lib-nav')).toHaveLength(12 + 3)
     const stages = buttons(renderToStaticMarkup(createElement(JourneyStepper, { route: parseLibraryPath('/'), onGroup: noop })))
     expect(stages).toEqual(Array(6).fill('lib-stage'))
+  })
+
+  it("VE-06 a card's hover border is --primary", () => {
+    const rs = rules(read(join(HERE, 'styles/library.css')))
+    expect(ruleFor(rs, '.lib-card:hover')['border-color']).toBe('var(--primary) !important')
+    const html = renderToStaticMarkup(createElement(Home, { demoHref: null, onGroup: () => {}, onTour: () => {} }))
+    const cards = [...html.matchAll(/<button\b([^>]*)>/g)].map((m) => m[1].match(/class="([^"]*)"/)?.[1] ?? '').filter((c) => c !== 'ds-btn ds-btn--primary ds-btn--md')
+    expect(cards).toEqual(Array(11).fill('lib-card'))
   })
 })

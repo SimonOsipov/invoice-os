@@ -108,10 +108,12 @@ test('landing sign-in window: the sign-up line is centred', async ({ page }) => 
     for (const width of WIDTHS) {
       const at = `${view} view at ${width}px`
       const { dialog, card } = await openSignIn(page, view, width)
-      const row = dialog.getByText('New to ASComply?').locator('..')
+      // getByText resolves to the row itself: its own text node holds the sentence, the button is a child.
+      const row = dialog.getByText('New to ASComply?')
+      await expect(row.getByRole('button', { name: 'Create an account', exact: true }), `${at}: the matched element is not the sign-up row`).toBeVisible()
       await expect(row, `${at}: the sign-up row is missing`).toBeVisible()
       const cardBox = (await card.boundingBox())!
-      // The row spans the card's content; the text extent is a Range over its children.
+      // The text extent is a Range over the row's children; a left-aligned line leaves left gap ~0 and right gap > 0.
       const { rowBox, textBox } = await row.evaluate((el) => {
         const r = document.createRange()
         r.selectNodeContents(el)

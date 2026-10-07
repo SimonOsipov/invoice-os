@@ -285,6 +285,42 @@ describe('Escape', () => {
   })
 })
 
+describe('the sign-up row is centred', () => {
+  const createButton = () => Array.from(dialog().querySelectorAll('button')).find((b) => b.textContent === 'Create an account')
+
+  it('signUpRow_isCentred_inSignInView', async () => {
+    stubTargets(ALL_TARGETS)
+    configured()
+    await mount(vi.fn(), STATE, undefined, vi.fn())
+    const row = createButton()!.parentElement as HTMLElement
+    expect(row.textContent).toContain('New to ASComply?')
+    expect(row.style.justifyContent).toBe('center')
+    expect(row.style.flexWrap).toBe('wrap')
+    expect(row.style.textAlign).toBe('center')
+    expect(row.style.borderTop, 'the top border stays').not.toBe('')
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('signUpRow_isCentred_inForgotView', async () => {
+    stubTargets(ALL_TARGETS)
+    configured()
+    await mount(vi.fn(), STATE, undefined, vi.fn(), 'forgot')
+    const row = createButton()!.parentElement as HTMLElement
+    const back = Array.from(dialog().querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Back to sign in')!
+    expect(row.style.justifyContent).toBe('center')
+    expect(back.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING, 'the row is below Back').toBeTruthy()
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('signUpRow_absent_withoutOnCreateAccount', async () => {
+    stubTargets(ALL_TARGETS)
+    configured()
+    await mount(vi.fn(), STATE, undefined, undefined, 'forgot')
+    expect(createButton()).toBeUndefined()
+    expect(dialog().textContent).not.toContain('New to ASComply?')
+  })
+})
+
 describe('the forgot view', () => {
   const BOOT_ERROR = 'Sign-in failed. Try again.'
   const SIGN_IN_HEADING = 'Sign in to your workspace'

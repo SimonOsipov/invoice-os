@@ -24,11 +24,14 @@ export function Alert({ id, text }: { id?: string; text: string }) {
 }
 
 // The status region stays mounted while the resend control shows, so screen readers announce the text put into it.
-export function ResendNotice({ note, email, text }: { note?: { ok: boolean }; email: string; text?: string }) {
+const PEACH_NOTICE_STYLE: CSSProperties = { marginTop: 12, marginBottom: 0, padding: '10px 12px', borderRadius: 'var(--radius)', background: 'var(--accent)', color: 'var(--ink)', overflowWrap: 'anywhere' }
+
+// peach: ink on --accent, since peach text on white fails contrast.
+export function ResendNotice({ note, email, text, peach }: { note?: { ok: boolean }; email: string; text?: string; peach?: boolean }) {
   return (
     <>
       <div role="status">
-        {note?.ok && <p className="t-body-sm" style={{ marginTop: 8, marginBottom: 0, overflowWrap: 'anywhere' }}>{text ?? resendSentNotice(email)}</p>}
+        {note?.ok && <p className="t-body-sm" style={peach ? PEACH_NOTICE_STYLE : { marginTop: 8, marginBottom: 0, overflowWrap: 'anywhere' }}>{text ?? resendSentNotice(email)}</p>}
       </div>
       {note?.ok === false && <Alert text={RESEND_FAILED} />}
     </>

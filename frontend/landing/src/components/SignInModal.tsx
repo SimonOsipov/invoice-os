@@ -60,7 +60,7 @@ export function SignInModal({ onClose, heldState = NO_STATE, initialError, conso
                 <SignInForm heldState={heldState} initialError={shownError} consoleTarget={consoleTarget} onForgot={() => show('forgot')} />
               )}
               {onCreateAccount && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--border)', fontSize: 13, color: 'var(--muted-foreground)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap', textAlign: 'center', gap: 6, marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--border)', fontSize: 13, color: 'var(--muted-foreground)' }}>
                   New to ASComply?
                   <button type="button" className="a-link" onClick={onCreateAccount} style={{ fontSize: 13 }}>Create an account</button>
                 </div>

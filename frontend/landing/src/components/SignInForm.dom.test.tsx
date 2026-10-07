@@ -441,6 +441,18 @@ describe('the resend control on the unverified sign-in error', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
+  it('unverifiedResendNotice_isNotPeach', async () => {
+    configure()
+    routedFetch({ signIn: [refuse(403)] })
+    await mountForm(STATE)
+    await signInAs(ADA)
+    await click(resendButton())
+
+    const p = container.querySelector('[role="status"] p')
+    expect(p?.textContent?.trim(), 'control: the notice shows').toBe(sent(ADA))
+    expect(p!.getAttribute('style') ?? '').not.toContain('--accent')
+  })
+
   it('no resend control before a submit or after another refusal', async () => {
     configure()
     routedFetch({ signIn: [refuse(401)] })

@@ -171,11 +171,12 @@ describe('e2eMember', () => {
     expect(new Set(passwords).size).toBe(3)
     for (const p of passwords) expect(p.length).toBeGreaterThanOrEqual(16)
 
-    const ids = sixTenantIds(targets)
+    const ids = topologyTenantIds(targets)
     const all = ids.flatMap((t) => realm.E2E_MEMBER_ROLES.map((r) => realm.e2eMember(t, r)))
-    expect(all).toHaveLength(18)
-    expect(new Set(all.map((m) => m.email)).size).toBe(18)
-    expect(new Set(all.map((m) => m.password)).size).toBe(18)
+    const n = ids.length * realm.E2E_MEMBER_ROLES.length
+    expect(all).toHaveLength(n)
+    expect(new Set(all.map((m) => m.email)).size).toBe(n)
+    expect(new Set(all.map((m) => m.password)).size).toBe(n)
   })
 })
 

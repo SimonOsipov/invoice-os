@@ -1020,6 +1020,8 @@ jobs:
       # arrives the same way.
       - name: Unit tests (support-console)
         run: pnpm --filter @invoice-os/support-console test
+      - name: Unit tests (library)
+        run: pnpm --filter @invoice-os/library test
       # e2e's *.test.ts files are vitest, not Playwright, so the deploy gate's
       # test:api/topology/smoke/demo jobs never ran them — they had no runner at all
       # until this line. Cheap and deployment-free: they assert local seam logic
@@ -1072,7 +1074,7 @@ jobs:
           node-version: 22
       - name: pnpm install (cold, frozen lockfile)
         run: pnpm install --frozen-lockfile
-      - name: pnpm -r build (all four SPAs)
+      - name: pnpm -r build
         run: pnpm -r build
 
   # Stale cross-language references (cluster 4 of the QA-log aggregate). The Go

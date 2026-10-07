@@ -23,10 +23,10 @@ export function Alert({ id, text }: { id?: string; text: string }) {
   )
 }
 
-// The status region stays mounted while the resend control shows, so screen readers announce the text put into it.
+// peach: ink on --accent, since peach text on white fails contrast.
 const PEACH_NOTICE_STYLE: CSSProperties = { marginTop: 12, marginBottom: 0, padding: '10px 12px', borderRadius: 'var(--radius)', background: 'var(--accent)', color: 'var(--ink)', overflowWrap: 'anywhere' }
 
-// peach: ink on --accent, since peach text on white fails contrast.
+// The status region stays mounted while the resend control shows, so screen readers announce the text put into it.
 export function ResendNotice({ note, email, text, peach }: { note?: { ok: boolean }; email: string; text?: string; peach?: boolean }) {
   return (
     <>

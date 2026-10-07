@@ -663,6 +663,23 @@ describe('SignInForm adversarial: the state-less bounce', () => {
     expect(locationStub.href).toBe('https://app.x?auth=start')
   })
 
+  it('submit_noState_bounceWritesNothingToStorage', async () => {
+    configure()
+    const writes: unknown[] = []
+    const spyStore = () => ({ getItem: () => null, setItem: (...a: unknown[]) => void writes.push(a), removeItem: () => undefined, clear: () => undefined, key: () => null, length: 0 })
+    vi.stubGlobal('localStorage', spyStore())
+    vi.stubGlobal('sessionStorage', spyStore())
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null))
+    vi.stubGlobal('fetch', fetchMock)
+    await mountForm(null)
+    await fill('ada@okafor.ng', 'hunter2')
+    await submit()
+    expect(locationStub.href).toBe('https://app.x?auth=start')
+    expect(writes).toEqual([])
+    expect(document.cookie).not.toContain('hunter2')
+    expect(JSON.stringify(fetchMock.mock.calls)).not.toContain('hunter2')
+  })
+
   it('pageshowPersisted_afterBounce_submitBouncesAgain', async () => {
     configure()
     vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(new Response(null))))

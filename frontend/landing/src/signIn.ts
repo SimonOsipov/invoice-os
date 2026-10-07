@@ -71,7 +71,7 @@ export async function bounceToStart(target?: ConsoleTarget): Promise<boolean> {
   const url = startUrl(target)
   if (!base || !url) return false
   const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), PREFLIGHT_MS)
+  const timer = setTimeout(() => ctrl.abort(new DOMException('preflight timed out', 'TimeoutError')), PREFLIGHT_MS)
   try {
     await fetch(base, { mode: 'no-cors', cache: 'no-store', signal: ctrl.signal })
   } catch (e) {

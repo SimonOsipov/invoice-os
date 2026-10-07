@@ -50,6 +50,9 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Entity, error) {
 		}
 
 		// After the role check: a non-admin gets 403 whatever the input.
+		if in.Name == "" {
+			return ErrNameRequired
+		}
 		canonicalTIN, err := ValidateTIN(in.TIN)
 		if err != nil {
 			return err

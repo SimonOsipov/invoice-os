@@ -85,6 +85,7 @@ type ListFilter struct {
 // redeclared.
 var (
 	ErrValidation          = errors.New("portfolio: validation")
+	ErrNameRequired        = errors.New("portfolio: name required")
 	ErrNotFound            = errors.New("portfolio: not found")
 	ErrDuplicateTIN        = errors.New("portfolio: duplicate tin")
 	ErrRedundantTransition = errors.New("portfolio: redundant transition")
@@ -104,7 +105,7 @@ type createEntityRequest struct {
 
 // CreateHandler returns POST /v1/entities. It checks the verified identity is
 // present (401 before decode/create, exactly like tenancy.MeHandler's order),
-// decodes the request body (400 on decode error or empty name), calls create,
+// decodes the request body (400 on decode error), calls create,
 // maps errors via statusForErr (403 for a non-admin, Store.Create), and
 // answers 201 + Entity on success.
 func CreateHandler(create func(ctx context.Context, in CreateInput) (Entity, error), log *slog.Logger) http.HandlerFunc {
@@ -122,14 +123,8 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Entity, err
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		trimmedName := strings.TrimSpace(req.Name)
-		if trimmedName == "" {
-			writeError(w, http.StatusBadRequest, "name is required")
-			return
-		}
-
 		entity, err := create(r.Context(), CreateInput{
-			Name:         trimmedName,
+			Name:         strings.TrimSpace(req.Name),
 			TIN:          req.TIN,
 			Registration: req.Registration,
 			Sector:       req.Sector,
@@ -416,6 +411,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusForbidden, db.NotActiveMemberMessage
 	case errors.Is(err, ErrNotPermitted):
 		return http.StatusForbidden, "only an admin can add a company"
+	case errors.Is(err, ErrNameRequired):
+		return http.StatusBadRequest, "name is required"
 	case errors.Is(err, ErrInvalidTIN), errors.Is(err, ErrValidation):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, ErrNotFound):

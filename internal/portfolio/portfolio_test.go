@@ -203,14 +203,15 @@ func TestStatusForErr_ValidationKeepsItsMessage(t *testing.T) {
 	}
 }
 
-// TestCreateHandler_MissingName400 (AC1): a body without a name must 400
-// before create ever runs -- asserted by failing the test if create is
-// called.
+// TestCreateHandler_MissingName400 (AC1): a body without a name reaches create
+// as "" (the role check comes first, in the store) and ErrNameRequired is a 400.
 func TestCreateHandler_MissingName400(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	create := func(ctx context.Context, in CreateInput) (Entity, error) {
-		t.Fatal("create must not run when name is missing")
-		return Entity{}, nil
+		if in.Name != "" {
+			t.Errorf("create name = %q, want empty", in.Name)
+		}
+		return Entity{}, ErrNameRequired
 	}
 	rec, body := doCreate(t, create, &id, createRequest{TIN: "1234567897"})
 
@@ -223,14 +224,14 @@ func TestCreateHandler_MissingName400(t *testing.T) {
 }
 
 // TestCreateHandler_WhitespaceName400 (CodeRabbit review, PR #33): a
-// whitespace-only name (e.g. "   ") must 400 before create ever runs --
-// asserted by failing the test if create is called. strings.TrimSpace
-// treats "   " as blank, same as "".
+// whitespace-only name (e.g. "   ") reaches create trimmed to "".
 func TestCreateHandler_WhitespaceName400(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	create := func(ctx context.Context, in CreateInput) (Entity, error) {
-		t.Fatal("create must not run when name is whitespace-only")
-		return Entity{}, nil
+		if in.Name != "" {
+			t.Errorf("create name = %q, want empty", in.Name)
+		}
+		return Entity{}, ErrNameRequired
 	}
 	rec, body := doCreate(t, create, &id, createRequest{Name: "   ", TIN: "1234567897"})
 
@@ -3165,6 +3166,32 @@ func TestStoreCreate_NonAdminMalformedTINStillRefused(t *testing.T) {
 				t.Fatalf("Create as %s with TIN abc err = %v, want ErrNotPermitted", role, err)
 			}
 		})
+	}
+}
+
+func TestCreateHandler_NonAdminEmptyNameAnswers403(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	for _, role := range []string{"preparer", "reviewer"} {
+		t.Run(role, func(t *testing.T) {
+			_, c := seedCaller(t, super, "firm", role, "active")
+			id, _ := auth.IdentityFromContext(c)
+			rec, body := doCreate(t, store.Create, &id, createRequest{Name: "  ", TIN: "1234567897"})
+			if rec.Code != http.StatusForbidden || body.Error != "only an admin can add a company" {
+				t.Errorf("create = %d %q, want 403 %q", rec.Code, body.Error, "only an admin can add a company")
+			}
+		})
+	}
+}
+
+func TestCreateHandler_AdminEmptyNameAnswers400(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	_, c := seedCaller(t, super, "firm", "admin", "active")
+	id, _ := auth.IdentityFromContext(c)
+	rec, body := doCreate(t, store.Create, &id, createRequest{Name: "  ", TIN: "1234567897"})
+	if rec.Code != http.StatusBadRequest || body.Error != "name is required" {
+		t.Errorf("create = %d %q, want 400 %q", rec.Code, body.Error, "name is required")
 	}
 }
 

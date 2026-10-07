@@ -151,19 +151,23 @@ func TestCreateHandler_TINReasonInBody(t *testing.T) {
 	}
 }
 
-// TestHandlers_StoreTINRefusalIsBareReason: the real Store.Create and
-// Store.Update refuse a TIN before any database call, so a nil pool is enough;
-// the 400 body is the reason alone, with no wrapper added on the way.
+// TestHandlers_StoreTINRefusalIsBareReason: the real Store.Create (as an admin,
+// after the role check) and Store.Update refuse a TIN; the 400 body is the
+// reason alone, with no wrapper added on the way. Update needs no database.
 func TestHandlers_StoreTINRefusalIsBareReason(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	store := NewStore(nil)
+	super, app := dbTestPools(t)
+	createStore := NewStore(app)
+	_, adminCtx := seedCaller(t, super, "firm", "admin", "active")
+	adminID, _ := auth.IdentityFromContext(adminCtx)
 	rows := tinReasonRows()
 	if len(rows) == 0 {
 		t.Fatal("no rows")
 	}
 	for _, tc := range rows {
 		t.Run("create/"+tc.raw, func(t *testing.T) {
-			rec, body := doCreate(t, store.Create, &id, createRequest{Name: "Acme Ltd", TIN: tc.raw})
+			rec, body := doCreate(t, createStore.Create, &adminID, createRequest{Name: "Acme Ltd", TIN: tc.raw})
 			if rec.Code != http.StatusBadRequest || body.Error != tc.want {
 				t.Errorf("create = %d %q, want 400 %q", rec.Code, body.Error, tc.want)
 			}
@@ -199,14 +203,15 @@ func TestStatusForErr_ValidationKeepsItsMessage(t *testing.T) {
 	}
 }
 
-// TestCreateHandler_MissingName400 (AC1): a body without a name must 400
-// before create ever runs -- asserted by failing the test if create is
-// called.
+// TestCreateHandler_MissingName400 (AC1): a body without a name reaches create
+// as "" (the role check comes first, in the store) and ErrNameRequired is a 400.
 func TestCreateHandler_MissingName400(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	create := func(ctx context.Context, in CreateInput) (Entity, error) {
-		t.Fatal("create must not run when name is missing")
-		return Entity{}, nil
+		if in.Name != "" {
+			t.Errorf("create name = %q, want empty", in.Name)
+		}
+		return Entity{}, ErrNameRequired
 	}
 	rec, body := doCreate(t, create, &id, createRequest{TIN: "1234567897"})
 
@@ -219,14 +224,14 @@ func TestCreateHandler_MissingName400(t *testing.T) {
 }
 
 // TestCreateHandler_WhitespaceName400 (CodeRabbit review, PR #33): a
-// whitespace-only name (e.g. "   ") must 400 before create ever runs --
-// asserted by failing the test if create is called. strings.TrimSpace
-// treats "   " as blank, same as "".
+// whitespace-only name (e.g. "   ") reaches create trimmed to "".
 func TestCreateHandler_WhitespaceName400(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	create := func(ctx context.Context, in CreateInput) (Entity, error) {
-		t.Fatal("create must not run when name is whitespace-only")
-		return Entity{}, nil
+		if in.Name != "" {
+			t.Errorf("create name = %q, want empty", in.Name)
+		}
+		return Entity{}, ErrNameRequired
 	}
 	rec, body := doCreate(t, create, &id, createRequest{Name: "   ", TIN: "1234567897"})
 
@@ -1002,7 +1007,7 @@ func TestStoreCreate_PersistsAndAudits(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', 'active')`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -1068,7 +1073,7 @@ func TestStoreCreate_FailedCreateWritesNoAudit(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', 'active')`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -1190,7 +1195,7 @@ func TestStoreCreate_TINUniquenessIsPerTenantNotGlobal(t *testing.T) {
 		t.Fatalf("seed tenants: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $3, 'preparer', 'active'), ($2, $3, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $3, 'admin', 'active'), ($2, $3, 'admin', 'active')`,
 		tenantA, tenantB, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller memberships: %v", err)
@@ -1249,7 +1254,7 @@ func TestStoreCreate_NullableOptionalFieldsRoundTrip(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', 'active')`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -1322,7 +1327,7 @@ func TestStoreCreate_AuditRowIsTenantScoped(t *testing.T) {
 		t.Fatalf("seed tenants: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', 'active')`,
 		tenantA, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -1408,7 +1413,7 @@ func TestStoreCreate_InvalidTINRejectedAtStoreLayer(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', 'active')`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -2730,7 +2735,7 @@ func TestStoreLifecycle_RoundTripAuditTrail(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', 'active')`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -2831,7 +2836,7 @@ func TestStoreUpdate_PartialUpdateLeavesOtherFieldsIntact(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', 'active')`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -3082,5 +3087,342 @@ func TestStoreSetStatus_CrossTenantOnboardNotFound(t *testing.T) {
 	afterA := auditCount(t, app, tenantA, event)
 	if afterA != beforeA {
 		t.Errorf("audit_log rows for %s under tenant A = %d, want unchanged %d (cross-tenant Onboard must write no audit row under A)", event, afterA, beforeA)
+	}
+}
+
+// --- Store.Create refuses a non-admin ---
+
+// seedCaller seeds a tenant of the given kind with memberSubject holding role/status,
+// and returns the tenant id plus a context carrying that caller's identity.
+func seedCaller(t *testing.T, super *pgxpool.Pool, kind, role, status string) (string, context.Context) {
+	t.Helper()
+	ctx := context.Background()
+	tenantID := uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, $2, $3)`, tenantID, "create-by-role "+kind, kind,
+	); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM business_entities WHERE tenant_id = $1`, tenantID)
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, $3, $4)`,
+		tenantID, memberSubject, role, status,
+	); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+	return tenantID, c
+}
+
+func entityCount(t *testing.T, super *pgxpool.Pool, tenantID string) int {
+	t.Helper()
+	var n int
+	if err := super.QueryRow(context.Background(),
+		`SELECT count(*) FROM business_entities WHERE tenant_id = $1`, tenantID,
+	).Scan(&n); err != nil {
+		t.Fatalf("count business_entities: %v", err)
+	}
+	return n
+}
+
+var createByRoleKinds = []string{"firm", "in_house"}
+
+func TestStoreCreate_NonAdminRefusedInBothModes(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	const event = "portfolio.entity.created"
+	for _, kind := range createByRoleKinds {
+		for _, role := range []string{"preparer", "reviewer"} {
+			t.Run(kind+"/"+role, func(t *testing.T) {
+				tenantID, c := seedCaller(t, super, kind, role, "active")
+				before := auditCount(t, app, tenantID, event)
+
+				_, err := store.Create(c, CreateInput{Name: "Acme Ltd", TIN: "1234567897"})
+				if !errors.Is(err, ErrNotPermitted) {
+					t.Fatalf("Create as %s/%s err = %v, want ErrNotPermitted", kind, role, err)
+				}
+				if n := entityCount(t, super, tenantID); n != 0 {
+					t.Errorf("business_entities rows = %d, want 0", n)
+				}
+				if after := auditCount(t, app, tenantID, event); after != before {
+					t.Errorf("audit rows for %s = %d, want unchanged %d", event, after, before)
+				}
+			})
+		}
+	}
+}
+
+func TestStoreCreate_NonAdminMalformedTINStillRefused(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	for _, role := range []string{"preparer", "reviewer"} {
+		t.Run(role, func(t *testing.T) {
+			_, c := seedCaller(t, super, "firm", role, "active")
+			_, err := store.Create(c, CreateInput{Name: "X", TIN: "abc"})
+			if !errors.Is(err, ErrNotPermitted) {
+				t.Fatalf("Create as %s with TIN abc err = %v, want ErrNotPermitted", role, err)
+			}
+		})
+	}
+}
+
+func TestCreateHandler_NonAdminEmptyNameAnswers403(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	for _, role := range []string{"preparer", "reviewer"} {
+		t.Run(role, func(t *testing.T) {
+			_, c := seedCaller(t, super, "firm", role, "active")
+			id, _ := auth.IdentityFromContext(c)
+			rec, body := doCreate(t, store.Create, &id, createRequest{Name: "  ", TIN: "1234567897"})
+			if rec.Code != http.StatusForbidden || body.Error != "only an admin can add a company" {
+				t.Errorf("create = %d %q, want 403 %q", rec.Code, body.Error, "only an admin can add a company")
+			}
+		})
+	}
+}
+
+func TestCreateHandler_AdminEmptyNameAnswers400(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	_, c := seedCaller(t, super, "firm", "admin", "active")
+	id, _ := auth.IdentityFromContext(c)
+	rec, body := doCreate(t, store.Create, &id, createRequest{Name: "  ", TIN: "1234567897"})
+	if rec.Code != http.StatusBadRequest || body.Error != "name is required" {
+		t.Errorf("create = %d %q, want 400 %q", rec.Code, body.Error, "name is required")
+	}
+}
+
+func TestStoreCreate_AdminCreatesInBothModes(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	for _, kind := range createByRoleKinds {
+		t.Run(kind, func(t *testing.T) {
+			tenantID, c := seedCaller(t, super, kind, "admin", "active")
+
+			entity, err := store.Create(c, CreateInput{Name: "Acme Ltd", TIN: "1234567897"})
+			if err != nil {
+				t.Fatalf("Create as %s admin: %v", kind, err)
+			}
+			if entity.Status != "active" {
+				t.Errorf("status = %q, want active", entity.Status)
+			}
+			if n := entityCount(t, super, tenantID); n != 1 {
+				t.Errorf("business_entities rows = %d, want 1", n)
+			}
+		})
+	}
+}
+
+// The role is read per call: a demotion takes effect on the next create.
+func TestStoreCreate_DemotedAdminRefused(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	tenantID, c := seedCaller(t, super, "firm", "admin", "active")
+
+	if _, err := store.Create(c, CreateInput{Name: "First Co", TIN: "1234567897"}); err != nil {
+		t.Fatalf("Create before demotion: %v", err)
+	}
+	if _, err := super.Exec(context.Background(),
+		`UPDATE memberships SET role = 'preparer' WHERE tenant_id = $1 AND user_id = $2`, tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("demote caller: %v", err)
+	}
+
+	_, err := store.Create(c, CreateInput{Name: "Second Co", TIN: "123456780006"})
+	if !errors.Is(err, ErrNotPermitted) {
+		t.Fatalf("Create after demotion err = %v, want ErrNotPermitted", err)
+	}
+	if n := entityCount(t, super, tenantID); n != 1 {
+		t.Errorf("business_entities rows = %d, want 1 (only the pre-demotion create)", n)
+	}
+}
+
+// A suspended admin is stopped by the seam, not by requireAdmin.
+func TestStoreCreate_SuspendedAdminRefusedBySeam(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	tenantID, c := seedCaller(t, super, "firm", "admin", "suspended")
+
+	_, err := store.Create(c, CreateInput{Name: "Acme Ltd", TIN: "1234567897"})
+	if !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("Create as suspended admin err = %v, want db.ErrNotActiveMember", err)
+	}
+	if errors.Is(err, ErrNotPermitted) {
+		t.Errorf("suspended admin got ErrNotPermitted, want the seam's refusal alone")
+	}
+	if n := entityCount(t, super, tenantID); n != 0 {
+		t.Errorf("business_entities rows = %d, want 0", n)
+	}
+}
+
+// A non-admin never learns whether a TIN exists: the role check precedes the INSERT.
+func TestStoreCreate_RoleCheckedBeforeDuplicateTIN(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	tenantID, c := seedCaller(t, super, "firm", "preparer", "active")
+	const tin = "1234567897"
+	seedEntity(t, super, tenantID, "Existing Co", strPtr(tin))
+
+	_, err := store.Create(c, CreateInput{Name: "Second Co", TIN: tin})
+	if !errors.Is(err, ErrNotPermitted) {
+		t.Fatalf("Create duplicate TIN as preparer err = %v, want ErrNotPermitted", err)
+	}
+	if errors.Is(err, ErrDuplicateTIN) {
+		t.Error("preparer reached the duplicate-TIN refusal, want the role refusal first")
+	}
+}
+
+func TestStatusForErr_NotPermittedIs403(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"bare", ErrNotPermitted},
+		{"wrapped", fmt.Errorf("x: %w", ErrNotPermitted)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, msg := statusForErr(tc.err)
+			if status != http.StatusForbidden {
+				t.Errorf("status = %d, want 403", status)
+			}
+			if msg != "only an admin can add a company" {
+				t.Errorf("msg = %q, want %q", msg, "only an admin can add a company")
+			}
+		})
+	}
+}
+
+func TestCreateHandler_NotPermitted403(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	create := func(ctx context.Context, in CreateInput) (Entity, error) {
+		return Entity{}, ErrNotPermitted
+	}
+	b, err := json.Marshal(createRequest{Name: "Acme Ltd", TIN: "1234567897"})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	r := httptest.NewRequest("POST", "/v1/entities", bytes.NewReader(b))
+	r = r.WithContext(auth.WithIdentity(r.Context(), id))
+	rec := httptest.NewRecorder()
+	CreateHandler(create, nil).ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode %q: %v", rec.Body.String(), err)
+	}
+	if len(body) != 1 || body["error"] != "only an admin can add a company" {
+		t.Errorf("body = %v, want exactly {error: %q}", body, "only an admin can add a company")
+	}
+}
+
+// Roles are per tenant: admin in one workspace grants nothing in another.
+func TestStoreCreate_AdminElsewhereIsRefusedHere(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	adminTenant, adminCtx := seedCaller(t, super, "firm", "admin", "active")
+	preparerTenant, preparerCtx := seedCaller(t, super, "in_house", "preparer", "active")
+
+	if _, err := store.Create(adminCtx, CreateInput{Name: "Admin Side Co", TIN: "1234567897"}); err != nil {
+		t.Fatalf("Create in the tenant where the caller is admin: %v", err)
+	}
+	_, err := store.Create(preparerCtx, CreateInput{Name: "Preparer Side Co", TIN: "1234567897"})
+	if !errors.Is(err, ErrNotPermitted) {
+		t.Fatalf("Create in the tenant where the caller is preparer err = %v, want ErrNotPermitted", err)
+	}
+	if n := entityCount(t, super, adminTenant); n != 1 {
+		t.Errorf("admin tenant rows = %d, want 1", n)
+	}
+	if n := entityCount(t, super, preparerTenant); n != 0 {
+		t.Errorf("preparer tenant rows = %d, want 0", n)
+	}
+}
+
+// requireAdmin is called directly: the seam admits only active callers, so the
+// no-row and suspended arms are unreachable through Store.Create.
+func TestRequireAdmin_ReadsActiveRoleInTenant(t *testing.T) {
+	super, app := dbTestPools(t)
+	for _, tc := range []struct {
+		name, role, status string
+		subject            string
+		want               error
+	}{
+		{"active admin", "admin", "active", memberSubject, nil},
+		{"active preparer", "preparer", "active", memberSubject, ErrNotPermitted},
+		{"active reviewer", "reviewer", "active", memberSubject, ErrNotPermitted},
+		{"suspended admin", "admin", "suspended", memberSubject, ErrNotPermitted},
+		{"no membership row", "admin", "active", uuid.NewString(), ErrNotPermitted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tenantID, _ := seedCaller(t, super, "firm", tc.role, tc.status)
+			var got error
+			if err := db.WithinTenantTx(context.Background(), app, tenantID, func(tx pgx.Tx) error {
+				got = requireAdmin(context.Background(), tx, tc.subject)
+				return nil
+			}); err != nil {
+				t.Fatalf("tx: %v", err)
+			}
+			if !errors.Is(got, tc.want) || (tc.want == nil && got != nil) {
+				t.Errorf("requireAdmin = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// An in-process actor (non-uuid subject) passes the seam unchecked; it must not create.
+func TestStoreCreate_NonUUIDSubjectCreatesNothing(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID, _ := seedCaller(t, super, "firm", "admin", "active")
+	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: "system", Role: "authenticated", TenantID: tenantID})
+
+	if _, err := NewStore(app).Create(c, CreateInput{Name: "Acme Ltd", TIN: "1234567897"}); err == nil {
+		t.Fatal("Create as a non-uuid subject succeeded, want a refusal")
+	}
+	if n := entityCount(t, super, tenantID); n != 0 {
+		t.Errorf("business_entities rows = %d, want 0", n)
+	}
+}
+
+// The real store's refusal reaches the wire as 403 + the message; an admin still gets 201.
+func TestCreateHandler_RealStoreByRole(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	for _, tc := range []struct {
+		role       string
+		wantStatus int
+	}{{"preparer", http.StatusForbidden}, {"reviewer", http.StatusForbidden}, {"admin", http.StatusCreated}} {
+		t.Run(tc.role, func(t *testing.T) {
+			tenantID, c := seedCaller(t, super, "in_house", tc.role, "active")
+			b, err := json.Marshal(createRequest{Name: "Acme Ltd", TIN: "1234567897"})
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			r := httptest.NewRequest("POST", "/v1/entities", bytes.NewReader(b)).WithContext(c)
+			rec := httptest.NewRecorder()
+			CreateHandler(store.Create, nil).ServeHTTP(rec, r)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d (body=%s)", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			wantRows := 1
+			if tc.wantStatus == http.StatusForbidden {
+				wantRows = 0
+				var body map[string]any
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+					t.Fatalf("decode %q: %v", rec.Body.String(), err)
+				}
+				if len(body) != 1 || body["error"] != "only an admin can add a company" {
+					t.Errorf("body = %v, want exactly {error: %q}", body, "only an admin can add a company")
+				}
+			}
+			if n := entityCount(t, super, tenantID); n != wantRows {
+				t.Errorf("business_entities rows = %d, want %d", n, wantRows)
+			}
+		})
 	}
 }

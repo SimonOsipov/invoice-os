@@ -1,9 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { EmptyState, ErrorState, gatewayBase, Loading } from '@invoice-os/api-client'
 
 import { plusGlyph } from '../glyphs'
 import { firstRunSurface } from '../lib/clients'
+import { companySetupAccess } from '../lib/members'
+import { listEntities } from '../lib/portfolio'
 import type { Mode, PlatformCtx } from '../types'
 import { EntityFormModal } from './EntityFormModal'
 
@@ -22,9 +24,55 @@ export const ADD_COMPANY_COPY: Record<Mode, { h1: string; emptyTitle: string; em
   },
 }
 
+export const NO_COMPANY_COPY = {
+  title: 'No company created',
+  message: 'Your workspace admin adds the company. You can start when it exists.',
+}
+
+function CompanySetupWaiting({ ctx, base, onCompanyFound }: { ctx: PlatformCtx; base: string | null; onCompanyFound: () => void }) {
+  const latest = useRef({ authedFetch: ctx.authedFetch, onCompanyFound })
+  latest.current = { authedFetch: ctx.authedFetch, onCompanyFound }
+
+  // The admin may add the company while this tab is in the background.
+  useEffect(() => {
+    let live = true
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible' || base == null) return
+      listEntities(latest.current.authedFetch, base)
+        .then((r) => {
+          if (live && r.entities.length > 0) latest.current.onCompanyFound()
+        })
+        .catch(() => {})
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      live = false
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [])
+
+  return (
+    <div style={{ padding: '30px 36px 56px' }}>
+      <div style={{ marginBottom: 26 }}>
+        <div className="eyebrow" style={{ marginBottom: 10 }}>
+          OVERVIEW
+        </div>
+        <h1 style={{ fontSize: 28, letterSpacing: '-0.03em', margin: '0 0 5px' }}>{NO_COMPANY_COPY.title}</h1>
+        <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0, overflowWrap: 'anywhere' }}>
+          {ctx.user.tenantName ?? 'Your workspace'} · invoices are filed for a registered company.
+        </p>
+      </div>
+      <div data-testid="company-setup-waiting">
+        <EmptyState dense messageMaxWidth={460} message={NO_COMPANY_COPY.message} />
+      </div>
+    </div>
+  )
+}
+
 export function AddCompanyTask({ ctx }: { ctx: PlatformCtx }) {
   const { mode, activeEntity, entitiesState, entities, clients, refetchEntities } = ctx
   const [open, setOpen] = useState(false)
+  const [companyFound, setCompanyFound] = useState(false)
   const base = gatewayBase()
   const surface = firstRunSurface(activeEntity, entitiesState, entities.length, clients.length)
 
@@ -35,12 +83,45 @@ export function AddCompanyTask({ ctx }: { ctx: PlatformCtx }) {
       </div>
     )
   }
+  const access = companySetupAccess(ctx.membersState, ctx.members)
+  const waiting = (
+    <CompanySetupWaiting
+      ctx={ctx}
+      base={base}
+      onCompanyFound={() => {
+        setCompanyFound(true)
+        refetchEntities()
+      }}
+    />
+  )
+  // a found company keeps the waiting view until the dashboard replaces it
+  if (surface === 'loading' && companyFound) return waiting
   if (surface !== 'task') {
     return (
       <div style={{ padding: '30px 36px 56px' }}>
         <Loading label="Loading your workspace…" />
       </div>
     )
+  }
+
+  if (access === 'error' && ctx.membersError) {
+    return (
+      <div style={{ padding: '30px 36px 56px' }}>
+        <ErrorState error={ctx.membersError} onRetry={ctx.refetchMembers} />
+      </div>
+    )
+  }
+  if (access === 'error' || access === 'loading') {
+    return (
+      <div style={{ padding: '30px 36px 56px' }}>
+        <Loading label="Loading your workspace…" />
+      </div>
+    )
+  }
+  if (access === 'wait') {
+    // a later promotion must not reopen a modal the waiting view unmounted
+    if (open) setOpen(false)
+    return waiting
   }
 
   const copy = ADD_COMPANY_COPY[mode]

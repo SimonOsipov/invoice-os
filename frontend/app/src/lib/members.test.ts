@@ -18,6 +18,7 @@ import {
   CAPABILITY_ROWS,
   classifyInvites,
   clientSelectionCount,
+  companySetupAccess,
   CLIENT_ROSTER,
   CLIENT_USERS_COPY,
   delegateCandidates,
@@ -2192,5 +2193,31 @@ describe('membersSurface — the one derivation both tabs branch on, over every 
       ['empty', 'empty'],
       ['ready', 'roster'],
     ])
+  })
+})
+
+describe('LOGFIX-06-02 — companySetupAccess', () => {
+  it('companySetupAccess reads the roster state before the role', () => {
+    const self = (role: Member['role'], status: MemberStatus = 'active'): Member => ({
+      ...inhouseRow('Ada Self', status),
+      role,
+      isYou: true,
+    })
+    const rows: [AsyncStatus, Member[], string][] = [
+      ['error', [self('admin')], 'error'],
+      ['idle', [], 'add'],
+      ['loading', [], 'loading'],
+      ['loading', [self('admin')], 'add'],
+      ['loading', [self('preparer')], 'wait'],
+      ['ready', [self('preparer')], 'wait'],
+      ['ready', [self('reviewer')], 'wait'],
+      ['ready', [self('admin', 'suspended')], 'wait'],
+      ['empty', [], 'wait'],
+      ['ready', [], 'loading'],
+      ['ready', [self('admin')], 'add'],
+    ]
+    for (const [state, members, want] of rows) {
+      expect(companySetupAccess(state, members), `${state} / ${members.map((m) => m.role + ':' + m.status).join() || 'no rows'}`).toBe(want)
+    }
   })
 })

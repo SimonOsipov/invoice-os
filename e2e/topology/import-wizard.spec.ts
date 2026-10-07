@@ -3324,11 +3324,11 @@ test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly t
     )
   }
 
-  // The field SET itself, twenty-three names. EXTR-18-05 re-pointed this fixture at the wired
-  // extractor's own reading (rich_invoice.pdf), so this is transcribed from the real
-  // Reconcile(Resolve(...)) result, never from mock.go and never from the SPA. This is the only DEPLOYED oracle that the rich
-  // fixture reaches the screen unchanged, so a wiring regression must red here and not only in
-  // Go. Both sides are sorted in JS, so the database's collation is not what this compares.
+  // The field SET itself, twenty-three names, from the wired extractor's reading of
+  // rich_invoice.pdf. Re-derive it from the rows `rfRun` returns in
+  // internal/extraction/corpus_wired_db_test.go (no Go test pins the full name set). Only
+  // DEPLOYED oracle that the rich fixture reaches the screen unchanged. Both sides are sorted
+  // in JS, so the database's collation is not what this compares.
   const WIRE_FIELD_SET = [
     'buyer_name',
     'buyer_tin',

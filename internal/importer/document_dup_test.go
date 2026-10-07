@@ -130,7 +130,7 @@ func intervalsOverlap(aStart, aEnd, bStart, bEnd time.Time) bool {
 // :209-210 temporarily changed from
 //
 //	if errors.Is(createErr, invoice.ErrDuplicateNumber) {
-//	    quarantineErr = storeDuplicateRowError(nil, existing[in.InvoiceNumber])
+//	    quarantineErr = storeDuplicateRowError(1, nil, existing[in.InvoiceNumber])
 //	} else {
 //	    quarantineErr = RowError{Message: msg}
 //	}
@@ -278,8 +278,8 @@ func TestServiceImportDocument_ConcurrentDuplicateRaceWinnerWritesLosersEnriched
 // the fast path (ExistingNumbers's upfront precheck resolves it before Create even runs).
 //
 // GREEN ON ARRIVAL. Non-vacuity proven by mutation: the `storeDuplicateRowError` call in
-// document.go temporarily changed from `storeDuplicateRowError(nil, existing[in.InvoiceNumber])` to
-// `storeDuplicateRowError(nil, "")` (dropping the resolved id) -> re-ran this test -> FAILED
+// document.go temporarily changed from `storeDuplicateRowError(1, nil, existing[in.InvoiceNumber])` to
+// `storeDuplicateRowError(1, nil, "")` (dropping the resolved id) -> re-ran this test -> FAILED
 // on the InvoiceID assertion (got "" want the winner's id) -> reverted.
 func TestServiceImportDocument_SequentialReimportResolvesInvoiceIDToWinner(t *testing.T) {
 	super, app := dbTestPools(t)

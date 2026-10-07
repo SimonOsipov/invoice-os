@@ -3518,7 +3518,7 @@ test('detail surface: the armed decision block and approval card, plus their lay
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// arch §7 A-D: the four claims the state strip makes that jsdom cannot see. StatusStrip.test.tsx
+// The four claims the state strip makes that jsdom cannot see. StatusStrip.test.tsx
 // reads inline style PROPS -- it can prove the component ASKED for flex:none/max-content/nowrap,
 // never that a browser delivered them. These four are the only oracle for the delivered layout.
 //

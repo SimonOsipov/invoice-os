@@ -457,7 +457,7 @@ describe('StatusStrip: attribution', () => {
     expect(named.className.split(' ')).not.toContain('mono')
   })
 
-  it('a time with no actor renders as the time (arch §12 C-5, the dominant production case)', () => {
+  it('a time with no actor renders as the time (the dominant production case)', () => {
     // A run approved by a human gives node 3 `at` with a null `actor` -- resolving
     // closed_by would re-open the cross-tenant leak S-10 guards. A renderer that draws
     // the attribution only when `actor` is set blanks node 3 on the commonest path.
@@ -482,7 +482,7 @@ describe('StatusStrip: attribution', () => {
     // Was RED against a hole: an empty run.state captioned node 3 with ''
     // and the strip drew a blank cell. Closed in invoiceStrip.ts's default branch, pinned
     // there by S-33; the guard below keeps this fixture on that branch.
-    expect(EMPTY_RUN_STATE[2].caption, 'fixture guard: the C-6 fallback, not a blank cell').toBe('Waiting')
+    expect(EMPTY_RUN_STATE[2].caption, 'fixture guard: the fallback caption, not a blank cell').toBe('Waiting')
     for (const [name, nodes] of SCENARIOS) {
       cleanup()
       for (const actor of actorsOf(renderStrip(nodes))) {
@@ -492,7 +492,7 @@ describe('StatusStrip: attribution', () => {
   })
 })
 
-describe('StatusStrip: read-only (AC-9 / arch §7E)', () => {
+describe('StatusStrip: read-only (AC-9)', () => {
   it('contains no interactive element, while staying keyboard-reachable', () => {
     for (const [name, nodes] of SCENARIOS) {
       cleanup()

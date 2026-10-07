@@ -22,6 +22,7 @@ const (
 	authForkGatewayID = "svc-gw-fork"
 	authForkAuthID    = "svc-auth-fork"
 	authProdAuthID    = "svc-auth-production"
+	authProdTenancyID = "svc-tenancy-production"
 
 	authInternalURL  = "http://auth.railway.internal:8080"
 	authJWKSURL      = authInternalURL + "/.well-known/jwks.json"
@@ -1091,13 +1092,20 @@ func prodSealed(sealed ...string) string {
 	return `{"data":{"environment":{"id":"` + persistentEnvironmentID + `","name":"production","variables":{"edges":[` + strings.Join(edges, ",") + `]}}}}`
 }
 
-func newProdAuthShim(t *testing.T, sealed string) authShim {
+// prodSealedOn answers the sealed-variable read with one variable sealed on the given service.
+func prodSealedOn(svc, name string) string {
+	return `{"data":{"environment":{"id":"` + persistentEnvironmentID + `","name":"production","variables":{"edges":[` +
+		`{"node":{"name":"ENVIRONMENT","isSealed":false,"serviceId":"` + productionGatewayID + `"}},` +
+		`{"node":{"name":"` + name + `","isSealed":true,"serviceId":"` + svc + `"}}]}}}}`
+}
+
+func newProdAuthShim(t *testing.T, sealed string, extraInstances ...string) authShim {
 	t.Helper()
 	return newAuthShim(t, map[string]string{
-		"settle": forkSettle(
-			`{"node":{"serviceId":"`+productionGatewayID+`","serviceName":"gateway"}}`,
-			`{"node":{"serviceId":"`+authProdAuthID+`","serviceName":"auth"}}`,
-		),
+		"settle": forkSettle(append([]string{
+			`{"node":{"serviceId":"` + productionGatewayID + `","serviceName":"gateway"}}`,
+			`{"node":{"serviceId":"` + authProdAuthID + `","serviceName":"auth"}}`,
+		}, extraInstances...)...),
 		"sealedAudit": sealed,
 		"sealed":      sealed,
 	}, map[string]map[string]string{
@@ -1226,6 +1234,37 @@ func TestSetProductionAuth_PostMergeRefusesSealedTarget(t *testing.T) {
 			}
 			if len(s.calls(t)) == 0 {
 				t.Error("no Railway call was made, so the sealed flag was never read")
+			}
+		})
+	}
+}
+
+// A sealed variable on another service is not auth's: the writer reads only the three auth names on auth.
+func TestSetProductionAuth_PostMergeIgnoresSealedVariablesOnTenancy(t *testing.T) {
+	jwk := freshJWK(t)
+	exports := prodAuthExports(authProdPassword, jwk, authProdJWTSecret, authProdResendKey)
+	run := func(t *testing.T, sealed string) authShim {
+		t.Helper()
+		s := newProdAuthShim(t, sealed, `{"node":{"serviceId":"`+authProdTenancyID+`","serviceName":"tenancy"}}`)
+		stdout, stderr, code := s.run(t, exports, "set-production-auth", "--post-merge", persistentEnvironmentID)
+		if code != 0 {
+			t.Fatalf("exit %d, want 0; output = %q", code, stdout+stderr)
+		}
+		return s
+	}
+	control := run(t, prodSealed())
+	if len(control.upserts(t)) == 0 {
+		t.Fatal("the control wrote nothing; the comparison proves nothing")
+	}
+	for _, c := range []struct{ name, sealed string }{
+		{"RESEND_SENDING_KEY sealed on tenancy", prodSealedOn(authProdTenancyID, "RESEND_SENDING_KEY")},
+		{"an auth name sealed on tenancy", prodSealedOn(authProdTenancyID, "GOTRUE_JWT_KEYS")},
+		{"RESEND_SENDING_KEY sealed on auth", prodSealedOn(authProdAuthID, "RESEND_SENDING_KEY")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := run(t, c.sealed)
+			if got, want := s.upserts(t), control.upserts(t); !slices.Equal(got, want) {
+				t.Errorf("upserts = %v, want the control's %v", got, want)
 			}
 		})
 	}

@@ -80,3 +80,11 @@ dm-success-done
 # parseRoute REJECTED. ROUTE-02 made the route real and rewrote that comment,
 # so the scan reads the route's arrival as its removal.
 /invoices/<uuid>
+
+# --- assembled log lines (resend-verification) ---------------------------
+# mailLinkHandler (internal/gateway/resend_verification.go) builds these as
+# name+": timing" etc.; the runtime strings are unchanged. TestResendVerification_* assert them.
+resend-verification: gotrue resend failed
+resend-verification: gotrue unreachable
+resend-verification: limit reached
+resend-verification: timing

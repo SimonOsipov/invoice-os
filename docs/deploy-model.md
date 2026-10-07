@@ -111,6 +111,12 @@ PR opened ──> dev-env.yml:
                 ──> `fleet-gate` job: fleet /healthz/fleet gate + its Sentry
                     state check: every Go service and docling report sentry "off"
                     + notifications reports `contacts: fake`
+                    + "Gate on the account-mail templates" (PR and push, not
+                    dispatch): `railway-env.sh check-mail-templates <environment_id>`
+                    with `RAILWAY_API_TOKEN`, after "Wait for the auth deployment"
+                    and an `actions/setup-go` step; reads auth's variables unrendered
+                    + "Gate on the account-mail logo" (push only):
+                    `go run ./tools/prenv mail-logo-check`
                 ──> `deploy-slot-release` job: a marker; the run's slot is free once it ends
                 ──> verify, `e2e` job: smoke (landing + both consoles) + api
                 ──> verify, `topology` job: one parallel leg per unit (serial-lane,
@@ -421,7 +427,7 @@ contradict what the docs imply.
 | Postgres deployment | **No** — `latestDeployment == NONE` | Real gap: nothing in this repo ever deployed Postgres (the `railway up` matrices are gateway + 8 contexts + docling + auth + 4 SPAs; Postgres is excluded above). `prepare-env` now deploys it explicitly via `serviceInstanceDeployV2`, then waits. |
 | Postgres volume | **No** — `volumeInstances == []`, while `development` has 5000MB | **CI must CREATE it.** Without a volume Postgres deploys to `SUCCESS` but **never accepts a connection** (corrected 2026-07-19 — see below). `prepare-env` creates it with `volumeCreate`, copying the `mountPath` and `region` from `development`, confirms by re-query, and redeploys Postgres if a deployment already existed. The database is still **ephemeral by design** and born empty — the gateway bootstraps, migrates, purges the demo tenants and seeds at boot. |
 | TCP proxy + `DATABASE_PUBLIC_URL` | Yes, with its own distinct port; `DATABASE_URL` resolves too | Since M4-22-08, `prepare-env` no longer probes or observes the proxy at all. `health-gate`'s `/healthz` 200 is now the sole Postgres liveness proof (`docs/migrations.md` §2) — strictly stronger. The proxy resource itself is scheduled for deletion via Escalation E2; until then it may still exist, unused. |
-| Sealed variables | **No** — they never fork | `prepare-env` fails loudly if `development` holds any, since they would otherwise go silently missing in every PR environment. Only exception: `GOTRUE_JWT_KEYS`, `GOTRUE_JWT_SECRET` and `GOTRUE_SMTP_PASS` on `auth`, which `fork-vars-before-urls` writes per fork. |
+| Sealed variables | **No** — they never fork | `prepare-env` fails loudly if `development` holds any, since they would otherwise go silently missing in every PR environment. Only exceptions: `GOTRUE_JWT_KEYS`, `GOTRUE_JWT_SECRET` and `GOTRUE_SMTP_PASS` on `auth`, which `fork-vars-before-urls` writes per fork, and `RESEND_SENDING_KEY` on `tenancy`, which a fork lacks and runs without. |
 | Unsealed variables | Yes — verbatim | `GATEWAY_TOKEN` is the exception: `fork-vars-before-urls` overwrites it per fork on the gateway and the seven services (`TestSetForkGatewayToken_WritesOneFreshValueToTheEight`). |
 | Leftover PR environments | None existed before the probe | Independent confirmation that Railway's PR Environments feature never created any here. |
 
@@ -544,6 +550,19 @@ A service outside the table has no later check, so a lost poll fails the step.
 status is its verdict. `deploy-context` publishes the auth deployment id as a job output;
 `fleet-gate` polls that deployment (`SUCCESS` or `SLEEPING` passes; `FAILED`, `CRASHED`,
 `REMOVED`, `REMOVING` or `SKIPPED` fails). An empty or malformed id fails before any call.
+
+**Account-mail gates.** After "Wait for the auth deployment" and an `actions/setup-go` step,
+`fleet-gate` has two more steps. "Gate on the account-mail templates" runs
+`railway-env.sh check-mail-templates <environment_id>` with `RAILWAY_API_TOKEN` on PR and
+push, not `workflow_dispatch` (its project token cannot read variables). It loads every
+non-empty `GOTRUE_MAILER_TEMPLATES_*` of that environment's `auth` through
+`prenv mail-template-check` and every non-empty `GOTRUE_MAILER_SUBJECTS_*` through
+`prenv mail-subject-check`, reading variables unrendered, so a Railway reference in a
+template URL is fetched literally and fails; it also fails when `GOTRUE_SITE_URL` is absent
+from `auth`'s variables. "Gate on the account-mail logo" runs
+`go run ./tools/prenv mail-logo-check` on push only, because production serves the logo only
+after a push deploy. See [identity-provider.md](./identity-provider.md) "Branding the account
+mails in production".
 
 **`spa-build-gate`.** On push and dispatch `e2e` does not run, so this job runs
 `scripts/ci/wait-spa-builds.sh` against the four SPA URLs. Each must serve `/health` and a

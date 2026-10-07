@@ -167,7 +167,7 @@ func TestHandoffHandlersWiring(t *testing.T) {
 	store, throttle := assigned["gateway.NewHandoffStore"], assigned["gateway.NewSignInThrottle"]
 	for callee, want := range map[string]string{
 		"gateway.NewHandoffStore":   "gateway.HandoffTTL, time.Now",
-		"gateway.NewSignInThrottle": "gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now",
+		"gateway.NewSignInThrottle": `"sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now`,
 		"gateway.SignInHandler":     "authURL, client, " + store + ", " + throttle + ", log, sink",
 		"gateway.ExchangeHandler":   store,
 		"gateway.RefreshHandler":    "authURL, client, log",

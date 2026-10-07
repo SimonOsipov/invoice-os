@@ -101,23 +101,28 @@ func (rt *router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	proxy.ServeHTTP(w, r)
 }
 
-// tenantlessPath is the one route a token with no tenant may reach: it creates that tenant.
-const tenantlessPath = "/api/tenancy/v1/workspaces"
+// A token with no tenant may reach these two POST routes only: provisioning creates a tenant, accept joins one.
+const (
+	tenantlessPath       = "/api/tenancy/v1/workspaces"
+	tenantlessAcceptPath = "/api/tenancy/v1/invitations/accept"
+)
 
 // authorize returns 0 when the identity may use the service, otherwise the HTTP
 // status to answer. P1 rule: every context service is tenant-scoped, so a valid
-// token carrying no tenant is forbidden, except POST /api/tenancy/v1/workspaces.
+// token carrying no tenant is forbidden, except POST /api/tenancy/v1/workspaces and
+// POST /api/tenancy/v1/invitations/accept.
 // The M7 ops console adds its operator-role rule here, keyed on service.
 func authorize(r *http.Request, service string, id auth.Identity) int {
-	if id.TenantID == "" && !isProvisioning(r) {
+	if id.TenantID == "" && !isTenantlessRoute(r) {
 		return http.StatusForbidden
 	}
 	return 0
 }
 
-// isProvisioning matches the escaped path, so an encoded variant (v1%2Fworkspaces) is not exempt.
-func isProvisioning(r *http.Request) bool {
-	return r.Method == http.MethodPost && r.URL.EscapedPath() == tenantlessPath
+// isTenantlessRoute matches the escaped path, so an encoded variant (v1%2Fworkspaces) is not exempt.
+func isTenantlessRoute(r *http.Request) bool {
+	p := r.URL.EscapedPath()
+	return r.Method == http.MethodPost && (p == tenantlessPath || p == tenantlessAcceptPath)
 }
 
 var errGuardRefused = errors.New("upstream refused the gateway token")

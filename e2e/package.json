@@ -11,10 +11,12 @@
     "test:api": "playwright test --config playwright.api.config.ts",
     "test:unit": "vitest run",
     "test:hooks": "vitest run --config vitest.hooks.config.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "ctl": "node --import ./ctl/tsResolve.mjs ./ctl/main.ts"
   },
   "devDependencies": {
     "@invoice-os/api-client": "workspace:*",
+    "@playwright/cli": "0.1.22",
     "@playwright/test": "^1.50.0",
     "@types/node": "^22.10.0",
     "fflate": "^0.8.3",

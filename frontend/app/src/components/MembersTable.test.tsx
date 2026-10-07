@@ -11,7 +11,7 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { MEMBER_UNBACKED, PROTECTED_ADMIN_NOTE, type Member } from '../lib/members'
+import { invitedMember, MEMBER_UNBACKED, PROTECTED_ADMIN_NOTE, type Member, type PendingInvite } from '../lib/members'
 import type { Role } from '../lib/roles'
 import type { Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
@@ -221,7 +221,7 @@ const ROSTER = (): Member[] => [
   member({ id: 'u4', name: 'Di Suspended', initials: 'DS', status: 'suspended' }),
 ]
 
-const rowOf = (name: string) => within(screen.getByText(name).closest('[data-testid="member-row"]') as HTMLElement)
+const rowOf = (name: string) => within(screen.getByText(name).closest('[data-testid="member-row"], [data-testid="invite-row"]') as HTMLElement)
 
 describe('the row atoms', () => {
   it('each status pill is a childless radius-4 mono 8.5/600 label', () => {
@@ -251,7 +251,7 @@ describe('the row atoms', () => {
   it('every initials chip is a circle, whatever the status', () => {
     renderRows(ROSTER())
 
-    const chips = screen.getAllByTestId('member-row').map((row) => row.querySelector('[aria-hidden="true"]') as HTMLElement)
+    const chips = screen.getAllByTestId(/^(member|invite)-row$/).map((row) => row.querySelector('[aria-hidden="true"]') as HTMLElement)
     expect(chips).toHaveLength(4)
     for (const chip of chips) expect(chip.style.borderRadius).toBe('50%')
   })
@@ -310,7 +310,7 @@ describe('the row menu', () => {
     expect(reason.style.fontSize).toBe('11px')
   })
 
-  it('an invited row offers three disabled items and states both distinct reasons', () => {
+  it('an invited row offers Resend, and states why Copy and Revoke are disabled', () => {
     renderRows(ROSTER())
 
     fireEvent.click(rowOf('Cy Invited').getByTestId('member-menu-trigger'))
@@ -318,8 +318,8 @@ describe('the row menu', () => {
     const menu = screen.getByTestId('member-menu')
     const items = within(menu).getAllByRole('button') as HTMLButtonElement[]
     expect(items.map((i) => i.textContent)).toEqual(['Resend invite', 'Copy invite link', 'Revoke invite'])
-    for (const item of items) expect(item.disabled, `${item.textContent} must be disabled`).toBe(true)
-    expect(within(menu).getAllByTestId('member-menu-reason').map((r) => r.textContent)).toEqual([MEMBER_UNBACKED.invite, MEMBER_UNBACKED.remove])
+    expect(items.map((i) => i.disabled)).toEqual([false, true, true])
+    expect(within(menu).getAllByTestId('member-menu-reason').map((r) => r.textContent)).toEqual([MEMBER_UNBACKED.inviteLink, MEMBER_UNBACKED.revokeInvite])
   })
 
   it('your own menu has Edit and a locked Suspend, and no Remove at all', () => {
@@ -433,5 +433,151 @@ describe('InitialsChip type scale and ring', () => {
     expect(chipAt(26, { ring: true }).style.border).toBe('2px solid var(--bg-2)')
     expect(chipAt(26, { ring: true, status: 'suspended' }).style.border).toBe('2px solid var(--bg-2)')
     expect(chipAt(26, { ring: true, status: 'invited' }).style.border, 'invited stays dashed over its transparent ground').toBe('1px dashed var(--line-3)')
+  })
+})
+
+// ============================================================================
+// RESEND-07-04 — the pending row (D7, D9, D19, N5)
+// ============================================================================
+
+const INVITE: PendingInvite = {
+  id: 'inv-1',
+  email: 'zed@x.ng',
+  role: 'reviewer',
+  expiresAt: new Date(Date.now() + 7 * 86_400_000).toISOString(),
+  delivery: 'sent',
+}
+
+function renderPending(over: { invites?: PendingInvite[]; onResend?: (id: string) => void; resending?: ReadonlySet<string>; onOpen?: (id: string) => void; extra?: Member[] } = {}) {
+  const pending = invitedMember(INVITE)
+  const rows = [...(over.extra ?? []), pending]
+  render(
+    <MembersTable
+      ctx={ctxWith({ members: rows })}
+      rows={rows}
+      policies={[]}
+      roles={[]}
+      onOpen={over.onOpen ?? vi.fn()}
+      onStatus={vi.fn()}
+      statusError={null}
+      invites={over.invites ?? [INVITE]}
+      onResend={over.onResend ?? vi.fn()}
+      resending={over.resending}
+    />,
+  )
+  return pending
+}
+
+function openMenuOf(row: HTMLElement): HTMLElement {
+  fireEvent.click(within(row).getByTestId('member-menu-trigger'))
+  return screen.getByTestId('member-menu')
+}
+
+describe('RESEND-07-04: the pending row status cell', () => {
+  it('the expiry line sits under the INVITED pill, in a column', () => {
+    renderPending()
+    const cell = screen.getByTestId('invite-row').children[3] as HTMLElement
+    expect(getComputedStyle(cell).flexDirection, 'pill and line stack, they do not sit side by side').toBe('column')
+    const pill = within(cell).getByText('INVITED')
+    const line = within(cell).getByText(/^Expires in/)
+    expect(pill.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+})
+
+describe('RESEND-07-04: the pending row menu', () => {
+  it("MembersTable: a pending row's menu offers Resend and two disabled items with their reasons", () => {
+    renderPending()
+    const menu = openMenuOf(screen.getByTestId('invite-row'))
+
+    const labels = within(menu).getAllByRole('button').map((b) => b.textContent)
+    expect(labels, 'the pending menu is exactly Resend, Copy link, Revoke; no Edit, Suspend or Remove').toEqual([
+      'Resend invite',
+      'Copy invite link',
+      'Revoke invite',
+    ])
+
+    expect((within(menu).getByRole('button', { name: 'Resend invite' }) as HTMLButtonElement).disabled).toBe(false)
+
+    for (const [label, reason] of [
+      ['Copy invite link', MEMBER_UNBACKED.inviteLink],
+      ['Revoke invite', MEMBER_UNBACKED.revokeInvite],
+    ] as const) {
+      const item = within(menu).getByRole('button', { name: label }) as HTMLButtonElement
+      expect(item.disabled, `${label} stays disabled`).toBe(true)
+      const note = within(menu).getByText(reason)
+      expect(note.getAttribute('data-testid'), `${label}'s reason is a visible note`).toBe('member-menu-reason')
+      expect(item.getAttribute('aria-describedby'), `${label} points at its own reason`).toBe(note.id)
+    }
+    expect(within(menu).queryByText('Edit')).toBeNull()
+    expect(within(menu).queryByText('Suspend')).toBeNull()
+    expect(within(menu).queryByText('Remove')).toBeNull()
+  })
+
+  it('MembersTable: Resend calls onResend with the invitation id, and is disabled while that id is resending', () => {
+    const onResend = vi.fn()
+    renderPending({ onResend })
+    fireEvent.click(within(openMenuOf(screen.getByTestId('invite-row'))).getByRole('button', { name: 'Resend invite' }))
+    expect(onResend).toHaveBeenCalledTimes(1)
+    expect(onResend).toHaveBeenCalledWith('inv-1')
+
+    cleanup()
+    const again = vi.fn()
+    renderPending({ onResend: again, resending: new Set(['inv-1']) })
+    const resend = within(openMenuOf(screen.getByTestId('invite-row'))).getByRole('button', { name: 'Resend invite' }) as HTMLButtonElement
+    expect(resend.disabled).toBe(true)
+    fireEvent.click(resend)
+    expect(again).not.toHaveBeenCalled()
+  })
+
+  it("MembersTable: a pending row's click does not open the drawer", () => {
+    const onOpen = vi.fn()
+    const ada = member({ id: 'u2', name: 'Ada Person' })
+    renderPending({ onOpen, extra: [ada] })
+
+    // Pair: a membership row still opens it, so the silence below is the pending row's.
+    fireEvent.click(screen.getByTestId('member-row'))
+    expect(onOpen).toHaveBeenCalledTimes(1)
+    expect(onOpen).toHaveBeenCalledWith('u2')
+
+    fireEvent.click(screen.getByTestId('invite-row'))
+    expect(onOpen).toHaveBeenCalledTimes(1)
+  })
+
+  it('MembersTable: the scroll container holds the table and pads only while a menu is open', () => {
+    renderPending()
+    const scroll = screen.getByTestId('members-table-scroll')
+    expect(scroll.contains(screen.getByTestId('members-table')), 'L2 reads the menu against this container').toBe(true)
+    const closed = scroll.style.paddingBottom
+
+    openMenuOf(screen.getByTestId('invite-row'))
+    expect(scroll.style.paddingBottom, 'an open menu gets clearance the closed table does not').not.toBe(closed)
+  })
+
+  it('MembersTable: an invited membership without an invitation shows the pill only', () => {
+    const lone = member({ id: 'u9', name: 'Lone Invitee', email: 'lone@x.ng', status: 'invited' })
+    render(
+      <MembersTable
+        ctx={ctxWith({ members: [lone] })}
+        rows={[lone]}
+        policies={[]}
+        roles={[]}
+        onOpen={vi.fn()}
+        onStatus={vi.fn()}
+        statusError={null}
+        invites={[]}
+        onResend={vi.fn()}
+      />,
+    )
+
+    const row = screen.getByTestId('invite-row')
+    expect(within(row).getByText('INVITED')).toBeTruthy()
+    expect(within(row).queryByText(/Expires/)).toBeNull()
+    expect(within(row).queryByText('Email not sent')).toBeNull()
+
+    let menu!: HTMLElement
+    expect(() => {
+      menu = openMenuOf(row)
+    }).not.toThrow()
+    expect(within(menu).getByRole('button', { name: 'Resend invite' })).toBeTruthy()
   })
 })

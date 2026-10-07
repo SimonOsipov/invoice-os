@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -56,8 +57,23 @@ var (
 	ErrLastActiveAdmin          = errors.New("tenancy: last active admin")
 )
 
+// Sentinels for the invitations store.
+var (
+	ErrInviteNotPermitted   = errors.New("tenancy: invite not permitted")
+	ErrInvitationNotFound   = errors.New("tenancy: invitation not found")
+	ErrInvitationNotPending = errors.New("tenancy: invitation not pending")
+	ErrDailyInviteLimit     = errors.New("tenancy: daily invite limit")
+)
+
 // ErrAlreadyProvisioned means the caller already has a workspace.
 var ErrAlreadyProvisioned = errors.New("tenancy: already provisioned")
+
+// Sentinels for previewing and accepting an invitation.
+var (
+	ErrInvitationNotValid      = errors.New("tenancy: invitation not valid")
+	ErrAlreadyMember           = errors.New("tenancy: already a member")
+	ErrInvitationEmailMismatch = errors.New("tenancy: invitation email mismatch")
+)
 
 // MeLoader resolves the caller's tenant and their own membership (role, display
 // name, email). The handler takes this function type rather than a pool so its
@@ -388,6 +404,20 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "an invited member has no sign-in to suspend or reactivate"
 	case errors.Is(err, ErrLastActiveAdmin):
 		return http.StatusConflict, "this is the tenant's last active admin — make another member an active admin first"
+	case errors.Is(err, ErrInviteNotPermitted):
+		return http.StatusForbidden, "only an admin can invite people"
+	case errors.Is(err, ErrInvitationNotFound):
+		return http.StatusNotFound, "invitation not found"
+	case errors.Is(err, ErrInvitationNotPending):
+		return http.StatusConflict, "this invite is no longer pending"
+	case errors.Is(err, ErrDailyInviteLimit):
+		return http.StatusTooManyRequests, fmt.Sprintf("daily invite limit reached: %d invite mails per workspace per 24 hours", maxInviteMailsPerDay)
+	case errors.Is(err, ErrInvitationNotValid):
+		return http.StatusNotFound, msgInviteNotValid
+	case errors.Is(err, ErrAlreadyMember):
+		return http.StatusConflict, msgAlreadyMember
+	case errors.Is(err, ErrInvitationEmailMismatch):
+		return http.StatusForbidden, msgWrongAddress
 	case errors.Is(err, ErrAlreadyProvisioned):
 		return http.StatusConflict, "this account already has a workspace"
 	default:

@@ -111,8 +111,8 @@ const (
 	ScopeUnattributed CompanyScope = "unattributed"
 )
 
-// firmWideEvents are the thirteen genuinely firm-wide event names — the whole of the
-// Policies (4), Roles (4), Memberships (3) and Validation-rule (2) domains (§2 rule 2).
+// firmWideEvents are the sixteen genuinely firm-wide event names — the whole of the
+// Policies (4), Roles (4), Memberships (6) and Validation-rule (2) domains (§2 rule 2).
 // Hand-maintained: nothing derives this set from the SQL resolver.
 var firmWideEvents = map[string]struct{}{
 	"approval_policy.created":   {},
@@ -126,6 +126,9 @@ var firmWideEvents = map[string]struct{}{
 	"membership.suspended":      {},
 	"membership.reactivated":    {},
 	"workspace.provisioned":     {},
+	"invitation.sent":           {},
+	"invitation.resent":         {},
+	"invitation.accepted":       {},
 	"validation.rule.enabled":   {},
 	"validation.rule.disabled":  {},
 }

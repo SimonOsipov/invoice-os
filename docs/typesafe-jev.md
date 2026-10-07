@@ -102,7 +102,7 @@ The key goes on `submission` and `invoice` only. Both services call the client.
 and the fork copies its variables. A key set on production would therefore reach every fork.
 Sealing the key cannot stop that: `audit-sealed-variables` fails `prepare-env` whenever the
 source environment holds a sealed variable, except `GOTRUE_JWT_KEYS`, `GOTRUE_JWT_SECRET` and
-`GOTRUE_SMTP_PASS` on `auth`. `set-ai-fake` is the one defence. Its checks run in
+`GOTRUE_SMTP_PASS` on `auth`, and `RESEND_SENDING_KEY` on `tenancy`. `set-ai-fake` is the one defence. Its checks run in
 every PR `prepare-env`, through `fork-vars-after-urls`, and it refuses any environment that is not ephemeral. For each of
 `submission` and `invoice` it:
 1. upserts `JEV_FAKE=true` and `OPENROUTER_API_KEY=""`, beside `AI_FAKE=true` for the AI client;

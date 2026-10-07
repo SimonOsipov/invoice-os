@@ -5,8 +5,9 @@ import { resolveBootSession, loadSession, saveSession, clearSession, decodeJwtPa
 import { revokeSessions } from './lib/revoke'
 import { createRenewer, isRenewalDue, SessionEndedError, type Renewer } from './lib/renewal'
 import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
-import { consumeSignInState, ensureSignInState, landingSignInUrl, mintSignInState } from './lib/signInState'
-import { HANDOFF_PARAM, isLiveHandoffSession, readHandoffCode, redeemHandoff } from './lib/sessionHandoff'
+import { consumeSignInState, ensureSignInState, landingInviteUrl, landingSignInUrl, mintSignInState } from './lib/signInState'
+import { consumePendingInvite, holdPendingInvite, peekPendingInvite, readInviteFragment } from './lib/pendingInvite'
+import { HANDOFF_PARAM, InviteRefusedError, isLiveHandoffSession, readHandoffCode, redeemHandoff } from './lib/sessionHandoff'
 import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import { isPromiseLike, makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, resolveActiveClient, startingDraft } from './lib/clients'
@@ -460,8 +461,9 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   // overwrites it wholesale, so the fetch stays authoritative.
   const [members, setMembers] = useState<Member[]>([])
   useEffect(() => {
+    if (membersAsync.status === 'loading') return
     setMembers(membersAsync.data ?? [])
-  }, [membersAsync.data])
+  }, [membersAsync.status, membersAsync.data])
   // The approval seats a policy's steps point at — the `membersAsync` idiom immediately
   // above, verbatim: ONE fetch, shared by the Roles tab and the Workflows builder.
   const rolesAsync = useAsync<Role[]>(
@@ -1810,8 +1812,10 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
 // with the persona's static identity, marked unverified, so the showcase never hard-fails.
 export default function App() {
   const [bootSession] = useState(() => resolveBootSession())
-  // A live stored hand-off session wins over `?handoff=`.
-  const [liveHandoff] = useState(() => isLiveHandoffSession(bootSession))
+  // A live stored hand-off session wins over `?handoff=`, unless an invite is held: the user signed in again to accept it.
+  const [liveHandoff] = useState(() => isLiveHandoffSession(bootSession) && peekPendingInvite() === null)
+  // Set while a held invite's code overrides a live stored session: a refusal leaves that session stored.
+  const [overridesLive] = useState(() => !liveHandoff && isLiveHandoffSession(bootSession))
   // An unconfigured gateway ignores the code (it is still stripped).
   const [handoffCode] = useState(() =>
     liveHandoff || !gatewayBase() ? null : readHandoffCode(window.location.search),
@@ -1822,6 +1826,8 @@ export default function App() {
   const [authStart] = useState(
     () => !handoffCode && new URLSearchParams(window.location.search).get('auth') === 'start',
   )
+  // Read before the strip effect drops the hash; null when `?auth=start` carries no invite.
+  const [startInvite] = useState(() => (authStart ? readInviteFragment(window.location.hash) : null))
   const startBounced = useRef(false)
   const frontDoorBounced = useRef(false)
   // Lazy initializer: synchronously rehydrate a persisted session at boot (no network,
@@ -1841,6 +1847,7 @@ export default function App() {
   useEffect(() => {
     if (seat) saveSession(seat)
     else if (keepStoredRecord.current) keepStoredRecord.current = false
+    else if (overridesLive && handoffPending) return
     else clearSession()
   }, [seat])
 
@@ -1977,8 +1984,9 @@ export default function App() {
     if (!handoffCode || !base || redeemStarted.current) return
     redeemStarted.current = true
     const state = consumeSignInState()
+    const invite = consumePendingInvite()
     const redemption = state
-      ? redeemHandoff(base, handoffCode, state)
+      ? redeemHandoff(base, handoffCode, state, Date.now(), invite)
       : Promise.reject(new Error('no sign-in state in this tab'))
     redemption.then(
       (session) => {
@@ -1987,9 +1995,12 @@ export default function App() {
       },
       (err: unknown) => {
         console.warn('[app] hand-off redemption failed:', err)
-        // Exchange never answers 403, so a 403 is /me's: no workspace.
-        const outcome = err instanceof ApiError && err.status === 403 ? 'no-workspace' : 'failed'
-        const dest = landingSignInUrl(ensureSignInState(), outcome)
+        // Exchange never answers 403. Without an invite a 403 is /me's: no workspace.
+        // With one, only tenancy's three refusals carry a notice; every other failure is 'failed'.
+        const dest =
+          err instanceof InviteRefusedError
+            ? landingInviteUrl(err.outcome)
+            : landingSignInUrl(ensureSignInState(), invite === null && err instanceof ApiError && err.status === 403 ? 'no-workspace' : 'failed')
         // Stays pending while leaving, so the front door adds no second navigation.
         if (dest) window.location.href = dest
         else setHandoffPending(false)
@@ -2004,9 +2015,10 @@ export default function App() {
     const dest = landingBase() ? landingSignInUrl(mintSignInState(), 'ready') : null
     if (dest) {
       startBounced.current = true
+      holdPendingInvite(startInvite)
       window.location.href = dest
     }
-  }, [authStart])
+  }, [authStart, startInvite])
 
   // The single front door. Any sessionless visit — never signed in, signed out, session
   // expired while the tab was closed, or token invalidated by a 401 — goes to the landing

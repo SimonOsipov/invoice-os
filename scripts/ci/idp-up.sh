@@ -2,7 +2,7 @@
 # scripts/ci/idp-up.sh <auth-admin-dsn> <db-host-port>
 #
 # Builds sidecar/auth/Dockerfile and starts idp-es256, idp-hs256 and idp-rebuild on 9991-9993,
-# plus mailpit (SMTP 1025, API 8025) and idp-mail on 9994, which mails its confirmation links there,
+# plus mailpit (SMTP 1025, API 8025) and idp-mail on 9994, which mails its branded confirmation and reset links there,
 # and idp-short on 9996, whose access tokens expire after 5 s (9995 is the mailed-link verify handler).
 # Stdout carries only the NAME=url lines and IDP_ISSUER (safe for $GITHUB_ENV); the rest goes to stderr.
 # IDP_SLOT=n (0-500, default 0) suffixes every container name with -s<n> and adds 10*n to every
@@ -119,8 +119,15 @@ start idp-rebuild 9993 -e GOTRUE_JWT_KEYS "${no_mail[@]}" \
   -e GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_URI=pg-functions://postgres/public/test_rebuild_claims_hook
 start_mailpit
 es256_keys
-# The absolute confirmation path points the mailed link at the test's gateway verify handler.
-start idp-mail 9994 -e GOTRUE_JWT_KEYS \
+# The absolute confirmation path points the mailed link at the test's gateway verify routes, which also serve the branded template.
+GOTRUE_MAILER_SUBJECTS_CONFIRMATION="Confirm your ASComply account"
+export GOTRUE_MAILER_SUBJECTS_CONFIRMATION
+GOTRUE_MAILER_SUBJECTS_RECOVERY="Reset your ASComply password"
+export GOTRUE_MAILER_SUBJECTS_RECOVERY
+# The default email-sent cap (30/h) would throttle the reset specs' mail volume.
+start idp-mail 9994 -e GOTRUE_JWT_KEYS -e GOTRUE_MAILER_SUBJECTS_CONFIRMATION -e GOTRUE_MAILER_SUBJECTS_RECOVERY -e GOTRUE_RATE_LIMIT_EMAIL_SENT=100 \
+  -e GOTRUE_MAILER_TEMPLATES_RECOVERY="http://$smtp_host:$verify/emails/recovery.html" -e GOTRUE_MAILER_URLPATHS_RECOVERY="http://localhost:$verify/auth/reset-password" \
+  -e GOTRUE_MAILER_TEMPLATES_CONFIRMATION="http://$smtp_host:$verify/emails/confirmation.html" \
   -e GOTRUE_MAILER_AUTOCONFIRM=false \
   -e GOTRUE_SMTP_HOST="$smtp_host" -e GOTRUE_SMTP_PORT="$smtp" -e GOTRUE_SMTP_PASS=unused \
   -e GOTRUE_MAILER_URLPATHS_CONFIRMATION="http://localhost:$verify/auth/verify"

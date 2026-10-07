@@ -370,7 +370,7 @@ jobs:
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
         run: bash scripts/ci/railway-env.sh fork-vars-before-urls "$ENV_ID"
 
-      - name: Audit sealed variables in the source environment (only the auth allowlist may be sealed)
+      - name: Audit sealed variables in the source environment (only the allowlist may be sealed)
         if: github.event_name == 'pull_request'
         env:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
@@ -930,6 +930,23 @@ jobs:
           RAILWAY_API_TOKEN: ${{ github.event_name != 'workflow_dispatch' && secrets.RAILWAY_API_TOKEN || '' }}
           RAILWAY_PROJECT_TOKEN: ${{ github.event_name == 'workflow_dispatch' && secrets.RAILWAY_API_DEV_TOKEN || '' }}
         run: bash scripts/ci/railway-env.sh wait-deployment auth "$AUTH_DEPLOYMENT_ID"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # Dispatch carries only the project token, which cannot read variables.
+      - name: Gate on the account-mail templates
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+        run: bash scripts/ci/railway-env.sh check-mail-templates "${{ needs.prepare-env.outputs.environment_id }}"
+
+      # Production serves the logo only after a push deploy.
+      - name: Gate on the account-mail logo
+        if: github.event_name == 'push'
+        run: go run ./tools/prenv mail-logo-check
 
   # Frees this run's deploy slot once the deploy chain ends, pass or fail.
   deploy-slot-release:

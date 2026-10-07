@@ -1,0 +1,13 @@
+{{- define "title"}}You are invited to ASComply{{end}}
+{{- define "preheader"}}Accept your invite to join your team's ASComply workspace.{{end}}
+{{- define "eyebrow"}}Invitation{{end}}
+{{- define "heading"}}You are invited.{{end}}
+{{- define "heading_accent"}}Join your team on ASComply.{{end}}
+{{- define "intro"}}{{.Inviter}} invited you to join {{.Workspace}} on ASComply as {{.RoleLabel}}. Use {{.Email}} to create your account or sign in.{{end}}
+{{- define "action_url"}}{{.AcceptURL}}{{end}}
+{{- define "action_label"}}Accept invite{{end}}
+{{- define "expiry"}}This invite expires in {{.ValidDays}} days.{{end}}
+{{- define "details"}}<tr><td width="120" style="{{template "row_label_style"}}">Organisation</td><td style="{{template "row_value_style"}}">{{.Workspace}}</td></tr><tr><td width="120" style="{{template "row_label_style"}}">Invited by</td><td style="{{template "row_value_style"}}">{{.Inviter}}</td></tr><tr><td width="120" style="{{template "row_label_style"}}">Email</td><td style="{{template "row_value_style"}}">{{.Email}}</td></tr><tr><td width="120" style="{{template "row_label_style_last"}}">Role</td><td style="{{template "row_value_style_last"}}">{{.RoleLabel}}</td></tr>{{end}}
+{{- define "ignore_note"}}If you did not expect this invite, ignore this email. Nothing happens unless you accept.{{end}}
+{{- define "reason"}}You received this email because a workspace admin invited this address to ASComply.{{end}}
+{{- template "layout" .}}

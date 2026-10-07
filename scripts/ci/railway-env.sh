@@ -18,7 +18,7 @@
 #                            set-sentry-off <environment-id|--self-test>|
 #                            set-fork-reconciliation-url <environment-id>|
 #                            delete-environment <name>|list-environments|
-#                            query <context>|wait-deployment <label> <deployment-id>|report-api-calls>
+#                            query <context>|wait-deployment <label> <deployment-id>|check-mail-templates <environment-id>|report-api-calls>
 #
 # `set-production-environment` is run by hand, once, never from a workflow: it
 # sets the persistent environment's gateway ENVIRONMENT=production.
@@ -80,7 +80,7 @@
 # `audit-sealed-variables` and `reconcile-fork <environment-id>` (M4-23-04) close the
 # fork-fidelity gaps. See the M4-23-04 banner further down: two checks the design asked
 # for are deliberately absent because a live probe proved they would fail every run.
-# The audit allows only SEALED_ALLOWLIST, and only on the `auth` service.
+# The audit allows only the service-qualified SEALED_ALLOWLIST entries.
 #
 # Auth: account-scoped RAILWAY_API_TOKEN, `Authorization: Bearer`. A Railway *project*
 # token is pinned to one environment and cannot perform projectUpdate, nor reach an
@@ -739,8 +739,9 @@ SEALED_AUDIT_QUERY='query sealedAudit($e: String!) {
   }
 }'
 
-# The only names that may be sealed, and only on `auth`: its PR fork writes its own values.
-SEALED_ALLOWLIST=(GOTRUE_JWT_KEYS GOTRUE_JWT_SECRET GOTRUE_SMTP_PASS)
+# The only service:NAME pairs that may be sealed. auth: its PR fork writes its own values.
+# tenancy: a PR fork has no key and runs in `capture` mode.
+SEALED_ALLOWLIST=(auth:GOTRUE_JWT_KEYS auth:GOTRUE_JWT_SECRET auth:GOTRUE_SMTP_PASS tenancy:RESEND_SENDING_KEY)
 
 # shellcheck disable=SC2016  # $e is a GraphQL variable — not a shell expansion.
 SETTLE_QUERY='query settle($e: String!) {
@@ -889,12 +890,12 @@ require_fork_ids() {
 # missing, surfacing much later as an unexplained boot or auth error in a PR
 # environment that looks correctly configured. Assert, never repair — a sealed
 # value is unreadable by definition, so there is nothing to copy. Every variable
-# must be unsealed or allowlisted (SEALED_ALLOWLIST on `auth`).
+# must be unsealed or listed in SEALED_ALLOWLIST.
 cmd_audit_sealed_variables() {
   require_env
   require_source_env
 
-  local body total sealed auth_id allow count offenders allowed
+  local body total sealed allow count offenders allowed entry svc svc_id
   body=$(gql_body "$SEALED_AUDIT_QUERY" "$(jq -n --arg e "$RAILWAY_DEV_ENVIRONMENT_ID" '{e: $e}')")
   graphql_post "$body" "auditing sealed variables in the source environment $RAILWAY_DEV_ENVIRONMENT_ID"
 
@@ -913,28 +914,33 @@ cmd_audit_sealed_variables() {
     return
   fi
 
-  # "Cannot resolve the allowlist" is never "allowed".
-  if ! auth_id=$(service_id_by_name "$GQL_RESPONSE" auth "the source environment $RAILWAY_DEV_ENVIRONMENT_ID" "The sealed-variable allowlist"); then
-    echo "::error::$sealed sealed variable(s) found in the source environment $RAILWAY_DEV_ENVIRONMENT_ID, and the audit cannot resolve the allowlist without the \`auth\` service. Nothing was allowed."
-    exit 1
-  fi
+  # "Cannot resolve the allowlist" is never "allowed". Resolve in allowlist order.
+  local -a allow_pairs=()
+  for entry in "${SEALED_ALLOWLIST[@]}"; do
+    svc=${entry%%:*}
+    if ! svc_id=$(service_id_by_name "$GQL_RESPONSE" "$svc" "the source environment $RAILWAY_DEV_ENVIRONMENT_ID" "The sealed-variable allowlist"); then
+      echo "::error::$sealed sealed variable(s) found in the source environment $RAILWAY_DEV_ENVIRONMENT_ID, and the audit cannot resolve the allowlist without the \`$svc\` service. Nothing was allowed."
+      exit 1
+    fi
+    allow_pairs+=("$svc_id:${entry#*:}")
+  done
 
-  allow=$(printf '%s\n' "${SEALED_ALLOWLIST[@]}" | jq -R . | jq -sc .)
-  offenders=$(echo "$GQL_RESPONSE" | jq -r --arg a "$auth_id" --argjson allow "$allow" '
+  allow=$(printf '%s\n' "${allow_pairs[@]}" | jq -R . | jq -sc .)
+  offenders=$(echo "$GQL_RESPONSE" | jq -r --argjson allow "$allow" '
     .data.environment.variables.edges[]?.node
     | select(.isSealed == true)
-    | select((.serviceId == $a and (.name | IN($allow[]))) | not)
+    | select((.serviceId != null and ("\(.serviceId):\(.name)" | IN($allow[]))) | not)
     | "  \(.name) (serviceId=\(.serviceId // "environment-scoped"))"')
 
   if [ -n "$offenders" ]; then
     count=$(printf '%s\n' "$offenders" | wc -l | tr -d ' ')
-    echo "::error::$count sealed variable(s) found in the source environment $RAILWAY_DEV_ENVIRONMENT_ID. Sealed variables do NOT fork: every pr-<N> environment would be created with these SILENTLY MISSING, surfacing much later as an unexplained boot or auth failure. Every variable must be unsealed or allowlisted (${SEALED_ALLOWLIST[*]} on \`auth\`). Offenders:"
+    echo "::error::$count sealed variable(s) found in the source environment $RAILWAY_DEV_ENVIRONMENT_ID. Sealed variables do NOT fork: every pr-<N> environment would be created with these SILENTLY MISSING, surfacing much later as an unexplained boot or auth failure. Every variable must be unsealed or allowlisted (${SEALED_ALLOWLIST[*]}). Offenders:"
     echo "$offenders"
     exit 1
   fi
 
   allowed=$(echo "$GQL_RESPONSE" | jq -r '[.data.environment.variables.edges[]?.node | select(.isSealed == true) | .name] | join(" ")')
-  echo "Sealed-variable audit clean: $sealed of $total variables in the source environment are sealed, all allowlisted on auth: $allowed."
+  echo "Sealed-variable audit clean: $sealed of $total variables in the source environment are sealed, all allowlisted: $allowed."
 }
 
 # --- DB DSN invariant (M4-22-FU) ---------------------------------------------
@@ -3004,6 +3010,7 @@ cmd_set_production_auth() {
   fi
   local name sealed=0
   for name in "${SEALED_ALLOWLIST[@]}"; do
+    case "$name" in auth:*) name=${name#auth:} ;; *) continue ;; esac
     if echo "$GQL_RESPONSE" | jq -e --arg n "$name" --arg s "$auth_id" \
         'any(.data.environment.variables.edges[]?.node; .name == $n and .serviceId == $s and .isSealed == true)' >/dev/null; then
       echo "::error::auth.$name is already sealed in environment $env_id. Change it in the dashboard; this command does not write over a sealed variable."
@@ -3483,6 +3490,68 @@ cmd_report_api_calls() {
     }' "$rl" "$log" || true
 }
 
+# check-mail-templates <environment-id>: every non-empty GOTRUE_MAILER_TEMPLATES_* on auth must serve a mail template,
+# and every non-empty GOTRUE_MAILER_SUBJECTS_* must parse and execute.
+cmd_check_mail_templates() {
+  local env_id="${1:-}"
+  if [ -z "$env_id" ]; then
+    echo "::error::usage: railway-env.sh check-mail-templates <environment-id>"
+    exit 2
+  fi
+
+  require_env
+
+  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+    "listing service instances in environment $env_id"
+  local auth_id
+  auth_id=$(service_id_by_name "$GQL_RESPONSE" auth "environment $env_id" GOTRUE_MAILER_TEMPLATES)
+
+  auth_read "$env_id" "$auth_id" auth
+  # Production auth always sets GOTRUE_SITE_URL, so a map without it is a token that cannot read variables.
+  if [ "$(auth_kind "$GQL_RESPONSE" GOTRUE_SITE_URL)" != present ]; then
+    echo "::error::auth's variables are unreadable in environment $env_id, so GOTRUE_MAILER_TEMPLATES_* and GOTRUE_MAILER_SUBJECTS_* could not be checked."
+    exit 1
+  fi
+
+  local pairs subjects name value rc=0 checked=0
+  pairs=$(printf '%s' "$GQL_RESPONSE" | jq -r '.data.variables | to_entries[]
+    | select((.key | startswith("GOTRUE_MAILER_TEMPLATES_")) and .value != "") | [.key, .value] | @tsv')
+  subjects=$(printf '%s' "$GQL_RESPONSE" | jq -r '.data.variables | to_entries[]
+    | select((.key | startswith("GOTRUE_MAILER_SUBJECTS_")) and .value != "") | .key')
+  if [ -z "$pairs" ] && [ -z "$subjects" ]; then
+    echo "No GOTRUE_MAILER_TEMPLATES_* or GOTRUE_MAILER_SUBJECTS_* is set on auth in environment $env_id; GoTrue sends its default mail."
+    return 0
+  fi
+
+  # A subject that fails to parse makes GoTrue send its default subject and body.
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    value=$(printf '%s' "$GQL_RESPONSE" | jq -r --arg k "$name" '.data.variables[$k]')
+    if [ "$checked" = 0 ]; then
+      auth_build_prenv "the account-mail template check"
+    fi
+    checked=1
+    "$AUTH_PRENV" mail-subject-check "$value" | sed "s/^::error::/::error::$name: /" || rc=1
+  done <<<"$subjects"
+
+  while IFS=$'\t' read -r name value; do
+    [ -n "$name" ] || continue
+    case "$value" in
+      http*) ;;
+      *)
+        echo "::error::$name is '$value', not an http(s) URL: GoTrue resolves it against GOTRUE_SITE_URL."
+        rc=1
+        continue ;;
+    esac
+    if [ "$checked" = 0 ]; then
+      auth_build_prenv "the account-mail template check"
+    fi
+    checked=1
+    "$AUTH_PRENV" mail-template-check "$value" | sed "s/^::error::/::error::$name: /" || rc=1
+  done <<<"$pairs"
+  return "$rc"
+}
+
 case "${1:-}" in
   assert-project-settings)   cmd_assert_project_settings ;;
   disable-pr-environments)   cmd_disable_pr_environments ;;
@@ -3508,9 +3577,10 @@ case "${1:-}" in
   list-environments)         cmd_list_environments ;;
   query)                     cmd_query "${2:-}" ;;
   wait-deployment)           shift; cmd_wait_deployment "$@" ;;
+  check-mail-templates)      cmd_check_mail_templates "${2:-}" ;;
   report-api-calls)          cmd_report_api_calls ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-fork-gateway-token <environment-id>|set-production-gateway-token <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments|query <context>|wait-deployment <label> <deployment-id>|report-api-calls>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-fork-gateway-token <environment-id>|set-production-gateway-token <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments|query <context>|wait-deployment <label> <deployment-id>|check-mail-templates <environment-id>|report-api-calls>"
     exit 2
     ;;
 esac

@@ -1,9 +1,9 @@
 // Members (Settings › Members) — types, the memberships wire and read-only derivations.
 //
 // Identity, access role and status are SERVER truth, read through `listMembers` and written
-// through `setMembershipStatus`. Everything else this module still models — invite, remove,
-// department, per-person client access — has no endpoint behind it; `MEMBER_UNBACKED` says
-// so in one sentence per control.
+// through `setMembershipStatus`. Pending invites are server truth too (`listInvitations`,
+// `sendInvitations`, `resendInvitation`). Remove, department, per-person client access, invite
+// link and revoke have no endpoint behind them; `MEMBER_UNBACKED` says so in one sentence each.
 //
 // This module is a function of a PERSON. Anything that is really a function of the ROLE LIST
 // — who holds a seat, what a policy step resolves to, how a workspace's coverage reads —
@@ -86,8 +86,8 @@ export const DEPARTMENTS: readonly Department[] = ['Finance', 'Tax & Compliance'
  *
  * Three rows are server-enforced: 'transmit to NRS/MBS' (both transmit handlers reject a
  * non-approver), 'approve in approval steps' (internal/approval/decision.go's two-axis
- * check), and the manage half of 'invite and manage members' (admin-only memberships
- * PATCH). The rest remain descriptive only.
+ * check), and 'invite and manage members' (admin-only memberships PATCH and invitations).
+ * The rest remain descriptive only.
  */
 export const CAPABILITY_ROWS: readonly { label: string; admin: boolean; preparer: boolean; reviewer: boolean }[] = [
   { label: 'create and edit invoices', admin: true, preparer: true, reviewer: true },
@@ -167,9 +167,7 @@ export function activeAdmins(list: readonly Member[]): Member[] {
 // ---------------------------------------------------------------------------
 // The invite pipeline, the reducers, the filter and the last-admin guard
 // ---------------------------------------------------------------------------
-// UNREACHED from the app since the roster went live: no endpoint mints an invite, so the
-// modal that consumed this half is gone. Kept, not deleted — the invite surface is MEMB's
-// to rebuild, and these are the rules it will need. Nothing below has an app-path caller.
+// The address rules below back the invite modal; `chipVerdicts` adds the server's limits.
 
 /** One verdict per pasted address, in input order. */
 export type InviteVerdict = 'ok' | 'member' | 'invited' | 'malformed'
@@ -330,8 +328,7 @@ export function isProtectedAdmin(list: readonly Member[], member: Member): boole
 // ---------------------------------------------------------------------------
 // The invite modal's copy and its client-picker derivations
 // ---------------------------------------------------------------------------
-// The modal that rendered these is gone with the unbacked invite flow; `ClientAccessPicker`
-// still reads the picker half. Living here rather than in a component for §15.8's reason:
+// `ClientAccessPicker` reads the picker half. Living here rather than in a component for §15.8's reason:
 // vitest is `environment: node`, so a string authored inside a component is a string no
 // spec can hold.
 //
@@ -421,19 +418,6 @@ export function filterClientRoster(query: string): { id: number; name: string }[
  */
 export function clientSelectionCount(selected: number): string {
   return `${selected} of ${CLIENT_ROSTER.length} selected`
-}
-
-/**
- * The flash MembersView raises after a successful send. INVENTED COPY — §7 says the modal
- * closes and says nothing about what confirms it — so it is pinned here rather than left in a
- * component, the same shape and the same reason as `unassignedNotice`'s singular.
- *
- * It exists because every other action on this tab already flashes (MembersTable's Resend
- * invite / Copy invite link), and the one action that actually changes the roster must not be
- * the silent one.
- */
-export function invitedNotice(count: number): string {
-  return `Invited ${count} ${count === 1 ? 'person' : 'people'}.`
 }
 
 // ---------------------------------------------------------------------------
@@ -603,10 +587,172 @@ export const ABSENT_LABEL = '—'
  * One sentence per control the roster still offers but no endpoint backs. Plain and
  * server-stated: what is missing, not an apology or a promise.
  */
-export const MEMBER_UNBACKED: Record<'invite' | 'remove' | 'role' | 'department' | 'clientAccess', string> = {
-  invite: 'There is no invite endpoint yet — nothing mints a token, tracks an expiry, or sends the email.',
+export const MEMBER_UNBACKED: Record<
+  'remove' | 'role' | 'department' | 'clientAccess' | 'inviteLink' | 'revokeInvite',
+  string
+> = {
   remove: 'Deleting a membership locks that person out on their next request, and nothing undoes it. That decision has not been taken.',
   role: 'The membership endpoint writes status only. Changing someone\'s access role has no server call behind it.',
   department: 'A membership stores a name, an email, an access role and a status. There is no department column.',
   clientAccess: 'Client access is not stored per person — everyone in this workspace sees the same clients.',
+  inviteLink: 'The invite link exists only in the email. The server keeps only a hash of it.',
+  revokeInvite: 'There is no way to revoke an invite yet. An unused invite expires 7 days after it was sent.',
+}
+
+// ---------------------------------------------------------------------------
+// The invitations wire and the invite rules
+// ---------------------------------------------------------------------------
+
+/** One item of the invitations endpoints (internal/tenancy `InviteResult`; the list adds fields this module ignores). */
+export type InvitationWire = { id: string; email: string; role: string; status: string; expires_at: string; delivery: string }
+export type PendingInvite = { id: string; email: string; role: AccessRole; expiresAt: string; delivery: string }
+
+export const INVITE_ADMIN_ONLY = 'Only an admin can invite people.'
+
+export async function listInvitations(f: AuthedFetch, base: string): Promise<InvitationWire[]> {
+  const body = await f<{ invitations: InvitationWire[] }>(`${base}/api/tenancy/v1/invitations`)
+  return body.invitations
+}
+
+export async function sendInvitations(
+  f: AuthedFetch,
+  base: string,
+  emails: readonly string[],
+  role: AccessRole,
+): Promise<InvitationWire[]> {
+  const body = await f<{ invitations: InvitationWire[] }>(`${base}/api/tenancy/v1/invitations`, {
+    method: 'POST',
+    body: { emails, role },
+  })
+  return body.invitations
+}
+
+export function resendInvitation(f: AuthedFetch, base: string, id: string): Promise<InvitationWire> {
+  return f<InvitationWire>(`${base}/api/tenancy/v1/invitations/${id}/resend`, { method: 'POST' })
+}
+
+/** `role` is verbatim, like `toMember`. */
+export function toPendingInvite(w: InvitationWire): PendingInvite {
+  return { id: w.id, email: w.email, role: w.role as AccessRole, expiresAt: w.expires_at, delivery: w.delivery }
+}
+
+/** Replaces by `id`, appends new ids; always allocates. */
+export function upsertInvites(list: readonly PendingInvite[], items: readonly PendingInvite[]): PendingInvite[] {
+  const out = list.map((i) => items.find((n) => n.id === i.id) ?? i)
+  return [...out, ...items.filter((n) => !list.some((i) => i.id === n.id))]
+}
+
+/** A pending invite as a roster row; `id` is the invite id, never a user id. */
+export function invitedMember(i: PendingInvite): Member {
+  return {
+    id: i.id,
+    name: nameFromEmail(i.email) || i.email,
+    initials: initialsFrom(i.email) || i.email.slice(0, 2).toUpperCase(),
+    email: i.email,
+    role: i.role,
+    status: 'invited',
+    isYou: false,
+  }
+}
+
+export function rosterWithInvites(members: readonly Member[], invites: readonly PendingInvite[]): Member[] {
+  return [...members, ...invites.map(invitedMember)]
+}
+
+export function viewerIsAdmin(members: readonly Member[]): boolean {
+  return members.some((m) => m.isYou && m.role === 'admin' && m.status === 'active')
+}
+
+// maxEmailBytes (internal/tenancy/invitations_handler.go).
+const MAX_EMAIL_BYTES = 254
+
+// unicode.IsControl: the Cc category.
+const CONTROL_CHAR = /[\u0000-\u001f\u007f-\u009f]/
+
+/** `classifyInvites` plus the server's refusals the minimal EMAIL_RE misses. */
+export function chipVerdicts(
+  existing: readonly Member[],
+  chips: readonly string[],
+  serverRefused: readonly string[] = [],
+): InviteVerdict[] {
+  return classifyInvites(existing, chips).map((v, i): InviteVerdict => {
+    const c = chips[i]
+    const refused =
+      !hasDerivableName(c) ||
+      new TextEncoder().encode(c).length > MAX_EMAIL_BYTES ||
+      CONTROL_CHAR.test(c) ||
+      serverRefused.includes(c)
+    return v === 'ok' && refused ? 'malformed' : v
+  })
+}
+
+const GO_SIMPLE_ESCAPES: Record<string, string> = {
+  a: '\x07',
+  b: '\b',
+  f: '\f',
+  n: '\n',
+  r: '\r',
+  t: '\t',
+  v: '\v',
+  '\\': '\\',
+  '"': '"',
+}
+const GO_ESCAPE = /\\(?:([abfnrtv\\"])|x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8})|.)/gs
+
+/** strconv.Unquote of a double-quoted token; null when it is invalid or holds a raw byte (\x80+) no JS string equals. */
+function unquoteGo(token: string): string | null {
+  let bad = false
+  const out = token.slice(1, -1).replace(GO_ESCAPE, (m, simple, x, u, U) => {
+    if (simple) return GO_SIMPLE_ESCAPES[simple]
+    const code = x ? parseInt(x, 16) : u ? parseInt(u, 16) : U ? parseInt(U, 16) : -1
+    if (code < 0 || (x && code >= 0x80) || code > 0x10ffff || (code >= 0xd800 && code < 0xe000)) {
+      bad = true
+      return m
+    }
+    return String.fromCodePoint(code)
+  })
+  return bad ? null : out
+}
+
+const REFUSED_PREFIX = 'invalid email address: '
+
+/** The quoted tokens of the 400 (invitations_handler.go, `%q` list) that equal a chip; [] for any other message. */
+export function serverRefusedAddresses(message: string, chips: readonly string[]): string[] {
+  if (!message.startsWith(REFUSED_PREFIX)) return []
+  const out: string[] = []
+  for (const [token] of message.slice(REFUSED_PREFIX.length).matchAll(/"(?:[^"\\]|\\.)*"/g)) {
+    const address = unquoteGo(token)
+    if (address !== null && chips.includes(address)) out.push(address)
+  }
+  return out
+}
+
+const HOUR_MS = 3_600_000
+const DAY_MS = 24 * HOUR_MS
+
+/** Whole days with an hour of slack, so a browser clock a little behind still reads 7 days. */
+export function inviteStatusLine(i: PendingInvite, nowMs: number): string {
+  if (i.delivery === 'failed') return 'Email not sent'
+  const expires = Date.parse(i.expiresAt)
+  if (Number.isNaN(expires)) return ABSENT_LABEL
+  const remaining = expires - nowMs
+  if (remaining <= 0) return 'Expired'
+  const days = Math.max(1, Math.ceil((remaining - HOUR_MS) / DAY_MS))
+  return `Expires in ${days} ${days === 1 ? 'day' : 'days'}`
+}
+
+/** The flash after a send or a resend; `null` when nothing was sent. */
+export function inviteSentNotice(items: readonly PendingInvite[]): { tone: 'ok' | 'failed'; text: string } | null {
+  const n = items.length
+  if (n === 0) return null
+  const failed = items.filter((i) => i.delivery === 'failed').length
+  if (failed === 0) return { tone: 'ok', text: n === 1 ? `Invite sent to ${items[0].email}.` : `Invite sent to ${n} people.` }
+  if (failed === 1) {
+    const text =
+      n === 1
+        ? `The invite email to ${items[0].email} did not go out. Resend it from the row's ⋯ menu.`
+        : `1 of ${n} invite emails did not go out. Resend it from the row's ⋯ menu.`
+    return { tone: 'failed', text }
+  }
+  return { tone: 'failed', text: `${failed} of ${n} invite emails did not go out. Resend them from the rows' ⋯ menus.` }
 }

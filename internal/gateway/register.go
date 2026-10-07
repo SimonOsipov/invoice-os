@@ -25,9 +25,15 @@ const (
 // DefaultRegisterMinResponse is the shortest time any non-400 register answer takes.
 const DefaultRegisterMinResponse = 2 * time.Second
 
+const (
+	RegisterPerIP   = 10
+	RegisterWindow  = time.Hour
+	RegisterMaxKeys = 10_000
+)
+
 // RegisterHandler answers POST /auth/register by calling GoTrue's /signup under authURL.
 // Every answer except a 400 arrives no earlier than minResponse after the request; 0 means no wait.
-func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, log *slog.Logger) http.Handler {
+func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, perIP *SignInThrottle, enforce bool, log *slog.Logger) http.Handler {
 	signup := authURL.JoinPath("signup").String()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Not postOnly: it sets headers on a POST, and a gone client must see no write.
@@ -80,49 +86,75 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 			body["data"] = data
 		}
 
-		status, gt, err := postGoTrue(r, client, signup, body, nil)
-		upstream := time.Since(start)
-		pending := func() { writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"}) }
-		var send func()
-		if err != nil {
-			log.WarnContext(r.Context(), "registration: gotrue unreachable", slog.String("error", err.Error()))
-			send = func() { writeError(w, http.StatusBadGateway, "registration is unavailable") }
-		}
-
-		// A repeat or confirmed address answers exactly like a new one.
-		switch {
-		case err != nil:
-		case status == http.StatusOK,
-			gt.ErrorCode == "user_already_exists",
-			gt.ErrorCode == "email_exists":
-			send = pending
-		case gt.ErrorCode == "over_email_send_rate_limit":
-			// ceiling: GoTrue's instance-wide mail cap (30/h) answers the same code, so this WARN is its only signal; raise GOTRUE_RATE_LIMIT_EMAIL_SENT when signups near it.
-			log.WarnContext(r.Context(), "registration: gotrue email send rate limit", slog.Int("upstream_status", status))
-			send = pending
-		case status >= http.StatusInternalServerError && gt.Code == "23505":
-			// The loser of two concurrent signups for one address gets GoTrue's unique-violation 500.
-			log.WarnContext(r.Context(), "registration: gotrue concurrent duplicate signup")
-			send = pending
-		case gt.ErrorCode == "validation_failed",
-			gt.ErrorCode == "weak_password",
-			gt.ErrorCode == "email_address_invalid":
-			writeError(w, http.StatusBadRequest, gt.Msg)
-			return
-		case gt.ErrorCode == "signup_disabled":
-			send = func() { writeError(w, http.StatusServiceUnavailable, "registration is closed") }
-		case status == http.StatusTooManyRequests:
-			send = func() { writeError(w, http.StatusTooManyRequests, "too many requests") }
-		default:
-			log.WarnContext(r.Context(), "registration: gotrue signup failed",
-				slog.Int("upstream_status", status), slog.String("error_code", gt.ErrorCode))
-			send = func() { writeError(w, http.StatusBadGateway, "registration is unavailable") }
-		}
-
-		if holdMinimum(r.Context(), log, start, upstream, minResponse) {
-			send()
-		}
+		signUp(w, r, client, signup, body, start, minResponse, perIP, enforce, log)
 	})
+}
+
+// signUp spends the per-IP budget, posts body to GoTrue's /signup and answers with the floor held.
+// RegisterHandler and InvitationRegisterHandler share it, so both map GoTrue's answers alike.
+func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup string, body map[string]any, start time.Time, minResponse time.Duration, perIP *SignInThrottle, enforce bool, log *slog.Logger) {
+	key, source := clientKey(r)
+	held := perIP.Reserve(key)
+	refused := false
+	if !held {
+		log.WarnContext(r.Context(), "registration: limit reached",
+			slog.String("limit", "ip"), slog.String("key_source", source), slog.Bool("enforced", enforce))
+		refused = enforce
+	}
+
+	if refused {
+		if holdMinimum(r.Context(), log, "registration: signup timing", start, 0, minResponse) {
+			writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"})
+		}
+		return
+	}
+
+	status, gt, err := postGoTrue(r, client, signup, body, nil)
+	upstream := time.Since(start)
+	// GoTrue mails nothing when it answers 4xx; 2xx, 5xx and transport errors may have mailed.
+	if held && err == nil && status >= http.StatusBadRequest && status < http.StatusInternalServerError {
+		perIP.Refund(key)
+	}
+	pending := func() { writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"}) }
+	var send func()
+	if err != nil {
+		log.WarnContext(r.Context(), "registration: gotrue unreachable", slog.String("error", err.Error()))
+		send = func() { writeError(w, http.StatusBadGateway, "registration is unavailable") }
+	}
+
+	// A repeat or confirmed address answers exactly like a new one.
+	switch {
+	case err != nil:
+	case status == http.StatusOK,
+		gt.ErrorCode == "user_already_exists",
+		gt.ErrorCode == "email_exists":
+		send = pending
+	case gt.ErrorCode == "over_email_send_rate_limit":
+		// ceiling: GoTrue's instance-wide mail cap (30/h) answers the same code, so this WARN is its only signal; raise GOTRUE_RATE_LIMIT_EMAIL_SENT when signups near it.
+		log.WarnContext(r.Context(), "registration: gotrue email send rate limit", slog.Int("upstream_status", status))
+		send = pending
+	case status >= http.StatusInternalServerError && gt.Code == "23505":
+		// The loser of two concurrent signups for one address gets GoTrue's unique-violation 500.
+		log.WarnContext(r.Context(), "registration: gotrue concurrent duplicate signup")
+		send = pending
+	case gt.ErrorCode == "validation_failed",
+		gt.ErrorCode == "weak_password",
+		gt.ErrorCode == "email_address_invalid":
+		writeError(w, http.StatusBadRequest, gt.Msg)
+		return
+	case gt.ErrorCode == "signup_disabled":
+		send = func() { writeError(w, http.StatusServiceUnavailable, "registration is closed") }
+	case status == http.StatusTooManyRequests:
+		send = func() { writeError(w, http.StatusTooManyRequests, "too many requests") }
+	default:
+		log.WarnContext(r.Context(), "registration: gotrue signup failed",
+			slog.Int("upstream_status", status), slog.String("error_code", gt.ErrorCode))
+		send = func() { writeError(w, http.StatusBadGateway, "registration is unavailable") }
+	}
+
+	if holdMinimum(r.Context(), log, "registration: signup timing", start, upstream, minResponse) {
+		send()
+	}
 }
 
 // registrationAnswers trims and validates the answers with tenancy.ProvisionHandler's rules and
@@ -157,9 +189,9 @@ func registrationAnswers(workspace, display, kind *string) (map[string]string, s
 	return out, ""
 }
 
-// holdMinimum logs the signup timing and waits out what is left of minResponse since start.
+// holdMinimum logs the timing line msg and waits out what is left of minResponse since start.
 // It reports false when the client went away first. A minResponse of 0 neither logs nor waits.
-func holdMinimum(ctx context.Context, log *slog.Logger, start time.Time, upstream, minResponse time.Duration) bool {
+func holdMinimum(ctx context.Context, log *slog.Logger, msg string, start time.Time, upstream, minResponse time.Duration) bool {
 	if minResponse <= 0 {
 		return true
 	}
@@ -168,8 +200,8 @@ func holdMinimum(ctx context.Context, log *slog.Logger, start time.Time, upstrea
 		level = slog.LevelInfo
 	}
 	// ceiling: a GoTrue answer slower than the minimum still leaks timing; revisit when this line logs WARN.
-	// ceiling: each waiting request holds a connection for up to the minimum and register has no per-client limit; revisit with the per-client-IP limit owed before U3.
-	log.Log(ctx, level, "registration: signup timing",
+	// ceiling: each waiting request holds a connection for up to the minimum.
+	log.Log(ctx, level, msg,
 		slog.Int64("upstream_ms", upstream.Milliseconds()), slog.Int64("min_ms", minResponse.Milliseconds()))
 	timer := time.NewTimer(max(0, minResponse-time.Since(start)))
 	defer timer.Stop()
@@ -181,7 +213,8 @@ func holdMinimum(ctx context.Context, log *slog.Logger, start time.Time, upstrea
 	}
 }
 
-// VerifyHandler answers the emailed link by calling GoTrue's /verify, then redirects to siteURL.
+// VerifyHandler answers the confirm page's form POST by calling GoTrue's /verify, then redirects to siteURL.
+// The token is read from the form body only; any bad form redirects to the failure notice with no GoTrue call.
 func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Logger, sink ContactSink) http.Handler {
 	if siteURL == nil {
 		return RegistrationNotConfigured()
@@ -191,16 +224,16 @@ func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Log
 	verified, failed := site+"/?verified=1", site+"/?verify=failed"
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// A HEAD prefetch by a link scanner would consume the single-use token.
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		if !postOnly(w, r) {
 			return
 		}
-		// redirect_to is ignored: the target is server configuration, never a query value.
-		q := r.URL.Query()
-		token := q.Get("token")
-		if token == "" || q.Get("type") != "signup" {
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<10)
+		if err := r.ParseForm(); err != nil {
+			http.Redirect(w, r, failed, http.StatusSeeOther)
+			return
+		}
+		token := r.PostForm.Get("token")
+		if token == "" || len(token) > maxVerifyTokenBytes || r.PostForm.Get("type") != "signup" {
 			http.Redirect(w, r, failed, http.StatusSeeOther)
 			return
 		}
@@ -223,7 +256,7 @@ func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Log
 	})
 }
 
-// RegistrationNotConfigured answers both registration routes while AUTH_SITE_URL is unset.
+// RegistrationNotConfigured answers 503 while AUTH_SITE_URL is unset.
 func RegistrationNotConfigured() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "registration is not configured")
@@ -281,4 +314,30 @@ func postGoTrueBearer(ctx context.Context, client *http.Client, target, bearer s
 	gone = sessionGone(resp.StatusCode, resp.Body)
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxGoTrueBodyBytes))
 	return resp.StatusCode, gone, nil
+}
+
+// putGoTrueBearerJSON puts body as JSON with bearer as the Authorization and returns the status and any error fields.
+func putGoTrueBearerJSON(ctx context.Context, client *http.Client, target, bearer string, body any) (int, gotrueError, error) {
+	var gt gotrueError
+	b, err := json.Marshal(body)
+	if err != nil {
+		return 0, gt, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, target, bytes.NewReader(b))
+	if err != nil {
+		return 0, gt, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+bearer)
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, gt, err
+	}
+	defer resp.Body.Close()
+	lr := io.LimitReader(resp.Body, maxGoTrueBodyBytes)
+	if resp.StatusCode != http.StatusOK {
+		_ = json.NewDecoder(lr).Decode(&gt)
+	}
+	_, _ = io.Copy(io.Discard, lr)
+	return resp.StatusCode, gt, nil
 }

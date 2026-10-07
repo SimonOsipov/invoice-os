@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@invoice-os/api-client'
 
 import { APP_PERSONAS, type Me, type Session } from '../auth'
-import { HANDOFF_PARAM, HANDOFF_TTL_MS, handoffPersona, isLiveHandoffSession, readHandoffCode, redeemHandoff, registrationAnswers } from './sessionHandoff'
+import { HANDOFF_PARAM, HANDOFF_TTL_MS, InviteRefusedError, handoffPersona, isLiveHandoffSession, readHandoffCode, redeemHandoff, registrationAnswers } from './sessionHandoff'
 
 const CODE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ'
 const STATE = 'ZYXWVUTSRQPONMLKJIHGFEDCBAzyxwvutsrqponmlk_'
@@ -352,6 +352,155 @@ describe('redeemHandoff provisions the registered workspace', () => {
       expect(err, name).toBeInstanceOf(Error)
       expect((err as { status?: number }).status, name).not.toBe(403)
     }
+  })
+})
+
+// An invitee's hand-off accepts the held invite instead of provisioning.
+describe('redeemHandoff with a held invite (D11, D12)', () => {
+  const INVITE = 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE'
+  const ANSWERS = { workspace_name: 'Adaeze Ventures', display_name: 'Adaeze Nwankwo', kind: 'in_house' }
+  // The tenant-less first token; a complete registration must not make the invite branch provision.
+  const FIRST = tokenWith({ user_metadata: { registration: ANSWERS } })
+  const RENEWED = tokenWith({ tenant_id: ME.tenant.id }, NOW / 1000 + 7200)
+  // Copied from the Go constants in internal/tenancy/accept.go.
+  const MSG_INVALID = 'this invite is no longer valid' // msgInviteNotValid
+  const MSG_ALREADY_MEMBER = 'you already belong to a workspace' // msgAlreadyMember
+  const MSG_OTHER_ADDRESS = 'this invite was sent to a different email address' // msgWrongAddress
+  type Reply = { status: number; body?: unknown }
+  type Call = { url: string; method: string; auth: string | null; body: unknown; signal: AbortSignal | null | undefined }
+
+  function stubInvite(r: { exchange?: Reply; accept?: Reply; refresh?: Reply; me?: Reply; acceptNetworkError?: boolean } = {}): Call[] {
+    const calls: Call[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init: { method?: string; headers: Headers; body?: string; signal?: AbortSignal | null }) => {
+        const path = url.replace(GATEWAY, '')
+        const auth = init.headers.get('Authorization')
+        calls.push({ url: path, method: init.method ?? 'GET', auth, body: init.body === undefined ? undefined : JSON.parse(init.body), signal: init.signal })
+        if (path === '/api/tenancy/v1/invitations/accept' && r.acceptNetworkError) {
+          return Promise.reject(new TypeError('Failed to fetch'))
+        }
+        const reply: Reply =
+          path === '/auth/exchange'
+            ? (r.exchange ?? { status: 200, body: { access_token: FIRST, refresh_token: 'R0' } })
+            : path === '/api/tenancy/v1/invitations/accept'
+              ? (r.accept ?? { status: 200, body: { tenant: ME.tenant, user: { id: ME.user.id, role: 'admin' } } })
+              : path === '/api/tenancy/v1/me'
+                ? (r.me ?? (auth === `Bearer ${FIRST}` ? { status: 403, body: { error: 'forbidden' } } : { status: 200, body: ME }))
+                : path === '/auth/refresh'
+                  ? (r.refresh ?? { status: 200, body: { access_token: RENEWED, refresh_token: 'R1' } })
+                  : { status: 500 }
+        return Promise.resolve({ ok: reply.status < 400, status: reply.status, statusText: String(reply.status), json: () => Promise.resolve(reply.body ?? {}) })
+      }),
+    )
+    return calls
+  }
+  const trace = (calls: Call[]) => calls.map((c) => `${c.method} ${c.url}`)
+  const ACCEPT = 'POST /api/tenancy/v1/invitations/accept'
+  const CHAIN = ['POST /auth/exchange', ACCEPT, 'POST /auth/refresh', 'GET /api/tenancy/v1/me']
+
+  it('redeemHandoff_withInviteAcceptsThenRenews', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout')
+    const calls = stubInvite()
+    const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000, INVITE).catch((e: unknown) => e)
+    expect(trace(calls)).toEqual(CHAIN)
+    expect(calls[1].body).toEqual({ token: INVITE })
+    expect(calls[1].auth).toBe(`Bearer ${FIRST}`)
+    expect(calls[2].body).toEqual({ refresh_token: 'R0' })
+    expect(calls[2].auth).toBeNull()
+    expect(calls[3].auth).toBe(`Bearer ${RENEWED}`)
+    expect(timeout).toHaveBeenCalledTimes(1)
+    expect(calls.every((c) => c.signal === calls[0].signal)).toBe(true)
+    expect(s).toEqual({
+      persona: handoffPersona(ME),
+      token: RENEWED,
+      me: ME,
+      verified: true,
+      handoff: true,
+      renewal: { refreshToken: 'R1', receivedAt: 5000 },
+    })
+  })
+
+  it('redeemHandoff_withInviteNeverProvisions', async () => {
+    const calls = stubInvite()
+    await redeemHandoff(GATEWAY, CODE, STATE, 5000, INVITE).catch((e: unknown) => e)
+    expect(calls.filter((c) => c.url === '/api/tenancy/v1/workspaces')).toEqual([])
+    expect(trace(calls), 'control: the invite chain ran').toEqual(CHAIN)
+    const firstMe = calls.findIndex((c) => c.url === '/api/tenancy/v1/me')
+    const accept = calls.findIndex((c) => c.url === '/api/tenancy/v1/invitations/accept')
+    expect(accept, 'accept is called').toBeGreaterThan(-1)
+    expect(firstMe, '/me comes after the accept').toBeGreaterThan(accept)
+  })
+
+  it('redeemHandoff_refusedInviteThrowsItsOutcome', async () => {
+    const rows: [string, number, string, string][] = [
+      ['404 invalid', 404, MSG_INVALID, 'invalid'],
+      ['409 already a member', 409, MSG_ALREADY_MEMBER, 'already-member'],
+      ['403 other address', 403, MSG_OTHER_ADDRESS, 'other-address'],
+    ]
+    for (const [name, status, error, outcome] of rows) {
+      const calls = stubInvite({ accept: { status, body: { error } } })
+      const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000, INVITE).catch((e: unknown) => e)
+      expect(err, name).toBeInstanceOf(InviteRefusedError)
+      expect((err as InviteRefusedError).outcome, name).toBe(outcome)
+      expect(trace(calls), `${name}: no refresh and no /me`).toEqual(['POST /auth/exchange', ACCEPT])
+    }
+  })
+
+  // Status and message must both match tenancy's (a gateway 403 says "forbidden").
+  it('redeemHandoff_otherRefusalsAreNotInviteOutcomes', async () => {
+    const rows: [string, number, unknown][] = [
+      ['403 forbidden', 403, { error: 'forbidden' }],
+      ['404 not found', 404, { error: 'not found' }],
+      ['409 another message', 409, { error: 'already has a workspace' }],
+      ['404 with the 409 message', 404, { error: MSG_ALREADY_MEMBER }],
+      ['409 with the 403 message', 409, { error: MSG_OTHER_ADDRESS }],
+      ['403 with the 404 message', 403, { error: MSG_INVALID }],
+      ['400 with the 404 message', 400, { error: MSG_INVALID }],
+      ['404 with no body', 404, undefined],
+      ['404 with the message in another key', 404, { message: MSG_INVALID }],
+      ['500', 500, { error: 'internal error' }],
+    ]
+    for (const [name, status, body] of rows) {
+      const calls = stubInvite({ accept: { status, body } })
+      const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000, INVITE).catch((e: unknown) => e)
+      expect(trace(calls), `${name}: stopped at the accept`).toEqual(['POST /auth/exchange', ACCEPT])
+      expect(err, name).toBeInstanceOf(ApiError)
+      expect(err, name).not.toBeInstanceOf(InviteRefusedError)
+      expect((err as ApiError).status, name).toBe(status)
+    }
+    const control = stubInvite({ accept: { status: 404, body: { error: MSG_INVALID } } })
+    const refused = await redeemHandoff(GATEWAY, CODE, STATE, 5000, INVITE).catch((e: unknown) => e)
+    expect(trace(control), 'control: the exact pair is refused').toEqual(['POST /auth/exchange', ACCEPT])
+    expect(refused).toBeInstanceOf(InviteRefusedError)
+  })
+
+  it('redeemHandoff_withInviteRejectsWhenRenewalFails', async () => {
+    const rows: [string, Parameters<typeof stubInvite>[0], string[]][] = [
+      ['accept network error', { acceptNetworkError: true }, CHAIN.slice(0, 2)],
+      ['exchange without a refresh token', { exchange: { status: 200, body: { access_token: FIRST } } }, CHAIN.slice(0, 2)],
+      ['exchange with an empty refresh token', { exchange: { status: 200, body: { access_token: FIRST, refresh_token: '' } } }, CHAIN.slice(0, 2)],
+      ['refresh 401', { refresh: { status: 401, body: { error: 'invalid refresh token' } } }, CHAIN.slice(0, 3)],
+      ['refresh answering without tokens', { refresh: { status: 200, body: {} } }, CHAIN.slice(0, 3)],
+      ['/me 500', { me: { status: 500 } }, CHAIN],
+      ['/me malformed', { me: { status: 200, body: {} } }, CHAIN],
+    ]
+    for (const [name, r, want] of rows) {
+      const calls = stubInvite(r)
+      const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000, INVITE).then(
+        () => null,
+        (e: unknown) => e,
+      )
+      expect(trace(calls), name).toEqual(want)
+      expect(err, name).toBeInstanceOf(Error)
+      expect(err, name).not.toBeInstanceOf(InviteRefusedError)
+    }
+  })
+
+  it('redeemHandoff_withoutInviteNeverCallsAccept', async () => {
+    const calls = stubInvite({ exchange: { status: 200, body: { access_token: LIVE, refresh_token: 'R0' } }, me: { status: 200, body: ME } })
+    await redeemHandoff(GATEWAY, CODE, STATE, 5000, null)
+    expect(trace(calls)).toEqual(['POST /auth/exchange', 'GET /api/tenancy/v1/me'])
   })
 })
 

@@ -247,7 +247,6 @@ export function drawerRoleHelper(role: AccessRole): string {
     : 'Roles decide which approval steps this person can act on.'
 }
 
-/** Beneath the invite modal's `Workflow role` select, in both modes. */
 export const INVITE_ROLE_HELPER =
   'The workflow role decides which approval steps they can sign. You can change it later in Settings › Roles.'
 
@@ -331,7 +330,7 @@ export function deleteRoleConfirmUnknownUsage(title: string): string {
 export const NEW_ROLE_SUBTITLE = 'Name the seat and say who fills it.'
 export const EDIT_ROLE_SUBTITLE = 'Rename the seat, or change who fills it.'
 
-/** The toolbar flash after a save — §2's string. `invitedNotice`'s posture on the Members tab. */
+/** The toolbar flash after a save — §2's string. `inviteSentNotice`'s posture on the Members tab. */
 export function savedNotice(title: string): string {
   return `${title} saved`
 }

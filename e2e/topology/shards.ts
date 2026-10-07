@@ -57,7 +57,7 @@ export const UNITS: Unit[] = [
       'portfolio-workflow-surfaces.spec.ts':
         'Reads the `Standard approval policy` that `internal/demopolicy` seeds only on 1111 / 2222 (`planFor`), without saving it; creates its own entity and invoice in 1111.',
       'roles.spec.ts':
-        'Asserts the exact seeded roles, staffing and rosters of both tenants (the seeded rows plus exactly one e2e member row), derived by hand from `db/seed.dev.sql`, and the demopolicy-sealed policies.',
+        'Asserts the exact seeded roles, staffing and rosters of both tenants (the seeded rows plus exactly one e2e member row), derived by hand from `db/seed.dev.sql`, and the demopolicy-sealed policies. Its last test invites on 1111, whose invitations every deploy purges; no other spec in the lane reads them.',
       'support-console.spec.ts':
         'Cost, not shared state ([fork-lane-by-cost]): signs a provisioned staff account in to the mock-backed Support Console; reads and writes no tenant data.',
       'workflows.spec.ts':

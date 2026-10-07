@@ -143,7 +143,7 @@ func TestSignIn_SlowGoTrueTimesOutAndRefunds(t *testing.T) {
 	fake.mu.Unlock()
 	clk := newTestClock()
 	store := NewHandoffStore(HandoffTTL, clk.Now)
-	th := NewSignInThrottle(SignInMaxFailures, SignInMaxKeys, SignInWindow, clk.Now)
+	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, clk.Now)
 	h := SignInHandler(fake.URL, &http.Client{Timeout: 50 * time.Millisecond}, store, th, slog.New(slog.DiscardHandler), nil)
 	s := randomState(t)
 

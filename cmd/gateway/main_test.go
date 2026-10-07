@@ -10,7 +10,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -31,6 +33,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"golang.org/x/net/html"
 )
 
 // TestGatewayMainPrefersUnprefixedPasswordVars: Test Spec #1. Static
@@ -1134,7 +1137,70 @@ func serveRegistration(h http.Handler, method, target, body string) *httptest.Re
 	return rec
 }
 
-func TestRegistrationHandlers_WiresBothRoutes(t *testing.T) {
+// serveForm posts body as an urlencoded form, as the confirm page's button does.
+func serveForm(h http.Handler, target, body string) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// pageForm returns the one form of a confirm page: its action resolved against pageURL, and its named inputs.
+func pageForm(t *testing.T, pageURL, body string) (string, url.Values) {
+	t.Helper()
+	doc, err := html.Parse(strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("parse page: %v", err)
+	}
+	attr := func(n *html.Node, key string) string {
+		for _, a := range n.Attr {
+			if a.Key == key {
+				return a.Val
+			}
+		}
+		return ""
+	}
+	var forms []*html.Node
+	var find func(*html.Node)
+	find = func(n *html.Node) {
+		if n.Type == html.ElementNode && n.Data == "form" {
+			forms = append(forms, n)
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			find(c)
+		}
+	}
+	find(doc)
+	if len(forms) != 1 {
+		t.Fatalf("page has %d forms, want exactly one:\n%s", len(forms), body)
+	}
+	if m := attr(forms[0], "method"); !strings.EqualFold(m, "post") {
+		t.Fatalf("form method = %q, want post", m)
+	}
+	values := url.Values{}
+	var collect func(*html.Node)
+	collect = func(n *html.Node) {
+		if n.Type == html.ElementNode && n.Data == "input" && attr(n, "name") != "" {
+			values.Add(attr(n, "name"), attr(n, "value"))
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			collect(c)
+		}
+	}
+	collect(forms[0])
+	page, err := url.Parse(pageURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	action, err := url.Parse(attr(forms[0], "action"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return page.ResolveReference(action).String(), values
+}
+
+func TestRegistrationHandlers_WiresRegisterAndVerify(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
 	const floor = 100 * time.Millisecond
@@ -1148,7 +1214,7 @@ func TestRegistrationHandlers_WiresBothRoutes(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Errorf("Register = %d, want 202: %s", rec.Code, rec.Body.String())
 	}
-	rec = serveRegistration(reg.Verify, http.MethodGet, "/auth/verify?token=T&type=signup", "")
+	rec = serveForm(reg.Verify, "/auth/verify", "token=T&type=signup")
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "https://site.example/?verified=1" {
 		t.Errorf("Verify = %d Location %q, want 303 https://site.example/?verified=1", rec.Code, rec.Header().Get("Location"))
 	}
@@ -1157,26 +1223,487 @@ func TestRegistrationHandlers_WiresBothRoutes(t *testing.T) {
 	}
 }
 
-// AUTH_SITE_URL unset: both routes refuse without calling GoTrue.
+// AUTH_SITE_URL or AUTH_URL unset: every GoTrue route refuses without calling GoTrue.
 func TestRegistrationHandlers_NotConfigured503(t *testing.T) {
-	authURL, calls := fakeAuth(t)
-	reg := registrationHandlers(authURL, nil, 0, slog.New(slog.DiscardHandler), nil)
+	site, _ := url.Parse("https://site.example")
+	for _, unset := range []string{"AUTH_SITE_URL", "AUTH_URL"} {
+		t.Run(unset, func(t *testing.T) {
+			authURL, calls := fakeAuth(t)
+			var reg registration
+			if unset == "AUTH_SITE_URL" {
+				reg = registrationHandlers(authURL, nil, 0, slog.New(slog.DiscardHandler), nil)
+			} else {
+				reg = registrationHandlers(nil, site, 0, slog.New(slog.DiscardHandler), nil)
+			}
 
-	for name, rec := range map[string]*httptest.ResponseRecorder{
-		"Register": serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`),
-		"Verify":   serveRegistration(reg.Verify, http.MethodGet, "/auth/verify?token=T&type=signup", ""),
-	} {
-		if rec.Code != http.StatusServiceUnavailable {
-			t.Errorf("%s = %d, want 503: %s", name, rec.Code, rec.Body.String())
-			continue
+			for name, rec := range map[string]*httptest.ResponseRecorder{
+				"Register": serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`),
+				"Verify":   serveForm(reg.Verify, "/auth/verify", "token=T&type=signup"),
+
+				"ResendVerification":   serveRegistration(reg.ResendVerification, http.MethodPost, "/auth/resend-verification", `{"email":"new@corp.example"}`),
+				"RequestPasswordReset": serveRegistration(reg.RequestPasswordReset, http.MethodPost, "/auth/request-password-reset", `{"email":"new@corp.example"}`),
+			} {
+				if rec.Code != http.StatusServiceUnavailable {
+					t.Errorf("%s = %d, want 503: %s", name, rec.Code, rec.Body.String())
+					continue
+				}
+				var body map[string]string
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body) != 1 || body["error"] != "registration is not configured" {
+					t.Errorf("%s body = %s, want {\"error\":\"registration is not configured\"}", name, rec.Body.String())
+				}
+			}
+			if got := calls(); len(got) != 0 {
+				t.Errorf("GoTrue saw %v, want no calls", got)
+			}
+		})
+	}
+}
+
+// invitationPreviewerStub answers every token with one live invite and counts the calls.
+func invitationPreviewerStub(address string) (gateway.InvitationPreviewer, func() int) {
+	var mu sync.Mutex
+	n := 0
+	return func(context.Context, string) (gateway.InvitationPreview, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			n++
+			return gateway.InvitationPreview{Workspace: "Obi Partners", Role: "reviewer", Email: address}, nil
+		}, func() int {
+			mu.Lock()
+			defer mu.Unlock()
+			return n
 		}
-		var body map[string]string
-		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body) != 1 || body["error"] != "registration is not configured" {
-			t.Errorf("%s body = %s, want {\"error\":\"registration is not configured\"}", name, rec.Body.String())
+}
+
+// AUTH_URL, AUTH_SITE_URL or the register throttle missing: invitee registration refuses, and the preview still answers.
+func TestInvitationHandlers_NotConfigured503(t *testing.T) {
+	site, _ := url.Parse("https://site.example")
+	perIP := func() *gateway.SignInThrottle {
+		return gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now)
+	}
+	const registerBody = `{"token":"Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T","password":"Corr3ct-Horse"}`
+
+	// Control: configured, the same call signs the invited address up, so the 503s below are the unset input.
+	t.Run("configured", func(t *testing.T) {
+		authURL, calls := fakeAuth(t)
+		preview, previewed := invitationPreviewerStub("tunde@obi.test")
+		_, register := invitationHandlers(authURL, site, 0, perIP(), preview, slog.New(slog.DiscardHandler))
+
+		rec := serveRegistration(register, http.MethodPost, "/auth/invitation/register", registerBody)
+
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("register = %d, want 202: %s", rec.Code, rec.Body.String())
+		}
+		if got := calls(); !slices.Equal(got, []string{"POST /signup"}) || previewed() != 1 {
+			t.Errorf("GoTrue saw %v and the previewer %d call(s), want one signup and one preview", got, previewed())
+		}
+	})
+
+	for _, unset := range []string{"AUTH_URL", "AUTH_SITE_URL", "register throttle"} {
+		t.Run(unset, func(t *testing.T) {
+			authURL, calls := fakeAuth(t)
+			preview, previewed := invitationPreviewerStub("tunde@obi.test")
+			log := slog.New(slog.DiscardHandler)
+			var invitation, register http.Handler
+			switch unset {
+			case "AUTH_URL":
+				invitation, register = invitationHandlers(nil, site, 0, perIP(), preview, log)
+			case "AUTH_SITE_URL":
+				invitation, register = invitationHandlers(authURL, nil, 0, perIP(), preview, log)
+			default:
+				invitation, register = invitationHandlers(authURL, site, 0, nil, preview, log)
+			}
+
+			rec := serveRegistration(register, http.MethodPost, "/auth/invitation/register", registerBody)
+
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("register = %d, want 503: %s", rec.Code, rec.Body.String())
+			}
+			var body map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body) != 1 || body["error"] != "registration is not configured" {
+				t.Errorf("register body = %s, want {\"error\":\"registration is not configured\"}", rec.Body.String())
+			}
+			if got := calls(); len(got) != 0 || previewed() != 0 {
+				t.Errorf("GoTrue saw %v and the previewer %d call(s), want none", got, previewed())
+			}
+
+			rec = serveRegistration(invitation, http.MethodPost, "/auth/invitation", `{"token":"Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T"}`)
+			if rec.Code != http.StatusOK || previewed() != 1 {
+				t.Errorf("preview = %d with %d previewer call(s), want 200 and 1: %s", rec.Code, previewed(), rec.Body.String())
+			}
+			var preview200 map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &preview200); err != nil || preview200["email"] != "tunde@obi.test" {
+				t.Errorf("preview body = %s, want the invite's workspace, role and email", rec.Body.String())
+			}
+		})
+	}
+}
+
+// Invitee registration enforces its per-client limit exactly where /auth/register does: not on a PR preview.
+func TestInvitationHandlers_EnforcementFollowsThePosture(t *testing.T) {
+	for _, c := range []struct {
+		name, env string
+		wantCalls int
+	}{
+		{"pr-7", "pr-7", 11},
+		{"production", "production", gateway.RegisterPerIP},
+		{"development", "development", gateway.RegisterPerIP},
+		{"empty", "", gateway.RegisterPerIP},
+		{"upper-case PR-7", "PR-7", gateway.RegisterPerIP},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("RAILWAY_ENVIRONMENT_NAME", c.env)
+			authURL, calls := fakeAuth(t)
+			site, _ := url.Parse("https://site.example")
+			log := slog.New(slog.DiscardHandler)
+			reg := registrationHandlers(authURL, site, 0, log, nil)
+			preview, _ := invitationPreviewerStub("tunde@obi.test")
+			_, register := invitationHandlers(authURL, site, 0, reg.RegisterPerIP, preview, log)
+
+			for range 11 {
+				req := httptest.NewRequest(http.MethodPost, "/auth/invitation/register", strings.NewReader(`{"token":"Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T","password":"Corr3ct-Horse"}`))
+				req.RemoteAddr = "203.0.113.7:4000"
+				rec := httptest.NewRecorder()
+				register.ServeHTTP(rec, req)
+				if rec.Code != http.StatusAccepted {
+					t.Fatalf("invitee register = %d, want 202: %s", rec.Code, rec.Body.String())
+				}
+			}
+			if got := countCalls(calls(), "POST /signup"); got != c.wantCalls {
+				t.Errorf("GoTrue /signup calls = %d, want %d", got, c.wantCalls)
+			}
+		})
+	}
+}
+
+// The throttle invitee registration shares is the one /auth/register spends.
+func TestRegistrationHandlers_ExposesTheRegisterThrottle(t *testing.T) {
+	const remote = "203.0.113.7:4000"
+	authURL, _ := fakeAuth(t)
+	site, _ := url.Parse("https://site.example")
+	log := slog.New(slog.DiscardHandler)
+
+	reg := registrationHandlers(authURL, site, 0, log, nil)
+	if reg.RegisterPerIP == nil {
+		t.Fatal("RegisterPerIP is nil with AUTH_URL and AUTH_SITE_URL configured")
+	}
+	if !reg.RegisterPerIP.Reserve("198.51.100.1") {
+		t.Fatal("a fresh throttle refused its first reservation")
+	}
+	for _, email := range distinctAddresses(gateway.RegisterPerIP) {
+		if rec := registerFrom(reg.Register, email, remote); rec.Code != http.StatusAccepted {
+			t.Fatalf("register = %d, want 202: %s", rec.Code, rec.Body.String())
 		}
 	}
-	if got := calls(); len(got) != 0 {
-		t.Errorf("GoTrue saw %v, want no calls", got)
+	if reg.RegisterPerIP.Reserve("203.0.113.7") {
+		t.Errorf("RegisterPerIP still has budget for a client that spent all %d register attempts: it is not the throttle Register uses", gateway.RegisterPerIP)
+	}
+
+	if got := registrationHandlers(nil, site, 0, log, nil).RegisterPerIP; got != nil {
+		t.Error("RegisterPerIP is non-nil with AUTH_URL unset")
+	}
+	if got := registrationHandlers(authURL, nil, 0, log, nil).RegisterPerIP; got != nil {
+		t.Error("RegisterPerIP is non-nil with AUTH_SITE_URL unset")
+	}
+}
+
+// resendFrom posts one resend for email as the client behind remote.
+func resendFrom(h http.Handler, email, remote string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/auth/resend-verification", strings.NewReader(`{"email":"`+email+`"}`))
+	req.RemoteAddr = remote
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// registerFrom posts one register for email as the client behind remote.
+func registerFrom(h http.Handler, email, remote string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(`{"email":"`+email+`","password":"Corr3ct-Horse"}`))
+	req.RemoteAddr = remote
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// countCalls counts the recorded GoTrue calls equal to want.
+func countCalls(calls []string, want string) int {
+	n := 0
+	for _, c := range calls {
+		if c == want {
+			n++
+		}
+	}
+	return n
+}
+
+// resetFrom posts one reset request for email as the client behind remote.
+func resetFrom(h http.Handler, email, remote string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/auth/request-password-reset", strings.NewReader(`{"email":"`+email+`"}`))
+	req.RemoteAddr = remote
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// The reset page and its form need AUTH_SITE_URL, the form also AUTH_URL: unset, they answer 503 and call nothing.
+func TestResetPasswordHandler_NotConfigured503(t *testing.T) {
+	site, _ := url.Parse("https://site.example")
+	log := slog.New(slog.DiscardHandler)
+	signIn := gateway.NewSignInThrottle("sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
+	for _, unset := range []string{"AUTH_SITE_URL", "AUTH_URL"} {
+		t.Run(unset, func(t *testing.T) {
+			authURL, calls := fakeAuth(t)
+			sessions := gateway.NewSessionChecker(nil, nil, time.Now, log)
+			got := map[string]*httptest.ResponseRecorder{}
+			if unset == "AUTH_SITE_URL" {
+				got["page"] = serveRegistration(gateway.ResetPasswordPageHandler(nil), http.MethodGet, "/auth/reset-password?token=t&type=recovery", "")
+				got["form"] = serveForm(resetPasswordHandler(authURL, nil, sessions, signIn, log), "/auth/reset-password", "token=t&type=recovery&password=new-password-1")
+			} else {
+				got["form"] = serveForm(resetPasswordHandler(nil, site, sessions, signIn, log), "/auth/reset-password", "token=t&type=recovery&password=new-password-1")
+			}
+			for name, rec := range got {
+				if rec.Code != http.StatusServiceUnavailable {
+					t.Errorf("%s = %d, want 503: %s", name, rec.Code, rec.Body.String())
+					continue
+				}
+				var body map[string]string
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body) != 1 || body["error"] != "registration is not configured" {
+					t.Errorf("%s body = %s, want {\"error\":\"registration is not configured\"}", name, rec.Body.String())
+				}
+			}
+			if c := calls(); len(c) != 0 {
+				t.Errorf("GoTrue saw %v, want no calls", c)
+			}
+		})
+	}
+}
+
+// Resend and reset spend one budget: 3 per address and 10 per client (D4). Separate throttles would double both.
+func TestRegistrationHandlers_ResetSharesTheResendLimits(t *testing.T) {
+	const remote = "203.0.113.7:4000"
+	mailCalls := func(calls []string) int {
+		return countCalls(calls, "POST /resend") + countCalls(calls, "POST /recover")
+	}
+
+	t.Run("per address", func(t *testing.T) {
+		authURL, calls := fakeAuth(t)
+		site, _ := url.Parse("https://site.example")
+		reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
+		for range 2 {
+			resendFrom(reg.ResendVerification, "ada@corp.example", remote)
+			resetFrom(reg.RequestPasswordReset, "ada@corp.example", remote)
+		}
+		if got := mailCalls(calls()); got != 3 {
+			t.Errorf("GoTrue /resend + /recover calls for one address = %d, want 3", got)
+		}
+	})
+	t.Run("per client", func(t *testing.T) {
+		authURL, calls := fakeAuth(t)
+		site, _ := url.Parse("https://site.example")
+		reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
+		for i, email := range distinctAddresses(11) {
+			if i%2 == 0 {
+				resendFrom(reg.ResendVerification, email, remote)
+			} else {
+				resetFrom(reg.RequestPasswordReset, email, remote)
+			}
+		}
+		if got := mailCalls(calls()); got != 10 {
+			t.Errorf("GoTrue /resend + /recover calls from one client = %d, want 10", got)
+		}
+	})
+}
+
+// On a PR preview the per-address limit of the reset request logs but does not refuse.
+func TestRegistrationHandlers_ResetPreviewOnlyLogsPerAddress(t *testing.T) {
+	for _, c := range []struct {
+		env          string
+		wantCalls    int
+		wantEnforced bool
+	}{{"pr-7", 4, false}, {"production", 3, true}} {
+		t.Run(c.env, func(t *testing.T) {
+			t.Setenv("RAILWAY_ENVIRONMENT_NAME", c.env)
+			authURL, calls := fakeAuth(t)
+			site, _ := url.Parse("https://site.example")
+			var logs bytes.Buffer
+			reg := registrationHandlers(authURL, site, 0, slog.New(slog.NewJSONHandler(&logs, nil)), nil)
+
+			for range 4 {
+				resetFrom(reg.RequestPasswordReset, "ada@corp.example", "203.0.113.7:4000")
+			}
+			if got := countCalls(calls(), "POST /recover"); got != c.wantCalls {
+				t.Errorf("GoTrue /recover calls = %d, want %d", got, c.wantCalls)
+			}
+			var limited int
+			for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+				var rec map[string]any
+				if json.Unmarshal([]byte(line), &rec) != nil || rec["msg"] != "reset-request: limit reached" {
+					continue
+				}
+				limited++
+				if rec["enforced"] != c.wantEnforced || rec["limit"] != "address" {
+					t.Errorf("limit line = %s, want limit address enforced=%v", line, c.wantEnforced)
+				}
+			}
+			if limited != 1 {
+				t.Errorf("%d limit lines, want exactly 1 for the fourth request", limited)
+			}
+		})
+	}
+}
+
+func TestRegistrationHandlers_ResendWaitsAndLimits(t *testing.T) {
+	const remote = "203.0.113.7:4000"
+	for _, c := range []struct {
+		name      string
+		floor     time.Duration
+		addresses []string
+		wantCalls int
+	}{
+		{"waits", 300 * time.Millisecond, []string{"ada@corp.example"}, 1},
+		{"three", 0, []string{"ada@corp.example", "ada@corp.example", "ada@corp.example"}, 3},
+		{"four", 0, []string{"ada@corp.example", "ada@corp.example", "ada@corp.example", "ada@corp.example"}, 3},
+		{"per key", 0, distinctAddresses(11), 10},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			authURL, calls := fakeAuth(t)
+			site, _ := url.Parse("https://site.example")
+			reg := registrationHandlers(authURL, site, c.floor, slog.New(slog.DiscardHandler), nil)
+
+			start := time.Now()
+			for _, email := range c.addresses {
+				rec := resendFrom(reg.ResendVerification, email, remote)
+				if rec.Code != http.StatusAccepted {
+					t.Errorf("resend = %d, want 202 whether or not it was sent: %s", rec.Code, rec.Body.String())
+				}
+			}
+			if elapsed := time.Since(start); elapsed < time.Duration(len(c.addresses))*c.floor {
+				t.Errorf("%d resends took %v, want no less than %v each", len(c.addresses), elapsed, c.floor)
+			}
+			if got := countCalls(calls(), "POST /resend"); got != c.wantCalls {
+				t.Errorf("GoTrue /resend calls = %d, want %d", got, c.wantCalls)
+			}
+		})
+	}
+}
+
+func distinctAddresses(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = "user" + strconv.Itoa(i) + "@corp.example"
+	}
+	return out
+}
+
+// Register's per-key bucket is its own: not removed, not shared with resend, not resend's per-address one.
+func TestRegistrationHandlers_RegisterHasItsOwnLimit(t *testing.T) {
+	const remote = "203.0.113.7:4000"
+	authURL, calls := fakeAuth(t)
+	site, _ := url.Parse("https://site.example")
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
+
+	for _, email := range distinctAddresses(11) {
+		if rec := registerFrom(reg.Register, email, remote); rec.Code != http.StatusAccepted {
+			t.Errorf("register = %d, want 202 over the limit too: %s", rec.Code, rec.Body.String())
+		}
+	}
+	if got := countCalls(calls(), "POST /signup"); got != 10 {
+		t.Errorf("GoTrue /signup calls = %d, want 10", got)
+	}
+
+	if rec := resendFrom(reg.ResendVerification, "ada@corp.example", remote); rec.Code != http.StatusAccepted {
+		t.Errorf("resend = %d, want 202: %s", rec.Code, rec.Body.String())
+	}
+	if got := countCalls(calls(), "POST /resend"); got != 1 {
+		t.Errorf("GoTrue /resend calls after a spent register bucket = %d, want 1", got)
+	}
+}
+
+// A PR fork counts and logs each limited route's limits but does not refuse; every other posture refuses the eleventh.
+func TestRegistrationHandlers_PreviewOnlyLogs(t *testing.T) {
+	routes := []struct {
+		name, path, limitMsg string
+		send                 func(h http.Handler, email, remote string) *httptest.ResponseRecorder
+		handler              func(reg registration) http.Handler
+	}{
+		{"register", "POST /signup", "registration: limit reached", registerFrom, func(r registration) http.Handler { return r.Register }},
+		{"resend", "POST /resend", "resend-verification: limit reached", resendFrom, func(r registration) http.Handler { return r.ResendVerification }},
+		{"reset", "POST /recover", "reset-request: limit reached", resetFrom, func(r registration) http.Handler { return r.RequestPasswordReset }},
+	}
+	for _, c := range []struct {
+		name, env    string
+		wantCalls    int
+		wantEnforced bool
+	}{
+		{"pr-7", "pr-7", 11, false},
+		{"production", "production", 10, true},
+		{"development", "development", 10, true},
+		{"empty", "", 10, true},
+		{"bare pr-", "pr-", 10, true},
+		{"lookalike prod-7", "prod-7", 10, true},
+		{"upper-case PR-7", "PR-7", 10, true},
+		{"trailing text pr-7x", "pr-7x", 10, true},
+	} {
+		for _, rt := range routes {
+			t.Run(c.name+"/"+rt.name, func(t *testing.T) {
+				t.Setenv("RAILWAY_ENVIRONMENT_NAME", c.env)
+				authURL, calls := fakeAuth(t)
+				site, _ := url.Parse("https://site.example")
+				var logs bytes.Buffer
+				reg := registrationHandlers(authURL, site, 0, slog.New(slog.NewJSONHandler(&logs, nil)), nil)
+
+				for _, email := range distinctAddresses(11) {
+					rt.send(rt.handler(reg), email, "203.0.113.7:4000")
+				}
+				if got := countCalls(calls(), rt.path); got != c.wantCalls {
+					t.Errorf("GoTrue %s calls = %d, want %d", rt.path, got, c.wantCalls)
+				}
+				var limited int
+				for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+					var rec map[string]any
+					if json.Unmarshal([]byte(line), &rec) != nil || rec["msg"] != rt.limitMsg {
+						continue
+					}
+					limited++
+					if rec["enforced"] != c.wantEnforced {
+						t.Errorf("limit line enforced = %v, want %v: %s", rec["enforced"], c.wantEnforced, line)
+					}
+				}
+				if limited != 1 {
+					t.Errorf("%d limit lines, want exactly 1 for the eleventh request", limited)
+				}
+			})
+		}
+	}
+}
+
+// A full map warns under the name of its own throttle: register's, resend's per-address and resend's per-key.
+func TestRegistrationHandlers_FullMapWarningNamesTheMap(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	authURL, _ := fakeAuth(t)
+	site, _ := url.Parse("https://site.example")
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
+
+	remote := func(i int) string { return fmt.Sprintf("10.%d.%d.%d:4000", i>>16&255, i>>8&255, i&255) }
+	for i := range gateway.RegisterMaxKeys {
+		registerFrom(reg.Register, "user"+strconv.Itoa(i)+"@corp.example", remote(i))
+	}
+	registerFrom(reg.Register, "one-more@corp.example", remote(gateway.RegisterMaxKeys))
+	for i := range gateway.ResendMaxKeys {
+		resendFrom(reg.ResendVerification, "user"+strconv.Itoa(i)+"@corp.example", remote(i))
+	}
+	// A known client with a new address fills the per-address map; a new client fills the per-key map.
+	resendFrom(reg.ResendVerification, "one-more@corp.example", remote(0))
+	resendFrom(reg.ResendVerification, "another@corp.example", remote(gateway.ResendMaxKeys))
+
+	for _, name := range []string{"register", "resend-address", "resend-ip"} {
+		if want := name + " throttle full; refusing new addresses"; strings.Count(logs.String(), want) != 1 {
+			t.Errorf("WARN %q appears %d times, want once: %s", want, strings.Count(logs.String(), want), logs.String())
+		}
 	}
 }
 

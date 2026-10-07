@@ -35,7 +35,8 @@ func NewStore(pool *pgxpool.Pool) *Store {
 // audit.Record row in the SAME transaction, AFTER the successful INSERT and
 // BEFORE the closure returns nil — so a failed audit write rolls back the
 // insert too. A unique_violation (23505, via pgCode) on the duplicate-TIN
-// partial index maps to ErrDuplicateTIN.
+// partial index maps to ErrDuplicateTIN. It refuses a non-admin caller with
+// ErrNotPermitted.
 func (s *Store) Create(ctx context.Context, in CreateInput) (Entity, error) {
 	canonicalTIN, err := ValidateTIN(in.TIN)
 	if err != nil {
@@ -48,6 +49,10 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Entity, error) {
 		// resolved it (as the tenant id) before this closure ran, returning
 		// db.ErrNoTenant otherwise.
 		id, _ := auth.IdentityFromContext(ctx)
+
+		if err := requireAdmin(ctx, tx, id.Subject); err != nil {
+			return err
+		}
 
 		if err := tx.QueryRow(ctx,
 			`INSERT INTO business_entities (tenant_id, name, tin, registration, sector, address)
@@ -70,6 +75,23 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Entity, error) {
 		return Entity{}, err
 	}
 	return entity, nil
+}
+
+// requireAdmin refuses any caller that is not an active admin. First statement in the tx.
+func requireAdmin(ctx context.Context, tx pgx.Tx, subject string) error {
+	var role string
+	if err := tx.QueryRow(ctx,
+		`SELECT role FROM memberships WHERE user_id = $1 AND status = 'active'`, subject,
+	).Scan(&role); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotPermitted
+		}
+		return err
+	}
+	if role != "admin" {
+		return ErrNotPermitted
+	}
+	return nil
 }
 
 // List returns the caller's tenant's business_entities filtered by f

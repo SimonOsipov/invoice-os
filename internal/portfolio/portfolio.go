@@ -88,6 +88,7 @@ var (
 	ErrNotFound            = errors.New("portfolio: not found")
 	ErrDuplicateTIN        = errors.New("portfolio: duplicate tin")
 	ErrRedundantTransition = errors.New("portfolio: redundant transition")
+	ErrNotPermitted        = errors.New("portfolio: not permitted")
 )
 
 // createEntityRequest is the POST /v1/entities wire body (snake_case JSON
@@ -104,7 +105,8 @@ type createEntityRequest struct {
 // CreateHandler returns POST /v1/entities. It checks the verified identity is
 // present (401 before decode/create, exactly like tenancy.MeHandler's order),
 // decodes the request body (400 on decode error or empty name), calls create,
-// maps errors via statusForErr, and answers 201 + Entity on success.
+// maps errors via statusForErr (403 for a non-admin, Store.Create), and
+// answers 201 + Entity on success.
 func CreateHandler(create func(ctx context.Context, in CreateInput) (Entity, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -412,6 +414,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusUnauthorized, "unauthorized"
 	case errors.Is(err, db.ErrNotActiveMember):
 		return http.StatusForbidden, db.NotActiveMemberMessage
+	case errors.Is(err, ErrNotPermitted):
+		return http.StatusForbidden, "only an admin can add a company"
 	case errors.Is(err, ErrInvalidTIN), errors.Is(err, ErrValidation):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, ErrNotFound):

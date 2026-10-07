@@ -37,7 +37,7 @@ func TestPortfolioCrossTenantIntegrationFlow(t *testing.T) {
 		t.Fatalf("seed tenants: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $3, 'preparer', 'active'), ($2, $3, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $3, 'admin', 'active'), ($2, $3, 'admin', 'active')`,
 		tenantA, tenantB, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller memberships: %v", err)

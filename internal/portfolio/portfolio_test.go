@@ -1002,7 +1002,7 @@ func TestStoreCreate_PersistsAndAudits(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', 'active')`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -1068,7 +1068,7 @@ func TestStoreCreate_FailedCreateWritesNoAudit(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', 'active')`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -1190,7 +1190,7 @@ func TestStoreCreate_TINUniquenessIsPerTenantNotGlobal(t *testing.T) {
 		t.Fatalf("seed tenants: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $3, 'preparer', 'active'), ($2, $3, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $3, 'admin', 'active'), ($2, $3, 'admin', 'active')`,
 		tenantA, tenantB, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller memberships: %v", err)
@@ -1249,7 +1249,7 @@ func TestStoreCreate_NullableOptionalFieldsRoundTrip(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', 'active')`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -1322,7 +1322,7 @@ func TestStoreCreate_AuditRowIsTenantScoped(t *testing.T) {
 		t.Fatalf("seed tenants: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', 'active')`,
 		tenantA, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -1408,7 +1408,7 @@ func TestStoreCreate_InvalidTINRejectedAtStoreLayer(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', 'active')`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -2730,7 +2730,7 @@ func TestStoreLifecycle_RoundTripAuditTrail(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', 'active')`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -2831,7 +2831,7 @@ func TestStoreUpdate_PartialUpdateLeavesOtherFieldsIntact(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', 'active')`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)

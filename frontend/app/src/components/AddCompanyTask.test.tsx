@@ -10,7 +10,7 @@ import type { Member } from '../lib/members'
 import { createEntity, listEntities } from '../lib/portfolio'
 import type { Entity } from '../lib/portfolio'
 import type { Mode, PlatformCtx } from '../types'
-import { ADD_COMPANY_COPY, AddCompanyTask, NO_COMPANY_COPY } from './AddCompanyTask'
+import { ADD_COMPANY_COPY, AddCompanyTask } from './AddCompanyTask'
 
 vi.mock('../lib/portfolio', async (importActual) => ({
   ...(await importActual<typeof import('../lib/portfolio')>()),
@@ -330,7 +330,7 @@ describe('AddCompanyTask follows the role (LOGFIX-06-02)', () => {
         const { unmount } = render(<AddCompanyTask ctx={mkCtx({ mode, role }).ctx} />)
         expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('No company created')
         const waiting = screen.getByTestId('company-setup-waiting')
-        expect(waiting.textContent).toContain(NO_COMPANY_COPY.message)
+        expect(waiting.textContent).toContain('Your workspace admin adds the company. You can start when it exists.')
         expect(within(waiting).queryAllByRole('button')).toEqual([])
         expect(within(waiting).queryAllByRole('link')).toEqual([])
         expect(screen.queryAllByRole('button')).toEqual([])

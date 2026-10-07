@@ -903,7 +903,7 @@ func TestDeploySlot_StuckHolderExpires(t *testing.T) {
 	t.Run("59 min 59 s ago still holds", func(t *testing.T) {
 		t.Parallel()
 		s := newSlotShim(t)
-		s.runs(t, slotList(slotRun{id: 150, pr: 5}, slotRun{id: 151, pr: 6}), slotList())
+		s.runs(t, slotList(slotRun{id: 150, pr: 5, startedAgo: slotMaxHold + 200}, slotRun{id: 151, pr: 6}), slotList())
 		s.jobsAlways(t, 150, stuck(slotMaxHold-1))
 		holdersOf(t, s, 151)
 		out, code := s.run(t)
@@ -916,6 +916,49 @@ func TestDeploySlot_StuckHolderExpires(t *testing.T) {
 		}
 		s.wantSleeps(t, 1)
 	})
+}
+
+// A holder's hold ends only when both its slot job and its attempt are 60 min old.
+func TestDeploySlot_HoldFollowsTheLatestOfSlotAndAttempt(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		attempt    int
+		startedAgo int // attempt clock
+		slotAgo    int // slot job's completed_at
+		holder     bool
+	}{
+		{"re-run, attempt 10 min old, slot 2 h old", 2, 600, 7200, true},
+		{"re-run, attempt 59 min 59 s old, slot 2 h old", 2, slotMaxHold - 1, 7200, true},
+		{"re-run, attempt 60 min old, slot 2 h old", 2, slotMaxHold, 7200, false},
+		{"re-run, attempt 60 min 1 s old, slot 2 h old", 2, slotMaxHold + 1, 7200, false},
+		{"re-run, attempt 2 h old, slot 59 min 59 s old", 2, 7200, slotMaxHold - 1, true},
+		{"first attempt, chain stuck 2 h", 1, 7200 + 200, 7200, false},
+		{"first attempt, chain stuck 60 min", 1, slotMaxHold + 200, slotMaxHold, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			s := newSlotShim(t)
+			s.runs(t, slotList(slotRun{id: 150, pr: 5, attempt: c.attempt, startedAgo: c.startedAgo}, slotRun{id: 151, pr: 6}), slotList())
+			s.jobsAlways(t, 150, jobsBody(jobDone(jobChanges, "success", c.slotAgo+100), jobDone(jobSlot, "success", c.slotAgo)))
+			holdersOf(t, s, 151)
+			out, code := s.run(t)
+
+			wantExit(t, code, 0, out)
+			line := pollLine(t, out, 1)
+			if c.holder {
+				wantContains(t, "poll 1", line, "2 of 2 held", "run 150 (PR #5)")
+				if strings.Contains(line, "expired") {
+					t.Errorf("poll 1 lists the holder as expired: %q", line)
+				}
+				s.wantSleeps(t, 1)
+			} else {
+				wantContains(t, "poll 1", line, "1 of 2 held", "expired: run 150 (PR #5)")
+				s.wantSleeps(t, 0)
+			}
+		})
+	}
 }
 
 // Settled keys are matched whole: settled run 150 must not hide run 50.

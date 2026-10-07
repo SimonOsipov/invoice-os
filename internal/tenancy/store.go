@@ -388,8 +388,6 @@ func (s *Store) AcceptInvitation(ctx context.Context, token string) (Tenant, str
 	return t, subject, role, nil
 }
 
-var errNotImplemented = errors.New("tenancy: not implemented")
-
 // PendingInvite is one live invite addressed to the caller's verified email.
 type PendingInvite struct {
 	ID        string    `json:"id"`
@@ -400,12 +398,112 @@ type PendingInvite struct {
 	tenantID  string
 }
 
-// MyPendingInvitations lists the live invites for the caller's email.
-func (s *Store) MyPendingInvitations(ctx context.Context) ([]PendingInvite, error) {
-	return nil, errNotImplemented
+// joinCaller resolves the tenant-less caller of a join-by-email route: the
+// subject and the normalised header email (empty when it fails to normalise).
+// A tenant-bearing identity is ErrAlreadyMember; no caller or a non-uuid subject is db.ErrNoTenant.
+func joinCaller(ctx context.Context) (subject, email string, err error) {
+	if _, ok := auth.IdentityFromContext(ctx); ok {
+		return "", "", ErrAlreadyMember
+	}
+	caller, ok := auth.TenantlessCallerFromContext(ctx)
+	if !ok {
+		return "", "", db.ErrNoTenant
+	}
+	parsed, perr := uuid.Parse(caller.Subject)
+	if perr != nil {
+		return "", "", db.ErrNoTenant
+	}
+	email, _ = normaliseEmail(caller.Email)
+	return parsed.String(), email, nil
 }
 
-// AcceptInvitationByID joins the caller to the tenant of invite id.
+// MyPendingInvitations lists the live invites for the caller's email, soonest expiry first.
+func (s *Store) MyPendingInvitations(ctx context.Context) ([]PendingInvite, error) {
+	_, email, err := joinCaller(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if email == "" {
+		return []PendingInvite{}, nil
+	}
+	out := []PendingInvite{}
+	// The caller has no membership; the email filter in the function is the guard.
+	err = db.WithinTenantTx(ctx, s.pool, uuid.Nil.String(), func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT invitation_id, tenant_id, workspace, role, inviter, expires_at
+			   FROM public.pending_invites_for_email($1)`, email)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var p PendingInvite
+			if err := rows.Scan(&p.ID, &p.tenantID, &p.Workspace, &p.Role, &p.Inviter, &p.ExpiresAt); err != nil {
+				return err
+			}
+			out = append(out, p)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// AcceptInvitationByID joins the caller to the tenant of invite id with the
+// invited role and audits it in one transaction. The invite must be addressed
+// to the caller's email; every other id answers ErrInvitationNotValid.
 func (s *Store) AcceptInvitationByID(ctx context.Context, id string) (Tenant, string, string, error) {
-	return Tenant{}, "", "", errNotImplemented
+	subject, email, err := joinCaller(ctx)
+	if err != nil {
+		return Tenant{}, "", "", err
+	}
+	invID, perr := uuid.Parse(id)
+	if email == "" || perr != nil {
+		return Tenant{}, "", "", ErrInvitationNotValid
+	}
+
+	var tenantID string
+	err = db.WithinTenantTx(ctx, s.pool, uuid.Nil.String(), func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx,
+			`SELECT tenant_id FROM public.pending_invites_for_email($1) WHERE invitation_id = $2`,
+			email, invID.String()).Scan(&tenantID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrInvitationNotValid
+		}
+		return err
+	})
+	if err != nil {
+		return Tenant{}, "", "", err
+	}
+
+	var t Tenant
+	var role string
+	// The caller has no membership in this tenant yet, so the gated seam would refuse.
+	err = db.WithinTenantTx(ctx, s.pool, tenantID, func(tx pgx.Tx) error {
+		var accepted string
+		if err := tx.QueryRow(ctx, `SELECT invitation_id, role FROM public.accept_invitation_by_id($1, $2, $3, $4)`,
+			tenantID, invID.String(), subject, email,
+		).Scan(&accepted, &role); err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) {
+				switch pgErr.ConstraintName {
+				case "invitation_not_valid", "invitation_email_mismatch":
+					return ErrInvitationNotValid
+				case "one_workspace_per_identity":
+					return ErrAlreadyMember
+				}
+			}
+			return err
+		}
+		if err := tx.QueryRow(ctx, `SELECT id, name, kind FROM tenants`).Scan(&t.ID, &t.Name, &t.Kind); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, subject, "invitation.accepted", map[string]any{"invitation_id": accepted, "role": role})
+	})
+	if err != nil {
+		return Tenant{}, "", "", err
+	}
+	return t, subject, role, nil
 }

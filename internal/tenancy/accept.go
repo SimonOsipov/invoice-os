@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+
+	"github.com/google/uuid"
 )
 
 // InvitationPreview is what a token holder sees before signing in.
@@ -109,16 +111,59 @@ type MyPendingInvitationsFunc func(context.Context) ([]PendingInvite, error)
 // AcceptInvitationByIDFunc accepts invite id for the caller: tenant, subject, role.
 type AcceptInvitationByIDFunc func(context.Context, string) (Tenant, string, string, error)
 
-// InvitationsMineHandler returns GET /v1/invitations/mine.
+// InvitationsMineHandler returns GET /v1/invitations/mine: 200 `{"invitations":[…]}`,
+// never null. The store reads the caller's email from the identity header.
 func InvitationsMineHandler(list MyPendingInvitationsFunc, log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not implemented")
+		invites, err := list(r.Context())
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "tenancy: list pending invitations", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+		if invites == nil {
+			invites = []PendingInvite{}
+		}
+		writeJSON(w, http.StatusOK, struct {
+			Invitations []PendingInvite `json:"invitations"`
+		}{invites})
 	}
 }
 
-// AcceptInvitationByIDHandler returns POST /v1/invitations/{id}/accept.
+// AcceptInvitationByIDHandler returns POST /v1/invitations/{id}/accept: no body
+// is read; 200 in the token-accept shape. A non-uuid id is 404.
 func AcceptInvitationByIDHandler(accept AcceptInvitationByIDFunc, log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not implemented")
+		id, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			writeError(w, http.StatusNotFound, msgInviteNotValid)
+			return
+		}
+		tenant, subject, role, err := accept(r.Context(), id.String())
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "tenancy: accept invitation by id", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		var resp provisionResponse
+		resp.Tenant.ID = tenant.ID
+		resp.Tenant.Name = tenant.Name
+		resp.Tenant.Kind = tenant.Kind
+		resp.User.ID = subject
+		resp.User.Role = role
+		writeJSON(w, http.StatusOK, resp)
 	}
 }

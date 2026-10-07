@@ -561,6 +561,21 @@ the escaped path (`v1%2Finvitations%2Faccept` and `%61ccept` are not exempt):
 `/api/tenancy/v1/workspaces` and `/api/tenancy/v1/invitations/accept`. A tenant-bearing token
 reaches the accept route like any tenancy route; tenancy then answers 409.
 
+Tenancy also joins a signed-in invitee by address, with no token. Both routes read the email from
+the identity header only, normalised as for invites; the gateway admit rule is a later change.
+
+| Route | Answer |
+|---|---|
+| `GET /v1/invitations/mine` | 200 `{"invitations":[{"id","workspace","role","inviter","expires_at"}]}`, soonest expiry first; `inviter` is the inviter's display name, else email, else `null`; `[]` when none |
+| `POST /v1/invitations/{id}/accept` (no body read) | 200 `{tenant:{id,name,kind}, user:{id,role}}`, as the token accept; one `invitation.accepted` audit row |
+| a non-uuid id; an id that is unknown, expired, accepted, revoked, or addressed to another address or tenant; an address that fails normalisation | 404 `this invite is no longer valid`; the cases are not told apart |
+| a caller who holds a membership, in any status, or a tenant-bearing token (no statement sent) | 409 `you already belong to a workspace` |
+| no caller identity | 401 `unauthorized` |
+
+`public.accept_invitation_by_id` locks the identity as `provision_workspace` does, so two joins
+of one identity, or two accepts of one invite, admit one. The token link and the id join spend the
+same invite: whichever comes second answers not valid.
+
 **`POST /auth/invitation`**, outside `/api/`, no verifier, CORS-wrapped, with an `OPTIONS` route.
 Body `{"token"}`, at most 1 KiB. Every answer sets `Cache-Control: no-store`.
 

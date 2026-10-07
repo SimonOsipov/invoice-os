@@ -124,6 +124,10 @@ would refuse before the join. It reads the tenant the token names, then writes o
 membership, invite and audit row, for the caller's own subject and only when the caller's email is
 the invited address.
 
+`Store.MyPendingInvitations` (`GET /v1/invitations/mine`) and `Store.AcceptInvitationByID`
+(`POST /v1/invitations/{id}/accept`) are exempt the same way: the caller has no membership, and the
+email in the identity header, through `pending_invites_for_email`, is the only guard.
+
 `tenancy.Store.PreviewInvitation` (`POST /internal/invitations/preview`) is the fourth,
 func-scoped. It has no caller: the token is the credential. It discloses the invited workspace name,
 role and address to whoever holds the token, and answers `404` alike for an unknown, spent,
@@ -264,7 +268,7 @@ fragile part of it.
 **`covered` is structural, not per-route inspection.** Scans 1 and 2 (§9) make the gated seam a
 monopoly: outside the exemptions named in `scPoolAllowlist`, nothing in `internal/` **or `cmd/`** can
 obtain a database handle at all, and the only callers allowed to reach the identity-free core
-are workers, boot-time seeders, two operator CLIs, `GET /v1/me`, `POST /v1/workspaces`, `POST /v1/invitations/accept` and `POST /internal/invitations/preview`. Every route that touches
+are workers, boot-time seeders, two operator CLIs, `GET /v1/me`, `POST /v1/workspaces`, `POST /v1/invitations/accept`, `GET /v1/invitations/mine`, `POST /v1/invitations/{id}/accept` and `POST /internal/invitations/preview`. Every route that touches
 tenant data is therefore gated by construction, and `covered` records that. `exempt` rows each
 state their own reason.
 
@@ -315,6 +319,8 @@ predicates it would previously have hit inside the transaction.
 | `GET /v1/me` | tenancy | exempt | §4 — the SPA's boot round trip; gating it would make the 403 unreachable |
 | `POST /v1/workspaces` | tenancy | exempt | the caller has no membership yet (AC-5) |
 | `POST /v1/invitations/accept` | tenancy | exempt | the caller has no membership yet; §4 |
+| `GET /v1/invitations/mine` | tenancy | exempt | the caller has no membership yet; the verified email names the invites; §4 |
+| `POST /v1/invitations/{id}/accept` | tenancy | exempt | the caller has no membership yet; the verified email names the invites; §4 |
 | `POST /internal/invitations/preview` | tenancy | exempt | no caller; the token names the invite; §4 |
 | `POST /v1/validate/batch` | validation | exempt | `S2SMiddleware` peer call with no caller identity by construction, and the gateway strips any client-supplied `X-S2S-Token` (`internal/gateway/gateway.go`, `injectIdentity`) |
 | `POST /internal/contacts/registrants` | notifications | exempt | gateway-token call with no caller; contacts carry no tenant, so a membership has nothing to gate |

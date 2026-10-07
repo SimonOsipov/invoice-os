@@ -1,10 +1,16 @@
 package gateway
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/golang-jwt/jwt/v4"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
@@ -259,4 +265,303 @@ func TestTenantlessAcceptRouteKeepsTheIdentityContract(t *testing.T) {
 		}
 		assertHeader(t, tg.caps["tenancy"].header, "X-Tenant-ID", testTenant)
 	})
+}
+
+const (
+	joinEmail      = "ada@corp.example"
+	joinInviteID   = "3f2b8c1e-7d4a-4b6f-9a1c-5e8d2f0a7b3c"
+	joinMinePath   = "/api/tenancy/v1/invitations/mine"
+	joinAcceptPath = "/api/tenancy/v1/invitations/" + joinInviteID + "/accept"
+)
+
+// tenantlessClaims shapes a GoTrue-style token with no tenant; an empty email or sid omits the claim.
+type tenantlessClaims struct {
+	email, sid string
+	meta       map[string]any
+}
+
+func (s *sidSigner) tenantlessToken(t *testing.T, sub string, c tenantlessClaims) string {
+	t.Helper()
+	now := time.Now()
+	claims := jwt.MapClaims{
+		"iss":  sidIssuer,
+		"sub":  sub,
+		"aud":  "authenticated",
+		"iat":  now.Unix(),
+		"exp":  now.Add(time.Hour).Unix(),
+		"role": testRole,
+	}
+	if c.email != "" {
+		claims["email"] = c.email
+	}
+	if c.sid != "" {
+		claims["session_id"] = c.sid
+	}
+	if c.meta != nil {
+		claims["user_metadata"] = c.meta
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
+	tok.Header["kid"] = s.kid
+	out, err := tok.SignedString(s.key)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	return out
+}
+
+// confirmedUser is the measured GoTrue GET /user body, edited by edit.
+func confirmedUser(t *testing.T, edit func(map[string]any)) string {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/gotrue_user_v2.197.0.json")
+	if err != nil {
+		t.Fatalf("read testdata: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("decode testdata: %v", err)
+	}
+	if m["email"] != joinEmail || m["email_confirmed_at"] == nil {
+		t.Fatalf("testdata must answer a confirmed %s, got email=%v email_confirmed_at=%v", joinEmail, m["email"], m["email_confirmed_at"])
+	}
+	if edit != nil {
+		edit(m)
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	return string(out)
+}
+
+// confirmedUserSized pads the confirmed body with one JSON field to exactly size bytes.
+func confirmedUserSized(t *testing.T, size int) string {
+	t.Helper()
+	base := len(confirmedUser(t, func(m map[string]any) { m["pad"] = "" }))
+	if size < base {
+		t.Fatalf("size %d is below the unpadded body (%d)", size, base)
+	}
+	body := confirmedUser(t, func(m map[string]any) { m["pad"] = strings.Repeat("a", size-base) })
+	if len(body) != size {
+		t.Fatalf("padded body = %d bytes, want %d", len(body), size)
+	}
+	return body
+}
+
+func joinRig(t *testing.T, userBody string) (*sessionRig, *userFake) {
+	t.Helper()
+	fake := newUserFake(t, http.StatusOK, userBody)
+	return newSessionRig(t, fake.URL, nil, nil), fake
+}
+
+func (rg *sessionRig) do(method, path, bearer string) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	rg.handler.ServeHTTP(rec, request(method, path, bearer))
+	return rec
+}
+
+func assertForbiddenNoUpstream(t *testing.T, rg *sessionRig, rec *httptest.ResponseRecorder, what string) {
+	t.Helper()
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("%s: status = %d, want 403", what, rec.Code)
+	} else if got := errorBody(t, rec); got != "forbidden" {
+		t.Errorf("%s: error = %q, want %q", what, got, "forbidden")
+	}
+	if n, m := rg.upstream.Hits(), rg.other.Hits(); n != 0 || m != 0 {
+		t.Errorf("%s: upstream hits = %d tenancy, %d portfolio, want 0", what, n, m)
+	}
+}
+
+func TestJoinRoutesAdmitAConfirmedTenantlessSession(t *testing.T) {
+	cases := []struct{ name, method, path, upstreamPath string }{
+		{"list", http.MethodGet, joinMinePath, "/v1/invitations/mine"},
+		{"accept", http.MethodPost, joinAcceptPath, "/v1/invitations/" + joinInviteID + "/accept"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rg, fake := joinRig(t, confirmedUser(t, nil))
+			tok := rg.signer.tenantlessToken(t, subjectS1, tenantlessClaims{email: joinEmail, sid: sid1})
+
+			rec := rg.do(tc.method, tc.path, tok)
+
+			if rec.Code != http.StatusOK || rg.upstream.Hits() != 1 {
+				t.Fatalf("status = %d, tenancy hits = %d, want 200 and 1 (body %q)", rec.Code, rg.upstream.Hits(), rec.Body.String())
+			}
+			if n := fake.Hits(); n != 1 {
+				t.Errorf("GoTrue /user calls = %d, want 1", n)
+			}
+			if method, path := rg.upstream.Last(); method != tc.method || path != tc.upstreamPath {
+				t.Errorf("upstream got %s %s, want %s %s", method, path, tc.method, tc.upstreamPath)
+			}
+			h := rg.upstream.Header()
+			for key, want := range map[string]string{"X-Tenant-ID": "", "X-User-ID": subjectS1, "X-User-Email": joinEmail} {
+				if got := h.Values(key); !slices.Equal(got, []string{want}) {
+					t.Errorf("upstream %s = %q, want [%q]", key, got, want)
+				}
+			}
+		})
+	}
+}
+
+// user_metadata.email_verified is user-writable (PUT /user), so no route may read it.
+func TestJoinRoutesIgnoreAWrittenMetadataClaim(t *testing.T) {
+	rg, _ := joinRig(t, confirmedUser(t, func(m map[string]any) { m["email_confirmed_at"] = nil }))
+	tok := rg.signer.tenantlessToken(t, subjectS1, tenantlessClaims{
+		email: joinEmail, sid: sid1, meta: map[string]any{"email_verified": true},
+	})
+
+	assertForbiddenNoUpstream(t, rg, rg.do(http.MethodGet, joinMinePath, tok), "GET mine")
+	assertForbiddenNoUpstream(t, rg, rg.do(http.MethodPost, joinAcceptPath, tok), "POST accept")
+
+	// Control: the token-accept route stays open to the same unconfirmed session.
+	rec := rg.do(http.MethodPost, acceptPath, tok)
+	if rec.Code != http.StatusOK || rg.upstream.Hits() != 1 {
+		t.Errorf("control POST %s = %d, tenancy hits = %d, want 200 and 1", acceptPath, rec.Code, rg.upstream.Hits())
+	}
+}
+
+func TestJoinRoutesRefuseUnprovenConfirmation(t *testing.T) {
+	meta := map[string]any{"email_verified": true}
+	sidTok := func(rg *sessionRig, t *testing.T) string {
+		return rg.signer.tenantlessToken(t, subjectS1, tenantlessClaims{email: joinEmail, sid: sid1, meta: meta})
+	}
+	cases := []struct {
+		name string
+		body string
+		tok  func(*sessionRig, *testing.T) string
+	}{
+		{"another email", confirmedUser(t, func(m map[string]any) { m["email"] = "bob@corp.example" }), sidTok},
+		{"null confirmation", confirmedUser(t, func(m map[string]any) { m["email_confirmed_at"] = nil }), sidTok},
+		{"absent confirmation", confirmedUser(t, func(m map[string]any) { delete(m, "email_confirmed_at") }), sidTok},
+		{"undecodable body", "not json", sidTok},
+		{"17 KiB body", confirmedUserSized(t, 17<<10), sidTok},
+		{"no session_id", confirmedUser(t, nil), func(rg *sessionRig, t *testing.T) string {
+			return rg.signer.tenantlessToken(t, subjectS1, tenantlessClaims{email: joinEmail, meta: meta})
+		}},
+		{"mock issuer token", confirmedUser(t, nil), func(rg *sessionRig, t *testing.T) string {
+			tok, err := rg.mock.Mint(auth.MintOptions{Subject: subjectS1, Role: testRole, Email: joinEmail})
+			if err != nil {
+				t.Fatalf("mint: %v", err)
+			}
+			return tok
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rg, _ := joinRig(t, tc.body)
+			tok := tc.tok(rg, t)
+
+			assertForbiddenNoUpstream(t, rg, rg.do(http.MethodGet, joinMinePath, tok), "GET mine")
+			assertForbiddenNoUpstream(t, rg, rg.do(http.MethodPost, joinAcceptPath, tok), "POST accept")
+
+			// Control: a tenant-bearing route answers 200 with the same /user answer.
+			rec := rg.get(rg.signer.token(t, subjectS1, sid2))
+			if rec.Code != http.StatusOK || rg.upstream.Hits() != 1 {
+				t.Errorf("control GET /me = %d, tenancy hits = %d, want 200 and 1", rec.Code, rg.upstream.Hits())
+			}
+		})
+	}
+}
+
+func TestJoinRoutesRefuseEmptyEmails(t *testing.T) {
+	cases := []struct {
+		name, tokenEmail, userEmail string
+		admitted                    bool
+	}{
+		{"both empty", "", "", false},
+		{"token email empty", "", joinEmail, false},
+		{"/user email empty", joinEmail, "", false},
+		{"control: both set and equal", joinEmail, joinEmail, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rg, _ := joinRig(t, confirmedUser(t, func(m map[string]any) { m["email"] = tc.userEmail }))
+			tok := rg.signer.tenantlessToken(t, subjectS1, tenantlessClaims{email: tc.tokenEmail, sid: sid1})
+
+			if tc.admitted {
+				if rec := rg.do(http.MethodGet, joinMinePath, tok); rec.Code != http.StatusOK {
+					t.Errorf("GET mine = %d, want 200", rec.Code)
+				}
+				if rec := rg.do(http.MethodPost, joinAcceptPath, tok); rec.Code != http.StatusOK {
+					t.Errorf("POST accept = %d, want 200", rec.Code)
+				}
+				return
+			}
+			assertForbiddenNoUpstream(t, rg, rg.do(http.MethodGet, joinMinePath, tok), "GET mine")
+			assertForbiddenNoUpstream(t, rg, rg.do(http.MethodPost, joinAcceptPath, tok), "POST accept")
+		})
+	}
+}
+
+func TestJoinRoutesConfirmationMatchesCaseAndSpace(t *testing.T) {
+	rg, _ := joinRig(t, confirmedUser(t, func(m map[string]any) { m["email"] = " ada@corp.example" }))
+	tok := rg.signer.tenantlessToken(t, subjectS1, tenantlessClaims{email: "Ada@Corp.Example", sid: sid1})
+
+	if rec := rg.do(http.MethodGet, joinMinePath, tok); rec.Code != http.StatusOK || rg.upstream.Hits() != 1 {
+		t.Fatalf("GET mine = %d, tenancy hits = %d, want 200 and 1", rec.Code, rg.upstream.Hits())
+	}
+	// The identity tenancy filters on is the token's own address, byte for byte.
+	assertHeader(t, rg.upstream.Header(), "X-User-Email", "Ada@Corp.Example")
+}
+
+func TestJoinRoutesNearMissesForbidden(t *testing.T) {
+	rg, _ := joinRig(t, confirmedUser(t, nil))
+	tok := rg.signer.tenantlessToken(t, subjectS1, tenantlessClaims{email: joinEmail, sid: sid1})
+	const base = "/api/tenancy/v1/invitations/"
+	if rec := rg.do(http.MethodGet, joinMinePath, tok); rec.Code != http.StatusOK || rg.upstream.Hits() != 1 {
+		t.Errorf("control: GET mine = %d, tenancy hits = %d, want 200 and 1", rec.Code, rg.upstream.Hits())
+	}
+	ctl := rg.upstream.Hits()
+
+	cases := []struct{ name, method, path string }{
+		{"POST mine", "POST", joinMinePath},
+		{"PUT mine", "PUT", joinMinePath},
+		{"DELETE mine", "DELETE", joinMinePath},
+		{"HEAD mine", "HEAD", joinMinePath},
+		{"GET accept", "GET", joinAcceptPath},
+		{"PUT accept", "PUT", joinAcceptPath},
+		{"upper-case uuid", "POST", base + strings.ToUpper(joinInviteID) + "/accept"},
+		{"braced uuid", "POST", base + "{" + joinInviteID + "}/accept"},
+		{"uuid without dashes", "POST", base + strings.ReplaceAll(joinInviteID, "-", "") + "/accept"},
+		{"not a uuid", "POST", base + "x/accept"},
+		{"mine trailing slash", "GET", joinMinePath + "/"},
+		{"mine extra segment", "GET", joinMinePath + "/x"},
+		{"accept trailing slash", "POST", joinAcceptPath + "/"},
+		{"resend", "POST", base + joinInviteID + "/resend"},
+		{"bare id", "GET", base + joinInviteID},
+		{"encoded slash", "GET", "/api/tenancy/v1%2Finvitations%2Fmine"},
+		{"encoded slash before accept", "POST", base + joinInviteID + "%2Faccept"},
+		{"encoded letter", "POST", base + joinInviteID + "/%61ccept"},
+		{"double slash", "GET", "/api/tenancy/v1//invitations/mine"},
+		{"path parameter", "GET", joinMinePath + ";x=1"},
+		{"other service", "GET", "/api/portfolio/v1/invitations/mine"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := rg.do(tc.method, tc.path, tok)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403", rec.Code)
+			}
+			if got := errorBody(t, rec); got != "forbidden" {
+				t.Errorf("error = %q, want %q", got, "forbidden")
+			}
+			if n, m := rg.upstream.Hits(), rg.other.Hits(); n != ctl || m != 0 {
+				t.Errorf("upstream hits = %d tenancy (control left %d), %d portfolio, want no new hit", n, ctl, m)
+			}
+		})
+	}
+}
+
+func TestJoinRoutesLeaveTenantBearingTokensAlone(t *testing.T) {
+	rg, _ := joinRig(t, confirmedUser(t, func(m map[string]any) { m["email_confirmed_at"] = nil }))
+	tok := rg.signer.token(t, subjectS1, sid1)
+
+	rec := rg.do(http.MethodGet, joinMinePath, tok)
+
+	if rec.Code != http.StatusOK || rg.upstream.Hits() != 1 {
+		t.Fatalf("status = %d, tenancy hits = %d, want 200 and 1", rec.Code, rg.upstream.Hits())
+	}
+	if _, path := rg.upstream.Last(); path != "/v1/invitations/mine" {
+		t.Errorf("upstream path = %q, want /v1/invitations/mine", path)
+	}
+	assertHeader(t, rg.upstream.Header(), "X-Tenant-ID", testTenant)
 }

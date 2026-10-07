@@ -1074,7 +1074,7 @@ jobs:
           node-version: 22
       - name: pnpm install (cold, frozen lockfile)
         run: pnpm install --frozen-lockfile
-      - name: pnpm -r build (all four SPAs)
+      - name: pnpm -r build
         run: pnpm -r build
 
   # Stale cross-language references (cluster 4 of the QA-log aggregate). The Go

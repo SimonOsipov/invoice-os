@@ -1,7 +1,7 @@
 // e2e/envCopy.test.ts — guards against posture-dishonest copy reappearing on any deployed SPA
 // (DEMO-01-09, Backlog task-326). Lives outside frontend/ (unlike a per-SPA vitest test) so
 // the guard cannot self-match its own forbidden strings, per e2e/personas.test.ts:72-80's
-// precedent of reading source across all four SPAs via REPO_ROOT (import.meta.url, never
+// precedent of reading source across all SPAs via REPO_ROOT (import.meta.url, never
 // process.cwd() — CI invokes vitest via `pnpm --filter`, cwd differs from a dev's shell).
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'

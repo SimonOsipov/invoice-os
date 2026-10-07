@@ -35,16 +35,16 @@ const ENTITY: Entity = {
   created_at: '2026-01-01T00:00:00Z',
 }
 
-function ctxFor(mode: 'inhouse' | 'firm'): PlatformCtx {
-  return { mode, authedFetch: vi.fn() } as unknown as PlatformCtx
+function ctxFor(mode: 'inhouse' | 'firm', refetchMembers = vi.fn()): PlatformCtx {
+  return { mode, authedFetch: vi.fn(), refetchMembers } as unknown as PlatformCtx
 }
 
-function mount(mode: 'create' | 'edit', ctxMode: 'inhouse' | 'firm') {
+function mount(mode: 'create' | 'edit', ctxMode: 'inhouse' | 'firm', refetchMembers = vi.fn()) {
   const utils = render(
     <EntityFormModal
       mode={mode}
       entity={mode === 'edit' ? ENTITY : undefined}
-      ctx={ctxFor(ctxMode)}
+      ctx={ctxFor(ctxMode, refetchMembers)}
       base="https://gateway.test"
       onClose={() => {}}
       onSuccess={() => {}}
@@ -249,6 +249,103 @@ describe('EntityFormModal TIN hint (AUTH-10-02)', () => {
     const edit = within(await screen.findByRole('dialog'))
     expect(edit.getByText('Edit client')).toBeTruthy()
     expect(edit.getByText(TIN_HINT)).toBeTruthy()
+  })
+})
+
+const ADMIN_ONLY = 'only an admin can add a company' // internal/portfolio ErrNotPermitted
+const GENERIC = 'Something went wrong. Please try again.'
+
+describe('EntityFormModal refused create (LOGFIX-06-04)', () => {
+  beforeEach(() => {
+    vi.mocked(createEntity).mockReset()
+    vi.mocked(updateEntity).mockReset()
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gateway.test')
+  })
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllEnvs()
+  })
+
+  function fillAndSubmit(dialog: ReturnType<typeof within>, container: HTMLElement, tin: string) {
+    fillName(container)
+    fireEvent.change(dialog.getByPlaceholderText('########-####'), { target: { value: tin } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Add company' }))
+  }
+
+  function fillName(container: HTMLElement, name = 'Acme Ltd') {
+    fireEvent.change(container.querySelector('input.pf-input') as HTMLInputElement, { target: { value: name } })
+  }
+
+  it('a refused create shows the reason and re-reads the roster', async () => {
+    vi.mocked(createEntity).mockRejectedValue(new ApiError('http', ADMIN_ONLY, 403))
+    const refetchMembers = vi.fn()
+    const { container, dialog } = mount('create', 'inhouse', refetchMembers)
+    fillAndSubmit(dialog, container, '1234567890')
+    expect(await dialog.findByText(ADMIN_ONLY)).toBeTruthy()
+    expect(dialog.queryByText(GENERIC)).toBeNull()
+    expect(refetchMembers).toHaveBeenCalledTimes(1)
+  })
+
+  it('a refused create with an empty 403 message falls back', async () => {
+    vi.mocked(createEntity).mockRejectedValue(new ApiError('http', '', 403))
+    const refetchMembers = vi.fn()
+    const { container, dialog } = mount('create', 'inhouse', refetchMembers)
+    fillAndSubmit(dialog, container, '1234567890')
+    expect(await dialog.findByText(GENERIC)).toBeTruthy()
+    expect(refetchMembers).toHaveBeenCalledTimes(1)
+  })
+
+  it('a refused edit keeps the generic message', async () => {
+    vi.mocked(updateEntity).mockRejectedValue(new ApiError('http', 'your membership in this workspace is not active', 403))
+    const refetchMembers = vi.fn()
+    const { container, dialog } = mount('edit', 'inhouse', refetchMembers)
+    fillName(container, 'Renamed Ltd')
+    fireEvent.click(dialog.getByRole('button', { name: 'Save changes' }))
+    expect(await dialog.findByText(GENERIC)).toBeTruthy()
+    expect(dialog.queryByText('your membership in this workspace is not active')).toBeNull()
+    expect(refetchMembers).not.toHaveBeenCalled()
+  })
+
+  it('a 409 does not re-read the roster', async () => {
+    vi.mocked(createEntity).mockRejectedValue(new ApiError('http', 'duplicate', 409))
+    const refetchMembers = vi.fn()
+    const { container, dialog } = mount('create', 'inhouse', refetchMembers)
+    fillAndSubmit(dialog, container, '1234567890')
+    expect(await dialog.findByText('This TIN is already registered.')).toBeTruthy()
+    expect(refetchMembers).not.toHaveBeenCalled()
+  })
+
+  it("a demoted admin's screen turns into No company created", async () => {
+    vi.mocked(createEntity).mockRejectedValue(new ApiError('http', ADMIN_ONLY, 403))
+    const member = (role: string) => ({ id: 'u1', name: 'Ada', initials: 'A', email: null, role, status: 'active', isYou: true })
+    const refetchMembers = vi.fn()
+    const ctxWith = (role: string) =>
+      ({
+        mode: 'inhouse',
+        entitiesState: 'empty',
+        entities: [],
+        clients: [],
+        activeEntity: null,
+        entitiesError: null,
+        refetchEntities: vi.fn(),
+        members: [member(role)],
+        membersState: 'ready',
+        membersError: null,
+        refetchMembers,
+        authedFetch: vi.fn(),
+        user: { name: 'Ada', initials: 'A', tenantName: 'Acme Ltd', verified: true },
+      }) as unknown as PlatformCtx
+    const { container, rerender } = render(<AddCompanyTask ctx={ctxWith('admin')} />)
+    fireEvent.click(within(screen.getByTestId('add-company-task')).getByRole('button', { name: 'Add company' }))
+    const dialog = within(screen.getByRole('dialog'))
+    fillAndSubmit(dialog, container, '1234567890')
+    expect(await dialog.findByText(ADMIN_ONLY)).toBeTruthy()
+    expect(refetchMembers).toHaveBeenCalledTimes(1)
+
+    rerender(<AddCompanyTask ctx={ctxWith('preparer')} />)
+    expect(screen.getByTestId('company-setup-waiting')).toBeTruthy()
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.queryByTestId('add-company-task')).toBeNull()
   })
 })
 

@@ -127,7 +127,13 @@ export function EntityFormModal({ mode, entity, ctx, base, onClose, onSuccess }:
       await createEntity(ctx.authedFetch, base, toEntityInput(form))
       onSuccess()
     } catch (err) {
-      handleError(err)
+      // Create-only: the edit path keeps the generic 403 text (D18).
+      if (err instanceof ApiError && err.status === 403) {
+        setFormError(err.message.trim() || 'Something went wrong. Please try again.')
+        ctx.refetchMembers()
+      } else {
+        handleError(err)
+      }
     } finally {
       setSubmitting(false)
     }

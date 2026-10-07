@@ -6,6 +6,9 @@ import { StrictMode, act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { captureNavigation as capture } from './navigation.test.util'
+import { SIGN_IN_UNAVAILABLE } from './signIn'
+
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const DIALOG = '[role="dialog"]'
@@ -70,36 +73,10 @@ async function bootAt(path: string, strict = false): Promise<void> {
   })
 }
 
-// Reads delegate to the real location so the strip still works; only `href` writes are captured.
 function captureNavigation(): string[] {
-  const assigned: string[] = []
-  const original = Object.getOwnPropertyDescriptor(window, 'location')
-  const real = window.location
-  const stub = {
-    get href() {
-      return real.href
-    },
-    set href(v: string) {
-      assigned.push(v)
-    },
-    get search() {
-      return real.search
-    },
-    get pathname() {
-      return real.pathname
-    },
-    get hash() {
-      return real.hash
-    },
-    get origin() {
-      return real.origin
-    },
-  }
-  Object.defineProperty(window, 'location', { value: stub, writable: true, configurable: true })
-  restoreLocation = () => {
-    if (original) Object.defineProperty(window, 'location', original)
-  }
-  return assigned
+  const nav = capture()
+  restoreLocation = nav.restore
+  return nav.assigned
 }
 
 function dialogs(): HTMLElement[] {
@@ -133,18 +110,26 @@ describe('AUTH-05-07 adversarial: boot params', () => {
   it('a repeated state is ignored and every copy is stripped', async () => {
     vi.stubEnv('VITE_OPS_URL', 'https://ops.x')
     vi.stubEnv('VITE_SUPPORT_URL', 'https://support.x')
+    const fetchMock = stubPreflight()
     const assigned = captureNavigation()
     await bootAt(`/?state=${STATE}&console=ops&signin=ready&state=${OTHER}&console=support`)
     const d = onlyDialog()
-    expect(d.querySelectorAll('input').length).toBe(0)
-    expect(d.textContent).toContain('Continue with email')
+    expect(d.textContent).not.toContain('Continue with email')
     expect(window.location.search).toBe('')
-    // Two console values hold no target: the bounce goes to the app.
-    const cont = Array.from(d.querySelectorAll('button')).filter((b) => b.textContent?.trim() === 'Continue with email')
-    expect(cont.length).toBe(1)
-    await act(async () => cont[0].click())
+    // Two state copies hold no state, two console values hold no target: the submit bounces to the app.
+    await fillAndSubmit(d)
     expect(assigned).toEqual(['https://app.x?auth=start'])
+    expect(posts(fetchMock)).toEqual([])
     expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('click_oneNavigationUnderStrictMode', async () => {
+    stubPreflight()
+    const assigned = captureNavigation()
+    await bootAt('/', true)
+    await openFromNav()
+    expect(assigned).toEqual(['https://app.x?auth=start'])
+    expect(dialogs().length).toBe(0)
   })
 
   it('an empty signin is stripped and opens nothing', async () => {
@@ -309,16 +294,16 @@ async function remountFresh(): Promise<void> {
 }
 
 const NOT_STAFF = 'This account cannot open the ASComply consoles.'
-const CONTINUE = 'Continue with email'
 
-function continueButtons(d: HTMLElement): HTMLButtonElement[] {
-  return Array.from(d.querySelectorAll('button')).filter((b) => b.textContent?.trim() === CONTINUE)
+// The preflight is a GET that resolves; a sign-in POST would be a call with a method.
+function stubPreflight() {
+  const fetchMock = vi.fn().mockResolvedValue(new Response(null))
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
 }
 
-async function clickContinue(): Promise<void> {
-  const b = continueButtons(onlyDialog())
-  expect(b.length).toBe(1)
-  await act(async () => b[0].click())
+function posts(m: ReturnType<typeof vi.fn>) {
+  return m.mock.calls.filter((c) => (c[1] as RequestInit | undefined)?.method === 'POST')
 }
 
 async function fillAndSubmit(d: HTMLElement): Promise<void> {
@@ -354,6 +339,7 @@ describe('adversarial: the console target', () => {
   })
 
   it('a single console and no state reaches that console through App, modal and form', async () => {
+    stubPreflight()
     const cases: [string, string][] = [
       ['ops', 'https://ops.x?auth=start'],
       ['support', 'https://support.x?auth=start'],
@@ -366,7 +352,6 @@ describe('adversarial: the console target', () => {
       expect(dialogs().length).toBe(0)
       expect(window.location.search).toBe('')
       await openFromNav()
-      await clickContinue()
       expect(assigned, target).toEqual([want])
       await remountFresh()
     }
@@ -375,11 +360,12 @@ describe('adversarial: the console target', () => {
 
   it('a console value that is not exactly ops or support holds no target and never reaches the URL', async () => {
     const refused = ['OPS', 'Support', 'ops%20', '%20ops', '', 'ops,support', 'ops%00', 'https%3A%2F%2Fevil.example', '%2F%2Fevil.example', 'ops%40evil.example', 'app']
+    stubPreflight()
     for (const v of refused) {
       const assigned = captureNavigation()
       await bootAt(`/?console=${v}&signin=ready`)
       expect(window.location.search, v).toBe('')
-      await clickContinue()
+      await fillAndSubmit(onlyDialog())
       expect(assigned, v).toEqual(['https://app.x?auth=start'])
       await remountFresh()
     }
@@ -412,8 +398,10 @@ describe('adversarial: the console target', () => {
 
       const bounced = captureNavigation()
       await bootAt(`/?console=${target}&signin=ready`)
-      await clickContinue()
-      expect(bounced, `${target} continue`).toEqual([])
+      await fillAndSubmit(onlyDialog())
+      expect(bounced, `${target} bounce`).toEqual([])
+      expect(onlyDialog().textContent, target).toContain(SIGN_IN_UNAVAILABLE)
+      expect(fetchMock, `${target}: no preflight to the app`).toHaveBeenCalledTimes(1)
       await remountFresh()
       vi.stubEnv('VITE_OPS_URL', 'https://ops.x')
       vi.stubEnv('VITE_SUPPORT_URL', 'https://support.x')
@@ -431,12 +419,13 @@ describe('adversarial: the console target', () => {
   })
 
   it('not-staff with a held console and no state keeps the alert and bounces through that console', async () => {
+    stubPreflight()
     const assigned = captureNavigation()
     await bootAt('/?console=ops&signin=not-staff')
     const alerts = Array.from(onlyDialog().querySelectorAll('[role="alert"]'))
     expect(alerts.length).toBe(1)
     expect(alerts[0].textContent).toContain(NOT_STAFF)
-    await clickContinue()
+    await fillAndSubmit(onlyDialog())
     expect(assigned).toEqual(['https://ops.x?auth=start'])
   })
 
@@ -454,9 +443,11 @@ describe('adversarial: the console target', () => {
   })
 
   it('no dialog control navigates to a persona URL', async () => {
+    stubPreflight()
     const assigned = captureNavigation()
     await bootAt('/?console=ops&signin=ready')
     const d = onlyDialog()
+    await fillAndSubmit(d)
     const all = Array.from(d.querySelectorAll<HTMLButtonElement>('button'))
     // Close last: it unmounts the dialog and would turn later clicks into no-ops.
     const buttons = [...all.filter((b) => b.getAttribute('aria-label') !== 'Close'), ...all.filter((b) => b.getAttribute('aria-label') === 'Close')]
@@ -477,9 +468,10 @@ describe('adversarial: the console target', () => {
   })
 
   it('the console target is held in memory only', async () => {
+    stubPreflight()
     const assigned = captureNavigation()
     await bootAt('/?console=ops&signin=ready')
-    await clickContinue()
+    await fillAndSubmit(onlyDialog())
     expect(assigned).toEqual(['https://ops.x?auth=start'])
     for (const w of writes) expect(JSON.stringify(w)).not.toContain('console')
     expect(document.cookie).not.toContain('console')

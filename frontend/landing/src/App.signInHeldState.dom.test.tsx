@@ -6,17 +6,21 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { captureNavigation } from './navigation.test.util'
+
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const DIALOG = '[role="dialog"]'
 const STATE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN-_0'
 const CONTINUE = 'Continue with email'
+const START = 'https://app.x?auth=start'
 const HOLD_MS = 9 * 60 * 1000
 const T0 = new Date('2026-09-25T12:00:00Z').getTime()
 
 let container: HTMLDivElement
 let root: Root
 let fetchMock: ReturnType<typeof vi.fn>
+let nav: ReturnType<typeof captureNavigation>
 
 function memoryStore() {
   const map = new Map<string, string>()
@@ -39,8 +43,10 @@ beforeEach(() => {
   vi.stubGlobal('sessionStorage', memoryStore())
   vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.x')
   vi.stubEnv('VITE_APP_URL', 'https://app.x')
-  fetchMock = vi.fn().mockReturnValue(new Promise(() => undefined))
+  // The preflight is a GET that resolves; a sign-in POST never answers.
+  fetchMock = vi.fn((_url: string, init?: RequestInit) => (init?.method === 'POST' ? new Promise(() => undefined) : Promise.resolve(new Response(null))))
   vi.stubGlobal('fetch', fetchMock)
+  nav = captureNavigation()
   vi.resetModules()
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -48,6 +54,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  nav.restore()
   act(() => root.unmount())
   container.remove()
   window.history.replaceState(null, '', '/')
@@ -99,12 +106,6 @@ function expectFields(d: HTMLElement): void {
   expect(continueButtons(d).length, 'Continue with email buttons').toBe(0)
 }
 
-// Continue with email shown, no fields.
-function expectContinue(d: HTMLElement): void {
-  expect(continueButtons(d).length, 'Continue with email buttons').toBe(1)
-  expect(d.querySelectorAll('input').length, 'form inputs').toBe(0)
-}
-
 async function fillAndSubmit(d: HTMLElement): Promise<void> {
   const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
   const email = d.querySelector<HTMLInputElement>('input[type="email"]')!
@@ -118,8 +119,12 @@ async function fillAndSubmit(d: HTMLElement): Promise<void> {
   await act(async () => d.querySelector<HTMLButtonElement>('button[type="submit"]')!.click())
 }
 
+function posts(): unknown[][] {
+  return fetchMock.mock.calls.filter((c) => (c[1] as RequestInit | undefined)?.method === 'POST')
+}
+
 function postedStates(): unknown[] {
-  return fetchMock.mock.calls.map((c) => (JSON.parse((c[1] as RequestInit).body as string) as { state: unknown }).state)
+  return posts().map((c) => (JSON.parse((c[1] as RequestInit).body as string) as { state: unknown }).state)
 }
 
 describe('F1a: the held state expires 9 minutes after boot', () => {
@@ -133,26 +138,29 @@ describe('F1a: the held state expires 9 minutes after boot', () => {
     expect(postedStates()).toEqual([STATE])
   })
 
-  it('9 min after boot, opening the modal shows Continue with email and posts nothing', async () => {
+  it('click_after9Minutes_navigates', async () => {
     await bootAt(`/?state=${STATE}`)
-    await advance(HOLD_MS)
+    await advance(HOLD_MS - 1)
     await openFromNav()
-    expectContinue(onlyDialog())
-    expect(fetchMock).not.toHaveBeenCalled()
+    expectFields(onlyDialog())
+    expect(nav.assigned).toEqual([])
+    await closeDialog()
+    await advance(1)
+    await openFromNav()
+    expect(nav.assigned).toEqual([START])
+    expect(document.querySelectorAll(DIALOG).length).toBe(0)
+    expect(posts()).toEqual([])
   })
 
-  it('a submit 9 min after boot never posts the stale state and shows Continue with email', async () => {
+  it('submit_afterTheStateExpiresWhileOpen_navigatesAndPostsNothing', async () => {
     await bootAt(`/?state=${STATE}&signin=ready`)
-    const d = onlyDialog()
-    expectFields(d)
+    expectFields(onlyDialog())
     await advance(HOLD_MS - 1)
     expectFields(onlyDialog())
     await advance(1)
-    // A submit at expiry, whether the fields are still on screen or not.
-    const submit = onlyDialog().querySelector<HTMLButtonElement>('button[type="submit"]')
-    if (submit) await fillAndSubmit(onlyDialog())
-    expect(fetchMock, 'a sign-in post with the stale state').not.toHaveBeenCalled()
-    expectContinue(onlyDialog())
+    await fillAndSubmit(onlyDialog())
+    expect(nav.assigned).toEqual([START])
+    expect(posts(), 'a sign-in post with the stale state').toEqual([])
   })
 
   it('an expired state stays dropped across a close and reopen', async () => {
@@ -161,36 +169,37 @@ describe('F1a: the held state expires 9 minutes after boot', () => {
     await closeDialog()
     await advance(HOLD_MS)
     await openFromNav()
-    expectContinue(onlyDialog())
-    await closeDialog()
+    expect(nav.assigned).toEqual([START])
+    expect(document.querySelectorAll(DIALOG).length).toBe(0)
     await advance(60 * 1000)
     await openFromNav()
-    expectContinue(onlyDialog())
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(nav.assigned).toEqual([START, START])
+    expect(posts()).toEqual([])
   })
 })
 
 describe('F3: a bfcache restore drops the held state', () => {
-  it('pageshow persisted=true swaps the fields for Continue with email', async () => {
+  it('submit_afterBfcacheRestore_withOpenWindow_navigates', async () => {
     await bootAt(`/?state=${STATE}&signin=ready`)
     expectFields(onlyDialog())
     await act(async () => {
       window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))
     })
-    expectContinue(onlyDialog())
-    await closeDialog()
-    await openFromNav()
-    expectContinue(onlyDialog())
-    expect(fetchMock).not.toHaveBeenCalled()
+    const d = onlyDialog()
+    expectFields(d)
+    await fillAndSubmit(d)
+    expect(nav.assigned).toEqual([START])
+    expect(posts()).toEqual([])
   })
 
-  it('pageshow persisted=true with the modal closed: the next open shows Continue with email', async () => {
+  it('click_afterBfcacheRestore_navigates', async () => {
     await bootAt(`/?state=${STATE}`)
     await act(async () => {
       window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))
     })
     await openFromNav()
-    expectContinue(onlyDialog())
+    expect(nav.assigned).toEqual([START])
+    expect(document.querySelectorAll(DIALOG).length).toBe(0)
   })
 
   it('pageshow persisted=false keeps the held state', async () => {
@@ -202,11 +211,12 @@ describe('F3: a bfcache restore drops the held state', () => {
     expectFields(d)
     await fillAndSubmit(d)
     expect(postedStates()).toEqual([STATE])
+    expect(nav.assigned).toEqual([])
   })
 })
 
 describe('held state: adversarial', () => {
-  it('a retry after a 401 that crosses 9 min posts nothing and shows Continue with email', async () => {
+  it('a retry after a 401 that crosses 9 min posts nothing more and navigates', async () => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'invalid email or password' }), { status: 401 }))
     await bootAt(`/?state=${STATE}&signin=ready`)
     await fillAndSubmit(onlyDialog())
@@ -214,8 +224,8 @@ describe('held state: adversarial', () => {
     expectFields(onlyDialog())
     await advance(HOLD_MS)
     await act(async () => onlyDialog().querySelector<HTMLButtonElement>('button[type="submit"]')!.click())
-    expect(fetchMock, 'one post only').toHaveBeenCalledTimes(1)
-    expectContinue(onlyDialog())
+    expect(posts(), 'one post only').toHaveLength(1)
+    expect(nav.assigned).toEqual([START])
   })
 
   it('a bfcache restore mid-submit drops the state; no second post', async () => {
@@ -225,7 +235,10 @@ describe('held state: adversarial', () => {
     await act(async () => {
       window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))
     })
-    expectContinue(onlyDialog())
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const d = onlyDialog()
+    expectFields(d)
+    await fillAndSubmit(d)
+    expect(posts()).toHaveLength(1)
+    expect(nav.assigned).toEqual([START])
   })
 })

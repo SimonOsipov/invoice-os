@@ -160,7 +160,7 @@ describe('verify notice: the emailed-link landing', () => {
     expect(window.location.search).toBe('')
 
     // A re-render after the strip must not re-read the URL.
-    await rebootAt('/?verify=failed')
+    await rebootAt(`/?verify=failed&state=${STATE}`)
     const login = Array.from(document.querySelectorAll('header button')).find((b) => b.textContent?.trim() === 'Sign in')
     expect(login).toBeDefined()
     await act(async () => (login as HTMLButtonElement).click())
@@ -173,7 +173,7 @@ describe('verify notice: the emailed-link landing', () => {
       ['?verified=1', VERIFIED],
       ['?verify=failed', FAILED],
     ] as const) {
-      await rebootAt(`/${search}`)
+      await rebootAt(`/${search}&state=${STATE}`)
       const n = onlyNotice(text)
       const dismiss = Array.from(n.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Dismiss')
       expect(dismiss, search).toBeDefined()

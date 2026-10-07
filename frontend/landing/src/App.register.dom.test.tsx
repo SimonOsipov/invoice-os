@@ -10,6 +10,7 @@ import type { ConsentStore } from './consent'
 import { CHECK_INPUT_STYLE, CHECK_LABEL_STYLE, DemoLeadForm } from './components/DemoLeadForm'
 import { MARKETING_CONSENT_TEXT } from './components/MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './components/RegisterModal'
+import { captureNavigation } from './navigation.test.util'
 import { FREE_MAIL_REFUSED } from './register'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -221,11 +222,17 @@ describe('the entries', () => {
   })
 
   it('the sign-in window link shows without a held state too', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
     window.history.replaceState(null, '', '/')
+    const nav = captureNavigation()
     await mountApp(false)
     await clickByText(header(), LOGIN)
+    await settle()
+    nav.restore()
+    expect(nav.assigned).toEqual([])
     const signIn = document.querySelector<HTMLElement>(DIALOG)!
-    expect(byText(signIn, 'Continue with email'), 'control: no held state, the bounce button shows').toBeDefined()
+    expect(signIn.querySelectorAll('input[type="email"]').length, 'control: no held state, the failed preflight opens the form').toBe(1)
     expect(byText(signIn, CREATE)).toBeDefined()
   })
 

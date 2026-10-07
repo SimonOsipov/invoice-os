@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Nav } from './components/Nav'
 import { VerifyNotice } from './components/VerifyNotice'
 import { SignInModal } from './components/SignInModal'
@@ -26,7 +26,7 @@ import { INVITE_PARAM, readInviteOutcome } from './invite'
 import { isPrivacyPath } from './route'
 import { readResetOutcome, RESET_PARAM } from './passwordReset'
 import { registrationOpen } from './register'
-import { readSignInConsole, readSignInState } from './signIn'
+import { bounceToStart, readSignInConsole, readSignInState, SIGN_IN_UNAVAILABLE, signInConfigured } from './signIn'
 import { readVerifyOutcome, VERIFIED_PARAM, VERIFY_PARAM } from './verify'
 
 // Copy for the ?signin= outcome; `ready` opens the modal with no message.
@@ -85,7 +85,20 @@ export default function App() {
     setSignInView(view)
     setSignInOpen(true)
   }
-  const onSignIn = () => openSignIn('sign-in')
+  const bouncing = useRef(false)
+  // The click decides: a live state opens the form, otherwise the app issues one. A second click mid-preflight is ignored.
+  const onSignIn = async () => {
+    if (heldState() || !signInConfigured()) return openSignIn('sign-in')
+    if (bouncing.current) return
+    bouncing.current = true
+    try {
+      if (await bounceToStart(signInBoot.consoleTarget ?? undefined)) return
+      setSignInError(SIGN_IN_UNAVAILABLE)
+      openSignIn('sign-in')
+    } finally {
+      bouncing.current = false
+    }
+  }
   const onCreateAccount = registrationOpen()
     ? () => {
         setSignInOpen(false)

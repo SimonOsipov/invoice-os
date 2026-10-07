@@ -6,6 +6,8 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { captureNavigation } from './navigation.test.util'
+
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const DIALOG = '[role="dialog"]'
@@ -18,6 +20,8 @@ const VERIFY_FAILED = 'That link did not work. It may have expired or already be
 const REQUEST_NEW = 'Request a new link'
 const SIGN_IN_HEADING = 'Sign in to your workspace'
 const RESET_HEADING = 'Reset your password'
+// A live state makes the header click open the form instead of navigating (story D10).
+const STATE = 'S'.repeat(43)
 
 let container: HTMLDivElement
 let root: Root
@@ -148,8 +152,17 @@ describe('reset notice: the landing after the emailed reset link', () => {
     expect(dialogs().length).toBe(0)
   })
 
-  it('Request a new link opens the forgot view', async () => {
+  it('requestNewLink_opensForgotWithoutNavigating', async () => {
+    const nav = captureNavigation()
     await bootAt('/?reset=failed')
+    await press(onlyNotice(RESET_FAILED), REQUEST_NEW)
+    nav.restore()
+    expect(nav.assigned, 'no state, and the forgot view still opens without navigating').toEqual([])
+    expect(headings()).toEqual([RESET_HEADING])
+  })
+
+  it('Request a new link opens the forgot view', async () => {
+    await bootAt(`/?reset=failed&state=${STATE}`)
     await press(onlyNotice(RESET_FAILED), REQUEST_NEW)
 
     expect(dialogs().length).toBe(1)
@@ -166,7 +179,7 @@ describe('reset notice: the landing after the emailed reset link', () => {
 
     // D34: the Footer control too, after a fresh forgot-view open.
     await escape()
-    await rebootAt('/?reset=failed')
+    await rebootAt(`/?reset=failed&state=${STATE}`)
     await press(onlyNotice(RESET_FAILED), REQUEST_NEW)
     expect(headings()).toEqual([RESET_HEADING])
     await escape()
@@ -177,7 +190,7 @@ describe('reset notice: the landing after the emailed reset link', () => {
 
   it('Create an account from the forgot view still reopens on the sign-in view (D34)', async () => {
     vi.stubEnv('VITE_REGISTRATION_OPEN', 'true')
-    await bootAt('/?reset=failed')
+    await bootAt(`/?reset=failed&state=${STATE}`)
     await press(onlyNotice(RESET_FAILED), REQUEST_NEW)
     expect(headings(), 'control: the forgot view is open').toEqual([RESET_HEADING])
 
@@ -192,7 +205,7 @@ describe('reset notice: the landing after the emailed reset link', () => {
   })
 
   it('the Close button also resets the view', async () => {
-    await bootAt('/?reset=failed')
+    await bootAt(`/?reset=failed&state=${STATE}`)
     await press(onlyNotice(RESET_FAILED), REQUEST_NEW)
     expect(headings()).toEqual([RESET_HEADING])
     const close = document.querySelector<HTMLButtonElement>(`${DIALOG} button[aria-label="Close"]`)

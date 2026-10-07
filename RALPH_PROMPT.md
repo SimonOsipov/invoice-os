@@ -176,6 +176,7 @@ Spawn `product-architecture-spec` with the full basic story and its Obsidian pat
 
 #### b. Plan review — unattended
 Run `/qa-verify` in **unattended** disposition. Judgement and unresolved findings take the conservative default; never block here — Phase 0.6d re-tests them. A finding that falsifies a premise is recorded as `premise — CORRECTED`, not repaired as wording. The log goes to the story's `… QA Debate Log.md`.
+For a story that changes a primary journey, plan review applies the "Primary user journey" rule of `product-qa-spec`.
 - **Checkpoint:** `PLAN_VERIFIED`
 
 #### c. Subtask generation
@@ -385,6 +386,7 @@ Runs once per story, after `CI` is green. It verifies the assembled feature agai
    - Quote each AC beside its evidence. Evidence of different behaviour than the quoted text fails that AC.
    - Backend / data / RLS ACs → cite the passing CI job or E2E assertion.
    - **UI ACs** → pass the Stage 4 "Frontend" rules in the brief. QA drives the deployed SPA with them and captures each touched surface and state. Diff live `getComputedStyle` and layout against the prototype (`.dc.html`; confirm the file→surface mapping first) and the design system. A delta citing a design-system rule or a prototype CSS rule is a fail; uncited taste is advisory: list it in the final report, never bounce.
+   - **Primary user journey:** when the story changes one, pass the "Primary user journey" rule of `product-qa-spec`. Each wrong turn needs evidence from the green run or from the deployed build.
    - **Assert the relationship, not the dimension.** A layout AC is satisfied by what the number encodes — gutter symmetry, containment, alignment to a sibling. A width assertion passes on the very bug it should catch. This applies whenever the diff adds or changes a layout constant, not only when an AC names layout. **Measure widest first:** `e2e/topology/layout.ts` sweeps 2560/1920/1440/1280; every other sweep in `e2e/` stops at 1280.
    - **A pixel figure derived from source is a guess.** Measure it on the gate run with `e2e/topology/layout.ts` and cite the run id before a CSS edit, a bounce or an escalation.
    - No holistic "looks done": every AC needs its own evidence.

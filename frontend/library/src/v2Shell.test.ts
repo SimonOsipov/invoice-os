@@ -353,4 +353,52 @@ describe('library shell primitives', () => {
       'border-bottom': '1px solid var(--header-border)',
     })
   })
+
+  it('SH-16 each sidebar and stepper button calls its handler with the right target', () => {
+    type El = { type: unknown; props: { type?: string; children?: unknown; onClick?: () => void; id?: string; className?: string } }
+    const walk = (n: unknown, out: El[] = []): El[] => {
+      if (Array.isArray(n)) n.forEach((c) => walk(c, out))
+      else if (n && typeof n === 'object' && 'props' in n) {
+        out.push(n as El)
+        walk((n as El).props.children, out)
+      }
+      return out
+    }
+    const buttonsOf = (tree: unknown) => walk(tree).filter((e) => e.type === 'button')
+    const calls: string[] = []
+    const props = {
+      route: parseLibraryPath('/recognition'),
+      demoHref: null,
+      onHome: () => calls.push('home'),
+      onGroup: (g: { id: string }) => calls.push(`group:${g.id}`),
+      onFeature: (f: { id: string }) => calls.push(`feature:${f.id}`),
+      onTour: () => calls.push('tour'),
+    }
+    const bs = buttonsOf(Sidebar(props))
+    const click = (b: El) => b.props.onClick!()
+    expect(bs.length).toBeGreaterThan(12)
+    for (const b of bs) expect(b.props.type).toBe('button')
+    click(bs[0])
+    click(bs.find((b) => b.props.className === 'lib-tour')!)
+    click(bs.filter((b) => b.props.className === 'lib-nav')[0])
+    for (const g of GROUPS) click(bs.find((b) => b.props.id === `nav-${g.id}`)!)
+    const recognition = GROUPS.find((g) => g.id === 'recognition')!
+    const featBtns = bs.filter((b) => b.props.className === 'lib-nav' && !b.props.id).slice(1)
+    expect(featBtns).toHaveLength(recognition.feats.length)
+    for (const b of featBtns) click(b)
+    expect(calls).toEqual([
+      'home',
+      'tour',
+      'home',
+      ...GROUPS.map((g) => `group:${g.id}`),
+      ...recognition.feats.map((f) => `feature:${f.id}`),
+    ])
+
+    const stageCalls: string[] = []
+    const stages = buttonsOf(JourneyStepper({ route: home, onGroup: (g) => stageCalls.push(g.id) }))
+    expect(stages).toHaveLength(6)
+    for (const b of stages) expect(b.props.type).toBe('button')
+    for (const b of stages) click(b)
+    expect(stageCalls).toEqual(STAGES.map(([, gid]) => gid))
+  })
 })

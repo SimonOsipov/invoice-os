@@ -1356,8 +1356,8 @@ func TestSessionCheck_RefusalBodiesStayAtOneKiB(t *testing.T) {
 			} else {
 				assertUnavailable(t, rec)
 			}
-			if got := read.Load(); got != maxSessionCheckBody {
-				t.Errorf("session check read %d bytes of a %d-byte refusal, want %d", got, len(tc.body), maxSessionCheckBody)
+			if got := read.Load(); got != 1024 {
+				t.Errorf("session check read %d bytes of a %d-byte refusal, want 1024", got, len(tc.body))
 			}
 		})
 	}

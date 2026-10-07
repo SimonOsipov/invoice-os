@@ -1110,8 +1110,8 @@ func TestRailwayAPI_RateLimitResetForms(t *testing.T) {
 		if code != 0 {
 			t.Errorf("exit %d, want 0; output = %q", code, stdout+stderr)
 		}
-		if got := s.sleeps(t); !slices.Equal(got, []string{"0"}) {
-			t.Errorf("sleeps = %v, want [0]", got)
+		if got := s.sleeps(t); !slices.Equal(got, []string{"1"}) {
+			t.Errorf("sleeps = %v, want [1]", got)
 		}
 	})
 	t.Run("the year 9999 is over the limit", func(t *testing.T) {

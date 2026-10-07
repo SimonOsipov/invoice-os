@@ -479,7 +479,7 @@ A slow or briefly failing Railway API must not fail the gate by itself. Every Gr
 through `railway-env.sh` subcommands, `query` included. The rules below are the shipped behaviour
 (`tools/prenv/railway_env_retry_test.go`).
 
-**What retries.** A curl timeout (`--max-time 30`, exit 28) and an HTTP 5xx. Up to 3 attempts,
+**What retries.** A curl timeout (`--max-time 30`, exit 28; 90 for a batched request) and an HTTP 5xx. Up to 3 attempts,
 waiting 5 s then 10 s. A call that needed a retry prints a `::warning::`; an exhausted budget
 prints one `::error::`.
 
@@ -488,8 +488,8 @@ connection resets or any other curl failure. A mutation that is not
 idempotent, and every poll tick, gets one transient attempt (`once`).
 
 **429 waits.** Any call, a poll tick included, waits the time Railway names in `Retry-After`
-(else `X-RateLimit-Reset`, ISO-8601) and sends once more, at most 600 s per call and 600 s per job
-in total (`$RUNNER_TEMP/railway-api-429-waited`). A `::warning::` names the wait. A longer wait, a
+(else `X-RateLimit-Reset`, ISO-8601, rounded up) and sends once more, at least 1 s, at most 600 s per call and 600 s per job
+in total (`$RUNNER_TEMP/railway-api-429-waited`). Each job that runs `railway-env.sh` has a `timeout-minutes` 10 above its work budget for those waits. A `::warning::` names the wait. A longer wait, a
 second 429, no usable wait or a full job total fails and names the wait, batched calls included
 (`tools/prenv/railway_env_retry_test.go`; poll ticks: `tools/prenv/railway_env_wait_deployment_test.go`;
 batched calls: `tools/prenv/railway_env_pass_test.go`).

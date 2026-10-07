@@ -258,7 +258,8 @@ jobs:
     # minutes a slow-but-CORRECT fork would die as a bare job-level timeout with
     # no annotation naming a cause — the exact failure mode the seam exists to
     # prevent. A job knob, not a restructure.
-    timeout-minutes: 20
+    # Raised 20 -> 30: the job's 429 waits total up to 600 s on top of that budget.
+    timeout-minutes: 30
     outputs:
       # `environment` is what `railway up --environment` consumes: a name for an
       # ephemeral PR fork, the ID for the persistent environment (see `resolve`).

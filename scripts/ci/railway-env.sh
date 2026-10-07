@@ -195,6 +195,10 @@ gql_error_aliases() {
   printf '%s' "$GQL_RESPONSE" | jq -r '[.errors[]?.path[0]? | strings | select(test("^s[0-9]+$"))] | unique[]' 2>/dev/null || true
 }
 
+# A request that carries many aliases gets 90 s per attempt (a 15-alias call measured about 9 s);
+# a batched caller sets GQL_MAX_TIME=$BATCH_MAX_TIME. Three attempts and their backoff take at most 285 s.
+BATCH_MAX_TIME=90
+
 # gql_attempt <json-body> <context-label>
 # One HTTP attempt; only curl 28 and HTTP 5xx are transient. An HTTP 429 is fault `ratelimit`,
 # with GQL_WAIT set to Railway's wait in whole seconds, empty when it gave none.
@@ -204,7 +208,7 @@ gql_attempt() {
   local body="$1" ctx="$2" tmp rc=0 code ra reset ts at
   GQL_WAIT=""
   tmp=$(mktemp -d)
-  GQL_RESPONSE=$(curl -sS --fail-with-body --connect-timeout 5 --max-time 30 -D "$tmp/hdr" \
+  GQL_RESPONSE=$(curl -sS --fail-with-body --connect-timeout 5 --max-time "${GQL_MAX_TIME:-30}" -D "$tmp/hdr" \
         --request POST \
         --url "$RAILWAY_GRAPHQL_URL" \
         --header "${GQL_AUTH_HEADER:-Authorization: Bearer $RAILWAY_API_TOKEN}" \
@@ -245,10 +249,12 @@ gql_attempt() {
             # GNU date (CI), then BSD date (macOS).
             at=$(date -u -d "${ts}Z" +%s 2>/dev/null || date -u -j -f '%Y-%m-%dT%H:%M:%S' "$ts" +%s 2>/dev/null) || at=""
             if [ -n "$at" ]; then
-              GQL_WAIT=$((at - $(date +%s)))
-              [ "$GQL_WAIT" -ge 0 ] || GQL_WAIT=0
+              # +1: the reset has a fraction that `at` dropped.
+              GQL_WAIT=$((at - $(date +%s) + 1))
             fi
           fi
+          # A resend never leaves at once.
+          [ -z "$GQL_WAIT" ] || [ "$GQL_WAIT" -ge 1 ] || GQL_WAIT=1
           ;;
         *) GQL_FAULT=fatal GQL_ERROR="Railway API answered HTTP ${code:-unknown} (not retried) while $ctx: $GQL_LAST $(gql_errors)" ;;
       esac
@@ -1033,7 +1039,7 @@ read_vars_batch() {
   done
   q="query varsRead(\$p: String!, \$e: String!$decl) {$fields
 }"
-  if ! graphql_try "$(gql_body "$q" "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" \
+  if ! GQL_MAX_TIME=$BATCH_MAX_TIME graphql_try "$(gql_body "$q" "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" \
       '{p: $p, e: $e} + ([$ARGS.positional | to_entries[] | {("s\(.key)"): .value}] | add)' --args "$@")")" "$ctx"; then
     if [ "$GQL_CURL_RC" = 0 ]; then
       for id in $(gql_error_aliases); do
@@ -3018,9 +3024,12 @@ pass_read_failed() {
 pass_owned_verdict() {
   local id label name want bad=0
   while IFS=$'\t' read -r id label name want; do
+    # base64 keeps a backslash, tab or newline that @tsv would escape; the sentinel keeps a trailing newline.
+    want=$(printf '%s' "$want" | base64 -d && printf x)
+    want=${want%x}
     value_verdict "$(pass_map "$id")" "$label" "$name" "$want" || bad=1
   done < <(printf '%s' "$PASS_OWNED" | jq -r --arg o "$1" \
-    '.[] | select(.owner == $o) | .id as $i | .label as $l | .vars | to_entries[] | [$i, $l, .key, .value] | @tsv')
+    '.[] | select(.owner == $o) | .id as $i | .label as $l | .vars | to_entries[] | [$i, $l, .key, (.value | @base64)] | @tsv')
   return "$bad"
 }
 
@@ -3039,7 +3048,7 @@ pass_write_detail() {
   printf '%s' "${d:-$GQL_LAST}"
 }
 
-# pass_write_failed <plan-index>...: the AC-5 report for a failed varsWrite; alias sK is the Kth argument.
+# pass_write_failed <plan-index>...: the report for a failed varsWrite; alias sK is the Kth argument.
 # Names a service only from errors[].path[0]; never prints Railway's message.
 pass_write_failed() {
   local widx=("$@") a k i failed="" others="" all=""
@@ -3117,7 +3126,7 @@ fork_pass() {
     body=$(printf '%s\n%s' "$PASS_DIFFS" "$PASS_PLAN" | jq -sc --arg q "$q" --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --argjson idx "$idx" '
       .[0] as $d | .[1] as $plan |
       {query: $q, variables: ([$idx | to_entries[] | {("i\(.key)"): {projectId: $p, environmentId: $e, serviceId: $plan[.value].id, variables: $d[.value], skipDeploys: true}}] | add)}')
-    if ! graphql_try "$body" "setting the variables of $names in environment $env_id"; then
+    if ! GQL_MAX_TIME=$BATCH_MAX_TIME graphql_try "$body" "setting the variables of $names in environment $env_id"; then
       pass_write_failed "${widx[@]}"
       exit 1
     fi
@@ -3813,7 +3822,7 @@ cmd_discover_urls() {
     fields="$fields
   s$i: domains(projectId: \$p, environmentId: \$e, serviceId: \$s$i) { customDomains { domain targetPort } serviceDomains { domain targetPort } }"
   done
-  if ! graphql_try "$(gql_body "query discoverUrls(\$p: String!, \$e: String!$decl) {$fields
+  if ! GQL_MAX_TIME=$BATCH_MAX_TIME graphql_try "$(gql_body "query discoverUrls(\$p: String!, \$e: String!$decl) {$fields
 }" "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" \
       '{p: $p, e: $e} + ([$ARGS.positional | to_entries[] | {("s\(.key)"): .value}] | add)' --args "${ids[@]}")")" "$ctx"; then
     if [ "$GQL_CURL_RC" = 0 ]; then

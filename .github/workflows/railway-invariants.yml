@@ -48,7 +48,8 @@ jobs:
   pr-environments-off:
     name: Railway PR Environments are OFF
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # 5 + 10 min: the job's 429 waits total up to 600 s.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 

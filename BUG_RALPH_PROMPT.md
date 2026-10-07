@@ -6,11 +6,13 @@
 
 `RALPH_PROMPT.md` owns the shared rules. This file names each rule that it uses and states only what differs.
 
+In every shared rule, `<STORY>` means `<BUG-ID>`.
+
 | Shared rule in `RALPH_PROMPT.md` | Use in `/bug-ralph` |
 |---|---|
 | Agents and models; CRITICAL RULES 1, 2, 3 and 5 | As written. |
 | Phase 0.5: Worktree bootstrap | As written. `BASE=main`. |
-| Phase 1: the screen playbook | As written, with `STORY_SOURCE=obsidian` and `<STORY>` = `<BUG-ID>`. |
+| Phase 1: the screen playbook | As written, with `STORY_SOURCE=obsidian`. |
 | Stage 3: the orientation rules and the suite run | As written. |
 | Stage 4: the mutation rows, their replay, the comment sweep and the "Frontend" rules | As written, for the one fix. |
 | CI Monitoring Protocol | As written. |

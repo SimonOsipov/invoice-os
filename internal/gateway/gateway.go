@@ -15,6 +15,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"path"
+	"regexp"
 	"strings"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform"
@@ -107,16 +108,33 @@ const (
 	tenantlessAcceptPath = "/api/tenancy/v1/invitations/accept"
 )
 
+// The two join routes: list the caller's pending invites, accept one by id.
+// A tenant-less token reaches them only with an email GoTrue confirmed.
+const joinListRoute = "/api/tenancy/v1/invitations/mine"
+
+var joinAcceptRoute = regexp.MustCompile(`^/api/tenancy/v1/invitations/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/accept$`)
+
 // authorize returns 0 when the identity may use the service, otherwise the HTTP
 // status to answer. P1 rule: every context service is tenant-scoped, so a valid
-// token carrying no tenant is forbidden, except POST /api/tenancy/v1/workspaces and
-// POST /api/tenancy/v1/invitations/accept.
+// token carrying no tenant is forbidden, except POST /api/tenancy/v1/workspaces,
+// POST /api/tenancy/v1/invitations/accept, and the two join routes (GET invitations/mine,
+// POST invitations/{id}/accept) when GoTrue confirmed the token's email.
 // The M7 ops console adds its operator-role rule here, keyed on service.
 func authorize(r *http.Request, service string, id auth.Identity) int {
-	if id.TenantID == "" && !isTenantlessRoute(r) {
+	if id.TenantID == "" && !isTenantlessRoute(r) && !isConfirmedJoinRoute(r, id) {
 		return http.StatusForbidden
 	}
 	return 0
+}
+
+// isConfirmedJoinRoute matches the escaped path and needs both emails non-empty and equal.
+func isConfirmedJoinRoute(r *http.Request, id auth.Identity) bool {
+	p := r.URL.EscapedPath()
+	if !(r.Method == http.MethodGet && p == joinListRoute) && !(r.Method == http.MethodPost && joinAcceptRoute.MatchString(p)) {
+		return false
+	}
+	confirmed := strings.TrimSpace(confirmedEmailFrom(r.Context()))
+	return confirmed != "" && id.Email != "" && strings.EqualFold(confirmed, strings.TrimSpace(id.Email))
 }
 
 // isTenantlessRoute matches the escaped path, so an encoded variant (v1%2Fworkspaces) is not exempt.

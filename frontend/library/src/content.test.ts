@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { FEATURES, GROUPS, STAGES, TOUR } from './content.ts'
+import { APP_PATHS } from './appPaths.ts'
+import { COMING_SOON_IDS, FEATURES, GROUPS, STAGES, TOUR } from './content.ts'
 import type { SceneKind } from './types.ts'
 
 const byId = (id: string) => {
@@ -54,6 +55,44 @@ describe('content', () => {
     expect(list.steps[0].banner).toBe('Synced 3 contacts from Sage')
     expect(byId('import-files').benefits).toContain('Works with exports from Odoo, Sage, QuickBooks, SAP and Microsoft Dynamics')
     expect(JSON.stringify([GROUPS, FEATURES, STAGES, TOUR])).not.toContain('NRS')
+  })
+
+  it('content_marksExactlyTheElevenComingSoonFeatures', () => {
+    const soon = FEATURES.filter((f) => f.status === 'soon').map((f) => f.id).sort()
+    expect(soon).toEqual(['alerts', 'channels', 'company-profile', 'contacts', 'custom-rules', 'erp-connectors',
+      'fiscal-outcomes', 'invite-members', 'learns', 'reports', 'rule-library'])
+    expect(COMING_SOON_IDS).toHaveLength(11)
+    for (const id of COMING_SOON_IDS) expect(FEATURES.map((f) => f.id)).toContain(id)
+  })
+
+  it('content_marksTheOtherFifteenShipped', () => {
+    const shipped = FEATURES.filter((f) => f.status === 'shipped').map((f) => f.id)
+    expect(shipped).toEqual(['import-files', 'create-invoice', 'invoice-status', 'read-documents', 'review-fields', 'validate',
+      'approval-queue', 'workflow-builder', 'submit-clear', 'overview', 'audit-trail', 'evidence-bundle', 'portfolio',
+      'onboard-client', 'roles'])
+    for (const f of FEATURES) expect(['shipped', 'soon']).toContain(f.status)
+  })
+
+  it('content_shippedFeaturesHaveTheirViewsAppPath', () => {
+    const shipped = FEATURES.filter((f) => f.status === 'shipped')
+    expect(shipped.length).toBeGreaterThan(0)
+    for (const f of shipped) expect(f.path, f.id).toBe(APP_PATHS[f.view])
+    expect(byId('overview').path).toBe('/')
+    expect(byId('import-files').path).toBe('/create')
+    expect(byId('workflow-builder').path).toBe('/workflows')
+  })
+
+  it('content_comingSoonFeaturesHaveNoPath', () => {
+    const soon = FEATURES.filter((f) => f.status === 'soon')
+    expect(soon).toHaveLength(11)
+    expect(byId('reports').view).toBe('reports')
+    expect(byId('contacts').view).toBe('customers')
+    for (const f of soon) expect('path' in f, f.id).toBe(false)
+  })
+
+  it('content_usesExactlyTheElevenPrototypeViews', () => {
+    expect([...new Set(FEATURES.map((f) => f.view))].sort()).toEqual(
+      ['approvals', 'audit', 'clients', 'create', 'customers', 'dashboard', 'invoices', 'reports', 'rules', 'settings', 'workflows'])
   })
 
   it('content_idsAreUnique', () => {

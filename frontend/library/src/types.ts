@@ -25,7 +25,8 @@ export type Scene = ListScene | FormScene | FlowScene | FeedScene | MetricsScene
 
 interface FeatureBase { id: string; title: string; short: string; desc: string; benefits: string[]
   who: string[]; view: ViewId; rel: string[]; sc: Scene }
-export type RawFeature = FeatureBase
+export type StatusFields = { status: 'shipped'; path: string } | { status: 'soon'; path?: never }
+export type RawFeature = FeatureBase & StatusFields
 export type Feature = RawFeature & { gid: string }
 interface GroupBase { id: string; n: string; name: string; icon: string; view: ViewId
   one: string; intro: string }

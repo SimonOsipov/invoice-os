@@ -580,15 +580,15 @@ func TestRailwayAPI_RateLimitWaitsRetryAfterThenRetriesOnce(t *testing.T) {
 	}
 }
 
-func TestRailwayAPI_RateLimitWaitOfZeroRetriesAtOnce(t *testing.T) {
+func TestRailwayAPI_RateLimitWaitOfZeroStillWaitsOneSecond(t *testing.T) {
 	s := rateLimitedEnvList(t, []string{"retry-after: 0"}, "429")
 	stdout, stderr, code := ensurePR(t, s, "")
 
 	if code != 0 {
 		t.Errorf("exit %d, want 0; output = %q", code, stdout+stderr)
 	}
-	if got := s.sleeps(t); !slices.Equal(got, []string{"0"}) {
-		t.Errorf("sleeps = %v, want [0]", got)
+	if got := s.sleeps(t); !slices.Equal(got, []string{"1"}) {
+		t.Errorf("sleeps = %v, want [1]: a resend never leaves at once", got)
 	}
 	if n := opCount(t, s, "envList"); n != 2 {
 		t.Errorf("envList calls = %d, want 2", n)
@@ -669,15 +669,15 @@ func TestRailwayAPI_RateLimitFallsBackToXRateLimitReset(t *testing.T) {
 	}
 }
 
-func TestRailwayAPI_RateLimitResetInThePastRetriesAtOnce(t *testing.T) {
+func TestRailwayAPI_RateLimitResetInThePastStillWaitsOneSecond(t *testing.T) {
 	s := rateLimitedEnvList(t, []string{"x-ratelimit-reset: " + resetAt(-60*time.Second)}, "429")
 	stdout, stderr, code := ensurePR(t, s, "")
 
 	if code != 0 {
 		t.Errorf("exit %d, want 0; output = %q", code, stdout+stderr)
 	}
-	if got := s.sleeps(t); !slices.Equal(got, []string{"0"}) {
-		t.Errorf("sleeps = %v, want [0]: a wait floors at 0", got)
+	if got := s.sleeps(t); !slices.Equal(got, []string{"1"}) {
+		t.Errorf("sleeps = %v, want [1]: a wait floors at 1", got)
 	}
 }
 
@@ -1991,4 +1991,146 @@ func TestBucketConfirm_HTTP4xxNotAuthorizedEndsThePoll(t *testing.T) {
 	if e := errorLines(stderr); !strings.Contains(e, "HTTP 403") {
 		t.Errorf("stderr error lines do not name HTTP 403: %q", e)
 	}
+}
+
+// fixNow makes `date +%s` answer epoch; every other date call is the real one.
+func fixNow(t *testing.T, s authShim, epoch int64) {
+	t.Helper()
+	body := "#!/bin/sh\nif [ \"$*\" = '+%s' ]; then echo " + strconv.FormatInt(epoch, 10) + "; exit 0; fi\nexec /bin/date \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(s.dir, "date"), []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRailwayAPI_RateLimitResetWaitIsRoundedUp(t *testing.T) {
+	const now = int64(1_790_000_000)
+	reset := time.Unix(now+120, 0).UTC().Format("2006-01-02T15:04:05") + ".900Z"
+	s := rateLimitedEnvList(t, []string{"x-ratelimit-reset: " + reset}, "429")
+	fixNow(t, s, now)
+	stdout, stderr, code := ensurePR(t, s, "")
+
+	if code != 0 {
+		t.Errorf("exit %d, want 0; output = %q", code, stdout+stderr)
+	}
+	if got := s.sleeps(t); !slices.Equal(got, []string{"121"}) {
+		t.Errorf("sleeps = %v, want [121]: the reset is 120.9 s away, and a resend before it is a second 429", got)
+	}
+}
+
+// batchedOps are the requests that carry what many calls carried.
+var batchedOps = []string{"varsRead", "varsWrite", "discoverUrls"}
+
+// maxTimes returns, per call of the run, the operation and the --max-time of its curl argv.
+func maxTimes(t *testing.T, s authShim) map[string][]string {
+	t.Helper()
+	lines := strings.Split(strings.TrimSpace(s.argv(t)), "\n")
+	ops := operations(s.calls(t))
+	if len(lines) != len(ops) {
+		t.Fatalf("control: %d curl argv lines for %d calls", len(lines), len(ops))
+	}
+	re := regexp.MustCompile(`--max-time (\d+)`)
+	out := map[string][]string{}
+	for i, op := range ops {
+		m := re.FindStringSubmatch(lines[i])
+		if m == nil {
+			t.Fatalf("no --max-time in the argv of call %d (%s): %q", i, op, lines[i])
+		}
+		out[op] = append(out[op], m[1])
+	}
+	return out
+}
+
+func requireMaxTimes(t *testing.T, got map[string][]string) {
+	t.Helper()
+	for op, times := range got {
+		want := "30"
+		if slices.Contains(batchedOps, op) {
+			want = "90"
+		}
+		for _, m := range times {
+			if m != want {
+				t.Errorf("%s was sent with --max-time %s, want %s", op, m, want)
+			}
+		}
+	}
+}
+
+func TestRailwayAPI_BatchedRequestsGetALargerCurlBudget(t *testing.T) {
+	t.Run("a pass: single reads keep 30 s, the batched read and write get 90 s", func(t *testing.T) {
+		s := newPassShim(t, nil, nil)
+		if out, code := runPass(t, s); code != 0 {
+			t.Fatalf("control: exit %d; output = %q", code, clip(out))
+		}
+		got := maxTimes(t, s)
+		for _, op := range []string{"envList", "varsRead", "varsWrite"} {
+			if len(got[op]) == 0 {
+				t.Fatalf("control: the pass sent no %s", op)
+			}
+		}
+		requireMaxTimes(t, got)
+	})
+	t.Run("discover-urls: the five-alias read gets 90 s", func(t *testing.T) {
+		s := newURLsShim(t, nil)
+		if stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID); code != 0 {
+			t.Fatalf("control: exit %d; output = %q", code, stdout+stderr)
+		}
+		got := maxTimes(t, s)
+		if len(got["discoverUrls"]) == 0 {
+			t.Fatal("control: no discoverUrls call")
+		}
+		requireMaxTimes(t, got)
+	})
+}
+
+// A timeout test of the 429 cap: each job that runs railway-env.sh must outlast its old budget plus the 600 s of waits.
+func TestWorkflowTimeoutsCoverTheRateLimitWaits(t *testing.T) {
+	const extraMinutes = 600 / 60
+	oldBudget := map[string]int{
+		"dev-env.yml/prepare-env":                    20,
+		"dev-env-teardown.yml/teardown":              10,
+		"dev-env-sweeper.yml/sweep":                  20,
+		"railway-invariants.yml/pr-environments-off": 5,
+	}
+	timeoutRE := regexp.MustCompile(`^    timeout-minutes:\s*(\d+)\s*$`)
+	seen := map[string]bool{}
+	for _, file := range []string{"dev-env.yml", "dev-env-teardown.yml", "dev-env-sweeper.yml", "railway-invariants.yml"} {
+		for _, job := range workflowJobsOf(readWorkflow(t, file)) {
+			key := file + "/" + job.name
+			if !jobCallsRailway(job.lines) {
+				continue
+			}
+			timeout := 360 // GitHub's default
+			for _, l := range job.lines {
+				if m := timeoutRE.FindStringSubmatch(l); m != nil {
+					timeout, _ = strconv.Atoi(m[1])
+				}
+			}
+			old, known := oldBudget[key]
+			if !known {
+				if timeout < 360 {
+					t.Errorf("%s runs railway-env.sh with timeout-minutes %d and is not in the table of old budgets", key, timeout)
+				}
+				continue
+			}
+			seen[key] = true
+			if timeout < old+extraMinutes {
+				t.Errorf("%s has timeout-minutes %d, want at least %d (old budget %d + %d min of 429 waits)", key, timeout, old+extraMinutes, old, extraMinutes)
+			}
+		}
+	}
+	for key := range oldBudget {
+		if !seen[key] {
+			t.Errorf("control: no job %s runs railway-env.sh", key)
+		}
+	}
+}
+
+// jobCallsRailway is true when a line runs railway-env.sh other than as a --self-test.
+func jobCallsRailway(lines []string) bool {
+	for _, l := range lines {
+		if strings.Contains(l, "railway-env.sh") && !strings.Contains(l, "--self-test") {
+			return true
+		}
+	}
+	return false
 }

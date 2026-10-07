@@ -1803,6 +1803,10 @@ func TestForkPass_OwnedVerdictComparesTheValueAsWritten(t *testing.T) {
 	for _, c := range []struct{ name, value string }{
 		{"leading and trailing spaces", "  https://a  "},
 		{"an equals sign", "https://a?x=1&y=2"},
+		{"a backslash", `{"a":"b\\c"}`},
+		{"a tab", "a\tb"},
+		{"a carriage return", "a\rb"},
+		{"a newline", "a\nb"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newAfterShim(t, afterProdStores())
@@ -1814,5 +1818,14 @@ func TestForkPass_OwnedVerdictComparesTheValueAsWritten(t *testing.T) {
 				t.Errorf("exit %d, want 0: the value was written and re-read as given; output = %q", code, clip(out))
 			}
 		})
+	}
+}
+
+func TestForkPass_OwnedVerdictStillFailsOnADifferentBackslashValue(t *testing.T) {
+	script := passVariantScript(t, dupContributors)
+	s := newAfterShim(t, afterProdStores())
+	out, code := runVariant(t, s, script, `x\y`, `x\z`, "dup_a", "dup_b")
+	if code != 1 || !strings.Contains(errorLines(out), "reads a different value after the write") {
+		t.Errorf("exit %d, want 1 with a different-value verdict; output = %q", code, clip(out))
 	}
 }

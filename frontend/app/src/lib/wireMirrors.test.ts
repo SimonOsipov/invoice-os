@@ -726,7 +726,7 @@ describe('wire mirror: extraction Reason <-> both ExtractionReason unions (EXTR-
 const HEADER_FIELDS_GO_PATH = 'internal/extraction/vocabulary.go'
 const HEADER_FIELDS_SPA_PATH = 'frontend/app/src/lib/extractionReview.ts'
 const HEADER_FIELDS_TEST_PATH = 'frontend/app/src/components/ExtractionFields.test.tsx'
-const HEADER_FIELDS_E2E_PATH = 'e2e/topology/import-wizard.spec.ts'
+const HEADER_FIELDS_E2E_PATH = 'e2e/topology/importWizardShared.ts'
 
 // var HeaderFields = []string{...}, quoted strings in declaration order.
 function goHeaderFields(source: string): string[] {

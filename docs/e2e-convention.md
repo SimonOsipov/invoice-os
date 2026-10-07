@@ -50,13 +50,16 @@ or `pageerror` during a journey fails it).
 ## One browser, serial
 
 **chromium-only, `workers: 1` per unit.** No multi-browser matrix. The api suite and each
-topology unit run serial on one worker. Topology runs as three units in parallel, as listed
+topology unit run serial on one worker. Topology runs as four units in parallel, as listed
 in `e2e/topology/shards.ts`: a `serial-lane` of the specs that stay on the seeded persona
 tenants (1111 / 2222), plus one shard per big file
-(`import-wizard`, `invoice-surfaces`), each on its own seeded tenant pair
-(`db/seed.e2e-shards.sql`). `playwright.topology.config.ts` builds one project per unit, and
-`--project=<unit>` runs one. A new topology spec file must be added to a unit in `shards.ts`,
-or every topology run fails at config load.
+(`import-wizard`, `import-wizard-2`, `invoice-surfaces`), each on its own seeded tenant pair
+(`db/seed.e2e-shards.sql`). The import-wizard tests run as two files, split for time:
+`import-wizard.spec.ts` (unit `import-wizard`) and `import-wizard-2.spec.ts` (unit
+`import-wizard-2`). The helpers both use live in `e2e/topology/importWizardShared.ts`.
+`playwright.topology.config.ts` builds one project per unit, and `--project=<unit>` runs one.
+A new topology spec file must be added to a unit in `shards.ts`, or every topology run fails
+at config load.
 
 **A browser spec that needs an app session on a seeded tenant signs in with `signInAs(page, id, { tenantId })`**
 (`e2e/personaSession.ts`). It drives the landing "Platform login" form as the tenant's e2e member (`e2e/realAccounts.ts`:
@@ -84,7 +87,7 @@ therefore starts from the seed, never from another run's leftovers, and the heal
 fails the run outright if that reset did not happen — it is armed by a hand-set Railway
 variable that otherwise fails closed and silent. The purge needs no such variable: it is
 gated like the seed, by `GATEWAY_DB_BOOTSTRAP` and the `ENVIRONMENT` that CI's
-`set-fork-environment` sets in every PR fork.
+`fork-vars-after-urls` sets in every PR fork.
 
 What a spec still cannot assume is an empty table:
 

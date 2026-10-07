@@ -1,5 +1,5 @@
-// railway_env_batch_test.go drives the fork variable writers through set_service_vars:
-// read once, write only the names that differ in one variableCollectionUpsert, re-read.
+// railway_env_batch_test.go drives the fork variable writers:
+// read once, write only the names that differ, re-read.
 package main
 
 import (
@@ -102,24 +102,53 @@ type collectionWrite struct {
 	Input        map[string]any
 }
 
+// collectionWritesIn lists one collectionWrite per service input: the single write's input,
+// or each iK input of a batched varsWrite, in alias order. A batched call shares one At.
 func collectionWritesIn(calls []railwayCall) []collectionWrite {
 	var out []collectionWrite
 	for i, c := range calls {
 		if !strings.Contains(c.Query, "variableCollectionUpsert(") {
 			continue
 		}
-		in, _ := c.Variables["input"].(map[string]any)
-		w := collectionWrite{At: i, Input: in, Vars: map[string]string{}, SkipDeploys: in["skipDeploys"]}
-		w.Env, _ = in["environmentId"].(string)
-		w.Service, _ = in["serviceId"].(string)
-		_, w.HasReplace = in["replace"]
-		vars, _ := in["variables"].(map[string]any)
-		for n, v := range vars {
-			w.Vars[n], _ = v.(string)
+		inputs := []map[string]any{}
+		if in, ok := c.Variables["input"].(map[string]any); ok {
+			inputs = append(inputs, in)
 		}
-		out = append(out, w)
+		for _, k := range numberedKeys(c.Variables, "i") {
+			in, _ := c.Variables[k].(map[string]any)
+			inputs = append(inputs, in)
+		}
+		for _, in := range inputs {
+			w := collectionWrite{At: i, Input: in, Vars: map[string]string{}, SkipDeploys: in["skipDeploys"]}
+			w.Env, _ = in["environmentId"].(string)
+			w.Service, _ = in["serviceId"].(string)
+			_, w.HasReplace = in["replace"]
+			vars, _ := in["variables"].(map[string]any)
+			for n, v := range vars {
+				w.Vars[n], _ = v.(string)
+			}
+			out = append(out, w)
+		}
 	}
 	return out
+}
+
+// numberedKeys lists the keys of vars named prefix+<digits> in numeric order (s0, s1, ... s10).
+func numberedKeys(vars map[string]any, prefix string) []string {
+	var keys []string
+	for k := range vars {
+		if n, ok := strings.CutPrefix(k, prefix); ok {
+			if _, err := strconv.Atoi(n); err == nil {
+				keys = append(keys, k)
+			}
+		}
+	}
+	slices.SortFunc(keys, func(a, b string) int {
+		x, _ := strconv.Atoi(a[len(prefix):])
+		y, _ := strconv.Atoi(b[len(prefix):])
+		return x - y
+	})
+	return keys
 }
 
 func collectionWrites(t *testing.T, s authShim) []collectionWrite {
@@ -161,24 +190,40 @@ func readService(c railwayCall) string {
 	return s
 }
 
-// lastWriteOf is the call index of the last write of svc.name in either mutation, or -1.
+// readServices lists the service ids one read asks for: the single read's, or each sK of a batched varsRead.
+func readServices(c railwayCall) []string {
+	if id := readService(c); id != "" {
+		return []string{id}
+	}
+	var ids []string
+	for _, k := range numberedKeys(c.Variables, "s") {
+		id, _ := c.Variables[k].(string)
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// lastWriteOf is the call index of the last write of svc.name in any variable mutation, or -1.
 func lastWriteOf(calls []railwayCall, svc, name string) int {
 	at := -1
 	for i, c := range calls {
 		if !isVariableWrite(c) {
 			continue
 		}
-		in, _ := c.Variables["input"].(map[string]any)
-		if in["serviceId"] != svc {
-			continue
-		}
-		vars, _ := in["variables"].(map[string]any)
-		if _, ok := vars[name]; ok || in["name"] == name {
+		if in, ok := c.Variables["input"].(map[string]any); ok && in["name"] == name && in["serviceId"] == svc {
 			at = i
+		}
+		for _, w := range collectionWritesIn([]railwayCall{c}) {
+			if _, ok := w.Vars[name]; ok && w.Service == svc {
+				at = i
+			}
 		}
 	}
 	return at
 }
+
+// must drops the ok of a lookup; an absent value is "" and the scan reports the empty needle.
+func must(v string, _ bool) string { return v }
 
 func readStore(t *testing.T, s authShim, svc string) map[string]any {
 	t.Helper()
@@ -214,7 +259,9 @@ func readsPerService(calls []railwayCall) map[string]int {
 	got := map[string]int{}
 	for _, c := range calls {
 		if isVariableRead(c) {
-			got[readService(c)]++
+			for _, id := range readServices(c) {
+				got[id]++
+			}
 		}
 	}
 	return got
@@ -232,16 +279,13 @@ func TestSetSentryOff_SteadyStateWritesNothing(t *testing.T) {
 	}
 	calls := s.calls(t)
 	ops := operations(calls)
-	if len(calls) != 16 {
-		t.Errorf("%d calls %v, want 16: envList, settle and one read per Sentry service", len(calls), ops)
-	}
-	if len(ops) < 2 || ops[0] != "envList" || ops[1] != "settle" {
-		t.Errorf("calls begin %v, want envList then settle", ops)
+	if want := []string{"envList", "settle", "varsRead"}; !slices.Equal(ops, want) {
+		t.Errorf("Railway calls = %v, want %v: one read for every Sentry service", ops, want)
 	}
 	var read, all []string
 	for _, c := range calls {
 		if isVariableRead(c) {
-			read = append(read, readService(c))
+			read = append(read, readServices(c)...)
 		}
 	}
 	for _, n := range slices.Concat(sentryBackends, sentrySPAs) {
@@ -249,7 +293,7 @@ func TestSetSentryOff_SteadyStateWritesNothing(t *testing.T) {
 	}
 	slices.Sort(read)
 	slices.Sort(all)
-	if !slices.Equal(read, all) {
+	if len(all) != 14 || !slices.Equal(read, all) {
 		t.Errorf("variable reads = %v, want exactly one per service %v", read, all)
 	}
 	if e := upsertEcho.FindAllString(out, -1); len(e) != 0 {
@@ -270,8 +314,8 @@ func TestSetSentryOff_SteadyStateWritesNothing(t *testing.T) {
 	}
 }
 
-func TestReconcileURLs_SteadyStateMakesFiveReads(t *testing.T) {
-	s := newAuthShim(t, nil, reconcileIntended())
+func TestReconcileURLs_SteadyStateMakesThreeCalls(t *testing.T) {
+	s := fleetShim(t, reconcileIntended())
 	stdout, stderr, code := runReconcileURLs(t, s)
 	out := stdout + stderr
 	if code != 0 {
@@ -281,13 +325,13 @@ func TestReconcileURLs_SteadyStateMakesFiveReads(t *testing.T) {
 		t.Errorf("steady state wrote %d variable(s) %v, want none", len(ups), names(ups))
 	}
 	calls := s.calls(t)
-	if len(calls) != 5 {
-		t.Errorf("%d calls %v, want 5: one read per service", len(calls), operations(calls))
+	if want := []string{"envList", "settle", "varsRead"}; !slices.Equal(operations(calls), want) {
+		t.Errorf("Railway calls = %v, want %v: one read of the five services", operations(calls), want)
 	}
 	var read, want []string
 	for _, c := range calls {
 		if isVariableRead(c) {
-			read = append(read, readService(c))
+			read = append(read, readServices(c)...)
 		}
 	}
 	for _, l := range reconcileURLLabels {
@@ -380,6 +424,9 @@ func TestSetServiceVars_SteadyStateWritesNothing(t *testing.T) {
 			if len(calls) == 0 {
 				t.Fatal("control: no call reached the shim")
 			}
+			if want := []string{"envList", "settle", "varsRead"}; !slices.Equal(operations(calls), want) {
+				t.Errorf("Railway calls = %v, want %v", operations(calls), want)
+			}
 			if m := s.mutations(t); len(m) != 0 {
 				t.Errorf("steady state sent mutations %v, want none", m)
 			}
@@ -413,7 +460,10 @@ func TestSetSentryOff_InheritedValuesOneWritePerService(t *testing.T) {
 	}
 	ws := collectionWrites(t, s)
 	if len(ws) != 14 {
-		t.Errorf("%d variableCollectionUpsert call(s) %v, want 14: one per Sentry service", len(ws), writeNames(ws))
+		t.Errorf("%d write input(s) %v, want 14: one per Sentry service", len(ws), writeNames(ws))
+	}
+	if n := opCount(t, s, "varsWrite"); n != 1 {
+		t.Errorf("%d varsWrite call(s), want 1: every Sentry service in one request", n)
 	}
 	if len(ws) == 0 {
 		t.FailNow()
@@ -465,7 +515,7 @@ func TestSetSentryOff_InheritedValuesOneWritePerService(t *testing.T) {
 func TestSetServiceVars_OnlyChangedNamesAreWritten(t *testing.T) {
 	stores := reconcileIntended()
 	stores[sentrySvcID("app")]["VITE_LANDING_URL"] = batchProdLandingURL
-	s := newAuthShim(t, nil, stores)
+	s := fleetShim(t, stores)
 	stdout, stderr, code := runReconcileURLs(t, s)
 	out := stdout + stderr
 	if code != 0 {
@@ -502,7 +552,7 @@ func TestReconcileURLs_WritesTheRegistrationFlag(t *testing.T) {
 			} else {
 				stores[landing]["VITE_REGISTRATION_OPEN"] = stale
 			}
-			s := newAuthShim(t, nil, stores)
+			s := fleetShim(t, stores)
 			stdout, stderr, code := runReconcileURLs(t, s)
 			out := stdout + stderr
 			if code != 0 {
@@ -527,7 +577,7 @@ func TestReconcileURLs_WritesTheRegistrationFlag(t *testing.T) {
 
 // guard, passes at HEAD: the flag write must not widen the refusal of the persistent environment.
 func TestReconcileURLs_RefusesThePersistentEnvironment(t *testing.T) {
-	s := newAuthShim(t, nil, reconcileIntended())
+	s := fleetShim(t, reconcileIntended())
 	stdout, stderr, code := s.run(t, batchExports(), "reconcile-urls", persistentEnvironmentID, batchGatewayURL, batchAppURL, batchLandingURL, batchOpsURL, batchSupportURL)
 	out := stdout + stderr
 	if code != 1 {
@@ -538,6 +588,37 @@ func TestReconcileURLs_RefusesThePersistentEnvironment(t *testing.T) {
 	}
 	if ups := s.upserts(t); len(ups) != 0 {
 		t.Errorf("a refused run wrote %v", names(ups))
+	}
+	if calls := s.calls(t); len(calls) != 0 {
+		t.Errorf("the persistent-id refusal called Railway %v; it must refuse before any call", operations(calls))
+	}
+}
+
+// reconcile-urls read no environment list before the shared pass: a non-ephemeral id still got its writes.
+func TestReconcileURLs_RefusesANonEphemeralEnvironment(t *testing.T) {
+	for _, c := range []struct {
+		name, envList, says string
+	}{
+		{"isEphemeral false", sentryEnvList(false, true), "is NOT ephemeral"},
+		{"an id the project does not own", sentryEnvList(true, false), "No environment with id " + forkEnvID},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newAuthShim(t, map[string]string{"envList": c.envList, "settle": sentrySettle("")}, reconcileStale())
+			stdout, stderr, code := runReconcileURLs(t, s)
+			out := stdout + stderr
+			if code != 1 {
+				t.Errorf("exit %d, want 1; output = %q", code, out)
+			}
+			if !strings.Contains(errorLines(out), c.says) {
+				t.Errorf("no ::error:: line says %q; error lines = %q", c.says, errorLines(out))
+			}
+			if want, got := []string{"envList"}, operations(s.calls(t)); !slices.Equal(got, want) {
+				t.Errorf("Railway calls = %v, want %v: the refusal precedes service resolution", got, want)
+			}
+			if m := s.mutations(t); len(m) != 0 {
+				t.Errorf("the refused environment received mutations %v", m)
+			}
+		})
 	}
 }
 
@@ -560,7 +641,7 @@ func TestSetServiceVars_StaleValueIsRewritten(t *testing.T) {
 			} else {
 				stores[id][c.name] = c.stale
 			}
-			s := newAuthShim(t, nil, stores)
+			s := fleetShim(t, stores)
 			stdout, stderr, code := runReconcileURLs(t, s)
 			out := stdout + stderr
 			if code != 0 {
@@ -652,11 +733,15 @@ func TestSetServiceVars_EveryWriteTargetsTheForkOnly(t *testing.T) {
 			func(t *testing.T, s authShim) (string, string, int) {
 				return s.run(t, forkAuthExports(), "set-fork-auth", authForkEnvID)
 			}},
+		{passSub, authForkEnvID, func(t *testing.T) authShim { return newPassShim(t, nil, nil) },
+			func(t *testing.T, s authShim) (string, string, int) {
+				return s.run(t, forkAuthExports(), passSub, authForkEnvID)
+			}},
 		{"set-fork-auth-site", authForkEnvID, newForkSiteShim,
 			func(t *testing.T, s authShim) (string, string, int) {
 				return s.run(t, forkAuthExports(), "set-fork-auth-site", authForkEnvID, forkSiteURL)
 			}},
-		{"reconcile-urls", forkEnvID, func(t *testing.T) authShim { return newAuthShim(t, nil, reconcileStale()) }, runReconcileURLs},
+		{"reconcile-urls", forkEnvID, func(t *testing.T) authShim { return fleetShim(t, reconcileStale()) }, runReconcileURLs},
 		{"set-ai-fake", forkEnvID, func(t *testing.T) authShim {
 			planted := map[string]string{"AI_FAKE": "false", "JEV_FAKE": "false", "OPENROUTER_API_KEY": "sk-or-v1-planted"}
 			return fleetShim(t, map[string]map[string]string{sentrySvcID("submission"): maps.Clone(planted), sentrySvcID("invoice"): maps.Clone(planted)})
@@ -666,6 +751,10 @@ func TestSetServiceVars_EveryWriteTargetsTheForkOnly(t *testing.T) {
 		{"set-sentry-off", forkEnvID, func(t *testing.T) authShim { return fleetShim(t, sentryStores()) },
 			func(t *testing.T, s authShim) (string, string, int) {
 				return s.run(t, forkExports(true, true, true), "set-sentry-off", forkEnvID)
+			}},
+		{afterSub, forkEnvID, func(t *testing.T) authShim { return newAfterShim(t, afterProdStores()) },
+			func(t *testing.T, s authShim) (string, string, int) {
+				return s.run(t, forkExports(true, true, true), afterSub, afterArgs()...)
 			}},
 		{"set-fork-reconciliation-url", forkEnvID, func(t *testing.T) authShim {
 			return fleetShim(t, map[string]map[string]string{gw: {"RECONCILIATION_URL": "http://reconciliation.railway.internal:8081"}})
@@ -687,8 +776,11 @@ func TestSetServiceVars_EveryWriteTargetsTheForkOnly(t *testing.T) {
 				t.Fatalf("exit %d, want 0; output = %q", code, stdout+stderr)
 			}
 			var targets []string
+			for _, w := range collectionWrites(t, s) {
+				targets = append(targets, w.Env)
+			}
 			for _, call := range s.calls(t) {
-				if isVariableWrite(call) {
+				if strings.Contains(call.Query, "variableUpsert(") {
 					in, _ := call.Variables["input"].(map[string]any)
 					e, _ := in["environmentId"].(string)
 					targets = append(targets, e)
@@ -733,14 +825,14 @@ func TestSetServiceVars_ReReadMismatchFails(t *testing.T) {
 	t.Run("set-fork-environment re-read GraphQL error", func(t *testing.T) {
 		gw := sentrySvcID("gateway")
 		s := fleetShim(t, map[string]map[string]string{gw: {"ENVIRONMENT": "production", "DATABASE_URL": sentryDBSentinel}})
-		setFaults(t, s, "authVars", "ok", "gqlerr")
+		setFaults(t, s, "varsRead", "ok", "gqlerr")
 		stdout, stderr, code := s.run(t, forkExports(true, true, true), "set-fork-environment", forkEnvID)
 		out := stdout + stderr
 		if code != 1 {
 			t.Errorf("exit %d, want 1; output = %q", code, out)
 		}
-		if !strings.Contains(errorLines(out), "Not Authorized") || !strings.Contains(errorLines(out), "gateway") {
-			t.Errorf("no ::error:: line names the gateway's GraphQL error; error lines = %q", errorLines(out))
+		if !strings.Contains(errorLines(out), "written but not confirmed") {
+			t.Errorf("no ::error:: line says the write is not confirmed; error lines = %q", errorLines(out))
 		}
 		if len(upsertsOf(s.upserts(t), gw, "ENVIRONMENT")) != 1 {
 			t.Error("gateway.ENVIRONMENT was not written once, so the failure is not a re-read failure")
@@ -748,13 +840,13 @@ func TestSetServiceVars_ReReadMismatchFails(t *testing.T) {
 		if n := readsPerService(s.calls(t))[gw]; n != 2 {
 			t.Errorf("%d gateway reads, want 2: the read and the failed re-read", n)
 		}
-		if strings.Contains(out, "confirmed") || strings.Contains(out, sentryDBSentinel) {
-			t.Errorf("a failed re-read printed the confirmation line or a planted value; output = %q", out)
+		if got := confirmedLines(out); len(got) != 0 || strings.Contains(out, sentryDBSentinel) || strings.Contains(out, "Not Authorized") {
+			t.Errorf("a failed re-read printed a confirmation line %q, a planted value or Railway's message; output = %q", got, out)
 		}
 	})
 	t.Run("reconcile-urls", func(t *testing.T) {
 		landing := sentrySvcID("landing")
-		s := newAuthShim(t, nil, reconcileStale())
+		s := fleetShim(t, reconcileStale())
 		s.bendRead(t, landing, `.VITE_APP_URL = "`+batchProdAppURL+`"`)
 		stdout, stderr, code := runReconcileURLs(t, s)
 		out := stdout + stderr
@@ -775,7 +867,7 @@ func TestSetServiceVars_ReReadMismatchFails(t *testing.T) {
 	for _, svc := range []string{"ops-console", "support-console"} {
 		t.Run("reconcile-urls "+svc, func(t *testing.T) {
 			id := sentrySvcID(svc)
-			s := newAuthShim(t, nil, reconcileStale())
+			s := fleetShim(t, reconcileStale())
 			s.bendRead(t, id, `.VITE_GATEWAY_URL = "`+batchProdLandingURL+`"`)
 			stdout, stderr, code := runReconcileURLs(t, s)
 			out := stdout + stderr
@@ -801,11 +893,7 @@ func TestSetServiceVars_UnreadableMapWritesNothing(t *testing.T) {
 		name  string
 		setup func(t *testing.T, s authShim)
 	}{
-		// Both variable reads fault, so the case holds whichever one reads first.
-		{"graphql errors", func(t *testing.T, s authShim) {
-			setFaults(t, s, "authVars", "gqlerr")
-			setFaults(t, s, "svcVars", "gqlerr")
-		}},
+		{"graphql errors", func(t *testing.T, s authShim) { s.plantReadBad(t, "first", gw, "error") }},
 		{"not an object", func(t *testing.T, s authShim) { s.bendRead(t, gw, "null") }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -878,6 +966,39 @@ func TestSetForkAuth_FreshSecretsAlwaysWritten(t *testing.T) {
 			t.Errorf("the second run wrote %v.%v with variableUpsert; want only the collection writes", in["serviceId"], in["name"])
 		}
 	}
+
+	t.Run(passSub, func(t *testing.T) {
+		src := passAuthInherited(t)
+		s := newPassShim(t, maps.Clone(src), nil)
+		secrets := map[string][]string{"auth": {"GOTRUE_JWT_KEYS", "GOTRUE_JWT_SECRET"}, "gateway": {"AUTH_ADMIN_PASSWORD"}}
+		sources := map[string]string{"GOTRUE_JWT_KEYS": src["GOTRUE_JWT_KEYS"], "GOTRUE_JWT_SECRET": authSourceJWTSecret, "AUTH_ADMIN_PASSWORD": authSourcePassword}
+		var runs [2]map[string]string
+		for i := range runs {
+			before := len(s.calls(t))
+			if out, code := runPass(t, s); code != 0 {
+				t.Fatalf("run %d: exit %d, want 0; output = %q", i+1, code, clip(out))
+			}
+			ws := collectionWritesIn(s.calls(t)[before:])
+			runs[i] = map[string]string{}
+			for label, ns := range secrets {
+				for _, name := range ns {
+					v, ok := passWritten(ws, gtSvcID(label), name)
+					if !ok || v == "" {
+						t.Fatalf("run %d never wrote %s.%s", i+1, label, name)
+					}
+					runs[i][name] = v
+				}
+			}
+		}
+		for name, source := range sources {
+			if runs[0][name] == source || runs[1][name] == source {
+				t.Errorf("%s equals the source value on a run; it must be generated", name)
+			}
+			if runs[0][name] == runs[1][name] {
+				t.Errorf("%s is the same on both runs; it must be fresh every run", name)
+			}
+		}
+	})
 }
 
 // guard, passes at HEAD
@@ -949,6 +1070,41 @@ func TestSetServiceVars_SecretsNeverOnArgvOrInOutput(t *testing.T) {
 		}
 	})
 
+	t.Run(passSub, func(t *testing.T) {
+		auth := passAuthInherited(t)
+		s := newPassShim(t, maps.Clone(auth), nil)
+		jqLog := jqArgvLog(t, s)
+		out, code := runPass(t, s)
+		if code != 0 {
+			t.Fatalf("exit %d, want 0; output = %q", code, clip(out))
+		}
+		ws := passWrites(t, s)
+		key, _ := passWritten(ws, gtSvcID("auth"), "GOTRUE_JWT_KEYS")
+		token, _ := passWritten(ws, gtSvcID("gateway"), "GATEWAY_TOKEN")
+		needles := map[string]string{
+			"the source key's private scalar":    jwkPrivateScalar(t, auth["GOTRUE_JWT_KEYS"]),
+			"the source JWT secret":              authSourceJWTSecret,
+			"the source admin password":          authSourcePassword,
+			"the source Resend key":              authSourceResendKey,
+			"the source GATEWAY_TOKEN":           gtSourceToken,
+			"the gateway's migration DSN secret": forkEnvSecret,
+			"the generated key":                  key,
+			"the generated JWT secret":           must(passWritten(ws, gtSvcID("auth"), "GOTRUE_JWT_SECRET")),
+			"the generated admin password":       must(passWritten(ws, gtSvcID("gateway"), "AUTH_ADMIN_PASSWORD")),
+			"the generated GATEWAY_TOKEN":        token,
+		}
+		if key != "" {
+			needles["the generated key's private scalar"] = jwkPrivateScalar(t, key)
+		}
+		scan(t, s, jqLog, out, needles)
+		redacted(t, out, "auth", "GOTRUE_JWT_KEYS")
+		redacted(t, out, "auth", "GOTRUE_JWT_SECRET")
+		redacted(t, out, "gateway", "AUTH_ADMIN_PASSWORD")
+		for _, n := range gatewayTokenTargets(t) {
+			redacted(t, out, n, "GATEWAY_TOKEN")
+		}
+	})
+
 	t.Run("set-sentry-off", func(t *testing.T) {
 		s := fleetShim(t, sentryStores())
 		jqLog := jqArgvLog(t, s)
@@ -974,13 +1130,39 @@ func TestSetServiceVars_SecretsNeverOnArgvOrInOutput(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run(afterSub, func(t *testing.T) {
+		s := newAfterShim(t, afterProdStores())
+		jqLog := jqArgvLog(t, s)
+		out, code := runAfter(t, s)
+		if code != 0 {
+			t.Fatalf("exit %d, want 0; output = %q", code, clip(out))
+		}
+		scan(t, s, jqLog, out, map[string]string{
+			"the inherited DSN":        sentryDSNSentinel,
+			"the inherited auth token": sentryTokenSentinel,
+			"the sibling DATABASE_URL": sentryDBSentinel,
+			"the inherited AI key":     afterAIKey,
+		})
+		if strings.Contains(out, forkToken) {
+			t.Error("the output carries the API token")
+		}
+		for _, b := range sentryBackends {
+			redacted(t, out, b, "SENTRY_DSN")
+		}
+		for _, sp := range sentrySPAs {
+			for _, n := range sentrySPANames {
+				redacted(t, out, sp, n)
+			}
+		}
+	})
 }
 
 func TestSetServiceVars_CollectionWriteTimeoutRetries(t *testing.T) {
 	stores := reconcileIntended()
 	stores[sentrySvcID("app")]["VITE_LANDING_URL"] = batchProdLandingURL
-	s := newAuthShim(t, nil, stores)
-	setFaults(t, s, "varCollectionUpsert", "timeout")
+	s := fleetShim(t, stores)
+	setFaults(t, s, "varsWrite", "timeout")
 	stdout, stderr, code := runReconcileURLs(t, s)
 	if code != 0 {
 		t.Fatalf("exit %d, want 0; output = %q", code, stdout+stderr)

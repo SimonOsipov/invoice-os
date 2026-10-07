@@ -51,9 +51,11 @@ post-deploy verification steps of `.github/workflows/dev-env.yml`, on every read
 environment (M4-23) and its Postgres is bootstrapped + seeded fresh at gateway boot
 (M4-21-04), alongside the smoke and api suites. The `e2e` job runs smoke then api; the
 `topology` job then runs the topology suite as parallel units, one matrix leg each
-(`serial-lane`, `import-wizard`, `invoice-surfaces`, from `e2e/topology/shards.ts`). `dev-env.yml` flow:
+(`serial-lane`, `import-wizard`, `import-wizard-2`, `invoice-surfaces`, from `e2e/topology/shards.ts`). `dev-env.yml` flow:
 
 ```
+deploy-slot ──> wait until fewer than 2 other PR runs hold a Railway deploy slot (a
+                push or dispatch run passes at once)
 prepare-env ──> create-or-reuse this PR's `pr-<N>` fork of `development` (on
                 workflow_dispatch: target `development` itself) ──> assert Watch Paths
                 empty (M3-16 invariant) ──> discover the 5 public URLs fresh
@@ -63,7 +65,7 @@ gateway     ──> gate on /healthz (schema migrated at boot; a PR fork's DB is
                 /healthz's `demo_purge` field separately: `true` on a PR fork, `false`
                 on `development` — DEMO-04)
             ──> deploy 8 context services + docling + auth + 4 SPAs (all four are
-                gateway-wired: prepare-env's `reconcile-urls` writes VITE_GATEWAY_URL on
+                gateway-wired: prepare-env's `fork-vars-after-urls` writes VITE_GATEWAY_URL on
                 each per run)
             ──> verify: `e2e` job: smoke (landing + consoles) + api (typed contract suite)
             ──> `topology` job, one parallel leg per unit (browser login, isolation)
@@ -129,17 +131,17 @@ binary. The route reaches only a pending invite by id and tenant, and opens no t
 itself.
 
 **Written per run, not inherited:** the URL variables. On a PR, prepare-env's
-`reconcile-urls` step writes and re-reads the fork's own `gateway.CORS_ALLOWED_ORIGINS` (all
+`fork-vars-after-urls` pass (its `reconcile-urls` part) writes and re-reads the fork's own `gateway.CORS_ALLOWED_ORIGINS` (all
 four SPA origins), `VITE_GATEWAY_URL` on `app`, `landing` and each console, `app.VITE_LANDING_URL`,
 the landing's `VITE_APP_URL`, `VITE_OPS_URL` and `VITE_SUPPORT_URL`, each console's
 `VITE_LANDING_URL` and `landing.VITE_REGISTRATION_OPEN=true`. It refuses the persistent environment.
 
 **Written per fork, not inherited:** `gateway.RECONCILIATION_URL`. A fork is reused per PR, so
-it never picks up a production write made after its creation. `set-fork-reconciliation-url`
-writes `http://reconciliation.railway.internal:8080` and re-reads it
+it never picks up a production write made after its creation. `fork-vars-after-urls` (its `set-fork-reconciliation-url`
+part) writes `http://reconciliation.railway.internal:8080` and re-reads it
 (`TestSetForkReconciliationURLAgainstAScriptedRailway`).
 
-**Written per fork, not inherited:** `GATEWAY_TOKEN`. `set-fork-gateway-token` generates one
+**Written per fork, not inherited:** `GATEWAY_TOKEN`. `fork-vars-before-urls` generates one
 fresh value per PR run and writes it to the gateway and the seven guarded services, so a fork
 never keeps production's token (`TestSetForkGatewayToken_WritesOneFreshValueToTheEight`).
 
@@ -156,11 +158,11 @@ added to — a missing `GATEWAY_DB_RESET` fails closed (no reset), not open.
 **Exception, measured (M4-23-04): sealed variables do NOT fork.** A sealed variable on
 `development` would simply be absent in every PR environment. `prepare-env` therefore fails
 loudly if `development` holds any — do not add one. The only exceptions are `GOTRUE_JWT_KEYS`,
-`GOTRUE_JWT_SECRET` and `GOTRUE_SMTP_PASS` on `auth` (`set-fork-auth` writes the fork's own) and
+`GOTRUE_JWT_SECRET` and `GOTRUE_SMTP_PASS` on `auth` (`fork-vars-before-urls` writes the fork's own) and
 `RESEND_SENDING_KEY` on `tenancy` (a fork has none and sends no invite mail).
 
 **Written per fork, not inherited:** a fork no longer relies on the gateway's `AUTH_ISSUER`
-and `AUTH_JWKS_URL` it copied from production. `set-fork-auth` (the first prepare-env step
+and `AUTH_JWKS_URL` it copied from production. `fork-vars-before-urls` (the first prepare-env step
 after `resolve`) writes them: `AUTH_ISSUER=https://mock.ascomply.dev`, `AUTH_JWKS_URL` at the
 gateway's own loopback `/.well-known/jwks.json` so the mock round trip verifies, and
 `AUTH_ADDITIONAL_ISSUERS` naming the fork's own GoTrue. It also writes the fork's `auth`
@@ -168,7 +170,7 @@ key, JWT secret and admin password. The gateway health gate asserts `auth_issuer
 PR. If the round trip 401s on a PR environment, check that step first. See
 [identity-provider.md](./identity-provider.md).
 
-**A fork accepts registrations, sends no mail, and confirms at once.** `set-fork-auth` also
+**A fork accepts registrations, sends no mail, and confirms at once.** `fork-vars-before-urls` also
 writes `auth.GOTRUE_DISABLE_SIGNUP=false`, so the fork's GoTrue accepts `/signup`; the image
 default keeps production closed. It blanks `GOTRUE_SMTP_HOST` and `GOTRUE_SMTP_PASS`, and a
 blank SMTP host selects GoTrue's no-op mailer, so no confirmation mail leaves a fork and
@@ -176,8 +178,7 @@ blank SMTP host selects GoTrue's no-op mailer, so no confirmation mail leaves a 
 `auth.GOTRUE_MAILER_AUTOCONFIRM=true` (forks only; production keeps the image value
 `false`), so a fork registration is confirmed at once and the deployed sign-in specs can sign
 it in. A repeat registration then answers GoTrue `user_already_exists`, which
-`/auth/register` maps to the same 202. `set-fork-auth-site` (after the
-`urls` step) writes the fork's landing URL as both `auth.GOTRUE_SITE_URL` and
+`/auth/register` maps to the same 202. `fork-vars-after-urls` (after URL discovery) writes the fork's landing URL as both `auth.GOTRUE_SITE_URL` and
 `gateway.AUTH_SITE_URL`; without the second, the fork's `/auth/register`, `/auth/resend-verification`, `/auth/request-password-reset`, `/auth/verify` and `/auth/reset-password`
 answer 503 `registration is not configured`. The emailed-link half, including the branded confirmation and recovery templates that `idp-mail` fetches from the
 gateway's `GET /emails/confirmation.html` and `GET /emails/recovery.html`, is proven only by the
@@ -214,7 +215,7 @@ neither purges nor seeds.
 
 **Shard seed (INFRA-04).** After the seed, `db.SeedShards` applies `db/seed.e2e-shards.sql`,
 only when `ResetWillRun` holds, so on PR forks only. It gives each dedicated topology shard
-(`import-wizard`, `invoice-surfaces`) a tenant pair that copies 1111 (firm) and 2222
+(`import-wizard`, `import-wizard-2`, `invoice-surfaces`) a tenant pair that copies 1111 (firm) and 2222
 (in-house), and the file lists what it copies. It writes nothing for the four
 `db/seed.dev.sql` tenants, and the purge allowlist (`db.DemoTenants`) does not include the
 shard tenants.
@@ -232,7 +233,7 @@ gate above: `ResetEnabled` requires `GATEWAY_DB_RESET=true` (a separate durable 
 variable from `GATEWAY_DB_BOOTSTRAP`, forked from `development` the same way
 `GATEWAY_MOCK_ISSUER` already is — see
 "Railway variables" above) AND `RAILWAY_ENVIRONMENT_NAME` — deliberately NOT
-`ENVIRONMENT`, which CI's `set-fork-environment` sets to the literal string `"development"`
+`ENVIRONMENT`, which CI's `fork-vars-after-urls` sets to the literal string `"development"`
 inside every PR fork (see "GitHub secrets" above and `db.ResetEnabled`'s doc comment) — matching
 a Railway PR-environment name, which excludes `"development"`/`"production"` unconditionally.
 This does not reverse M4-22-07 ("dropped reset-seed/E2E"): that removal was scoped to the

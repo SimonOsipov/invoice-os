@@ -77,11 +77,13 @@ func newAuthShim(t *testing.T, responses map[string]string, stores map[string]ma
 		}
 		writeFile(t, filepath.Join(dir, "store-"+svc+".json"), string(raw))
 	}
+	writeFile(t, filepath.Join(dir, "aliasfail.message.default"), passRailwayMessage)
 	// faults-<op>: one outcome per call; faultbody-<op> is what a 4xx prints under --fail-with-body.
 	// <op>[-<e>[-<s>]].seq: one body per line, before .json.
 	// A request with no --data is a GET probe: probe.body, and probe.code under -w.
 	shim := `#!/bin/sh
 dir='` + dir + `'
+trace='` + passTraceID + `'
 printf '%s\n' "$*" >> "$dir/argv.log"
 data="" hasdata="" hdr="" w="" withbody=""
 while [ $# -gt 0 ]; do
@@ -126,6 +128,36 @@ fi
 headers
 q=$(printf '%s' "$data" | jq -r '.query')
 case "$q" in
+  *"mutation varsWrite("*)
+    # One sK: variableCollectionUpsert(input: $iK) per service, applied in query order; touches wrote.
+    # upsert-<NAME>.fail / .json apply when NAME is in any input, as for a single write.
+    # aliasfail-<svcId> fails that alias. aliasfail.mode: abort (default; data null, that alias and
+    # the later ones not applied, the earlier ones applied) or null (that alias null, the rest applied).
+    for n in $(printf '%s' "$data" | jq -r '.variables | to_entries[] | select(.key | test("^i[0-9]+$")) | .value.variables | keys[]'); do
+      if [ -f "$dir/upsert-$n.fail" ]; then cat "$dir/upsert-$n.fail" >&2; exit 22; fi
+      if [ -f "$dir/upsert-$n.json" ]; then cat "$dir/upsert-$n.json"; exit 0; fi
+    done
+    : > "$dir/wrote"
+    mode=abort; [ -f "$dir/aliasfail.mode" ] && mode=$(cat "$dir/aliasfail.mode")
+    out='{}' failed=""
+    for pair in $(printf '%s' "$q" | jq -Rrs 'scan("(\\w+)\\s*:\\s*variableCollectionUpsert\\(input:\\s*\\$(\\w+)") | "\(.[0]):\(.[1])"'); do
+      k="${pair%%:*}"; v="${pair#*:}"
+      s=$(printf '%s' "$data" | jq -r --arg v "$v" '.variables[$v].serviceId')
+      if [ -f "$dir/aliasfail-$s" ] && [ -z "$failed" ]; then
+        failed=$k
+        out=$(printf '%s' "$out" | jq -c --arg k "$k" '. + {($k): null}')
+        [ "$mode" = abort ] && break
+        continue
+      fi
+      st="$dir/store-$s.json"; [ -f "$st" ] || echo '{}' > "$st"
+      printf '%s' "$data" | jq -c --arg v "$v" --slurpfile st "$st" '$st[0] + .variables[$v].variables' > "$st.tmp" && mv "$st.tmp" "$st"
+      out=$(printf '%s' "$out" | jq -c --arg k "$k" '. + {($k): true}')
+    done
+    if [ -z "$failed" ]; then printf '{"data":%s}' "$out"; exit 0; fi
+    msg="$dir/aliasfail.message"; [ -f "$msg" ] || msg="$dir/aliasfail.message.default"
+    [ "$mode" = abort ] && out=null
+    printf '%s' "$out" | jq -c --arg k "$failed" --rawfile m "$msg" \
+      '{data: ., errors: [{message: ($m | rtrimstr("\n")), path: [$k], extensions: {code: "INTERNAL_SERVER_ERROR", traceId: "'"$trace"'"}}]}' ;;
   *"variableUpsert("*)
     n=$(printf '%s' "$data" | jq -r '.variables.input.name')
     # upsert-<NAME>.fail fails the transport; upsert-<NAME>.json is the reply and nothing is stored.
@@ -147,6 +179,62 @@ case "$q" in
     echo '{"data":{"variableCollectionUpsert":true}}' ;;
   *isSealed*)
     cat "$dir/sealed.json" ;;
+  *"query discoverUrls("*)
+    # One aliased domains field per service: alias -> $var -> service id -> domains-<svc>[-<e>].json.
+    # errors-discoverUrls.json is added beside the data; a planted discoverUrls.json answers verbatim.
+    if [ -f "$dir/discoverUrls.json" ]; then cat "$dir/discoverUrls.json"; exit 0; fi
+    e=$(printf '%s' "$data" | jq -r '.variables.e // empty')
+    out='{}'
+    for pair in $(printf '%s' "$q" | jq -Rrs 'scan("(\\w+)\\s*:\\s*domains\\([^)]*serviceId:\\s*\\$(\\w+)") | "\(.[0]):\(.[1])"'); do
+      k="${pair%%:*}"; v="${pair#*:}"
+      s=$(printf '%s' "$data" | jq -r --arg v "$v" '.variables[$v]')
+      f="$dir/domains-$s-$e.json"; [ -f "$f" ] || f="$dir/domains-$s.json"
+      if [ ! -f "$f" ]; then echo '{"errors":[{"message":"no domains planted"}]}'; exit 0; fi
+      out=$(printf '%s' "$out" | jq -c --arg k "$k" --slurpfile v "$f" '. + {($k): $v[0]}')
+    done
+    resp=$(printf '{"data":%s}' "$out")
+    if [ -f "$dir/errors-discoverUrls.json" ]; then
+      resp=$(printf '%s' "$resp" | jq -c --slurpfile er "$dir/errors-discoverUrls.json" '. + {errors: $er[0]}')
+    fi
+    printf '%s' "$resp" ;;
+  *"query varsRead("*)
+    # One alias sK per $sK variable, served like a single read (rendered-, store-, read-<svc>.jq).
+    # A planted varsRead.json answers verbatim. jq gets file paths, never a value.
+    if [ -f "$dir/varsRead.json" ]; then cat "$dir/varsRead.json"; exit 0; fi
+    e=$(printf '%s' "$data" | jq -r '.variables.e // empty')
+    unr=""; printf '%s' "$q" | grep -q unrendered && unr=1
+    out='{}' bad=""
+    for k in $(printf '%s' "$data" | jq -r '.variables | keys_unsorted[] | select(test("^s[0-9]+$"))'); do
+      s=$(printf '%s' "$data" | jq -r --arg k "$k" '.variables[$k]')
+      if [ -z "$unr" ] && [ -f "$dir/rendered-$s-$e.json" ]; then
+        cat "$dir/rendered-$s-$e.json" > "$dir/alias.tmp"
+      else
+        st="$dir/store-$s.json"; flt="$dir/read-$s.jq"
+        if [ -n "$e" ] && [ -f "$dir/store-$s-$e.json" ]; then st="$dir/store-$s-$e.json"; flt="$dir/read-$s-$e.jq"; fi
+        [ -f "$st" ] || echo '{}' > "$st"
+        if [ -f "$flt" ]; then jq -c -f "$flt" "$st" > "$dir/alias.tmp"; else cat "$st" > "$dir/alias.tmp"; fi
+      fi
+      # reread-<svc>.jq bends only a read sent after a varsWrite.
+      phase=first; [ -f "$dir/wrote" ] && phase=after
+      if [ "$phase" = after ] && [ -f "$dir/reread-$s.jq" ]; then
+        jq -c -f "$dir/reread-$s.jq" "$dir/alias.tmp" > "$dir/alias.bent" && mv "$dir/alias.bent" "$dir/alias.tmp"
+      fi
+      # readbad-<first|after>-<svc>: error | missing | string | null, for a read before or after a varsWrite.
+      if [ -f "$dir/readbad-$phase-$s" ]; then
+        case "$(cat "$dir/readbad-$phase-$s")" in
+          missing) continue ;;
+          string) printf '"not-a-map"' > "$dir/alias.tmp" ;;
+          null) printf 'null' > "$dir/alias.tmp" ;;
+          error) printf 'null' > "$dir/alias.tmp"; bad="$bad $k" ;;
+        esac
+      fi
+      out=$(printf '%s' "$out" | jq -c --arg k "$k" --slurpfile v "$dir/alias.tmp" '. + {($k): $v[0]}')
+    done
+    if [ -n "$bad" ]; then
+      printf '%s' "$out" | jq -c --arg bad "$bad" '{data: ., errors: [($bad | split(" ")[] | select(length > 0)) as $k | {message: "Not Authorized", path: [$k], extensions: {code: "INTERNAL_SERVER_ERROR"}}]}'
+      exit 0
+    fi
+    printf '{"data":%s}' "$out" ;;
   *"variables(projectId"*)
     s=$(printf '%s' "$data" | jq -r '.variables | (.s // .serviceId // empty)')
     e=$(printf '%s' "$data" | jq -r '.variables.e // empty')
@@ -202,19 +290,17 @@ func (s authShim) run(t *testing.T, exports, sub string, args ...string) (stdout
 
 type authUpsert struct{ Service, Name, Value string }
 
-// upserts lists every variable the shim was asked to write, in call order;
-// a variableCollectionUpsert contributes one entry per name, sorted.
+// upserts lists every variable the shim was asked to write, in call order; a collection
+// write, single or batched (one entry per iK input), contributes one entry per name, sorted.
 func (s authShim) upserts(t *testing.T) []authUpsert {
 	t.Helper()
 	var out []authUpsert
 	for _, c := range s.calls(t) {
 		if strings.Contains(c.Query, "variableCollectionUpsert(") {
-			in, _ := c.Variables["input"].(map[string]any)
-			svc, _ := in["serviceId"].(string)
-			vars, _ := in["variables"].(map[string]any)
-			for _, name := range slices.Sorted(maps.Keys(vars)) {
-				value, _ := vars[name].(string)
-				out = append(out, authUpsert{svc, name, value})
+			for _, w := range collectionWritesIn([]railwayCall{c}) {
+				for _, name := range slices.Sorted(maps.Keys(w.Vars)) {
+					out = append(out, authUpsert{w.Service, name, w.Vars[name]})
+				}
 			}
 			continue
 		}
@@ -241,11 +327,11 @@ func (s authShim) mutations(t *testing.T) []string {
 	return ops
 }
 
-// readAfter reports whether svc's variables were read after call index i.
+// readAfter reports whether svc's variables were read after call index i, singly or in a batch.
 func (s authShim) readAfter(t *testing.T, svc string, i int) bool {
 	t.Helper()
 	for _, c := range s.calls(t)[i+1:] {
-		if strings.Contains(c.Query, "variables(projectId") && (c.Variables["s"] == svc || c.Variables["serviceId"] == svc) {
+		if isVariableRead(c) && slices.Contains(readServices(c), svc) {
 			return true
 		}
 	}
@@ -403,14 +489,29 @@ func runForkAuthOnEmptyFork(t *testing.T) authShim {
 	return s
 }
 
-// Both fork commands refuse before any write.
+// Every fork writer refuses before any write. mk builds the row's shim; envList "" keeps its default.
 func TestSetForkAuth_RefusesPersistentAndNonEphemeral(t *testing.T) {
+	forkRow := func(t *testing.T, envList string) authShim {
+		resp := forkAuthRailway()
+		if envList != "" {
+			resp["envList"] = envList
+		}
+		return newAuthShim(t, resp, forkAuthStores(freshJWK(t)))
+	}
 	for _, c := range []struct {
 		sub  string
 		args []string
+		mk   func(t *testing.T, envList string) authShim
 	}{
-		{"set-fork-auth", nil},
-		{"set-fork-auth-site", []string{forkSiteURL}},
+		{"set-fork-auth", nil, forkRow},
+		{"set-fork-auth-site", []string{forkSiteURL}, forkRow},
+		{passSub, nil, func(t *testing.T, envList string) authShim {
+			resp := map[string]string{}
+			if envList != "" {
+				resp["envList"] = envList
+			}
+			return newPassShim(t, nil, resp)
+		}},
 	} {
 		run := func(s authShim, env string) (string, int) {
 			stdout, stderr, code := s.run(t, forkAuthExports(), c.sub, append([]string{env}, c.args...)...)
@@ -418,22 +519,22 @@ func TestSetForkAuth_RefusesPersistentAndNonEphemeral(t *testing.T) {
 		}
 		t.Run(c.sub, func(t *testing.T) {
 			t.Run("control: a pr fork is written", func(t *testing.T) {
-				s := newForkAuthShim(t, freshJWK(t))
+				s := c.mk(t, "")
 				if out, code := run(s, authForkEnvID); code != 0 {
-					t.Fatalf("control: exit %d, want 0; output = %q", code, out)
+					t.Fatalf("control: exit %d, want 0; output = %q", code, clip(out))
 				}
 				if len(s.mutations(t)) == 0 {
 					t.Fatal("control: the fork run wrote nothing, so a zero-write refusal proves nothing")
 				}
 			})
 			t.Run("the persistent id", func(t *testing.T) {
-				s := newForkAuthShim(t, freshJWK(t))
+				s := c.mk(t, "")
 				out, code := run(s, persistentEnvironmentID)
 				if code != 1 {
-					t.Errorf("exit %d, want 1; output = %q", code, out)
+					t.Errorf("exit %d, want 1; output = %q", code, clip(out))
 				}
 				if !authPersisted.MatchString(errorLines(out)) {
-					t.Errorf("no ::error:: line refuses the persistent environment (%s) by id; output = %q", persistentEnvironmentID, out)
+					t.Errorf("no ::error:: line refuses the persistent environment (%s) by id; output = %q", persistentEnvironmentID, clip(out))
 				}
 				if calls := s.calls(t); len(calls) != 0 {
 					t.Errorf("the persistent-id refusal called Railway %v; it must refuse before any network call", operations(calls))
@@ -441,21 +542,35 @@ func TestSetForkAuth_RefusesPersistentAndNonEphemeral(t *testing.T) {
 				s.requireLogs(t)
 			})
 			t.Run("a non-ephemeral id", func(t *testing.T) {
-				resp := forkAuthRailway()
-				resp["envList"] = authEnvList(false)
-				s := newAuthShim(t, resp, forkAuthStores(freshJWK(t)))
+				s := c.mk(t, authEnvList(false))
 				out, code := run(s, authStaleEnvID)
 				if code != 1 {
-					t.Errorf("exit %d, want 1; output = %q", code, out)
+					t.Errorf("exit %d, want 1; output = %q", code, clip(out))
 				}
 				if !strings.Contains(errorLines(out), "is NOT ephemeral") {
-					t.Errorf("no ::error:: line says the environment is NOT ephemeral; output = %q", out)
+					t.Errorf("no ::error:: line says the environment is NOT ephemeral; output = %q", clip(out))
 				}
 				if m := s.mutations(t); len(m) != 0 {
 					t.Errorf("a non-ephemeral environment received mutations %v", m)
 				}
-				if ops := operations(s.calls(t)); !slices.Contains(ops, "envList") {
-					t.Errorf("Railway calls = %v; the ephemeral check never listed environments", ops)
+				if ops := operations(s.calls(t)); !slices.Equal(ops, []string{"envList"}) {
+					t.Errorf("Railway calls = %v, want only envList: the refusal precedes service resolution", ops)
+				}
+			})
+			t.Run("an id the project does not own", func(t *testing.T) {
+				s := c.mk(t, "")
+				out, code := run(s, "env-not-in-this-project")
+				if code != 1 {
+					t.Errorf("exit %d, want 1; output = %q", code, clip(out))
+				}
+				if !strings.Contains(errorLines(out), "No environment with id env-not-in-this-project") {
+					t.Errorf("no ::error:: line says the id is not in the project; output = %q", clip(out))
+				}
+				if m := s.mutations(t); len(m) != 0 {
+					t.Errorf("an unknown environment received mutations %v", m)
+				}
+				if ops := operations(s.calls(t)); !slices.Equal(ops, []string{"envList"}) {
+					t.Errorf("Railway calls = %v, want only envList", ops)
 				}
 			})
 		})

@@ -49,8 +49,8 @@ async function load(): Promise<{ realm: Realm; targets: Targets }> {
   return { realm: await import('./realAccounts'), targets: await import('./topology/targets') }
 }
 
-// The six tenants the topology suite signs in to: the two seeded ones and each shard's pair.
-function sixTenantIds(targets: Targets): string[] {
+// The tenants the topology suite signs in to: the two seeded ones and each shard's pair.
+function topologyTenantIds(targets: Targets): string[] {
   const shards = UNITS.flatMap((u) => (u.tenants ? [u.tenants.firm, u.tenants.inHouse] : []))
   return [targets.TENANTS.a.id, targets.TENANTS.b.id, ...shards]
 }
@@ -79,19 +79,19 @@ describe('e2eMember', () => {
 
   it('e2eMember is distinct per tenant', async () => {
     const { realm, targets } = await load()
-    const ids = sixTenantIds(targets)
-    expect(ids).toHaveLength(6)
-    expect(new Set(ids).size).toBe(6)
+    const ids = topologyTenantIds(targets)
+    expect(ids).toHaveLength(8)
+    expect(new Set(ids).size).toBe(8)
 
     const members = ids.map((id) => realm.e2eMember(id))
 
-    expect(new Set(members.map((m) => m.email)).size).toBe(6)
-    expect(new Set(members.map((m) => m.password)).size).toBe(6)
+    expect(new Set(members.map((m) => m.email)).size).toBe(8)
+    expect(new Set(members.map((m) => m.password)).size).toBe(8)
   })
 
   it('e2eMember password floor', async () => {
     const { realm, targets } = await load()
-    const ids = sixTenantIds(targets)
+    const ids = topologyTenantIds(targets)
     expect(ids.length).toBeGreaterThan(0)
 
     for (const id of ids) expect(realm.e2eMember(id).password.length, id).toBeGreaterThanOrEqual(16)
@@ -171,11 +171,12 @@ describe('e2eMember', () => {
     expect(new Set(passwords).size).toBe(3)
     for (const p of passwords) expect(p.length).toBeGreaterThanOrEqual(16)
 
-    const ids = sixTenantIds(targets)
+    const ids = topologyTenantIds(targets)
     const all = ids.flatMap((t) => realm.E2E_MEMBER_ROLES.map((r) => realm.e2eMember(t, r)))
-    expect(all).toHaveLength(18)
-    expect(new Set(all.map((m) => m.email)).size).toBe(18)
-    expect(new Set(all.map((m) => m.password)).size).toBe(18)
+    const n = ids.length * realm.E2E_MEMBER_ROLES.length
+    expect(all).toHaveLength(n)
+    expect(new Set(all.map((m) => m.email)).size).toBe(n)
+    expect(new Set(all.map((m) => m.password)).size).toBe(n)
   })
 })
 

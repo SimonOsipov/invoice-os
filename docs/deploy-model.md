@@ -89,16 +89,18 @@ across PRs the way `development`'s own four URLs (still constant, still hardcode
 
 ```
 PR opened ──> dev-env.yml:
+                deploy-slot: waits until fewer than 2 other runs hold a deploy slot
+                             (scripts/ci/deploy-slot.sh; `Deploy slot` below)
                 prepare-env: derive `pr-<N>` (prenv.Name) ──> environmentCreate, forked
                              from `development` (skipInitialDeploys, create-or-reuse)
-                             ──> write a fresh gateway token (set-fork-gateway-token,
-                             right after set-fork-auth) ──> blank WAL_ARCHIVE_* on
+                             ──> pass 1: auth config, secrets and a fresh gateway token
+                             (fork-vars-before-urls) ──> blank WAL_ARCHIVE_* on
                              Postgres (a kept BUCKET must differ from production's) ──>
                              deploy Postgres + probe ──> assert Watch Paths empty
                              (M3-16 invariant, now runtime-asserted) ──> discover the
-                             5 URLs ──> blank Sentry variables (set-sentry-off)
-                             ──> point the fork gateway at reconciliation
-                             (set-fork-reconciliation-url)
+                             5 URLs in one request (discover-urls) ──> pass 2: URLs, auth
+                             site, AI/Jev fakes, Sentry blanks, reconciliation URL and
+                             ENVIRONMENT (fork-vars-after-urls)
                 ci-watch: polls the `CI` check alongside prepare-env; e2e waits for green CI
                 gateway ──> gate on /healthz (schema migrated + seeded at boot,
                 M4-21-04; the demo-tenant purge runs in the same sequence and is
@@ -115,9 +117,10 @@ PR opened ──> dev-env.yml:
                     and an `actions/setup-go` step; reads auth's variables unrendered
                     + "Gate on the account-mail logo" (push only):
                     `go run ./tools/prenv mail-logo-check`
+                ──> `deploy-slot-release` job: a marker; its end frees the slot if the chain end was not seen earlier
                 ──> verify, `e2e` job: smoke (landing + both consoles) + api
                 ──> verify, `topology` job: one parallel leg per unit (serial-lane,
-                    import-wizard, invoice-surfaces; app login, cross-tenant
+                    import-wizard, import-wizard-2, invoice-surfaces; app login, cross-tenant
                     isolation)
               ──> PR stays open: environment stays up
 PR closed  ──> dev-env-teardown.yml (M4-23-05): prenv name ──> look the name up among
@@ -125,6 +128,8 @@ PR closed  ──> dev-env-teardown.yml (M4-23-05): prenv name ──> look the 
                Best-effort; the daily sweeper (M4-23-07) is the authority.
 
 merge to main ──> dev-env.yml (push): await green CI on the merge commit
+                  ──> `deploy-slot` job passes at once (a push run never waits; it counts
+                      as a holder until its deploy chain ends)
                   ──> targets the PERSISTENT environment BY ID (never a fork; the
                       fork-reconciliation steps are all `== 'pull_request'`)
                   ──> gateway ──> /healthz gate (demo_purge == "false", mock_issuer ==
@@ -133,6 +138,7 @@ merge to main ──> dev-env.yml (push): await green CI on the merge commit
                       4 SPAs ──> fleet gate + Sentry state check (every Go service and
                       docling reports sentry "on" or "off", never absent; notifications
                       reports `contacts` "real" or "off", never "fake")
+                  ──> `deploy-slot-release` job (backstop; the slot frees when the chain ends)
                   ──> no E2E (ephemeral environments only)
 
 workflow_dispatch ──> targets the persistent environment directly (never torn down),
@@ -151,7 +157,7 @@ every PR queued behind `dev-env.yml`'s single shared concurrency lock, serializi
 deploys. M4-21 designed the constraint away and M4-23 delivered it: each PR forks its own
 environment, so `dev-env.yml`'s concurrency group is now keyed **per-PR**
 (`dev-preview-${{ github.event.pull_request.number || github.ref }}`) — two different PRs'
-groups never collide, so their deploys run **fully in parallel**. A `workflow_dispatch` or
+groups never collide. A `workflow_dispatch` or
 `push` run has no PR number and falls back to `github.ref` — `refs/heads/main` for both —
 so **every run targeting the persistent environment lands in one shared group** and
 serializes. That is deliberate: concurrent runs would otherwise `railway up` the same
@@ -415,14 +421,14 @@ contradict what the docs imply.
 
 | Thing | Carries into a fork? | Consequence for `prepare-env` |
 |---|---|---|
-| Service instances | Yes — all of them, immediately, `watchPatterns: []` on every one | No settle race. The M3-16 invariant holds in a fork. Prepare reads the service list once; `set-fork-auth` already requires `gateway` and `auth` from one read. |
+| Service instances | Yes — all of them, immediately, `watchPatterns: []` on every one | No settle race. The M3-16 invariant holds in a fork. Each variable pass reads the service list once and requires `gateway` and `auth` from that read. |
 | Public domains | Railway-**generated** ones only, auto-renamed `<svc>-pr-<N>.up.railway.app`; a custom domain never forks | Once the source environment holds only custom domains, a fork starts with none, so domain reconcile **creates** one per service: a query, a `serviceDomainCreate`, and a confirming re-query. Not a no-op. |
 | `targetPort` on those domains | Only the **gateway's** generated domain is `null`; the four SPA generated domains and all five custom domains report `8080` (re-measured 2026-08-02, all five services) | CI **reads** it off whichever domain it selected in the source environment — never a literal, so the gateway now gets a real `8080` from its custom domain. A `null` is still valid (Railway magic-port detection) and is replicated by **omitting** the field, not by substituting a port. |
 | Postgres deployment | **No** — `latestDeployment == NONE` | Real gap: nothing in this repo ever deployed Postgres (the `railway up` matrices are gateway + 8 contexts + docling + auth + 4 SPAs; Postgres is excluded above). `prepare-env` now deploys it explicitly via `serviceInstanceDeployV2`, then waits. |
 | Postgres volume | **No** — `volumeInstances == []`, while `development` has 5000MB | **CI must CREATE it.** Without a volume Postgres deploys to `SUCCESS` but **never accepts a connection** (corrected 2026-07-19 — see below). `prepare-env` creates it with `volumeCreate`, copying the `mountPath` and `region` from `development`, confirms by re-query, and redeploys Postgres if a deployment already existed. The database is still **ephemeral by design** and born empty — the gateway bootstraps, migrates, purges the demo tenants and seeds at boot. |
 | TCP proxy + `DATABASE_PUBLIC_URL` | Yes, with its own distinct port; `DATABASE_URL` resolves too | Since M4-22-08, `prepare-env` no longer probes or observes the proxy at all. `health-gate`'s `/healthz` 200 is now the sole Postgres liveness proof (`docs/migrations.md` §2) — strictly stronger. The proxy resource itself is scheduled for deletion via Escalation E2; until then it may still exist, unused. |
-| Sealed variables | **No** — they never fork | `prepare-env` fails loudly if `development` holds any, since they would otherwise go silently missing in every PR environment. Only exceptions: `GOTRUE_JWT_KEYS`, `GOTRUE_JWT_SECRET` and `GOTRUE_SMTP_PASS` on `auth`, which `set-fork-auth` writes per fork, and `RESEND_SENDING_KEY` on `tenancy`, which a fork lacks and runs without. |
-| Unsealed variables | Yes — verbatim | `GATEWAY_TOKEN` is the exception: `set-fork-gateway-token` overwrites it per fork on the gateway and the seven services (`TestSetForkGatewayToken_WritesOneFreshValueToTheEight`). |
+| Sealed variables | **No** — they never fork | `prepare-env` fails loudly if `development` holds any, since they would otherwise go silently missing in every PR environment. Only exceptions: `GOTRUE_JWT_KEYS`, `GOTRUE_JWT_SECRET` and `GOTRUE_SMTP_PASS` on `auth`, which `fork-vars-before-urls` writes per fork, and `RESEND_SENDING_KEY` on `tenancy`, which a fork lacks and runs without. |
+| Unsealed variables | Yes — verbatim | `GATEWAY_TOKEN` is the exception: `fork-vars-before-urls` overwrites it per fork on the gateway and the seven services (`TestSetForkGatewayToken_WritesOneFreshValueToTheEight`). |
 | Leftover PR environments | None existed before the probe | Independent confirmation that Railway's PR Environments feature never created any here. |
 
 ### Correction, 2026-07-19 — "no volume is fine" was false
@@ -468,7 +474,7 @@ fatal.
 ### `ENVIRONMENT` in a fork is set by CI
 
 `ENVIRONMENT` forks verbatim, and production's gateway reads `production`. On `pull_request`,
-`prepare-env` runs `railway-env.sh set-fork-environment`, which sets the fork **gateway's**
+`prepare-env`'s `fork-vars-after-urls` pass sets the fork **gateway's**
 `ENVIRONMENT` to the constant `development` and re-reads it. The other services keep the
 inherited value. `RAILWAY_ENVIRONMENT_NAME` is `pr-<N>`.
 
@@ -482,16 +488,34 @@ renaming the fork convention cannot change whether a fork's database bootstraps.
 
 A slow or briefly failing Railway API must not fail the gate by itself. Every GraphQL call in
 `scripts/ci/railway-env.sh` goes through one transport, `graphql_try`; `dev-env.yml` reaches it
-through `railway-env.sh query`. The rules below are the shipped behaviour
+through `railway-env.sh` subcommands, `query` included. The rules below are the shipped behaviour
 (`tools/prenv/railway_env_retry_test.go`).
 
-**What retries.** A curl timeout (`--max-time 30`, exit 28) and an HTTP 5xx. Up to 3 attempts,
+**What retries.** A curl timeout (`--max-time 30`, exit 28; 90 for a batched request) and an HTTP 5xx. Up to 3 attempts,
 waiting 5 s then 10 s. A call that needed a retry prints a `::warning::`; an exhausted budget
 prints one `::error::`.
 
-**What fails fast, with no retry.** A GraphQL `errors` array, any 4xx, HTTP 429 (named as
-rate-limiting), and connection resets or any other curl failure. A mutation that is not
-idempotent, and every poll tick, is sent once (`once`).
+**What fails fast, with no retry.** A GraphQL `errors` array, any 4xx but 429, and
+connection resets or any other curl failure. A mutation that is not
+idempotent, and every poll tick, gets one transient attempt (`once`).
+
+**429 waits.** Any call, a poll tick included, waits the time Railway names in `Retry-After`
+(else `X-RateLimit-Reset`, ISO-8601, reset minus now plus 1 s) and sends once more, at least 1 s, at most 600 s per call and 600 s per job
+in total (`$RUNNER_TEMP/railway-api-429-waited`). The four jobs with a set timeout (`prepare-env`, `teardown`, `sweep`, `pr-environments-off`) have a `timeout-minutes` 10 above their work budget for those waits; the other jobs that run `railway-env.sh` use GitHub's 360-minute default (`TestWorkflowTimeoutsCoverTheRateLimitWaits`). A `::warning::` names the wait. A longer wait, a
+second 429, no usable wait or a full job total fails and names the wait, batched calls included
+(`tools/prenv/railway_env_retry_test.go`; poll ticks: `tools/prenv/railway_env_wait_deployment_test.go`;
+batched calls: `tools/prenv/railway_env_pass_test.go`).
+
+**Batched variable passes.** `fork-vars-before-urls` (auth config, secrets, `GATEWAY_TOKEN`) and
+`fork-vars-after-urls` (URLs, auth site, AI/Jev fakes, Sentry blanks, reconciliation URL,
+`ENVIRONMENT`) each run one env-list read, one service-list read, one batched read of the
+unrendered values; when any name differs, one batched write of only those names (`skipDeploys`)
+and one batched re-read, otherwise neither; every verdict reads the last read. A failed alias names its service and variable names,
+never a value or Railway's message. `discover-urls` reads the 5 domains in one request and
+`assert-db-dsns` reads an environment's variables in one request, after one service-list read
+(`tools/prenv/railway_env_pass_test.go`, `TestForkVarsAfterURLs_SettledForkMakesThreeCalls`;
+`tools/prenv/railway_env_dsn_test.go`, `TestAssertDBDSNs_ReadsAnEnvironmentInTwoCalls`). The per-variable subcommands (`set-fork-auth`,
+`set-ai-fake`, `set-sentry-off` and the rest) stay as entry points: each runs one pass for its own variables.
 
 **Poll budgets.**
 
@@ -501,6 +525,7 @@ idempotent, and every poll tick, is sent once (`once`).
 | `fleet-gate` fleet poll | 600 s |
 | SPA `/health` + `/build.txt` (`wait-spa-builds.sh`) | 600 s (120 x 5 s) |
 | `wait-deployment` | 60 ticks x 10 s = 600 s; 3 failed ticks in all end it |
+| 429 waits (any call, poll ticks included) | 600 s per job in total |
 
 **`railway up` upload re-run.** `scripts/ci/railway-up-ci.sh` re-runs an upload once, after 10 s,
 when the CLI failed on a transport error before Railway printed a `Build Logs:` URL. It never
@@ -548,6 +573,57 @@ domain; domain repair stays in `e2e`. On a PR the same script runs inside `e2e`.
 (`if: always()`), prints one line: `Railway API: N calls, M attempts, K retried; by command:
 ...; ratelimit-policy=... x-ratelimit-limit=... x-ratelimit-remaining=...`. Each rate-limit
 value reads `n/a` when Railway sent no such header. The step never fails the job.
+
+## Deploy slot (INFRA-08)
+
+At most **2** PR runs of `dev-env.yml` are in Prepare-and-deploy at the same time. The job `Deploy slot`
+(`scripts/ci/deploy-slot.sh`) runs after `changes` and before `prepare-env`; `prepare-env` needs it to
+succeed. The job holds `actions: read` and `contents: read` only, and never calls Railway.
+`tools/prenv/deploy_slot_test.go` covers the decision; `tools/prenv/deploy_slot_workflow_test.go` covers
+the wiring. A draft PR, or a run whose `changes` says no E2E-relevant files, skips the job and never holds a slot.
+
+**What holds a slot.** A run holds one from the moment its `Deploy slot` job passes until its deploy chain
+ends: the `Fleet /healthz gate` is listed and `prepare-env`, `health-gate` and every `Deploy <x> → <env>`
+job (gateway and matrix legs) are completed, with any conclusion. A failed or cancelled chain frees the
+slot at once, because GitHub lists the skipped downstream jobs as completed. A completed
+`Release deploy slot` job also frees it. `e2e` and `topology` hold no slot. A chain that never ends
+stops counting 60 min after its slot passed (`MAX_HOLD_SECONDS=3600`).
+
+**Order.** A run counts older waiters (lower run id, `Deploy slot` job not completed) against itself, and
+never a newer one, so no run waits forever behind a newer run. Gap: a run whose `changes` job still runs
+(about 6-15 s) has no `Deploy slot` job yet and is invisible, so a newer run can pass first in that window.
+Every holder counts, newer or older.
+
+**Push and dispatch runs.** They never wait: the script prints `a <event> run takes a slot without waiting`
+and exits 0 with no API call. They count as holders until their release job completes.
+
+**The bound.** Polls come every 60 s. The wait ends at 2400 s of wall clock: at most 40 polls, then exit 1 with
+`::error::Deploy slot: no free slot after <k> polls (<s> s); held by ...`. The job has `timeout-minutes: 50`,
+which stays inside `hm ci wait --gate`'s 2 h. A timeout skips `prepare-env` and `e2e`, so `E2E gate` fails.
+Re-run the whole run (`gh run rerun <run id>`), with no code change.
+
+**Reading the wait lines.**
+
+```
+Deploy slot: poll 3: 2 of 2 held by run 101 (PR #11), run 102 (PR #12); 1 older waiting: run 99 (PR #9); expired: run 80 (PR #4)
+Deploy slot: taken after 180 s.
+```
+
+`<H> of 2 held` counts holders. `<W> older waiting` lists older runs still in their own wait; each takes a
+slot ahead of this run. `expired: run <id>` is a holder past 60 min, not counted. A run without a PR shows as
+`<event> <branch>`, for example `push main`. `could not read the runs: <gh error>` or `could not read run <id>:
+...` means the poll has no verdict; the run waits and never passes on a read it could not make. At the deadline,
+`unreadable: run <id>` names a run whose last read failed.
+
+**GITHUB_TOKEN budget.** The token allows 1,000 API requests per hour per repository. One poll makes one
+runs-list call plus one jobs call per candidate run. A run found settled (chain ended, release completed, slot not
+successful, or no slot job 60 s after `changes` ended) is not read again in that wait. Runs started more than
+3 h ago are ignored (`MAX_AGE_SECONDS=10800`). Polling every 60 s limits one waiter to 60 runs-list calls an hour,
+plus the jobs calls for runs not yet settled.
+
+**Which runs count.** Only runs whose workflow file carries the `Deploy slot` job. A PR branch cut before
+`epic/infra` landed on `main` runs the old workflow and is not counted (D-11). Other epics' PRs join the cap
+when their branch merges `main`.
 
 ## Related
 

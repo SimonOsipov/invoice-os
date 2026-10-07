@@ -144,20 +144,20 @@ func (s railwayShim) run(t *testing.T, exports string, args ...string) (out stri
 	return stdout + stderr, code
 }
 
+// forkVariables is a varsRead answer for the gateway alone: alias s0 holds its variables.
 func forkVariables(environment string) string {
-	return `{"data":{"variables":{` + forkEnvSecretSibling + `,"RAILWAY_ENVIRONMENT_NAME":"pr-900"` + environment + `}}}`
+	return `{"data":{"s0":{` + forkEnvSecretSibling + `,"RAILWAY_ENVIRONMENT_NAME":"pr-900"` + environment + `}}}`
 }
 
 func forkRailway() map[string]string {
-	vars := forkVariables(`,"ENVIRONMENT":"development"`)
 	return map[string]string{
 		"envList": `{"data":{"environments":{"edges":[` +
 			`{"node":{"id":"` + persistentEnvironmentID + `","name":"production","isEphemeral":false}},` +
 			`{"node":{"id":"` + forkEnvID + `","name":"pr-900","isEphemeral":true}},` +
 			`{"node":{"id":"env-other","name":"pr-901","isEphemeral":true}}]}}}`,
-		"settle":              forkSettle(`{"node":{"serviceId":"` + forkGatewayID + `","serviceName":"gateway"}}`),
-		"varCollectionUpsert": `{"data":{"variableCollectionUpsert":true}}`,
-		"authVars":            vars,
+		"settle":    forkSettle(`{"node":{"serviceId":"` + forkGatewayID + `","serviceName":"gateway"}}`),
+		"varsWrite": `{"data":{"s0":true}}`,
+		"varsRead":  forkVariables(`,"ENVIRONMENT":"development"`),
 	}
 }
 
@@ -173,23 +173,24 @@ var upsertEcho = regexp.MustCompile(`(?m)^[ \t]+\S+\.\S+ = .*$`)
 
 func TestSetForkEnvironmentAgainstAScriptedRailway(t *testing.T) {
 	// The shim answers every read alike, so a value that is not intended is written and re-read.
-	full := []string{"envList", "settle", "authVars", "varCollectionUpsert", "authVars"}
+	full := []string{"envList", "settle", "varsRead", "varsWrite", "varsRead"}
 	cases := []struct {
 		name     string
 		override map[string]string
 		code     int
 		ops      []string
 		says     string
+		lacks    string // Railway's message: no failure line prints it
 	}{
-		{"already development", nil, 0, []string{"envList", "settle", "authVars"}, "gateway ENVIRONMENT=development confirmed in environment " + forkEnvID},
-		{"re-read empty", map[string]string{"authVars": forkVariables(`,"ENVIRONMENT":""`)}, 1, full, "is empty"},
-		{"re-read absent", map[string]string{"authVars": forkVariables("")}, 1, full, "is absent"},
-		{"re-read production", map[string]string{"authVars": forkVariables(`,"ENVIRONMENT":"production"`)}, 1, full, "reads 'production'"},
-		{"read GraphQL error", map[string]string{"authVars": `{"errors":[{"message":"Not Authorized"}],"data":{"variables":{` + forkEnvSecretSibling + `}}}`}, 1, []string{"envList", "settle", "authVars"}, "Not Authorized"},
-		{"no gateway in the fork", map[string]string{"settle": forkSettle()}, 1, []string{"envList", "settle"}, "is named 'gateway'"},
-		{"two gateways", map[string]string{"settle": forkSettle(`{"node":{"serviceId":"svc-gw-a","serviceName":"gateway"}}`, `{"node":{"serviceId":"svc-gw-b","serviceName":"gateway"}}`)}, 1, []string{"envList", "settle"}, "are named 'gateway'"},
-		{"the target is not ephemeral", map[string]string{"envList": `{"data":{"environments":{"edges":[{"node":{"id":"` + forkEnvID + `","name":"pr-900","isEphemeral":false}}]}}}`}, 1, []string{"envList"}, "is NOT ephemeral"},
-		{"the project does not own the id", map[string]string{"envList": `{"data":{"environments":{"edges":[{"node":{"id":"env-other","name":"pr-901","isEphemeral":true}}]}}}`}, 1, []string{"envList"}, "No environment with id " + forkEnvID},
+		{"already development", nil, 0, []string{"envList", "settle", "varsRead"}, "gateway ENVIRONMENT=development confirmed in environment " + forkEnvID, ""},
+		{"re-read empty", map[string]string{"varsRead": forkVariables(`,"ENVIRONMENT":""`)}, 1, full, "is empty", ""},
+		{"re-read absent", map[string]string{"varsRead": forkVariables("")}, 1, full, "is absent", ""},
+		{"re-read production", map[string]string{"varsRead": forkVariables(`,"ENVIRONMENT":"production"`)}, 1, full, "reads 'production'", ""},
+		{"read GraphQL error", map[string]string{"varsRead": `{"errors":[{"message":"Not Authorized","path":["s0"]}],"data":{"s0":null}}`}, 1, []string{"envList", "settle", "varsRead"}, "gateway", "Not Authorized"},
+		{"no gateway in the fork", map[string]string{"settle": forkSettle()}, 1, []string{"envList", "settle"}, "is named 'gateway'", ""},
+		{"two gateways", map[string]string{"settle": forkSettle(`{"node":{"serviceId":"svc-gw-a","serviceName":"gateway"}}`, `{"node":{"serviceId":"svc-gw-b","serviceName":"gateway"}}`)}, 1, []string{"envList", "settle"}, "are named 'gateway'", ""},
+		{"the target is not ephemeral", map[string]string{"envList": `{"data":{"environments":{"edges":[{"node":{"id":"` + forkEnvID + `","name":"pr-900","isEphemeral":false}}]}}}`}, 1, []string{"envList"}, "is NOT ephemeral", ""},
+		{"the project does not own the id", map[string]string{"envList": `{"data":{"environments":{"edges":[{"node":{"id":"env-other","name":"pr-901","isEphemeral":true}}]}}}`}, 1, []string{"envList"}, "No environment with id " + forkEnvID, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -210,8 +211,11 @@ func TestSetForkEnvironmentAgainstAScriptedRailway(t *testing.T) {
 			if !strings.Contains(out, c.says) {
 				t.Errorf("output does not carry %q; output = %q", c.says, out)
 			}
-			if c.code != 0 && strings.Contains(out, "confirmed") {
-				t.Errorf("a failed run printed the confirmation line; output = %q", out)
+			if c.lacks != "" && strings.Contains(out, c.lacks) {
+				t.Errorf("output carries Railway's message %q; output = %q", c.lacks, out)
+			}
+			if got := confirmedLines(out); c.code != 0 && len(got) != 0 {
+				t.Errorf("a failed run printed confirmation lines %q", got)
 			}
 			if got := operations(calls); !slices.Equal(got, c.ops) {
 				t.Errorf("Railway calls = %v, want %v", got, c.ops)
@@ -223,7 +227,7 @@ func TestSetForkEnvironmentAgainstAScriptedRailway(t *testing.T) {
 			}
 
 			wantEcho := []string{}
-			if slices.Contains(c.ops, "varCollectionUpsert") {
+			if slices.Contains(c.ops, "varsWrite") {
 				wantEcho = []string{"  gateway.ENVIRONMENT = development"}
 			}
 			if got := upsertEcho.FindAllString(out, -1); !slices.Equal(got, wantEcho) {
@@ -236,17 +240,17 @@ func TestSetForkEnvironmentAgainstAScriptedRailway(t *testing.T) {
 					if want := map[string]any{"e": forkEnvID}; !reflect.DeepEqual(call.Variables, want) {
 						t.Errorf("settle variables = %v, want %v", call.Variables, want)
 					}
-				case "varCollectionUpsert":
-					want := map[string]any{"input": map[string]any{
+				case "varsWrite":
+					want := map[string]any{"i0": map[string]any{
 						"projectId": forkProjectID, "environmentId": forkEnvID, "serviceId": forkGatewayID,
 						"variables": map[string]any{"ENVIRONMENT": "development"}, "skipDeploys": true,
 					}}
 					if !reflect.DeepEqual(call.Variables, want) {
-						t.Errorf("upsert variables = %v, want %v", call.Variables, want)
+						t.Errorf("write variables = %v, want %v", call.Variables, want)
 					}
-				case "authVars":
-					if want := map[string]any{"p": forkProjectID, "e": forkEnvID, "s": forkGatewayID}; !reflect.DeepEqual(call.Variables, want) {
-						t.Errorf("re-read variables = %v, want %v", call.Variables, want)
+				case "varsRead":
+					if want := map[string]any{"p": forkProjectID, "e": forkEnvID, "s0": forkGatewayID}; !reflect.DeepEqual(call.Variables, want) {
+						t.Errorf("read variables = %v, want %v", call.Variables, want)
 					}
 				}
 			}

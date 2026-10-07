@@ -181,6 +181,28 @@ func TestRailwayEnvUsageListsSayProductionIsWrittenByHand(t *testing.T) {
 	if !regexp.MustCompile("`?" + productionGatewayTokenNeedle + "`? is run " + regexp.QuoteMeta(productionUsageNote)).MatchString(flow) {
 		t.Errorf("the header never says %s is run %s", productionGatewayTokenNeedle, productionUsageNote)
 	}
+
+	if !regexp.MustCompile(`[<|]discover-urls <environment-id>[|>]`).MatchString(generic) {
+		t.Errorf("the dispatcher's usage does not name discover-urls <environment-id>; output = %q", generic)
+	}
+	if !regexp.MustCompile(`discover-urls <environment-id>[|>]`).MatchString(list) {
+		t.Errorf("the header usage list does not name discover-urls <environment-id>:\n%s", list)
+	}
+
+	if !regexp.MustCompile(`[<|]fork-vars-before-urls <environment-id>[|>]`).MatchString(generic) {
+		t.Errorf("the dispatcher's usage does not name fork-vars-before-urls <environment-id>; output = %q", generic)
+	}
+	if !regexp.MustCompile(`fork-vars-before-urls <environment-id>[|>]`).MatchString(list) {
+		t.Errorf("the header usage list does not name fork-vars-before-urls <environment-id>:\n%s", list)
+	}
+
+	const afterUsage = `fork-vars-after-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url>`
+	if !regexp.MustCompile(`[<|]` + afterUsage + `[|>]`).MatchString(generic) {
+		t.Errorf("the dispatcher's usage does not name %s; output = %q", afterUsage, generic)
+	}
+	if !strings.Contains(strings.Join(strings.Fields(strings.ReplaceAll(list, "#", " ")), " "), afterUsage+"|") {
+		t.Errorf("the header usage list does not name %s:\n%s", afterUsage, list)
+	}
 }
 
 var (
@@ -208,6 +230,74 @@ func railwayEnvSubcommandFaults(workflow string) (calls int, faults []string) {
 		}
 	}
 	return calls, faults
+}
+
+// workflowEnvCall is one literal railway-env.sh call in a workflow run step.
+type workflowEnvCall struct {
+	sub  string
+	args []string
+}
+
+// railwayEnvCalls returns each railway-env.sh call in the run steps of a workflow; an echo is not a call.
+func railwayEnvCalls(workflow string) []workflowEnvCall {
+	var out []workflowEnvCall
+	for _, job := range workflowJobsOf(workflow) {
+		for _, s := range job.steps() {
+			for _, inv := range invocations(s.keys["run"], "railway-env.sh") {
+				f := strings.Fields(inv)
+				for i, w := range f {
+					if !strings.HasSuffix(w, "railway-env.sh") || i+1 >= len(f) {
+						continue
+					}
+					c := workflowEnvCall{sub: strings.TrimRight(f[i+1], ");")}
+					for _, a := range f[i+2:] {
+						c.args = append(c.args, strings.TrimRight(a, ");"))
+					}
+					out = append(out, c)
+				}
+			}
+		}
+	}
+	return out
+}
+
+var singleForkVariableCommands = []string{
+	"set-fork-auth", "set-fork-gateway-token", "set-fork-auth-site", "reconcile-urls",
+	"set-ai-fake", "set-sentry-off", "set-fork-reconciliation-url", "set-fork-environment",
+}
+
+func TestNoWorkflowRunsASingleForkVariableCommandOnAnEnvironment(t *testing.T) {
+	dir := filepath.Join(repoRoot(t), ".github", "workflows")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read, selfTests := 0, 0
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		read++
+		for _, c := range railwayEnvCalls(string(raw)) {
+			if !slices.Contains(singleForkVariableCommands, c.sub) {
+				continue
+			}
+			if slices.Equal(c.args, []string{"--self-test"}) {
+				if e.Name() == "railway-invariants.yml" {
+					selfTests++
+				}
+				continue
+			}
+			t.Errorf("%s runs %s %v; only --self-test may run, the fork passes write the fork's variables", e.Name(), c.sub, c.args)
+		}
+	}
+	if read < 3 || selfTests != 4 {
+		t.Fatalf("control: read %d workflow file(s) and found %d --self-test run(s) in railway-invariants.yml, want at least 3 and exactly 4; the scan is broken", read, selfTests)
+	}
 }
 
 func TestNoWorkflowPicksTheRailwayEnvSubcommandAtRunTime(t *testing.T) {
@@ -242,6 +332,7 @@ func TestNoWorkflowPicksTheRailwayEnvSubcommandAtRunTime(t *testing.T) {
 		t.Fatal(err)
 	}
 	total := 0
+	passCalls := map[string]int{}
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -252,9 +343,18 @@ func TestNoWorkflowPicksTheRailwayEnvSubcommandAtRunTime(t *testing.T) {
 		}
 		calls, faults := railwayEnvSubcommandFaults(string(raw))
 		total += calls
+		if e.Name() == "dev-env.yml" {
+			for _, c := range railwayEnvCalls(string(raw)) {
+				passCalls[c.sub]++
+			}
+		}
 		for _, f := range faults {
 			t.Errorf("%s: %s", e.Name(), f)
 		}
+	}
+	// Control: the scan sees both fork passes as literal calls in dev-env.yml.
+	if passCalls[passSub] != 1 || passCalls[afterSub] != 1 {
+		t.Errorf("control: dev-env.yml calls %s %d time(s) and %s %d time(s), want 1 each; the scan does not see the fork passes", passSub, passCalls[passSub], afterSub, passCalls[afterSub])
 	}
 	// Floor: today's workflows call railway-env.sh at least 15 times, each with a literal subcommand.
 	if total < 15 {
@@ -323,9 +423,7 @@ func TestSetProductionAuthIsByHandOnly(t *testing.T) {
 
 	root := repoRoot(t)
 	dir := filepath.Join(root, ".github", "workflows")
-	if control, read := workflowsNaming(t, dir, "set-fork-environment"); read < 3 || !slices.Contains(control, "dev-env.yml") {
-		t.Fatalf("control: read %d workflow file(s) and found set-fork-environment in %v; the scan is broken", read, control)
-	}
+	requireForkPassControl(t)
 	for _, needle := range []string{needle, productionGatewayTokenNeedle} {
 		if hits, _ := workflowsNaming(t, dir, needle); len(hits) != 0 {
 			t.Errorf("%v run or name %s; production is written by hand", hits, needle)
@@ -369,9 +467,12 @@ func TestNothingCIRunsNamesSetProductionEnvironment(t *testing.T) {
 	})
 
 	root := repoRoot(t)
-	// Control: the walk reads workflow code, and reads the one script that defines the subcommand.
-	if control, _ := executableNaming(t, root, "set-fork-environment"); !slices.Contains(control, ".github/workflows/dev-env.yml") || !slices.Contains(control, definer) {
-		t.Fatalf("control: set-fork-environment found in %v; the walk is not reading the workflows and scripts", control)
+	// Control: the walk reads workflow code, and reads the one script that defines the subcommands.
+	requireForkPassControl(t)
+	for _, sub := range []string{passSub, afterSub} {
+		if control, _ := executableNaming(t, root, sub); !slices.Contains(control, ".github/workflows/dev-env.yml") || !slices.Contains(control, definer) {
+			t.Fatalf("control: %s found in %v; the walk is not reading the workflows and scripts", sub, control)
+		}
 	}
 	hits, read := executableNaming(t, root, productionNeedle)
 	if read < 10 {

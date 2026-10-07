@@ -1,4 +1,4 @@
-// The checks import-wizard.spec.ts names: the two fixture-freshness scans, the freshened-DOCX
+// The checks the import-wizard specs name: the two fixture-freshness scans, the freshened-DOCX
 // unzip, the dead-letter sentence read-back and the EXTR36 declaration order.
 import { describe, expect, it } from 'vitest'
 import { unzipSync } from 'fflate'
@@ -10,13 +10,15 @@ import { stripComments } from '@invoice-os/api-client/strip-comments'
 const TOPOLOGY_DIR = dirname(fileURLToPath(import.meta.url))
 const E2E_ROOT = dirname(TOPOLOGY_DIR)
 const REPO_ROOT = dirname(E2E_ROOT)
-const SPEC_PATH = join(TOPOLOGY_DIR, 'import-wizard.spec.ts')
-const source = readFileSync(SPEC_PATH, 'utf8')
+const SPEC_1 = 'import-wizard.spec.ts'
+const SPEC_2 = 'import-wizard-2.spec.ts'
+const source1 = readFileSync(join(TOPOLOGY_DIR, SPEC_1), 'utf8')
+const source2 = readFileSync(join(TOPOLOGY_DIR, SPEC_2), 'utf8')
 
 const BLOCK_START = 'EXTR-18-07 · the deployed proof'
-const blockStart = source.indexOf(BLOCK_START)
-if (blockStart === -1) throw new Error(`start marker not found in import-wizard.spec.ts: ${JSON.stringify(BLOCK_START)}`)
-const block = source.slice(blockStart)
+const blockStart = source2.indexOf(BLOCK_START)
+if (blockStart === -1) throw new Error(`start marker not found in ${SPEC_2}: ${JSON.stringify(BLOCK_START)}`)
+const block = source2.slice(blockStart)
 
 const EXTR35_E2E_01 = 'EXTR35-E2E-01 (AC-8): the letter-spaced register files its invoice instead of quarantining'
 const EXTR36_E2E_02 = 'EXTR36-E2E-02 (AC-3): a typed correction on a Chrome print teaches its twin'
@@ -25,15 +27,15 @@ const EXTR36_E2E_01 = 'EXTR36-E2E-01 (AC-1/AC-2): a Chrome-shaped register ancho
 // EXTR-15-12 (task-836). The EXTR-15 deployed-proof span runs from its own marker to
 // EXTR-18-07's, and is scanned SEPARATELY: two of its documents are DOCX, which no
 // unique*PdfBytes() helper mints, so it needs its own allowlist. The rest of
-// import-wizard.spec.ts is CSV probes with `Buffer.from(...)` bodies and is not scanned at
+// import-wizard-2.spec.ts is not scanned at
 // all -- freshness only matters where an upload is polled to a settled extraction.
 const EXTR15_BLOCK_START = 'EXTR-15 · the deployed proof'
-const extr15Start = source.indexOf(EXTR15_BLOCK_START)
+const extr15Start = source2.indexOf(EXTR15_BLOCK_START)
 if (extr15Start === -1)
-  throw new Error(`start marker not found in import-wizard.spec.ts: ${JSON.stringify(EXTR15_BLOCK_START)}`)
+  throw new Error(`start marker not found in ${SPEC_2}: ${JSON.stringify(EXTR15_BLOCK_START)}`)
 if (extr15Start >= blockStart)
   throw new Error('the EXTR-15 marker no longer precedes the EXTR-18-07 marker -- the span it delimits is empty')
-const extr15Block = source.slice(extr15Start, blockStart)
+const extr15Block = source2.slice(extr15Start, blockStart)
 
 describe('[extr-18-07] every EXTR18 fixture upload goes through a unique*PdfBytes() helper', () => {
   const bufferArgs = [...block.matchAll(/buffer:\s*([^,}\n]+)/g)].map((m) => m[1].trim())
@@ -135,8 +137,8 @@ describe('[extr-15-12] the deployed dead-letter literals track their sole owner'
   const owner = readFileSync(OWNER, 'utf8')
 
   function literalOf(name: string): string {
-    const m = new RegExp(`const ${name} =\\s*\\n?\\s*'([^']+)'`).exec(source)
-    expect(m, `${name} is gone from import-wizard.spec.ts`).not.toBeNull()
+    const m = new RegExp(`const ${name} =\\s*\\n?\\s*'([^']+)'`).exec(source1)
+    expect(m, `${name} is gone from ${SPEC_1}`).not.toBeNull()
     return (m as RegExpExecArray)[1]
   }
 
@@ -166,10 +168,10 @@ describe('[extr-36] declaration order is load-bearing', () => {
   // by an earlier test is live for every later upload. Each failure message below names it.
 
   it('EXTR36-E2E-02 is declared after EXTR35-E2E-01', () => {
-    const at35 = source.indexOf(EXTR35_E2E_01)
-    const at02 = source.indexOf(EXTR36_E2E_02)
-    expect(at35, `test name not found in import-wizard.spec.ts: ${JSON.stringify(EXTR35_E2E_01)}`).toBeGreaterThan(-1)
-    expect(at02, `test name not found in import-wizard.spec.ts: ${JSON.stringify(EXTR36_E2E_02)}`).toBeGreaterThan(-1)
+    const at35 = source2.indexOf(EXTR35_E2E_01)
+    const at02 = source2.indexOf(EXTR36_E2E_02)
+    expect(at35, `test name not found in ${SPEC_2}: ${JSON.stringify(EXTR35_E2E_01)}`).toBeGreaterThan(-1)
+    expect(at02, `test name not found in ${SPEC_2}: ${JSON.stringify(EXTR36_E2E_02)}`).toBeGreaterThan(-1)
     expect(
       at02,
       "EXTR36-E2E-02 sits above EXTR35-E2E-01 -- advisory_register.pdf shares chrome_register.pdf's fingerprint v3:d89450d1..., and both run as PERSONAS.A, so a rule EXTR35-E2E-01 could write would already be live for EXTR36-E2E-02's upload",
@@ -177,10 +179,10 @@ describe('[extr-36] declaration order is load-bearing', () => {
   })
 
   it('EXTR36-E2E-01 is declared after EXTR36-E2E-02', () => {
-    const at02 = source.indexOf(EXTR36_E2E_02)
-    const at01 = source.indexOf(EXTR36_E2E_01)
-    expect(at02, `test name not found in import-wizard.spec.ts: ${JSON.stringify(EXTR36_E2E_02)}`).toBeGreaterThan(-1)
-    expect(at01, `test name not found in import-wizard.spec.ts: ${JSON.stringify(EXTR36_E2E_01)}`).toBeGreaterThan(-1)
+    const at02 = source2.indexOf(EXTR36_E2E_02)
+    const at01 = source2.indexOf(EXTR36_E2E_01)
+    expect(at02, `test name not found in ${SPEC_2}: ${JSON.stringify(EXTR36_E2E_02)}`).toBeGreaterThan(-1)
+    expect(at01, `test name not found in ${SPEC_2}: ${JSON.stringify(EXTR36_E2E_01)}`).toBeGreaterThan(-1)
     expect(
       at01,
       "EXTR36-E2E-01 sits above EXTR36-E2E-02 -- both upload documents sharing fingerprint v3:d89450d1..., both run as PERSONAS.A, so the buyer_name rule EXTR36-E2E-01 teaches would already be live when EXTR36-E2E-02 uploads its supposedly untaught twin",

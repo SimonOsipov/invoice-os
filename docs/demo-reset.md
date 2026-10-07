@@ -40,7 +40,7 @@ directions, and `TestPurgeHasNoUnscopedDeleteStatement` proves the tenant predic
 in the same string literal as the `DELETE`.
 
 **The tenant list is the safety boundary, not the environment.** `ENVIRONMENT` decides
-where the purge runs: CI's `set-fork-environment` sets `development` in every `pr-<N>`
+where the purge runs: CI's `fork-vars-after-urls` pass sets `development` in every `pr-<N>`
 fork, so it runs there, and production's gateway reads `production`, so it does not — see
 [`docs/deploy-model.md`](deploy-model.md). But `ENVIRONMENT` is a hand-set variable that
 can rot. Wherever the purge runs, it cannot reach a real tenant's data, because no real

@@ -598,7 +598,7 @@ describe('the header click: one way in', () => {
   it('click_unconfigured_opensTheUnavailableWindow', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null))
     vi.stubGlobal('fetch', fetchMock)
-    for (const unset of [['VITE_APP_URL'], ['VITE_APP_URL', 'VITE_GATEWAY_URL']]) {
+    for (const unset of [['VITE_GATEWAY_URL'], ['VITE_APP_URL'], ['VITE_APP_URL', 'VITE_GATEWAY_URL']]) {
       for (const k of unset) vi.stubEnv(k, '')
       await bootAt('/')
       await navSignIn()

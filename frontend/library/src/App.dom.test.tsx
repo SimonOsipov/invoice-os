@@ -126,6 +126,14 @@ describe('App', () => {
     click(byText('aside button', 'Overview'))
     expect(window.history.length).toBe(l3)
     expect(window.location.pathname).toBe('/nope')
+    act(() => root.unmount())
+    container.remove()
+
+    mount('/rules')
+    const l4 = window.history.length
+    click(byText('aside button', 'Plain validation messages'))
+    expect(window.location.pathname).toBe('/rules/validate')
+    expect(window.history.length).toBe(l4 + 1)
   })
 
   it('backAndForward_restoreEachView', async () => {

@@ -31,7 +31,7 @@ describe('main', () => {
     expect(h.initMonitoring.mock.invocationCallOrder[0]).toBeLessThan(h.createRoot.mock.invocationCallOrder[0])
 
     expect(h.render).toHaveBeenCalledTimes(1)
-    const root = h.render.mock.calls[0][0] as ReactElement<{ children: ReactElement<{ brand: ReactElement }> }>
+    const root = h.render.mock.calls[0][0] as ReactElement<{ children: ReactElement<{ brand: ReactElement<{ src?: unknown }> }> }>
     expect(root.type).toBe(StrictMode)
     const boundary = root.props.children
     expect(boundary.type).toBe(CrashBoundary)

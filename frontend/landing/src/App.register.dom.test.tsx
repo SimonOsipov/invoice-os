@@ -493,7 +493,7 @@ describe('the window as a dialog', () => {
     expect(document.querySelectorAll(DIALOG).length).toBe(0)
   })
 
-  it('the header Close control closes the window and the entry opens it again', async () => {
+  it('the header Close control closes the window and it opens again', async () => {
     await mountApp()
     const d = await openRegistration()
     await act(async () => {

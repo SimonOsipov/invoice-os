@@ -784,6 +784,7 @@ describe('a failed redemption bounces to landing (AC-7, D23)', () => {
     configure()
     ensureSignInState()
     meReply = fail(403, 'forbidden')
+    mineReply = ok({ invitations: [] })
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     window.history.replaceState(null, '', `/?handoff=${CODE}`)
     const { hrefWrites } = interceptHref()
@@ -796,7 +797,7 @@ describe('a failed redemption bounces to landing (AC-7, D23)', () => {
     expect(localStorage.getItem(SESSION_KEY)).toBeNull()
   })
 
-  it('a join offer takes the no-workspace path until the Join screen lands', async () => {
+  it('a join offer shows the Join screen, not the no-workspace path', async () => {
     configure()
     ensureSignInState()
     meReply = fail(403, 'forbidden')
@@ -805,8 +806,9 @@ describe('a failed redemption bounces to landing (AC-7, D23)', () => {
     window.history.replaceState(null, '', `/?handoff=${CODE}`)
     const { hrefWrites } = interceptHref()
     await bootApp()
-    await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=no-workspace`]))
-    expect(fetchUrls).toContain(`${GATEWAY}/api/tenancy/v1/invitations/mine`)
+    await waitFor(() => expect(screen.getByTestId('join-screen')).toBeTruthy())
+    await settle()
+    expect(hrefWrites).toEqual([])
     expect(workspacesCalls).toEqual([])
     expect(localStorage.getItem(SESSION_KEY)).toBeNull()
   })
@@ -1118,16 +1120,19 @@ describe('AUTH-05-08 adversarial', () => {
   })
 
   it('the token and the code never reach a URL, an href or the console', async () => {
-    const cases: [string, Reply][] = [
-      ['success', ok(ME)],
-      ['me 403', fail(403, 'forbidden')],
-      ['me 500', fail(500, 'boom')],
+    const ONE_INVITE = ok({ invitations: [{ id: 'a', workspace: 'WS', role: 'admin', inviter: null, expires_at: '2026-10-20T00:00:00Z' }] })
+    const cases: [string, Reply, Reply | null][] = [
+      ['success', ok(ME), null],
+      ['me 403', fail(403, 'forbidden'), null],
+      ['me 500', fail(500, 'boom'), null],
+      ['me 403, mine one invite, Join screen', fail(403, 'forbidden'), ONE_INVITE],
     ]
     expect(cases.length).toBeGreaterThan(0)
-    for (const [name, reply] of cases) {
+    for (const [name, reply, mine] of cases) {
       configure()
       ensureSignInState()
       meReply = reply
+      mineReply = mine
       const spies = consoleSpies()
       window.history.replaceState(null, '', `/?handoff=${CODE}`)
       const replace = vi.spyOn(window.history, 'replaceState')

@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn, SignInLoading } from './components/SignIn'
+import { CREATING_OWN, JoinWorkspace } from './components/JoinWorkspace'
 import { resolveBootSession, loadSession, saveSession, clearSession, decodeJwtPayload, cardIdentity } from './lib/session'
 import { revokeSessions } from './lib/revoke'
 import { createRenewer, isRenewalDue, SessionEndedError, type Renewer } from './lib/renewal'
 import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
 import { consumeSignInState, ensureSignInState, landingInviteUrl, landingSignInUrl, mintSignInState } from './lib/signInState'
 import { consumePendingInvite, holdPendingInvite, peekPendingInvite, readInviteFragment } from './lib/pendingInvite'
-import { HANDOFF_PARAM, InviteRefusedError, isJoinOffer, isLiveHandoffSession, readHandoffCode, redeemHandoff } from './lib/sessionHandoff'
+import { HANDOFF_PARAM, InviteRefusedError, createOwnWorkspace, isJoinOffer, isLiveHandoffSession, joinInvite, readHandoffCode, redeemHandoff, type JoinOffer } from './lib/sessionHandoff'
 import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import { isPromiseLike, makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, resolveActiveClient, startingDraft } from './lib/clients'
@@ -1822,6 +1823,10 @@ export default function App() {
   )
   const [handoffPending, setHandoffPending] = useState(handoffCode !== null)
   const redeemStarted = useRef(false)
+  const [joinOffer, setJoinOffer] = useState<JoinOffer | null>(null)
+  const [joining, setJoining] = useState<string | null>(null)
+  // Set in the click handler, before any re-render, so a second click in the same tick sends nothing.
+  const joinStarted = useRef(false)
   // `?auth=start`: landing asks for a state. `?handoff=` wins over it.
   const [authStart] = useState(
     () => !handoffCode && new URLSearchParams(window.location.search).get('auth') === 'start',
@@ -1990,11 +1995,9 @@ export default function App() {
       : Promise.reject(new Error('no sign-in state in this tab'))
     redemption.then(
       (outcome) => {
-        // Until the Join screen lands, an offer takes today's no-workspace path.
         if (isJoinOffer(outcome)) {
-          const dest = landingSignInUrl(ensureSignInState(), 'no-workspace')
-          if (dest) window.location.href = dest
-          else setHandoffPending(false)
+          setJoinOffer(outcome)
+          setHandoffPending(false)
           return
         }
         setSeat(outcome)
@@ -2014,6 +2017,50 @@ export default function App() {
       },
     )
   }, [handoffCode])
+
+  // Join and Create my own workspace share one outcome: the workspace mounts, or the page leaves.
+  const resolveJoin = useCallback((attempt: Promise<Session>) => {
+    if (joinStarted.current) return
+    joinStarted.current = true
+    attempt.then(
+      (next) => {
+        setSeat(next)
+        setJoinOffer(null)
+        setJoining(null)
+      },
+      (err: unknown) => {
+        console.warn('[app] joining failed:', err)
+        const dest = err instanceof InviteRefusedError ? landingInviteUrl(err.outcome) : landingSignInUrl(ensureSignInState(), 'failed')
+        // Stays disabled while leaving; with no landing the card is usable again.
+        if (dest) window.location.href = dest
+        else {
+          joinStarted.current = false
+          setJoining(null)
+        }
+      },
+    )
+  }, [])
+  const onJoin = (id: string) => {
+    const base = gatewayBase()
+    if (!joinOffer || !base || joinStarted.current) return
+    setJoining(id)
+    resolveJoin(joinInvite(base, joinOffer, id))
+  }
+  const onCreateOwn = () => {
+    const base = gatewayBase()
+    if (!joinOffer || !base || joinStarted.current) return
+    setJoining(CREATING_OWN)
+    resolveJoin(createOwnWorkspace(base, joinOffer))
+  }
+  const onJoinSignOut = async () => {
+    const base = gatewayBase()
+    if (signingOut.current || !joinOffer || !base) return
+    signingOut.current = true
+    if (typeof joinOffer.refreshToken === 'string') await revokeSessions(base, joinOffer.refreshToken)
+    const dest = landingBase()
+    if (dest) window.location.href = dest
+    else signingOut.current = false
+  }
 
   // Bounces whatever session is stored; the ref keeps StrictMode to one navigation.
   // A fresh state gives landing the full TTL to hold it.
@@ -2035,7 +2082,7 @@ export default function App() {
   // redemption navigates itself), so bouncing to landing would break landing → app. Also skipped when no
   // landing URL is configured (the standalone showcase build), which keeps its own picker.
   useEffect(() => {
-    if (seat || authStart || handoffPending || frontDoorBounced.current) return
+    if (seat || authStart || handoffPending || joinOffer || frontDoorBounced.current) return
     const dest = landingBase() ? landingSignInUrl(ensureSignInState()) : null
     if (dest) {
       // The ref keeps StrictMode to one navigation.
@@ -2047,12 +2094,23 @@ export default function App() {
       captureDestination(window.location.pathname, routeQuery(at.view, at))
       window.location.href = dest
     }
-  }, [seat, authStart, handoffPending])
+  }, [seat, authStart, handoffPending, joinOffer])
 
   // Mounting Workspace would clear the captured destination before the start bounce leaves.
   if (authStart && landingBase()) return null
   if (bootRenewing && seat) return <SignInLoading />
   if (!seat) {
+    if (joinOffer) {
+      return (
+        <JoinWorkspace
+          invites={joinOffer.invites}
+          joining={joining}
+          onJoin={onJoin}
+          onSignOut={onJoinSignOut}
+          onCreateOwn={joinOffer.answers ? onCreateOwn : undefined}
+        />
+      )
+    }
     if (handoffPending) return <SignInLoading />
     // No session and no deep link. The landing page is the product's single sign-in front
     // door, so go there rather than offer a SECOND place to sign in — the effect above has

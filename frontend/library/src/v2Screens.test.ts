@@ -1,8 +1,9 @@
-import { createElement } from 'react'
+import { createElement, type ReactElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { Home } from './components/Home'
 import { GROUPS } from './content'
+import { Icon } from './icons'
 
 type Tag = { name: string; attrs: string; text: string }
 const attr = (t: { attrs: string }, name: string) => t.attrs.match(new RegExp(`\\s${name}="([^"]*)"`))?.[1]
@@ -93,6 +94,7 @@ describe('library home', () => {
     expect(GROUPS).toHaveLength(11)
     cards.forEach((card, k) => {
       const g = GROUPS[k]
+      expect(attr(card, 'type')).toBe('button')
       expect(style(card)).toMatchObject({
         background: 'var(--sage-card)',
         border: '1px solid var(--sage-card-border)',
@@ -163,5 +165,29 @@ describe('library home', () => {
     expect(withText(ts, 'Start with a demo.')).toBeDefined()
     expect(ts.some((t) => t.text === 'Book the Demo')).toBe(false)
     expect(named(ts, 'a')).toHaveLength(0)
+  })
+
+  it('SC-05 a card calls onGroup with its group id and the tour button calls onTour', () => {
+    const calls: string[] = []
+    type El = ReactElement<{ onClick?: () => void; children?: ReactNode }>
+    const walk = (n: ReactNode, out: El[] = []): El[] => {
+      if (Array.isArray(n)) n.forEach((c) => walk(c, out))
+      else if (n && typeof n === 'object' && 'props' in n) {
+        out.push(n as El)
+        walk((n as El).props.children, out)
+      }
+      return out
+    }
+    const els = walk(Home({ demoHref: null, onGroup: (g) => calls.push(g), onTour: () => calls.push('tour') }))
+    const cards = els.filter((e) => e.type === 'button')
+    expect(cards).toHaveLength(11)
+    const icons = els.filter((e) => e.type === Icon).map((e) => (e.props as { name?: string }).name)
+    expect(icons).toEqual(GROUPS.map((g) => g.icon))
+    cards.forEach((c) => c.props.onClick!())
+    expect(calls).toEqual(GROUPS.map((g) => g.id))
+    const tour = els.filter((e) => typeof e.type === 'function' && e.props.onClick)
+    expect(tour).toHaveLength(1)
+    tour[0].props.onClick!()
+    expect(calls.at(-1)).toBe('tour')
   })
 })

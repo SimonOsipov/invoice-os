@@ -3275,3 +3275,109 @@ func TestCreateHandler_NotPermitted403(t *testing.T) {
 		t.Errorf("body = %v, want exactly {error: %q}", body, "only an admin can add a company")
 	}
 }
+
+// Roles are per tenant: admin in one workspace grants nothing in another.
+func TestStoreCreate_AdminElsewhereIsRefusedHere(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	adminTenant, adminCtx := seedCaller(t, super, "firm", "admin", "active")
+	preparerTenant, preparerCtx := seedCaller(t, super, "in_house", "preparer", "active")
+
+	if _, err := store.Create(adminCtx, CreateInput{Name: "Admin Side Co", TIN: "1234567897"}); err != nil {
+		t.Fatalf("Create in the tenant where the caller is admin: %v", err)
+	}
+	_, err := store.Create(preparerCtx, CreateInput{Name: "Preparer Side Co", TIN: "1234567897"})
+	if !errors.Is(err, ErrNotPermitted) {
+		t.Fatalf("Create in the tenant where the caller is preparer err = %v, want ErrNotPermitted", err)
+	}
+	if n := entityCount(t, super, adminTenant); n != 1 {
+		t.Errorf("admin tenant rows = %d, want 1", n)
+	}
+	if n := entityCount(t, super, preparerTenant); n != 0 {
+		t.Errorf("preparer tenant rows = %d, want 0", n)
+	}
+}
+
+// requireAdmin is called directly: the seam admits only active callers, so the
+// no-row and suspended arms are unreachable through Store.Create.
+func TestRequireAdmin_ReadsActiveRoleInTenant(t *testing.T) {
+	super, app := dbTestPools(t)
+	for _, tc := range []struct {
+		name, role, status string
+		subject            string
+		want               error
+	}{
+		{"active admin", "admin", "active", memberSubject, nil},
+		{"active preparer", "preparer", "active", memberSubject, ErrNotPermitted},
+		{"active reviewer", "reviewer", "active", memberSubject, ErrNotPermitted},
+		{"suspended admin", "admin", "suspended", memberSubject, ErrNotPermitted},
+		{"no membership row", "admin", "active", uuid.NewString(), ErrNotPermitted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tenantID, _ := seedCaller(t, super, "firm", tc.role, tc.status)
+			var got error
+			if err := db.WithinTenantTx(context.Background(), app, tenantID, func(tx pgx.Tx) error {
+				got = requireAdmin(context.Background(), tx, tc.subject)
+				return nil
+			}); err != nil {
+				t.Fatalf("tx: %v", err)
+			}
+			if !errors.Is(got, tc.want) || (tc.want == nil && got != nil) {
+				t.Errorf("requireAdmin = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// An in-process actor (non-uuid subject) passes the seam unchecked; it must not create.
+func TestStoreCreate_NonUUIDSubjectCreatesNothing(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID, _ := seedCaller(t, super, "firm", "admin", "active")
+	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: "system", Role: "authenticated", TenantID: tenantID})
+
+	if _, err := NewStore(app).Create(c, CreateInput{Name: "Acme Ltd", TIN: "1234567897"}); err == nil {
+		t.Fatal("Create as a non-uuid subject succeeded, want a refusal")
+	}
+	if n := entityCount(t, super, tenantID); n != 0 {
+		t.Errorf("business_entities rows = %d, want 0", n)
+	}
+}
+
+// The real store's refusal reaches the wire as 403 + the message; an admin still gets 201.
+func TestCreateHandler_RealStoreByRole(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	for _, tc := range []struct {
+		role       string
+		wantStatus int
+	}{{"preparer", http.StatusForbidden}, {"reviewer", http.StatusForbidden}, {"admin", http.StatusCreated}} {
+		t.Run(tc.role, func(t *testing.T) {
+			tenantID, c := seedCaller(t, super, "in_house", tc.role, "active")
+			b, err := json.Marshal(createRequest{Name: "Acme Ltd", TIN: "1234567897"})
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			r := httptest.NewRequest("POST", "/v1/entities", bytes.NewReader(b)).WithContext(c)
+			rec := httptest.NewRecorder()
+			CreateHandler(store.Create, nil).ServeHTTP(rec, r)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d (body=%s)", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			wantRows := 1
+			if tc.wantStatus == http.StatusForbidden {
+				wantRows = 0
+				var body map[string]any
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+					t.Fatalf("decode %q: %v", rec.Body.String(), err)
+				}
+				if len(body) != 1 || body["error"] != "only an admin can add a company" {
+					t.Errorf("body = %v, want exactly {error: %q}", body, "only an admin can add a company")
+				}
+			}
+			if n := entityCount(t, super, tenantID); n != wantRows {
+				t.Errorf("business_entities rows = %d, want %d", n, wantRows)
+			}
+		})
+	}
+}

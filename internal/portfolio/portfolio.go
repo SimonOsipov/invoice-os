@@ -397,7 +397,7 @@ func OnboardHandler(setStatus func(ctx context.Context, id string) (Entity, erro
 
 // statusForErr maps a store/domain error to the HTTP status + message the
 // real handler bodies (added by the executor) write to the response.
-// db.ErrNoTenant is 401 (fail-closed); db.ErrNotActiveMember is 403;
+// db.ErrNoTenant is 401 (fail-closed); db.ErrNotActiveMember and ErrNotPermitted are 403;
 // ErrInvalidTIN/ErrValidation are 400
 // with the wrapped message (a *TINError sends just its Reason, no prefix); ErrNotFound is 404; ErrDuplicateTIN/
 // ErrRedundantTransition are 409; anything else is 500 with a generic body —

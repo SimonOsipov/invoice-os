@@ -12,30 +12,68 @@ func forkAuthRun(t *testing.T, s authShim, sub string, args ...string) (string, 
 	return stdout + stderr, code
 }
 
+// A missing or duplicated service name refuses before any write and names the service.
 func TestSetForkAuthSite_MissingInstanceRefusesBeforeAnyWrite(t *testing.T) {
 	gw := `{"node":{"serviceId":"` + authForkGatewayID + `","serviceName":"gateway"}}`
 	auth := `{"node":{"serviceId":"` + authForkAuthID + `","serviceName":"auth"}}`
-	for _, c := range []struct{ missing, variable, present string }{
-		{"gateway", "AUTH_SITE_URL", auth},
-		{"auth", "GOTRUE_SITE_URL", gw},
-	} {
-		t.Run(c.missing, func(t *testing.T) {
+	siteShim := func(settle string) func(t *testing.T) authShim {
+		return func(t *testing.T) authShim {
 			resp := forkAuthRailway()
-			resp["settle"] = forkSettle(c.present)
-			s := newAuthShim(t, resp, forkAuthStores(freshJWK(t)))
-			out, code := forkAuthRun(t, s, "set-fork-auth-site", authForkEnvID, forkSiteURL)
+			resp["settle"] = forkSettle(settle)
+			return newAuthShim(t, resp, forkAuthStores(freshJWK(t)))
+		}
+	}
+	passShim := func(skip string, extra ...string) func(t *testing.T) authShim {
+		return func(t *testing.T) authShim {
+			settle := gtSettle(t, skip)
+			for _, e := range extra {
+				settle = strings.Replace(settle, `"edges":[`, `"edges":[`+e+`,`, 1)
+			}
+			return newPassShim(t, nil, map[string]string{"settle": settle})
+		}
+	}
+	dup := func(name string) string {
+		return `{"node":{"serviceId":"svc-` + name + `-dup","serviceName":"` + name + `"}}`
+	}
+	afterShim := func(skip string, extra ...string) func(t *testing.T) authShim {
+		return func(t *testing.T) authShim { return afterShimIn(t, skip, extra...) }
+	}
+	urls := afterArgs()[1:]
+	for _, c := range []struct {
+		name, sub, service, says string
+		args                     []string
+		mk                       func(t *testing.T) authShim
+	}{
+		{"set-fork-auth-site without gateway", "set-fork-auth-site", "gateway", "AUTH_SITE_URL was NOT set", []string{forkSiteURL}, siteShim(auth)},
+		{"set-fork-auth-site without auth", "set-fork-auth-site", "auth", "GOTRUE_SITE_URL was NOT set", []string{forkSiteURL}, siteShim(gw)},
+		{"fork-vars-before-urls without auth", passSub, "auth", "", nil, passShim("auth")},
+		{"fork-vars-before-urls without gateway", passSub, "gateway", "", nil, passShim("gateway")},
+		{"fork-vars-before-urls with two auth", passSub, "auth", "", nil, passShim("", dup("auth"))},
+		{"fork-vars-before-urls with two gateway", passSub, "gateway", "", nil, passShim("", dup("gateway"))},
+		{"fork-vars-after-urls without auth", afterSub, "auth", "", urls, afterShim("auth")},
+		{"fork-vars-after-urls without gateway", afterSub, "gateway", "", urls, afterShim("gateway")},
+		{"fork-vars-after-urls without app", afterSub, "app", "", urls, afterShim("app")},
+		{"fork-vars-after-urls without ops-console", afterSub, "ops-console", "", urls, afterShim("ops-console")},
+		{"fork-vars-after-urls without submission", afterSub, "submission", "", urls, afterShim("submission")},
+		{"fork-vars-after-urls without docling", afterSub, "docling", "", urls, afterShim("docling")},
+		{"fork-vars-after-urls with two landing", afterSub, "landing", "", urls, afterShim("", dup("landing"))},
+		{"reconcile-urls without support-console", "reconcile-urls", "support-console", "", urls, afterShim("support-console")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := c.mk(t)
+			out, code := forkAuthRun(t, s, c.sub, append([]string{authForkEnvID}, c.args...)...)
 			if code != 1 {
-				t.Errorf("exit %d, want 1; output = %q", code, out)
+				t.Errorf("exit %d, want 1; output = %q", code, clip(out))
 			}
 			errs := errorLines(out)
-			if !strings.Contains(errs, "'"+c.missing+"'") || !strings.Contains(errs, c.variable+" was NOT set") {
-				t.Errorf("error lines %q do not name the missing '%s' and %s", errs, c.missing, c.variable)
+			if !strings.Contains(errs, "'"+c.service+"'") || !strings.Contains(errs, c.says) {
+				t.Errorf("error lines %q do not name '%s' and carry %q", errs, c.service, c.says)
 			}
 			if !slices.Contains(operations(s.calls(t)), "settle") {
 				t.Fatal("control: the run never listed service instances")
 			}
 			if m := s.mutations(t); len(m) != 0 {
-				t.Errorf("a missing %s instance still wrote %v", c.missing, m)
+				t.Errorf("a bad %s instance still wrote %v", c.service, m)
 			}
 		})
 	}
@@ -95,28 +133,26 @@ func TestForkAuthWritesSkipDeploys(t *testing.T) {
 	for _, c := range []struct {
 		sub  string
 		args []string
+		mk   func(t *testing.T) authShim
 	}{
-		{"set-fork-auth", []string{authForkEnvID}},
-		{"set-fork-auth-site", []string{authForkEnvID, forkSiteURL}},
+		{"set-fork-auth", []string{authForkEnvID}, newForkSiteShim},
+		{"set-fork-auth-site", []string{authForkEnvID, forkSiteURL}, newForkSiteShim},
+		{passSub, []string{authForkEnvID}, func(t *testing.T) authShim { return newPassShim(t, nil, nil) }},
+		{afterSub, append([]string{authForkEnvID}, afterArgs()[1:]...), func(t *testing.T) authShim { return afterShimIn(t, "") }},
 	} {
 		t.Run(c.sub, func(t *testing.T) {
-			s := newForkSiteShim(t)
+			s := c.mk(t)
 			if out, code := forkAuthRun(t, s, c.sub, c.args...); code != 0 {
-				t.Fatalf("exit %d, want 0; output = %q", code, out)
+				t.Fatalf("exit %d, want 0; output = %q", code, clip(out))
 			}
-			n := 0
-			for _, call := range s.calls(t) {
-				if !strings.Contains(call.Query, "variableCollectionUpsert(") {
-					continue
-				}
-				n++
-				in, _ := call.Variables["input"].(map[string]any)
-				if in["skipDeploys"] != true {
-					t.Errorf("the %v write has skipDeploys %v, want true", in["serviceId"], in["skipDeploys"])
-				}
-			}
-			if n == 0 {
+			ws := collectionWrites(t, s)
+			if len(ws) == 0 {
 				t.Fatal("control: no variableCollectionUpsert was sent")
+			}
+			for _, w := range ws {
+				if w.SkipDeploys != true {
+					t.Errorf("the %v write has skipDeploys %v, want true", w.Service, w.SkipDeploys)
+				}
 			}
 		})
 	}
@@ -130,6 +166,8 @@ func TestForkAuthRefusalsPrecedeServiceResolution(t *testing.T) {
 	}{
 		{"set-fork-auth", nil},
 		{"set-fork-auth-site", []string{forkSiteURL}},
+		{"reconcile-urls", afterArgs()[1:]},
+		{afterSub, afterArgs()[1:]},
 	} {
 		t.Run(c.sub, func(t *testing.T) {
 			resp := forkAuthRailway()

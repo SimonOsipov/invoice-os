@@ -888,6 +888,11 @@ func TestReconcileFork_B4_UnreadableReReadFails(t *testing.T) {
 	}
 	requireNoBoot(t, s)
 	requireNoArchiveNeedles(t, stdout+stderr)
+
+	// set_service_vars is unchanged by the batched passes; its re-read must still follow its write.
+	for _, fault := range setServiceVarsReReadFaults(shellCode(shellFunctionBody(t, "set_service_vars")), shellCode(shellFunctionBody(t, "auth_read"))) {
+		t.Errorf("set_service_vars: %s", fault)
+	}
 }
 
 // pitrPostgresNames lists the Postgres variable names the run wrote, in call order.

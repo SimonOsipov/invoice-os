@@ -9,10 +9,9 @@ import (
 )
 
 const (
-	reconciliationURL       = "http://reconciliation.railway.internal:8080"
-	reconciliationURLUsage  = "usage: railway-env.sh set-fork-reconciliation-url <environment-id>"
-	reconciliationURLRunCmd = `bash scripts/ci/railway-env.sh set-fork-reconciliation-url "$ENV_ID"`
-	reconciliationDBNeedle  = "postgresql://invoice_app:planted-recon-db-password@h:5432/railway"
+	reconciliationURL      = "http://reconciliation.railway.internal:8080"
+	reconciliationURLUsage = "usage: railway-env.sh set-fork-reconciliation-url <environment-id>"
+	reconciliationDBNeedle = "postgresql://invoice_app:planted-recon-db-password@h:5432/railway"
 )
 
 var reconciliationGatewayID = sentrySvcID("gateway")
@@ -57,13 +56,22 @@ func TestSetForkReconciliationURLAgainstAScriptedRailway(t *testing.T) {
 		}
 	}
 
-	// set_service_vars reads before it writes, so an unreadable map refuses with no write.
+	// The batched read precedes the write, so an unreadable map refuses with no write.
 	unreadableRefused := func(t *testing.T, s authShim, out string) {
-		if !strings.Contains(errorLines(out), "gateway.RECONCILIATION_URL") {
-			t.Errorf("no ::error:: line names gateway.RECONCILIATION_URL; output = %q", out)
+		if errs := errorLines(out); !strings.Contains(errs, "gateway") || !strings.Contains(errs, "unreadable") {
+			t.Errorf("no ::error:: line names the gateway and says it is unreadable; output = %q", out)
 		}
 		if ups := s.upserts(t); len(ups) != 0 {
 			t.Errorf("an unreadable map was followed by writes %v", names(ups))
+		}
+	}
+	// The write landed and only its re-read is unreadable.
+	rereadUnreadable := func(t *testing.T, s authShim, out string) {
+		if errs := errorLines(out); !strings.Contains(errs, "gateway") || !strings.Contains(errs, "written but not confirmed") {
+			t.Errorf("no ::error:: line names the gateway as written but not confirmed; output = %q", out)
+		}
+		if at := s.lastCallIndex(t, reconciliationGatewayID, "RECONCILIATION_URL"); at < 0 || !s.readAfter(t, reconciliationGatewayID, at) {
+			t.Errorf("the refusal did not come from a re-read after the write (write at call %d)", at)
 		}
 	}
 
@@ -87,7 +95,7 @@ func TestSetForkReconciliationURLAgainstAScriptedRailway(t *testing.T) {
 		{name: "reread_different", bend: `.RECONCILIATION_URL = "http://reconciliation.railway.internal:8081"`, code: 1, check: rereadRefused},
 		{name: "read_unreadable", bend: `"not-a-map"`, code: 1, check: unreadableRefused},
 		// Only the re-read after the write is unreadable.
-		{name: "reread_unreadable", bend: `if .RECONCILIATION_URL == "` + reconciliationURL + `" then "not-a-map" else . end`, code: 1, check: rereadRefused},
+		{name: "reread_unreadable", bend: `if .RECONCILIATION_URL == "` + reconciliationURL + `" then "not-a-map" else . end`, code: 1, check: rereadUnreadable},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -190,35 +198,4 @@ func TestSetForkReconciliationURLUsageAndPersistentRefusal(t *testing.T) {
 		}
 		shim.requireOnPath(t)
 	})
-}
-
-func TestDevEnvYmlRunsSetForkReconciliationURLOnceInPrepareEnvOnPullRequestsOnly(t *testing.T) {
-	devEnv := readWorkflow(t, "dev-env.yml")
-	for _, f := range prOnlyPrepareEnvStepFaults(devEnv, "set-fork-reconciliation-url", reconciliationURLRunCmd) {
-		t.Errorf(".github/workflows/dev-env.yml: %s", f)
-	}
-
-	sentryOff, reconURL := -1, -1
-	for _, job := range workflowJobsOf(devEnv) {
-		if job.name != "prepare-env" {
-			continue
-		}
-		for _, s := range job.steps() {
-			if len(invocations(s.keys["run"], "set-sentry-off")) > 0 {
-				sentryOff = s.index
-			}
-			if len(invocations(s.keys["run"], "set-fork-reconciliation-url")) > 0 {
-				reconURL = s.index
-			}
-		}
-	}
-	if sentryOff < 0 {
-		t.Fatal("control: no set-sentry-off step found in prepare-env; the scan is broken")
-	}
-	switch {
-	case reconURL < 0:
-		t.Errorf("no set-fork-reconciliation-url step in prepare-env, want one after the set-sentry-off step (step %d)", sentryOff)
-	case reconURL <= sentryOff:
-		t.Errorf("the set-fork-reconciliation-url step is prepare-env step %d, want after the set-sentry-off step (step %d)", reconURL, sentryOff)
-	}
 }

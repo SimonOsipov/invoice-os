@@ -142,14 +142,14 @@ func TestPurgeGateCommentExplainsWhyItIsDirectional(t *testing.T) {
 		t.Fatal("the purge gate in dev-env.yml's health-gate carries no comment above it at all")
 	}
 
-	want := []string{"ENVIRONMENT", "provisionableEnvironment", "set-fork-environment"}
+	want := []string{"ENVIRONMENT", "provisionableEnvironment", "fork-vars-after-urls"}
 	if missing := missingFragments(comment, want); len(missing) != 0 {
 		t.Errorf("the comment above dev-env.yml's purge gate never mentions %v, so it does not say why a fork expects \"true\" and production expects \"false\":\n%s", missing, comment)
 	}
 
 	t.Run("control needle", func(t *testing.T) {
 		const explains = `
-          # Directional: set-fork-environment sets a fork's gateway ENVIRONMENT to
+          # Directional: fork-vars-after-urls sets a fork's gateway ENVIRONMENT to
           # development, so its purge runs. Production reads ENVIRONMENT=production,
           # which db.provisionableEnvironment refuses, so its purge never runs.
           if [ "$IS_PR" = "true" ]; then

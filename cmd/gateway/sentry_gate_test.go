@@ -107,9 +107,9 @@ func TestSentryGateIsDirectional(t *testing.T) {
 	rows := []sentryRow{
 		{name: "pr_all_off", isPR: true, body: withSentry("off", nil), wantExit: 0},
 		{name: "pr_invoice_on", isPR: true, body: withSentry("off", setField("invoice", "sentry", "on")), wantExit: 1,
-			named: []string{"invoice=on@deadbeef", "set-sentry-off"}, notNamed: []string{"gateway=", "tenancy="}},
+			named: []string{"invoice=on@deadbeef", "fork-vars-after-urls"}, notNamed: []string{"gateway=", "tenancy="}},
 		{name: "pr_reconciliation_on", isPR: true, body: withSentry("off", setField("reconciliation", "sentry", "on")), wantExit: 1,
-			named: []string{"reconciliation=on@deadbeef", "set-sentry-off"}, notNamed: []string{"gateway=", "invoice="}},
+			named: []string{"reconciliation=on@deadbeef", "fork-vars-after-urls"}, notNamed: []string{"gateway=", "invoice="}},
 		{name: "pr_tenancy_missing", isPR: true, body: withSentry("off", setField("tenancy", "sentry", nil)), wantExit: 1,
 			named: []string{"tenancy=none@deadbeef"}, notNamed: []string{"portfolio="}},
 		{name: "push_tenancy_missing", isPR: false, body: withSentry("on", setField("tenancy", "sentry", nil)), wantExit: 1,
@@ -142,7 +142,7 @@ func TestSentryGateIsDirectional(t *testing.T) {
 			return append(s, map[string]any{"name": "authz", "status": "up", "build": "deadbeef"})
 		}), wantExit: 1, named: []string{"authz=none@deadbeef"}, notNamed: []string{"auth=none"}},
 		{name: "pr_docling_on", isPR: true, body: withSentry("off", setField("docling", "sentry", "on")), wantExit: 1,
-			named: []string{"docling=on@deadbeef", "set-sentry-off"}, notNamed: []string{"gateway="}},
+			named: []string{"docling=on@deadbeef", "fork-vars-after-urls"}, notNamed: []string{"gateway="}},
 		{name: "pr_docling_missing", isPR: true, body: withSentry("off", setField("docling", "sentry", nil)), wantExit: 1,
 			named: []string{"docling=none@deadbeef"}, notNamed: []string{"gateway="}},
 		{name: "push_docling_missing", isPR: false, body: withSentry("on", setField("docling", "sentry", nil)), wantExit: 1,
@@ -150,7 +150,7 @@ func TestSentryGateIsDirectional(t *testing.T) {
 
 		// QA Mode B adversarial rows.
 		{name: "pr_docling_empty_sentry", isPR: true, body: withSentry("off", setField("docling", "sentry", "")), wantExit: 1,
-			named: []string{"docling=@deadbeef", "set-sentry-off"}, notNamed: []string{"gateway="}},
+			named: []string{"docling=@deadbeef", "fork-vars-after-urls"}, notNamed: []string{"gateway="}},
 		{name: "push_docling_empty_sentry", isPR: false, body: withSentry("on", setField("docling", "sentry", "")), wantExit: 1,
 			named: []string{"docling=@deadbeef"}, notNamed: []string{"gateway="}},
 		{name: "pr_docling_stale_build", isPR: true, body: withSentry("off", setField("docling", "build", "0ld")), wantExit: 1,
@@ -182,7 +182,7 @@ func TestSentryGateIsDirectional(t *testing.T) {
 		{name: "pr_build_none", isPR: true, body: withSentry("off", setField("invoice", "build", nil)), wantExit: 1,
 			named: []string{"invoice=off@none"}, notNamed: []string{"gateway="}},
 		{name: "pr_gateway_on", isPR: true, body: withSentry("off", setField("gateway", "sentry", "on")), wantExit: 1,
-			named: []string{"gateway=on@deadbeef", "set-sentry-off"}, notNamed: []string{"tenancy="}},
+			named: []string{"gateway=on@deadbeef", "fork-vars-after-urls"}, notNamed: []string{"tenancy="}},
 		{name: "push_gateway_stale", isPR: false, body: withSentry("on", setField("gateway", "build", "0ld")), wantExit: 1,
 			named: []string{"gateway=on@0ld"}, notNamed: []string{"tenancy="}},
 		{name: "pr_Auth_is_not_auth", isPR: true, body: withSentry("off", func(t *testing.T, s []map[string]any) []map[string]any {

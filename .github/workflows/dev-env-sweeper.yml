@@ -45,7 +45,8 @@ jobs:
   sweep:
     name: Reap ephemeral environments whose PR is closed
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 20 + 10 min: the job's 429 waits total up to 600 s.
+    timeout-minutes: 30
     steps:
       # No `ref:` pin, unlike dev-env-teardown.yml. That pin exists because a
       # `pull_request: closed` checkout races the deletion of refs/pull/<N>/merge; there

@@ -91,14 +91,14 @@ across PRs the way `development`'s own four URLs (still constant, still hardcode
 PR opened ──> dev-env.yml:
                 prepare-env: derive `pr-<N>` (prenv.Name) ──> environmentCreate, forked
                              from `development` (skipInitialDeploys, create-or-reuse)
-                             ──> write a fresh gateway token (set-fork-gateway-token,
-                             right after set-fork-auth) ──> blank WAL_ARCHIVE_* on
+                             ──> pass 1: auth config, secrets and a fresh gateway token
+                             (fork-vars-before-urls) ──> blank WAL_ARCHIVE_* on
                              Postgres (a kept BUCKET must differ from production's) ──>
                              deploy Postgres + probe ──> assert Watch Paths empty
                              (M3-16 invariant, now runtime-asserted) ──> discover the
-                             5 URLs ──> blank Sentry variables (set-sentry-off)
-                             ──> point the fork gateway at reconciliation
-                             (set-fork-reconciliation-url)
+                             5 URLs in one request (discover-urls) ──> pass 2: URLs, auth
+                             site, AI/Jev fakes, Sentry blanks, reconciliation URL and
+                             ENVIRONMENT (fork-vars-after-urls)
                 ci-watch: polls the `CI` check alongside prepare-env; e2e waits for green CI
                 gateway ──> gate on /healthz (schema migrated + seeded at boot,
                 M4-21-04; the demo-tenant purge runs in the same sequence and is
@@ -409,14 +409,14 @@ contradict what the docs imply.
 
 | Thing | Carries into a fork? | Consequence for `prepare-env` |
 |---|---|---|
-| Service instances | Yes — all of them, immediately, `watchPatterns: []` on every one | No settle race. The M3-16 invariant holds in a fork. Prepare reads the service list once; `set-fork-auth` already requires `gateway` and `auth` from one read. |
+| Service instances | Yes — all of them, immediately, `watchPatterns: []` on every one | No settle race. The M3-16 invariant holds in a fork. Each variable pass reads the service list once and requires `gateway` and `auth` from that read. |
 | Public domains | Railway-**generated** ones only, auto-renamed `<svc>-pr-<N>.up.railway.app`; a custom domain never forks | Once the source environment holds only custom domains, a fork starts with none, so domain reconcile **creates** one per service: a query, a `serviceDomainCreate`, and a confirming re-query. Not a no-op. |
 | `targetPort` on those domains | Only the **gateway's** generated domain is `null`; the four SPA generated domains and all five custom domains report `8080` (re-measured 2026-08-02, all five services) | CI **reads** it off whichever domain it selected in the source environment — never a literal, so the gateway now gets a real `8080` from its custom domain. A `null` is still valid (Railway magic-port detection) and is replicated by **omitting** the field, not by substituting a port. |
 | Postgres deployment | **No** — `latestDeployment == NONE` | Real gap: nothing in this repo ever deployed Postgres (the `railway up` matrices are gateway + 8 contexts + docling + auth + 4 SPAs; Postgres is excluded above). `prepare-env` now deploys it explicitly via `serviceInstanceDeployV2`, then waits. |
 | Postgres volume | **No** — `volumeInstances == []`, while `development` has 5000MB | **CI must CREATE it.** Without a volume Postgres deploys to `SUCCESS` but **never accepts a connection** (corrected 2026-07-19 — see below). `prepare-env` creates it with `volumeCreate`, copying the `mountPath` and `region` from `development`, confirms by re-query, and redeploys Postgres if a deployment already existed. The database is still **ephemeral by design** and born empty — the gateway bootstraps, migrates, purges the demo tenants and seeds at boot. |
 | TCP proxy + `DATABASE_PUBLIC_URL` | Yes, with its own distinct port; `DATABASE_URL` resolves too | Since M4-22-08, `prepare-env` no longer probes or observes the proxy at all. `health-gate`'s `/healthz` 200 is now the sole Postgres liveness proof (`docs/migrations.md` §2) — strictly stronger. The proxy resource itself is scheduled for deletion via Escalation E2; until then it may still exist, unused. |
-| Sealed variables | **No** — they never fork | `prepare-env` fails loudly if `development` holds any, since they would otherwise go silently missing in every PR environment. Only exception: `GOTRUE_JWT_KEYS`, `GOTRUE_JWT_SECRET` and `GOTRUE_SMTP_PASS` on `auth`, which `set-fork-auth` writes per fork. |
-| Unsealed variables | Yes — verbatim | `GATEWAY_TOKEN` is the exception: `set-fork-gateway-token` overwrites it per fork on the gateway and the seven services (`TestSetForkGatewayToken_WritesOneFreshValueToTheEight`). |
+| Sealed variables | **No** — they never fork | `prepare-env` fails loudly if `development` holds any, since they would otherwise go silently missing in every PR environment. Only exception: `GOTRUE_JWT_KEYS`, `GOTRUE_JWT_SECRET` and `GOTRUE_SMTP_PASS` on `auth`, which `fork-vars-before-urls` writes per fork. |
+| Unsealed variables | Yes — verbatim | `GATEWAY_TOKEN` is the exception: `fork-vars-before-urls` overwrites it per fork on the gateway and the seven services (`TestSetForkGatewayToken_WritesOneFreshValueToTheEight`). |
 | Leftover PR environments | None existed before the probe | Independent confirmation that Railway's PR Environments feature never created any here. |
 
 ### Correction, 2026-07-19 — "no volume is fine" was false
@@ -462,7 +462,7 @@ fatal.
 ### `ENVIRONMENT` in a fork is set by CI
 
 `ENVIRONMENT` forks verbatim, and production's gateway reads `production`. On `pull_request`,
-`prepare-env` runs `railway-env.sh set-fork-environment`, which sets the fork **gateway's**
+`prepare-env`'s `fork-vars-after-urls` pass sets the fork **gateway's**
 `ENVIRONMENT` to the constant `development` and re-reads it. The other services keep the
 inherited value. `RAILWAY_ENVIRONMENT_NAME` is `pr-<N>`.
 
@@ -476,16 +476,34 @@ renaming the fork convention cannot change whether a fork's database bootstraps.
 
 A slow or briefly failing Railway API must not fail the gate by itself. Every GraphQL call in
 `scripts/ci/railway-env.sh` goes through one transport, `graphql_try`; `dev-env.yml` reaches it
-through `railway-env.sh query`. The rules below are the shipped behaviour
+through `railway-env.sh` subcommands, `query` included. The rules below are the shipped behaviour
 (`tools/prenv/railway_env_retry_test.go`).
 
-**What retries.** A curl timeout (`--max-time 30`, exit 28) and an HTTP 5xx. Up to 3 attempts,
+**What retries.** A curl timeout (`--max-time 30`, exit 28; 90 for a batched request) and an HTTP 5xx. Up to 3 attempts,
 waiting 5 s then 10 s. A call that needed a retry prints a `::warning::`; an exhausted budget
 prints one `::error::`.
 
-**What fails fast, with no retry.** A GraphQL `errors` array, any 4xx, HTTP 429 (named as
-rate-limiting), and connection resets or any other curl failure. A mutation that is not
-idempotent, and every poll tick, is sent once (`once`).
+**What fails fast, with no retry.** A GraphQL `errors` array, any 4xx but 429, and
+connection resets or any other curl failure. A mutation that is not
+idempotent, and every poll tick, gets one transient attempt (`once`).
+
+**429 waits.** Any call, a poll tick included, waits the time Railway names in `Retry-After`
+(else `X-RateLimit-Reset`, ISO-8601, reset minus now plus 1 s) and sends once more, at least 1 s, at most 600 s per call and 600 s per job
+in total (`$RUNNER_TEMP/railway-api-429-waited`). The four jobs with a set timeout (`prepare-env`, `teardown`, `sweep`, `pr-environments-off`) have a `timeout-minutes` 10 above their work budget for those waits; the other jobs that run `railway-env.sh` use GitHub's 360-minute default (`TestWorkflowTimeoutsCoverTheRateLimitWaits`). A `::warning::` names the wait. A longer wait, a
+second 429, no usable wait or a full job total fails and names the wait, batched calls included
+(`tools/prenv/railway_env_retry_test.go`; poll ticks: `tools/prenv/railway_env_wait_deployment_test.go`;
+batched calls: `tools/prenv/railway_env_pass_test.go`).
+
+**Batched variable passes.** `fork-vars-before-urls` (auth config, secrets, `GATEWAY_TOKEN`) and
+`fork-vars-after-urls` (URLs, auth site, AI/Jev fakes, Sentry blanks, reconciliation URL,
+`ENVIRONMENT`) each run one env-list read, one service-list read, one batched read of the
+unrendered values; when any name differs, one batched write of only those names (`skipDeploys`)
+and one batched re-read, otherwise neither; every verdict reads the last read. A failed alias names its service and variable names,
+never a value or Railway's message. `discover-urls` reads the 5 domains in one request and
+`assert-db-dsns` reads an environment's variables in one request, after one service-list read
+(`tools/prenv/railway_env_pass_test.go`, `TestForkVarsAfterURLs_SettledForkMakesThreeCalls`;
+`tools/prenv/railway_env_dsn_test.go`, `TestAssertDBDSNs_ReadsAnEnvironmentInTwoCalls`). The per-variable subcommands (`set-fork-auth`,
+`set-ai-fake`, `set-sentry-off` and the rest) stay as entry points: each runs one pass for its own variables.
 
 **Poll budgets.**
 
@@ -495,6 +513,7 @@ idempotent, and every poll tick, is sent once (`once`).
 | `fleet-gate` fleet poll | 600 s |
 | SPA `/health` + `/build.txt` (`wait-spa-builds.sh`) | 600 s (120 x 5 s) |
 | `wait-deployment` | 60 ticks x 10 s = 600 s; 3 failed ticks in all end it |
+| 429 waits (any call, poll ticks included) | 600 s per job in total |
 
 **`railway up` upload re-run.** `scripts/ci/railway-up-ci.sh` re-runs an upload once, after 10 s,
 when the CLI failed on a transport error before Railway printed a `Build Logs:` URL. It never

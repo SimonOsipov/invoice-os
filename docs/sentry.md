@@ -86,7 +86,7 @@ The user does every step. Production writes are the user's; an agent never write
 - **Usage:** Settings → Stats (errors, spans, logs).
 - **Health:** `GET https://api.ascomply.com/healthz/fleet` (`sentry` per service).
 - **Source map upload:** the SPA's Railway build log.
-- **PR silence:** the deploy gate's `prepare-env` step "Blank every Sentry variable in the fork" and `fleet-gate` step "Gate on the fleet's Sentry state".
+- **PR silence:** the deploy gate's `prepare-env` pass `fork-vars-after-urls` (`set-sentry-off`) and `fleet-gate` step "Gate on the fleet's Sentry state".
 
 ## Go-live record
 

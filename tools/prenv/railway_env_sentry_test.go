@@ -11,8 +11,7 @@ import (
 )
 
 const (
-	sentryUsage     = "usage: railway-env.sh set-sentry-off <environment-id>"
-	sentryOffRunCmd = `bash scripts/ci/railway-env.sh set-sentry-off "$ENV_ID"`
+	sentryUsage = "usage: railway-env.sh set-sentry-off <environment-id>"
 
 	// Planted values a fork inherits. None may be printed.
 	sentryDSNSentinel   = "https://5eedpublickey@o4500000.ingest.de.sentry.io/4500000000000001"
@@ -91,21 +90,17 @@ func sentryConfirmed(out string) bool {
 	return false
 }
 
-// reReads returns the service id of each authVars read that follows a write of that
-// service, with the call index. The read before a service's write is not a re-read.
+// reReads lists the service id of every variable read sent after a write, with its call index.
 func reReads(calls []railwayCall) (ids []string, at []int) {
-	written := map[string]bool{}
+	wrote := false
 	for i, c := range calls {
-		if strings.Contains(c.Query, "variableCollectionUpsert(") {
-			in, _ := c.Variables["input"].(map[string]any)
-			sv, _ := in["serviceId"].(string)
-			written[sv] = true
+		if isVariableWrite(c) {
+			wrote = true
 			continue
 		}
-		if ops := operations([]railwayCall{c}); ops[0] == "authVars" {
-			sv, _ := c.Variables["s"].(string)
-			if written[sv] {
-				ids = append(ids, sv)
+		if wrote && isVariableRead(c) {
+			for _, id := range readServices(c) {
+				ids = append(ids, id)
 				at = append(at, i)
 			}
 		}
@@ -113,23 +108,21 @@ func reReads(calls []railwayCall) (ids []string, at []int) {
 	return ids, at
 }
 
-func noReReadAfter(t *testing.T, s authShim, svc string) {
+// singleReRead fails unless one request re-read svc after the write and no read followed it:
+// every verdict runs on that one re-read.
+func singleReRead(t *testing.T, s authShim, svc string) {
 	t.Helper()
 	calls := s.calls(t)
 	ids, at := reReads(calls)
-	i := slices.Index(ids, sentrySvcID(svc))
-	if i < 0 {
+	if !slices.Contains(ids, sentrySvcID(svc)) {
 		t.Errorf("%s was never re-read; re-reads = %v", svc, ids)
 		return
 	}
-	var later []string
-	for _, c := range calls[at[i]+1:] {
-		if isVariableRead(c) {
-			later = append(later, readService(c))
-		}
+	if n := opCount(t, s, "varsRead"); n != 2 {
+		t.Errorf("%d varsRead calls, want 2: the read and one re-read", n)
 	}
-	if len(later) != 0 {
-		t.Errorf("reads continued after %s's refusal (call %d): %v; the command must fail fast", svc, at[i], later)
+	if last := len(calls) - 1; at[0] != last {
+		t.Errorf("a read followed the re-read (call %d of %d)", at[0], last)
 	}
 }
 
@@ -138,6 +131,18 @@ func refusesAsSet(t *testing.T, out, label string) {
 	errs := errorLines(out)
 	if !strings.Contains(errs, label) || !strings.Contains(errs, "Value not printed") {
 		t.Errorf("no ::error:: line names %s and says \"Value not printed\"; output = %q", label, out)
+	}
+}
+
+// refusesUnreadableRead is the batched read's refusal: it names the service, says it is unreadable, and is not the "set" refusal.
+func refusesUnreadableRead(t *testing.T, out, svc string) {
+	t.Helper()
+	errs := errorLines(out)
+	if !strings.Contains(errs, svc) || !strings.Contains(errs, "unreadable") {
+		t.Errorf("no ::error:: line names %s and says it is unreadable; output = %q", svc, out)
+	}
+	if strings.Contains(errs, "Value not printed") {
+		t.Errorf("an unreadable map produced the \"set\" refusal; the two must read differently; output = %q", out)
 	}
 }
 
@@ -160,14 +165,8 @@ func TestSetSentryOffAgainstAScriptedRailway(t *testing.T) {
 		if sentryConfirmed(out) {
 			t.Errorf("a failed write printed the confirmation line; output = %q", out)
 		}
-		var dsn int
-		for _, u := range s.upserts(t) {
-			if u.Name == "SENTRY_DSN" {
-				dsn++
-			}
-		}
-		if dsn != 1 {
-			t.Errorf("SENTRY_DSN upserts = %d, want the one failed write, not retried", dsn)
+		if n := opCount(t, s, "varsWrite"); n != 1 {
+			t.Errorf("varsWrite calls = %d, want the one failed write, not retried", n)
 		}
 	}
 	noUpsert := func(says string) func(*testing.T, authShim, string) {
@@ -190,9 +189,16 @@ func TestSetSentryOffAgainstAScriptedRailway(t *testing.T) {
 			}
 		}
 	}
+	// A first read with no map for the gateway refuses before any write.
+	unreadableGateway := func(t *testing.T, s authShim, out string) {
+		refusesUnreadableRead(t, out, "gateway")
+		if n := opCount(t, s, "varsWrite"); n != 0 {
+			t.Errorf("an unreadable map was followed by %d varsWrite call(s), want none", n)
+		}
+	}
 	gatewaySet := func(t *testing.T, s authShim, out string) {
 		refusesAsSet(t, out, "gateway.SENTRY_DSN")
-		noReReadAfter(t, s, "gateway")
+		singleReRead(t, s, "gateway")
 	}
 
 	cases := []struct {
@@ -217,15 +223,20 @@ func TestSetSentryOffAgainstAScriptedRailway(t *testing.T) {
 		{name: "token_survives_on_landing", bend: map[string]string{"landing": `.SENTRY_AUTH_TOKEN = "` + sentryTokenSentinel + `"`}, code: 1, check: func(t *testing.T, s authShim, out string) {
 			refusesAsSet(t, out, "landing.SENTRY_AUTH_TOKEN")
 			ids, _ := reReads(s.calls(t))
-			for _, b := range sentryBackends {
-				if !slices.Contains(ids, sentrySvcID(b)) {
-					t.Errorf("backend %s was never re-read before landing refused; re-reads = %v", b, ids)
+			// Every verdict runs on the one re-read: the services before landing and the SPAs after it.
+			for _, svc := range slices.Concat(sentryBackends, []string{"app", "ops-console", "support-console"}) {
+				if !slices.Contains(ids, sentrySvcID(svc)) {
+					t.Errorf("%s was never re-read; re-reads = %v", svc, ids)
 				}
-				if !strings.Contains(out, b+".SENTRY_DSN is empty") {
-					t.Errorf("backend %s did not pass its verdict (no %q line); output = %q", b, b+".SENTRY_DSN is empty", out)
+				name := "SENTRY_DSN"
+				if slices.Contains(sentrySPAs, svc) {
+					name = "VITE_SENTRY_DSN"
+				}
+				if !strings.Contains(out, svc+"."+name+" is empty") {
+					t.Errorf("%s did not pass its verdict (no %q line); output = %q", svc, svc+"."+name+" is empty", out)
 				}
 			}
-			noReReadAfter(t, s, "landing")
+			singleReRead(t, s, "landing")
 		}},
 		// A backend is checked for SENTRY_DSN only, so the SPA names on it do not refuse.
 		{name: "backend_checks_sentry_dsn_only", bend: map[string]string{"gateway": `.VITE_SENTRY_DSN = "` + sentryDSNSentinel + `" | .SENTRY_AUTH_TOKEN = "` + sentryTokenSentinel + `"`}, code: 0, check: func(t *testing.T, s authShim, out string) {
@@ -233,8 +244,8 @@ func TestSetSentryOffAgainstAScriptedRailway(t *testing.T) {
 				t.Errorf("no confirmation line; output = %q", out)
 			}
 		}},
-		{name: "variables_null", bend: map[string]string{"gateway": "null"}, code: 1, check: func(t *testing.T, s authShim, out string) { refusesUnreadable(t, out) }},
-		{name: "variables_array", bend: map[string]string{"gateway": "[]"}, code: 1, check: func(t *testing.T, s authShim, out string) { refusesUnreadable(t, out) }},
+		{name: "variables_null", bend: map[string]string{"gateway": "null"}, code: 1, check: unreadableGateway},
+		{name: "variables_array", bend: map[string]string{"gateway": "[]"}, code: 1, check: unreadableGateway},
 		{name: "write_refused", files: map[string]string{"upsert-SENTRY_DSN.json": `{"errors":[{"message":"Not Authorized"}]}`}, code: 1, check: noReRead},
 		{name: "write_transport_failure", files: map[string]string{"upsert-SENTRY_DSN.fail": "curl: (22) The requested URL returned error: 400"}, code: 1, check: noReRead},
 		{name: "vite_dsn_survives_on_support_console", bend: map[string]string{"support-console": `.VITE_SENTRY_DSN = "` + sentryDSNSentinel + `"`}, code: 1, check: func(t *testing.T, s authShim, out string) {
@@ -244,23 +255,22 @@ func TestSetSentryOffAgainstAScriptedRailway(t *testing.T) {
 			}
 		}},
 		{name: "json_null_value", bend: map[string]string{"gateway": `.SENTRY_DSN = null`}, code: 1, check: gatewaySet},
-		{name: "variables_string", bend: map[string]string{"gateway": `"` + sentryDSNSentinel + `"`}, code: 1, check: func(t *testing.T, s authShim, out string) { refusesUnreadable(t, out) }},
-		// The shim then answers {"data":{"variables":}}, which graphql_post passes through.
-		{name: "read_not_json", bend: map[string]string{"gateway": `error("broken read")`}, code: 1, check: func(t *testing.T, s authShim, out string) { refusesUnreadable(t, out) }},
+		{name: "variables_string", bend: map[string]string{"gateway": `"` + sentryDSNSentinel + `"`}, code: 1, check: unreadableGateway},
+		// The shim then answers an empty alias, which the batched read treats as no variable map.
+		{name: "read_not_json", bend: map[string]string{"gateway": `error("broken read")`}, code: 1, check: unreadableGateway},
 		// Only the re-read after the write is unreadable.
 		{name: "reread_unreadable", bend: map[string]string{"gateway": `if .SENTRY_DSN == "" then null else . end`}, code: 1, check: func(t *testing.T, s authShim, out string) {
-			refusesUnreadable(t, out)
-			noReReadAfter(t, s, "gateway")
-		}},
-		{name: "token_write_refused_after_the_backends", files: map[string]string{"upsert-SENTRY_AUTH_TOKEN.json": `{"errors":[{"message":"Not Authorized"}]}`}, code: 1, check: func(t *testing.T, s authShim, out string) {
-			ids, _ := reReads(s.calls(t))
-			if len(ids) != len(sentryBackends) || slices.Contains(ids, sentrySvcID("landing")) {
-				t.Errorf("re-reads = %v, want exactly the backends and never landing after its write failed", ids)
+			refusesUnreadableRead(t, out, "gateway")
+			if !strings.Contains(errorLines(out), "written but not confirmed") {
+				t.Errorf("no ::error:: line says the write is not confirmed; output = %q", out)
 			}
-			if sentryConfirmed(out) {
-				t.Errorf("a failed write printed the confirmation line; output = %q", out)
+			if n := opCount(t, s, "varsWrite"); n != 1 {
+				t.Errorf("varsWrite calls = %d, want the write that landed", n)
 			}
+			singleReRead(t, s, "gateway")
 		}},
+		// One request writes every service, so a write refused for the SPA names fails the whole batch.
+		{name: "token_write_refused_fails_the_batch", files: map[string]string{"upsert-SENTRY_AUTH_TOKEN.json": `{"errors":[{"message":"Not Authorized"}]}`}, code: 1, check: noReRead},
 		// Only the literal compare can refuse here with no call: the ephemeral check would read the list first.
 		{name: "persistent_id_with_every_variable_set", arg: persistentEnvironmentID, code: 1, check: func(t *testing.T, s authShim, out string) {
 			if !strings.Contains(errorLines(out), persistentEnvironmentID) {
@@ -357,22 +367,18 @@ func checkBlanked(t *testing.T, s authShim, out string) {
 		}
 	}
 
-	// Each write is followed at once by a re-read of the same service.
-	var reread []string
-	for _, w := range ws {
-		if w.At+1 >= len(calls) || !isVariableRead(calls[w.At+1]) || readService(calls[w.At+1]) != w.Service {
-			t.Errorf("the write of %q is not followed at once by its re-read", w.Service)
-			continue
-		}
-		reread = append(reread, w.Service)
+	// One write of every service, then one re-read of the same services.
+	if want, got := []string{"envList", "settle", "varsRead", "varsWrite", "varsRead"}, operations(calls); !slices.Equal(got, want) {
+		t.Errorf("Railway calls = %v, want %v", got, want)
 	}
+	reread, _ := reReads(calls)
 	var all []string
 	for _, n := range slices.Concat(sentryBackends, sentrySPAs) {
 		all = append(all, sentrySvcID(n))
 	}
 	slices.Sort(reread)
 	slices.Sort(all)
-	if !slices.Equal(reread, all) {
+	if len(all) != 14 || !slices.Equal(reread, all) {
 		t.Errorf("re-reads = %v, want one per service %v", reread, all)
 	}
 
@@ -629,36 +635,5 @@ func TestSentryVerdictTruthTableIncludingShapesNoFixtureCovers(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestDevEnvYmlRunsSetSentryOffOnceInPrepareEnvOnPullRequestsOnly(t *testing.T) {
-	devEnv := readWorkflow(t, "dev-env.yml")
-	for _, f := range prOnlyPrepareEnvStepFaults(devEnv, "set-sentry-off", sentryOffRunCmd) {
-		t.Errorf(".github/workflows/dev-env.yml: %s", f)
-	}
-
-	aiFake, sentryOff := -1, -1
-	for _, job := range workflowJobsOf(devEnv) {
-		if job.name != "prepare-env" {
-			continue
-		}
-		for _, s := range job.steps() {
-			if len(invocations(s.keys["run"], "set-ai-fake")) > 0 {
-				aiFake = s.index
-			}
-			if len(invocations(s.keys["run"], "set-sentry-off")) > 0 {
-				sentryOff = s.index
-			}
-		}
-	}
-	if aiFake < 0 {
-		t.Fatal("control: no set-ai-fake step found in prepare-env; the scan is broken")
-	}
-	switch {
-	case sentryOff < 0:
-		t.Errorf("no set-sentry-off step in prepare-env, want one after the set-ai-fake step (step %d)", aiFake)
-	case sentryOff <= aiFake:
-		t.Errorf("the set-sentry-off step is prepare-env step %d, want after the set-ai-fake step (step %d)", sentryOff, aiFake)
 	}
 }

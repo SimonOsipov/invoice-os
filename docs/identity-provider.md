@@ -145,8 +145,8 @@ not echo the value. There is no upper bound.
 
 - `set-fork-auth`, `set-fork-auth-site` and `set-production-auth` write with
   `skipDeploys: true`, so a write never redeploys a service by itself.
-- `set-fork-auth` and `set-fork-auth-site` write through `set_service_vars`
-  (`variableCollectionUpsert`, only the names that differ). `set-production-auth` writes one
+- Fork passes write batched (`variableCollectionUpsert`, only the names that differ;
+  `docs/deploy-model.md`, "Batched variable passes"). `set-production-auth` writes one
   variable at a time; a secret goes through `upsert_secret_variable`. Both print
   `label.NAME = <redacted>` for a secret and never a value or a length.
 - Every write is re-read. A secret re-read compares the stored value with the written value
@@ -188,7 +188,7 @@ Production writes are the user's. The environment id is
   push after merge.
 - **Needed before the PR's first deploy gate**, because forks inherit services from
   production and `expected_json` fails on a missing `auth`.
-- Until done, the PR gate is red at prepare-env's `set-fork-auth` step, which cannot resolve
+- Until done, the PR gate is red at prepare-env's `fork-vars-before-urls` step, which cannot resolve
   a service named `auth`.
 - This is the **only** production action the PR gate needs. The fork writes everything else
   itself. It is not the only one before a production deploy of this code: `GATEWAY_TOKEN`

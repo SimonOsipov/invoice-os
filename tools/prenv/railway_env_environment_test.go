@@ -18,12 +18,13 @@ import (
 )
 
 const (
-	forkEnvironmentUsage  = "usage: railway-env.sh set-fork-environment <environment-id>"
-	forkEnvSecret         = "sentinel-secret-dsn"
-	forkEnvSecretSibling  = `"DATABASE_URL":"sentinel-secret-dsn"`
-	prOnlyCondition       = "github.event_name == 'pull_request'"
-	forkEnvironmentRunCmd = `bash scripts/ci/railway-env.sh set-fork-environment "$ENV_ID"`
-	forkSelfTestRunCmd    = "bash scripts/ci/railway-env.sh set-fork-environment --self-test"
+	forkEnvironmentUsage = "usage: railway-env.sh set-fork-environment <environment-id>"
+	forkEnvSecret        = "sentinel-secret-dsn"
+	forkEnvSecretSibling = `"DATABASE_URL":"sentinel-secret-dsn"`
+	prOnlyCondition      = "github.event_name == 'pull_request'"
+	forkVarsBeforeRunCmd = `bash scripts/ci/railway-env.sh fork-vars-before-urls "$ENV_ID"`
+	forkVarsAfterRunCmd  = `bash scripts/ci/railway-env.sh fork-vars-after-urls "$ENV_ID" "$GATEWAY_URL" "$APP_URL" "$LANDING_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL"`
+	forkSelfTestRunCmd   = "bash scripts/ci/railway-env.sh set-fork-environment --self-test"
 )
 
 // curlShim prepends a curl to PATH that logs each call instead of reaching the network.
@@ -166,67 +167,9 @@ func guardOrderFaults(code string, guards []shellGuard) []string {
 }
 
 var (
-	forkEnvironmentGuards = []shellGuard{
-		{"the --self-test branch", regexp.MustCompile(`--self-test`)},
-		{"the usage guard", regexp.MustCompile(regexp.QuoteMeta(forkEnvironmentUsage))},
-		{"require_source_env", regexp.MustCompile(`\brequire_source_env\b`)},
-		{"the persistent-id compare", regexp.MustCompile(`"\$\{?env_id\}?"\s*==?\s*"\$\{?RAILWAY_DEV_ENVIRONMENT_ID\}?"|"\$\{?RAILWAY_DEV_ENVIRONMENT_ID\}?"\s*==?\s*"\$\{?env_id\}?"`)},
-		{"require_env", regexp.MustCompile(`\brequire_env\b`)},
-		{"assert_environment_is_ephemeral", regexp.MustCompile(`\bassert_environment_is_ephemeral\s+"\$\{?env_id\}?"\s+\S`)},
-		{"service_id_by_name", regexp.MustCompile(`\bservice_id_by_name\b`)},
-		{"set_service_vars", regexp.MustCompile(`\bset_service_vars\b`)},
-	}
-	gatewayIDByName    = regexp.MustCompile(`\b(\w+)=\$\(\s*service_id_by_name\s+\S+\s+"?gateway"?\s`)
-	variablesReRead    = regexp.MustCompile(`\b(SERVICE_)?VARIABLES_QUERY\b`)
-	developmentVerdict = regexp.MustCompile(`\benvironment_verdict\s+\S+\s+"?development"?(\s|$)`)
+	gatewayIDByName = regexp.MustCompile(`\b(\w+)=\$\(\s*service_id_by_name\s+\S+\s+"?gateway"?\s`)
+	variablesReRead = regexp.MustCompile(`\b(SERVICE_)?VARIABLES_QUERY\b`)
 )
-
-// forkEnvironmentBodyFaults reports each way comment-stripped cmd_set_fork_environment code
-// departs from the guard order and the gateway-only write.
-func forkEnvironmentBodyFaults(code string) []string {
-	faults := guardOrderFaults(code, forkEnvironmentGuards)
-
-	// set_service_vars writes and then re-reads (setServiceVarsReReadFaults), so it is both.
-	upserts := regexp.MustCompile(`\bset_service_vars\b`).FindAllStringIndex(code, -1)
-	if len(upserts) != 1 {
-		faults = append(faults, fmt.Sprintf("%d set_service_vars calls, want exactly 1", len(upserts)))
-	}
-	if regexp.MustCompile(`\bupsert_variable\b`).MatchString(code) {
-		faults = append(faults, "calls upsert_variable, a write with no re-read")
-	}
-	if strings.Contains(code, "RAILWAY_SVC_GATEWAY_ID") {
-		faults = append(faults, "names RAILWAY_SVC_GATEWAY_ID; the gateway must be resolved by name")
-	}
-	if !strings.Contains(code, "SETTLE_QUERY") {
-		faults = append(faults, "no SETTLE_QUERY read for service_id_by_name")
-	}
-	if m := gatewayIDByName.FindStringSubmatch(code); m == nil {
-		faults = append(faults, "no `<id>=$(service_id_by_name … gateway …)`")
-	} else {
-		write := regexp.MustCompile(`(?m)\bset_service_vars\s+"\$\{?env_id\}?"\s+"\$\{?` + regexp.QuoteMeta(m[1]) + `\}?"\s+"?gateway"?\s+""\s+"?ENVIRONMENT=development"?\s*$`)
-		if !write.MatchString(code) {
-			faults = append(faults, fmt.Sprintf(`no set_service_vars "$env_id" "$%s" gateway "" ENVIRONMENT=development`, m[1]))
-		}
-	}
-
-	var upsertAt, reReadAt, verdictAt = -1, -1, -1
-	if len(upserts) > 0 {
-		upsertAt = upserts[len(upserts)-1][0]
-		reReadAt = upsertAt
-	}
-	if all := developmentVerdict.FindAllStringIndex(code, -1); len(all) > 0 {
-		verdictAt = all[len(all)-1][0]
-	}
-	switch {
-	case reReadAt < 0 || reReadAt < upsertAt:
-		faults = append(faults, "no fresh variables re-read after the upsert")
-	case verdictAt < 0:
-		faults = append(faults, "no `environment_verdict … development`")
-	case verdictAt < reReadAt:
-		faults = append(faults, "environment_verdict runs before the fresh re-read")
-	}
-	return faults
-}
 
 const (
 	forkBodySelfTest = `  local env_id="${1:-}"
@@ -240,23 +183,7 @@ const (
     exit 2
   fi
 `
-	forkBodyGuards = `  require_source_env
-  if [ "$env_id" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
-    echo "::error::Refusing to set ENVIRONMENT in the persistent environment ($env_id)."
-    exit 1
-  fi
-  require_env
-  assert_environment_is_ephemeral "$env_id" ENVIRONMENT
-  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
-    "listing service instances in environment $env_id"
-  local svc_id
-`
 	forkBodyResolve = `  svc_id=$(service_id_by_name "$GQL_RESPONSE" gateway "environment $env_id" ENVIRONMENT)
-`
-	forkBodyUpsert = `  set_service_vars "$env_id" "$svc_id" gateway "" ENVIRONMENT=development
-`
-	forkBodyVerdict = `  environment_verdict "$GQL_RESPONSE" development || exit 1
-  echo "gateway ENVIRONMENT=development confirmed in environment $env_id."
 `
 )
 
@@ -268,44 +195,6 @@ func swapOnce(s, a, b string) string {
 
 func shellCode(lines []string) string {
 	return strings.Join(stripHashComments(lines), "\n")
-}
-
-func TestSetForkEnvironmentWritesOnlyTheGatewayEnvironment(t *testing.T) {
-	good := forkBodySelfTest + forkBodyUsage + forkBodyGuards + forkBodyResolve + forkBodyUpsert + forkBodyVerdict
-	fixtures := []struct{ name, body string }{
-		{"require_env swapped with require_source_env", swapOnce(good, "  require_source_env\n", "  require_env\n")},
-		{"usage after require_source_env", swapOnce(good, forkBodyUsage, "  require_source_env\n")},
-		{"service_id_by_name before assert_environment_is_ephemeral", swapOnce(good, "  assert_environment_is_ephemeral \"$env_id\" ENVIRONMENT\n", forkBodyResolve)},
-		{"the constant gateway id", strings.Replace(good, forkBodyResolve, "  svc_id=\"$RAILWAY_SVC_GATEWAY_ID\"\n", 1)},
-		{"the constant id in the upsert", strings.Replace(good, `"$svc_id" gateway "" ENVIRONMENT`, `"$RAILWAY_SVC_GATEWAY_ID" gateway "" ENVIRONMENT`, 1)},
-		{"a second variable written", strings.Replace(good, forkBodyUpsert, forkBodyUpsert+"  set_service_vars \"$env_id\" \"$svc_id\" gateway \"\" GATEWAY_MOCK_ISSUER=true\n", 1)},
-		{"a second variable on the same line", strings.Replace(good, "ENVIRONMENT=development\n", "ENVIRONMENT=development GATEWAY_MOCK_ISSUER=true\n", 1)},
-		{"the value production", strings.Replace(good, "ENVIRONMENT=development\n", "ENVIRONMENT=production\n", 1)},
-		{"a service other than gateway", strings.Replace(good, `"$GQL_RESPONSE" gateway "environment`, `"$GQL_RESPONSE" submission "environment`, 1)},
-		{"require_env commented out", strings.Replace(good, "  require_env\n", "  # require_env\n", 1)},
-		{"no fresh re-read", strings.Replace(good, forkBodyUpsert, "  upsert_variable \"$env_id\" \"$svc_id\" gateway ENVIRONMENT development\n", 1)},
-		{"the verdict before the re-read", swapOnce(good, forkBodyUpsert, forkBodyVerdict)},
-	}
-	t.Run("fixtures", func(t *testing.T) {
-		if faults := forkEnvironmentBodyFaults(shellCode(strings.Split(good, "\n"))); len(faults) != 0 {
-			t.Fatalf("the planned body reports %v", faults)
-		}
-		for _, f := range fixtures {
-			if f.body == good {
-				t.Fatalf("fixture %q: the edit did not apply", f.name)
-			}
-			if faults := forkEnvironmentBodyFaults(shellCode(strings.Split(f.body, "\n"))); len(faults) == 0 {
-				t.Errorf("fixture %q: no fault reported", f.name)
-			}
-		}
-	})
-
-	for _, fault := range forkEnvironmentBodyFaults(shellCode(shellFunctionBody(t, "cmd_set_fork_environment"))) {
-		t.Errorf("cmd_set_fork_environment: %s", fault)
-	}
-	for _, fault := range setServiceVarsReReadFaults(shellCode(shellFunctionBody(t, "set_service_vars")), shellCode(shellFunctionBody(t, "auth_read"))) {
-		t.Errorf("set_service_vars: %s", fault)
-	}
 }
 
 // setServiceVarsReReadFaults reports a set_service_vars whose last read does not follow its
@@ -712,11 +601,6 @@ func invocations(run, needle string) []string {
 	return out
 }
 
-// forkEnvironmentStepFaults reports each way dev-env.yml departs from one PR-only prepare-env step running set-fork-environment.
-func forkEnvironmentStepFaults(devEnv string) []string {
-	return prOnlyPrepareEnvStepFaults(devEnv, "set-fork-environment", forkEnvironmentRunCmd)
-}
-
 // prOnlyPrepareEnvStepFaults reports each way dev-env.yml departs from one PR-only prepare-env step
 // whose one command naming subcommand is runCmd.
 func prOnlyPrepareEnvStepFaults(devEnv, subcommand, runCmd string) []string {
@@ -841,43 +725,67 @@ func readWorkflow(t *testing.T, name string) string {
 	return string(raw)
 }
 
-func TestDevEnvYmlWiresSetForkEnvironmentIntoPrepareEnv(t *testing.T) {
-	for _, c := range []struct {
-		name, yaml string
-		bad        bool
-	}{
-		{"the planned step", fxDevEnv, false},
-		{"no if:", strings.Replace(fxDevEnv, fxForkStep, strings.Replace(fxForkStep, fxForkIf, "", 1), 1), true},
-		{"a push-and-PR if:", strings.Replace(fxDevEnv, fxForkStep, strings.Replace(fxForkStep, fxForkIf, "        if: github.event_name != 'workflow_dispatch'\n", 1), 1), true},
-		{"no RAILWAY_API_TOKEN", strings.Replace(fxDevEnv, fxForkStep, strings.Replace(fxForkStep, fxForkToken, "", 1), 1), true},
-		{"continue-on-error", strings.Replace(fxDevEnv, fxForkStep, fxForkStep+"        continue-on-error: true\n", 1), true},
-		{"the step in deploy-gateway", strings.Replace(strings.Replace(fxDevEnv, fxForkStep, "", 1), fxStampStep, fxForkStep+fxStampStep, 1), true},
-		{"a second run in health-gate", strings.Replace(fxDevEnv, "            exit 1\n", "            bash scripts/ci/railway-env.sh set-fork-environment \"$ENV_ID\"\n            exit 1\n", 1), true},
-		{"the step commented out", strings.Replace(fxDevEnv, fxForkStep, commentOut(fxForkStep), 1), true},
-	} {
-		if c.bad && c.yaml == fxDevEnv {
-			t.Fatalf("fixture %q: the edit did not apply", c.name)
-		}
-		if faults := forkEnvironmentStepFaults(c.yaml); (len(faults) > 0) != c.bad {
-			t.Errorf("fixture %q: faults %v, want faults = %v", c.name, faults, c.bad)
-		}
-	}
-
-	devEnv := readWorkflow(t, "dev-env.yml")
-	// Control: the parser reads the set-ai-fake step's if: and env in the real prepare-env job.
-	var control []workflowStep
-	for _, job := range workflowJobsOf(devEnv) {
+// devEnvJobsRunning returns the dev-env.yml jobs with a run step that invokes sub; an echo of the name does not count.
+func devEnvJobsRunning(t *testing.T, sub string) []string {
+	t.Helper()
+	var jobs []string
+	for _, job := range workflowJobsOf(readWorkflow(t, "dev-env.yml")) {
 		for _, s := range job.steps() {
-			if len(invocations(s.keys["run"], "set-ai-fake")) > 0 && job.name == "prepare-env" {
-				control = append(control, s)
+			for range invocations(s.keys["run"], sub) {
+				jobs = append(jobs, job.name)
 			}
 		}
 	}
-	if len(control) != 1 || control[0].keys["if"] != prOnlyCondition || control[0].env["RAILWAY_API_TOKEN"] == "" {
-		t.Fatalf("control: the parser does not read the set-ai-fake step in prepare-env (%d found); the scan is broken", len(control))
+	return jobs
+}
+
+// requireForkPassControl fails unless the workflow scans can see both fork passes as run steps in dev-env.yml.
+func requireForkPassControl(t *testing.T) {
+	t.Helper()
+	dir := filepath.Join(repoRoot(t), ".github", "workflows")
+	for _, sub := range []string{passSub, afterSub} {
+		hits, read := workflowsNaming(t, dir, sub)
+		if read < 3 || !slices.Contains(hits, "dev-env.yml") {
+			t.Fatalf("control: read %d workflow file(s) and found %s in %v; the scan is broken", read, sub, hits)
+		}
+		if jobs := devEnvJobsRunning(t, sub); !slices.Equal(jobs, []string{"prepare-env"}) {
+			t.Fatalf("control: %s runs as a step in dev-env.yml jobs %v, want [prepare-env]; a name inside an echo does not count", sub, jobs)
+		}
 	}
-	for _, f := range forkEnvironmentStepFaults(devEnv) {
-		t.Errorf(".github/workflows/dev-env.yml: %s", f)
+}
+
+func TestDevEnvYmlWiresTheForkPassesIntoPrepareEnv(t *testing.T) {
+	devEnv := readWorkflow(t, "dev-env.yml")
+	var prep *workflowJob
+	for _, job := range workflowJobsOf(devEnv) {
+		if job.name == "prepare-env" {
+			prep = &job
+		}
+	}
+	if prep == nil {
+		t.Fatal("control: workflowJobsOf finds no prepare-env job in dev-env.yml")
+	}
+	hasResolve := false
+	steps := prep.steps()
+	for _, s := range steps {
+		hasResolve = hasResolve || s.keys["id"] == "resolve"
+	}
+	if len(steps) < 10 || !hasResolve {
+		t.Fatalf("control: prepare-env parsed to %d steps (resolve found: %v), want >= 10 and a resolve step", len(steps), hasResolve)
+	}
+	for _, l := range prep.lines {
+		if strings.HasPrefix(l, "    continue-on-error") {
+			t.Errorf("the prepare-env job carries a job-level %q", strings.TrimSpace(l))
+		}
+	}
+
+	for _, c := range []struct{ sub, cmd string }{{passSub, forkVarsBeforeRunCmd}, {afterSub, forkVarsAfterRunCmd}} {
+		if n := len(devEnvJobsRunning(t, c.sub)); n != 1 {
+			t.Errorf("control: %d commands in dev-env.yml run %s, want exactly 1", n, c.sub)
+		}
+		for _, f := range prOnlyPrepareEnvStepFaults(devEnv, c.sub, c.cmd) {
+			t.Errorf(".github/workflows/dev-env.yml: %s", f)
+		}
 	}
 }
 
@@ -1385,11 +1293,8 @@ func TestNoWorkflowRunsSetProductionEnvironment(t *testing.T) {
 	})
 
 	dir := filepath.Join(repoRoot(t), ".github", "workflows")
-	// Floor and control: every workflow is read, and a sibling subcommand two of them run is found.
-	control, read := workflowsNaming(t, dir, "set-fork-environment")
-	if read < 3 || !slices.Contains(control, "dev-env.yml") || !slices.Contains(control, "railway-invariants.yml") {
-		t.Fatalf("control: read %d workflow file(s) and found set-fork-environment in %v; the scan is broken", read, control)
-	}
+	// Floor and control: every workflow is read, and dev-env.yml runs both fork passes.
+	requireForkPassControl(t)
 	if hits, _ := workflowsNaming(t, dir, productionNeedle); len(hits) != 0 {
 		t.Errorf("%v run or name %s; production's ENVIRONMENT is written by hand, once, and no workflow writes it", hits, productionNeedle)
 	}

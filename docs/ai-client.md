@@ -45,7 +45,7 @@ Model, endpoint and the retry budget are constants — there is no knob for any 
 | Environment | OPENROUTER_API_KEY | AI_FAKE | Set by |
 |---|---|---|---|
 | production (persistent) | set by an operator, unsealed | unset | An operator, directly in the Railway dashboard. `railway-env.sh set-ai-fake` refuses to run against this environment's id. |
-| `pr-<N>` (ephemeral fork) | `""` on both `submission` and `invoice` | `true` on both `submission` and `invoice` | `set-ai-fake <env-id>` in `dev-env.yml`'s `prepare-env` job, PR-only, no `continue-on-error`. Each write is independently re-read; the job fails if either service still holds a usable key. |
+| `pr-<N>` (ephemeral fork) | `""` on both `submission` and `invoice` | `true` on both `submission` and `invoice` | `set-ai-fake <env-id>`, run by `fork-vars-after-urls` in `dev-env.yml`'s `prepare-env` job, PR-only, no `continue-on-error`. The pass re-reads every write (`docs/deploy-model.md`, "Batched variable passes"); the job fails if either service still holds a usable key. |
 | local compose / developer shell | unset | unset | Nobody — the client is off. |
 
 ## Fake mode markers
@@ -220,8 +220,8 @@ the source environment holds a sealed variable, because `prepare-env` forks the 
 environment's variables into every `pr-<N>`. Its only exception is `GOTRUE_JWT_KEYS`,
 `GOTRUE_JWT_SECRET` and `GOTRUE_SMTP_PASS` on `auth` (see `docs/identity-provider.md`).
 So the production key has to stay unsealed,
-which means every fork inherits it — which is exactly why `set-ai-fake` runs and blanks
-it before any forked service deploys.
+which means every fork inherits it — which is exactly why `set-ai-fake`'s checks run in every PR `prepare-env`, through `fork-vars-after-urls`,
+and blank it before any forked service deploys.
 
 ## Known limitations
 
@@ -229,15 +229,13 @@ it before any forked service deploys.
    for document extraction; `invoice`'s `SuggestMappingHandler` (AIR-07) calls it for
    spreadsheet column mapping (see "Spreadsheet mapping" above). `submission`'s two
    deployed checks are recorded on PR #247's deploy-gate run 35341117286
-   (`dev-env.yml`): the `prepare-env` step "Force AI fake mode and blank the AI key
-   in the fork" read `submission.OPENROUTER_API_KEY is empty` and
+   (`dev-env.yml`): the `prepare-env` fork-variable step read `submission.OPENROUTER_API_KEY is empty` and
    `submission.AI_FAKE = true`, the fleet health gate passed, and the Railway
    deploy log for the submission instance on `pr-247` carried `ai call` lines with
    `purpose: document` and `outcome: fake`. The image read's own check
    (AIR05-E2E-01 and the `pr-249` `ai call` line) is recorded in PR #249's description.
    `invoice`'s own two checks are recorded on PR #251's deploy-gate run 35559923822
-   (`dev-env.yml`): the `prepare-env` step "Force AI fake mode and blank the AI key
-   in the fork" read `invoice.AI_FAKE = true` and `invoice.OPENROUTER_API_KEY is
+   (`dev-env.yml`): the `prepare-env` fork-variable step read `invoice.AI_FAKE = true` and `invoice.OPENROUTER_API_KEY is
    empty`, the fleet health gate passed, and the Railway deploy log for the invoice
    instance on `pr-251` carried 29 `ai call` lines — each matched by a
    `POST /v1/imports/suggest-mapping` request returning 200 — with
@@ -251,8 +249,8 @@ it before any forked service deploys.
 4. **Railway does store an empty-string variable value** — measured, not assumed. On the
    first `prepare-env` run of a ready PR, both services' re-read verdicts came back
    `is empty` rather than `is absent`, so `variableUpsert` accepted `""` and persisted it.
-   Fork writes now go through `set_service_vars`, which sends `variableCollectionUpsert`
-   (one write per service, only for names that differ). On the fresh-fork gate run (36636496623) a blank `OPENROUTER_API_KEY` written by `variableCollectionUpsert` re-read as `is empty`, so collection upserts persist `""`.
+   Fork writes are batched: one `variableCollectionUpsert` per service, only for names that
+   differ (`docs/deploy-model.md`, "Batched variable passes"). On the fresh-fork gate run (36636496623) a blank `OPENROUTER_API_KEY` written by `variableCollectionUpsert` re-read as `is empty`, so collection upserts persist `""`.
    The verdict in `ai_key_verdict` passes on either shape, absent or exactly `""`, so no
    code depends on which one Railway chooses; a rejection would have failed `prepare-env`
    loudly rather than deploying a fork with an inherited key.

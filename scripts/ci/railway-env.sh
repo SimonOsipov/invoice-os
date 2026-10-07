@@ -14,10 +14,13 @@
 #                            set-fork-auth-site <environment-id> <landing-url>|
 #                            set-production-auth <--pre-merge|--post-merge> <environment-id>|
 #                            set-fork-gateway-token <environment-id>|
+#                            fork-vars-before-urls <environment-id>|
+#                            fork-vars-after-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url>|
 #                            set-production-gateway-token <environment-id>|
 #                            set-sentry-off <environment-id|--self-test>|
 #                            set-fork-reconciliation-url <environment-id>|
 #                            delete-environment <name>|list-environments|
+#                            discover-urls <environment-id>|
 #                            query <context>|wait-deployment <label> <deployment-id>|report-api-calls>
 #
 # `set-production-environment` is run by hand, once, never from a workflow: it
@@ -85,7 +88,7 @@
 # Auth: account-scoped RAILWAY_API_TOKEN, `Authorization: Bearer`. A Railway *project*
 # token is pinned to one environment and cannot perform projectUpdate, nor reach an
 # ephemeral PR environment.
-# Only `query` and `wait-deployment` also accept RAILWAY_PROJECT_TOKEN (`Project-Access-Token`), for dispatch runs.
+# `query` and `wait-deployment` also accept RAILWAY_PROJECT_TOKEN (`Project-Access-Token`), for dispatch runs.
 #
 # bash, not POSIX sh: unlike scripts/ci/railway-up-ci.sh this does NOT run inside the
 # minimal ghcr.io/railwayapp/cli container.
@@ -163,6 +166,9 @@ GQL_CURL_RC=0
 GQL_REPORTED=0
 # Auth header override; empty means `Authorization: Bearer $RAILWAY_API_TOKEN`.
 GQL_AUTH_HEADER=""
+# Railway's wait for the 429 just seen (seconds, may be huge), and the per-process total of 429 waits.
+GQL_WAIT=""
+GQL_429_WAITED=0
 # Subcommand name for the call log.
 API_COMMAND="${1:-}"
 # Environment id found by the most recent successful lookup_environment.
@@ -184,13 +190,25 @@ gql_errors() {
   printf '%s' "$GQL_RESPONSE" | jq -c '[.errors[]? | {message, code: .extensions.code?}]' 2>/dev/null || true
 }
 
+# gql_error_aliases: each distinct alias (sK) in an error's path[0], never a message.
+gql_error_aliases() {
+  printf '%s' "$GQL_RESPONSE" | jq -r '[.errors[]?.path[0]? | strings | select(test("^s[0-9]+$"))] | unique[]' 2>/dev/null || true
+}
+
+# A request that carries many aliases gets 90 s per attempt (a 15-alias call measured about 9 s);
+# a batched caller sets GQL_MAX_TIME=$BATCH_MAX_TIME. Three attempts and their backoff take at most 285 s.
+BATCH_MAX_TIME=90
+
 # gql_attempt <json-body> <context-label>
-# One HTTP attempt; only curl 28 and HTTP 5xx are transient. The body goes through a pipe:
+# One HTTP attempt; only curl 28 and HTTP 5xx are transient. An HTTP 429 is fault `ratelimit`,
+# with GQL_WAIT set to Railway's wait in whole seconds, empty when it gave none.
+# The body goes through a pipe:
 # argv is visible in `ps`, and a here-string can land in a temp file (TestRailwayAPI_BodyReachesCurlThroughAPipe).
 gql_attempt() {
-  local body="$1" ctx="$2" tmp rc=0 code
+  local body="$1" ctx="$2" tmp rc=0 code ra reset ts at
+  GQL_WAIT=""
   tmp=$(mktemp -d)
-  GQL_RESPONSE=$(curl -sS --fail-with-body --connect-timeout 5 --max-time 30 -D "$tmp/hdr" \
+  GQL_RESPONSE=$(curl -sS --fail-with-body --connect-timeout 5 --max-time "${GQL_MAX_TIME:-30}" -D "$tmp/hdr" \
         --request POST \
         --url "$RAILWAY_GRAPHQL_URL" \
         --header "${GQL_AUTH_HEADER:-Authorization: Bearer $RAILWAY_API_TOKEN}" \
@@ -201,7 +219,6 @@ gql_attempt() {
   if [ -n "${RUNNER_TEMP:-}" ] && grep -qiE '^(ratelimit-policy|x-ratelimit-(limit|remaining)):' "$tmp/hdr" 2>/dev/null; then
     grep -iE '^(ratelimit-policy|x-ratelimit-(limit|remaining)):' "$tmp/hdr" | tr -d '\r' > "$RUNNER_TEMP/railway-api-ratelimit"
   fi
-  rm -rf "$tmp"
 
   GQL_FAULT="" GQL_ERROR="" GQL_CURL_RC=$rc
   case "$rc" in
@@ -218,7 +235,27 @@ gql_attempt() {
       code=$(printf '%s' "$GQL_LAST" | sed -n 's/.*returned error: \([0-9][0-9]*\).*/\1/p')
       case "$code" in
         5??) GQL_FAULT=transient GQL_ERROR="Railway API call failed while $ctx: $GQL_LAST" ;;
-        429) GQL_FAULT=fatal GQL_ERROR="Railway rate-limited this token (HTTP 429) while $ctx; not retried." ;;
+        429)
+          GQL_FAULT=ratelimit GQL_ERROR="Railway rate-limited this call (HTTP 429) while $ctx."
+          ra=$(tr -d '\r' < "$tmp/hdr" | awk -F: 'tolower($1) == "retry-after" { sub(/^[^:]*:[ \t]*/, ""); sub(/[ \t]+$/, ""); print; exit }' || true)
+          reset=$(tr -d '\r' < "$tmp/hdr" | awk -F: 'tolower($1) == "x-ratelimit-reset" { sub(/^[^:]*:[ \t]*/, ""); sub(/[ \t]+$/, ""); print; exit }' || true)
+          if [[ "$ra" =~ ^[0-9]+$ ]]; then
+            # Base 10: bash reads a leading 0 as octal. Anything over 3 digits is over the cap, not a number to add.
+            GQL_WAIT="${ra#"${ra%%[!0]*}"}"
+            # A resend never leaves at once.
+            [ -n "$GQL_WAIT" ] && [ "$GQL_WAIT" != 0 ] || GQL_WAIT=1
+          elif [[ "$reset" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]]; then
+            ts="${reset%%.*}"
+            ts="${ts%Z}"
+            # GNU date (CI), then BSD date (macOS).
+            at=$(date -u -d "${ts}Z" +%s 2>/dev/null || date -u -j -f '%Y-%m-%dT%H:%M:%S' "$ts" +%s 2>/dev/null) || at=""
+            if [ -n "$at" ]; then
+              # +1: the reset has a fraction that `at` dropped.
+              GQL_WAIT=$((at - $(date +%s) + 1))
+              [ "$GQL_WAIT" -ge 1 ] || GQL_WAIT=1
+            fi
+          fi
+          ;;
         *) GQL_FAULT=fatal GQL_ERROR="Railway API answered HTTP ${code:-unknown} (not retried) while $ctx: $GQL_LAST $(gql_errors)" ;;
       esac
       ;;
@@ -226,32 +263,79 @@ gql_attempt() {
       GQL_FAULT=fatal GQL_ERROR="Railway API request failed (not retried) while $ctx: $GQL_LAST"
       ;;
   esac
+  rm -rf "$tmp"
   [ -z "$GQL_FAULT" ]
 }
 
 # graphql_try <json-body> <context-label> [once]
 # Returns 1 silently on failure (GQL_ERROR, GQL_FAULT). Retries a transient failure up to
 # 3 attempts; `once` sends a non-idempotent mutation or a poll tick a single time.
+# An HTTP 429 is not a transient attempt: it waits Railway's wait and resends once, any call.
+# The waits of a job total 600 s ($RUNNER_TEMP/railway-api-429-waited; per process without it).
 # Only an exhausted budget prints, as ::error::.
+# GQL_ERROR_SAFE=1 marks a GQL_ERROR the script built itself (a fatal 429): callers may print it.
 graphql_try() {
-  local body="$1" ctx="$2" max=3 n earlier=""
+  local body="$1" ctx="$2" max=3 t=0 h=0 rl=0 earlier="" waited_file="" waited=0 last_wait=""
   [ "${3:-}" = once ] && max=1
-  GQL_REPORTED=0
+  [ -z "${RUNNER_TEMP:-}" ] || waited_file="$RUNNER_TEMP/railway-api-429-waited"
+  GQL_REPORTED=0 GQL_ERROR_SAFE=0
 
-  for n in 1 2 3; do
+  while :; do
+    h=$((h + 1))
     if gql_attempt "$body" "$ctx"; then
-      [ -z "${RUNNER_TEMP:-}" ] || printf '%s\t%s\tok\n' "$API_COMMAND" "$n" >> "$RUNNER_TEMP/railway-api-calls.tsv"
-      if [ "$n" != 1 ]; then
-        echo "::warning::Railway API call succeeded on attempt $n/3 while $ctx; earlier: $earlier." >&2
+      t=$((t + 1))
+      [ -z "${RUNNER_TEMP:-}" ] || printf '%s\t%s\tok\n' "$API_COMMAND" "$h" >> "$RUNNER_TEMP/railway-api-calls.tsv"
+      if [ "$t" != 1 ]; then
+        echo "::warning::Railway API call succeeded on attempt $t/3 while $ctx; earlier: $earlier." >&2
       fi
       return 0
     fi
-    [ -z "${RUNNER_TEMP:-}" ] || printf '%s\t%s\t%s\n' "$API_COMMAND" "$n" "$GQL_FAULT" >> "$RUNNER_TEMP/railway-api-calls.tsv"
-    if [ "$GQL_FAULT" != transient ] || [ "$n" -ge "$max" ]; then
+    [ -z "${RUNNER_TEMP:-}" ] || printf '%s\t%s\t%s\n' "$API_COMMAND" "$h" "$GQL_FAULT" >> "$RUNNER_TEMP/railway-api-calls.tsv"
+
+    if [ "$GQL_FAULT" = ratelimit ]; then
+      rl=$((rl + 1))
+      GQL_FAULT=fatal
+      if [ "$rl" -gt 1 ]; then
+        GQL_ERROR="Railway rate-limited this call (HTTP 429) a second time while $ctx, after a wait of ${last_wait} s; not retried."
+        GQL_ERROR_SAFE=1
+        return 1
+      fi
+      if [ -z "$GQL_WAIT" ]; then
+        GQL_ERROR="Railway rate-limited this call (HTTP 429) while $ctx and gave no wait (no usable Retry-After or X-RateLimit-Reset); not retried."
+        GQL_ERROR_SAFE=1
+        return 1
+      fi
+      if [ "${#GQL_WAIT}" -gt 3 ] || [ "$GQL_WAIT" -gt 600 ]; then
+        GQL_ERROR="Railway rate-limited this call (HTTP 429) while $ctx and asked for a wait of ${GQL_WAIT} s, over the 600 s limit; not retried."
+        GQL_ERROR_SAFE=1
+        return 1
+      fi
+      if [ -n "$waited_file" ]; then
+        waited=$(cat "$waited_file" 2>/dev/null || true)
+      else
+        waited="${GQL_429_WAITED:-0}"
+      fi
+      [[ "$waited" =~ ^[0-9]+$ ]] || waited=0
+      waited=$((10#$waited))
+      if [ $((waited + GQL_WAIT)) -gt 600 ]; then
+        GQL_ERROR="Railway rate-limited this call (HTTP 429) while $ctx and asked for a wait of ${GQL_WAIT} s with ${waited} s already waited in this job; the total limit is 600 s; not retried."
+        GQL_ERROR_SAFE=1
+        return 1
+      fi
+      echo "::warning::Railway rate-limited this call (HTTP 429) while $ctx; waiting ${GQL_WAIT} s, then sending it once more." >&2
+      sleep "$GQL_WAIT"
+      last_wait="$GQL_WAIT"
+      waited=$((waited + GQL_WAIT))
+      if [ -n "$waited_file" ]; then printf '%s\n' "$waited" > "$waited_file"; else GQL_429_WAITED=$waited; fi
+      continue
+    fi
+
+    t=$((t + 1))
+    if [ "$GQL_FAULT" != transient ] || [ "$t" -ge "$max" ]; then
       break
     fi
     earlier="$GQL_LAST"
-    sleep $((n * 5))
+    sleep $((t * 5))
   done
 
   if [ "$GQL_FAULT" = transient ] && [ "$max" = 3 ]; then
@@ -937,6 +1021,50 @@ cmd_audit_sealed_variables() {
   echo "Sealed-variable audit clean: $sealed of $total variables in the source environment are sealed, all allowlisted on auth: $allowed."
 }
 
+# read_vars_batch <env-id> <rendered|unrendered> <context> <svc-id>...
+# One varsRead request; alias sK is the Kth service id. On success GQL_RESPONSE holds it.
+# On failure returns 1 and sets READ_FAILED_IDX (the K of each unreadable alias, empty when none
+# is known) and READ_FAIL_WHY. Never prints, and never keeps Railway's message.
+read_vars_batch() {
+  local env_id="$1" mode="$2" ctx="$3" q decl="" fields="" arg="" i=0 id n
+  shift 3
+  n=$#
+  READ_FAILED_IDX="" READ_FAIL_WHY=""
+  [ "$mode" != unrendered ] || arg=", unrendered: true"
+  for id in "$@"; do
+    decl="$decl, \$s$i: String!"
+    fields="$fields
+  s$i: variables(projectId: \$p, environmentId: \$e, serviceId: \$s$i${arg})"
+    i=$((i + 1))
+  done
+  q="query varsRead(\$p: String!, \$e: String!$decl) {$fields
+}"
+  if ! GQL_MAX_TIME=$BATCH_MAX_TIME graphql_try "$(gql_body "$q" "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" \
+      '{p: $p, e: $e} + ([$ARGS.positional | to_entries[] | {("s\(.key)"): .value}] | add)' --args "$@")")" "$ctx"; then
+    if [ "$GQL_CURL_RC" = 0 ]; then
+      for id in $(gql_error_aliases); do
+        id="${id#s}"
+        # Canonical index below n only: a bare s99 or s08 names no service.
+        if [[ "$id" =~ ^(0|[1-9][0-9]{0,8})$ ]] && [ "$id" -lt "$n" ]; then READ_FAILED_IDX="$READ_FAILED_IDX$id "; fi
+      done
+      READ_FAIL_WHY="Railway answered a GraphQL error"
+    else
+      READ_FAIL_WHY="$GQL_LAST"
+      [ "${GQL_ERROR_SAFE:-0}" != 1 ] || READ_FAIL_WHY="$GQL_ERROR"
+    fi
+    return 1
+  fi
+  if ! printf '%s' "$GQL_RESPONSE" | jq -e '(type == "object") and (.data | type == "object")' >/dev/null 2>&1; then
+    READ_FAIL_WHY="the response was not a JSON object with data"
+    return 1
+  fi
+  READ_FAILED_IDX=$(printf '%s' "$GQL_RESPONSE" | jq -r --argjson n "$n" \
+    '[range(0; $n) as $i | select(((try .data["s\($i)"] catch null) | type) != "object") | $i] | join(" ")')
+  [ -z "$READ_FAILED_IDX" ] && return 0
+  READ_FAIL_WHY="no variable map came back"
+  return 1
+}
+
 # --- DB DSN invariant (M4-22-FU) ---------------------------------------------
 #
 # M4-22: a variable RENAME left the DSNs interpolating the deleted names, so
@@ -1010,7 +1138,7 @@ cmd_assert_db_dsns() {
   graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
     "listing service instances in environment $env_id"
 
-  local instances map='{}' sid sname vars prefixes
+  local instances map prefixes sid sname k names=() ids=()
   prefixes=$(printf '%s' "$DSN_VAR_PREFIXES" | jq -R 'split(" ")')
   instances=$(echo "$GQL_RESPONSE" | jq -r \
     '.data.environment.serviceInstances.edges[]?.node | "\(.serviceId)\t\(.serviceName)"')
@@ -1018,17 +1146,24 @@ cmd_assert_db_dsns() {
     echo "::error::Railway returned no service instances for environment $env_id, so the DB DSN check could not run. This is NOT evidence that the DSNs are healthy."
     exit 1
   fi
-
-  # A here-string, not a pipe: the loop must run in THIS shell or $map is lost.
   while IFS=$'\t' read -r sid sname; do
     [ -n "$sid" ] || continue
-    graphql_post "$(gql_body "$SERVICE_VARIABLES_QUERY" \
-      "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$sid" '{p: $p, e: $e, s: $s}')")" \
-      "reading the $sname variables in environment $env_id"
-    vars=$(echo "$GQL_RESPONSE" | jq -c --argjson pre "$prefixes" \
-      '(.data.variables // {}) | with_entries(.key as $k | select(any($pre[]; . as $p | $k | startswith($p))))')
-    map=$(jq -cn --argjson m "$map" --arg n "$sname" --argjson v "$vars" '$m + {($n): $v}')
+    ids+=("$sid")
+    names+=("$sname")
   done <<< "$instances"
+
+  if ! read_vars_batch "$env_id" rendered "reading the variables of every service in environment $env_id" "${ids[@]}"; then
+    local who=""
+    for k in $READ_FAILED_IDX; do who="$who ${names[$k]}"; done
+    [ -n "$who" ] || who=" every service"
+    echo "::error::The DB DSN check could not read the variables of${who} in environment $env_id ($READ_FAIL_WHY), so it did NOT run. This is NOT evidence that the DSNs are healthy."
+    exit 1
+  fi
+
+  # Values reach jq on stdin; only the service names are argv.
+  map=$(printf '%s' "$GQL_RESPONSE" | jq -c --argjson pre "$prefixes" \
+    '. as $r | reduce ($ARGS.positional | to_entries[]) as $x ({}; . + {($x.value): ($r.data["s\($x.key)"] | with_entries(.key as $k | select(any($pre[]; . as $p | $k | startswith($p)))))})' \
+    --args "${names[@]}")
 
   run_dsn_check "$map" "environment $env_id"
 }
@@ -1198,7 +1333,7 @@ settle_fork() {
 # --- Reconcile C: domains ----------------------------------------------------
 #
 # F7 is absolute: this NEVER emits a URL. It only makes domains EXIST. The
-# untouched `urls` step remains the sole discoverer and still fails if any is
+# `urls` step remains the sole discoverer and still fails if any is
 # missing, so no URL is ever constructed from a pattern.
 reconcile_domain() {
   local env_id="$1" svc_id="$2" label="$3" existing target src_count input body sel count
@@ -1481,9 +1616,6 @@ VARIABLE_COLLECTION_UPSERT_MUTATION='mutation varCollectionUpsert($input: Variab
   variableCollectionUpsert(input: $input)
 }'
 
-# Pairs of the last set_service_vars call, for the caller's auth_check.
-SET_VARS_PAIRS=()
-
 # set_service_vars <env-id> <svc-id> <label> "<secret names>" NAME=VALUE...
 # Reads the unrendered map, writes only the names that differ (absent != "") in one
 # collection write, and re-reads when it wrote. Leaves the final map in GQL_RESPONSE.
@@ -1491,7 +1623,6 @@ SET_VARS_PAIRS=()
 set_service_vars() {
   local env_id="$1" svc_id="$2" label="$3" secrets="$4" intended diff held names n
   shift 4
-  SET_VARS_PAIRS=("$@")
   names=$(for n in "${@%%=*}"; do printf '%s.%s ' "$label" "$n"; done)
   intended=$(printf '%s\0' "$@" | jq -Rsc 'split("\u0000")[:-1] | map(split("=") | {key: .[0], value: (.[1:] | join("="))}) | from_entries')
 
@@ -1527,8 +1658,18 @@ upsert_variable() {
   echo "  $label.$name = $value"
 }
 
+reconcile_url_variables_check() {
+  if [ "$1" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to rewrite URL variables in the persistent development environment ($1)."
+    exit 1
+  fi
+  PASS_NOT_SET="${PASS_NOT_SET:+$PASS_NOT_SET/}URL_VARIABLES"
+}
+
+# Reads PASS_GATEWAY_URL, PASS_APP_URL, PASS_LANDING_URL, PASS_OPS_URL and PASS_SUPPORT_URL.
 reconcile_url_variables() {
-  local env_id="$1" gateway_url="$2" app_url="$3" landing_url="$4" ops_url="$5" support_url="$6"
+  local env_id="$1" gateway_url="$PASS_GATEWAY_URL" app_url="$PASS_APP_URL" landing_url="$PASS_LANDING_URL"
+  local ops_url="$PASS_OPS_URL" support_url="$PASS_SUPPORT_URL" gw_id app_id landing_id ops_id support_id
   # Every browser origin that calls the gateway. Omitting one does not fail loudly — the
   # SPA renders and its fetches are refused by CORS at runtime — so a new SPA MUST be
   # added here in the same change that creates it.
@@ -1539,17 +1680,21 @@ reconcile_url_variables() {
     exit 1
   fi
 
-  echo "Reconciling per-environment URL variables in $env_id ..."
-  set_service_vars "$env_id" "$RAILWAY_SVC_GATEWAY_ID" gateway "" "CORS_ALLOWED_ORIGINS=$origins"
-  auth_check gateway "${SET_VARS_PAIRS[@]}" || exit 1
-  set_service_vars "$env_id" "$RAILWAY_SVC_APP_ID" app "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url"
-  auth_check app "${SET_VARS_PAIRS[@]}" || exit 1
-  set_service_vars "$env_id" "$RAILWAY_SVC_LANDING_ID" landing "" "VITE_GATEWAY_URL=$gateway_url" "VITE_APP_URL=$app_url" "VITE_OPS_URL=$ops_url" "VITE_SUPPORT_URL=$support_url" VITE_REGISTRATION_OPEN=true
-  auth_check landing "${SET_VARS_PAIRS[@]}" || exit 1
-  set_service_vars "$env_id" "$RAILWAY_SVC_OPS_CONSOLE_ID" ops-console "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url"
-  auth_check ops-console "${SET_VARS_PAIRS[@]}" || exit 1
-  set_service_vars "$env_id" "$RAILWAY_SVC_SUPPORT_CONSOLE_ID" support-console "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url"
-  auth_check support-console "${SET_VARS_PAIRS[@]}" || exit 1
+  gw_id=$(service_id_by_name "$PASS_SETTLE" gateway "environment $env_id" URL_VARIABLES) || exit 1
+  app_id=$(service_id_by_name "$PASS_SETTLE" app "environment $env_id" URL_VARIABLES) || exit 1
+  landing_id=$(service_id_by_name "$PASS_SETTLE" landing "environment $env_id" URL_VARIABLES) || exit 1
+  ops_id=$(service_id_by_name "$PASS_SETTLE" ops-console "environment $env_id" URL_VARIABLES) || exit 1
+  support_id=$(service_id_by_name "$PASS_SETTLE" support-console "environment $env_id" URL_VARIABLES) || exit 1
+
+  pass_plan_add "$gw_id" gateway "" "CORS_ALLOWED_ORIGINS=$origins"
+  pass_plan_add "$app_id" app "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url"
+  pass_plan_add "$landing_id" landing "" "VITE_GATEWAY_URL=$gateway_url" "VITE_APP_URL=$app_url" "VITE_OPS_URL=$ops_url" "VITE_SUPPORT_URL=$support_url" VITE_REGISTRATION_OPEN=true
+  pass_plan_add "$ops_id" ops-console "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url"
+  pass_plan_add "$support_id" support-console "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url"
+}
+
+reconcile_url_variables_verdict() {
+  pass_owned_verdict reconcile_url_variables || return 1
   echo "All 12 environment variables confirmed by independent re-query."
 }
 
@@ -1559,10 +1704,8 @@ cmd_reconcile_urls() {
     echo "::error::usage: railway-env.sh reconcile-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url>"
     exit 2
   fi
-  require_env
-  require_source_env
-  require_fork_ids
-  reconcile_url_variables "$1" "$2" "$3" "$4" "$5" "$6"
+  PASS_GATEWAY_URL="$2" PASS_APP_URL="$3" PASS_LANDING_URL="$4" PASS_OPS_URL="$5" PASS_SUPPORT_URL="$6"
+  fork_pass "$1" reconcile_url_variables
 }
 
 # --- Reconcile D: Postgres bring-up ------------------------------------------
@@ -2417,6 +2560,40 @@ ai_fake_self_test() {
   echo "AI fake self-test: 10 fixtures passed, no token read, no network call."
 }
 
+ai_fake_check() {
+  if [ "$1" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to force AI fake mode in the persistent environment ($1). The real key there is an OPERATOR's; no CI path may override it."
+    exit 1
+  fi
+  PASS_NOT_SET="${PASS_NOT_SET:+$PASS_NOT_SET/}AI_FAKE"
+}
+
+# ai_fake: AF_IDS is parallel to AI_FAKE_SERVICES.
+AI_FAKE_SERVICES=(submission invoice)
+
+ai_fake() {
+  local svc id
+  AF_IDS=()
+  for svc in "${AI_FAKE_SERVICES[@]}"; do
+    id=$(service_id_by_name "$PASS_SETTLE" "$svc" "environment $1" AI_FAKE) || exit 1
+    AF_IDS+=("$id")
+    pass_plan_add "$id" "$svc" "" AI_FAKE=true JEV_FAKE=true OPENROUTER_API_KEY=
+  done
+}
+
+ai_fake_verdict() {
+  local i svc bad=0 map
+  for i in "${!AI_FAKE_SERVICES[@]}"; do
+    svc="${AI_FAKE_SERVICES[$i]}"
+    map=$(pass_map "${AF_IDS[$i]}")
+    value_verdict "$map" "$svc" AI_FAKE true || bad=1
+    value_verdict "$map" "$svc" JEV_FAKE true || bad=1
+    ai_key_verdict "$map" "$svc" || bad=1
+  done
+  [ "$bad" = 0 ] || return 1
+  echo "AI and Jev fake mode confirmed in environment $PASS_ENV: AI_FAKE=true, JEV_FAKE=true and no usable OPENROUTER_API_KEY on submission and invoice."
+}
+
 # cmd_set_ai_fake <environment-id|--self-test>
 # Guard order is load-bearing: the usage guard must precede the
 # persistent-environment compare, or an empty argument compares false against
@@ -2436,30 +2613,7 @@ cmd_set_ai_fake() {
     echo "::error::usage: railway-env.sh set-ai-fake <environment-id>"
     exit 2
   fi
-
-  require_source_env
-  if [ "$env_id" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
-    echo "::error::Refusing to force AI fake mode in the persistent environment ($env_id). The real key there is an OPERATOR's; no CI path may override it."
-    exit 1
-  fi
-
-  require_env
-  assert_environment_is_ephemeral "$env_id" AI_FAKE
-
-  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
-    "listing service instances in environment $env_id"
-  # Saved before the loop: graphql_post overwrites GQL_RESPONSE inside it.
-  local settle="$GQL_RESPONSE" svc svc_id
-  for svc in submission invoice; do
-    # Own line, not `local svc_id=$(...)`: a local declaration masks the exit
-    # status and set -e would not fire on a refusal.
-    svc_id=$(service_id_by_name "$settle" "$svc" "environment $env_id" AI_FAKE)
-
-    set_service_vars "$env_id" "$svc_id" "$svc" "" AI_FAKE=true JEV_FAKE=true OPENROUTER_API_KEY=
-    auth_check "$svc" AI_FAKE=true JEV_FAKE=true || exit 1
-    ai_key_verdict "$GQL_RESPONSE" "$svc" || exit 1
-  done
-  echo "AI and Jev fake mode confirmed in environment $env_id: AI_FAKE=true, JEV_FAKE=true and no usable OPENROUTER_API_KEY on submission and invoice."
+  fork_pass "$env_id" ai_fake
 }
 
 # --- Fork gateway ENVIRONMENT ------------------------------------------------
@@ -2556,6 +2710,24 @@ environment_self_test() {
   echo "Fork ENVIRONMENT self-test: 7 fixtures passed, no token read, no network call."
 }
 
+fork_environment_check() {
+  if [ "$1" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to set ENVIRONMENT in the persistent environment ($1). This command only writes a pr-<N> fork."
+    exit 1
+  fi
+  PASS_NOT_SET="${PASS_NOT_SET:+$PASS_NOT_SET/}ENVIRONMENT"
+}
+
+fork_environment() {
+  FE_ID=$(service_id_by_name "$PASS_SETTLE" gateway "environment $1" ENVIRONMENT) || exit 1
+  pass_plan_add "$FE_ID" gateway "" ENVIRONMENT=development
+}
+
+fork_environment_verdict() {
+  environment_verdict "$(pass_map "$FE_ID")" development || return 1
+  echo "gateway ENVIRONMENT=development confirmed in environment $PASS_ENV."
+}
+
 # cmd_set_fork_environment <environment-id|--self-test>
 # Same guard order as cmd_set_ai_fake. Writes the gateway's ENVIRONMENT only;
 # the other services keep the inherited value.
@@ -2570,25 +2742,7 @@ cmd_set_fork_environment() {
     echo "::error::usage: railway-env.sh set-fork-environment <environment-id>"
     exit 2
   fi
-
-  require_source_env
-  if [ "$env_id" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
-    echo "::error::Refusing to set ENVIRONMENT in the persistent environment ($env_id). This command only writes a pr-<N> fork."
-    exit 1
-  fi
-
-  require_env
-  assert_environment_is_ephemeral "$env_id" ENVIRONMENT
-
-  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
-    "listing service instances in environment $env_id"
-  # Own line: `local svc_id=$(...)` would mask a refusal's exit status from set -e.
-  local svc_id
-  svc_id=$(service_id_by_name "$GQL_RESPONSE" gateway "environment $env_id" ENVIRONMENT)
-
-  set_service_vars "$env_id" "$svc_id" gateway "" ENVIRONMENT=development
-  environment_verdict "$GQL_RESPONSE" development || exit 1
-  echo "gateway ENVIRONMENT=development confirmed in environment $env_id."
+  fork_pass "$env_id" fork_environment
 }
 
 # cmd_set_production_environment <environment-id>
@@ -2817,51 +2971,208 @@ auth_refuse_persistent() {
   fi
 }
 
-# cmd_set_fork_auth <environment-id|--self-test>
-# Same guard order as cmd_set_ai_fake. Runs before the `urls` step, so it
-# writes everything except the site URLs (set-fork-auth-site).
-cmd_set_fork_auth() {
-  local env_id="${1:-}"
+# --- Fork pass ---------------------------------------------------------------
+#
+# A pass writes its contributors' variables in one batched write. Contributor NAME is three
+# functions: NAME_check <env-id> (pure refusals; adds its label to PASS_NOT_SET), NAME <env-id>
+# (resolves services, calls pass_plan_add) and NAME_verdict (runs on the final maps).
 
-  if [ "$env_id" = "--self-test" ]; then
-    auth_self_test
+PASS_ENV="" PASS_NOT_SET="" PASS_ENVS="" PASS_SETTLE="" PASS_PLAN='[]' PASS_DIFFS='[]' PASS_FINAL=""
+PASS_OWNER="" PASS_OWNED='[]'
+PASS_IDS=() PASS_LABELS=()
+
+# pass_plan_add <svc-id> <label> "<secret names>" NAME=VALUE...: merges into the service's entry
+# and records the names for PASS_OWNER (see pass_owned_verdict).
+# Values reach jq on stdin only (TestSetServiceVars_SecretsNeverOnArgvOrInOutput).
+pass_plan_add() {
+  local id="$1" label="$2" secrets="$3" intended
+  shift 3
+  intended=$(printf '%s\0' "$@" | jq -Rsc 'split("\u0000")[:-1] | map(split("=") | {key: .[0], value: (.[1:] | join("="))}) | from_entries')
+  PASS_OWNED=$(printf '%s\n%s' "$PASS_OWNED" "$intended" | jq -sc --arg o "$PASS_OWNER" --arg id "$id" --arg l "$label" \
+    '.[0] + [{owner: $o, id: $id, label: $l, vars: .[1]}]')
+  PASS_PLAN=$(printf '%s\n%s' "$PASS_PLAN" "$intended" | jq -sc --arg id "$id" --arg l "$label" --arg sec "$secrets" '
+    .[0] as $p | .[1] as $v | ($sec | split(" ") | map(select(length > 0))) as $s |
+    if ($p | map(.id) | index($id)) != null
+    then $p | map(if .id == $id then (.vars += $v | .secrets += $s) else . end)
+    else $p + [{id: $id, label: $l, vars: $v, secrets: $s}] end')
+}
+
+# pass_map <svc-id>: the service's map in the final read, shaped as a variables response.
+pass_map() {
+  local i
+  for i in "${!PASS_IDS[@]}"; do
+    [ "${PASS_IDS[$i]}" = "$1" ] || continue
+    printf '%s' "$PASS_FINAL" | jq -c --argjson i "$i" '{data: {variables: .data["s\($i)"]}}'
     return
+  done
+}
+
+# pass_read_failed <suffix>: names each unreadable service of the last batched read, else the environment.
+# Never prints Railway's message.
+pass_read_failed() {
+  local i
+  if [ -n "$READ_FAILED_IDX" ]; then
+    for i in $READ_FAILED_IDX; do
+      echo "::error::${PASS_LABELS[$i]}'s variables in environment $PASS_ENV are unreadable ($READ_FAIL_WHY).$1"
+    done
+  else
+    echo "::error::The batched variable read in environment $PASS_ENV failed ($READ_FAIL_WHY) and named no service.$1"
   fi
-  if [ -z "$env_id" ]; then
-    echo "::error::usage: railway-env.sh set-fork-auth <environment-id>"
-    exit 2
+}
+
+# pass_owned_verdict <contributor>: value_verdict on every name that contributor planned.
+pass_owned_verdict() {
+  local id label name want bad=0
+  while IFS=$'\t' read -r id label name want; do
+    # base64 keeps a backslash, tab or newline that @tsv would escape; the sentinel keeps a trailing newline.
+    want=$(printf '%s' "$want" | base64 -d && printf x)
+    want=${want%x}
+    value_verdict "$(pass_map "$id")" "$label" "$name" "$want" || bad=1
+  done < <(printf '%s' "$PASS_OWNED" | jq -r --arg o "$1" \
+    '.[] | select(.owner == $o) | .id as $i | .label as $l | .vars | to_entries[] | [$i, $l, .key, (.value | @base64)] | @tsv')
+  return "$bad"
+}
+
+# pass_names <plan-index>: the names that index's alias writes.
+pass_names() {
+  printf '%s' "$PASS_DIFFS" | jq -r --argjson i "$1" '.[$i] | keys | join(" ")'
+}
+
+# pass_write_detail <alias|"">: Railway's code and trace id for that alias.
+pass_write_detail() {
+  local d
+  d=$(printf '%s' "$GQL_RESPONSE" | jq -r --arg a "$1" '
+    [.errors[]? | select($a == "" or .path[0]? == $a)] | first // empty
+    | "Railway \(.extensions.code // "error"), trace \(.extensions.traceId // "unknown")"' 2>/dev/null) || d=""
+  if [ "${GQL_ERROR_SAFE:-0}" = 1 ]; then d="$GQL_ERROR"; fi
+  printf '%s' "${d:-$GQL_LAST}"
+}
+
+# pass_write_failed <plan-index>...: the report for a failed varsWrite; alias sK is the Kth argument.
+# Names a service only from errors[].path[0]; never prints Railway's message.
+pass_write_failed() {
+  local widx=("$@") a k i failed="" others="" all=""
+  for a in $(gql_error_aliases); do
+    k="${a#s}"
+    if [[ "$k" =~ ^(0|[1-9][0-9]{0,8})$ ]] && [ "$k" -lt "$#" ]; then
+      i="${widx[$k]}"
+      failed="$failed $i "
+      echo "::error::The batched variable write in environment $PASS_ENV failed for ${PASS_LABELS[$i]}: $(pass_names "$i") ($(pass_write_detail "$a")). Value not printed."
+    fi
+  done
+  if [ -z "$failed" ]; then
+    for i in "${widx[@]}"; do all="$all${all:+; }${PASS_LABELS[$i]}: $(pass_names "$i")"; done
+    echo "::error::The batched variable write in environment $PASS_ENV failed for $all ($(pass_write_detail "")). Value not printed."
   fi
+  for i in "${widx[@]}"; do
+    case "$failed" in *" $i "*) ;; *) others="$others ${PASS_LABELS[$i]}" ;; esac
+  done
+  if [ -n "$others" ]; then
+    echo "::error::These services of the write are not confirmed:$others."
+  fi
+}
+
+# fork_pass <env-id> <contributor>...
+# envList and settle once, one batched read, one batched write of the names that differ (absent
+# differs from ""), one batched re-read, then every contributor's verdicts on the final maps.
+fork_pass() {
+  local env_id="$1" c i j n total held q decl fields idx body names bad=0 widx=()
+  shift
+  PASS_ENV="$env_id" PASS_NOT_SET="" PASS_PLAN='[]' PASS_OWNED='[]'
 
   require_source_env
-  auth_refuse_persistent "$env_id"
+  for c in "$@"; do "${c}_check" "$env_id"; done
   require_env
-  assert_environment_is_ephemeral "$env_id" AUTH
+  assert_environment_is_ephemeral "$env_id" "$PASS_NOT_SET"
+  PASS_ENVS="$GQL_RESPONSE"
 
-  local name
-  name=$(echo "$GQL_RESPONSE" | jq -r --arg id "$env_id" \
+  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+    "listing service instances in environment $env_id"
+  PASS_SETTLE="$GQL_RESPONSE"
+  for c in "$@"; do PASS_OWNER="$c"; "$c" "$env_id"; done
+
+  PASS_IDS=() PASS_LABELS=()
+  while IFS= read -r i; do PASS_IDS+=("$i"); done < <(printf '%s' "$PASS_PLAN" | jq -r '.[].id')
+  while IFS= read -r i; do PASS_LABELS+=("$i"); done < <(printf '%s' "$PASS_PLAN" | jq -r '.[].label')
+  n=${#PASS_IDS[@]}
+
+  if ! read_vars_batch "$env_id" unrendered "reading the variables of $n services in environment $env_id" "${PASS_IDS[@]}"; then
+    pass_read_failed " Nothing was written."
+    exit 1
+  fi
+  PASS_FINAL="$GQL_RESPONSE"
+
+  PASS_DIFFS=$(printf '%s\n%s' "$PASS_FINAL" "$PASS_PLAN" | jq -sc '
+    .[0].data as $d | .[1] | to_entries | map(.key as $i | .value.vars | with_entries(
+      select(.key as $k | ($d["s\($i)"] | has($k) | not) or $d["s\($i)"][$k] != .value)))')
+  while IFS=$'\t' read -r i total j; do
+    held=$((total - j))
+    [ "$held" = 0 ] || echo "  ${PASS_LABELS[$i]}: $held of $total already hold the intended value — not written."
+    [ "$j" = 0 ] || widx+=("$i")
+  done < <(printf '%s\n%s' "$PASS_DIFFS" "$PASS_PLAN" | jq -sr '.[0] as $d | .[1] | to_entries[] | "\(.key)\t\(.value.vars | length)\t\($d[.key] | length)"')
+
+  if [ "${#widx[@]}" -gt 0 ]; then
+    decl="" fields="" names="" j=0
+    for i in "${widx[@]}"; do
+      decl="$decl${decl:+, }\$i$j: VariableCollectionUpsertInput!"
+      fields="$fields
+  s$j: variableCollectionUpsert(input: \$i$j)"
+      names="$names${names:+ }${PASS_LABELS[$i]}"
+      j=$((j + 1))
+    done
+    q="mutation varsWrite($decl) {$fields
+}"
+    idx=$(printf '%s\n' "${widx[@]}" | jq -sc .)
+    body=$(printf '%s\n%s' "$PASS_DIFFS" "$PASS_PLAN" | jq -sc --arg q "$q" --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --argjson idx "$idx" '
+      .[0] as $d | .[1] as $plan |
+      {query: $q, variables: ([$idx | to_entries[] | {("i\(.key)"): {projectId: $p, environmentId: $e, serviceId: $plan[.value].id, variables: $d[.value], skipDeploys: true}}] | add)}')
+    if ! GQL_MAX_TIME=$BATCH_MAX_TIME graphql_try "$body" "setting the variables of $names in environment $env_id"; then
+      pass_write_failed "${widx[@]}"
+      exit 1
+    fi
+    for i in "${widx[@]}"; do
+      printf '%s\n%s' "$PASS_DIFFS" "$PASS_PLAN" | jq -rs --argjson i "$i" \
+        '.[1][$i] as $e | .[0][$i] | to_entries[] | "  \($e.label).\(.key) = \(if (.key | IN($e.secrets[])) then "<redacted>" else .value end)"'
+    done
+    if ! read_vars_batch "$env_id" unrendered "re-reading the variables of $n services in environment $env_id" "${PASS_IDS[@]}"; then
+      pass_read_failed " The variables were written but not confirmed."
+      exit 1
+    fi
+    PASS_FINAL="$GQL_RESPONSE"
+  fi
+
+  for c in "$@"; do "${c}_verdict" || bad=1; done
+  [ "$bad" = 0 ] || exit 1
+}
+
+fork_auth_check() {
+  auth_refuse_persistent "$1"
+  PASS_NOT_SET="${PASS_NOT_SET:+$PASS_NOT_SET/}AUTH"
+}
+
+# fork_auth: runs before the `urls` step, so it writes everything except the site URLs (set-fork-auth-site).
+fork_auth() {
+  local env_id="$1" name auth_id gw_id additional
+  name=$(printf '%s' "$PASS_ENVS" | jq -r --arg id "$env_id" \
     '[.data.environments.edges[]?.node | select(.id == $id) | .name] | first // ""')
   if [ -z "$name" ]; then
     echo "::error::Environment $env_id has no name, so its issuer cannot be formed. AUTH was NOT set."
     exit 1
   fi
-
-  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
-    "listing service instances in environment $env_id"
-  local settle="$GQL_RESPONSE" gw_id auth_id
-  gw_id=$(service_id_by_name "$settle" gateway "environment $env_id" AUTH)
-  auth_id=$(service_id_by_name "$settle" auth "environment $env_id" AUTH)
+  gw_id=$(service_id_by_name "$PASS_SETTLE" gateway "environment $env_id" AUTH) || exit 1
+  auth_id=$(service_id_by_name "$PASS_SETTLE" auth "environment $env_id" AUTH) || exit 1
 
   auth_build_prenv "the fork auth configuration"
   # Generated, never read from the source: a fork must not sign with production's key.
-  local jwk jwt_secret admin_pw issuer additional
-  jwk=$("$AUTH_PRENV" jwk-es256)
-  jwt_secret=$(openssl rand -hex 32)
-  admin_pw=$(openssl rand -hex 32)
-  issuer=$(auth_issuer "$name")
-  additional=$(auth_additional_issuers "$issuer")
+  FA_JWK=$("$AUTH_PRENV" jwk-es256)
+  FA_JWT_SECRET=$(openssl rand -hex 32)
+  FA_ADMIN_PW=$(openssl rand -hex 32)
+  FA_ISSUER=$(auth_issuer "$name")
+  FA_AUTH_ID="$auth_id" FA_GW_ID="$gw_id"
+  additional=$(auth_additional_issuers "$FA_ISSUER")
 
   local auth_vars=(
-    "GOTRUE_JWT_ISSUER=$issuer"
+    "GOTRUE_JWT_ISSUER=$FA_ISSUER"
     "DATABASE_URL=$AUTH_DSN_REFERENCE"
     "API_EXTERNAL_URL=$AUTH_INTERNAL_URL"
     "PORT=8080"
@@ -2880,58 +3191,80 @@ cmd_set_fork_auth() {
     "AUTH_ADDITIONAL_ISSUERS=$additional"
     "AUTH_URL=$AUTH_INTERNAL_URL"
   )
+  FA_AUTH_VARS=("${auth_vars[@]}") FA_GW_VARS=("${gateway_vars[@]}")
 
+  pass_plan_add "$auth_id" auth "GOTRUE_JWT_KEYS GOTRUE_JWT_SECRET" "GOTRUE_JWT_KEYS=$FA_JWK" "GOTRUE_JWT_SECRET=$FA_JWT_SECRET" "${auth_vars[@]}"
+  pass_plan_add "$gw_id" gateway AUTH_ADMIN_PASSWORD "AUTH_ADMIN_PASSWORD=$FA_ADMIN_PW" "${gateway_vars[@]}"
+}
+
+fork_auth_verdict() {
   local bad=0
-  set_service_vars "$env_id" "$auth_id" auth "GOTRUE_JWT_KEYS GOTRUE_JWT_SECRET" "GOTRUE_JWT_KEYS=$jwk" "GOTRUE_JWT_SECRET=$jwt_secret" "${auth_vars[@]}"
-  secret_verdict "$GQL_RESPONSE" auth GOTRUE_JWT_KEYS "$jwk" "$AUTH_PRENV" || bad=1
-  secret_verdict "$GQL_RESPONSE" auth GOTRUE_JWT_SECRET "$jwt_secret" || bad=1
-  auth_check auth "${auth_vars[@]}" || bad=1
-  set_service_vars "$env_id" "$gw_id" gateway AUTH_ADMIN_PASSWORD "AUTH_ADMIN_PASSWORD=$admin_pw" "${gateway_vars[@]}"
-  secret_verdict "$GQL_RESPONSE" gateway AUTH_ADMIN_PASSWORD "$admin_pw" || bad=1
-  auth_check gateway "${gateway_vars[@]}" || bad=1
+  GQL_RESPONSE=$(pass_map "$FA_AUTH_ID")
+  secret_verdict "$GQL_RESPONSE" auth GOTRUE_JWT_KEYS "$FA_JWK" "$AUTH_PRENV" || bad=1
+  secret_verdict "$GQL_RESPONSE" auth GOTRUE_JWT_SECRET "$FA_JWT_SECRET" || bad=1
+  auth_check auth "${FA_AUTH_VARS[@]}" || bad=1
+  GQL_RESPONSE=$(pass_map "$FA_GW_ID")
+  secret_verdict "$GQL_RESPONSE" gateway AUTH_ADMIN_PASSWORD "$FA_ADMIN_PW" || bad=1
+  auth_check gateway "${FA_GW_VARS[@]}" || bad=1
   if [ "$bad" != "0" ]; then
-    echo "::error::The fork auth configuration in environment $env_id did not read back as written."
-    exit 1
+    echo "::error::The fork auth configuration in environment $PASS_ENV did not read back as written."
+    return 1
   fi
-  echo "Fork auth configuration confirmed in environment $env_id: issuer $issuer, with a fresh key, JWT secret and admin password."
+  echo "Fork auth configuration confirmed in environment $PASS_ENV: issuer $FA_ISSUER, with a fresh key, JWT secret and admin password."
+}
+
+# cmd_set_fork_auth <environment-id|--self-test>
+cmd_set_fork_auth() {
+  local env_id="${1:-}"
+
+  if [ "$env_id" = "--self-test" ]; then
+    auth_self_test
+    return
+  fi
+  if [ -z "$env_id" ]; then
+    echo "::error::usage: railway-env.sh set-fork-auth <environment-id>"
+    exit 2
+  fi
+  fork_pass "$env_id" fork_auth
+}
+
+# Reads PASS_LANDING_URL: runs after the `urls` step, which discovers it. A fork inherits
+# auth.GOTRUE_SITE_URL and gateway.AUTH_SITE_URL from production.
+auth_site_check() {
+  auth_refuse_persistent "$1"
+  case "$PASS_LANDING_URL" in
+    https://?*) ;;
+    *)
+      echo "::error::GOTRUE_SITE_URL must be the fork's https:// landing URL; got '$PASS_LANDING_URL'. GOTRUE_SITE_URL was NOT set."
+      exit 1 ;;
+  esac
+  PASS_NOT_SET="${PASS_NOT_SET:+$PASS_NOT_SET/}GOTRUE_SITE_URL"
+}
+
+auth_site() {
+  local auth_id gw_id
+  auth_id=$(service_id_by_name "$PASS_SETTLE" auth "environment $1" GOTRUE_SITE_URL) || exit 1
+  gw_id=$(service_id_by_name "$PASS_SETTLE" gateway "environment $1" AUTH_SITE_URL) || exit 1
+  pass_plan_add "$auth_id" auth "" "GOTRUE_SITE_URL=$PASS_LANDING_URL"
+  pass_plan_add "$gw_id" gateway "" "AUTH_SITE_URL=$PASS_LANDING_URL"
+}
+
+auth_site_verdict() {
+  pass_owned_verdict auth_site || return 1
+  echo "auth.GOTRUE_SITE_URL confirmed in environment $PASS_ENV."
+  echo "gateway.AUTH_SITE_URL confirmed in environment $PASS_ENV."
 }
 
 # cmd_set_fork_auth_site <environment-id> <landing-url>
-# Runs after the `urls` step, which discovers the landing URL. Writes it as
-# auth.GOTRUE_SITE_URL and gateway.AUTH_SITE_URL, which a fork inherits from production.
 cmd_set_fork_auth_site() {
-  local env_id="${1:-}" url="${2:-}"
+  local env_id="${1:-}"
 
   if [ -z "$env_id" ]; then
     echo "::error::usage: railway-env.sh set-fork-auth-site <environment-id> <landing-url>"
     exit 2
   fi
-
-  require_source_env
-  auth_refuse_persistent "$env_id"
-  case "$url" in
-    https://?*) ;;
-    *)
-      echo "::error::GOTRUE_SITE_URL must be the fork's https:// landing URL; got '$url'. GOTRUE_SITE_URL was NOT set."
-      exit 1 ;;
-  esac
-
-  require_env
-  assert_environment_is_ephemeral "$env_id" GOTRUE_SITE_URL
-
-  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
-    "listing service instances in environment $env_id"
-  local settle="$GQL_RESPONSE" auth_id gw_id
-  auth_id=$(service_id_by_name "$settle" auth "environment $env_id" GOTRUE_SITE_URL)
-  gw_id=$(service_id_by_name "$settle" gateway "environment $env_id" AUTH_SITE_URL)
-
-  set_service_vars "$env_id" "$auth_id" auth "" "GOTRUE_SITE_URL=$url"
-  auth_check auth "GOTRUE_SITE_URL=$url" || exit 1
-  echo "auth.GOTRUE_SITE_URL confirmed in environment $env_id."
-
-  set_service_vars "$env_id" "$gw_id" gateway "" "AUTH_SITE_URL=$url"
-  auth_check gateway "AUTH_SITE_URL=$url" || exit 1
-  echo "gateway.AUTH_SITE_URL confirmed in environment $env_id."
+  PASS_LANDING_URL="${2:-}"
+  fork_pass "$env_id" auth_site
 }
 
 # cmd_set_production_auth <--pre-merge|--post-merge> <environment-id>
@@ -3092,19 +3425,52 @@ gateway_token_write() {
   echo "GATEWAY_TOKEN confirmed on ${#GATEWAY_TOKEN_SERVICES[@]} services in environment $env_id."
 }
 
-# gateway_token_write_generated <env-id>: refuses unless openssl yields 64 lowercase hex; then writes.
-gateway_token_write_generated() {
-  local env_id="$1" token
-  token=$(openssl rand -hex 32)
-  if ! [[ "$token" =~ ^[0-9a-f]{64}$ ]]; then
+# gateway_token_generate: sets GT_TOKEN; refuses unless openssl yields 64 lowercase hex.
+gateway_token_generate() {
+  GT_TOKEN=$(openssl rand -hex 32)
+  if ! [[ "$GT_TOKEN" =~ ^[0-9a-f]{64}$ ]]; then
     echo "::error::The generated GATEWAY_TOKEN is not 64 lowercase hex characters (openssl rand -hex 32). Value not printed. Nothing was written."
     exit 1
   fi
-  gateway_token_write "$env_id" "$token"
+}
+
+# gateway_token_write_generated <env-id>: generates, then writes.
+gateway_token_write_generated() {
+  gateway_token_generate
+  gateway_token_write "$1" "$GT_TOKEN"
+}
+
+gateway_token_check() {
+  if [ "$1" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to write GATEWAY_TOKEN in the persistent environment ($1). This command only writes a pr-<N> fork."
+    exit 1
+  fi
+  PASS_NOT_SET="${PASS_NOT_SET:+$PASS_NOT_SET/}GATEWAY_TOKEN"
+}
+
+# gateway_token: generated, never read from the source: a fork must not trust production's token.
+gateway_token() {
+  local i
+  gateway_token_ids "$1" "$PASS_SETTLE"
+  gateway_token_generate
+  for i in "${!GATEWAY_TOKEN_SERVICES[@]}"; do
+    pass_plan_add "${GT_IDS[$i]}" "${GATEWAY_TOKEN_SERVICES[$i]}" GATEWAY_TOKEN "GATEWAY_TOKEN=$GT_TOKEN"
+  done
+}
+
+gateway_token_verdict() {
+  local i bad=0
+  for i in "${!GATEWAY_TOKEN_SERVICES[@]}"; do
+    secret_verdict "$(pass_map "${GT_IDS[$i]}")" "${GATEWAY_TOKEN_SERVICES[$i]}" GATEWAY_TOKEN "$GT_TOKEN" || bad=1
+  done
+  if [ "$bad" != "0" ]; then
+    echo "::error::GATEWAY_TOKEN in environment $PASS_ENV did not read back as written."
+    return 1
+  fi
+  echo "GATEWAY_TOKEN confirmed on ${#GATEWAY_TOKEN_SERVICES[@]} services in environment $PASS_ENV."
 }
 
 # cmd_set_fork_gateway_token <environment-id>
-# Generated, never read from the source: a fork must not trust production's token.
 cmd_set_fork_gateway_token() {
   local env_id="${1:-}"
 
@@ -3112,20 +3478,18 @@ cmd_set_fork_gateway_token() {
     echo "::error::usage: railway-env.sh set-fork-gateway-token <environment-id>"
     exit 2
   fi
+  fork_pass "$env_id" gateway_token
+}
 
-  require_source_env
-  if [ "$env_id" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
-    echo "::error::Refusing to write GATEWAY_TOKEN in the persistent environment ($env_id). This command only writes a pr-<N> fork."
-    exit 1
+# cmd_fork_vars_before_urls <environment-id>
+cmd_fork_vars_before_urls() {
+  local env_id="${1:-}"
+
+  if [ -z "$env_id" ]; then
+    echo "::error::usage: railway-env.sh fork-vars-before-urls <environment-id>"
+    exit 2
   fi
-  require_env
-  assert_environment_is_ephemeral "$env_id" GATEWAY_TOKEN
-
-  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
-    "listing service instances in environment $env_id"
-  gateway_token_ids "$env_id" "$GQL_RESPONSE"
-
-  gateway_token_write_generated "$env_id"
+  fork_pass "$env_id" fork_auth gateway_token
 }
 
 # cmd_set_production_gateway_token <environment-id>
@@ -3299,16 +3663,42 @@ sentry_off_self_test() {
 
 SENTRY_SECRET_NAMES="SENTRY_DSN VITE_SENTRY_DSN SENTRY_AUTH_TOKEN"
 
-# sentry_off_service <env-id> <settle-json> <service> <NAME>...: blank, re-read, verdict.
-sentry_off_service() {
-  local env_id="$1" settle="$2" svc="$3" svc_id name blank=()
-  shift 3
-  svc_id=$(service_id_by_name "$settle" "$svc" "environment $env_id" SENTRY)
-  for name in "$@"; do
-    blank+=("$name=")
+sentry_off_check() {
+  if [ "$1" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to blank Sentry in the persistent environment ($1). Its Sentry configuration is the user's; no CI path may write it."
+    exit 1
+  fi
+  PASS_NOT_SET="${PASS_NOT_SET:+$PASS_NOT_SET/}SENTRY"
+}
+
+# sentry_off: SO_IDS holds the backends' ids, then the SPAs'.
+sentry_off() {
+  local svc id
+  SO_IDS=()
+  for svc in "${SENTRY_BACKENDS[@]}"; do
+    id=$(service_id_by_name "$PASS_SETTLE" "$svc" "environment $1" SENTRY) || exit 1
+    SO_IDS+=("$id")
+    pass_plan_add "$id" "$svc" "$SENTRY_SECRET_NAMES" SENTRY_DSN=
   done
-  set_service_vars "$env_id" "$svc_id" "$svc" "$SENTRY_SECRET_NAMES" "${blank[@]}"
-  sentry_verdict "$GQL_RESPONSE" "$svc" "$@" || exit 1
+  for svc in "${SENTRY_SPAS[@]}"; do
+    id=$(service_id_by_name "$PASS_SETTLE" "$svc" "environment $1" SENTRY) || exit 1
+    SO_IDS+=("$id")
+    pass_plan_add "$id" "$svc" "$SENTRY_SECRET_NAMES" VITE_SENTRY_DSN= SENTRY_AUTH_TOKEN=
+  done
+}
+
+sentry_off_verdict() {
+  local i=0 svc bad=0
+  for svc in "${SENTRY_BACKENDS[@]}"; do
+    sentry_verdict "$(pass_map "${SO_IDS[$i]}")" "$svc" SENTRY_DSN || bad=1
+    i=$((i + 1))
+  done
+  for svc in "${SENTRY_SPAS[@]}"; do
+    sentry_verdict "$(pass_map "${SO_IDS[$i]}")" "$svc" VITE_SENTRY_DSN SENTRY_AUTH_TOKEN || bad=1
+    i=$((i + 1))
+  done
+  [ "$bad" = 0 ] || return 1
+  echo "Sentry off confirmed in environment $PASS_ENV: SENTRY_DSN blank on ${SENTRY_BACKENDS[*]}; VITE_SENTRY_DSN and SENTRY_AUTH_TOKEN blank on ${SENTRY_SPAS[*]}."
 }
 
 # cmd_set_sentry_off <environment-id|--self-test>
@@ -3324,26 +3714,7 @@ cmd_set_sentry_off() {
     echo "::error::usage: railway-env.sh set-sentry-off <environment-id>"
     exit 2
   fi
-
-  require_source_env
-  if [ "$env_id" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
-    echo "::error::Refusing to blank Sentry in the persistent environment ($env_id). Its Sentry configuration is the user's; no CI path may write it."
-    exit 1
-  fi
-
-  require_env
-  assert_environment_is_ephemeral "$env_id" SENTRY
-
-  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
-    "listing service instances in environment $env_id"
-  local settle="$GQL_RESPONSE" svc
-  for svc in "${SENTRY_BACKENDS[@]}"; do
-    sentry_off_service "$env_id" "$settle" "$svc" SENTRY_DSN
-  done
-  for svc in "${SENTRY_SPAS[@]}"; do
-    sentry_off_service "$env_id" "$settle" "$svc" VITE_SENTRY_DSN SENTRY_AUTH_TOKEN
-  done
-  echo "Sentry off confirmed in environment $env_id: SENTRY_DSN blank on ${SENTRY_BACKENDS[*]}; VITE_SENTRY_DSN and SENTRY_AUTH_TOKEN blank on ${SENTRY_SPAS[*]}."
+  fork_pass "$env_id" sentry_off
 }
 
 # --- The fork gateway's RECONCILIATION_URL -----------------------------------
@@ -3351,6 +3722,25 @@ cmd_set_sentry_off() {
 # A fork is reused per PR, so it never inherits a production write made after it was created.
 
 RECONCILIATION_INTERNAL_URL="http://reconciliation.railway.internal:8080"
+
+reconciliation_url_check() {
+  if [ "$1" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to set RECONCILIATION_URL in the persistent environment ($1). Its gateway variables are the user's; no CI path may write them."
+    exit 1
+  fi
+  PASS_NOT_SET="${PASS_NOT_SET:+$PASS_NOT_SET/}RECONCILIATION_URL"
+}
+
+reconciliation_url() {
+  local gw_id
+  gw_id=$(service_id_by_name "$PASS_SETTLE" gateway "environment $1" RECONCILIATION_URL) || exit 1
+  pass_plan_add "$gw_id" gateway "" "RECONCILIATION_URL=$RECONCILIATION_INTERNAL_URL"
+}
+
+reconciliation_url_verdict() {
+  pass_owned_verdict reconciliation_url || return 1
+  echo "gateway.RECONCILIATION_URL confirmed in environment $PASS_ENV."
+}
 
 # cmd_set_fork_reconciliation_url <environment-id>
 # Guard order is cmd_set_ai_fake's. The URL is not a secret, so its write line prints it.
@@ -3361,25 +3751,17 @@ cmd_set_fork_reconciliation_url() {
     echo "::error::usage: railway-env.sh set-fork-reconciliation-url <environment-id>"
     exit 2
   fi
+  fork_pass "$env_id" reconciliation_url
+}
 
-  require_source_env
-  if [ "$env_id" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
-    echo "::error::Refusing to set RECONCILIATION_URL in the persistent environment ($env_id). Its gateway variables are the user's; no CI path may write them."
-    exit 1
+# cmd_fork_vars_after_urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url>
+cmd_fork_vars_after_urls() {
+  if [ "$#" -ne 6 ] || [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ] || [ -z "$4" ] || [ -z "$5" ] || [ -z "$6" ]; then
+    echo "::error::usage: railway-env.sh fork-vars-after-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url>"
+    exit 2
   fi
-
-  require_env
-  assert_environment_is_ephemeral "$env_id" RECONCILIATION_URL
-
-  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
-    "listing service instances in environment $env_id"
-  # Own line: `local gw_id=$(...)` would mask a refusal's exit status from set -e.
-  local gw_id
-  gw_id=$(service_id_by_name "$GQL_RESPONSE" gateway "environment $env_id" RECONCILIATION_URL)
-
-  set_service_vars "$env_id" "$gw_id" gateway "" "RECONCILIATION_URL=$RECONCILIATION_INTERNAL_URL"
-  value_verdict "$GQL_RESPONSE" gateway RECONCILIATION_URL "$RECONCILIATION_INTERNAL_URL" || exit 1
-  echo "gateway.RECONCILIATION_URL confirmed in environment $env_id."
+  PASS_GATEWAY_URL="$2" PASS_APP_URL="$3" PASS_LANDING_URL="$4" PASS_OPS_URL="$5" PASS_SUPPORT_URL="$6"
+  fork_pass "$1" auth_site reconcile_url_variables ai_fake sentry_off reconciliation_url fork_environment
 }
 
 # use_query_auth <context>: picks the token header. RAILWAY_API_TOKEN wins when both are set.
@@ -3411,6 +3793,66 @@ cmd_query() {
   body=$(cat)
   graphql_post "$body" "$ctx"
   printf '%s' "$GQL_RESPONSE"
+}
+
+# discover-urls <environment-id>: one request reads the 5 public services' domains.
+# Prints the five <key>=https://<domain> lines only once all five resolve. A failure names the
+# environment (and the services whose alias errored), never Railway's message.
+cmd_discover_urls() {
+  local env_id="${1:-}" i v missing="" decl="" fields="" who="" ids=() out="" sel wrapped count d ctx
+  local labels=(gateway app landing ops-console support-console)
+  local idvars=(RAILWAY_SVC_GATEWAY_ID RAILWAY_SVC_APP_ID RAILWAY_SVC_LANDING_ID RAILWAY_SVC_OPS_CONSOLE_ID RAILWAY_SVC_SUPPORT_CONSOLE_ID)
+  local keys=(gateway_url app_url landing_url ops_console_url support_console_url)
+  if [ -z "$env_id" ]; then
+    echo "::error::usage: railway-env.sh discover-urls <environment-id>" >&2
+    exit 2
+  fi
+  for v in "${idvars[@]}"; do
+    [ -n "${!v:-}" ] || missing="$missing $v"
+    ids+=("${!v:-}")
+  done
+  if [ -n "$missing" ]; then
+    echo "::error::Missing Railway service id(s):$missing — expected the workflow-level constants in dev-env.yml's env: block." >&2
+    exit 1
+  fi
+  ctx="discovering the public URLs of environment $env_id"
+  use_query_auth "$ctx"
+  for i in 0 1 2 3 4; do
+    decl="$decl, \$s$i: String!"
+    fields="$fields
+  s$i: domains(projectId: \$p, environmentId: \$e, serviceId: \$s$i) { customDomains { domain targetPort } serviceDomains { domain targetPort } }"
+  done
+  if ! GQL_MAX_TIME=$BATCH_MAX_TIME graphql_try "$(gql_body "query discoverUrls(\$p: String!, \$e: String!$decl) {$fields
+}" "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" \
+      '{p: $p, e: $e} + ([$ARGS.positional | to_entries[] | {("s\(.key)"): .value}] | add)' --args "${ids[@]}")")" "$ctx"; then
+    if [ "$GQL_CURL_RC" = 0 ]; then
+      for i in $(gql_error_aliases); do
+        i="${i#s}"
+        [[ "$i" =~ ^[0-4]$ ]] && who="$who${who:+ }${labels[$i]}"
+      done
+      echo "::error::Could not read the public URLs of environment $env_id${who:+ ($who unreadable)}: Railway answered a GraphQL error." >&2
+    elif [ "$GQL_REPORTED" != 1 ]; then
+      echo "::error::Could not read the public URLs of environment $env_id: $([ "${GQL_ERROR_SAFE:-0}" = 1 ] && printf '%s' "$GQL_ERROR" || printf '%s' "$GQL_LAST")" >&2
+    fi
+    exit 1
+  fi
+  for i in 0 1 2 3 4; do
+    wrapped=$(printf '%s' "$GQL_RESPONSE" | jq -c --arg k "s$i" '{data: {domains: .data[$k]?}}') || wrapped=""
+    sel=$(select_domain "$wrapped") || exit 1
+    count=$(printf '%s' "$sel" | jq -r '.count')
+    if [ "$count" = "0" ]; then
+      echo "::error::No domain found for ${labels[$i]} (service ${ids[$i]}) in environment $env_id — neither a custom domain nor a Railway-generated one. Every public service must have at least one (docs/add-a-service.md step 6)." >&2
+      exit 1
+    fi
+    d=$(printf '%s' "$sel" | jq -r 'if (.domain | type) == "string" then .domain else "" end')
+    if ! [[ "$d" =~ ^[A-Za-z0-9.-]+$ ]]; then
+      echo "::error::The domain of ${labels[$i]} (service ${ids[$i]}) in environment $env_id is empty or not a hostname." >&2
+      exit 1
+    fi
+    out="$out${keys[$i]}=https://$d
+"
+  done
+  printf '%s' "$out"
 }
 
 # wait-deployment <label> <deployment-id>: polls one deployment's status, every 10 s, 60 ticks.
@@ -3501,16 +3943,19 @@ case "${1:-}" in
   set-fork-auth-site)        shift; cmd_set_fork_auth_site "$@" ;;
   set-production-auth)       shift; cmd_set_production_auth "$@" ;;
   set-fork-gateway-token)    cmd_set_fork_gateway_token "${2:-}" ;;
+  fork-vars-before-urls)     cmd_fork_vars_before_urls "${2:-}" ;;
+  fork-vars-after-urls)      shift; cmd_fork_vars_after_urls "$@" ;;
   set-production-gateway-token) cmd_set_production_gateway_token "${2:-}" ;;
   set-sentry-off)            cmd_set_sentry_off "${2:-}" ;;
   set-fork-reconciliation-url) cmd_set_fork_reconciliation_url "${2:-}" ;;
   delete-environment)        cmd_delete_environment "${2:-}" ;;
   list-environments)         cmd_list_environments ;;
+  discover-urls)             cmd_discover_urls "${2:-}" ;;
   query)                     cmd_query "${2:-}" ;;
   wait-deployment)           shift; cmd_wait_deployment "$@" ;;
   report-api-calls)          cmd_report_api_calls ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-fork-gateway-token <environment-id>|set-production-gateway-token <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments|query <context>|wait-deployment <label> <deployment-id>|report-api-calls>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-fork-gateway-token <environment-id>|fork-vars-before-urls <environment-id>|fork-vars-after-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url>|set-production-gateway-token <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments|discover-urls <environment-id>|query <context>|wait-deployment <label> <deployment-id>|report-api-calls>"
     exit 2
     ;;
 esac

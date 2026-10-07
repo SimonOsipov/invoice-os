@@ -112,9 +112,8 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
             <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden', maxWidth: 720 }}>
               <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <span style={{ fontSize: 15, fontWeight: 700 }}>Your company</span>
-                {/* Same button, two labels/modes: Add when there's nothing yet (AC-3's
-                    bootstrap window), Edit once the one entity this workspace can ever
-                    have (AC-1/AC-2) exists. */}
+                {/* Same button, two labels/modes: Add (admin only) or Edit once the one
+                    entity this workspace can ever have exists. */}
                 {(activeEntity || companySetupAccess(ctx.membersState, ctx.members) === 'add') && (
                 <button
                   onClick={() => setCompanyModal(activeEntity ? { mode: 'edit', entity: activeEntity } : { mode: 'create' })}

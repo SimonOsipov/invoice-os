@@ -231,3 +231,30 @@ func TestIdP_WrittenMetadataOnAnUnconfirmedAddressReachesNoJoinRoute(t *testing.
 		t.Errorf("upstream hits = %d, want 1 (the control only)", got)
 	}
 }
+
+// A confirmed email opens only the two join routes: other methods and paths stay 403 and reach no upstream.
+func TestIdP_ConfirmedSessionReachesNoRouteBesideTheTwoJoinRoutes(t *testing.T) {
+	base := idpURL(t)
+	u := signUp(t, superConn(t), base)
+	access, _ := signedIn(t, base, u)
+	e := newJoinEdge(t, base)
+	id := uuid.NewString()
+
+	if got := e.do(http.MethodGet, joinListPath, access); got != http.StatusOK || e.hits.Load() != 1 {
+		t.Fatalf("control: GET mine status %d with %d upstream hits, want 200 with 1", got, e.hits.Load())
+	}
+	for _, c := range []struct{ method, path string }{
+		{http.MethodPost, joinListPath},
+		{http.MethodGet, "/api/tenancy/v1/invitations/" + id + joinAcceptTail},
+		{http.MethodPost, "/api/tenancy/v1/invitations/not-a-uuid" + joinAcceptTail},
+		{http.MethodGet, "/api/tenancy/v1/me"},
+		{http.MethodGet, "/api/tenancy/v1/members"},
+	} {
+		if got := e.do(c.method, c.path, access); got != http.StatusForbidden {
+			t.Errorf("%s %s: status %d, want 403", c.method, c.path, got)
+		}
+	}
+	if got := e.hits.Load(); got != 1 {
+		t.Errorf("upstream hits = %d, want 1 (the control only)", got)
+	}
+}

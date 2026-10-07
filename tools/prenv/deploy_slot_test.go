@@ -954,3 +954,19 @@ func TestDeploySlot_DeadlineNamesHoldersOfTheLastVerdictPoll(t *testing.T) {
 	wantContains(t, "::error:: line", errs[0], "run 101 (PR #11)", "run 102 (PR #12)")
 	wantContains(t, "poll 2", pollLine(t, out, 2), "could not read the runs")
 }
+
+// A listed run with a null run_started_at must not kill the script: exit codes are 0, 1 and 2.
+func TestDeploySlot_NullStartedAtDoesNotCrashThePoll(t *testing.T) {
+	t.Parallel()
+	s := newSlotShim(t)
+	body := slotList(slotRun{id: 101, pr: 11})
+	needle := `"run_started_at":"` + slotTS(600) + `"`
+	at := strings.LastIndex(body, needle) // the last run listed is run 101, not the run under test
+	body = body[:at] + `"run_started_at":null` + body[at+len(needle):]
+	s.runs(t, body, slotList())
+	out, code := s.run(t)
+
+	wantExit(t, code, 0, out)
+	wantContains(t, "poll 1", pollLine(t, out, 1), "Deploy slot: poll 1: ")
+	s.wantSleeps(t, 1)
+}

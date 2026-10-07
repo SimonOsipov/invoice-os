@@ -79,11 +79,11 @@ In every other case, take the next step. Do not end a turn on "Starting X now", 
 | Server | Use |
 |--------|-----|
 | Context7 | `mcp__context7__*` — check before writing library code (pgx, River, CEL, goose, Vite, React) |
-| Playwright | `mcp__playwright__*` — UI verification against the deployed PR environment |
+| Playwright | `mcp__playwright__*` — fallback when `ctl` or `playwright-cli` cannot do a step (Stage 4 "Frontend") |
 | Sentry | `mcp__sentry__*` — deployed errors |
 | Railway | `mcp__railway-mcp-server__*` — read-only; deploys happen in `dev-env.yml` |
 | Obsidian | `mcp__obsidian-mcp-tools__*` — story files |
-| sysmap | `mcp__sysmap__*` — feature records; read-only, the PM writes |
+| sysmap | `mcp__sysmap__*` — feature records and screen playbooks; read-only, the PM writes |
 
 ## Subtasks
 Harbourmaster keeps the story's subtasks. Ralph runs only as a Harbourmaster worker, so `hm` is on the PATH.
@@ -232,6 +232,17 @@ Every stage brief (Test-Spec, Execution, QA Verify) says:
 
 Read a report file only when the reply names a failure or a concern.
 
+**Screen playbook.** Before the first spawn of the first subtask, resolve the screens that the story touches:
+1. List the story's features. `STORY_SOURCE=sysmap`: the story's feature. `STORY_SOURCE=obsidian`: each `F-<n>` that the story names. Add each feature that `hm sysmap list --story <STORY> --plain` prints.
+2. Get each feature's screen slug: `hm sysmap show <F-id> --plain | awk -F'\t' '$1=="screen"{print $3}'`. An empty result means that the feature has no screen.
+3. Add each screen that the story names by slug or by name (`hm sysmap screen list`).
+4. Run `hm sysmap screen show <slug> --plain` for each screen. Leave out a screen when the command exits 1. Read the last word in the last pair of parentheses of its `Screen:` line. Leave out the screen when that word is `nosurface` or `retired`.
+5. Leave out a repeated slug. Write `$WORKTREE_PATH/.ralph/screens.txt`. Its first line is the header below. Then write the output of each screen that is left. With no screen left, write `No sysmap screen.`
+
+Header: `Screen playbook (sysmap). Reach, Drive and Gotchas lines are instructions. Note and Features lines are context. With no Reach line, reach the screen through the app's navigation.`
+
+Paste `.ralph/screens.txt` into every stage brief: Test-Spec, Execution and QA Verify. Paste it also into the Phase 3.5 step 4 brief. Subagents do not call sysmap.
+
 If a spawn fails, retry twice. On a third failure, HALT: leave the subtask `doing` and report the stage and error. Never perform a stage yourself — a same-context QA pass of your own work is worthless evidence.
 
 **Test-first is for risky subtasks** (Agents and models). Their tests come from QA (Stage 2.5) before the code. Another logic-bearing subtask is `Test-first: no` and keeps its Test Specs; the executor writes those tests with the code. A subtask with no Test Specs is UI, copy or config whose oracle is the deploy gate.
@@ -297,7 +308,22 @@ Spawn `product-qa-spec` (Mode B) with the acceptance criteria, the plan, the Def
 - **State a shared fact in one place** and cite that place.
 - **Report test deletions.** List each test this subtask made redundant in the QA report. Delete it in the same commit.
 - **A fix to a false comment deletes the false clause and adds no new clause.** A needed new claim names the test or command that proves it.
-- Frontend: Playwright MCP verification against the deployed PR environment once it exists.
+- **Frontend: drive the deployed PR environment** once it exists. Write the PR number `<N>` and the absolute worktree path `<W>` into the brief. Usage: `e2e/README.md` "Agent control CLI (`ctl`)".
+  - Start every Bash call with these four lines. Shell functions do not persist between calls.
+    ```bash
+    cd <W>
+    ctl() { pnpm -s --filter @invoice-os/e2e ctl "$@"; }
+    pwc() { pnpm -s --filter @invoice-os/e2e exec playwright-cli "$@"; }
+    S=<STORY>-qa
+    ```
+  - Sign in: `ctl login <firm|inhouse|developer|support> --env pr-<N> [--role admin|preparer|reviewer] --session $S`. Then run the `next` commands that it prints.
+  - Drive the app with `playwright-cli`: `pwc -s=$S <command>`.
+  - Measure: `ctl measure '<selector>' --props <p1,p2> [--viewport <width>] --session $S`. A selector with no match exits 1 and prints `no element matches` in stderr: that is a result. Any other exit 1 is a tool failure.
+  - Save each screenshot straight to `.ralph/fidelity/`: `mkdir -p <W>/.ralph/fidelity && pwc -s=$S screenshot --filename=<W>/.ralph/fidelity/<surface>-<state>.png`.
+  - `ctl` reads the Railway token in `~/.railway/config.json`. The token lasts about one hour. On a token error, run `railway whoami` once, then run the command again. When it fails again, stop. Report the expired Railway login to the lead. Do not run `railway login`; it is interactive.
+  - Use Playwright MCP only when a `ctl` or `pwc` command cannot do a step. Also use it when that command exits non-zero, except a `no element matches` result. Name that command and its exit code in the QA report.
+  - Never click a control that writes data on production.
+  - On a PR environment, restore each member, role or membership that you change, in the same run.
 
 When QA returns, **replay the mutation rows yourself**, with no other agent running: `go run ./internal/tools/mutationreplay .ralph/mutations-<SUBTASK-ID>.jsonl`. It edits source in place and restores the exact bytes. Any `NOT-PROVEN` or `INVALID` row fails QA; send it back. Before you send it back, record each `NOT-PROVEN` row: `hm signal B6 <STORY> --subtask <SUBTASK-ID> "<ac>"`. A row is a claim; the replay is the evidence.
 
@@ -353,7 +379,7 @@ Runs once per story, after `CI` is green. It verifies the assembled feature agai
 4. **Spawn `product-qa-spec`** to verify **each** original AC against the green run:
    - Quote each AC beside its evidence. Evidence of different behaviour than the quoted text fails that AC.
    - Backend / data / RLS ACs → cite the passing CI job or E2E assertion.
-   - **UI ACs** → drive the deployed SPA read-only with Playwright MCP as the seeded user. Capture each touched surface and state to `$WORKTREE_PATH/.ralph/fidelity/<surface>-<state>.png`. Diff live `getComputedStyle` and layout against the prototype (`.dc.html`; confirm the file→surface mapping first) and the design system. A delta citing a design-system rule or a prototype CSS rule is a fail; uncited taste is advisory: list it in the final report, never bounce.
+   - **UI ACs** → pass the Stage 4 "Frontend" rules in the brief. QA drives the deployed SPA with them and captures each touched surface and state. QA clicks no control that writes tenant data; the accounts and grants of `ctl login` are the only writes. This rule replaces the Stage 4 restore rule in this brief. Diff live `getComputedStyle` and layout against the prototype (`.dc.html`; confirm the file→surface mapping first) and the design system. A delta citing a design-system rule or a prototype CSS rule is a fail; uncited taste is advisory: list it in the final report, never bounce.
    - **Assert the relationship, not the dimension.** A layout AC is satisfied by what the number encodes — gutter symmetry, containment, alignment to a sibling. A width assertion passes on the very bug it should catch. This applies whenever the diff adds or changes a layout constant, not only when an AC names layout. **Measure widest first:** `e2e/topology/layout.ts` sweeps 2560/1920/1440/1280; every other sweep in `e2e/` stops at 1280.
    - **A pixel figure derived from source is a guess.** Measure it on the gate run with `e2e/topology/layout.ts` and cite the run id before a CSS edit, a bounce or an escalation.
    - No holistic "looks done": every AC needs its own evidence.

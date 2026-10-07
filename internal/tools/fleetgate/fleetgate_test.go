@@ -346,6 +346,9 @@ func jobBounds(lines []string, i int) (int, int) {
 	return start, end
 }
 
+// trailingYAMLComment matches a `#` comment that follows code on a run line (no quote handling: the wait lines carry none).
+var trailingYAMLComment = regexp.MustCompile(`\s+#.*$`)
+
 func TestDevEnv_EveryDeployedSPAIsDiscoveredAndAwaited(t *testing.T) {
 	content := readFile(t, filepath.Join(repoRoot(t), devEnvRel))
 	spas := matrixList(t, content, "deploy-spas")
@@ -353,11 +356,13 @@ func TestDevEnv_EveryDeployedSPAIsDiscoveredAndAwaited(t *testing.T) {
 
 	var waits []int
 	for i, l := range lines {
+		l = trailingYAMLComment.ReplaceAllString(l, "")
 		if strings.Contains(l, "wait-spa-builds.sh") && strings.Contains(l, "$EXPECTED_BUILD") {
 			waits = append(waits, i)
+			lines[i] = l
 		}
 	}
-	if len(spas) == 0 || len(waits) == 0 {
+	if len(spas) == 0 || len(waits) < 2 {
 		t.Fatalf("%s: parsed %d deploy-spas name(s) and %d wait-spa-builds.sh call(s) -- nothing to compare", devEnvRel, len(spas), len(waits))
 	}
 
@@ -423,6 +428,25 @@ func TestFleetGate_EveryCountSiteAgreesWithExpectedJSON(t *testing.T) {
 	hits := scanRepo(t)
 	if len(hits) == 0 {
 		t.Fatalf("the scan found no fleet-count site at all -- the detection pattern or the trees have drifted, and a clean run means nothing")
+	}
+
+	// A count wrapped before its subject word ("all 16" / "services") escapes the line scan.
+	wrapped := 0
+	lines := strings.Split(content, "\n")
+	for i := 0; i+1 < len(lines); i++ {
+		next := strings.TrimLeft(lines[i+1], " #")
+		if subjectRe.MatchString(lines[i]) || !strings.HasPrefix(strings.ToLower(next), "service") {
+			continue
+		}
+		for _, m := range countRe.FindAllString(lines[i], -1) {
+			wrapped++
+			if got, _ := strconv.Atoi(m); got != want {
+				t.Errorf("%s:%d: wrapped count got %d want %d -- %s", devEnvRel, i+1, got, want, strings.TrimSpace(lines[i]))
+			}
+		}
+	}
+	if wrapped == 0 {
+		t.Errorf("%s: no wrapped fleet count found -- the cold-build comment moved or the control is stale", devEnvRel)
 	}
 
 	checked := 0

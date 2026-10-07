@@ -1197,7 +1197,7 @@ func TestForkVarsAfterURLs_SettledForkMakesThreeCalls(t *testing.T) {
 	}
 }
 
-func TestForkVarsAfterURLs_ReadCoversTheFifteenServicesOnce(t *testing.T) {
+func TestForkVarsAfterURLs_ReadCoversEveryServiceOnce(t *testing.T) {
 	s := newAfterShim(t, afterProdStores())
 	if out, code := runAfter(t, s); code != 0 {
 		t.Fatalf("exit %d, want 0; output = %q", code, clip(out))

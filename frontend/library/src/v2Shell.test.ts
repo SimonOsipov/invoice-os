@@ -45,6 +45,13 @@ describe('library shell primitives', () => {
     ])
     expect(render(createElement(Icon, { name: 'pen-tool' })).filter((t) => t.name === 'path')).toHaveLength(4)
     expect(GLYPHS['pen-tool']).toHaveLength(4)
+    expect(GLYPHS['rotate-cw']).toEqual(['M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8', 'M21 3v5h-5'])
+    expect(GLYPHS['pen-tool'].slice(0, 3)).toEqual([
+      'M15.707 21.293a1 1 0 0 1-1.414 0l-1.586-1.586a1 1 0 0 1 0-1.414l5.586-5.586a1 1 0 0 1 1.414 0l1.586 1.586a1 1 0 0 1 0 1.414z',
+      'm18 13-1.375-6.874a1 1 0 0 0-.746-.776L3.235 2.028a1 1 0 0 0-1.207 1.207L5.35 15.879a1 1 0 0 0 .776.746L13 18',
+      'm2.3 2.3 7.286 7.286',
+    ])
+    expect(GLYPHS['pen-tool'][3]).toBe('M9 11a2 2 0 1 0 4 0a2 2 0 1 0 -4 0')
   })
 
   it('SH-02 Button renders each variant and size the prototype uses', () => {

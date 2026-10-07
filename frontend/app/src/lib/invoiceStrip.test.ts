@@ -2,9 +2,6 @@
 // S-27..S-31 are the Mode B adversarial pass. Every spec below is proven killable by a
 // source mutation -- see the QA report on task-672.
 //
-// The source of truth is .ralph/AUDIT-09-01-arch.md, which overrides the story's Test
-// Specs table in eight places (its §7). Section references below point at that file.
-//
 // TIMEZONE: no TZ is pinned in this repo (vitest.config.ts is three lines; no playwright
 // config sets one). Every timestamp here is OFFSET-LESS ('2026-07-01T14:32:07'), which
 // ECMA-262 parses as LOCAL time, so fmtTime's local getHours()/getMinutes() round-trip it

@@ -4,8 +4,6 @@
 // AUDIT-09-06's RED specs, written before the component (Mode A). ApprovalStateCard.tsx is
 // a stub that throws 'not implemented', so every render-based spec below fails on that
 // throw; the two source/copy specs fail on a real assertion instead (see their comments).
-// Contract: .ralph/AUDIT-09-06-arch.md section 3 (the component), 4.5 (the guarantee
-// ledger), 6.1 (the spec table), 7 (the branch ladder).
 
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'

@@ -829,14 +829,12 @@ test('register geometry: a blocked row costs no extra line and stands the same h
 // container's first child (InvoicesList.tsx:565-566), so an in-container offset is 0 in both
 // filter states and the assertion would be vacuous. The defect moved the container itself.
 //
-// Two open story findings shape this fixture, which avoids both by construction:
-//   .ralph/STORY-FINDING-AC2.md -- a live selection mounts `batch-submit-summary` above the
-//   list (InvoicesList.tsx:491-495), and the toggle's own setSelected([]) unmounts it,
-//   moving the table by more than the offset under test. This fixture never clicks a
-//   checkbox and never calls select-all, so that bar is absent from both measurements.
-//   .ralph/STORY-FINDING-SEARCH.md -- the header search box's `q` rides the SAME request as
-//   `needs_attention`. This fixture never types in it, so the row set differs between the
-//   two states because of the filter alone.
+// Two hazards shape this fixture, which avoids both by construction:
+//   - a live selection mounts `batch-submit-summary` above the list (InvoicesList), and the
+//     toggle's own setSelected([]) unmounts it, moving the table by more than the offset under
+//     test. This fixture never clicks a checkbox or select-all.
+//   - the header search box's `q` rides the SAME request as `needs_attention`. This fixture
+//     never types in it, so the row set differs between the two states because of the filter alone.
 test('register geometry: toggling needs-attention moves nothing above the rows and never empties them', async ({ page }, testInfo) => {
   // Two create+validate round trips, a sign-in, an entity switch, three toggle round trips
   // and two four-width sweeps whose per-width settle poll is bounded at 10s each.
@@ -947,7 +945,7 @@ test('register geometry: toggling needs-attention moves nothing above the rows a
 // register, so it had never been observed on a deployed build. This entity holds ONLY clean
 // validated invoices, so needs_attention returns a genuine zero-total set.
 //
-// No search term is typed (.ralph/STORY-FINDING-SEARCH.md): `q` rides the same request as
+// No search term is typed: `q` rides the same request as
 // `needs_attention`, so a search matching nothing would reach this SAME branch by a path
 // whose copy is false -- and this test would pass on the wrong path.
 test('register empty state: a filter that matches nothing says so, and offers the way back', async ({ page }) => {
@@ -3877,9 +3875,8 @@ test.describe.serial("detail surface: the activity card's geometry", () => {
 })
 
 // BUG-13-03: the only layer that can observe this defect (jsdom performs no layout). Ten
-// assertions -- D1,D2,D3,D4a,D4b,D5,D7,D9,D10a,D10b -- from .ralph/bug-13-arch.md's
-// `## Layout assertion`; D6/D8 are deliberately absent (measured unreachable in Chromium
-// under table-layout:auto).
+// assertions -- D1,D2,D3,D4a,D4b,D5,D7,D9,D10a,D10b; D6/D8 are deliberately absent (measured
+// unreachable in Chromium under table-layout:auto).
 //
 // R (real) = badInvoiceFields fires vat-standard-rate through createInvoice, a genuine,
 // short, natively-breaking violation -- see the fixture's own comment above. S (stubbed) =
@@ -4008,7 +4005,7 @@ test.describe.serial("detail surface: the compliance card's geometry", () => {
     const fits = await assertFillsColumn(page, card, column, 'compliance-card vs main column', 1)
     expect(fits.map((f) => f.width), 'assertFillsColumn measured fewer widths than it swept').toEqual([...WIDE_WIDTHS])
 
-    // The hole assertFillsColumn leaves (bug-13-03-arch-validation.md #2): it bounds
+    // The hole assertFillsColumn leaves: it bounds
     // max(left,right) <= slackPx, which a card overflowing its column on BOTH sides
     // satisfies too, because both gaps go negative. This floor is the single-sided bound's
     // blind spot.

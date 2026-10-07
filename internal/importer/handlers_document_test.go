@@ -15,10 +15,6 @@
 //	H-07 TestCreateDocumentHandler_CorsAllowMethodsAlreadyContainsPOST (green from the start)
 //	H-08 TestImportRoutes_DocumentAndSpreadsheetDoNotCollide
 //	H-09 TestCreateDocumentHandler_EndToEndOverRealServiceWritesReadableInvoice
-//
-// Run:
-//
-//	.ralph/dbtest.sh ./internal/importer/... -run 'CreateDocumentHandler|ImportRoutes'
 package importer
 
 import (

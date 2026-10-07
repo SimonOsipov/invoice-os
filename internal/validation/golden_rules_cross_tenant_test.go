@@ -2,8 +2,6 @@
 // evaluation, at the handler (403) or at the grant (42501). `rules` is global, so these
 // tests write the shared seeded rows when the grant is missing; each registers a
 // superuser restore in t.Cleanup before its first write. No t.Parallel().
-//
-//	. .ralph/dbenv.sh && go test -p 1 -count=1 ./internal/validation/...
 package validation
 
 import (

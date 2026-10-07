@@ -1,10 +1,7 @@
 // @vitest-environment jsdom
 // Per-file opt-in: vitest.config.ts stays `environment: 'node'` for every other suite.
 //
-// Mode A (AUDIT-09-02): written RED against a throwing StatusStrip stub. The contract is
-// .ralph/AUDIT-09-02-arch.md -- §3 for the JSX, the testids and the tone map, §7E for the
-// no-interactive-element rule -- plus .ralph/AUDIT-09-01-arch.md §12 C-5/C-6, which
-// corrected the mapper's contract after §3 was written.
+// Mode A (AUDIT-09-02): written RED against a throwing StatusStrip stub.
 //
 // jsdom HAS NO LAYOUT ENGINE. Every flex / min-width / white-space assertion below reads
 // an inline style PROP, never a measured box. The geometry claims -- above the fold, no

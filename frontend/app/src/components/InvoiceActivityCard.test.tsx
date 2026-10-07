@@ -729,7 +729,7 @@ describe('InvoiceActivityCard "Open in Audit →" hand-off (AUDIT-09-05)', () =>
 
 // AUDIT-09-07: the nothing-dropped proof. Every field the retired approval trail carried is
 // either in an audit payload, in the event NAME, or on the surviving Approval card -- and
-// each claim below reaches an assertion. Contract: .ralph/AUDIT-09-07-arch.md sections 2, 6.
+// each claim below reaches an assertion.
 
 const REJECTED_EVENT = 'invoice.approval_rejected'
 const APPROVED_EVENT = APPROVALS_EVENT

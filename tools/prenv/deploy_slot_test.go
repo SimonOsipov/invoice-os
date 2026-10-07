@@ -28,6 +28,14 @@ const (
 	jobSlot    = "Deploy slot" // exact job names the script matches
 	jobRelease = "Release deploy slot"
 	jobChanges = "Detect E2E-relevant changes" // the no-slot-job grace reads it
+
+	jobPrepare = "Prepare Railway environment (create-or-reuse + assert Watch Paths + discover URLs)" // chain-ended rule
+	jobHealth  = "Gate on gateway /healthz (schema migrated)"
+	jobFleet   = "Fleet /healthz gate (all 10 backends green)"
+	jobLegRaw  = "Deploy ${{ matrix.service }} → ${{ (needs.prepare-env.outputs.environment_label || needs.prepare-env.outputs.environment) }}"
+	jobGateway = "Deploy gateway → pr-353"
+	jobLegSPA  = "Deploy app → pr-353"
+	jobLegCtx  = "Deploy tenancy → pr-353"
 )
 
 // slotShim is gh, date and sleep on PATH. gh answers by URL: the runs list from runs.seq (one
@@ -379,6 +387,12 @@ func TestDeploySlot_TwoHoldersWaitThenPass(t *testing.T) {
 }
 
 // Other run 150 (older) or 250 (newer) is tested against a fixed holder 151: 2 of 2 blocks, 1 of 2 passes.
+// chainJobs: a run past its slot with the deploy chain as GitHub lists it, plus extra jobs; never a release job.
+func chainJobs(extra ...string) string {
+	base := []string{jobDone(jobChanges, "success", 400), jobDone(jobSlot, "success", 300)}
+	return jobsBody(append(base, extra...)...)
+}
+
 func TestDeploySlot_HolderRule(t *testing.T) {
 	t.Parallel()
 	slotDone := func(c string) string { return jobsBody(jobDone(jobChanges, "success", 400), jobDone(jobSlot, c, 300)) }
@@ -401,10 +415,51 @@ func TestDeploySlot_HolderRule(t *testing.T) {
 		{"slot failure", 150, slotDone("failure"), false},
 		{"slot cancelled", 150, slotDone("cancelled"), false},
 		{"no slot job listed", 150, jobsBody(jobDone(jobChanges, "success", 10)), false},
+
+		// the chain ended, no release job listed
+		{"prepare failed, everything downstream skipped", 150, chainJobs(
+			jobDone(jobPrepare, "failure", 60), jobDone(jobLegRaw, "skipped", 60), jobDone(jobHealth, "skipped", 60),
+			jobDone(jobLegRaw, "skipped", 60), jobDone(jobFleet, "skipped", 60)), false},
+		{"cancelled chain, unrendered legs", 150, chainJobs(
+			jobDone(jobPrepare, "success", 60), jobDone(jobLegRaw, "cancelled", 60), jobDone(jobHealth, "cancelled", 60),
+			jobDone(jobLegRaw, "cancelled", 60), jobDone(jobLegRaw, "cancelled", 60), jobDone(jobFleet, "cancelled", 60)), false},
+		{"green chain, rendered legs", 150, chainJobs(
+			jobDone(jobPrepare, "success", 90), jobDone(jobGateway, "success", 80), jobDone(jobHealth, "success", 70),
+			jobDone(jobLegCtx, "success", 60), jobDone(jobLegSPA, "success", 50), jobDone(jobFleet, "success", 40)), false},
+		{"chain ended, release queued", 150, chainJobs(
+			jobDone(jobPrepare, "success", 90), jobDone(jobGateway, "success", 80), jobDone(jobHealth, "success", 70),
+			jobDone(jobLegCtx, "success", 60), jobDone(jobLegSPA, "success", 50), jobDone(jobFleet, "success", 40),
+			jobOpen(jobRelease, "queued")), false},
+		{"fleet gate not listed", 150, chainJobs(
+			jobDone(jobPrepare, "success", 90), jobDone(jobGateway, "success", 80), jobDone(jobHealth, "success", 70),
+			jobDone(jobLegCtx, "success", 60), jobDone(jobLegSPA, "success", 50)), true},
+		{"fleet gate completed, an SPA leg in progress", 150, chainJobs(
+			jobDone(jobPrepare, "success", 90), jobDone(jobGateway, "success", 80), jobDone(jobHealth, "success", 70),
+			jobDone(jobLegCtx, "success", 60), jobOpen(jobLegSPA, "in_progress"), jobDone(jobFleet, "success", 40)), true},
+		{"fleet gate skipped, an SPA leg in progress", 150, chainJobs(
+			jobDone(jobPrepare, "success", 90), jobDone(jobGateway, "success", 80), jobDone(jobHealth, "success", 70),
+			jobDone(jobLegCtx, "failure", 60), jobOpen(jobLegSPA, "in_progress"), jobDone(jobFleet, "skipped", 40)), true},
+		{"fleet gate in progress, all legs completed", 150, chainJobs(
+			jobDone(jobPrepare, "success", 90), jobDone(jobGateway, "success", 80), jobDone(jobHealth, "success", 70),
+			jobDone(jobLegCtx, "success", 60), jobDone(jobLegSPA, "success", 50), jobOpen(jobFleet, "in_progress")), true},
+		{"fleet gate completed, a leg queued", 150, chainJobs(
+			jobDone(jobPrepare, "success", 90), jobDone(jobGateway, "success", 80), jobDone(jobHealth, "success", 70),
+			jobOpen(jobLegCtx, "queued"), jobDone(jobLegSPA, "success", 50), jobDone(jobFleet, "success", 40)), true},
+		{"fleet gate completed, an unrendered leg in progress", 150, chainJobs(
+			jobDone(jobPrepare, "success", 90), jobDone(jobGateway, "success", 80), jobDone(jobHealth, "success", 70),
+			jobDone(jobLegRaw, "success", 60), jobOpen(jobLegRaw, "in_progress"), jobDone(jobFleet, "success", 40)), true},
+		{"slot job open, chain jobs completed, older run", 150, jobsBody(jobDone(jobChanges, "success", 400), jobOpen(jobSlot, "in_progress"),
+			jobDone(jobPrepare, "success", 90), jobDone(jobFleet, "success", 40)), false},
+		{"fleet gate completed, gateway deploy in progress", 150, chainJobs(
+			jobDone(jobPrepare, "success", 90), jobOpen(jobGateway, "in_progress"), jobDone(jobHealth, "success", 70),
+			jobDone(jobFleet, "success", 40)), true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
+			if !strings.Contains(c.jobs, `"jobs":[{`) {
+				t.Fatalf("fixture lists no jobs: %s", c.jobs)
+			}
 			s := newSlotShim(t)
 			s.runs(t, slotList(slotRun{id: c.id, pr: 5}, slotRun{id: 151, pr: 6}), slotList())
 			s.jobsAlways(t, c.id, c.jobs)

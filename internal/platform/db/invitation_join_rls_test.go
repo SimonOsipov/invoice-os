@@ -2,7 +2,9 @@ package db_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -13,8 +15,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/pressly/goose/v3"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/migrations"
 )
 
 const (
@@ -131,6 +135,13 @@ func TestRLS_PendingInvitesForEmailSpansTenantsInExpiryOrder(t *testing.T) {
 					if g.id != w.id || g.tenantID != w.tenantID || g.workspace != w.workspace || g.role != w.role {
 						t.Errorf("row %d = (%s, %s, %s, %s), want (%s, %s, %s, %s)",
 							i, g.id, g.tenantID, g.workspace, g.role, w.id, w.tenantID, w.workspace, w.role)
+					}
+					var stored time.Time
+					if err := h.super.QueryRow(context.Background(), `SELECT expires_at FROM invitations WHERE id = $1`, w.id).Scan(&stored); err != nil {
+						t.Fatalf("read stored expiry: %v", err)
+					}
+					if !g.expires.Equal(stored) {
+						t.Errorf("row %d expires_at = %v, want the stored %v", i, g.expires, stored)
 					}
 					if i > 0 && !got[i-1].expires.Before(g.expires) {
 						t.Errorf("row %d expires %v is not after row %d expires %v", i, g.expires, i-1, got[i-1].expires)
@@ -411,6 +422,10 @@ func TestRLS_AcceptByIdRefusals(t *testing.T) {
 			_, _, err := acceptByIDAs(ctx, f.a, f.a, invite, f.user, email)
 
 			assertAcceptRefusal(t, c.name, err, "P0002", notValidName)
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && (pgErr.Message != "invitation is not valid" || pgErr.Detail != "" || pgErr.Hint != "") {
+				t.Errorf("message/detail/hint = %q/%q/%q, want the generic message and nothing else (no tenant or id)", pgErr.Message, pgErr.Detail, pgErr.Hint)
+			}
 			if n := membershipCount(t, f.user); n != 0 {
 				t.Errorf("memberships for the user = %d, want 0", n)
 			}
@@ -498,6 +513,14 @@ func TestRLS_AcceptByIdRefusesAMismatchedGUC(t *testing.T) {
 			_, _, err := acceptByIDAs(ctx, c.guc(a, b), a, target, user, addr)
 
 			assertPgRefusal(t, c.name, err, "42501", mismatchMessage)
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) {
+				for _, secret := range []string{a, b, inviteID, user, addr} {
+					if strings.Contains(pgErr.Message+pgErr.Detail+pgErr.Hint, secret) {
+						t.Errorf("refusal text %q leaks %s", pgErr.Message, secret)
+					}
+				}
+			}
 			if n := membershipCount(t, user); n != 0 {
 				t.Errorf("memberships for the user = %d, want 0", n)
 			}
@@ -775,5 +798,61 @@ func TestRLS_JoinLookupDoesNotWidenTheApp(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", c.scope, err)
 		}
+	}
+}
+
+// Drives the shipped Down and Up through goose; a Down that leaves a function or a grant fails here.
+func TestRLS_JoinMigrationDownRemovesFunctionsAndGrantsThenReapplies(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	join := migrationVersion(t, "*_invitation_join_by_email.sql")
+	sqlDB, err := sql.Open("pgx", os.Getenv("DATABASE_MIGRATION_URL"))
+	if err != nil {
+		t.Fatalf("open migrator connection: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
+	if err != nil {
+		t.Fatalf("build migration provider: %v", err)
+	}
+	footprint := func() (fns, grants int) {
+		t.Helper()
+		if err := h.super.QueryRow(ctx,
+			`SELECT (SELECT count(*) FROM pg_proc WHERE proname IN ('pending_invites_for_email', 'accept_invitation_by_id')),
+			        (SELECT count(*) FROM information_schema.column_privileges
+			          WHERE grantee = 'auth_hook_reader'
+			            AND ((table_name = 'memberships' AND column_name IN ('display_name', 'email'))
+			              OR (table_name = 'invitations' AND column_name = 'invited_by')))`,
+		).Scan(&fns, &grants); err != nil {
+			t.Fatalf("read join footprint: %v", err)
+		}
+		return
+	}
+	if fns, grants := footprint(); fns != 2 || grants != 3 {
+		t.Fatalf("before Down: functions=%d grants=%d, want 2 3", fns, grants)
+	}
+	applied := true
+	t.Cleanup(func() {
+		if !applied {
+			if _, err := provider.ApplyVersion(context.Background(), join, true); err != nil {
+				t.Errorf("restore the join migration: %v", err)
+			}
+		}
+	})
+
+	if _, err := provider.ApplyVersion(ctx, join, false); err != nil {
+		t.Fatalf("roll back the join migration: %v", err)
+	}
+	applied = false
+	if fns, grants := footprint(); fns != 0 || grants != 0 {
+		t.Errorf("after Down: functions=%d grants=%d, want 0 0", fns, grants)
+	}
+
+	if _, err := provider.ApplyVersion(ctx, join, true); err != nil {
+		t.Fatalf("re-apply the join migration: %v", err)
+	}
+	applied = true
+	if fns, grants := footprint(); fns != 2 || grants != 3 {
+		t.Errorf("after Up again: functions=%d grants=%d, want 2 3", fns, grants)
 	}
 }

@@ -326,7 +326,7 @@ func TestReconcileURLs_SteadyStateMakesThreeCalls(t *testing.T) {
 	}
 	calls := s.calls(t)
 	if want := []string{"envList", "settle", "varsRead"}; !slices.Equal(operations(calls), want) {
-		t.Errorf("Railway calls = %v, want %v: one read of the five services", operations(calls), want)
+		t.Errorf("Railway calls = %v, want %v: one read of the services", operations(calls), want)
 	}
 	var read, want []string
 	for _, c := range calls {

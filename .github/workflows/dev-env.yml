@@ -260,7 +260,7 @@ jobs:
   #      hardcoded constant — PREREQUISITES #6) and the create path is
   #      structurally unreachable. Either way, this job also asserts every
   #      non-Postgres service instance still has empty Watch Paths
-  #      (PREREQUISITES #5) and discovers the 5 public URLs fresh (F7) — the
+  #      (PREREQUISITES #5) and discovers the public URLs fresh (F7) — the
   #      hardcoded workflow-level `env:` URLs this superseded are GONE; every
   #      consumer below reads `needs.prepare-env.outputs.*` instead.
   prepare-env:
@@ -447,7 +447,7 @@ jobs:
       # earlier: that step queries all 15 service names and hard-fails if any is
       # missing, which is what proves the 8 context services and the `docling`
       # and `auth` sidecars have materialised.
-      # settle_fork is NOT a sufficient barrier — it checks only the 6 service
+      # settle_fork is NOT a sufficient barrier — it checks only the service
       # ids reconcile-fork acts on (the RAILWAY_SVC_*_ID list in
       # require_service_ids, railway-env.sh), which excludes the 8 contexts and the sidecar.
       #
@@ -464,7 +464,7 @@ jobs:
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
         run: bash scripts/ci/railway-env.sh assert-db-dsns "$ENV_ID"
 
-      - name: Discover the 5 public URLs (never construct — F7)
+      - name: Discover the public URLs (never construct — F7)
         id: urls
         env:
           RAILWAY_API_TOKEN: ${{ github.event_name != 'workflow_dispatch' && secrets.RAILWAY_API_TOKEN || '' }}

@@ -1,4 +1,4 @@
-// railway_env_urls_test.go pins railway-env.sh discover-urls (one aliased domains read of the five
+// railway_env_urls_test.go pins railway-env.sh discover-urls (one aliased domains read of the
 // public services) and the dev-env.yml urls step that publishes its stdout.
 package main
 
@@ -63,7 +63,7 @@ func newURLsShim(t *testing.T, override map[string]string) authShim {
 	return s
 }
 
-// urlsExports sets the five service ids but not the Postgres one: discover-urls needs only the five.
+// urlsExports sets the public service ids but not the Postgres one: discover-urls needs only those.
 func urlsExports(apiToken, projectToken bool, unset ...string) string {
 	var b strings.Builder
 	if apiToken {
@@ -251,14 +251,18 @@ func TestDiscoverURLs_PrintsExactlySixOutputLines(t *testing.T) {
 }
 
 func TestDiscoverURLs_NoDomainFailsNamingTheService(t *testing.T) {
-	s := newURLsShim(t, map[string]string{"support-console": domainsJSON(t, nil, nil)})
-	stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID)
-	requireOneDiscoverCall(t, s)
-	requireURLsRefused(t, stdout, stderr, code)
-	want := "No domain found for support-console (service svc-support-console-urls) in environment " + forkEnvID +
-		" — neither a custom domain nor a Railway-generated one. Every public service must have at least one (docs/add-a-service.md step 6)."
-	if !strings.Contains(stderr, want) {
-		t.Errorf("stderr does not carry today's message %q; stderr = %q", want, stderr)
+	for _, svc := range urlsServices {
+		t.Run(svc.label, func(t *testing.T) {
+			s := newURLsShim(t, map[string]string{svc.label: domainsJSON(t, nil, nil)})
+			stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID)
+			requireOneDiscoverCall(t, s)
+			requireURLsRefused(t, stdout, stderr, code)
+			want := "No domain found for " + svc.label + " (service " + svc.id + ") in environment " + forkEnvID +
+				" — neither a custom domain nor a Railway-generated one. Every public service must have at least one (docs/add-a-service.md step 6)."
+			if !strings.Contains(stderr, want) {
+				t.Errorf("stderr does not carry today's message %q; stderr = %q", want, stderr)
+			}
+		})
 	}
 }
 
@@ -290,6 +294,7 @@ func TestDiscoverURLs_GraphQLErrorEmptyStdout(t *testing.T) {
 		{"errors beside a complete data", beside(""), nil, true},
 		{"a path names the service of the alias", beside(`"s2"`), []int{2}, false},
 		{"two aliased errors name both services", beside(`"s0"`, `"s4"`), []int{0, 4}, false},
+		{"the last alias names the library", beside(`"s5"`), []int{5}, false},
 		{"an alias past the request names the environment", beside(`"s6"`), nil, true},
 		{"a path that is no alias names the environment", beside(`"domains"`), nil, true},
 		{"an in-range and an out-of-range alias name only the real service", beside(`"s1"`, `"s9"`), []int{1}, false},
@@ -804,4 +809,59 @@ func TestDevEnvYmlURLsStepWritesTheSixOutputs(t *testing.T) {
 			t.Errorf("control: no later job reads needs.prepare-env.outputs.%s", svc.key)
 		}
 	}
+
+	top := map[string]string{}
+	for _, line := range stripHashComments(strings.Split(yml, "\n")) {
+		if strings.HasPrefix(line, "jobs:") {
+			break
+		}
+		if strings.HasPrefix(line, "  RAILWAY_SVC_") {
+			k, v, _ := strings.Cut(strings.TrimSpace(line), ":")
+			top[k] = strings.TrimSpace(v)
+		}
+	}
+	if top["RAILWAY_SVC_SUPPORT_CONSOLE_ID"] == "" {
+		t.Fatalf("control: the top-level env holds no RAILWAY_SVC_SUPPORT_CONSOLE_ID: %v", top)
+	}
+	for _, svc := range urlsServices {
+		if top[svc.idVar] == "" {
+			t.Errorf("the top-level env has no %s", svc.idVar)
+		}
+	}
+	for _, name := range []string{"spa-build-gate", "e2e"} {
+		var env map[string]string
+		for _, j := range workflowJobsOf(yml) {
+			if j.name == name {
+				env = jobEnv(j)
+			}
+		}
+		if env["SUPPORT_CONSOLE_URL"] == "" {
+			t.Fatalf("control: job %s env holds no SUPPORT_CONSOLE_URL: %v", name, env)
+		}
+		if want := "${{ needs.prepare-env.outputs.library_url }}"; env["LIBRARY_URL"] != want {
+			t.Errorf("job %s env LIBRARY_URL = %q, want %q", name, env["LIBRARY_URL"], want)
+		}
+	}
+}
+
+// jobEnv returns a job's own env: map (not a step's).
+func jobEnv(j workflowJob) map[string]string {
+	out := map[string]string{}
+	in := false
+	for _, line := range j.lines {
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case trimmed == "":
+		case indent == 4 && trimmed == "env:":
+			in = true
+		case indent <= 4:
+			in = false
+		case in && indent == 6:
+			if k, v, ok := strings.Cut(trimmed, ":"); ok {
+				out[strings.TrimSpace(k)] = strings.TrimSpace(v)
+			}
+		}
+	}
+	return out
 }

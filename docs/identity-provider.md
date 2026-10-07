@@ -696,8 +696,8 @@ hand-off is the app by default and a console when the visitor came from one (Con
    from the start bounce (step 3) with `signin=ready`, and from a failed hand-off (step 7).
    A console adds `console=ops` or `console=support`. Landing keeps the state and the console
    target in memory only and strips the params it read at boot.
-3. A visitor who opened landing directly has no state. The modal then shows "Continue with
-   email", which goes to `<app>?auth=start`, or to the held console's `?auth=start`. The app
+3. A visitor who opened landing directly has no state. A click on "Sign in" goes straight to
+   `<app>?auth=start`, or to the held console's `?auth=start`, with no modal step. The app
    or console ensures a state and returns to landing with `signin=ready`, which opens the
    modal with the form. An invite link opens `<app>?auth=start#invite=<token>` (43 base64url
    characters, exactly once). The app holds the token at `sessionStorage['invoice-os.pendingInvite']`
@@ -1739,8 +1739,9 @@ code, a whole-run re-run of the latest push `dev-env` run, or an empty commit.
    curl -sS -X POST https://api.ascomply.com/auth/exchange -H 'Content-Type: application/json' -d "{\"code\":\"x\",\"state\":\"$S\"}"
    ```
    It answers 400 `{"error":"invalid or expired code"}`.
-4. On `https://www.ascomply.com`, "Platform login" shows the sign-in form:
-   Work email, Password and "Sign in →".
+4. On `https://www.ascomply.com`, a click on "Sign in" on a landing that holds a state shows the
+   sign-in form: Work email, Password and "Sign in →". With no state it goes through the start
+   bounce first.
 5. An unknown refresh token is refused:
    ```
    curl -sS -X POST https://api.ascomply.com/auth/refresh -H 'Content-Type: application/json' -d '{"refresh_token":"aaaaaaaaaaaa"}'

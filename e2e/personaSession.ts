@@ -35,8 +35,12 @@ export function isHandoffNavigation(url: string): boolean {
   return url.startsWith(resolveTarget('APP_URL')) && new URL(url).searchParams.has('handoff')
 }
 
+// "Sign in" names the header button, the window and (with " →") the submit; scope plus exact keeps them apart.
+export const signInDialog = (page: Page) => page.getByRole('dialog', { name: 'Sign in', exact: true })
+export const headerSignIn = (page: Page) => page.getByRole('banner').getByRole('button', { name: 'Sign in', exact: true })
+
 export async function submitSignIn(page: Page, email: string, password: string): Promise<void> {
-  const dialog = page.getByRole('dialog', { name: 'Platform login' })
+  const dialog = signInDialog(page)
   await dialog.getByLabel('Work email', { exact: true }).fill(email)
   await dialog.getByLabel('Password', { exact: true }).fill(password)
   await dialog.getByRole('button', { name: 'Sign in →', exact: true }).click()
@@ -47,7 +51,7 @@ export async function expectInWorkspace(page: Page, account: { workspaceName: st
   await expect(page.locator('aside.pf-sidebar')).toContainText(account.workspaceName.toUpperCase())
 }
 
-// App path -> landing front door -> "Platform login" -> hand-off navigation back to the app.
+// App path -> landing front door -> "Sign in" -> hand-off navigation back to the app.
 // A stored session is rehydrated at boot and suppresses the front-door bounce (App.tsx resolveBootSession,
 // the `activeSession` guard of the bounce effect), so a page already on the app drops it first.
 // ceiling: a page parked on another origin keeps its stored session, sign out there first.
@@ -57,7 +61,7 @@ export async function passFrontDoor(page: Page, account: { email: string; passwo
   }
   await page.goto(`${resolveTarget('APP_URL')}${path}`)
   await page.waitForURL((u) => u.href.startsWith(resolveTarget('LANDING_URL')), { timeout: 20_000 })
-  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
+  await headerSignIn(page).click()
   await Promise.all([
     page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
     submitSignIn(page, account.email, account.password),

@@ -62,7 +62,7 @@ A new topology spec file must be added to a unit in `shards.ts`, or every topolo
 at config load.
 
 **A browser spec that needs an app session on a seeded tenant signs in with `signInAs(page, id, { tenantId })`**
-(`e2e/personaSession.ts`). It drives the landing "Platform login" form as the tenant's e2e member (`e2e/realAccounts.ts`:
+(`e2e/personaSession.ts`). It drives the landing "Sign in" form as the tenant's e2e member (`e2e/realAccounts.ts`:
 `e2e-member-<tenantId>@example.com`, an admin that `ensureMember` registers and admits through
 `POST /auth/mock/member`, once per worker) and waits for the app to draw. `ensureMember` also takes a role:
 `e2e-member-<tenantId>-<role>@example.com` for `preparer` and `reviewer`, which `ctl login` uses (`e2e/README.md`). It fails a sign-in whose

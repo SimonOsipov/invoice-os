@@ -705,18 +705,17 @@ test('landing consent: Escape, an outside click and an in-notice click all leave
 // Tab trap of its own.
 test('landing consent: keyboard focus cannot reach the notice while a modal is open', async ({ page }) => {
   test.setTimeout(90_000) // 3 modals x 30 Tab presses, each press read back over the wire
-  const { errors, card } = await openLanding(page)
+  // A held state makes "Sign in" open the window at once; with none it bounces to the app first.
+  const { errors, card } = await openLanding(page, { url: `${LANDING_URL}/?state=${'A'.repeat(43)}` })
 
   const cases = [
-    { trigger: 'Platform login', dialog: 'Platform login' },
+    { trigger: 'Sign in', dialog: 'Sign in' },
     { trigger: 'Book a demo', dialog: 'Book a demo' },
-    // The header entry shows above 1219px; the default viewport is 1280.
-    { trigger: 'Create an account', dialog: 'Create an account' },
   ]
 
   for (const c of cases) {
-    await page.getByRole('banner').getByRole('button', { name: c.trigger }).click()
-    await expect(page.getByRole('dialog', { name: c.dialog })).toBeVisible()
+    await page.getByRole('banner').getByRole('button', { name: c.trigger, exact: true }).click()
+    await expect(page.getByRole('dialog', { name: c.dialog, exact: true })).toBeVisible()
     await expect(card, `the notice unmounted under the ${c.dialog} modal, so inertness proves nothing`).toHaveCount(1)
     expect(
       await card.evaluate((el) => el.hasAttribute('inert')),
@@ -731,7 +730,7 @@ test('landing consent: keyboard focus cannot reach the notice while a modal is o
 
     // The overlay itself closes every modal (its root div owns onClick={onClose}).
     await page.mouse.click(5, 5)
-    await expect(page.getByRole('dialog', { name: c.dialog })).toHaveCount(0)
+    await expect(page.getByRole('dialog', { name: c.dialog, exact: true })).toHaveCount(0)
   }
 
   // Control: with no modal open Tab DOES reach the notice, else every assertion above

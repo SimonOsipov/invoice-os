@@ -49,8 +49,45 @@ export class InviteRefusedError extends Error {
   }
 }
 
+// Mirrors PendingInvite in internal/tenancy/store.go.
+export interface PendingInvite {
+  id: string
+  workspace: string
+  role: string
+  inviter: string | null
+  expires_at: string
+}
+
+// A tenant-less sign-in with invites waiting; the Join screen resolves it (joinInvite, createOwnWorkspace).
+export type JoinOffer = { kind: 'join'; token: string; refreshToken: unknown; invites: PendingInvite[]; answers: ProvisionBody | null }
+
+export function isPendingInvites(body: unknown): body is { invitations: PendingInvite[] } {
+  const list = (body as { invitations?: unknown } | null | undefined)?.invitations
+  return (
+    Array.isArray(list) &&
+    list.length > 0 &&
+    list.every((i) => {
+      const o = i as Record<string, unknown> | null
+      return (
+        o !== null &&
+        typeof o === 'object' &&
+        typeof o.id === 'string' &&
+        o.id !== '' &&
+        typeof o.workspace === 'string' &&
+        typeof o.role === 'string' &&
+        (o.inviter === null || typeof o.inviter === 'string') &&
+        typeof o.expires_at === 'string'
+      )
+    })
+  )
+}
+
+export function isJoinOffer(x: Session | JoinOffer): x is JoinOffer {
+  return 'kind' in x && x.kind === 'join'
+}
+
 // No degraded fallback: any failure, a 15 s timeout included, rejects.
-export async function redeemHandoff(base: string, code: string, state: string, now: number = Date.now(), invite: string | null = null): Promise<Session> {
+export async function redeemHandoff(base: string, code: string, state: string, now: number = Date.now(), invite: string | null = null): Promise<Session | JoinOffer> {
   const signal = AbortSignal.timeout(15000)
   const { access_token: token, refresh_token: refreshToken } = await apiFetch<{ access_token: string; refresh_token?: unknown }>(`${base}/auth/exchange`, {
     method: 'POST',
@@ -64,7 +101,15 @@ export async function redeemHandoff(base: string, code: string, state: string, n
   try {
     me = await apiFetch<Me>(`${base}/api/tenancy/v1/me`, { token, signal })
   } catch (err) {
-    const answers = err instanceof ApiError && err.status === 403 ? registrationAnswers(token) : null
+    if (!(err instanceof ApiError && err.status === 403)) {
+      throw err
+    }
+    const answers = registrationAnswers(token)
+    // Invites first (D7); a failed or malformed lookup keeps today's path (D11).
+    const invites = await apiFetch<unknown>(`${base}/api/tenancy/v1/invitations/mine`, { token, signal }).catch(() => null)
+    if (isPendingInvites(invites)) {
+      return { kind: 'join', token, refreshToken, invites: invites.invitations, answers }
+    }
     if (answers === null) {
       throw err
     }
@@ -99,6 +144,38 @@ async function acceptInviteAndRead(base: string, token: string, refreshToken: un
     throw err
   }
   return renewAndRead(base, refreshToken, now, signal, 'no refresh token after accepting the invite')
+}
+
+export async function createOwnWorkspace(base: string, offer: JoinOffer, now: number = Date.now()): Promise<Session> {
+  if (offer.answers === null) {
+    throw new Error('no registration answers')
+  }
+  return provisionAndRead(base, offer.token, offer.refreshToken, offer.answers, now, AbortSignal.timeout(15000))
+}
+
+// A 404 or 409 re-reads /me first: another tab may have accepted already (D10).
+export async function joinInvite(base: string, offer: JoinOffer, id: string, now: number = Date.now()): Promise<Session> {
+  const signal = AbortSignal.timeout(15000)
+  try {
+    await apiFetch(`${base}/api/tenancy/v1/invitations/${encodeURIComponent(id)}/accept`, { method: 'POST', token: offer.token, signal })
+  } catch (err) {
+    const message = err instanceof ApiError ? (err.body as { error?: unknown } | null | undefined)?.error : undefined
+    const outcome =
+      err instanceof ApiError && message === 'this invite is no longer valid' && err.status === 404
+        ? 'invalid'
+        : err instanceof ApiError && message === 'you already belong to a workspace' && err.status === 409
+          ? 'already-member'
+          : null
+    if (outcome === null) {
+      throw err
+    }
+    try {
+      return await renewAndRead(base, offer.refreshToken, now, signal, 'no refresh token after the refusal')
+    } catch {
+      throw new InviteRefusedError(outcome)
+    }
+  }
+  return renewAndRead(base, offer.refreshToken, now, signal, 'no refresh token after joining the invite')
 }
 
 // ceiling: an account whose workspace an operator deleted re-provisions at its next sign-in; revisit when workspace deletion ships.

@@ -7,7 +7,7 @@ import { createRenewer, isRenewalDue, SessionEndedError, type Renewer } from './
 import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
 import { consumeSignInState, ensureSignInState, landingInviteUrl, landingSignInUrl, mintSignInState } from './lib/signInState'
 import { consumePendingInvite, holdPendingInvite, peekPendingInvite, readInviteFragment } from './lib/pendingInvite'
-import { HANDOFF_PARAM, InviteRefusedError, isLiveHandoffSession, readHandoffCode, redeemHandoff } from './lib/sessionHandoff'
+import { HANDOFF_PARAM, InviteRefusedError, isJoinOffer, isLiveHandoffSession, readHandoffCode, redeemHandoff } from './lib/sessionHandoff'
 import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import { isPromiseLike, makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, resolveActiveClient, startingDraft } from './lib/clients'
@@ -1989,8 +1989,15 @@ export default function App() {
       ? redeemHandoff(base, handoffCode, state, Date.now(), invite)
       : Promise.reject(new Error('no sign-in state in this tab'))
     redemption.then(
-      (session) => {
-        setSeat(session)
+      (outcome) => {
+        // Until the Join screen lands, an offer takes today's no-workspace path.
+        if (isJoinOffer(outcome)) {
+          const dest = landingSignInUrl(ensureSignInState(), 'no-workspace')
+          if (dest) window.location.href = dest
+          else setHandoffPending(false)
+          return
+        }
+        setSeat(outcome)
         setHandoffPending(false)
       },
       (err: unknown) => {

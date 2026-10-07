@@ -739,14 +739,21 @@ hand-off is the app by default and a console when the visitor came from one (Con
    `handoff: true`, the refresh token (`refresh_token`) and `received_at` (epoch ms): the
    local time the exchange was sent, backdated by `HandoffTTL` (60 s) because the token may
    have waited that long in the store. A tab with no live state makes no exchange call and
-   goes to step 7. When `/me` answers 403 and the token's `user_metadata.registration`
+   goes to step 7. Without a held invite, a `/me` 403 first calls `GET /api/tenancy/v1/invitations/mine`
+   with the same token and signal, whether or not the token holds answers. One or more valid
+   invites end the redemption in a join offer (token, refresh token, invites, and the answers
+   when complete), not a session; the Join screen resolves it. An empty list, a non-200 or a
+   malformed body continues as follows. When the token's `user_metadata.registration`
    holds both names (and a `kind` that is absent, `firm` or `in_house`), the app posts them to
    `POST /api/tenancy/v1/workspaces` with the same token, silently and without a
    confirmation screen. After a 201, or a 409 (the identity already holds a membership), it
    posts the exchange's refresh token to `POST /auth/refresh` and calls `/me` with the new
    access token. The session then holds the refreshed access and refresh tokens, and
    `received_at` is the local time of the refresh, not backdated. One 15 s timeout covers the
-   whole chain. Without answers the 403 stands. A provisioning 400 or 5xx, a failed refresh or an
+   whole chain. Without answers the 403 stands. Joining an invite posts `POST
+   /api/tenancy/v1/invitations/<id>/accept`, refreshes and reads `/me`; a 404 `this invite is no longer
+   valid` or 409 `you already belong to a workspace` re-reads first and opens the workspace
+   when `/me` answers 200, else ends in step 7 as `?invite=invalid` or `already-member`. A provisioning 400 or 5xx, a failed refresh or an
    exchange without a refresh token ends in step 7 as `signin=failed`. An account whose
    workspace an operator deleted re-provisions at its next sign-in (accepted; revisit when
    workspace deletion ships). With a held invite (`consumePendingInvite`, one-shot) the app

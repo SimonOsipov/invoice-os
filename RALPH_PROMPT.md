@@ -191,7 +191,7 @@ Test every `## Decisions` entry (conservative defaults and `premise —` entries
 - Does it let the system **silently override a human's action**?
 - Does a **corrected premise** remove something the scope needs: a shipped screen, an endpoint, a merged PR, a seeded row?
 - After it, does the **outcome that a Core AC promises** (or a subtask AC taken from one) no longer happen for the user? A narrower or a wider reading after which the outcome still happens is not a fork.
-- Does it add a **dead end**, or a **step the user must find alone**, to a primary journey? The primary journeys are sign-up, invite, sign-in and first use.
+- Does it add a **dead end**, or a **step the user must find alone**, to a primary journey? The primary journeys are sign-up, invite, sign-in and first use. A dead end is a screen with no way forward inside the product. A step that no screen offers is a step found alone. A step that a screen offers is not.
 
 Any "yes" makes the fork **critical**. Expect zero or one per story.
 A plan-review finding tagged `escalated→critical fork` is critical: it names a defect, and its fix changes the scope.

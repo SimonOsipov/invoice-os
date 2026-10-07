@@ -28,15 +28,14 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// Create refuses a non-admin first, then validates in.TIN via ValidateTIN, inside ONE
-// db.WithinRequestTenantTx closure, INSERTs a business_entities row owned by
+// Create, inside ONE db.WithinRequestTenantTx closure, refuses a non-admin caller
+// with ErrNotPermitted, validates in.TIN via ValidateTIN, INSERTs a business_entities row owned by
 // the caller's tenant (tenant_id passed explicitly, id left to the column
 // DEFAULT gen_random_uuid()) and writes a "portfolio.entity.created"
 // audit.Record row in the SAME transaction, AFTER the successful INSERT and
 // BEFORE the closure returns nil — so a failed audit write rolls back the
 // insert too. A unique_violation (23505, via pgCode) on the duplicate-TIN
-// partial index maps to ErrDuplicateTIN. It refuses a non-admin caller with
-// ErrNotPermitted.
+// partial index maps to ErrDuplicateTIN.
 func (s *Store) Create(ctx context.Context, in CreateInput) (Entity, error) {
 	var entity Entity
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {

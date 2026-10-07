@@ -1677,6 +1677,23 @@ production". Then read `tenancy`'s boot line:
 `"mode":"off"` means the key was not read: check U1's write and the deploy. Invite one real
 address to prove the send end to end.
 
+## Resend templates (the send contract)
+
+Resend holds the only copy of each mail's HTML and subject; the repo keeps this contract. A Resend UI edit is live on Publish. No check compares a published template with this table.
+
+| Alias | Variables (`key: type, fallback`) | Subject |
+|---|---|---|
+| `account-confirmation` | `NAME: string, fallback there`; `USER_EMAIL: string`; `ACTION_URL: string` | `Confirm your ASComply account` |
+| `account-recovery` | `USER_EMAIL: string`; `ACTION_URL: string` | `Reset your ASComply password` |
+| `account-invite` | `INVITER: string, fallback A workspace admin`; `WORKSPACE: string`; `ROLE: string`; `USER_EMAIL: string`; `ACCEPT_URL: string`; `VALID_DAYS: number` | `You are invited to ASComply` |
+| `marketing-starter` | none required; footer `{{{RESEND_UNSUBSCRIBE_URL}}}`; not sent by code, the base for broadcasts | `Update from ASComply` |
+
+- The sender `ASComply <no-reply@ascomply.com>` is set in each template.
+- A send names the alias, never the id.
+- A variable without a fallback must be sent (Resend docs).
+- Never declare the Resend-reserved names `FIRST_NAME`, `LAST_NAME`, `EMAIL`, `UNSUBSCRIBE_URL`, `RESEND_UNSUBSCRIBE_URL`, `contact`, `this`.
+- The logo is `https://api.ascomply.com/emails/mark.png`, a gateway route that stays.
+
 ## Opening sign-in in production (sign-in U1–U3)
 
 These steps are separate from the two U1–U4 lists above. Production writes are the user's.

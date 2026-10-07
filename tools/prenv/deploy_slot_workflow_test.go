@@ -104,10 +104,22 @@ func TestDevEnvDeploySlotJobRunsTheScript(t *testing.T) {
 			t.Errorf("env %s = %q, want %q", k, env[k], want)
 		}
 	}
-	for _, k := range []string{"REPO", "GH_TOKEN"} {
-		if env[k] == "" {
-			t.Errorf("env %s is not set on the script step", k)
+	for k, want := range map[string]string{"REPO": "${{ github.repository }}", "GH_TOKEN": "${{ github.token }}"} {
+		if env[k] != want {
+			t.Errorf("env %s = %q, want %q", k, env[k], want)
 		}
+	}
+	checkout, script := -1, -1
+	for i, s := range j.steps() {
+		if strings.HasPrefix(s.keys["uses"], "actions/checkout@") && checkout < 0 {
+			checkout = i
+		}
+		if strings.Contains(s.keys["run"], "scripts/ci/deploy-slot.sh") {
+			script = i
+		}
+	}
+	if checkout < 0 || checkout > script {
+		t.Errorf("deploy-slot must check out the repo before running the script (checkout step %d, script step %d)", checkout, script)
 	}
 	if v, _ := jobKey(devEnvJob(t, "changes"), "name"); v != changesJobName {
 		t.Errorf("changes name = %q, want %q", v, changesJobName)
@@ -231,5 +243,43 @@ func TestDeploySlotPermissions(t *testing.T) {
 	top := blockLines(strings.Split(readWorkflow(t, "dev-env.yml"), "\n"), 0, "permissions")
 	if !slices.Equal(sorted(top), []string{"checks: read", "contents: read"}) {
 		t.Errorf("workflow permissions = %v, want checks: read + contents: read", top)
+	}
+}
+
+func TestDeploySlotReleaseWaitsForEveryJobThatDeploys(t *testing.T) {
+	needs := jobList(devEnvJob(t, releaseJobID), "needs")
+	deployers := 0
+	for _, j := range workflowJobsOf(readWorkflow(t, "dev-env.yml")) {
+		if j.name == releaseJobID {
+			continue
+		}
+		for _, l := range stripHashComments(j.lines) {
+			if strings.Contains(l, "railway-up-ci.sh") {
+				deployers++
+				if !slices.Contains(needs, j.name) {
+					t.Errorf("job %s runs railway-up-ci.sh but deploy-slot-release does not need it; the slot would free mid-deploy", j.name)
+				}
+				break
+			}
+		}
+	}
+	if deployers == 0 {
+		t.Fatal("control: no job runs railway-up-ci.sh")
+	}
+}
+
+func TestDeploySlotAndPrepareEnvShareTheRelevanceGate(t *testing.T) {
+	slot, _ := jobKey(devEnvJob(t, slotJobID), "if")
+	prep, _ := jobKey(devEnvJob(t, "prepare-env"), "if")
+	if slot == "" || prep == "" {
+		t.Fatal("control: deploy-slot or prepare-env has no if:")
+	}
+	for _, want := range []string{
+		"github.event_name == 'workflow_dispatch'", "github.event_name == 'push'",
+		"github.event.pull_request.draft == false", "needs.changes.outputs.e2e == 'true'",
+	} {
+		if !strings.Contains(slot, want) || !strings.Contains(prep, want) {
+			t.Errorf("deploy-slot and prepare-env must both gate on %q; a skipped slot would silently skip Prepare\n slot: %s\n prep: %s", want, slot, prep)
+		}
 	}
 }

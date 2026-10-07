@@ -257,7 +257,9 @@ describe('library shell primitives', () => {
       ['true', 'nav-recognition'],
       ['true', 'Review low-confidence fields'],
     ])
-    expect(sidebar(home).some((t) => attr(t, 'aria-current') !== undefined)).toBe(false)
+    const onHome = sidebar(home).filter((t) => attr(t, 'aria-current') !== undefined)
+    expect(onHome.map((t) => [attr(t, 'aria-current'), t.text])).toEqual([['true', '']])
+    expect(onHome[0].attrs).toContain('lib-nav')
   })
 
   it('SH-11 a Coming soon feature carries the pill in the sidebar', () => {

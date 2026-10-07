@@ -1128,7 +1128,7 @@ test('deployed app: a firm Preparer of a workspace with no company sees no add c
   })
   expect([refused.status, refused.body], 'the Preparer POST').toEqual([403, { error: ONLY_ADMIN_ADDS }])
 
-  // The wrong turn last: an open tab learns of the company with no navigation (D17).
+  // The wrong turn last: an open tab learns of the company with no navigation.
   await sidebarNav(page).getByRole('button', { name: 'Overview' }).click()
   await expect(page.getByTestId('company-setup-waiting')).toBeVisible()
   // framenavigated also fires on the SPA's pushState, so a window marker proves no document reload.

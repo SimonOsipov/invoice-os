@@ -415,6 +415,21 @@ describe('AddCompanyTask follows the role (LOGFIX-06-02)', () => {
     expect(listEntities).not.toHaveBeenCalled()
   })
 
+  it('a demotion while the form is open does not reopen it after a re-promotion', () => {
+    const { ctx } = mkCtx({ mode: 'inhouse', role: 'admin' })
+    const { rerender } = render(<AddCompanyTask ctx={ctx} />)
+    fireEvent.click(trigger())
+    expect(screen.getByRole('dialog', { name: 'Add company' })).toBeTruthy()
+
+    rerender(<AddCompanyTask ctx={{ ...ctx, members: [selfRow('preparer')] } as PlatformCtx} />)
+    expect(screen.getByTestId('company-setup-waiting')).toBeTruthy()
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    rerender(<AddCompanyTask ctx={{ ...ctx, members: [selfRow('admin')] } as PlatformCtx} />)
+    expect(screen.getByTestId('add-company-task')).toBeTruthy()
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
   it('a failed re-read keeps the waiting view and tries again next time', async () => {
     vi.mocked(listEntities).mockRejectedValue(new ApiError('network', 'down'))
     const { ctx, refetchEntities } = mkCtx({ role: 'preparer' })

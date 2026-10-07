@@ -118,7 +118,11 @@ export function AddCompanyTask({ ctx }: { ctx: PlatformCtx }) {
       </div>
     )
   }
-  if (access === 'wait') return waiting
+  if (access === 'wait') {
+    // a later promotion must not reopen a modal the waiting view unmounted
+    if (open) setOpen(false)
+    return waiting
+  }
 
   const copy = ADD_COMPANY_COPY[mode]
   return (

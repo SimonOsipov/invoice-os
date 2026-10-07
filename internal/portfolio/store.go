@@ -28,7 +28,7 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// Create validates in.TIN via ValidateTIN, then, inside ONE
+// Create refuses a non-admin first, then validates in.TIN via ValidateTIN, inside ONE
 // db.WithinRequestTenantTx closure, INSERTs a business_entities row owned by
 // the caller's tenant (tenant_id passed explicitly, id left to the column
 // DEFAULT gen_random_uuid()) and writes a "portfolio.entity.created"
@@ -38,19 +38,20 @@ func NewStore(pool *pgxpool.Pool) *Store {
 // partial index maps to ErrDuplicateTIN. It refuses a non-admin caller with
 // ErrNotPermitted.
 func (s *Store) Create(ctx context.Context, in CreateInput) (Entity, error) {
-	canonicalTIN, err := ValidateTIN(in.TIN)
-	if err != nil {
-		return Entity{}, err
-	}
-
 	var entity Entity
-	err = db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		// The identity is guaranteed present here: WithinRequestTenantTx already
 		// resolved it (as the tenant id) before this closure ran, returning
 		// db.ErrNoTenant otherwise.
 		id, _ := auth.IdentityFromContext(ctx)
 
 		if err := requireAdmin(ctx, tx, id.Subject); err != nil {
+			return err
+		}
+
+		// After the role check: a non-admin gets 403 whatever the input.
+		canonicalTIN, err := ValidateTIN(in.TIN)
+		if err != nil {
 			return err
 		}
 

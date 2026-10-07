@@ -151,19 +151,23 @@ func TestCreateHandler_TINReasonInBody(t *testing.T) {
 	}
 }
 
-// TestHandlers_StoreTINRefusalIsBareReason: the real Store.Create and
-// Store.Update refuse a TIN before any database call, so a nil pool is enough;
-// the 400 body is the reason alone, with no wrapper added on the way.
+// TestHandlers_StoreTINRefusalIsBareReason: the real Store.Create (as an admin,
+// after the role check) and Store.Update refuse a TIN; the 400 body is the
+// reason alone, with no wrapper added on the way. Update needs no database.
 func TestHandlers_StoreTINRefusalIsBareReason(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	store := NewStore(nil)
+	super, app := dbTestPools(t)
+	createStore := NewStore(app)
+	_, adminCtx := seedCaller(t, super, "firm", "admin", "active")
+	adminID, _ := auth.IdentityFromContext(adminCtx)
 	rows := tinReasonRows()
 	if len(rows) == 0 {
 		t.Fatal("no rows")
 	}
 	for _, tc := range rows {
 		t.Run("create/"+tc.raw, func(t *testing.T) {
-			rec, body := doCreate(t, store.Create, &id, createRequest{Name: "Acme Ltd", TIN: tc.raw})
+			rec, body := doCreate(t, createStore.Create, &adminID, createRequest{Name: "Acme Ltd", TIN: tc.raw})
 			if rec.Code != http.StatusBadRequest || body.Error != tc.want {
 				t.Errorf("create = %d %q, want 400 %q", rec.Code, body.Error, tc.want)
 			}
@@ -3085,7 +3089,7 @@ func TestStoreSetStatus_CrossTenantOnboardNotFound(t *testing.T) {
 	}
 }
 
-// --- LOGFIX-06-01: Store.Create refuses a non-admin ----------------------------------
+// --- Store.Create refuses a non-admin ---
 
 // seedCaller seeds a tenant of the given kind with memberSubject holding role/status,
 // and returns the tenant id plus a context carrying that caller's identity.
@@ -3147,6 +3151,20 @@ func TestStoreCreate_NonAdminRefusedInBothModes(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestStoreCreate_NonAdminMalformedTINStillRefused(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	for _, role := range []string{"preparer", "reviewer"} {
+		t.Run(role, func(t *testing.T) {
+			_, c := seedCaller(t, super, "firm", role, "active")
+			_, err := store.Create(c, CreateInput{Name: "X", TIN: "abc"})
+			if !errors.Is(err, ErrNotPermitted) {
+				t.Fatalf("Create as %s with TIN abc err = %v, want ErrNotPermitted", role, err)
+			}
+		})
 	}
 }
 

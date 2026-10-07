@@ -488,8 +488,8 @@ connection resets or any other curl failure. A mutation that is not
 idempotent, and every poll tick, gets one transient attempt (`once`).
 
 **429 waits.** Any call, a poll tick included, waits the time Railway names in `Retry-After`
-(else `X-RateLimit-Reset`, ISO-8601, rounded up) and sends once more, at least 1 s, at most 600 s per call and 600 s per job
-in total (`$RUNNER_TEMP/railway-api-429-waited`). Each job that runs `railway-env.sh` has a `timeout-minutes` 10 above its work budget for those waits. A `::warning::` names the wait. A longer wait, a
+(else `X-RateLimit-Reset`, ISO-8601, reset minus now plus 1 s) and sends once more, at least 1 s, at most 600 s per call and 600 s per job
+in total (`$RUNNER_TEMP/railway-api-429-waited`). The four jobs with a set timeout (`prepare-env`, `teardown`, `sweep`, `pr-environments-off`) have a `timeout-minutes` 10 above their work budget for those waits; the other jobs that run `railway-env.sh` use GitHub's 360-minute default (`TestWorkflowTimeoutsCoverTheRateLimitWaits`). A `::warning::` names the wait. A longer wait, a
 second 429, no usable wait or a full job total fails and names the wait, batched calls included
 (`tools/prenv/railway_env_retry_test.go`; poll ticks: `tools/prenv/railway_env_wait_deployment_test.go`;
 batched calls: `tools/prenv/railway_env_pass_test.go`).

@@ -97,7 +97,7 @@ in the UI rather than as a suspension.
 is immediate and needs no new session: the gate reads status per request
 (`TestRLS_RequestSeamAdmitsAReactivatedCaller`, `…RefusesAfterALiveSuspension`).
 
-## 4. `GET /v1/me`, `POST /v1/workspaces` and the two invite routes are the four deliberate exemptions
+## 4. `GET /v1/me`, `POST /v1/workspaces` and the invite routes are the deliberate exemptions
 
 `tenancy.Store.Me` calls `db.WithinTenantTx` directly, skipping the gate. Scan 2 (§9) pins that
 exemption to that one **func**, not to its file.
@@ -128,7 +128,7 @@ the invited address.
 (`POST /v1/invitations/{id}/accept`) are exempt the same way: the caller has no membership, and the
 email in the identity header, through `pending_invites_for_email`, is the only guard.
 
-`tenancy.Store.PreviewInvitation` (`POST /internal/invitations/preview`) is the fourth,
+`tenancy.Store.PreviewInvitation` (`POST /internal/invitations/preview`) is
 func-scoped. It has no caller: the token is the credential. It discloses the invited workspace name,
 role and address to whoever holds the token, and answers `404` alike for an unknown, spent,
 revoked, expired or malformed token.
@@ -420,7 +420,7 @@ it", so a stale exemption cannot outlive its reason.
 | Guard | What it asserts | Needles | Floor (measured at AUDIT-10-04) |
 |---|---|---|---|
 | `TestRLS_NoDirectPoolUseOutsideTheSeam` | **no database handle is acquired outside the `scPoolAllowlist` entries**: no pool method on a `*pgxpool.Pool`-typed name, and no `pgx.Connect`, `pgxpool.New`, `pgconn.Connect` or `sql.Open` off a DSN | a fixture holding both `r.ReaderPool.Query(...)` and `r.URL.Query()` must find **exactly 1**; a bare pool parameter; a non-database method; an aliased local; all three DSN entry points; a renamed import; an acquisition inside a func literal, attributed to the literal | ≥130 files walked (139); ≥4 pool-typed names (4); ≥9 sites across ≥8 files (10 across 9) |
-| `TestRLS_UngatedCoreIsWorkerAndExemptionOnly` | every call of the identity-free `db.WithinTenantTx`/`Opts` is a worker, a boot-time seeder, an operator CLI, or `tenancy` func `Me`, `ProvisionWorkspace`, `AcceptInvitation` or `PreviewInvitation` | a call in a named func; a doc comment naming the seam (0 sites); a call inside a func literal, attributed to the literal | ≥130 files walked (139); ≥12 sites across ≥6 packages (14 across 7) |
+| `TestRLS_UngatedCoreIsWorkerAndExemptionOnly` | every call of the identity-free `db.WithinTenantTx`/`Opts` is a worker, a boot-time seeder, an operator CLI, or `tenancy` func `Me`, `ProvisionWorkspace`, `AcceptInvitation`, `MyPendingInvitations`, `AcceptInvitationByID` or `PreviewInvitation` | a call in a named func; a doc comment naming the seam (0 sites); a call inside a func literal, attributed to the literal | ≥130 files walked (139); ≥12 sites across ≥6 packages (14 across 7) |
 | `TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute` | every `app.Mux` route in `cmd/*/main.go` and `internal/platform/server.go` has a row in §8 with a verdict, and no row classifies a route nobody registers | a const-indirected route resolves; an unresolvable argument fails loudly; a verdict cell must read exactly `covered` or `exempt`; a longer path cannot answer for a shorter one | ≥8 roots yielding routes (9); ≥55 registrations (63) |
 | `TestRLS_ReadPathSuspensionDocHasNoStaleNarrowRuleClaim` | this page carries no sentence still asserting AUDIT-10's narrow rule (§5) | a fixture planting both stale phrases must be flagged; a fixture holding only the legitimate active-row line must not | this file parses to ≥10 top-level (`## `) section headings |
 

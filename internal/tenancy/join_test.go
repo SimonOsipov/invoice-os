@@ -513,3 +513,227 @@ func TestJoin_JoinByIdAfterTokenLinkIsNoLongerValid(t *testing.T) {
 		t.Errorf("invitation.accepted rows = %d, want 1", n)
 	}
 }
+
+func setInviteStatus(t *testing.T, super *pgxpool.Pool, id, status string) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(), `UPDATE invitations SET status = $2 WHERE id = $1`, id, status); err != nil {
+		t.Fatalf("set status: %v", err)
+	}
+}
+
+func TestJoin_RevokedOrAcceptedInviteIsNeitherListedNorAccepted(t *testing.T) {
+	for _, state := range []string{"revoked", "accepted"} {
+		t.Run(state, func(t *testing.T) {
+			w, addr := newJoinWorld(t, "reviewer")
+			user := uuid.NewString()
+			ctx := tenantless(user, addr)
+			if got, err := w.store.MyPendingInvitations(ctx); err != nil || len(got) != 1 {
+				t.Fatalf("a live invite lists as %+v, err %v; want exactly it", got, err)
+			}
+			setInviteStatus(t, w.super, w.invite.ID, state)
+
+			if got, err := w.store.MyPendingInvitations(ctx); err != nil || len(got) != 0 {
+				t.Errorf("list of a %s invite = %+v, err %v; want empty", state, got, err)
+			}
+			if _, _, _, err := w.store.AcceptInvitationByID(ctx, w.invite.ID); !errors.Is(err, ErrInvitationNotValid) {
+				t.Errorf("accept of a %s invite: err = %v, want ErrInvitationNotValid", state, err)
+			}
+			if got := len(membersOf(t, w.super, user)); got != 0 {
+				t.Errorf("memberships = %d, want 0", got)
+			}
+			if n := len(acceptedAudits(t, w.super, w.tenant)); n != 0 {
+				t.Errorf("invitation.accepted rows = %d, want 0", n)
+			}
+			requireStatus(t, w, state)
+		})
+	}
+}
+
+func TestJoin_ANonUuidIdSendsNoStatement(t *testing.T) {
+	w, addr := newJoinWorld(t, "reviewer")
+	store, tr := tracedStore(t)
+	ctx := tenantless(uuid.NewString(), addr)
+	for _, id := range []string{"", "x", w.invite.ID + "x", "' OR 1=1 --", w.invite.Token} {
+		before := tr.count()
+		if _, _, _, err := store.AcceptInvitationByID(ctx, id); !errors.Is(err, ErrInvitationNotValid) {
+			t.Errorf("accept %q: err = %v, want ErrInvitationNotValid", id, err)
+		}
+		if n := tr.count() - before; n != 0 {
+			t.Errorf("accept %q sent %d statements, want none", id, n)
+		}
+	}
+	requireStatus(t, w, "pending")
+	before := tr.count()
+	if _, _, _, err := store.AcceptInvitationByID(ctx, w.invite.ID); err != nil {
+		t.Fatalf("control accept: %v", err)
+	}
+	if tr.count() == before {
+		t.Error("the traced pool saw no statement for a valid accept, so a zero count above proves nothing")
+	}
+}
+
+func TestJoin_TwoCallersOneInviteJoinOnce(t *testing.T) {
+	w, addr := newJoinWorld(t, "reviewer")
+	users := []string{uuid.NewString(), uuid.NewString()}
+	ch := make(chan joinResult, len(users))
+	start := make(chan struct{})
+	for _, u := range users {
+		go func() {
+			<-start
+			tenant, _, _, err := w.store.AcceptInvitationByID(tenantless(u, addr), w.invite.ID)
+			ch <- joinResult{tenant, err}
+		}()
+	}
+	close(start)
+	ok, refused := 0, 0
+	for range users {
+		r := <-ch
+		switch {
+		case r.err == nil && r.tenant.ID == w.tenant:
+			ok++
+		case errors.Is(r.err, ErrInvitationNotValid):
+			refused++
+		default:
+			t.Errorf("unexpected result: tenant %+v, err %v", r.tenant, r.err)
+		}
+	}
+	if ok != 1 || refused != 1 {
+		t.Errorf("successes/refusals = %d/%d, want 1/1", ok, refused)
+	}
+	if n := len(membersOf(t, w.super, users[0])) + len(membersOf(t, w.super, users[1])); n != 1 {
+		t.Errorf("memberships across both callers = %d, want 1", n)
+	}
+	if n := len(acceptedAudits(t, w.super, w.tenant)); n != 1 {
+		t.Errorf("invitation.accepted rows = %d, want 1", n)
+	}
+}
+
+func TestJoin_AuditMatchesTheTokenAccept(t *testing.T) {
+	byID, addrA := newJoinWorld(t, "preparer")
+	byToken, addrB := newJoinWorld(t, "preparer")
+	userA, userB := uuid.NewString(), uuid.NewString()
+	if _, _, _, err := byID.store.AcceptInvitationByID(tenantless(userA, addrA), byID.invite.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := byToken.store.AcceptInvitation(tenantless(userB, addrB), byToken.invite.Token); err != nil {
+		t.Fatal(err)
+	}
+	a, b := acceptedAudits(t, byID.super, byID.tenant), acceptedAudits(t, byToken.super, byToken.tenant)
+	if len(a) != 1 || len(b) != 1 {
+		t.Fatalf("audit rows by id / by token = %d / %d, want 1 / 1", len(a), len(b))
+	}
+	if a[0].Actor != userA || b[0].Actor != userB {
+		t.Errorf("actors = %s, %s; want the joining subjects", a[0].Actor, b[0].Actor)
+	}
+	if len(a[0].Payload) != len(b[0].Payload) || a[0].Payload["role"] != b[0].Payload["role"] ||
+		a[0].Payload["invitation_id"] != byID.invite.ID || b[0].Payload["invitation_id"] != byToken.invite.ID {
+		t.Errorf("payloads differ: by id %v, by token %v", a[0].Payload, b[0].Payload)
+	}
+}
+
+// The routes read the address from the caller context only; a victim's address in the body or query is ignored,
+// and every refusal is the same bytes whatever made it.
+func TestJoin_HandlersIgnoreBodyAndQueryAndRefuseAlike(t *testing.T) {
+	w, addr := newJoinWorld(t, "reviewer")
+	other := newInvWorld(t, "Eze Ltd", "Bola Eze")
+	otherInv := mustIssue(t, other.adminCtx(), other.store, []string{addr}, "preparer")[0]
+	// One tenant each: a second invite to the same address in a tenant revives the first row.
+	dead := func(name string) IssuedInvite {
+		x := newInvWorld(t, name, "Chi Okoro")
+		return mustIssue(t, x.adminCtx(), x.store, []string{addr}, "reviewer")[0]
+	}
+	expired, revoked, accepted := dead("Dead A"), dead("Dead B"), dead("Dead C")
+	setExpiry(t, w.super, expired.ID, time.Now().Add(-time.Minute))
+	setInviteStatus(t, w.super, revoked.ID, "revoked")
+	setInviteStatus(t, w.super, accepted.ID, "accepted")
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/invitations/mine", InvitationsMineHandler(w.store.MyPendingInvitations, nil))
+	mux.HandleFunc("POST /v1/invitations/{id}/accept", AcceptInvitationByIDHandler(w.store.AcceptInvitationByID, nil))
+	attacker := uuid.NewString()
+	atk := tenantless(attacker, joinAddr("attacker"))
+	spoof := `{"email":"` + addr + `","tenant_id":"` + w.tenant + `"}`
+
+	var bodies []string
+	for name, c := range map[string]struct{ id, query string }{
+		"unknown id":         {uuid.NewString(), ""},
+		"live invite of A":   {w.invite.ID, "?email=" + addr},
+		"other tenant":       {otherInv.ID, "?email=" + addr + "&tenant_id=" + other.tenant},
+		"expired":            {expired.ID, ""},
+		"revoked":            {revoked.ID, ""},
+		"accepted":           {accepted.ID, ""},
+		"not a uuid":         {"x", ""},
+		"token as id":        {w.invite.Token, ""},
+		"upper-case foreign": {strings.ToUpper(w.invite.ID), ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := apiDo(mux, atk, http.MethodPost, "/v1/invitations/"+c.id+"/accept"+c.query, spoof)
+			assertErrorBody(t, rec, http.StatusNotFound, "this invite is no longer valid")
+			bodies = append(bodies, rec.Body.String())
+			for _, leak := range []string{"Obi Partners", "Eze Ltd", w.tenant, other.tenant, addr} {
+				if strings.Contains(rec.Body.String(), leak) {
+					t.Errorf("refusal %s names %q", rec.Body, leak)
+				}
+			}
+		})
+	}
+	if len(bodies) == 0 {
+		t.Fatal("no refusal ran")
+	}
+	for _, b := range bodies[1:] {
+		if b != bodies[0] {
+			t.Errorf("refusal bodies differ: %q vs %q", b, bodies[0])
+		}
+	}
+	if rows := membersOf(t, w.super, attacker); len(rows) != 0 {
+		t.Errorf("attacker memberships = %+v, want none", rows)
+	}
+	requireStatus(t, w, "pending")
+
+	rec := apiDo(mux, atk, http.MethodGet, "/v1/invitations/mine?email="+addr, "")
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"invitations":[]}` {
+		t.Errorf("attacker list with a spoofed query = %d %s, want 200 empty", rec.Code, rec.Body)
+	}
+
+	// Positive controls: the addressee lists and joins; a member and a no-caller request get 409 / 401.
+	user := uuid.NewString()
+	rec = apiDo(mux, tenantless(user, addr), http.MethodGet, "/v1/invitations/mine", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), w.invite.ID) || !strings.Contains(rec.Body.String(), "Obi Partners") {
+		t.Fatalf("addressee list = %d %s, want 200 naming the invite", rec.Code, rec.Body)
+	}
+	rec = apiDo(mux, tenantless(user, addr), http.MethodPost, "/v1/invitations/"+w.invite.ID+"/accept", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"reviewer"`) {
+		t.Fatalf("addressee accept = %d %s, want 200", rec.Code, rec.Body)
+	}
+	member := auth.WithIdentity(context.Background(), auth.Identity{Subject: user, Role: "authenticated", TenantID: w.tenant, Email: addr})
+	assertErrorBody(t, apiDo(mux, member, http.MethodGet, "/v1/invitations/mine", ""), http.StatusConflict, "you already belong to a workspace")
+	assertErrorBody(t, apiDo(mux, member, http.MethodPost, "/v1/invitations/"+otherInv.ID+"/accept", ""), http.StatusConflict, "you already belong to a workspace")
+	assertErrorBody(t, apiDo(mux, context.Background(), http.MethodGet, "/v1/invitations/mine", ""), http.StatusUnauthorized, "unauthorized")
+	assertErrorBody(t, apiDo(mux, context.Background(), http.MethodPost, "/v1/invitations/"+otherInv.ID+"/accept", ""), http.StatusUnauthorized, "unauthorized")
+}
+
+func TestJoin_AcceptNamesTheInviteNotTheFirstOfTheAddress(t *testing.T) {
+	addr := joinAddr("tunde")
+	t1 := newInvWorld(t, "Obi Partners", "Ada Obi")
+	t2 := newInvWorld(t, "Eze Ltd", "Bola Eze")
+	i1 := mustIssue(t, t1.adminCtx(), t1.store, []string{addr}, "reviewer")[0]
+	i2 := mustIssue(t, t2.adminCtx(), t2.store, []string{addr}, "preparer")[0]
+	setExpiry(t, t1.super, i1.ID, time.Now().Add(24*time.Hour)) // i1 lists first
+	setExpiry(t, t1.super, i2.ID, time.Now().Add(48*time.Hour))
+	user := uuid.NewString()
+
+	tenant, _, role, err := t1.store.AcceptInvitationByID(tenantless(user, addr), i2.ID)
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	if tenant.ID != t2.tenant || tenant.Name != "Eze Ltd" || role != "preparer" {
+		t.Errorf("joined %+v as %q, want Eze Ltd as preparer", tenant, role)
+	}
+	rows := membersOf(t, t1.super, user)
+	if len(rows) != 1 || rows[0].Tenant != t2.tenant || rows[0].Role != "preparer" {
+		t.Errorf("memberships = %+v, want one in %s as preparer", rows, t2.tenant)
+	}
+	if got := invRows(t, t1.super, t1.tenant, "id = $2", i1.ID); len(got) != 1 || got[0].Status != "pending" {
+		t.Errorf("the other invite = %+v, want pending", got)
+	}
+}

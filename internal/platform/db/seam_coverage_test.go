@@ -3176,6 +3176,11 @@ var scSweepSubjectAllowlist = []scSweepSubjectExemption{
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_SameInviteTwoConcurrentAcceptsJoinOnce"},                             // the invitee holds no membership before joining
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TokenLinkAfterJoinByIdIsNoLongerValid"},                              // the invitee holds no membership before joining
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_JoinByIdAfterTokenLinkIsNoLongerValid"},                              // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_RevokedOrAcceptedInviteIsNeitherListedNorAccepted"},                  // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_ANonUuidIdSendsNoStatement"},                                         // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AuditMatchesTheTokenAccept"},                                         // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_HandlersIgnoreBodyAndQueryAndRefuseAlike"},                           // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AcceptNamesTheInviteNotTheFirstOfTheAddress"},                        // the invitee holds no membership before joining
 }
 
 // scSweepTestFiles returns every _test.go file under internal/ (repo-relative,

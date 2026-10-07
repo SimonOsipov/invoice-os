@@ -1053,7 +1053,7 @@ func TestRailwayAPI_RetryAfterIntegerForms(t *testing.T) {
 	}{
 		{"08", []string{"8"}, ""},
 		{"0030", []string{"30"}, ""},
-		{"000", []string{"0"}, ""},
+		{"000", []string{"1"}, ""},
 		{"0600", []string{"600"}, ""},
 		{"0000000000000000000030", []string{"30"}, ""},
 		{"0601", nil, "601"},

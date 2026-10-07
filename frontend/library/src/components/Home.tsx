@@ -1,8 +1,9 @@
 import { GROUPS } from '../content'
 import { Icon, type GlyphName } from '../icons'
+import type { Group } from '../types'
 import { Button } from './Button'
 
-type HomeProps = { demoHref: string | null; onGroup: (gid: string) => void; onTour: () => void }
+type HomeProps = { demoHref: string | null; onGroup: (g: Group) => void; onTour: () => void }
 
 export function Home({ demoHref, onGroup, onTour }: HomeProps) {
   return (
@@ -53,7 +54,7 @@ export function Home({ demoHref, onGroup, onTour }: HomeProps) {
                 key={g.id}
                 type="button"
                 className="lib-card"
-                onClick={() => onGroup(g.id)}
+                onClick={() => onGroup(g)}
                 style={{
                   textAlign: 'left',
                   cursor: 'pointer',

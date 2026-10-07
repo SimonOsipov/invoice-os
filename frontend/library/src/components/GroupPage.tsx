@@ -1,10 +1,11 @@
-import type { Group } from '../types'
+import { GROUPS } from '../content'
+import type { Feature, Group } from '../types'
 import { Icon } from '../icons'
 import { formatSeconds, STEP_SECONDS } from '../timing'
 import { Button } from './Button'
 import { ComingSoonPill } from './ComingSoonPill'
 
-type GroupPageProps = { group: Group; openHref: string | null; onFeature: (fid: string) => void }
+type GroupPageProps = { group: Group; openHref: string | null; onFeature: (f: Feature) => void }
 
 const dot = { width: 6, height: 6, borderRadius: '50%', background: 'var(--border)' }
 
@@ -12,7 +13,7 @@ export function GroupPage({ group, openHref, onFeature }: GroupPageProps) {
   return (
     <section style={{ padding: '56px 40px 80px', maxWidth: 1180, display: 'flex', flexDirection: 'column', gap: 40 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 700 }}>
-        <div className="t-eyebrow">{`Group ${group.n} of 11`}</div>
+        <div className="t-eyebrow">{`Group ${group.n} of ${GROUPS.length}`}</div>
         <h2 className="t-h2" style={{ margin: 0, fontSize: 44 }}>
           {group.name}
         </h2>
@@ -34,7 +35,7 @@ export function GroupPage({ group, openHref, onFeature }: GroupPageProps) {
             id={`fc-${f.id}`}
             type="button"
             className="lib-card"
-            onClick={() => onFeature(f.id)}
+            onClick={() => onFeature(f)}
             style={{
               textAlign: 'left',
               cursor: 'pointer',

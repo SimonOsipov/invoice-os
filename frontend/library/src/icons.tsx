@@ -123,9 +123,9 @@ export const GLYPHS: Record<GlyphName, readonly string[]> = {
   ],
 }
 
-type IconProps = { name: GlyphName; size?: number; strokeWidth?: number }
+type IconProps = { name: GlyphName; size?: number }
 
-export function Icon({ name, size = 16, strokeWidth = 2 }: IconProps) {
+export function Icon({ name, size = 16 }: IconProps) {
   return (
     <svg
       width={size}
@@ -133,7 +133,7 @@ export function Icon({ name, size = 16, strokeWidth = 2 }: IconProps) {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth={strokeWidth}
+      strokeWidth={2}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"

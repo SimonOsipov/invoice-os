@@ -66,7 +66,7 @@ export function Sidebar({ route, demoHref, onHome, onGroup, onFeature, onTour }:
             textAlign: 'left',
           }}
         >
-          <Logo size={28} />
+          <Logo />
           <span
             className="mono"
             style={{
@@ -142,6 +142,7 @@ export function Sidebar({ route, demoHref, onHome, onGroup, onFeature, onTour }:
                 type="button"
                 id={`nav-${g.id}`}
                 className="lib-nav"
+                aria-current={open ? 'true' : undefined}
                 onClick={() => onGroup(g)}
                 style={{
                   ...navButton,
@@ -174,6 +175,7 @@ export function Sidebar({ route, demoHref, onHome, onGroup, onFeature, onTour }:
                         type="button"
                         key={f.id}
                         className="lib-nav"
+                        aria-current={active ? 'true' : undefined}
                         onClick={() => onFeature(f)}
                         style={{
                           textAlign: 'left',

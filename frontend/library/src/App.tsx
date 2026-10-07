@@ -25,10 +25,11 @@ export function App() {
     return () => window.removeEventListener('popstate', onPop)
   }, [])
 
-  // Compares canonical paths, so a click on the current view pushes nothing (D8).
+  // A click on the current view adds no history entry; a non-canonical URL is corrected in place.
   const navigate = useCallback((next: Route) => {
     const path = libraryPath(next)
     if (path !== libraryPath(parseLibraryPath(window.location.pathname))) window.history.pushState(null, '', path)
+    else if (path !== window.location.pathname) window.history.replaceState(null, '', path)
     setRoute(next)
     toTop()
   }, [])
@@ -36,12 +37,8 @@ export function App() {
   const goHome = () => navigate({ view: 'home' })
   const goGroup = (group: Group) => navigate({ view: 'group', group })
   const goFeature = (feature: Feature) => {
-    const group = GROUPS.find((g) => g.feats.includes(feature))
+    const group = GROUPS.find((g) => g.id === feature.gid)
     if (group) navigate({ view: 'feature', group, feature })
-  }
-  const goGroupId = (gid: string) => {
-    const group = GROUPS.find((g) => g.id === gid)
-    if (group) goGroup(group)
   }
   const demo = demoHref()
   // ceiling: inert until the tour ships
@@ -63,15 +60,12 @@ export function App() {
       <Sidebar route={route} demoHref={demo} onHome={goHome} onGroup={goGroup} onFeature={goFeature} onTour={onTour} />
       <main id="lib-main" style={{ flex: 1, minWidth: 0, overflowY: 'auto', position: 'relative' }}>
         <JourneyStepper route={route} onGroup={goGroup} />
-        {route.view === 'home' && <Home demoHref={demo} onGroup={goGroupId} onTour={onTour} />}
+        {route.view === 'home' && <Home demoHref={demo} onGroup={goGroup} onTour={onTour} />}
         {route.view === 'group' && (
           <GroupPage
             group={route.group}
             openHref={groupPlatformHref(route.group)}
-            onFeature={(fid) => {
-              const feature = route.group.feats.find((f) => f.id === fid)
-              if (feature) navigate({ view: 'feature', group: route.group, feature })
-            }}
+            onFeature={goFeature}
           />
         )}
       </main>

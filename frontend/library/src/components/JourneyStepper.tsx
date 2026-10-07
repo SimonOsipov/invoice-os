@@ -37,6 +37,7 @@ export function JourneyStepper({ route, onGroup }: JourneyStepperProps) {
               <button
                 type="button"
                 className="lib-stage"
+                aria-current={active ? 'true' : undefined}
                 onClick={() => group && onGroup(group)}
                 style={{
                   display: 'flex',

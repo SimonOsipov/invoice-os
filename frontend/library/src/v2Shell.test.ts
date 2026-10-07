@@ -92,7 +92,7 @@ describe('library shell primitives', () => {
   })
 
   it('SH-05 Logo is the DS dark lockup at 28', () => {
-    const ts = render(createElement(Logo, { size: 28 }))
+    const ts = render(createElement(Logo))
     const img = only(ts, 'img')
     expect(['width', 'height', 'alt', 'aria-hidden'].map((a) => attr(img, a))).toEqual(['28', '28', '', 'true'])
     expect(style(img)['border-radius']).toBe('var(--radius-md)')
@@ -250,6 +250,16 @@ describe('library shell primitives', () => {
     expect(style(byId(ts, 'nav-recognition'))).toMatchObject({ background: 'var(--surface-panel)', 'font-weight': '700' })
   })
 
+  it('SH-09b aria-current marks only the active group and feature in the sidebar', () => {
+    const ts = sidebar(parseLibraryPath('/recognition/review-fields'))
+    const current = ts.filter((t) => attr(t, 'aria-current') !== undefined)
+    expect(current.map((t) => [attr(t, 'aria-current'), attr(t, 'id') ?? t.text])).toEqual([
+      ['true', 'nav-recognition'],
+      ['true', 'Review low-confidence fields'],
+    ])
+    expect(sidebar(home).some((t) => attr(t, 'aria-current') !== undefined)).toBe(false)
+  })
+
   it('SH-11 a Coming soon feature carries the pill in the sidebar', () => {
     const pills = (path: string) => sidebar(parseLibraryPath(path)).filter((t) => t.text === 'Coming soon')
     const notif = sidebar(parseLibraryPath('/notifications'))
@@ -337,6 +347,13 @@ describe('library shell primitives', () => {
     expect(active(parseLibraryPath('/clearance/submit-clear'))).toEqual([false, false, false, false, true, false])
     expect(active(parseLibraryPath('/reports'))).toEqual(Array(6).fill(false))
     expect(active(home)).toEqual(Array(6).fill(false))
+  })
+
+  it('SH-14b aria-current marks only the active stage', () => {
+    const marked = (route: Route) => buttons(stepper(route)).map((b) => attr(b, 'aria-current'))
+    const i = STAGES.findIndex(([, g]) => g === 'rules')
+    expect(marked(parseLibraryPath('/rules'))).toEqual(STAGES.map((_, j) => (j === i ? 'true' : undefined)))
+    expect(marked(home)).toEqual(Array(6).fill(undefined))
   })
 
   it('SH-15 the stepper bar is sticky over a blurred header', () => {

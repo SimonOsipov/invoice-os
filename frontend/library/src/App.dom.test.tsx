@@ -26,8 +26,9 @@ afterEach(() => {
   act(() => root.unmount())
   container.remove()
   vi.unstubAllEnvs()
-  expect(errorSpy).not.toHaveBeenCalled()
+  const errors = errorSpy.mock.calls.length
   errorSpy.mockRestore()
+  expect(errors).toBe(0)
 })
 
 const byText = (sel: string, text: string) =>
@@ -117,7 +118,7 @@ describe('App', () => {
     const l2 = window.history.length
     click(nav('invoices'))
     expect(window.history.length).toBe(l2)
-    expect(window.location.pathname).toBe('/invoices/')
+    expect(window.location.pathname).toBe('/invoices')
     act(() => root.unmount())
     container.remove()
 
@@ -125,7 +126,7 @@ describe('App', () => {
     const l3 = window.history.length
     click(byText('aside button', 'Overview'))
     expect(window.history.length).toBe(l3)
-    expect(window.location.pathname).toBe('/nope')
+    expect(window.location.pathname).toBe('/')
     act(() => root.unmount())
     container.remove()
 

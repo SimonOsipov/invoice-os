@@ -179,7 +179,7 @@ describe('library home', () => {
       }
       return out
     }
-    const els = walk(Home({ demoHref: null, onGroup: (g) => calls.push(g), onTour: () => calls.push('tour') }))
+    const els = walk(Home({ demoHref: null, onGroup: (g) => calls.push(g.id), onTour: () => calls.push('tour') }))
     const cards = els.filter((e) => e.type === 'button')
     expect(cards).toHaveLength(11)
     const icons = els.filter((e) => e.type === Icon).map((e) => (e.props as { name?: string }).name)
@@ -210,6 +210,7 @@ describe('library group page', () => {
     expect(style(section)).toMatchObject({ padding: '56px 40px 80px', 'max-width': '1180px', gap: '40px' })
     expect(style(ts[ts.indexOf(section) + 1])).toMatchObject({ 'max-width': '700px', gap: '18px' })
     eyebrow(ts, 'Group 02 of 11')
+    expect(GROUPS).toHaveLength(11)
     const h2 = only(ts, 'h2')
     expect(attr(h2, 'class')).toBe('t-h2')
     expect(style(h2)['font-size']).toBe('44px')
@@ -326,10 +327,11 @@ describe('library group page', () => {
     }
     GROUPS.forEach((g) => {
       calls.length = 0
-      const cards = walk(GroupPage({ group: g, openHref: null, onFeature: (id) => calls.push(id) })).filter((e) => e.type === 'button')
+      const cards = walk(GroupPage({ group: g, openHref: null, onFeature: (f) => calls.push(f.id) })).filter((e) => e.type === 'button')
       expect(cards).toHaveLength(g.feats.length)
       cards.forEach((c) => c.props.onClick!())
       expect(calls).toEqual(g.feats.map((f) => f.id))
+      expect(g.feats.every((f) => f.gid === g.id)).toBe(true)
     })
   })
 })

@@ -300,6 +300,7 @@ Spawn `product-qa-spec` (Mode B) with the acceptance criteria, the plan, the Def
   An AC item with no row is a QA failure. A Playwright spec cannot replay locally: cite its assertion for Phase 3.5 and write no row.
 - **Assert a collection is non-empty** before asserting over its items.
 - **Source scans:** the QA agent's rules "A source scan is the last resort" and "Never test a test" apply. A source scan also needs a `## Decisions` entry that names the failure no runtime test can observe.
+- **Pinned surprise:** report each test that asserts behaviour a user would call wrong. Give its name, what the user does, what the user sees, and why the behaviour stays.
 - **Every source scan** (a grep, a source walk, a forbidden-string guard, a site count):
   1. strips comments before it matches (TypeScript: `stripComments` from `@invoice-os/api-client/strip-comments`; Go: `go/ast` or strip first);
   2. reads only the function or block it guards, not the whole file;
@@ -386,13 +387,14 @@ Runs once per story, after `CI` is green. It verifies the assembled feature agai
    - Quote each AC beside its evidence. Evidence of different behaviour than the quoted text fails that AC.
    - Backend / data / RLS ACs → cite the passing CI job or E2E assertion.
    - **UI ACs** → pass the Stage 4 "Frontend" rules in the brief. QA drives the deployed SPA with them and captures each touched surface and state. Diff live `getComputedStyle` and layout against the prototype (`.dc.html`; confirm the file→surface mapping first) and the design system. A delta citing a design-system rule or a prototype CSS rule is a fail; uncited taste is advisory: list it in the final report, never bounce.
-   - **Primary user journey:** when the story changes one, pass the "Primary user journey" rule of `product-qa-spec`. Each wrong turn needs evidence from the green run or from the deployed build.
+   - **Primary user journey:** when the story changes one, pass the "Primary user journey" rule of `product-qa-spec`.
    - **Assert the relationship, not the dimension.** A layout AC is satisfied by what the number encodes — gutter symmetry, containment, alignment to a sibling. A width assertion passes on the very bug it should catch. This applies whenever the diff adds or changes a layout constant, not only when an AC names layout. **Measure widest first:** `e2e/topology/layout.ts` sweeps 2560/1920/1440/1280; every other sweep in `e2e/` stops at 1280.
    - **A pixel figure derived from source is a guess.** Measure it on the gate run with `e2e/topology/layout.ts` and cite the run id before a CSS edit, a bounce or an escalation.
    - No holistic "looks done": every AC needs its own evidence.
 5. **Fix loop (cap 2 cycles):** batch all fails into one report → `product-executor` fixes → push (re-fires `dev-env.yml`) → wait → re-verify only the failed items. Every bounce cites an AC id, a design-system rule or a prototype CSS rule. After 2 cycles, send the coordinator the rest as one question: continue the fix loop, or stop. Each gate run rebuilds an 11-service environment. A fail that is a defect is recorded per "A defect in a verified subtask" (Phase 1).
 6. **Log** under `## Post-Deploy QA — <date>` in the QA Debate Log: per-AC verdict + evidence, fidelity deltas, fix cycles, run ids, advisory notes.
-7. **On PASS** (all original ACs pass on a green run, no unresolved bounces, fidelity evidence for UI stories): end with a short report in this order: **Needs you** (merge PR #N; each default or advisory finding a reviewer should see), **Changed** (subtasks, PR), **Found** (corrected premises; what you could not confirm and where you looked). Then output `<promise>ALL_TASKS_COMPLETE</promise>`.
+7. **On PASS** (all original ACs pass on a green run, no unresolved bounces, fidelity evidence for UI stories): end with a short report in this order: **Needs you** (merge PR #N; each default or advisory finding a reviewer should see; each pinned surprise; each owed walk-through), **Changed** (subtasks, PR), **Found** (corrected premises; what you could not confirm and where you looked). Then output `<promise>ALL_TASKS_COMPLETE</promise>`.
+   **PR body:** before the report, add `## Needs you` to the PR body with `gh pr edit`. List each pinned surprise from the Stage 4 reports, with the fields of the Stage 4 bullet. List each owed walk-through of Completion Rules rule 4.
    **Otherwise:** do not emit completion. Send the coordinator the open failures as one question.
 
 ### Phase 4: Worktree cleanup
@@ -432,6 +434,7 @@ An agent parses these instructions with no one to ask. Write for that reader.
 1. Both gates green on the PR head (Core Rule 3). Local tests green ≠ done.
 2. Subtask status: todo → doing (its first stage starts) → done (its QA Verify passes).
 3. Output `<promise>ALL_TASKS_COMPLETE</promise>` only after Phase 3.5 passes and every subtask is `done`.
+4. A story that changes a sign-up, invite, verify or reset flow owes one walk-through. It runs on the deployed build with a real mail client. It lists the exact steps. Phase 3.5 step 7 lists it. Global `CLAUDE.md` rule 5, "Audit the Surface", defines done for surface work.
 
 ## Anti-Patterns
 

@@ -118,6 +118,8 @@ What a spec still cannot assume is an empty table:
     deploy's reset truncates both, so they live only until the next push. The registration
     journey (`deployed journey: a stranger registers ...`) registers through the landing UI, so
     it leaves one `auth.users` row, tenant and membership per kind; its repeat registration adds none.
+    The three company-setup role journeys each leave two `auth.users` rows, a tenant and two
+    memberships; the firm Preparer journey also leaves one `business_entities` row (the owner's company), the other two leave none.
   - `api/session-handoff.spec.ts`: each registering test leaves an `auth.users` row only; it
     provisions no workspace. The staff-claim test also leaves the tenant and membership of
     its `provisionRealAccount` call and one `staff_members` row.

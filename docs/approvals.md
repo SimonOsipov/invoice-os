@@ -668,11 +668,12 @@ Read either as a statement of fact, never as "presumably enforced somewhere".
 | run validation | ✓ | ✓ | ✓ | not enforced |
 | approve in approval steps | ✓ | — | ✓ | **server-enforced** — `internal/approval/decision.go`'s two-axis check: AXIS 1 refuses any non-{admin,reviewer}; AXIS 2 refuses an approver who does not hold the pending step's workflow role. |
 | transmit to NRS/MBS | ✓ | — | ✓ | **server-enforced, both doors** — `TransitionHandler` (single) and `BatchSubmitHandler` (batch, `POST /v1/invoices/submissions`), both `internal/invoice/handlers.go`. Both apply `isApprover` = admin or reviewer; a preparer gets `403` either way. **Role is only the first rung**: past it, the approval gate (`TransmitClear`) blocks an invoice whose run is still open, at `Store.Transition` and `Submitter.BatchSubmit`. |
+| add a company or client | ✓ | — | — | **server-enforced** — portfolio `Store.Create` refuses a non-admin (`internal/portfolio/store.go`) |
 | invite and manage members | ✓ | — | — | **server-enforced** — the *manage* half is admin-only in `tenancy.Store.SetMembershipStatus` (`internal/tenancy/store.go`) (`PATCH /v1/memberships/{user_id}`). The *invite* half is admin-only too, enforced by `requireInviteAdmin` (`internal/tenancy/invitations.go`) on `POST`/`GET /v1/invitations` and `POST /v1/invitations/{id}/resend`. |
 | manage ERP connectors | ✓ | — | — | **no server surface** — no endpoint exists |
 | manage signing certificates | ✓ | — | — | **no server surface** — no endpoint exists |
 
-**Three rows are server-enforced today.** Any wider claim
+**Four rows are server-enforced today.** Any wider claim
 — that the matrix as a whole is backed — remains aspirational. Arming shipped (APPR-06):
 the runs exist. Approve/reject shipped (APPR-07): `internal/approval/decision.go` is the
 enforcement point. The transmit gate shipped (APPR-08): an open approval run

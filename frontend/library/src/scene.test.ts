@@ -162,7 +162,9 @@ describe('scene', () => {
   it('sceneState_omittedFocusCarriesOverAndOmittedToneIsInfo', () => {
     const list: Scene = { kind: 'list', win: 'w', grid: 'g', cols: ['a', 'b', 'c', 'd'], rows: [['1', '1', '1', 'new'], ['2', '2', '2', 'new']],
       steps: [{ cap: 'x', focus: 1 }, { cap: 'y' }] }
-    expect(sceneState(list, 1).kind === 'list' && sceneState(list, 1).rows.map((r) => r.focused)).toEqual([false, true])
+    const l1 = sceneState(list, 1)
+    if (l1.kind !== 'list') throw new Error('kind')
+    expect(l1.rows.map((r) => r.focused)).toEqual([false, true])
     const form: Scene = { kind: 'form', win: 'w', fields: [{ l: 'a', v: 'A' }, { l: 'b', v: 'B' }],
       steps: [{ cap: 'x', reveal: 2, focus: 1, msg: 'hello' }, { cap: 'y' }] }
     const f0 = sceneState(form, 0)

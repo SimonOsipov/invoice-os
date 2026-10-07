@@ -6,12 +6,15 @@
 
 `RALPH_PROMPT.md` owns the shared rules. This file names each rule that it uses and states only what differs.
 
+In every shared rule, `<STORY>` means `<BUG-ID>`.
+
 | Shared rule in `RALPH_PROMPT.md` | Use in `/bug-ralph` |
 |---|---|
 | Agents and models; CRITICAL RULES 1, 2, 3 and 5 | As written. |
 | Phase 0.5: Worktree bootstrap | As written. `BASE=main`. |
+| Phase 1: the screen playbook | As written, with `STORY_SOURCE=obsidian`. |
 | Stage 3: the orientation rules and the suite run | As written. |
-| Stage 4: the mutation rows, their replay and the comment sweep | As written, for the one fix. |
+| Stage 4: the mutation rows, their replay, the comment sweep and the "Frontend" rules | As written, for the one fix. |
 | CI Monitoring Protocol | As written. |
 | Phase 3.5: steps 2, 3 and 5 | As written. |
 | Phase 4: Worktree cleanup | As written. |
@@ -37,7 +40,7 @@ Follow `RALPH_PROMPT.md` Phase 0.5. Start the dev Postgres only when the fix tou
 
 ### Phase 1: Reproduce, fix, verify
 
-Run one stage agent at a time. Every stage brief says **terse comments**, per `CLAUDE.md` "Code Comments". Before each spawn, run `git -C "$WORKTREE_PATH" status --short` and `git -C "$WORKTREE_PATH" log --oneline -3`.
+Run one stage agent at a time. Every stage brief says **terse comments**, per `CLAUDE.md` "Code Comments". Before each spawn, run `git -C "$WORKTREE_PATH" status --short` and `git -C "$WORKTREE_PATH" log --oneline -3`. Before the first spawn, resolve the screen playbook. Paste `.ralph/screens.txt` into every stage brief.
 
 #### Stage Test-Spec: the reproducing test
 
@@ -68,6 +71,7 @@ Run `hm worker phase 1 "QA Verify"`. Spawn a new `product-qa-spec` (Mode B). It 
 - Search for the same fault elsewhere: the siblings of the changed code, and every other caller of the changed function. Fix each other occurrence in this PR, or name it in the QA report as out of scope.
 - Prove the reproducing test can fail: write one mutation row that reverts the fix, per `RALPH_PROMPT.md` Stage 4.
 - Re-read each comment and doc that the fix made false, per `RALPH_PROMPT.md` Stage 4.
+- For UI work, follow the "Frontend" rules of `RALPH_PROMPT.md` Stage 4.
 
 When QA returns, replay the mutation rows yourself: `go run ./internal/tools/mutationreplay .ralph/mutations-<BUG-ID>.jsonl`. A `NOT-PROVEN` or `INVALID` row fails QA. When QA fails, spawn `product-executor` to fix, then run QA Verify again. Cap: 2 cycles. After 2 cycles, send the coordinator the open findings as one question.
 

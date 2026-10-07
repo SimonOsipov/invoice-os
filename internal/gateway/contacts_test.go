@@ -121,8 +121,11 @@ func requireOneHandOff(t *testing.T, s *recSink, want RegistrantContact) {
 
 const verifyQuery = "token=" + verifyToken + "&type=signup"
 
+// verifyRequest is the click: a form POST whose body is query.
 func verifyRequest(ctx context.Context, query string) *http.Request {
-	return httptest.NewRequest(http.MethodGet, "/auth/verify?"+query, nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodPost, "/auth/verify", strings.NewReader(query)).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return req
 }
 
 func doVerifySink(t *testing.T, authURL *url.URL, query string, sink ContactSink) *httptest.ResponseRecorder {
@@ -814,7 +817,7 @@ func offlineClient(status int, body string) *http.Client {
 
 var offlineAuth = &url.URL{Scheme: "http", Host: "gotrue.invalid"}
 
-// verifyOffline serves one GET /auth/verify?query inside a synctest bubble: when it returns the hand-off has run to its end or sleeps.
+// verifyOffline serves one POST /auth/verify with form query inside a synctest bubble: when it returns the hand-off has run to its end or sleeps.
 func verifyOffline(t *testing.T, client *http.Client, query string, sink ContactSink) *httptest.ResponseRecorder {
 	t.Helper()
 	return verifyOfflineLog(t, client, query, sink, slog.New(slog.DiscardHandler))
@@ -836,7 +839,7 @@ func signInOffline(t *testing.T, client *http.Client, store *HandoffStore, sink 
 
 func signInOfflineLog(t *testing.T, client *http.Client, store *HandoffStore, sink ContactSink, log *slog.Logger) *httptest.ResponseRecorder {
 	t.Helper()
-	th := NewSignInThrottle(SignInMaxFailures, SignInMaxKeys, SignInWindow, time.Now)
+	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, time.Now)
 	rec := serve(SignInHandler(offlineAuth, client, store, th, log, sink), http.MethodPost, "/auth/sign-in", signInBody(regEmail, regPassword, randomState(t)))
 	synctest.Wait()
 	return rec

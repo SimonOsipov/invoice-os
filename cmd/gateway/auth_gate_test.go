@@ -451,8 +451,8 @@ func TestDevEnvAuditStepNamesTheAllowlist(t *testing.T) {
 	if g := stepIf(step); g != prOnlyIf {
 		t.Errorf("the audit step's if: reads %q, want %q", g, prOnlyIf)
 	}
-	if name, _ := stepKey(step, "name"); !strings.Contains(name, "auth allowlist") {
-		t.Errorf("the audit step is named %q; it must say only the auth allowlist may be sealed", name)
+	if name, _ := stepKey(step, "name"); !strings.Contains(name, "only the allowlist may be sealed") {
+		t.Errorf("the audit step is named %q; it must say only the allowlist may be sealed", name)
 	}
 }
 

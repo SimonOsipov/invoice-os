@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os/exec"
 	"strings"
 	"testing"
@@ -17,6 +18,17 @@ func TestUntaggedGatewayServesNoMintRoutes(t *testing.T) {
 	jwks, login := mockIssuerRoutes("development", "true", func(h http.Handler) http.Handler { return h }, logger)
 	if jwks != nil || login != nil {
 		t.Errorf(`mockIssuerRoutes("development", "true") = (jwks %v, login %v), want (nil, nil) in a build without -tags mockissuer`, jwks, login)
+	}
+	for name, route := range map[string]func(string, *slog.Logger) http.Handler{
+		"mockStaffRoute":           mockStaffRoute,
+		"mockMemberRoute":          mockMemberRoute,
+		"mockInvitationTokenRoute": mockInvitationTokenRoute,
+	} {
+		rec := httptest.NewRecorder()
+		route("postgres://u@unused.invalid:5432/db", logger).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/mock/x", strings.NewReader(`{}`)))
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("%s answers %d in a build without -tags mockissuer, want 404", name, rec.Code)
+		}
 	}
 }
 
@@ -33,6 +45,7 @@ func TestMockIssuerBuildPassesItsTaggedTests(t *testing.T) {
 		"TestTaggedMockIssuerRoutesKeepTheirWiring",
 		"TestTaggedMockStaffRouteWiresTheGrant",
 		"TestTaggedMockMemberRouteWiresTheGrant",
+		"TestTaggedMockInvitationTokenRouteWiresTheSetter",
 		"TestTaggedMockLoginIgnoresRailwayEnvironmentName",
 	} {
 		if !strings.Contains(string(out), "--- PASS: "+name+" (") {

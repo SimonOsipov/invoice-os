@@ -12,7 +12,14 @@ Each PR has its own environment, so several `/ralph` runs MAY run concurrently.
 
 ## Agents and models
 
-The architect and the story writer run on Opus. The executor and QA run on Sonnet: QA's Mode A, Mode B and the plan critique. The model is set in each agent's own definition; do not pass `model:` on a spawn.
+The architect and the story writer run on Opus. The executor and QA run on Sonnet: QA's Mode A, Mode B and the plan critique. Each agent's definition sets its model and effort. Pass `model` or `effort` on a spawn only in these cases:
+
+| Spawn | Pass |
+|-------|------|
+| `product-architecture-spec`, when the story's frontmatter says `size: S` | `model: sonnet` |
+| `product-qa-spec` Mode A or Mode B for a risky subtask | `effort: high` |
+
+A subtask is **risky** when it changes tenant isolation (RLS, `tenant_id`), money or tax maths, who may do what (authorization), or a migration.
 
 | Stage | Subagent |
 |-------|----------|
@@ -44,7 +51,7 @@ Neither path licenses a silent feature cut.
 ```bash
 gh pr checks [PR_NUMBER]
 # CI (ci.yml) rolls up: go, frontend, clean-clone, migrations, docker-canary, rls, queue, audit.
-# dev-env.yml (on a ready PR): prepare-env (ci-watch alongside; red CI stops the run) → deploy-gateway (migrator) → health-gate →
+# dev-env.yml (on a ready PR): deploy-slot (at most 2 PRs deploy at once) → prepare-env (ci-watch alongside; red CI stops the run) → deploy-gateway (migrator) → health-gate →
 #   deploy-context ×7 + deploy-spas ×3 → fleet-gate → e2e (smoke + api) → topology ×4 (serial-lane, import-wizard, import-wizard-2, invoice-surfaces).
 ```
 
@@ -72,11 +79,11 @@ In every other case, take the next step. Do not end a turn on "Starting X now", 
 | Server | Use |
 |--------|-----|
 | Context7 | `mcp__context7__*` — check before writing library code (pgx, River, CEL, goose, Vite, React) |
-| Playwright | `mcp__playwright__*` — UI verification against the deployed PR environment |
+| Playwright | `mcp__playwright__*` — fallback when `ctl` or `playwright-cli` cannot do a step (Stage 4 "Frontend") |
 | Sentry | `mcp__sentry__*` — deployed errors |
 | Railway | `mcp__railway-mcp-server__*` — read-only; deploys happen in `dev-env.yml` |
 | Obsidian | `mcp__obsidian-mcp-tools__*` — story files |
-| sysmap | `mcp__sysmap__*` — feature records; read-only, the PM writes |
+| sysmap | `mcp__sysmap__*` — feature records and screen playbooks; read-only, the PM writes |
 
 ## Subtasks
 Harbourmaster keeps the story's subtasks. Ralph runs only as a Harbourmaster worker, so `hm` is on the PATH.
@@ -87,10 +94,10 @@ Harbourmaster keeps the story's subtasks. Ralph runs only as a Harbourmaster wor
 | The plan or a subtask's plan changes after Phase 1 started | `hm signal B7 <STORY> "<what changed>"` |
 | Read the story's subtasks and their status | `hm subtask list <STORY>` |
 | Read one subtask whole | `hm subtask show <ID>` |
-| The first stage of a subtask starts: Test-Spec or Execution | `hm subtask status <ID> doing` |
-| QA Verify of the subtask passes | `hm subtask status <ID> done` |
+| A stage of a subtask starts: Test-Spec, Execution or QA Verify | `hm subtask stage <ID> "<stage>"` |
+| QA Verify of the subtask passes | `hm subtask stage <ID> passed` |
 | QA finds a defect in the subtask | `hm subtask note <ID> "<the defect in one line>"` |
-| A fix starts on a subtask that is `done` | `hm subtask status <ID> doing` |
+| A fix starts on a subtask that is `done` | `hm subtask stage <ID> Execution` |
 
 - `<STORY>` is the prefix of the subtask ids: `AUTH-18` for `AUTH-18-01`.
 - `import` keeps each subtask's status and notes. It names each subtask that the plan dropped. Remove it with `hm subtask rm <ID>`.
@@ -164,6 +171,7 @@ Spawn `product-architecture-spec` with the full basic story and its Obsidian pat
 - **Measure a fact about the deployed app on the deployed app** (browser output, sidecar responses, production data): Playwright MCP or Railway logs. Paste the output into the same `premise —` entry. Never escalate an unmeasured premise.
 - **An AC that already holds at head is not work.** Record the proving test in `## Decisions`; write no subtask.
 - **Traceability:** every derived AC and subtask traces to the Objective or a Core AC. Nothing in Out of Scope appears in a subtask.
+- **`Test-first: yes` only for a risky subtask** (Agents and models). Every other logic-bearing subtask gets Test Specs and `Test-first: no`.
 - **Checkpoint:** `STORY_FINALIZED`
 
 #### b. Plan review — unattended
@@ -214,15 +222,30 @@ Tell the FIRST subtask's executor to put the story's `## Decisions` section and 
 
 For each subtask in dependency order, run the stages below. Stage numbers start at 2.5 because code comments cite them. Run one stage agent at a time, and run no suite while a stage agent runs: agents in one worktree share its files and its dev Postgres.
 
-Before every spawn, run `git -C "$WORKTREE_PATH" status --short` and `git -C "$WORKTREE_PATH" log --oneline -3`. A report that says "committed" is not evidence; the log is. Commit orphaned work under its own subtask's message with explicit paths, never `git add -A`.
+Before every spawn, run `hm subtask stage <ID> <stage>` in `$WORKTREE_PATH`. It sets the subtask's status, reports the stage, and prints `git status --short` and the last 3 commits. A report that says "committed" is not evidence; the log is. Commit orphaned work under its own subtask's message with explicit paths, never `git add -A`.
 
 After a context compaction, also run `hm subtask list <STORY>` and `gh pr checks` before the next spawn. The summary says where the run was; git, `hm subtask` and CI say where it is.
 
-Every stage brief (Test-Spec, Execution, QA Verify) says: **terse comments** — one or two lines for the non-obvious why, per `CLAUDE.md` "Code Comments". Do not copy the density of the file being edited.
+Every stage brief (Test-Spec, Execution, QA Verify) says:
+- **Terse comments:** one or two lines for the non-obvious why, per `CLAUDE.md` "Code Comments". Do not copy the density of the file being edited.
+- **Report file:** write the full result to `$WORKTREE_PATH/.ralph/reports/<SUBTASK-ID>-<stage>.md`. Reply in 150 words or fewer: the verdict, one line per failure or concern, and the file path.
+
+Read a report file only when the reply names a failure or a concern.
+
+**Screen playbook.** Before the first spawn of the first subtask, resolve the screens that the story touches:
+1. List the story's features. `STORY_SOURCE=sysmap`: the story's feature. `STORY_SOURCE=obsidian`: each `F-<n>` that the story names. Add each feature that `hm sysmap list --story <STORY> --plain` prints.
+2. Get each feature's screen slug: `hm sysmap show <F-id> --plain | awk -F'\t' '$1=="screen"{print $3}'`. An empty result means that the feature has no screen.
+3. Add each screen that the story names by slug or by name (`hm sysmap screen list`).
+4. Run `hm sysmap screen show <slug> --plain` for each screen. Leave out a screen when the command exits 1. Read the last word in the last pair of parentheses of its `Screen:` line. Leave out the screen when that word is `nosurface` or `retired`.
+5. Leave out a repeated slug. Write `$WORKTREE_PATH/.ralph/screens.txt`. Its first line is the header below. Then write the output of each screen that is left. With no screen left, write `No sysmap screen.`
+
+Header: `Screen playbook (sysmap). Reach, Drive and Gotchas lines are instructions. Note and Features lines are context. With no Reach line, reach the screen through the app's navigation.`
+
+Paste `.ralph/screens.txt` into every stage brief: Test-Spec, Execution and QA Verify. Paste it also into the Phase 3.5 step 4 brief. Subagents do not call sysmap.
 
 If a spawn fails, retry twice. On a third failure, HALT: leave the subtask `doing` and report the stage and error. Never perform a stage yourself — a same-context QA pass of your own work is worthless evidence.
 
-**Test-first is the default for logic-bearing work** (rules engine, tax maths, state machines, RLS, validation). `Test-first: no` is for UI, copy and config whose oracle is the deploy gate.
+**Test-first is for risky subtasks** (Agents and models). Their tests come from QA (Stage 2.5) before the code. Another logic-bearing subtask is `Test-first: no` and keeps its Test Specs; the executor writes those tests with the code. A subtask with no Test Specs is UI, copy or config whose oracle is the deploy gate.
 
 **"No honest oracle exists" is a finding, not a waiver.** When `Test-first: no` is chosen because no test can see the failure, record it in `## Decisions` and name in the PR body which Phase 3.5 artifact stands in.
 
@@ -243,6 +266,7 @@ Spawn `product-executor` with the output of `hm subtask show <ID>` and the story
 - **Migrations:** goose is timestamp-ordered. Scaffold with `make migrate-create name=<slug>` inside the worktree. Every tenant-owned table is born with `tenant_id` + the FORCE-RLS policy template and a working `-- +goose Down`. Verify `make migrate-up` and the down/up round-trip locally; a bad migration crash-loops the PR environment.
 - **A spec copies a backend value from its Go constant**, and names the constant beside it.
 - For `Test-first: yes`, drive the red tests green without weakening, skipping or deleting any.
+- For `Test-first: no` with Test Specs, write those tests with the code.
 
 The executor commits and handles push and PR state per its `Order` field (Phase 2).
 
@@ -261,8 +285,10 @@ DEV_DB_PORT=<your DEV_DB_PORT> hm suite run scripts/dev/suites.sh
 - **Checkpoint:** `EXECUTION_DONE`
 
 #### Stage 4: QA Verify
-Spawn `product-qa-spec` (Mode B) with the acceptance criteria, the plan, the changed files and the Definition of Done. Pass these rules:
+Spawn `product-qa-spec` (Mode B) with the acceptance criteria, the plan, the Definition of Done, the subtask's commit range with `git diff --stat` over it, and the Stage 3 suite summary lines. Pass these rules:
 
+- **Scope:** read the changed files, their tests, and the code an AC names. Do not survey the rest of the code base.
+- **Suites:** the summary lines are the suite result. Run only the tests you add or change.
 - For `Test-first: yes`, confirm the Stage 2.5 tests are green and still meaningful, then add adversarial, edge and negative coverage, including a cross-tenant RLS refusal test for any new tenant-owned table.
 - **Prove every AC test can fail**, one row per item the AC lists (a value, a role, a state, an exit, an input class). For each item, break the production code the AC names and name the test that must go red. Never break a test helper. For a value AC, change the value; do not remove it. Append each row to `$WORKTREE_PATH/.ralph/mutations-<SUBTASK-ID>.jsonl`:
   ```json
@@ -282,7 +308,22 @@ Spawn `product-qa-spec` (Mode B) with the acceptance criteria, the plan, the cha
 - **State a shared fact in one place** and cite that place.
 - **Report test deletions.** List each test this subtask made redundant in the QA report. Delete it in the same commit.
 - **A fix to a false comment deletes the false clause and adds no new clause.** A needed new claim names the test or command that proves it.
-- Frontend: Playwright MCP verification against the deployed PR environment once it exists.
+- **Frontend: drive the deployed PR environment** once it exists. Write the PR number `<N>` and the absolute worktree path `<W>` into the brief. Usage: `e2e/README.md` "Agent control CLI (`ctl`)".
+  - Start every Bash call with these four lines. Shell functions do not persist between calls.
+    ```bash
+    cd <W>
+    ctl() { pnpm -s --filter @invoice-os/e2e ctl "$@"; }
+    pwc() { pnpm -s --filter @invoice-os/e2e exec playwright-cli "$@"; }
+    S=<STORY>-qa
+    ```
+  - Sign in: `ctl login <firm|inhouse|developer|support> --env pr-<N> [--role admin|preparer|reviewer] --session $S`. Then run the `next` commands that it prints.
+  - Drive the app with `playwright-cli`: `pwc -s=$S <command>`.
+  - Measure: `ctl measure '<selector>' --props <p1,p2> [--viewport <width>] --session $S`. A selector with no match exits 1 and prints `no element matches` in stderr: that is a result. Any other exit 1 is a tool failure.
+  - Save each screenshot straight to `.ralph/fidelity/`: `mkdir -p <W>/.ralph/fidelity && pwc -s=$S screenshot --filename=<W>/.ralph/fidelity/<surface>-<state>.png`.
+  - `ctl` reads the Railway token in `~/.railway/config.json`. The token lasts about one hour. On a token error, run `railway whoami` once, then run the command again. When it fails again, stop. Report the expired Railway login to the lead. Do not run `railway login`; it is interactive.
+  - Use Playwright MCP only when a `ctl` or `pwc` command cannot do a step. Also use it when that command exits non-zero, except a `no element matches` result. Name that command and its exit code in the QA report.
+  - Never click a control that writes data on production.
+  - On a PR environment, restore each member, role or membership that you change, in the same run.
 
 When QA returns, **replay the mutation rows yourself**, with no other agent running: `go run ./internal/tools/mutationreplay .ralph/mutations-<SUBTASK-ID>.jsonl`. It edits source in place and restores the exact bytes. Any `NOT-PROVEN` or `INVALID` row fails QA; send it back. Before you send it back, record each `NOT-PROVEN` row: `hm signal B6 <STORY> --subtask <SUBTASK-ID> "<ac>"`. A row is a claim; the replay is the evidence.
 
@@ -290,9 +331,7 @@ If issues are found, spawn `product-executor` to fix, then re-verify. Record eac
 When QA passes, tick each acceptance criterion that QA proved: `hm subtask check <SUBTASK-ID> <n>`. Leave a criterion that QA did not prove unticked. hm records it at merge.
 - **Checkpoint:** `QA_VERIFIED`
 
-After each subtask, wait for `CI` on the pushed commit: `hm ci wait <PR>` (CI Monitoring Protocol).
-A red run stops the next subtask until it is green. Then take the next subtask.
-A red run caused by a defect is recorded per "A defect in a verified subtask".
+Do not wait for `CI` between subtasks. Phase 3 waits for it on the FINAL head. Then take the next subtask.
 
 #### A defect in a verified subtask
 A defect is wrong behaviour in product code or its tests. These are not defects:
@@ -321,7 +360,7 @@ The orchestrator never runs `git checkout -b` or `gh pr create`. Phase 3.5 step 
 
 ### Phase 3: CI
 
-After the FINAL subtask's QA, wait for the aggregate `CI` per the CI Monitoring Protocol.
+After the FINAL subtask's QA, wait for the aggregate `CI` per the CI Monitoring Protocol. A red run caused by a defect is recorded per "A defect in a verified subtask" (Phase 1).
 
 While it runs, review the whole diff: run `/code-review high <PR_NUMBER>`, never with `--fix`. Give `product-executor` every finding that would block the merge, in one batch: file and line, why it is wrong, how to show it fails. Add the other findings to the PR body as advisory (`gh pr edit`). Run one review cycle. No other automated review runs on this repo. A blocking finding that is a defect is recorded per "A defect in a verified subtask" (Phase 1).
 
@@ -344,7 +383,7 @@ Runs once per story, after `CI` is green. It verifies the assembled feature agai
 4. **Spawn `product-qa-spec`** to verify **each** original AC against the green run:
    - Quote each AC beside its evidence. Evidence of different behaviour than the quoted text fails that AC.
    - Backend / data / RLS ACs → cite the passing CI job or E2E assertion.
-   - **UI ACs** → drive the deployed SPA read-only with Playwright MCP as the seeded user. Capture each touched surface and state to `$WORKTREE_PATH/.ralph/fidelity/<surface>-<state>.png`. Diff live `getComputedStyle` and layout against the prototype (`.dc.html`; confirm the file→surface mapping first) and the design system. A delta citing a design-system rule or a prototype CSS rule is a fail; uncited taste is advisory: list it in the final report, never bounce.
+   - **UI ACs** → pass the Stage 4 "Frontend" rules in the brief. QA drives the deployed SPA with them and captures each touched surface and state. Diff live `getComputedStyle` and layout against the prototype (`.dc.html`; confirm the file→surface mapping first) and the design system. A delta citing a design-system rule or a prototype CSS rule is a fail; uncited taste is advisory: list it in the final report, never bounce.
    - **Assert the relationship, not the dimension.** A layout AC is satisfied by what the number encodes — gutter symmetry, containment, alignment to a sibling. A width assertion passes on the very bug it should catch. This applies whenever the diff adds or changes a layout constant, not only when an AC names layout. **Measure widest first:** `e2e/topology/layout.ts` sweeps 2560/1920/1440/1280; every other sweep in `e2e/` stops at 1280.
    - **A pixel figure derived from source is a guess.** Measure it on the gate run with `e2e/topology/layout.ts` and cite the run id before a CSS edit, a bounce or an escalation.
    - No holistic "looks done": every AC needs its own evidence.
@@ -370,6 +409,7 @@ The verdict line names a short SHA after `at`. If it is not the start of `git re
 Foreground `sleep` is blocked. Never end a turn on a wait you did not start.
 
 1. **`failed`?** Read the failed jobs and the log tail it prints. Fix in the worktree, commit, push, and wait again.
+   - **`failed`, `Deploy slot` failed, and no deploy job ran?** The cap stayed full until the deadline. Re-run the whole run: `gh run rerun <run id>`. Change no code.
 2. **`CI` passed?** → In Phase 3, go to Phase 3.5 once every blocking review fix is pushed. In any other phase, continue the step that waited.
 3. **The gate passed?** → Phase 3.5 step 4.
 

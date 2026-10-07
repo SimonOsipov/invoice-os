@@ -23,3 +23,8 @@ func mockStaffRoute(dsn string, logger *slog.Logger) http.Handler {
 func mockMemberRoute(dsn string, logger *slog.Logger) http.Handler {
 	return http.NotFoundHandler()
 }
+
+// mockInvitationTokenRoute never serves: this build carries no invite token code.
+func mockInvitationTokenRoute(dsn string, logger *slog.Logger) http.Handler {
+	return http.NotFoundHandler()
+}

@@ -91,10 +91,9 @@ on:
   workflow_dispatch:
 
 # M4-21-09: each PR now deploys to its OWN ephemeral Railway environment, so
-# two different PRs must run FULLY IN PARALLEL rather than queueing behind
-# each other — the whole point of per-PR environments (Core AC 4/5). The
+# two different PRs never queue behind each other here (Core AC 4/5). The
 # group is keyed by PR number, so it is UNIQUE per PR: two different PRs'
-# numbers never collide (their groups differ → both run at once), and a
+# numbers never collide (their groups differ), and a
 # second push to the SAME PR queues behind (never cancels) an in-flight
 # deploy of that SAME PR. A workflow_dispatch or push run has no PR number and
 # falls back to `github.ref` — `refs/heads/main` for both — so every run that
@@ -223,6 +222,30 @@ jobs:
           RUN_ID: ${{ github.run_id }}
         run: gh run cancel "$RUN_ID" --repo "$REPO"
 
+  # At most two runs deploy to Railway at once; see scripts/ci/deploy-slot.sh.
+  deploy-slot:
+    name: Deploy slot
+    needs: [changes]
+    if: >-
+      ( github.event_name == 'workflow_dispatch' ||
+        github.event_name == 'push' ||
+        github.event.pull_request.draft == false ) &&
+      needs.changes.outputs.e2e == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for a free deploy slot
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: bash scripts/ci/deploy-slot.sh
+
   # 0.5. Prepare the target Railway environment (M4-23-03). On a PR we now
   #      CREATE the environment ourselves rather than waiting for Railway to
   #      make one for us: `prenv name <pr>` derives `pr-<N>` (the single name
@@ -245,13 +268,14 @@ jobs:
     # `github.event.pull_request.draft == false`. On a push that expression is
     # `null == false`, which GitHub's loose comparison coerces to true — correct
     # by accident, via a coercion rule no reader should have to know.
-    needs: [changes]
+    needs: [changes, deploy-slot]
     if: >-
       ( always() &&
         ( github.event_name == 'workflow_dispatch' ||
           github.event_name == 'push' ||
           github.event.pull_request.draft == false ) ) &&
-      needs.changes.outputs.e2e == 'true'
+      needs.changes.outputs.e2e == 'true' &&
+      needs.deploy-slot.result == 'success'
     runs-on: ubuntu-latest
     # Raised 10 -> 20 by M4-23-04. The seam now creates the Postgres volume and
     # brings Postgres up in a fresh fork, waiting for it (<=420s). At 10
@@ -346,7 +370,7 @@ jobs:
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
         run: bash scripts/ci/railway-env.sh fork-vars-before-urls "$ENV_ID"
 
-      - name: Audit sealed variables in the source environment (only the auth allowlist may be sealed)
+      - name: Audit sealed variables in the source environment (only the allowlist may be sealed)
         if: github.event_name == 'pull_request'
         env:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
@@ -906,6 +930,34 @@ jobs:
           RAILWAY_API_TOKEN: ${{ github.event_name != 'workflow_dispatch' && secrets.RAILWAY_API_TOKEN || '' }}
           RAILWAY_PROJECT_TOKEN: ${{ github.event_name == 'workflow_dispatch' && secrets.RAILWAY_API_DEV_TOKEN || '' }}
         run: bash scripts/ci/railway-env.sh wait-deployment auth "$AUTH_DEPLOYMENT_ID"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # Dispatch carries only the project token, which cannot read variables.
+      - name: Gate on the account-mail templates
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+        run: bash scripts/ci/railway-env.sh check-mail-templates "${{ needs.prepare-env.outputs.environment_id }}"
+
+      # Production serves the logo only after a push deploy.
+      - name: Gate on the account-mail logo
+        if: github.event_name == 'push'
+        run: go run ./tools/prenv mail-logo-check
+
+  # Frees this run's deploy slot once the deploy chain ends, pass or fail.
+  deploy-slot-release:
+    name: Release deploy slot
+    needs: [deploy-slot, prepare-env, deploy-gateway, health-gate, deploy-context, deploy-spas, fleet-gate]
+    if: always() && needs.deploy-slot.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - run: echo "Deploy chain ended; this run's deploy slot is free."
 
   # 6b. SPA build verdict on push/dispatch, where e2e does not run. Read-only: GET only,
   #     no domain repair (that stays in e2e).

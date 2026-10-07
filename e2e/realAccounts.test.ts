@@ -113,6 +113,118 @@ describe('e2eMember', () => {
       expect(realm.e2eMember(u.tenants!.inHouse).displayName, u.name).toBe(inHouse)
     }
   })
+
+  it("e2eMember admin is today's record", async () => {
+    const { realm, targets } = await load()
+    const id = targets.TENANTS.a.id
+
+    expect(realm.e2eMember(id, 'admin')).toEqual(realm.e2eMember(id))
+    expect(realm.e2eMember(id, 'admin').email).toBe(`e2e-member-${id}@example.com`)
+
+    // Literals from origin/main's e2eMember: a changed value locks the accounts a PR environment already holds.
+    expect(realm.e2eMember('11111111-1111-1111-1111-111111111111')).toEqual({
+      email: 'e2e-member-11111111-1111-1111-1111-111111111111@example.com',
+      password: 'e2e-member-pw-11111111-1111-1111-1111-111111111111',
+      displayName: 'E2E Firm Admin',
+    })
+    expect(realm.e2eMember('22222222-2222-2222-2222-222222222222', 'admin')).toEqual({
+      email: 'e2e-member-22222222-2222-2222-2222-222222222222@example.com',
+      password: 'e2e-member-pw-22222222-2222-2222-2222-222222222222',
+      displayName: 'E2E In-house Admin',
+    })
+  })
+
+  it('e2eMember names each role', async () => {
+    const { realm, targets } = await load()
+    const firm = targets.TENANTS.a.id
+    const inHouse = targets.TENANTS.b.id
+
+    const preparer = realm.e2eMember(firm, 'preparer')
+    const reviewer = realm.e2eMember(firm, 'reviewer')
+
+    expect(preparer.email).toBe(`e2e-member-${firm}-preparer@example.com`)
+    expect(reviewer.email).toBe(`e2e-member-${firm}-reviewer@example.com`)
+    expect(preparer.displayName).toBe('E2E Firm Preparer')
+    expect(reviewer.displayName).toBe('E2E Firm Reviewer')
+    expect(realm.e2eMember(inHouse, 'reviewer').displayName).toBe('E2E In-house Reviewer')
+    expect(realm.e2eMember(firm, 'reviewer')).toEqual(reviewer)
+    expect(preparer.password).toBe(`e2e-member-pw-${firm}-preparer`)
+    expect(reviewer.password).toBe(`e2e-member-pw-${firm}-reviewer`)
+    expect(realm.e2eMember(inHouse, 'preparer').displayName).toBe('E2E In-house Preparer')
+
+    const shards = UNITS.filter((u) => u.tenants)
+    expect(shards.length).toBeGreaterThan(0)
+    for (const u of shards) {
+      expect(realm.e2eMember(u.tenants!.firm, 'preparer').displayName, u.name).toBe('E2E Firm Preparer')
+      expect(realm.e2eMember(u.tenants!.inHouse, 'reviewer').displayName, u.name).toBe('E2E In-house Reviewer')
+    }
+  })
+
+  it('role passwords are distinct and keep the floor', async () => {
+    const { realm, targets } = await load()
+    const id = targets.TENANTS.a.id
+    expect(realm.E2E_MEMBER_ROLES.length).toBe(3)
+    expect([...realm.E2E_MEMBER_ROLES]).toEqual(['admin', 'preparer', 'reviewer'])
+
+    const passwords = realm.E2E_MEMBER_ROLES.map((r) => realm.e2eMember(id, r).password)
+
+    expect(new Set(passwords).size).toBe(3)
+    for (const p of passwords) expect(p.length).toBeGreaterThanOrEqual(16)
+
+    const ids = topologyTenantIds(targets)
+    const all = ids.flatMap((t) => realm.E2E_MEMBER_ROLES.map((r) => realm.e2eMember(t, r)))
+    const n = ids.length * realm.E2E_MEMBER_ROLES.length
+    expect(all).toHaveLength(n)
+    expect(new Set(all.map((m) => m.email)).size).toBe(n)
+    expect(new Set(all.map((m) => m.password)).size).toBe(n)
+  })
+})
+
+describe('isE2eMemberEmail', () => {
+  it('isE2eMemberEmail accepts the three role emails of the tenant', async () => {
+    const { realm, targets } = await load()
+    const id = targets.TENANTS.a.id
+    expect(realm.E2E_MEMBER_ROLES.length).toBe(3)
+
+    for (const r of realm.E2E_MEMBER_ROLES) expect(realm.isE2eMemberEmail(id, realm.e2eMember(id, r).email), r).toBe(true)
+  })
+
+  it("isE2eMemberEmail rejects a stranger and another tenant's member", async () => {
+    const { realm, targets } = await load()
+    const id = targets.TENANTS.a.id
+    expect(realm.isE2eMemberEmail(id, realm.e2eMember(id).email)).toBe(true)
+
+    expect(realm.isE2eMemberEmail(id, 'c.okafor@okafor.ng')).toBe(false)
+    expect(realm.isE2eMemberEmail(id, realm.e2eMember(targets.TENANTS.b.id, 'reviewer').email)).toBe(false)
+    expect(realm.isE2eMemberEmail(id, `e2e-member-${id}-owner@example.com`)).toBe(false)
+    expect(realm.isE2eMemberEmail(id, '')).toBe(false)
+
+    const admin = realm.e2eMember(id).email
+    const reviewer = realm.e2eMember(id, 'reviewer').email
+    const other = targets.TENANTS.b.id
+    for (const email of [
+      `e2e-member-${id}-admin@example.com`,
+      admin.toUpperCase(),
+      reviewer.toUpperCase(),
+      `${admin}\n`,
+      `${reviewer}\n`,
+      ` ${admin}`,
+      `${reviewer} `,
+      `x${admin}`,
+      `${reviewer}.evil`,
+      `${admin}@example.com`,
+      reviewer.replace('@example.com', '@example.org'),
+      `e2e-member-${id}-preparer-extra@example.com`,
+      `e2e-member-${id}-@example.com`,
+      realm.e2eMember(other).email,
+      realm.e2eMember(other, 'preparer').email,
+      `e2e-member-${id}`,
+    ]) {
+      expect(realm.isE2eMemberEmail(id, email), JSON.stringify(email)).toBe(false)
+    }
+    expect(realm.isE2eMemberEmail(other, realm.e2eMember(other).email)).toBe(true)
+    expect(realm.isE2eMemberEmail(other, admin)).toBe(false)
+  })
 })
 
 describe('isSeededMember', () => {
@@ -213,6 +325,21 @@ describe('ensureMember', () => {
       display_name: 'E2E In-house Admin',
       email: member.email,
     })
+
+    stubGateway()
+    const reviewer = realm.e2eMember(IN_HOUSE, 'reviewer')
+
+    await realm.ensureMember(IN_HOUSE, 'in_house', 'reviewer')
+
+    expect(fetched).toHaveLength(4)
+    expect(fetched[0].body).toEqual({ email: reviewer.email, password: reviewer.password })
+    expect(fetched[3].body).toEqual({
+      user_id: SUBJECT,
+      tenant_id: IN_HOUSE,
+      role: 'reviewer',
+      display_name: 'E2E In-house Reviewer',
+      email: reviewer.email,
+    })
   })
 
   it.each([400, 429, 503])('ensureMember refuses a register that answers %i', async (status) => {
@@ -238,6 +365,17 @@ describe('ensureMember', () => {
 
     await realm.ensureMember(FIRM, 'firm')
     expect(fetched).toHaveLength(4)
+
+    stubGateway({ register: { status: 500, body: { error: 'boom' } } })
+    await rejection(realm.ensureMember(FIRM, 'firm', 'reviewer'))
+    expect(fetched).toHaveLength(1)
+
+    stubGateway()
+    await realm.ensureMember(FIRM, 'firm', 'reviewer')
+    expect(fetched).toHaveLength(4)
+    expect((await realm.ensureMember(FIRM, 'firm', 'reviewer')).email).toBe(realm.e2eMember(FIRM, 'reviewer').email)
+    await realm.ensureMember(FIRM, 'firm')
+    expect(fetched).toHaveLength(4)
   })
 
   it('ensureMember shares one in-flight provision between concurrent callers', async () => {
@@ -247,6 +385,21 @@ describe('ensureMember', () => {
 
     expect(a).toEqual(b)
     expect(fetched).toHaveLength(4)
+
+    stubGateway()
+    const [r1, r2, p] = await Promise.all([
+      realm.ensureMember(FIRM, 'firm', 'reviewer'),
+      realm.ensureMember(FIRM, 'firm', 'reviewer'),
+      realm.ensureMember(FIRM, 'firm', 'preparer'),
+    ])
+
+    expect(r1).toEqual(r2)
+    expect(r1).toEqual(realm.e2eMember(FIRM, 'reviewer'))
+    expect(p).toEqual(realm.e2eMember(FIRM, 'preparer'))
+    const registers = fetched.filter((c) => c.url.endsWith('/auth/register')).map((c) => c.body.email)
+    expect(registers.sort()).toEqual([realm.e2eMember(FIRM, 'preparer').email, realm.e2eMember(FIRM, 'reviewer').email].sort())
+    const grants = fetched.filter((c) => c.url.endsWith('/auth/mock/member')).map((c) => c.body.role)
+    expect(grants.sort()).toEqual(['preparer', 'reviewer'])
   })
 
   it('ensureMember caches per tenant', async () => {
@@ -257,5 +410,20 @@ describe('ensureMember', () => {
     await realm.ensureMember(IN_HOUSE, 'in_house')
 
     expect(fetched).toHaveLength(8)
+
+    await realm.ensureMember(FIRM, 'firm', 'reviewer')
+    expect(fetched).toHaveLength(12)
+    await realm.ensureMember(FIRM, 'firm', 'reviewer')
+    await realm.ensureMember(FIRM, 'firm')
+    expect(fetched).toHaveLength(12)
+
+    await realm.ensureMember(IN_HOUSE, 'in_house', 'reviewer')
+    expect(fetched).toHaveLength(16)
+    expect(fetched.slice(12)[0].body.email).toBe(realm.e2eMember(IN_HOUSE, 'reviewer').email)
+    await realm.ensureMember(IN_HOUSE, 'in_house', 'reviewer')
+    expect(fetched).toHaveLength(16)
+
+    const firmRegisters = fetched.filter((c) => c.url.endsWith('/auth/register') && c.body.email.startsWith(`e2e-member-${FIRM}`))
+    expect(firmRegisters.map((c) => c.body.email)).toEqual([realm.e2eMember(FIRM).email, realm.e2eMember(FIRM, 'reviewer').email])
   })
 })

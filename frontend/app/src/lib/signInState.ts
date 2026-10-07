@@ -1,6 +1,7 @@
 // App-minted sign-in state: binds a hand-off code to this tab. Mirrors lib/deepLink.ts's
 // versioned-blob, warn-never-throw conventions. Never reads window.location.
 import { landingBase } from '../auth'
+import type { InviteOutcome } from './sessionHandoff'
 
 export const SIGN_IN_STATE_KEY = 'invoice-os.signInState'
 export const SIGN_IN_STATE_SCHEMA_VERSION = 1
@@ -91,4 +92,9 @@ export function landingSignInUrl(state: string, outcome?: SignInOutcome): string
   const base = landingBase()
   if (!base) return null
   return `${base}/?state=${state}${outcome ? `&signin=${outcome}` : ''}`
+}
+
+export function landingInviteUrl(outcome: InviteOutcome): string | null {
+  const base = landingBase()
+  return base ? `${base}/?invite=${outcome}` : null
 }

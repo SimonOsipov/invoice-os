@@ -97,7 +97,7 @@ in the UI rather than as a suspension.
 is immediate and needs no new session: the gate reads status per request
 (`TestRLS_RequestSeamAdmitsAReactivatedCaller`, `…RefusesAfterALiveSuspension`).
 
-## 4. `GET /v1/me` and `POST /v1/workspaces` are the two deliberate exemptions
+## 4. `GET /v1/me`, `POST /v1/workspaces` and the two invite routes are the four deliberate exemptions
 
 `tenancy.Store.Me` calls `db.WithinTenantTx` directly, skipping the gate. Scan 2 (§9) pins that
 exemption to that one **func**, not to its file.
@@ -117,6 +117,17 @@ anyone widens it.
 func-scoped. Its caller has no membership yet, so the gate would refuse before the workspace
 exists (AUTH-03 AC-5). It creates only the tenant its transaction's GUC names, with the caller as
 its first admin.
+
+`tenancy.Store.AcceptInvitation` (`POST /v1/invitations/accept`) is the third, func-scoped. The
+invitee has no membership in the invite's tenant yet, and may have no tenant at all, so the gate
+would refuse before the join. It reads the tenant the token names, then writes only that tenant's
+membership, invite and audit row, for the caller's own subject and only when the caller's email is
+the invited address.
+
+`tenancy.Store.PreviewInvitation` (`POST /internal/invitations/preview`) is the fourth,
+func-scoped. It has no caller: the token is the credential. It discloses the invited workspace name,
+role and address to whoever holds the token, and answers `404` alike for an unknown, spent,
+revoked, expired or malformed token.
 
 ### 4.1 What the exemption discloses, named plainly
 
@@ -253,7 +264,7 @@ fragile part of it.
 **`covered` is structural, not per-route inspection.** Scans 1 and 2 (§9) make the gated seam a
 monopoly: outside the exemptions named in `scPoolAllowlist`, nothing in `internal/` **or `cmd/`** can
 obtain a database handle at all, and the only callers allowed to reach the identity-free core
-are workers, boot-time seeders, two operator CLIs, `GET /v1/me` and `POST /v1/workspaces`. Every route that touches
+are workers, boot-time seeders, two operator CLIs, `GET /v1/me`, `POST /v1/workspaces`, `POST /v1/invitations/accept` and `POST /internal/invitations/preview`. Every route that touches
 tenant data is therefore gated by construction, and `covered` records that. `exempt` rows each
 state their own reason.
 
@@ -267,10 +278,14 @@ predicates it would previously have hit inside the transaction.
 | `GET /healthz` | every service (`internal/platform/server.go`) | exempt | must answer while the database is down; a membership lookup would invert its meaning |
 | `GET /readyz` | every service (`internal/platform/server.go`) | exempt | same — readiness reports on the database, so it cannot depend on reaching it |
 | `GET /healthz/fleet` | gateway | exempt | fleet roll-up across services, deliberately outside the verifier |
+| `GET /emails/confirmation.html` | gateway | exempt | no database; static account-mail template |
+| `GET /emails/recovery.html` | gateway | exempt | no database; static account-mail template |
+| `GET /emails/mark.png` | gateway | exempt | no database; static account-mail logo |
 | `POST /auth/login` | gateway | exempt | unauthenticated by definition; there is no caller yet to hold a membership |
 | `OPTIONS /auth/login` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `POST /auth/mock/staff` | gateway | exempt | mock builds only; grants staff on the owner DSN for the E2E fork, with no caller identity |
 | `POST /auth/mock/member` | gateway | exempt | mock builds only; grants a tenant membership on the owner DSN for the E2E fork, with no caller identity |
+| `POST /auth/mock/invitation-token` | gateway | exempt | mock builds only; replaces a pending invite's token hash on the owner DSN for the E2E fork, with no caller identity |
 | `POST /auth/sign-in` | gateway | exempt | no database; calls GoTrue |
 | `OPTIONS /auth/sign-in` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `POST /auth/exchange` | gateway | exempt | no database; in-process code store |
@@ -281,19 +296,35 @@ predicates it would previously have hit inside the transaction.
 | `OPTIONS /auth/sign-out` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `POST /auth/register` | gateway | exempt | no database; calls GoTrue |
 | `OPTIONS /auth/register` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
-| `GET /auth/verify` | gateway | exempt | no database; calls GoTrue |
+| `POST /auth/invitation` | gateway | exempt | no database; asks tenancy |
+| `OPTIONS /auth/invitation` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
+| `POST /auth/invitation/register` | gateway | exempt | no database; asks tenancy, calls GoTrue |
+| `OPTIONS /auth/invitation/register` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
+| `POST /auth/resend-verification` | gateway | exempt | no database; calls GoTrue |
+| `OPTIONS /auth/resend-verification` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
+| `POST /auth/request-password-reset` | gateway | exempt | no database; calls GoTrue |
+| `OPTIONS /auth/request-password-reset` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
+| `GET /auth/verify` | gateway | exempt | no database; renders the confirm page |
+| `POST /auth/verify` | gateway | exempt | no database; calls GoTrue |
+| `GET /auth/reset-password` | gateway | exempt | no database; renders the reset page |
+| `POST /auth/reset-password` | gateway | exempt | no database; calls GoTrue |
 | `POST /contacts/demo-request` | gateway | exempt | no database; hands the form to notifications |
 | `OPTIONS /contacts/demo-request` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `GET /.well-known/jwks.json` | gateway | exempt | serves the public verification keys; unauthenticated by design |
 | `/api/` | gateway | exempt | the proxy mount, not an endpoint — it forwards to the seven services |
 | `GET /v1/me` | tenancy | exempt | §4 — the SPA's boot round trip; gating it would make the 403 unreachable |
 | `POST /v1/workspaces` | tenancy | exempt | the caller has no membership yet (AC-5) |
+| `POST /v1/invitations/accept` | tenancy | exempt | the caller has no membership yet; §4 |
+| `POST /internal/invitations/preview` | tenancy | exempt | no caller; the token names the invite; §4 |
 | `POST /v1/validate/batch` | validation | exempt | `S2SMiddleware` peer call with no caller identity by construction, and the gateway strips any client-supplied `X-S2S-Token` (`internal/gateway/gateway.go`, `injectIdentity`) |
 | `POST /internal/contacts/registrants` | notifications | exempt | gateway-token call with no caller; contacts carry no tenant, so a membership has nothing to gate |
 | `POST /internal/contacts/demo-requests` | notifications | exempt | same, and a request carrying `X-User-ID` is refused 404 |
 | `GET /v1/contacts/me` | notifications | exempt | reads the caller's own contact by the token's email; contacts carry no tenant |
 | `GET /v1/memberships` | tenancy | covered | |
 | `PATCH /v1/memberships/{user_id}` | tenancy | covered | |
+| `POST /v1/invitations` | tenancy | covered | |
+| `GET /v1/invitations` | tenancy | covered | |
+| `POST /v1/invitations/{id}/resend` | tenancy | covered | |
 | `GET /v1/entities` | portfolio | covered | |
 | `POST /v1/entities` | portfolio | covered | |
 | `GET /v1/entities/{id}` | portfolio | covered | |
@@ -351,7 +382,7 @@ predicates it would previously have hit inside the transaction.
 | `POST /v1/extractions/{id}/fields/{name}/corrections` | submission | covered | |
 | `POST /v1/extractions/{id}/line-items` | submission | covered | |
 
-87 distinct routes, 93 registrations (`GET /v1/ping` is registered once per service).
+107 distinct routes, 113 registrations (`GET /v1/ping` is registered once per service).
 
 ### 8.1 The non-HTTP callers, so nobody looks for them above
 
@@ -383,7 +414,7 @@ it", so a stale exemption cannot outlive its reason.
 | Guard | What it asserts | Needles | Floor (measured at AUDIT-10-04) |
 |---|---|---|---|
 | `TestRLS_NoDirectPoolUseOutsideTheSeam` | **no database handle is acquired outside the `scPoolAllowlist` entries**: no pool method on a `*pgxpool.Pool`-typed name, and no `pgx.Connect`, `pgxpool.New`, `pgconn.Connect` or `sql.Open` off a DSN | a fixture holding both `r.ReaderPool.Query(...)` and `r.URL.Query()` must find **exactly 1**; a bare pool parameter; a non-database method; an aliased local; all three DSN entry points; a renamed import; an acquisition inside a func literal, attributed to the literal | ≥130 files walked (139); ≥4 pool-typed names (4); ≥9 sites across ≥8 files (10 across 9) |
-| `TestRLS_UngatedCoreIsWorkerAndExemptionOnly` | every call of the identity-free `db.WithinTenantTx`/`Opts` is a worker, a boot-time seeder, an operator CLI, or `tenancy` func `Me` or `ProvisionWorkspace` | a call in a named func; a doc comment naming the seam (0 sites); a call inside a func literal, attributed to the literal | ≥130 files walked (139); ≥12 sites across ≥6 packages (14 across 7) |
+| `TestRLS_UngatedCoreIsWorkerAndExemptionOnly` | every call of the identity-free `db.WithinTenantTx`/`Opts` is a worker, a boot-time seeder, an operator CLI, or `tenancy` func `Me`, `ProvisionWorkspace`, `AcceptInvitation` or `PreviewInvitation` | a call in a named func; a doc comment naming the seam (0 sites); a call inside a func literal, attributed to the literal | ≥130 files walked (139); ≥12 sites across ≥6 packages (14 across 7) |
 | `TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute` | every `app.Mux` route in `cmd/*/main.go` and `internal/platform/server.go` has a row in §8 with a verdict, and no row classifies a route nobody registers | a const-indirected route resolves; an unresolvable argument fails loudly; a verdict cell must read exactly `covered` or `exempt`; a longer path cannot answer for a shorter one | ≥8 roots yielding routes (9); ≥55 registrations (63) |
 | `TestRLS_ReadPathSuspensionDocHasNoStaleNarrowRuleClaim` | this page carries no sentence still asserting AUDIT-10's narrow rule (§5) | a fixture planting both stale phrases must be flagged; a fixture holding only the legitimate active-row line must not | this file parses to ≥10 top-level (`## `) section headings |
 

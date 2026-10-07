@@ -32,7 +32,7 @@ M2-14.4).
    lands on the add-company task, and adding its company opens the import step it gated, the
    identity card shows the account's own name, a long name stays inside the card, and a stranger
    registers through the landing window as a firm and as an in-house account, then signs in and
-   lands in the workspace it named (the verify step is a stand-in: only the failed-link redirect is real)
+   lands in the workspace it named (the verify step is a stand-in: only the bogus link's confirm-page click is real), and the emailed link opens a confirm page whose button is laid out inside its card at every wide width and 375 px, logs no console error, and sends one verify POST on a double-click, and the check-your-email view and the unverified sign-in error (its 403 faked, the resend real) each send the link again once per click, with the sent notice naming the address, laid out inside the card at every wide width and 375 px, a 254-byte address included, and "Forgot password?" sits between the password field and the submit at every wide width and 375 px, one click of "Send reset link" sends one request and shows the sent notice inside the card, and a bogus reset link's page (laid out inside its card at every width) submits once on a double-click and lands on the failed notice, which offers a new request, and an invite link's accept page names the workspace and role, drops the fragment from the address bar, and stacks inside its card at every wide width and 375 px for a 200-character workspace name and a 250-byte invited address, on the ready view and the register view alike (`deployed landing: the accept page names the workspace and role at every width, and a bogus invite is no longer valid`, which also shows the invalid view for a malformed and an unknown token), an invitee creates an account on that page, sees the sent view stacked at 375 px, signs in through the landing window and lands in the inviting workspace as `reviewer` with no `signin=no-workspace` and no workspace created (`deployed journey: an invitee creates an account on the accept page, signs in and lands in the workspace with the invited role`), and an invitee who signs in from a fresh browser context without the invite sees the "open the invite link" text, then joins through the link (`deployed journey: an invitee who signs in from another tab without the invite is pointed back to the invite link and joins through it`). `e2e/api/invitation-accept.spec.ts` drives the accept API over the fork: the preview, the invitee registration, the accept and the next token's workspace, and the 409, 403 and tenant-less refusals
    ([identity-provider.md](./identity-provider.md) "Sign-in and hand-off",
    "Renewal"). The same file's "deployed consoles:" journeys sign a staff account in through
    landing and open both consoles, refuse a customer's session and a forged record, renew the
@@ -54,6 +54,8 @@ environment (M4-23) and its Postgres is bootstrapped + seeded fresh at gateway b
 (`serial-lane`, `import-wizard`, `import-wizard-2`, `invoice-surfaces`, from `e2e/topology/shards.ts`). `dev-env.yml` flow:
 
 ```
+deploy-slot ──> wait until fewer than 2 other PR runs hold a Railway deploy slot (a
+                push or dispatch run passes at once)
 prepare-env ──> create-or-reuse this PR's `pr-<N>` fork of `development` (on
                 workflow_dispatch: target `development` itself) ──> assert Watch Paths
                 empty (M3-16 invariant) ──> discover the 5 public URLs fresh
@@ -118,6 +120,16 @@ registered fork account to a tenant (`mintsymbols_test.go` requires its handler 
 `db.GrantMembership` absent from a production binary). Unlike staff, a membership opens real
 tenant data on that fork: the control is the `mockissuer` build tag, which only PR forks stamp.
 
+**The fork invite token route.** The same branch mounts `POST /auth/mock/invitation-token`
+`{"tenant_id","invitation_id","token"}` beside it. It replaces a pending invite's `token_hash`
+with the hash of a 43-character base64url `token` on the migrator DSN and answers 204, 400, 404
+(no pending row matches), 405 or 502. A fork's sender captures mail, so a spec cannot read the
+token a real invite carries; it invites through `POST /api/tenancy/v1/invitations` and sets the
+token itself (`setInvitationToken` and `inviteWithToken`, `e2e/api/client.ts`).
+`mintsymbols_test.go` requires its handler and `db.SetInvitationToken` absent from a production
+binary. The route reaches only a pending invite by id and tenant, and opens no tenant data by
+itself.
+
 **Written per run, not inherited:** the URL variables. On a PR, prepare-env's
 `fork-vars-after-urls` pass (its `reconcile-urls` part) writes and re-reads the fork's own `gateway.CORS_ALLOWED_ORIGINS` (all
 four SPA origins), `VITE_GATEWAY_URL` on `app`, `landing` and each console, `app.VITE_LANDING_URL`,
@@ -145,8 +157,9 @@ added to — a missing `GATEWAY_DB_RESET` fails closed (no reset), not open.
 
 **Exception, measured (M4-23-04): sealed variables do NOT fork.** A sealed variable on
 `development` would simply be absent in every PR environment. `prepare-env` therefore fails
-loudly if `development` holds any — do not add one. The only exception is `GOTRUE_JWT_KEYS`,
-`GOTRUE_JWT_SECRET` and `GOTRUE_SMTP_PASS` on `auth`: `fork-vars-before-urls` writes the fork's own.
+loudly if `development` holds any — do not add one. The only exceptions are `GOTRUE_JWT_KEYS`,
+`GOTRUE_JWT_SECRET` and `GOTRUE_SMTP_PASS` on `auth` (`fork-vars-before-urls` writes the fork's own) and
+`RESEND_SENDING_KEY` on `tenancy` (a fork has none and sends no invite mail).
 
 **Written per fork, not inherited:** a fork no longer relies on the gateway's `AUTH_ISSUER`
 and `AUTH_JWKS_URL` it copied from production. `fork-vars-before-urls` (the first prepare-env step
@@ -166,8 +179,9 @@ blank SMTP host selects GoTrue's no-op mailer, so no confirmation mail leaves a 
 `false`), so a fork registration is confirmed at once and the deployed sign-in specs can sign
 it in. A repeat registration then answers GoTrue `user_already_exists`, which
 `/auth/register` maps to the same 202. `fork-vars-after-urls` (after URL discovery) writes the fork's landing URL as both `auth.GOTRUE_SITE_URL` and
-`gateway.AUTH_SITE_URL`; without the second, the fork's `/auth/register` and `/auth/verify`
-answer 503 `registration is not configured`. The emailed-link half is proven only by the
+`gateway.AUTH_SITE_URL`; without the second, the fork's `/auth/register`, `/auth/resend-verification`, `/auth/request-password-reset`, `/auth/verify` and `/auth/reset-password`
+answer 503 `registration is not configured`. The emailed-link half, including the branded confirmation and recovery templates that `idp-mail` fetches from the
+gateway's `GET /emails/confirmation.html` and `GET /emails/recovery.html`, is proven only by the
 CI `idp` job's `idp-mail` container and mailpit.
 
 ### GitHub secrets

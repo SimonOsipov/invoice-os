@@ -186,7 +186,7 @@ describe('F-2 menu: sign-in from the burger menu', () => {
 describe('AUTH-05-07: the boot sign-in params', () => {
   const STATE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN-_0'
   // Outcome copy.
-  const NO_WORKSPACE = 'This account has no workspace yet.'
+  const NO_WORKSPACE = 'This account has no workspace yet. If you were invited, open the invite link in your email.'
   const FAILED = "We couldn't open your workspace. Sign in again."
 
   beforeEach(() => {
@@ -300,7 +300,7 @@ describe('the console hand-back', () => {
   const STATE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN-_0'
   // D8 copy, verbatim.
   const NOT_STAFF = 'This account cannot open the ASComply consoles.'
-  const NO_WORKSPACE = 'This account has no workspace yet.'
+  const NO_WORKSPACE = 'This account has no workspace yet. If you were invited, open the invite link in your email.'
 
   let assigned: string[]
   let originalLocation: PropertyDescriptor | undefined

@@ -40,18 +40,20 @@ export const MODAL_CHROME_CSS = `
   .si-close:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 `
 
-export function ModalHeader({ onClose, padX }: { onClose: () => void; padX: 18 | 20 }) {
+export function ModalHeader({ onClose, padX }: { onClose?: () => void; padX: 18 | 20 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: `14px ${padX}px`, borderBottom: '1px solid var(--border)' }}>
       <Logo size={28} />
-      <button
-        onClick={onClose}
-        className="si-close"
-        aria-label="Close"
-        style={{ flex: 'none', width: 36, height: 36, borderRadius: 'var(--radius-btn)', border: 0, background: 'transparent', color: 'var(--muted-foreground)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}
-      >
-        <Icon paths={GLYPHS.x} size={18} strokeWidth={2} />
-      </button>
+      {onClose && (
+        <button
+          onClick={onClose}
+          className="si-close"
+          aria-label="Close"
+          style={{ flex: 'none', width: 36, height: 36, borderRadius: 'var(--radius-btn)', border: 0, background: 'transparent', color: 'var(--muted-foreground)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}
+        >
+          <Icon paths={GLYPHS.x} size={18} strokeWidth={2} />
+        </button>
+      )}
     </div>
   )
 }

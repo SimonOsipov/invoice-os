@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
+import { stripComments } from '@invoice-os/api-client/strip-comments'
+
 import { clampFilterText } from './invoices'
 import {
   ROUTE_PATHS,
@@ -920,23 +922,35 @@ describe('parseReviewHash: widened to a run (BULK-01-06, AC-1) — migrated to p
 const REVIEW_FRAGMENT = '#' + 'review'
 const LOCATION_HASH = 'location' + '.hash'
 
+// A read of the url fragment, however spelled: `.hash`, `['hash']` or a destructured `hash`.
+const FRAGMENT_READ = /\.\s*hash\b|\[\s*['"`]hash['"`]\s*\]|\{[^}]*\bhash\b[^}]*\}\s*=\s*[\w.]*location\b/g
+// The one fragment read the app keeps: the invite link's token, parsed by lib/pendingInvite.ts.
+const INVITE_FRAGMENT_READ = 'readinvitefragment(window.location.hash)'
+
 describe('ROUTE-03-05 AC-1: no retired review-hash fragment survives in the app', () => {
   it('guard_noReviewHashSurvivesInTheApp', () => {
     const files = [
-      { name: 'App.tsx', path: APP_TSX },
-      { name: 'lib/reviewBatch.ts', path: fileURLToPath(new URL('./reviewBatch.ts', import.meta.url)) },
-      { name: 'lib/route.ts', path: ROUTE_TS },
-      { name: 'types.ts', path: fileURLToPath(new URL('../types.ts', import.meta.url)) },
-      { name: 'components/ReviewBatch.tsx', path: fileURLToPath(new URL('../components/ReviewBatch.tsx', import.meta.url)) },
-      { name: 'lib/importApi.ts', path: fileURLToPath(new URL('./importApi.ts', import.meta.url)) },
+      { name: 'App.tsx', path: APP_TSX, inviteReads: 1 },
+      { name: 'lib/reviewBatch.ts', path: fileURLToPath(new URL('./reviewBatch.ts', import.meta.url)), inviteReads: 0 },
+      { name: 'lib/route.ts', path: ROUTE_TS, inviteReads: 0 },
+      { name: 'types.ts', path: fileURLToPath(new URL('../types.ts', import.meta.url)), inviteReads: 0 },
+      { name: 'components/ReviewBatch.tsx', path: fileURLToPath(new URL('../components/ReviewBatch.tsx', import.meta.url)), inviteReads: 0 },
+      { name: 'lib/importApi.ts', path: fileURLToPath(new URL('./importApi.ts', import.meta.url)), inviteReads: 0 },
     ]
-    for (const { name, path } of files) {
-      const src = readFileSync(path, 'utf8')
+    for (const { name, path, inviteReads } of files) {
+      const raw = readFileSync(path, 'utf8')
       // Floor: a broken path reads back '', which would make the absence checks below pass
       // on nothing read rather than a clean file -- M4-04 burned five instruments this way.
-      expect(src.length, `${name} read back empty -- the path is broken`).toBeGreaterThan(0)
-      expect(src.includes(REVIEW_FRAGMENT), `${name} still mentions the retired review-hash fragment`).toBe(false)
-      expect(src.includes(LOCATION_HASH), `${name} still reads or writes the url fragment`).toBe(false)
+      expect(raw.length, `${name} read back empty -- the path is broken`).toBeGreaterThan(0)
+      const code = stripComments(raw).toLowerCase()
+      expect(code.includes(REVIEW_FRAGMENT), `${name} still mentions the retired review-hash fragment`).toBe(false)
+      // App.tsx keeps exactly one fragment read, the invite link's; any other read is a review hash returning.
+      const reads = code.match(FRAGMENT_READ) ?? []
+      expect(reads.length, `${name} reads or writes the url fragment ${inviteReads === 0 ? 'at all' : 'beyond the invite link'}`).toBe(inviteReads)
+      if (inviteReads > 0) {
+        // Control needle: the one allowed read is the invite's, so the count above is not a count of nothing.
+        expect(code.includes(INVITE_FRAGMENT_READ), `${name} no longer reads the invite fragment through readInviteFragment`).toBe(true)
+      }
     }
   })
 })

@@ -242,7 +242,8 @@ gql_attempt() {
           if [[ "$ra" =~ ^[0-9]+$ ]]; then
             # Base 10: bash reads a leading 0 as octal. Anything over 3 digits is over the cap, not a number to add.
             GQL_WAIT="${ra#"${ra%%[!0]*}"}"
-            GQL_WAIT="${GQL_WAIT:-0}"
+            # A resend never leaves at once.
+            [ -n "$GQL_WAIT" ] && [ "$GQL_WAIT" != 0 ] || GQL_WAIT=1
           elif [[ "$reset" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]]; then
             ts="${reset%%.*}"
             ts="${ts%Z}"
@@ -251,10 +252,9 @@ gql_attempt() {
             if [ -n "$at" ]; then
               # +1: the reset has a fraction that `at` dropped.
               GQL_WAIT=$((at - $(date +%s) + 1))
+              [ "$GQL_WAIT" -ge 1 ] || GQL_WAIT=1
             fi
           fi
-          # A resend never leaves at once.
-          [ -z "$GQL_WAIT" ] || [ "$GQL_WAIT" -ge 1 ] || GQL_WAIT=1
           ;;
         *) GQL_FAULT=fatal GQL_ERROR="Railway API answered HTTP ${code:-unknown} (not retried) while $ctx: $GQL_LAST $(gql_errors)" ;;
       esac

@@ -1287,3 +1287,45 @@ func TestSessionCheck_ReadsAndDrainsTheUserBodyAtSixteenKiB(t *testing.T) {
 		})
 	}
 }
+
+// The cache is keyed by session_id: one session's confirmation admits no other session or address.
+func TestSessionCheck_ConfirmationDoesNotLeakAcrossSessions(t *testing.T) {
+	rg, fake := joinRig(t, "{}")
+	a := rg.signer.tenantlessToken(t, subjectS1, tenantlessClaims{email: joinEmail, sid: sid1})
+	b := rg.signer.tenantlessToken(t, subjectS2, tenantlessClaims{email: joinEmail, sid: sid2})
+	other := rg.signer.tenantlessToken(t, subjectS1, tenantlessClaims{email: "bob@corp.example", sid: sid1})
+	confirmed := confirmedUser(t, nil)
+	unconfirmed := confirmedUser(t, func(m map[string]any) { m["email_confirmed_at"] = nil })
+	fake.setAnswer(func(w http.ResponseWriter, r *http.Request) {
+		body := unconfirmed
+		if r.Header.Get("Authorization") == "Bearer "+a {
+			body = confirmed
+		}
+		_, _ = io.WriteString(w, body)
+	})
+
+	if rec := rg.do(http.MethodGet, joinMinePath, a); rec.Code != http.StatusOK {
+		t.Fatalf("session 1: status = %d, want 200", rec.Code)
+	}
+	if rec := rg.do(http.MethodGet, joinMinePath, b); rec.Code != http.StatusForbidden || rg.upstream.Hits() != 1 {
+		t.Fatalf("session 2 after session 1 confirmed: status = %d, tenancy hits = %d, want 403 and 1 (session 1's)", rec.Code, rg.upstream.Hits())
+	}
+	if n := fake.Hits(); n != 2 {
+		t.Fatalf("GoTrue /user calls = %d, want 2 (one per session)", n)
+	}
+
+	// Both verdicts now come from the cache and stay apart.
+	if rec := rg.do(http.MethodGet, joinMinePath, a); rec.Code != http.StatusOK {
+		t.Errorf("session 1 cached: status = %d, want 200", rec.Code)
+	}
+	if rec := rg.do(http.MethodGet, joinMinePath, b); rec.Code != http.StatusForbidden {
+		t.Errorf("session 2 cached: status = %d, want 403", rec.Code)
+	}
+	// Same session, a token whose email differs from the confirmed one.
+	if rec := rg.do(http.MethodGet, joinMinePath, other); rec.Code != http.StatusForbidden {
+		t.Errorf("session 1 with another email claim: status = %d, want 403", rec.Code)
+	}
+	if n := fake.Hits(); n != 2 {
+		t.Errorf("GoTrue /user calls = %d, want 2 (the rest are cache hits)", n)
+	}
+}

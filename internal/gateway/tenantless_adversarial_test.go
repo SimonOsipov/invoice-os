@@ -433,6 +433,20 @@ func TestJoinRoutesRefuseUnprovenConfirmation(t *testing.T) {
 		{"null confirmation", confirmedUser(t, func(m map[string]any) { m["email_confirmed_at"] = nil }), sidTok},
 		{"absent confirmation", confirmedUser(t, func(m map[string]any) { delete(m, "email_confirmed_at") }), sidTok},
 		{"undecodable body", "not json", sidTok},
+		// The decoder fills email and email_confirmed_at, then fails on the repeated email.
+		{"type error after a valid email", `{"email":"ada@corp.example","email_confirmed_at":"2026-10-07T17:04:47Z","email":5}`, sidTok},
+		{"null body", "null", sidTok},
+		{"empty body", "", sidTok},
+		{"array body", "[]", sidTok},
+		{"empty object", "{}", sidTok},
+		{"empty-string confirmation", confirmedUser(t, func(m map[string]any) { m["email_confirmed_at"] = "" }), sidTok},
+		{"boolean confirmation", confirmedUser(t, func(m map[string]any) { m["email_confirmed_at"] = true }), sidTok},
+		{"non-string email", confirmedUser(t, func(m map[string]any) { m["email"] = 5 }), sidTok},
+		{"top-level email absent", confirmedUser(t, func(m map[string]any) { delete(m, "email") }), sidTok},
+		{"only user_metadata.email matches", confirmedUser(t, func(m map[string]any) {
+			m["email"] = "bob@corp.example"
+			m["user_metadata"] = map[string]any{"email": joinEmail, "email_verified": true}
+		}), sidTok},
 		{"17 KiB body", confirmedUserSized(t, 17<<10), sidTok},
 		{"no session_id", confirmedUser(t, nil), func(rg *sessionRig, t *testing.T) string {
 			return rg.signer.tenantlessToken(t, subjectS1, tenantlessClaims{email: joinEmail, meta: meta})
@@ -517,6 +531,9 @@ func TestJoinRoutesNearMissesForbidden(t *testing.T) {
 		{"PUT mine", "PUT", joinMinePath},
 		{"DELETE mine", "DELETE", joinMinePath},
 		{"HEAD mine", "HEAD", joinMinePath},
+		{"OPTIONS mine", "OPTIONS", joinMinePath},
+		{"PATCH accept", "PATCH", joinAcceptPath},
+		{"HEAD accept", "HEAD", joinAcceptPath},
 		{"GET accept", "GET", joinAcceptPath},
 		{"PUT accept", "PUT", joinAcceptPath},
 		{"upper-case uuid", "POST", base + strings.ToUpper(joinInviteID) + "/accept"},
@@ -532,6 +549,12 @@ func TestJoinRoutesNearMissesForbidden(t *testing.T) {
 		{"encoded slash before accept", "POST", base + joinInviteID + "%2Faccept"},
 		{"encoded letter", "POST", base + joinInviteID + "/%61ccept"},
 		{"double slash", "GET", "/api/tenancy/v1//invitations/mine"},
+		{"double slash before id", "POST", base + "/" + joinInviteID + "/accept"},
+		{"encoded slash after mine", "GET", joinMinePath + "%2F"},
+		{"encoded letter in mine", "GET", "/api/tenancy/v1/invitations/%6dine"},
+		{"encoded digit in id", "POST", base + "%33" + joinInviteID[1:] + "/accept"},
+		{"space after id", "POST", base + joinInviteID + "%20/accept"},
+		{"dot segment", "GET", "/api/tenancy/v1/./invitations/mine"},
 		{"path parameter", "GET", joinMinePath + ";x=1"},
 		{"other service", "GET", "/api/portfolio/v1/invitations/mine"},
 	}
@@ -564,4 +587,167 @@ func TestJoinRoutesLeaveTenantBearingTokensAlone(t *testing.T) {
 		t.Errorf("upstream path = %q, want /v1/invitations/mine", path)
 	}
 	assertHeader(t, rg.upstream.Header(), "X-Tenant-ID", testTenant)
+}
+
+func TestJoinRoutesIgnoreMethodOverrideAndKeepQueryStrings(t *testing.T) {
+	rg, _ := joinRig(t, confirmedUser(t, nil))
+	tok := rg.signer.tenantlessToken(t, subjectS1, tenantlessClaims{email: joinEmail, sid: sid1})
+	do := func(method, path string, hdr map[string]string) *httptest.ResponseRecorder {
+		r := request(method, path, tok)
+		for k, v := range hdr {
+			r.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		rg.handler.ServeHTTP(rec, r)
+		return rec
+	}
+
+	if rec := do(http.MethodGet, joinMinePath+"?x=1", nil); rec.Code != http.StatusOK {
+		t.Fatalf("control: GET mine with a query = %d, want 200", rec.Code)
+	}
+	if rec := do(http.MethodPost, joinAcceptPath+"?x=1", nil); rec.Code != http.StatusOK {
+		t.Fatalf("control: POST accept with a query = %d, want 200", rec.Code)
+	}
+	ctl := rg.upstream.Hits()
+	if ctl != 2 {
+		t.Fatalf("control tenancy hits = %d, want 2", ctl)
+	}
+
+	for _, h := range []string{"X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"} {
+		for _, tc := range []struct{ name, method, path, override string }{
+			{"POST mine as GET", http.MethodPost, joinMinePath, http.MethodGet},
+			{"GET accept as POST", http.MethodGet, joinAcceptPath, http.MethodPost},
+		} {
+			rec := do(tc.method, tc.path, map[string]string{h: tc.override})
+			if rec.Code != http.StatusForbidden || rg.upstream.Hits() != ctl {
+				t.Errorf("%s via %s: status = %d, tenancy hits = %d (control %d), want 403 and no new hit", tc.name, h, rec.Code, rg.upstream.Hits(), ctl)
+			}
+		}
+	}
+}
+
+// Confirmation lives in the request context; no client header can stand in for it.
+func TestJoinRoutesIgnoreClientConfirmationHeaders(t *testing.T) {
+	spoof := map[string]string{
+		"X-User-Email": joinEmail, "X-Confirmed-Email": joinEmail, "X-Email-Confirmed": "true",
+		"X-Verified-Email": joinEmail, "X-Email-Verified": "true",
+	}
+	do := func(rg *sessionRig, method, path, tok string) *httptest.ResponseRecorder {
+		r := request(method, path, tok)
+		for k, v := range spoof {
+			r.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		rg.handler.ServeHTTP(rec, r)
+		return rec
+	}
+
+	t.Run("unconfirmed session", func(t *testing.T) {
+		rg, _ := joinRig(t, confirmedUser(t, func(m map[string]any) { m["email_confirmed_at"] = nil }))
+		tok := rg.signer.tenantlessToken(t, subjectS1, tenantlessClaims{email: joinEmail, sid: sid1})
+		assertForbiddenNoUpstream(t, rg, do(rg, http.MethodGet, joinMinePath, tok), "GET mine")
+		assertForbiddenNoUpstream(t, rg, do(rg, http.MethodPost, joinAcceptPath, tok), "POST accept")
+	})
+	t.Run("mock-issuer token", func(t *testing.T) {
+		rg, _ := joinRig(t, confirmedUser(t, nil))
+		tok, err := rg.mock.Mint(auth.MintOptions{Subject: subjectS1, Role: testRole, Email: joinEmail})
+		if err != nil {
+			t.Fatalf("mint: %v", err)
+		}
+		assertForbiddenNoUpstream(t, rg, do(rg, http.MethodGet, joinMinePath, tok), "GET mine")
+	})
+	t.Run("another address in the client header", func(t *testing.T) {
+		rg, _ := joinRig(t, confirmedUser(t, nil))
+		tok := rg.signer.tenantlessToken(t, subjectS1, tenantlessClaims{email: joinEmail, sid: sid1})
+		r := request(http.MethodGet, joinMinePath, tok)
+		r.Header.Set("X-User-Email", "evil@x")
+		rec := httptest.NewRecorder()
+		rg.handler.ServeHTTP(rec, r)
+		if rec.Code != http.StatusOK || rg.upstream.Hits() != 1 {
+			t.Fatalf("status = %d, tenancy hits = %d, want 200 and 1", rec.Code, rg.upstream.Hits())
+		}
+		if got := rg.upstream.Header().Values("X-User-Email"); !slices.Equal(got, []string{joinEmail}) {
+			t.Errorf("upstream X-User-Email = %q, want [%q]", got, joinEmail)
+		}
+	})
+}
+
+// A join route adds no verdict: revoked is 401, unavailable is 503 and uncached, as on every route.
+func TestJoinRoutesKeepRevokedAndUnavailableVerdicts(t *testing.T) {
+	cases := []struct {
+		name        string
+		status      int
+		body        string
+		wantRevoked bool
+		uncached    bool
+	}{
+		{"session gone", http.StatusForbidden, gtError(403, "session_not_found"), true, false},
+		{"user banned", http.StatusUnauthorized, gtError(401, "user_banned"), true, false},
+		{"bad_jwt", http.StatusUnauthorized, gtError(401, "bad_jwt"), false, true},
+		{"500 with a confirming body", http.StatusInternalServerError, confirmedUser(t, nil), false, true},
+		{"404 with a confirming body", http.StatusNotFound, confirmedUser(t, nil), false, true},
+	}
+	routes := []struct{ method, path string }{{http.MethodGet, joinMinePath}, {http.MethodPost, joinAcceptPath}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newUserFake(t, tc.status, tc.body)
+			rg := newSessionRig(t, fake.URL, nil, nil)
+			refusal := rg.refusal(t)
+			tok := rg.signer.tenantlessToken(t, subjectS1, tenantlessClaims{email: joinEmail, sid: sid1})
+
+			for _, rt := range routes {
+				rec := rg.do(rt.method, rt.path, tok)
+				if tc.wantRevoked {
+					assertRevoked(t, rec, refusal)
+				} else {
+					assertUnavailable(t, rec)
+				}
+				if n := rg.upstream.Hits(); n != 0 {
+					t.Errorf("%s %s: tenancy hits = %d, want 0", rt.method, rt.path, n)
+				}
+			}
+			if tc.uncached {
+				if n := fake.Hits(); n != len(routes) {
+					t.Errorf("GoTrue /user calls = %d, want %d (a 503 is not cached)", n, len(routes))
+				}
+				fake.set(http.StatusOK, confirmedUser(t, nil))
+				if rec := rg.do(http.MethodGet, joinMinePath, tok); rec.Code != http.StatusOK {
+					t.Errorf("after GoTrue recovers: GET mine = %d, want 200 with no clock advance", rec.Code)
+				}
+			}
+		})
+	}
+}
+
+// A session confirmed once is revoked when GoTrue says so after the TTL.
+func TestJoinRoutesConfirmedSessionThenRevoked(t *testing.T) {
+	rg, fake := joinRig(t, confirmedUser(t, nil))
+	refusal := rg.refusal(t)
+	tok := rg.signer.tenantlessToken(t, subjectS1, tenantlessClaims{email: joinEmail, sid: sid1})
+	if rec := rg.do(http.MethodGet, joinMinePath, tok); rec.Code != http.StatusOK {
+		t.Fatalf("control: GET mine = %d, want 200", rec.Code)
+	}
+
+	fake.set(http.StatusForbidden, gtError(403, "session_not_found"))
+	rg.clock.Advance(SessionCheckTTL)
+	assertRevoked(t, rg.do(http.MethodPost, joinAcceptPath, tok), refusal)
+	if n := rg.upstream.Hits(); n != 1 {
+		t.Errorf("tenancy hits = %d, want 1 (only the control)", n)
+	}
+}
+
+// The provisioning and token-accept exemptions need no confirmation, whatever /user answers.
+func TestTenantlessOpenRoutesNeedNoConfirmation(t *testing.T) {
+	for _, body := range []string{"not json", confirmedUser(t, func(m map[string]any) { m["email_confirmed_at"] = nil })} {
+		rg, _ := joinRig(t, body)
+		tok := rg.signer.tenantlessToken(t, subjectS1, tenantlessClaims{email: joinEmail, sid: sid1})
+		for _, path := range []string{provisioningPath, acceptPath} {
+			if rec := rg.do(http.MethodPost, path, tok); rec.Code != http.StatusOK {
+				t.Errorf("POST %s = %d, want 200", path, rec.Code)
+			}
+		}
+		if n := rg.upstream.Hits(); n != 2 {
+			t.Errorf("tenancy hits = %d, want 2", n)
+		}
+	}
 }

@@ -102,7 +102,7 @@ func (rt *router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	proxy.ServeHTTP(w, r)
 }
 
-// A token with no tenant may reach these two POST routes only: provisioning creates a tenant, accept joins one.
+// A token with no tenant may reach these two POST routes: provisioning creates a tenant, accept joins one.
 const (
 	tenantlessPath       = "/api/tenancy/v1/workspaces"
 	tenantlessAcceptPath = "/api/tenancy/v1/invitations/accept"

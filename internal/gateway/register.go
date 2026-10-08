@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -238,20 +239,30 @@ func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Log
 			return
 		}
 		var confirmed struct {
-			User gotrueUser `json:"user"`
+			AccessToken  string     `json:"access_token"`
+			RefreshToken string     `json:"refresh_token"`
+			User         gotrueUser `json:"user"`
 		}
-		status, _, err := postGoTrue(r, client, verify, map[string]string{"type": "signup", "token_hash": token}, &confirmed)
+		status, gt, err := postGoTrue(r, client, verify, map[string]string{"type": "signup", "token_hash": token}, &confirmed)
 		switch {
 		case err != nil:
 			log.WarnContext(r.Context(), "verify: gotrue unreachable", slog.String("error", err.Error()))
 			http.Redirect(w, r, failed, http.StatusSeeOther)
 		case status != http.StatusOK:
-			log.WarnContext(r.Context(), "verify: gotrue refused the link", slog.Int("upstream_status", status))
+			log.WarnContext(r.Context(), "verify: gotrue refused the link", slog.Int("upstream_status", status), slog.String("error_code", gt.ErrorCode))
 			http.Redirect(w, r, failed, http.StatusSeeOther)
 		default:
-			// ceiling: the session GoTrue issued is never delivered; any global sign-out or staff cut-off deletes it. Revisit when verifying should sign the user in.
 			handOffRegistrant(r.Context(), log, "verify", sink, confirmed.User.contact())
-			http.Redirect(w, r, verified, http.StatusSeeOther)
+			location := verified
+			if state := r.PostForm.Get("state"); stateShape.MatchString(state) && confirmed.AccessToken != "" && confirmed.RefreshToken != "" {
+				answer, _ := json.Marshal(map[string]string{"access_token": confirmed.AccessToken, "refresh_token": confirmed.RefreshToken}) // cannot fail
+				if code, ok := store.Put(string(answer), sha256.Sum256([]byte(state))); ok {
+					location = verified + "&handoff=" + code
+				} else {
+					log.WarnContext(r.Context(), "verify: hand-off store full")
+				}
+			}
+			http.Redirect(w, r, location, http.StatusSeeOther)
 		}
 	})
 }

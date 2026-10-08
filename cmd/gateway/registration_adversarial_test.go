@@ -359,8 +359,8 @@ func TestVerifyRoute_OpeningNeverReachesGoTrue(t *testing.T) {
 	}
 	rec := serveForm(mux, action, values.Encode())
 
-	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "https://site.example/?verified=1" {
-		t.Errorf("click = %d Location %q, want 303 https://site.example/?verified=1", rec.Code, rec.Header().Get("Location"))
+	if loc := rec.Header().Get("Location"); rec.Code != http.StatusSeeOther || !strings.HasPrefix(loc, "https://site.example/?verified=1&handoff=") {
+		t.Errorf("click = %d Location %q, want 303 https://site.example/?verified=1&handoff=<code>", rec.Code, loc)
 	}
 	if got, want := calls(), []string{"POST /verify"}; !slices.Equal(got, want) {
 		t.Errorf("GoTrue saw %v, want %v", got, want)

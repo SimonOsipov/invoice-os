@@ -351,10 +351,13 @@ scope, or `/token` with any other grant) is reachable from outside.
    them.
 3. The registrant opens the link and clicks "Confirm my email". The button submits a form to
    `POST /auth/verify`, which posts `{"type":"signup","token_hash":<token>}` to GoTrue
-   `/verify`, discards the session GoTrue returns, and redirects the browser to
-   `AUTH_SITE_URL`. Opening the link verifies nothing. No token reaches a landing URL.
-4. The verified user signs in through `POST /auth/sign-in` and redeems the code at
-   `POST /auth/exchange` (see Sign-in and hand-off). The first token carries no tenant: the
+   `/verify`, and redirects the browser to `AUTH_SITE_URL`. Opening the link verifies nothing.
+   No token reaches a landing URL.
+4. When the form carries the tab's `state` and GoTrue's answer holds both tokens, the gateway
+   stores the session in the hand-off store and redirects to `?verified=1&handoff=<code>`;
+   the tab redeems the code at `POST /auth/exchange` with its state (see Sign-in and hand-off).
+   Without a state, with a session-less answer or with a full store, the redirect is
+   `?verified=1` and the user signs in through `POST /auth/sign-in`. The first token carries no tenant: the
    access-token hook projects a tenant only for exactly one active membership.
 5. With that tenant-less token the client calls `POST /api/tenancy/v1/workspaces`
    `{"workspace_name","display_name","kind"?}`. The gateway lets a tenant-less token through
@@ -521,9 +524,10 @@ is fixed for the signup link; whether other links can reuse it is unmeasured.
 
 | Outcome | Answer |
 |---|---|
-| GoTrue `/verify` 200 | 303 to `<AUTH_SITE_URL>/?verified=1`; one contact hand-off |
+| GoTrue `/verify` 200 with both tokens and a form `state` of 43 base64url characters | 303 to `<AUTH_SITE_URL>/?verified=1&handoff=<code>`; the session is stored once in the hand-off store; one contact hand-off |
+| GoTrue `/verify` 200 with no or a malformed `state`, a missing token, or a full hand-off store (WARN `verify: hand-off store full`) | 303 to `<AUTH_SITE_URL>/?verified=1`, no code; one contact hand-off |
 | a form that does not parse, is over 1 KiB, is not `application/x-www-form-urlencoded`, or carries an empty or over-256-byte `token` or a `type` other than `signup` | 303 to `<AUTH_SITE_URL>/?verify=failed`; GoTrue is not called |
-| a GoTrue refusal, or GoTrue unreachable | 303 to `<AUTH_SITE_URL>/?verify=failed`, logged at WARN (the upstream status, or the error) |
+| a GoTrue refusal, or GoTrue unreachable | 303 to `<AUTH_SITE_URL>/?verify=failed`, logged at WARN (the upstream status and GoTrue's `error_code`, or the error) |
 | any method but GET, HEAD and POST | 405 from the router, `Allow: GET, HEAD, POST`; GoTrue is not called |
 | any method but POST, sent to the handler | 405 `{"error":"method not allowed"}`, `Allow: POST`; GoTrue is not called |
 | `AUTH_SITE_URL` unset | 503 `registration is not configured` |
@@ -672,10 +676,10 @@ does not, because an admin chose the address. An expired or spent invite to such
   edge. A proxy in front makes every key the proxy's IP, and every client then shares one bucket of 10;
   resend then fails toward fewer mails for everyone, never more. `key_source=remote_addr` in the
   limit WARN shows the fallback.
-- `ceiling:` the session GoTrue issues on verify is discarded but stays live in
-  `auth.sessions` and `auth.refresh_tokens`. No route revokes it by itself; a global
-  sign-out or a staff cut-off of the account deletes it with the account's other sessions
-  (see Revocation and Cutting an account off). Its tokens never reach anyone.
+- The session GoTrue issues on verify reaches only the tab whose `state` the click carried,
+  once, through `POST /auth/exchange`. Without a code it is discarded but stays live in
+  `auth.sessions` and `auth.refresh_tokens` until a global sign-out or a staff cut-off of
+  the account deletes it (see Revocation and Cutting an account off).
 
 **Accepted risks of the emailed link:**
 - *First registrant's answers.* GoTrue does not update an unconfirmed user on a repeat signup,

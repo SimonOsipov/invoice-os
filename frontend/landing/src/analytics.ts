@@ -18,7 +18,7 @@ export function measurementId(): string | null {
   return id || null
 }
 
-/** THE GATE. Production hostname AND consent AND a configured property. */
+/** THE GATE. Allowed hostname (production by default) AND consent AND a configured property. */
 export function shouldLoadTag(hostname: string, allowed: boolean, id: string | null, hosts?: readonly string[]): boolean {
   return isProductionHost(hostname, hosts) && allowed && id !== null
 }

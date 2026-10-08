@@ -164,9 +164,22 @@ func TestScan_OnlyAddedLinesAreJudged(t *testing.T) {
 	assertFlagged(t, flaggedLines(t, diff, map[string]string{path: src}), path+":3")
 }
 
-func TestScan_DocsAndMarkdownAreOutOfScope(t *testing.T) {
-	diff := "--- a/docs/ops.sh\n+++ b/docs/ops.sh\n@@ -0,0 +1 @@\n+# see store.go:1\n" +
-		"--- a/README.md\n+++ b/README.md\n@@ -0,0 +1 @@\n+see store.go:1\n"
+func TestScan_RuleFilesAreJudged(t *testing.T) {
+	for _, path := range []string{".claude/rules/r.md", ".claude/rules/sub/r.md"} {
+		diff := "--- a/" + path + "\n+++ b/" + path + "\n@@ -0,0 +1 @@\n+see store.go:12\n"
+		assertFlagged(t, flaggedLines(t, diff, map[string]string{path: "see store.go:12\n"}), path+":1")
+	}
+}
+
+func TestScan_DocsPathIsNoLongerExempt(t *testing.T) {
+	const path = "docs/ops.sh"
+	diff := "--- a/" + path + "\n+++ b/" + path + "\n@@ -0,0 +1 @@\n+# see store.go:1\n"
+	assertFlagged(t, flaggedLines(t, diff, map[string]string{path: "# see store.go:1\n"}), path+":1")
+}
+
+func TestScan_MarkdownOutsideRulesIsOutOfScope(t *testing.T) {
+	diff := "--- a/README.md\n+++ b/README.md\n@@ -0,0 +1 @@\n+see store.go:1\n" +
+		"--- a/.claude/rules/r.txt\n+++ b/.claude/rules/r.txt\n@@ -0,0 +1 @@\n+see store.go:1\n"
 	// No fixture files: showing either one would fail the scan.
 	assertFlagged(t, flaggedLines(t, diff, map[string]string{}))
 }
@@ -181,6 +194,7 @@ func TestComments_PerLanguage(t *testing.T) {
 		{"m.sql", "-- store.go:1\nSELECT 'it''s -- x.go:2'\nFROM t; /* y.go:3 */\nINSERT INTO t VALUES ('multi\n-- still.go:5 string');\n", []int{1, 3}},
 		{"a.py", "x = \"# a.py:1\"\n# b.py:2\ns = \"\"\"\n# c.py:4\n\"\"\"\n", []int{2}},
 		{"a.css", ".x { content: '/* a.css:1 */'; }\n/* b.css:2\n   c.css:3 */\n", []int{2, 3}},
+		{".claude/rules/r.md", "---\npaths:\n  - \"migrations/**\"\n---\nsee b.go:2\n", []int{5}},
 		{"g_test.go", bt("var d = ¦\n// store.go:2 inside a raw string\n¦ // store.go:3\n"), []int{3}},
 		{"n.ts", bt("const s = ¦a ${f(¦b¦)} c¦ // n.ts:1\nconst r = /['\"¦]/ // n.ts:2\nconst q = x / y // n.ts:3\nconst fx = ¦\n// store.go:5 inside a template\n¦ // n.ts:6\n"), []int{1, 2, 3, 6}},
 	}

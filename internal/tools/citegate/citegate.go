@@ -28,15 +28,17 @@ type syntax struct {
 	template  bool     // JS template literal; ${} is read as part of the string
 	regex     bool     // JS regex literal
 	triple    bool     // Python triple-quoted strings
+	prose     bool     // every line is comment text
 }
 
 var (
-	goSyntax   = syntax{line: []string{"//"}, block: true, quotes: `"'`, multi: "`"}
-	jsSyntax   = syntax{line: []string{"//"}, block: true, quotes: `"'`, template: true, regex: true}
-	cssSyntax  = syntax{block: true, quotes: `"'`}
-	sqlSyntax  = syntax{line: []string{"--"}, block: true, quotes: `"`, multi: `'`}
-	hashSyntax = syntax{line: []string{"#"}, hashSpace: true, quotes: `"'`}
-	pySyntax   = syntax{line: []string{"#"}, quotes: `"'`, triple: true}
+	goSyntax    = syntax{line: []string{"//"}, block: true, quotes: `"'`, multi: "`"}
+	jsSyntax    = syntax{line: []string{"//"}, block: true, quotes: `"'`, template: true, regex: true}
+	cssSyntax   = syntax{block: true, quotes: `"'`}
+	sqlSyntax   = syntax{line: []string{"--"}, block: true, quotes: `"`, multi: `'`}
+	hashSyntax  = syntax{line: []string{"#"}, hashSpace: true, quotes: `"'`}
+	pySyntax    = syntax{line: []string{"#"}, quotes: `"'`, triple: true}
+	proseSyntax = syntax{prose: true}
 )
 
 var syntaxByExt = map[string]syntax{
@@ -46,10 +48,10 @@ var syntaxByExt = map[string]syntax{
 }
 
 // syntaxFor returns the grammar for a path the gate judges. Test files are in
-// scope; docs are not.
+// scope; Markdown is, only under .claude/rules/.
 func syntaxFor(path string) (syntax, bool) {
-	if strings.HasPrefix(path, "docs/") {
-		return syntax{}, false
+	if strings.HasPrefix(path, ".claude/rules/") && strings.HasSuffix(path, ".md") {
+		return proseSyntax, true
 	}
 	i := strings.LastIndexByte(path, '.')
 	if i < 0 {
@@ -80,6 +82,12 @@ func Comments(path, src string) map[int]string {
 		return nil
 	}
 	out := map[int]string{}
+	if sx.prose {
+		for i, l := range strings.Split(src, "\n") {
+			out[i+1] = l
+		}
+		return out
+	}
 	var buf strings.Builder
 	state := inCode
 	line := 1

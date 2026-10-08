@@ -13,7 +13,7 @@
 //	no producer emits this string any more, yet a consumer still quotes it
 //
 // producer  source that emits the string     (frontend/, internal/, cmd/, db/)
-// consumer  something no compiler links back (e2e/, docs/, .github/)
+// consumer  something no compiler links back (e2e/, .claude/rules/, .github/)
 // ignored   a unit test beside its own source — type-checked, and it runs on
 //
 //	the same push, so it cannot rot unnoticed
@@ -37,7 +37,7 @@ import (
 )
 
 // consumerDirs hold references no compiler resolves back to their producer.
-var consumerDirs = []string{"e2e/", "docs/", ".github/"}
+var consumerDirs = []string{"e2e/", ".claude/rules/", ".github/"}
 
 // producerExts are the file kinds that can *emit* a string a consumer asserts on.
 var producerExts = []string{".go", ".ts", ".tsx", ".js", ".jsx", ".sql"}

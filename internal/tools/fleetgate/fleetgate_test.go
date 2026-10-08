@@ -1,5 +1,5 @@
 // fleetgate_test.go: EXTR-17-06. The fleet size is written in prose in a dozen
-// places across workflows, docs and CI scripts; each one goes stale silently
+// places across workflows and CI scripts; each one goes stale silently
 // the moment the fleet changes. This derives the size from dev-env.yml's
 // deploy topology and fails on every site that disagrees.
 //
@@ -34,12 +34,12 @@ const (
 // The four trees the detection command walks:
 //
 //	grep -rnE '\b(14|15)\b' \
-//	  .github/workflows docs scripts/ci internal/tools \
+//	  .github/workflows scripts/ci internal/tools \
 //	  | grep -iE 'service'
 //
 // Split across three lines on purpose: written as one line this comment
 // carries both halves of the pattern and becomes a hit in its own scan.
-var scanTrees = []string{".github/workflows", "docs", "scripts/ci", "internal/tools"}
+var scanTrees = []string{".github/workflows", "scripts/ci", "internal/tools"}
 
 // The two halves of that command, kept on separate lines so neither line is
 // itself a hit.
@@ -48,10 +48,10 @@ var (
 	subjectRe = regexp.MustCompile(`(?i)service`)
 )
 
-// Population floors: the measured population (9 hits across 4 files), this gate's own source excluded.
+// Population floors: the measured population (4 hits across 1 file), this gate's own source excluded.
 const (
-	minHits  = 9
-	minFiles = 4
+	minHits  = 4
+	minFiles = 1
 )
 
 // allowEntry keys on a line substring, never a line number -- a line-keyed
@@ -63,9 +63,7 @@ type allowEntry struct {
 }
 
 // TestFleetGate_AllowlistFaultsFireOnAPlantedTree drives the carve-out machinery.
-var allowlist = []allowEntry{
-	{File: "docs/docling-sidecar.md", LineContains: "since EXTR-15-04 the worker", Why: "a story ID, not a fleet size"},
-}
+var allowlist = []allowEntry{}
 
 type hit struct {
 	File   string

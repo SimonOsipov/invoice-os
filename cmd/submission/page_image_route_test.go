@@ -1,6 +1,6 @@
 // page_image_route_test.go: the cmd/submission half of EXTR-11-03 -- the object-store adapter
 // the page route streams through. Nothing here serves a mux or opens a database (main() is not
-// unit-testable, main_test.go:1-4): the adapter is driven over a fake ObjectStore. The route's
+// unit-testable): the adapter is driven over a fake ObjectStore. The route's
 // registration is asserted in main_test.go's shipped ast.Inspect switch.
 //
 // Helpers use a pgi* prefix; dr ea wt ds are taken.

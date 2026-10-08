@@ -123,7 +123,7 @@ export async function redeemHandoff(base: string, code: string, state: string, n
     if (answers === null) {
       throw err
     }
-    return provisionAndRead(base, token, refreshToken, answers, now, signal)
+    return provisionAndRead(base, { token, refreshToken }, answers, now, signal)
   }
   if (!isHandoffMe(me)) {
     throw new Error('malformed /me')
@@ -153,22 +153,22 @@ async function acceptInviteAndRead(base: string, token: string, refreshToken: un
     }
     throw err
   }
-  return renewAndRead(base, refreshToken, now, signal, 'no refresh token after accepting the invite')
+  return renewAndRead(base, { token, refreshToken }, now, signal, 'no refresh token after accepting the invite')
 }
 
 export async function createOwnWorkspace(base: string, offer: JoinOffer, now: number = Date.now()): Promise<Session> {
   if (offer.answers === null) {
     throw new Error('no registration answers')
   }
-  return provisionAndRead(base, offer.token, offer.refreshToken, offer.answers, now, AbortSignal.timeout(15000))
+  return provisionAndRead(base, offer, offer.answers, now, AbortSignal.timeout(15000))
 }
 
 // A 404 or 409 re-reads /me first: another tab may have accepted already.
+// A renewal rotates the refresh token; the offer is updated in place so the next Join uses the live pair.
 export async function joinInvite(base: string, offer: JoinOffer, id: string, now: number = Date.now()): Promise<Session> {
   const signal = AbortSignal.timeout(15000)
-  const auth = { token: offer.token, refreshToken: offer.refreshToken }
   try {
-    await callRenewing(base, auth, signal, (token) =>
+    await callRenewing(base, offer, signal, (token) =>
       apiFetch(`${base}/api/tenancy/v1/invitations/${encodeURIComponent(id)}/accept`, { method: 'POST', token, signal }),
     )
   } catch (err) {
@@ -183,17 +183,16 @@ export async function joinInvite(base: string, offer: JoinOffer, id: string, now
       throw err
     }
     try {
-      return await renewAndRead(base, auth.refreshToken, now, signal, 'no refresh token after the refusal')
+      return await renewAndRead(base, offer, now, signal, 'no refresh token after the refusal')
     } catch {
       throw new InviteRefusedError(outcome)
     }
   }
-  return renewAndRead(base, auth.refreshToken, now, signal, 'no refresh token after joining the invite')
+  return renewAndRead(base, offer, now, signal, 'no refresh token after joining the invite')
 }
 
 // ceiling: an account whose workspace an operator deleted re-provisions at its next sign-in; revisit when workspace deletion ships.
-async function provisionAndRead(base: string, token: string, refreshToken: unknown, answers: ProvisionBody, now: number, signal: AbortSignal): Promise<Session> {
-  const auth = { token, refreshToken }
+async function provisionAndRead(base: string, auth: { token: string; refreshToken: unknown }, answers: ProvisionBody, now: number, signal: AbortSignal): Promise<Session> {
   try {
     await callRenewing(base, auth, signal, (t) => apiFetch(`${base}/api/tenancy/v1/workspaces`, { method: 'POST', token: t, body: answers, signal }))
   } catch (err) {
@@ -202,7 +201,7 @@ async function provisionAndRead(base: string, token: string, refreshToken: unkno
       throw err
     }
   }
-  return renewAndRead(base, auth.refreshToken, now, signal, 'no refresh token after provisioning')
+  return renewAndRead(base, auth, now, signal, 'no refresh token after provisioning')
 }
 
 // The Join screen can outlive the access token: one 401 renews and retries once. Refresh tokens rotate, so auth keeps the latest.
@@ -220,11 +219,13 @@ async function callRenewing(base: string, auth: { token: string; refreshToken: u
   }
 }
 
-async function renewAndRead(base: string, refreshToken: unknown, now: number, signal: AbortSignal, missing: string): Promise<Session> {
-  if (typeof refreshToken !== 'string' || refreshToken === '') {
+async function renewAndRead(base: string, auth: { token: string; refreshToken: unknown }, now: number, signal: AbortSignal, missing: string): Promise<Session> {
+  if (typeof auth.refreshToken !== 'string' || auth.refreshToken === '') {
     throw new Error(missing)
   }
-  const { access, refresh } = await refreshTokens(base, refreshToken, signal)
+  const { access, refresh } = await refreshTokens(base, auth.refreshToken, signal)
+  auth.token = access
+  auth.refreshToken = refresh
   const me = await apiFetch<Me>(`${base}/api/tenancy/v1/me`, { token: access, signal })
   if (!isHandoffMe(me)) {
     throw new Error('malformed /me')

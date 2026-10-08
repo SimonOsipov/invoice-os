@@ -521,11 +521,12 @@ describe('join offers', () => {
   type Reply = { status: number; body?: unknown }
   type Call = { url: string; method: string; auth: string | null; body: unknown; signal: AbortSignal | null | undefined }
 
-  function stub(r: { exchange?: Reply; me?: Reply[]; mine?: Reply; accept?: Reply; workspaces?: Reply; refresh?: Reply; acceptNetworkError?: boolean; acceptSeq?: Reply[]; workspacesSeq?: Reply[] } = {}): Call[] {
+  function stub(r: { exchange?: Reply; me?: Reply[]; mine?: Reply; accept?: Reply; workspaces?: Reply; refresh?: Reply; acceptNetworkError?: boolean; acceptSeq?: Reply[]; workspacesSeq?: Reply[]; refreshSeq?: Reply[] } = {}): Call[] {
     const calls: Call[] = []
     const me = [...(r.me ?? [FORBIDDEN])]
     const acceptSeq = [...(r.acceptSeq ?? [])]
     const workspacesSeq = [...(r.workspacesSeq ?? [])]
+    const refreshSeq = [...(r.refreshSeq ?? [])]
     vi.stubGlobal(
       'fetch',
       vi.fn((url: string, init: { method?: string; headers: Headers; body?: string; signal?: AbortSignal | null }) => {
@@ -541,7 +542,7 @@ describe('join offers', () => {
               : path === '/api/tenancy/v1/workspaces'
                 ? (workspacesSeq.shift() ?? r.workspaces ?? { status: 201, body: {} })
                 : path === '/auth/refresh'
-                  ? (r.refresh ?? { status: 200, body: { access_token: RENEWED, refresh_token: 'R1' } })
+                  ? (refreshSeq.shift() ?? r.refresh ?? { status: 200, body: { access_token: RENEWED, refresh_token: 'R1' } })
                   : (acceptSeq.shift() ?? r.accept ?? { status: 200, body: {} })
         return Promise.resolve({ ok: reply.status < 400, status: reply.status, statusText: String(reply.status), json: () => Promise.resolve(reply.body ?? {}) })
       }),
@@ -690,6 +691,25 @@ describe('join offers', () => {
     expect(calls[2].auth).toBe(`Bearer ${RENEWED}`)
     expect(calls[3].body).toEqual({ refresh_token: 'R1' })
     expect(s).toMatchObject({ token: RENEWED, handoff: true })
+  })
+
+  it('joinInvite_theRotatedPairReachesTheOfferAfterARefusedRow', async () => {
+    const RENEWED2 = tokenWith({}, NOW / 1000 + 7300)
+    const renewed = (access_token: string, refresh_token: string): Reply => ({ status: 200, body: { access_token, refresh_token } })
+    const calls = stub({
+      acceptSeq: [UNAUTH, { status: 404, body: { error: MSG_INVALID } }, { status: 200, body: {} }],
+      refreshSeq: [renewed(RENEWED, 'R1'), renewed(RENEWED2, 'R2'), renewed(RENEWED, 'R3')],
+      me: [FORBIDDEN, { status: 200, body: ME }],
+    })
+    const o = offer()
+    const err = await joinInvite(GATEWAY, o, 'a', 5000).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(InviteRefusedError)
+    expect(o).toMatchObject({ token: RENEWED2, refreshToken: 'R2' })
+
+    await joinInvite(GATEWAY, o, 'b', 5000)
+    const accepts = calls.filter((c) => c.url.endsWith('/accept'))
+    expect(accepts[2].auth).toBe(`Bearer ${RENEWED2}`)
+    expect(calls.filter((c) => c.url === '/auth/refresh').map((c) => c.body)).toEqual([{ refresh_token: 'R0' }, { refresh_token: 'R1' }, { refresh_token: 'R2' }])
   })
 
   it('joinInvite_a401TwiceRethrowsAfterOneRenewal', async () => {

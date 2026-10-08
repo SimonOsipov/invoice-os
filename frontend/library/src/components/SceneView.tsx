@@ -117,6 +117,16 @@ function ListView({ s, size }: { s: Of<'list'>; size: Size }) {
   )
 }
 
+// at most n fields, always including the focused and every marked one
+function fieldWindow<T extends { mark: Mark | null; focused: boolean }>(fields: T[], n: number): T[] {
+  const need = fields.flatMap((f, i) => (f.focused || f.mark ? [i] : []))
+  const last = need.length ? Math.max(...need) : 0
+  let start = Math.max(0, last - n + 1)
+  const focus = fields.findIndex((f) => f.focused)
+  if (focus >= 0 && focus < start) start = focus
+  return fields.slice(start, start + n)
+}
+
 function FormView({ s, size }: { s: Of<'form'>; size: Size }) {
   const thumb = size === 'thumb'
   const msg = s.msg && { text: s.msg.text, ...msgColors(s.msg.tone) }
@@ -132,7 +142,7 @@ function FormView({ s, size }: { s: Of<'form'>; size: Size }) {
         {s.doc && (
           <div style={{ background: '#fff', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 7px', display: 'flex', flexDirection: 'column', gap: 2, boxShadow: 'var(--shadow-soft)' }}>
             <span style={{ fontSize: 8, fontWeight: 800, letterSpacing: '0.14em', marginBottom: 2 }}>INVOICE</span>
-            {s.fields.slice(0, 4).map((f) => (
+            {fieldWindow(s.fields, 4).map((f) => (
               <div
                 key={f.l}
                 style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, padding: '2px 4px', borderRadius: 2, background: docBg(f), outline: docOutline(f) }}
@@ -147,7 +157,7 @@ function FormView({ s, size }: { s: Of<'form'>; size: Size }) {
         )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
           <div style={{ display: 'grid', gridTemplateColumns: s.doc ? '1fr' : '1fr 1fr', gap: '5px 8px' }}>
-            {s.fields.slice(0, nf).map((f) => {
+            {fieldWindow(s.fields, nf).map((f) => {
               const mk = f.mark ? MK[f.mark] : null
               return (
                 <div key={f.l} style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
@@ -199,7 +209,7 @@ function FormView({ s, size }: { s: Of<'form'>; size: Size }) {
       )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
         {/* why: 5 fields plus the message overflow the player scene box */}
-        {(msg ? s.fields.slice(0, 4) : s.fields).map((f) => {
+        {(msg ? fieldWindow(s.fields, 4) : s.fields).map((f) => {
           const mk = f.mark ? MK[f.mark] : null
           return (
             <div key={f.l} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>

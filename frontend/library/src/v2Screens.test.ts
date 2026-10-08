@@ -473,16 +473,42 @@ describe('library scenes', () => {
     expect(ci.some((x) => x.text === '12 fields checked · 0 errors')).toBe(true)
   })
 
-  it('SN-17 the player form caps at four fields under a message', () => {
-    const labels = (ts: Tag[]) => where(ts, (s) => s['text-transform'] === 'uppercase' && s['font-size'] === '10px')
-    const withMsg = view('validate', 0, 'player')
-    expect(labels(withMsg)).toHaveLength(4)
-    expect(withMsg.some((t) => t.text.startsWith('Seller TIN has 7 digits'))).toBe(true)
-    expect(labels(view('validate', 1, 'player'))).toHaveLength(5)
+  const formCases = FEATURES.flatMap((f) => {
+    const sc = f.sc
+    if (sc.kind !== 'form') return []
+    return sc.steps.map((_, idx) => ({ id: f.id, idx, doc: !!sc.doc, st: sceneState(sc, idx) as Extract<ReturnType<typeof sceneState>, { kind: 'form' }> }))
+  })
+  // the focused field always; every marked field whenever they fit in cap fields
+  const needed = (st: { fields: { l: string; mark: unknown; focused: boolean }[] }, cap: number) => {
+    const idx = st.fields.flatMap((x, i) => (x.focused || x.mark ? [i] : []))
+    const fits = idx.length > 0 && Math.max(...idx) - Math.min(...idx) < cap
+    return st.fields.filter((x) => x.focused || (fits && x.mark)).map((x) => x.l)
+  }
+  const fitting = (st: Parameters<typeof needed>[0], cap: number) => needed(st, cap).length > 0
+
+  it('SN-17 the player form caps at four fields under a message and keeps the focused and marked ones', () => {
+    const cases = formCases.filter((c) => c.st.msg)
+    expect(cases.filter((c) => fitting(c.st, 4)).length).toBeGreaterThan(0)
+    for (const c of cases) {
+      const shown = where(view(c.id, c.idx, 'player'), (s) => s['text-transform'] === 'uppercase' && s['font-size'] === '10px').map((t) => t.text)
+      expect(shown.length, `${c.id} step ${c.idx}`).toBeLessThanOrEqual(4)
+      for (const l of needed(c.st, 4)) expect(shown, `${c.id} step ${c.idx}`).toContain(esc(l))
+    }
+    expect(where(view('validate', 1, 'player'), (s) => s['text-transform'] === 'uppercase' && s['font-size'] === '10px')).toHaveLength(5)
     expect(where(view('read-documents', 2, 'player'), (s) => s.padding === '5px 7px')).toHaveLength(5)
   })
 
-  it('SN-18 a thumbnail form with a doc and a message shows two fields', () => {
+  it('SN-18 a thumbnail form shows at most its cap and keeps the focused and marked fields', () => {
+    const cases = formCases.map((c) => ({ ...c, st: sceneState(feat(c.id).sc, thumbStep(feat(c.id))) as typeof c.st })).filter((c, i, all) => all.findIndex((x) => x.id === c.id) === i)
+    expect(cases.length).toBeGreaterThan(0)
+    expect(cases.some((c) => c.doc && c.st.msg)).toBe(true)
+    for (const c of cases) {
+      const cap = c.doc ? (c.st.msg ? 2 : 3) : 4
+      const ts = view(c.id, thumbStep(feat(c.id)), 'thumb')
+      const shown = where(ts, (s) => s['text-transform'] === 'uppercase' && s['font-size'] === '8px').map((t) => t.text)
+      expect(shown.length, c.id).toBeLessThanOrEqual(cap)
+      for (const l of needed(c.st, cap)) expect(shown, c.id).toContain(esc(l))
+    }
     const boxes = (id: string) => where(view(id, thumbStep(feat(id)), 'thumb'), (s) => s.height === '18px')
     expect(boxes('learns')).toHaveLength(2)
     expect(boxes('create-invoice')).toHaveLength(4)

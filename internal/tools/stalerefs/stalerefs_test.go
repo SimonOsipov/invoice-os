@@ -243,6 +243,27 @@ func TestScan_ARuleFileIsAConsumer(t *testing.T) {
 	}
 }
 
+// Markdown outside the consumer dirs must not read as a surviving producer.
+func TestScan_ADocsHitDoesNotMaskARuleFileHit(t *testing.T) {
+	diff := `--- a/internal/platform/db/tenant.go
++++ b/internal/platform/db/tenant.go
+@@ -10,1 +10,1 @@
+-const key = "WITHIN_REQUEST_TENANT_TX_OPTS"
+++const key = "WITHIN_REQUEST_TX_OPTS"
+`
+	tree := map[string][]Hit{
+		"WITHIN_REQUEST_TENANT_TX_OPTS": {
+			{".claude/rules/tenant-seam.md", 7, "- Set `WITHIN_REQUEST_TENANT_TX_OPTS` for every read."},
+			{"docs/tenancy.md", 3, "The `WITHIN_REQUEST_TENANT_TX_OPTS` key is set per request."},
+		},
+	}
+
+	f := find(t, Scan(diff, fakeGrep(tree), defaultAllow()), "WITHIN_REQUEST_TENANT_TX_OPTS")
+	if len(f.Stale) != 1 || f.Stale[0].Path != ".claude/rules/tenant-seam.md" {
+		t.Fatalf("stale = %+v, want the one rule-file hit", f.Stale)
+	}
+}
+
 // TestScan_ALongerSiblingTokenDoesNotMaskTheRename pins the one bug the fixture
 // tests structurally could not catch, because they hand Scan its grep results.
 // Renaming the test id `detail-submit-confirm` while `detail-submit-confirm-prompt`
@@ -290,7 +311,8 @@ func TestRole(t *testing.T) {
 		"e2e/smoke/support-console.spec.ts":    "consumer",
 		"e2e/topology/roleFixtures.ts":         "consumer",
 		".claude/rules/ci-railway.md":          "consumer",
-		"docs/deploy-model.md":                 "producer",
+		"docs/deploy-model.md":                 "ignore",
+		"README.md":                            "ignore",
 		".github/workflows/dev-env.yml":        "consumer",
 		"frontend/app/src/lib/members.ts":      "producer",
 		"internal/invoice/handlers.go":         "producer",

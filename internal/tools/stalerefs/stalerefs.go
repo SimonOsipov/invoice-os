@@ -4,7 +4,7 @@
 // Go's compiler and the TypeScript project references already fail a build when
 // a renamed symbol leaves a caller behind. What neither can see is a *string*
 // that one file produces and another file quotes: a Playwright assertion on
-// user-visible copy, a getByTestId, a route path in a doc, an env var name in a
+// user-visible copy, a getByTestId, an env var name in a
 // CI workflow. Those references break silently and surface late — in a deploy
 // gate, or not at all.
 //
@@ -89,19 +89,16 @@ func Role(path string) string {
 	if testish.MatchString(path) {
 		return "ignore"
 	}
-	return "producer"
+	for _, e := range producerExts {
+		if strings.HasSuffix(path, e) {
+			return "producer"
+		}
+	}
+	return "ignore"
 }
 
 func isProducerFile(path string) bool {
-	if Role(path) != "producer" {
-		return false
-	}
-	for _, e := range producerExts {
-		if strings.HasSuffix(path, e) {
-			return true
-		}
-	}
-	return false
+	return Role(path) == "producer"
 }
 
 // Literals pulls quoted strings out of one line. Written by hand rather than by

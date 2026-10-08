@@ -1,5 +1,5 @@
 // Package main implements citegate, a merge gate that fails a PR adding a code
-// comment that cites source by line number (a file name, a colon, digits).
+// comment or rule-file line that cites source by line number (a file name, a colon, digits).
 // Such a citation goes stale silently when code above the line moves. Only
 // lines the PR adds are judged; existing citations are grandfathered.
 //

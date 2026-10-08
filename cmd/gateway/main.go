@@ -256,7 +256,7 @@ const dbConnectWait = 120 * time.Second
 //
 // It returns handlers rather than registering them, and leaves the CORS wrap to
 // main, so both source scans still see what they assert on:
-// TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute (the app.Mux calls) and
+// TestRLS_EveryRegisteredRouteHasAVerdict (the app.Mux calls) and
 // TestGatewayApiMountIsCORSWrappedAndNotMethodScoped (withCORS at the mount).
 func gatewayHandlers(
 	verifier *auth.Verifier,

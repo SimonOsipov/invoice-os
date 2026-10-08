@@ -131,7 +131,7 @@ func TestRLS_SingleDocumentValidateRouteIsNotRegistered(t *testing.T) {
 
 	if off := vrOffenders(routes); len(off) > 0 {
 		for _, r := range off {
-			t.Errorf("%s:%d still registers %q — RMV-01-03 retires the single-document validate route; delete the registration (and its doc row in %s)", r.file, r.line, r.route, scDocPath)
+			t.Errorf("%s:%d still registers %q — RMV-01-03 retires the single-document validate route; delete the registration (and its entry in scRouteVerdicts)", r.file, r.line, r.route)
 		}
 	}
 }

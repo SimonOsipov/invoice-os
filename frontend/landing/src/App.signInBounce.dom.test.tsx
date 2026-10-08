@@ -140,5 +140,8 @@ describe('one bounce per load', () => {
     await act(async () => settle.reject())
     await flush()
     expect(dialogs().length).toBe(1)
+    await act(async () => document.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click())
+    await click(nav(), 'Sign in')
+    expect(fetchMock, 'a failed bounce leaves the control free').toHaveBeenCalledTimes(2)
   })
 })

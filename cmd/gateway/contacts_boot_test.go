@@ -266,8 +266,10 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 			t.Fatal(err)
 		}
 		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "http://site.invalid/?verified=1" {
-			t.Fatalf("the click answered %d Location %q", resp.StatusCode, resp.Header.Get("Location"))
+		const verifiedPrefix = "http://site.invalid/?verified=1&handoff="
+		loc := resp.Header.Get("Location")
+		if resp.StatusCode != http.StatusSeeOther || !strings.HasPrefix(loc, verifiedPrefix) || len(loc)-len(verifiedPrefix) != 43 {
+			t.Fatalf("the click answered %d Location %q, want 303 %s<43-char code>", resp.StatusCode, loc, verifiedPrefix)
 		}
 		got := verifyCalls()
 		if len(got) != 1 {

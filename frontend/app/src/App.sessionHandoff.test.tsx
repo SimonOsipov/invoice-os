@@ -1116,6 +1116,50 @@ describe('a confirm code over a live session (LOGFIX-04-05, D10, D18)', () => {
     expect(toast()?.textContent).toContain(NOTICE('as a@corp.example'))
   })
 
+  it('a verify code past the marker and state TTL over a renewable session with an expired access token keeps A', async () => {
+    configure()
+    meReply = ok(A_ME)
+    refreshReply = ok({
+      access_token: jwt(A_ME.user.id, nowSec() + 7200, { iat: nowSec(), app_metadata: { tenant_id: A_ME.tenant.id } }),
+      refresh_token: 'R1',
+    })
+    const expired = jwt(A_ME.user.id, nowSec() - 3600)
+    localStorage.setItem(
+      SESSION_KEY,
+      JSON.stringify({ ...JSON.parse(handoffRecord(expired, A_ME)), refresh_token: 'R0', received_at: Date.now() - 7_200_000 }),
+    )
+    const old = Date.now() - 12 * 60 * 1000
+    mintSignInState(old)
+    holdPendingVerify(old + 1000)
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    await settle()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(hrefWrites).toEqual([])
+    expect((storedRecord()?.me as Me | undefined)?.user.id).toBe(A_ME.user.id)
+    expect(toast()?.textContent).toContain(NOTICE('as a@corp.example'))
+  })
+
+  it('a stale marker bound to a replaced state shows no notice over a renewable session', async () => {
+    configure()
+    const expired = jwt(A_ME.user.id, nowSec() - 3600)
+    localStorage.setItem(
+      SESSION_KEY,
+      JSON.stringify({ ...JSON.parse(handoffRecord(expired, A_ME)), refresh_token: 'R0', received_at: Date.now() - 7_200_000 }),
+    )
+    const old = Date.now() - 12 * 60 * 1000
+    mintSignInState(old)
+    holdPendingVerify(old + 1000)
+    mintSignInState()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    expect(toast()).toBeNull()
+  })
+
   it('a plain handoff over a renewable session with an expired access token, with no pending confirm, signs in as B', async () => {
     configure()
     const expired = jwt(A_ME.user.id, nowSec() - 3600)

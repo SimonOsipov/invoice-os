@@ -44,6 +44,19 @@ export function peekPendingVerify(now: number = Date.now()): boolean {
   }
 }
 
+// True when a well-formed marker is bound to the state live at its own mint time, whatever its age.
+// The gateway issues the code only after GoTrue confirmed the email, so the TTL does not gate a code in hand.
+export function holdsPendingVerify(): boolean {
+  try {
+    const p = JSON.parse(sessionStorage.getItem(PENDING_VERIFY_KEY) ?? 'null') as { v?: unknown; at?: unknown; s?: unknown } | null
+    if (p == null || p.v !== PENDING_VERIFY_SCHEMA_VERSION || typeof p.at !== 'number' || typeof p.s !== 'string') return false
+    return peekSignInState(p.at) === p.s
+  } catch (e) {
+    console.warn(`[verifyBounce] failed to read marker at "${PENDING_VERIFY_KEY}":`, e)
+    return false
+  }
+}
+
 // One-shot: removes the key whatever it held, returns true only when it was live.
 export function consumePendingVerify(now: number = Date.now()): boolean {
   try {

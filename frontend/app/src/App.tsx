@@ -8,7 +8,7 @@ import { createRenewer, isRenewalDue, SessionEndedError, type Renewer } from './
 import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
 import { consumeSignInState, ensureSignInState, landingInviteUrl, landingSignInUrl, mintSignInState } from './lib/signInState'
 import { consumePendingInvite, holdPendingInvite, peekPendingInvite, readInviteFragment } from './lib/pendingInvite'
-import { consumePendingVerify, gatewayVerifyUrl, holdPendingVerify, landingVerifyFailedUrl, peekPendingVerify, readVerifyFragment } from './lib/verifyBounce'
+import { consumePendingVerify, gatewayVerifyUrl, holdPendingVerify, holdsPendingVerify, landingVerifyFailedUrl, readVerifyFragment } from './lib/verifyBounce'
 import { AuditExportToast } from './components/AuditExportToast'
 import { HANDOFF_PARAM, InviteRefusedError, createOwnWorkspace, isJoinOffer, isLiveHandoffSession, joinInvite, readHandoffCode, redeemHandoff, type JoinOffer } from './lib/sessionHandoff'
 import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
@@ -1820,7 +1820,7 @@ export default function App() {
   const [liveHandoff] = useState(
     () =>
       (isLiveHandoffSession(bootSession) ||
-        (bootSession?.handoff === true && readHandoffCode(window.location.search) !== null && peekPendingVerify())) &&
+        (bootSession?.handoff === true && readHandoffCode(window.location.search) !== null && holdsPendingVerify())) &&
       peekPendingInvite() === null,
   )
   // Set while a held invite's code overrides a live stored session: a refusal leaves that session stored.
@@ -1852,7 +1852,7 @@ export default function App() {
   const verifyBounced = useRef(false)
   // A live session wins over a confirm code; a pending verify turns on a notice naming it.
   const [verifyConfirmedNotice, setVerifyConfirmedNotice] = useState<string | null>(() =>
-    liveHandoff && readHandoffCode(window.location.search) !== null && peekPendingVerify()
+    liveHandoff && readHandoffCode(window.location.search) !== null && holdsPendingVerify()
       ? confirmedNotice(bootSession?.me?.user.email || bootSession?.me?.user.display_name || undefined)
       : null,
   )

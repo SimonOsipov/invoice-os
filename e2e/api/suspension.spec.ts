@@ -8,7 +8,7 @@
 // minting for …0007, tenant A's seeded SUSPENDED reviewer, is the same mechanism.
 //
 // NOT READ-ONLY, and `memberships` is excluded from both the per-deploy reset and the demo
-// purge (.claude/rules/e2e.md), so a leaked status survives into the topology suite that
+// purge, so a leaked status survives into the topology suite that
 // runs after this one — and topology/roles.spec.ts asserts …0007's status pill verbatim. So:
 //   - every mutating test restores `suspended` in its own `finally`, and the reactivated
 //     window never spans a test boundary;
@@ -19,7 +19,7 @@
 // belt-and-braces, not the only guard.
 //
 // No browser spec accompanies this one, deliberately: the only browser-observable change is
-// one error state, and .claude/rules/e2e.md forbids growing the browser layer.
+// one error state, and .claude/rules/e2e.md keeps the browser layer thin.
 import { test, expect } from '@playwright/test'
 import {
   getAuditLog,

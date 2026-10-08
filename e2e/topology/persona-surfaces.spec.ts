@@ -642,7 +642,7 @@ test('entity scoping: in-house Invoices is tenant-wide, firm Invoices follows th
 // the reported defect.
 //
 // Cannot be run locally -- this package's vitest projects run in `node` with no DOM
-// layer (.claude/rules/e2e.md) -- so this cannot go RED in a local run; its first
+// layer -- so this cannot go RED in a local run; its first
 // green run is the post-deploy gate (dev-env.yml). Today's pre-fix values, measured
 // against the deployed build: label x = 45 (Clients), 48 (every other item) -- distinct
 // icon widths leaking into distinct label offsets.

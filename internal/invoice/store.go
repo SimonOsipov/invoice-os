@@ -1684,7 +1684,7 @@ func (s *Store) CallerRole(ctx context.Context) (string, error) {
 }
 
 // ApprovalFacts is one invoice's approval standing: TransmitClear feeds can_submit,
-// the other three feed can_approve/can_reject (.claude/rules/approvals.md).
+// the other three feed can_approve/can_reject.
 type ApprovalFacts struct {
 	TransmitClear   bool
 	RunState        string

@@ -3,11 +3,11 @@
 # Makefile targets and .claude/rules/db-migrations.md. This is the disposable LOCAL
 # Postgres a solo engineer iterates against daily; it is unrelated to the
 # always-on shared Railway dev DB and to the PR scale-to-zero model (which
-# scales SPA compute only, per .claude/rules/ci-railway.md). CI does NOT use this file
+# scales SPA compute only). CI does NOT use this file
 # — ci.yml spins up its own ephemeral Postgres service container.
 services:
   postgres:
-    image: postgres:18            # MAJOR must match the Railway-provisioned major (.claude/rules/db-migrations.md).
+    image: postgres:18            # MAJOR must match the Railway-provisioned major.
     environment:
       # Superuser + default DB, identical to ci.yml's migrations job so local == CI.
       POSTGRES_USER: postgres

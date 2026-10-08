@@ -19,7 +19,7 @@
 // story) are proven ONLY in internal/archive/exchange_db_test.go. The first describe's
 // invoice is never submitted. The second describe submits one through the mock adapter and
 // proves only that its body files exist and the request body carries the invoice number.
-// Departure from .claude/rules/e2e.md's "containment, never a literal count": each
+// Departure from .claude/rules/e2e.md (containment or live-read, never a literal count): each
 // describe's bundle is scoped to an entity it creates and nothing else ever touches, so
 // the counts are deterministic. The exact count is also STRICTLY STRONGER than containment
 // here -- it proves no OTHER entity's invoice leaked into the bundle, which a toContain

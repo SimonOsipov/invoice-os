@@ -63,8 +63,8 @@ test('deployed app: sign-out redirects to the landing page', async ({ page }) =>
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// A live hand-off session wins over a later sign-in from landing (.claude/rules/auth.md,
-// "Precedence in the app"): a second account only takes the tab once the first session is gone.
+// A live hand-off session wins over a later sign-in from landing:
+// a second account only takes the tab once the first session is gone.
 test('deployed app: a second real sign-in replaces the session only after the first one is gone', async ({ page }) => {
   test.setTimeout(180_000)
   const errors = collectErrors(page)
@@ -135,7 +135,7 @@ test('deployed app: a visit with no session redirects to the landing page', asyn
 })
 
 // ROUTE-01-08: the only spec that presses Back/Forward. Lives in the sign-in capability
-// file it depends on (.claude/rules/e2e.md: organize by capability, not by date).
+// file it depends on (.claude/rules/e2e.md: organise by capability, never by date).
 //
 // goBack() alone would only prove Chromium reused a bfcached page, not that the router
 // restored the view. So every step asserts the URL AND the rendered panel, never one alone.
@@ -485,8 +485,7 @@ test('deployed landing: the sign-in dialog offers the form and no persona', asyn
 
 // ROUTE-06-06 AC-1: the plain top-level views ROUTE-06-05's popstate sweep leaves with no
 // coverage (dashboard/audit/settings/extraction/detail already have their own deep-link
-// specs above). One test looping all 8 paths in-process — .claude/rules/e2e.md forbids
-// a test() per screen.
+// specs above). One test looping all 8 paths in-process, not a test() per screen.
 test('deployed app: every top-level path cold-boots to its own screen', async ({ page }) => {
   test.setTimeout(120_000)
   const errors = collectErrors(page)
@@ -1198,7 +1197,7 @@ async function storedRenewal(page: Page): Promise<StoredRenewal> {
   return JSON.parse(raw ?? 'null') as StoredRenewal
 }
 
-// Moves received_at back past GOTRUE_JWT_EXP (3600 s, .claude/rules/auth.md), whatever the page clock reads.
+// Moves received_at back past GOTRUE_JWT_EXP (3600 s), whatever the page clock reads.
 async function ageStoredSession(page: Page, patch: Partial<StoredRenewal> = {}): Promise<void> {
   await page.evaluate(
     ({ key, patch, ageMs }) => {

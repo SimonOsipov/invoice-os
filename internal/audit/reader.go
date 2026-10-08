@@ -150,7 +150,7 @@ func ScopeOf(event string, entityID *string) CompanyScope {
 
 // Event is one row of the page (System Design §2). ActorName and ActorKind are plain
 // strings, never pointers, so they cannot marshal as JSON null — the same rule as
-// invoice.StatusChange (.claude/rules/audit-log.md). Actor stays byte-identical
+// invoice.StatusChange. Actor stays byte-identical
 // to the stored column. EntityID/CompanyName/CompanyScope together encode the four
 // states in §2's table; see ScopeOf for how CompanyScope is derived.
 type Event struct {

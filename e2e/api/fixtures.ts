@@ -9,8 +9,8 @@ export const BAD_INVOICE_KEYS = ['supplier-tin-format', 'vat-standard-rate']
 // fresh per call so nothing already in the database collides with it on
 // business_entities' duplicate-TIN partial index (there is no DELETE endpoint —
 // only offboard/onboard = archive/active). A run now starts from the curated
-// seed rather than from prior runs' residue (.claude/rules/e2e.md), but the three suites share one deployment with no reset
-// between them and a retry re-runs against what its first attempt left, so
+// seed rather than from prior runs' residue, but the three suites share one deployment with no
+// reset between them and a retry re-runs against what its first attempt left, so
 // "fresh" means fresh WITHIN the run — which is the collision that was ever
 // reachable from inside a spec anyway. Replicates
 // internal/portfolio/tin.go's luhnValid exactly: from the rightmost digit,

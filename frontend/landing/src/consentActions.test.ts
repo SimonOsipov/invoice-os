@@ -159,8 +159,7 @@ describe('the revocation seam is in analytics.ts, not a second copy of load stat
     expect(src).toMatch(/let revoked = false/)
     expect(src).toMatch(/export function tagIsLoaded\(\)/)
     expect(src).toMatch(/export function setAnalyticsRevoked\(/)
-    // The single choke point. .claude/rules/privacy-page.md quotes this guard
-    // verbatim under W5, so the two must be corrected together.
+    // The single choke point.
     expect(src).toMatch(/if\s*\(\s*!loaded\s*\|\|\s*revoked\s*\)\s*return/)
     // Load state stays one flag: no re-derivation from the injected script tag.
     expect(src).not.toContain('script[src*=googletagmanager]')

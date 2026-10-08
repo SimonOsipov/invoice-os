@@ -6,8 +6,8 @@
 // example.
 //
 // It CONVERGES rather than inserting-if-absent. db.PurgeDemoTenants empties
-// approval_runs on every gated boot, and deliberately leaves
-// the three policy tables standing (.claude/rules/db-migrations.md); db.Reset truncates the
+// approval_runs on every gated boot (.claude/rules/approvals.md), and deliberately leaves
+// the three policy tables standing; db.Reset truncates the
 // same rows, but only in a pr-<N> environment. So a seeder that no-ops once its
 // policy exists arms nothing on the second deploy and every validated invoice
 // then satisfies awaiting_approval vacuously

@@ -279,7 +279,7 @@ func Provision(ctx context.Context, cfg ProvisionConfig) error {
 
 	// Unconditional and unchanged: the gateway is the fleet's single in-network
 	// migrator regardless of whether deploy-time provisioning is enabled for
-	// this environment (.claude/rules/db-migrations.md).
+	// this environment.
 	if err := MigrateUp(ctx, cfg.MigrationDSN, cfg.MigrationsFS); err != nil {
 		return fmt.Errorf("db: provision: migrate: %w", err)
 	}

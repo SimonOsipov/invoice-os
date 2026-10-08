@@ -20,7 +20,7 @@
 // (invoice_app, to run jobs) and DATABASE_MIGRATION_URL (invoice_migrator, to create the
 // test-only effects table), and SKIPS ITSELF when either is unset — so a bare
 // `go test ./...` and the default CI `go` job stay green. It runs under the CI `queue` job
-// or `make test-queue`. See .claude/rules/db-migrations.md.
+// or `make test-queue`.
 package submission_test
 
 import (

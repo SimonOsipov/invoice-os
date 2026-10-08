@@ -728,8 +728,7 @@ describe('ApprovalStateCard', () => {
 
   it('approvalStateCard_dropsTheNotifyDisclosure', () => {
     // Retired guarantee: the third "no message is delivered" disclosure. DROPPED with the
-    // ladder (arch 4.5); .claude/rules/approvals.md's constant count must be corrected in the same
-    // commit (F-S). A notify step is rendered nowhere on the invoice page any more.
+    // ladder (arch 4.5). A notify step is rendered nowhere on the invoice page any more.
     const steps = [
       stepFixture({ ord: 0, kind: 'notify', state: 'pending', workflow_role_title: 'AP Team', notify_target: 'ap@acme.test', notify_channel: 'email' }),
       stepFixture({ ord: 1, workflow_role_title: 'Finance lead', holder: { text: 'Ada Obi', warn: false } }),

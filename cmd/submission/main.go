@@ -2,7 +2,7 @@
 // pool (the async job spine) alongside the platform kit's /healthz + /readyz and drains
 // in-flight jobs within the shutdown window on SIGINT/SIGTERM. The worker connects as the
 // app role (invoice_app) and re-establishes tenant context per job — the worker-role
-// pattern, .claude/rules/db-migrations.md. M5-04 wires the real handlers onto that spine:
+// pattern, .claude/rules/tenant-seam.md. M5-04 wires the real handlers onto that spine:
 // SubmitWorker drives the tx1 / adapter / tx2 submit flow and PollWorker follows a
 // deferred verdict the same way (internal/submission/worker.go) — both registered, with
 // ExtractWorker, on the single bundle workerBundle builds below.

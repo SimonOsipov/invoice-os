@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// The D13 runbook statements; .claude/rules/auth.md copies them verbatim.
+// The D13 runbook statements.
 const (
 	grantStaffSQL  = `INSERT INTO public.staff_members (user_id) SELECT id FROM auth.users WHERE email = lower('<address>');`
 	removeStaffSQL = `DELETE FROM public.staff_members WHERE user_id = (SELECT id FROM auth.users WHERE email = lower('<address>'));`

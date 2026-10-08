@@ -38,7 +38,7 @@
 // the frontend calls the route differently.
 //
 // NAMING. Named for the SUBJECT rather than a capability: .claude/rules/e2e.md
-// forbids DATED files ("no dayN.spec.ts files") and fixes the organizing AXIS, explicitly
+// forbids DATED files and fixes the organizing AXIS, explicitly
 // leaving the file/directory layout to the implementation. A persona-named api
 // spec is what makes the asymmetry above visibly closed.
 //

@@ -58,8 +58,8 @@ func main() {
 	// (gated, DEMO-04) -> seed (gated), all complete before
 	// app.Run opens the listener, so a green /healthz continues to mean "fully
 	// provisioned" (task-128). Every step is fatal on error except the purge,
-	// which logs and continues — see db.Provision's doc comment. The gateway remains the fleet's single in-network migrator
-	// (.claude/rules/db-migrations.md): migrate is unconditional regardless of the
+	// which logs and continues — see db.Provision's doc comment. The gateway remains the fleet's single in-network migrator:
+	// migrate is unconditional regardless of the
 	// guard below, exactly as before.
 	//
 	// The bootstrap/seed guard reads the RAW

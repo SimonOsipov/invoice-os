@@ -823,7 +823,7 @@ test('register geometry: a blocked row costs no extra line and stands the same h
 
 // Core AC-2 and AC-3. Neither claim can be made in vitest -- jsdom has no layout engine, so
 // "nothing above the rows moved" and "the rows never emptied for a round trip" are
-// browser-only (.claude/rules/e2e.md).
+// browser-only.
 //
 // Measured from the VIEWPORT, not from inside the list container: `.pf-list-head` is that
 // container's first child (InvoicesList.tsx:565-566), so an in-container offset is 0 in both
@@ -2100,7 +2100,7 @@ test('resolve/unresolve loop: marking a failed invoice resolved drops it from ne
 // move together instead of drifting apart. The other two kinds (payload_not_built,
 // never_acknowledged) and the legacy-NULL case are proven by the Go/SPA unit suites plus the
 // seed + the Phase 3.5 deploy-gate checklist -- not a second/third/fourth copy of this test,
-// which .claude/rules/e2e.md names as the failure mode to avoid.
+// which the thin browser layer (.claude/rules/e2e.md) rules out.
 test('submission surface: a failed invoice with a recorded kind explains itself', async ({ page }) => {
   const errors = collectErrors(page)
 

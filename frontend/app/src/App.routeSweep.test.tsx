@@ -137,7 +137,7 @@ interface Row {
 
 // Forward onto a plain top-level view has no oracle at this layer: popTo is replaceState +
 // a synthetic PopStateEvent, so a Forward row would be a byte-identical copy of that view's
-// Back row. It is a browser-layer claim (.claude/rules/e2e.md), asserted deployed for two
+// Back row. It is a browser-layer claim, asserted deployed for two
 // of the thirteen by 'deployed app: Forward re-applies the view Back left'.
 const FORWARD_IS_BACK_AT_THIS_LAYER = {
   na: 'Forward onto a bare view is a byte-identical popTo call to its Back row -- same synthetic PopStateEvent, same expected view+pathname, no discriminating power (verified: a popstate mutation fails both identically). Browser layer owns it.',

@@ -139,7 +139,7 @@ export function buildMixedCsv(): string {
 // fixed literal, mirroring this file's own per-run-uniqueness discipline. A fixed literal
 // would collide on (tenant, entity, invoice_number) with any other row already carrying it:
 // an earlier spec in the same run, or the same test's own first attempt before a Playwright
-// retry. The per-PR reset (.claude/rules/e2e.md) clears the cross-RUN case only.
+// retry. The per-PR reset clears the cross-RUN case only.
 export function buildSingleInvoiceCsv(invoiceNumber: string): string {
   const lines: string[] = [PERF_HEADER]
   lines.push(

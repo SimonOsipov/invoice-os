@@ -831,7 +831,7 @@ test('in-house: a created role survives a reload, is selectable on a step this t
   // Per-run-unique, so nothing else in this run (nor this test's own pre-retry attempt, nor
   // a role a previous run's afterAll sweep failed to remove -- workflow_roles is EXCLUDED
   // from the per-PR reset, resetTables, and the boot-time demo purge that does delete it
-  // runs only at a gateway boot, .claude/rules/db-migrations.md) can collide with it, the title can
+  // runs only at a gateway boot) can collide with it, the title can
   // never be confused with a seeded one, and the afterAll sweep below can find it by
   // prefix alone.
   const stamp = Date.now()

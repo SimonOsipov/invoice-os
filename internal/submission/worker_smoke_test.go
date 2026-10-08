@@ -20,7 +20,7 @@
 // when that is unset, so a bare `go test ./...` and the default CI `go` job stay green
 // without a database. It runs only under the CI `queue` job or `make test-queue`, which
 // bootstrap the roles, migrate (creating River's tables + idempotency_keys), and set
-// DATABASE_URL to the invoice_app URL. See .claude/rules/db-migrations.md.
+// DATABASE_URL to the invoice_app URL.
 package submission_test
 
 import (

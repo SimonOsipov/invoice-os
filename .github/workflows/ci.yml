@@ -517,8 +517,7 @@ jobs:
     if: needs.changes.outputs.migrations == 'true'
     runs-on: ubuntu-latest
     # Postgres MAJOR must match the Railway-provisioned major (both 18 today —
-    # Railway's postgres-ssl template provisioned PG18) — bump together. See
-    # .claude/rules/db-migrations.md.
+    # Railway's postgres-ssl template provisioned PG18) — bump together.
     services:
       postgres:
         image: postgres:18
@@ -629,7 +628,7 @@ jobs:
   # and migrates exactly like the `migrations` job, then runs the suite as the
   # app/migrator/reader roles. The suite SKIPS itself when these DATABASE_* URLs are
   # absent, so the `go` job above and a bare local `go test ./...` stay green without
-  # a database. See .claude/rules/db-migrations.md. Deliberately not testcontainers — this
+  # a database. Deliberately not testcontainers — this
   # service-container + Makefile-bootstrap path adds no Go dependency and keeps one
   # canonical bootstrap.
   rls:

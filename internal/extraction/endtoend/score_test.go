@@ -776,7 +776,7 @@ func TestEndToEnd_EveryExpectationIsCarriedByTheFixtureBytes(t *testing.T) {
 // the corpus grew.
 func TestEndToEnd_TheScoredSetIsTheRequiredSet(t *testing.T) {
 	if len(requiredPDFs) != eeLayoutCount {
-		t.Fatalf("requiredPDFs holds %d layout(s), expectByLayout scores %d -- a layout on disk that the score never walks is unmeasured, and .claude/rules/extraction-corpus.md's \"Adding a layout\" list is short an edit", len(requiredPDFs), eeLayoutCount)
+		t.Fatalf("requiredPDFs holds %d layout(s), expectByLayout scores %d -- a layout on disk that the score never walks is unmeasured, and .claude/rules/extraction-corpus.md's new-layout steps are short an edit", len(requiredPDFs), eeLayoutCount)
 	}
 	scored := map[string]int{}
 	for _, want := range expectByLayout {

@@ -33,7 +33,7 @@ const NotActiveMemberMessage = "your membership in this workspace is not active"
 //
 // The core WithinTenantTx stays free of this auth dependency on purpose: the M5
 // worker has no request identity and calls WithinTenantTx directly with the job's
-// tenant_id (the worker-role pattern, .claude/rules/db-migrations.md).
+// tenant_id (the worker-role pattern, .claude/rules/tenant-seam.md).
 func WithinRequestTenantTx(ctx context.Context, pool *pgxpool.Pool, fn func(pgx.Tx) error) error {
 	return WithinRequestTenantTxOpts(ctx, pool, pgx.TxOptions{}, fn)
 }

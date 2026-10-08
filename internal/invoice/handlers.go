@@ -329,7 +329,7 @@ const notApproverTransmitReason = "Only an admin or a reviewer can submit an inv
 // FIELD — the notApproverTransmitReason precedent above. Those fields are the 409
 // body (statusForErr) and submit_blocked_reason (submitGate). The batch door has
 // no sentence field at all: BatchSubmitResultItem.Reason carries the machine token
-// awaiting_approval, which the SPA labels itself (.claude/rules/approvals.md).
+// awaiting_approval, which the SPA labels itself.
 // The SPA maps that token straight back to these bytes, pinned both ways by
 // TestAwaitingApprovalReason_MatchesTheSPASkipLabel.
 // Distinguishable on purpose from internal/approval's "no longer awaiting
@@ -781,7 +781,7 @@ func ListHandler(
 		}
 
 		// awaiting_approval (APPR-08-07): invoices an active approval policy still holds.
-		// A read filter, never a refusal (.claude/rules/approvals.md).
+		// A read filter, never a refusal.
 		awaitingApproval := false
 		if raw := query.Get("awaiting_approval"); raw != "" {
 			b, err := strconv.ParseBool(raw)

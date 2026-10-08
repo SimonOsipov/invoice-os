@@ -43,7 +43,7 @@ type SubmitArgs struct {
 func (SubmitArgs) Kind() string { return "submission_submit" }
 
 // Tenant satisfies queue.TenantScoped: the tenant this job runs its work under. EnqueueTx
-// requires it and fails closed if it diverges from the outbox tenant (.claude/rules/db-migrations.md).
+// requires it and fails closed if it diverges from the outbox tenant.
 func (a SubmitArgs) Tenant() string { return a.TenantID }
 
 // InsertOpts: MaxAttempts: 8 under River's unmodified attempt^4s policy is the

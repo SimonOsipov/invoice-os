@@ -861,7 +861,10 @@ first attempt (`SignInMaxFailures`, `SignInWindow`).
 **Precedence in the app.** A live stored hand-off session wins over `?handoff=`: the code is
 stripped and not acted on, so a URL never replaces a real session. A
 user signed in as A who signs in on landing as B arrives back in A's workspace with no
-message; B's code expires unused. Sign out first to switch accounts. With an invite held
+message; B's code expires unused. Sign out first to switch accounts. A live
+`invoice-os.pendingVerify` marker (step 3) turns the message on: the app shows the confirmed
+notice and posts nothing. Guarded by `App.sessionHandoff.test.tsx` "a verify code over a live
+session keeps A, posts nothing and shows the confirmed notice". With an invite held
 (D11) the code is redeemed over a live stored session: success replaces it, a refusal or
 any failure leaves it stored. Guarded by `App.inviteAccept.test.tsx` "a held invite redeems
 a hand-off over a live stored session". A stored hand-off

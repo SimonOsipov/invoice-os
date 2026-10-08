@@ -452,6 +452,18 @@ describe('?auth=verify opens the gateway confirm page (LOGFIX-04-05)', () => {
     expect(sessionStorage.getItem('invoice-os.pendingVerify')).not.toBeNull()
   })
 
+  it('the confirm token is stripped from the address bar and never logged or stored', () => {
+    configure()
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) => vi.spyOn(console, m))
+    boot(`/?auth=verify#token=${T}`)
+    expect(window.location.hash).toBe('')
+    expect(window.location.search).toBe('')
+    expect(spies.flatMap((sp) => sp.mock.calls).filter((c) => JSON.stringify(c).includes(T))).toEqual([])
+    const stored = [localStorage, sessionStorage].flatMap((st) => Object.keys(st).map((k) => st.getItem(k) ?? ''))
+    expect(stored.length).toBeGreaterThan(0)
+    expect(stored.filter((v) => v.includes(T))).toEqual([])
+  })
+
   it('StrictMode auth=verify navigates once', () => {
     configure()
     const hrefWrites = boot(`/?auth=verify#token=${T}`, true)
@@ -487,6 +499,7 @@ describe('?auth=verify opens the gateway confirm page (LOGFIX-04-05)', () => {
       configure()
       const hrefWrites = boot(`/?auth=verify${hash}`)
       expect(hrefWrites).toEqual(['https://landing.example/?verify=failed'])
+      expect(sessionStorage.getItem('invoice-os.pendingVerify')).toBeNull()
     }
     cleanup()
     vi.unstubAllEnvs()

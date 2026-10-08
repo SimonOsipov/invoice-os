@@ -1027,6 +1027,35 @@ describe('a confirm code over a live session (LOGFIX-04-05, D10, D18)', () => {
     expect(toast()?.textContent).toContain(NOTICE('to another account'))
   })
 
+  it('a stale verify marker over a live session shows no notice', async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(A_TOKEN, A_ME))
+    holdPendingVerify(Date.now() - 11 * 60 * 1000)
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    await settle()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(toast()).toBeNull()
+  })
+
+  it('a handoff beside auth=verify over a live session neither bounces nor posts, and names A', async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(A_TOKEN, A_ME))
+    ensureSignInState()
+    holdPendingVerify()
+    window.history.replaceState(null, '', `/?handoff=${CODE}&auth=verify#token=tok_1`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    await settle()
+    expect(hrefWrites).toEqual([])
+    expect(exchangeBodies).toHaveLength(0)
+    expect(storedRecord()?.token).toBe(A_TOKEN)
+    expect(toast()?.textContent).toContain(NOTICE('as a@corp.example'))
+  })
+
   it('the confirmed notice renders the email as text', async () => {
     await bootOverLive({ ...A_ME, user: { ...A_ME.user, email: '<b id="x">a</b>@corp.example' } })
     expect(toast()?.querySelector('#x')).toBeNull()

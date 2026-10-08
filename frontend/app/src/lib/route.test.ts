@@ -947,7 +947,7 @@ describe('ROUTE-03-05 AC-1: no retired review-hash fragment survives in the app'
       expect(code.includes(REVIEW_FRAGMENT), `${name} still mentions the retired review-hash fragment`).toBe(false)
       // App.tsx keeps exactly two fragment reads, the invite link's and the confirm link's; any other read is a review hash returning.
       const reads = code.match(FRAGMENT_READ) ?? []
-      expect(reads.length, `${name} reads or writes the url fragment ${inviteReads === 0 ? 'at all' : 'beyond the invite link'}`).toBe(inviteReads)
+      expect(reads.length, `${name} reads or writes the url fragment ${inviteReads === 0 ? 'at all' : 'beyond the invite and confirm links'}`).toBe(inviteReads)
       if (inviteReads > 0) {
         // Control needle: the allowed reads are the invite's and the confirm link's, so the count above is not a count of nothing.
         expect(code.includes(INVITE_FRAGMENT_READ), `${name} no longer reads the invite fragment through readInviteFragment`).toBe(true)

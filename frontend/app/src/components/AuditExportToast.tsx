@@ -1,4 +1,4 @@
-// The audit export's outcome toast (success or an aborted download).
+// The workspace's one notice toast: the audit export's outcome, and App's confirmed-email notice.
 // Fixed geometry, own expiry timer.
 
 import { useEffect } from 'react'
@@ -13,7 +13,7 @@ export function AuditExportToast({
   text,
   onDismiss,
   // AUDIT-07's assertions address this toast by its default; only the evidence-bundle
-  // download passes a different one. EB-06-9's second render is the oracle.
+  // download and App's confirmed-email notice pass a different one. EB-06-9's second render is the oracle.
   testId = DEFAULT_TEST_ID,
   maxWidth = 640,
 }: {

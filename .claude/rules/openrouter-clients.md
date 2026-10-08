@@ -23,7 +23,8 @@ paths:
 - Accept an absent key or exactly `""` as a blanked key. Railway stores an empty-string variable.
 - Match the key variable name exactly. Never print its value.
 - Read the model, the endpoint and the retry budget from constants. Add no variable for any of them.
-- Treat an unset or empty key as off when fake mode is off. `Enabled()` is false and `Call` returns `ErrOff` having sent nothing.
+- Treat an unset or empty key as off when fake mode is off. `Enabled()` is false on both clients.
+- Return `ai.ErrOff` from `ai.Client.Call` when off, having sent nothing. `jev.Client.Ask` returns an error that wraps `jev.ErrCheckSkipped`.
 - Never trim or validate the key. Any other value counts as set, whitespace included.
 - Parse `AI_FAKE` and `JEV_FAKE` with `strconv.ParseBool`. Never trim them. An unparseable value makes `FromEnv` return an error.
 - Let `AI_FAKE` win over a key. A set key is never used for the wire request.

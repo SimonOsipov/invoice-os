@@ -2,6 +2,7 @@
 paths:
   - "frontend/landing/src/components/Privacy*"
   - "frontend/landing/src/components/DemoLeadForm*"
+  - "frontend/landing/src/components/MarketingConsent*"
   - "frontend/landing/src/components/demoForm*"
   - "frontend/landing/src/analytics*"
   - "frontend/landing/src/consent*"

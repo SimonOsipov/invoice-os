@@ -1334,6 +1334,8 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
   const resp = await importResp
   const body = (await resp.json()) as MixedImportResponse
+  // The app routes to the review a tick after the response; leaving earlier lets its URL write overwrite ours.
+  await expect(page).toHaveURL(/\/imports\/[^/]+\/review$/)
 
   // 2. The real invoice_id of INV-UI-MIX-VIOLATE, which fires ONLY vat-standard-rate
   // (buildMixedCsv's doc comment; re-verified live at import-wizard.spec.ts:286).
@@ -2868,6 +2870,8 @@ test("invoice detail: the source-document card states the real range, and the mo
   )
   await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
   await importResp
+  // The app routes to the review a tick after the response; leaving earlier lets its URL write overwrite ours.
+  await expect(page).toHaveURL(/\/imports\/[^/]+\/review$/)
 
   await goToInvoices(page)
   await openInvoiceRow(page, 'INV-UI-MIX-VIOLATE')

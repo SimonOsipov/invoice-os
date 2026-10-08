@@ -383,4 +383,12 @@ describe('the menu Library link', () => {
     act(() => void links.at(-1)!.click())
     expect(menu()).toBeNull()
   })
+
+  it('menu_theLibraryHrefIgnoresHrefPrefix', () => {
+    mount({ hrefPrefix: '/', libraryHref: 'https://lib.x' })
+    toggle()
+    const hrefs = Array.from(menu()!.querySelectorAll('a')).map((a) => a.getAttribute('href'))
+    expect(hrefs.at(-1)).toBe('https://lib.x')
+    expect(hrefs.slice(0, -1).every((h) => h!.startsWith('/#'))).toBe(true)
+  })
 })

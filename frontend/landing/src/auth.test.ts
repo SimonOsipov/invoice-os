@@ -54,5 +54,8 @@ describe('libraryBase', () => {
       vi.stubEnv('VITE_LIBRARY_URL', blank)
       expect(libraryBase(), JSON.stringify(blank)).toBeNull()
     }
+    vi.stubEnv('VITE_LIBRARY_URL', undefined)
+    expect(import.meta.env.VITE_LIBRARY_URL, 'control: the var is really unset').toBeUndefined()
+    expect(libraryBase()).toBeNull()
   })
 })

@@ -238,9 +238,13 @@ test.describe('library layout at wide widths', () => {
       const label = player.getByText(/^\d{2} \/ \d{2}$/)
       await expect(label).toBeVisible()
       const n = Number((await label.textContent())!.slice(5))
-      await page.getByRole('button', { name: 'Play or pause' }).click()
       const scene = page.getByTestId('lib-scene')
       const scrub = page.locator('#lib-scrub')
+      const toggle = page.getByRole('button', { name: 'Play or pause' })
+      // a click on an ended clock restarts it, so only a playing clock is toggled; a seek pauses an ended one
+      if ((await toggle.getAttribute('data-state')) === 'playing') await toggle.click()
+      if ((await toggle.getAttribute('data-state')) === 'ended') await scrub.click({ position: { x: 1, y: 3 } })
+      await expect(toggle, `${gid}/${fid}: the player is paused before seeking`).toHaveAttribute('data-state', 'paused')
       for (const width of WIDE_WIDTHS) {
         await resize(page, width, 1080)
         for (let i = 0; i < n; i++) {

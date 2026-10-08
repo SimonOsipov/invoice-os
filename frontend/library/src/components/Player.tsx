@@ -43,6 +43,7 @@ export function Player({ feature, clock, onToggle, onSeek }: {
           type="button"
           className="lib-play"
           aria-label="Play or pause"
+          data-state={clock.playing ? 'playing' : clock.ended ? 'ended' : 'paused'}
           onClick={onToggle}
           style={{ flex: 'none', width: 40, height: 40, borderRadius: '50%', border: 0, cursor: 'pointer', background: 'var(--accent)', color: 'var(--accent-foreground)', display: 'grid', placeItems: 'center' }}
         >

@@ -176,4 +176,8 @@ describe('library entry', () => {
     const buttons = [...html.matchAll(/<button\b([^>]*)>/g)].map((m) => m[1].match(/class="([^"]*)"/)?.[1])
     expect(buttons).toEqual(['lib-play'])
   })
+
+  it('VE-10 the back button hover is a rule in library.css', () => {
+    expect(ruleFor(rules(read(join(HERE, 'styles/library.css'))), '.lib-back:hover').color).toBe('var(--teal) !important')
+  })
 })

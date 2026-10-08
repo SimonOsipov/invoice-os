@@ -19,6 +19,7 @@ function mount(path: string) {
 }
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
   errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 })
 
@@ -26,6 +27,7 @@ afterEach(() => {
   act(() => root.unmount())
   container.remove()
   vi.unstubAllEnvs()
+  vi.useRealTimers()
   const errors = errorSpy.mock.calls.length
   errorSpy.mockRestore()
   expect(errors).toBe(0)
@@ -39,6 +41,10 @@ const click = (el: Element) => act(() => el.dispatchEvent(new MouseEvent('click'
 const card = (name: string) => [...container.querySelectorAll<HTMLElement>('.lib-card')].find((e) => e.textContent!.includes(name))!
 const stage = (label: string) => [...container.querySelectorAll<HTMLElement>('.lib-stage')].find((e) => e.textContent!.includes(label))!
 const h2s = () => [...main().querySelectorAll('h2')].map((h) => h.textContent)
+const pos = () => [...main().querySelectorAll('span.mono')].map((e) => e.textContent!).find((t) => /^\d\d \/ \d\d$/.test(t))
+const clock = () => [...main().querySelectorAll('span.mono')].map((e) => e.textContent!).find((t) => /^\d:\d\d \/ \d:\d\d$/.test(t))
+const advance = (ms: number) => act(() => vi.advanceTimersByTime(ms))
+const playBtn = () => main().querySelector<HTMLElement>('.lib-play')!
 const links = (text: string) => [...container.querySelectorAll('a')].filter((a) => a.textContent!.includes(text))
 
 async function move(go: () => void) {
@@ -74,7 +80,7 @@ describe('App', () => {
     expect(byText('aside button', 'Submit for FIRS clearance').style.color).toBe('var(--accent)')
     expect(stage('Clear').style.background).toBe('var(--sage-panel)')
     expect(stage('Validate').style.background).toBe('transparent')
-    expect(main().querySelector('h2')).toBeNull()
+    expect(main().querySelector('h2')!.textContent).toBe('Submit for FIRS clearance')
     act(() => root.unmount())
     container.remove()
 
@@ -193,15 +199,139 @@ describe('App', () => {
     expect(links('Open in Platform')).toHaveLength(0)
   })
 
-  it('featurePath_rendersNoOpenInPlatform', () => {
+  it('featurePath_showsOpenInPlatformOnlyForShippedFeatures', () => {
     vi.stubEnv('VITE_APP_URL', 'https://a.example')
+    mount('/rules/validate')
+    expect(links('Open in Platform').map((a) => a.getAttribute('href'))).toEqual(['https://a.example/invoices?via=library'])
+    act(() => root.unmount())
+    container.remove()
+
     mount('/notifications/alerts')
     expect(links('Open in Platform')).toHaveLength(0)
-    expect(byText('aside button', 'Alerts where you workComing soon').textContent).toContain('Coming soon')
+    expect(main().textContent).toContain('Coming soon')
+    advance(3400)
+    expect(pos()).toBe('02 / 03')
+  })
+
+  it('feature_autoplaysOneStepEvery3_4Seconds', () => {
+    mount('/invoices/import-files')
+    expect([pos(), clock()]).toEqual(['01 / 04', '0:00 / 0:13'])
+    advance(3300)
+    expect(pos()).toBe('01 / 04')
+    advance(100)
+    expect([pos(), clock()]).toEqual(['02 / 04', '0:03 / 0:13'])
+    expect(main().textContent).toContain('Columns are matched to invoice fields')
+    advance(3400)
+    expect(pos()).toBe('03 / 04')
+  })
+
+  it('feature_stopsOnTheLastStepAndReplays', () => {
+    mount('/invoices/import-files')
+    advance(13600)
+    expect([pos(), clock()]).toEqual(['04 / 04', '0:13 / 0:13'])
+    expect(playBtn().innerHTML).toContain('M21 3v5h-5')
+    expect(vi.getTimerCount()).toBe(0)
+    advance(5000)
+    expect([pos(), clock()]).toEqual(['04 / 04', '0:13 / 0:13'])
+    click(playBtn())
+    expect([pos(), clock()]).toEqual(['01 / 04', '0:00 / 0:13'])
+    expect(vi.getTimerCount()).toBe(1)
+  })
+
+  it('feature_pausesAndResumes', () => {
+    mount('/invoices/import-files')
+    advance(3400)
+    expect(pos()).toBe('02 / 04')
+    click(playBtn())
+    expect(vi.getTimerCount()).toBe(0)
+    advance(10000)
+    expect(pos()).toBe('02 / 04')
+    click(playBtn())
+    advance(3400)
+    expect(pos()).toBe('03 / 04')
+  })
+
+  it('feature_scrubMovesToTheClickedTime', () => {
+    mount('/invoices/import-files')
+    const scrub = container.querySelector<HTMLElement>('#lib-scrub')!
+    scrub.getBoundingClientRect = () => ({ left: 0, width: 400 }) as DOMRect
+    act(() => scrub.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 300 })))
+    expect([pos(), clock()]).toEqual(['04 / 04', '0:10 / 0:13'])
+    expect(vi.getTimerCount()).toBe(1)
+    advance(3400)
+    expect([pos(), clock()]).toEqual(['04 / 04', '0:13 / 0:13'])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('feature_stepListJumpsAndPlays', () => {
+    mount('/invoices/import-files')
+    click(playBtn())
+    const third = [...main().querySelectorAll('button')].find((b) => b.textContent === '03One invoice is created per row')!
+    click(third)
+    expect([pos(), clock()]).toEqual(['03 / 04', '0:06 / 0:13'])
+    advance(3400)
+    expect(pos()).toBe('04 / 04')
+  })
+
+  it('feature_leavingStopsTheTimerAndReturningStartsAtStepOne', async () => {
+    mount('/invoices/import-files')
+    advance(6800)
+    expect(pos()).toBe('03 / 04')
+    click(nav('invoices'))
+    expect(vi.getTimerCount()).toBe(0)
+    expect(window.location.pathname).toBe('/invoices')
+    click(container.querySelector('#fc-import-files')!)
+    expect([pos(), clock()]).toEqual(['01 / 04', '0:00 / 0:13'])
+    expect(vi.getTimerCount()).toBe(1)
+    advance(6800)
+    await move(() => window.history.back())
+    expect(vi.getTimerCount()).toBe(0)
+    await move(() => window.history.forward())
+    expect(pos()).toBe('01 / 04')
+    expect(vi.getTimerCount()).toBe(1)
+  })
+
+  it('feature_relatedOpensThatFeatureAtStepOne', () => {
+    mount('/invoices/import-files')
+    advance(3400)
+    click(card('Read PDFs and scans'))
+    expect(window.location.pathname).toBe('/recognition/read-documents')
+    expect(h2s()).toEqual(['Read PDFs and scans'])
+    expect(pos()).toBe('01 / 03')
+    expect(vi.getTimerCount()).toBe(1)
     act(() => root.unmount())
     container.remove()
 
     mount('/rules/validate')
-    expect(links('Open in Platform')).toHaveLength(0)
+    click(card('A rule set for every invoice'))
+    expect(window.location.pathname).toBe('/rules/rule-library')
+    expect(pos()).toBe('01 / 03')
+    expect(main().textContent).toContain('Coming soon')
+  })
+
+  it('feature_clickingTheCurrentFeatureRestartsItsDemo', () => {
+    mount('/invoices/import-files')
+    advance(13600)
+    expect(pos()).toBe('04 / 04')
+    expect(vi.getTimerCount()).toBe(0)
+    const len = window.history.length
+    click(byText('aside button', 'Import from CSV or Excel'))
+    expect([pos(), clock()]).toEqual(['01 / 04', '0:00 / 0:13'])
+    expect(vi.getTimerCount()).toBe(1)
+    expect(window.history.length).toBe(len)
+    advance(3400)
+    expect(pos()).toBe('02 / 04')
+    click(playBtn())
+    click(byText('aside button', 'Import from CSV or Excel'))
+    expect(pos()).toBe('01 / 04')
+    expect(vi.getTimerCount()).toBe(1)
+  })
+
+  it('feature_backButtonOpensTheGroup', () => {
+    mount('/rules/validate')
+    click(main().querySelector('.lib-back')!)
+    expect(window.location.pathname).toBe('/rules')
+    expect(h2s()).toEqual(['Rules & validation'])
+    expect(vi.getTimerCount()).toBe(0)
   })
 })

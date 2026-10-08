@@ -28,3 +28,4 @@ a:hover { color: var(--teal); }
 .lib-stage:hover { background: var(--sage-panel) !important; }
 .lib-card:hover { border-color: var(--primary) !important; }
 .lib-play:hover { filter: brightness(1.06); }
+.lib-back:hover { color: var(--teal) !important; }

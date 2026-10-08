@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { GROUPS } from './content'
 import { Home } from './components/Home'
+import { FeaturePage } from './components/FeaturePage'
 import { GroupPage } from './components/GroupPage'
 import { JourneyStepper } from './components/JourneyStepper'
 import { Sidebar } from './components/Sidebar'
-import { demoHref, groupPlatformHref } from './links'
+import { demoHref, featurePlatformHref, groupPlatformHref } from './links'
 import { libraryPath, parseLibraryPath, type Route } from './route'
 import type { Feature, Group } from './types'
 
@@ -15,6 +16,8 @@ const toTop = () => {
 
 export function App() {
   const [route, setRoute] = useState<Route>(() => parseLibraryPath(window.location.pathname))
+  // Re-clicking the open feature remounts its page, so the demo restarts.
+  const [visit, setVisit] = useState(0)
 
   useEffect(() => {
     const onPop = () => {
@@ -38,7 +41,9 @@ export function App() {
   const goGroup = (group: Group) => navigate({ view: 'group', group })
   const goFeature = (feature: Feature) => {
     const group = GROUPS.find((g) => g.id === feature.gid)
-    if (group) navigate({ view: 'feature', group, feature })
+    if (!group) return
+    setVisit((v) => v + 1)
+    navigate({ view: 'feature', group, feature })
   }
   const demo = demoHref()
   // ceiling: inert until the tour ships
@@ -65,6 +70,16 @@ export function App() {
           <GroupPage
             group={route.group}
             openHref={groupPlatformHref(route.group)}
+            onFeature={goFeature}
+          />
+        )}
+        {route.view === 'feature' && (
+          <FeaturePage
+            key={`${route.feature.id}:${visit}`}
+            group={route.group}
+            feature={route.feature}
+            openHref={featurePlatformHref(route.feature)}
+            onGroup={goGroup}
             onFeature={goFeature}
           />
         )}

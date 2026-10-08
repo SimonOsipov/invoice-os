@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { Home } from './components/Home'
 import { GroupPage } from './components/GroupPage'
+import { FeaturePage } from './components/FeaturePage'
 import { Player } from './components/Player'
 import { SceneView } from './components/SceneView'
 import { COMING_SOON_IDS, FEATURES, GROUPS } from './content'
@@ -783,5 +784,117 @@ describe('library player', () => {
     click(100)
     expect(sought).toBe(0)
     expect(toggled).toBe(1)
+  })
+})
+
+const featurePage = (id: string, openHref: string | null = null) => {
+  const f = FEATURE(id)
+  const g = GROUPS.find((x) => x.id === f.gid)!
+  return { f, g, ts: parse(renderToStaticMarkup(createElement(FeaturePage, { group: g, feature: f, openHref, onGroup: noop, onFeature: noop }))) }
+}
+// Tags of one panel: from its eyebrow to the next eyebrow (or the end).
+const panelOf = (ts: Tag[], label: string) => {
+  const start = ts.indexOf(eyebrow(ts, label))
+  const next = ts.findIndex((t, i) => i > start && attr(t, 'class') === 't-eyebrow')
+  return ts.slice(start, next < 0 ? ts.length : next)
+}
+
+describe('library feature page', () => {
+  it('FP-01 the header shows the group, the title and the description', () => {
+    const { f, g, ts } = featurePage('validate')
+    expect(g.name).toBe('Rules & validation')
+    const [section] = named(ts, 'section')
+    expect(style(section)).toMatchObject({ padding: '40px 40px 88px', 'max-width': '1080px', gap: '36px' })
+    expect(style(ts[ts.indexOf(section) + 1])).toMatchObject({ 'max-width': '720px', gap: '18px' })
+    const back = named(ts, 'button')[0]
+    expect(attr(back, 'class')).toBe('lib-back')
+    expect(style(back)).toMatchObject({ color: 'var(--link)', 'font-size': '13px' })
+    const svg = ts[ts.indexOf(back) + 1]
+    expect([svg.name, attr(svg, 'width'), attr(svg, 'height')]).toEqual(['svg', '15', '15'])
+    expect(renderToStaticMarkup(createElement(FeaturePage, { group: g, feature: f, openHref: null, onGroup: noop, onFeature: noop }))).toContain(
+      renderToStaticMarkup(createElement(Icon, { name: 'chevron-left', size: 15 })),
+    )
+    expect(ts.slice(ts.indexOf(svg)).find((t) => t.text === esc(g.name))).toBeDefined()
+    const h2 = only(ts, 'h2')
+    expect(attr(h2, 'class')).toBe('t-h2')
+    expect(style(h2)['font-size']).toBe('44px')
+    expect(h2.text).toBe(f.title)
+    const lead = ts.filter((t) => attr(t, 'class') === 't-lead')
+    expect(lead).toHaveLength(1)
+    expect(lead[0].text).toBe(esc(f.desc))
+  })
+
+  it('FP-02 Open in Platform is a primary arrow link for a shipped feature, absent for Coming soon', () => {
+    const href = 'https://a.example/invoices?via=library'
+    const ts = featurePage('validate', href).ts
+    const a = only(ts, 'a')
+    expect(a.text).toBe('Open in Platform')
+    expect(attr(a, 'class')).toBe('ds-btn ds-btn--primary ds-btn--sm')
+    expect(attr(a, 'href')).toBe(href)
+    expect(ts[ts.indexOf(a) + 1].name).toBe('svg')
+    expect(ts.some((t) => t.text === 'Coming soon')).toBe(false)
+
+    const soon = featurePage('alerts', null).ts
+    expect(FEATURE('alerts').status).toBe('soon')
+    const pill = withText(soon, 'Coming soon')
+    expect(style(pill).background).toBe('var(--status-progress-bg)')
+    expect(soon.indexOf(pill)).toBeLessThan(soon.indexOf(only(soon, 'h2')))
+    expect(named(soon, 'a')).toHaveLength(0)
+  })
+
+  it('FP-03 What you get lists the benefits', () => {
+    const { f, ts } = featurePage('validate')
+    const p = panelOf(ts, 'What you get')
+    const rows = p.filter((t) => attr(t, 'class') === 't-body')
+    expect(f.benefits).toHaveLength(3)
+    expect(rows.map((r) => r.text)).toEqual(f.benefits.map(esc))
+    const icons = where(p, (s) => s.color === 'var(--teal)')
+    expect(icons).toHaveLength(3)
+    icons.forEach((i) => expect(attr(p[p.indexOf(i) + 1], 'width')).toBe('18'))
+    rows.forEach((r) => expect(style(r).color).toBe('var(--foreground)'))
+    const grid = where(ts, (s) => s['grid-template-columns'] === 'repeat(auto-fit, minmax(280px, 1fr))')
+    expect(grid).toHaveLength(1)
+    expect(style(grid[0]).gap).toBe('40px')
+  })
+
+  it('FP-04 In this demo lists the captions and marks the current step', () => {
+    const { f, ts } = featurePage('import-files')
+    const p = panelOf(ts, 'In this demo')
+    const btns = named(p, 'button')
+    expect(btns).toHaveLength(f.sc.steps.length)
+    const steps = btns.map((b) => p.slice(p.indexOf(b), p.indexOf(b) + 3))
+    expect(steps.map((x) => x[1].text)).toEqual(['01', '02', '03', '04'])
+    expect(f.sc.steps).toHaveLength(4)
+    expect(steps.map((x) => x[2].text)).toEqual(f.sc.steps.map((s) => esc(s.cap)))
+    expect(attr(btns[0], 'aria-current')).toBe('step')
+    expect(style(steps[0][2])['font-weight']).toBe('700')
+    expect(style(btns[0]).color).toBe('var(--ink)')
+    expect(style(steps[0][1]).color).toBe('var(--teal)')
+    for (const k of [1, 2, 3]) {
+      expect(attr(btns[k], 'aria-current')).toBeUndefined()
+      expect(style(steps[k][2])['font-weight']).toBe('500')
+      expect(style(btns[k]).color).toBe('var(--text-copy)')
+      expect(style(steps[k][1]).color).toBe('var(--step-label)')
+    }
+  })
+
+  it('FP-05 Related lists each rel feature with its group', () => {
+    const { f, ts } = featurePage('import-files')
+    const p = panelOf(ts, 'Related')
+    const cards = named(p, 'button')
+    expect(cards.map((c) => attr(c, 'class'))).toEqual(['lib-card', 'lib-card', 'lib-card'])
+    const want = f.rel.map((id) => {
+      const r = FEATURE(id)
+      return [GROUPS.find((g) => g.id === r.gid)!.name, r.title]
+    })
+    const got = cards.map((c) => {
+      const [g, t] = p.slice(p.indexOf(c) + 1, p.indexOf(c) + 3)
+      expect(attr(g, 'class')).toBe('t-step')
+      expect(style(t)['font-size']).toBe('15px')
+      return [g.text, t.text]
+    })
+    expect(got).toEqual(want.map(([g, t]) => [esc(g), esc(t)]))
+    expect(got[0]).toEqual(['Document recognition', 'Read PDFs and scans'])
+    expect(named(panelOf(featurePage('roles').ts, 'Related'), 'button')).toHaveLength(2)
   })
 })

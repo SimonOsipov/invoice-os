@@ -2809,6 +2809,8 @@ test('deployed app: the Join screen and the chooser stack at every width', async
   const singleAccount = await registerFresh('join-single')
   await inviteWithToken(long.adminToken, long.tenantId, singleAccount.email)
   await page.goto('about:blank')
+  // The sweep ends at 375 px, where the landing header folds Sign in into the mobile menu.
+  await page.setViewportSize({ width: 1280, height: 1080 })
   await passFrontDoor(page, singleAccount, '/')
   await expect(page.getByRole('heading', { name: `Join ${long.name}`, exact: true })).toBeVisible({ timeout: 30_000 })
   const singleText = page.getByText(`${'D'.repeat(200)} invited you as Reviewer.`, { exact: true })

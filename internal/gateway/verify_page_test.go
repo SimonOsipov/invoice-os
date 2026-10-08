@@ -662,7 +662,11 @@ func TestVerifyPage_MalformedStateBounces(t *testing.T) {
 }
 
 func TestVerifyPage_HeadWithoutStateBounces(t *testing.T) {
-	vpBounced(t, vpDo(t, vpHandler(t), http.MethodHead, vpQueryBare(vpToken)), bounceLocation)
+	rec := vpDo(t, vpHandler(t), http.MethodHead, vpQueryBare(vpToken))
+	vpBounced(t, rec, bounceLocation)
+	if rec.Body.Len() != 0 {
+		t.Errorf("HEAD bounce body = %q, want empty", rec.Body.String())
+	}
 }
 
 func TestVerifyPage_BounceEscapesTheToken(t *testing.T) {

@@ -12,7 +12,8 @@ type SidebarProps = {
   onHome: () => void
   onGroup: (g: Group) => void
   onFeature: (f: Feature) => void
-  onTour: () => void
+  onTour: (() => void) | null
+  tourLabel?: string
   onCookieChoices: () => void
 }
 
@@ -29,7 +30,16 @@ const navButton = {
   fontSize: '13.5px',
 } as const
 
-export function Sidebar({ route, demoHref, onHome, onGroup, onFeature, onTour, onCookieChoices }: SidebarProps) {
+export function Sidebar({
+  route,
+  demoHref,
+  onHome,
+  onGroup,
+  onFeature,
+  onTour,
+  tourLabel = 'Take the tour',
+  onCookieChoices,
+}: SidebarProps) {
   const home = route.view === 'home'
   return (
     <aside
@@ -83,29 +93,33 @@ export function Sidebar({ route, demoHref, onHome, onGroup, onFeature, onTour, o
             LIBRARY
           </span>
         </button>
-        <button
-          type="button"
-          className="lib-tour"
-          onClick={onTour}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 10,
-            width: '100%',
-            height: 42,
-            border: 0,
-            borderRadius: 7,
-            background: 'var(--accent)',
-            color: 'var(--accent-foreground)',
-            fontSize: 14,
-            fontWeight: 700,
-            cursor: 'pointer',
-          }}
-        >
-          <Icon name="play" size={15} />
-          <span>Take the tour</span>
-        </button>
+        {onTour !== null && (
+          <button
+            type="button"
+            className="lib-tour"
+            onClick={onTour}
+            style={{
+              position: 'relative',
+              zIndex: 61,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 10,
+              width: '100%',
+              height: 42,
+              border: 0,
+              borderRadius: 7,
+              background: 'var(--accent)',
+              color: 'var(--accent-foreground)',
+              fontSize: 14,
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            <Icon name="play" size={15} />
+            <span>{tourLabel}</span>
+          </button>
+        )}
       </div>
       <nav
         style={{
@@ -133,7 +147,7 @@ export function Sidebar({ route, demoHref, onHome, onGroup, onFeature, onTour, o
           <Icon name="layout-dashboard" size={17} />
           <span style={{ flex: 1 }}>Overview</span>
         </button>
-        <div className="t-meta" style={{ padding: '16px 10px 8px', color: 'var(--fg-4)', fontSize: 10, letterSpacing: '0.1em' }}>
+        <div className="t-meta lib-navlabel" style={{ padding: '16px 10px 8px', color: 'var(--fg-4)', fontSize: 10, letterSpacing: '0.1em' }}>
           FEATURE GROUPS
         </div>
         {GROUPS.map((g) => {
@@ -161,6 +175,7 @@ export function Sidebar({ route, demoHref, onHome, onGroup, onFeature, onTour, o
               </button>
               {open && (
                 <div
+                  className="lib-subnav"
                   style={{
                     display: 'flex',
                     flexDirection: 'column',

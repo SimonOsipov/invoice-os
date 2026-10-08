@@ -1,18 +1,23 @@
 import { useCallback, useEffect, useState } from 'react'
-import { GROUPS } from './content'
+import { GROUPS, TOUR } from './content'
 import { Home } from './components/Home'
 import { FeaturePage } from './components/FeaturePage'
 import { GroupPage } from './components/GroupPage'
 import { JourneyStepper } from './components/JourneyStepper'
 import { Sidebar } from './components/Sidebar'
+import { TourOverlay } from './components/TourOverlay'
 import { chooseConsent, CookieNotice, readConsent } from './analytics'
 import { demoHref, featurePlatformHref, groupPlatformHref, privacyHref } from './links'
 import { libraryPath, parseLibraryPath, type Route } from './route'
+import { TOUR_START, tourBack, tourButtonLabel, tourNext, tourStage, type TourState } from './tour'
 import type { Feature, Group } from './types'
+import { usePhone } from './phone'
+import { useTourSpot } from './useTourSpot'
 
 const toTop = () => {
   const main = document.getElementById('lib-main')
   if (main) main.scrollTop = 0
+  document.documentElement.scrollTop = 0
 }
 
 export function App() {
@@ -21,9 +26,13 @@ export function App() {
   const [visit, setVisit] = useState(0)
   const [consent, setConsent] = useState(() => readConsent())
   const [reopened, setReopened] = useState(false)
+  const [tour, setTour] = useState<TourState | null>(null)
+  const phone = usePhone()
+  const tourOn = tour !== null && !phone
 
   useEffect(() => {
     const onPop = () => {
+      setTour(null)
       setRoute(parseLibraryPath(window.location.pathname))
       toTop()
     }
@@ -40,17 +49,34 @@ export function App() {
     toTop()
   }, [])
 
-  const goHome = () => navigate({ view: 'home' })
-  const goGroup = (group: Group) => navigate({ view: 'group', group })
+  const go = (next: Route) => {
+    setTour(null)
+    navigate(next)
+  }
+  const goHome = () => go({ view: 'home' })
+  const goGroup = (group: Group) => go({ view: 'group', group })
   const goFeature = (feature: Feature) => {
     const group = GROUPS.find((g) => g.id === feature.gid)
     if (!group) return
     setVisit((v) => v + 1)
-    navigate({ view: 'feature', group, feature })
+    go({ view: 'feature', group, feature })
   }
   const demo = demoHref()
-  // ceiling: inert until the tour ships
-  const onTour = () => {}
+
+  const startTour = () => setTour(TOUR_START)
+  const toggleTour = () => setTour((t) => (t ? null : TOUR_START))
+  const stepTo = (next: TourState | null) => {
+    setTour(next)
+    if (next?.phase === 'card') {
+      const group = GROUPS.find((g) => g.id === TOUR[next.i].g)
+      if (group) navigate({ view: 'group', group })
+    }
+  }
+  const watch = (t: TourState) => {
+    const feature = GROUPS.flatMap((g) => g.feats).find((f) => f.id === TOUR[t.i].f)
+    if (feature) goFeature(feature)
+  }
+  const { rect, win } = useTourSpot(tourOn ? tour : null, libraryPath(route))
 
   return (
     <div
@@ -71,12 +97,13 @@ export function App() {
         onHome={goHome}
         onGroup={goGroup}
         onFeature={goFeature}
-        onTour={onTour}
+        tourLabel={tourButtonLabel(tourOn ? tour : null)}
+        onTour={phone ? null : toggleTour}
         onCookieChoices={() => setReopened(true)}
       />
       <main id="lib-main" style={{ flex: 1, minWidth: 0, overflowY: 'auto', position: 'relative' }}>
-        <JourneyStepper route={route} onGroup={goGroup} />
-        {route.view === 'home' && <Home demoHref={demo} onGroup={goGroup} onTour={onTour} />}
+        <JourneyStepper route={route} onGroup={goGroup} tourStage={tourOn ? tourStage(tour) : undefined} />
+        {route.view === 'home' && <Home demoHref={demo} onGroup={goGroup} onTour={phone ? null : startTour} />}
         {route.view === 'group' && (
           <GroupPage
             group={route.group}
@@ -107,6 +134,17 @@ export function App() {
         )}
       </main>
       <style>{__COOKIE_NOTICE_CSS__}</style>
+      {tourOn && (
+        <TourOverlay
+          tour={tour}
+          rect={rect}
+          win={win}
+          onBack={() => stepTo(tourBack(tour))}
+          onNext={() => stepTo(tourNext(tour))}
+          onWatch={() => watch(tour)}
+          onClose={() => setTour(null)}
+        />
+      )}
     </div>
   )
 }

@@ -5,12 +5,14 @@ import { Home } from './components/Home'
 import { GroupPage } from './components/GroupPage'
 import { FeaturePage } from './components/FeaturePage'
 import { Player } from './components/Player'
+import { TourOverlay } from './components/TourOverlay'
 import { SceneView } from './components/SceneView'
-import { COMING_SOON_IDS, FEATURES, GROUPS } from './content'
-import { Icon } from './icons'
+import { COMING_SOON_IDS, FEATURES, GROUPS, TOUR } from './content'
+import { GLYPHS, Icon } from './icons'
 import { START, type Clock } from './player'
 import { sceneState, thumbStep } from './scene'
 import type { Scene } from './types'
+import type { Rect, TourState } from './tour'
 
 type Tag = { name: string; attrs: string; text: string }
 const attr = (t: { attrs: string }, name: string) => t.attrs.match(new RegExp(`\\s${name}="([^"]*)"`))?.[1]
@@ -196,6 +198,18 @@ describe('library home', () => {
     expect(tour).toHaveLength(1)
     tour[0].props.onClick!()
     expect(calls.at(-1)).toBe('tour')
+  })
+
+  it('SC-12 a null onTour removes the hero tour button and its row', () => {
+    const render = (onTour: (() => void) | null) => parse(renderToStaticMarkup(createElement(Home, { demoHref: null, onGroup: noop, onTour })))
+    const actionsRows = (ts: Tag[]) => ts.filter((t) => t.name === 'div' && style(t).gap === '14px' && style(t)['flex-wrap'] === 'wrap')
+    const off = render(null)
+    expect(off.filter((t) => t.name === 'button' && t.text === 'Take the tour')).toHaveLength(0)
+    expect(actionsRows(off)).toHaveLength(0)
+    expect(off.some((t) => t.text.includes('or take the tour'))).toBe(true)
+    const on = render(noop)
+    expect(on.filter((t) => t.name === 'button' && t.text === 'Take the tour')).toHaveLength(1)
+    expect(actionsRows(on)).toHaveLength(1)
   })
 })
 
@@ -913,5 +927,141 @@ describe('library feature page', () => {
     const cards = named(panelOf(skip, 'Related'), 'button')
     expect(cards).toHaveLength(1)
     expect(panelOf(skip, 'Related').some((t) => t.text === 'Roles and permissions')).toBe(true)
+  })
+})
+
+describe('library tour', () => {
+  const MENU: TourState = { i: 0, phase: 'menu' }
+  const CARD: TourState = { i: 0, phase: 'card' }
+  const R: Rect = { x: 6, y: 97, w: 208, h: 42 }
+  const WIN = { w: 1440, h: 900 }
+  const overlay = (tour: TourState, rect: Rect | null = R, win = WIN) =>
+    parse(renderToStaticMarkup(createElement(TourOverlay, { tour, rect, win, onBack: noop, onNext: noop, onWatch: noop, onClose: noop })))
+  const EASE = '380ms var(--ease-out)'
+
+  it('TR-01 the overlay is a full-window layer over a click blocker', () => {
+    const ts = overlay(MENU)
+    expect(style(ts[0])).toEqual({ position: 'absolute', inset: '0', 'z-index': '60' })
+    expect(style(ts[1])).toEqual({ position: 'absolute', inset: '0' })
+    expect(ts[1].text).toBe('')
+    expect(ts[2].name).toBe('div')
+    expect(style(ts[2]).left).toBeDefined()
+  })
+
+  it('TR-02 the spotlight sits on the rectangle with a dimming ring', () => {
+    const spot = style(overlay(MENU)[2])
+    expect(spot).toMatchObject({ left: '6px', top: '97px', width: '208px', height: '42px', 'border-radius': '10px', 'pointer-events': 'none' })
+    expect(spot['box-shadow']).toBe('0 0 0 9999px rgba(8,47,49,0.66), 0 0 0 2px var(--accent)')
+    expect(spot.transition).toBe(`left ${EASE}, top ${EASE}, width ${EASE}, height ${EASE}`)
+    const centre = style(overlay(MENU, null)[2])
+    expect(centre).toMatchObject({ left: '720px', top: '450px' })
+    expect(Number.parseFloat(centre.width)).toBe(0)
+    expect(Number.parseFloat(centre.height)).toBe(0)
+  })
+
+  it('TR-03 the callout card carries the prototype box', () => {
+    expect(style(overlay(CARD)[3])).toMatchObject({
+      width: '360px',
+      background: 'var(--card)',
+      'border-radius': '8px',
+      padding: '22px 24px 20px',
+      'box-shadow': 'var(--shadow-elegant)',
+      display: 'flex',
+      'flex-direction': 'column',
+      gap: '12px',
+      transition: `left ${EASE}, top ${EASE}, bottom ${EASE}`,
+    })
+  })
+
+  it('TR-04 the callout is placed with left and top, or left and bottom', () => {
+    const menu = style(overlay(MENU)[3])
+    expect(menu).toMatchObject({ left: '232px', top: '85px' })
+    expect(menu).not.toHaveProperty('bottom')
+    const card = style(overlay(CARD, { x: 320, y: 340, w: 356, h: 316 }, { w: 1440, h: 700 })[3])
+    expect(card).toMatchObject({ left: '320px', bottom: '376px' })
+    expect(card).not.toHaveProperty('top')
+  })
+
+  it('TR-05 the callout shows the step, the title, the text and a close button', () => {
+    const ts = overlay(CARD)
+    const step = ts.filter((t) => attr(t, 'class') === 't-step')
+    expect(step.map((t) => t.text)).toEqual(['STEP 02 OF 14'])
+    const title = withText(ts, TOUR[0].t)
+    expect(style(title)).toMatchObject({ 'font-size': '19px', 'font-weight': '700', 'letter-spacing': '-0.02em', 'line-height': '1.25' })
+    const body = withText(ts, TOUR[0].d)
+    expect(attr(body, 'class')).toBe('t-body-sm')
+    expect(style(body).color).toBe('var(--foreground)')
+    const x = ts.filter((t) => t.name === 'button' && attr(t, 'class') === 'lib-tour-x')
+    expect(x).toHaveLength(1)
+    expect(attr(x[0], 'aria-label')).toBe('Close tour')
+    expect(style(x[0])).toMatchObject({ color: 'var(--muted-foreground)', padding: '2px' })
+    const svg = after(ts, x[0], 'svg')
+    expect([attr(svg, 'width'), attr(svg, 'height')]).toEqual(['16', '16'])
+    expect(after(ts, svg, 'path') && attr(after(ts, svg, 'path'), 'd')).toBe(GLYPHS.x[0])
+  })
+
+  it('TR-06 Watch demo shows on card steps only', () => {
+    const ts = overlay(CARD)
+    const watch = withText(ts, 'Watch demo')
+    expect(watch.name).toBe('button')
+    expect(style(watch)).toMatchObject({
+      color: 'var(--link)',
+      'border-bottom': '1px solid var(--link)',
+      'font-size': '13px',
+      'font-weight': '700',
+      padding: '0',
+    })
+    expect(overlay(MENU).some((t) => t.text === 'Watch demo')).toBe(false)
+    const row = ts[ts.indexOf(watch) - 1]
+    expect(style(row)).toEqual({ display: 'flex', 'align-items': 'center', 'justify-content': 'space-between', gap: '10px', 'margin-top': '6px' })
+  })
+
+  it('TR-07 Back is the outline button and is disabled on step 1; Next reads Finish on the last step', () => {
+    const ts = overlay(MENU)
+    const back = withText(ts, 'Back')
+    const next = withText(ts, 'Next')
+    expect(attr(back, 'class')).toBe('ds-btn ds-btn--outline ds-btn--sm')
+    expect(back.attrs).toMatch(/\sdisabled(=|\s|$)/)
+    expect(attr(next, 'class')).toBe('ds-btn ds-btn--primary ds-btn--sm')
+    expect(next.attrs).not.toContain('disabled')
+    const wrap = ts[ts.indexOf(back) - 1]
+    expect(style(wrap)).toEqual({ display: 'flex', gap: '8px', 'margin-left': 'auto' })
+    expect(ts[ts.indexOf(back) + 1]).toBe(next)
+    expect(withText(overlay(CARD), 'Back').attrs).not.toContain('disabled')
+    const last = overlay({ i: 6, phase: 'card' })
+    expect(withText(last, 'Finish')).toBeDefined()
+    expect(last.some((t) => t.text === 'Next')).toBe(false)
+  })
+
+  it('TR-08 each control calls its handler', () => {
+    const calls: string[] = []
+    type El = ReactElement<{ onClick?: () => void; children?: ReactNode }>
+    const walk = (n: ReactNode, out: El[] = []): El[] => {
+      if (Array.isArray(n)) n.forEach((c) => walk(c, out))
+      else if (n && typeof n === 'object' && 'props' in n) {
+        out.push(n as El)
+        walk((n as El).props.children, out)
+      }
+      return out
+    }
+    const els = walk(
+      TourOverlay({
+        tour: { i: 0, phase: 'card' },
+        rect: R,
+        win: WIN,
+        onBack: () => calls.push('back'),
+        onNext: () => calls.push('next'),
+        onWatch: () => calls.push('watch'),
+        onClose: () => calls.push('close'),
+      }),
+    ).filter((e) => e.props.onClick)
+    const label = (e: El) => (e.type === 'button' && (e.props as { className?: string }).className === 'lib-tour-x' ? 'Close' : e.props.children)
+    expect(els.map(label)).toEqual(['Close', 'Watch demo', 'Back', 'Next'])
+    for (const e of els) {
+      const before = calls.length
+      e.props.onClick!()
+      expect(calls).toHaveLength(before + 1)
+    }
+    expect(calls).toEqual(['close', 'watch', 'back', 'next'])
   })
 })

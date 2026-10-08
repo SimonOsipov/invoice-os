@@ -21,7 +21,6 @@ import {
   provisionStaffAccount,
   registerFresh,
   rawFetch,
-  registerFresh,
   signInForCode,
   signInSession,
   subjectOf,

@@ -135,7 +135,9 @@ export function Privacy() {
             If you allow analytics there, Google Analytics measures the Library in the same way and under the same
             property. Google also receives each Library page you view, when you choose Book the Demo, when you start
             the tour, and when you choose Open in Platform, with the feature or group it was for. On the Library,
-            Google's _ga cookies are set for {LIBRARY_HOSTNAMES[0]} only, and choosing Reject there deletes them.
+            Google's _ga cookies are set for {LIBRARY_HOSTNAMES[0]} only, and choosing Reject there deletes them. If
+            analytics was running, though, Google's script is still loaded into the Library page you are on, and until
+            you reload it can send measurements of its own and re-create those cookies.
           </p>
           <p style={P}>
             The Library has no forms, so it sends HubSpot nothing. It is typeset in the same Google fonts. When a

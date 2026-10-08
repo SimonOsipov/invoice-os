@@ -119,6 +119,7 @@ let workspacesReply: Reply = ok({ tenant: ME.tenant })
 let refreshReply: Reply = ok({ access_token: T2, refresh_token: 'R1' })
 let workspacesCalls: { auth: string | null; body: unknown }[] = []
 let refreshBodies: unknown[] = []
+let mineReply: Reply | null = null
 
 function routeFetch() {
   vi.stubGlobal(
@@ -134,6 +135,7 @@ function routeFetch() {
         meAuth.push(init?.headers?.get('Authorization') ?? null)
         return (meQueue.shift() ?? meReply)()
       }
+      if (mineReply && url === `${GATEWAY}/api/tenancy/v1/invitations/mine`) return mineReply()
       if (url === `${GATEWAY}/api/tenancy/v1/workspaces`) {
         workspacesCalls.push({ auth: init?.headers?.get('Authorization') ?? null, body: JSON.parse(init?.body ?? 'null') })
         return workspacesReply()
@@ -222,6 +224,7 @@ beforeEach(() => {
   refreshReply = ok({ access_token: T2, refresh_token: 'R1' })
   workspacesCalls = []
   refreshBodies = []
+  mineReply = ok({ invitations: [] })
   routeFetch()
 })
 
@@ -781,6 +784,7 @@ describe('a failed redemption bounces to landing (AC-7, D23)', () => {
     configure()
     ensureSignInState()
     meReply = fail(403, 'forbidden')
+    mineReply = ok({ invitations: [] })
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     window.history.replaceState(null, '', `/?handoff=${CODE}`)
     const { hrefWrites } = interceptHref()
@@ -790,6 +794,22 @@ describe('a failed redemption bounces to landing (AC-7, D23)', () => {
     expect(meAuth).toEqual([`Bearer ${T}`])
     expect(workspacesCalls, 'a token without answers provisions nothing').toEqual([])
     expect(refreshBodies).toEqual([])
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+  })
+
+  it('a join offer shows the Join screen, not the no-workspace path', async () => {
+    configure()
+    ensureSignInState()
+    meReply = fail(403, 'forbidden')
+    mineReply = ok({ invitations: [{ id: 'a', workspace: 'WS', role: 'admin', inviter: null, expires_at: '2026-10-20T00:00:00Z' }] })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(screen.getByTestId('join-screen')).toBeTruthy())
+    await settle()
+    expect(hrefWrites).toEqual([])
+    expect(workspacesCalls).toEqual([])
     expect(localStorage.getItem(SESSION_KEY)).toBeNull()
   })
 
@@ -1100,16 +1120,19 @@ describe('AUTH-05-08 adversarial', () => {
   })
 
   it('the token and the code never reach a URL, an href or the console', async () => {
-    const cases: [string, Reply][] = [
-      ['success', ok(ME)],
-      ['me 403', fail(403, 'forbidden')],
-      ['me 500', fail(500, 'boom')],
+    const ONE_INVITE = ok({ invitations: [{ id: 'a', workspace: 'WS', role: 'admin', inviter: null, expires_at: '2026-10-20T00:00:00Z' }] })
+    const cases: [string, Reply, Reply | null][] = [
+      ['success', ok(ME), null],
+      ['me 403', fail(403, 'forbidden'), null],
+      ['me 500', fail(500, 'boom'), null],
+      ['me 403, mine one invite, Join screen', fail(403, 'forbidden'), ONE_INVITE],
     ]
     expect(cases.length).toBeGreaterThan(0)
-    for (const [name, reply] of cases) {
+    for (const [name, reply, mine] of cases) {
       configure()
       ensureSignInState()
       meReply = reply
+      if (mine) mineReply = mine
       const spies = consoleSpies()
       window.history.replaceState(null, '', `/?handoff=${CODE}`)
       const replace = vi.spyOn(window.history, 'replaceState')
@@ -1411,6 +1434,7 @@ describe('the first sign-in provisions the registered workspace', () => {
   const CHAIN = (base: string) => [
     `${base}/auth/exchange`,
     `${base}/api/tenancy/v1/me`,
+    `${base}/api/tenancy/v1/invitations/mine`,
     `${base}/api/tenancy/v1/workspaces`,
     `${base}/auth/refresh`,
     `${base}/api/tenancy/v1/me`,
@@ -1448,7 +1472,7 @@ describe('the first sign-in provisions the registered workspace', () => {
     expect(screens, 'one screen before the workspace: the splash').toHaveLength(1)
     expect(screens[0]).toContain('Opening your workspace…')
     expect(Math.max(...preWorkspace.map((f) => f.prompts)), 'no button, field, link or dialog before the workspace').toBe(0)
-    expect(fetchUrls.slice(0, 5)).toEqual(CHAIN(GATEWAY))
+    expect(fetchUrls.slice(0, 6)).toEqual(CHAIN(GATEWAY))
     expect(workspacesCalls).toEqual([{ auth: `Bearer ${T_ANSWERS}`, body: ANSWERS }])
     expect(refreshBodies).toEqual([{ refresh_token: 'R0' }])
     expect(meAuth).toEqual([`Bearer ${T_ANSWERS}`, `Bearer ${T2}`])
@@ -1469,7 +1493,7 @@ describe('the first sign-in provisions the registered workspace', () => {
     const { hrefWrites } = registered()
     await bootApp()
     await waitForVerifiedWorkspace()
-    expect(fetchUrls.slice(0, 5)).toEqual(CHAIN(GATEWAY))
+    expect(fetchUrls.slice(0, 6)).toEqual(CHAIN(GATEWAY))
     expect(hrefWrites).toEqual([])
     expect(storedRecord()?.token).toBe(T2)
   })
@@ -1488,15 +1512,15 @@ describe('the first sign-in provisions the registered workspace', () => {
     const { hrefWrites } = registered({ me: [fail(403, 'forbidden'), fail(403, 'forbidden')] })
     await bootApp()
     await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=no-workspace`]))
-    expect(fetchUrls.slice(0, 5)).toEqual(CHAIN(GATEWAY))
+    expect(fetchUrls.slice(0, 6)).toEqual(CHAIN(GATEWAY))
     expect(localStorage.getItem(SESSION_KEY)).toBeNull()
   })
 
   const failures: [string, () => void, Reply | undefined, number][] = [
-    ['provisioning 400', () => (workspacesReply = fail(400, 'bad request')), undefined, 3],
-    ['provisioning 500', () => (workspacesReply = fail(500, 'boom')), undefined, 3],
-    ['refresh 401', () => (refreshReply = fail(401, 'invalid refresh token')), undefined, 4],
-    ['an exchange without a refresh token', () => {}, ok({ access_token: T_ANSWERS }), 3],
+    ['provisioning 400', () => (workspacesReply = fail(400, 'bad request')), undefined, 4],
+    ['provisioning 500', () => (workspacesReply = fail(500, 'boom')), undefined, 4],
+    ['refresh 401', () => (refreshReply = fail(401, 'invalid refresh token')), undefined, 5],
+    ['an exchange without a refresh token', () => {}, ok({ access_token: T_ANSWERS }), 4],
   ]
   for (const [name, arrange, exchange, calls] of failures) {
     it(`a registered account with ${name} reports failed and stores nothing`, async () => {
@@ -1509,6 +1533,34 @@ describe('the first sign-in provisions the registered workspace', () => {
       expect(localStorage.getItem(SESSION_KEY)).toBeNull()
     })
   }
+
+  const badLists: [string, Reply][] = [
+    ['a 500', fail(500, 'boom')],
+    ['a malformed body', ok({ invitations: 'x' })],
+  ]
+  for (const [name, mine] of badLists) {
+    it(`a registered account with ${name} on the invite lookup reports failed and does not provision`, async () => {
+      mineReply = mine
+      const { hrefWrites } = registered()
+      await bootApp()
+      await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=failed`]))
+      expect(workspacesCalls).toEqual([])
+      expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+    })
+  }
+
+  it('an account without answers and a 500 on the invite lookup reports failed, not no-workspace', async () => {
+    configure()
+    ensureSignInState()
+    meReply = fail(403, 'forbidden')
+    mineReply = fail(500, 'boom')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=failed`]))
+    expect(workspacesCalls).toEqual([])
+  })
 })
 
 // F5: each redemption call aborts after 15 s and takes the failure arm.
@@ -1547,6 +1599,9 @@ describe('a hung redemption times out', () => {
           meCalls++
           return registered && meCalls === 1 ? fail(403, 'forbidden')() : hang(init?.signal)
         }
+        if (url === `${GATEWAY}/api/tenancy/v1/invitations/mine`) {
+          return ok({ invitations: [] })()
+        }
         if (url === `${GATEWAY}/api/tenancy/v1/workspaces`) {
           return hangAt === 'workspaces' ? hang(init?.signal) : ok({ tenant: ME.tenant })()
         }
@@ -1584,9 +1639,9 @@ describe('a hung redemption times out', () => {
   const LEGS: [Leg, string[], number][] = [
     ['exchange', ['/auth/exchange'], 0],
     ['me', ['/auth/exchange', '/api/tenancy/v1/me'], 1],
-    ['workspaces', ['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/workspaces'], 1],
-    ['refresh', ['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/workspaces', '/auth/refresh'], 1],
-    ['second /me', ['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/workspaces', '/auth/refresh', '/api/tenancy/v1/me'], 2],
+    ['workspaces', ['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/invitations/mine', '/api/tenancy/v1/workspaces'], 1],
+    ['refresh', ['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/invitations/mine', '/api/tenancy/v1/workspaces', '/auth/refresh'], 1],
+    ['second /me', ['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/invitations/mine', '/api/tenancy/v1/workspaces', '/auth/refresh', '/api/tenancy/v1/me'], 2],
   ]
   for (const [leg, path, meCalls] of LEGS) {
     it(`a hung ${leg} fails once at 15 s, not before`, async () => {

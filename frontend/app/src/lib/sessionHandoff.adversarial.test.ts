@@ -24,13 +24,13 @@ function jwt(exp: number): string {
 const LIVE = jwt(NOW / 1000 + 3600)
 
 type Answer = { status: number; body: unknown } | 'network'
-function stubFetch(exchange: Answer, me: Answer) {
+function stubFetch(exchange: Answer, me: Answer, mine: Answer = { status: 500, body: {} }) {
   const urls: string[] = []
   vi.stubGlobal(
     'fetch',
     vi.fn((url: string) => {
       urls.push(url)
-      const a = url.endsWith('/auth/exchange') ? exchange : me
+      const a = url.endsWith('/auth/exchange') ? exchange : url.endsWith('/invitations/mine') ? mine : me
       if (a === 'network') return Promise.reject(new TypeError('Failed to fetch'))
       return Promise.resolve({ ok: a.status < 400, status: a.status, statusText: String(a.status), json: () => Promise.resolve(a.body) })
     }),
@@ -61,11 +61,11 @@ describe('redeemHandoff adversarial', () => {
   })
 
   it('a /me 403 rejects with status 403 after the exchange', async () => {
-    const urls = stubFetch({ status: 200, body: { access_token: LIVE } }, { status: 403, body: { error: 'forbidden' } })
+    const urls = stubFetch({ status: 200, body: { access_token: LIVE } }, { status: 403, body: { error: 'forbidden' } }, { status: 200, body: { invitations: [] } })
     const err = await redeemHandoff(GATEWAY, CODE, STATE).catch((e: unknown) => e)
     expect(err).toBeInstanceOf(ApiError)
     expect((err as ApiError).status).toBe(403)
-    expect(urls).toEqual([`${GATEWAY}/auth/exchange`, `${GATEWAY}/api/tenancy/v1/me`])
+    expect(urls).toEqual([`${GATEWAY}/auth/exchange`, `${GATEWAY}/api/tenancy/v1/me`, `${GATEWAY}/api/tenancy/v1/invitations/mine`])
   })
 
   it('a /me 200 with no tenant rejects', async () => {
@@ -77,6 +77,7 @@ describe('redeemHandoff adversarial', () => {
   it('pinned: a non-string access_token is passed through unchecked', async () => {
     stubFetch({ status: 200, body: { access_token: 12345 } }, { status: 200, body: ME })
     const s = await redeemHandoff(GATEWAY, CODE, STATE)
+    if ('kind' in s) throw new Error('join offer')
     expect(s.token).toBe(12345)
     expect(s.handoff).toBe(true)
   })

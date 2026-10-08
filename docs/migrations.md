@@ -76,10 +76,10 @@ case adversarially; M2-06 adds `FORCE ROW LEVEL SECURITY`.)
 - `auth_hook_reader` (added AUTH-02) — `NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB
   NOCREATEROLE`, `USAGE, CREATE ON SCHEMA public`. It owns the SECURITY DEFINER
   `public.custom_access_token_hook`, `public.identity_has_membership` (callable only by
-  `invoice_migrator`, §1) and `public.invitation_by_token` (callable only by `invoice_app`),
-  and holds the policies that let it read `(user_id, tenant_id, status)` on `memberships`
-  for every tenant, `user_id` on `staff_members`, seven columns of `invitations` and
-  `(id, name)` of `tenants`. No DSN or password exists for it. See §8.
+  `invoice_migrator`, §1) and `public.invitation_by_token` and `public.pending_invites_for_email` (both callable only by
+  `invoice_app`), and holds the policies that let it read `(user_id, tenant_id, status)` plus
+  `(display_name, email)` on `memberships` for every tenant, `user_id` on `staff_members`,
+  eight columns of `invitations` and `(id, name)` of `tenants`. No DSN or password exists for it. See §8.
 - Bootstrap also `REVOKE CREATE ON SCHEMA public FROM PUBLIC` (a no-op on PG15+, kept for
   PG13/14 + defense-in-depth).
 
@@ -290,7 +290,7 @@ What it guarantees:
   input returns `ErrNoTenant` and issues **no** statement — the helper can never run an
   unscoped query.
 - **Explicit tenant, not context-derived.** The core helper takes the tenant as an
-  argument, so it serves the worker (§8), the `tools/*` CLIs, `GET /v1/me`, `POST /v1/workspaces` and the two invite routes.
+  argument, so it serves the worker (§8), the `tools/*` CLIs, `GET /v1/me`, `POST /v1/workspaces` and the invite routes.
   `WithinRequestTenantTx` pulls the tenant from the request `auth.Identity` for handlers.
 
 `WithinRequestTenantTx` is **not** a thin wrapper over the core. It opens its own
@@ -304,7 +304,7 @@ visible to a plain `pgx.QueryTracer`** — pgx routes `SendBatch` through `pgx.B
 A subject that is not a UUID skips the lookup and delegates to the core unchanged: only in-process
 actors (the extraction worker, `backfill-source-rows`, `revalidate-rule-set`) reach that arm,
 because over HTTP `identityMiddleware` builds no identity for one
-(`TestIdentityMiddleware_NonUUIDSubjectBuildsNoIdentity`). `GET /v1/me`, `POST /v1/workspaces`, `POST /v1/invitations/accept` and `POST /internal/invitations/preview` are the four deliberate exemptions (they call `WithinTenantTx` directly).
+(`TestIdentityMiddleware_NonUUIDSubjectBuildsNoIdentity`). `GET /v1/me`, `POST /v1/workspaces`, `POST /v1/invitations/accept`, `GET /v1/invitations/mine`, `POST /v1/invitations/{id}/accept` and `POST /internal/invitations/preview` are the deliberate exemptions (they call `WithinTenantTx` directly).
 
 ---
 
@@ -471,11 +471,12 @@ store-on-`Postgres`-service pattern as the app/migrator URLs — see the Appendi
 ### The second, bounded cross-tenant reader — `auth_hook_reader` (AUTH-02)
 
 `auth_hook_reader` is a second cross-tenant reader, but not an enumeration identity: it
-cannot log in, and it is reachable only per user id or per token. It owns three SECURITY DEFINER
+cannot log in, and it is reachable only per user id, per token or per address. It owns four SECURITY DEFINER
 functions, `public.custom_access_token_hook(event jsonb)` and (AUTH-16)
 `public.identity_has_membership(p_user_id uuid) RETURNS boolean`, and (RESEND-06)
-`public.invitation_by_token(p_token text)`, and a policy lets it read
-`(user_id, tenant_id, status)` for every tenant:
+`public.invitation_by_token(p_token text)`, and (LOGFIX-03)
+`public.pending_invites_for_email(p_email text, p_user_id uuid)`, and a policy lets it read
+`(user_id, tenant_id, status)` for every tenant (LOGFIX-03 adds `display_name` and `email`):
 
 ```sql
 CREATE POLICY auth_hook_lookup ON public.memberships
@@ -508,6 +509,25 @@ CREATE POLICY auth_hook_lookup ON public.memberships
   With a live token and a matching GUC it can also learn whether any user id holds a
   membership: `accept_invitation` answers 23505 before it checks the email
   (`TestRLS_AcceptInvitationRefusalOrder`). Same trust as the provisioning residual below.
+- `pending_invites_for_email(p_email, p_user_id)` returns `(invitation_id, tenant_id, workspace, role,
+  inviter, expires_at)` for the pending, unexpired invites whose address equals
+  `lower(btrim(p_email))`, across tenants, ordered by `expires_at, id`. It returns no rows when
+  `p_user_id` holds any membership, of any status (it reads `memberships.user_id`, already granted). `inviter` is the
+  inviter's `memberships.display_name` in the inviting tenant, else that row's `email`, else
+  NULL. SECURITY DEFINER, `search_path=""`, STABLE; `EXECUTE` to `invoice_app` only. It adds
+  `SELECT (invited_by)` on `invitations` and `SELECT (display_name, email)` on `memberships`
+  to the role; the pin tests moved to those counts.
+- `accept_invitation_by_id(p_tenant_id, p_invitation_id, p_user_id, p_email)` is owned by
+  `invoice_migrator`, like `accept_invitation`, and takes the same GUC check and identity lock.
+  It joins the caller with the invite's role and marks only that invite accepted. Refusals, in
+  order: GUC mismatch 42501; not valid (unknown, other tenant, other address, expired,
+  accepted, revoked) `invitation_not_valid`; already a member `one_workspace_per_identity`.
+  `EXECUTE` to `invoice_app` only.
+- List residual: `invoice_app` can list, for any address it names, the pending invites with
+  workspace name, role, inviter name and expiry. An address is guessable, unlike a token.
+  `invoice_app` is trusted code that already reads every tenant it sets the GUC for. Under its
+  own scope, tenant B still reads none of tenant A's invitations, tenants or memberships
+  (`TestRLS_JoinLookupDoesNotWidenTheApp`).
 - Residual: a leaked GoTrue DSN can call the hook once per GoTrue user and map each user
   with exactly one active membership to its tenant. It also learns whether that user is
   staff (`app_metadata.staff`). It cannot bulk-read statuses or multiple memberships.

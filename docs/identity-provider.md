@@ -307,7 +307,7 @@ GoTrue stays private. The gateway is the only public surface, and it calls GoTru
 `AUTH_URL` at: `/signup` and `/verify` for registration, `/token?grant_type=password` for
 sign-in (see Sign-in and hand-off), `/token?grant_type=refresh_token` for renewal and
 sign-out (see Renewal and Revocation), `GET /user` for the session check on every checked
-`/api/` request (cached 30 s; only `error_code` is read from the answer), and
+`/api/` request (cached 30 s; `error_code` is read from a refusal, `email` and `email_confirmed_at` from a 200), and
 `POST /logout?scope=global` for sign-out (see Revocation), `/recover` for a reset request and
 `/verify` (type `recovery`) with `PUT /user` for a reset (see Password reset). It forwards no client path or
 query, so no other GoTrue route (`/otp`, `/admin/*`, `/logout` with any other
@@ -358,8 +358,8 @@ scope, or `/token` with any other grant) is reachable from outside.
    access-token hook projects a tenant only for exactly one active membership.
 5. With that tenant-less token the client calls `POST /api/tenancy/v1/workspaces`
    `{"workspace_name","display_name","kind"?}`. The gateway lets a tenant-less token through
-   on this method and path and on `POST /api/tenancy/v1/invitations/accept` only (see
-   Accepting an invite). Tenancy creates the tenant and its first active admin
+   on this method and path and on three more routes only: `POST /api/tenancy/v1/invitations/accept`,
+   and the two join routes that need a GoTrue-confirmed email (see Accepting an invite). Tenancy creates the tenant and its first active admin
    in one transaction through `public.provision_workspace`
    ([migrations.md](./migrations.md) §1) and answers 201 `{tenant:{id,name,kind}, user:{id,role}}`. An absent
    `kind` stores `in_house`. `provision_workspace` refuses an identity that
@@ -556,10 +556,35 @@ An invitee joins an existing workspace instead of provisioning one. The invite m
    adds the membership with the invited role and marks the invite accepted in one transaction.
 4. The next token (a refresh grant or a new sign-in) carries `app_metadata.tenant_id`.
 
-The gateway lets a tenant-less token through on exactly two routes, both `POST`, matched on
-the escaped path (`v1%2Finvitations%2Faccept` and `%61ccept` are not exempt):
-`/api/tenancy/v1/workspaces` and `/api/tenancy/v1/invitations/accept`. A tenant-bearing token
-reaches the accept route like any tenancy route; tenancy then answers 409.
+The gateway lets a tenant-less token through on exactly four routes, matched on the escaped
+path (`v1%2Finvitations%2Faccept` and `%61ccept` are not exempt). Two are open: `POST
+/api/tenancy/v1/workspaces` and `POST /api/tenancy/v1/invitations/accept`. Two are the join
+routes: `GET /api/tenancy/v1/invitations/mine` and `POST /api/tenancy/v1/invitations/{id}/accept`,
+where `{id}` is a lower-case dashed uuid. A tenant-bearing token reaches the accept routes like
+any tenancy route; tenancy then answers 409.
+
+A join route also needs a confirmed email. The session check keeps the `email` that GoTrue's
+`GET /user` 200 answers when `email_confirmed_at` is not null. The gateway admits the request
+only when that email and the token's `email` claim are both non-empty and equal after trim and
+case folding. A token with no `session_id` (the mock issuer), a `/user` answer that does not
+decode or exceeds 16 KiB, and a null `email_confirmed_at` all give 403 `forbidden`, with no
+upstream call. The gateway never reads `user_metadata`: any session holder can write
+`email_verified` there. The confirmation is cached with the session verdict for 30 s.
+
+Tenancy joins a signed-in invitee by address, with no token. Both routes read the email from
+the identity header only, normalised as for invites.
+
+| Route | Answer |
+|---|---|
+| `GET /v1/invitations/mine` | 200 `{"invitations":[{"id","workspace","role","inviter","expires_at"}]}`, soonest expiry first; `inviter` is the inviter's display name, else email, else `null`; `[]` when none |
+| `POST /v1/invitations/{id}/accept` (no body read) | 200 `{tenant:{id,name,kind}, user:{id,role}}`, as the token accept; one `invitation.accepted` audit row |
+| a non-uuid id; an id that is unknown, expired, accepted, revoked, or addressed to another address or tenant; an address that fails normalisation | 404 `this invite is no longer valid`; the cases are not told apart |
+| a caller who holds a membership, in any status, or a tenant-bearing token (no statement sent) | 409 `you already belong to a workspace` |
+| no caller identity | 401 `unauthorized` |
+
+`public.accept_invitation_by_id` locks the identity as `provision_workspace` does, so two joins
+of one identity, or two accepts of one invite, admit one. The token link and the id join spend the
+same invite: whichever comes second answers not valid.
 
 **`POST /auth/invitation`**, outside `/api/`, no verifier, CORS-wrapped, with an `OPTIONS` route.
 Body `{"token"}`, at most 1 KiB. Every answer sets `Cache-Control: no-store`.
@@ -714,14 +739,21 @@ hand-off is the app by default and a console when the visitor came from one (Con
    `handoff: true`, the refresh token (`refresh_token`) and `received_at` (epoch ms): the
    local time the exchange was sent, backdated by `HandoffTTL` (60 s) because the token may
    have waited that long in the store. A tab with no live state makes no exchange call and
-   goes to step 7. When `/me` answers 403 and the token's `user_metadata.registration`
+   goes to step 7. Without a held invite, a `/me` 403 first calls `GET /api/tenancy/v1/invitations/mine`
+   with the same token and signal, whether or not the token holds answers. One or more valid
+   invites end the redemption in a join offer (token, refresh token, invites, and the answers
+   when complete), not a session; the Join screen resolves it. An empty list, a non-200 or a
+   malformed body continues as follows. When the token's `user_metadata.registration`
    holds both names (and a `kind` that is absent, `firm` or `in_house`), the app posts them to
    `POST /api/tenancy/v1/workspaces` with the same token, silently and without a
    confirmation screen. After a 201, or a 409 (the identity already holds a membership), it
    posts the exchange's refresh token to `POST /auth/refresh` and calls `/me` with the new
    access token. The session then holds the refreshed access and refresh tokens, and
    `received_at` is the local time of the refresh, not backdated. One 15 s timeout covers the
-   whole chain. Without answers the 403 stands. A provisioning 400 or 5xx, a failed refresh or an
+   whole chain. Without answers the 403 stands. Joining an invite posts `POST
+   /api/tenancy/v1/invitations/<id>/accept`, refreshes and reads `/me`; a 404 `this invite is no longer
+   valid` or 409 `you already belong to a workspace` re-reads first and opens the workspace
+   when `/me` answers 200, else ends in step 7 as `?invite=invalid` or `already-member`. A provisioning 400 or 5xx, a failed refresh or an
    exchange without a refresh token ends in step 7 as `signin=failed`. An account whose
    workspace an operator deleted re-provisions at its next sign-in (accepted; revisit when
    workspace deletion ships). With a held invite (`consumePendingInvite`, one-shot) the app
@@ -1056,9 +1088,11 @@ answer, unverified), then answers.
 
 **The edge check** (`internal/gateway/session_check.go` `SessionChecker`) runs on `/api/`
 after the verifier and before the router. For a token with a `session_id` claim it calls
-GoTrue `GET /user` with the caller's own `Authorization` header and reads only `error_code`
-from the first 1 KiB of the answer:
-- **200** → live; the request proceeds.
+GoTrue `GET /user` with the caller's own `Authorization` header. It reads `error_code` from the
+first 1 KiB of a refusal, and `email` and `email_confirmed_at` from a 200 body (read and drained
+through 16 KiB, `maxSessionUserBody`):
+- **200** → live; the request proceeds. A body that does not decode or exceeds 16 KiB is still
+  live, with no confirmed email.
 - **401/403 with `session_not_found`, `user_not_found`, `user_banned` or
   `session_expired`** → revoked: 401 `{"error":"unauthorized"}` with
   `WWW-Authenticate: Bearer`, the verifier's own refusal bytes. No service is reached.

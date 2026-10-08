@@ -71,6 +71,17 @@ func InvitationPreviewHandler(preview InvitationPreviewFunc, log *slog.Logger) h
 	}
 }
 
+// writeAccepted writes the 200 `{tenant, user:{id, role}}` body both accept routes share.
+func writeAccepted(w http.ResponseWriter, tenant Tenant, subject, role string) {
+	var resp provisionResponse
+	resp.Tenant.ID = tenant.ID
+	resp.Tenant.Name = tenant.Name
+	resp.Tenant.Kind = tenant.Kind
+	resp.User.ID = subject
+	resp.User.Role = role
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // AcceptInvitationHandler returns POST /v1/invitations/accept: capped decode
 // (400), accept, 200 `{tenant, user:{id, role}}`. The caller check is the
 // store's: the handler cannot see a tenant-less caller.
@@ -92,13 +103,54 @@ func AcceptInvitationHandler(accept AcceptInvitationFunc, log *slog.Logger) http
 			writeError(w, status, msg)
 			return
 		}
+		writeAccepted(w, tenant, subject, role)
+	}
+}
 
-		var resp provisionResponse
-		resp.Tenant.ID = tenant.ID
-		resp.Tenant.Name = tenant.Name
-		resp.Tenant.Kind = tenant.Kind
-		resp.User.ID = subject
-		resp.User.Role = role
-		writeJSON(w, http.StatusOK, resp)
+// MyPendingInvitationsFunc lists the live invites for the caller's email.
+type MyPendingInvitationsFunc func(context.Context) ([]PendingInvite, error)
+
+// AcceptInvitationByIDFunc accepts invite id for the caller: tenant, subject, role.
+type AcceptInvitationByIDFunc func(context.Context, string) (Tenant, string, string, error)
+
+// InvitationsMineHandler returns GET /v1/invitations/mine: 200 `{"invitations":[…]}`,
+// never null. The store reads the caller's email from the identity header.
+func InvitationsMineHandler(list MyPendingInvitationsFunc, log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		invites, err := list(r.Context())
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "tenancy: list pending invitations", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+		writeJSON(w, http.StatusOK, struct {
+			Invitations []PendingInvite `json:"invitations"`
+		}{invites})
+	}
+}
+
+// AcceptInvitationByIDHandler returns POST /v1/invitations/{id}/accept: no body
+// is read; 200 in the token-accept shape. The store maps a non-uuid id to 404.
+func AcceptInvitationByIDHandler(accept AcceptInvitationByIDFunc, log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, subject, role, err := accept(r.Context(), r.PathValue("id"))
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "tenancy: accept invitation by id", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+		writeAccepted(w, tenant, subject, role)
 	}
 }

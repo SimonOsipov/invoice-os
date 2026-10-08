@@ -702,19 +702,22 @@ func (e scCoreExemption) covers(s scCoreSite) bool {
 
 // scCoreAllowlist is every caller allowed to reach the identity-free core.
 var scCoreAllowlist = []scCoreExemption{
-	{pkg: "internal/submission"},                                  // River job workers; the job row carries its tenant and there is no request identity to gate
-	{pkg: "internal/reconciliation"},                              // the sweep worker, same shape: a schedule opened it, not a caller
-	{pkg: "internal/demodocs"},                                    // boot-time document seeder; it runs to completion before the first request is served
-	{pkg: "internal/demopolicy"},                                  // boot-time approval-policy seeder, on the same pre-request boot phase
-	{file: "internal/extraction/store.go"},                        // the extraction worker's store; a River job carries its own tenant and there is no request identity to gate
-	{file: "internal/extraction/worker.go"},                       // the extraction River worker itself, same shape: the job row carries the tenant
-	{file: "internal/extraction/anchor_store.go"},                 // the learned-rule read, same shape as store.go: no request path reaches it
-	{file: "internal/importer/backfill.go"},                       // operator CLI only, and internal/importer DOES serve HTTP, so a package exemption would un-gate the import handlers
-	{file: "internal/invoice/revalidate.go"},                      // operator CLI only, and internal/invoice is the largest HTTP-serving package in the tree
-	{file: "internal/tenancy/store.go", fn: "Me"},                 // a deliberate HTTP-path exemption, as is ProvisionWorkspace; func-scoped because ListMemberships and SetMembershipStatus share this file and ARE gated
-	{file: "internal/tenancy/store.go", fn: "ProvisionWorkspace"}, // the caller has no membership yet; the seam would refuse before the closure
-	{file: "internal/tenancy/store.go", fn: "PreviewInvitation"},  // the token is the only credential and names the invite; there is no caller to gate
-	{file: "internal/tenancy/store.go", fn: "AcceptInvitation"},   // the invitee has no membership in the invite's tenant yet; the seam would refuse before the closure
+	{pkg: "internal/submission"},                                    // River job workers; the job row carries its tenant and there is no request identity to gate
+	{pkg: "internal/reconciliation"},                                // the sweep worker, same shape: a schedule opened it, not a caller
+	{pkg: "internal/demodocs"},                                      // boot-time document seeder; it runs to completion before the first request is served
+	{pkg: "internal/demopolicy"},                                    // boot-time approval-policy seeder, on the same pre-request boot phase
+	{file: "internal/extraction/store.go"},                          // the extraction worker's store; a River job carries its own tenant and there is no request identity to gate
+	{file: "internal/extraction/worker.go"},                         // the extraction River worker itself, same shape: the job row carries the tenant
+	{file: "internal/extraction/anchor_store.go"},                   // the learned-rule read, same shape as store.go: no request path reaches it
+	{file: "internal/importer/backfill.go"},                         // operator CLI only, and internal/importer DOES serve HTTP, so a package exemption would un-gate the import handlers
+	{file: "internal/invoice/revalidate.go"},                        // operator CLI only, and internal/invoice is the largest HTTP-serving package in the tree
+	{file: "internal/tenancy/store.go", fn: "Me"},                   // a deliberate HTTP-path exemption, as is ProvisionWorkspace; func-scoped because ListMemberships and SetMembershipStatus share this file and ARE gated
+	{file: "internal/tenancy/store.go", fn: "ProvisionWorkspace"},   // the caller has no membership yet; the seam would refuse before the closure
+	{file: "internal/tenancy/store.go", fn: "PreviewInvitation"},    // the token is the only credential and names the invite; there is no caller to gate
+	{file: "internal/tenancy/store.go", fn: "AcceptInvitation"},     // the invitee has no membership in the invite's tenant yet; the seam would refuse before the closure
+	{file: "internal/tenancy/store.go", fn: "acceptInTenant"},       // the shared tail of AcceptInvitation and AcceptInvitationByID, same reason
+	{file: "internal/tenancy/store.go", fn: "MyPendingInvitations"}, // the caller has no membership; the email filter is the guard
+	{file: "internal/tenancy/store.go", fn: "AcceptInvitationByID"}, // the caller has no membership; the email filter is the guard
 }
 
 // scCoreSite is one call of the ungated core, attributed to the INNERMOST
@@ -3162,6 +3165,23 @@ var scSweepSubjectAllowlist = []scSweepSubjectExemption{
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AMismatchedAddressIsRefusedAlikeWithOrWithoutAnAccount"},         // the invitee holds no membership in the invite's tenant before accepting
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_ATokenJoinsOnlyItsOwnTenant"},                                    // the invitee holds no membership in the invite's tenant before accepting
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AMalformedTokenOrSubjectSendsNoStatement"},                       // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AcceptByIdJoinsWithTheInvitedRole"},                                  // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_ListNamesEveryWorkspaceThatInvitedTheAddress"},                       // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_ListUsesTheNormalisedHeaderEmail"},                                   // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AnotherAddressInAnyTenantIsNeitherListedNorAccepted"},                // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_ExpiredInviteIsNotListedAndNotAccepted"},                             // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TenantBearingCallerSendsNoStatement"},                                // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_NoCallerOrANonUuidSubjectSendsNoStatement"},                          // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AFailedAuditRollsTheJoinBack"},                                       // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TwoInvitesJoinOnceUnderRace"},                                        // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_SameInviteTwoConcurrentAcceptsJoinOnce"},                             // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TokenLinkAfterJoinByIdIsNoLongerValid"},                              // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_JoinByIdAfterTokenLinkIsNoLongerValid"},                              // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_RevokedOrAcceptedInviteIsNeitherListedNorAccepted"},                  // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_ANonUuidIdSendsNoStatement"},                                         // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AuditMatchesTheTokenAccept"},                                         // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_HandlersIgnoreBodyAndQueryAndRefuseAlike"},                           // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AcceptNamesTheInviteNotTheFirstOfTheAddress"},                        // the invitee holds no membership before joining
 }
 
 // scSweepTestFiles returns every _test.go file under internal/ (repo-relative,

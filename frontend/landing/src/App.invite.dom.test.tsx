@@ -17,7 +17,7 @@ const OUTCOMES = [
   ['other-address', 'This invite was sent to a different email address. Open the invite link from that email and sign in with the invited address.'],
 ] as const
 const VERIFIED = 'Your email address is verified. Please sign in.'
-const VERIFY_FAILED = 'That link did not work. It may have expired or already been used.'
+const VERIFY_FAILED = 'This link is already used or expired. If you confirmed your email, sign in.'
 const RESET_DONE = 'Your password is changed. Sign in with your new password.'
 const RESET_FAILED = 'That reset link did not work. It may have expired or already been used.'
 const REQUEST_NEW = 'Request a new link'

@@ -9,7 +9,7 @@ export { readConsent, type ConsentRecord } from '../../landing/src/consent'
 export { PRODUCTION_HOSTNAMES } from '../../landing/src/hubspot'
 export { trackLibraryDemoOpen, trackLibraryPageView, trackOpenInPlatform, trackTourStart } from '../../landing/src/analytics'
 
-// BQ1: the library's _ga stays on its own host.
+// The library's _ga stays on its own host.
 const cookieDomain = LIBRARY_HOSTNAMES[0]
 
 export const bootLibraryAnalytics = (): boolean => bootAnalytics(LIBRARY_HOSTNAMES, cookieDomain)

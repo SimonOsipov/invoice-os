@@ -646,7 +646,7 @@ describe('LIB-07: the library origin', () => {
     return Array.from(html.slice(at, end).matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g)).map((m) => text(m[1]))
   }
 
-  // Pending PM approval: the D12 copy.
+  // Pending PM approval of this copy.
   const LIBRARY_SECTION = [
     `Our Feature Library at ${LIBRARY_HOSTNAMES[0]} follows this policy too. It asks for your analytics choice itself: your browser keeps the answer for each address apart, so an answer given on one does not carry to the other. Cookie choices, at the foot of the Library's sidebar, brings its notice back.`,
     `If you allow analytics there, Google Analytics measures the Library in the same way and under the same property. Google also receives each Library page you view, when you choose Book the Demo, when you start the tour, and when you choose Open in Platform, with the feature or group it was for. On the Library, Google's _ga cookies are set for ${LIBRARY_HOSTNAMES[0]} only, and choosing Reject there deletes them. If analytics was running, though, Google's script is still loaded into the Library page you are on, and until you reload it can send measurements of its own and re-create those cookies.`,

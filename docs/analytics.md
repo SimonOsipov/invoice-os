@@ -59,8 +59,7 @@ Three notes on what does **not** fire:
 | Railway → project `ASComply` → environment `production` → service `landing` | `VITE_GA_MEASUREMENT_ID` | `G-E409H76XYY` |
 | Railway → project `ASComply` → environment `production` → service `library` | `VITE_GA_MEASUREMENT_ID` | `G-E409H76XYY` |
 
-Set on these two services and **nowhere else**. Leaving it unset in every other environment is half of what keeps previews
-dark; the hostname gate is the other half.
+Set on these two services. The hostname gate is what keeps previews dark.
 
 Vite bakes `VITE_*` at **image build time**, so changing the value needs a landing redeploy, not a
 restart. `frontend/landing/Dockerfile` carries the matching `ARG VITE_GA_MEASUREMENT_ID` +
@@ -174,7 +173,7 @@ library host; the senders are in `frontend/landing/src/analytics.ts`.
 - The library asks for consent itself. The answer is stored under `asc_consent` on its own
   origin, so an answer given on the landing does not carry over, nor the reverse.
 - The `_ga` cookies are set for `library.ascomply.com` only (`cookie_domain`), and a library
-  Reject expires them there. The library never reads or deletes a `.ascomply.com` `_ga`.
+  Reject expires them there. The library never deletes a `.ascomply.com` `_ga`.
 - The library sends no HubSpot form and no `generate_lead`; it has no forms.
 
 | Event | Parameters | Fires when |
@@ -186,8 +185,8 @@ library host; the senders are in `frontend/landing/src/analytics.ts`.
 
 Operator items. They sit outside the seven numbered items above and are not dischargeable by CI.
 
-- L1. Set `VITE_GA_MEASUREMENT_ID=G-E409H76XYY` on the production `library` service, then
-  redeploy so `vite build` bakes it. **OPEN.**
+- L1. Set `VITE_GA_MEASUREMENT_ID=G-E409H76XYY` on the production `library` service.
+  **DONE** 2026-10-08 (set with `--skip-deploys`); the production library bakes it on its next deploy.
 - L2. Register `feature_id` and `group_id` as GA4 event-scoped custom dimensions. **OPEN.**
 - L3. In the web stream's enhanced measurement, turn off "Page changes based on browser history
   events". **OPEN** — a human gate with no code backstop; required before `epic/lib` reaches `main`.

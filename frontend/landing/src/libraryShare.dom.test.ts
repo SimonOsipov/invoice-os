@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://library.ascomply.com/" }
-// The landing's gate, consent seam and senders, driven on the library host (LIB-07-01).
+// The landing's gate, consent seam and senders, driven on the library host.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { CONSENT_STORAGE_KEY, CONSENT_VERSION, type ConsentRecord } from './consent'

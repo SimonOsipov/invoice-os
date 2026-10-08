@@ -7,6 +7,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { FEATURES, GROUPS } from './content'
 import { Home } from './components/Home'
+import { TourOverlay } from './components/TourOverlay'
 import { JourneyStepper } from './components/JourneyStepper'
 import { Player } from './components/Player'
 import { Sidebar } from './components/Sidebar'
@@ -99,9 +100,9 @@ describe('library entry', () => {
       color: 'var(--surface-foreground)',
       border: '1px solid var(--on-dark-20)',
     })
-    expect(ruleFor(rs, '.asc-app .ds-btn--primary:hover').filter).toBe('brightness(1.18)')
-    expect(ruleFor(rs, '.asc-app .ds-btn--outline:hover').background).toBe('var(--muted)')
-    expect(ruleFor(rs, '.asc-app .ds-btn--outlineDark:hover').background).toBe('var(--on-dark-10)')
+    expect(ruleFor(rs, '.asc-app .ds-btn--primary:hover:not(:disabled)').filter).toBe('brightness(1.18)')
+    expect(ruleFor(rs, '.asc-app .ds-btn--outline:hover:not(:disabled)').background).toBe('var(--muted)')
+    expect(ruleFor(rs, '.asc-app .ds-btn--outlineDark:hover:not(:disabled)').background).toBe('var(--on-dark-10)')
   })
 
   it('VE-04 a link Button keeps its colour inside .asc-app', () => {
@@ -179,5 +180,21 @@ describe('library entry', () => {
 
   it('VE-10 the back button hover is a rule in library.css', () => {
     expect(ruleFor(rules(read(join(HERE, 'styles/library.css'))), '.lib-back:hover').color).toBe('var(--teal) !important')
+  })
+
+  it("VE-11 the library's disabled rule has the landing's declarations", () => {
+    const landing = ruleFor(rules(read(join(HERE, '../../landing/src/styles/ds.css'))), '.ds-btn:disabled')
+    expect(landing).toMatchObject({ cursor: 'not-allowed', opacity: '0.45' })
+    const lib = ruleFor(rules(read(join(HERE, 'styles/library.css'))), '.ds-btn:disabled')
+    expect(lib).toEqual(landing)
+  })
+
+  it('VE-12 the tour close hover is a rule in library.css', () => {
+    const rs = rules(read(join(HERE, 'styles/library.css')))
+    expect(ruleFor(rs, '.lib-tour-x:hover').color).toBe('var(--ink) !important')
+    const html = renderToStaticMarkup(
+      createElement(TourOverlay, { tour: { i: 0, phase: 'card' }, rect: null, win: { w: 100, h: 100 }, onBack() {}, onNext() {}, onWatch() {}, onClose() {} }),
+    )
+    expect(html.match(/<button\b[^>]*class="lib-tour-x"/g)).toHaveLength(1)
   })
 })

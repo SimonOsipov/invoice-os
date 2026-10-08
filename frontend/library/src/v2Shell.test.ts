@@ -67,6 +67,15 @@ describe('library shell primitives', () => {
     expect(cls({ variant: 'outlineDark', size: 'sm' })).toBe('ds-btn ds-btn--outlineDark ds-btn--sm')
   })
 
+  it('SH-02b Button passes disabled to the button only', () => {
+    const off = only(render(btn({ disabled: true }, 'Go')), 'button')
+    expect(off.attrs).toMatch(/\sdisabled(=|\s|$)/)
+    expect(attr(off, 'type')).toBe('button')
+    expect(only(render(btn({}, 'Go')), 'button').attrs).not.toContain('disabled')
+    const link = only(render(btn({ href: 'https://l.example/', disabled: true }, 'Go')), 'a')
+    expect(link.attrs).not.toContain('disabled')
+  })
+
   it('SH-03 a Button with href is a link, without href a button', () => {
     const link = render(btn({ href: 'https://l.example/?demo' }, 'Book'))
     const a = only(link, 'a')

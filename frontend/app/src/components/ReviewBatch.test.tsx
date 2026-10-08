@@ -80,6 +80,7 @@ function reviewCtx(batchIds: string[]): PlatformCtx {
   const ctx = {
     authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
     reviewBatchIds: batchIds,
+    adoptBatchClient: vi.fn(),
     run: null,
     restartImport: vi.fn(),
     openImportedInvoice: vi.fn(),

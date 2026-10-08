@@ -424,6 +424,8 @@ export type PlatformCtx = {
   // instead, and a stale in-memory report is exactly the frozen-counter source that
   // replaced. An id is all any consumer needs; nothing may resurrect the payload.
   reviewBatchIds: string[]
+  // Cold review load only: no-op unless no client is picked yet and the id is in the portfolio.
+  adoptBatchClient: (entityId: string) => void
   // Set by openImportedInvoice (M4-08-05) when the user clicks through to a real
   // invoice. Non-null makes InvoiceDetail render its honest placeholder instead of
   // resolving a mock invoice; M4-09 swaps that for a real fetch.

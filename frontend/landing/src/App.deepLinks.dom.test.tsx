@@ -2,7 +2,7 @@
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
 /// <reference types="node" />
 // ?demo and ?register open their modals at mount. Setup mirrors App.register.dom.test.tsx.
-import { act, createElement } from 'react'
+import { StrictMode, act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -55,11 +55,11 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-async function bootAt(path: string): Promise<void> {
+async function bootAt(path: string, strict = false): Promise<void> {
   window.history.replaceState(null, '', path)
   const mod = (await import('./App')) as { default: () => ReturnType<typeof createElement> }
   await act(async () => {
-    root.render(createElement(mod.default))
+    root.render(strict ? createElement(StrictMode, null, createElement(mod.default)) : createElement(mod.default))
   })
 }
 
@@ -149,6 +149,15 @@ describe('deep links', () => {
     const book = Array.from(document.querySelectorAll<HTMLButtonElement>('header button')).find((b) => b.textContent?.trim() === 'Book a demo')!
     await act(async () => book.click())
     expect(trackDemoOpen).toHaveBeenCalledWith('nav')
+  })
+
+  it.each([
+    ['/?demo', 'Book a demo'],
+    ['/?register', 'Create an account'],
+  ])('deepLink_strictModeDoubleInitSeesOneUrl %s', async (path, title) => {
+    await bootAt(path, true)
+    expect(dialogs()).toEqual([title])
+    expect(window.location.search).toBe('')
   })
 
   it('deepLink_noParamOpensNothing', async () => {

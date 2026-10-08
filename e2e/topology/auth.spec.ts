@@ -1,7 +1,7 @@
 import { test, expect, type BrowserContext, type Frame, type Locator, type Page, type Request, type Response } from '@playwright/test'
 import { APP_URL, FIRM_PERSONA, GATEWAY_URL, INHOUSE_PERSONA, TENANTS } from './targets'
 import { resolveTarget } from '../targets'
-import { DESTINATION_READY, VERIFIED, browserToken, collectErrors, expectInWorkspace, isHandoffNavigation, passFrontDoor, sidebarRoster, signInAs, signInAtFrontDoor, submitSignIn } from '../personaSession'
+import { DESTINATION_READY, VERIFIED, browserToken, collectErrors, expectInWorkspace, headerSignIn, isHandoffNavigation, passFrontDoor, sidebarRoster, signInAs, signInAtFrontDoor, signInDialog, submitSignIn } from '../personaSession'
 import { CONSOLE_SESSION_KEY, consoleUrl, seedStaffSession, type ConsoleTarget } from '../staffSession'
 import { ensureMember } from '../realAccounts'
 import {
@@ -81,7 +81,7 @@ test('deployed app: a second real sign-in replaces the session only after the fi
   // and keeps it, then the hand-off code is ignored.
   await page.goto(`${APP_URL}/?auth=start`)
   await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-  const dialog = page.getByRole('dialog', { name: 'Platform login' })
+  const dialog = signInDialog(page)
   await expect(dialog.getByLabel('Work email', { exact: true })).toBeVisible()
   await Promise.all([
     page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
@@ -471,7 +471,7 @@ test('deployed landing: the sign-in dialog offers the form and no persona', asyn
   // ?auth=start bounces to landing with a sign-in state, which opens the dialog on its form.
   await page.goto(`${APP_URL}/?auth=start`)
   await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-  const dialog = page.getByRole('dialog', { name: 'Platform login' })
+  const dialog = signInDialog(page)
   await expect(dialog).toBeVisible()
 
   // Positive control first: an absence check beside an unrendered form passes vacuously.
@@ -681,6 +681,8 @@ const HANDOFF_TTL_MS = 60_000
 // frontend/landing/src/App.tsx SIGN_IN_OUTCOMES and src/signIn.ts INCORRECT.
 const HANDOFF_FAILED = "We couldn't open your workspace. Sign in again."
 const INCORRECT = 'Email or password is incorrect.'
+// frontend/landing/src/signIn.ts SIGN_IN_UNAVAILABLE.
+const SIGN_IN_UNAVAILABLE = 'Sign-in is unavailable right now. Try again shortly.'
 // internal/gateway/signin.go: the exchange refusal.
 const INVALID_CODE = 'invalid or expired code'
 
@@ -732,8 +734,8 @@ test('deployed app: a real sign-in from the front door returns to its destinatio
     .poll(() => new URL(page.url()).searchParams.has('state'), { message: `landing kept ?state= at ${page.url()}` })
     .toBe(false)
 
-  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
-  await expect(page.getByRole('dialog', { name: 'Platform login' })).toBeVisible()
+  await headerSignIn(page).click()
+  await expect(signInDialog(page)).toBeVisible()
   const [handoffNav] = await Promise.all([
     page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
     submitSignIn(page, account.email, account.password),
@@ -786,16 +788,13 @@ test('deployed app: a real sign-in from a direct landing visit bounces for a sta
   const urls = recordUrls(page)
 
   await page.goto(LANDING_URL)
-  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
-  const dialog = page.getByRole('dialog', { name: 'Platform login' })
-  await expect(dialog.getByRole('button', { name: 'Continue with email', exact: true })).toBeVisible()
-  await expect(dialog.getByLabel('Work email', { exact: true }), 'a stateless landing must not offer the form').toHaveCount(0)
+  const dialog = signInDialog(page)
 
-  // Armed before the click: app ?auth=start, then back to landing with signin=ready.
+  // Armed before the click: one click on "Sign in" goes to app ?auth=start, then back to landing with signin=ready.
   await Promise.all([
     page.waitForRequest((r) => r.isNavigationRequest() && r.url().startsWith(APP_URL) && new URL(r.url()).searchParams.get('auth') === 'start'),
     page.waitForRequest((r) => r.isNavigationRequest() && r.url().startsWith(LANDING_URL) && new URL(r.url()).searchParams.get('signin') === 'ready'),
-    dialog.getByRole('button', { name: 'Continue with email', exact: true }).click(),
+    headerSignIn(page).click(),
   ])
   await expect(dialog.getByLabel('Work email', { exact: true })).toBeVisible()
 
@@ -812,6 +811,65 @@ test('deployed app: a real sign-in from a direct landing visit bounces for a sta
   expect(leakingUrls(urls), 'a JWT appeared in these URLs').toEqual([])
 
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+// Main-frame navigation requests, counted from the call on.
+function countMainFrameNavigations(page: Page): () => number {
+  let n = 0
+  page.on('request', (r) => {
+    if (r.isNavigationRequest() && r.frame() === page.mainFrame()) n++
+  })
+  return () => n
+}
+
+test('deployed landing: Back after the Sign in bounce leaves a working Sign in', async ({ page }) => {
+  await seedConsent(page, false)
+  await page.goto(LANDING_URL)
+  await headerSignIn(page).click()
+  // Control: an absence check after Back passes vacuously if the bounce never showed the form.
+  await page.waitForURL((u) => u.href.startsWith(LANDING_URL) && new URL(u).searchParams.get('signin') === 'ready', { timeout: 20_000 })
+  await expect(signInDialog(page).getByLabel('Work email', { exact: true })).toBeVisible()
+
+  await page.goBack()
+  await page.waitForLoadState('load')
+  await expect(headerSignIn(page)).toBeVisible()
+  expect(page.url().startsWith(LANDING_URL), `Back left the landing: ${page.url()}`).toBe(true)
+  expect(new URL(page.url()).searchParams.has('signin'), `signin survived Back: ${page.url()}`).toBe(false)
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+
+  const navigations = countMainFrameNavigations(page)
+  await headerSignIn(page).click()
+  await expect(signInDialog(page).getByLabel('Work email', { exact: true })).toBeVisible()
+  expect(navigations(), 'Sign in after Back navigated instead of opening the form').toBe(0)
+})
+
+test('deployed landing: a blocked app shows Sign in unavailable and does not navigate', async ({ page }) => {
+  await seedConsent(page, false)
+  await page.goto(LANDING_URL)
+  await page.route(`${APP_URL}/**`, (r) => r.abort('connectionrefused'))
+  const navigations = countMainFrameNavigations(page)
+  const appNavigations: string[] = []
+  page.on('request', (r) => {
+    if (r.isNavigationRequest() && r.url().startsWith(APP_URL)) appNavigations.push(r.url())
+  })
+
+  await headerSignIn(page).click()
+  const dialog = signInDialog(page)
+  await expect(dialog.getByRole('alert')).toHaveText(SIGN_IN_UNAVAILABLE)
+  expect(page.url().startsWith(LANDING_URL), `the click left the landing: ${page.url()}`).toBe(true)
+  expect(navigations(), 'a main-frame navigation fired with the app blocked').toBe(0)
+  expect(appNavigations, 'a navigation to the app fired').toEqual([])
+
+  // Retry: with the app reachable the Submit bounce succeeds and the form shows.
+  await page.unroute(`${APP_URL}/**`)
+  await dialog.getByLabel('Work email', { exact: true }).fill('retry@example.com')
+  await dialog.getByLabel('Password', { exact: true }).fill('not-a-real-password')
+  await Promise.all([
+    page.waitForRequest((r) => r.isNavigationRequest() && r.url().startsWith(APP_URL) && new URL(r.url()).searchParams.get('auth') === 'start'),
+    page.waitForRequest((r) => r.isNavigationRequest() && r.url().startsWith(LANDING_URL) && new URL(r.url()).searchParams.get('signin') === 'ready'),
+    dialog.getByRole('button', { name: 'Sign in →', exact: true }).click(),
+  ])
+  await expect(signInDialog(page).getByLabel('Work email', { exact: true })).toBeVisible()
 })
 
 // A code redeems only with the state its own tab minted on the app origin.
@@ -834,7 +892,7 @@ test('deployed app: a hand-off code minted in another browser signs no tab in', 
 
       await victim.goto(`${APP_URL}/?handoff=${c1}`)
       await victim.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-      await expect(victim.getByRole('dialog', { name: 'Platform login' })).toContainText(HANDOFF_FAILED)
+      await expect(signInDialog(victim)).toContainText(HANDOFF_FAILED)
       expect(exchanges, 'the victim tab called /auth/exchange').toEqual([])
       expect(await storedSession(context), 'the victim tab stored a session').toBeNull()
       expect(errors, `console errors in the victim tab:\n${errors.join('\n')}`).toEqual([])
@@ -864,7 +922,7 @@ test('deployed app: a hand-off code minted in another browser signs no tab in', 
       // An expired code answers the same 400, which would prove nothing about the state.
       expect(Date.now() - mintedAt, 'the code could have expired before the victim tab redeemed it').toBeLessThan(HANDOFF_TTL_MS)
       await victim.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-      await expect(victim.getByRole('dialog', { name: 'Platform login' })).toContainText(HANDOFF_FAILED)
+      await expect(signInDialog(victim)).toContainText(HANDOFF_FAILED)
       expect(await storedSession(context), 'the victim tab stored a session').toBeNull()
       expect(errors, `console errors in the victim tab:\n${errors.join('\n')}`).toEqual([])
     } finally {
@@ -1464,7 +1522,7 @@ test('deployed app: a refused renewal returns to landing and keeps the destinati
   ).toBe(true)
   expect(await storedSession(page.context()), 'the app origin kept a stored session').toBeNull()
 
-  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
+  await headerSignIn(page).click()
   await Promise.all([
     page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
     submitSignIn(page, account.email, account.password),
@@ -1554,7 +1612,7 @@ test('deployed app: signing out on one device ends the session on every device',
       await b.page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: 'Invoices' }).click()
       expect((await refused).status(), "B's first /api/ answer after the sign-out").toBe(401)
       expect((await bFrontDoor).status(), "B's front door answer").toBe(200)
-      await expect(b.page.getByRole('banner').getByRole('button', { name: 'Platform login' })).toBeVisible()
+      await expect(headerSignIn(b.page)).toBeVisible()
       expect(await storedSession(b.context), 'B kept a stored session').toBeNull()
 
       const renewed = await rawFetch('/auth/refresh', { method: 'POST', body: { refresh_token: recordB.refresh_token } })
@@ -1562,7 +1620,7 @@ test('deployed app: signing out on one device ends the session on every device',
     })
 
     await test.step('B signs in again and lands on /, not the old destination', async () => {
-      await b.page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
+      await headerSignIn(b.page).click()
       await Promise.all([
         b.page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
         submitSignIn(b.page, account.email, account.password),
@@ -1659,7 +1717,7 @@ async function visitConsole(page: Page, target: ConsoleTarget): Promise<void> {
 }
 
 async function signInThroughLanding(page: Page, target: ConsoleTarget, account: { email: string; password: string }): Promise<Request> {
-  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click({ timeout: 15_000 })
+  await headerSignIn(page).click({ timeout: 15_000 })
   const [handoff] = await Promise.all([
     page.waitForRequest((r) => r.isNavigationRequest() && isConsoleHandoff(r.url(), target)),
     submitSignIn(page, account.email, account.password),
@@ -1734,7 +1792,7 @@ test("deployed consoles: a customer's real session opens neither console and is 
         await signInThroughLanding(page, target, account)
         expect((await notStaff).status(), `the ${target} not-staff landing answer`).toBe(200)
         await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-        await expect(page.getByRole('dialog', { name: 'Platform login' }).getByRole('alert')).toContainText(NOT_STAFF)
+        await expect(signInDialog(page).getByRole('alert')).toContainText(NOT_STAFF)
 
         expect(await consoleRecord(context, target), `${target} kept a session for a customer`).toBeNull()
         expect(urls.length, 'no URLs were recorded').toBeGreaterThan(0)
@@ -1887,12 +1945,13 @@ const KIND_LABEL: Record<TenantKind, string> = {
 }
 const CREATE = 'Create an account'
 
-// Opens the registration window from the header, fills it, submits, and ends on "Check your email".
+// Opens the registration window through the sign-in window (one "Sign in" click bounces for a state), fills it, submits, and ends on "Check your email".
 // A firstEmail is submitted first: the window must refuse it inline and keep every other field.
 async function registerThroughLanding(page: Page, account: RealAccount, kind: TenantKind, firstEmail?: string, marketing = false): Promise<void> {
   await seedConsent(page, false)
   await page.goto(LANDING_URL)
-  await page.getByRole('banner').getByRole('button', { name: CREATE }).click()
+  await headerSignIn(page).click()
+  await signInDialog(page).getByRole('button', { name: CREATE, exact: true }).click()
   const dialog = page.getByRole('dialog', { name: CREATE })
   await expect(dialog).toBeVisible()
   const email = dialog.getByLabel('Work email', { exact: true })
@@ -2120,13 +2179,13 @@ async function fakeUnverifiedSignIn(page: Page): Promise<void> {
   })
 }
 
-// Front door -> "Platform login" -> the form signs in `email`; the faked 403 shows the alert.
+// Front door -> "Sign in" -> the form signs in `email`; the faked 403 shows the alert.
 async function signInUnverified(page: Page, email: string): Promise<Locator> {
   await seedConsent(page, false)
   await page.goto(`${resolveTarget('APP_URL')}/`)
   await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
-  const dialog = page.getByRole('dialog', { name: 'Platform login' })
+  await headerSignIn(page).click()
+  const dialog = signInDialog(page)
   await expect(dialog).toBeVisible()
   await submitSignIn(page, email, crypto.randomUUID().slice(0, 16))
   await expect(dialog.getByRole('alert').filter({ hasText: UNVERIFIED })).toBeVisible()
@@ -2332,7 +2391,7 @@ test('deployed landing: "Forgot password?" sends a reset request, and a bogus re
     await page.setViewportSize({ width: 1280, height: TALL })
     await page.goto(`${APP_URL}/?auth=start`)
     await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-    const dialog = page.getByRole('dialog', { name: 'Platform login' })
+    const dialog = signInDialog(page)
     await expect(dialog.getByRole('heading', { name: 'Sign in to your workspace' })).toBeVisible()
     const forgot = dialog.getByRole('button', { name: 'Forgot password?', exact: true })
     await expect(forgot).toBeVisible()
@@ -2541,9 +2600,9 @@ async function readSessionIdentity(page: Page): Promise<Me> {
   return me(await browserToken(page))
 }
 
-// The landing "Platform login" window, as `signInAtFrontDoor` completes it, once the invite page's "Sign in" opened it.
+// The landing "Sign in" window, as `signInAtFrontDoor` completes it, once the invite page's "Sign in" opened it.
 async function signInInOpenWindow(page: Page, account: { email: string; password: string }): Promise<void> {
-  await expect(page.getByRole('dialog', { name: 'Platform login' }).getByLabel('Work email', { exact: true })).toBeVisible({ timeout: 30_000 })
+  await expect(signInDialog(page).getByLabel('Work email', { exact: true })).toBeVisible({ timeout: 30_000 })
   await Promise.all([
     page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
     submitSignIn(page, account.email, account.password),
@@ -2629,8 +2688,7 @@ test('deployed journey: an invitee who registered in one browser signs in from a
     const errors = errorsAllowing403Me(page)
     await seedConsent(page, false)
     await page.goto(LANDING_URL)
-    await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
-    await page.getByRole('dialog', { name: 'Platform login' }).getByRole('button', { name: 'Continue with email', exact: true }).click()
+    await headerSignIn(page).click()
     await signInInOpenWindow(page, account)
 
     await expect(page.getByRole('heading', { name: `Join ${workspace.name}`, exact: true })).toBeVisible({ timeout: 30_000 })

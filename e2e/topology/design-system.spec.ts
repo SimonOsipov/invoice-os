@@ -239,18 +239,16 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
       ).toBeLessThanOrEqual(row[i + 1].left + 1)
     }
 
-    const login = row.find((e) => e.tag === 'button' && e.text === 'Platform login')
-    const create = row.find((e) => e.tag === 'button' && e.text === CREATE_LABEL)
-    expect(Boolean(login), `${width}px: Platform login shown`).toBe(width > BURGER_MAX)
-    if (width > CREATE_MAX) {
-      expect(create, `${width}px: the "${CREATE_LABEL}" entry is missing from the header (is landing.VITE_REGISTRATION_OPEN on?)`).toBeDefined()
-      expect(login!.right, `${width}px: "${CREATE_LABEL}" left ${create!.left} is not right of Platform login right ${login!.right}`).toBeLessThanOrEqual(create!.left + 1)
-      const centreGap = Math.abs((create!.top + create!.bottom) / 2 - (login!.top + login!.bottom) / 2)
-      expect(centreGap, `${width}px: "${CREATE_LABEL}" and Platform login centre lines differ by ${centreGap}`).toBeLessThanOrEqual(1)
-      const heightGap = Math.abs(create!.bottom - create!.top - (login!.bottom - login!.top))
-      expect(heightGap, `${width}px: "${CREATE_LABEL}" wraps: its height differs from Platform login's by ${heightGap}`).toBeLessThanOrEqual(1)
-    } else {
-      expect(create, `${width}px: "${CREATE_LABEL}" must be hidden at or below ${CREATE_MAX}px`).toBeUndefined()
+    const signIn = row.find((e) => e.tag === 'button' && e.text === 'Sign in')
+    const demo = row.find((e) => e.tag === 'button' && e.text === 'Book a demo')
+    expect(Boolean(signIn), `${width}px: Sign in shown`).toBe(width > BURGER_MAX)
+    if (width > BURGER_MAX) {
+      expect(demo, `${width}px: "Book a demo" is missing from the header`).toBeDefined()
+      expect(signIn!.right, `${width}px: "Sign in" right ${signIn!.right} is not left of "Book a demo" left ${demo!.left}`).toBeLessThanOrEqual(demo!.left + 1)
+      const centreGap = Math.abs((demo!.top + demo!.bottom) / 2 - (signIn!.top + signIn!.bottom) / 2)
+      expect(centreGap, `${width}px: "Sign in" and "Book a demo" centre lines differ by ${centreGap}`).toBeLessThanOrEqual(1)
+      const oneLine = Math.min(...row.filter((e) => e.tag === 'a' && e.nav).map((e) => e.bottom - e.top))
+      expect(signIn!.bottom - signIn!.top, `${width}px: "Sign in" wraps (a nav link line is ${oneLine})`).toBeLessThanOrEqual(oneLine + 1)
     }
 
     const navLinks = row.filter((e) => e.tag === 'a' && e.nav)
@@ -267,9 +265,9 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
 }
 
 // BURGER_MAX + 1 is the narrowest width that shows the five nav links.
-// Widest first (layout.ts); 1220 and 1219 straddle the entry's edge.
+// Widest first (layout.ts).
 test('landing header row: inside the viewport and no overlap from 2560 to 834', async ({ page }, testInfo) => {
-  await assertHeaderRow(page, testInfo, [...WIDE_WIDTHS, 1240, CREATE_MAX + 1, CREATE_MAX, BURGER_MAX + 1, 1080, 834])
+  await assertHeaderRow(page, testInfo, [...WIDE_WIDTHS, 1240, BURGER_MAX + 1, 1080, 834])
 })
 
 test('landing header row at 390: inside the viewport and no overlap', async ({ page }, testInfo) => {
@@ -285,10 +283,6 @@ const FRAME_VIEWPORTS = [
 
 // Burger shows at <=1120px (landing.css .a-burger).
 const BURGER_MAX = 1120
-
-// The header entry hides at <=1219px (landing.css .a-create).
-const CREATE_MAX = 1219
-const CREATE_LABEL = 'Create an account'
 
 type Frame = { width: number; height: number }
 
@@ -330,7 +324,7 @@ test('landing frame geometry at 1440, 834 and 390', async ({ page }, testInfo) =
   const header = page.getByRole('banner')
   const burger = header.getByRole('button', { name: 'Menu' })
   const nav = page.getByRole('navigation', { name: 'Primary' })
-  const login = header.getByRole('button', { name: 'Platform login' })
+  const login = header.getByRole('button', { name: 'Sign in', exact: true })
   const measured: unknown[] = []
 
   for (const vp of FRAME_VIEWPORTS) {
@@ -347,11 +341,11 @@ test('landing frame geometry at 1440, 834 and 390', async ({ page }, testInfo) =
     if (wide) {
       await expect(burger, `${label}: burger`).toBeHidden()
       await expect(nav, `${label}: Primary nav`).toBeVisible()
-      await expect(login, `${label}: Platform login`).toBeVisible()
+      await expect(login, `${label}: Sign in`).toBeVisible()
     } else {
       await expect(burger, `${label}: burger`).toBeVisible()
       await expect(nav, `${label}: Primary nav`).toBeHidden()
-      await expect(login, `${label}: Platform login`).toBeHidden()
+      await expect(login, `${label}: Sign in`).toBeHidden()
     }
     await expect(header.getByRole('button', { name: 'Book a demo' }), `${label}: Book a demo`).toBeVisible()
 
@@ -745,17 +739,14 @@ test('landing mobile menu at 834 and 390', async ({ page }, testInfo) => {
     const navLinks = await page.locator('nav[aria-label="Primary"] a').count()
     expect(navLinks, `${label}: Primary nav links`).toBeGreaterThan(0)
     await expect(menu.locator('a'), `${label}: one menu link per nav link`).toHaveCount(navLinks)
-    await expect(menu.getByRole('button', { name: 'Platform login' }), `${label}: Platform login in the menu`).toHaveCount(1)
-    const create = menu.getByRole('button', { name: CREATE_LABEL })
-    await expect(create, `${label}: exactly one "${CREATE_LABEL}" in the menu (is landing.VITE_REGISTRATION_OPEN on?)`).toHaveCount(1)
-    await expect(menu.getByRole('button'), `${label}: the menu buttons, in order`).toHaveText(['Platform login', CREATE_LABEL])
-    const loginBox = await box(menu.getByRole('button', { name: 'Platform login' }), `${label} menu login`)
-    const createBox = await box(create, `${label} menu create`)
-    expect(createBox.y, `${label}: "${CREATE_LABEL}" top vs Platform login bottom`).toBeGreaterThanOrEqual(loginBox.y + loginBox.height - 1)
-    expect(enclosesRect(menuBox, createBox, 1), `${label}: "${CREATE_LABEL}" leaves the menu`).toBe(true)
-    expect(createBox.y + createBox.height, `${label}: "${CREATE_LABEL}" bottom vs viewport`).toBeLessThanOrEqual(vp.height + 1)
+    const signIn = menu.getByRole('button', { name: 'Sign in', exact: true })
+    await expect(signIn, `${label}: exactly one "Sign in" in the menu`).toHaveCount(1)
+    await expect(menu.getByRole('button'), `${label}: the menu buttons`).toHaveText(['Sign in'])
+    const signInBox = await box(signIn, `${label} menu sign in`)
+    expect(enclosesRect(menuBox, signInBox, 1), `${label}: "Sign in" leaves the menu`).toBe(true)
+    expect(signInBox.y + signInBox.height, `${label}: "Sign in" bottom vs viewport`).toBeLessThanOrEqual(vp.height + 1)
 
-    measured.push({ width: vp.width, headerBox, menuBox, loginBox, createBox, navLinks })
+    measured.push({ width: vp.width, headerBox, menuBox, signInBox, navLinks })
 
     await page.keyboard.press('Escape')
     await expect(menu, `${label}: menu after Escape`).toHaveCount(0)
@@ -773,21 +764,14 @@ test('landing breakpoint edges', async ({ page }, testInfo) => {
   const header = page.getByRole('banner')
   const burger = header.getByRole('button', { name: 'Menu' })
   const nav = page.getByRole('navigation', { name: 'Primary' })
-  const login = header.getByRole('button', { name: 'Platform login' })
+  const login = header.getByRole('button', { name: 'Sign in', exact: true })
   const measured: Record<string, unknown> = {}
 
   for (const [width, collapsed] of [[BURGER_MAX, true], [BURGER_MAX + 1, false]] as const) {
     await settleFrame(page, { width, height: 900 })
     await expect(burger, `${width}px: burger`).toBeVisible({ visible: collapsed })
     await expect(nav, `${width}px: Primary nav`).toBeVisible({ visible: !collapsed })
-    await expect(login, `${width}px: Platform login`).toBeVisible({ visible: !collapsed })
-  }
-
-  const create = header.getByRole('button', { name: CREATE_LABEL })
-  for (const [width, shown] of [[CREATE_MAX, false], [CREATE_MAX + 1, true]] as const) {
-    await settleFrame(page, { width, height: 900 })
-    await expect(create, `${width}px: "${CREATE_LABEL}" (a hidden entry at ${CREATE_MAX + 1} may mean landing.VITE_REGISTRATION_OPEN is off)`).toBeVisible({ visible: shown })
-    await expect(burger, `${width}px: burger`).toBeHidden()
+    await expect(login, `${width}px: Sign in`).toBeVisible({ visible: !collapsed })
   }
 
   const heights: number[] = []

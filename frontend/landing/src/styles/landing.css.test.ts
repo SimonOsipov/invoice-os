@@ -446,38 +446,3 @@ describe('R5-GE-4 the FAQ aside is static in the one-column layout', () => {
     expect(declared(rules, '[data-faq-aside]', 'position', noAt), 'a base rule would fight the sticky inline style').toBeUndefined()
   })
 })
-
-const ENTRY_FIXTURE = (max: string, block1120 = '') => `
-@media (max-width: ${max}) { .a-create { display: none; } }
-@media (max-width: 1120px) { .a-nav, .a-login { display: none; }${block1120} }
-`
-
-/** The registration entry contract: the failures, empty when it holds. */
-function createEntryFailures(css: string): string[] {
-  const rules = parseRules(css)
-  const in1120 = rules.filter((r) => maxWidth1120(r.at) && selectorParts(r).includes('.a-create'))
-  const checks: [string, string | undefined, string | undefined][] = [
-    ['.a-create at max-width 1219px', display(rules, '.a-create', maxWidth(1219)), 'none'],
-    ['.a-create outside any media', display(rules, '.a-create', noAt), undefined],
-    ['.a-create rules in the 1120px block', String(in1120.length), '0'],
-  ]
-  return checks.filter(([, got, want]) => got !== want).map(([what, got, want]) => `${what}: ${got} != ${want}`)
-}
-
-describe('HD-13 the registration entry hides at 1219px and the 1120px breakpoint is untouched', () => {
-  it('controls: the lookup accepts a 1219px fixture and rejects 1218px, a comment, and a 1120px-block copy', () => {
-    expect(createEntryFailures(ENTRY_FIXTURE('1219px'))).toEqual([])
-    expect(createEntryFailures(ENTRY_FIXTURE('1218px')).length, 'a max-width 1218px copy must fail the lookup').toBeGreaterThan(0)
-    const commented = ENTRY_FIXTURE('1219px').replace('.a-create { display: none; }', '/* .a-create { display: none; } */')
-    expect(commented).not.toBe(ENTRY_FIXTURE('1219px'))
-    expect(createEntryFailures(commented).length, 'a commented-out rule must fail the lookup').toBeGreaterThan(0)
-    expect(createEntryFailures(ENTRY_FIXTURE('1219px', ' .a-create { display: none; }')).length, 'a rule inside the 1120px block must fail the lookup').toBeGreaterThan(0)
-  })
-
-  it('landing.css hides .a-create at max-width 1219px, shows it above, keeps it out of the 1120px block, and HD-11 still holds', () => {
-    const rules = parseRules(LANDING_CSS)
-    expect(rules.length, 'control: the sheet parsed').toBeGreaterThan(10)
-    expect(breakpointFailures(LANDING_CSS), 'control: v2 1120px rules hold').toEqual([])
-    expect(createEntryFailures(LANDING_CSS)).toEqual([])
-  })
-})

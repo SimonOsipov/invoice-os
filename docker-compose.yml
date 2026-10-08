@@ -1,6 +1,6 @@
 # Local dev database for the inner loop (M2-02). `make dev-db` brings this up,
 # bootstraps the two non-superuser roles, and applies all migrations — see the
-# Makefile targets and .claude/rules/db-migrations.md. This is the disposable LOCAL
+# Makefile targets. This is the disposable LOCAL
 # Postgres a solo engineer iterates against daily; it is unrelated to the
 # always-on shared Railway dev DB and to the PR scale-to-zero model (which
 # scales SPA compute only). CI does NOT use this file

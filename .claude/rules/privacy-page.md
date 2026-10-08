@@ -12,6 +12,8 @@ paths:
   - "packages/monitoring/src/**"
   - "internal/notifications/hubspot.go"
   - "internal/notifications/resend.go"
+  - "internal/notifications/worker.go"
+  - "internal/notifications/store.go"
 ---
 # Privacy page
 

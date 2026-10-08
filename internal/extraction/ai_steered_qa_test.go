@@ -97,7 +97,7 @@ func TestFixtures_AISteeredCommittedFixtureReadsAsTheOrderTestAssumes(t *testing
 		}
 	}
 
-	// .claude/rules/openrouter-clients.md: a blank answer changes nothing.
+	// A blank answer changes nothing.
 	if blank := extraction.MergeAIForTest(engine, nil, pages, nil); !reflect.DeepEqual(blank, engine) {
 		t.Errorf("a blank answer moved the engine's reading:\n got %+v\nwant %+v", blank, engine)
 	}

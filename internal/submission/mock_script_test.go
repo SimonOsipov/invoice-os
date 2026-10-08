@@ -257,8 +257,8 @@ func msRawURLOnly(t *testing.T, what, s string) {
 
 // TestMockTriggerFor_AllocationTable drives one row per allocation, and separately pins the
 // TABLE itself -- its length, its order and its contents. The two halves catch different bugs:
-// mockTriggerFor could be a correct-looking switch statement that has drifted from the table
-// the table is generated against, or the table could be right while the lookup
+// mockTriggerFor could be a correct-looking switch statement that has drifted from the
+// allocation table, or the table could be right while the lookup
 // silently normalises or short-circuits.
 func TestMockTriggerFor_AllocationTable(t *testing.T) {
 	want := []mockAllocation{

@@ -8,6 +8,8 @@ import { createRenewer, isRenewalDue, SessionEndedError, type Renewer } from './
 import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
 import { consumeSignInState, ensureSignInState, landingInviteUrl, landingSignInUrl, mintSignInState } from './lib/signInState'
 import { consumePendingInvite, holdPendingInvite, peekPendingInvite, readInviteFragment } from './lib/pendingInvite'
+import { consumePendingVerify, gatewayVerifyUrl, holdPendingVerify, landingVerifyFailedUrl, peekPendingVerify, readVerifyFragment } from './lib/verifyBounce'
+import { AuditExportToast } from './components/AuditExportToast'
 import { HANDOFF_PARAM, InviteRefusedError, createOwnWorkspace, isJoinOffer, isLiveHandoffSession, joinInvite, readHandoffCode, redeemHandoff, type JoinOffer } from './lib/sessionHandoff'
 import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import { isPromiseLike, makeAuthedFetch } from './lib/authedFetch'
@@ -1835,6 +1837,20 @@ export default function App() {
   // Read before the strip effect drops the hash; null when `?auth=start` carries no invite.
   const [startInvite] = useState(() => (authStart ? readInviteFragment(window.location.hash) : null))
   const startBounced = useRef(false)
+  // `?auth=verify#token=T`: landing forwards a confirm link. `?handoff=` wins over it.
+  const [authVerify] = useState(
+    () => readHandoffCode(window.location.search) === null && new URLSearchParams(window.location.search).get('auth') === 'verify',
+  )
+  // Read before the strip effect drops the hash.
+  const [verifyToken] = useState(() => (authVerify ? readVerifyFragment(window.location.hash) : null))
+  const verifyBounced = useRef(false)
+  // A live session wins over a confirm code; a pending verify turns on a notice naming it.
+  const [verifyConfirmedNotice, setVerifyConfirmedNotice] = useState<string | null>(() =>
+    liveHandoff && readHandoffCode(window.location.search) !== null && peekPendingVerify()
+      ? confirmedNotice(bootSession?.me?.user.email || bootSession?.me?.user.display_name || undefined)
+      : null,
+  )
+  const dismissVerifyNotice = useCallback(() => setVerifyConfirmedNotice(null), [])
   const frontDoorBounced = useRef(false)
   // Lazy initializer: synchronously rehydrate a persisted session at boot (no network,
   // no SignIn flash) so a reload / new tab returns straight to the workspace. A stored
@@ -1994,6 +2010,7 @@ export default function App() {
     const base = gatewayBase()
     if (!handoffCode || !base || redeemStarted.current) return
     redeemStarted.current = true
+    consumePendingVerify()
     const state = consumeSignInState()
     const invite = consumePendingInvite()
     const redemption = state
@@ -2092,6 +2109,28 @@ export default function App() {
     }
   }, [authStart, startInvite])
 
+  // Bounces over any stored session to the gateway confirm page; the ref keeps StrictMode to one navigation.
+  useEffect(() => {
+    if (!authVerify || verifyBounced.current) return
+    const base = gatewayBase()
+    let dest: string | null
+    if (verifyToken && base) {
+      dest = gatewayVerifyUrl(base, verifyToken, mintSignInState())
+    } else {
+      dest = landingVerifyFailedUrl()
+    }
+    if (dest) {
+      verifyBounced.current = true
+      if (verifyToken && base) holdPendingVerify()
+      window.location.href = dest
+    }
+  }, [authVerify, verifyToken])
+
+  // The marker only switches the notice on; a shown notice spends it.
+  useEffect(() => {
+    if (verifyConfirmedNotice !== null) consumePendingVerify()
+  }, [])
+
   // The single front door. Any sessionless visit — never signed in, signed out, session
   // expired while the tab was closed, or token invalidated by a 401 — goes to the landing
   // page rather than being offered a second place to sign in here.
@@ -2100,7 +2139,7 @@ export default function App() {
   // redemption navigates itself), so bouncing to landing would break landing → app. Also skipped when no
   // landing URL is configured (the standalone showcase build), which keeps its own picker.
   useEffect(() => {
-    if (seat || authStart || handoffPending || joinOffer || frontDoorBounced.current) return
+    if (seat || authStart || authVerify || handoffPending || joinOffer || frontDoorBounced.current) return
     const dest = landingBase() ? landingSignInUrl(ensureSignInState()) : null
     if (dest) {
       // The ref keeps StrictMode to one navigation.
@@ -2112,10 +2151,11 @@ export default function App() {
       captureDestination(window.location.pathname, routeQuery(at.view, at))
       window.location.href = dest
     }
-  }, [seat, authStart, handoffPending, joinOffer])
+  }, [seat, authStart, authVerify, handoffPending, joinOffer])
 
   // Mounting Workspace would clear the captured destination before the start bounce leaves.
   if (authStart && landingBase()) return null
+  if (authVerify && (gatewayBase() || landingBase())) return null
   if (bootRenewing && seat) return <SignInLoading />
   if (!seat) {
     if (joinOffer) {
@@ -2142,11 +2182,21 @@ export default function App() {
     return <SignIn signingIn={signingIn} onPick={doSignIn} />
   }
   return (
-    <Workspace
-      session={seat}
-      onSignOut={signOut}
-      freshToken={freshToken}
-      onUnauthorized={endRevokedSession}
-    />
+    <>
+      <Workspace
+        session={seat}
+        onSignOut={signOut}
+        freshToken={freshToken}
+        onUnauthorized={endRevokedSession}
+      />
+      {verifyConfirmedNotice !== null && (
+        <AuditExportToast kind="success" testId="verify-confirmed-toast" text={verifyConfirmedNotice} onDismiss={dismissVerifyNotice} />
+      )}
+    </>
   )
+}
+
+function confirmedNotice(who: string | undefined): string {
+  const as = who ? `as ${who}` : 'to another account'
+  return `Your email is confirmed. You are signed in ${as}. To use the confirmed account, sign out and sign in with it.`
 }

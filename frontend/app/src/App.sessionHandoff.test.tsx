@@ -2,13 +2,14 @@
 // The app redeems a landing hand-off code.
 
 import { StrictMode } from 'react'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, onTestFinished, vi } from 'vitest'
 
 import { APP_PERSONAS, type Me, type Session } from './auth'
 import { captureDestination } from './lib/deepLink'
 import { SESSION_KEY, serializeSession } from './lib/session'
 import { ensureSignInState } from './lib/signInState'
+import { holdPendingVerify } from './lib/verifyBounce'
 import { EMPTY_BUCKET } from './lib/dashboard'
 import { SUGGESTED_RULES } from './lib/rules'
 import type { PlatformCtx, SignedInUser } from './types'
@@ -961,6 +962,95 @@ describe('precedence (AC-9..AC-13, D9, D18)', () => {
     expect(window.location.search).toBe('')
     expect(fetchUrls).toEqual([])
     expect(hrefWrites, 'the front door runs with the unconsumed state').toEqual([`${LANDING}/?state=${S}`])
+  })
+})
+
+describe('a confirm code over a live session (LOGFIX-04-05, D10, D18)', () => {
+  const A_ME: Me = { ...OLD_ME, user: { ...OLD_ME.user, email: 'a@corp.example' } }
+  const A_TOKEN = jwt(A_ME.user.id, nowSec() + 3600)
+  const NOTICE = (who: string) => `Your email is confirmed. You are signed in ${who}. To use the confirmed account, sign out and sign in with it.`
+  const toast = () => screen.queryByTestId('verify-confirmed-toast')
+
+  async function bootOverLive(me: Me, withMarker = true) {
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(A_TOKEN, me))
+    const S = ensureSignInState()
+    if (withMarker) holdPendingVerify()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    return S
+  }
+
+  it('a verify code over a live session keeps A, posts nothing and shows the confirmed notice', async () => {
+    await bootOverLive(A_ME)
+    await settle()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(meAuth).toHaveLength(0)
+    expect(storedRecord()?.token).toBe(A_TOKEN)
+    expect(toast()?.textContent).toContain(NOTICE('as a@corp.example'))
+    expect(screen.getByTestId('verify-confirmed-toast').firstChild?.textContent).toBe(NOTICE('as a@corp.example'))
+    expect(sessionStorage.getItem('invoice-os.pendingVerify')).toBeNull()
+    expect(window.location.search).toBe('')
+  })
+
+  it('a verify code with no session signs in as B', async () => {
+    configure()
+    const S = ensureSignInState()
+    holdPendingVerify()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    await settle()
+    expect(exchangeBodies).toEqual([{ code: CODE, state: S }])
+    expect(toast()).toBeNull()
+    expect(sessionStorage.getItem('invoice-os.pendingVerify')).toBeNull()
+  })
+
+  it('a plain handoff over a live session shows no notice', async () => {
+    await bootOverLive(A_ME, false)
+    await settle()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(capturedCtx?.user.tenantName).toBe(OLD_ME.tenant.name)
+    expect(toast()).toBeNull()
+  })
+
+  it('the confirmed notice falls back to the display name, then to another account', async () => {
+    await bootOverLive({ ...A_ME, user: { ...A_ME.user, email: null } })
+    expect(toast()?.textContent).toContain(NOTICE('as Adaeze Nwankwo'))
+    cleanup()
+    capturedCtx = undefined
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    await bootOverLive({ ...A_ME, user: { ...A_ME.user, email: null, display_name: null } })
+    expect(toast()?.textContent).toContain(NOTICE('to another account'))
+  })
+
+  it('the confirmed notice renders the email as text', async () => {
+    await bootOverLive({ ...A_ME, user: { ...A_ME.user, email: '<b id="x">a</b>@corp.example' } })
+    expect(toast()?.querySelector('#x')).toBeNull()
+    expect(toast()?.textContent).toContain('<b id="x">a</b>@corp.example')
+  })
+
+  it('the confirmed notice dismisses like its sibling', async () => {
+    await bootOverLive(A_ME)
+    fireEvent.click(screen.getByLabelText('Dismiss'))
+    expect(toast()).toBeNull()
+    cleanup()
+    capturedCtx = undefined
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      await bootOverLive(A_ME)
+      expect(toast()).not.toBeNull()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5200)
+      })
+      expect(toast()).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

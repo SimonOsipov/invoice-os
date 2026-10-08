@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { APP_PERSONAS, type Session } from './auth'
 import { captureDestination, readDestination } from './lib/deepLink'
 import { SESSION_KEY, serializeSession } from './lib/session'
+import { ensureSignInState } from './lib/signInState'
 import App from './App'
 
 const KEY = 'invoice-os.signInState'
@@ -425,5 +426,79 @@ describe('the front door re-mints a state older than a minute', () => {
     expect(s).not.toBe(X)
     expect(storedAt()).toBe(NOW)
     expect(hrefWrites).toEqual([`https://landing.example/?state=${s}`])
+  })
+})
+
+describe('?auth=verify opens the gateway confirm page (LOGFIX-04-05)', () => {
+  const GATEWAY = 'https://gw.test'
+  const T = 'tok_123-abc'
+  const configure = () => {
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
+  }
+  const boot = (url: string, strict = false) => {
+    window.history.replaceState(null, '', url)
+    const { hrefWrites } = interceptHref()
+    render(strict ? <StrictMode><App /></StrictMode> : <App />)
+    return hrefWrites
+  }
+
+  it('auth=verify in a fresh tab mints a state and opens the confirm page', () => {
+    configure()
+    const hrefWrites = boot(`/?auth=verify#token=${T}`)
+    const s = storedState()
+    expect(s).toEqual(expect.stringMatching(STATE_RE))
+    expect(hrefWrites).toEqual([`${GATEWAY}/auth/verify?token=${T}&type=signup&state=${s}`])
+    expect(sessionStorage.getItem('invoice-os.pendingVerify')).not.toBeNull()
+  })
+
+  it('StrictMode auth=verify navigates once', () => {
+    configure()
+    const hrefWrites = boot(`/?auth=verify#token=${T}`, true)
+    expect(hrefWrites).toEqual([`${GATEWAY}/auth/verify?token=${T}&type=signup&state=${storedState()}`])
+  })
+
+  it('auth=verify bounces over a stored session', () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
+    captureDestination('/audit', '', Date.now())
+    const hrefWrites = boot(`/?auth=verify#token=${T}`)
+    expect(hrefWrites).toEqual([`${GATEWAY}/auth/verify?token=${T}&type=signup&state=${storedState()}`])
+    expect(document.body.textContent).toBe('')
+    expect(readDestination()).toEqual({ path: '/audit', query: '' })
+  })
+
+  it('?handoff= wins over ?auth=verify', async () => {
+    configure()
+    const exchange = vi.fn(() => Promise.reject(new TypeError('Failed to fetch')))
+    vi.stubGlobal('fetch', exchange)
+    ensureSignInState()
+    const hrefWrites = boot(`/?handoff=${'C'.repeat(43)}&auth=verify#token=${T}`)
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30))
+    })
+    expect((exchange.mock.calls as unknown[][]).map((c) => c[0])).toContain(`${GATEWAY}/auth/exchange`)
+    expect(hrefWrites.filter((h) => h.includes('/auth/verify'))).toEqual([])
+  })
+
+  it('auth=verify with a bad token goes to the failed notice', () => {
+    for (const hash of ['#token=a b', '']) {
+      cleanup()
+      configure()
+      const hrefWrites = boot(`/?auth=verify${hash}`)
+      expect(hrefWrites).toEqual(['https://landing.example/?verify=failed'])
+    }
+    cleanup()
+    vi.unstubAllEnvs()
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    expect(boot(`/?auth=verify#token=${T}`)).toEqual(['https://landing.example/?verify=failed'])
+  })
+
+  it('App adversarial: a URL state beside auth=verify is never adopted', () => {
+    configure()
+    const hrefWrites = boot(`/?auth=verify&state=${X}#token=${T}`)
+    const s = storedState()
+    expect(s).not.toBe(X)
+    expect(hrefWrites).toEqual([`${GATEWAY}/auth/verify?token=${T}&type=signup&state=${s}`])
   })
 })

@@ -736,6 +736,17 @@ hand-off is the app by default and a console when the visitor came from one (Con
    characters, exactly once). The app holds the token at `sessionStorage['invoice-os.pendingInvite']`
    (`{v:1, t, at}`, 10 minutes, `lib/pendingInvite.ts`) and strips the hash. A start with no
    invite removes a held one.
+   A confirm link that landing receives with `#token=<T>` (the mail opens landing, not the
+   gateway) goes to `<app>?auth=verify#token=<T>`. A `?handoff=` beside it wins. The app reads the
+   one `[A-Za-z0-9_-]{1,256}` token before it strips the URL and mints a fresh state, over any stored
+   session. It holds `sessionStorage['invoice-os.pendingVerify']` (`{v:1, at}`, 10 minutes,
+   `lib/verifyBounce.ts`), then goes to `<gateway>/auth/verify?token=<T>&type=signup&state=<s>`. A
+   bad or missing token, or no gateway URL, goes to `<landing>/?verify=failed`. The click returns to
+   landing, which forwards `?verified=1&handoff=<code>` to the app (step 5). With a live stored
+   session A at that point, the app wins for A: it posts no exchange, stores nothing for the
+   confirmed account, removes the marker and shows "Your email is confirmed. You are signed in as
+   <A's email>. To use the confirmed account, sign out and sign in with it." With no session, the
+   code signs in as the confirmed account (step 6) and the marker is removed.
 4. Landing posts `{"email","password","state"}` to `POST /auth/sign-in`. The gateway posts
    `{"email","password"}` to GoTrue `/token?grant_type=password`. On a 200 it keeps the access
    token and the refresh token with `sha256(state)` and answers a code.
@@ -1564,9 +1575,10 @@ empty commit instead.
    answers 202 `{"status":"verification_pending"}`, after at least the minimum (`2s` by default).
 2. The mail arrives from `no-reply@ascomply.com`. Its link starts
    `https://api.ascomply.com/auth/verify?token=`.
-3. Opening the link shows the confirm page. Clicking "Confirm my email" lands on
-   `https://www.ascomply.com/?verified=1`. Opening the link again and clicking lands on
-   `?verify=failed`.
+3. Opening the link shows the confirm page (landing forwards it through `<app>?auth=verify`).
+   Clicking "Confirm my email" signs the clicking tab in at the app. With another account
+   already signed in on that tab, the app keeps it and shows the confirmed notice. Opening the
+   link again and clicking lands on `?verify=failed`.
 4. `curl -sS -X POST https://api.ascomply.com/auth/register -H 'Content-Type: application/json' -d '{"email":"someone@gmail.com","password":"<12+ characters>"}'`
    answers 400 `{"error":"a business email address is required; personal email providers are not accepted"}`.
 5. Time a real signup. A client-side `curl` time cannot separate GoTrue's time from the minimum, so read the gateway's

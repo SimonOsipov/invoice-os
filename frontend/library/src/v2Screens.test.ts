@@ -423,7 +423,7 @@ describe('library scenes', () => {
 
   it('SN-03 the player form marks fields and shows the message', () => {
     const ts = view('validate', 0, 'player')
-    // why: a message caps the player form at four fields (LIB-06-07)
+    // why: a message caps the player form at four fields
     expect(where(ts, (s) => s['text-transform'] === 'uppercase' && s['font-size'] === '10px')).toHaveLength(4)
     const fields = where(ts, (s) => s.height === '38px')
     expect(fields).toHaveLength(4)

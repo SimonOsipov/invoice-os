@@ -424,7 +424,7 @@ func joinCaller(ctx context.Context) (subject, email string, err error) {
 
 // MyPendingInvitations lists the live invites for the caller's email, soonest expiry first.
 func (s *Store) MyPendingInvitations(ctx context.Context) ([]PendingInvite, error) {
-	_, email, err := joinCaller(ctx)
+	subject, email, err := joinCaller(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -432,11 +432,11 @@ func (s *Store) MyPendingInvitations(ctx context.Context) ([]PendingInvite, erro
 		return []PendingInvite{}, nil
 	}
 	out := []PendingInvite{}
-	// The caller has no membership; the email filter in the function is the guard.
+	// The email filter and the function's membership filter are the guard.
 	err = db.WithinTenantTx(ctx, s.pool, uuid.Nil.String(), func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
 			`SELECT invitation_id, workspace, role, inviter, expires_at
-			   FROM public.pending_invites_for_email($1)`, email)
+			   FROM public.pending_invites_for_email($1, $2)`, email, subject)
 		if err != nil {
 			return err
 		}
@@ -470,10 +470,11 @@ func (s *Store) AcceptInvitationByID(ctx context.Context, id string) (Tenant, st
 	}
 
 	var tenantID string
+	// The nil user id skips the list's membership filter: a member must reach accept_invitation_by_id's already-member answer.
 	err = db.WithinTenantTx(ctx, s.pool, uuid.Nil.String(), func(tx pgx.Tx) error {
 		err := tx.QueryRow(ctx,
-			`SELECT tenant_id FROM public.pending_invites_for_email($1) WHERE invitation_id = $2`,
-			email, invID.String()).Scan(&tenantID)
+			`SELECT tenant_id FROM public.pending_invites_for_email($1, $2) WHERE invitation_id = $3`,
+			email, uuid.Nil.String(), invID.String()).Scan(&tenantID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrInvitationNotValid
 		}

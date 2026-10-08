@@ -475,7 +475,7 @@ cannot log in, and it is reachable only per user id, per token or per address. I
 functions, `public.custom_access_token_hook(event jsonb)` and (AUTH-16)
 `public.identity_has_membership(p_user_id uuid) RETURNS boolean`, and (RESEND-06)
 `public.invitation_by_token(p_token text)`, and (LOGFIX-03)
-`public.pending_invites_for_email(p_email text)`, and a policy lets it read
+`public.pending_invites_for_email(p_email text, p_user_id uuid)`, and a policy lets it read
 `(user_id, tenant_id, status)` for every tenant (LOGFIX-03 adds `display_name` and `email`):
 
 ```sql
@@ -509,9 +509,10 @@ CREATE POLICY auth_hook_lookup ON public.memberships
   With a live token and a matching GUC it can also learn whether any user id holds a
   membership: `accept_invitation` answers 23505 before it checks the email
   (`TestRLS_AcceptInvitationRefusalOrder`). Same trust as the provisioning residual below.
-- `pending_invites_for_email(p_email)` returns `(invitation_id, tenant_id, workspace, role,
+- `pending_invites_for_email(p_email, p_user_id)` returns `(invitation_id, tenant_id, workspace, role,
   inviter, expires_at)` for the pending, unexpired invites whose address equals
-  `lower(btrim(p_email))`, across tenants, ordered by `expires_at, id`. `inviter` is the
+  `lower(btrim(p_email))`, across tenants, ordered by `expires_at, id`. It returns no rows when
+  `p_user_id` holds any membership, of any status (it reads `memberships.user_id`, already granted). `inviter` is the
   inviter's `memberships.display_name` in the inviting tenant, else that row's `email`, else
   NULL. SECURITY DEFINER, `search_path=""`, STABLE; `EXECUTE` to `invoice_app` only. It adds
   `SELECT (invited_by)` on `invitations` and `SELECT (display_name, email)` on `memberships`

@@ -321,15 +321,25 @@ func TestJoin_AMemberGetsAlreadyMember(t *testing.T) {
 		t.Errorf("membership changed to %+v", m)
 	}
 
-	// The list still shows the invite (the app then explains the 409).
-	if got, err := w.store.MyPendingInvitations(ctx); err != nil || len(got) != 1 || got[0].ID != w.invite.ID {
-		t.Errorf("a member's list = %+v, err %v; want the invite", got, err)
+	if got, err := w.store.MyPendingInvitations(ctx); err != nil || len(got) != 0 {
+		t.Errorf("a suspended member's list = %+v, err %v; want empty", got, err)
 	}
 
 	// A member probing an invite of another address learns nothing: not valid answers before member.
 	probe := tenantless(user, joinAddr("probe"))
 	if _, _, _, err := w.store.AcceptInvitationByID(probe, w.invite.ID); !errors.Is(err, ErrInvitationNotValid) {
 		t.Errorf("a member's probe of another address: err = %v, want ErrInvitationNotValid", err)
+	}
+}
+
+func TestJoin_AnActiveMemberListsNothing(t *testing.T) {
+	w, addr := newJoinWorld(t, "reviewer")
+	other := newInvWorld(t, "Other Firm", "Bola Eze")
+	user := uuid.NewString()
+	seedIdentityMembership(t, w.super, other.tenant, user, "admin", "active", nil, strp(addr))
+
+	if got, err := w.store.MyPendingInvitations(tenantless(user, addr)); err != nil || len(got) != 0 {
+		t.Errorf("an active member's list = %+v, err %v; want empty", got, err)
 	}
 }
 

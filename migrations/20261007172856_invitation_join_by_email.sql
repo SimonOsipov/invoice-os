@@ -8,7 +8,7 @@ GRANT SELECT (display_name, email) ON public.memberships TO auth_hook_reader;
 -- Created as the owner: an ALTER OWNER after the GRANT would drop the migrator's grant.
 SET LOCAL ROLE auth_hook_reader;
 -- +goose StatementBegin
-CREATE FUNCTION public.pending_invites_for_email(p_email text)
+CREATE FUNCTION public.pending_invites_for_email(p_email text, p_user_id uuid)
 RETURNS TABLE (invitation_id uuid, tenant_id uuid, workspace text, role text, inviter text, expires_at timestamptz)
     LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$
     SELECT i.id, i.tenant_id, t.name, i.role,
@@ -18,11 +18,12 @@ RETURNS TABLE (invitation_id uuid, tenant_id uuid, workspace text, role text, in
       LEFT JOIN public.memberships m ON m.tenant_id = i.tenant_id AND m.user_id = i.invited_by
      WHERE pg_catalog.lower(i.invitee_email) = pg_catalog.lower(pg_catalog.btrim(p_email))
        AND i.status = 'pending' AND i.expires_at > pg_catalog.now()
+       AND NOT EXISTS (SELECT 1 FROM public.memberships x WHERE x.user_id = p_user_id)
      ORDER BY i.expires_at, i.id
 $$;
 -- +goose StatementEnd
-REVOKE EXECUTE ON FUNCTION public.pending_invites_for_email(text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.pending_invites_for_email(text) TO invoice_app;
+REVOKE EXECUTE ON FUNCTION public.pending_invites_for_email(text, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.pending_invites_for_email(text, uuid) TO invoice_app;
 RESET ROLE;
 
 -- +goose StatementBegin
@@ -68,7 +69,7 @@ GRANT EXECUTE ON FUNCTION public.accept_invitation_by_id(uuid, uuid, uuid, text)
 -- +goose Down
 DROP FUNCTION IF EXISTS public.accept_invitation_by_id(uuid, uuid, uuid, text);
 SET LOCAL ROLE auth_hook_reader;
-DROP FUNCTION IF EXISTS public.pending_invites_for_email(text);
+DROP FUNCTION IF EXISTS public.pending_invites_for_email(text, uuid);
 RESET ROLE;
 REVOKE SELECT (display_name, email) ON public.memberships FROM auth_hook_reader;
 REVOKE SELECT (invited_by) ON public.invitations FROM auth_hook_reader;

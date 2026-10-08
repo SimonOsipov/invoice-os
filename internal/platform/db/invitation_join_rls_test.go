@@ -22,9 +22,9 @@ import (
 )
 
 const (
-	pendingSig      = "public.pending_invites_for_email(text)"
+	pendingSig      = "public.pending_invites_for_email(text, uuid)"
 	acceptByIDSig   = "public.accept_invitation_by_id(uuid, uuid, uuid, text)"
-	pendingCall     = `SELECT invitation_id::text, tenant_id::text, workspace, role, inviter, expires_at FROM public.pending_invites_for_email($1::text)`
+	pendingCall     = `SELECT invitation_id::text, tenant_id::text, workspace, role, inviter, expires_at FROM public.pending_invites_for_email($1::text, $2::uuid)`
 	acceptByIDCall  = `SELECT invitation_id::text, role FROM public.accept_invitation_by_id($1::uuid, $2::uuid, $3::uuid, $4::text)`
 	mismatchMessage = "row-level security"
 )
@@ -69,11 +69,17 @@ func seedNamedMember(t *testing.T, tenant, user string, display, email any) {
 	}
 }
 
+// pendingFor lists as a caller who holds no membership.
 func pendingFor(t *testing.T, guc string, email any) []pendingRow {
+	t.Helper()
+	return pendingForUser(t, guc, email, uuid.NewString())
+}
+
+func pendingForUser(t *testing.T, guc string, email any, user string) []pendingRow {
 	t.Helper()
 	var out []pendingRow
 	err := inAppTx(context.Background(), guc, func(tx pgx.Tx) error {
-		rows, err := tx.Query(context.Background(), pendingCall, email)
+		rows, err := tx.Query(context.Background(), pendingCall, email, user)
 		if err != nil {
 			return err
 		}
@@ -742,6 +748,28 @@ func TestRLS_AcceptByIdSameInviteUnderRace(t *testing.T) {
 	}
 }
 
+func TestRLS_PendingInvitesForEmailIsEmptyForAMember(t *testing.T) {
+	requireHarness(t)
+	roles := rolesInDB(t)
+	addr := uniqueAddr("member")
+	t1, t2 := newNamedTenant(t, "Obi Partners"), newNamedTenant(t, "Other Firm")
+	invite := seedJoinInvite(t, t1, roles[0], addr, `now() + interval '1 day'`, "")
+
+	if got := pendingForUser(t, "", addr, uuid.NewString()); len(got) != 1 || got[0].id != invite {
+		t.Fatalf("member-less control = %+v, want the invite", got)
+	}
+	for _, status := range []string{"active", "suspended"} {
+		user := uuid.NewString()
+		if _, err := h.super.Exec(context.Background(),
+			`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', $3)`, t2, user, status); err != nil {
+			t.Fatalf("seed %s membership: %v", status, err)
+		}
+		if got := pendingForUser(t, "", addr, user); len(got) != 0 {
+			t.Errorf("a %s member's list = %+v, want empty", status, got)
+		}
+	}
+}
+
 func TestRLS_JoinFunctionsAreOwnedAndGrantedNarrowly(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
@@ -751,7 +779,7 @@ func TestRLS_JoinFunctionsAreOwnedAndGrantedNarrowly(t *testing.T) {
 		name, sql string
 		args      []any
 	}{
-		{"pending_invites_for_email", `SELECT count(*) FROM public.pending_invites_for_email($1::text)`, []any{"a@obi.test"}},
+		{"pending_invites_for_email", `SELECT count(*) FROM public.pending_invites_for_email($1::text, $2::uuid)`, []any{"a@obi.test", uuid.NewString()}},
 		{"accept_invitation_by_id", `SELECT count(*) FROM public.accept_invitation_by_id($1::uuid, $2::uuid, $3::uuid, $4::text)`,
 			[]any{uuid.NewString(), uuid.NewString(), uuid.NewString(), "a@obi.test"}},
 	} {

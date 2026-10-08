@@ -10,7 +10,8 @@ paths:
 - Reach tenant data in a request through `WithinRequestTenantTx` or `WithinRequestTenantTxOpts`.
 - Acquire no database handle outside the seam. A bypass needs an `scPoolAllowlist` entry with a reason.
 - Call `WithinTenantTx` only from a worker, a boot-time seeder, an operator CLI or an exempt method. Each needs an `scCoreAllowlist` entry with a reason.
-- These `tenancy.Store` methods skip the gate: `Me`, `ProvisionWorkspace`, `AcceptInvitation` and `PreviewInvitation`.
+- These `tenancy.Store` methods skip the gate: `Me`, `ProvisionWorkspace`, `AcceptInvitation`, `AcceptInvitationByID`, `MyPendingInvitations` and `PreviewInvitation`.
+- Guard `AcceptInvitationByID` and `MyPendingInvitations` with the email of the identity header only. The caller has no membership.
 - Scope an exemption to one func, never to a file that holds gated methods.
 - Give every new route an entry in `scRouteVerdicts` in `internal/platform/db/seam_coverage_test.go`.
 - Set the verdict to `covered` or `exempt`. Give an `exempt` entry a reason.

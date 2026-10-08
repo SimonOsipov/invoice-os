@@ -58,17 +58,26 @@ paths:
 - Wait `AUTH_REGISTER_MIN_RESPONSE` before each register, resend or reset answer that passes the 400 checks.
 - Spend one shared budget on resend and password-reset requests.
 - Log no email address, password, token, code or client IP.
-- Read the confirm token from the POST form body only. The GET page makes no GoTrue call.
+- Read the confirm token and the `state` from the POST form body only. The GET page makes no GoTrue call.
+- Answer `GET /auth/verify` with 303 to `<AUTH_SITE_URL>/?confirm=1#token=<token>` when the request carries no valid `state`. Render the confirm page only for a 43-character base64url `state`.
+- Store the verify session in the hand-off store and redirect with `handoff=<code>` only when the form holds a valid `state` and GoTrue returns both tokens. Otherwise redirect to `?verified=1` with no code.
 - Carry a hand-off code in the URL, never a token. A code is single use and expires in `HandoffTTL`.
 - Bind a hand-off code to the `state` that minted it.
 - Reserve a sign-in throttle attempt before the GoTrue call.
-- Accept a tenant-less token only on `POST /api/tenancy/v1/workspaces` and `POST /api/tenancy/v1/invitations/accept`.
+- Accept a tenant-less token only on four routes: `POST /api/tenancy/v1/workspaces`, `POST /api/tenancy/v1/invitations/accept`, `GET /api/tenancy/v1/invitations/mine` and `POST /api/tenancy/v1/invitations/{id}/accept`.
+- Admit the two join routes only when GoTrue confirmed the email and it equals the token's `email` claim after trim and case folding.
+- Refuse a join route with 403 for a token with no `session_id`, an unreadable `/user` answer or a null `email_confirmed_at`.
+- Never read `user_metadata` for an email check. Any session holder can write it.
 - Match the tenant-less routes on the escaped path.
-- Check every session with GoTrue `GET /user` before a request reaches a service.
+- Check every session with GoTrue `GET /user` before a request reaches a service. Read `error_code` from a refusal and `email` and `email_confirmed_at` from a 200, within 16 KiB.
 - Answer 503 when the session check cannot reach GoTrue. Never treat that failure as a revoked session.
 - Evict the subject's session-check cache on sign-out.
 - Mint the staff claim from `public.staff_members` in the access-token hook. Never read `user_metadata` for it.
 - Accept an invite only for the account whose verified email equals the invited address.
+- Answer a join with 404 `this invite is no longer valid` for every unusable invite. Never tell the cases apart.
+- Answer a join with 409 `you already belong to a workspace` for a caller who holds a membership of any status.
+- Keep the live stored session over a verify hand-off code. Show the confirmed notice and post no exchange.
+- Offer the invites from `GET /api/tenancy/v1/invitations/mine` when `/me` answers 403 and no invite is held.
 
 - Ship mock-issuer code only behind the `mockissuer` build tag. `TestProductionGatewayBinaryCannotMint` must stay green.
 - Serve the mock routes only when `GATEWAY_MOCK_ISSUER` is `true` and `ENVIRONMENT` is not `production`.

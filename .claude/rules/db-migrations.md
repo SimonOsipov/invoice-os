@@ -20,6 +20,9 @@ paths:
 - Loop over tenants one at a time for cross-tenant work.
 - Enumerate tenants only through `invoice_tenant_reader`.
 - Install a trusted extension in a migration. Install an untrusted extension in `db/bootstrap.sql`.
+- Grant `EXECUTE` on `public.invitation_by_token`, `public.pending_invites_for_email` and `public.accept_invitation_by_id` to `invoice_app` only.
+- Return no rows from `pending_invites_for_email` for a user id that holds a membership of any status.
+- Refuse `accept_invitation_by_id` in this order: GUC mismatch `42501`, not valid `invitation_not_valid`, already a member `one_workspace_per_identity`.
 - Name a new migration with a current timestamp.
 - Check the order with `go run ./internal/tools/migrationorder -base origin/main`.
 - Write a working Down in every migration. CI resets all migrations and applies them again.

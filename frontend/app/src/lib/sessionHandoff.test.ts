@@ -521,9 +521,11 @@ describe('join offers (D7, D10, D11)', () => {
   type Reply = { status: number; body?: unknown }
   type Call = { url: string; method: string; auth: string | null; body: unknown; signal: AbortSignal | null | undefined }
 
-  function stub(r: { exchange?: Reply; me?: Reply[]; mine?: Reply; accept?: Reply; workspaces?: Reply; refresh?: Reply; acceptNetworkError?: boolean } = {}): Call[] {
+  function stub(r: { exchange?: Reply; me?: Reply[]; mine?: Reply; accept?: Reply; workspaces?: Reply; refresh?: Reply; acceptNetworkError?: boolean; acceptSeq?: Reply[]; workspacesSeq?: Reply[] } = {}): Call[] {
     const calls: Call[] = []
     const me = [...(r.me ?? [FORBIDDEN])]
+    const acceptSeq = [...(r.acceptSeq ?? [])]
+    const workspacesSeq = [...(r.workspacesSeq ?? [])]
     vi.stubGlobal(
       'fetch',
       vi.fn((url: string, init: { method?: string; headers: Headers; body?: string; signal?: AbortSignal | null }) => {
@@ -537,10 +539,10 @@ describe('join offers (D7, D10, D11)', () => {
             : path === '/api/tenancy/v1/invitations/mine'
               ? (r.mine ?? { status: 200, body: { invitations: THREE } })
               : path === '/api/tenancy/v1/workspaces'
-                ? (r.workspaces ?? { status: 201, body: {} })
+                ? (workspacesSeq.shift() ?? r.workspaces ?? { status: 201, body: {} })
                 : path === '/auth/refresh'
                   ? (r.refresh ?? { status: 200, body: { access_token: RENEWED, refresh_token: 'R1' } })
-                  : (r.accept ?? { status: 200, body: {} })
+                  : (acceptSeq.shift() ?? r.accept ?? { status: 200, body: {} })
         return Promise.resolve({ ok: reply.status < 400, status: reply.status, statusText: String(reply.status), json: () => Promise.resolve(reply.body ?? {}) })
       }),
     )
@@ -649,7 +651,6 @@ describe('join offers (D7, D10, D11)', () => {
 
   it('joinInvite_otherFailuresRethrow', async () => {
     const rows: [string, Reply | 'network'][] = [
-      ['401', { status: 401, body: { error: 'unauthorized' } }],
       ['500', { status: 500, body: { error: 'internal error' } }],
       ['404 other message', { status: 404, body: { error: 'not found' } }],
       ['409 other message', { status: 409, body: { error: 'conflict' } }],
@@ -662,6 +663,48 @@ describe('join offers (D7, D10, D11)', () => {
       expect(err, name).not.toBeInstanceOf(InviteRefusedError)
       expect(paths(calls), name).toEqual(['/api/tenancy/v1/invitations/a/accept'])
     }
+  })
+
+  const UNAUTH: Reply = { status: 401, body: { error: 'unauthorized' } }
+
+  it('joinInvite_a401RenewsOnceAndRetriesWithTheNewToken', async () => {
+    const calls = stub({ acceptSeq: [UNAUTH, { status: 200, body: {} }], me: [{ status: 200, body: ME }] })
+    const s = await joinInvite(GATEWAY, offer(), 'a', 5000)
+    expect(paths(calls)).toEqual(['/api/tenancy/v1/invitations/a/accept', '/auth/refresh', '/api/tenancy/v1/invitations/a/accept', '/auth/refresh', '/api/tenancy/v1/me'])
+    expect(calls[0].auth).toBe(`Bearer ${BARE}`)
+    expect(calls[2].auth).toBe(`Bearer ${RENEWED}`)
+    expect(calls[3].body).toEqual({ refresh_token: 'R1' })
+    expect(s).toMatchObject({ token: RENEWED, handoff: true })
+  })
+
+  it('joinInvite_a401TwiceRethrowsAfterOneRenewal', async () => {
+    const calls = stub({ accept: UNAUTH })
+    const err = await joinInvite(GATEWAY, offer(), 'a', 5000).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(ApiError)
+    expect(err).toMatchObject({ status: 401 })
+    expect(paths(calls)).toEqual(['/api/tenancy/v1/invitations/a/accept', '/auth/refresh', '/api/tenancy/v1/invitations/a/accept'])
+  })
+
+  it('joinInvite_a401WithoutARefreshTokenRethrows', async () => {
+    for (const refreshToken of [undefined, '']) {
+      const calls = stub({ accept: UNAUTH })
+      const err = await joinInvite(GATEWAY, offer({ refreshToken }), 'a', 5000).catch((e: unknown) => e)
+      expect(err).toMatchObject({ status: 401 })
+      expect(paths(calls)).toEqual(['/api/tenancy/v1/invitations/a/accept'])
+    }
+  })
+
+  it('createOwnWorkspace_a401RenewsOnceAndRetries', async () => {
+    const calls = stub({ workspacesSeq: [UNAUTH, { status: 201, body: {} }], me: [{ status: 200, body: IN_HOUSE_ME }] })
+    await createOwnWorkspace(GATEWAY, offer({ token: WITH_ANSWERS, answers: ANSWERS }), 5000)
+    expect(paths(calls)).toEqual(['/api/tenancy/v1/workspaces', '/auth/refresh', '/api/tenancy/v1/workspaces', '/auth/refresh', '/api/tenancy/v1/me'])
+    expect(calls[2].auth).toBe(`Bearer ${RENEWED}`)
+  })
+
+  it('createOwnWorkspace_a401TwiceRethrows', async () => {
+    stub({ workspaces: UNAUTH })
+    const err = await createOwnWorkspace(GATEWAY, offer({ token: WITH_ANSWERS, answers: ANSWERS }), 5000).catch((e: unknown) => e)
+    expect(err).toMatchObject({ status: 401 })
   })
 
   it('redeemHandoff_offerKeepsWireOrderNotIdOrder', async () => {

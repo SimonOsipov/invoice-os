@@ -105,7 +105,7 @@ export async function redeemHandoff(base: string, code: string, state: string, n
       throw err
     }
     const answers = registrationAnswers(token)
-    // Invites first (D7); a failed or malformed lookup keeps today's path (D11).
+    // A failed or malformed lookup falls through to provisioning.
     const invites = await apiFetch<unknown>(`${base}/api/tenancy/v1/invitations/mine`, { token, signal }).catch(() => null)
     if (isPendingInvites(invites)) {
       return { kind: 'join', token, refreshToken, invites: invites.invitations, answers }
@@ -153,11 +153,14 @@ export async function createOwnWorkspace(base: string, offer: JoinOffer, now: nu
   return provisionAndRead(base, offer.token, offer.refreshToken, offer.answers, now, AbortSignal.timeout(15000))
 }
 
-// A 404 or 409 re-reads /me first: another tab may have accepted already (D10).
+// A 404 or 409 re-reads /me first: another tab may have accepted already.
 export async function joinInvite(base: string, offer: JoinOffer, id: string, now: number = Date.now()): Promise<Session> {
   const signal = AbortSignal.timeout(15000)
+  const auth = { token: offer.token, refreshToken: offer.refreshToken }
   try {
-    await apiFetch(`${base}/api/tenancy/v1/invitations/${encodeURIComponent(id)}/accept`, { method: 'POST', token: offer.token, signal })
+    await callRenewing(base, auth, signal, (token) =>
+      apiFetch(`${base}/api/tenancy/v1/invitations/${encodeURIComponent(id)}/accept`, { method: 'POST', token, signal }),
+    )
   } catch (err) {
     const message = err instanceof ApiError ? (err.body as { error?: unknown } | null | undefined)?.error : undefined
     const outcome =
@@ -170,25 +173,41 @@ export async function joinInvite(base: string, offer: JoinOffer, id: string, now
       throw err
     }
     try {
-      return await renewAndRead(base, offer.refreshToken, now, signal, 'no refresh token after the refusal')
+      return await renewAndRead(base, auth.refreshToken, now, signal, 'no refresh token after the refusal')
     } catch {
       throw new InviteRefusedError(outcome)
     }
   }
-  return renewAndRead(base, offer.refreshToken, now, signal, 'no refresh token after joining the invite')
+  return renewAndRead(base, auth.refreshToken, now, signal, 'no refresh token after joining the invite')
 }
 
 // ceiling: an account whose workspace an operator deleted re-provisions at its next sign-in; revisit when workspace deletion ships.
 async function provisionAndRead(base: string, token: string, refreshToken: unknown, answers: ProvisionBody, now: number, signal: AbortSignal): Promise<Session> {
+  const auth = { token, refreshToken }
   try {
-    await apiFetch(`${base}/api/tenancy/v1/workspaces`, { method: 'POST', token, body: answers, signal })
+    await callRenewing(base, auth, signal, (t) => apiFetch(`${base}/api/tenancy/v1/workspaces`, { method: 'POST', token: t, body: answers, signal }))
   } catch (err) {
     // 409: the identity already holds a membership; the refresh below tells which.
     if (!(err instanceof ApiError && err.status === 409)) {
       throw err
     }
   }
-  return renewAndRead(base, refreshToken, now, signal, 'no refresh token after provisioning')
+  return renewAndRead(base, auth.refreshToken, now, signal, 'no refresh token after provisioning')
+}
+
+// The Join screen can outlive the access token: one 401 renews and retries once. Refresh tokens rotate, so auth keeps the latest.
+async function callRenewing(base: string, auth: { token: string; refreshToken: unknown }, signal: AbortSignal, call: (token: string) => Promise<unknown>): Promise<unknown> {
+  try {
+    return await call(auth.token)
+  } catch (err) {
+    if (!(err instanceof ApiError && err.status === 401) || typeof auth.refreshToken !== 'string' || auth.refreshToken === '') {
+      throw err
+    }
+    const { access, refresh } = await refreshTokens(base, auth.refreshToken, signal)
+    auth.token = access
+    auth.refreshToken = refresh
+    return call(access)
+  }
 }
 
 async function renewAndRead(base: string, refreshToken: unknown, now: number, signal: AbortSignal, missing: string): Promise<Session> {
